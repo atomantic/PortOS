@@ -10,15 +10,10 @@
  * EventSource, which the server interprets as a cancel and SIGTERMs pip.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { CheckCircle2, Loader2, AlertCircle, Download, X } from 'lucide-react';
-import { safeParseJSON } from '../../lib/genUtils';
+import { useInstallStream } from '../../hooks/useInstallStream';
 import Modal from '../ui/Modal';
-
-// Cap on retained log lines. A torch install can emit hundreds of pip output
-// lines; without this the array grows unbounded and re-renders cost more per
-// append (slice copy is O(n) but n is bounded).
-const MAX_LOG_LINES = 500;
 
 const STAGES = [
   { id: 'detect',      label: 'Detect Python' },
@@ -31,89 +26,27 @@ const STAGES = [
 const STAGE_INDEX = Object.fromEntries(STAGES.map((s, i) => [s.id, i]));
 
 export default function Flux2InstallModal({ open, onClose, onComplete }) {
-  const [currentStage, setCurrentStage] = useState(null);
-  const [logs, setLogs] = useState([]);
-  const [done, setDone] = useState(false);
-  const [error, setError] = useState(null);
   const [confirmingCancel, setConfirmingCancel] = useState(false);
-  const logsEndRef = useRef(null);
-  const esRef = useRef(null);
-  // Stash onComplete in a ref so the EventSource effect doesn't re-run (and
-  // tear down the SSE connection) every time the parent re-renders with a
-  // fresh inline arrow. Without this, ImageGen's frequent state churn
-  // (gallery, generating, localProgress) would kill the install mid-stream.
-  const onCompleteRef = useRef(onComplete);
-  useEffect(() => { onCompleteRef.current = onComplete; }, [onComplete]);
+  // The shared install-stream hook owns the EventSource lifecycle, log
+  // accumulation, stage tracking, connection-lost handling and auto-scroll.
+  // onComplete is ref-stashed inside the hook so ImageGen's frequent state
+  // churn (gallery, generating, localProgress) can't kill the install
+  // mid-stream by re-running the effect.
+  const { logs, currentStage, done, error, logsEndRef, close } = useInstallStream(
+    '/api/image-gen/setup/flux2-install',
+    { enabled: open, onComplete },
+  );
 
-  const appendLog = (entry) => setLogs((prev) => {
-    const next = prev.length >= MAX_LOG_LINES ? [...prev.slice(-(MAX_LOG_LINES - 1)), entry] : [...prev, entry];
-    return next;
-  });
-
-  useEffect(() => {
-    if (!open) {
-      setCurrentStage(null);
-      setLogs([]);
-      setDone(false);
-      setError(null);
-      setConfirmingCancel(false);
-      if (esRef.current) { esRef.current.close(); esRef.current = null; }
-      return;
-    }
-
-    const es = new EventSource('/api/image-gen/setup/flux2-install');
-    esRef.current = es;
-
-    es.onmessage = (ev) => {
-      const msg = safeParseJSON(ev.data);
-      if (!msg) return;
-      if (msg.type === 'stage') {
-        setCurrentStage(msg.stage);
-        appendLog({ kind: 'stage', text: msg.message || msg.stage });
-      } else if (msg.type === 'log') {
-        appendLog({ kind: 'log', text: msg.message });
-      } else if (msg.type === 'complete') {
-        setDone(true);
-        appendLog({ kind: 'success', text: msg.message });
-        es.close();
-        esRef.current = null;
-        onCompleteRef.current?.();
-      } else if (msg.type === 'error') {
-        setError(msg.message);
-        appendLog({ kind: 'error', text: msg.message });
-        es.close();
-        esRef.current = null;
-      }
-    };
-
-    es.onerror = () => {
-      // Network drop or server killed the stream. If we already saw `complete`
-      // this is harmless; otherwise surface it so the user isn't stuck on a
-      // forever-spinning modal.
-      setError((prev) => prev ?? (done ? null : 'Connection to installer lost. Restart PortOS or try again.'));
-      es.close();
-      esRef.current = null;
-    };
-
-    return () => {
-      if (esRef.current) { esRef.current.close(); esRef.current = null; }
-    };
-    // onComplete intentionally excluded — it lives in onCompleteRef.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
-
-  // Auto-scroll on every log line. `behavior: 'auto'` (instant) avoids
-  // queueing hundreds of smooth-scroll animations during a chatty pip install.
-  useEffect(() => {
-    if (logsEndRef.current) {
-      logsEndRef.current.scrollIntoView({ behavior: 'auto', block: 'end' });
-    }
-  }, [logs.length]);
+  // Reset the cancel-confirm prompt whenever the modal closes, so a reopen
+  // never starts mid-confirmation. (The stream state itself resets inside the
+  // hook when `enabled` flips false.)
+  useEffect(() => { if (!open) setConfirmingCancel(false); }, [open]);
 
   const installRunning = !done && !error && currentStage && currentStage !== 'verify';
 
   const performClose = () => {
-    if (esRef.current) { esRef.current.close(); esRef.current = null; }
+    close();
+    setConfirmingCancel(false);
     onClose();
   };
 

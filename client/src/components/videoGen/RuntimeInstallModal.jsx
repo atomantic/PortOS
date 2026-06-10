@@ -13,123 +13,37 @@
  * EventSource, which the server interprets as a SIGTERM to the bash child.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { CheckCircle2, Loader2, AlertCircle, Download, X } from 'lucide-react';
-import { safeParseJSON } from '../../lib/genUtils';
+import { useInstallStream } from '../../hooks/useInstallStream';
 import Modal from '../ui/Modal';
 
 const MAX_LOG_LINES = 1000;
 
 export default function RuntimeInstallModal({ open, runtime, label, onClose, onComplete }) {
-  const [logs, setLogs] = useState([]);
-  const [streamStarted, setStreamStarted] = useState(false);
-  const [done, setDone] = useState(false);
-  const [error, setError] = useState(null);
   const [confirmingCancel, setConfirmingCancel] = useState(false);
-  const logsEndRef = useRef(null);
-  const esRef = useRef(null);
-  // Mirror `done` into a ref so es.onerror can read the latest value — the
-  // effect's closure captures the initial `done=false` and never refreshes,
-  // so without this the modal flashes "Connection to installer lost" when
-  // the server cleanly closes the SSE socket right after sending `complete`.
-  const doneRef = useRef(false);
-  // Stash onComplete in a ref so the EventSource effect doesn't tear down
-  // mid-install on every parent re-render with a fresh inline arrow.
-  const onCompleteRef = useRef(onComplete);
-  useEffect(() => { onCompleteRef.current = onComplete; }, [onComplete]);
+  // The shared install-stream hook owns the EventSource lifecycle, log
+  // accumulation, connection-lost handling and auto-scroll. Pip/git emit
+  // hundreds of lines/sec, so flush on a 100ms debounce instead of per-line.
+  // The runtime install has no structured `stage` events (the bash script
+  // emits free-form log lines), so `currentStage` is unused here.
+  const { logs, done, error, streamStarted, logsEndRef, close } = useInstallStream(
+    open && runtime ? `/api/video-gen/setup/runtime-install?runtime=${encodeURIComponent(runtime)}` : null,
+    { enabled: open && !!runtime, onComplete, maxLogLines: MAX_LOG_LINES, flushMs: 100 },
+  );
 
-  // Pip and git can each emit hundreds of lines/sec. Per-line setState would
-  // re-render the entire log list on every line — buffer into a ref and
-  // flush on a short debounce so the React tree settles at ~10 Hz instead.
-  const pendingRef = useRef([]);
-  const flushTimerRef = useRef(null);
-  const flush = () => {
-    flushTimerRef.current = null;
-    if (pendingRef.current.length === 0) return;
-    const incoming = pendingRef.current;
-    pendingRef.current = [];
-    setLogs((prev) => {
-      const combined = prev.length + incoming.length > MAX_LOG_LINES
-        ? [...prev, ...incoming].slice(-MAX_LOG_LINES)
-        : [...prev, ...incoming];
-      return combined;
-    });
-  };
-  const appendLog = (entry) => {
-    pendingRef.current.push(entry);
-    if (flushTimerRef.current == null) {
-      flushTimerRef.current = setTimeout(flush, 100);
-    }
-  };
-
-  useEffect(() => {
-    if (!open || !runtime) {
-      setLogs([]);
-      setStreamStarted(false);
-      setDone(false);
-      doneRef.current = false;
-      setError(null);
-      setConfirmingCancel(false);
-      pendingRef.current = [];
-      if (flushTimerRef.current != null) { clearTimeout(flushTimerRef.current); flushTimerRef.current = null; }
-      if (esRef.current) { esRef.current.close(); esRef.current = null; }
-      return;
-    }
-
-    setStreamStarted(true);
-    const es = new EventSource(`/api/video-gen/setup/runtime-install?runtime=${encodeURIComponent(runtime)}`);
-    esRef.current = es;
-
-    es.onmessage = (ev) => {
-      const msg = safeParseJSON(ev.data);
-      if (!msg) return;
-      if (msg.type === 'log') {
-        appendLog({ kind: 'log', text: msg.message });
-      } else if (msg.type === 'complete') {
-        setDone(true);
-        doneRef.current = true;
-        appendLog({ kind: 'success', text: msg.message });
-        flush();
-        es.close();
-        esRef.current = null;
-        onCompleteRef.current?.();
-      } else if (msg.type === 'error') {
-        setError(msg.message);
-        appendLog({ kind: 'error', text: msg.message });
-        flush();
-        es.close();
-        esRef.current = null;
-      }
-    };
-
-    es.onerror = () => {
-      setError((prev) => prev ?? (doneRef.current ? null : 'Connection to installer lost. Restart PortOS or try again.'));
-      es.close();
-      esRef.current = null;
-    };
-
-    return () => {
-      if (flushTimerRef.current != null) { clearTimeout(flushTimerRef.current); flushTimerRef.current = null; }
-      if (esRef.current) { esRef.current.close(); esRef.current = null; }
-    };
-    // onComplete intentionally excluded — it lives in onCompleteRef.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, runtime]);
-
-  useEffect(() => {
-    if (logsEndRef.current) {
-      logsEndRef.current.scrollIntoView({ behavior: 'auto', block: 'end' });
-    }
-  }, [logs.length]);
+  // Reset the cancel-confirm prompt whenever the modal closes so a reopen never
+  // starts mid-confirmation. (Stream state resets inside the hook.)
+  useEffect(() => { if (!open || !runtime) setConfirmingCancel(false); }, [open, runtime]);
 
   // True from the moment the EventSource opens — closing the modal between
   // the open and the first log line must still confirm before killing the
-  // server-side bash child. Previously gated on `logs.length > 0`, which let
-  // a quick X-click silently drop a just-started install.
+  // server-side bash child.
   const installRunning = streamStarted && !done && !error;
 
   const performClose = () => {
-    if (esRef.current) { esRef.current.close(); esRef.current = null; }
+    close();
+    setConfirmingCancel(false);
     onClose();
   };
 
