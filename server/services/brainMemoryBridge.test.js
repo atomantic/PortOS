@@ -110,6 +110,20 @@ describe('brainMemoryBridge — resyncBrainRecord (issue #1080)', () => {
     expect(updateMemory).not.toHaveBeenCalled();
     expect(createMemory).not.toHaveBeenCalled();
   });
+
+  it('reactivates an archived memory when its record comes back live (status:active)', async () => {
+    const bridge = await loadBridge();
+    // p1 is already mapped (memory was archived for a prior synced-in delete);
+    // now the record resolves live again. The re-embed must reset status:active
+    // or memory search (which filters status='active') keeps hiding it.
+    bridgeFileContents = JSON.stringify({ [bridge.bridgeKey('people', 'p1')]: 'mem-resurrect' });
+    getById.mockResolvedValue({ id: 'p1', name: 'Alice', context: 'back again' });
+
+    await bridge.resyncBrainRecord('people', 'p1');
+
+    expect(updateMemory).toHaveBeenCalledWith('mem-resurrect', expect.objectContaining({ status: 'active' }));
+    expect(createMemory).not.toHaveBeenCalled();
+  });
 });
 
 describe('brainMemoryBridge — queueResync debounce + dedup', () => {

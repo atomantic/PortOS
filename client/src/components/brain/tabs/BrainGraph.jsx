@@ -215,7 +215,9 @@ export default function BrainGraph() {
   // automatically (issue #1080). The default sync only embeds new records.
   const handleSync = async ({ refresh = false } = {}) => {
     setSyncing(true);
-    const stats = await api.syncBrainData({ refresh }).catch(err => {
+    // silent:true — this catch owns the error toast, so suppress the helper's
+    // own toast to avoid a duplicate (CLAUDE.md: custom catch ⇒ silent).
+    const stats = await api.syncBrainData({ refresh }, { silent: true }).catch(err => {
       toast.error(err.message || 'Sync failed');
       return null;
     });

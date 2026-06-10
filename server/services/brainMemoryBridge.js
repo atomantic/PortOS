@@ -188,8 +188,12 @@ export async function syncBrainRecord(brainType, record) {
   const embedding = await embeddings.generateMemoryEmbedding(memoryData).catch(() => null);
 
   if (existingMemoryId) {
-    // Update existing memory
-    const updated = await memory.updateMemory(existingMemoryId, memoryData);
+    // Update existing memory. Force status:'active' so a record that was
+    // archived for a synced-in delete/archive and later came back live
+    // (un-deleted on a peer, or un-archived) is searchable again — memory
+    // search filters out archived rows, so without this the resurrected
+    // record would stay invisible (issue #1080 review finding).
+    const updated = await memory.updateMemory(existingMemoryId, { ...memoryData, status: 'active' });
     if (updated && embedding) {
       await memory.updateMemoryEmbedding(existingMemoryId, embedding);
     }
