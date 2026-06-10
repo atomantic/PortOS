@@ -22,7 +22,8 @@
  *   compact?: boolean
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Cloud, Circle, CheckCircle2, Loader2 } from 'lucide-react';
 import toast from '../ui/Toast';
 import {
@@ -45,6 +46,22 @@ export default function SyncToPeerButton({
   const [loading, setLoading] = useState(false);
   const [busyPeerId, setBusyPeerId] = useState(null);
   const wrapperRef = useRef(null);
+  const triggerRef = useRef(null);
+  const menuRef = useRef(null);
+  // The dropdown is portaled to <body> so it escapes each series/universe
+  // card's stacking context (the cards have their own compositing layer, so an
+  // in-card `absolute z-30` popover is painted UNDER the next card). Position
+  // it `fixed`, anchored to the trigger button's viewport rect.
+  const MENU_WIDTH = 288; // w-72
+  const [coords, setCoords] = useState(null);
+  const updateCoords = () => {
+    const el = triggerRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    // Right-align the menu to the button, clamped to the viewport.
+    const left = Math.max(8, Math.min(r.right - MENU_WIDTH, window.innerWidth - MENU_WIDTH - 8));
+    setCoords({ top: r.bottom + 4, left });
+  };
 
   const refresh = async () => {
     setLoading(true);
@@ -86,10 +103,27 @@ export default function SyncToPeerButton({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
+  // Anchor the portaled menu to the trigger while open, and keep it pinned as
+  // the page scrolls/resizes (capture-phase scroll catches inner scrollers too).
+  useLayoutEffect(() => {
+    if (!open) { setCoords(null); return; }
+    updateCoords();
+    const onMove = () => updateCoords();
+    window.addEventListener('scroll', onMove, true);
+    window.addEventListener('resize', onMove);
+    return () => {
+      window.removeEventListener('scroll', onMove, true);
+      window.removeEventListener('resize', onMove);
+    };
+  }, [open]);
+
   useEffect(() => {
     if (!open) return;
     const handler = (e) => {
-      if (wrapperRef.current && !wrapperRef.current.contains(e.target)) setOpen(false);
+      // The menu lives in a portal outside wrapperRef, so check both.
+      const inTrigger = wrapperRef.current && wrapperRef.current.contains(e.target);
+      const inMenu = menuRef.current && menuRef.current.contains(e.target);
+      if (!inTrigger && !inMenu) setOpen(false);
     };
     window.addEventListener('mousedown', handler);
     return () => window.removeEventListener('mousedown', handler);
@@ -136,6 +170,7 @@ export default function SyncToPeerButton({
   return (
     <div ref={wrapperRef} className={`relative inline-block ${className}`}>
       <button
+        ref={triggerRef}
         type="button"
         onClick={() => setOpen((v) => !v)}
         disabled={nothingToSync}
@@ -146,8 +181,12 @@ export default function SyncToPeerButton({
         {!compact && <span>{label}</span>}
       </button>
 
-      {open && (
-        <div className="absolute right-0 z-30 mt-1 w-72 bg-port-card border border-port-border rounded-lg shadow-lg overflow-hidden">
+      {open && coords && createPortal(
+        <div
+          ref={menuRef}
+          style={{ position: 'fixed', top: coords.top, left: coords.left, width: MENU_WIDTH }}
+          className="z-50 bg-port-card border border-port-border rounded-lg shadow-lg overflow-hidden"
+        >
           <div className="px-3 py-2 text-[10px] uppercase tracking-wider text-gray-500 border-b border-port-border">
             Subscribe to peer
           </div>
@@ -205,7 +244,7 @@ export default function SyncToPeerButton({
                             : <Circle size={14} className="text-gray-600" />}
                       </span>
                       <div className="flex-1 min-w-0">
-                        <div className="text-sm text-white truncate">{p.name}</div>
+                        <div className="text-sm text-white truncate">{p.name || p.host || p.address || 'Unnamed peer'}</div>
                         <div className="text-[10px] text-gray-500 truncate">
                           {p.status === 'online' ? 'online' : p.status || 'offline'}
                           {p.host ? ` · ${p.host}` : p.address ? ` · ${p.address}` : ''}
@@ -223,7 +262,8 @@ export default function SyncToPeerButton({
               Subscribed peers receive your edits automatically; their edits flow back if their config allows.
             </div>
           )}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );
