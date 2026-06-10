@@ -13,7 +13,12 @@ import { readClipboard } from '../lib/clipboard';
 const MAX_SESSIONS = 5;
 
 const QUICK_COMMANDS = [
-  { label: 'claude', command: 'claude --dangerously-skip-permissions' },
+  // `--system-prompt .` replaces Claude's default system prompt with a single
+  // "." (a minimal/blank prompt) rather than appending to it — so interactive
+  // sessions launched here skip the heavyweight default harness prompt. The
+  // `claude (full)` entry keeps the default system prompt for when it's wanted.
+  { label: 'claude', command: 'claude --dangerously-skip-permissions --system-prompt .' },
+  { label: 'claude (full)', command: 'claude --dangerously-skip-permissions' },
   { label: 'codex', command: 'codex' },
   { label: 'antigravity', command: 'agy' },
   { label: 'openclaw', command: 'openclaw tui' },
