@@ -18,6 +18,7 @@
 - **[issue-1086] Maintenance:** Extracted the sidebar's apps/series/universes data-fetch loops into dedicated, independently-tested hooks — no behavior change.
 - **[issue-1087] Maintenance:** Extracted the duplicated install-progress streaming logic shared by the FLUX.2 and video-runtime installer dialogs into one tested hook — no behavior change.
 - **[issue-1088] Maintenance:** Added behavioral tests for the Backup settings tab covering settings save, the database restore confirmation gate, and backup-status rendering — no behavior change.
+- **[issue-1089] Repo detection path scoping:** The "import a repo" detector now documents its single-user trust model and, when you set `PORTOS_WORKSPACE_ROOTS`, confines detection to those directories — pointing it elsewhere returns an invalid-path result instead of reading the directory. Unset (the default), detection stays unrestricted as before.
 
 ## Fixed
 
