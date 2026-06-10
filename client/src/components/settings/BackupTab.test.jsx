@@ -185,6 +185,90 @@ describe('BackupTab', () => {
     });
   });
 
+  describe('Run Now gating (saved state)', () => {
+    // The CLAUDE.md invariant: "Run Now must gate on saved state, not the form
+    // input." `canRun` keys off `savedDestPath` + `dirty`, never the live input.
+    it('disables Run Backup Now when no destination is saved', async () => {
+      getSettings.mockResolvedValue({ backup: { destPath: '', enabled: false, cronExpression: '0 2 * * *', excludePaths: [], disabledDefaultExcludes: [] } });
+      await renderTab();
+
+      const runBtn = screen.getByRole('button', { name: /Run Backup Now/i });
+      expect(runBtn.disabled).toBe(true);
+      expect(runBtn.title).toMatch(/Configure and save a destination path first/i);
+    });
+
+    it('disables Run Backup Now while the destination is edited-but-unsaved (dirty)', async () => {
+      getSettings.mockResolvedValue({ backup: { destPath: '/backups', enabled: false, cronExpression: '0 2 * * *', excludePaths: [], disabledDefaultExcludes: [] } });
+      await renderTab();
+
+      // Enabled at rest with a saved destination.
+      expect(screen.getByRole('button', { name: /Run Backup Now/i }).disabled).toBe(false);
+
+      // Editing the field makes it dirty — the action must lock until saved,
+      // because the server reads the saved value, not this in-memory one.
+      fireEvent.change(screen.getByLabelText(/Destination Path/i), { target: { value: '/backups/edited' } });
+
+      const runBtn = screen.getByRole('button', { name: /Run Backup Now/i });
+      expect(runBtn.disabled).toBe(true);
+      expect(runBtn.title).toMatch(/Save your changes before running/i);
+    });
+
+    it('re-enables Run Backup Now once the edited destination is saved', async () => {
+      getSettings.mockResolvedValue({ backup: { destPath: '/backups', enabled: false, cronExpression: '0 2 * * *', excludePaths: [], disabledDefaultExcludes: [] } });
+      updateSettings.mockResolvedValue({});
+      await renderTab();
+
+      fireEvent.change(screen.getByLabelText(/Destination Path/i), { target: { value: '/backups/edited' } });
+      expect(screen.getByRole('button', { name: /Run Backup Now/i }).disabled).toBe(true);
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
+      });
+
+      // Save advances savedDestPath to the new value, clearing dirty → enabled.
+      expect(screen.getByRole('button', { name: /Run Backup Now/i }).disabled).toBe(false);
+    });
+  });
+
+  describe('Run Now — backup-already-running skip path', () => {
+    it('toasts "Backup already running" and leaves status/snapshots untouched when skipped', async () => {
+      getSettings.mockResolvedValue({ backup: { destPath: '/backups', enabled: false, cronExpression: '0 2 * * *', excludePaths: [], disabledDefaultExcludes: [] } });
+      triggerBackup.mockResolvedValue({ skipped: true });
+      await renderTab();
+
+      // One snapshot fetch from the initial load; none from the skip path.
+      expect(getBackupSnapshots).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: /Run Backup Now/i }));
+      });
+
+      expect(triggerBackup).toHaveBeenCalledTimes(1);
+      // Bare-callable toast (not .success/.error) announces the skip.
+      expect(toast).toHaveBeenCalledWith('Backup already running');
+      expect(toast.success).not.toHaveBeenCalled();
+      // Status + snapshots must NOT be refreshed — the skip is a no-op.
+      expect(getBackupSnapshots).toHaveBeenCalledTimes(1);
+    });
+
+    it('refreshes snapshots and toasts success on a non-skipped run', async () => {
+      getSettings.mockResolvedValue({ backup: { destPath: '/backups', enabled: false, cronExpression: '0 2 * * *', excludePaths: [], disabledDefaultExcludes: [] } });
+      triggerBackup.mockResolvedValue({ status: 'ok', filesChanged: 3, pgBackup: { status: 'ok', sizeBytes: 1024, tableCount: 7 } });
+      await renderTab();
+
+      expect(getBackupSnapshots).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: /Run Backup Now/i }));
+      });
+
+      expect(toast).not.toHaveBeenCalledWith('Backup already running');
+      expect(toast.success).toHaveBeenCalledWith('Backup complete — 3 files changed', { icon: '💾' });
+      // A real run refreshes the snapshot list (initial load + post-run).
+      expect(getBackupSnapshots).toHaveBeenCalledTimes(2);
+    });
+  });
+
   describe('pgBackup conditional rendering', () => {
     it('shows "No backup run yet" when pgBackup is null', async () => {
       getBackupStatus.mockResolvedValue({ status: 'never', defaultExcludes: [], pgBackup: null });
