@@ -41,7 +41,7 @@ vi.mock('../runner.js', () => ({
   // onComplete with success. Mirrors what universeBuilderExpand.test.js doesn't
   // need to do (it mocks the upstream expander), but we test the lower-level
   // text-stage runner here.
-  executeApiRun: vi.fn(async (runId, provider, model, prompt, _cwd, _shots, onData, onComplete) => {
+  executeApiRun: vi.fn(async ({ runId, provider, model, prompt, onData, onComplete }) => {
     llmCalls.push({ runId, provider: provider.id, model, prompt });
     onData('## Beat sheet\n1. Setup ...\n');
     onComplete({ success: true });
@@ -120,7 +120,7 @@ describe('pipeline text stage generator', () => {
   it('marks stage as error and rethrows when LLM rejects', async () => {
     const { issue } = await seed();
     const runner = await import('../runner.js');
-    runner.executeApiRun.mockImplementationOnce(async (runId, _p, _m, _prompt, _cwd, _shots, _onData, onComplete) => {
+    runner.executeApiRun.mockImplementationOnce(async ({ onComplete }) => {
       onComplete({ error: 'simulated provider 500' });
     });
     await expect(textStages.generateStage(issue.id, 'idea')).rejects.toThrow(/simulated provider 500/);

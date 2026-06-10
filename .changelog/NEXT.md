@@ -13,6 +13,7 @@
 - **[issue-1082] Maintenance:** Decomposed the Chief-of-Staff task-evaluation engine's monolithic spawn loop into one named function per priority tier — no behavior change, making each tier independently testable.
 - **[issue-1083] Maintenance:** Split the 2,600-line task-prompt module into a pure data leaf (the default-prompt catalog) and a thin getter layer, removing a circular import between the prompt and schedule services — no behavior change.
 - **[issue-1084] Maintenance:** AI provider/run/prompt API errors now report the same structured shape (with an error code and timestamp) as the rest of PortOS, so error-handling UI behaves consistently across every API.
+- **[issue-1085] Maintenance:** The AI run executors now take a single named-options argument instead of long positional parameter lists, making their call sites less order-fragile — no behavior change.
 
 ## Fixed
 

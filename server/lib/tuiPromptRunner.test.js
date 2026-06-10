@@ -264,21 +264,21 @@ describe('executeTuiRun', () => {
 
   describe('input validation', () => {
     it('throws when provider is missing', async () => {
-      await expect(executeTuiRun('run-x', null, 'prompt', '/tmp'))
+      await expect(executeTuiRun({ runId: 'run-x', provider: null, prompt: 'prompt', workspacePath: '/tmp' }))
         .rejects.toThrow(/provider is required/);
       expect(ptySpawnMock).not.toHaveBeenCalled();
     });
 
     it('throws when prompt is empty', async () => {
       const provider = { id: 'claude', type: 'tui', command: 'echo' };
-      await expect(executeTuiRun('run-x', provider, '', '/tmp'))
+      await expect(executeTuiRun({ runId: 'run-x', provider, prompt: '', workspacePath: '/tmp' }))
         .rejects.toThrow(/non-empty string/);
       expect(ptySpawnMock).not.toHaveBeenCalled();
     });
 
     it('throws when prompt is non-string', async () => {
       const provider = { id: 'claude', type: 'tui', command: 'echo' };
-      await expect(executeTuiRun('run-x', provider, 12345, '/tmp'))
+      await expect(executeTuiRun({ runId: 'run-x', provider, prompt: 12345, workspacePath: '/tmp' }))
         .rejects.toThrow(/non-empty string/);
     });
   });
@@ -287,7 +287,7 @@ describe('executeTuiRun', () => {
     it('wraps node-pty spawn errors with the offending command name', async () => {
       ptySpawnMock.mockImplementation(() => { throw new Error('ENOENT'); });
       const provider = { id: 'codex', type: 'tui', command: 'nonexistent-cli' };
-      await expect(executeTuiRun('run-x', provider, 'do thing', '/tmp'))
+      await expect(executeTuiRun({ runId: 'run-x', provider, prompt: 'do thing', workspacePath: '/tmp' }))
         .rejects.toThrow(/Failed to spawn TUI 'nonexistent-cli': ENOENT/);
     });
   });
@@ -297,7 +297,7 @@ describe('executeTuiRun', () => {
       const provider = {
         id: 'claude', type: 'tui', command: 'echo', defaultModel: 'claude-3.5',
       };
-      const promise = executeTuiRun('run-A', provider, 'do thing big enough', '/cwd', undefined, undefined, 60000);
+      const promise = executeTuiRun({ runId: 'run-A', provider, prompt: 'do thing big enough', workspacePath: '/cwd', onData: undefined, onComplete: undefined, timeout: 60000 });
       await flushAsync();
 
       expect(ptySpawnMock).toHaveBeenCalledTimes(1);
@@ -327,7 +327,7 @@ describe('executeTuiRun', () => {
           id: 'claude', type: 'tui', command: 'echo',
           envVars: { CUSTOM_PROVIDER_VAR: 'on' },
         };
-        const promise = executeTuiRun('run-B', provider, 'p large enough to clear the guard', '/cwd', undefined, undefined, 60000);
+        const promise = executeTuiRun({ runId: 'run-B', provider, prompt: 'p large enough to clear the guard', workspacePath: '/cwd', onData: undefined, onComplete: undefined, timeout: 60000 });
         await flushAsync();
 
         const env = ptySpawnMock.mock.calls[0][2].env;
@@ -355,7 +355,7 @@ describe('executeTuiRun', () => {
         tuiPromptDelayMs: 50, tuiOneShotIdleMs: 500,
       };
       const onComplete = vi.fn();
-      const promise = executeTuiRun('run-idle', provider, 'do thing big enough to clear the prompt guard', '/cwd', undefined, onComplete, 60000);
+      const promise = executeTuiRun({ runId: 'run-idle', provider, prompt: 'do thing big enough to clear the prompt guard', workspacePath: '/cwd', onData: undefined, onComplete, timeout: 60000 });
       await flushAsync();
 
       const pty = ptyInstances[0];
@@ -395,7 +395,7 @@ describe('executeTuiRun', () => {
         toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
       });
       const provider = { id: 'claude', type: 'tui', command: 'echo' };
-      const promise = executeTuiRun('run-timeout', provider, 'a prompt long enough to clear the guard', '/cwd', undefined, undefined, 500);
+      const promise = executeTuiRun({ runId: 'run-timeout', provider, prompt: 'a prompt long enough to clear the guard', workspacePath: '/cwd', onData: undefined, onComplete: undefined, timeout: 500 });
       await flushAsync();
 
       // No data emitted → no firstOutputAt → ready-watch never triggers paste
@@ -417,7 +417,7 @@ describe('executeTuiRun', () => {
 
     it('early-fails with reason "command-not-found" and exitCode 127 when "command not found" appears pre-paste', async () => {
       const provider = { id: 'codex', type: 'tui', command: 'no-such-tui' };
-      const promise = executeTuiRun('run-missing', provider, 'a prompt long enough', '/cwd', undefined, undefined, 60000);
+      const promise = executeTuiRun({ runId: 'run-missing', provider, prompt: 'a prompt long enough', workspacePath: '/cwd', onData: undefined, onComplete: undefined, timeout: 60000 });
       await flushAsync();
 
       // Shell banner echoing the missing-command error before paste.
@@ -436,7 +436,7 @@ describe('executeTuiRun', () => {
     it('early-fails with reason "fallback-signal" when Claude switches to extra usage', async () => {
       const provider = { id: 'claude', type: 'tui', command: 'claude' };
       const onComplete = vi.fn();
-      const promise = executeTuiRun('run-extra-usage', provider, 'a prompt long enough', '/cwd', undefined, onComplete, 60000);
+      const promise = executeTuiRun({ runId: 'run-extra-usage', provider, prompt: 'a prompt long enough', workspacePath: '/cwd', onData: undefined, onComplete, timeout: 60000 });
       await flushAsync();
 
       ptyInstances[0].emitData('Now using extra ');
@@ -461,7 +461,7 @@ describe('executeTuiRun', () => {
 
     it('finishes with reason "exit" + exitCode 0 when the PTY closes cleanly', async () => {
       const provider = { id: 'claude', type: 'tui', command: 'echo' };
-      const promise = executeTuiRun('run-exit', provider, 'a prompt long enough', '/cwd', undefined, undefined, 60000);
+      const promise = executeTuiRun({ runId: 'run-exit', provider, prompt: 'a prompt long enough', workspacePath: '/cwd', onData: undefined, onComplete: undefined, timeout: 60000 });
       await flushAsync();
 
       ptyInstances[0].emitExit({ exitCode: 0 });
@@ -478,7 +478,7 @@ describe('executeTuiRun', () => {
 
     it('finishes with reason "killed" and surfaces the signal in the error when the PTY is terminated', async () => {
       const provider = { id: 'claude', type: 'tui', command: 'echo' };
-      const promise = executeTuiRun('run-killed', provider, 'a prompt long enough', '/cwd', undefined, undefined, 60000);
+      const promise = executeTuiRun({ runId: 'run-killed', provider, prompt: 'a prompt long enough', workspacePath: '/cwd', onData: undefined, onComplete: undefined, timeout: 60000 });
       await flushAsync();
 
       ptyInstances[0].emitData('some screen output');
@@ -496,7 +496,7 @@ describe('executeTuiRun', () => {
 
     it('finishes with a tail-bearing error message when the PTY exits non-zero with prior output', async () => {
       const provider = { id: 'claude', type: 'tui', command: 'echo' };
-      const promise = executeTuiRun('run-nonzero', provider, 'a prompt long enough', '/cwd', undefined, undefined, 60000);
+      const promise = executeTuiRun({ runId: 'run-nonzero', provider, prompt: 'a prompt long enough', workspacePath: '/cwd', onData: undefined, onComplete: undefined, timeout: 60000 });
       await flushAsync();
 
       ptyInstances[0].emitData('fatal: provider config malformed at line 42');

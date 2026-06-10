@@ -65,7 +65,7 @@ const PTY_ROWS = 50;
 /**
  * Run a single prompt through a TUI provider. Mirrors the signature of
  * `executeCliRun` / `executeApiRun` so the central handler treats all three
- * branches uniformly (positional, NOT an options object).
+ * branches uniformly (a single options object).
  *
  * Caller (typically `runPromptThroughProvider`) owns the run record:
  *   - `createRun` (toolkit) writes the initial metadata.json + prompt.txt
@@ -73,24 +73,25 @@ const PTY_ROWS = 50;
  *     via `runner.js#finalizeRunRecord`, so /runs shows TUI runs with the
  *     same success/exitCode/duration shape as CLI runs.
  *
- * @param {string} runId — pre-created run id (from createRun).
- * @param {object} provider — { id, type: 'tui', command, args, envVars,
+ * @param {object} options
+ * @param {string} options.runId — pre-created run id (from createRun).
+ * @param {object} options.provider — { id, type: 'tui', command, args, envVars,
  *   tuiPromptDelayMs?, tuiOneShotIdleMs?, timeout?, defaultModel? }. The
  *   model passed to `--model` is taken from `provider.defaultModel`; per-
  *   call overrides are applied by the central handler via a provider clone
  *   before this function is reached.
- * @param {string} prompt — full text to paste into the TUI.
- * @param {string} cwd — working directory for the spawned TUI.
- * @param {(chunk: string) => void} [onData] — incremental ANSI-stripped
+ * @param {string} options.prompt — full text to paste into the TUI.
+ * @param {string} options.workspacePath — working directory for the spawned TUI.
+ * @param {(chunk: string) => void} [options.onData] — incremental ANSI-stripped
  *   output stream.
- * @param {(meta: object) => void} [onComplete] — fired after exit with
+ * @param {(meta: object) => void} [options.onComplete] — fired after exit with
  *   `{ exitCode, duration, success, error?, model? }`. Promise resolves
  *   AFTER this fires.
- * @param {number} [timeout] — hard cap on a single run (ms). Falls back to
+ * @param {number} [options.timeout] — hard cap on a single run (ms). Falls back to
  *   `provider.timeout`, then `DEFAULT_TIMEOUT_MS`.
  * @returns {Promise<void>}
  */
-export async function executeTuiRun(runId, provider, prompt, cwd, onData, onComplete, timeout) {
+export async function executeTuiRun({ runId, provider, prompt, workspacePath, onData, onComplete, timeout }) {
   if (!provider || typeof provider !== 'object') {
     throw new Error('executeTuiRun: provider is required');
   }
@@ -102,7 +103,7 @@ export async function executeTuiRun(runId, provider, prompt, cwd, onData, onComp
   const promptDelayMs = provider.tuiPromptDelayMs ?? DEFAULT_TUI_PROMPT_DELAY_MS;
   const idleThresholdMs = provider.tuiOneShotIdleMs ?? DEFAULT_ONE_SHOT_IDLE_MS;
   const totalTimeoutMs = timeout ?? provider.timeout ?? DEFAULT_TIMEOUT_MS;
-  const workingDir = (typeof cwd === 'string' && cwd) ? cwd : PATHS.root;
+  const workingDir = (typeof workspacePath === 'string' && workspacePath) ? workspacePath : PATHS.root;
 
   // Mirror runner.js#executeCliRun's runs-path resolution so TUI runs land
   // under the runner-config dataDir (not always PATHS.runs) — otherwise a

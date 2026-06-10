@@ -194,7 +194,7 @@ export function createRunnerService(config = {}) {
       return { runId, runDir, provider, metadata, timeout: effectiveTimeout, usedFallback, fallbackModel: fallbackModelHint };
     },
 
-    async executeCliRun(runId, provider, prompt, workspacePath, onData, onComplete, timeout) {
+    async executeCliRun({ runId, provider, prompt, workspacePath, onData, onComplete, timeout }) {
       const runDir = join(RUNS_PATH, runId);
       const outputPath = join(runDir, 'output.txt');
       const metadataPath = join(runDir, 'metadata.json');
@@ -281,7 +281,7 @@ export function createRunnerService(config = {}) {
       return runId;
     },
 
-    async executeApiRun(runId, provider, model, prompt, workspacePath, screenshots, onData, onComplete) {
+    async executeApiRun({ runId, provider, model, prompt, workspacePath, screenshots, onData, onComplete }) {
       const runDir = join(RUNS_PATH, runId);
       const outputPath = join(runDir, 'output.txt');
       const metadataPath = join(runDir, 'metadata.json');

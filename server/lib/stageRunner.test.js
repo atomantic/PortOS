@@ -135,7 +135,7 @@ describe('stageRunner — runStagedLLM provider resolution', () => {
   it('uses the active provider when stage and overrides leave it unspecified', async () => {
     prompts.getStage.mockReturnValue(null);
     providers.getActiveProvider.mockResolvedValue(apiProvider());
-    runner.executeApiRun.mockImplementation(async (_id, _p, _m, _pr, _cwd, _shots, onData, onComplete) => {
+    runner.executeApiRun.mockImplementation(async ({ onData, onComplete }) => {
       onData('hello');
       onComplete({ success: true });
     });
@@ -151,7 +151,7 @@ describe('stageRunner — runStagedLLM provider resolution', () => {
     providers.getProviderById.mockImplementation(async (id) => (
       id === 'override-id' ? apiProvider({ id: 'override-id' }) : null
     ));
-    runner.executeApiRun.mockImplementation(async (_id, _p, _m, _pr, _cwd, _shots, onData, onComplete) => {
+    runner.executeApiRun.mockImplementation(async ({ onData, onComplete }) => {
       onData('override-content');
       onComplete({ success: true });
     });
@@ -165,7 +165,7 @@ describe('stageRunner — runStagedLLM provider resolution', () => {
     providers.getProviderById.mockImplementation(async (id) => (
       id === 'stage-pinned' ? apiProvider({ id: 'stage-pinned' }) : null
     ));
-    runner.executeApiRun.mockImplementation(async (_id, _p, _m, _pr, _cwd, _shots, onData, onComplete) => {
+    runner.executeApiRun.mockImplementation(async ({ onData, onComplete }) => {
       onData('pinned');
       onComplete({ success: true });
     });
@@ -196,7 +196,7 @@ describe('stageRunner — runStagedLLM dispatch', () => {
   it('routes CLI providers through executeCliRun', async () => {
     prompts.getStage.mockReturnValue(null);
     providers.getActiveProvider.mockResolvedValue(cliProvider());
-    runner.executeCliRun.mockImplementation(async (_id, _p, _pr, _cwd, onData, onComplete, _t) => {
+    runner.executeCliRun.mockImplementation(async ({ onData, onComplete }) => {
       onData('cli-output');
       onComplete({ success: true });
     });
@@ -209,7 +209,7 @@ describe('stageRunner — runStagedLLM dispatch', () => {
   it('rejects when executeApiRun reports an error', async () => {
     prompts.getStage.mockReturnValue(null);
     providers.getActiveProvider.mockResolvedValue(apiProvider());
-    runner.executeApiRun.mockImplementation(async (_id, _p, _m, _pr, _cwd, _shots, _onData, onComplete) => {
+    runner.executeApiRun.mockImplementation(async ({ onComplete }) => {
       onComplete({ error: 'simulated 500' });
     });
     await expect(runStagedLLM('s', {})).rejects.toThrow(/simulated 500/);
@@ -218,7 +218,7 @@ describe('stageRunner — runStagedLLM dispatch', () => {
   it('rejects when executeCliRun reports success: false', async () => {
     prompts.getStage.mockReturnValue(null);
     providers.getActiveProvider.mockResolvedValue(cliProvider());
-    runner.executeCliRun.mockImplementation(async (_id, _p, _pr, _cwd, _onData, onComplete, _t) => {
+    runner.executeCliRun.mockImplementation(async ({ onComplete }) => {
       onComplete({ success: false, error: 'cli failed' });
     });
     await expect(runStagedLLM('s', {})).rejects.toThrow(/cli failed/);
@@ -227,7 +227,7 @@ describe('stageRunner — runStagedLLM dispatch', () => {
   it('parses JSON when returnsJson is true', async () => {
     prompts.getStage.mockReturnValue(null);
     providers.getActiveProvider.mockResolvedValue(apiProvider());
-    runner.executeApiRun.mockImplementation(async (_id, _p, _m, _pr, _cwd, _shots, onData, onComplete) => {
+    runner.executeApiRun.mockImplementation(async ({ onData, onComplete }) => {
       onData('```json\n{"x":1}\n```');
       onComplete({ success: true });
     });
@@ -238,7 +238,7 @@ describe('stageRunner — runStagedLLM dispatch', () => {
   it('forwards source to createRun for transcript filtering', async () => {
     prompts.getStage.mockReturnValue(null);
     providers.getActiveProvider.mockResolvedValue(apiProvider());
-    runner.executeApiRun.mockImplementation(async (_id, _p, _m, _pr, _cwd, _shots, onData, onComplete) => {
+    runner.executeApiRun.mockImplementation(async ({ onData, onComplete }) => {
       onData('out');
       onComplete({ success: true });
     });
@@ -249,32 +249,32 @@ describe('stageRunner — runStagedLLM dispatch', () => {
   it('passes stage.timeout to executeCliRun when set', async () => {
     prompts.getStage.mockReturnValue({ timeout: 900000 });
     providers.getActiveProvider.mockResolvedValue(cliProvider({ timeout: 5000 }));
-    runner.executeCliRun.mockImplementation(async (_id, _p, _pr, _cwd, _onData, onComplete, _t) => {
+    runner.executeCliRun.mockImplementation(async ({ onComplete }) => {
       onComplete({ success: true });
     });
     await runStagedLLM('s', {});
-    // executeCliRun(runId, provider, prompt, cwd, onData, onComplete, timeout)
-    expect(runner.executeCliRun.mock.calls[0][6]).toBe(900000);
+    // executeCliRun({ runId, provider, prompt, workspacePath, onData, onComplete, timeout })
+    expect(runner.executeCliRun.mock.calls[0][0].timeout).toBe(900000);
   });
 
   it('falls back to provider.timeout when stage.timeout is missing', async () => {
     prompts.getStage.mockReturnValue(null);
     providers.getActiveProvider.mockResolvedValue(cliProvider({ timeout: 5000 }));
-    runner.executeCliRun.mockImplementation(async (_id, _p, _pr, _cwd, _onData, onComplete, _t) => {
+    runner.executeCliRun.mockImplementation(async ({ onComplete }) => {
       onComplete({ success: true });
     });
     await runStagedLLM('s', {});
-    expect(runner.executeCliRun.mock.calls[0][6]).toBe(5000);
+    expect(runner.executeCliRun.mock.calls[0][0].timeout).toBe(5000);
   });
 
   it('coerces a legacy digit-only stringified stage.timeout to a number', async () => {
     prompts.getStage.mockReturnValue({ timeout: '900000' });
     providers.getActiveProvider.mockResolvedValue(cliProvider({ timeout: 5000 }));
-    runner.executeCliRun.mockImplementation(async (_id, _p, _pr, _cwd, _onData, onComplete, _t) => {
+    runner.executeCliRun.mockImplementation(async ({ onComplete }) => {
       onComplete({ success: true });
     });
     await runStagedLLM('s', {});
-    expect(runner.executeCliRun.mock.calls[0][6]).toBe(900000);
+    expect(runner.executeCliRun.mock.calls[0][0].timeout).toBe(900000);
   });
 
   it('rejects exponent/hex/float string forms (matches parseTimeoutMs)', async () => {
@@ -283,31 +283,31 @@ describe('stageRunner — runStagedLLM dispatch', () => {
     // the route validator and client parser.
     prompts.getStage.mockReturnValue({ timeout: '1e3' });
     providers.getActiveProvider.mockResolvedValue(cliProvider({ timeout: 5000 }));
-    runner.executeCliRun.mockImplementation(async (_id, _p, _pr, _cwd, _onData, onComplete, _t) => {
+    runner.executeCliRun.mockImplementation(async ({ onComplete }) => {
       onComplete({ success: true });
     });
     await runStagedLLM('s', {});
-    expect(runner.executeCliRun.mock.calls[0][6]).toBe(5000);
+    expect(runner.executeCliRun.mock.calls[0][0].timeout).toBe(5000);
   });
 
   it('rejects zero/negative stage.timeout instead of cancelling instantly', async () => {
     prompts.getStage.mockReturnValue({ timeout: 0 });
     providers.getActiveProvider.mockResolvedValue(cliProvider({ timeout: 5000 }));
-    runner.executeCliRun.mockImplementation(async (_id, _p, _pr, _cwd, _onData, onComplete, _t) => {
+    runner.executeCliRun.mockImplementation(async ({ onComplete }) => {
       onComplete({ success: true });
     });
     await runStagedLLM('s', {});
-    expect(runner.executeCliRun.mock.calls[0][6]).toBe(5000);
+    expect(runner.executeCliRun.mock.calls[0][0].timeout).toBe(5000);
   });
 
   it('honors timeoutOverride beating both stage.timeout and provider.timeout', async () => {
     prompts.getStage.mockReturnValue({ timeout: 900000 });
     providers.getActiveProvider.mockResolvedValue(cliProvider({ timeout: 5000 }));
-    runner.executeCliRun.mockImplementation(async (_id, _p, _pr, _cwd, _onData, onComplete, _t) => {
+    runner.executeCliRun.mockImplementation(async ({ onComplete }) => {
       onComplete({ success: true });
     });
     await runStagedLLM('s', {}, { timeoutOverride: 1234 });
-    expect(runner.executeCliRun.mock.calls[0][6]).toBe(1234);
+    expect(runner.executeCliRun.mock.calls[0][0].timeout).toBe(1234);
   });
 
   it('rejects a non-integer stage.timeout (no silent truncation)', async () => {
@@ -316,11 +316,11 @@ describe('stageRunner — runStagedLLM dispatch', () => {
     // runner mirrors that. Falls back to provider default.
     prompts.getStage.mockReturnValue({ timeout: 1000.9 });
     providers.getActiveProvider.mockResolvedValue(cliProvider({ timeout: 5000 }));
-    runner.executeCliRun.mockImplementation(async (_id, _p, _pr, _cwd, _onData, onComplete, _t) => {
+    runner.executeCliRun.mockImplementation(async ({ onComplete }) => {
       onComplete({ success: true });
     });
     await runStagedLLM('s', {});
-    expect(runner.executeCliRun.mock.calls[0][6]).toBe(5000);
+    expect(runner.executeCliRun.mock.calls[0][0].timeout).toBe(5000);
   });
 
   it('rejects a non-positive timeoutOverride instead of running unbounded', async () => {
@@ -329,11 +329,11 @@ describe('stageRunner — runStagedLLM dispatch', () => {
     // when neither is set).
     prompts.getStage.mockReturnValue(null);
     providers.getActiveProvider.mockResolvedValue(cliProvider({ timeout: 5000 }));
-    runner.executeCliRun.mockImplementation(async (_id, _p, _pr, _cwd, _onData, onComplete, _t) => {
+    runner.executeCliRun.mockImplementation(async ({ onComplete }) => {
       onComplete({ success: true });
     });
     await runStagedLLM('s', {}, { timeoutOverride: 0 });
-    expect(runner.executeCliRun.mock.calls[0][6]).toBe(5000);
+    expect(runner.executeCliRun.mock.calls[0][0].timeout).toBe(5000);
   });
 
   it('rejects a too-large timeoutOverride (above 30-min cap) and falls back', async () => {
@@ -341,11 +341,11 @@ describe('stageRunner — runStagedLLM dispatch', () => {
     // not silently clamped. Falls through to provider.timeout.
     prompts.getStage.mockReturnValue(null);
     providers.getActiveProvider.mockResolvedValue(cliProvider({ timeout: 5000 }));
-    runner.executeCliRun.mockImplementation(async (_id, _p, _pr, _cwd, _onData, onComplete, _t) => {
+    runner.executeCliRun.mockImplementation(async ({ onComplete }) => {
       onComplete({ success: true });
     });
     await runStagedLLM('s', {}, { timeoutOverride: 9_999_999_999 });
-    expect(runner.executeCliRun.mock.calls[0][6]).toBe(5000);
+    expect(runner.executeCliRun.mock.calls[0][0].timeout).toBe(5000);
   });
 
   it('rejects a timeoutOverride below the 1s floor', async () => {
@@ -354,17 +354,17 @@ describe('stageRunner — runStagedLLM dispatch', () => {
     // override would otherwise become a near-instant cancel.
     prompts.getStage.mockReturnValue(null);
     providers.getActiveProvider.mockResolvedValue(cliProvider({ timeout: 5000 }));
-    runner.executeCliRun.mockImplementation(async (_id, _p, _pr, _cwd, _onData, onComplete, _t) => {
+    runner.executeCliRun.mockImplementation(async ({ onComplete }) => {
       onComplete({ success: true });
     });
     await runStagedLLM('s', {}, { timeoutOverride: 999 });
-    expect(runner.executeCliRun.mock.calls[0][6]).toBe(5000);
+    expect(runner.executeCliRun.mock.calls[0][0].timeout).toBe(5000);
   });
 
   it('passes effectiveTimeout into createRun so /runs metadata matches execution', async () => {
     prompts.getStage.mockReturnValue({ timeout: 900000 });
     providers.getActiveProvider.mockResolvedValue(cliProvider({ timeout: 5000 }));
-    runner.executeCliRun.mockImplementation(async (_id, _p, _pr, _cwd, _onData, onComplete, _t) => {
+    runner.executeCliRun.mockImplementation(async ({ onComplete }) => {
       onComplete({ success: true });
     });
     await runStagedLLM('s', {});
@@ -374,7 +374,7 @@ describe('stageRunner — runStagedLLM dispatch', () => {
   it('falls back to provider.timeout in createRun call when no override is set', async () => {
     prompts.getStage.mockReturnValue(null);
     providers.getActiveProvider.mockResolvedValue(cliProvider({ timeout: 5000 }));
-    runner.executeCliRun.mockImplementation(async (_id, _p, _pr, _cwd, _onData, onComplete, _t) => {
+    runner.executeCliRun.mockImplementation(async ({ onComplete }) => {
       onComplete({ success: true });
     });
     await runStagedLLM('s', {});
@@ -391,7 +391,7 @@ describe('stageRunner — runStagedLLM dispatch', () => {
     const fallback = cliProvider({ id: 'fallback-cli', defaultModel: 'fallback-model', timeout: 7000 });
     providers.getActiveProvider.mockResolvedValue(original);
     runner.createRun.mockResolvedValueOnce({ runId: 'run-abc12345', provider: fallback });
-    runner.executeCliRun.mockImplementation(async (_id, providerArg, _pr, _cwd, _onData, onComplete, _t) => {
+    runner.executeCliRun.mockImplementation(async ({ provider: providerArg, onComplete }) => {
       // Critical: execution must run against the fallback (the one createRun
       // returned), NOT the original requested provider.
       expect(providerArg.id).toBe('fallback-cli');

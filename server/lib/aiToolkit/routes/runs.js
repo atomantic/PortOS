@@ -70,35 +70,35 @@ export function createRunsRoutes(runnerService, options = {}) {
       : provider;
 
     if (provider.type === 'cli') {
-      runnerService.executeCliRun(
+      runnerService.executeCliRun({
         runId,
-        cliProvider,
+        provider: cliProvider,
         prompt,
         workspacePath,
-        (data) => {
+        onData: (data) => {
           io?.emit(`run:${runId}:data`, data);
         },
-        (finalMetadata) => {
+        onComplete: (finalMetadata) => {
           console.log(`✅ Run complete: ${runId}, success: ${finalMetadata.success}`);
           io?.emit(`run:${runId}:complete`, finalMetadata);
         },
-        effectiveTimeout
-      );
+        timeout: effectiveTimeout,
+      });
     } else if (provider.type === 'api') {
-      runnerService.executeApiRun(
+      runnerService.executeApiRun({
         runId,
         provider,
-        runModel,
+        model: runModel,
         prompt,
         workspacePath,
         screenshots,
-        (data) => {
+        onData: (data) => {
           io?.emit(`run:${runId}:data`, data);
         },
-        (finalMetadata) => {
+        onComplete: (finalMetadata) => {
           io?.emit(`run:${runId}:complete`, finalMetadata);
-        }
-      );
+        },
+      });
     } else if (provider.type === 'tui' && typeof runnerService.executeTuiRun === 'function') {
       // Honor the user-picked model from the Runs UI — `executeTuiRun` reads
       // `provider.defaultModel` for its `--model` injection, so without the
@@ -109,20 +109,20 @@ export function createRunsRoutes(runnerService, options = {}) {
       const effectiveProvider = runModel
         ? { ...provider, defaultModel: runModel }
         : provider;
-      runnerService.executeTuiRun(
+      runnerService.executeTuiRun({
         runId,
-        effectiveProvider,
+        provider: effectiveProvider,
         prompt,
         workspacePath,
-        (data) => {
+        onData: (data) => {
           io?.emit(`run:${runId}:data`, data);
         },
-        (finalMetadata) => {
+        onComplete: (finalMetadata) => {
           console.log(`✅ Run complete: ${runId}, success: ${finalMetadata.success}`);
           io?.emit(`run:${runId}:complete`, finalMetadata);
         },
-        effectiveTimeout
-      );
+        timeout: effectiveTimeout,
+      });
     } else {
       throw new ServerError(`Unsupported provider type: ${provider.type}`, {
         status: 400,
