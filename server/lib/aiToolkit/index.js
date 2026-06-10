@@ -14,6 +14,7 @@ import { createProvidersRoutes } from './routes/providers.js';
 import { createRunsRoutes } from './routes/runs.js';
 import { createPromptsRoutes } from './routes/prompts.js';
 import { createProviderStatusRoutes } from './routes/providerStatus.js';
+import { defaultAsyncHandler } from './internal/httpError.js';
 import * as errorDetection from './errorDetection.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -36,7 +37,15 @@ export function createAIToolkit(config = {}) {
     screenshotsDir = './data/screenshots',
     sampleProvidersFile = null,
     io = null,
-    asyncHandler = (fn) => fn,
+    // Standalone, fall back to the toolkit's own JSON-serializing handler so
+    // thrown errors still produce the canonical envelope (not Express 5's HTML
+    // error page). PortOS injects its own asyncHandler (→ errorMiddleware).
+    asyncHandler = defaultAsyncHandler,
+    // Host-injected HTTP error class (PortOS passes its `ServerError` so route
+    // errors normalize into `{ error, code, timestamp, context? }`). Threaded
+    // to every router; routes default to the toolkit's own ToolkitHttpError
+    // when this is unset (standalone use).
+    ServerError,
     hooks = {},
     maxConcurrentRuns = 5,
     enableProviderStatus = true,
@@ -90,12 +99,15 @@ export function createAIToolkit(config = {}) {
     console.error(`❌ Failed to initialize prompts: ${err.message}`);
   });
 
-  const providersRouter = createProvidersRoutes(providerService, { asyncHandler });
-  const runsRouter = createRunsRoutes(runnerService, { asyncHandler, io });
-  const promptsRouter = createPromptsRoutes(promptsService, { asyncHandler });
+  // `ServerError: undefined` lets the router's own default (ToolkitHttpError)
+  // apply — destructuring defaults fire for undefined values.
+  const providersRouter = createProvidersRoutes(providerService, { asyncHandler, ServerError });
+  const runsRouter = createRunsRoutes(runnerService, { asyncHandler, io, ServerError });
+  const promptsRouter = createPromptsRoutes(promptsService, { asyncHandler, ServerError });
 
   let providerStatusRouter = null;
   if (providerStatusService) {
+    // providerStatus has no 4xx error paths today, so it takes no ServerError.
     providerStatusRouter = createProviderStatusRoutes(providerStatusService, { asyncHandler });
   }
 

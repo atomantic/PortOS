@@ -95,6 +95,9 @@ import { useSharingNotifications } from '../hooks/useSharingNotifications';
 import { useUpdateChecker } from '../hooks/useUpdateChecker';
 import { useAIStatusNotifications } from '../hooks/useAIStatusNotifications';
 import { useNavWorkingSet } from '../hooks/useNavWorkingSet.js';
+import { useSidebarApps } from '../hooks/useSidebarApps.js';
+import { useSidebarSeries } from '../hooks/useSidebarSeries.js';
+import { useSidebarUniverses } from '../hooks/useSidebarUniverses.js';
 import { useThemeContext } from './ThemeContext';
 import NotificationDropdown from './NotificationDropdown';
 import VoiceToggleButton from './voice/VoiceToggleButton';
@@ -120,7 +123,6 @@ function ThemeModeToggle({ className = '' }) {
   );
 }
 import * as api from '../services/api';
-import socket from '../services/socket';
 
 const navItems = [
   { to: '/', label: 'Dashboard', icon: Home, single: true },
@@ -484,80 +486,12 @@ export default function Layout() {
     clearAll
   } = useNotifications();
 
-  // Fetch apps for sidebar navigation
-  const [sidebarApps, setSidebarApps] = useState([]);
-  useEffect(() => {
-    const fetchApps = () => {
-      api.getApps({ silent: true }).then(apps => {
-        setSidebarApps((apps || []).filter(a => !a.archived).sort((a, b) => a.name.localeCompare(b.name)));
-      }).catch((err) => {
-        console.warn(`⚠️ Layout: getApps refresh failed: ${err?.message || err}`);
-      });
-    };
-    fetchApps();
-    socket.on('apps:changed', fetchApps);
-    return () => socket.off('apps:changed', fetchApps);
-  }, []);
-
-  // Fetch all pipeline series for the Create > Pipeline grandchildren.
-  // Refresh on focus (debounced 30s) so freshly-created or renamed series
-  // surface without a reload. Signature guard avoids re-rendering the whole
-  // sidebar tree when nothing changed.
-  const [pipelineSeries, setPipelineSeries] = useState([]);
-  useEffect(() => {
-    let lastSuccessAt = 0;
-    const sigOf = (items) => items.map((s) => `${s.id}|${s.name}`).join('||');
-    const loadSeries = () => {
-      api.listPipelineSeries({ silent: true })
-        .then((items) => {
-          lastSuccessAt = Date.now();
-          const next = (Array.isArray(items) ? items : []).slice().sort((a, b) =>
-            (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' }),
-          );
-          setPipelineSeries((prev) => sigOf(prev) === sigOf(next) ? prev : next);
-        })
-        .catch((err) => {
-          console.warn(`⚠️ Sidebar pipeline-series fetch failed: ${err?.message || err}`);
-        });
-    };
-    loadSeries();
-    const onFocus = () => {
-      if (Date.now() - lastSuccessAt < 30_000) return;
-      loadSeries();
-    };
-    window.addEventListener('focus', onFocus);
-    return () => window.removeEventListener('focus', onFocus);
-  }, []);
-
-  // Fetch all universes for the Create > Universes grandchildren.
-  // Refresh on focus (debounced 30s) so freshly-created or renamed universes
-  // surface without a reload. Signature guard avoids re-rendering the whole
-  // sidebar tree when nothing changed.
-  const [universes, setUniverses] = useState([]);
-  useEffect(() => {
-    let lastSuccessAt = 0;
-    const sigOf = (items) => items.map((u) => `${u.id}|${u.name}`).join('||');
-    const loadUniverses = () => {
-      api.listUniverses({ silent: true })
-        .then((items) => {
-          lastSuccessAt = Date.now();
-          const next = (Array.isArray(items) ? items : []).slice().sort((a, b) =>
-            (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' }),
-          );
-          setUniverses((prev) => sigOf(prev) === sigOf(next) ? prev : next);
-        })
-        .catch((err) => {
-          console.warn(`⚠️ Sidebar universes fetch failed: ${err?.message || err}`);
-        });
-    };
-    loadUniverses();
-    const onFocus = () => {
-      if (Date.now() - lastSuccessAt < 30_000) return;
-      loadUniverses();
-    };
-    window.addEventListener('focus', onFocus);
-    return () => window.removeEventListener('focus', onFocus);
-  }, []);
+  // Sidebar data-fetch loops (apps / pipeline series / universes) live in
+  // dedicated hooks so the shared focus-debounce + signature-guard pattern is
+  // testable in isolation. See client/src/hooks/useSidebar*.js.
+  const sidebarApps = useSidebarApps();
+  const pipelineSeries = useSidebarSeries();
+  const universes = useSidebarUniverses();
 
   // Fetch the palette nav manifest once on mount so manifest-only paths
   // (e.g. /wiki/log, /goals/tree) can be resolved in the Pinned/Recent sections

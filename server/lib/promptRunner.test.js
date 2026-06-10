@@ -90,7 +90,7 @@ beforeEach(() => {
 
 describe('promptRunner — happy paths', () => {
   it('routes CLI providers through executeCliRun, accumulates text, resolves { text, runId, model }', async () => {
-    runner.executeCliRun.mockImplementation(async (id, _p, _pr, _cwd, onData, onComplete, _t) => {
+    runner.executeCliRun.mockImplementation(async ({ onData, onComplete }) => {
       onData('hello ');
       onData('world');
       onComplete({ success: true });
@@ -108,7 +108,7 @@ describe('promptRunner — happy paths', () => {
   });
 
   it('routes API providers through executeApiRun, accumulates text, resolves { text, runId, model }', async () => {
-    runner.executeApiRun.mockImplementation(async (id, _p, _m, _pr, _cwd, _ctx, onData, onComplete) => {
+    runner.executeApiRun.mockImplementation(async ({ onData, onComplete }) => {
       onData('foo');
       onData({ text: 'bar' }); // API streams sometimes ship {text} chunks
       onComplete({ success: true });
@@ -140,7 +140,7 @@ describe('promptRunner — happy paths', () => {
       fallbackModel: 'pinned-fb',
     });
     let ranModel;
-    runner.executeApiRun.mockImplementation(async (id, _p, model, _pr, _cwd, _ctx, onData, onComplete) => {
+    runner.executeApiRun.mockImplementation(async ({ model, onData, onComplete }) => {
       ranModel = model;
       onData('ok');
       onComplete({ success: true });
@@ -159,7 +159,7 @@ describe('promptRunner — happy paths', () => {
   });
 
   it('forwards the provider id + model + source to createRun', async () => {
-    runner.executeApiRun.mockImplementation(async (id, _p, _m, _pr, _cwd, _ctx, onData, onComplete) => {
+    runner.executeApiRun.mockImplementation(async ({ onData, onComplete }) => {
       onData('ok');
       onComplete({ success: true });
     });
@@ -183,8 +183,8 @@ describe('promptRunner — happy paths', () => {
   });
 
   it('forwards a per-call cwd through to createRun as workspacePath', async () => {
-    runner.executeCliRun.mockImplementation(async (id, _p, _pr, cwd, onData, onComplete, _t) => {
-      onData(cwd); // echo back the cwd so the assertion below can check it
+    runner.executeCliRun.mockImplementation(async ({ workspacePath, onData, onComplete }) => {
+      onData(workspacePath); // echo back the cwd so the assertion below can check it
       onComplete({ success: true });
     });
 
@@ -202,7 +202,7 @@ describe('promptRunner — happy paths', () => {
   });
 
   it('reuses a caller-supplied runId (no createRun round-trip)', async () => {
-    runner.executeApiRun.mockImplementation(async (id, _p, _m, _pr, _cwd, _ctx, onData, onComplete) => {
+    runner.executeApiRun.mockImplementation(async ({ onData, onComplete }) => {
       onData('ok');
       onComplete({ success: true });
     });
@@ -219,7 +219,7 @@ describe('promptRunner — happy paths', () => {
   });
 
   it('passes a CLI provider clone with overridden defaultModel for codex (which honors --model)', async () => {
-    runner.executeCliRun.mockImplementation(async (id, providerArg, _p, _cwd, onData, onComplete, _t) => {
+    runner.executeCliRun.mockImplementation(async ({ provider: providerArg, onData, onComplete }) => {
       onData(`ran with model=${providerArg.defaultModel}`);
       onComplete({ success: true });
     });
@@ -240,7 +240,7 @@ describe('promptRunner — happy paths', () => {
     // baked a model flag into provider.args. So the clone is safe and
     // the run record correctly reflects the user's selection.
     runner.hasModelFlag.mockReturnValue(false);
-    runner.executeCliRun.mockImplementation(async (id, providerArg, _p, _cwd, onData, onComplete, _t) => {
+    runner.executeCliRun.mockImplementation(async ({ provider: providerArg, onData, onComplete }) => {
       onData(`ran with defaultModel=${providerArg.defaultModel}`);
       onComplete({ success: true });
     });
@@ -261,7 +261,7 @@ describe('promptRunner — happy paths', () => {
     // silently dropped and the args-baked model wins — keep the run
     // record honest by not pretending the override applied.
     runner.hasModelFlag.mockReturnValue(true);
-    runner.executeCliRun.mockImplementation(async (id, providerArg, _p, _cwd, onData, onComplete, _t) => {
+    runner.executeCliRun.mockImplementation(async ({ provider: providerArg, onData, onComplete }) => {
       onData(`ran with defaultModel=${providerArg.defaultModel}`);
       onComplete({ success: true });
     });
@@ -283,7 +283,7 @@ describe('promptRunner — happy paths', () => {
     // the args-pinned id directly.
     runner.hasModelFlag.mockReturnValue(true);
     runner.extractBakedModel.mockReturnValue('baked-in');
-    runner.executeCliRun.mockImplementation(async (id, providerArg, _p, _cwd, onData, onComplete, _t) => {
+    runner.executeCliRun.mockImplementation(async ({ provider: providerArg, onData, onComplete }) => {
       onData(`ran with defaultModel=${providerArg.defaultModel}`);
       onComplete({ success: true });
     });
@@ -315,7 +315,7 @@ describe('promptRunner — happy paths', () => {
 
 describe('promptRunner — strictest-discriminator rejection', () => {
   it('rejects when CLI onComplete reports success: false (even with no error string)', async () => {
-    runner.executeCliRun.mockImplementation(async (id, _p, _pr, _cwd, _onData, onComplete, _t) => {
+    runner.executeCliRun.mockImplementation(async ({ onComplete }) => {
       onComplete({ success: false });
     });
 
@@ -327,7 +327,7 @@ describe('promptRunner — strictest-discriminator rejection', () => {
   });
 
   it('rejects when CLI onComplete reports a non-zero error', async () => {
-    runner.executeCliRun.mockImplementation(async (id, _p, _pr, _cwd, _onData, onComplete, _t) => {
+    runner.executeCliRun.mockImplementation(async ({ onComplete }) => {
       onComplete({ error: 'codex timeout' });
     });
 
@@ -342,7 +342,7 @@ describe('promptRunner — strictest-discriminator rejection', () => {
     // Before the unification, API sites only checked `error` and would
     // resolve with empty text on success: false — silently swallowing
     // soft failures. The unified runner rejects on success: false too.
-    runner.executeApiRun.mockImplementation(async (id, _p, _m, _pr, _cwd, _ctx, _onData, onComplete) => {
+    runner.executeApiRun.mockImplementation(async ({ onComplete }) => {
       onComplete({ success: false });
     });
 
@@ -354,7 +354,7 @@ describe('promptRunner — strictest-discriminator rejection', () => {
   });
 
   it('rejects when API onComplete reports a non-zero error', async () => {
-    runner.executeApiRun.mockImplementation(async (id, _p, _m, _pr, _cwd, _ctx, _onData, onComplete) => {
+    runner.executeApiRun.mockImplementation(async ({ onComplete }) => {
       onComplete({ error: 'upstream 500' });
     });
 
@@ -421,7 +421,7 @@ describe('promptRunner — strictest-discriminator rejection', () => {
 
 describe('promptRunner — multi-chunk text accumulation', () => {
   it('accumulates many CLI string chunks in order', async () => {
-    runner.executeCliRun.mockImplementation(async (id, _p, _pr, _cwd, onData, onComplete, _t) => {
+    runner.executeCliRun.mockImplementation(async ({ onData, onComplete }) => {
       for (const c of ['a', 'b', 'c', 'd', 'e']) onData(c);
       onComplete({ success: true });
     });
@@ -434,7 +434,7 @@ describe('promptRunner — multi-chunk text accumulation', () => {
   });
 
   it('accumulates mixed string + {text} API chunks in order', async () => {
-    runner.executeApiRun.mockImplementation(async (id, _p, _m, _pr, _cwd, _ctx, onData, onComplete) => {
+    runner.executeApiRun.mockImplementation(async ({ onData, onComplete }) => {
       onData('A');
       onData({ text: 'B' });
       onData({ text: 'C' });
@@ -450,7 +450,7 @@ describe('promptRunner — multi-chunk text accumulation', () => {
   });
 
   it('ignores non-string non-{text} chunks (e.g. heartbeat events)', async () => {
-    runner.executeApiRun.mockImplementation(async (id, _p, _m, _pr, _cwd, _ctx, onData, onComplete) => {
+    runner.executeApiRun.mockImplementation(async ({ onData, onComplete }) => {
       onData('hello');
       onData({ heartbeat: true }); // chunk with no text — ignored
       onData(null);                  // ignored
@@ -474,7 +474,7 @@ describe('promptRunner — multi-chunk text accumulation', () => {
 
 describe('promptRunner — TUI provider routing', () => {
   it('routes TUI providers through executeTuiRun and resolves with result.text', async () => {
-    tuiRunner.executeTuiRun.mockImplementation(async (id, _p, _pr, _cwd, onData, onComplete, _t) => {
+    tuiRunner.executeTuiRun.mockImplementation(async ({ onData, onComplete }) => {
       onData('chrome chunk ');
       onData('more chrome');
       onComplete({ success: true, exitCode: 0, text: 'once upon a time' });
@@ -493,7 +493,7 @@ describe('promptRunner — TUI provider routing', () => {
   });
 
   it('passes cwd + timeout overrides through to executeTuiRun', async () => {
-    tuiRunner.executeTuiRun.mockImplementation(async (id, _p, _pr, _cwd, onData, onComplete, _t) => {
+    tuiRunner.executeTuiRun.mockImplementation(async ({ onData, onComplete }) => {
       onData('ok');
       onComplete({ success: true });
     });
@@ -505,13 +505,13 @@ describe('promptRunner — TUI provider routing', () => {
       timeout: 60000,
     });
 
-    const args = tuiRunner.executeTuiRun.mock.calls[0];
-    expect(args[3]).toBe('/tmp/some-other-repo'); // cwd positional arg
-    expect(args[6]).toBe(60000);                   // timeout positional arg
+    const opts = tuiRunner.executeTuiRun.mock.calls[0][0];
+    expect(opts.workspacePath).toBe('/tmp/some-other-repo'); // workspacePath option
+    expect(opts.timeout).toBe(60000);                         // timeout option
   });
 
   it('returns result.text from executeTuiRun (which owns its own response cleanup)', async () => {
-    tuiRunner.executeTuiRun.mockImplementation(async (id, _p, _pr, _cwd, onData, onComplete, _t) => {
+    tuiRunner.executeTuiRun.mockImplementation(async ({ onData, onComplete }) => {
       onData('raw with chrome');
       onComplete({ success: true, text: 'cleaned response from file' });
     });
@@ -525,7 +525,7 @@ describe('promptRunner — TUI provider routing', () => {
   });
 
   it('falls back to empty string when executeTuiRun omits result.text', async () => {
-    tuiRunner.executeTuiRun.mockImplementation(async (id, _p, _pr, _cwd, onData, onComplete, _t) => {
+    tuiRunner.executeTuiRun.mockImplementation(async ({ onData, onComplete }) => {
       onData('streamed chrome');
       onComplete({ success: true });
     });
@@ -539,7 +539,7 @@ describe('promptRunner — TUI provider routing', () => {
   });
 
   it('rejects with TUI-labeled error when executeTuiRun fires onComplete with success: false', async () => {
-    tuiRunner.executeTuiRun.mockImplementation(async (id, _p, _pr, _cwd, _od, onComplete, _t) => {
+    tuiRunner.executeTuiRun.mockImplementation(async ({ onComplete }) => {
       onComplete({ success: false, exitCode: 124 });
     });
 
@@ -591,7 +591,7 @@ describe('promptRunner — API timeout enforcement', () => {
 
   it('does not call stopRun when API completes within the timeout', async () => {
     vi.useFakeTimers();
-    runner.executeApiRun.mockImplementation(async (id, _p, _m, _pr, _cwd, _ctx, onData, onComplete) => {
+    runner.executeApiRun.mockImplementation(async ({ onData, onComplete }) => {
       onData('quick');
       onComplete({ success: true });
     });
@@ -652,10 +652,10 @@ describe('promptRunner — retry-with-fallback', () => {
     const status = mockToolkitWithFallback();
 
     // First call: primary CLI fails. Second call: fallback API succeeds.
-    runner.executeCliRun.mockImplementation(async (id, _p, _pr, _cwd, _onData, onComplete, _t) => {
+    runner.executeCliRun.mockImplementation(async ({ onComplete }) => {
       onComplete({ success: false, error: 'Process exited with code 1' });
     });
-    runner.executeApiRun.mockImplementation(async (id, _p, _m, _pr, _cwd, _ctx, onData, onComplete) => {
+    runner.executeApiRun.mockImplementation(async ({ onData, onComplete }) => {
       onData('fallback content');
       onComplete({ success: true });
     });
@@ -702,11 +702,11 @@ describe('promptRunner — retry-with-fallback', () => {
       model: 'pinned-fb-model',
     });
 
-    runner.executeCliRun.mockImplementation(async (id, _p, _pr, _cwd, _onData, onComplete, _t) => {
+    runner.executeCliRun.mockImplementation(async ({ onComplete }) => {
       onComplete({ success: false, error: 'Process exited with code 1' });
     });
     let ranModel;
-    runner.executeApiRun.mockImplementation(async (id, _p, model, _pr, _cwd, _ctx, onData, onComplete) => {
+    runner.executeApiRun.mockImplementation(async ({ model, onData, onComplete }) => {
       ranModel = model;
       onData('fallback content');
       onComplete({ success: true });
@@ -730,7 +730,7 @@ describe('promptRunner — retry-with-fallback', () => {
     mockToolkitWithFallback();
 
     let calls = 0;
-    runner.executeApiRun.mockImplementation(async (id, providerArg, _m, _pr, _cwd, _ctx, onData, onComplete) => {
+    runner.executeApiRun.mockImplementation(async ({ provider: providerArg, onData, onComplete }) => {
       calls += 1;
       if (providerArg.id === 'primary-api') {
         onComplete({ success: false, error: 'upstream 500' });
@@ -761,14 +761,14 @@ describe('promptRunner — retry-with-fallback', () => {
       waitTime: 12345,
     };
 
-    runner.executeCliRun.mockImplementation(async (id, _p, _pr, _cwd, _onData, onComplete, _t) => {
+    runner.executeCliRun.mockImplementation(async ({ onComplete }) => {
       onComplete({
         success: false,
         error: 'plain wrapper error',
         errorAnalysis: runnerErrorAnalysis,
       });
     });
-    runner.executeApiRun.mockImplementation(async (id, _p, _m, _pr, _cwd, _ctx, onData, onComplete) => {
+    runner.executeApiRun.mockImplementation(async ({ onData, onComplete }) => {
       onData('recovered');
       onComplete({ success: true });
     });
@@ -789,10 +789,10 @@ describe('promptRunner — retry-with-fallback', () => {
   it('does NOT suppress the investigation task when the fallback ALSO fails (both errors must surface)', async () => {
     mockToolkitWithFallback();
 
-    runner.executeCliRun.mockImplementation(async (id, _p, _pr, _cwd, _onData, onComplete, _t) => {
+    runner.executeCliRun.mockImplementation(async ({ onComplete }) => {
       onComplete({ success: false, error: 'primary boom' });
     });
-    runner.executeApiRun.mockImplementation(async (id, _p, _m, _pr, _cwd, _ctx, _onData, onComplete) => {
+    runner.executeApiRun.mockImplementation(async ({ onComplete }) => {
       onComplete({ success: false, error: 'fallback also boom' });
     });
 
@@ -813,7 +813,7 @@ describe('promptRunner — retry-with-fallback', () => {
   it('rethrows the original error when no fallback is available', async () => {
     mockToolkitWithFallback(null);
 
-    runner.executeCliRun.mockImplementation(async (id, _p, _pr, _cwd, _onData, onComplete, _t) => {
+    runner.executeCliRun.mockImplementation(async ({ onComplete }) => {
       onComplete({ success: false, error: 'no recovery path' });
     });
 
@@ -829,7 +829,7 @@ describe('promptRunner — retry-with-fallback', () => {
 
   it('rethrows when toolkit/providerStatus is not initialized (no retry path possible)', async () => {
     // Default mock returns null toolkit — no retry attempted.
-    runner.executeCliRun.mockImplementation(async (id, _p, _pr, _cwd, _onData, onComplete, _t) => {
+    runner.executeCliRun.mockImplementation(async ({ onComplete }) => {
       onComplete({ success: false, error: 'init not ready' });
     });
 
@@ -846,7 +846,7 @@ describe('promptRunner — retry-with-fallback', () => {
     // No fallback → original error rethrown. The annotation fields are
     // implementation-detail-only and should never leak to callers.
     mockToolkitWithFallback(null);
-    runner.executeCliRun.mockImplementation(async (id, _p, _pr, _cwd, _onData, onComplete, _t) => {
+    runner.executeCliRun.mockImplementation(async ({ onComplete }) => {
       onComplete({ success: false, error: 'plain failure' });
     });
 
@@ -870,7 +870,7 @@ describe('promptRunner — retry-with-fallback', () => {
     // before onComplete fired — providerStatus.isAvailable now returns false.
     status.isAvailable.mockReturnValue(false);
 
-    runner.executeApiRun.mockImplementation(async (id, providerArg, _m, _pr, _cwd, _ctx, onData, onComplete) => {
+    runner.executeApiRun.mockImplementation(async ({ provider: providerArg, onData, onComplete }) => {
       if (providerArg.id === 'primary-api') {
         onComplete({ success: false, error: 'rate limit hit' });
       } else {
@@ -912,11 +912,11 @@ describe('promptRunner — retry-with-fallback', () => {
       provider: intermediate,
     });
 
-    runner.executeCliRun.mockImplementation(async (id, providerArg, _p, _cwd, _onData, onComplete, _t) => {
+    runner.executeCliRun.mockImplementation(async ({ provider: providerArg, onComplete }) => {
       // Intermediate fails on first attempt.
       onComplete({ success: false, error: `intermediate boom (${providerArg.id})` });
     });
-    runner.executeApiRun.mockImplementation(async (id, _p, _m, _pr, _cwd, _ctx, onData, onComplete) => {
+    runner.executeApiRun.mockImplementation(async ({ onData, onComplete }) => {
       onData('recovered via final');
       onComplete({ success: true });
     });
@@ -968,10 +968,10 @@ describe('promptRunner — retry-with-fallback', () => {
     // test pins the call-site contract that the primary stays in the map.
     const status = mockToolkitWithFallback();
 
-    runner.executeCliRun.mockImplementation(async (id, _p, _pr, _cwd, _onData, onComplete, _t) => {
+    runner.executeCliRun.mockImplementation(async ({ onComplete }) => {
       onComplete({ success: false, error: 'primary boom' });
     });
-    runner.executeApiRun.mockImplementation(async (id, _p, _m, _pr, _cwd, _ctx, onData, onComplete) => {
+    runner.executeApiRun.mockImplementation(async ({ onData, onComplete }) => {
       onData('recovered');
       onComplete({ success: true });
     });
@@ -994,10 +994,10 @@ describe('promptRunner — retry-with-fallback', () => {
       throw new Error('autoFixer is offline');
     });
 
-    runner.executeCliRun.mockImplementation(async (id, _p, _pr, _cwd, _onData, onComplete, _t) => {
+    runner.executeCliRun.mockImplementation(async ({ onComplete }) => {
       onComplete({ success: false, error: 'primary boom' });
     });
-    runner.executeApiRun.mockImplementation(async (id, _p, _m, _pr, _cwd, _ctx, onData, onComplete) => {
+    runner.executeApiRun.mockImplementation(async ({ onData, onComplete }) => {
       onData('still works');
       onComplete({ success: true });
     });
@@ -1016,10 +1016,10 @@ describe('promptRunner — retry-with-fallback', () => {
 
   it('routes USAGE_LIMIT failures through markUsageLimit (parses wait time)', async () => {
     const status = mockToolkitWithFallback();
-    runner.executeCliRun.mockImplementation(async (id, _p, _pr, _cwd, _onData, onComplete, _t) => {
+    runner.executeCliRun.mockImplementation(async ({ onComplete }) => {
       onComplete({ success: false, error: "You've hit your usage limit. Try again in 5 hours" });
     });
-    runner.executeApiRun.mockImplementation(async (id, _p, _m, _pr, _cwd, _ctx, onData, onComplete) => {
+    runner.executeApiRun.mockImplementation(async ({ onData, onComplete }) => {
       onData('recovered');
       onComplete({ success: true });
     });
@@ -1058,10 +1058,10 @@ describe('promptRunner — retry-with-fallback', () => {
       getAllGate.then(() => ({ activeProvider: null, providers: [primaryCli, primaryApi, fallbackApi] }))
     );
 
-    runner.executeCliRun.mockImplementation(async (id, _p, _pr, _cwd, _onData, onComplete, _t) => {
+    runner.executeCliRun.mockImplementation(async ({ onComplete }) => {
       onComplete({ success: false, error: 'storm boom' });
     });
-    runner.executeApiRun.mockImplementation(async (id, _p, _m, _pr, _cwd, _ctx, onData, onComplete) => {
+    runner.executeApiRun.mockImplementation(async ({ onData, onComplete }) => {
       onData('fallback content');
       onComplete({ success: true });
     });

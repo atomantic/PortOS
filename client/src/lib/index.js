@@ -57,6 +57,7 @@ export * from './voiceLabel.js';
 export * from './cityPlaybackFrame.js';
 export * from './colorMatch.js';
 export * from './metronome.js';
+export * from './pianoKeyboard.js';
 export * from './pitchDetect.js';
 export * from './scoreNotation.js';
 export * from './scorePlayback.js';

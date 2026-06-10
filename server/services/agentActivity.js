@@ -5,11 +5,11 @@
  * and rate limit enforcement. Activity is stored per-agent per-day.
  */
 
-import { readFile, writeFile, readdir } from 'fs/promises';
+import { readFile, readdir } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import EventEmitter from 'events';
-import { ensureDir, getDateString, PATHS } from '../lib/fileUtils.js';
+import { ensureDir, getDateString, atomicWrite, PATHS } from '../lib/fileUtils.js';
 
 const AGENTS_DIR = PATHS.agentPersonalities;
 const ACTIVITY_DIR = join(AGENTS_DIR, 'activity');
@@ -53,7 +53,7 @@ async function loadActivity(agentId, date = new Date()) {
 async function saveActivity(agentId, date, data) {
   await ensureActivityDir(agentId);
   const filePath = getActivityFilePath(agentId, date);
-  await writeFile(filePath, JSON.stringify(data, null, 2));
+  await atomicWrite(filePath, data);
 }
 
 /**

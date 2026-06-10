@@ -90,4 +90,18 @@ describe('memoryBackend backend selection', () => {
     const name = await mod.ensureBackend();
     expect(name).toBe('file');
   });
+
+  it('uses the file backend in test mode even when Postgres is HEALTHY — never probes a live dev DB', async () => {
+    // Regression guard: a developer's machine commonly has a live `portos` DB
+    // running (federated to real peers). The test runner must never write to
+    // it — fixture creation would pollute the DB and fan out to peers, and
+    // cleanup tombstones would delete real records. Test mode must short-circuit
+    // to the file backend BEFORE the health probe runs.
+    process.env.NODE_ENV = 'test';
+    checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
+    const mod = await loadFresh();
+    const name = await mod.ensureBackend();
+    expect(name).toBe('file');
+    expect(checkHealth).not.toHaveBeenCalled();
+  });
 });

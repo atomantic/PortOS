@@ -46,7 +46,7 @@ vi.mock('./cos.js', () => ({
   addTask: (...args) => addTaskMock(...args),
 }));
 const getTaskPromptMock = vi.fn(async () => 'Analyze {appName} at {repoPath} for {appId} reviewer={reviewers}\n{referenceData}\n{planConstraint}');
-vi.mock('./taskSchedule.js', () => ({
+vi.mock('./taskPromptService.js', () => ({
   getTaskPrompt: (...args) => getTaskPromptMock(...args),
 }));
 

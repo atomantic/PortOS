@@ -30,7 +30,7 @@ import {
   evaluateOnPage,
 } from './browserService.js';
 import { lookup } from 'dns/promises';
-import { PATHS, ensureDir } from '../lib/fileUtils.js';
+import { PATHS, ensureDir, sleep } from '../lib/fileUtils.js';
 import { isSafeIngestUrl, isBlockedIngestHost } from '../lib/catalogValidation.js';
 
 // Cap fetched/transcribed bodies at the scrap column boundary (the Zod
@@ -44,7 +44,6 @@ const PAGE_SETTLE_MS = 2_500;
 
 const clampText = (s) => (typeof s === 'string' ? s.slice(0, RAW_TEXT_MAX) : '');
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
  * Shared tail for every source: create a typed scrap and run the SAME

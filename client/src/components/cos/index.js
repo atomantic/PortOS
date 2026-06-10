@@ -2,12 +2,11 @@
 export { TABS, AGENT_STATES, STATE_MESSAGES, MEMORY_TYPES, MEMORY_TYPE_COLORS } from './constants';
 
 // Avatar/Character Components
+// The five three.js *CoSAvatar variants are intentionally NOT re-exported:
+// ChiefOfStaff.jsx lazy-imports them per variant, and a static barrel
+// re-export pulls them all back into the eager chunk
+// (Rollup INEFFECTIVE_DYNAMIC_IMPORT).
 export { default as CoSCharacter } from './CoSCharacter';
-export { default as CyberCoSAvatar } from './CyberCoSAvatar';
-export { default as SigilCoSAvatar } from './SigilCoSAvatar';
-export { default as EsotericCoSAvatar } from './EsotericCoSAvatar';
-export { default as NexusCoSAvatar } from './NexusCoSAvatar';
-export { default as MuseCoSAvatar } from './MuseCoSAvatar';
 export { default as StateLabel } from './StateLabel';
 export { default as TerminalCoSPanel } from './TerminalCoSPanel';
 

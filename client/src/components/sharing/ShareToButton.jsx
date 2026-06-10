@@ -22,7 +22,8 @@
  *   compact?: boolean
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Share2, Check, Circle, CheckCircle2, Loader2 } from 'lucide-react';
 import toast from '../ui/Toast';
 import {
@@ -50,6 +51,20 @@ export default function ShareToButton({ kind, ids, items, label = 'Share', compa
   const [loading, setLoading] = useState(false);
   const [busyBucketId, setBusyBucketId] = useState(null);
   const wrapperRef = useRef(null);
+  const triggerRef = useRef(null);
+  const menuRef = useRef(null);
+  // Portal the dropdown to <body> so it escapes each card's stacking context
+  // (an in-card `absolute z-30` popover is otherwise painted under the next
+  // card). Position it `fixed`, anchored to the trigger's viewport rect.
+  const MENU_WIDTH = 288; // w-72
+  const [coords, setCoords] = useState(null);
+  const updateCoords = () => {
+    const el = triggerRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const left = Math.max(8, Math.min(r.right - MENU_WIDTH, window.innerWidth - MENU_WIDTH - 8));
+    setCoords({ top: r.bottom + 4, left });
+  };
 
   const isSubscribable = SUBSCRIBABLE_KINDS.has(kind);
   const recordId = isSubscribable && Array.isArray(ids) && ids.length > 0 ? ids[0] : null;
@@ -82,10 +97,24 @@ export default function ShareToButton({ kind, ids, items, label = 'Share', compa
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
+  useLayoutEffect(() => {
+    if (!open) { setCoords(null); return; }
+    updateCoords();
+    const onMove = () => updateCoords();
+    window.addEventListener('scroll', onMove, true);
+    window.addEventListener('resize', onMove);
+    return () => {
+      window.removeEventListener('scroll', onMove, true);
+      window.removeEventListener('resize', onMove);
+    };
+  }, [open]);
+
   useEffect(() => {
     if (!open) return;
     const handler = (e) => {
-      if (wrapperRef.current && !wrapperRef.current.contains(e.target)) setOpen(false);
+      const inTrigger = wrapperRef.current && wrapperRef.current.contains(e.target);
+      const inMenu = menuRef.current && menuRef.current.contains(e.target);
+      if (!inTrigger && !inMenu) setOpen(false);
     };
     window.addEventListener('mousedown', handler);
     return () => window.removeEventListener('mousedown', handler);
@@ -149,6 +178,7 @@ export default function ShareToButton({ kind, ids, items, label = 'Share', compa
   return (
     <div ref={wrapperRef} className={`relative inline-block ${className}`}>
       <button
+        ref={triggerRef}
         type="button"
         onClick={() => setOpen((v) => !v)}
         disabled={nothingToShare}
@@ -159,8 +189,12 @@ export default function ShareToButton({ kind, ids, items, label = 'Share', compa
         {!compact && <span>{label}</span>}
       </button>
 
-      {open && (
-        <div className="absolute right-0 z-30 mt-1 w-72 bg-port-card border border-port-border rounded-lg shadow-lg overflow-hidden">
+      {open && coords && createPortal(
+        <div
+          ref={menuRef}
+          style={{ position: 'fixed', top: coords.top, left: coords.left, width: MENU_WIDTH }}
+          className="z-50 bg-port-card border border-port-border rounded-lg shadow-lg overflow-hidden"
+        >
           <div className="px-3 py-2 text-[10px] uppercase tracking-wider text-gray-500 border-b border-port-border">
             {isSubscribable ? 'Subscribe to bucket' : 'Share to bucket'}
           </div>
@@ -206,7 +240,8 @@ export default function ShareToButton({ kind, ids, items, label = 'Share', compa
               Subscribed buckets receive your edits automatically as you save.
             </div>
           )}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

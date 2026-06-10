@@ -1,8 +1,12 @@
 import { Router } from 'express';
+import { defaultAsyncHandler } from '../internal/httpError.js';
 
 export function createProviderStatusRoutes(providerStatusService, options = {}) {
   const router = Router();
-  const { asyncHandler = (fn) => fn } = options;
+  // Standalone default serializes thrown errors into the canonical envelope;
+  // PortOS injects its own asyncHandler. This router has no 4xx throws of its
+  // own, but a rejected service call still lands in the same JSON shape.
+  const { asyncHandler = defaultAsyncHandler } = options;
 
   router.get('/', asyncHandler(async (req, res) => {
     const statuses = providerStatusService.getAllStatuses();

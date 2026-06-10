@@ -1,18 +1,35 @@
 import { Router } from 'express';
-import { existsSync } from 'fs';
+import { existsSync, realpathSync } from 'fs';
 import { readFile, stat } from 'fs/promises';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { execPm2 } from '../services/pm2.js';
 import { detectAppWithAi } from '../services/aiDetect.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
+import { isWithinAllowedRoots, WORKSPACE_ROOTS_CONFIGURED } from '../lib/workspaceRoots.js';
 
 const execAsync = promisify(exec);
 const router = Router();
 
 // POST /api/detect/repo - Validate repo path and detect project type
+//
+// TRUST MODEL: This endpoint accepts an arbitrary, caller-supplied filesystem
+// path and reads a small set of well-known project files under it (package.json
+// scripts + name, project.yml, vite.config, and PORT/VITE_PORT lines from .env),
+// returning their values verbatim. This is INTENTIONAL: PortOS is a single-user
+// app on a private Tailscale network (see CLAUDE.md "Security Model"), where the
+// sole operator legitimately points the "import a repo" flow at any directory on
+// their own machine — there is no second user to read data from, so no path
+// confinement is required for safety.
+//
+// Operators who still want to confine detection to specific directories can set
+// PORTOS_WORKSPACE_ROOTS="/path1:/path2" (the same allow-list `routes/commands.js`
+// uses to scope command execution). When that env var is set, this route enforces
+// the allow-list too — a path outside the configured roots returns valid:false
+// rather than reading its files. When it is unset (the default), detection is
+// unrestricted, matching the pre-existing behavior.
 router.post('/repo', asyncHandler(async (req, res) => {
   const { path } = req.body;
 
@@ -35,6 +52,27 @@ router.post('/repo', asyncHandler(async (req, res) => {
       valid: false,
       error: 'Path is not a directory'
     });
+  }
+
+  // Optional confinement: only when the operator has configured workspace roots.
+  // realpath() first so a symlink can't smuggle a path past the containment check.
+  // realpathSync can throw on a permission/TOCTOU edge (path deleted between the
+  // stat above and here) — convert that to the same valid:false shape the rest of
+  // this route returns for unusable paths, rather than leaking a 500. This is the
+  // sanctioned fs-edge-case exception to the no-try/catch rule (see commands.js).
+  if (WORKSPACE_ROOTS_CONFIGURED) {
+    let realPath;
+    try {
+      realPath = realpathSync(resolve(path));
+    } catch {
+      return res.json({ valid: false, error: 'Path is not accessible' });
+    }
+    if (!isWithinAllowedRoots(realPath)) {
+      return res.json({
+        valid: false,
+        error: 'Path is outside the configured workspace roots (PORTOS_WORKSPACE_ROOTS)'
+      });
+    }
   }
 
   // Detect project type

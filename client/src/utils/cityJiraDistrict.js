@@ -6,11 +6,13 @@
 // No three.js / React imports so the topology is unit-testable (mirrors cityTaskQueue.js etc.).
 
 import { gridIndexToPosition, tallyByKey, scaleMetricToHeight } from './cityDistrictLayout';
+import { PARCELS } from './cityPlan';
 
 export const JIRA_DISTRICT = {
-  // North-east-of-north: a yard between the goal monuments (NE, +30,-40) and downtown, on the
-  // -X side so it doesn't collide with the artifact hall (+44,-28) or memory district (-44,-30).
-  base: [-20, 0, -44],
+  // North-of-downtown yard between the goal monuments and downtown, on the -X side so it
+  // doesn't collide with the artifact hall or memory quarter. Anchored by cityPlan.js;
+  // sits near the shoreline on purpose — a dockside construction yard.
+  base: PARCELS.jira.anchor,
   columns: 6, // structures per row before wrapping toward -Z
   spacing: 3.2, // distance between adjacent structures
   maxStructures: 24, // cap; overflow folds into a "+N MORE" marker

@@ -8,11 +8,12 @@
 
 import { hashString } from './hashString';
 import { groupByFieldValue, scaleMetricToHeight } from './cityDistrictLayout';
+import { PARCELS } from './cityPlan';
 
 export const MEMORY_DISTRICT = {
-  // Northwest quadrant — mirrors the artifact cluster at NE (+44,-28), clear of the
-  // productivity district (SW, -48,+28), the backup vault (W, -34,-10), and downtown.
-  base: [-44, 0, -30],
+  // Northwest quadrant — mirrors the artifact cluster at NE, clear of the productivity
+  // district, the backup vault, and downtown. Anchored by the master plan (cityPlan.js).
+  base: PARCELS.memory.anchor,
   radius: 9, // clusters arrange on a ring of this radius around the district center
   maxCrystalsPerCluster: 7, // visual cap; overflow is summarized in the cluster label
   crystalSpacing: 1.4, // horizontal spread of crystals within a cluster

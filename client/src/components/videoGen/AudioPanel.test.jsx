@@ -34,7 +34,7 @@ describe('AudioPanel', () => {
       />,
     );
     expect(screen.getByText('track.wav')).toBeTruthy();
-    expect(screen.getByText(/2\.00 MB/)).toBeTruthy();
+    expect(screen.getByText(/2 MB/)).toBeTruthy();
     fireEvent.click(screen.getByText('Clear'));
     expect(onClear).toHaveBeenCalled();
   });

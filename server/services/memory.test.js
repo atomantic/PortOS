@@ -3,7 +3,6 @@ import EventEmitter from 'events';
 
 // Mock fs/promises
 vi.mock('fs/promises', () => ({
-  writeFile: vi.fn().mockResolvedValue(undefined),
   readdir: vi.fn().mockResolvedValue([]),
   rm: vi.fn().mockResolvedValue(undefined)
 }));
@@ -37,10 +36,11 @@ vi.mock('./notifications.js', () => ({
 
 // Mock fileUtils
 vi.mock('../lib/fileUtils.js', () => ({
-tryReadFile: vi.fn().mockResolvedValue(null),
+  tryReadFile: vi.fn().mockResolvedValue(null),
   ensureDir: vi.fn(),
   ensureDirs: vi.fn(),
   readJSONFile: vi.fn(),
+  atomicWrite: vi.fn().mockResolvedValue(undefined),
   PATHS: { memory: '/tmp/test/memory' }
 }));
 
@@ -73,9 +73,9 @@ vi.mock('./memoryConfig.js', () => ({
   decrementAgentPendingApproval: vi.fn().mockResolvedValue(undefined)
 }));
 
-import { writeFile, rm } from 'fs/promises';
+import { rm } from 'fs/promises';
 import { existsSync } from 'fs';
-import { ensureDir, ensureDirs, readJSONFile } from '../lib/fileUtils.js';
+import { ensureDir, ensureDirs, readJSONFile, atomicWrite } from '../lib/fileUtils.js';
 import * as memoryBM25 from './memoryBM25.js';
 import * as notifications from './notifications.js';
 import { findTopK, findAboveThreshold, clusterBySimilarity } from '../lib/vectorMath.js';
@@ -199,7 +199,7 @@ describe('memory service', () => {
       expect(result.embedding).toEqual([0.1, 0.2, 0.3]);
       expect(result.embeddingModel).toBe('test-embedding-model');
       // Should save embeddings file
-      const embeddingsCall = writeFile.mock.calls.find(c => c[0].includes('embeddings.json'));
+      const embeddingsCall = atomicWrite.mock.calls.find(c => c[0].includes('embeddings.json'));
       expect(embeddingsCall).toBeDefined();
     });
 
@@ -207,7 +207,7 @@ describe('memory service', () => {
       const data = { type: 'fact', content: 'no embedding' };
       await createMemory(data);
 
-      const embeddingsCall = writeFile.mock.calls.find(c => c[0].includes('embeddings.json'));
+      const embeddingsCall = atomicWrite.mock.calls.find(c => c[0].includes('embeddings.json'));
       expect(embeddingsCall).toBeUndefined();
     });
 
@@ -215,12 +215,12 @@ describe('memory service', () => {
       const data = { type: 'learning', content: 'Learned something' };
       await createMemory(data);
 
-      // writeFile is called for saving memory and saving index
-      const indexCall = writeFile.mock.calls.find(call =>
+      // atomicWrite is called for saving memory and saving index
+      const indexCall = atomicWrite.mock.calls.find(call =>
         call[0].includes('index.json')
       );
       expect(indexCall).toBeDefined();
-      const savedIndex = JSON.parse(indexCall[1]);
+      const savedIndex = indexCall[1];
       expect(savedIndex.count).toBe(1);
       expect(savedIndex.memories).toHaveLength(1);
       expect(savedIndex.memories[0].id).toBe('test-uuid-1234');
@@ -618,9 +618,9 @@ describe('memory service', () => {
       expect(result).toEqual({ success: true, id: 'mem-1' });
       expect(rm).not.toHaveBeenCalled();
       // The memory should have been saved with archived status
-      const memorySaveCall = writeFile.mock.calls.find(c => c[0].includes('memory.json'));
+      const memorySaveCall = atomicWrite.mock.calls.find(c => c[0].includes('memory.json'));
       expect(memorySaveCall).toBeDefined();
-      const savedMemory = JSON.parse(memorySaveCall[1]);
+      const savedMemory = memorySaveCall[1];
       expect(savedMemory.status).toBe('archived');
     });
 
@@ -1388,7 +1388,7 @@ describe('memory service', () => {
       expect(result.sourceId).toBe('src');
       expect(result.targetId).toBe('tgt');
       // Both memories should be saved with the link
-      const memorySaves = writeFile.mock.calls.filter(c => c[0].includes('memory.json'));
+      const memorySaves = atomicWrite.mock.calls.filter(c => c[0].includes('memory.json'));
       expect(memorySaves.length).toBe(2);
     });
 
@@ -1416,9 +1416,9 @@ describe('memory service', () => {
       await linkMemories('src', 'tgt');
 
       // Should not add duplicate - memories saved but relatedMemories should still be length 1
-      const memorySaves = writeFile.mock.calls.filter(c => c[0].includes('memory.json'));
+      const memorySaves = atomicWrite.mock.calls.filter(c => c[0].includes('memory.json'));
       for (const save of memorySaves) {
-        const saved = JSON.parse(save[1]);
+        const saved = save[1];
         expect(saved.relatedMemories).toHaveLength(1);
       }
     });

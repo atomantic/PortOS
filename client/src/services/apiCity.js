@@ -21,3 +21,8 @@ export const getCitySnapshotConfig = (options = {}) =>
 // POST /api/city/snapshots/capture — capture a frame on demand.
 export const captureCitySnapshot = (options = {}) =>
   request('/city/snapshots/capture', { method: 'POST', ...options });
+
+// GET /api/city/introspection — DB tables + data/ domain sizes for the Data
+// Harbor district. Server-cached; `db: null` means the database is unreachable.
+export const getCityIntrospection = (options = {}) =>
+  request('/city/introspection', options);

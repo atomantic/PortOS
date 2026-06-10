@@ -526,6 +526,17 @@ export const HOUR = 60 * MINUTE;
 export const DAY = 24 * HOUR;
 
 /**
+ * Promise-based delay. Canonical replacement for the per-module
+ * `const delay = (ms) => new Promise(...)` one-liners.
+ *
+ * @param {number} ms - Milliseconds to wait
+ * @returns {Promise<void>}
+ */
+export function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
  * Format a date as YYYY-MM-DD string.
  *
  * @param {Date} [date=new Date()] - Date to format

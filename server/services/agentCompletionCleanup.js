@@ -93,8 +93,8 @@ export async function handlePipelineProgression(task, agentId, success) {
     }
   }
 
-  const taskScheduleMod = await import('./taskSchedule.js');
-  let prompt = await taskScheduleMod.getStagePrompt(task.metadata.analysisType, nextStageIndex);
+  const { getStagePrompt } = await import('./taskPromptService.js');
+  let prompt = await getStagePrompt(task.metadata.analysisType, nextStageIndex);
   if (task.metadata.appName) prompt = prompt.replace(/\{appName\}/g, task.metadata.appName);
   if (task.metadata.repoPath) prompt = prompt.replace(/\{repoPath\}/g, task.metadata.repoPath);
   if (task.metadata.app) prompt = prompt.replace(/\{appId\}/g, task.metadata.app);

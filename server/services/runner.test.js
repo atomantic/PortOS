@@ -64,7 +64,7 @@ describe('executeCliRun — Codex sentinel suppression', () => {
       child.emit('close', 0);
     });
 
-    await executeCliRun('run-1', provider, 'test prompt', '/workspace');
+    await executeCliRun({ runId: 'run-1', provider, prompt: 'test prompt', workspacePath: '/workspace' });
 
     const [, capturedArgs] = spawn.mock.calls.at(-1);
     expect(capturedArgs).not.toContain('--model');
@@ -91,7 +91,7 @@ describe('executeCliRun — Codex sentinel suppression', () => {
       child.emit('close', 0);
     });
 
-    await executeCliRun('run-2', provider, 'test prompt', '/workspace');
+    await executeCliRun({ runId: 'run-2', provider, prompt: 'test prompt', workspacePath: '/workspace' });
 
     const [, capturedArgs] = spawn.mock.calls.at(-1);
     const modelIdx = capturedArgs.indexOf('--model');
@@ -114,7 +114,7 @@ describe('executeCliRun — Codex sentinel suppression', () => {
     };
 
     const completed = new Promise((resolve) => {
-      executeCliRun('run-extra-usage', provider, 'test prompt', '/workspace', undefined, resolve, 60000);
+      executeCliRun({ runId: 'run-extra-usage', provider, prompt: 'test prompt', workspacePath: '/workspace', onData: undefined, onComplete: resolve, timeout: 60000 });
     });
 
     await Promise.resolve();
@@ -146,7 +146,7 @@ describe('executeCliRun — Codex sentinel suppression', () => {
     };
 
     const completed = new Promise((resolve) => {
-      executeCliRun('run-fallback-exit0', provider, 'test prompt', '/workspace', undefined, resolve, 60000);
+      executeCliRun({ runId: 'run-fallback-exit0', provider, prompt: 'test prompt', workspacePath: '/workspace', onData: undefined, onComplete: resolve, timeout: 60000 });
     });
 
     await Promise.resolve();

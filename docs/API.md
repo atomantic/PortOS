@@ -215,6 +215,15 @@ PortOS is designed for personal/developer use on trusted networks. It implements
 | GET | `/usage/daily` | Get daily activity |
 | GET | `/usage/hourly` | Get hourly activity |
 
+### CyberCity
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/city/snapshots` | Recorded city-state series, oldest-first (`since`, `limit` query params) |
+| POST | `/city/snapshots/capture` | Capture a city snapshot frame on demand |
+| GET | `/city/snapshots/config` | Effective snapshot capture config + next run time |
+| GET | `/city/introspection` | DB tables (rows/size/pgvector) + `data/` domain sizes for the Data Harbor district. Cached server-side; `db: null` means the database is unreachable (distinct from reachable-but-empty) |
+
 ### Brain (Second Brain)
 
 | Method | Endpoint | Description |

@@ -312,6 +312,71 @@ describe('stream error containment', () => {
     expect(logged).toBe(true);
   });
 
+  describe('initialization timeout — 3-second phase transition', () => {
+    it('calls updateAgent with working phase after 3s when agent has not started working', async () => {
+      const { activeAgents } = await import('./agentState.js');
+      const agents = cosAgentsMocks;
+
+      const spawnPromise = spawnDirectly(minimalArgs);
+      // Yield two microtask rounds so the getClaudeSettingsEnv await resolves and
+      // the setTimeout is registered before we seed activeAgents.
+      await new Promise((r) => setTimeout(r, 10));
+
+      // Manually seed the activeAgents map so the guard inside the timeout passes.
+      activeAgents.set(minimalArgs.agentId, { process: fakeProcess });
+
+      // Wait past the 3-second threshold using real timers.
+      await new Promise((r) => setTimeout(r, 3100));
+
+      expect(agents.updateAgent).toHaveBeenCalledWith(
+        minimalArgs.agentId,
+        { metadata: { phase: 'working' } }
+      );
+
+      // Clean up: close the fake process so spawnDirectly can settle.
+      activeAgents.delete(minimalArgs.agentId);
+      fakeProcess.emit('close', 0);
+      await spawnPromise.catch(() => {});
+    }, 10000);
+
+    it('does NOT crash when updateAgent rejects inside the timeout callback', async () => {
+      const { activeAgents } = await import('./agentState.js');
+      // spawnDirectly calls updateAgent once synchronously (PID update at line ~406)
+      // before the 3-second setTimeout fires. Allow that first call to resolve
+      // normally so spawnDirectly doesn't throw before the timeout test begins;
+      // then reject the SECOND call (the phase-transition inside the timeout).
+      cosAgentsMocks.updateAgent
+        .mockResolvedValueOnce(undefined)     // PID update — let it pass
+        .mockRejectedValueOnce(new Error('db write failed')); // timeout update — reject
+
+      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const unhandledRejections = [];
+      const onUnhandled = (reason) => unhandledRejections.push(reason);
+      process.on('unhandledRejection', onUnhandled);
+
+      const spawnPromise = spawnDirectly(minimalArgs);
+      await new Promise((r) => setTimeout(r, 10));
+
+      activeAgents.set(minimalArgs.agentId, { process: fakeProcess });
+
+      // Wait for the timeout to fire and its async body to finish.
+      await new Promise((r) => setTimeout(r, 3100));
+
+      process.off('unhandledRejection', onUnhandled);
+
+      expect(unhandledRejections).toHaveLength(0);
+      const logged = consoleSpy.mock.calls.some(
+        (args) => typeof args[0] === 'string' && args[0].startsWith('❌ agentCliSpawning init timeout failed')
+      );
+      expect(logged).toBe(true);
+
+      activeAgents.delete(minimalArgs.agentId);
+      fakeProcess.emit('close', 0);
+      await spawnPromise.catch(() => {});
+      consoleSpy.mockRestore();
+    }, 10000);
+  });
+
   it('threads the ordered reviewers list (not a stale singular `reviewer`) into worktree cleanup', async () => {
     const cleanupWorktreeFn = vi.fn().mockResolvedValue(undefined);
     const args = {

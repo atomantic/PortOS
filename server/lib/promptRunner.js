@@ -608,7 +608,7 @@ async function executeProviderRunOnce({ provider, prompt, source, model, runId: 
       : effectiveProvider;
 
     if (effectiveProvider.type === PROVIDER_TYPES.CLI) {
-      executeCliRun(runId, providerForRun, prompt, effectiveCwd, onData, onComplete, effectiveTimeout).catch(safeReject);
+      executeCliRun({ runId, provider: providerForRun, prompt, workspacePath: effectiveCwd, onData, onComplete, timeout: effectiveTimeout }).catch(safeReject);
     } else if (effectiveProvider.type === PROVIDER_TYPES.API) {
       // API runs take model as a first-class arg — no clone needed. The
       // toolkit's executeApiRun uses AbortController without a timer, so
@@ -622,9 +622,9 @@ async function executeProviderRunOnce({ provider, prompt, source, model, runId: 
         stopRun(runId).catch(() => { /* best-effort cancel */ });
         safeReject(new Error(`API execution timed out after ${effectiveTimeout}ms`));
       }, effectiveTimeout);
-      executeApiRun(runId, effectiveProvider, effectiveModel, prompt, effectiveCwd, [], onData, onComplete).catch(safeReject);
+      executeApiRun({ runId, provider: effectiveProvider, model: effectiveModel, prompt, workspacePath: effectiveCwd, screenshots: [], onData, onComplete }).catch(safeReject);
     } else if (effectiveProvider.type === PROVIDER_TYPES.TUI) {
-      executeTuiRun(runId, providerForRun, prompt, effectiveCwd, onData, onComplete, effectiveTimeout).catch(safeReject);
+      executeTuiRun({ runId, provider: providerForRun, prompt, workspacePath: effectiveCwd, onData, onComplete, timeout: effectiveTimeout }).catch(safeReject);
     } else {
       safeReject(new Error(`Unsupported provider type: ${effectiveProvider.type}`));
     }

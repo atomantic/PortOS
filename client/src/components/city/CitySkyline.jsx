@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import * as THREE from 'three';
 import { cityDayMix, seededRand } from './cityConstants';
+import { isInWater } from '../../utils/cityPlan';
 
 // Distant cyberpunk skyline silhouettes with neon trim
 // Creates a ring of faint skyscraper outlines around the city perimeter
@@ -105,6 +106,11 @@ export default function CitySkyline({ settings }) {
       const bWidth = 1.5 + rand() * 4;
       const bHeight = 5 + rand() * 25;
       const colorIdx = Math.floor(rand() * colors.length);
+
+      // The north arc of the ring lands in the bay — no silhouette stands in the water.
+      // The harbor piers and the federation peers across the bay own that horizon.
+      // (rand() calls above stay unconditional so the rest of the ring keeps its layout.)
+      if (isInWater(x, z, 4)) continue;
 
       result.push({
         id: `skyline-${i}`,

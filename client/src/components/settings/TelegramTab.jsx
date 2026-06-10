@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useId } from 'react';
 import { Save, Eye, EyeOff, Trash2, Send } from 'lucide-react';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
@@ -18,6 +18,8 @@ const NOTIFICATION_TYPES = [
 ];
 
 export function TelegramTab() {
+  const botTokenId = useId();
+  const chatIdId = useId();
   const [loading, setLoading] = useState(true);
   const [method, setMethod] = useState('manual');
   const [switching, setSwitching] = useState(false);
@@ -124,7 +126,7 @@ export function TelegramTab() {
     <div className="space-y-4">
       {/* Method Selector */}
       <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6 space-y-4">
-        <label className="block text-sm text-gray-400">Integration Method</label>
+        <p className="block text-sm text-gray-400">Integration Method</p>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <button
             onClick={() => method !== 'manual' && handleMethodChange('manual')}
@@ -179,9 +181,10 @@ export function TelegramTab() {
           )}
 
           <div className="space-y-1">
-            <label className="block text-sm text-gray-400">Bot Token</label>
+            <label htmlFor={botTokenId} className="block text-sm text-gray-400">Bot Token</label>
             <div className="flex gap-2">
               <input
+                id={botTokenId}
                 type={tgShowToken ? 'text' : 'password'}
                 value={tgToken}
                 onChange={e => setTgToken(e.target.value)}
@@ -199,8 +202,9 @@ export function TelegramTab() {
           </div>
 
           <div className="space-y-1">
-            <label className="block text-sm text-gray-400">Chat ID</label>
+            <label htmlFor={chatIdId} className="block text-sm text-gray-400">Chat ID</label>
             <input
+              id={chatIdId}
               type="text"
               value={tgChatId}
               onChange={e => setTgChatId(e.target.value)}
@@ -300,7 +304,7 @@ export function TelegramTab() {
       {/* Forward types (shared between both methods) */}
       {tgStatus?.connected && (
         <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6 space-y-2">
-          <label className="block text-sm text-gray-400">Forward Notification Types</label>
+          <p className="block text-sm text-gray-400">Forward Notification Types</p>
           <p className="text-xs text-gray-500">When all are unchecked, all types are forwarded</p>
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
             {NOTIFICATION_TYPES.map(({ key, label }) => (

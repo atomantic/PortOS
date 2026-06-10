@@ -56,6 +56,14 @@ describe('buildSchedule', () => {
     expect(totalSec).toBeCloseTo(2.0, 6);
   });
 
+  it('carries the MIDI note number per pitched note (null for rests)', () => {
+    const score = parseScore('time: 4/4\ntempo: 120\n| C4q rq A4h |');
+    const { events } = buildSchedule(score);
+    expect(events[0].midi).toBe(60);   // C4 → MIDI 60 (feeds the piano-roll)
+    expect(events[1].midi).toBeNull(); // rest carries no key
+    expect(events[2].midi).toBe(69);   // A4 → MIDI 69
+  });
+
   it('advances time through rests but carries no frequency', () => {
     const score = parseScore('time: 4/4\ntempo: 60\n| C4q rq C4h |');
     const { events, totalSec } = buildSchedule(score);
@@ -243,6 +251,24 @@ describe('createMultiScorePlayer', () => {
     drive(3);
     expect(audio.oscillators).toHaveLength(scheduledSoFar); // nothing new after stop
     expect(player.isPlaying()).toBe(false);
+  });
+
+  it('reports duration (longest voice) and a live score-position for the piano roll', async () => {
+    const player = createMultiScorePlayer(
+      [{ id: 'melody', score: MELODY }, { id: 'bass', score: BASS }],
+      { bpm: 120 },
+    );
+    expect(player.duration()).toBeCloseTo(2.0, 6); // 4 quarters @120 = the longest voice
+    expect(player.position()).toBe(0);             // idle → resume offset 0
+    await player.play();
+    // During the LEAD-in (before beat 0 sounds) the head is NEGATIVE, not clamped
+    // to 0 — so the piano roll keeps the first note above the hit line until audio.
+    expect(player.position()).toBeLessThan(0);
+    audio.now = 1.0;                               // advance the fake audio clock
+    expect(player.position()).toBeGreaterThan(0.5);
+    expect(player.position()).toBeLessThanOrEqual(player.duration());
+    player.stop();
+    expect(player.position()).toBe(0);             // reset to the top
   });
 
   it('reports ended for an empty selection without scheduling audio', async () => {

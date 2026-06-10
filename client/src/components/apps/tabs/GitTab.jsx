@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { GitBranch, Plus, Minus, FileText, RefreshCw, Download, Rocket, Upload, ArrowUpDown, Check, Trash2, GitMerge, Globe } from 'lucide-react';
 import toast from '../../ui/Toast';
+import Modal from '../../ui/Modal';
 import BrailleSpinner from '../../BrailleSpinner';
 import * as api from '../../../services/api';
 
@@ -801,71 +802,79 @@ export default function GitTab({ appId: _appId, appName, repoPath }) {
       )}
 
       {/* Diff Modal */}
-      {showDiff && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setShowDiff(false)}>
-          <div className="bg-port-card border border-port-border rounded-xl w-3/4 max-h-[80vh] overflow-hidden" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between p-4 border-b border-port-border">
-              <h3 className="font-medium text-white">Git Diff</h3>
-              <button onClick={() => setShowDiff(false)} className="text-gray-400 hover:text-white">×</button>
-            </div>
-            <pre className="p-4 overflow-auto max-h-[70vh] text-sm font-mono">
-              {diff.split('\n').map((line, i) => {
-                let color = 'text-gray-300';
-                if (line.startsWith('+') && !line.startsWith('+++')) color = 'text-port-success';
-                if (line.startsWith('-') && !line.startsWith('---')) color = 'text-port-error';
-                if (line.startsWith('@@')) color = 'text-port-accent';
-                return <div key={i} className={color}>{line}</div>;
-              })}
-              {!diff && <span className="text-gray-500">No changes to display</span>}
-            </pre>
-          </div>
+      <Modal
+        open={showDiff}
+        onClose={() => setShowDiff(false)}
+        size="none"
+        align="none"
+        backdropClassName="bg-black/50"
+        panelClassName="bg-port-card border border-port-border rounded-xl w-3/4 max-h-[80vh] overflow-hidden"
+        ariaLabelledBy="git-diff-modal-title"
+      >
+        <div className="flex items-center justify-between p-4 border-b border-port-border">
+          <h3 id="git-diff-modal-title" className="font-medium text-white">Git Diff</h3>
+          <button onClick={() => setShowDiff(false)} aria-label="Close" className="text-gray-400 hover:text-white">×</button>
         </div>
-      )}
+        <pre className="p-4 overflow-auto max-h-[70vh] text-sm font-mono">
+          {diff.split('\n').map((line, i) => {
+            let color = 'text-gray-300';
+            if (line.startsWith('+') && !line.startsWith('+++')) color = 'text-port-success';
+            if (line.startsWith('-') && !line.startsWith('---')) color = 'text-port-error';
+            if (line.startsWith('@@')) color = 'text-port-accent';
+            return <div key={i} className={color}>{line}</div>;
+          })}
+          {!diff && <span className="text-gray-500">No changes to display</span>}
+        </pre>
+      </Modal>
 
       {/* Release Confirmation Dialog */}
-      {showReleaseConfirm && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setShowReleaseConfirm(false)}>
-          <div className="bg-port-card border border-port-border rounded-xl w-full max-w-lg overflow-hidden" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between p-4 border-b border-port-border">
-              <h3 className="font-medium text-white flex items-center gap-2">
-                <Rocket size={18} className="text-port-accent" />
-                Create Release PR for {appName}
-              </h3>
-              <button onClick={() => setShowReleaseConfirm(false)} className="text-gray-400 hover:text-white">×</button>
-            </div>
-            <div className="p-4 space-y-3">
-              <p className="text-sm text-gray-300">
-                This will create a CoS agent task to automate the full release workflow:
-              </p>
-              <ul className="text-sm text-gray-400 space-y-1.5 ml-4 list-disc">
-                <li>Push local commits to origin/{gitInfo?.devBranch || 'dev'}</li>
-                {gitInfo?.hasChangelog && <li>Check and update the changelog</li>}
-                <li>Create PR from {gitInfo?.devBranch || 'dev'} to {gitInfo?.baseBranch || 'main'}</li>
-                <li>Wait for Copilot review and address feedback</li>
-                <li>Merge when approved and CI passes</li>
-              </ul>
-              <p className="text-xs text-gray-500">
-                {branchComparison?.ahead || 0} commits will be included in this release.
-              </p>
-            </div>
-            <div className="flex justify-end gap-3 p-4 border-t border-port-border">
-              <button
-                onClick={() => setShowReleaseConfirm(false)}
-                className="px-4 py-2 text-sm text-gray-400 hover:text-white"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleReleasePR}
-                className="flex items-center gap-2 px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg text-sm"
-              >
-                <Rocket size={16} />
-                Start Release
-              </button>
-            </div>
-          </div>
+      <Modal
+        open={showReleaseConfirm}
+        onClose={() => setShowReleaseConfirm(false)}
+        size="md"
+        align="none"
+        backdropClassName="bg-black/50"
+        panelClassName="bg-port-card border border-port-border rounded-xl overflow-hidden"
+        ariaLabelledBy="git-release-modal-title"
+      >
+        <div className="flex items-center justify-between p-4 border-b border-port-border">
+          <h3 id="git-release-modal-title" className="font-medium text-white flex items-center gap-2">
+            <Rocket size={18} className="text-port-accent" />
+            Create Release PR for {appName}
+          </h3>
+          <button onClick={() => setShowReleaseConfirm(false)} aria-label="Close" className="text-gray-400 hover:text-white">×</button>
         </div>
-      )}
+        <div className="p-4 space-y-3">
+          <p className="text-sm text-gray-300">
+            This will create a CoS agent task to automate the full release workflow:
+          </p>
+          <ul className="text-sm text-gray-400 space-y-1.5 ml-4 list-disc">
+            <li>Push local commits to origin/{gitInfo?.devBranch || 'dev'}</li>
+            {gitInfo?.hasChangelog && <li>Check and update the changelog</li>}
+            <li>Create PR from {gitInfo?.devBranch || 'dev'} to {gitInfo?.baseBranch || 'main'}</li>
+            <li>Wait for Copilot review and address feedback</li>
+            <li>Merge when approved and CI passes</li>
+          </ul>
+          <p className="text-xs text-gray-500">
+            {branchComparison?.ahead || 0} commits will be included in this release.
+          </p>
+        </div>
+        <div className="flex justify-end gap-3 p-4 border-t border-port-border">
+          <button
+            onClick={() => setShowReleaseConfirm(false)}
+            className="px-4 py-2 text-sm text-gray-400 hover:text-white"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleReleasePR}
+            className="flex items-center gap-2 px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg text-sm"
+          >
+            <Rocket size={16} />
+            Start Release
+          </button>
+        </div>
+      </Modal>
     </div>
   );
 }

@@ -179,6 +179,7 @@ export * from './singleFlight.js';
 export * from './streamBackpressure.js';
 export * from './sseUtils.js';
 export * from './uuid.js';
+export * from './workspaceRoots.js';
 export * from './zodCompat.js';
 
 // === Test support (consumed by *.test.js files) ===

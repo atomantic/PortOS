@@ -7,6 +7,7 @@ import {
   getSnapshotConfig,
 } from '../services/citysnapshots.js';
 import { getNextSnapshotTime } from '../services/citySnapshotScheduler.js';
+import { getCityIntrospection } from '../services/cityIntrospection.js';
 
 const router = Router();
 
@@ -21,6 +22,13 @@ router.get('/snapshots', asyncHandler(async (req, res) => {
 // testing trigger; the scheduler drives the periodic captures).
 router.post('/snapshots/capture', asyncHandler(async (req, res) => {
   res.json(await captureSnapshot());
+}));
+
+// GET /api/city/introspection — DB tables + data/ domain sizes for the Data
+// Harbor district. Cached server-side (stale-while-revalidate); `db: null`
+// means the database is unreachable, distinct from a reachable-but-empty one.
+router.get('/introspection', asyncHandler(async (req, res) => {
+  res.json(await getCityIntrospection());
 }));
 
 // GET /api/city/snapshots/config — effective capture config + next run time.

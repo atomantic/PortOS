@@ -2,6 +2,7 @@ import { useEffect, useMemo } from 'react';
 import * as THREE from 'three';
 import { cityDayMix, mixHex, seededRand, smoothstepRange } from './cityConstants';
 import { useCityPalette } from './CityPaletteContext';
+import { WORLD } from '../../utils/cityPlan';
 
 const TERRAIN_SIZE = 2400;
 const MOUNTAIN_INNER_RADIUS = 560;
@@ -89,7 +90,7 @@ function TerrainPlane({ dayMix, accent }) {
   return (
     <mesh
       rotation={[-Math.PI / 2, 0, 0]}
-      position={[0, -0.08, 0]}
+      position={[0, WORLD.terrainY, 0]}
       material={material}
       frustumCulled={false}
     >

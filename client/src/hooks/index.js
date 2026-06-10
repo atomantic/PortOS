@@ -56,6 +56,7 @@ export * from './useArcCanvasSync.js';
 // === Progress & streaming (SSE / socket) ===
 export * from './useImageGenProgress.js';
 export * from './useImporterProgress.js';
+export * from './useInstallStream.js';
 export * from './useOpenClawStream.js';
 export * from './usePipelineAutoRunProgress.js';
 export * from './usePipelineEditorialProgress.js';
@@ -95,6 +96,12 @@ export * from './useSwipeNav.js';
 // === Storage & persistence ===
 export * from './useLocalStorageBool.js';
 export * from './useNavWorkingSet.js';
+
+// === Sidebar navigation data ===
+export * from './useFocusRefreshedList.js';
+export * from './useSidebarApps.js';
+export * from './useSidebarSeries.js';
+export * from './useSidebarUniverses.js';
 
 // === Domain: City / Voice / Mortality / Universe / Apps / Sessions ===
 export * from './useAppDeploy.js';

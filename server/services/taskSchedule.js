@@ -19,33 +19,36 @@ import { join } from 'path';
 import { cosEvents, emitLog } from './cosEvents.js';
 import { DAY, ensureDir, HOUR, readJSONFile, PATHS, safeDate } from '../lib/fileUtils.js';
 import { isPlainObject } from '../lib/objects.js';
+import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
 import { getAdaptiveCooldownMultiplier } from './taskLearning.js';
 import { isTaskTypeEnabledForApp, getAppTaskTypeInterval, getActiveApps, getAppTaskTypeOverrides, clearAllPrWatcherState } from './apps.js';
 import { loadState, isImprovementEnabled } from './cosState.js';
 import { getUserTimezone, getLocalParts } from '../lib/timezone.js';
 import { parseCronToNextRun, parseCronToPrevRun } from './eventScheduler.js';
-// Prompt catalog + getters were extracted to taskPromptService.js (issue #744).
-// loadSchedule()/getScheduleStatus() below still consume the prompt-version
-// machinery (DEFAULT_TASK_PROMPTS / PROMPT_VERSIONS / PREVIOUS_DEFAULT_PROMPTS)
-// for the auto-upgrade path, so import those here. PROMPT_VERSIONS is part of
-// taskSchedule.js's public API (consumers import it from here), so it's
-// re-exported below alongside the prompt getters; DEFAULT_TASK_PROMPTS and
-// PREVIOUS_DEFAULT_PROMPTS stay internal, matching their pre-split visibility.
+// The prompt catalog + compat constants live in the taskPromptDefaults.js data
+// leaf (issue #1083); the prompt getters live in taskPromptService.js (split
+// out in issue #744). loadSchedule()/getScheduleStatus() below consume the
+// prompt-version machinery (DEFAULT_TASK_PROMPTS / PROMPT_VERSIONS /
+// PREVIOUS_DEFAULT_PROMPTS) for the auto-upgrade path, so import those from the
+// leaf here. Importing from the leaf (not taskPromptService) is what keeps the
+// graph acyclic: taskPromptService imports getTaskInterval from THIS module, so
+// this module must not import taskPromptService back. PROMPT_VERSIONS and
+// REFERENCE_WATCH_AUDITED_VERSION are part of taskSchedule.js's public API
+// (consumers import them from here), so they're re-exported below;
+// DEFAULT_TASK_PROMPTS and PREVIOUS_DEFAULT_PROMPTS stay internal.
 import {
   DEFAULT_TASK_PROMPTS,
   PROMPT_VERSIONS,
-  PREVIOUS_DEFAULT_PROMPTS
-} from './taskPromptService.js';
-
-// Re-export the public prompt API so existing importers of taskSchedule.js are
-// unaffected by the split (PROMPT_VERSIONS is exported via its local binding above).
-export { PROMPT_VERSIONS };
-export {
   REFERENCE_WATCH_AUDITED_VERSION,
-  getDefaultPrompt,
-  getTaskPrompt,
-  getStagePrompt
-} from './taskPromptService.js';
+  PREVIOUS_DEFAULT_PROMPTS
+} from './taskPromptDefaults.js';
+
+// Re-export the prompt-version constants so existing importers of taskSchedule.js
+// are unaffected. The prompt GETTERS (getDefaultPrompt / getTaskPrompt /
+// getStagePrompt) moved to taskPromptService.js and are NO LONGER re-exported
+// here — import them from './taskPromptService.js' directly (re-exporting them
+// would re-form the taskSchedule ⇄ taskPromptService cycle this split removed).
+export { PROMPT_VERSIONS, REFERENCE_WATCH_AUDITED_VERSION };
 
 const DATA_DIR = PATHS.cos;
 const SCHEDULE_FILE = join(DATA_DIR, 'task-schedule.json');
@@ -1037,7 +1040,7 @@ export async function getScheduleStatus() {
     const isEnabledForApp = (override) => override?.enabled === true;
     const appOverrides = {};
     let enabledAppCount = 0;
-    const allOverrides = await Promise.all(activeApps.map(app => getAppTaskTypeOverrides(app.id)));
+    const allOverrides = await mapWithConcurrency(activeApps, 8, (app) => getAppTaskTypeOverrides(app.id));
     for (let i = 0; i < activeApps.length; i++) {
       const override = allOverrides[i][taskType];
       if (override) {

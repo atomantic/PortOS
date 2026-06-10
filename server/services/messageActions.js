@@ -129,19 +129,19 @@ export async function executeAction(accountId, messageId, action) {
  * Archive = remove INBOX label. Delete = move to trash.
  */
 async function executeGmailApiAction(message, action) {
-  const { google } = await import('googleapis');
+  const { gmail } = await import('@googleapis/gmail');
   const { getAuthenticatedClient } = await import('./googleAuth.js');
 
   const auth = await getAuthenticatedClient();
   if (!auth) throw new Error('Google OAuth not configured');
 
-  const gmail = google.gmail({ version: 'v1', auth });
+  const gmailClient = gmail({ version: 'v1', auth });
 
   if (action === 'delete') {
-    await gmail.users.messages.trash({ userId: 'me', id: message.apiId });
+    await gmailClient.users.messages.trash({ userId: 'me', id: message.apiId });
     console.log(`📧 Gmail API: trashed "${message.subject}"`);
   } else if (action === 'archive') {
-    await gmail.users.messages.modify({
+    await gmailClient.users.messages.modify({
       userId: 'me',
       id: message.apiId,
       requestBody: { removeLabelIds: ['INBOX'] }

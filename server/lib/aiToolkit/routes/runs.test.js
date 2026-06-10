@@ -61,8 +61,8 @@ describe('POST /api/runs — fallback-model execution', () => {
       const res = await post(app);
       expect(res.status).toBe(202);
       expect(runnerService.executeApiRun).toHaveBeenCalledTimes(1);
-      // executeApiRun(runId, provider, runModel, prompt, ...)
-      expect(runnerService.executeApiRun.mock.calls[0][2]).toBe(REQUEST_MODEL);
+      // executeApiRun({ runId, provider, model: runModel, prompt, ... })
+      expect(runnerService.executeApiRun.mock.calls[0][0].model).toBe(REQUEST_MODEL);
     });
 
     it('TUI: clones the provider with the request model as defaultModel', async () => {
@@ -72,8 +72,8 @@ describe('POST /api/runs — fallback-model execution', () => {
       const res = await post(app);
       expect(res.status).toBe(202);
       expect(runnerService.executeTuiRun).toHaveBeenCalledTimes(1);
-      // executeTuiRun(runId, effectiveProvider, prompt, ...)
-      expect(runnerService.executeTuiRun.mock.calls[0][1].defaultModel).toBe(REQUEST_MODEL);
+      // executeTuiRun({ runId, provider: effectiveProvider, prompt, ... })
+      expect(runnerService.executeTuiRun.mock.calls[0][0].provider.defaultModel).toBe(REQUEST_MODEL);
     });
 
     it('CLI: leaves the provider untouched (request model is never threaded into CLI runs)', async () => {
@@ -82,8 +82,8 @@ describe('POST /api/runs — fallback-model execution', () => {
       const res = await post(app);
       expect(res.status).toBe(202);
       expect(runnerService.executeCliRun).toHaveBeenCalledTimes(1);
-      // executeCliRun(runId, cliProvider, prompt, ...): no clone, keeps provider's own default
-      const cliProvider = runnerService.executeCliRun.mock.calls[0][1];
+      // executeCliRun({ runId, provider: cliProvider, prompt, ... }): no clone, keeps provider's own default
+      const cliProvider = runnerService.executeCliRun.mock.calls[0][0].provider;
       expect(cliProvider).toBe(provider.provider);
       expect(cliProvider.defaultModel).toBe('provider-default');
     });
@@ -97,7 +97,7 @@ describe('POST /api/runs — fallback-model execution', () => {
         runData({ providerType: 'api', defaultModel: 'fallback-default', usedFallback: true, fallbackModel: PINNED })
       );
       await post(app);
-      expect(runnerService.executeApiRun.mock.calls[0][2]).toBe(PINNED);
+      expect(runnerService.executeApiRun.mock.calls[0][0].model).toBe(PINNED);
     });
 
     it('TUI: clones the fallback provider with the pinned model as defaultModel', async () => {
@@ -105,14 +105,14 @@ describe('POST /api/runs — fallback-model execution', () => {
         runData({ providerType: 'tui', defaultModel: 'fallback-default', usedFallback: true, fallbackModel: PINNED })
       );
       await post(app);
-      expect(runnerService.executeTuiRun.mock.calls[0][1].defaultModel).toBe(PINNED);
+      expect(runnerService.executeTuiRun.mock.calls[0][0].provider.defaultModel).toBe(PINNED);
     });
 
     it('CLI: clones the fallback provider with the pinned model as defaultModel', async () => {
       const run = runData({ providerType: 'cli', defaultModel: 'fallback-default', usedFallback: true, fallbackModel: PINNED });
       const { app, runnerService } = makeApp(run);
       await post(app);
-      const cliProvider = runnerService.executeCliRun.mock.calls[0][1];
+      const cliProvider = runnerService.executeCliRun.mock.calls[0][0].provider;
       expect(cliProvider.defaultModel).toBe(PINNED);
       // runModel !== provider.defaultModel, so the route must hand a *clone* to the
       // CLI runner — never mutate the shared fallback provider record.
@@ -128,8 +128,8 @@ describe('POST /api/runs — fallback-model execution', () => {
         runData({ providerType: 'api', defaultModel: FALLBACK_DEFAULT, usedFallback: true, fallbackModel: null })
       );
       await post(app);
-      expect(runnerService.executeApiRun.mock.calls[0][2]).toBe(FALLBACK_DEFAULT);
-      expect(runnerService.executeApiRun.mock.calls[0][2]).not.toBe(REQUEST_MODEL);
+      expect(runnerService.executeApiRun.mock.calls[0][0].model).toBe(FALLBACK_DEFAULT);
+      expect(runnerService.executeApiRun.mock.calls[0][0].model).not.toBe(REQUEST_MODEL);
     });
 
     it('TUI: clones the fallback provider with its own default, never the request model', async () => {
@@ -137,7 +137,7 @@ describe('POST /api/runs — fallback-model execution', () => {
         runData({ providerType: 'tui', defaultModel: FALLBACK_DEFAULT, usedFallback: true, fallbackModel: null })
       );
       await post(app);
-      const tuiProvider = runnerService.executeTuiRun.mock.calls[0][1];
+      const tuiProvider = runnerService.executeTuiRun.mock.calls[0][0].provider;
       expect(tuiProvider.defaultModel).toBe(FALLBACK_DEFAULT);
       expect(tuiProvider.defaultModel).not.toBe(REQUEST_MODEL);
     });
@@ -148,7 +148,7 @@ describe('POST /api/runs — fallback-model execution', () => {
       await post(app);
       // runModel === provider.defaultModel here, so the route skips the clone and
       // passes the fallback provider as-is — its default is already correct.
-      const cliProvider = runnerService.executeCliRun.mock.calls[0][1];
+      const cliProvider = runnerService.executeCliRun.mock.calls[0][0].provider;
       expect(cliProvider.defaultModel).toBe(FALLBACK_DEFAULT);
       expect(cliProvider.defaultModel).not.toBe(REQUEST_MODEL);
       // No pin and runModel === provider.defaultModel, so the route skips the clone

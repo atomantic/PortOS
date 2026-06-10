@@ -215,6 +215,11 @@ export const cityDayMix = (settings) => {
   return smoothstepRange(0.35, 1, preset?.daylightFactor ?? 0);
 };
 
+// True when the active quality preset is above "low" (particleDensity 0.5) — the shared
+// gate for optional set dressing (rooftop kits, street furniture, transit trams). The
+// boundary is exact-0.5-excluded on purpose: the low preset renders structure only.
+export const cityShowDetail = (settings) => (settings?.particleDensity ?? 1) > 0.5;
+
 // Drei <Text> props for an informational in-world label that stays legible in both
 // the night-neon scene AND the bright daytime scene. At night (dayMix→0) the label
 // keeps its neon fill with no outline, so the established look is untouched. As day

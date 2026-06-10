@@ -36,6 +36,7 @@ grep -i "what you want to do" client/src/hooks/README.md
 | Hook | Purpose | Use when |
 |---|---|---|
 | `useSseProgress` | Generic JSON-frame EventSource subscriber. | New SSE progress stream — start here, build on top. |
+| `useInstallStream` | BYO-runtime install-log EventSource lifecycle: `stage`/`log`/`complete`/`error` frame dispatch, capped + optionally-debounced log accumulation, "connection lost" handling, ref-stashed `onComplete`, auto-scroll. | A streamed install/setup modal that shows live SSE log lines (FLUX.2, video runtimes). Don't re-roll the EventSource teardown/onComplete-ref dance. |
 | `useModelDownloadStatus` | Image/video model cache-status + SSE pre-download. | Surfacing "Available" vs "Download" badge inline in the gen form. |
 | `useImageGenProgress` | Live diffusion progress for an image-gen call. | Showing per-call image-gen progress. |
 | `useImporterProgress` | Live analyze-phase stage checklist via the `importer:progress` socket (runId-filtered); exports `stageStatusIcon` for the status→icon lookup. | Importer analyze progress UI only. |
@@ -101,6 +102,15 @@ grep -i "what you want to do" client/src/hooks/README.md
 |---|---|---|
 | `useLocalStorageBool` | Boolean `useState` mirrored to `localStorage`. | Per-user UI preference toggle. |
 | `useNavWorkingSet` | Sidebar Pinned + Recent working set (localStorage MRU + pins); resolves stored paths to `{ path, label, icon }` rows via a `resolveNavEntry` arg. | Rendering the sidebar's Pinned/Recent sections. |
+
+## Sidebar navigation data
+
+| Hook | Purpose | Use when |
+|---|---|---|
+| `useFocusRefreshedList` | Load-once-then-refresh-on-focus list fetcher: debounces focus refreshes to 30s, sorts by name, and skips re-render when an `id\|name` signature is unchanged. Owns its own warn-on-error. | Any sidebar/nav list that should refresh when the user returns to the tab without hammering the API. Pass a stable `api.*` fetch fn. |
+| `useSidebarApps` | Apps list for sidebar nav: socket-driven (`apps:changed`), archived filtered out, name-sorted. | The sidebar apps section. |
+| `useSidebarSeries` | Pipeline series for the Create > Pipeline grandchildren (built on `useFocusRefreshedList`). | The sidebar pipeline-series section. |
+| `useSidebarUniverses` | Universes for the Create > Universes grandchildren (built on `useFocusRefreshedList`). | The sidebar universes section. |
 
 ## Apps / Sessions / Domain
 

@@ -143,7 +143,7 @@ export async function patchRunMetadata(runId, patch) {
  * Override executeCliRun to fix shell security issue
  * This removes 'shell: true' which causes DEP0190 warning and potential security issues
  */
-export async function executeCliRun(runId, provider, prompt, workspacePath, onData, onComplete, timeout) {
+export async function executeCliRun({ runId, provider, prompt, workspacePath, onData, onComplete, timeout }) {
   const toolkit = requireToolkit();
 
   const runsPath = join(runnerConfig.dataDir, 'runs');
@@ -275,8 +275,8 @@ export async function executeCliRun(runId, provider, prompt, workspacePath, onDa
   return runId;
 }
 
-export async function executeApiRun(runId, provider, model, prompt, workspacePath, screenshots, onData, onComplete) {
-  return requireToolkit().services.runner.executeApiRun(runId, provider, model, prompt, workspacePath, screenshots, onData, onComplete);
+export async function executeApiRun(options) {
+  return requireToolkit().services.runner.executeApiRun(options);
 }
 
 /**

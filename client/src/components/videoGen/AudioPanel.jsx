@@ -6,6 +6,7 @@
  * "no compatible model installed" condition are owned by the VideoGen page.
  */
 import { Upload, Music } from 'lucide-react';
+import { formatBytes } from '../../utils/formatters';
 
 export default function AudioPanel({ audioFile, numFrames, fps, hasCompatibleModel, onPick, onClear }) {
   return (
@@ -20,7 +21,7 @@ export default function AudioPanel({ audioFile, numFrames, fps, hasCompatibleMod
         <div className="flex items-center gap-2 text-[11px] text-gray-300">
           <Music className="w-3.5 h-3.5 text-port-accent" />
           <span className="truncate" title={audioFile.name}>{audioFile.name}</span>
-          <span className="text-gray-500">{(audioFile.size / 1024 / 1024).toFixed(2)} MB</span>
+          <span className="text-gray-500">{formatBytes(audioFile.size, 2)}</span>
         </div>
       ) : (
         <label className="flex items-center gap-2 text-[11px] text-gray-400 cursor-pointer hover:text-white">

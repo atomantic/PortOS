@@ -12,8 +12,10 @@
 // keep the generic radial fan-out. Model tier is a best-effort heuristic from the model
 // name (the event has no explicit tier).
 
+import { PARCELS } from './cityPlan';
+
 export const AI_CORE = {
-  position: [0, 0, 0], // city center — the spire rises above the building grid
+  position: PARCELS.aiCore.anchor, // city center — the spire rises above the building grid
   height: 34, // tall enough to clear downtown and read as the central landmark
   apexY: 34, // beams/glow originate from the apex
   maxBeams: 6, // visible activity beams cap

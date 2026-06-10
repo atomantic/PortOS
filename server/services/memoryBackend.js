@@ -48,6 +48,23 @@ async function getBackend() {
     return backend;
   }
 
+  // Under the test runner, ALWAYS use the file backend — never probe or touch a
+  // real Postgres instance. A developer's machine commonly has a live `portos`
+  // DB running (and that DB is federated to real peers). If the suite were to
+  // auto-detect that healthy DB it would write hundreds of fixture
+  // universes/series into it AND fan them out to live peers via
+  // autoSubscribeRecordToAllPeers — and test-cleanup tombstones would delete the
+  // user's real records. This must short-circuit BEFORE checkHealth(); the
+  // earlier conditional-on-unavailable form silently wrote to a dev's real DB
+  // whenever Postgres happened to be up. An explicit `MEMORY_BACKEND=postgres`
+  // (handled above) still opts a suite into the PG path.
+  if (process.env.NODE_ENV === 'test') {
+    backend = await import('./memory.js');
+    backendName = 'file';
+    console.log('🧠 Memory backend: file-based (test mode — Postgres deliberately bypassed)');
+    return backend;
+  }
+
   // MEMORY_BACKEND unset: require PostgreSQL. We do NOT silently fall back to
   // file storage when Postgres is unavailable — that masks a broken install.
   const health = await checkHealth();
@@ -56,18 +73,6 @@ async function getBackend() {
     backend = await import('./memoryDB.js');
     backendName = 'postgres';
     console.log('🧠 Memory backend: PostgreSQL + pgvector (auto-detected)');
-    return backend;
-  }
-
-  // Postgres is required but unavailable/unhealthy. The only sanctioned
-  // file-backed path here is the test/dev escape hatch — and that requires
-  // NODE_ENV=test (explicit MEMORY_BACKEND=file is handled above). Tests boot
-  // without a database; gate the file backend on test mode so a real install
-  // never silently serves file-backed memory.
-  if (process.env.NODE_ENV === 'test') {
-    backend = await import('./memory.js');
-    backendName = 'file';
-    console.log(`🧠 Memory backend: file-based (test mode — PostgreSQL unavailable: ${health.error || 'no schema'})`);
     return backend;
   }
 

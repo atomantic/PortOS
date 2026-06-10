@@ -28,6 +28,7 @@ import CitySeasonalDecor from './CitySeasonalDecor';
 import CityEasterEggs from './CityEasterEggs';
 import CityVoiceMarker from './CityVoiceMarker';
 import CityMemoryDistrict from './CityMemoryDistrict';
+import CityDataHarbor from './CityDataHarbor';
 import CityJiraDistrict from './CityJiraDistrict';
 import CityAiCore from './CityAiCore';
 import CityDataRain from './CityDataRain';
@@ -37,6 +38,10 @@ import CitySignalBeacons from './CitySignalBeacons';
 import CitySky from './CitySky';
 import CityGalaxySky from './CityGalaxySky';
 import CityLandscape from './CityLandscape';
+import CityWater from './CityWater';
+import CityStreets from './CityStreets';
+import CityStreetProps from './CityStreetProps';
+import CityTransitLoop from './CityTransitLoop';
 import CityEnergyOverlay from './CityEnergyOverlay';
 import PlayerController from './PlayerController';
 import CameraTransition from './CameraTransition';
@@ -46,7 +51,7 @@ import { cityDayMix } from './cityConstants';
 import { CityPaletteProvider } from './CityPaletteContext';
 import ErrorBoundary from '../ErrorBoundary';
 
-export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, reviewCounts, instances, backupStatus, cosTasks, healthMetrics, voiceState, aiActivity, productivityData, activityCalendar, goals, character, chronotype, memoryGraph, inboxDepth, jiraTickets, playback = false, photoMode, photoPresetId, photoDof, onPhotoCaptureReady, settings, playSfx, keysRef, dimmedAppIds, background, palette }) {
+export default function CityScene({ apps, agentMap, onBuildingClick, onToggleCameraView, cosStatus, reviewCounts, instances, backupStatus, cosTasks, healthMetrics, voiceState, aiActivity, productivityData, activityCalendar, goals, character, chronotype, memoryGraph, inboxDepth, jiraTickets, introspection, playback = false, photoMode, photoPresetId, photoDof, onPhotoCaptureReady, settings, playSfx, keysRef, dimmedAppIds, background, palette }) {
   const [positions, setPositions] = useState(null);
   const [proximityApp, setProximityApp] = useState(null);
   const [transitioning, setTransitioning] = useState(false);
@@ -201,6 +206,7 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
       <CitySky settings={settings} />
       <CityLights settings={settings} />
       <CityLandscape settings={settings} />
+      <CityWater settings={settings} />
       <CityEnergyOverlay chronotype={chronotype} settings={settings} />
       <CityStarfield settings={settings} />
       <CityShootingStars playSfx={playSfx} settings={settings} />
@@ -219,9 +225,13 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
       <CityEasterEggs character={character} goals={goals} productivityData={productivityData} settings={settings} />
       <CityVoiceMarker voiceState={voiceState} settings={settings} />
       <CityMemoryDistrict memoryGraph={memoryGraph} inboxDepth={inboxDepth} settings={settings} />
+      <CityDataHarbor introspection={introspection} settings={settings} />
       <CityJiraDistrict jiraTickets={jiraTickets} settings={settings} />
       <CityAiCore aiActivity={aiActivity} positions={positions} apps={apps} settings={settings} />
       <CityGround settings={settings} />
+      <CityStreets settings={settings} />
+      <CityStreetProps settings={settings} />
+      <CityTransitLoop settings={settings} />
 
       <BuildingCluster
         apps={apps}
@@ -257,8 +267,11 @@ export default function CityScene({ apps, agentMap, onBuildingClick, cosStatus, 
           positions={positions}
           onBuildingProximity={handleBuildingProximity}
           onBuildingClick={onBuildingClick}
+          onToggleCameraView={onToggleCameraView}
           apps={apps}
           active={explorationMode}
+          transitioning={transitioning}
+          cameraView={settings?.cameraView ?? 'third'}
         />
       )}
       {!explorationMode && !transitioning && !photoMode && (

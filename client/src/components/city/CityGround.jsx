@@ -4,6 +4,14 @@ import { Grid } from '@react-three/drei';
 import * as THREE from 'three';
 import { getTimeOfDayPreset, cityDayMix, mixHex, seededRand } from './cityConstants';
 import { useCityPalette } from './CityPaletteContext';
+import { WORLD } from '../../utils/cityPlan';
+
+// The city ground stops at the master plan's shoreline (z = WORLD.shorelineZ) — the bay
+// (CityWater) owns everything north of it. Both the pavement plane and the neon grid are
+// sized/offset to end exactly at the water's edge.
+const GROUND_HALF = WORLD.landHalf;
+const GROUND_DEPTH = GROUND_HALF - WORLD.shorelineZ; // shoreline → +landHalf
+const GROUND_CENTER_Z = (GROUND_HALF + WORLD.shorelineZ) / 2;
 
 // Reflective puddle/wet-ground patches
 function WetPatch({ position, size, color, dayMix = 0 }) {
@@ -107,8 +115,8 @@ export default function CityGround({ settings }) {
     <group>
       {/* Reflective dark ground plane */}
       {reflectionsEnabled && (
-        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.02, 0]}>
-          <planeGeometry args={[120, 120]} />
+        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, WORLD.groundY, GROUND_CENTER_Z]}>
+          <planeGeometry args={[GROUND_HALF * 2, GROUND_DEPTH]} />
           <meshStandardMaterial
             ref={groundMatRef}
             color={preset.groundColor ?? '#0a0a20'}
@@ -120,7 +128,7 @@ export default function CityGround({ settings }) {
       )}
 
       <Grid
-        infiniteGrid
+        args={[GROUND_HALF * 2, GROUND_DEPTH]}
         cellSize={2}
         sectionSize={6}
         cellColor={gridCellColor}
@@ -129,7 +137,7 @@ export default function CityGround({ settings }) {
         sectionThickness={1.4}
         fadeDistance={80}
         fadeStrength={0.6}
-        position={[0, -0.01, 0]}
+        position={[0, -0.01, GROUND_CENTER_Z]}
       />
 
       {/* Wet street reflective patches */}

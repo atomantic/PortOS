@@ -39,6 +39,7 @@ import SongTraining from '../components/songs/SongTraining';
 import SongScoreEditor from '../components/songs/SongScoreEditor';
 import SongScoreParts from '../components/songs/SongScoreParts';
 import ScoreSheet from '../components/songs/ScoreSheet';
+import PianoRoll, { layerColor } from '../components/songs/PianoRoll';
 import RoundStack from '../components/songs/RoundStack';
 import { scoreHasMusic, parseScore } from '../lib/scoreNotation';
 import { createMultiScorePlayer, DEFAULT_BPM } from '../lib/scorePlayback';
@@ -909,7 +910,16 @@ function LayeredSheetMusic({ tabs }) {
   const uid = useId();
   const tabsKey = tabs.map((t) => t.key).join('|');
 
+  // 'staff' = SVG sheet music; 'piano' = Synthesia-style falling-note piano roll.
+  const [view, setView] = useState('staff');
   const [viewKey, setViewKey] = useState(tabs[0].key);
+
+  // Stable per-part colors (by tab order) shared by the piano roll and the layer
+  // swatches so every surface agrees on which color is which voice.
+  const colorByKey = useMemo(
+    () => new Map(tabs.map((t, i) => [t.key, layerColor(i)])),
+    [tabsKey], // eslint-disable-line react-hooks/exhaustive-deps
+  );
   // Default: every part checked, so Play gives the full stack out of the box.
   // Reconcile across tab-set changes — keep checks for parts that still exist,
   // include any newly-added part, and never leave the selection empty.
@@ -933,6 +943,9 @@ function LayeredSheetMusic({ tabs }) {
   const playerRef = useRef(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [activeByPart, setActiveByPart] = useState({}); // partKey → now-sounding note index
+  // Live playhead in score-seconds for the piano roll; stable so its rAF loop
+  // doesn't restart on every render (reads the player ref, 0 when torn down).
+  const getPosition = useCallback(() => playerRef.current?.position?.() ?? 0, []);
 
   const selectionKey = tabs.filter((t) => selected.has(t.key)).map((t) => t.key).join('|');
   // Notation content of every tab — changes when a score's TEXT changes even if
@@ -990,6 +1003,13 @@ function LayeredSheetMusic({ tabs }) {
   // hand control back to <ScoreSheet>'s own — here unused — internal player).
   const shownActive = selected.has(current.key) ? (activeByPart[current.key] ?? -1) : -1;
 
+  // Selected layers the piano roll renders together — raw score text (it parses)
+  // plus the shared per-layer color.
+  const pianoParts = useMemo(
+    () => tabs.filter((t) => selected.has(t.key)).map((t) => ({ id: t.key, label: t.label, color: colorByKey.get(t.key), score: t.score })),
+    [tabs, selectionKey, colorByKey], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+
   const transportBtn = 'flex items-center gap-1 rounded-md border border-port-border bg-port-card px-2 py-1 text-white hover:border-port-accent transition-colors disabled:opacity-40 disabled:hover:border-port-border';
 
   return (
@@ -1019,9 +1039,24 @@ function LayeredSheetMusic({ tabs }) {
           />
           <span>BPM</span>
         </label>
+
+        {/* Staff ↔ Piano-roll (Synthesia) view toggle — both share this transport. */}
+        <div className="ml-auto flex items-center rounded-md border border-port-border overflow-hidden" role="group" aria-label="Sheet view">
+          {[['staff', 'Staff'], ['piano', 'Piano']].map(([key, label]) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => setView(key)}
+              aria-pressed={view === key}
+              className={`px-2.5 py-1 transition-colors ${view === key ? 'bg-port-accent text-white' : 'bg-port-card text-gray-300 hover:text-white'}`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
 
-      {/* One checkbox per part — the mix that Play sounds. */}
+      {/* One checkbox per part — the mix that Play sounds. Swatch = piano color. */}
       <fieldset className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs">
         <legend className="sr-only">Parts to play together</legend>
         <span className="text-gray-500">Layers:</span>
@@ -1034,29 +1069,42 @@ function LayeredSheetMusic({ tabs }) {
               onChange={() => toggleSelected(t.key)}
               className="accent-port-accent"
             />
+            <span
+              aria-hidden="true"
+              className="inline-block w-2.5 h-2.5 rounded-sm shrink-0"
+              style={{ backgroundColor: selected.has(t.key) ? colorByKey.get(t.key) : 'transparent', border: `1px solid ${colorByKey.get(t.key)}` }}
+            />
             {t.label}
           </label>
         ))}
       </fieldset>
 
-      {/* Pill row picks which staff is shown (independent of what plays). */}
-      <div className="flex flex-wrap gap-1.5">
-        {tabs.map((t) => (
-          <button
-            key={t.key}
-            type="button"
-            onClick={() => setViewKey(t.key)}
-            aria-pressed={t.key === current.key}
-            className={`px-2.5 py-1 text-xs rounded-full border transition-colors ${t.key === current.key ? 'bg-port-accent text-white border-port-accent' : 'border-port-border text-gray-300 hover:text-white hover:border-port-accent/60'}`}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
+      {view === 'staff' ? (
+        <>
+          {/* Pill row picks which staff is shown (independent of what plays). */}
+          <div className="flex flex-wrap gap-1.5">
+            {tabs.map((t) => (
+              <button
+                key={t.key}
+                type="button"
+                onClick={() => setViewKey(t.key)}
+                aria-pressed={t.key === current.key}
+                className={`px-2.5 py-1 text-xs rounded-full border transition-colors ${t.key === current.key ? 'bg-port-accent text-white border-port-accent' : 'border-port-border text-gray-300 hover:text-white hover:border-port-accent/60'}`}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
 
-      <div className="bg-port-card border border-port-border rounded-lg p-4 overflow-x-auto">
-        <ScoreSheet key={current.key} text={current.score} controls={false} activeNoteIndex={shownActive} />
-      </div>
+          <div className="bg-port-card border border-port-border rounded-lg p-4 overflow-x-auto">
+            <ScoreSheet key={current.key} text={current.score} controls={false} activeNoteIndex={shownActive} />
+          </div>
+        </>
+      ) : (
+        <div className="bg-port-card border border-port-border rounded-lg p-2">
+          <PianoRoll parts={pianoParts} tempo={tempo} getPosition={getPosition} playing={isPlaying} />
+        </div>
+      )}
     </section>
   );
 }

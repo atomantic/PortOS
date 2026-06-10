@@ -89,8 +89,6 @@ import {
   addTemplateTask,
   getTemplateTasks,
   deleteTemplateTask,
-  getDefaultPrompt,
-  getTaskPrompt,
   resetExecutionHistory,
   triggerOnDemandTask,
   getScheduleStatus,
@@ -99,6 +97,13 @@ import {
   MANAGED_AGENT_OPTIONS,
   REFERENCE_WATCH_AUDITED_VERSION
 } from './taskSchedule.js'
+
+// Prompt getters moved to taskPromptService.js (issue #744 split, #1083 cycle
+// break). taskSchedule.js re-exports the version constants but not the getters.
+import {
+  getDefaultPrompt,
+  getTaskPrompt
+} from './taskPromptService.js'
 
 import { loadState } from './cosState.js'
 

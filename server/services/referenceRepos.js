@@ -584,10 +584,10 @@ export async function triggerReferenceAnalysis(app, ref, snapshot) {
   if (!app) return { queued: false, reason: 'app-not-found' };
 
   const { addTask } = await import('./cos.js');
-  const taskSchedule = await import('./taskSchedule.js');
+  const { getTaskPrompt } = await import('./taskPromptService.js');
 
   const referenceDataBlock = formatReferenceForPrompt(ref, snapshot);
-  const promptTemplate = await taskSchedule.getTaskPrompt('reference-watch');
+  const promptTemplate = await getTaskPrompt('reference-watch');
   // Use arrow replacers to avoid $& / $1 interpretation in replacement strings
   const fullPrompt = promptTemplate
     .replace(/\{appName\}/g, () => app.name)

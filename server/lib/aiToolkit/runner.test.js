@@ -38,16 +38,16 @@ describe('AI Toolkit runner service', () => {
       }
     });
 
-    await runner.executeApiRun(
-      'run-ready-hook',
+    await runner.executeApiRun({
+      runId: 'run-ready-hook',
       provider,
-      null,
-      'hello',
-      process.cwd(),
-      [],
-      undefined,
+      model: null,
+      prompt: 'hello',
+      workspacePath: process.cwd(),
+      screenshots: [],
+      onData: undefined,
       onComplete
-    );
+    });
 
     expect(ensureProviderReady).toHaveBeenCalledWith(provider);
     expect(fetch).not.toHaveBeenCalled();
@@ -101,7 +101,7 @@ describe('AI Toolkit runner service', () => {
     });
     let done;
     const completed = new Promise((resolve) => { done = resolve; });
-    await runner.executeApiRun('run-numctx', runReady({ numCtx: 32768 }), null, 'hi', process.cwd(), [], undefined, () => done());
+    await runner.executeApiRun({ runId: 'run-numctx', provider: runReady({ numCtx: 32768 }), model: null, prompt: 'hi', workspacePath: process.cwd(), screenshots: [], onData: undefined, onComplete: () => done() });
     await completed;
 
     expect(fetch).toHaveBeenCalledTimes(1);
@@ -119,7 +119,7 @@ describe('AI Toolkit runner service', () => {
     });
     let done;
     const completed = new Promise((resolve) => { done = resolve; });
-    await runner.executeApiRun('run-no-numctx', runReady(), null, 'hi', process.cwd(), [], undefined, () => done());
+    await runner.executeApiRun({ runId: 'run-no-numctx', provider: runReady(), model: null, prompt: 'hi', workspacePath: process.cwd(), screenshots: [], onData: undefined, onComplete: () => done() });
     await completed;
 
     expect(fetch).toHaveBeenCalledTimes(1);

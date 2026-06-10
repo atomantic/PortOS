@@ -11,11 +11,28 @@ import { downloadHfRepo } from './hfDownload.js';
 
 const inFlight = new Map(); // repo -> { promise, kill }
 
-const SSE_HEADERS = {
+export const SSE_HEADERS = {
   'Content-Type': 'text/event-stream',
   'Cache-Control': 'no-cache',
   Connection: 'keep-alive',
 };
+
+/**
+ * Open an SSE response and return write-safe helpers. Canonical replacement
+ * for the per-route `writeHead → send → safeEnd` boilerplate: `send` JSON-
+ * encodes one event per frame and both helpers no-op after the response ends.
+ *
+ * @param {import('http').ServerResponse} res - Express/HTTP response
+ * @returns {{ send: (event: object) => void, safeEnd: () => void }}
+ */
+export function openSseStream(res) {
+  res.writeHead(200, SSE_HEADERS);
+  const send = (event) => {
+    if (!res.writableEnded) res.write(`data: ${JSON.stringify(event)}\n\n`);
+  };
+  const safeEnd = () => { if (!res.writableEnded) res.end(); };
+  return { send, safeEnd };
+}
 
 export async function startHfDownloadStream({ req, res, repo, repos, alreadyDownloadedMessage }) {
   // Caller passes either `repo` (single string, legacy callers) OR `repos`
@@ -26,11 +43,7 @@ export async function startHfDownloadStream({ req, res, repo, repos, alreadyDown
   const targets = Array.isArray(repos)
     ? repos.filter((r) => typeof r === 'string' && r.length > 0)
     : (typeof repo === 'string' && repo.length > 0 ? [repo] : []);
-  res.writeHead(200, SSE_HEADERS);
-  const send = (event) => {
-    if (!res.writableEnded) res.write(`data: ${JSON.stringify(event)}\n\n`);
-  };
-  const safeEnd = () => { if (!res.writableEnded) res.end(); };
+  const { send, safeEnd } = openSseStream(res);
 
   if (targets.length === 0) {
     send({ type: 'error', message: 'No repo specified for download.' });

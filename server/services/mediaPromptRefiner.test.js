@@ -29,12 +29,10 @@ beforeEach(() => {
   runner.createRun.mockResolvedValue({ runId: 'test-run' });
 });
 
-// executeCliRun and executeApiRun have different signatures — onData/onComplete
-// sit at different positions. Find the two trailing function args dynamically.
+// executeCliRun and executeApiRun both take a single options object with
+// onData/onComplete callbacks — drive them from the options.
 function mockRunnerSuccess(target, payload) {
-  target.mockImplementation((...args) => {
-    const fns = args.filter((a) => typeof a === 'function');
-    const [onData, onComplete] = fns;
+  target.mockImplementation(({ onData, onComplete }) => {
     onData(payload);
     onComplete({ success: true });
     return Promise.resolve();
@@ -345,7 +343,7 @@ ${JSON.stringify({ prompt: 'painted owl portrait', negativePrompt: 'blurry', rat
     providers.getProviderById.mockResolvedValue({
       id: 'openai', type: 'api', enabled: true, defaultModel: 'gpt-test',
     });
-    runner.executeApiRun.mockImplementation((runId, provider, model, prompt, cwd, ctx, onData, onComplete) => {
+    runner.executeApiRun.mockImplementation(({ onComplete }) => {
       onComplete({ error: 'upstream down' });
       return Promise.resolve();
     });

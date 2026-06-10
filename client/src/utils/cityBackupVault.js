@@ -4,8 +4,10 @@
 // backup that hasn't run in too long glows red and reads as needing attention. No
 // three.js / React imports so the topology is unit-testable (mirrors cityFederation.js).
 
+import { PARCELS } from './cityPlan';
+
 export const VAULT = {
-  position: [-34, 0, -10], // west of the building grid, clear of downtown and the +Z archive district
+  position: PARCELS.backupVault.anchor, // west of the building grid, anchored by the master plan (cityPlan.js)
   width: 5,
   height: 8,
   // Staleness thresholds, in ms since the last snapshot. A fresh backup is healthy;

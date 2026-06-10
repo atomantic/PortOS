@@ -1,5 +1,18 @@
-import { describe, it, expect } from 'vitest';
-import { truncateOnWordBoundary, registerVoiceHandlers } from './voice.js';
+import { describe, it, expect, vi } from 'vitest';
+
+// Force the enabled-gate open so the validation tests below deterministically
+// exercise the size/text guards (ensureEnabled runs BEFORE every guard; with
+// the real config loader the file read fails in this harness and its error
+// would mask the guard under test).
+vi.mock(import('../services/voice/config.js'), async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    getVoiceConfig: vi.fn(async () => ({ enabled: true })),
+  };
+});
+
+const { truncateOnWordBoundary, registerVoiceHandlers } = await import('./voice.js');
 
 // Minimal fake socket: records on() handlers so tests can fire inbound events,
 // and captures emit() calls. No real Socket.IO needed — the voice:ui:index /
@@ -121,5 +134,61 @@ describe('voice:screenshot:result socket handler', () => {
     // Unmatched requestId — no waiter parked for it, must not throw (and must
     // not resolve a stale waiter, which is the whole point of the id keying).
     expect(() => socket.fire('voice:screenshot:result', { requestId: 'missing', dataUrl: 'data:image/png;base64,AAAA' })).not.toThrow();
+  });
+});
+
+describe('voice:turn validation', () => {
+  it('emits voice:error when audio exceeds MAX_AUDIO_BYTES', async () => {
+    // MAX_AUDIO_BYTES = 8 * 1024 * 1024. Build a Buffer just over the limit.
+    const MAX_AUDIO_BYTES = 8 * 1024 * 1024;
+    const socket = makeFakeSocket();
+    registerVoiceHandlers(socket);
+    const oversized = Buffer.alloc(MAX_AUDIO_BYTES + 1);
+    await socket.fire('voice:turn', { audio: oversized, mimeType: 'audio/wav' });
+    const errors = socket.emitted.filter((e) => e.event === 'voice:error');
+    expect(errors).toHaveLength(1);
+    expect(errors[0].payload.stage).toBe('turn');
+    expect(errors[0].payload.message).toBe(`audio too large (${MAX_AUDIO_BYTES + 1} > ${MAX_AUDIO_BYTES} bytes)`);
+  });
+
+  it('emits voice:error when audio is missing', async () => {
+    const socket = makeFakeSocket();
+    registerVoiceHandlers(socket);
+    await socket.fire('voice:turn', { mimeType: 'audio/wav' });
+    const errors = socket.emitted.filter((e) => e.event === 'voice:error');
+    expect(errors).toHaveLength(1);
+    expect(errors[0].payload).toEqual({ stage: 'turn', message: 'audio is required' });
+  });
+});
+
+describe('voice:text validation', () => {
+  it('emits voice:error for text exceeding MAX_TEXT_LEN', async () => {
+    const MAX_TEXT_LEN = 4000;
+    const socket = makeFakeSocket();
+    registerVoiceHandlers(socket);
+    const longText = 'x'.repeat(MAX_TEXT_LEN + 1);
+    await socket.fire('voice:text', { text: longText });
+    const errors = socket.emitted.filter((e) => e.event === 'voice:error');
+    expect(errors).toHaveLength(1);
+    expect(errors[0].payload.stage).toBe('text');
+    expect(errors[0].payload.message).toBe(`text too long (${MAX_TEXT_LEN + 1} > ${MAX_TEXT_LEN} chars)`);
+  });
+
+  it('emits voice:error for empty text payload', async () => {
+    const socket = makeFakeSocket();
+    registerVoiceHandlers(socket);
+    await socket.fire('voice:text', { text: '' });
+    const errors = socket.emitted.filter((e) => e.event === 'voice:error');
+    expect(errors).toHaveLength(1);
+    expect(errors[0].payload).toEqual({ stage: 'text', message: 'text is required' });
+  });
+
+  it('emits voice:error when text field is absent', async () => {
+    const socket = makeFakeSocket();
+    registerVoiceHandlers(socket);
+    await socket.fire('voice:text', {});
+    const errors = socket.emitted.filter((e) => e.event === 'voice:error');
+    expect(errors).toHaveLength(1);
+    expect(errors[0].payload).toEqual({ stage: 'text', message: 'text is required' });
   });
 });

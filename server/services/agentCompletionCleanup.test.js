@@ -22,7 +22,7 @@ vi.mock('./jira.js', () => ({ getInstances: vi.fn(), addComment: vi.fn() }));
 vi.mock('./git.js', () => ({ push: vi.fn(), getRepoBranches: vi.fn(), generatePRDescription: vi.fn(), suggestPRTitle: vi.fn(), createPR: vi.fn(), checkout: vi.fn() }));
 vi.mock('./codeReview.js', () => ({ resolveReviewLoopOptions: vi.fn().mockResolvedValue({}) }));
 vi.mock('./agentWorktreeCleanup.js', () => ({ cleanupAgentWorktree: vi.fn().mockResolvedValue([]), spawnMergeRecoveryTask: vi.fn() }));
-vi.mock('./taskSchedule.js', () => ({ getStagePrompt: vi.fn().mockResolvedValue('do stage work in {appName}') }));
+vi.mock('./taskPromptService.js', () => ({ getStagePrompt: vi.fn().mockResolvedValue('do stage work in {appName}') }));
 
 import { handlePipelineProgression } from './agentCompletionCleanup.js';
 import { updateTask, addTask } from './cos.js';

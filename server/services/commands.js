@@ -1,6 +1,7 @@
 import { spawn } from 'child_process';
 import { logAction } from './history.js';
 import { ALLOWED_COMMANDS, validateCommand } from '../lib/commandSecurity.js';
+import { safeChildProcessEnv } from '../lib/processEnv.js';
 
 // Track active commands
 const activeCommands = new Map();
@@ -33,9 +34,13 @@ export function executeCommand(command, workspacePath, onData, onComplete) {
   // Security: Use spawn with array of args (shell:false) to prevent shell injection.
   // validateCommand has already rejected shell metacharacters AND parsed quoted args
   // correctly (e.g. 'git commit -m "msg with spaces"' becomes 4 args, not 5).
+  // safeChildProcessEnv matches the other spawn sites (ffmpeg, python, media):
+  // it strips macOS Malloc* debug noise but intentionally inherits the rest of
+  // the parent env — allowlisted commands like gh/git/npm legitimately need
+  // PATH/HOME and their auth tokens.
   const child = spawn(baseCommand, args, {
     cwd: workspacePath || process.cwd(),
-    env: { ...process.env, FORCE_COLOR: '1' },
+    env: safeChildProcessEnv({ FORCE_COLOR: '1' }),
     shell: false,
     windowsHide: true
   });

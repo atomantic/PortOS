@@ -1,9 +1,9 @@
-import { readFile, writeFile, readdir } from 'fs/promises';
+import { readFile, readdir } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import EventEmitter from 'events';
 import { digitalTwinMetaSchema } from '../lib/digitalTwinValidation.js';
-import { safeJSONParse } from '../lib/fileUtils.js';
+import { safeJSONParse, atomicWrite } from '../lib/fileUtils.js';
 import { DIGITAL_TWIN_DIR, generateId, ensureSoulDir } from './digital-twin-helpers.js';
 
 export const META_FILE = join(DIGITAL_TWIN_DIR, 'meta.json');
@@ -152,7 +152,7 @@ function getPriorityForFile(filename) {
 
 export async function saveMeta(meta) {
   await ensureSoulDir();
-  await writeFile(META_FILE, JSON.stringify(meta, null, 2));
+  await atomicWrite(META_FILE, meta);
   cache.meta.data = meta;
   cache.meta.timestamp = Date.now();
   digitalTwinEvents.emit('meta:changed', meta);

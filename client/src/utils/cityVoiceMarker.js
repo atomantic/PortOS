@@ -6,10 +6,11 @@
 // persisted /voice/status payload. No three.js / React imports so the topology is
 // unit-testable (mirrors cityBackupVault.js).
 
+import { PARCELS } from './cityPlan';
+
 export const MARKER = {
-  position: [0, 0, -40], // front-north: between the building grid (~±25) and the far skyline,
-  // clear of the backup vault (x≈-34), CoS warehouse (x≈+34), +Z archive district, and
-  // the federation horizon (radius 76).
+  position: PARCELS.voice.anchor, // north of downtown, stepped just off the harbor avenue's
+  // centerline so the plaza→harbor walkway runs clear past the beacon (see cityPlan.js).
   baseRadius: 2.2,
   poleHeight: 6,
   beaconRadius: 0.9,

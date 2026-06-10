@@ -12,11 +12,12 @@
 
 import { hashString } from './hashString';
 import { effectiveLevel, completedGoalCount, bestStreakDays } from './cityArtifacts';
+import { PARCELS } from './cityPlan';
 
 // Placement: a tight cluster at the far -X / +Z corner, deliberately off in a quiet quadrant
 // away from the achievement hall (+X/-Z) so an egg reads as "hidden" rather than featured.
 export const EGGS = {
-  base: [-46, 0, 40],
+  base: PARCELS.easterEggs.anchor,
   spacing: 5,
   columns: 2,
   size: 1.1,

@@ -242,7 +242,7 @@ function getVariantCatalog() {
       return _variantCache;
     })
     .catch((err) => {
-      console.error('Failed to load reference-sheet variant catalog', err);
+      console.error(`❌ Failed to load reference-sheet variant catalog: ${err?.message || err}`);
       // Fallback to the legacy standard-only catalog so the panel still
       // works against an older server that hasn't shipped the registry yet.
       _variantCache = [{ id: LEGACY_SHEET_VARIANT_ID, label: 'Reference sheet', description: '' }];

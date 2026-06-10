@@ -293,7 +293,6 @@ const NAV_COVERAGE_OPT_OUT = new Map([
   ['/apps/create', 'create-app form, reached via the "New App" button on /apps'],
   ['/feature-agents/create', 'create-agent form, reached via the "New Agent" button'],
   ['/login', 'auth gate — surfaced only when settings.secrets.auth is enabled, reached via 401 redirect'],
-  ['/templates', 'legacy templates page, intentionally not surfaced in nav'],
   ['/universes/new', 'create-mode sentinel for the Universe Builder editor'],
 ]);
 

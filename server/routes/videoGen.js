@@ -41,7 +41,7 @@ import {
 import { enqueueJob, attachSseClient, cancelJob, listJobs } from '../services/mediaJobQueue/index.js';
 import { repoForModel, getTextEncoderRepo, isHfRepoId } from '../lib/mediaModels.js';
 import { inspectModelCache } from '../lib/hfCache.js';
-import { startHfDownloadStream } from '../lib/sseDownload.js';
+import { startHfDownloadStream, openSseStream } from '../lib/sseDownload.js';
 
 const router = Router();
 
@@ -229,15 +229,7 @@ const runtimeInstallInFlight = new Map();
 router.get('/setup/runtime-install', asyncHandler(async (req, res) => {
   const runtime = String(req.query?.runtime || '');
   const info = BYOV_RUNTIME_INFO[runtime];
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    Connection: 'keep-alive',
-  });
-  const send = (event) => {
-    if (!res.writableEnded) res.write(`data: ${JSON.stringify(event)}\n\n`);
-  };
-  const safeEnd = () => { if (!res.writableEnded) res.end(); };
+  const { send, safeEnd } = openSseStream(res);
 
   if (!info) {
     send({ type: 'error', message: `Unknown runtime: ${runtime}` });
