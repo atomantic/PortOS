@@ -96,6 +96,12 @@ export * from './useSwipeNav.js';
 export * from './useLocalStorageBool.js';
 export * from './useNavWorkingSet.js';
 
+// === Sidebar navigation data ===
+export * from './useFocusRefreshedList.js';
+export * from './useSidebarApps.js';
+export * from './useSidebarSeries.js';
+export * from './useSidebarUniverses.js';
+
 // === Domain: City / Voice / Mortality / Universe / Apps / Sessions ===
 export * from './useAppDeploy.js';
 export * from './useAppOperation.js';

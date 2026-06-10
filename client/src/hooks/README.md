@@ -102,6 +102,15 @@ grep -i "what you want to do" client/src/hooks/README.md
 | `useLocalStorageBool` | Boolean `useState` mirrored to `localStorage`. | Per-user UI preference toggle. |
 | `useNavWorkingSet` | Sidebar Pinned + Recent working set (localStorage MRU + pins); resolves stored paths to `{ path, label, icon }` rows via a `resolveNavEntry` arg. | Rendering the sidebar's Pinned/Recent sections. |
 
+## Sidebar navigation data
+
+| Hook | Purpose | Use when |
+|---|---|---|
+| `useFocusRefreshedList` | Load-once-then-refresh-on-focus list fetcher: debounces focus refreshes to 30s, sorts by name, and skips re-render when an `id\|name` signature is unchanged. Owns its own warn-on-error. | Any sidebar/nav list that should refresh when the user returns to the tab without hammering the API. Pass a stable `api.*` fetch fn. |
+| `useSidebarApps` | Apps list for sidebar nav: socket-driven (`apps:changed`), archived filtered out, name-sorted. | The sidebar apps section. |
+| `useSidebarSeries` | Pipeline series for the Create > Pipeline grandchildren (built on `useFocusRefreshedList`). | The sidebar pipeline-series section. |
+| `useSidebarUniverses` | Universes for the Create > Universes grandchildren (built on `useFocusRefreshedList`). | The sidebar universes section. |
+
 ## Apps / Sessions / Domain
 
 | Hook | Purpose | Use when |
