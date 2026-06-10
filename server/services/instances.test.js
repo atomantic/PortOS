@@ -605,8 +605,8 @@ describe('instances.js', () => {
       const { changed, peer } = await applyReciprocalSync('inst-A', { goals: false });
 
       expect(changed).toBe(true);
-      expect(peer.syncCategories.goals).toBe(false); // full replace clobbers our independent enable
-      expect(peer.syncCategories.brain).toBe(true);  // untouched keys preserved
+      expect(peer.syncCategories.goals).toBe(false); // announced false is authoritative — clobbers our independent enable
+      expect(peer.syncCategories.brain).toBe(true);  // omitted keys preserved untouched
       expect(peer.syncEnabled).toBe(true);           // brain still on
     });
 

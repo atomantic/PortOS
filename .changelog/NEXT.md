@@ -8,4 +8,4 @@
 
 ## Changed
 
-- **[issue-1094] Federation reciprocal-sync semantics documented as full-mirror** — confirmed and pinned the existing behavior where enabling/disabling a sync category toward a peer mirrors symmetrically, so "Make mutual" and the offline-disable recovery path keep working as intended.
+- **[issue-1094] Federation "Make mutual" sync behavior clarified** — documented and locked in how toggling a sync category toward a peer stays mirrored on both machines. No change to how syncing behaves.

@@ -739,9 +739,11 @@ export async function connectPeer(id) {
 // is `applyReciprocalSync`, invoked by the POST /sync-categories route.
 //
 // SEMANTICS — full mirror, NOT enable-only (resolved, issue #1094). A peer's
-// announced map is applied as a full replace (`{ ...prev, ...sanitized }`), so
-// a peer sending `C:false` DISABLES C on our record for that peer even when we
-// had independently enabled C toward them. This is intentional, not a bug:
+// announced keys are applied as an authoritative overlay onto our existing map
+// (`{ ...prev, ...sanitized }`) — announced `false` values are authoritative
+// (they DISABLE), while categories the peer omits are preserved untouched. So a
+// peer sending `C:false` DISABLES C on our record for that peer even when we had
+// independently enabled C toward them. This is intentional, not a bug:
 //   - The 'Make mutual' UI deliberately pushes the sender's *current* set
 //     (including its disables) so a previously-offline / one-directional peer
 //     converges to the sender's view in one round-trip.
