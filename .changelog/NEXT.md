@@ -35,6 +35,8 @@
 
 ## Changed
 
+- **[issue-1151] Internal reorganization of request validation** — the peer-sync, Creative Director, importer, and Story Builder validation rules moved into their own focused files. No behavior change.
+
 - **[issue-1150] Sturdier federation internals** — the machinery that auto-shares newly created universes, series, and collections with your other machines no longer depends on fragile module load ordering. No change to how syncing behaves.
 
 - **[issue-1149] Calendar errors are now consistent everywhere** — calendar sync, discovery, and Google OAuth setup failures all come back in the same structured shape the rest of the app uses (instead of a mix of formats), and a failed Google sign-in now lands you back on the Calendar Config page with a clear error message instead of a raw error page.

@@ -27,14 +27,17 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `appleHealthValidation.js` | Apple Health import payloads. |
 | `brainValidation.js` | Brain/memory route schemas (search, ingest, edit). |
 | `catalogValidation.js` | Creative ingredients catalog route schemas (scraps, ingredients, links, relations, tags, revisions, sync envelope). |
+| `creativeDirectorValidation.js` | Creative Director project/treatment/scene + Create-Suite importer schemas. |
 | `digitalTwinValidation.js` | Digital twin document/category schemas. |
 | `genomeValidation.js` | Genome upload + search schemas. |
 | `identityValidation.js` | Identity section + chronotype + scheduling schemas. |
 | `meatspaceValidation.js` | Meatspace (location/health log) schemas. |
 | `memoryValidation.js` | Memory record + retrieval schemas. |
 | `notesValidation.js` | Notes route schemas + safe-relative-path guard. |
+| `peerSyncValidation.js` | Federated peer-sync wire/request schemas (push payload, subscribe, sync-now, pull-metadata). |
 | `postValidation.js` | Social post schemas. |
 | `socketValidation.js` | Socket event payload schemas. |
+| `storyBuilderValidation.js` | Unified Story Builder session/step schemas. |
 | `telegramValidation.js` | Telegram bot config + test schemas. |
 
 ## Story & narrative

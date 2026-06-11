@@ -19,14 +19,17 @@
 export * as appleHealthValidation from './appleHealthValidation.js';
 export * as brainValidation from './brainValidation.js';
 export * as catalogValidation from './catalogValidation.js';
+export * as creativeDirectorValidation from './creativeDirectorValidation.js';
 export * as digitalTwinValidation from './digitalTwinValidation.js';
 export * as genomeValidation from './genomeValidation.js';
 export * as identityValidation from './identityValidation.js';
 export * as meatspaceValidation from './meatspaceValidation.js';
 export * as memoryValidation from './memoryValidation.js';
 export * as notesValidation from './notesValidation.js';
+export * as peerSyncValidation from './peerSyncValidation.js';
 export * as postValidation from './postValidation.js';
 export * as socketValidation from './socketValidation.js';
+export * as storyBuilderValidation from './storyBuilderValidation.js';
 export * as telegramValidation from './telegramValidation.js';
 export * from './validation.js';
 

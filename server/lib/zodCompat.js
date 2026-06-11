@@ -67,3 +67,12 @@ export function partialWithoutDefaults(objectSchema) {
   // unknown-key contract.
   return objectSchema.def?.catchall?.def?.type === 'never' ? rebuilt.strict() : rebuilt;
 }
+
+/**
+ * Preprocess helper: treat an empty-string UI sentinel as "not sent" so an
+ * optional field's validation doesn't fire on ''. Lives here (not in
+ * validation.js) so per-domain schema files can use it without importing
+ * validation.js — which re-exports them, and ESM hoists `export * from`, so
+ * an import in the other direction would hit a TDZ cycle.
+ */
+export const emptyToUndefined = (v) => (v === '' ? undefined : v);
