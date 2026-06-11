@@ -1,0 +1,70 @@
+{
+  "DEFAULT_TASK_PROMPTS": {
+    "security": "8e58c1305a391ac765b0b13ab9615eb3",
+    "code-quality": "5d86db04077cf0b0d190b62db1c5581d",
+    "test-coverage": "0d8359170529da12cd63356610b2e220",
+    "performance": "672bd3958b12afb0f382bcebb6dc3b33",
+    "accessibility": "372916803f32b82da38a5b2130a54baf",
+    "console-errors": "2b6ed595287f0742bed9ecba6788afe6",
+    "dependency-updates": "3f461b1c111ba45b7fa5016883cfa54d",
+    "documentation": "74aa8433896647e7815f9d6d9e4a56c8",
+    "ui-bugs": "def9ad96bd74ab397233f234d79a1974",
+    "mobile-responsive": "16d8e7f63a673a2de48994c0ac08ef3d",
+    "feature-ideas": "0741418bd275b8953131155f8bc89460",
+    "plan-task": "5425306bf082b15b6a17f972557d4dd9",
+    "claim-issue": "06190b8089adf1cb2c84bddeb6596af7",
+    "code-reviewer-review": "1cd13ee5142d130f95cc390098d0f278",
+    "code-reviewer-implement": "ab2c3e16d54e195bdf856574b7702042",
+    "error-handling": "9afba2e99b90a8d5771c75e7f0615d96",
+    "typing": "1f2758ce0bb62d789a21aec241549531",
+    "release-check": "8436a47b5b1c9b2a342795e5634552da",
+    "jira-sprint-manager": "3e63c8a3bdf0d5a05a30faaa2dc07980",
+    "do-replan": "59a57f1bb445138c30ab4fa23630c6f8",
+    "jira-status-report": "9d374a9d8ccb92c5c8fd0aa9899e79a5",
+    "branch-cleanup": "8fdeb4acc2749816a47ca318b6602721",
+    "pr-reviewer": "add27b67daa6aa2c75717ac96a6bd625",
+    "pr-reviewer-security": "2050297d1cdb081a8576a781828ee44f",
+    "pr-reviewer-review": "21ccd5d3a6f3eea16c479db9ed9aedaa",
+    "reference-watch": "722ca590fb4b6323c98850a176b9b309",
+    "pr-watcher": "53ead8e26d396849bfa78f28550bd691",
+    "refresh-local-llm-catalog": "a9dce67bb9f0837ba904f3412b03637f"
+  },
+  "PROMPT_VERSIONS": {
+    "feature-ideas": 9,
+    "plan-task": 8,
+    "claim-issue": 1,
+    "pr-reviewer": 3,
+    "code-reviewer-a": 1,
+    "code-reviewer-b": 1,
+    "reference-watch": 2,
+    "pr-watcher": 1,
+    "refresh-local-llm-catalog": 1
+  },
+  "REFERENCE_WATCH_AUDITED_VERSION": 2,
+  "PREVIOUS_DEFAULT_PROMPTS": {
+    "feature-ideas": [
+      "d67a9028aeb8bb8348453951f878501b",
+      "c6a399399245872401666d5c67c716cc",
+      "a4a4b4d7191ae58b82140295c3df5926",
+      "52b76c852fd00f15c50eb73ea0bc4340",
+      "5a0350fa6db8ac040fb638fdd4a31700",
+      "d076e19a6848f6452f4d1078b096ba4b",
+      "73cdc70f8d14fc909668054bbcee1259"
+    ],
+    "plan-task": [
+      "e7ff71a98468960cb4465741bd54e6aa",
+      "602b259b4d1a565a84219b3e244f0a7f",
+      "6bf6de4ca34035fcfbc09e8d98c66001",
+      "1197ece173b4fddb90f38710ee04661c",
+      "5d55c4255b557a495f79762a1deab8ba"
+    ],
+    "pr-reviewer": [
+      "9ceeed08f238b3787fc1201a0ce8e023",
+      "f64e5d8176a871304fa691df812cda61"
+    ],
+    "reference-watch": [
+      "f9322140bff7d3f603799c09ce468da9"
+    ],
+    "pr-watcher": []
+  }
+}

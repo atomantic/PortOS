@@ -35,6 +35,8 @@
 
 ## Changed
 
+- **[issue-1148] Internal reorganization of the scheduled-task prompt catalog** — the default prompts and their cross-install upgrade bookkeeping now live in separate files, with a new integrity check that guarantees the prompts your install upgrades against are exactly the shipped ones. No behavior change.
+
 - **[issue-1144] Internal cleanup of live-progress streams and tab handling** — consolidated duplicated client plumbing for streamed progress (installs, renders, pipeline runs) and tabbed-page URL validation onto shared building blocks; no change to how any page behaves.
 
 - **[issue-1136] Debug and status responses no longer echo raw upstream payloads** — the OpenClaw status check and the message-account token test now return only the summary fields they're meant to (connection state, counts, errors) instead of passing through whatever the upstream service responded with.
