@@ -562,6 +562,13 @@ export function initSocket(io) {
       shellService.killSession(validated.sessionId);
     });
 
+    // Client left the Shell page — release any watched TUI-run views so those
+    // runs resume normal completion instead of staying paused (the persistent
+    // SocketProvider socket means a navigation doesn't fire `disconnect`).
+    socket.on('shell:release-views', () => {
+      shellService.releaseExternalViewsForSocket(socket);
+    });
+
     // Cleanup on disconnect — detach sessions, don't kill them
     socket.on('disconnect', () => {
       console.log(`🔌 Client disconnected: ${socket.id}`);

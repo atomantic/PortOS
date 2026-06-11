@@ -624,7 +624,9 @@ async function executeProviderRunOnce({ provider, prompt, source, model, runId: 
       }, effectiveTimeout);
       executeApiRun({ runId, provider: effectiveProvider, model: effectiveModel, prompt, workspacePath: effectiveCwd, screenshots: [], onData, onComplete }).catch(safeReject);
     } else if (effectiveProvider.type === PROVIDER_TYPES.TUI) {
-      executeTuiRun({ runId, provider: providerForRun, prompt, workspacePath: effectiveCwd, onData, onComplete, timeout: effectiveTimeout }).catch(safeReject);
+      // `source` (e.g. 'pipeline-manuscript-completeness') labels the live,
+      // interactive view this TUI run surfaces in the Shell page.
+      executeTuiRun({ runId, provider: providerForRun, prompt, workspacePath: effectiveCwd, onData, onComplete, timeout: effectiveTimeout, label: source }).catch(safeReject);
     } else {
       safeReject(new Error(`Unsupported provider type: ${effectiveProvider.type}`));
     }

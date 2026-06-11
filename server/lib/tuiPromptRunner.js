@@ -13,8 +13,10 @@
  * promptRunner needs when `provider.type === 'tui'`.
  *
  * Spawning bypasses `services/shell.js` deliberately:
- *   - shellService caps total sessions at 5, which the central handler can
- *     exceed easily (arc planner fans out parallel calls).
+ *   - shellService caps interactive sessions, which the central handler can
+ *     exceed easily (arc planner fans out parallel calls). We still *register*
+ *     the spawned PTY as an external view afterward (see below) — that path is
+ *     exempt from the cap, so surfacing the run doesn't re-introduce the limit.
  *   - shellService wraps a login shell around the TUI; pasting `${cmd}\n`
  *     into a zsh prompt is slower and noisier than spawning the TUI directly.
  *
@@ -32,6 +34,7 @@ import { ensureDir, PATHS, tryReadFile } from './fileUtils.js';
 import { createStreamingAnsiStripper } from './ansiStrip.js';
 import { createImmediateFallbackSignalDetector } from './aiToolkit/errorDetection.js';
 import { getRunsPath, finalizeRunRecord, emitRunStarted, registerActiveRun, unregisterActiveRun } from '../services/runner.js';
+import { registerExternalSession, unregisterExternalSession, isExternalSessionAttached } from '../services/shell.js';
 import {
   DEFAULT_TUI_PROMPT_DELAY_MS,
   PASTE_MARKER_POLL_MS,
@@ -89,9 +92,12 @@ const PTY_ROWS = 50;
  *   AFTER this fires.
  * @param {number} [options.timeout] — hard cap on a single run (ms). Falls back to
  *   `provider.timeout`, then `DEFAULT_TIMEOUT_MS`.
+ * @param {string} [options.label] — human label for the live Shell view (the
+ *   run `source`, e.g. `'pipeline-manuscript-completeness'`). Surfaced in the
+ *   Shell page's session tab; falls back to `command · model` when absent.
  * @returns {Promise<void>}
  */
-export async function executeTuiRun({ runId, provider, prompt, workspacePath, onData, onComplete, timeout }) {
+export async function executeTuiRun({ runId, provider, prompt, workspacePath, onData, onComplete, timeout, label }) {
   if (!provider || typeof provider !== 'object') {
     throw new Error('executeTuiRun: provider is required');
   }
@@ -171,6 +177,21 @@ ${prompt}`;
   // any SSE-based "active run" UI never see TUI runs as in-flight.
   emitRunStarted({ runId, provider, model: provider.defaultModel });
 
+  // Surface this one-shot run as an interactive session in the Shell UI so the
+  // user can watch its live output and step in — answer a question, correct it,
+  // or interrupt it (it bypasses services/shell.js for *spawning*, but
+  // registering the already-live PTY for *viewing/driving* doesn't re-introduce
+  // the cap/login-shell concerns the spawn bypass avoids).
+  const viewLabel = (typeof label === 'string' && label)
+    ? label
+    : `${command} · ${provider.defaultModel || 'tui'}`;
+  registerExternalSession(runId, ptyProcess, {
+    label: viewLabel,
+    command: `${command} ${args.join(' ')}`.trim(),
+    cwd: workingDir,
+    kind: 'tui-run',
+  });
+
   const startTime = Date.now();
   let outputBuffer = '';
   let rawBuffer = '';
@@ -204,6 +225,11 @@ ${prompt}`;
       finalized = true;
       cleanupTimers();
       unregisterActiveRun(runId);
+      // Drop the live Shell view the moment the run ends (notifies any attached
+      // viewer via shell:exit). Idempotent — safe even if no viewer ever
+      // attached. Runs before the kill below so the session disappears from the
+      // list immediately rather than waiting on PTY teardown.
+      unregisterExternalSession(runId, { exitCode });
 
       // Kill the PTY if still alive — one-shot runs don't leave a session
       // behind for the user to interact with.
@@ -275,6 +301,12 @@ ${prompt}`;
         // Significant on parallel fan-out paths (arc planner).
         idleWatchTimer = setInterval(() => {
           if (finalized) return;
+          // Don't auto-complete a run a human is actively watching in the Shell
+          // page — they may be reading the output or about to type a correction
+          // or an answer the model is waiting on. The run then ends only on
+          // natural process exit or an explicit Stop. Unattended pipeline runs
+          // keep the snappy idle threshold for throughput.
+          if (isExternalSessionAttached(runId)) return;
           const idle = Date.now() - lastOutputAt;
           if (idle >= idleThresholdMs) {
             finish({ success: true, exitCode: 0, reason: 'idle-complete' });
@@ -374,7 +406,10 @@ ${prompt}`;
     // (idleWatchTimer is created inside onData once firstResponseAt is set.)
 
     // Hard timeout — covers stuck-banner, no-response, and runaway-response
-    // cases. Provider-configurable via `timeout`; defaults to 5 min.
+    // cases, and is the honest backstop that bounds a run a viewer left open on
+    // a backgrounded tab (idle-completion is paused while watched, but this is
+    // not — a run can't exceed its configured max time). Provider-configurable
+    // via `timeout`; defaults to 5 min.
     hardTimeoutTimer = setTimeout(() => {
       if (finalized) return;
       finish({

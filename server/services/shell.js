@@ -5,7 +5,11 @@ import { v4 as uuidv4 } from '../lib/uuid.js';
 // Store active shell sessions (persist across socket reconnects)
 const shellSessions = new Map();
 
-const MAX_TOTAL_SESSIONS = 5;
+// Soft ceiling on concurrent user-spawned interactive shells. Each session is a
+// single idle PTY (a few MB, one OS process), and the deployment is single-user
+// on a private network — so this is a sanity bound against runaway tab-spamming,
+// not a resource/abuse defense. External views (TUI runs) don't count.
+const MAX_TOTAL_SESSIONS = 20;
 
 // PTY event handlers run outside the Express middleware chain — uncaught throws here
 // crash the Node process instead of bubbling to res.next. try/catch is therefore
@@ -58,7 +62,11 @@ function getDefaultShell() {
  * Create a new shell session
  */
 export function createShellSession(socket, options = {}) {
-  if (shellSessions.size >= MAX_TOTAL_SESSIONS) {
+  // Only user-spawned interactive shells count toward the cap. External views
+  // (one-shot TUI runs registered via registerExternalSession) are governed by
+  // their own runner and must not consume a shell slot.
+  const interactiveCount = [...shellSessions.values()].filter(s => !s.external).length;
+  if (interactiveCount >= MAX_TOTAL_SESSIONS) {
     console.warn(`🐚 Max total sessions reached (${MAX_TOTAL_SESSIONS})`);
     socket?.emit?.('shell:error', { error: `Max ${MAX_TOTAL_SESSIONS} shell sessions. Kill an existing session first.` });
     return null;
@@ -141,11 +149,144 @@ export function createShellSession(socket, options = {}) {
     broadcastSessionList();
   });
 
+  // Starting a fresh shell means the user moved on from whatever they were
+  // viewing — release any TUI-run views they held so those runs resume normal
+  // completion instead of staying paused for a tab they've left.
+  releaseExternalViews(socket, sessionId);
   broadcastSessionList();
   if (options.initialCommand) {
     setTimeout(() => writeToSession(sessionId, `${options.initialCommand}\n`), options.initialCommandDelayMs ?? 200);
   }
   return sessionId;
+}
+
+/**
+ * A socket can stay bound to multiple sessions (the registry allows it), but a
+ * user views one at a time. `isExternalSessionAttached` keys off socket binding,
+ * so without this a TUI run stays "watched" (and its completion stays paused)
+ * after the user switches to another tab. When a socket starts viewing a
+ * different session, drop its binding to any OTHER external (TUI-run) view so
+ * that run resumes normal idle/timeout completion. Interactive shells keep their
+ * lingering binding (the registry's one-socket-many-shells model is unchanged).
+ */
+function releaseExternalViews(socket, exceptId = null) {
+  if (!socket) return;
+  for (const [id, session] of shellSessions.entries()) {
+    if (session.external && session.socket === socket && id !== exceptId) {
+      session.socket = null;
+    }
+  }
+}
+
+/**
+ * Register a PTY spawned OUTSIDE this service (one-shot TUI runs in
+ * `lib/tuiPromptRunner.js`) as an attachable session so it shows up in the Shell
+ * UI where the user can watch its live output AND interact with it — type
+ * corrections, answer questions the model is waiting on, or interrupt it.
+ *
+ * Why this exists separately from createShellSession:
+ *   - The TUI runner deliberately spawns its own PTY (it bypasses the session
+ *     cap and the login-shell wrapper — see tuiPromptRunner.js's header). This
+ *     helper only *surfaces* that already-running PTY; it does not spawn one.
+ *   - `external: true` keeps it out of the interactive-session cap count and out
+ *     of Shell's auto-attach (you opt into watching a run by clicking its tab).
+ *
+ * Input and resize are NOT blocked — these views are fully interactive. To keep
+ * a run from being killed out from under an engaged human, the runner pauses its
+ * idle-completion and hard-timeout while a viewer is attached (see
+ * `isExternalSessionAttached` + tuiPromptRunner's completion watch).
+ *
+ * node-pty fans `onData` out to every registered listener, so the listener we
+ * add here streams to the Shell viewer without disturbing the runner's own
+ * output capture. Lifecycle is owned by the runner: it calls
+ * unregisterExternalSession from its single finish() funnel when the run ends.
+ *
+ * @param {string} sessionId — typically the runId, so the Shell view correlates
+ *   with the /runs record.
+ * @param {object} ptyProcess — the live node-pty IPty.
+ * @param {object} [options] — { label, command, cwd, kind }.
+ * @returns {string} sessionId (idempotent — returns the id if already registered).
+ */
+export function registerExternalSession(sessionId, ptyProcess, options = {}) {
+  if (shellSessions.has(sessionId)) return sessionId;
+
+  // Mirror createShellSession's 50KB re-attach ring buffer so a viewer who
+  // opens the run mid-stream still sees the recent screen state.
+  const outputBuffer = [];
+  let bufferSize = 0;
+  const MAX_BUFFER = 50 * 1024;
+
+  shellSessions.set(sessionId, {
+    _id: sessionId.slice(0, 8),
+    hookQueue: Promise.resolve(),
+    pty: ptyProcess,
+    socket: null,
+    cwd: options.cwd || null,
+    createdAt: Date.now(),
+    label: options.label || null,
+    kind: options.kind || 'tui-run',
+    agentId: null,
+    command: options.command || null,
+    onData: null,
+    onExit: null,
+    external: true,
+    outputBuffer,
+    bufferSize: () => bufferSize
+  });
+
+  ptyProcess.onData((data) => {
+    outputBuffer.push(data);
+    bufferSize += data.length;
+    while (bufferSize > MAX_BUFFER && outputBuffer.length > 1) {
+      bufferSize -= outputBuffer.shift().length;
+    }
+    // Re-read the session each time — the attached socket changes as viewers
+    // come and go; a null socket (no viewer) just drops the emit.
+    shellSessions.get(sessionId)?.socket?.emit('shell:output', { sessionId, data });
+  });
+
+  console.log(`🐚 Registered external TUI session ${sessionId.slice(0, 8)} (${options.label || options.command || 'tui'})`);
+  broadcastSessionList();
+  return sessionId;
+}
+
+/**
+ * Remove an external session from the registry and notify any attached viewer
+ * that the run finished. Idempotent and external-only — a no-op if the id is
+ * unknown or belongs to an interactive shell (those clean up via PTY onExit).
+ */
+export function unregisterExternalSession(sessionId, { exitCode = 0 } = {}) {
+  const session = shellSessions.get(sessionId);
+  if (!session || !session.external) return false;
+  shellSessions.delete(sessionId);
+  session.socket?.emit('shell:exit', { sessionId, code: exitCode });
+  broadcastSessionList();
+  return true;
+}
+
+/**
+ * True when an external (TUI-run) session exists and a Shell viewer is currently
+ * attached to it. The runner consults this to pause auto-completion/timeout while
+ * a human is watching, so the run isn't killed mid-interaction.
+ */
+export function isExternalSessionAttached(sessionId) {
+  const session = shellSessions.get(sessionId);
+  return !!(session && session.external && session.socket);
+}
+
+/**
+ * Public "stopped viewing" signal — the client emits this when it leaves the
+ * Shell page (the SocketProvider socket persists across navigations, so a plain
+ * disconnect doesn't fire). Releases every external (TUI-run) view bound to this
+ * socket so those runs resume normal idle completion instead of staying paused
+ * for a page the user has navigated away from. Tab-switching already releases via
+ * attach/create; this covers navigating away from /shell entirely.
+ */
+export function releaseExternalViewsForSocket(socket) {
+  if (!socket) return;
+  const held = [...shellSessions.values()].some(s => s.external && s.socket === socket);
+  releaseExternalViews(socket);
+  if (held) broadcastSessionList();
 }
 
 /**
@@ -176,6 +317,9 @@ export function attachSession(sessionId, socket, { claim = false } = {}) {
     prevSocket.emit('shell:detached', { sessionId, reason: 'attached-elsewhere' });
   }
   session.socket = socket;
+  // Switching view releases any TUI-run this socket was watching, so that run
+  // resumes normal completion rather than staying paused for a tab left behind.
+  releaseExternalViews(socket, sessionId);
   console.log(`🐚 Attached session ${sessionId.slice(0, 8)} to socket ${socket.id}`);
   // Broadcast so other clients pick up the new `attached: true` state and skip
   // this session in their auto-pick flow.
@@ -230,6 +374,7 @@ export function listAllSessions(forSocket = null) {
       kind: session.kind,
       agentId: session.agentId,
       command: session.command,
+      external: !!session.external,
       attached: forSocket
         ? (!!session.socket && session.socket !== forSocket)
         : !!session.socket
