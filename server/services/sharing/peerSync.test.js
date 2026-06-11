@@ -13,14 +13,17 @@ import { tmpdir } from 'os';
 import { PATHS } from '../../lib/fileUtils.js';
 import { RECORD_KIND_SCHEMA_CATEGORIES, PORTOS_SCHEMA_VERSIONS } from '../../lib/schemaVersions.js';
 
-vi.mock('../instances.js', async () => {
-  return {
-    UNKNOWN_INSTANCE_ID: 'unknown',
-    DEFAULT_SYNC_CATEGORIES: {},
-    getInstanceId: vi.fn(),
-    getPeers: vi.fn(),
-  };
-});
+// instances.js mock: aligns with mockNoPeers() contract (getPeers → [], getInstanceId
+// → 'test-instance' by default) while keeping vi.fn() wrappers so per-test
+// overrides via vi.mocked(getPeers).mockResolvedValue([...]) still work.
+// A plain mockNoPeers() call would return static functions that vi.mocked()
+// cannot spy on — so we construct vi.fn() variants here and match the same defaults.
+vi.mock('../instances.js', () => ({
+  UNKNOWN_INSTANCE_ID: 'unknown',
+  DEFAULT_SYNC_CATEGORIES: {},
+  getInstanceId: vi.fn().mockResolvedValue('test-instance'),
+  getPeers: vi.fn().mockResolvedValue([]),
+}));
 
 vi.mock('../universeBuilder.js', async () => ({
   getUniverse: vi.fn(),

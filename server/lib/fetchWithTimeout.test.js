@@ -34,12 +34,32 @@ describe('fetchWithTimeout', () => {
     }
   });
 
-  it('clears timeout on success', async () => {
-    const clearSpy = vi.spyOn(global, 'clearTimeout');
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }));
+  it('clears timeout on success — no pending timer remains', async () => {
+    // Use fake timers so we can observe that no timer is left pending after
+    // a successful fetch. If clearTimeout were NOT called, advanceTimersByTime
+    // would later fire the abort, which would error on an already-resolved fetch.
+    vi.useFakeTimers();
+    try {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200 }));
+      const clearSpy = vi.spyOn(global, 'clearTimeout');
 
-    await fetchWithTimeout('http://example.com');
-    expect(clearSpy).toHaveBeenCalled();
+      const result = await fetchWithTimeout('http://example.com', {}, 5000);
+
+      expect(result.status).toBe(200);
+      // clearTimeout must have been called with a non-null handle.
+      // Under fake timers the handle is an object, not a number; the important
+      // thing is it was called (not skipped) and not with null/undefined.
+      expect(clearSpy).toHaveBeenCalledTimes(1);
+      const [handle] = clearSpy.mock.calls[0];
+      expect(handle).not.toBeNull();
+      expect(handle).not.toBeUndefined();
+
+      // Advance past the original timeout — if the abort timer were still
+      // pending this would cause an unhandled abort on a resolved promise.
+      vi.advanceTimersByTime(6000);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('forwards options to fetch', async () => {

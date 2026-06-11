@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { existsSync, unlinkSync } from 'fs';
+import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
+import { existsSync, unlinkSync, rmSync } from 'fs';
 import { join } from 'path';
 
 // The service captures STATE_PATH at module-load time, so the scratch dir must
@@ -32,17 +32,22 @@ describe('songs service', () => {
     if (existsSync(STATE_FILE)) unlinkSync(STATE_FILE);
   });
 
+  afterAll(() => {
+    rmSync(scratch.dir, { recursive: true, force: true });
+  });
+
   it('seeds the 500 Miles example on first read and persists it', async () => {
     const songs = await svc.listSongs();
     expect(songs.length).toBeGreaterThan(0);
-    const seed = songs.find((s) => s.title === '500 Miles');
-    expect(seed).toBeTruthy();
+    const seed = songs.find((s) => s.id === 'seed-500-miles');
+    expect(seed).not.toBeNull();
+    expect(seed.title).toBe('500 Miles');
     expect(seed.artist).toBe('Peter, Paul and Mary');
     expect(seed.rhythmShapeId).toBe('slow-4-4');
     // Persisted, so a re-read returns the same seed (no re-seed churn).
     expect(existsSync(STATE_FILE)).toBe(true);
     const again = await svc.listSongs();
-    expect(again.find((s) => s.title === '500 Miles')).toBeTruthy();
+    expect(again.find((s) => s.id === 'seed-500-miles')).toBeDefined();
   });
 
   it('creates a song with a generated id, newest-first', async () => {
@@ -475,5 +480,11 @@ describe('songs service', () => {
     expect(song.partnerSongIds).toEqual([]);
     const patched = await svc.updateSong(song.id, { partnerSongIds: [song.id, 'song-other'] });
     expect(patched.partnerSongIds).toEqual(['song-other']); // self dropped
+  });
+
+  it('getSong returns null for a non-existent id', async () => {
+    await svc.listSongs(); // ensure seeded
+    const missing = await svc.getSong('song-does-not-exist-xyz');
+    expect(missing).toBeNull();
   });
 });

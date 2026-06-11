@@ -49,6 +49,18 @@ describe('Tools Routes', () => {
 
       expect(response.status).toBe(200);
       expect(response.body).toHaveLength(1);
+      expect(response.body[0].id).toBe('sd-api');
+      expect(response.body[0].enabled).toBe(true);
+      expect(toolsService.getEnabledTools).toHaveBeenCalledTimes(1);
+    });
+
+    it('returns an empty array when no tools are enabled', async () => {
+      toolsService.getEnabledTools.mockResolvedValue([]);
+
+      const response = await request(app).get('/api/tools/enabled');
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual([]);
     });
   });
 

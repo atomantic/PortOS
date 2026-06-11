@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import os from 'os';
 import path from 'path';
 import fs from 'fs';
@@ -59,6 +59,13 @@ beforeEach(async () => {
   state.root = fs.mkdtempSync(path.join(os.tmpdir(), 'portos-llm-svc-'));
   vi.resetModules();
   svc = await import('./localLlm.js');
+});
+
+afterEach(() => {
+  if (state.root) {
+    fs.rmSync(state.root, { recursive: true, force: true });
+    state.root = '';
+  }
 });
 
 describe('localLlm', () => {
