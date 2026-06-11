@@ -35,6 +35,8 @@
 
 ## Changed
 
+- **[issue-1167] Trimmed two dependencies' footprint** — the Moltworld real-time connection now uses the runtime's built-in WebSocket instead of a third-party library, and the Claude Code changelog feed parses with a small built-in extractor. No behavior change.
+
 - **[issue-1154] Library hygiene for the genome + writers-room internals** — the curated SNP marker dataset now loads from a data file instead of a hardcoded array, and the writers-room storage factory moved out of the shared sanitizer library. No behavior change.
 
 - **[issue-1153] Internal cleanup of the local video-generation service** — the progress-parsing and finalize steps of the video generator moved into a separately-tested helper module. No behavior change.

@@ -15,7 +15,12 @@
  *   hello_ack   - server acknowledged our hello
  */
 
-import WebSocket from 'ws';
+// Uses Node's built-in WHATWG `WebSocket` (global since Node 22, stable in
+// Node 24) — no `ws` dependency. The browser-style API differs from `ws`:
+// events arrive via addEventListener with an event object (message text is
+// `evt.data`), there's no `.terminate()` (native `.close()` is safe in the
+// CONNECTING state, unlike `ws`), and there's no `.removeAllListeners()` —
+// we track our handlers per-socket and removeEventListener them in cleanup.
 import EventEmitter from 'events';
 import * as platformAccounts from './platformAccounts.js';
 import * as agentActivity from './agentActivity.js';
@@ -24,6 +29,9 @@ export const moltworldWsEvents = new EventEmitter();
 
 // Connection state
 let ws = null;
+// The event listeners attached to the current `ws` — native WebSocket has no
+// `.removeAllListeners()`, so cleanupWs() removes exactly what we added.
+let wsListeners = null;
 let reconnectTimer = null;
 let reconnectAttempts = 0;
 let connectedAt = null;
@@ -130,11 +138,19 @@ function handleMessage(raw) {
 
 function cleanupWs() {
   if (ws) {
-    ws.removeAllListeners();
-    if (ws.readyState === WebSocket.OPEN) {
+    // Native WebSocket has no removeAllListeners() — detach exactly the
+    // handlers we registered in doConnect so a torn-down socket can't fire
+    // 'close'/'error' into the reconnect logic after we've abandoned it.
+    if (wsListeners) {
+      for (const [type, handler] of Object.entries(wsListeners)) {
+        ws.removeEventListener(type, handler);
+      }
+      wsListeners = null;
+    }
+    // close() is valid (and a no-op) in OPEN and CONNECTING alike for the
+    // native WebSocket — no terminate()/throw split like `ws` needed.
+    if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
       ws.close();
-    } else if (ws.readyState === WebSocket.CONNECTING) {
-      ws.terminate(); // terminate() is safe for CONNECTING state; close() throws
     }
     ws = null;
   }
@@ -163,7 +179,7 @@ function doConnect() {
     const instance = new WebSocket('wss://moltworld.io/ws');
     ws = instance;
 
-    instance.on('open', () => {
+    const onOpen = () => {
       clearTimeout(timeout);
       connectedAt = Date.now();
       reconnectAttempts = 0;
@@ -178,31 +194,44 @@ function doConnect() {
       });
 
       resolve();
-    });
+    };
 
-    instance.on('message', (raw) => handleMessage(String(raw)));
+    // Native WebSocket delivers the frame payload on `evt.data` (a string for
+    // text frames); `ws` passed the raw buffer as the first arg.
+    const onMessage = (evt) => handleMessage(String(evt.data));
 
-    instance.on('close', (code) => {
+    const onClose = (evt) => {
       clearTimeout(timeout);
-      console.log(`🌐 Moltworld WS: closed (code=${code})`);
+      console.log(`🌐 Moltworld WS: closed (code=${evt.code})`);
       ws = null;
+      wsListeners = null;
       if (currentStatus !== 'disconnected') {
         scheduleReconnect();
       }
-    });
+    };
 
-    instance.on('error', (err) => {
+    // Native WebSocket fires a generic Event on error (no `.message`); the
+    // useful detail arrives in the subsequent close event. Synthesize a stable
+    // message so logs/rejections stay informative.
+    const onError = (evt) => {
       clearTimeout(timeout);
-      console.error(`🌐 Moltworld WS: error: ${err.message}`);
+      const detail = evt?.message || evt?.error?.message || 'connection error';
+      console.error(`🌐 Moltworld WS: error: ${detail}`);
       cleanupWs();
       if (isReconnecting) {
         // Continue backoff loop on reconnect failures
         scheduleReconnect();
       } else {
         setStatus('disconnected');
-        reject(new Error(`WebSocket connection failed: ${err.message}`));
+        reject(new Error(`WebSocket connection failed: ${detail}`));
       }
-    });
+    };
+
+    wsListeners = { open: onOpen, message: onMessage, close: onClose, error: onError };
+    instance.addEventListener('open', onOpen);
+    instance.addEventListener('message', onMessage);
+    instance.addEventListener('close', onClose);
+    instance.addEventListener('error', onError);
   });
 }
 
