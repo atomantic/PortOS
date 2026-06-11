@@ -167,7 +167,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 
 | Module | Purpose |
 |---|---|
-| `curatedGenomeMarkers.js` | Curated SNP database with classification logic. |
+| `curatedGenomeMarkers.js` | SNP classification logic (`classifyGenotype`, `formatGenotype`, `resolveApoeHaplotype`) + `MARKER_CATEGORIES`; loads the ~116-marker dataset from the co-located `curatedGenomeMarkers.json` at module init. |
 | `songCraftRef.js` | Server-side mirror of the a cappella rhythm-shape + voice-layer vocabulary (`RHYTHM_SHAPES`, `VOICE_LAYERS`, `DIRGE_RHYTHM_SHAPES`) injected into the song generate/evaluate prompts so the model returns ids the editor pickers understand. Mirrors `client/src/lib/songCraft.js`. |
 
 ## Domain utilities
