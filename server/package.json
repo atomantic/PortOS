@@ -25,7 +25,7 @@
     "sharp": "0.34.5",
     "socket.io": "4.8.3",
     "socket.io-client": "4.8.3",
-    "ws": "8.20.1",
+    "ws": "8.21.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
@@ -41,7 +41,8 @@
     "qs": "6.15.2",
     "socket.io-parser": "4.2.6",
     "protobufjs": "7.5.9",
-    "@protobufjs/utf8": "1.1.0",
+    "@protobufjs/utf8": "1.1.1",
+    "ws": "8.21.0",
     "ip-address": "10.2.0",
     "picomatch": "4.0.4",
     "postcss": "8.5.15",

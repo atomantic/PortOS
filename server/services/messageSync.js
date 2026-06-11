@@ -1,7 +1,9 @@
 
+import { createHash } from 'crypto';
 import { join } from 'path';
 import { atomicWrite, ensureDir, filterBySearch as genericFilterBySearch, PATHS, safeDate, safeJSONParse, UUID_RE, tryReadFile } from '../lib/fileUtils.js';
 import { getAccount, updateSyncStatus } from './messageAccounts.js';
+import { v4 as uuidv4 } from '../lib/uuid.js';
 
 const CACHE_DIR = join(PATHS.messages, 'cache');
 const syncLocks = new Map();
@@ -228,10 +230,8 @@ export async function refreshMessage(accountId, messageId) {
     return { error: 'extraction-failed', message: 'Could not extract message content — the message may not be visible in the Outlook inbox' };
   }
 
-  const { default: crypto } = await import('crypto');
-  const { v4: uuidv4 } = await import('uuid');
   function makeExternalId(date, sender, subject) {
-    return 'pw-' + crypto.createHash('md5').update(`${date}|${sender}|${subject}`).digest('hex').slice(0, 12);
+    return 'pw-' + createHash('md5').update(`${date}|${sender}|${subject}`).digest('hex').slice(0, 12);
   }
 
   const threadKey = message.threadId || `thread-${message.externalId || messageId}`;
