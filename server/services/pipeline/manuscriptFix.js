@@ -92,31 +92,37 @@ function resolveEditSection(raw, targets) {
   return null;
 }
 
-function normalizeFix(content, targets) {
-  const edits = normalizeModelEdits(content)
-    .map((raw) => {
-      const find = typeof raw?.find === 'string' ? raw.find : '';
-      const replace = typeof raw?.replace === 'string' ? raw.replace : '';
-      if (!find || !replace) return null;
-      const section = resolveEditSection(raw, targets);
-      if (!section) return null;
-      const edit = {
-        issueNumber: section.number,
-        issueId: section.issueId,
-        stageId: section.stageId,
-        title: section.title || '',
-        find,
-        replace,
-      };
-      if (typeof raw.note === 'string' && raw.note.trim()) edit.note = raw.note.trim().slice(0, 1000);
-      // Flag fuzzy only when the find can't be located even tolerating
-      // whitespace differences — i.e. accept would actually fail. A quote that
-      // differs only in spacing still applies, so it shouldn't warn.
-      if (!locateFindSpan(section.content || '', find)) edit.fuzzy = true;
-      return edit;
-    })
-    .filter(Boolean);
-  if (edits.length === 0) return null;
+/**
+ * Shape one anchored edit from a `find`/`replace` pair against a resolved
+ * manuscript section. Returns null when either side is empty. `fuzzy` is set
+ * only when `find` can't be located even tolerating whitespace differences —
+ * i.e. when accept would actually fail; a quote that differs only in spacing
+ * still applies, so it doesn't warn. Shared by the fix pass (normalizeFix) and
+ * the with-edits completeness pass (manuscriptReview.seedReviewFromFindings),
+ * so both produce byte-identical edit shapes the accept path can consume.
+ */
+export function shapeAnchoredEdit(section, { find, replace, note } = {}) {
+  if (!section || !find || !replace) return null;
+  const edit = {
+    issueNumber: section.number,
+    issueId: section.issueId,
+    stageId: section.stageId,
+    title: section.title || '',
+    find,
+    replace,
+  };
+  if (typeof note === 'string' && note.trim()) edit.note = note.trim().slice(0, 1000);
+  if (!locateFindSpan(section.content || '', find)) edit.fuzzy = true;
+  return edit;
+}
+
+/**
+ * Wrap a list of shaped edits into a `fix` record, rebuilding the single-edit
+ * convenience fields (`find`/`replace`/`fuzzy`) the accept path reads. Returns
+ * null for an empty list. Shared by normalizeFix, mergeFixes, and the seed path.
+ */
+export function fixFromEdits(edits) {
+  if (!Array.isArray(edits) || edits.length === 0) return null;
   const fix = { edits };
   if (edits.length === 1) {
     fix.find = edits[0].find;
@@ -124,6 +130,18 @@ function normalizeFix(content, targets) {
     if (edits[0].fuzzy) fix.fuzzy = true;
   }
   return fix;
+}
+
+function normalizeFix(content, targets) {
+  const edits = normalizeModelEdits(content)
+    .map((raw) => {
+      const find = typeof raw?.find === 'string' ? raw.find : '';
+      const replace = typeof raw?.replace === 'string' ? raw.replace : '';
+      if (!find || !replace) return null;
+      return shapeAnchoredEdit(resolveEditSection(raw, targets), { find, replace, note: raw.note });
+    })
+    .filter(Boolean);
+  return fixFromEdits(edits);
 }
 
 function editsFromAcceptRequest({ comment, find, replace, edits }) {
@@ -322,14 +340,7 @@ function mergeFixes(fixes) {
       edits.push(e);
     }
   }
-  if (edits.length === 0) return null;
-  const fix = { edits };
-  if (edits.length === 1) {
-    fix.find = edits[0].find;
-    fix.replace = edits[0].replace;
-    if (edits[0].fuzzy) fix.fuzzy = true;
-  }
-  return fix;
+  return fixFromEdits(edits);
 }
 
 export async function generateManuscriptFix(seriesId, { commentId, providerOverride, modelOverride } = {}) {

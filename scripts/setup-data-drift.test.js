@@ -38,7 +38,7 @@ const EXPECTED_STAGE_OLD = {
   'universe-character-expand.md': ['ef109eb8e12ddb664c11c790271b5139'],
   'story-builder-idea-expand.md': ['778c86e2caa120856c36e4d5a4da3355', 'a23939626a226f7420cebfb45d47950c'],
   'pipeline-editorial-analysis.md': ['14d9879697c66d51830cc798040d5369'],
-  'pipeline-manuscript-completeness.md': ['4f2b95778aed85f5fc461d71eb461b79', 'e6858c74ab2cead752d388e3f428406c', '1ee5ac936fbf1d365e0eaea99bcf1e77'],
+  'pipeline-manuscript-completeness.md': ['4f2b95778aed85f5fc461d71eb461b79', 'e6858c74ab2cead752d388e3f428406c', '1ee5ac936fbf1d365e0eaea99bcf1e77', 'cec8faeb75dfff74e41b8221145c2e92'],
   'pipeline-manuscript-fix.md': ['196625952f4a36f3cb962c729f60f0ee', 'c88a56304eb5e290ae0de9dadd20b310'],
   'cos-agent-briefing.md': ['181b26838e526427173e4dccfc884d01', '3e1ca7f7b14b799f89a193c568003624', '699d053875472df455258724a0162bd5', '9bcd3a0167dd4aed7cfff7f404494dfb', 'af73fd50d6f29d561772474c12346e53', 'd761133753da290a0c02eca1c87709e4'],
   'pipeline-tv-script.md': ['3f6fecc25573ed054b47db392250034a'],
@@ -59,7 +59,7 @@ const EXPECTED_STAGE_NEW = {
   'universe-character-expand.md': '67b6e73ed47f318451a730088b4cff14',
   'story-builder-idea-expand.md': 'c12d76fefaaded2838023065bfc94bb0',
   'pipeline-editorial-analysis.md': 'daeb02bd54b0c099b21af659c6298cfe',
-  'pipeline-manuscript-completeness.md': 'cec8faeb75dfff74e41b8221145c2e92',
+  'pipeline-manuscript-completeness.md': 'fd26f928c33803c12878a1bfb8561ece',
   'pipeline-manuscript-fix.md': '88199bf7b5b50155bd2e1624bd920ebd',
   'pipeline-tv-script.md': '376f779f4687b598f1c92ca4e770fd5a',
 };

@@ -334,6 +334,13 @@ vi.mock('../services/pipeline/editorialAnalysisRunner.js', () => ({
   cancelSeriesAnalysis: vi.fn(() => true),
   isSeriesAnalysisActive: vi.fn(() => false),
 }));
+const startCompletenessReviewMock = vi.fn(async () => ({ runId: 'cr-run-1', alreadyRunning: false }));
+vi.mock('../services/pipeline/manuscriptCompletenessRunner.js', () => ({
+  startCompletenessReview: (...a) => startCompletenessReviewMock(...a),
+  attachClient: vi.fn(() => false),
+  cancelCompletenessReview: vi.fn(() => true),
+  isCompletenessReviewActive: vi.fn(() => false),
+}));
 
 const pipelineRouter = (await import('./pipeline/index.js')).default;
 const universeSvc = await import('../services/universeBuilder.js');
@@ -2167,6 +2174,38 @@ describe('pipeline routes', () => {
     expect(completenessSpy).toHaveBeenCalledWith(ser.body.id, expect.any(Object));
     // The completeness pass also seeds a persisted review the editor reads.
     expect(Array.isArray(r.body.review?.comments)).toBe(true);
+  });
+
+  it('POST /series/:id/manuscript/completeness/stream starts the runner + returns sseUrl', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
+    startCompletenessReviewMock.mockClear();
+    const r = await request(app)
+      .post(`/api/pipeline/series/${ser.body.id}/manuscript/completeness/stream`)
+      .send({ mode: 'fresh' });
+    expect(r.status).toBe(200);
+    expect(r.body.runId).toBe('cr-run-1');
+    expect(r.body.sseUrl).toContain(`/manuscript/completeness/progress`);
+    expect(startCompletenessReviewMock).toHaveBeenCalledWith(
+      ser.body.id,
+      expect.objectContaining({ mode: 'fresh' }),
+    );
+  });
+
+  it('GET /series/:id/manuscript/completeness/status reports active flag', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
+    const r = await request(app).get(`/api/pipeline/series/${ser.body.id}/manuscript/completeness/status`);
+    expect(r.status).toBe(200);
+    expect(r.body).toEqual({ active: false });
+  });
+
+  it('POST /series/:id/manuscript/completeness/cancel returns the cancel result', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
+    const r = await request(app).post(`/api/pipeline/series/${ser.body.id}/manuscript/completeness/cancel`).send({});
+    expect(r.status).toBe(200);
+    expect(r.body).toEqual({ canceled: true });
   });
 
   describe('manuscript editor routes', () => {

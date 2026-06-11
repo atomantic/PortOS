@@ -9,13 +9,14 @@
 
 import { Router } from 'express';
 import { z } from 'zod';
-import { asyncHandler } from '../../lib/errorHandler.js';
+import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
 import { validateRequest } from '../../lib/validation.js';
 import * as seriesSvc from '../../services/pipeline/series.js';
 import * as issuesSvc from '../../services/pipeline/issues.js';
 import * as arcPlanner from '../../services/pipeline/arcPlanner.js';
 import * as manuscriptReview from '../../services/pipeline/manuscriptReview.js';
 import * as manuscriptFix from '../../services/pipeline/manuscriptFix.js';
+import * as completenessRunner from '../../services/pipeline/manuscriptCompletenessRunner.js';
 import { mapServiceError, providerOverrideShape } from './shared.js';
 
 const router = Router();
@@ -84,6 +85,43 @@ router.post('/series/:id/manuscript/completeness', asyncHandler(async (req, res)
   const review = await manuscriptReview.seedReviewFromFindings(req.params.id, result.issues, { runId: result.runId, mode: body.mode })
     .catch((err) => { throw mapServiceError(err); });
   res.json({ ...result, review });
+}));
+
+// Streamed completeness review — backs the "generate edits for every finding"
+// option. Kicks off the runner (which streams per-chunk progress over SSE, then
+// seeds the review with pre-attached fixes) and returns the runId + SSE url. The
+// client re-fetches the review on the terminal `complete` frame.
+router.post('/series/:id/manuscript/completeness/stream', asyncHandler(async (req, res) => {
+  await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
+  const body = validateRequest(manuscriptCompletenessSchema, req.body ?? {});
+  // The streamed runner always generates per-finding edits (that's its reason to
+  // exist) — no `withEdits` knob; the sync /completeness route stays findings-only.
+  const result = await completenessRunner.startCompletenessReview(req.params.id, {
+    providerOverride: body.providerOverride,
+    modelOverride: body.modelOverride,
+    mode: body.mode,
+  });
+  res.json({
+    ...result,
+    sseUrl: `/api/pipeline/series/${req.params.id}/manuscript/completeness/progress`,
+  });
+}));
+
+router.get('/series/:id/manuscript/completeness/progress', (req, res) => {
+  const attached = completenessRunner.attachClient(req.params.id, res);
+  if (!attached) {
+    throw new ServerError('No active completeness review for this series', { status: 404 });
+  }
+});
+
+// Lightweight probe so a (re)mounting client can re-attach to an in-flight run.
+router.get('/series/:id/manuscript/completeness/status', (req, res) => {
+  res.json({ active: completenessRunner.isCompletenessReviewActive(req.params.id) });
+});
+
+router.post('/series/:id/manuscript/completeness/cancel', asyncHandler(async (req, res) => {
+  const canceled = completenessRunner.cancelCompletenessReview(req.params.id);
+  res.json({ canceled });
 }));
 
 // Full series manuscript in a chosen format (prose / teleplay / comic script).

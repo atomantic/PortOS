@@ -21,6 +21,7 @@ import { atomicWrite, readJSONFile } from '../../lib/fileUtils.js';
 import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
 import { seriesStore } from './series.js';
 import { collectManuscriptSections, REPLACEMENT_STRATEGIES, replacementStrategyForCategory } from './arcPlanner.js';
+import { shapeAnchoredEdit, fixFromEdits } from './manuscriptFix.js';
 import { emitRecordUpdated } from '../sharing/recordEvents.js';
 
 // Storage-layout version for the review document. Bump + migrate if the
@@ -183,19 +184,61 @@ export async function seedReviewFromFindings(seriesId, findings, { runId = null,
     const candidates = [];
     for (const f of Array.isArray(findings) ? findings : []) {
       const candidate = sanitizeComment({ ...f, status: 'open', sourceRunId: runId, createdAt: now, updatedAt: now });
-      if (candidate) candidates.push(candidate);
+      if (!candidate) continue;
+      // `replace` (the with-edits in-place rewrite) isn't part of the stored
+      // comment shape, so sanitizeComment drops it — stash it on the candidate so
+      // the append + backfill paths below can build the comment's `fix` from it.
+      if (typeof f?.replace === 'string' && f.replace) candidate.replace = f.replace;
+      candidates.push(candidate);
     }
     const freshKeys = new Set(candidates.map(findingKey));
+    // Look up a re-surfaced finding (and its `replace`) by key, so an EXISTING
+    // open comment with no fix can be backfilled when a with-edits re-run finds
+    // it again. First candidate wins (matches the append loop's dedupe order).
+    const candidateByKey = new Map();
+    for (const c of candidates) { const k = findingKey(c); if (!candidateByKey.has(k)) candidateByKey.set(k, c); }
+
+    // Build the pre-seeded fix for a finding from { find: anchorQuote, replace }
+    // via the same shaper the manual "Generate fix" path uses, so the editor
+    // shows the diff + Accept with no per-comment fix call. Returns null (→ stays
+    // advice-only, falls back to manual fix generation) when:
+    //   - there's no `replace`, no `anchorQuote`, or no resolved section;
+    //   - the anchor can't be located even whitespace-tolerantly (shapeAnchoredEdit
+    //     flags `fuzzy`): the bulk pass has no per-comment warning, so an
+    //     unappliable fix would present a diff whose Accept silently fails;
+    //   - the finding is a `full-page` (comic-structure) replacement: there the
+    //     `anchorQuote` is only the malformed page's OPENING text while `replace`
+    //     is the complete rewritten page, so splicing `replace` over just the
+    //     anchor would leave the rest of the page behind. The manual fix path
+    //     handles full-page substitution correctly; defer to it.
+    const buildSeedFix = (comment, section) => {
+      if (!section || !comment.replace || !comment.anchorQuote) return null;
+      if (comment.replacementStrategy === 'full-page') return null;
+      const edit = shapeAnchoredEdit(section, { find: comment.anchorQuote, replace: comment.replace });
+      return edit && !edit.fuzzy ? fixFromEdits([edit]) : null;
+    };
 
     // Carry every existing comment forward. In 'fresh' mode, an open comment the
     // new pass no longer surfaces is flipped to dismissed (a synced status
     // change, not a deletion — see the doc comment). Accepted/dismissed are
-    // always left untouched.
+    // always left untouched. A with-edits re-run also backfills a fix onto an
+    // existing open comment that has none yet (so enabling "generate edits" on a
+    // series whose notes came from an earlier findings-only run still drafts them).
     let dismissedCount = 0;
+    let backfilledCount = 0;
     const carried = review.comments.map((c) => {
       if (mode === 'fresh' && c.status === 'open' && !freshKeys.has(findingKey(c))) {
         dismissedCount += 1;
         return sanitizeComment({ ...c, status: 'dismissed', updatedAt: now });
+      }
+      if (c.status === 'open' && !c.fix) {
+        const match = candidateByKey.get(findingKey(c));
+        const section = c.issueNumber != null ? byNumber.get(c.issueNumber) : null;
+        const fix = match?.replace ? buildSeedFix({ ...c, replace: match.replace }, section) : null;
+        if (fix) {
+          backfilledCount += 1;
+          return sanitizeComment({ ...c, fix, updatedAt: now });
+        }
       }
       return c;
     });
@@ -212,6 +255,11 @@ export async function seedReviewFromFindings(seriesId, findings, { runId = null,
         candidate.issueId = section.issueId;
         candidate.stageId = section.stageId;
       }
+      const fix = buildSeedFix(candidate, section);
+      if (fix) candidate.fix = fix;
+      // `replace` is consumed into `fix` (or dropped) — it's not part of the
+      // stored comment shape (sanitizeComment ignores unknown keys, but be tidy).
+      delete candidate.replace;
       seenKeys.add(key);
       fresh.push(candidate);
     }
@@ -221,10 +269,11 @@ export async function seedReviewFromFindings(seriesId, findings, { runId = null,
     // The review is a sibling of the series record, so a review-only change
     // doesn't move the series `index.json` — emit a series `updated` event so
     // the peer-sync push + bucket re-export fire (both hash the review into
-    // their payload). Only when something actually changed — appended findings
-    // OR opens auto-dismissed by a 'fresh' re-run. Skipped on the sync RECEIVE
-    // path (`mergeReviewFromSync`) to avoid an echo loop.
-    if (fresh.length > 0 || dismissedCount > 0) emitRecordUpdated('series', seriesId);
+    // their payload). Only when something actually changed — appended findings,
+    // opens auto-dismissed by a 'fresh' re-run, OR fixes backfilled onto existing
+    // opens. Skipped on the sync RECEIVE path (`mergeReviewFromSync`) to avoid
+    // an echo loop.
+    if (fresh.length > 0 || dismissedCount > 0 || backfilledCount > 0) emitRecordUpdated('series', seriesId);
     return next;
   });
 }

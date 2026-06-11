@@ -45,6 +45,7 @@ grep -i "what you want to do" client/src/hooks/README.md
 | `useOpenClawStream` | OpenClaw SSE chat stream. | OpenClaw file-browser chat surface only. |
 | `usePipelineAutoRunProgress` | Auto-run-text SSE for a pipeline issue. | Pipeline auto-run UI surfaces only. |
 | `usePipelineEditorialProgress` | Series editorial reader-emotion batch SSE. | Editorial Roadmap analysis UI only. |
+| `usePipelineManuscriptCompletenessProgress` | Streamed manuscript-completeness review (generate-edits pass) per-chunk SSE. | Manuscript editor review trigger only. |
 | `usePipelineVolumeBeatsProgress` | Volume beat-sheet SSE. | Volume beat-sheet UI only. |
 | `useSeriesEditorial` | Editorial-roadmap aggregate + batch lifecycle (load, re-attach, SSE, start/cancel, reload). | Any view of the editorial roadmap (panel or Reader Map page). |
 | `useStoryStepProgress` | Generate/refine SSE for one Story Builder step. | Story Builder step generate/refine progress only. |

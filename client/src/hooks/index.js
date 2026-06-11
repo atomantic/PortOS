@@ -60,6 +60,7 @@ export * from './useInstallStream.js';
 export * from './useOpenClawStream.js';
 export * from './usePipelineAutoRunProgress.js';
 export * from './usePipelineEditorialProgress.js';
+export * from './usePipelineManuscriptCompletenessProgress.js';
 export * from './usePipelineVolumeBeatsProgress.js';
 export * from './useSeriesEditorial.js';
 export * from './useSseProgress.js';

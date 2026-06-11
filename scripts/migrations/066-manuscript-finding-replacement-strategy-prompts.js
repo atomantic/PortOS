@@ -28,15 +28,20 @@ import { makePromptReplaceMigration } from './_lib.js';
 // Pre-change shipped hashes: completeness from migration 057 (six-category
 // comic-structure prompt), fix from migration 060 (multi-edit prompt).
 export const ACCEPTED_OLD_MD5 = {
-  'pipeline-manuscript-completeness.md': ['1ee5ac936fbf1d365e0eaea99bcf1e77'],
+  // 'cec8…' is this migration's own (post-066) completeness body, kept as
+  // accepted-old because migration 083 (with-edits replace field) is the current
+  // shape, so a copy still at the post-066 body is auto-upgradable.
+  'pipeline-manuscript-completeness.md': ['1ee5ac936fbf1d365e0eaea99bcf1e77', 'cec8faeb75dfff74e41b8221145c2e92'],
   'pipeline-manuscript-fix.md': ['c88a56304eb5e290ae0de9dadd20b310'],
 };
 
-// Post-change shipped hashes (replacementStrategy contract on both prompts).
-// Mirror these into every earlier migration that tracks the same file
-// (056/057 for completeness, 060 for fix) so their drift-catch tests stay green.
+// Post-change shipped hashes. Mirror these into every earlier migration that
+// tracks the same file (056/057 for completeness, 060 for fix) so their
+// drift-catch tests stay green. The completeness hash reflects the post-083 body
+// (migration 083 added the with-edits `replace` field); the fix hash is still
+// 066's own output (no later migration touches it).
 export const NEW_SHIPPED_MD5 = {
-  'pipeline-manuscript-completeness.md': 'cec8faeb75dfff74e41b8221145c2e92',
+  'pipeline-manuscript-completeness.md': 'fd26f928c33803c12878a1bfb8561ece',
   'pipeline-manuscript-fix.md': '88199bf7b5b50155bd2e1624bd920ebd',
 };
 

@@ -27,15 +27,15 @@ import { makePromptReplaceMigration } from './_lib.js';
 // accepted-old entry — migration 066 (replacementStrategy) further updated the
 // file, so a copy still at the 057 body is auto-upgradable to the current shape.
 export const ACCEPTED_OLD_MD5 = {
-  'pipeline-manuscript-completeness.md': ['4f2b95778aed85f5fc461d71eb461b79', '1ee5ac936fbf1d365e0eaea99bcf1e77'],
+  'pipeline-manuscript-completeness.md': ['4f2b95778aed85f5fc461d71eb461b79', '1ee5ac936fbf1d365e0eaea99bcf1e77', 'cec8faeb75dfff74e41b8221145c2e92'],
 };
 
-// Current shipped hash — migration 066 further updated this file (added the
-// replacementStrategy contract), so this hash reflects the post-066 body.
-// The idempotent-rerun and drift-catch tests require it to match the live
-// data.reference body, not 057's own output.
+// Current shipped hash — migrations 066 (replacementStrategy contract) and 083
+// (with-edits replace field) further updated this file, so this hash reflects
+// the post-083 body. The idempotent-rerun and drift-catch tests require it to
+// match the live data.reference body, not 057's own output.
 export const NEW_SHIPPED_MD5 = {
-  'pipeline-manuscript-completeness.md': 'cec8faeb75dfff74e41b8221145c2e92',
+  'pipeline-manuscript-completeness.md': 'fd26f928c33803c12878a1bfb8561ece',
 };
 
 const { applyMigration, up } = makePromptReplaceMigration({

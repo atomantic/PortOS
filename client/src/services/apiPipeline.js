@@ -421,6 +421,29 @@ export const analyzePipelineManuscriptCompleteness = (seriesId, { providerOverri
     body: JSON.stringify({ providerOverride, modelOverride, mode }),
   });
 
+// Streamed completeness review backing the "generate edits for every finding"
+// option: this pass always returns a concrete `replace` per finding so each
+// seeded comment lands with its `fix` pre-attached. Returns { runId,
+// alreadyRunning, sseUrl } — subscribe via pipelineManuscriptCompletenessSseUrl
+// to stream per-chunk progress, then re-fetch the review on `complete`.
+export const startPipelineManuscriptCompleteness = (seriesId, { providerOverride, modelOverride, mode } = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/manuscript/completeness/stream`, {
+    method: 'POST',
+    body: JSON.stringify({ providerOverride, modelOverride, mode }),
+  });
+
+export const cancelPipelineManuscriptCompleteness = (seriesId) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/manuscript/completeness/cancel`, {
+    method: 'POST',
+  });
+
+// { active: boolean } — lets a (re)mounting editor re-attach to an in-flight run.
+export const getPipelineManuscriptCompletenessStatus = (seriesId, options = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/manuscript/completeness/status`, options);
+
+export const pipelineManuscriptCompletenessSseUrl = (seriesId) =>
+  `/api/pipeline/series/${encodeURIComponent(seriesId)}/manuscript/completeness/progress`;
+
 // ---- Manuscript editor ----
 // Full series manuscript in one format. `type` (comicScript|teleplay|prose)
 // selects the format; omit to get the series' primary/source format. Returns

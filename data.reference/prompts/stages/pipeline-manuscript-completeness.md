@@ -86,7 +86,8 @@ Return ONLY valid JSON matching this shape — no prose, no markdown fence, no c
       "location": "Issue 2, around the castle-escape page",
       "problem": "string (what is missing or under-developed, with specific evidence from the script)",
       "replacementStrategy": "delta",
-      "suggestion": "string (the smallest concrete addition — a beat, a page, a scene, a line of motivation — that closes the gap)"
+      "suggestion": "string (the smallest concrete addition — a beat, a page, a scene, a line of motivation — that closes the gap)"{{#withEdits}},
+      "replace": "the rewritten passage that REPLACES anchorQuote verbatim to close this gap (see the rule below)"{{/withEdits}}
     }
   ]
 }
@@ -103,5 +104,8 @@ Return ONLY valid JSON matching this shape — no prose, no markdown fence, no c
   - **`medium`** — the story works but feels incomplete or thin here (an under-built relationship, a skipped transition).
   - **`low`** — an opportunity to enrich (a theme that could land harder, a minor character that could carry more).
 - **For `comic-structure` findings:** `severity` is always `high` and `replacementStrategy` is always `full-page`. The `suggestion` must be the **complete restructured page content** — a full `Panel 1 / Description: … / Caption: … / Dialogue: … / SFX: …` breakdown for every panel the page should have, not prose advice — because the fix step substitutes it directly for the malformed page rather than synthesizing an edit. Distribute the prose content from the page description into appropriately sequenced panels (4–6 panels typical for a story page; use your judgment for pacing). Set `anchorQuote` to the opening text of the malformed page description block so the editor can locate it precisely.
+{{#withEdits}}
+- **`replace` (required this pass):** in addition to the advice in `suggestion`, return the concrete edit that closes the gap. `replace` is the new text that **substitutes for `anchorQuote` exactly** — the editor splices it in over the span `anchorQuote` marks, so `anchorQuote` must be a real verbatim excerpt (not empty) and `replace` must be that same span rewritten to incorporate the fix. To ADD a missing beat, set `replace` to `anchorQuote` followed by the new material (so nothing is deleted); to REWRITE, set `replace` to the corrected version of that span. For `comic-structure` (`full-page`), `replace` is the complete panel-by-panel page (same content as `suggestion`). Keep `replace` tightly scoped to the anchored span — do not restate the whole issue. Omit `replace` (or set it to `""`) only when the gap genuinely has no in-place edit (e.g. a whole missing issue with no nearby text to anchor to); that finding then stays advice-only.
+{{/withEdits}}
 
 Return `{ "issues": [] }` only if the manuscript is genuinely complete. Do NOT pad with low-confidence entries.
