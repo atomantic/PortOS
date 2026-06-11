@@ -8,11 +8,9 @@
  */
 
 import { randomUUID } from 'crypto';
-import { join } from 'path';
 import { normalizeSlugline } from './scenePrompt.js';
-import { PATHS, atomicWrite, ensureDir, readJSONFile, resolveImageRef } from './fileUtils.js';
+import { PATHS, resolveImageRef } from './fileUtils.js';
 import { isPlainObject } from './objects.js';
-import { ServerError } from './errorHandler.js';
 
 // Re-export so callers (writers-room domain files) can import a single
 // canonical normalizer when they need to match places by slugline.
