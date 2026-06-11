@@ -15,7 +15,7 @@ The character's body animation, facial expression, and speaking behavior react t
 
 ## Non-goals
 
-- Shipping a bundled 3D model in the repo. The single source of the character is a user-supplied GLB at `./data/avatar/model.glb`. No binary is committed.
+- ~~Shipping a bundled 3D model in the repo.~~ **(Superseded 2026-06-10.)** PortOS now bundles two CC0 Kenney Mini Character GLBs as ready-to-use animated avatar styles (`miniMaleC`, `miniFemaleD`), seeded from `data.reference/avatar/` into `data/avatar/` by `setup-data.js`. The `muse` style still loads a user-supplied `./data/avatar/model.glb`; the bundled mini-characters are served from the same route via a `?variant=<name>` selector. See `client/src/components/cos/MiniCharacterCoSAvatar.jsx` and `data.reference/avatar/README.md`.
 - Teaching users to rig characters. `docs/avatar-pipeline.md` links to external tools (AccuRIG 2, Mesh2Motion, Rigify) for the rigging step.
 - Per-agent personas, skins, or multiple simultaneous avatars.
 - Phoneme-timed TTS lip-sync. Speaking is driven by audio amplitude or a sine fallback, not phoneme sequences. A viseme-per-phoneme engine is a later upgrade if desired.

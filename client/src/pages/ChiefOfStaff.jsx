@@ -47,9 +47,15 @@ const LAZY_AVATARS = {
   esoteric: lazy(() => import('../components/cos/EsotericCoSAvatar')),
   nexus:    lazy(() => import('../components/cos/NexusCoSAvatar')),
   muse:     lazy(() => import('../components/cos/MuseCoSAvatar')),
+  // Bundled CC0 Kenney Mini Characters — animated rigged GLB avatars.
+  miniMaleC:   lazy(() => import('../components/cos/MiniCharMaleC')),
+  miniFemaleD: lazy(() => import('../components/cos/MiniCharFemaleD')),
 };
 
-const CANVAS_AVATAR_STYLES = new Set(['cyber', 'sigil', 'esoteric', 'nexus', 'muse']);
+const CANVAS_AVATAR_STYLES = new Set([
+  'cyber', 'sigil', 'esoteric', 'nexus', 'muse',
+  'miniMaleC', 'miniFemaleD',
+]);
 
 export default function ChiefOfStaff() {
   const { tab } = useParams();

@@ -92,6 +92,7 @@ class RequestBuilder {
 export function request(app) {
   return {
     get: (path) => new RequestBuilder(app, 'GET', path),
+    head: (path) => new RequestBuilder(app, 'HEAD', path),
     post: (path) => new RequestBuilder(app, 'POST', path),
     put: (path) => new RequestBuilder(app, 'PUT', path),
     delete: (path) => new RequestBuilder(app, 'DELETE', path),

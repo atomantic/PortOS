@@ -34,7 +34,7 @@ export const cosConfigSchema = z.object({
   selfImprovementEnabled: z.boolean().optional(),
   appImprovementEnabled: z.boolean().optional(),
   improvementEnabled: z.boolean().optional(),
-  avatarStyle: z.enum(['svg', 'ascii', 'cyber', 'sigil', 'esoteric', 'nexus', 'muse']).optional(),
+  avatarStyle: z.enum(['svg', 'ascii', 'cyber', 'sigil', 'esoteric', 'nexus', 'muse', 'miniMaleC', 'miniFemaleD']).optional(),
   dynamicAvatar: z.boolean().optional(),
   alwaysOn: z.boolean().optional(),
   appReviewCooldownMs: z.number().int().min(0).optional(),
