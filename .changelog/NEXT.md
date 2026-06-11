@@ -35,6 +35,8 @@
 
 ## Changed
 
+- **[issue-1153] Internal cleanup of the local video-generation service** — the progress-parsing and finalize steps of the video generator moved into a separately-tested helper module. No behavior change.
+
 - **[issue-1152] Internal reorganization of the story-arc planning service** — the arc-planning code (overview, episode seeding, manuscript completeness, arc-from-manuscript derivation) split from one 2,100-line file into focused modules. No behavior change.
 
 - **[issue-1151] Internal reorganization of request validation** — the peer-sync, Creative Director, importer, and Story Builder validation rules moved into their own focused files. No behavior change.

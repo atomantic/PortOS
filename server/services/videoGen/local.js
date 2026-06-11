@@ -25,6 +25,7 @@ import { getVideoModels, getDefaultVideoModelId, getTextEncoderRepo } from '../.
 import { findFfmpeg, safeUnder, generateThumbnail, optimizeForStreaming, upscaleVideo2x, extractEvaluationFrames } from '../../lib/ffmpeg.js';
 import { hfTokenEnv } from '../../lib/hfToken.js';
 import { safeChildProcessEnv } from '../../lib/processEnv.js';
+import { makeVideoGenLineHandler, finalizeGeneratedVideo, isWatchdogSuccess } from './generateVideoHelpers.js';
 
 // Path to the dgrauet/ltx-2-mlx venv populated by `INSTALL_LTX2=1
 // scripts/setup-image-video.sh`. Used when a model entry has
@@ -938,85 +939,11 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   let outputBuf = '';
   let missingPyModule = null;
 
-  // Returns true when the line was a known progress/status message (already
-  // broadcast over SSE) or python-noise — caller should suppress logging.
-  // Returns false for unhandled lines that are worth raw-logging.
-  const handleLine = (raw) => {
-    const line = raw.trim();
-    if (!line) return true;
-    if (PYTHON_NOISE_RE.test(line)) return true;
-    // Heartbeat for the queue's idle watchdog (see imageGen/local.js).
-    videoGenEvents.emit('activity', { generationId: jobId });
-    if (line.startsWith('STATUS:')) {
-      const message = line.slice(7);
-      broadcastSse(job, { type: 'status', message });
-      // Mirror status to videoGenEvents so the mediaJobQueue SSE dispatcher
-      // forwards it to the client. Without this, only STAGE: progress
-      // reaches the UI and long pre-render phases ("Loading pipeline…",
-      // "Generating I2V…") display nothing.
-      videoGenEvents.emit('status', { generationId: jobId, message });
-      return true;
-    }
-    if (line.startsWith('STAGE:')) {
-      const parts = line.split(':');
-      // Three STAGE: shapes ship today:
-      //   STAGE:<stage>:step:<cur>:<total>:<msg>  — explicit progress (parts[2]='step')
-      //   STAGE:<stage>:heartbeat:<N>s            — idle-watchdog ping (parts[2]='heartbeat')
-      //   STAGE:<stage>                           — terse phase marker (no extra fields)
-      // The legacy "treat every STAGE: as step:" parse mangled heartbeat
-      // lines: parts[3]='20s' → parseInt=20, parts[4]=undefined → total=1, so
-      // a download-clip heartbeat broadcast progress=20.0 (= 2000%) to the UI.
-      // Normalize tag case — generate_ltx2.py emits `STEP:` (uppercase),
-      // generate_hunyuan.py emits `step:` and `heartbeat:` (lowercase).
-      const tag = (parts[2] || '').toLowerCase();
-      if (tag === 'heartbeat') {
-        // Surface as a status message; the activity emit above already
-        // resets the queue watchdog. Mirror to videoGenEvents so the
-        // mediaJobQueue SSE dispatcher forwards it to the client.
-        const message = `${parts[1]}: heartbeat ${parts[3] || ''}`;
-        broadcastSse(job, { type: 'status', message });
-        videoGenEvents.emit('status', { generationId: jobId, message });
-        return true;
-      }
-      if (tag === 'step') {
-        const step = parseInt(parts[3], 10) || 0;
-        const total = parseInt(parts[4], 10) || 1;
-        const label = parts.slice(5).join(':');
-        broadcastSse(job, { type: 'progress', progress: step / total, message: label });
-        // Pass the python-side label as `message` so the dispatcher surfaces
-        // it to the client instead of falling back to the synthesized
-        // "Rendering step X/Y" (which hides useful labels like "Loading
-        // model" emitted at stage boundaries).
-        videoGenEvents.emit('progress', { generationId: jobId, progress: step / total, step, totalSteps: total, message: label || undefined });
-        return true;
-      }
-      // Bare phase marker (e.g. STAGE:load-pipeline, STAGE:from-pretrained) —
-      // surface as a status line. No progress %, no division-by-undefined.
-      // Mirror to videoGenEvents for client forwarding.
-      const message = parts.slice(1).join(':');
-      broadcastSse(job, { type: 'status', message });
-      videoGenEvents.emit('status', { generationId: jobId, message });
-      return true;
-    }
-    if (line.startsWith('DOWNLOAD:')) {
-      const message = `Downloading model... ${line.slice(9)}`;
-      broadcastSse(job, { type: 'status', message });
-      videoGenEvents.emit('status', { generationId: jobId, message });
-      return true;
-    }
-    const m = line.match(/(\d+)%\|/);
-    if (m) {
-      const pct = parseInt(m[1], 10) / 100;
-      broadcastSse(job, { type: 'progress', progress: pct, message: line });
-      // Omit `message` on the queue-dispatcher emit: the raw tqdm bar
-      // (`60%|██████    | 6/10 [00:30<00:20, ...]`) is terminal noise that
-      // would clobber the last meaningful STATUS/STAGE line on every
-      // percent update. Client renders the percentage separately.
-      videoGenEvents.emit('progress', { generationId: jobId, progress: pct });
-      return true;
-    }
-    return false;
-  };
+  // The python child's STATUS:/STAGE:/DOWNLOAD:/tqdm → SSE-frame parser lives
+  // in generateVideoHelpers.js so it can be unit-tested without a real child.
+  // Returns true for a recognized progress/status/noise line (suppress raw
+  // logging), false for an unhandled line worth raw-logging.
+  const handleLine = makeVideoGenLineHandler({ job, jobId, pythonNoiseRe: PYTHON_NOISE_RE });
 
   proc.stdout.on('data', (chunk) => {
     outputBuf += chunk.toString();
@@ -1081,8 +1008,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     // on disk, so treat it as success (not the generic "killed, likely OOM"
     // failure). Guard on the file actually existing + being non-empty so a
     // marker without a real output (a malformed runtime) still fails loudly.
-    const watchdogSuccess = completionWatchdogFired && signal === 'SIGKILL'
-      && existsSync(outputPath) && statSync(outputPath).size > 0;
+    const watchdogSuccess = isWatchdogSuccess({ completionWatchdogFired, signal, outputPath });
 
     if (code !== 0 && !watchdogSuccess) {
       job.status = 'error';
@@ -1112,15 +1038,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
       if (watchdogSuccess) {
         console.log(`⚠️ video child force-killed after completion teardown hang — output is intact [${jobId.slice(0, 8)}]`);
       }
-      job.status = 'complete';
-      await optimizeForStreaming(outputPath);
-      const thumbnail = await generateThumbnail(outputPath, jobId);
-      const history = await loadHistory();
-      history.unshift({ ...meta, thumbnail });
-      await saveHistory(history);
-      console.log(`✅ Video generated [${jobId.slice(0, 8)}]: ${filename}`);
-      broadcastSse(job, { type: 'complete', result: { filename, seed: actualSeed, thumbnail, path: `/data/videos/${filename}` } });
-      videoGenEvents.emit('completed', { generationId: jobId, filename, path: `/data/videos/${filename}`, thumbnail });
+      await finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta, actualSeed, loadHistory, saveHistory });
     }
     closeJobAfterDelay(jobs, jobId);
   });
