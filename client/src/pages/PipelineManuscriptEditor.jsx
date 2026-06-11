@@ -221,13 +221,20 @@ export default function PipelineManuscriptEditor() {
 
   // Re-fetch the persisted review after a streamed run lands (the runner seeds
   // it server-side; comments now carry pre-built fixes). `meta` populates the
-  // chunk badge from the terminal frame when there was one.
-  const reloadReviewAfterRun = (meta = null) =>
+  // chunk badge from the terminal `complete` frame. On the recovery path
+  // (`recovered: true`) the stream died WITHOUT a terminal frame, so we can't
+  // claim success — show a neutral "stream ended, notes refreshed" message
+  // instead of a green "complete", since the run may have failed server-side.
+  const reloadReviewAfterRun = (meta = null, { recovered = false } = {}) =>
     getPipelineManuscriptReview(seriesId)
       .then((review) => {
         const next = Array.isArray(review?.comments) ? review.comments : [];
         setComments(next);
         if (meta) setReviewMeta({ chunked: !!meta.chunked, chunkCount: meta.chunkCount || 1 });
+        if (recovered) {
+          toast('Editorial review stream ended — refreshed notes from the server');
+          return;
+        }
         const openCount = next.filter((c) => c.status === 'open').length;
         toast.success(meta?.chunked
           ? `Editorial review complete — ${openCount} open notes with drafted edits (reviewed in ${meta.chunkCount} chunks)`
@@ -257,7 +264,7 @@ export default function PipelineManuscriptEditor() {
     const t = reviewLatest?.type;
     if (t === 'complete' || t === 'canceled' || t === 'error') return; // handled above
     setReviewActive(false);
-    reloadReviewAfterRun();
+    reloadReviewAfterRun(null, { recovered: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reviewActive, reviewClosed, reviewLatest, seriesId]);
 
