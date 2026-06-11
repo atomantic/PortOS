@@ -52,7 +52,7 @@ export const unlockStoryStep = (id, stepId, options = {}) =>
 
 // generate / refine kick off a background run and return { runId, alreadyRunning,
 // sseUrl }. Subscribe to progress via storyStepProgressSseUrl (see
-// hooks/useStoryStepProgress.js); the result lands on the stream's `complete`
+// hooks/usePipelineProgress.js); the result lands on the stream's `complete`
 // frame and the persisted content is read back by refetching the session view.
 export const generateStoryStep = (id, stepId, payload = {}, options = {}) =>
   request(`/story-builder/${id}/steps/${stepId}/generate`, {

@@ -1,9 +1,10 @@
-import { useParams, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { CalendarDays, Calendar as CalendarIcon, ClipboardList, Clock, Columns, LayoutGrid, RefreshCw, Settings } from 'lucide-react';
 import { useState, useEffect, useCallback } from 'react';
 import * as api from '../services/api';
 import BrailleSpinner from '../components/BrailleSpinner';
 import TabPills from '../components/ui/TabPills';
+import { useValidTab } from '../hooks/useValidTab';
 
 import AgendaTab from '../components/calendar/AgendaTab';
 import DayView from '../components/calendar/DayView';
@@ -28,10 +29,8 @@ export const TABS = [
 ];
 
 export default function Calendar() {
-  const { tab } = useParams();
   const navigate = useNavigate();
-  const VALID_TABS = TABS.map(t => t.id);
-  const activeTab = VALID_TABS.includes(tab) ? tab : 'agenda';
+  const activeTab = useValidTab(TABS, 'agenda');
   const [accounts, setAccounts] = useState([]);
   const [loading, setLoading] = useState(true);
 

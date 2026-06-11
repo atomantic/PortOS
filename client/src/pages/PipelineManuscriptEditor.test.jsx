@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
+import { MockEventSource, lastEventSource as lastEs } from '../test/mockEventSource';
 
 const api = vi.hoisted(() => ({
   getPipelineSeries: vi.fn(),
@@ -355,31 +356,9 @@ describe('PipelineManuscriptEditor', () => {
   });
 });
 
-// jsdom has no EventSource — stand up a minimal mock the test drives by hand.
-class MockEventSource {
-  constructor(url) {
-    this.url = url;
-    this.onmessage = null;
-    this.onerror = null;
-    this.onopen = null;
-    this.readyState = MockEventSource.OPEN;
-    MockEventSource.instances.push(this);
-  }
-  close() { this.readyState = MockEventSource.CLOSED; }
-  emit(payload) { this.onmessage?.({ data: JSON.stringify(payload) }); }
-  // Simulate a non-terminal stream death (attach 404, dropped connection): the
-  // hook flips `closed` true via onerror when readyState is CLOSED, with no
-  // terminal frame ever delivered.
-  fail() { this.readyState = MockEventSource.CLOSED; this.onerror?.(); }
-}
-MockEventSource.CONNECTING = 0;
-MockEventSource.OPEN = 1;
-MockEventSource.CLOSED = 2;
-const lastEs = () => MockEventSource.instances[MockEventSource.instances.length - 1];
-
 describe('PipelineManuscriptEditor — generate-edits streamed review', () => {
   beforeEach(() => {
-    MockEventSource.instances = [];
+    MockEventSource.reset();
     // Stub for the whole describe — a deferred SSE-open effect can fire after the
     // test body returns (during RTL cleanup), so don't delete it per-test or that
     // late `new EventSource(url)` throws a ReferenceError.

@@ -5,6 +5,7 @@ import * as api from '../services/api';
 import GoalsListView from '../components/goals/GoalsListView';
 import MortalLoomBanner from '../components/MortalLoomBanner';
 import BrailleSpinner from '../components/BrailleSpinner';
+import { useValidTab } from '../hooks/useValidTab';
 
 const GoalsTreeView = lazy(() => import('../components/goals/GoalsTreeView'));
 
@@ -14,11 +15,9 @@ export const TABS = [
   { id: 'tree', label: 'Tree', icon: TreePine }
 ];
 
-const VALID_TABS = new Set(TABS.map(t => t.id));
-
 export default function Goals() {
   const { tab: rawTab } = useParams();
-  const tab = VALID_TABS.has(rawTab) ? rawTab : 'list';
+  const tab = useValidTab(TABS, 'list');
   const navigate = useNavigate();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -32,10 +31,11 @@ export default function Goals() {
   useEffect(() => { loadData(); }, [loadData]);
 
   useEffect(() => {
-    if (rawTab && !VALID_TABS.has(rawTab)) {
+    // `tab !== rawTab` only when the param failed validation and fell back.
+    if (rawTab && rawTab !== tab) {
       navigate('/goals/list', { replace: true });
     }
-  }, [rawTab, navigate]);
+  }, [rawTab, tab, navigate]);
 
   const handleTabChange = (tabId) => {
     navigate(`/goals/${tabId}`, { replace: true });

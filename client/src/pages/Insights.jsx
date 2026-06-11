@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
+import { useValidTab } from '../hooks/useValidTab';
 import { Dna, Palette, Link2, Lightbulb, ArrowRight } from 'lucide-react';
 import {
   getGenomeHealthCorrelations,
@@ -19,8 +20,6 @@ export const TABS = [
   { id: 'taste-identity', label: 'Taste & Identity', icon: Palette },
   { id: 'cross-domain', label: 'Cross-Domain Patterns', icon: Link2 }
 ];
-
-const VALID_TAB_IDS = new Set(TABS.map(t => t.id));
 
 function SummaryCardSkeleton() {
   return (
@@ -177,9 +176,8 @@ function OverviewTab() {
 }
 
 export default function Insights() {
-  const { tab } = useParams();
   const navigate = useNavigate();
-  const activeTab = VALID_TAB_IDS.has(tab) ? tab : 'overview';
+  const activeTab = useValidTab(TABS, 'overview');
 
   const renderTabContent = () => {
     switch (activeTab) {

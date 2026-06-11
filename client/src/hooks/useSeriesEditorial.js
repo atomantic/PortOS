@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   getSeriesEditorial, getSeriesEditorialStatus,
-  analyzeSeriesEditorial, cancelSeriesEditorial,
+  analyzeSeriesEditorial, cancelSeriesEditorial, pipelineEditorialSseUrl,
 } from '../services/api';
 import toast from '../components/ui/Toast';
 import { projectAnalyzedPoints } from '../lib/editorialRoadmap';
-import { usePipelineEditorialProgress } from './usePipelineEditorialProgress';
+import { usePipelineProgress } from './usePipelineProgress';
 
 const EMPTY_COVERAGE = { analyzed: 0, total: 0, withContent: 0, stale: 0, noContent: 0 };
 
@@ -54,7 +54,7 @@ export function useSeriesEditorial(seriesId) {
   // Reload when the batch ends. `closed` covers a terminal frame OR a
   // dropped/404 stream (fast batch pruned before we attached), so the UI never
   // hangs in "Analyzing…" waiting for a frame that will never arrive.
-  const { latest, closed } = usePipelineEditorialProgress(seriesId, { enabled: analysisEnabled });
+  const { latest, closed } = usePipelineProgress(pipelineEditorialSseUrl, [seriesId], { enabled: analysisEnabled });
   useEffect(() => {
     if (closed && analysisEnabled) {
       setAnalysisEnabled(false);

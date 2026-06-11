@@ -4,6 +4,7 @@ import { useSocket } from '../hooks/useSocket';
 import { useLocalStorageBool } from '../hooks/useLocalStorageBool';
 import useNextEvalCountdown from '../hooks/useNextEvalCountdown';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
+import { useValidTab } from '../hooks/useValidTab';
 import * as api from '../services/api';
 import { Play, Square, Clock, CheckCircle, AlertCircle, Cpu, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Brain, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import toast from '../components/ui/Toast';
@@ -60,8 +61,7 @@ const CANVAS_AVATAR_STYLES = new Set([
 export default function ChiefOfStaff() {
   const { tab } = useParams();
   const navigate = useNavigate();
-  const validTabIds = useMemo(() => new Set(TABS.map(t => t.id)), []);
-  const activeTab = (tab && validTabIds.has(tab)) ? tab : 'tasks';
+  const activeTab = useValidTab(TABS, 'tasks');
 
   const [status, setStatus] = useState(null);
   const [tasks, setTasks] = useState({ user: null, cos: null });
@@ -154,12 +154,13 @@ export default function ChiefOfStaff() {
     setActiveAgentMeta(runningAgent?.metadata || null);
   }, [deriveAgentState]);
 
-  // Redirect unknown tab IDs to the default tab
+  // Redirect unknown tab IDs to the default tab — `activeTab !== tab` only
+  // when the param failed validation and fell back.
   useEffect(() => {
-    if (tab && !validTabIds.has(tab)) {
+    if (tab && tab !== activeTab) {
       navigate('/cos/tasks', { replace: true });
     }
-  }, [tab, validTabIds, navigate]);
+  }, [tab, activeTab, navigate]);
 
   // Reduced polling since most updates come via socket events
   useAutoRefetch(fetchData, 30_000, { pollOnly: true });

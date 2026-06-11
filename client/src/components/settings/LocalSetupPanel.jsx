@@ -4,17 +4,18 @@ import toast from '../ui/Toast';
 import Banner from '../ui/Banner';
 import BrailleSpinner from '../BrailleSpinner';
 import { usePrevious } from '../../hooks/usePrevious.js';
-import { safeParseJSON } from '../../lib/genUtils.js';
+import { useInstallStream } from '../../hooks/useInstallStream.js';
 
 export default function LocalSetupPanel({ pythonPath, onPythonPathChange, onPackagesChanged }) {
   const [detecting, setDetecting] = useState(false);
   const [check, setCheck] = useState(null); // { required, installed, missing, missingPip }
   const [checking, setChecking] = useState(false);
-  const [installing, setInstalling] = useState(false);
-  const [installLog, setInstallLog] = useState([]);
+  // Pip-install SSE URL — null until the user clicks Install. The `attempt`
+  // counter makes a retry after a failed install produce a fresh URL, so the
+  // stream hook re-subscribes even when the package list is unchanged.
+  const [installUrl, setInstallUrl] = useState(null);
+  const installAttemptRef = useRef(0);
   const [creatingVenv, setCreatingVenv] = useState(false);
-  const logRef = useRef(null);
-  const installEsRef = useRef(null);
   // Decouple the input from the parent's persisted path. The VideoGen
   // consumer saves on every onPythonPathChange, so wiring the input to the
   // prop directly fires a settings PATCH + ~1-2s status re-probe per
@@ -34,11 +35,6 @@ export default function LocalSetupPanel({ pythonPath, onPythonPathChange, onPack
     clearTimeout(commitTimerRef.current);
     commitTimerRef.current = setTimeout(() => commitDraft(value), 800);
   };
-
-  // Closing the install EventSource on unmount stops setInstalling /
-  // setInstallLog calls firing on a torn-down component if the user
-  // navigates away mid pip-install.
-  useEffect(() => () => installEsRef.current?.close(), []);
 
   const refreshCheck = useCallback(async (path) => {
     if (!path) { setCheck(null); return; }
@@ -63,10 +59,33 @@ export default function LocalSetupPanel({ pythonPath, onPythonPathChange, onPack
     return () => clearTimeout(t);
   }, [pythonPath, refreshCheck]);
 
-  // Auto-scroll install log to bottom
+  // The shared install-stream hook owns the EventSource lifecycle, log
+  // accumulation (capped at the same 200 lines as before), connection-lost
+  // handling, unmount teardown, and auto-scroll.
+  const {
+    logs: installLog,
+    done: installDone,
+    error: installError,
+    streamStarted: installStarted,
+    logsEndRef,
+  } = useInstallStream(installUrl, {
+    maxLogLines: 200,
+    onComplete: () => {
+      toast.success('Packages installed');
+      refreshCheck(pythonPath);
+    },
+  });
+  const installing = installStarted && !installDone && !installError;
+
+  // Surface an install failure (error frame or dropped connection) once, then
+  // re-check so the package list reflects whatever did get installed.
+  const prevInstallError = usePrevious(installError, null);
   useEffect(() => {
-    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
-  }, [installLog]);
+    if (installError && !prevInstallError) {
+      toast.error(installError);
+      refreshCheck(pythonPath);
+    }
+  }, [installError, prevInstallError, refreshCheck, pythonPath]);
 
   // Notify the parent whenever local check transitions from "had missing
   // packages" to "all installed" — covers manual refresh, terminal installs,
@@ -102,37 +121,8 @@ export default function LocalSetupPanel({ pythonPath, onPythonPathChange, onPack
 
   const handleInstall = () => {
     if (!check?.missingPip?.length) return;
-    setInstalling(true);
-    setInstallLog([]);
-
-    const url = `/api/image-gen/setup/install?pythonPath=${encodeURIComponent(pythonPath)}&packages=${encodeURIComponent(check.missingPip.join(','))}`;
-    const es = new EventSource(url);
-    installEsRef.current = es;
-
-    es.onmessage = (e) => {
-      const event = safeParseJSON(e.data);
-      if (!event) return;
-      setInstallLog(prev => [...prev.slice(-200), event]);
-      if (event.type === 'complete') {
-        es.close();
-        installEsRef.current = null;
-        setInstalling(false);
-        toast.success('Packages installed');
-        refreshCheck(pythonPath);
-      } else if (event.type === 'error') {
-        es.close();
-        installEsRef.current = null;
-        setInstalling(false);
-        toast.error(event.message);
-        refreshCheck(pythonPath);
-      }
-    };
-
-    es.onerror = () => {
-      es.close();
-      installEsRef.current = null;
-      setInstalling(false);
-    };
+    installAttemptRef.current += 1;
+    setInstallUrl(`/api/image-gen/setup/install?pythonPath=${encodeURIComponent(pythonPath)}&packages=${encodeURIComponent(check.missingPip.join(','))}&attempt=${installAttemptRef.current}`);
   };
 
   const handleCreateVenv = async () => {
@@ -266,14 +256,14 @@ export default function LocalSetupPanel({ pythonPath, onPythonPathChange, onPack
               )}
               {(installing || installLog.length > 0) && (
                 <pre
-                  ref={logRef}
                   className="mt-3 max-h-48 overflow-y-auto text-[11px] font-mono text-gray-400 bg-black/40 border border-port-border rounded p-2 whitespace-pre-wrap"
                 >
                   {installLog.map((e, i) => (
-                    <div key={i} className={e.type === 'error' ? 'text-port-error' : e.type === 'complete' ? 'text-port-success' : ''}>
-                      {e.message}
+                    <div key={i} className={e.kind === 'error' ? 'text-port-error' : e.kind === 'success' ? 'text-port-success' : ''}>
+                      {e.text}
                     </div>
                   ))}
+                  <div ref={logsEndRef} />
                 </pre>
               )}
             </>

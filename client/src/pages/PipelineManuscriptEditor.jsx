@@ -34,7 +34,7 @@ import {
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import { useAsyncAction } from '../hooks/useAsyncAction';
-import { usePipelineManuscriptCompletenessProgress } from '../hooks/usePipelineManuscriptCompletenessProgress';
+import { usePipelineProgress } from '../hooks/usePipelineProgress';
 import { filterGenerationModels, mergeModelLists, localBackendForProvider, modelOptionLabel } from '../utils/providers';
 import useLocalModels from '../hooks/useLocalModels';
 import { locateAnchors } from '../lib/manuscriptAnchors';
@@ -49,6 +49,7 @@ import {
   savePipelineManuscriptSection, restorePipelineStageVersion,
   analyzePipelineManuscriptCompleteness, startPipelineManuscriptCompleteness,
   cancelPipelineManuscriptCompleteness, getPipelineManuscriptCompletenessStatus, getProviders,
+  pipelineManuscriptCompletenessSseUrl,
 } from '../services/api';
 
 // Stable empty array so sections that gain no comments/spans don't get a fresh
@@ -213,7 +214,7 @@ export default function PipelineManuscriptEditor() {
   // re-fetches the review (comments now carry pre-built fixes). `closed` flips
   // true when the stream ends for ANY reason, including a non-terminal death
   // (attach 404, dropped connection) where no terminal frame ever arrives.
-  const { latest: reviewLatest, closed: reviewClosed } = usePipelineManuscriptCompletenessProgress(seriesId, { enabled: reviewActive });
+  const { latest: reviewLatest, closed: reviewClosed } = usePipelineProgress(pipelineManuscriptCompletenessSseUrl, [seriesId], { enabled: reviewActive });
 
   // On mount, re-attach to an in-flight streamed run (e.g. after a reload mid-run).
   useEffect(() => {

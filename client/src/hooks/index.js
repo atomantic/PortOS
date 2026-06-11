@@ -58,13 +58,9 @@ export * from './useImageGenProgress.js';
 export * from './useImporterProgress.js';
 export * from './useInstallStream.js';
 export * from './useOpenClawStream.js';
-export * from './usePipelineAutoRunProgress.js';
-export * from './usePipelineEditorialProgress.js';
-export * from './usePipelineManuscriptCompletenessProgress.js';
-export * from './usePipelineVolumeBeatsProgress.js';
+export * from './usePipelineProgress.js';
 export * from './useSeriesEditorial.js';
 export * from './useSseProgress.js';
-export * from './useStoryStepProgress.js';
 export * from './useModelDownloadStatus.js';
 
 // === Media (annotations, completion, attachments) ===
@@ -93,6 +89,7 @@ export * from './useKeyboardHelp.js';
 export * from './useLockToggle.js';
 export * from './useScrollLock.js';
 export * from './useSwipeNav.js';
+export * from './useValidTab.js';
 
 // === Storage & persistence ===
 export * from './useLocalStorageBool.js';

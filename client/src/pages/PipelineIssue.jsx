@@ -17,10 +17,10 @@ import Modal from '../components/ui/Modal';
 import TabPills from '../components/ui/TabPills';
 import {
   getPipelineIssue, getPipelineSeries, updatePipelineIssue,
-  startPipelineAutoRunText, cancelPipelineAutoRunText,
+  startPipelineAutoRunText, cancelPipelineAutoRunText, pipelineAutoRunSseUrl,
   PIPELINE_STAGES, PIPELINE_TAB_STAGES, PIPELINE_STAGE_LABELS,
 } from '../services/api';
-import { usePipelineAutoRunProgress } from '../hooks/usePipelineAutoRunProgress';
+import { usePipelineProgress } from '../hooks/usePipelineProgress';
 import { useLockToggle } from '../hooks/useLockToggle';
 import IdeaStage from '../components/pipeline/stages/IdeaStage';
 import ProseStage from '../components/pipeline/stages/ProseStage';
@@ -101,7 +101,7 @@ export default function PipelineIssue() {
   // Close the settings modal whenever the active stage changes so it doesn't
   // reopen unexpectedly when the user returns to a previously-visited stage.
   useEffect(() => { setSettingsOpen(false); }, [stageId]);
-  const { latest, frames } = usePipelineAutoRunProgress(issueId, { enabled: autoRunActive });
+  const { latest, frames } = usePipelineProgress(pipelineAutoRunSseUrl, [issueId], { enabled: autoRunActive });
 
   useEffect(() => {
     let canceled = false;

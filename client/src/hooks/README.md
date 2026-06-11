@@ -43,12 +43,8 @@ grep -i "what you want to do" client/src/hooks/README.md
 | `useMediaJobProgress` | Live progress for a single `mediaJobQueue` job. | Subscribing to a known media-job id. |
 | `useMediaJobSse` | Imperative per-job `/{kind}-gen/:id/events` SSE; `attach()` returns a Promise that settles on the terminal frame. | POST-then-attach media render flows that await completion (ImageGen/VideoGen). |
 | `useOpenClawStream` | OpenClaw SSE chat stream. | OpenClaw file-browser chat surface only. |
-| `usePipelineAutoRunProgress` | Auto-run-text SSE for a pipeline issue. | Pipeline auto-run UI surfaces only. |
-| `usePipelineEditorialProgress` | Series editorial reader-emotion batch SSE. | Editorial Roadmap analysis UI only. |
-| `usePipelineManuscriptCompletenessProgress` | Streamed manuscript-completeness review (generate-edits pass) per-chunk SSE. | Manuscript editor review trigger only. |
-| `usePipelineVolumeBeatsProgress` | Volume beat-sheet SSE. | Volume beat-sheet UI only. |
+| `usePipelineProgress` | Id-derived runner SSE stream: builds the URL from `(urlBuilder, ids)`, connects only when every id is truthy. | Any runner SSE keyed by record ids (pipeline auto-run, editorial, manuscript completeness, volume beats, story steps). |
 | `useSeriesEditorial` | Editorial-roadmap aggregate + batch lifecycle (load, re-attach, SSE, start/cancel, reload). | Any view of the editorial roadmap (panel or Reader Map page). |
-| `useStoryStepProgress` | Generate/refine SSE for one Story Builder step. | Story Builder step generate/refine progress only. |
 
 ## Media (annotations, completion, attachments)
 
@@ -95,6 +91,7 @@ grep -i "what you want to do" client/src/hooks/README.md
 | `usePopoverPosition` | Viewport-clamped `{ left, top, width }` for a fixed-position portal popover anchored to a trigger; re-measures on open and rAF-coalesced on capture-phase scroll/resize. Returns `{ triggerRef, popoverRef, style, reposition }`; pass `anchorRef` to follow a parent-owned trigger. | Any portal-into-`<body>` menu/popover placed relative to a button (ThemeSwitcher, CollectionPickerShell) — use this instead of re-rolling the measure/flip/clamp/reflow plumbing. |
 | `useScrollLock` | Body-scroll lock with ref-count. | Modals, drawers, lightboxes. |
 | `useSwipeNav` | Horizontal swipe prev/next. | Mobile swipe between siblings. |
+| `useValidTab` | Resolve the active tab from the `:tab` URL param against a TABS list, falling back to a default on invalid/missing. | Any tabbed page whose tab lives in the URL — don't re-roll the `new Set(TABS.map(...))` guard. |
 | `useAsyncAction` | `running` state + toast-on-error. | Buttons that await an async action. |
 
 ## Storage & persistence

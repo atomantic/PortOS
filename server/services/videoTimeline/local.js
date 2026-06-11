@@ -418,15 +418,17 @@ export async function renderProject(projectId) {
   proc.on('close', async (code, signal) => {
     job.process = null;
     if (code !== 0) {
-      const cancelled = signal === 'SIGTERM' || signal === 'SIGKILL';
-      job.status = cancelled ? 'cancelled' : 'error';
-      const reason = cancelled
+      const canceled = signal === 'SIGTERM' || signal === 'SIGKILL';
+      // 'canceled' (single l) matches every other SSE emitter in the app —
+      // useSseProgress treats it as terminal.
+      job.status = canceled ? 'canceled' : 'error';
+      const reason = canceled
         ? 'Render cancelled'
         : signal ? `Killed by signal ${signal}` : `ffmpeg exit ${code}`;
       job.lastError = reason;
-      console.log(`${cancelled ? '🛑' : '❌'} Timeline render ${cancelled ? 'cancelled' : 'failed'} [${jobId.slice(0, 8)}]: ${reason}`);
+      console.log(`${canceled ? '🛑' : '❌'} Timeline render ${canceled ? 'cancelled' : 'failed'} [${jobId.slice(0, 8)}]: ${reason}`);
       await unlink(outputPath).catch(() => {});
-      broadcastSse(job, { type: cancelled ? 'cancelled' : 'error', error: reason });
+      broadcastSse(job, { type: canceled ? 'canceled' : 'error', error: reason });
       projectRenders.delete(projectId);
       closeJobAfterDelay(jobs, jobId);
       return;

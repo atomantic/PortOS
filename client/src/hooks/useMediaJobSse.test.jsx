@@ -1,38 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook } from '@testing-library/react';
 import { useMediaJobSse } from './useMediaJobSse';
-
-// jsdom has no EventSource — stand up a minimal mock that records instances
-// and lets a test drive onmessage / onerror by hand.
-class MockEventSource {
-  constructor(url) {
-    this.url = url;
-    this.onmessage = null;
-    this.onerror = null;
-    this.closed = false;
-    this.readyState = MockEventSource.OPEN;
-    MockEventSource.instances.push(this);
-  }
-
-  close() { this.closed = true; this.readyState = MockEventSource.CLOSED; }
-
-  emit(payload) { this.onmessage?.({ data: JSON.stringify(payload) }); }
-
-  emitRaw(data) { this.onmessage?.({ data }); }
-
-  // A terminal failure (non-2xx / non-event-stream response): the browser sets
-  // readyState CLOSED and will NOT auto-retry. A transient blip leaves
-  // readyState CONNECTING so the browser's built-in reconnect can recover.
-  fail(readyState = MockEventSource.CLOSED) { this.readyState = readyState; this.onerror?.(); }
-}
-MockEventSource.CONNECTING = 0;
-MockEventSource.OPEN = 1;
-MockEventSource.CLOSED = 2;
-
-const last = () => MockEventSource.instances[MockEventSource.instances.length - 1];
+import { MockEventSource, lastEventSource as last } from '../test/mockEventSource';
 
 beforeEach(() => {
-  MockEventSource.instances = [];
+  MockEventSource.reset();
   global.EventSource = MockEventSource;
 });
 

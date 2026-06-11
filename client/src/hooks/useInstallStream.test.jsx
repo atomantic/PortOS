@@ -1,36 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useInstallStream } from './useInstallStream';
-
-// jsdom has no EventSource — stand up a minimal mock that records instances
-// and lets a test drive onmessage / onerror by hand.
-class MockEventSource {
-  constructor(url) {
-    this.url = url;
-    this.onmessage = null;
-    this.onerror = null;
-    this.onopen = null;
-    this.closed = false;
-    this.readyState = MockEventSource.OPEN;
-    MockEventSource.instances.push(this);
-  }
-
-  close() { this.closed = true; this.readyState = MockEventSource.CLOSED; }
-
-  emit(payload) { this.onmessage?.({ data: JSON.stringify(payload) }); }
-
-  emitRaw(data) { this.onmessage?.({ data }); }
-
-  fail() { this.readyState = MockEventSource.CLOSED; this.onerror?.(); }
-}
-MockEventSource.CONNECTING = 0;
-MockEventSource.OPEN = 1;
-MockEventSource.CLOSED = 2;
-
-const last = () => MockEventSource.instances[MockEventSource.instances.length - 1];
+import { MockEventSource, lastEventSource as last } from '../test/mockEventSource';
 
 beforeEach(() => {
-  MockEventSource.instances = [];
+  MockEventSource.reset();
   global.EventSource = MockEventSource;
   // jsdom doesn't implement scrollIntoView; the auto-scroll effect calls it.
   Element.prototype.scrollIntoView = vi.fn();
@@ -238,5 +212,28 @@ describe('useInstallStream', () => {
     // complete forces a flush — both the buffered log and the success line land.
     expect(result.current.logs.map((e) => e.text)).toEqual(['a', 'done']);
     expect(result.current.done).toBe(true);
+  });
+
+  it('resets error/done/log state when the url changes while enabled (retry path)', () => {
+    const { result, rerender } = renderHook(
+      ({ url }) => useInstallStream(url, { enabled: true }),
+      { initialProps: { url: '/install?attempt=1' } },
+    );
+    act(() => { last().emit({ type: 'error', message: 'pip exited with code 1' }); });
+    expect(result.current.error).toBe('pip exited with code 1');
+    expect(result.current.logs).toHaveLength(1);
+
+    // A retry bumps the url (attempt counter) without toggling enabled — the
+    // new stream must start clean or `error` wedges the consumer's
+    // "installing" derivation and the old log lines leak into the new run.
+    rerender({ url: '/install?attempt=2' });
+    expect(result.current.error).toBeNull();
+    expect(result.current.done).toBe(false);
+    expect(result.current.logs).toEqual([]);
+    expect(result.current.streamStarted).toBe(true);
+
+    act(() => { last().emit({ type: 'complete', message: 'ok' }); });
+    expect(result.current.done).toBe(true);
+    expect(result.current.error).toBeNull();
   });
 });

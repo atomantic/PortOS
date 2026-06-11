@@ -20,6 +20,7 @@ import {
 import toast from '../components/ui/Toast';
 import * as api from '../services/api';
 import { formatTimecode } from '../utils/formatters';
+import { useSseProgress, isTerminalSseFrame } from '../hooks/useSseProgress';
 
 // Map project-time t (every clip contributes its trimmed duration) to the
 // (clipIndex, withinClipSec) pair the preview <video> element needs. The
@@ -405,39 +406,51 @@ export default function VideoTimelineEditor() {
     }
   };
 
-  // SSE progress wiring — opens an EventSource on the render jobId, updates
-  // the progress bar, and on 'complete' navigates to Media History focused
-  // on the new clip.
+  // SSE progress wiring — subscribes to the render jobId's event stream (via
+  // the shared useSseProgress lifecycle), updates the progress bar, and on
+  // 'complete' navigates to Media History focused on the new clip. Frame
+  // shapes come from server/services/videoTimeline/local.js
+  // (progress / complete / error / canceled).
+  const { latest: renderFrame, closed: renderStreamClosed } = useSseProgress(
+    renderJobId ? `/api/video-timeline/${renderJobId}/events` : null,
+    { enabled: !!renderJobId },
+  );
   useEffect(() => {
-    if (!renderJobId) return;
-    const es = new EventSource(`/api/video-timeline/${renderJobId}/events`);
-    es.onmessage = (ev) => {
-      const data = JSON.parse(ev.data);
-      if (data.type === 'progress') setRenderProgress(data.progress);
-      else if (data.type === 'complete') {
-        toast.success('Timeline rendered');
-        es.close();
-        setRenderJobId(null);
-        navigate(`/media/history?focus=${data.result.id}`);
-      } else if (data.type === 'error') {
-        toast.error(data.error || 'Render failed');
-        es.close();
-        setRenderJobId(null);
-      } else if (data.type === 'cancelled') {
-        toast('Render cancelled');
-        es.close();
-        setRenderJobId(null);
-        setRenderProgress(0);
-      }
-    };
-    es.onerror = () => {
-      es.close();
-      toast.error('Lost connection to render — check Media History');
+    if (!renderJobId || !renderFrame) return;
+    if (renderFrame.type === 'progress') {
+      setRenderProgress(renderFrame.progress);
+      return;
+    }
+    // A genuine terminal frame sets `latest` and `closed` in the same commit,
+    // so they're visible together here. A STALE terminal frame — the hook
+    // keeps `latest` across the disabled gap, so starting a second render
+    // briefly re-exposes the previous job's final frame — arrives with
+    // `closed === false`; without this gate it would duplicate the toast and
+    // tear down the new render's UI while ffmpeg keeps running.
+    if (!renderStreamClosed || !isTerminalSseFrame(renderFrame)) return;
+    if (renderFrame.type === 'complete') {
+      toast.success('Timeline rendered');
+      setRenderJobId(null);
+      navigate(`/media/history?focus=${renderFrame.result.id}`);
+    } else if (renderFrame.type === 'error') {
+      toast.error(renderFrame.error || 'Render failed');
+      setRenderJobId(null);
+    } else {
+      // canceled (either spelling — the hook treats both as terminal)
+      toast('Render cancelled');
       setRenderJobId(null);
       setRenderProgress(0);
-    };
-    return () => es.close();
-  }, [renderJobId, navigate]);
+    }
+  }, [renderJobId, renderFrame, renderStreamClosed, navigate]);
+  useEffect(() => {
+    // Stream ended without a terminal frame — connection lost. Terminal frames
+    // are handled (and clear renderJobId) in the frame effect above.
+    if (!renderJobId || !renderStreamClosed) return;
+    if (isTerminalSseFrame(renderFrame)) return;
+    toast.error('Lost connection to render — check Media History');
+    setRenderJobId(null);
+    setRenderProgress(0);
+  }, [renderJobId, renderStreamClosed, renderFrame]);
 
   if (loading) return <div className="text-gray-500 text-sm">Loading project…</div>;
   if (error || !project) {

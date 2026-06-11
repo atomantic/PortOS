@@ -4,7 +4,8 @@ import { Wand2, ArrowLeft } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import * as api from '../services/api';
 import socket from '../services/socket';
-import { TABS, VALID_TAB_IDS } from '../components/feature-agents/constants';
+import { TABS } from '../components/feature-agents/constants';
+import { useValidTab } from '../hooks/useValidTab';
 import OverviewTab from '../components/feature-agents/OverviewTab';
 import ConfigTab from '../components/feature-agents/ConfigTab';
 import RunsTab from '../components/feature-agents/RunsTab';
@@ -13,10 +14,10 @@ import GitTab from '../components/feature-agents/GitTab';
 import BrailleSpinner from '../components/BrailleSpinner';
 
 export default function FeatureAgentDetail() {
-  const { id, tab } = useParams();
+  const { id } = useParams();
   const navigate = useNavigate();
   const isCreate = !id;
-  const activeTab = VALID_TAB_IDS.has(tab) ? tab : 'overview';
+  const activeTab = useValidTab(TABS, 'overview');
 
   const [agent, setAgent] = useState(null);
   const [loading, setLoading] = useState(!isCreate);
