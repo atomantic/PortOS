@@ -48,6 +48,8 @@
 
 ## Changed
 
+- **[issue-1181] MeatSpace Genome upload uses the full width** — the Genome tab's "upload your data" screen no longer floats in a narrow centered column; on wider screens the drop zone and the privacy note sit side-by-side, matching the other MeatSpace tabs, and stack into a single column on phones.
+
 - **[issue-1180] Loops, Songs, Templates, and Capabilities tile across the desktop** — these four list pages no longer render a narrow centered single column that wastes desktop width and pushes items below the fold. On wider screens loops, songs, app templates, and capability rows now flow into multi-column grids so far more is visible at a glance; on phones they stack into a single column as before.
 
 - **[issue-1175] Brain Digest shows Daily and Weekly side-by-side on wide screens** — the Brain → Digest tab no longer stacks the Daily Digest above the Weekly Review in a narrow centered column; on large screens they now sit in two columns so both are visible at once, while still stacking into a single column on smaller screens.

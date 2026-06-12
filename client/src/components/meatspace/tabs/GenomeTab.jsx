@@ -353,54 +353,65 @@ export default function GenomeTab() {
   // Upload state — no genome data yet
   if (!summary?.uploaded) {
     return (
-      <div className="max-w-2xl mx-auto space-y-6">
+      <div className="space-y-6">
         <div className="text-center space-y-2">
           <Dna className="w-12 h-12 text-purple-400 mx-auto" />
           <h2 className="text-xl font-bold text-white">Genome Data</h2>
           <p className="text-gray-400">Upload your 23andMe raw data export to track health and longevity markers.</p>
         </div>
 
-        {/* Drop zone */}
-        <div
-          ref={dropRef}
-          onDrop={handleDrop}
-          onDragOver={handleDragOver}
-          onDragLeave={handleDragLeave}
-          className="border-2 border-dashed border-port-border rounded-lg p-12 text-center transition-colors hover:border-gray-500 cursor-pointer"
-          onClick={() => fileInputRef.current?.click()}
-        >
-          {uploading ? (
-            <div className="space-y-3">
-              <BrailleSpinner />
-              <p className="text-gray-400">Parsing genome data...</p>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              <Upload className="w-10 h-10 text-gray-500 mx-auto" />
-              <p className="text-gray-300">Drag and drop your 23andMe raw data file</p>
-              <p className="text-sm text-gray-500">or click to browse</p>
-              <p className="text-xs text-gray-600">Accepts .zip or .txt files from 23andMe (typically 15-25MB)</p>
-            </div>
-          )}
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".txt,.tsv,.csv,.zip"
-            className="sr-only"
-            tabIndex={-1}
-            aria-hidden="true"
-            onChange={(e) => handleFileUpload(e.target.files[0])}
-          />
-        </div>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+          {/* Drop zone */}
+          <div
+            ref={dropRef}
+            onDrop={handleDrop}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            className="border-2 border-dashed border-port-border rounded-lg p-12 text-center transition-colors hover:border-gray-500 cursor-pointer focus:outline-none focus:border-port-accent"
+            onClick={() => fileInputRef.current?.click()}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                fileInputRef.current?.click();
+              }
+            }}
+            role="button"
+            tabIndex={0}
+            aria-label="Upload your 23andMe raw data file — drag and drop or activate to browse"
+          >
+            {uploading ? (
+              <div className="space-y-3">
+                <BrailleSpinner />
+                <p className="text-gray-400">Parsing genome data...</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <Upload className="w-10 h-10 text-gray-500 mx-auto" />
+                <p className="text-gray-300">Drag and drop your 23andMe raw data file</p>
+                <p className="text-sm text-gray-500">or click to browse</p>
+                <p className="text-xs text-gray-600">Accepts .zip or .txt files from 23andMe (typically 15-25MB)</p>
+              </div>
+            )}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".txt,.tsv,.csv,.zip"
+              className="sr-only"
+              tabIndex={-1}
+              aria-hidden="true"
+              onChange={(e) => handleFileUpload(e.target.files[0])}
+            />
+          </div>
 
-        <div className="p-3 rounded bg-port-card border border-port-border text-sm text-gray-400">
-          <p className="flex items-start gap-2">
-            <AlertTriangle size={16} className="text-yellow-500 mt-0.5 shrink-0" />
-            <span>
-              Your genome data is stored locally on this server only. It is never sent to external services.
-              All analysis is performed locally using a curated list of known health markers.
-            </span>
-          </p>
+          <div className="p-3 rounded bg-port-card border border-port-border text-sm text-gray-400">
+            <p className="flex items-start gap-2">
+              <AlertTriangle size={16} className="text-yellow-500 mt-0.5 shrink-0" />
+              <span>
+                Your genome data is stored locally on this server only. It is never sent to external services.
+                All analysis is performed locally using a curated list of known health markers.
+              </span>
+            </p>
+          </div>
         </div>
       </div>
     );
