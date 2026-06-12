@@ -510,7 +510,7 @@ export default function NotesTab({ onRefresh }) {
             )}
 
             {/* Note content */}
-            <div className="flex-1 overflow-auto flex">
+            <div className="flex-1 min-h-0 overflow-auto flex">
               {/* Main content area */}
               <div className="flex-1 min-w-0">
                 {editing ? (

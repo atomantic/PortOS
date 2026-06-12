@@ -8,7 +8,7 @@ import TabPills from '../components/ui/TabPills';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
 import { sameJsonShape } from '../lib/sameJsonShape';
 
-import { TABS } from '../components/brain/constants';
+import { TABS, FULL_BLEED_TAB_IDS } from '../components/brain/constants';
 import { timeAgo } from '../utils/formatters';
 
 import InboxTab from '../components/brain/tabs/InboxTab';
@@ -26,17 +26,14 @@ import ImportTab from '../components/brain/tabs/ImportTab';
 // graph tab is actually opened.
 const BrainGraph = lazy(() => import('../components/brain/tabs/BrainGraph'));
 
-// Full-bleed tabs fill the available height and own their internal scroll, so
-// the shared content wrapper must NOT add padding or a second scrollbar for
-// them (that produced the double-scroll/clipping in issue #1177). Every other
-// tab is document-style and gets the padded, scrolling wrapper.
-const FULL_BLEED_TABS = new Set(['graph', 'daily-log', 'notes']);
-
 export default function Brain() {
   const { tab } = useParams();
   const navigate = useNavigate();
   const activeTab = tab || 'inbox';
-  const fullBleed = FULL_BLEED_TABS.has(activeTab);
+  // Full-bleed tabs own their internal scroll and fill height, so the shared
+  // wrapper must NOT add padding or a second scrollbar (issue #1177). The set
+  // is derived from the TABS registry so it can't drift from the tab list.
+  const fullBleed = FULL_BLEED_TAB_IDS.has(activeTab);
 
   // Let errors throw — `useAutoRefetch` preserves the last-good data on
   // transient failures. `silent: true` keeps the 30s poll from spamming
