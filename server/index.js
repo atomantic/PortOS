@@ -155,6 +155,7 @@ import { recoverStuckClassifications } from './services/brain.js';
 import { recoverStuckAnalyses } from './services/writersRoom/evaluator.js';
 import { recoverStuckAutoRuns } from './services/pipeline/autoRunner.js';
 import { startOrphanShellGc } from './services/importerOrphanGc.js';
+import { startImageRefsGc } from './services/imageRefsGc.js';
 import { initBridge as initBrainMemoryBridge } from './services/brainMemoryBridge.js';
 import { initDrillCache } from './services/meatspacePostDrillCache.js';
 import { createAIToolkit } from './lib/aiToolkit/index.js';
@@ -572,6 +573,9 @@ startCitySnapshotScheduler().catch(err => console.error(`❌ City snapshot sched
 // Periodically GC orphan zero-issue/zero-canon importer shells left by an
 // abandoned analyze (issue #727).
 startOrphanShellGc();
+// Periodically GC orphan staged init/reference upload images that pile up in
+// data/image-refs on every i2i/edit render and are never cleaned up (issue #1214).
+startImageRefsGc();
 // Warm the catalog user-type registry from the user-type store (Postgres as of
 // #1001; the settings.json slice under the escape hatch) before any catalog
 // request can land, so user-defined types validate + mint ids immediately on
