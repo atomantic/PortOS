@@ -377,7 +377,7 @@ export default function Loops() {
   const runningCount = loops.filter(l => l.isRunning).length;
 
   return (
-    <div className="max-w-4xl mx-auto space-y-4">
+    <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-bold text-gray-100 flex items-center gap-2">
@@ -408,7 +408,7 @@ export default function Loops() {
           <p className="text-sm">No loops yet. Create one above to get started.</p>
         </div>
       ) : (
-        <div className="space-y-2">
+        <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4 items-start">
           {loops.map(loop => (
             <LoopCard
               key={loop.id}
