@@ -162,8 +162,7 @@ export default function Songs() {
                     {song.learned
                       ? <CheckCircle2 size={16} className="text-port-success shrink-0" aria-label="Learned" />
                       : <Circle size={16} className="text-gray-600 shrink-0" aria-label="In progress" />}
-                    <span className="text-white font-medium truncate">{song.title}</span>
-                    {song.artist && <span className="text-gray-500 text-sm truncate">· {song.artist}</span>}
+                    <span className="flex-1 min-w-0 text-white font-medium truncate" title={song.title}>{song.title}</span>
                     {song.builtIn && (
                       <span className="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] uppercase tracking-wide bg-port-accent/10 text-port-accent border border-port-accent/20">
                         Built-in
@@ -171,6 +170,7 @@ export default function Songs() {
                     )}
                   </div>
                   <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-gray-500 mt-1 pl-6">
+                    {song.artist && <span className="text-gray-400">{song.artist}</span>}
                     {song.key && <span>Key: {song.key}</span>}
                     {song.tempo && <span>{song.tempo} BPM</span>}
                     {shape && <span>{shape}</span>}

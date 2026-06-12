@@ -868,13 +868,14 @@ function ReadView({ song, setField, onRefreshTemplate, refreshing, partnerSongs 
 }
 
 // Sheet-music card for the read view: the base melody plus any harmony
-// variations. With more than one part it grows a layered MIDI player — a tempo
-// control plus a checkbox per part so you can hear any combination of voices
-// (melody + bass + a harmony, the whole stack, …) sounding together, synthesized
-// in sync by createMultiScorePlayer. A pill row picks which staff is *shown*
-// (independent of what plays), and the playhead lights up on the shown staff when
-// it's one of the parts currently sounding. A single-part song keeps the simple
-// per-staff player. Returns null when there's no music anywhere.
+// variations. Every song that has music gets the layered MIDI player — a tempo
+// control plus the Staff ↔ Piano-roll (Synthesia) view toggle, synthesized in
+// sync by createMultiScorePlayer. With more than one part it also grows a
+// per-part checkbox row (hear any combination of voices) and a pill row that
+// picks which staff is *shown* (independent of what plays); the playhead lights
+// up on the shown staff when it's one of the parts currently sounding. A
+// single-part song hides those multi-part affordances but keeps the piano view.
+// Returns null when there's no music anywhere.
 function SheetMusicViewer({ baseScore, scoreParts = [] }) {
   const tabs = useMemo(() => {
     const out = [];
@@ -888,17 +889,6 @@ function SheetMusicViewer({ baseScore, scoreParts = [] }) {
   }, [baseScore, scoreParts]);
 
   if (!tabs.length) return null;
-  // Single part: keep the simple per-staff player (its own transport).
-  if (tabs.length === 1) {
-    return (
-      <section className="space-y-2">
-        <h2 className="text-sm font-semibold text-white">Sheet music</h2>
-        <div className="bg-port-card border border-port-border rounded-lg p-4 overflow-x-auto">
-          <ScoreSheet key={tabs[0].key} text={tabs[0].score} />
-        </div>
-      </section>
-    );
-  }
   return <LayeredSheetMusic tabs={tabs} />;
 }
 
@@ -909,6 +899,7 @@ function SheetMusicViewer({ baseScore, scoreParts = [] }) {
 function LayeredSheetMusic({ tabs }) {
   const uid = useId();
   const tabsKey = tabs.map((t) => t.key).join('|');
+  const multiPart = tabs.length > 1;
 
   // 'staff' = SVG sheet music; 'piano' = Synthesia-style falling-note piano roll.
   const [view, setView] = useState('staff');
@@ -1056,7 +1047,9 @@ function LayeredSheetMusic({ tabs }) {
         </div>
       </div>
 
-      {/* One checkbox per part — the mix that Play sounds. Swatch = piano color. */}
+      {/* One checkbox per part — the mix that Play sounds. Swatch = piano color.
+          A single-part song has nothing to combine, so the row is hidden. */}
+      {multiPart && (
       <fieldset className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs">
         <legend className="sr-only">Parts to play together</legend>
         <span className="text-gray-500">Layers:</span>
@@ -1078,10 +1071,13 @@ function LayeredSheetMusic({ tabs }) {
           </label>
         ))}
       </fieldset>
+      )}
 
       {view === 'staff' ? (
         <>
-          {/* Pill row picks which staff is shown (independent of what plays). */}
+          {/* Pill row picks which staff is shown (independent of what plays).
+              With a single part there's nothing to pick between, so it's hidden. */}
+          {multiPart && (
           <div className="flex flex-wrap gap-1.5">
             {tabs.map((t) => (
               <button
@@ -1095,6 +1091,7 @@ function LayeredSheetMusic({ tabs }) {
               </button>
             ))}
           </div>
+          )}
 
           <div className="bg-port-card border border-port-border rounded-lg p-4 overflow-x-auto">
             <ScoreSheet key={current.key} text={current.score} controls={false} activeNoteIndex={shownActive} />

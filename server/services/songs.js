@@ -430,6 +430,122 @@ export const SEED_500_MILES_SCORE_PARTS = [
   },
 ];
 
+// --- Traditional rounds: melodies + canonic voice stacks --------------------
+// The four built-in rounds are canons — the harmony IS the melody sung against
+// itself, each voice entering a fixed number of bars late. Rather than hand-
+// transcribe the staggered voices (which could drift from the tune), we DERIVE
+// each canon voice from the one melody string below: every voice is provably the
+// same melody, just delayed by whole-bar rests. SEED_SONGS uses these for both a
+// round's base `score` and its `scoreParts`, and migration 086 backfills the
+// parts onto installs that seeded the rounds before they carried a voice stack.
+
+// Split a lead-sheet score into its header lines (`key: value`, no bar) and its
+// music-body lines (everything containing a `|`). Blank lines are dropped.
+const splitScoreLines = (score) => {
+  const headers = [];
+  const body = [];
+  for (const raw of String(score).split('\n')) {
+    const line = raw.trim();
+    if (!line) continue;
+    if (!line.includes('|') && /^[A-Za-z]+\s*:/.test(line)) headers.push(line);
+    else body.push(line);
+  }
+  return { headers, body };
+};
+
+// A canon voice: the melody entering `delayBars` whole-bar rests late (the
+// round's staggered entry). Built from the melody so the voice can't drift from
+// the tune. `role` is free-text (`voice-2` …) — it falls after the named harmony
+// stack via harmonyPartOrder (→ 99, stable), so the View switcher lists the
+// voices in entry order after the Melody tab.
+const canonVoice = (melody, { delayBars, id, label, role }) => {
+  const { headers, body } = splitScoreLines(melody);
+  const rests = Array.from({ length: delayBars }, () => '| rw |');
+  return { id, label, role, score: [...headers, '', ...rests, ...body].join('\n') };
+};
+
+// Hey Ho Nobody Home — six bars, three 2-bar phrases. The classic 3-voice round:
+// voices enter one phrase (2 bars) apart, and the three phrases stack into the
+// full minor chord.
+const HEY_HO_MELODY = [
+  'clef: treble',
+  'key: C',
+  'time: 4/4',
+  'tempo: 76',
+  '',
+  '| G4h(Hey) D4h(ho) | G4q(no-) G4e(bo-) G4e(dy) D4h(home) |',
+  '| G4q(Meat) G4q(nor) A4q(drink) A4q(nor) | B4e(mon-) B4e(ey) B4e(have) B4e(I) A4h(none) |',
+  '| D5q(Still) C5q(I) D5q(will) C5q(be) | B4h(mer-) A4h(ry) |',
+].join('\n');
+const HEY_HO_SCORE_PARTS = [
+  canonVoice(HEY_HO_MELODY, { delayBars: 2, id: 'part-heyho-v2', label: 'Voice 2', role: 'voice-2' }),
+  canonVoice(HEY_HO_MELODY, { delayBars: 4, id: 'part-heyho-v3', label: 'Voice 3', role: 'voice-3' }),
+];
+
+// Ah Poor Bird — eight bars, four 2-bar phrases. A 4-voice round; voices enter
+// every two bars.
+const AH_POOR_BIRD_MELODY = [
+  'clef: treble',
+  'key: C',
+  'time: 4/4',
+  'tempo: 72',
+  '',
+  '| D4h(Ah) E4h(poor) | F4w(bird) |',
+  '| F4h(take) G4h(thy) | A4w(flight) |',
+  '| A4q(far) D5q(a-) D5q(bove) C5q(the) | D5h(sor-) A4q(rows) G4q(of) |',
+  '| F4h(this) E4h(sad) | D4w(night) |',
+].join('\n');
+const AH_POOR_BIRD_SCORE_PARTS = [
+  canonVoice(AH_POOR_BIRD_MELODY, { delayBars: 2, id: 'part-ahpoorbird-v2', label: 'Voice 2', role: 'voice-2' }),
+  canonVoice(AH_POOR_BIRD_MELODY, { delayBars: 4, id: 'part-ahpoorbird-v3', label: 'Voice 3', role: 'voice-3' }),
+  canonVoice(AH_POOR_BIRD_MELODY, { delayBars: 6, id: 'part-ahpoorbird-v4', label: 'Voice 4', role: 'voice-4' }),
+];
+
+// Rose Rose Rose Red — eight bars, four 2-bar phrases. A 4-voice round; voices
+// enter every two bars.
+const ROSE_MELODY = [
+  'clef: treble',
+  'key: C',
+  'time: 4/4',
+  'tempo: 76',
+  '',
+  '| D4h(Rose) C4h(rose) | D4h(rose) A3h(red) |',
+  '| D4q(Will) D4q(I) E4q(ev-) E4q(er) | F4q(see) G4q(thee) E4h(wed) |',
+  '| A4q(I) A4q(will) G4q(mar-) A4q(ry) | F4q(at) G4e(thy) F4e E4q(will) A3q(sir) |',
+  '| D4h(At) C4q(thy) E4q(will) | D4w |',
+].join('\n');
+const ROSE_SCORE_PARTS = [
+  canonVoice(ROSE_MELODY, { delayBars: 2, id: 'part-rose-v2', label: 'Voice 2', role: 'voice-2' }),
+  canonVoice(ROSE_MELODY, { delayBars: 4, id: 'part-rose-v3', label: 'Voice 3', role: 'voice-3' }),
+  canonVoice(ROSE_MELODY, { delayBars: 6, id: 'part-rose-v4', label: 'Voice 4', role: 'voice-4' }),
+];
+
+// Zum Gali Gali — the 2-bar chant stated twice. Because the chant repeats every
+// two bars, an even delay would only double the voice in unison; a ONE-bar entry
+// offsets the busy half against the resolving half so the two halves overlap
+// into harmony (a single canonic Voice 2).
+const ZUM_MELODY = [
+  'clef: treble',
+  'key: C',
+  'time: 4/4',
+  'tempo: 112',
+  '',
+  '| D4q(Zoom) D4e(gul-) E4e(ly) F4e(gul-) E4e(ly) F4e(gul-) E4e(ly) | D4q(zoom) D4e(gul-) D4e(ly) A3q(gul-) C4q(ly) |',
+  '| D4q(Zoom) D4e(gul-) E4e(ly) F4e(gul-) E4e(ly) F4e(gul-) E4e(ly) | D4q(zoom) D4e(gul-) D4e(ly) A3q(gul-) C4q(ly) |',
+].join('\n');
+const ZUM_SCORE_PARTS = [
+  canonVoice(ZUM_MELODY, { delayBars: 1, id: 'part-zum-v2', label: 'Voice 2', role: 'voice-2' }),
+];
+
+// The canonic voice stacks for the four rounds, keyed by song id. Shared by
+// SEED_SONGS (below) and migration 086 so there's ONE source — no drift.
+export const SEED_ROUND_SCORE_PARTS = {
+  'seed-hey-ho-nobody-home': HEY_HO_SCORE_PARTS,
+  'seed-ah-poor-bird': AH_POOR_BIRD_SCORE_PARTS,
+  'seed-rose-rose-rose-red': ROSE_SCORE_PARTS,
+  'seed-zum-gali-gali': ZUM_SCORE_PARTS,
+};
+
 // Seeded on first read so a fresh install opens on a worked example — the song
 // the feature was designed around. Mirrors the dirge `slow-4-4` rhythm shape
 // and the foundation-first layer ladder from songCraft.js.
@@ -552,16 +668,12 @@ export const SEED_SONGS = [
     tempo: 76,
     rhythmShapeId: 'slow-4-4',
     notation: 'A round in up to six voices (Ravenscroft\'s Pammelia, 1609). New voices enter one two-bar phrase behind the last. Scored in D with no key signature — D Dorian, B natural. Melody after Jack Campin\'s D-minor round transcription.',
-    score: [
-      'clef: treble',
-      'key: C',
-      'time: 4/4',
-      'tempo: 76',
-      '',
-      '| G4h(Hey) D4h(ho) | G4q(no-) G4e(bo-) G4e(dy) D4h(home) |',
-      '| G4q(Meat) G4q(nor) A4q(drink) A4q(nor) | B4e(mon-) B4e(ey) B4e(have) B4e(I) A4h(none) |',
-      '| D5q(Still) C5q(I) D5q(will) C5q(be) | B4h(mer-) A4h(ry) |',
-    ].join('\n'),
+    score: HEY_HO_MELODY,
+    // Canonic voice stack: the melody entering one phrase (2 bars) late per voice
+    // — the round sung against itself. Derived from HEY_HO_MELODY so it can't
+    // drift from the tune. Gives every round (not just 500 Miles) the layered
+    // player + piano-roll view in the editor.
+    scoreParts: HEY_HO_SCORE_PARTS,
     notes: 'One of the oldest English rounds. Sung with Ah Poor Bird and Rose Rose Rose Red it forms a classic three-round quodlibet — all three share one minor chord cycle and can be sung at the same time. Keep it light and lilting despite the minor key.',
     learned: false,
     sections: [
@@ -586,17 +698,10 @@ export const SEED_SONGS = [
     tempo: 72,
     rhythmShapeId: 'slow-4-4',
     notation: 'A four-phrase round (8 bars). Voices enter every two bars. The melody climbs the minor scale to a leap in the third phrase, then settles back to the tonic. Scored in D minor with no key signature (all naturals).',
-    score: [
-      'clef: treble',
-      'key: C',
-      'time: 4/4',
-      'tempo: 72',
-      '',
-      '| D4h(Ah) E4h(poor) | F4w(bird) |',
-      '| F4h(take) G4h(thy) | A4w(flight) |',
-      '| A4q(far) D5q(a-) D5q(bove) C5q(the) | D5h(sor-) A4q(rows) G4q(of) |',
-      '| F4h(this) E4h(sad) | D4w(night) |',
-    ].join('\n'),
+    score: AH_POOR_BIRD_MELODY,
+    // Canonic voice stack: the melody entering two bars late per voice. Derived
+    // from AH_POOR_BIRD_MELODY so it can't drift from the tune.
+    scoreParts: AH_POOR_BIRD_SCORE_PARTS,
     notes: 'A gentle English lament-round. Combines with Hey Ho Nobody Home and Rose Rose Rose Red as a quodlibet. Two lyric sets ship: the common "take thy flight" verse and the "Oh poor bird, why art thou…" variant.',
     learned: false,
     sections: [
@@ -622,17 +727,10 @@ export const SEED_SONGS = [
     tempo: 76,
     rhythmShapeId: 'slow-4-4',
     notation: 'A four-phrase English round (i–VII–V harmony), 8 bars. Voices enter every two bars. Scored in D minor with no key signature (all naturals).',
-    score: [
-      'clef: treble',
-      'key: C',
-      'time: 4/4',
-      'tempo: 76',
-      '',
-      '| D4h(Rose) C4h(rose) | D4h(rose) A3h(red) |',
-      '| D4q(Will) D4q(I) E4q(ev-) E4q(er) | F4q(see) G4q(thee) E4h(wed) |',
-      '| A4q(I) A4q(will) G4q(mar-) A4q(ry) | F4q(at) G4e(thy) F4e E4q(will) A3q(sir) |',
-      '| D4h(At) C4q(thy) E4q(will) | D4w |',
-    ].join('\n'),
+    score: ROSE_MELODY,
+    // Canonic voice stack: the melody entering two bars late per voice. Derived
+    // from ROSE_MELODY so it can't drift from the tune.
+    scoreParts: ROSE_SCORE_PARTS,
     notes: 'The third of the classic quodlibet trio with Hey Ho Nobody Home and Ah Poor Bird — all three stack in the same key. A favourite singing-round.',
     learned: false,
     sections: [
@@ -657,15 +755,11 @@ export const SEED_SONGS = [
     tempo: 112,
     rhythmShapeId: 'driving-4-4',
     notation: 'The refrain chant, repeated. Scored in D minor with no key signature (all naturals). Loop it as many times as you like; a second voice entering one phrase behind turns it into a round.',
-    score: [
-      'clef: treble',
-      'key: C',
-      'time: 4/4',
-      'tempo: 112',
-      '',
-      '| D4q(Zoom) D4e(gul-) E4e(ly) F4e(gul-) E4e(ly) F4e(gul-) E4e(ly) | D4q(zoom) D4e(gul-) D4e(ly) A3q(gul-) C4q(ly) |',
-      '| D4q(Zoom) D4e(gul-) E4e(ly) F4e(gul-) E4e(ly) F4e(gul-) E4e(ly) | D4q(zoom) D4e(gul-) D4e(ly) A3q(gul-) C4q(ly) |',
-    ].join('\n'),
+    score: ZUM_MELODY,
+    // Canonic Voice 2: the chant entering ONE bar late so its busy half overlaps
+    // the resolving half (an even delay would only double it in unison). Derived
+    // from ZUM_MELODY so it can't drift from the tune.
+    scoreParts: ZUM_SCORE_PARTS,
     notes: 'A simple chant on repeat — sung here as "zoom gully gully gully, zoom gully gully" (the refrain of the Israeli round Zum Gali Gali). Loop it as a driving ostinato; a second voice entering a phrase late turns it into a round. Shares the key with the English trio and rounds out the set.',
     learned: false,
     sections: [
