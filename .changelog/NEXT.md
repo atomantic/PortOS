@@ -48,6 +48,8 @@
 
 ## Changed
 
+- **[issue-1180] Loops, Songs, Templates, and Capabilities tile across the desktop** — these four list pages no longer render a narrow centered single column that wastes desktop width and pushes items below the fold. On wider screens loops, songs, app templates, and capability rows now flow into multi-column grids so far more is visible at a glance; on phones they stack into a single column as before.
+
 - **[issue-1175] Brain Digest shows Daily and Weekly side-by-side on wide screens** — the Brain → Digest tab no longer stacks the Daily Digest above the Weekly Review in a narrow centered column; on large screens they now sit in two columns so both are visible at once, while still stacking into a single column on smaller screens.
 
 - **[issue-1174] Brain Config settings use the full width on desktop** — the Brain → Config tab no longer crams its four settings cards (AI Provider, Classification, Schedule, Schedule Summary) into a narrow centered column; on wide screens they now flow into two or three columns so everything fits without scrolling, while still stacking into a single column on mobile.
