@@ -1117,11 +1117,11 @@ function ReferenceCard({ reference }) {
   const safeHref = isHttpUrl(reference.url);
   if (ttId) {
     return (
-      <div className="w-full sm:w-[325px] space-y-2">
+      <div className="w-full sm:w-80 lg:w-96 space-y-2">
         <iframe
           title={title}
           src={tiktokEmbedSrc(ttId)}
-          className="w-full h-[575px] rounded-lg border border-port-border bg-port-card"
+          className="w-full aspect-[9/16] max-h-[80vh] rounded-lg border border-port-border bg-port-card"
           loading="lazy"
           allow="encrypted-media; fullscreen"
           referrerPolicy="strict-origin-when-cross-origin"
@@ -1144,7 +1144,7 @@ function ReferenceCard({ reference }) {
   return (
     <Wrapper
       {...wrapperProps}
-      className={`w-full sm:w-[325px] bg-port-card border border-port-border rounded-lg p-4 ${safeHref ? 'hover:border-port-accent/50 transition-colors' : ''}`}
+      className={`w-full sm:w-80 lg:w-96 bg-port-card border border-port-border rounded-lg p-4 ${safeHref ? 'hover:border-port-accent/50 transition-colors' : ''}`}
     >
       <div className="flex items-center gap-2 text-white">
         <ExternalLink size={15} className="text-port-accent shrink-0" />

@@ -270,7 +270,7 @@ export default function Review() {
 
   return (
     <div className="h-full overflow-auto p-4 md:p-6">
-      <div className="max-w-6xl mx-auto space-y-3">
+      <div className="space-y-3">
         {/* Header */}
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
           <h2 className="text-xl font-bold text-white flex items-center gap-2">
@@ -440,7 +440,9 @@ export default function Review() {
           </section>
         )}
 
-        {/* Detailed sections */}
+        {/* Detailed sections — tiled two-up on wide screens so the per-type
+            queues use the full width instead of stacking in one column. */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 items-start">
         {['alert', 'cos', 'todo', 'briefing'].map(type => {
           const typeItems = grouped[type];
           if (!typeItems?.length) return null;
@@ -474,6 +476,7 @@ export default function Review() {
             </section>
           );
         })}
+        </div>
 
         {items.length === 0 && (
           <div className="text-center py-12 text-gray-500">
