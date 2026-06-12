@@ -1142,7 +1142,11 @@ export default function Layout() {
             location.pathname === '/shell' ||
             location.pathname.startsWith('/shell/') ||
             location.pathname.startsWith('/city') ||
-            /^\/apps\/[^/]+/.test(location.pathname);
+            // Only the App DETAIL editor (/apps/:id) is full-width and owns its
+            // own scroll; the Add App form (/apps/create) is a plain scrolling
+            // page and must stay OUT of full-width, or its content clips below
+            // the fold (it has no internal overflow-y-auto container).
+            /^\/apps\/(?!create$)[^/]+/.test(location.pathname);
           return (
             <main id="main-content" className={`flex-1 min-h-0 print:overflow-visible print:min-h-0 ${isFullWidth ? 'relative overflow-hidden' : 'overflow-auto p-4 md:p-6'}`}>
               <Outlet />
