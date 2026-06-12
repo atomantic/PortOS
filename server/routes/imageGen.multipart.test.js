@@ -233,9 +233,15 @@ describe('POST /api/image-gen/generate — multipart reference-image packing', (
     expect(enqueueJob).toHaveBeenCalledTimes(1);
     const params = enqueueJob.mock.calls[0][0].params;
     const { dir, name, ext } = parsePath(params.initImagePath);
-    expect(dir).toBe(imagesSandbox);
+    // Init uploads stage into PATHS.imageRefs (sibling of the gallery), NOT
+    // PATHS.images — landing in the gallery dir surfaces them as duplicate
+    // "(no prompt)" cards because listGallery() enumerates every .png there.
+    expect(dir).toBe(refsSandbox);
     expect(name.startsWith('init-')).toBe(true);
     expect(ext).toBe('.png');
+    // And no file leaked into the gallery dir.
+    const imagesDirContents = await readdir(imagesSandbox);
+    expect(imagesDirContents).toHaveLength(0);
   });
 
   // The editOnly gate must fire for a text-only submission to an edit-only

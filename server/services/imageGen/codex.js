@@ -24,7 +24,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { randomUUID } from 'crypto';
-import { ensureDir, PATHS, resolveGalleryImage } from '../../lib/fileUtils.js';
+import { ensureDir, PATHS, resolveImageInputPath } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
 import { imageGenEvents } from '../imageGenEvents.js';
@@ -149,9 +149,11 @@ export async function generateImage({
 
   // Defense-in-depth: HTTP routes already resolve basenames to absolute paths,
   // but re-anchor here so any future caller can't attach an arbitrary local
-  // file via the codex CLI's `-i` flag. Mirrors imageGen/local.js.
+  // file via the codex CLI's `-i` flag. Mirrors imageGen/local.js — accepts
+  // the gallery, the image-refs upload dir (where init uploads are staged), and
+  // shipped visual templates.
   const validInitImagePath = (initImagePath && typeof initImagePath === 'string')
-    ? resolveGalleryImage(initImagePath)
+    ? resolveImageInputPath(initImagePath)
     : null;
 
   // An empty prompt is fine when editing an init image (the attached image is

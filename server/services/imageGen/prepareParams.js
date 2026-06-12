@@ -114,15 +114,19 @@ export async function prepareGenerateParams({ data, files, referenceImageFields 
     }
   }
 
-  if (initUpload) await ensureDir(PATHS.images);
-  if (referenceUploads.length) await ensureDir(PATHS.imageRefs);
+  if (initUpload || referenceUploads.length) await ensureDir(PATHS.imageRefs);
   if (initUpload) {
     // Trust the validated mimetype from the fileFilter — picking the ext
     // off the original filename can mismatch the bytes (e.g. HEIC saved
     // as .jpg). MIME_TO_EXT only contains formats the fileFilter accepts.
     const ext = MIME_TO_EXT[(initUpload.mimetype || '').toLowerCase()] || '.png';
     const initFilename = `init-${randomUUID()}${ext}`;
-    initImagePath = join(PATHS.images, initFilename);
+    // Stage into PATHS.imageRefs (sibling of the gallery), NOT PATHS.images —
+    // listGallery() enumerates every .png in PATHS.images, so an init upload
+    // landing there surfaces as a duplicate "(no prompt)" card in the gallery
+    // on every i2i/edit render. The runner re-anchors init paths through
+    // resolveImageInputPath, which accepts the refs dir.
+    initImagePath = join(PATHS.imageRefs, initFilename);
     await copyFile(initUpload.path, initImagePath);
     uploadedTempPaths.push(initUpload.path);
   } else if (data.initImageFile) {
