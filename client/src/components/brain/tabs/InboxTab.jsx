@@ -234,10 +234,24 @@ export default function InboxTab({ onRefresh, settings }) {
     );
   }
 
+  // Compact per-status overview rendered in the desktop rail so the page reads
+  // as a dashboard rather than a centered document.
+  const overviewStats = [
+    { label: 'Needs review', value: needsReviewEntries.length, className: 'text-port-warning' },
+    { label: 'Classifying', value: classifyingEntries.length, className: 'text-port-accent' },
+    { label: 'Filed', value: filedEntries.length, className: 'text-port-success' },
+    { label: 'Done', value: doneEntries.length, className: 'text-gray-400' },
+    { label: 'Errors', value: errorEntries.length, className: 'text-port-error' }
+  ];
+
   return (
-    <div className="flex flex-col h-full max-w-3xl mx-auto">
-      {/* Capture input */}
-      <form onSubmit={handleSubmit} className="mb-6">
+    // Full-bleed dashboard grid: capture form spans the top, filed/done entries
+    // fill the main column, and a persistent stats + Needs-Review rail sits on
+    // the right at xl+. Below xl it collapses to a single column (mobile flow:
+    // form → Needs Review → entries).
+    <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-4 content-start">
+      {/* Capture input — spans both columns */}
+      <form onSubmit={handleSubmit} className="xl:col-span-2">
         <div className="flex gap-2">
           <input
             ref={inputRef}
@@ -265,55 +279,228 @@ export default function InboxTab({ onRefresh, settings }) {
         </p>
       </form>
 
-      {/* Classifying section */}
-      {classifyingEntries.length > 0 && (
-        <div className="mb-4">
-          <div className="flex items-center gap-2 text-port-accent font-medium mb-2">
-            <Brain size={16} className="animate-pulse" />
-            Classifying ({classifyingEntries.length})
+      {/* Needs Review rail — right column on xl+, first after the form on mobile.
+          Capped to the viewport and given its own scroll on xl+ so a long
+          Needs-Review queue stays reachable instead of growing past the fold
+          (the very problem #1173 set out to fix). */}
+      <div className="flex flex-col gap-4 xl:col-start-2 xl:row-start-2 xl:sticky xl:top-0 xl:self-start xl:max-h-[calc(100vh-7rem)] xl:overflow-y-auto">
+        {/* Overview stats — desktop rail only (counts also live in the page header) */}
+        <div className="hidden xl:block p-3 bg-port-card border border-port-border rounded-lg">
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-sm font-medium text-gray-300">Overview</span>
+            <button
+              type="button"
+              onClick={() => { fetchInbox(); onRefresh?.(); }}
+              className="p-1 text-gray-400 hover:text-white transition-colors"
+              title="Refresh inbox"
+              aria-label="Refresh inbox"
+            >
+              <RefreshCw size={14} />
+            </button>
           </div>
-          <div className="space-y-2">
-            {classifyingEntries.map(entry => (
-              <div
-                key={entry.id}
-                className="p-3 bg-port-card border border-port-accent/30 rounded-lg"
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <p className="text-white flex-1">{entry.capturedText}</p>
-                  <div className="flex items-center gap-2">
-                    <BrailleSpinner />
-                    <span className="text-xs text-gray-500 whitespace-nowrap">
-                      {timeAgo(entry.capturedAt)}
-                    </span>
-                  </div>
-                </div>
-                <p className="text-xs text-port-accent mt-1">AI is classifying this thought...</p>
+          <div className="grid grid-cols-2 gap-2">
+            {overviewStats.map(stat => (
+              <div key={stat.label} className="flex items-baseline justify-between gap-2">
+                <span className="text-xs text-gray-500">{stat.label}</span>
+                <span className={`text-sm font-semibold ${stat.className}`}>{stat.value}</span>
               </div>
             ))}
           </div>
         </div>
-      )}
 
-      {/* Needs Review section */}
-      {needsReviewEntries.length > 0 && (
-        <div className="mb-4">
-          <button
-            onClick={() => setShowNeedsReview(!showNeedsReview)}
-            className="flex items-center gap-2 text-port-warning font-medium mb-2"
-          >
-            {showNeedsReview ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-            <AlertCircle size={16} />
-            Needs Review ({needsReviewEntries.length})
-          </button>
+        {/* Needs Review section */}
+        {needsReviewEntries.length > 0 ? (
+          <div>
+            <button
+              onClick={() => setShowNeedsReview(!showNeedsReview)}
+              className="flex items-center gap-2 text-port-warning font-medium mb-2"
+            >
+              {showNeedsReview ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+              <AlertCircle size={16} />
+              Needs Review ({needsReviewEntries.length})
+            </button>
 
-          {showNeedsReview && (
+            {showNeedsReview && (
+              <div className="space-y-2">
+                {needsReviewEntries.map(entry => (
+                  <div
+                    key={entry.id}
+                    className="p-3 bg-port-card border border-port-warning/30 rounded-lg"
+                  >
+                    <div className="flex items-start justify-between gap-2 mb-2">
+                      {editingId === entry.id ? (
+                        <div className="flex-1 flex gap-2">
+                          <textarea
+                            value={editText}
+                            onChange={(e) => setEditText(e.target.value)}
+                            className="flex-1 px-2 py-1 bg-port-bg border border-port-border rounded text-white text-sm resize-none"
+                            rows={3}
+                            autoFocus
+                          />
+                          <div className="flex flex-col gap-1">
+                            <button
+                              onClick={() => handleSaveEdit(entry.id)}
+                              className="p-1 text-port-success hover:bg-port-success/20 rounded transition-colors"
+                              title="Save changes"
+                            >
+                              <Save size={14} />
+                            </button>
+                            <button
+                              onClick={handleCancelEdit}
+                              className="p-1 text-gray-400 hover:bg-port-border/50 rounded transition-colors"
+                              title="Cancel editing"
+                            >
+                              <X size={14} />
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <p className="text-white flex-1">{entry.capturedText}</p>
+                          <div className="flex gap-1">
+                            <button
+                              onClick={() => handleEdit(entry)}
+                              className="p-1 text-gray-400 hover:text-white transition-colors"
+                              title="Edit text"
+                            >
+                              <Edit2 size={14} />
+                            </button>
+                            <button
+                              onClick={() => setConfirmingDeleteId(entry.id)}
+                              className="p-1 text-gray-400 hover:text-port-error transition-colors"
+                              title="Delete entry"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        </>
+                      )}
+                      <span className="text-xs text-gray-500 whitespace-nowrap">
+                        {timeAgo(entry.capturedAt)}
+                      </span>
+                    </div>
+
+                    {entry.classification?.cleanedUp && entry.classification.cleanedUp !== entry.capturedText && (
+                      <p className="text-sm text-gray-300 mb-2 pl-3 border-l-2 border-port-accent/30">
+                        {entry.classification.cleanedUp}
+                      </p>
+                    )}
+
+                    {entry.classification?.thoughts && (
+                      <p className="text-xs text-port-accent/70 italic mb-2">
+                        {entry.classification.thoughts}
+                      </p>
+                    )}
+
+                    {entry.classification?.reasons && (
+                      <p className="text-xs text-gray-500 mb-2">
+                        {entry.classification.reasons.join(' • ')}
+                      </p>
+                    )}
+
+                    {confirmingDeleteId === entry.id ? (
+                      <InlineConfirmRow
+                        question="Delete this entry? This cannot be undone."
+                        confirmTitle="Confirm delete"
+                        cancelTitle="Cancel delete"
+                        onConfirm={() => handleDelete(entry.id)}
+                        onCancel={() => setConfirmingDeleteId(null)}
+                      />
+                    ) : editingId !== entry.id && (
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-xs text-gray-500">Route to:</span>
+                        {['people', 'projects', 'ideas', 'admin', 'memories'].map(dest => {
+                          const destInfo = DESTINATIONS[dest];
+                          const Icon = destInfo.icon;
+                          return (
+                            <button
+                              key={dest}
+                              onClick={() => handleResolve(entry.id, dest)}
+                              className={`flex items-center gap-1 px-2 py-1 text-xs rounded border ${destInfo.color} hover:opacity-80 transition-opacity`}
+                              title={`Route to ${destInfo.label}`}
+                            >
+                              <Icon size={12} />
+                              {destInfo.label}
+                            </button>
+                          );
+                        })}
+                        <button
+                          onClick={() => handleMarkDone(entry.id)}
+                          className="flex items-center gap-1 px-2 py-1 text-xs rounded border border-port-border text-gray-400 hover:text-port-success transition-colors"
+                          title="Mark as done without filing"
+                        >
+                          <CheckCheck size={12} />
+                          Done
+                        </button>
+                        <button
+                          onClick={() => handleRetry(entry.id)}
+                          disabled={retryingId === entry.id}
+                          className={`flex items-center gap-1 px-2 py-1 text-xs rounded border border-port-border transition-colors ${retryingId === entry.id ? 'text-gray-600 cursor-not-allowed' : 'text-gray-400 hover:text-white'}`}
+                          title="Retry AI classification"
+                        >
+                          <RefreshCw size={12} className={retryingId === entry.id ? 'animate-spin' : ''} />
+                          {retryingId === entry.id ? 'Classifying...' : 'Retry AI'}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="hidden xl:flex items-center gap-2 p-3 bg-port-card border border-port-border rounded-lg text-sm text-gray-500">
+            <CheckCircle size={16} className="text-port-success" />
+            Nothing needs review.
+          </div>
+        )}
+      </div>
+
+      {/* Main entries column */}
+      <div className="flex flex-col min-w-0 xl:col-start-1 xl:row-start-2">
+        {/* Classifying section */}
+        {classifyingEntries.length > 0 && (
+          <div className="mb-4">
+            <div className="flex items-center gap-2 text-port-accent font-medium mb-2">
+              <Brain size={16} className="animate-pulse" />
+              Classifying ({classifyingEntries.length})
+            </div>
             <div className="space-y-2">
-              {needsReviewEntries.map(entry => (
+              {classifyingEntries.map(entry => (
                 <div
                   key={entry.id}
-                  className="p-3 bg-port-card border border-port-warning/30 rounded-lg"
+                  className="p-3 bg-port-card border border-port-accent/30 rounded-lg"
                 >
-                  <div className="flex items-start justify-between gap-2 mb-2">
+                  <div className="flex items-start justify-between gap-2">
+                    <p className="text-white flex-1">{entry.capturedText}</p>
+                    <div className="flex items-center gap-2">
+                      <BrailleSpinner />
+                      <span className="text-xs text-gray-500 whitespace-nowrap">
+                        {timeAgo(entry.capturedAt)}
+                      </span>
+                    </div>
+                  </div>
+                  <p className="text-xs text-port-accent mt-1">AI is classifying this thought...</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Error entries */}
+        {errorEntries.length > 0 && (
+          <div className="mb-4">
+            <div className="text-port-error font-medium mb-2 flex items-center gap-2">
+              <AlertCircle size={16} />
+              Errors ({errorEntries.length})
+            </div>
+            <div className="space-y-2">
+              {errorEntries.map(entry => (
+                <div
+                  key={entry.id}
+                  className="p-3 bg-port-card border border-port-error/30 rounded-lg"
+                >
+                  <div className="flex items-start justify-between gap-2 mb-1">
                     {editingId === entry.id ? (
                       <div className="flex-1 flex gap-2">
                         <textarea
@@ -361,29 +548,8 @@ export default function InboxTab({ onRefresh, settings }) {
                         </div>
                       </>
                     )}
-                    <span className="text-xs text-gray-500 whitespace-nowrap">
-                      {timeAgo(entry.capturedAt)}
-                    </span>
                   </div>
-
-                  {entry.classification?.cleanedUp && entry.classification.cleanedUp !== entry.capturedText && (
-                    <p className="text-sm text-gray-300 mb-2 pl-3 border-l-2 border-port-accent/30">
-                      {entry.classification.cleanedUp}
-                    </p>
-                  )}
-
-                  {entry.classification?.thoughts && (
-                    <p className="text-xs text-port-accent/70 italic mb-2">
-                      {entry.classification.thoughts}
-                    </p>
-                  )}
-
-                  {entry.classification?.reasons && (
-                    <p className="text-xs text-gray-500 mb-2">
-                      {entry.classification.reasons.join(' • ')}
-                    </p>
-                  )}
-
+                  <p className="text-xs text-port-error mb-2">{entry.error?.message || 'Unknown error'}</p>
                   {confirmingDeleteId === entry.id ? (
                     <InlineConfirmRow
                       question="Delete this entry? This cannot be undone."
@@ -393,100 +559,68 @@ export default function InboxTab({ onRefresh, settings }) {
                       onCancel={() => setConfirmingDeleteId(null)}
                     />
                   ) : editingId !== entry.id && (
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-xs text-gray-500">Route to:</span>
-                      {['people', 'projects', 'ideas', 'admin', 'memories'].map(dest => {
-                        const destInfo = DESTINATIONS[dest];
-                        const Icon = destInfo.icon;
-                        return (
-                          <button
-                            key={dest}
-                            onClick={() => handleResolve(entry.id, dest)}
-                            className={`flex items-center gap-1 px-2 py-1 text-xs rounded border ${destInfo.color} hover:opacity-80 transition-opacity`}
-                            title={`Route to ${destInfo.label}`}
-                          >
-                            <Icon size={12} />
-                            {destInfo.label}
-                          </button>
-                        );
-                      })}
-                      <button
-                        onClick={() => handleMarkDone(entry.id)}
-                        className="flex items-center gap-1 px-2 py-1 text-xs rounded border border-port-border text-gray-400 hover:text-port-success transition-colors"
-                        title="Mark as done without filing"
-                      >
-                        <CheckCheck size={12} />
-                        Done
-                      </button>
-                      <button
-                        onClick={() => handleRetry(entry.id)}
-                        disabled={retryingId === entry.id}
-                        className={`flex items-center gap-1 px-2 py-1 text-xs rounded border border-port-border transition-colors ${retryingId === entry.id ? 'text-gray-600 cursor-not-allowed' : 'text-gray-400 hover:text-white'}`}
-                        title="Retry AI classification"
-                      >
-                        <RefreshCw size={12} className={retryingId === entry.id ? 'animate-spin' : ''} />
-                        {retryingId === entry.id ? 'Classifying...' : 'Retry AI'}
-                      </button>
-                    </div>
+                    <button
+                      onClick={() => handleRetry(entry.id)}
+                      disabled={retryingId === entry.id}
+                      className={`flex items-center gap-1 px-2 py-1 text-xs rounded border border-port-border transition-colors ${retryingId === entry.id ? 'text-gray-600 cursor-not-allowed' : 'text-gray-400 hover:text-white'}`}
+                      title="Retry AI classification"
+                    >
+                      <RefreshCw size={12} className={retryingId === entry.id ? 'animate-spin' : ''} />
+                      {retryingId === entry.id ? 'Classifying...' : 'Retry'}
+                    </button>
                   )}
                 </div>
               ))}
             </div>
-          )}
-        </div>
-      )}
-
-      {/* Error entries */}
-      {errorEntries.length > 0 && (
-        <div className="mb-4">
-          <div className="text-port-error font-medium mb-2 flex items-center gap-2">
-            <AlertCircle size={16} />
-            Errors ({errorEntries.length})
           </div>
-          <div className="space-y-2">
-            {errorEntries.map(entry => (
-              <div
-                key={entry.id}
-                className="p-3 bg-port-card border border-port-error/30 rounded-lg"
-              >
-                <div className="flex items-start justify-between gap-2 mb-1">
-                  {editingId === entry.id ? (
-                    <div className="flex-1 flex gap-2">
-                      <textarea
-                        value={editText}
-                        onChange={(e) => setEditText(e.target.value)}
-                        className="flex-1 px-2 py-1 bg-port-bg border border-port-border rounded text-white text-sm resize-none"
-                        rows={3}
-                        autoFocus
-                      />
-                      <div className="flex flex-col gap-1">
-                        <button
-                          onClick={() => handleSaveEdit(entry.id)}
-                          className="p-1 text-port-success hover:bg-port-success/20 rounded transition-colors"
-                          title="Save changes"
-                        >
-                          <Save size={14} />
-                        </button>
-                        <button
-                          onClick={handleCancelEdit}
-                          className="p-1 text-gray-400 hover:bg-port-border/50 rounded transition-colors"
-                          title="Cancel editing"
-                        >
-                          <X size={14} />
-                        </button>
+        )}
+
+        {/* Filed entries */}
+        <div>
+          <button
+            onClick={() => setShowFiled(!showFiled)}
+            className="flex items-center gap-2 text-port-success font-medium mb-2"
+          >
+            {showFiled ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+            <CheckCircle size={16} />
+            Filed ({filedEntries.length})
+          </button>
+
+          {showFiled && (
+            <div className="space-y-2">
+              {filedEntries.map(entry => {
+                const destInfo = DESTINATIONS[entry.classification?.destination || 'unknown'];
+                const DestIcon = destInfo.icon;
+                const confidence = entry.classification?.confidence || 0;
+                const isCorrected = entry.status === 'corrected';
+
+                return (
+                  <div
+                    key={entry.id}
+                    className={`p-3 bg-port-card border rounded-lg ${
+                      isCorrected ? 'border-blue-500/30' : 'border-port-border'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-2 mb-2">
+                      <div className="flex-1">
+                        <p className="text-white">{entry.capturedText}</p>
+                        {entry.classification?.cleanedUp && entry.classification.cleanedUp !== entry.capturedText && (
+                          <p className="text-sm text-gray-300 mt-1 pl-3 border-l-2 border-port-accent/30">
+                            {entry.classification.cleanedUp}
+                          </p>
+                        )}
+                        {entry.classification?.title && (
+                          <p className="text-sm text-gray-400 mt-1">
+                            → {entry.classification.title}
+                          </p>
+                        )}
+                        {entry.classification?.thoughts && (
+                          <p className="text-xs text-port-accent/70 italic mt-1">
+                            {entry.classification.thoughts}
+                          </p>
+                        )}
                       </div>
-                    </div>
-                  ) : (
-                    <>
-                      <p className="text-white flex-1">{entry.capturedText}</p>
                       <div className="flex gap-1">
-                        <button
-                          onClick={() => handleEdit(entry)}
-                          className="p-1 text-gray-400 hover:text-white transition-colors"
-                          title="Edit text"
-                        >
-                          <Edit2 size={14} />
-                        </button>
                         <button
                           onClick={() => setConfirmingDeleteId(entry.id)}
                           className="p-1 text-gray-400 hover:text-port-error transition-colors"
@@ -494,241 +628,8 @@ export default function InboxTab({ onRefresh, settings }) {
                         >
                           <Trash2 size={14} />
                         </button>
-                      </div>
-                    </>
-                  )}
-                </div>
-                <p className="text-xs text-port-error mb-2">{entry.error?.message || 'Unknown error'}</p>
-                {confirmingDeleteId === entry.id ? (
-                  <InlineConfirmRow
-                    question="Delete this entry? This cannot be undone."
-                    confirmTitle="Confirm delete"
-                    cancelTitle="Cancel delete"
-                    onConfirm={() => handleDelete(entry.id)}
-                    onCancel={() => setConfirmingDeleteId(null)}
-                  />
-                ) : editingId !== entry.id && (
-                  <button
-                    onClick={() => handleRetry(entry.id)}
-                    disabled={retryingId === entry.id}
-                    className={`flex items-center gap-1 px-2 py-1 text-xs rounded border border-port-border transition-colors ${retryingId === entry.id ? 'text-gray-600 cursor-not-allowed' : 'text-gray-400 hover:text-white'}`}
-                    title="Retry AI classification"
-                  >
-                    <RefreshCw size={12} className={retryingId === entry.id ? 'animate-spin' : ''} />
-                    {retryingId === entry.id ? 'Classifying...' : 'Retry'}
-                  </button>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Filed entries */}
-      <div>
-        <button
-          onClick={() => setShowFiled(!showFiled)}
-          className="flex items-center gap-2 text-port-success font-medium mb-2"
-        >
-          {showFiled ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-          <CheckCircle size={16} />
-          Filed ({filedEntries.length})
-        </button>
-
-        {showFiled && (
-          <div className="space-y-2">
-            {filedEntries.map(entry => {
-              const destInfo = DESTINATIONS[entry.classification?.destination || 'unknown'];
-              const DestIcon = destInfo.icon;
-              const confidence = entry.classification?.confidence || 0;
-              const isCorrected = entry.status === 'corrected';
-
-              return (
-                <div
-                  key={entry.id}
-                  className={`p-3 bg-port-card border rounded-lg ${
-                    isCorrected ? 'border-blue-500/30' : 'border-port-border'
-                  }`}
-                >
-                  <div className="flex items-start justify-between gap-2 mb-2">
-                    <div className="flex-1">
-                      <p className="text-white">{entry.capturedText}</p>
-                      {entry.classification?.cleanedUp && entry.classification.cleanedUp !== entry.capturedText && (
-                        <p className="text-sm text-gray-300 mt-1 pl-3 border-l-2 border-port-accent/30">
-                          {entry.classification.cleanedUp}
-                        </p>
-                      )}
-                      {entry.classification?.title && (
-                        <p className="text-sm text-gray-400 mt-1">
-                          → {entry.classification.title}
-                        </p>
-                      )}
-                      {entry.classification?.thoughts && (
-                        <p className="text-xs text-port-accent/70 italic mt-1">
-                          {entry.classification.thoughts}
-                        </p>
-                      )}
-                    </div>
-                    <div className="flex gap-1">
-                      <button
-                        onClick={() => setConfirmingDeleteId(entry.id)}
-                        className="p-1 text-gray-400 hover:text-port-error transition-colors"
-                        title="Delete entry"
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                      <span className="text-xs text-gray-500 whitespace-nowrap">
-                        {timeAgo(entry.capturedAt)}
-                      </span>
-                    </div>
-                  </div>
-
-                  {confirmingDeleteId === entry.id && (
-                    <InlineConfirmRow
-                      question="Delete this entry? This cannot be undone."
-                      className="mb-2"
-                      confirmTitle="Confirm delete"
-                      cancelTitle="Cancel delete"
-                      onConfirm={() => handleDelete(entry.id)}
-                      onCancel={() => setConfirmingDeleteId(null)}
-                    />
-                  )}
-
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className={`flex items-center gap-1 px-2 py-1 text-xs rounded border ${destInfo.color}`}>
-                      <DestIcon size={12} />
-                      {destInfo.label}
-                    </span>
-
-                    <span className={`text-xs ${getConfidenceColor(confidence)}`}>
-                      {Math.round(confidence * 100)}%
-                    </span>
-
-                    {isCorrected && (
-                      <span className="text-xs text-blue-400">
-                        (corrected from {entry.correction?.previousDestination})
-                      </span>
-                    )}
-
-                    {entry.filed?.destinationId && (
-                      <button
-                        onClick={() => {
-                          // Navigate to the record in memory tab
-                          window.location.href = `/brain/memory?type=${entry.filed.destination}&id=${entry.filed.destinationId}`;
-                        }}
-                        className="flex items-center gap-1 px-2 py-1 text-xs rounded border border-port-border text-gray-400 hover:text-white transition-colors"
-                        title="View in Memory"
-                      >
-                        <ExternalLink size={12} />
-                        View
-                      </button>
-                    )}
-
-                    {/* Done button */}
-                    <button
-                      onClick={() => handleMarkDone(entry.id)}
-                      className="flex items-center gap-1 px-2 py-1 text-xs rounded border border-port-border text-gray-400 hover:text-port-success transition-colors"
-                      title="Mark as done"
-                    >
-                      <CheckCheck size={12} />
-                      Done
-                    </button>
-
-                    {/* Fix button */}
-                    {fixingId === entry.id ? (
-                      <div className="flex items-center gap-2">
-                        <select
-                          value={fixDestination}
-                          onChange={(e) => setFixDestination(e.target.value)}
-                          className="px-2 py-1 text-xs bg-port-bg border border-port-border rounded text-white"
-                          title="Select new destination"
-                        >
-                          <option value="">Select...</option>
-                          {['people', 'projects', 'ideas', 'admin', 'memories']
-                            .filter(d => d !== entry.filed?.destination)
-                            .map(d => (
-                              <option key={d} value={d}>{DESTINATIONS[d].label}</option>
-                            ))}
-                        </select>
-                        <button
-                          onClick={() => handleFix(entry.id)}
-                          className="px-2 py-1 text-xs rounded bg-port-accent/20 text-port-accent hover:bg-port-accent/30"
-                          title="Move to selected destination"
-                        >
-                          Move
-                        </button>
-                        <button
-                          onClick={() => { setFixingId(null); setFixDestination(''); }}
-                          className="px-2 py-1 text-xs text-gray-400 hover:text-white"
-                          title="Cancel fix"
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    ) : (
-                      <button
-                        onClick={() => setFixingId(entry.id)}
-                        className="flex items-center gap-1 px-2 py-1 text-xs rounded border border-port-border text-gray-400 hover:text-white transition-colors"
-                        title="Fix/move to different destination"
-                      >
-                        <Edit2 size={12} />
-                        Fix
-                      </button>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-
-            {filedEntries.length === 0 && (
-              <p className="text-gray-500 text-sm">No filed entries yet. Start capturing thoughts above.</p>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* Done entries */}
-      {doneEntries.length > 0 && (
-        <div className="mt-4">
-          <button
-            onClick={() => setShowDone(!showDone)}
-            className="flex items-center gap-2 text-gray-400 font-medium mb-2"
-          >
-            {showDone ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-            <CheckCheck size={16} />
-            Done ({doneEntries.length})
-          </button>
-
-          {showDone && (
-            <div className="space-y-2">
-              {doneEntries.map(entry => {
-                const destInfo = DESTINATIONS[entry.classification?.destination || 'unknown'];
-                const DestIcon = destInfo.icon;
-
-                return (
-                  <div
-                    key={entry.id}
-                    className="p-3 bg-port-card border border-port-border/50 rounded-lg opacity-60"
-                  >
-                    <div className="flex items-start justify-between gap-2 mb-2">
-                      <div className="flex-1">
-                        <p className="text-gray-400 line-through">{entry.capturedText}</p>
-                        {entry.classification?.title && (
-                          <p className="text-sm text-gray-500 mt-1">
-                            → {entry.classification.title}
-                          </p>
-                        )}
-                      </div>
-                      <div className="flex gap-1">
-                        <button
-                          onClick={() => setConfirmingDeleteId(entry.id)}
-                          className="p-1 text-gray-500 hover:text-port-error transition-colors"
-                          title="Delete entry"
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                        <span className="text-xs text-gray-600 whitespace-nowrap">
-                          {timeAgo(entry.doneAt || entry.capturedAt)}
+                        <span className="text-xs text-gray-500 whitespace-nowrap">
+                          {timeAgo(entry.capturedAt)}
                         </span>
                       </div>
                     </div>
@@ -744,31 +645,182 @@ export default function InboxTab({ onRefresh, settings }) {
                       />
                     )}
 
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <span className={`flex items-center gap-1 px-2 py-1 text-xs rounded border ${destInfo.color}`}>
                         <DestIcon size={12} />
                         {destInfo.label}
                       </span>
+
+                      <span className={`text-xs ${getConfidenceColor(confidence)}`}>
+                        {Math.round(confidence * 100)}%
+                      </span>
+
+                      {isCorrected && (
+                        <span className="text-xs text-blue-400">
+                          (corrected from {entry.correction?.previousDestination})
+                        </span>
+                      )}
+
                       {entry.filed?.destinationId && (
                         <button
                           onClick={() => {
+                            // Navigate to the record in memory tab
                             window.location.href = `/brain/memory?type=${entry.filed.destination}&id=${entry.filed.destinationId}`;
                           }}
-                          className="flex items-center gap-1 px-2 py-1 text-xs rounded border border-port-border text-gray-500 hover:text-white transition-colors"
+                          className="flex items-center gap-1 px-2 py-1 text-xs rounded border border-port-border text-gray-400 hover:text-white transition-colors"
                           title="View in Memory"
                         >
                           <ExternalLink size={12} />
                           View
                         </button>
                       )}
+
+                      {/* Done button */}
+                      <button
+                        onClick={() => handleMarkDone(entry.id)}
+                        className="flex items-center gap-1 px-2 py-1 text-xs rounded border border-port-border text-gray-400 hover:text-port-success transition-colors"
+                        title="Mark as done"
+                      >
+                        <CheckCheck size={12} />
+                        Done
+                      </button>
+
+                      {/* Fix button */}
+                      {fixingId === entry.id ? (
+                        <div className="flex items-center gap-2">
+                          <select
+                            value={fixDestination}
+                            onChange={(e) => setFixDestination(e.target.value)}
+                            className="px-2 py-1 text-xs bg-port-bg border border-port-border rounded text-white"
+                            title="Select new destination"
+                          >
+                            <option value="">Select...</option>
+                            {['people', 'projects', 'ideas', 'admin', 'memories']
+                              .filter(d => d !== entry.filed?.destination)
+                              .map(d => (
+                                <option key={d} value={d}>{DESTINATIONS[d].label}</option>
+                              ))}
+                          </select>
+                          <button
+                            onClick={() => handleFix(entry.id)}
+                            className="px-2 py-1 text-xs rounded bg-port-accent/20 text-port-accent hover:bg-port-accent/30"
+                            title="Move to selected destination"
+                          >
+                            Move
+                          </button>
+                          <button
+                            onClick={() => { setFixingId(null); setFixDestination(''); }}
+                            className="px-2 py-1 text-xs text-gray-400 hover:text-white"
+                            title="Cancel fix"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => setFixingId(entry.id)}
+                          className="flex items-center gap-1 px-2 py-1 text-xs rounded border border-port-border text-gray-400 hover:text-white transition-colors"
+                          title="Fix/move to different destination"
+                        >
+                          <Edit2 size={12} />
+                          Fix
+                        </button>
+                      )}
                     </div>
                   </div>
                 );
               })}
+
+              {filedEntries.length === 0 && (
+                <p className="text-gray-500 text-sm">No filed entries yet. Start capturing thoughts above.</p>
+              )}
             </div>
           )}
         </div>
-      )}
+
+        {/* Done entries */}
+        {doneEntries.length > 0 && (
+          <div className="mt-4">
+            <button
+              onClick={() => setShowDone(!showDone)}
+              className="flex items-center gap-2 text-gray-400 font-medium mb-2"
+            >
+              {showDone ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+              <CheckCheck size={16} />
+              Done ({doneEntries.length})
+            </button>
+
+            {showDone && (
+              <div className="space-y-2">
+                {doneEntries.map(entry => {
+                  const destInfo = DESTINATIONS[entry.classification?.destination || 'unknown'];
+                  const DestIcon = destInfo.icon;
+
+                  return (
+                    <div
+                      key={entry.id}
+                      className="p-3 bg-port-card border border-port-border/50 rounded-lg opacity-60"
+                    >
+                      <div className="flex items-start justify-between gap-2 mb-2">
+                        <div className="flex-1">
+                          <p className="text-gray-400 line-through">{entry.capturedText}</p>
+                          {entry.classification?.title && (
+                            <p className="text-sm text-gray-500 mt-1">
+                              → {entry.classification.title}
+                            </p>
+                          )}
+                        </div>
+                        <div className="flex gap-1">
+                          <button
+                            onClick={() => setConfirmingDeleteId(entry.id)}
+                            className="p-1 text-gray-500 hover:text-port-error transition-colors"
+                            title="Delete entry"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                          <span className="text-xs text-gray-600 whitespace-nowrap">
+                            {timeAgo(entry.doneAt || entry.capturedAt)}
+                          </span>
+                        </div>
+                      </div>
+
+                      {confirmingDeleteId === entry.id && (
+                        <InlineConfirmRow
+                          question="Delete this entry? This cannot be undone."
+                          className="mb-2"
+                          confirmTitle="Confirm delete"
+                          cancelTitle="Cancel delete"
+                          onConfirm={() => handleDelete(entry.id)}
+                          onCancel={() => setConfirmingDeleteId(null)}
+                        />
+                      )}
+
+                      <div className="flex items-center gap-2">
+                        <span className={`flex items-center gap-1 px-2 py-1 text-xs rounded border ${destInfo.color}`}>
+                          <DestIcon size={12} />
+                          {destInfo.label}
+                        </span>
+                        {entry.filed?.destinationId && (
+                          <button
+                            onClick={() => {
+                              window.location.href = `/brain/memory?type=${entry.filed.destination}&id=${entry.filed.destinationId}`;
+                            }}
+                            className="flex items-center gap-1 px-2 py-1 text-xs rounded border border-port-border text-gray-500 hover:text-white transition-colors"
+                            title="View in Memory"
+                          >
+                            <ExternalLink size={12} />
+                            View
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
