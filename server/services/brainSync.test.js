@@ -1,7 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+// Hoisted so the vi.mock factory (also hoisted) can reference it without a TDZ error.
+const { brainEvents } = vi.hoisted(() => {
+  const { EventEmitter } = require('events');
+  return { brainEvents: new EventEmitter() };
+});
+
 vi.mock('./brainStorage.js', () => ({
   applyRemoteRecord: vi.fn(),
+  brainEvents,
   BRAIN_ENTITY_TYPES: ['people', 'projects', 'ideas', 'admin', 'memories', 'links', 'buckets', 'journals', 'inbox'],
 }));
 
@@ -134,6 +141,40 @@ describe('brainSync', () => {
     );
     expect(result.deleted).toBe(1);
     expect(result.inserted).toBe(0);
+  });
+
+  it('emits a local-only sync:applied signal carrying applied {type,id}s (issue #1080)', async () => {
+    applyRemoteRecord.mockResolvedValue({ applied: true });
+    const seen = [];
+    const listener = (payload) => seen.push(payload);
+    brainEvents.on('sync:applied', listener);
+
+    await applyRemoteChanges([
+      { op: 'create', type: 'people', id: 'p1', record: { name: 'A', updatedAt: '2026-01-01T00:00:00.000Z' } },
+      { op: 'update', type: 'ideas', id: 'i1', record: { title: 'B', updatedAt: '2026-01-01T00:00:00.000Z' } },
+    ]);
+
+    brainEvents.off('sync:applied', listener);
+    expect(seen).toHaveLength(1);
+    // Carries only {type,id} — the bridge re-reads canonical state itself.
+    expect(seen[0].records).toEqual([
+      { type: 'people', id: 'p1' },
+      { type: 'ideas', id: 'i1' },
+    ]);
+  });
+
+  it('does NOT emit sync:applied when every change is rejected (no relay batch)', async () => {
+    applyRemoteRecord.mockResolvedValue({ applied: false, reason: 'local_newer' });
+    const seen = [];
+    const listener = (payload) => seen.push(payload);
+    brainEvents.on('sync:applied', listener);
+
+    await applyRemoteChanges([
+      { op: 'update', type: 'people', id: 'p1', record: { name: 'Old', updatedAt: '2020-01-01T00:00:00.000Z' } },
+    ]);
+
+    brainEvents.off('sync:applied', listener);
+    expect(seen).toHaveLength(0);
   });
 
   it('handles mixed operations correctly', async () => {

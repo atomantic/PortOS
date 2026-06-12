@@ -270,6 +270,9 @@ async function reconnect() {
  */
 async function healthCheck() {
   if (!bot) return;
+  // Piggyback expired-checkin cleanup on the existing health-check cadence
+  // rather than adding a separate timer.
+  cleanExpiredCheckins();
   await bot.getMe().catch(async (err) => {
     console.error(`📱 Telegram: health check failed — ${err.message}`);
     isConnected = false;
@@ -472,7 +475,7 @@ async function handleGoalsCommand(msg) {
 
   const lines = ['<b>🎯 Active Goals</b>\n'];
   for (const goal of activeGoals) {
-    const progress = goal.progress || 0;
+    const progress = goal.progress ?? 0;
     const filled = Math.round(progress / 10);
     const bar = '█'.repeat(filled) + '░'.repeat(10 - filled);
     const velocity = goal.velocity?.percentPerMonth
@@ -531,7 +534,7 @@ async function handleCheckinCommand(msg) {
 
   if (!targetGoal) return;
 
-  const question = `How's progress on "<b>${escapeHtml(targetGoal.title)}</b>"? (currently ${targetGoal.progress || 0}%)`;
+  const question = `How's progress on "<b>${escapeHtml(targetGoal.title)}</b>"? (currently ${targetGoal.progress ?? 0}%)`;
   pendingCheckins.set(chatId, {
     question,
     goalId: targetGoal.id,
@@ -596,7 +599,7 @@ export async function sendCheckin(goalId) {
 
   if (!targetGoal) return;
 
-  const question = `How's progress on "<b>${escapeHtml(targetGoal.title)}</b>"? (currently ${targetGoal.progress || 0}%)`;
+  const question = `How's progress on "<b>${escapeHtml(targetGoal.title)}</b>"? (currently ${targetGoal.progress ?? 0}%)`;
   pendingCheckins.set(authorizedChatId, {
     question,
     goalId: targetGoal.id,

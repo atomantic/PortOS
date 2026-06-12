@@ -91,8 +91,7 @@ export default function SystemHealthPage() {
       draft.diskCritical !== t.diskCritical);
 
   return (
-    <div className="h-full overflow-auto p-4 md:p-6">
-      <div className="max-w-5xl mx-auto space-y-4">
+    <div className="max-w-5xl mx-auto space-y-4">
         <div className="flex items-center justify-between gap-3">
           <h2 className="text-xl font-bold text-white flex items-center gap-2">
             <ServerCog size={20} />
@@ -205,7 +204,6 @@ export default function SystemHealthPage() {
             </button>
           </div>
         </section>
-      </div>
     </div>
   );
 }

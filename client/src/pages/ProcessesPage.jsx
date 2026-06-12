@@ -3,6 +3,7 @@ import { Save } from 'lucide-react';
 import ProcessesTab from '../components/apps/tabs/ProcessesTab';
 import toast from '../components/ui/Toast';
 import * as api from '../services/api';
+import { executeCommand } from '../services/api';
 
 export function ProcessesPage() {
   const [managedProcessNames, setManagedProcessNames] = useState(new Set());
@@ -27,16 +28,12 @@ export function ProcessesPage() {
 
   const handlePm2Save = async () => {
     setSaving(true);
-    // /api/commands/execute returns 202 { commandId, status: 'started' } and
-    // runs asynchronously — treat a returned commandId as a successful queue.
-    const res = await fetch('/api/commands/execute', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ command: 'pm2 save' })
-    }).catch(() => null);
-    const body = res ? await res.json().catch(() => null) : null;
+    // executeCommand returns { commandId, status: 'started' } on success.
+    // silent: true — this handler owns the error UI (toast.error below);
+    // without it the request() helper would also toast, double-toasting.
+    const result = await executeCommand('pm2 save', undefined, { silent: true }).catch(() => null);
     setSaving(false);
-    if (res?.ok && body?.commandId) {
+    if (result?.commandId) {
       toast.success('PM2 save queued');
     } else {
       toast.error('Failed to save PM2 process list');

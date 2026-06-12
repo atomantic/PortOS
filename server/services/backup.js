@@ -394,7 +394,7 @@ export async function generateManifest(snapshotDataDir, manifestPath, pgDumpPath
     files
   };
 
-  await writeFile(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8');
+  await atomicWrite(manifestPath, manifest);
   console.log(`💾 Backup manifest: ${manifest.fileCount} files`);
   return manifest;
 }

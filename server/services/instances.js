@@ -16,6 +16,7 @@ import { DEFAULT_PEER_PORT } from '../lib/ports.js';
 import { peerBaseUrl } from '../lib/peerUrl.js';
 import { peerFetch } from '../lib/peerHttpClient.js';
 import { getSelfHost } from '../lib/peerSelfHost.js';
+import { autoSubscribePeerToAllRecords } from './sharing/recordEvents.js';
 
 const INSTANCES_FILE = dataPath('instances.json');
 const PROBE_TIMEOUT_MS = 5000;
@@ -388,23 +389,21 @@ export async function updatePeer(id, updates) {
   // Backfill-subscribe every local record of any kind whose category just
   // flipped on. Fire-and-forget — `autoSubscribePeerToAllRecords` is
   // idempotent + per-record-error tolerant, and we don't want to block the
-  // PATCH response on a slow peer's initial-push round-trip. Dynamic import
-  // dodges a static cycle (peerSync.js statically imports getPeers from us).
+  // PATCH response on a slow peer's initial-push round-trip. Goes through the
+  // recordEvents subscription adapter (peerSync statically imports getPeers
+  // from us, so importing it back would close a cycle). Per-kind catch so a
+  // transient failure in one kind's backfill (e.g. universe) doesn't abort
+  // the loop and leave the peer with no series subscriptions either; the next
+  // category-toggle PATCH or peer-online event re-fires any kind that didn't
+  // land.
   if (turnedOnKinds.length > 0 && backfillPeerInstanceId) {
-    import('./sharing/peerSync.js').then(async ({ autoSubscribePeerToAllRecords }) => {
-      // Per-kind try/catch so a transient failure in one kind's backfill
-      // (e.g. universe) doesn't abort the loop and leave the peer with no
-      // series subscriptions either. Each kind is best-effort + logged
-      // independently; the next category-toggle PATCH or peer-online
-      // event re-fires the backfill for any kind that didn't land.
+    (async () => {
       for (const kind of turnedOnKinds) {
         await autoSubscribePeerToAllRecords(backfillPeerInstanceId, kind).catch((err) => {
           console.log(`⚠️ peer: backfill-subscribe ${kind} after category toggle failed: ${err.message}`);
         });
       }
-    }).catch((err) => {
-      console.log(`⚠️ peer: backfill-subscribe after category toggle failed: ${err.message}`);
-    });
+    })();
   }
   // Mirror the category change back to the peer so sync is bidirectional.
   // Fire-and-forget, but SERIALIZED per peer (see enqueueReciprocalSync): two
@@ -737,6 +736,24 @@ export async function connectPeer(id) {
 // toward peer B only makes US pull B's C. For B to pull OUR C, B must enable C
 // toward US. `requestReciprocalSync` asks B to do exactly that; the peer side
 // is `applyReciprocalSync`, invoked by the POST /sync-categories route.
+//
+// SEMANTICS — full mirror, NOT enable-only (resolved, issue #1094). A peer's
+// announced keys are applied as an authoritative overlay onto our existing map
+// (`{ ...prev, ...sanitized }`) — announced `false` values are authoritative
+// (they DISABLE), while categories the peer omits are preserved untouched. So a
+// peer sending `C:false` DISABLES C on our record for that peer even when we had
+// independently enabled C toward them. This is intentional, not a bug:
+//   - The 'Make mutual' UI deliberately pushes the sender's *current* set
+//     (including its disables) so a previously-offline / one-directional peer
+//     converges to the sender's view in one round-trip.
+//   - It's the recovery path for clearing a stale enabled category after a peer
+//     was offline during a disable (the all-false / offline-disable test below).
+// Treating sync categories as a symmetric mirror (rather than two strictly
+// independent per-direction switches) is the chosen model. If a future change
+// wants per-direction-independent semantics, 'Make mutual' must grow a separate
+// explicit-disable path so reciprocation never clobbers an independent enable —
+// don't quietly switch this to enable-only, which would regress the two paths
+// above. The full-mirror behavior is pinned by tests in instances.test.js.
 
 // Keep only the keys DEFAULT_SYNC_CATEGORIES defines, coerced to booleans, so a
 // peer can never inject unknown/garbage category flags onto our peer record.
@@ -787,13 +804,13 @@ export async function applyReciprocalSync(instanceId, categories) {
   // Mirror updatePeer's backfill-subscribe so a reciprocally-enabled
   // per-record category (universe/pipeline) pushes our existing records too.
   if (changed && turnedOnKinds.length > 0 && backfillInstanceId) {
-    import('./sharing/peerSync.js').then(async ({ autoSubscribePeerToAllRecords }) => {
+    (async () => {
       for (const kind of turnedOnKinds) {
         await autoSubscribePeerToAllRecords(backfillInstanceId, kind).catch((err) => {
           console.log(`⚠️ peer: reciprocal backfill-subscribe ${kind} failed: ${err.message}`);
         });
       }
-    }).catch((err) => console.log(`⚠️ peer: reciprocal backfill-subscribe failed: ${err.message}`));
+    })();
   }
   if (changed) console.log(`🔁 Reciprocal sync applied for peer ${peer.name}: ${Object.keys(sanitized).filter(k => sanitized[k]).join(',') || 'none'}`);
   return { changed, peer };

@@ -43,6 +43,22 @@ describe('diffWords', () => {
     expect(newRuns).toHaveLength(1);
   });
 
+  it('keeps a localized edit granular in a text far past the cap size', () => {
+    const words = Array.from({ length: 6000 }, (_, i) => `w${i}`);
+    const oldStr = words.join(' ');
+    const changed = words.slice();
+    changed[3000] = 'REPLACED';
+    const newStr = changed.join(' ');
+    const { tooLarge, oldRuns, newRuns } = diffWords(oldStr, newStr);
+    // 6000×6000 words would blow the cap; prefix/suffix trim reduces it to the
+    // one differing token, so the diff stays word-granular.
+    expect(tooLarge).toBe(false);
+    expect(oldRuns.filter((r) => r.changed).map((r) => r.text)).toEqual(['w3000']);
+    expect(newRuns.filter((r) => r.changed).map((r) => r.text)).toEqual(['REPLACED']);
+    expect(oldRuns.map((r) => r.text).join('')).toBe(oldStr);
+    expect(newRuns.map((r) => r.text).join('')).toBe(newStr);
+  });
+
   it('stays under the cap when one side is short even if the other is long', () => {
     const long = Array.from({ length: 5000 }, (_, i) => `w${i}`).join(' ');
     expect(diffWords(long, 'x').tooLarge).toBe(false);

@@ -9,9 +9,9 @@
  */
 
 import { Router } from 'express';
-import { spawn } from 'child_process';
 import { existsSync } from 'fs';
 import * as brainService from '../services/brain.js';
+import { openFolderInSystemExplorer } from '../lib/openFolder.js';
 import { getProviderById } from '../services/providers.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
@@ -37,6 +37,7 @@ import {
   bucketReorderSchema,
   brainSyncQuerySchema,
   brainSyncPushSchema,
+  brainBridgeSyncSchema,
   dailyLogSettingsSchema
 } from '../lib/brainValidation.js';
 import * as githubCloner from '../services/githubCloner.js';
@@ -71,8 +72,10 @@ router.post('/capture', asyncHandler(async (req, res) => {
  */
 router.get('/inbox', asyncHandler(async (req, res) => {
   const data = validateRequest(inboxQuerySchema, req.query);
-  const entries = await brainService.getInboxLog(data);
-  const counts = await brainService.getInboxLogCounts();
+  const [entries, counts] = await Promise.all([
+    brainService.getInboxLog(data),
+    brainService.getInboxLogCounts(),
+  ]);
   res.json({ entries, counts });
 }));
 
@@ -779,24 +782,7 @@ router.post('/links/:id/open-folder', asyncHandler(async (req, res) => {
     });
   }
 
-  // Cross-platform folder open command
-  const platform = process.platform;
-  let cmd, args;
-
-  if (platform === 'darwin') {
-    cmd = 'open';
-    args = [link.localPath];
-  } else if (platform === 'win32') {
-    cmd = 'explorer';
-    args = [link.localPath];
-  } else {
-    cmd = 'xdg-open';
-    args = [link.localPath];
-  }
-
-  spawn(cmd, args, { detached: true, stdio: 'ignore', windowsHide: true }).unref();
-  console.log(`📂 Opened folder: ${link.localPath}`);
-
+  openFolderInSystemExplorer(link.localPath);
   res.json({ message: 'Folder opened', path: link.localPath });
 }));
 
@@ -878,14 +864,7 @@ router.get('/buckets', asyncHandler(async (req, res) => {
  */
 router.post('/buckets', asyncHandler(async (req, res) => {
   const { name, color, icon } = validateRequest(bucketInputSchema, req.body);
-  const existing = await brainService.getBuckets();
-  const nextOrder = existing.reduce((max, b) => Math.max(max, b.order ?? 0), -1) + 1;
-  const bucket = await brainService.createBucket({
-    name,
-    color: color || 'accent',
-    icon: icon || '',
-    order: nextOrder
-  });
+  const bucket = await brainService.createBucketAppended({ name, color, icon });
   console.log(`🗂️ Created bucket: ${bucket.id} (${bucket.name})`);
   res.status(201).json(bucket);
 }));
@@ -930,18 +909,9 @@ router.delete('/buckets/:id', asyncHandler(async (req, res) => {
     throw new ServerError('Bucket not found', { status: 404, code: 'NOT_FOUND' });
   }
 
-  const links = await brainService.getLinks();
-  let unassigned = 0;
-  for (const link of links) {
-    if (link.bucketId === req.params.id) {
-      await brainService.updateLink(link.id, { bucketId: null });
-      unassigned++;
-    }
-  }
-
-  await brainService.deleteBucket(req.params.id);
-  console.log(`🗂️ Deleted bucket: ${req.params.id} (unassigned ${unassigned} links)`);
-  res.json({ deleted: true, unassigned });
+  const result = await brainService.deleteBucketAndUnlinkChildren(req.params.id);
+  console.log(`🗂️ Deleted bucket: ${req.params.id} (unassigned ${result.unassigned} links)`);
+  res.json(result);
 }));
 
 // =============================================================================
@@ -963,12 +933,16 @@ router.get('/graph', asyncHandler(async (req, res) => {
 
 /**
  * POST /api/brain/bridge-sync
- * Sync all brain data to CoS memory system (generates embeddings)
+ * Sync all brain data to CoS memory system (generates embeddings).
+ * Body: { refresh?: boolean } — refresh:true re-embeds already-mapped records
+ * to heal memory entries that diverged before the per-record sync:applied
+ * signal existed (issue #1080).
  * (Renamed from /sync to avoid conflict with federation sync)
  */
 router.post('/bridge-sync', asyncHandler(async (req, res) => {
-  const stats = await syncAllBrainData();
-  console.log(`🧠🔗 Brain bridge sync complete: ${stats.synced} synced, ${stats.skipped} skipped, ${stats.errors} errors`);
+  const { refresh } = validateRequest(brainBridgeSyncSchema, req.body ?? {});
+  const stats = await syncAllBrainData({ refresh });
+  console.log(`🧠🔗 Brain bridge sync complete${refresh ? ' (refresh)' : ''}: ${stats.synced} synced, ${stats.skipped} skipped, ${stats.archived} archived, ${stats.errors} errors`);
   res.json(stats);
 }));
 

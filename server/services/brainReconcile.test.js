@@ -1,11 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+// Hoisted so the vi.mock factory (also hoisted) can reference it without a TDZ error.
+const { brainEvents } = vi.hoisted(() => {
+  const { EventEmitter } = require('events');
+  return { brainEvents: new EventEmitter() };
+});
+
 // brainStorage is the data layer; mock it so the reconcile logic is tested in
 // isolation (matching the inline-copy / mock style used across sync tests).
 vi.mock('./brainStorage.js', () => ({
   BRAIN_ENTITY_TYPES: ['people', 'projects', 'ideas', 'admin', 'memories', 'links', 'buckets', 'journals', 'inbox'],
   getRawRecords: vi.fn(),
   applyRemoteRecord: vi.fn(),
+  brainEvents,
 }));
 vi.mock('./brainSyncLog.js', () => ({
   appendChanges: vi.fn().mockResolvedValue([]),
@@ -143,6 +150,41 @@ describe('applyBrainSnapshot', () => {
     expect(brainSyncLog.appendChanges).toHaveBeenCalledTimes(1);
     const relayed = brainSyncLog.appendChanges.mock.calls[0][0];
     expect(relayed.map(r => r.id)).toEqual(['x']);
+  });
+
+  it('emits a local-only sync:applied signal for reconciled records (issue #1080)', async () => {
+    brainStorage.applyRemoteRecord
+      .mockResolvedValueOnce({ applied: true })
+      .mockResolvedValueOnce({ applied: false, reason: 'local_newer' });
+    const seen = [];
+    const listener = (payload) => seen.push(payload);
+    brainEvents.on('sync:applied', listener);
+
+    await applyBrainSnapshot({
+      records: { links: {
+        x: { id: 'x', updatedAt: '2026-01-02T00:00:00.000Z', title: 'X' },
+        y: { id: 'y', updatedAt: '2026-01-01T00:00:00.000Z', title: 'Y' },
+      } },
+    });
+
+    brainEvents.off('sync:applied', listener);
+    expect(seen).toHaveLength(1);
+    // Only the APPLIED record is signalled (the rejected LWW op is not).
+    expect(seen[0].records).toEqual([{ type: 'links', id: 'x' }]);
+  });
+
+  it('does NOT emit sync:applied when nothing applies', async () => {
+    brainStorage.applyRemoteRecord.mockResolvedValue({ applied: false, reason: 'local_newer' });
+    const seen = [];
+    const listener = (payload) => seen.push(payload);
+    brainEvents.on('sync:applied', listener);
+
+    await applyBrainSnapshot({
+      records: { links: { y: { id: 'y', updatedAt: '2020-01-01T00:00:00.000Z', title: 'Y' } } },
+    });
+
+    brainEvents.off('sync:applied', listener);
+    expect(seen).toHaveLength(0);
   });
 
   it('skips records missing updatedAt (no LWW clock) and unknown types', async () => {

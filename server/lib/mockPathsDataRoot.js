@@ -108,12 +108,19 @@ export function mockNoPeers(actual = {}, overrides = {}) {
 }
 
 /**
- * Build a `sharing/peerSync.js` mock that disables create-time peer fan-out.
+ * Build a `sharing/peerSync.js` mock that disables peer fan-out for suites
+ * that load the peer-sync module graph (directly or via sharing/index.js).
  *
- * This is intentionally separate from `mockNoPeers`: stubbing `getPeers → []`
- * prevents live registry reads once `peerSync.js` loads, while this helper
- * prevents record-creating tests from loading the peer-sync module graph at
- * all through the fire-and-forget dynamic import.
+ * NOTE: record CREATE paths no longer need this — they reach peer-sync only
+ * through the `recordEvents.js` subscription adapter, a silent no-op until
+ * peerSync.js registers itself at module load. A suite that never loads
+ * peerSync gets no fan-out without mocking anything. Keep this helper for
+ * suites that DO import peerSync (its module-load registration would
+ * otherwise wire live fan-out into the adapter).
+ *
+ * Intentionally separate from `mockNoPeers`: stubbing `getPeers → []`
+ * prevents live registry reads once `peerSync.js` loads; this helper prevents
+ * the real module (and its registration side effect) from loading at all.
  */
 export function mockNoPeerSync(actual = {}, overrides = {}) {
   return {

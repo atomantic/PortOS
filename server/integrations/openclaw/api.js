@@ -109,7 +109,11 @@ function normalizeStatusPayload(payload, config, reachable, errorMessage) {
     label: pickFirst(payload?.label, payload?.name, config.label, 'OpenClaw Runtime'),
     defaultSession: pickFirst(payload?.defaultSession, payload?.defaultSessionId, config.defaultSession, null) || null,
     message: errorMessage || pickFirst(payload?.message, payload?.statusMessage, null) || null,
-    runtime: payload && typeof payload === 'object' ? payload : null
+    // Allowlist runtime fields — the upstream payload may echo internal fields
+    // (or reflected tokens), so never pass the raw object through to the client.
+    runtime: payload && typeof payload === 'object'
+      ? { sessionsCount: payload.sessionsCount ?? null }
+      : null
   };
 }
 

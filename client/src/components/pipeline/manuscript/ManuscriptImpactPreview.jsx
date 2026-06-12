@@ -1,21 +1,29 @@
 /**
  * Whole-manuscript impact preview — a modal that shows, per affected section, a
- * before/after side-by-side diff of what accepting the currently-selected
- * editorial fixes would do. Per-card diffs don't convey cumulative impact; this
- * applies every selected edit (via the same `selectedEditsFor` logic Accept
- * uses) to a COPY of each section client-side. Preview only — accept still goes
- * through the authoritative server route.
+ * before/after diff of what accepting the currently-selected editorial fixes
+ * would do, with an "Accept all" that applies them right here. Per-card diffs
+ * don't convey cumulative impact; this applies every selected edit (via the
+ * same `selectedEditsFor` logic Accept uses) to a COPY of each section
+ * client-side. Accept all walks the same per-comment accept route the cards
+ * use — one comment at a time, sequentially, so each accept re-anchors against
+ * the freshest server-side text — reporting (and leaving in the preview) any
+ * note whose edits the server rejects.
  *
- * Diffs per changed section (never one giant concatenation) so the diff cell
- * cap isn't tripped on a long manuscript.
+ * Sections are diffed with the hunked `HunkDiff` (line-level blocks, unchanged
+ * context collapsed, word-level highlights inside each changed block) — a whole
+ * section is thousands of words, so a flat word diff would either drown the
+ * change in unchanged text or trip the diff cell cap and render everything
+ * red/green. Diffs per changed section, never one giant concatenation.
  */
 
-import { useMemo } from 'react';
-import { X } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Check, Loader2, X } from 'lucide-react';
 import Modal from '../../ui/Modal';
-import SideBySideDiff from '../../ui/SideBySideDiff';
+import HunkDiff from '../../ui/HunkDiff';
+import toast from '../../ui/Toast';
 import { planManuscriptEdits } from '../../../lib/applyManuscriptEdits';
 import { selectedEditsFor } from './ManuscriptCommentCard';
+import { acceptPipelineManuscriptFix } from '../../../services/api';
 import { STAGE_LABEL } from './constants';
 
 // Gather every selected edit across the given comments, grouped by the section
@@ -35,7 +43,16 @@ function editsBySectionKey(comments, fixDrafts) {
   return map;
 }
 
-export default function ManuscriptImpactPreview({ open, onClose, sections, comments, fixDrafts }) {
+export default function ManuscriptImpactPreview({ open, onClose, seriesId, sections, comments, fixDrafts, onAccepted }) {
+  // null when idle, { done, total } while the accept-all pass runs.
+  const [acceptState, setAcceptState] = useState(null);
+
+  // The accept-all pass awaits one network round-trip per note; if the user
+  // closes the preview mid-batch, late callbacks must not fire into a torn-down
+  // parent. Never reset to true (handles dev-mode double-mount cleanly).
+  const mountedRef = useRef(true);
+  useEffect(() => () => { mountedRef.current = false; }, []);
+
   const changed = useMemo(() => {
     if (!open) return [];
     const edits = editsBySectionKey(comments, fixDrafts);
@@ -54,6 +71,50 @@ export default function ManuscriptImpactPreview({ open, onClose, sections, comme
 
   const totalEdits = changed.reduce((n, c) => n + c.count, 0);
 
+  // Accept every previewed note, one comment per request (the accept route is
+  // per-comment, and sequential application lets each accept anchor against the
+  // text the previous one produced). Failures are reported and stay open — the
+  // preview re-derives from comment status, so applied sections drop out live.
+  const acceptAll = async () => {
+    // Only accept edits that landed in a PREVIEWED section. `changed` drops any
+    // edit whose section isn't in the current `sections` (e.g. a fix for a
+    // different manuscript stage) or that produced no visible change — so
+    // building targets from every comment would apply unseen edits and make the
+    // "Accept all N edits" count lie. Restrict to the same section keys the
+    // modal rendered, filtering at the edit level (a comment may span stages).
+    const previewedKeys = new Set(changed.map((c) => `${c.section.issueId}:${c.section.stageId}`));
+    const targets = comments
+      .map((c) => ({
+        comment: c,
+        edits: selectedEditsFor(c, fixDrafts[c.id])
+          .filter((e) => previewedKeys.has(`${e.issueId || ''}:${e.stageId || ''}`))
+          .map(({ selected: _s, ...edit }) => edit),
+      }))
+      .filter((t) => t.edits.length);
+    if (!targets.length) return;
+    setAcceptState({ done: 0, total: targets.length });
+    const errors = [];
+    for (const target of targets) {
+      const result = await acceptPipelineManuscriptFix(seriesId, target.comment.id, { edits: target.edits }, { silent: true })
+        .catch((err) => {
+          errors.push(err?.message || 'accept failed');
+          return null;
+        });
+      if (!mountedRef.current) return;
+      if (result) onAccepted(result);
+      setAcceptState((s) => (s ? { ...s, done: s.done + 1 } : s));
+    }
+    if (!mountedRef.current) return;
+    setAcceptState(null);
+    const applied = targets.length - errors.length;
+    if (errors.length) {
+      toast.error(`Applied ${applied} of ${targets.length} notes — ${errors.length} failed (${errors[0]}). The failed notes stay in the preview; regenerate those fixes.`);
+    } else {
+      toast.success(applied === 1 ? 'Fix applied to the manuscript' : `${applied} notes applied to the manuscript`);
+      onClose();
+    }
+  };
+
   return (
     <Modal open={open} onClose={onClose} size="3xl" align="top" ariaLabel="Manuscript impact preview">
       <div className="bg-port-card border border-port-border rounded-lg max-h-[85vh] flex flex-col">
@@ -63,12 +124,28 @@ export default function ManuscriptImpactPreview({ open, onClose, sections, comme
             <p className="text-[11px] text-gray-500">
               {totalEdits === 0
                 ? 'No selected edits to preview yet — generate a fix and keep its edits checked.'
-                : `${totalEdits} edit${totalEdits === 1 ? '' : 's'} across ${changed.length} issue${changed.length === 1 ? '' : 's'} (preview only — accept from each note)`}
+                : `${totalEdits} edit${totalEdits === 1 ? '' : 's'} across ${changed.length} issue${changed.length === 1 ? '' : 's'} — accept them all here, or one note at a time from the cards`}
             </p>
           </div>
-          <button type="button" onClick={onClose} className="text-gray-400 hover:text-white" aria-label="Close preview" title="Close (Esc)">
-            <X size={18} />
-          </button>
+          <div className="flex items-center gap-2">
+            {totalEdits > 0 ? (
+              <button
+                type="button"
+                onClick={acceptAll}
+                disabled={!!acceptState}
+                title="Apply every previewed edit to the manuscript (each section keeps a version-history snapshot, so this is revertible per section)"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs font-medium bg-port-success/20 text-port-success border border-port-success/40 hover:bg-port-success/30 disabled:opacity-40 whitespace-nowrap"
+              >
+                {acceptState ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
+                {acceptState
+                  ? `Accepting note ${Math.min(acceptState.done + 1, acceptState.total)} of ${acceptState.total}…`
+                  : `Accept all ${totalEdits} edit${totalEdits === 1 ? '' : 's'}`}
+              </button>
+            ) : null}
+            <button type="button" onClick={onClose} className="text-gray-400 hover:text-white" aria-label="Close preview" title="Close (Esc)">
+              <X size={18} />
+            </button>
+          </div>
         </div>
 
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
@@ -94,7 +171,7 @@ export default function ManuscriptImpactPreview({ open, onClose, sections, comme
                     {overlapping} of these edits overlap — accepting will be rejected; regenerate the fix. Preview below shows the non-overlapping subset.
                   </p>
                 ) : null}
-                <SideBySideDiff oldText={before} newText={after} oldLabel="Current" newLabel="With edits" />
+                <HunkDiff oldText={before} newText={after} oldLabel="Current" newLabel="With edits" />
               </div>
             ))
           )}

@@ -9,7 +9,7 @@ import {
   CODEX_PARALLEL_DEFAULT,
 } from '../services/mediaJobQueue/index.js';
 import { asyncHandler } from '../lib/errorHandler.js';
-import { backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, codeReviewSettingsSchema, locationSettingsSchema, settingsEmbeddingsSchema, citySnapshotConfigSchema, validateRequest } from '../lib/validation.js';
+import { backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, codeReviewSettingsSchema, locationSettingsSchema, settingsEmbeddingsSchema, citySnapshotConfigSchema, apiAccessSettingsSchema, validateRequest } from '../lib/validation.js';
 
 const router = Router();
 
@@ -95,6 +95,12 @@ router.put('/', asyncHandler(async (req, res) => {
   // malformed interval/cap can't reach disk and break the scheduler.
   if (req.body?.citySnapshots !== undefined) {
     validateRequest(citySnapshotConfigSchema.partial(), req.body.citySnapshots);
+  }
+  // Per-API external-access flags (voice/sdapi). Validate the slice when present
+  // so a malformed toggle save can't write a non-boolean exposed/requireAuth to
+  // disk (the registry would then silently treat it as its default).
+  if (req.body?.apiAccess !== undefined) {
+    validateRequest(apiAccessSettingsSchema.partial(), req.body.apiAccess);
   }
   // User-defined catalog types moved out of settings.json into PostgreSQL
   // (`catalog_user_types`, #1001). The `/api/catalog/types` routes are the only

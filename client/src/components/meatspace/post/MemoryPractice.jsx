@@ -621,7 +621,7 @@ export default function MemoryPractice({ item, onBack }) {
             answered: r.answered,
           })),
           totalMs: Date.now() - startTime,
-        }).catch(() => {});
+        }).catch(err => console.warn(`⚠️ Failed to save sequence practice: ${err.message}`));
       }
 
       if (spacedChunkIdx + 1 < chunkMastery.length) {
@@ -648,7 +648,7 @@ export default function MemoryPractice({ item, onBack }) {
         answered: r.answered,
       })),
       totalMs: Date.now() - startTime,
-    }).catch(() => {});
+    }).catch(err => console.warn(`⚠️ Failed to save practice results: ${err.message}`));
   }
 }
 

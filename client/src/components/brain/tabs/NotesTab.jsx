@@ -227,17 +227,22 @@ export default function NotesTab({ onRefresh }) {
   }
 
   if (showVaultSetup || vaults.length === 0) {
+    // Notes is a full-bleed tab (Brain wraps it in overflow-hidden with no
+    // padding), so this branch must own its scroll + padding — otherwise the
+    // vault manager clips below the fold with no scrollbar (#1177).
     return (
-      <VaultSetup
-        detectedVaults={detectedVaults}
-        vaults={vaults}
-        customPath={customPath}
-        setCustomPath={setCustomPath}
-        adding={addingVault}
-        onAdd={handleAddVault}
-        onDetect={detectAvailableVaults}
-        onClose={() => setShowVaultSetup(false)}
-      />
+      <div className="h-full overflow-y-auto p-3 sm:p-4">
+        <VaultSetup
+          detectedVaults={detectedVaults}
+          vaults={vaults}
+          customPath={customPath}
+          setCustomPath={setCustomPath}
+          adding={addingVault}
+          onAdd={handleAddVault}
+          onDetect={detectAvailableVaults}
+          onClose={() => setShowVaultSetup(false)}
+        />
+      </div>
     );
   }
 
@@ -253,9 +258,11 @@ export default function NotesTab({ onRefresh }) {
   const displayNotes = searchResults ? searchResults.results : notes;
 
   return (
-    <div className="flex h-full -m-4" style={{ height: 'calc(100vh - 180px)' }}>
-      {/* Left panel: note list */}
-      <div className="w-80 border-r border-port-border flex flex-col shrink-0">
+    <div className="grid grid-cols-1 md:grid-cols-[320px_1fr] grid-rows-1 h-full min-h-0 overflow-hidden">
+      {/* Left panel: note list — on mobile it yields to the detail pane once a
+          note is opened (the detail pane's back button restores it). On md+ both
+          panels are always visible side-by-side. */}
+      <div className={`border-r border-port-border flex-col min-h-0 overflow-hidden ${selectedNote || loadingNote ? 'hidden md:flex' : 'flex'}`}>
         {/* Vault selector and actions */}
         <div className="p-3 border-b border-port-border space-y-2">
           <div className="flex items-center gap-2">
@@ -433,8 +440,9 @@ export default function NotesTab({ onRefresh }) {
         </div>
       </div>
 
-      {/* Right panel: note viewer/editor */}
-      <div className="flex-1 flex flex-col min-w-0">
+      {/* Right panel: note viewer/editor — hidden on mobile until a note is
+          opened so the list owns the small-screen viewport; always shown on md+. */}
+      <div className={`flex-col min-w-0 min-h-0 overflow-hidden ${selectedNote || loadingNote ? 'flex' : 'hidden md:flex'}`}>
         {loadingNote ? (
           <div className="flex items-center justify-center h-full">
             <BrailleSpinner text="Loading" />
@@ -510,7 +518,7 @@ export default function NotesTab({ onRefresh }) {
             )}
 
             {/* Note content */}
-            <div className="flex-1 overflow-auto flex">
+            <div className="flex-1 min-h-0 overflow-auto flex">
               {/* Main content area */}
               <div className="flex-1 min-w-0">
                 {editing ? (

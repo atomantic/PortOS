@@ -332,6 +332,9 @@ export const AVATAR_STYLE_LABELS = {
   esoteric: 'Esoteric (3D)',
   nexus: 'Neural Nexus (3D)',
   muse: 'Cyber Muse (3D)',
+  // Bundled CC0 Kenney Mini Characters — animated rigged GLB avatars.
+  miniMaleC: 'Mini Character — Male (3D)',
+  miniFemaleD: 'Mini Character — Female (3D)',
   ascii: 'Minimalist (ASCII)'
 };
 

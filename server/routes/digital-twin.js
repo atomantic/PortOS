@@ -52,6 +52,17 @@ import {
 } from '../lib/digitalTwinValidation.js';
 import * as timeCapsuleService from '../services/timeCapsule.js';
 import { UUID_RE } from '../lib/fileUtils.js';
+import { z } from 'zod';
+
+const importSaveSchema = z.object({
+  source: z.string().min(1),
+  suggestedDoc: z.object({
+    filename: z.string().min(1),
+    content: z.string().min(1),
+    title: z.string().optional(),
+    category: z.string().optional(),
+  }),
+});
 
 const router = Router();
 
@@ -701,15 +712,7 @@ router.post('/import/analyze', asyncHandler(async (req, res) => {
  * Save import analysis as a document
  */
 router.post('/import/save', asyncHandler(async (req, res) => {
-  const { source, suggestedDoc } = req.body;
-
-  if (!source || !suggestedDoc || !suggestedDoc.filename || !suggestedDoc.content) {
-    throw new ServerError('Missing required fields: source and suggestedDoc', {
-      status: 400,
-      code: 'VALIDATION_ERROR'
-    });
-  }
-
+  const { source, suggestedDoc } = validateRequest(importSaveSchema, req.body);
   const document = await digitalTwinService.saveImportAsDocument(source, suggestedDoc);
   res.json({ document, message: 'Document saved successfully' });
 }));

@@ -129,7 +129,7 @@ export async function uploadScreenshotFile(file, options = {}) {
 }
 
 // Max file size for attachments: 50MB
-const ATTACHMENT_MAX_FILE_SIZE = 50 * 1024 * 1024;
+export const ATTACHMENT_MAX_FILE_SIZE = 50 * 1024 * 1024;
 
 /**
  * Check if a file extension is allowed for attachments

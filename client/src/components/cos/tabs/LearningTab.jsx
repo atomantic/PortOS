@@ -28,6 +28,7 @@ import {
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
+import { formatDurationMin } from '../../../utils/formatters';
 
 export default function LearningTab() {
   const [learning, setLearning] = useState(null);
@@ -144,15 +145,6 @@ export default function LearningTab() {
     if (rate >= 80) return 'bg-port-success';
     if (rate >= 60) return 'bg-port-warning';
     return 'bg-port-error';
-  }, []);
-
-  const formatDuration = useCallback((ms) => {
-    if (!ms) return '—';
-    const minutes = Math.round(ms / 60000);
-    if (minutes < 60) return `${minutes}m`;
-    const hours = Math.floor(minutes / 60);
-    const mins = minutes % 60;
-    return `${hours}h ${mins}m`;
   }, []);
 
   // Memoize sorted durations to avoid re-sorting on each render
@@ -613,10 +605,10 @@ export default function LearningTab() {
                         <tr key={idx} className="border-t border-port-border">
                           <td className="p-3 text-gray-300 truncate max-w-[200px]">{taskType}</td>
                           <td className="p-3 text-right text-gray-500 font-mono">
-                            {formatDuration(data.avgDurationMs)}
+                            {data.avgDurationMs ? formatDurationMin(Math.round(data.avgDurationMs / 60000)) || '—' : '—'}
                           </td>
                           <td className="p-3 text-right text-cyan-400 font-mono" title="P80 estimate used for progress bars and ETAs">
-                            {formatDuration(data.p80DurationMs || data.avgDurationMs)}
+                            {(data.p80DurationMs || data.avgDurationMs) ? formatDurationMin(Math.round((data.p80DurationMs || data.avgDurationMs) / 60000)) || '—' : '—'}
                           </td>
                           <td className="p-3 text-right text-gray-500 hidden sm:table-cell">
                             {data.completed}

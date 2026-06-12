@@ -17,7 +17,7 @@ import * as brainStorage from './brainStorage.js';
 import * as memory from './memoryBackend.js';
 import * as embeddings from './memoryEmbeddings.js';
 import { ensureDir, PATHS } from '../lib/fileUtils.js';
-import { listJournals } from './brainJournal.js';
+import { listJournals, getJournal } from './brainJournal.js';
 
 const BRIDGE_MAP_PATH = join(PATHS.brain, 'memory-bridge-map.json');
 
@@ -188,8 +188,12 @@ export async function syncBrainRecord(brainType, record) {
   const embedding = await embeddings.generateMemoryEmbedding(memoryData).catch(() => null);
 
   if (existingMemoryId) {
-    // Update existing memory
-    const updated = await memory.updateMemory(existingMemoryId, memoryData);
+    // Update existing memory. Force status:'active' so a record that was
+    // archived for a synced-in delete/archive and later came back live
+    // (un-deleted on a peer, or un-archived) is searchable again — memory
+    // search filters out archived rows, so without this the resurrected
+    // record would stay invisible (issue #1080 review finding).
+    const updated = await memory.updateMemory(existingMemoryId, { ...memoryData, status: 'active' });
     if (updated && embedding) {
       await memory.updateMemoryEmbedding(existingMemoryId, embedding);
     }
@@ -208,11 +212,24 @@ export async function syncBrainRecord(brainType, record) {
 /**
  * Bulk sync all existing brain data into the memory system.
  * Used for initial migration and catch-up.
- * Returns { synced, skipped, errors }.
+ *
+ * @param {object}  [opts]
+ * @param {boolean} [opts.dryRun=false]  Report what would sync without writing.
+ * @param {boolean} [opts.refresh=false] Re-embed records that ALREADY have a
+ *   bridge-map entry instead of skipping them. This is the recovery path for
+ *   records that diverged before the per-record sync:applied signal existed
+ *   (issue #1080): a peer's edit/delete of an already-mapped record used to
+ *   leave the local memory copy stale and searchable forever, and a normal
+ *   bulk sync skipped it precisely because it was mapped. `refresh` forces a
+ *   re-embed of every live record so a one-time catch-up heals the staleness.
+ *   In refresh mode a reconcile pass also archives memory entries whose brain
+ *   record was deleted/archived on a peer before this fix (orphaned map keys
+ *   the live-record walks can't reach) — reported as `archived`.
+ * @returns {Promise<{synced:number, skipped:number, errors:number, archived:number}>}
  */
-export async function syncAllBrainData({ dryRun = false } = {}) {
+export async function syncAllBrainData({ dryRun = false, refresh = false } = {}) {
   const map = await loadBridgeMap();
-  const stats = { synced: 0, skipped: 0, errors: 0 };
+  const stats = { synced: 0, skipped: 0, errors: 0, archived: 0 };
 
   // Entity stores (JSON-based)
   const entityTypes = ['people', 'projects', 'ideas', 'admin', 'memories'];
@@ -225,7 +242,7 @@ export async function syncAllBrainData({ dryRun = false } = {}) {
         continue;
       }
       const key = bridgeKey(type, record.id);
-      if (map[key] && !dryRun) {
+      if (map[key] && !dryRun && !refresh) {
         stats.skipped++;
         continue;
       }
@@ -243,18 +260,19 @@ export async function syncAllBrainData({ dryRun = false } = {}) {
     }
   }
 
-  // Daily log entries — one memory per day, initial/backfill import only;
-  // already-mapped records are skipped by this bulk sync. Content updates
-  // and deletions flow through the 'journals:upserted' / 'journals:deleted'
-  // event handlers instead (see initBridge).
+  // Daily log entries — one memory per day. Without `refresh`, already-mapped
+  // days are skipped (initial/backfill import only) and content updates /
+  // deletions flow through the 'journals:upserted' / 'journals:deleted' and
+  // 'sync:applied' event handlers instead (see initBridge). With `refresh`,
+  // already-mapped days are re-embedded to heal pre-#1080 staleness.
   {
     const { records: journals } = await listJournals({ limit: 10000, includeContent: true });
     for (const record of journals) {
       const key = bridgeKey('journals', record.id);
       // Already-mapped days are skipped in both real and dry-run modes so
       // dry-run stats match actual-run stats (rather than claiming to
-      // re-sync every day every time).
-      if (map[key]) {
+      // re-sync every day every time) — unless refresh is forcing a re-embed.
+      if (map[key] && !refresh) {
         stats.skipped += 1;
         continue;
       }
@@ -279,7 +297,7 @@ export async function syncAllBrainData({ dryRun = false } = {}) {
     const records = await getter(1000); // get all
     for (const record of records) {
       const key = bridgeKey(type, record.id);
-      if (map[key] && !dryRun) {
+      if (map[key] && !dryRun && !refresh) {
         stats.skipped++;
         continue;
       }
@@ -297,7 +315,146 @@ export async function syncAllBrainData({ dryRun = false } = {}) {
     }
   }
 
+  // Refresh-mode reconcile (issue #1080 recovery): the live-record walks above
+  // re-embed edited records, but they iterate ONLY live records — getAll /
+  // listJournals strip tombstones and archived entities are skipped — so a
+  // record DELETED or ARCHIVED on a peer BEFORE this fix shipped leaves an
+  // orphaned bridge-map entry whose memory copy stays active and searchable.
+  // The going-forward sync:applied path archives those, but it can't reach the
+  // pre-fix backlog. Walk the bridge map and archive any mapped entry whose
+  // canonical record no longer resolves as live. Only for deletable, bridge-
+  // mirrored stores: digests/reviews are append-only (never deleted) and
+  // links/buckets/inbox aren't mirrored, so neither can orphan a memory entry.
+  if (refresh && !dryRun) {
+    const reconcilableTypes = new Set(['people', 'projects', 'ideas', 'admin', 'memories', 'journals']);
+    for (const mapKey of Object.keys(map)) {
+      const sep = mapKey.indexOf(':');
+      if (sep === -1) continue;
+      const type = mapKey.slice(0, sep);
+      const id = mapKey.slice(sep + 1);
+      if (!reconcilableTypes.has(type)) continue;
+      const record = type === 'journals'
+        ? await getJournal(id)
+        : await brainStorage.getById(type, id);
+      if (record && !record.archived) continue; // still live — already re-embedded above
+      const archived = await archiveMappedMemory(type, id).catch(err => {
+        console.error(`❌ Failed to archive stale ${type}/${id}: ${err.message}`);
+        stats.errors++;
+        return false;
+      });
+      if (archived) stats.archived++;
+    }
+  }
+
   return stats;
+}
+
+// ─── Synced-in record resync (issue #1080) ──────────────────────────────────
+// Peer-synced brain writes go through brainStorage.applyRemoteRecord, which is
+// deliberately event-silent (no brainEvents) to prevent cross-peer echo loops
+// (#1077). That silence means the per-record bridge listeners below never fire
+// for synced-in records, so a record created/edited/deleted on peer A was never
+// re-vectorized into peer B's memory index — it stayed stale and searchable
+// until a full bulk resync (which itself SKIPPED already-mapped records). The
+// sync apply paths now emit a LOCAL-ONLY 'sync:applied' signal (it never feeds
+// the sync log, so no echo) carrying the {type, id} of every applied change;
+// we re-read each record's canonical state and re-embed or archive accordingly.
+
+const RESYNC_DEBOUNCE_MS = 250;
+const pendingResync = new Map(); // bridgeKey → { type, id } (dedups repeated touches)
+let resyncTimer = null;
+let resyncFlushing = false; // single-flight guard so two flushes can't overlap
+
+/**
+ * Archive the memory entry mapped to a brain record (if any). Used when the
+ * canonical record is gone (tombstoned), archived, or otherwise should no
+ * longer be searchable.
+ */
+async function archiveMappedMemory(brainType, id) {
+  const map = await loadBridgeMap();
+  const memoryId = map[bridgeKey(brainType, id)];
+  if (!memoryId) return false;
+  await memory.updateMemory(memoryId, { status: 'archived' });
+  console.log(`🧠🔗 Archived brain→memory: ${brainType}/${id} → ${memoryId}`);
+  return true;
+}
+
+/**
+ * Re-vectorize (or archive) a single brain record from its CANONICAL stored
+ * state — used after a peer sync applies a change. Reading the store rather
+ * than trusting an event payload makes this self-healing and order-independent:
+ * whatever the final converged state is (live record, archived, or tombstoned),
+ * the memory copy is brought into line.
+ *   - record present & not archived → upsert + re-embed (syncBrainRecord)
+ *   - record absent (tombstoned) or archived → archive the mapped memory entry
+ *   - type not mirrored by the bridge (links/buckets/inbox) → no-op
+ */
+export async function resyncBrainRecord(brainType, id) {
+  if (!id || !TYPE_MAP[brainType]) return;
+  // getById returns null for tombstones (deleted records), so a synced-in
+  // delete naturally lands in the archive branch.
+  const record = brainType === 'journals'
+    ? await getJournal(id)
+    : await brainStorage.getById(brainType, id);
+  if (!record || record.archived) {
+    await archiveMappedMemory(brainType, id);
+    return;
+  }
+  await syncBrainRecord(brainType, record);
+}
+
+/**
+ * Drain the pending resync queue sequentially. Single-flight + re-draining:
+ * only one flush runs at a time (the `resyncFlushing` guard), and it loops
+ * until the queue is empty so records enqueued mid-flush are still processed —
+ * without a second flush running concurrently. Sequential (not parallel) so a
+ * large catch-up sync doesn't fire hundreds of concurrent embedding calls and
+ * saturate the embedding backend; single-flight also prevents two flushes from
+ * both creating a memory for the same not-yet-mapped record (duplicate entries).
+ * Exported for deterministic flushing in tests.
+ */
+export async function flushPendingResync() {
+  if (resyncTimer) { clearTimeout(resyncTimer); resyncTimer = null; }
+  if (resyncFlushing) return; // an in-flight flush will pick up newly-queued items
+  resyncFlushing = true;
+  try {
+    // The queue only grows during an `await` below; the loop re-checks size at
+    // the top of each pass, and the gap between the final size===0 check and
+    // clearing `resyncFlushing` contains no await — so nothing can be stranded.
+    while (pendingResync.size > 0) {
+      const batch = [...pendingResync.values()];
+      pendingResync.clear();
+      for (const { type, id } of batch) {
+        await resyncBrainRecord(type, id).catch((err) => {
+          console.error(`❌ Brain bridge resync failed for ${type}/${id}: ${err.message}`);
+        });
+      }
+    }
+  } finally {
+    resyncFlushing = false;
+  }
+}
+
+/**
+ * Queue applied-change records for a debounced resync. Records touching a type
+ * the bridge doesn't mirror are dropped here so they never schedule a flush.
+ * No timer is armed while a flush is in flight — that flush re-drains the queue
+ * itself, so a second concurrent flush can never start.
+ */
+export function queueResync(records) {
+  if (!Array.isArray(records)) return;
+  for (const { type, id } of records) {
+    if (!id || !TYPE_MAP[type]) continue;
+    pendingResync.set(bridgeKey(type, id), { type, id });
+  }
+  if (pendingResync.size === 0 || resyncTimer || resyncFlushing) return;
+  resyncTimer = setTimeout(() => {
+    flushPendingResync().catch((err) => {
+      console.error(`❌ Brain bridge resync flush failed: ${err.message}`);
+    });
+  }, RESYNC_DEBOUNCE_MS);
+  // Don't keep the event loop alive just for a pending resync flush.
+  if (typeof resyncTimer.unref === 'function') resyncTimer.unref();
 }
 
 // ─── Event Handlers ─────────────────────────────────────────────────────────
@@ -377,6 +534,14 @@ export function initBridge() {
       console.error(`❌ Brain bridge delete sync failed for journals/${entry?.id}: ${err.message}`);
     });
   });
+
+  // Peer-synced records (issue #1080) — applyRemoteRecord is event-silent to
+  // prevent echo loops, so the per-record listeners above never fire for
+  // synced-in changes. The sync apply paths emit this local-only signal with
+  // the touched {type, id}s; we re-read each from the store and re-embed or
+  // archive. Debounced + sequential so a large catch-up doesn't saturate the
+  // embedding backend.
+  brainEvents.on('sync:applied', ({ records } = {}) => queueResync(records));
 
   console.log('🧠🔗 Brain→Memory bridge initialized');
 }

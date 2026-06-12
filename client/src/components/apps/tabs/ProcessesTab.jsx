@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, Fragment } from 'react';
 import { Maximize2, X } from 'lucide-react';
 import * as api from '../../../services/api';
+import { executeCommand } from '../../../services/api';
 import socket from '../../../services/socket';
 import BrailleSpinner from '../../BrailleSpinner';
 import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
@@ -95,39 +96,9 @@ export default function ProcessesTab({ pm2ProcessNames, filterFn }) {
     };
   }, [expandedProcess, tailLines]);
 
-  const handleRestart = async (name) => {
+  const pm2Action = async (action, name) => {
     setRestarting(prev => ({ ...prev, [name]: true }));
-    await fetch('/api/commands/execute', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ command: `pm2 restart ${name}` })
-    }).catch(() => null);
-    setTimeout(() => {
-      setRestarting(prev => ({ ...prev, [name]: false }));
-      refetch();
-    }, 2000);
-  };
-
-  const handleStop = async (name) => {
-    setRestarting(prev => ({ ...prev, [name]: true }));
-    await fetch('/api/commands/execute', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ command: `pm2 stop ${name}` })
-    }).catch(() => null);
-    setTimeout(() => {
-      setRestarting(prev => ({ ...prev, [name]: false }));
-      refetch();
-    }, 2000);
-  };
-
-  const handleStart = async (name) => {
-    setRestarting(prev => ({ ...prev, [name]: true }));
-    await fetch('/api/commands/execute', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ command: `pm2 start ${name}` })
-    }).catch(() => null);
+    await executeCommand(`pm2 ${action} ${name}`, undefined).catch(() => null);
     setTimeout(() => {
       setRestarting(prev => ({ ...prev, [name]: false }));
       refetch();
@@ -210,14 +181,14 @@ export default function ProcessesTab({ pm2ProcessNames, filterFn }) {
                         {proc.status === 'online' ? (
                           <>
                             <button
-                              onClick={() => handleRestart(proc.name)}
+                              onClick={() => pm2Action('restart', proc.name)}
                               disabled={restarting[proc.name]}
                               className="px-2 py-1 text-xs bg-port-warning/20 text-port-warning hover:bg-port-warning/30 rounded disabled:opacity-50"
                             >
                               {restarting[proc.name] ? '...' : 'Restart'}
                             </button>
                             <button
-                              onClick={() => handleStop(proc.name)}
+                              onClick={() => pm2Action('stop', proc.name)}
                               disabled={restarting[proc.name]}
                               className="px-2 py-1 text-xs bg-port-error/20 text-port-error hover:bg-port-error/30 rounded disabled:opacity-50"
                             >
@@ -226,7 +197,7 @@ export default function ProcessesTab({ pm2ProcessNames, filterFn }) {
                           </>
                         ) : (
                           <button
-                            onClick={() => handleStart(proc.name)}
+                            onClick={() => pm2Action('start', proc.name)}
                             disabled={restarting[proc.name]}
                             className="px-2 py-1 text-xs bg-port-success/20 text-port-success hover:bg-port-success/30 rounded disabled:opacity-50"
                           >

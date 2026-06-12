@@ -16,6 +16,7 @@ import * as api from '../services/api';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
 import { useTimeTick } from '../hooks/useTimeTick';
 import { equalByKeys, equalListByKeys } from '../lib/compareHelpers';
+import { timeAgo, timeUntil } from '../utils/formatters';
 
 // ---------------------------------------------------------------------------
 // Pure helpers
@@ -32,25 +33,6 @@ function computeHealth(status) {
   if (hoursSince < 25) return 'healthy';
   if (hoursSince < 49) return 'warning';
   return 'critical';
-}
-
-function relativeTime(isoString) {
-  if (!isoString) return null;
-  const diffMs = Date.now() - new Date(isoString).getTime();
-  const future = diffMs < 0;
-  const abs = Math.abs(diffMs);
-  const minutes = Math.floor(abs / 60000);
-  const hours = Math.floor(minutes / 60);
-  const days = Math.floor(hours / 24);
-
-  let label;
-  if (minutes < 2) label = 'just now';
-  else if (minutes < 60) label = `${minutes} min`;
-  else if (hours < 24) label = `${hours} hour${hours !== 1 ? 's' : ''}`;
-  else label = `${days} day${days !== 1 ? 's' : ''}`;
-
-  if (label === 'just now') return label;
-  return future ? `in ${label}` : `${label} ago`;
 }
 
 const HEALTH_STYLES = {
@@ -351,7 +333,7 @@ const BackupWidget = memo(function BackupWidget() {
               <span className="text-xs text-gray-500">Last backup</span>
             </div>
             <div className="text-sm font-semibold text-white truncate">
-              {status?.lastRun ? relativeTime(status.lastRun) : '—'}
+              {status?.lastRun ? timeAgo(status.lastRun) : '—'}
             </div>
             {status?.filesChanged != null && (
               <div className="text-xs text-gray-600">{status.filesChanged} files changed</div>
@@ -363,7 +345,7 @@ const BackupWidget = memo(function BackupWidget() {
               <span className="text-xs text-gray-500">Next backup</span>
             </div>
             <div className="text-sm font-semibold text-white truncate">
-              {status?.nextRun ? relativeTime(status.nextRun) : '—'}
+              {status?.nextRun ? timeUntil(status.nextRun) : '—'}
             </div>
             {status?.destPath && (
               <div className="text-xs text-gray-600 truncate" title={status.destPath}>

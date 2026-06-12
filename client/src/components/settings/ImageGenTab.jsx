@@ -6,7 +6,7 @@
  * lives in the always-visible Codex CLI Imagegen section.
  */
 
-import { useState, useEffect, useCallback, useRef, useId } from 'react';
+import { useState, useEffect, useCallback, useId } from 'react';
 import {
   Save, Image as ImageIcon, Zap, Wrench, Cloud, Cpu, Globe, AlertTriangle,
   Sparkles, Terminal, Key, Check, Trash2
@@ -22,7 +22,7 @@ import {
 } from '../../services/api';
 import { IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
 import { resolveCleanersFromConfig } from '../../lib/imageCleaners';
-import { safeParseJSON } from '../../lib/genUtils';
+import { useMediaJobSse } from '../../hooks/useMediaJobSse';
 
 const SDAPI_TOOL_ID = 'sdapi';
 const CODEX_TOOL_ID = 'codex-imagegen';
@@ -93,7 +93,9 @@ export function ImageGenTab() {
   const [testPrompt, setTestPrompt] = useState(DEFAULT_TEST_PROMPT);
   const [rendering, setRendering] = useState(false);
   const [renderResult, setRenderResult] = useState(null);
-  const renderEsRef = useRef(null);
+  // Shared per-job SSE subscriber — same hook ImageGen/VideoGen use to await
+  // an async render's terminal frame after the kickoff POST returns a jobId.
+  const { attach: attachRenderSse, close: closeRenderSse } = useMediaJobSse('image');
 
   // HuggingFace token state — separate from the main settings save flow because
   // it has its own validated endpoints (POST /setup/hf-token + DELETE) and
@@ -136,7 +138,7 @@ export function ImageGenTab() {
 
   // Close any in-flight test-render SSE on unmount so we don't fire setState
   // on a torn-down component if the user navigates away mid-render.
-  useEffect(() => () => renderEsRef.current?.close(), []);
+  useEffect(() => () => closeRenderSse(), [closeRenderSse]);
 
   useEffect(() => {
     Promise.all([getSettings(), getToolsList()])
@@ -326,27 +328,10 @@ export function ImageGenTab() {
       // by the time generateImage resolves, so we can short-circuit.
       const isAsync = (result?.mode === IMAGE_GEN_MODE.LOCAL || result?.mode === IMAGE_GEN_MODE.CODEX);
       if (isAsync && result?.generationId) {
-        await new Promise((resolve, reject) => {
-          const es = new EventSource(`/api/image-gen/${result.generationId}/events`);
-          renderEsRef.current = es;
-          const closeEs = () => { es.close(); renderEsRef.current = null; };
-          es.onmessage = (e) => {
-            const msg = safeParseJSON(e.data);
-            if (!msg) return;
-            if (msg.type === 'complete') {
-              closeEs();
-              setRenderResult({ ...result, ...msg.result });
-              resolve();
-            } else if (msg.type === 'error') {
-              closeEs();
-              reject(new Error(msg.error || 'Generation failed'));
-            } else if (msg.type === 'canceled') {
-              closeEs();
-              reject(new Error(msg.reason || 'Canceled'));
-            }
-          };
-          es.onerror = () => { closeEs(); reject(new Error('Lost connection during test render')); };
+        const jobResult = await attachRenderSse(result.generationId, {
+          onError: (msg) => new Error(msg.error || 'Generation failed'),
         });
+        setRenderResult({ ...result, ...jobResult });
       } else {
         setRenderResult(result);
       }

@@ -15,6 +15,7 @@ import toast from '../../ui/Toast';
 import Banner from '../../ui/Banner';
 import BrailleSpinner from '../../BrailleSpinner';
 import { formatBytes, formatDateShort } from '../../../utils/formatters';
+import { ATTACHMENT_MAX_FILE_SIZE } from '../../../utils/fileUpload';
 
 // Sources we plan to support. Only `available` ones are clickable.
 const SOURCES = [
@@ -48,8 +49,7 @@ const SOURCES = [
 const STEPS = [
   { id: 'instructions', label: 'Get your data' },
   { id: 'upload', label: 'Upload' },
-  { id: 'preview', label: 'Preview' },
-  { id: 'configure', label: 'Configure' },
+  { id: 'review', label: 'Review & import' },
   { id: 'run', label: 'Import' },
   { id: 'done', label: 'Done' }
 ];
@@ -146,7 +146,7 @@ function ChatGPTWizard({ onExit, navigate }) {
       setError('Please select the conversations.json file from your ChatGPT export.');
       return;
     }
-    if (file.size > 50 * 1024 * 1024) {
+    if (file.size > ATTACHMENT_MAX_FILE_SIZE) {
       setError(`File is ${formatBytes(file.size)}, larger than the 50 MB upload limit. See instructions for splitting the file.`);
       return;
     }
@@ -227,18 +227,16 @@ function ChatGPTWizard({ onExit, navigate }) {
         />
       )}
 
-      {step.id === 'preview' && preview && (
-        <StepPreview preview={preview} fileMeta={fileMeta} onNext={goNext} onBack={goBack} />
-      )}
-
-      {step.id === 'configure' && (
-        <StepConfigure
+      {step.id === 'review' && preview && (
+        <StepReview
+          preview={preview}
+          fileMeta={fileMeta}
           tagsInput={tagsInput}
           setTagsInput={setTagsInput}
           skipEmpty={skipEmpty}
           setSkipEmpty={setSkipEmpty}
           onBack={goBack}
-          onNext={() => { setStepIdx(STEPS.findIndex((s) => s.id === 'run')); runImport(); }}
+          onRun={() => { setStepIdx(STEPS.findIndex((s) => s.id === 'run')); runImport(); }}
         />
       )}
 
@@ -411,60 +409,100 @@ function StepUpload({ uploading, fileMeta, onPick, onFile, fileInputRef, onBack 
   );
 }
 
-function StepPreview({ preview, fileMeta, onNext, onBack }) {
+function StepReview({ preview, fileMeta, tagsInput, setTagsInput, skipEmpty, setSkipEmpty, onBack, onRun }) {
   const { summary, conversations } = preview;
   const sample = conversations.slice(0, 8);
   const remaining = conversations.length - sample.length;
 
   return (
     <div className="space-y-4">
-      <p className="text-sm text-gray-300">
-        Found <span className="text-white font-medium">{summary.totalConversations}</span> conversations
-        in <span className="font-mono text-gray-200">{fileMeta?.name}</span>. Quick stats:
-      </p>
+      <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6 items-start">
+        {/* Left — preview of what was found */}
+        <div className="space-y-4 min-w-0">
+          <p className="text-sm text-gray-300">
+            Found <span className="text-white font-medium">{summary.totalConversations}</span> conversations
+            in <span className="font-mono text-gray-200">{fileMeta?.name}</span>. Quick stats:
+          </p>
 
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-        <Stat label="Conversations" value={summary.totalConversations.toLocaleString()} />
-        <Stat label="Messages" value={summary.totalMessages.toLocaleString()} />
-        <Stat label="Total chars" value={summary.totalChars.toLocaleString()} />
-        <Stat label="Custom GPTs" value={summary.gizmoCount.toString()} />
-        <Stat label="Earliest" value={formatDateShort(summary.earliest)} />
-        <Stat label="Latest" value={formatDateShort(summary.latest)} />
-      </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+            <Stat label="Conversations" value={summary.totalConversations.toLocaleString()} />
+            <Stat label="Messages" value={summary.totalMessages.toLocaleString()} />
+            <Stat label="Total chars" value={summary.totalChars.toLocaleString()} />
+            <Stat label="Custom GPTs" value={summary.gizmoCount.toString()} />
+            <Stat label="Earliest" value={formatDateShort(summary.earliest)} />
+            <Stat label="Latest" value={formatDateShort(summary.latest)} />
+          </div>
 
-      <div className="border border-port-border rounded">
-        <div className="px-3 py-2 border-b border-port-border text-xs font-medium text-gray-400 uppercase">
-          Sample conversations
+          <div className="border border-port-border rounded">
+            <div className="px-3 py-2 border-b border-port-border text-xs font-medium text-gray-400 uppercase">
+              Sample conversations
+            </div>
+            <ul className="divide-y divide-port-border">
+              {sample.map((c) => (
+                <li key={c.id || c.title} className="px-3 py-2 flex items-center justify-between gap-2">
+                  <span className="text-sm text-white truncate">{c.title}</span>
+                  <span className="text-xs text-gray-500 flex-shrink-0">
+                    {c.messageCount} msg · {formatDateShort(c.createTime)}
+                  </span>
+                </li>
+              ))}
+              {remaining > 0 && (
+                <li className="px-3 py-2 text-xs text-gray-500">
+                  …and {remaining.toLocaleString()} more
+                </li>
+              )}
+            </ul>
+          </div>
         </div>
-        <ul className="divide-y divide-port-border">
-          {sample.map((c) => (
-            <li key={c.id || c.title} className="px-3 py-2 flex items-center justify-between gap-2">
-              <span className="text-sm text-white truncate">{c.title}</span>
-              <span className="text-xs text-gray-500 flex-shrink-0">
-                {c.messageCount} msg · {formatDateShort(c.createTime)}
-              </span>
-            </li>
-          ))}
-          {remaining > 0 && (
-            <li className="px-3 py-2 text-xs text-gray-500">
-              …and {remaining.toLocaleString()} more
-            </li>
-          )}
-        </ul>
+
+        {/* Right — import options */}
+        <div className="space-y-4 lg:sticky lg:top-4 self-start">
+          <p className="text-sm text-gray-300">
+            Each conversation becomes a Memory entry in Brain → Memory. The full transcript is also archived to
+            <span className="font-mono text-port-accent"> data/brain/imports/chatgpt</span>.
+          </p>
+
+          <div>
+            <label htmlFor="import-tags" className="block text-sm text-white mb-1">Tags</label>
+            <input
+              id="import-tags"
+              type="text"
+              value={tagsInput}
+              onChange={(e) => setTagsInput(e.target.value)}
+              placeholder="chatgpt-import, archive"
+              className="w-full px-3 py-2 bg-port-card border border-port-border rounded text-sm text-white focus:outline-none focus:border-port-accent min-h-[40px]"
+            />
+            <p className="text-xs text-gray-500 mt-1">
+              Comma-separated. Each conversation gets these tags so you can filter on them later in Memory.
+            </p>
+          </div>
+
+          <label htmlFor="import-skip-empty" className="flex items-center gap-2 text-sm text-gray-300 select-none">
+            <input
+              id="import-skip-empty"
+              type="checkbox"
+              checked={skipEmpty}
+              onChange={(e) => setSkipEmpty(e.target.checked)}
+              className="rounded border-port-border bg-port-card"
+            />
+            Skip empty conversations (chats started but never sent)
+          </label>
+
+          <button
+            onClick={onRun}
+            className="w-full px-4 py-2 bg-port-success text-white text-sm font-medium rounded hover:bg-port-success/90 flex items-center justify-center gap-1 min-h-[40px]"
+          >
+            Run import <ArrowRight size={14} aria-hidden="true" />
+          </button>
+        </div>
       </div>
 
-      <div className="flex items-center justify-between pt-2">
+      <div className="flex items-center pt-2">
         <button
           onClick={onBack}
           className="px-4 py-2 text-sm text-gray-400 hover:text-white flex items-center gap-1 min-h-[40px]"
         >
           <ArrowLeft size={14} aria-hidden="true" /> Back
-        </button>
-        <button
-          onClick={onNext}
-          className="px-4 py-2 bg-port-accent text-white text-sm font-medium rounded hover:bg-port-accent/90 flex items-center gap-1 min-h-[40px]"
-        >
-          Configure import <ArrowRight size={14} aria-hidden="true" />
         </button>
       </div>
     </div>
@@ -476,56 +514,6 @@ function Stat({ label, value }) {
     <div className="p-3 bg-port-card border border-port-border rounded">
       <div className="text-xs text-gray-500 uppercase">{label}</div>
       <div className="text-base text-white font-medium">{value}</div>
-    </div>
-  );
-}
-
-function StepConfigure({ tagsInput, setTagsInput, skipEmpty, setSkipEmpty, onBack, onNext }) {
-  return (
-    <div className="space-y-4">
-      <p className="text-sm text-gray-300">
-        Each conversation becomes a Memory entry in Brain → Memory. The full transcript is also archived to
-        <span className="font-mono text-port-accent"> data/brain/imports/chatgpt</span>.
-      </p>
-
-      <div>
-        <label className="block text-sm text-white mb-1">Tags</label>
-        <input
-          type="text"
-          value={tagsInput}
-          onChange={(e) => setTagsInput(e.target.value)}
-          placeholder="chatgpt-import, archive"
-          className="w-full px-3 py-2 bg-port-card border border-port-border rounded text-sm text-white focus:outline-none focus:border-port-accent min-h-[40px]"
-        />
-        <p className="text-xs text-gray-500 mt-1">
-          Comma-separated. Each conversation gets these tags so you can filter on them later in Memory.
-        </p>
-      </div>
-
-      <label className="flex items-center gap-2 text-sm text-gray-300 select-none">
-        <input
-          type="checkbox"
-          checked={skipEmpty}
-          onChange={(e) => setSkipEmpty(e.target.checked)}
-          className="rounded border-port-border bg-port-card"
-        />
-        Skip empty conversations (chats started but never sent)
-      </label>
-
-      <div className="flex items-center justify-between pt-2">
-        <button
-          onClick={onBack}
-          className="px-4 py-2 text-sm text-gray-400 hover:text-white flex items-center gap-1 min-h-[40px]"
-        >
-          <ArrowLeft size={14} aria-hidden="true" /> Back
-        </button>
-        <button
-          onClick={onNext}
-          className="px-4 py-2 bg-port-success text-white text-sm font-medium rounded hover:bg-port-success/90 flex items-center gap-1 min-h-[40px]"
-        >
-          Run import <ArrowRight size={14} aria-hidden="true" />
-        </button>
-      </div>
     </div>
   );
 }

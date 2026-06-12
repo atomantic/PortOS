@@ -96,17 +96,17 @@ describe('createShellSession', () => {
   });
 
   it('emits shell:error and returns null when max sessions reached', () => {
-    for (let i = 0; i < 5; i++) shell.createShellSession(makeSocket(`s${i}`));
+    for (let i = 0; i < 20; i++) shell.createShellSession(makeSocket(`s${i}`));
     const socket = makeSocket('over');
     const id = shell.createShellSession(socket);
     expect(id).toBeNull();
     expect(socket.emit).toHaveBeenCalledWith('shell:error', {
-      error: 'Max 5 shell sessions. Kill an existing session first.',
+      error: 'Max 20 shell sessions. Kill an existing session first.',
     });
   });
 
   it('does not throw when over-cap and socket is missing', () => {
-    for (let i = 0; i < 5; i++) shell.createShellSession(makeSocket(`s${i}`));
+    for (let i = 0; i < 20; i++) shell.createShellSession(makeSocket(`s${i}`));
     expect(() => shell.createShellSession(null)).not.toThrow();
   });
 
@@ -352,6 +352,144 @@ describe('detachSocketSessions', () => {
     shell.createShellSession(makeSocket('owner'));
     const sessionsCalls = sock.emit.mock.calls.filter(c => c[0] === 'shell:sessions');
     expect(sessionsCalls).toHaveLength(0);
+  });
+});
+
+describe('registerExternalSession / unregisterExternalSession', () => {
+  it('registers an external session that lists with metadata', () => {
+    const pty = makeFakePty();
+    const id = shell.registerExternalSession('run-123', pty, {
+      label: 'pipeline-manuscript-completeness',
+      command: 'claude --model x',
+      cwd: '/work',
+    });
+    expect(id).toBe('run-123');
+    const [info] = shell.listAllSessions(makeSocket());
+    expect(info).toMatchObject({
+      sessionId: 'run-123',
+      label: 'pipeline-manuscript-completeness',
+      kind: 'tui-run',
+      command: 'claude --model x',
+      external: true,
+    });
+  });
+
+  it('is idempotent — re-registering the same id is a no-op returning the id', () => {
+    const pty = makeFakePty();
+    shell.registerExternalSession('run-1', pty, { label: 'first' });
+    const again = shell.registerExternalSession('run-1', makeFakePty(), { label: 'second' });
+    expect(again).toBe('run-1');
+    expect(shell.getSession('run-1').label).toBe('first');
+  });
+
+  it('does NOT count toward the interactive session cap', () => {
+    // Fill the cap with external sessions — interactive creation must still work.
+    for (let i = 0; i < 6; i++) shell.registerExternalSession(`run-${i}`, makeFakePty(), {});
+    const id = shell.createShellSession(makeSocket());
+    expect(typeof id).toBe('string');
+  });
+
+  it('streams output to the attached viewer and buffers for re-attach', () => {
+    const pty = makeFakePty();
+    const id = shell.registerExternalSession('run-x', pty, {});
+    // No viewer yet — output buffers without throwing.
+    pty.emitData('early');
+    const viewer = makeSocket('viewer');
+    const result = shell.attachSession(id, viewer);
+    expect(result.bufferedOutput).toBe('early');
+    pty.emitData('live');
+    expect(viewer.emit).toHaveBeenCalledWith('shell:output', { sessionId: id, data: 'live' });
+  });
+
+  it('is fully interactive — input writes through and resize works', () => {
+    const pty = makeFakePty();
+    const id = shell.registerExternalSession('run-rw', pty, {});
+    expect(shell.writeToSession(id, 'yes\n')).toBe(true);
+    expect(pty.write).toHaveBeenCalledWith('yes\n');
+    expect(shell.resizeSession(id, 120, 40)).toBe(true);
+    expect(pty.resize).toHaveBeenCalledWith(120, 40);
+  });
+
+  it('isExternalSessionAttached reflects whether a viewer is bound', () => {
+    const pty = makeFakePty();
+    const id = shell.registerExternalSession('run-att', pty, {});
+    expect(shell.isExternalSessionAttached(id)).toBe(false); // registered, no viewer
+    shell.attachSession(id, makeSocket('viewer'));
+    expect(shell.isExternalSessionAttached(id)).toBe(true);
+    shell.detachSocketSessions(shell.getSession(id).socket);
+    expect(shell.isExternalSessionAttached(id)).toBe(false);
+    // Never true for unknown ids or interactive shells.
+    expect(shell.isExternalSessionAttached('missing')).toBe(false);
+    const shellId = shell.createShellSession(makeSocket('owner'));
+    expect(shell.isExternalSessionAttached(shellId)).toBe(false);
+  });
+
+  it('releases a watched run when the same socket attaches to another session', () => {
+    const viewer = makeSocket('viewer');
+    const runId = shell.registerExternalSession('run-watch', makeFakePty(), {});
+    shell.attachSession(runId, viewer);
+    expect(shell.isExternalSessionAttached(runId)).toBe(true);
+    // Same socket switches to a shell — the run is released so it resumes
+    // normal completion instead of staying paused for a tab left behind.
+    const shellId = shell.createShellSession(viewer);
+    expect(shell.isExternalSessionAttached(runId)).toBe(false);
+    expect(shell.getSession(runId)).toBeTruthy(); // still alive, just unwatched
+    // The new shell is unaffected.
+    expect(shell.getSession(shellId).socket).toBe(viewer);
+  });
+
+  it('releases a watched run when the same socket attaches to a different run', () => {
+    const viewer = makeSocket('viewer');
+    const runA = shell.registerExternalSession('run-A', makeFakePty(), {});
+    const runB = shell.registerExternalSession('run-B', makeFakePty(), {});
+    shell.attachSession(runA, viewer);
+    shell.attachSession(runB, viewer);
+    expect(shell.isExternalSessionAttached(runA)).toBe(false);
+    expect(shell.isExternalSessionAttached(runB)).toBe(true);
+  });
+
+  it('releaseExternalViewsForSocket releases watched runs and broadcasts when something changed', () => {
+    const observer = makeSocket('obs');
+    shell.subscribeSessionList(observer);
+    const viewer = makeSocket('viewer');
+    const runId = shell.registerExternalSession('run-leave', makeFakePty(), {});
+    shell.attachSession(runId, viewer);
+    expect(shell.isExternalSessionAttached(runId)).toBe(true);
+    observer.emit.mockClear();
+    // Viewer navigated away from /shell — release without disconnecting.
+    shell.releaseExternalViewsForSocket(viewer);
+    expect(shell.isExternalSessionAttached(runId)).toBe(false);
+    expect(shell.getSession(runId)).toBeTruthy(); // run still alive, just unwatched
+    expect(observer.emit).toHaveBeenCalledWith('shell:sessions', expect.anything());
+  });
+
+  it('releaseExternalViewsForSocket is a no-op (no broadcast) when the socket held no runs', () => {
+    const observer = makeSocket('obs');
+    shell.subscribeSessionList(observer);
+    observer.emit.mockClear();
+    shell.releaseExternalViewsForSocket(makeSocket('stranger'));
+    expect(observer.emit).not.toHaveBeenCalledWith('shell:sessions', expect.anything());
+  });
+
+  it('unregister removes the session, emits shell:exit to the viewer, broadcasts', () => {
+    const observer = makeSocket('obs');
+    shell.subscribeSessionList(observer);
+    const viewer = makeSocket('viewer');
+    const pty = makeFakePty();
+    const id = shell.registerExternalSession('run-done', pty, {});
+    shell.attachSession(id, viewer);
+    expect(shell.unregisterExternalSession(id, { exitCode: 0 })).toBe(true);
+    expect(shell.getSession(id)).toBeNull();
+    expect(viewer.emit).toHaveBeenCalledWith('shell:exit', { sessionId: id, code: 0 });
+    const last = observer.emit.mock.calls.filter(c => c[0] === 'shell:sessions').pop();
+    expect(last[1]).toHaveLength(0);
+  });
+
+  it('unregister is a no-op for unknown ids and for interactive sessions', () => {
+    expect(shell.unregisterExternalSession('nope')).toBe(false);
+    const id = shell.createShellSession(makeSocket());
+    expect(shell.unregisterExternalSession(id)).toBe(false);
+    expect(shell.getSession(id)).toBeTruthy();
   });
 });
 

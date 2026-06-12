@@ -96,6 +96,32 @@ export function timeAgo(dateStr, fallback = 'never') {
 }
 
 /**
+ * Format a future timestamp as a relative "in X" string, mirroring timeAgo's
+ * bucket thresholds. Returns `fallback` for null/missing or past dates (use
+ * timeAgo for past-relative display). Example outputs: "in 5s", "in 3m",
+ * "in 2h", "in 4d".
+ * @param {string|Date|null} dateStr - ISO timestamp or Date object
+ * @param {string} fallback - Text to show for null/missing/past dates (default: 'now')
+ * @returns {string} Future-relative time string
+ */
+export function timeUntil(dateStr, fallback = 'now') {
+  if (!dateStr) return fallback;
+  const time = new Date(dateStr).getTime();
+  if (!Number.isFinite(time)) return fallback;
+  const seconds = Math.floor((time - Date.now()) / 1000);
+  if (seconds <= 0) return fallback;
+  if (seconds < 60) return `in ${seconds}s`;
+  const mins = Math.floor(seconds / 60);
+  if (mins < 60) return `in ${mins}m`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `in ${hrs}h`;
+  const days = Math.floor(hrs / 24);
+  if (days < 30) return `in ${days}d`;
+  if (days < 365) return `in ${Math.floor(days / 30)}mo`;
+  return `in ${Math.floor(days / 365)}y`;
+}
+
+/**
  * Format bytes as a human-readable string
  * @param {number} bytes - Size in bytes
  * @param {number} decimals - Number of decimal places
@@ -311,6 +337,21 @@ export function formatEventDateTime(dateStr, options = {}) {
   // All-day events render exactly like `formatDateFull` (full weekday + year).
   if (allDay) return formatDateFull(date);
   return date.toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+
+/**
+ * Format a date string as a short weekday + month + day string
+ * (e.g., "Sat, Mar 5"). Used for activity-heatmap tooltips where compact
+ * output with a leading weekday abbreviation is important.
+ * The input is treated as a calendar date (anchored at local noon to avoid
+ * day-boundary drift), not as a precise timestamp.
+ * @param {string} dateStr - Date-only string ("YYYY-MM-DD"); a full ISO
+ *   timestamp is NOT supported (the noon-anchor suffix would make it invalid)
+ * @returns {string} Formatted date (e.g., "Sat, Mar 5")
+ */
+export function formatDateWeekday(dateStr) {
+  const date = new Date(dateStr + 'T12:00:00');
+  return date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
 }
 
 /**

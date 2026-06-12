@@ -241,271 +241,301 @@ export default function CreateApp() {
     return <Circle size={16} className="text-gray-600" />;
   };
 
+  // The status rail only has something to show once detection has started or
+  // produced results — otherwise we render a hint so the column isn't a void.
+  const hasRailContent = detecting || detected || detectionLog.length > 0;
+
   return (
-    <div className="max-w-2xl mx-auto">
+    <div className="max-w-5xl mx-auto">
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-white">Add App</h1>
         <p className="text-gray-500">Import an existing project or create a new one from a template</p>
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-6">
-        {/* Path Input */}
-        <div className="bg-port-card border border-port-border rounded-xl p-6">
-          <label className="block text-sm text-gray-400 mb-2">Project Directory</label>
-          <div className="flex gap-2">
-            <input
-              type="text"
-              value={repoPath}
-              onChange={(e) => { setRepoPath(e.target.value); reset(); }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault();
-                  handleImport();
-                }
-              }}
-              placeholder="/Users/you/projects/my-app"
-              className="flex-1 px-4 py-3 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden font-mono"
-            />
-            <FolderPicker
-              value={repoPath}
-              onChange={(path) => { setRepoPath(path); reset(); }}
-            />
+        <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6 items-start">
+          {/* Left column — path input + configuration form */}
+          <div className="space-y-6 min-w-0">
+            {/* Path Input */}
+            <div className="bg-port-card border border-port-border rounded-xl p-6">
+              <label htmlFor="repo-path" className="block text-sm text-gray-400 mb-2">Project Directory</label>
+              <div className="flex gap-2">
+                <input
+                  id="repo-path"
+                  type="text"
+                  value={repoPath}
+                  onChange={(e) => { setRepoPath(e.target.value); reset(); }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      handleImport();
+                    }
+                  }}
+                  placeholder="/Users/you/projects/my-app"
+                  className="flex-1 min-w-0 px-4 py-3 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden font-mono"
+                />
+                <FolderPicker
+                  value={repoPath}
+                  onChange={(path) => { setRepoPath(path); reset(); }}
+                />
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex gap-3 mt-4">
+                <button
+                  type="button"
+                  onClick={() => navigate('/templates')}
+                  className="flex-1 px-6 py-3 bg-port-border hover:bg-port-border/80 text-white rounded-lg transition-colors"
+                >
+                  Create from Template
+                </button>
+                <button
+                  type="button"
+                  onClick={handleImport}
+                  disabled={!repoPath || detecting}
+                  className="flex-1 px-6 py-3 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors disabled:opacity-50"
+                >
+                  {detecting ? 'Detecting...' : 'Import'}
+                </button>
+              </div>
+            </div>
+
+            {/* App Configuration - shown after detection */}
+            {detected && (
+              <div className="bg-port-card border border-port-border rounded-xl p-6 space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                <h3 className="text-lg font-semibold text-white mb-4">App Configuration</h3>
+
+                <div className="grid grid-cols-[1fr_auto] gap-4">
+                  <div>
+                    <label htmlFor="app-name" className="block text-sm text-gray-400 mb-1">App Name *</label>
+                    <input
+                      id="app-name"
+                      type="text"
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      placeholder="My Awesome App"
+                      required
+                      className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
+                    />
+                  </div>
+                  <div className="w-32">
+                    <IconPicker value={icon} onChange={setIcon} />
+                  </div>
+                </div>
+
+                <div>
+                  <label htmlFor="app-description" className="block text-sm text-gray-400 mb-1">Description</label>
+                  <input
+                    id="app-description"
+                    type="text"
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
+                    placeholder="A brief description of the app"
+                    className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
+                  />
+                </div>
+
+                {/* Port fields - only for PM2/server apps */}
+                {!isNonPm2 && (
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <div>
+                      <label htmlFor="ui-port" className="block text-sm text-gray-400 mb-1">UI Port</label>
+                      <input
+                        id="ui-port"
+                        type="number"
+                        value={uiPort}
+                        onChange={(e) => setUiPort(e.target.value)}
+                        placeholder="3000"
+                        className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="dev-ui-port" className="block text-sm text-gray-400 mb-1">Dev UI Port</label>
+                      <input
+                        id="dev-ui-port"
+                        type="number"
+                        value={devUiPort}
+                        onChange={(e) => setDevUiPort(e.target.value)}
+                        placeholder="3001"
+                        className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="api-port" className="block text-sm text-gray-400 mb-1">API Port</label>
+                      <input
+                        id="api-port"
+                        type="number"
+                        value={apiPort}
+                        onChange={(e) => setApiPort(e.target.value)}
+                        placeholder="3002"
+                        className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* Start commands - only for PM2/server apps */}
+                {!isNonPm2 && (
+                  <div>
+                    <label htmlFor="start-commands" className="block text-sm text-gray-400 mb-1">Start Commands (one per line)</label>
+                    <textarea
+                      id="start-commands"
+                      value={startCommands}
+                      onChange={(e) => setStartCommands(e.target.value)}
+                      placeholder="npm run dev"
+                      rows={2}
+                      className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden font-mono text-sm"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      Commands to start your app. Multiple lines = multiple PM2 processes.
+                    </p>
+                  </div>
+                )}
+
+                <div>
+                  <label htmlFor="build-command" className="block text-sm text-gray-400 mb-1">Build Command</label>
+                  <input
+                    id="build-command"
+                    type="text"
+                    value={buildCommand}
+                    onChange={(e) => setBuildCommand(e.target.value)}
+                    placeholder={isNonPm2 ? 'xcodebuild -scheme MyApp build' : 'npm run build'}
+                    className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden font-mono text-sm"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    {isNonPm2 ? 'Command to build the project.' : 'Command to build the production UI. Enables the Build button.'}
+                  </p>
+                </div>
+
+                {/* PM2 process names - only for PM2/server apps */}
+                {!isNonPm2 && (
+                  <div>
+                    <label htmlFor="pm2-names" className="block text-sm text-gray-400 mb-1">PM2 Process Names (comma-separated)</label>
+                    <input
+                      id="pm2-names"
+                      type="text"
+                      value={pm2Names}
+                      onChange={(e) => setPm2Names(e.target.value)}
+                      placeholder="my-app-ui, my-app-api"
+                      className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      Names for PM2 processes. Leave blank to auto-generate from app name.
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
-          {/* Detection Progress */}
-          {detecting && (
-            <div className="mt-4 space-y-2">
-              {(isNonPm2 ? DETECTION_STEPS_NON_PM2 : DETECTION_STEPS_PM2).map(({ id, label }) => (
-                <div key={id} className="flex items-center gap-2 text-sm">
-                  {getStepIcon(id)}
-                  <span className={steps[id]?.status === 'running' ? 'text-port-accent' :
-                    steps[id]?.status === 'done' ? 'text-white' : 'text-gray-500'}>
-                    {label}
-                  </span>
-                  {steps[id]?.data?.message && (
-                    <span className="text-gray-500 text-xs ml-2">
-                      {steps[id].data.message}
+          {/* Right column — detection status rail */}
+          <aside className="space-y-3 lg:sticky lg:top-4 self-start">
+            {/* Detection Progress */}
+            {detecting && (
+              <div className="bg-port-card border border-port-border rounded-xl p-4 space-y-2">
+                <h3 className="text-xs font-medium uppercase tracking-wide text-gray-500">Detecting</h3>
+                {(isNonPm2 ? DETECTION_STEPS_NON_PM2 : DETECTION_STEPS_PM2).map(({ id, label }) => (
+                  <div key={id} className="flex items-center gap-2 text-sm">
+                    {getStepIcon(id)}
+                    <span className={steps[id]?.status === 'running' ? 'text-port-accent' :
+                      steps[id]?.status === 'done' ? 'text-white' : 'text-gray-500'}>
+                      {label}
                     </span>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
+                    {steps[id]?.data?.message && (
+                      <span className="text-gray-500 text-xs ml-2 truncate">
+                        {steps[id].data.message}
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
 
-          {/* App Type Badge */}
-          {detected && isNonPm2 && (
-            <Banner tone="info" size="md" className="mt-3">
-              <p className="font-medium">
-                {appType === 'ios-native' ? '📱 iOS App' :
-                 appType === 'macos-native' ? '🖥️ macOS App' :
-                 appType === 'swift' ? '🐦 Swift Package' :
-                 '🔨 Xcode Project'} — not managed by PM2
-              </p>
-            </Banner>
-          )}
-
-          {/* PM2 Running Status */}
-          {pm2Status && pm2Status.length > 0 && !isNonPm2 && (
-            <Banner tone="warning" size="md" className="mt-3">
-              <p className="font-medium flex items-center gap-2">
-                <Play size={14} /> Already running in PM2
-              </p>
-              <p className="text-xs text-gray-400 mt-1">
-                {pm2Status.map(p => `${p.name} (${p.status})`).join(', ')}
-              </p>
-            </Banner>
-          )}
-
-          {/* Standardization Result */}
-          {standardizeResult && (
-            <Banner tone="success" size="md" className="mt-3">
-              <p className="font-medium flex items-center gap-2">
-                <Wrench size={14} /> PM2 Config Standardized
-              </p>
-              {standardizeResult.backupBranch && (
-                <p className="text-xs text-gray-400 mt-1">
-                  Backup branch: <code className="bg-port-bg px-1 rounded">{standardizeResult.backupBranch}</code>
+            {/* App Type Badge */}
+            {detected && isNonPm2 && (
+              <Banner tone="info" size="md">
+                <p className="font-medium">
+                  {appType === 'ios-native' ? '📱 iOS App' :
+                   appType === 'macos-native' ? '🖥️ macOS App' :
+                   appType === 'swift' ? '🐦 Swift Package' :
+                   '🔨 Xcode Project'} — not managed by PM2
                 </p>
-              )}
-              {standardizeResult.filesModified?.length > 0 && (
-                <p className="text-xs text-gray-400 mt-1">
-                  Modified: {standardizeResult.filesModified.join(', ')}
+              </Banner>
+            )}
+
+            {/* PM2 Running Status */}
+            {pm2Status && pm2Status.length > 0 && !isNonPm2 && (
+              <Banner tone="warning" size="md">
+                <p className="font-medium flex items-center gap-2">
+                  <Play size={14} /> Already running in PM2
                 </p>
-              )}
-            </Banner>
-          )}
+                <p className="text-xs text-gray-400 mt-1">
+                  {pm2Status.map(p => `${p.name} (${p.status})`).join(', ')}
+                </p>
+              </Banner>
+            )}
 
-          {/* No Provider Warning */}
-          {detected && !activeProvider && !standardizing && !standardizeResult && !isNonPm2 && (
-            <div className="mt-3 p-3 bg-port-border/50 border border-port-border rounded-lg">
-              <p className="text-xs text-gray-400">
-                <span className="text-port-warning">⚠</span> No LLM provider configured. PM2 standardization skipped.
-              </p>
-            </div>
-          )}
+            {/* Standardization Result */}
+            {standardizeResult && (
+              <Banner tone="success" size="md">
+                <p className="font-medium flex items-center gap-2">
+                  <Wrench size={14} /> PM2 Config Standardized
+                </p>
+                {standardizeResult.backupBranch && (
+                  <p className="text-xs text-gray-400 mt-1">
+                    Backup branch: <code className="bg-port-bg px-1 rounded">{standardizeResult.backupBranch}</code>
+                  </p>
+                )}
+                {standardizeResult.filesModified?.length > 0 && (
+                  <p className="text-xs text-gray-400 mt-1">
+                    Modified: {standardizeResult.filesModified.join(', ')}
+                  </p>
+                )}
+              </Banner>
+            )}
 
-          {/* Detection Log Toggle */}
-          {detectionLog.length > 0 && (
-            <button
-              type="button"
-              onClick={() => setShowLog(!showLog)}
-              className="mt-3 text-xs text-gray-500 hover:text-gray-400"
-            >
-              {showLog ? 'Hide' : 'Show'} detection log ({detectionLog.length} entries)
-            </button>
-          )}
+            {/* No Provider Warning */}
+            {detected && !activeProvider && !standardizing && !standardizeResult && !isNonPm2 && (
+              <div className="p-3 bg-port-border/50 border border-port-border rounded-lg">
+                <p className="text-xs text-gray-400">
+                  <span className="text-port-warning">⚠</span> No LLM provider configured. PM2 standardization skipped.
+                </p>
+              </div>
+            )}
 
-          {showLog && (
-            <div className="mt-2 p-2 bg-port-bg rounded text-xs font-mono text-gray-400 max-h-40 overflow-auto">
-              {detectionLog.map((log, i) => (
-                <div key={i} className="py-0.5">
-                  <span className={log.status === 'done' ? 'text-port-success' :
-                    log.status === 'error' ? 'text-port-error' : 'text-gray-500'}>
-                    [{log.step}]
-                  </span> {log.message}
-                </div>
-              ))}
-            </div>
-          )}
+            {/* Detection Log */}
+            {detectionLog.length > 0 && (
+              <div>
+                <button
+                  type="button"
+                  onClick={() => setShowLog(!showLog)}
+                  className="text-xs text-gray-500 hover:text-gray-400"
+                >
+                  {showLog ? 'Hide' : 'Show'} detection log ({detectionLog.length} entries)
+                </button>
+                {showLog && (
+                  <div className="mt-2 p-2 bg-port-bg rounded text-xs font-mono text-gray-400 max-h-40 overflow-auto">
+                    {detectionLog.map((log, i) => (
+                      <div key={i} className="py-0.5">
+                        <span className={log.status === 'done' ? 'text-port-success' :
+                          log.status === 'error' ? 'text-port-error' : 'text-gray-500'}>
+                          [{log.step}]
+                        </span> {log.message}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
 
-          {/* Action Buttons */}
-          <div className="flex gap-3 mt-4">
-            <button
-              type="button"
-              onClick={() => navigate('/templates')}
-              className="flex-1 px-6 py-3 bg-port-border hover:bg-port-border/80 text-white rounded-lg transition-colors"
-            >
-              Create from Template
-            </button>
-            <button
-              type="button"
-              onClick={handleImport}
-              disabled={!repoPath || detecting}
-              className="flex-1 px-6 py-3 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors disabled:opacity-50"
-            >
-              {detecting ? 'Detecting...' : 'Import'}
-            </button>
-          </div>
+            {/* Empty-state placeholder — keeps the rail from being a blank gap before detection runs */}
+            {!hasRailContent && (
+              <div className="bg-port-card/50 border border-dashed border-port-border rounded-xl p-4 text-xs text-gray-500">
+                Detection progress and results appear here once you import a project.
+              </div>
+            )}
+          </aside>
         </div>
-
-        {/* App Configuration - shown after detection */}
-        {detected && (
-          <div className="bg-port-card border border-port-border rounded-xl p-6 space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
-            <h3 className="text-lg font-semibold text-white mb-4">App Configuration</h3>
-
-            <div className="grid grid-cols-[1fr_auto] gap-4">
-              <div>
-                <label className="block text-sm text-gray-400 mb-1">App Name *</label>
-                <input
-                  type="text"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="My Awesome App"
-                  required
-                  className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
-                />
-              </div>
-              <div className="w-32">
-                <IconPicker value={icon} onChange={setIcon} />
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-sm text-gray-400 mb-1">Description</label>
-              <input
-                type="text"
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                placeholder="A brief description of the app"
-                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
-              />
-            </div>
-
-            {/* Port fields - only for PM2/server apps */}
-            {!isNonPm2 && (
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <div>
-                  <label className="block text-sm text-gray-400 mb-1">UI Port</label>
-                  <input
-                    type="number"
-                    value={uiPort}
-                    onChange={(e) => setUiPort(e.target.value)}
-                    placeholder="3000"
-                    className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm text-gray-400 mb-1">Dev UI Port</label>
-                  <input
-                    type="number"
-                    value={devUiPort}
-                    onChange={(e) => setDevUiPort(e.target.value)}
-                    placeholder="3001"
-                    className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm text-gray-400 mb-1">API Port</label>
-                  <input
-                    type="number"
-                    value={apiPort}
-                    onChange={(e) => setApiPort(e.target.value)}
-                    placeholder="3002"
-                    className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
-                  />
-                </div>
-              </div>
-            )}
-
-            {/* Start commands - only for PM2/server apps */}
-            {!isNonPm2 && (
-              <div>
-                <label className="block text-sm text-gray-400 mb-1">Start Commands (one per line)</label>
-                <textarea
-                  value={startCommands}
-                  onChange={(e) => setStartCommands(e.target.value)}
-                  placeholder="npm run dev"
-                  rows={2}
-                  className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden font-mono text-sm"
-                />
-                <p className="text-xs text-gray-500 mt-1">
-                  Commands to start your app. Multiple lines = multiple PM2 processes.
-                </p>
-              </div>
-            )}
-
-            <div>
-              <label className="block text-sm text-gray-400 mb-1">Build Command</label>
-              <input
-                type="text"
-                value={buildCommand}
-                onChange={(e) => setBuildCommand(e.target.value)}
-                placeholder={isNonPm2 ? 'xcodebuild -scheme MyApp build' : 'npm run build'}
-                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden font-mono text-sm"
-              />
-              <p className="text-xs text-gray-500 mt-1">
-                {isNonPm2 ? 'Command to build the project.' : 'Command to build the production UI. Enables the Build button.'}
-              </p>
-            </div>
-
-            {/* PM2 process names - only for PM2/server apps */}
-            {!isNonPm2 && (
-              <div>
-                <label className="block text-sm text-gray-400 mb-1">PM2 Process Names (comma-separated)</label>
-                <input
-                  type="text"
-                  value={pm2Names}
-                  onChange={(e) => setPm2Names(e.target.value)}
-                  placeholder="my-app-ui, my-app-api"
-                  className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
-                />
-                <p className="text-xs text-gray-500 mt-1">
-                  Names for PM2 processes. Leave blank to auto-generate from app name.
-                </p>
-              </div>
-            )}
-          </div>
-        )}
 
         {/* Error Display */}
         {error && (

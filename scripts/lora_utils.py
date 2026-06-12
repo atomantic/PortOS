@@ -44,7 +44,10 @@ def apply_loras(pipe, lora_paths, lora_scales) -> None:
             )
     if not loaded:
         return
-    adapter_names, scales = zip(*loaded)
+    # `zip(*loaded)` yields tuples; diffusers' set_adapters does arithmetic over
+    # the weights (e.g. `weight / len(...)`) and raises `'tuple' / int` on a
+    # tuple, so hand it plain lists.
+    adapter_names, scales = (list(x) for x in zip(*loaded))
     if hasattr(pipe, "set_adapters"):
         try:
             pipe.set_adapters(adapter_names, adapter_weights=scales)

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {Sparkles,
   ChevronRight,
@@ -32,9 +32,14 @@ export default function EnrichTab({ onRefresh }) {
   const [loadingQuestion, setLoadingQuestion] = useState(false);
   const [skippedIndices, setSkippedIndices] = useState([]);
 
-  // Writing sample analysis
+  // Writing sample analysis.
+  // Each entry is { value: string, _key: number } so we have a stable key
+  // for React when samples are removed mid-list (key={index} causes
+  // mis-association of textarea state on removal).
+  const writingSampleKey = useRef(0);
+  const mkSample = (value = '') => ({ value, _key: writingSampleKey.current++ });
   const [showWritingAnalysis, setShowWritingAnalysis] = useState(false);
-  const [writingSamples, setWritingSamples] = useState(['']);
+  const [writingSamples, setWritingSamples] = useState(() => [mkSample()]);
   const [analyzingWriting, setAnalyzingWriting] = useState(false);
   const [writingAnalysis, setWritingAnalysis] = useState(null);
   const [providers, setProviders] = useState([]);
@@ -63,12 +68,12 @@ export default function EnrichTab({ onRefresh }) {
   }, [loadData, loadProviders]);
 
   const addWritingSample = () => {
-    setWritingSamples([...writingSamples, '']);
+    setWritingSamples([...writingSamples, mkSample()]);
   };
 
   const updateWritingSample = (index, value) => {
     const updated = [...writingSamples];
-    updated[index] = value;
+    updated[index] = { ...updated[index], value };
     setWritingSamples(updated);
   };
 
@@ -79,7 +84,7 @@ export default function EnrichTab({ onRefresh }) {
   };
 
   const analyzeWriting = async () => {
-    const validSamples = writingSamples.filter(s => s.trim().length >= 50);
+    const validSamples = writingSamples.map(s => s.value).filter(s => s.trim().length >= 50);
     if (validSamples.length === 0) {
       toast.error('Add at least one writing sample (50+ characters)');
       return;
@@ -560,9 +565,9 @@ export default function EnrichTab({ onRefresh }) {
             {/* Writing Samples */}
             <div className="space-y-3">
               {writingSamples.map((sample, index) => (
-                <div key={index} className="relative">
+                <div key={sample._key} className="relative">
                   <textarea
-                    value={sample}
+                    value={sample.value}
                     onChange={(e) => updateWritingSample(index, e.target.value)}
                     placeholder={`Paste writing sample ${index + 1} here (emails, messages, docs)...`}
                     rows={4}
@@ -570,6 +575,7 @@ export default function EnrichTab({ onRefresh }) {
                   />
                   {writingSamples.length > 1 && (
                     <button
+                      type="button"
                       onClick={() => removeWritingSample(index)}
                       className="absolute top-2 right-2 text-gray-500 hover:text-red-400"
                     >
@@ -577,7 +583,7 @@ export default function EnrichTab({ onRefresh }) {
                     </button>
                   )}
                   <div className="text-xs text-gray-500 mt-1">
-                    {sample.length} characters {sample.length < 50 && sample.length > 0 && '(need 50+)'}
+                    {sample.value.length} characters {sample.value.length < 50 && sample.value.length > 0 && '(need 50+)'}
                   </div>
                 </div>
               ))}

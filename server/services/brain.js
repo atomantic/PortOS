@@ -781,3 +781,30 @@ export const getBucketById = storage.getBucketById;
 export const createBucket = storage.createBucket;
 export const updateBucket = storage.updateBucket;
 export const deleteBucket = storage.deleteBucket;
+
+/**
+ * Create a bucket appended after all existing ones (next-order logic).
+ * Folds the next-order computation into the service so the route stays thin.
+ */
+export async function createBucketAppended({ name, color, icon }) {
+  const existing = await storage.getBuckets();
+  const nextOrder = existing.reduce((max, b) => Math.max(max, b.order ?? 0), -1) + 1;
+  return storage.createBucket({ name, color: color || 'accent', icon: icon || '', order: nextOrder });
+}
+
+/**
+ * Delete a bucket and unassign (bucketId → null) all links that belonged to it.
+ * Links survive; they fall back to the ungrouped list rather than being orphaned.
+ */
+export async function deleteBucketAndUnlinkChildren(id) {
+  const links = await storage.getLinks();
+  let unassigned = 0;
+  for (const link of links) {
+    if (link.bucketId === id) {
+      await storage.updateLink(link.id, { bucketId: null });
+      unassigned++;
+    }
+  }
+  await storage.deleteBucket(id);
+  return { deleted: true, unassigned };
+}

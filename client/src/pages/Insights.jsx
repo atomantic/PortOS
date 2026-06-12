@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
+import { useValidTab } from '../hooks/useValidTab';
 import { Dna, Palette, Link2, Lightbulb, ArrowRight } from 'lucide-react';
 import {
   getGenomeHealthCorrelations,
@@ -10,6 +11,8 @@ import GenomeHealthTab from '../components/insights/GenomeHealthTab';
 import TasteIdentityTab from '../components/insights/TasteIdentityTab';
 import CrossDomainTab from '../components/insights/CrossDomainTab';
 import ConfidenceBadge from '../components/insights/ConfidenceBadge';
+import PageHeader from '../components/PageHeader';
+import TabPills from '../components/ui/TabPills';
 import { timeAgo } from '../utils/formatters';
 
 // Exported for the nav-manifest tab-coverage guard (server/lib/navManifest.test.js).
@@ -19,8 +22,6 @@ export const TABS = [
   { id: 'taste-identity', label: 'Taste & Identity', icon: Palette },
   { id: 'cross-domain', label: 'Cross-Domain Patterns', icon: Link2 }
 ];
-
-const VALID_TAB_IDS = new Set(TABS.map(t => t.id));
 
 function SummaryCardSkeleton() {
   return (
@@ -177,9 +178,8 @@ function OverviewTab() {
 }
 
 export default function Insights() {
-  const { tab } = useParams();
   const navigate = useNavigate();
-  const activeTab = VALID_TAB_IDS.has(tab) ? tab : 'overview';
+  const activeTab = useValidTab(TABS, 'overview');
 
   const renderTabContent = () => {
     switch (activeTab) {
@@ -198,32 +198,18 @@ export default function Insights() {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Header */}
-      <div className="shrink-0 px-6 pt-6 pb-4 border-b border-port-border">
-        <div className="flex items-center gap-3 mb-4">
-          <Lightbulb size={24} className="text-port-accent" />
-          <h1 className="text-2xl font-bold text-white">Insights</h1>
-          <span className="text-sm text-gray-500">Cross-Domain Intelligence</span>
-        </div>
+      <PageHeader
+        icon={Lightbulb}
+        title="Insights"
+        subtitle="Cross-Domain Intelligence"
+      />
 
-        {/* Tab bar */}
-        <div className="flex gap-1 overflow-x-auto">
-          {TABS.map(({ id, label, icon: Icon }) => (
-            <button
-              key={id}
-              onClick={() => navigate(`/insights/${id}`)}
-              className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-colors ${
-                activeTab === id
-                  ? 'bg-port-accent/10 text-port-accent'
-                  : 'text-gray-400 hover:text-white hover:bg-port-border/50'
-              }`}
-            >
-              <Icon size={16} />
-              {label}
-            </button>
-          ))}
-        </div>
-      </div>
+      <TabPills
+        tabs={TABS}
+        activeTab={activeTab}
+        onChange={(id) => navigate(`/insights/${id}`)}
+        ariaLabel="Insights sections"
+      />
 
       {/* Tab content */}
       <div className="flex-1 overflow-auto p-6">

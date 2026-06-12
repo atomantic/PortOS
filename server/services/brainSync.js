@@ -10,6 +10,7 @@
  */
 
 import * as brainStorage from './brainStorage.js';
+import { brainEvents } from './brainStorage.js';
 import * as brainSyncLog from './brainSyncLog.js';
 
 const { BRAIN_ENTITY_TYPES } = brainStorage;
@@ -70,6 +71,15 @@ export async function applyRemoteChanges(changes) {
   if (relayBatch.length > 0) {
     await brainSyncLog.appendChanges(relayBatch)
       .catch(err => console.error(`⚠️ Sync log batch append failed (${relayBatch.length} entries): ${err.message}`));
+    // Local-only signal so the memory bridge re-vectorizes synced-in records
+    // (issue #1080). applyRemoteRecord is event-silent to prevent cross-peer
+    // echo (#1077); this event drives ONLY local embedding and never feeds the
+    // sync log, so it can't amplify. Carries just {type, id} — the bridge
+    // re-reads canonical state. Emitted on the relay batch (applied changes
+    // only) so a rejected LWW op doesn't trigger a needless re-embed.
+    brainEvents.emit('sync:applied', {
+      records: relayBatch.map(({ type, id }) => ({ type, id })),
+    });
   }
 
   console.log(`🔄 Brain sync applied: ${inserted} inserted, ${updated} updated, ${deleted} deleted, ${skipped} skipped`);

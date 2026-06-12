@@ -165,7 +165,7 @@ export default function GitHub() {
   }
 
   return (
-    <div className="p-4 sm:p-6 max-w-6xl mx-auto">
+    <div className="p-4 sm:p-6">
       <h1 className="text-xl sm:text-2xl font-bold text-white mb-6">GitHub Repos</h1>
 
       {/* Archive Confirmation Modal */}
@@ -203,222 +203,226 @@ export default function GitHub() {
         </div>
       )}
 
-      {/* Secrets Management */}
-      <div className="bg-port-card rounded-lg border border-port-border p-4 sm:p-6 mb-6">
-        <h2 className="text-lg font-bold text-white mb-4">Secrets Management</h2>
-
-        {secretEntries.length > 0 && (
-          <div className="space-y-2 mb-4">
-            {secretEntries.map(([name, meta]) => (
-              <div key={name} className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 p-3 bg-port-bg rounded border border-port-border">
-                <div>
-                  <span className="text-white font-mono text-sm">{name}</span>
-                  <span className={`ml-2 text-xs ${meta.hasValue ? 'text-port-success' : 'text-port-warning'}`}>
-                    {meta.hasValue ? 'configured' : 'no value'}
-                  </span>
-                  {meta.updatedAt && (
-                    <span className="ml-2 text-xs text-gray-500">
-                      updated {timeAgo(meta.updatedAt)}
-                    </span>
-                  )}
-                </div>
-                <button
-                  onClick={() => handleSyncSecret(name)}
-                  disabled={syncingSecret === name || !meta.hasValue}
-                  className="px-3 py-1 text-sm bg-port-accent hover:bg-port-accent/80 text-white rounded disabled:opacity-50"
-                >
-                  {syncingSecret === name ? 'Syncing...' : 'Sync to Repos'}
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-
-        <div className="flex flex-col sm:flex-row gap-2">
-          <input
-            type="text"
-            value={newSecretName}
-            onChange={(e) => setNewSecretName(e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, ''))}
-            placeholder="SECRET_NAME"
-            className="flex-1 px-3 py-2 bg-port-bg border border-port-border rounded text-white font-mono text-sm"
-          />
-          <input
-            type="password"
-            value={newSecretValue}
-            onChange={(e) => setNewSecretValue(e.target.value)}
-            placeholder="Secret value"
-            className="flex-1 px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm"
-          />
-          <button
-            onClick={handleSaveSecret}
-            disabled={savingSecret || !newSecretName.trim() || !newSecretValue}
-            className="px-4 py-2 bg-port-success hover:bg-port-success/80 text-white rounded text-sm disabled:opacity-50"
-          >
-            {savingSecret ? 'Saving...' : 'Save Secret'}
-          </button>
-        </div>
-        <p className="text-xs text-gray-500 mt-2">
-          Secrets are stored locally and pushed to repos via <code>gh secret set</code>. Stored values are never returned from the server.
-        </p>
-      </div>
-
-      {/* Repo List */}
-      <div className="bg-port-card rounded-lg border border-port-border p-4 sm:p-6 mb-6">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
-          <div className="flex items-center gap-3">
-            <h2 className="text-lg font-bold text-white">Repositories</h2>
-            {lastSync && (
-              <span className="text-xs text-gray-500">Last sync: {timeAgo(lastSync)}</span>
-            )}
-          </div>
-          <button
-            onClick={handleSync}
-            disabled={syncing}
-            className="px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded text-sm disabled:opacity-50"
-          >
-            {syncing ? 'Syncing...' : 'Sync Repos'}
-          </button>
-        </div>
-
-        {/* Search + Filter */}
-        <div className="flex flex-col sm:flex-row gap-2 mb-4">
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search repos..."
-            className="flex-1 px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm"
-          />
-          <div className="flex gap-1">
-            {FILTERS.map(f => (
-              <button
-                key={f}
-                onClick={() => setFilter(f)}
-                className={`px-3 py-2 text-sm rounded capitalize ${
-                  filter === f
-                    ? 'bg-port-accent text-white'
-                    : 'bg-port-bg text-gray-400 hover:text-white border border-port-border'
-                }`}
-              >
-                {f === 'npm' ? 'NPM Projects' : f === 'secrets' ? 'Has Secrets' : f === 'archived' ? 'Archived' : 'All'}
-              </button>
-            ))}
+      <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-6 items-start">
+        {/* Repo List */}
+        <div className="bg-port-card rounded-lg border border-port-border p-4 sm:p-6 min-w-0">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+            <div className="flex items-center gap-3">
+              <h2 className="text-lg font-bold text-white">Repositories</h2>
+              {lastSync && (
+                <span className="text-xs text-gray-500">Last sync: {timeAgo(lastSync)}</span>
+              )}
+            </div>
             <button
-              onClick={() => setSort(s => s === 'recent' ? 'alpha' : 'recent')}
-              className="px-3 py-2 text-sm rounded bg-port-bg text-gray-400 hover:text-white border border-port-border"
-              title={`Sort by ${sort === 'recent' ? 'name' : 'recent activity'}`}
+              onClick={handleSync}
+              disabled={syncing}
+              className="px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded text-sm disabled:opacity-50"
             >
-              {sort === 'recent' ? 'A-Z' : 'Recent'}
+              {syncing ? 'Syncing...' : 'Sync Repos'}
             </button>
           </div>
-        </div>
 
-        {/* Repo count */}
-        <p className="text-xs text-gray-500 mb-3">
-          {repoList.length} repo{repoList.length !== 1 ? 's' : ''}
-          {filter !== 'all' ? ` (filtered)` : ''}
-        </p>
-
-        {Object.keys(repos).length === 0 ? (
-          <div className="text-center py-8">
-            <p className="text-gray-400">No repos loaded yet.</p>
-            <p className="text-gray-500 text-sm mt-1">Click "Sync Repos" to fetch from GitHub.</p>
-          </div>
-        ) : repoList.length === 0 ? (
-          <div className="text-center py-8">
-            <p className="text-gray-400">No repos match your filter.</p>
-          </div>
-        ) : (
-          <div className="space-y-1">
-            {repoList.map(repo => (
-              <div
-                key={repo.fullName}
-                className={`flex flex-col sm:flex-row sm:items-center gap-2 p-3 rounded border border-port-border ${
-                  repo.isArchived ? 'opacity-50 bg-port-bg/50' : 'bg-port-bg'
-                }`}
+          {/* Search + Filter */}
+          <div className="flex flex-col sm:flex-row gap-2 mb-4">
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search repos..."
+              className="flex-1 px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm"
+            />
+            <div className="flex gap-1">
+              {FILTERS.map(f => (
+                <button
+                  key={f}
+                  onClick={() => setFilter(f)}
+                  className={`px-3 py-2 text-sm rounded capitalize ${
+                    filter === f
+                      ? 'bg-port-accent text-white'
+                      : 'bg-port-bg text-gray-400 hover:text-white border border-port-border'
+                  }`}
+                >
+                  {f === 'npm' ? 'NPM Projects' : f === 'secrets' ? 'Has Secrets' : f === 'archived' ? 'Archived' : 'All'}
+                </button>
+              ))}
+              <button
+                onClick={() => setSort(s => s === 'recent' ? 'alpha' : 'recent')}
+                className="px-3 py-2 text-sm rounded bg-port-bg text-gray-400 hover:text-white border border-port-border"
+                title={`Sort by ${sort === 'recent' ? 'name' : 'recent activity'}`}
               >
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <a
-                      href={`https://github.com/${repo.fullName}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-white text-sm font-medium hover:text-port-accent truncate"
-                    >
-                      {repo.name}
-                    </a>
-                    {repo.isPrivate && (
-                      <span className="text-xs px-1.5 py-0.5 rounded bg-purple-900/50 text-purple-400 border border-purple-800">private</span>
-                    )}
-                    {repo.isFork && (
+                {sort === 'recent' ? 'A-Z' : 'Recent'}
+              </button>
+            </div>
+          </div>
+
+          {/* Repo count */}
+          <p className="text-xs text-gray-500 mb-3">
+            {repoList.length} repo{repoList.length !== 1 ? 's' : ''}
+            {filter !== 'all' ? ` (filtered)` : ''}
+          </p>
+
+          {Object.keys(repos).length === 0 ? (
+            <div className="text-center py-8">
+              <p className="text-gray-400">No repos loaded yet.</p>
+              <p className="text-gray-500 text-sm mt-1">Click "Sync Repos" to fetch from GitHub.</p>
+            </div>
+          ) : repoList.length === 0 ? (
+            <div className="text-center py-8">
+              <p className="text-gray-400">No repos match your filter.</p>
+            </div>
+          ) : (
+            <div className="space-y-1">
+              {repoList.map(repo => (
+                <div
+                  key={repo.fullName}
+                  className={`flex flex-col sm:flex-row sm:items-center gap-2 p-3 rounded border border-port-border ${
+                    repo.isArchived ? 'opacity-50 bg-port-bg/50' : 'bg-port-bg'
+                  }`}
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <a
-                        href={`https://github.com/${repo.forkSource}`}
+                        href={`https://github.com/${repo.fullName}`}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="text-xs px-1.5 py-0.5 rounded bg-cyan-900/50 text-cyan-400 border border-cyan-800 hover:bg-cyan-900/70"
-                        title={`Forked from ${repo.forkSource}`}
+                        className="text-white text-sm font-medium hover:text-port-accent truncate"
                       >
-                        fork: {repo.forkSource}
+                        {repo.name}
                       </a>
+                      {repo.isPrivate && (
+                        <span className="text-xs px-1.5 py-0.5 rounded bg-purple-900/50 text-purple-400 border border-purple-800">private</span>
+                      )}
+                      {repo.isFork && (
+                        <a
+                          href={`https://github.com/${repo.forkSource}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-xs px-1.5 py-0.5 rounded bg-cyan-900/50 text-cyan-400 border border-cyan-800 hover:bg-cyan-900/70"
+                          title={`Forked from ${repo.forkSource}`}
+                        >
+                          fork: {repo.forkSource}
+                        </a>
+                      )}
+                      {repo.isArchived && (
+                        <span className="text-xs px-1.5 py-0.5 rounded bg-gray-700 text-gray-400">archived</span>
+                      )}
+                      {repo.flags?.npmProject && (
+                        <span className="text-xs px-1.5 py-0.5 rounded bg-red-900/50 text-red-400 border border-red-800">npm</span>
+                      )}
+                      {repo.managedSecrets?.map(s => (
+                        <span key={s} className="text-xs px-1.5 py-0.5 rounded bg-port-accent/10 text-port-accent border border-port-accent/30">
+                          {s}
+                        </span>
+                      ))}
+                    </div>
+                    {repo.description && (
+                      <p className="text-xs text-gray-500 mt-0.5 truncate">{repo.description}</p>
                     )}
-                    {repo.isArchived && (
-                      <span className="text-xs px-1.5 py-0.5 rounded bg-gray-700 text-gray-400">archived</span>
-                    )}
-                    {repo.flags?.npmProject && (
-                      <span className="text-xs px-1.5 py-0.5 rounded bg-red-900/50 text-red-400 border border-red-800">npm</span>
-                    )}
-                    {repo.managedSecrets?.map(s => (
-                      <span key={s} className="text-xs px-1.5 py-0.5 rounded bg-port-accent/10 text-port-accent border border-port-accent/30">
-                        {s}
-                      </span>
-                    ))}
                   </div>
-                  {repo.description && (
-                    <p className="text-xs text-gray-500 mt-0.5 truncate">{repo.description}</p>
-                  )}
+                  <div className="flex items-center gap-3 shrink-0">
+                    <span className="text-xs text-gray-500">{timeAgo(repo.pushedAt)}</span>
+                    {!repo.isArchived && (
+                      <label className="flex items-center gap-1.5 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={!!repo.flags?.npmProject}
+                          onChange={() => handleToggleNpm(repo.fullName, repo.flags?.npmProject)}
+                          className="w-4 h-4 rounded border-gray-600 bg-port-bg text-port-accent focus:ring-port-accent"
+                        />
+                        <span className="text-xs text-gray-400">NPM</span>
+                      </label>
+                    )}
+                    <button
+                      onClick={() => handleArchiveClick(repo.fullName, repo.isArchived)}
+                      disabled={archiving === repo.fullName}
+                      className={`px-2 py-1 text-xs rounded ${
+                        repo.isArchived
+                          ? 'bg-port-success/20 text-port-success hover:bg-port-success/30 border border-port-success/30'
+                          : 'bg-port-warning/20 text-port-warning hover:bg-port-warning/30 border border-port-warning/30'
+                      } disabled:opacity-50`}
+                    >
+                      {archiving === repo.fullName ? '...' : repo.isArchived ? 'Unarchive' : 'Archive'}
+                    </button>
+                  </div>
                 </div>
-                <div className="flex items-center gap-3 shrink-0">
-                  <span className="text-xs text-gray-500">{timeAgo(repo.pushedAt)}</span>
-                  {!repo.isArchived && (
-                    <label className="flex items-center gap-1.5 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={!!repo.flags?.npmProject}
-                        onChange={() => handleToggleNpm(repo.fullName, repo.flags?.npmProject)}
-                        className="w-4 h-4 rounded border-gray-600 bg-port-bg text-port-accent focus:ring-port-accent"
-                      />
-                      <span className="text-xs text-gray-400">NPM</span>
-                    </label>
-                  )}
-                  <button
-                    onClick={() => handleArchiveClick(repo.fullName, repo.isArchived)}
-                    disabled={archiving === repo.fullName}
-                    className={`px-2 py-1 text-xs rounded ${
-                      repo.isArchived
-                        ? 'bg-port-success/20 text-port-success hover:bg-port-success/30 border border-port-success/30'
-                        : 'bg-port-warning/20 text-port-warning hover:bg-port-warning/30 border border-port-warning/30'
-                    } disabled:opacity-50`}
-                  >
-                    {archiving === repo.fullName ? '...' : repo.isArchived ? 'Unarchive' : 'Archive'}
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+              ))}
+            </div>
+          )}
+        </div>
 
-      {/* Info */}
-      <div className="bg-port-card rounded-lg border border-port-border p-4 sm:p-6">
-        <h2 className="text-base font-bold text-white mb-3">How it works</h2>
-        <div className="space-y-2 text-xs sm:text-sm text-gray-300">
-          <p>1. Click "Sync Repos" to fetch your GitHub repos via <code>gh repo list</code></p>
-          <p>2. Toggle "NPM" on repos that publish to npm &mdash; this auto-adds NPM_TOKEN to their managed secrets</p>
-          <p>3. Add secrets (like NPM_TOKEN) with their values &mdash; values are stored locally, never in the browser</p>
-          <p>4. Click "Sync to Repos" to push secrets to all flagged repos via <code>gh secret set</code></p>
-          <p className="text-gray-500 mt-2">
-            Requires <code>gh</code> CLI authenticated with repo and admin:org scope.
-          </p>
+        <div className="space-y-6">
+          {/* Secrets Management */}
+          <div className="bg-port-card rounded-lg border border-port-border p-4 sm:p-6">
+            <h2 className="text-lg font-bold text-white mb-4">Secrets Management</h2>
+
+            {secretEntries.length > 0 && (
+              <div className="space-y-2 mb-4">
+                {secretEntries.map(([name, meta]) => (
+                  <div key={name} className="flex flex-col gap-2 p-3 bg-port-bg rounded border border-port-border">
+                    <div>
+                      <span className="text-white font-mono text-sm">{name}</span>
+                      <span className={`ml-2 text-xs ${meta.hasValue ? 'text-port-success' : 'text-port-warning'}`}>
+                        {meta.hasValue ? 'configured' : 'no value'}
+                      </span>
+                      {meta.updatedAt && (
+                        <span className="ml-2 text-xs text-gray-500">
+                          updated {timeAgo(meta.updatedAt)}
+                        </span>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => handleSyncSecret(name)}
+                      disabled={syncingSecret === name || !meta.hasValue}
+                      className="self-start px-3 py-1 text-sm bg-port-accent hover:bg-port-accent/80 text-white rounded disabled:opacity-50"
+                    >
+                      {syncingSecret === name ? 'Syncing...' : 'Sync to Repos'}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="flex flex-col gap-2">
+              <input
+                type="text"
+                value={newSecretName}
+                onChange={(e) => setNewSecretName(e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, ''))}
+                placeholder="SECRET_NAME"
+                className="px-3 py-2 bg-port-bg border border-port-border rounded text-white font-mono text-sm"
+              />
+              <input
+                type="password"
+                value={newSecretValue}
+                onChange={(e) => setNewSecretValue(e.target.value)}
+                placeholder="Secret value"
+                className="px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm"
+              />
+              <button
+                onClick={handleSaveSecret}
+                disabled={savingSecret || !newSecretName.trim() || !newSecretValue}
+                className="px-4 py-2 bg-port-success hover:bg-port-success/80 text-white rounded text-sm disabled:opacity-50"
+              >
+                {savingSecret ? 'Saving...' : 'Save Secret'}
+              </button>
+            </div>
+            <p className="text-xs text-gray-500 mt-2">
+              Secrets are stored locally and pushed to repos via <code>gh secret set</code>. Stored values are never returned from the server.
+            </p>
+          </div>
+
+          {/* Info */}
+          <div className="bg-port-card rounded-lg border border-port-border p-4 sm:p-6">
+            <h2 className="text-base font-bold text-white mb-3">How it works</h2>
+            <div className="space-y-2 text-xs sm:text-sm text-gray-300">
+              <p>1. Click "Sync Repos" to fetch your GitHub repos via <code>gh repo list</code></p>
+              <p>2. Toggle "NPM" on repos that publish to npm &mdash; this auto-adds NPM_TOKEN to their managed secrets</p>
+              <p>3. Add secrets (like NPM_TOKEN) with their values &mdash; values are stored locally, never in the browser</p>
+              <p>4. Click "Sync to Repos" to push secrets to all flagged repos via <code>gh secret set</code></p>
+              <p className="text-gray-500 mt-2">
+                Requires <code>gh</code> CLI authenticated with repo and admin:org scope.
+              </p>
+            </div>
+          </div>
         </div>
       </div>
     </div>

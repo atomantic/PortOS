@@ -10,13 +10,26 @@
  *   run = { text, changed }   // changed=true ⇒ removed (old) / added (new)
  *
  * `tooLarge` guards the (m+1)×(n+1) DP allocation. The product — not either
- * side — is what matters; cap at 4M cells (~16MB Int32Array). `split(/(\s+)/)`
- * roughly doubles the word count (word + whitespace token), so a ~1000-word vs
- * ~1000-word diff lands at 2000×2000 = 4M cells, right at the cap. Past it,
- * callers fall back to showing both versions in full rather than risk a freeze.
+ * side — is what matters; cap at 4M cells (~16MB Int32Array). Common
+ * prefix/suffix tokens are trimmed before sizing the table, so a localized edit
+ * inside an arbitrarily long text stays under the cap — only texts whose
+ * *differing middle* exceeds ~1000×1000 words trip it. Past it, callers fall
+ * back to showing both versions in full rather than risk a freeze.
  */
 
 export const DIFF_CELL_CAP = 4_000_000;
+
+// Trim the common prefix/suffix off two token arrays so only the differing
+// middle pays for LCS. Shared with the line-level `diffLines.js`.
+export function trimCommonEnds(a, b) {
+  let pre = 0;
+  const maxPre = Math.min(a.length, b.length);
+  while (pre < maxPre && a[pre] === b[pre]) pre++;
+  let suf = 0;
+  const maxSuf = maxPre - pre;
+  while (suf < maxSuf && a[a.length - 1 - suf] === b[b.length - 1 - suf]) suf++;
+  return { pre, suf, aMid: a.slice(pre, a.length - suf), bMid: b.slice(pre, b.length - suf) };
+}
 
 function lcs(a, b) {
   const m = a.length, n = b.length;
@@ -68,13 +81,31 @@ function toRuns(words, commonSeq) {
   return runs;
 }
 
+// Glue an unchanged prefix/suffix run back onto a run list, merging with an
+// adjacent unchanged run so consecutive same-state runs stay collapsed.
+function wrapRuns(prefix, runs, suffix) {
+  const out = runs.filter((r) => r.text);
+  if (prefix) {
+    if (out[0] && !out[0].changed) out[0] = { text: prefix + out[0].text, changed: false };
+    else out.unshift({ text: prefix, changed: false });
+  }
+  if (suffix) {
+    const last = out[out.length - 1];
+    if (last && !last.changed) out[out.length - 1] = { text: last.text + suffix, changed: false };
+    else out.push({ text: suffix, changed: false });
+  }
+  return out;
+}
+
 export function diffWords(oldText, newText) {
   const oldStr = oldText || '';
   const newStr = newText || '';
   const oldWords = oldStr.split(/(\s+)/);
   const newWords = newStr.split(/(\s+)/);
 
-  if (oldWords.length * newWords.length > DIFF_CELL_CAP) {
+  const { pre, suf, aMid: oldMid, bMid: newMid } = trimCommonEnds(oldWords, newWords);
+
+  if (oldMid.length * newMid.length > DIFF_CELL_CAP) {
     return {
       tooLarge: true,
       oldRuns: oldStr ? [{ text: oldStr, changed: true }] : [],
@@ -82,10 +113,12 @@ export function diffWords(oldText, newText) {
     };
   }
 
-  const commonSeq = lcs(oldWords, newWords);
+  const commonSeq = lcs(oldMid, newMid);
+  const prefix = oldWords.slice(0, pre).join('');
+  const suffix = suf ? oldWords.slice(oldWords.length - suf).join('') : '';
   return {
     tooLarge: false,
-    oldRuns: toRuns(oldWords, commonSeq),
-    newRuns: toRuns(newWords, commonSeq),
+    oldRuns: wrapRuns(prefix, toRuns(oldMid, commonSeq), suffix),
+    newRuns: wrapRuns(prefix, toRuns(newMid, commonSeq), suffix),
   };
 }

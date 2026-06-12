@@ -114,6 +114,7 @@ export default function NotificationDropdown({
             <div className="flex items-center gap-2">
               {unreadCount > 0 && (
                 <button
+                  type="button"
                   onClick={onMarkAllAsRead}
                   className="p-1.5 rounded hover:bg-port-border transition-colors focus:outline-hidden focus:ring-2 focus:ring-port-accent"
                   title="Mark all as read"
@@ -124,6 +125,7 @@ export default function NotificationDropdown({
               )}
               {notifications.length > 0 && (
                 <button
+                  type="button"
                   onClick={onClearAll}
                   className="p-1.5 rounded hover:bg-port-border transition-colors focus:outline-hidden focus:ring-2 focus:ring-port-accent"
                   title="Clear all"
@@ -170,6 +172,7 @@ export default function NotificationDropdown({
                             {notification.title}
                           </span>
                           <button
+                            type="button"
                             onClick={(e) => {
                               e.stopPropagation();
                               onRemove(notification.id);
@@ -191,6 +194,7 @@ export default function NotificationDropdown({
                           </span>
                           {!notification.read && (
                             <button
+                              type="button"
                               onClick={(e) => {
                                 e.stopPropagation();
                                 onMarkAsRead(notification.id);

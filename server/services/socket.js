@@ -76,10 +76,12 @@ export function getIo() {
 const ALL_SUBSCRIBER_SETS = [cosSubscribers, errorSubscribers, notificationSubscribers, agentSubscribers, instanceSubscribers, loopSubscribers];
 
 function broadcastToSet(set, event, data) {
+  const disconnected = [];
   for (const s of set) {
-    if (!s.connected) { set.delete(s); continue; }
+    if (!s.connected) { disconnected.push(s); continue; }
     s.emit(event, data);
   }
+  for (const s of disconnected) set.delete(s);
 }
 
 function registerSubscriber(socket, namespace, set) {
@@ -560,6 +562,13 @@ export function initSocket(io) {
       const validated = validateSocketData(shellStopSchema, rawData, socket, 'shell:stop');
       if (!validated) return;
       shellService.killSession(validated.sessionId);
+    });
+
+    // Client left the Shell page — release any watched TUI-run views so those
+    // runs resume normal completion instead of staying paused (the persistent
+    // SocketProvider socket means a navigation doesn't fire `disconnect`).
+    socket.on('shell:release-views', () => {
+      shellService.releaseExternalViewsForSocket(socket);
     });
 
     // Cleanup on disconnect — detach sessions, don't kill them

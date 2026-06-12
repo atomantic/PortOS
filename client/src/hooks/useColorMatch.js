@@ -24,10 +24,21 @@ import {
   buildColorMatchTimeline,
   noteAtTime,
   gradeNote,
+  centsBetween,
   summarizeAccuracy,
   GRADE,
 } from '../lib/colorMatch.js';
 import useMounted from './useMounted.js';
+
+// Downsample the per-frame pitch readout into a trace at ~20 samples/sec. The
+// rAF loop runs at ~60fps; storing every frame would triple the persisted trace
+// for no extra fidelity (a sung note is far slower than 16 ms). One sample per
+// 50 ms keeps the saved tuner trace replay-accurate while small (a 30 s take is
+// ~600 samples, well under the server's PITCH_TRACK_MAX bound).
+const TRACE_SAMPLE_MS = 50;
+// Defensive client-side cap mirroring the server's PITCH_TRACK_MAX so a runaway
+// take can't grow an unbounded array in memory before the server clamps it.
+const TRACE_MAX_SAMPLES = 4000;
 
 // Rank grades so a note keeps the BEST attempt it was hit with across the frames
 // it's active — a singer who slides into pitch shouldn't be graded on the wobble
@@ -58,11 +69,16 @@ export default function useColorMatch({ score, stream, bpm = null, countInBars =
   const analyserRef = useRef(null);
   const timelineRef = useRef(null);
   const startAudioTimeRef = useRef(null); // metronome audio time of the first music beat
-  const pitchRef = useRef({ hz: null });  // latest tracked pitch, read each rAF frame
+  const pitchRef = useRef({ hz: null, clarity: null }); // latest tracked pitch, read each rAF frame
   const gradesRef = useRef({});           // mutable accumulator; flushed to state
   const cursorRef = useRef(0);            // lower-bound index hint for noteAtTime
   const maxReachedRef = useRef(-1);       // furthest note.index the timeline walked
   const rafRef = useRef(null);
+  // Downsampled tuner trace ({ tMs, hz, cents, clarity }[]) accumulated across
+  // the run and returned by stop() so the recorder can persist it on the take.
+  // `lastTraceMs` throttles to one sample per TRACE_SAMPLE_MS (see grade()).
+  const traceRef = useRef([]);
+  const lastTraceMsRef = useRef(-Infinity);
 
   // Tear down the audio graph, tracker, metronome, and rAF loop. Idempotent.
   const teardown = useCallback(() => {
@@ -74,16 +90,19 @@ export default function useColorMatch({ score, stream, bpm = null, countInBars =
     if (trackerRef.current) { trackerRef.current.stop(); trackerRef.current = null; }
     if (analyserRef.current) { analyserRef.current.close(); analyserRef.current = null; }
     startAudioTimeRef.current = null;
-    pitchRef.current = { hz: null };
+    pitchRef.current = { hz: null, clarity: null };
     cursorRef.current = 0;
   }, []);
 
   // Stop a session: finalize the accuracy summary from whatever was graded, then
   // tear the audio graph down. Keeps the painted `noteColors` so the singer sees
-  // their last result.
+  // their last result. Returns the finished take analysis `{ summary, pitchTrack }`
+  // so a caller (the recorder) can attach it to the saved take; an unmounted stop
+  // returns null. The trace is snapshotted BEFORE teardown wipes the run refs.
   const stop = useCallback(() => {
+    const pitchTrack = traceRef.current.slice();
     teardown();
-    if (!mountedRef.current) return;
+    if (!mountedRef.current) return null;
     // Fill MISSED for every note the timeline WALKED PAST (index <= maxReached)
     // that never received a usable grade — so a note the singer skipped counts
     // against the take. Notes never reached on an early stop stay absent, so
@@ -100,10 +119,12 @@ export default function useColorMatch({ score, stream, bpm = null, countInBars =
       gradesRef.current = filled;
       setNoteColors(filled);
     }
-    setSummary(summarizeAccuracy(gradesRef.current));
+    const finalSummary = summarizeAccuracy(gradesRef.current);
+    setSummary(finalSummary);
     setRunning(false);
     setCountingIn(false);
     setActiveIndex(null);
+    return { summary: finalSummary, pitchTrack };
   }, [teardown, mountedRef]);
 
   // One animation frame while grading: read elapsed time off the metronome's
@@ -136,19 +157,41 @@ export default function useColorMatch({ score, stream, bpm = null, countInBars =
     } else {
       setActiveIndex((cur) => (cur === null ? cur : null));
     }
+    // Downsample the live pitch into the persisted trace: at most one sample per
+    // TRACE_SAMPLE_MS, capped at TRACE_MAX_SAMPLES (the server clamps too). `cents`
+    // is measured against the active note's target when one is being sung, else
+    // null (a sample in a rest still records hz so the replay isn't gappy).
+    if (elapsedMs - lastTraceMsRef.current >= TRACE_SAMPLE_MS
+        && traceRef.current.length < TRACE_MAX_SAMPLES) {
+      lastTraceMsRef.current = elapsedMs;
+      const { hz, clarity } = pitchRef.current;
+      const cents = hit ? centsBetween(hz, hit.note.targetHz) : null;
+      traceRef.current.push({
+        tMs: Math.round(elapsedMs),
+        hz: Number.isFinite(hz) ? hz : null,
+        cents: Number.isFinite(cents) ? Math.round(cents) : null,
+        clarity: Number.isFinite(clarity) ? clarity : null,
+      });
+    }
     rafRef.current = requestAnimationFrame(grade);
   }, [stop]);
 
-  // Start a session: requires a live mic stream and a score with notes.
+  // Start a session: requires a live mic stream and a score with at least one
+  // gradable (non-rest) note. Returns true when a run actually armed (the
+  // accumulators were reset and grading began), false when it bailed early —
+  // callers gate "this take is being graded" on that so a rest-only / no-stream
+  // score can't leave a take falsely armed (which would harvest stale analysis).
   const start = useCallback(() => {
-    if (!stream || running) return;
+    if (!stream || running) return false;
     const timeline = buildColorMatchTimeline(score, { bpm, a4 });
-    if (!timeline.notes.length) return;
+    if (!timeline.notes.length) return false;
 
     teardown();
     gradesRef.current = {};
     cursorRef.current = 0;
     maxReachedRef.current = -1;
+    traceRef.current = [];
+    lastTraceMsRef.current = -Infinity;
     timelineRef.current = timeline;
     setNoteColors({});
     setSummary(null);
@@ -162,7 +205,9 @@ export default function useColorMatch({ score, stream, bpm = null, countInBars =
     analyserRef.current = graph;
     trackerRef.current = createPitchTracker(graph.analyser, {
       a4,
-      onUpdate: (u) => { pitchRef.current = { hz: u.hz }; },
+      // Keep hz + clarity — grade() reads hz for scoring and samples both
+      // (plus cents-from-target) into the persisted tuner trace.
+      onUpdate: (u) => { pitchRef.current = { hz: u.hz, clarity: u.clarity ?? null }; },
     });
 
     const ts = timeSignatureFromScore(score);
@@ -189,6 +234,7 @@ export default function useColorMatch({ score, stream, bpm = null, countInBars =
     });
     metronomeRef.current = metro;
     Promise.resolve(metro.start()).catch(() => { if (mountedRef.current) stop(); });
+    return true;
   }, [stream, running, score, bpm, a4, countInBars, teardown, grade, stop, mountedRef]);
 
   // A vanished stream (recording stopped) or score change ends an active session.

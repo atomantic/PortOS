@@ -3,11 +3,12 @@ import { useParams, useNavigate } from 'react-router-dom';
 import * as api from '../services/api';
 import {Brain as BrainIcon} from 'lucide-react';
 import BrailleSpinner from '../components/BrailleSpinner';
+import PageHeader from '../components/PageHeader';
 import TabPills from '../components/ui/TabPills';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
 import { sameJsonShape } from '../lib/sameJsonShape';
 
-import { TABS } from '../components/brain/constants';
+import { TABS, FULL_BLEED_TAB_IDS } from '../components/brain/constants';
 import { timeAgo } from '../utils/formatters';
 
 import InboxTab from '../components/brain/tabs/InboxTab';
@@ -29,6 +30,10 @@ export default function Brain() {
   const { tab } = useParams();
   const navigate = useNavigate();
   const activeTab = tab || 'inbox';
+  // Full-bleed tabs own their internal scroll and fill height, so the shared
+  // wrapper must NOT add padding or a second scrollbar (issue #1177). The set
+  // is derived from the TABS registry so it can't drift from the tab list.
+  const fullBleed = FULL_BLEED_TAB_IDS.has(activeTab);
 
   // Let errors throw — `useAutoRefetch` preserves the last-good data on
   // transient failures. `silent: true` keeps the 30s poll from spamming
@@ -89,19 +94,13 @@ export default function Brain() {
   }
 
   return (
-    <div className="flex flex-col h-full">
-      {/* Header */}
-      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-3 py-2 sm:p-4 border-b border-port-border">
-        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-          <BrainIcon className="w-6 h-6 sm:w-8 sm:h-8 text-port-accent shrink-0" />
-          <div className="min-w-0">
-            <h1 className="text-lg sm:text-xl font-bold text-white leading-tight">Brain</h1>
-            <p className="hidden sm:block text-sm text-gray-500">Second brain for capturing and organizing thoughts</p>
-          </div>
-        </div>
-
-        {/* Quick stats — wrap on small screens; only "needs review" stays loud */}
-        {summary && (
+    <div className="flex flex-col h-full min-h-0">
+      <PageHeader
+        icon={BrainIcon}
+        title="Brain"
+        subtitle="Second brain for capturing and organizing thoughts"
+        actions={summary && (
+          // Quick stats — wrap on small screens; only "needs review" stays loud
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs sm:text-sm">
             {summary.needsReview > 0 && (
               <span className="px-2 py-0.5 rounded bg-port-warning/20 text-port-warning">
@@ -124,7 +123,7 @@ export default function Brain() {
             )}
           </div>
         )}
-      </div>
+      />
 
       <TabPills
         tabs={TABS}
@@ -134,8 +133,9 @@ export default function Brain() {
         ariaLabel="Brain sections"
       />
 
-      {/* Tab content */}
-      <div className="flex-1 overflow-auto p-4">
+      {/* Tab content — full-bleed tabs own their own scroll and fill height;
+          document-style tabs scroll inside a padded wrapper. */}
+      <div className={`flex-1 min-h-0 ${fullBleed ? 'overflow-hidden' : 'overflow-auto p-3 sm:p-4'}`}>
         {renderTabContent()}
       </div>
     </div>

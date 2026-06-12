@@ -475,18 +475,21 @@ def main() -> None:
         int(args.width),
         unpack_latents=_unpack_flux2_latents,
     )
-    # Flux2KleinPipeline.__call__ doesn't always accept negative_prompt or
-    # strength — passing an unsupported kwarg raises TypeError. Filter to
-    # what the live signature actually accepts.
+    # Flux2KleinPipeline.__call__ doesn't always accept negative_prompt,
+    # strength, or guidance_scale — passing an unsupported kwarg raises
+    # TypeError. Filter to what the live signature actually accepts.
+    # Flux2KleinKVPipeline (multi-reference editing) is guidance-distilled and
+    # omits `guidance_scale` entirely, so gate it like the rest.
     accepted = set(inspect.signature(pipe.__call__).parameters.keys())
     pipe_kwargs = dict(
         prompt=args.prompt,
         height=int(args.height),
         width=int(args.width),
         num_inference_steps=int(args.steps),
-        guidance_scale=float(args.guidance),
         generator=generator,
     )
+    if "guidance_scale" in accepted:
+        pipe_kwargs["guidance_scale"] = float(args.guidance)
     if args.negative_prompt and "negative_prompt" in accepted:
         pipe_kwargs["negative_prompt"] = args.negative_prompt
     if callback is not None and "callback_on_step_end" in accepted:

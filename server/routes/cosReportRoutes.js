@@ -13,6 +13,10 @@ import { validateRequest } from '../lib/validation.js';
 
 const router = Router();
 
+const generateReportSchema = z.object({
+  date: z.string().optional(),
+});
+
 // `since` is the client's last-visit marker (ISO-8601). Optional and tolerant:
 // `getWhileAwayActivity` already clamps an absent/garbage/future marker to a
 // 24h fallback, so a malformed value preprocesses to `undefined` (let the
@@ -48,7 +52,7 @@ router.get('/reports/:date', asyncHandler(async (req, res) => {
 
 // POST /api/cos/reports/generate - Generate report for date
 router.post('/reports/generate', asyncHandler(async (req, res) => {
-  const { date } = req.body;
+  const { date } = validateRequest(generateReportSchema, req.body);
   const report = await cos.generateReport(date);
   res.json(report);
 }));

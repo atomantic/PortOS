@@ -1,6 +1,7 @@
 import { readdir, unlink, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { ensureDir, filterBySearch as genericFilterBySearch, PATHS, readJSONFile, safeDate, UUID_RE } from '../lib/fileUtils.js';
+import { ServerError } from '../lib/errorHandler.js';
 import { getAccount, updateSyncStatus } from './calendarAccounts.js';
 
 export const CACHE_DIR = join(PATHS.calendar, 'cache');
@@ -143,11 +144,11 @@ export async function deleteCache(accountId) {
 }
 
 export async function syncAccount(accountId, io, options = {}) {
-  if (syncLocks.has(accountId)) return { error: 'Sync already in progress', status: 409 };
+  if (syncLocks.has(accountId)) throw new ServerError('Sync already in progress', { status: 409 });
 
   const account = await getAccount(accountId);
-  if (!account) return { error: 'Account not found' };
-  if (!account.enabled) return { error: 'Account is disabled', status: 400 };
+  if (!account) throw new ServerError('Account not found', { status: 404 });
+  if (!account.enabled) throw new ServerError('Account is disabled', { status: 400 });
 
   syncLocks.set(accountId, true);
   io?.emit('calendar:sync:started', { accountId });
@@ -220,7 +221,7 @@ export async function syncAccount(accountId, io, options = {}) {
     console.error(`📅 Sync failed for ${account.name} (${account.type}): ${error.message}`);
     await updateSyncStatus(accountId, 'error').catch(() => {});
     io?.emit('calendar:sync:failed', { accountId, error: error.message });
-    return { error: error.message, status: 502 };
+    throw error instanceof ServerError ? error : new ServerError(error.message, { status: 502 });
   }).finally(() => {
     syncLocks.delete(accountId);
   });

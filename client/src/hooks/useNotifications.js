@@ -10,6 +10,7 @@ export function useNotifications() {
 
   // Fetch initial notifications
   useEffect(() => {
+    let cancelled = false;
     const fetchNotifications = async () => {
       setLoading(true);
       try {
@@ -17,16 +18,19 @@ export function useNotifications() {
           api.getNotifications({ limit: 50 }),
           api.getNotificationCount()
         ]);
+        if (cancelled) return;
         setNotifications(notifs);
         setUnreadCount(countData.count);
       } catch (err) {
+        if (cancelled) return;
         console.error(`❌ Failed to load notifications: ${err.message}`);
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     };
 
     fetchNotifications();
+    return () => { cancelled = true; };
   }, []);
 
   // Subscribe to socket events

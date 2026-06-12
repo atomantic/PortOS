@@ -5,7 +5,7 @@ export const ALLOWED_COMMANDS = new Set([
   'git', 'gh',
   'pm2',
   'ls', 'cat', 'head', 'tail', 'grep', 'find', 'wc',
-  'pwd', 'which', 'echo', 'env',
+  'pwd', 'which', 'echo',
   'curl', 'wget',
   'docker', 'docker-compose',
   'make', 'cargo', 'go', 'python', 'python3', 'pip', 'pip3',

@@ -6,10 +6,13 @@
 import { Router } from 'express';
 import { writeFile, unlink, readdir, stat } from 'fs/promises';
 import { existsSync } from 'fs';
-import { join, basename, extname, resolve } from 'path';
+import { join, resolve } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { ensureDir, PATHS, RISKY_MIME_TYPES } from '../lib/fileUtils.js';
+import {
+  ensureDir, PATHS, RISKY_MIME_TYPES,
+  sanitizeFilename, getFileExtension, getMimeType, ATTACHMENT_ALLOWED_EXTENSIONS,
+} from '../lib/fileUtils.js';
 
 const ATTACHMENTS_DIR = PATHS.cosAttachments;
 
@@ -18,71 +21,13 @@ const router = Router();
 // Max file size: 50MB (larger than screenshots to accommodate documents)
 const MAX_FILE_SIZE = 50 * 1024 * 1024;
 
-// Allowed file extensions and their MIME types
-const ALLOWED_EXTENSIONS = {
-  // Documents
-  '.txt': 'text/plain',
-  '.md': 'text/markdown',
-  '.json': 'application/json',
-  '.csv': 'text/csv',
-  '.xml': 'application/xml',
-  '.yaml': 'application/x-yaml',
-  '.yml': 'application/x-yaml',
-  // Images
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.gif': 'image/gif',
-  '.webp': 'image/webp',
-  '.svg': 'image/svg+xml',
-  // Documents
-  '.pdf': 'application/pdf',
-  // Code
-  '.js': 'text/javascript',
-  '.ts': 'text/typescript',
-  '.jsx': 'text/javascript',
-  '.tsx': 'text/typescript',
-  '.py': 'text/x-python',
-  '.sh': 'text/x-shellscript',
-  '.sql': 'text/x-sql',
-  '.html': 'text/html',
-  '.css': 'text/css',
-  // Archives (useful for providing multiple files)
-  '.zip': 'application/zip',
-  '.tar': 'application/x-tar',
-  '.gz': 'application/gzip'
-};
-
 /**
- * Validate and sanitize filename to prevent path traversal
- * @param {string} filename - User-provided filename
- * @returns {string} - Safe filename
- */
-function sanitizeFilename(filename) {
-  const base = basename(filename);
-  // Replace problematic characters but keep extension dots
-  const sanitized = base.replace(/[^a-zA-Z0-9._-]/g, '_');
-  // Ensure it doesn't start with a dot (hidden files)
-  if (sanitized.startsWith('.')) {
-    return '_' + sanitized.slice(1);
-  }
-  return sanitized;
-}
-
-/**
- * Get file extension, normalized to lowercase with leading dot
- */
-function getExtension(filename) {
-  const ext = extname(filename).toLowerCase();
-  return ext || null;
-}
-
-/**
- * Validate file extension is allowed
+ * Validate file extension is allowed for attachments.
+ * Uses the strict ATTACHMENT_ALLOWED_EXTENSIONS allowlist from fileUtils.
  */
 function isAllowedExtension(filename) {
-  const ext = getExtension(filename);
-  return ext && ALLOWED_EXTENSIONS[ext];
+  const ext = getFileExtension(filename);
+  return ext && ATTACHMENT_ALLOWED_EXTENSIONS.has(ext);
 }
 
 // POST /api/attachments - Upload a file attachment (base64)
@@ -99,7 +44,7 @@ router.post('/', asyncHandler(async (req, res) => {
 
   // Validate extension
   if (!isAllowedExtension(filename)) {
-    const allowedList = Object.keys(ALLOWED_EXTENSIONS).join(', ');
+    const allowedList = [...ATTACHMENT_ALLOWED_EXTENSIONS].join(', ');
     throw new ServerError(`File type not allowed. Supported: ${allowedList}`, { status: 400, code: 'INVALID_FILE_TYPE' });
   }
 
@@ -116,7 +61,7 @@ router.post('/', asyncHandler(async (req, res) => {
 
   const id = uuidv4();
   const safeName = sanitizeFilename(filename);
-  const ext = getExtension(safeName);
+  const ext = getFileExtension(safeName);
   // Create unique filename with UUID prefix to avoid collisions
   const fname = `${id.slice(0, 8)}-${safeName}`;
   const filepath = join(ATTACHMENTS_DIR, fname);
@@ -129,7 +74,7 @@ router.post('/', asyncHandler(async (req, res) => {
 
   await writeFile(filepath, buffer);
 
-  const mimeType = ALLOWED_EXTENSIONS[ext] || 'application/octet-stream';
+  const mimeType = getMimeType(ext);
 
   console.log(`📎 Attachment saved: ${fname} (${buffer.length} bytes, ${mimeType})`);
 
@@ -159,8 +104,8 @@ router.get('/:filename', asyncHandler(async (req, res) => {
     throw new ServerError('Attachment not found', { status: 404, code: 'NOT_FOUND' });
   }
 
-  const ext = getExtension(safeFilename);
-  const mimeType = ALLOWED_EXTENSIONS[ext] || 'application/octet-stream';
+  const ext = getFileExtension(safeFilename);
+  const mimeType = getMimeType(ext);
 
   res.set('X-Content-Type-Options', 'nosniff');
   if (RISKY_MIME_TYPES.has(mimeType)) {
@@ -202,12 +147,12 @@ router.get('/', asyncHandler(async (req, res) => {
   const attachments = await Promise.all(files.map(async filename => {
     const filepath = join(ATTACHMENTS_DIR, filename);
     const stats = await stat(filepath);
-    const ext = getExtension(filename);
+    const ext = getFileExtension(filename);
     return {
       filename,
       path: filepath,
       size: stats.size,
-      mimeType: ALLOWED_EXTENSIONS[ext] || 'application/octet-stream',
+      mimeType: getMimeType(ext),
       createdAt: stats.birthtime
     };
   }));

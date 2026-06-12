@@ -33,7 +33,7 @@
 
 import { listUniverses, deleteUniverse } from './universeBuilder.js';
 import { listSeries, deleteSeries } from './pipeline/series.js';
-import { listIssues } from './pipeline/issues.js';
+import { listAllIssues } from './pipeline/issues.js';
 
 // Grace window before an abandoned, never-committed shell is eligible for GC.
 // Measured against `updatedAt`. Generous on purpose — the cost of an orphan
@@ -89,19 +89,29 @@ export async function sweepOrphanShells({ now = Date.now(), maxAgeMs = ORPHAN_SH
     survivingSeriesByUniverse.set(key, (survivingSeriesByUniverse.get(key) || 0) + 1);
   };
 
+  // Pre-load ALL issues once and group by seriesId to avoid an N+1 pattern
+  // (one listIssues call per candidate series). listAllIssues is UNCAPPED —
+  // listIssues({}) slices at 1000 total, and a series whose issues fall past
+  // that cap would count as zero here and get DELETED while it still has
+  // live issues.
+  const allIssues = await listAllIssues();
+  const issueCountBySeries = new Map();
+  for (const issue of allIssues) {
+    if (!issue.seriesId) continue;
+    issueCountBySeries.set(issue.seriesId, (issueCountBySeries.get(issue.seriesId) || 0) + 1);
+  }
+
   // True only for an import-draft, story-work-free, aged-out, zero-issue shell.
-  // Each gate runs cheapest-first (the listIssues read is reached only by a
-  // series that already passed every in-memory check).
-  const seriesIsSweepable = async (s) => {
+  // Each gate runs cheapest-first; the issue count lookup is now O(1) from the map.
+  const seriesIsSweepable = (s) => {
     if (s.importDraft !== true || seriesHasStoryWork(s)) return false;
     const age = ageMs(s, now);
     if (!Number.isFinite(age) || age < maxAgeMs) return false;
-    const issues = await listIssues({ seriesId: s.id });
-    return issues.length === 0;
+    return (issueCountBySeries.get(s.id) || 0) === 0;
   };
 
   for (const s of allSeries) {
-    if (await seriesIsSweepable(s)) {
+    if (seriesIsSweepable(s)) {
       await deleteSeries(s.id);
       deletedSeries.push(s.id);
     } else {

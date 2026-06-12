@@ -15,6 +15,7 @@ import RunsTab from '../components/creative-director/RunsTab.jsx';
 import ActiveAgentsBanner from '../components/creative-director/ActiveAgentsBanner.jsx';
 import { getCosAgents } from '../services/apiAgents.js';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
+import { useValidTab } from '../hooks/useValidTab';
 
 const TERMINAL_PROJECT_STATUSES = new Set(['complete', 'failed', 'paused', 'draft']);
 
@@ -25,12 +26,10 @@ const TABS = [
   { id: 'runs', label: 'Runs' },
 ];
 
-const VALID_TAB_IDS = new Set(TABS.map((t) => t.id));
-
 export default function CreativeDirectorDetail() {
-  const { id, tab } = useParams();
+  const { id } = useParams();
   const navigate = useNavigate();
-  const activeTab = VALID_TAB_IDS.has(tab) ? tab : 'overview';
+  const activeTab = useValidTab(TABS, 'overview');
   const [project, setProject] = useState(null);
   const [loading, setLoading] = useState(true);
   const [activeAgents, setActiveAgents] = useState([]);

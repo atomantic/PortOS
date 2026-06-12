@@ -13,8 +13,13 @@
  *             cards and an Edit toggle per section.
  *   - Right : a navigable/filterable INDEX of editorial comments — click a row
  *             to reveal + open that note in the manuscript.
- *   An "Impact preview" button shows a before/after side-by-side diff of how the
- *   selected fixes change the whole manuscript.
+ *   The open note's card carries a ‹ N of M › stepper over every open note (in
+ *   story/anchor order), and resolving a note (Accept/Dismiss) auto-advances to
+ *   the next one — triaging a long review pass is one action per note, with no
+ *   scrolling back to the sidebar in between.
+ *   An "Impact preview" button shows a hunked before/after diff (unchanged
+ *   context collapsed, word-level highlights) of how the selected fixes change
+ *   the whole manuscript, with an "Accept all" that applies them in bulk.
  *
  * Data: GET /pipeline/series/:id/manuscript (sections) + .../manuscript/review
  * (comments). Section saves reuse PATCH /pipeline/issues/:id; fixes go through
@@ -25,10 +30,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
 import {
-  ArrowLeft, Loader2, Sparkles, FileText, Star, ClipboardCheck, Layers, PencilLine, BookOpen, GitCompare,
+  ArrowLeft, Loader2, Sparkles, FileText, Star, ClipboardCheck, Layers, PencilLine, BookOpen, GitCompare, X,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import { useAsyncAction } from '../hooks/useAsyncAction';
+import { usePipelineProgress } from '../hooks/usePipelineProgress';
 import { filterGenerationModels, mergeModelLists, localBackendForProvider, modelOptionLabel } from '../utils/providers';
 import useLocalModels from '../hooks/useLocalModels';
 import { locateAnchors } from '../lib/manuscriptAnchors';
@@ -41,7 +47,9 @@ import { MANUSCRIPT_TYPES, STAGE_LABEL } from '../components/pipeline/manuscript
 import {
   getPipelineSeries, updatePipelineSeries, getPipelineManuscript, getPipelineManuscriptReview,
   savePipelineManuscriptSection, restorePipelineStageVersion,
-  analyzePipelineManuscriptCompleteness, getProviders,
+  analyzePipelineManuscriptCompleteness, startPipelineManuscriptCompleteness,
+  cancelPipelineManuscriptCompleteness, getPipelineManuscriptCompletenessStatus, getProviders,
+  pipelineManuscriptCompletenessSseUrl,
 } from '../services/api';
 
 // Stable empty array so sections that gain no comments/spans don't get a fresh
@@ -73,6 +81,14 @@ export default function PipelineManuscriptEditor() {
   const [comments, setComments] = useState([]);
   const [reviewMeta, setReviewMeta] = useState(null);
   const [freshReview, setFreshReview] = useState(false);
+  // "Generate edits for every finding" — pre-builds each comment's fix during the
+  // review so the diff + Accept show with no per-comment "Generate fix" call.
+  // Runs through the streamed runner (per-chunk SSE progress) rather than the
+  // synchronous findings-only path.
+  const [generateEdits, setGenerateEdits] = useState(false);
+  // SSE-gated streaming state for the generate-edits run.
+  const [reviewActive, setReviewActive] = useState(false);
+  const [reviewStarting, setReviewStarting] = useState(false);
   const [loading, setLoading] = useState(true);
   const [switching, setSwitching] = useState(false);
   const [pinning, setPinning] = useState(false);
@@ -193,6 +209,120 @@ export default function PipelineManuscriptEditor() {
     { errorMessage: 'Failed to run editorial review' },
   );
 
+  // Streamed generate-edits review — `reviewActive` gates the SSE subscription;
+  // the latest frame drives the per-chunk button label. The terminal frame
+  // re-fetches the review (comments now carry pre-built fixes). `closed` flips
+  // true when the stream ends for ANY reason, including a non-terminal death
+  // (attach 404, dropped connection) where no terminal frame ever arrives.
+  const { latest: reviewLatest, closed: reviewClosed } = usePipelineProgress(pipelineManuscriptCompletenessSseUrl, [seriesId], { enabled: reviewActive });
+
+  // On mount, re-attach to an in-flight streamed run (e.g. after a reload mid-run).
+  useEffect(() => {
+    let canceled = false;
+    getPipelineManuscriptCompletenessStatus(seriesId, { silent: true })
+      .then((s) => { if (!canceled && s?.active) setReviewActive(true); })
+      .catch(() => {});
+    return () => { canceled = true; };
+  }, [seriesId]);
+
+  // Re-fetch the persisted review after a streamed run lands (the runner seeds
+  // it server-side; comments now carry pre-built fixes). `meta` populates the
+  // chunk badge from the terminal `complete` frame. On the recovery path
+  // (`recovered: true`) the stream died WITHOUT a terminal frame, so we can't
+  // claim success — show a neutral "stream ended, notes refreshed" message
+  // instead of a green "complete", since the run may have failed server-side.
+  const reloadReviewAfterRun = (meta = null, { recovered = false } = {}) =>
+    getPipelineManuscriptReview(seriesId)
+      .then((review) => {
+        const next = Array.isArray(review?.comments) ? review.comments : [];
+        setComments(next);
+        if (meta) setReviewMeta({ chunked: !!meta.chunked, chunkCount: meta.chunkCount || 1 });
+        if (recovered) {
+          toast('Editorial review stream ended — refreshed notes from the server');
+          return;
+        }
+        const openCount = next.filter((c) => c.status === 'open').length;
+        toast.success(meta?.chunked
+          ? `Editorial review complete — ${openCount} open notes with drafted edits (reviewed in ${meta.chunkCount} chunks)`
+          : `Editorial review complete — ${openCount} open notes with drafted edits`);
+      })
+      .catch((err) => toast.error(err.message || 'Failed to load review'));
+
+  // Terminal-frame handler for the streamed run: refresh comments + toast, then
+  // tear the subscription down. Per-chunk frames only drive the button label.
+  // Gate on `reviewClosed` (not just the frame type): `useSseProgress` resets
+  // `latest` only on (re)subscribe, but resets `closed` on disable too — so
+  // between runs `reviewLatest` still holds the prior run's terminal frame while
+  // `reviewClosed` is already back to false. Without the `reviewClosed` gate,
+  // starting a SECOND review in the same editor session sees the stale frame and
+  // tears the new run's subscription down before its EventSource reports.
+  useEffect(() => {
+    if (!reviewActive || !reviewClosed || !reviewLatest) return;
+    const type = reviewLatest.type;
+    if (type !== 'complete' && type !== 'canceled' && type !== 'error') return;
+    setReviewActive(false);
+    if (type === 'complete') reloadReviewAfterRun(reviewLatest);
+    else if (type === 'canceled') toast.success('Editorial review canceled');
+    else toast.error(reviewLatest.error || 'Editorial review failed');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reviewActive, reviewClosed, reviewLatest, seriesId]);
+
+  // Recovery: the stream died WITHOUT a terminal frame (attach 404, dropped
+  // connection, server restart). Don't strand the UI with the Run button stuck
+  // disabled — drop the active flag and re-fetch the review, since the runner
+  // may have completed + seeded server-side even though we lost the stream.
+  useEffect(() => {
+    if (!reviewActive || !reviewClosed) return;
+    const t = reviewLatest?.type;
+    if (t === 'complete' || t === 'canceled' || t === 'error') return; // handled above
+    setReviewActive(false);
+    reloadReviewAfterRun(null, { recovered: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reviewActive, reviewClosed, reviewLatest, seriesId]);
+
+  const startGenerateEditsReview = async (mode) => {
+    setReviewStarting(true);
+    const result = await startPipelineManuscriptCompleteness(seriesId, {
+      providerOverride, modelOverride, mode,
+    }).catch((err) => {
+      toast.error(err.message || 'Failed to start editorial review');
+      return null;
+    });
+    setReviewStarting(false);
+    if (!result) return;
+    setReviewActive(true);
+  };
+
+  const cancelGenerateEditsReview = async () => {
+    await cancelPipelineManuscriptCompleteness(seriesId).catch((err) => {
+      toast.error(err.message || 'Cancel failed');
+    });
+  };
+
+  // Unified trigger: the streamed generate-edits path when the box is checked,
+  // else today's synchronous findings-only path. Disabled state below covers both.
+  const onRunReview = () => {
+    const mode = freshReview ? 'fresh' : 'merge';
+    if (generateEdits) return startGenerateEditsReview(mode);
+    return runEditorialReview(mode);
+  };
+
+  const busy = reviewing || reviewActive || reviewStarting;
+
+  // The full review-button label: per-chunk progress for the streamed
+  // generate-edits run, the sync-pass spinner text, or the idle prompt.
+  const reviewButtonLabel = useMemo(() => {
+    if (reviewActive) {
+      const f = reviewLatest;
+      if (!f || f.type === 'start') return 'Starting editorial review…';
+      // Chunk number: chunk:start hasn't finished `done` yet, so show done+1.
+      const n = Math.min((f.done || 0) + (f.type === 'chunk:start' ? 1 : 0), f.total || 1);
+      if (f.total > 1) return `Drafting edits — chunk ${n} of ${f.total}…`;
+      return 'Drafting edits…';
+    }
+    return reviewing ? 'Running editorial review…' : 'Run editorial review';
+  }, [reviewActive, reviewLatest, reviewing]);
+
   const changeView = async (type) => {
     if (type === viewType || switching) return;
     setSwitching(true);
@@ -258,26 +388,43 @@ export default function PipelineManuscriptEditor() {
     return result;
   };
 
-  // Reveal a comment in context: drop into Review mode (where the note expands
-  // as an in-context card) and open it, switching to its issue tab if needed.
+  // Step to a note without disturbing the current view mode — shared by the
+  // card's ‹ › stepper, the auto-advance after a resolve, and revealComment.
   // The section's card-scroll effect brings the card into view — on arrival for
   // a cross-issue jump, or immediately when it's the active issue. A story-level
   // note with no issueNumber has no tab, so it expands inline in the sidebar.
-  const revealComment = (comment) => {
+  const advanceTo = (comment) => {
     setOpenCommentId(comment.id);
-    setViewMode('review');     // surface the in-context review card…
-    setEditingIssueId(null);   // …and make sure it's the card showing, not the editor
+    setEditingIssueId(null); // make sure it's the card showing, not the editor
     if (comment.issueNumber == null) return; // unanchored — expands in the sidebar
     if (comment.issueNumber !== activeNumber) {
       navigate(`/pipeline/series/${seriesId}/manuscript/${comment.issueNumber}`);
     }
+  };
+
+  // Reveal a comment in context from the sidebar: drop into Review mode (where
+  // the note expands as an in-context card) and open it.
+  const revealComment = (comment) => {
+    setViewMode('review');
+    advanceTo(comment);
+    if (comment.issueNumber == null) return;
     if (comment.stageId && viewType && comment.stageId !== viewType) {
       toast(`This note is on the ${STAGE_LABEL[comment.stageId] || comment.stageId} — switch formats to edit it in context`);
     }
   };
 
-  const updateCommentLocal = (next) =>
+  // Local comment swap + triage auto-advance: resolving the open note (accept
+  // or dismiss) steps straight to the next open one, so a long editorial pass
+  // is one action per note with no scroll-back in between. `openOrder` is
+  // declared below; by the time these handlers run it's populated.
+  const updateCommentLocal = (next) => {
     setComments((prev) => prev.map((c) => (c.id === next.id ? next : c)));
+    if (next.id !== openCommentId || next.status === 'open') return;
+    const idx = openOrder.findIndex((c) => c.id === next.id);
+    const following = idx === -1 ? [] : [...openOrder.slice(idx + 1), ...openOrder.slice(0, idx)];
+    if (following.length) advanceTo(following[0]);
+    else setOpenCommentId(null);
+  };
 
   const applyAccepted = ({ comment, section, sections: changedSections }) => {
     const list = Array.isArray(changedSections) && changedSections.length ? changedSections : [section].filter(Boolean);
@@ -329,6 +476,30 @@ export default function PipelineManuscriptEditor() {
     return map;
   }, [openCommentsByNumber]);
 
+  // Triage order over the open notes that can actually display in the current
+  // format: story order across issues, anchor position within an issue
+  // (unlocated notes after located ones), story-level notes last. Drives the
+  // card's ‹ N of M › stepper and the auto-advance after Accept/Dismiss.
+  const openOrder = useMemo(() => {
+    const startBy = new Map();
+    sectionSpans.forEach((spans) => spans.forEach((s) => {
+      const cur = startBy.get(s.commentId);
+      if (cur == null || s.start < cur) startBy.set(s.commentId, s.start);
+    }));
+    const ordered = [];
+    sections.forEach((s) => {
+      const list = (openCommentsByNumber.get(s.number) || [])
+        .slice()
+        .sort((a, b) => (startBy.get(a.id) ?? Infinity) - (startBy.get(b.id) ?? Infinity));
+      ordered.push(...list);
+    });
+    comments.forEach((c) => {
+      if (c.status === 'open' && c.issueNumber == null) ordered.push(c);
+    });
+    return ordered;
+  }, [sections, sectionSpans, openCommentsByNumber, comments]);
+  const openOrderIds = useMemo(() => openOrder.map((c) => c.id), [openOrder]);
+
   // The one issue the editor is focused on. On the bare /manuscript URL (or an
   // unknown issue) fall back to the first issue so there's no blank frame, and
   // canonicalize the URL to it so the tab highlights and deep links/back work.
@@ -351,6 +522,13 @@ export default function PipelineManuscriptEditor() {
     onAccepted: applyAccepted,
     fixDrafts,
     setCommentDraft,
+    openNav: {
+      order: openOrderIds,
+      goto: (id) => {
+        const target = comments.find((c) => c.id === id);
+        if (target) advanceTo(target);
+      },
+    },
   };
 
   const registerSectionRef = (number) => (el) => {
@@ -532,23 +710,32 @@ export default function PipelineManuscriptEditor() {
             ) : null}
             <button
               type="button"
-              onClick={() => runEditorialReview(freshReview ? 'fresh' : 'merge')}
-              disabled={reviewing || sections.length === 0}
+              onClick={onRunReview}
+              disabled={busy || sections.length === 0}
               title={sections.length === 0
                 ? 'Draft at least one issue before running an editorial review'
                 : 'Re-run the editorial feedback pass over the manuscript with the selected provider'}
               className="w-full inline-flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded text-[12px] font-medium border bg-port-bg text-port-accent border-port-border hover:border-port-accent/40 disabled:opacity-40"
             >
-              {reviewing ? <Loader2 size={12} className="animate-spin" /> : <ClipboardCheck size={12} />}
-              {reviewing ? 'Running editorial review…' : 'Run editorial review'}
+              {busy ? <Loader2 size={12} className="animate-spin" /> : <ClipboardCheck size={12} />}
+              {reviewButtonLabel}
             </button>
+            {reviewActive ? (
+              <button
+                type="button"
+                onClick={cancelGenerateEditsReview}
+                className="w-full inline-flex items-center justify-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-medium border bg-port-bg text-gray-400 border-port-border hover:text-white hover:border-port-error/40"
+              >
+                <X size={11} /> Cancel
+              </button>
+            ) : null}
             <label htmlFor="ms-fresh-review" className="flex items-start gap-1.5 text-[11px] text-gray-400 cursor-pointer">
               <input
                 id="ms-fresh-review"
                 type="checkbox"
                 checked={freshReview}
                 onChange={(e) => setFreshReview(e.target.checked)}
-                disabled={reviewing}
+                disabled={busy}
                 className="mt-0.5 accent-port-accent"
               />
               <span>
@@ -556,6 +743,23 @@ export default function PipelineManuscriptEditor() {
                 <span className="text-gray-600">
                   {' '}— auto-dismiss open notes this pass no longer finds; still-valid,
                   accepted &amp; dismissed notes are kept.
+                </span>
+              </span>
+            </label>
+            <label htmlFor="ms-generate-edits" className="flex items-start gap-1.5 text-[11px] text-gray-400 cursor-pointer">
+              <input
+                id="ms-generate-edits"
+                type="checkbox"
+                checked={generateEdits}
+                onChange={(e) => setGenerateEdits(e.target.checked)}
+                disabled={busy}
+                className="mt-0.5 accent-port-accent"
+              />
+              <span>
+                Generate edits for every finding
+                <span className="text-gray-600">
+                  {' '}— pre-build a fix per note so you can review the full diff &amp;
+                  accept edits one-by-one without a separate “Generate fix” step.
                 </span>
               </span>
             </label>
@@ -584,9 +788,11 @@ export default function PipelineManuscriptEditor() {
       <ManuscriptImpactPreview
         open={showImpact}
         onClose={() => setShowImpact(false)}
+        seriesId={seriesId}
         sections={sections}
         comments={comments.filter((c) => c.status === 'open' && c.fix)}
         fixDrafts={fixDrafts}
+        onAccepted={applyAccepted}
       />
     </div>
   );

@@ -5,15 +5,22 @@
  * Accepted / Dismissed groups. A row reveals + opens that note in the manuscript.
  */
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight, Check, X, MapPin } from 'lucide-react';
 import { Badge, CommentCardFromProps } from './ManuscriptCommentCard';
 
 const SEVERITIES = ['high', 'medium', 'low'];
 
 function CommentRow({ comment, located, active, onReveal }) {
+  const ref = useRef(null);
+  // Keep the active row visible while the card's ‹ › stepper (or auto-advance)
+  // walks the open notes — the sidebar tracks where the triage pass is.
+  useEffect(() => {
+    if (active) ref.current?.scrollIntoView?.({ block: 'nearest' });
+  }, [active]);
   return (
     <button
+      ref={ref}
       type="button"
       onClick={() => onReveal(comment)}
       className={`block w-full text-left border rounded p-2 bg-port-bg/30 hover:border-port-accent/40 ${active ? 'border-port-accent/60' : 'border-port-border'}`}

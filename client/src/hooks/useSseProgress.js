@@ -1,6 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 
-const TERMINAL_TYPES = new Set(['complete', 'canceled', 'error']);
+// Both cancel spellings are terminal. Every emitter normalizes on `canceled`
+// (single l); `cancelled` stays tolerated defensively so a stream from an
+// emitter that drifts back to the double-l spelling still terminates.
+const TERMINAL_TYPES = new Set(['complete', 'canceled', 'cancelled', 'error']);
+
+/** True when a frame is one of the stream-ending types this hook closes on. */
+export const isTerminalSseFrame = (frame) => TERMINAL_TYPES.has(frame?.type);
 
 /**
  * Subscribe to a server-side EventSource stream of JSON-payload progress

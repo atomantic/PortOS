@@ -591,6 +591,25 @@ describe('instances.js', () => {
       expect(peer.syncEnabled).toBe(false); // nothing left enabled
     });
 
+    it('full-mirror is intentional: a peer\'s category:false disables a category we independently enabled (issue #1094)', async () => {
+      // Decision (issue #1094): sync categories are a symmetric full mirror, not
+      // two strictly-independent per-direction switches. So when a peer announces
+      // `{ goals: false }` (e.g. via 'Make mutual' pushing its current set), it
+      // DISABLES goals on our record for that peer even though we had enabled it
+      // toward them independently. This pins that behavior so a future refactor to
+      // enable-only reciprocation can't silently regress 'Make mutual' / the
+      // offline-disable recovery path without tripping this test.
+      const peers = [{ id: 'p1', instanceId: 'inst-A', name: 'A', syncCategories: { brain: true, goals: true }, syncEnabled: true }];
+      readJSONFile.mockResolvedValue({ self: { instanceId: 'me' }, peers });
+
+      const { changed, peer } = await applyReciprocalSync('inst-A', { goals: false });
+
+      expect(changed).toBe(true);
+      expect(peer.syncCategories.goals).toBe(false); // announced false is authoritative — clobbers our independent enable
+      expect(peer.syncCategories.brain).toBe(true);  // omitted keys preserved untouched
+      expect(peer.syncEnabled).toBe(true);           // brain still on
+    });
+
     it('returns changed:false for an unknown peer instanceId', async () => {
       readJSONFile.mockResolvedValue({ self: { instanceId: 'me' }, peers: [] });
       const { changed, peer } = await applyReciprocalSync('nope', { brain: true });

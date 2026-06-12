@@ -14,12 +14,15 @@
  */
 
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
-import { Mic, Square, Play, Trash2, Volume2, VolumeX, Loader2 } from 'lucide-react';
+import { Mic, Square, Play, Trash2, Volume2, VolumeX, Loader2, Target } from 'lucide-react';
 import toast from '../ui/Toast';
 import { startMemoRecording } from '../../lib/audioRecorder';
 import { createLayeredPlayer } from '../../lib/songPlayback';
 import { uploadFile, getUploadUrl } from '../../services/api';
 import { formatDurationMs } from '../../utils/formatters';
+import { parseScore, scoreHasMusic } from '../../lib/scoreNotation';
+import { buildColorMatchTimeline, gradesFromPerNote } from '../../lib/colorMatch';
+import useColorMatch from '../../hooks/useColorMatch';
 import Metronome from './Metronome';
 import PitchTuner from './PitchTuner';
 import ColorMatch from './ColorMatch';
@@ -46,6 +49,45 @@ export default function SongRecordings({ recordings = [], layers = [], onChange,
   const handleRef = useRef(null);   // active MediaRecorder handle
   const playerRef = useRef(null);   // active layered player
 
+  // Live color-match grading is owned HERE (not inside <ColorMatch>) so the
+  // finished take's pitch trace + accuracy can be attached to the saved
+  // recording (#1092). The hook taps the SAME recording stream; ColorMatch is a
+  // presentational view of its noteColors/summary.
+  const hasMusic = useMemo(() => scoreHasMusic(score), [score]);
+  const parsedScore = useMemo(() => parseScore(score), [score]);
+  const bpm = Number.isFinite(tempo) && tempo > 0 ? tempo : null;
+  const {
+    running: matchRunning, countingIn, noteColors, summary, activeIndex,
+    start: startMatch, stop: stopMatch,
+  } = useColorMatch({ score: parsedScore, stream: liveStream, bpm });
+
+  // True once grading has armed for the CURRENT take. The hook's accumulators
+  // (trace/grades) only reset on start(), so stopMatch() returns whatever the
+  // last run left behind even when no run armed for this take (e.g. the score
+  // was cleared between takes). We harvest the analysis only when this take
+  // actually armed grading — otherwise a no-score take would inherit the prior
+  // take's pitchTrack/accuracy. Reset at each record start, set when arming.
+  const armedThisTakeRef = useRef(false);
+
+  // Auto-arm grading the moment a take starts (stream appears) and the score has
+  // notes — mirrors the old <ColorMatch> self-arm, now lifted up. The take's
+  // stopRecording explicitly stops grading to harvest the trace, so we only
+  // need to start here. The hook also self-stops if the stream vanishes.
+  // We mark this take "armed" ONLY when startMatch() reports it actually began a
+  // run — a rest-only score makes hasMusic true but the hook bails (zero gradable
+  // notes) without resetting its accumulators, so a falsely-armed take would
+  // harvest the previous take's stale analysis.
+  useEffect(() => {
+    if (liveStream && hasMusic && !matchRunning && startMatch()) armedThisTakeRef.current = true;
+    // start is stable; react only to stream/hasMusic (the arm trigger).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveStream, hasMusic]);
+
+  // A persisted take selected for review — repaints its saved grades onto the
+  // staff from disk (no re-grading). Null when no take is being reviewed or a
+  // live take is grading (the live run owns the staff then).
+  const [reviewId, setReviewId] = useState(null);
+
   // Tear down any live player/recorder on unmount so a navigation-away can't
   // leave the mic open or audio playing into the void.
   useEffect(() => () => {
@@ -59,6 +101,8 @@ export default function SongRecordings({ recordings = [], layers = [], onChange,
   }, [layers]);
 
   const startRecording = useCallback(async () => {
+    setReviewId(null); // a fresh take takes over the staff from any saved-take review
+    armedThisTakeRef.current = false; // until the auto-arm effect fires for THIS take
     if (playerRef.current) { playerRef.current.stop(); setPlaying(false); }
     const handle = await startMemoRecording().catch((err) => {
       toast.error(err?.message || 'Microphone access denied');
@@ -74,6 +118,15 @@ export default function SongRecordings({ recordings = [], layers = [], onChange,
     const handle = handleRef.current;
     if (!handle) return;
     handleRef.current = null;
+    // Stop grading FIRST (while the analyser graph is still alive) to harvest the
+    // finished take's pitch trace + accuracy summary, THEN drop the stream. Only
+    // trust the harvest when grading armed for THIS take — otherwise stopMatch()
+    // would return the previous take's stale accumulators (the hook only resets
+    // them on start(), which a no-score take never calls). stop() also returns
+    // null when unmounted.
+    const armed = armedThisTakeRef.current;
+    armedThisTakeRef.current = false;
+    const analysis = armed ? stopMatch() : null;
     setLiveStream(null); // stream is being torn down with the take
     setRecording(false);
     setSaving(true);
@@ -96,25 +149,51 @@ export default function SongRecordings({ recordings = [], layers = [], onChange,
     setSaving(false);
     if (!result?.filename) return;
 
-    const next = [
-      ...recordings,
-      {
-        id: tempRecordingId(),
-        layerId: targetLayerId,
-        label: targetLayerId ? layerLabel(targetLayerId) : 'Take',
-        filename: result.filename,
-        durationMs: take.durationMs || 0,
-        peak: take.peak || 0,
-        muted: false,
-      },
-    ];
-    onChange(next);
+    const entry = {
+      id: tempRecordingId(),
+      layerId: targetLayerId,
+      label: targetLayerId ? layerLabel(targetLayerId) : 'Take',
+      filename: result.filename,
+      durationMs: take.durationMs || 0,
+      peak: take.peak || 0,
+      muted: false,
+    };
+    // Attach the captured pitch analysis when the take was graded against a score
+    // (#1092). Only persist a trace/summary that actually has content — a take
+    // sung with no score (or that graded zero notes) carries no analysis, and the
+    // server omits empty fields anyway. The server re-sanitizes + bounds both.
+    if (analysis?.pitchTrack?.length) entry.pitchTrack = analysis.pitchTrack;
+    if (analysis?.summary?.graded > 0) entry.accuracy = analysis.summary;
+
+    onChange([...recordings, entry]);
     toast.success('Take recorded — Save the song to keep it');
-  }, [recordings, targetLayerId, layerLabel, onChange]);
+  }, [recordings, targetLayerId, layerLabel, onChange, stopMatch]);
 
   const removeRecording = useCallback((id) => {
+    setReviewId((cur) => (cur === id ? null : cur));
     onChange(recordings.filter((r) => r.id !== id));
   }, [recordings, onChange]);
+
+  // The take being reviewed (if it still exists and carries saved accuracy).
+  const reviewTake = useMemo(
+    () => recordings.find((r) => r.id === reviewId && r.accuracy?.perNote?.length) || null,
+    [recordings, reviewId],
+  );
+  // Repaint the reviewed take's SAVED grades onto the staff — read from disk via
+  // gradesFromPerNote, never re-graded from audio (the migration's purpose).
+  // Alignment is positional (i-th saved grade → i-th current timeline note), so
+  // editing the score's note count after recording can shift the repaint — an
+  // inherent limit of the positional perNote shape (#1027); gradesFromPerNote
+  // truncates to the shorter side so it can't paint past the staff.
+  const reviewColors = useMemo(() => {
+    if (!reviewTake) return null;
+    const timeline = buildColorMatchTimeline(parsedScore, { bpm });
+    return gradesFromPerNote(timeline, reviewTake.accuracy.perNote);
+  }, [reviewTake, parsedScore, bpm]);
+
+  const toggleReview = useCallback((id) => {
+    setReviewId((cur) => (cur === id ? null : id));
+  }, []);
 
   const toggleMute = useCallback((id) => {
     onChange(recordings.map((r) => (r.id === id ? { ...r, muted: !r.muted } : r)));
@@ -192,10 +271,20 @@ export default function SongRecordings({ recordings = [], layers = [], onChange,
       </div>
 
       {/* Color-match — walks the written score in tempo while recording and
-          grades each note by sung accuracy. Only shows when the song has a
+          grades each note by sung accuracy. While a live take grades, it shows
+          the live run; otherwise it can replay a saved take's grading (selected
+          via the "Review" button on a recording). Only shows when the song has a
           notated melody to sing against. */}
       <div className="mb-3">
-        <ColorMatch score={score} stream={liveStream} tempo={tempo} />
+        <ColorMatch
+          score={score}
+          stream={liveStream}
+          running={matchRunning}
+          countingIn={countingIn}
+          noteColors={reviewTake && !matchRunning ? reviewColors : noteColors}
+          summary={reviewTake && !matchRunning ? reviewTake.accuracy : summary}
+          activeIndex={matchRunning ? activeIndex : null}
+        />
       </div>
 
       {/* Layer the next take targets (optional) */}
@@ -233,6 +322,14 @@ export default function SongRecordings({ recordings = [], layers = [], onChange,
                 <div className="flex items-center gap-2 min-w-0">
                   <span className="text-sm text-white truncate">{r.label || 'Take'}</span>
                   {r.durationMs > 0 && <span className="text-xs text-gray-500 shrink-0">{formatDurationMs(r.durationMs)}</span>}
+                  {r.accuracy?.graded > 0 && (
+                    <span
+                      className={`text-xs shrink-0 font-medium ${r.accuracy.percentInTune >= 80 ? 'text-port-success' : r.accuracy.percentInTune >= 50 ? 'text-port-warning' : 'text-port-error'}`}
+                      title={`${r.accuracy.percentInTune}% in tune over ${r.accuracy.graded} ${r.accuracy.graded === 1 ? 'note' : 'notes'}`}
+                    >
+                      {r.accuracy.percentInTune}%
+                    </span>
+                  )}
                 </div>
                 {layers.length > 0 && (
                   <select
@@ -246,6 +343,20 @@ export default function SongRecordings({ recordings = [], layers = [], onChange,
                   </select>
                 )}
               </div>
+              {/* Review the saved grading on the staff (no re-grading from audio).
+                  Only when the take carries per-note grades and nothing is live. */}
+              {hasMusic && r.accuracy?.perNote?.length > 0 && !matchRunning && (
+                <button
+                  type="button"
+                  onClick={() => toggleReview(r.id)}
+                  aria-pressed={reviewId === r.id}
+                  title={reviewId === r.id ? 'Hide saved grading' : 'Show this take’s grading on the staff'}
+                  className={`p-1 shrink-0 ${reviewId === r.id ? 'text-port-accent' : 'text-gray-500 hover:text-port-accent'}`}
+                  aria-label="Review take grading"
+                >
+                  <Target size={15} />
+                </button>
+              )}
               {/* Solo listen to one take */}
               <audio controls preload="none" src={getUploadUrl(r.filename)} className="h-8 max-w-[160px] hidden sm:block" />
               <button type="button" onClick={() => removeRecording(r.id)} className="p-1.5 text-gray-500 hover:text-port-error shrink-0" aria-label="Remove take">

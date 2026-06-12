@@ -42,7 +42,10 @@ import {
   maybeJournalBeforeOverwrite, setSyncBaseHash, contentHashForRecord, flushBaseHashes,
   deleteSyncBaseHash,
 } from '../lib/conflictJournal.js';
-import { emitRecordUpdated, emitRecordDeleted } from './sharing/recordEvents.js';
+import {
+  emitRecordUpdated, emitRecordDeleted,
+  autoSubscribeRecordToAllPeers, unsubscribeAllForRecord,
+} from './sharing/recordEvents.js';
 import { renameCollectionForUniverse, unlinkCollectionsForUniverse } from './mediaCollections.js';
 import {
   clearPendingSheetSlot, clearPendingSheetSlotsForUniverse,
@@ -942,18 +945,15 @@ export async function createUniverse(input = {}) {
     await store().writeRecord(next.id, next);
     return next;
   });
-  // Fire-and-forget auto-subscribe to every peer with universe-sync enabled.
+  // Fire-and-forget auto-subscribe to every peer with universe-sync enabled,
+  // via the recordEvents subscription adapter (peerSync registers the real
+  // implementation at boot — importing peerSync from here would close a cycle).
   // Skip the auto-subscribe entirely for ephemeral universes — the push
   // would short-circuit anyway via sanitizeRecordForWire returning null, but
   // not creating the subscription in the first place keeps peer_subscriptions.json
   // free of orphan rows tied to records the user explicitly excluded.
-  // Dynamic import keeps peerSync.js OUT of the universeBuilder module-load
-  // graph — peerSync already imports getUniverse / mergeUniversesFromSync
-  // from here, so a static import would close a cycle.
   if (!created.ephemeral) {
-    import('./sharing/peerSync.js').then(({ autoSubscribeRecordToAllPeers }) =>
-      autoSubscribeRecordToAllPeers('universe', created.id)
-    ).catch((err) => {
+    autoSubscribeRecordToAllPeers('universe', created.id).catch((err) => {
       console.log(`⚠️ universe: auto-subscribe after create failed: ${err.message}`);
     });
   }
@@ -996,9 +996,7 @@ export async function insertUniverseWithId(input = {}) {
   // peers that still have the deleted record need the resurrection propagated.
   if (wasResurrection && !next.ephemeral) {
     emitRecordUpdated('universe', next.id);
-    import('./sharing/peerSync.js').then(({ autoSubscribeRecordToAllPeers }) =>
-      autoSubscribeRecordToAllPeers('universe', next.id)
-    ).catch((err) => {
+    autoSubscribeRecordToAllPeers('universe', next.id).catch((err) => {
       console.log(`⚠️ universe: auto-subscribe after resurrection failed: ${err.message}`);
     });
   }
@@ -1325,23 +1323,19 @@ export async function updateUniverse(id, patchOrMutator = {}, options = {}) {
   //             excludes records it ALREADY pushes per-record, so an
   //             un-subscribed record rides the snapshot — but the push path
   //             converges it immediately instead of waiting up to a cycle.)
-  // Await the dynamic import — fire-and-forget .then() resolves on a
+  // Awaited (not fire-and-forget) — a .catch()-only call settles on a
   // microtask AFTER the synchronous emitRecordUpdated below, so the
   // peerSync 'updated' listener would schedule pushes against subs the
   // user just disabled. The await keeps the documented "BEFORE
   // emitRecordUpdated" contract honest.
   if (prevEphemeral && !nextEphemeral) {
-    await import('./sharing/peerSync.js')
-      .then(({ autoSubscribeRecordToAllPeers }) => autoSubscribeRecordToAllPeers('universe', merged.id))
-      .catch((err) => {
-        console.log(`⚠️ universe: re-subscribe after un-ephemeralizing failed: ${err.message}`);
-      });
+    await autoSubscribeRecordToAllPeers('universe', merged.id).catch((err) => {
+      console.log(`⚠️ universe: re-subscribe after un-ephemeralizing failed: ${err.message}`);
+    });
   } else if (!prevEphemeral && nextEphemeral) {
-    await import('./sharing/peerSync.js')
-      .then(({ unsubscribeAllForRecord }) => unsubscribeAllForRecord('universe', merged.id))
-      .catch((err) => {
-        console.log(`⚠️ universe: unsubscribe after ephemeralizing failed: ${err.message}`);
-      });
+    await unsubscribeAllForRecord('universe', merged.id).catch((err) => {
+      console.log(`⚠️ universe: unsubscribe after ephemeralizing failed: ${err.message}`);
+    });
   }
   if (!silent) {
     emitRecordUpdated('universe', merged.id);

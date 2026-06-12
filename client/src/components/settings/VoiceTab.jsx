@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useId, Children, cloneElement, isValidElement } from 'react';
-import { Save, Mic, Play, Zap, RefreshCw } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Save, Mic, Play, Zap, RefreshCw, Globe } from 'lucide-react';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
 import {
@@ -310,6 +311,17 @@ export function VoiceTab() {
         {status?.services && Object.entries(status.services).map(([k, probe]) => (
           <ServiceBadge key={k} label={SERVICE_LABELS[k] || k} probe={probe} />
         ))}
+      </div>
+
+      <div className="flex items-start gap-3 bg-port-bg border border-port-border rounded-lg p-3">
+        <Globe size={16} className="text-port-accent mt-0.5 shrink-0" />
+        <div className="text-xs text-gray-400 min-w-0">
+          <span className="text-white">Serve TTS as an API.</span>{' '}
+          Expose <code className="text-port-accent">POST /api/voice/public/synthesize</code> so other
+          machines on your tailnet can request audio (any engine/voice). Configure exposure and
+          passwordless/auth gating under{' '}
+          <Link to="/settings/api-access" className="text-port-accent hover:underline">Settings → API Access</Link>.
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

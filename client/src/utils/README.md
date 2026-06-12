@@ -81,7 +81,7 @@ its tunable constants and placement helpers.
 | `cityHealthTower` | Health-metric tower segments from the latest health entry (`computeHealthTower`). |
 | `cityJiraDistrict` | Jira ticket district: ticket state, sprint structures, placement (`computeJiraDistrict`). |
 | `cityMemoryDistrict` | Brain-graph memory district: category clustering, bridges, placement (`computeMemoryDistrict`). |
-| `cityMiniMap` | Mini-map projection of building positions into 2D bounds (`computeMiniMap`, `projectPoint`). |
+| `cityMiniMap` | Mini-map projection of building positions into 2D bounds, plus opt-in waterfront geography (bay/shoreline/harbor) read from `cityPlan` (`computeMiniMap`, `projectPoint`, `geographyWorldPoints`, `projectGeography`). |
 | `cityPhotoMode` | Photo-mode camera presets, the demand-loop fly stepper, postcard stats, and screenshot filename (`getPreset`, `cyclePreset`, `stepFly`). |
 | `cityPlan` | Master town plan: district parcels, shoreline/bay, plaza, transit loop, street network (`PARCELS`, `WORLD`, `computeStreets`, `computeStreetProps`, `isInWater`). |
 | `cityPlayerRig` | Exploration player-rig math: third-person follow camera, boom collision, damping, facing, avatar state (`thirdPersonCamera`, `resolveBoom`, `dampAngle`, `moveFacing`, `avatarState`). |

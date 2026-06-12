@@ -7,6 +7,7 @@ import {
   gradeNote,
   centsBetween,
   summarizeAccuracy,
+  gradesFromPerNote,
   GRADE,
   MATCH_IN_TUNE_CENTS,
   MATCH_CLOSE_CENTS,
@@ -172,5 +173,56 @@ describe('summarizeAccuracy', () => {
     const s = summarizeAccuracy(grades);
     expect(s.graded).toBe(3);
     expect(s.percentInTune).toBe(0);
+  });
+
+  // #1092: the summary now carries `perNote` — the ordered grade list the
+  // persisted take stores (mirrors server sanitizeAccuracy). It must be in
+  // ASCENDING note-index order so a saved take lines up with the score, and
+  // exclude PENDING (un-sung) notes just like the counts do.
+  it('emits perNote in ascending note-index order, excluding pending', () => {
+    // Deliberately out of insertion order to prove the sort, with a PENDING hole.
+    const grades = { 2: GRADE.OFF, 0: GRADE.IN_TUNE, 3: GRADE.PENDING, 1: GRADE.CLOSE };
+    const s = summarizeAccuracy(grades);
+    expect(s.perNote).toEqual([GRADE.IN_TUNE, GRADE.CLOSE, GRADE.OFF]);
+    expect(s.graded).toBe(3);
+  });
+
+  it('perNote preserves an array input order verbatim', () => {
+    expect(summarizeAccuracy([GRADE.OFF, GRADE.IN_TUNE]).perNote).toEqual([GRADE.OFF, GRADE.IN_TUNE]);
+  });
+
+  it('emits an empty perNote for a take with no graded notes', () => {
+    expect(summarizeAccuracy({}).perNote).toEqual([]);
+  });
+});
+
+describe('gradesFromPerNote', () => {
+  // The persisted-take round trip: a saved `perNote` list repaints onto the
+  // staff by mapping each grade to the timeline note at the same ordinal — rests
+  // are excluded from both the timeline notes and perNote, so they align.
+  const tl = buildColorMatchTimeline(parseScore('time: 4/4\ntempo: 120\n| C4q rq D4q E4q |'));
+
+  it('maps each saved grade to the timeline note at the same ordinal (rests skipped)', () => {
+    // Timeline notes are at global indices 0, 2, 3 (index 1 is the rest).
+    const map = gradesFromPerNote(tl, [GRADE.IN_TUNE, GRADE.CLOSE, GRADE.OFF]);
+    expect(map).toEqual({ 0: GRADE.IN_TUNE, 2: GRADE.CLOSE, 3: GRADE.OFF });
+  });
+
+  it('round-trips with summarizeAccuracy.perNote', () => {
+    const graded = { 0: GRADE.IN_TUNE, 2: GRADE.MISSED, 3: GRADE.OFF };
+    const { perNote } = summarizeAccuracy(graded);
+    expect(gradesFromPerNote(tl, perNote)).toEqual(graded);
+  });
+
+  it('tolerates a perNote shorter or longer than the timeline', () => {
+    expect(gradesFromPerNote(tl, [GRADE.IN_TUNE])).toEqual({ 0: GRADE.IN_TUNE });
+    // Extra grades past the last timeline note are ignored (no index to bind to).
+    const over = gradesFromPerNote(tl, [GRADE.IN_TUNE, GRADE.OFF, GRADE.OFF, GRADE.CLOSE, GRADE.OFF]);
+    expect(over).toEqual({ 0: GRADE.IN_TUNE, 2: GRADE.OFF, 3: GRADE.OFF });
+  });
+
+  it('returns an empty map for an empty perNote', () => {
+    expect(gradesFromPerNote(tl, [])).toEqual({});
+    expect(gradesFromPerNote(tl)).toEqual({});
   });
 });

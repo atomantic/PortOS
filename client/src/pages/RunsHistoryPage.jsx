@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Trash2, RotateCcw, MessageSquarePlus } from 'lucide-react';
 import * as api from '../services/api';
-import { formatTime, formatRuntime } from '../utils/formatters';
+import { formatTime, formatRuntime, formatBytes } from '../utils/formatters';
 import BrailleSpinner from '../components/BrailleSpinner';
 import Banner from '../components/ui/Banner';
 import { writeClipboardSilently } from '../lib/clipboard';
@@ -347,7 +347,7 @@ export function RunsHistoryPage() {
                         {run.outputSize && (
                           <div>
                             <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Output Size</div>
-                            <div className="text-gray-300 font-mono">{(run.outputSize / 1024).toFixed(1)} KB</div>
+                            <div className="text-gray-300 font-mono">{formatBytes(run.outputSize)}</div>
                           </div>
                         )}
                       </div>

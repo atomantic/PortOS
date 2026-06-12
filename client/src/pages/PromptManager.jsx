@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { FileText, Variable, RefreshCw, Save, Plus, Trash2, Eye, Briefcase } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import BrailleSpinner from '../components/BrailleSpinner';
@@ -14,8 +15,18 @@ import {
 import useFieldDraft from '../hooks/useFieldDraft';
 import SettingsTabsHeader from '../components/settings/SettingsTabsHeader';
 
+const VALID_PROMPT_TABS = ['stages', 'variables', 'job-skills'];
+
 export default function PromptManager() {
-  const [tab, setTab] = useState('stages');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const rawTab = searchParams.get('tab');
+  const tab = VALID_PROMPT_TABS.includes(rawTab) ? rawTab : 'stages';
+  const setTab = (next) => {
+    const p = new URLSearchParams(searchParams);
+    if (next === 'stages') p.delete('tab');
+    else p.set('tab', next);
+    setSearchParams(p, { replace: true });
+  };
   const [stages, setStages] = useState({});
   const [variables, setVariables] = useState({});
   const [loading, setLoading] = useState(true);

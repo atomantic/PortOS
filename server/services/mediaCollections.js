@@ -29,7 +29,7 @@ import { createCollectionStore } from '../lib/collectionStore.js';
 import { ITEM_KIND, REF_MAX_LENGTH, itemKey } from '../lib/mediaItemKey.js';
 import { sanitizeOrigin } from '../lib/sharingOrigin.js';
 import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
-import { emitRecordUpdated, emitRecordDeleted } from './sharing/recordEvents.js';
+import { emitRecordUpdated, emitRecordDeleted, autoSubscribeRecordToAllPeers } from './sharing/recordEvents.js';
 import {
   maybeJournalBeforeOverwrite, setSyncBaseHash, contentHashForRecord, flushBaseHashes, deleteSyncBaseHash,
 } from '../lib/conflictJournal.js';
@@ -212,15 +212,14 @@ export async function getCollection(id, { includeDeleted = false } = {}) {
 // emit the 'updated' event so any existing subscription pushes it, AND
 // auto-subscribe every mediaCollections-enabled peer so brand-new collections
 // (and their later tombstones) propagate even when that peer has universe/series
-// sync disabled. Dynamic import avoids a module cycle — peerSync imports
-// mergeMediaCollectionsFromSync from here, so a static import would close one.
-// Call ONLY when a brand-new record was persisted — never on a find-existing
-// hit, or every render would re-announce and churn the pipeline.
+// sync disabled. Goes through the recordEvents subscription adapter — peerSync
+// imports mergeMediaCollectionsFromSync from here, so importing it back (even
+// dynamically) would close a cycle. Call ONLY when a brand-new record was
+// persisted — never on a find-existing hit, or every render would re-announce
+// and churn the pipeline.
 const announceNewCollection = (id) => {
   emitRecordUpdated('mediaCollection', id);
-  import('./sharing/peerSync.js')
-    .then(({ autoSubscribeRecordToAllPeers }) => autoSubscribeRecordToAllPeers('mediaCollection', id))
-    .catch(() => {});
+  autoSubscribeRecordToAllPeers('mediaCollection', id).catch(() => {});
 };
 
 export async function createCollection({ name, description = '' }) {

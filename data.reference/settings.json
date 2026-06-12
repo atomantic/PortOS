@@ -50,5 +50,9 @@
     "enabled": true,
     "intervalMinutes": 5,
     "maxSnapshots": 1000
+  },
+  "apiAccess": {
+    "voice": { "exposed": false, "requireAuth": false },
+    "sdapi": { "exposed": false, "requireAuth": false }
   }
 }

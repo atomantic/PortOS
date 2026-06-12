@@ -33,15 +33,29 @@ function isJsScript(script) {
  * Spawn PM2 CLI via local binary (node pm2/bin/pm2).
  * Always uses the local PM2 binary to avoid depending on a global pm2 install.
  * On Windows this also avoids pm2.cmd which creates visible CMD windows.
+ *
+ * A default 'error' listener is attached so that an ENOENT or EACCES error
+ * (e.g. missing Node binary) doesn't crash Node via the uncaught-EventEmitter
+ * exception path when no caller attaches its own 'error' listener.
+ * Callers that attach their own 'error' handler are unaffected — multiple
+ * listeners are fine and all receive the event.
+ *
  * @param {string[]} pm2Args PM2 CLI arguments (e.g. ['jlist'], ['start', 'ecosystem.config.cjs'])
  * @param {object} opts Spawn options (cwd, env, etc.)
  * @returns {ChildProcess}
  */
 export function spawnPm2(pm2Args, opts = {}) {
-  return spawn(process.execPath, [PM2_BIN, ...pm2Args], {
+  const child = spawn(process.execPath, [PM2_BIN, ...pm2Args], {
     ...opts,
     windowsHide: true
   });
+  // Default error handler — prevents an uncaught EventEmitter 'error' crash
+  // when no caller attaches its own handler. Callers that do attach their own
+  // 'error' listener receive the event too (multiple listeners are additive).
+  child.on('error', (err) => {
+    console.error(`❌ spawnPm2 error [${pm2Args[0]}]: ${err.message}`);
+  });
+  return child;
 }
 
 /**

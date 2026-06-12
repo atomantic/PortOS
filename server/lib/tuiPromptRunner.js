@@ -13,16 +13,23 @@
  * promptRunner needs when `provider.type === 'tui'`.
  *
  * Spawning bypasses `services/shell.js` deliberately:
- *   - shellService caps total sessions at 5, which the central handler can
- *     exceed easily (arc planner fans out parallel calls).
+ *   - shellService caps interactive sessions, which the central handler can
+ *     exceed easily (arc planner fans out parallel calls). We still *register*
+ *     the spawned PTY as an external view afterward (see below) — that path is
+ *     exempt from the cap, so surfacing the run doesn't re-introduce the limit.
  *   - shellService wraps a login shell around the TUI; pasting `${cmd}\n`
  *     into a zsh prompt is slower and noisier than spawning the TUI directly.
  *
- * Completion detection is intentionally minimal: idle-after-response, with a
- * hard timeout fallback. Per-binary input-prompt regexes were considered but
- * are fragile across versions and screen sizes; the idle threshold (~8s)
- * works universally and matches how a human knows the TUI finished — output
- * stopped scrolling.
+ * Completion detection, in priority order: the model's response-file write
+ * is the authoritative "done" signal (the wrapped prompt directs it to write
+ * its full answer to `tui-response.txt` and then finish) — checked
+ * unconditionally, even while a human watches. Output-idle is the fallback for
+ * runs that print inline instead of writing the file (paused while watched, so
+ * a viewer isn't snapped shut mid-read). The hard timeout is the backstop, and
+ * salvages an already-written file before failing. Per-binary input-prompt
+ * regexes were considered for idle but are fragile across versions and screen
+ * sizes; the idle threshold (~8s) works universally and matches how a human
+ * knows the TUI finished — output stopped scrolling.
  */
 
 import { spawn as ptySpawn } from 'node-pty';
@@ -32,6 +39,7 @@ import { ensureDir, PATHS, tryReadFile } from './fileUtils.js';
 import { createStreamingAnsiStripper } from './ansiStrip.js';
 import { createImmediateFallbackSignalDetector } from './aiToolkit/errorDetection.js';
 import { getRunsPath, finalizeRunRecord, emitRunStarted, registerActiveRun, unregisterActiveRun } from '../services/runner.js';
+import { registerExternalSession, unregisterExternalSession, isExternalSessionAttached } from '../services/shell.js';
 import {
   DEFAULT_TUI_PROMPT_DELAY_MS,
   PASTE_MARKER_POLL_MS,
@@ -89,9 +97,12 @@ const PTY_ROWS = 50;
  *   AFTER this fires.
  * @param {number} [options.timeout] — hard cap on a single run (ms). Falls back to
  *   `provider.timeout`, then `DEFAULT_TIMEOUT_MS`.
+ * @param {string} [options.label] — human label for the live Shell view (the
+ *   run `source`, e.g. `'pipeline-manuscript-completeness'`). Surfaced in the
+ *   Shell page's session tab; falls back to `command · model` when absent.
  * @returns {Promise<void>}
  */
-export async function executeTuiRun({ runId, provider, prompt, workspacePath, onData, onComplete, timeout }) {
+export async function executeTuiRun({ runId, provider, prompt, workspacePath, onData, onComplete, timeout, label }) {
   if (!provider || typeof provider !== 'object') {
     throw new Error('executeTuiRun: provider is required');
   }
@@ -171,6 +182,21 @@ ${prompt}`;
   // any SSE-based "active run" UI never see TUI runs as in-flight.
   emitRunStarted({ runId, provider, model: provider.defaultModel });
 
+  // Surface this one-shot run as an interactive session in the Shell UI so the
+  // user can watch its live output and step in — answer a question, correct it,
+  // or interrupt it (it bypasses services/shell.js for *spawning*, but
+  // registering the already-live PTY for *viewing/driving* doesn't re-introduce
+  // the cap/login-shell concerns the spawn bypass avoids).
+  const viewLabel = (typeof label === 'string' && label)
+    ? label
+    : `${command} · ${provider.defaultModel || 'tui'}`;
+  registerExternalSession(runId, ptyProcess, {
+    label: viewLabel,
+    command: `${command} ${args.join(' ')}`.trim(),
+    cwd: workingDir,
+    kind: 'tui-run',
+  });
+
   const startTime = Date.now();
   let outputBuffer = '';
   let rawBuffer = '';
@@ -186,15 +212,36 @@ ${prompt}`;
   let outputBufferTruncated = false;
 
   const streamingStrip = createStreamingAnsiStripper();
+
+  // The wrapped prompt directs the model to write its COMPLETE response to
+  // `responseFilePath` and then finish. That file appearing is the model's
+  // explicit "done" signal — more reliable than output-idle and, unlike idle,
+  // authoritative even while a human watches (the task is finished; there's
+  // nothing left to intervene in). Returns true once the file has non-empty
+  // content whose length held steady across two consecutive polls (~1s apart),
+  // so a half-flushed write isn't read as complete. `lastResponseLen = -1`
+  // means "not yet seen / reset"; a real reading seeds it and the next equal
+  // reading confirms stability.
+  let lastResponseLen = -1;
+  const responseFileSettled = async () => {
+    const txt = await tryReadFile(responseFilePath);
+    if (typeof txt !== 'string' || !txt.trim()) { lastResponseLen = -1; return false; }
+    if (txt.length === lastResponseLen) return true;
+    lastResponseLen = txt.length;
+    return false;
+  };
+
   let readyTimer = null;
   let pasteEnterTimer = null;
   let idleWatchTimer = null;
+  let responseFileWatchTimer = null;
   let hardTimeoutTimer = null;
 
   const cleanupTimers = () => {
     if (readyTimer) { clearInterval(readyTimer); readyTimer = null; }
     if (pasteEnterTimer) { clearInterval(pasteEnterTimer); pasteEnterTimer = null; }
     if (idleWatchTimer) { clearInterval(idleWatchTimer); idleWatchTimer = null; }
+    if (responseFileWatchTimer) { clearInterval(responseFileWatchTimer); responseFileWatchTimer = null; }
     if (hardTimeoutTimer) { clearTimeout(hardTimeoutTimer); hardTimeoutTimer = null; }
   };
 
@@ -204,6 +251,11 @@ ${prompt}`;
       finalized = true;
       cleanupTimers();
       unregisterActiveRun(runId);
+      // Drop the live Shell view the moment the run ends (notifies any attached
+      // viewer via shell:exit). Idempotent — safe even if no viewer ever
+      // attached. Runs before the kill below so the session disappears from the
+      // list immediately rather than waiting on PTY teardown.
+      unregisterExternalSession(runId, { exitCode });
 
       // Kill the PTY if still alive — one-shot runs don't leave a session
       // behind for the user to interact with.
@@ -275,6 +327,15 @@ ${prompt}`;
         // Significant on parallel fan-out paths (arc planner).
         idleWatchTimer = setInterval(() => {
           if (finalized) return;
+          // Idle-completion is the FALLBACK for runs that print their answer
+          // inline instead of writing the response file (the authoritative
+          // done-signal, handled by responseFileWatchTimer from paste onward).
+          // Don't auto-complete a run a human is actively watching in the Shell
+          // page — they may be reading the output or about to type a correction
+          // or an answer the model is waiting on. The run then ends only on
+          // natural process exit or an explicit Stop. Unattended pipeline runs
+          // keep the snappy idle threshold for throughput.
+          if (isExternalSessionAttached(runId)) return;
           const idle = Date.now() - lastOutputAt;
           if (idle >= idleThresholdMs) {
             finish({ success: true, exitCode: 0, reason: 'idle-complete' });
@@ -334,6 +395,21 @@ ${prompt}`;
       }
       console.log(`📟 Pasted prompt into TUI ${command} (${reason})`);
 
+      // Watch for the response file from paste onward — it's the model's
+      // authoritative "done" signal and must complete the run INDEPENDENTLY of
+      // whether any post-paste PTY output ever arrives. A model that writes the
+      // file silently (no streamed output to arm idleWatchTimer) would otherwise
+      // hang until the hard-timeout salvage. Runs unconditionally, even while a
+      // human watches: once the file exists the task is finished, so there's
+      // nothing left to intervene in. (Idle/attach gating lives only on
+      // idleWatchTimer, the inline-output fallback.)
+      responseFileWatchTimer = setInterval(async () => {
+        if (finalized) return;
+        if (await responseFileSettled()) {
+          finish({ success: true, exitCode: 0, reason: 'response-file' });
+        }
+      }, 1000);
+
       const pasteSentAt = Date.now();
       pasteEnterTimer = setInterval(() => {
         if (finalized) { clearInterval(pasteEnterTimer); pasteEnterTimer = null; return; }
@@ -374,9 +450,23 @@ ${prompt}`;
     // (idleWatchTimer is created inside onData once firstResponseAt is set.)
 
     // Hard timeout — covers stuck-banner, no-response, and runaway-response
-    // cases. Provider-configurable via `timeout`; defaults to 5 min.
-    hardTimeoutTimer = setTimeout(() => {
+    // cases, and is the honest backstop that bounds a run a viewer left open on
+    // a backgrounded tab (idle-completion is paused while watched, but this is
+    // not — a run can't exceed its configured max time). Provider-configurable
+    // via `timeout`; defaults to 5 min.
+    hardTimeoutTimer = setTimeout(async () => {
       if (finalized) return;
+      // Salvage net: if the model already wrote its response file, the run truly
+      // finished — the TUI just never exited — so the timeout is a false failure.
+      // Complete as success with the written result instead of discarding it and
+      // triggering a pointless fallback retry. (The response-file watcher above
+      // normally catches this within ~2s; this covers the boundary case where the
+      // file lands right at the deadline or the watcher hadn't confirmed yet.)
+      const salvaged = await tryReadFile(responseFilePath);
+      if (typeof salvaged === 'string' && salvaged.trim()) {
+        finish({ success: true, exitCode: 0, reason: 'timeout-response-file' });
+        return;
+      }
       finish({
         success: false,
         exitCode: 124,

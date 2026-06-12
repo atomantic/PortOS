@@ -57,6 +57,8 @@ import digitalTwinRoutes from './routes/digital-twin.js';
 import socialAccountsRoutes from './routes/socialAccounts.js';
 import lmstudioRoutes from './routes/lmstudio.js';
 import voiceRoutes from './routes/voice.js';
+import voicePublicRoutes from './routes/voicePublic.js';
+import apiDocsRoutes from './routes/apiDocs.js';
 import { getVoiceConfig } from './services/voice/config.js';
 import { reconcile as reconcileVoice } from './services/voice/bootstrap.js';
 import { initVoiceTimers } from './services/voice/timers.js';
@@ -478,7 +480,14 @@ app.use('/api/digital-twin', digitalTwinRoutes);
 app.use('/api/lmstudio', lmstudioRoutes);
 app.use('/api/local-llm', localLlmRoutes);
 app.use('/api/code-review', codeReviewRoutes);
+// Public, externally-callable TTS surface. Mounted BEFORE the main voice
+// router for readability; Express matches the more specific `/api/voice/public`
+// regardless of order since `voiceRoutes` defines no `/public/*` paths. This
+// mount is the only voice surface `authGate` will re-open when exposed — the
+// main `/api/voice` router (config/whisper/etc.) stays fully gated.
+app.use('/api/voice/public', voicePublicRoutes);
 app.use('/api/voice', voiceRoutes);
+app.use('/api/api-docs', apiDocsRoutes);
 app.use('/api/browser', browserRoutes);
 app.use('/api/data', dataManagerRoutes);
 app.use('/api/datadog', datadogRoutes);

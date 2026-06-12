@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, writeFile } from 'fs/promises';
+import { mkdtemp, rm, writeFile, mkdir } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -9,7 +9,7 @@ import { join } from 'path';
 // real run directories the SUT never needs in these tests). Mocks live
 // inside vi.hoisted so the vi.mock factories (which are themselves hoisted
 // to the top of the file) can reference them.
-const { ptyInstances, ptySpawnMock, runnerMocks, runsTmpDirRef } = vi.hoisted(() => ({
+const { ptyInstances, ptySpawnMock, runnerMocks, shellMocks, runsTmpDirRef } = vi.hoisted(() => ({
   ptyInstances: [],
   ptySpawnMock: vi.fn(),
   runsTmpDirRef: { current: null },
@@ -20,11 +20,21 @@ const { ptyInstances, ptySpawnMock, runnerMocks, runsTmpDirRef } = vi.hoisted(()
     unregisterActiveRun: vi.fn(),
     getRunsPath: vi.fn(),
   },
+  // shell.js is mocked so the runner's Shell-view registration is observable
+  // here without dragging in the real session registry singleton.
+  // isExternalSessionAttached defaults to "no viewer" so idle/timeout fire as
+  // they would for an unattended pipeline run; tests flip it to assert the pause.
+  shellMocks: {
+    registerExternalSession: vi.fn(),
+    unregisterExternalSession: vi.fn(),
+    isExternalSessionAttached: vi.fn(() => false),
+  },
 }));
 runnerMocks.getRunsPath.mockImplementation(() => runsTmpDirRef.current);
 
 vi.mock('node-pty', () => ({ spawn: (...args) => ptySpawnMock(...args) }));
 vi.mock('../services/runner.js', () => runnerMocks);
+vi.mock('../services/shell.js', () => shellMocks);
 vi.mock('./fileUtils.js', async () => {
   const actual = await vi.importActual('./fileUtils.js');
   return { ...actual, ensureDir: vi.fn(async () => {}) };
@@ -252,6 +262,10 @@ describe('executeTuiRun', () => {
     runnerMocks.registerActiveRun.mockClear();
     runnerMocks.unregisterActiveRun.mockClear();
     runnerMocks.getRunsPath.mockClear();
+    shellMocks.registerExternalSession.mockClear();
+    shellMocks.unregisterExternalSession.mockClear();
+    shellMocks.isExternalSessionAttached.mockReset();
+    shellMocks.isExternalSessionAttached.mockReturnValue(false);
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(console, 'error').mockImplementation(() => {});
   });
@@ -311,6 +325,41 @@ describe('executeTuiRun', () => {
 
       // Drive a clean exit so the run-Promise resolves.
       pty.emitExit({ exitCode: 0 });
+      await promise;
+    });
+
+    it('registers a read-only Shell view (labelled by source) and tears it down on finish', async () => {
+      const provider = { id: 'claude', type: 'tui', command: 'claude', defaultModel: 'claude-fable-5' };
+      const promise = executeTuiRun({
+        runId: 'run-view', provider, prompt: 'review this manuscript', workspacePath: '/work',
+        label: 'pipeline-manuscript-completeness',
+      });
+      await flushAsync();
+
+      expect(shellMocks.registerExternalSession).toHaveBeenCalledWith(
+        'run-view',
+        ptyInstances[0],
+        expect.objectContaining({
+          label: 'pipeline-manuscript-completeness',
+          kind: 'tui-run',
+          cwd: '/work',
+        }),
+      );
+      expect(shellMocks.unregisterExternalSession).not.toHaveBeenCalled();
+
+      ptyInstances[0].emitExit({ exitCode: 0 });
+      await promise;
+      expect(shellMocks.unregisterExternalSession).toHaveBeenCalledWith('run-view', { exitCode: 0 });
+    });
+
+    it('falls back to a command·model label when no source label is supplied', async () => {
+      const provider = { id: 'codex', type: 'tui', command: 'codex', defaultModel: 'gpt-x' };
+      const promise = executeTuiRun({ runId: 'run-nolabel', provider, prompt: 'do the thing', workspacePath: '/w' });
+      await flushAsync();
+      expect(shellMocks.registerExternalSession).toHaveBeenCalledWith(
+        'run-nolabel', ptyInstances[0], expect.objectContaining({ label: 'codex · gpt-x' }),
+      );
+      ptyInstances[0].emitExit({ exitCode: 0 });
       await promise;
     });
 
@@ -390,6 +439,156 @@ describe('executeTuiRun', () => {
       }));
     });
 
+    it('does NOT idle-complete while a Shell viewer is attached, then completes once they detach', async () => {
+      vi.useFakeTimers({
+        toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
+      });
+      // A human is watching this run in the Shell page.
+      shellMocks.isExternalSessionAttached.mockReturnValue(true);
+      const provider = {
+        id: 'claude', type: 'tui', command: 'echo',
+        tuiPromptDelayMs: 50, tuiOneShotIdleMs: 500,
+      };
+      const onComplete = vi.fn();
+      const promise = executeTuiRun({ runId: 'run-watched', provider, prompt: 'do thing big enough to clear the prompt guard', workspacePath: '/cwd', onComplete, timeout: 60000 });
+      await flushAsync();
+
+      const pty = ptyInstances[0];
+      pty.emitData('claude code ready> ');
+      await vi.advanceTimersByTimeAsync(2000); // paste
+      await vi.advanceTimersByTimeAsync(4000); // enter
+      pty.emitData('model response chunk');     // arms idleWatchTimer
+
+      // Idle well past the threshold — but a viewer is attached, so the run must
+      // NOT auto-complete.
+      await vi.advanceTimersByTimeAsync(5000);
+      await flushAsync();
+      expect(onComplete).not.toHaveBeenCalled();
+      expect(runnerMocks.unregisterActiveRun).not.toHaveBeenCalled();
+
+      // Viewer detaches → next idle tick completes the run normally.
+      shellMocks.isExternalSessionAttached.mockReturnValue(false);
+      await vi.advanceTimersByTimeAsync(1100);
+      await flushAsync();
+      await promise;
+      expect(runnerMocks.finalizeRunRecord).toHaveBeenCalledWith(expect.objectContaining({
+        runId: 'run-watched',
+        success: true,
+        extras: expect.objectContaining({ completionReason: 'idle-complete' }),
+      }));
+    });
+
+    it('completes with reason "response-file" once the model writes its response file — even while a viewer is attached', async () => {
+      vi.useFakeTimers({
+        toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
+      });
+      // A human is watching — idle-completion is paused, but the response file
+      // is the model's explicit "done" signal and must complete regardless.
+      // This is the regression guard for the manuscript-completeness run that
+      // wrote tui-response.txt yet rode to the hard timeout because it was watched.
+      shellMocks.isExternalSessionAttached.mockReturnValue(true);
+      const provider = {
+        id: 'claude', type: 'tui', command: 'claude',
+        tuiPromptDelayMs: 50, tuiOneShotIdleMs: 500,
+      };
+      const runId = 'run-respfile';
+      const promise = executeTuiRun({ runId, provider, prompt: 'review this manuscript thoroughly enough to clear the guard', workspacePath: '/cwd', timeout: 60000 });
+      await flushAsync();
+
+      const pty = ptyInstances[0];
+      pty.emitData('claude code ready> ');
+      await vi.advanceTimersByTimeAsync(2000); // paste
+      await vi.advanceTimersByTimeAsync(4000); // enter
+      pty.emitData('model thinking…');          // arms idleWatchTimer
+
+      // The model writes its COMPLETE response to the file the runner directed
+      // it to (and, like Claude Code's TUI, does NOT exit afterward).
+      const runDir = join(runsTmpDirRef.current, runId);
+      await mkdir(runDir, { recursive: true });
+      await writeFile(join(runDir, 'tui-response.txt'), '{"issues":[]}');
+
+      // First tick seeds the size-stability baseline; the second confirms it.
+      await vi.advanceTimersByTimeAsync(1100);
+      await vi.advanceTimersByTimeAsync(1100);
+      await flushAsync();
+      await promise;
+
+      expect(runnerMocks.finalizeRunRecord).toHaveBeenCalledWith(expect.objectContaining({
+        runId,
+        success: true,
+        exitCode: 0,
+        output: '{"issues":[]}',
+        extras: expect.objectContaining({ completionReason: 'response-file', usedResponseFile: true }),
+      }));
+    });
+
+    it('completes via the response file even when the TUI emits NO post-paste output (watcher is not gated on streamed output)', async () => {
+      vi.useFakeTimers({
+        toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
+      });
+      // Regression guard: the response-file watcher must run independently of
+      // idleWatchTimer (which only arms after the first POST-PASTE output chunk).
+      // A model that writes its file silently would otherwise hang until the
+      // hard-timeout salvage despite the result already being on disk.
+      const provider = { id: 'claude', type: 'tui', command: 'claude', tuiPromptDelayMs: 50 };
+      const runId = 'run-silent-respfile';
+      const promise = executeTuiRun({ runId, provider, prompt: 'do the task quietly then write the file', workspacePath: '/cwd', timeout: 60000 });
+      await flushAsync();
+
+      const pty = ptyInstances[0];
+      // Pre-paste banner lets the ready-watch paste — but NOTHING is emitted
+      // after the paste, so idleWatchTimer never arms.
+      pty.emitData('claude code ready> ');
+      await vi.advanceTimersByTimeAsync(2000); // ready-watch pastes → response-file watcher starts
+      await vi.advanceTimersByTimeAsync(4000); // enter submitted; still zero post-paste output
+
+      const runDir = join(runsTmpDirRef.current, runId);
+      await mkdir(runDir, { recursive: true });
+      await writeFile(join(runDir, 'tui-response.txt'), 'silent result body');
+
+      await vi.advanceTimersByTimeAsync(1100); // poll 1: seed baseline
+      await vi.advanceTimersByTimeAsync(1100); // poll 2: stable → complete
+      await flushAsync();
+      await promise;
+
+      // Completed long before the 60s hard timeout, with no idle output to lean on.
+      expect(runnerMocks.finalizeRunRecord).toHaveBeenCalledWith(expect.objectContaining({
+        runId,
+        success: true,
+        exitCode: 0,
+        output: 'silent result body',
+        extras: expect.objectContaining({ completionReason: 'response-file', usedResponseFile: true }),
+      }));
+    });
+
+    it('salvages the response file on hard timeout → success with reason "timeout-response-file" instead of a false failure + fallback', async () => {
+      vi.useFakeTimers({
+        toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
+      });
+      const provider = { id: 'claude', type: 'tui', command: 'echo' };
+      const runId = 'run-tmo-salvage';
+      // The model finished and wrote its file, but the TUI never exited and the
+      // idle watcher was never armed (no post-paste chunk) — so only the hard
+      // timeout remains to terminate the run. It must NOT throw the result away.
+      const runDir = join(runsTmpDirRef.current, runId);
+      await mkdir(runDir, { recursive: true });
+      await writeFile(join(runDir, 'tui-response.txt'), 'the completed review body');
+
+      const promise = executeTuiRun({ runId, provider, prompt: 'a prompt long enough to clear the guard', workspacePath: '/cwd', timeout: 500 });
+      await flushAsync();
+      await vi.advanceTimersByTimeAsync(600); // hard timeout fires
+      await flushAsync();
+      await promise;
+
+      expect(runnerMocks.finalizeRunRecord).toHaveBeenCalledWith(expect.objectContaining({
+        runId,
+        success: true,
+        exitCode: 0,
+        output: 'the completed review body',
+        extras: expect.objectContaining({ completionReason: 'timeout-response-file', usedResponseFile: true }),
+      }));
+    });
+
     it('finishes with reason "timeout" and exitCode 124 when the hard timeout fires before any completion', async () => {
       vi.useFakeTimers({
         toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
@@ -413,6 +612,28 @@ describe('executeTuiRun', () => {
       }));
       // PTY was killed by finish() as part of cleanup.
       expect(ptyInstances[0].kill).toHaveBeenCalled();
+    });
+
+    it('still hard-times-out a watched run (the backstop is not paused while attached)', async () => {
+      vi.useFakeTimers({
+        toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
+      });
+      shellMocks.isExternalSessionAttached.mockReturnValue(true); // a viewer is watching
+      const provider = { id: 'claude', type: 'tui', command: 'echo' };
+      const promise = executeTuiRun({ runId: 'run-tmo-watched', provider, prompt: 'a prompt long enough to clear the guard', workspacePath: '/cwd', timeout: 500 });
+      await flushAsync();
+
+      // The hard timeout fires even though a viewer is attached — only idle
+      // auto-completion is paused while watched, not the max-time backstop.
+      await vi.advanceTimersByTimeAsync(600);
+      await flushAsync();
+      await promise;
+      expect(runnerMocks.finalizeRunRecord).toHaveBeenCalledWith(expect.objectContaining({
+        runId: 'run-tmo-watched',
+        success: false,
+        exitCode: 124,
+        extras: expect.objectContaining({ completionReason: 'timeout' }),
+      }));
     });
 
     it('early-fails with reason "command-not-found" and exitCode 127 when "command not found" appears pre-paste', async () => {

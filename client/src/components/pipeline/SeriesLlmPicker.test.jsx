@@ -47,6 +47,9 @@ describe('SeriesLlmPicker', () => {
     const onSeriesUpdate = vi.fn();
     renderPicker({ id: 's1', llm: undefined }, onSeriesUpdate);
     await waitFor(() => expect(getProviders).toHaveBeenCalled());
+    // Wait for the provider option to render before selecting it (its options
+    // come from the async getProviders result — same populate race as above).
+    await screen.findByRole('option', { name: 'Provider One' });
     fireEvent.change(screen.getAllByRole('combobox')[0], { target: { value: 'p1' } });
     await waitFor(() => expect(updatePipelineSeries).toHaveBeenCalledWith('s1', { llm: { provider: 'p1', model: null } }));
     await waitFor(() => expect(onSeriesUpdate).toHaveBeenCalledWith({ id: 's1', llm: { provider: 'p1', model: null } }));
@@ -69,6 +72,11 @@ describe('SeriesLlmPicker', () => {
   it('preserves the chosen provider when only the model changes', async () => {
     renderPicker({ id: 's1', llm: { provider: 'p1', model: '' } });
     await waitFor(() => expect(getProviders).toHaveBeenCalled());
+    // The model <select>'s options are populated from the async getProviders
+    // result. Wait for the target option to actually exist before changing the
+    // value — firing the change before the provider's models render leaves the
+    // picker mid-populate and saves the wrong (empty) provider (flaky in CI).
+    await screen.findByRole('option', { name: 'm2' });
     fireEvent.change(screen.getAllByRole('combobox')[1], { target: { value: 'm2' } });
     await waitFor(() => expect(updatePipelineSeries).toHaveBeenCalledWith('s1', { llm: { provider: 'p1', model: 'm2' } }));
   });

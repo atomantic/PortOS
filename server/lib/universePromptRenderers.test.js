@@ -79,7 +79,7 @@ describe('renderEntitiesSummary', () => {
     });
     // Descriptor body length stays bounded; trailing ellipsis present.
     const match = out.match(/Mira \(([^)]+)\)/);
-    expect(match).toBeTruthy();
+    expect(match, 'renderEntitiesSummary should produce a "Mira (...)" descriptor').not.toBeNull();
     expect(match[1].length).toBeLessThanOrEqual(ENTITIES_SUMMARY_DESCRIPTOR_MAX);
     expect(match[1]).toMatch(/…$/);
   });

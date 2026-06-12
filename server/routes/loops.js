@@ -3,6 +3,16 @@ import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.j
 import * as loopsService from '../services/loops.js';
 import { createLoopSchema } from '../lib/validation.js';
 
+// updateLoop accepts a subset of createLoopSchema fields (name/prompt/interval/cwd/providerId/timeout)
+const updateLoopSchema = createLoopSchema.pick({
+  name: true,
+  prompt: true,
+  interval: true,
+  cwd: true,
+  providerId: true,
+  timeout: true,
+}).partial();
+
 const router = Router();
 
 // GET /api/loops
@@ -38,7 +48,9 @@ router.post('/', asyncHandler(async (req, res) => {
 
 // PUT /api/loops/:id
 router.put('/:id', asyncHandler(async (req, res) => {
-  const loop = await loopsService.updateLoop(req.params.id, req.body);
+  const parsed = updateLoopSchema.safeParse(req.body);
+  if (!parsed.success) failValidation(parsed);
+  const loop = await loopsService.updateLoop(req.params.id, parsed.data);
   res.json(loop);
 }));
 

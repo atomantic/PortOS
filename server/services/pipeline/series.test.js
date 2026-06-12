@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mockNoPeerSync, mockNoPeers } from '../../lib/mockPathsDataRoot.js';
 
 const fileStore = new Map();
@@ -21,13 +21,18 @@ vi.mock('../instances.js', () => mockNoPeers());
 vi.mock('../sharing/peerSync.js', () => mockNoPeerSync());
 
 const svc = await import('./series.js');
-const peerSyncMock = await import('../sharing/peerSync.js');
-const { recordEvents } = await import('../sharing/recordEvents.js');
+const { recordEvents, registerSubscriptionAdapter, __resetSubscriptionAdapter } = await import('../sharing/recordEvents.js');
 
 describe('pipeline series service', () => {
   beforeEach(() => {
     fileStore.clear();
     uuidCounter = 0;
+  });
+
+  // A test that registers a subscription-adapter double must not leak it into
+  // later tests even when its assertions fail mid-body.
+  afterEach(() => {
+    __resetSubscriptionAdapter();
   });
 
   it('listSeries returns [] for fresh state', async () => {
@@ -171,17 +176,20 @@ describe('pipeline series service', () => {
       await svc.deleteSeries(id);
 
       const emitSpy = vi.spyOn(recordEvents, 'emit');
-      const subscribeSpy = vi.spyOn(peerSyncMock, 'autoSubscribeRecordToAllPeers');
+      // The auto-subscribe flows through the recordEvents subscription
+      // adapter (peerSync registers the real impl at boot) — register a
+      // test double to observe the call.
+      const subscribeSpy = vi.fn().mockResolvedValue([]);
+      registerSubscriptionAdapter({ autoSubscribeRecordToAllPeers: subscribeSpy });
 
       await svc.insertSeriesWithId({ id, name: 'Resurrected' });
-      // Allow the fire-and-forget peerSync dynamic import to settle.
+      // Allow the fire-and-forget adapter call to settle.
       await new Promise((r) => setTimeout(r, 0));
 
       expect(emitSpy).toHaveBeenCalledWith('updated', { recordKind: 'series', recordId: id });
       expect(subscribeSpy).toHaveBeenCalledWith('series', id);
 
       emitSpy.mockRestore();
-      subscribeSpy.mockRestore();
     });
 
     it('insertSeriesWithId fresh insert does NOT fire emitRecordUpdated', async () => {

@@ -21,7 +21,15 @@ vi.mock('../services/taskSchedule.js', () => ({
 }));
 
 vi.mock('../lib/validation.js', () => ({
-  sanitizeTaskMetadata: vi.fn((meta) => meta)
+  sanitizeTaskMetadata: vi.fn((meta) => meta),
+  validateRequest: vi.fn((schema, data) => {
+    const result = schema.safeParse(data);
+    if (!result.success) {
+      const { ServerError } = require('../lib/errorHandler.js');
+      throw new ServerError('Validation failed', { status: 400, code: 'VALIDATION_ERROR' });
+    }
+    return result.data;
+  }),
 }));
 
 import * as taskSchedule from '../services/taskSchedule.js';

@@ -28,6 +28,7 @@ import { execGh } from './github.js';
 import { getAppById, updateApp } from './apps.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
 import { PR_AUTHOR_FILTERS } from '../lib/validation.js';
+import { safeJSONParse } from '../lib/fileUtils.js';
 
 // Bound the gh query. The high-water mark (computePrCheck) advances to the max
 // open PR number it saw, so it can only correctly drain a backlog it received
@@ -92,8 +93,8 @@ async function listOpenPullRequests(repoFullName, baseBranch) {
   // otherwise throw a SyntaxError, breaking this module's "never throws"
   // contract and aborting the scheduler tick (the generator calls
   // checkPullRequests with no try/catch). Degrade to the pr-list-failed path.
-  let parsed;
-  try { parsed = JSON.parse(raw); } catch { return null; }
+  const parsed = safeJSONParse(raw, null);
+  if (parsed === null) return null;
   if (!Array.isArray(parsed)) return [];
   return parsed.map((pr) => ({
     number: pr.number,

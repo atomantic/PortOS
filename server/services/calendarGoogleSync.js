@@ -6,6 +6,7 @@ import { getAllProviders } from './providers.js';
 import { getSettings } from './settings.js';
 import { pickCliProvider, runCliProviderPrompt } from '../lib/cliProviderRun.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
+import { ServerError } from '../lib/errorHandler.js';
 
 // Google Calendar sync is driven through an MCP-capable CLI provider — the
 // prompt asks the model to call the `mcp__claude_ai_Google_Calendar__*` tools.
@@ -118,14 +119,14 @@ export async function pushSyncEvents(accountId, calendarId, calendarName, rawEve
 const mcpSyncLock = new Map();
 
 export async function mcpSyncAccount(accountId, io) {
-  if (mcpSyncLock.has(accountId)) return { error: 'MCP sync already in progress', status: 409 };
+  if (mcpSyncLock.has(accountId)) throw new ServerError('MCP sync already in progress', { status: 409 });
 
   const account = await getAccount(accountId);
-  if (!account) return { error: 'Account not found', status: 404 };
-  if (account.type !== 'google-calendar') return { error: 'Not a Google Calendar account', status: 400 };
+  if (!account) throw new ServerError('Account not found', { status: 404 });
+  if (account.type !== 'google-calendar') throw new ServerError('Not a Google Calendar account', { status: 400 });
 
   const enabledCalendars = (account.subcalendars || []).filter(sc => sc.enabled && !sc.dormant);
-  if (enabledCalendars.length === 0) return { error: 'No enabled subcalendars', status: 400 };
+  if (enabledCalendars.length === 0) throw new ServerError('No enabled subcalendars', { status: 400 });
 
   mcpSyncLock.set(accountId, true);
   io?.emit('calendar:sync:started', { accountId, method: 'mcp' });
@@ -148,46 +149,42 @@ After fetching ALL calendars, output ONLY a single JSON object (no markdown fenc
 
 Include the full events arrays as returned by gcal_list_events. Output NOTHING else — just the JSON.`;
 
-  const result = await runConfiguredMcp(prompt, io, accountId);
+  const runSync = async () => {
+    const result = await runConfiguredMcp(prompt, io, accountId);
 
-  mcpSyncLock.delete(accountId);
+    // Parse Claude's output and push events
+    const parsed = parseCalendarJson(result.output);
+    if (!parsed) throw new ServerError('Failed to parse calendar data from Claude response', { status: 502 });
 
-  if (result.error) {
-    console.error(`❌ MCP sync failed for ${account.name}: ${result.error}`);
-    io?.emit('calendar:sync:failed', { accountId, error: result.error, method: 'mcp' });
-    await updateSyncStatus(accountId, 'error');
-    return { error: result.error, status: 502 };
-  }
+    let totalNew = 0;
+    let totalUpdated = 0;
+    let totalPruned = 0;
+    const results = [];
 
-  // Parse Claude's output and push events
-  const parsed = parseCalendarJson(result.output);
-  if (!parsed) {
-    const errMsg = 'Failed to parse calendar data from Claude response';
-    io?.emit('calendar:sync:failed', { accountId, error: errMsg, method: 'mcp' });
-    await updateSyncStatus(accountId, 'error');
-    console.error(`❌ ${errMsg}`);
-    return { error: errMsg, status: 502 };
-  }
+    for (const cal of parsed.calendars) {
+      if (!cal.calendarId || !Array.isArray(cal.events)) continue;
+      const syncResult = await pushSyncEvents(accountId, cal.calendarId, cal.calendarName || cal.calendarId, cal.events, null);
+      totalNew += syncResult.newEvents;
+      totalUpdated += syncResult.updated;
+      totalPruned += syncResult.pruned;
+      results.push({ calendarId: cal.calendarId, calendarName: cal.calendarName, ...syncResult });
+    }
 
-  let totalNew = 0;
-  let totalUpdated = 0;
-  let totalPruned = 0;
-  const results = [];
+    await updateSyncStatus(accountId, 'success');
+    io?.emit('calendar:sync:completed', { accountId, newEvents: totalNew, updated: totalUpdated, pruned: totalPruned, status: 'success', method: 'mcp' });
+    console.log(`📅 MCP sync complete for ${account.name}: ${totalNew} new, ${totalUpdated} updated, ${totalPruned} pruned across ${results.length} calendars`);
 
-  for (const cal of parsed.calendars) {
-    if (!cal.calendarId || !Array.isArray(cal.events)) continue;
-    const syncResult = await pushSyncEvents(accountId, cal.calendarId, cal.calendarName || cal.calendarId, cal.events, null);
-    totalNew += syncResult.newEvents;
-    totalUpdated += syncResult.updated;
-    totalPruned += syncResult.pruned;
-    results.push({ calendarId: cal.calendarId, calendarName: cal.calendarName, ...syncResult });
-  }
+    return { newEvents: totalNew, updated: totalUpdated, pruned: totalPruned, calendars: results, status: 'success' };
+  };
 
-  await updateSyncStatus(accountId, 'success');
-  io?.emit('calendar:sync:completed', { accountId, newEvents: totalNew, updated: totalUpdated, pruned: totalPruned, status: 'success', method: 'mcp' });
-  console.log(`📅 MCP sync complete for ${account.name}: ${totalNew} new, ${totalUpdated} updated, ${totalPruned} pruned across ${results.length} calendars`);
-
-  return { newEvents: totalNew, updated: totalUpdated, pruned: totalPruned, calendars: results, status: 'success' };
+  return runSync().catch(async (error) => {
+    console.error(`❌ MCP sync failed for ${account.name}: ${error.message}`);
+    io?.emit('calendar:sync:failed', { accountId, error: error.message, method: 'mcp' });
+    await updateSyncStatus(accountId, 'error').catch(() => {});
+    throw error instanceof ServerError ? error : new ServerError(error.message, { status: 502 });
+  }).finally(() => {
+    mcpSyncLock.delete(accountId);
+  });
 }
 
 function parseCalendarJson(output) {
@@ -206,8 +203,8 @@ function parseCalendarJson(output) {
 
 export async function mcpDiscoverCalendars(accountId, io) {
   const account = await getAccount(accountId);
-  if (!account) return { error: 'Account not found', status: 404 };
-  if (account.type !== 'google-calendar') return { error: 'Not a Google Calendar account', status: 400 };
+  if (!account) throw new ServerError('Account not found', { status: 404 });
+  if (account.type !== 'google-calendar') throw new ServerError('Not a Google Calendar account', { status: 400 });
 
   console.log(`📅 Discovering Google calendars for ${account.name} via MCP`);
   io?.emit('calendar:sync:progress', { accountId, message: 'Discovering calendars via Claude...' });
@@ -226,17 +223,12 @@ Output NOTHING else — just the JSON array.`;
 
   const result = await runConfiguredMcp(prompt, io, accountId);
 
-  if (result.error) {
-    console.error(`❌ Calendar discovery failed: ${result.error}`);
-    return { error: result.error, status: 502 };
-  }
-
   // Parse the calendar list from Claude's output
   const match = result.output.match(/\[[\s\S]*\]/);
-  if (!match) return { error: 'Failed to parse calendar list from Claude response', status: 502 };
+  if (!match) throw new ServerError('Failed to parse calendar list from Claude response', { status: 502 });
 
   const calendars = safeJSONParse(match[0], null);
-  if (!Array.isArray(calendars)) return { error: 'Invalid calendar list format', status: 502 };
+  if (!Array.isArray(calendars)) throw new ServerError('Invalid calendar list format', { status: 502 });
 
   // Merge with existing subcalendars (preserve enabled/dormant state)
   const merged = mergeDiscoveredSubcalendars(account.subcalendars, calendars);
@@ -255,7 +247,7 @@ async function runConfiguredMcp(prompt, io, accountId) {
   const settings = await getSettings().catch(() => ({}));
   const picked = pickCliProvider(all?.providers, settings?.calendarSync || {});
   if (picked.error) {
-    return { error: picked.error };
+    throw new ServerError(picked.error, { status: 502 });
   }
 
   // `--allowedTools mcp__…` is Claude-Code-specific argv. Other CLIs grant MCP
@@ -283,7 +275,7 @@ async function runConfiguredMcp(prompt, io, accountId) {
   });
 
   if (result.error) {
-    return { error: result.error };
+    throw new ServerError(result.error, { status: 502 });
   }
   return { output: result.text, exitCode: result.exitCode };
 }

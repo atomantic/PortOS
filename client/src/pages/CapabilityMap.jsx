@@ -68,7 +68,7 @@ export default function CapabilityMap() {
   const OverallIcon = overallStyle.icon;
 
   return (
-    <div className="max-w-3xl mx-auto space-y-4">
+    <div className="space-y-4">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <h2 className="text-xl font-bold text-white flex items-center gap-2">
           <LayoutGrid size={20} />
@@ -92,7 +92,7 @@ export default function CapabilityMap() {
         <span className="flex items-center gap-1"><Circle size={12} className="text-gray-500" /> {summary.unconfigured} not set up</span>
       </div>
 
-      <div className="space-y-2">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
         {caps.map((cap) => (
           <CapabilityRow key={cap.id} cap={cap} />
         ))}

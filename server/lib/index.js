@@ -19,14 +19,17 @@
 export * as appleHealthValidation from './appleHealthValidation.js';
 export * as brainValidation from './brainValidation.js';
 export * as catalogValidation from './catalogValidation.js';
+export * as creativeDirectorValidation from './creativeDirectorValidation.js';
 export * as digitalTwinValidation from './digitalTwinValidation.js';
 export * as genomeValidation from './genomeValidation.js';
 export * as identityValidation from './identityValidation.js';
 export * as meatspaceValidation from './meatspaceValidation.js';
 export * as memoryValidation from './memoryValidation.js';
 export * as notesValidation from './notesValidation.js';
+export * as peerSyncValidation from './peerSyncValidation.js';
 export * as postValidation from './postValidation.js';
 export * as socketValidation from './socketValidation.js';
+export * as storyBuilderValidation from './storyBuilderValidation.js';
 export * as telegramValidation from './telegramValidation.js';
 export * from './validation.js';
 
@@ -109,6 +112,7 @@ export * from './gitArgs.js';
 export * from './gitForge.js';
 export * from './gitOutputParsers.js';
 export * from './gitRemote.js';
+export * from './openFolder.js';
 export * from './processEnv.js';
 export * from './pythonSetup.js';
 
@@ -131,6 +135,7 @@ export * from './tailscale.js';
 export * from './bm25.js';
 export * from './memoryQuery.js';
 export * from './memoryStats.js';
+export * from './rrfRanking.js';
 export * from './vectorMath.js';
 
 // === Extraction & parsing ===
@@ -168,6 +173,7 @@ export * from './ports.js';
 export * from './timezone.js';
 
 // === General utilities ===
+export * from './apiRegistry.js';
 export * from './asyncMutex.js';
 export * from './authGate.js';
 export * from './domainAutonomy.js';
@@ -175,6 +181,7 @@ export * from './domainBudgets.js';
 export * from './errorHandler.js';
 export * from './mapWithConcurrency.js';
 export * from './objects.js';
+export * from './openapiSpec.js';
 export * from './singleFlight.js';
 export * from './streamBackpressure.js';
 export * from './sseUtils.js';

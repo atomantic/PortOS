@@ -141,51 +141,61 @@ export const registerVoiceHandlers = (socket) => {
   };
 
   socket.on('voice:turn', async (payload = {}) => {
-    if (!(await ensureEnabled('turn'))) return;
-    const { audio, mimeType: rawMime } = payload;
-    if (!audio) {
-      socket.emit('voice:error', { stage: 'turn', message: 'audio is required' });
-      return;
+    try {
+      if (!(await ensureEnabled('turn'))) return;
+      const { audio, mimeType: rawMime } = payload;
+      if (!audio) {
+        socket.emit('voice:error', { stage: 'turn', message: 'audio is required' });
+        return;
+      }
+      const size = audioByteLength(audio);
+      if (!size) {
+        socket.emit('voice:error', { stage: 'turn', message: 'audio is empty or unrecognized' });
+        return;
+      }
+      if (size > MAX_AUDIO_BYTES) {
+        socket.emit('voice:error', { stage: 'turn', message: `audio too large (${size} > ${MAX_AUDIO_BYTES} bytes)` });
+        return;
+      }
+      // Normalize mimeType — reject anything that isn't a plain string to keep
+      // downstream HTTP multipart stable.
+      const mimeType = typeof rawMime === 'string' && rawMime.length <= 64 ? rawMime : 'audio/wav';
+      // Preserve TypedArray byteOffset/byteLength so a sliced Uint8Array view
+      // doesn't drag unrelated bytes from its underlying ArrayBuffer.
+      let buffer;
+      if (Buffer.isBuffer(audio)) buffer = audio;
+      else if (audio instanceof ArrayBuffer) buffer = Buffer.from(audio);
+      else if (ArrayBuffer.isView(audio)) buffer = Buffer.from(audio.buffer, audio.byteOffset, audio.byteLength);
+      else buffer = Buffer.from(audio);
+      await runTurnWithState({ audio: buffer, mimeType, errorStage: 'turn' });
+    } catch (err) {
+      console.error(`❌ voice:turn failed: ${err.message}`);
+      socket.emit('voice:error', { stage: 'turn', message: err.message });
     }
-    const size = audioByteLength(audio);
-    if (!size) {
-      socket.emit('voice:error', { stage: 'turn', message: 'audio is empty or unrecognized' });
-      return;
-    }
-    if (size > MAX_AUDIO_BYTES) {
-      socket.emit('voice:error', { stage: 'turn', message: `audio too large (${size} > ${MAX_AUDIO_BYTES} bytes)` });
-      return;
-    }
-    // Normalize mimeType — reject anything that isn't a plain string to keep
-    // downstream HTTP multipart stable.
-    const mimeType = typeof rawMime === 'string' && rawMime.length <= 64 ? rawMime : 'audio/wav';
-    // Preserve TypedArray byteOffset/byteLength so a sliced Uint8Array view
-    // doesn't drag unrelated bytes from its underlying ArrayBuffer.
-    let buffer;
-    if (Buffer.isBuffer(audio)) buffer = audio;
-    else if (audio instanceof ArrayBuffer) buffer = Buffer.from(audio);
-    else if (ArrayBuffer.isView(audio)) buffer = Buffer.from(audio.buffer, audio.byteOffset, audio.byteLength);
-    else buffer = Buffer.from(audio);
-    await runTurnWithState({ audio: buffer, mimeType, errorStage: 'turn' });
   });
 
   socket.on('voice:text', async (payload = {}) => {
-    if (!(await ensureEnabled('text'))) return;
-    const raw = payload?.text;
-    if (typeof raw !== 'string' && typeof raw !== 'number') {
-      socket.emit('voice:error', { stage: 'text', message: 'text is required' });
-      return;
+    try {
+      if (!(await ensureEnabled('text'))) return;
+      const raw = payload?.text;
+      if (typeof raw !== 'string' && typeof raw !== 'number') {
+        socket.emit('voice:error', { stage: 'text', message: 'text is required' });
+        return;
+      }
+      const text = String(raw).trim();
+      if (!text) {
+        socket.emit('voice:error', { stage: 'text', message: 'text is required' });
+        return;
+      }
+      if (text.length > MAX_TEXT_LEN) {
+        socket.emit('voice:error', { stage: 'text', message: `text too long (${text.length} > ${MAX_TEXT_LEN} chars)` });
+        return;
+      }
+      await runTurnWithState({ text, source: payload?.source, errorStage: 'text' });
+    } catch (err) {
+      console.error(`❌ voice:text failed: ${err.message}`);
+      socket.emit('voice:error', { stage: 'text', message: err.message });
     }
-    const text = String(raw).trim();
-    if (!text) {
-      socket.emit('voice:error', { stage: 'text', message: 'text is required' });
-      return;
-    }
-    if (text.length > MAX_TEXT_LEN) {
-      socket.emit('voice:error', { stage: 'text', message: `text too long (${text.length} > ${MAX_TEXT_LEN} chars)` });
-      return;
-    }
-    await runTurnWithState({ text, source: payload?.source, errorStage: 'text' });
   });
 
   socket.on('voice:interrupt', () => {

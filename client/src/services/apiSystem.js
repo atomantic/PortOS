@@ -42,6 +42,10 @@ export const updateSettings = (data, options) => request('/settings', {
   ...options
 });
 export const getAiAssignments = (options) => request('/settings/ai-assignments', options);
+
+// API Access — the OpenAPI 3.1 spec for the public API surface (built from the
+// exposed entries in apiAccess settings). Rendered by the API Access settings tab.
+export const getOpenApiSpec = (options) => request('/api-docs/openapi.json', options);
 export const updateAiAssignment = (id, data, options) => request(`/settings/ai-assignments/${encodeURIComponent(id)}`, {
   method: 'PUT',
   body: JSON.stringify(data),

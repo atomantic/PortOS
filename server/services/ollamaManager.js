@@ -21,7 +21,7 @@ import { execFile, spawn } from 'child_process'
 import { promisify } from 'util'
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js'
 import { readResponseJson } from '../lib/readResponseJson.js'
-import { readJSONFile, sha256File } from '../lib/fileUtils.js'
+import { readJSONFile, sha256File, safeJSONParse } from '../lib/fileUtils.js'
 import {
   parseOllamaManifest, parseOllamaModelRef, ollamaManifestRelPath, digestToBlobFilename, buildModelfile
 } from '../lib/localLlmDisk.js'
@@ -756,9 +756,8 @@ async function streamNdjson(response, onFrame) {
   return lastError
 }
 
-function safeParse(line) {
-  try { return JSON.parse(line) } catch { return null }
-}
+// safeJSONParse imported from fileUtils provides identical null-on-failure semantics.
+const safeParse = (line) => safeJSONParse(line, null);
 
 /**
  * Delete an installed model (DELETE /api/delete).

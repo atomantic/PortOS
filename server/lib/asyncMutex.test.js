@@ -1,19 +1,25 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createMutex } from './asyncMutex.js';
 
 describe('asyncMutex.js', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   describe('createMutex', () => {
-    it('should serialize concurrent operations', async () => {
+    it('serializes concurrent operations — deterministic with fake timers', async () => {
+      vi.useFakeTimers();
       const withLock = createMutex();
       const results = [];
 
-      // Start multiple operations concurrently
+      // First op awaits a 20ms delay before pushing.
       const p1 = withLock(async () => {
-        await new Promise(r => setTimeout(r, 20));
+        await vi.advanceTimersByTimeAsync(20);
         results.push('first');
         return 'first';
       });
 
+      // p2 and p3 are already queued behind p1.
       const p2 = withLock(async () => {
         results.push('second');
         return 'second';
@@ -26,7 +32,7 @@ describe('asyncMutex.js', () => {
 
       await Promise.all([p1, p2, p3]);
 
-      // Operations should complete in order despite first one being slow
+      // Operations must complete in order despite p1 being slower.
       expect(results).toEqual(['first', 'second', 'third']);
     });
 
@@ -77,7 +83,7 @@ describe('asyncMutex.js', () => {
       expect(result).toBe('sync result');
     });
 
-    it('should handle rapid sequential calls', async () => {
+    it('serializes rapid sequential calls — counter reaches 10 without races', async () => {
       const withLock = createMutex();
       let counter = 0;
 
@@ -85,26 +91,29 @@ describe('asyncMutex.js', () => {
       for (let i = 0; i < 10; i++) {
         promises.push(withLock(async () => {
           const current = counter;
-          await new Promise(r => setTimeout(r, 1));
+          // Microtask yield — gives the event loop a chance to interleave.
+          // Without serialization, concurrent readers would see the same
+          // `current` and the final counter would be less than 10.
+          await Promise.resolve();
           counter = current + 1;
         }));
       }
 
       await Promise.all(promises);
 
-      // Without serialization, counter would likely be less than 10
-      // due to race conditions
       expect(counter).toBe(10);
     });
 
-    it('should create independent mutexes', async () => {
+    it('creates independent mutexes — separate queues run concurrently', async () => {
+      vi.useFakeTimers();
       const withLock1 = createMutex();
       const withLock2 = createMutex();
       const results = [];
 
-      // Both locks should run concurrently
+      // lock1's single op awaits a 20ms delay, lock2's op is instant.
+      // Because the mutexes are independent, lock2 must finish first.
       const p1 = withLock1(async () => {
-        await new Promise(r => setTimeout(r, 20));
+        await vi.advanceTimersByTimeAsync(20);
         results.push('lock1');
       });
 
@@ -114,7 +123,7 @@ describe('asyncMutex.js', () => {
 
       await Promise.all([p1, p2]);
 
-      // lock2 should finish first since locks are independent
+      // lock2 finishes first — independent queues don't block each other.
       expect(results[0]).toBe('lock2');
       expect(results[1]).toBe('lock1');
     });

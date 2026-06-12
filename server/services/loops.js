@@ -8,9 +8,8 @@
  */
 
 import { EventEmitter } from 'events';
-import { readFile, writeFile } from 'fs/promises';
 import { join } from 'path';
-import { PATHS, ensureDir } from '../lib/fileUtils.js';
+import { PATHS, ensureDir, atomicWrite } from '../lib/fileUtils.js';
 import { randomUUID } from 'crypto';
 import { createRun } from './runner.js';
 import { resolveProviderAndModel, runPromptThroughProvider } from '../lib/promptRunner.js';
@@ -41,13 +40,35 @@ function formatInterval(ms) {
   return `${ms / 1000}s`;
 }
 
+// Serializes load-modify-save cycles to prevent concurrent updates from
+// racing each other. Every public mutator that does a read-modify-write must
+// go through this tail so writes are always ordered.
+let loopsTail = Promise.resolve();
+
 async function loadLoops() {
-  const raw = await readFile(LOOPS_FILE, 'utf-8').catch(() => '[]');
-  return JSON.parse(raw);
+  const { readFile } = await import('fs/promises');
+  const raw = await readFile(LOOPS_FILE, 'utf-8').catch(() => null);
+  if (raw === null) return [];
+  try {
+    return JSON.parse(raw);
+  } catch {
+    console.error(`❌ [loops] Failed to parse loops file — resetting to empty state`);
+    return [];
+  }
 }
 
 async function saveLoops(loops) {
-  await writeFile(LOOPS_FILE, JSON.stringify(loops, null, 2));
+  await atomicWrite(LOOPS_FILE, loops);
+}
+
+/**
+ * Queue a mutator that does load-modify-save on the loops file. The mutator
+ * receives the current loops array and should return the modified array (or
+ * undefined to skip saving). Serializes all writes through one promise tail.
+ */
+function withLoopsTail(mutatorFn) {
+  loopsTail = loopsTail.catch(() => {}).then(mutatorFn);
+  return loopsTail;
 }
 
 async function executeIteration(loop) {
@@ -61,7 +82,7 @@ async function executeIteration(loop) {
 
   loopEvents.emit('iteration:start', { id, iteration: iterationNum, timestamp: Date.now() });
 
-  const { provider } = await resolveProviderAndModel({ providerId: loop.providerId })
+  let { provider } = await resolveProviderAndModel({ providerId: loop.providerId })
     .catch(() => ({ provider: null }));
   if (!provider) {
     const msg = 'No AI provider available';
@@ -116,7 +137,10 @@ async function executeIteration(loop) {
     loopEvents.emit('iteration:complete', { id, ...iterResult });
 
     const outputPath = join(LOOPS_OUTPUT_DIR, `${id}-${iterationNum}.txt`);
-    await writeFile(outputPath, result).catch(() => {});
+    // atomicWrite (not a bare writeFile, which is no longer imported) — a bare
+    // writeFile here throws ReferenceError synchronously, before .catch() can
+    // attach, skipping updatePersistedLoop so lastRun/iterationCount never persist.
+    await atomicWrite(outputPath, result).catch(() => {});
 
     await updatePersistedLoop(id, {
       lastRun: Date.now(),
@@ -203,12 +227,14 @@ async function executeIteration(loop) {
 }
 
 async function updatePersistedLoop(id, updates) {
-  const loops = await loadLoops();
-  const idx = loops.findIndex(l => l.id === id);
-  if (idx >= 0) {
-    Object.assign(loops[idx], updates);
-    await saveLoops(loops);
-  }
+  await withLoopsTail(async () => {
+    const loops = await loadLoops();
+    const idx = loops.findIndex(l => l.id === id);
+    if (idx >= 0) {
+      Object.assign(loops[idx], updates);
+      await saveLoops(loops);
+    }
+  });
 }
 
 export async function createLoop({ prompt, interval, name, cwd, providerId, timeout, runImmediately = true }) {
@@ -238,9 +264,11 @@ export async function createLoop({ prompt, interval, name, cwd, providerId, time
     lastExitCode: null
   };
 
-  const loops = await loadLoops();
-  loops.push(loop);
-  await saveLoops(loops);
+  await withLoopsTail(async () => {
+    const loops = await loadLoops();
+    loops.push(loop);
+    await saveLoops(loops);
+  });
 
   startLoopTimer(loop, runImmediately);
 
@@ -276,13 +304,15 @@ export async function stopLoop(id) {
   clearInterval(active.timer);
   activeLoops.delete(id);
 
-  const loops = await loadLoops();
-  const idx = loops.findIndex(l => l.id === id);
-  if (idx >= 0) {
-    loops[idx].status = 'stopped';
-    loops[idx].stoppedAt = Date.now();
-    await saveLoops(loops);
-  }
+  await withLoopsTail(async () => {
+    const loops = await loadLoops();
+    const idx = loops.findIndex(l => l.id === id);
+    if (idx >= 0) {
+      loops[idx].status = 'stopped';
+      loops[idx].stoppedAt = Date.now();
+      await saveLoops(loops);
+    }
+  });
 
   loopEvents.emit('stopped', { id });
   console.log(`⏹️ Loop ${id} stopped`);
@@ -291,20 +321,23 @@ export async function stopLoop(id) {
 export async function resumeLoop(id) {
   if (activeLoops.has(id)) throw new Error(`Loop ${id} is already running`);
 
-  const loops = await loadLoops();
-  const loop = loops.find(l => l.id === id);
-  if (!loop) throw new Error(`Loop ${id} not found`);
-
-  loop.status = 'running';
-  loop.stoppedAt = null;
-  await saveLoops(loops);
+  let loopRecord;
+  await withLoopsTail(async () => {
+    const loops = await loadLoops();
+    const loop = loops.find(l => l.id === id);
+    if (!loop) throw new Error(`Loop ${id} not found`);
+    loop.status = 'running';
+    loop.stoppedAt = null;
+    await saveLoops(loops);
+    loopRecord = loop;
+  });
 
   await ensureDir(LOOPS_OUTPUT_DIR);
-  startLoopTimer(loop, true);
+  startLoopTimer(loopRecord, true);
 
   loopEvents.emit('resumed', { id });
   console.log(`▶️ Loop ${id} resumed`);
-  return loop;
+  return loopRecord;
 }
 
 export async function deleteLoop(id) {
@@ -314,9 +347,11 @@ export async function deleteLoop(id) {
     activeLoops.delete(id);
   }
 
-  const loops = await loadLoops();
-  const filtered = loops.filter(l => l.id !== id);
-  await saveLoops(filtered);
+  await withLoopsTail(async () => {
+    const loops = await loadLoops();
+    const filtered = loops.filter(l => l.id !== id);
+    await saveLoops(filtered);
+  });
 
   loopEvents.emit('deleted', { id });
   console.log(`🗑️ Loop ${id} deleted`);
@@ -355,36 +390,39 @@ export async function triggerLoop(id) {
 }
 
 export async function updateLoop(id, updates) {
-  const loops = await loadLoops();
-  const idx = loops.findIndex(l => l.id === id);
-  if (idx < 0) throw new Error(`Loop ${id} not found`);
+  let updatedRecord;
+  await withLoopsTail(async () => {
+    const loops = await loadLoops();
+    const idx = loops.findIndex(l => l.id === id);
+    if (idx < 0) throw new Error(`Loop ${id} not found`);
 
-  const allowed = ['name', 'prompt', 'interval', 'cwd', 'providerId', 'timeout'];
-  for (const key of allowed) {
-    if (updates[key] !== undefined) {
-      if (key === 'interval') {
-        const ms = typeof updates[key] === 'number' ? updates[key] : parseInterval(updates[key]);
-        if (!ms || ms < MIN_INTERVAL_MS) throw new Error('Interval must be at least 10 seconds');
-        loops[idx].intervalMs = ms;
-      } else {
-        loops[idx][key] = updates[key];
+    const allowed = ['name', 'prompt', 'interval', 'cwd', 'providerId', 'timeout'];
+    for (const key of allowed) {
+      if (updates[key] !== undefined) {
+        if (key === 'interval') {
+          const ms = typeof updates[key] === 'number' ? updates[key] : parseInterval(updates[key]);
+          if (!ms || ms < MIN_INTERVAL_MS) throw new Error('Interval must be at least 10 seconds');
+          loops[idx].intervalMs = ms;
+        } else {
+          loops[idx][key] = updates[key];
+        }
       }
     }
-  }
 
-  await saveLoops(loops);
+    await saveLoops(loops);
+    updatedRecord = loops[idx];
+  });
 
   if (activeLoops.has(id) && updates.interval) {
     const active = activeLoops.get(id);
     clearInterval(active.timer);
-    const updatedLoop = loops[idx];
-    active.timer = setInterval(() => executeIteration(updatedLoop).catch(err => {
-      console.error(`❌ [loops] iteration error for loop ${updatedLoop.id}: ${err?.stack || err?.message || String(err)}`);
-    }), updatedLoop.intervalMs);
+    active.timer = setInterval(() => executeIteration(updatedRecord).catch(err => {
+      console.error(`❌ [loops] iteration error for loop ${updatedRecord.id}: ${err?.stack || err?.message || String(err)}`);
+    }), updatedRecord.intervalMs);
   }
 
-  loopEvents.emit('updated', { loop: loops[idx] });
-  return loops[idx];
+  loopEvents.emit('updated', { loop: updatedRecord });
+  return updatedRecord;
 }
 
 export async function getAvailableProviders() {

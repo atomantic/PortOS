@@ -4,7 +4,10 @@ import {Target, TreePine, List} from 'lucide-react';
 import * as api from '../services/api';
 import GoalsListView from '../components/goals/GoalsListView';
 import MortalLoomBanner from '../components/MortalLoomBanner';
+import PageHeader from '../components/PageHeader';
+import TabPills from '../components/ui/TabPills';
 import BrailleSpinner from '../components/BrailleSpinner';
+import { useValidTab } from '../hooks/useValidTab';
 
 const GoalsTreeView = lazy(() => import('../components/goals/GoalsTreeView'));
 
@@ -14,11 +17,9 @@ export const TABS = [
   { id: 'tree', label: 'Tree', icon: TreePine }
 ];
 
-const VALID_TABS = new Set(TABS.map(t => t.id));
-
 export default function Goals() {
   const { tab: rawTab } = useParams();
-  const tab = VALID_TABS.has(rawTab) ? rawTab : 'list';
+  const tab = useValidTab(TABS, 'list');
   const navigate = useNavigate();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -32,10 +33,11 @@ export default function Goals() {
   useEffect(() => { loadData(); }, [loadData]);
 
   useEffect(() => {
-    if (rawTab && !VALID_TABS.has(rawTab)) {
+    // `tab !== rawTab` only when the param failed validation and fell back.
+    if (rawTab && rawTab !== tab) {
       navigate('/goals/list', { replace: true });
     }
-  }, [rawTab, navigate]);
+  }, [rawTab, tab, navigate]);
 
   const handleTabChange = (tabId) => {
     navigate(`/goals/${tabId}`, { replace: true });
@@ -45,40 +47,28 @@ export default function Goals() {
     <div className="h-full flex flex-col overflow-hidden">
       <MortalLoomBanner section="Goals" />
 
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 sm:px-6 py-3 sm:py-4 border-b border-port-border bg-port-card">
-        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-          <Target className="w-5 h-5 sm:w-6 sm:h-6 text-port-accent shrink-0" />
-          <h1 className="text-lg sm:text-xl font-semibold text-white">Goals</h1>
-          {data && (
-            <span className="text-xs sm:text-sm text-gray-500">
-              {data.flat?.length || 0}
-            </span>
-          )}
-        </div>
-        <div className="flex items-center gap-2 sm:gap-3">
-          <div className="flex bg-port-bg rounded-lg p-0.5">
-            {TABS.map(t => {
-              const Icon = t.icon;
-              const active = tab === t.id;
-              return (
-                <button
-                  key={t.id}
-                  onClick={() => handleTabChange(t.id)}
-                  className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
-                    active
-                      ? 'bg-port-accent text-white'
-                      : 'text-gray-400 hover:text-white'
-                  }`}
-                >
-                  <Icon className="w-4 h-4" />
-                  <span className="hidden sm:inline">{t.label}</span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      </div>
+      <PageHeader
+        icon={Target}
+        title="Goals"
+        className="bg-port-card"
+        actions={(
+          <>
+            {data && (
+              <span className="text-xs sm:text-sm text-gray-500">
+                {data.flat?.length || 0}
+              </span>
+            )}
+            <TabPills
+              tabs={TABS}
+              activeTab={tab}
+              onChange={handleTabChange}
+              variant="pills"
+              size="sm"
+              ariaLabel="Goals views"
+            />
+          </>
+        )}
+      />
 
       {/* Content */}
       <div className="flex-1 overflow-hidden">

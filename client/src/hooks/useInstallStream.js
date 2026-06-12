@@ -113,6 +113,15 @@ export function useInstallStream(url, {
       return undefined;
     }
 
+    // Reset state on every (re)subscribe, not just on disable — a url change
+    // while enabled (e.g. a retry that bumps an attempt counter) must start
+    // the new stream clean, or a prior run's `error`/`done`/log lines leak
+    // into it (wedging consumers that derive "installing" from those flags).
+    setLogs([]);
+    setCurrentStage(null);
+    setDone(false);
+    doneRef.current = false;
+    setError(null);
     setStreamStarted(true);
     const es = new EventSource(url);
     esRef.current = es;

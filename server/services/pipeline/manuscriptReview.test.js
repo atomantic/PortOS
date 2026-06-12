@@ -12,8 +12,9 @@ vi.mock('./series.js', () => ({
   seriesStore: () => ({ recordDir: (id) => `/mock/series/${id}` }),
 }));
 
-// No manuscript sections needed for these tests (seed resolves issueId/stageId
-// from them, but we don't assert on those here).
+// No manuscript sections needed for most tests (seed resolves issueId/stageId
+// from them, but we don't assert on those here). The with-edits fix-seeding test
+// overrides this to return a section so the anchor can resolve.
 vi.mock('./arcPlanner.js', () => ({
   collectManuscriptSections: vi.fn(async () => []),
   // sanitizeComment imports these to classify a finding's suggestion. Mirror
@@ -23,6 +24,7 @@ vi.mock('./arcPlanner.js', () => ({
 }));
 
 import { recordEvents } from '../sharing/recordEvents.js';
+import { collectManuscriptSections } from './arcPlanner.js';
 import { seedReviewFromFindings, updateComment, mergeReviewFromSync } from './manuscriptReview.js';
 
 describe('manuscriptReview — record-event emission on write', () => {
@@ -66,6 +68,30 @@ describe('manuscriptReview — record-event emission on write', () => {
       comments: [{ id: 'mrc-x', problem: 'remote note', status: 'open', updatedAt: '2026-06-02T00:00:00Z' }],
     });
     expect(updates).toEqual([]);
+  });
+
+  it('mergeReviewFromSync is strict-LWW: newer remote wins, equal-clock echo is a no-op', async () => {
+    // Local holds a comment the user has acted on (status 'accepted').
+    await mergeReviewFromSync('ser-lww', {
+      schemaVersion: 1,
+      comments: [{ id: 'c1', problem: 'note', status: 'accepted', updatedAt: '2026-06-02T00:00:00Z' }],
+    });
+
+    // Equal-clock echo from a peer (same updatedAt) carrying a different status
+    // must NOT overwrite the local copy — otherwise a full-snapshot sync cycle
+    // re-adopts and re-writes it forever (write amplification / non-convergence).
+    let merged = await mergeReviewFromSync('ser-lww', {
+      schemaVersion: 1,
+      comments: [{ id: 'c1', problem: 'note', status: 'open', updatedAt: '2026-06-02T00:00:00Z' }],
+    });
+    expect(merged.comments.find((c) => c.id === 'c1').status).toBe('accepted');
+
+    // A strictly-newer remote DOES win.
+    merged = await mergeReviewFromSync('ser-lww', {
+      schemaVersion: 1,
+      comments: [{ id: 'c1', problem: 'note', status: 'dismissed', updatedAt: '2026-06-03T00:00:00Z' }],
+    });
+    expect(merged.comments.find((c) => c.id === 'c1').status).toBe('dismissed');
   });
 
   it('persists replacementStrategy (explicit value, derived from category, and legacy fallback)', async () => {
@@ -160,5 +186,101 @@ describe('manuscriptReview — re-run merge vs fresh reconcile', () => {
     const kept = next.comments.filter((c) => c.problem === 'kept-dismissed');
     expect(kept).toHaveLength(1);
     expect(kept[0].status).toBe('dismissed');
+  });
+});
+
+describe('manuscriptReview — with-edits fix seeding', () => {
+  beforeEach(() => {
+    fileStore.clear();
+    // A section whose content contains the verbatim anchor so the fix resolves.
+    collectManuscriptSections.mockResolvedValue([
+      { issueId: 'iss-1', stageId: 'prose', number: 1, title: 'One', content: 'The hero walked in. She left.' },
+    ]);
+  });
+  afterEach(() => { collectManuscriptSections.mockResolvedValue([]); });
+
+  it('attaches a fix built from { find: anchorQuote, replace } when the finding carries a replace', async () => {
+    const seeded = await seedReviewFromFindings('ser-edits', [
+      { problem: 'abrupt ending', anchorQuote: 'She left.', replace: 'She left, but paused.', issueNumber: 1 },
+    ]);
+    const c = seeded.comments[0];
+    expect(c.fix).toBeTruthy();
+    expect(c.fix.find).toBe('She left.');
+    expect(c.fix.replace).toBe('She left, but paused.');
+    expect(c.fix.edits).toHaveLength(1);
+    expect(c.fix.edits[0]).toMatchObject({ issueId: 'iss-1', stageId: 'prose', issueNumber: 1, find: 'She left.', replace: 'She left, but paused.' });
+    // `replace` is consumed into the fix, not persisted as a stray comment field.
+    expect(c.replace).toBeUndefined();
+  });
+
+  it('still attaches a fix when the anchor differs only in whitespace (tolerant match)', async () => {
+    const seeded = await seedReviewFromFindings('ser-edits-fuzzy', [
+      { problem: 'gap', anchorQuote: 'She   left.', replace: 'She left, but paused.', issueNumber: 1 },
+    ]);
+    // The exact span "She   left." is absent, but the whitespace-tolerant locate
+    // matches "She left." — accept would succeed, so the fix attaches (not gated
+    // out as unappliable).
+    const c = seeded.comments[0];
+    expect(c.fix).toBeTruthy();
+    expect(c.fix.find).toBe('She   left.');
+  });
+
+  it('leaves fix null when the finding has no replace (advice-only / findings pass)', async () => {
+    const seeded = await seedReviewFromFindings('ser-no-edits', [
+      { problem: 'just advice', anchorQuote: 'She left.', issueNumber: 1 },
+    ]);
+    expect(seeded.comments[0].fix).toBeNull();
+  });
+
+  it('leaves fix null when the anchor cannot be located in any section', async () => {
+    const seeded = await seedReviewFromFindings('ser-no-anchor', [
+      { problem: 'unanchorable', anchorQuote: 'text that does not appear', replace: 'rewrite', issueNumber: 1 },
+    ]);
+    expect(seeded.comments[0].fix).toBeNull();
+  });
+
+  it('does NOT pre-seed a fix for a full-page (comic-structure) finding — anchor is only the page opening', async () => {
+    // The anchor ("The hero") is present, but for full-page the replace is the
+    // whole rewritten page; splicing it over just the anchor would corrupt the
+    // page, so the seed defers to the manual full-page fix path (fix stays null).
+    const seeded = await seedReviewFromFindings('ser-fullpage', [
+      {
+        category: 'comic-structure', replacementStrategy: 'full-page',
+        problem: 'page is prose', anchorQuote: 'The hero',
+        replace: 'Panel 1\nDescription: …\nPanel 2\nDescription: …', issueNumber: 1,
+      },
+    ]);
+    expect(seeded.comments[0].fix).toBeNull();
+  });
+
+  it('backfills a fix onto an existing open comment that lacked one when a with-edits re-run re-surfaces it', async () => {
+    // First pass: findings-only (no replace) → comment lands advice-only.
+    const first = await seedReviewFromFindings('ser-backfill', [
+      { problem: 'abrupt ending', anchorQuote: 'She left.', issueNumber: 1 },
+    ]);
+    expect(first.comments[0].fix).toBeNull();
+    const id = first.comments[0].id;
+
+    // Second pass: same finding (same key) now carries a replace. It's deduped
+    // out of the append path, but the carried-forward open comment is backfilled.
+    const second = await seedReviewFromFindings('ser-backfill', [
+      { problem: 'abrupt ending', anchorQuote: 'She left.', replace: 'She left, but paused.', issueNumber: 1 },
+    ]);
+    expect(second.comments).toHaveLength(1);
+    const c = second.comments[0];
+    expect(c.id).toBe(id); // same comment, not a duplicate
+    expect(c.fix).toBeTruthy();
+    expect(c.fix.replace).toBe('She left, but paused.');
+  });
+
+  it('does NOT overwrite an existing fix on backfill (only fills comments that lack one)', async () => {
+    const first = await seedReviewFromFindings('ser-backfill-keep', [
+      { problem: 'abrupt ending', anchorQuote: 'She left.', replace: 'She left, but paused.', issueNumber: 1 },
+    ]);
+    const original = first.comments[0].fix.replace;
+    const second = await seedReviewFromFindings('ser-backfill-keep', [
+      { problem: 'abrupt ending', anchorQuote: 'She left.', replace: 'A DIFFERENT rewrite.', issueNumber: 1 },
+    ]);
+    expect(second.comments[0].fix.replace).toBe(original); // untouched
   });
 });

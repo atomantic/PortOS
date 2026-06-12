@@ -80,6 +80,21 @@ describe('applyRemoteChanges — catalogTypes LWW merge', () => {
     expect(store.catalogUserTypes[0].label).toBe('New');
   });
 
+  it('LWW: an equal-clock echo of a held type is a no-op (sync converges)', async () => {
+    // Regression: the merge used `>=`, so a peer re-sending a type we already
+    // hold at the SAME updatedAt was re-adopted, re-written, and re-counted as
+    // an applied change every cycle — the "Synced: N catalog changes" log never
+    // dropped to 0. Strict `>` makes an equal clock a skip, so it converges.
+    store = { catalogUserTypes: [{ id: 'faction', label: 'Faction', primaryContentKey: 'creed', fields: [], updatedAt: '2026-01-01' }] };
+    const echo = { id: 'faction', label: 'Faction', primaryContentKey: 'creed', fields: [], updatedAt: '2026-01-01' };
+    for (let cycle = 0; cycle < 3; cycle++) {
+      const stats = await applyRemoteChanges({ portosMeta: meta, catalogTypes: [echo] });
+      expect(stats.catalogTypes.applied).toBe(0);
+      expect(stats.catalogTypes.skipped).toBe(1);
+    }
+    expect(store.catalogUserTypes).toHaveLength(1);
+  });
+
   it('skips a peer type colliding with a built-in system id', async () => {
     const stats = await applyRemoteChanges({ portosMeta: meta, catalogTypes: [{ id: 'character', label: 'Hijack', primaryContentKey: 'x', fields: [], updatedAt: '2027-01-01' }] });
     expect(stats.catalogTypes.applied).toBe(0);

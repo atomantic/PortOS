@@ -8,9 +8,11 @@
 import { Router } from 'express'
 import { z } from 'zod'
 import { existsSync } from 'fs'
-import { readFile, writeFile } from 'fs/promises'
+import { readFile } from 'fs/promises'
 import { join, resolve } from 'path'
 import { asyncHandler, ServerError } from '../lib/errorHandler.js'
+import { atomicWrite } from '../lib/fileUtils.js'
+import { documentUpdateSchema } from '../lib/validation.js'
 import * as gsdService from '../services/gsdService.js'
 import { addTask } from '../services/cos.js'
 import { getActiveApps } from '../services/apps.js'
@@ -28,11 +30,6 @@ const concernIdsSchema = z.object({
 
 const phaseActionSchema = z.object({
   action: z.enum(['plan', 'execute', 'verify'])
-})
-
-const documentUpdateSchema = z.object({
-  content: z.string().max(500000),
-  commitMessage: z.string().max(200).optional()
 })
 
 const GSD_ALLOWED_DOCUMENTS = ['PROJECT.md', 'ROADMAP.md', 'STATE.md', 'CONCERNS.md', 'RETROSPECTIVE.md', 'MILESTONES.md']
@@ -200,7 +197,7 @@ router.put('/projects/:appId/documents/:docName', asyncHandler(async (req, res) 
   const { content, commitMessage } = documentUpdateSchema.parse(req.body)
   const created = !existsSync(resolved)
 
-  await writeFile(resolved, content, 'utf-8')
+  await atomicWrite(resolved, content)
   const relPath = `.planning/${docName}`
   await git.stageFiles(ctx.app.repoPath, [relPath])
 

@@ -9,8 +9,6 @@ export const TABS = [
   { id: 'git', label: 'Git', icon: GitBranch }
 ];
 
-export const VALID_TAB_IDS = new Set(TABS.map(t => t.id));
-
 export const STATUS_COLORS = {
   draft: 'text-gray-400',
   active: 'text-port-success',

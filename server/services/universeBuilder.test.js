@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterAll } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from "vitest";
 import { mkdtempSync, rmSync, mkdirSync } from "fs";
 import { writeFile, mkdir } from "fs/promises";
 import { tmpdir } from "os";
@@ -80,8 +80,7 @@ vi.mock("crypto", async () => {
 });
 
 const svc = await import("./universeBuilder.js");
-const peerSyncMock = await import("./sharing/peerSync.js");
-const { recordEvents } = await import("./sharing/recordEvents.js");
+const { recordEvents, registerSubscriptionAdapter, __resetSubscriptionAdapter } = await import("./sharing/recordEvents.js");
 
 // Default universe with non-empty influences. Override `influences` for tests
 // that need isolation from the seed tokens.
@@ -125,6 +124,12 @@ describe("universeBuilder service", () => {
     mkdirSync(TEST_DATA_ROOT, { recursive: true });
     uuidCounter = 0;
     refSheetFilesByName.clear();
+  });
+
+  // A test that registers a subscription-adapter double must not leak it into
+  // later tests even when its assertions fail mid-body.
+  afterEach(() => {
+    __resetSubscriptionAdapter();
   });
 
   it("listUniverses returns [] for fresh state", async () => {
@@ -721,17 +726,20 @@ describe("universeBuilder service", () => {
       await svc.deleteUniverse(id);
 
       const emitSpy = vi.spyOn(recordEvents, "emit");
-      const subscribeSpy = vi.spyOn(peerSyncMock, "autoSubscribeRecordToAllPeers");
+      // The auto-subscribe flows through the recordEvents subscription
+      // adapter (peerSync registers the real impl at boot) — register a
+      // test double to observe the call.
+      const subscribeSpy = vi.fn().mockResolvedValue([]);
+      registerSubscriptionAdapter({ autoSubscribeRecordToAllPeers: subscribeSpy });
 
       await svc.insertUniverseWithId({ id, name: "Resurrected" });
-      // Allow the fire-and-forget peerSync dynamic import to settle.
+      // Allow the fire-and-forget adapter call to settle.
       await new Promise((r) => setTimeout(r, 0));
 
       expect(emitSpy).toHaveBeenCalledWith("updated", { recordKind: "universe", recordId: id });
       expect(subscribeSpy).toHaveBeenCalledWith("universe", id);
 
       emitSpy.mockRestore();
-      subscribeSpy.mockRestore();
     });
 
     it("insertUniverseWithId fresh insert does NOT fire emitRecordUpdated", async () => {

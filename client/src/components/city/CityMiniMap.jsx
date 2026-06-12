@@ -26,7 +26,7 @@ export default function CityMiniMap({ apps, onSelectApp }) {
   const { getBuildingColor } = useCityPalette();
   const view = useMemo(() => {
     const positions = computeCityLayout(Array.isArray(apps) ? apps : []);
-    return computeMiniMap(apps, positions);
+    return computeMiniMap(apps, positions, { geography: true });
   }, [apps]);
 
   if (view.empty) return null;
@@ -43,6 +43,27 @@ export default function CityMiniMap({ apps, onSelectApp }) {
           className="relative rounded-sm border border-cyan-500/20 bg-cyan-500/[0.03] overflow-hidden"
           style={{ width: MAP_SIZE, height: MAP_SIZE }}
         >
+          {/* The bay: everything above the shoreline reads as water, matching the city's
+              real geography (the bay sits north / -Z, projected to the top of the map). */}
+          {view.geography && (
+            <div className="absolute inset-0 pointer-events-none" aria-hidden="true">
+              <div
+                className="absolute left-0 right-0 top-0 bg-cyan-400/10 border-b border-cyan-400/25"
+                style={{ height: `${(view.geography.shorelineY * 100).toFixed(2)}%` }}
+              />
+              {/* Data Harbor pier marker. */}
+              <div
+                className="absolute w-1 h-1 rounded-[1px] bg-cyan-300/70 -translate-x-1/2 -translate-y-1/2 rotate-45"
+                style={{
+                  left: `${(view.geography.harbor.nx * 100).toFixed(2)}%`,
+                  top: `${(view.geography.harbor.ny * 100).toFixed(2)}%`,
+                  boxShadow: '0 0 3px rgba(103, 232, 249, 0.8)',
+                }}
+                title={view.geography.harbor.label}
+              />
+            </div>
+          )}
+
           {/* Faint grid lines for orientation */}
           <div className="absolute inset-0 pointer-events-none" aria-hidden="true">
             <div className="absolute top-1/2 left-0 right-0 h-px bg-cyan-500/10" />

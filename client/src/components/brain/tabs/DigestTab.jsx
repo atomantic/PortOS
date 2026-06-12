@@ -82,7 +82,7 @@ export default function DigestTab({ onRefresh }) {
   }
 
   return (
-    <div className="space-y-8 max-w-3xl mx-auto">
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
       {/* Daily Digest Section */}
       <section>
         <div className="flex items-center justify-between mb-4">

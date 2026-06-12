@@ -134,6 +134,17 @@ function coerceFormFields(body) {
     const raw = Array.isArray(body.referenceStrengths) ? body.referenceStrengths : [body.referenceStrengths];
     body.referenceStrengths = raw.map((v) => (typeof v === 'string' && v !== '' ? Number(v) : v));
   }
+  // LoRA fields are repeated multipart keys (one per selected LoRA). A SINGLE
+  // selected LoRA arrives as a bare string, not a one-element array — wrap it
+  // so Zod's `z.array(...)` accepts it. `loraScales` numbers also arrive as
+  // strings, so coerce element-wise like referenceStrengths above.
+  for (const f of ['loraFilenames', 'loraPaths']) {
+    if (body[f] != null && !Array.isArray(body[f])) body[f] = [body[f]];
+  }
+  if (body.loraScales != null) {
+    const raw = Array.isArray(body.loraScales) ? body.loraScales : [body.loraScales];
+    body.loraScales = raw.map((v) => (typeof v === 'string' && v !== '' ? Number(v) : v));
+  }
   // Multipart sends checkbox values as 'true' / 'false' strings; coerce to
   // bool so Zod's `z.boolean()` accepts them.
   for (const f of ['cleanC2PA', 'denoise', 'autoClean']) {

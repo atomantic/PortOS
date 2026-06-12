@@ -1,18 +1,19 @@
 import { calendar } from '@googleapis/calendar';
+import { ServerError } from '../lib/errorHandler.js';
 import { getAuthenticatedClient } from './googleAuth.js';
 import { getAccount, updateSubcalendars, mergeDiscoveredSubcalendars } from './calendarAccounts.js';
 import { pushSyncEvents, getSyncDateRange } from './calendarGoogleSync.js';
 
 export async function apiSyncAccount(accountId, io) {
   const account = await getAccount(accountId);
-  if (!account) return { error: 'Account not found', status: 404 };
-  if (account.type !== 'google-calendar') return { error: 'Not a Google Calendar account', status: 400 };
+  if (!account) throw new ServerError('Account not found', { status: 404 });
+  if (account.type !== 'google-calendar') throw new ServerError('Not a Google Calendar account', { status: 400 });
 
   const auth = await getAuthenticatedClient();
-  if (!auth) return { error: 'Google OAuth not configured. Set up credentials in Config tab.', status: 401 };
+  if (!auth) throw new ServerError('Google OAuth not configured. Set up credentials in Config tab.', { status: 401 });
 
   const enabledCalendars = (account.subcalendars || []).filter(sc => sc.enabled && !sc.dormant);
-  if (enabledCalendars.length === 0) return { error: 'No enabled subcalendars', status: 400 };
+  if (enabledCalendars.length === 0) throw new ServerError('No enabled subcalendars', { status: 400 });
 
   io?.emit('calendar:sync:started', { accountId, method: 'api' });
   console.log(`📅 Starting Google API sync for ${account.name} (${enabledCalendars.length} calendars)`);
@@ -71,10 +72,10 @@ export async function apiSyncAccount(accountId, io) {
 
 export async function apiDiscoverCalendars(accountId) {
   const account = await getAccount(accountId);
-  if (!account) return { error: 'Account not found', status: 404 };
+  if (!account) throw new ServerError('Account not found', { status: 404 });
 
   const auth = await getAuthenticatedClient();
-  if (!auth) return { error: 'Google OAuth not configured', status: 401 };
+  if (!auth) throw new ServerError('Google OAuth not configured', { status: 401 });
 
   const cal = calendar({ version: 'v3', auth });
   const allCalendars = [];

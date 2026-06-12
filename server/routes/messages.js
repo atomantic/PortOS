@@ -468,7 +468,18 @@ router.post('/debug/test-token', asyncHandler(async (req, res) => {
 
   const apiResult = await testApi(provider, tokenResult.token, parseInt(req.query?.top, 10) || 5);
 
-  res.json({ token: tokenInfo, api: apiResult });
+  // Trim the raw Graph/Outlook response to a status summary — message bodies and
+  // recipient lists have no business in a token-connectivity check response.
+  res.json({
+    token: tokenInfo,
+    api: {
+      success: apiResult.success === true,
+      ...(apiResult.status !== undefined && { status: apiResult.status }),
+      ...(apiResult.error !== undefined && { error: apiResult.error }),
+      ...(apiResult.count !== undefined && { count: apiResult.count }),
+      ...(apiResult.note !== undefined && { note: apiResult.note })
+    }
+  });
 }));
 
 router.post('/debug/clear-token', asyncHandler(async (req, res) => {

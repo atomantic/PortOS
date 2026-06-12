@@ -89,7 +89,7 @@ export async function runStitch(projectId) {
       // Fast-fail: if the render job itself has entered an error/cancelled
       // state, there will never be a history entry — bail immediately.
       const jobStatus = getRenderJobStatus(jobId);
-      if (jobStatus && (jobStatus.status === 'error' || jobStatus.status === 'cancelled')) {
+      if (jobStatus && (jobStatus.status === 'error' || jobStatus.status === 'canceled')) {
         const reason = jobStatus.error ?? `Render ${jobStatus.status}`;
         console.log(`❌ CD stitch: timeline render ${jobStatus.status} for ${timeline.id}: ${reason}`);
         await updateProject(projectId, { status: 'failed', failureReason: reason });

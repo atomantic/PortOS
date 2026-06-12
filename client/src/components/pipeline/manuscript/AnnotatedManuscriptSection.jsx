@@ -3,7 +3,10 @@
  * (highlights + click-to-expand cards) for a focused editorial sweep, and flips
  * to the plain editable `<textarea>` on demand via an Edit toggle. Blur in edit
  * mode saves and returns to the annotated view, which re-locates anchors against
- * the new text. The open comment's card expands inline beneath the prose.
+ * the new text. The open comment's card is injected into the prose at its
+ * anchor (so acting on a note keeps the text it's about on screen); a note
+ * whose anchor isn't located in the current draft falls back to expanding
+ * beneath the prose.
  */
 
 import { useEffect, useMemo, useRef } from 'react';
@@ -22,17 +25,33 @@ export default function AnnotatedManuscriptSection({
   const content = section.content || '';
   const byId = useMemo(() => new Map(comments.map((c) => [c.id, c])), [comments]);
   const openComment = openCommentId && byId.get(openCommentId)?.status === 'open' ? byId.get(openCommentId) : null;
+  const located = openComment ? spans.some((s) => s.commentId === openComment.id) : false;
   const cardRef = useRef(null);
 
-  // The card expands beneath the (often long) prose, so bring it into view when
-  // it opens — otherwise clicking a highlight mid-section looks like nothing
-  // happened. Only the section that actually owns the open comment scrolls.
+  // Bring the open card (and with it the anchor text it sits under) into view —
+  // on open, and again when stepping prev/next between notes. Only the section
+  // that actually owns the open comment scrolls.
   useEffect(() => {
     if (openComment) cardRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
   }, [openComment?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Esc closes the open note — parity with the Live popover.
   useEscapeKey(openComment, onCloseComment);
+
+  const card = openComment && !editing ? (
+    <div ref={cardRef} className="relative border-l-2 border-port-accent/50 pl-2">
+      <button
+        type="button"
+        onClick={onCloseComment}
+        className="absolute right-1 top-1 z-10 text-gray-500 hover:text-white"
+        aria-label="Close note"
+        title="Close note"
+      >
+        <X size={14} />
+      </button>
+      <CommentCardFromProps comment={openComment} commentCardProps={commentCardProps} idScope={`review-${openComment.id}`} />
+    </div>
+  ) : null;
 
   const editToggle = (
     <button
@@ -63,23 +82,11 @@ export default function AnnotatedManuscriptSection({
           spans={spans}
           openCommentId={openCommentId}
           onOpenComment={onOpenComment}
+          inlineCard={located ? card : null}
         />
       )}
 
-      {!editing && openComment ? (
-        <div ref={cardRef} className="relative border-l-2 border-port-accent/50 pl-2">
-          <button
-            type="button"
-            onClick={onCloseComment}
-            className="absolute right-1 top-1 z-10 text-gray-500 hover:text-white"
-            aria-label="Close note"
-            title="Close note"
-          >
-            <X size={14} />
-          </button>
-          <CommentCardFromProps comment={openComment} commentCardProps={commentCardProps} idScope={`review-${openComment.id}`} />
-        </div>
-      ) : null}
+      {card && !located ? card : null}
     </ManuscriptSectionFrame>
   );
 }

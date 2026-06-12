@@ -3,6 +3,8 @@ import { Skull } from 'lucide-react';
 
 import { TABS } from '../components/meatspace/constants';
 import MortalLoomBanner from '../components/MortalLoomBanner';
+import PageHeader from '../components/PageHeader';
+import TabPills from '../components/ui/TabPills';
 
 import OverviewTab from '../components/meatspace/tabs/OverviewTab';
 import AgeTab from '../components/meatspace/tabs/AgeTab';
@@ -60,32 +62,21 @@ export default function MeatSpace() {
         <MortalLoomBanner section="Meatspace health data" />
       </div>
 
-      {/* Header */}
-      <div className="shrink-0 px-6 pt-6 pb-4 border-b border-port-border print:hidden">
-        <div className="flex items-center gap-3 mb-4">
-          <Skull size={24} className="text-port-error" />
-          <h1 className="text-2xl font-bold text-white">MeatSpace</h1>
-          <span className="text-sm text-gray-500">Physical Health Dashboard</span>
-        </div>
+      <PageHeader
+        icon={Skull}
+        iconColor="text-port-error"
+        title="MeatSpace"
+        subtitle="Physical Health Dashboard"
+        className="print:hidden"
+      />
 
-        {/* Tabs */}
-        <div className="flex gap-1 overflow-x-auto">
-          {TABS.map(({ id, label, icon: Icon }) => (
-            <button
-              key={id}
-              onClick={() => handleTabChange(id)}
-              className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-colors ${
-                activeTab === id
-                  ? 'bg-port-accent/10 text-port-accent'
-                  : 'text-gray-400 hover:text-white hover:bg-port-border/50'
-              }`}
-            >
-              <Icon size={16} />
-              {label}
-            </button>
-          ))}
-        </div>
-      </div>
+      <TabPills
+        tabs={TABS}
+        activeTab={activeTab}
+        onChange={handleTabChange}
+        ariaLabel="MeatSpace sections"
+        className="print:hidden"
+      />
 
       {/* Tab content */}
       <div className="flex-1 overflow-auto p-6 print:overflow-visible print:p-0">

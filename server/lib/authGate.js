@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { extractToken, isAuthEnabled, verifyPassword, verifySession } from '../services/auth.js';
-import { settingsEvents } from '../services/settings.js';
+import { getSettings, settingsEvents } from '../services/settings.js';
+import { isRegistryPublic } from './apiRegistry.js';
 
 // Paths that bypass the auth gate even when a password is set:
 //   - /api/auth/status, /api/auth/whoami, /api/auth/login → the login UI
@@ -132,6 +133,16 @@ export const authGate = async (req, res, next) => {
   }
   const path = req.path;
   if (isPublicPath(path)) return next();
+  // Per-API public exemptions. When the user has marked an API exposed +
+  // passwordless in Settings (`apiAccess.<id>`), re-open ONLY its declared
+  // public prefix (e.g. /api/voice/public/, /sdapi/). `isRegistryPublic`
+  // matches only those prefixes, so config-mutation routes outside them
+  // (/api/voice/config, etc.) stay gated. This sits AFTER the cross-origin
+  // CSRF guard above (a public API is still not a CSRF bypass) and after the
+  // static public-path set. `getSettings()` is a cheap file read; no cache is
+  // introduced here so a Settings toggle takes effect on the very next request.
+  const settings = await getSettings();
+  if (isRegistryPublic(settings, path)) return next();
   const token = extractToken(req);
   if (await verifySession(token)) return next();
   // Also accept HTTP Basic auth — used by peer-to-peer federation probes.
@@ -155,6 +166,11 @@ export const authGate = async (req, res, next) => {
 // `req.headers.cookie` is available on `socket.handshake.headers`. When auth
 // is off, every connection is allowed; when on, the handshake must carry a
 // valid cookie/header.
+//
+// NOTE: there is intentionally NO `isRegistryPublic` check here. The public
+// API surface (apiRegistry) is HTTP-only — external callers hit REST endpoints,
+// not the interactive socket. The socket carries the authenticated UI session
+// (voice streaming, live updates) and must stay fully gated when auth is on.
 export const socketAuthGate = async (socket, next) => {
   const enabled = await isAuthEnabled();
   if (!enabled) return next();

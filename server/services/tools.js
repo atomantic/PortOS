@@ -25,24 +25,36 @@ const toolPath = (id) => {
 };
 
 let cache = null;
+// In-flight dedup: two concurrent cold-cache getTools() calls share one load
+// rather than each kicking off a parallel readdir+readJSONFile storm.
+let loadAllPromise = null;
 
 async function loadAll() {
   await ensureDir(PATHS.tools);
   const files = await readdir(PATHS.tools);
-  const tools = [];
-  for (const f of files) {
-    if (!f.endsWith('.json')) continue;
-    const data = await readJSONFile(join(PATHS.tools, f), null);
-    if (data) tools.push(data);
-  }
+  const jsonFiles = files.filter((f) => f.endsWith('.json'));
+  // Parallelize all per-file reads instead of sequential awaits.
+  const results = await Promise.all(
+    jsonFiles.map((f) => readJSONFile(join(PATHS.tools, f), null))
+  );
+  const tools = results.filter(Boolean);
   cache = tools;
   return tools;
 }
 
-function invalidateCache() { cache = null; }
+function invalidateCache() {
+  cache = null;
+  loadAllPromise = null;
+}
 
 export async function getTools() {
-  return cache || loadAll();
+  if (cache) return cache;
+  if (loadAllPromise) return loadAllPromise;
+  loadAllPromise = loadAll().catch((err) => {
+    loadAllPromise = null;
+    throw err;
+  });
+  return loadAllPromise;
 }
 
 export async function getTool(id) {

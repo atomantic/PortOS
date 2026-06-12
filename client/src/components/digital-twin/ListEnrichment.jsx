@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {ArrowLeft,
   Plus,
   X,
@@ -29,8 +29,14 @@ export default function ListEnrichment({
 }) {
   const config = ENRICHMENT_CATEGORIES[categoryId];
 
+  // Stable key counter — items from the server have no id field, so we stamp
+  // a client-side _key on each item when it is loaded or created. This avoids
+  // the key={index} footgun when items are removed mid-list.
+  const nextKey = useRef(0);
+  const mkItem = (title = '', note = '') => ({ title, note, _key: nextKey.current++ });
+
   // List items state
-  const [items, setItems] = useState([{ title: '', note: '' }]);
+  const [items, setItems] = useState(() => [mkItem()]);
   const [loadingItems, setLoadingItems] = useState(true);
 
   // Analysis state
@@ -51,19 +57,19 @@ export default function ListEnrichment({
     setLoadingItems(true);
     const existingItems = await api.getEnrichmentListItems(categoryId).catch(() => []);
     if (existingItems && existingItems.length > 0) {
-      setItems(existingItems);
+      setItems(existingItems.map(({ title, note }) => mkItem(title, note)));
     } else {
-      setItems([{ title: '', note: '' }]);
+      setItems([mkItem()]);
     }
     setLoadingItems(false);
-  }, [categoryId]);
+  }, [categoryId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     loadExistingItems();
   }, [loadExistingItems]);
 
   const addItem = () => {
-    setItems([...items, { title: '', note: '' }]);
+    setItems([...items, mkItem()]);
   };
 
   const updateItem = (index, field, value) => {
@@ -78,7 +84,10 @@ export default function ListEnrichment({
     }
   };
 
-  const getValidItems = () => items.filter(item => item.title.trim().length > 0);
+  // Strip the client-only _key before sending items to the API.
+  const getValidItems = () => items
+    .filter(item => item.title.trim().length > 0)
+    .map(({ title, note }) => ({ title, note }));
 
   const analyzeList = async () => {
     const validItems = getValidItems();
@@ -176,7 +185,7 @@ export default function ListEnrichment({
         <div className="space-y-4">
           {items.map((item, index) => (
             <div
-              key={index}
+              key={item._key}
               className="bg-port-bg rounded-lg border border-port-border p-4 relative group"
             >
               {items.length > 1 && (

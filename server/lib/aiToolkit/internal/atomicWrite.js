@@ -1,11 +1,19 @@
 /**
  * Atomic file write helper for the aiToolkit.
  *
- * Duplicated from server/lib/fileUtils.js so the toolkit stays self-contained
- * (no imports out to sibling PortOS modules). Keep in sync with upstream.
+ * Vendored copy of server/lib/fileUtils.js#atomicWrite so the toolkit stays
+ * self-contained (no imports out to sibling PortOS modules — see CLAUDE.md
+ * "AI Toolkit" section). Keep in sync with the upstream implementation:
+ *
+ *   PARITY REQUIREMENT: every change to server/lib/fileUtils.js#atomicWrite
+ *   must be mirrored here and vice-versa. The critical invariant is the
+ *   payload-coercion line: Buffer must pass through unchanged (JSON.stringify
+ *   on a Buffer produces `{"type":"Buffer","data":[...]}`, corrupting binary
+ *   writes). String and Buffer both bypass stringify; everything else is
+ *   serialised with 2-space indentation.
  *
  * Writes data to a temp file, then renames atomically so readers never see
- * a partial write. Accepts a string or any JSON-serializable value.
+ * a partial write. Accepts a string, a Buffer, or any JSON-serializable value.
  */
 
 import { mkdir, writeFile, rename, unlink } from 'fs/promises';
@@ -17,7 +25,9 @@ export async function ensureDir(dir) {
 }
 
 export async function atomicWrite(filePath, data) {
-  const payload = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+  // Buffer must pass through unchanged — JSON.stringify on a Buffer produces
+  // `{"type":"Buffer","data":[...]}` which corrupts binary writes (PNG, etc.).
+  const payload = typeof data === 'string' || Buffer.isBuffer(data) ? data : JSON.stringify(data, null, 2);
   await ensureDir(dirname(filePath));
   const tmp = `${filePath}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`;
   await writeFile(tmp, payload);

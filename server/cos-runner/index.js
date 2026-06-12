@@ -18,43 +18,20 @@ import { Server as SocketServer } from 'socket.io';
 import { ensureDir, PATHS } from '../lib/fileUtils.js';
 import { createCodexStderrFormatter } from '../lib/codexCliOutput.js';
 import { createStreamJsonParser } from './streamJsonParser.js';
-import { loadState, saveState } from './runnerState.js';
+import { loadState, saveState, withState } from './runnerState.js';
 import { getProcessStats, checkProcessRunning } from './processStats.js';
+import { ALLOWED_COMMANDS, isAllowedCommand } from './allowedCommands.js';
 
+// Path + listen constants. These lived adjacent to the command allowlist before
+// it was extracted to ./allowedCommands.js; they must stay here — they're
+// referenced throughout (RUNS_DIR/AGENTS_DIR/ROOT_DIR for spawn cwd + dirs, and
+// server.listen(PORT, HOST)) and dropping them crashes the runner on boot.
 const ROOT_DIR = PATHS.root;
 const AGENTS_DIR = PATHS.cosAgents;
+const RUNS_DIR = PATHS.runs;
 
 const PORT = process.env.PORT || 5558;
 const HOST = process.env.HOST || '127.0.0.1';
-const RUNS_DIR = PATHS.runs;
-
-// Allowlist of permitted CLI commands to prevent arbitrary code execution.
-// Only commands in this list can be spawned by the runner.
-const ALLOWED_COMMANDS = new Set([
-  'claude',
-  'aider',
-  'codex',
-  'copilot',
-  'agy',
-  'gemini'
-]);
-
-/**
- * Validate that a command is in the allowlist.
- * Extracts the base command name from the full path using path.basename for cross-platform support.
- * Handles Windows .exe extensions by stripping them before checking.
- */
-function isAllowedCommand(command) {
-  if (!command || typeof command !== 'string') return false;
-  // Extract base command name from full path (e.g., /usr/bin/claude -> claude)
-  // Uses path.basename for correct handling on both Unix and Windows
-  let baseName = basename(command);
-  // Normalize for Windows: strip trailing .exe (case-insensitive)
-  if (baseName.toLowerCase().endsWith('.exe')) {
-    baseName = baseName.slice(0, -4);
-  }
-  return ALLOWED_COMMANDS.has(baseName);
-}
 
 // Active agent processes (in memory)
 const activeAgents = new Map();
@@ -284,7 +261,13 @@ app.post('/spawn', async (req, res) => {
 
   // Handle process exit
   claudeProcess.on('close', async (code) => {
+    try {
     const agent = activeAgents.get(agentId);
+    // Cancel any pending SIGKILL timer — process already exited.
+    if (agent?.killTimer) {
+      clearTimeout(agent.killTimer);
+      agent.killTimer = null;
+    }
     const duration = Date.now() - (agent?.startedAt || Date.now());
 
     // Flush remaining stream parser data
@@ -351,24 +334,31 @@ app.post('/spawn', async (req, res) => {
       outputLength: output.length
     });
 
-    // Update state
-    const state = await loadState();
-    state.stats.completed++;
-    if (code !== 0) state.stats.failed++;
-    await saveState(state);
+    // Update state — serialize with the spawn write path via withState.
+    await withState((state) => {
+      state.stats.completed++;
+      if (code !== 0) state.stats.failed++;
+      delete state.agents[agentId];
+    });
 
     activeAgents.delete(agentId);
+    } catch (err) {
+      console.error(`❌ Agent ${agentId} close handler error: ${err.message}`);
+      activeAgents.delete(agentId);
+    }
   });
 
-  // Update state
-  const state = await loadState();
-  state.agents[agentId] = {
-    pid: claudeProcess.pid,
-    taskId,
-    startedAt: Date.now()
-  };
-  state.stats.spawned++;
-  await saveState(state);
+  // Update state — use withState to serialize the read-modify-write with the
+  // close handler's own state update, preventing concurrent mutation of the
+  // same state file.
+  await withState((state) => {
+    state.agents[agentId] = {
+      pid: claudeProcess.pid,
+      taskId,
+      startedAt: Date.now()
+    };
+    state.stats.spawned++;
+  });
 
   res.json({
     success: true,
@@ -392,8 +382,9 @@ app.post('/terminate/:agentId', (req, res) => {
 
   agent.process.kill('SIGTERM');
 
-  // Force kill after timeout
-  setTimeout(() => {
+  // Force kill after timeout; store handle so it can be cancelled if the
+  // process exits cleanly before the 5s window expires.
+  agent.killTimer = setTimeout(() => {
     if (activeAgents.has(agentId)) {
       agent.process.kill('SIGKILL');
       activeAgents.delete(agentId);
@@ -423,9 +414,9 @@ app.post('/kill/:agentId', async (req, res) => {
   activeAgents.delete(agentId);
 
   // Update state
-  const state = await loadState();
-  delete state.agents[agentId];
-  await saveState(state);
+  await withState((state) => {
+    delete state.agents[agentId];
+  });
 
   res.json({ success: true, agentId, pid: agent.pid, signal: 'SIGKILL' });
 });
@@ -452,7 +443,8 @@ app.post('/pause/:agentId', async (req, res) => {
   agent.pauseReason = reason;
 
   agent.process.kill('SIGTERM');
-  setTimeout(() => {
+  // Store handle so the close handler can clear it when the process exits first.
+  agent.killTimer = setTimeout(() => {
     const current = activeAgents.get(agentId);
     if (current?.paused) current.process.kill('SIGKILL');
   }, 5000);
@@ -466,23 +458,22 @@ app.post('/pause/:agentId', async (req, res) => {
 app.post('/terminate-all', async (req, res) => {
   const agentIds = Array.from(activeAgents.keys());
 
+  // Per-agent SIGKILL fallback timers. Each agent gets its OWN timer (stored
+  // as agent.killTimer so its close handler can cancel it on clean exit). A
+  // single shared timer would be cleared by the FIRST agent to exit, leaving
+  // any agent that ignores SIGTERM running with no force-kill escalation.
   for (const agentId of agentIds) {
     const agent = activeAgents.get(agentId);
     if (agent) {
       agent.process.kill('SIGTERM');
+      agent.killTimer = setTimeout(() => {
+        if (activeAgents.has(agentId)) {
+          agent.process.kill('SIGKILL');
+          activeAgents.delete(agentId);
+        }
+      }, 5000);
     }
   }
-
-  // Force kill after timeout
-  setTimeout(() => {
-    for (const agentId of agentIds) {
-      const agent = activeAgents.get(agentId);
-      if (agent) {
-        agent.process.kill('SIGKILL');
-        activeAgents.delete(agentId);
-      }
-    }
-  }, 5000);
 
   res.json({ success: true, killed: agentIds.length });
 });
@@ -622,6 +613,7 @@ app.post('/run', async (req, res) => {
 
   // Handle process exit
   childProcess.on('close', async (code) => {
+    try {
     const run = activeRuns.get(runId);
     const duration = Date.now() - startTime;
     const output = run?.outputBuffer || '';
@@ -659,6 +651,10 @@ app.post('/run', async (req, res) => {
     });
 
     activeRuns.delete(runId);
+    } catch (err) {
+      console.error(`❌ Run ${runId} close handler error: ${err.message}`);
+      activeRuns.delete(runId);
+    }
   });
 
   // Set timeout if specified

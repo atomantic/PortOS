@@ -30,16 +30,16 @@
     "three": "0.184.0"
   },
   "devDependencies": {
-    "@eslint/js": "9.23.0",
+    "@eslint/js": "9.39.4",
     "@tailwindcss/postcss": "4.2.1",
     "@testing-library/jest-dom": "6.9.1",
     "@testing-library/react": "16.3.2",
     "@testing-library/user-event": "14.6.1",
     "@vitejs/plugin-react": "6.0.2",
-    "eslint": "9.23.0",
+    "eslint": "9.39.4",
     "eslint-plugin-react": "7.37.5",
     "eslint-plugin-react-hooks": "5.2.0",
-    "jsdom": "25.0.1",
+    "jsdom": "26.1.0",
     "rollup-plugin-visualizer": "6.0.11",
     "tailwindcss": "4.2.1",
     "vite": "8.0.16",
@@ -49,7 +49,7 @@
     "brace-expansion": "5.0.5",
     "socket.io-parser": "4.2.6",
     "minimatch@3": {
-      "brace-expansion": "1.1.12"
+      "brace-expansion": "1.1.15"
     },
     "three": "0.184.0"
   }

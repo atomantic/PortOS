@@ -5,12 +5,12 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
 import { useSocket } from '../hooks/useSocket';
-import { RefreshCw, Power, PowerOff, FolderOpen, ChevronDown, Plus, X, Terminal as TerminalIcon, ClipboardPaste, OctagonX, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, CornerDownLeft } from 'lucide-react';
+import { RefreshCw, Power, PowerOff, FolderOpen, ChevronDown, Plus, X, Terminal as TerminalIcon, ClipboardPaste, OctagonX, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, CornerDownLeft, Bot } from 'lucide-react';
 import * as api from '../services/api';
 import { readClipboard } from '../lib/clipboard';
 
 // Must match MAX_TOTAL_SESSIONS in server/services/shell.js
-const MAX_SESSIONS = 5;
+const MAX_SESSIONS = 20;
 
 const QUICK_COMMANDS = [
   // `--system-prompt .` replaces Claude's default system prompt with a single
@@ -426,9 +426,11 @@ export default function Shell() {
       sessionsRef.current = sessionList;
       setSessions(sessionList);
       // Auto-pick helper: skip sessions already attached to another socket so we don't
-      // steal them via the shell:detached takeover. Manual tab clicks bypass this.
+      // steal them via the shell:detached takeover. Also skip external TUI runs —
+      // those are opt-in views the user clicks into, never the default landing
+      // session. Manual tab clicks bypass this.
       const pickUnattachedSurvivor = (list) => {
-        const free = list.filter(s => !s.attached);
+        const free = list.filter(s => !s.attached && !s.external);
         return free.length > 0 ? free[free.length - 1] : null;
       };
       // On first load, auto-attach to existing session or create new
@@ -454,10 +456,12 @@ export default function Shell() {
           const survivor = pickUnattachedSurvivor(sessionList);
           if (survivor) {
             attachToSession(survivor.sessionId, { claim: true });
-          } else if (sessionList.length < MAX_SESSIONS) {
+          } else if (sessionList.filter(s => !s.external).length < MAX_SESSIONS) {
             // Every live session is attached elsewhere but we have capacity. The user
             // landed here (probably via a now-dead deep link) intending to get a
             // shell — start a fresh one rather than leaving them at bare /shell.
+            // Capacity counts only interactive shells: external TUI runs are exempt
+            // from the cap server-side, so they must not block a new shell here.
             startSession();
           } else {
             // At session cap with all attached elsewhere — nothing safe to do here.
@@ -564,8 +568,9 @@ export default function Shell() {
         // complete instead of overriding it with our fallback. The handleShellAttached
         // response will install the new session and the user's intent wins.
         if (pendingAttachRef.current.target) return;
-        // Auto-attach to a survivor not already driving another tab (don't steal).
-        const free = sessionsRef.current.filter(s => s.sessionId !== sid && !s.attached);
+        // Auto-attach to a survivor not already driving another tab (don't steal,
+        // and don't auto-adopt a TUI-run view).
+        const free = sessionsRef.current.filter(s => s.sessionId !== sid && !s.attached && !s.external);
         if (free.length > 0) {
           // Claim pending immediately so the shell:sessions broadcast that follows
           // shell:exit doesn't race the timeout — the bare-/shell adoption branch
@@ -644,7 +649,7 @@ export default function Shell() {
         // No previously-displayed session to restore (e.g. initial deep-link attach
         // failed before any session was active). Fall back to a free survivor so the
         // user isn't stranded on /shell/<dead-id> with only the error message visible.
-        const free = live.filter(s => !s.attached && s.sessionId !== failedTarget);
+        const free = live.filter(s => !s.attached && s.sessionId !== failedTarget && !s.external);
         if (free.length > 0) {
           attachToSession(free[free.length - 1].sessionId, { claim: true });
         } else if (urlSessionIdRef.current) {
@@ -657,7 +662,7 @@ export default function Shell() {
         // isn't already attached elsewhere; claim:true protects against multi-tab
         // adopt races. activateSession will update the URL on success.
         clearActiveSession();
-        const free = live.filter(s => !s.attached && s.sessionId !== failedTarget);
+        const free = live.filter(s => !s.attached && s.sessionId !== failedTarget && !s.external);
         if (free.length > 0) {
           attachToSession(free[free.length - 1].sessionId, { claim: true });
         } else {
@@ -716,6 +721,12 @@ export default function Shell() {
       socket.off('shell:exit', handleShellExit);
       socket.off('shell:detached', handleShellDetached);
       socket.off('shell:error', handleShellError);
+      // Leaving the Shell page: tell the server we've stopped viewing so any
+      // watched TUI run resumes normal idle completion instead of staying
+      // paused for a page we've left (the singleton socket stays connected
+      // across navigations, so `disconnect` won't fire). This effect only
+      // re-binds on socket identity change, so this runs on real unmount.
+      if (socket.connected) socket.emit('shell:release-views');
       // Don't kill session on unmount — it persists server-side
       sessionIdRef.current = null;
     };
@@ -747,6 +758,14 @@ export default function Shell() {
     }
   }, [urlSessionId, switchToSession]);
 
+  // External TUI runs (editorial review, pipeline stages, etc.) are surfaced as
+  // opt-in, fully-interactive tabs — you can watch and step in. They're labelled
+  // distinctly and don't count toward the shell cap.
+  const interactiveCount = sessions.filter(s => !s.external).length;
+  const liveRunCount = sessions.filter(s => s.external).length;
+  const activeSession = sessions.find(s => s.sessionId === activeSessionId);
+  const isLiveRun = !!activeSession?.external;
+
   return (
     <div className="h-full flex flex-col p-4 md:p-6">
       {/* Header */}
@@ -758,11 +777,18 @@ export default function Shell() {
           <div className={`w-2 h-2 rounded-full ${connected ? 'bg-green-500' : 'bg-gray-500'}`} />
           {connected ? 'Connected' : 'Disconnected'}
         </div>
-        {sessions.length > 0 && (
-          <span className="text-xs text-gray-500 font-mono">{sessions.length}/{MAX_SESSIONS}</span>
+        {interactiveCount > 0 && (
+          <span className="text-xs text-gray-500 font-mono">{interactiveCount}/{MAX_SESSIONS}</span>
+        )}
+        {liveRunCount > 0 && (
+          <span className="flex items-center gap-1 text-xs text-port-accent font-mono" title={`${liveRunCount} live TUI run${liveRunCount > 1 ? 's' : ''}`}>
+            <Bot size={12} />
+            {liveRunCount} live
+          </span>
         )}
         <div className="flex items-center gap-2 ml-auto">
-          {connected && (
+          {/* Restart (kill + new shell) is meaningless for a TUI-run view. */}
+          {connected && !isLiveRun && (
             <button
               onClick={() => { stopSession(); setTimeout(() => { if (mountedRef.current) startSession(); }, 1000); }}
               className="flex items-center gap-1.5 px-2.5 py-2 bg-port-card hover:bg-port-border text-gray-300 hover:text-white rounded-lg text-sm transition-colors border border-port-border min-h-[40px]"
@@ -776,7 +802,7 @@ export default function Shell() {
             <button
               onClick={stopSession}
               className="flex items-center gap-1.5 px-2.5 py-2 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg text-sm transition-colors min-h-[40px]"
-              title="Kill current session"
+              title={isLiveRun ? 'Stop this TUI run' : 'Kill current session'}
             >
               <PowerOff size={16} />
               <span className="hidden sm:inline">Stop</span>
@@ -799,26 +825,33 @@ export default function Shell() {
           {sessions.map((s) => {
             const isActive = s.sessionId === activeSessionId;
             const label = s.label || s.cwd?.split('/').pop() || shortId(s.sessionId);
+            // External TUI runs get a distinct bot icon + accent tint + pulsing
+            // dot so they read as "live run you can watch and drive".
+            const isRun = s.external;
+            const TabIcon = isRun ? Bot : TerminalIcon;
             return (
               <div
                 key={s.sessionId}
                 className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs font-mono transition-colors cursor-pointer min-h-[40px] ${
                   isActive
                     ? 'bg-port-accent/20 text-port-accent border border-port-accent/40'
-                    : 'bg-port-card hover:bg-port-border text-gray-400 hover:text-white border border-port-border'
+                    : isRun
+                      ? 'bg-port-accent/5 hover:bg-port-accent/15 text-port-accent/80 hover:text-port-accent border border-port-accent/20'
+                      : 'bg-port-card hover:bg-port-border text-gray-400 hover:text-white border border-port-border'
                 }`}
                 onClick={() => !isActive && switchToSession(s.sessionId)}
-                title={`${s.label || s.cwd || shortId(s.sessionId)} — ${formatAge(s.createdAt)} old`}
+                title={`${isRun ? 'Live TUI run — ' : ''}${s.label || s.cwd || shortId(s.sessionId)} — ${formatAge(s.createdAt)} old`}
               >
-                <TerminalIcon size={12} className="shrink-0" />
+                <TabIcon size={12} className="shrink-0" />
                 <span className="min-w-0 break-all">{label}</span>
+                {isRun && <span className="w-1.5 h-1.5 rounded-full bg-port-accent animate-pulse shrink-0" title="Live" />}
                 <span className="text-[10px] opacity-60 shrink-0">{formatAge(s.createdAt)}</span>
                 <button
                   onClick={(e) => { e.stopPropagation(); killOtherSession(s.sessionId); }}
                   className={`shrink-0 ml-0.5 p-0.5 rounded transition-colors ${
                     isActive ? 'text-port-accent/60 hover:text-red-400' : 'text-gray-600 hover:text-red-400'
                   }`}
-                  title="Kill session"
+                  title={isRun ? 'Stop run' : 'Kill session'}
                 >
                   <X size={14} />
                 </button>
@@ -832,6 +865,18 @@ export default function Shell() {
           >
             <Plus size={14} />
           </button>
+        </div>
+      )}
+
+      {/* Live TUI run banner — these views are interactive: type to answer or
+          correct the model, or Stop to end it. It won't auto-close while open. */}
+      {connected && isLiveRun && (
+        <div className="flex items-center gap-2 mb-3 px-3 py-2 rounded bg-port-accent/10 border border-port-accent/30 text-port-accent text-xs">
+          <Bot size={14} className="shrink-0" />
+          <span>
+            Live run <span className="font-mono">{activeSession?.label || 'TUI'}</span> — you can type to answer or correct it,
+            or <span className="font-semibold">Stop</span> to end it. It won't idle-close while you have it open.
+          </span>
         </div>
       )}
 

@@ -11,6 +11,7 @@ import TabPills from '../ui/TabPills';
 // pages use the `<tab>` slug; the standalone pages use `providers` / `prompts`.
 export const TABS = [
   { id: 'ai-assignments', label: 'AI Assignments', to: '/settings/ai-assignments' },
+  { id: 'api-access', label: 'API Access', to: '/settings/api-access' },
   { id: 'autofixer', label: 'Autofixer', to: '/settings/autofixer' },
   { id: 'backup', label: 'Backup', to: '/settings/backup' },
   { id: 'catalog', label: 'Catalog', to: '/settings/catalog' },

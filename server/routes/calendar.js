@@ -123,7 +123,6 @@ router.post('/sync/:accountId', asyncHandler(async (req, res) => {
   }
   const io = req.app.get('io');
   const result = await calendarSync.syncAccount(req.params.accountId, io);
-  if (result.error) return res.status(result.status || 404).json({ error: result.error });
   res.json(result);
 }));
 
@@ -204,7 +203,6 @@ router.post('/sync/:accountId/discover', asyncHandler(async (req, res) => {
   }
   const io = req.app.get('io');
   const result = await calendarGoogleSync.mcpDiscoverCalendars(req.params.accountId, io);
-  if (result.error) return res.status(result.status || 500).json({ error: result.error });
   req.app.get('io')?.emit('calendar:changed', {});
   res.json(result);
 }));
@@ -216,7 +214,6 @@ router.post('/sync/:accountId/google', asyncHandler(async (req, res) => {
   }
   const io = req.app.get('io');
   const result = await calendarGoogleSync.mcpSyncAccount(req.params.accountId, io);
-  if (result.error) return res.status(result.status || 500).json({ error: result.error });
   res.json(result);
 }));
 
@@ -238,17 +235,26 @@ router.post('/google/auth/credentials', asyncHandler(async (req, res) => {
 
 router.get('/google/auth/url', asyncHandler(async (req, res) => {
   const result = await googleAuth.getAuthUrl();
-  if (result.error) throw new ServerError(result.error, { status: 400 });
   res.json(result);
 }));
 
 router.get('/google/oauth/callback', asyncHandler(async (req, res) => {
+  // This endpoint is hit by a BROWSER redirect from Google, not by the SPA —
+  // render every outcome as a redirect to the config page (which toasts the
+  // oauthError param) instead of the JSON envelope the middleware would send.
+  const configUrl = (error) => error
+    ? `/calendar/config?oauthError=${encodeURIComponent(error)}`
+    : '/calendar/config';
   const code = req.query.code;
-  if (!code) return res.status(400).send('Missing authorization code');
-  const result = await googleAuth.handleCallback(code);
-  if (result.error) return res.status(500).send(result.error);
-  // Redirect to calendar config page after successful auth
-  res.redirect('/calendar/config');
+  if (!code) return res.redirect(configUrl('Missing authorization code'));
+  const error = await googleAuth.handleCallback(code).then(() => null)
+    .catch((err) => {
+      // This catch replaces asyncHandler's logging (the redirect swallows the
+      // throw), so keep the failure visible in server logs.
+      console.error(`❌ Google OAuth callback failed: ${err.message}`);
+      return err.message || 'Google OAuth callback failed';
+    });
+  res.redirect(configUrl(error));
 }));
 
 router.post('/google/auth/clear', asyncHandler(async (req, res) => {
@@ -260,14 +266,12 @@ router.post('/google/auth/clear', asyncHandler(async (req, res) => {
 router.post('/google/auto-configure/start', asyncHandler(async (req, res) => {
   const io = req.app.get('io');
   const result = await googleOAuthAutoConfig.startAutoConfig(io);
-  if (result.error) return res.status(result.status || 500).json({ error: result.error });
   res.json(result);
 }));
 
 router.post('/google/auto-configure/capture', asyncHandler(async (req, res) => {
   const io = req.app.get('io');
   const result = await googleOAuthAutoConfig.captureCredentials(io);
-  if (result.error) return res.status(result.status || 500).json({ error: result.error });
   res.json(result);
 }));
 
@@ -275,7 +279,6 @@ router.post('/google/auto-configure/run', asyncHandler(async (req, res) => {
   const io = req.app.get('io');
   const email = req.body?.email || '';
   const result = await googleOAuthAutoConfig.runAutomatedSetup(email, io);
-  if (result.error) return res.status(result.status || 500).json({ error: result.error });
   res.json(result);
 }));
 
@@ -286,7 +289,6 @@ router.post('/sync/:accountId/api', asyncHandler(async (req, res) => {
   }
   const io = req.app.get('io');
   const result = await calendarGoogleApiSync.apiSyncAccount(req.params.accountId, io);
-  if (result.error) return res.status(result.status || 500).json({ error: result.error });
   res.json(result);
 }));
 
@@ -295,7 +297,6 @@ router.post('/sync/:accountId/discover-api', asyncHandler(async (req, res) => {
     throw new ServerError('Invalid account ID format', { status: 400, code: 'VALIDATION_ERROR' });
   }
   const result = await calendarGoogleApiSync.apiDiscoverCalendars(req.params.accountId);
-  if (result.error) return res.status(result.status || 500).json({ error: result.error });
   req.app.get('io')?.emit('calendar:changed', {});
   res.json(result);
 }));

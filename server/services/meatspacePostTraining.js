@@ -36,9 +36,9 @@ export async function submitTrainingEntry(entry) {
     timestamp: now,
     module: entry.module,
     drillType: entry.drillType,
-    questionCount: entry.questionCount || 0,
-    correctCount: entry.correctCount || 0,
-    totalMs: entry.totalMs || 0,
+    questionCount: entry.questionCount ?? 0,
+    correctCount: entry.correctCount ?? 0,
+    totalMs: entry.totalMs ?? 0,
   };
 
   data.entries.push(record);

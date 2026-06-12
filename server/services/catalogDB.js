@@ -11,6 +11,7 @@
 
 import { randomUUID } from 'crypto';
 import { query, withTransaction, pgvectorToArray, arrayToPgvector } from '../lib/db.js';
+import { reciprocalRankFusion } from '../lib/rrfRanking.js';
 import {
   getActiveCatalogType,
   ingredientIdPrefix,
@@ -815,18 +816,7 @@ export async function hybridSearchIngredients(queryText, queryEmbedding, options
     vecRows = r.rows;
   }
 
-  const rrf = new Map();
-  ftsRows.forEach((row, rank) => {
-    const cur = rrf.get(row.id) || { row, ftsRank: null, vectorRank: null, rrfScore: 0 };
-    cur.row = row; cur.ftsRank = rank + 1; cur.rrfScore += ftsWeight / (RRF_K + rank + 1);
-    rrf.set(row.id, cur);
-  });
-  vecRows.forEach((row, rank) => {
-    const cur = rrf.get(row.id) || { row, ftsRank: null, vectorRank: null, rrfScore: 0 };
-    if (!cur.row) cur.row = row;
-    cur.vectorRank = rank + 1; cur.rrfScore += vectorWeight / (RRF_K + rank + 1);
-    rrf.set(row.id, cur);
-  });
+  const rrf = reciprocalRankFusion(ftsRows, vecRows, { k: RRF_K, ftsWeight, vectorWeight });
 
   return Array.from(rrf.values())
     .map((d) => ({

@@ -95,7 +95,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
   const hasGmailAccount = accounts.some(a => a.type === 'gmail');
   useEffect(() => {
     if (hasGmailAccount) {
-      api.getGoogleAuthStatus().then(setGoogleAuth).catch(() => {});
+      api.getGoogleAuthStatus().then(setGoogleAuth).catch(err => console.warn(`⚠️ Failed to load Google auth status: ${err.message}`));
     }
   }, [hasGmailAccount]);
 

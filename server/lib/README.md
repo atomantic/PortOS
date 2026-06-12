@@ -27,14 +27,17 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `appleHealthValidation.js` | Apple Health import payloads. |
 | `brainValidation.js` | Brain/memory route schemas (search, ingest, edit). |
 | `catalogValidation.js` | Creative ingredients catalog route schemas (scraps, ingredients, links, relations, tags, revisions, sync envelope). |
+| `creativeDirectorValidation.js` | Creative Director project/treatment/scene + Create-Suite importer schemas. |
 | `digitalTwinValidation.js` | Digital twin document/category schemas. |
 | `genomeValidation.js` | Genome upload + search schemas. |
 | `identityValidation.js` | Identity section + chronotype + scheduling schemas. |
 | `meatspaceValidation.js` | Meatspace (location/health log) schemas. |
 | `memoryValidation.js` | Memory record + retrieval schemas. |
 | `notesValidation.js` | Notes route schemas + safe-relative-path guard. |
+| `peerSyncValidation.js` | Federated peer-sync wire/request schemas (push payload, subscribe, sync-now, pull-metadata). |
 | `postValidation.js` | Social post schemas. |
 | `socketValidation.js` | Socket event payload schemas. |
+| `storyBuilderValidation.js` | Unified Story Builder session/step schemas. |
 | `telegramValidation.js` | Telegram bot config + test schemas. |
 
 ## Story & narrative
@@ -113,6 +116,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | Module | Purpose |
 |---|---|
 | `bashResolver.js` | `resolveBashBinary()` — resolves the POSIX `bash` for running bundled `*.sh` scripts (e.g. `scripts/db.sh`). On Windows a bare `bash` often resolves (via PM2's PATH) to WSL, which mounts drives at `/mnt/h` and can't see a `H:/...` drive path (exit 127); this prefers Git Bash (PORTOS_BASH override → standard install dirs → derived from `git` on PATH → bare `bash`). No-op (`bash`) on non-Windows. |
+| `openFolder.js` | `openFolderInSystemExplorer(localPath)` — cross-platform "open in Finder/Explorer/Nautilus" via detached spawn; child `error` handler prevents spawn failures from crashing the process. |
 | `bufferedSpawn.js` | `bufferedSpawn(cmd, args, opts)` (structured non-throwing result) + `bufferedSpawnOrThrow` (throwing adapter), plus `killProcessTree`, `needsShell`, `IS_WIN32`, `WIN_CMD_SHIMS`, `MAX_OUTPUT_BYTES` — shared buffered-spawn machinery with capped stdout/stderr, timeout-kill, and Windows `taskkill /T /F` tree-kill. Used by `appBuilder.js` and `appUpdater.js`. |
 | `commandSecurity.js` | Allowlist of safe shell commands. |
 | `execGit.js` | `execGit` utility imported by `git.js` + worktree manager. |
@@ -150,6 +154,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `vectorMath.js` | Vector math utilities (cosine, etc.). |
 | `memoryQuery.js` | Pure memory-index helpers: meta projection, filter/sort, search/hybrid meta filters, RRF fusion. |
 | `memoryStats.js` | macOS-correct memory accounting (handles "Pages free" quirk). |
+| `rrfRanking.js` | Pure `reciprocalRankFusion(textResults, vectorResults, options)` — merges two ranked lists via RRF scoring (Cormack 2009). Used by `catalogDB.hybridSearchIngredients`. |
 
 ## Extraction & parsing
 
@@ -162,7 +167,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 
 | Module | Purpose |
 |---|---|
-| `curatedGenomeMarkers.js` | Curated SNP database with classification logic. |
+| `curatedGenomeMarkers.js` | SNP classification logic (`classifyGenotype`, `formatGenotype`, `resolveApoeHaplotype`) + `MARKER_CATEGORIES`; loads the ~116-marker dataset from the co-located `curatedGenomeMarkers.json` at module init. |
 | `songCraftRef.js` | Server-side mirror of the a cappella rhythm-shape + voice-layer vocabulary (`RHYTHM_SHAPES`, `VOICE_LAYERS`, `DIRGE_RHYTHM_SHAPES`) injected into the song generate/evaluate prompts so the model returns ids the editor pickers understand. Mirrors `client/src/lib/songCraft.js`. |
 
 ## Domain utilities
@@ -201,13 +206,15 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 
 | Module | Purpose |
 |---|---|
+| `apiRegistry.js` | Single source of truth for which PortOS services are externally-callable HTTP APIs (`voice`, `sdapi`). `API_REGISTRY` declares each API's `publicPrefixes` (read/compute-safe surface only) + defaults; `isRegistryPublic(settings, path)` tells `authGate` when an `exposed && !requireAuth` API re-opens its prefix; `resolveApiAccess(settings)` merges persisted `apiAccess` flags for the Settings UI + OpenAPI docs. |
 | `asyncMutex.js` | Promise-based async mutex. |
-| `authGate.js` | Express + Socket.IO middleware that gates `/api/*` and `/data/*` behind the password set in `settings.secrets.auth`. No-op when auth is off; emits 401 `AUTH_REQUIRED` (or plain text for `/data/*`) when on and the request has no valid session token. |
+| `authGate.js` | Express + Socket.IO middleware that gates `/api/*` and `/data/*` behind the password set in `settings.secrets.auth`. No-op when auth is off; emits 401 `AUTH_REQUIRED` (or plain text for `/data/*`) when on and the request has no valid session token. Consults `apiRegistry.isRegistryPublic` so an exposed+passwordless API (voice/sdapi) bypasses the gate on its public prefix only. |
 | `domainAutonomy.js` | Per-domain autonomy guardrails (pure). `AUTONOMY_DOMAINS`/`DOMAIN_IDS`/`DOMAIN_MODES` (`off`/`dry-run`/`execute`), `getDomainMode(config, id)`, and `normalizeDomainAutonomy(raw)` to coerce a hand-edited/partial map. Default per domain is `execute` (reproduces pre-#711 behavior, so no migration needed). |
 | `domainBudgets.js` | Per-domain daily autonomy budgets (pure). `BUDGET_LIMIT_FIELDS` (`maxActionsPerDay`/`maxMinutesPerDay`), `getDomainBudget(config, id)`, `normalizeDomainBudgets(raw)`, `hasBudget(budget)`, and `evaluateBudget(budget, usage)` → `{ withinBudget, exceeded }`. A `null`/non-positive cap means unlimited (default per domain, so no migration needed). Token/$ caps are intentionally absent — CLI subscription providers expose no per-run metering. Usage ledger + gate wiring live in `services/domainUsage.js`. |
 | `errorHandler.js` | `ServerError` + `asyncHandler` middleware. |
 | `mapWithConcurrency.js` | Generic bounded-concurrency async mapper that preserves input order while capping in-flight work. |
 | `objects.js` | Object utilities — `deepMerge` (recursive merge w/ array replacement), `isPlainObject` (non-null, non-array `object` guard for JSON / LLM payloads), `POLLUTING_KEYS` (shared `__proto__`/`constructor`/`prototype` denylist for sanitizers), `canonicalStringify` (recursive sorted-key JSON serialization for cross-machine content hashing), `isEmptyScalar` (true for null/undefined/whitespace-string/empty-array — merge gap-fill gate). |
+| `openapiSpec.js` | `buildOpenApiSpec(settings, { baseUrl, version })` — builds an OpenAPI 3.1 document for the currently-exposed public APIs from `apiRegistry`, reusing route Zod schemas via `z.toJSONSchema`. Exposed+`requireAuth` operations get a `security` requirement; passwordless ones don't. Served by `routes/apiDocs.js`. |
 | `singleFlight.js` | `createSingleFlight()` → `run(key, fn)` — keyed in-flight coalescer: concurrent calls for the same key share one `fn()` execution and result; the slot auto-clears on settle. Minimal by design (no TTL/result cache layered on top, doesn't reject concurrent callers). Used by `promptRunner.js`'s fallback mark-and-pick. |
 | `sseUtils.js` | Per-job SSE stream helpers (imageGen + others). |
 | `streamBackpressure.js` | `awaitWritableDrain(res)` — park a streaming-response producer on the socket's next `drain` (or `close`) when `res.write()` returned false, so SSE/NDJSON writes stay bounded for a slow reader. Shared by `routes/ask.js` (SSE) and `routes/localLlm.js` (NDJSON). |

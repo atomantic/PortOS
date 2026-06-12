@@ -197,8 +197,13 @@ export const reorderBrainBuckets = (ids) => request('/brain/buckets/reorder', {
 // Brain - Graph
 export const getBrainGraph = () => request('/brain/graph');
 
-// Brain - Bridge Sync (brain data to CoS memory system)
-export const syncBrainData = () => request('/brain/bridge-sync', { method: 'POST' });
+// Brain - Bridge Sync (brain data to CoS memory system).
+// refresh:true re-embeds already-mapped records to heal memory entries that
+// went stale before the per-record sync signal existed (issue #1080).
+// `options` (e.g. { silent: true }) passes through to the request helper so a
+// caller with its own error toast doesn't get a duplicate from the helper.
+export const syncBrainData = ({ refresh = false } = {}, options = {}) =>
+  request('/brain/bridge-sync', { method: 'POST', body: JSON.stringify({ refresh }), ...options });
 
 // Brain - Daily Log
 export const listDailyLogs = (options = {}) => {

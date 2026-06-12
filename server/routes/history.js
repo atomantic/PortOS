@@ -1,17 +1,28 @@
 import { Router } from 'express';
+import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { validateRequest } from '../lib/validation.js';
 import * as history from '../services/history.js';
+
+const historyQuerySchema = z.object({
+  limit: z.preprocess(v => (v !== undefined ? Number(v) : undefined), z.number().int().min(1).max(1000).optional()),
+  offset: z.preprocess(v => (v !== undefined ? Number(v) : undefined), z.number().int().min(0).optional()),
+  action: z.string().optional(),
+  target: z.string().optional(),
+  success: z.preprocess(v => (v === 'true' ? true : v === 'false' ? false : undefined), z.boolean().optional()),
+});
 
 const router = Router();
 
 // GET /api/history - Get history entries
 router.get('/', asyncHandler(async (req, res) => {
+  const parsed = validateRequest(historyQuerySchema, req.query);
   const options = {
-    limit: parseInt(req.query.limit, 10) || 100,
-    offset: parseInt(req.query.offset, 10) || 0,
-    action: req.query.action || undefined,
-    target: req.query.target || undefined,
-    success: req.query.success !== undefined ? req.query.success === 'true' : undefined
+    limit: parsed.limit ?? 100,
+    offset: parsed.offset ?? 0,
+    action: parsed.action,
+    target: parsed.target,
+    success: parsed.success,
   };
 
   res.json(await history.getHistory(options));

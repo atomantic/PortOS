@@ -42,12 +42,20 @@ vi.mock('../services/messagePlaywrightSync.js', () => ({
   launchProvider: vi.fn()
 }));
 
+vi.mock('../services/messageTokenExtractor.js', () => ({
+  getToken: vi.fn(),
+  getTokenStatus: vi.fn(),
+  testApi: vi.fn(),
+  clearTokenCache: vi.fn()
+}));
+
 // Import mocked modules
 import * as messageAccounts from '../services/messageAccounts.js';
 import * as messageSync from '../services/messageSync.js';
 import * as messageDrafts from '../services/messageDrafts.js';
 import * as messageSender from '../services/messageSender.js';
 import * as messagePlaywrightSync from '../services/messagePlaywrightSync.js';
+import * as messageTokenExtractor from '../services/messageTokenExtractor.js';
 
 const VALID_UUID = '11111111-1111-1111-1111-111111111111';
 const VALID_UUID_2 = '22222222-2222-2222-2222-222222222222';
@@ -636,6 +644,54 @@ describe('Messages Routes', () => {
 
       expect(response.status).toBe(400);
       expect(response.body.error).toBe('Invalid provider');
+    });
+  });
+
+  describe('POST /api/messages/debug/test-token', () => {
+    it('trims the provider API result to a status summary without message payloads', async () => {
+      messageTokenExtractor.getToken.mockResolvedValue({
+        token: 'tok-abcdef',
+        fresh: true,
+        decoded: { exp: 1893456000, aud: 'https://outlook.office.com', scp: 'Mail.Read' }
+      });
+      messageTokenExtractor.testApi.mockResolvedValue({
+        success: true,
+        count: 2,
+        messages: [
+          { id: 'm1', subject: 'Private subject', bodyContent: 'private-body-content' },
+          { id: 'm2', subject: 'Another', bodyContent: 'more-private-content' }
+        ]
+      });
+
+      const response = await request(app)
+        .post('/api/messages/debug/test-token')
+        .send({ provider: 'outlook' });
+
+      expect(response.status).toBe(200);
+      expect(response.body.api).toEqual({ success: true, count: 2 });
+      const serialized = JSON.stringify(response.body);
+      expect(serialized).not.toContain('private-body-content');
+      expect(serialized).not.toContain('Private subject');
+    });
+
+    it('passes through status and error fields when the API test fails', async () => {
+      messageTokenExtractor.getToken.mockResolvedValue({
+        token: 'tok-abcdef',
+        fresh: false,
+        decoded: {}
+      });
+      messageTokenExtractor.testApi.mockResolvedValue({
+        success: false,
+        status: 401,
+        error: 'InvalidAuthenticationToken'
+      });
+
+      const response = await request(app)
+        .post('/api/messages/debug/test-token')
+        .send({ provider: 'outlook' });
+
+      expect(response.status).toBe(200);
+      expect(response.body.api).toEqual({ success: false, status: 401, error: 'InvalidAuthenticationToken' });
     });
   });
 });

@@ -92,8 +92,10 @@ router.get('/:processName', asyncHandler(async (req, res) => {
   });
 
   logProcess.on('close', (code) => {
-    res.write(`event: close\ndata: ${JSON.stringify({ code })}\n\n`);
-    res.end();
+    if (!res.writableEnded && !res.destroyed) {
+      res.write(`event: close\ndata: ${JSON.stringify({ code })}\n\n`);
+      res.end();
+    }
   });
 
   // Cleanup on client disconnect

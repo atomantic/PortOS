@@ -30,7 +30,7 @@ import {
   evaluateOnPage,
 } from './browserService.js';
 import { lookup } from 'dns/promises';
-import { PATHS, ensureDir, sleep } from '../lib/fileUtils.js';
+import { PATHS, ensureDir, sleep, safeJSONParse } from '../lib/fileUtils.js';
 import { isSafeIngestUrl, isBlockedIngestHost } from '../lib/catalogValidation.js';
 
 // Cap fetched/transcribed bodies at the scrap column boundary (the Zod
@@ -130,8 +130,7 @@ export async function fetchUrlMainText(url, { settleMs = PAGE_SETTLE_MS } = {}) 
     return JSON.stringify({ title, text });
   })()`;
   const raw = await evaluateOnPage(page, expression);
-  let parsed = null;
-  try { parsed = raw ? JSON.parse(raw) : null; } catch { parsed = null; }
+  const parsed = raw ? safeJSONParse(raw, null) : null;
   const text = clampText(parsed?.text || '');
   if (!text.trim()) throw new Error('no readable text extracted from page');
   return { text, title: parsed?.title || page.title || '', finalUrl: page.url || url };

@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { spawn } from 'child_process';
 import { readFile, writeFile, stat, access, mkdir } from 'fs/promises';
 import { join, resolve, extname } from 'path';
-import { PATHS, tryReadFile, readJSONFile, safeJSONParse } from '../lib/fileUtils.js';
+import { PATHS, tryReadFile, readJSONFile, safeJSONParse, atomicWrite } from '../lib/fileUtils.js';
 import * as appsService from '../services/apps.js';
 import { notifyAppsChanged, PORTOS_APP_ID } from '../services/apps.js';
 import * as pm2Service from '../services/pm2.js';
@@ -11,7 +11,7 @@ import * as appBuilder from '../services/appBuilder.js';
 import * as cos from '../services/cos.js';
 import { logAction } from '../services/history.js';
 import { z } from 'zod';
-import { validateRequest, appSchema, appUpdateSchema, sanitizeTaskMetadata } from '../lib/validation.js';
+import { validateRequest, appSchema, appUpdateSchema, sanitizeTaskMetadata, documentUpdateSchema } from '../lib/validation.js';
 import * as git from '../services/git.js';
 import { parseCronToNextRun } from '../services/eventScheduler.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
@@ -274,11 +274,8 @@ router.post('/:id/upgrade-tls', loadApp, asyncHandler(async (req, res) => {
     );
   }
 
-  const [helperSource] = await Promise.all([
-    readFile(sourcePath, 'utf-8'),
-    mkdir(targetDir, { recursive: true })
-  ]);
-  await writeFile(targetPath, helperSource);
+  const helperSource = await readFile(sourcePath, 'utf-8');
+  await atomicWrite(targetPath, helperSource);
 
   await appsService.updateApp(app.id, { tlsPort });
 
@@ -967,11 +964,6 @@ router.post('/:id/refresh-config', loadApp, asyncHandler(async (req, res) => {
 
 const ALLOWED_DOCUMENTS = ['PLAN.md', 'CLAUDE.md', 'GOALS.md', 'REVIEW.md', 'REJECTED.md'];
 
-const documentUpdateSchema = z.object({
-  content: z.string().max(500000),
-  commitMessage: z.string().max(200).optional()
-});
-
 // GET /api/apps/:id/documents - List which documents exist
 router.get('/:id/documents', loadApp, asyncHandler(async (req, res) => {
   const app = req.loadedApp;
@@ -1052,7 +1044,7 @@ router.put('/:id/documents/:filename', loadApp, asyncHandler(async (req, res) =>
   const { content, commitMessage } = documentUpdateSchema.parse(req.body);
   const created = !await pathExists(resolved);
 
-  await writeFile(resolved, content, 'utf-8');
+  await atomicWrite(resolved, content);
   await git.stageFiles(app.repoPath, [filename]);
 
   const status = await git.getStatus(app.repoPath);

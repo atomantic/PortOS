@@ -18,7 +18,7 @@ import {
   detectForgeCli,
   parsePullRequestUrl
 } from '../lib/gitForge.js';
-import { PROTECTED_BRANCHES, validateFilePaths } from '../lib/gitArgs.js';
+import { PROTECTED_BRANCHES, validateFilePaths, toLiteralPathspec } from '../lib/gitArgs.js';
 
 // Re-export so callers that used to import from services/git.js keep working.
 export { execGit };
@@ -109,19 +109,21 @@ export async function getDiffStats(dir) {
 }
 
 /**
- * Stage files
+ * Stage files. Paths are passed with `:(literal)` pathspec magic so git
+ * treats wildcard characters as literal filename bytes — `[id].jsx` stages
+ * that exact file, and a crafted `*` can't expand to the whole tree.
  */
 export async function stageFiles(dir, files) {
-  const safePaths = validateFilePaths(files);
+  const safePaths = validateFilePaths(files).map(toLiteralPathspec);
   await execGit(['add', '--', ...safePaths], dir);
   return true;
 }
 
 /**
- * Unstage files
+ * Unstage files (same literal-pathspec handling as stageFiles).
  */
 export async function unstageFiles(dir, files) {
-  const safePaths = validateFilePaths(files);
+  const safePaths = validateFilePaths(files).map(toLiteralPathspec);
   await execGit(['reset', 'HEAD', '--', ...safePaths], dir);
   return true;
 }

@@ -50,7 +50,7 @@ import { setSyncBaseHash, contentHashForRecord, flushBaseHashes, withBaseHashFlu
 import { collectAssetReferences } from './exporter.js';
 import { imageSidecarName, sanitizeAssetFilename } from './buckets.js';
 import { pullSidecarForImage } from './sidecarSync.js';
-import { recordEvents } from './recordEvents.js';
+import { recordEvents, registerSubscriptionAdapter } from './recordEvents.js';
 import {
   PORTOS_SCHEMA_VERSIONS,
   RECORD_KIND_SCHEMA_CATEGORIES,
@@ -2441,3 +2441,16 @@ export async function __drainForTests() {
   await new Promise((r) => setTimeout(r, 0));
   await writeTail.catch(() => {});
 }
+
+// Register the subscription-lifecycle implementation with the import-light
+// adapter in recordEvents.js. Domain services (universeBuilder, series,
+// mediaCollections, instances) call the adapter instead of importing this
+// module — peerSync statically imports their merge entry points, so an import
+// in the other direction (even a dynamic one) formed a load-order-sensitive
+// cycle. Module-load registration is safe: sharing/index.js imports this file
+// during server boot, before any HTTP write can fire an adapter call.
+registerSubscriptionAdapter({
+  autoSubscribeRecordToAllPeers,
+  unsubscribeAllForRecord,
+  autoSubscribePeerToAllRecords,
+});

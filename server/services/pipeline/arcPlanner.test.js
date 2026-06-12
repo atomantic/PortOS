@@ -1686,6 +1686,46 @@ describe('arcPlanner — manuscript completeness + derive-from-manuscript', () =
     expect(out[3].replacementStrategy).toBe('full-page'); // invalid → category default
   });
 
+  it('shapeCompletenessFindings reads `replace` only in the with-edits pass (trimmed; absent → no key)', () => {
+    const { shapeCompletenessFindings } = planner.__testing;
+    const raw = [
+      { category: 'missing-content', problem: 'abrupt', anchorQuote: 'She left.', replace: '  She left, but paused.  ' },
+      { category: 'pacing', problem: 'no replace', anchorQuote: 'q' }, // model omitted replace
+    ];
+    // Findings-only pass ignores `replace` entirely.
+    const findingsOnly = shapeCompletenessFindings(raw);
+    expect(findingsOnly[0]).not.toHaveProperty('replace');
+    // With-edits pass carries a trimmed `replace`; an absent one yields no key.
+    const withEdits = shapeCompletenessFindings(raw, { withEdits: true });
+    expect(withEdits[0].replace).toBe('She left, but paused.');
+    expect(withEdits[1]).not.toHaveProperty('replace');
+  });
+
+  it('analyzeManuscriptCompleteness passes withEdits into the prompt ctx and shapes replace', async () => {
+    const s = await setupSeries();
+    await issuesSvc.createIssue({ seriesId: s.id, title: 'One', arcPosition: 1, stages: { prose: { output: 'The hero walked in. She left.', status: 'ready' } } });
+    stageRunnerSpy = vi.fn(async (template, ctx) => {
+      expect(ctx.withEdits).toBe(true);
+      return {
+        content: { issues: [{ severity: 'high', category: 'arc-gap', issueNumber: 1, anchorQuote: 'She left.', problem: 'abrupt', suggestion: 'add a beat', replace: 'She left, but paused.' }] },
+        runId: 'rc', providerId: 'p', model: 'm',
+      };
+    });
+    const out = await planner.analyzeManuscriptCompleteness(s.id, { withEdits: true });
+    expect(out.issues[0].replace).toBe('She left, but paused.');
+  });
+
+  it('analyzeManuscriptCompleteness defaults withEdits false (ctx.withEdits=false, no replace shaped)', async () => {
+    const s = await setupSeries();
+    await issuesSvc.createIssue({ seriesId: s.id, title: 'One', arcPosition: 1, stages: { prose: { output: 'A short draft.', status: 'ready' } } });
+    stageRunnerSpy = vi.fn(async (template, ctx) => {
+      expect(ctx.withEdits).toBe(false);
+      return { content: { issues: [{ severity: 'low', category: 'pacing', problem: 'thin', replace: 'ignored' }] }, runId: 'rc', providerId: 'p', model: 'm' };
+    });
+    const out = await planner.analyzeManuscriptCompleteness(s.id);
+    expect(out.issues[0]).not.toHaveProperty('replace');
+  });
+
   it('analyzeManuscriptCompleteness reads the manuscript and returns shaped findings', async () => {
     const s = await setupSeries();
     await issuesSvc.createIssue({

@@ -263,6 +263,7 @@ const navItems = [
     defaultTo: '/settings/general',
     children: [
       { to: '/settings/ai-assignments', label: 'AI Assignments', icon: Bot },
+      { to: '/settings/api-access', label: 'API Access', icon: Globe },
       { to: '/settings/backup', label: 'Backup', icon: Download },
       { to: '/settings/database', label: 'Database', icon: Database },
       { to: '/settings/general', label: 'General', icon: Settings },
@@ -895,6 +896,7 @@ export default function Layout() {
           {/* Collapsed: just logo, clickable to expand */}
           {collapsed && (
             <button
+              type="button"
               onClick={() => setCollapsed(false)}
               className="hidden lg:block opacity-95 transition-opacity hover:opacity-80"
               title="Expand sidebar"
@@ -906,6 +908,7 @@ export default function Layout() {
           {/* Expanded: collapse button */}
           {!collapsed && (
             <button
+              type="button"
               onClick={() => setCollapsed(true)}
               className="hidden lg:flex p-1 text-gray-500 hover:text-white transition-colors"
               title="Collapse sidebar"
@@ -916,6 +919,7 @@ export default function Layout() {
           )}
           {/* Mobile close button */}
           <button
+            type="button"
             onClick={() => setMobileOpen(false)}
             className="lg:hidden inline-flex items-center justify-center min-w-[40px] min-h-[40px] rounded-lg text-gray-500 hover:text-white"
             aria-label="Close sidebar"
@@ -1138,7 +1142,14 @@ export default function Layout() {
             location.pathname === '/shell' ||
             location.pathname.startsWith('/shell/') ||
             location.pathname.startsWith('/city') ||
-            /^\/apps\/[^/]+/.test(location.pathname);
+            // Only the App DETAIL editor (/apps/:id, /apps/:id/:tab) is
+            // full-width and owns its own scroll; the Add App form
+            // (/apps/create) is a plain scrolling page and must stay OUT of
+            // full-width, or its content clips below the fold (it has no
+            // internal overflow-y-auto container). The trailing (?:\/|$) +
+            // create(?:\/|$) lookahead also excludes the trailing-slash URL
+            // /apps/create/ (React Router treats it as the same route).
+            /^\/apps\/(?!create(?:\/|$))[^/]+(?:\/|$)/.test(location.pathname);
           return (
             <main id="main-content" className={`flex-1 min-h-0 print:overflow-visible print:min-h-0 ${isFullWidth ? 'relative overflow-hidden' : 'overflow-auto p-4 md:p-6'}`}>
               <Outlet />

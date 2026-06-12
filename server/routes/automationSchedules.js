@@ -5,12 +5,17 @@
  */
 
 import { Router } from 'express';
+import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, automationScheduleSchema, automationScheduleUpdateSchema } from '../lib/validation.js';
 import * as automationScheduler from '../services/automationScheduler.js';
 import * as platformAccounts from '../services/platformAccounts.js';
 import * as agentPersonalities from '../services/agentPersonalities.js';
 import { logAction } from '../services/history.js';
+
+const toggleScheduleSchema = z.object({
+  enabled: z.boolean(),
+});
 
 const router = Router();
 
@@ -120,7 +125,7 @@ router.delete('/:id', asyncHandler(async (req, res) => {
 // POST /:id/toggle - Toggle schedule enabled status
 router.post('/:id/toggle', asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const { enabled } = req.body;
+  const { enabled } = validateRequest(toggleScheduleSchema, req.body);
   console.log(`📅 POST /api/agents/schedules/${id}/toggle enabled=${enabled}`);
 
   const schedule = await automationScheduler.toggleSchedule(id, enabled);

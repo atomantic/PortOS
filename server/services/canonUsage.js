@@ -6,7 +6,7 @@
 
 import { getUniverse, ERR_NOT_FOUND } from './universeBuilder.js';
 import { listSeries } from './pipeline/series.js';
-import { listIssues } from './pipeline/issues.js';
+import { listAllIssues } from './pipeline/issues.js';
 import {
   matchCharactersInText, matchPlacesInText, matchObjectsInText,
 } from '../lib/scenePrompt.js';
@@ -86,9 +86,26 @@ export async function getUniverseCanonUsage(universeId) {
   // Per (kind, entryId) → Map(seriesId → { seriesName, issueIds: Set })
   const tally = { characters: new Map(), places: new Map(), objects: new Map() };
 
+  // Pre-load ALL issues once and group by seriesId to avoid an N+1 query
+  // (one listIssues call per series previously). listAllIssues is UNCAPPED —
+  // listIssues({}) slices at 1000 total and would silently drop the tail on
+  // large installs. Filter to only the series linked to this universe.
+  const linkedSeriesIds = new Set(linkedSeries.map((s) => s.id));
+  const allIssues = await listAllIssues();
+  const issuesBySeriesId = new Map();
+  for (const issue of allIssues) {
+    if (!linkedSeriesIds.has(issue.seriesId)) continue;
+    const bucket = issuesBySeriesId.get(issue.seriesId);
+    if (bucket) {
+      bucket.push(issue);
+    } else {
+      issuesBySeriesId.set(issue.seriesId, [issue]);
+    }
+  }
+
   let issueCount = 0;
   for (const series of linkedSeries) {
-    const issues = await listIssues({ seriesId: series.id });
+    const issues = issuesBySeriesId.get(series.id) || [];
     issueCount += issues.length;
     for (const issue of issues) {
       const corpus = corpusForIssue(issue);

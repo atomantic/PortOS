@@ -167,3 +167,10 @@ export async function shutdownAllWatchers() {
 export function listAttachedWatchers() {
   return [...watchers.keys()];
 }
+
+/**
+ * Exported for unit testing only — exposes the coalescing queue so the
+ * flood-then-assert pattern can be tested without a real chokidar watcher.
+ * @internal
+ */
+export { queueBacklog as __queueBacklogForTests, backlogQueues as __backlogQueuesForTests };

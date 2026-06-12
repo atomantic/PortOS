@@ -16,12 +16,12 @@ import {
 import toast from '../components/ui/Toast';
 import Banner from '../components/ui/Banner';
 import { useLockToggle } from '../hooks/useLockToggle';
-import { useStoryStepProgress } from '../hooks/useStoryStepProgress';
+import { usePipelineProgress } from '../hooks/usePipelineProgress';
 import {
   getStoryBuilderSteps, listStorySessions, getStorySession, createStorySession,
   updateStorySession, setStoryCurrentStep, lockStoryStep, unlockStoryStep,
   generateStoryStep, refineStoryStep, setStoryIssueLock, generateStoryIssues,
-  setStorySessionSync, reconcileStorySession,
+  setStorySessionSync, reconcileStorySession, storyStepProgressSseUrl,
   getUniverse, getPipelineSeries, listPipelineIssues,
   analyzeImport, commitImport, retryImporterIssues, IMPORTER_CONTENT_TYPES,
   getProviders, updateUniverse,
@@ -502,7 +502,9 @@ function useStepStream(sessionId, stepId) {
   // the PREVIOUS run's terminal frame. Gating the terminal branches on a frame's
   // runId stops that stale frame from firing the new run's onComplete instantly.
   const runIdRef = useRef(null);
-  const { latest, closed } = useStoryStepProgress(sessionId, stepId, { enabled: active });
+  // Enable only after the kickoff POST resolves (so the run is registered
+  // server-side before the EventSource connects) — see the step runner below.
+  const { latest, closed } = usePipelineProgress(storyStepProgressSseUrl, [sessionId, stepId], { enabled: active });
 
   const settle = useCallback(() => {
     setActive(false); setPhase(''); setOp(null);

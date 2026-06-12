@@ -1,9 +1,11 @@
-import { useParams, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { CalendarDays, Calendar as CalendarIcon, ClipboardList, Clock, Columns, LayoutGrid, RefreshCw, Settings } from 'lucide-react';
 import { useState, useEffect, useCallback } from 'react';
 import * as api from '../services/api';
 import BrailleSpinner from '../components/BrailleSpinner';
+import PageHeader from '../components/PageHeader';
 import TabPills from '../components/ui/TabPills';
+import { useValidTab } from '../hooks/useValidTab';
 
 import AgendaTab from '../components/calendar/AgendaTab';
 import DayView from '../components/calendar/DayView';
@@ -28,10 +30,8 @@ export const TABS = [
 ];
 
 export default function Calendar() {
-  const { tab } = useParams();
   const navigate = useNavigate();
-  const VALID_TABS = TABS.map(t => t.id);
-  const activeTab = VALID_TABS.includes(tab) ? tab : 'agenda';
+  const activeTab = useValidTab(TABS, 'agenda');
   const [accounts, setAccounts] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -82,18 +82,12 @@ export default function Calendar() {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between p-4 border-b border-port-border">
-        <div className="flex items-center gap-3">
-          <CalendarDays className="w-8 h-8 text-port-accent" />
-          <div>
-            <h1 className="text-xl font-bold text-white">Calendar</h1>
-            <p className="text-sm text-gray-500">Unified calendar and event management</p>
-          </div>
-        </div>
-        <div className="flex items-center gap-4 text-sm">
-          <span className="text-gray-500">{accounts.length} accounts</span>
-        </div>
-      </div>
+      <PageHeader
+        icon={CalendarDays}
+        title="Calendar"
+        subtitle="Unified calendar and event management"
+        actions={<span className="text-sm text-gray-500">{accounts.length} accounts</span>}
+      />
 
       <TabPills tabs={TABS} activeTab={activeTab} onChange={handleTabChange} ariaLabel="Calendar sections" />
 

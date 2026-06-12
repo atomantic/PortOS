@@ -43,3 +43,23 @@ export function saveState(state) {
   stateLock = stateLock.catch(() => {}).then(() => atomicWrite(STATE_FILE, state));
   return stateLock;
 }
+
+/**
+ * Queue an entire read-modify-write cycle on the serialized lock.
+ * The mutator receives the current state, mutates it in-place (or returns a
+ * new state), and the helper saves whatever it returns (or the mutated arg if
+ * it returns undefined). Callers that previously did loadState/mutate/saveState
+ * in open code are subject to read-modify-write races when two such cycles
+ * interleave; using withState serializes the whole cycle end-to-end.
+ *
+ * @param {function(state: object): Promise<object|undefined>} mutatorFn
+ */
+export function withState(mutatorFn) {
+  stateLock = stateLock.catch(() => {}).then(async () => {
+    const state = await loadState();
+    const result = await mutatorFn(state);
+    const next = result !== undefined ? result : state;
+    await atomicWrite(STATE_FILE, next);
+  });
+  return stateLock;
+}

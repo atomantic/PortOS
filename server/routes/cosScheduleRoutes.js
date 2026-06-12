@@ -3,9 +3,19 @@
  */
 
 import { Router } from 'express';
+import { z } from 'zod';
 import * as taskSchedule from '../services/taskSchedule.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { sanitizeTaskMetadata } from '../lib/validation.js';
+import { sanitizeTaskMetadata, validateRequest } from '../lib/validation.js';
+
+const templateTaskSchema = z.object({
+  name: z.string().min(1),
+  description: z.string().min(1),
+  category: z.string().optional(),
+  taskType: z.string().optional(),
+  priority: z.string().optional(),
+  metadata: z.record(z.unknown()).optional(),
+});
 
 const router = Router();
 
@@ -150,11 +160,7 @@ router.get('/schedule/templates', asyncHandler(async (req, res) => {
 
 // POST /api/cos/schedule/templates - Add a template task
 router.post('/schedule/templates', asyncHandler(async (req, res) => {
-  const { name, description, category, taskType, priority, metadata } = req.body;
-
-  if (!name || !description) {
-    throw new ServerError('name and description are required', { status: 400, code: 'VALIDATION_ERROR' });
-  }
+  const { name, description, category, taskType, priority, metadata } = validateRequest(templateTaskSchema, req.body);
 
   const template = await taskSchedule.addTemplateTask({
     name,

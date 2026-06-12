@@ -594,3 +594,64 @@ describe('runBackup pg status propagation', () => {
     expect(backupStatusForPg({ status: 'ok', sizeBytes: 10, tableCount: 1 })).toBe('ok');
   });
 });
+
+describe('generateManifest', () => {
+  // Regression: the manifest write used a bare `writeFile` that was never
+  // imported, so every real backup threw `writeFile is not defined` at the
+  // very end of generateManifest. This exercises the actual write path
+  // (atomicWrite) end-to-end against a real temp dir so a missing import
+  // can never silently reappear.
+  let tmpRoot;
+  beforeEach(async () => {
+    // Earlier suites install persistent vi.spyOn(fs, 'readdir'/'stat') mocks
+    // (e.g. stat → { isFile: () => true }). Those leak into these real-
+    // filesystem tests, so restore the spies AND re-point the factory-level
+    // stat/readFile wrappers back at the genuine implementations.
+    vi.restoreAllMocks();
+    vi.clearAllMocks();
+    const realFs = await vi.importActual('fs/promises');
+    fs.stat.mockImplementation(realFs.stat);
+    fs.readFile.mockImplementation(realFs.readFile);
+    vi.resetModules();
+    const { mkdtemp } = await import('fs/promises');
+    const { tmpdir } = await import('os');
+    const { join } = await import('path');
+    tmpRoot = await mkdtemp(join(tmpdir(), 'portos-manifest-'));
+  });
+
+  it('writes the manifest file and returns hashes for every data file', async () => {
+    const { mkdir, writeFile, readFile } = await import('fs/promises');
+    const { join } = await import('path');
+    const dataDir = join(tmpRoot, 'data');
+    await mkdir(join(dataDir, 'sub'), { recursive: true });
+    await writeFile(join(dataDir, 'a.txt'), 'hello');
+    await writeFile(join(dataDir, 'sub', 'b.txt'), 'world');
+
+    const manifestPath = join(tmpRoot, 'manifest.json');
+    const { generateManifest } = await import('./backup.js');
+    const manifest = await generateManifest(dataDir, manifestPath);
+
+    expect(manifest.fileCount).toBe(2);
+    expect(manifest.files['a.txt']).toMatch(/^[0-9a-f]{64}$/);
+    expect(manifest.files[join('sub', 'b.txt')]).toMatch(/^[0-9a-f]{64}$/);
+
+    // The file must actually be written (the regression was a write-time throw).
+    const written = JSON.parse(await readFile(manifestPath, 'utf-8'));
+    expect(written).toEqual(manifest);
+  });
+
+  it('includes the parent-relative pg dump hash when a dump path is given', async () => {
+    const { writeFile } = await import('fs/promises');
+    const { join } = await import('path');
+    const { mkdir } = await import('fs/promises');
+    const dataDir = join(tmpRoot, 'data');
+    await mkdir(dataDir, { recursive: true });
+    const dumpPath = join(tmpRoot, 'portos-db.sql');
+    await writeFile(dumpPath, 'PG DUMP');
+
+    const { generateManifest } = await import('./backup.js');
+    const manifest = await generateManifest(dataDir, join(tmpRoot, 'manifest.json'), dumpPath);
+
+    expect(manifest.files['../portos-db.sql']).toMatch(/^[0-9a-f]{64}$/);
+  });
+});

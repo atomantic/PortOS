@@ -299,7 +299,8 @@ export async function applyRemoteChanges(envelope = {}) {
 
   // User-defined type definitions (catalog v8). LWW-merge the incoming
   // definitions into the local settings slice: a peer's type whose `updatedAt`
-  // is newer than (or equal to, for a first-seen) the local copy wins; a type
+  // is strictly newer than the local copy wins (or the local copy is absent —
+  // first-seen); an equal clock is a no-op skip so the merge converges; a type
   // colliding with a built-in system id is skipped. The merge writes the
   // settings slice ONCE (not per-row) and refreshes the in-process registry so
   // the synced types resolve immediately. Wrapped so a settings write failure
@@ -346,8 +347,14 @@ export async function applyUserTypesFromPeer(incoming = []) {
     // system types always win and are never represented in this slice.
     if (!id || INGREDIENT_TYPE_IDS.includes(id)) { skipped++; continue; }
     const existing = byId.get(id);
-    // LWW: adopt when no local copy, or the peer's clock is at-or-newer.
-    if (!existing || clockOf(peer) >= clockOf(existing)) {
+    // LWW: adopt when no local copy, or the peer's clock is STRICTLY newer.
+    // Must be `>`, not `>=` — an equal clock means the peer is echoing a type
+    // we already hold, so re-adopting it re-writes the slice and re-counts it
+    // as an applied change every cycle, and the merge never converges (the peer
+    // keeps re-sending it on the next envelope). Strict `>` mirrors the SQL LWW
+    // guard every other catalog kind uses (`EXCLUDED.updated_at > … .updated_at`
+    // in upsertScrapFromPeer / upsertTagFromPeer): equal clock = no-op = skip.
+    if (!existing || clockOf(peer) > clockOf(existing)) {
       byId.set(id, { ...peer, id });
       applied++;
     } else {

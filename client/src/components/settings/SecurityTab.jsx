@@ -86,7 +86,7 @@ export function SecurityTab() {
   }
 
   return (
-    <div className="max-w-2xl space-y-6">
+    <div className="space-y-6">
       <div className="bg-port-card border border-port-border rounded-lg p-4">
         <div className="flex items-start gap-3">
           {enabled
@@ -105,6 +105,7 @@ export function SecurityTab() {
         </div>
       </div>
 
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
       <form onSubmit={handleSubmit} className="bg-port-card border border-port-border rounded-lg p-4 space-y-4">
         <h3 className="text-md font-semibold text-white flex items-center gap-2">
           <Lock className="w-4 h-4" /> {enabled ? 'Change password' : 'Set a password'}
@@ -203,6 +204,7 @@ export function SecurityTab() {
           )}
         </div>
       )}
+      </div>
     </div>
   );
 }

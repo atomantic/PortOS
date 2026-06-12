@@ -11,7 +11,7 @@
  */
 
 import { useMemo, useState } from 'react';
-import { Loader2, Sparkles, Check, X, Columns2, Rows2, Copy } from 'lucide-react';
+import { Loader2, Sparkles, Check, X, Columns2, Rows2, Copy, ChevronLeft, ChevronRight } from 'lucide-react';
 import InlineDiff from '../../ui/InlineDiff';
 import SideBySideDiff from '../../ui/SideBySideDiff';
 import toast from '../../ui/Toast';
@@ -90,8 +90,19 @@ export function selectedEditsFor(comment, draft) {
 // Bind a comment card to the page's shared `commentCardProps` (handlers + the
 // per-comment draft keyed by id). The card renders identically in the Live
 // popover, the Review inline expansion, and the sidebar index — only `idScope`
-// differs — so this wrapper is the single place that prop shape lives.
+// differs — so this wrapper is the single place that prop shape lives. When the
+// page supplies `openNav` (the triage order over open notes + a goto handler),
+// the card grows a ‹ N of M › stepper so a review pass never detours back
+// through the sidebar between notes.
 export function CommentCardFromProps({ comment, commentCardProps, idScope }) {
+  const order = commentCardProps.openNav?.order || [];
+  const idx = order.indexOf(comment.id);
+  const nav = idx !== -1 && order.length > 1 ? {
+    index: idx,
+    total: order.length,
+    onPrev: () => commentCardProps.openNav.goto(order[(idx - 1 + order.length) % order.length]),
+    onNext: () => commentCardProps.openNav.goto(order[(idx + 1) % order.length]),
+  } : null;
   return (
     <ManuscriptCommentCard
       comment={comment}
@@ -103,12 +114,13 @@ export function CommentCardFromProps({ comment, commentCardProps, idScope }) {
       onAccepted={commentCardProps.onAccepted}
       draft={commentCardProps.fixDrafts[comment.id]}
       onDraftChange={(entry) => commentCardProps.setCommentDraft(comment.id, entry)}
+      nav={nav}
     />
   );
 }
 
 export default function ManuscriptCommentCard({
-  comment, seriesId, providerOverride, modelOverride, onCommentChange, onAccepted, idScope, draft, onDraftChange,
+  comment, seriesId, providerOverride, modelOverride, onCommentChange, onAccepted, idScope, draft, onDraftChange, nav,
 }) {
   // Namespace form ids so two copies of an open comment don't share ids.
   const scope = idScope || comment.id;
@@ -170,7 +182,32 @@ export default function ManuscriptCommentCard({
     <div className="border border-port-border rounded-lg bg-port-bg/40 p-2.5 space-y-2">
       <div className="flex items-center justify-between gap-2">
         <Badge comment={comment} />
-        <CopyId id={comment.id} />
+        <span className="flex items-center gap-2">
+          {nav ? (
+            <span className="inline-flex items-center gap-0.5 text-[10px] text-gray-400">
+              <button
+                type="button"
+                onClick={nav.onPrev}
+                className="p-0.5 rounded hover:text-white hover:bg-port-border/60"
+                aria-label="Previous open note"
+                title="Previous open note"
+              >
+                <ChevronLeft size={13} />
+              </button>
+              <span className="tabular-nums whitespace-nowrap">{nav.index + 1} of {nav.total}</span>
+              <button
+                type="button"
+                onClick={nav.onNext}
+                className="p-0.5 rounded hover:text-white hover:bg-port-border/60"
+                aria-label="Next open note"
+                title="Next open note"
+              >
+                <ChevronRight size={13} />
+              </button>
+            </span>
+          ) : null}
+          <CopyId id={comment.id} />
+        </span>
       </div>
 
       <p className="text-xs text-gray-200">{comment.problem}</p>

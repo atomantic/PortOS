@@ -39,6 +39,13 @@ vi.mock('../lib/fileUtils.js', () => ({
   PATHS: { audio: '/tmp/data/audio' },
   ensureDir: vi.fn(),
   sleep: vi.fn(() => Promise.resolve()),
+  safeJSONParse: vi.fn((raw, fallback) => {
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return fallback;
+    }
+  }),
 }));
 
 const catalogDB = await import('./catalogDB.js');

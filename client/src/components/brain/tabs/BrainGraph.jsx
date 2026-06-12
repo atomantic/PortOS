@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
-import {Search, AlertTriangle, Zap} from 'lucide-react';
+import {Search, AlertTriangle, Zap, RefreshCw} from 'lucide-react';
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
 import { BRAIN_TYPE_HEX, DESTINATIONS } from '../constants';
@@ -210,15 +210,21 @@ export default function BrainGraph() {
     }
   }, []);
 
-  const handleSync = async () => {
+  // refresh:true re-embeds already-mapped records — the recovery path for
+  // memory entries that diverged before synced-in records were re-vectorized
+  // automatically (issue #1080). The default sync only embeds new records.
+  const handleSync = async ({ refresh = false } = {}) => {
     setSyncing(true);
-    const stats = await api.syncBrainData().catch(err => {
+    // silent:true — this catch owns the error toast, so suppress the helper's
+    // own toast to avoid a duplicate (CLAUDE.md: custom catch ⇒ silent).
+    const stats = await api.syncBrainData({ refresh }, { silent: true }).catch(err => {
       toast.error(err.message || 'Sync failed');
       return null;
     });
     setSyncing(false);
     if (stats) {
-      toast.success(`Synced ${stats.synced} records (${stats.skipped} skipped)`);
+      const archivedNote = stats.archived ? `, ${stats.archived} archived` : '';
+      toast.success(`Synced ${stats.synced} records (${stats.skipped} skipped${archivedNote})`);
       // Reload graph data to pick up new embeddings
       const fresh = await api.getBrainGraph().catch(() => null);
       if (fresh) setGraphData(fresh);
@@ -247,7 +253,9 @@ export default function BrainGraph() {
   }
 
   return (
-    <div className="space-y-3">
+    // Full-bleed tab: own the scroll (the Brain wrapper is overflow-hidden) and
+    // restore the edge padding the shared wrapper no longer provides (#1177).
+    <div className="h-full overflow-y-auto p-3 sm:p-4 space-y-3">
       {/* No-embeddings banner */}
       {graphData && !graphData.hasEmbeddings && (
         <div className="flex items-center justify-between bg-port-warning/10 border border-port-warning/30 rounded-lg px-4 py-2.5">
@@ -256,7 +264,7 @@ export default function BrainGraph() {
             No embeddings found. Sync brain data to CoS memory to enable semantic similarity edges.
           </div>
           <button
-            onClick={handleSync}
+            onClick={() => handleSync()}
             disabled={syncing}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-port-warning/20 text-port-warning border border-port-warning/30 rounded-lg hover:bg-port-warning/30 transition-colors disabled:opacity-50"
           >
@@ -313,6 +321,18 @@ export default function BrainGraph() {
           className="px-3 py-1.5 min-h-[36px] text-xs bg-port-border text-gray-400 hover:text-white rounded-lg transition-colors"
         >
           Re-layout
+        </button>
+        {/* Recovery action (issue #1080): re-embed already-synced records whose
+            memory copy may be stale — e.g. a peer edited a record that this
+            machine received via sync before auto re-vectorization existed. */}
+        <button
+          onClick={() => handleSync({ refresh: true })}
+          disabled={syncing}
+          title="Re-embed all brain records, including ones synced from peers, to refresh stale memory entries"
+          className="flex items-center gap-1.5 px-3 py-1.5 min-h-[36px] text-xs bg-port-border text-gray-400 hover:text-white rounded-lg transition-colors disabled:opacity-50"
+        >
+          {syncing ? <BrailleSpinner /> : <RefreshCw size={14} />}
+          Refresh embeddings
         </button>
       </div>
 

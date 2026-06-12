@@ -34,3 +34,10 @@ export const KOKORO_VOICES = Object.freeze({
   bm_george:   { gender: 'Male',   language: 'en-GB', grade: 'C' },
   bm_lewis:    { gender: 'Male',   language: 'en-GB', grade: 'D+' },
 });
+
+// True iff `id` is a known Kokoro voice. Mirrors `findPiperVoice` so the TTS
+// façade can reject an unknown Kokoro voice override (otherwise an invalid
+// `voice` would pass straight to the model and either error or synthesize the
+// wrong voice). `Object.hasOwn` avoids matching inherited props like `toString`.
+export const isKokoroVoice = (id) =>
+  typeof id === 'string' && Object.hasOwn(KOKORO_VOICES, id);

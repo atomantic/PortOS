@@ -1097,6 +1097,25 @@ describe('pipeline issues service', () => {
         expect(got.filter((id) => ids.includes(id))).toHaveLength(5);
       });
     });
+
+    describe('listAllIssues', () => {
+      it('returns full live records, includes deleted only when asked, strips history on request', async () => {
+        const a = await svc.createIssue({ seriesId: 'ser-all', title: 'A' });
+        const b = await svc.createIssue({ seriesId: 'ser-all', title: 'B' });
+        await svc.deleteIssue(b.id);
+        const live = await svc.listAllIssues();
+        expect(live.map((i) => i.id)).toContain(a.id);
+        expect(live.map((i) => i.id)).not.toContain(b.id);
+        // Full records, not ids — the canon-usage tally needs stages/seriesId.
+        const rec = live.find((i) => i.id === a.id);
+        expect(rec.seriesId).toBe('ser-all');
+        const all = await svc.listAllIssues({ includeDeleted: true });
+        expect(all.map((i) => i.id)).toEqual(expect.arrayContaining([a.id, b.id]));
+        const lean = await svc.listAllIssues({ withHistory: false });
+        const leanRec = lean.find((i) => i.id === a.id);
+        expect(leanRec).toBeTruthy();
+      });
+    });
   });
 
   describe('isStageReady', () => {

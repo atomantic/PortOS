@@ -21,7 +21,7 @@ import {
 import PeerAppsList from '../components/instances/PeerAppsList';
 import PeerAgentsSection from '../components/instances/PeerAgentsSection';
 import { SchemaGapBadge } from '../components/instances/SchemaGapBadge';
-import { timeAgo } from '../utils/formatters';
+import { timeAgo, timeUntil } from '../utils/formatters';
 import { useLocalStorageBool } from '../hooks/useLocalStorageBool';
 import { directionalCounts, describeDirectional } from '../lib/syncCounts';
 
@@ -36,19 +36,6 @@ const STATUS_ICONS = {
   offline: WifiOff,
   unknown: CircleDot
 };
-
-function timeUntil(iso) {
-  if (!iso) return null;
-  const diff = new Date(iso).getTime() - Date.now();
-  if (diff <= 0) return 'now';
-  const secs = Math.floor(diff / 1000);
-  if (secs < 60) return `in ${secs}s`;
-  const mins = Math.floor(secs / 60);
-  if (mins < 60) return `in ${mins}m`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `in ${hrs}h`;
-  return `in ${Math.floor(hrs / 24)}d`;
-}
 
 function HealthSummary({ health, version }) {
   if (!health) return <span className="text-gray-500 text-xs">No data</span>;

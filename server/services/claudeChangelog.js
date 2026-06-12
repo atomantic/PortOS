@@ -7,7 +7,6 @@
  */
 
 import { join } from 'path'
-import sax from 'sax'
 import { atomicWrite, readJSONFile, PATHS } from '../lib/fileUtils.js'
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js'
 
@@ -23,62 +22,53 @@ const defaultState = () => ({
   entries: []
 })
 
+// Decode the five XML predefined entities (the only ones a text feed uses
+// outside CDATA). `&amp;` is intentionally last so a literal "&amp;lt;" in the
+// source decodes to "&lt;" rather than being double-decoded to "<".
+function decodeXmlEntities(s) {
+  return s
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, '&')
+}
+
+// Pull the first <tag>…</tag> text from an <entry> block. CDATA-wrapped
+// content (GitHub wraps release notes in <![CDATA[…]]>) is returned verbatim;
+// plain text is entity-decoded. Returns '' when the tag is absent.
+function extractTag(entryXml, tag) {
+  const m = entryXml.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`, 'i'))
+  if (!m) return ''
+  const inner = m[1]
+  const cdata = inner.match(/<!\[CDATA\[([\s\S]*?)\]\]>/)
+  if (cdata) return cdata[1]
+  return decodeXmlEntities(inner.trim())
+}
+
+/**
+ * Parse the GitHub releases Atom feed into flat entries. The feed is small
+ * and flat (one level of <entry> under <feed>), so a focused extractor beats
+ * pulling in a streaming SAX parser — sax stays for the 500MB Apple Health
+ * export path where streaming actually matters (issue #1167).
+ */
 function parseAtomFeed(xml) {
-  return new Promise((resolve, reject) => {
-    const parser = sax.parser(true, { trim: true })
-    const entries = []
-    let current = null
-    let tag = null
-    let inFeed = false
-    let settled = false
-
-    parser.onopentag = (node) => {
-      tag = node.name
-      if (tag === 'feed') inFeed = true
-      if (tag === 'entry' && inFeed) {
-        current = { title: '', link: '', updated: '', content: '' }
-      }
-      if (current && tag === 'link' && node.attributes.href) {
-        current.link = node.attributes.href
-      }
-    }
-
-    parser.ontext = (text) => {
-      if (!current || !tag) return
-      if (tag === 'title') current.title += text
-      if (tag === 'updated') current.updated += text
-      if (tag === 'content') current.content += text
-    }
-
-    parser.oncdata = (cdata) => {
-      if (!current || !tag) return
-      if (tag === 'content') current.content += cdata
-    }
-
-    parser.onclosetag = (name) => {
-      if (name === 'entry' && current) {
-        entries.push(current)
-        current = null
-      }
-      tag = null
-    }
-
-    parser.onerror = (err) => {
-      if (!settled) {
-        settled = true
-        reject(err)
-      }
-    }
-
-    parser.onend = () => {
-      if (!settled) {
-        settled = true
-        resolve(entries)
-      }
-    }
-
-    parser.write(xml).close()
-  })
+  const entries = []
+  const entryRe = /<entry[^>]*>([\s\S]*?)<\/entry>/gi
+  let match
+  while ((match = entryRe.exec(xml)) !== null) {
+    const block = match[1]
+    // <link href="…"/> — Atom links carry the URL in the href attribute.
+    const linkMatch = block.match(/<link\b[^>]*\bhref="([^"]*)"/i)
+    entries.push({
+      title: extractTag(block, 'title'),
+      link: linkMatch ? decodeXmlEntities(linkMatch[1]) : '',
+      updated: extractTag(block, 'updated'),
+      content: extractTag(block, 'content'),
+    })
+  }
+  return entries
 }
 
 function extractVersion(title) {
@@ -120,7 +110,7 @@ export async function checkChangelog() {
   }
 
   const xml = await response.text()
-  const allEntries = await parseAtomFeed(xml)
+  const allEntries = parseAtomFeed(xml)
 
   const entries = allEntries.slice(0, MAX_ENTRIES).map(e => ({
     version: extractVersion(e.title),
@@ -155,3 +145,7 @@ export async function checkChangelog() {
 export async function getCachedChangelog() {
   return readJSONFile(STATE_FILE, defaultState())
 }
+
+// Exposed for unit tests — the Atom parse is the regex-extractor that replaced
+// sax on this path (issue #1167).
+export const __testing = { parseAtomFeed, stripHtml, extractVersion }

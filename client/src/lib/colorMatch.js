@@ -122,19 +122,49 @@ export const noteAtTime = (timeline, tMs, fromIdx = 0) => {
   return null;
 };
 
+// Flatten a grade map/array into the ordered list of GRADED grades. PENDING
+// (un-sung) notes are dropped so a stopped-early take isn't penalized for notes
+// it never reached. A map is walked in ASCENDING note-index order so the result
+// lines up note-for-note with the score (the renderer's global note index); an
+// array is taken in its given order. Shared by `summarizeAccuracy` so the
+// `perNote` it persists and the counts it derives come from one ordered pass.
+const orderedGrades = (grades) => {
+  if (Array.isArray(grades)) return grades.filter((g) => g && g !== GRADE.PENDING);
+  return Object.entries(grades || {})
+    .sort((a, b) => Number(a[0]) - Number(b[0]))
+    .map(([, g]) => g)
+    .filter((g) => g && g !== GRADE.PENDING);
+};
+
 // Aggregate per-note grades into a take summary for training mode. `grades` is a
 // map (or array) of noteIndex → GRADE for the notes that were walked. Counts a
 // note "in tune" only for GRADE.IN_TUNE; `percentInTune` is over the GRADED
 // notes (PENDING/un-sung notes are excluded so a stopped-early take isn't
-// penalized for notes it never reached). Returns counts per bucket + the
-// percentage, all derived — no side effects.
+// penalized for notes it never reached). Returns counts per bucket, the
+// percentage, AND `perNote` — the ordered grade list the persisted-take shape
+// stores (mirrors server `sanitizeAccuracy`, so a saved take round-trips its
+// grading). All derived — no side effects.
 export const summarizeAccuracy = (grades) => {
-  const values = Array.isArray(grades)
-    ? grades.filter((g) => g && g !== GRADE.PENDING)
-    : Object.values(grades || {}).filter((g) => g && g !== GRADE.PENDING);
+  const perNote = orderedGrades(grades);
   const counts = { 'in-tune': 0, close: 0, off: 0, missed: 0 };
-  for (const g of values) if (g in counts) counts[g] += 1;
-  const graded = values.length;
+  for (const g of perNote) if (g in counts) counts[g] += 1;
+  const graded = perNote.length;
   const percentInTune = graded > 0 ? Math.round((counts['in-tune'] / graded) * 100) : 0;
-  return { graded, counts, percentInTune };
+  return { graded, counts, percentInTune, perNote };
+};
+
+// Reconstruct a noteIndex → GRADE map from a take's persisted `perNote` list and
+// its timeline, WITHOUT re-grading audio. `perNote` (from summarizeAccuracy) is
+// the graded notes in ascending global-note-index order, rests excluded and
+// un-reached notes absent — exactly the order `buildColorMatchTimeline` walks its
+// notes — so the i-th persisted grade belongs to the i-th timeline note. Used to
+// repaint the staff from a saved take on song open so the grading is read from
+// disk, not recomputed from the mic (#1092). Returns an empty map for an empty
+// list (a take with no graded notes paints no colors).
+export const gradesFromPerNote = (timeline, perNote = []) => {
+  const notes = timeline?.notes || [];
+  const map = {};
+  const n = Math.min(notes.length, perNote.length);
+  for (let i = 0; i < n; i += 1) map[notes[i].index] = perNote[i];
+  return map;
 };

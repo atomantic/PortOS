@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { writeFile, readdir, stat } from 'fs/promises';
-import { existsSync } from 'fs';
+import { existsSync, realpathSync } from 'fs';
 import { join, dirname, resolve, sep } from 'path';
 import { fileURLToPath } from 'url';
 import { exec, spawn } from 'child_process';
@@ -9,6 +9,7 @@ import { platform } from 'os';
 import { createApp, getReservedPorts } from '../services/apps.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { ensureDir, expandHome } from '../lib/fileUtils.js';
+import { isWithinAllowedRoots } from '../lib/workspaceRoots.js';
 import { scaffoldVite } from './scaffoldVite.js';
 import { scaffoldExpress } from './scaffoldExpress.js';
 import { scaffoldIOS } from './scaffoldIOS.js';
@@ -254,6 +255,18 @@ async function scaffoldApp(req, res) {
       status: 400,
       code: 'INVALID_PARENT'
     });
+  }
+
+  // Assert parentDir resolves within an allowed workspace root (mirrors commands.js pattern).
+  // realpathSync throws on permission/TOCTOU edges — convert to a clean 400.
+  let realParentDir;
+  try {
+    realParentDir = realpathSync(resolve(parentDir));
+  } catch {
+    throw new ServerError('parentDir is not accessible', { status: 400, code: 'INVALID_PARENT' });
+  }
+  if (!isWithinAllowedRoots(realParentDir)) {
+    throw new ServerError('parentDir is outside allowed directories', { status: 403, code: 'FORBIDDEN' });
   }
 
   // Check target doesn't exist

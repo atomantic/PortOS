@@ -89,7 +89,7 @@ export default function EmbeddingsTab() {
   }
 
   return (
-    <div className="max-w-2xl space-y-6">
+    <div className="space-y-6">
       <div className="flex items-center gap-2 text-gray-300">
         <Boxes size={18} />
         <h2 className="text-lg font-semibold">Embeddings</h2>
@@ -101,6 +101,7 @@ export default function EmbeddingsTab() {
         pick a 768-dim model below or your saves will be rejected.
       </p>
 
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
       {/* Provider picker */}
       <div className="space-y-2">
         <label htmlFor="embeddings-provider" className="block text-sm font-medium text-gray-300">
@@ -176,6 +177,7 @@ export default function EmbeddingsTab() {
           )}
         </div>
       )}
+      </div>
 
       <div className="flex items-center gap-3 pt-2">
         <button

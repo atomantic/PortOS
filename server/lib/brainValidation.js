@@ -474,6 +474,14 @@ export const brainSyncPushSchema = z.object({
   changes: z.array(brainSyncChangeSchema).min(1).max(1000)
 });
 
+// Brain bridge-sync body (POST /api/brain/bridge-sync). `refresh` forces a
+// re-embed of already-mapped records — the recovery path for memory entries
+// that diverged before the per-record sync:applied signal existed (issue
+// #1080). Optional + default-false so the existing no-body call is unchanged.
+export const brainBridgeSyncSchema = z.object({
+  refresh: z.boolean().optional().default(false)
+});
+
 // Daily log settings schema (PUT /api/brain/daily-log/settings body).
 // Only these three keys are persisted — strict() rejects unknown keys so
 // a typo or stray payload field can't corrupt the settings file.

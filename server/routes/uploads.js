@@ -6,10 +6,10 @@
 import { Router } from 'express';
 import { writeFile, unlink, readdir, stat } from 'fs/promises';
 import { existsSync } from 'fs';
-import { join, basename, extname, resolve } from 'path';
+import { join, resolve } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { ensureDir, PATHS, RISKY_MIME_TYPES } from '../lib/fileUtils.js';
+import { ensureDir, PATHS, RISKY_MIME_TYPES, sanitizeFilename, getFileExtension, getMimeType } from '../lib/fileUtils.js';
 
 const UPLOADS_DIR = PATHS.uploads;
 
@@ -17,89 +17,6 @@ const router = Router();
 
 // Max file size: 100MB for general uploads
 const MAX_FILE_SIZE = 100 * 1024 * 1024;
-
-/**
- * Validate and sanitize filename to prevent path traversal
- */
-function sanitizeFilename(filename) {
-  const base = basename(filename);
-  const sanitized = base.replace(/[^a-zA-Z0-9._-]/g, '_');
-  if (sanitized.startsWith('.')) {
-    return '_' + sanitized.slice(1);
-  }
-  return sanitized;
-}
-
-/**
- * Get file extension, normalized to lowercase with leading dot
- */
-function getExtension(filename) {
-  return extname(filename).toLowerCase() || null;
-}
-
-/**
- * Get MIME type from extension
- */
-function getMimeType(ext) {
-  const mimeTypes = {
-    // Documents
-    '.txt': 'text/plain',
-    '.md': 'text/markdown',
-    '.json': 'application/json',
-    '.csv': 'text/csv',
-    '.xml': 'application/xml',
-    '.yaml': 'application/x-yaml',
-    '.yml': 'application/x-yaml',
-    '.pdf': 'application/pdf',
-    // Images
-    '.png': 'image/png',
-    '.jpg': 'image/jpeg',
-    '.jpeg': 'image/jpeg',
-    '.gif': 'image/gif',
-    '.webp': 'image/webp',
-    '.svg': 'image/svg+xml',
-    '.ico': 'image/x-icon',
-    '.bmp': 'image/bmp',
-    // Audio
-    '.mp3': 'audio/mpeg',
-    '.wav': 'audio/wav',
-    '.ogg': 'audio/ogg',
-    '.m4a': 'audio/mp4',
-    // Video
-    '.mp4': 'video/mp4',
-    '.webm': 'video/webm',
-    '.mov': 'video/quicktime',
-    // Code
-    '.js': 'text/javascript',
-    '.ts': 'text/typescript',
-    '.jsx': 'text/javascript',
-    '.tsx': 'text/typescript',
-    '.py': 'text/x-python',
-    '.sh': 'text/x-shellscript',
-    '.sql': 'text/x-sql',
-    '.html': 'text/html',
-    '.css': 'text/css',
-    '.go': 'text/x-go',
-    '.rs': 'text/x-rust',
-    '.java': 'text/x-java',
-    '.c': 'text/x-c',
-    '.cpp': 'text/x-c++',
-    '.h': 'text/x-c',
-    // Archives
-    '.zip': 'application/zip',
-    '.tar': 'application/x-tar',
-    '.gz': 'application/gzip',
-    '.7z': 'application/x-7z-compressed',
-    '.rar': 'application/vnd.rar',
-    // Other
-    '.log': 'text/plain',
-    '.env': 'text/plain',
-    '.conf': 'text/plain',
-    '.cfg': 'text/plain',
-    '.ini': 'text/plain'
-  };
-  return mimeTypes[ext] || 'application/octet-stream';
-}
 
 /**
  * Format file size for display
@@ -136,7 +53,7 @@ router.post('/', asyncHandler(async (req, res) => {
 
   const id = uuidv4();
   const safeName = sanitizeFilename(filename);
-  const ext = getExtension(safeName);
+  const ext = getFileExtension(safeName);
   // Create unique filename with UUID prefix to avoid collisions
   const fname = `${id.slice(0, 8)}-${safeName}`;
   const filepath = join(UPLOADS_DIR, fname);
@@ -177,7 +94,7 @@ router.get('/', asyncHandler(async (req, res) => {
   const uploads = await Promise.all(files.map(async (filename) => {
     const filepath = join(UPLOADS_DIR, filename);
     const stats = await stat(filepath);
-    const ext = getExtension(filename);
+    const ext = getFileExtension(filename);
     totalSize += stats.size;
 
     return {
@@ -216,7 +133,7 @@ router.get('/:filename', asyncHandler(async (req, res) => {
     throw new ServerError('File not found', { status: 404, code: 'NOT_FOUND' });
   }
 
-  const ext = getExtension(safeFilename);
+  const ext = getFileExtension(safeFilename);
   const mimeType = getMimeType(ext);
 
   res.set('X-Content-Type-Options', 'nosniff');

@@ -21,16 +21,28 @@ vi.mock('./pipeline/series.js', () => ({
 }));
 
 vi.mock('./pipeline/issues.js', () => ({
-  listIssues: vi.fn(async ({ seriesId }) => mockIssuesBySeries.get(seriesId) || []),
+  // canonUsage calls listAllIssues() once to pre-load every issue (UNCAPPED —
+  // listIssues({}) slices at 1000 total), so flatten the per-series map and
+  // annotate each issue with its seriesId.
+  listAllIssues: vi.fn(async () => {
+    const all = [];
+    for (const [sid, issues] of mockIssuesBySeries) {
+      for (const issue of issues) {
+        all.push({ ...issue, seriesId: sid });
+      }
+    }
+    return all;
+  }),
 }));
 
-const { listIssues } = await import('./pipeline/issues.js');
+const { listAllIssues } = await import('./pipeline/issues.js');
 const { getUniverseCanonUsage, listLinkedSeriesNames } = await import('./canonUsage.js');
 
 beforeEach(() => {
   mockUniverses.clear();
   mockSeriesList.length = 0;
   mockIssuesBySeries.clear();
+  listAllIssues.mockClear();
 });
 
 describe('canonUsage — seriesNameMap', () => {
@@ -80,18 +92,18 @@ describe('canonUsage — listLinkedSeriesNames', () => {
       { id: 'ser-c', name: 'Gamma', universeId: 'uni-other' },
     );
     // Seed issues to prove the thin variant skips the prose scan entirely —
-    // the explicit listIssues assertion below is what locks that in; the
+    // the explicit listAllIssues assertion below is what locks that in; the
     // seeded data just ensures the assertion would catch a regression.
     mockIssuesBySeries.set('ser-a', [{ id: 'iss-1', stages: { prose: { output: 'long prose' } } }]);
 
-    listIssues.mockClear();
+    listAllIssues.mockClear();
     const result = await listLinkedSeriesNames('uni-1');
     expect(result).toEqual([
       { id: 'ser-a', name: 'Alpha' },
       { id: 'ser-b', name: 'Beta' },
     ]);
     // The thin endpoint must NOT scan issues — that's the whole point.
-    expect(listIssues).not.toHaveBeenCalled();
+    expect(listAllIssues).not.toHaveBeenCalled();
   });
 
   it('returns an empty array when no series link to the universe', async () => {
@@ -110,6 +122,30 @@ describe('canonUsage — getUniverseCanonUsage entry rows', () => {
   it('throws 404 when the universe does not exist', async () => {
     await expect(getUniverseCanonUsage('missing'))
       .rejects.toMatchObject({ status: 404, code: 'UNIVERSE_NOT_FOUND' });
+  });
+
+  it('calls listAllIssues exactly once regardless of how many series are linked (N+1 guard)', async () => {
+    // Three series linked to the universe. The pre-load-all-issues fix means
+    // canonUsage must call listAllIssues() once, not once-per-series. A
+    // regression to the old per-series loop would call it 3 times here.
+    mockUniverses.set('uni-1', {
+      id: 'uni-1',
+      characters: [{ id: 'c1', name: 'Lyra' }],
+      places: [],
+      objects: [],
+    });
+    mockSeriesList.push(
+      { id: 'ser-1', name: 'Alpha', universeId: 'uni-1' },
+      { id: 'ser-2', name: 'Beta', universeId: 'uni-1' },
+      { id: 'ser-3', name: 'Gamma', universeId: 'uni-1' },
+    );
+    mockIssuesBySeries.set('ser-1', [{ id: 'i1', stages: { prose: { output: 'Lyra walks.' } } }]);
+    mockIssuesBySeries.set('ser-2', [{ id: 'i2', stages: { prose: { output: 'Lyra runs.' } } }]);
+    mockIssuesBySeries.set('ser-3', [{ id: 'i3', stages: { prose: { output: 'Lyra flies.' } } }]);
+
+    await getUniverseCanonUsage('uni-1');
+
+    expect(listAllIssues).toHaveBeenCalledTimes(1);
   });
 
   it('sorts per-entry rows by issueCount desc with alpha tiebreaker on seriesName', async () => {

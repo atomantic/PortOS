@@ -13,6 +13,7 @@ import { attachAllWatchers, attachWatcher, detachWatcher, shutdownAllWatchers, l
 import { sharingEvents } from './importer.js';
 import { installSubscriptionListener } from './subscriptions.js';
 import { installPeerSyncListener, uninstallPeerSyncListener, peerSyncEvents } from './peerSync.js';
+import { hasSubscriptionAdapter } from './recordEvents.js';
 import { initAnnotationsSync } from './annotationsSync.js';
 
 export { sharingEvents } from './importer.js';
@@ -26,6 +27,13 @@ export async function initSharing({ io: socketIo } = {}) {
   if (initialized) return;
   initialized = true;
   io = socketIo || null;
+  // Boot sanity check: peerSync.js wires the subscription adapter at module
+  // load (this file imports it statically, so it's registered by the time we
+  // run). If a future refactor lazies that import, every auto-subscribe
+  // becomes a silent no-op — make that loud instead.
+  if (!hasSubscriptionAdapter()) {
+    console.error('❌ sharing: subscription adapter not registered — peer auto-subscribe is disabled (peerSync.js failed to load?)');
+  }
   await ensureDir(join(PATHS.data, 'sharing'));
   await ensureDir(join(PATHS.data, 'sharing', 'cursors'));
   await ensureDir(join(PATHS.data, 'sharing', 'inbox'));

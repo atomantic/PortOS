@@ -66,8 +66,10 @@ vi.mock('../services/brain.js', () => ({
   getBuckets: vi.fn(),
   getBucketById: vi.fn(),
   createBucket: vi.fn(),
+  createBucketAppended: vi.fn(),
   updateBucket: vi.fn(),
-  deleteBucket: vi.fn()
+  deleteBucket: vi.fn(),
+  deleteBucketAndUnlinkChildren: vi.fn()
 }));
 
 // Mock the brain graph service
@@ -977,6 +979,17 @@ describe('Brain Routes', () => {
       expect(response.body.synced).toBe(5);
       expect(response.body.skipped).toBe(2);
       expect(response.body.errors).toBe(0);
+      // No body → refresh defaults false (issue #1080).
+      expect(syncAllBrainData).toHaveBeenCalledWith({ refresh: false });
+    });
+
+    it('passes refresh:true through for the recovery re-embed path (issue #1080)', async () => {
+      syncAllBrainData.mockResolvedValue({ synced: 3, skipped: 0, errors: 0, archived: 1 });
+
+      const response = await request(app).post('/api/brain/bridge-sync').send({ refresh: true });
+      expect(response.status).toBe(200);
+      expect(response.body.archived).toBe(1);
+      expect(syncAllBrainData).toHaveBeenCalledWith({ refresh: true });
     });
 
     it('should return 500 when sync fails', async () => {
@@ -1236,18 +1249,18 @@ describe('Brain Routes', () => {
   });
 
   describe('POST /api/brain/buckets', () => {
-    it('creates a bucket appended after existing ones', async () => {
-      brainService.getBuckets.mockResolvedValue([{ id: 'b1', order: 0 }, { id: 'b2', order: 1 }]);
-      brainService.createBucket.mockImplementation(async (data) => ({ id: 'b3', ...data }));
+    it('delegates to createBucketAppended with the validated fields', async () => {
+      brainService.createBucketAppended.mockImplementation(async (data) => ({ id: 'b3', order: 2, ...data }));
       const res = await request(app).post('/api/brain/buckets').send({ name: 'Disney' });
       expect(res.status).toBe(201);
-      expect(brainService.createBucket).toHaveBeenCalledWith(expect.objectContaining({ name: 'Disney', order: 2 }));
+      expect(brainService.createBucketAppended).toHaveBeenCalledWith({ name: 'Disney', color: undefined, icon: undefined });
+      expect(res.body.name).toBe('Disney');
     });
 
     it('rejects an empty name with 400', async () => {
       const res = await request(app).post('/api/brain/buckets').send({ name: '' });
       expect(res.status).toBe(400);
-      expect(brainService.createBucket).not.toHaveBeenCalled();
+      expect(brainService.createBucketAppended).not.toHaveBeenCalled();
     });
 
     it('rejects an invalid color with 400', async () => {
@@ -1340,30 +1353,21 @@ describe('Brain Routes', () => {
   });
 
   describe('DELETE /api/brain/buckets/:id', () => {
-    it('deletes the bucket and unassigns its links', async () => {
+    it('delegates to deleteBucketAndUnlinkChildren and returns its result', async () => {
       brainService.getBucketById.mockResolvedValue({ id: 'b1', name: 'Disney' });
-      brainService.getLinks.mockResolvedValue([
-        { id: 'l1', bucketId: 'b1' },
-        { id: 'l2', bucketId: 'b2' },
-        { id: 'l3', bucketId: 'b1' }
-      ]);
-      brainService.updateLink.mockResolvedValue({});
-      brainService.deleteBucket.mockResolvedValue(true);
+      brainService.deleteBucketAndUnlinkChildren.mockResolvedValue({ deleted: true, unassigned: 2 });
 
       const res = await request(app).delete('/api/brain/buckets/b1');
       expect(res.status).toBe(200);
-      expect(res.body.unassigned).toBe(2);
-      expect(brainService.updateLink).toHaveBeenCalledWith('l1', { bucketId: null });
-      expect(brainService.updateLink).toHaveBeenCalledWith('l3', { bucketId: null });
-      expect(brainService.updateLink).not.toHaveBeenCalledWith('l2', { bucketId: null });
-      expect(brainService.deleteBucket).toHaveBeenCalledWith('b1');
+      expect(res.body).toEqual({ deleted: true, unassigned: 2 });
+      expect(brainService.deleteBucketAndUnlinkChildren).toHaveBeenCalledWith('b1');
     });
 
     it('returns 404 for an unknown bucket', async () => {
       brainService.getBucketById.mockResolvedValue(null);
       const res = await request(app).delete('/api/brain/buckets/missing');
       expect(res.status).toBe(404);
-      expect(brainService.deleteBucket).not.toHaveBeenCalled();
+      expect(brainService.deleteBucketAndUnlinkChildren).not.toHaveBeenCalled();
     });
   });
 

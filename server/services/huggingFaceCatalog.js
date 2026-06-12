@@ -256,6 +256,7 @@ async function fetchModels(search, limit, useGgufFilter) {
 // not fetched, `null` = fetched-but-no-size (sentinel, per the absent-vs-empty
 // rule) so a sizeless repo isn't probed on every search.
 const repoSizeCache = new Map()
+const REPO_SIZE_CACHE_MAX = 500
 
 async function fetchRepoSizeBytes(repoId) {
   if (repoSizeCache.has(repoId)) return repoSizeCache.get(repoId)
@@ -268,6 +269,10 @@ async function fetchRepoSizeBytes(repoId) {
   // Re-run the same quant picker against the now-sized siblings.
   const picked = pickGgufFile(model)
   const bytes = Number.isFinite(picked?.size) ? picked.size : null
+  // Evict oldest entry when the cap is reached (insertion-order iteration).
+  if (repoSizeCache.size >= REPO_SIZE_CACHE_MAX) {
+    repoSizeCache.delete(repoSizeCache.keys().next().value)
+  }
   repoSizeCache.set(repoId, bytes)
   return bytes
 }

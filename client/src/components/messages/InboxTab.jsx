@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Mail, Search, RefreshCw, ChevronRight, Sparkles, Archive, Trash2, Reply, Eye, Flag, Pin, Loader2 } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import toast from '../ui/Toast';
 import * as api from '../../services/api';
 import socket from '../../services/socket';
@@ -44,9 +44,18 @@ export default function InboxTab({ accounts }) {
   const [syncing, setSyncing] = useState(false);
   const [fetchingFull, setFetchingFull] = useState(false);
   const [actionInProgress, setActionInProgress] = useState(null);
-  const [activeTab, setActiveTab] = useState('all');
   const debounceRef = useRef(null);
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const rawTriage = searchParams.get('triage');
+  const VALID_TRIAGE_KEYS = TRIAGE_TABS.map(t => t.key);
+  const activeTab = VALID_TRIAGE_KEYS.includes(rawTriage) ? rawTriage : 'all';
+  const setActiveTab = (key) => {
+    const p = new URLSearchParams(searchParams);
+    if (key === 'all') p.delete('triage');
+    else p.set('triage', key);
+    setSearchParams(p, { replace: true });
+  };
 
   useEffect(() => {
     clearTimeout(debounceRef.current);

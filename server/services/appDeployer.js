@@ -6,6 +6,10 @@ import { NON_PM2_TYPES } from './streamingDetect.js';
 export const DEPLOY_FLAGS = ['--ios', '--macos', '--watch', '--all', '--skip-tests'];
 const VALID_FLAGS = new Set(DEPLOY_FLAGS);
 const FLUSH_INTERVAL_MS = 80;
+// Maximum time (ms) a deploy.sh may run before the child is killed and the
+// lock released. Escalates from SIGTERM → SIGKILL after DEPLOY_KILL_DELAY_MS.
+const DEPLOY_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+const DEPLOY_KILL_DELAY_MS = 10 * 1000;   // 10 seconds after SIGTERM
 
 // Per-app lock to prevent concurrent deploys
 const deployingApps = new Set();
@@ -65,10 +69,27 @@ export function deployApp(app, flags, emit) {
       env: { ...process.env, FORCE_COLOR: '0' }
     });
 
+    // Guard against a hung deploy.sh holding the lock forever.
+    // After DEPLOY_TIMEOUT_MS: SIGTERM the child; escalate to SIGKILL after
+    // DEPLOY_KILL_DELAY_MS if it hasn't exited. The 'close' handler below
+    // handles lock release and result resolution for both normal and timed-out
+    // exits, so we only need to kill here.
+    let killTimer = null;
+    const deployTimer = setTimeout(() => {
+      console.error(`❌ Deploy timed out after ${DEPLOY_TIMEOUT_MS / 1000}s — killing child process`);
+      emit('error', { message: 'Deploy timed out' });
+      child.kill('SIGTERM');
+      killTimer = setTimeout(() => {
+        child.kill('SIGKILL');
+      }, DEPLOY_KILL_DELAY_MS);
+    }, DEPLOY_TIMEOUT_MS);
+
     child.stdout.on('data', (data) => { stdoutBuf += data.toString(); });
     child.stderr.on('data', (data) => { stderrBuf += data.toString(); });
 
     child.on('close', (code) => {
+      clearTimeout(deployTimer);
+      clearTimeout(killTimer);
       const success = code === 0;
       const result = finish(success, code);
       emit('status', {
@@ -81,6 +102,8 @@ export function deployApp(app, flags, emit) {
     });
 
     child.on('error', (err) => {
+      clearTimeout(deployTimer);
+      clearTimeout(killTimer);
       const result = finish(false, -1);
       emit('error', { message: err.message });
       resolve(result);

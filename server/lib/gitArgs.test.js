@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { PROTECTED_BRANCHES, validateFilePaths } from './gitArgs.js';
+import { PROTECTED_BRANCHES, validateFilePaths, toLiteralPathspec } from './gitArgs.js';
 
 describe('PROTECTED_BRANCHES', () => {
   it('lists the branches that must never be deleted', () => {
@@ -28,5 +28,19 @@ describe('validateFilePaths', () => {
     expect(() => validateFilePaths(['/etc/passwd'])).toThrow(/Invalid file path/);
     expect(() => validateFilePaths(['../secrets'])).toThrow(/Invalid file path/);
     expect(() => validateFilePaths(['a/../b'])).toThrow(/Invalid file path/);
+  });
+
+  it('accepts filenames containing pathspec wildcards (Next.js dynamic routes etc.)', () => {
+    // Glob-expansion safety lives in toLiteralPathspec at the call site, not
+    // in rejection here — these are legitimate on-disk filenames.
+    expect(validateFilePaths(['app/[id].jsx'])).toEqual(['app/[id].jsx']);
+    expect(validateFilePaths(['what?.md', 'star*.txt'])).toEqual(['what?.md', 'star*.txt']);
+  });
+});
+
+describe('toLiteralPathspec', () => {
+  it('prefixes the path with the :(literal) pathspec magic', () => {
+    expect(toLiteralPathspec('app/[id].jsx')).toBe(':(literal)app/[id].jsx');
+    expect(toLiteralPathspec('src/a.js')).toBe(':(literal)src/a.js');
   });
 });

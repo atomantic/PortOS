@@ -1,31 +1,14 @@
 import { Router } from 'express';
 import { writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
-import { join, basename, resolve } from 'path';
+import { join, resolve } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { ensureDir, PATHS } from '../lib/fileUtils.js';
+import { ensureDir, PATHS, sanitizeFilename } from '../lib/fileUtils.js';
 
 const SCREENSHOTS_DIR = PATHS.screenshots;
 
 const router = Router();
-
-/**
- * Validate and sanitize filename to prevent path traversal
- * @param {string} filename - User-provided filename
- * @returns {string} - Safe filename
- */
-function sanitizeFilename(filename) {
-  // Get just the base filename, removing any path components
-  const base = basename(filename);
-  // Remove any remaining path traversal attempts or special characters
-  const sanitized = base.replace(/[^a-zA-Z0-9._-]/g, '_');
-  // Ensure it doesn't start with a dot (hidden files)
-  if (sanitized.startsWith('.')) {
-    return '_' + sanitized.slice(1);
-  }
-  return sanitized;
-}
 
 // Max file size: 10MB
 const MAX_FILE_SIZE = 10 * 1024 * 1024;

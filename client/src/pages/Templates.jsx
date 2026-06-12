@@ -74,7 +74,7 @@ export default function Templates() {
   }
 
   return (
-    <div className="max-w-4xl mx-auto">
+    <div>
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-6">
         <div>
           <h1 className="text-2xl font-bold text-white">App Templates</h1>
@@ -89,7 +89,7 @@ export default function Templates() {
       </div>
 
       {createMode && selectedTemplate ? (
-        <div className="bg-port-card border border-port-border rounded-xl p-6">
+        <div className="bg-port-card border border-port-border rounded-xl p-6 max-w-2xl">
           <div className="flex items-center gap-3 mb-6">
             {(() => {
               const Icon = ICONS[selectedTemplate.icon] || Layers;
@@ -157,7 +157,7 @@ export default function Templates() {
           </form>
         </div>
       ) : (
-        <div className="grid gap-4 grid-cols-1 md:grid-cols-2">
+        <div className="grid gap-4 grid-cols-1 md:grid-cols-2 xl:grid-cols-3">
           {templates.map(template => {
             const Icon = ICONS[template.icon] || Layers;
             return (

@@ -30,6 +30,7 @@
 
 import { createHash } from 'crypto';
 import * as brainStorage from './brainStorage.js';
+import { brainEvents } from './brainStorage.js';
 import * as brainSyncLog from './brainSyncLog.js';
 
 const { BRAIN_ENTITY_TYPES } = brainStorage;
@@ -186,6 +187,15 @@ export async function applyBrainSnapshot(snapshot) {
   if (relayBatch.length > 0) {
     await brainSyncLog.appendChanges(relayBatch)
       .catch(err => console.error(`⚠️ Brain reconcile relay append failed (${relayBatch.length} entries): ${err.message}`));
+    // Local-only signal so the memory bridge re-vectorizes reconciled records
+    // (issue #1080) — same mechanism as brainSync.applyRemoteChanges. Anti-
+    // entropy snapshot merges are exactly the case where a record can change
+    // without ever flowing through a per-record event, so the bridge would
+    // otherwise never learn of the reconciled state. Local embedding only,
+    // never re-fed to the sync log (no #1077 echo).
+    brainEvents.emit('sync:applied', {
+      records: relayBatch.map(({ type, id }) => ({ type, id })),
+    });
   }
 
   console.log(`🔄 Brain reconcile applied: ${updated} upserted, ${deleted} deleted, ${skipped} skipped`);

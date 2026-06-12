@@ -19,6 +19,7 @@ import { findOrOpenPage, evaluateOnPage, getPages } from './messagePlaywrightSyn
 import { navigateToUrl } from './browserService.js';
 import { saveCredentials, getAuthUrl, OAUTH_REDIRECT_URI } from './googleAuth.js';
 import { sleep } from '../lib/fileUtils.js';
+import { ServerError } from '../lib/errorHandler.js';
 
 async function getGcpPage() {
   const pages = await getPages();
@@ -113,7 +114,7 @@ export async function startAutoConfig(io) {
 
   const page = await findOrOpenPage('https://console.cloud.google.com');
   if (!page) {
-    return { error: 'Failed to open browser. Ensure portos-browser is running.', status: 503 };
+    throw new ServerError('Failed to open browser. Ensure portos-browser is running.', { status: 503 });
   }
 
   io?.emit('calendar:google:autoconfig', { step: 'login', message: 'Google Cloud Console opened. Log in and select a project, then click Continue.' });
@@ -129,7 +130,7 @@ export async function runAutomatedSetup(userEmail, io) {
   };
 
   let page = await getGcpPage();
-  if (!page) return { error: 'Google Cloud Console not open. Click "Setup with Browser" first.', status: 400 };
+  if (!page) throw new ServerError('Google Cloud Console not open. Click "Setup with Browser" first.', { status: 400 });
 
   // Detect the project from the current URL
   const projectMatch = page.url?.match(/project=([^&]+)/);
@@ -444,11 +445,12 @@ export async function runAutomatedSetup(userEmail, io) {
 
   if (!credentials?.clientId || !credentials?.clientSecret) {
     emit('error', 'Could not capture credentials automatically');
-    return {
-      status: 'partial',
-      error: 'Automation completed but could not extract the client secret. Use "Download JSON" from the Google Cloud Console client page and paste the credentials manually.',
-      clientId: credentials?.clientId || null
-    };
+    // The route's old { error } mapping returned HTTP 500 and dropped the
+    // partial clientId; keep it available to operators via error context.
+    throw new ServerError(
+      'Automation completed but could not extract the client secret. Use "Download JSON" from the Google Cloud Console client page and paste the credentials manually.',
+      { status: 500, context: { clientId: credentials?.clientId || null } },
+    );
   }
 
   // Save credentials
@@ -492,7 +494,7 @@ async function extractFromDialog(page) {
 
 export async function captureCredentials(io) {
   const page = await getGcpPage();
-  if (!page) return { error: 'Google Cloud Console not open in browser', status: 404 };
+  if (!page) throw new ServerError('Google Cloud Console not open in browser', { status: 404 });
 
   io?.emit('calendar:google:autoconfig', { step: 'capturing', message: 'Scanning for credentials...' });
 
@@ -523,10 +525,13 @@ export async function captureCredentials(io) {
   `);
 
   if (!credentials?.clientId) {
-    return { error: 'Could not find credentials on the page.', status: 404 };
+    throw new ServerError('Could not find credentials on the page.', { status: 404 });
   }
   if (!credentials.clientSecret) {
-    return { error: 'Found Client ID but not secret. Click "Information and summary" on the client detail page first.', clientId: credentials.clientId, status: 404 };
+    throw new ServerError('Found Client ID but not secret. Click "Information and summary" on the client detail page first.', {
+      status: 404,
+      context: { clientId: credentials.clientId },
+    });
   }
 
   await saveCredentials(credentials);

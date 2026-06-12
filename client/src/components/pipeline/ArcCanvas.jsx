@@ -47,10 +47,10 @@ import {
   startPipelineVolumeBeats, cancelPipelineVolumeBeats,
   generatePipelineVolumeCover, generatePipelineVolumeBackCover,
   generatePipelineVolumeCoverConcepts,
-  pipelineVolumePdfUrl,
+  pipelineVolumePdfUrl, pipelineVolumeBeatsSseUrl,
 } from '../../services/api';
 import useMediaJobProgress from '../../hooks/useMediaJobProgress';
-import { usePipelineVolumeBeatsProgress } from '../../hooks/usePipelineVolumeBeatsProgress';
+import { usePipelineProgress } from '../../hooks/usePipelineProgress';
 import { useSeriesEditorial } from '../../hooks/useSeriesEditorial';
 import { dominant } from '../../lib/editorialRoadmap';
 import SeriesLlmPicker from './SeriesLlmPicker';
@@ -1516,7 +1516,7 @@ function SeasonRow({ series, season, seasons, issues, onSeriesUpdate, onIssuesUp
   // frame drives the per-issue label on the button.
   const [beatsActive, setBeatsActive] = useState(false);
   const [beatsStarting, setBeatsStarting] = useState(false);
-  const { latest: beatsLatest } = usePipelineVolumeBeatsProgress(series.id, season.id, { enabled: beatsActive });
+  const { latest: beatsLatest } = usePipelineProgress(pipelineVolumeBeatsSseUrl, [series.id, season.id], { enabled: beatsActive });
 
   // Stable ref over the parent's setter — `handleIssuesUpdate` in
   // PipelineSeries is re-allocated every render, so depending on it would

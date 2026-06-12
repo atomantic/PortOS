@@ -1,23 +1,24 @@
 /**
  * ColorMatch — sing the written melody and watch the score grade you in real
- * time. While a vocal take is recording, this panel walks the notated score in
- * tempo (after a one-bar metronome count-in) and colors each notehead by how
- * accurately it was sung — green (in tune), yellow (close), red (off or missed)
- * — then shows a per-take accuracy score for training.
+ * time. While a vocal take is recording, the parent (`SongRecordings`) walks the
+ * notated score in tempo (after a one-bar metronome count-in) and feeds this
+ * panel the per-note grades; it colors each notehead by how accurately it was
+ * sung — green (in tune), yellow (close), red (off or missed) — then shows a
+ * per-take accuracy score for training.
  *
- * It is a thin shell over `useColorMatch` (which owns the timing/grading) and
- * the pure <ScoreSheet> renderer (which just paints the `noteColors` it's
- * handed). The grading mic is the SAME stream the recorder opened — no second
- * getUserMedia. With no live take, the panel shows a hint to start recording.
+ * Presentational: the grading lives in `useColorMatch`, lifted into
+ * `SongRecordings` so the recorder can attach the finished take's pitch trace +
+ * accuracy to the saved recording (#1092). This component only paints the
+ * `noteColors`/`summary` it's handed onto the pure <ScoreSheet> renderer. With
+ * no live take and no prior summary, it shows a hint to start recording.
  *
  * Colors and copy use `--port-*` theme tokens only; the layout is
  * mobile-responsive (the controls wrap above the staff).
  */
 
-import { useEffect, useMemo } from 'react';
+import { useMemo } from 'react';
 import { Target } from 'lucide-react';
-import { parseScore, scoreHasMusic } from '../../lib/scoreNotation.js';
-import useColorMatch from '../../hooks/useColorMatch.js';
+import { scoreHasMusic } from '../../lib/scoreNotation.js';
 import ScoreSheet from './ScoreSheet.jsx';
 
 // Summary bucket → readout color token, matching the notehead grades.
@@ -28,25 +29,16 @@ const BUCKET_TONE = {
   missed: 'text-port-error',
 };
 
-export default function ColorMatch({ score = '', stream = null, tempo = null }) {
+export default function ColorMatch({
+  score = '',
+  stream = null,
+  running = false,
+  countingIn = false,
+  noteColors = null,
+  summary = null,
+  activeIndex = null,
+}) {
   const hasMusic = useMemo(() => scoreHasMusic(score), [score]);
-  const parsed = useMemo(() => parseScore(score), [score]);
-  const bpm = Number.isFinite(tempo) && tempo > 0 ? tempo : null;
-
-  const { running, countingIn, noteColors, summary, activeIndex, start } = useColorMatch({
-    score: parsed,
-    stream,
-    bpm,
-  });
-
-  // Auto-arm: the moment a take starts (stream appears) and the score has notes,
-  // begin a color-match run so the singer is graded as they record. Stop when the
-  // take ends. The hook also stops itself when the stream vanishes mid-run.
-  useEffect(() => {
-    if (stream && hasMusic && !running) start();
-    // start/stop are stable from the hook; we only react to stream/hasMusic.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stream, hasMusic]);
 
   if (!hasMusic) return null;
 

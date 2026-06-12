@@ -55,7 +55,8 @@ export default function useTheme() {
   const userPickedRef = useRef(false);
 
   useEffect(() => {
-    fetch('/api/settings')
+    const controller = new AbortController();
+    fetch('/api/settings', { signal: controller.signal })
       .then(r => r.ok ? r.json() : null)
       .then(settings => {
         if (userPickedRef.current) return;
@@ -68,7 +69,11 @@ export default function useTheme() {
           setThemeId(serverTheme);
         }
       })
-      .catch(() => console.log('Theme fetch failed, using localStorage fallback'));
+      .catch((err) => {
+        if (err.name === 'AbortError') return;
+        console.warn(`⚠️ Theme fetch failed, using localStorage fallback: ${err.message}`);
+      });
+    return () => controller.abort();
   }, []);
 
   const setTheme = useCallback((id) => {

@@ -2,6 +2,7 @@ import { OAuth2Client } from 'google-auth-library';
 import { writeFile } from 'fs/promises';
 import { join } from 'path';
 import { ensureDir, PATHS, tryReadFile } from '../lib/fileUtils.js';
+import { ServerError } from '../lib/errorHandler.js';
 
 const AUTH_DIR = join(PATHS.calendar, 'google-auth');
 const CREDENTIALS_FILE = join(AUTH_DIR, 'credentials.json');
@@ -64,7 +65,7 @@ function createOAuth2Client(credentials) {
 
 export async function getAuthUrl() {
   const credentials = await getCredentials();
-  if (!credentials) return { error: 'No Google OAuth credentials configured' };
+  if (!credentials) throw new ServerError('No Google OAuth credentials configured', { status: 400 });
 
   const client = createOAuth2Client(credentials);
   const url = client.generateAuthUrl({
@@ -77,7 +78,7 @@ export async function getAuthUrl() {
 
 export async function handleCallback(code) {
   const credentials = await getCredentials();
-  if (!credentials) return { error: 'No credentials configured' };
+  if (!credentials) throw new ServerError('No credentials configured', { status: 400 });
 
   const client = createOAuth2Client(credentials);
   const { tokens } = await client.getToken(code);

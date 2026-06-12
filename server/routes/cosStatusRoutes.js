@@ -15,6 +15,10 @@ import { BUDGET_LIMIT_FIELDS } from '../lib/domainBudgets.js';
 
 const router = Router();
 
+const pauseSchema = z.object({
+  reason: z.string().optional(),
+});
+
 export const cosConfigSchema = z.object({
   userTasksFile: z.string().optional(),
   cosTasksFile: z.string().optional(),
@@ -34,7 +38,7 @@ export const cosConfigSchema = z.object({
   selfImprovementEnabled: z.boolean().optional(),
   appImprovementEnabled: z.boolean().optional(),
   improvementEnabled: z.boolean().optional(),
-  avatarStyle: z.enum(['svg', 'ascii', 'cyber', 'sigil', 'esoteric', 'nexus', 'muse']).optional(),
+  avatarStyle: z.enum(['svg', 'ascii', 'cyber', 'sigil', 'esoteric', 'nexus', 'muse', 'miniMaleC', 'miniFemaleD']).optional(),
   dynamicAvatar: z.boolean().optional(),
   alwaysOn: z.boolean().optional(),
   appReviewCooldownMs: z.number().int().min(0).optional(),
@@ -93,7 +97,7 @@ router.post('/stop', asyncHandler(async (req, res) => {
 
 // POST /api/cos/pause - Pause CoS daemon (stays running but skips evaluations)
 router.post('/pause', asyncHandler(async (req, res) => {
-  const { reason } = req.body;
+  const { reason } = validateRequest(pauseSchema, req.body);
   const result = await cos.pause(reason);
   res.json(result);
 }));

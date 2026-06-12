@@ -3,12 +3,18 @@
  */
 
 import { Router } from 'express';
+import { z } from 'zod';
 import * as cos from '../services/cos.js';
 import * as taskWatcher from '../services/taskWatcher.js';
 import { enhanceTaskPrompt } from '../services/taskEnhancer.js';
 import { loadSlashdoCommand } from '../services/subAgentSpawner.js';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
-import { createCosTaskSchema, updateCosTaskSchema } from '../lib/validation.js';
+import { createCosTaskSchema, updateCosTaskSchema, validateRequest } from '../lib/validation.js';
+
+const enhanceTaskSchema = z.object({
+  description: z.string().min(1),
+  context: z.string().optional(),
+});
 
 const SLASHDO_COMMANDS = {
   push:           { label: 'Push', description: 'Commit and push all work with changelog' },
@@ -59,12 +65,7 @@ router.post('/tasks/reorder', asyncHandler(async (req, res) => {
 
 // POST /api/cos/tasks/enhance - Enhance a task prompt with AI
 router.post('/tasks/enhance', asyncHandler(async (req, res) => {
-  const { description, context } = req.body;
-
-  if (!description) {
-    throw new ServerError('Description is required', { status: 400, code: 'VALIDATION_ERROR' });
-  }
-
+  const { description, context } = validateRequest(enhanceTaskSchema, req.body);
   const result = await enhanceTaskPrompt(description, context);
   res.json(result);
 }));

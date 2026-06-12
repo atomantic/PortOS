@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { RefreshCw } from 'lucide-react';
 import * as api from '../services/api';
 import BrailleSpinner from '../components/BrailleSpinner';
+import { formatCompactCount } from '../utils/formatters';
 
 export function UsagePage() {
   const [usage, setUsage] = useState(null);
@@ -18,12 +19,8 @@ export function UsagePage() {
     setLoading(false);
   };
 
-  const formatNumber = (num) => {
-    if (num == null) return '—';
-    if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M`;
-    if (num >= 1000) return `${(num / 1000).toFixed(1)}K`;
-    return String(num);
-  };
+  // Preserve the em-dash empty-state; delegate K/M abbreviation to the shared helper.
+  const formatNumber = (num) => (num == null ? '—' : formatCompactCount(num));
 
   if (loading) {
     return <div className="text-center py-8"><BrailleSpinner text="Loading usage data" /></div>;

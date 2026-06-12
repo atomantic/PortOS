@@ -1068,4 +1068,52 @@ describe('brain service', () => {
       expect(getSummary).toBe(storage.getSummary);
     });
   });
+
+  // ===========================================================================
+  // Bucket orchestration (next-order append + delete-with-unlink)
+  // ===========================================================================
+
+  describe('createBucketAppended', () => {
+    it('appends after the highest existing order and applies defaults', async () => {
+      const { createBucketAppended } = await import('./brain.js');
+      storage.getBuckets.mockResolvedValue([{ id: 'b1', order: 0 }, { id: 'b2', order: 4 }]);
+      storage.createBucket.mockImplementation(async (data) => ({ id: 'b3', ...data }));
+
+      const bucket = await createBucketAppended({ name: 'Disney' });
+
+      expect(storage.createBucket).toHaveBeenCalledWith({ name: 'Disney', color: 'accent', icon: '', order: 5 });
+      expect(bucket.id).toBe('b3');
+    });
+
+    it('starts at order 0 when no buckets exist', async () => {
+      const { createBucketAppended } = await import('./brain.js');
+      storage.getBuckets.mockResolvedValue([]);
+      storage.createBucket.mockImplementation(async (data) => ({ id: 'b1', ...data }));
+
+      await createBucketAppended({ name: 'First', color: 'success', icon: '⭐' });
+
+      expect(storage.createBucket).toHaveBeenCalledWith({ name: 'First', color: 'success', icon: '⭐', order: 0 });
+    });
+  });
+
+  describe('deleteBucketAndUnlinkChildren', () => {
+    it('unassigns only the bucket\'s links, then deletes the bucket', async () => {
+      const { deleteBucketAndUnlinkChildren } = await import('./brain.js');
+      storage.getLinks.mockResolvedValue([
+        { id: 'l1', bucketId: 'b1' },
+        { id: 'l2', bucketId: 'b2' },
+        { id: 'l3', bucketId: 'b1' }
+      ]);
+      storage.updateLink.mockResolvedValue({});
+      storage.deleteBucket.mockResolvedValue(true);
+
+      const result = await deleteBucketAndUnlinkChildren('b1');
+
+      expect(result).toEqual({ deleted: true, unassigned: 2 });
+      expect(storage.updateLink).toHaveBeenCalledWith('l1', { bucketId: null });
+      expect(storage.updateLink).toHaveBeenCalledWith('l3', { bucketId: null });
+      expect(storage.updateLink).not.toHaveBeenCalledWith('l2', { bucketId: null });
+      expect(storage.deleteBucket).toHaveBeenCalledWith('b1');
+    });
+  });
 });

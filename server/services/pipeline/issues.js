@@ -630,6 +630,27 @@ export async function listIssueIds({ includeDeleted = false } = {}) {
 }
 
 /**
+ * Every live issue record — UNCAPPED, unsorted, unpaginated.
+ *
+ * Same rationale as `listIssueIds`: `listIssues` slices at
+ * `ISSUES_PER_RESPONSE_MAX` (1000) even unpaginated, so it cannot back
+ * whole-library scans. Callers that group/count issues across ALL series
+ * (canon-usage tallies, the orphan-shell sweep's "does this series still have
+ * issues?" gate) must use this — with `listIssues({})` an install holding
+ * >1000 issues would silently miss the tail, and the orphan sweep could
+ * delete a series that still has issues past the cap.
+ *
+ * @param {object} [options]
+ * @param {boolean} [options.includeDeleted=false]
+ * @param {boolean} [options.withHistory=true] - false strips per-stage run history
+ */
+export async function listAllIssues({ includeDeleted = false, withHistory = true } = {}) {
+  const { issues } = await readState();
+  const live = includeDeleted ? issues : issues.filter((i) => !i.deleted);
+  return withHistory ? live : live.map(stripRunHistoryFromIssue);
+}
+
+/**
  * Recently-updated issues across all series. Sorts the FULL issue set by
  * `updatedAt` desc before applying `limit` — unlike `listIssues`, which
  * sorts by `seriesId/number` then caps at `ISSUES_PER_RESPONSE_MAX`. That

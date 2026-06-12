@@ -89,7 +89,7 @@ export default function MessageDetail({ message, accounts, onBack }) {
   useEffect(() => {
     api.getSettings()
       .then(s => setUseVoice(s?.messages?.voiceMode ?? false))
-      .catch(() => {});
+      .catch(err => console.warn(`⚠️ Failed to load voice mode setting: ${err.message}`));
   }, []);
 
   const account = accounts.find(a => a.id === displayedMessage.accountId) || accounts[0];

@@ -10,21 +10,30 @@ import {
 
 describe('commandSecurity', () => {
   describe('ALLOWED_COMMANDS', () => {
-    it('should be a Set containing expected base commands', () => {
-      expect(ALLOWED_COMMANDS).toBeInstanceOf(Set)
-      expect(ALLOWED_COMMANDS.has('npm')).toBe(true)
-      expect(ALLOWED_COMMANDS.has('git')).toBe(true)
-      expect(ALLOWED_COMMANDS.has('node')).toBe(true)
-      expect(ALLOWED_COMMANDS.has('docker')).toBe(true)
-      expect(ALLOWED_COMMANDS.has('pm2')).toBe(true)
+    // Behavioral tests via validateCommand — avoid tautological Set.has() checks.
+    it.each([
+      'npm', 'git', 'node', 'docker', 'pm2'
+    ])('allows %s through validateCommand', (cmd) => {
+      expect(validateCommand(`${cmd} --version`).valid).toBe(true)
     })
 
-    it('should not contain dangerous commands', () => {
-      expect(ALLOWED_COMMANDS.has('rm')).toBe(false)
-      expect(ALLOWED_COMMANDS.has('sudo')).toBe(false)
-      expect(ALLOWED_COMMANDS.has('chmod')).toBe(false)
-      expect(ALLOWED_COMMANDS.has('chown')).toBe(false)
-      expect(ALLOWED_COMMANDS.has('kill')).toBe(false)
+    it.each([
+      ['rm', 'rm -rf /'],
+      ['sudo', 'sudo su'],
+      ['chmod', 'chmod 777 /etc'],
+      ['chown', 'chown root /etc'],
+      ['kill', 'kill -9 1'],
+      ['env', 'env']
+    ])('rejects %s through validateCommand', (_label, cmd) => {
+      const result = validateCommand(cmd)
+      expect(result.valid).toBe(false)
+      expect(result.error).toMatch(/not in the allowlist|disallowed shell/)
+    })
+
+    it('env is not in the allowlist (dumps process secrets)', () => {
+      const result = validateCommand('env')
+      expect(result.valid).toBe(false)
+      expect(result.error).toContain("Command 'env' is not in the allowlist")
     })
   })
 

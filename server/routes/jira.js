@@ -3,10 +3,37 @@
  */
 
 import express from 'express';
+import { z } from 'zod';
 import * as jiraService from '../services/jira.js';
 import * as jiraReports from '../services/jiraReports.js';
 import { getAppById } from '../services/apps.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { validateRequest } from '../lib/validation.js';
+
+const jiraInstanceSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  baseUrl: z.string().url(),
+  email: z.string().email(),
+  apiToken: z.string().min(1),
+});
+
+const jiraTicketCreateSchema = z.object({
+  projectKey: z.string().min(1),
+  summary: z.string().min(1),
+  description: z.string().optional(),
+  issueType: z.string().optional(),
+  priority: z.string().optional(),
+  labels: z.array(z.string()).optional(),
+  epicKey: z.string().optional(),
+  sprintId: z.union([z.string(), z.number()]).optional(),
+  storyPoints: z.number().optional(),
+  assignee: z.string().optional(),
+  components: z.array(z.string()).optional(),
+  customFields: z.record(z.unknown()).optional(),
+}).passthrough();
+
+const jiraTicketUpdateSchema = jiraTicketCreateSchema.partial();
 
 const router = express.Router();
 
@@ -44,14 +71,7 @@ router.get('/instances', asyncHandler(async (req, res) => {
  * Create or update JIRA instance
  */
 router.post('/instances', asyncHandler(async (req, res) => {
-  const { id, name, baseUrl, email, apiToken } = req.body;
-
-  if (!id || !name || !baseUrl || !email || !apiToken) {
-    throw new ServerError('Missing required fields', {
-      status: 400,
-      code: 'INVALID_INPUT'
-    });
-  }
+  const { id, name, baseUrl, email, apiToken } = validateRequest(jiraInstanceSchema, req.body);
 
   const instance = await jiraService.upsertInstance(id, {
     name,
@@ -107,7 +127,8 @@ router.get('/instances/:id/projects', asyncHandler(async (req, res) => {
  * Create JIRA ticket
  */
 router.post('/instances/:id/tickets', asyncHandler(async (req, res) => {
-  const result = await jiraService.createTicket(req.params.id, req.body);
+  const ticketData = validateRequest(jiraTicketCreateSchema, req.body);
+  const result = await jiraService.createTicket(req.params.id, ticketData);
   res.json(result);
 }));
 
@@ -116,10 +137,11 @@ router.post('/instances/:id/tickets', asyncHandler(async (req, res) => {
  * Update JIRA ticket
  */
 router.put('/instances/:instanceId/tickets/:ticketId', asyncHandler(async (req, res) => {
+  const updates = validateRequest(jiraTicketUpdateSchema, req.body);
   const result = await jiraService.updateTicket(
     req.params.instanceId,
     req.params.ticketId,
-    req.body
+    updates
   );
   res.json(result);
 }));

@@ -16,11 +16,17 @@ describe('healthProvenance', () => {
   });
 
   it('every level carries label, tone, description, and a what-would-change explainer', () => {
+    const EXPECTED = {
+      'data-backed':  { label: 'Data-backed',    tone: 'success'  },
+      inferred:       { label: 'Inferred',        tone: 'accent'   },
+      experimental:   { label: 'Experimental',    tone: 'warning'  },
+      speculative:    { label: 'Speculative',      tone: 'muted'    },
+    };
     for (const id of PROVENANCE_LEVEL_IDS) {
       const meta = PROVENANCE_LEVELS[id];
       expect(meta.id).toBe(id);
-      expect(meta.label).toBeTruthy();
-      expect(['success', 'accent', 'warning', 'muted']).toContain(meta.tone);
+      expect(meta.label).toBe(EXPECTED[id].label);
+      expect(meta.tone).toBe(EXPECTED[id].tone);
       expect(meta.description.length).toBeGreaterThan(10);
       expect(meta.whatWouldChange.length).toBeGreaterThan(10);
     }

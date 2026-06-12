@@ -1,0 +1,201 @@
+/**
+ * Tests for POST /api/database/destroy (and the adjacent validation paths).
+ *
+ * Strategy: mock child_process.execFile — which is what runCmd() wraps — so
+ * we can control every shell invocation without touching the real filesystem
+ * or running actual Docker/psql commands.
+ */
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import express from 'express';
+import { request } from '../lib/testHelper.js';
+
+// resolveBashBinary and the db.sh path are resolved at module load — mock
+// the dependencies before the route is imported.
+vi.mock('../lib/bashResolver.js', () => ({
+  resolveBashBinary: vi.fn(() => 'bash'),
+}));
+
+vi.mock('../lib/pgTools.js', () => ({
+  resolvePgDumpBinary: vi.fn(async () => ({ binary: 'pg_dump', satisfies: true })),
+}));
+
+vi.mock('../lib/fileUtils.js', async () => {
+  const actual = await vi.importActual('../lib/fileUtils.js');
+  return {
+    ...actual,
+    PATHS: { ...actual.PATHS, root: '/fake/root' },
+  };
+});
+
+vi.mock('../lib/db.js', () => ({
+  checkHealth: vi.fn(async () => ({ healthy: true })),
+  query: vi.fn(async () => ({ rows: [] })),
+}));
+
+// Mock child_process.execFile at the module level.
+vi.mock('child_process', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    execFile: vi.fn(),
+  };
+});
+
+import { execFile } from 'child_process';
+import databaseRoutes from './database.js';
+
+// Helper: make execFile call the callback with controlled output
+function mockExecFile(responses) {
+  // responses: array of { exitCode, stdout, stderr } in call order.
+  // Any call beyond the list resolves with exitCode=0.
+  let callIndex = 0;
+  execFile.mockImplementation((_cmd, _args, _opts, callback) => {
+    const resp = responses[callIndex++] ?? { exitCode: 0, stdout: '', stderr: '' };
+    if (resp.exitCode !== 0) {
+      const err = Object.assign(new Error(resp.stderr || 'error'), { code: resp.exitCode });
+      callback(err, resp.stdout || '', resp.stderr || '');
+    } else {
+      callback(null, resp.stdout || '', resp.stderr || '');
+    }
+    // Return a dummy handle (execFile should return a ChildProcess)
+    return { pid: 0 };
+  });
+}
+
+function makeApp() {
+  const app = express();
+  app.use(express.json());
+  app.use('/api/database', databaseRoutes);
+  app.use((err, _req, res, _next) => {
+    res.status(err.status ?? 500).json({ error: err.message, code: err.code });
+  });
+  return app;
+}
+
+describe('POST /api/database/destroy', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  describe('input validation', () => {
+    it('returns 400 when backend is missing', async () => {
+      const app = makeApp();
+      const res = await request(app).post('/api/database/destroy').send({});
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/backend/i);
+    });
+
+    it('returns 400 when backend is an unknown value', async () => {
+      const app = makeApp();
+      const res = await request(app)
+        .post('/api/database/destroy')
+        .send({ backend: 'mysql' });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/docker.*native|native.*docker/i);
+    });
+
+    it('returns 400 when backend is null', async () => {
+      const app = makeApp();
+      const res = await request(app)
+        .post('/api/database/destroy')
+        .send({ backend: null });
+      expect(res.status).toBe(400);
+    });
+  });
+
+  describe('active-backend safety guard', () => {
+    it('returns 400 when the requested backend matches the active backend (docker)', async () => {
+      // First execFile call is runDbScript(['status']) → returns "Current mode: docker"
+      mockExecFile([
+        { exitCode: 0, stdout: 'Current mode: docker\nSome other output', stderr: '' },
+      ]);
+
+      const app = makeApp();
+      const res = await request(app)
+        .post('/api/database/destroy')
+        .send({ backend: 'docker' });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/active/i);
+    });
+
+    it('returns 400 when the requested backend matches the active backend (native)', async () => {
+      mockExecFile([
+        { exitCode: 0, stdout: 'Current mode: native', stderr: '' },
+      ]);
+
+      const app = makeApp();
+      const res = await request(app)
+        .post('/api/database/destroy')
+        .send({ backend: 'native' });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/active/i);
+    });
+  });
+
+  describe('docker destroy path', () => {
+    it('invokes docker stop, rm, and volume rm commands when destroying non-active docker backend', async () => {
+      // Call order:
+      // 0: runDbScript(['status'])  → mode is "native" (so docker is the non-active backend)
+      // 1: docker compose stop db
+      // 2: docker compose rm -f db
+      // 3: docker volume rm -f portos_portos-pgdata  (first volume attempt)
+      // 4: docker volume rm -f portos-pgdata          (alternate volume attempt)
+      mockExecFile([
+        { exitCode: 0, stdout: 'Current mode: native', stderr: '' },
+        { exitCode: 0, stdout: '', stderr: '' }, // compose stop
+        { exitCode: 0, stdout: '', stderr: '' }, // compose rm
+        { exitCode: 0, stdout: '', stderr: '' }, // volume rm primary
+        { exitCode: 0, stdout: '', stderr: '' }, // volume rm alternate
+      ]);
+
+      const app = makeApp();
+      const res = await request(app)
+        .post('/api/database/destroy')
+        .send({ backend: 'docker' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+
+      // Verify the first call was the status probe
+      const statusCall = execFile.mock.calls[0];
+      expect(statusCall[1]).toContain('status'); // db.sh status arg
+
+      // Verify one of the calls used 'docker' as the command with compose/volume args
+      const dockerCalls = execFile.mock.calls.filter(c => c[0] === 'docker');
+      expect(dockerCalls.length).toBeGreaterThanOrEqual(3);
+
+      const volumeRmCall = dockerCalls.find(
+        c => c[1].includes('volume') && c[1].includes('rm')
+      );
+      expect(volumeRmCall).toBeDefined();
+    });
+  });
+
+  describe('native destroy path', () => {
+    it('invokes psql DROP DATABASE when destroying the non-active native backend', async () => {
+      // Call order:
+      // 0: runDbScript(['status']) → mode is "docker" (so native is non-active)
+      // 1: psql DROP DATABASE …
+      mockExecFile([
+        { exitCode: 0, stdout: 'Current mode: docker', stderr: '' },
+        { exitCode: 0, stdout: 'DROP DATABASE', stderr: '' },
+      ]);
+
+      const app = makeApp();
+      const res = await request(app)
+        .post('/api/database/destroy')
+        .send({ backend: 'native' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+
+      // Verify a psql call was made
+      const psqlCall = execFile.mock.calls.find(c => c[0] === 'psql');
+      expect(psqlCall).toBeDefined();
+      // The args should contain a DROP DATABASE statement
+      expect(psqlCall[1].join(' ')).toMatch(/DROP DATABASE/i);
+    });
+  });
+});

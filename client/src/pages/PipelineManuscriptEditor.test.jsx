@@ -1,6 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
+import { MockEventSource, lastEventSource as lastEs } from '../test/mockEventSource';
 
 const api = vi.hoisted(() => ({
   getPipelineSeries: vi.fn(),
@@ -13,6 +14,10 @@ const api = vi.hoisted(() => ({
   generatePipelineManuscriptFix: vi.fn(),
   acceptPipelineManuscriptFix: vi.fn(),
   analyzePipelineManuscriptCompleteness: vi.fn(),
+  startPipelineManuscriptCompleteness: vi.fn(),
+  cancelPipelineManuscriptCompleteness: vi.fn(),
+  getPipelineManuscriptCompletenessStatus: vi.fn(),
+  pipelineManuscriptCompletenessSseUrl: vi.fn((id) => `/api/pipeline/series/${id}/manuscript/completeness/progress`),
   getProviders: vi.fn(),
 }));
 vi.mock('../services/api', () => api);
@@ -51,6 +56,7 @@ beforeEach(() => {
     availableTypes: ['prose'],
   });
   api.getPipelineManuscriptReview.mockResolvedValue({ schemaVersion: 1, comments: [comment] });
+  api.getPipelineManuscriptCompletenessStatus.mockResolvedValue({ active: false });
   api.getProviders.mockResolvedValue({ providers: [
     { id: 'anthropic', name: 'Anthropic', enabled: true, defaultModel: 'claude-opus', models: ['claude-opus', 'claude-haiku'] },
     { id: 'openai', name: 'OpenAI', enabled: true, defaultModel: 'gpt-5', models: ['gpt-5'] },
@@ -347,5 +353,115 @@ describe('PipelineManuscriptEditor', () => {
     fireEvent.click(screen.getByText('Run editorial review'));
     await waitFor(() => expect(api.analyzePipelineManuscriptCompleteness).toHaveBeenCalled());
     expect(screen.queryByText(/Reviewed in/)).not.toBeInTheDocument();
+  });
+});
+
+describe('PipelineManuscriptEditor — generate-edits streamed review', () => {
+  beforeEach(() => {
+    MockEventSource.reset();
+    // Stub for the whole describe — a deferred SSE-open effect can fire after the
+    // test body returns (during RTL cleanup), so don't delete it per-test or that
+    // late `new EventSource(url)` throws a ReferenceError.
+    vi.stubGlobal('EventSource', MockEventSource);
+  });
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  it('checkbox-on runs the streamed edits endpoint (not the sync findings-only path)', async () => {
+    api.startPipelineManuscriptCompleteness.mockResolvedValue({ runId: 'cr-1', sseUrl: '/sse' });
+    renderEditor();
+    await screen.findByText('My Series');
+
+    fireEvent.click(screen.getByLabelText(/Generate edits for every finding/i));
+    fireEvent.click(screen.getByText('Run editorial review'));
+
+    await waitFor(() => expect(api.startPipelineManuscriptCompleteness).toHaveBeenCalledWith(
+      'ser-1', expect.objectContaining({ mode: 'merge' }),
+    ));
+    expect(api.analyzePipelineManuscriptCompleteness).not.toHaveBeenCalled();
+    // Let the deferred SSE-open effect flush + close inside the test (while the
+    // EventSource stub is live) so it can't throw during teardown.
+    await waitFor(() => expect(MockEventSource.instances.length).toBeGreaterThan(0));
+    lastEs().emit({ type: 'canceled' });
+  });
+
+  it('on the complete frame, re-fetches the review so comments arrive with fixes (diff + Accept, no Generate fix)', async () => {
+    const withFix = {
+      ...comment,
+      fix: { find: 'She left.', replace: 'She left, but paused.', edits: [{ issueNumber: 1, issueId: 'iss-1', stageId: 'prose', find: 'She left.', replace: 'She left, but paused.' }] },
+    };
+    api.startPipelineManuscriptCompleteness.mockResolvedValue({ runId: 'cr-1', sseUrl: '/sse' });
+    // First load returns the fix-less comment; the post-complete re-fetch returns
+    // the comment with its pre-built fix.
+    api.getPipelineManuscriptReview
+      .mockResolvedValueOnce({ schemaVersion: 1, comments: [comment] })
+      .mockResolvedValueOnce({ schemaVersion: 1, comments: [withFix] });
+
+    renderEditor();
+    await screen.findByText('My Series');
+
+    fireEvent.click(screen.getByLabelText(/Generate edits for every finding/i));
+    fireEvent.click(screen.getByText('Run editorial review'));
+    await waitFor(() => expect(MockEventSource.instances.length).toBeGreaterThan(0));
+
+    // Drive the terminal frame; the editor re-fetches the review.
+    lastEs().emit({ type: 'complete', openCount: 1, chunked: false, chunkCount: 1 });
+    await waitFor(() => expect(api.getPipelineManuscriptReview).toHaveBeenCalledTimes(2));
+
+    // The comment now carries a fix → the in-context card shows Accept, not "Generate fix".
+    revealFromIndex('The ending is abrupt');
+    expect(await screen.findByDisplayValue('She left, but paused.')).toBeInTheDocument();
+    expect(screen.getByText('Accept')).toBeInTheDocument();
+    expect(screen.queryByText('Generate fix')).not.toBeInTheDocument();
+  });
+
+  it('a SECOND streamed review in the same session is not torn down by the prior run\'s stale terminal frame', async () => {
+    api.startPipelineManuscriptCompleteness.mockResolvedValue({ runId: 'cr-1', sseUrl: '/sse' });
+    api.getPipelineManuscriptReview.mockResolvedValue({ schemaVersion: 1, comments: [comment] });
+    renderEditor();
+    await screen.findByText('My Series');
+
+    // Run 1: start, complete, re-fetch (getReview now called twice — initial + post-complete).
+    fireEvent.click(screen.getByLabelText(/Generate edits for every finding/i));
+    fireEvent.click(screen.getByText('Run editorial review'));
+    await waitFor(() => expect(MockEventSource.instances.length).toBe(1));
+    lastEs().emit({ type: 'complete', openCount: 1, chunked: false, chunkCount: 1 });
+    await waitFor(() => expect(api.getPipelineManuscriptReview).toHaveBeenCalledTimes(2));
+    // Run 1's button is back to idle.
+    await screen.findByText('Run editorial review');
+
+    // Run 2: starting it must subscribe a fresh stream and STAY active — the
+    // prior run's `complete` frame is still in useSseProgress's `latest` until
+    // the resubscribe resets it, and without the reviewClosed gate the terminal
+    // effect would consume that stale frame and tear run 2 down on start
+    // (firing a spurious 3rd review re-fetch).
+    fireEvent.click(screen.getByText('Run editorial review'));
+    await waitFor(() => expect(MockEventSource.instances.length).toBe(2));
+    // Button stays busy (run 2 in flight) and no stale re-fetch fired.
+    await screen.findByText(/Starting editorial review|Drafting edits/);
+    expect(api.getPipelineManuscriptReview).toHaveBeenCalledTimes(2);
+
+    // Run 2's own complete frame drives the real re-fetch (3rd call).
+    lastEs().emit({ type: 'complete', openCount: 1, chunked: false, chunkCount: 1 });
+    await waitFor(() => expect(api.getPipelineManuscriptReview).toHaveBeenCalledTimes(3));
+  });
+
+  it('recovers when the SSE stream dies without a terminal frame (button re-enables, review re-fetched)', async () => {
+    api.startPipelineManuscriptCompleteness.mockResolvedValue({ runId: 'cr-1', sseUrl: '/sse' });
+    api.getPipelineManuscriptReview.mockResolvedValue({ schemaVersion: 1, comments: [comment] });
+    renderEditor();
+    await screen.findByText('My Series');
+
+    fireEvent.click(screen.getByLabelText(/Generate edits for every finding/i));
+    fireEvent.click(screen.getByText('Run editorial review'));
+    await waitFor(() => expect(MockEventSource.instances.length).toBeGreaterThan(0));
+    // Mid-run the button is disabled (busy) showing progress text.
+    await screen.findByText(/Starting editorial review|Drafting edits/);
+
+    // Connection drops with no complete/canceled/error frame.
+    lastEs().fail();
+
+    // Recovery: button re-enables (no longer stuck) and the review is re-fetched.
+    expect(await screen.findByText('Run editorial review')).toBeInTheDocument();
+    await waitFor(() => expect(api.getPipelineManuscriptReview).toHaveBeenCalledTimes(2));
   });
 });
