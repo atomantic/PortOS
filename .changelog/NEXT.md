@@ -38,6 +38,8 @@
 
 ## Changed
 
+- **[issue-1174] Brain Config settings use the full width on desktop** — the Brain → Config tab no longer crams its four settings cards (AI Provider, Classification, Schedule, Schedule Summary) into a narrow centered column; on wide screens they now flow into two or three columns so everything fits without scrolling, while still stacking into a single column on mobile.
+
 - **[issue-1182] Unified tabbed-page headers behind a shared `PageHeader`** — Brain, MeatSpace, Settings, Goals, Calendar, and Insights each hand-rolled their title bar with different padding and title scales (`px-3 py-2 sm:p-4` vs `px-6 pt-6 pb-4` vs `p-4` vs `px-4 sm:px-6 py-3 sm:py-4`, `text-lg` through `text-2xl`), so moving between sections jittered the header. They now share `client/src/components/PageHeader.jsx` — compact `px-3 py-2 sm:px-4 sm:py-3 border-b border-port-border` padding and a `text-lg sm:text-xl font-bold` title, with `icon`/`subtitle`/`actions` slots. The three pages that hand-rolled their own tab strips (MeatSpace, Insights, Goals) now render the shared `TabPills` instead, so all six pages share one active-tab style and gain its tablist/tab a11y roles and 44px mobile tap targets. Settings gains a gear icon to match its siblings; ChiefOfStaff keeps its bespoke gradient avatar panel (it isn't a plain title bar). (`client/src/components/PageHeader.jsx`, `client/src/pages/{Brain,MeatSpace,Settings,Goals,Calendar,Insights}.jsx`)
 
 - **[issue-1200] Stabilized a flaky federation test** — the peer-sync unsubscribe race test now asserts the timing-independent invariants instead of one specific interleaving, so CI stops failing intermittently on it. No behavior change.

@@ -113,7 +113,7 @@ export default function ConfigTab({ onRefresh }) {
   }
 
   return (
-    <div className="space-y-6 max-w-2xl mx-auto">
+    <div className="space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
@@ -141,6 +141,8 @@ export default function ConfigTab({ onRefresh }) {
         )}
       </div>
 
+      {/* Settings cards flow into columns on lg/xl, stack on mobile */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4 items-start">
       {/* AI Provider & Model Section */}
       <section className="p-4 bg-port-card border border-port-border rounded-lg space-y-4">
         <div className="flex items-center gap-2 mb-4">
@@ -344,6 +346,7 @@ export default function ConfigTab({ onRefresh }) {
           </div>
         </section>
       )}
+      </div>
 
       {/* Save button at bottom for mobile */}
       {hasChanges() && (
