@@ -258,9 +258,11 @@ export default function NotesTab({ onRefresh }) {
   const displayNotes = searchResults ? searchResults.results : notes;
 
   return (
-    <div className="flex h-full min-h-0">
-      {/* Left panel: note list */}
-      <div className="w-80 border-r border-port-border flex flex-col min-h-0 shrink-0">
+    <div className="grid grid-cols-1 md:grid-cols-[320px_1fr] grid-rows-1 h-full min-h-0 overflow-hidden">
+      {/* Left panel: note list — on mobile it yields to the detail pane once a
+          note is opened (the detail pane's back button restores it). On md+ both
+          panels are always visible side-by-side. */}
+      <div className={`border-r border-port-border flex-col min-h-0 overflow-hidden ${selectedNote || loadingNote ? 'hidden md:flex' : 'flex'}`}>
         {/* Vault selector and actions */}
         <div className="p-3 border-b border-port-border space-y-2">
           <div className="flex items-center gap-2">
@@ -438,8 +440,9 @@ export default function NotesTab({ onRefresh }) {
         </div>
       </div>
 
-      {/* Right panel: note viewer/editor */}
-      <div className="flex-1 flex flex-col min-w-0 min-h-0">
+      {/* Right panel: note viewer/editor — hidden on mobile until a note is
+          opened so the list owns the small-screen viewport; always shown on md+. */}
+      <div className={`flex-col min-w-0 min-h-0 overflow-hidden ${selectedNote || loadingNote ? 'flex' : 'hidden md:flex'}`}>
         {loadingNote ? (
           <div className="flex items-center justify-center h-full">
             <BrailleSpinner text="Loading" />
