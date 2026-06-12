@@ -82,13 +82,15 @@ Return ONLY valid JSON matching this shape — no prose, no markdown fence, no c
   "edits": [
     {
       "issueNumber": 1,
-      "find": "a verbatim excerpt copied EXACTLY from that issue's manuscript above — the span you are replacing",
-      "replace": "that same span rewritten to close the gap",
-      "note": "optional short note explaining this edit"
+      "find": "<paste the verbatim manuscript span you are replacing>",
+      "replace": "<that same span, rewritten to close the gap>",
+      "note": "<optional short note explaining this edit>"
     }
   ]
 }
 ```
+
+The `<…>` values above are field DESCRIPTIONS, not content. Do **not** copy them into your answer — every `find` must be real text lifted character-for-character from the manuscript above, and every `replace` must be your actual rewrite. Returning the bracketed placeholder text (or its wording) is a failed response.
 
 - `edits` may contain one edit or several edits. Use several only when the finding genuinely requires more than one insertion/revision.
 - `issueNumber` MUST identify the issue section containing that edit's `find`.

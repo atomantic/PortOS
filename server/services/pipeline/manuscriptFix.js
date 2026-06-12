@@ -74,6 +74,31 @@ function normalizeModelEdits(content) {
   return [];
 }
 
+// The placeholder strings used as VALUES in the prompt's JSON example
+// (pipeline-manuscript-fix.md, "Output contract"). Weaker models sometimes echo
+// the example back verbatim instead of filling it in. Those strings are never a
+// real manuscript span, so they'd surface as an un-appliable `fuzzy` edit whose
+// Accept throws "Anchor text is no longer present". Detect and drop them here so
+// the fix collapses to null → the caller's "did not return a usable fix" retry.
+//
+// Only the `find`/`replace` example values are listed (the only fields the guard
+// checks) — not the `note` placeholder. Both the current bracketed wording AND
+// the prior prose-style wording are included: an install whose prompt copy hasn't
+// migrated to the bracketed shape yet still echoes the old text, so the guard must
+// catch both. Keep these byte-identical to whichever example shipped in
+// pipeline-manuscript-fix.md (a drift test in manuscriptFix.test.js pins the
+// current ones to the live prompt so a future example edit can't silently rot it).
+export const PROMPT_EXAMPLE_PLACEHOLDERS = new Set([
+  // Current (bracketed) example.
+  '<paste the verbatim manuscript span you are replacing>',
+  '<that same span, rewritten to close the gap>',
+  // Prior prose-style example (pre-bracket installs).
+  "a verbatim excerpt copied EXACTLY from that issue's manuscript above — the span you are replacing",
+  'that same span rewritten to close the gap',
+]);
+
+const isEchoedPlaceholder = (s) => typeof s === 'string' && PROMPT_EXAMPLE_PLACEHOLDERS.has(s.trim());
+
 function resolveEditSection(raw, targets) {
   const issueNumber = Number.isInteger(raw?.issueNumber) ? raw.issueNumber : null;
   if (issueNumber != null) {
@@ -132,12 +157,15 @@ export function fixFromEdits(edits) {
   return fix;
 }
 
-function normalizeFix(content, targets) {
+export function normalizeFix(content, targets) {
   const edits = normalizeModelEdits(content)
     .map((raw) => {
       const find = typeof raw?.find === 'string' ? raw.find : '';
       const replace = typeof raw?.replace === 'string' ? raw.replace : '';
       if (!find || !replace) return null;
+      // Drop an edit the model copied straight out of the prompt's JSON example
+      // instead of synthesizing — it would only ever be an un-appliable fuzzy edit.
+      if (isEchoedPlaceholder(find) || isEchoedPlaceholder(replace)) return null;
       return shapeAnchoredEdit(resolveEditSection(raw, targets), { find, replace, note: raw.note });
     })
     .filter(Boolean);
