@@ -253,7 +253,9 @@ export default function BrainGraph() {
   }
 
   return (
-    <div className="space-y-3">
+    // Full-bleed tab: own the scroll (the Brain wrapper is overflow-hidden) and
+    // restore the edge padding the shared wrapper no longer provides (#1177).
+    <div className="h-full overflow-y-auto p-3 sm:p-4 space-y-3">
       {/* No-embeddings banner */}
       {graphData && !graphData.hasEmbeddings && (
         <div className="flex items-center justify-between bg-port-warning/10 border border-port-warning/30 rounded-lg px-4 py-2.5">

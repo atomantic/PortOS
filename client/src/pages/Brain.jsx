@@ -8,7 +8,7 @@ import TabPills from '../components/ui/TabPills';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
 import { sameJsonShape } from '../lib/sameJsonShape';
 
-import { TABS } from '../components/brain/constants';
+import { TABS, FULL_BLEED_TAB_IDS } from '../components/brain/constants';
 import { timeAgo } from '../utils/formatters';
 
 import InboxTab from '../components/brain/tabs/InboxTab';
@@ -30,6 +30,10 @@ export default function Brain() {
   const { tab } = useParams();
   const navigate = useNavigate();
   const activeTab = tab || 'inbox';
+  // Full-bleed tabs own their internal scroll and fill height, so the shared
+  // wrapper must NOT add padding or a second scrollbar (issue #1177). The set
+  // is derived from the TABS registry so it can't drift from the tab list.
+  const fullBleed = FULL_BLEED_TAB_IDS.has(activeTab);
 
   // Let errors throw — `useAutoRefetch` preserves the last-good data on
   // transient failures. `silent: true` keeps the 30s poll from spamming
@@ -90,7 +94,7 @@ export default function Brain() {
   }
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full min-h-0">
       <PageHeader
         icon={BrainIcon}
         title="Brain"
@@ -129,8 +133,9 @@ export default function Brain() {
         ariaLabel="Brain sections"
       />
 
-      {/* Tab content */}
-      <div className="flex-1 overflow-auto p-4">
+      {/* Tab content — full-bleed tabs own their own scroll and fill height;
+          document-style tabs scroll inside a padded wrapper. */}
+      <div className={`flex-1 min-h-0 ${fullBleed ? 'overflow-hidden' : 'overflow-auto p-3 sm:p-4'}`}>
         {renderTabContent()}
       </div>
     </div>

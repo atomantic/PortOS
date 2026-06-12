@@ -227,17 +227,22 @@ export default function NotesTab({ onRefresh }) {
   }
 
   if (showVaultSetup || vaults.length === 0) {
+    // Notes is a full-bleed tab (Brain wraps it in overflow-hidden with no
+    // padding), so this branch must own its scroll + padding — otherwise the
+    // vault manager clips below the fold with no scrollbar (#1177).
     return (
-      <VaultSetup
-        detectedVaults={detectedVaults}
-        vaults={vaults}
-        customPath={customPath}
-        setCustomPath={setCustomPath}
-        adding={addingVault}
-        onAdd={handleAddVault}
-        onDetect={detectAvailableVaults}
-        onClose={() => setShowVaultSetup(false)}
-      />
+      <div className="h-full overflow-y-auto p-3 sm:p-4">
+        <VaultSetup
+          detectedVaults={detectedVaults}
+          vaults={vaults}
+          customPath={customPath}
+          setCustomPath={setCustomPath}
+          adding={addingVault}
+          onAdd={handleAddVault}
+          onDetect={detectAvailableVaults}
+          onClose={() => setShowVaultSetup(false)}
+        />
+      </div>
     );
   }
 
@@ -253,7 +258,7 @@ export default function NotesTab({ onRefresh }) {
   const displayNotes = searchResults ? searchResults.results : notes;
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-[320px_1fr] grid-rows-1 h-[calc(100%_+_2rem)] min-h-0 overflow-hidden -m-4">
+    <div className="grid grid-cols-1 md:grid-cols-[320px_1fr] grid-rows-1 h-full min-h-0 overflow-hidden">
       {/* Left panel: note list — on mobile it yields to the detail pane once a
           note is opened (the detail pane's back button restores it). On md+ both
           panels are always visible side-by-side. */}
@@ -513,7 +518,7 @@ export default function NotesTab({ onRefresh }) {
             )}
 
             {/* Note content */}
-            <div className="flex-1 overflow-auto flex">
+            <div className="flex-1 min-h-0 overflow-auto flex">
               {/* Main content area */}
               <div className="flex-1 min-w-0">
                 {editing ? (

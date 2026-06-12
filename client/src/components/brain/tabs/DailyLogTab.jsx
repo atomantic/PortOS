@@ -344,7 +344,7 @@ export default function DailyLogTab() {
   }, [date]);
 
   return (
-    <div className="flex h-full -m-4 relative" style={{ height: 'calc(100vh - 180px)', minHeight: '420px' }}>
+    <div className="flex h-full min-h-0 relative">
       {/* Left: history + settings. Drawer on mobile, persistent column on md+. */}
       {historyOpen && (
         <button
@@ -355,7 +355,7 @@ export default function DailyLogTab() {
         />
       )}
       <div
-        className={`${historyOpen ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0 transform transition-transform duration-200 absolute md:static inset-y-0 left-0 z-20 w-[80vw] max-w-xs md:w-64 bg-port-bg md:bg-transparent border-r border-port-border flex flex-col shrink-0`}
+        className={`${historyOpen ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0 transform transition-transform duration-200 absolute md:static inset-y-0 left-0 z-20 w-[80vw] max-w-xs md:w-64 bg-port-bg md:bg-transparent border-r border-port-border flex flex-col min-h-0 shrink-0`}
       >
         <div className="p-3 border-b border-port-border flex items-center gap-2">
           <BookOpen size={14} className="text-port-accent" />
@@ -454,7 +454,7 @@ export default function DailyLogTab() {
       </div>
 
       {/* Right: editor */}
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="flex-1 flex flex-col min-w-0 min-h-0">
         <div className="flex flex-wrap items-center gap-2 px-3 sm:px-4 py-2 sm:py-3 border-b border-port-border">
           <button
             onClick={() => setHistoryOpen(true)}

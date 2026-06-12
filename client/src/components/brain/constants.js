@@ -1,19 +1,25 @@
 import { MessageSquare, Database, Calendar, Rss, Shield, Users, FolderKanban, Lightbulb, ClipboardList, Settings, Link2, BookOpen, Network, FileText, NotebookPen, Upload } from 'lucide-react';
 
-// Main navigation tabs
+// Main navigation tabs.
+// `fullBleed: true` marks a tab that fills the available height and owns its
+// own internal scroll — Brain renders these inside an overflow-hidden wrapper
+// with no padding (the rest scroll inside a padded wrapper). See issue #1177.
 export const TABS = [
   { id: 'inbox', label: 'Inbox', icon: MessageSquare },
-  { id: 'daily-log', label: 'Daily Log', icon: NotebookPen },
+  { id: 'daily-log', label: 'Daily Log', icon: NotebookPen, fullBleed: true },
   { id: 'links', label: 'Links', icon: Link2 },
   { id: 'memory', label: 'Memory', icon: Database },
-  { id: 'notes', label: 'Notes', icon: FileText },
-  { id: 'graph', label: 'Graph', icon: Network },
+  { id: 'notes', label: 'Notes', icon: FileText, fullBleed: true },
+  { id: 'graph', label: 'Graph', icon: Network, fullBleed: true },
   { id: 'digest', label: 'Digest', icon: Calendar },
   { id: 'feeds', label: 'Feeds', icon: Rss },
   { id: 'trust', label: 'Trust', icon: Shield },
   { id: 'import', label: 'Import', icon: Upload },
   { id: 'config', label: 'Config', icon: Settings }
 ];
+
+// Tab ids that render full-bleed (derived from TABS so the list can't drift).
+export const FULL_BLEED_TAB_IDS = new Set(TABS.filter((t) => t.fullBleed).map((t) => t.id));
 
 // Memory sub-tabs for entity types (alphabetical)
 export const MEMORY_TABS = [
