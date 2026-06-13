@@ -10,6 +10,14 @@ import { readResponseJson } from './readResponseJson.js';
 
 const isAPI = (p) => p && p.type === 'api' && p.enabled !== false;
 
+// LM Studio auto-recovery timeouts. Listing downloaded models is a quick local
+// HTTP call; loading a model into VRAM can take a while on a cold start.
+const LM_STUDIO_LIST_TIMEOUT_MS = 5000;
+const LM_STUDIO_LOAD_TIMEOUT_MS = 120000;
+// Default chat-completion timeout when a provider doesn't set its own. Generous
+// because local models on modest hardware can be slow to first token.
+const DEFAULT_PROVIDER_TIMEOUT_MS = 300000;
+
 /**
  * Resolve an API-type provider for features that can only run against an API
  * endpoint (CLI providers don't support the simple chat-completions call path).
@@ -66,7 +74,7 @@ async function ensureLMStudioModelLoaded(provider, statusOp) {
   if (!baseUrl) return null;
 
   const listCtl = new AbortController();
-  const listTimer = setTimeout(() => listCtl.abort(), 5000);
+  const listTimer = setTimeout(() => listCtl.abort(), LM_STUDIO_LIST_TIMEOUT_MS);
   const listResp = await fetch(`${baseUrl}/api/v0/models`, {
     method: 'GET',
     signal: listCtl.signal
@@ -97,7 +105,7 @@ async function ensureLMStudioModelLoaded(provider, statusOp) {
 
   const loadStart = Date.now();
   const loadCtl = new AbortController();
-  const loadTimer = setTimeout(() => loadCtl.abort(), 120000);
+  const loadTimer = setTimeout(() => loadCtl.abort(), LM_STUDIO_LOAD_TIMEOUT_MS);
   const loadResp = await fetch(`${baseUrl}/api/v1/models/load`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -187,7 +195,7 @@ export async function callProviderAISimple(provider, model, prompt, options = {}
   if (provider.type !== 'api') {
     return { error: 'This operation requires an API-based provider' };
   }
-  const opts = { temperature, max_tokens, timeout: provider.timeout || 300000 };
+  const opts = { temperature, max_tokens, timeout: provider.timeout || DEFAULT_PROVIDER_TIMEOUT_MS };
 
   // Always emit status events (server logs + UI toasts) for AI calls. Callers
   // can pass `op` to give the toast a meaningful label; otherwise it's labeled
