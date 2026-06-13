@@ -22,6 +22,17 @@ describe('classifyTrainingFailure', () => {
     expect(classifyTrainingFailure({ stderrTail: ['GatedRepoError: 403'] }).code).toBe('HF_AUTH');
   });
 
+  it('classifies argparse CLI mismatch as a stale-mflux upgrade hint', () => {
+    // The exact tail the wrapper replays when mflux 0.12.x rejects --config.
+    const tail = [
+      'mflux: usage: mflux-train [-h] ...',
+      'mflux: mflux-train: error: unrecognized arguments: --config /run/mflux-train.json',
+    ];
+    const out = classifyTrainingFailure({ exitCode: 2, stderrTail: tail });
+    expect(out.code).toBe('CLI_MISMATCH');
+    expect(out.message).toMatch(/mflux>=0\.17/);
+  });
+
   it('flags SIGKILL as memory reclaim', () => {
     expect(classifyTrainingFailure({ signal: 'SIGKILL' }).code).toBe('KILLED');
   });

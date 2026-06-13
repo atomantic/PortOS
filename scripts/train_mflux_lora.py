@@ -36,10 +36,16 @@ import subprocess
 import sys
 import threading
 import zipfile
+from collections import deque
 from pathlib import Path
 
 CHILD = None
 STOP_REQUESTED = False
+
+# How many of the trainer's recent non-progress output lines to retain and
+# replay to stderr on a non-zero exit (so the Node failure classifier sees the
+# real error, not just the exit code). See the loop in main().
+OUTPUT_TAIL_LINES = 40
 
 
 def log(msg: str) -> None:
@@ -111,6 +117,13 @@ FATAL_PATTERNS = [
     ("OOM", re.compile(r"out of memory|Insufficient Memory|Metal.*out of memory|std::bad_alloc", re.I)),
     ("MODULE_NOT_FOUND", re.compile(r"ModuleNotFoundError|No module named", re.I)),
     ("HF_AUTH", re.compile(r"GatedRepoError|401 Client Error|is restricted|Repo.*is gated", re.I)),
+    # argparse rejecting our flags / model choice means the installed mflux is
+    # too old for FLUX.2 LoRA training (e.g. 0.12.x wants `--train-config` and
+    # has no flux2 base models) — the exact failure that surfaced as a bare
+    # "exited with code 2". CLI_MISMATCH mirrors failure.js.
+    ("CLI_MISMATCH", re.compile(
+        r"unrecognized arguments|invalid choice|the following arguments are required|"
+        r"mflux-train: error", re.I)),
 ]
 
 
@@ -231,6 +244,14 @@ def main():
 
     in_training = False
     fatal_emitted = False
+    # Ring buffer of the trainer's recent non-progress output. mflux's stderr
+    # is merged into its stdout (so tqdm stays in order), which means the Node
+    # side tags every line `stream='stdout'` and the JS classifier's stderr
+    # tail — its only window into *why* a run died — stays empty. On a non-zero
+    # exit we replay this buffer to stderr so argparse errors, tracebacks, and
+    # version-mismatch complaints actually reach the classifier instead of the
+    # run failing with a bare "exited with code N".
+    output_tail = deque(maxlen=OUTPUT_TAIL_LINES)
     for raw in stream_lines(CHILD.stdout):
         line = raw.strip()
         if not line or NOISE_RE.search(line):
@@ -266,6 +287,7 @@ def main():
 
         # Forward everything else (truncated) — keeps the JS idle watchdog
         # fed during model download/load phases and aids debugging.
+        output_tail.append(line[:300])
         log(f"STATUS:{line[:300]}")
 
     code = CHILD.wait()
@@ -277,6 +299,12 @@ def main():
         sys.exit(143)
 
     if code != 0:
+        # Replay the trainer's tail to stderr so the Node classifier sees the
+        # real error. Skip when a structured USER_ERROR already pinned the
+        # cause (its message is more actionable than raw tail lines).
+        if not fatal_emitted:
+            for tail_line in output_tail:
+                print(f"mflux: {tail_line}", file=sys.stderr, flush=True)
         print(f"❌ mflux trainer exited with code {code}", file=sys.stderr, flush=True)
         sys.exit(code or 1)
 

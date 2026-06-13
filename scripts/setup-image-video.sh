@@ -78,7 +78,10 @@ INSTALL_VIDEO="${INSTALL_VIDEO:-$DEFAULT_INSTALL_VIDEO}"
 if [[ "$INSTALL_MFLUX" == "1" ]]; then
   # Install via pip --user so we don't pollute the system or require a venv.
   # mflux comes with the mflux-generate CLI which the local image backend
-  # spawns directly. transformers<5 is required for MLX compatibility.
+  # spawns directly. Pin >=0.17: that's the first release with FLUX.2 LoRA
+  # training (`mflux-train --config`, `flux2-klein-*` base models). Older
+  # mflux (0.12.x) wants `--train-config` and has no flux2 models, so its
+  # trainer dies with a bare "exited with code 2" — see train_mflux_lora.py.
   #
   # `--force-reinstall --no-deps` on mflux only — earlier setup runs could
   # leave the user-site copy at the right version number but with stale file
@@ -86,12 +89,13 @@ if [[ "$INSTALL_MFLUX" == "1" ]]; then
   # from a partial reinstall, breaking the entry-point shim). Forcing the
   # reinstall flushes the file tree without re-resolving torch/mlx and friends.
   echo "📦 Installing image generation packages (mflux + deps)..."
-  "$PYTHON_BIN" -m pip install --upgrade --user --force-reinstall --no-deps mflux
+  "$PYTHON_BIN" -m pip install --upgrade --user --force-reinstall --no-deps 'mflux>=0.17'
   # mflux above is installed with --no-deps to flush its file tree without
   # re-resolving torch/mlx — but that means we must explicitly install mflux's
   # own runtime deps here (notably `mlx` on macOS, which it imports at startup).
-  # Without this, INSTALL_VIDEO=0 leaves mflux unable to import.
-  MFLUX_DEPS=("transformers<5" safetensors huggingface_hub numpy opencv-python tqdm)
+  # Without this, INSTALL_VIDEO=0 leaves mflux unable to import. mflux >=0.17
+  # requires transformers 5.x (>=5,<6) — the old <5 pin breaks it on import.
+  MFLUX_DEPS=("transformers>=5,<6" safetensors huggingface_hub numpy opencv-python tqdm)
   if is_macos; then
     MFLUX_DEPS+=(mlx)
   fi
