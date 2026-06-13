@@ -99,6 +99,35 @@ describe('resolveAgentProviderAndModel', () => {
     expect(r.selectedModel).toBe('m-default');
   });
 
+  it('honors a pinned provider before the active-provider availability gate', async () => {
+    // The active provider is down, but the task pins a different, healthy
+    // provider. The pin must win without the active provider's unavailability
+    // ever blocking the task (regression: the override used to run after the
+    // active-provider availability check, so a pinned-but-healthy provider
+    // still failed when the active one was down).
+    const active = { id: 'p-active', type: 'api' };
+    const chosen = { id: 'p-user', type: 'api', models: ['m-default'] };
+    getActiveProvider.mockResolvedValue(active);
+    getProviderById.mockResolvedValue(chosen);
+    isProviderAvailable.mockImplementation((id) => id === 'p-user'); // active down, pinned up
+
+    const r = await resolveAgentProviderAndModel({ id: 't', metadata: { provider: 'p-user' } });
+    expect(r.ok).toBe(true);
+    expect(r.provider).toBe(chosen);
+    expect(r.selectedModel).toBe('m-default');
+    expect(getFallbackProvider).not.toHaveBeenCalled();
+  });
+
+  it('honors a pinned provider even when no active provider is configured', async () => {
+    const chosen = { id: 'p-user', type: 'api', models: ['m-default'] };
+    getActiveProvider.mockResolvedValue(null); // no active provider at all
+    getProviderById.mockResolvedValue(chosen);
+
+    const r = await resolveAgentProviderAndModel({ id: 't', metadata: { provider: 'p-user' } });
+    expect(r.ok).toBe(true);
+    expect(r.provider).toBe(chosen);
+  });
+
   it('falls back to the provider tier default when the selected model is not in the provider model list', async () => {
     const provider = { id: 'p1', type: 'api', models: ['only-this'], heavyModel: 'heavy-x' };
     getActiveProvider.mockResolvedValue(provider);
