@@ -261,8 +261,9 @@ export async function runTraining({ jobId, runId, pythonPath = null }) {
   // rather than training the moved dataset and registering a LoRA under the
   // run's now-stale character. failBeforeSpawn's flipDatasetAfterRun is
   // character-guarded, so it won't disturb the reassigned dataset's state.
-  // (entryId is a globally-unique UUID, so it alone identifies the character.)
-  if (dataset.character?.entryId !== run.character.entryId) {
+  // Match the full (universeId, entryId) key the dataset store uses elsewhere.
+  if (dataset.character?.entryId !== run.character.entryId
+    || dataset.character?.universeId !== run.character.universeId) {
     return failBeforeSpawn('Dataset was reassigned to a different character after this run was queued — cancel and retrain.');
   }
 

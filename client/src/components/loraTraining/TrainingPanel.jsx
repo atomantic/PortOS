@@ -55,15 +55,15 @@ export default function TrainingPanel({ dataset, readiness, triggerSaving, onRun
   const charEntryId = dataset.character?.entryId;
   const charUniverseId = dataset.character?.universeId;
   const refreshRuns = useCallback(() => {
-    // Filter by the current character on the SERVER (characterId = the
-    // globally-unique entryId), so the row limit applies to this character's
-    // runs — not to other-character runs left over on the same dataset id after
-    // a reassignment (which a client-side filter-after-limit would drop). The
-    // client-side guard below is belt-and-suspenders for any run missing its
-    // character snapshot.
+    // Filter by the current character on the SERVER (characterId = entryId) so
+    // the row limit applies to this character's runs — not to other-character
+    // runs left over on the same dataset id after a reassignment (which a
+    // client-side filter-after-limit would drop). The client guard then matches
+    // the full (universeId, entryId) key the dataset store uses, and tolerates
+    // a run missing its character snapshot.
     listLoraTrainingRuns({ datasetId: dataset.id, characterId: charEntryId, limit: 5 }).then((runs) => {
       const own = (Array.isArray(runs) ? runs : []).filter(
-        (r) => !r.character || r.character.entryId === charEntryId,
+        (r) => !r.character || (r.character.entryId === charEntryId && r.character.universeId === charUniverseId),
       );
       setActiveRun(own.find(isActive) || null);
       setLastRun(own.find((r) => !isActive(r)) || null);
