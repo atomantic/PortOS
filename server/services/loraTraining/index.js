@@ -561,9 +561,12 @@ export async function listCheckpoints(runId) {
  */
 export async function promoteCheckpoint(runId, step) {
   const run = await runsDb.getRunRequired(runId);
-  if (!['completed', 'failed', 'canceled'].includes(run.status)) {
-    throw new ServerError('Cannot promote a checkpoint while the run is active', {
-      status: 409, code: 'RUN_ACTIVE',
+  // Only completed runs (matching the UI, which exposes the picker only there).
+  // Promoting flips the dataset to `trained` + deploys a LoRA — a failed or
+  // canceled run shouldn't masquerade as trained off a partial checkpoint.
+  if (run.status !== 'completed') {
+    throw new ServerError('Can only promote a checkpoint from a completed run', {
+      status: 409, code: 'RUN_NOT_COMPLETED',
     });
   }
   const listed = listRunCheckpoints(run);

@@ -67,6 +67,23 @@ function stepFromSampleName(name) {
   return m ? Number(m[1]) : null;
 }
 
+/**
+ * Parse the boundary step a checkpoint artifact was saved at, from its
+ * basename. The mflux watcher tags its CHECKPOINT line with the POLL-TIME
+ * tqdm step, which can lag the actual save boundary by a few steps — so the
+ * recorded `step` may not match the boundary the preview filename embeds.
+ * Deriving the step from the filename (the same source `stepFromSampleName`
+ * uses) keeps the checkpoint↔preview join exact. Returns null if unparseable.
+ */
+function stepFromCheckpointName(name) {
+  // mflux: 0000250_checkpoint.zip ; flux2: step-000250
+  const m = String(name).match(/^(\d+)_checkpoint/) || String(name).match(/^step-(\d+)/);
+  return m ? Number(m[1]) : null;
+}
+
+/** Canonical (filename-derived) step for a recorded checkpoint, with fallback. */
+const checkpointStep = (c) => stepFromCheckpointName(c.path) ?? c.step;
+
 /** Map step → sample basename from the run's recorded sample artifacts. */
 function sampleByStep(run) {
   const map = new Map();
@@ -90,13 +107,14 @@ export function listRunCheckpoints(run) {
   const deployedStep = run.output?.selectedCheckpointStep ?? null;
   const checkpoints = (run.artifacts?.checkpoints || [])
     .map((c) => {
-      const preview = samples.get(c.step) || null;
+      const step = checkpointStep(c);
+      const preview = samples.get(step) || null;
       return {
-        step: c.step,
+        step,
         loss: Number.isFinite(c.loss) ? c.loss : null,
         previewUrl: sampleUrl(run.id, preview),
         hasPreview: !!preview,
-        deployed: deployedStep != null && c.step === deployedStep,
+        deployed: deployedStep != null && step === deployedStep,
       };
     })
     .sort((a, b) => a.step - b.step);
@@ -132,8 +150,11 @@ const pad6 = (n) => String(n).padStart(6, '0');
  * Throws a clear error if the checkpoint artifact is missing.
  */
 export async function resolveCheckpointAdapterBuffer(run, step) {
+  // Match on the canonical (filename-derived) step so a promote request from
+  // listRunCheckpoints — which reports filename steps — finds the right
+  // artifact even when the recorded poll-time `step` drifted.
   if (run.runtime === TRAINING_RUNTIMES.MFLUX) {
-    const recorded = (run.artifacts?.checkpoints || []).find((c) => c.step === step);
+    const recorded = (run.artifacts?.checkpoints || []).find((c) => checkpointStep(c) === step);
     const zipName = recorded?.path || `${pad7(step)}_checkpoint.zip`;
     const zipPath = join(resolveMfluxOutputDir(run.id), 'checkpoints', basename(zipName));
     if (!existsSync(zipPath)) {
@@ -149,7 +170,7 @@ export async function resolveCheckpointAdapterBuffer(run, step) {
   // flux2 torch runtime — diffusers save_lora_weights dir. Prefer the recorded
   // checkpoint basename (symmetric with the mflux path) so a trainer naming
   // change can't silently break resolution; fall back to the derived name.
-  const recorded = (run.artifacts?.checkpoints || []).find((c) => c.step === step);
+  const recorded = (run.artifacts?.checkpoints || []).find((c) => checkpointStep(c) === step);
   const dirName = recorded?.path ? basename(recorded.path) : `step-${pad6(step)}`;
   const file = join(runDirFor(run.id), 'checkpoints', dirName, 'pytorch_lora_weights.safetensors');
   if (!existsSync(file)) {
@@ -171,16 +192,22 @@ export async function resolveCheckpointAdapterBuffer(run, step) {
  */
 export async function selectDeployableCheckpoint(run, finalAdapterPath, finalStep) {
   const samples = sampleByStep(run);
-  const withPreview = listRunCheckpoints(run).filter((c) => c.hasPreview);
+  const all = listRunCheckpoints(run);
+  const withPreview = all.filter((c) => c.hasPreview);
+  // The step to record as "deployed" is the newest recorded checkpoint (the
+  // one `finalAdapterPath` was extracted from), NOT the trainer's raw end-step
+  // counter — using a listed checkpoint's step keeps the picker's deployed flag
+  // accurate. Fall back to finalStep when no checkpoints were recorded.
+  const finalCkptStep = all.length ? all[all.length - 1].step : finalStep;
   // Health proxy for the final adapter: its own preview, or — since mflux
   // saves the final checkpoint a few steps PAST the last sampled step, so the
   // final usually has no preview of its own — the most recent preview.
   const latest = withPreview.length ? withPreview[withPreview.length - 1] : null;
-  const finalPreviewName = samples.get(finalStep) || (latest ? samples.get(latest.step) : null);
+  const finalPreviewName = samples.get(finalCkptStep) || (latest ? samples.get(latest.step) : null);
 
   const readFinal = async (reason = null) => ({
     buffer: await readFile(finalAdapterPath),
-    step: finalStep,
+    step: finalCkptStep,
     previewUrl: sampleUrl(run.id, finalPreviewName),
     autoSelected: false,
     reason,
@@ -194,7 +221,7 @@ export async function selectDeployableCheckpoint(run, finalAdapterPath, finalSte
 
   // Final diverged. Walk earlier checkpoints newest→oldest for a healthy one.
   const earlier = withPreview
-    .filter((c) => c.step < finalStep)
+    .filter((c) => c.step < finalCkptStep)
     .sort((a, b) => b.step - a.step);
   for (const cand of earlier) {
     const previewName = samples.get(cand.step);
@@ -212,5 +239,5 @@ export async function selectDeployableCheckpoint(run, finalAdapterPath, finalSte
   }
   // Every preview collapsed (or no earlier adapter recoverable) — keep final
   // so the run still registers a (flawed) LoRA the user can inspect/replace.
-  return readFinal(`all previews collapsed — kept final step ${finalStep}`);
+  return readFinal(`all previews collapsed — kept final step ${finalCkptStep}`);
 }

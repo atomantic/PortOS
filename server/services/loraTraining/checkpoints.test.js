@@ -118,6 +118,31 @@ describe('loraTraining/checkpoints', () => {
     expect(list[1].deployed).toBe(false);
   });
 
+  it('joins preview by the filename-derived step even when the recorded step drifted', async () => {
+    // mflux tags the CHECKPOINT line with the poll-time tqdm step, which can
+    // lag the save boundary — here the record says 252/502 but the zip names
+    // (and previews) are at 250/500. The join must use the filename step.
+    const run = buildRun({
+      artifacts: {
+        checkpoints: [
+          { step: 252, path: '0000250_checkpoint.zip', loss: 0.64 },
+          { step: 502, path: '0000500_checkpoint.zip', loss: 0.53 },
+        ],
+        samples: [
+          '0000250_preview_image_preview_1.png',
+          '0000500_preview_image_preview_1.png',
+        ],
+      },
+      output: { selectedCheckpointStep: 250, loraFilename: 'lora-x.safetensors' },
+    });
+    const list = listRunCheckpoints(run);
+    expect(list.map((c) => c.step)).toEqual([250, 500]); // canonical, not 252/502
+    expect(list.every((c) => c.hasPreview)).toBe(true);
+    expect(list[0].deployed).toBe(true); // selectedCheckpointStep 250 matches
+    // And the adapter resolves by that canonical step despite the drifted record.
+    expect((await resolveCheckpointAdapterBuffer(run, 250)).toString()).toBe(ADAPTER_250.toString());
+  });
+
   it('flags a black preview as collapsed and a noisy one as healthy', async () => {
     expect(await isPreviewCollapsed(join(runDir, 'samples', '0000500_preview_image_preview_1.png'))).toBe(true);
     expect(await isPreviewCollapsed(join(runDir, 'samples', '0000250_preview_image_preview_1.png'))).toBe(false);
@@ -143,9 +168,15 @@ describe('loraTraining/checkpoints', () => {
     expect(sel.reason).toMatch(/collapsed/);
   });
 
-  it('guard: keeps the final adapter when its preview is healthy', async () => {
-    // finalStep 250 has the noisy (healthy) preview → no override.
-    const sel = await selectDeployableCheckpoint(buildRun(), finalAdapterPath, 250);
+  it('guard: keeps the final adapter when its (latest checkpoint) preview is healthy', async () => {
+    // Latest checkpoint is 250 with the noisy (healthy) preview → no override.
+    const run = buildRun({
+      artifacts: {
+        checkpoints: [{ step: 250, path: '0000250_checkpoint.zip', loss: 0.64 }],
+        samples: ['0000250_preview_image_preview_1.png'],
+      },
+    });
+    const sel = await selectDeployableCheckpoint(run, finalAdapterPath, 250);
     expect(sel.autoSelected).toBe(false);
     expect(sel.step).toBe(250);
     expect(sel.buffer.toString()).toBe(ADAPTER_500.toString()); // returns the on-disk final adapter as-is
