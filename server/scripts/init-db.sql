@@ -849,3 +849,100 @@ CREATE TABLE IF NOT EXISTS lora_training_runs (
 );
 CREATE INDEX IF NOT EXISTS idx_lora_training_runs_status ON lora_training_runs (status);
 CREATE INDEX IF NOT EXISTS idx_lora_training_runs_character ON lora_training_runs (character_id);
+
+-- Deletion audit log (incident #1248-follow-up). Append-only forensic trail of
+-- every tombstone / un-tombstone / hard-delete of user-authored records, written
+-- by a DB trigger so it captures deletions from ANY source (app, a test suite's
+-- raw DELETE, a manual psql session). row_snapshot keeps the OLD row JSON so a
+-- wrongful delete is recoverable from the log alone. Local-only (not federated).
+-- Mirrors the record_audit block in server/lib/db.js (parity-locked by
+-- db.catalogDdlParity.test.js).
+CREATE TABLE IF NOT EXISTS record_audit (
+  id BIGSERIAL PRIMARY KEY,
+  table_name TEXT NOT NULL,
+  record_id TEXT,
+  record_name TEXT,
+  action VARCHAR(16) NOT NULL,
+  actor TEXT,
+  source_query TEXT,
+  application_name TEXT,
+  backend_pid INTEGER,
+  row_snapshot JSONB,
+  occurred_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_record_audit_record ON record_audit (table_name, record_id, occurred_at DESC);
+CREATE INDEX IF NOT EXISTS idx_record_audit_occurred ON record_audit (occurred_at DESC);
+CREATE INDEX IF NOT EXISTS idx_record_audit_action ON record_audit (action, occurred_at DESC);
+
+-- Generic audit trigger function — reads id/name/title/deleted/deleted_at out of
+-- to_jsonb(OLD/NEW) so it needs no per-table column knowledge. A row is "deleted"
+-- when `deleted` is true OR `deleted_at` is non-null. See server/lib/db.js for
+-- the authoritative copy + commentary.
+CREATE OR REPLACE FUNCTION record_audit_log()
+RETURNS TRIGGER AS $$
+DECLARE
+  oldj JSONB := to_jsonb(OLD);
+  newj JSONB;
+  was_deleted BOOLEAN;
+  now_deleted BOOLEAN;
+  v_action TEXT;
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    v_action := 'hard_delete';
+    INSERT INTO record_audit
+      (table_name, record_id, record_name, action, actor, source_query, application_name, backend_pid, row_snapshot)
+    VALUES
+      (TG_TABLE_NAME, oldj->>'id', COALESCE(oldj->>'name', oldj->>'title'), v_action,
+       current_setting('portos.actor', true), current_query(),
+       current_setting('application_name', true), pg_backend_pid(), oldj);
+    RETURN OLD;
+  END IF;
+
+  newj := to_jsonb(NEW);
+  was_deleted := COALESCE((oldj->>'deleted')::boolean, oldj->>'deleted_at' IS NOT NULL, false);
+  now_deleted := COALESCE((newj->>'deleted')::boolean, newj->>'deleted_at' IS NOT NULL, false);
+  IF now_deleted AND NOT was_deleted THEN
+    v_action := 'tombstone';
+  ELSIF was_deleted AND NOT now_deleted THEN
+    v_action := 'untombstone';
+  ELSE
+    RETURN NEW;
+  END IF;
+  INSERT INTO record_audit
+    (table_name, record_id, record_name, action, actor, source_query, application_name, backend_pid, row_snapshot)
+  VALUES
+    (TG_TABLE_NAME, newj->>'id', COALESCE(newj->>'name', newj->>'title'), v_action,
+     current_setting('portos.actor', true), current_query(),
+     current_setting('application_name', true), pg_backend_pid(), newj);
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Audit trigger on every user-authored-content table. AUDITED_RECORD_TABLES —
+-- keep in sync with the auditedTables list in server/lib/db.js.
+DROP TRIGGER IF EXISTS trg_universes_audit ON universes;
+CREATE TRIGGER trg_universes_audit AFTER UPDATE OR DELETE ON universes FOR EACH ROW EXECUTE FUNCTION record_audit_log();
+DROP TRIGGER IF EXISTS trg_universe_runs_audit ON universe_runs;
+CREATE TRIGGER trg_universe_runs_audit AFTER UPDATE OR DELETE ON universe_runs FOR EACH ROW EXECUTE FUNCTION record_audit_log();
+DROP TRIGGER IF EXISTS trg_pipeline_series_audit ON pipeline_series;
+CREATE TRIGGER trg_pipeline_series_audit AFTER UPDATE OR DELETE ON pipeline_series FOR EACH ROW EXECUTE FUNCTION record_audit_log();
+DROP TRIGGER IF EXISTS trg_pipeline_issues_audit ON pipeline_issues;
+CREATE TRIGGER trg_pipeline_issues_audit AFTER UPDATE OR DELETE ON pipeline_issues FOR EACH ROW EXECUTE FUNCTION record_audit_log();
+DROP TRIGGER IF EXISTS trg_story_builder_sessions_audit ON story_builder_sessions;
+CREATE TRIGGER trg_story_builder_sessions_audit AFTER UPDATE OR DELETE ON story_builder_sessions FOR EACH ROW EXECUTE FUNCTION record_audit_log();
+DROP TRIGGER IF EXISTS trg_writers_room_works_audit ON writers_room_works;
+CREATE TRIGGER trg_writers_room_works_audit AFTER UPDATE OR DELETE ON writers_room_works FOR EACH ROW EXECUTE FUNCTION record_audit_log();
+DROP TRIGGER IF EXISTS trg_writers_room_folders_audit ON writers_room_folders;
+CREATE TRIGGER trg_writers_room_folders_audit AFTER UPDATE OR DELETE ON writers_room_folders FOR EACH ROW EXECUTE FUNCTION record_audit_log();
+DROP TRIGGER IF EXISTS trg_writers_room_draft_versions_audit ON writers_room_draft_versions;
+CREATE TRIGGER trg_writers_room_draft_versions_audit AFTER UPDATE OR DELETE ON writers_room_draft_versions FOR EACH ROW EXECUTE FUNCTION record_audit_log();
+DROP TRIGGER IF EXISTS trg_catalog_ingredients_audit ON catalog_ingredients;
+CREATE TRIGGER trg_catalog_ingredients_audit AFTER UPDATE OR DELETE ON catalog_ingredients FOR EACH ROW EXECUTE FUNCTION record_audit_log();
+DROP TRIGGER IF EXISTS trg_catalog_scraps_audit ON catalog_scraps;
+CREATE TRIGGER trg_catalog_scraps_audit AFTER UPDATE OR DELETE ON catalog_scraps FOR EACH ROW EXECUTE FUNCTION record_audit_log();
+DROP TRIGGER IF EXISTS trg_catalog_user_types_audit ON catalog_user_types;
+CREATE TRIGGER trg_catalog_user_types_audit AFTER UPDATE OR DELETE ON catalog_user_types FOR EACH ROW EXECUTE FUNCTION record_audit_log();
+DROP TRIGGER IF EXISTS trg_creative_director_projects_audit ON creative_director_projects;
+CREATE TRIGGER trg_creative_director_projects_audit AFTER UPDATE OR DELETE ON creative_director_projects FOR EACH ROW EXECUTE FUNCTION record_audit_log();
+DROP TRIGGER IF EXISTS trg_lora_training_runs_audit ON lora_training_runs;
+CREATE TRIGGER trg_lora_training_runs_audit AFTER UPDATE OR DELETE ON lora_training_runs FOR EACH ROW EXECUTE FUNCTION record_audit_log();

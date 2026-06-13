@@ -30,12 +30,54 @@ pool.on('error', (err) => {
 });
 
 /**
+ * Is the configured database a DESIGNATED test database?
+ *
+ * The test runner must NEVER touch a real (production) Postgres — there is only
+ * ONE database per install (`PGDATABASE || 'portos'`), shared by every git
+ * worktree, so a DB-backed `*.db.test.js` suite that does `DELETE FROM universes`
+ * runs against the user's real authored content. (This is exactly how a CoS
+ * agent running the suite in its worktree wiped every universe/series on
+ * 2026-06-13.) A database is "safe for destructive tests" only when its name is
+ * explicitly a test database (ends in `_test`, or the canonical `portos_test`)
+ * or the operator sets `TEST_DB_OK=1` to opt a non-standard name in.
+ *
+ * Consumed by `checkHealth()` (skips DB suites on a non-test DB) and by the
+ * destructive-statement guard in `query()` (a hard backstop).
+ *
+ * @returns {boolean}
+ */
+export function isTestDatabase() {
+  if (process.env.TEST_DB_OK === '1') return true;
+  const db = process.env.PGDATABASE || 'portos';
+  return /_test$/.test(db) || db === 'portos_test';
+}
+
+// Only guard row deletion — not schema DDL (ensureSchema's CREATE/ALTER/DROP is
+// idempotent and not a data-loss risk). Skips leading line/block comments + space.
+const DESTRUCTIVE_SQL = /^\s*(?:--[^\n]*\n|\/\*[\s\S]*?\*\/|\s)*(DELETE\s+FROM|TRUNCATE)\b/i;
+
+/**
  * Execute a query against the connection pool.
  * @param {string} text - SQL query text with $1, $2, etc. placeholders
  * @param {Array} params - Parameter values
  * @returns {Promise<pg.QueryResult>}
  */
 export async function query(text, params) {
+  // Hard backstop: under the test runner, refuse to delete rows from a non-test
+  // database even if a suite somehow reaches query() without gating on
+  // checkHealth() first (e.g. a new test author calls query('DELETE …')
+  // directly). Throwing fails loudly instead of silently destroying real data.
+  if (
+    process.env.NODE_ENV === 'test' &&
+    !isTestDatabase() &&
+    typeof text === 'string' &&
+    DESTRUCTIVE_SQL.test(text)
+  ) {
+    throw new Error(
+      `🛑 Refusing destructive query against non-test database '${process.env.PGDATABASE || 'portos'}' under NODE_ENV=test. ` +
+        `Point PGDATABASE at a *_test database (e.g. portos_test) or set TEST_DB_OK=1. Query: ${text.slice(0, 80)}`,
+    );
+  }
   return pool.query(text, params);
 }
 
@@ -84,6 +126,20 @@ export async function withTransaction(fn) {
  * @returns {Promise<{connected: boolean, hasSchema: boolean, error?: string}>}
  */
 export async function checkHealth() {
+  // Test-runner safety gate. Under NODE_ENV=test the only database we permit is
+  // a designated test database (see isTestDatabase). Reporting "disconnected"
+  // here makes every DB-backed `*.db.test.js` suite skip via its existing
+  // `if (!health.connected)` branch — instead of running DELETE FROM against the
+  // developer's real universes/series/writing. The mocked checkHealth in
+  // memoryBackend.test.js / backup.test.js is unaffected (it replaces this fn).
+  if (process.env.NODE_ENV === 'test' && !isTestDatabase()) {
+    return {
+      connected: false,
+      hasSchema: false,
+      hasCatalogSchema: false,
+      error: `test runner blocked from non-test database '${process.env.PGDATABASE || 'portos'}' — point PGDATABASE at a *_test database (e.g. portos_test) or set TEST_DB_OK=1`,
+    };
+  }
   try {
     const result = await pool.query(`
       SELECT
@@ -852,7 +908,100 @@ async function ensureSchemaImpl() {
     )`,
     `CREATE INDEX IF NOT EXISTS idx_lora_training_runs_status ON lora_training_runs (status)`,
     `CREATE INDEX IF NOT EXISTS idx_lora_training_runs_character ON lora_training_runs (character_id)`,
+
+    // ─── Deletion audit log (incident #1248-follow-up) ──────────────────────
+    // Append-only forensic trail of EVERY tombstone (soft-delete), un-tombstone
+    // (recovery), and hard-delete of user-authored records — written by a DB
+    // trigger so it captures deletions from ANY source: the app, a test suite
+    // doing raw `DELETE FROM`, or a manual `psql` session. (On 2026-06-13 a CoS
+    // agent's test run wiped every universe/series with no trace of who/when;
+    // this table closes that gap.) `row_snapshot` keeps the OLD row JSON so a
+    // wrongful delete is recoverable from the log alone. Local-only, never
+    // federated (no sync_sequence) — each install audits its own mutations.
+    // Mirrors the record_audit block in init-db.sql (parity-locked by
+    // db.catalogDdlParity.test.js).
+    `CREATE TABLE IF NOT EXISTS record_audit (
+      id BIGSERIAL PRIMARY KEY,
+      table_name TEXT NOT NULL,
+      record_id TEXT,
+      record_name TEXT,
+      action VARCHAR(16) NOT NULL,
+      actor TEXT,
+      source_query TEXT,
+      application_name TEXT,
+      backend_pid INTEGER,
+      row_snapshot JSONB,
+      occurred_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_record_audit_record ON record_audit (table_name, record_id, occurred_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_record_audit_occurred ON record_audit (occurred_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_record_audit_action ON record_audit (action, occurred_at DESC)`,
+
+    // Generic audit trigger. Works on any table via to_jsonb(OLD/NEW) so it needs
+    // no per-table column knowledge: `id`/`name`/`title`/`deleted`/`deleted_at`
+    // are read out of the row JSON (absent keys → NULL). A row is "deleted" when
+    // its `deleted` boolean is true OR its `deleted_at` is non-null (covers both
+    // the bool-trio tables and catalog_user_types' deleted_at-only shape).
+    // `actor` reads the optional `portos.actor` GUC the app MAY set per session;
+    // `source_query` captures current_query() so even an un-attributed raw DELETE
+    // is traceable. AFTER trigger: only committed-path rows are logged.
+    `CREATE OR REPLACE FUNCTION record_audit_log()
+     RETURNS TRIGGER AS $$
+     DECLARE
+       oldj JSONB := to_jsonb(OLD);
+       newj JSONB;
+       was_deleted BOOLEAN;
+       now_deleted BOOLEAN;
+       v_action TEXT;
+     BEGIN
+       IF TG_OP = 'DELETE' THEN
+         v_action := 'hard_delete';
+         INSERT INTO record_audit
+           (table_name, record_id, record_name, action, actor, source_query, application_name, backend_pid, row_snapshot)
+         VALUES
+           (TG_TABLE_NAME, oldj->>'id', COALESCE(oldj->>'name', oldj->>'title'), v_action,
+            current_setting('portos.actor', true), current_query(),
+            current_setting('application_name', true), pg_backend_pid(), oldj);
+         RETURN OLD;
+       END IF;
+
+       newj := to_jsonb(NEW);
+       was_deleted := COALESCE((oldj->>'deleted')::boolean, oldj->>'deleted_at' IS NOT NULL, false);
+       now_deleted := COALESCE((newj->>'deleted')::boolean, newj->>'deleted_at' IS NOT NULL, false);
+       IF now_deleted AND NOT was_deleted THEN
+         v_action := 'tombstone';
+       ELSIF was_deleted AND NOT now_deleted THEN
+         v_action := 'untombstone';
+       ELSE
+         RETURN NEW;
+       END IF;
+       INSERT INTO record_audit
+         (table_name, record_id, record_name, action, actor, source_query, application_name, backend_pid, row_snapshot)
+       VALUES
+         (TG_TABLE_NAME, newj->>'id', COALESCE(newj->>'name', newj->>'title'), v_action,
+          current_setting('portos.actor', true), current_query(),
+          current_setting('application_name', true), pg_backend_pid(), newj);
+       RETURN NEW;
+     END;
+     $$ LANGUAGE plpgsql`,
   ];
+
+  // Attach the audit trigger to every user-authored-content table. Adding a
+  // table here is all it takes to audit its deletions. (Keep in sync with the
+  // AUDITED_RECORD_TABLES list in init-db.sql.)
+  const auditedTables = [
+    'universes', 'universe_runs', 'pipeline_series', 'pipeline_issues',
+    'story_builder_sessions', 'writers_room_works', 'writers_room_folders',
+    'writers_room_draft_versions', 'catalog_ingredients', 'catalog_scraps',
+    'catalog_user_types', 'creative_director_projects', 'lora_training_runs',
+  ];
+  for (const t of auditedTables) {
+    catalogDDL.push(`DROP TRIGGER IF EXISTS trg_${t}_audit ON ${t}`);
+    catalogDDL.push(
+      `CREATE TRIGGER trg_${t}_audit AFTER UPDATE OR DELETE ON ${t} FOR EACH ROW EXECUTE FUNCTION record_audit_log()`,
+    );
+  }
+
   for (const sql of catalogDDL) {
     await pool.query(sql);
   }

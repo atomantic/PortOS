@@ -144,8 +144,13 @@ describe('catalog DDL parity (init-db.sql ↔ db.js ensureSchema)', () => {
   });
 
   it('every trg_catalog_* trigger appears in both files', () => {
-    const sqlTrgs = extractTriggerNames(INIT_SQL);
-    const jsTrgs = extractTriggerNames(DB_JS);
+    // Exclude the generic `*_audit` triggers (record_audit): init-db.sql spells
+    // them literally while db.js builds them from the auditedTables array via a
+    // `trg_${t}_audit` template literal, so a literal-name extractor only sees
+    // them on the init-db.sql side. They have their own parity assertion below.
+    const noAudit = (s) => new Set([...s].filter((t) => !t.endsWith('_audit')));
+    const sqlTrgs = noAudit(extractTriggerNames(INIT_SQL));
+    const jsTrgs = noAudit(extractTriggerNames(DB_JS));
     expect([...sqlTrgs].sort()).toEqual([...jsTrgs].sort());
     expect(sqlTrgs.size).toBeGreaterThan(0);
   });
@@ -307,6 +312,47 @@ describe('catalog DDL parity (init-db.sql ↔ db.js ensureSchema)', () => {
     expect(jsBody, 'db.js missing CREATE TABLE schema_migrations').toBeTruthy();
     expect([...new Set(extractColumnNames(sqlBody))].sort())
       .toEqual([...new Set(extractColumnNames(jsBody))].sort());
+  });
+
+  // Deletion audit log (incident #1248-follow-up) — the record_audit table, the
+  // record_audit_log() trigger function, and the per-content-table `_audit`
+  // triggers all live in BOTH DDL sources. A one-sided edit (e.g. auditing a new
+  // table only in db.js) would leave fresh installs un-audited, so lock all three.
+  it('record_audit table + trigger function + audit triggers match in both files', () => {
+    // table columns
+    const sqlBody = extractCreateTable(INIT_SQL, 'record_audit');
+    const jsBody = extractCreateTable(DB_JS, 'record_audit');
+    expect(sqlBody, 'init-db.sql missing CREATE TABLE record_audit').toBeTruthy();
+    expect(jsBody, 'db.js missing CREATE TABLE record_audit').toBeTruthy();
+    expect([...new Set(extractColumnNames(sqlBody))].sort())
+      .toEqual([...new Set(extractColumnNames(jsBody))].sort());
+
+    // generic trigger function present in both
+    expect(/CREATE OR REPLACE FUNCTION\s+record_audit_log\b/i.test(INIT_SQL)).toBe(true);
+    expect(/CREATE OR REPLACE FUNCTION\s+record_audit_log\b/i.test(DB_JS)).toBe(true);
+
+    // The set of audited tables is identical across both. init-db.sql spells out
+    // a `trg_<table>_audit` per table; db.js builds them from the `auditedTables`
+    // array via a `trg_${t}_audit` template literal, so we parse that array on the
+    // js side rather than matching literal trigger names.
+    const sqlAuditTables = (() => {
+      const out = new Set();
+      const re = /CREATE TRIGGER\s+trg_([a-z0-9_]+)_audit\b/gi;
+      let m;
+      while ((m = re.exec(INIT_SQL)) !== null) out.add(m[1]);
+      return out;
+    })();
+    const jsAuditTables = (() => {
+      const m = /const auditedTables\s*=\s*\[([\s\S]*?)\]/i.exec(DB_JS);
+      expect(m, 'db.js missing the auditedTables array').toBeTruthy();
+      const out = new Set();
+      const re = /'([a-z0-9_]+)'/gi;
+      let mm;
+      while ((mm = re.exec(m[1])) !== null) out.add(mm[1]);
+      return out;
+    })();
+    expect(sqlAuditTables.size, 'no _audit triggers found in init-db.sql — DDL broke').toBeGreaterThan(8);
+    expect([...sqlAuditTables].sort()).toEqual([...jsAuditTables].sort());
   });
 
   // Broad drift guard for the whole upgrade-vs-fresh-install gap (beyond the
