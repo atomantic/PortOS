@@ -552,9 +552,12 @@ function normalizeModels(backend, models) {
       id: m.id, name: m.name, size: m.size ?? null,
       params: m.params || null, quantization: m.quantization || null, family: m.family || null,
       contextLength: m.contextLength ?? null,
-      // Ollama's /api/tags doesn't tag vision capability, so this is the id
-      // heuristic only (no explicit metadata to prefer).
-      vision: isVisionModel(m.id)
+      // Ollama's /api/tags doesn't tag vision capability, but /api/show does —
+      // when the model has been enriched with a `capabilities` array (status
+      // path, or the listVisionModels enrichment below) prefer it; otherwise
+      // fall back to the id heuristic. Passing the object lets a vision-capable
+      // MoE like `qwen3.6:35b` (no `vl`/`vision` token in its id) resolve true.
+      vision: isVisionModel(Array.isArray(m.capabilities) ? { id: m.id, capabilities: m.capabilities } : m.id)
     }))
   }
   return models.map((m) => ({
@@ -646,10 +649,20 @@ export async function listVisionModels() {
     listModels('ollama').catch(() => []),
     listModels('lmstudio').catch(() => [])
   ])
+  // Ollama's /api/tags carries no vision flag, so the normalized `vision` above
+  // is id-regex only — it misses vision-capable models whose id has no
+  // `vl`/`vision` token (e.g. the `qwen3.6:35b` MoE). For each not already
+  // matched, consult /api/show capabilities (cached per model) so they surface
+  // in the picker. Models the id heuristic already caught skip the round-trip.
+  const ollamaVision = await Promise.all(ollama.map(async (m) => {
+    if (m.vision) return m
+    const capabilities = await ollamaManager.getModelCapabilities(m.id).catch(() => [])
+    return { ...m, vision: isVisionModel({ id: m.id, capabilities }) }
+  }))
   const tag = (backend, models) => models
     .filter((m) => m.vision)
     .map((m) => ({ providerId: PROVIDER_ID[backend], backend, id: m.id, name: m.name || m.id, vision: true }))
-  return [...tag('ollama', ollama), ...tag('lmstudio', lmstudio)]
+  return [...tag('ollama', ollamaVision), ...tag('lmstudio', lmstudio)]
 }
 
 // ---- install / delete --------------------------------------------------------

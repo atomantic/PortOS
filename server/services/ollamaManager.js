@@ -421,48 +421,66 @@ async function getVersion() {
   return data?.version || null
 }
 
-// A model's native context length is immutable for a given build, but Ollama's
-// /api/tags listing doesn't include it — only /api/show does (one POST per
-// model). Cache name → contextLength so enriching the model list on every
-// status poll doesn't re-hit /api/show. Busted alongside installedModels on
-// delete (a deleted name shouldn't linger), but a re-pull of the same name
-// yields the same value so we don't bust on pull.
-const modelContextCache = new Map() // name -> number|null
+// A model's native context length and capability set are immutable for a given
+// build, but Ollama's /api/tags listing carries neither — only /api/show does
+// (one POST per model). Cache name → { contextLength, capabilities } so
+// enriching the model list on every status poll doesn't re-hit /api/show.
+// Busted alongside installedModels on delete (a deleted name shouldn't linger),
+// but a re-pull of the same name yields the same details so we don't bust on pull.
+const modelDetailsCache = new Map() // name -> { contextLength: number|null, capabilities: string[] }
 
 /**
- * Fetch a model's native maximum context length (in tokens) via /api/show.
- * Ollama nests it under `model_info["<arch>.context_length"]`; the arch prefix
- * varies by family so we scan for the suffix. Cached; returns null when the
- * daemon doesn't report it.
+ * Fetch a model's native details (max context length + capability set) via
+ * /api/show. Ollama nests context under `model_info["<arch>.context_length"]`
+ * (the arch prefix varies by family so we scan for the suffix) and reports a
+ * top-level `capabilities` array (`["completion","vision","tools",…]`). Cached;
+ * returns nulls/empty when the daemon doesn't report a field.
  * @param {string} name
- * @returns {Promise<number|null>}
+ * @returns {Promise<{ contextLength: number|null, capabilities: string[] }>}
  */
-async function getModelContextLength(name) {
-  if (!name) return null
-  if (modelContextCache.has(name)) return modelContextCache.get(name)
+async function getModelDetails(name) {
+  const miss = { contextLength: null, capabilities: [] }
+  if (!name) return miss
+  if (modelDetailsCache.has(name)) return modelDetailsCache.get(name)
   // /api/show documents the id under `model`; current Ollama also accepts the
   // legacy `name`, so send both (extra fields are ignored) for cross-version safety.
   const data = await ollamaRequest('/api/show', { method: 'POST', body: JSON.stringify({ model: name, name }) }).catch(() => null)
-  // A transient /api/show failure must NOT be cached as a permanent null —
-  // that would pin the model with no context label until restart. Only cache
-  // when the daemon actually answered; a present-but-no-context_length response
-  // legitimately caches null ("daemon doesn't report it"). Mirrors the
-  // null-vs-empty sentinel rule used by the installed-model caches.
-  if (!data) return null
-  let ctx = null
+  // A transient /api/show failure must NOT be cached — that would pin the model
+  // with no context label / wrong vision flag until restart. Only cache when the
+  // daemon actually answered; a present-but-missing field legitimately caches
+  // its empty default. Mirrors the null-vs-empty sentinel rule used by the
+  // installed-model caches.
+  if (!data) return miss
+  let contextLength = null
   for (const [key, value] of Object.entries(data.model_info || {})) {
-    if (key.endsWith('.context_length') && Number.isFinite(value)) { ctx = value; break }
+    if (key.endsWith('.context_length') && Number.isFinite(value)) { contextLength = value; break }
   }
-  modelContextCache.set(name, ctx)
-  return ctx
+  const details = {
+    contextLength,
+    capabilities: Array.isArray(data.capabilities) ? data.capabilities : []
+  }
+  modelDetailsCache.set(name, details)
+  return details
 }
 
-/** Add `contextLength` to each model (parallel, cached). */
-async function enrichWithContextLength(models) {
-  return Promise.all(models.map(async (m) => ({
-    ...m,
-    contextLength: await getModelContextLength(m.id || m.name)
-  })))
+/**
+ * A model's capability set (`["completion","vision","tools",…]`) from /api/show.
+ * Lets vision detection see capabilities that the /api/tags id can't reveal —
+ * e.g. a vision-capable MoE like `qwen3.6:35b` whose id has no `vl`/`vision`
+ * token. Cached; returns `[]` when the daemon doesn't report capabilities.
+ * @param {string} name
+ * @returns {Promise<string[]>}
+ */
+async function getModelCapabilities(name) {
+  return (await getModelDetails(name)).capabilities
+}
+
+/** Add `contextLength` + `capabilities` to each model (parallel, cached). */
+async function enrichWithModelDetails(models) {
+  return Promise.all(models.map(async (m) => {
+    const { contextLength, capabilities } = await getModelDetails(m.id || m.name)
+    return { ...m, contextLength, capabilities }
+  }))
 }
 
 /**
@@ -776,7 +794,7 @@ async function deleteModel(modelId) {
     return { success: false, error: result._err, modelId }
   }
   installedModels = null
-  modelContextCache.delete(modelId)
+  modelDetailsCache.delete(modelId)
   console.log(`🗑️ Ollama deleted: ${modelId}`)
   return { success: true, modelId }
 }
@@ -894,9 +912,10 @@ function getBaseUrl() {
 async function getStatus(forceRefresh = false) {
   const available = await checkOllamaAvailable(forceRefresh)
   const baseModels = available ? await getInstalledModels(true) : []
-  // Enrich with native context length (cached /api/show per model) so the
-  // model cards + selector dropdowns can show each model's window.
-  const models = available ? await enrichWithContextLength(baseModels) : baseModels
+  // Enrich with native context length + capabilities (cached /api/show per
+  // model) so the model cards + selector dropdowns can show each model's window
+  // and so vision-capable models are detected from their reported capabilities.
+  const models = available ? await enrichWithModelDetails(baseModels) : baseModels
   const service = await getServiceStatus().catch(() => ({ supported: false, manager: null, running: false, runAtStartup: false, status: null }))
   return {
     available,
@@ -912,6 +931,7 @@ async function getStatus(forceRefresh = false) {
 
 export {
   getInstalledModels,
+  getModelCapabilities,
   getLoadedModels,
   unloadModel,
   pullModel,
