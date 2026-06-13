@@ -604,7 +604,10 @@ export default function UniverseCanonSection({
     const kindKey = kind.key;
     const list = getKindList(universe, kindKey);
     // Dedup by normalized name so a manual add of an existing entry is a clear
-    // no-op (the server's sanitizeBibleList would otherwise silently merge it).
+    // no-op. This client guard is the ONLY name-dedup on the wholesale-PATCH
+    // path: updateUniverse re-runs sanitizeBibleList, which sanitizes per-entry
+    // but does not merge by name (only the extract path's mergeExtractedBible
+    // dedups), so without this two same-named entries would both persist.
     if (list.some((e) => String(e?.name || '').trim().toLowerCase() === trimmedName.toLowerCase())) {
       toast.error(`${trimmedName} is already in this universe`);
       return false;
