@@ -148,6 +148,10 @@ export const listLoras = async () => {
         installedAt: sidecar?.installedAt || s.birthtime?.toISOString?.() || null,
         // sidecar fields surfaced for the picker / manager UI:
         civitai: sidecar?.civitai || null,
+        // HF-installed video LoRAs carry this instead of `civitai` — the
+        // manager matches curated video suggestions to installs by repo and
+        // links the card out to HuggingFace.
+        huggingface: sidecar?.huggingface || null,
         runnerFamily,
         fluxVariant,
         loraCompatKey,

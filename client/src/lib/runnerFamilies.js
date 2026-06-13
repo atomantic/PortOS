@@ -19,6 +19,13 @@ export const VIDEO_LORA_FAMILIES = Object.freeze({
   LTX_VIDEO: 'ltx-video',
 });
 
+// Predicate: is this LoRA family a video family (vs. an image RUNNER_FAMILIES
+// one)? Backs the Image/Video filter on /media/loras. Anything not in
+// VIDEO_LORA_FAMILIES (including null/legacy) is treated as image. Mirror of
+// server/lib/runners.js.
+const VIDEO_LORA_FAMILY_SET = new Set(Object.values(VIDEO_LORA_FAMILIES));
+export const isVideoLoraFamily = (family) => VIDEO_LORA_FAMILY_SET.has(family);
+
 // Map a video model (carries `runtime`, not `runner`) to its LoRA family. Only
 // the dgrauet `ltx2` runtime fuses arbitrary user LoRAs today; everything else
 // returns null so the VideoGen picker hides itself. Mirror of

@@ -21,6 +21,7 @@ import {
   patchLoraSidecar,
 } from '../services/loras.js';
 import { getSuggestions, searchLorasInFamily } from '../services/civitaiSuggestions.js';
+import { getVideoSuggestions } from '../services/videoLoraSuggestions.js';
 import { findLorasByCharacter } from '../services/characterLoraResolver.js';
 import { getSettings, updateSettingsWith } from '../services/settings.js';
 import { RUNNER_FAMILIES, VIDEO_LORA_FAMILIES } from '../lib/runners.js';
@@ -31,14 +32,19 @@ router.get('/', asyncHandler(async (_req, res) => {
   res.json(await listLoras());
 }));
 
-// Civitai LoRA suggestions per runner family (mflux / flux2 / z-image / ernie).
-// Cached server-side for 1h. `?force=1` busts the cache for a manual refresh.
-// Default 4 cards per family — that's enough to show breadth without
-// overwhelming the panel; users can paste a URL for anything specific.
+// LoRA suggestions — Civitai image LoRAs per runner family (mflux / flux2 /
+// z-image / ernie …) PLUS a curated list of HuggingFace video LoRAs. Cached
+// server-side for 1h. `?force=1` busts both caches for a manual refresh.
+// Default 4 cards per family — enough to show breadth without overwhelming the
+// panel; users can paste a URL for anything specific.
 router.get('/suggestions', asyncHandler(async (req, res) => {
   const force = req.query.force === '1' || req.query.force === 'true';
   const limit = Math.max(1, Math.min(24, Number(req.query.limit) || 4));
-  res.json(await getSuggestions({ force, limit }));
+  const [civitai, video] = await Promise.all([
+    getSuggestions({ force, limit }),
+    getVideoSuggestions({ force }),
+  ]);
+  res.json({ ...civitai, video });
 }));
 
 // Live keyword search + cursor pagination within one runner family. Backs the

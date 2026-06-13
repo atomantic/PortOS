@@ -23,6 +23,11 @@ vi.mock('../services/civitaiSuggestions.js', () => ({
     _echo: { cursor, limit },
   })),
 }));
+vi.mock('../services/videoLoraSuggestions.js', () => ({
+  getVideoSuggestions: vi.fn(async () => ([
+    { source: 'huggingface', repo: 'fal/ltx2.3-audio-reactive-lora', name: 'LTX', runnerFamily: 'ltx-video' },
+  ])),
+}));
 vi.mock('../services/settings.js', () => ({
   getSettings: vi.fn(async () => ({})),
   updateSettingsWith: vi.fn(async () => ({})),
@@ -83,5 +88,19 @@ describe('GET /api/loras/search', () => {
     const res = await request(makeApp())
       .get('/api/loras/search?runner=qwen&limit=999');
     expect(res.status).toBe(400);
+  });
+});
+
+describe('GET /api/loras/suggestions', () => {
+  it('merges the curated video LoRAs into the Civitai suggestion payload', async () => {
+    const res = await request(makeApp()).get('/api/loras/suggestions');
+    expect(res.status).toBe(200);
+    // Civitai shape preserved …
+    expect(res.body).toHaveProperty('curated');
+    expect(res.body).toHaveProperty('runners');
+    // … plus the merged video section.
+    expect(Array.isArray(res.body.video)).toBe(true);
+    expect(res.body.video[0].runnerFamily).toBe('ltx-video');
+    expect(res.body.video[0].repo).toBe('fal/ltx2.3-audio-reactive-lora');
   });
 });

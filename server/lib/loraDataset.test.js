@@ -3,9 +3,11 @@ import {
   buildVariationMatrix,
   captionHasTriggerWord,
   computeDatasetReadiness,
+  datasetQualityTier,
   deriveTriggerWord,
   isValidTriggerWord,
   MIN_TRAINING_IMAGES,
+  RECOMMENDED_TRAINING_IMAGES,
   prefixCaption,
   sanitizeDatasetImage,
   sanitizeLoraDataset,
@@ -188,6 +190,39 @@ describe('computeDatasetReadiness', () => {
     const images = Array.from({ length: MIN_TRAINING_IMAGES }, (_, i) => img({ id: `i${i}` }));
     expect(computeDatasetReadiness({ triggerWord: 'kessa', images }).trainable).toBe(true);
     expect(computeDatasetReadiness({ triggerWord: '', images }).trainable).toBe(false);
+  });
+
+  it('reports the recommended target and an advisory quality tier', () => {
+    const mk = (n) => computeDatasetReadiness({
+      triggerWord: 'kessa',
+      images: Array.from({ length: n }, (_, i) => img({ id: `i${i}` })),
+    });
+    expect(mk(MIN_TRAINING_IMAGES - 1)).toMatchObject({ quality: 'insufficient', trainable: false });
+    // Trainable but below the recommended target → 'minimum' (still trainable).
+    expect(mk(MIN_TRAINING_IMAGES)).toMatchObject({
+      quality: 'minimum', trainable: true, recommended: RECOMMENDED_TRAINING_IMAGES,
+    });
+    expect(mk(RECOMMENDED_TRAINING_IMAGES)).toMatchObject({ quality: 'good', trainable: true });
+  });
+
+  it('reports insufficient quality when there is no trigger word, even with plenty of images', () => {
+    // Without a trigger word captionHasTriggerWord counts every caption, so
+    // captioned can clear the recommended target while the dataset is NOT
+    // trainable. quality must stay 'insufficient' so the UI never turns green
+    // "Ready to train" while the train gate rejects the run.
+    const images = Array.from({ length: RECOMMENDED_TRAINING_IMAGES + 5 }, (_, i) => img({ id: `i${i}` }));
+    const out = computeDatasetReadiness({ triggerWord: '', images });
+    expect(out.captioned).toBeGreaterThanOrEqual(RECOMMENDED_TRAINING_IMAGES);
+    expect(out).toMatchObject({ trainable: false, quality: 'insufficient' });
+  });
+
+  it('datasetQualityTier brackets on the min and recommended thresholds', () => {
+    expect(datasetQualityTier(0)).toBe('insufficient');
+    expect(datasetQualityTier(MIN_TRAINING_IMAGES - 1)).toBe('insufficient');
+    expect(datasetQualityTier(MIN_TRAINING_IMAGES)).toBe('minimum');
+    expect(datasetQualityTier(RECOMMENDED_TRAINING_IMAGES - 1)).toBe('minimum');
+    expect(datasetQualityTier(RECOMMENDED_TRAINING_IMAGES)).toBe('good');
+    expect(datasetQualityTier(RECOMMENDED_TRAINING_IMAGES + 50)).toBe('good');
   });
 
   it('matches trigger word case-insensitively', () => {

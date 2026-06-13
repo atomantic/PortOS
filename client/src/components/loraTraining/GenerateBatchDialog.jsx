@@ -10,6 +10,15 @@ import toast from '../ui/Toast';
 import Modal from '../ui/Modal';
 import { generateLoraDatasetImages } from '../../services/api';
 
+// Advisory dataset-quality targets, mirrored from server/lib/loraDataset.js
+// (RECOMMENDED_TRAINING_IMAGES / TRAINING_IMAGE_SWEET_SPOT_MAX). Kept local
+// so the batch default + sweet-spot copy share one source of truth with the
+// readiness coaching on LoraDatasetDetail. MAX_BATCH_IMAGES is this dialog's
+// own slider cap (matches server buildVariationMatrix's 40-tuple clamp).
+const RECOMMENDED_TRAINING_IMAGES = 20;
+const TRAINING_IMAGE_SWEET_SPOT_MAX = 30;
+const MAX_BATCH_IMAGES = 40;
+
 const ChipToggleList = ({ idPrefix, label, options, selected, onToggle }) => (
   <div>
     <span className="block text-sm text-gray-400 mb-1">{label}</span>
@@ -34,7 +43,10 @@ const ChipToggleList = ({ idPrefix, label, options, selected, onToggle }) => (
 );
 
 export default function GenerateBatchDialog({ dataset, expressionOptions = [], outfitOptions = [], onClose, onStarted }) {
-  const [count, setCount] = useState(12);
+  // Default to the recommended quality target rather than the bare minimum so
+  // a one-click batch lands a strong dataset. See the tips block in
+  // LoraDatasetDetail for the rationale (variety > volume; sweet spot range).
+  const [count, setCount] = useState(RECOMMENDED_TRAINING_IMAGES);
   const [expressions, setExpressions] = useState(expressionOptions);
   const [outfits, setOutfits] = useState(outfitOptions);
   const [submitting, setSubmitting] = useState(false);
@@ -79,11 +91,15 @@ export default function GenerateBatchDialog({ dataset, expressionOptions = [], o
             id="lt-gen-count"
             type="range"
             min={1}
-            max={40}
+            max={MAX_BATCH_IMAGES}
             value={count}
             onChange={(e) => setCount(Number(e.target.value))}
             className="w-full"
           />
+          <p className="text-xs text-gray-500 mt-1">
+            Sweet spot ~{RECOMMENDED_TRAINING_IMAGES}–{TRAINING_IMAGE_SWEET_SPOT_MAX}. Fewer than 10 won&apos;t train;
+            past ~{MAX_BATCH_IMAGES} mostly adds time and overfitting risk.
+          </p>
         </div>
         {expressionOptions.length > 0 && (
           <ChipToggleList

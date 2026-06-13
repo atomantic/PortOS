@@ -18,6 +18,14 @@ export const LORA_DATASET_SCHEMA_VERSION = 1;
 // ~10 images a character LoRA badly overfits the few poses it has seen.
 export const MIN_TRAINING_IMAGES = 10;
 
+// Quality target a character LoRA wants to hit for a reliable likeness across
+// poses/framing. 10 is *trainable* but thin; ~20–30 varied shots is the sweet
+// spot. Past ~50 you mostly add training time and overfitting risk (near-
+// duplicate frames teach the net to memorize, not generalize), so the UI
+// nudges toward the target rather than "more is always better".
+export const RECOMMENDED_TRAINING_IMAGES = 20;
+export const TRAINING_IMAGE_SWEET_SPOT_MAX = 30;
+
 export const DATASET_IMAGE_SOURCES = Object.freeze(['generated', 'upload', 'refsheet-slice', 'gallery']);
 export const DATASET_IMAGE_STATUSES = Object.freeze(['rendering', 'ready', 'failed']);
 export const DATASET_STATUSES = Object.freeze(['draft', 'training', 'trained']);
@@ -225,21 +233,46 @@ export function captionHasTriggerWord(caption, triggerWord) {
 }
 
 /**
+ * Bucket a captioned-image count into a quality tier. Pure — shared by the
+ * server readiness helper and mirrored client-side so the UI advisory and the
+ * authoritative gate agree on wording:
+ *   'insufficient' — below the hard minimum, not trainable
+ *   'minimum'      — trainable but thin; more variety recommended
+ *   'good'         — at/above the recommended quality target
+ */
+export function datasetQualityTier(captioned) {
+  if (captioned < MIN_TRAINING_IMAGES) return 'insufficient';
+  if (captioned < RECOMMENDED_TRAINING_IMAGES) return 'minimum';
+  return 'good';
+}
+
+/**
  * Compute dataset readiness for training. Pure — callers pass the sanitized
  * record. `trainable` requires a trigger word plus MIN_TRAINING_IMAGES
  * images that are status 'ready' AND carry a caption with the trigger token.
+ * `recommended`/`quality` are advisory only — they nudge toward a stronger
+ * dataset without blocking a thin-but-valid run.
  */
 export function computeDatasetReadiness(dataset) {
   const images = Array.isArray(dataset?.images) ? dataset.images : [];
   const triggerWord = trim(dataset?.triggerWord);
   const readyImages = images.filter((img) => img.status === 'ready');
   const captioned = readyImages.filter((img) => captionHasTriggerWord(img.caption, triggerWord));
+  const trainable = !!triggerWord && captioned.length >= MIN_TRAINING_IMAGES;
   return {
     total: images.length,
     ready: readyImages.length,
     captioned: captioned.length,
     rendering: images.filter((img) => img.status === 'rendering').length,
     required: MIN_TRAINING_IMAGES,
-    trainable: !!triggerWord && captioned.length >= MIN_TRAINING_IMAGES,
+    recommended: RECOMMENDED_TRAINING_IMAGES,
+    trainable,
+    // Gate the tier on trainability, not the raw captioned count: with no
+    // trigger word captionHasTriggerWord counts every caption, so a record
+    // with enough images but a missing/empty trigger would otherwise report
+    // 'good' while trainable is false — and the UI would turn green "Ready to
+    // train" while the train gate rejects the run. 'minimum'/'good' therefore
+    // imply trainable by construction.
+    quality: trainable ? datasetQualityTier(captioned.length) : 'insufficient',
   };
 }
