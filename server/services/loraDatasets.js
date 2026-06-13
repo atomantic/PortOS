@@ -108,11 +108,14 @@ export async function getDataset(id) {
 }
 
 /**
- * Find-or-create the dataset for one universe character. Validates the
- * character exists in the universe and snapshots its identity (entryId +
- * catalog ingredientId + name) into the record. Returns `{ dataset, created }`.
+ * Resolve a universe character and the identity snapshot a dataset stores for
+ * it. Validates the character exists in the universe (404 otherwise) and is the
+ * single source of truth for the snapshot shape — both createDataset and
+ * patchDataset's reassignment go through here so the stored `character` fields
+ * can't drift between the two write paths. Returns `{ character, snapshot }`
+ * (the live canon entry plus the persisted shape).
  */
-export async function createDataset({ universeId, entryId, triggerWord = null }) {
+async function resolveCharacterSnapshot(universeId, entryId) {
   const universe = await getUniverse(universeId);
   const characters = Array.isArray(universe.characters) ? universe.characters : [];
   const character = characters.find((c) => c.id === entryId);
@@ -121,6 +124,24 @@ export async function createDataset({ universeId, entryId, triggerWord = null })
       status: 404, code: 'UNIVERSE_CANON_NOT_FOUND',
     });
   }
+  return {
+    character,
+    snapshot: {
+      entryId,
+      ingredientId: character.ingredientId || null,
+      universeId,
+      name: character.name,
+    },
+  };
+}
+
+/**
+ * Find-or-create the dataset for one universe character. Validates the
+ * character exists in the universe and snapshots its identity (entryId +
+ * catalog ingredientId + name) into the record. Returns `{ dataset, created }`.
+ */
+export async function createDataset({ universeId, entryId, triggerWord = null }) {
+  const { character, snapshot } = await resolveCharacterSnapshot(universeId, entryId);
 
   const existingAll = await loraDatasetStore.loadAll();
   const existing = existingAll.find(
@@ -140,12 +161,7 @@ export async function createDataset({ universeId, entryId, triggerWord = null })
   const record = sanitizeLoraDataset({
     schemaVersion: LORA_DATASET_SCHEMA_VERSION,
     id,
-    character: {
-      entryId,
-      ingredientId: character.ingredientId || null,
-      universeId,
-      name: character.name,
-    },
+    character: snapshot,
     triggerWord: resolvedTrigger,
     status: 'draft',
     images: [],
@@ -159,24 +175,99 @@ export async function createDataset({ universeId, entryId, triggerWord = null })
   return { dataset: { ...record, readiness: computeDatasetReadiness(record) }, created: true };
 }
 
-export async function patchDataset(id, { triggerWord } = {}) {
+/**
+ * Patch a dataset's trigger word and/or reassign it to a different
+ * universe character. `universeId` + `entryId` must travel together — a
+ * reassignment re-snapshots the character identity (entryId, universeId,
+ * ingredientId, name) exactly the way createDataset does, and is refused
+ * if it would collide with another dataset already keyed on that
+ * (universeId, entryId) pair (the one-dataset-per-character invariant).
+ */
+export async function patchDataset(id, { triggerWord, universeId, entryId } = {}) {
   if (triggerWord !== undefined && !isValidTriggerWord(triggerWord)) {
     throw new ServerError('Trigger word must be 2-64 chars of [a-z0-9_]', {
       status: 400, code: 'VALIDATION_ERROR',
     });
   }
+
+  // Reassignment is all-or-nothing: a half-specified target (universe but no
+  // character) can't resolve a character snapshot, so reject it up front.
+  const reassigning = universeId !== undefined || entryId !== undefined;
+  let nextCharacter = null;
+  if (reassigning) {
+    if (!universeId || !entryId) {
+      throw new ServerError('Reassignment requires both universeId and entryId', {
+        status: 400, code: 'VALIDATION_ERROR',
+      });
+    }
+    // The character validation and the collision scan are independent reads —
+    // run them together. resolveCharacterSnapshot keeps the snapshot shape in
+    // lockstep with createDataset.
+    const [{ character, snapshot }, all] = await Promise.all([
+      resolveCharacterSnapshot(universeId, entryId),
+      loraDatasetStore.loadAll(),
+    ]);
+    // (The in-flight-run guard moved into the write lock below — a pre-write
+    // status snapshot races a concurrent startTrainingRun stamping 'training'.)
+    // Enforce the same find-or-create key createDataset uses: at most one
+    // dataset per (universeId, entryId). Reassigning onto a character that
+    // already owns a dataset would create a duplicate the list can't tell apart.
+    const clash = all.find(
+      (d) => d.id !== id && d.character.universeId === universeId && d.character.entryId === entryId,
+    );
+    if (clash) {
+      throw new ServerError(`A dataset already exists for "${character.name}" in that universe`, {
+        status: 409, code: 'DATASET_EXISTS',
+      });
+    }
+    nextCharacter = snapshot;
+  }
+
   return updateDataset(id, (current) => {
-    if (triggerWord === undefined || triggerWord === current.triggerWord) return null;
-    // Re-prefix every captioned image so the binding token follows the
+    const triggerChanged = triggerWord !== undefined && triggerWord !== current.triggerWord;
+    const characterChanged = nextCharacter && (
+      nextCharacter.entryId !== current.character.entryId
+      || nextCharacter.universeId !== current.character.universeId
+      || nextCharacter.ingredientId !== current.character.ingredientId
+      || nextCharacter.name !== current.character.name);
+    // Authoritative in-flight guard, under the per-record write lock: a
+    // concurrent startTrainingRun may have stamped status:'training' since the
+    // pre-write reads above. Reassigning then would move the dataset out from
+    // under a queued run that captured its id + old character — and because
+    // flipDatasetAfterRun skips character-mismatched runs, the dataset would be
+    // left stuck in 'training'. Refuse here so the user cancels the run first.
+    if (characterChanged && current.status === 'training') {
+      throw new ServerError('Cannot reassign while a training run is in progress — cancel it first', {
+        status: 409, code: 'DATASET_TRAINING',
+      });
+    }
+    if (!triggerChanged && !characterChanged) return null;
+    // Re-prefix every captioned image so the binding token follows a trigger
     // rename. Without this, computeDatasetReadiness (which gates `captioned`
     // on the caption containing the trigger word) silently drops every
     // previously-captioned image and any training binds the stale token.
     // Empty captions are left untouched — don't fabricate a caption.
     const prev = current.triggerWord;
-    const images = current.images.map((img) => (img.caption
-      ? { ...img, caption: prefixCaption(triggerWord, img.caption, { previousTriggerWord: prev }) }
-      : img));
-    return { ...current, triggerWord, images };
+    const images = triggerChanged
+      ? current.images.map((img) => (img.caption
+        ? { ...img, caption: prefixCaption(triggerWord, img.caption, { previousTriggerWord: prev }) }
+        : img))
+      : current.images;
+    // A trained dataset's LoRA is registered against the OLD character
+    // (its sidecar drives /loras/by-character + render auto-apply). Moving
+    // the dataset to a new character must NOT carry the `trained` status and
+    // `training.loraFilename` over — that would advertise the new character
+    // as trained while the actual LoRA still resolves only for the old one.
+    // Reset to the untrained baseline so the new character must retrain; the
+    // old character keeps its registered LoRA.
+    const trainingReset = characterChanged ? { status: 'draft', training: {} } : {};
+    return {
+      ...current,
+      ...(characterChanged ? { character: nextCharacter } : {}),
+      ...(triggerChanged ? { triggerWord } : {}),
+      ...trainingReset,
+      images,
+    };
   });
 }
 

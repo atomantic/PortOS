@@ -62,7 +62,14 @@ router.get('/:id', asyncHandler(async (req, res) => {
   res.json({ ...dataset, readiness: computeDatasetReadiness(dataset) });
 }));
 
-const patchSchema = z.object({ triggerWord: triggerWordSchema.optional() });
+const patchSchema = z.object({
+  triggerWord: triggerWordSchema.optional(),
+  // Reassign the dataset to a different universe character. Both must be
+  // present together; the service re-snapshots the character and refuses a
+  // collision with an existing dataset for that character.
+  universeId: idSchema.optional(),
+  entryId: idSchema.optional(),
+});
 router.patch('/:id', asyncHandler(async (req, res) => {
   const body = validateRequest(patchSchema, req.body);
   const dataset = await patchDataset(req.params.id, body);

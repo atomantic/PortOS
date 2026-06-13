@@ -12,12 +12,11 @@ import { GraduationCap, Plus, Loader2, Sparkles, Images } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import Modal from '../components/ui/Modal';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
+import UniverseCharacterPicker from '../components/loraTraining/UniverseCharacterPicker';
 import {
   listLoraDatasets,
   createLoraDataset,
   deleteLoraDataset,
-  listUniverses,
-  getUniverse,
 } from '../services/api';
 
 const STATUS_CHIP = {
@@ -27,24 +26,9 @@ const STATUS_CHIP = {
 };
 
 function NewDatasetDialog({ onClose, onCreated }) {
-  const [universes, setUniverses] = useState(null);
   const [universeId, setUniverseId] = useState('');
-  const [characters, setCharacters] = useState(null);
   const [entryId, setEntryId] = useState('');
   const [creating, setCreating] = useState(false);
-
-  useEffect(() => {
-    listUniverses().then((list) => setUniverses(Array.isArray(list) ? list : []))
-      .catch(() => setUniverses([]));
-  }, []);
-
-  useEffect(() => {
-    if (!universeId) { setCharacters(null); setEntryId(''); return; }
-    setCharacters(null);
-    getUniverse(universeId)
-      .then((u) => setCharacters(Array.isArray(u?.characters) ? u.characters : []))
-      .catch(() => setCharacters([]));
-  }, [universeId]);
 
   const create = async () => {
     setCreating(true);
@@ -66,32 +50,13 @@ function NewDatasetDialog({ onClose, onCreated }) {
     >
       <div className="space-y-4">
         <h2 id="lt-new-dataset-title" className="text-base font-semibold text-white">New training dataset</h2>
-        <div>
-          <label htmlFor="lt-universe" className="block text-sm text-gray-400 mb-1">Universe</label>
-          <select
-            id="lt-universe"
-            value={universeId}
-            onChange={(e) => setUniverseId(e.target.value)}
-            className="w-full bg-port-bg border border-port-border rounded px-3 py-2 text-white"
-          >
-            <option value="">{universes === null ? 'Loading…' : 'Pick a universe'}</option>
-            {(universes || []).map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
-          </select>
-        </div>
-        {universeId && (
-          <div>
-            <label htmlFor="lt-character" className="block text-sm text-gray-400 mb-1">Character</label>
-            <select
-              id="lt-character"
-              value={entryId}
-              onChange={(e) => setEntryId(e.target.value)}
-              className="w-full bg-port-bg border border-port-border rounded px-3 py-2 text-white"
-            >
-              <option value="">{characters === null ? 'Loading…' : characters.length ? 'Pick a character' : 'No characters in this universe'}</option>
-              {(characters || []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
-          </div>
-        )}
+        <UniverseCharacterPicker
+          idPrefix="lt-new"
+          universeId={universeId}
+          entryId={entryId}
+          onUniverseChange={(id) => { setUniverseId(id); setEntryId(''); }}
+          onEntryChange={setEntryId}
+        />
         <div className="flex justify-end gap-2">
           <button type="button" onClick={onClose} className="px-3 py-2 text-sm text-gray-400 hover:text-white">Cancel</button>
           <button

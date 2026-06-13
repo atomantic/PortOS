@@ -10,7 +10,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import {
-  ArrowLeft, Loader2, Upload, Wand2, Scissors, Tags, RefreshCw, AlertTriangle, Images, Lightbulb,
+  ArrowLeft, Loader2, Upload, Wand2, Scissors, Tags, RefreshCw, AlertTriangle, Images, Replace, Lightbulb,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import Modal from '../components/ui/Modal';
@@ -20,6 +20,7 @@ import GenerateBatchDialog from '../components/loraTraining/GenerateBatchDialog'
 import TrainingPanel from '../components/loraTraining/TrainingPanel';
 import CaptionModelPicker from '../components/loraTraining/CaptionModelPicker';
 import ImportGalleryDialog from '../components/loraTraining/ImportGalleryDialog';
+import UniverseCharacterPicker from '../components/loraTraining/UniverseCharacterPicker';
 import {
   getLoraDataset,
   patchLoraDataset,
@@ -138,6 +139,62 @@ function SliceDialog({ dataset, onClose, onSliced }) {
   );
 }
 
+function ReassignDialog({ dataset, onClose, onReassigned }) {
+  // Default to the current assignment so the picker opens on the dataset's
+  // own universe (characters pre-load) and the user only changes what they want.
+  const [universeId, setUniverseId] = useState(dataset.character.universeId);
+  const [entryId, setEntryId] = useState(dataset.character.entryId);
+  const [submitting, setSubmitting] = useState(false);
+
+  const submit = async () => {
+    setSubmitting(true);
+    try {
+      const next = await patchLoraDataset(dataset.id, { universeId, entryId });
+      toast.success(`Reassigned to ${next.character.name}`);
+      onReassigned(next);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      size="sm"
+      ariaLabelledBy="lt-reassign-title"
+      panelClassName="bg-port-card border border-port-border rounded-lg p-5"
+    >
+      <div className="space-y-4">
+        <h2 id="lt-reassign-title" className="text-base font-semibold text-white">Reassign character</h2>
+        <p className="text-sm text-gray-400">
+          Move this dataset&apos;s images and trigger word to a different universe character.
+          The trigger word stays the same — edit it separately if the new character needs its own token.
+        </p>
+        <UniverseCharacterPicker
+          idPrefix="lt-reassign"
+          universeId={universeId}
+          entryId={entryId}
+          onUniverseChange={(id) => { setUniverseId(id); setEntryId(''); }}
+          onEntryChange={setEntryId}
+        />
+        <div className="flex justify-end gap-2">
+          <button type="button" onClick={onClose} className="px-3 py-2 text-sm text-gray-400 hover:text-white">Cancel</button>
+          <button
+            type="button"
+            onClick={submit}
+            disabled={!universeId || !entryId || submitting}
+            className="px-3 py-2 text-sm rounded bg-port-accent text-white disabled:opacity-50 flex items-center gap-2"
+          >
+            {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Replace className="w-4 h-4" />}
+            Reassign
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 export default function LoraDatasetDetail() {
   const { datasetId } = useParams();
   const [dataset, setDataset] = useState(null);
@@ -149,6 +206,7 @@ export default function LoraDatasetDetail() {
   const [showGenerate, setShowGenerate] = useState(false);
   const [showSlice, setShowSlice] = useState(false);
   const [showImport, setShowImport] = useState(false);
+  const [showReassign, setShowReassign] = useState(false);
   const [captionRun, setCaptionRun] = useState(null);
   const [captionStarting, setCaptionStarting] = useState(false);
   // Chosen caption model { providerId, model } — null fields mean "let the
@@ -316,15 +374,28 @@ export default function LoraDatasetDetail() {
           <Link to="/media/training" className="text-xs text-gray-400 hover:text-white flex items-center gap-1 mb-1">
             <ArrowLeft className="w-3 h-3" /> Datasets
           </Link>
-          <h2 className="text-lg font-semibold text-white truncate">
-            <Link
-              to={`/universes/${dataset.character.universeId}`}
-              className="hover:text-port-accent"
-              title="Open in universe editor"
+          <div className="flex items-center gap-2 min-w-0">
+            <h2 className="text-lg font-semibold text-white truncate">
+              <Link
+                to={`/universes/${dataset.character.universeId}`}
+                className="hover:text-port-accent"
+                title="Open in universe editor"
+              >
+                {dataset.character.name}
+              </Link>
+            </h2>
+            <button
+              type="button"
+              onClick={() => setShowReassign(true)}
+              disabled={dataset.status === 'training'}
+              title={dataset.status === 'training'
+                ? 'Cancel the in-progress training run before reassigning'
+                : 'Reassign this dataset to a different universe character'}
+              className="shrink-0 text-xs text-gray-500 hover:text-port-accent flex items-center gap-1 disabled:opacity-40 disabled:hover:text-gray-500"
             >
-              {dataset.character.name}
-            </Link>
-          </h2>
+              <Replace className="w-3.5 h-3.5" /> Reassign
+            </button>
+          </div>
           <div className="flex items-center gap-2 mt-1">
             <label htmlFor="lt-trigger" className="text-xs text-gray-500">Trigger word</label>
             <input
@@ -483,6 +554,13 @@ export default function LoraDatasetDetail() {
             if (images?.length) onImagesChange((prev) => [...prev, ...images]);
             refresh();
           }}
+        />
+      )}
+      {showReassign && (
+        <ReassignDialog
+          dataset={dataset}
+          onClose={() => setShowReassign(false)}
+          onReassigned={(next) => { setShowReassign(false); setDataset(next); }}
         />
       )}
     </div>

@@ -128,6 +128,78 @@ describe('patchDataset / listDatasets', () => {
     expect(reread.readiness.captioned).toBe(1);
   });
 
+  it('reassigns to another character, re-snapshotting identity', async () => {
+    const { dataset } = await createDataset({ universeId: 'uni-1', entryId: 'char-1' });
+    const next = await patchDataset(dataset.id, { universeId: 'uni-1', entryId: 'char-2' });
+    expect(next.character).toEqual({
+      entryId: 'char-2', ingredientId: null, universeId: 'uni-1', name: 'Moss',
+    });
+    // Trigger word is left alone — reassignment doesn't rename the token.
+    expect(next.triggerWord).toBe('kessa_brightwater');
+    // The list now keys the dataset under the new character.
+    expect(await listDatasets({ entryId: 'char-2' })).toHaveLength(1);
+    expect(await listDatasets({ entryId: 'char-1' })).toHaveLength(0);
+  });
+
+  it('reassigns and renames the trigger word in one patch', async () => {
+    const { dataset } = await createDataset({ universeId: 'uni-1', entryId: 'char-1' });
+    const next = await patchDataset(dataset.id, { universeId: 'uni-1', entryId: 'char-2', triggerWord: 'moss_v1' });
+    expect(next.character.entryId).toBe('char-2');
+    expect(next.triggerWord).toBe('moss_v1');
+  });
+
+  it('resets trained status when reassigning to a new character', async () => {
+    // The trained LoRA is registered against the OLD character, so a moved
+    // dataset must drop its `trained` status + training metadata rather than
+    // falsely advertise the new character as trained.
+    const { dataset } = await createDataset({ universeId: 'uni-1', entryId: 'char-1' });
+    await updateDataset(dataset.id, (current) => ({
+      ...current, status: 'trained', training: { loraFilename: 'char-1.safetensors', completedAt: 'x' },
+    }));
+    const next = await patchDataset(dataset.id, { universeId: 'uni-1', entryId: 'char-2' });
+    expect(next.status).toBe('draft');
+    expect(next.training).toEqual({});
+  });
+
+  it('keeps trained status on a trigger-only patch (same character)', async () => {
+    const { dataset } = await createDataset({ universeId: 'uni-1', entryId: 'char-1' });
+    await updateDataset(dataset.id, (current) => ({
+      ...current, status: 'trained', training: { loraFilename: 'char-1.safetensors' },
+    }));
+    const next = await patchDataset(dataset.id, { triggerWord: 'kessa_v2' });
+    expect(next.status).toBe('trained');
+    expect(next.training.loraFilename).toBe('char-1.safetensors');
+  });
+
+  it('refuses to reassign while a training run is in progress', async () => {
+    // status 'training' = a queued/running job that captured this dataset id +
+    // old character; reassigning now would register the adapter under the wrong
+    // character. The user must cancel first.
+    const { dataset } = await createDataset({ universeId: 'uni-1', entryId: 'char-1' });
+    await updateDataset(dataset.id, (current) => ({ ...current, status: 'training' }));
+    await expect(patchDataset(dataset.id, { universeId: 'uni-1', entryId: 'char-2' }))
+      .rejects.toMatchObject({ status: 409, code: 'DATASET_TRAINING' });
+  });
+
+  it('refuses to reassign onto a character that already owns a dataset', async () => {
+    const a = await createDataset({ universeId: 'uni-1', entryId: 'char-1' });
+    await createDataset({ universeId: 'uni-1', entryId: 'char-2' });
+    await expect(patchDataset(a.dataset.id, { universeId: 'uni-1', entryId: 'char-2' }))
+      .rejects.toMatchObject({ status: 409 });
+  });
+
+  it('404s reassignment to a character missing from the universe', async () => {
+    const { dataset } = await createDataset({ universeId: 'uni-1', entryId: 'char-1' });
+    await expect(patchDataset(dataset.id, { universeId: 'uni-1', entryId: 'nope' }))
+      .rejects.toMatchObject({ status: 404 });
+  });
+
+  it('400s a half-specified reassignment (universe without character)', async () => {
+    const { dataset } = await createDataset({ universeId: 'uni-1', entryId: 'char-1' });
+    await expect(patchDataset(dataset.id, { universeId: 'uni-1' }))
+      .rejects.toMatchObject({ status: 400 });
+  });
+
   it('filters list by character ids', async () => {
     await createDataset({ universeId: 'uni-1', entryId: 'char-1' });
     await createDataset({ universeId: 'uni-1', entryId: 'char-2' });

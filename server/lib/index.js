@@ -72,6 +72,7 @@ export * from './codexAssistantExtract.js';
 export * from './codexCliOutput.js';
 export * from './contextBudget.js';
 export * from './hfToken.js';
+export * from './hfErrors.js';
 export * from './hfCache.js';
 export * from './hfDownload.js';
 export * from './sseDownload.js';
