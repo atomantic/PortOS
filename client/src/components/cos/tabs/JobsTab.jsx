@@ -52,6 +52,29 @@ const JOB_TYPE_OPTIONS = [
 // AI runner.
 const isAgentJobType = (type) => type !== 'shell' && type !== 'script';
 
+// Blank create-form state — shared by the initial useState and the post-create
+// reset so the two can't drift (a field added to one but not the other would
+// silently carry the previous job's value into the next).
+const INITIAL_JOB = {
+  name: '',
+  description: '',
+  category: 'custom',
+  type: 'agent',
+  scheduleMode: 'interval',
+  interval: 'daily',
+  scheduledTime: '',
+  cronExpression: '',
+  priority: 'MEDIUM',
+  autonomyLevel: 'manager',
+  promptTemplate: '',
+  command: '',
+  triggerAction: 'log-only',
+  appId: '',
+  providerId: '',
+  model: '',
+  enabled: false
+};
+
 const BRIEFING_CONFIG_OPTIONS = [
   { key: 'dailyJoke', label: 'Daily Joke', desc: 'Include a short joke to start the day' },
   { key: 'dailyQuote', label: 'Daily Quote', desc: 'Include an inspirational quote related to focus areas' },
@@ -524,7 +547,7 @@ function JobCard({ job, apps, providers, onToggle, onTrigger, onDelete, onUpdate
               <div className="flex flex-wrap gap-4 text-xs text-gray-500">
                 <span>Priority: <span className="text-gray-300">{job.priority}</span></span>
                 {!isShell && <span>Autonomy: <span className="text-gray-300">{job.autonomyLevel}</span></span>}
-                {!isShell && !isScript && job.providerId && (
+                {isAgentJobType(job.type) && job.providerId && (
                   <span>AI: <span className="text-gray-300">{providers.find(p => p.id === job.providerId)?.name || job.providerId}{job.model ? ` / ${job.model}` : ''}</span></span>
                 )}
                 {isShell && <span>Action: <span className="text-gray-300">{job.triggerAction || 'log-only'}</span></span>}
@@ -581,25 +604,7 @@ export default function JobsTab() {
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
-  const [newJob, setNewJob] = useState({
-    name: '',
-    description: '',
-    category: 'custom',
-    type: 'agent',
-    scheduleMode: 'interval',
-    interval: 'daily',
-    scheduledTime: '',
-    cronExpression: '',
-    priority: 'MEDIUM',
-    autonomyLevel: 'manager',
-    promptTemplate: '',
-    command: '',
-    triggerAction: 'log-only',
-    appId: '',
-    providerId: '',
-    model: '',
-    enabled: false
-  });
+  const [newJob, setNewJob] = useState(INITIAL_JOB);
 
   const fetchJobs = useCallback(async () => {
     const data = await api.getCosJobs().catch(err => {
@@ -647,23 +652,7 @@ export default function JobsTab() {
     });
     if (!created) return;
     toast.success('Job created');
-    setNewJob({
-      name: '',
-      description: '',
-      category: 'custom',
-      type: 'agent',
-      scheduleMode: 'interval',
-      interval: 'daily',
-      scheduledTime: '',
-      cronExpression: '',
-      priority: 'MEDIUM',
-      autonomyLevel: 'manager',
-      promptTemplate: '',
-      command: '',
-      triggerAction: 'log-only',
-      appId: '',
-      enabled: false
-    });
+    setNewJob(INITIAL_JOB);
     setShowCreate(false);
     fetchJobs();
   };
