@@ -215,6 +215,18 @@ describe('universe-builder routes', () => {
     expect(res.body).toEqual([]);
   });
 
+  it('GET /:id for a missing universe 404s without spamming console.error', async () => {
+    // LoraDatasetDetail speculatively fetches a dataset's character.universeId
+    // ({ silent: true }); that 404s whenever the universe was deleted. The route
+    // tags it severity:'warning' so the error middleware skips the log line.
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await request(buildApp()).get('/api/universe-builder/does-not-exist');
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('NOT_FOUND');
+    expect(errSpy).not.toHaveBeenCalled();
+    errSpy.mockRestore();
+  });
+
   it('POST / creates a universe', async () => {
     const res = await request(buildApp())
       .post('/api/universe-builder')

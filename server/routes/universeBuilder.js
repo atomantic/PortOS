@@ -515,7 +515,16 @@ router.post('/merge/ai-resolve', asyncHandler(async (req, res) => {
 }));
 
 router.get('/:id', asyncHandler(async (req, res) => {
-  const w = await svc.getUniverse(req.params.id).catch((err) => { throw mapServiceError(err); });
+  // Read-by-id 404s are benign and high-volume: callers like LoraDatasetDetail
+  // speculatively fetch a dataset's `character.universeId` ({ silent: true }),
+  // which 404s whenever that universe was deleted. Classify as `warning` so the
+  // error middleware skips it instead of spamming ❌ Route error on every
+  // page reconnect. (Mirrors the media-job archive-lookup precedent.)
+  const w = await svc.getUniverse(req.params.id).catch((err) => {
+    const mapped = mapServiceError(err);
+    if (mapped?.code === svc.ERR_NOT_FOUND) mapped.severity = 'warning';
+    throw mapped;
+  });
   // Lazy stale-reference-sheet collapse: nulls out any character.referenceSheetImageRef
   // whose underlying file was deleted from disk, so the UI never tries to
   // render `<img src="/data/image-refs/<gone>">`. Doesn't persist the change
