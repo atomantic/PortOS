@@ -18,7 +18,7 @@ export const LORA_DATASET_SCHEMA_VERSION = 1;
 // ~10 images a character LoRA badly overfits the few poses it has seen.
 export const MIN_TRAINING_IMAGES = 10;
 
-export const DATASET_IMAGE_SOURCES = Object.freeze(['generated', 'upload', 'refsheet-slice']);
+export const DATASET_IMAGE_SOURCES = Object.freeze(['generated', 'upload', 'refsheet-slice', 'gallery']);
 export const DATASET_IMAGE_STATUSES = Object.freeze(['rendering', 'ready', 'failed']);
 export const DATASET_STATUSES = Object.freeze(['draft', 'training', 'trained']);
 export const CAPTION_SOURCES = Object.freeze(['vision', 'manual']);

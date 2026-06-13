@@ -32,6 +32,7 @@ const {
   deleteImage,
   datasetImagePath,
   getDataset,
+  importGalleryImages,
   listDatasets,
   patchDataset,
   reconcileRenderingImages,
@@ -221,6 +222,48 @@ describe('reconcileRenderingImages', () => {
       jobLookup: () => ({ status: 'running' }),
     });
     expect(out.images[0].status).toBe('rendering');
+  });
+});
+
+describe('importGalleryImages', () => {
+  const seedGallery = async (...filenames) => {
+    mkdirSync(join(TEST_DATA_ROOT, 'images'), { recursive: true });
+    for (const f of filenames) await makePng(join(TEST_DATA_ROOT, 'images', f));
+  };
+
+  it('imports gallery images as independent copies tagged source=gallery', async () => {
+    const { dataset } = await createDataset({ universeId: 'uni-1', entryId: 'char-1' });
+    await seedGallery('aaaa.png', 'bbbb.png');
+    const images = await importGalleryImages(dataset.id, { filenames: ['aaaa.png', 'bbbb.png'] });
+    expect(images).toHaveLength(2);
+    for (const img of images) {
+      expect(img.source).toBe('gallery');
+      expect(img.status).toBe('ready');
+      expect(img.width).toBe(64);
+      expect(existsSync(datasetImagePath(dataset.id, img.file))).toBe(true);
+    }
+    // The copy is independent — the dataset image is NOT the gallery file.
+    expect(images[0].file).not.toBe('aaaa.png');
+    const after = await getDataset(dataset.id);
+    expect(after.images).toHaveLength(2);
+  });
+
+  it('404s when a gallery file is missing', async () => {
+    const { dataset } = await createDataset({ universeId: 'uni-1', entryId: 'char-1' });
+    await expect(importGalleryImages(dataset.id, { filenames: ['ghost.png'] }))
+      .rejects.toMatchObject({ status: 404 });
+  });
+
+  it('rejects path-traversal filenames before touching disk', async () => {
+    const { dataset } = await createDataset({ universeId: 'uni-1', entryId: 'char-1' });
+    await expect(importGalleryImages(dataset.id, { filenames: ['../../etc/passwd.png'] }))
+      .rejects.toBeTruthy();
+  });
+
+  it('400s on an empty filename list', async () => {
+    const { dataset } = await createDataset({ universeId: 'uni-1', entryId: 'char-1' });
+    await expect(importGalleryImages(dataset.id, { filenames: [] }))
+      .rejects.toMatchObject({ status: 400 });
   });
 });
 

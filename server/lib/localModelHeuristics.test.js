@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isEmbeddingModel, isGenerationModel, recommendEditorialModel } from './localModelHeuristics.js';
+import { isEmbeddingModel, isGenerationModel, isVisionModel, recommendEditorialModel } from './localModelHeuristics.js';
 
 describe('localModelHeuristics', () => {
   describe('isEmbeddingModel', () => {
@@ -39,6 +39,53 @@ describe('localModelHeuristics', () => {
       expect(isGenerationModel('qwen3.6:35b')).toBe(true);
       expect(isGenerationModel('nomic-embed-text:latest')).toBe(false);
       expect(isGenerationModel('')).toBe(false);
+    });
+  });
+
+  describe('isVisionModel', () => {
+    it('flags known vision/multimodal model ids', () => {
+      for (const id of [
+        'qwen2.5-vl:7b',
+        'llava:latest',
+        'bakllava',
+        'moondream:latest',
+        'minicpm-v:8b',
+        'llama3.2-vision:11b',
+        'pixtral-12b',
+        'gemma3:4b',
+        'internvl2:8b',
+        'glm-4v:9b',
+        'paligemma',
+      ]) {
+        expect(isVisionModel(id), id).toBe(true);
+      }
+    });
+
+    it('does not flag text-only models', () => {
+      for (const id of [
+        'llama3.1:8b',
+        'qwen2.5:7b',
+        'gpt-oss:20b',
+        'mistral-small:latest',
+        'nomic-embed-text:latest',
+      ]) {
+        expect(isVisionModel(id), id).toBe(false);
+      }
+    });
+
+    it('prefers explicit backend capability metadata over the id heuristic', () => {
+      // LM Studio tags vision models type: 'vlm' even when the id is opaque.
+      expect(isVisionModel({ id: 'some-opaque-id', type: 'vlm' })).toBe(true);
+      expect(isVisionModel({ id: 'x', capabilities: ['vision'] })).toBe(true);
+      // A text model card with no vision markers stays false.
+      expect(isVisionModel({ id: 'llama3.1:8b', type: 'llm' })).toBe(false);
+    });
+
+    it('handles non-values', () => {
+      expect(isVisionModel(null)).toBe(false);
+      expect(isVisionModel(undefined)).toBe(false);
+      expect(isVisionModel('')).toBe(false);
+      expect(isVisionModel(42)).toBe(false);
     });
   });
 

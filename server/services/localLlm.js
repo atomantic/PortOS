@@ -31,7 +31,7 @@ import { Readable } from 'stream'
 import { PATHS, atomicWrite } from '../lib/fileUtils.js'
 import { isBackend, mapModelToBackend } from '../lib/localLlmCatalog.js'
 import { sanitizeOllamaName } from '../lib/localLlmDisk.js'
-import { recommendEditorialModel } from '../lib/localModelHeuristics.js'
+import { recommendEditorialModel, isVisionModel } from '../lib/localModelHeuristics.js'
 import * as ollamaManager from './ollamaManager.js'
 import * as lmStudioManager from './lmStudioManager.js'
 import { getProviderById, updateProvider } from './providers.js'
@@ -551,13 +551,19 @@ function normalizeModels(backend, models) {
     return models.map((m) => ({
       id: m.id, name: m.name, size: m.size ?? null,
       params: m.params || null, quantization: m.quantization || null, family: m.family || null,
-      contextLength: m.contextLength ?? null
+      contextLength: m.contextLength ?? null,
+      // Ollama's /api/tags doesn't tag vision capability, so this is the id
+      // heuristic only (no explicit metadata to prefer).
+      vision: isVisionModel(m.id)
     }))
   }
   return models.map((m) => ({
     id: m.id, name: m.id, size: null,
     params: null, quantization: m.quantization || null, family: m.arch || null,
-    contextLength: m.maxContextLength ?? null
+    contextLength: m.maxContextLength ?? null,
+    // LM Studio's native model list tags vision models `type: 'vlm'` — prefer
+    // that over the id regex.
+    vision: isVisionModel(m)
   }))
 }
 
@@ -624,6 +630,26 @@ export async function getStatus() {
       downloadUrl: DOWNLOAD_URL.lmstudio
     }
   }
+}
+
+/**
+ * Vision-capable installed models across both local backends, tagged with the
+ * aiToolkit provider id (`ollama` / `lmstudio`) that serves them. Powers the
+ * caption-model picker and the captioner's auto-resolution of a default vision
+ * model. Each entry: `{ providerId, backend, id, name, vision: true }`.
+ */
+export async function listVisionModels() {
+  // Cache-first for both backends (the model-list caches are busted on
+  // install/delete, so they stay accurate) — the picker doesn't need a forced
+  // round-trip on every dataset-page load.
+  const [ollama, lmstudio] = await Promise.all([
+    listModels('ollama').catch(() => []),
+    listModels('lmstudio').catch(() => [])
+  ])
+  const tag = (backend, models) => models
+    .filter((m) => m.vision)
+    .map((m) => ({ providerId: PROVIDER_ID[backend], backend, id: m.id, name: m.name || m.id, vision: true }))
+  return [...tag('ollama', ollama), ...tag('lmstudio', lmstudio)]
 }
 
 // ---- install / delete --------------------------------------------------------

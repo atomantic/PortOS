@@ -19,6 +19,7 @@ import {
   deleteDataset,
   deleteImage,
   getDataset,
+  importGalleryImages,
   listDatasets,
   patchDataset,
   reconcileRenderingImages,
@@ -94,6 +95,17 @@ router.post('/:id/images', datasetUploads, asyncHandler(async (req, res) => {
     }));
   }
   res.status(201).json({ images: entries });
+}));
+
+// Import existing gallery images into the dataset by basename. The server
+// re-normalizes each through sharp (gallery PNGs are `<jobId>.png`).
+const importGallerySchema = z.object({
+  filenames: z.array(z.string().max(256).regex(/^[^/\\]+\.png$/i, 'filename must be a gallery PNG basename')).min(1).max(50),
+});
+router.post('/:id/import-gallery', asyncHandler(async (req, res) => {
+  const { filenames } = validateRequest(importGallerySchema, req.body);
+  const images = await importGalleryImages(req.params.id, { filenames });
+  res.status(201).json({ images });
 }));
 
 const generateSchema = z.object({
