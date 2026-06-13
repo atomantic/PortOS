@@ -4,7 +4,7 @@ import { describe, it, expect, vi } from 'vitest';
 // branches are testable without touching the network/DB. The module still
 // pulls in localLlm transitively at import; that's import-only (no calls fire
 // until resolveCaptionModel runs with our stub), so no mocks are needed.
-const { resolveCaptionModel, buildCaption } = await import('./loraDatasetCaption.js');
+const { resolveCaptionModel, buildCaption, withCaptionVisionLock } = await import('./loraDatasetCaption.js');
 
 const VISION = [
   { providerId: 'lmstudio', backend: 'lmstudio', id: 'qwen2.5-vl-7b', name: 'Qwen2.5-VL 7B', vision: true },
@@ -82,5 +82,35 @@ describe('buildCaption', () => {
   it('names the model in the error so the user knows which to swap', () => {
     expect(() => buildCaption('tamsin_reed', '', 'vision model "llava:7b"'))
       .toThrow(/llava:7b/);
+  });
+});
+
+describe('withCaptionVisionLock', () => {
+  it('serializes overlapping vision calls so concurrent runs never overlap at the backend', async () => {
+    // Two caption runs firing at once must NOT produce two in-flight vision
+    // requests — on a single-GPU Ollama that doubles KV-cache VRAM. The lock
+    // forces concurrency 1: while one "vision call" is mid-await, a second
+    // call kicked off in parallel must wait for it to finish.
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const visionCall = () => withCaptionVisionLock(async () => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((r) => setTimeout(r, 5)); // simulate a backend round-trip
+      inFlight -= 1;
+    });
+
+    await Promise.all([visionCall(), visionCall(), visionCall()]);
+
+    expect(maxInFlight).toBe(1);
+  });
+
+  it('runs calls in submission order (FIFO)', async () => {
+    const order = [];
+    await Promise.all([1, 2, 3].map((n) => withCaptionVisionLock(async () => {
+      await new Promise((r) => setTimeout(r, 1));
+      order.push(n);
+    })));
+    expect(order).toEqual([1, 2, 3]);
   });
 });

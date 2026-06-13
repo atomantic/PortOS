@@ -4,7 +4,11 @@
  * Sequential loop (vision backends are local; concurrency 1) over the
  * dataset's ready images: read file → base64 data URL →
  * `describeImageDataUrl` (the same provider pathway the voice agent's
- * ui_describe_visually tool uses) → trigger-word prefix → persist.
+ * ui_describe_visually tool uses) → trigger-word prefix → persist. A
+ * module-level mutex (`withCaptionVisionLock`) extends that concurrency-1
+ * guarantee ACROSS runs, so overlapping caption runs can't fan out parallel
+ * requests at a single-GPU backend (see the lock's header for why parallel
+ * local vision is pure downside).
  * Progress streams over the shared per-job SSE helpers; the client
  * subscribes via `GET /api/lora-datasets/:id/caption-runs/:runId/events`
  * and refetches the dataset on the terminal frame.
@@ -23,6 +27,7 @@ import { shortId } from '../lib/fileUtils.js';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { prefixCaption } from '../lib/loraDataset.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../lib/sseUtils.js';
+import { createMutex } from '../lib/asyncMutex.js';
 import { describeImageDataUrl } from './visionTest.js';
 import { getSettings } from './settings.js';
 import { listVisionModels } from './localLlm.js';
@@ -38,6 +43,23 @@ export const CAPTION_PROMPT = [
 ].join(' ');
 
 const CAPTION_MAX_TOKENS = 300;
+
+// Module-level mutex serializing every vision call across ALL caption runs.
+// Within one run the loop is already sequential, but nothing stops a user (or
+// the UI) from kicking off several runs at once — caption Dataset A + Dataset B,
+// re-caption multiple single images, or double-click the button. Each run is a
+// detached loop, so concurrent runs would fire N parallel `/chat/completions`
+// requests at the same local backend. On a single-GPU Ollama/LM Studio that is
+// pure downside: every Ollama parallel slot reserves its own `num_ctx` KV cache
+// (PortOS uses 32K), so concurrent vision requests multiply VRAM and risk an
+// OOM/model reload, while parallel decoding gives no throughput win on one GPU —
+// it just time-slices the same compute and makes each request slower. Funnelling
+// every image through this lock keeps backend load at concurrency 1 (predictable
+// VRAM, no slower-per-request) regardless of how many runs are in flight. Scoped
+// to caption runs only — one-shot vision calls (voice `ui_describe_visually`, the
+// vision-test page) deliberately stay off this lock so a long batch run can't
+// FIFO-starve an interactive describe.
+export const withCaptionVisionLock = createMutex();
 
 // runId → { clients: [], lastPayload } — same shape the imageGen/videoGen
 // SSE helpers operate on.
@@ -176,13 +198,13 @@ export async function startCaptionRun(datasetId, {
       try {
         const bytes = await readFile(datasetImagePath(datasetId, img.file));
         const dataUrl = `data:image/png;base64,${bytes.toString('base64')}`;
-        const text = await describeImageDataUrl({
+        const text = await withCaptionVisionLock(() => describeImageDataUrl({
           dataUrl,
           prompt: CAPTION_PROMPT,
           providerId: resolvedProvider,
           model: resolvedModel,
           maxTokens: CAPTION_MAX_TOKENS,
-        });
+        }));
         caption = buildCaption(dataset.triggerWord, text, `vision model "${resolvedModel}"`);
       } catch (err) {
         failed += 1;
