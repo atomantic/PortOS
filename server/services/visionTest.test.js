@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { testVision, runVisionTestSuite, checkVisionHealth } from './visionTest.js';
+import { testVision, runVisionTestSuite, checkVisionHealth, describeImageDataUrlDetailed } from './visionTest.js';
 
 // Mock the providers module
 vi.mock('./providers.js', () => ({
@@ -249,6 +249,55 @@ describe('Vision Test Service', () => {
       expect(result.results).toHaveLength(2);
       expect(result.results[0].testName).toBe('basic-description');
       expect(result.results[1].testName).toBe('ui-identification');
+    });
+  });
+
+  describe('describeImageDataUrlDetailed', () => {
+    const DATA_URL = 'data:image/png;base64,Zm9v';
+    const callWith = async (message, extra = {}) => {
+      getProviderById.mockResolvedValue(mockProvider);
+      global.fetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ choices: [{ message, ...extra }], usage: extra.usage }),
+      });
+      return describeImageDataUrlDetailed({ dataUrl: DATA_URL, prompt: 'caption this' });
+    };
+
+    it('surfaces finish_reason and usage alongside the text', async () => {
+      const out = await callWith(
+        { content: 'a calm portrait, soft light' },
+        { finish_reason: 'stop', usage: { completion_tokens: 12 } },
+      );
+      expect(out.text).toBe('a calm portrait, soft light');
+      expect(out.finishReason).toBe('stop');
+      expect(out.usage).toEqual({ completion_tokens: 12 });
+      expect(out.reasoning).toBe('');
+    });
+
+    it('maps a length cutoff to finishReason for the empty-caption diagnosis', async () => {
+      const out = await callWith({ content: '' }, { finish_reason: 'length', usage: { completion_tokens: 600 } });
+      expect(out.text).toBe('');
+      expect(out.finishReason).toBe('length');
+      expect(out.usage.completion_tokens).toBe(600);
+    });
+
+    it('extracts reasoning from each backend field shape (Ollama / LM Studio / native)', async () => {
+      expect((await callWith({ content: '', reasoning: 'ollama thoughts' })).reasoning).toBe('ollama thoughts');
+      expect((await callWith({ content: '', reasoning_content: 'lmstudio thoughts' })).reasoning).toBe('lmstudio thoughts');
+      expect((await callWith({ content: '', thinking: 'native thoughts' })).reasoning).toBe('native thoughts');
+    });
+
+    it('pulls reasoning out of an inline <think> block and strips it from the caption text', async () => {
+      const out = await callWith({ content: '<think>she is facing left</think>bust shot, looking left' });
+      expect(out.reasoning).toBe('she is facing left');
+      // the leaked reasoning must NOT pollute the persisted caption
+      expect(out.text).toBe('bust shot, looking left');
+    });
+
+    it('returns empty text (not a stray tag) when the reply is only a think block', async () => {
+      const out = await callWith({ content: '<think>I should refuse</think>' }, { finish_reason: 'stop' });
+      expect(out.text).toBe('');
+      expect(out.reasoning).toBe('I should refuse');
     });
   });
 

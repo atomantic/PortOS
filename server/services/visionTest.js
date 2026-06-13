@@ -270,8 +270,15 @@ export async function describeImageDataUrlDetailed({ dataUrl, prompt, providerId
     ...(maxTokens != null ? { maxTokens } : {}),
   });
   const choice = apiResponse.choices?.[0];
+  // A reasoning model that leaks its chain-of-thought inline emits
+  // `<think>…</think>` followed by the real answer; strip a LEADING think block
+  // so the returned text is the caption (or JSON, for the digital-twin caller),
+  // not the caption with the model's reasoning glued to the front. Anchored to
+  // the start so legitimate mid-text never gets clipped; the reasoning itself is
+  // still surfaced via `reasoning` for the diagnostic.
+  const rawContent = choice?.message?.content || '';
   return {
-    text: choice?.message?.content || '',
+    text: rawContent.replace(/^\s*<think>[\s\S]*?<\/think>\s*/i, '').trim(),
     finishReason: choice?.finish_reason || null,
     usage: apiResponse.usage || null,
     reasoning: extractReasoning(choice?.message),
