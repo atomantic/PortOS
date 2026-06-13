@@ -176,15 +176,32 @@ export default function LoraDatasetDetail() {
     return () => clearInterval(timer);
   }, [renderingCount, refresh]);
 
-  // Caption-run SSE — refetch on terminal so captions land in the grid.
+  // Caption-run SSE — refetch on terminal so captions land in the grid, and
+  // surface failures the run reported. The server emits per-image `error`
+  // progress frames and a terminal frame carrying the failure tally
+  // (`complete` with `failed`, or `error` when every image failed); without
+  // this the run just stops spinning and the user never learns an image was
+  // refused / returned an empty description.
   const captionSseUrl = captionRun ? `/api/lora-datasets/${datasetId}/caption-runs/${captionRun.runId}/events` : null;
   const captionSse = useSseProgress(captionSseUrl, { enabled: !!captionRun });
   useEffect(() => {
-    if (captionRun && captionSse.closed) {
-      setCaptionRun(null);
-      refresh();
+    if (!captionRun || !captionSse.closed) return;
+    const last = captionSse.latest;
+    if (last?.type === 'error') {
+      // Whole run failed up front (e.g. every image refused) — show the
+      // actionable server message verbatim.
+      toast.error(last.message || 'Captioning failed');
+    } else if (last?.type === 'complete' && last.failed > 0) {
+      const noun = last.failed === 1 ? 'image' : 'images';
+      toast.error(last.done > 0
+        ? `Captioned ${last.done}/${last.total} — ${last.failed} ${noun} failed (model refused or returned an empty description). Re-caption individually or pick another vision model.`
+        : `All ${last.failed} ${noun} failed to caption — the vision model refused or returned nothing. Try another vision model.`);
+    } else if (last?.type === 'complete' && last.done > 0) {
+      toast.success(`Captioned ${last.done} image${last.done === 1 ? '' : 's'}`);
     }
-  }, [captionRun, captionSse.closed, refresh]);
+    setCaptionRun(null);
+    refresh();
+  }, [captionRun, captionSse.closed, captionSse.latest, refresh]);
 
   const onImagesChange = (mutate) => setDataset((prev) => (prev ? { ...prev, images: mutate(prev.images) } : prev));
 
