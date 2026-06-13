@@ -66,19 +66,17 @@ export const parseHuggingfaceLoraRef = (raw) => {
     );
   }
   const repo = `${segments[0]}/${segments[1]}`;
-  // Recover a revision from `/tree/<rev>` or `/blob/<rev>` URLs. A revision can
-  // itself contain slashes (a branch like `feature/foo` or a ref like
-  // `refs/pr/123`), so join ALL segments after the marker — and, for /blob/
-  // URLs, drop the trailing filepath component so `…/blob/main/lora.safetensors`
-  // yields revision `main`, not `main/lora.safetensors`. (/tree/ URLs have no
-  // trailing file, so nothing is dropped there.)
+  // Recover a revision from `/tree/<rev>/…` or `/blob/<rev>/…` URLs. The URL
+  // shape is `…/<tree|blob>/<rev>/<optional subpath>`, and the subpath itself
+  // can contain slashes (`/blob/main/weights/lora.safetensors`), so only the
+  // FIRST segment after the marker is the revision — joining the rest would
+  // mis-read a subdirectory as part of the ref and 404 the metadata fetch. This
+  // means a slash-containing branch/ref pasted as a /tree/ URL isn't recovered
+  // (genuinely ambiguous from the URL alone) — use the `org/name@refs/pr/123`
+  // form for those (the bare-ref parser above keeps the full ref).
   let revision = null;
   const treeIdx = segments.findIndex((s) => s === 'tree' || s === 'blob');
-  if (treeIdx >= 0 && segments[treeIdx + 1]) {
-    const rest = segments.slice(treeIdx + 1);
-    if (segments[treeIdx] === 'blob' && rest.length > 1) rest.pop(); // drop the file path
-    revision = rest.join('/') || null;
-  }
+  if (treeIdx >= 0 && segments[treeIdx + 1]) revision = segments[treeIdx + 1];
   return { repo, revision };
 };
 

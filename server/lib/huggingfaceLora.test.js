@@ -21,15 +21,20 @@ describe('parseHuggingfaceLoraRef', () => {
     expect(parseHuggingfaceLoraRef('https://huggingface.co/fal/x/blob/main/lora.safetensors'))
       .toEqual({ repo: 'fal/x', revision: 'main' });
   });
-  it('preserves slash-containing revisions and drops the trailing file on /blob/', () => {
-    expect(parseHuggingfaceLoraRef('https://huggingface.co/fal/x/tree/feature/foo'))
-      .toEqual({ repo: 'fal/x', revision: 'feature/foo' });
-    expect(parseHuggingfaceLoraRef('https://huggingface.co/fal/x/tree/refs/pr/123'))
-      .toEqual({ repo: 'fal/x', revision: 'refs/pr/123' });
-    expect(parseHuggingfaceLoraRef('https://huggingface.co/fal/x/blob/feature/foo/lora.safetensors'))
-      .toEqual({ repo: 'fal/x', revision: 'feature/foo' });
+
+  it('takes only the first segment after tree/blob as the revision (subpaths are not part of the ref)', () => {
+    // The common copy-paste case: a single-segment revision followed by a
+    // (possibly nested) subpath. Only `main` is the ref; the rest is the path.
+    expect(parseHuggingfaceLoraRef('https://huggingface.co/fal/x/blob/main/weights/lora.safetensors'))
+      .toEqual({ repo: 'fal/x', revision: 'main' });
+    expect(parseHuggingfaceLoraRef('https://huggingface.co/fal/x/tree/main/subdir'))
+      .toEqual({ repo: 'fal/x', revision: 'main' });
   });
 
+  it('recovers a slash-containing ref from the org/name@rev form (URL form is ambiguous)', () => {
+    expect(parseHuggingfaceLoraRef('fal/x@refs/pr/123'))
+      .toEqual({ repo: 'fal/x', revision: 'refs/pr/123' });
+  });
   it('parses a bare org/name id (optionally @rev or :rev)', () => {
     expect(parseHuggingfaceLoraRef('fal/ltx-lora')).toEqual({ repo: 'fal/ltx-lora', revision: null });
     expect(parseHuggingfaceLoraRef('fal/ltx-lora@v2')).toEqual({ repo: 'fal/ltx-lora', revision: 'v2' });
