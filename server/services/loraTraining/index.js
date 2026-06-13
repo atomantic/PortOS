@@ -43,6 +43,7 @@ import { buildTrainedSidecar, trainedLoraFilename } from './sidecar.js';
 import { validateDatasetReady } from './dataset.js';
 import {
   listRunCheckpoints,
+  listRunSamples,
   resolveCheckpointAdapterBuffer,
   selectDeployableCheckpoint,
 } from './checkpoints.js';
@@ -550,6 +551,12 @@ async function registerTrainedLora({
 export async function listCheckpoints(runId) {
   const run = await runsDb.getRunRequired(runId);
   return { runId, runtime: run.runtime, checkpoints: listRunCheckpoints(run) };
+}
+
+/** Mid-training sample previews (step + url) for the live progress gallery. */
+export async function listSamples(runId) {
+  const run = await runsDb.getRunRequired(runId);
+  return { runId, samples: listRunSamples(run) };
 }
 
 /**

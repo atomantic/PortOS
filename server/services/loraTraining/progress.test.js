@@ -25,15 +25,17 @@ describe('makeTrainingLineHandler', () => {
     expect(progress.progress).toBeCloseTo(0.25);
     expect(progress.step).toBe(250);
     expect(progress.totalSteps).toBe(1000);
+    expect(progress.loss).toBeCloseTo(0.0812);
     expect(progress.message).toContain('250/1000');
     expect(progress.message).toContain('0.0812');
   });
 
-  it('handles nan loss without a loss suffix', () => {
+  it('handles nan loss without a loss suffix (loss null)', () => {
     const { handleLine, emit } = setup();
     handleLine('STEP:5:100:nan');
     const progress = emit.mock.calls.find(([e]) => e === 'progress')[1];
     expect(progress.message).toBe('Training step 5/100');
+    expect(progress.loss).toBeNull();
   });
 
   it('routes CHECKPOINT and SAMPLE lines to callbacks', () => {
@@ -47,6 +49,7 @@ describe('makeTrainingLineHandler', () => {
     expect(onSample).toHaveBeenCalled();
     const preview = emit.mock.calls.find(([e, p]) => e === 'progress' && p.currentImage)[1];
     expect(preview.currentImage).toBe('/api/lora-training/runs/r1/samples/step-000250.png');
+    expect(preview.step).toBe(250); // keys the live gallery thumbnail by step
     expect(preview.progress).toBeUndefined(); // preview frame, not a progress update
   });
 

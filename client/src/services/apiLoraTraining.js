@@ -93,6 +93,11 @@ export const cancelLoraTrainingRun = (runId) =>
 export const listLoraTrainingCheckpoints = (runId) =>
   request(`/lora-training/runs/${runId}/checkpoints`);
 
+// Mid-training sample timeline (step + thumbnail URL) — seeds the live
+// progress gallery so a reload mid-run shows every sample rendered so far.
+export const listLoraTrainingSamples = (runId) =>
+  request(`/lora-training/runs/${runId}/samples`);
+
 // Promote a checkpoint to be the deployed LoRA (re-extracts that step's
 // adapter and overwrites the run's registered .safetensors in place).
 export const promoteLoraTrainingCheckpoint = (runId, step, { silent = false } = {}) =>

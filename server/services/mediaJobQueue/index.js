@@ -512,10 +512,20 @@ function makeGenDispatcher(emitter, job, handlers) {
     const hasProgress = typeof e.progress === 'number' && Number.isFinite(e.progress);
     const hasCurrentImage = typeof e.currentImage === 'string' && e.currentImage.length > 0;
     const message = e.message !== undefined ? e.message : synthesizeMessage(e, job.kind);
+    // Structured step/loss ride along on the wire when the emitter supplies
+    // them (LoRA training does) so the client plots a loss curve and keys
+    // sample thumbnails by step instead of re-parsing the message string.
+    // Additive + presence-guarded — image/video gen omit them, unaffected.
+    const addStepFields = (payload) => {
+      if (typeof e.step === 'number') payload.step = e.step;
+      if (typeof e.totalSteps === 'number') payload.totalSteps = e.totalSteps;
+      if (typeof e.loss === 'number') payload.loss = e.loss;
+    };
     if (hasProgress) {
       const payload = { type: 'progress', progress: e.progress };
       if (hasCurrentImage) payload.currentImage = e.currentImage;
       if (message !== undefined) payload.message = message;
+      addStepFields(payload);
       handlers.progress(payload);
       return;
     }
@@ -524,6 +534,7 @@ function makeGenDispatcher(emitter, job, handlers) {
       // existing consumers can keep their progress-bar value untouched.
       const payload = { type: 'preview', currentImage: e.currentImage };
       if (message !== undefined) payload.message = message;
+      addStepFields(payload);
       handlers.progress(payload);
     }
   };

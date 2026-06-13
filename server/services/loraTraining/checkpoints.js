@@ -122,6 +122,20 @@ export function listRunCheckpoints(run) {
 }
 
 /**
+ * Every mid-training sample the run has recorded so far, as `{ step, url }`
+ * sorted by step. Unlike listRunCheckpoints this is keyed off the SAMPLE
+ * artifacts alone (samples are written on their own cadence, often denser than
+ * checkpoints) — it seeds the live progress gallery so a mid-run reload shows
+ * the full sample timeline, not just frames that arrived after re-subscribe.
+ */
+export function listRunSamples(run) {
+  return (run.artifacts?.samples || [])
+    .map((name) => ({ step: stepFromSampleName(name), url: sampleUrl(run.id, name) }))
+    .filter((s) => s.step != null)
+    .sort((a, b) => a.step - b.step);
+}
+
+/**
  * Decide whether a preview image is a degenerate collapse (near-black /
  * near-uniform). Conservative by design — only the catastrophic case. A
  * missing/unreadable preview returns false (don't veto on analysis failure).

@@ -13,6 +13,7 @@ import { Dumbbell, Loader2, Square, CheckCircle2, XCircle, Sparkles } from 'luci
 import toast from '../ui/Toast';
 import { useSseProgress } from '../../hooks/useSseProgress';
 import CheckpointPicker from './CheckpointPicker';
+import LiveSampleGallery from './LiveSampleGallery';
 import {
   getLoraTrainingStatus,
   listLoraTrainingRuns,
@@ -57,7 +58,7 @@ export default function TrainingPanel({ dataset, readiness, triggerSaving, onRun
   useEffect(() => { refreshRuns(); }, [refreshRuns]);
 
   const sseUrl = activeRun ? `/api/lora-training/runs/${activeRun.id}/events` : null;
-  const { latest, closed } = useSseProgress(sseUrl, { enabled: !!activeRun });
+  const { frames, latest, closed } = useSseProgress(sseUrl, { enabled: !!activeRun });
 
   useEffect(() => {
     if (!closed || !activeRun) return;
@@ -122,9 +123,10 @@ export default function TrainingPanel({ dataset, readiness, triggerSaving, onRun
         <div className="h-2 bg-port-bg rounded overflow-hidden">
           <div className="h-full bg-port-accent transition-all" style={{ width: `${Math.round(progress * 100)}%` }} />
         </div>
-        <div className="text-xs text-gray-400">{latest?.message || (activeRun.status === 'queued' ? `Queued (position ${latest?.position ?? '…'})` : 'Starting…')}</div>
-        {latest?.currentImage && (
-          <img src={latest.currentImage} alt="training sample" className="w-32 h-32 object-cover rounded border border-port-border" />
+        {activeRun.status === 'queued' ? (
+          <div className="text-xs text-gray-400">Queued (position {latest?.position ?? '…'})</div>
+        ) : (
+          <LiveSampleGallery run={activeRun} frames={frames} progress={progress} message={latest?.message} />
         )}
       </div>
     );

@@ -23,6 +23,7 @@ vi.mock('../../lib/fileUtils.js', async (importOriginal) =>
 
 const {
   listRunCheckpoints,
+  listRunSamples,
   isPreviewCollapsed,
   resolveCheckpointAdapterBuffer,
   selectDeployableCheckpoint,
@@ -116,6 +117,22 @@ describe('loraTraining/checkpoints', () => {
     expect(list[0]).toMatchObject({ step: 250, loss: 0.64, hasPreview: true, deployed: true });
     expect(list[0].previewUrl).toContain('0000250_preview');
     expect(list[1].deployed).toBe(false);
+  });
+
+  it('lists samples as step+url sorted by step (seeds the live gallery)', () => {
+    const samples = listRunSamples(buildRun());
+    expect(samples.map((s) => s.step)).toEqual([250, 500]);
+    expect(samples[0].url).toContain(`/runs/${RUN_ID}/samples/0000250_preview`);
+    // flux2 naming + unparseable names: keep the parseable ones, sorted.
+    const mixed = listRunSamples(buildRun({
+      artifacts: { checkpoints: [], samples: ['step-000500.png', 'garbage.png', 'step-000250.png'] },
+    }));
+    expect(mixed.map((s) => s.step)).toEqual([250, 500]);
+  });
+
+  it('returns no samples when the run has none recorded', () => {
+    expect(listRunSamples(buildRun({ artifacts: { checkpoints: [], samples: [] } }))).toEqual([]);
+    expect(listRunSamples({ id: RUN_ID })).toEqual([]);
   });
 
   it('joins preview by the filename-derived step even when the recorded step drifted', async () => {

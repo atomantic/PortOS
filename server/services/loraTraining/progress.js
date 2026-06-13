@@ -67,6 +67,9 @@ export function makeTrainingLineHandler({
         progress: Math.max(0, Math.min(1, cur / total)),
         step: cur,
         totalSteps: total,
+        // Structured loss (null on nan) so the client plots a curve instead of
+        // re-parsing it back out of the message string.
+        loss: Number.isFinite(loss) ? loss : null,
         message: `Training step ${cur}/${total}${Number.isFinite(loss) ? ` · loss ${loss.toFixed(4)}` : ''}`,
       });
       return;
@@ -83,11 +86,13 @@ export function makeTrainingLineHandler({
 
     const sample = line.match(/^SAMPLE:(.+):(\d+)$/);
     if (sample) {
-      onSample?.(sample[1], Number(sample[2]));
+      const sampleStep = Number(sample[2]);
+      onSample?.(sample[1], sampleStep);
       const url = sampleUrl ? sampleUrl(sample[1]) : null;
       if (url) {
         // currentImage without progress → dispatcher emits a 'preview' frame.
-        emit('progress', { generationId: jobId, currentImage: url, message: `Sample @ step ${sample[2]}` });
+        // `step` rides along so the live gallery can key the thumbnail by step.
+        emit('progress', { generationId: jobId, currentImage: url, step: sampleStep, message: `Sample @ step ${sampleStep}` });
       }
       return;
     }

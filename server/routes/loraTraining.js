@@ -22,6 +22,7 @@ import {
   isMfluxTrainAvailable,
   listCheckpoints,
   listRuns,
+  listSamples,
   promoteCheckpoint,
   runDir,
   runSamplesDir,
@@ -124,6 +125,15 @@ router.post('/runs/:id/promote-checkpoint', asyncHandler(async (req, res) => {
   await getRunRequired(req.params.id);
   const { step } = validateRequest(promoteSchema, req.body);
   res.json(await promoteCheckpoint(req.params.id, step));
+}));
+
+// Mid-training sample timeline (step + thumbnail URL) — seeds the live
+// progress gallery so a reload mid-run shows every sample so far, not just
+// the ones streamed after re-subscribing. Registered before the
+// `/samples/:filename` serve route (which needs the extra path segment).
+router.get('/runs/:id/samples', asyncHandler(async (req, res) => {
+  await getRunRequired(req.params.id); // 404 if the run is unknown
+  res.json(await listSamples(req.params.id));
 }));
 
 router.get('/runs/:id/samples/:filename', asyncHandler(async (req, res) => {
