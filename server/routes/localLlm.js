@@ -26,7 +26,7 @@ import {
 import { getCatalog, searchCatalog, isBackend } from '../lib/localLlmCatalog.js'
 import { searchHuggingFaceModels } from '../services/huggingFaceCatalog.js'
 import {
-  getStatus, listModels, installModel, deleteModel, switchBackend, migrateBackend, installBackend, upgradeBackend, controlOllamaServer
+  getStatus, listModels, listVisionModels, installModel, deleteModel, switchBackend, migrateBackend, installBackend, upgradeBackend, controlOllamaServer
 } from '../services/localLlm.js'
 import { runLocalLlmTest, compareLocalLlmModels } from '../services/localLlmPlayground.js'
 import { abortSignalFromResponse } from '../lib/requestAbort.js'
@@ -43,6 +43,13 @@ const emitter = (req) => {
 // GET /api/local-llm/status — both backends + active marker
 router.get('/status', asyncHandler(async (req, res) => {
   res.json(await getStatus())
+}))
+
+// GET /api/local-llm/vision-models — vision-capable installed models across
+// both backends, tagged with the provider id that serves them. Powers the
+// LoRA caption-model picker.
+router.get('/vision-models', asyncHandler(async (_req, res) => {
+  res.json({ models: await listVisionModels() })
 }))
 
 // GET /api/local-llm/catalog?backend=ollama&q=llama — curated install picker

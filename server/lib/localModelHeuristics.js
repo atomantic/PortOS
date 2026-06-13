@@ -9,8 +9,9 @@
  *     generation/fallback run — the cause of the nomic-embed-text fallback bug)
  *   - localLlm.getStatus (recommend a best-fit editorial model)
  *
- * The client mirrors `isEmbeddingModel` in client/src/utils/providers.js — keep
- * the two regexes in lockstep (the aiToolkit/lib dirs can't be imported there).
+ * The client mirrors `isEmbeddingModel` + `isVisionModel` in
+ * client/src/utils/providers.js — keep the regexes in lockstep (the
+ * aiToolkit/lib dirs can't be imported there).
  */
 
 // Embedding-only models — never valid for chat/generation. The bge/nomic/e5/gte
@@ -33,6 +34,55 @@ export function isEmbeddingModel(id) {
  */
 export function isGenerationModel(id) {
   return typeof id === 'string' && id.length > 0 && !isEmbeddingModel(id);
+}
+
+// Vision / multimodal (VLM) model id markers. These are the families that
+// accept image content blocks on an OpenAI-compatible /chat/completions call.
+// Two groups:
+//   - Short/ambiguous tokens (`vision`, `vl`) must be token-bounded so they
+//     don't match mid-word (`vl` is the Qwen-VL/InternVL suffix). `vl` requires
+//     a leading boundary and a trailing boundary-or-digit (`internvl2`).
+//   - Distinctive family names are matched as plain substrings — they're
+//     unique enough that an interior version digit (`internvl2`, `glm-4v`)
+//     shouldn't defeat the match.
+const VISION_RE = new RegExp([
+  '(?:^|[-_/:])vision(?:[-_/:.]|$)',
+  '(?:^|[-_/:])vl(?:\\d|[-_/:.]|$)',
+  'llava', 'bakllava', 'moondream', 'minicpm-?v', 'pixtral', 'gemma-?3',
+  'smolvlm', 'internvl', 'cogvlm', 'glm-?4v', 'phi-?3\\.5?-vision',
+  'phi-?4-multimodal', 'got-ocr', 'idefics', 'fuyu', 'paligemma',
+  'kosmos', 'nanollava',
+].join('|'), 'i');
+
+/**
+ * Detect a vision-capable (multimodal) model from its id and/or backend
+ * capability metadata. Prefers explicit metadata when present — LM Studio's
+ * native `/api/v0/models` tags vision models with `type: 'vlm'`, and Ollama's
+ * `/api/show` reports a `vision` capability — and falls back to the id regex
+ * for backends that don't tag (or stored provider model lists that are just
+ * strings).
+ *
+ * @param {string|{id?:string,name?:string,type?:string,capabilities?:string[]}} model
+ * @returns {boolean}
+ */
+export function isVisionModel(model) {
+  if (!model) return false;
+  if (typeof model === 'string') return VISION_RE.test(model);
+  if (typeof model !== 'object') return false;
+  // Explicit metadata is authoritative — in BOTH directions. LM Studio tags
+  // every model with a `type` (`vlm` / `llm` / `embeddings`), so a positive
+  // `vlm` (or a `vision` capability) confirms vision, and any OTHER explicit
+  // type means text-only even when the id happens to match the regex (e.g.
+  // `gemma3:1b` is `type:'llm'` — a text-only Gemma 3). Only fall through to
+  // the id heuristic when the backend gave us no capability metadata at all
+  // (Ollama's /api/tags), so a name-only guess never overrides a known type.
+  const type = model.type ? String(model.type).toLowerCase() : null;
+  if (type === 'vlm') return true;
+  if (Array.isArray(model.capabilities)
+    && model.capabilities.some((c) => String(c).toLowerCase() === 'vision')) return true;
+  if (type) return false; // explicit non-vision type — don't regex-guess past it
+  const id = model.id || model.name || '';
+  return typeof id === 'string' && VISION_RE.test(id);
 }
 
 // Families ranked for EDITORIAL FIX GENERATION, best-first. This task needs

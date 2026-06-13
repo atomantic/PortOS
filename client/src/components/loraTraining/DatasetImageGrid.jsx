@@ -17,9 +17,10 @@ const SOURCE_BADGE = {
   generated: { label: 'generated', cls: 'bg-port-accent/20 text-port-accent' },
   upload: { label: 'upload', cls: 'bg-emerald-600/20 text-emerald-300' },
   'refsheet-slice': { label: 'sheet crop', cls: 'bg-purple-600/20 text-purple-300' },
+  gallery: { label: 'gallery', cls: 'bg-sky-600/20 text-sky-300' },
 };
 
-export default function DatasetImageGrid({ dataset, onImagesChange, onCaptionRunStarted }) {
+export default function DatasetImageGrid({ dataset, onImagesChange, onCaptionRunStarted, captionModel = null }) {
   const [drafts, setDrafts] = useState({});
   const [savingId, setSavingId] = useState(null);
   const [confirmingId, setConfirmingId] = useState(null);
@@ -53,7 +54,12 @@ export default function DatasetImageGrid({ dataset, onImagesChange, onCaptionRun
   const recaption = async (img) => {
     setRecaptioningId(img.id);
     try {
-      const run = await startLoraCaptionRun(dataset.id, { imageIds: [img.id], overwrite: true });
+      const run = await startLoraCaptionRun(dataset.id, {
+        imageIds: [img.id],
+        overwrite: true,
+        ...(captionModel?.providerId ? { providerId: captionModel.providerId } : {}),
+        ...(captionModel?.model ? { model: captionModel.model } : {}),
+      });
       onCaptionRunStarted?.(run);
       toast.success('Re-captioning image…');
     } finally {

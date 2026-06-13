@@ -10,7 +10,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import {
-  ArrowLeft, Loader2, Upload, Wand2, Scissors, Tags, AlertTriangle,
+  ArrowLeft, Loader2, Upload, Wand2, Scissors, Tags, AlertTriangle, Images,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import Modal from '../components/ui/Modal';
@@ -18,6 +18,8 @@ import { useSseProgress } from '../hooks/useSseProgress';
 import DatasetImageGrid from '../components/loraTraining/DatasetImageGrid';
 import GenerateBatchDialog from '../components/loraTraining/GenerateBatchDialog';
 import TrainingPanel from '../components/loraTraining/TrainingPanel';
+import CaptionModelPicker from '../components/loraTraining/CaptionModelPicker';
+import ImportGalleryDialog from '../components/loraTraining/ImportGalleryDialog';
 import {
   getLoraDataset,
   patchLoraDataset,
@@ -134,8 +136,13 @@ export default function LoraDatasetDetail() {
   const [uploading, setUploading] = useState(false);
   const [showGenerate, setShowGenerate] = useState(false);
   const [showSlice, setShowSlice] = useState(false);
+  const [showImport, setShowImport] = useState(false);
   const [captionRun, setCaptionRun] = useState(null);
   const [captionStarting, setCaptionStarting] = useState(false);
+  // Chosen caption model { providerId, model } — null fields mean "let the
+  // server auto-pick a vision model". Lifted from CaptionModelPicker so caption
+  // runs pass the explicit selection.
+  const [captionModel, setCaptionModel] = useState({ providerId: null, model: null });
   const fileInputRef = useRef(null);
 
   const refresh = useCallback(() => getLoraDataset(datasetId)
@@ -213,10 +220,21 @@ export default function LoraDatasetDetail() {
     }
   };
 
+  // Stable so CaptionModelPicker's run-once effect doesn't re-fire.
+  const onCaptionModelChange = useCallback((sel) => setCaptionModel(sel), []);
+
+  // Strip null provider/model so an "Auto" selection sends an empty body and
+  // the server resolves a vision model itself.
+  const captionOptions = (extra = {}) => ({
+    ...extra,
+    ...(captionModel.providerId ? { providerId: captionModel.providerId } : {}),
+    ...(captionModel.model ? { model: captionModel.model } : {}),
+  });
+
   const captionAll = async () => {
     setCaptionStarting(true);
     try {
-      const run = await startLoraCaptionRun(datasetId, { overwrite: false });
+      const run = await startLoraCaptionRun(datasetId, captionOptions({ overwrite: false }));
       setCaptionRun(run);
     } finally {
       setCaptionStarting(false);
@@ -300,6 +318,13 @@ export default function LoraDatasetDetail() {
         >
           {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />} Upload
         </button>
+        <button
+          type="button"
+          onClick={() => setShowImport(true)}
+          className="px-3 py-2 text-sm rounded bg-port-card border border-port-border text-gray-300 hover:text-white flex items-center gap-2"
+        >
+          <Images className="w-4 h-4" /> From gallery
+        </button>
         <input
           ref={fileInputRef}
           type="file"
@@ -328,6 +353,7 @@ export default function LoraDatasetDetail() {
             ? `Captioning ${captionSse.latest?.done ?? 0}/${captionSse.latest?.total ?? '…'}`
             : 'Caption all'}
         </button>
+        <CaptionModelPicker onChange={onCaptionModelChange} />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-4 items-start">
@@ -335,6 +361,7 @@ export default function LoraDatasetDetail() {
           dataset={dataset}
           onImagesChange={onImagesChange}
           onCaptionRunStarted={setCaptionRun}
+          captionModel={captionModel}
         />
         <TrainingPanel
           dataset={dataset}
@@ -358,6 +385,17 @@ export default function LoraDatasetDetail() {
           dataset={dataset}
           onClose={() => setShowSlice(false)}
           onSliced={() => { setShowSlice(false); refresh(); }}
+        />
+      )}
+      {showImport && (
+        <ImportGalleryDialog
+          dataset={dataset}
+          onClose={() => setShowImport(false)}
+          onImported={(images) => {
+            setShowImport(false);
+            if (images?.length) onImagesChange((prev) => [...prev, ...images]);
+            refresh();
+          }}
         />
       )}
     </div>

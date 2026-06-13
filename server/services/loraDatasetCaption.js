@@ -9,8 +9,12 @@
  * subscribes via `GET /api/lora-datasets/:id/caption-runs/:runId/events`
  * and refetches the dataset on the terminal frame.
  *
- * Provider resolution: request override → `settings.loraTraining.captionProviderId`
- * → 'lmstudio' (the default local vision backend).
+ * Provider/model resolution: request override → `settings.loraTraining.*`
+ * → a vision-capable installed model auto-picked across the local backends.
+ * A vision model is *required* — captioning sends image content blocks, so a
+ * text-only model would 400 per image with a cryptic "Model does not support
+ * images". We resolve (and validate) a vision model up front and fail the whole
+ * run with one actionable error instead.
  */
 
 import { readFile } from 'fs/promises';
@@ -21,6 +25,8 @@ import { prefixCaption } from '../lib/loraDataset.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../lib/sseUtils.js';
 import { describeImageDataUrl } from './visionTest.js';
 import { getSettings } from './settings.js';
+import { listVisionModels } from './localLlm.js';
+import { isVisionModel } from '../lib/localModelHeuristics.js';
 import { getDataset, updateDataset, datasetImagePath } from './loraDatasets.js';
 
 export const CAPTION_PROMPT = [
@@ -38,6 +44,68 @@ const CAPTION_MAX_TOKENS = 300;
 const captionRuns = new Map();
 
 export const attachCaptionSseClient = (runId, res) => attachSse(captionRuns, runId, res);
+
+/**
+ * Resolve which provider+model the run captions with, requiring a
+ * vision-capable model. Precedence:
+ *   1. Explicit request override (providerId/model from the UI picker).
+ *   2. Saved `settings.loraTraining.captionProviderId/captionModel`.
+ *   3. Auto-pick the first vision-capable installed local model.
+ *
+ * An explicit non-vision model is rejected (the caller asked for it, so warn
+ * loudly rather than silently swap). When nothing is configured and no vision
+ * model is installed, throws a 409 with an actionable message — the run never
+ * starts, so the user doesn't get N cryptic per-image 400s.
+ *
+ * Known gap (intentional): the heuristic-first short-circuit accepts a
+ * regex-recognized explicit model WITHOUT confirming it's still installed —
+ * skipping the two-backend scan is the whole point of the fast path. So a saved
+ * `captionModel` that was later uninstalled slips past the up-front 409 and
+ * fails per-image at the API instead (surfaced by the run's terminal error).
+ * Validating every run against the live model list would defeat the fast path;
+ * the picker's own list is the primary defense against a stale selection.
+ *
+ * `listVision` is injectable for tests; defaults to the localLlm scan.
+ */
+export async function resolveCaptionModel({
+  providerId = null, model = null, settings = null, listVision = listVisionModels,
+} = {}) {
+  const explicitProvider = providerId || settings?.loraTraining?.captionProviderId || null;
+  const explicitModel = model || settings?.loraTraining?.captionModel || null;
+
+  if (explicitModel) {
+    // Heuristic-first: the common path (re-caption / caption-all with a picked
+    // model) passes a model the id regex already recognizes, so skip the
+    // two-backend vision scan entirely. Only scan when the id is opaque — then
+    // trust backend metadata (LM Studio `type:'vlm'`) before rejecting.
+    if (!isVisionModel(explicitModel)) {
+      const visionModels = await listVision().catch(() => []);
+      const known = visionModels.some((m) => m.id === explicitModel
+        && (!explicitProvider || m.providerId === explicitProvider));
+      if (!known) {
+        throw new ServerError(
+          `Caption model "${explicitModel}" is not vision-capable — pick a vision model (e.g. a Qwen-VL, LLaVA, or Llama 3.2 Vision build).`,
+          { status: 409, code: 'LORA_CAPTION_NOT_VISION' },
+        );
+      }
+    }
+    return { providerId: explicitProvider || 'lmstudio', model: explicitModel };
+  }
+
+  // No explicit model — scan and auto-pick a vision model (preferring the
+  // chosen provider when one was set).
+  const visionModels = await listVision().catch(() => []);
+  const pick = (explicitProvider
+    ? visionModels.find((m) => m.providerId === explicitProvider)
+    : null) || visionModels[0];
+  if (!pick) {
+    throw new ServerError(
+      'No vision-capable model is installed for captioning. Install one (e.g. Qwen2.5-VL, LLaVA, or Llama 3.2 Vision) from Settings → Local LLM, then pick it on the dataset.',
+      { status: 409, code: 'LORA_CAPTION_NO_VISION_MODEL' },
+    );
+  }
+  return { providerId: pick.providerId, model: pick.id };
+}
 
 const emit = (runId, payload) => {
   const run = captionRuns.get(runId);
@@ -68,12 +136,16 @@ export async function startCaptionRun(datasetId, {
   }
 
   const settings = await getSettings();
-  const resolvedProvider = providerId || settings?.loraTraining?.captionProviderId || 'lmstudio';
-  const resolvedModel = model || settings?.loraTraining?.captionModel || undefined;
+  // Resolve (and validate) a vision-capable model BEFORE creating the run, so a
+  // missing/non-vision model fails the request synchronously with one clear
+  // error instead of N per-image 400s inside the detached loop.
+  const { providerId: resolvedProvider, model: resolvedModel } = await resolveCaptionModel({
+    providerId, model, settings,
+  });
 
   const runId = uuidv4();
   captionRuns.set(runId, { clients: [], lastPayload: null });
-  console.log(`🏷️ Caption run ${shortId(runId)} — dataset=${shortId(datasetId)} images=${targets.length} provider=${resolvedProvider}`);
+  console.log(`🏷️ Caption run ${shortId(runId)} — dataset=${shortId(datasetId)} images=${targets.length} provider=${resolvedProvider} model=${resolvedModel}`);
 
   // Detached loop — runs outside the request lifecycle, so each iteration
   // wraps its fallible work in try/catch (the async-boundary exception to

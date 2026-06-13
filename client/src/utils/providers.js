@@ -44,6 +44,21 @@ export const isEmbeddingModel = (id) =>
   /(?:^|[-_/:])(?:embed|embedding|bge|nomic|mxbai|gte|e5|snowflake-arctic-embed)(?:[-_/:]|$)|text-embedding/i.test(id);
 
 /**
+ * Vision-capable (multimodal) model detector — mirror of `isVisionModel` in
+ * server/lib/localModelHeuristics.js (id-regex branch only). Keep the regex in
+ * lockstep with the server. Used to flag/select vision models in the LoRA
+ * caption picker. The server prefers explicit backend capability metadata
+ * (`vision: true` on the model card); use that field when you have it and fall
+ * back to this for bare id strings.
+ * @param {string} id
+ * @returns {boolean}
+ */
+export const isVisionModel = (id) =>
+  typeof id === 'string' && id.length > 0 &&
+  // Mirror of VISION_RE in server/lib/localModelHeuristics.js — keep in lockstep.
+  /(?:^|[-_/:])vision(?:[-_/:.]|$)|(?:^|[-_/:])vl(?:\d|[-_/:.]|$)|llava|bakllava|moondream|minicpm-?v|pixtral|gemma-?3|smolvlm|internvl|cogvlm|glm-?4v|phi-?3\.5?-vision|phi-?4-multimodal|got-ocr|idefics|fuyu|paligemma|kosmos|nanollava/i.test(id);
+
+/**
  * Selectable models for a generation/chat picker: drops internal sentinels AND
  * embedding-only models. Use anywhere the user picks a model that will run a
  * prompt (provider editor model lists, fallback model, manuscript review).

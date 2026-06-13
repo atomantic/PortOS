@@ -14,9 +14,11 @@
  */
 
 import { copyFile, unlink } from 'fs/promises';
+import { existsSync } from 'fs';
 import { join, basename } from 'path';
 import sharp from 'sharp';
 import { PATHS, ensureDir } from '../lib/fileUtils.js';
+import { assertGalleryFilename } from './imageGen/local.js';
 import { createCollectionStore } from '../lib/collectionStore.js';
 import {
   LORA_DATASET_SCHEMA_VERSION,
@@ -187,6 +189,23 @@ export async function deleteDataset(id) {
   return { ok: true, id };
 }
 
+/** Canonical dataset-image entry. One source of truth for the shape so every
+ *  image source (upload / gallery import / generation) stamps identical fields. */
+const makeImageEntry = ({ imageId, file, source, info, sourceJobId = null }) => ({
+  id: imageId,
+  file,
+  caption: '',
+  captionSource: null,
+  captionedAt: null,
+  source,
+  sourceJobId,
+  variation: null,
+  status: 'ready',
+  width: info?.width || null,
+  height: info?.height || null,
+  createdAt: nowIso(),
+});
+
 /**
  * Normalize an uploaded image to PNG inside the dataset's images dir and
  * append its entry. `tmpPath` is the multipart parser's staged temp file —
@@ -211,26 +230,65 @@ export async function addUploadedImage(id, { tmpPath, originalname = '' }) {
     );
   });
   await cleanup();
-  const width = info.width || null;
-  const height = info.height || null;
 
-  const entry = {
-    id: imageId,
-    file,
-    caption: '',
-    captionSource: null,
-    captionedAt: null,
-    source: 'upload',
-    sourceJobId: null,
-    variation: null,
-    status: 'ready',
-    width,
-    height,
-    createdAt: nowIso(),
-  };
+  const entry = makeImageEntry({ imageId, file, source: 'upload', info });
   await updateDataset(id, (current) => ({ ...current, images: [...current.images, entry] }));
-  console.log(`📥 Dataset ${id} ← upload ${file} (${width}×${height})`);
+  console.log(`📥 Dataset ${id} ← upload ${file} (${entry.width}×${entry.height})`);
   return entry;
+}
+
+/**
+ * Import existing gallery images (by basename, e.g. `<jobId>.png`) into a
+ * dataset. Each is normalized through sharp into the dataset's images dir —
+ * same gate as a fresh upload — so a gallery PNG with odd metadata can't smuggle
+ * anything in, and the dataset owns an independent copy (deleting the gallery
+ * image later won't strand the dataset). Each call appends a fresh copy (no
+ * dedup — same as uploading the same file twice). Returns the appended entries.
+ */
+export async function importGalleryImages(id, { filenames = [] } = {}) {
+  await requireDataset(id);
+  if (!Array.isArray(filenames) || !filenames.length) {
+    throw new ServerError('No gallery filenames provided', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  await ensureDir(datasetImagesDir(id));
+  // sharp transcodes are independent CPU/disk work — run them concurrently
+  // (single-user trust model; the per-id write queue still serializes the one
+  // dataset mutation below). Use allSettled, NOT all: a rejection from all()
+  // returns before sibling toFile() calls finish, so files written *after* the
+  // first failure would escape cleanup and orphan. allSettled waits for every
+  // transcode to land before we either commit them all or unlink them all.
+  const written = [];
+  const results = await Promise.allSettled(filenames.map(async (filename) => {
+    // Reuse the gallery's own path-traversal/extension guard.
+    assertGalleryFilename(filename);
+    const sourcePath = join(PATHS.images, basename(filename));
+    if (!existsSync(sourcePath)) {
+      throw new ServerError(`Gallery image not found: ${filename}`, { status: 404, code: 'NOT_FOUND' });
+    }
+    const imageId = uuidv4();
+    const file = `${imageId}.png`;
+    const destPath = datasetImagePath(id, file);
+    const info = await sharp(sourcePath).rotate().png().toFile(destPath)
+      .then((i) => { written.push(destPath); return i; })
+      .catch((err) => {
+        throw new ServerError(
+          `"${filename}" is not a decodable image: ${err?.message || err}`,
+          { status: 422, code: 'INVALID_IMAGE' },
+        );
+      });
+    return makeImageEntry({ imageId, file, source: 'gallery', info });
+  }));
+  const failure = results.find((r) => r.status === 'rejected');
+  if (failure) {
+    // All transcodes have settled now, so `written` is complete — no late write
+    // can re-orphan a file after this cleanup.
+    await Promise.all(written.map((p) => unlink(p).catch(() => {})));
+    throw failure.reason;
+  }
+  const entries = results.map((r) => r.value);
+  await updateDataset(id, (current) => ({ ...current, images: [...current.images, ...entries] }));
+  console.log(`🖼️ Dataset ${id} ← imported ${entries.length} gallery image(s)`);
+  return entries;
 }
 
 export async function updateImageCaption(id, imageId, caption) {

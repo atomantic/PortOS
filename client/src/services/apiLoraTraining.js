@@ -38,6 +38,12 @@ export const uploadLoraDatasetImages = (id, files) => {
   return request(`/lora-datasets/${id}/images`, { method: 'POST', body: form });
 };
 
+// Import existing gallery images (basenames) into the dataset.
+export const importLoraDatasetGalleryImages = (id, filenames) =>
+  request(`/lora-datasets/${id}/import-gallery`, {
+    method: 'POST', body: JSON.stringify({ filenames }),
+  });
+
 export const generateLoraDatasetImages = (id, options = {}) =>
   request(`/lora-datasets/${id}/generate`, { method: 'POST', body: JSON.stringify(options) });
 

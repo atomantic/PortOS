@@ -839,7 +839,9 @@ const loraTrainingParamsSchema = z.object({
 // provider pick + training parameter defaults. Code-level defaults live in
 // `services/loraTraining/runtimes.js` so an absent slice needs no migration.
 export const loraTrainingConfigSchema = z.object({
-  captionProviderId: z.string().max(128).optional(),
+  // Both nullable — the caption-model picker clears them to null on "Auto"
+  // (defer to the server's vision-model auto-pick).
+  captionProviderId: z.string().max(128).nullable().optional(),
   captionModel: z.string().max(256).nullable().optional(),
   defaults: loraTrainingParamsSchema.optional(),
 });
