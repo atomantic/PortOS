@@ -172,6 +172,15 @@ export const detectVideoLoraFamily = ({ repo, model } = {}) => {
 
 const DESCRIPTION_MAX_CHARS = 2000;
 
+// Read the HF model-card description, clamped to `maxChars`. Shared by the
+// sidecar builder (long, persisted) and the video-suggestion card builder
+// (short, display-only) — both read the same `cardData.description` but clamp
+// to different lengths, so the field-extraction lives in one place.
+export const extractHfCardDescription = (model, maxChars) => {
+  const raw = typeof model?.cardData?.description === 'string' ? model.cardData.description : '';
+  return raw.length > maxChars ? raw.slice(0, maxChars) : raw;
+};
+
 // Build the canonical sidecar for an HF-installed video LoRA. Shape mirrors the
 // Civitai sidecar (services builds the same fields) but carries a `huggingface`
 // block instead of `civitai`, sets `source: 'huggingface'`, and stamps
@@ -188,8 +197,7 @@ export const buildHfLoraSidecar = ({ repo, revision, file, model, family, filena
   const instancePrompt = typeof model?.cardData?.instance_prompt === 'string'
     ? model.cardData.instance_prompt.trim()
     : '';
-  const rawDesc = typeof model?.cardData?.description === 'string' ? model.cardData.description : '';
-  const description = rawDesc.length > DESCRIPTION_MAX_CHARS ? rawDesc.slice(0, DESCRIPTION_MAX_CHARS) : rawDesc;
+  const description = extractHfCardDescription(model, DESCRIPTION_MAX_CHARS);
   return {
     filename,
     name: repo.split('/')[1] || repo,

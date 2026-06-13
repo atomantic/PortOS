@@ -38,6 +38,14 @@ export const VIDEO_LORA_FAMILIES = Object.freeze({
   LTX_VIDEO: 'ltx-video',
 });
 
+// Predicate: is this LoRA family a video family (vs. an image RUNNER_FAMILIES
+// one)? Backs the Image/Video filter on /media/loras — both the installed-list
+// filter and the suggestion-panel section gating. Anything not in
+// VIDEO_LORA_FAMILIES (including null/legacy) is treated as image. Mirror of
+// client/src/lib/runnerFamilies.js.
+const VIDEO_LORA_FAMILY_SET = new Set(Object.values(VIDEO_LORA_FAMILIES));
+export const isVideoLoraFamily = (family) => VIDEO_LORA_FAMILY_SET.has(family);
+
 // Map a video-model registry entry (which carries `runtime`, not `runner`) to
 // the LoRA family the picker filters on. Only dgrauet's `ltx2` runtime can
 // fuse arbitrary user LoRAs today — its `ltx_pipelines_mlx` pipelines honor a
