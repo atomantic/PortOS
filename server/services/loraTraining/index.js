@@ -177,15 +177,29 @@ export async function startTrainingRun({ datasetId, baseModelId, name = null, pa
 
 const emitFailed = (jobId, error) => trainingEvents.emit('failed', { generationId: jobId, error });
 
-const flipDatasetAfterRun = (datasetId, { trained, loraFilename = null }) =>
-  updateDataset(datasetId, (current) => ({
-    ...current,
-    status: trained ? 'trained' : 'draft',
-    training: {
-      ...current.training,
-      ...(trained ? { loraFilename, completedAt: new Date().toISOString() } : {}),
-    },
-  })).catch((err) => console.error(`❌ dataset post-run stamp failed: ${err?.message}`));
+const flipDatasetAfterRun = (run, { trained, loraFilename = null }) => {
+  const datasetId = run?.datasetId;
+  if (!datasetId) return Promise.resolve();
+  // A run owns the dataset's training state only while the dataset still
+  // points at the run's character. The dataset can be reassigned to a
+  // different character mid-run (patchDataset resets it to draft); flipping
+  // it here would otherwise mark the NEW character trained with the OLD
+  // character's adapter, or clobber a fresh run's 'training' status. Skip the
+  // flip when the dataset has moved on. Pre-reassignment runs predate the
+  // `character` snapshot guarantee, so a missing entryId falls through (flip).
+  const runEntryId = run?.character?.entryId || null;
+  return updateDataset(datasetId, (current) => {
+    if (runEntryId && current.character?.entryId !== runEntryId) return null;
+    return {
+      ...current,
+      status: trained ? 'trained' : 'draft',
+      training: {
+        ...current.training,
+        ...(trained ? { loraFilename, completedAt: new Date().toISOString() } : {}),
+      },
+    };
+  }).catch((err) => console.error(`❌ dataset post-run stamp failed: ${err?.message}`));
+};
 
 /**
  * Queue-worker entry — `mediaJobQueue.runJob` calls this for kind
@@ -213,7 +227,7 @@ export async function runTraining({ jobId, runId, pythonPath = null }) {
     await runsDb.updateRun(runId, {
       status: 'failed', error: message, completedAt: new Date().toISOString(),
     }).catch(() => {});
-    await flipDatasetAfterRun(run.datasetId, { trained: false });
+    await flipDatasetAfterRun(run, { trained: false });
     return fail(message);
   };
 
@@ -478,7 +492,7 @@ async function finalizeTraining({ jobId, runId, code, signal, state }) {
         autoSelectedCheckpoint: selection.autoSelected,
       },
     });
-    await flipDatasetAfterRun(run.datasetId, { trained: true, loraFilename: filename });
+    await flipDatasetAfterRun(run, { trained: true, loraFilename: filename });
     if (selection.autoSelected) console.log(`⚠️ training [${shortId(jobId)}] ${selection.reason} (size ${sizeBytes ?? '?'}B)`);
     console.log(`✅ training [${shortId(jobId)}] complete — registered ${filename} @ step ${selection.step}`);
     trainingEvents.emit('completed', {
@@ -492,7 +506,7 @@ async function finalizeTraining({ jobId, runId, code, signal, state }) {
     // record keeps the checkpoint lineage for a future resume.
     await runsDb.updateRun(runId, { status: 'canceled', completedAt: new Date().toISOString(), error: 'Canceled' })
       .catch(() => {});
-    await flipDatasetAfterRun(run.datasetId, { trained: false });
+    await flipDatasetAfterRun(run, { trained: false });
     trainingEvents.emit('failed', { generationId: jobId, error: 'Canceled' });
     return;
   }
@@ -508,7 +522,7 @@ async function finalizeTraining({ jobId, runId, code, signal, state }) {
       status: 'failed', completedAt: new Date().toISOString(),
       error: message, errorCode: state.userError?.kind || 'NO_RESULT',
     }).catch(() => {});
-    await flipDatasetAfterRun(run.datasetId, { trained: false });
+    await flipDatasetAfterRun(run, { trained: false });
     console.error(`❌ training [${shortId(jobId)}] no-result: ${message}`);
     trainingEvents.emit('failed', { generationId: jobId, error: message });
     return;
@@ -522,7 +536,7 @@ async function finalizeTraining({ jobId, runId, code, signal, state }) {
     // Gated-repo deep-link target for the UI banner (HF_AUTH only); null otherwise.
     errorRepo: failRepo,
   }).catch(() => {});
-  await flipDatasetAfterRun(run?.datasetId, { trained: false });
+  await flipDatasetAfterRun(run, { trained: false });
   console.error(`❌ training [${shortId(jobId)}] ${failCode}: ${message}`);
   trainingEvents.emit('failed', { generationId: jobId, error: message, code: failCode, repo: failRepo });
 }
@@ -602,7 +616,7 @@ export async function promoteCheckpoint(runId, step) {
       autoSelectedCheckpoint: false,
     },
   }));
-  await flipDatasetAfterRun(run.datasetId, { trained: true, loraFilename: filename });
+  await flipDatasetAfterRun(run, { trained: true, loraFilename: filename });
   console.log(`📌 training [${shortId(runId)}] promoted checkpoint step ${step} → ${filename}`);
   return { loraFilename: filename, step };
 }
@@ -626,7 +640,7 @@ export async function initLoraTraining() {
       await runsDb.updateRun(run.id, {
         status: 'failed', error: 'interrupted by restart', completedAt: new Date().toISOString(),
       }).catch(() => {});
-      await flipDatasetAfterRun(run.datasetId, { trained: false });
+      await flipDatasetAfterRun(run, { trained: false });
       console.log(`🧹 training run ${shortId(run.id)} marked failed (interrupted by restart)`);
     }
   }
@@ -638,7 +652,7 @@ export async function initLoraTraining() {
       if (!run || ['completed', 'failed', 'canceled'].includes(run.status)) return null;
       return runsDb.updateRun(run.id, {
         status: 'canceled', completedAt: new Date().toISOString(), error: job.error || 'Canceled',
-      }).then(() => flipDatasetAfterRun(run.datasetId, { trained: false }));
+      }).then(() => flipDatasetAfterRun(run, { trained: false }));
     }).catch((err) => console.error(`❌ training cancel mirror failed: ${err?.message}`));
   });
   console.log('🏋️ loraTraining initialized');
