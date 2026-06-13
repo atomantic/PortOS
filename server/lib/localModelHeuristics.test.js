@@ -46,6 +46,8 @@ describe('localModelHeuristics', () => {
     it('flags known vision/multimodal model ids', () => {
       for (const id of [
         'qwen2.5-vl:7b',
+        'qwen2.5vl',       // Ollama's hyphen-free tag for Qwen2.5-VL
+        'qwen2.5vl:32b',
         'llava:latest',
         'bakllava',
         'moondream:latest',

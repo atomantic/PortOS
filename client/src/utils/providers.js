@@ -56,7 +56,7 @@ export const isEmbeddingModel = (id) =>
 export const isVisionModel = (id) =>
   typeof id === 'string' && id.length > 0 &&
   // Mirror of VISION_RE in server/lib/localModelHeuristics.js — keep in lockstep.
-  /(?:^|[-_/:])vision(?:[-_/:.]|$)|(?:^|[-_/:])vl(?:\d|[-_/:.]|$)|llava|bakllava|moondream|minicpm-?v|pixtral|gemma-?3|smolvlm|internvl|cogvlm|glm-?4v|phi-?3\.5?-vision|phi-?4-multimodal|got-ocr|idefics|fuyu|paligemma|kosmos|nanollava/i.test(id);
+  /(?:^|[-_/:])vision(?:[-_/:.]|$)|(?:^|[-_/:])vl(?:\d|[-_/:.]|$)|qwen[\d.]*-?vl|llava|bakllava|moondream|minicpm-?v|pixtral|gemma-?3|smolvlm|internvl|cogvlm|glm-?4v|phi-?3\.5?-vision|phi-?4-multimodal|got-ocr|idefics|fuyu|paligemma|kosmos|nanollava/i.test(id);
 
 /**
  * Selectable models for a generation/chat picker: drops internal sentinels AND

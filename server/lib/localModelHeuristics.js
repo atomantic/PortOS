@@ -48,6 +48,10 @@ export function isGenerationModel(id) {
 const VISION_RE = new RegExp([
   '(?:^|[-_/:])vision(?:[-_/:.]|$)',
   '(?:^|[-_/:])vl(?:\\d|[-_/:.]|$)',
+  // Qwen-VL ids glue the family to `vl` with a version digit and no separator
+  // (Ollama tags it `qwen2.5vl`, not `qwen2.5-vl`), so the bounded `vl` rule
+  // above misses them — match the qwen…vl form explicitly.
+  'qwen[\\d.]*-?vl',
   'llava', 'bakllava', 'moondream', 'minicpm-?v', 'pixtral', 'gemma-?3',
   'smolvlm', 'internvl', 'cogvlm', 'glm-?4v', 'phi-?3\\.5?-vision',
   'phi-?4-multimodal', 'got-ocr', 'idefics', 'fuyu', 'paligemma',

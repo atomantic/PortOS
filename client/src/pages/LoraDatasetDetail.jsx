@@ -378,7 +378,7 @@ export default function LoraDatasetDetail() {
         <button
           type="button"
           onClick={captionAll}
-          disabled={captionStarting || !!captionRun}
+          disabled={captionStarting || !!captionRun || !readiness.ready}
           className="px-3 py-2 text-sm rounded bg-port-card border border-port-border text-gray-300 hover:text-white flex items-center gap-2 disabled:opacity-50"
         >
           {captionStarting || captionRun ? <Loader2 className="w-4 h-4 animate-spin" /> : <Tags className="w-4 h-4" />}

@@ -202,7 +202,7 @@ describe('isEmbeddingModel / filterGenerationModels', () => {
 describe('isVisionModel (mirror of server localModelHeuristics)', () => {
   it('flags known vision model ids', () => {
     for (const id of [
-      'qwen2.5-vl:7b', 'llava:latest', 'moondream:latest', 'minicpm-v:8b',
+      'qwen2.5-vl:7b', 'qwen2.5vl', 'qwen2.5vl:32b', 'llava:latest', 'moondream:latest', 'minicpm-v:8b',
       'llama3.2-vision:11b', 'pixtral-12b', 'gemma3:4b', 'internvl2:8b', 'glm-4v:9b',
     ]) {
       expect(isVisionModel(id), id).toBe(true);
