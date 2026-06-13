@@ -253,7 +253,10 @@ export async function importGalleryImages(id, { filenames = [] } = {}) {
   await ensureDir(datasetImagesDir(id));
   // sharp transcodes are independent CPU/disk work — run them concurrently
   // (single-user trust model; the per-id write queue still serializes the one
-  // dataset mutation below). A single failure rejects the whole import.
+  // dataset mutation below). A single failure rejects the whole import; track
+  // every file actually written so a partial failure doesn't strand orphaned
+  // PNGs (written but never recorded in the dataset).
+  const written = [];
   const entries = await Promise.all(filenames.map(async (filename) => {
     // Reuse the gallery's own path-traversal/extension guard.
     assertGalleryFilename(filename);
@@ -263,14 +266,20 @@ export async function importGalleryImages(id, { filenames = [] } = {}) {
     }
     const imageId = uuidv4();
     const file = `${imageId}.png`;
-    const info = await sharp(sourcePath).rotate().png().toFile(datasetImagePath(id, file)).catch((err) => {
-      throw new ServerError(
-        `"${filename}" is not a decodable image: ${err?.message || err}`,
-        { status: 422, code: 'INVALID_IMAGE' },
-      );
-    });
+    const destPath = datasetImagePath(id, file);
+    const info = await sharp(sourcePath).rotate().png().toFile(destPath)
+      .then((i) => { written.push(destPath); return i; })
+      .catch((err) => {
+        throw new ServerError(
+          `"${filename}" is not a decodable image: ${err?.message || err}`,
+          { status: 422, code: 'INVALID_IMAGE' },
+        );
+      });
     return makeImageEntry({ imageId, file, source: 'gallery', info });
-  }));
+  })).catch(async (err) => {
+    await Promise.all(written.map((p) => unlink(p).catch(() => {})));
+    throw err;
+  });
   await updateDataset(id, (current) => ({ ...current, images: [...current.images, ...entries] }));
   console.log(`🖼️ Dataset ${id} ← imported ${entries.length} gallery image(s)`);
   return entries;

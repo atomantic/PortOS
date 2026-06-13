@@ -67,6 +67,9 @@ export default function ImportGalleryDialog({ dataset, onClose, onImported }) {
       const { images } = await importLoraDatasetGalleryImages(dataset.id, selected);
       toast.success(`Imported ${images.length} image${images.length === 1 ? '' : 's'} — caption them next`);
       onImported?.(images);
+    } catch {
+      // The api `request` helper already toasted the failure — swallow so the
+      // un-awaited onClick doesn't surface an unhandled promise rejection.
     } finally {
       setImporting(false);
     }

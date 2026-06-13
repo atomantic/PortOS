@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, existsSync } from 'fs';
+import { mkdtempSync, rmSync, mkdirSync, existsSync, readdirSync } from 'fs';
 import { writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -264,6 +264,20 @@ describe('importGalleryImages', () => {
     const { dataset } = await createDataset({ universeId: 'uni-1', entryId: 'char-1' });
     await expect(importGalleryImages(dataset.id, { filenames: [] }))
       .rejects.toMatchObject({ status: 400 });
+  });
+
+  it('cleans up already-written copies when one image in the batch is missing', async () => {
+    const { dataset } = await createDataset({ universeId: 'uni-1', entryId: 'char-1' });
+    await seedGallery('good1.png', 'good2.png'); // 'missing.png' intentionally absent
+    await expect(importGalleryImages(dataset.id, { filenames: ['good1.png', 'good2.png', 'missing.png'] }))
+      .rejects.toMatchObject({ status: 404 });
+    // The dataset records nothing on a partial failure...
+    const after = await getDataset(dataset.id);
+    expect(after.images).toHaveLength(0);
+    // ...and no orphaned PNGs are left in the dataset's images dir.
+    const imagesDir = join(TEST_DATA_ROOT, 'lora-datasets', dataset.id, 'images');
+    const leftover = existsSync(imagesDir) ? readdirSync(imagesDir) : [];
+    expect(leftover).toEqual([]);
   });
 });
 

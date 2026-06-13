@@ -57,6 +57,14 @@ export const attachCaptionSseClient = (runId, res) => attachSse(captionRuns, run
  * model is installed, throws a 409 with an actionable message — the run never
  * starts, so the user doesn't get N cryptic per-image 400s.
  *
+ * Known gap (intentional): the heuristic-first short-circuit accepts a
+ * regex-recognized explicit model WITHOUT confirming it's still installed —
+ * skipping the two-backend scan is the whole point of the fast path. So a saved
+ * `captionModel` that was later uninstalled slips past the up-front 409 and
+ * fails per-image at the API instead (surfaced by the run's terminal error).
+ * Validating every run against the live model list would defeat the fast path;
+ * the picker's own list is the primary defense against a stale selection.
+ *
  * `listVision` is injectable for tests; defaults to the localLlm scan.
  */
 export async function resolveCaptionModel({
