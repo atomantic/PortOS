@@ -171,6 +171,16 @@ describe('patchDataset / listDatasets', () => {
     expect(next.training.loraFilename).toBe('char-1.safetensors');
   });
 
+  it('refuses to reassign while a training run is in progress', async () => {
+    // status 'training' = a queued/running job that captured this dataset id +
+    // old character; reassigning now would register the adapter under the wrong
+    // character. The user must cancel first.
+    const { dataset } = await createDataset({ universeId: 'uni-1', entryId: 'char-1' });
+    await updateDataset(dataset.id, (current) => ({ ...current, status: 'training' }));
+    await expect(patchDataset(dataset.id, { universeId: 'uni-1', entryId: 'char-2' }))
+      .rejects.toMatchObject({ status: 409, code: 'DATASET_TRAINING' });
+  });
+
   it('refuses to reassign onto a character that already owns a dataset', async () => {
     const a = await createDataset({ universeId: 'uni-1', entryId: 'char-1' });
     await createDataset({ universeId: 'uni-1', entryId: 'char-2' });

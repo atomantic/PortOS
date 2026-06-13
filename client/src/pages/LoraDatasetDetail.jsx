@@ -378,8 +378,11 @@ export default function LoraDatasetDetail() {
             <button
               type="button"
               onClick={() => setShowReassign(true)}
-              title="Reassign this dataset to a different universe character"
-              className="shrink-0 text-xs text-gray-500 hover:text-port-accent flex items-center gap-1"
+              disabled={dataset.status === 'training'}
+              title={dataset.status === 'training'
+                ? 'Cancel the in-progress training run before reassigning'
+                : 'Reassign this dataset to a different universe character'}
+              className="shrink-0 text-xs text-gray-500 hover:text-port-accent flex items-center gap-1 disabled:opacity-40 disabled:hover:text-gray-500"
             >
               <Replace className="w-3.5 h-3.5" /> Reassign
             </button>

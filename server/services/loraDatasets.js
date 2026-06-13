@@ -207,6 +207,17 @@ export async function patchDataset(id, { triggerWord, universeId, entryId } = {}
       resolveCharacterSnapshot(universeId, entryId),
       loraDatasetStore.loadAll(),
     ]);
+    // Refuse while a run is in flight (status 'training' = a queued or running
+    // job exists). A queued run captured this dataset's id + old character
+    // snapshot; if we moved the dataset now, the run would stage the moved
+    // images yet register the adapter under the OLD character. Make the user
+    // cancel first — then reassignment is a clean draft-state operation.
+    const self = all.find((d) => d.id === id);
+    if (self?.status === 'training') {
+      throw new ServerError('Cannot reassign while a training run is in progress — cancel it first', {
+        status: 409, code: 'DATASET_TRAINING',
+      });
+    }
     // Enforce the same find-or-create key createDataset uses: at most one
     // dataset per (universeId, entryId). Reassigning onto a character that
     // already owns a dataset would create a duplicate the list can't tell apart.
