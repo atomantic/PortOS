@@ -14,7 +14,7 @@ export const DB_TEST_INCLUDE = [
   'services/catalogRefResolver.test.js',
   'services/creativeDirector/projectsDB.test.js',
   'routes/catalog.test.js',
-  '../scripts/run-db-migrations.test.js',
+  'scripts/run-db-migrations.test.js',
 ];
 
 /**

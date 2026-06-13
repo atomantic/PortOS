@@ -16,7 +16,7 @@
  */
 
 import { describe, it, expect, afterEach } from 'vitest';
-import { readdirSync, openSync, readSync, closeSync } from 'node:fs';
+import { readdirSync, openSync, readSync, closeSync, existsSync } from 'node:fs';
 import { dirname, join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isTestDatabase, checkHealth, query } from './db.js';
@@ -154,7 +154,9 @@ describe('DB-backed test files are covered by vitest.config.db.js', () => {
 
     // The checkHealth + dbReady gating always sits in a suite's first ~40 lines,
     // so read only the file header instead of slurping every test file whole.
-    const readHead = (path, bytes = 2048) => {
+    // 8 KB leaves generous margin past the gating block (routes/catalog.test.js
+    // already reaches ~1.8 KB) without slurping large suites whole.
+    const readHead = (path, bytes = 8192) => {
       const fd = openSync(path, 'r');
       try {
         const buf = Buffer.alloc(bytes);
@@ -196,6 +198,22 @@ describe('DB-backed test files are covered by vitest.config.db.js', () => {
       offenders,
       `These DB-backed suites use checkHealth()+dbReady but are missing from ` +
         `server/vitest.config.db.js include — they would never run against portos_test:\n  ${offenders.join('\n  ')}`,
+    ).toEqual([]);
+  });
+
+  it('every explicit DB_TEST_INCLUDE entry resolves to a real file', () => {
+    // Basename matching above proves a suite IS listed, but not that its include
+    // PATH is correct — a wrong path (e.g. `../scripts/x` for a file under
+    // `scripts/x`) matches no file in vitest yet is "covered" by basename, so the
+    // suite silently never runs. Resolve each non-glob entry against the config
+    // root (server/) and assert it exists.
+    const SERVER = join(dirname(fileURLToPath(import.meta.url)), '..');
+    const broken = DB_TEST_INCLUDE
+      .filter((p) => !p.includes('*'))
+      .filter((p) => !existsSync(join(SERVER, p)));
+    expect(
+      broken,
+      `These vitest.config.db.js include paths resolve to no file (relative to server/):\n  ${broken.join('\n  ')}`,
     ).toEqual([]);
   });
 });
