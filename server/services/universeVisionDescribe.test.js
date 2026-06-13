@@ -57,12 +57,26 @@ describe('describeEntityFromImages', () => {
     );
   });
 
-  it('reports the fallback provider id when the runner swapped providers', async () => {
+  it('reports the fallback provider id when the runner swapped to another API provider', async () => {
     promptRunner.runPromptThroughProvider.mockResolvedValue({
-      text: 'x', model: 'gpt-vision', fallbackProvider: { id: 'openai' },
+      text: 'x', model: 'gpt-vision', usedFallback: true, fallbackProvider: { id: 'openai', type: 'api' },
     });
     const out = await describeEntityFromImages({ kind: 'place', screenshots: ['a.png'] });
     expect(out.llm).toEqual({ provider: 'openai', model: 'gpt-vision' });
+  });
+
+  it('rejects (VISION_FALLBACK_DROPPED_IMAGES) when the runner fell back to a non-API provider that drops images', async () => {
+    promptRunner.runPromptThroughProvider.mockResolvedValue({
+      text: 'hallucinated from text alone', model: 'sonnet', usedFallback: true, fallbackProvider: { id: 'claude-code', type: 'cli' },
+    });
+    await expect(describeEntityFromImages({ kind: 'character', screenshots: ['a.png'] }))
+      .rejects.toMatchObject({ code: 'VISION_FALLBACK_DROPPED_IMAGES', status: 502 });
+  });
+
+  it('forwards optional context into the vision prompt', async () => {
+    await describeEntityFromImages({ kind: 'object', context: 'a relic blade', screenshots: ['a.png'] });
+    const { prompt } = promptRunner.runPromptThroughProvider.mock.calls[0][0];
+    expect(prompt).toMatch(/Known context.*a relic blade/s);
   });
 
   it('strips code fences the model may wrap the prose in', async () => {

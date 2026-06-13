@@ -39,6 +39,10 @@ export default function VisionDescribeModal({ open, kind, entryName, onApply, on
   const [images, setImages] = useState([]);
   const [uploading, setUploading] = useState(false);
   const [result, setResult] = useState('');
+  // Optional "known context" the user can type to disambiguate the subject
+  // (e.g. a name the images don't make obvious) — passed straight to the
+  // vision prompt.
+  const [context, setContext] = useState('');
   const fileInputRef = useRef(null);
 
   const {
@@ -79,6 +83,7 @@ export default function VisionDescribeModal({ open, kind, entryName, onApply, on
     const res = await describeEntityFromImages({
       kind,
       name: entryName || undefined,
+      context: context.trim() || undefined,
       screenshots: images.map((img) => img.filename),
       providerId: selectedProviderId || undefined,
       model: selectedModel || undefined,
@@ -137,6 +142,7 @@ export default function VisionDescribeModal({ open, kind, entryName, onApply, on
                     type="button"
                     onClick={() => removeImage(img.filename)}
                     title="Remove image"
+                    aria-label="Remove image"
                     className="absolute -top-1.5 -right-1.5 bg-port-bg border border-port-border rounded-full p-0.5 text-gray-400 hover:text-port-error"
                   >
                     <X size={11} />
@@ -176,6 +182,22 @@ export default function VisionDescribeModal({ open, kind, entryName, onApply, on
                 : 'No API provider configured. Add one with a vision-capable model under Settings → Providers to describe images.'}
             </p>
           )}
+
+          {/* Optional context to disambiguate the subject for the model. */}
+          <div>
+            <label htmlFor="vision-describe-context" className="block text-xs text-gray-500 mb-1">
+              Known context (optional)
+            </label>
+            <input
+              id="vision-describe-context"
+              type="text"
+              value={context}
+              onChange={(e) => setContext(e.target.value)}
+              placeholder={`Anything the images don't make obvious about this ${noun}`}
+              maxLength={2000}
+              className="w-full px-2 py-1.5 text-xs bg-port-bg border border-port-border rounded text-gray-200"
+            />
+          </div>
 
           <button
             type="button"

@@ -413,10 +413,19 @@ const describeFromImagesSchema = z.object({
 });
 router.post('/describe-from-images', asyncHandler(async (req, res) => {
   const body = validateRequest(describeFromImagesSchema, req.body ?? {});
-  // Strip any path components so a crafted filename can't escape the
-  // screenshots dir when the runner joins it (the upload route already
-  // sanitizes on write; this guards a hand-crafted request body too).
-  const screenshots = body.screenshots.map((f) => sanitizeFilename(f));
+  // The upload route already sanitizes on write, so a legitimately-uploaded
+  // filename round-trips unchanged here. A hand-crafted body with path
+  // components is rejected outright (a 400, not a silent rewrite to a name
+  // that won't exist on disk — which would surface as a confusing generic
+  // "Image not found" from the runner), keeping a traversal attempt
+  // distinguishable from a deleted/never-uploaded file.
+  const screenshots = body.screenshots.map((f) => {
+    const safe = sanitizeFilename(f);
+    if (safe !== f) {
+      throw new ServerError(`Invalid screenshot filename: ${f}`, { status: 400, code: 'VALIDATION_ERROR' });
+    }
+    return safe;
+  });
   const result = await describeEntityFromImages({ ...body, screenshots });
   res.json(result);
 }));

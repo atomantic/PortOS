@@ -123,6 +123,19 @@ export async function describeEntityFromImages({ kind, name, context, screenshot
     screenshots: images,
   });
 
+  // runPromptThroughProvider's fallback path can swap a failed API provider for
+  // a CLI/TUI one, which has no vision path and silently drops the images — so
+  // a fallback completion would be prose hallucinated from the text prompt
+  // alone, with no signal the references were ignored. Reject that outright
+  // (the whole point of resolving an API provider up front was to never
+  // describe images from nothing).
+  if (result.usedFallback && result.fallbackProvider && result.fallbackProvider.type !== 'api') {
+    throw new ServerError(
+      'The vision request fell back to a non-vision provider that cannot read images. Configure a reliable vision-capable API provider and retry.',
+      { status: 502, code: 'VISION_FALLBACK_DROPPED_IMAGES' },
+    );
+  }
+
   const description = stripCodeFences(result.text || '').trim();
   if (!description) {
     throw new ServerError('The vision model returned an empty description — try a different model or clearer images.', {
