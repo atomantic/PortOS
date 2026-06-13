@@ -10,7 +10,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import {
-  ArrowLeft, Loader2, Upload, Wand2, Scissors, Tags, RefreshCw, AlertTriangle, Images,
+  ArrowLeft, Loader2, Upload, Wand2, Scissors, Tags, RefreshCw, AlertTriangle, Images, Lightbulb,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import Modal from '../components/ui/Modal';
@@ -37,6 +37,13 @@ const TRIGGER_RE = /^[a-z0-9_]{2,64}$/;
 // deleted, instead of waiting on a server round-trip. Port logic changes here
 // when the server helper changes.
 const MIN_TRAINING_IMAGES = 10;
+const RECOMMENDED_TRAINING_IMAGES = 20;
+const TRAINING_IMAGE_SWEET_SPOT_MAX = 30;
+const qualityTier = (captioned) => {
+  if (captioned < MIN_TRAINING_IMAGES) return 'insufficient';
+  if (captioned < RECOMMENDED_TRAINING_IMAGES) return 'minimum';
+  return 'good';
+};
 const captionHasTriggerWord = (caption, triggerWord) => {
   const word = (triggerWord || '').trim();
   const text = (caption || '').trim();
@@ -50,13 +57,18 @@ const deriveReadiness = (images, triggerWord) => {
   const word = (triggerWord || '').trim();
   const ready = list.filter((img) => img.status === 'ready');
   const captioned = ready.filter((img) => captionHasTriggerWord(img.caption, word));
+  const trainable = !!word && captioned.length >= MIN_TRAINING_IMAGES;
   return {
     total: list.length,
     ready: ready.length,
     captioned: captioned.length,
     rendering: list.filter((img) => img.status === 'rendering').length,
     required: MIN_TRAINING_IMAGES,
-    trainable: !!word && captioned.length >= MIN_TRAINING_IMAGES,
+    recommended: RECOMMENDED_TRAINING_IMAGES,
+    trainable,
+    // Mirror of computeDatasetReadiness: gate the tier on trainability so a
+    // record with enough images but no trigger word never shows green.
+    quality: trainable ? qualityTier(captioned.length) : 'insufficient',
   };
 };
 
@@ -327,11 +339,19 @@ export default function LoraDatasetDetail() {
           </div>
         </div>
         <div className="text-right text-sm">
-          <div className={readiness.trainable ? 'text-port-success' : 'text-gray-400'}>
+          <div className={readiness.quality === 'good' ? 'text-port-success' : readiness.quality === 'minimum' ? 'text-port-warning' : 'text-gray-400'}>
             {readiness.ready ?? 0} images · {readiness.captioned ?? 0}/{readiness.required ?? 10} captioned
             {renderingCount ? ` · ${renderingCount} rendering` : ''}
           </div>
-          <div className="text-xs text-gray-500">{readiness.trainable ? 'Ready to train' : 'Add + caption more images to train'}</div>
+          <div className="text-xs text-gray-500">
+            {readiness.quality === 'good'
+              ? 'Ready to train — strong dataset'
+              : readiness.quality === 'minimum'
+                ? `Trainable now · ${Math.max(0, (readiness.recommended ?? 20) - (readiness.captioned ?? 0))} more for best quality`
+                : (readiness.captioned ?? 0) >= (readiness.required ?? 10)
+                  ? 'Set a trigger word to train'
+                  : `Add + caption ${(readiness.required ?? 10) - (readiness.captioned ?? 0)} more to train`}
+          </div>
         </div>
       </div>
 
@@ -397,6 +417,31 @@ export default function LoraDatasetDetail() {
         </button>
         <CaptionModelPicker onChange={onCaptionModelChange} />
       </div>
+
+      <details className="bg-port-card border border-port-border rounded-lg text-sm">
+        <summary className="cursor-pointer select-none px-3 py-2 flex items-center gap-2 text-gray-300 hover:text-white">
+          <Lightbulb className="w-4 h-4 text-port-warning shrink-0" />
+          <span className="font-medium">Tips for a strong character dataset</span>
+          <span className="text-xs text-gray-500">
+            target ~{RECOMMENDED_TRAINING_IMAGES}–{TRAINING_IMAGE_SWEET_SPOT_MAX} images · {MIN_TRAINING_IMAGES} minimum
+          </span>
+        </summary>
+        <div className="px-3 pb-3 pt-1 text-xs text-gray-400 space-y-2 border-t border-port-border/60">
+          <p>
+            Quality beats quantity. {MIN_TRAINING_IMAGES} images is the floor; ~{RECOMMENDED_TRAINING_IMAGES}–{TRAINING_IMAGE_SWEET_SPOT_MAX} sharp,
+            varied shots is the sweet spot. Past ~50 you mostly add training time and overfitting risk —
+            near-duplicate frames teach the model to memorize a pose instead of learning the character.
+          </p>
+          <ul className="list-disc pl-4 space-y-1">
+            <li><span className="text-gray-300">Vary the angle</span> — front, three-quarter, profile, and a back view.</li>
+            <li><span className="text-gray-300">Vary the framing</span> — mix tight face close-ups (for likeness) with mid and full-body shots (for proportions).</li>
+            <li><span className="text-gray-300">Vary pose &amp; expression</span> — standing, sitting, action; neutral, smiling, intense.</li>
+            <li><span className="text-gray-300">Vary outfit, lighting &amp; background</span> — so the LoRA learns the character, not one costume, key light, or backdrop.</li>
+            <li><span className="text-gray-300">Keep it single-subject and on-model</span> — one clearly-visible character per image, consistent identity, no clutter or other people.</li>
+            <li><span className="text-gray-300">Drop the weak ones</span> — blurry, occluded, or off-model frames hurt more than they help; avoid near-duplicates.</li>
+          </ul>
+        </div>
+      </details>
 
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-4 items-start">
         <DatasetImageGrid

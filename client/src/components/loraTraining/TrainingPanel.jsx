@@ -220,7 +220,12 @@ export default function TrainingPanel({ dataset, readiness, triggerSaving, onRun
         )}
       </div>
       <div className="flex items-center justify-between gap-2">
-        <span className="text-xs text-gray-500">{disabledReason || `Trains on ${readiness?.captioned ?? 0} captioned images`}</span>
+        <span className={`text-xs ${!disabledReason && readiness?.quality === 'minimum' ? 'text-port-warning' : 'text-gray-500'}`}>
+          {disabledReason
+            || (readiness?.quality === 'minimum'
+              ? `Trains on ${readiness?.captioned ?? 0} — ${Math.max(0, (readiness?.recommended ?? 20) - (readiness?.captioned ?? 0))} more recommended`
+              : `Trains on ${readiness?.captioned ?? 0} captioned images`)}
+        </span>
         <button
           type="button"
           onClick={start}
