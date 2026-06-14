@@ -17,7 +17,7 @@ import { spawn } from 'child_process';
 import { existsSync } from 'fs';
 import { copyFile, mkdir, writeFile } from 'fs/promises';
 import { join, basename, dirname } from 'path';
-import { platform, totalmem } from 'os';
+import { platform } from 'os';
 import { PATHS, ensureDir, atomicWrite, shortId } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { v4 as uuidv4 } from '../../lib/uuid.js';
@@ -38,6 +38,7 @@ import {
   resolveTrainingRuntime,
 } from './runtimes.js';
 import { makeTrainingLineHandler } from './progress.js';
+import { prepareMemoryForTraining, TRAINING_MIN_HEADROOM_GB } from './memoryPrep.js';
 import { classifyTrainingFailure } from './failure.js';
 import { buildTrainedSidecar, trainedLoraFilename } from './sidecar.js';
 import { validateDatasetReady } from './dataset.js';
@@ -373,6 +374,24 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
     return failBeforeSpawn('Dataset was reassigned to a different character after this run was queued — cancel and retrain.');
   }
 
+  // Reclaim unified memory before a GPU-heavy run, then gate on real headroom.
+  // Training shares the unified-memory pool with resident LLMs and renders; an
+  // oversubscribed run swap-thrashes and has coincided with GPU watchdog
+  // reboots (docs/research/2026-06-13-mflux-training-watchdog-panic.md). We
+  // unload resident models, measure what's actually free, and refuse to start
+  // (rather than crash mid-run) when headroom is below the floor. The budget
+  // also sizes the mflux quantize/low_ram tier below.
+  const memReport = await prepareMemoryForTraining();
+  if (memReport.unloaded.length) {
+    console.log(`🧹 training [${shortId(jobId)}] freed ${memReport.unloaded.length} resident model(s): ${memReport.unloaded.join(', ')}`);
+  }
+  console.log(`🧮 training [${shortId(jobId)}] memory budget ${memReport.budgetGb.toFixed(0)} GB free of ${memReport.totalGb.toFixed(0)} GB total`);
+  if (!Number.isFinite(memReport.budgetGb) || memReport.budgetGb < TRAINING_MIN_HEADROOM_GB) {
+    // Fail safe: a non-finite budget (should never happen — both inputs are
+    // finite) must REFUSE the run, not slip past `NaN < x` (always false).
+    return failBeforeSpawn(`Not enough free memory to train safely — ${memReport.budgetGb.toFixed(1)} GB available, need ≥ ${TRAINING_MIN_HEADROOM_GB} GB. Stop other model servers or close apps and retry.`);
+  }
+
   const dir = runDir(runId);
   const checkpointsDir = join(dir, 'checkpoints');
   const samplesDir = join(dir, 'samples');
@@ -438,9 +457,11 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
         dataDir,
         imageCount: manifest.images.length,
         outputDir: mfluxOutputDir,
-        // Memory-derived quantize/low_ram (see deriveMfluxMemoryConfig) —
-        // a bf16 base + in-RAM latent cache OOM-killed a 48 GB machine.
-        totalMemGb: totalmem() / 2 ** 30,
+        // Memory-derived quantize/low_ram (see deriveMfluxMemoryConfig) keyed
+        // on the post-unload AVAILABLE budget, not raw RAM — a bf16 base +
+        // in-RAM latent cache OOM-killed a 48 GB machine, and on a shared box
+        // resident models eat the same pool, so the tier must track headroom.
+        totalMemGb: memReport.budgetGb,
       });
       const configPath = join(dir, 'mflux-train.json');
       await atomicWrite(configPath, config);

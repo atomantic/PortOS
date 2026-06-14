@@ -68,6 +68,27 @@ swap thrash if a run oversubscribes unified memory.
    training proceeds. This gives the next crash a forensic record of GPU temp /
    power leading up to the hang.
 
+3. **Unified-memory pressure mitigations** (`server/services/loraTraining/memoryPrep.js`)
+   — directly attacks the swap-thrash secondary hypothesis. A 128 GB box was
+   observed at ~122 GB used + ~21 GB swap during a single run, so before a run
+   spawns PortOS now:
+   - **Unloads resident models** — `prepareMemoryForTraining()` unloads every
+     model resident in Ollama and LM Studio (best-effort) so their unified
+     memory returns to the pool instead of stacking under the trainer. On a
+     shared box this is the largest single reclaim. Only **loopback-local**
+     backends are evicted — a remote `OLLAMA_URL`/`LM_STUDIO_URL` (LAN peer)
+     is skipped, since unloading it frees no memory on the training machine.
+   - **Spills the latent cache to disk at every tier** — `deriveMfluxMemoryConfig`
+     now returns `low_ram: true` for all memory sizes (was `false` ≥64 GB). The
+     in-RAM encoded-dataset cache bought nothing but swap pressure; disk-backing
+     it costs only I/O, not training quality.
+   - **Sizes the config to *available* memory + a hard floor** — the
+     quantize/`low_ram` tier is derived from post-unload available memory
+     (`vm_stat`: free + inactive + speculative + purgeable on macOS), not raw
+     RAM, so a busy box auto-tightens to a smaller/quantized base. A run refuses
+     to start (`failBeforeSpawn`) below `TRAINING_MIN_HEADROOM_GB` (24 GB)
+     rather than swap-thrashing the machine into another reboot.
+
 ### Enabling the telemetry sidecar (passwordless powermetrics)
 
 `powermetrics` needs root. To let training capture telemetry without a prompt,

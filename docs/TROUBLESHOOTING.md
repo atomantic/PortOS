@@ -305,6 +305,14 @@ thrash are secondary possibilities. First observed 2026-06-13 (twice in one day)
   resume rolls to a timestamped `powermetrics.<ts>.log` so the pre-crash log is
   preserved) when passwordless `powermetrics` is configured (see the incident
   record for the sudoers rule).
+- Memory pressure is bounded before each run (`memoryPrep.js`): resident Ollama /
+  LM Studio models on loopback-local backends are unloaded to free unified memory
+  (a remote LAN backend is left untouched), the encoded-dataset cache
+  always spills to disk (`low_ram`), the quantize tier is sized to *available*
+  memory rather than total RAM, and a run refuses to start when under ~24 GB is
+  free — so an oversubscribed run can't swap-thrash the box into a reboot. If a
+  run won't start with a "not enough free memory" error, stop other model servers
+  or close apps and retry.
 
 **What to do / how to investigate**: see the full incident record and checklist in
 [`docs/research/2026-06-13-mflux-training-watchdog-panic.md`](research/2026-06-13-mflux-training-watchdog-panic.md).

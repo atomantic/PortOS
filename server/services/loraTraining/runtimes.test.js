@@ -117,9 +117,12 @@ describe('buildMfluxTrainConfig', () => {
     expect(() => buildMfluxTrainConfig({ ...base, imageCount: 0 })).toThrow(/at least one/);
   });
 
-  it('derives quantize/low_ram from total RAM (unknown → most conservative)', () => {
-    expect(deriveMfluxMemoryConfig(128)).toEqual({ quantize: null, low_ram: false });
-    expect(deriveMfluxMemoryConfig(64)).toEqual({ quantize: 8, low_ram: false });
+  it('derives quantize from the memory budget; latent cache always spills to disk', () => {
+    // low_ram is true at every tier — an in-RAM latent cache bought nothing
+    // but risked swap-thrash (the 128 GB / 21 GB-swap incident). quantize still
+    // steps down as the available budget shrinks.
+    expect(deriveMfluxMemoryConfig(128)).toEqual({ quantize: null, low_ram: true });
+    expect(deriveMfluxMemoryConfig(64)).toEqual({ quantize: 8, low_ram: true });
     expect(deriveMfluxMemoryConfig(48)).toEqual({ quantize: 4, low_ram: true });
     expect(deriveMfluxMemoryConfig(null)).toEqual({ quantize: 4, low_ram: true });
     const config = buildMfluxTrainConfig({ ...base, totalMemGb: 48 });

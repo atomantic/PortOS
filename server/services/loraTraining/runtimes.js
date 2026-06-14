@@ -77,14 +77,20 @@ const MFLUX_SCHED = Object.freeze({ steps: 40, guidance: 1.0, timestepLow: 25, t
  * (videoGen/local.js): pure, with total RAM injected by the caller.
  * Training a bf16 base + in-RAM latent cache OOM-killed a 48 GB machine
  * during verification, so anything under 96 GB trains QLoRA-style against
- * an on-the-fly-quantized base, and under 64 GB also spills the encoded
- * dataset cache to disk (`low_ram`). Quantizing the FROZEN base is the
- * standard QLoRA recipe — the LoRA weights themselves stay full precision.
+ * an on-the-fly-quantized base. The encoded dataset cache ALWAYS spills to
+ * disk (`low_ram`): keeping it in RAM bought nothing but pushed a 128 GB box
+ * to 122 GB used + 21 GB swap (the swap-thrash that coincided with GPU
+ * watchdog reboots — see docs/research/2026-06-13-mflux-training-watchdog-panic.md);
+ * disk-backing it costs only I/O, no training quality. Quantizing the FROZEN
+ * base is the standard QLoRA recipe — the LoRA weights stay full precision.
+ *
+ * Callers feed the *available* memory budget (post-unload, see memoryPrep.js),
+ * not raw RAM, so the tier reflects real headroom on a shared box.
  */
 export function deriveMfluxMemoryConfig(totalMemGb) {
   const gb = Number.isFinite(totalMemGb) ? totalMemGb : 0; // unknown → most conservative
-  if (gb >= 96) return { quantize: null, low_ram: false };
-  if (gb >= 64) return { quantize: 8, low_ram: false };
+  if (gb >= 96) return { quantize: null, low_ram: true };
+  if (gb >= 64) return { quantize: 8, low_ram: true };
   return { quantize: 4, low_ram: true };
 }
 
