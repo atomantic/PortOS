@@ -88,18 +88,22 @@ const ROW_WRITE_SQL =
   /^\s*(?:--[^\n]*\n|\/\*[\s\S]*?\*\/|\s)*(INSERT\s+INTO|UPDATE\s|DELETE\s+FROM|TRUNCATE)\b/i;
 
 /**
- * Execute a query against the connection pool.
- * @param {string} text - SQL query text with $1, $2, etc. placeholders
- * @param {Array} params - Parameter values
- * @returns {Promise<pg.QueryResult>}
+ * Hard backstop: under the test runner, refuse to MUTATE a non-test database.
+ * Throws (fail loudly) on any row write (INSERT/UPDATE/DELETE/TRUNCATE) instead
+ * of silently writing — or stranding — real data. Reads (SELECT) and schema DDL
+ * are left alone so health/version probes and ensureSchema() still work.
+ *
+ * Shared by BOTH the pool `query()` wrapper and the per-transaction client in
+ * `withTransaction()`. The transaction path is critical: nearly every store
+ * mutation (updateAuthor, deleteAuthor, mergeAuthorsFromSync, universe runs,
+ * catalog, writers-room) runs its writes through `client.query()` inside a
+ * transaction — which talks to the raw pg client, NOT this module's `query()`.
+ * Guarding only `query()` left that path wide open: a suite under VITEST that
+ * reached any transaction write path wrote straight into the real `portos` DB.
+ *
+ * @param {string} text - SQL query text
  */
-export async function query(text, params) {
-  // Hard backstop: under the test runner, refuse to MUTATE a non-test database
-  // even if a suite somehow reaches query() without gating on checkHealth()
-  // first (a new test author calls query('INSERT …') directly, or a backend
-  // selector mis-chose Postgres because NODE_ENV wasn't 'test'). Throwing fails
-  // loudly instead of silently writing — or stranding — real data. Reads
-  // (SELECT) are left alone so health/version probes still work.
+export function assertWriteAllowed(text) {
   if (
     isTestRunner() &&
     !isTestDatabase() &&
@@ -111,6 +115,40 @@ export async function query(text, params) {
         `Point PGDATABASE at a *_test database (e.g. portos_test), gate the suite on requireDb(), or set TEST_DB_OK=1. Query: ${text.slice(0, 80)}`,
     );
   }
+}
+
+// Proxy handler that runs a pg client's row writes through assertWriteAllowed.
+// Defined once at module scope (not per-transaction): the `get` trap receives
+// the client as `target`, so a single shared handler guards every client
+// withTransaction() wraps — no per-call handler/closure allocation. A Proxy
+// (rather than an object-spread copy) is required because pg's client methods
+// live on the prototype, which a spread would not carry.
+const GUARDED_CLIENT_HANDLER = {
+  get(target, prop, receiver) {
+    if (prop === 'query') {
+      return (config, ...rest) => {
+        const sql = typeof config === 'string' ? config : config?.text;
+        assertWriteAllowed(sql);
+        return target.query(config, ...rest);
+      };
+    }
+    const value = Reflect.get(target, prop, receiver);
+    return typeof value === 'function' ? value.bind(target) : value;
+  },
+};
+
+/**
+ * Execute a query against the connection pool.
+ * @param {string} text - SQL query text with $1, $2, etc. placeholders
+ * @param {Array} params - Parameter values
+ * @returns {Promise<pg.QueryResult>}
+ */
+export async function query(text, params) {
+  // Hard backstop: refuse to mutate a non-test DB under the runner even if a
+  // suite reaches query() without gating on checkHealth() first (a new test
+  // author calls query('INSERT …') directly, or a backend selector mis-chose
+  // Postgres because NODE_ENV wasn't 'test').
+  assertWriteAllowed(text);
   return pool.query(text, params);
 }
 
@@ -140,10 +178,18 @@ export async function getServerMajorVersion() {
  */
 export async function withTransaction(fn) {
   const client = await pool.connect();
+  // Guard the client's row writes with the same backstop as query(). The raw
+  // pg client bypasses query() entirely, so without this wrapper a test-runner
+  // process pointed at the real `portos` DB writes through every store's
+  // transaction path unguarded (see assertWriteAllowed). BEGIN/COMMIT/ROLLBACK
+  // below call the raw client directly (they are not row writes). pg's
+  // client.query accepts either a SQL string or a { text, values } config —
+  // GUARDED_CLIENT_HANDLER reads the SQL out of both.
+  const guardedClient = new Proxy(client, GUARDED_CLIENT_HANDLER);
   await client.query('BEGIN');
   let result;
   try {
-    result = await fn(client);
+    result = await fn(guardedClient);
     await client.query('COMMIT');
   } catch (err) {
     await client.query('ROLLBACK');

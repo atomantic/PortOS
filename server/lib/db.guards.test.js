@@ -18,13 +18,19 @@
  *                         even if a suite reaches it without gating on checkHealth
  *                         first. (DELETE-only guarding let test INSERTs leak
  *                         fixtures into the real `portos` DB on 2026-06-14.)
+ *   - withTransaction() — the SAME backstop on the raw pg client it hands the
+ *                         callback. client.query() bypasses query() entirely, so
+ *                         every store mutation that writes inside a transaction
+ *                         (updateAuthor, deleteAuthor, mergeAuthorsFromSync,
+ *                         universe runs, catalog, writers-room) wrote to the real
+ *                         `portos` DB unguarded under VITEST until this was added.
  */
 
 import { describe, it, expect, afterEach } from 'vitest';
 import { readdirSync, openSync, readSync, closeSync, existsSync } from 'node:fs';
 import { dirname, join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { isTestDatabase, isTestRunner, checkHealth, query } from './db.js';
+import { isTestDatabase, isTestRunner, checkHealth, query, assertWriteAllowed } from './db.js';
 import { DB_TEST_INCLUDE } from '../vitest.config.db.js';
 
 // NODE_ENV is 'test' throughout (vitest default); we vary PGDATABASE / TEST_DB_OK.
@@ -192,6 +198,52 @@ describe('query row-write backstop', () => {
       () => {},
       (err) => expect(err.message).not.toMatch(/Refusing to mutate/i),
     );
+  });
+});
+
+// The shared backstop used by BOTH query() and the withTransaction client. The
+// transaction path is the one that actually leaked: nearly every store mutation
+// (updateAuthor, deleteAuthor, mergeAuthorsFromSync, universe runs, catalog,
+// writers-room) runs its INSERT/UPDATE/DELETE through `client.query()` inside a
+// transaction, which talks to the raw pg client — NOT this module's query(). We
+// can't open a real transaction in CI (no DB), so we test the guard the proxy
+// wraps directly: assertWriteAllowed sees the exact SQL the proxy forwards it.
+describe('assertWriteAllowed (shared query + transaction-client backstop)', () => {
+  it('throws on a row write against a non-test DB under the runner', () => {
+    setEnv('PGDATABASE', 'portos');
+    setEnv('TEST_DB_OK', undefined);
+    expect(() => assertWriteAllowed("INSERT INTO authors (id) VALUES ('x')")).toThrow(
+      /Refusing to mutate/i,
+    );
+    expect(() => assertWriteAllowed('DELETE FROM universes')).toThrow(/Refusing to mutate/i);
+    expect(() => assertWriteAllowed("UPDATE pipeline_series SET name = 'x'")).toThrow(
+      /Refusing to mutate/i,
+    );
+  });
+
+  it('allows transaction control statements (BEGIN/COMMIT/ROLLBACK) and reads', () => {
+    setEnv('PGDATABASE', 'portos');
+    setEnv('TEST_DB_OK', undefined);
+    // These are exactly the statements withTransaction runs around the callback,
+    // plus the SELECT … FOR UPDATE reads the store mutations issue first.
+    expect(() => assertWriteAllowed('BEGIN')).not.toThrow();
+    expect(() => assertWriteAllowed('COMMIT')).not.toThrow();
+    expect(() => assertWriteAllowed('ROLLBACK')).not.toThrow();
+    expect(() => assertWriteAllowed('SELECT data FROM authors WHERE id = $1 FOR UPDATE')).not.toThrow();
+  });
+
+  it('allows row writes against a designated test DB', () => {
+    setEnv('PGDATABASE', 'portos_test');
+    setEnv('TEST_DB_OK', undefined);
+    expect(() => assertWriteAllowed("INSERT INTO authors (id) VALUES ('x')")).not.toThrow();
+  });
+
+  it('tolerates a non-string arg (a config object with no .text reaches it as undefined)', () => {
+    setEnv('PGDATABASE', 'portos');
+    setEnv('TEST_DB_OK', undefined);
+    // The transaction proxy passes config?.text; a parameterless control call
+    // can surface undefined here — it must not throw on a non-string.
+    expect(() => assertWriteAllowed(undefined)).not.toThrow();
   });
 });
 
