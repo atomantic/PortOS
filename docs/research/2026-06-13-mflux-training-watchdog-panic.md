@@ -205,7 +205,18 @@ doesn't lose which version was under test.
 | When | mflux | mlx | mlx-metal | Result | powermetrics verdict |
 |---|---|---|---|---|---|
 | (baseline, not run) | 0.17.5 | 0.30.6 | 0.30.6 | known-bad (3 panics 06-13/14) | none captured (sudo was off) |
-| 2026-06-14 candidate #1 | 0.17.5 | **0.31.2** | **0.31.2** | ⏳ IN FLIGHT — launching | TBD: read scratch powermetrics.log |
+| 2026-06-14 candidate #1 | 0.17.5 | **0.31.2** | **0.31.2** | ⏳ IN FLIGHT — survived to step ~11/600 @ 13:45 (box up, no panic) | telemetry capturing (`_bisect-mlx0312/powermetrics.log`) |
+
+**Candidate #1 live notes (2026-06-14 ~13:45):** scratch run
+`data/training-runs/_bisect-mlx0312/` (9B bf16, 768px, low_ram, segmentation
+OFF). The wrapper's `STEP:n:40` lines at the start are the **step-0 preview
+image** (40 denoise steps), NOT training — real training is the `STEP:n:600`
+series (minor wrapper-cosmetics bug: `TQDM_RE` catches the preview bar; worth a
+PLAN note, not blocking). Real-step rate is **~1.3–1.6 min/step** (9B bf16 +
+low_ram disk cache + ~21 GB swap on a shared box), so the **150–300-step panic
+window is ~3.5–7 h out** and a full 600-step run ~15 h. No panic through step
+~11. If this row still says IN FLIGHT after a reboot, candidate #1 panicked —
+read the scratch powermetrics.log.
 
 Candidate #1 rationale: bump only the MLX/Metal backend (highest-probability
 driver-hang fix); mflux held at 0.17.5 to isolate the variable. mflux caps
