@@ -216,19 +216,12 @@ export async function resumeTrainingRun(runId) {
       status: 409, code: 'RUN_NOT_RESUMABLE',
     });
   }
-  // mflux only: its `--resume <zip>` restores optimizer state AND the step
-  // counter, so training picks up mid-run and finishes at the original total.
-  // The torch FLUX.2 trainer's `--resume-from` only warm-starts the adapter
-  // weights and then runs a FRESH optimizer loop for the full `steps` again —
-  // that would over-train and re-collide checkpoint step numbers, not resume.
-  // The arg-builder wiring (buildFlux2TrainArgs `resumeFrom`) is in place for
-  // when the trainer learns true optimizer-state resume; until then, refuse it.
-  if (run.runtime === TRAINING_RUNTIMES.FLUX2) {
-    throw new ServerError(
-      'Resume is only supported for mflux (MLX) runs right now — the FLUX.2 torch trainer restarts its optimizer from step 0, which would over-train. Start a fresh run.',
-      { status: 409, code: 'RESUME_UNSUPPORTED_RUNTIME' },
-    );
-  }
+  // Both runtimes restore optimizer state + the step counter on resume, so
+  // training picks up mid-run and finishes at the original total: mflux via
+  // `mflux-train --resume <zip>`, and the torch FLUX.2 trainer via
+  // `--resume-from <dir>` (restores the AdamW state from the checkpoint's
+  // optimizer.pt and continues range(start_step + 1, steps + 1) — no
+  // over-training, no checkpoint renumber collisions).
   const checkpoint = resolveLatestCheckpointArtifact(run);
   if (!checkpoint) {
     throw new ServerError(

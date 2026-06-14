@@ -77,7 +77,8 @@ def parse_args():
     p.add_argument("--sample-prompt", default=None)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--device", default="auto")
-    p.add_argument("--resume-from", default=None, help="checkpoint dir to load adapter weights from")
+    p.add_argument("--resume-from", default=None,
+                   help="checkpoint dir to resume from (restores adapter + AdamW optimizer state + step offset from optimizer.pt)")
     return p.parse_args()
 
 
@@ -113,13 +114,31 @@ def lora_target_modules(transformer) -> list:
     return sorted(found)
 
 
-def save_checkpoint(pipe_cls, transformer, out_dir: Path, step: int) -> Path:
+def save_checkpoint(pipe_cls, transformer, optimizer, out_dir: Path, step: int) -> Path:
+    """Persist the adapter for inference/promotion AND a self-contained resume
+    bundle (`optimizer.pt`) carrying the AdamW state, the PEFT adapter state, and
+    the step counter — so `--resume-from` continues mid-run (correct optimizer
+    momentum + starting-step offset) instead of warm-starting into a fresh
+    `args.steps`-long loop (which would over-train and re-collide step numbers).
+
+    The adapter goes into the bundle as its PEFT state dict (not via the diffusers
+    loader) so resume can restore it into the SAME `default` adapter with
+    `set_peft_model_state_dict` — round-tripping `get_peft_model_state_dict`
+    exactly. Loading the `pytorch_lora_weights.safetensors` back through
+    `pipe.load_lora_weights()` would instead inject a SECOND adapter
+    (`get_adapter_name` returns `default_<n>` when one already exists), leaving the
+    trained weights in `default_1` while export reads `default` — silently wrong.
+    Saved on CPU; `load_state_dict` re-casts onto the fp32 on-device params."""
     from peft.utils import get_peft_model_state_dict
 
     ckpt_dir = out_dir / "checkpoints" / f"step-{step:06d}"
     ckpt_dir.mkdir(parents=True, exist_ok=True)
     state = get_peft_model_state_dict(transformer)
     pipe_cls.save_lora_weights(str(ckpt_dir), transformer_lora_layers=state)
+    torch.save(
+        {"optimizer": optimizer.state_dict(), "adapter": state, "step": step},
+        ckpt_dir / "optimizer.pt",
+    )
     (ckpt_dir / "state.json").write_text(json.dumps({"step": step}))
     return ckpt_dir
 
@@ -235,17 +254,16 @@ def main():
     transformer.requires_grad_(False)
     targets = lora_target_modules(transformer)
     log(f"STATUS:LoRA targets: {', '.join(targets)} (rank {args.rank})")
+    # Always create the single trainable `default` adapter (gaussian init). On
+    # resume its weights are overwritten in-place below from the checkpoint's
+    # PEFT state dict — NOT via pipe.load_lora_weights(), which would inject a
+    # second `default_<n>` adapter and leave training/export out of sync.
     transformer.add_adapter(LoraConfig(
         r=args.rank,
         lora_alpha=args.rank,
         init_lora_weights="gaussian",
         target_modules=targets,
     ))
-    if args.resume_from:
-        resume_dir = Path(args.resume_from)
-        if resume_dir.exists():
-            pipe.load_lora_weights(str(resume_dir))
-            log(f"STATUS:resumed adapter weights from {resume_dir}")
     transformer.enable_gradient_checkpointing()
     transformer.to(device)
     transformer.train()
@@ -256,12 +274,45 @@ def main():
         p.data = p.data.to(torch.float32)
     optimizer = torch.optim.AdamW(trainable, lr=args.lr, weight_decay=0.01)
 
+    # Resume: restore the adapter weights, AdamW state, and a starting-step
+    # offset from the checkpoint's optimizer.pt bundle, so the loop continues
+    # toward the ORIGINAL total (range(start_step + 1, args.steps + 1)) with warm
+    # momentum instead of re-running a fresh args.steps from a random adapter.
+    # The adapter is loaded into the existing `default` adapter via
+    # set_peft_model_state_dict (in-place — param identities, and therefore the
+    # optimizer state alignment, are preserved). The server only hands us
+    # checkpoints that carry optimizer.pt (resolveLatestCheckpointArtifact gates
+    # on it); a checkpoint that predates optimizer-state resume is a hard error
+    # rather than a silent cold-start onto the random gaussian adapter. (RNG
+    # state is intentionally not restored; the per-step noise/timestep sequence
+    # restarts from the seed, immaterial to quality — the load-bearing fix is
+    # adapter + optimizer + step.)
+    start_step = 0
+    if args.resume_from:
+        from peft.utils import set_peft_model_state_dict
+
+        opt_file = Path(args.resume_from) / "optimizer.pt"
+        if not opt_file.exists():
+            print(
+                f"USER_ERROR:TRAINING_FAILED:resume checkpoint has no optimizer state ({opt_file}) — "
+                "it predates optimizer-state resume; start a fresh run",
+                file=sys.stderr, flush=True,
+            )
+            sys.exit(1)
+        ckpt = torch.load(opt_file, map_location="cpu")
+        set_peft_model_state_dict(transformer, ckpt["adapter"], adapter_name="default")
+        optimizer.load_state_dict(ckpt["optimizer"])
+        start_step = int(ckpt.get("step", 0))
+        log(f"STATUS:resumed adapter + optimizer state — continuing from step {start_step}")
+        if start_step >= args.steps:
+            log(f"STATUS:resume point (step {start_step}) already at/past target {args.steps} — nothing to train")
+
     order = list(range(len(examples)))
     rng = torch.Generator().manual_seed(args.seed)
     final_loss = None
     last_checkpoint = None
 
-    for step in range(1, args.steps + 1):
+    for step in range(start_step + 1, args.steps + 1):
         if (step - 1) % len(order) == 0:
             order = torch.randperm(len(examples), generator=rng).tolist()
         ex = examples[order[(step - 1) % len(order)]]
@@ -295,13 +346,13 @@ def main():
         log(f"STEP:{step}:{args.steps}:{final_loss:.4f}")
 
         if STOP_REQUESTED:
-            ckpt = save_checkpoint(Flux2KleinPipeline, transformer, out_dir, step)
+            ckpt = save_checkpoint(Flux2KleinPipeline, transformer, optimizer, out_dir, step)
             log(f"CHECKPOINT:{ckpt}:{step}")
             log("STATUS:canceled-checkpoint-saved")
             os._exit(143)
 
         if args.checkpoint_every > 0 and step % args.checkpoint_every == 0 and step < args.steps:
-            ckpt = save_checkpoint(Flux2KleinPipeline, transformer, out_dir, step)
+            ckpt = save_checkpoint(Flux2KleinPipeline, transformer, optimizer, out_dir, step)
             last_checkpoint = ckpt
             log(f"CHECKPOINT:{ckpt}:{step}")
 

@@ -162,10 +162,16 @@ const pad6 = (n) => String(n).padStart(6, '0');
  * runtime-aware — the resume point a re-launched run hands the trainer:
  *   - mflux: the newest `*_checkpoint.zip` (full optimizer + adapter state) in
  *     the run's checkpoints dir → `mflux-train --resume <zip>`.
- *   - flux2: the highest `checkpoints/step-NNNNNN/` dir → `--resume-from <dir>`.
- * Reads the disk directly (the trainer may have written more checkpoints than
- * the debounced run record captured before it was killed). Returns
- * `{ step, path }` (absolute) or null when nothing resumable exists.
+ *   - flux2: the highest `checkpoints/step-NNNNNN/` dir that carries an
+ *     `optimizer.pt` resume bundle → `--resume-from <dir>`.
+ * A flux2 checkpoint dir that has only `pytorch_lora_weights.safetensors` (one
+ * written before optimizer-state resume existed) is NOT a resume point — the
+ * trainer can't restore optimizer state from it and would otherwise cold-start
+ * onto a random adapter. Such checkpoints are still listed/promotable via
+ * listRunCheckpoints + resolveCheckpointAdapterBuffer; they just can't be
+ * resumed. Reads the disk directly (the trainer may have written more
+ * checkpoints than the debounced run record captured before it was killed).
+ * Returns `{ step, path }` (absolute) or null when nothing resumable exists.
  */
 export function resolveLatestCheckpointArtifact(run) {
   // Highest-step entry whose name parses, among those a runtime-specific filter
@@ -182,7 +188,7 @@ export function resolveLatestCheckpointArtifact(run) {
     return latest(join(resolveMfluxOutputDir(run.id), 'checkpoints'), (n) => n.endsWith('.zip'));
   }
   const dir = join(runDirFor(run.id), 'checkpoints');
-  return latest(dir, (n) => existsSync(join(dir, n, 'pytorch_lora_weights.safetensors')));
+  return latest(dir, (n) => existsSync(join(dir, n, 'optimizer.pt')));
 }
 
 /**

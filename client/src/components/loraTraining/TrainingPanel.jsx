@@ -126,13 +126,14 @@ export default function TrainingPanel({ dataset, readiness, triggerSaving, onRun
 
   // A killed run keeps its checkpoints — surface the picker (view + salvage a
   // partial LoRA) whenever a non-completed run recorded one, and a Resume button
-  // for any failed/canceled mflux run. Gate Resume on status, NOT the recorded
+  // for any failed/canceled run. Gate Resume on status, NOT the recorded
   // checkpoint count: a crash can kill the run before the debounced record
   // persists its last checkpoint, yet the server resumes from disk — let its
-  // 409 (NO_RESUMABLE_CHECKPOINT) handle the genuinely-empty case. mflux only;
-  // the FLUX.2 torch trainer's resume restarts the optimizer (server refuses it).
+  // 409 (NO_RESUMABLE_CHECKPOINT) handle the genuinely-empty case. Both runtimes
+  // support true optimizer-state resume (mflux via --resume, FLUX.2 torch via
+  // --resume-from), so this no longer filters by runtime.
   const lastRunCheckpoints = lastRun?.artifacts?.checkpoints?.length || 0;
-  const canResume = lastRun && ['failed', 'canceled'].includes(lastRun.status) && lastRun.runtime === 'mflux';
+  const canResume = lastRun && ['failed', 'canceled'].includes(lastRun.status);
 
   const disabledReason = !readiness?.trainable
     ? `Needs ${readiness?.required ?? 10} captioned images (have ${readiness?.captioned ?? 0})`
