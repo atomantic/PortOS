@@ -18,7 +18,7 @@ import { finalizeAgent, releaseAgentLane } from './agentLifecycle.js';
 import { activeAgents, userTerminatedAgents, pausedAgents } from './agentState.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { resolveCliModel } from '../lib/providerModels.js';
-import { createStreamingAnsiStripper } from '../lib/ansiStrip.js';
+import { createStreamingAnsiStripper, stripAnsi } from '../lib/ansiStrip.js';
 import { createImmediateFallbackSignalDetector } from '../lib/aiToolkit/errorDetection.js';
 import { isAntigravityCommand } from '../lib/antigravity.js';
 import {
@@ -200,8 +200,12 @@ export async function spawnTuiAgent({
   // Markers already present in the prompt text itself (a transcript-analysis task
   // can echo `[Pasted text #N]` back). The paste-commit fast path must wait for
   // the TUI's OWN marker — i.e. the count to EXCEED this — so an echoed marker
-  // doesn't fire the submit-Enters mid-reflow (issue #1229 review).
-  const promptMarkerCount = countPasteMarkers(prompt);
+  // doesn't fire the submit-Enters mid-reflow (issue #1229 review). STRIP the
+  // prompt first: a pasted RAW transcript may carry the cursor-positioned marker
+  // form (`[Pasted\x1b[11Gtext…`), which counts as 0 unstripped but echoes back as
+  // the stripped `[Pastedtext#…]` (count 1) — so we must count the prompt the same
+  // way the post-paste buffer is counted, or the gate undercounts and fires early.
+  const promptMarkerCount = countPasteMarkers(stripAnsi(prompt));
 
   let outputBuffer = '';
   let finalized = false;

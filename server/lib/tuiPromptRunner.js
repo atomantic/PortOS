@@ -36,7 +36,7 @@ import { spawn as ptySpawn } from 'node-pty';
 
 import { join, resolve } from 'path';
 import { ensureDir, PATHS, tryReadFile } from './fileUtils.js';
-import { createStreamingAnsiStripper } from './ansiStrip.js';
+import { createStreamingAnsiStripper, stripAnsi } from './ansiStrip.js';
 import { createImmediateFallbackSignalDetector } from './aiToolkit/errorDetection.js';
 import { getRunsPath, finalizeRunRecord, emitRunStarted, registerActiveRun, unregisterActiveRun } from '../services/runner.js';
 import { registerExternalSession, unregisterExternalSession, isExternalSessionAttached } from '../services/shell.js';
@@ -153,7 +153,9 @@ ${prompt}`;
   // task can echo `[Pasted text #N]` back into the post-paste stream. The fast
   // path must wait for the TUI's OWN marker (the count to EXCEED this), so an
   // echoed marker doesn't fire the submit-Enter mid-reflow (issue #1229 review).
-  const promptMarkerCount = countPasteMarkers(wrappedPrompt);
+  // STRIP first so a pasted RAW transcript's cursor-positioned marker (counts as 0
+  // unstripped) is counted the same way the stripped post-paste buffer is.
+  const promptMarkerCount = countPasteMarkers(stripAnsi(wrappedPrompt));
 
   // CLAUDECODE is set when PortOS itself runs inside Claude Code; passing it
   // through to a spawned Claude Code TUI would make the child think it's

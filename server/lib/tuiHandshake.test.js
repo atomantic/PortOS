@@ -126,6 +126,24 @@ describe('tuiHandshake — paste timing constants', () => {
     expect(countPasteMarkers('[Pastedtext#1+35lines]') > countPasteMarkers('do the thing')).toBe(true);
   });
 
+  it('the gate must count a STRIPPED prompt — a raw cursor-positioned marker echoes back stripped', () => {
+    // Round-6 review: a pasted RAW transcript can carry the cursor-positioned form.
+    // Unstripped it counts as 0 (escapes break the match), but it echoes back as
+    // the stripped form (count 1) — so counting the RAW prompt would undercount and
+    // fire the fast path early. The prompt must be stripped the same way the
+    // post-paste buffer is. (stripAnsi behavior is covered in ansiStrip.test.js;
+    // here we pin the count asymmetry the consumers must avoid.)
+    const rawMarkerPrompt = 'analyze: [Pasted\x1b[11Gtext\x1b[16G#1\x1b[19G+35\x1b[23Glines]';
+    const strippedPrompt = rawMarkerPrompt.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '');
+    expect(countPasteMarkers(rawMarkerPrompt)).toBe(0);      // raw → undercount (the bug)
+    expect(countPasteMarkers(strippedPrompt)).toBe(1);       // stripped → correct count
+    // What the echo produces in the (stripped) post-paste buffer:
+    const echoInStrippedBuffer = countPasteMarkers('[Pastedtext#1+35lines]'); // 1
+    // Gating on the RAW count fires early (1 > 0); gating on the STRIPPED count does not (1 > 1 == false).
+    expect(echoInStrippedBuffer > countPasteMarkers(rawMarkerPrompt)).toBe(true);
+    expect(echoInStrippedBuffer > countPasteMarkers(strippedPrompt)).toBe(false);
+  });
+
   it('extractWorkCounterSeconds parses the TUI bullet-suffixed working counter', () => {
     // Claude Code: `(1s · …`; Codex: `(57s • …`.
     expect(extractWorkCounterSeconds('(1s · thinking with high effort)')).toEqual([1]);
