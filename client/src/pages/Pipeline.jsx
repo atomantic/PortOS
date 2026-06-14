@@ -22,12 +22,12 @@ import {
   deletePipelineSeries,
   generateSeriesTitleLogo,
   listUniverses,
-  SERIES_AUTHOR_MAX,
   WORLD_LOGLINE_MAX,
   WORLD_PREMISE_MAX,
   WORLD_STYLE_NOTES_MAX,
 } from '../services/api';
 import { ArcShapePicker, ArcShapeSparkline, getStoryShape } from '../components/pipeline/StoryShapes';
+import AuthorPicker from '../components/pipeline/AuthorPicker';
 
 const emptyForm = () => ({
   name: '',
@@ -36,6 +36,7 @@ const emptyForm = () => ({
   premise: '',
   styleNotes: '',
   author: '',
+  authorId: '',
   shape: null,
   issueCountTarget: '',
 });
@@ -109,6 +110,7 @@ export default function Pipeline() {
       premise: form.premise.trim(),
       styleNotes: form.styleNotes.trim(),
       author: form.author.trim(),
+      authorId: form.authorId || null,
       universeId: form.universeId,
       issueCountTarget: Number.isFinite(target) && target > 0 ? target : undefined,
       arc: form.shape ? { shape: form.shape } : undefined,
@@ -238,14 +240,11 @@ export default function Pipeline() {
               <label htmlFor="series-author" className="block text-xs uppercase tracking-wider text-gray-500 mb-1">
                 Author (cover byline)
               </label>
-              <input
+              <AuthorPicker
                 id="series-author"
-                type="text"
-                value={form.author}
-                onChange={(e) => setForm((f) => ({ ...f, author: e.target.value }))}
-                placeholder="Jane Doe"
-                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
-                maxLength={SERIES_AUTHOR_MAX}
+                value={form.authorId}
+                byline={form.author}
+                onChange={(authorId, name) => setForm((f) => ({ ...f, authorId: authorId || '', author: name }))}
               />
             </div>
           </div>

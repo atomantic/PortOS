@@ -86,6 +86,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiCreativeDirector.js` | Creative Director (video production). |
 | `apiPipeline.js` | Pipeline (issues + stages + canon). |
 | `apiUniverseBuilder.js` | Universe Builder (generate + edit + commit). |
+| `apiAuthors.js` | Author personas (name, writing style, bio, headshot description/style). |
 | `apiWritersRoom.js` | Writers Room (folders + works + drafts, live continuation + render-preview reservation, scene-image attach). |
 | `apiSharing.js` | Share buckets + federation sync. |
 | `apiSongs.js` | Songs workbench CRUD (a cappella song writing + arranging voice layers + learning tracking). |

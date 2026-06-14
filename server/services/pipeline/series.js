@@ -63,6 +63,10 @@ export const STYLE_PROMPT_OVERRIDE_MODE_DEFAULT = 'prepend';
 // style notes on series creation; editable in the bible.
 export const TITLE_LOGO_MAX = 2000;
 export const AUTHOR_MAX = 120;
+// FK to an Author persona (auth-<uuid>). The `author` string above stays as a
+// denormalized byline so a federated series renders the cover correctly even
+// when the peer lacks the (local-only) author record. Empty/cleared → null.
+export const AUTHOR_ID_MAX = 64;
 export const UNIVERSE_ID_MAX = 64;
 export const WRITERS_ROOM_WORK_ID_MAX = 64;
 export const TARGET_FORMATS = Object.freeze(['comic', 'tv', 'comic+tv']);
@@ -137,6 +141,7 @@ const sanitizeSeries = (raw) => {
     styleNotes: trimTo(raw.styleNotes, STYLE_NOTES_MAX),
     titleLogo: trimTo(raw.titleLogo, TITLE_LOGO_MAX),
     author: trimTo(raw.author, AUTHOR_MAX),
+    authorId: trimTo(raw.authorId, AUTHOR_ID_MAX) || null,
     // Per-series override that prepends ahead of the linked universe's
     // stylePrompt during image-gen composition. Lets a single series in a
     // shared universe deviate slightly (e.g. a noir spin-off) without
@@ -206,6 +211,7 @@ export async function createSeries(input = {}) {
     styleNotes: input.styleNotes || '',
     titleLogo: input.titleLogo || '',
     author: input.author || '',
+    authorId: input.authorId || null,
     stylePromptOverride: input.stylePromptOverride || '',
     stylePromptOverrideMode: input.stylePromptOverrideMode,
     targetFormat: input.targetFormat || 'comic+tv',
@@ -363,6 +369,7 @@ export async function updateSeries(id, patch = {}) {
       ...('styleNotes' in patch ? { styleNotes: patch.styleNotes } : {}),
       ...('titleLogo' in patch ? { titleLogo: patch.titleLogo } : {}),
       ...('author' in patch ? { author: patch.author } : {}),
+      ...('authorId' in patch ? { authorId: patch.authorId } : {}),
       ...('stylePromptOverride' in patch ? { stylePromptOverride: patch.stylePromptOverride } : {}),
       ...('stylePromptOverrideMode' in patch ? { stylePromptOverrideMode: patch.stylePromptOverrideMode } : {}),
       ...('targetFormat' in patch ? { targetFormat: patch.targetFormat } : {}),

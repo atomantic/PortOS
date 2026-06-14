@@ -64,6 +64,25 @@ describe('pipeline series service', () => {
     expect(s.objects).toBeUndefined();
   });
 
+  it('createSeries stores an author byline + authorId FK; defaults authorId to null', async () => {
+    const s = await svc.createSeries({ name: 'Salt Run', author: 'Jane Doe', authorId: 'auth-1' });
+    expect(s.author).toBe('Jane Doe');
+    expect(s.authorId).toBe('auth-1');
+    const noAuthor = await svc.createSeries({ name: 'No Byline' });
+    expect(noAuthor.author).toBe('');
+    expect(noAuthor.authorId).toBeNull();
+  });
+
+  it('updateSeries can re-link or clear the authorId FK', async () => {
+    const s = await svc.createSeries({ name: 'Salt Run', author: 'Jane Doe', authorId: 'auth-1' });
+    const relinked = await svc.updateSeries(s.id, { author: 'John Roe', authorId: 'auth-2' });
+    expect(relinked.authorId).toBe('auth-2');
+    expect(relinked.author).toBe('John Roe');
+    const cleared = await svc.updateSeries(s.id, { author: '', authorId: null });
+    expect(cleared.authorId).toBeNull();
+    expect(cleared.author).toBe('');
+  });
+
   it('createSeries requires a non-empty name', async () => {
     await expect(svc.createSeries({})).rejects.toMatchObject({ code: svc.ERR_VALIDATION });
     await expect(svc.createSeries({ name: '   ' })).rejects.toMatchObject({ code: svc.ERR_VALIDATION });

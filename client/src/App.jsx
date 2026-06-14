@@ -46,6 +46,7 @@ const LoraTraining = lazyWithReload(() => import('./pages/LoraTraining'));
 const LoraDatasetDetail = lazyWithReload(() => import('./pages/LoraDatasetDetail'));
 const UniverseBuilder = lazyWithReload(() => import('./pages/UniverseBuilder'));
 const Universes = lazyWithReload(() => import('./pages/Universes'));
+const Authors = lazyWithReload(() => import('./pages/Authors'));
 const Catalog = lazyWithReload(() => import('./pages/Catalog'));
 const Songs = lazyWithReload(() => import('./pages/Songs'));
 const SongEditor = lazyWithReload(() => import('./pages/SongEditor'));
@@ -306,6 +307,7 @@ export default function App() {
           <Route path="story-builder" element={<StoryBuilder />} />
           <Route path="story-builder/:storyId" element={<Navigate to="idea" replace />} />
           <Route path="story-builder/:storyId/:step" element={<StoryBuilder />} />
+          <Route path="authors" element={<Authors />} />
           <Route path="pipeline" element={<Pipeline />} />
           <Route path="pipeline/series/:seriesId" element={<PipelineSeries />} />
           <Route path="pipeline/series/:seriesId/roadmap" element={<PipelineSeriesRoadmap />} />

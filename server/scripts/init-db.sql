@@ -690,6 +690,26 @@ CREATE TABLE IF NOT EXISTS universe_runs (
 );
 CREATE INDEX IF NOT EXISTS idx_universe_runs_universe ON universe_runs (universe_id, created_at DESC);
 
+-- Author personas. One row per reusable author/byline persona, the full
+-- sanitized record (name, writingStyle, bio, physicalDescription, headshotStyle,
+-- headshotImageUrl) in `data` JSONB. `name` mirrors a column for the live-list
+-- sort; the LWW/tombstone trio (updated_at/deleted/deleted_at) is populated FROM
+-- the record body. Authors are db-primary but LOCAL-ONLY for now (no
+-- sync_sequence/wire path) — a federated series keeps its denormalized `author`
+-- byline so peers still render the cover correctly. Mirrors the authors block in
+-- db.js ensureSchema().
+CREATE TABLE IF NOT EXISTS authors (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  data JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  deleted BOOLEAN DEFAULT FALSE,
+  deleted_at TIMESTAMPTZ
+);
+-- The common path is "live authors sorted by name".
+CREATE INDEX IF NOT EXISTS idx_authors_live ON authors (deleted) WHERE deleted = FALSE;
+
 -- Pipeline series (Phase 3 Create migration, issue #1015). One row per series,
 -- the full sanitized record (arc/seasons/locks/covers/style) in `data` JSONB,
 -- moved out of data/pipeline-series/{id}/index.json (collectionStore). Only the
@@ -946,3 +966,5 @@ DROP TRIGGER IF EXISTS trg_creative_director_projects_audit ON creative_director
 CREATE TRIGGER trg_creative_director_projects_audit AFTER UPDATE OR DELETE ON creative_director_projects FOR EACH ROW EXECUTE FUNCTION record_audit_log();
 DROP TRIGGER IF EXISTS trg_lora_training_runs_audit ON lora_training_runs;
 CREATE TRIGGER trg_lora_training_runs_audit AFTER UPDATE OR DELETE ON lora_training_runs FOR EACH ROW EXECUTE FUNCTION record_audit_log();
+DROP TRIGGER IF EXISTS trg_authors_audit ON authors;
+CREATE TRIGGER trg_authors_audit AFTER UPDATE OR DELETE ON authors FOR EACH ROW EXECUTE FUNCTION record_audit_log();

@@ -25,8 +25,9 @@ import {
   listPipelineIssues,
   listUniverses,
   generateSeriesTitleLogo,
-  SERIES_TITLE_LOGO_MAX, SERIES_AUTHOR_MAX,
+  SERIES_TITLE_LOGO_MAX,
 } from '../services/api';
+import AuthorPicker from '../components/pipeline/AuthorPicker';
 import { recommendStructure, describeStructure } from '../lib/seasonStructure';
 import { useLocalStorageBool } from '../hooks/useLocalStorageBool';
 import { useArcCanvasSync } from '../hooks/useArcCanvasSync';
@@ -46,12 +47,13 @@ const STYLE_OVERRIDE_MODE_TABS = [
 // empty-value defaults the server expects for the optional ones. Module-level
 // constants so the `useArcCanvasSync` callbacks keep a stable identity.
 const ARC_FLUSH_FIELDS = [
-  'name', 'logline', 'premise', 'styleNotes', 'titleLogo', 'author',
+  'name', 'logline', 'premise', 'styleNotes', 'titleLogo', 'author', 'authorId',
   'stylePromptOverride', 'stylePromptOverrideMode', 'issueCountTarget', 'universeId',
 ];
 const ARC_PAYLOAD_DEFAULTS = {
   titleLogo: '',
   author: '',
+  authorId: null,
   stylePromptOverride: '',
   stylePromptOverrideMode: STYLE_OVERRIDE_MODE_DEFAULT,
 };
@@ -248,12 +250,10 @@ function BibleSidebar({ series, universes, patchSeries, onSeriesUpdate, onFlushP
         />
       </Field>
       <Field label="Author (cover byline + title screen)">
-        <input
-          value={series.author || ''}
-          onChange={(e) => patchSeries({ author: e.target.value })}
-          placeholder="Jane Doe"
-          className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
-          maxLength={SERIES_AUTHOR_MAX}
+        <AuthorPicker
+          value={series.authorId}
+          byline={series.author}
+          onChange={(authorId, name) => patchSeries({ authorId: authorId || null, author: name })}
         />
       </Field>
       <Field label="Logline">
