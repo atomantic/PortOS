@@ -11,12 +11,14 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { FilePen, Plus, Loader2, Trash2, Save, Upload, ImageIcon, X } from 'lucide-react';
+import { FilePen, Plus, Loader2, Trash2, Save, Upload, ImageIcon, Sparkles, X } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import GalleryImagePicker from '../components/imageGen/GalleryImagePicker';
+import useMediaJobProgress from '../hooks/useMediaJobProgress';
+import { DEFAULT_NEGATIVE_PROMPT } from '../lib/imageGenDefaults';
 import { readFileAsBase64 } from '../utils/fileUpload';
 import {
-  listAuthors, createAuthor, updateAuthor, deleteAuthor, uploadFile,
+  listAuthors, createAuthor, updateAuthor, deleteAuthor, uploadFile, generateImage,
   AUTHOR_NAME_MAX, AUTHOR_WRITING_STYLE_MAX, AUTHOR_BIO_MAX,
   AUTHOR_PHYSICAL_DESCRIPTION_MAX, AUTHOR_HEADSHOT_STYLE_MAX, AUTHOR_HEADSHOT_IMAGE_URL_MAX,
 } from '../services/api';
@@ -38,6 +40,16 @@ const formFromAuthor = (a) => ({
   headshotImageUrl: a.headshotImageUrl || '',
 });
 
+// Build the image-gen prompt for an author headshot from the persona's
+// physical description (the subject) and headshot style (the art direction).
+// Either field alone is enough to render; both are folded into one prompt.
+const buildHeadshotPrompt = (f) => {
+  const desc = (f.physicalDescription || '').trim();
+  const style = (f.headshotStyle || '').trim();
+  const subject = desc ? `Author headshot portrait. ${desc}` : 'Professional author headshot portrait.';
+  return style ? `${subject} ${style}` : subject;
+};
+
 function Field({ label, hint, children }) {
   return (
     <label className="block">
@@ -58,9 +70,69 @@ export default function Authors() {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [galleryOpen, setGalleryOpen] = useState(false);
   const [uploadingHeadshot, setUploadingHeadshot] = useState(false);
+  // Headshot generation: `startingGen` covers the request round-trip before a
+  // jobId exists; `genJobId` tracks an async (local/codex) render until it
+  // completes. External SD-API renders synchronously and never sets genJobId.
+  const [startingGen, setStartingGen] = useState(false);
+  const [genJobId, setGenJobId] = useState(null);
   const fileInputRef = useRef(null);
 
+  const gen = useMediaJobProgress(genJobId);
+  const isGenerating = startingGen || !!genJobId;
+
   const setHeadshot = (url) => setForm((f) => ({ ...f, headshotImageUrl: url }));
+  // Drop any in-flight render so its completion can't write the wrong author.
+  const clearGeneration = () => { setGenJobId(null); setStartingGen(false); };
+
+  // Land the finished async render into the form, or surface a failure. Cleared
+  // genJobId on author switch (see selectAuthor/startCreate) prevents a stale
+  // render from writing the wrong author's headshot.
+  useEffect(() => {
+    if (!genJobId) return;
+    if (gen.status === 'completed' && gen.filename) {
+      setHeadshot(gen.path || `/data/images/${gen.filename}`);
+      setGenJobId(null);
+      toast.success('Headshot generated');
+    } else if (gen.status === 'failed' || gen.status === 'canceled') {
+      setGenJobId(null);
+      toast.error(gen.error || 'Headshot generation failed');
+    }
+  }, [genJobId, gen.status, gen.filename, gen.path, gen.error]);
+
+  const handleGenerateHeadshot = async () => {
+    if (isGenerating) return;
+    if (!form.physicalDescription.trim() && !form.headshotStyle.trim()) {
+      toast.error('Add a physical description or headshot style to generate from');
+      return;
+    }
+    setStartingGen(true);
+    const queued = await generateImage({
+      prompt: buildHeadshotPrompt(form),
+      // Shared base plus portrait-specific guards (people-only artifacts).
+      negativePrompt: `${DEFAULT_NEGATIVE_PROMPT}, extra limbs, nsfw, nude`,
+      width: 768,
+      height: 1024,
+    }).catch((err) => {
+      toast.error(err.message || 'Headshot generation failed');
+      return null;
+    });
+    setStartingGen(false);
+    if (!queued) return;
+    if (queued.jobId) {
+      // Async backend — track progress until the job completes.
+      setGenJobId(queued.jobId);
+      toast.success('Generating headshot…');
+      return;
+    }
+    // Synchronous backend (external SD-API) returns the finished image directly.
+    const path = queued.path || (queued.filename ? `/data/images/${queued.filename}` : '');
+    if (path) {
+      setHeadshot(path);
+      toast.success('Headshot generated');
+    } else {
+      toast.error('Headshot generation returned no image');
+    }
+  };
 
   const handleHeadshotFile = async (e) => {
     const file = e.target.files?.[0];
@@ -103,17 +175,21 @@ export default function Authors() {
     () => (isCreate || !selectedId ? null : authors.find((a) => a.id === selectedId) || null),
     [authors, selectedId, isCreate],
   );
+  // A headshot render needs at least a subject or an art-direction prompt.
+  const canGenerate = !!(form.physicalDescription.trim() || form.headshotStyle.trim());
 
   const selectAuthor = (a) => {
     setSelectedId(a.id);
     setForm(formFromAuthor(a));
     setConfirmDelete(false);
+    clearGeneration();
   };
 
   const startCreate = () => {
     setSelectedId('new');
     setForm(emptyForm());
     setConfirmDelete(false);
+    clearGeneration();
   };
 
   const handleSave = async () => {
@@ -260,9 +336,26 @@ export default function Authors() {
                   className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm"
                 />
               </Field>
-              <Field label="Headshot image" hint="Optional — upload a photo, pick one from your gallery, or paste a URL. Used on covers.">
+              <Field label="Headshot image" hint="Optional — generate from the description + style, upload a photo, pick one from your gallery, or paste a URL. Used on covers.">
                 <div className="flex items-start gap-3">
-                  {form.headshotImageUrl ? (
+                  {isGenerating ? (
+                    <div className="relative w-20 h-20 rounded border border-port-border bg-port-bg overflow-hidden flex items-center justify-center shrink-0">
+                      {gen.currentImage ? (
+                        <img
+                          src={`data:image/png;base64,${gen.currentImage}`}
+                          alt="Generating headshot preview"
+                          className="w-full h-full object-cover opacity-70"
+                        />
+                      ) : (
+                        <Loader2 size={20} className="animate-spin text-port-accent" aria-hidden="true" />
+                      )}
+                      {gen.totalSteps ? (
+                        <div className="absolute bottom-0 inset-x-0 bg-black/60 text-[9px] text-white text-center py-0.5 font-mono">
+                          {Math.round((gen.step / gen.totalSteps) * 100)}%
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : form.headshotImageUrl ? (
                     <div className="relative shrink-0">
                       <img
                         src={form.headshotImageUrl}
@@ -285,6 +378,18 @@ export default function Authors() {
                   )}
                   <div className="flex-1 space-y-2">
                     <div className="flex items-center gap-2 flex-wrap">
+                      <button
+                        type="button"
+                        onClick={handleGenerateHeadshot}
+                        disabled={isGenerating || !canGenerate}
+                        title={canGenerate
+                          ? 'Generate a headshot from the description + style'
+                          : 'Add a physical description or headshot style first'}
+                        className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-bg border border-port-border text-white text-sm hover:border-port-accent disabled:opacity-50"
+                      >
+                        {isGenerating ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+                        Generate
+                      </button>
                       <button
                         type="button"
                         onClick={() => fileInputRef.current?.click()}
