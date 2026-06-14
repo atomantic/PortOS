@@ -57,6 +57,15 @@ export const MFLUX_TRAIN_MODELS = Object.freeze({
   '9b': 'flux2-klein-base-9b',
 });
 
+// Crash-resilience floor: guarantee at least this many checkpoints across a
+// run regardless of the user's checkpointEvery. macOS GPU watchdog-timeout
+// kernel panics during sustained mflux training (see docs/TROUBLESHOOTING.md
+// "GPU watchdog kernel panic") hard-reboot the machine mid-run; without a
+// floor, checkpointEvery=0 ("only final save") or a very large interval means
+// such a crash discards the entire run. Capping the interval at
+// totalSteps/MIN_CHECKPOINTS bounds the worst-case loss to ~1/N of the run.
+export const MFLUX_MIN_CHECKPOINTS = 4;
+
 // Noise-schedule shape for mflux base-model training — mirrors the official
 // flux2 README example (steps 40, guidance 1.0, train the high-noise window
 // [25, 40)). These are INFERENCE-schedule steps, distinct from the training
@@ -169,8 +178,11 @@ export function buildMfluxTrainConfig({
   const totalSteps = p.steps;
   const epochs = Math.max(1, Math.round(totalSteps / imageCount));
   // save_frequency must be > 0; 0/absent checkpointEvery → only the final
-  // save (frequency = total).
-  const saveFrequency = p.checkpointEvery > 0 ? p.checkpointEvery : totalSteps;
+  // save (frequency = total). The crash-resilience floor then caps the
+  // interval so a hard reboot mid-run loses at most ~1/MIN_CHECKPOINTS of it.
+  const requestedSaveFrequency = p.checkpointEvery > 0 ? p.checkpointEvery : totalSteps;
+  const maxSaveInterval = Math.max(1, Math.ceil(totalSteps / MFLUX_MIN_CHECKPOINTS));
+  const saveFrequency = Math.min(requestedSaveFrequency, maxSaveInterval);
   const memory = deriveMfluxMemoryConfig(totalMemGb);
   return {
     model: mfluxModel,

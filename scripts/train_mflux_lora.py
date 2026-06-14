@@ -182,6 +182,62 @@ class ArtifactWatcher(threading.Thread):
         self.scan()  # final sweep after the child exits
 
 
+class TelemetrySidecar:
+    """Optional GPU/thermal/power capture for crash forensics.
+
+    macOS GPU watchdog-timeout kernel panics during sustained mflux training
+    (see docs/TROUBLESHOOTING.md "GPU watchdog kernel panic" + the incident
+    record under docs/research) hard-reboot the machine mid-run and leave NO
+    application-level record of GPU temperature / power draw leading up to the
+    hang. This streams `powermetrics` into <output_dir>/powermetrics.log so a
+    post-crash investigation can tell a thermal/power fault from a driver hang.
+
+    powermetrics requires root. We gate on a *non-interactive* `sudo -n` probe:
+    if passwordless sudo isn't configured the sidecar no-ops with a single
+    STATUS note and training proceeds unaffected — it never prompts or blocks.
+    """
+
+    SAMPLE_INTERVAL_MS = 5000
+
+    def __init__(self, output_dir: Path):
+        self.log_path = output_dir / "powermetrics.log"
+        self.proc = None
+
+    def start(self):
+        if sys.platform != "darwin" or not shutil.which("powermetrics"):
+            return
+        # `sudo -n true` returns non-zero (and prints nothing usable) when a
+        # password would be required — cheaper than letting powermetrics fail.
+        probe = subprocess.run(["sudo", "-n", "true"], capture_output=True)
+        if probe.returncode != 0:
+            log("STATUS:GPU telemetry disabled — passwordless sudo for powermetrics not configured; "
+                "see docs/TROUBLESHOOTING.md to enable thermal/power capture. Continuing without it.")
+            return
+        cmd = [
+            "sudo", "-n", "powermetrics",
+            "--samplers", "gpu_power,thermal,smc",
+            "-i", str(self.SAMPLE_INTERVAL_MS),
+            "--output-file", str(self.log_path),
+        ]
+        try:
+            self.proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError as err:
+            log(f"STATUS:GPU telemetry unavailable ({err}); continuing without it")
+            self.proc = None
+            return
+        log(f"STATUS:GPU telemetry → {self.log_path} (powermetrics @ {self.SAMPLE_INTERVAL_MS}ms)")
+
+    def stop(self):
+        if not self.proc or self.proc.poll() is not None:
+            return
+        # sudo forwards SIGTERM to powermetrics; escalate if it lingers.
+        self.proc.terminate()
+        try:
+            self.proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+
+
 def find_adapter(checkpoints_dir: Path, output_dir: Path) -> Path | None:
     """Extract the lora adapter (`*_adapter.safetensors`, NOT the optimizer
     state) from the newest checkpoint zip."""
@@ -235,6 +291,10 @@ def main():
     watcher.start()
 
     cmd = build_command(args.config, args.resume_checkpoint)
+    # Start telemetry only once we know the trainer command resolved (build_command
+    # exits early on a missing mflux) so we never leave an orphaned root process.
+    telemetry = TelemetrySidecar(output_dir)
+    telemetry.start()
     log("STAGE:load-model")
     log(f"STATUS:launching {Path(cmd[0]).name}")
     CHILD = subprocess.Popen(
@@ -294,6 +354,7 @@ def main():
     code = CHILD.wait()
     watcher.stop_event.set()
     watcher.join(timeout=10)
+    telemetry.stop()
 
     if STOP_REQUESTED:
         log("STATUS:canceled — last saved checkpoint retained")

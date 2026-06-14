@@ -278,6 +278,39 @@ npm test -- taskParser.test.js
 npm run test:watch
 ```
 
+## Known Issues
+
+### GPU watchdog kernel panic during LoRA training
+
+**Symptom**: The whole machine hard-reboots while an mflux LoRA training run is
+active. After reboot you may see downstream PortOS errors — training failed with
+`SIGINT`/`KeyboardInterrupt`, `Tombstone sweep failed: timeout … connect`, CoS
+`xhr poll error`. The crash report under `/Library/Logs/DiagnosticReports/` reads:
+
+```
+panic(cpu N caller 0x…): watchdog timeout: no checkins from watchdogd in 90 seconds
+```
+
+**Cause**: A system-level hang (not a PortOS or training-script bug) — the machine
+stopped making forward progress long enough that the hardware watchdog
+force-rebooted it. On new Apple Silicon (M5 / `Mac17,7`) under sustained Metal/GPU
+load this is most likely a GPU/Metal driver hang; thermal/power or severe swap
+thrash are secondary possibilities. First observed 2026-06-13 (twice in one day).
+
+**Mitigations already in place**:
+- Training checkpoints at least every `ceil(totalSteps/4)` steps
+  (`MFLUX_MIN_CHECKPOINTS`), so a crash loses at most ~¼ of a run. Resume from the
+  newest `checkpoints/*.zip` via the UI's resume action or `--resume-checkpoint`.
+- Each run captures GPU/thermal/power telemetry to `<run>/powermetrics.log` when
+  passwordless `powermetrics` is configured (see the incident record for the
+  sudoers rule).
+
+**What to do / how to investigate**: see the full incident record and checklist in
+[`docs/research/2026-06-13-mflux-training-watchdog-panic.md`](research/2026-06-13-mflux-training-watchdog-panic.md).
+Short version: read the run's `powermetrics.log` (climbing GPU temp → cooling/power;
+log just stops at normal temps → driver hang), reduce batch size/resolution/rank as
+a test, and update macOS + `mflux`/`mlx`.
+
 ## Getting Help
 
 1. **Check logs**: `pm2 logs` shows all process output

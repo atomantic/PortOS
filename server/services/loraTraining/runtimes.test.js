@@ -87,9 +87,23 @@ describe('buildMfluxTrainConfig', () => {
     });
     expect(config.optimizer.learning_rate).toBe(0.0002);
     expect(config.max_resolution).toBe(768);
-    expect(config.checkpoint.save_frequency).toBe(200); // only the final save
+    // checkpointEvery:0 would mean "only the final save", but the crash-
+    // resilience floor caps the interval at totalSteps/MIN_CHECKPOINTS (200/4).
+    expect(config.checkpoint.save_frequency).toBe(50);
     expect(config.monitoring).toBeUndefined();
     expect(config.lora_layers.targets[0].rank).toBe(8);
+  });
+
+  it('caps save_frequency at totalSteps/MIN_CHECKPOINTS for crash resilience', () => {
+    // A huge checkpointEvery (or 0 → "only final save") must still checkpoint
+    // periodically so a mid-run hard reboot (GPU watchdog panic) keeps progress.
+    const onlyFinal = buildMfluxTrainConfig({ ...base, params: { steps: 600, checkpointEvery: 0 } });
+    expect(onlyFinal.checkpoint.save_frequency).toBe(150); // ceil(600/4)
+    const tooLarge = buildMfluxTrainConfig({ ...base, params: { steps: 600, checkpointEvery: 9999 } });
+    expect(tooLarge.checkpoint.save_frequency).toBe(150);
+    // A reasonable user interval below the cap is left untouched.
+    const reasonable = buildMfluxTrainConfig({ ...base, params: { steps: 600, checkpointEvery: 100 } });
+    expect(reasonable.checkpoint.save_frequency).toBe(100);
   });
 
   it('enables monitoring with sample dimensions when sampleEvery > 0', () => {
