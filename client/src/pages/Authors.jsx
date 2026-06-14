@@ -105,7 +105,7 @@ export default function Authors() {
   }, [genJobId, gen.status, gen.filename, gen.path, gen.error]);
 
   const handleGenerateHeadshot = async () => {
-    if (isGenerating) return;
+    if (isGenerating || uploadingHeadshot) return;
     if (!form.physicalDescription.trim() && !form.headshotStyle.trim()) {
       toast.error('Add a physical description or headshot style to generate from');
       return;
@@ -392,7 +392,7 @@ export default function Authors() {
                       <button
                         type="button"
                         onClick={handleGenerateHeadshot}
-                        disabled={isGenerating || !canGenerate}
+                        disabled={isGenerating || uploadingHeadshot || !canGenerate}
                         title={canGenerate
                           ? 'Generate a headshot from the description + style'
                           : 'Add a physical description or headshot style first'}
