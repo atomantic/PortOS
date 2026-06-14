@@ -113,6 +113,22 @@ describe('Authors headshot generation', () => {
     expect(img.getAttribute('src')).toBe('/data/images/final.png');
   });
 
+  it('disables the competing headshot controls while a render is in flight', async () => {
+    generateImage.mockResolvedValue({ jobId: 'job-3', filename: 'job-3.png', path: '/data/images/job-3.png' });
+    await openCreateForm();
+    fireEvent.change(screen.getByPlaceholderText(/silver-streaked dark hair/i), {
+      target: { value: 'Woman in her 40s' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Generate/i }));
+    await waitFor(() => expect(generateImage).toHaveBeenCalledTimes(1));
+
+    // The async job is in flight — a manual headshot change would be clobbered
+    // on completion, so Upload / gallery / URL are locked until it settles.
+    expect(screen.getByRole('button', { name: 'Upload' }).disabled).toBe(true);
+    expect(screen.getByRole('button', { name: 'Choose from gallery' }).disabled).toBe(true);
+    expect(screen.getByPlaceholderText(/https:/i).disabled).toBe(true);
+  });
+
   it('does not overwrite a different author when one is selected mid-render', async () => {
     generateImage.mockResolvedValue({ jobId: 'job-2', filename: 'job-2.png', path: '/data/images/job-2.png' });
     listAuthors.mockResolvedValue([

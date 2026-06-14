@@ -404,7 +404,7 @@ export default function Authors() {
                       <button
                         type="button"
                         onClick={() => fileInputRef.current?.click()}
-                        disabled={uploadingHeadshot}
+                        disabled={uploadingHeadshot || isGenerating}
                         className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-bg border border-port-border text-white text-sm hover:border-port-accent disabled:opacity-50"
                       >
                         {uploadingHeadshot ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
@@ -413,7 +413,8 @@ export default function Authors() {
                       <button
                         type="button"
                         onClick={() => setGalleryOpen(true)}
-                        className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-bg border border-port-border text-white text-sm hover:border-port-accent"
+                        disabled={isGenerating}
+                        className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-bg border border-port-border text-white text-sm hover:border-port-accent disabled:opacity-50"
                       >
                         <ImageIcon size={14} /> Choose from gallery
                       </button>
@@ -428,9 +429,10 @@ export default function Authors() {
                     <input
                       value={form.headshotImageUrl}
                       onChange={(e) => setHeadshot(e.target.value)}
+                      disabled={isGenerating}
                       placeholder="/images/…  or  https://…"
                       maxLength={AUTHOR_HEADSHOT_IMAGE_URL_MAX}
-                      className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm"
+                      className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm disabled:opacity-50"
                     />
                   </div>
                 </div>
