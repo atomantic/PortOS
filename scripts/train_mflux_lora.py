@@ -27,6 +27,7 @@ last saved checkpoint).
 """
 
 import argparse
+import atexit
 import json
 import os
 import re
@@ -225,6 +226,11 @@ class TelemetrySidecar:
             log(f"STATUS:GPU telemetry unavailable ({err}); continuing without it")
             self.proc = None
             return
+        # Guarantee the root powermetrics child is reaped even if main() throws
+        # between start() and the explicit stop() — unlike the daemon watcher
+        # thread, this is a separate OS process that outlives the interpreter.
+        # stop() is idempotent (poll() guard), so the later explicit call is safe.
+        atexit.register(self.stop)
         log(f"STATUS:GPU telemetry → {self.log_path} (powermetrics @ {self.SAMPLE_INTERVAL_MS}ms)")
 
     def stop(self):
