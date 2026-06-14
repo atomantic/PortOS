@@ -220,6 +220,31 @@ FATAL_PATTERNS = [
 # the actionable message — one source of truth for that text, on the JS side.
 
 
+def is_preview_progress_bar(line, cur, total, *, has_step_loss, preview_steps, training_total):
+    """True if a matched tqdm bar belongs to the preview/sample IMAGE generation
+    rather than the training loop.
+
+    mflux runs `adapter.generate_preview_image` (→ `flux2.generate_image`) once
+    before training (step 0) and again at every sample interval. That diffusion
+    sampler prints its own tqdm bar whose total is the DENOISE step count
+    (`config["steps"]`, e.g. 40) — identical in shape to the training bar except
+    the total differs (training total = epochs × images). If we don't exclude it
+    the wrapper both mislabels denoise ticks as training STEPs and lets them
+    perturb `state["step"]`, which gates the segment-boundary kill (a preview bar
+    reading 38/40 could spuriously satisfy a 150-step boundary).
+
+    Discriminators, all required:
+      - `has_step_loss` False — the explicit "step N/M … loss X" prose is emitted
+        only by the training loop, never the sampler, so it's never a preview.
+      - `preview_steps` known (caller passes None when steps == training_total,
+        the degenerate tiny-dataset case where totals can't disambiguate).
+      - the bar's total equals `preview_steps` and differs from `training_total`.
+    """
+    if has_step_loss or preview_steps is None:
+        return False
+    return total == preview_steps and (training_total is None or total != training_total)
+
+
 def resolve_mflux_output(configured: Path) -> Path:
     """mflux appends `_YYYYMMDD_HHMMSS` to checkpoint.output_path when the
     configured dir already exists (its new-run-folder behavior) — a killed
@@ -433,7 +458,8 @@ def compute_effective_total(config: dict, fallback: int) -> int:
 
 
 def run_segment(cmd, *, segment_target, state, last_reported, output_tail,
-                fatal_holder, configured_output, cooldown):
+                fatal_holder, configured_output, cooldown,
+                preview_steps=None, training_total=None):
     """Run ONE mflux invocation and stream its output.
 
     Returns a dict with `reason`:
@@ -455,6 +481,7 @@ def run_segment(cmd, *, segment_target, state, last_reported, output_tail,
         CHILD.terminate()
 
     in_training = False
+    preview_logged = {"v": False}  # one STAGE:sampling per contiguous preview run
     for raw in stream_lines(CHILD.stdout):
         line = raw.strip()
         if not line or NOISE_RE.search(line):
@@ -469,9 +496,24 @@ def run_segment(cmd, *, segment_target, state, last_reported, output_tail,
                     fatal_holder["v"] = True
                     break
 
-        m = STEP_LOSS_RE.search(line) or TQDM_RE.search(line)
+        step_loss_match = STEP_LOSS_RE.search(line)
+        m = step_loss_match or TQDM_RE.search(line)
         if m:
             cur, total = int(m.group(1)), int(m.group(2))
+            # Skip the preview/sample image generation's own tqdm bar so it isn't
+            # mislabeled as a training step or allowed to trip the segment kill.
+            if is_preview_progress_bar(
+                line, cur, total,
+                has_step_loss=step_loss_match is not None,
+                preview_steps=preview_steps, training_total=training_total,
+            ):
+                if not in_training and not preview_logged["v"]:
+                    # Pre-training step-0 preview: surface a distinct stage so the
+                    # UI shows "sampling" instead of a frozen "load-model". Emit
+                    # once — the bar redraws every denoise tick.
+                    preview_logged["v"] = True
+                    log("STAGE:sampling")
+                continue
             if total > 0 and cur >= 0:
                 state["step"], state["total"] = cur, total
                 if m.lastindex and m.lastindex >= 3:
@@ -482,6 +524,12 @@ def run_segment(cmd, *, segment_target, state, last_reported, output_tail,
                 if not in_training:
                     in_training = True
                     log("STAGE:training")
+                # A real training step ends a preview run; re-arm so the NEXT
+                # mid-training sampling phase (step 150, 300…) logs STAGE:sampling
+                # again. Re-announce STAGE:training when we come back from one.
+                elif preview_logged["v"]:
+                    log("STAGE:training")
+                preview_logged["v"] = False
                 # tqdm redraws constantly at the same step — only emit on change.
                 if cur != last_reported["step"]:
                     last_reported["step"] = cur
@@ -539,6 +587,15 @@ def main():
     seg = max(0, args.segment_steps)
     cooldown = max(0, args.cooldown_sec)
     segmented = seg > 0
+
+    # The preview/sample image generation prints its own tqdm bar whose total is
+    # the denoise step count (`steps`), distinct from the training total. Pass
+    # both to run_segment so it can tell a preview bar from a training bar. Guard
+    # the rare degenerate case where steps == training total (tiny datasets):
+    # then we can't disambiguate by total, so don't filter (preview_steps=None).
+    preview_steps = config.get("steps")
+    if not isinstance(preview_steps, int) or preview_steps <= 0 or preview_steps == total:
+        preview_steps = None
 
     state = {"step": 0, "total": total, "loss": None}
     last_reported = {"step": -1}
@@ -601,6 +658,7 @@ def main():
             cmd, segment_target=segment_target, state=state, last_reported=last_reported,
             output_tail=output_tail, fatal_holder=fatal_holder,
             configured_output=configured_output, cooldown=cooldown,
+            preview_steps=preview_steps, training_total=total,
         )
         segment_index += 1
 
