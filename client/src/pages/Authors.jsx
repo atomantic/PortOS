@@ -10,14 +10,20 @@
  * an author loads it into the editor; "New Author" opens a blank create form.
  */
 
-import { useEffect, useMemo, useState } from 'react';
-import { FilePen, Plus, Loader2, Trash2, Save } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { FilePen, Plus, Loader2, Trash2, Save, Upload, ImageIcon, X } from 'lucide-react';
 import toast from '../components/ui/Toast';
+import GalleryImagePicker from '../components/imageGen/GalleryImagePicker';
+import { readFileAsBase64 } from '../utils/fileUpload';
 import {
-  listAuthors, createAuthor, updateAuthor, deleteAuthor,
+  listAuthors, createAuthor, updateAuthor, deleteAuthor, uploadFile,
   AUTHOR_NAME_MAX, AUTHOR_WRITING_STYLE_MAX, AUTHOR_BIO_MAX,
   AUTHOR_PHYSICAL_DESCRIPTION_MAX, AUTHOR_HEADSHOT_STYLE_MAX, AUTHOR_HEADSHOT_IMAGE_URL_MAX,
 } from '../services/api';
+
+// Cap headshot uploads so the base64 round-trip stays small — a cover headshot
+// never needs more than a few MB.
+const HEADSHOT_MAX_BYTES = 12 * 1024 * 1024;
 
 const emptyForm = () => ({
   name: '', writingStyle: '', bio: '', physicalDescription: '', headshotStyle: '', headshotImageUrl: '',
@@ -50,6 +56,40 @@ export default function Authors() {
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [galleryOpen, setGalleryOpen] = useState(false);
+  const [uploadingHeadshot, setUploadingHeadshot] = useState(false);
+  const fileInputRef = useRef(null);
+
+  const setHeadshot = (url) => setForm((f) => ({ ...f, headshotImageUrl: url }));
+
+  const handleHeadshotFile = async (e) => {
+    const file = e.target.files?.[0];
+    if (e.target) e.target.value = ''; // allow re-picking the same file
+    if (!file) return;
+    if (!file.type.startsWith('image/')) { toast.error('Please choose an image file'); return; }
+    if (file.size > HEADSHOT_MAX_BYTES) {
+      toast.error(`Image exceeds ${Math.round(HEADSHOT_MAX_BYTES / 1024 / 1024)}MB`);
+      return;
+    }
+    setUploadingHeadshot(true);
+    const base64 = await readFileAsBase64(file).catch(() => null);
+    if (!base64) { setUploadingHeadshot(false); toast.error('Could not read that file'); return; }
+    const uploaded = await uploadFile(base64, file.name).catch((err) => {
+      toast.error(err.message || 'Upload failed');
+      return null;
+    });
+    setUploadingHeadshot(false);
+    if (uploaded?.path) {
+      setHeadshot(uploaded.path);
+      toast.success('Headshot uploaded');
+    }
+  };
+
+  const handleHeadshotPick = (item) => {
+    setGalleryOpen(false);
+    const url = item?.previewUrl || (item?.filename ? `/data/images/${item.filename}` : '');
+    if (url) setHeadshot(url);
+  };
 
   useEffect(() => {
     listAuthors()
@@ -220,14 +260,64 @@ export default function Authors() {
                   className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm"
                 />
               </Field>
-              <Field label="Headshot image URL" hint="Optional — a chosen/generated headshot to use on covers.">
-                <input
-                  value={form.headshotImageUrl}
-                  onChange={(e) => setForm((f) => ({ ...f, headshotImageUrl: e.target.value }))}
-                  placeholder="/images/…  or  https://…"
-                  maxLength={AUTHOR_HEADSHOT_IMAGE_URL_MAX}
-                  className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
-                />
+              <Field label="Headshot image" hint="Optional — upload a photo, pick one from your gallery, or paste a URL. Used on covers.">
+                <div className="flex items-start gap-3">
+                  {form.headshotImageUrl ? (
+                    <div className="relative shrink-0">
+                      <img
+                        src={form.headshotImageUrl}
+                        alt="Author headshot"
+                        className="w-20 h-20 rounded object-cover border border-port-border bg-port-bg"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setHeadshot('')}
+                        title="Remove headshot"
+                        className="absolute -top-2 -right-2 p-1 rounded-full bg-port-bg border border-port-border text-gray-400 hover:text-port-error"
+                      >
+                        <X size={12} />
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="w-20 h-20 rounded border border-dashed border-port-border bg-port-bg flex items-center justify-center text-gray-600 shrink-0">
+                      <ImageIcon size={20} aria-hidden="true" />
+                    </div>
+                  )}
+                  <div className="flex-1 space-y-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        disabled={uploadingHeadshot}
+                        className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-bg border border-port-border text-white text-sm hover:border-port-accent disabled:opacity-50"
+                      >
+                        {uploadingHeadshot ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
+                        Upload
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setGalleryOpen(true)}
+                        className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-bg border border-port-border text-white text-sm hover:border-port-accent"
+                      >
+                        <ImageIcon size={14} /> Choose from gallery
+                      </button>
+                      <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept="image/*"
+                        onChange={handleHeadshotFile}
+                        className="hidden"
+                      />
+                    </div>
+                    <input
+                      value={form.headshotImageUrl}
+                      onChange={(e) => setHeadshot(e.target.value)}
+                      placeholder="/images/…  or  https://…"
+                      maxLength={AUTHOR_HEADSHOT_IMAGE_URL_MAX}
+                      className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm"
+                    />
+                  </div>
+                </div>
               </Field>
 
               <div className="flex items-center gap-2 pt-1 flex-wrap">
@@ -266,6 +356,12 @@ export default function Authors() {
           )}
         </div>
       </div>
+
+      <GalleryImagePicker
+        open={galleryOpen}
+        onClose={() => setGalleryOpen(false)}
+        onSelect={handleHeadshotPick}
+      />
     </div>
   );
 }
