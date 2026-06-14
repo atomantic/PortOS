@@ -1,7 +1,7 @@
 # Incident: GPU watchdog-timeout kernel panic during mflux LoRA training
 
 **Status:** Open — monitoring for recurrence
-**First observed:** 2026-06-13 (two panics same day)
+**First observed:** 2026-06-13 (two panics same day; a third on 2026-06-14)
 **Affected:** `Mac17,7` (Apple Silicon, `T6050` SoC), macOS 26.5 (`Darwin 25.5.0`, `xnu-12377.121.6~2`)
 **Trigger:** Sustained GPU compute during mflux FLUX.2 LoRA training (`scripts/train_mflux_lora.py` → `mflux-train`)
 
@@ -22,11 +22,18 @@ Two panic reports under `/Library/Logs/DiagnosticReports/`, identical signature:
 
 | Time (local) | panicString | product | caller |
 |---|---|---|---|
-| 06:28:45 | `watchdog timeout: no checkins from watchdogd in 90 seconds` | `Mac17,7` | `0x…40a65d8c` |
-| 20:49:36 | `watchdog timeout: no checkins from watchdogd in 90 seconds` | `Mac17,7` | `0x…477fdd8c` |
+| 06-13 06:28:45 | `watchdog timeout: no checkins from watchdogd in 90 seconds` | `Mac17,7` | `0x…40a65d8c` |
+| 06-13 20:49:36 | `watchdog timeout: no checkins from watchdogd in 90 seconds` | `Mac17,7` | `0x…477fdd8c` |
+| 06-14 07:26:47 | `watchdog timeout: no checkins from watchdogd in 93 seconds` | `Mac17,7` | `0x…49c65d8c` |
 
-The two caller addresses differ **only by the ASLR kernel slide** — i.e. it is
-the same code path firing both times.
+The caller addresses differ **only by the ASLR kernel slide** (all three share
+the `…65d8c` low bytes) — i.e. it is the same code path firing every time. The
+06-14 recurrence happened with the 2026-06-13 mitigations (checkpoint floor,
+memory-pressure reclaim) already shipped, and **no `powermetrics.log` was
+captured on any of the three** — the telemetry sidecar no-ops because
+passwordless `sudo` for `powermetrics` was never configured, so all three
+crashes are still blind on the thermal-vs-driver question. Enabling the sidecar
+(below) is the top priority before the next run.
 
 Key fields from the 20:49 paniclog:
 
@@ -88,6 +95,47 @@ swap thrash if a run oversubscribes unified memory.
      RAM, so a busy box auto-tightens to a smaller/quantized base. A run refuses
      to start (`failBeforeSpawn`) below `TRAINING_MIN_HEADROOM_GB` (24 GB)
      rather than swap-thrashing the machine into another reboot.
+
+## Mitigations shipped (2026-06-14, after crash #3)
+
+4. **Segmented training + GPU cooldown** (default ON) — the strongest lever
+   short of an OS fix, and a direct response to crashes #1–3 all happening
+   *during sustained GPU compute* a fairly consistent depth into the run (a
+   signature of a cumulative thermal/driver trigger). Instead of one mflux
+   process held open for the whole run, `scripts/train_mflux_lora.py` now trains
+   in **checkpoint-sized segments**: train one save interval → **terminate the
+   mflux child so its Metal/GPU context is fully torn down** → idle the GPU for a
+   cooldown (default 90 s) → `--resume` the newest checkpoint → repeat. mflux
+   resume reads `num_epochs` from the checkpoint (the config value is ignored on
+   resume), so each segment continues toward the *same* total — segmentation is
+   numerically equivalent to one continuous run, just with periodic full-process
+   teardown. Sustained GPU pressure therefore never spans more than one segment,
+   and any accumulated driver/thermal state resets between segments while the GPU
+   clocks down.
+   - The child is killed only *after* the trainer steps **past** the boundary,
+     guaranteeing the boundary checkpoint zip is fully flushed (no truncation
+     from a mid-write kill); resume loses at most the one in-flight step.
+   - Wiring: `buildMfluxTrainArgs` emits `--segment-steps <save_frequency>
+     --cooldown-sec <n>`; segment size is exactly the config's effective
+     `save_frequency` so each segment ends on a checkpoint (no extra checkpoints,
+     no lost steps). `server/services/loraTraining/index.js` derives both from
+     `settings.loraTraining`.
+   - **Globally disable-able** once a macOS/mflux update fixes the underlying
+     GPU-driver hang: set `settings.loraTraining.segmentation = false` (or tune
+     `segmentCooldownSec`). With segmentation off the wrapper runs as a single
+     sustained process again (`--segment-steps 0`).
+   - Cost: each segment reloads the (quantized) base model and re-encodes the
+     dataset (low_ram wipes+re-encodes on every launch), so a 4-segment run pays
+     ~3 extra model loads + cooldowns. Acceptable vs. never completing a run. To
+     trade fewer reloads for a longer sustained window, raise `checkpointEvery`
+     (which raises `save_frequency` = segment size) — but keep it below the
+     ~150–300-step crash window.
+   - The cooldown emits a `STAGE:cooldown:heartbeat:<n>s` keep-alive every 30 s,
+     which resets the mediaJobQueue idle watchdog (it only resets on emitted
+     runner output). Without it a cooldown tuned above the 30-min
+     `WATCHDOG_TRAINING_MS` window — `segmentCooldownSec` validates up to 3600 s —
+     would get a healthy run killed mid-pause; with it, any cooldown length is
+     safe.
 
 ### Enabling the telemetry sidecar (passwordless powermetrics)
 

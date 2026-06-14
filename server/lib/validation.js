@@ -850,6 +850,12 @@ export const loraTrainingConfigSchema = z.object({
   captionProviderId: z.string().max(128).nullable().optional(),
   captionModel: z.string().max(256).nullable().optional(),
   defaults: loraTrainingParamsSchema.optional(),
+  // Segmented mflux training (watchdog-panic mitigation, default ON in
+  // services/loraTraining/runtimes.js). Setting this false runs the trainer as
+  // one sustained process again — flip it once a macOS/mflux update resolves
+  // the GPU-driver hang. Cooldown is the GPU idle gap (seconds) between segments.
+  segmentation: z.boolean().optional(),
+  segmentCooldownSec: z.number().int().min(0).max(3600).optional(),
 });
 
 // POST /api/lora-training/runs — start a training run for a dataset.

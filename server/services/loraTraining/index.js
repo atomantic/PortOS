@@ -36,6 +36,7 @@ import {
   buildMfluxTrainArgs,
   buildMfluxTrainConfig,
   resolveTrainingRuntime,
+  MFLUX_DEFAULT_COOLDOWN_SEC,
 } from './runtimes.js';
 import { makeTrainingLineHandler } from './progress.js';
 import { prepareMemoryForTraining, TRAINING_MIN_HEADROOM_GB } from './memoryPrep.js';
@@ -342,6 +343,7 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
 
   const run = await runsDb.getRun(runId);
   if (!run) return fail(`run record missing: ${runId}`);
+  const settings = await getSettings();
 
   // Terminal failure BEFORE the child spawns: flip the run record to failed
   // AND release the dataset's `training` status, then emit the failed event.
@@ -465,12 +467,23 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
       });
       const configPath = join(dir, 'mflux-train.json');
       await atomicWrite(configPath, config);
+      // Segmented training (watchdog-panic mitigation): default ON, globally
+      // disable-able via settings.loraTraining.segmentation = false once a
+      // macOS/mflux update fixes the underlying GPU-driver hang. Segment size
+      // is the config's effective save_frequency so each segment ends exactly
+      // on a checkpoint — no extra checkpoints, no lost steps on resume.
+      const segCfg = settings?.loraTraining || {};
+      const segmentationOn = segCfg.segmentation !== false;
+      const cooldownSec = Number.isFinite(segCfg.segmentCooldownSec)
+        ? segCfg.segmentCooldownSec : MFLUX_DEFAULT_COOLDOWN_SEC;
       args = buildMfluxTrainArgs({
         scriptPath: TRAINER_SCRIPTS.mflux,
         configPath,
         runDir: dir,
         totalSteps: run.params?.steps || TRAINING_DEFAULTS.steps,
         resumeCheckpoint,
+        segmentSteps: segmentationOn ? config.checkpoint.save_frequency : 0,
+        cooldownSec,
       });
     }
   } catch (err) {

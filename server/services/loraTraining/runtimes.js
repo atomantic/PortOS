@@ -221,14 +221,39 @@ export function buildMfluxTrainConfig({
   };
 }
 
-/** Argv for the mflux wrapper script. */
-export function buildMfluxTrainArgs({ scriptPath, configPath, runDir, totalSteps, resumeCheckpoint = null }) {
+// Default GPU cooldown (seconds) between training segments — long enough for
+// the GPU to clock down and the system to settle after a full Metal-context
+// teardown, short relative to a segment's compute. See the segmentation block
+// in scripts/train_mflux_lora.py and the watchdog-panic incident record.
+export const MFLUX_DEFAULT_COOLDOWN_SEC = 90;
+
+/**
+ * Argv for the mflux wrapper script.
+ *
+ * `segmentSteps > 0` enables segmented training (watchdog-panic mitigation):
+ * the wrapper trains one checkpoint interval, tears down the GPU child, cools
+ * down `cooldownSec`, then resumes — so sustained GPU pressure never spans the
+ * whole run. Pass `segmentSteps = the effective save_frequency` so each segment
+ * ends exactly on a checkpoint. `segmentSteps = 0` keeps the single-process run.
+ */
+export function buildMfluxTrainArgs({
+  scriptPath,
+  configPath,
+  runDir,
+  totalSteps,
+  resumeCheckpoint = null,
+  segmentSteps = 0,
+  cooldownSec = MFLUX_DEFAULT_COOLDOWN_SEC,
+}) {
   const args = [
     scriptPath,
     '--config', configPath,
     '--output-dir', runDir,
     '--total-steps', String(totalSteps),
   ];
+  if (segmentSteps > 0) {
+    args.push('--segment-steps', String(segmentSteps), '--cooldown-sec', String(Math.max(0, cooldownSec)));
+  }
   if (resumeCheckpoint) args.push('--resume-checkpoint', resumeCheckpoint);
   return args;
 }

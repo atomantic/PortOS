@@ -7,6 +7,7 @@ import {
   buildMfluxTrainConfig,
   deriveMfluxMemoryConfig,
   resolveTrainingRuntime,
+  MFLUX_DEFAULT_COOLDOWN_SEC,
 } from './runtimes.js';
 
 const MODELS = [
@@ -179,6 +180,38 @@ describe('buildMfluxTrainArgs / buildFlux2TrainArgs', () => {
       scriptPath: '/x.py', configPath: '/r/cfg.json', runDir: '/r', totalSteps: 500,
     });
     expect(args).not.toContain('--resume-checkpoint');
+  });
+
+  it('omits segment flags when segmentSteps is 0 (single-process run)', () => {
+    const args = buildMfluxTrainArgs({
+      scriptPath: '/x.py', configPath: '/r/cfg.json', runDir: '/r', totalSteps: 500, segmentSteps: 0,
+    });
+    expect(args).not.toContain('--segment-steps');
+    expect(args).not.toContain('--cooldown-sec');
+  });
+
+  it('emits segment + cooldown flags when segmentation is enabled', () => {
+    const args = buildMfluxTrainArgs({
+      scriptPath: '/x.py', configPath: '/r/cfg.json', runDir: '/r', totalSteps: 600,
+      segmentSteps: 150, cooldownSec: 120,
+    });
+    expect(args[args.indexOf('--segment-steps') + 1]).toBe('150');
+    expect(args[args.indexOf('--cooldown-sec') + 1]).toBe('120');
+  });
+
+  it('defaults the cooldown when only segmentSteps is given', () => {
+    const args = buildMfluxTrainArgs({
+      scriptPath: '/x.py', configPath: '/r/cfg.json', runDir: '/r', totalSteps: 600, segmentSteps: 150,
+    });
+    expect(args[args.indexOf('--cooldown-sec') + 1]).toBe(String(MFLUX_DEFAULT_COOLDOWN_SEC));
+  });
+
+  it('clamps a negative cooldown to 0', () => {
+    const args = buildMfluxTrainArgs({
+      scriptPath: '/x.py', configPath: '/r/cfg.json', runDir: '/r', totalSteps: 600,
+      segmentSteps: 150, cooldownSec: -5,
+    });
+    expect(args[args.indexOf('--cooldown-sec') + 1]).toBe('0');
   });
 
   it('refuses non-bf16 train repos', () => {
