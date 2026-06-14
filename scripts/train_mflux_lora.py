@@ -38,6 +38,7 @@ import sys
 import threading
 import zipfile
 from collections import deque
+from datetime import datetime
 from pathlib import Path
 
 CHILD = None
@@ -193,29 +194,44 @@ class TelemetrySidecar:
     hang. This streams `powermetrics` into <output_dir>/powermetrics.log so a
     post-crash investigation can tell a thermal/power fault from a driver hang.
 
-    powermetrics requires root. We gate on a *non-interactive* `sudo -n` probe:
-    if passwordless sudo isn't configured the sidecar no-ops with a single
-    STATUS note and training proceeds unaffected — it never prompts or blocks.
+    powermetrics requires root. We gate on a *non-interactive* `sudo -n -l`
+    probe of powermetrics specifically: if passwordless sudo for that command
+    isn't configured the sidecar no-ops with a single STATUS note and training
+    proceeds unaffected — it never prompts or blocks.
     """
 
     SAMPLE_INTERVAL_MS = 5000
 
     def __init__(self, output_dir: Path):
-        self.log_path = output_dir / "powermetrics.log"
+        # Don't clobber a prior run's telemetry on resume — the post-crash
+        # investigation reads it from this dir, and `powermetrics --output-file`
+        # truncates. Roll to a timestamped name when the default already exists
+        # so each launch keeps its own forensic log.
+        base = output_dir / "powermetrics.log"
+        if base.exists():
+            base = output_dir / f"powermetrics.{datetime.now():%Y%m%d_%H%M%S}.log"
+        self.log_path = base
         self.proc = None
 
     def start(self):
-        if sys.platform != "darwin" or not shutil.which("powermetrics"):
+        if sys.platform != "darwin":
             return
-        # `sudo -n true` returns non-zero (and prints nothing usable) when a
-        # password would be required — cheaper than letting powermetrics fail.
-        probe = subprocess.run(["sudo", "-n", "true"], capture_output=True)
+        pm = shutil.which("powermetrics")
+        if not pm:
+            return
+        # Probe whether *powermetrics specifically* is permitted under
+        # passwordless sudo. The documented sudoers rule grants NOPASSWD for
+        # powermetrics only, so a generic `sudo -n true` probe (which runs
+        # /usr/bin/true) would fail for exactly the users who configured it
+        # correctly. `sudo -n -l <cmd>` lists the permission without running
+        # powermetrics and without prompting; non-zero means not allowed.
+        probe = subprocess.run(["sudo", "-n", "-l", pm], capture_output=True)
         if probe.returncode != 0:
             log("STATUS:GPU telemetry disabled — passwordless sudo for powermetrics not configured; "
                 "see docs/TROUBLESHOOTING.md to enable thermal/power capture. Continuing without it.")
             return
         cmd = [
-            "sudo", "-n", "powermetrics",
+            "sudo", "-n", pm,
             "--samplers", "gpu_power,thermal,smc",
             "-i", str(self.SAMPLE_INTERVAL_MS),
             "--output-file", str(self.log_path),

@@ -301,13 +301,14 @@ thrash are secondary possibilities. First observed 2026-06-13 (twice in one day)
 - Training checkpoints at least every `ceil(totalSteps/4)` steps
   (`MFLUX_MIN_CHECKPOINTS`), so a crash loses at most ~¼ of a run. Resume from the
   newest `checkpoints/*.zip` via the UI's resume action or `--resume-checkpoint`.
-- Each run captures GPU/thermal/power telemetry to `<run>/powermetrics.log` when
-  passwordless `powermetrics` is configured (see the incident record for the
-  sudoers rule).
+- Each run captures GPU/thermal/power telemetry to `<run>/powermetrics.log` (a
+  resume rolls to a timestamped `powermetrics.<ts>.log` so the pre-crash log is
+  preserved) when passwordless `powermetrics` is configured (see the incident
+  record for the sudoers rule).
 
 **What to do / how to investigate**: see the full incident record and checklist in
 [`docs/research/2026-06-13-mflux-training-watchdog-panic.md`](research/2026-06-13-mflux-training-watchdog-panic.md).
-Short version: read the run's `powermetrics.log` (climbing GPU temp → cooling/power;
+Short version: read the run's newest `powermetrics*.log` (climbing GPU temp → cooling/power;
 log just stops at normal temps → driver hang), reduce batch size/resolution/rank as
 a test, and update macOS + `mflux`/`mlx`.
 

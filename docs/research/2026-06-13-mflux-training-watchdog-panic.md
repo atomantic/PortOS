@@ -81,7 +81,9 @@ Without this the sidecar simply skips capture — training is unaffected.
 
 ## If it recurs — investigation checklist
 
-1. **Read the telemetry.** Open `<run>/powermetrics.log` from the crashed run.
+1. **Read the telemetry.** Open the newest `<run>/powermetrics*.log` from the
+   crashed run (a resume rolls the prior log to a timestamped name, so the
+   pre-crash capture is the one with the highest timestamp / matching the run).
    - GPU die temp climbing toward ~100°C / SMC throttle flags set right before
      the gap → **thermal/power**. Improve cooling, ensure high-watt AC adapter,
      reduce load.
