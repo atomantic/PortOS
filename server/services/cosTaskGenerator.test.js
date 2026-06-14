@@ -53,6 +53,24 @@ describe('dry-run hook wiring matches each engine execute path', () => {
   });
 });
 
+// The `{reviewers}` prompt token is what tasks like claim-issue use to tell the
+// agent which reviewers to run (the prompt drives the review loop directly, so
+// this IS the operative reviewer list, not just display). It must fall back to
+// the user's PortOS Code Review Defaults when the task didn't pin reviewers —
+// not the bare `normalizeReviewers(metadata)` call, which silently reverts to
+// hardcoded copilot. This guard pins the wiring against that regression.
+describe('{reviewers} interpolation honors Code Review Defaults', () => {
+  it('resolves getCodeReviewDefaults and passes them as the normalizeReviewers fallback', () => {
+    expect(GEN_SRC).toContain("import { getCodeReviewDefaults } from './codeReview.js'");
+    const start = GEN_SRC.indexOf('const reviewersCsv =');
+    expect(start, 'reviewersCsv must be assigned').toBeGreaterThan(-1);
+    const line = GEN_SRC.slice(start, GEN_SRC.indexOf('\n', start));
+    expect(line).toContain('normalizeReviewers(metadata, codeReviewDefaults?.reviewers)');
+    // The bare two-arg-less form is the bug we are guarding against.
+    expect(line).not.toMatch(/normalizeReviewers\(metadata\)/);
+  });
+});
+
 describe('exceedsMaxSpawns', () => {
   it('is false below the ceiling and true at/above it — no mutation', () => {
     expect(exceedsMaxSpawns(task('a', { totalSpawnCount: 0 }))).toBe(false);

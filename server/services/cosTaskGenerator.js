@@ -36,6 +36,7 @@ import { getActiveApps, getAppTaskTypeOverrides } from './apps.js';
 import { getTaskTypeConfidence } from './taskLearning.js';
 import { generateProactiveTasks as generateMissionTasks } from './missions.js';
 import { isRecoveryTask } from './recoveryTasks.js';
+import { getCodeReviewDefaults } from './codeReview.js';
 
 /**
  * Block a task that has exceeded the max spawn limit. Returns true if blocked.
@@ -1383,7 +1384,15 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
     return null;
   }
   const planConstraintBlock = buildPlanConstraintBlock(metadata.planId);
-  const reviewersCsv = normalizeReviewers(metadata).join(',');
+  // Resolve the `{reviewers}` the agent is told to run. When the task itself
+  // didn't pin reviewers, fall back to the user's PortOS Code Review Defaults
+  // (AI Providers → Code Review Defaults) rather than the hardcoded `copilot` —
+  // otherwise scheduled tasks like claim-issue, whose prompt drives the review
+  // loop directly, would always tell the agent to use Copilot regardless of the
+  // user's configured reviewers. Settings I/O failures degrade to the hardcoded
+  // default inside normalizeReviewers, so a read error never blocks dispatch.
+  const codeReviewDefaults = await getCodeReviewDefaults().catch(() => null);
+  const reviewersCsv = normalizeReviewers(metadata, codeReviewDefaults?.reviewers).join(',');
   // claim-issue: expand {issueAuthorFilter} into a concrete directive telling
   // the agent which open issues are claimable. The filter was already merged
   // (global → per-app override) and value-constrained by sanitizeTaskMetadata,
