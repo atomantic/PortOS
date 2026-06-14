@@ -106,13 +106,15 @@ export default function Authors() {
       return;
     }
     setStartingGen(true);
+    // `silent: true` — this catch owns the error toast, so suppress the
+    // apiCore `request()` helper's default toast to avoid firing two.
     const queued = await generateImage({
       prompt: buildHeadshotPrompt(form),
       // Shared base plus portrait-specific guards (people-only artifacts).
       negativePrompt: `${DEFAULT_NEGATIVE_PROMPT}, extra limbs, nsfw, nude`,
       width: 768,
       height: 1024,
-    }).catch((err) => {
+    }, { silent: true }).catch((err) => {
       toast.error(err.message || 'Headshot generation failed');
       return null;
     });
