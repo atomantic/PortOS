@@ -26,7 +26,7 @@ const EDITOR_TYPO = 'px-3 py-2 text-sm font-mono leading-relaxed whitespace-pre-
 
 export default function ManuscriptLiveSection({
   section, comments, spans, saveState, openCommentId, onOpenComment, onCloseComment,
-  onContentChange, onBlurSave, onFormat, onRevert, registerRef, commentCardProps,
+  onContentChange, onBlurSave, onFormat, onReformat, onRevert, registerRef, commentCardProps,
 }) {
   const content = section.content || '';
   const taRef = useRef(null);
@@ -72,7 +72,7 @@ export default function ManuscriptLiveSection({
   useEscapeKey(openComment, onCloseComment);
 
   return (
-    <ManuscriptSectionFrame section={section} saveState={saveState} onRevert={onRevert} onFormat={onFormat} registerRef={registerRef}>
+    <ManuscriptSectionFrame section={section} saveState={saveState} onRevert={onRevert} onFormat={onFormat} onReformat={onReformat} registerRef={registerRef}>
       {/* Pin chips: a touch-friendly, count-bearing way into each anchored note. */}
       {anchoredComments.length > 0 || unlocatedCount > 0 ? (
         <div className="flex flex-wrap items-center gap-1">

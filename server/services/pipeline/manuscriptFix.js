@@ -344,6 +344,94 @@ export async function saveManuscriptSection(seriesId, { issueId, stageId, output
   return { section: sectionFrom(issue, stageId, stage) };
 }
 
+// === AI Reformat (repair paste artifacts via the LLM) ===
+
+const MANUSCRIPT_FORMAT_LABEL = { prose: 'Prose', comicScript: 'Comic script', teleplay: 'Teleplay' };
+
+// Letters + digits only, lowercased — the "skeleton" a pure reformat preserves.
+// Reformatting only moves whitespace and re-attaches quotation marks, so the
+// letter/digit sequence is (near) identical before and after; comparing
+// skeletons is how we prove the model didn't rewrite the prose.
+const wordSkeleton = (s) => (typeof s === 'string' ? s.replace(/[^\p{L}\p{N}]+/gu, '').toLowerCase() : '');
+
+// Is `small` a subsequence of `big` (same order, gaps allowed)?
+const isSubsequence = (small, big) => {
+  let i = 0;
+  for (let j = 0; j < big.length && i < small.length; j += 1) {
+    if (small[i] === big[j]) i += 1;
+  }
+  return i === small.length;
+};
+
+// Reject any reformat that altered the actual wording. The output is allowed to
+// be the input with at most a tiny budget of characters DELETED (artifact
+// removal — e.g. a duplicated drop-cap), and those deletions must form a
+// subsequence (no substitutions, no additions). Anything else — a rewritten
+// word, an inserted sentence, a dropped paragraph — fails and is discarded.
+function assertWordsPreserved(before, after) {
+  const a = wordSkeleton(before);
+  const b = wordSkeleton(after);
+  if (a === b) return;
+  const budget = Math.max(8, Math.round(a.length * 0.004));
+  const shrink = a.length - b.length;
+  if (shrink >= 0 && shrink <= budget && isSubsequence(b, a)) return;
+  throw makeErr(
+    'AI reformat changed the wording, so it was discarded and the text is unchanged. Try again or use the plain Format button.',
+    ERR_VALIDATION,
+  );
+}
+
+// Strip a stray ``` code fence or echoed ===MANUSCRIPT=== marker the model may
+// wrap the output in despite the prompt's contract.
+const stripReformatWrapper = (text) => String(text ?? '')
+  .replace(/^﻿?\s*```[\w-]*\s*\n?/, '').replace(/\n?```\s*$/, '')
+  .replace(/^\s*===MANUSCRIPT===\s*\n?/, '').replace(/\n?\s*===MANUSCRIPT===\s*$/, '')
+  .trim();
+
+/**
+ * Reformat a block of manuscript text with the LLM — repair paste artifacts
+ * (wrapping, split drop-caps, hyphen splits, orphaned/duplicated quotes)
+ * WITHOUT changing words. Returns `{ text, runId, changed }`. Throws
+ * ERR_VALIDATION when the model altered the wording (integrity guard), so a
+ * caller never persists silently-rewritten prose. Shared by the section
+ * endpoint and the importer.
+ */
+export async function reformatManuscriptText(text, { stageId = 'prose', providerOverride, modelOverride } = {}) {
+  const body = typeof text === 'string' ? text : '';
+  if (!body.trim()) return { text: body, runId: null, changed: false };
+  const format = MANUSCRIPT_FORMAT_LABEL[stageId] || MANUSCRIPT_FORMAT_LABEL.prose;
+  const r = await runStagedLLM('manuscript-reformat', { format, body }, {
+    providerOverride,
+    modelOverride,
+    returnsJson: false,
+    source: 'pipeline-manuscript-reformat',
+  });
+  const cleaned = stripReformatWrapper(r?.content);
+  if (!cleaned) throw makeErr('The model returned no text — try again', ERR_VALIDATION);
+  assertWordsPreserved(body, cleaned);
+  return { text: cleaned, runId: r?.runId || null, changed: cleaned !== body };
+}
+
+/**
+ * Reformat one manuscript section in place and persist it (snapshotting the
+ * prior text into history so the change is revertible). No-op-safe: when the
+ * model returns the text unchanged, the section is returned without a write.
+ */
+export async function reformatManuscriptSection(seriesId, { issueId, stageId, providerOverride, modelOverride } = {}) {
+  if (!MANUSCRIPT_TYPES.includes(stageId)) {
+    throw makeErr(`Not an editable manuscript stage: ${stageId}`, ERR_VALIDATION);
+  }
+  const current = await loadStageText(issueId, stageId);
+  if (!current.trim()) throw makeErr('There is no drafted text to reformat', ERR_VALIDATION);
+  const { text, changed } = await reformatManuscriptText(current, { stageId, providerOverride, modelOverride });
+  if (!changed) {
+    const issue = await getIssue(issueId);
+    return { section: sectionFrom(issue, stageId, issue.stages?.[stageId]), changed: false };
+  }
+  const saved = await saveManuscriptSection(seriesId, { issueId, stageId, output: text });
+  return { ...saved, changed: true };
+}
+
 /**
  * Generate anchored fix edits for a comment and persist them on the comment
  * (status stays `open` — the user still has to accept). When an edit's `find`

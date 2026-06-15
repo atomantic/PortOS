@@ -7,7 +7,9 @@
  */
 
 import { useState } from 'react';
-import { Loader2, History, RotateCcw, WandSparkles } from 'lucide-react';
+import {
+  Loader2, History, RotateCcw, WandSparkles, Sparkles,
+} from 'lucide-react';
 import { timeAgo } from '../../../utils/formatters';
 import { REFLOW_STAGES } from '../../../lib/manuscriptFormat';
 import { STAGE_LABEL } from './constants';
@@ -18,10 +20,11 @@ function SaveBadge({ state }) {
   return null;
 }
 
-export default function ManuscriptSectionFrame({ section, saveState, onRevert, onFormat, headerExtra, registerRef, children }) {
+export default function ManuscriptSectionFrame({ section, saveState, onRevert, onFormat, onReformat, headerExtra, registerRef, children }) {
   const [showVersions, setShowVersions] = useState(false);
   const [revertingId, setRevertingId] = useState(null);
   const [formatting, setFormatting] = useState(false);
+  const [reformatting, setReformatting] = useState(false);
   const versions = section.versions || [];
 
   const revert = async (runId) => {
@@ -36,6 +39,15 @@ export default function ManuscriptSectionFrame({ section, saveState, onRevert, o
       await onFormat();
     } finally {
       setFormatting(false);
+    }
+  };
+
+  const reformat = async () => {
+    setReformatting(true);
+    try {
+      await onReformat();
+    } finally {
+      setReformatting(false);
     }
   };
 
@@ -69,6 +81,19 @@ export default function ManuscriptSectionFrame({ section, saveState, onRevert, o
             >
               {formatting ? <Loader2 size={11} className="animate-spin" /> : <WandSparkles size={11} />}
               Format
+            </button>
+          ) : null}
+          {onReformat ? (
+            <button
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={reformat}
+              disabled={reformatting}
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] border border-port-border text-port-accent hover:text-white hover:border-port-accent/40 disabled:opacity-40"
+              title="Reformat with AI — fixes paste artifacts the plain Format can't (scrambled/duplicated quotes, ambiguous wraps) using the AI provider selected in the sidebar. Never changes your words; revertible via history."
+            >
+              {reformatting ? <Loader2 size={11} className="animate-spin" /> : <Sparkles size={11} />}
+              Reformat (AI)
             </button>
           ) : null}
           {headerExtra}

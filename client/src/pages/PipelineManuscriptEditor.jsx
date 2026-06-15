@@ -47,7 +47,7 @@ import ManuscriptImpactPreview from '../components/pipeline/manuscript/Manuscrip
 import { MANUSCRIPT_TYPES, STAGE_LABEL } from '../components/pipeline/manuscript/constants';
 import {
   getPipelineSeries, updatePipelineSeries, getPipelineManuscript, getPipelineManuscriptReview,
-  savePipelineManuscriptSection, restorePipelineStageVersion,
+  savePipelineManuscriptSection, reformatPipelineManuscriptSection, restorePipelineStageVersion,
   analyzePipelineManuscriptCompleteness, startPipelineManuscriptCompleteness,
   cancelPipelineManuscriptCompleteness, getPipelineManuscriptCompletenessStatus, getProviders,
   pipelineManuscriptCompletenessSseUrl,
@@ -398,6 +398,28 @@ export default function PipelineManuscriptEditor() {
     if (saved) toast.success('Formatting cleaned up');
   };
 
+  // AI reformat: send the section to the LLM (selected provider override) to
+  // repair paste artifacts that the deterministic Format can't — handled
+  // server-side, snapshotted (revertible), and guarded so it can never change
+  // the wording (a 400 surfaces "changed the wording" and saves nothing).
+  const reformatSection = async (section) => {
+    const result = await reformatPipelineManuscriptSection(
+      seriesId,
+      section.issueId,
+      { stageId: section.stageId, providerOverride, modelOverride },
+      { silent: true },
+    ).catch((err) => {
+      toast.error(err.message || 'AI reformat failed');
+      return null;
+    });
+    if (!result?.section) return;
+    const content = result.section.content;
+    baselineRef.current.set(`${section.issueId}:${section.stageId}`, content);
+    patchSection(section.issueId, { content, versions: result.section.versions });
+    setSaveState((prev) => ({ ...prev, [section.issueId]: 'saved' }));
+    toast.success(result.changed === false ? 'Already well-formatted — nothing to clean up' : 'Reformatted with AI');
+  };
+
   const revertSection = async (section, runId) => {
     const result = await restorePipelineStageVersion(section.issueId, section.stageId, runId, { silent: true })
       .catch((err) => { toast.error(err.message || 'Failed to revert'); return null; });
@@ -671,6 +693,7 @@ export default function PipelineManuscriptEditor() {
                   onContentChange: (content) => setSectionContent(section.issueId, content),
                   onBlurSave: () => saveSection(section),
                   onFormat: () => formatSection(section),
+                  onReformat: () => reformatSection(section),
                   onRevert: (runId) => revertSection(section, runId),
                   registerRef: registerSectionRef(section.number),
                   commentCardProps,

@@ -14,6 +14,13 @@
       "returnsJson": false,
       "variables": []
     },
+    "manuscript-reformat": {
+      "name": "Manuscript — Reformat (fix paste artifacts)",
+      "description": "Repair PDF/paste formatting artifacts in a manuscript section — hard-wrapped paragraphs, split drop-caps, hyphen-broken words, and orphaned/duplicated quotation marks — WITHOUT changing any words. Returns the reformatted text only; an integrity guard rejects the result if any letters/digits changed.",
+      "model": "default",
+      "returnsJson": false,
+      "variables": []
+    },
     "writers-room-script": {
       "name": "Writers Room — Adapt to Scene Script",
       "description": "Adapt a Writers Room prose draft into a scene-by-scene screenplay-style breakdown with sluglines, action, dialogue, and per-scene visual prompts the image-gen pipeline can render.",
