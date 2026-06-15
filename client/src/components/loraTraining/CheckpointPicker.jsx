@@ -10,7 +10,7 @@
  * overwrites the deployed LoRA in place.
  */
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { Layers, Loader2, CheckCircle2, AlertTriangle } from 'lucide-react';
 import toast from '../ui/Toast';
 import {
@@ -23,6 +23,11 @@ export default function CheckpointPicker({ run, onPromoted }) {
   const [checkpoints, setCheckpoints] = useState(null);
   const [loading, setLoading] = useState(false);
   const [promotingStep, setPromotingStep] = useState(null);
+  // Guards the background preview-poll setTimeout chain from firing after the
+  // component unmounts (deferred-work-respects-unmount rule). Not reset to true
+  // so dev-mode double-mount can't re-arm a stale chain.
+  const mountedRef = useRef(true);
+  useEffect(() => () => { mountedRef.current = false; }, []);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -40,6 +45,11 @@ export default function CheckpointPicker({ run, onPromoted }) {
 
   const promote = async (step) => {
     setPromotingStep(step);
+    // If the promoted checkpoint has no thumbnail, the server renders one in the
+    // background (its step wasn't on the sample cadence — e.g. the final step).
+    // That render takes minutes, so poll a few times to surface it once ready
+    // without a full page reload. (No socket event for this; bounded polling.)
+    const lacksPreview = !checkpoints?.find((c) => c.step === step)?.hasPreview;
     try {
       await promoteLoraTrainingCheckpoint(run.id, step, { silent: true });
       toast.success(`Promoted checkpoint @ step ${step}`);
@@ -48,6 +58,25 @@ export default function CheckpointPicker({ run, onPromoted }) {
       setCheckpoints((prev) => prev?.map((c) => ({ ...c, deployed: c.step === step })) ?? prev);
       load();
       onPromoted?.();
+      if (lacksPreview) {
+        // Backstop poll for the background-rendered preview (~5 min on 9B).
+        // Each tick re-lists; stop once the step has a preview or attempts run out.
+        let attempts = 0;
+        const tick = () => {
+          if (!mountedRef.current) return;
+          attempts += 1;
+          listLoraTrainingCheckpoints(run.id)
+            .then((res) => {
+              if (!mountedRef.current) return;
+              const list = Array.isArray(res?.checkpoints) ? res.checkpoints : [];
+              setCheckpoints(list);
+              const ready = list.find((c) => c.step === step)?.hasPreview;
+              if (!ready && attempts < 12) setTimeout(tick, 30000);
+            })
+            .catch(() => { if (mountedRef.current && attempts < 12) setTimeout(tick, 30000); });
+        };
+        setTimeout(tick, 30000);
+      }
     } catch (err) {
       toast.error(`Promote failed: ${err?.message || 'unknown error'}`);
     } finally {
