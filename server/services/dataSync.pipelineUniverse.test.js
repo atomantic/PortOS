@@ -1086,6 +1086,9 @@ describe('dataSync — per-category schema gate (cross-key isolation)', () => {
     const OUT_OF_BAND_SYNC_KEYS = new Set([
       // catalog → `POST /api/catalog/sync/apply` (server/services/catalogSync.js)
       'catalog',
+      // authors → per-record peer-push only (no 60s file-snapshot category).
+      // Gated at applyIncomingPush via compareSchemaVersions / RECORD_KIND_SCHEMA_CATEGORIES.author.
+      'authors',
     ]);
     const covered = new Set(Object.values(dataSync.getSnapshotCategorySchemaKeys()).flat());
     for (const key of Object.keys(PORTOS_SCHEMA_VERSIONS)) {

@@ -223,7 +223,34 @@ export async function testVision({ imagePath, prompt, expectedContent, providerI
  *   default when asking the model for a long/structured reply (see callVisionAPI).
  * @returns {Promise<string>} - The model's description text
  */
-export async function describeImageDataUrl({ dataUrl, prompt, providerId = 'lmstudio', model, maxTokens }) {
+export async function describeImageDataUrl(opts) {
+  return (await describeImageDataUrlDetailed(opts)).text;
+}
+
+// Pull any hidden chain-of-thought a reasoning model emitted out of band, so an
+// empty `content` can be explained ("it reasoned but produced no caption")
+// rather than mislabeled as a refusal. Backends surface this differently:
+// Ollama's OpenAI-compat puts it on `message.reasoning`, LM Studio on
+// `message.reasoning_content`, and some models leak an inline `<think>…</think>`
+// block into `content`. Returns the reasoning text (trimmed) or ''.
+function extractReasoning(message) {
+  if (!message || typeof message !== 'object') return '';
+  const direct = message.reasoning || message.reasoning_content || message.thinking;
+  if (typeof direct === 'string' && direct.trim()) return direct.trim();
+  const content = typeof message.content === 'string' ? message.content : '';
+  const inline = content.match(/<think>([\s\S]*?)<\/think>/i);
+  return inline ? inline[1].trim() : '';
+}
+
+/**
+ * Like {@link describeImageDataUrl} but returns the model's text alongside the
+ * diagnostics that explain a blank reply — `finishReason` ('length' = cut off
+ * at the token budget), token `usage`, and any out-of-band `reasoning`. The
+ * caption loop uses these to tell a real refusal apart from a reasoning model
+ * that burned its whole budget thinking and returned no caption.
+ * @returns {Promise<{ text: string, finishReason: string|null, usage: object|null, reasoning: string }>}
+ */
+export async function describeImageDataUrlDetailed({ dataUrl, prompt, providerId = 'lmstudio', model, maxTokens }) {
   if (typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image/')) {
     throw new Error('dataUrl must be a base64 image data URL');
   }
@@ -242,7 +269,20 @@ export async function describeImageDataUrl({ dataUrl, prompt, providerId = 'lmst
     timeout: provider.timeout || DEFAULT_VISION_TIMEOUT_MS,
     ...(maxTokens != null ? { maxTokens } : {}),
   });
-  return apiResponse.choices?.[0]?.message?.content || '';
+  const choice = apiResponse.choices?.[0];
+  // A reasoning model that leaks its chain-of-thought inline emits
+  // `<think>…</think>` followed by the real answer; strip a LEADING think block
+  // so the returned text is the caption (or JSON, for the digital-twin caller),
+  // not the caption with the model's reasoning glued to the front. Anchored to
+  // the start so legitimate mid-text never gets clipped; the reasoning itself is
+  // still surfaced via `reasoning` for the diagnostic.
+  const rawContent = choice?.message?.content || '';
+  return {
+    text: rawContent.replace(/^\s*<think>[\s\S]*?<\/think>\s*/i, '').trim(),
+    finishReason: choice?.finish_reason || null,
+    usage: apiResponse.usage || null,
+    reasoning: extractReasoning(choice?.message),
+  };
 }
 
 /**

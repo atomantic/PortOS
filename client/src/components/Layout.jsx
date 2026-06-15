@@ -197,6 +197,7 @@ const navItems = [
     icon: Sparkles,
     defaultTo: '/media',
     children: [
+      { to: '/authors', label: 'Authors', icon: FilePen },
       { to: '/catalog', label: 'Catalog', icon: Sparkles },
       { to: '/importer', label: 'Importer', icon: FileInput },
       { to: '/media', label: 'Media Gen', icon: Layers },

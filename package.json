@@ -1,6 +1,6 @@
 {
   "name": "portos",
-  "version": "2.20.0",
+  "version": "2.21.0",
   "private": true,
   "description": "Local dev machine App OS portal",
   "author": "Adam Eivy (@antic|@atomantic)",
@@ -23,6 +23,8 @@
     "setup": "git submodule update --init --recursive && npm install && npm install --prefix client && npm install --prefix server && npm install --prefix autofixer && npm rebuild esbuild --prefix client && (npm rebuild esbuild --prefix server || true) && npm rebuild node-pty sharp --prefix server && node scripts/setup-data.js && node scripts/setup-db.js && node scripts/setup-llm.js && node scripts/setup-browser.js",
     "setup:data": "node scripts/setup-data.js",
     "setup:db": "node scripts/setup-db.js",
+    "setup:db:test": "npm run setup:db:test --prefix server",
+    "test:db": "npm run test:db --prefix server",
     "setup:llm": "node scripts/setup-llm.js",
     "setup:browser": "node scripts/setup-browser.js",
     "setup:cert": "node scripts/setup-cert.js",

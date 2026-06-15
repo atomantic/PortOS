@@ -19,6 +19,7 @@ const MOCK_PATHS = {
   images: '/mock/data/images',
   videoThumbnails: '/mock/data/video-thumbnails',
   uploads: '/mock/data/uploads',
+  loras: '/mock/data/loras',
 };
 
 vi.mock('../../lib/fileUtils.js', () => ({
@@ -27,6 +28,10 @@ tryReadFile: vi.fn().mockResolvedValue(null),
   PATHS: MOCK_PATHS,
   readJSONFile: vi.fn(async () => []),
   atomicWrite: vi.fn(async () => {}),
+  // resolveVideoLoras → assertSafeLoraFilename → assertSafeFilename; the
+  // filename safety check is unit-tested in loras.test.js, so a no-op here
+  // lets the LoRA-arg test focus on the spawn-args plumbing.
+  assertSafeFilename: vi.fn(),
   UUID_RE: /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
 }));
 
@@ -850,5 +855,101 @@ describe('generateVideo — panel-side completion watchdog', () => {
     hang.emitStdout('60%|██████    | 6/10\n');
     await vi.advanceTimersByTimeAsync(120000);
     expect(hang.proc.kill).not.toHaveBeenCalled();
+  });
+});
+
+describe('generateVideo — video LoRA (--user-loras) arg threading', () => {
+  it('emits --user-loras JSON with resolved path + strength for ltx2 renders', async () => {
+    const { spawn } = await import('child_process');
+    const spawnMock = vi.mocked(spawn);
+    spawnMock.mockClear();
+
+    await generateVideo({
+      jobId: 'lora-arg-test',
+      pythonPath: '/usr/bin/python3',
+      modelId: 'ltx2_unified',
+      prompt: 'audio reactive clip',
+      width: 512, height: 512, numFrames: 25, fps: 24,
+      mode: 'text',
+      loras: [{ filename: 'lora-fal-ltx2-3-audio-reactive-lora-hf.safetensors', scale: 0.8 }],
+    });
+
+    const call = spawnMock.mock.calls.find(
+      ([bin, args]) => String(bin).includes('.portos/ltx-2-mlx/.venv/bin/python3')
+        && Array.isArray(args) && args.includes('--user-loras'),
+    );
+    expect(call).toBeTruthy();
+    const args = call[1];
+    const payload = JSON.parse(args[args.indexOf('--user-loras') + 1]);
+    expect(payload).toEqual([
+      { path: join(MOCK_PATHS.loras, 'lora-fal-ltx2-3-audio-reactive-lora-hf.safetensors'), strength: 0.8 },
+    ]);
+  });
+
+  it('defaults missing scale to 1.0', async () => {
+    const { spawn } = await import('child_process');
+    const spawnMock = vi.mocked(spawn);
+    spawnMock.mockClear();
+
+    await generateVideo({
+      jobId: 'lora-default-scale',
+      pythonPath: '/usr/bin/python3',
+      modelId: 'ltx2_unified',
+      prompt: 'clip',
+      width: 512, height: 512, numFrames: 25, fps: 24,
+      mode: 'text',
+      loras: [{ filename: 'style.safetensors' }],
+    });
+
+    const call = spawnMock.mock.calls.find(
+      ([, args]) => Array.isArray(args) && args.includes('--user-loras'),
+    );
+    const payload = JSON.parse(call[1][call[1].indexOf('--user-loras') + 1]);
+    expect(payload[0].strength).toBe(1.0);
+  });
+
+  it('omits --user-loras when no LoRAs are passed', async () => {
+    const { spawn } = await import('child_process');
+    const spawnMock = vi.mocked(spawn);
+    spawnMock.mockClear();
+
+    await generateVideo({
+      jobId: 'no-lora',
+      pythonPath: '/usr/bin/python3',
+      modelId: 'ltx2_unified',
+      prompt: 'clip',
+      width: 512, height: 512, numFrames: 25, fps: 24,
+      mode: 'text',
+    });
+
+    const call = spawnMock.mock.calls.find(
+      ([bin]) => String(bin).includes('.portos/ltx-2-mlx/.venv/bin/python3'),
+    );
+    expect(call[1]).not.toContain('--user-loras');
+  });
+});
+
+describe('generateVideo — LoRA history-record contract (Remix round-trip)', () => {
+  it('stamps loraFilenames + loraScales (not a bespoke `loras` field) so normalizeVideo/Remix can read them', async () => {
+    let startedMeta = null;
+    videoGenEvents.on('started', (e) => { if (e.generationId === 'lora-history-test') startedMeta = e; });
+
+    await generateVideo({
+      jobId: 'lora-history-test',
+      pythonPath: '/usr/bin/python3',
+      modelId: 'ltx2_unified',
+      prompt: 'styled clip',
+      width: 512, height: 512, numFrames: 25, fps: 24,
+      mode: 'text',
+      loras: [{ filename: 'a.safetensors', scale: 0.7 }, { filename: 'b.safetensors', scale: 1.0 }],
+    });
+    videoGenEvents.removeAllListeners('started');
+
+    expect(startedMeta).toBeTruthy();
+    // The image LoRA contract that normalize.js#pickLoraFilenames + the Remix
+    // handler consume — parallel arrays, not a `loras: [{filename,scale}]` blob.
+    expect(startedMeta.loraFilenames).toEqual(['a.safetensors', 'b.safetensors']);
+    expect(startedMeta.loraScales).toEqual([0.7, 1.0]);
+    expect(startedMeta.loras).toBeUndefined();
   });
 });

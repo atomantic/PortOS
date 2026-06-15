@@ -130,6 +130,19 @@ export const runChatgptImport = (data, options = {}) => request('/brain/import/c
   method: 'POST',
   body: JSON.stringify({ data, ...options })
 });
+// Stream the whole export ZIP up via multipart — no JSON-body size cap, and the
+// server extracts conversations + image/voice/file assets. `tags` is a comma-
+// separated string; `skipEmpty` a boolean. request() detects the FormData body
+// and lets the browser set the multipart boundary itself.
+export const uploadChatgptZip = (file, { tags = '', skipEmpty = true, ...options } = {}) => {
+  const formData = new FormData();
+  formData.append('file', file);
+  if (tags) formData.append('tags', tags);
+  formData.append('skipEmpty', skipEmpty ? 'true' : 'false');
+  return request('/brain/import/chatgpt/zip', { method: 'POST', body: formData, ...options });
+};
+export const getChatgptArchive = (name) =>
+  request(`/brain/import/chatgpt/archive/${encodeURIComponent(name)}`);
 
 // Brain - Digests & Reviews
 export const getBrainLatestDigest = () => request('/brain/digest/latest');

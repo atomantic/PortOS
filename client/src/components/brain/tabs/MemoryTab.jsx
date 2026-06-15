@@ -7,9 +7,12 @@ import {Plus,
   Save,
   CheckCircle2,
   Search,
-  AlertTriangle} from 'lucide-react';
+  AlertTriangle,
+  MessageSquareText} from 'lucide-react';
 import toast from '../../ui/Toast';
 import Banner from '../../ui/Banner';
+import MarkdownOutput from '../../cos/MarkdownOutput';
+import ConversationViewer from '../ConversationViewer';
 
 import {
   MEMORY_TABS,
@@ -32,6 +35,8 @@ export default function MemoryTab({ onRefresh }) {
   const [statusFilter, setStatusFilter] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [backendStatus, setBackendStatus] = useState(null);
+  // The chatgpt-import conversation currently open in the full-transcript viewer.
+  const [viewerRecord, setViewerRecord] = useState(null);
 
   const fetchRecords = useCallback(async () => {
     setLoading(true);
@@ -447,7 +452,11 @@ export default function MemoryTab({ onRefresh }) {
     return (
       <div key={record.id} className="p-4 bg-port-card border border-port-border rounded-lg hover:border-port-border/80 transition-colors">
         <div className="flex items-start justify-between gap-2">
-          <div className="flex-1">
+          {/* min-w-0: without it a flex child won't shrink below its content's
+              intrinsic width, so a long unbreakable code block in an imported
+              transcript blows the row out and shoves the action buttons off
+              the page. */}
+          <div className="flex-1 min-w-0">
             {activeType === 'people' && (
               <>
                 <h3 className="font-medium text-white">{record.name}</h3>
@@ -516,7 +525,24 @@ export default function MemoryTab({ onRefresh }) {
                     </span>
                   )}
                 </div>
-                {record.content && <p className="text-sm text-gray-400 mt-1 whitespace-pre-wrap">{record.content}</p>}
+                {record.content && (
+                  // Imported ChatGPT transcripts carry markdown (inline images,
+                  // asset links) — render them rich, but cap the height with an
+                  // internal scroll so a long transcript preview doesn't make
+                  // the card a mile tall (the full thread is in the viewer).
+                  // Hand-written memories stay plain pre-wrap text.
+                  record.source === 'chatgpt-import'
+                    ? <div className="text-sm text-gray-400 mt-1 max-h-72 overflow-y-auto pr-1"><MarkdownOutput content={record.content} /></div>
+                    : <p className="text-sm text-gray-400 mt-1 whitespace-pre-wrap break-words">{record.content}</p>
+                )}
+                {record.source === 'chatgpt-import' && record.sourceRef && (
+                  <button
+                    onClick={() => setViewerRecord(record)}
+                    className="mt-2 inline-flex items-center gap-1 text-xs text-port-accent hover:underline"
+                  >
+                    <MessageSquareText size={13} aria-hidden="true" /> View full conversation
+                  </button>
+                )}
                 {record.tags?.length > 0 && (
                   <div className="flex gap-1 mt-2 flex-wrap">
                     {record.tags.map((tag, i) => (
@@ -720,6 +746,10 @@ export default function MemoryTab({ onRefresh }) {
           </div>
         );
       })()}
+
+      {viewerRecord && (
+        <ConversationViewer record={viewerRecord} onClose={() => setViewerRecord(null)} />
+      )}
     </div>
   );
 }

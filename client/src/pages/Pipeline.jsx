@@ -7,9 +7,9 @@
  * drills into its detail page where issues are created and managed.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Plus, Workflow as WorkflowIcon, Trash2, Loader2, Globe2 } from 'lucide-react';
+import { Plus, Workflow as WorkflowIcon, Trash2, Loader2, Globe2, FileInput } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import ShareToButton from '../components/sharing/ShareToButton';
 import SyncToPeerButton from '../components/sharing/SyncToPeerButton';
@@ -22,12 +22,13 @@ import {
   deletePipelineSeries,
   generateSeriesTitleLogo,
   listUniverses,
-  SERIES_AUTHOR_MAX,
   WORLD_LOGLINE_MAX,
   WORLD_PREMISE_MAX,
   WORLD_STYLE_NOTES_MAX,
 } from '../services/api';
 import { ArcShapePicker, ArcShapeSparkline, getStoryShape } from '../components/pipeline/StoryShapes';
+import AuthorPicker from '../components/pipeline/AuthorPicker';
+import { buildImporterLink } from '../lib/importerDeepLink';
 
 const emptyForm = () => ({
   name: '',
@@ -36,6 +37,7 @@ const emptyForm = () => ({
   premise: '',
   styleNotes: '',
   author: '',
+  authorId: '',
   shape: null,
   issueCountTarget: '',
 });
@@ -109,6 +111,7 @@ export default function Pipeline() {
       premise: form.premise.trim(),
       styleNotes: form.styleNotes.trim(),
       author: form.author.trim(),
+      authorId: form.authorId || null,
       universeId: form.universeId,
       issueCountTarget: Number.isFinite(target) && target > 0 ? target : undefined,
       arc: form.shape ? { shape: form.shape } : undefined,
@@ -135,6 +138,15 @@ export default function Pipeline() {
     }
   };
 
+  // Carry the in-progress create-form selection into the Importer deep-link:
+  // the universe by id (an existing record) and the typed series name (no id
+  // yet — it's being created). The importer resolves these into its match-or-
+  // create autocomplete so the user doesn't have to retype them.
+  const importerHref = useMemo(
+    () => buildImporterLink({ universeId: form.universeId, seriesName: form.name }),
+    [form.universeId, form.name],
+  );
+
   // Two-click delete: first click "arms" the row, second click fires. Avoids
   // window.confirm (banned per CLAUDE.md) without pulling in a modal for the
   // skeleton. armedId resets on any other click.
@@ -160,14 +172,24 @@ export default function Pipeline() {
           <WorkflowIcon className="w-6 h-6 text-port-accent" />
           <h1 className="text-2xl font-bold text-white">Series Pipeline</h1>
         </div>
-        <button
-          type="button"
-          onClick={() => setShowForm((v) => !v)}
-          className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-port-accent hover:bg-port-accent/90 text-white text-sm font-medium"
-        >
-          <Plus size={16} aria-hidden="true" />
-          New Series
-        </button>
+        <div className="flex items-center gap-2">
+          <Link
+            to="/importer"
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-port-border text-gray-300 hover:text-white hover:border-port-accent/50 text-sm font-medium"
+            title="Reverse-engineer an existing manuscript, novel, screenplay, or comic script into a series"
+          >
+            <FileInput size={16} aria-hidden="true" />
+            Import
+          </Link>
+          <button
+            type="button"
+            onClick={() => setShowForm((v) => !v)}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-port-accent hover:bg-port-accent/90 text-white text-sm font-medium"
+          >
+            <Plus size={16} aria-hidden="true" />
+            New Series
+          </button>
+        </div>
       </div>
 
       <p className="text-sm text-gray-400 mb-6">
@@ -178,6 +200,19 @@ export default function Pipeline() {
 
       {showForm && (
         <form onSubmit={handleCreate} className="mb-6 p-4 bg-port-card border border-port-border rounded-lg space-y-3">
+          <div className="flex items-start gap-2 text-xs text-gray-400 bg-port-bg border border-port-border rounded p-2.5">
+            <FileInput size={14} className="mt-0.5 flex-shrink-0 text-port-accent" aria-hidden="true" />
+            <span>
+              Already have a manuscript, novel, screenplay, or comic script?{' '}
+              <Link to={importerHref} className="text-port-accent hover:underline">
+                Import it instead
+              </Link>{' '}
+              — the importer extracts canon, the arc, and an issue split for you.
+              {(form.universeId || form.name.trim())
+                ? ' Your current universe / series selection carries over.'
+                : ''}
+            </span>
+          </div>
           <div className="grid grid-cols-1 sm:grid-cols-[1fr_240px] gap-3">
             <div>
               <label htmlFor="series-name" className="block text-xs uppercase tracking-wider text-gray-500 mb-1">
@@ -238,14 +273,11 @@ export default function Pipeline() {
               <label htmlFor="series-author" className="block text-xs uppercase tracking-wider text-gray-500 mb-1">
                 Author (cover byline)
               </label>
-              <input
+              <AuthorPicker
                 id="series-author"
-                type="text"
-                value={form.author}
-                onChange={(e) => setForm((f) => ({ ...f, author: e.target.value }))}
-                placeholder="Jane Doe"
-                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
-                maxLength={SERIES_AUTHOR_MAX}
+                value={form.authorId}
+                byline={form.author}
+                onChange={(authorId, name) => setForm((f) => ({ ...f, authorId: authorId || '', author: name }))}
               />
             </div>
           </div>

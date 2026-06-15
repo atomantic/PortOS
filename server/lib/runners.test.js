@@ -3,7 +3,7 @@ import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
-import { RUNNER_FAMILIES, isMflux, isFlux2, isZImage, isErnie, isHiDream, isQwen, flux2VariantFromModel, loraCompatKey, composeCompatKey } from './runners.js';
+import { RUNNER_FAMILIES, VIDEO_LORA_FAMILIES, videoLoraFamily, isMflux, isFlux2, isZImage, isErnie, isHiDream, isQwen, flux2VariantFromModel, loraCompatKey, composeCompatKey } from './runners.js';
 
 const __dirname_self = dirname(fileURLToPath(import.meta.url));
 const CLIENT_MIRROR_PATH = join(__dirname_self, '..', '..', 'client', 'src', 'lib', 'runnerFamilies.js');
@@ -46,6 +46,33 @@ describe('RUNNER_FAMILIES', () => {
     expect(isFlux2({ runner: 'mflux' })).toBe(false);
     expect(isFlux2(null)).toBe(false);
     expect(isFlux2(undefined)).toBe(false);
+  });
+});
+
+describe('VIDEO_LORA_FAMILIES / videoLoraFamily', () => {
+  it('exports the canonical ltx-video family id, frozen', () => {
+    expect(VIDEO_LORA_FAMILIES.LTX_VIDEO).toBe('ltx-video');
+    expect(Object.isFrozen(VIDEO_LORA_FAMILIES)).toBe(true);
+  });
+
+  it('maps only the ltx2 runtime to a LoRA family', () => {
+    expect(videoLoraFamily({ runtime: 'ltx2' })).toBe('ltx-video');
+    expect(videoLoraFamily({ runtime: 'mlx_video' })).toBe(null);
+    expect(videoLoraFamily({ runtime: 'wan22' })).toBe(null);
+    expect(videoLoraFamily({ runtime: 'hunyuan' })).toBe(null);
+    expect(videoLoraFamily({})).toBe(null);
+    expect(videoLoraFamily(null)).toBe(null);
+  });
+
+  it('composeCompatKey leaves the ltx-video family bare (no variant)', () => {
+    expect(composeCompatKey('ltx-video', null)).toBe('ltx-video');
+    expect(composeCompatKey('ltx-video', '9b')).toBe('ltx-video');
+  });
+
+  it('client mirror carries the video family + helper', () => {
+    const text = readFileSync(CLIENT_MIRROR_PATH, 'utf-8');
+    expect(text).toMatch(/LTX_VIDEO:\s*'ltx-video'/);
+    expect(text).toMatch(/export const videoLoraFamily/);
   });
 });
 

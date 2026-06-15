@@ -161,7 +161,13 @@ async function generateTaskFromJob(job) {
       // worktree and open a PR (same metadata flags the built-in task types use).
       ...(meta.useWorktree != null ? { useWorktree: meta.useWorktree } : {}),
       ...(meta.openPR != null ? { openPR: meta.openPR } : {}),
-      ...(meta.simplify != null ? { simplify: meta.simplify } : {})
+      ...(meta.simplify != null ? { simplify: meta.simplify } : {}),
+      // Optional per-job AI provider + model override. resolveAgentProviderAndModel
+      // reads metadata.provider to switch providers and selectModelForTask reads
+      // metadata.model as the highest-priority model choice. Absent = active
+      // provider / per-task model selection (historical behavior).
+      ...(job.providerId ? { provider: job.providerId } : {}),
+      ...(job.model ? { model: job.model } : {})
     },
     taskType: 'internal',
     autoApprove: job.autonomyLevel === 'yolo'

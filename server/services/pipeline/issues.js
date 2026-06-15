@@ -322,10 +322,13 @@ const sanitizeGenConfig = (raw) => {
     : null;
   const refineProvider = trimTo(raw.refineProvider, GEN_CONFIG_STR_MAX) || null;
   const refineModel = trimTo(raw.refineModel, GEN_CONFIG_STR_MAX) || null;
-  if (imageMode === 'auto' && !imageModelId && !refineProvider && !refineModel) {
+  // Trained character-LoRA auto-apply opt-out. Default ON — only an explicit
+  // false persists, so issues that never touched the toggle stay clean.
+  const applyCharacterLoras = raw.applyCharacterLoras !== false;
+  if (imageMode === 'auto' && !imageModelId && !refineProvider && !refineModel && applyCharacterLoras) {
     return null;
   }
-  return { imageMode, imageModelId, refineProvider, refineModel };
+  return { imageMode, imageModelId, refineProvider, refineModel, applyCharacterLoras };
 };
 
 // Page records (pages[]) are pass-through in sanitizeVisualStage's array

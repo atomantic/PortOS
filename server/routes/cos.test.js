@@ -796,6 +796,7 @@ describe('CoS Routes', () => {
       'push',
       'review',
       'replan',
+      'next',
       'release',
       'better',
       'better-swift'

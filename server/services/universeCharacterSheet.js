@@ -86,7 +86,9 @@ const trim = (s) => (typeof s === 'string' ? s.trim() : '');
 // Shared field bag used by every variant's prompt builder. Centralizes the
 // trim/flatten calls so a new variant only writes the style-specific layout
 // sentences. Pure — caller decides which fields to weave into its prompt.
-function extractCharacterPromptCommon(character) {
+// Exported for reuse by the LoRA training dataset prompt builder
+// (server/lib/loraDataset.js), which needs the same canon field extraction.
+export function extractCharacterPromptCommon(character) {
   return {
     name: trim(character.name) || 'Unnamed',
     aliases: Array.isArray(character.aliases) ? character.aliases.filter(Boolean).join(', ') : '',

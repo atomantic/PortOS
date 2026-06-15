@@ -40,24 +40,25 @@ export function execGit(args, cwd, options = {}) {
       }
     }, timeout);
 
-    child.stdout.on('data', (data) => {
-      stdout += data.toString();
+    // Both streams share one overflow guard against the combined byte count so
+    // a runaway command can't blow past maxBuffer on either channel.
+    const guardOverflow = () => {
       if (stdout.length + stderr.length > maxBuffer && !killed) {
         killed = true;
         clearTimeout(timer);
         child.kill();
         reject(new Error(`git output exceeded maxBuffer (${maxBuffer} bytes)`));
       }
+    };
+
+    child.stdout.on('data', (data) => {
+      stdout += data.toString();
+      guardOverflow();
     });
 
     child.stderr.on('data', (data) => {
       stderr += data.toString();
-      if (stdout.length + stderr.length > maxBuffer && !killed) {
-        killed = true;
-        clearTimeout(timer);
-        child.kill();
-        reject(new Error(`git output exceeded maxBuffer (${maxBuffer} bytes)`));
-      }
+      guardOverflow();
     });
 
     child.on('close', (code) => {

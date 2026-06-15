@@ -60,6 +60,7 @@ const syncCategoriesSchema = z.object({
   mediaCollections: z.boolean().optional(),
   videoHistory: z.boolean().optional(),
   storyBuilder: z.boolean().optional(),
+  authors: z.boolean().optional(),
   catalog: z.boolean().optional()
 }).optional();
 

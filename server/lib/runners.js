@@ -25,6 +25,36 @@ export const RUNNER_FAMILIES = Object.freeze({
   QWEN: 'qwen',
 });
 
+// Video-LoRA families are tracked SEPARATELY from the image RUNNER_FAMILIES
+// above. The Civitai suggestion/search code iterates Object.values(
+// RUNNER_FAMILIES) and would 400 on any family Civitai has no baseModel
+// mapping for — and video LoRAs (e.g. fal/ltx2.3-audio-reactive-lora) are
+// imported from HuggingFace, not Civitai (see installFromHuggingface), so they
+// must never enter that iteration. The compat-key machinery
+// (composeCompatKey / the picker's familyOf) is family-string-agnostic, so a
+// LoRA tagged `runnerFamily: 'ltx-video'` filters correctly against an
+// `ltx-video` video model without any change there.
+export const VIDEO_LORA_FAMILIES = Object.freeze({
+  LTX_VIDEO: 'ltx-video',
+});
+
+// Predicate: is this LoRA family a video family (vs. an image RUNNER_FAMILIES
+// one)? Backs the Image/Video filter on /media/loras — both the installed-list
+// filter and the suggestion-panel section gating. Anything not in
+// VIDEO_LORA_FAMILIES (including null/legacy) is treated as image. Mirror of
+// client/src/lib/runnerFamilies.js.
+const VIDEO_LORA_FAMILY_SET = new Set(Object.values(VIDEO_LORA_FAMILIES));
+export const isVideoLoraFamily = (family) => VIDEO_LORA_FAMILY_SET.has(family);
+
+// Map a video-model registry entry (which carries `runtime`, not `runner`) to
+// the LoRA family the picker filters on. Only dgrauet's `ltx2` runtime can
+// fuse arbitrary user LoRAs today — its `ltx_pipelines_mlx` pipelines honor a
+// `_pending_loras` hook (see scripts/generate_ltx2.py). The legacy mlx_video /
+// wan22 / hunyuan runtimes have no general LoRA path, so they return null
+// ("no LoRA support") and the VideoGen picker hides itself.
+export const videoLoraFamily = (model) =>
+  model?.runtime === 'ltx2' ? VIDEO_LORA_FAMILIES.LTX_VIDEO : null;
+
 // Convenience predicate helpers — match the semantics of the existing
 // `isFlux2()` / `isZImage()` / `isErnie()` exports in `mediaModels.js`
 // (which still exist for back-compat with their many call sites). New code
@@ -60,6 +90,22 @@ export const flux2VariantFromModel = (model) => {
   }
   return null;
 };
+
+// The gated bf16 base repo per FLUX.2 Klein size variant. This is BOTH what a
+// trained LoRA is trained against AND the only runtime that can load a LoRA at
+// render time: PEFT can't inject adapters into SDNQ/int8-quantized Linear
+// layers, so a LoRA on a quantized klein pipeline silently no-ops into a base
+// render (see scripts/lora_utils.apply_loras). The image runner routes LoRA
+// renders off the quantized repo onto this. Single source of truth — LoRA
+// training (FLUX2_TRAIN_REPOS) re-exports it so the two can't drift.
+export const FLUX2_BF16_BASE_REPOS = Object.freeze({
+  '4b': 'black-forest-labs/FLUX.2-klein-4B',
+  '9b': 'black-forest-labs/FLUX.2-klein-9B',
+});
+
+// The bf16 base repo to render a LoRA against for a given (quantized or not)
+// FLUX.2 model — resolved from its size variant. null when the size is unknown.
+export const flux2Bf16BaseRepo = (model) => FLUX2_BF16_BASE_REPOS[flux2VariantFromModel(model)] || null;
 
 // Encode a (runner family, size variant) pair into the single compat-key
 // string the LoRA picker matches on: FLUX.2 with a known size → `flux2-4b` /

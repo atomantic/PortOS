@@ -26,6 +26,7 @@ import { findFfmpeg, safeUnder, generateThumbnail, optimizeForStreaming, upscale
 import { hfTokenEnv } from '../../lib/hfToken.js';
 import { safeChildProcessEnv } from '../../lib/processEnv.js';
 import { makeVideoGenLineHandler, finalizeGeneratedVideo, isWatchdogSuccess } from './generateVideoHelpers.js';
+import { assertSafeLoraFilename } from '../loras.js';
 
 // Path to the dgrauet/ltx-2-mlx venv populated by `INSTALL_LTX2=1
 // scripts/setup-image-video.sh`. Used when a model entry has
@@ -329,11 +330,32 @@ export const resolveT2vTwoStageOverride = ({
   return { guidance: 1.0, steps: 8, stage2Steps: 3 };
 };
 
+// Resolve picker `{ filename, scale }` LoRA entries into absolute
+// `{ path, strength }` pairs the ltx2 helper fuses via the pipeline's
+// `_pending_loras` hook (see scripts/generate_ltx2.py). Validates each
+// basename can't escape PATHS.loras (assertSafeLoraFilename) and that the file
+// exists — a typo or a deleted LoRA would otherwise surface as an opaque
+// Python FileNotFoundError deep inside the render. Returns [] for no LoRAs.
+// Only the ltx2 runtime consumes the result; buildArgs rejects LoRAs on the
+// other runtimes before this is even reached for a doomed job.
+export const resolveVideoLoras = (loras) => {
+  if (!Array.isArray(loras) || loras.length === 0) return [];
+  return loras.map((l) => {
+    assertSafeLoraFilename(l?.filename);
+    const path = join(PATHS.loras, l.filename);
+    if (!existsSync(path)) {
+      throw new ServerError(`LoRA not found: ${l.filename}`, { status: 400, code: 'LORA_NOT_FOUND' });
+    }
+    const strength = Number.isFinite(l?.scale) ? l.scale : 1.0;
+    return { path, strength, filename: l.filename };
+  });
+};
+
 // Build the spawn args for dgrauet's ltx-2-mlx runtime via our Python helper.
 // The helper lives in the ltx-2-mlx venv (so its `import ltx_pipelines_mlx`
 // resolves) but the script file lives in the PortOS repo so updates ship
 // with PortOS releases instead of the user's HF cache.
-const buildLtx2Args = ({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, mode, imageStrength, disableAudio, outputPath, textEncoderRepo }) => {
+const buildLtx2Args = ({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, mode, imageStrength, disableAudio, outputPath, textEncoderRepo, loras }) => {
   assertByovRuntimeInstalled('ltx2');
   // Map PortOS UI modes to the helper's subcommand. Native extend on ltx2
   // routes to ExtendPipeline.extend_from_video — conditions on the entire
@@ -443,6 +465,13 @@ const buildLtx2Args = ({ model, prompt, negativePrompt, width, height, numFrames
     '--steps', String(steps),
     '--cfg-scale', String(guidance),
   ];
+  // User LoRAs — fused into the transformer via the pipeline's _pending_loras
+  // hook. Emitted as a JSON list of { path, strength }; generate_ltx2.py sets
+  // pipe._pending_loras before generation so the deltas fuse at load time
+  // (the same mechanism the upstream `ltx-2-mlx generate --lora` CLI uses).
+  if (Array.isArray(loras) && loras.length > 0) {
+    args.push('--user-loras', JSON.stringify(loras.map((l) => ({ path: l.path, strength: l.strength }))));
+  }
   // Two-stage T2V experiment passes an explicit stage-2 step count; omitted
   // otherwise so the pipeline keeps its own default.
   if (stage2Steps != null) args.push('--stage2-steps', String(stage2Steps));
@@ -554,12 +583,22 @@ const buildHunyuanArgs = ({ model, prompt, negativePrompt, width, height, numFra
   return { bin: HUNYUAN_VENV_PYTHON, args };
 };
 
-const buildArgs = ({ pythonPath, modelId, model, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, tiling, disableAudio, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, mode, imageStrength, textEncoderRepo, outputPath }) => {
+const buildArgs = ({ pythonPath, modelId, model, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, tiling, disableAudio, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, mode, imageStrength, textEncoderRepo, outputPath, loras }) => {
   // Route to the dgrauet/ltx-2-mlx helper when the model declares the new
   // runtime. Existing notapalindrome models default to runtime: 'mlx_video'
   // (or undefined in legacy registries — see backfillRuntime in mediaModels.js).
   if (model.runtime === 'ltx2') {
-    return buildLtx2Args({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, mode, imageStrength, disableAudio, outputPath, textEncoderRepo });
+    return buildLtx2Args({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, mode, imageStrength, disableAudio, outputPath, textEncoderRepo, loras });
+  }
+  // Defense-in-depth: only the ltx2 runtime can fuse user LoRAs. The route
+  // already rejects this combination, but a non-route caller (test, queue
+  // replay) could reach here — fail clearly rather than silently dropping the
+  // LoRAs and producing a base render the user thinks is LoRA-styled.
+  if (Array.isArray(loras) && loras.length > 0) {
+    throw new ServerError(
+      `LoRAs are only supported on the ltx2 runtime. Model "${modelId}" runs on "${model.runtime || 'mlx_video'}".`,
+      { status: 400, code: 'LORAS_REQUIRE_LTX2' },
+    );
   }
   if (model.runtime === 'wan22') {
     return buildWan22Args({ model, prompt, width, height, numFrames, steps, guidance, seed, sourceImagePath, mode, outputPath });
@@ -637,7 +676,7 @@ const buildArgs = ({ pythonPath, modelId, model, prompt, negativePrompt, width, 
 // use (avoiding drift between two hardcoded constants).
 export const DEFAULT_NUM_FRAMES = 121;
 
-export async function generateVideo({ pythonPath, prompt, negativePrompt = '', modelId = defaultVideoModelId(), width = 768, height = 512, numFrames = DEFAULT_NUM_FRAMES, fps = 24, steps, guidanceScale, seed, tiling = 'auto', disableAudio = false, sourceImagePath = null, uploadedTempPath = null, uploadedTempPaths = [], lastImagePath = null, keyframes = null, extendFromVideoPath = null, audioFilePath = null, mode = null, imageStrength = null, hidden = false, jobId: providedJobId = null }) {
+export async function generateVideo({ pythonPath, prompt, negativePrompt = '', modelId = defaultVideoModelId(), width = 768, height = 512, numFrames = DEFAULT_NUM_FRAMES, fps = 24, steps, guidanceScale, seed, tiling = 'auto', disableAudio = false, sourceImagePath = null, uploadedTempPath = null, uploadedTempPaths = [], lastImagePath = null, keyframes = null, extendFromVideoPath = null, audioFilePath = null, mode = null, imageStrength = null, loras = null, hidden = false, jobId: providedJobId = null }) {
   uploadedTempPaths = Array.isArray(uploadedTempPaths) ? uploadedTempPaths : [];
   if (!prompt?.trim()) throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
   // Single-flight is now enforced by the mediaJobQueue worker upstream — only
@@ -661,6 +700,12 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   if (!IS_WIN && (typeof model.repo !== 'string' || model.repo.length === 0)) {
     throw new ServerError(`Video model "${modelId}" is missing the required \`repo\` field in data/media-models.json`, { status: 500, code: 'VIDEO_MODEL_MISCONFIGURED' });
   }
+
+  // Resolve LoRA basenames → absolute { path, strength } pairs up-front so a
+  // missing/typo'd LoRA fails with a clean 400 before any GPU work. buildArgs
+  // rejects LoRAs on non-ltx2 runtimes (the route also guards), so this is a
+  // no-op there.
+  const resolvedLoras = resolveVideoLoras(loras);
 
   await ensureDir(PATHS.videos);
   await ensureDir(PATHS.videoThumbnails);
@@ -810,6 +855,16 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     // render apart from a user who happened to pick 8 steps — comparing it
     // against the default Standard render is the whole point of the knob.
     ...(t2vTwoStage ? { twoStageT2v: true, stage2Steps: actualStage2Steps } : {}),
+    // Stamp applied LoRAs using the SAME parallel-array contract image renders
+    // use (`loraFilenames` + `loraScales`) so the existing history consumers —
+    // normalizeVideo / getRenderConfigForItem (client/src/components/media/
+    // normalize.js) and the Remix handler — surface and round-trip them with no
+    // per-shape special-casing. A bespoke `loras` field would be invisible to
+    // those readers.
+    ...(resolvedLoras.length ? {
+      loraFilenames: resolvedLoras.map((l) => l.filename),
+      loraScales: resolvedLoras.map((l) => l.strength),
+    } : {}),
     ...(hidden ? { hidden: true } : {}),
   };
   const job = { ...meta, clients: [], status: 'running' };
@@ -823,7 +878,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   // logic of the spawn-error handler so failure modes converge.
   let bin, args;
   try {
-    ({ bin, args } = buildArgs({ pythonPath, modelId, model, prompt, negativePrompt, width: w, height: h, numFrames: parsedNumFrames, fps: parsedFps, steps: actualSteps, stage2Steps: actualStage2Steps, guidance: actualGuidance, seed: actualSeed, tiling, disableAudio, sourceImagePath: resolvedSourceImage, lastImagePath: resolvedLastImage, keyframes: resolvedKeyframes, extendFromVideoPath, audioFilePath, mode, imageStrength: actualImageStrength, textEncoderRepo: actualTextEncoderRepo, outputPath }));
+    ({ bin, args } = buildArgs({ pythonPath, modelId, model, prompt, negativePrompt, width: w, height: h, numFrames: parsedNumFrames, fps: parsedFps, steps: actualSteps, stage2Steps: actualStage2Steps, guidance: actualGuidance, seed: actualSeed, tiling, disableAudio, sourceImagePath: resolvedSourceImage, lastImagePath: resolvedLastImage, keyframes: resolvedKeyframes, extendFromVideoPath, audioFilePath, mode, imageStrength: actualImageStrength, textEncoderRepo: actualTextEncoderRepo, outputPath, loras: resolvedLoras }));
   } catch (err) {
     job.status = 'error';
     const reason = err.message || 'Failed to build video gen args';
@@ -1459,6 +1514,14 @@ export async function stitchVideos(videoIds, opts = {}) {
     thumbnail: thumb,
     createdAt: new Date().toISOString(),
     [historyKey]: videoIds,
+    // Inherit applied LoRAs from the first constituent clip (a chunk chain
+    // shares one LoRA set across all chunks), so the visible stitched entry
+    // round-trips LoRAs on Remix the same way a single render does — mirrors
+    // how modelId/seed/width above are taken from videos[0].
+    ...(Array.isArray(videos[0].loraFilenames) && videos[0].loraFilenames.length ? {
+      loraFilenames: videos[0].loraFilenames,
+      loraScales: videos[0].loraScales,
+    } : {}),
   };
   const h = await loadHistory();
   h.unshift(stitchedMeta);

@@ -42,8 +42,11 @@ const MediaCollectionSyncView = lazyWithReload(() => import('./pages/MediaCollec
 const SyncView = lazyWithReload(() => import('./pages/SyncView'));
 const MediaModels = lazyWithReload(() => import('./pages/MediaModels'));
 const Loras = lazyWithReload(() => import('./pages/Loras'));
+const LoraTraining = lazyWithReload(() => import('./pages/LoraTraining'));
+const LoraDatasetDetail = lazyWithReload(() => import('./pages/LoraDatasetDetail'));
 const UniverseBuilder = lazyWithReload(() => import('./pages/UniverseBuilder'));
 const Universes = lazyWithReload(() => import('./pages/Universes'));
+const Authors = lazyWithReload(() => import('./pages/Authors'));
 const Catalog = lazyWithReload(() => import('./pages/Catalog'));
 const Songs = lazyWithReload(() => import('./pages/Songs'));
 const SongEditor = lazyWithReload(() => import('./pages/SongEditor'));
@@ -259,6 +262,8 @@ export default function App() {
             <Route path="timeline/:projectId" element={<VideoTimelineEditor />} />
             <Route path="models" element={<MediaModels />} />
             <Route path="loras" element={<Loras />} />
+            <Route path="training" element={<LoraTraining />} />
+            <Route path="training/:datasetId" element={<LoraDatasetDetail />} />
             {/* Universes live at /universes (Create sidebar link). These
                 redirects keep legacy /media/universe-builder bookmarks working
                 after the MediaGen tab was removed. */}
@@ -302,6 +307,7 @@ export default function App() {
           <Route path="story-builder" element={<StoryBuilder />} />
           <Route path="story-builder/:storyId" element={<Navigate to="idea" replace />} />
           <Route path="story-builder/:storyId/:step" element={<StoryBuilder />} />
+          <Route path="authors" element={<Authors />} />
           <Route path="pipeline" element={<Pipeline />} />
           <Route path="pipeline/series/:seriesId" element={<PipelineSeries />} />
           <Route path="pipeline/series/:seriesId/roadmap" element={<PipelineSeriesRoadmap />} />

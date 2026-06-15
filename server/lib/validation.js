@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { ServerError } from './errorHandler.js';
-import { partialWithoutDefaults, emptyToUndefined } from './zodCompat.js';
+import { partialWithoutDefaults, emptyToUndefined, emptyToNull } from './zodCompat.js';
 import { WORK_KINDS, WORK_STATUSES, ANALYSIS_KINDS } from './writersRoomPresets.js';
 import { ALL_STYLE_IDS, STYLE_ID } from './writersRoomStylePresets.js';
 import { BIBLE_LIMITS } from './storyBible.js';
@@ -728,11 +728,17 @@ export const createCosJobSchema = z.object({
   promptTemplate: z.string().optional(),
   command: z.string().optional(),
   triggerAction: z.preprocess(v => v === '' ? undefined : v, z.string().optional()),
+  // Optional AI provider + model override for agent jobs. Empty string from the
+  // UI picker → null so a PUT can actively clear the override back to the active
+  // provider/default model (updateJob only skips `undefined`). Forwarded into the
+  // generated task's metadata as `provider`/`model` by generateTaskFromJob.
+  providerId: z.preprocess(emptyToNull, z.string().nullable().optional()),
+  model: z.preprocess(emptyToNull, z.string().nullable().optional()),
   // Optional managed-app scope. Empty string from the UI picker → null so a PUT
   // can actively un-scope a job back to global (updateJob only skips `undefined`,
   // so undefined would silently preserve the old scope). Absent key stays
   // undefined (preserve existing on PUT, default null on create).
-  appId: z.preprocess(v => v === '' ? null : v, z.string().nullable().optional()),
+  appId: z.preprocess(emptyToNull, z.string().nullable().optional()),
   // Optional git-workflow options for app-scoped agent jobs.
   taskMetadata: z.object({
     useWorktree: z.boolean().optional(),
@@ -820,6 +826,44 @@ export const citySnapshotConfigSchema = z.object({
   enabled: z.boolean().optional(),
   intervalMinutes: z.number().int().min(1).max(1440).optional(),
   maxSnapshots: z.number().int().min(10).max(100000).optional()
+});
+
+// Shared LoRA-training parameter bounds — used by both the settings-slice
+// defaults and the per-run override on POST /api/lora-training/runs.
+const loraTrainingParamsSchema = z.object({
+  steps: z.number().int().min(10).max(10000).optional(),
+  rank: z.number().int().min(1).max(128).optional(),
+  learningRate: z.number().positive().max(0.1).optional(),
+  resolution: z.union([z.literal(512), z.literal(768), z.literal(1024)]).optional(),
+  seed: z.number().int().optional(),
+  checkpointEvery: z.number().int().min(0).max(5000).optional(),
+  sampleEvery: z.number().int().min(0).max(5000).optional(),
+  samplePrompt: z.string().max(2000).optional(),
+});
+
+// LoRA training settings slice (`settings.loraTraining`) — vision-caption
+// provider pick + training parameter defaults. Code-level defaults live in
+// `services/loraTraining/runtimes.js` so an absent slice needs no migration.
+export const loraTrainingConfigSchema = z.object({
+  // Both nullable — the caption-model picker clears them to null on "Auto"
+  // (defer to the server's vision-model auto-pick).
+  captionProviderId: z.string().max(128).nullable().optional(),
+  captionModel: z.string().max(256).nullable().optional(),
+  defaults: loraTrainingParamsSchema.optional(),
+  // Segmented mflux training (watchdog-panic mitigation, default ON in
+  // services/loraTraining/runtimes.js). Setting this false runs the trainer as
+  // one sustained process again — flip it once a macOS/mflux update resolves
+  // the GPU-driver hang. Cooldown is the GPU idle gap (seconds) between segments.
+  segmentation: z.boolean().optional(),
+  segmentCooldownSec: z.number().int().min(0).max(3600).optional(),
+});
+
+// POST /api/lora-training/runs — start a training run for a dataset.
+export const startTrainingRunSchema = z.object({
+  datasetId: z.string().min(1).max(128),
+  baseModelId: z.string().min(1).max(128),
+  name: z.string().trim().max(120).optional(),
+  params: loraTrainingParamsSchema.optional(),
 });
 
 // Query for GET /api/city/snapshots — `since` (ISO timestamp) and `limit`

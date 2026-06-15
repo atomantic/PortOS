@@ -259,6 +259,49 @@ describe('mediaJobQueue', () => {
     expect(persisted.statusMsg).toBe('Completed');
   });
 
+  it('forwards structured step/totalSteps/loss onto the SSE wire', async () => {
+    // The LoRA training live gallery reads loss + step off the progress/preview
+    // SSE frames to plot a curve and key sample thumbnails by step. The
+    // dispatcher must pass those structured fields through (additive — guarded
+    // by presence so image/video frames that omit them are unaffected).
+    const job = mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'metrics' } });
+    await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
+    await waitFor(() => mediaJobQueue.getJob(job.jobId)?.status === 'running');
+
+    const frames = [];
+    const res = {
+      writeHead: () => {},
+      write: (msg) => {
+        for (const line of msg.split('\n')) {
+          if (line.startsWith('data: ')) frames.push(JSON.parse(line.slice(6)));
+        }
+      },
+      end: () => {}, // sseUtils calls c.end() on deferred cleanup after a terminal frame
+      req: { on: () => {} },
+    };
+    expect(mediaJobQueue.attachSseClient(job.jobId, res)).toBe(true);
+
+    videoGenEvents.emit('progress', {
+      generationId: job.jobId, progress: 0.5, step: 250, totalSteps: 600, loss: 0.0812,
+      message: 'Training step 250/600',
+    });
+    await waitFor(() => frames.some((f) => f.type === 'progress' && f.step === 250));
+    expect(frames.find((f) => f.type === 'progress' && f.step === 250))
+      .toMatchObject({ type: 'progress', step: 250, totalSteps: 600, loss: 0.0812 });
+
+    // Preview-only sample frame (no progress number) still carries its step.
+    videoGenEvents.emit('progress', {
+      generationId: job.jobId, currentImage: 'http://x/samples/step-000250.png', step: 250,
+      message: 'Sample @ step 250',
+    });
+    await waitFor(() => frames.some((f) => f.type === 'preview'));
+    expect(frames.find((f) => f.type === 'preview'))
+      .toMatchObject({ type: 'preview', currentImage: 'http://x/samples/step-000250.png', step: 250 });
+
+    videoGenEvents.emit('completed', { generationId: job.jobId, filename: `${job.jobId}.mp4` });
+    await waitFor(() => mediaJobQueue.getJob(job.jobId)?.status === 'completed');
+  });
+
   it('debounce-persists live progress before a terminal transition', async () => {
     const file = join(tempDataDir, 'media-jobs.json');
     const job = mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'restart snapshot' } });

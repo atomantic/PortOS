@@ -29,6 +29,7 @@ import { createCollectionStore } from '../lib/collectionStore.js';
 import { ITEM_KIND, REF_MAX_LENGTH, itemKey } from '../lib/mediaItemKey.js';
 import { sanitizeOrigin } from '../lib/sharingOrigin.js';
 import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
+import { compareNewerWins, compareEarlierWins } from '../lib/lwwTimestamp.js';
 import { emitRecordUpdated, emitRecordDeleted, autoSubscribeRecordToAllPeers } from './sharing/recordEvents.js';
 import {
   maybeJournalBeforeOverwrite, setSyncBaseHash, contentHashForRecord, flushBaseHashes, deleteSyncBaseHash,
@@ -1063,44 +1064,6 @@ function mergeCollectionItems(localItems, remoteItems) {
   // wire stability; aligning the in-memory merge keeps reads and writes
   // self-consistent.
   return Array.from(byKey.values()).sort((a, b) => itemKey(a).localeCompare(itemKey(b)));
-}
-
-// Parse a timestamp string to epoch ms, or null when unparseable. The
-// "loses on null" semantics differ between the two LWW directions, so each
-// caller handles nulls explicitly rather than baking a polarity into this
-// helper (an Infinity / -Infinity fallback would invert behavior between
-// "earliest wins" and "newer wins").
-function parseTsMs(s) {
-  const n = typeof s === 'string' ? Date.parse(s) : NaN;
-  return Number.isFinite(n) ? n : null;
-}
-
-// "Earliest wins" tiebreak for two records of the same key. Used by
-// mergeCollectionItems when both sides claim to know an `addedAt` for the
-// same `<kind>:<ref>`. Returns -1 if `a` is earlier (a wins), 1 if `b` is
-// earlier, 0 on tie. Unparseable side LOSES — a corrupted timestamp can't
-// claim to be earliest; if both are unparseable the caller's default wins.
-function compareEarlierWins(a, b) {
-  const aMs = parseTsMs(a);
-  const bMs = parseTsMs(b);
-  if (aMs === null && bMs === null) return 0;
-  if (aMs === null) return 1;  // a unparseable → b wins
-  if (bMs === null) return -1; // b unparseable → a wins
-  if (aMs < bMs) return -1;
-  if (aMs > bMs) return 1;
-  return 0;
-}
-
-// "Newer wins" comparison: returns true iff `candidate` is strictly newer
-// than `incumbent`. Used by mergeMediaCollectionsFromSync to decide whether
-// remote overrides local on scalar fields. Same null-loses-to-valid rule
-// as `compareEarlierWins`. Ties → incumbent (local) wins.
-function compareNewerWins(candidate, incumbent) {
-  const cMs = parseTsMs(candidate);
-  const iMs = parseTsMs(incumbent);
-  if (cMs === null) return false;       // candidate unparseable → never overrides
-  if (iMs === null) return true;        // incumbent unparseable, candidate valid → take valid
-  return cMs > iMs;
 }
 
 function collectionsEqual(a, b) {

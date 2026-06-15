@@ -184,8 +184,13 @@ export async function syncBrainRecord(brainType, record) {
   const key = bridgeKey(brainType, record.id);
   const existingMemoryId = map[key];
 
-  // Generate embedding
-  const embedding = await embeddings.generateMemoryEmbedding(memoryData).catch(() => null);
+  // Generate embedding. Pass the source hints (NOT persisted on memoryData —
+  // the memory schema has no such columns) so the embedder can summarize the
+  // FULL archived transcript for an over-budget chatgpt-import record rather
+  // than the already-capped content preview.
+  const embedding = await embeddings
+    .generateMemoryEmbedding(memoryData, { source: record.source, sourceRef: record.sourceRef })
+    .catch(() => null);
 
   if (existingMemoryId) {
     // Update existing memory. Force status:'active' so a record that was
@@ -459,39 +464,9 @@ export function queueResync(records) {
 
 // ─── Event Handlers ─────────────────────────────────────────────────────────
 // Entity stores emit "{type}:upserted" / "{type}:deleted" with the single
-// affected record. (An earlier version listened to the store-wide
-// "{type}:changed" event and re-synced every record on each write — which
-// triggered O(N) memory updates and embedding rebuilds for every brain item
-// added. The journals path was fixed first; this is the same fix for the
-// JSON entity stores.)
+// affected record. Both are routed through the debounced+sequential
+// queueResync path (not handled inline) — see initBridge for why.
 // JSONL stores still emit "{type}:added" with a single record.
-
-async function handleEntityUpserted(brainType, { id, record }) {
-  if (!id || !record) return;
-  if (record.archived) {
-    const map = await loadBridgeMap();
-    const memoryId = map[bridgeKey(brainType, id)];
-    if (memoryId) {
-      memory.updateMemory(memoryId, { status: 'archived' }).catch(err => {
-        console.error(`❌ Brain bridge archive failed for ${brainType}/${id}: ${err.message}`);
-      });
-    }
-    return;
-  }
-  syncBrainRecord(brainType, record).catch(err => {
-    console.error(`❌ Brain bridge sync failed for ${brainType}/${id}: ${err.message}`);
-  });
-}
-
-async function handleEntityDeleted(brainType, { id }) {
-  if (!id) return;
-  const map = await loadBridgeMap();
-  const memoryId = map[bridgeKey(brainType, id)];
-  if (!memoryId) return;
-  memory.updateMemory(memoryId, { status: 'archived' }).catch(err => {
-    console.error(`❌ Brain bridge delete-archive failed for ${brainType}/${id}: ${err.message}`);
-  });
-}
 
 function handleJsonlAdded(brainType, record) {
   if (!record?.id) return;
@@ -508,11 +483,22 @@ function handleJsonlAdded(brainType, record) {
  * are automatically mirrored to the CoS memory system.
  */
 export function initBridge() {
-  // Entity store changes — listen to per-record events so a single create/update
-  // doesn't fan out to re-sync every existing record (and rebuild every embedding).
+  // Entity store changes — route through the debounced + sequential queueResync
+  // path rather than embedding inline per event. A single create/update already
+  // emits one per-record event (not a store-wide fan-out), but a BULK producer —
+  // e.g. the ChatGPT import creating ~1,400 conversations back-to-back — fires
+  // that many `:upserted` events in a tight loop. Handling each inline would
+  // launch ~1,400 concurrent embedding calls + Postgres writes, saturating the
+  // embedding backend (most time out → records persist with a NULL embedding,
+  // silently unsearchable) and exhausting the PG pool. queueResync coalesces the
+  // burst (250ms debounce + dedup) and drains it sequentially — the same
+  // protection the peer-sync `sync:applied` path already relies on. It also
+  // re-reads each record's CANONICAL state (resyncBrainRecord), so the archived/
+  // deleted/tombstoned branches are handled there uniformly and an event whose
+  // payload is already stale by flush time still converges correctly.
   for (const type of ['people', 'projects', 'ideas', 'admin', 'memories']) {
-    brainEvents.on(`${type}:upserted`, (payload) => handleEntityUpserted(type, payload));
-    brainEvents.on(`${type}:deleted`, (payload) => handleEntityDeleted(type, payload));
+    brainEvents.on(`${type}:upserted`, ({ id }) => queueResync([{ type, id }]));
+    brainEvents.on(`${type}:deleted`, ({ id }) => queueResync([{ type, id }]));
   }
 
   // JSONL appends (digests, reviews)

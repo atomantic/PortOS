@@ -53,6 +53,31 @@ describe('dry-run hook wiring matches each engine execute path', () => {
   });
 });
 
+// The `{reviewers}` prompt token is what tasks like claim-issue use to tell the
+// agent which reviewers to run (the prompt drives the review loop directly, so
+// this IS the operative reviewer list, not just display). It must fall back to
+// the user's PortOS Code Review Defaults when the task didn't pin reviewers —
+// not the bare `normalizeReviewers(metadata)` call, which silently reverts to
+// hardcoded copilot. This guard pins the wiring against that regression.
+describe('{reviewers} interpolation honors Code Review Defaults', () => {
+  it('resolves getCodeReviewDefaults and passes them as the normalizeReviewers fallback', () => {
+    expect(GEN_SRC).toContain("import { getCodeReviewDefaults } from './codeReview.js'");
+    expect(GEN_SRC).toContain('normalizeReviewers(metadata, codeReviewDefaults?.reviewers)');
+    // The bare two-arg-less form (which silently reverts to hardcoded copilot)
+    // is the bug we are guarding against. `(?!,)` lets the legitimate two-arg
+    // call through while still catching a regression to `normalizeReviewers(metadata)`.
+    expect(GEN_SRC).not.toMatch(/normalizeReviewers\(metadata\)(?!,)/);
+  });
+
+  it('filters local-LLM reviewers out of the prompt token (no invocation instructions in claim/plan prompts)', () => {
+    // lmstudio/ollama defaults must not reach {reviewers}: the claim/plan
+    // prompts can't drive them, so the loop would stall. The filter falls
+    // through to the hardcoded copilot default when it empties the list.
+    expect(GEN_SRC).toContain('.filter((r) => !LOCAL_LLM_REVIEWERS.includes(r))');
+    expect(GEN_SRC).toContain('promptReviewers.length ? promptReviewers : [...DEFAULT_REVIEWERS]');
+  });
+});
+
 describe('exceedsMaxSpawns', () => {
   it('is false below the ceiling and true at/above it — no mutation', () => {
     expect(exceedsMaxSpawns(task('a', { totalSpawnCount: 0 }))).toBe(false);

@@ -36,16 +36,17 @@ import { spawn as ptySpawn } from 'node-pty';
 
 import { join, resolve } from 'path';
 import { ensureDir, PATHS, tryReadFile } from './fileUtils.js';
-import { createStreamingAnsiStripper } from './ansiStrip.js';
+import { createStreamingAnsiStripper, stripAnsi } from './ansiStrip.js';
 import { createImmediateFallbackSignalDetector } from './aiToolkit/errorDetection.js';
 import { getRunsPath, finalizeRunRecord, emitRunStarted, registerActiveRun, unregisterActiveRun } from '../services/runner.js';
 import { registerExternalSession, unregisterExternalSession, isExternalSessionAttached } from '../services/shell.js';
 import {
   DEFAULT_TUI_PROMPT_DELAY_MS,
   PASTE_MARKER_POLL_MS,
-  PASTE_MARKER_PATTERN,
+  countPasteMarkers,
   PASTE_TO_ENTER_MIN_DELAY_MS,
   PASTE_TO_ENTER_FALLBACK_MS,
+  scheduleSubmitEnters,
   PASTE_DEADLINE_MS,
   READY_POLL_INTERVAL_MS,
   READY_IDLE_THRESHOLD_MS,
@@ -148,6 +149,14 @@ ${prompt}`;
 
   console.log(`📟 Executing TUI: ${command} ${args.join(' ')} (${wrappedPrompt.length} chars via paste, response→${responseFilePath})`);
 
+  // Markers already present in the (wrapped) prompt itself — a transcript-analysis
+  // task can echo `[Pasted text #N]` back into the post-paste stream. The fast
+  // path must wait for the TUI's OWN marker (the count to EXCEED this), so an
+  // echoed marker doesn't fire the submit-Enter mid-reflow (issue #1229 review).
+  // STRIP first so a pasted RAW transcript's cursor-positioned marker (counts as 0
+  // unstripped) is counted the same way the stripped post-paste buffer is.
+  const promptMarkerCount = countPasteMarkers(stripAnsi(wrappedPrompt));
+
   // CLAUDECODE is set when PortOS itself runs inside Claude Code; passing it
   // through to a spawned Claude Code TUI would make the child think it's
   // nested. Other AI spawn paths (runner.js, agentCliSpawning.js) strip it
@@ -201,6 +210,12 @@ ${prompt}`;
   let outputBuffer = '';
   let rawBuffer = '';
   let promptSentAt = null;
+  // ANSI-stripped post-paste accumulator for paste-marker detection. The marker
+  // renders with absolute-column cursor moves between glyphs, so it only matches
+  // after stripping — testing the raw stream never matched and left the fast
+  // path dead (issue #1229). Lives only during the paste→Enter window; nulled
+  // when detection resolves or the run finalizes.
+  let postPasteStripped = null;
   let firstOutputAt = null;
   let lastOutputAt = startTime;
   let firstResponseAt = null;
@@ -233,13 +248,18 @@ ${prompt}`;
 
   let readyTimer = null;
   let pasteEnterTimer = null;
+  let submitEnterTimer = null;
   let idleWatchTimer = null;
   let responseFileWatchTimer = null;
   let hardTimeoutTimer = null;
 
   const cleanupTimers = () => {
+    // Stop the post-paste accumulator from growing on any chunk that lands
+    // between finalize and the PTY kill (onData here has no finalized guard).
+    postPasteStripped = null;
     if (readyTimer) { clearInterval(readyTimer); readyTimer = null; }
     if (pasteEnterTimer) { clearInterval(pasteEnterTimer); pasteEnterTimer = null; }
+    if (submitEnterTimer) { clearInterval(submitEnterTimer); submitEnterTimer = null; }
     if (idleWatchTimer) { clearInterval(idleWatchTimer); idleWatchTimer = null; }
     if (responseFileWatchTimer) { clearInterval(responseFileWatchTimer); responseFileWatchTimer = null; }
     if (hardTimeoutTimer) { clearTimeout(hardTimeoutTimer); hardTimeoutTimer = null; }
@@ -295,6 +315,7 @@ ${prompt}`;
 
       const stripped = streamingStrip(text);
       if (stripped) {
+        if (postPasteStripped !== null) postPasteStripped += stripped;
         outputBuffer += stripped;
         if (outputBuffer.length > OUTPUT_BUFFER_HEADROOM) {
           outputBuffer = outputBuffer.slice(-OUTPUT_BUFFER_CAP);
@@ -338,6 +359,15 @@ ${prompt}`;
           if (isExternalSessionAttached(runId)) return;
           const idle = Date.now() - lastOutputAt;
           if (idle >= idleThresholdMs) {
+            // NOTE: unlike the long-running agent path, the one-shot runner does
+            // NOT gate this on a work-activity signal. Idle-complete here is the
+            // inline-output fallback for a model that prints its answer instead of
+            // writing the response file — that output legitimately may carry no
+            // `(Ns ·` working counter (fast reply, or a non-Claude/Codex TUI), so
+            // requiring one would falsely fail a completed run whose answer is
+            // already in outputBuffer. The authoritative done-signal is the
+            // response file (handled by responseFileWatchTimer); this stays the
+            // permissive fallback it has always been.
             finish({ success: true, exitCode: 0, reason: 'idle-complete' });
           }
         }, 1000);
@@ -386,7 +416,9 @@ ${prompt}`;
     const sendPrompt = (reason) => {
       if (finalized || promptSentAt) return;
       promptSentAt = Date.now();
-      const rawLenBeforePaste = rawBuffer.length;
+      // Start capturing stripped post-paste output BEFORE the paste write so the
+      // marker watcher sees every response chunk.
+      postPasteStripped = '';
       try {
         ptyProcess.write(`\x1b[200~${wrappedPrompt}\x1b[201~`);
       } catch (err) {
@@ -412,15 +444,22 @@ ${prompt}`;
 
       const pasteSentAt = Date.now();
       pasteEnterTimer = setInterval(() => {
-        if (finalized) { clearInterval(pasteEnterTimer); pasteEnterTimer = null; return; }
+        if (finalized) { clearInterval(pasteEnterTimer); pasteEnterTimer = null; postPasteStripped = null; return; }
         const elapsed = Date.now() - pasteSentAt;
-        const postPaste = rawBuffer.slice(rawLenBeforePaste);
-        const markerSeen = PASTE_MARKER_PATTERN.test(postPaste);
+        const markerSeen = countPasteMarkers(postPasteStripped) > promptMarkerCount;
         if ((markerSeen && elapsed >= PASTE_TO_ENTER_MIN_DELAY_MS)
           || elapsed >= PASTE_TO_ENTER_FALLBACK_MS) {
           clearInterval(pasteEnterTimer);
           pasteEnterTimer = null;
-          try { ptyProcess.write('\r'); } catch { /* PTY may have already exited */ }
+          postPasteStripped = null;
+          // Submit with repeated Enters — a single `\r` can be swallowed while
+          // the TUI is still reflowing a large paste, stranding the prompt
+          // unsent. Tracked in submitEnterTimer so finish()'s cleanupTimers()
+          // cancels pending retries if the run ends first.
+          submitEnterTimer = scheduleSubmitEnters(
+            () => { try { ptyProcess.write('\r'); } catch { /* PTY may have already exited */ } },
+            () => finalized
+          );
         }
       }, PASTE_MARKER_POLL_MS);
     };

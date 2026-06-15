@@ -144,8 +144,13 @@ describe('catalog DDL parity (init-db.sql ↔ db.js ensureSchema)', () => {
   });
 
   it('every trg_catalog_* trigger appears in both files', () => {
-    const sqlTrgs = extractTriggerNames(INIT_SQL);
-    const jsTrgs = extractTriggerNames(DB_JS);
+    // Exclude the generic `*_audit` triggers (record_audit): init-db.sql spells
+    // them literally while db.js builds them from the auditedTables array via a
+    // `trg_${t}_audit` template literal, so a literal-name extractor only sees
+    // them on the init-db.sql side. They have their own parity assertion below.
+    const noAudit = (s) => new Set([...s].filter((t) => !t.endsWith('_audit')));
+    const sqlTrgs = noAudit(extractTriggerNames(INIT_SQL));
+    const jsTrgs = noAudit(extractTriggerNames(DB_JS));
     expect([...sqlTrgs].sort()).toEqual([...jsTrgs].sort());
     expect(sqlTrgs.size).toBeGreaterThan(0);
   });
@@ -307,6 +312,75 @@ describe('catalog DDL parity (init-db.sql ↔ db.js ensureSchema)', () => {
     expect(jsBody, 'db.js missing CREATE TABLE schema_migrations').toBeTruthy();
     expect([...new Set(extractColumnNames(sqlBody))].sort())
       .toEqual([...new Set(extractColumnNames(jsBody))].sort());
+  });
+
+  // Deletion audit log (incident #1248-follow-up) — the record_audit table, the
+  // record_audit_log() trigger function, and the per-content-table `_audit`
+  // triggers all live in BOTH DDL sources. A one-sided edit (e.g. auditing a new
+  // table only in db.js) would leave fresh installs un-audited, so lock all three.
+  it('record_audit table + trigger function + audit triggers match in both files', () => {
+    // table columns
+    const sqlBody = extractCreateTable(INIT_SQL, 'record_audit');
+    const jsBody = extractCreateTable(DB_JS, 'record_audit');
+    expect(sqlBody, 'init-db.sql missing CREATE TABLE record_audit').toBeTruthy();
+    expect(jsBody, 'db.js missing CREATE TABLE record_audit').toBeTruthy();
+    expect([...new Set(extractColumnNames(sqlBody))].sort())
+      .toEqual([...new Set(extractColumnNames(jsBody))].sort());
+
+    // generic trigger function present in both
+    expect(/CREATE OR REPLACE FUNCTION\s+record_audit_log\b/i.test(INIT_SQL)).toBe(true);
+    expect(/CREATE OR REPLACE FUNCTION\s+record_audit_log\b/i.test(DB_JS)).toBe(true);
+
+    // The set of audited tables is identical across both. init-db.sql spells out
+    // a `trg_<table>_audit` per table; db.js builds them from the `auditedTables`
+    // array via a `trg_${t}_audit` template literal, so we parse that array on the
+    // js side rather than matching literal trigger names.
+    const sqlAuditTables = (() => {
+      const out = new Set();
+      const re = /CREATE TRIGGER\s+trg_([a-z0-9_]+)_audit\b/gi;
+      let m;
+      while ((m = re.exec(INIT_SQL)) !== null) out.add(m[1]);
+      return out;
+    })();
+    const jsAuditTables = (() => {
+      const m = /const auditedTables\s*=\s*\[([\s\S]*?)\]/i.exec(DB_JS);
+      expect(m, 'db.js missing the auditedTables array').toBeTruthy();
+      const out = new Set();
+      const re = /'([a-z0-9_]+)'/gi;
+      let mm;
+      while ((mm = re.exec(m[1])) !== null) out.add(mm[1]);
+      return out;
+    })();
+    expect(sqlAuditTables.size, 'no _audit triggers found in init-db.sql — DDL broke').toBeGreaterThan(8);
+    expect([...sqlAuditTables].sort()).toEqual([...jsAuditTables].sort());
+  });
+
+  // Broad drift guard for the whole upgrade-vs-fresh-install gap (beyond the
+  // catalog tables above). init-db.sql runs ONLY on fresh `db.sh setup-native`
+  // provisioning; existing installs + federated peers get new tables solely
+  // through db.js `ensureSchema()`'s catalogDDL array. A table added to one
+  // source but not the other is invisible until a real upgrade fails in the
+  // wild (e.g. lora_training_runs shipped in init-db.sql but was missing from
+  // ensureSchema — every existing install would 500 on the first training run).
+  it('every table in init-db.sql is also created in db.js ensureSchema', () => {
+    const tableNames = (source) => {
+      const out = new Set();
+      const re = /CREATE TABLE IF NOT EXISTS\s+([a-z0-9_]+)/gi;
+      let m;
+      while ((m = re.exec(source)) !== null) out.add(m[1].toLowerCase());
+      return out;
+    };
+    // The memory subsystem provisions its own tables via a separate path
+    // (server/scripts/migrate*Memories*.js), so they live in init-db.sql but
+    // intentionally NOT in ensureSchema — the documented exception in this
+    // file's header. Everything else must be in both.
+    const PROVISIONED_ELSEWHERE = new Set(['memories', 'memory_links']);
+    const sqlTables = tableNames(INIT_SQL);
+    const jsTables = tableNames(DB_JS);
+    expect(sqlTables.size, 'init-db.sql declares no tables — parser broke').toBeGreaterThan(8);
+    const missing = [...sqlTables]
+      .filter((t) => !jsTables.has(t) && !PROVISIONED_ELSEWHERE.has(t));
+    expect(missing, `tables in init-db.sql but missing from db.js ensureSchema (existing installs won't get them): ${missing.join(', ')}`).toEqual([]);
   });
 
   it('search_tsv payload field set matches', () => {

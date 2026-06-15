@@ -55,6 +55,19 @@ export const expandUniverse = ({
   }),
 });
 
+// Vision-to-prose: turn reference image(s) into an image-gen-ready prose
+// description for a canon entry. `screenshots` are filenames already uploaded
+// via uploadScreenshot(); multiple images → the model returns the description
+// common to all of them. `providerId`/`model` pick the (API/vision-capable)
+// provider on demand. Resolves to `{ description, llm: { provider, model } }`.
+export const describeEntityFromImages = ({
+  kind, name, context, screenshots, providerId, model,
+} = {}, options = {}) => request('/universe-builder/describe-from-images', {
+  method: 'POST',
+  body: JSON.stringify({ kind, name, context, screenshots, providerId, model }),
+  ...options,
+});
+
 // Caller should dedupe the returned variations against its local list before
 // appending — the local list may have changed during the request.
 export const generateCategoryVariations = ({

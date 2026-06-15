@@ -44,6 +44,12 @@ export const DEFAULT_EXCLUDES = [
   { path: '/cos/worktrees/', reason: 'Ephemeral agent git worktrees — recreated on demand', overridable: false },
   { path: '/cos/feature-agents/*/worktree/', reason: 'Per-feature-agent git worktrees — recreated on demand', overridable: false },
   { path: '/loras/*.safetensors', reason: 'LoRA adapter weight files — large, re-downloadable. .metadata.json sidecars (Civitai metadata, user-editable name/notes) ARE backed up.', overridable: true },
+  // `**` (not `*`) so both engines' checkpoint dirs match: the torch trainer
+  // writes training-runs/<id>/checkpoints/, mflux writes
+  // training-runs/<id>/mflux/checkpoints/.
+  { path: '/training-runs/**/checkpoints/', reason: 'LoRA training checkpoints — large intermediate adapter state, resumable-but-regenerable. Final trained adapters land in data/loras/ (weights excluded there too); run samples + configs ARE backed up.', overridable: true },
+  { path: '/training-runs/*/cache/', reason: 'Precomputed latent/text-embedding training cache — regenerated from the dataset on the next run', overridable: false },
+  { path: '/training-runs/*/data/.mflux_cache/', reason: 'mflux low_ram disk-backed encode cache (written inside the staged training data dir) — regenerable', overridable: false },
   { path: '/repos/', reason: 'Cloned git repositories — large, re-cloneable from origin', overridable: true },
   { path: '/cos/reference-repos/', reason: 'Reference upstream repos used by agents — re-cloneable', overridable: true },
   { path: '/browser-downloads/', reason: 'Browser downloads cache — large, re-downloadable', overridable: true }

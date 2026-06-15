@@ -230,6 +230,32 @@ describe('CoS Job Routes', () => {
         expect.objectContaining({ appId: null })
       );
     });
+
+    it('should accept providerId + model and forward them to createJob', async () => {
+      autonomousJobs.createJob.mockResolvedValue({ id: 'j1' });
+
+      const response = await request(app)
+        .post('/api/cos/jobs')
+        .send({ name: 'Pinned Task', type: 'agent', promptTemplate: 'test', providerId: 'anthropic', model: 'claude-opus-4-8' });
+
+      expect(response.status).toBe(200);
+      expect(autonomousJobs.createJob).toHaveBeenCalledWith(
+        expect.objectContaining({ providerId: 'anthropic', model: 'claude-opus-4-8' })
+      );
+    });
+
+    it('should coerce empty-string providerId/model to null', async () => {
+      autonomousJobs.createJob.mockResolvedValue({ id: 'j1' });
+
+      const response = await request(app)
+        .post('/api/cos/jobs')
+        .send({ name: 'Default AI Task', type: 'agent', promptTemplate: 'test', providerId: '', model: '' });
+
+      expect(response.status).toBe(200);
+      expect(autonomousJobs.createJob).toHaveBeenCalledWith(
+        expect.objectContaining({ providerId: null, model: null })
+      );
+    });
   });
 
   describe('PUT /api/cos/jobs/:id', () => {
@@ -344,6 +370,26 @@ describe('CoS Job Routes', () => {
       expect(response.status).toBe(200);
       expect(cos.addTask).toHaveBeenCalledWith(
         expect.objectContaining({ app: 'app-xyz', useWorktree: true, openPR: true, simplify: false }),
+        'internal'
+      );
+    });
+
+    it('should forward provider + model overrides into addTask', async () => {
+      autonomousJobs.getJob.mockResolvedValue({ id: 'j1', type: 'agent', name: 'Pinned Review' });
+      autonomousJobs.isShellJob.mockReturnValue(false);
+      autonomousJobs.isScriptJob.mockReturnValue(false);
+      autonomousJobs.generateTaskFromJob.mockResolvedValue({
+        description: 'Review',
+        priority: 'MEDIUM',
+        metadata: { provider: 'anthropic', model: 'claude-opus-4-8' }
+      });
+      cos.addTask.mockResolvedValue({ id: 'task-3' });
+
+      const response = await request(app).post('/api/cos/jobs/j1/trigger');
+
+      expect(response.status).toBe(200);
+      expect(cos.addTask).toHaveBeenCalledWith(
+        expect.objectContaining({ provider: 'anthropic', model: 'claude-opus-4-8' }),
         'internal'
       );
     });

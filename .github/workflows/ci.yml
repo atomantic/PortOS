@@ -19,6 +19,32 @@ jobs:
       matrix:
         node-version: [20.x]
 
+    # Postgres (with pgvector) for the DB-backed adapter suites. The image ships
+    # the `vector` extension that init-db.sql requires. The default `portos` DB
+    # exists so setup:db:test has a maintenance connection to CREATE portos_test
+    # from; the suites themselves only ever touch portos_test (the production
+    # `portos` name is hard-blocked by isTestDatabase()).
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: portos
+          POSTGRES_PASSWORD: portos
+          POSTGRES_DB: portos
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U portos"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      PGHOST: localhost
+      PGPORT: 5432
+      PGUSER: portos
+      PGPASSWORD: portos
+
     steps:
       - uses: actions/checkout@v6
 
@@ -37,8 +63,19 @@ jobs:
       - name: Install client dependencies
         run: npm install --prefix client
 
+      # Main server suite runs WITHOUT PGDATABASE pointing at a test DB, so the
+      # DB-backed suites skip here (they'd see the non-test `portos` name). They
+      # run in their own serial step below against portos_test.
       - name: Run server tests
         run: npm run test:ci --prefix server
+
+      - name: Provision test database (portos_test)
+        run: npm run setup:db:test --prefix server
+
+      - name: Run DB-backed tests (portos_test)
+        run: npm run test:db:ci --prefix server
+        env:
+          PGDATABASE: portos_test
 
       - name: Run client tests
         run: npm test --prefix client

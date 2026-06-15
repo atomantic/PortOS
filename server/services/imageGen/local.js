@@ -26,6 +26,7 @@ import { imageGenEvents } from '../imageGenEvents.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, PYTHON_NOISE_RE } from '../../lib/sseUtils.js';
 import { resolveFlux2Python, FLUX2_VENV_DEFAULT } from '../../lib/pythonSetup.js';
 import { hfTokenEnv } from '../../lib/hfToken.js';
+import { extractGatedRepo } from '../../lib/hfErrors.js';
 import { safeChildProcessEnv } from '../../lib/processEnv.js';
 import { IMAGE_GEN_MODE } from './modes.js';
 import { computePixelDelta } from './regen.js';
@@ -33,7 +34,7 @@ import { computePixelDelta } from './regen.js';
 const IS_WIN = process.platform === 'win32';
 
 import { getImageModels, isFlux2, isZImage, isErnie, isHiDream, isQwen } from '../../lib/mediaModels.js';
-import { usesDiffusersRunner } from '../../lib/runners.js';
+import { usesDiffusersRunner, flux2Bf16BaseRepo } from '../../lib/runners.js';
 
 // Read the registry lazily — callers below hit getImageModels() at request
 // time. A prior `IMAGE_MODELS = Object.fromEntries(getImageModels()...)`
@@ -137,20 +138,54 @@ export const buildArgs = ({ pythonPath, model, prompt, negativePrompt, width, he
         { status: 500, code: 'IMAGE_GEN_FLUX2_MISCONFIGURED' },
       );
     }
-    const quantization = model.quantization || 'sdnq';
+    let repo = model.repo;
+    let quantization = model.quantization || 'sdnq';
+    let { tokenizerRepo, basePipelineRepo, kvRepo } = model;
+    let refImagePaths = referenceImagePaths;
+    let refImageStrengths = referenceImageStrengths;
+    // LoRA + quantized base is incompatible: PEFT can't inject an adapter into
+    // SDNQ/int8-quantized Linear layers, and the runner swallows the failure
+    // into a base render (lora_utils.apply_loras), so the LoRA silently does
+    // nothing. The adapter was trained against the bf16 base anyway — route the
+    // render onto it.
+    if (loraPaths?.length && quantization !== 'none') {
+      const bf16 = flux2Bf16BaseRepo(model);
+      if (!bf16) {
+        throw new ServerError(
+          `Can't render a LoRA on "${modelId}" — a LoRA needs a bf16 FLUX.2 base and the size variant couldn't be resolved`,
+          { status: 400, code: 'IMAGE_GEN_LORA_NEEDS_BF16' },
+        );
+      }
+      console.log(`🎚️  flux2 LoRA render → routing ${modelId} (${quantization}) onto bf16 base ${bf16}`);
+      repo = bf16;
+      quantization = 'none';
+      tokenizerRepo = null;
+      basePipelineRepo = null;
+      // Multi-reference editing needs the `-kv` sibling repo, which the bf16
+      // LoRA route doesn't load (and the 4B variant has none). Drop the refs so
+      // the LoRA render proceeds as txt2img/i2i instead of the runner hard-
+      // failing on the missing kv pipeline — the LoRA is the primary intent
+      // when one is attached. i2i (single init image) is unaffected.
+      kvRepo = null;
+      if (refImagePaths?.length) {
+        console.log(`⚠️ flux2 LoRA render dropped ${refImagePaths.length} reference image(s) — multi-ref editing isn't supported on the bf16 LoRA route`);
+        refImagePaths = [];
+        refImageStrengths = [];
+      }
+    }
     if (quantization !== 'sdnq' && quantization !== 'int8' && quantization !== 'none') {
       throw new ServerError(
         `FLUX.2 model "${modelId}" has unsupported quantization "${quantization}" (supported: sdnq, int8, none)`,
         { status: 500, code: 'IMAGE_GEN_FLUX2_MISCONFIGURED' },
       );
     }
-    if (quantization === 'sdnq' && !model.tokenizerRepo) {
+    if (quantization === 'sdnq' && !tokenizerRepo) {
       throw new ServerError(
         `FLUX.2 SDNQ model "${modelId}" requires 'tokenizerRepo' (the gated base repo for the tokenizer)`,
         { status: 500, code: 'IMAGE_GEN_FLUX2_MISCONFIGURED' },
       );
     }
-    if (quantization === 'int8' && !model.basePipelineRepo) {
+    if (quantization === 'int8' && !basePipelineRepo) {
       throw new ServerError(
         `FLUX.2 Int8 model "${modelId}" requires 'basePipelineRepo' (the gated base repo for VAE/scheduler)`,
         { status: 500, code: 'IMAGE_GEN_FLUX2_MISCONFIGURED' },
@@ -174,7 +209,7 @@ export const buildArgs = ({ pythonPath, model, prompt, negativePrompt, width, he
       scriptPath,
       '--model', modelId,
       '--quantization', quantization,
-      '--repo', model.repo,
+      '--repo', repo,
       '--prompt', prompt,
       '--height', String(height),
       '--width', String(width),
@@ -183,13 +218,13 @@ export const buildArgs = ({ pythonPath, model, prompt, negativePrompt, width, he
       '--seed', String(seed),
       '--output', outputPath,
     ];
-    if (model.tokenizerRepo) args.push('--tokenizer-repo', model.tokenizerRepo);
-    if (model.basePipelineRepo) args.push('--base-pipeline-repo', model.basePipelineRepo);
+    if (tokenizerRepo) args.push('--tokenizer-repo', tokenizerRepo);
+    if (basePipelineRepo) args.push('--base-pipeline-repo', basePipelineRepo);
     // bf16 multi-reference editing loads the `-kv` sibling repo (whose
-    // transformer is tuned for reference editing) instead of `model.repo`.
+    // transformer is tuned for reference editing) instead of `repo`.
     // The runner only uses --kv-repo when --reference-images is also present;
     // the plain text/i2i bf16 path stays on the base repo.
-    if (model.kvRepo) args.push('--kv-repo', model.kvRepo);
+    if (kvRepo) args.push('--kv-repo', kvRepo);
     if (negativePrompt) args.push('--negative-prompt', negativePrompt);
     if (initImagePath) args.push('--image-path', initImagePath);
     if (initImagePath && initImageStrength != null) args.push('--image-strength', String(initImageStrength));
@@ -199,10 +234,10 @@ export const buildArgs = ({ pythonPath, model, prompt, negativePrompt, width, he
     // The route always emits parallel referenceImageStrengths (defaulting to
     // 1.0 per ref); the runner honors them per-reference via a runtime patch
     // on Flux2KVLayerCache.store + _flux2_kv_causal_attention.
-    if (referenceImagePaths?.length) {
-      args.push('--reference-images', ...referenceImagePaths);
-      if (referenceImageStrengths?.length) {
-        args.push('--reference-strengths', ...referenceImageStrengths.map(String));
+    if (refImagePaths?.length) {
+      args.push('--reference-images', ...refImagePaths);
+      if (refImageStrengths?.length) {
+        args.push('--reference-strengths', ...refImageStrengths.map(String));
       }
     }
     if (stepwiseDir) args.push('--stepwise-image-output-dir', stepwiseDir);
@@ -680,13 +715,16 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
       // page (and we set kind=gated_repo so the client knows to surface the
       // token-entry form).
       if (!userMessage) {
-        const gatedUrlMatch = lines
-          .map((l) => l.match(/Cannot access gated repo for url https?:\/\/huggingface\.co\/([^/\s]+\/[^/\s]+)\//))
-          .find(Boolean);
-        const hasGatedError = lines.some((l) => /GatedRepoError|Access to model .* is restricted/.test(l));
-        if (gatedUrlMatch || hasGatedError) {
+        const gatedText = lines.join('\n');
+        // Classify as gated ONLY on a gated-specific signal — extractGatedRepo
+        // matches any huggingface.co/<owner>/<repo> URL, so a non-gated failure
+        // (404, network error) that merely prints a HF URL must NOT be turned
+        // into a misleading license-request flow. Extract the repo for the link
+        // only after the gated signal is confirmed.
+        const hasGatedError = /GatedRepoError|Access to model .* is restricted|Cannot access gated repo/i.test(gatedText);
+        if (hasGatedError) {
           userKind = 'gated_repo';
-          userRepo = gatedUrlMatch ? gatedUrlMatch[1] : null;
+          userRepo = extractGatedRepo(gatedText);
           const repoText = userRepo || 'the model';
           userMessage = `Access to ${repoText} is gated. Accept the license at https://huggingface.co/${userRepo || '<repo>'} and paste your HuggingFace token into Image Gen settings, then retry.`;
         }

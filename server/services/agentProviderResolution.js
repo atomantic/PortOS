@@ -28,7 +28,24 @@ import { selectModelForTask } from './agentModelSelection.js';
  * >}
  */
 export async function resolveAgentProviderAndModel(task) {
-  let provider = await getActiveProvider();
+  // A task can pin a specific provider via metadata.provider (e.g. a CoS job's
+  // per-job AI override). Resolve it BEFORE the active-provider availability
+  // gate so a pinned-but-healthy provider isn't blocked when the *active*
+  // provider is down or unset — independence from the active provider is the
+  // whole point of pinning. The pinned provider then runs through the same
+  // availability/fallback logic below as any other resolved provider.
+  let provider = null;
+  const userProviderId = task.metadata?.provider;
+  if (userProviderId) {
+    const userProvider = await getProviderById(userProviderId);
+    if (userProvider) {
+      emitLog('info', `Using user-specified provider: ${userProviderId}`, { taskId: task.id });
+      provider = userProvider;
+    } else {
+      emitLog('warn', `User-specified provider "${userProviderId}" not found, using active provider`, { taskId: task.id });
+    }
+  }
+  if (!provider) provider = await getActiveProvider();
 
   if (!provider) {
     return { ok: false, error: 'No active AI provider configured' };
@@ -69,22 +86,6 @@ export async function resolveAgentProviderAndModel(task) {
     } else {
       const errorMsg = `Provider ${provider.id} unavailable (${status.message}) and no fallback available`;
       return { ok: false, error: errorMsg, providerId: provider.id, providerStatus: status };
-    }
-  }
-
-  // Check if user specified a different provider in task metadata
-  const userProviderId = task.metadata?.provider;
-  if (userProviderId && userProviderId !== provider.id) {
-    const userProvider = await getProviderById(userProviderId);
-    if (userProvider) {
-      emitLog('info', `Using user-specified provider: ${userProviderId}`, { taskId: task.id });
-      provider = userProvider;
-      // The fallback pin belonged to the fallback provider we just replaced —
-      // it must not carry onto the user's explicitly chosen provider, which
-      // gets its own normal model selection.
-      fallbackModelPin = null;
-    } else {
-      emitLog('warn', `User-specified provider "${userProviderId}" not found, using active provider`, { taskId: task.id });
     }
   }
 

@@ -14,7 +14,7 @@ import { useEffect, useState } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, Save, Loader2, Workflow as WorkflowIcon, Globe, NotebookPen,
-  PanelLeftClose, PanelLeftOpen, Sparkles, BookOpen,
+  PanelLeftClose, PanelLeftOpen, Sparkles, BookOpen, FileInput,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import ArcCanvas from '../components/pipeline/ArcCanvas';
@@ -25,8 +25,10 @@ import {
   listPipelineIssues,
   listUniverses,
   generateSeriesTitleLogo,
-  SERIES_TITLE_LOGO_MAX, SERIES_AUTHOR_MAX,
+  SERIES_TITLE_LOGO_MAX,
 } from '../services/api';
+import AuthorPicker from '../components/pipeline/AuthorPicker';
+import { buildImporterLink } from '../lib/importerDeepLink';
 import { recommendStructure, describeStructure } from '../lib/seasonStructure';
 import { useLocalStorageBool } from '../hooks/useLocalStorageBool';
 import { useArcCanvasSync } from '../hooks/useArcCanvasSync';
@@ -46,12 +48,13 @@ const STYLE_OVERRIDE_MODE_TABS = [
 // empty-value defaults the server expects for the optional ones. Module-level
 // constants so the `useArcCanvasSync` callbacks keep a stable identity.
 const ARC_FLUSH_FIELDS = [
-  'name', 'logline', 'premise', 'styleNotes', 'titleLogo', 'author',
+  'name', 'logline', 'premise', 'styleNotes', 'titleLogo', 'author', 'authorId',
   'stylePromptOverride', 'stylePromptOverrideMode', 'issueCountTarget', 'universeId',
 ];
 const ARC_PAYLOAD_DEFAULTS = {
   titleLogo: '',
   author: '',
+  authorId: null,
   stylePromptOverride: '',
   stylePromptOverrideMode: STYLE_OVERRIDE_MODE_DEFAULT,
 };
@@ -184,6 +187,13 @@ export default function PipelineSeries() {
             >
               <BookOpen size={12} /> Manuscript
             </Link>
+            <Link
+              to={buildImporterLink({ universeId: series.universeId, seriesId: series.id })}
+              className="ml-2 inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-gray-400 hover:text-white border border-port-border bg-port-card"
+              title="Import an existing manuscript, novel, screenplay, or comic script into this series"
+            >
+              <FileInput size={12} /> Import
+            </Link>
             <button
               type="button"
               onClick={handleSave}
@@ -248,12 +258,10 @@ function BibleSidebar({ series, universes, patchSeries, onSeriesUpdate, onFlushP
         />
       </Field>
       <Field label="Author (cover byline + title screen)">
-        <input
-          value={series.author || ''}
-          onChange={(e) => patchSeries({ author: e.target.value })}
-          placeholder="Jane Doe"
-          className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
-          maxLength={SERIES_AUTHOR_MAX}
+        <AuthorPicker
+          value={series.authorId}
+          byline={series.author}
+          onChange={(authorId, name) => patchSeries({ authorId: authorId || null, author: name })}
         />
       </Field>
       <Field label="Logline">

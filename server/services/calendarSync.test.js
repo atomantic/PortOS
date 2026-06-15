@@ -7,6 +7,15 @@ vi.mock('./calendarAccounts.js', () => ({
   mergeDiscoveredSubcalendars: vi.fn()
 }));
 
+// Force the "no OAuth configured" path deterministically. Without this mock
+// the test reads the developer's REAL Google credentials/tokens off disk —
+// on a machine with credentials configured, the auth client materializes and
+// the sync fails later with a GaxiosError (400 invalid_grant) instead of the
+// 401 this test pins.
+vi.mock('./googleAuth.js', () => ({
+  getAuthenticatedClient: vi.fn(async () => null),
+}));
+
 import { syncAccount } from './calendarSync.js';
 import { mcpSyncAccount, mcpDiscoverCalendars } from './calendarGoogleSync.js';
 import { apiSyncAccount, apiDiscoverCalendars } from './calendarGoogleApiSync.js';

@@ -74,8 +74,16 @@ client/package-lock.json
 server/package-lock.json
 __pycache__/
 
+# Temporary reference/scrape files created while building Freydis LoRA datasets
+tmp/freydis*
+tmp/portos-index.js
+tmp/LoraDatasetDetail.js
+
 # Runtime cache (e.g. projects.json) — regenerated, never committed
 cache/
 
 .antigravitycli
 .superpowers/
+
+
+tmp

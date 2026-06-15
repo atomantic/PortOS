@@ -331,6 +331,13 @@ def parse_args() -> argparse.Namespace:
                         "ltx-2.3-22b-distilled-lora-384.safetensors.")
     p.add_argument("--lora-strength", type=float, default=1.0,
                    help="Distilled-LoRA fusion strength (default 1.0, matches dgrauet's CLI).")
+    p.add_argument("--user-loras", default=None,
+                   help="JSON list of {path, strength} dicts — user LoRAs (e.g. a "
+                        "fal LTX-2.3 LoRA) fused into the transformer via the pipeline's "
+                        "_pending_loras hook, the same mechanism upstream's "
+                        "`ltx-2-mlx generate --lora <path> <strength>` uses. Works across "
+                        "all modes (text/image/fflf/extend/a2v) because every pipeline "
+                        "loads its DiT through _load_transformer_with_optional_streaming.")
     p.add_argument("--image", default=None, help="Source/start frame (image, fflf modes)")
     p.add_argument("--last-image", default=None, help="End frame (fflf mode)")
     p.add_argument("--keyframes-json", default=None,
@@ -356,6 +363,58 @@ def parse_args() -> argparse.Namespace:
                         "skipping = faster but lower fidelity (~1.2x at 0.5, up to ~3x at 1.5). "
                         "Omit to use the pipeline default (0.5).")
     return p.parse_args()
+
+
+def _parse_user_loras(raw: str | None) -> list[tuple[str, float]]:
+    """Parse --user-loras JSON into a list of (path, strength) tuples.
+
+    Validation is strict so a Node-side bug surfaces here before any GPU work.
+    Each entry must be {path: str (existing file), strength: number}. Returns
+    [] when --user-loras is unset.
+    """
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise SystemExit(f"--user-loras is not valid JSON: {e}")
+    if not isinstance(data, list):
+        raise SystemExit("--user-loras must be a JSON list of {path, strength}")
+    specs: list[tuple[str, float]] = []
+    for i, item in enumerate(data):
+        if not isinstance(item, dict) or "path" not in item:
+            raise SystemExit(f"user-loras[{i}] must be an object with 'path'")
+        path = item["path"]
+        if not isinstance(path, str) or not path:
+            raise SystemExit(f"user-loras[{i}].path must be a non-empty string")
+        if not Path(path).exists():
+            raise SystemExit(f"user-loras[{i}].path does not exist: {path}")
+        strength = item.get("strength", 1.0)
+        try:
+            strength = float(strength)
+        except (TypeError, ValueError):
+            raise SystemExit(f"user-loras[{i}].strength must be a number")
+        specs.append((path, strength))
+    return specs
+
+
+def _apply_user_loras(pipe, specs: list[tuple[str, float]]) -> None:
+    """Set the pipeline's _pending_loras hook so user-LoRA deltas fuse into the
+    transformer at load time.
+
+    The DiT loads lazily inside generate_and_save (via
+    _load_transformer_with_optional_streaming, which reads _pending_loras and
+    fuses the deltas before quantization), so setting it on the constructed
+    pipe — before the generate call — is sufficient. This is the exact
+    mechanism the upstream `ltx-2-mlx generate --lora` CLI uses, and it works
+    across every mode because all pipelines route DiT construction through that
+    one method. No-op when no user LoRAs were requested.
+    """
+    if not specs:
+        return
+    pipe._pending_loras = list(specs)
+    names = ", ".join(f"{Path(p).name}@{s:g}" for p, s in specs)
+    emit_status(f"Fusing {len(specs)} user LoRA(s): {names}")
 
 
 def bind_output_fps(pipe, fps: float) -> None:
@@ -486,6 +545,7 @@ def run_two_stage(args: argparse.Namespace, image: str | None = None) -> str:
         distilled_lora=args.distilled_lora or "ltx-2.3-22b-distilled-lora-384.safetensors",
         distilled_lora_strength=args.lora_strength,
     )
+    _apply_user_loras(pipe, args.user_lora_specs)
     bind_output_fps(pipe, args.fps)
     emit_stage(1, 1, 1, "Loaded")
     emit_status("Generating with CFG…")
@@ -511,6 +571,7 @@ def run_text(args: argparse.Namespace) -> str:
     emit_status(f"Loading T2V pipeline ({args.model})…")
     emit_stage(1, 0, 1, "Loading model")
     pipe = OneStagePipeline(model_dir=args.model, gemma_model_id=args.gemma)
+    _apply_user_loras(pipe, args.user_lora_specs)
     bind_output_fps(pipe, args.fps)
     emit_stage(1, 1, 1, "Loaded")
     emit_status("Generating T2V…")
@@ -532,6 +593,7 @@ def run_image(args: argparse.Namespace) -> str:
     emit_status(f"Loading I2V pipeline ({args.model})…")
     emit_stage(1, 0, 1, "Loading model")
     pipe = OneStagePipeline(model_dir=args.model, gemma_model_id=args.gemma)
+    _apply_user_loras(pipe, args.user_lora_specs)
     bind_output_fps(pipe, args.fps)
     emit_stage(1, 1, 1, "Loaded")
     emit_status("Generating I2V…")
@@ -619,6 +681,7 @@ def run_fflf(args: argparse.Namespace) -> str:
         distilled_lora=distilled_lora,
         distilled_lora_strength=args.lora_strength,
     )
+    _apply_user_loras(pipe, args.user_lora_specs)
     emit_stage(1, 1, 1, "Loaded")
     emit_status(f"Interpolating between {len(keyframe_images)} keyframes at indices {keyframe_indices}…")
     return pipe.generate_and_save(
@@ -656,6 +719,7 @@ def run_extend(args: argparse.Namespace) -> str:
     emit_status(f"Loading Extend pipeline ({args.model})…")
     emit_stage(1, 0, 1, "Loading model")
     pipe = ExtendPipeline(model_dir=args.model, gemma_model_id=args.gemma)
+    _apply_user_loras(pipe, args.user_lora_specs)
     emit_stage(1, 1, 1, "Loaded")
     emit_status(f"Extending video {args.extend_direction} by {args.extend_frames} latent frames…")
     num_steps = args.steps if args.steps is not None else 30
@@ -709,6 +773,7 @@ def run_a2v(args: argparse.Namespace) -> str:
     emit_status(f"Loading A2V pipeline ({args.model})…")
     emit_stage(1, 0, 1, "Loading model")
     pipe = AudioToVideoPipeline(model_dir=args.model, gemma_model_id=args.gemma)
+    _apply_user_loras(pipe, args.user_lora_specs)
     emit_stage(1, 1, 1, "Loaded")
     emit_status(f"Generating A2V from {Path(args.audio).name}…")
     stage1_steps = args.steps if args.steps is not None else 30
@@ -771,6 +836,9 @@ def maybe_strip_audio(output_path: str) -> None:
 def main() -> NoReturn:
     args = parse_args()
     Path(args.output).parent.mkdir(parents=True, exist_ok=True)
+    # Parse user LoRAs once up-front (strict validation surfaces bad input
+    # before any model load). Each run_* sets pipe._pending_loras from this.
+    args.user_lora_specs = _parse_user_loras(args.user_loras)
     configure_negative_prompt(args.negative_prompt)
 
     runners = {

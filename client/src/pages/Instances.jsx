@@ -7,7 +7,7 @@ import {
   Database, Brain, CheckCircle2, AlertCircle, Clock,
   RefreshCcw, Timer,
   Target, Sword, Fingerprint, HeartPulse, ChevronDown, ChevronRight,
-  Lock, Globe, Info, Sparkles, Film, Images, Library, BookOpen
+  Lock, Globe, Info, Sparkles, Film, Images, Library, BookOpen, FilePen
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import Pill from '../components/ui/Pill';
@@ -492,11 +492,15 @@ const SYNC_CATEGORY_META = [
   { key: 'mediaCollections', label: 'Media Collections', icon: Images, description: 'Per-universe/series image + video buckets' },
   { key: 'videoHistory', label: 'Video History', icon: Film, description: 'Generated-video metadata rows (so synced collection videos render)' },
   { key: 'storyBuilder', label: 'Story Builder', icon: BookOpen, description: 'Resumable Story Builder sessions you marked for cross-machine sync' },
+  { key: 'authors', label: 'Authors', icon: FilePen, description: 'Author personas + headshots used as series bylines (PostgreSQL)' },
   { key: 'catalog', label: 'Catalog', icon: Library, description: 'Creative ingredients catalog: orphan ingredients + ref links (PostgreSQL)' }
 ];
 
-// Snapshot categories (excludes delta-based brain/memory/catalog)
-const SNAPSHOT_CATEGORIES = SYNC_CATEGORY_META.filter(m => m.key !== 'brain' && m.key !== 'memory' && m.key !== 'catalog');
+// Snapshot categories — exclude the per-record / delta-based categories that
+// have no 60s snapshot checksum: brain + memory (delta), catalog + authors
+// (PostgreSQL, per-record peer-push only — no snapshot loop).
+const NON_SNAPSHOT_KEYS = new Set(['brain', 'memory', 'catalog', 'authors']);
+const SNAPSHOT_CATEGORIES = SYNC_CATEGORY_META.filter(m => !NON_SNAPSHOT_KEYS.has(m.key));
 
 function SyncCategoriesPanel({ peer, onRefresh }) {
   const [expanded, setExpanded] = useState(false);

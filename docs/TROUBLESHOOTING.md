@@ -278,6 +278,48 @@ npm test -- taskParser.test.js
 npm run test:watch
 ```
 
+## Known Issues
+
+### GPU watchdog kernel panic during LoRA training
+
+**Symptom**: The whole machine hard-reboots while an mflux LoRA training run is
+active. After reboot you may see downstream PortOS errors — training failed with
+`SIGINT`/`KeyboardInterrupt`, `Tombstone sweep failed: timeout … connect`, CoS
+`xhr poll error`. The crash report under `/Library/Logs/DiagnosticReports/` reads:
+
+```
+panic(cpu N caller 0x…): watchdog timeout: no checkins from watchdogd in 90 seconds
+```
+
+**Cause**: A system-level hang (not a PortOS or training-script bug) — the machine
+stopped making forward progress long enough that the hardware watchdog
+force-rebooted it. On new Apple Silicon (M5 / `Mac17,7`) under sustained Metal/GPU
+load this is most likely a GPU/Metal driver hang; thermal/power or severe swap
+thrash are secondary possibilities. First observed 2026-06-13 (twice in one day).
+
+**Mitigations already in place**:
+- Training checkpoints at least every `ceil(totalSteps/4)` steps
+  (`MFLUX_MIN_CHECKPOINTS`), so a crash loses at most ~¼ of a run. Resume from the
+  newest `checkpoints/*.zip` via the UI's resume action or `--resume-checkpoint`.
+- Each run captures GPU/thermal/power telemetry to `<run>/powermetrics.log` (a
+  resume rolls to a timestamped `powermetrics.<ts>.log` so the pre-crash log is
+  preserved) when passwordless `powermetrics` is configured (see the incident
+  record for the sudoers rule).
+- Memory pressure is bounded before each run (`memoryPrep.js`): resident Ollama /
+  LM Studio models on loopback-local backends are unloaded to free unified memory
+  (a remote LAN backend is left untouched), the encoded-dataset cache
+  always spills to disk (`low_ram`), the quantize tier is sized to *available*
+  memory rather than total RAM, and a run refuses to start when under ~24 GB is
+  free — so an oversubscribed run can't swap-thrash the box into a reboot. If a
+  run won't start with a "not enough free memory" error, stop other model servers
+  or close apps and retry.
+
+**What to do / how to investigate**: see the full incident record and checklist in
+[`docs/research/2026-06-13-mflux-training-watchdog-panic.md`](research/2026-06-13-mflux-training-watchdog-panic.md).
+Short version: read the run's newest `powermetrics*.log` (climbing GPU temp → cooling/power;
+log just stops at normal temps → driver hang), reduce batch size/resolution/rank as
+a test, and update macOS + `mflux`/`mlx`.
+
 ## Getting Help
 
 1. **Check logs**: `pm2 logs` shows all process output

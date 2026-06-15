@@ -20,6 +20,10 @@ vi.mock('../mediaCollections.js', () => ({
   pruneTombstonedCollections: vi.fn().mockResolvedValue({ pruned: 0 }),
   listCollections: vi.fn().mockResolvedValue([]),
 }));
+vi.mock('../authors/index.js', () => ({
+  pruneTombstonedAuthors: vi.fn().mockResolvedValue({ pruned: 0 }),
+  listAuthorIds: vi.fn().mockResolvedValue([]),
+}));
 vi.mock('../../lib/conflictJournal.js', () => ({
   pruneOrphanedBaseHashes: vi.fn().mockResolvedValue({ pruned: 0 }),
 }));
@@ -43,6 +47,7 @@ import { pruneTombstonedUniverses, listUniverses } from '../universeBuilder.js';
 import { pruneTombstonedSeries, listSeries } from '../pipeline/series.js';
 import { pruneTombstonedIssues, listIssueIds } from '../pipeline/issues.js';
 import { pruneTombstonedCollections, listCollections } from '../mediaCollections.js';
+import { pruneTombstonedAuthors, listAuthorIds } from '../authors/index.js';
 import { pruneOrphanedBaseHashes } from '../../lib/conflictJournal.js';
 import { listPeerSubscriptions, pruneOrphanedPeerSubscriptions } from './peerSync.js';
 import { getMinAckAcrossPeers } from './peerTombstoneCursors.js';
@@ -337,8 +342,9 @@ describe('sweepTombstones — return shape', () => {
     pruneTombstonedSeries.mockResolvedValueOnce({ pruned: 0 });
     pruneTombstonedIssues.mockResolvedValueOnce({ pruned: 5 });
     pruneTombstonedCollections.mockResolvedValueOnce({ pruned: 3 });
+    pruneTombstonedAuthors.mockResolvedValueOnce({ pruned: 1 });
     const result = await sweepTombstones({ now: NOW });
-    expect(result).toEqual({ universes: 2, series: 0, issues: 5, collections: 3, orphanBaseHashes: 0, orphanSubscriptions: 0, refused: [] });
+    expect(result).toEqual({ universes: 2, series: 0, issues: 5, collections: 3, authors: 1, orphanBaseHashes: 0, orphanSubscriptions: 0, refused: [] });
   });
 
   it('lists kinds whose cutoff was null in `refused` so the manual-trigger UI can explain why nothing pruned', async () => {

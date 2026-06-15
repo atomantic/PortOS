@@ -6,6 +6,7 @@ import {
   filterSelectableModels,
   filterGenerationModels,
   isEmbeddingModel,
+  isVisionModel,
   localBackendForProvider,
   mergeModelLists,
   modelOptionLabel,
@@ -195,6 +196,24 @@ describe('isEmbeddingModel / filterGenerationModels', () => {
       'qwen3.6:35b',
       'llama3.2:latest',
     ])).toEqual(['qwen3.6:35b', 'llama3.2:latest']);
+  });
+});
+
+describe('isVisionModel (mirror of server localModelHeuristics)', () => {
+  it('flags known vision model ids', () => {
+    for (const id of [
+      'qwen2.5-vl:7b', 'qwen2.5vl', 'qwen2.5vl:32b', 'llava:latest', 'moondream:latest', 'minicpm-v:8b',
+      'llama3.2-vision:11b', 'pixtral-12b', 'gemma3:4b', 'internvl2:8b', 'glm-4v:9b',
+    ]) {
+      expect(isVisionModel(id), id).toBe(true);
+    }
+  });
+
+  it('does not flag text-only models or non-strings', () => {
+    for (const id of ['llama3.1:8b', 'qwen2.5:7b', 'gpt-oss:20b', '']) {
+      expect(isVisionModel(id), id).toBe(false);
+    }
+    expect(isVisionModel(null)).toBe(false);
   });
 });
 

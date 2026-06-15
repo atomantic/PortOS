@@ -1,14 +1,17 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { FileInput, Loader2, ArrowLeft, CheckCircle2, AlertTriangle, ChevronDown, ChevronRight, Wand2 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import { useImporterProgress, stageStatusIcon } from '../hooks/useImporterProgress';
 import { STORY_SHAPES } from '../components/pipeline/StoryShapes';
 import EntryCard from '../components/universe/EntryCard';
+import EntityCombobox from '../components/EntityCombobox';
 import ProviderModelSelector from '../components/ProviderModelSelector';
 import useProviderModels from '../hooks/useProviderModels';
 import { previewCanonFragments } from '../lib/canonPrompt';
+import { resolveImporterDeepLink } from '../lib/importerDeepLink';
+import { listUniverses, listPipelineSeries } from '../services/api';
 import {
   analyzeImport,
   classifyImport,
@@ -104,9 +107,89 @@ const emptyIntake = () => ({
 
 export default function Importer() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [phase, setPhase] = useState('intake'); // 'intake' | 'review'
   const [intake, setIntake] = useState(emptyIntake);
   const [preview, setPreview] = useState(null);
+
+  // Existing universes + series power the intake autocomplete: the importer
+  // matches the typed universe/series by name (case-insensitive), so surfacing
+  // the real records lets the user land an exact match instead of guessing the
+  // spelling. `listsLoaded` distinguishes "still fetching" from "fetched and
+  // legitimately empty" so the deep-link resolver doesn't wait forever on an
+  // install with no universes yet.
+  const [universes, setUniverses] = useState([]);
+  const [allSeries, setAllSeries] = useState([]);
+  const [listsLoaded, setListsLoaded] = useState(false);
+  useEffect(() => {
+    let canceled = false;
+    Promise.all([
+      listUniverses({ silent: true }).catch(() => []),
+      listPipelineSeries({ silent: true }).catch(() => []),
+    ]).then(([u, s]) => {
+      if (canceled) return;
+      setUniverses(Array.isArray(u) ? u : []);
+      setAllSeries(Array.isArray(s) ? s : []);
+      setListsLoaded(true);
+    });
+    return () => { canceled = true; };
+  }, []);
+
+  // Apply a `?universeId=…&seriesId=…` (or name-param) deep-link exactly once,
+  // after the lists load so ids can resolve to names. Guarded by a ref so a
+  // later list refresh or param change can't clobber what the user has since
+  // typed.
+  const deepLinkAppliedRef = useRef(false);
+  useEffect(() => {
+    if (deepLinkAppliedRef.current || !listsLoaded) return;
+    deepLinkAppliedRef.current = true;
+    const { universeName, seriesName } = resolveImporterDeepLink({
+      universeId: searchParams.get('universeId'),
+      seriesId: searchParams.get('seriesId'),
+      universeName: searchParams.get('universe'),
+      seriesName: searchParams.get('series'),
+      universes,
+      series: allSeries,
+    });
+    if (!universeName && !seriesName) return;
+    setIntake((prev) => ({
+      ...prev,
+      ...(universeName ? { universeName } : {}),
+      ...(seriesName ? { seriesName } : {}),
+    }));
+  }, [listsLoaded, searchParams, universes, allSeries]);
+
+  // The importer matches by name, so derive the matched universe straight from
+  // the typed name rather than tracking a separate "selected id" that could
+  // drift out of sync with the input. The matched id scopes the series
+  // autocomplete to that universe (series names are matched within a universe).
+  const universeMatch = useMemo(() => {
+    const lower = intake.universeName.trim().toLowerCase();
+    if (!lower) return null;
+    return universes.find((u) => (u.name || '').trim().toLowerCase() === lower) || null;
+  }, [universes, intake.universeName]);
+  const universeSeries = useMemo(
+    () => (universeMatch ? allSeries.filter((s) => s.universeId === universeMatch.id) : []),
+    [allSeries, universeMatch],
+  );
+  const seriesMatch = useMemo(() => {
+    const lower = intake.seriesName.trim().toLowerCase();
+    if (!lower) return null;
+    return universeSeries.find((s) => (s.name || '').trim().toLowerCase() === lower) || null;
+  }, [universeSeries, intake.seriesName]);
+
+  // Combobox option shapes. Memoized so a stable array identity reaches the
+  // child instead of a fresh `.map()` allocation on every keystroke-driven
+  // render. Universes prefer a logline subtitle, falling back to the starter
+  // prompt; series only carry a logline.
+  const universeItems = useMemo(
+    () => universes.map((u) => ({ id: u.id, name: u.name, subtitle: u.logline || u.starterPrompt || '' })),
+    [universes],
+  );
+  const seriesItems = useMemo(
+    () => universeSeries.map((s) => ({ id: s.id, name: s.name, subtitle: s.logline || '' })),
+    [universeSeries],
+  );
 
   // Live analyze-phase stage progress, driven by `importer:progress` socket
   // frames. `null` = no run started yet. See `useImporterProgress`.
@@ -395,6 +478,10 @@ export default function Importer() {
         <IntakeForm
           intake={intake}
           setIntake={setIntake}
+          universeItems={universeItems}
+          universeSelectedId={universeMatch?.id || null}
+          seriesItems={seriesItems}
+          seriesSelectedId={seriesMatch?.id || null}
           sourceCharLimit={config.sourceCharLimit}
           analyzing={analyzing}
           analyzeStages={analyzeStages}
@@ -444,13 +531,21 @@ export default function Importer() {
 }
 
 function IntakeForm({
-  intake, setIntake, sourceCharLimit, analyzing, analyzeStages, onAnalyze, classifying, onClassify, classifyHint,
+  intake, setIntake,
+  universeItems, universeSelectedId, seriesItems, seriesSelectedId,
+  sourceCharLimit, analyzing, analyzeStages, onAnalyze, classifying, onClassify, classifyHint,
   providers, llmProvider, llmModel, llmModels, onProviderChange, onModelChange,
 }) {
   const sourceLen = intake.source.length;
   const sourceOver = sourceLen > sourceCharLimit;
   const intakeValid = intake.universeName.trim() && intake.seriesName.trim() && intake.source.trim() && !sourceOver;
   const canClassify = intake.source.trim().length > 0 && !sourceOver && !classifying && !analyzing;
+  // Unlike the Universe creator (which creates a record via its onCreate), the
+  // importer never eagerly creates — typing a non-matching name IS the create,
+  // and the server mints the universe/series on commit. Passing onCreate just
+  // surfaces the confirming "New … 'X'" row; committing it only needs to close
+  // the dropdown (EntityCombobox already does), so the handler is a no-op.
+  const confirmNewName = () => {};
   return (
     <form
       className="space-y-4 bg-port-card border border-port-border rounded-lg p-4 sm:p-6"
@@ -466,31 +561,50 @@ function IntakeForm({
           <label htmlFor="importer-universe-name" className="block text-sm font-medium mb-1">
             Universe Name
           </label>
-          <input
-            id="importer-universe-name"
-            type="text"
+          <EntityCombobox
+            items={universeItems}
+            selectedId={universeSelectedId}
             value={intake.universeName}
-            onChange={(e) => setIntake({ ...intake, universeName: e.target.value })}
-            placeholder="e.g. Cyberpunk 2099"
-            className="w-full bg-port-bg border border-port-border rounded px-3 py-2 text-sm focus:outline-none focus:border-port-accent"
-            maxLength={200}
+            onChange={(name) => setIntake({ ...intake, universeName: name })}
+            onPick={(item) => setIntake({ ...intake, universeName: item.name })}
+            onCreate={confirmNewName}
+            inputId="importer-universe-name"
+            noun="universe"
+            placeholder="Search universes or type a new name… e.g. Cyberpunk 2099"
+            createPrefix="New universe"
+            className="w-full"
           />
-          <p className="text-xs text-port-text-muted mt-1">Existing universe is matched by name (case-insensitive); otherwise created fresh.</p>
+          <p className="text-xs text-port-text-muted mt-1">
+            {universeSelectedId
+              ? 'Matched an existing universe — the import is added to it.'
+              : 'Existing universe is matched by name (case-insensitive); otherwise created fresh on import.'}
+          </p>
         </div>
         <div>
           <label htmlFor="importer-series-name" className="block text-sm font-medium mb-1">
             Series Name
           </label>
-          <input
-            id="importer-series-name"
-            type="text"
+          <EntityCombobox
+            items={seriesItems}
+            selectedId={seriesSelectedId}
             value={intake.seriesName}
-            onChange={(e) => setIntake({ ...intake, seriesName: e.target.value })}
-            placeholder="e.g. The Choir Awakens"
-            className="w-full bg-port-bg border border-port-border rounded px-3 py-2 text-sm focus:outline-none focus:border-port-accent"
-            maxLength={200}
+            onChange={(name) => setIntake({ ...intake, seriesName: name })}
+            onPick={(item) => setIntake({ ...intake, seriesName: item.name })}
+            onCreate={confirmNewName}
+            inputId="importer-series-name"
+            noun="series"
+            placeholder="Search this universe's series or type a new name… e.g. The Choir Awakens"
+            createPrefix="New series"
+            emptyNoItems={intake.universeName.trim()
+              ? 'No series in this universe yet — type a name.'
+              : 'Pick a universe above to list its series, or type a new name.'}
+            className="w-full"
           />
-          <p className="text-xs text-port-text-muted mt-1">Series match is scoped to the universe — same name in a different universe creates a fresh series.</p>
+          <p className="text-xs text-port-text-muted mt-1">
+            {seriesSelectedId
+              ? 'Matched an existing series — the import extends it.'
+              : 'Series match is scoped to the universe — same name in a different universe creates a fresh series.'}
+          </p>
         </div>
       </div>
 

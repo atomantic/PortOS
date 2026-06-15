@@ -78,24 +78,26 @@ INSTALL_VIDEO="${INSTALL_VIDEO:-$DEFAULT_INSTALL_VIDEO}"
 if [[ "$INSTALL_MFLUX" == "1" ]]; then
   # Install via pip --user so we don't pollute the system or require a venv.
   # mflux comes with the mflux-generate CLI which the local image backend
-  # spawns directly. transformers<5 is required for MLX compatibility.
+  # spawns directly. Pin >=0.17: that's the first release with FLUX.2 LoRA
+  # training (`mflux-train --config`, `flux2-klein-*` base models). Older
+  # mflux (0.12.x) wants `--train-config` and has no flux2 models, so its
+  # trainer dies with a bare "exited with code 2" — see train_mflux_lora.py.
   #
-  # `--force-reinstall --no-deps` on mflux only — earlier setup runs could
-  # leave the user-site copy at the right version number but with stale file
-  # layout (we hit this in 0.12.1, where `mflux/models/flux/cli/` was missing
-  # from a partial reinstall, breaking the entry-point shim). Forcing the
-  # reinstall flushes the file tree without re-resolving torch/mlx and friends.
   echo "📦 Installing image generation packages (mflux + deps)..."
-  "$PYTHON_BIN" -m pip install --upgrade --user --force-reinstall --no-deps mflux
-  # mflux above is installed with --no-deps to flush its file tree without
-  # re-resolving torch/mlx — but that means we must explicitly install mflux's
-  # own runtime deps here (notably `mlx` on macOS, which it imports at startup).
-  # Without this, INSTALL_VIDEO=0 leaves mflux unable to import.
-  MFLUX_DEPS=("transformers<5" safetensors huggingface_hub numpy opencv-python tqdm)
-  if is_macos; then
-    MFLUX_DEPS+=(mlx)
-  fi
-  "$PYTHON_BIN" -m pip install --upgrade --user "${MFLUX_DEPS[@]}"
+  # Step 1: force-reinstall mflux's OWN files with --no-deps to flush a stale
+  # file layout left by a partial reinstall (we hit this on 0.12.1, where
+  # `mflux/models/flux/cli/` went missing, breaking the entry-point shim)
+  # WITHOUT re-downloading the heavy torch/mlx tree.
+  "$PYTHON_BIN" -m pip install --upgrade --user --force-reinstall --no-deps 'mflux>=0.17'
+  # Step 2: let pip install mflux's DECLARED runtime deps — pip is the source
+  # of truth, not a hand-kept list. mflux 0.17 imports packages the 0.12.x set
+  # omitted (pillow, matplotlib, platformdirs, sentencepiece, piexif, …) and
+  # constrains transformers>=5,<6 and mlx<0.32; a hand list silently drifts and
+  # leaves `mflux-train` failing at import before it can reach the trainer.
+  # No --no-deps (so missing deps ARE pulled) and no --upgrade (so an
+  # already-satisfied heavyweight like torch isn't re-resolved/re-downloaded on
+  # repeat runs); a dep that violates mflux's constraints is still corrected.
+  "$PYTHON_BIN" -m pip install --user 'mflux>=0.17'
 fi
 
 if [[ "$INSTALL_VIDEO" == "1" ]]; then

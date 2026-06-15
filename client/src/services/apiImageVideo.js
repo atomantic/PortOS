@@ -202,6 +202,16 @@ export const installLoraFromCivitai = ({ url, silent = false } = {}) => request(
   silent,
 });
 
+// Install a video LoRA from a HuggingFace repo (fal / Lightricks LTX LoRAs).
+// `family` is an optional override (e.g. 'ltx-video') when autodetection from
+// the repo id/tags can't classify it. `silent` lets the page route HF_AUTH /
+// HF_UNKNOWN_FAMILY errors into its own inline UI.
+export const installLoraFromHuggingface = ({ url, family, silent = false } = {}) => request('/loras/install/huggingface', {
+  method: 'POST',
+  body: JSON.stringify(family ? { url, family } : { url }),
+  silent,
+});
+
 // Civitai LoRA suggestions per runner family. Cached server-side for 1h.
 // Pass `force: true` to bust the cache and re-fetch from Civitai.
 export const getCivitaiSuggestions = ({ force = false } = {}) =>

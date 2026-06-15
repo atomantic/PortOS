@@ -589,6 +589,7 @@ describe('pipeline issues service', () => {
     expect(afterStoryboards.stages.storyboards.scenes[0].slugline).toBe('INT. LAB');
     expect(afterStoryboards.stages.storyboards.genConfig).toEqual({
       imageMode: 'codex', imageModelId: null, refineProvider: null, refineModel: null,
+      applyCharacterLoras: true,
     });
 
     // Patch only cover on comicPages — pages must survive.

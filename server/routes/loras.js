@@ -16,12 +16,15 @@ import {
   deleteLora,
   getLora,
   installFromCivitai,
+  installFromHuggingface,
   listLoras,
   patchLoraSidecar,
 } from '../services/loras.js';
 import { getSuggestions, searchLorasInFamily } from '../services/civitaiSuggestions.js';
+import { getVideoSuggestions } from '../services/videoLoraSuggestions.js';
+import { findLorasByCharacter } from '../services/characterLoraResolver.js';
 import { getSettings, updateSettingsWith } from '../services/settings.js';
-import { RUNNER_FAMILIES } from '../lib/runners.js';
+import { RUNNER_FAMILIES, VIDEO_LORA_FAMILIES } from '../lib/runners.js';
 
 const router = Router();
 
@@ -29,14 +32,19 @@ router.get('/', asyncHandler(async (_req, res) => {
   res.json(await listLoras());
 }));
 
-// Civitai LoRA suggestions per runner family (mflux / flux2 / z-image / ernie).
-// Cached server-side for 1h. `?force=1` busts the cache for a manual refresh.
-// Default 4 cards per family — that's enough to show breadth without
-// overwhelming the panel; users can paste a URL for anything specific.
+// LoRA suggestions — Civitai image LoRAs per runner family (mflux / flux2 /
+// z-image / ernie …) PLUS a curated list of HuggingFace video LoRAs. Cached
+// server-side for 1h. `?force=1` busts both caches for a manual refresh.
+// Default 4 cards per family — enough to show breadth without overwhelming the
+// panel; users can paste a URL for anything specific.
 router.get('/suggestions', asyncHandler(async (req, res) => {
   const force = req.query.force === '1' || req.query.force === 'true';
   const limit = Math.max(1, Math.min(24, Number(req.query.limit) || 4));
-  res.json(await getSuggestions({ force, limit }));
+  const [civitai, video] = await Promise.all([
+    getSuggestions({ force, limit }),
+    getVideoSuggestions({ force }),
+  ]);
+  res.json({ ...civitai, video });
 }));
 
 // Live keyword search + cursor pagination within one runner family. Backs the
@@ -116,6 +124,32 @@ router.post('/install', asyncHandler(async (req, res) => {
   const data = validateRequest(installSchema, req.body);
   const sidecar = await installFromCivitai(data);
   res.status(201).json(sidecar);
+}));
+
+// Install a video LoRA from a HuggingFace repo (fal / Lightricks LTX LoRAs).
+// `family` is an optional override; absence auto-detects from the repo.
+const hfInstallSchema = z.object({
+  url: z.string().min(1).max(1024),
+  family: z.enum(Object.values(VIDEO_LORA_FAMILIES)).optional(),
+  // One-shot token override; absence falls back to the stored/env/CLI HF token.
+  token: z.string().min(1).max(256).optional(),
+});
+router.post('/install/huggingface', asyncHandler(async (req, res) => {
+  const data = validateRequest(hfInstallSchema, req.body);
+  const sidecar = await installFromHuggingface(data);
+  res.status(201).json(sidecar);
+}));
+
+// Trained LoRAs linked to a universe character — used by the character card
+// chip in the universe editor + catalog detail page. 2-segment path keeps it
+// off the `/:filename` wildcard below.
+const byCharacterSchema = z.object({
+  entryId: z.preprocess(emptyToUndefined, z.string().max(128).optional()),
+  ingredientId: z.preprocess(emptyToUndefined, z.string().max(128).optional()),
+}).refine((q) => q.entryId || q.ingredientId, { message: 'entryId or ingredientId required' });
+router.get('/by-character', asyncHandler(async (req, res) => {
+  const { entryId, ingredientId } = validateRequest(byCharacterSchema, req.query);
+  res.json(await findLorasByCharacter({ entryId: entryId || null, ingredientId: ingredientId || null }));
 }));
 
 router.get('/:filename', asyncHandler(async (req, res) => {

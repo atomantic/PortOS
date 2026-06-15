@@ -22,7 +22,7 @@
 import { readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
-import { sanitizeTaskMetadata, PIPELINE_BEHAVIOR_FLAGS, MAX_TOTAL_SPAWNS, normalizeReviewers } from '../lib/validation.js';
+import { sanitizeTaskMetadata, PIPELINE_BEHAVIOR_FLAGS, MAX_TOTAL_SPAWNS, normalizeReviewers, LOCAL_LLM_REVIEWERS, DEFAULT_REVIEWERS } from '../lib/validation.js';
 import { parsePlanItems, extractAllIds, findInProgressIds, pickFirstAvailable, diagnoseUnpickablePlan } from '../lib/planIds.js';
 import { loadState, saveState, withStateLock, isImprovementEnabled, isDaemonRunning } from './cosState.js';
 import { getDomainMode } from '../lib/domainAutonomy.js';
@@ -36,6 +36,7 @@ import { getActiveApps, getAppTaskTypeOverrides } from './apps.js';
 import { getTaskTypeConfidence } from './taskLearning.js';
 import { generateProactiveTasks as generateMissionTasks } from './missions.js';
 import { isRecoveryTask } from './recoveryTasks.js';
+import { getCodeReviewDefaults } from './codeReview.js';
 
 /**
  * Block a task that has exceeded the max spawn limit. Returns true if blocked.
@@ -1383,7 +1384,24 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
     return null;
   }
   const planConstraintBlock = buildPlanConstraintBlock(metadata.planId);
-  const reviewersCsv = normalizeReviewers(metadata).join(',');
+  // Resolve the `{reviewers}` the agent is told to run. When the task itself
+  // didn't pin reviewers, fall back to the user's PortOS Code Review Defaults
+  // (AI Providers → Code Review Defaults) rather than the hardcoded `copilot` —
+  // otherwise scheduled tasks like claim-issue, whose prompt drives the review
+  // loop directly, would always tell the agent to use Copilot regardless of the
+  // user's configured reviewers. Settings I/O failures degrade to the hardcoded
+  // default inside normalizeReviewers, so a read error never blocks dispatch.
+  const codeReviewDefaults = await getCodeReviewDefaults().catch(() => null);
+  // Drop local-LLM reviewers (lmstudio/ollama) from the prompt's {reviewers}
+  // token: the claim/plan prompt templates only document how to drive copilot
+  // and the CLI reviewers (claude/codex/antigravity). Unlike the system
+  // review-loop follow-up prompt (agentPromptBuilder.js), they carry no
+  // local-endpoint invocation instructions, so naming a local-LLM reviewer
+  // here would stall the agent's review step. Fall through to the hardcoded
+  // copilot default when filtering empties the list.
+  const promptReviewers = normalizeReviewers(metadata, codeReviewDefaults?.reviewers)
+    .filter((r) => !LOCAL_LLM_REVIEWERS.includes(r));
+  const reviewersCsv = (promptReviewers.length ? promptReviewers : [...DEFAULT_REVIEWERS]).join(',');
   // claim-issue: expand {issueAuthorFilter} into a concrete directive telling
   // the agent which open issues are claimable. The filter was already merged
   // (global → per-app override) and value-constrained by sanitizeTaskMetadata,

@@ -52,7 +52,11 @@ class RequestBuilder {
     const headers = { ...this._headers };
     let body;
     if (this._body !== undefined) {
-      if (typeof this._body === 'object' && this._body !== null) {
+      if (Buffer.isBuffer(this._body) || this._body instanceof Uint8Array) {
+        // Raw bytes (e.g. a multipart body) — pass through untouched; the
+        // caller sets its own content-type (multipart boundary, etc.).
+        body = this._body;
+      } else if (typeof this._body === 'object' && this._body !== null) {
         body = JSON.stringify(this._body);
         headers['content-type'] ??= 'application/json';
       } else {

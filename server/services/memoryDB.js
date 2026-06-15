@@ -63,6 +63,23 @@ function rowToMeta(row) {
 // CRUD Operations
 // =============================================================================
 
+// The `embedding` column is a fixed-dimension pgvector (768). Now that the
+// embedding provider/model is user-configurable, a mismatched model can yield a
+// vector of a different length — Postgres would then throw "expected 768
+// dimensions" on EVERY insert, aborting the whole bridge resync. Store NULL with
+// one clear warning instead; the record stays un-searchable until it's
+// re-embedded with a matching-dimension model. Returns `{ value, model }` for
+// the embedding + embedding_model columns so both stay consistent.
+function embeddingColumns(embedding) {
+  if (!embedding) return { value: null, model: null };
+  const expected = DEFAULT_MEMORY_CONFIG.embeddingDimension;
+  if (embedding.length !== expected) {
+    console.warn(`⚠️ Skipping memory embedding: got ${embedding.length} dims, column expects ${expected} — check the Brain embedding model`);
+    return { value: null, model: null };
+  }
+  return { value: arrayToPgvector(embedding), model: DEFAULT_MEMORY_CONFIG.embeddingModel };
+}
+
 /**
  * Create a new memory
  */
@@ -72,6 +89,7 @@ export async function createMemory(data, embedding = null) {
   const now = new Date().toISOString();
 
   const originInstanceId = await getInstanceId();
+  const embeddingCol = embeddingColumns(embedding);
 
   const memory = await withTransaction(async (client) => {
     const result = await client.query(
@@ -88,8 +106,8 @@ export async function createMemory(data, embedding = null) {
       ) RETURNING *`,
       [
         id, data.type, data.content, summary, data.category || 'other', data.tags || [],
-        embedding ? arrayToPgvector(embedding) : null,
-        embedding ? DEFAULT_MEMORY_CONFIG.embeddingModel : null,
+        embeddingCol.value,
+        embeddingCol.model,
         data.confidence ?? 0.8, data.importance ?? 0.5,
         data.sourceTaskId || null, data.sourceAgentId || null, data.sourceAppId || null,
         data.expiresAt || null, data.status || 'active', now, now, originInstanceId
@@ -333,15 +351,16 @@ export async function updateMemory(id, updates) {
  * Update a memory's embedding
  */
 export async function updateMemoryEmbedding(id, embedding) {
+  const embeddingCol = embeddingColumns(embedding);
   const result = await query(
     `UPDATE memories SET embedding = $1, embedding_model = $2 WHERE id = $3 RETURNING *`,
-    [arrayToPgvector(embedding), DEFAULT_MEMORY_CONFIG.embeddingModel, id]
+    [embeddingCol.value, embeddingCol.model, id]
   );
 
   if (result.rows.length === 0) return null;
 
   const memory = rowToMemory(result.rows[0]);
-  memory.embedding = embedding;
+  memory.embedding = embeddingCol.value ? embedding : null;
 
   console.log(`🧠 Memory embedding updated: ${id}`);
   return memory;

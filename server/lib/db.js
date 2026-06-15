@@ -20,14 +20,122 @@ const pool = new Pool({
   database: process.env.PGDATABASE || 'portos',
   user: process.env.PGUSER || 'portos',
   password: process.env.PGPASSWORD || 'portos',
-  max: 10,
+  max: 20,
   idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 2000
+  // 10s (was 2s) — a single-user box periodically runs heavy local workloads
+  // (Ollama model pulls, CoS agents) that can briefly delay establishing a
+  // fresh loopback connection past a 2s window, causing spurious "timeout
+  // exceeded when trying to connect" pool errors against a perfectly healthy
+  // Postgres. 10s absorbs the busy moments while still failing fast on a real outage.
+  connectionTimeoutMillis: 10000
 });
 
 pool.on('error', (err) => {
   console.error(`🗄️ Database pool error: ${err.message}`);
 });
+
+/**
+ * Is the configured database a DESIGNATED test database?
+ *
+ * The test runner must NEVER touch a real (production) Postgres — there is only
+ * ONE database per install (`PGDATABASE || 'portos'`), shared by every git
+ * worktree, so a DB-backed `*.db.test.js` suite that does `DELETE FROM universes`
+ * runs against the user's real authored content. (This is exactly how a CoS
+ * agent running the suite in its worktree wiped every universe/series on
+ * 2026-06-13.) A database is "safe for destructive tests" only when its name is
+ * explicitly a test database (ends in `_test`, or the canonical `portos_test`)
+ * or the operator sets `TEST_DB_OK=1` to opt a non-standard name in.
+ *
+ * Consumed by `checkHealth()` (skips DB suites on a non-test DB) and by the
+ * destructive-statement guard in `query()` (a hard backstop).
+ *
+ * @returns {boolean}
+ */
+export function isTestDatabase() {
+  if (process.env.TEST_DB_OK === '1') return true;
+  const db = process.env.PGDATABASE || 'portos';
+  return /_test$/.test(db) || db === 'portos_test';
+}
+
+/**
+ * Are we executing under a test runner?
+ *
+ * `NODE_ENV === 'test'` alone is not reliable: a suite run from a CoS-agent
+ * worktree (or any wrapper that sets NODE_ENV=development / leaves it unset)
+ * still executes test code, and the backend selectors that key off NODE_ENV
+ * (e.g. seriesStore's `useFileBackend()`) then quietly choose the *Postgres*
+ * backend — so the test writes land in the real `portos` DB with the guard
+ * below disarmed. Vitest always sets `process.env.VITEST` in every worker
+ * process, so OR-ing it in arms the guard regardless of how NODE_ENV was
+ * (mis)configured. This is the signal that actually closed the 2026-06-14
+ * fixture leak into prod.
+ *
+ * @returns {boolean}
+ */
+export function isTestRunner() {
+  return process.env.NODE_ENV === 'test' || process.env.VITEST != null;
+}
+
+// Guard ALL row writes — not just deletions. The original guard only blocked
+// DELETE/TRUNCATE, which let a mis-pointed suite INSERT fixtures into prod
+// (their cleanup DELETE then threw, *stranding* the rows) — exactly how test
+// series/issues/story-builder fixtures leaked into the real `portos` DB and
+// federated to peers. INSERT/UPDATE are now blocked too. Schema DDL
+// (CREATE/ALTER/DROP) is still allowed: it is idempotent, carries no row-data,
+// and ensureSchema() needs it to stand up portos_test. Skips leading
+// line/block comments + whitespace before the verb.
+const ROW_WRITE_SQL =
+  /^\s*(?:--[^\n]*\n|\/\*[\s\S]*?\*\/|\s)*(INSERT\s+INTO|UPDATE\s|DELETE\s+FROM|TRUNCATE)\b/i;
+
+/**
+ * Hard backstop: under the test runner, refuse to MUTATE a non-test database.
+ * Throws (fail loudly) on any row write (INSERT/UPDATE/DELETE/TRUNCATE) instead
+ * of silently writing — or stranding — real data. Reads (SELECT) and schema DDL
+ * are left alone so health/version probes and ensureSchema() still work.
+ *
+ * Shared by BOTH the pool `query()` wrapper and the per-transaction client in
+ * `withTransaction()`. The transaction path is critical: nearly every store
+ * mutation (updateAuthor, deleteAuthor, mergeAuthorsFromSync, universe runs,
+ * catalog, writers-room) runs its writes through `client.query()` inside a
+ * transaction — which talks to the raw pg client, NOT this module's `query()`.
+ * Guarding only `query()` left that path wide open: a suite under VITEST that
+ * reached any transaction write path wrote straight into the real `portos` DB.
+ *
+ * @param {string} text - SQL query text
+ */
+export function assertWriteAllowed(text) {
+  if (
+    isTestRunner() &&
+    !isTestDatabase() &&
+    typeof text === 'string' &&
+    ROW_WRITE_SQL.test(text)
+  ) {
+    throw new Error(
+      `🛑 Refusing to mutate non-test database '${process.env.PGDATABASE || 'portos'}' under the test runner. ` +
+        `Point PGDATABASE at a *_test database (e.g. portos_test), gate the suite on requireDb(), or set TEST_DB_OK=1. Query: ${text.slice(0, 80)}`,
+    );
+  }
+}
+
+// Proxy handler that runs a pg client's row writes through assertWriteAllowed.
+// Defined once at module scope (not per-transaction): the `get` trap receives
+// the client as `target`, so a single shared handler guards every client
+// withTransaction() wraps — no per-call handler/closure allocation. A Proxy
+// (rather than an object-spread copy) is required because pg's client methods
+// live on the prototype, which a spread would not carry.
+const GUARDED_CLIENT_HANDLER = {
+  get(target, prop, receiver) {
+    if (prop === 'query') {
+      return (config, ...rest) => {
+        const sql = typeof config === 'string' ? config : config?.text;
+        assertWriteAllowed(sql);
+        return target.query(config, ...rest);
+      };
+    }
+    const value = Reflect.get(target, prop, receiver);
+    return typeof value === 'function' ? value.bind(target) : value;
+  },
+};
 
 /**
  * Execute a query against the connection pool.
@@ -36,6 +144,11 @@ pool.on('error', (err) => {
  * @returns {Promise<pg.QueryResult>}
  */
 export async function query(text, params) {
+  // Hard backstop: refuse to mutate a non-test DB under the runner even if a
+  // suite reaches query() without gating on checkHealth() first (a new test
+  // author calls query('INSERT …') directly, or a backend selector mis-chose
+  // Postgres because NODE_ENV wasn't 'test').
+  assertWriteAllowed(text);
   return pool.query(text, params);
 }
 
@@ -65,10 +178,18 @@ export async function getServerMajorVersion() {
  */
 export async function withTransaction(fn) {
   const client = await pool.connect();
+  // Guard the client's row writes with the same backstop as query(). The raw
+  // pg client bypasses query() entirely, so without this wrapper a test-runner
+  // process pointed at the real `portos` DB writes through every store's
+  // transaction path unguarded (see assertWriteAllowed). BEGIN/COMMIT/ROLLBACK
+  // below call the raw client directly (they are not row writes). pg's
+  // client.query accepts either a SQL string or a { text, values } config —
+  // GUARDED_CLIENT_HANDLER reads the SQL out of both.
+  const guardedClient = new Proxy(client, GUARDED_CLIENT_HANDLER);
   await client.query('BEGIN');
   let result;
   try {
-    result = await fn(client);
+    result = await fn(guardedClient);
     await client.query('COMMIT');
   } catch (err) {
     await client.query('ROLLBACK');
@@ -84,6 +205,22 @@ export async function withTransaction(fn) {
  * @returns {Promise<{connected: boolean, hasSchema: boolean, error?: string}>}
  */
 export async function checkHealth() {
+  // Test-runner safety gate. Under the test runner the only database we permit
+  // is a designated test database (see isTestDatabase). Reporting "disconnected"
+  // here makes every DB-backed `*.db.test.js` suite skip via its existing
+  // `if (!health.connected)` branch — instead of running DELETE FROM against the
+  // developer's real universes/series/writing. Keyed on isTestRunner() (not bare
+  // NODE_ENV) so a worktree run that left NODE_ENV unset is still gated. The
+  // mocked checkHealth in memoryBackend.test.js / backup.test.js is unaffected
+  // (it replaces this fn).
+  if (isTestRunner() && !isTestDatabase()) {
+    return {
+      connected: false,
+      hasSchema: false,
+      hasCatalogSchema: false,
+      error: `test runner blocked from non-test database '${process.env.PGDATABASE || 'portos'}' — point PGDATABASE at a *_test database (e.g. portos_test) or set TEST_DB_OK=1`,
+    };
+  }
   try {
     const result = await pool.query(`
       SELECT
@@ -671,6 +808,26 @@ async function ensureSchemaImpl() {
     )`,
     `CREATE INDEX IF NOT EXISTS idx_universe_runs_universe ON universe_runs (universe_id, created_at DESC)`,
 
+    // Author personas. One row per reusable author/byline persona, the full
+    // sanitized record (name, writingStyle, bio, physicalDescription,
+    // headshotStyle, headshotImageUrl) in `data` JSONB. `name` mirrors a column
+    // for the live-list sort; the LWW/tombstone trio (updated_at/deleted/
+    // deleted_at) is populated FROM the record body. Authors are db-primary AND
+    // federated via the per-record peer-sync push pipeline (record kind `author`,
+    // sync category `authors`); a federated series also keeps its denormalized
+    // `author` byline so a peer that hasn't synced the persona still renders the
+    // cover correctly. Mirrors the authors block in init-db.sql.
+    `CREATE TABLE IF NOT EXISTS authors (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      data JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      deleted BOOLEAN DEFAULT FALSE,
+      deleted_at TIMESTAMPTZ
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_authors_live ON authors (deleted) WHERE deleted = FALSE`,
+
     // Pipeline series (Phase 3 Create migration, issue #1015). One row per
     // series, the full sanitized record (arc/seasons/locks/covers/style) in
     // `data` JSONB, moved out of data/pipeline-series/{id}/index.json
@@ -837,7 +994,116 @@ async function ensureSchemaImpl() {
       finished_at TIMESTAMPTZ
     )`,
     `CREATE INDEX IF NOT EXISTS idx_wr_exercises_work ON writers_room_exercises (work_id, started_at DESC)`,
+
+    // LoRA training runs (character LoRA training). MUST live here, not only
+    // in init-db.sql — init-db.sql runs only on fresh `db.sh setup-native`
+    // provisioning, so existing installs + federated peers get new tables
+    // exclusively through this boot-time upgrade path. Mirrors init-db.sql.
+    `CREATE TABLE IF NOT EXISTS lora_training_runs (
+      id TEXT PRIMARY KEY,
+      status TEXT NOT NULL,
+      character_id TEXT,
+      data JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_lora_training_runs_status ON lora_training_runs (status)`,
+    `CREATE INDEX IF NOT EXISTS idx_lora_training_runs_character ON lora_training_runs (character_id)`,
+
+    // ─── Deletion audit log (incident #1248-follow-up) ──────────────────────
+    // Append-only forensic trail of EVERY tombstone (soft-delete), un-tombstone
+    // (recovery), and hard-delete of user-authored records — written by a DB
+    // trigger so it captures deletions from ANY source: the app, a test suite
+    // doing raw `DELETE FROM`, or a manual `psql` session. (On 2026-06-13 a CoS
+    // agent's test run wiped every universe/series with no trace of who/when;
+    // this table closes that gap.) `row_snapshot` keeps the OLD row JSON so a
+    // wrongful delete is recoverable from the log alone. Local-only, never
+    // federated (no sync_sequence) — each install audits its own mutations.
+    // Mirrors the record_audit block in init-db.sql (parity-locked by
+    // db.catalogDdlParity.test.js).
+    `CREATE TABLE IF NOT EXISTS record_audit (
+      id BIGSERIAL PRIMARY KEY,
+      table_name TEXT NOT NULL,
+      record_id TEXT,
+      record_name TEXT,
+      action VARCHAR(16) NOT NULL,
+      actor TEXT,
+      source_query TEXT,
+      application_name TEXT,
+      backend_pid INTEGER,
+      row_snapshot JSONB,
+      occurred_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_record_audit_record ON record_audit (table_name, record_id, occurred_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_record_audit_occurred ON record_audit (occurred_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_record_audit_action ON record_audit (action, occurred_at DESC)`,
+
+    // Generic audit trigger. Works on any table via to_jsonb(OLD/NEW) so it needs
+    // no per-table column knowledge: `id`/`name`/`title`/`deleted`/`deleted_at`
+    // are read out of the row JSON (absent keys → NULL). A row is "deleted" when
+    // its `deleted` boolean is true OR its `deleted_at` is non-null (covers both
+    // the bool-trio tables and catalog_user_types' deleted_at-only shape).
+    // `actor` reads the optional `portos.actor` GUC the app MAY set per session;
+    // `source_query` captures current_query() so even an un-attributed raw DELETE
+    // is traceable. AFTER trigger: only committed-path rows are logged.
+    `CREATE OR REPLACE FUNCTION record_audit_log()
+     RETURNS TRIGGER AS $$
+     DECLARE
+       oldj JSONB := to_jsonb(OLD);
+       newj JSONB;
+       was_deleted BOOLEAN;
+       now_deleted BOOLEAN;
+       v_action TEXT;
+     BEGIN
+       IF TG_OP = 'DELETE' THEN
+         v_action := 'hard_delete';
+         INSERT INTO record_audit
+           (table_name, record_id, record_name, action, actor, source_query, application_name, backend_pid, row_snapshot)
+         VALUES
+           (TG_TABLE_NAME, oldj->>'id', COALESCE(oldj->>'name', oldj->>'title'), v_action,
+            current_setting('portos.actor', true), current_query(),
+            current_setting('application_name', true), pg_backend_pid(), oldj);
+         RETURN OLD;
+       END IF;
+
+       newj := to_jsonb(NEW);
+       was_deleted := COALESCE((oldj->>'deleted')::boolean, oldj->>'deleted_at' IS NOT NULL, false);
+       now_deleted := COALESCE((newj->>'deleted')::boolean, newj->>'deleted_at' IS NOT NULL, false);
+       IF now_deleted AND NOT was_deleted THEN
+         v_action := 'tombstone';
+       ELSIF was_deleted AND NOT now_deleted THEN
+         v_action := 'untombstone';
+       ELSE
+         RETURN NEW;
+       END IF;
+       INSERT INTO record_audit
+         (table_name, record_id, record_name, action, actor, source_query, application_name, backend_pid, row_snapshot)
+       VALUES
+         (TG_TABLE_NAME, newj->>'id', COALESCE(newj->>'name', newj->>'title'), v_action,
+          current_setting('portos.actor', true), current_query(),
+          current_setting('application_name', true), pg_backend_pid(), newj);
+       RETURN NEW;
+     END;
+     $$ LANGUAGE plpgsql`,
   ];
+
+  // Attach the audit trigger to every user-authored-content table. Adding a
+  // table here is all it takes to audit its deletions. (Keep in sync with the
+  // AUDITED_RECORD_TABLES list in init-db.sql.)
+  const auditedTables = [
+    'universes', 'universe_runs', 'pipeline_series', 'pipeline_issues',
+    'story_builder_sessions', 'writers_room_works', 'writers_room_folders',
+    'writers_room_draft_versions', 'catalog_ingredients', 'catalog_scraps',
+    'catalog_user_types', 'creative_director_projects', 'lora_training_runs',
+    'authors',
+  ];
+  for (const t of auditedTables) {
+    catalogDDL.push(`DROP TRIGGER IF EXISTS trg_${t}_audit ON ${t}`);
+    catalogDDL.push(
+      `CREATE TRIGGER trg_${t}_audit AFTER UPDATE OR DELETE ON ${t} FOR EACH ROW EXECUTE FUNCTION record_audit_log()`,
+    );
+  }
+
   for (const sql of catalogDDL) {
     await pool.query(sql);
   }

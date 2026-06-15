@@ -262,6 +262,50 @@ describe('videoGen routes', () => {
       }));
     });
 
+    it('translates the universal loraFilenames/loraScales contract into internal { filename, scale } params', async () => {
+      // This is the contract a history requeue (getRenderConfigForItem) emits,
+      // so it must round-trip without a bespoke shape.
+      const r = await request(app).post('/api/video-gen/').send({
+        prompt: 'styled clip',
+        loraFilenames: ['a.safetensors', 'b.safetensors'],
+        loraScales: [0.7, 1.0],
+      });
+      expect(r.status).toBe(200);
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'video',
+        params: expect.objectContaining({
+          loras: [
+            { filename: 'a.safetensors', scale: 0.7 },
+            { filename: 'b.safetensors', scale: 1.0 },
+          ],
+        }),
+      }));
+    });
+
+    it('defaults a missing scale to 1.0 when fewer loraScales than loraFilenames', async () => {
+      const r = await request(app).post('/api/video-gen/').send({
+        prompt: 'clip',
+        loraFilenames: ['a.safetensors'],
+      });
+      expect(r.status).toBe(200);
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({
+        params: expect.objectContaining({ loras: [{ filename: 'a.safetensors', scale: 1.0 }] }),
+      }));
+    });
+
+    it('rejects LoRAs on a non-ltx2 runtime with LORAS_REQUIRE_LTX2', async () => {
+      videoGenService.listVideoModels.mockReturnValueOnce([
+        { id: 'ltx_legacy', name: 'LTX legacy', runtime: 'mlx_video' },
+      ]);
+      const r = await request(app).post('/api/video-gen/').send({
+        prompt: 'clip',
+        modelId: 'ltx_legacy',
+        loraFilenames: ['a.safetensors'],
+      });
+      expect(r.status).toBe(400);
+      expect(r.body.code).toBe('LORAS_REQUIRE_LTX2');
+    });
+
     it('strips path-traversal segments from sourceImageFile via basename + prefix-check', async () => {
       const r = await request(app).post('/api/video-gen/').send({
         prompt: 'a cat',

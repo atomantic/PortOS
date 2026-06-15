@@ -76,6 +76,10 @@ const PARAM_ALLOWLIST = new Set([
   'width', 'height', 'numFrames', 'fps', 'steps', 'guidanceScale',
   'seed', 'tiling', 'disableAudio', 'mode', 'imageStrength',
   'cfgScale', 'guidance', 'quantize',
+  // Training-kind label fields so the Render Queue UI can title training
+  // rows ("Training: Kessa · mflux · 1000 steps") without exposing paths.
+  'runId', 'runtime', 'datasetId', 'characterId', 'characterName',
+  'triggerWord', 'rank', 'baseModelId',
 ]);
 function sanitizeJob(job) {
   if (!job) return job;

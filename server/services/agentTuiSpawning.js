@@ -18,7 +18,7 @@ import { finalizeAgent, releaseAgentLane } from './agentLifecycle.js';
 import { activeAgents, userTerminatedAgents, pausedAgents } from './agentState.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { resolveCliModel } from '../lib/providerModels.js';
-import { createStreamingAnsiStripper } from '../lib/ansiStrip.js';
+import { createStreamingAnsiStripper, stripAnsi } from '../lib/ansiStrip.js';
 import { createImmediateFallbackSignalDetector } from '../lib/aiToolkit/errorDetection.js';
 import { isAntigravityCommand } from '../lib/antigravity.js';
 import {
@@ -27,9 +27,12 @@ import {
   READY_POLL_INTERVAL_MS,
   READY_IDLE_THRESHOLD_MS,
   PASTE_MARKER_POLL_MS,
-  PASTE_MARKER_PATTERN,
+  countPasteMarkers,
+  createWorkActivityTracker,
+  rendersWorkCounter,
   PASTE_TO_ENTER_MIN_DELAY_MS,
   PASTE_TO_ENTER_FALLBACK_MS,
+  scheduleSubmitEnters,
   PASTE_DEADLINE_MS,
   OUTPUT_BUFFER_CAP,
   OUTPUT_BUFFER_HEADROOM,
@@ -194,6 +197,15 @@ export async function spawnTuiAgent({
   const doneSentinelPath = workspacePath ? join(workspacePath, DONE_SENTINEL_NAME) : null;
   const promptPreview = prompt.replace(/\s+/g, ' ').slice(0, 100);
   const commandName = tuiConfig.command.split('/').pop();
+  // Markers already present in the prompt text itself (a transcript-analysis task
+  // can echo `[Pasted text #N]` back). The paste-commit fast path must wait for
+  // the TUI's OWN marker — i.e. the count to EXCEED this — so an echoed marker
+  // doesn't fire the submit-Enters mid-reflow (issue #1229 review). STRIP the
+  // prompt first: a pasted RAW transcript may carry the cursor-positioned marker
+  // form (`[Pasted\x1b[11Gtext…`), which counts as 0 unstripped but echoes back as
+  // the stripped `[Pastedtext#…]` (count 1) — so we must count the prompt the same
+  // way the post-paste buffer is counted, or the gate undercounts and fires early.
+  const promptMarkerCount = countPasteMarkers(stripAnsi(prompt));
 
   let outputBuffer = '';
   let finalized = false;
@@ -205,6 +217,20 @@ export async function spawnTuiAgent({
   let sentinelIngested = false;
   let hasStartedWorking = false;
   let promptSentAt = null;
+  // When the submit-Enter is first written (NOT when the paste starts). Work-
+  // activity observation keys on this so the prompt ECHO — which renders during
+  // the paste→Enter window, before this is set — is never scanned for the working
+  // counter (issue #1229 review: a pasted transcript could otherwise echo counters
+  // that fake work before the prompt is actually submitted).
+  let promptSubmittedAt = null;
+  // Tracks evidence the model is actively processing the SUBMITTED prompt — the
+  // TUI's elapsed working counter advancing through ≥2 distinct values (see
+  // createWorkActivityTracker; echo-proof, unlike word-matching the prompt text).
+  // Distinct from `hasStartedWorking`, which flips on ANY post-spawn PTY output
+  // including pure banner/status-line chrome. `tracker.active` is what gates the
+  // fallback idle-complete path from finalizing a never-submitted prompt as
+  // success (issue #1229).
+  const workActivity = createWorkActivityTracker();
   let firstOutputAt = null;
   let lastOutputAt = Date.now();
   let lastLine = '';
@@ -231,6 +257,7 @@ export async function spawnTuiAgent({
   let rawBytesWritten = 0;
   let rawSpoolTruncationWarned = false;
   let pasteEnterTimer = null;
+  let submitEnterTimer = null;
 
   const streamingStrip = createStreamingAnsiStripper();
 
@@ -380,6 +407,7 @@ export async function spawnTuiAgent({
     if (agentData?.promptTimer) clearInterval(agentData.promptTimer);
     if (agentData?.doneSentinelTimer) clearInterval(agentData.doneSentinelTimer);
     if (pasteEnterTimer) { clearInterval(pasteEnterTimer); pasteEnterTimer = null; }
+    if (submitEnterTimer) { clearInterval(submitEnterTimer); submitEnterTimer = null; }
     // Release the post-paste accumulator even when finalize fires mid-paste-
     // window. The pasteEnterTimer's own cleanup path nulls this too, but if
     // finalize comes from elsewhere (shell-exit, command-not-found, user
@@ -519,8 +547,22 @@ export async function spawnTuiAgent({
       const stripped = streamingStrip(text);
       pendingRawChunks.push(text);
       scheduleRawFlush();
-      if (postPasteBuffer !== null) postPasteBuffer += text;
-      lastOutputAt = Date.now();
+      // Accumulate the ANSI-STRIPPED chunk (not the raw text): the paste marker
+      // is rendered with absolute-column cursor moves between glyphs, so it only
+      // matches after stripping (see countPasteMarkers). Appending raw text here
+      // — as this did before #1229 — left the marker unmatchable and the fast
+      // path dead.
+      if (postPasteBuffer !== null && stripped) postPasteBuffer += stripped;
+      const now = Date.now();
+      // Once the prompt is SUBMITTED (Enter sent — not merely pasted), watch for
+      // proof the model is actually working. Keying on promptSubmittedAt (not
+      // promptSentAt) excludes the prompt echo rendered during the paste→Enter
+      // window. The TUI repaints chrome continuously even with an unsent prompt,
+      // so we can't trust mere PTY activity — only the working counter advancing
+      // across wall-clock time confirms real work (a static echo's counters all
+      // arrive together and fail the time-span). Gates idle-complete (#1229).
+      if (promptSubmittedAt && stripped && !workActivity.active) workActivity.observe(stripped, now);
+      lastOutputAt = now;
       if (firstOutputAt === null) firstOutputAt = lastOutputAt;
 
       if (!hasStartedWorking) {
@@ -628,9 +670,18 @@ export async function spawnTuiAgent({
     shellService.writeToSession(sessionId, `\x1b[200~${prompt}\x1b[201~`);
     appendLine(`📟 Prompt pasted into TUI session ${sessionId.slice(0, 8)} (${reason})`);
 
+    // Submit the pasted prompt with repeated Enters — a single `\r` can be
+    // swallowed while the TUI is still reflowing a large paste, stranding the
+    // prompt unsent (the "I had to hit Enter myself" bug). Tracked in
+    // submitEnterTimer so finish() can cancel pending retries if the agent ends.
     const submitEnter = () => {
-      if (finalized) return;
-      shellService.writeToSession(sessionId, '\r');
+      // Mark submission so work-activity observation begins only now — after the
+      // Enter is written, past the prompt-echo window (issue #1229 review).
+      if (promptSubmittedAt === null) promptSubmittedAt = Date.now();
+      submitEnterTimer = scheduleSubmitEnters(
+        () => shellService.writeToSession(sessionId, '\r'),
+        () => finalized
+      );
     };
 
     const pasteSentAt = Date.now();
@@ -642,9 +693,7 @@ export async function spawnTuiAgent({
         return;
       }
       const elapsed = Date.now() - pasteSentAt;
-      const markerSeen = postPasteBuffer
-        ? PASTE_MARKER_PATTERN.test(postPasteBuffer)
-        : false;
+      const markerSeen = countPasteMarkers(postPasteBuffer) > promptMarkerCount;
       // Submit when EITHER the paste-commit marker appears (preferred) or
       // the fallback window elapses (covers small prompts that don't render
       // the marker).
@@ -687,9 +736,33 @@ export async function spawnTuiAgent({
     // agents — see handleData.
     if (lastOutputAt <= promptSentAt) return;
     if (idle >= tuiConfig.idleTimeoutMs) {
-      finish({ success: true, exitCode: 0, reason: 'idle-complete' }).catch(err => {
-        emitLog('error', `Failed to finalize TUI agent ${agentId}: ${err.message}`, { agentId });
-      });
+      // Distinguish a real (sentinel-less) completion from a never-submitted
+      // prompt that just idled out. `lastOutputAt > promptSentAt` only proves
+      // the TUI repainted SOMETHING — banner/status chrome churns even with the
+      // prompt sitting unsent. The #1229 failure mode (prompt never submitted,
+      // zero work done) must be recorded as a FAILURE so the orchestrator doesn't
+      // treat a no-op run as done — but the work-counter signal exists ONLY on
+      // Claude Code / Codex. On a provider that never renders the counter
+      // (Antigravity/Gemini), its absence proves nothing, so we must preserve the
+      // original permissive idle-complete=success there (else every sentinel-less
+      // completion on those providers would falsely fail). So: downgrade to
+      // failure only when the provider DOES render the counter and we never saw
+      // it advance.
+      const noWorkButCounterExpected = !workActivity.active && rendersWorkCounter(commandName);
+      if (noWorkButCounterExpected) {
+        finish({
+          success: false,
+          exitCode: 1,
+          error: 'TUI agent idled out with no sign of work — the prompt likely never submitted (no working indicator ever appeared after submit).',
+          reason: 'idle-no-activity',
+        }).catch(err => {
+          emitLog('error', `Failed to finalize TUI agent ${agentId}: ${err.message}`, { agentId });
+        });
+      } else {
+        finish({ success: true, exitCode: 0, reason: 'idle-complete' }).catch(err => {
+          emitLog('error', `Failed to finalize TUI agent ${agentId}: ${err.message}`, { agentId });
+        });
+      }
     }
   }, 5000);
 

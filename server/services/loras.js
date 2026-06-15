@@ -40,8 +40,18 @@ import {
   pickVersion,
   slugifyForFilename,
 } from '../lib/civitai.js';
-import { RUNNER_FAMILIES, composeCompatKey } from '../lib/runners.js';
+import {
+  buildHfAuthHeaders,
+  buildHfLoraSidecar,
+  buildHfResolveUrl,
+  detectVideoLoraFamily,
+  fetchHuggingfaceModel,
+  parseHuggingfaceLoraRef,
+  pickHfLoraFile,
+} from '../lib/huggingfaceLora.js';
+import { RUNNER_FAMILIES, VIDEO_LORA_FAMILIES, composeCompatKey } from '../lib/runners.js';
 import { detectFlux2Variant } from '../lib/safetensors.js';
+import { getHfToken } from '../lib/hfToken.js';
 import { getSettings } from './settings.js';
 
 const SIDECAR_SUFFIX = '.metadata.json';
@@ -138,6 +148,10 @@ export const listLoras = async () => {
         installedAt: sidecar?.installedAt || s.birthtime?.toISOString?.() || null,
         // sidecar fields surfaced for the picker / manager UI:
         civitai: sidecar?.civitai || null,
+        // HF-installed video LoRAs carry this instead of `civitai` — the
+        // manager matches curated video suggestions to installs by repo and
+        // links the card out to HuggingFace.
+        huggingface: sidecar?.huggingface || null,
         runnerFamily,
         fluxVariant,
         loraCompatKey,
@@ -149,6 +163,13 @@ export const listLoras = async () => {
         // before the URL-normalize fix) also benefit without a reinstall.
         previewImageUrl: normalizeCivitaiImageUrl(sidecar?.previewImageUrl) || null,
         description: sidecar?.description || '',
+        // Trained-LoRA surfacing (sidecars written by services/loraTraining):
+        // 'trained' source + the character identity block let the library UI
+        // badge them and characterLoraResolver match them. Null for Civitai
+        // installs and legacy drops.
+        source: sidecar?.source || null,
+        character: sidecar?.character || null,
+        trainedFromDatasetId: sidecar?.datasetId || null,
       };
     },
   });
@@ -236,11 +257,19 @@ export const resolveCivitaiKey = async () => {
 // `.partial` from a previous crashed install (and prevents two concurrent
 // installs of the same target from racing on the same temp path).
 // fetchImpl is injectable for tests.
-const downloadToFile = async (url, destPath, { fetchImpl = fetch, headers = {} , hasApiKey = false } = {}) => {
+const downloadToFile = async (url, destPath, { fetchImpl = fetch, headers = {} , hasApiKey = false, source = 'civitai' } = {}) => {
   const tmpPath = `${destPath}.${randomBytes(6).toString('hex')}.partial`;
   const res = await fetchImpl(url, { headers, redirect: 'follow' });
   if (!res.ok) {
     if (res.status === 401 || res.status === 403) {
+      // HuggingFace LoRAs: a 401/403 means the repo is gated and the token is
+      // missing/insufficient — point the user at the license + HF token UI.
+      if (source === 'huggingface') {
+        const message = hasApiKey
+          ? `HuggingFace rejected the download (${res.status}) even with your saved token — accept the model's license on its HF page, or the token may be expired/scoped.`
+          : `HuggingFace download rejected (${res.status}) — this LoRA's repo is gated. Accept its license on HuggingFace and add your HF token in Image Gen settings, then retry.`;
+        throw new ServerError(message, { status: res.status, code: 'HF_AUTH' });
+      }
       // When a key was supplied and Civitai still rejects, the cause is
       // almost always early-access content or a deactivated/scoped key —
       // not a missing key. Don't tell the user to set a key they've
@@ -250,7 +279,9 @@ const downloadToFile = async (url, destPath, { fetchImpl = fetch, headers = {} ,
         : `Civitai download rejected (${res.status}) — this LoRA may require an API key. Configure a Civitai API key in PortOS Settings (or set the CIVITAI_API_KEY env var) and retry.`;
       throw new ServerError(message, { status: res.status, code: 'CIVITAI_AUTH' });
     }
-    throw new ServerError(`Civitai download failed: ${res.status} ${res.statusText}`, { status: 502, code: 'CIVITAI_DOWNLOAD_FAILED' });
+    const label = source === 'huggingface' ? 'HuggingFace' : 'Civitai';
+    const code = source === 'huggingface' ? 'HF_DOWNLOAD_FAILED' : 'CIVITAI_DOWNLOAD_FAILED';
+    throw new ServerError(`${label} download failed: ${res.status} ${res.statusText}`, { status: 502, code });
   }
   if (!res.body) {
     throw new ServerError('Civitai download returned no body', { status: 502, code: 'CIVITAI_DOWNLOAD_FAILED' });
@@ -374,5 +405,74 @@ export const installFromCivitai = async (input, { fetchImpl = fetch } = {}) => {
   const sidecar = buildSidecar({ model, version, file, filename });
   await writeFile(sidecarPath(filename), JSON.stringify(sidecar, null, 2) + '\n');
   console.log(`✅ Installed Civitai LoRA: ${filename}`);
+  return sidecar;
+};
+
+// Set of recognized video-LoRA families an HF import may target. Used to
+// validate a user-supplied `family` override before trusting it.
+const VIDEO_LORA_FAMILY_VALUES = new Set(Object.values(VIDEO_LORA_FAMILIES));
+
+// Install a video LoRA from a HuggingFace repo (e.g.
+// fal/ltx2.3-audio-reactive-lora). Mirrors installFromCivitai: parse the ref →
+// fetch repo metadata → pick the .safetensors → stream-download → write the
+// sidecar. The family is auto-detected from the repo id / tags / base_model,
+// or taken from an explicit `input.family` override (validated against the
+// known video families). Returns the new sidecar JSON.
+export const installFromHuggingface = async (input, { fetchImpl = fetch } = {}) => {
+  const { repo, revision } = parseHuggingfaceLoraRef(input?.url);
+  // Stored/env/CLI HF token — only needed for gated repos, but harmless to
+  // send on public ones (HF ignores a bearer it doesn't require).
+  const token = (typeof input?.token === 'string' && input.token.trim()) || (await getHfToken()) || '';
+  const model = await fetchHuggingfaceModel(repo, { token, revision, fetchImpl });
+  const file = pickHfLoraFile(model);
+
+  // Family: explicit override (validated) wins over autodetection so a user
+  // can correct a mis-detected repo from the UI. An unrecognized repo with no
+  // override is refused rather than silently tagged — a wrongly-tagged LoRA
+  // would surface under a model it can't actually load against.
+  let family = null;
+  if (input?.family) {
+    if (!VIDEO_LORA_FAMILY_VALUES.has(input.family)) {
+      throw new ServerError(
+        `Unknown video LoRA family "${input.family}" — expected one of ${[...VIDEO_LORA_FAMILY_VALUES].join(', ')}`,
+        { status: 400, code: 'HF_BAD_FAMILY' },
+      );
+    }
+    family = input.family;
+  } else {
+    family = detectVideoLoraFamily({ repo, model });
+  }
+  if (!family) {
+    throw new ServerError(
+      `Couldn't determine a supported video model for HuggingFace repo "${repo}". Only LTX-Video LoRAs are supported today — pass an explicit family if you know this LoRA targets LTX-2.`,
+      { status: 422, code: 'HF_UNKNOWN_FAMILY' },
+    );
+  }
+
+  // Stable filename: `lora-<org>-<name>-hf.safetensors`. The org+name slug
+  // disambiguates same-named LoRAs from different authors; the `-hf` suffix
+  // keeps it distinct from a Civitai install of the same model.
+  const slug = slugifyForFilename(repo.replace('/', '-'));
+  const filename = `lora-${slug}-hf.safetensors`;
+  const destPath = join(PATHS.loras, filename);
+  if (existsSync(destPath)) {
+    throw new ServerError(
+      `Already installed: ${filename}. Delete it first to reinstall.`,
+      { status: 409, code: 'HF_ALREADY_INSTALLED' },
+    );
+  }
+
+  await ensureDir(PATHS.loras);
+  console.log(`📥 Installing HuggingFace LoRA: ${repo} (${file}) → ${filename} [family=${family}]`);
+  await downloadToFile(buildHfResolveUrl(repo, revision, file), destPath, {
+    fetchImpl,
+    headers: { 'User-Agent': 'PortOS/hf-lora-installer', ...buildHfAuthHeaders(token) },
+    hasApiKey: !!token,
+    source: 'huggingface',
+  });
+
+  const sidecar = buildHfLoraSidecar({ repo, revision, file, model, family, filename });
+  await writeFile(sidecarPath(filename), JSON.stringify(sidecar, null, 2) + '\n');
+  console.log(`✅ Installed HuggingFace LoRA: ${filename}`);
   return sidecar;
 };

@@ -11,15 +11,31 @@ const BASE_ENV = {
   TZ: 'UTC'  // All log timestamps and Date operations in UTC
 };
 
-// Read PGMODE from .env to determine PostgreSQL port
+// Read a couple of machine-local settings from .env (pm2 doesn't auto-load it
+// here): PGMODE → PostgreSQL port; PORTOS_SERVER_MAX_MEMORY → the restart ceiling
+// below. An explicit process.env wins over the .env file so a one-off shell
+// override still works.
 const fs = require('fs');
 const envFile = path.join(__dirname, '.env');
 let pgMode = 'docker';
+let envMaxMemory = null;
 try {
   const envContent = fs.readFileSync(envFile, 'utf8');
   const modeMatch = envContent.match(/^PGMODE=(\w+)/m);
   if (modeMatch) pgMode = modeMatch[1];
+  const memMatch = envContent.match(/^PORTOS_SERVER_MAX_MEMORY=(\S+)/m);
+  if (memMatch) envMaxMemory = memMatch[1];
 } catch { /* no .env file — default to docker */ }
+
+// pm2 restarts portos-server when its RSS crosses this — originally a memory-leak
+// safety valve. The committed default stays modest so the guard still fires on a
+// small install (a fork on an 8 GB box), but it's overridable per-machine via
+// PORTOS_SERVER_MAX_MEMORY (.env or shell env; e.g. '32G' on a 128 GB
+// workstation) since a too-low ceiling causes spurious restarts that disrupt SSE
+// streams and long jobs. (Training is no longer collateral damage from these
+// restarts — it's spawned detached into its own process group — but fewer
+// restarts is still better.)
+const SERVER_MAX_MEMORY = process.env.PORTOS_SERVER_MAX_MEMORY || envMaxMemory || '4G';
 
 const PORTS = {
   API: 5555,           // Express API server (HTTPS when Tailscale cert is active)
@@ -75,7 +91,15 @@ module.exports = {
       // and add `'**/data/**'` (plus `'**/node_modules'`, `'**/logs/**'`,
       // `'**/.cache/**'`, `'**/portos-stepwise-*/**'`) to `ignore_watch`.
       watch: false,
-      max_memory_restart: '2G'
+      max_memory_restart: SERVER_MAX_MEMORY
+      // NOTE: do NOT set `treekill: false` here to protect long media jobs from
+      // restart-SIGINT. Tried 2026-06-14: pm2 then fails to reap the old node
+      // process on restart, so it lingers holding :5555 and the new instance
+      // EADDRINUSE-crash-loops. The right place to isolate a multi-hour trainer
+      // from pm2's parent-tree kill is the spawn side (double-fork / reparent to
+      // launchd so it leaves the ppid tree), NOT disabling treekill server-wide.
+      // Raising max_memory_restart (above) already removes the most common
+      // restart trigger; full isolation is tracked in PLAN.
     },
     {
       name: 'portos-cos',

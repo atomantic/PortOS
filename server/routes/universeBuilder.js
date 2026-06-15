@@ -7,6 +7,7 @@
  *   PATCH  /api/universe-builder/:id                    → Universe
  *   DELETE /api/universe-builder/:id                    → { id }
  *   POST   /api/universe-builder/expand                 → { logline, premise, styleNotes, influences, categories, compositeSheets, characters, places, objects, llm }
+ *   POST   /api/universe-builder/describe-from-images   → { description, llm }
  *   POST   /api/universe-builder/:id/render             → { runId, collectionId, jobIds, promptCount }
  *   GET    /api/universe-builder/:id/runs               → Run[]
  */
@@ -26,6 +27,10 @@ import {
 import { BIBLE_KINDS, BIBLE_LIMITS, pruneStaleReferenceSheets } from '../lib/storyBible.js';
 import { getUniverseCanonUsage, listLinkedSeriesNames } from '../services/canonUsage.js';
 import { expandWorldTemplate, generateCategoryVariations } from '../services/universeBuilderExpand.js';
+import { describeEntityFromImages, VISION_KINDS, VISION_MAX_IMAGES } from '../services/universeVisionDescribe.js';
+import { sanitizeFilename, PATHS } from '../lib/fileUtils.js';
+import { existsSync } from 'fs';
+import { join } from 'path';
 import { refineWorldPrompts } from '../services/universeBuilderRefine.js';
 import { promoteVariationToCanon, VALID_TARGET_KINDS } from '../services/universeBuilderPromote.js';
 import { autoSortOtherBuckets } from '../services/universeBuilderAutoSort.js';
@@ -393,6 +398,48 @@ router.post('/generate-variations', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
+// Vision-to-prose: turn one or more reference images of a character/place/
+// object into an image-gen-ready prose description (multiple images → the
+// shared/common description). Stateless — the client decides which entry
+// field to write the result into. `screenshots` are filenames the client
+// already uploaded via POST /api/screenshots (server-sanitized again here as
+// defense-in-depth before the runner resolves them under data/screenshots).
+// Keep ahead of `/:id` so "describe-from-images" isn't parsed as a universe id.
+const describeFromImagesSchema = z.object({
+  kind: z.enum(VISION_KINDS),
+  name: z.string().trim().max(BIBLE_LIMITS.NAME_MAX).optional(),
+  context: z.string().trim().max(2000).optional(),
+  screenshots: z.array(z.string().trim().min(1).max(300)).min(1).max(VISION_MAX_IMAGES),
+  providerId: z.string().trim().max(80).optional(),
+  model: z.string().trim().max(200).optional(),
+});
+router.post('/describe-from-images', asyncHandler(async (req, res) => {
+  const body = validateRequest(describeFromImagesSchema, req.body ?? {});
+  // The upload route already sanitizes on write, so a legitimately-uploaded
+  // filename round-trips unchanged here. A hand-crafted body with path
+  // components is rejected outright (a 400, not a silent rewrite to a name
+  // that won't exist on disk — which would surface as a confusing generic
+  // "Image not found" from the runner), keeping a traversal attempt
+  // distinguishable from a deleted/never-uploaded file.
+  const screenshots = body.screenshots.map((f) => {
+    const safe = sanitizeFilename(f);
+    if (safe !== f) {
+      throw new ServerError(`Invalid screenshot filename: ${f}`, { status: 400, code: 'VALIDATION_ERROR' });
+    }
+    // Preflight existence: the runner's loadImageAsBase64 silently DROPS a
+    // missing image and still sends the text prompt, so a stale/never-uploaded
+    // filename would otherwise let the model describe with fewer references —
+    // or, if all are missing, hallucinate from the prompt alone. Fail loudly
+    // here instead. data/screenshots is where POST /api/screenshots writes.
+    if (!existsSync(join(PATHS.screenshots, safe))) {
+      throw new ServerError(`Screenshot not found: ${safe} — re-upload the image and retry.`, { status: 400, code: 'SCREENSHOT_NOT_FOUND' });
+    }
+    return safe;
+  });
+  const result = await describeEntityFromImages({ ...body, screenshots });
+  res.json(result);
+}));
+
 // Refines the 3 top-level prompts (starter / style / negative) based on
 // user feedback. Stateless — the caller decides whether to write the
 // result back to a saved universe. Keep ahead of `/:id`.
@@ -468,7 +515,16 @@ router.post('/merge/ai-resolve', asyncHandler(async (req, res) => {
 }));
 
 router.get('/:id', asyncHandler(async (req, res) => {
-  const w = await svc.getUniverse(req.params.id).catch((err) => { throw mapServiceError(err); });
+  // Read-by-id 404s are benign and high-volume: callers like LoraDatasetDetail
+  // speculatively fetch a dataset's `character.universeId` ({ silent: true }),
+  // which 404s whenever that universe was deleted. Classify as `warning` so the
+  // error middleware skips it instead of spamming ❌ Route error on every
+  // page reconnect. (Mirrors the media-job archive-lookup precedent.)
+  const w = await svc.getUniverse(req.params.id).catch((err) => {
+    const mapped = mapServiceError(err);
+    if (mapped?.code === svc.ERR_NOT_FOUND) mapped.severity = 'warning';
+    throw mapped;
+  });
   // Lazy stale-reference-sheet collapse: nulls out any character.referenceSheetImageRef
   // whose underlying file was deleted from disk, so the UI never tries to
   // render `<img src="/data/image-refs/<gone>">`. Doesn't persist the change

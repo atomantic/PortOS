@@ -207,6 +207,60 @@ describe('brainMemoryBridge — queueResync debounce + dedup', () => {
   });
 });
 
+describe('brainMemoryBridge — entity :upserted/:deleted route through queueResync (bulk-create throttle)', () => {
+  it('does NOT embed synchronously on a single :upserted — it enqueues for the debounced flush', async () => {
+    const bridge = await loadBridge();
+    const { brainEvents } = await import('./brainStorage.js');
+    bridge.initBridge();
+    getById.mockResolvedValue({ id: 'm1', title: 'note', content: 'hi' });
+
+    brainEvents.emit('memories:upserted', { id: 'm1', record: { id: 'm1', title: 'note' } });
+    // Before the flush nothing has been embedded — the burst is only queued.
+    expect(getById).not.toHaveBeenCalled();
+    expect(createMemory).not.toHaveBeenCalled();
+
+    await bridge.flushPendingResync();
+    // After the flush it re-reads canonical state and embeds exactly once.
+    expect(getById).toHaveBeenCalledWith('memories', 'm1');
+    expect(createMemory).toHaveBeenCalledTimes(1);
+  });
+
+  it('coalesces a tight burst of N :upserted events into N sequential resyncs (one per distinct id)', async () => {
+    const bridge = await loadBridge();
+    const { brainEvents } = await import('./brainStorage.js');
+    bridge.initBridge();
+    getById.mockImplementation(async (_type, id) => ({ id, title: id, content: id }));
+
+    // Simulate the ChatGPT import creating many conversations back-to-back.
+    for (let i = 0; i < 50; i++) {
+      brainEvents.emit('memories:upserted', { id: `c${i}`, record: { id: `c${i}` } });
+    }
+    // A repeat touch of an already-queued id collapses (dedup).
+    brainEvents.emit('memories:upserted', { id: 'c0', record: { id: 'c0' } });
+
+    await bridge.flushPendingResync();
+
+    // 50 distinct ids → 50 reads, NOT 51 — and they ran through the sequential
+    // queue, not 51 concurrent fire-and-forget embeds.
+    expect(getById).toHaveBeenCalledTimes(50);
+    expect(createMemory).toHaveBeenCalledTimes(50);
+  });
+
+  it('routes :deleted through the resync path, archiving the mapped memory', async () => {
+    const bridge = await loadBridge();
+    const { brainEvents } = await import('./brainStorage.js');
+    bridge.initBridge();
+    bridgeFileContents = JSON.stringify({ [bridge.bridgeKey('people', 'p9')]: 'mem-del' });
+    getById.mockResolvedValue(null); // deleted/tombstoned → getById returns null
+
+    brainEvents.emit('people:deleted', { id: 'p9' });
+    await bridge.flushPendingResync();
+
+    expect(updateMemory).toHaveBeenCalledWith('mem-del', { status: 'archived' });
+    expect(createMemory).not.toHaveBeenCalled();
+  });
+});
+
 describe('brainMemoryBridge — syncAllBrainData refresh mode (issue #1080 recovery)', () => {
   it('skips already-mapped records by default but re-embeds them with refresh:true', async () => {
     const bridge = await loadBridge();

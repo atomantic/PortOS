@@ -15,7 +15,7 @@ import { catalogSyncIngredientSchema, catalogSyncRefSchema } from './catalogVali
 // subscriptions target another PortOS instance over Tailnet.
 export const peerSubscribeSchema = z.object({
   peerId: z.string().trim().min(1).max(120),
-  recordKind: z.enum(['universe', 'series', 'mediaCollection']),
+  recordKind: z.enum(['universe', 'series', 'mediaCollection', 'author']),
   recordId: z.string().trim().min(1).max(120),
 }).strict();
 
@@ -143,17 +143,26 @@ const mediaCollectionPushSchema = z.object({
   kind: z.literal('mediaCollection'),
   ...peerSyncPushBase,
 }).strict();
+// Author personas push the bare record + its headshot image in the asset
+// manifest — no bundled children, linked collection, or catalog rows, so the
+// base shape alone (`.strict()` rejects any smuggled bundle keys, same posture
+// as mediaCollection).
+const authorPushSchema = z.object({
+  kind: z.literal('author'),
+  ...peerSyncPushBase,
+}).strict();
 export const peerSyncPushSchema = z.discriminatedUnion('kind', [
   universePushSchema,
   seriesPushSchema,
   mediaCollectionPushSchema,
+  authorPushSchema,
 ]);
 
 // Manual sync action schemas — used by POST /sync-record, /sync-now, /pull-metadata.
 
 export const peerSyncRecordSchema = z.object({
   peerId: z.string().trim().min(1).max(120),
-  recordKind: z.enum(['universe', 'series', 'mediaCollection']),
+  recordKind: z.enum(['universe', 'series', 'mediaCollection', 'author']),
   recordId: z.string().trim().min(1).max(200),
 }).strict();
 

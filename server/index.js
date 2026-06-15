@@ -105,6 +105,7 @@ import mediaJobsRoutes from './routes/mediaJobs.js';
 import creativeDirectorRoutes from './routes/creativeDirector.js';
 import writersRoomRoutes from './routes/writersRoom.js';
 import universeBuilderRoutes from './routes/universeBuilder.js';
+import authorsRoutes from './routes/authors.js';
 import conflictJournalRoutes from './routes/conflictJournal.js';
 import { initUniverseBuilderCollectionHook } from './services/universeBuilderCollectionHook.js';
 import { initComicPagesFilenameHook } from './services/pipeline/comicPagesFilenameHook.js';
@@ -117,6 +118,10 @@ import { initMediaJobQueue } from './services/mediaJobQueue/index.js';
 import { recoverInFlightProjects } from './services/creativeDirector/recovery.js';
 import imageVideoModelsRoutes from './routes/imageVideoModels.js';
 import lorasRoutes from './routes/loras.js';
+import loraDatasetsRoutes from './routes/loraDatasets.js';
+import loraTrainingRoutes from './routes/loraTraining.js';
+import { loraDatasetStore } from './services/loraDatasets.js';
+import { initLoraTraining } from './services/loraTraining/index.js';
 import sdapiRoutes from './routes/sdapi.js';
 import openclawRoutes from './routes/openclaw.js';
 import sharingRoutes from './routes/sharing.js';
@@ -155,6 +160,7 @@ import { recoverStuckClassifications } from './services/brain.js';
 import { recoverStuckAnalyses } from './services/writersRoom/evaluator.js';
 import { recoverStuckAutoRuns } from './services/pipeline/autoRunner.js';
 import { startOrphanShellGc } from './services/importerOrphanGc.js';
+import { startImageRefsGc } from './services/imageRefsGc.js';
 import { initBridge as initBrainMemoryBridge } from './services/brainMemoryBridge.js';
 import { initDrillCache } from './services/meatspacePostDrillCache.js';
 import { createAIToolkit } from './lib/aiToolkit/index.js';
@@ -227,7 +233,7 @@ await runMigrations({ rootDir: join(__dirname, '..') }).catch(err => {
 // but DO NOT crash the server. PortOS is single-user (CLAUDE.md "Security
 // Model"); a hard exit on startup is worse than a noisy log the user can act
 // on. Returns per-store statuses for downstream telemetry; we discard them.
-await verifyCollectionVersions([universeStore(), seriesStore(), issueStore(), conflictJournalStore(), storyBuilderStore(), mediaCollectionStore()]).catch(err => {
+await verifyCollectionVersions([universeStore(), seriesStore(), issueStore(), conflictJournalStore(), storyBuilderStore(), mediaCollectionStore(), loraDatasetStore]).catch(err => {
   console.error(`❌ Collection version check failed at startup: ${err?.stack ?? err}`);
 });
 
@@ -513,12 +519,15 @@ app.use('/api/media-jobs', mediaJobsRoutes);
 app.use('/api/creative-director', creativeDirectorRoutes);
 app.use('/api/writers-room', writersRoomRoutes);
 app.use('/api/universe-builder', universeBuilderRoutes);
+app.use('/api/authors', authorsRoutes);
 app.use('/api/pipeline', pipelineRoutes);
 app.use('/api/conflict-journal', conflictJournalRoutes);
 app.use('/api/importer', importerRoutes);
 app.use('/api/story-builder', storyBuilderRoutes);
 app.use('/api/image-video/models', imageVideoModelsRoutes);
 app.use('/api/loras', lorasRoutes);
+app.use('/api/lora-datasets', loraDatasetsRoutes);
+app.use('/api/lora-training', loraTrainingRoutes);
 // AUTOMATIC1111-compatible surface for tailnet clients — gated by
 // settings.imageGen.expose.a1111 so it returns 403 unless the user opted in.
 app.use('/sdapi/v1', sdapiRoutes);
@@ -572,6 +581,9 @@ startCitySnapshotScheduler().catch(err => console.error(`❌ City snapshot sched
 // Periodically GC orphan zero-issue/zero-canon importer shells left by an
 // abandoned analyze (issue #727).
 startOrphanShellGc();
+// Periodically GC orphan staged init/reference upload images that pile up in
+// data/image-refs on every i2i/edit render and are never cleaned up (issue #1214).
+startImageRefsGc();
 // Warm the catalog user-type registry from the user-type store (Postgres as of
 // #1001; the settings.json slice under the escape hatch) before any catalog
 // request can land, so user-defined types validate + mint ids immediately on
@@ -659,6 +671,8 @@ app.use('/data/images', express.static(PATHS.images, ASSET_STATIC_OPTS));
 // Reference images (multi-ref upload inputs + generated character reference
 // sheets) — served read-only so the UI can render thumbnails by URL.
 app.use('/data/image-refs', express.static(PATHS.imageRefs, ASSET_STATIC_OPTS));
+// LoRA training dataset images (lora-datasets/<id>/images/*.png).
+app.use('/data/lora-datasets', express.static(PATHS.loraDatasets, ASSET_STATIC_OPTS));
 // Serve generated videos + thumbnails so the Media UI and tailnet clients
 // can pull them by URL without going through an explicit download route.
 app.use('/data/videos', express.static(PATHS.videos, ASSET_STATIC_OPTS));
@@ -669,6 +683,10 @@ app.use('/data/audio', express.static(PATHS.audio));
 // Background-music tracks (uploaded today, generated locally tomorrow). The
 // AudioStage music picker plays them inline via <audio src="/data/music/...">.
 app.use('/data/music', express.static(PATHS.music));
+// Extracted third-party import assets (ChatGPT export images/audio/PDFs). The
+// Brain Memory conversation viewer renders these inline (`![](/data/brain-
+// imports/...)`) and as asset links. Read-only; range support for large PDFs.
+app.use('/data/brain-imports', express.static(PATHS.brainImportAssets, ASSET_STATIC_OPTS));
 
 // Serve built client UI (production mode — no Vite dev server needed)
 const CLIENT_DIST = join(__dirname, '..', 'client', 'dist');
@@ -730,6 +748,10 @@ ensureSelf()
   })
   .then(() => initMediaJobQueue())
   .then(() => {
+    // LoRA training run records reconcile against the live queue (interrupted
+    // runs → failed) and mirror queue-side cancels — must run after the queue
+    // has loaded its persisted jobs.
+    initLoraTraining().catch(err => console.error(`❌ loraTraining init failed: ${err.message}`));
     // Universe Builder needs the media job queue running before it can listen
     // for `completed` events — so initialize the hook here.
     initUniverseBuilderCollectionHook();

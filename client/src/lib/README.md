@@ -48,6 +48,7 @@ grep -i "what you want to do" client/src/lib/README.md
 | `imageGenBackends.js` | `IMAGE_GEN_MODE` enum (local / codex / external) + metadata; `deriveAvailableBackends`; `I2I_CAPABLE_MODES` / `isI2iCapableMode(mode)` / `pickI2iMode(backends)` — image-to-image capability gating + best-backend selection. |
 | `imageGenDefaults.js` | Shared `DEFAULT_NEGATIVE_PROMPT` used by the Image Gen form and quick-submit entry points. Mirrors server-side default. |
 | `imageGenResolutions.js` | Shared resolution presets for image generation. |
+| `importerDeepLink.js` | The Importer deep-link contract both ways: `buildImporterLink({ universeId, seriesId, seriesName })` builds the `/importer?…` URL a Series Pipeline page navigates to; `resolveImporterDeepLink(...)` reads those params back into the universe + series names the importer matches on. |
 | `videoGenResolutions.js` | Shared resolution presets for video generation (companion to image side; LTX-2 latent-friendly sizes). |
 | `videoTilingOptions.js` | `VIDEO_TILING_OPTIONS` (the `<select>` rows) + `VIDEO_TILING_ENUM_SET` (the value-only Set). Single source consumed by `VideoGen.jsx` and the Remix URL builder in `useMediaPreviewActions`. Mirrors the server's `z.enum` in `server/routes/videoGen.js`. |
 

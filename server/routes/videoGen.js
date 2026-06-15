@@ -151,6 +151,27 @@ const generateBodySchema = z.object({
       index: z.number().int().min(0).max(1023),
     })).min(2).max(8).optional(),
   ),
+  // Video LoRAs to fuse for this render (ltx2 runtime only). Sent as the SAME
+  // universal contract image renders use — parallel `loraFilenames` +
+  // `loraScales` arrays — NOT a bespoke shape. This is what lets a history
+  // requeue via getRenderConfigForItem() (which emits exactly these fields)
+  // round-trip with no per-page translation. Multipart sends each array as
+  // repeated keys; a SINGLE entry arrives as a bare string and scales arrive as
+  // strings, so wrap+coerce in preprocess (mirrors server/routes/imageGen.js).
+  // `filename` rejects path separators here; the service re-validates with
+  // assertSafeLoraFilename before touching disk.
+  loraFilenames: z.preprocess(
+    (v) => (v == null || v === '') ? undefined : (Array.isArray(v) ? v : [v]),
+    z.array(z.string().min(1).max(255).regex(/^[^/\\]+\.safetensors$/i, 'filename must be a bare .safetensors basename')).max(8).optional(),
+  ),
+  loraScales: z.preprocess(
+    (v) => {
+      if (v == null || v === '') return undefined;
+      const raw = Array.isArray(v) ? v : [v];
+      return raw.map((x) => (typeof x === 'string' && x !== '' ? Number(x) : x));
+    },
+    z.array(z.number().min(0).max(2)).max(8).optional(),
+  ),
 });
 
 // Probes required-package imports on each call so a half-installed Python
@@ -682,6 +703,29 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
     extendFromVideoPath = candidate;
   }
 
+  // Collapse the parallel loraFilenames/loraScales arrays into the internal
+  // `[{ filename, scale }]` shape the service (resolveVideoLoras) and the
+  // resume param echo consume. A defaulted scale keeps the worker contract
+  // simple. Empty (picker cleared) → undefined.
+  const loras = Array.isArray(body.loraFilenames) && body.loraFilenames.length
+    ? body.loraFilenames.map((filename, i) => ({
+        filename,
+        scale: typeof body.loraScales?.[i] === 'number' ? body.loraScales[i] : 1.0,
+      }))
+    : undefined;
+
+  // Video LoRAs are an ltx2-runtime primitive — the dgrauet pipeline fuses
+  // them via _pending_loras (see scripts/generate_ltx2.py). Reject up-front on
+  // any other runtime so a bad modelId can't enqueue a doomed job that only
+  // fails in the worker.
+  if (loras && effectiveModel && effectiveModel.runtime !== 'ltx2') {
+    await cleanupAllStaged();
+    throw new ServerError(
+      `LoRAs require an ltx2-runtime model. Model "${effectiveModelId}" runs on "${effectiveModel.runtime || 'mlx_video'}".`,
+      { status: 400, code: 'LORAS_REQUIRE_LTX2' },
+    );
+  }
+
   const effectiveChunks = body.mode === 'a2v' ? 1 : (body.chunks ?? 1);
 
   // Enqueue rather than spawn synchronously — the mediaJobQueue worker will
@@ -712,6 +756,7 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
       mode: body.mode,
       imageStrength: body.imageStrength,
       chunks: effectiveChunks,
+      loras,
     },
   });
   // Match the legacy response shape (jobId, generationId, filename, model,
@@ -739,6 +784,9 @@ const ACTIVE_JOB_PARAM_FIELDS = [
   'width', 'height', 'numFrames', 'fps',
   'steps', 'guidanceScale', 'seed',
   'tiling', 'disableAudio', 'mode', 'chunks', 'imageStrength',
+  // loras are { filename, scale } basenames (no server filesystem paths), so
+  // they're safe to echo back for the resuming picker to repopulate.
+  'loras',
 ];
 const pickJobParams = (params) => {
   if (!params || typeof params !== 'object') return {};

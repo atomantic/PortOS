@@ -40,6 +40,7 @@ import {
 } from '../../lib/sseUtils.js';
 import { videoGenEvents } from '../videoGen/events.js';
 import { imageGenEvents } from '../imageGenEvents.js';
+import { trainingEvents } from '../loraTraining/events.js';
 import { getSettings } from '../settings.js';
 import { IMAGE_GEN_MODE } from '../imageGen/modes.js';
 
@@ -64,6 +65,10 @@ const WATCHDOG_IMAGE_MS = watchdogMs(process.env.MEDIA_JOB_WATCHDOG_IMAGE_MS, 5 
 // default trips false positives. 20 minutes covers a slow generation +
 // queueing delay, and is env-overridable when batch limits change.
 const WATCHDOG_CODEX_MS = watchdogMs(process.env.MEDIA_JOB_WATCHDOG_CODEX_MS, 20 * 60 * 1000);
+// Training is idle-based like video — per-step STEP: lines and the python
+// heartbeat thread reset it, so 30 minutes only trips on true hangs (model
+// download stalls emit tqdm lines; GIL-pinned wedges emit nothing).
+const WATCHDOG_TRAINING_MS = watchdogMs(process.env.MEDIA_JOB_WATCHDOG_TRAINING_MS, 30 * 60 * 1000);
 const PROGRESS_PERSIST_DEBOUNCE_MS = 250;
 
 // Returns true if `p` resolves strictly under PATHS.uploads. Shared by
@@ -100,7 +105,7 @@ async function safeUnlinkUpload(path) {
   await unlink(path).catch(() => {});
 }
 
-export const JOB_KINDS = Object.freeze(['video', 'image']);
+export const JOB_KINDS = Object.freeze(['video', 'image', 'training']);
 export const JOB_STATUSES = Object.freeze(['queued', 'running', 'completed', 'failed', 'canceled']);
 
 // Returns a Promise that resolves to the gen module for the given job's
@@ -109,6 +114,7 @@ export const JOB_STATUSES = Object.freeze(['queued', 'running', 'completed', 'fa
 // so a new provider addition is one edit instead of three.
 function getGenModuleForJob(job) {
   if (job.kind === 'video') return import('../videoGen/local.js');
+  if (job.kind === 'training') return import('../loraTraining/index.js');
   if (job.kind === 'image' && job.params?.mode === IMAGE_GEN_MODE.CODEX) return import('../imageGen/codex.js');
   if (job.kind === 'image') return import('../imageGen/local.js');
   return Promise.resolve(null);
@@ -120,7 +126,12 @@ function getGenModuleForJob(job) {
 // here so the seam stays in one place instead of accreting into runJob.
 // Mutates safeParams in place.
 async function resolveLiveParams(job, safeParams) {
-  const usesLocalPython = job.kind === 'video' || (job.kind === 'image' && job.params?.mode !== IMAGE_GEN_MODE.CODEX);
+  // mflux training runs in the same venv as local image renders, so the
+  // live settings pythonPath wins there too. flux2 training resolves its
+  // own venv (resolveFlux2Python) inside runTraining — skip it here.
+  const usesLocalPython = job.kind === 'video'
+    || (job.kind === 'image' && job.params?.mode !== IMAGE_GEN_MODE.CODEX)
+    || (job.kind === 'training' && job.params?.runtime === 'mflux');
   if (!usesLocalPython) return;
   const live = await getSettings().catch(() => null);
   const livePythonPath = live?.imageGen?.local?.pythonPath || null;
@@ -490,7 +501,7 @@ function recomputeQueuePositions() {
 // the queue, even though the underlying emitters don't supply one.
 function synthesizeMessage(e, kind) {
   if (typeof e.step === 'number' && typeof e.totalSteps === 'number' && e.totalSteps > 0) {
-    const verb = kind === 'video' ? 'Rendering' : 'Generating';
+    const verb = kind === 'video' ? 'Rendering' : kind === 'training' ? 'Training' : 'Generating';
     return `${verb} step ${e.step}/${e.totalSteps}`;
   }
   return undefined;
@@ -501,10 +512,20 @@ function makeGenDispatcher(emitter, job, handlers) {
     const hasProgress = typeof e.progress === 'number' && Number.isFinite(e.progress);
     const hasCurrentImage = typeof e.currentImage === 'string' && e.currentImage.length > 0;
     const message = e.message !== undefined ? e.message : synthesizeMessage(e, job.kind);
+    // Structured step/loss ride along on the wire when the emitter supplies
+    // them (LoRA training does) so the client plots a loss curve and keys
+    // sample thumbnails by step instead of re-parsing the message string.
+    // Additive + presence-guarded — image/video gen omit them, unaffected.
+    const addStepFields = (payload) => {
+      if (typeof e.step === 'number') payload.step = e.step;
+      if (typeof e.totalSteps === 'number') payload.totalSteps = e.totalSteps;
+      if (typeof e.loss === 'number') payload.loss = e.loss;
+    };
     if (hasProgress) {
       const payload = { type: 'progress', progress: e.progress };
       if (hasCurrentImage) payload.currentImage = e.currentImage;
       if (message !== undefined) payload.message = message;
+      addStepFields(payload);
       handlers.progress(payload);
       return;
     }
@@ -513,6 +534,7 @@ function makeGenDispatcher(emitter, job, handlers) {
       // existing consumers can keep their progress-bar value untouched.
       const payload = { type: 'preview', currentImage: e.currentImage };
       if (message !== undefined) payload.message = message;
+      addStepFields(payload);
       handlers.progress(payload);
     }
   };
@@ -684,7 +706,9 @@ async function runJob(job) {
 
   await resolveLiveParams(job, safeParams);
 
-  const emitter = job.kind === 'video' ? videoGenEvents : imageGenEvents;
+  const emitter = job.kind === 'video' ? videoGenEvents
+    : job.kind === 'training' ? trainingEvents
+    : imageGenEvents;
   const dispatcher = makeGenDispatcher(emitter, job, handlers);
   dispatcher.attach();
 
@@ -698,6 +722,7 @@ async function runJob(job) {
   // lastActivityAt; only true hangs (process wedged, no output) trip it.
   const idleTimeoutMs = (() => {
     if (job.kind === 'video') return WATCHDOG_VIDEO_MS * Math.max(1, Number(safeParams.chunks) || 1);
+    if (job.kind === 'training') return WATCHDOG_TRAINING_MS;
     if (isCodexJob(job)) return WATCHDOG_CODEX_MS;
     return WATCHDOG_IMAGE_MS;
   })();
@@ -761,6 +786,8 @@ async function runJob(job) {
       await mod.generateChainedVideo({ ...safeParams, jobId: job.id });
     } else if (job.kind === 'video') {
       await mod.generateVideo({ ...safeParams, jobId: job.id });
+    } else if (job.kind === 'training') {
+      await mod.runTraining({ ...safeParams, jobId: job.id });
     } else {
       await mod.generateImage({ ...safeParams, jobId: job.id });
     }

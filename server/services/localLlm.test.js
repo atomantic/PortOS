@@ -19,6 +19,7 @@ vi.mock('../lib/fileUtils.js', async () => {
 const mocks = vi.hoisted(() => ({
   ollama: {
     getInstalledModels: vi.fn(async () => []),
+    getModelCapabilities: vi.fn(async () => []),
     pullModel: vi.fn(async (id) => ({ success: true, modelId: id })),
     deleteModel: vi.fn(async (id) => ({ success: true, modelId: id })),
     getStatus: vi.fn(async () => ({ available: true, baseUrl: 'x', version: '1', modelCount: 0, models: [] })),
@@ -298,6 +299,34 @@ describe('localLlm', () => {
       } finally {
         Object.defineProperty(process, 'platform', orig);
       }
+    });
+  });
+
+  describe('listVisionModels', () => {
+    it('detects a vision-capable Ollama model whose id lacks a vl/vision token via /api/show capabilities', async () => {
+      mocks.ollama.getInstalledModels.mockResolvedValueOnce([
+        { id: 'qwen3.6:35b', name: 'qwen3.6:35b', family: 'qwen35moe' },
+        { id: 'gemma4:31b', name: 'gemma4:31b', family: 'gemma4' },
+      ]);
+      mocks.ollama.getModelCapabilities.mockImplementation(async (id) =>
+        id === 'qwen3.6:35b' ? ['completion', 'vision', 'tools'] : ['completion']);
+
+      const models = await svc.listVisionModels();
+      expect(models).toEqual([
+        { providerId: 'ollama', backend: 'ollama', id: 'qwen3.6:35b', name: 'qwen3.6:35b', vision: true },
+      ]);
+      // The text-only gemma was excluded even though /api/show was consulted.
+      expect(mocks.ollama.getModelCapabilities).toHaveBeenCalledWith('gemma4:31b');
+    });
+
+    it('skips the /api/show round-trip when the id already matches the vision heuristic', async () => {
+      mocks.ollama.getInstalledModels.mockResolvedValueOnce([
+        { id: 'qwen2.5-vl:7b', name: 'qwen2.5-vl:7b', family: 'qwen2vl' },
+      ]);
+
+      const models = await svc.listVisionModels();
+      expect(models.map((m) => m.id)).toEqual(['qwen2.5-vl:7b']);
+      expect(mocks.ollama.getModelCapabilities).not.toHaveBeenCalled();
     });
   });
 });

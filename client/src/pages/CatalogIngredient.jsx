@@ -26,6 +26,7 @@ import {
 import { listImageGallery } from '../services/apiImageVideo';
 import IngredientPicker from '../components/IngredientPicker';
 import MediaImage from '../components/MediaImage';
+import CharacterLoraChip from '../components/loraTraining/CharacterLoraChip';
 import TagPicker from '../components/TagPicker';
 import GenericIngredientFields from '../components/GenericIngredientFields';
 import { getCatalogType, CATALOG_BADGE_BY_ID, RELATION_KINDS, getRelationKind } from '../lib/catalogTypes';
@@ -391,7 +392,17 @@ export default function CatalogIngredient() {
         </div>
 
         {record.type === 'character' && (
-          <ReferenceSheetPanel payload={payload} universeRef={universeRef} />
+          <>
+            <ReferenceSheetPanel payload={payload} universeRef={universeRef} />
+            {/* Trained-LoRA link + dataset entry point. The catalog id IS the
+                ingredientId the trained sidecars carry; the universe entryId
+                isn't known on this surface, so the chip links an existing
+                dataset rather than offering find-or-create. */}
+            <div className="bg-port-card border border-port-border rounded-lg p-4">
+              <div className="text-xs uppercase tracking-wider text-gray-500 mb-2">Character LoRA</div>
+              <CharacterLoraChip ingredientId={record.id} />
+            </div>
+          </>
         )}
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

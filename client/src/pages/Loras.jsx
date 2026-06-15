@@ -14,10 +14,11 @@ import toast from '../components/ui/Toast';
 import Modal from '../components/ui/Modal';
 import Banner from '../components/ui/Banner';
 import { formatBytes } from '../utils/formatters';
-import { RUNNER_FAMILIES } from '../lib/runnerFamilies';
+import { RUNNER_FAMILIES, VIDEO_LORA_FAMILIES, isVideoLoraFamily } from '../lib/runnerFamilies';
 import {
   listLorasFull,
   installLoraFromCivitai,
+  installLoraFromHuggingface,
   deleteLoraFull,
   getCivitaiAuth,
   setCivitaiAuth,
@@ -33,6 +34,7 @@ const RUNNER_LABEL = {
   [RUNNER_FAMILIES.ERNIE]: 'ERNIE',
   [RUNNER_FAMILIES.HIDREAM]: 'HiDream',
   [RUNNER_FAMILIES.QWEN]: 'Qwen',
+  [VIDEO_LORA_FAMILIES.LTX_VIDEO]: 'LTX-Video',
 };
 const RUNNER_BADGE_CLASS = {
   [RUNNER_FAMILIES.MFLUX]: 'bg-port-accent/20 text-port-accent border-port-accent/30',
@@ -41,7 +43,16 @@ const RUNNER_BADGE_CLASS = {
   [RUNNER_FAMILIES.ERNIE]: 'bg-amber-600/20 text-amber-300 border-amber-500/30',
   [RUNNER_FAMILIES.HIDREAM]: 'bg-rose-600/20 text-rose-300 border-rose-500/30',
   [RUNNER_FAMILIES.QWEN]: 'bg-sky-600/20 text-sky-300 border-sky-500/30',
+  [VIDEO_LORA_FAMILIES.LTX_VIDEO]: 'bg-fuchsia-600/20 text-fuchsia-300 border-fuchsia-500/30',
 };
+
+// Image/Video filter applied to BOTH the suggestion panel and the installed
+// list (see the user request: filter suggestions + installed by media type).
+const MEDIA_FILTERS = [
+  { id: 'all', label: 'All' },
+  { id: 'image', label: 'Image' },
+  { id: 'video', label: 'Video' },
+];
 
 // Stable identity for a suggestion's specific model+version — used for React
 // keys, install-in-flight tracking, and "Load more" dedup. Curated cards pass
@@ -56,6 +67,15 @@ export default function Loras() {
   const [error, setError] = useState(null);
   const [installUrl, setInstallUrl] = useState('');
   const [installing, setInstalling] = useState(false);
+  // HuggingFace video-LoRA import (fal / Lightricks LTX LoRAs) — separate from
+  // the Civitai installer above because video LoRAs live on HF.
+  const [hfUrl, setHfUrl] = useState('');
+  const [hfInstalling, setHfInstalling] = useState(false);
+  // When autodetection can't classify the repo (HF_UNKNOWN_FAMILY), hold the
+  // URL here to render an inline "install as LTX-Video?" confirm row — the API
+  // supports an explicit family override, so a valid LTX LoRA with an
+  // unrecognizable id shouldn't dead-end at an error toast.
+  const [hfFamilyPrompt, setHfFamilyPrompt] = useState(null);
   const [deleting, setDeleting] = useState(null);
   // Civitai auth — `auth` is `{ hasKey, source }`; `authPrompt` is set to a
   // pending install URL when a 401/403 redirects the user to the inline key
@@ -63,10 +83,15 @@ export default function Loras() {
   // so users don't have to remember what they were installing.
   const [auth, setAuth] = useState({ hasKey: false, source: 'none' });
   const [authPrompt, setAuthPrompt] = useState(null);
-  // suggestions: { runners: { mflux: [...], flux2: [...], 'z-image': [...] }, fetchedAt }
+  // suggestions: { runners: { mflux: [...], flux2: [...], 'z-image': [...] }, video: [...], fetchedAt }
   const [suggestions, setSuggestions] = useState(null);
   const [loadingSuggestions, setLoadingSuggestions] = useState(true);
   const [installingSuggestion, setInstallingSuggestion] = useState(null);
+  // Repo of the video suggestion currently installing (HF installs key off
+  // repo, not modelId/versionId like the Civitai path).
+  const [installingVideoRepo, setInstallingVideoRepo] = useState(null);
+  // Image/Video media-type filter for both panels. 'all' | 'image' | 'video'.
+  const [mediaFilter, setMediaFilter] = useState('all');
 
   const refresh = useCallback(() => {
     setError(null);
@@ -124,6 +149,56 @@ export default function Loras() {
     return performInstall(installUrl.trim());
   };
 
+  // Install a video LoRA from a HuggingFace repo. The family is auto-detected
+  // server-side from the repo id/tags (LTX-Video → ltx-video); HF_UNKNOWN_FAMILY
+  // surfaces as a toast asking the user to confirm it's an LTX LoRA.
+  // Shared install runner: `family` is undefined for the first attempt
+  // (server autodetects) and set to the override on the inline-confirm retry.
+  const runHfInstall = useCallback(async (url, family) => {
+    if (!url || hfInstalling) return;
+    setHfInstalling(true);
+    await installLoraFromHuggingface({ url, family, silent: true })
+      .then((sidecar) => {
+        toast.success(`Installed ${sidecar.name}`);
+        setHfUrl('');
+        setHfFamilyPrompt(null);
+        refresh();
+      })
+      .catch((err) => {
+        // Autodetection failed but the install is otherwise valid — offer an
+        // inline confirm to retry with the LTX-Video family rather than toast a
+        // dead-end. (Skip when we already tried with an explicit override.)
+        if (err?.code === 'HF_UNKNOWN_FAMILY' && !family) {
+          setHfFamilyPrompt(url);
+        } else {
+          toast.error(err?.message || 'HuggingFace install failed');
+        }
+      })
+      .finally(() => setHfInstalling(false));
+  }, [hfInstalling, refresh]);
+
+  const handleHfInstall = useCallback((e) => {
+    e?.preventDefault?.();
+    setHfFamilyPrompt(null);
+    return runHfInstall(hfUrl.trim(), undefined);
+  }, [hfUrl, runHfInstall]);
+
+  // Quick-install a curated video LoRA suggestion. Routes through the HF
+  // installer (not the Civitai one) with the card's known family. Tracks the
+  // in-flight repo in its own state because the Civitai `installingSuggestion`
+  // key is modelId/versionId-based — video installs have neither.
+  const installVideoSuggestion = useCallback(async (card) => {
+    if (!card?.installUrl || installingVideoRepo) return;
+    setInstallingVideoRepo(card.repo);
+    await installLoraFromHuggingface({ url: card.installUrl, family: card.runnerFamily, silent: true })
+      .then((sidecar) => {
+        toast.success(`Installed ${sidecar.name}`);
+        refresh();
+      })
+      .catch((err) => toast.error(err?.message || 'HuggingFace install failed'))
+      .finally(() => setInstallingVideoRepo(null));
+  }, [installingVideoRepo, refresh]);
+
   const handleDelete = async (filename) => {
     setDeleting(filename);
     await deleteLoraFull(filename)
@@ -135,12 +210,21 @@ export default function Loras() {
       .finally(() => setDeleting(null));
   };
 
+  // Installed list narrowed to the active media filter. Video families
+  // (ltx-video) are video; everything else (image families + legacy null) is
+  // image.
+  const visibleLoras = loras.filter((l) => {
+    if (mediaFilter === 'image') return !isVideoLoraFamily(l.runnerFamily);
+    if (mediaFilter === 'video') return isVideoLoraFamily(l.runnerFamily);
+    return true;
+  });
+
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-white mb-1">LoRA Manager</h1>
         <p className="text-sm text-gray-400">
-          Install LoRA fine-tunes from Civitai and apply them to your Image Gen renders.
+          Install LoRA fine-tunes from Civitai (image) or HuggingFace (video) and apply them to your Image Gen and Video Gen renders.
         </p>
       </div>
 
@@ -180,6 +264,64 @@ export default function Loras() {
         </p>
       </form>
 
+      <form
+        onSubmit={handleHfInstall}
+        className="bg-port-card border border-port-border rounded-lg p-4 space-y-3"
+      >
+        <div className="flex items-center gap-2 text-sm font-medium text-gray-300">
+          <Download size={16} />
+          <span>Install video LoRA from HuggingFace</span>
+        </div>
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={hfUrl}
+            onChange={(e) => setHfUrl(e.target.value)}
+            placeholder="https://huggingface.co/fal/ltx2.3-audio-reactive-lora"
+            className="flex-1 bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-gray-200 placeholder:text-gray-600"
+            disabled={hfInstalling}
+          />
+          <button
+            type="submit"
+            disabled={hfInstalling || !hfUrl.trim()}
+            className="bg-port-accent text-white px-4 py-2 rounded text-sm font-medium hover:bg-port-accent/90 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+          >
+            {hfInstalling ? 'Downloading…' : 'Install'}
+          </button>
+        </div>
+        <p className="text-xs text-gray-500">
+          Paste a <code className="bg-port-bg px-1 rounded">huggingface.co</code> repo URL — or an{' '}
+          <code className="bg-port-bg px-1 rounded">org/name</code> id — for an LTX-Video LoRA
+          (e.g. <code className="bg-port-bg px-1 rounded">fal/ltx2.3-audio-reactive-lora</code>).
+          These apply to <Link to="/media/video" className="text-port-accent hover:underline">Video Gen</Link> renders on an LTX-2 (ltx2) model. Gated repos use your HuggingFace token from Image Gen settings.
+        </p>
+        {hfFamilyPrompt && (
+          <div className="flex items-center justify-between gap-3 rounded border border-port-warning/40 bg-port-warning/10 px-3 py-2">
+            <span className="text-xs text-gray-300">
+              Couldn&apos;t detect the model family for <code className="bg-port-bg px-1 rounded">{hfFamilyPrompt}</code>. Install it as an LTX-Video LoRA?
+            </span>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => runHfInstall(hfFamilyPrompt, VIDEO_LORA_FAMILIES.LTX_VIDEO)}
+                disabled={hfInstalling}
+                className="bg-port-accent text-white px-3 py-1 rounded text-xs font-medium hover:bg-port-accent/90 disabled:opacity-50"
+              >
+                {hfInstalling ? 'Installing…' : 'Install as LTX-Video'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setHfFamilyPrompt(null)}
+                disabled={hfInstalling}
+                className="text-gray-400 hover:text-gray-200 px-2 py-1 rounded text-xs disabled:opacity-50"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+      </form>
+
       {authPrompt && (
         <CivitaiAuthModal
           pendingUrl={authPrompt.url}
@@ -198,12 +340,18 @@ export default function Loras() {
         />
       )}
 
+      <MediaFilter value={mediaFilter} onChange={setMediaFilter} />
+
       <SuggestionsPanel
         suggestions={suggestions}
         loading={loadingSuggestions}
+        mediaFilter={mediaFilter}
         installedFilenames={new Set(loras.map((l) => l.filename))}
+        installedHfRepos={new Set(loras.map((l) => l.huggingface?.repo).filter(Boolean))}
         installingSuggestionKey={installingSuggestion}
+        installingVideoRepo={installingVideoRepo}
         onRefresh={() => refreshSuggestions({ force: true })}
+        onInstallVideo={installVideoSuggestion}
         onInstall={async (card, url, versionId) => {
           // Curated cards pass a family-specific (url, versionId); non-curated
           // cards omit versionId and we fall back to the card's primary.
@@ -221,14 +369,16 @@ export default function Loras() {
         {error && (
           <Banner tone="error" size="md" icon={AlertTriangle} align="center">{error}</Banner>
         )}
-        {!loading && !error && loras.length === 0 && (
+        {!loading && !error && visibleLoras.length === 0 && (
           <div className="text-sm text-gray-500 italic">
-            No LoRAs installed yet — pick one from the suggestions above, or paste a Civitai URL.
+            {loras.length === 0
+              ? 'No LoRAs installed yet — pick one from the suggestions above, or paste a Civitai URL.'
+              : `No ${mediaFilter} LoRAs installed.`}
           </div>
         )}
-        {loras.length > 0 && (
+        {visibleLoras.length > 0 && (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-            {loras.map((lora) => (
+            {visibleLoras.map((lora) => (
               <LoraCard key={lora.filename} lora={lora} onDelete={() => handleDelete(lora.filename)} deleting={deleting === lora.filename} />
             ))}
           </div>
@@ -238,9 +388,40 @@ export default function Loras() {
   );
 }
 
-function SuggestionsPanel({ suggestions, loading, installedFilenames, installingSuggestionKey, onRefresh, onInstall }) {
+// Segmented All / Image / Video control. Pure presentational — the parent owns
+// the `mediaFilter` state and applies it to both the suggestion panel and the
+// installed list.
+function MediaFilter({ value, onChange }) {
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-xs text-gray-500">Show</span>
+      <div className="inline-flex rounded-lg border border-port-border overflow-hidden">
+        {MEDIA_FILTERS.map((f) => (
+          <button
+            key={f.id}
+            type="button"
+            onClick={() => onChange(f.id)}
+            aria-pressed={value === f.id}
+            className={`px-3 py-1 text-xs font-medium transition-colors ${
+              value === f.id
+                ? 'bg-port-accent text-white'
+                : 'bg-port-card text-gray-400 hover:text-gray-200'
+            }`}
+          >
+            {f.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SuggestionsPanel({ suggestions, loading, mediaFilter = 'all', installedFilenames, installedHfRepos, installingSuggestionKey, installingVideoRepo, onRefresh, onInstall, onInstallVideo }) {
   const curated = suggestions?.curated || [];
   const runners = suggestions?.runners || {};
+  const video = suggestions?.video || [];
+  const showImage = mediaFilter !== 'video';
+  const showVideo = mediaFilter !== 'image';
   const sections = [
     { key: 'curated', label: 'Curated picks', cards: curated, hint: 'Hand-picked LoRAs that work across multiple base models.' },
     // The runner-family sections always render, even when Civitai search
@@ -276,7 +457,7 @@ function SuggestionsPanel({ suggestions, loading, installedFilenames, installing
       {loading && !suggestions && (
         <div className="text-sm text-gray-500">Loading suggestions…</div>
       )}
-      {sections.map((section) => (
+      {showImage && sections.map((section) => (
         <SuggestionsSection
           key={section.key}
           label={section.label}
@@ -292,6 +473,99 @@ function SuggestionsPanel({ suggestions, loading, installedFilenames, installing
           onInstall={onInstall}
         />
       ))}
+      {showVideo && (
+        <VideoSuggestionsSection
+          cards={video}
+          installedHfRepos={installedHfRepos}
+          installingVideoRepo={installingVideoRepo}
+          onInstall={onInstallVideo}
+        />
+      )}
+    </div>
+  );
+}
+
+// Curated HuggingFace video LoRAs (LTX-Video). No keyword search / pagination
+// like the Civitai sections — it's a small hand-picked list installed via the
+// HF path. Installed-state matches on the repo (HF installs carry no
+// modelId/versionId).
+function VideoSuggestionsSection({ cards, installedHfRepos, installingVideoRepo, onInstall }) {
+  const list = cards || [];
+  return (
+    <div>
+      <div className="flex items-baseline gap-3 mb-2">
+        <h3 className="text-sm font-medium text-gray-300">Video LoRAs</h3>
+        <span className="text-xs text-gray-600">{list.length}</span>
+      </div>
+      <p className="text-xs text-gray-500 mb-2">
+        Curated LTX-Video LoRAs from HuggingFace — apply on an LTX-2 (ltx2) model in{' '}
+        <Link to="/media/video" className="text-port-accent hover:underline">Video Gen</Link>.
+      </p>
+      {list.length === 0 ? (
+        <p className="text-xs text-gray-600 italic">No video LoRA suggestions yet.</p>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+          {list.map((card) => (
+            <VideoSuggestionCard
+              key={card.repo}
+              card={card}
+              installed={installedHfRepos?.has(card.repo)}
+              installing={installingVideoRepo === card.repo}
+              onInstall={onInstall}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function VideoSuggestionCard({ card, installed, installing, onInstall }) {
+  return (
+    <div className="bg-port-card border border-port-border rounded-lg overflow-hidden flex flex-col">
+      {card.previewImageUrl ? (
+        <img src={card.previewImageUrl} alt="" className="w-full h-64 object-cover bg-port-bg" loading="lazy" referrerPolicy="no-referrer" />
+      ) : (
+        <div className="w-full h-64 bg-port-bg flex items-center justify-center text-gray-700">
+          <Sparkles size={32} />
+        </div>
+      )}
+      <div className="p-3 flex-1 flex flex-col gap-2">
+        <div className="flex items-start justify-between gap-2">
+          <h4 className="font-semibold text-white text-sm flex-1 break-words">{card.name}</h4>
+          <span className={`text-[10px] px-1.5 py-0.5 rounded border whitespace-nowrap ${RUNNER_BADGE_CLASS[card.runnerFamily] || 'bg-gray-600/20 text-gray-300 border-gray-500/30'}`}>
+            {RUNNER_LABEL[card.runnerFamily] || 'Video'}
+          </span>
+        </div>
+        {card.note && <p className="text-[11px] text-gray-400 italic break-words">{card.note}</p>}
+        {card.description && (
+          <details className="text-[11px] text-gray-500">
+            <summary className="cursor-pointer hover:text-gray-300">Details</summary>
+            <p className="mt-1 text-[10px] leading-snug bg-port-bg p-1.5 rounded border border-port-border line-clamp-4">{card.description}</p>
+          </details>
+        )}
+        <div className="flex items-center gap-2 mt-auto">
+          {installed ? (
+            <button disabled className="flex-1 bg-port-success/20 text-port-success border border-port-success/30 px-3 py-1.5 rounded text-xs font-medium flex items-center justify-center gap-1">
+              <Check size={12} /> Installed
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => onInstall(card)}
+              disabled={installing}
+              className="flex-1 bg-port-accent text-white px-3 py-1.5 rounded text-xs font-medium hover:bg-port-accent/90 disabled:opacity-50"
+            >
+              {installing ? 'Installing…' : 'Quick install'}
+            </button>
+          )}
+        </div>
+        {card.hfUrl && (
+          <a href={card.hfUrl} target="_blank" rel="noopener noreferrer" className="text-[10px] text-gray-500 hover:text-gray-300 inline-flex items-center gap-1 self-start" title="Open on HuggingFace">
+            <ExternalLink size={11} /> View on HuggingFace
+          </a>
+        )}
+      </div>
     </div>
   );
 }
@@ -683,9 +957,12 @@ function LoraCard({ lora, onDelete, deleting }) {
   const badgeClass = family ? (RUNNER_BADGE_CLASS[family] || 'bg-gray-600/20 text-gray-300 border-gray-500/30') : 'bg-port-warning/20 text-port-warning border-port-warning/30';
   const triggerWords = lora.triggerWords || [];
   const civitai = lora.civitai;
-  // Image Gen page reads ?lora=<filename> as a preselect hint via query string;
-  // keeps the manager → gen handoff URL-driven (deep-linkable).
-  const testHref = `/media/image?lora=${encodeURIComponent(lora.filename)}`;
+  // The gen pages read ?lora=<filename> as a preselect hint via query string;
+  // keeps the manager → gen handoff URL-driven (deep-linkable). Video-family
+  // LoRAs (ltx-video) deep-link to Video Gen — routing them to Image Gen would
+  // preselect an LTX adapter into an incompatible image render.
+  const isVideoLora = family === VIDEO_LORA_FAMILIES.LTX_VIDEO;
+  const testHref = `${isVideoLora ? '/media/video' : '/media/image'}?lora=${encodeURIComponent(lora.filename)}`;
 
   return (
     <div className="bg-port-card border border-port-border rounded-lg overflow-hidden flex flex-col">
@@ -709,6 +986,20 @@ function LoraCard({ lora, onDelete, deleting }) {
             {familyLabel}
           </span>
         </div>
+
+        {/* Trained-in-PortOS lineage: character chip links back to the
+            training dataset that produced this adapter. */}
+        {lora.source === 'trained' && lora.character && (
+          <div className="mb-2">
+            <Link
+              to={lora.trainedFromDatasetId ? `/media/training/${lora.trainedFromDatasetId}` : '/media/training'}
+              className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-port-success/15 text-port-success border border-port-success/30 hover:bg-port-success/25"
+              title="Trained in PortOS — open the training dataset"
+            >
+              <Sparkles size={11} /> Character: {lora.character.name}
+            </Link>
+          </div>
+        )}
 
         {triggerWords.length > 0 && (
           <div className="mb-2">
@@ -742,6 +1033,17 @@ function LoraCard({ lora, onDelete, deleting }) {
               rel="noopener noreferrer"
               className="text-gray-400 hover:text-gray-200 p-1.5 rounded hover:bg-port-bg"
               title="Open on Civitai"
+            >
+              <ExternalLink size={14} />
+            </a>
+          )}
+          {lora.huggingface?.url && (
+            <a
+              href={lora.huggingface.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-gray-400 hover:text-gray-200 p-1.5 rounded hover:bg-port-bg"
+              title="Open on HuggingFace"
             >
               <ExternalLink size={14} />
             </a>

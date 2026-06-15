@@ -158,6 +158,17 @@ export function sanitizeRecordForWire(kind, record) {
       const { deleted: _d, deletedAt: _da, ...rest } = record;
       return { ...rest, ...sanitizeSoftDeleteFields(record) };
     }
+    case 'author': {
+      // Author personas: like mediaCollection, no `ephemeral` flag — always
+      // wire-syncable when present. Strip-then-tail-re-add the soft-delete pair
+      // for byte-stable checksums. The full record is small (a handful of text
+      // fields + the LWW/tombstone trio), so unlike mediaCollection there's no
+      // item-union — the whole record is LWW-overwritten on merge and the wire
+      // form converges byte-for-byte, so it feeds the conflict-journal content
+      // hash directly (no scalar narrowing in contentHashForRecord).
+      const { deleted: _d, deletedAt: _da, ...rest } = record;
+      return { ...rest, ...sanitizeSoftDeleteFields(record) };
+    }
     default:
       return null;
   }

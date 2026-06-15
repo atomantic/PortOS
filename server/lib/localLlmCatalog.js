@@ -229,6 +229,64 @@ export const LOCAL_LLM_CATALOG = [
     lmstudio: 'lmstudio-community/gpt-oss-20b-GGUF'
   },
   {
+    key: 'qwen2.5-vl-7b',
+    name: 'Qwen2.5-VL 7B (vision)',
+    category: 'vision',
+    params: '7B',
+    size: '6.0 GB',
+    family: 'qwen',
+    description: 'Strong vision-language model — the recommended default for LoRA dataset captioning.',
+    capabilities: ['chat', 'vision'],
+    ollama: 'qwen2.5vl',
+    lmstudio: 'lmstudio-community/Qwen2.5-VL-7B-Instruct-GGUF'
+  },
+  {
+    key: 'qwen2.5-vl-32b',
+    name: 'Qwen2.5-VL 32B (vision)',
+    category: 'vision',
+    params: '32B',
+    size: '21 GB',
+    family: 'qwen',
+    description: 'Larger Qwen2.5-VL for the most detailed image captions — best on high-memory machines.',
+    capabilities: ['chat', 'vision'],
+    ollama: 'qwen2.5vl:32b',
+    lmstudio: 'lmstudio-community/Qwen2.5-VL-32B-Instruct-GGUF'
+  },
+  {
+    key: 'llama3.2-vision',
+    name: 'Llama 3.2 Vision 11B',
+    category: 'vision',
+    params: '11B',
+    size: '7.9 GB',
+    family: 'llama',
+    description: "Meta's vision-language model for image description and captioning.",
+    capabilities: ['chat', 'vision'],
+    ollama: 'llama3.2-vision'
+  },
+  {
+    key: 'minicpm-v',
+    name: 'MiniCPM-V 2.6 8B (vision)',
+    category: 'vision',
+    params: '8B',
+    size: '5.5 GB',
+    family: 'minicpm',
+    description: 'Efficient vision-language model with strong single-image captioning.',
+    capabilities: ['chat', 'vision'],
+    ollama: 'minicpm-v',
+    lmstudio: 'openbmb/MiniCPM-V-2_6-gguf'
+  },
+  {
+    key: 'moondream',
+    name: 'Moondream 1.8B (vision)',
+    category: 'vision',
+    params: '1.8B',
+    size: '1.7 GB',
+    family: 'moondream',
+    description: 'Tiny, fast vision model for quick captions on modest hardware.',
+    capabilities: ['chat', 'vision'],
+    ollama: 'moondream'
+  },
+  {
     key: 'llava',
     name: 'LLaVA 7B (vision)',
     category: 'vision',

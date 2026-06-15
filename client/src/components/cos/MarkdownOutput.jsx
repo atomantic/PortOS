@@ -1,6 +1,11 @@
 // Inline markdown parser — replaces react-markdown
 
-const INLINE_RE = /(`[^`]*`|\*\*[^*]+\*\*|\*[^*]+\*|_[^_]+_|\[[^\]]+\]\([^)]+\))/g;
+// `![alt](url)` image embeds are matched BEFORE the `[text](url)` link form so
+// the leading `!` isn't dropped. A same-origin (`/…`) or http(s) src is allowed;
+// anything else (data:, javascript:, etc.) renders as the alt text only.
+const INLINE_RE = /(!\[[^\]]*\]\([^)]+\)|`[^`]*`|\*\*[^*]+\*\*|\*[^*]+\*|_[^_]+_|\[[^\]]+\]\([^)]+\))/g;
+
+const safeSrc = (url) => (/^(https?:\/\/|\/[^/])/.test(url) ? url : null);
 
 function parseInline(text) {
   const parts = [];
@@ -10,7 +15,16 @@ function parseInline(text) {
   while ((m = INLINE_RE.exec(text)) !== null) {
     if (m.index > last) parts.push(text.slice(last, m.index));
     const s = m[0];
-    if (s[0] === '`') {
+    if (s[0] === '!') {
+      const im = s.match(/^!\[([^\]]*)\]\(([^)]+)\)/);
+      if (im) {
+        const src = safeSrc(im[2]);
+        parts.push(src
+          ? <img key={m.index} src={src} alt={im[1]} loading="lazy"
+                 className="max-w-full sm:max-w-md rounded border border-port-border my-2" />
+          : <span key={m.index} className="text-gray-500 italic">[{im[1] || 'image'}]</span>);
+      }
+    } else if (s[0] === '`') {
       parts.push(<code key={m.index} className="bg-port-bg px-1 py-0.5 rounded text-port-accent font-mono text-xs break-all">{s.slice(1, -1)}</code>);
     } else if (s.startsWith('**')) {
       parts.push(<strong key={m.index} className="text-white font-semibold">{s.slice(2, -2)}</strong>);
@@ -19,10 +33,9 @@ function parseInline(text) {
     } else {
       const lm = s.match(/\[([^\]]+)\]\(([^)]+)\)/);
       if (lm) {
-        const href = lm[2];
-        const safeHref = /^(https?:\/\/|\/[^/])/.test(href) ? href : null;
-        parts.push(safeHref
-          ? <a key={m.index} href={safeHref} className="text-port-accent hover:underline" target="_blank" rel="noopener noreferrer">{lm[1]}</a>
+        const href = safeSrc(lm[2]);
+        parts.push(href
+          ? <a key={m.index} href={href} className="text-port-accent hover:underline" target="_blank" rel="noopener noreferrer">{lm[1]}</a>
           : <span key={m.index} className="text-port-accent">{lm[1]}</span>);
       }
     }

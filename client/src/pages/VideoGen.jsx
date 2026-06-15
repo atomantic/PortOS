@@ -62,7 +62,10 @@ import {
   listImageGallery,
   getSettings, patchSettingsSlice,
   getActiveVideoJob,
+  listLorasFull,
 } from '../services/api';
+import LoraPicker from '../components/imageGen/LoraPicker';
+import { videoLoraFamily, VIDEO_LORA_FAMILIES } from '../lib/runnerFamilies';
 import { randomSeed } from '../lib/genUtils';
 import { VIDEO_RESOLUTIONS } from '../lib/videoGenResolutions';
 import { VIDEO_TILING_OPTIONS, VIDEO_TILING_ENUM_SET } from '../lib/videoTilingOptions';
@@ -159,6 +162,11 @@ export default function VideoGen() {
   const [seed, setSeed] = useState('');
   const [tiling, setTiling] = useState('auto');
   const [disableAudio, setDisableAudio] = useState(false);
+  // Video LoRAs (ltx2 runtime only) — `{ filename, name, scale }` entries the
+  // LoraPicker owns; `availableLoras` is the full installed library filtered
+  // by the picker to the model's video family. See videoLoraFamily().
+  const [availableLoras, setAvailableLoras] = useState([]);
+  const [selectedLoras, setSelectedLoras] = useState([]);
   // "No music" appends a soundscape constraint at submit time. LTX-2
   // conditions audio on prompt text — adding "no music, no soundtrack"
   // pushes the model toward ambient/diegetic sound (footsteps, room tone)
@@ -300,6 +308,45 @@ export default function VideoGen() {
   useMediaCompletionRefresh({ onVideoCompleted: refreshHistory });
   useEffect(() => { refreshHistory(); }, [refreshHistory]);
   useEffect(() => { listImageGallery().then(setImageGallery).catch(() => {}); }, []);
+  // Installed LoRA library — the picker filters this to the current model's
+  // video family (ltx-video). Silent: a failure just hides the picker.
+  useEffect(() => { listLorasFull().then((l) => setAvailableLoras(Array.isArray(l) ? l : [])).catch(() => {}); }, []);
+  // ?lora=<filename> preselects a video LoRA when the user clicks "Test" on a
+  // video LoRA card in /media/loras. Mirrors the ImageGen ?lora= handoff:
+  // defer until the library has loaded (for name/scale/triggers), append the
+  // LoRA's trigger words, then strip the param so a refresh doesn't re-add it.
+  useEffect(() => {
+    const fromUrl = searchParams.get('lora');
+    if (!fromUrl || !availableLoras.length) return;
+    const match = availableLoras.find((l) => l.filename === fromUrl);
+    if (match) {
+      // A video (ltx-video) LoRA only renders on an ltx2 model. The default
+      // video model is often mlx_video (e.g. ltx23_distilled_q4 on macOS), where
+      // the picker is hidden and the payload omits the LoRA — so the Test
+      // handoff would silently no-op. Switch to an available ltx2 model first.
+      // Wait for `models` to load before deciding (the LoRA library usually
+      // loads first); the mode is still the default 'text', with which every
+      // ltx2 model is compatible, so the modelId-validation effect won't undo
+      // this. A non-ltx2 LoRA needs no switch (the image picker tolerates it).
+      const isVideoLora = (match.loraCompatKey || match.runnerFamily) === VIDEO_LORA_FAMILIES.LTX_VIDEO;
+      const cur = models.find((m) => m.id === modelId);
+      if (isVideoLora && !videoLoraFamily(cur)) {
+        if (!models.length) return; // re-runs when models loads (in deps)
+        const ltx2Model = models.find((m) => m.runtime === 'ltx2');
+        if (ltx2Model) setModelId(ltx2Model.id);
+      }
+      setSelectedLoras((prev) => prev.find((s) => s.filename === fromUrl) ? prev : [...prev, {
+        filename: match.filename,
+        name: match.name,
+        scale: typeof match.recommendedScale === 'number' ? match.recommendedScale : 1.0,
+      }]);
+      if (match.triggerWords?.length) {
+        setPrompt((p) => { const add = match.triggerWords.join(', '); return p && p.trim() ? `${p}, ${add}` : add; });
+      }
+    }
+    setSearchParams((prev) => { const next = new URLSearchParams(prev); next.delete('lora'); return next; }, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [availableLoras, models]);
 
   const { visibleHistory, hiddenHistory } = useMemo(() => ({
     visibleHistory: history.filter((v) => !v.hidden),
@@ -431,6 +478,22 @@ export default function VideoGen() {
     setLastImageUpload(null);
     setExtendFromVideoId('');
     setAudioFile(null);
+    // Restore the LoRA picker from the render record. `item` here is the RAW
+    // history record (the gallery passes `handleRemixVideo(item.raw)` and every
+    // field above — prompt/modelId/width/… — is read off it directly), so the
+    // LoRAs live on `item.loraFilenames`/`item.loraScales` (the parallel-array
+    // contract the record is stamped with). Names resolve from the loaded
+    // library, falling back to the filename. The picker self-hides when the
+    // remixed model isn't ltx2, and the payload omits LoRAs there.
+    if (Array.isArray(item.loraFilenames) && item.loraFilenames.length) {
+      setSelectedLoras(item.loraFilenames.map((filename, i) => ({
+        filename,
+        name: availableLoras.find((a) => a.filename === filename)?.name || filename,
+        scale: typeof item.loraScales?.[i] === 'number' ? item.loraScales[i] : 1.0,
+      })));
+    } else {
+      setSelectedLoras([]);
+    }
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -562,6 +625,16 @@ export default function VideoGen() {
         setKeyframes(p.keyframes.map((kf) => ({ file: kf.file, index: kf.index })));
         setKeyframesMode(true);
       }
+      // Restore the LoRA picker — params carry { filename, scale } basenames;
+      // resolve the display name from the loaded library (falls back to the
+      // filename if the library hasn't loaded yet or the LoRA was deleted).
+      if (Array.isArray(p.loras) && p.loras.length) {
+        setSelectedLoras(p.loras.map((l) => ({
+          filename: l.filename,
+          name: availableLoras.find((a) => a.filename === l.filename)?.name || l.filename,
+          scale: typeof l.scale === 'number' ? l.scale : 1.0,
+        })));
+      }
       setGenerating(true);
       // Skip a forced setProgress(0) here — attachJobEvents will replay the
       // server's last SSE payload synchronously after EventSource open, and
@@ -651,6 +724,23 @@ export default function VideoGen() {
   }, [modelId, models, status?.defaultModel, status?.systemMemoryGb, mode, visibleModels]);
 
   const currentModel = models.find((m) => m.id === modelId);
+
+  // Video-LoRA family for the selected model — 'ltx-video' on ltx2, else null.
+  // When null the picker is hidden and no LoRAs ride along on submit (the
+  // route would 400 with LORAS_REQUIRE_LTX2). Derived, not state, so it tracks
+  // the model dropdown without an effect.
+  const loraFamily = videoLoraFamily(currentModel);
+  // Strictly restrict the video picker to LoRAs whose family IS the video
+  // family. The shared LoraPicker treats a missing compat key as "compatible"
+  // (reasonable for image, where an unknown LoRA is usually still some image
+  // family), but for video that would surface hand-dropped / pre-sidecar IMAGE
+  // LoRAs — selecting one would send an incompatible adapter to the LTX
+  // transformer (the route only checks file-exists + ltx2) and fail the render.
+  // Video LoRAs always carry an explicit `ltx-video` family (HF import sets it),
+  // so an exact-match filter here is the correct strict mode.
+  const videoLoras = loraFamily
+    ? availableLoras.filter((l) => (l.loraCompatKey || l.runnerFamily) === loraFamily)
+    : [];
 
   // Multi-keyframe availability + validation. Keyframes are an ltx2-runtime
   // primitive (the route 400s with KEYFRAMES_REQUIRE_LTX2 otherwise), so the
@@ -943,6 +1033,14 @@ export default function VideoGen() {
       // arrays element-by-element); the route's zod preprocess JSON-parses it
       // and strips any unknown keys, so sending the entries verbatim is safe.
       keyframes: keyframesActive ? JSON.stringify(keyframes) : '',
+      // Video LoRAs (ltx2 only) ride as the universal parallel-array contract
+      // (loraFilenames + loraScales) — the SAME shape ImageGen submits and a
+      // history requeue emits — so buildFormData appends them as repeated
+      // multipart keys and the route needs no bespoke shape. Only sent when the
+      // model's runtime supports LoRAs (else the route 400s LORAS_REQUIRE_LTX2);
+      // undefined fields are dropped by buildFormData.
+      loraFilenames: (loraFamily && selectedLoras.length) ? selectedLoras.map((l) => l.filename) : undefined,
+      loraScales: (loraFamily && selectedLoras.length) ? selectedLoras.map((l) => l.scale) : undefined,
       sourceImageFile: (mode === 'image' || legacyFflf
         || (mode === 'extend' && currentModel?.runtime !== 'ltx2'))
         ? (sourceImageFile || '') : '',
@@ -1410,6 +1508,26 @@ export default function VideoGen() {
                     />
                   </div>
                 )}
+              </div>
+            )}
+
+            {/* Video LoRAs — only on ltx2-runtime models (loraFamily non-null)
+                and only when at least one video-family LoRA is installed
+                (videoLoras is the strict ltx-video subset; see above). */}
+            {loraFamily && videoLoras.length > 0 && (
+              <div className="col-span-2 sm:col-span-3">
+                <LoraPicker
+                  availableLoras={videoLoras}
+                  selected={selectedLoras}
+                  onChange={setSelectedLoras}
+                  currentRunnerFamily={loraFamily}
+                  currentCompatKey={loraFamily}
+                  onAppendTrigger={(triggers) => setPrompt((p) => {
+                    const add = triggers.join(', ');
+                    return p && p.trim() ? `${p}, ${add}` : add;
+                  })}
+                  disabled={generating}
+                />
               </div>
             )}
 

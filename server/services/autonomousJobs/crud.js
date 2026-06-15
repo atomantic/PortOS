@@ -98,6 +98,11 @@ async function createJob(jobData) {
       priority: jobData.priority || 'MEDIUM',
       autonomyLevel: jobData.autonomyLevel || 'manager',
       promptTemplate: jobData.promptTemplate || '',
+      // Optional per-job AI provider + model override. Null = use the active
+      // provider / its default model (historical behavior). generateTaskFromJob
+      // forwards these into the task metadata the agent runner resolves.
+      providerId: jobData.providerId || null,
+      model: jobData.model || null,
       command: jobData.command || null,
       triggerAction,
       config: jobData.config || null,
@@ -143,7 +148,7 @@ async function updateJob(jobId, updates) {
     const updatableFields = [
       'name', 'description', 'category', 'type', 'interval', 'intervalMs',
       'scheduledTime', 'cronExpression', 'weekdaysOnly', 'enabled', 'priority', 'autonomyLevel', 'promptTemplate',
-      'command', 'triggerAction', 'config', 'appId', 'taskMetadata'
+      'command', 'triggerAction', 'config', 'appId', 'taskMetadata', 'providerId', 'model'
     ]
 
     for (const field of updatableFields) {

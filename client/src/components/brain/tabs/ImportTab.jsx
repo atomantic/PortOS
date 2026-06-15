@@ -15,7 +15,6 @@ import toast from '../../ui/Toast';
 import Banner from '../../ui/Banner';
 import BrailleSpinner from '../../BrailleSpinner';
 import { formatBytes, formatDateShort } from '../../../utils/formatters';
-import { ATTACHMENT_MAX_FILE_SIZE } from '../../../utils/fileUpload';
 
 // Sources we plan to support. Only `available` ones are clickable.
 const SOURCES = [
@@ -125,8 +124,9 @@ function SourcePicker({ onPick, navigate }) {
 
 function ChatGPTWizard({ onExit, navigate }) {
   const [stepIdx, setStepIdx] = useState(0);
-  const [parsedRaw, setParsedRaw] = useState(null);   // the original parsed JSON from the file
-  const [preview, setPreview] = useState(null);
+  const [parsedRaw, setParsedRaw] = useState(null);   // legacy JSON path: the parsed conversations.json
+  const [zipFile, setZipFile] = useState(null);       // ZIP path: the raw File to stream-upload
+  const [preview, setPreview] = useState(null);       // JSON path only — ZIPs are parsed server-side
   const [fileMeta, setFileMeta] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [importing, setImporting] = useState(false);
@@ -142,18 +142,28 @@ function ChatGPTWizard({ onExit, navigate }) {
 
   const handleFile = async (file) => {
     if (!file) return;
-    if (!/\.json$/i.test(file.name)) {
-      setError('Please select the conversations.json file from your ChatGPT export.');
-      return;
-    }
-    if (file.size > ATTACHMENT_MAX_FILE_SIZE) {
-      setError(`File is ${formatBytes(file.size)}, larger than the 50 MB upload limit. See instructions for splitting the file.`);
+    const isZip = /\.zip$/i.test(file.name);
+    const isJson = /\.json$/i.test(file.name);
+    if (!isZip && !isJson) {
+      setError('Select your ChatGPT export .zip (recommended) or the conversations.json inside it.');
       return;
     }
     setError(null);
-    setUploading(true);
-    setFileMeta({ name: file.name, size: file.size });
+    setFileMeta({ name: file.name, size: file.size, isZip });
 
+    // ZIP path: no browser-side parse — the whole archive streams to the server
+    // which extracts conversations + image/voice/file assets. Just stash the
+    // File and advance to the options step.
+    if (isZip) {
+      setZipFile(file);
+      setParsedRaw(null);
+      setPreview(null);
+      goNext();
+      return;
+    }
+
+    // Legacy JSON path: parse + preview in the browser as before.
+    setUploading(true);
     const text = await file.text();
     let parsed;
     try {
@@ -170,27 +180,43 @@ function ChatGPTWizard({ onExit, navigate }) {
       setError(res?.error || 'Server rejected the upload.');
       return;
     }
+    setZipFile(null);
     setParsedRaw(parsed);
     setPreview(res);
     goNext();
   };
 
   const runImport = async () => {
-    if (!parsedRaw) return;
-    setImporting(true);
-    setError(null);
     const tags = tagsInput
       .split(',')
       .map((t) => t.trim())
       .filter(Boolean);
-    const res = await api.runChatgptImport(parsedRaw, { tags, skipEmpty }).catch((err) => ({ error: err.message }));
+    setImporting(true);
+    setError(null);
+
+    let res;
+    if (zipFile) {
+      res = await api
+        .uploadChatgptZip(zipFile, { tags: tags.join(','), skipEmpty, silent: true })
+        .catch((err) => ({ error: err.message }));
+    } else if (parsedRaw) {
+      res = await api
+        .runChatgptImport(parsedRaw, { tags, skipEmpty })
+        .catch((err) => ({ error: err.message }));
+    } else {
+      setImporting(false);
+      return;
+    }
+
     setImporting(false);
     if (res?.error || !res?.ok) {
       setError(res?.error || 'Import failed.');
+      setStepIdx(STEPS.findIndex((s) => s.id === 'review'));
       return;
     }
     setResult(res);
-    toast.success(`Imported ${res.imported} conversation${res.imported === 1 ? '' : 's'} into Memory`);
+    const assetNote = res.assetStats?.assetCount ? ` and ${res.assetStats.assetCount} assets` : '';
+    toast.success(`Imported ${res.imported} conversation${res.imported === 1 ? '' : 's'}${assetNote} into Memory`);
     setStepIdx(STEPS.findIndex((s) => s.id === 'done'));
   };
 
@@ -227,9 +253,10 @@ function ChatGPTWizard({ onExit, navigate }) {
         />
       )}
 
-      {step.id === 'review' && preview && (
+      {step.id === 'review' && (preview || zipFile) && (
         <StepReview
           preview={preview}
+          isZip={!!zipFile}
           fileMeta={fileMeta}
           tagsInput={tagsInput}
           setTagsInput={setTagsInput}
@@ -243,9 +270,13 @@ function ChatGPTWizard({ onExit, navigate }) {
       {step.id === 'run' && (
         <div className="text-center py-12">
           <BrailleSpinner />
-          <p className="text-white">Importing conversations into Memory…</p>
+          <p className="text-white">
+            {zipFile ? 'Uploading & extracting your export…' : 'Importing conversations into Memory…'}
+          </p>
           <p className="text-xs text-gray-500 mt-1">
-            {importing ? 'Don\'t close this tab.' : 'Finalising…'}
+            {importing
+              ? (zipFile ? 'Large exports can take a minute — don\'t close this tab.' : 'Don\'t close this tab.')
+              : 'Finalising…'}
           </p>
         </div>
       )}
@@ -322,10 +353,12 @@ function StepInstructions({ onNext }) {
           OpenAI emails you a download link (usually within a few minutes; the link expires in 24 hours).
         </li>
         <li>
-          Download the ZIP and unzip it on your machine. You'll see <span className="font-mono text-port-accent">conversations.json</span> alongside other files.
+          Download the <span className="font-mono text-port-accent">.zip</span>. You don't need to unzip it.
         </li>
         <li>
-          On the next step, upload that <span className="font-mono text-port-accent">conversations.json</span> file.
+          On the next step, upload the whole <span className="font-mono text-port-accent">.zip</span> — PortOS extracts your conversations
+          {' '}<span className="text-white">and their images, voice clips, and files</span> for you. (You can still upload a
+          {' '}lone <span className="font-mono text-port-accent">conversations.json</span> instead, but it won't include images.)
         </li>
       </ol>
       <div className="flex items-center justify-between pt-4">
@@ -358,7 +391,7 @@ function StepUpload({ uploading, fileMeta, onPick, onFile, fileInputRef, onBack 
   return (
     <div className="space-y-4">
       <p className="text-sm text-gray-300">
-        Drop your <span className="font-mono text-port-accent">conversations.json</span> file here, or click to browse.
+        Drop your ChatGPT export <span className="font-mono text-port-accent">.zip</span> here, or click to browse.
         The file stays on this device — nothing is uploaded to OpenAI or any third party.
       </p>
 
@@ -376,8 +409,8 @@ function StepUpload({ uploading, fileMeta, onPick, onFile, fileInputRef, onBack 
           </div>
         ) : (
           <>
-            <p className="text-white font-medium">Drop conversations.json here</p>
-            <p className="text-xs text-gray-400 mt-1">or click to browse — max 50 MB</p>
+            <p className="text-white font-medium">Drop your export .zip here</p>
+            <p className="text-xs text-gray-400 mt-1">or click to browse — no size limit</p>
           </>
         )}
         {uploading && (
@@ -388,7 +421,7 @@ function StepUpload({ uploading, fileMeta, onPick, onFile, fileInputRef, onBack 
         <input
           ref={fileInputRef}
           type="file"
-          accept=".json,application/json"
+          accept=".zip,application/zip,.json,application/json"
           className="hidden"
           onChange={(e) => onFile(e.target.files?.[0])}
         />
@@ -402,15 +435,16 @@ function StepUpload({ uploading, fileMeta, onPick, onFile, fileInputRef, onBack 
           <ArrowLeft size={14} aria-hidden="true" /> Back
         </button>
         <p className="text-xs text-gray-500">
-          Tip: if your export is larger than 50 MB, split <span className="font-mono">conversations.json</span> into chunks and import each.
+          The whole <span className="font-mono">.zip</span> is fine — it streams straight to your PortOS, no size cap.
         </p>
       </div>
     </div>
   );
 }
 
-function StepReview({ preview, fileMeta, tagsInput, setTagsInput, skipEmpty, setSkipEmpty, onBack, onRun }) {
-  const { summary, conversations } = preview;
+function StepReview({ preview, isZip, fileMeta, tagsInput, setTagsInput, skipEmpty, setSkipEmpty, onBack, onRun }) {
+  const summary = preview?.summary;
+  const conversations = preview?.conversations || [];
   const sample = conversations.slice(0, 8);
   const remaining = conversations.length - sample.length;
 
@@ -419,46 +453,63 @@ function StepReview({ preview, fileMeta, tagsInput, setTagsInput, skipEmpty, set
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6 items-start">
         {/* Left — preview of what was found */}
         <div className="space-y-4 min-w-0">
-          <p className="text-sm text-gray-300">
-            Found <span className="text-white font-medium">{summary.totalConversations}</span> conversations
-            in <span className="font-mono text-gray-200">{fileMeta?.name}</span>. Quick stats:
-          </p>
+          {isZip ? (
+            <>
+              <p className="text-sm text-gray-300">
+                Ready to import <span className="font-mono text-gray-200">{fileMeta?.name}</span>
+                {' '}(<span className="text-white">{formatBytes(fileMeta?.size || 0)}</span>).
+              </p>
+              <Banner tone="info" size="sm">
+                The full archive — every conversation plus all images, voice clips, and files — streams to your
+                PortOS and is extracted here. Counts appear once the import finishes. This can take a minute for
+                large exports.
+              </Banner>
+            </>
+          ) : (
+            <>
+              <p className="text-sm text-gray-300">
+                Found <span className="text-white font-medium">{summary.totalConversations}</span> conversations
+                in <span className="font-mono text-gray-200">{fileMeta?.name}</span>. Quick stats:
+              </p>
 
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-            <Stat label="Conversations" value={summary.totalConversations.toLocaleString()} />
-            <Stat label="Messages" value={summary.totalMessages.toLocaleString()} />
-            <Stat label="Total chars" value={summary.totalChars.toLocaleString()} />
-            <Stat label="Custom GPTs" value={summary.gizmoCount.toString()} />
-            <Stat label="Earliest" value={formatDateShort(summary.earliest)} />
-            <Stat label="Latest" value={formatDateShort(summary.latest)} />
-          </div>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                <Stat label="Conversations" value={summary.totalConversations.toLocaleString()} />
+                <Stat label="Messages" value={summary.totalMessages.toLocaleString()} />
+                <Stat label="Total chars" value={summary.totalChars.toLocaleString()} />
+                <Stat label="Custom GPTs" value={summary.gizmoCount.toString()} />
+                <Stat label="Earliest" value={formatDateShort(summary.earliest)} />
+                <Stat label="Latest" value={formatDateShort(summary.latest)} />
+              </div>
 
-          <div className="border border-port-border rounded">
-            <div className="px-3 py-2 border-b border-port-border text-xs font-medium text-gray-400 uppercase">
-              Sample conversations
-            </div>
-            <ul className="divide-y divide-port-border">
-              {sample.map((c) => (
-                <li key={c.id || c.title} className="px-3 py-2 flex items-center justify-between gap-2">
-                  <span className="text-sm text-white truncate">{c.title}</span>
-                  <span className="text-xs text-gray-500 flex-shrink-0">
-                    {c.messageCount} msg · {formatDateShort(c.createTime)}
-                  </span>
-                </li>
-              ))}
-              {remaining > 0 && (
-                <li className="px-3 py-2 text-xs text-gray-500">
-                  …and {remaining.toLocaleString()} more
-                </li>
-              )}
-            </ul>
-          </div>
+              <div className="border border-port-border rounded">
+                <div className="px-3 py-2 border-b border-port-border text-xs font-medium text-gray-400 uppercase">
+                  Sample conversations
+                </div>
+                <ul className="divide-y divide-port-border">
+                  {sample.map((c) => (
+                    <li key={c.id || c.title} className="px-3 py-2 flex items-center justify-between gap-2">
+                      <span className="text-sm text-white truncate">{c.title}</span>
+                      <span className="text-xs text-gray-500 flex-shrink-0">
+                        {c.messageCount} msg · {formatDateShort(c.createTime)}
+                      </span>
+                    </li>
+                  ))}
+                  {remaining > 0 && (
+                    <li className="px-3 py-2 text-xs text-gray-500">
+                      …and {remaining.toLocaleString()} more
+                    </li>
+                  )}
+                </ul>
+              </div>
+            </>
+          )}
         </div>
 
         {/* Right — import options */}
         <div className="space-y-4 lg:sticky lg:top-4 self-start">
           <p className="text-sm text-gray-300">
-            Each conversation becomes a Memory entry in Brain → Memory. The full transcript is also archived to
+            Each conversation becomes a Memory entry in Brain → Memory. The full transcript
+            {isZip ? ' (with inline images and asset links)' : ''} is also archived to
             <span className="font-mono text-port-accent"> data/brain/imports/chatgpt</span>.
           </p>
 
@@ -526,6 +577,7 @@ function StepDone({ result, onExit, navigate }) {
         <h3 className="text-lg font-semibold text-white">Import complete</h3>
         <p className="text-sm text-gray-400 mt-1">
           {result.imported} imported · {result.skipped} skipped · {result.archived} archived
+          {result.assetStats?.assetCount ? ` · ${result.assetStats.assetCount} assets` : ''}
         </p>
       </div>
 
@@ -551,7 +603,9 @@ function StepDone({ result, onExit, navigate }) {
             <li key={r.id || i} className="px-2 py-1 flex items-center justify-between gap-2">
               <span className="truncate text-gray-300">{r.title || '(untitled)'}</span>
               <span className={r.status === 'imported' ? 'text-port-success' : 'text-gray-500'}>
-                {r.status === 'imported' ? `${r.messageCount} msg` : r.reason || r.status}
+                {r.status === 'imported'
+                  ? `${r.messageCount} msg${r.assetCount ? ` · ${r.assetCount} assets` : ''}`
+                  : r.reason || r.status}
               </span>
             </li>
           ))}

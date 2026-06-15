@@ -1,5 +1,5 @@
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
-import { Layers, Image as ImageIcon, Film, History, HardDrive, Scissors, FolderOpen, Clapperboard, Sparkles } from 'lucide-react';
+import { Layers, Image as ImageIcon, Film, History, HardDrive, Scissors, FolderOpen, Clapperboard, Sparkles, GraduationCap } from 'lucide-react';
 import TabPills from '../components/ui/TabPills';
 
 const TABS = [
@@ -10,6 +10,7 @@ const TABS = [
   { id: 'history', label: 'History', icon: History },
   { id: 'collections', label: 'Collections', icon: FolderOpen },
   { id: 'loras', label: 'LoRAs', icon: Sparkles },
+  { id: 'training', label: 'Training', icon: GraduationCap },
   { id: 'models', label: 'Models', icon: HardDrive }
 ];
 

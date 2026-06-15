@@ -76,3 +76,12 @@ export function partialWithoutDefaults(objectSchema) {
  * an import in the other direction would hit a TDZ cycle.
  */
 export const emptyToUndefined = (v) => (v === '' ? undefined : v);
+
+/**
+ * Preprocess helper: treat an empty-string UI sentinel as an explicit `null`
+ * (a *clear*), distinct from `emptyToUndefined`'s "not sent". Use this when an
+ * absent key must preserve the existing value on a PATCH/PUT while an empty
+ * picker selection actively un-sets it (e.g. a job's appId / provider / model
+ * override). Pair with `z.string().nullable().optional()`.
+ */
+export const emptyToNull = (v) => (v === '' ? null : v);

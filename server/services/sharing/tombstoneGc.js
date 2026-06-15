@@ -30,6 +30,7 @@ import { pruneTombstonedUniverses, listUniverses } from '../universeBuilder.js';
 import { pruneTombstonedSeries, listSeries } from '../pipeline/series.js';
 import { pruneTombstonedIssues, listIssueIds } from '../pipeline/issues.js';
 import { pruneTombstonedCollections, listCollections } from '../mediaCollections.js';
+import { pruneTombstonedAuthors, listAuthorIds } from '../authors/index.js';
 import { pruneOrphanedBaseHashes } from '../../lib/conflictJournal.js';
 import { listPeerSubscriptions, pruneOrphanedPeerSubscriptions } from './peerSync.js';
 import { getMinAckAcrossPeers } from './peerTombstoneCursors.js';
@@ -46,6 +47,7 @@ const LIVE_ID_LISTERS = Object.freeze({
   series: async () => (await listSeries()).map((r) => r.id),
   issue: () => listIssueIds(),
   mediaCollection: async () => (await listCollections()).map((r) => r.id),
+  author: () => listAuthorIds(),
 });
 
 // Each peer-subscribable kind's UNCAPPED id source INCLUDING tombstones —
@@ -59,6 +61,7 @@ const ALL_ID_LISTERS = Object.freeze({
   universe: async () => (await listUniverses({ includeDeleted: true })).map((r) => r.id),
   series: async () => (await listSeries({ includeDeleted: true })).map((r) => r.id),
   mediaCollection: async () => (await listCollections({ includeDeleted: true })).map((r) => r.id),
+  author: () => listAuthorIds({ includeDeleted: true }),
 });
 
 // Build a kind-aware id-membership resolver for ONE sweep: lazily list each
@@ -213,7 +216,7 @@ async function loadState() {
   return { peers, subs };
 }
 
-function refusedFromCutoffs(universeCutoff, seriesCutoff, collectionCutoff) {
+function refusedFromCutoffs(universeCutoff, seriesCutoff, collectionCutoff, authorCutoff) {
   const refused = [];
   if (universeCutoff === null) refused.push('universe');
   // Issue tombstones ride series pushes — refused exactly when series is.
@@ -222,6 +225,10 @@ function refusedFromCutoffs(universeCutoff, seriesCutoff, collectionCutoff) {
     refused.push('issue');
   }
   if (collectionCutoff === null) refused.push('mediaCollection');
+  // Authors have no snapshot category (snapshotCategoryForKind → null), so the
+  // cutoff never refuses on snapshot-coverage grounds — but the per-record
+  // confirmed-push clamp can still hold it; surface it for symmetry.
+  if (authorCutoff === null) refused.push('author');
   return refused;
 }
 
@@ -238,17 +245,19 @@ function refusedFromCutoffs(universeCutoff, seriesCutoff, collectionCutoff) {
  */
 export async function sweepTombstones({ now = Date.now(), graceMs = GRACE_MS } = {}) {
   const { peers, subs } = await loadState();
-  const [universeCutoff, seriesCutoff, collectionCutoff] = await Promise.all([
+  const [universeCutoff, seriesCutoff, collectionCutoff, authorCutoff] = await Promise.all([
     cutoffForKind('universe', { peers, subs, now, graceMs }),
     cutoffForKind('series', { peers, subs, now, graceMs }),
     cutoffForKind('mediaCollection', { peers, subs, now, graceMs }),
+    cutoffForKind('author', { peers, subs, now, graceMs }),
   ]);
   const issueCutoff = seriesCutoff;
-  const [u, s, i, c] = await Promise.all([
+  const [u, s, i, c, a] = await Promise.all([
     universeCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedUniverses(universeCutoff),
     seriesCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedSeries(seriesCutoff),
     issueCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedIssues(issueCutoff),
     collectionCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedCollections(collectionCutoff),
+    authorCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedAuthors(authorCutoff),
   ]);
   // Backstop AFTER the tombstone prunes: the prune paths already evict a freshly
   // hard-deleted record's base hash, so this sweep mops up only keys that
@@ -269,9 +278,10 @@ export async function sweepTombstones({ now = Date.now(), graceMs = GRACE_MS } =
     series: s.pruned,
     issues: i.pruned,
     collections: c.pruned,
+    authors: a.pruned,
     orphanBaseHashes: orphan.pruned,
     orphanSubscriptions: orphanSubs.pruned,
-    refused: refusedFromCutoffs(universeCutoff, seriesCutoff, collectionCutoff),
+    refused: refusedFromCutoffs(universeCutoff, seriesCutoff, collectionCutoff, authorCutoff),
   };
 }
 
@@ -280,12 +290,13 @@ export async function sweepTombstones({ now = Date.now(), graceMs = GRACE_MS } =
 // coverage matters), so this hardcodes graceMs:0 internally.
 export async function getSweepStatus({ now = Date.now() } = {}) {
   const { peers, subs } = await loadState();
-  const [universeCutoff, seriesCutoff, collectionCutoff] = await Promise.all([
+  const [universeCutoff, seriesCutoff, collectionCutoff, authorCutoff] = await Promise.all([
     cutoffForKind('universe', { peers, subs, now, graceMs: 0 }),
     cutoffForKind('series', { peers, subs, now, graceMs: 0 }),
     cutoffForKind('mediaCollection', { peers, subs, now, graceMs: 0 }),
+    cutoffForKind('author', { peers, subs, now, graceMs: 0 }),
   ]);
-  return { refused: refusedFromCutoffs(universeCutoff, seriesCutoff, collectionCutoff) };
+  return { refused: refusedFromCutoffs(universeCutoff, seriesCutoff, collectionCutoff, authorCutoff) };
 }
 
 export const TOMBSTONE_GRACE_MS = GRACE_MS;

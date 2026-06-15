@@ -28,6 +28,9 @@ const DEFAULT_CONFIG = Object.freeze({
   imageModelId: null,
   refineProvider: null,
   refineModel: null,
+  // Trained character-LoRA auto-apply (local renders). Default on; the
+  // server only honors an explicit false.
+  applyCharacterLoras: true,
 });
 
 // "auto" is the default sentinel — the backend strip displays it as a
@@ -120,6 +123,20 @@ function VisualGenSettingsBody({ cfg, update, stageLabel, systemSettings, imageM
             Codex Imagegen is disabled in Settings — renders will fall back to local diffusion.
           </p>
         )}
+      </div>
+
+      <div>
+        <label className="text-[10px] text-gray-500 inline-flex items-center gap-1.5">
+          <input
+            type="checkbox"
+            checked={cfg.applyCharacterLoras !== false}
+            onChange={(e) => update({ applyCharacterLoras: e.target.checked })}
+          />
+          Auto-apply trained character LoRAs
+        </label>
+        <p className="text-[10px] text-gray-500 mt-0.5 ml-5">
+          Local renders attach a matched character&apos;s trained LoRA + trigger word automatically (codex has no LoRA support).
+        </p>
       </div>
 
       {cfg.imageMode === IMAGE_GEN_MODE.LOCAL && (
@@ -310,6 +327,8 @@ export function genConfigToImageOptions(cfg) {
   const out = {};
   if (cfg.imageMode && cfg.imageMode !== 'auto') out.mode = cfg.imageMode;
   if (cfg.imageMode === IMAGE_GEN_MODE.LOCAL && cfg.imageModelId) out.modelId = cfg.imageModelId;
+  // Server default is ON — only the explicit opt-out travels.
+  if (cfg.applyCharacterLoras === false) out.applyCharacterLoras = false;
   return out;
 }
 

@@ -187,6 +187,31 @@ describe('syncWire', () => {
       const series = sanitizeRecordForWire('series', { id: 's1', name: 'S', styleImageRefs: ['x.png'] });
       expect(series.styleImageRefs).toEqual(['x.png']);
     });
+
+    describe('author kind', () => {
+      it('passes through an author with canonical tail soft-delete fields', () => {
+        const a = { id: 'auth-1', name: 'Ada', bio: 'b' };
+        expect(sanitizeRecordForWire('author', a))
+          .toEqual({ id: 'auth-1', name: 'Ada', bio: 'b', deleted: false, deletedAt: null });
+      });
+
+      it('canonicalizes an oddly-ordered author record byte-for-byte (checksum stability)', () => {
+        const odd = { deleted: false, id: 'auth-1', deletedAt: null, name: 'Ada' };
+        const canonical = { id: 'auth-1', name: 'Ada', deleted: false, deletedAt: null };
+        expect(JSON.stringify(sanitizeRecordForWire('author', odd)))
+          .toBe(JSON.stringify(sanitizeRecordForWire('author', canonical)));
+      });
+
+      it('preserves an author tombstone (deleted: true crosses the wire)', () => {
+        const t = { id: 'auth-1', name: 'Ada', deleted: true, deletedAt: '2026-01-01T00:00:00Z' };
+        expect(sanitizeRecordForWire('author', t))
+          .toEqual({ id: 'auth-1', name: 'Ada', deleted: true, deletedAt: '2026-01-01T00:00:00Z' });
+      });
+
+      it('returns null for an author missing an id', () => {
+        expect(sanitizeRecordForWire('author', { name: 'no id' })).toBeNull();
+      });
+    });
   });
 
   describe('sanitizeStateForWire', () => {

@@ -14,10 +14,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
-  Library, Loader2, Users, MapPin, Package, Wand2, Filter, Lock, Unlock, ImagePlus, Sparkles,
+  Library, Loader2, Users, MapPin, Package, Wand2, Filter, Lock, Unlock, ImagePlus, Sparkles, Plus,
 } from 'lucide-react';
 import toast from '../ui/Toast';
 import IngredientPicker from '../IngredientPicker';
+import VisionDescribeModal from './VisionDescribeModal';
 import { linkCatalogIngredient } from '../../services/apiCatalog';
 import {
   extractUniverseCanon,
@@ -136,6 +137,8 @@ export default function UniverseCanonSection({
   const [extractOpen, setExtractOpen] = useState(false);
   // Which kind's "Pick from Catalog" modal is open (a KINDS entry, or null).
   const [catalogPickerKind, setCatalogPickerKind] = useState(null);
+  // `{ kind, entry }` when the vision "Describe from image(s)" modal is open.
+  const [describeTarget, setDescribeTarget] = useState(null);
   const [catalogLinking, setCatalogLinking] = useState(false);
   // Ingredient ids already embedded in the open kind's canon list — passed to
   // the picker so it hides already-linked rows. Only recomputed when the open
@@ -590,6 +593,53 @@ export default function UniverseCanonSection({
     toast.success(`Added ${picked.name || 'ingredient'} from Catalog`);
   }, [universe, universeId, onUniverseChange, mountedRef, catalogLinking]);
 
+  // Manual "Add" — mint a blank canon entry from a name the user types (and an
+  // optional description), mirroring the optimistic-append-then-persist shape
+  // of `handlePickFromCatalog`. The entry carries no `id` (the server's
+  // `ensureId` mints a kind-prefixed one) and `locked: false` so the card's
+  // inline editors are usable immediately without a separate unlock click —
+  // the user explicitly created it to fill in, so the lock-by-default contract
+  // (which guards AI-extracted/-arriving entries) doesn't apply here.
+  const [creatingKindKey, setCreatingKindKey] = useState(null);
+  const handleCreateEntry = useCallback(async (kind, { name, description }) => {
+    const trimmedName = String(name || '').trim();
+    if (!trimmedName || !universe || creatingKindKey) return false;
+    const kindKey = kind.key;
+    const list = getKindList(universe, kindKey);
+    // Dedup by normalized name so a manual add of an existing entry is a clear
+    // no-op. This client guard is the ONLY name-dedup on the wholesale-PATCH
+    // path: updateUniverse re-runs sanitizeBibleList, which sanitizes per-entry
+    // but does not merge by name (only the extract path's mergeExtractedBible
+    // dedups), so without this two same-named entries would both persist.
+    if (list.some((e) => String(e?.name || '').trim().toLowerCase() === trimmedName.toLowerCase())) {
+      toast.error(`${trimmedName} is already in this universe`);
+      return false;
+    }
+    const entry = { name: trimmedName, locked: false };
+    const desc = String(description || '').trim();
+    if (desc && kind.descField) entry[kind.descField] = desc;
+    setCreatingKindKey(kindKey);
+    const capturedId = universeId;
+    const nextList = [...list, entry];
+    // Optimistic append so the new card shows immediately; the server response
+    // (with the minted entry id) replaces it.
+    onUniverseChange({ ...universe, [kindKey]: nextList });
+    // `{ silent: true }` because the .catch below owns the error toast.
+    const updated = await updateUniverse(universeId, { [kindKey]: nextList }, { silent: true })
+      .catch((err) => { toast.error(`Add ${kind.singular} failed: ${err.message}`); return null; });
+    const stillCurrent = mountedRef.current && currentUniverseIdRef.current === capturedId;
+    if (!updated) {
+      // Revert the optimistic append — the save didn't land. `list` is the
+      // pre-append snapshot (canon edits are user-driven one-at-a-time).
+      if (stillCurrent) onUniverseChange({ ...universe, [kindKey]: list });
+    } else if (stillCurrent) {
+      onUniverseChange(updated);
+    }
+    if (mountedRef.current) setCreatingKindKey(null);
+    if (updated) toast.success(`Added ${trimmedName}`);
+    return !!updated;
+  }, [universe, universeId, onUniverseChange, mountedRef, creatingKindKey]);
+
   // Inline-edit channel for canon fields the user types/picks directly
   // (setting intExt + timeOfDay chips, primaryImageRef pinning, wardrobe
   // edits). Optimistic — UI updates before the server roundtrip so chip
@@ -758,6 +808,7 @@ export default function UniverseCanonSection({
           togglingLockId={togglingLockId}
           onPatchEntry={(entryId, patch) => handlePatchEntry(kind, entryId, patch)}
           onRenderCleanPlate={handleRenderCleanPlate}
+          onDescribeImages={(entry) => setDescribeTarget({ kind, entry })}
           seriesNameMap={usage?.seriesNameMap || null}
           onBulkLock={(nextLocked) => handleBulkLockKind(kind, nextLocked)}
           bulkLocking={bulkLockingKindKey === kind.key}
@@ -773,6 +824,8 @@ export default function UniverseCanonSection({
           renderingAll={renderAllKindKey === kind.key}
           onPickFromCatalog={() => setCatalogPickerKind(kind)}
           catalogLinking={catalogLinking}
+          onAddEntry={(payload) => handleCreateEntry(kind, payload)}
+          creating={creatingKindKey === kind.key}
         />
       ))}
 
@@ -788,11 +841,30 @@ export default function UniverseCanonSection({
         refKind="universe"
         refId={universeId}
       />
+
+      {/* Vision "Describe from image(s)" — turns reference images into an
+          image-gen-ready description and writes it into the entry's descriptor
+          field (the same field CanonCard's inline editor binds to). */}
+      {describeTarget ? (
+        <VisionDescribeModal
+          open
+          kind={describeTarget.kind.apiKind}
+          entryName={describeTarget.entry.name}
+          onApply={(description) => {
+            if (describeTarget.kind.descField) {
+              handlePatchEntry(describeTarget.kind, describeTarget.entry.id, {
+                [describeTarget.kind.descField]: description,
+              });
+            }
+          }}
+          onClose={() => setDescribeTarget(null)}
+        />
+      ) : null}
     </section>
   );
 }
 
-function KindSection({ kind, universeId, all, totalCount, filtered, usage, renderingJobs, onRender, onJobCompleted, onJobFailed, onPreview, onRefine, refiningId, onExpandCharacter, expandingId, onSheetCompleted, onSheetDeleted, onToggleLock, togglingLockId, onPatchEntry, onRenderCleanPlate, seriesNameMap, onBulkLock, bulkLocking, fullList, externalPendingByEntryId = null, compact = false, onRenderAll = null, renderingAll = false, onPickFromCatalog = null, catalogLinking = false }) {
+function KindSection({ kind, universeId, all, totalCount, filtered, usage, renderingJobs, onRender, onJobCompleted, onJobFailed, onPreview, onRefine, refiningId, onExpandCharacter, expandingId, onSheetCompleted, onSheetDeleted, onToggleLock, togglingLockId, onPatchEntry, onRenderCleanPlate, onDescribeImages = null, seriesNameMap, onBulkLock, bulkLocking, fullList, externalPendingByEntryId = null, compact = false, onRenderAll = null, renderingAll = false, onPickFromCatalog = null, catalogLinking = false, onAddEntry = null, creating = false }) {
   // Universe-only character wiring — `null` for non-character kinds so
   // CanonCard's gate stays `kind === 'characters' && characterExtensions`.
   // Memoized so the BASE object is stable across re-renders that aren't
@@ -806,6 +878,25 @@ function KindSection({ kind, universeId, all, totalCount, filtered, usage, rende
     [kind.key, universeId, onExpandCharacter, onSheetCompleted, onSheetDeleted],
   );
   const Icon = kind.icon;
+
+  // Manual-add form state — local to the section (mirrors CategoryEditor's
+  // `adding`/`newLabel` bucket-add form). Persistence is the parent's job via
+  // `onAddEntry`; this just collects a name + optional description and resets
+  // on a successful save.
+  const [adding, setAdding] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [newDesc, setNewDesc] = useState('');
+  const submitAdd = async () => {
+    if (!newName.trim() || !onAddEntry || creating) return;
+    const ok = await onAddEntry({ name: newName, description: newDesc });
+    if (ok) {
+      setNewName('');
+      setNewDesc('');
+      setAdding(false);
+    }
+  };
+  const cancelAdd = () => { setAdding(false); setNewName(''); setNewDesc(''); };
+
   // Bulk lock-state summary computed off the FULL list (not the series-filtered
   // view) so the buttons reflect the universe-wide state the bulk action will
   // change. A mixed list (some locked, some not) enables BOTH buttons so the
@@ -828,6 +919,20 @@ function KindSection({ kind, universeId, all, totalCount, filtered, usage, rende
 
   const controls = (
     <>
+      {onAddEntry ? (
+        <button
+          type="button"
+          onClick={() => setAdding((v) => !v)}
+          disabled={creating}
+          title={`Add a ${kind.singular} manually`}
+          aria-label={`Add ${kind.singular}`}
+          aria-expanded={adding}
+          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-gray-400 hover:text-port-accent disabled:opacity-30 disabled:cursor-not-allowed border border-port-border hover:border-port-accent/50"
+        >
+          {creating ? <Loader2 size={11} className="animate-spin" /> : <Plus size={11} />}
+          Add
+        </button>
+      ) : null}
       {onPickFromCatalog ? (
         <button
           type="button"
@@ -884,10 +989,52 @@ function KindSection({ kind, universeId, all, totalCount, filtered, usage, rende
     </>
   );
 
+  const addForm = adding ? (
+    <div className="bg-port-bg border border-port-border rounded p-2 mb-2 flex flex-col gap-2">
+      <input
+        value={newName}
+        onChange={(e) => setNewName(e.target.value)}
+        onKeyDown={(e) => { if (e.key === 'Enter') submitAdd(); }}
+        placeholder={`${kind.singular[0].toUpperCase()}${kind.singular.slice(1)} name`}
+        className="bg-port-card border border-port-border rounded px-2 py-1 text-white text-sm"
+        maxLength={BIBLE_LIMITS.NAME_MAX}
+        autoFocus
+        aria-label={`New ${kind.singular} name`}
+      />
+      <textarea
+        value={newDesc}
+        onChange={(e) => setNewDesc(e.target.value)}
+        placeholder={`Describe this ${kind.singular} (optional — image-gen-ready prose)`}
+        className="bg-port-card border border-port-border rounded px-2 py-1 text-white text-sm"
+        rows={2}
+        maxLength={kind.descFieldMax}
+        aria-label={`New ${kind.singular} description`}
+      />
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={submitAdd}
+          disabled={!newName.trim() || creating}
+          className="inline-flex items-center gap-1 text-xs px-2 py-1 bg-port-accent hover:bg-port-accent/90 disabled:opacity-50 text-white rounded"
+        >
+          {creating ? <Loader2 size={12} className="animate-spin" /> : null}
+          Save
+        </button>
+        <button
+          type="button"
+          onClick={cancelAdd}
+          className="text-xs px-2 py-1 bg-port-bg hover:bg-port-border text-gray-300 rounded"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  ) : null;
+
   const list = all.length === 0 ? (
     filtered && totalCount > 0
       ? <p className="text-xs text-gray-500 italic">No {kind.label.toLowerCase()} in the selected series. {totalCount} total in this universe — clear the filter to see them all.</p>
-      : <p className="text-xs text-gray-500 italic">No {kind.label.toLowerCase()} yet. Use <em>Extract from prose</em> above to populate this list from an issue.</p>
+      : <p className="text-xs text-gray-500 italic">No {kind.label.toLowerCase()} yet. Use <em>Add</em> or <em>Extract from prose</em> above to populate this list.</p>
   ) : (
     <ul className="space-y-2">
       {all.map((entry) => (
@@ -915,6 +1062,7 @@ function KindSection({ kind, universeId, all, totalCount, filtered, usage, rende
           togglingLock={togglingLockId === entry.id}
           onPatchEntry={onPatchEntry}
           onRenderCleanPlate={onRenderCleanPlate}
+          onDescribeImages={onDescribeImages}
           seriesNameMap={seriesNameMap}
           characterExtensions={characterExtensions
             ? { ...characterExtensions, expanding: expandingId === entry.id }
@@ -937,6 +1085,7 @@ function KindSection({ kind, universeId, all, totalCount, filtered, usage, rende
           </span>
           {controls}
         </div>
+        {addForm}
         {list}
       </div>
     );
@@ -954,7 +1103,7 @@ function KindSection({ kind, universeId, all, totalCount, filtered, usage, rende
           {controls}
         </div>
       </div>
-      <div className="p-3">{list}</div>
+      <div className="p-3">{addForm}{list}</div>
     </section>
   );
 }

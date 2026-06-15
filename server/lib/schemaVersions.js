@@ -73,6 +73,19 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // LWW it back) MUST introduce a gate then — mirroring the catalog
   // payloadSchemaVersion lockstep note below.
   mediaCollections: 1,
+  // v1 = author personas (PostgreSQL `authors` table) federated via the
+  // per-record peer-sync push pipeline (record kind `author`, sync category
+  // `authors`). A brand-NEW synced record type like `storyBuilder` below, so it
+  // gets its own per-category gate: a v1 sender pushing to a ≤v0 (pre-feature)
+  // receiver is sender-ahead on `authors` and gets a 412 (the older peer's
+  // `sanitizeAuthor` would silently strip any future field and LWW it back) —
+  // only the authors category pauses; every other category keeps flowing
+  // (per-category gate via scopeVersionDiff). A v1 receiver still accepts a ≤v0
+  // sender (sender-behind): pre-feature peers never push an `author` record at
+  // all, so there's nothing to gate. The FIRST incompatible author-shape change
+  // MUST bump this to 2 then (where a v1 peer would round-trip the new shape
+  // through an unaware sanitizer).
+  authors: 1,
   // v1 = creative ingredients catalog (Postgres tables: catalog_scraps,
   // catalog_ingredients, catalog_ingredient_sources, catalog_ingredient_refs).
   // v2 = `catalog_ingredients.search_tsv` expanded to also index the
@@ -201,6 +214,7 @@ export const RECORD_KIND_SCHEMA_CATEGORIES = Object.freeze({
   series: Object.freeze(['pipelineSeries']),
   issue: Object.freeze(['pipelineIssues']),
   mediaCollection: Object.freeze(['mediaCollections']),
+  author: Object.freeze(['authors']),
   'cat-ingredient': Object.freeze(['catalog']),
   'cat-scrap': Object.freeze(['catalog']),
   storyBuilder: Object.freeze(['storyBuilder']),

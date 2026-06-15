@@ -218,6 +218,19 @@ describe('autonomousJobs', () => {
       expect(task.metadata.openPR).toBe(true)
       expect(task.metadata.simplify).toBe(false)
     })
+
+    it('forwards providerId/model into metadata.provider/metadata.model', async () => {
+      const job = { ...mockJobsData.jobs[0], providerId: 'anthropic', model: 'claude-opus-4-8' }
+      const task = await generateTaskFromJob(job)
+      expect(task.metadata.provider).toBe('anthropic')
+      expect(task.metadata.model).toBe('claude-opus-4-8')
+    })
+
+    it('omits provider/model when job has no override', async () => {
+      const task = await generateTaskFromJob(mockJobsData.jobs[0])
+      expect(task.metadata.provider).toBeUndefined()
+      expect(task.metadata.model).toBeUndefined()
+    })
   })
 
   describe('createJob with resolveIntervalMs', () => {
@@ -757,6 +770,23 @@ describe('autonomousJobs', () => {
       expect(job.appId).toBe('app-xyz')
       expect(job.taskMetadata).toEqual({ useWorktree: true, openPR: true, simplify: false })
     })
+
+    it('defaults providerId/model to null when omitted', async () => {
+      const job = await createJob({ name: 'Default AI Job', promptTemplate: 'do it' })
+      expect(job.providerId).toBeNull()
+      expect(job.model).toBeNull()
+    })
+
+    it('persists providerId + model when provided', async () => {
+      const job = await createJob({
+        name: 'Pinned AI Job',
+        promptTemplate: 'do it',
+        providerId: 'anthropic',
+        model: 'claude-opus-4-8'
+      })
+      expect(job.providerId).toBe('anthropic')
+      expect(job.model).toBe('claude-opus-4-8')
+    })
   })
 
   describe('updateJob', () => {
@@ -789,6 +819,16 @@ describe('autonomousJobs', () => {
 
       const cleared = await updateJob('job-test-1', { appId: null })
       expect(cleared.appId).toBeNull()
+    })
+
+    it('updates providerId + model, and can clear them', async () => {
+      const pinned = await updateJob('job-test-1', { providerId: 'anthropic', model: 'claude-opus-4-8' })
+      expect(pinned.providerId).toBe('anthropic')
+      expect(pinned.model).toBe('claude-opus-4-8')
+
+      const cleared = await updateJob('job-test-1', { providerId: null, model: null })
+      expect(cleared.providerId).toBeNull()
+      expect(cleared.model).toBeNull()
     })
   })
 

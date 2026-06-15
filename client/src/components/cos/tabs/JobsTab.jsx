@@ -4,6 +4,8 @@ import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
 import { timeAgo } from '../../../utils/formatters';
 import { CRON_PRESETS, describeCron } from '../../../utils/cronHelpers';
+import { filterSelectableModels } from '../../../utils/providers';
+import ProviderModelSelector from '../../ProviderModelSelector';
 
 const INTERVAL_OPTIONS = [
   { value: 'hourly', label: 'Every Hour' },
@@ -45,6 +47,34 @@ const JOB_TYPE_OPTIONS = [
   { value: 'shell', label: 'Shell Command' }
 ];
 
+// App scope, provider/model override, and prompt template only apply to
+// AI-agent jobs — shell/script jobs run a fixed command and never reach the
+// AI runner.
+const isAgentJobType = (type) => type !== 'shell' && type !== 'script';
+
+// Blank create-form state — shared by the initial useState and the post-create
+// reset so the two can't drift (a field added to one but not the other would
+// silently carry the previous job's value into the next).
+const INITIAL_JOB = {
+  name: '',
+  description: '',
+  category: 'custom',
+  type: 'agent',
+  scheduleMode: 'interval',
+  interval: 'daily',
+  scheduledTime: '',
+  cronExpression: '',
+  priority: 'MEDIUM',
+  autonomyLevel: 'manager',
+  promptTemplate: '',
+  command: '',
+  triggerAction: 'log-only',
+  appId: '',
+  providerId: '',
+  model: '',
+  enabled: false
+};
+
 const BRIEFING_CONFIG_OPTIONS = [
   { key: 'dailyJoke', label: 'Daily Joke', desc: 'Include a short joke to start the day' },
   { key: 'dailyQuote', label: 'Daily Quote', desc: 'Include an inspirational quote related to focus areas' },
@@ -81,9 +111,36 @@ function BriefingConfig({ config, onChange }) {
   );
 }
 
+// Provider + model override for an agent job. Empty selection = use the active
+// provider / its default model. Only rendered for agent jobs (shell/script jobs
+// never reach the AI runner). `data` carries `providerId`/`model`; `onChange`
+// applies a partial patch back onto the form state.
+function JobProviderModelFields({ data, providers, onChange }) {
+  if (!providers?.length) return null;
+  const selectedProvider = providers.find(p => p.id === data.providerId);
+  const availableModels = filterSelectableModels(selectedProvider?.models);
+  return (
+    <div>
+      <span className="text-xs text-gray-400 block mb-1">AI Provider &amp; Model (optional)</span>
+      <ProviderModelSelector
+        providers={providers}
+        selectedProviderId={data.providerId || ''}
+        selectedModel={data.model || ''}
+        availableModels={availableModels}
+        onProviderChange={id => onChange({ providerId: id, model: '' })}
+        onModelChange={model => onChange({ model })}
+        compact
+        emptyProviderOption="Default (active provider)"
+        emptyModelOption="Default model"
+        alwaysShowModel
+      />
+    </div>
+  );
+}
+
 function normalizeJobPayload(formData) {
   const payload = { ...formData };
-  if (payload.type !== 'shell' && payload.type !== 'script') {
+  if (isAgentJobType(payload.type)) {
     payload.command = null;
     payload.triggerAction = null;
   } else {
@@ -92,6 +149,10 @@ function normalizeJobPayload(formData) {
     // appId left over from when the job was an agent type — otherwise the saved
     // job shows a misleading app badge while executing in root.
     payload.appId = null;
+    // Provider/model overrides only apply to AI-agent jobs — clear any leftover
+    // selection so a shell/script job doesn't carry a misleading AI badge.
+    payload.providerId = null;
+    payload.model = null;
   }
   // Empty app picker selection ('') → null so a PUT actively un-scopes the job
   // back to global (undefined would be dropped from JSON and updateJob would
@@ -205,7 +266,7 @@ function getJobTypeLabel(job) {
   return 'AI';
 }
 
-function JobCard({ job, apps, onToggle, onTrigger, onDelete, onUpdate }) {
+function JobCard({ job, apps, providers, onToggle, onTrigger, onDelete, onUpdate }) {
   const [expanded, setExpanded] = useState(false);
   const [editing, setEditing] = useState(false);
   const [editData, setEditData] = useState({});
@@ -226,7 +287,9 @@ function JobCard({ job, apps, onToggle, onTrigger, onDelete, onUpdate }) {
       priority: job.priority,
       autonomyLevel: job.autonomyLevel,
       promptTemplate: job.promptTemplate || '',
-      appId: job.appId || ''
+      appId: job.appId || '',
+      providerId: job.providerId || '',
+      model: job.model || ''
     };
     // Always initialize shell fields so switching type to 'shell' during editing works
     base.command = job.command || '';
@@ -400,7 +463,7 @@ function JobCard({ job, apps, onToggle, onTrigger, onDelete, onUpdate }) {
                 )}
               </div>
               <ScheduleFields data={editData} onChange={(key, val) => setEditData(d => ({ ...d, [key]: val }))} />
-              {editData.type !== 'shell' && editData.type !== 'script' && (
+              {isAgentJobType(editData.type) && (
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-gray-400">App scope:</span>
                   <select
@@ -412,6 +475,13 @@ function JobCard({ job, apps, onToggle, onTrigger, onDelete, onUpdate }) {
                     {apps.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
                   </select>
                 </div>
+              )}
+              {isAgentJobType(editData.type) && (
+                <JobProviderModelFields
+                  data={editData}
+                  providers={providers}
+                  onChange={patch => setEditData(d => ({ ...d, ...patch }))}
+                />
               )}
               {editData.config && (
                 <BriefingConfig
@@ -477,6 +547,9 @@ function JobCard({ job, apps, onToggle, onTrigger, onDelete, onUpdate }) {
               <div className="flex flex-wrap gap-4 text-xs text-gray-500">
                 <span>Priority: <span className="text-gray-300">{job.priority}</span></span>
                 {!isShell && <span>Autonomy: <span className="text-gray-300">{job.autonomyLevel}</span></span>}
+                {isAgentJobType(job.type) && job.providerId && (
+                  <span>AI: <span className="text-gray-300">{providers.find(p => p.id === job.providerId)?.name || job.providerId}{job.model ? ` / ${job.model}` : ''}</span></span>
+                )}
                 {isShell && <span>Action: <span className="text-gray-300">{job.triggerAction || 'log-only'}</span></span>}
                 <span>Created: <span className="text-gray-300">{job.createdAt ? new Date(job.createdAt).toLocaleDateString() : '—'}</span></span>
               </div>
@@ -527,26 +600,11 @@ function JobCard({ job, apps, onToggle, onTrigger, onDelete, onUpdate }) {
 export default function JobsTab() {
   const [jobs, setJobs] = useState([]);
   const [apps, setApps] = useState([]);
+  const [providers, setProviders] = useState([]);
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
-  const [newJob, setNewJob] = useState({
-    name: '',
-    description: '',
-    category: 'custom',
-    type: 'agent',
-    scheduleMode: 'interval',
-    interval: 'daily',
-    scheduledTime: '',
-    cronExpression: '',
-    priority: 'MEDIUM',
-    autonomyLevel: 'manager',
-    promptTemplate: '',
-    command: '',
-    triggerAction: 'log-only',
-    appId: '',
-    enabled: false
-  });
+  const [newJob, setNewJob] = useState(INITIAL_JOB);
 
   const fetchJobs = useCallback(async () => {
     const data = await api.getCosJobs().catch(err => {
@@ -564,6 +622,10 @@ export default function JobsTab() {
 
   useEffect(() => {
     api.getApps().then(data => setApps(data?.apps || data || [])).catch(() => setApps([]));
+  }, []);
+
+  useEffect(() => {
+    api.getProviders().then(data => setProviders(data?.providers || [])).catch(() => setProviders([]));
   }, []);
 
   const handleCreate = async () => {
@@ -590,23 +652,7 @@ export default function JobsTab() {
     });
     if (!created) return;
     toast.success('Job created');
-    setNewJob({
-      name: '',
-      description: '',
-      category: 'custom',
-      type: 'agent',
-      scheduleMode: 'interval',
-      interval: 'daily',
-      scheduledTime: '',
-      cronExpression: '',
-      priority: 'MEDIUM',
-      autonomyLevel: 'manager',
-      promptTemplate: '',
-      command: '',
-      triggerAction: 'log-only',
-      appId: '',
-      enabled: false
-    });
+    setNewJob(INITIAL_JOB);
     setShowCreate(false);
     fetchJobs();
   };
@@ -756,7 +802,7 @@ export default function JobsTab() {
               )}
             </div>
             <ScheduleFields data={newJob} onChange={(key, val) => setNewJob(j => ({ ...j, [key]: val }))} />
-            {newJob.type !== 'shell' && newJob.type !== 'script' && (
+            {isAgentJobType(newJob.type) && (
               <div className="flex items-center gap-2">
                 <span className="text-xs text-gray-400">App scope:</span>
                 <select
@@ -768,6 +814,13 @@ export default function JobsTab() {
                   {apps.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
                 </select>
               </div>
+            )}
+            {isAgentJobType(newJob.type) && (
+              <JobProviderModelFields
+                data={newJob}
+                providers={providers}
+                onChange={patch => setNewJob(j => ({ ...j, ...patch }))}
+              />
             )}
             {newJob.type === 'shell' ? (
               <>
@@ -829,6 +882,7 @@ export default function JobsTab() {
               key={job.id}
               job={job}
               apps={apps}
+              providers={providers}
               onToggle={handleToggle}
               onTrigger={handleTrigger}
               onDelete={handleDelete}

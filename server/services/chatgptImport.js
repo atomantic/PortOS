@@ -1,16 +1,27 @@
 /**
  * ChatGPT Import Service
  *
- * Parses ChatGPT data exports (`conversations.json`) and imports them as
- * Brain Memory entries. Full conversation transcripts are also archived to
- * `data/brain/imports/chatgpt/<conversation-id>.json` so that the original
- * structure (mapping tree, model, citations) is preserved if a richer viewer
- * is added later.
+ * Parses ChatGPT data exports and imports them as Brain Memory entries. Full
+ * conversation transcripts are also archived to
+ * `data/brain/imports/chatgpt/<conversation-id>.json` so the original structure
+ * (mapping tree, model, citations) and a rich markdown transcript are preserved
+ * for the in-app conversation viewer.
+ *
+ * Two upload shapes are supported:
+ *   - The legacy single `conversations.json` (parsed in the browser, POSTed as
+ *     JSON). No assets — image/audio parts render as `[image]` / `[audio]`.
+ *   - The modern multi-file ZIP export (streamed up whole, extracted server-
+ *     side by `chatgptZipImport.js`). That path passes an `assetResolver` so
+ *     image/audio/file parts render as inline markdown (`![name](url)`,
+ *     `[🔊 audio](url)`, `[📎 file](url)`) pointing at the extracted assets.
+ *
+ * `parseExport` / `summarizeConversation` / `extractMessages` all accept an
+ * optional `{ assetResolver }`; when omitted they behave exactly as before.
  */
 
 import { join } from 'path';
 import { writeFile } from 'fs/promises';
-import { ensureDir, PATHS } from '../lib/fileUtils.js';
+import { ensureDir, PATHS, tryReadFile, safeJSONParse } from '../lib/fileUtils.js';
 import { createMemoryEntry } from './brainStorage.js';
 
 const MAX_MEMORY_CONTENT = 9800;
@@ -32,24 +43,102 @@ const cleanTitle = (s, fallback = 'Untitled conversation') => {
 };
 
 /**
- * Reduce a single message's `content.parts` array into a plain text string.
- * ChatGPT parts can be strings, or objects (image_asset_pointer, code, etc.).
+ * Normalize a ChatGPT asset pointer to its bare file id. Pointers appear as
+ * `file-service://file-XXX`, `sediment://file_HASH`, or (in `attachments`) a
+ * bare `file-XXX` id. The matching on-disk asset is `<id>.dat`.
  */
-const partsToText = (parts) => {
-  if (!Array.isArray(parts)) return '';
-  return parts
-    .map((part) => {
-      if (typeof part === 'string') return part;
-      if (part && typeof part === 'object') {
-        if (typeof part.text === 'string') return part.text;
-        if (part.content_type === 'image_asset_pointer') return '[image]';
-        if (part.content_type === 'audio_transcription' && typeof part.text === 'string') return part.text;
-        if (part.content_type) return `[${part.content_type}]`;
-      }
-      return '';
-    })
+export const assetPointerId = (pointer) => String(pointer || '')
+  .replace(/^file-service:\/\//, '')
+  .replace(/^sediment:\/\//, '')
+  .trim();
+
+const escapeMd = (s) => String(s || '').replace(/([\\`*_[\]()])/g, '\\$1');
+
+/**
+ * Render one message part to markdown text. `assetResolver(pointer)` returns
+ * `{ url, name, mime } | null` for an extracted asset (ZIP path), or is null
+ * (legacy JSON path) — in which case asset parts degrade to `[image]` etc.
+ * `renderedIds` collects the asset ids we inlined so `extractMessages` can
+ * avoid double-listing them in the message's attachment footer.
+ */
+const partToText = (part, assetResolver, renderedIds) => {
+  if (typeof part === 'string') return part;
+  if (!part || typeof part !== 'object') return '';
+
+  const ct = part.content_type;
+
+  // Spoken-turn transcript text — render the words, not a placeholder.
+  if (ct === 'audio_transcription' && typeof part.text === 'string') return part.text;
+
+  if (ct === 'image_asset_pointer') {
+    const resolved = assetResolver?.(part.asset_pointer);
+    if (resolved?.url) {
+      if (renderedIds) renderedIds.add(assetPointerId(part.asset_pointer));
+      return `\n\n![${escapeMd(resolved.name || 'image')}](${resolved.url})\n`;
+    }
+    return '[image]';
+  }
+
+  if (ct === 'audio_asset_pointer') {
+    const resolved = assetResolver?.(part.asset_pointer);
+    if (resolved?.url) {
+      if (renderedIds) renderedIds.add(assetPointerId(part.asset_pointer));
+      return `[🔊 ${escapeMd(resolved.name || 'audio')}](${resolved.url})`;
+    }
+    return '[audio]';
+  }
+
+  if (ct === 'real_time_user_audio_video_asset_pointer') {
+    const resolved = assetResolver?.(part.asset_pointer);
+    if (resolved?.url) {
+      if (renderedIds) renderedIds.add(assetPointerId(part.asset_pointer));
+      return `[🎙️ ${escapeMd(resolved.name || 'voice message')}](${resolved.url})`;
+    }
+    return '[voice message]';
+  }
+
+  if (typeof part.text === 'string') return part.text;
+  if (ct) return `[${ct}]`;
+  return '';
+};
+
+/**
+ * Reduce a single message's `content.parts` array into a plain text / markdown
+ * string. Returns `{ text, renderedIds }` so the caller can dedupe attachments.
+ */
+const renderParts = (parts, assetResolver) => {
+  const renderedIds = new Set();
+  if (!Array.isArray(parts)) return { text: '', renderedIds };
+  const text = parts
+    .map((part) => partToText(part, assetResolver, renderedIds))
     .filter(Boolean)
     .join('\n');
+  return { text, renderedIds };
+};
+
+// Kept for back-compat with the existing unit tests (`__test.partsToText`).
+const partsToText = (parts) => renderParts(parts, null).text;
+
+/**
+ * Render a message's `metadata.attachments` (files the user attached) as a
+ * markdown footer of links — skipping any already inlined as image parts.
+ * Non-image attachments (PDFs, docs, spreadsheets) only appear here, never as
+ * parts, so this is the only place they surface.
+ */
+const renderAttachments = (msg, assetResolver, renderedIds) => {
+  const attachments = msg?.metadata?.attachments;
+  if (!Array.isArray(attachments) || attachments.length === 0) return '';
+  const links = [];
+  for (const att of attachments) {
+    const id = att?.id;
+    if (!id || renderedIds.has(id)) continue;
+    const resolved = assetResolver?.(id);
+    if (resolved?.url) {
+      const icon = (resolved.mime || att.mime_type || '').startsWith('image/') ? '🖼️' : '📎';
+      links.push(`[${icon} ${escapeMd(resolved.name || att.name || 'file')}](${resolved.url})`);
+    }
+  }
+  return links.length ? `\n\n${links.join('\n')}` : '';
 };
 
 /**
@@ -57,7 +146,7 @@ const partsToText = (parts) => {
  * root, then reverse — that path is the visible conversation thread (ChatGPT
  * mappings can include alternate branches from edits/regenerations).
  */
-export function extractMessages(conversation) {
+export function extractMessages(conversation, { assetResolver = null } = {}) {
   if (!conversation || typeof conversation !== 'object') return [];
   const mapping = conversation.mapping || {};
   const seen = new Set();
@@ -76,7 +165,9 @@ export function extractMessages(conversation) {
     if (!msg) continue;
     const role = msg.author?.role;
     if (!role || role === 'system') continue;
-    const text = partsToText(msg.content?.parts);
+    const { text: partsText, renderedIds } = renderParts(msg.content?.parts, assetResolver);
+    const attachmentText = renderAttachments(msg, assetResolver, renderedIds);
+    const text = `${partsText}${attachmentText}`;
     if (!text.trim()) continue;
     messages.push({
       id: msg.id || node.id,
@@ -105,11 +196,14 @@ const epochToISO = (epoch) => {
 /**
  * Build a lightweight summary record for a parsed conversation.
  */
-export function summarizeConversation(conversation) {
-  const messages = extractMessages(conversation);
+export function summarizeConversation(conversation, { assetResolver = null } = {}) {
+  const messages = extractMessages(conversation, { assetResolver });
   const userMessages = messages.filter((m) => m.role === 'user').length;
   const assistantMessages = messages.filter((m) => m.role === 'assistant').length;
   const transcript = formatTranscript(messages);
+  // Count inlined assets (markdown image embeds + asset link icons) for the
+  // preview/summary so the wizard can report "N conversations, M assets".
+  const assetCount = (transcript.match(/!\[[^\]]*\]\([^)]+\)|\[(?:🔊|🎙️|🖼️|📎)[^\]]*\]\([^)]+\)/g) || []).length;
   return {
     id: conversation.id || conversation.conversation_id || null,
     title: cleanTitle(conversation.title),
@@ -119,6 +213,7 @@ export function summarizeConversation(conversation) {
     userMessages,
     assistantMessages,
     charCount: transcript.length,
+    assetCount,
     gizmoId: conversation.gizmo_id || null,
     messages,
     transcript
@@ -126,16 +221,22 @@ export function summarizeConversation(conversation) {
 }
 
 /**
- * Parse a raw `conversations.json` payload (array OR object with `conversations`).
- * Returns analysis + per-conversation summaries (without full transcripts) so
- * the client can render a preview without round-tripping huge payloads.
+ * Parse a raw conversations payload into analysis + per-conversation summaries.
+ * Accepts: a top-level array of conversations, an object with a `conversations`
+ * array (legacy single-file `conversations.json`), OR an object with a
+ * `conversationFiles` array of already-parsed JSON payloads (the multi-file ZIP
+ * path, where each `conversations-NNN.json` is its own array/object).
  */
-export function parseExport(raw) {
+export function parseExport(raw, { assetResolver = null } = {}) {
   let conversations;
   if (Array.isArray(raw)) {
     conversations = raw;
   } else if (raw && Array.isArray(raw.conversations)) {
     conversations = raw.conversations;
+  } else if (raw && Array.isArray(raw.conversationFiles)) {
+    // Multi-file export: flatten every shard into one conversation list.
+    conversations = raw.conversationFiles.flatMap((shard) =>
+      Array.isArray(shard) ? shard : (Array.isArray(shard?.conversations) ? shard.conversations : []));
   } else {
     return { ok: false, error: 'Expected an array of conversations or an object with a "conversations" array.' };
   }
@@ -147,15 +248,17 @@ export function parseExport(raw) {
   const summaries = [];
   let totalMessages = 0;
   let totalChars = 0;
+  let totalAssets = 0;
   let earliest = null;
   let latest = null;
   const gizmos = new Set();
 
   for (const c of conversations) {
-    const s = summarizeConversation(c);
+    const s = summarizeConversation(c, { assetResolver });
     summaries.push(s);
     totalMessages += s.messageCount;
     totalChars += s.charCount;
+    totalAssets += s.assetCount;
     if (s.gizmoId) gizmos.add(s.gizmoId);
     if (s.createTime && (!earliest || s.createTime < earliest)) earliest = s.createTime;
     if (s.updateTime && (!latest || s.updateTime > latest)) latest = s.updateTime;
@@ -167,6 +270,7 @@ export function parseExport(raw) {
       totalConversations: summaries.length,
       totalMessages,
       totalChars,
+      totalAssets,
       earliest,
       latest,
       gizmoCount: gizmos.size
@@ -194,6 +298,21 @@ const safeFilename = (s) => String(s || 'conversation')
   .slice(0, 80) || 'conversation';
 
 /**
+ * Read one archived conversation transcript by its archive filename (the
+ * `sourceRef` stored on a chatgpt-import Memory entry). Returns null if the
+ * name escapes the archive dir or the file is missing — the conversation
+ * viewer falls back to the truncated Memory `content` in that case.
+ */
+export async function readArchivedConversation(archiveName) {
+  const name = String(archiveName || '');
+  // Reject path traversal — archive names are flat `<safe-id>.json`.
+  if (!/^[a-zA-Z0-9-_]+\.json$/.test(name)) return null;
+  const raw = await tryReadFile(join(IMPORT_ROOT, name));
+  if (!raw) return null;
+  return safeJSONParse(raw, null, { allowArray: false });
+}
+
+/**
  * Persist one conversation's full transcript + structured messages to the
  * import archive directory.
  */
@@ -208,6 +327,7 @@ async function archiveConversation(summary) {
     createTime: summary.createTime,
     updateTime: summary.updateTime,
     messageCount: summary.messageCount,
+    assetCount: summary.assetCount,
     gizmoId: summary.gizmoId,
     messages: summary.messages,
     transcript: summary.transcript,
@@ -222,13 +342,14 @@ const buildContent = (summary) => {
     `Source: ChatGPT export`,
     summary.createTime ? `Started: ${summary.createTime}` : null,
     summary.updateTime ? `Updated: ${summary.updateTime}` : null,
-    `Messages: ${summary.messageCount}`
+    `Messages: ${summary.messageCount}`,
+    summary.assetCount ? `Assets: ${summary.assetCount}` : null
   ].filter(Boolean).join('\n');
   const body = summary.transcript;
   const combined = `${header}\n\n${body}`;
   if (combined.length <= MAX_MEMORY_CONTENT) return combined;
   const truncated = combined.slice(0, MAX_MEMORY_CONTENT - 80).trimEnd();
-  return `${truncated}\n\n…(transcript truncated — full content archived in data/brain/imports/chatgpt)`;
+  return `${truncated}\n\n…(transcript truncated — open the full conversation to see everything)`;
 };
 
 /**
@@ -283,6 +404,7 @@ export async function importConversations(parsed, options = {}) {
       memoryId: entry.id,
       title: summary.title,
       messageCount: summary.messageCount,
+      assetCount: summary.assetCount,
       archiveName,
       status: 'imported'
     });
@@ -299,4 +421,4 @@ export async function importConversations(parsed, options = {}) {
   };
 }
 
-export const __test = { sanitizeTag, cleanTitle, partsToText, buildContent };
+export const __test = { sanitizeTag, cleanTitle, partsToText, buildContent, assetPointerId };

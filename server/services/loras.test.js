@@ -403,3 +403,73 @@ describe('installFromCivitai', () => {
     expect(tmpFiles.some((f) => f.endsWith('.partial'))).toBe(false);
   });
 });
+
+describe('installFromHuggingface', () => {
+  const HF_MODEL = {
+    id: 'fal/ltx2.3-audio-reactive-lora',
+    tags: ['ltxv', 'lora'],
+    cardData: { base_model: 'Lightricks/LTX-2.3', instance_prompt: 'audio reactive' },
+    siblings: [
+      { rfilename: 'README.md' },
+      { rfilename: 'pytorch_lora_weights.safetensors' },
+    ],
+  };
+
+  it('fetches metadata, downloads the .safetensors, writes a video-LoRA sidecar', async () => {
+    const calls = [];
+    const fetchImpl = async (url) => {
+      calls.push(url);
+      if (url.startsWith('https://huggingface.co/api/models/fal/ltx2.3-audio-reactive-lora')) {
+        return mockJsonResponse(HF_MODEL);
+      }
+      if (url.includes('/resolve/main/pytorch_lora_weights.safetensors')) {
+        const stream = new ReadableStream({
+          start(c) { c.enqueue(new Uint8Array(Buffer.from('weights'))); c.close(); },
+        });
+        return { ok: true, status: 200, body: stream };
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    };
+    const sidecar = await lorasService.installFromHuggingface(
+      { url: 'https://huggingface.co/fal/ltx2.3-audio-reactive-lora', token: 'hf_test' },
+      { fetchImpl },
+    );
+    expect(sidecar.filename).toBe('lora-fal-ltx2.3-audio-reactive-lora-hf.safetensors');
+    expect(sidecar.runnerFamily).toBe('ltx-video');
+    expect(sidecar.source).toBe('huggingface');
+    expect(sidecar.huggingface.repo).toBe('fal/ltx2.3-audio-reactive-lora');
+    expect(sidecar.triggerWords).toEqual(['audio reactive']);
+    // The picked file is the canonical diffusers weights, not the README.
+    expect(calls.some((u) => u.includes('/resolve/main/pytorch_lora_weights.safetensors'))).toBe(true);
+  });
+
+  it('refuses a repo it cannot classify as a supported video family', async () => {
+    const fetchImpl = async (url) => {
+      if (url.startsWith('https://huggingface.co/api/models/')) {
+        return mockJsonResponse({ id: 'someone/sdxl-lora', tags: ['sdxl'], siblings: [{ rfilename: 'lora.safetensors' }] });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    };
+    await expect(
+      lorasService.installFromHuggingface({ url: 'someone/sdxl-lora', token: 'hf_test' }, { fetchImpl }),
+    ).rejects.toMatchObject({ code: 'HF_UNKNOWN_FAMILY' });
+  });
+
+  it('accepts an explicit family override', async () => {
+    const fetchImpl = async (url) => {
+      if (url.startsWith('https://huggingface.co/api/models/')) {
+        return mockJsonResponse({ id: 'someone/mystery-lora', siblings: [{ rfilename: 'lora.safetensors' }] });
+      }
+      if (url.includes('/resolve/main/lora.safetensors')) {
+        const stream = new ReadableStream({ start(c) { c.enqueue(new Uint8Array(Buffer.from('w'))); c.close(); } });
+        return { ok: true, status: 200, body: stream };
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    };
+    const sidecar = await lorasService.installFromHuggingface(
+      { url: 'someone/mystery-lora', family: 'ltx-video', token: 'hf_test' },
+      { fetchImpl },
+    );
+    expect(sidecar.runnerFamily).toBe('ltx-video');
+  });
+});

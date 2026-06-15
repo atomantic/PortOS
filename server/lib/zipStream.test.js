@@ -1,7 +1,10 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { Readable, Writable } from 'stream';
 import { deflateRawSync } from 'zlib';
-import { parseZip } from './zipStream.js';
+import { writeFile, rm, mkdtemp } from 'fs/promises';
+import { join } from 'path';
+import { tmpdir } from 'os';
+import { parseZip, extractZipEntryToBuffer } from './zipStream.js';
 
 const LOCAL_SIG = 0x04034b50;
 const CENTRAL_SIG = 0x02014b50;
@@ -137,5 +140,45 @@ describe('parseZip', () => {
     }
     const entries = await collectEntries(Buffer.concat(pieces));
     expect(entries[0].data.toString()).toBe(data.toString());
+  });
+});
+
+describe('extractZipEntryToBuffer', () => {
+  let dir;
+  let zipPath;
+  // A two-entry zip mirroring an mflux checkpoint: a big stored "optimizer"
+  // FIRST (must be skipped without inflation), then a deflated "adapter".
+  const adapterPayload = Buffer.from('adapter weights — round-trip me cleanly');
+
+  beforeAll(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'zipextract-'));
+    zipPath = join(dir, 'ckpt.zip');
+    const optimizer = buildEntry('0001_optimizer.safetensors', Buffer.alloc(4096, 7));
+    const adapter = buildEntry('0001_adapter.safetensors', deflateRawSync(adapterPayload), { method: 8 });
+    await writeFile(zipPath, Buffer.concat([optimizer, adapter, buildEocd()]));
+  });
+
+  afterAll(async () => { await rm(dir, { recursive: true, force: true }); });
+
+  it('extracts a later deflated entry past an earlier one via predicate', async () => {
+    const out = await extractZipEntryToBuffer(
+      zipPath,
+      (name) => name.endsWith('_adapter.safetensors') && !name.includes('optimizer'),
+    );
+    expect(out).not.toBeNull();
+    expect(out.toString()).toBe(adapterPayload.toString());
+  });
+
+  it('matches by substring shorthand', async () => {
+    const out = await extractZipEntryToBuffer(zipPath, '_adapter.safetensors');
+    expect(out.toString()).toBe(adapterPayload.toString());
+  });
+
+  it('resolves null when nothing matches', async () => {
+    expect(await extractZipEntryToBuffer(zipPath, 'no-such-member.bin')).toBeNull();
+  });
+
+  it('rejects on a missing file', async () => {
+    await expect(extractZipEntryToBuffer(join(dir, 'nope.zip'), 'x')).rejects.toThrow();
   });
 });

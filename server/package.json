@@ -9,7 +9,10 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:ci": "vitest run --bail=1 --silent=passed-only --reporter=default --reporter=github-actions",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "setup:db:test": "node scripts/setup-db-test.mjs",
+    "test:db": "vitest run --config vitest.config.db.js",
+    "test:db:ci": "vitest run --config vitest.config.db.js --bail=1 --reporter=default --reporter=github-actions"
   },
   "dependencies": {
     "@googleapis/calendar": "^15.0.0",

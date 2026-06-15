@@ -9,7 +9,7 @@ import {
   CODEX_PARALLEL_DEFAULT,
 } from '../services/mediaJobQueue/index.js';
 import { asyncHandler } from '../lib/errorHandler.js';
-import { backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, codeReviewSettingsSchema, locationSettingsSchema, settingsEmbeddingsSchema, citySnapshotConfigSchema, apiAccessSettingsSchema, validateRequest } from '../lib/validation.js';
+import { backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, codeReviewSettingsSchema, locationSettingsSchema, settingsEmbeddingsSchema, citySnapshotConfigSchema, apiAccessSettingsSchema, loraTrainingConfigSchema, validateRequest } from '../lib/validation.js';
 
 const router = Router();
 
@@ -95,6 +95,12 @@ router.put('/', asyncHandler(async (req, res) => {
   // malformed interval/cap can't reach disk and break the scheduler.
   if (req.body?.citySnapshots !== undefined) {
     validateRequest(citySnapshotConfigSchema.partial(), req.body.citySnapshots);
+  }
+  // LoRA training config (caption provider + training defaults) — validate
+  // the slice when present so a malformed save can't write bad bounds the
+  // trainer would then pass to the python child.
+  if (req.body?.loraTraining !== undefined) {
+    validateRequest(loraTrainingConfigSchema.partial(), req.body.loraTraining);
   }
   // Per-API external-access flags (voice/sdapi). Validate the slice when present
   // so a malformed toggle save can't write a non-boolean exposed/requireAuth to

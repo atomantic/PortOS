@@ -74,12 +74,18 @@ import {
   mergeMediaCollectionsFromSync,
 } from '../mediaCollections.js';
 import {
+  getAuthor,
+  listAuthors,
+  mergeAuthorsFromSync,
+  headshotImageFilename,
+} from '../authors/index.js';
+import {
   initCursor,
   ackDeletesUpTo,
   removeCursor as removeTombstoneCursor,
 } from './peerTombstoneCursors.js';
 
-export const PEER_SUBSCRIBABLE_KINDS = Object.freeze(['universe', 'series', 'mediaCollection']);
+export const PEER_SUBSCRIBABLE_KINDS = Object.freeze(['universe', 'series', 'mediaCollection', 'author']);
 
 /**
  * Cross-cutting event bus for the peer-sync receiver. The asset-pull worker
@@ -195,6 +201,14 @@ export async function findPeerSubscription(peerId, recordKind, recordId) {
  * Returns `{ universe, pipeline, mediaCollections }`, each a `Set<recordId>`.
  */
 export async function getOutboundCoverageForPeer(peerId) {
+  // Keyed by SNAPSHOT category — this set excludes per-record-subscribed records
+  // from the 60s snapshot the source serves a peer. Only kinds that ALSO ride a
+  // snapshot category belong here (universe / pipeline / mediaCollections).
+  // `author` is intentionally absent: authors sync ONLY via per-record push (no
+  // snapshot category), so there's no snapshot to exclude them from. The
+  // `coverage[category]?.add` below no-ops for an `author` sub by design — do
+  // NOT add an `authors` key here (it would have no consumer in dataSync's
+  // snapshot exclude path and would imply a snapshot category that doesn't exist).
   const coverage = { universe: new Set(), pipeline: new Set(), mediaCollections: new Set() };
   if (!isNonEmptyStr(peerId)) return coverage;
   const subs = await listPeerSubscriptions({ peerId });
@@ -344,6 +358,7 @@ const KIND_TO_CATEGORY = Object.freeze({
   universe: 'universe',
   series: 'pipeline',
   mediaCollection: 'mediaCollections',
+  author: 'authors',
 });
 
 function peerAllowsOutbound(peer) {
@@ -430,6 +445,8 @@ export async function autoSubscribePeerToAllRecords(peerId, recordKind) {
     records = await listSeries({ includeDeleted: false }).catch(() => []);
   } else if (recordKind === 'mediaCollection') {
     records = await listCollections({ includeDeleted: false }).catch(() => []);
+  } else if (recordKind === 'author') {
+    records = await listAuthors({ includeDeleted: false }).catch(() => []);
   }
   // Drop ephemeral records before the set-difference / sub creation. The wire
   // sanitizer would short-circuit any push anyway, but creating a sub that
@@ -667,6 +684,7 @@ function summarizeAssetManifest(manifest) {
 
 async function buildIntegrityAssetManifest(kind, record) {
   if (kind === 'mediaCollection') return buildCollectionAssetManifest(record);
+  if (kind === 'author') return buildAuthorAssetManifest(record);
   if (kind === 'series') {
     const childIssues = await listIssues({ seriesId: record?.id, includeDeleted: true }).catch(() => []);
     const manifestIssues = childIssues.filter(
@@ -866,6 +884,10 @@ async function isSubscriptionRecordTombstone(sub) {
   }
   if (sub.recordKind === 'mediaCollection') {
     const record = await getCollection(sub.recordId, { includeDeleted: true }).catch(() => null);
+    return record?.deleted === true;
+  }
+  if (sub.recordKind === 'author') {
+    const record = await getAuthor(sub.recordId, { includeDeleted: true }).catch(() => null);
     return record?.deleted === true;
   }
   return false;
@@ -1323,7 +1345,32 @@ async function buildPushPayload(sub, sourceInstanceId) {
     const assetManifest = record.deleted === true ? [] : await buildCollectionAssetManifest(record);
     return { kind: 'mediaCollection', record: sanitized, assetManifest, sourceInstanceId, portosMeta };
   }
+  if (sub.recordKind === 'author') {
+    const record = await getAuthor(sub.recordId, { includeDeleted: true }).catch(() => null);
+    if (!record) return null;
+    const sanitized = sanitizeRecordForWire('author', record);
+    if (!sanitized) return null;
+    // Tombstone push ships no assets — the receiver is about to delete the
+    // record, so pulling its headshot would be wasteful + privacy-sensitive
+    // (same reasoning as the universe/series branches above).
+    const assetManifest = record.deleted === true ? [] : await buildAuthorAssetManifest(record);
+    return { kind: 'author', record: sanitized, assetManifest, sourceInstanceId, portosMeta };
+  }
   return null;
+}
+
+/**
+ * Hash an author's referenced headshot image (if any) so the receiver can pull
+ * the bytes from `/data/images/`. `headshotImageFilename` returns null for an
+ * external URL / non-local path, so those never ship as assets (the receiver
+ * resolves the same URL itself). A missing local file is skipped silently by
+ * `hashImageForManifest` — can't ship bytes we don't have.
+ */
+async function buildAuthorAssetManifest(author) {
+  const filename = headshotImageFilename(author?.headshotImageUrl);
+  if (!filename) return [];
+  const entry = await hashImageForManifest(filename);
+  return entry ? [entry] : [];
 }
 
 /**
@@ -1651,6 +1698,8 @@ export async function applyIncomingPush(payload) {
     }
   } else if (kind === 'mediaCollection') {
     await mergeMediaCollectionsFromSync([record], { source });
+  } else if (kind === 'author') {
+    await mergeAuthorsFromSync([record], { source });
   }
 
   // Apply the bundled collection (if any) — same LWW + union-of-items
@@ -1864,6 +1913,14 @@ async function classifyLocalRecord(recordKind, recordId) {
     // it, same as universe/series.
     const c = await getCollection(recordId, { includeDeleted: true }).catch(() => null);
     return c ? 'syncable' : 'missing';
+  }
+  if (recordKind === 'author') {
+    // Authors have no `ephemeral` concept (like mediaCollection) — a found
+    // record (live or tombstoned) is always 'syncable'. Lets an inbound author
+    // push bootstrap bidirectional sync. No ping-pong risk: lastPushedHash +
+    // LWW same-`updatedAt` no-op merge prevent it, same as the others.
+    const a = await getAuthor(recordId, { includeDeleted: true }).catch(() => null);
+    return a ? 'syncable' : 'missing';
   }
   return 'missing';
 }
@@ -2130,7 +2187,7 @@ export async function collectSubscriptionsForUpdate(recordKind, recordId) {
   // mediaCollections.js's emitRecordUpdated('mediaCollection', …) inert, so
   // collection edits would only reach peers via initial subscribe / manual
   // force-push, never on subsequent edits.
-  if (recordKind === 'universe' || recordKind === 'series' || recordKind === 'mediaCollection') {
+  if (recordKind === 'universe' || recordKind === 'series' || recordKind === 'mediaCollection' || recordKind === 'author') {
     return listPeerSubscriptions({ recordKind, recordId });
   }
   if (recordKind === 'issue') {

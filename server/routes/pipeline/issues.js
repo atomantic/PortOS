@@ -96,6 +96,7 @@ const visualStageInputSchema = stageInputSchema.extend({
     imageModelId: z.string().trim().max(200).nullable().optional(),
     refineProvider: z.string().trim().max(200).nullable().optional(),
     refineModel: z.string().trim().max(200).nullable().optional(),
+    applyCharacterLoras: z.boolean().optional(),
   }).nullable().optional(),
   // Comic-issue front cover. Only meaningful on the comicPages stage; the
   // service-side sanitizer drops the field on other visual stages.
@@ -197,6 +198,8 @@ const visualGenerateSchema = z.object({
     characterId: z.string().trim().min(1).max(120),
     wardrobeId: z.string().trim().min(1).max(120).nullable().optional(),
   })).max(50).optional(),
+  // Per-render opt-out for trained character-LoRA auto-apply (local mode).
+  applyCharacterLoras: z.boolean().optional().default(true),
 }).refine(refineImagePixelCap, { message: PIXEL_CAP_MESSAGE, path: ['width'] });
 
 // Full-comic-page render: same knobs as panel render minus `description` /
@@ -216,6 +219,8 @@ const comicPageRenderSchema = z.object({
   // See covers.js's makeCoverRenderSchema for the proof/final semantics.
   target: z.enum(COMIC_PAGE_VARIANTS).optional().default('proof'),
   useProofAsBase: z.boolean().optional().default(false),
+  // Per-render opt-out for trained character-LoRA auto-apply (local mode).
+  applyCharacterLoras: z.boolean().optional().default(true),
 }).refine(refineImagePixelCap, { message: PIXEL_CAP_MESSAGE, path: ['width'] });
 
 const episodeVideoSchema = z.object({

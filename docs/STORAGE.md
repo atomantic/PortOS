@@ -51,6 +51,7 @@ PostgreSQL is a **required** install/runtime dependency (see [Backup & Restore](
 - Writers Room draft bodies — `data/writers-room/works/{workId}/drafts/{draftId}.md`. Keep `.md` file-backed; store metadata/index rows in DB.
 - MortalLoom / Health / Meatspace health data — `data/health`, `data/meatspace`, MortalLoom iCloud store. Kept file-backed to preserve iCloud/file sync and avoid routing sensitive health records through the app DB before that boundary is designed.
 - App scaffolds / cloned repos / browser profiles — `data/repos`, `data/browser-profile` — inherently filesystem-oriented.
+- LoRA training datasets — `data/lora-datasets/{id}/index.json` + `images/*.png` (collectionStore). The record is inseparable from the image bytes it organizes, has no cross-record queries beyond a small characterId scan, and is **machine-local** like `data/loras/` itself (training artifacts tied to this machine's GPU output — never federates, no sync cursor/tombstone). Backed up in full: uploads and hand-edited captions are not re-creatable. Training RUN records are `db-primary` (`lora_training_runs`); run artifacts (checkpoints/samples) live under `data/training-runs/{runId}/` with checkpoints/cache excluded from backup.
 
 ---
 

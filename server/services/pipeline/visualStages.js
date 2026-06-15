@@ -38,7 +38,9 @@ import {
 } from '../../lib/scenePrompt.js';
 import { flattenCanonDescriptorFragments, richCanonDescriptorFragments } from '../../lib/canonPrompt.js';
 import { composeStyledPrompt } from '../../lib/composeStyledPrompt.js';
-import { getDefaultVideoModelId, getVideoModels } from '../../lib/mediaModels.js';
+import { getDefaultVideoModelId, getVideoModels, getImageModels } from '../../lib/mediaModels.js';
+import { loraCompatKey } from '../../lib/runners.js';
+import { resolveCharacterLoras } from '../characterLoraResolver.js';
 import { runStagedLLM } from '../../lib/stageRunner.js';
 import { runPromptRefine } from './refineHelpers.js';
 import { pickCanon } from './seriesCanon.js';
@@ -97,6 +99,50 @@ const resolveMode = (options, settings) => {
   if (codexEnabled) return IMAGE_GEN_MODE.CODEX;
   return IMAGE_GEN_MODE.LOCAL;
 };
+
+/**
+ * Resolve trained character LoRAs for a pipeline render. Local mode only —
+ * codex has no LoRA support, so resolution is skipped there with one log
+ * line. `options.applyCharacterLoras === false` is the per-render opt-out
+ * (default on). The compat key comes from the model the local render will
+ * actually use (request override → saved local model → first registered),
+ * mirroring resolveSheetModelId's order; an unresolvable model just means
+ * no compat filtering.
+ *
+ * Returns `{ loras, triggerByKey }` — `triggerByKey` maps canon
+ * entryId/ingredientId → trigger word for prompt weaving.
+ */
+async function applyCharacterLorasToRender({ matchedCharacters, mode, options, settings }) {
+  const none = { loras: [], triggerByKey: new Map() };
+  if (options.applyCharacterLoras === false || !matchedCharacters?.length) return none;
+  if (mode !== IMAGE_GEN_MODE.LOCAL) {
+    console.log(`⚠️ character LoRA skipped — ${mode} mode has no LoRA support`);
+    return none;
+  }
+  const allModels = getImageModels();
+  const model = allModels.find((m) => m.id === options.modelId)
+    || allModels.find((m) => m.id === settings?.imageGen?.local?.modelId)
+    || allModels[0]
+    || null;
+  const compatKey = model ? loraCompatKey(model) : null;
+  const loras = await resolveCharacterLoras(matchedCharacters, { compatKey }).catch((err) => {
+    console.error(`❌ character LoRA resolution failed: ${err?.message}`);
+    return [];
+  });
+  if (!loras.length) return none;
+  const triggerByKey = new Map();
+  for (const lora of loras) {
+    if (!lora.triggerWord || !lora.character) continue;
+    if (lora.character.entryId) triggerByKey.set(lora.character.entryId, lora.triggerWord);
+    if (lora.character.ingredientId) triggerByKey.set(lora.character.ingredientId, lora.triggerWord);
+  }
+  console.log(`🧬 character LoRA auto-apply — ${loras.map((l) => `${l.character?.name || '?'}→${l.filename}`).join(', ')}`);
+  return { loras, triggerByKey };
+}
+
+const loraRenderOptions = (loras) => (loras.length
+  ? { loraFilenames: loras.map((l) => l.filename), loraScales: loras.map((l) => l.scale) }
+  : {});
 
 // Defensive fallback — an unrecognized value must never land in the final
 // slot, even if a future client bypasses the route schema.
@@ -179,6 +225,10 @@ const enqueueImageJob = ({ prompt, world, settings, options, mode, owner, logLin
     // at the dispatcher.
     ...(options.initImagePath ? { initImagePath: options.initImagePath } : {}),
     ...(Number.isFinite(options.initImageStrength) ? { initImageStrength: options.initImageStrength } : {}),
+    // Character LoRAs resolved by applyCharacterLorasToRender — only the
+    // local runner honors these (codex has no LoRA support; the resolver is
+    // skipped there so the spread stays empty).
+    ...(options.loraFilenames?.length ? { loraFilenames: options.loraFilenames, loraScales: options.loraScales } : {}),
   };
   // The queue dispatches directly to imageGen/{codex,local}.generateImage,
   // bypassing imageGen/index.js's dispatcher that resolves cleaners for
@@ -596,16 +646,25 @@ export async function enqueueVolumeBackCover(seriesId, seasonId, options = {}) {
 export function composeComicPagePrompt({
   series, world, page, pageNumber, extraStyle = '',
   matchedCharacters = [], matchedPlaces = [], matchedObjects = [],
+  // entryId/ingredientId → trained-LoRA trigger word (see
+  // applyCharacterLorasToRender). Passed as a map so this compose stays pure.
+  loraTriggerByKey = null,
 }) {
   const panels = Array.isArray(page?.panels) ? page.panels : [];
   if (panels.length === 0) return '';
 
   // Placed AFTER the layout clause: diffusion models weight earlier tokens
   // more heavily, and the page-shape instruction has to claim that position.
+  // A character with a trained LoRA gets its trigger word parenthesized
+  // after the name — the token the adapter binds the identity to.
   const featuring = (matchedCharacters || [])
-    .map((c) => ({ name: c.name, desc: (c.physicalDescription || c.description || '').trim() }))
+    .map((c) => ({
+      name: c.name,
+      trigger: loraTriggerByKey?.get(c.id) || loraTriggerByKey?.get(c.ingredientId) || null,
+      desc: (c.physicalDescription || c.description || '').trim(),
+    }))
     .filter((c) => c.name && c.desc)
-    .map((c) => `${c.name}: ${c.desc}`)
+    .map((c) => `${c.name}${c.trigger ? ` (${c.trigger})` : ''}: ${c.desc}`)
     .join('; ');
 
   // Place baseline: pull the full RICH descriptor set per matched place
@@ -757,15 +816,20 @@ export async function enqueueVisualComicPage(issueId, options = {}) {
   // composeComicPagePrompt only returns '' when panels.length === 0, which is
   // already rejected above. The "(continuation of previous beat)" placeholder
   // covers panels with no description, so the prompt is non-empty by here.
+  const { loras: characterLoras, triggerByKey } = await applyCharacterLorasToRender({
+    matchedCharacters, mode, options, settings,
+  });
+
   const prompt = composeComicPagePrompt({
     series, world, page, pageNumber: pageIndex + 1,
     extraStyle: options.extraStyle || '',
     matchedCharacters, matchedPlaces, matchedObjects,
+    loraTriggerByKey: triggerByKey,
   });
 
   const jobId = enqueueImageJob({
     prompt, world, settings, mode,
-    options: { ...options, initImagePath, initImageStrength },
+    options: { ...options, initImagePath, initImageStrength, ...loraRenderOptions(characterLoras) },
     owner: buildComicPagesOwner({ issueId, target: 'page', pageIndex, variant }),
     logLine: `📄 Pipeline comic page — issue=${issueId.slice(0, 8)} page=${pageIndex + 1} panels=${page.panels.length} variant=${variant}${fromProof ? ' (from proof)' : ''}`,
   });
@@ -848,7 +912,7 @@ export async function enqueueVisualImage(issueId, stageId, options = {}) {
     `${options.description || ''} ${options.slugline || ''}`,
     canon.characters,
   );
-  const prompt = composeVisualPrompt({
+  const composedPrompt = composeVisualPrompt({
     series,
     description: options.description,
     slugline: options.slugline,
@@ -860,14 +924,26 @@ export async function enqueueVisualImage(issueId, stageId, options = {}) {
     // generic visual-image route, which has no scene index to look them up.
     characterAppearances: options.characterAppearances,
   });
-  if (!prompt) {
+  if (!composedPrompt) {
     throw new ServerError('visual prompt is empty (no description, no style)', {
       status: 400, code: 'PIPELINE_VISUAL_EMPTY_PROMPT',
     });
   }
 
+  const { loras: characterLoras } = await applyCharacterLorasToRender({
+    matchedCharacters, mode, options, settings,
+  });
+  // composeVisualPrompt is shared with the episode-video batch path, so the
+  // trigger words append here rather than threading a new param through it.
+  const triggerClause = characterLoras
+    .filter((l) => l.triggerWord)
+    .map((l) => `${l.character?.name || 'character'} (${l.triggerWord})`)
+    .join(', ');
+  const prompt = triggerClause ? `${composedPrompt}\n\nFeaturing ${triggerClause}.` : composedPrompt;
+
   const jobId = enqueueImageJob({
-    prompt, world, settings, options, mode,
+    prompt, world, settings, mode,
+    options: { ...options, ...loraRenderOptions(characterLoras) },
     owner: `pipeline:${issueId}:${stageId}`,
     logLine: `🎬 Pipeline visual — issue=${issueId.slice(0, 8)} stage=${stageId}`,
   });

@@ -102,7 +102,9 @@ describe('promptRunner — happy paths', () => {
       source: 'test',
     });
 
-    expect(out).toEqual({ text: 'hello world', runId: 'run-xyz', model: 'm-default' });
+    // `provider` is the effective provider that actually ran (reflects a
+    // proactive createRun swap); here no swap, so it echoes the input.
+    expect(out).toEqual({ text: 'hello world', runId: 'run-xyz', model: 'm-default', provider: cliProvider() });
     expect(runner.executeCliRun).toHaveBeenCalledTimes(1);
     expect(runner.executeApiRun).not.toHaveBeenCalled();
   });
@@ -121,9 +123,35 @@ describe('promptRunner — happy paths', () => {
       model: 'gpt-test',
     });
 
-    expect(out).toEqual({ text: 'foobar', runId: 'run-xyz', model: 'gpt-test' });
+    expect(out).toEqual({ text: 'foobar', runId: 'run-xyz', model: 'gpt-test', provider: apiProvider() });
     expect(runner.executeApiRun).toHaveBeenCalledTimes(1);
     expect(runner.executeCliRun).not.toHaveBeenCalled();
+  });
+
+  it('forwards screenshots to executeApiRun for a vision/multimodal call', async () => {
+    runner.executeApiRun.mockImplementation(async ({ onComplete }) => onComplete({ success: true }));
+
+    await runPromptThroughProvider({
+      provider: apiProvider(),
+      prompt: 'describe',
+      source: 'test',
+      model: 'gpt-vision',
+      screenshots: ['a.png', 'b.png'],
+    });
+
+    expect(runner.executeApiRun).toHaveBeenCalledWith(
+      expect.objectContaining({ screenshots: ['a.png', 'b.png'] }),
+    );
+  });
+
+  it('defaults screenshots to [] when omitted', async () => {
+    runner.executeApiRun.mockImplementation(async ({ onComplete }) => onComplete({ success: true }));
+
+    await runPromptThroughProvider({ provider: apiProvider(), prompt: 'p', source: 'test' });
+
+    expect(runner.executeApiRun).toHaveBeenCalledWith(
+      expect.objectContaining({ screenshots: [] }),
+    );
   });
 
   it('runs the fallbackModel (not the primary model) when createRun proactively swaps to a fallback', async () => {
@@ -156,6 +184,10 @@ describe('promptRunner — happy paths', () => {
     expect(runner.executeCliRun).not.toHaveBeenCalled();
     expect(ranModel).toBe('pinned-fb');
     expect(out.model).toBe('pinned-fb');
+    // The resolved result reports the proactively-swapped provider (not the
+    // requested one), so callers can detect a swap even though usedFallback
+    // stays unset on this path.
+    expect(out.provider).toEqual(fallback);
   });
 
   it('forwards the provider id + model + source to createRun', async () => {
@@ -486,7 +518,7 @@ describe('promptRunner — TUI provider routing', () => {
       source: 'pipeline-text-stage',
     });
 
-    expect(out).toEqual({ text: 'once upon a time', runId: 'run-xyz', model: 'm-default' });
+    expect(out).toEqual({ text: 'once upon a time', runId: 'run-xyz', model: 'm-default', provider: tuiProvider() });
     expect(tuiRunner.executeTuiRun).toHaveBeenCalledTimes(1);
     expect(runner.executeCliRun).not.toHaveBeenCalled();
     expect(runner.executeApiRun).not.toHaveBeenCalled();

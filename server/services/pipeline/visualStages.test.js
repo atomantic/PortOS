@@ -69,6 +69,16 @@ vi.mock('../../lib/stageRunner.js', () => ({ runStagedLLM: (...a) => runStagedLL
 vi.mock('../../lib/mediaModels.js', () => ({
   getDefaultVideoModelId: () => 'ltx-default',
   getVideoModels: () => [{ id: 'ltx-default' }, { id: 'ltx-extra' }],
+  // Character-LoRA auto-apply resolves the render model's compat key from
+  // the image registry; empty registry → no compat filtering in tests.
+  getImageModels: () => [],
+}));
+
+// Keep the character-LoRA resolver off the real data/loras directory; tests
+// that assert auto-apply behavior override this mock's return value.
+const resolveCharacterLorasMock = vi.fn(async () => []);
+vi.mock('../characterLoraResolver.js', () => ({
+  resolveCharacterLoras: (...a) => resolveCharacterLorasMock(...a),
 }));
 
 const {
@@ -946,5 +956,84 @@ describe('enqueueVisualImage characterAppearances enforcement', () => {
     });
     expect(result.jobId).toBe('job-fake-1234');
     expect(enqueueJobMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Guards the character-LoRA auto-apply WIRING: trained LoRAs resolved for
+// matched characters must reach enqueueJob params (local mode), weave their
+// trigger words into the prompt, and stay out entirely on opt-out.
+describe('enqueueVisualImage character-LoRA auto-apply', () => {
+  beforeEach(() => {
+    resolveCharacterLorasMock.mockClear();
+    resolveCharacterLorasMock.mockResolvedValue([]);
+  });
+
+  const canonWorld = {
+    characters: [
+      { id: 'char-aria', name: 'Aria', physicalDescription: 'tall, copper hair' },
+    ],
+  };
+  const ariaLora = {
+    filename: 'lora-trained-aria-12345678.safetensors',
+    scale: 1.0,
+    triggerWord: 'aria_tok',
+    character: { entryId: 'char-aria', ingredientId: null, name: 'Aria' },
+  };
+
+  it('passes resolved LoRAs into job params and appends trigger words', async () => {
+    getUniverse.mockResolvedValueOnce(canonWorld);
+    resolveCharacterLorasMock.mockResolvedValueOnce([ariaLora]);
+    const result = await enqueueVisualImage('iss-test', 'storyboards', {
+      description: 'A scene with Aria',
+    });
+    const { params } = enqueueJobMock.mock.calls.at(-1)[0];
+    expect(params.loraFilenames).toEqual([ariaLora.filename]);
+    expect(params.loraScales).toEqual([1.0]);
+    expect(result.prompt).toContain('Aria (aria_tok)');
+  });
+
+  it('skips resolution entirely when applyCharacterLoras is false', async () => {
+    getUniverse.mockResolvedValueOnce(canonWorld);
+    await enqueueVisualImage('iss-test', 'storyboards', {
+      description: 'A scene with Aria',
+      applyCharacterLoras: false,
+    });
+    expect(resolveCharacterLorasMock).not.toHaveBeenCalled();
+    const { params } = enqueueJobMock.mock.calls.at(-1)[0];
+    expect(params.loraFilenames).toBeUndefined();
+  });
+
+  it('omits lora params when no trained LoRA matches', async () => {
+    getUniverse.mockResolvedValueOnce(canonWorld);
+    resolveCharacterLorasMock.mockResolvedValueOnce([]);
+    const result = await enqueueVisualImage('iss-test', 'storyboards', {
+      description: 'A scene with Aria',
+    });
+    const { params } = enqueueJobMock.mock.calls.at(-1)[0];
+    expect(params.loraFilenames).toBeUndefined();
+    expect(result.prompt).not.toContain('aria_tok');
+  });
+});
+
+describe('composeComicPagePrompt trigger-word weaving', () => {
+  const page = { panels: [{ description: 'Aria stands on the cliff' }] };
+  const matched = [{ id: 'char-aria', name: 'Aria', physicalDescription: 'tall, copper hair' }];
+
+  it('parenthesizes the trigger word after the character name', () => {
+    const prompt = composeComicPagePrompt({
+      series: { name: 'Test' }, world: null, page, pageNumber: 1,
+      matchedCharacters: matched,
+      loraTriggerByKey: new Map([['char-aria', 'aria_tok']]),
+    });
+    expect(prompt).toContain('Aria (aria_tok): tall, copper hair');
+  });
+
+  it('renders plain names without a trigger map', () => {
+    const prompt = composeComicPagePrompt({
+      series: { name: 'Test' }, world: null, page, pageNumber: 1,
+      matchedCharacters: matched,
+    });
+    expect(prompt).toContain('Aria: tall, copper hair');
+    expect(prompt).not.toContain('aria_tok');
   });
 });

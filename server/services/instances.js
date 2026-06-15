@@ -226,10 +226,28 @@ const DEFAULT_SYNC_CATEGORIES = {
   mediaCollections: false,
   videoHistory: false,
   storyBuilder: false,
+  authors: false,
   catalog: false
 };
 
 export { DEFAULT_SYNC_CATEGORIES };
+
+// Sync categories whose records ride the PER-RECORD push pipeline (not the 60s
+// snapshot loop), paired with the record kind autoSubscribePeerToAllRecords
+// backfills. A false→true toggle on any of these triggers an inline backfill of
+// existing local records so the user doesn't have to wait for the next
+// `peer:online` / manual sync-now. Mirror of peerSync's KIND_TO_CATEGORY
+// (inverted). `pipeline → series` bundles child issues at push time; authors +
+// mediaCollections are standalone per-record kinds with NO snapshot category, so
+// the toggle-time backfill is the ONLY place existing records get subscribed
+// short of a reconnect — omitting them here strands a user's existing authors /
+// collections until the peer next comes online.
+const PER_RECORD_CATEGORY_KINDS = Object.freeze([
+  ['universe', 'universe'],
+  ['pipeline', 'series'],
+  ['mediaCollections', 'mediaCollection'],
+  ['authors', 'author'],
+]);
 
 export async function addPeer({ address, port = DEFAULT_PEER_PORT, name, host, auth }) {
   const peer = await withData(async (data) => {
@@ -310,10 +328,9 @@ export async function updatePeer(id, updates) {
       const prev = peer.syncCategories || DEFAULT_SYNC_CATEGORIES;
       const incoming = updates.syncCategories;
       // Detect false→true flips for kinds the per-record push pipeline owns
-      // (universe → 'universe' kind; pipeline → 'series' kind, which bundles
-      // child issues at push time). enabled + outbound-allowed gating is
+      // (PER_RECORD_CATEGORY_KINDS). enabled + outbound-allowed gating is
       // enforced inside peerSync.autoSubscribePeerToAllRecords.
-      for (const [cat, kind] of [['universe', 'universe'], ['pipeline', 'series']]) {
+      for (const [cat, kind] of PER_RECORD_CATEGORY_KINDS) {
         if (prev[cat] !== true && incoming[cat] === true) turnedOnKinds.push(kind);
       }
       peer.syncCategories = { ...prev, ...incoming };
@@ -790,7 +807,7 @@ export async function applyReciprocalSync(instanceId, categories) {
     const next = { ...prev, ...sanitized };
     // No-op when nothing actually flips — the echo guard.
     if (Object.keys(next).every(k => next[k] === prev[k])) return entry;
-    for (const [cat, kind] of [['universe', 'universe'], ['pipeline', 'series']]) {
+    for (const [cat, kind] of PER_RECORD_CATEGORY_KINDS) {
       if (prev[cat] !== true && next[cat] === true) turnedOnKinds.push(kind);
     }
     entry.syncCategories = next;

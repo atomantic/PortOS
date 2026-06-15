@@ -298,6 +298,12 @@ export const RESTORABLE_FIELDS = Object.freeze({
   // are structural links managed by the link/unlink helpers, not `updateCollection`
   // patches — so they're hashed for DETECTION but not offered for restore.
   mediaCollection: ['name', 'description', 'coverKey'],
+  // Author personas: all user-authored text scalars are restorable. `id`, the
+  // LWW/tombstone trio, and `createdAt` are server-owned/structural. Mirrors the
+  // PATCHABLE field set in services/authors/logic.js. The author wire form is
+  // LWW-overwritten whole (no field-union like mediaCollection's items), so it
+  // is hashed in full by contentHashForRecord — no scalar-narrowing branch.
+  author: ['name', 'writingStyle', 'bio', 'physicalDescription', 'headshotStyle', 'headshotImageUrl'],
   // Issue: the user-authored content the merge can restore. `stages` carries
   // the bulk of the work (prose, comic pages, render metadata). Server-owned /
   // structural fields are excluded deliberately — `number` is renumber-managed,
