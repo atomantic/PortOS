@@ -11,3 +11,5 @@
 - **Retire the repo-local `/claim`, `/gitup`, and `/work` slash commands in favor of slashdo.** The custom 46 KB `.claude/commands/claim.md` procedure (and its `.agents/skills/claim/SKILL.md` adapter) is replaced by slashdo's `/do:next`, which runs the same claim-an-item-in-a-worktree-and-ship-a-PR flow; `/gitup` and `/work` are dropped in favor of `/do:push` and slashdo's worktree workflow. The slashdo submodule is bumped v3.5.0 → v3.9.0 so `/do:next` ships from the module itself (symlinked into `.claude/commands/do/next.md` like the other `/do:*` commands) instead of relying on a separate global install. The CoS `plan-task` / `claim-issue` scheduled agents are unaffected — they carry their own self-contained prompts and never loaded the deleted command file.
 
 ## Fixed
+
+- **The "Verify arc" hover tooltip on the series arc page no longer renders behind the nav.** The `VerifyScopeTooltip` panel in `ArcCanvas.jsx` was at `z-30`, which loses to the sidebar nav (`z-50`), so the tooltip's overflow was clipped under the nav. Bumped to `z-[60]` — the layer the app's other floating dropdowns use. (`client/src/components/pipeline/ArcCanvas.jsx`)

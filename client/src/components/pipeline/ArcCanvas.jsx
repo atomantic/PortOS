@@ -137,7 +137,7 @@ function VerifyScopeTooltip({ scope, id }) {
     <div
       id={id}
       role="tooltip"
-      className="absolute top-full right-0 mt-2 w-80 max-w-[calc(100vw-2rem)] bg-port-card border border-port-border rounded-lg shadow-lg p-3 z-30 opacity-0 invisible group-hover:opacity-100 group-hover:visible group-focus-within:opacity-100 group-focus-within:visible transition-opacity pointer-events-none text-left normal-case tracking-normal"
+      className="absolute top-full right-0 mt-2 w-80 max-w-[calc(100vw-2rem)] bg-port-card border border-port-border rounded-lg shadow-lg p-3 z-[60] opacity-0 invisible group-hover:opacity-100 group-hover:visible group-focus-within:opacity-100 group-focus-within:visible transition-opacity pointer-events-none text-left normal-case tracking-normal"
     >
       <p className="text-[10px] text-gray-300 font-medium mb-1 flex items-center gap-1">
         <Info size={10} /> What this checks
