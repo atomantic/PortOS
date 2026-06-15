@@ -2,7 +2,7 @@
  * LoRA training dataset — pure helpers (no I/O, no service imports).
  *
  * A dataset is the curated set of captioned reference images for ONE
- * universe character, stored machine-locally at
+ * universe bible subject, stored machine-locally at
  * `data/lora-datasets/<id>/index.json` (+ `images/*.png`) via
  * collectionStore. These helpers cover the record sanitizer, trigger-word
  * derivation, caption prefixing, the generation variation matrix, and
@@ -26,6 +26,7 @@ export const MIN_TRAINING_IMAGES = 10;
 export const RECOMMENDED_TRAINING_IMAGES = 20;
 export const TRAINING_IMAGE_SWEET_SPOT_MAX = 30;
 
+export const LORA_DATASET_ENTRY_KINDS = Object.freeze(['characters', 'objects', 'places']);
 export const DATASET_IMAGE_SOURCES = Object.freeze(['generated', 'upload', 'refsheet-slice', 'gallery']);
 export const DATASET_IMAGE_STATUSES = Object.freeze(['rendering', 'ready', 'failed']);
 export const DATASET_STATUSES = Object.freeze(['draft', 'training', 'trained']);
@@ -102,6 +103,7 @@ export function sanitizeLoraDataset(raw) {
     id,
     character: {
       entryId,
+      entryKind: oneOf(character.entryKind, LORA_DATASET_ENTRY_KINDS, 'characters'),
       ingredientId: trim(character.ingredientId) || null,
       universeId,
       name: trim(character.name) || 'Unnamed',

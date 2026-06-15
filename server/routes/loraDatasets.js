@@ -2,7 +2,7 @@
  * LoRA training dataset routes — `/api/lora-datasets`.
  *
  * CRUD + image upload (multipart) + batch generation + reference-sheet
- * slicing + vision captioning (SSE) for the per-character training
+ * slicing + vision captioning (SSE) for the per-subject training
  * datasets behind /media/training. Training-run launch lives at
  * `/api/lora-training` (routes/loraTraining.js); this surface ends at
  * "dataset ready to train".
@@ -27,15 +27,17 @@ import {
 } from '../services/loraDatasets.js';
 import { generateDatasetImages, sliceReferenceSheet } from '../services/loraDatasetGenerate.js';
 import { attachCaptionSseClient, startCaptionRun } from '../services/loraDatasetCaption.js';
-import { computeDatasetReadiness } from '../lib/loraDataset.js';
+import { LORA_DATASET_ENTRY_KINDS, computeDatasetReadiness } from '../lib/loraDataset.js';
 
 const router = Router();
 
 const triggerWordSchema = z.string().regex(/^[a-z0-9_]{2,64}$/, 'trigger word must be 2-64 chars of [a-z0-9_]');
 const idSchema = z.string().min(1).max(128);
+const entryKindSchema = z.enum(LORA_DATASET_ENTRY_KINDS);
 
 const listQuerySchema = z.object({
   universeId: idSchema.optional(),
+  entryKind: entryKindSchema.optional(),
   entryId: idSchema.optional(),
   ingredientId: idSchema.optional(),
 });
@@ -46,6 +48,7 @@ router.get('/', asyncHandler(async (req, res) => {
 
 const createSchema = z.object({
   universeId: idSchema,
+  entryKind: entryKindSchema.default('characters'),
   entryId: idSchema,
   triggerWord: triggerWordSchema.optional(),
 });
@@ -64,10 +67,11 @@ router.get('/:id', asyncHandler(async (req, res) => {
 
 const patchSchema = z.object({
   triggerWord: triggerWordSchema.optional(),
-  // Reassign the dataset to a different universe character. Both must be
-  // present together; the service re-snapshots the character and refuses a
-  // collision with an existing dataset for that character.
+  // Reassign the dataset to a different universe subject. Universe + entry id
+  // must be present together; the service re-snapshots the subject and refuses
+  // a collision with an existing dataset for that subject.
   universeId: idSchema.optional(),
+  entryKind: entryKindSchema.optional(),
   entryId: idSchema.optional(),
 });
 router.patch('/:id', asyncHandler(async (req, res) => {

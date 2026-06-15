@@ -29,7 +29,7 @@ export default function CharacterLoraChip({ entryId, ingredientId, universeId, s
   const canCreate = !!(universeId && entryId);
   useEffect(() => {
     if (canCreate || (!entryId && !ingredientId)) return;
-    listLoraDatasets(entryId ? { entryId } : { ingredientId })
+    listLoraDatasets(entryId ? { entryKind: 'characters', entryId } : { entryKind: 'characters', ingredientId })
       .then((list) => setExistingDataset(list?.[0] || null))
       .catch(() => {});
   }, [canCreate, entryId, ingredientId]);

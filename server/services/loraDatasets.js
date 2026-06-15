@@ -1,8 +1,8 @@
 /**
  * LoRA training datasets — collectionStore CRUD + image file management.
  *
- * One dataset per universe character (find-or-create keyed on
- * `(universeId, entryId)`), stored machine-locally at
+ * One dataset per universe bible subject (find-or-create keyed on
+ * `(universeId, entryKind, entryId)`), stored machine-locally at
  * `data/lora-datasets/<id>/index.json` with image bytes at
  * `data/lora-datasets/<id>/images/<imageId>.png`. Datasets never federate
  * — like `data/loras/` itself, they organize artifacts tied to this
@@ -22,6 +22,7 @@ import { assertGalleryFilename } from './imageGen/local.js';
 import { createCollectionStore } from '../lib/collectionStore.js';
 import {
   LORA_DATASET_SCHEMA_VERSION,
+  LORA_DATASET_ENTRY_KINDS,
   computeDatasetReadiness,
   deriveTriggerWord,
   isValidTriggerWord,
@@ -44,6 +45,16 @@ export const datasetImagesDir = (datasetId) => join(loraDatasetStore.recordDir(d
 export const datasetImagePath = (datasetId, file) => join(datasetImagesDir(datasetId), file);
 
 const nowIso = () => new Date().toISOString();
+const normalizeEntryKind = (entryKind) => (
+  LORA_DATASET_ENTRY_KINDS.includes(entryKind) ? entryKind : 'characters'
+);
+const subjectLabel = (entryKind) => {
+  switch (normalizeEntryKind(entryKind)) {
+    case 'objects': return 'object';
+    case 'places': return 'place';
+    default: return 'character';
+  }
+};
 
 const requireDataset = async (id) => {
   const dataset = await loraDatasetStore.loadOne(id);
@@ -89,10 +100,14 @@ const summarize = (dataset) => ({
   updatedAt: dataset.updatedAt,
 });
 
-export async function listDatasets({ universeId = null, entryId = null, ingredientId = null } = {}) {
+export async function listDatasets({
+  universeId = null, entryKind = null, entryId = null, ingredientId = null,
+} = {}) {
+  const normalizedKind = entryKind ? normalizeEntryKind(entryKind) : null;
   const all = await loraDatasetStore.loadAll();
   const filtered = all.filter((d) => {
     if (universeId && d.character.universeId !== universeId) return false;
+    if (normalizedKind && normalizeEntryKind(d.character.entryKind) !== normalizedKind) return false;
     if (entryId && d.character.entryId !== entryId) return false;
     if (ingredientId && d.character.ingredientId !== ingredientId) return false;
     return true;
@@ -108,44 +123,52 @@ export async function getDataset(id) {
 }
 
 /**
- * Resolve a universe character and the identity snapshot a dataset stores for
- * it. Validates the character exists in the universe (404 otherwise) and is the
- * single source of truth for the snapshot shape — both createDataset and
+ * Resolve a universe bible subject and the identity snapshot a dataset stores
+ * for it. Validates the subject exists in the universe (404 otherwise) and is
+ * the single source of truth for the snapshot shape — both createDataset and
  * patchDataset's reassignment go through here so the stored `character` fields
- * can't drift between the two write paths. Returns `{ character, snapshot }`
+ * can't drift between the two write paths. Returns `{ subject, snapshot }`
  * (the live canon entry plus the persisted shape).
  */
-async function resolveCharacterSnapshot(universeId, entryId) {
+async function resolveDatasetSubjectSnapshot(universeId, entryId, entryKind = 'characters') {
+  const normalizedKind = normalizeEntryKind(entryKind);
   const universe = await getUniverse(universeId);
-  const characters = Array.isArray(universe.characters) ? universe.characters : [];
-  const character = characters.find((c) => c.id === entryId);
-  if (!character) {
-    throw new ServerError(`Character ${entryId} not found in universe`, {
+  const subjects = Array.isArray(universe[normalizedKind]) ? universe[normalizedKind] : [];
+  const subject = subjects.find((entry) => entry.id === entryId);
+  if (!subject) {
+    throw new ServerError(`${subjectLabel(normalizedKind)} ${entryId} not found in universe`, {
       status: 404, code: 'UNIVERSE_CANON_NOT_FOUND',
     });
   }
   return {
-    character,
+    universe,
+    subject,
     snapshot: {
       entryId,
-      ingredientId: character.ingredientId || null,
+      entryKind: normalizedKind,
+      ingredientId: subject.ingredientId || null,
       universeId,
-      name: character.name,
+      name: subject.name || subject.slugline || 'Unnamed',
     },
   };
 }
 
 /**
- * Find-or-create the dataset for one universe character. Validates the
- * character exists in the universe and snapshots its identity (entryId +
+ * Find-or-create the dataset for one universe bible subject. Validates the
+ * subject exists in the universe and snapshots its identity (entryId +
  * catalog ingredientId + name) into the record. Returns `{ dataset, created }`.
  */
-export async function createDataset({ universeId, entryId, triggerWord = null }) {
-  const { character, snapshot } = await resolveCharacterSnapshot(universeId, entryId);
+export async function createDataset({
+  universeId, entryId, entryKind = 'characters', triggerWord = null,
+}) {
+  const normalizedKind = normalizeEntryKind(entryKind);
+  const { subject, snapshot } = await resolveDatasetSubjectSnapshot(universeId, entryId, normalizedKind);
 
   const existingAll = await loraDatasetStore.loadAll();
   const existing = existingAll.find(
-    (d) => d.character.universeId === universeId && d.character.entryId === entryId,
+    (d) => d.character.universeId === universeId
+      && normalizeEntryKind(d.character.entryKind) === normalizedKind
+      && d.character.entryId === entryId,
   );
   if (existing) return { dataset: { ...existing, readiness: computeDatasetReadiness(existing) }, created: false };
 
@@ -155,7 +178,7 @@ export async function createDataset({ universeId, entryId, triggerWord = null })
     });
   }
   const taken = existingAll.map((d) => d.triggerWord).filter(Boolean);
-  const resolvedTrigger = triggerWord || deriveTriggerWord(character.name, { taken });
+  const resolvedTrigger = triggerWord || deriveTriggerWord(snapshot.name, { taken });
 
   const id = uuidv4();
   const record = sanitizeLoraDataset({
@@ -171,19 +194,21 @@ export async function createDataset({ universeId, entryId, triggerWord = null })
   });
   await loraDatasetStore.saveOne(id, record);
   await ensureDir(datasetImagesDir(id));
-  console.log(`🧬 Created LoRA dataset ${id} for character "${character.name}" (trigger=${resolvedTrigger})`);
+  console.log(`🧬 Created LoRA dataset ${id} for ${subjectLabel(normalizedKind)} "${subject.name || subject.slugline || entryId}" (trigger=${resolvedTrigger})`);
   return { dataset: { ...record, readiness: computeDatasetReadiness(record) }, created: true };
 }
 
 /**
  * Patch a dataset's trigger word and/or reassign it to a different
- * universe character. `universeId` + `entryId` must travel together — a
- * reassignment re-snapshots the character identity (entryId, universeId,
+ * universe bible subject. `universeId` + `entryId` must travel together — a
+ * reassignment re-snapshots the subject identity (entryId, entryKind, universeId,
  * ingredientId, name) exactly the way createDataset does, and is refused
  * if it would collide with another dataset already keyed on that
- * (universeId, entryId) pair (the one-dataset-per-character invariant).
+ * (universeId, entryKind, entryId) tuple (the one-dataset-per-subject invariant).
  */
-export async function patchDataset(id, { triggerWord, universeId, entryId } = {}) {
+export async function patchDataset(id, {
+  triggerWord, universeId, entryId, entryKind,
+} = {}) {
   if (triggerWord !== undefined && !isValidTriggerWord(triggerWord)) {
     throw new ServerError('Trigger word must be 2-64 chars of [a-z0-9_]', {
       status: 400, code: 'VALIDATION_ERROR',
@@ -191,8 +216,8 @@ export async function patchDataset(id, { triggerWord, universeId, entryId } = {}
   }
 
   // Reassignment is all-or-nothing: a half-specified target (universe but no
-  // character) can't resolve a character snapshot, so reject it up front.
-  const reassigning = universeId !== undefined || entryId !== undefined;
+  // subject) can't resolve a subject snapshot, so reject it up front.
+  const reassigning = universeId !== undefined || entryId !== undefined || entryKind !== undefined;
   let nextCharacter = null;
   if (reassigning) {
     if (!universeId || !entryId) {
@@ -200,23 +225,27 @@ export async function patchDataset(id, { triggerWord, universeId, entryId } = {}
         status: 400, code: 'VALIDATION_ERROR',
       });
     }
-    // The character validation and the collision scan are independent reads —
-    // run them together. resolveCharacterSnapshot keeps the snapshot shape in
+    const normalizedKind = normalizeEntryKind(entryKind);
+    // The subject validation and the collision scan are independent reads —
+    // run them together. resolveDatasetSubjectSnapshot keeps the snapshot shape in
     // lockstep with createDataset.
-    const [{ character, snapshot }, all] = await Promise.all([
-      resolveCharacterSnapshot(universeId, entryId),
+    const [{ subject, snapshot }, all] = await Promise.all([
+      resolveDatasetSubjectSnapshot(universeId, entryId, normalizedKind),
       loraDatasetStore.loadAll(),
     ]);
     // (The in-flight-run guard moved into the write lock below — a pre-write
     // status snapshot races a concurrent startTrainingRun stamping 'training'.)
     // Enforce the same find-or-create key createDataset uses: at most one
-    // dataset per (universeId, entryId). Reassigning onto a character that
+    // dataset per (universeId, entryKind, entryId). Reassigning onto a subject that
     // already owns a dataset would create a duplicate the list can't tell apart.
     const clash = all.find(
-      (d) => d.id !== id && d.character.universeId === universeId && d.character.entryId === entryId,
+      (d) => d.id !== id
+        && d.character.universeId === universeId
+        && normalizeEntryKind(d.character.entryKind) === normalizedKind
+        && d.character.entryId === entryId,
     );
     if (clash) {
-      throw new ServerError(`A dataset already exists for "${character.name}" in that universe`, {
+      throw new ServerError(`A dataset already exists for "${subject.name || subject.slugline || entryId}" in that universe`, {
         status: 409, code: 'DATASET_EXISTS',
       });
     }
@@ -227,6 +256,7 @@ export async function patchDataset(id, { triggerWord, universeId, entryId } = {}
     const triggerChanged = triggerWord !== undefined && triggerWord !== current.triggerWord;
     const characterChanged = nextCharacter && (
       nextCharacter.entryId !== current.character.entryId
+      || nextCharacter.entryKind !== normalizeEntryKind(current.character.entryKind)
       || nextCharacter.universeId !== current.character.universeId
       || nextCharacter.ingredientId !== current.character.ingredientId
       || nextCharacter.name !== current.character.name);

@@ -1,5 +1,5 @@
 /**
- * Character LoRA training API — datasets (/api/lora-datasets), training
+ * LoRA training API — datasets (/api/lora-datasets), training
  * runs (/api/lora-training), and the character→LoRA link lookup
  * (/api/loras/by-character).
  */
@@ -10,17 +10,21 @@ import { request } from './apiCore.js';
 
 export const listLoraDatasets = (filters = {}) => {
   const params = new URLSearchParams();
-  for (const key of ['universeId', 'entryId', 'ingredientId']) {
+  for (const key of ['universeId', 'entryKind', 'entryId', 'ingredientId']) {
     if (filters[key]) params.set(key, filters[key]);
   }
   const qs = params.toString();
   return request(`/lora-datasets${qs ? `?${qs}` : ''}`);
 };
 
-export const createLoraDataset = ({ universeId, entryId, triggerWord }, { silent = false } = {}) =>
+export const createLoraDataset = ({
+  universeId, entryKind = 'characters', entryId, triggerWord,
+}, { silent = false } = {}) =>
   request('/lora-datasets', {
     method: 'POST',
-    body: JSON.stringify({ universeId, entryId, ...(triggerWord ? { triggerWord } : {}) }),
+    body: JSON.stringify({
+      universeId, entryKind, entryId, ...(triggerWord ? { triggerWord } : {}),
+    }),
     silent,
   });
 

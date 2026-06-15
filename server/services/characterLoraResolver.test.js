@@ -72,6 +72,22 @@ describe('resolveCharacterLoras', () => {
     expect(await resolveCharacterLoras([])).toEqual([]);
     expect(listLoras).not.toHaveBeenCalled();
   });
+
+  it('never matches a non-character LoRA sharing the entry id', async () => {
+    // Same entryId in two bible kinds: only the character LoRA may apply.
+    listLoras.mockResolvedValue([
+      trainedLora({
+        filename: 'obj.safetensors',
+        character: { entryId: 'char-1', entryKind: 'objects', name: 'Truthbreaker' },
+      }),
+    ]);
+    expect(await resolveCharacterLoras([{ id: 'char-1' }])).toHaveLength(0);
+  });
+
+  it('treats a legacy sidecar with no entryKind as a character', async () => {
+    listLoras.mockResolvedValue([trainedLora({ character: { entryId: 'char-1', name: 'Kessa' } })]);
+    expect(await resolveCharacterLoras([{ id: 'char-1' }])).toHaveLength(1);
+  });
 });
 
 describe('findLorasByCharacter', () => {
@@ -85,5 +101,12 @@ describe('findLorasByCharacter', () => {
   it('requires at least one id', async () => {
     expect(await findLorasByCharacter({})).toEqual([]);
     expect(listLoras).not.toHaveBeenCalled();
+  });
+
+  it('excludes object/place LoRAs from a character lookup', async () => {
+    listLoras.mockResolvedValue([
+      trainedLora({ filename: 'place.safetensors', character: { entryId: 'char-1', entryKind: 'places', name: 'Shore' } }),
+    ]);
+    expect(await findLorasByCharacter({ entryId: 'char-1' })).toEqual([]);
   });
 });

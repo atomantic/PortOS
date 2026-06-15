@@ -100,13 +100,15 @@ const mergeParams = (settings, requestParams = {}) => ({
   ...requestParams,
 });
 
-// A dataset belongs to a run only while it still points at the run's character.
+// A dataset belongs to a run only while it still points at the run's subject.
 // Match the full (universeId, entryId) key the dataset store uses — a different
 // universe can reuse the same entryId, so entryId alone would falsely re-own a
 // reassigned dataset. (flipDatasetAfterRun keeps its own missing-entryId
 // fallthrough for pre-reassignment runs that predate the character snapshot.)
 const sameCharacter = (a, b) =>
-  a?.entryId === b?.entryId && a?.universeId === b?.universeId;
+  a?.entryId === b?.entryId
+  && a?.universeId === b?.universeId
+  && (a?.entryKind || 'characters') === (b?.entryKind || 'characters');
 
 // Re-stamp a dataset as `training` with the run's new job/run ids, but only
 // while it still owns the dataset — the dataset can be reassigned to a different
@@ -236,7 +238,7 @@ export async function resumeTrainingRun(runId) {
   // dataset may have been edited, deleted, or reassigned since the run failed.
   const { dataset } = await validateDatasetReady(run.datasetId);
   if (!sameCharacter(dataset.character, run.character)) {
-    throw new ServerError('Dataset was reassigned to a different character — start a fresh run.', {
+    throw new ServerError('Dataset was reassigned to a different subject — start a fresh run.', {
       status: 409, code: 'DATASET_REASSIGNED',
     });
   }
@@ -310,10 +312,12 @@ const flipDatasetAfterRun = (run, { trained, loraFilename = null }) => {
   // missing entryId falls through (flip).
   const runEntryId = run?.character?.entryId || null;
   const runUniverseId = run?.character?.universeId || null;
+  const runEntryKind = run?.character?.entryKind || 'characters';
   return updateDataset(datasetId, (current) => {
     const mismatch = runEntryId && (
       current.character?.entryId !== runEntryId
       || (runUniverseId && current.character?.universeId !== runUniverseId)
+      || ((current.character?.entryKind || 'characters') !== runEntryKind)
     );
     if (mismatch) return null;
     return {
@@ -367,13 +371,13 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
     return failBeforeSpawn(err.message);
   }
   // Stage-time ownership check: if the dataset was reassigned to a different
-  // character after this run was queued, the run no longer owns it. Bail out
+  // subject after this run was queued, the run no longer owns it. Bail out
   // rather than training the moved dataset and registering a LoRA under the
-  // run's now-stale character. failBeforeSpawn's flipDatasetAfterRun is
+  // run's now-stale subject. failBeforeSpawn's flipDatasetAfterRun is
   // character-guarded, so it won't disturb the reassigned dataset's state.
   // Match the full (universeId, entryId) key the dataset store uses elsewhere.
   if (!sameCharacter(dataset.character, run.character)) {
-    return failBeforeSpawn('Dataset was reassigned to a different character after this run was queued — cancel and retrain.');
+    return failBeforeSpawn('Dataset was reassigned to a different subject after this run was queued — cancel and retrain.');
   }
 
   // Reclaim unified memory before a GPU-heavy run, then gate on real headroom.

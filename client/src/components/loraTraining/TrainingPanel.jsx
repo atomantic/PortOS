@@ -51,27 +51,29 @@ export default function TrainingPanel({ dataset, readiness, triggerSaving, onRun
   }, []);
 
   // A reassigned dataset keeps its id but its old runs belong to the previous
-  // character. Re-fetch (and re-filter) whenever the character identity moves,
+  // subject. Re-fetch (and re-filter) whenever the subject identity moves,
   // not just the id, and show only runs matching the current (universeId,
   // entryId) so the panel + checkpoint picker can't surface/promote a stale
-  // run from the prior character.
+  // run from the prior subject.
   const charEntryId = dataset.character?.entryId;
   const charUniverseId = dataset.character?.universeId;
+  const charEntryKind = dataset.character?.entryKind || 'characters';
   const refreshRuns = useCallback(() => {
-    // Filter by the current character on the SERVER (characterId = entryId) so
-    // the row limit applies to this character's runs — not to other-character
-    // runs left over on the same dataset id after a reassignment (which a
-    // client-side filter-after-limit would drop). The client guard then matches
-    // the full (universeId, entryId) key the dataset store uses, and tolerates
-    // a run missing its character snapshot.
-    listLoraTrainingRuns({ datasetId: dataset.id, characterId: charEntryId, limit: 5 }).then((runs) => {
+    // Query by dataset id, then guard by the full subject identity. That covers
+    // character/object/place reassignments without relying on the legacy
+    // `character_id` mirror column.
+    listLoraTrainingRuns({ datasetId: dataset.id, limit: 5 }).then((runs) => {
       const own = (Array.isArray(runs) ? runs : []).filter(
-        (r) => !r.character || (r.character.entryId === charEntryId && r.character.universeId === charUniverseId),
+        (r) => !r.character || (
+          r.character.entryId === charEntryId
+          && r.character.universeId === charUniverseId
+          && (r.character.entryKind || 'characters') === charEntryKind
+        ),
       );
       setActiveRun(own.find(isActive) || null);
       setLastRun(own.find((r) => !isActive(r)) || null);
     }).catch(() => {});
-  }, [dataset.id, charEntryId, charUniverseId]);
+  }, [dataset.id, charEntryId, charEntryKind, charUniverseId]);
   useEffect(() => { refreshRuns(); }, [refreshRuns]);
 
   const sseUrl = activeRun ? `/api/lora-training/runs/${activeRun.id}/events` : null;

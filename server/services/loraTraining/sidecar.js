@@ -10,7 +10,7 @@ import { RUNNER_FAMILIES } from '../../lib/runners.js';
 
 /** `lora-trained-<slug>-<runId8>.safetensors` — runId suffix prevents collisions. */
 export function trainedLoraFilename({ name, characterName, runId }) {
-  const slug = slugifyForFilename(name || characterName || 'character');
+  const slug = slugifyForFilename(name || characterName || 'subject');
   return `lora-trained-${slug}-${String(runId).replace(/-/g, '').slice(0, 8)}.safetensors`;
 }
 
@@ -36,7 +36,7 @@ export function buildTrainedSidecar({
     : '';
   return {
     filename,
-    name: run.name || `${run.character?.name || 'Character'} (trained)`,
+    name: run.name || `${run.character?.name || 'Subject'} (trained)`,
     description: `Trained in PortOS · ${params.steps ?? '?'} steps · rank ${params.rank ?? '?'}${ckptNote} · dataset ${run.datasetId}`,
     source: 'trained',
     character: run.character || null,

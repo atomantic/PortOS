@@ -47,6 +47,12 @@ const UNIVERSE = {
     { id: 'char-1', ingredientId: 'ing-1', name: 'Kessa Brightwater' },
     { id: 'char-2', ingredientId: null, name: 'Moss' },
   ],
+  objects: [
+    { id: 'obj-1', name: 'Northwind Truthbreaker', description: 'A rune-bitten greataxe.' },
+  ],
+  places: [
+    { id: 'place-1', name: 'Moonsea Shore', description: 'Black water under cold stars.' },
+  ],
 };
 
 const makePng = (path, size = 64) => sharp({
@@ -68,9 +74,20 @@ describe('createDataset', () => {
     expect(created).toBe(true);
     expect(dataset.triggerWord).toBe('kessa_brightwater');
     expect(dataset.character).toEqual({
-      entryId: 'char-1', ingredientId: 'ing-1', universeId: 'uni-1', name: 'Kessa Brightwater',
+      entryId: 'char-1', entryKind: 'characters', ingredientId: 'ing-1', universeId: 'uni-1', name: 'Kessa Brightwater',
     });
     expect(dataset.readiness.trainable).toBe(false);
+  });
+
+  it('creates an object dataset from the universe bible', async () => {
+    const { dataset, created } = await createDataset({
+      universeId: 'uni-1', entryKind: 'objects', entryId: 'obj-1',
+    });
+    expect(created).toBe(true);
+    expect(dataset.triggerWord).toBe('northwind_truthbreaker');
+    expect(dataset.character).toEqual({
+      entryId: 'obj-1', entryKind: 'objects', ingredientId: null, universeId: 'uni-1', name: 'Northwind Truthbreaker',
+    });
   });
 
   it('is find-or-create per (universeId, entryId)', async () => {
@@ -78,6 +95,19 @@ describe('createDataset', () => {
     const second = await createDataset({ universeId: 'uni-1', entryId: 'char-1' });
     expect(second.created).toBe(false);
     expect(second.dataset.id).toBe(first.dataset.id);
+  });
+
+  it('allows the same entry id in different bible subject kinds', async () => {
+    getUniverse.mockResolvedValue({
+      ...UNIVERSE,
+      characters: [...UNIVERSE.characters, { id: 'shared-1', name: 'Shared Character' }],
+      objects: [...UNIVERSE.objects, { id: 'shared-1', name: 'Shared Object' }],
+    });
+    const character = await createDataset({ universeId: 'uni-1', entryKind: 'characters', entryId: 'shared-1' });
+    const object = await createDataset({ universeId: 'uni-1', entryKind: 'objects', entryId: 'shared-1' });
+    expect(character.dataset.id).not.toBe(object.dataset.id);
+    expect(await listDatasets({ entryKind: 'characters', entryId: 'shared-1' })).toHaveLength(1);
+    expect(await listDatasets({ entryKind: 'objects', entryId: 'shared-1' })).toHaveLength(1);
   });
 
   it('avoids trigger-word collisions across datasets', async () => {
@@ -132,13 +162,23 @@ describe('patchDataset / listDatasets', () => {
     const { dataset } = await createDataset({ universeId: 'uni-1', entryId: 'char-1' });
     const next = await patchDataset(dataset.id, { universeId: 'uni-1', entryId: 'char-2' });
     expect(next.character).toEqual({
-      entryId: 'char-2', ingredientId: null, universeId: 'uni-1', name: 'Moss',
+      entryId: 'char-2', entryKind: 'characters', ingredientId: null, universeId: 'uni-1', name: 'Moss',
     });
     // Trigger word is left alone — reassignment doesn't rename the token.
     expect(next.triggerWord).toBe('kessa_brightwater');
     // The list now keys the dataset under the new character.
     expect(await listDatasets({ entryId: 'char-2' })).toHaveLength(1);
     expect(await listDatasets({ entryId: 'char-1' })).toHaveLength(0);
+  });
+
+  it('reassigns to an object, re-snapshotting kind and identity', async () => {
+    const { dataset } = await createDataset({ universeId: 'uni-1', entryId: 'char-1' });
+    const next = await patchDataset(dataset.id, { universeId: 'uni-1', entryKind: 'objects', entryId: 'obj-1' });
+    expect(next.character).toEqual({
+      entryId: 'obj-1', entryKind: 'objects', ingredientId: null, universeId: 'uni-1', name: 'Northwind Truthbreaker',
+    });
+    expect(await listDatasets({ entryKind: 'objects', entryId: 'obj-1' })).toHaveLength(1);
+    expect(await listDatasets({ entryKind: 'characters', entryId: 'char-1' })).toHaveLength(0);
   });
 
   it('reassigns and renames the trigger word in one patch', async () => {

@@ -1,7 +1,7 @@
 /**
  * LoRA Training — dataset list (/media/training).
  *
- * One dataset per universe character. Cards show the character, a thumb
+ * One dataset per universe bible subject. Cards show the subject, a thumb
  * strip, image/caption counts, and training status; "New dataset" walks
  * universe → character and lands on the dataset workbench.
  */
@@ -24,16 +24,18 @@ const STATUS_CHIP = {
   training: 'bg-port-warning/20 text-port-warning',
   trained: 'bg-port-success/20 text-port-success',
 };
+const SUBJECT_TYPE_LABEL = { characters: 'Character', objects: 'Object', places: 'Place' };
 
 function NewDatasetDialog({ onClose, onCreated }) {
   const [universeId, setUniverseId] = useState('');
+  const [entryKind, setEntryKind] = useState('characters');
   const [entryId, setEntryId] = useState('');
   const [creating, setCreating] = useState(false);
 
   const create = async () => {
     setCreating(true);
     try {
-      const dataset = await createLoraDataset({ universeId, entryId });
+      const dataset = await createLoraDataset({ universeId, entryKind, entryId });
       onCreated(dataset);
     } finally {
       setCreating(false);
@@ -53,8 +55,10 @@ function NewDatasetDialog({ onClose, onCreated }) {
         <UniverseCharacterPicker
           idPrefix="lt-new"
           universeId={universeId}
+          entryKind={entryKind}
           entryId={entryId}
           onUniverseChange={(id) => { setUniverseId(id); setEntryId(''); }}
+          onEntryKindChange={(kind) => { setEntryKind(kind); setEntryId(''); }}
           onEntryChange={setEntryId}
         />
         <div className="flex justify-end gap-2">
@@ -103,7 +107,7 @@ export default function LoraTraining() {
       <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
         <div className="flex items-center gap-2">
           <GraduationCap className="w-5 h-5 text-port-accent" />
-          <h2 className="text-lg font-semibold text-white">Character LoRA Training</h2>
+          <h2 className="text-lg font-semibold text-white">LoRA Training</h2>
         </div>
         <button
           type="button"
@@ -121,8 +125,8 @@ export default function LoraTraining() {
       {datasets?.length === 0 && (
         <div className="bg-port-card border border-port-border rounded-lg p-8 text-center text-gray-400">
           <Sparkles className="w-8 h-8 mx-auto mb-3 text-port-accent" />
-          <p className="mb-1 text-white">Train a LoRA for consistent character renders.</p>
-          <p className="text-sm">Pick a universe character, build reference material (generated renders, uploads, reference-sheet crops), caption it, and train a FLUX.1 or FLUX.2 adapter.</p>
+          <p className="mb-1 text-white">Train a LoRA for consistent universe subjects.</p>
+          <p className="text-sm">Pick a character, object, or place from a universe bible, build reference material, caption it, and train a FLUX adapter.</p>
         </div>
       )}
 
@@ -132,7 +136,11 @@ export default function LoraTraining() {
             <div className="flex items-start justify-between gap-2">
               <Link to={`/media/training/${d.id}`} className="min-w-0">
                 <div className="text-white font-medium truncate">{d.character?.name || 'Unnamed'}</div>
-                <div className="text-xs text-gray-500 font-mono truncate">{d.triggerWord}</div>
+                <div className="text-xs text-gray-500 truncate">
+                  <span className="font-mono">{d.triggerWord}</span>
+                  <span className="mx-1">·</span>
+                  {SUBJECT_TYPE_LABEL[d.character?.entryKind || 'characters'] || 'Subject'}
+                </div>
               </Link>
               <span className={`text-xs px-2 py-0.5 rounded-full shrink-0 ${STATUS_CHIP[d.status] || STATUS_CHIP.draft}`}>
                 {d.status}

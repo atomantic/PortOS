@@ -1,7 +1,7 @@
 /**
  * LoRA dataset workbench (/media/training/:datasetId).
  *
- * Build reference material for one character (generate via the image
+ * Build reference material for one universe bible subject (generate via the image
  * queue, upload, slice the reference-sheet turnaround), caption it with
  * the vision model, then launch a training run. The dataset record is the
  * single source of truth; rendering images poll-refresh until they land.
@@ -31,6 +31,8 @@ import {
 } from '../services/api';
 
 const TRIGGER_RE = /^[a-z0-9_]{2,64}$/;
+const SUBJECT_TYPE_LABEL = { characters: 'Character', objects: 'Object', places: 'Place' };
+const subjectKind = (dataset) => dataset?.character?.entryKind || 'characters';
 // Mirror of server/lib/loraDataset.js MIN_TRAINING_IMAGES + the token-boundary
 // caption match. Kept page-local (UX-advisory only — the server re-validates
 // authoritatively via validateDatasetReady at train time) so the readiness
@@ -141,15 +143,16 @@ function SliceDialog({ dataset, onClose, onSliced }) {
 
 function ReassignDialog({ dataset, onClose, onReassigned }) {
   // Default to the current assignment so the picker opens on the dataset's
-  // own universe (characters pre-load) and the user only changes what they want.
+  // own universe (subjects pre-load) and the user only changes what they want.
   const [universeId, setUniverseId] = useState(dataset.character.universeId);
+  const [entryKind, setEntryKind] = useState(subjectKind(dataset));
   const [entryId, setEntryId] = useState(dataset.character.entryId);
   const [submitting, setSubmitting] = useState(false);
 
   const submit = async () => {
     setSubmitting(true);
     try {
-      const next = await patchLoraDataset(dataset.id, { universeId, entryId });
+      const next = await patchLoraDataset(dataset.id, { universeId, entryKind, entryId });
       toast.success(`Reassigned to ${next.character.name}`);
       onReassigned(next);
     } finally {
@@ -166,16 +169,18 @@ function ReassignDialog({ dataset, onClose, onReassigned }) {
       panelClassName="bg-port-card border border-port-border rounded-lg p-5"
     >
       <div className="space-y-4">
-        <h2 id="lt-reassign-title" className="text-base font-semibold text-white">Reassign character</h2>
+        <h2 id="lt-reassign-title" className="text-base font-semibold text-white">Reassign subject</h2>
         <p className="text-sm text-gray-400">
-          Move this dataset&apos;s images and trigger word to a different universe character.
-          The trigger word stays the same — edit it separately if the new character needs its own token.
+          Move this dataset&apos;s images and trigger word to a different universe bible subject.
+          The trigger word stays the same — edit it separately if the new subject needs its own token.
         </p>
         <UniverseCharacterPicker
           idPrefix="lt-reassign"
           universeId={universeId}
+          entryKind={entryKind}
           entryId={entryId}
           onUniverseChange={(id) => { setUniverseId(id); setEntryId(''); }}
+          onEntryKindChange={(kind) => { setEntryKind(kind); setEntryId(''); }}
           onEntryChange={setEntryId}
         />
         <div className="flex justify-end gap-2">
@@ -199,7 +204,7 @@ export default function LoraDatasetDetail() {
   const { datasetId } = useParams();
   const [dataset, setDataset] = useState(null);
   const [loadError, setLoadError] = useState(null);
-  const [character, setCharacter] = useState(null);
+  const [subject, setSubject] = useState(null);
   const [triggerDraft, setTriggerDraft] = useState(null);
   const [triggerSaving, setTriggerSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -221,14 +226,17 @@ export default function LoraDatasetDetail() {
 
   useEffect(() => { refresh(); }, [refresh]);
 
-  // Pull the live canon character once for variation-axis options + sheet link.
+  // Pull the live canon subject once for variation-axis options + sheet link.
   useEffect(() => {
     if (!dataset?.character?.universeId) return;
     getUniverse(dataset.character.universeId, { silent: true })
-      .then((u) => setCharacter((u?.characters || []).find((c) => c.id === dataset.character.entryId) || null))
+      .then((u) => {
+        const entries = Array.isArray(u?.[subjectKind(dataset)]) ? u[subjectKind(dataset)] : [];
+        setSubject(entries.find((entry) => entry.id === dataset.character.entryId) || null);
+      })
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dataset?.character?.universeId, dataset?.character?.entryId]);
+  }, [dataset?.character?.universeId, dataset?.character?.entryKind, dataset?.character?.entryId]);
 
   // Readiness is derived from the live local images (not the server's snapshot
   // on `dataset.readiness`) so manual caption edits / deletes reflect in the
@@ -345,15 +353,15 @@ export default function LoraDatasetDetail() {
   const recaptionAll = () => startCaption(true);
 
   const expressionOptions = useMemo(
-    () => (character?.expressions || []).map((e) => e?.name).filter(Boolean),
-    [character],
+    () => (subjectKind(dataset) === 'characters' ? (subject?.expressions || []).map((e) => e?.name).filter(Boolean) : []),
+    [dataset, subject],
   );
   const outfitOptions = useMemo(
-    () => (character?.wardrobes || []).map((w) => w?.name).filter(Boolean),
-    [character],
+    () => (subjectKind(dataset) === 'characters' ? (subject?.wardrobes || []).map((w) => w?.name).filter(Boolean) : []),
+    [dataset, subject],
   );
-  const hasReferenceSheet = !!(character?.referenceSheetImageRef
-    || Object.values(character?.referenceSheets || {}).some(Boolean));
+  const hasReferenceSheet = !!(subject?.referenceSheetImageRef
+    || Object.values(subject?.referenceSheets || {}).some(Boolean));
 
   if (loadError) {
     return (
@@ -390,7 +398,7 @@ export default function LoraDatasetDetail() {
               disabled={dataset.status === 'training'}
               title={dataset.status === 'training'
                 ? 'Cancel the in-progress training run before reassigning'
-                : 'Reassign this dataset to a different universe character'}
+                : 'Reassign this dataset to a different universe subject'}
               className="shrink-0 text-xs text-gray-500 hover:text-port-accent flex items-center gap-1 disabled:opacity-40 disabled:hover:text-gray-500"
             >
               <Replace className="w-3.5 h-3.5" /> Reassign
@@ -407,6 +415,9 @@ export default function LoraDatasetDetail() {
               className="bg-port-bg border border-port-border rounded px-2 py-1 text-xs font-mono text-white w-56 disabled:opacity-50"
             />
             {triggerSaving && <Loader2 className="w-3 h-3 animate-spin text-gray-400" />}
+          </div>
+          <div className="text-xs text-gray-500 mt-1">
+            {SUBJECT_TYPE_LABEL[subjectKind(dataset)] || 'Subject'} from the universe bible
           </div>
         </div>
         <div className="text-right text-sm">
@@ -492,7 +503,7 @@ export default function LoraDatasetDetail() {
       <details className="bg-port-card border border-port-border rounded-lg text-sm">
         <summary className="cursor-pointer select-none px-3 py-2 flex items-center gap-2 text-gray-300 hover:text-white">
           <Lightbulb className="w-4 h-4 text-port-warning shrink-0" />
-          <span className="font-medium">Tips for a strong character dataset</span>
+          <span className="font-medium">Tips for a strong training dataset</span>
           <span className="text-xs text-gray-500">
             target ~{RECOMMENDED_TRAINING_IMAGES}–{TRAINING_IMAGE_SWEET_SPOT_MAX} images · {MIN_TRAINING_IMAGES} minimum
           </span>
@@ -501,14 +512,14 @@ export default function LoraDatasetDetail() {
           <p>
             Quality beats quantity. {MIN_TRAINING_IMAGES} images is the floor; ~{RECOMMENDED_TRAINING_IMAGES}–{TRAINING_IMAGE_SWEET_SPOT_MAX} sharp,
             varied shots is the sweet spot. Past ~50 you mostly add training time and overfitting risk —
-            near-duplicate frames teach the model to memorize a pose instead of learning the character.
+            near-duplicate frames teach the model to memorize one setup instead of learning the subject.
           </p>
           <ul className="list-disc pl-4 space-y-1">
             <li><span className="text-gray-300">Vary the angle</span> — front, three-quarter, profile, and a back view.</li>
             <li><span className="text-gray-300">Vary the framing</span> — mix tight face close-ups (for likeness) with mid and full-body shots (for proportions).</li>
-            <li><span className="text-gray-300">Vary pose &amp; expression</span> — standing, sitting, action; neutral, smiling, intense.</li>
-            <li><span className="text-gray-300">Vary outfit, lighting &amp; background</span> — so the LoRA learns the character, not one costume, key light, or backdrop.</li>
-            <li><span className="text-gray-300">Keep it single-subject and on-model</span> — one clearly-visible character per image, consistent identity, no clutter or other people.</li>
+            <li><span className="text-gray-300">Vary pose, presentation &amp; expression</span> — action and rest for characters; display angles and use context for objects and places.</li>
+            <li><span className="text-gray-300">Vary outfit, lighting &amp; background</span> — so the LoRA learns the subject, not one costume, key light, or backdrop.</li>
+            <li><span className="text-gray-300">Keep it single-subject and on-model</span> — one clearly-visible subject per image, consistent identity, no clutter.</li>
             <li><span className="text-gray-300">Drop the weak ones</span> — blurry, occluded, or off-model frames hurt more than they help; avoid near-duplicates.</li>
           </ul>
         </div>

@@ -1,7 +1,7 @@
 /**
  * LoRA dataset generation — reference-material renders + sheet slicing.
  *
- * Builds single-subject training prompts from a character's canon (the
+ * Builds single-subject training prompts from a universe bible subject's canon (the
  * inverse of the dense reference-sheet layout: one clean figure on a
  * neutral background per image), enqueues them on the media-job queue, and
  * copies completed renders into the dataset. Also slices an existing
@@ -46,6 +46,34 @@ import {
 const DATASET_IMAGE_SIZE = 1024;
 
 const trim = (s) => (typeof s === 'string' ? s.trim() : '');
+const normalizeEntryKind = (entryKind) => (
+  ['characters', 'objects', 'places'].includes(entryKind) ? entryKind : 'characters'
+);
+const subjectLabel = (entryKind) => {
+  switch (normalizeEntryKind(entryKind)) {
+    case 'objects': return 'Object';
+    case 'places': return 'Place';
+    default: return 'Character';
+  }
+};
+
+const flattenValue = (value) => {
+  if (typeof value === 'string') return trim(value);
+  if (Array.isArray(value)) {
+    return value.map((v) => {
+      if (typeof v === 'string') return trim(v);
+      if (v && typeof v === 'object') return trim(v.name || v.label || v.description || v.prompt || '');
+      return '';
+    }).filter(Boolean).join(', ');
+  }
+  if (value && typeof value === 'object') {
+    return Object.entries(value)
+      .map(([key, v]) => `${key}: ${typeof v === 'string' ? trim(v) : trim(v?.name || v?.label || '')}`)
+      .filter((part) => !part.endsWith(': '))
+      .join(', ');
+  }
+  return '';
+};
 
 /**
  * Build the image-gen prompt + negative prompt for ONE dataset image.
@@ -53,13 +81,66 @@ const trim = (s) => (typeof s === 'string' ? s.trim() : '');
  * the variation clause, and hard-bans collage/sheet/text artifacts.
  * Pure — exported for tests.
  */
-export function buildDatasetImagePrompt(universe, character, variation = {}) {
+export function buildDatasetImagePrompt(universe, subject, variation = {}, entryKind = 'characters') {
+  const kind = normalizeEntryKind(entryKind);
   const styleClause = buildStyleClause(universe || {});
   const styleBits = styleClause.startsWith('(none provided') ? '' : styleClause;
+  if (kind !== 'characters') {
+    const name = trim(subject?.name || subject?.slugline) || 'Unnamed';
+    const description = flattenValue(subject?.description || subject?.prompt);
+    const significance = flattenValue(subject?.significance);
+    const palette = flattenValue(subject?.palette || subject?.colorPalette);
+    const recurring = flattenValue(subject?.recurringDetails);
+    const tags = Array.isArray(subject?.tags) && subject.tags.length ? subject.tags.join(', ') : '';
+    const identityBits = [
+      `${subjectLabel(kind)}: ${name}.`,
+      description ? `Description: ${description}.` : '',
+      significance ? `Significance: ${significance}.` : '',
+      recurring ? `Recurring details: ${recurring}.` : '',
+      palette ? `Palette: ${palette}.` : '',
+      tags ? `Tags: ${tags}.` : '',
+    ].filter(Boolean).join(' ');
+
+    const view = trim(variation.view) || (kind === 'objects' ? 'three-quarter view' : 'wide establishing view');
+    const composition = trim(variation.pose) || (kind === 'objects' ? 'centered presentation' : 'clear establishing composition');
+    const lighting = trim(variation.expression) || 'natural lighting';
+    const setting = trim(variation.outfit) || (kind === 'objects' ? 'plain studio plinth' : 'signature environment');
+    const subjectBits = kind === 'objects'
+      ? [
+        'Single object only',
+        view,
+        composition,
+        lighting,
+        `setting: ${setting}`,
+        'full object in frame',
+        'unobstructed silhouette',
+      ]
+      : [
+        'Single location focus',
+        view,
+        composition,
+        lighting,
+        `environment state: ${setting}`,
+        'no prominent characters',
+        'clear spatial layout',
+      ];
+
+    return {
+      prompt: [
+        styleBits || 'Style: contemporary illustrated fantasy design with confident line work and saturated, intentional color.',
+        identityBits,
+        `${subjectBits.filter(Boolean).join(', ')}, no text, no panels, no labels.`,
+      ].filter(Boolean).join('\n\n'),
+      negativePrompt: kind === 'objects'
+        ? 'person, hands covering the object, multiple objects, duplicate object, reference sheet, panel borders, grid, collage, text, labels, watermark, signature, blurry, cropped object, deformed geometry'
+        : 'prominent character, crowd, reference sheet, panel borders, grid, collage, text, labels, watermark, signature, blurry, distorted perspective, unreadable layout',
+    };
+  }
+
   const {
     name, role, physical, silhouette, posture, special, visualIdentity,
     paletteLine, wardrobeLine, propsLine,
-  } = extractCharacterPromptCommon(character || {});
+  } = extractCharacterPromptCommon(subject || {});
 
   const identityBits = [
     `Character: ${name}.`,
@@ -103,6 +184,19 @@ export function buildDatasetImagePrompt(universe, character, variation = {}) {
  * Pure — exported for tests.
  */
 export function deriveVariationAxes(character) {
+  const kind = normalizeEntryKind(character?.entryKind);
+  if (kind === 'objects') {
+    return {
+      expressions: ['soft studio lighting', 'warm firelight', 'cool moonlight', 'harsh desert sun', 'low dungeon torchlight'],
+      outfits: ['plain studio plinth', 'weathered wooden table', 'snow-covered stone', 'sunlit desert sand', 'torchlit dungeon floor'],
+    };
+  }
+  if (kind === 'places') {
+    return {
+      expressions: ['clear daylight', 'golden hour', 'moonlit night', 'stormy overcast', 'torchlit darkness'],
+      outfits: ['signature environment', 'after rainfall', 'dusty dry season', 'busy lived-in state', 'abandoned quiet state'],
+    };
+  }
   const names = (list) => (Array.isArray(list)
     ? list.map((e) => trim(e?.name)).filter(Boolean)
     : []);
@@ -114,20 +208,21 @@ export function deriveVariationAxes(character) {
   };
 }
 
-// Load the dataset's live canon character (generation + slicing both need
-// the current canon, not the dataset's snapshot). 409 when the character
+// Load the dataset's live canon subject (generation + slicing both need
+// the current canon, not the dataset's snapshot). 409 when the subject
 // was deleted from the universe after the dataset was created.
-async function loadDatasetCharacter(dataset) {
+async function loadDatasetSubject(dataset) {
+  const entryKind = normalizeEntryKind(dataset.character.entryKind);
   const universe = await getUniverse(dataset.character.universeId);
-  const characters = Array.isArray(universe.characters) ? universe.characters : [];
-  const character = characters.find((c) => c.id === dataset.character.entryId);
-  if (!character) {
+  const entries = Array.isArray(universe[entryKind]) ? universe[entryKind] : [];
+  const subject = entries.find((entry) => entry.id === dataset.character.entryId);
+  if (!subject) {
     throw new ServerError(
-      `Character ${dataset.character.entryId} no longer exists in universe ${dataset.character.universeId}`,
+      `${subjectLabel(entryKind)} ${dataset.character.entryId} no longer exists in universe ${dataset.character.universeId}`,
       { status: 409, code: 'UNIVERSE_CANON_NOT_FOUND' },
     );
   }
-  return { universe, character };
+  return { universe, subject: { ...subject, entryKind }, entryKind };
 }
 
 // Single-dispatcher subscription on mediaJobEvents — same shape as
@@ -220,7 +315,7 @@ async function resolveRenderParams({ modelId: modelOverride = null } = {}) {
 }
 
 /**
- * Generate `count` reference images for the dataset's character. Appends a
+ * Generate `count` reference images for the dataset's subject. Appends a
  * `rendering` image entry per variation, enqueues each render on the image
  * queue, and flips entries to `ready` (with the file copied in) as jobs
  * complete. Returns `{ images: [{ imageId, jobId, variation }], mode, modelId }`
@@ -228,9 +323,9 @@ async function resolveRenderParams({ modelId: modelOverride = null } = {}) {
  */
 export async function generateDatasetImages(datasetId, options = {}) {
   const dataset = await getDataset(datasetId);
-  const { universe, character } = await loadDatasetCharacter(dataset);
+  const { universe, subject, entryKind } = await loadDatasetSubject(dataset);
 
-  const axes = deriveVariationAxes(character);
+  const axes = deriveVariationAxes(subject);
   const variations = buildVariationMatrix({
     count: options.count,
     views: options.views,
@@ -245,7 +340,7 @@ export async function generateDatasetImages(datasetId, options = {}) {
   for (const variation of variations) {
     const imageId = uuidv4();
     const file = `${imageId}.png`;
-    const { prompt, negativePrompt } = buildDatasetImagePrompt(universe, character, variation);
+    const { prompt, negativePrompt } = buildDatasetImagePrompt(universe, subject, variation, entryKind);
     const queued = enqueueJob({ kind: 'image', params: { ...base, prompt, negativePrompt } });
     const jobId = queued.jobId;
 
@@ -305,18 +400,18 @@ export async function generateDatasetImages(datasetId, options = {}) {
 }
 
 /**
- * Slice the character's existing reference-sheet turnaround into a fixed
+ * Slice the subject's existing reference-sheet turnaround into a fixed
  * `cols × rows` grid of training crops. Each crop lands as a `ready`
  * dataset image with source 'refsheet-slice' — the user prunes bad crops
  * (label strips, palette swatches) in the grid UI.
  */
 export async function sliceReferenceSheet(datasetId, { variant = LEGACY_SHEET_VARIANT_ID, cols = 3, rows = 2 } = {}) {
   const dataset = await getDataset(datasetId);
-  const { character } = await loadDatasetCharacter(dataset);
-  const sheetFilename = readSheetPointer(character, variant);
+  const { subject, entryKind } = await loadDatasetSubject(dataset);
+  const sheetFilename = readSheetPointer(subject, variant);
   if (!sheetFilename) {
     throw new ServerError(
-      `Character "${character.name}" has no ${variant} reference sheet — render one first`,
+      `${subjectLabel(entryKind)} "${subject.name || subject.slugline || dataset.character.entryId}" has no ${variant} reference sheet — render one first`,
       { status: 409, code: 'LORA_DATASET_NO_SHEET' },
     );
   }

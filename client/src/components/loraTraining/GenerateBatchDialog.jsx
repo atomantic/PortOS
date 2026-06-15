@@ -1,6 +1,6 @@
 /**
  * Generate-batch dialog — count + optional variation-axis overrides
- * (views/expressions/outfits prefilled from the character's canon when the
+ * (views/expressions/outfits prefilled from the subject's canon when the
  * caller passes them). Submits to POST /api/lora-datasets/:id/generate.
  */
 
@@ -18,6 +18,7 @@ import { generateLoraDatasetImages } from '../../services/api';
 const RECOMMENDED_TRAINING_IMAGES = 20;
 const TRAINING_IMAGE_SWEET_SPOT_MAX = 30;
 const MAX_BATCH_IMAGES = 40;
+const subjectKind = (dataset) => dataset?.character?.entryKind || 'characters';
 
 const ChipToggleList = ({ idPrefix, label, options, selected, onToggle }) => (
   <div>
@@ -50,6 +51,7 @@ export default function GenerateBatchDialog({ dataset, expressionOptions = [], o
   const [expressions, setExpressions] = useState(expressionOptions);
   const [outfits, setOutfits] = useState(outfitOptions);
   const [submitting, setSubmitting] = useState(false);
+  const isCharacter = subjectKind(dataset) === 'characters';
 
   const toggle = (setter) => (value) =>
     setter((prev) => (prev.includes(value) ? prev.filter((v) => v !== value) : [...prev, value]));
@@ -82,8 +84,8 @@ export default function GenerateBatchDialog({ dataset, expressionOptions = [], o
           Generate reference images — {dataset.character?.name}
         </h2>
         <p className="text-sm text-gray-400">
-          Renders single-subject training images from the character&apos;s canon, varying view, pose,
-          expression, and outfit. Renders queue on the image lane; results stream into the dataset.
+          Renders single-subject training images from the universe bible, varying view, composition,
+          lighting, and context. Renders queue on the image lane; results stream into the dataset.
         </p>
         <div>
           <label htmlFor="lt-gen-count" className="block text-sm text-gray-400 mb-1">Images ({count})</label>
@@ -104,7 +106,7 @@ export default function GenerateBatchDialog({ dataset, expressionOptions = [], o
         {expressionOptions.length > 0 && (
           <ChipToggleList
             idPrefix="lt-exp"
-            label="Expressions"
+            label={isCharacter ? 'Expressions' : 'Lighting'}
             options={expressionOptions}
             selected={expressions}
             onToggle={toggle(setExpressions)}
@@ -113,7 +115,7 @@ export default function GenerateBatchDialog({ dataset, expressionOptions = [], o
         {outfitOptions.length > 0 && (
           <ChipToggleList
             idPrefix="lt-outfit"
-            label="Outfits"
+            label={isCharacter ? 'Outfits' : 'Settings'}
             options={outfitOptions}
             selected={outfits}
             onToggle={toggle(setOutfits)}

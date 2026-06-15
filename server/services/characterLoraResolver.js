@@ -5,16 +5,24 @@
  * simply doesn't list it, so resolution degrades to "no LoRA" with no
  * dangling links.
  *
- * Matching: a trained sidecar carries `character: { entryId, ingredientId,
- * universeId, name }`. Canon entries are keyed by per-universe `entryId`
- * AND catalog `ingredientId` — match on either, since some surfaces (the
- * catalog detail page) only know the ingredient id.
+ * Matching: a trained sidecar carries `character: { entryId, entryKind,
+ * ingredientId, universeId, name }`. Canon entries are keyed by per-universe
+ * `entryId` AND catalog `ingredientId` — match on either, since some surfaces
+ * (the catalog detail page) only know the ingredient id.
+ *
+ * Both resolution paths here are CHARACTER lookups, so a non-character
+ * trained LoRA (object/place datasets now carry `entryKind: 'objects'|'places'`)
+ * must never match — otherwise, in the newly supported case where the same
+ * entry id exists in multiple bible kinds, an object/place LoRA would be
+ * auto-applied to a character render. A legacy sidecar with no `entryKind`
+ * predates the object/place feature and is therefore a character.
  */
 
 import { listLoras } from './loras.js';
 
 const matchesCharacter = (sidecarCharacter, { entryId = null, ingredientId = null }) => {
   if (!sidecarCharacter) return false;
+  if ((sidecarCharacter.entryKind || 'characters') !== 'characters') return false;
   if (entryId && sidecarCharacter.entryId === entryId) return true;
   if (ingredientId && sidecarCharacter.ingredientId === ingredientId) return true;
   return false;

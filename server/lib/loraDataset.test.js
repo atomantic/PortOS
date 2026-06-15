@@ -28,11 +28,19 @@ describe('sanitizeLoraDataset', () => {
     const out = sanitizeLoraDataset(baseRecord());
     expect(out.schemaVersion).toBe(LORA_DATASET_SCHEMA_VERSION);
     expect(out.character).toEqual({
-      entryId: 'char-1', ingredientId: 'ing-1', universeId: 'uni-1', name: 'Kessa',
+      entryId: 'char-1', entryKind: 'characters', ingredientId: 'ing-1', universeId: 'uni-1', name: 'Kessa',
     });
     expect(out.training).toEqual({
       lastJobId: null, lastRunId: null, loraFilename: null, completedAt: null,
     });
+  });
+
+  it('preserves object/place subject kind on the compatibility character snapshot', () => {
+    const out = sanitizeLoraDataset({
+      ...baseRecord(),
+      character: { entryId: 'obj-1', entryKind: 'objects', universeId: 'uni-1', name: 'Truthbreaker' },
+    });
+    expect(out.character).toMatchObject({ entryId: 'obj-1', entryKind: 'objects', name: 'Truthbreaker' });
   });
 
   it('rejects records missing identity', () => {
