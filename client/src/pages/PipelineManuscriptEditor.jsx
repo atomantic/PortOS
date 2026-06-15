@@ -374,6 +374,7 @@ export default function PipelineManuscriptEditor() {
       patchSection(section.issueId, { versions: result.section.versions });
     }
     setSaveState((prev) => ({ ...prev, [section.issueId]: result ? 'saved' : undefined }));
+    return result;
   };
 
   const saveSection = (section) => saveSectionContent(section, section.content);
@@ -390,8 +391,11 @@ export default function PipelineManuscriptEditor() {
       return;
     }
     setSectionContent(section.issueId, formatted);
-    await saveSectionContent(section, formatted);
-    toast.success('Formatting cleaned up');
+    // Only claim success once the save lands — saveSectionContent swallows its
+    // own error (toasts "Failed to save…") and resolves null, so an
+    // unconditional success toast would stack a green toast on the red one.
+    const saved = await saveSectionContent(section, formatted);
+    if (saved) toast.success('Formatting cleaned up');
   };
 
   const revertSection = async (section, runId) => {

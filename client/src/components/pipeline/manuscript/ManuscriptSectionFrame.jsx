@@ -32,8 +32,11 @@ export default function ManuscriptSectionFrame({ section, saveState, onRevert, o
 
   const format = async () => {
     setFormatting(true);
-    await onFormat();
-    setFormatting(false);
+    try {
+      await onFormat();
+    } finally {
+      setFormatting(false);
+    }
   };
 
   // Prose reflows into paragraphs; scripts only get safe artifact cleanup.

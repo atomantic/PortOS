@@ -45,7 +45,10 @@ const stripTrailingWs = (text) => text.split('\n').map((l) => l.replace(/[ \t]+$
 
 // Join a syllable hyphenated across a wrap: "approxi-\nmating" → "approximating".
 // Only letter-hyphen-newline-lowercase, so real line-final hyphens before a
-// capitalized word or number are left alone.
+// capitalized word or number are left alone. Accepted miss: a genuinely
+// hyphenated compound that happens to wrap at its hyphen ("over-\nride") is
+// merged without the hyphen ("override") — unavoidable without a dictionary, and
+// rare enough that reflowing the common case is the better trade.
 const dehyphenate = (text) => text.replace(/([A-Za-z])-\n([a-z])/g, '$1$2');
 
 // Re-attach a stylized drop-cap that landed on its own line: a line that is a
