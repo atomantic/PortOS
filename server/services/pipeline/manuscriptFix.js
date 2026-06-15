@@ -348,12 +348,23 @@ export async function saveManuscriptSection(seriesId, { issueId, stageId, output
 
 const MANUSCRIPT_FORMAT_LABEL = { prose: 'Prose', comicScript: 'Comic script', teleplay: 'Teleplay' };
 
-// Letters + digits only, CASE-PRESERVING — the "skeleton" a pure reformat
-// leaves identical. No reformat operation (reflow, de-hyphenation, drop-cap
-// rejoin, quote re-attachment) changes letter case, so we compare
-// case-sensitively: a case-only rewrite ("US" → "us", a de-capitalized name) is
-// a wording change and must be rejected too.
-const wordSkeleton = (s) => (typeof s === 'string' ? s.replace(/[^\p{L}\p{N}]+/gu, '') : '');
+// The "skeleton" a pure reformat leaves identical: letters, digits, and
+// apostrophes (curly normalized to straight so a benign smart-quote pass isn't
+// flagged), CASE-PRESERVING. No reformat op (reflow, de-hyphenation, drop-cap
+// rejoin, quote re-attachment) changes case or touches an apostrophe, so
+// comparing this catches a substituted/dropped/inserted word, a case-only
+// rewrite ("US" → "us"), AND a mangled contraction ("don't" → "dont").
+//
+// Deliberately NOT guarded (these would break legitimate reformatting and are
+// instead forbidden by the prompt + caught by eye / undone via Revert): a
+// hyphen removed mid-word ("X-ray" → "Xray") is indistinguishable from the
+// de-hyphenation of a wrap-split word, and a removed inter-word boundary
+// ("now here" → "nowhere") is indistinguishable from a drop-cap rejoin
+// ("T\nhe" → "The") — both are whitespace/hyphen edits the skeleton ignores by
+// design so real reflow passes.
+const wordSkeleton = (s) => (typeof s === 'string'
+  ? s.replace(/[’ʼ]/g, '\'').replace(/[^\p{L}\p{N}']+/gu, '')
+  : '');
 
 // Reject any reformat that altered the actual wording. A pure reformat only
 // moves whitespace and quotation-mark/punctuation glyphs (all non-alphanumeric)

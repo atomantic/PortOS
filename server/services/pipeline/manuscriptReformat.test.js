@@ -66,6 +66,19 @@ describe('reformatManuscriptText — integrity guard', () => {
       .rejects.toThrow(/changed the wording/i);
   });
 
+  it('rejects a mangled contraction (apostrophe dropped: don\'t → dont)', async () => {
+    runStagedLLM.mockResolvedValue({ content: 'I dont know.', runId: 'r1' });
+    await expect(reformatManuscriptText("I don't\nknow.", { stageId: 'prose' }))
+      .rejects.toThrow(/changed the wording/i);
+  });
+
+  it('accepts a benign smart-quote apostrophe normalization', async () => {
+    // curly ’ ↔ straight ' is normalized in the skeleton, so it is not flagged.
+    runStagedLLM.mockResolvedValue({ content: 'I don’t know.', runId: 'r1' });
+    const r = await reformatManuscriptText("I don't\nknow.", { stageId: 'prose' });
+    expect(r.text).toBe('I don’t know.');
+  });
+
   it('rejects a dropped clause', async () => {
     const input = 'The pool hums softly. The nebula churns in slow motion outside the wide viewport.';
     runStagedLLM.mockResolvedValue({ content: 'The pool hums softly.', runId: 'r1' });
