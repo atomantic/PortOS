@@ -29,9 +29,23 @@ function getBaseUrl(config) {
 /**
  * Discover and auto-load an embedding model in LM Studio.
  * Uses the REST API to find downloaded embedding models and load one if needed.
+ *
+ * This dance is LM-Studio-specific: LM Studio lazy-loads models and exposes a
+ * native `/api/v0/models` + `/api/v1/models/load` API to discover and pin one.
+ * Other OpenAI-compatible embedding backends (Ollama, etc.) serve
+ * `/v1/embeddings` directly with no load step and don't implement those
+ * endpoints — so for them we skip the dance and trust the configured model id.
+ * Without this guard, an Ollama-backed config would 404 the LMS-only URLs on
+ * every call (modelEnsured never latches → repeated failed probes per embed).
  */
 async function ensureEmbeddingModelLoaded(config) {
   if (modelEnsured) return;
+
+  // Only LM Studio needs (and implements) the discover-and-load dance.
+  if (config.embeddingProvider !== 'lmstudio') {
+    modelEnsured = true;
+    return;
+  }
 
   const baseUrl = getBaseUrl(config);
 
@@ -110,10 +124,15 @@ async function initConfig() {
       : `${provider.endpoint}/v1/embeddings`;
     embeddingConfig = {
       ...DEFAULT_MEMORY_CONFIG,
+      // Track which provider backs embeddings so the LM-Studio-only model
+      // auto-load dance (ensureEmbeddingModelLoaded) is skipped for others.
+      embeddingProvider: providerId,
       embeddingEndpoint: endpoint,
+      // The model id MUST come from config for a non-LM-Studio provider: the
+      // DEFAULT model is an LM Studio model name that Ollama doesn't have.
       ...(configModel ? { embeddingModel: configModel } : {})
     };
-    console.log(`📚 Memory embeddings using provider ${providerId}: ${endpoint}`);
+    console.log(`📚 Memory embeddings using provider ${providerId} (model: ${embeddingConfig.embeddingModel}): ${endpoint}`);
   }
 }
 
@@ -132,7 +151,9 @@ export function setEmbeddingConfig(config) {
 }
 
 /**
- * Check if LM Studio is available and ensure embedding model is loaded
+ * Check if the embedding backend is reachable and an embedding model is usable.
+ * Works for any OpenAI-compatible backend (LM Studio, Ollama, …) — all serve
+ * `GET /v1/models`.
  */
 export async function checkAvailability() {
   await initConfig();
@@ -144,13 +165,29 @@ export async function checkAvailability() {
   }).catch(err => ({ ok: false, _err: err.message }));
 
   if (!response.ok) {
-    return { available: false, error: response._err || `LM Studio returned ${response.status}`, endpoint: config.embeddingEndpoint };
+    return { available: false, error: response._err || `Embedding backend returned ${response.status}`, endpoint: config.embeddingEndpoint };
   }
 
   const data = await readResponseJson(response);
   const models = data.data?.map(m => m.id) || [];
 
-  // If no embedding models are loaded, try to auto-load one
+  // For a non-LM-Studio provider (Ollama, etc.) the configured model id is
+  // authoritative — don't guess from `.includes('embed')` (it could latch onto
+  // the wrong listed model). Just confirm it's present; the load dance is a
+  // no-op for these backends.
+  if (config.embeddingProvider !== 'lmstudio') {
+    modelEnsured = true;
+    const present = models.some(id => id === config.embeddingModel || id.startsWith(`${config.embeddingModel}:`));
+    return {
+      available: true,
+      models,
+      embeddingModel: config.embeddingModel,
+      modelPresent: present,
+      endpoint: config.embeddingEndpoint
+    };
+  }
+
+  // LM Studio: if no embedding model is loaded, try to auto-load one.
   const hasEmbeddingModel = models.some(id => id.includes('embed'));
   if (!hasEmbeddingModel) {
     await ensureEmbeddingModelLoaded(config).catch(err =>
