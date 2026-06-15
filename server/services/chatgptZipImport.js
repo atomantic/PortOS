@@ -150,7 +150,18 @@ export async function extractChatgptZip(zipPath, { assetDir = PATHS.brainImportA
 
   await new Promise((resolve, reject) => {
     let settled = false;
-    const settle = (fn) => (arg) => { if (!settled) { settled = true; fn(arg); } };
+    const src = createReadStream(zipPath);
+    const parser = parseZip();
+    // On any error/settle, tear down both streams. Rejecting the Promise alone
+    // doesn't stop ingestion — the read stream keeps flowing into the parser and
+    // collect() keeps buffering members, so a charge() overflow would otherwise
+    // exhaust the heap *after* the budget guard already fired, defeating it.
+    const settle = (fn) => (arg) => {
+      if (settled) return;
+      settled = true;
+      if (fn === reject) { src.destroy(); parser.destroy?.(); }
+      fn(arg);
+    };
     const onErr = settle(reject);
     const inFlight = [];
     // Charge buffered bytes against the aggregate budget the moment they land,
@@ -164,9 +175,9 @@ export async function extractChatgptZip(zipPath, { assetDir = PATHS.brainImportA
       return buf;
     };
 
-    createReadStream(zipPath)
+    src
       .on('error', onErr)
-      .pipe(parseZip())
+      .pipe(parser)
       .on('entry', (entry) => {
         const { path } = entry;
         if (IS_ASSET_NAME_MAP(path)) {

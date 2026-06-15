@@ -62,7 +62,7 @@ export default function ConfigTab({ onRefresh }) {
       setSettings(settingsData);
       setSelectedProvider(settingsData.defaultProvider || '');
       setSelectedModel(settingsData.defaultModel || '');
-      setConfidenceThreshold(settingsData.confidenceThreshold || 0.6);
+      setConfidenceThreshold(settingsData.confidenceThreshold ?? 0.6);
       setDailyDigestTime(settingsData.dailyDigestTime || '09:00');
       setWeeklyReviewDay(settingsData.weeklyReviewDay || 'sunday');
       setWeeklyReviewTime(settingsData.weeklyReviewTime || '16:00');

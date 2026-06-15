@@ -694,10 +694,11 @@ CREATE INDEX IF NOT EXISTS idx_universe_runs_universe ON universe_runs (universe
 -- sanitized record (name, writingStyle, bio, physicalDescription, headshotStyle,
 -- headshotImageUrl) in `data` JSONB. `name` mirrors a column for the live-list
 -- sort; the LWW/tombstone trio (updated_at/deleted/deleted_at) is populated FROM
--- the record body. Authors are db-primary but LOCAL-ONLY for now (no
--- sync_sequence/wire path) — a federated series keeps its denormalized `author`
--- byline so peers still render the cover correctly. Mirrors the authors block in
--- db.js ensureSchema().
+-- the record body. Authors are db-primary AND federated via the per-record
+-- peer-sync push pipeline (record kind `author`, sync category `authors`); a
+-- federated series also keeps its denormalized `author` byline so a peer that
+-- hasn't synced the persona still renders the cover correctly. Mirrors the
+-- authors block in db.js ensureSchema().
 CREATE TABLE IF NOT EXISTS authors (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
