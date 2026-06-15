@@ -6,6 +6,8 @@
 
 ## Changed
 
+- **Share the `--user-loras` JSON parser between the two video LoRA runners.** `parse_user_loras` (the strict `[{path, strength}]` validator that surfaces a Node-side bug before any model load) was duplicated verbatim in `scripts/generate_ltx2.py` (dgrauet `ltx2` runtime) and `scripts/generate_av_lora.py` (mlx_video runtime); it now lives once in `scripts/_runner_common.py` (stdlib-only at import, so it's safe to import from either MLX venv — verified in both) and both runners import it, so a future fix to the validation contract can't drift between them. (`scripts/_runner_common.py`, `scripts/generate_ltx2.py`, `scripts/generate_av_lora.py`)
+
 - **Retire the repo-local `/claim`, `/gitup`, and `/work` slash commands in favor of slashdo.** The custom 46 KB `.claude/commands/claim.md` procedure (and its `.agents/skills/claim/SKILL.md` adapter) is replaced by slashdo's `/do:next`, which runs the same claim-an-item-in-a-worktree-and-ship-a-PR flow; `/gitup` and `/work` are dropped in favor of `/do:push` and slashdo's worktree workflow. The slashdo submodule is bumped v3.5.0 → v3.9.0 so `/do:next` ships from the module itself (symlinked into `.claude/commands/do/next.md` like the other `/do:*` commands) instead of relying on a separate global install. The CoS `plan-task` / `claim-issue` scheduled agents are unaffected — they carry their own self-contained prompts and never loaded the deleted command file.
 
 ## Fixed

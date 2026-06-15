@@ -30,47 +30,21 @@ a separate BYOV venv.
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
+
+# Sibling import: parse_user_loras is shared with generate_ltx2.py so the
+# strict --user-loras validation contract lives in one place. sys.path[0] is
+# already this dir when run as `python /abs/scripts/generate_av_lora.py`, but
+# insert defensively (mirrors generate_hunyuan.py). _runner_common is
+# stdlib-only at import time, so this is safe from the MLX venv.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _runner_common import parse_user_loras  # noqa: E402
 
 
 def emit_status(msg: str) -> None:
     """STATUS: line — routed to PortOS SSE as `status` (mirrors generate_ltx2.py)."""
     print(f"STATUS:{msg}", file=sys.stderr, flush=True)
-
-
-def _parse_user_loras(raw: str | None) -> list[tuple[str, float]]:
-    """Parse --user-loras JSON into a list of (path, strength) tuples.
-
-    Strict validation so a Node-side bug surfaces here before any model load.
-    Each entry must be {path: str (existing file), strength: number}. Returns []
-    when --user-loras is unset.
-    """
-    if not raw:
-        return []
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError as e:
-        raise SystemExit(f"--user-loras is not valid JSON: {e}")
-    if not isinstance(data, list):
-        raise SystemExit("--user-loras must be a JSON list of {path, strength}")
-    specs: list[tuple[str, float]] = []
-    for i, item in enumerate(data):
-        if not isinstance(item, dict) or "path" not in item:
-            raise SystemExit(f"user-loras[{i}] must be an object with 'path'")
-        path = item["path"]
-        if not isinstance(path, str) or not path:
-            raise SystemExit(f"user-loras[{i}].path must be a non-empty string")
-        if not Path(path).exists():
-            raise SystemExit(f"user-loras[{i}].path does not exist: {path}")
-        strength = item.get("strength", 1.0)
-        try:
-            strength = float(strength)
-        except (TypeError, ValueError):
-            raise SystemExit(f"user-loras[{i}].strength must be a number")
-        specs.append((path, strength))
-    return specs
 
 
 def _fuse(weights: dict, specs: list[tuple[str, float]]) -> dict:
@@ -156,7 +130,7 @@ def main() -> None:
     parser.add_argument("--user-loras", default=None)
     ns, passthrough = parser.parse_known_args()
 
-    specs = _parse_user_loras(ns.user_loras)
+    specs = parse_user_loras(ns.user_loras)
     if not specs:
         raise SystemExit(
             "generate_av_lora.py requires --user-loras; use `python -m "
