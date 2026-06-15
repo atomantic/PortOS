@@ -63,6 +63,14 @@ from typing import NoReturn
 os.environ.setdefault("LTX2_DIT_EVAL_EVERY", "1")
 os.environ.setdefault("LTX2_GEMMA_EVAL_EVERY", "1")
 
+# Sibling import: parse_user_loras is shared with generate_av_lora.py (the
+# mlx_video LoRA runtime) so the strict --user-loras validation lives in one
+# place. sys.path[0] is already this dir when run as a script; insert defensively
+# (mirrors generate_hunyuan.py). _runner_common is stdlib-only at import time, so
+# this is safe from the ltx-2-mlx venv (no torch pulled in).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _runner_common import parse_user_loras  # noqa: E402
+
 
 def emit_status(msg: str) -> None:
     """STATUS: line — single status update routed to PortOS SSE as `status`."""
@@ -363,39 +371,6 @@ def parse_args() -> argparse.Namespace:
                         "skipping = faster but lower fidelity (~1.2x at 0.5, up to ~3x at 1.5). "
                         "Omit to use the pipeline default (0.5).")
     return p.parse_args()
-
-
-def _parse_user_loras(raw: str | None) -> list[tuple[str, float]]:
-    """Parse --user-loras JSON into a list of (path, strength) tuples.
-
-    Validation is strict so a Node-side bug surfaces here before any GPU work.
-    Each entry must be {path: str (existing file), strength: number}. Returns
-    [] when --user-loras is unset.
-    """
-    if not raw:
-        return []
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError as e:
-        raise SystemExit(f"--user-loras is not valid JSON: {e}")
-    if not isinstance(data, list):
-        raise SystemExit("--user-loras must be a JSON list of {path, strength}")
-    specs: list[tuple[str, float]] = []
-    for i, item in enumerate(data):
-        if not isinstance(item, dict) or "path" not in item:
-            raise SystemExit(f"user-loras[{i}] must be an object with 'path'")
-        path = item["path"]
-        if not isinstance(path, str) or not path:
-            raise SystemExit(f"user-loras[{i}].path must be a non-empty string")
-        if not Path(path).exists():
-            raise SystemExit(f"user-loras[{i}].path does not exist: {path}")
-        strength = item.get("strength", 1.0)
-        try:
-            strength = float(strength)
-        except (TypeError, ValueError):
-            raise SystemExit(f"user-loras[{i}].strength must be a number")
-        specs.append((path, strength))
-    return specs
 
 
 def _apply_user_loras(pipe, specs: list[tuple[str, float]]) -> None:
@@ -838,7 +813,7 @@ def main() -> NoReturn:
     Path(args.output).parent.mkdir(parents=True, exist_ok=True)
     # Parse user LoRAs once up-front (strict validation surfaces bad input
     # before any model load). Each run_* sets pipe._pending_loras from this.
-    args.user_lora_specs = _parse_user_loras(args.user_loras)
+    args.user_lora_specs = parse_user_loras(args.user_loras)
     configure_negative_prompt(args.negative_prompt)
 
     runners = {

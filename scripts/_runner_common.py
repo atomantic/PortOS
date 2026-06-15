@@ -63,6 +63,42 @@ def heartbeat(stage: str, interval: float = 20.0):
         t.join(timeout=interval + 1)
 
 
+def parse_user_loras(raw: "str | None") -> "list[tuple[str, float]]":
+    """Parse a `--user-loras` JSON string into a list of (path, strength) tuples.
+
+    Shared by the video LoRA runners (scripts/generate_ltx2.py for the dgrauet
+    ltx2 runtime, scripts/generate_av_lora.py for the mlx_video runtime) so the
+    strict-validation contract that protects against a Node-side bug lives in one
+    place. Each entry must be {path: str (existing file), strength: number}.
+    Returns [] when the arg is unset. Raises SystemExit with a precise message on
+    any malformed input so the failure surfaces before any model load / GPU work.
+    """
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise SystemExit(f"--user-loras is not valid JSON: {e}")
+    if not isinstance(data, list):
+        raise SystemExit("--user-loras must be a JSON list of {path, strength}")
+    specs: "list[tuple[str, float]]" = []
+    for i, item in enumerate(data):
+        if not isinstance(item, dict) or "path" not in item:
+            raise SystemExit(f"user-loras[{i}] must be an object with 'path'")
+        path = item["path"]
+        if not isinstance(path, str) or not path:
+            raise SystemExit(f"user-loras[{i}].path must be a non-empty string")
+        if not Path(path).exists():
+            raise SystemExit(f"user-loras[{i}].path does not exist: {path}")
+        strength = item.get("strength", 1.0)
+        try:
+            strength = float(strength)
+        except (TypeError, ValueError):
+            raise SystemExit(f"user-loras[{i}].strength must be a number")
+        specs.append((path, strength))
+    return specs
+
+
 class _ClipTruncationFilter(logging.Filter):
     _MARKER = "input was truncated because CLIP can only handle"
 
