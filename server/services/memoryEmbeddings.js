@@ -224,7 +224,55 @@ export async function checkAvailability() {
 }
 
 /**
- * Generate embedding for a single text
+ * Embedding-input budgeting.
+ *
+ * The embedding model has a hard token context (config.embeddingMaxTokens —
+ * 2048 for nomic-embed-text). Input over it is REJECTED ("input length exceeds
+ * the context length") → a NULL embedding, not a truncated one. Our token
+ * estimate (~4 chars/token) is optimistic for dense transcripts (code/JSON/
+ * non-English run ~3 chars/token), so we budget against a conservative
+ * chars-per-token AND only fill a fraction of the context, leaving headroom for
+ * the few prompt tokens the backend wraps around the input.
+ */
+const EMBED_CONTEXT_FILL = 0.85;      // use ≤85% of the model context
+const CONSERVATIVE_CHARS_PER_TOKEN = 3; // dense text floor (vs the 4 estimate)
+
+function embeddingCharBudget(config) {
+  const maxTokens = config.embeddingMaxTokens || 2048;
+  return Math.floor(maxTokens * EMBED_CONTEXT_FILL * CONSERVATIVE_CHARS_PER_TOKEN);
+}
+
+const isContextOverflowError = (msg) =>
+  /context length|context window|too (?:long|large)|exceeds? .*length|maximum context/i.test(String(msg || ''));
+
+const clampToChars = (text, maxChars) => (text.length > maxChars ? text.slice(0, maxChars) : text);
+
+/**
+ * POST one input to the embedding endpoint. Returns
+ * { ok, embedding, error, overflow } so callers can decide whether to shrink
+ * and retry on a context-overflow rejection.
+ */
+async function postEmbedding(config, input) {
+  const response = await fetch(config.embeddingEndpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: config.embeddingModel, input }),
+    signal: AbortSignal.timeout(30000)
+  });
+  if (!response.ok) {
+    const error = await response.text();
+    return { ok: false, error, overflow: isContextOverflowError(error) };
+  }
+  const data = await readResponseJson(response);
+  return { ok: true, data };
+}
+
+/**
+ * Generate embedding for a single text. Truncates to the model's context
+ * budget up front, and if the backend still reports a context overflow (our
+ * char estimate undershot for very dense text), halves the input and retries a
+ * couple of times before giving up — so a pathological doc still embeds rather
+ * than landing NULL.
  */
 export async function generateEmbedding(text) {
   await initConfig();
@@ -241,32 +289,29 @@ export async function generateEmbedding(text) {
     );
   }
 
-  // Truncate very long texts to prevent issues
-  const maxChars = 8000;
-  const truncatedText = text.length > maxChars ? text.substring(0, maxChars) : text;
-
-  const response = await fetch(config.embeddingEndpoint, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: config.embeddingModel,
-      input: truncatedText
-    }),
-    signal: AbortSignal.timeout(30000)
-  });
-
-  if (!response.ok) {
-    const error = await response.text();
-    console.error(`❌ Embedding generation failed: ${error}`);
+  let maxChars = embeddingCharBudget(config);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const result = await postEmbedding(config, clampToChars(text, maxChars));
+    if (result.ok) return result.data.data?.[0]?.embedding || null;
+    if (result.overflow && maxChars > 500) {
+      maxChars = Math.floor(maxChars / 2); // undershoot — shrink and retry
+      console.warn(`⚠️ Embedding input over context; retrying at ${maxChars} chars`);
+      continue;
+    }
+    console.error(`❌ Embedding generation failed: ${result.error}`);
     return null;
   }
-
-  const data = await readResponseJson(response);
-  return data.data?.[0]?.embedding || null;
+  console.error('❌ Embedding generation failed: input still over context after shrinking');
+  return null;
 }
 
 /**
- * Generate embeddings for multiple texts (batch)
+ * Generate embeddings for multiple texts (batch).
+ *
+ * A batch shares one request, so one over-long member would 400 the WHOLE
+ * batch. We can't selectively retry inside a batch response, so on a
+ * context-overflow rejection we fall back to embedding each input individually
+ * (generateEmbedding handles per-item shrink/retry) rather than nulling all.
  */
 export async function generateBatchEmbeddings(texts) {
   await initConfig();
@@ -283,31 +328,26 @@ export async function generateBatchEmbeddings(texts) {
     );
   }
 
-  // LM Studio supports batch embeddings via array input
-  const maxChars = 8000;
-  const truncatedTexts = texts.map(t => t.length > maxChars ? t.substring(0, maxChars) : t);
+  const maxChars = embeddingCharBudget(config);
+  const truncatedTexts = texts.map(t => clampToChars(t, maxChars));
 
-  const response = await fetch(config.embeddingEndpoint, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: config.embeddingModel,
-      input: truncatedTexts
-    }),
-    signal: AbortSignal.timeout(30000)
-  });
-
-  if (!response.ok) {
-    const error = await response.text();
-    console.error(`❌ Batch embedding generation failed: ${error}`);
+  const result = await postEmbedding(config, truncatedTexts);
+  if (!result.ok) {
+    if (result.overflow) {
+      // One member still overflowed — re-embed each individually so the rest
+      // aren't lost to a single oversized input.
+      console.warn('⚠️ Batch embedding over context; falling back to per-item embedding');
+      const out = [];
+      for (const t of texts) out.push(await generateEmbedding(t));
+      return out;
+    }
+    console.error(`❌ Batch embedding generation failed: ${result.error}`);
     return texts.map(() => null);
   }
 
-  const data = await readResponseJson(response);
-
   // Sort by index to maintain order
   const embeddings = new Array(texts.length).fill(null);
-  for (const item of data.data || []) {
+  for (const item of result.data.data || []) {
     embeddings[item.index] = item.embedding;
   }
 

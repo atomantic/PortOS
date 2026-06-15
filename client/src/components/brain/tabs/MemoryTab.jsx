@@ -452,7 +452,11 @@ export default function MemoryTab({ onRefresh }) {
     return (
       <div key={record.id} className="p-4 bg-port-card border border-port-border rounded-lg hover:border-port-border/80 transition-colors">
         <div className="flex items-start justify-between gap-2">
-          <div className="flex-1">
+          {/* min-w-0: without it a flex child won't shrink below its content's
+              intrinsic width, so a long unbreakable code block in an imported
+              transcript blows the row out and shoves the action buttons off
+              the page. */}
+          <div className="flex-1 min-w-0">
             {activeType === 'people' && (
               <>
                 <h3 className="font-medium text-white">{record.name}</h3>
@@ -523,11 +527,13 @@ export default function MemoryTab({ onRefresh }) {
                 </div>
                 {record.content && (
                   // Imported ChatGPT transcripts carry markdown (inline images,
-                  // asset links) — render them rich. Hand-written memories stay
-                  // plain pre-wrap text.
+                  // asset links) — render them rich, but cap the height with an
+                  // internal scroll so a long transcript preview doesn't make
+                  // the card a mile tall (the full thread is in the viewer).
+                  // Hand-written memories stay plain pre-wrap text.
                   record.source === 'chatgpt-import'
-                    ? <div className="text-sm text-gray-400 mt-1"><MarkdownOutput content={record.content} /></div>
-                    : <p className="text-sm text-gray-400 mt-1 whitespace-pre-wrap">{record.content}</p>
+                    ? <div className="text-sm text-gray-400 mt-1 max-h-72 overflow-y-auto pr-1"><MarkdownOutput content={record.content} /></div>
+                    : <p className="text-sm text-gray-400 mt-1 whitespace-pre-wrap break-words">{record.content}</p>
                 )}
                 {record.source === 'chatgpt-import' && record.sourceRef && (
                   <button

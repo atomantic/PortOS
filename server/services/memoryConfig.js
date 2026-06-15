@@ -12,6 +12,12 @@ export const DEFAULT_MEMORY_CONFIG = {
   embeddingEndpoint: 'http://localhost:1234/v1/embeddings',
   embeddingModel: 'text-embedding-nomic-embed-text-v2-moe',
   embeddingDimension: 768,
+  // Token context window of the embedding model. nomic-embed-text (and most
+  // small local embedders) cap at 2048; we truncate input to a safe fraction
+  // of this before embedding. A too-long input is rejected outright by the
+  // backend ("input length exceeds the context length") and yields a NULL
+  // embedding, so this must stay at/under the real model context.
+  embeddingMaxTokens: 2048,
   maxMemories: 10000,
   maxContextTokens: 2000,
   minRelevanceThreshold: 0.7,
