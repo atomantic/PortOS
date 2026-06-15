@@ -26,20 +26,24 @@ import { isFlux2, flux2VariantFromModel, FLUX2_BF16_BASE_REPOS } from '../../lib
 
 export const TRAINING_RUNTIMES = Object.freeze({ MFLUX: 'mflux', FLUX2: 'flux2' });
 
-// Defaults tuned down after a FLUX.2 Klein face LoRA diverged: at the old
-// 1000 steps / lr 1e-4, the sample collapsed to a black frame by ~step 500
-// while the loss kept dropping. Halving the LR and shortening the run keeps
-// it in the useful window; 768 captures more facial detail than 512 (a 4K
-// source crushed to 512 loses the face) and the memory-derived quantize/low_ram
-// still covers smaller machines. Tighter checkpoint/sample cadence gives the
-// checkpoint picker more healthy steps to choose from.
+// Defaults validated 2026-06-15 on a real-face character LoRA (44-image dataset,
+// FLUX.2 Klein 9B 4-bit): identity bound cleanly and fast, stable through the run.
+// History worth knowing before lowering these again: an earlier run "diverged"
+// (sample collapsed to black) and the defaults were cut to 600 steps / lr 5e-5 /
+// rank 16 — but the real cause was captions over-describing invariant identity
+// (it bound to the words, not the trigger), NOT the learning rate. With good
+// captions, lr 1e-4 + rank 32 + ~1200 steps converges faster and sharper without
+// collapse. 768 captures more facial detail than 512; checkpoint/sample cadence
+// gives the picker several healthy steps to choose from. The base model + quant
+// tier are chosen elsewhere (deriveMfluxMemoryConfig + the base-model picker,
+// which prefers 9B); these are the per-run hyperparameters the form seeds from.
 export const TRAINING_DEFAULTS = Object.freeze({
-  steps: 600,
-  rank: 16,
-  learningRate: 0.00005,
+  steps: 1200,
+  rank: 32,
+  learningRate: 0.0001,
   resolution: 768,
-  checkpointEvery: 150,
-  sampleEvery: 150,
+  checkpointEvery: 300,
+  sampleEvery: 300,
 });
 
 // bf16 training bases per FLUX.2 size variant (torch runtime). Inference may

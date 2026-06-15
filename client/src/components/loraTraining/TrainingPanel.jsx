@@ -46,7 +46,17 @@ export default function TrainingPanel({ dataset, readiness, triggerSaving, onRun
       // torch fallback trains the same bf16 Klein bases.
       const trainable = (Array.isArray(list) ? list : []).filter((m) => m.runner === 'flux2');
       setModels(trainable);
-      setBaseModelId((prev) => prev || trainable[0]?.id || '');
+      // Default to the 9B base — it captures identity better than 4B and trains
+      // fine via 4-bit QLoRA (the server forces the panic-safe quant tier
+      // regardless of which inference id is picked). Prefer the plain 9B id we
+      // validated (flux2-klein-9b); avoid the explicit *-bf16 variant (the heavy
+      // path that GPU-watchdog-panics this M5). Fall back to any 9B, then first.
+      setBaseModelId((prev) => {
+        if (prev) return prev;
+        const nineB = trainable.filter((m) => /9b/i.test(m.id));
+        const nonBf16 = nineB.find((m) => !/bf16/i.test(m.id));
+        return (nonBf16 || nineB[0] || trainable[0])?.id || '';
+      });
     }).catch(() => setModels([]));
   }, []);
 
