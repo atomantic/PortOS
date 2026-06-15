@@ -36,7 +36,13 @@ tryReadFile: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock('../../lib/mediaModels.js', () => ({
-  getVideoModels: vi.fn(() => [{ id: 'ltx2_unified', name: 'LTX-2 Unified', runtime: 'ltx2', repo: 'Lightricks/LTX-Video', steps: 30, guidance: 3.5 }]),
+  getVideoModels: vi.fn(() => [
+    { id: 'ltx2_unified', name: 'LTX-2 Unified', runtime: 'ltx2', repo: 'Lightricks/LTX-Video', steps: 30, guidance: 3.5 },
+    // bf16 LTX-2.x mlx_video model — LoRA-capable via the generate_av wrapper.
+    { id: 'ltx23_unified', name: 'LTX-2.3 Unified Beta', runtime: 'mlx_video', repo: 'notapalindrome/ltx23-mlx-av', steps: 25, guidance: 3.0 },
+    // quantized mlx_video model — NOT LoRA-capable (out of scope).
+    { id: 'ltx23_distilled_q4', name: 'LTX-2.3 Distilled Q4', runtime: 'mlx_video', repo: 'notapalindrome/ltx23-mlx-av-q4', steps: 25, guidance: 3.0 },
+  ]),
   getDefaultVideoModelId: vi.fn(() => 'ltx2_unified'),
   getTextEncoderRepo: vi.fn(() => 'some/text-encoder'),
 }));
@@ -926,6 +932,73 @@ describe('generateVideo — video LoRA (--user-loras) arg threading', () => {
       ([bin]) => String(bin).includes('.portos/ltx-2-mlx/.venv/bin/python3'),
     );
     expect(call[1]).not.toContain('--user-loras');
+  });
+
+  it('routes a bf16 mlx_video LTX model through the generate_av_lora.py wrapper with --user-loras', async () => {
+    const { spawn } = await import('child_process');
+    const spawnMock = vi.mocked(spawn);
+    spawnMock.mockClear();
+
+    await generateVideo({
+      jobId: 'mlx-lora-test',
+      pythonPath: '/usr/bin/python3',
+      modelId: 'ltx23_unified', // runtime: mlx_video, bf16 → LoRA-capable
+      prompt: 'audio reactive clip',
+      width: 512, height: 512, numFrames: 25, fps: 24,
+      mode: 'text',
+      loras: [{ filename: 'lora-fal-ltx2-3-audio-reactive-lora-hf.safetensors', scale: 0.8 }],
+    });
+
+    const call = spawnMock.mock.calls.find(
+      ([bin, args]) => String(bin) === '/usr/bin/python3'
+        && Array.isArray(args) && args.includes('--user-loras'),
+    );
+    expect(call).toBeTruthy();
+    const args = call[1];
+    // wrapper script, NOT the bare `-m mlx_video.generate_av` module path
+    expect(args[0]).toBe(join(MOCK_PATHS.root, 'scripts', 'generate_av_lora.py'));
+    expect(args).not.toContain('-m');
+    // the generate_av flags still flow through the wrapper
+    expect(args).toContain('--model-repo');
+    expect(args[args.indexOf('--model-repo') + 1]).toBe('notapalindrome/ltx23-mlx-av');
+    const payload = JSON.parse(args[args.indexOf('--user-loras') + 1]);
+    expect(payload).toEqual([
+      { path: join(MOCK_PATHS.loras, 'lora-fal-ltx2-3-audio-reactive-lora-hf.safetensors'), strength: 0.8 },
+    ]);
+  });
+
+  it('a non-LoRA mlx_video render still uses the bare generate_av module (no wrapper)', async () => {
+    const { spawn } = await import('child_process');
+    const spawnMock = vi.mocked(spawn);
+    spawnMock.mockClear();
+
+    await generateVideo({
+      jobId: 'mlx-no-lora',
+      pythonPath: '/usr/bin/python3',
+      modelId: 'ltx23_unified',
+      prompt: 'clip',
+      width: 512, height: 512, numFrames: 25, fps: 24,
+      mode: 'text',
+    });
+
+    const call = spawnMock.mock.calls.find(
+      ([bin, args]) => String(bin) === '/usr/bin/python3' && Array.isArray(args) && args.includes('mlx_video.generate_av'),
+    );
+    expect(call).toBeTruthy();
+    expect(call[1]).not.toContain('--user-loras');
+    expect(call[1]).not.toContain(join(MOCK_PATHS.root, 'scripts', 'generate_av_lora.py'));
+  });
+
+  it('rejects LoRAs on a quantized (out-of-scope) mlx_video model', async () => {
+    await expect(generateVideo({
+      jobId: 'mlx-q4-lora',
+      pythonPath: '/usr/bin/python3',
+      modelId: 'ltx23_distilled_q4', // runtime: mlx_video, quantized → NOT capable
+      prompt: 'clip',
+      width: 512, height: 512, numFrames: 25, fps: 24,
+      mode: 'text',
+      loras: [{ filename: 'style.safetensors', scale: 1.0 }],
+    })).rejects.toThrow(/LoRAs aren't supported/);
   });
 });
 

@@ -27,6 +27,7 @@ import { hfTokenEnv } from '../../lib/hfToken.js';
 import { safeChildProcessEnv } from '../../lib/processEnv.js';
 import { makeVideoGenLineHandler, finalizeGeneratedVideo, isWatchdogSuccess } from './generateVideoHelpers.js';
 import { assertSafeLoraFilename } from '../loras.js';
+import { isMlxVideoLtxLoraCapable } from '../../lib/runners.js';
 
 // Path to the dgrauet/ltx-2-mlx venv populated by `INSTALL_LTX2=1
 // scripts/setup-image-video.sh`. Used when a model entry has
@@ -35,6 +36,15 @@ import { assertSafeLoraFilename } from '../loras.js';
 // progress protocol (STAGE:/STATUS:/DOWNLOAD:) as the mlx_video CLI.
 const LTX2_VENV_PYTHON = join(homedir(), '.portos', 'ltx-2-mlx', '.venv', 'bin', 'python3');
 const LTX2_HELPER_SCRIPT = join(PATHS.root, 'scripts', 'generate_ltx2.py');
+
+// LoRA wrapper for the notapalindrome `mlx_video` runtime. The stock
+// `mlx_video.generate_av` CLI has no --lora flag, but the package ships an
+// LTX-aware LoRA subsystem (`mlx_video.lora`) — this helper imports generate_av,
+// merges the user LoRAs into the transformer weights, then runs generate_av's
+// own main(), so it emits the identical STAGE:/STATUS:/DOWNLOAD: protocol. Runs
+// in the SAME venv as the bare `-m mlx_video.generate_av` path (the configured
+// pythonPath), not a separate BYOV venv. See isMlxVideoLtxLoraCapable.
+const AV_LORA_HELPER_SCRIPT = join(PATHS.root, 'scripts', 'generate_av_lora.py');
 
 // Wan 2.2 MLX runtime — osama-ata/Wan2.2-mlx cloned at
 // ~/.portos/wan2.2-mlx/. The wrapper at scripts/generate_wan22.py
@@ -590,13 +600,19 @@ const buildArgs = ({ pythonPath, modelId, model, prompt, negativePrompt, width, 
   if (model.runtime === 'ltx2') {
     return buildLtx2Args({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, mode, imageStrength, disableAudio, outputPath, textEncoderRepo, loras });
   }
-  // Defense-in-depth: only the ltx2 runtime can fuse user LoRAs. The route
-  // already rejects this combination, but a non-route caller (test, queue
-  // replay) could reach here — fail clearly rather than silently dropping the
-  // LoRAs and producing a base render the user thinks is LoRA-styled.
-  if (Array.isArray(loras) && loras.length > 0) {
+  const hasLoras = Array.isArray(loras) && loras.length > 0;
+  // Defense-in-depth: LoRAs fuse only on ltx2 (handled above) or a non-quantized
+  // LTX-2.x mlx_video model (the wrapper below), and the wrapper path is
+  // macOS/mlx-only. The route already rejects other runtimes, but a non-route
+  // caller (test, queue replay) — or a Windows install with a hand-edited/synced
+  // mlx_video LTX-2.x entry — could reach here. Fail clearly rather than fall
+  // through to the IS_WIN generate_win.py branch below, which would silently drop
+  // the LoRAs and produce a base render the user thinks is LoRA-styled.
+  if (hasLoras && (!isMlxVideoLtxLoraCapable(model) || IS_WIN)) {
     throw new ServerError(
-      `LoRAs are only supported on the ltx2 runtime. Model "${modelId}" runs on "${model.runtime || 'mlx_video'}".`,
+      IS_WIN
+        ? `LoRA fusion runs through the macOS-only mlx_video path; model "${modelId}" can't fuse LoRAs on Windows.`
+        : `LoRAs aren't supported on this model. Model "${modelId}" runs on "${model.runtime || 'mlx_video'}".`,
       { status: 400, code: 'LORAS_REQUIRE_LTX2' },
     );
   }
@@ -626,8 +642,9 @@ const buildArgs = ({ pythonPath, modelId, model, prompt, negativePrompt, width, 
     if (lastImagePath) args.push('--last-image', lastImagePath);
     return { bin: pythonPath, args };
   }
-  const args = [
-    '-m', 'mlx_video.generate_av',
+  // Flags shared by the bare `mlx_video.generate_av` CLI and the LoRA wrapper
+  // (scripts/generate_av_lora.py forwards these untouched to generate_av.main()).
+  const flags = [
     '--prompt', prompt,
     '--height', String(height),
     '--width', String(width),
@@ -641,8 +658,8 @@ const buildArgs = ({ pythonPath, modelId, model, prompt, negativePrompt, width, 
     '--text-encoder-repo', textEncoderRepo,
     '--tiling', tiling,
   ];
-  if (negativePrompt) args.push('--negative-prompt', negativePrompt);
-  if (disableAudio) args.push('--no-audio');
+  if (negativePrompt) flags.push('--negative-prompt', negativePrompt);
+  if (disableAudio) flags.push('--no-audio');
 
   // Pick a single conditioning image and frame index. mlx_video.generate_av
   // accepts only one --image so true FFLF (both keyframes) isn't supported;
@@ -659,15 +676,26 @@ const buildArgs = ({ pythonPath, modelId, model, prompt, negativePrompt, width, 
     console.log(`⚠️ FFLF requested but mlx_video CLI only supports single-frame conditioning — last image ignored`);
   }
   if (condImage) {
-    args.push('--image', condImage);
-    if (condFrameIdx != null) args.push('--image-frame-idx', String(condFrameIdx));
+    flags.push('--image', condImage);
+    if (condFrameIdx != null) flags.push('--image-frame-idx', String(condFrameIdx));
     // --image-strength uses mask = 1.0 - strength: 1.0 preserves the source
     // latent, 0.0 fully denoises (= T2V). mlx_video's help text describes
     // this inverted. Omit when no caller value so mlx_video's default (1.0)
     // applies.
-    if (imageStrength != null) args.push('--image-strength', String(imageStrength));
+    if (imageStrength != null) flags.push('--image-strength', String(imageStrength));
   }
-  return { bin: pythonPath, args };
+
+  // LoRA renders on a capable LTX-2.x mlx_video model go through the wrapper,
+  // which merges the LoRA deltas into the transformer before running
+  // generate_av.main(). `--user-loras` carries the resolved {path,strength}
+  // pairs — the same JSON shape buildLtx2Args emits for the dgrauet runtime.
+  if (hasLoras) {
+    return {
+      bin: pythonPath,
+      args: [AV_LORA_HELPER_SCRIPT, ...flags, '--user-loras', JSON.stringify(loras.map((l) => ({ path: l.path, strength: l.strength })))],
+    };
+  }
+  return { bin: pythonPath, args: ['-m', 'mlx_video.generate_av', ...flags] };
 };
 
 // Default frame count for LTX renders, matching the 8k+1 latent-boundary

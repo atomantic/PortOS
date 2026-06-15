@@ -40,6 +40,7 @@ import {
 } from '../services/videoGen/local.js';
 import { enqueueJob, attachSseClient, cancelJob, listJobs } from '../services/mediaJobQueue/index.js';
 import { repoForModel, getTextEncoderRepo, isHfRepoId } from '../lib/mediaModels.js';
+import { videoLoraFamily } from '../lib/runners.js';
 import { inspectModelCache } from '../lib/hfCache.js';
 import { startHfDownloadStream, openSseStream } from '../lib/sseDownload.js';
 
@@ -714,14 +715,16 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
       }))
     : undefined;
 
-  // Video LoRAs are an ltx2-runtime primitive — the dgrauet pipeline fuses
-  // them via _pending_loras (see scripts/generate_ltx2.py). Reject up-front on
-  // any other runtime so a bad modelId can't enqueue a doomed job that only
-  // fails in the worker.
-  if (loras && effectiveModel && effectiveModel.runtime !== 'ltx2') {
+  // Video LoRAs fuse on two runtimes: dgrauet's `ltx2` (via the pipeline's
+  // _pending_loras hook, see scripts/generate_ltx2.py) and non-quantized
+  // LTX-2.x `mlx_video` models (merged offline by scripts/generate_av_lora.py).
+  // videoLoraFamily() returns null for everything else (wan22 / hunyuan /
+  // quantized mlx_video) — reject up-front so a bad modelId can't enqueue a
+  // doomed job that only fails in the worker.
+  if (loras && effectiveModel && !videoLoraFamily(effectiveModel)) {
     await cleanupAllStaged();
     throw new ServerError(
-      `LoRAs require an ltx2-runtime model. Model "${effectiveModelId}" runs on "${effectiveModel.runtime || 'mlx_video'}".`,
+      `LoRAs aren't supported on this model. Model "${effectiveModelId}" runs on "${effectiveModel.runtime || 'mlx_video'}" — use an LTX-2.x model (dgrauet ltx2, or the bf16 Unified Beta).`,
       { status: 400, code: 'LORAS_REQUIRE_LTX2' },
     );
   }

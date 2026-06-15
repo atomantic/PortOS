@@ -742,6 +742,23 @@ export default function VideoGen() {
     ? availableLoras.filter((l) => (l.loraCompatKey || l.runnerFamily) === loraFamily)
     : [];
 
+  // Installed LTX-video LoRAs regardless of the selected model's runtime. When
+  // the user picks an LTX-2.x model whose runtime can't fuse LoRAs (a quantized
+  // mlx_video model — loraFamily is null), the picker is correctly hidden, but
+  // silently doing so reads as a bug. Use this to explain *why* the LoRA is
+  // unavailable and point at the models that CAN run it. The `/ltx-?2/i` scope
+  // matches the server's LTX-2.x capability family (see isMlxVideoLtxLoraCapable)
+  // so the hint never fires for a non-LTX-2.x model where the advice wouldn't apply.
+  const installedVideoLoras = availableLoras.filter(
+    (l) => (l.loraCompatKey || l.runnerFamily) === VIDEO_LORA_FAMILIES.LTX_VIDEO,
+  );
+  // Gated on the quantized-mlx_video case specifically (runtime mlx_video +
+  // loraFamily null = a quantized LTX-2.x model) so the hint copy's "quantized
+  // runtime isn't supported yet" wording always matches what triggered it.
+  const showLtxLoraUnsupportedHint = !loraFamily && installedVideoLoras.length > 0
+    && currentModel?.runtime === 'mlx_video'
+    && /ltx-?2/i.test(`${currentModel?.id || ''} ${currentModel?.repo || ''} ${currentModel?.name || ''}`);
+
   // Multi-keyframe availability + validation. Keyframes are an ltx2-runtime
   // primitive (the route 400s with KEYFRAMES_REQUIRE_LTX2 otherwise), so the
   // picker only offers itself when the selected model runs on ltx2. Mirror
@@ -1528,6 +1545,15 @@ export default function VideoGen() {
                   })}
                   disabled={generating}
                 />
+              </div>
+            )}
+
+            {/* LTX model that can't fuse LoRAs (quantized mlx_video — q4/q8) with
+                compatible LoRAs on disk: explain the absence instead of hiding
+                silently, and point at the models that CAN run them. */}
+            {showLtxLoraUnsupportedHint && (
+              <div className="col-span-2 sm:col-span-3 rounded-lg border border-port-warning/40 bg-port-warning/10 px-3 py-2 text-xs text-port-warning leading-snug">
+                You have {installedVideoLoras.length} LTX video LoRA{installedVideoLoras.length === 1 ? '' : 's'} installed, but <strong className="font-semibold">{currentModel?.name}</strong> can't fuse LoRAs (its quantized <code>mlx_video</code> runtime isn't supported yet). Switch to the <strong className="font-semibold">LTX-2.3 Unified Beta</strong> (bf16) or an <strong className="font-semibold">LTX-2.3 dgrauet (Q4/Q8)</strong> model to use them.
               </div>
             )}
 
