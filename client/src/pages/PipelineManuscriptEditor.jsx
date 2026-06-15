@@ -413,11 +413,16 @@ export default function PipelineManuscriptEditor() {
       return null;
     });
     if (!result?.section) return;
+    if (result.changed === false) {
+      // Nothing was written server-side — don't flash a "saved" badge.
+      toast('Already well-formatted — nothing to clean up');
+      return;
+    }
     const content = result.section.content;
     baselineRef.current.set(`${section.issueId}:${section.stageId}`, content);
     patchSection(section.issueId, { content, versions: result.section.versions });
     setSaveState((prev) => ({ ...prev, [section.issueId]: 'saved' }));
-    toast.success(result.changed === false ? 'Already well-formatted — nothing to clean up' : 'Reformatted with AI');
+    toast.success('Reformatted with AI');
   };
 
   const revertSection = async (section, runId) => {

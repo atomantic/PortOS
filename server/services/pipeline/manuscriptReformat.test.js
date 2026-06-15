@@ -53,6 +53,25 @@ describe('reformatManuscriptText — integrity guard', () => {
       .rejects.toThrow(/changed the wording/i);
   });
 
+  it('rejects a dropped clause even on a long section (budget is a small absolute)', async () => {
+    // A long doc must not buy a bigger deletion budget — dropping "the passage"
+    // (10 skeleton chars > the 8-char total budget) is rejected regardless of size.
+    const filler = `${'word '.repeat(2000)}`;
+    const input = `Start of it. ${filler}and the passage ends here.`;
+    const output = `Start of it. ${filler}and ends here.`;
+    runStagedLLM.mockResolvedValue({ content: output, runId: 'r1' });
+    await expect(reformatManuscriptText(input, { stageId: 'prose' }))
+      .rejects.toThrow(/changed the wording/i);
+  });
+
+  it('accepts a few scattered single-char artifact deletions', async () => {
+    const input = 'A line.\n"I\n"I am here.\nAnother "A\n"A line follows.';
+    const output = 'A line.\n"I am here.\nAnother "A line follows.';
+    runStagedLLM.mockResolvedValue({ content: output, runId: 'r1' });
+    const r = await reformatManuscriptText(input, { stageId: 'prose' });
+    expect(r.text).toBe(output);
+  });
+
   it('strips a stray code fence the model wrapped the output in', async () => {
     runStagedLLM.mockResolvedValue({ content: '```\nThe dawn cycle hums.\n```', runId: 'r1' });
     const r = await reformatManuscriptText('The dawn cycle\nhums.', { stageId: 'prose' });

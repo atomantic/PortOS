@@ -363,18 +363,25 @@ const isSubsequence = (small, big) => {
   return i === small.length;
 };
 
-// Reject any reformat that altered the actual wording. The output is allowed to
-// be the input with at most a tiny budget of characters DELETED (artifact
-// removal — e.g. a duplicated drop-cap), and those deletions must form a
-// subsequence (no substitutions, no additions). Anything else — a rewritten
-// word, an inserted sentence, a dropped paragraph — fails and is discarded.
+// The most letter/digit chars a pure reformat may delete IN TOTAL. Reflow and
+// quote-reattachment delete none (skeleton is identical); the only legitimate
+// deletion is a handful of artifact glyphs — a duplicated drop-cap, a stray
+// mark. Kept a small ABSOLUTE bound (not proportional): for a subsequence the
+// net length drop IS the exact total deleted, so this alone rejects a dropped
+// clause/sentence (≥ this many chars) without any unreliable run analysis.
+const MAX_TOTAL_DELETION = 8;
+
+// Reject any reformat that altered the actual wording. The output must be the
+// input skeleton with at most MAX_TOTAL_DELETION characters DELETED, those
+// deletions forming a subsequence (no substitutions, no additions). Anything
+// else — a rewritten word, an inserted sentence, a dropped clause — fails and is
+// discarded so a caller never persists silently-rewritten prose.
 function assertWordsPreserved(before, after) {
   const a = wordSkeleton(before);
   const b = wordSkeleton(after);
   if (a === b) return;
-  const budget = Math.max(8, Math.round(a.length * 0.004));
   const shrink = a.length - b.length;
-  if (shrink >= 0 && shrink <= budget && isSubsequence(b, a)) return;
+  if (shrink >= 0 && shrink <= MAX_TOTAL_DELETION && isSubsequence(b, a)) return;
   throw makeErr(
     'AI reformat changed the wording, so it was discarded and the text is unchanged. Try again or use the plain Format button.',
     ERR_VALIDATION,
