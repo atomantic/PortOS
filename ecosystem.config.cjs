@@ -91,19 +91,15 @@ module.exports = {
       // and add `'**/data/**'` (plus `'**/node_modules'`, `'**/logs/**'`,
       // `'**/.cache/**'`, `'**/portos-stepwise-*/**'`) to `ignore_watch`.
       watch: false,
-      max_memory_restart: SERVER_MAX_MEMORY,
-      // treekill OFF: on restart/stop pm2's TreeKill walks the `ps -o pid,ppid`
-      // PARENT tree and SIGINTs every descendant — which killed multi-hour media
-      // jobs (LoRA training, video gen) that the server had spawned, at the exact
-      // second of a restart (e.g. the max_memory_restart ceiling). detached:true
-      // on those spawns is NOT enough — TreeKill keys on ppid, not process group.
-      // With treekill:false pm2 signals only the node process; its SIGTERM/SIGINT
-      // handler (server/index.js) shuts down gracefully, and the detached media
-      // children reparent to launchd/init and keep running (they're checkpointed
-      // + reconciled by the job queue on boot). kill_timeout below gives the
-      // graceful shutdown room to finish.
-      treekill: false,
-      kill_timeout: 10000
+      max_memory_restart: SERVER_MAX_MEMORY
+      // NOTE: do NOT set `treekill: false` here to protect long media jobs from
+      // restart-SIGINT. Tried 2026-06-14: pm2 then fails to reap the old node
+      // process on restart, so it lingers holding :5555 and the new instance
+      // EADDRINUSE-crash-loops. The right place to isolate a multi-hour trainer
+      // from pm2's parent-tree kill is the spawn side (double-fork / reparent to
+      // launchd so it leaves the ppid tree), NOT disabling treekill server-wide.
+      // Raising max_memory_restart (above) already removes the most common
+      // restart trigger; full isolation is tracked in PLAN.
     },
     {
       name: 'portos-cos',
