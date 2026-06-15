@@ -17,6 +17,8 @@ import CodeReviewDefaultsPanel from '../components/providers/CodeReviewDefaultsP
 
 export default function AIProviders() {
   const [providers, setProviders] = useState([]);
+  const [statuses, setStatuses] = useState({}); // runtime availability by providerId (separate from the `enabled` toggle)
+  const [recovering, setRecovering] = useState({});
   const [activeProviderId, setActiveProviderId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
@@ -67,16 +69,46 @@ export default function AIProviders() {
 
   const loadData = async () => {
     setLoading(true);
-    const [providersData, appsData, runsData] = await Promise.all([
+    const [providersData, appsData, runsData, statusData] = await Promise.all([
       api.getProviders().catch(() => ({ providers: [], activeProvider: null })),
       api.getApps().catch(() => []),
-      api.getRuns(20).catch(() => ({ runs: [] }))
+      api.getRuns(20).catch(() => ({ runs: [] })),
+      api.getProviderStatuses().catch(() => ({ providers: {} }))
     ]);
     setProviders(providersData.providers || []);
     setActiveProviderId(providersData.activeProvider);
     setApps(appsData);
     setRuns(runsData.runs || []);
+    setStatuses(statusData.providers || {});
     setLoading(false);
+  };
+
+  // Refresh just the runtime availability map (cheap) so a bench badge appears
+  // when a provider fails elsewhere and clears itself once its recovery window
+  // passes (the server expires `estimatedRecovery` on read), without a full reload.
+  const refreshStatuses = useCallback(async () => {
+    const statusData = await api.getProviderStatuses().catch(() => null);
+    if (statusData?.providers) setStatuses(statusData.providers);
+  }, []);
+
+  useEffect(() => {
+    const id = setInterval(refreshStatuses, 20000);
+    return () => clearInterval(id);
+  }, [refreshStatuses]);
+
+  // Clear a provider's bench (runtime unavailability) so the next call retries it.
+  // Note: if the underlying cause persists (e.g. an invalid model id), the very
+  // next failure re-benches it — recovery is "try again now", not "fix the cause".
+  const handleRecover = async (id) => {
+    setRecovering(prev => ({ ...prev, [id]: true }));
+    const result = await api.recoverProvider(id).catch(() => null);
+    if (result) {
+      setStatuses(prev => ({ ...prev, [id]: { ...prev[id], available: true, reason: 'ok', message: 'Provider available', timeUntilRecovery: null } }));
+      toast.success('Provider marked available — it will be retried on the next call');
+    } else {
+      toast.error('Could not clear the provider status');
+    }
+    setRecovering(prev => ({ ...prev, [id]: false }));
   };
 
   const handleSetActive = async (id) => {
@@ -419,7 +451,39 @@ export default function AIProviders() {
                       DISABLED
                     </span>
                   )}
+                  {/* Runtime availability is independent of the `enabled` toggle: an
+                      enabled provider can still be benched after a failure (usage
+                      limit, model-not-found, auth) and skipped in favor of a fallback. */}
+                  {provider.enabled && statuses[provider.id]?.available === false && (
+                    <span
+                      className="text-xs px-2 py-0.5 rounded bg-port-error/20 text-port-error"
+                      title={statuses[provider.id]?.message || ''}
+                    >
+                      UNAVAILABLE{statuses[provider.id]?.reason ? ` · ${statuses[provider.id].reason}` : ''}
+                    </span>
+                  )}
                 </div>
+
+                {provider.enabled && statuses[provider.id]?.available === false && (
+                  <div className="mt-2 text-xs rounded border border-port-error/40 bg-port-error/10 px-3 py-2 text-port-error space-y-1">
+                    <p className="break-words">
+                      <span className="font-semibold">Benched ({statuses[provider.id]?.reason || 'unknown'})</span>
+                      {statuses[provider.id]?.timeUntilRecovery ? ` — auto-retries in ${statuses[provider.id].timeUntilRecovery}` : ''}
+                      . Calls route to the fallback until then.
+                    </p>
+                    {statuses[provider.id]?.message && (
+                      <p className="break-words text-port-error/80">Why: {statuses[provider.id].message}</p>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => handleRecover(provider.id)}
+                      disabled={recovering[provider.id]}
+                      className="mt-1 px-2 py-0.5 rounded bg-port-error/20 hover:bg-port-error/30 disabled:opacity-50 text-port-error"
+                    >
+                      {recovering[provider.id] ? 'Clearing…' : 'Recover now'}
+                    </button>
+                  </div>
+                )}
 
                 <div className="mt-2 text-sm text-gray-400 space-y-1">
                   {isProcessProvider(provider) && (
