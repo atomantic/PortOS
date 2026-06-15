@@ -7,6 +7,21 @@ describe('formatManuscript — prose reflow', () => {
     expect(out).toBe('The dawn cycle hums to life.');
   });
 
+  it('joins a wrapped "I" with a space, not as a drop-cap glue', () => {
+    // "I" is a word, not a stylized drop-cap — must become "I am", never "Iam".
+    expect(formatManuscript('I\nam absolutely, definitely here.', 'prose')).toBe(
+      'I am absolutely, definitely here.',
+    );
+  });
+
+  it('joins a wrapped "A" with a space too', () => {
+    expect(formatManuscript('A\nman walked in.', 'prose')).toBe('A man walked in.');
+  });
+
+  it('still glues a genuine drop-cap (not I/A) with no space', () => {
+    expect(formatManuscript('T\nhe dawn cycle hums.', 'prose')).toBe('The dawn cycle hums.');
+  });
+
   it('de-hyphenates a word split across a wrap', () => {
     const out = formatManuscript('something approxi-\nmating daylight.', 'prose');
     expect(out).toBe('something approximating daylight.');

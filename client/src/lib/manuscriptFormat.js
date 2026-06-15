@@ -50,8 +50,12 @@ const dehyphenate = (text) => text.replace(/([A-Za-z])-\n([a-z])/g, '$1$2');
 
 // Re-attach a stylized drop-cap that landed on its own line: a line that is a
 // single uppercase letter immediately followed by a line starting lowercase.
-// "T\nhe dawn" → "The dawn". Lookahead keeps the next line's first char.
-const rejoinDropCaps = (text) => text.replace(/^([A-Z])\n(?=[a-z])/gm, '$1');
+// "T\nhe dawn" → "The dawn" (joined with NO space — it's one word). `I` and `A`
+// are excluded: they're the only single-letter English words, so a lone `I`/`A`
+// is almost always the WORD wrapped to its own line ("I\nam …"), which must
+// join WITH a space — left to reflowProse — not glue into "Iam". The rare
+// drop-cap "In"/"And" is the accepted miss.
+const rejoinDropCaps = (text) => text.replace(/^([B-HJ-Z])\n(?=[a-z])/gm, '$1');
 
 // Re-attach closing double-quotes the PDF export orphaned. Three artifacts, all
 // keyed on a `"` separated from the text it should hug. (Straight quotes only —
