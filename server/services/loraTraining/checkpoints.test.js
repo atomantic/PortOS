@@ -120,6 +120,31 @@ describe('loraTraining/checkpoints', () => {
     expect(list[1].deployed).toBe(false);
   });
 
+  it('a checkpoint whose step has no sample reports no preview, then joins one appended at its step', () => {
+    // The final/odd-step checkpoint case the auto-preview-on-promote flow targets:
+    // step 1188 isn't on the sampleEvery cadence, so it starts blank…
+    const withFinal = buildRun({
+      artifacts: {
+        checkpoints: [{ step: 1188, path: '0001188_checkpoint.zip', loss: 0.4 }],
+        samples: ['0000250_preview_image_preview_1.png'], // none at 1188
+      },
+    });
+    const before = listRunCheckpoints(withFinal).find((c) => c.step === 1188);
+    expect(before).toMatchObject({ hasPreview: false, previewUrl: null });
+
+    // …after ensureCheckpointPreview appends the step-joined sample name
+    // (`${pad7(step)}_preview_image_preview_1.png`), the join populates it.
+    const withPreview = buildRun({
+      artifacts: {
+        checkpoints: [{ step: 1188, path: '0001188_checkpoint.zip', loss: 0.4 }],
+        samples: ['0000250_preview_image_preview_1.png', '0001188_preview_image_preview_1.png'],
+      },
+    });
+    const after = listRunCheckpoints(withPreview).find((c) => c.step === 1188);
+    expect(after.hasPreview).toBe(true);
+    expect(after.previewUrl).toContain('0001188_preview_image_preview_1.png');
+  });
+
   it('resolves the latest on-disk checkpoint zip as the mflux resume point', () => {
     const latest = resolveLatestCheckpointArtifact(buildRun());
     expect(latest).toMatchObject({ step: 500 });

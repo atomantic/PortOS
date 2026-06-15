@@ -836,7 +836,87 @@ export async function promoteCheckpoint(runId, step) {
   }));
   await flipDatasetAfterRun(run, { trained: true, loraFilename: filename });
   console.log(`📌 training [${shortId(runId)}] promoted checkpoint step ${step} → ${filename}`);
+  // If the promoted checkpoint had no preview (its step didn't land on the
+  // sampleEvery cadence — most often the final step, e.g. 1188 with sampleEvery
+  // 300), render one in the BACKGROUND from the just-registered LoRA so the
+  // deployed card isn't blank. Fire-and-forget: promote stays snappy, and a
+  // render failure (OOM, missing venv, server restart) must never fail the
+  // promote — the LoRA is already deployed; the thumbnail is cosmetic.
+  if (!target.previewUrl) {
+    ensureCheckpointPreview(run, step, filename).catch((err) => {
+      console.error(`⚠️ training [${shortId(runId)}] preview render for step ${step} failed: ${err?.message}`);
+    });
+  }
   return { loraFilename: filename, step };
+}
+
+// mflux preview filename for a step (matches stepFromSampleName's mflux regex in
+// checkpoints.js, so listRunCheckpoints joins it to the checkpoint by step).
+const previewSampleName = (step) => `${String(step).padStart(7, '0')}_preview_image_preview_1.png`;
+
+/**
+ * Render a neutral-prompt preview for a promoted checkpoint that has none, in the
+ * background, and attach it to the run so the deployed-checkpoint card shows a
+ * thumbnail. Best-effort by contract: every failure path logs and returns without
+ * throwing (the caller already deployed the LoRA; this is purely cosmetic).
+ *
+ * Renders at the SAME neutral prompt + seed + dims the trainer uses for its
+ * periodic samples (so it's visually comparable to the 600/900 thumbnails), via
+ * the registered LoRA on its own 9b/4b base. Uses generateImage (writes into the
+ * gallery dir + sidecar) then copies the PNG into the run's samples dir under the
+ * step-joined name; the gallery copy is harmless and lets the user find it too.
+ */
+async function ensureCheckpointPreview(run, step, loraFilename) {
+  const runId = run.id;
+  const samplesDir = runSamplesDir(runId);
+  const dest = join(samplesDir, previewSampleName(step));
+  if (existsSync(dest)) return; // already has one (race / re-promote)
+
+  // Resolve the inference model for this LoRA's variant. The registered base is
+  // flux2-klein-<variant>; fall back to the run's baseModelId.
+  const variant = run.fluxVariant || null;
+  const models = getImageModels();
+  const modelId = (variant && models.find((m) => m.id === `flux2-klein-${variant}`)?.id)
+    || (models.find((m) => m.id === run.baseModelId)?.id)
+    || run.baseModelId;
+  if (!modelId) { console.error(`⚠️ training [${shortId(runId)}] no inference model for preview`); return; }
+
+  const settings = await getSettings();
+  const pythonPath = settings?.imageGen?.local?.pythonPath || null;
+  const prompt = run.params?.samplePrompt || `${run.triggerWord} portrait, neutral background`;
+  const seed = Number.isInteger(run.params?.seed) ? run.params.seed : 42;
+  const res = run.params?.resolution || 768;
+
+  const { generateImage } = await import('../imageGen/local.js');
+  console.log(`🖼️ training [${shortId(runId)}] rendering preview for promoted step ${step} (${modelId})`);
+  const result = await generateImage({
+    pythonPath,
+    prompt,
+    modelId,
+    width: res,
+    height: res,
+    steps: 20,
+    seed,
+    loraFilenames: [loraFilename],
+    loraScales: [1.0],
+    jobId: `lora-preview-${runId}-${step}`,
+  });
+  // generateImage writes PATHS.images/<filename> (filename = `${jobId}.png`).
+  const renderedPath = join(PATHS.images, result?.filename || `lora-preview-${runId}-${step}.png`);
+  if (!existsSync(renderedPath)) { console.error(`⚠️ training [${shortId(runId)}] preview render produced no file`); return; }
+
+  await ensureDir(samplesDir);
+  await copyFile(renderedPath, dest);
+  // Join is by step, sourced from artifacts.samples — append so listRunCheckpoints
+  // picks it up. updateRun's function form merges against the freshest record.
+  await runsDb.updateRun(runId, (current) => {
+    const samples = current.artifacts?.samples || [];
+    const name = previewSampleName(step);
+    if (samples.includes(name)) return current;
+    return { ...current, artifacts: { ...current.artifacts, samples: [...samples, name] } };
+  });
+  trainingEvents.emit('checkpoint-preview', { generationId: run.jobId || runId, runId, step });
+  console.log(`🖼️ training [${shortId(runId)}] preview attached for step ${step}`);
 }
 
 /**
