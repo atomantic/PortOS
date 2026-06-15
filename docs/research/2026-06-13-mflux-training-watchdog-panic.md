@@ -59,6 +59,45 @@ GPU driver bugs commonly present exactly this way (whole system wedges → watch
 reboot). Secondary hypotheses: thermal/power-delivery trip, or severe
 swap thrash if a run oversubscribes unified memory.
 
+## Mitigations shipped (2026-06-14, session 2) — `LORA_TRAIN_MAX_QUANT_BITS`
+
+The real unlock for training on this M5: **cap the training-base quantization so it
+never picks bf16.** `deriveMfluxMemoryConfig` mapped ≥96 GB → `quantize:null`
+(bf16), which on this box both crawled (couldn't finish one step in 14 min) and
+was the 3×-panic config. New env override `LORA_TRAIN_MAX_QUANT_BITS=8|4`
+(`server/services/loraTraining/runtimes.js`, committed) caps the top tier at
+8- or 4-bit QLoRA (frozen base quantized, LoRA weights full precision) even when
+RAM allows bf16. Unset = original behavior (no change for other installs).
+
+**Validated 2026-06-14:** with `=4`, a **9B 4-bit** run (`f7bb4518`, rank 32,
+1200 steps, seed 7) trains at **~11 s/step with only ~2.5 GB swap, box stable,
+no panic** — vs the bf16 9B attempt that stalled at step 0 with ~18 GB swap. So
+9B LoRA training is now viable on this M5 Max via 4-bit QLoRA. The resulting 9B
+LoRA applies to the "Flux 2 Klein 9B SDNQ 4-bit" inference model. 4B-4bit for
+comparison: ~3.5 s/step.
+
+This makes `LORA_TRAIN_MAX_QUANT_BITS=4` (or 8) the recommended setting for this
+machine until a macOS/mlx update fixes the bf16 driver hang. Feeds PLAN item
+`lora-training-default-base-tier-too-heavy` (which proposes making this the
+default for the ≥96 GB tier rather than an opt-in env var).
+
+## Character-LoRA fidelity findings (2026-06-14, training Freydis)
+
+Independent of the panic, two things blocked a usable Freydis LoRA — neither was
+step count alone (initial assumption was wrong):
+1. **Captions over-described invariant identity.** All 25 Codex-authored captions
+   listed her white hair / circlet / necklace / armor, so those features bound to
+   the *words*, not the trigger token `freydis_of_quaervarr`. Bare-trigger renders
+   gave a generic woman; full-descriptive renders gave correct Freydis. Fix:
+   rewrote captions to keep only the trigger + what *varies* (pose/weapon/setting).
+   PLAN: `lora-training-caption-strips-invariant-identity`.
+2. **Preview seed 42 fights the prior.** The sample prompt is the bare trigger at a
+   *fixed* seed (`runtimes.js`, `--seed`, default 42). Seed 42's base "person" is a
+   dark-skinned woman — the opposite of pale-white-haired Freydis — so previews
+   *understate* the LoRA (it must overcome that prior every sample). Seed 7's base
+   prior is a pale woman, giving honest progress samples. Lesson: the preview seed
+   should be configurable / multi-seed (request `params.seed` already overrides it).
+
 ## Mitigations shipped (2026-06-13)
 
 1. **Checkpoint crash-resilience floor** — `MFLUX_MIN_CHECKPOINTS = 4` in
