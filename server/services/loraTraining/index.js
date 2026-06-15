@@ -331,6 +331,31 @@ const flipDatasetAfterRun = (run, { trained, loraFilename = null }) => {
   }).catch((err) => console.error(`❌ dataset post-run stamp failed: ${err?.message}`));
 };
 
+// When a trained LoRA artifact is deleted (DELETE /runs/:id?deleteLora=true),
+// reset the owning dataset back to the untrained baseline so the training list
+// stops advertising the subject as trained against a now-deleted file. Reset
+// ONLY when the dataset still points at THIS run's adapter: same character
+// (reuses flipDatasetAfterRun's ownership guard) AND the dataset's current
+// `training.loraFilename` is exactly the file being deleted. A dataset that was
+// retrained (different loraFilename) or reassigned to another character must
+// keep its current state.
+export const clearDatasetForDeletedLora = (run, deletedFilename) => {
+  const datasetId = run?.datasetId;
+  if (!datasetId || !deletedFilename) return Promise.resolve();
+  const runEntryId = run?.character?.entryId || null;
+  const runUniverseId = run?.character?.universeId || null;
+  const runEntryKind = run?.character?.entryKind || 'characters';
+  return updateDataset(datasetId, (current) => {
+    const mismatch = runEntryId && (
+      current.character?.entryId !== runEntryId
+      || (runUniverseId && current.character?.universeId !== runUniverseId)
+      || ((current.character?.entryKind || 'characters') !== runEntryKind)
+    );
+    if (mismatch || current.training?.loraFilename !== deletedFilename) return null;
+    return { ...current, status: 'draft', training: {} };
+  }).catch((err) => console.error(`❌ dataset reset after LoRA delete failed: ${err?.message}`));
+};
+
 /**
  * Queue-worker entry — `mediaJobQueue.runJob` calls this for kind
  * 'training'. Resolves the trainer binary + args, spawns, parses the line

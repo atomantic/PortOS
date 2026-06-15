@@ -17,6 +17,7 @@ import { resolveFlux2Python, isFlux2VenvHealthy } from '../lib/pythonSetup.js';
 import { getSettings } from '../services/settings.js';
 import { attachSseClient, cancelJob } from '../services/mediaJobQueue/index.js';
 import {
+  clearDatasetForDeletedLora,
   deleteRun,
   getRunRequired,
   isMfluxTrainAvailable,
@@ -116,6 +117,9 @@ router.delete('/runs/:id', asyncHandler(async (req, res) => {
     await deleteLora(run.output.loraFilename).catch((err) => {
       console.log(`⚠️ trained LoRA delete skipped: ${err?.message}`);
     });
+    // Reset the owning dataset off 'trained' so it can't keep advertising the
+    // subject as trained against the file we just deleted.
+    await clearDatasetForDeletedLora(run, run.output.loraFilename);
   }
   res.json(await deleteRun(run.id));
 }));
