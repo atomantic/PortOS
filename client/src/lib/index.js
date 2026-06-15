@@ -48,6 +48,7 @@ export * from './joinInfluenceList.js';
 export * from './localLlmTargetKey.js';
 export * from './loopbackHost.js';
 export * from './manuscriptAnchors.js';
+export * from './manuscriptFormat.js';
 export * from './mediaNavigation.js';
 export * from './mediaSearch.js';
 export * from './sameJsonShape.js';

@@ -32,6 +32,7 @@ import { Link, useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, Loader2, Sparkles, FileText, Star, ClipboardCheck, Layers, PencilLine, BookOpen, GitCompare, X,
 } from 'lucide-react';
+import { formatManuscript } from '../lib/manuscriptFormat';
 import toast from '../components/ui/Toast';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import { usePipelineProgress } from '../hooks/usePipelineProgress';
@@ -355,14 +356,14 @@ export default function PipelineManuscriptEditor() {
 
   const setSectionContent = (issueId, content) => patchSection(issueId, { content });
 
-  const saveSection = async (section) => {
+  const saveSectionContent = async (section, content) => {
     const key = `${section.issueId}:${section.stageId}`;
-    if (baselineRef.current.get(key) === section.content) return;
+    if (baselineRef.current.get(key) === content) return;
     setSaveState((prev) => ({ ...prev, [section.issueId]: 'saving' }));
     const result = await savePipelineManuscriptSection(
       seriesId,
       section.issueId,
-      { stageId: section.stageId, output: section.content },
+      { stageId: section.stageId, output: content },
       { silent: true },
     ).catch((err) => {
       toast.error(err.message || 'Failed to save manuscript edit');
@@ -373,6 +374,28 @@ export default function PipelineManuscriptEditor() {
       patchSection(section.issueId, { versions: result.section.versions });
     }
     setSaveState((prev) => ({ ...prev, [section.issueId]: result ? 'saved' : undefined }));
+    return result;
+  };
+
+  const saveSection = (section) => saveSectionContent(section, section.content);
+
+  // Clean up paste artifacts (PDF drop-caps, hyphen splits, hard-wrapped lines)
+  // and persist. Prose reflows into paragraphs; comic/teleplay keep their
+  // structural line breaks. The prior text is snapshotted server-side, so the
+  // History ▸ Revert affordance undoes it — no confirm needed.
+  const formatSection = async (section) => {
+    const current = section.content || '';
+    const formatted = formatManuscript(current, section.stageId);
+    if (formatted === current) {
+      toast('Already well-formatted — nothing to clean up');
+      return;
+    }
+    setSectionContent(section.issueId, formatted);
+    // Only claim success once the save lands — saveSectionContent swallows its
+    // own error (toasts "Failed to save…") and resolves null, so an
+    // unconditional success toast would stack a green toast on the red one.
+    const saved = await saveSectionContent(section, formatted);
+    if (saved) toast.success('Formatting cleaned up');
   };
 
   const revertSection = async (section, runId) => {
@@ -647,6 +670,7 @@ export default function PipelineManuscriptEditor() {
                   onCloseComment: () => setOpenCommentId(null),
                   onContentChange: (content) => setSectionContent(section.issueId, content),
                   onBlurSave: () => saveSection(section),
+                  onFormat: () => formatSection(section),
                   onRevert: (runId) => revertSection(section, runId),
                   registerRef: registerSectionRef(section.number),
                   commentCardProps,

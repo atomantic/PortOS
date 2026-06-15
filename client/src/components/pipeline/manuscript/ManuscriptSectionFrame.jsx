@@ -7,8 +7,9 @@
  */
 
 import { useState } from 'react';
-import { Loader2, History, RotateCcw } from 'lucide-react';
+import { Loader2, History, RotateCcw, WandSparkles } from 'lucide-react';
 import { timeAgo } from '../../../utils/formatters';
+import { REFLOW_STAGES } from '../../../lib/manuscriptFormat';
 import { STAGE_LABEL } from './constants';
 
 function SaveBadge({ state }) {
@@ -17,9 +18,10 @@ function SaveBadge({ state }) {
   return null;
 }
 
-export default function ManuscriptSectionFrame({ section, saveState, onRevert, headerExtra, registerRef, children }) {
+export default function ManuscriptSectionFrame({ section, saveState, onRevert, onFormat, headerExtra, registerRef, children }) {
   const [showVersions, setShowVersions] = useState(false);
   const [revertingId, setRevertingId] = useState(null);
+  const [formatting, setFormatting] = useState(false);
   const versions = section.versions || [];
 
   const revert = async (runId) => {
@@ -27,6 +29,20 @@ export default function ManuscriptSectionFrame({ section, saveState, onRevert, h
     await onRevert(runId);
     setRevertingId(null);
   };
+
+  const format = async () => {
+    setFormatting(true);
+    try {
+      await onFormat();
+    } finally {
+      setFormatting(false);
+    }
+  };
+
+  // Prose reflows into paragraphs; scripts only get safe artifact cleanup.
+  const formatTitle = REFLOW_STAGES.has(section.stageId)
+    ? 'Clean up formatting — fix pasted-PDF artifacts (drop-caps, hyphen splits) and reflow hard-wrapped lines into paragraphs'
+    : 'Clean up formatting — fix pasted-PDF artifacts (drop-caps, hyphen splits, stray blank lines) while keeping the script\'s line breaks';
 
   return (
     <article ref={registerRef} className="space-y-1.5">
@@ -36,6 +52,25 @@ export default function ManuscriptSectionFrame({ section, saveState, onRevert, h
           <span className="ml-2 text-[10px] uppercase tracking-wider text-gray-500">{STAGE_LABEL[section.stageId] || section.stageId}</span>
         </h2>
         <div className="flex items-center gap-2">
+          {onFormat ? (
+            <button
+              type="button"
+              // Don't steal focus from an active section textarea: a plain click
+              // would blur it first, firing onBlurSave with the PRE-format text,
+              // and that save can land after the format save (HTTP order isn't
+              // guaranteed), persisting stale content. Preventing the blur means
+              // only the format save runs — and the controlled textarea has
+              // already written every keystroke to state, so no edits are lost.
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={format}
+              disabled={formatting}
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] border border-port-border text-gray-300 hover:text-white hover:border-port-accent/40 disabled:opacity-40"
+              title={formatTitle}
+            >
+              {formatting ? <Loader2 size={11} className="animate-spin" /> : <WandSparkles size={11} />}
+              Format
+            </button>
+          ) : null}
           {headerExtra}
           <SaveBadge state={saveState} />
           {versions.length > 0 ? (
