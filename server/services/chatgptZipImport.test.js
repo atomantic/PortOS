@@ -74,6 +74,24 @@ describe('chatgptZipImport service', () => {
     });
   });
 
+  describe('extFromName (fallback extension allowlist)', () => {
+    it('accepts inert document/media extensions from the friendly name', async () => {
+      const { extFromName } = (await import('./chatgptZipImport.js')).__test;
+      expect(extFromName('photo.png')).toBe('.png');
+      expect(extFromName('report.pdf')).toBe('.pdf');
+      expect(extFromName('clip.WAV')).toBe('.wav');
+      expect(extFromName('data.csv')).toBe('.csv');
+    });
+    it('rejects active-content extensions so the served file can never be executable', async () => {
+      const { extFromName } = (await import('./chatgptZipImport.js')).__test;
+      // These must fall through to null → caller writes `.bin` (octet-stream).
+      for (const evil of ['x.html', 'x.htm', 'x.svg', 'x.xml', 'x.js', 'x.mjs', 'x.xhtml']) {
+        expect(extFromName(evil)).toBe(null);
+      }
+      expect(extFromName('noext')).toBe(null);
+    });
+  });
+
   describe('extractChatgptZip', () => {
     it('extracts conversation shards + assets with sniffed extensions and friendly names', async () => {
       const zipPath = await writeZip([
@@ -181,14 +199,28 @@ describe('chatgptZipImport service', () => {
       vi.resetModules();
     });
 
-    it('rejects a ZIP with no conversation shards', async () => {
+    it('rejects a ZIP with no conversation shards and cleans up extracted assets', async () => {
+      const { vi } = await import('vitest');
+      vi.resetModules();
+      const ASSET_DIR = join(TMP, 'assets-noshards');
+      vi.doMock('../lib/fileUtils.js', async () => {
+        const actual = await vi.importActual('../lib/fileUtils.js');
+        return { ...actual, PATHS: { ...actual.PATHS, brainImportAssets: ASSET_DIR } };
+      });
+      const { importChatgptZip: run } = await import('./chatgptZipImport.js');
+
       const zipPath = await writeZip([
         ['export_manifest.json', JSON.stringify({ export_files: [] })],
         ['file-IMG.dat', PNG],
       ]);
-      const result = await importChatgptZip(zipPath, {});
+      const result = await run(zipPath, {});
       expect(result.ok).toBe(false);
       expect(result.error).toMatch(/no conversations/i);
+      // The asset was extracted before the no-shards check — it MUST be cleaned
+      // up so a bad upload doesn't leave orphaned files under the served dir.
+      const leftover = await readdir(ASSET_DIR).catch(() => []);
+      expect(leftover).toEqual([]);
+      vi.resetModules();
     });
   });
 });

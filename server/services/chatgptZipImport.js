@@ -71,10 +71,28 @@ const sniffExtension = (buf) => {
   return null;
 };
 
+// Extensions we'll trust from the export-controlled friendly name when magic-
+// byte sniffing fails. These are inert document/media types the static mount
+// serves harmlessly. Active-content types (.html/.svg/.xml/.js/...) are
+// DELIBERATELY excluded: an attachment named `x.html` would otherwise be
+// written under /data/brain-imports/ and served inline with an executable
+// content type, and the viewer links to those same-origin assets — clicking
+// one would run script in PortOS's origin. Anything not on this list falls
+// back to `.bin` (served as application/octet-stream — download, never inline).
+const INERT_FALLBACK_EXTS = new Set([
+  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.ico',
+  '.pdf', '.wav', '.mp3', '.m4a', '.ogg', '.mp4', '.webm', '.mov',
+  '.txt', '.md', '.csv', '.json',
+]);
+
 // Friendly-name → extension fallback when magic-byte sniffing comes up empty.
+// Returns null for anything not on the inert allowlist (caller uses `.bin`),
+// so an export can never steer the served extension to an active-content type.
 const extFromName = (name) => {
   const m = String(name || '').match(/\.([a-z0-9]{1,5})$/i);
-  return m ? `.${m[1].toLowerCase()}` : null;
+  if (!m) return null;
+  const ext = `.${m[1].toLowerCase()}`;
+  return INERT_FALLBACK_EXTS.has(ext) ? ext : null;
 };
 
 const IS_DAT = (path) => path.endsWith('.dat');
@@ -231,21 +249,38 @@ export function makeAssetResolver(assets) {
   };
 }
 
+// Remove the asset files extractChatgptZip() wrote to the served dir. Called on
+// any FAILED import path: extraction writes assets to `/data/brain-imports/`
+// before conversations are validated, so a ZIP with assets but no valid
+// conversation shards (corrupt/wrong upload) would otherwise leave orphaned
+// served files behind, and repeated bad uploads could fill the disk.
+async function cleanupExtractedAssets(assets, assetDir = PATHS.brainImportAssets) {
+  await Promise.all(
+    [...assets.values()].map((a) => unlink(`${assetDir}/${a.file}`).catch(() => {}))
+  );
+}
+
 /**
  * Full ZIP-import pipeline: extract → resolve assets → parse → import.
  * `zipPath` is a temp file (the streamed multipart upload); the caller owns
  * unlinking it. Returns the `importConversations` result augmented with asset
- * stats, plus the parsed preview summary.
+ * stats, plus the parsed preview summary. On any failure the extracted assets
+ * are removed so a bad upload doesn't leave orphaned files under the served dir.
  */
 export async function importChatgptZip(zipPath, { tags, skipEmpty } = {}) {
   const { conversationFiles, assets, stats } = await extractChatgptZip(zipPath);
+
   if (conversationFiles.length === 0) {
+    await cleanupExtractedAssets(assets);
     return { ok: false, error: 'No conversations*.json files found in the ZIP. Is this a ChatGPT data export?' };
   }
 
   const assetResolver = makeAssetResolver(assets);
   const parsed = parseExport({ conversationFiles }, { assetResolver });
-  if (!parsed.ok) return parsed;
+  if (!parsed.ok) {
+    await cleanupExtractedAssets(assets);
+    return parsed;
+  }
 
   const result = await importConversations(parsed, { tags, skipEmpty });
   return {
@@ -255,4 +290,4 @@ export async function importChatgptZip(zipPath, { tags, skipEmpty } = {}) {
   };
 }
 
-export const __test = { sniffExtension, extFromName, datAssetId, makeAssetResolver };
+export const __test = { sniffExtension, extFromName, datAssetId, makeAssetResolver, cleanupExtractedAssets };
