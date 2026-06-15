@@ -26,12 +26,31 @@ export const VIDEO_LORA_FAMILIES = Object.freeze({
 const VIDEO_LORA_FAMILY_SET = new Set(Object.values(VIDEO_LORA_FAMILIES));
 export const isVideoLoraFamily = (family) => VIDEO_LORA_FAMILY_SET.has(family);
 
-// Map a video model (carries `runtime`, not `runner`) to its LoRA family. Only
-// the dgrauet `ltx2` runtime fuses arbitrary user LoRAs today; everything else
-// returns null so the VideoGen picker hides itself. Mirror of
-// server/lib/runners.js#videoLoraFamily.
+// A LoRA-quantization marker (`q4` / `q8`) in a model's id/repo/name, bounded
+// so it doesn't match inside unrelated tokens. Mirror of server/lib/runners.js.
+const QUANTIZED_LTX_RE = /(?:^|[-_/\s])q(?:4|8)(?:[-_./\s]|$)/i;
+
+// True when an mlx_video-runtime model is a non-quantized LTX-2.x model whose
+// LoRAs PortOS can fuse offline (scripts/generate_av_lora.py merges the deltas
+// into the transformer before generation). Excludes quantized q4/q8 variants
+// (bf16-only scope) and the Windows LTX-Video 0.9.5 model. Mirror of
+// server/lib/runners.js#isMlxVideoLtxLoraCapable.
+export const isMlxVideoLtxLoraCapable = (model) => {
+  if (model?.runtime !== 'mlx_video') return false;
+  const hay = `${model?.id || ''} ${model?.repo || ''} ${model?.name || ''}`;
+  if (!/ltx-?2/i.test(hay)) return false;
+  if (QUANTIZED_LTX_RE.test(hay)) return false;
+  return true;
+};
+
+// Map a video model (carries `runtime`, not `runner`) to its LoRA family. Both
+// the dgrauet `ltx2` runtime and non-quantized LTX-2.x `mlx_video` models fuse
+// user LoRAs; everything else returns null so the VideoGen picker hides itself.
+// Mirror of server/lib/runners.js#videoLoraFamily.
 export const videoLoraFamily = (model) =>
-  model?.runtime === 'ltx2' ? VIDEO_LORA_FAMILIES.LTX_VIDEO : null;
+  (model?.runtime === 'ltx2' || isMlxVideoLtxLoraCapable(model))
+    ? VIDEO_LORA_FAMILIES.LTX_VIDEO
+    : null;
 
 // FLUX.2 Klein ships in two sizes with different transformer hidden dims (4B =
 // 3072, 9B = 4096), so a LoRA trained for one can't load on the other. The

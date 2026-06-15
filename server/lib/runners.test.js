@@ -3,7 +3,7 @@ import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
-import { RUNNER_FAMILIES, VIDEO_LORA_FAMILIES, videoLoraFamily, isMflux, isFlux2, isZImage, isErnie, isHiDream, isQwen, flux2VariantFromModel, loraCompatKey, composeCompatKey } from './runners.js';
+import { RUNNER_FAMILIES, VIDEO_LORA_FAMILIES, videoLoraFamily, isMlxVideoLtxLoraCapable, isMflux, isFlux2, isZImage, isErnie, isHiDream, isQwen, flux2VariantFromModel, loraCompatKey, composeCompatKey } from './runners.js';
 
 const __dirname_self = dirname(fileURLToPath(import.meta.url));
 const CLIENT_MIRROR_PATH = join(__dirname_self, '..', '..', 'client', 'src', 'lib', 'runnerFamilies.js');
@@ -55,13 +55,35 @@ describe('VIDEO_LORA_FAMILIES / videoLoraFamily', () => {
     expect(Object.isFrozen(VIDEO_LORA_FAMILIES)).toBe(true);
   });
 
-  it('maps only the ltx2 runtime to a LoRA family', () => {
+  it('maps the ltx2 runtime + non-quantized LTX-2.x mlx_video models to a LoRA family', () => {
     expect(videoLoraFamily({ runtime: 'ltx2' })).toBe('ltx-video');
+    // bare mlx_video (no LTX-2.x identity) stays null
     expect(videoLoraFamily({ runtime: 'mlx_video' })).toBe(null);
+    // the bf16 Unified Beta — now LoRA-capable
+    expect(videoLoraFamily({ runtime: 'mlx_video', id: 'ltx23_unified', repo: 'notapalindrome/ltx23-mlx-av', name: 'LTX-2.3 Unified Beta' })).toBe('ltx-video');
+    expect(videoLoraFamily({ runtime: 'mlx_video', id: 'ltx2_unified', name: 'LTX-2 Unified' })).toBe('ltx-video');
+    // quantized variants are out of scope → null
+    expect(videoLoraFamily({ runtime: 'mlx_video', id: 'ltx23_distilled_q4', repo: 'notapalindrome/ltx23-mlx-av-q4', name: 'LTX-2.3 Distilled Q4' })).toBe(null);
     expect(videoLoraFamily({ runtime: 'wan22' })).toBe(null);
     expect(videoLoraFamily({ runtime: 'hunyuan' })).toBe(null);
     expect(videoLoraFamily({})).toBe(null);
     expect(videoLoraFamily(null)).toBe(null);
+  });
+
+  it('isMlxVideoLtxLoraCapable gates on runtime + LTX-2.x + non-quantized', () => {
+    // capable: bf16 LTX-2.x mlx_video
+    expect(isMlxVideoLtxLoraCapable({ runtime: 'mlx_video', name: 'LTX-2.3 Unified Beta' })).toBe(true);
+    expect(isMlxVideoLtxLoraCapable({ runtime: 'mlx_video', repo: 'notapalindrome/ltx2-mlx-av' })).toBe(true);
+    // not capable: quantized (q4/q8 marker bounded so it doesn't match mid-token)
+    expect(isMlxVideoLtxLoraCapable({ runtime: 'mlx_video', name: 'LTX-2.3 Distilled Q4 (~22 GB)' })).toBe(false);
+    expect(isMlxVideoLtxLoraCapable({ runtime: 'mlx_video', repo: 'notapalindrome/ltx23-mlx-av-q8' })).toBe(false);
+    // not capable: wrong runtime
+    expect(isMlxVideoLtxLoraCapable({ runtime: 'ltx2', name: 'LTX-2.3 dgrauet Q4' })).toBe(false);
+    // not capable: the Windows LTX-Video 0.9.5 model (no LTX-2.x marker)
+    expect(isMlxVideoLtxLoraCapable({ runtime: 'mlx_video', id: 'ltx_video', name: 'LTX-Video 0.9.5' })).toBe(false);
+    // not capable: non-LTX mlx_video
+    expect(isMlxVideoLtxLoraCapable({ runtime: 'mlx_video' })).toBe(false);
+    expect(isMlxVideoLtxLoraCapable(null)).toBe(false);
   });
 
   it('composeCompatKey leaves the ltx-video family bare (no variant)', () => {
@@ -69,10 +91,11 @@ describe('VIDEO_LORA_FAMILIES / videoLoraFamily', () => {
     expect(composeCompatKey('ltx-video', '9b')).toBe('ltx-video');
   });
 
-  it('client mirror carries the video family + helper', () => {
+  it('client mirror carries the video family + helpers', () => {
     const text = readFileSync(CLIENT_MIRROR_PATH, 'utf-8');
     expect(text).toMatch(/LTX_VIDEO:\s*'ltx-video'/);
     expect(text).toMatch(/export const videoLoraFamily/);
+    expect(text).toMatch(/export const isMlxVideoLtxLoraCapable/);
   });
 });
 
