@@ -107,6 +107,27 @@ describe('formatManuscript — orphaned closing quotes (prose)', () => {
     expect(formatManuscript(clean, 'prose')).toBe(clean);
   });
 
+  it('leaves an opening quote whose dialogue wrapped to the next line intact', () => {
+    // `said, "` ends a line because the OPENING quote wrapped — the space sits
+    // after a comma, not a sentence-ender, so it must not be eaten like a stray
+    // space before a closing quote.
+    const input = 'Maggie said, "\nGood morning.';
+    expect(formatManuscript(input, 'prose')).toBe('Maggie said, "\nGood morning.');
+  });
+
+  it('is idempotent over dirty quote inputs (re-running format = running once)', () => {
+    const cases = [
+      'A line of prose.\n"\n— Author',          // lone closing quote
+      'Some text.\n\n"\n— Author',              // lone closing quote after a blank line
+      '"Good morning,\n" I say, and continue.', // wrapped closing quote
+      '"You look stable. "',                    // stray space before closing quote
+    ];
+    for (const dirty of cases) {
+      const once = formatManuscript(dirty, 'prose');
+      expect(formatManuscript(once, 'prose')).toBe(once);
+    }
+  });
+
   it('cleans the full pasted epigraph + dialogue block end to end', () => {
     const input = [
       'Chapter 1: Anomalous Readings',

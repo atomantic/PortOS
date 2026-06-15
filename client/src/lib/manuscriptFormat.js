@@ -58,16 +58,27 @@ const rejoinDropCaps = (text) => text.replace(/^([A-Z])\n(?=[a-z])/gm, '$1');
 // a closing quote is one preceded by text / whitespace, never one immediately
 // followed by a word, which is how an opening quote reads.)
 const reattachQuotes = (text) => text
-  // A `"` alone on its own line collapses up onto the previous line:
+  // A `"` alone on its own line collapses up onto the previous NON-BLANK line.
+  // The `(\S)` anchor both keeps the quote off a blank line and makes the pass
+  // idempotent — without it a quote sitting after a blank line would hop one
+  // line closer per run instead of stabilizing.
   //   …diagnostics.\n"\n— Maggie  →  …diagnostics."\n— Maggie
-  .replace(/\n[ \t]*"[ \t]*(?=\n|$)/g, '"')
+  .replace(/(\S)\n[ \t]*"[ \t]*(?=\n|$)/g, '$1"')
   // A `"` that wrapped to the START of the next line, followed by more text,
   // hugs the previous line instead (no inserted space — it's a closing quote):
   //   Panel Seven,\n" I say  →  Panel Seven," I say
+  // Accepted miss: a non-standard opening quote written with a space after it
+  // at line start (`\n" Wait`) is pulled up too; standard opening quotes hug
+  // their word (`"Wait`) and are untouched. Not worth tightening — the obvious
+  // guard (skip when the previous line ends in terminal punctuation) would
+  // regress the common closing-quote-after-a-sentence case (`gone.\n" she`).
   .replace(/\n[ \t]*"(?=[ \t]+\S)/g, '"')
-  // A stray space before a closing `"` at end of line:
+  // A stray space before a closing `"` at end of line — but only after
+  // sentence-terminating punctuation, the real "stray space" shape. Gating on
+  // [.!?] leaves an OPENING quote whose dialogue wrapped (`said, "\nGood`)
+  // alone, since it sits after a comma, not a sentence-ender.
   //   relationships. "  →  relationships."
-  .replace(/[ \t]+"(?=[ \t]*$)/gm, '"');
+  .replace(/([.!?])[ \t]+"(?=[ \t]*$)/gm, '$1"');
 
 // Collapse 3+ consecutive newlines to a single blank line, then trim the ends.
 const tidyBlankLines = (text) => text.replace(/\n{3,}/g, '\n\n').trim();
