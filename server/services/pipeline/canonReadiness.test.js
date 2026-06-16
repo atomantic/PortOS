@@ -104,6 +104,25 @@ describe('checkIssueCanonReadiness (matches the visual source)', () => {
     expect(report.none.map((n) => n.name)).toContain('Aria');
   });
 
+  it('does not flag a character named only in dialogue body (not drawn)', async () => {
+    canon = { characters: [
+      { id: 'c1', name: 'Maggie', physicalDescription: '' },
+      { id: 'c2', name: 'Kai', physicalDescription: '' },
+    ], places: [], objects: [] };
+    const issueId = await seedIssue({ comicScript: 'PAGE 1\nPANEL 1\nMaggie sits alone at her terminal.\nMAGGIE: Kai called about the backdoor.' });
+    const report = await checkIssueCanonReadiness(issueId);
+    const names = report.none.map((n) => n.name);
+    expect(names).toContain('Maggie'); // drawn (in action + speaks) and undescribed
+    expect(names).not.toContain('Kai'); // only named inside dialogue body → not drawn
+  });
+
+  it('flags a character who speaks a line (drawn) when undescribed', async () => {
+    canon = { characters: [{ id: 'c1', name: 'Kai', physicalDescription: '' }], places: [], objects: [] };
+    const issueId = await seedIssue({ comicScript: 'PAGE 1\nPANEL 1\nTwo figures in shadow.\nKAI: I built it.' });
+    const report = await checkIssueCanonReadiness(issueId);
+    expect(report.none.map((n) => n.name)).toContain('Kai');
+  });
+
   it('does NOT flag an off-page character (in prose only, not in panels)', async () => {
     // Aria appears only in prose narration, never in the comic-script panels.
     canon = { characters: [{ id: 'c1', name: 'Aria', physicalDescription: '' }], places: [], objects: [] };

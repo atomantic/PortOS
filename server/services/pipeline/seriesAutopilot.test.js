@@ -432,6 +432,16 @@ describe('autopilot conductor', () => {
     expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('complete');
   });
 
+  it('pauses visual draft (no art) when the comic script does not parse into pages', async () => {
+    const { seriesId } = await seedComplete({ script: 'just prose, no comic pages here' });
+    await autopilot.startSeriesAutopilot(seriesId, { includeVisual: true });
+    await waitFor(runFinished(seriesId));
+    const last = autopilot.__testing.runs.get(seriesId)?.lastPayload;
+    expect(last?.type).toBe('paused');
+    expect(last?.scope).toBe('visualDraft');
+    expect(visualSpies.enqueueComicCover).not.toHaveBeenCalled();
+  });
+
   it('does not render visuals when includeVisual is false', async () => {
     const { seriesId } = await seedComplete();
     await autopilot.startSeriesAutopilot(seriesId, { includeVisual: false });
