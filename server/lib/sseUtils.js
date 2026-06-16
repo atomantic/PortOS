@@ -2,6 +2,13 @@
 // videoGen/local.js. Both providers attach a list of `res` clients to a
 // per-jobId record and broadcast diffuser progress as SSE frames; this module
 // keeps the wire format and the response headers in one place.
+//
+// `createSseRunner` (bottom of file) layers a run-lifecycle on top of these
+// primitives for the pipeline batch runners (manuscript completeness, editorial
+// analysis, editorial checks) that all share an identical in-memory `runs` map +
+// fire-and-forget coordinator shape.
+
+import { randomUUID } from 'crypto';
 
 // Filters Python child noise (HF/torch/bitsandbytes/xformers warnings, deprecation
 // notices, etc.) that would otherwise drown the user's view of real progress.
@@ -72,3 +79,112 @@ export const closeJobAfterDelay = (jobs, jobId, delay = SSE_CLEANUP_DELAY_MS, ex
     jobs.delete(jobId);
   }, delay);
 };
+
+// ---------------------------------------------------------------------------
+// createSseRunner — shared batch-runner lifecycle for the pipeline runners.
+// ---------------------------------------------------------------------------
+//
+// The manuscript-completeness, editorial-analysis, and editorial-checks runners
+// each kept a near-identical ~100-LOC block: a `runs` Map keyed by seriesId, a
+// `scheduleCleanup` that lingers a finished run for terminal-frame replay (with
+// an identity guard so a restart isn't clobbered by the old run's timer), an
+// `attachClient`/`cancel`/`isActive` trio, and a `start` that guards against a
+// duplicate in-flight run, mints a runId + AbortController, and drives the work
+// inside a fire-and-forget IIFE whose catch/finally emit `error` and schedule
+// cleanup. This factory owns all of that so a fix to the replay/cancel/cleanup
+// semantics can't drift between the three callers.
+//
+// The caller supplies only the per-run `work({ runId, signal, record, broadcast })`
+// async function — it owns its own `start`/`complete`/`canceled` frames and any
+// seeding; the factory owns the `error` frame, `finished` flag, and cleanup.
+//
+// `logLabel` is interpolated into the failure log (`❌ <logLabel> failed — …`).
+//
+// Returns `{ runs, isActive, attachClient, cancel, start }`. `runs` is exposed
+// so a module can re-export it as `__testing.runs`.
+export function createSseRunner({ logLabel = 'sse run' } = {}) {
+  // runs: Map<key, { runId, clients[], lastPayload, cancelRequested, finished, cleanupTimer, startedAt, abort }>
+  // A finished run lingers in the map for SSE_CLEANUP_DELAY_MS so late-attaching
+  // clients can replay its terminal frame — but `finished` lets `isActive` and
+  // the restart guard treat it as done, so an immediate re-run isn't swallowed.
+  const runs = new Map();
+
+  // Hold a finished run open briefly for terminal-frame replay, then evict it —
+  // but only if THIS record is still the one mapped, so a restart that replaced
+  // it within the window isn't clobbered by the prior run's timer.
+  const scheduleCleanup = (key, record) => {
+    record.cleanupTimer = setTimeout(() => {
+      if (runs.get(key) !== record) return;
+      for (const c of record.clients) c.end();
+      runs.delete(key);
+    }, SSE_CLEANUP_DELAY_MS);
+  };
+
+  const isActive = (key) => {
+    const run = runs.get(key);
+    return !!run && !run.finished;
+  };
+
+  const attachClient = (key, res) => attachSseClient(runs, key, res);
+
+  const cancel = (key) => {
+    const run = runs.get(key);
+    if (!run) return false;
+    run.cancelRequested = true;
+    run.abort?.abort();
+    return true;
+  };
+
+  // Kick off a run for `key`. Re-calling while a run is in flight resolves to the
+  // existing runId (no second coordinator). `work` runs inside the IIFE below.
+  const start = (key, work) => {
+    const existing = runs.get(key);
+    if (existing && !existing.finished) {
+      return { runId: existing.runId, alreadyRunning: true };
+    }
+    if (existing) {
+      // A finished run still in its replay window — cancel its pending eviction
+      // and drop its replay clients so this fresh run fully replaces it.
+      if (existing.cleanupTimer) clearTimeout(existing.cleanupTimer);
+      for (const c of existing.clients) c.end();
+    }
+    const runId = randomUUID();
+    const abort = new AbortController();
+    const record = {
+      runId,
+      clients: [],
+      lastPayload: null,
+      cancelRequested: false,
+      finished: false,
+      cleanupTimer: null,
+      startedAt: new Date().toISOString(),
+      abort,
+    };
+    runs.set(key, record);
+
+    const broadcast = (payload) => {
+      const run = runs.get(key);
+      if (!run) return;
+      broadcastSse(run, payload);
+    };
+
+    // Fire-and-forget coordinator. The try/catch is the permitted boundary use:
+    // an unhandled rejection here would crash the process on Node ≥15.
+    (async () => {
+      try {
+        await work({ runId, signal: abort.signal, record, broadcast });
+      } catch (err) {
+        const message = (err?.message || String(err)).slice(0, 1000);
+        console.error(`❌ ${logLabel} failed — series=${String(key).slice(0, 12)} ${message}`);
+        broadcast({ type: 'error', runId, error: message, failedAt: new Date().toISOString() });
+      } finally {
+        record.finished = true;
+        scheduleCleanup(key, record);
+      }
+    })();
+
+    return { runId, alreadyRunning: false };
+  };
+
+  return { runs, isActive, attachClient, cancel, start };
+}

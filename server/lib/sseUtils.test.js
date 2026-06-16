@@ -4,7 +4,8 @@ import {
   SSE_CLEANUP_DELAY_MS,
   broadcastSse,
   attachSseClient,
-  closeJobAfterDelay
+  closeJobAfterDelay,
+  createSseRunner
 } from './sseUtils.js';
 
 const makeRes = () => {
@@ -181,5 +182,125 @@ describe('closeJobAfterDelay', () => {
     vi.advanceTimersByTime(100);
     expect(job.clients[0].end).toHaveBeenCalled();
     expect(jobs.has('j1')).toBe(false);
+  });
+});
+
+describe('createSseRunner', () => {
+  // Flush the microtask queue enough times for the fire-and-forget IIFE
+  // (try → await work → finally) to settle. Real promises are not faked even
+  // when timers are.
+  const flush = async () => {
+    for (let i = 0; i < 5; i += 1) await Promise.resolve();
+  };
+  // A never-settling promise keeps a run "in flight" for the duration of a test
+  // without leaking a pending timer.
+  const pending = () => new Promise(() => {});
+
+  it('start returns a runId, registers the run, and reports it active', () => {
+    const runner = createSseRunner({ logLabel: 'test' });
+    const { runId, alreadyRunning } = runner.start('k1', () => pending());
+
+    expect(typeof runId).toBe('string');
+    expect(runId.length).toBeGreaterThan(0);
+    expect(alreadyRunning).toBe(false);
+    expect(runner.runs.has('k1')).toBe(true);
+    expect(runner.isActive('k1')).toBe(true);
+  });
+
+  it('a second start while one is in flight resolves to the existing runId without re-running work', () => {
+    const runner = createSseRunner({ logLabel: 'test' });
+    const first = runner.start('k1', () => pending());
+    const work2 = vi.fn(() => pending());
+    const second = runner.start('k1', work2);
+
+    expect(second.runId).toBe(first.runId);
+    expect(second.alreadyRunning).toBe(true);
+    expect(work2).not.toHaveBeenCalled();
+  });
+
+  it('broadcasts frames to attached clients and caches the last frame for replay', async () => {
+    const runner = createSseRunner({ logLabel: 'test' });
+    let release;
+    const gate = new Promise((r) => { release = r; });
+    runner.start('k1', async ({ broadcast }) => {
+      broadcast({ type: 'start' });
+      await gate;
+      broadcast({ type: 'complete' });
+    });
+
+    // A client that attaches after `start` fired still replays the cached frame.
+    const res = makeRes();
+    runner.attachClient('k1', res);
+    expect(res.write).toHaveBeenCalledWith(`data: ${JSON.stringify({ type: 'start' })}\n\n`);
+
+    release();
+    await flush();
+    expect(res.write).toHaveBeenCalledWith(`data: ${JSON.stringify({ type: 'complete' })}\n\n`);
+  });
+
+  it('cancel flags the record, aborts the signal, and returns false for an unknown key', () => {
+    const runner = createSseRunner({ logLabel: 'test' });
+    let captured;
+    runner.start('k1', ({ signal, record }) => {
+      captured = { signal, record };
+      return pending();
+    });
+
+    expect(runner.cancel('k1')).toBe(true);
+    expect(captured.record.cancelRequested).toBe(true);
+    expect(captured.signal.aborted).toBe(true);
+    expect(runner.cancel('missing')).toBe(false);
+  });
+
+  it('a thrown error emits an error frame and logs, then the run is no longer active', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const runner = createSseRunner({ logLabel: 'widget run' });
+    const res = makeRes();
+    runner.start('k1', async ({ broadcast }) => {
+      // Attach happens inside work so the client receives the error frame live.
+      runner.attachClient('k1', res);
+      throw new Error('boom');
+    });
+
+    await flush();
+    const errorWrite = res.write.mock.calls.find(([m]) => m.includes('"type":"error"'));
+    expect(errorWrite).toBeTruthy();
+    expect(errorWrite[0]).toContain('boom');
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('widget run failed'));
+    expect(runner.isActive('k1')).toBe(false);
+    errSpy.mockRestore();
+  });
+
+  it('a finished run lingers for replay then is evicted after SSE_CLEANUP_DELAY_MS', async () => {
+    vi.useFakeTimers();
+    const runner = createSseRunner({ logLabel: 'test' });
+    runner.start('k1', async ({ broadcast }) => { broadcast({ type: 'complete' }); });
+
+    await flush();
+    expect(runner.isActive('k1')).toBe(false); // finished
+    expect(runner.runs.has('k1')).toBe(true);  // but still mapped for replay
+
+    vi.advanceTimersByTime(SSE_CLEANUP_DELAY_MS);
+    expect(runner.runs.has('k1')).toBe(false);
+    vi.useRealTimers();
+  });
+
+  it('restarting within the replay window cancels the old eviction and replaces the run', async () => {
+    vi.useFakeTimers();
+    const runner = createSseRunner({ logLabel: 'test' });
+    const first = runner.start('k1', async ({ broadcast }) => { broadcast({ type: 'complete' }); });
+    await flush();
+    expect(runner.runs.has('k1')).toBe(true);
+
+    // Re-run before the eviction timer fires — should fully replace the record.
+    const second = runner.start('k1', () => pending());
+    expect(second.runId).not.toBe(first.runId);
+    expect(second.alreadyRunning).toBe(false);
+    expect(runner.isActive('k1')).toBe(true);
+
+    // The first run's eviction timer must NOT evict the live replacement.
+    vi.advanceTimersByTime(SSE_CLEANUP_DELAY_MS);
+    expect(runner.runs.get('k1')?.runId).toBe(second.runId);
+    vi.useRealTimers();
   });
 });

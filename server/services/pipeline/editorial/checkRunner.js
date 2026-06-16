@@ -16,7 +16,7 @@
  */
 
 import { randomUUID } from 'crypto';
-import { broadcastSse, attachSseClient, SSE_CLEANUP_DELAY_MS } from '../../../lib/sseUtils.js';
+import { createSseRunner } from '../../../lib/sseUtils.js';
 import { runStagedLLM } from '../../../lib/stageRunner.js';
 import { getEnabledChecks, getEnabledCheckRows } from '../../../lib/editorial/index.js';
 import { getSettings } from '../../settings.js';
@@ -133,41 +133,22 @@ export async function buildEditorialCheckPlan(seriesId, { checkIds = null, setti
 }
 
 // ---------------------------------------------------------------------------
-// SSE run-tracking (mirrors manuscriptCompletenessRunner.js).
+// SSE run-tracking — shared lifecycle via createSseRunner (server/lib/sseUtils.js),
+// the same factory backing manuscriptCompletenessRunner + editorialAnalysisRunner.
 // ---------------------------------------------------------------------------
 
-// runs: Map<seriesId, { runId, clients[], lastPayload, cancelRequested, finished, cleanupTimer, startedAt, abort }>
-const runs = new Map();
+const runner = createSseRunner({ logLabel: 'editorial checks' });
 
 export function isEditorialChecksActive(seriesId) {
-  const run = runs.get(seriesId);
-  return !!run && !run.finished;
-}
-
-function scheduleCleanup(seriesId, record) {
-  record.cleanupTimer = setTimeout(() => {
-    if (runs.get(seriesId) !== record) return;
-    for (const c of record.clients) c.end();
-    runs.delete(seriesId);
-  }, SSE_CLEANUP_DELAY_MS);
+  return runner.isActive(seriesId);
 }
 
 export function attachClient(seriesId, res) {
-  return attachSseClient(runs, seriesId, res);
+  return runner.attachClient(seriesId, res);
 }
 
 export function cancelEditorialChecks(seriesId) {
-  const run = runs.get(seriesId);
-  if (!run) return false;
-  run.cancelRequested = true;
-  run.abort?.abort();
-  return true;
-}
-
-function broadcast(seriesId, payload) {
-  const run = runs.get(seriesId);
-  if (!run) return;
-  broadcastSse(run, payload);
+  return runner.cancel(seriesId);
 }
 
 /**
@@ -176,65 +157,30 @@ function broadcast(seriesId, payload) {
  * existing runId.
  */
 export function startEditorialChecksRun(seriesId, options = {}) {
-  const existing = runs.get(seriesId);
-  if (existing && !existing.finished) {
-    return { runId: existing.runId, alreadyRunning: true };
-  }
-  if (existing) {
-    if (existing.cleanupTimer) clearTimeout(existing.cleanupTimer);
-    for (const c of existing.clients) c.end();
-  }
-  const runId = randomUUID();
-  const abort = new AbortController();
-  const record = {
-    runId,
-    clients: [],
-    lastPayload: null,
-    cancelRequested: false,
-    finished: false,
-    cleanupTimer: null,
-    startedAt: new Date().toISOString(),
-    abort,
-  };
-  runs.set(seriesId, record);
-
-  // Fire-and-forget coordinator. The try/catch is the permitted boundary use:
-  // an unhandled LLM rejection here would crash the process on Node ≥15.
-  (async () => {
-    try {
-      broadcast(seriesId, { type: 'start', runId });
-      const result = await runEditorialChecks(seriesId, {
-        checkIds: options.checkIds,
-        providerOverride: options.providerOverride,
-        modelOverride: options.modelOverride,
-        signal: abort.signal,
-        onProgress: (event) => broadcast(seriesId, { ...event, runId }),
-      });
-      if (record.cancelRequested || result.canceled) {
-        broadcast(seriesId, { type: 'canceled', runId, canceledAt: new Date().toISOString() });
-        console.log(`📝 editorial checks canceled — series=${String(seriesId).slice(0, 12)}`);
-        return;
-      }
-      broadcast(seriesId, {
-        type: 'complete',
-        runId,
-        findingCount: result.findings.length,
-        perCheck: result.perCheck,
-        completedAt: new Date().toISOString(),
-      });
-      console.log(`📝 editorial checks complete — series=${String(seriesId).slice(0, 12)} findings=${result.findings.length}`);
-    } catch (err) {
-      const message = (err?.message || String(err)).slice(0, 1000);
-      console.error(`❌ editorial checks failed — series=${String(seriesId).slice(0, 12)} ${message}`);
-      broadcast(seriesId, { type: 'error', runId, error: message, failedAt: new Date().toISOString() });
-    } finally {
-      record.finished = true;
-      scheduleCleanup(seriesId, record);
+  return runner.start(seriesId, async ({ runId, signal, record, broadcast }) => {
+    broadcast({ type: 'start', runId });
+    const result = await runEditorialChecks(seriesId, {
+      checkIds: options.checkIds,
+      providerOverride: options.providerOverride,
+      modelOverride: options.modelOverride,
+      signal,
+      onProgress: (event) => broadcast({ ...event, runId }),
+    });
+    if (record.cancelRequested || result.canceled) {
+      broadcast({ type: 'canceled', runId, canceledAt: new Date().toISOString() });
+      console.log(`📝 editorial checks canceled — series=${String(seriesId).slice(0, 12)}`);
+      return;
     }
-  })();
-
-  return { runId, alreadyRunning: false };
+    broadcast({
+      type: 'complete',
+      runId,
+      findingCount: result.findings.length,
+      perCheck: result.perCheck,
+      completedAt: new Date().toISOString(),
+    });
+    console.log(`📝 editorial checks complete — series=${String(seriesId).slice(0, 12)} findings=${result.findings.length}`);
+  });
 }
 
 // Export internals for tests.
-export const __testing = { runs };
+export const __testing = { runs: runner.runs };
