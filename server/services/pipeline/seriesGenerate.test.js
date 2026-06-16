@@ -64,6 +64,12 @@ describe('generateSeriesConcept', () => {
     });
   });
 
+  it('trims a valid shape with incidental whitespace before validating', async () => {
+    mockLLM({ name: 'X', logline: 'l', premise: 'p', shape: '  man-in-hole\n' });
+    const out = await generateSeriesConcept('uni-1');
+    expect(out.shape).toBe('man-in-hole');
+  });
+
   it('drops an unrecognized story shape to null', async () => {
     mockLLM({ name: 'X', logline: 'l', premise: 'p', shape: 'not-a-real-shape' });
     const out = await generateSeriesConcept('uni-1');
