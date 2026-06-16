@@ -172,13 +172,18 @@ export function scriptStructurallyReady(issue) {
 // filename (proof or final). Draft rendering only kicks off proof renders, but
 // we accept either so a re-run never re-renders a slot the user already
 // finalized manually.
+// Include the legacy pre-proof/final fields (`imageJobId`/`filename`) the
+// sanitizer still preserves on upgraded projects — otherwise an
+// already-rendered legacy slot reads as un-enqueued and gets re-rendered.
 const slotEnqueued = (slot) => !!(
   slot && (slot.proofImage?.jobId || slot.proofImage?.filename
-    || slot.finalImage?.jobId || slot.finalImage?.filename)
+    || slot.finalImage?.jobId || slot.finalImage?.filename
+    || slot.imageJobId || slot.filename)
 );
 const pageEnqueued = (page) => !!(
   page && (page.proofImage?.jobId || page.proofImage?.filename
-    || page.finalImage?.jobId || page.finalImage?.filename)
+    || page.finalImage?.jobId || page.finalImage?.filename
+    || page.imageJobId || page.filename)
 );
 
 /**
@@ -558,20 +563,22 @@ async function runEditorial(sId, record) {
     // Bounded auto-fix: apply a fix for each open high-severity comment, then
     // the loop re-analyzes. Each fix is wrapped so one bad anchor doesn't abort
     // the pass (boundary use of try/catch — these call into LLM/file paths).
-    const beforeFix = await budgetPause();
-    if (beforeFix) return beforeFix;
     const review = await getReview(sId).catch(() => ({ comments: [] }));
     const open = (review.comments || []).filter((c) => c.status === 'open' && EDITORIAL_BLOCKING.has(c.severity));
     for (const comment of open) {
       if (record.cancelRequested) return { canceled: true };
+      // Each generated fix is its own LLM call — gate AND bill per comment so a
+      // multi-comment pass can't overspend or under-count the daily budget.
+      const beforeFix = await budgetPause();
+      if (beforeFix) return beforeFix;
       try {
         if (!comment.fix) await generateManuscriptFix(sId, { commentId: comment.id });
         await acceptManuscriptFix(sId, { commentId: comment.id });
+        await recordDomainUsage('cos', { actions: 1 });
       } catch (err) {
         console.log(`⚠️ autopilot: editorial fix ${comment.id} failed: ${(err?.message || err)}`);
       }
     }
-    await recordDomainUsage('cos', { actions: 1 });
   }
   return {};
 }
