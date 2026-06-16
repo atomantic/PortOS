@@ -15,6 +15,7 @@ import { findDuplicateSeriesGroups, findSameNameSeries } from '../../services/du
 import { mergeSeries } from '../../services/recordMerge.js';
 import { mergeFieldsWithAI } from '../../services/recordMergeAI.js';
 import { generateSeriesTitleLogo } from '../../services/pipeline/seriesTitleLogo.js';
+import { generateSeriesConcept } from '../../services/pipeline/seriesGenerate.js';
 import {
   LENGTH_PROFILE_NAMES,
   CUSTOM_PAGE_MIN, CUSTOM_PAGE_MAX, CUSTOM_MINUTE_MIN, CUSTOM_MINUTE_MAX,
@@ -260,6 +261,22 @@ router.post('/series/merge/ai-resolve', asyncHandler(async (req, res) => {
     providerId: body.providerId,
     model: body.model,
   });
+  res.json(result);
+}));
+
+// Generate a fresh series concept (name / logline / premise / story shape)
+// from a universe, used as seed material. Returns the concept WITHOUT
+// persisting it — the New Series form pre-fills these for the user to edit
+// before creating. Static path: keep BEFORE `/series/:id`.
+const seriesGenerateSchema = z.object({
+  universeId: z.string().trim().min(1).max(seriesSvc.UNIVERSE_ID_MAX),
+  providerId: z.string().trim().max(80).optional(),
+  model: z.string().trim().max(200).optional(),
+});
+router.post('/series/generate-concept', asyncHandler(async (req, res) => {
+  const body = validateRequest(seriesGenerateSchema, req.body ?? {});
+  const result = await generateSeriesConcept(body.universeId, body)
+    .catch((err) => { throw mapServiceError(err); });
   res.json(result);
 }));
 
