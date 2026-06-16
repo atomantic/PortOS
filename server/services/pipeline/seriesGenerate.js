@@ -122,8 +122,10 @@ export async function generateSeriesConcept(universeId, options = {}) {
   const name = content.name.trim().slice(0, NAME_MAX);
   const logline = typeof content.logline === 'string' ? content.logline.trim().slice(0, LOGLINE_MAX) : '';
   const premise = typeof content.premise === 'string' ? content.premise.trim().slice(0, PREMISE_MAX) : '';
-  // Drop an unrecognized shape rather than poison the form — the create path
-  // already treats `null` as "no shape picked."
-  const shape = typeof content.shape === 'string' && ARC_SHAPE_IDS.includes(content.shape) ? content.shape : null;
+  // Trim before the allow-list check so a valid id with incidental whitespace
+  // (e.g. "man-in-hole\n") isn't discarded; drop an unrecognized shape rather
+  // than poison the form — the create path treats `null` as "no shape picked."
+  const shapeRaw = typeof content.shape === 'string' ? content.shape.trim() : '';
+  const shape = ARC_SHAPE_IDS.includes(shapeRaw) ? shapeRaw : null;
   return { name, logline, premise, shape, rationale, runId, providerId, model };
 }

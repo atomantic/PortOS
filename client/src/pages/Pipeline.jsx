@@ -7,7 +7,7 @@
  * drills into its detail page where issues are created and managed.
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Plus, Workflow as WorkflowIcon, Trash2, Loader2, Globe2, FileInput, Sparkles } from 'lucide-react';
 import toast from '../components/ui/Toast';
@@ -54,10 +54,6 @@ export default function Pipeline() {
   const [generating, setGenerating] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(emptyForm);
-  // Mirror the live universe selection so an in-flight generate can detect the
-  // user switching universes mid-request and drop the now-stale concept.
-  const universeIdRef = useRef(form.universeId);
-  useEffect(() => { universeIdRef.current = form.universeId; }, [form.universeId]);
 
   useEffect(() => {
     Promise.all([
@@ -119,19 +115,26 @@ export default function Pipeline() {
     if (!concept) return;
     // The request can outlive the selection: if the user switched universes
     // while it was in flight, applying a concept seeded from the old universe
-    // would pair the new universeId with a mismatched story. Drop the stale
-    // result — gate both the form merge and the toast on the live selection.
-    if (universeIdRef.current !== requestedUniverseId) return;
-    setForm((f) => ({
-      ...f,
-      name: concept.name || f.name,
-      logline: concept.logline || f.logline,
-      premise: concept.premise || f.premise,
-      // The generated concept owns the story shape — apply it verbatim,
-      // including null (LLM picked none), so a stale earlier pick can't
-      // misrepresent the freshly generated concept.
-      shape: concept.shape,
-    }));
+    // would pair the new universeId with a mismatched story. Gate the merge on
+    // the LIVE state inside the functional updater (race-free — `f` is the
+    // committed value, unlike a passively-synced ref), and gate the toast on
+    // whether the merge actually applied.
+    let applied = false;
+    setForm((f) => {
+      if (f.universeId !== requestedUniverseId) return f;
+      applied = true;
+      return {
+        ...f,
+        name: concept.name || f.name,
+        logline: concept.logline || f.logline,
+        premise: concept.premise || f.premise,
+        // The generated concept owns the story shape — apply it verbatim,
+        // including null (LLM picked none), so a stale earlier pick can't
+        // misrepresent the freshly generated concept.
+        shape: concept.shape,
+      };
+    });
+    if (!applied) return;
     toast.success(
       concept.rationale
         ? `Generated "${concept.name}" — ${concept.rationale}`
