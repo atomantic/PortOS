@@ -197,7 +197,7 @@ export function visualReady(issue) {
   const pages = Array.isArray(cp?.pages) ? cp.pages : [];
   if (pages.length === 0) return false;
   if (!slotEnqueued(cp?.cover)) return false;
-  if (cp?.backCover?.script && !slotEnqueued(cp?.backCover)) return false;
+  if (!slotEnqueued(cp?.backCover)) return false; // always drafted (renderer has a fallback)
   return pages.every((p) => (Array.isArray(p.panels) && p.panels.length > 0 ? pageEnqueued(p) : true));
 }
 
@@ -698,10 +698,12 @@ async function runVisualDraft(sId, issueId, record) {
     const r = await enqueueOne('cover', () => enqueueCoverDraft(issueId, 'cover', enqueueComicCover));
     if (r.pause) return r;
   }
-  // 3. Back cover (only when a concept/script exists to render).
+  // 3. Back cover — always queue it (like the front cover); the back-cover
+  //    renderer has a fallback prompt when no concept script is set, so a
+  //    "complete" draft shouldn't silently omit it.
   issue = await getIssue(issueId);
   cp = issue.stages?.comicPages;
-  if (cp?.backCover?.script && !slotEnqueued(cp?.backCover)) {
+  if (!slotEnqueued(cp?.backCover)) {
     const r = await enqueueOne('backCover', () => enqueueCoverDraft(issueId, 'backCover', enqueueComicBackCover));
     if (r.pause) return r;
   }
