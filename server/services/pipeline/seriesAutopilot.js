@@ -613,7 +613,7 @@ async function runVisualDraft(sId, issueId, record) {
       summary: 'Cannot draft comic art — the comic script did not parse into any pages. Fix the comicScript stage (PAGE/PANEL structure) first.',
       context: `issueId=${issueId}`,
     });
-    return { pause: true, reason: `issue ${issue.number ?? issueId} has no comic pages to render — the script did not parse`, residual: [{ severity: 'high', location: `issue ${issue.number ?? '?'} / comicPages`, problem: 'comic script did not parse into pages' }] };
+    return { pause: true, gapFiled: true, reason: `issue ${issue.number ?? issueId} has no comic pages to render — the script did not parse`, residual: [{ severity: 'high', location: `issue ${issue.number ?? '?'} / comicPages`, problem: 'comic script did not parse into pages' }] };
   }
 
   // Budget-gate + bill each render individually — a comic is many GPU jobs.
@@ -669,8 +669,15 @@ async function runVisualDraft(sId, issueId, record) {
   const after = await getIssue(issueId);
   if (!visualReady(after)) {
     record.runState.visualDrafted.add(issueId);
+    await fileGap(record, sId, {
+      gapKind: 'visual-incomplete',
+      issueId,
+      summary: `Issue ${after.number ?? issueId} could not be fully drafted — some cover/page renders did not enqueue (likely an un-renderable page or missing panels). Review the comic page/panel structure.`,
+      context: `issueId=${issueId}`,
+    });
     return {
       pause: true,
+      gapFiled: true,
       reason: `issue ${after.number ?? issueId} could not be fully drafted — some cover/page renders did not enqueue`,
       residual: [{ severity: 'high', location: `issue ${after.number ?? '?'} / comicPages`, problem: 'not every drawable cover/page render was enqueued (likely an un-renderable page or missing panels)' }],
     };
@@ -707,6 +714,7 @@ async function runCanonVerify(sId, record) {
     pause: true,
     reason: `${report.undescribed.length} canon noun(s) referenced in panels/scenes are undescribed — describe them before visual production`,
     residual,
+    gapFiled: true,
   };
 }
 
@@ -888,12 +896,18 @@ export async function startSeriesAutopilot(sId, options = {}) {
         if (result?.pause) {
           await persistMarker(sId, { status: 'paused', runId, currentStep: step.kind, residualFindings: result.residual || [], lastError: result.reason });
           broadcast(sId, { type: 'paused', runId, scope: step.kind, reason: result.reason, residualFindings: result.residual || [], completedAt: new Date().toISOString() });
-          await fileGap(record, sId, {
-            gapKind: `${step.kind}-stalled`,
-            issueId: step.issueId || null,
-            summary: `Autopilot paused: ${result.reason}. Needs human review of the residual findings before it can continue.`,
-            context: JSON.stringify(result.residual || []).slice(0, 1000),
-          });
+          // Only file the generic stalled task when the step didn't already file
+          // a more specific gap (canon-undescribed, visual-no-pages, …) — else
+          // fileGaps would create two CoS tasks for one underlying problem (the
+          // differing gapKind defeats addTask's first-line dedup).
+          if (!result.gapFiled) {
+            await fileGap(record, sId, {
+              gapKind: `${step.kind}-stalled`,
+              issueId: step.issueId || null,
+              summary: `Autopilot paused: ${result.reason}. Needs human review of the residual findings before it can continue.`,
+              context: JSON.stringify(result.residual || []).slice(0, 1000),
+            });
+          }
           console.log(`⏸️  autopilot paused (${step.kind}) — series=${sId.slice(0, 12)}: ${result.reason}`);
           return;
         }
