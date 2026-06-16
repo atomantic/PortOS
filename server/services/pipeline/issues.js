@@ -202,6 +202,33 @@ const sanitizeCanonExtraction = (raw) => {
   };
 };
 
+// Persisted outcome of the last strictly-prose-grounded "describe nouns from
+// prose" run (see universeCanon.describeCanonFromProse). `null` = never run.
+// `none`/`thin` carry the nouns the manuscript couldn't (or only thinly)
+// describe so the Nouns UI can render a persistent manuscript-quality banner.
+const sanitizeDescGapList = (arr) => (Array.isArray(arr) ? arr : [])
+  .filter((g) => g && typeof g === 'object' && CANON_KINDS.includes(g.kind))
+  .slice(0, 200)
+  .map((g) => ({
+    id: trimTo(g.id, 80),
+    name: trimTo(g.name, 200),
+    kind: g.kind,
+    note: trimTo(g.note, 600),
+  }));
+
+const sanitizeDescGaps = (raw) => {
+  if (!raw || typeof raw !== 'object') return null;
+  return {
+    at: isStr(raw.at) ? raw.at : null,
+    provider: trimTo(raw.provider, 80),
+    model: trimTo(raw.model, 128),
+    filled: Number.isFinite(raw.filled) && raw.filled > 0 ? Math.floor(raw.filled) : 0,
+    none: sanitizeDescGapList(raw.none),
+    thin: sanitizeDescGapList(raw.thin),
+    skippedLocked: sanitizeDescGapList(raw.skippedLocked),
+  };
+};
+
 const sanitizeStage = (raw) => {
   if (!raw || typeof raw !== 'object') return emptyStage();
   const status = STAGE_STATUSES.includes(raw.status) ? raw.status : 'empty';
@@ -229,6 +256,7 @@ const sanitizeStage = (raw) => {
 const sanitizeTextStage = (raw) => ({
   ...sanitizeStage(raw),
   canonExtraction: sanitizeCanonExtraction(raw?.canonExtraction),
+  descGaps: sanitizeDescGaps(raw?.descGaps),
 });
 
 /**

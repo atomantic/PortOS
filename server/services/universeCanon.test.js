@@ -334,6 +334,97 @@ describe('universeCanon — extractCanonFromProse per-kind resilience', () => {
   });
 });
 
+describe('universeCanon — describeCanonFromProse (strictly prose-grounded)', () => {
+  it('fills physicalDescription for a sufficient char and reports a none char without inventing', async () => {
+    const w = await seedUniverseWithCharacters([
+      { name: 'Mara', physicalDescription: '', locked: false },
+      { name: 'Ghost', physicalDescription: '', locked: false },
+    ]);
+    const [mara, ghost] = w.characters;
+    runStagedLLMMock.mockResolvedValue({
+      content: {
+        descriptions: [
+          { id: mara.id, sufficiency: 'sufficient', description: 'tall woman, copper braid, freckles', evidence: ['her copper braid'] },
+          { id: ghost.id, sufficiency: 'none', description: '', note: 'only named in dialogue' },
+        ],
+      },
+      runId: 'run-d', providerId: 'test', model: 'test',
+    });
+    const result = await canonSvc.describeCanonFromProse(w.id, {
+      corpus: 'Mara has a copper braid. Ghost is mentioned.',
+      targets: [{ id: mara.id, kind: 'character' }, { id: ghost.id, kind: 'character' }],
+    });
+    expect(result.report.filled).toBe(1);
+    expect(result.report.none.map((g) => g.id)).toEqual([ghost.id]);
+    const refreshed = (await svc.listUniverses())[0];
+    expect(refreshed.characters.find((c) => c.id === mara.id).physicalDescription).toContain('copper braid');
+    // The un-describable noun stays blank — the whole point of the red flag.
+    expect(refreshed.characters.find((c) => c.id === ghost.id).physicalDescription).toBe('');
+  });
+
+  it('skips locked + already-described targets and never calls the LLM when nothing is left', async () => {
+    const w = await seedUniverseWithCharacters([
+      { name: 'Locked', physicalDescription: '', locked: true },
+      { name: 'Done', physicalDescription: 'already has a look', locked: false },
+    ]);
+    const [locked, done] = w.characters;
+    const result = await canonSvc.describeCanonFromProse(w.id, {
+      corpus: 'some prose',
+      targets: [{ id: locked.id, kind: 'character' }, { id: done.id, kind: 'character' }],
+    });
+    expect(runStagedLLMMock).not.toHaveBeenCalled();
+    expect(result.report.filled).toBe(0);
+    expect(result.report.skippedLocked.map((g) => g.id)).toEqual([locked.id]);
+    expect(result.report.unmatched).toBe(1); // `Done` already described
+  });
+
+  it('grades thin into report.thin while still filling the grounded fragment', async () => {
+    const w = await svc.updateUniverse(
+      (await svc.createUniverse({ name: 'U', starterPrompt: 'x', stylePrompt: 'y' })).id,
+      { places: [{ name: 'The Vault', description: '', locked: false }] },
+    );
+    const vault = w.places[0];
+    runStagedLLMMock.mockResolvedValue({
+      content: { descriptions: [{ id: vault.id, sufficiency: 'thin', description: 'a dim concrete room', note: 'no lighting or scale given' }] },
+      runId: 'run-t', providerId: 'test', model: 'test',
+    });
+    const result = await canonSvc.describeCanonFromProse(w.id, {
+      corpus: 'The Vault was dim.',
+      targets: [{ id: vault.id, kind: 'place' }],
+    });
+    expect(result.report.filled).toBe(1);
+    expect(result.report.thin.map((g) => g.id)).toEqual([vault.id]);
+    expect(result.universe.places.find((p) => p.id === vault.id).description).toBe('a dim concrete room');
+  });
+
+  it('rejects an empty corpus and empty targets', async () => {
+    const w = await seedUniverseWithCharacters([]);
+    await expect(canonSvc.describeCanonFromProse(w.id, { corpus: '', targets: [{ id: 'x', kind: 'character' }] }))
+      .rejects.toMatchObject({ code: 'UNIVERSE_CANON_NO_CORPUS' });
+    await expect(canonSvc.describeCanonFromProse(w.id, { corpus: 'p', targets: [] }))
+      .rejects.toMatchObject({ code: 'UNIVERSE_CANON_NO_TARGETS' });
+  });
+});
+
+describe('universeCanon — summarizeDescribeGaps', () => {
+  it('maps the report into a persistable marker', () => {
+    const m = canonSvc.summarizeDescribeGaps({
+      report: {
+        filled: 2,
+        none: [{ id: 'a', name: 'A', kind: 'character', note: 'no look' }],
+        thin: [{ id: 'b', name: 'B', kind: 'place', note: 'sparse' }],
+        skippedLocked: [{ id: 'c', name: 'C', kind: 'object' }],
+      },
+      provider: 'codex', model: 'default',
+    });
+    expect(m.filled).toBe(2);
+    expect(m.none).toEqual([{ id: 'a', name: 'A', kind: 'character', note: 'no look' }]);
+    expect(m.thin[0].id).toBe('b');
+    expect(m.provider).toBe('codex');
+    expect(typeof m.at).toBe('string');
+  });
+});
+
 describe('universeCanon — summarizeCanonExtraction', () => {
   it('ok when no failures', () => {
     const m = canonSvc.summarizeCanonExtraction({

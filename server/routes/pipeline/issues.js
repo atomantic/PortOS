@@ -27,7 +27,10 @@ import {
   refineStoryboardScenePrompt,
   buildRenderSlot,
 } from '../../services/pipeline/visualStages.js';
-import { extractCanonFromProse, summarizeCanonExtraction } from '../../services/universeCanon.js';
+import {
+  extractCanonFromProse, summarizeCanonExtraction,
+  describeCanonFromProse, summarizeDescribeGaps,
+} from '../../services/universeCanon.js';
 import { getSeriesCanon } from '../../services/pipeline/seriesCanon.js';
 import { startEpisodeVideoForIssue } from '../../services/pipeline/episodeVideo.js';
 import { COMIC_PAGE_VARIANTS, slotKeyForVariant } from '../../services/pipeline/owners.js';
@@ -267,6 +270,17 @@ const extractComicPagesSchema = z.object({
 const extractCanonFromScriptSchema = z.object({
   providerOverride: z.string().trim().max(80).optional(),
   model: z.string().trim().max(128).optional(),
+});
+
+const describeCanonFromProseSchema = z.object({
+  providerOverride: z.string().trim().max(80).optional(),
+  model: z.string().trim().max(128).optional(),
+  // Nouns to backfill — typically the appears-in-this-issue entries that lack
+  // a description. The server re-validates each against the universe canon.
+  targets: z.array(z.object({
+    id: z.string().trim().min(1).max(80),
+    kind: z.enum(['character', 'place', 'object']),
+  })).min(1).max(500),
 });
 
 // Stages whose `output` can be mined for canon. `prose` is the conventional
@@ -620,6 +634,66 @@ router.post('/issues/:id/stages/:stageId/extract-canon', asyncHandler(async (req
     extracted: countExtractedCanon(result.results),
     sourceStage: stageId,
     truncated,
+  });
+}));
+
+// Backfill descriptions for canon nouns that have none, using ONLY what this
+// stage's prose establishes. Distinct from extract-canon: extraction invents +
+// flags missing renderable axes (so it never leaves a blank), while this pass
+// is strictly prose-grounded — a noun the prose never describes comes back in
+// the `descGaps` marker so the Nouns UI can flag the manuscript as thin instead
+// of fabricating a description that the prose can't support.
+router.post('/issues/:id/stages/:stageId/describe-canon', asyncHandler(async (req, res) => {
+  const { id, stageId } = req.params;
+  if (!CANON_EXTRACT_STAGES.includes(stageId)) {
+    throw new ServerError(
+      `Stage "${stageId}" does not support canon description — supported: ${CANON_EXTRACT_STAGES.join(', ')}`,
+      { status: 400, code: 'PIPELINE_CANON_DESCRIBE_BAD_STAGE' },
+    );
+  }
+  const body = validateRequest(describeCanonFromProseSchema, req.body ?? {});
+  const issue = await issuesSvc.getIssue(id).catch((err) => { throw mapServiceError(err); });
+  const rawCorpus = (issue.stages?.[stageId]?.output || '').trim();
+  if (!rawCorpus) {
+    throw new ServerError(
+      `Cannot describe canon — issue's ${stageId} stage is empty`,
+      { status: 400, code: 'PIPELINE_CANON_DESCRIBE_NO_CORPUS' },
+    );
+  }
+  const corpus = rawCorpus.length > EXTRACT_CANON_CORPUS_MAX
+    ? rawCorpus.slice(0, EXTRACT_CANON_CORPUS_MAX)
+    : rawCorpus;
+  const series = await seriesSvc.getSeries(issue.seriesId).catch((err) => { throw mapServiceError(err); });
+  if (!series.universeId) {
+    throw new ServerError(
+      `Cannot describe canon — series has no linked universe. Link a universe in the series settings first.`,
+      { status: 400, code: 'PIPELINE_CANON_DESCRIBE_NO_UNIVERSE' },
+    );
+  }
+  // Same provider/model resolution as extract-canon so a manual describe honors
+  // the series-header LLM (or the per-attempt picker override).
+  const { provider, model } = resolveSeriesLlmOverride(series, {
+    overrideProvider: body.providerOverride,
+    overrideModel: body.model,
+  });
+
+  const result = await describeCanonFromProse(series.universeId, {
+    corpus,
+    targets: body.targets,
+    providerOverride: provider,
+    modelOverride: model,
+  }).catch((err) => { throw mapServiceError(err); });
+
+  const marker = summarizeDescribeGaps({ report: result.report, provider, model });
+  const { issue: stampedIssue } = await issuesSvc.updateStage(id, stageId, { descGaps: marker })
+    .catch((err) => { throw mapServiceError(err); });
+
+  res.json({
+    universe: result.universe,
+    issue: stampedIssue,
+    descGaps: marker,
+    report: result.report,
+    sourceStage: stageId,
   });
 }));
 

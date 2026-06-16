@@ -199,6 +199,18 @@ export const extractPipelineCanonFromScript = (issueId, stageId, { providerOverr
     ...options,
   });
 
+// Strictly-prose-grounded description backfill. `targets` is `[{ id, kind }]`
+// (kind = 'character' | 'place' | 'object') — the nouns lacking a description.
+// Returns `{ universe, issue, descGaps, report }`; `report.none` lists nouns the
+// prose can't describe (the manuscript-quality red flag), `report.filled` the
+// count written. Unlike extract, this never invents — a blank stays blank.
+export const describePipelineCanonFromProse = (issueId, stageId, { providerOverride, model, targets } = {}, options = {}) =>
+  request(`/pipeline/issues/${encodeURIComponent(issueId)}/stages/${encodeURIComponent(stageId)}/describe-canon`, {
+    method: 'POST',
+    body: JSON.stringify({ providerOverride, model, targets }),
+    ...options,
+  });
+
 // Render a full comic page (multi-panel layout in one image) — the default
 // for cloud image models (Codex / Google), draft-quality for local models.
 // Server persists the returned jobId on stages.comicPages.pages[pageIndex].

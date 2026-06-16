@@ -16,7 +16,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   Library, Loader2, Users, MapPin, Package,
-  Settings as SettingsIcon, ChevronDown, ChevronRight, AlertTriangle,
+  Settings as SettingsIcon, ChevronDown, ChevronRight, AlertTriangle, FileSearch,
 } from 'lucide-react';
 import toast from '../../ui/Toast';
 import {
@@ -24,7 +24,7 @@ import {
   refineUniverseCharacter,
   getUniverseSeriesNames,
 } from '../../../services/apiUniverseBuilder';
-import { extractPipelineCanonFromScript } from '../../../services/apiPipeline';
+import { extractPipelineCanonFromScript, describePipelineCanonFromProse } from '../../../services/apiPipeline';
 import { getProviders } from '../../../services/apiProviders';
 import { getSettings, patchSettingsSlice, generateImage } from '../../../services/apiSystem';
 import { listImageModels } from '../../../services/apiImageVideo';
@@ -48,14 +48,21 @@ import {
   readPipelineImageSettings,
   pipelineImageCfgToRenderOpts,
 } from '../../../lib/pipelineImageDefaults';
+import { BIBLE_LIMITS } from '../../../lib/bibleLimits';
 
 // Per-kind metadata. `descFor` picks the most visual field for ref-image
-// generation; `match` is the prose scanner that decides whether an entry
-// "appears in this issue".
+// generation; `descField`/`descFieldFallback`/`descFieldMax` bind CanonCard's
+// inline description editor to the RIGHT stored field (characters keep their
+// text in `physicalDescription`, not `description`) so the card neither shows a
+// false "No description yet" nor edits the wrong field; `match` is the prose
+// scanner that decides whether an entry "appears in this issue". Kept in
+// lock-step with UniverseCanonSection's KIND_DEFS so the pipeline + universe
+// canon views render identically.
 const KINDS = [
   {
     key: 'characters', label: 'Characters', singular: 'character', icon: Users,
     descFor: (c) => c.physicalDescription || c.description || '',
+    descField: 'physicalDescription', descFieldFallback: 'description', descFieldMax: BIBLE_LIMITS.PHYSICAL_DESCRIPTION_MAX,
     match: matchCharactersInText,
   },
   {
@@ -65,11 +72,13 @@ const KINDS = [
       p.palette ? `Palette: ${p.palette}` : '',
       p.recurringDetails,
     ].filter(Boolean).join('. '),
+    descField: 'description', descFieldMax: BIBLE_LIMITS.PLACE_DESCRIPTION_MAX,
     match: matchPlacesInText,
   },
   {
     key: 'objects', label: 'Objects', singular: 'object', icon: Package,
     descFor: (o) => o.description || o.significance || '',
+    descField: 'description', descFieldFallback: 'significance', descFieldMax: BIBLE_LIMITS.OBJECT_DESCRIPTION_MAX,
     match: matchObjectsInText,
   },
 ];
@@ -287,6 +296,56 @@ export default function NounsStage({ issue, series, onStageUpdate }) {
     }
   };
 
+  // Strictly-prose-grounded description backfill. Targets = the
+  // appears-in-this-issue entries (across every kind) that lack a description
+  // and aren't locked. The server re-validates and fills only from prose
+  // evidence, returning a `descGaps` marker for nouns the prose can't support.
+  const [describing, setDescribing] = useState(false);
+  const missingTargets = useMemo(() => {
+    const out = [];
+    if (!universe || !proseReady) return out;
+    for (const kind of KINDS) {
+      const list = Array.isArray(universe[kind.key]) ? universe[kind.key] : [];
+      for (const entry of kind.match(prose, list)) {
+        if (entry.locked === true) continue;
+        if (!kind.descFor(entry).trim()) out.push({ id: entry.id, kind: kind.singular });
+      }
+    }
+    return out;
+  }, [universe, prose, proseReady]);
+
+  const descGaps = issue.stages?.prose?.descGaps || null;
+
+  const handleDescribeFromProse = async () => {
+    if (!universe || !proseReady || describing || missingTargets.length === 0) return;
+    setDescribing(true);
+    const result = await describePipelineCanonFromProse(issue.id, 'prose', {
+      providerOverride: extractProvider || undefined,
+      model: extractModel || undefined,
+      targets: missingTargets,
+    }, { silent: true }).catch((err) => {
+      if (mountedRef.current) toast.error(err.message || 'Describe from prose failed');
+      return null;
+    });
+    if (mountedRef.current) setDescribing(false);
+    if (!result || !mountedRef.current) return;
+    if (result.universe) setUniverse(result.universe);
+    // Propagate the stamped prose stage (with the fresh descGaps marker) so the
+    // red-flag banner persists across reloads without a refetch.
+    if (result.issue?.stages?.prose) onStageUpdate?.('prose', result.issue.stages.prose, result.issue);
+    const r = result.report || {};
+    const gaps = (r.none || []).length;
+    if (r.filled) {
+      toast.success(gaps
+        ? `Described ${r.filled} from prose · ${gaps} can't be described — the manuscript is thin on them`
+        : `Described ${r.filled} noun${r.filled === 1 ? '' : 's'} from prose`);
+    } else if (gaps) {
+      toast.error(`The prose doesn't describe ${gaps} noun${gaps === 1 ? '' : 's'} — enrich the manuscript`);
+    } else {
+      toast.success('Nothing to backfill — matched nouns already have descriptions');
+    }
+  };
+
   // Queue a reference render. The filename ISN'T persisted onto the entry's
   // imageRefs[] yet — NounCard subscribes to job progress and calls
   // `handleRefCompleted` once the file actually exists. Without that defer,
@@ -473,12 +532,26 @@ export default function NounsStage({ issue, series, onStageUpdate }) {
             {extracting ? <Loader2 size={14} className="animate-spin" /> : <Library size={14} />}
             {canonExtraction && canonExtraction.status !== 'ok' ? 'Retry extraction' : 'Extract from prose'}
           </button>
+          <button
+            type="button"
+            onClick={handleDescribeFromProse}
+            disabled={describing || !proseReady || missingTargets.length === 0}
+            title={missingTargets.length
+              ? `Write descriptions for ${missingTargets.length} undescribed noun${missingTargets.length === 1 ? '' : 's'} using ONLY what the prose says — nouns the prose can't describe are flagged, not invented`
+              : (proseReady ? 'Every noun that appears in this issue already has a description' : 'Generate prose first')}
+            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-card border border-port-border text-gray-200 text-sm font-medium disabled:opacity-40 hover:border-port-accent/50 hover:text-white"
+          >
+            {describing ? <Loader2 size={14} className="animate-spin" /> : <FileSearch size={14} />}
+            Describe from prose{missingTargets.length ? ` (${missingTargets.length})` : ''}
+          </button>
         </div>
       </header>
 
       {canonExtraction && canonExtraction.status !== 'ok' ? (
         <CanonExtractionBanner extraction={canonExtraction} />
       ) : null}
+
+      {descGaps ? <DescGapBanner gaps={descGaps} /> : null}
 
       {!proseReady ? (
         <p className="text-sm text-gray-400 italic">
@@ -548,6 +621,56 @@ function CanonExtractionBanner({ extraction }) {
           landed are kept.
         </p>
       </div>
+    </div>
+  );
+}
+
+// Persistent manuscript-quality red flag from the last "Describe from prose"
+// run. `none` = the prose names the noun but never describes it (the headline
+// signal that the manuscript is thin); `thin` = only a passing detail, could
+// use more. Both survive reload via the persisted `stage.descGaps` marker.
+function DescGapBanner({ gaps }) {
+  const none = Array.isArray(gaps.none) ? gaps.none : [];
+  const thin = Array.isArray(gaps.thin) ? gaps.thin : [];
+  if (none.length === 0 && thin.length === 0) return null;
+  const total = none.length + thin.length;
+  return (
+    <div className="rounded-lg border border-port-warning/40 bg-port-warning/5 p-3 space-y-2" role="alert">
+      <div className="flex items-start gap-2 text-port-warning">
+        <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+        <p className="text-sm font-medium">
+          The manuscript is thin on description for {total} noun{total === 1 ? '' : 's'}.
+          Enrich the prose, then re-run “Describe from prose”.
+        </p>
+      </div>
+      {none.length ? (
+        <div className="text-xs text-gray-300">
+          <span className="uppercase tracking-wider text-[10px] text-port-warning">Not described in prose</span>
+          <ul className="mt-1 space-y-1">
+            {none.map((g) => (
+              <li key={g.id}>
+                <span className="text-white">{g.name}</span>{' '}
+                <span className="text-gray-500">({g.kind})</span>
+                {g.note ? <span className="text-gray-400"> — {g.note}</span> : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {thin.length ? (
+        <div className="text-xs text-gray-400">
+          <span className="uppercase tracking-wider text-[10px] text-gray-500">Only thinly described</span>
+          <ul className="mt-1 space-y-1">
+            {thin.map((g) => (
+              <li key={g.id}>
+                <span className="text-gray-200">{g.name}</span>{' '}
+                <span className="text-gray-600">({g.kind})</span>
+                {g.note ? <span className="text-gray-500"> — {g.note}</span> : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
     </div>
   );
 }

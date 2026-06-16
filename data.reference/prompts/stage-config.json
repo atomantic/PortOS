@@ -89,7 +89,12 @@
       "description": "Analyze a project directory and detect its configuration",
       "model": "default",
       "returnsJson": true,
-      "variables": ["jsonOutputFormat", "appDetectionSchema", "portDetectionRules", "pm2NamingConvention"]
+      "variables": [
+        "jsonOutputFormat",
+        "appDetectionSchema",
+        "portDetectionRules",
+        "pm2NamingConvention"
+      ]
     },
     "cos-agent-briefing": {
       "name": "CoS Agent Briefing",
@@ -449,6 +454,13 @@
       "name": "Importer — Issue Proposal",
       "description": "Split a finished work into PortOS pipeline issues with titles + arcPosition + arcRole + verbatim prose excerpts. Honors source-marked issue / chapter / volume headers.",
       "model": "heavy",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-canon-describe-from-prose": {
+      "name": "Pipeline — Describe Nouns From Prose",
+      "description": "Backfill descriptions for canon nouns (characters/places/objects) that have none, using ONLY what the manuscript prose establishes. Grades each noun prose support (sufficient/thin/none) so nouns the prose never describes surface as a manuscript-quality red flag instead of being invented.",
+      "model": "default",
       "returnsJson": true,
       "variables": []
     }

@@ -7,7 +7,7 @@
 import { getUniverse, updateUniverse, listUniverses, joinInfluenceList } from './universeBuilder.js';
 import { extractBible } from '../lib/bibleExtractor.js';
 import {
-  BIBLE_KIND, BIBLE_KINDS, BIBLE_FIELD, BIBLE_KEYS, BIBLE_SOURCE, mergeExtractedBible,
+  BIBLE_KIND, BIBLE_KINDS, BIBLE_FIELD, BIBLE_KEYS, BIBLE_SOURCE, BIBLE_LIMITS, mergeExtractedBible,
   listSheetPointers, applySheetPointerToCharacter,
 } from '../lib/storyBible.js';
 import { runStagedLLM } from '../lib/stageRunner.js';
@@ -199,6 +199,181 @@ export function summarizeCanonExtraction({ results, failures, provider, model, e
       : '',
     failedKinds,
     extracted,
+  };
+}
+
+// Which field holds a kind's renderable description. Characters carry
+// `physicalDescription` (legacy `description` is the read-fallback);
+// places/objects use `description`. Mirrors NounsStage's `descFor` source.
+const DESC_FIELD = Object.freeze({
+  [BIBLE_KIND.CHARACTER]: 'physicalDescription',
+  [BIBLE_KIND.PLACE]: 'description',
+  [BIBLE_KIND.OBJECT]: 'description',
+});
+const DESC_LIMIT = Object.freeze({
+  [BIBLE_KIND.CHARACTER]: BIBLE_LIMITS.PHYSICAL_DESCRIPTION_MAX,
+  [BIBLE_KIND.PLACE]: BIBLE_LIMITS.PLACE_DESCRIPTION_MAX,
+  [BIBLE_KIND.OBJECT]: BIBLE_LIMITS.OBJECT_DESCRIPTION_MAX,
+});
+
+// True when an entry already carries a non-empty description (so the backfill
+// pass has nothing to do for it). Characters check both the canonical and the
+// legacy field so a pre-migration `description`-only entry isn't double-filled.
+const hasDescription = (kind, entry) => {
+  if (kind === BIBLE_KIND.CHARACTER) {
+    return !!(((entry.physicalDescription || '').trim()) || ((entry.description || '').trim()));
+  }
+  return !!((entry.description || '').trim());
+};
+
+/**
+ * Backfill descriptions for canon nouns that have none, using ONLY what the
+ * prose establishes. Unlike `extractCanonFromProse` (which is allowed to invent
+ * + flag renderable axes the prose omits, so it never leaves a blank), this
+ * pass is strictly prose-grounded: a noun the prose names but never describes
+ * comes back `none` with an empty description, so the gap surfaces as a
+ * manuscript-quality red flag rather than being papered over.
+ *
+ * `targets` is `[{ id, kind }]` — typically the appears-in-this-issue entries
+ * that lack a description. Unknown ids, already-described entries, and locked
+ * entries are dropped (locked ones are reported as `skippedLocked`).
+ *
+ * Returns `{ universe, report }` where `report` is
+ * `{ filled, sufficient[], thin[], none[], skippedLocked[], unmatched }`.
+ * Only `sufficient`/`thin` rows with a non-empty grounded description are
+ * written, and only into entries that are STILL empty + unlocked at write time.
+ */
+export async function describeCanonFromProse(universeId, opts = {}) {
+  const { corpus, targets, providerOverride, modelOverride } = opts;
+  if (typeof corpus !== 'string' || !corpus.trim()) {
+    throw new ServerError('describeCanonFromProse: corpus is required', {
+      status: 400, code: 'UNIVERSE_CANON_NO_CORPUS',
+    });
+  }
+  if (!Array.isArray(targets) || targets.length === 0) {
+    throw new ServerError('describeCanonFromProse: at least one target noun is required', {
+      status: 400, code: 'UNIVERSE_CANON_NO_TARGETS',
+    });
+  }
+  const universe = await getUniverse(universeId);
+
+  // Resolve each requested {id, kind} against the current canon. Drop unknown
+  // ids and already-described entries; hold locked ones aside to report.
+  const resolved = [];
+  const skippedLocked = [];
+  let unmatched = 0;
+  for (const t of (targets || [])) {
+    const kind = t?.kind;
+    if (!BIBLE_KINDS.includes(kind)) { unmatched += 1; continue; }
+    const list = Array.isArray(universe[BIBLE_FIELD[kind]]) ? universe[BIBLE_FIELD[kind]] : [];
+    const entry = list.find((e) => e.id === t.id);
+    if (!entry || hasDescription(kind, entry)) { unmatched += 1; continue; }
+    if (entry.locked === true) { skippedLocked.push({ id: entry.id, name: entry.name, kind }); continue; }
+    resolved.push({ kind, entry });
+  }
+
+  const report = { filled: 0, sufficient: [], thin: [], none: [], skippedLocked, unmatched };
+  if (resolved.length === 0) return { universe, report };
+
+  const targetsForPrompt = resolved.map(({ kind, entry }) => ({
+    id: entry.id,
+    kind,
+    name: entry.name,
+    aliases: Array.isArray(entry.aliases) ? entry.aliases : [],
+  }));
+
+  const result = await runStagedLLM('pipeline-canon-describe-from-prose', {
+    corpus,
+    targetsJson: JSON.stringify(targetsForPrompt, null, 2),
+  }, {
+    providerOverride,
+    modelOverride,
+    returnsJson: true,
+    source: 'universe-canon-describe-from-prose',
+  });
+
+  const rows = Array.isArray(result.content?.descriptions) ? result.content.descriptions : [];
+  const byId = new Map();
+  for (const r of rows) {
+    if (r && typeof r === 'object' && typeof r.id === 'string') byId.set(r.id, r);
+  }
+
+  const SUFFICIENCY = new Set(['sufficient', 'thin', 'none']);
+  const fills = new Map(); // entryId -> { value }
+  for (const { kind, entry } of resolved) {
+    const row = byId.get(entry.id);
+    const name = entry.name;
+    if (!row) {
+      // LLM omitted this id entirely — treat as un-describable so it still
+      // surfaces to the writer rather than vanishing silently.
+      report.none.push({ id: entry.id, name, kind, note: 'The model returned no result for this noun.' });
+      continue;
+    }
+    const sufficiency = SUFFICIENCY.has(row.sufficiency) ? row.sufficiency : 'none';
+    const desc = typeof row.description === 'string' ? row.description.trim() : '';
+    const note = typeof row.note === 'string' ? row.note.trim().slice(0, 600) : '';
+    if ((sufficiency === 'sufficient' || sufficiency === 'thin') && desc) {
+      fills.set(entry.id, { value: desc.slice(0, DESC_LIMIT[kind]) });
+      report.filled += 1;
+      (sufficiency === 'sufficient' ? report.sufficient : report.thin).push({ id: entry.id, name, kind, note });
+    } else {
+      report.none.push({
+        id: entry.id, name, kind,
+        note: note || 'The manuscript names this but never describes how it looks.',
+      });
+    }
+  }
+
+  if (fills.size > 0) {
+    // Mutator form: re-read freshest persisted state and write only into entries
+    // that are STILL empty + unlocked (guards against an inline edit landing
+    // between our read and this write). Mirrors setCanonEntryLock. The DESC_FIELD
+    // lookup is per-kind, so the right field is written for each entry.
+    const updated = await updateUniverse(universe.id, (cur) => {
+      const patch = {};
+      for (const kind of BIBLE_KINDS) {
+        const field = BIBLE_FIELD[kind];
+        const list = Array.isArray(cur[field]) ? cur[field] : [];
+        let touched = false;
+        const nextList = list.map((e) => {
+          const fill = fills.get(e.id);
+          if (!fill || e.locked === true || hasDescription(kind, e)) return e;
+          touched = true;
+          return { ...e, [DESC_FIELD[kind]]: fill.value };
+        });
+        if (touched) patch[field] = nextList;
+      }
+      return Object.keys(patch).length ? patch : null;
+    });
+    console.log(`📝 Universe canon describe-from-prose — universe=${shortId(universeId)} filled=${report.filled} none=${report.none.length} thin=${report.thin.length} runId=${shortId(result.runId)}`);
+    return { universe: updated || universe, report };
+  }
+  console.log(`📝 Universe canon describe-from-prose — universe=${shortId(universeId)} filled=0 none=${report.none.length} thin=${report.thin.length} runId=${shortId(result.runId)}`);
+  return { universe, report };
+}
+
+/**
+ * Collapse a `describeCanonFromProse` report into the persisted
+ * `stage.descGaps` marker (sanitized by issues.sanitizeDescGaps). Records the
+ * counts + the nouns the prose couldn't describe (`none`) or only thinly
+ * described (`thin`) so the Nouns UI can render a persistent red-flag banner
+ * pointing the writer at manuscript gaps. `provider`/`model` record what ran.
+ */
+export function summarizeDescribeGaps({ report, provider, model } = {}) {
+  const mapGap = (arr) => (Array.isArray(arr) ? arr : []).map((g) => ({
+    id: String(g.id || ''),
+    name: String(g.name || '').slice(0, 200),
+    kind: g.kind,
+    note: String(g.note || '').slice(0, 600),
+  }));
+  return {
+    at: new Date().toISOString(),
+    provider: provider || '',
+    model: model || '',
+    filled: report?.filled || 0,
+    none: mapGap(report?.none),
+    thin: mapGap(report?.thin),
+    skippedLocked: mapGap(report?.skippedLocked),
   };
 }
 
