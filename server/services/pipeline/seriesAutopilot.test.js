@@ -90,6 +90,13 @@ let scriptVerifyFindings = [];
 const verifyComicScript = vi.fn(async () => ({ issues: scriptVerifyFindings }));
 vi.mock('./scriptVerify.js', () => ({ verifyComicScript }));
 
+let canonReady = true;
+let canonUndescribed = [];
+const checkSeriesCanonReadiness = vi.fn(async (seriesId) => ({
+  seriesId, ready: canonReady, issues: [], blockingIssues: [], undescribed: canonUndescribed,
+}));
+vi.mock('./canonReadiness.js', () => ({ checkSeriesCanonReadiness }));
+
 // Real services + the unit under test (imported AFTER the mocks above).
 const seriesSvc = await import('./series.js');
 const seasonsSvc = await import('./seasons.js');
@@ -121,6 +128,8 @@ beforeEach(() => {
   verifyFindings = [];
   editorialFindings = [];
   scriptVerifyFindings = [];
+  canonReady = true;
+  canonUndescribed = [];
   nextTaskId = 0;
   autopilot.__testing.runs.clear();
   vi.clearAllMocks();
@@ -195,11 +204,21 @@ describe('resolveNextStep (pure)', () => {
     expect(step.kind).toBe('done');
   });
 
-  it('asks for visual draft when includeVisual and pages are not rendered', () => {
+  it('asks for canon verify before visuals when includeVisual', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
       { arcVerified: true, scriptChecked: new Set(['iss1']), editorialReviewed: true },
+      { includeVisual: true },
+    );
+    expect(step.kind).toBe('canonVerify');
+  });
+
+  it('asks for visual draft once canon is verified and pages are not rendered', () => {
+    const step = resolveNextStep(
+      comic,
+      [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
+      { arcVerified: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, canonVerified: true },
       { includeVisual: true },
     );
     expect(step).toMatchObject({ kind: 'visualDraft', issueId: 'iss1' });
@@ -217,7 +236,7 @@ describe('resolveNextStep (pure)', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: renderedStages })],
-      { arcVerified: true, scriptChecked: new Set(['iss1']), editorialReviewed: true },
+      { arcVerified: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, canonVerified: true },
       { includeVisual: true },
     );
     expect(step.kind).toBe('done');
@@ -374,6 +393,32 @@ describe('autopilot conductor', () => {
     expect(issue.stages.comicPages.pages[0].proofImage.jobId).toBe('job-page-0');
     const series = await seriesSvc.getSeries(seriesId);
     expect(series.autopilot?.status).toBe('done');
+  });
+
+  it('pauses before visuals when a drawn canon noun is undescribed', async () => {
+    canonReady = false;
+    canonUndescribed = [{ id: 'c1', name: 'Kai', kind: 'character' }];
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { includeVisual: true });
+    await waitFor(runFinished(seriesId));
+    const last = autopilot.__testing.runs.get(seriesId)?.lastPayload;
+    expect(last?.type).toBe('paused');
+    expect(last?.scope).toBe('canonVerify');
+    expect(last?.residualFindings?.[0]?.location).toMatch(/Kai/);
+    // gate is BEFORE visual production — no renders kicked off
+    expect(visualSpies.enqueueComicCover).not.toHaveBeenCalled();
+    const series = await seriesSvc.getSeries(seriesId);
+    expect(series.autopilot?.status).toBe('paused');
+  });
+
+  it('proceeds to visuals once canon is ready', async () => {
+    canonReady = true;
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { includeVisual: true });
+    await waitFor(runFinished(seriesId));
+    expect(checkSeriesCanonReadiness).toHaveBeenCalled();
+    expect(visualSpies.enqueueComicCover).toHaveBeenCalled();
+    expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('complete');
   });
 
   it('does not render visuals when includeVisual is false', async () => {

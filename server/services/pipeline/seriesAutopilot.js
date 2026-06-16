@@ -46,6 +46,13 @@
  * series-level editorial review, so blocking craft findings are surfaced + filed
  * (not auto-rewritten, not a hard pause) and the run keeps moving toward a draft.
  *
+* CANON GATE: before any visual production, a series-level canonVerify step
+ * (canonReadiness.js) checks that every canon noun appearing where it'd be
+ * DRAWN (comic-script panels / teleplay) has a description. Undescribed drawn
+ * nouns pause the run for human review — an artist can't render a name. (An
+ * off-page noun named only in prose narration is never drawn, so it doesn't
+ * block here; it's a Nouns-stage quality note.)
+ *
  * DRAFT VISUALS (Phase 2, VISUAL_DRAFT_ENABLED): once a story is text-ready,
  * extract comic pages from the script (if not already), then enqueue PROOF
  * (draft) renders for the front cover, back cover, and every interior page —
@@ -85,6 +92,7 @@ import * as autoRunner from './autoRunner.js';
 import { seedReviewFromFindings, getReview } from './manuscriptReview.js';
 import { generateManuscriptFix, acceptManuscriptFix } from './manuscriptFix.js';
 import { verifyComicScript } from './scriptVerify.js';
+import { checkSeriesCanonReadiness } from './canonReadiness.js';
 
 // runs: Map<seriesId, { runId, clients[], lastPayload, cancelRequested, finished,
 //   cleanupTimer, startedAt, mode, options, runState, activeChild }>
@@ -237,6 +245,14 @@ export function resolveNextStep(series, issues, runState = {}, options = {}) {
   // STEP 5 — series-level editorial review via the manuscript editor (once).
   if (!runState.editorialReviewed) {
     return { kind: 'editorialReview', reason: 'editorial review not yet run this run' };
+  }
+
+  // STEP 5.5 — canon descriptive integrity. Before ANY visual production, every
+  // canon noun that appears where it'd be drawn must be described (an artist
+  // can't render a name). Runs once per run; the gate blocks (pauses) on
+  // undescribed drawn nouns. Only relevant when visuals will be produced.
+  if (VISUAL_DRAFT_ENABLED && options.includeVisual && isComicTarget(series) && !runState.canonVerified) {
+    return { kind: 'canonVerify', reason: 'canon descriptive integrity not yet verified this run' };
   }
 
   // STEP 6 — draft visuals (cover + back + all interior pages).
@@ -614,6 +630,37 @@ async function runVisualDraft(sId, issueId, record) {
   return {};
 }
 
+// Canon descriptive-integrity gate — deterministic (no LLM), so not billable.
+// Pauses for human review when a canon noun that appears in the visual source
+// has no description (it can't be drawn). Marks canonVerified when clean so the
+// run proceeds to visual drafting.
+async function runCanonVerify(sId, record) {
+  const report = await checkSeriesCanonReadiness(sId);
+  broadcast(sId, {
+    type: 'verify:round', scope: 'canon', round: 1,
+    findings: report.undescribed.length, blocking: report.undescribed.length,
+  });
+  if (report.ready) {
+    record.runState.canonVerified = true;
+    return {};
+  }
+  const residual = report.undescribed.map((n) => ({
+    severity: 'high',
+    location: `${n.kind} "${n.name}"`,
+    problem: 'Appears where it would be drawn but has no description — can\'t be rendered.',
+  }));
+  await fileGap(record, sId, {
+    gapKind: 'canon-undescribed',
+    summary: `${report.undescribed.length} canon noun(s) appear in panels/scenes with no description: ${report.undescribed.map((n) => n.name).join(', ').slice(0, 400)}. Describe them on the Nouns stage before generating pages.`,
+    context: JSON.stringify(report.undescribed).slice(0, 1000),
+  });
+  return {
+    pause: true,
+    reason: `${report.undescribed.length} canon noun(s) referenced in panels/scenes are undescribed — describe them before visual production`,
+    residual,
+  };
+}
+
 async function dispatchStep(sId, step, record) {
   switch (step.kind) {
     case 'generateArc': {
@@ -640,6 +687,8 @@ async function dispatchStep(sId, step, record) {
       return runScriptVerify(sId, step.issueId, record);
     case 'editorialReview':
       return runEditorial(sId, record);
+    case 'canonVerify':
+      return runCanonVerify(sId, record);
     case 'visualDraft':
       return runVisualDraft(sId, step.issueId, record);
     default:
@@ -671,6 +720,7 @@ function buildDryRunPlan(series, issues, options) {
   if (isComicTarget(series)) plan.push({ kind: 'scriptVerify', count: ordered.length });
   plan.push({ kind: 'editorialReview', count: 1, note: `up to ${MAX_EDITORIAL_ROUNDS} rounds` });
   if (VISUAL_DRAFT_ENABLED && options.includeVisual && isComicTarget(series)) {
+    plan.push({ kind: 'canonVerify', count: 1, note: 'descriptive integrity of drawn nouns' });
     const visualNeeded = ordered.filter((i) => !visualReady(i)).length;
     if (visualNeeded) plan.push({ kind: 'visualDraft', count: visualNeeded, note: 'cover + back + all pages (draft)' });
   }
@@ -719,6 +769,7 @@ export async function startSeriesAutopilot(sId, options = {}) {
     runState: {
       arcVerified: false,
       editorialReviewed: false,
+      canonVerified: false,
       beatsAttempted: new Set(),
       textAttempted: new Set(),
       scriptChecked: new Set(),

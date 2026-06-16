@@ -24,6 +24,8 @@
  *   GET    /series/:id/autopilot/progress       → SSE (text/event-stream)
  *   POST   /series/:id/autopilot/cancel         → { canceled }
  *   GET    /series/:id/autopilot/status         → { autopilot, active }
+ *   GET    /issues/:id/canon-readiness          → { referenced, none, thin, ready }
+ *   GET    /series/:id/canon-readiness          → { ready, issues, blockingIssues, undescribed }
  *
  * Assembled from domain sub-routers (mirrors the cos.js pattern). Mount
  * order preserves the original single-file registration order; the only
@@ -41,6 +43,7 @@ import coverRoutes from './covers.js';
 import issueRoutes from './issues.js';
 import editorialRoutes from './editorial.js';
 import autopilotRoutes from './autopilot.js';
+import canonRoutes from './canon.js';
 
 const router = Router();
 
@@ -52,5 +55,6 @@ router.use(coverRoutes);
 router.use(issueRoutes);
 router.use(editorialRoutes);
 router.use(autopilotRoutes);
+router.use(canonRoutes);
 
 export default router;
