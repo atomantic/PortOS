@@ -9,7 +9,7 @@ import {
   CODEX_PARALLEL_DEFAULT,
 } from '../services/mediaJobQueue/index.js';
 import { asyncHandler } from '../lib/errorHandler.js';
-import { backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, codeReviewSettingsSchema, locationSettingsSchema, settingsEmbeddingsSchema, citySnapshotConfigSchema, apiAccessSettingsSchema, loraTrainingConfigSchema, validateRequest } from '../lib/validation.js';
+import { backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, codeReviewSettingsSchema, locationSettingsSchema, settingsEmbeddingsSchema, citySnapshotConfigSchema, apiAccessSettingsSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, validateRequest } from '../lib/validation.js';
 
 const router = Router();
 
@@ -107,6 +107,12 @@ router.put('/', asyncHandler(async (req, res) => {
   // disk (the registry would then silently treat it as its default).
   if (req.body?.apiAccess !== undefined) {
     validateRequest(apiAccessSettingsSchema.partial(), req.body.apiAccess);
+  }
+  // Editorial-check enable/config slice (#1284) — validate when present so a
+  // malformed save can't write a non-boolean enabled / non-object config the
+  // registry would then choke on.
+  if (req.body?.pipelineEditorialChecks !== undefined) {
+    validateRequest(pipelineEditorialChecksSettingsSchema.partial(), req.body.pipelineEditorialChecks);
   }
   // User-defined catalog types moved out of settings.json into PostgreSQL
   // (`catalog_user_types`, #1001). The `/api/catalog/types` routes are the only

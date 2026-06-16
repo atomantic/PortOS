@@ -44,6 +44,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 
 | Module | Purpose |
 |---|---|
+| `editorial/` | Extensible editorial-check registry (#1284) — `EDITORIAL_CHECKS` + fail-fast guards + lookup/state helpers. See `editorial/README.md`. The runner that executes checks lives at `server/services/pipeline/editorial/checkRunner.js`. |
 | `storyBible.js` | Canonical Character / Place / Object shapes + `BIBLE_LIMITS`. |
 | `storyArc.js` | Canonical Arc + Season + Reader-Map shapes for pipeline arc planning. |
 | `storyBuilderSteps.js` | Unified Story Builder ordered step definitions + helpers (`STEPS`, `STEP_IDS`, `STEP_STATUSES`, `isValidStepId`, `stepIndex`). |

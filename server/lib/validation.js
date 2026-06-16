@@ -984,6 +984,31 @@ export const writersRoomLiveSuggestSchema = z.object({
 // payload (e.g. an attempt to smuggle a usage counter) instead of ignoring it.
 export const writersRoomLiveRenderPreviewSchema = z.object({}).strict();
 
+// =============================================================================
+// EDITORIAL CHECKS (#1284) — registry-driven editorial review
+// =============================================================================
+// Per-check enable/config. `config` is a free-form blob validated a second time
+// against the check's own Zod `configSchema` in the registry (resolveCheckConfig)
+// — this gate just bounds the wire shape so a malformed PATCH can't write junk.
+export const editorialCheckConfigSchema = z.object({
+  enabled: z.boolean().optional(),
+  config: z.record(z.unknown()).optional(),
+}).strict();
+
+// POST .../editorial/checks/run — run all enabled checks, or a named subset.
+// providerId/model are optional overrides forwarded to LLM-kind checks.
+export const editorialChecksRunSchema = z.object({
+  checkIds: z.array(z.string().trim().min(1).max(120)).max(50).optional(),
+  providerId: z.string().trim().max(80).optional(),
+  model: z.string().trim().max(200).optional(),
+}).strict();
+
+// settings.pipelineEditorialChecks slice (validated on PUT /api/settings when
+// present). `checks` maps a checkId → its persisted enable/config.
+export const pipelineEditorialChecksSettingsSchema = z.object({
+  checks: z.record(editorialCheckConfigSchema).optional(),
+}).strict();
+
 // Cursor-context payload for the CD-bridge suggest route — identical shape to
 // the live continuation suggest (the server only needs a window around the
 // cursor, not the whole manuscript).

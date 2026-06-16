@@ -463,6 +463,13 @@
       "model": "default",
       "returnsJson": true,
       "variables": []
+    },
+    "pipeline-editorial-info-dumping": {
+      "name": "Pipeline — Editorial Check: Info-dumping",
+      "description": "Editorial check (#1284): flags info-dumping / 'as you know, Bob' exposition in the drafted manuscript — backstory bricks, maid-and-butler dialogue, front-loaded world rules — and suggests how to dramatize or trim each instead. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
     }
   }
 }

@@ -70,6 +70,9 @@ vi.mock('./manuscriptReview.js', () => ({
   seedReviewFromFindings: vi.fn(async () => ({ comments: [] })),
   getReview: vi.fn(async () => ({ comments: [] })),
 }));
+vi.mock('./editorial/checkRunner.js', () => ({
+  runEditorialChecks: vi.fn(async () => ({ runId: 'ec', findings: [], perCheck: [], canceled: false })),
+}));
 vi.mock('./manuscriptFix.js', () => ({
   generateManuscriptFix: vi.fn(async () => ({})),
   acceptManuscriptFix: vi.fn(async () => ({})),
@@ -218,11 +221,21 @@ describe('resolveNextStep (pure)', () => {
     expect(step.kind).toBe('editorialReview');
   });
 
-  it('is done once editorial review has run (no visuals requested)', () => {
+  it('asks for editorial checks after editorial review, before done/visuals', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
       { arcVerified: true, scriptChecked: new Set(['iss1']), editorialReviewed: true },
+      { includeVisual: false },
+    );
+    expect(step.kind).toBe('editorialChecks');
+  });
+
+  it('is done once editorial review has run (no visuals requested)', () => {
+    const step = resolveNextStep(
+      comic,
+      [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
+      { arcVerified: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, editorialChecksReviewed: true },
       { includeVisual: false },
     );
     expect(step.kind).toBe('done');
@@ -232,7 +245,7 @@ describe('resolveNextStep (pure)', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
-      { arcVerified: true, scriptChecked: new Set(['iss1']), editorialReviewed: true },
+      { arcVerified: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, editorialChecksReviewed: true },
       { includeVisual: true, target: 'text' },
     );
     expect(step.kind).toBe('done');
@@ -242,7 +255,7 @@ describe('resolveNextStep (pure)', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
-      { arcVerified: true, scriptChecked: new Set(['iss1']), editorialReviewed: true },
+      { arcVerified: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, editorialChecksReviewed: true },
       { includeVisual: true },
     );
     expect(step.kind).toBe('canonVerify');
@@ -252,7 +265,7 @@ describe('resolveNextStep (pure)', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
-      { arcVerified: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, canonVerified: true },
+      { arcVerified: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, editorialChecksReviewed: true, canonVerified: true },
       { includeVisual: true },
     );
     expect(step).toMatchObject({ kind: 'visualDraft', issueId: 'iss1' });
@@ -271,7 +284,7 @@ describe('resolveNextStep (pure)', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: renderedStages })],
-      { arcVerified: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, canonVerified: true },
+      { arcVerified: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, editorialChecksReviewed: true, canonVerified: true },
       { includeVisual: true },
     );
     expect(step.kind).toBe('done');

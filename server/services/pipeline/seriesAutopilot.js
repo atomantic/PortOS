@@ -90,6 +90,7 @@ import {
 import * as volumeBeatsRunner from './volumeBeatsRunner.js';
 import * as autoRunner from './autoRunner.js';
 import { seedReviewFromFindings, getReview } from './manuscriptReview.js';
+import { runEditorialChecks } from './editorial/checkRunner.js';
 import { generateManuscriptFix, acceptManuscriptFix } from './manuscriptFix.js';
 import { verifyComicScript } from './scriptVerify.js';
 import { checkSeriesCanonReadiness } from './canonReadiness.js';
@@ -270,6 +271,13 @@ export function resolveNextStep(series, issues, runState = {}, options = {}) {
   // STEP 5 — series-level editorial review via the manuscript editor (once).
   if (!runState.editorialReviewed) {
     return { kind: 'editorialReview', reason: 'editorial review not yet run this run' };
+  }
+
+  // STEP 5.2 — registry-driven editorial checks (#1284). Runs the enabled
+  // editorial checks once per run and seeds their findings into the same
+  // manuscript-review comment set. A no-op when no checks are enabled.
+  if (!runState.editorialChecksReviewed) {
+    return { kind: 'editorialChecks', reason: 'editorial checks not yet run this run' };
   }
 
   // STEP 5.5 — canon descriptive integrity. Before ANY visual production, every
@@ -593,6 +601,27 @@ async function runEditorial(sId, record) {
   return {};
 }
 
+// STEP 5.2 — run the registry-driven editorial checks once per run, seeding
+// their findings into the same manuscript-review comment set. LLM-kind checks
+// cost tokens, so gate on the daily budget first; a no-op when no checks are
+// enabled (the runner returns zero findings). Failures are surfaced (logged)
+// but never block the run — editorial checks are advisory.
+async function runEditorialChecksPass(sId, record) {
+  if (record.cancelRequested) return { canceled: true };
+  const beforeChecks = await budgetPause();
+  if (beforeChecks) return beforeChecks;
+  const result = await runEditorialChecks(sId, providerOverrideOpts(record)).catch((err) => {
+    console.log(`⚠️ autopilot: editorial checks failed for ${sId.slice(0, 12)}: ${err.message}`);
+    return null;
+  });
+  if (result) {
+    await recordDomainUsage('cos', { actions: 1 });
+    broadcast(sId, { type: 'verify:round', scope: 'editorialChecks', round: 1, findings: result.findings.length, blocking: 0 });
+  }
+  record.runState.editorialChecksReviewed = true;
+  return {};
+}
+
 // Turn a render-enqueue result into the { slotKey, slot } pair the render
 // routes persist (proof → proofImage, final → finalImage).
 const slotFromRenderResult = (result) => {
@@ -820,6 +849,8 @@ async function dispatchStep(sId, step, record) {
       return runScriptVerify(sId, step.issueId, record);
     case 'editorialReview':
       return runEditorial(sId, record);
+    case 'editorialChecks':
+      return runEditorialChecksPass(sId, record);
     case 'canonVerify':
       return runCanonVerify(sId, record);
     case 'visualDraft':
@@ -855,6 +886,7 @@ function buildDryRunPlan(series, issues, options) {
   if (textNeeded) plan.push({ kind: 'textStages', count: textNeeded });
   if (isComicTarget(series)) plan.push({ kind: 'scriptVerify', count: ordered.length });
   plan.push({ kind: 'editorialReview', count: 1, note: `up to ${MAX_EDITORIAL_ROUNDS} rounds` });
+  plan.push({ kind: 'editorialChecks', count: 1, note: 'enabled editorial checks (#1284)' });
   if (VISUAL_DRAFT_ENABLED && wantsVisual(options) && isComicTarget(series)) {
     plan.push({ kind: 'canonVerify', count: 1, note: 'descriptive integrity of drawn nouns' });
     const visualNeeded = ordered.filter((i) => !visualReady(i)).length;
@@ -906,6 +938,7 @@ export async function startSeriesAutopilot(sId, options = {}) {
       arcAttempted: false,
       arcVerified: false,
       editorialReviewed: false,
+      editorialChecksReviewed: false,
       canonVerified: false,
       episodesAttempted: new Set(),
       beatsAttempted: new Set(),

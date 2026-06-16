@@ -109,6 +109,11 @@ function sanitizeComment(raw) {
       ? raw.replacementStrategy
       : replacementStrategyForCategory(category),
     anchorQuote: clampStr(raw.anchorQuote, 400),
+    // Which editorial check produced this finding (#1284). `null` for findings
+    // from the manuscript-completeness pass (and older peers / legacy records)
+    // — those predate the registry, so they group as a single un-checked set.
+    // Optional + additive, so the synced review doc stays backward-compatible.
+    checkId: typeof raw.checkId === 'string' && raw.checkId ? raw.checkId : null,
     status: STATUS_SET.has(raw.status) ? raw.status : 'open',
     fix: sanitizeFix(raw.fix),
     sourceRunId: typeof raw.sourceRunId === 'string' ? raw.sourceRunId : null,
@@ -143,9 +148,13 @@ export async function getReview(seriesId) {
   return readReview(seriesId);
 }
 
-// Stable identity for a finding so re-running completeness doesn't duplicate a
-// still-open comment the user hasn't acted on yet.
-const findingKey = (c) => `${c.issueNumber ?? ''}|${c.anchorQuote}|${c.problem}`;
+// Stable identity for a finding so re-running completeness (or an editorial
+// check) doesn't duplicate a still-open comment the user hasn't acted on yet.
+// `checkId` is part of the key so the same anchor flagged by two different
+// checks stays as two distinct findings, and a dismissed finding only stays
+// suppressed for the check that raised it. Completeness findings carry no
+// checkId (→ '' prefix), so their existing dedup is unchanged.
+const findingKey = (c) => `${c.checkId ?? ''}|${c.issueNumber ?? ''}|${c.anchorQuote}|${c.problem}`;
 
 /**
  * Merge a fresh set of shaped completeness findings into the review.
