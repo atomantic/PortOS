@@ -167,6 +167,13 @@ describe('resolveNextStep (pure)', () => {
     expect(resolveNextStep(arcOnly, [], { arcAttempted: true }).kind).not.toBe('generateArc');
   });
 
+  it('dry-run plan includes generateArc for an arc-only series (parity with execute)', () => {
+    const plan = autopilot.__testing.buildDryRunPlan(
+      { targetFormat: 'comic', arc: { logline: 'L', summary: 'S' }, seasons: [] }, [], {},
+    );
+    expect(plan[0].kind).toBe('generateArc');
+  });
+
   it('asks to generate episodes for a season with no issues', () => {
     const step = resolveNextStep(comic, []);
     expect(step).toMatchObject({ kind: 'generateEpisodes', seasonId: 'se1' });
@@ -502,6 +509,15 @@ describe('autopilot conductor', () => {
     const last = autopilot.__testing.runs.get(seriesId)?.lastPayload;
     expect(last?.type).toBe('paused');
     expect(last?.scope).toBe('visualDraft');
+    expect(visualSpies.enqueueComicCover).not.toHaveBeenCalled();
+  });
+
+  it('skips visual draft for a locked comicPages stage (does not mutate it)', async () => {
+    const { seriesId, issueId } = await seedComplete();
+    await issuesSvc.updateStage(issueId, 'comicPages', { locked: true });
+    await autopilot.startSeriesAutopilot(seriesId, { includeVisual: true });
+    await waitFor(runFinished(seriesId));
+    expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('complete');
     expect(visualSpies.enqueueComicCover).not.toHaveBeenCalled();
   });
 
