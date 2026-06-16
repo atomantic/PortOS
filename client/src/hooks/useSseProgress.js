@@ -3,7 +3,11 @@ import { useEffect, useRef, useState } from 'react';
 // Both cancel spellings are terminal. Every emitter normalizes on `canceled`
 // (single l); `cancelled` stays tolerated defensively so a stream from an
 // emitter that drifts back to the double-l spelling still terminates.
-const TERMINAL_TYPES = new Set(['complete', 'canceled', 'cancelled', 'error']);
+// `paused` is terminal too: the series-autopilot runner ends a run by
+// broadcasting `paused` (budget/non-convergence/canon gate) and then closing
+// the SSE server-side, so the client must treat it as stream-ending. Inert for
+// other consumers — no other runner emits a `paused` frame.
+const TERMINAL_TYPES = new Set(['complete', 'canceled', 'cancelled', 'error', 'paused']);
 
 /** True when a frame is one of the stream-ending types this hook closes on. */
 export const isTerminalSseFrame = (frame) => TERMINAL_TYPES.has(frame?.type);
