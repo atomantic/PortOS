@@ -1249,5 +1249,127 @@ For each reference above:
   // pr-watcher shipped at v1 — no prior defaults to recognize yet. Kept as an
   // empty list so the auto-upgrade machinery has an entry to consult and the
   // next prompt revision just appends the v1 body here.
-  'pr-watcher': []
+  'pr-watcher': [],
+  // claim-issue v1 default — excluded every `plan`-labelled issue (the entire
+  // migrated backlog), so auto-pick always reported an empty queue. Superseded
+  // by v2, which skips only true epics. Kept so a stored v1 prompt auto-upgrades.
+  'claim-issue': [
+    `[Claim Issue: {appName}] Claim and ship the next open GitHub issue
+
+Pick the next available unclaimed open GitHub issue, **create your own worktree at \`claim/issue-<num>\`**, implement the fix, ship a PR that closes the issue, and clean up. This is the \`/claim --issues\` flow — same in-flight scan, same branch naming, same no-local-merge cleanup, but the work source is the repo's GitHub issue tracker instead of PLAN.md. **YOU pick the issue in Phase 1 — the scheduler does not reserve one for you.** Picking at execution time and immediately claiming (worktree + assignee + label) **narrows** the window for two concurrent runs to collide on the same issue — it does NOT eliminate it. Do NOT modify files in the source repo directly; ALL editing happens inside the worktree you create.
+
+{issueAuthorFilter}
+
+**How claiming works.** An issue is "in flight" when its number appears as the issue-position segment in either a \`claim/issue-<num>\` ref (the human/TUI pattern) or a \`cos/<task>/issue-<num>/<agent>\` ref (the CoS sub-agent pattern) across local branches, remote branches, or open PR head refs — OR the issue is already assigned to someone OR carries an \`in-progress\` label. The \`claim/issue-<num>\` branch + the assignee/\`in-progress\` markers you set ARE the claim, visible to every other agent (including parallel machines) and to the human running \`/claim --issues\` in a TUI.
+
+## Phase 1 — Pick the target issue
+
+Run steps 1–5 in order.
+
+1. cd into the repo root ({repoPath}) and confirm GitHub is the forge: \`gh repo view --json nameWithOwner -q .nameWithOwner\`. If \`gh\` is not authenticated or the remote is not GitHub, exit cleanly — this task only works against GitHub issue trackers.
+2. List candidate open issues **oldest-first**, honoring the author filter described above. \`gh issue list\` defaults to newest-first, so order on the SERVER with \`--search "sort:created-asc"\` — a client-side \`jq\` sort would only reorder the already-truncated newest page, dropping the true oldest issues on repos with more than \`--limit\` open issues:
+   \`\`\`bash
+   git fetch --prune 2>/dev/null
+   # Author filter (see the block above). Pass --author as a QUOTED single token —
+   # do NOT pack flag+value into one variable: a bare \`$VAR\` holding "--author x"
+   # is a single argv token in zsh (no word-splitting) and gh rejects it.
+   #   Owner-only mode (default): resolve the owner, then add  --author "$OWNER"
+   OWNER="$(gh repo view --json owner -q .owner.login)"
+   gh issue list --state open --author "$OWNER" --search "sort:created-asc" --json number,title,author,assignees,labels,createdAt --limit 100
+   #   Any-author mode: run the SAME command WITHOUT the --author "$OWNER" flag.
+   \`\`\`
+3. Build the in-flight set. Collect every branch/PR ref:
+   \`\`\`bash
+   git branch -a --no-color --format='%(refname:short)'
+   gh pr list --state open --json headRefName -q '.[].headRefName' 2>/dev/null
+   \`\`\`
+   For each ref (after stripping any leading \`origin/\` / \`upstream/\` prefix), extract the issue number **only when the ref matches** \`claim/issue-<num>\` (number after \`claim/issue-\`) or \`cos/<task>/issue-<num>/<agent>\` (the \`issue-<num>\` third segment). Do NOT flag an issue just because its bare number appears elsewhere in a ref.
+4. **Pick the target issue:** walk the candidate list oldest-first and pick the FIRST issue where ALL of the following are true:
+   - Its number is NOT in the in-flight set.
+   - It has NO assignees (an assignee means another machine/human already claimed it).
+   - It does NOT carry any of these blocking labels: \`in-progress\`, \`blocked\`, \`needs-input\`, \`future\`, \`wontfix\`, \`question\`, \`discussion\`.
+   - It is NOT itself a tracking/umbrella issue labeled \`plan\` (those are split by \`/claim --issues\` into per-slice PRs, not claimed wholesale here).
+5. **If no eligible issue exists**, exit cleanly — an empty actionable queue is a healthy state, not a failure.
+
+Capture the issue number as \`NUM\`, its title, and its full body — you'll reuse them in the PR and the \`Closes #<num>\` trailer.
+
+## Phase 2 — Claim (worktree + markers)
+
+Create the worktree on a branch named \`claim/issue-<num>\`, then set the cross-machine claim markers. Do all editing inside the worktree, NEVER in the source repo's working tree.
+
+\`\`\`bash
+NUM=<picked-number>
+WORKTREE="data/cos/worktrees/claim-issue-\${NUM}"
+mkdir -p data/cos/worktrees
+git fetch origin main
+git worktree add -b "claim/issue-\${NUM}" "\${WORKTREE}" origin/main
+# Cross-machine claim markers (best-effort — do not abort the run if these fail):
+gh issue edit "\${NUM}" --add-assignee @me 2>/dev/null
+gh issue edit "\${NUM}" --add-label in-progress 2>/dev/null
+cd "\${WORKTREE}"
+\`\`\`
+
+(If the repo's default branch is not \`main\`, detect it with \`gh repo view --json defaultBranchRef -q .defaultBranchRef.name\` and substitute it for \`main\` above.)
+
+**If \`git worktree add\` fails because the \`claim/issue-<num>\` branch already exists** (a concurrent run won the race, or a remote claim branch is now visible), do NOT force or reuse it — that branch IS another run's claim. Treat the issue as in-flight, return to Phase 1, and pick the next eligible issue; if nothing else is eligible, exit cleanly. Stash \`WORKTREE\` — you'll need it for Phase 7 cleanup.
+
+## Phase 3 — Verify still valid
+
+Read the full issue (\`gh issue view "\${NUM}" --comments\`) before writing any code. **If ANY of these are true, release the claim and re-pick** (remove the assignee + \`in-progress\` label you set, remove the worktree, return to Phase 1):
+
+- A comment indicates the issue was already fixed, superseded, or closed-then-reopened-for-tracking.
+- The request references a function, file, or component that no longer exists (\`grep -rn\` the named identifiers — if they're gone, the issue is stale).
+- The work would require touching files far outside the issue's scope (>5 unrelated files), suggesting it's bigger than a single claim.
+- The requirements are too ambiguous to implement without user clarification.
+
+If the issue is too ambiguous or large, post a brief comment on the issue explaining what's blocking (\`gh issue comment "\${NUM}" --body "..."\`), release the markers (\`gh issue edit "\${NUM}" --remove-assignee @me --remove-label in-progress\`), remove the worktree, and exit cleanly so a human can refine it. Do NOT leave a half-claimed issue.
+
+## Phase 4 — Implement
+
+Write the code, tests, and any docs the issue requires. Follow the repo conventions in CLAUDE.md (no try/catch in route handlers, functional programming, Zod validation, Tailwind tokens, reactive UI updates). Run the relevant test suite as you go.
+
+**Roll discovered backbone work INTO this PR** — small supporting helpers, refactors, and tests that the fix depends on belong here, not a follow-up. Only defer genuinely-large adjacent work; when you do, file a NEW issue (\`gh issue create\`) tagged \`plan\` that references this one (\`Related to #<num>\`) rather than appending to PLAN.md.
+
+Commit with a conventional message referencing the issue so the trail is grep-able:
+
+\`\`\`
+<type>: <one-line description> (#<num>)
+\`\`\`
+
+## Phase 5 — Open the PR
+
+This flow ships GitHub issues — it does NOT touch PLAN.md. The audit trail is the merged PR + \`git log\`.
+
+1. If the repo maintains a changelog (\`.changelog/NEXT.md\`, or a \`## Unreleased\` section in \`CHANGELOG.md\`), append a one-line entry mirroring the repo's existing prose style. If no changelog convention exists, skip this — the PR + commit history is the record.
+2. Push the branch: \`git push -u origin "claim/issue-\${NUM}"\`
+3. Open the PR with \`gh pr create\`. The body MUST contain \`Closes #\${NUM}\` so the merge auto-closes the issue. Summarize what shipped + a short test plan.
+
+## Phase 6 — Review and ship
+
+The configured reviewers for this task, in order, are \`{reviewers}\`. \`copilot\` waits for GitHub's auto-review; \`claude\` / \`codex\` / \`antigravity\` invoke a local-CLI critique. When more than one is configured, run each in the listed order before merging — this mirrors slashdo's \`/do:pr --review-with <list>\`.
+
+1. **Self-review your diff for reuse, quality, and efficiency** (DRY, dead code, naming, simpler equivalents, missed edge cases) and fix findings in the same diff BEFORE the reviewers run. Claude Code runs this as the three-agent \`/simplify\` pass; on other CLIs, do the equivalent review by hand.
+2. **Wait for each configured reviewer's findings BEFORE merging.** \`gh pr merge --auto\` only waits for required status checks; it does NOT wait for code-review feedback. Run the reviewers in the listed order (\`{reviewers}\`); for \`copilot\`, poll up to 10 minutes for its review and address \`COMMENTED\` / \`CHANGES_REQUESTED\` findings (commit + push inside the worktree, re-poll), capped at 3 rounds. For \`claude\` / \`codex\` / \`antigravity\`, invoke that CLI headless against the PR diff, apply fixes, run tests, re-push — capped at 3 rounds — then advance to the next reviewer.
+
+   **Review-stuck cleanup** (after 3 unresolved rounds): post one summarizing PR comment (\`gh pr comment\`), then run the worktree-only cleanup (\`cd {repoPath} && git worktree remove "\${WORKTREE}"\`). Leave the local branch, the open PR, the assignee, and the \`in-progress\` label in place so the human picks up cold. Do NOT run Phase 7.
+3. **Merge via \`gh pr merge\`** — NEVER a local \`git merge\`. The repo may allow only one method, so try in order and use the first that succeeds:
+   \`\`\`bash
+   gh pr merge <pr-num> --auto --delete-branch \\
+     || gh pr merge <pr-num> --merge --delete-branch \\
+     || gh pr merge <pr-num> --squash --delete-branch \\
+     || gh pr merge <pr-num> --rebase --delete-branch
+   \`\`\`
+
+## Phase 7 — Clean up (post-merge ONLY)
+
+This phase runs only after the PR merged via Phase 6. From the **source repo** (cd back to {repoPath} first):
+
+\`\`\`bash
+cd {repoPath}
+git worktree remove "\${WORKTREE}"
+git branch -d "claim/issue-\${NUM}"
+\`\`\`
+
+If \`git branch -d\` refuses (the PR squash-merged on GitHub but local doesn't know yet), use \`-D\` — the PR is confirmed merged, so the local branch is redundant. Verify the issue closed (the \`Closes #\${NUM}\` trailer auto-closes it on merge); if it's still open, close it manually (\`gh issue close "\${NUM}"\`) and remove the \`in-progress\` label (\`gh issue edit "\${NUM}" --remove-label in-progress\`). **Do NOT \`git pull\`** from inside this phase — the work is already integrated on GitHub via \`gh pr merge\`; leave the user's working tree alone.`,
+  ],
 };

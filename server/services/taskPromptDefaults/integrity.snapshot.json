@@ -12,7 +12,7 @@
     "mobile-responsive": "16d8e7f63a673a2de48994c0ac08ef3d",
     "feature-ideas": "0741418bd275b8953131155f8bc89460",
     "plan-task": "5425306bf082b15b6a17f972557d4dd9",
-    "claim-issue": "06190b8089adf1cb2c84bddeb6596af7",
+    "claim-issue": "28f09436566c281a6915d6ad4c1b80f8",
     "code-reviewer-review": "1cd13ee5142d130f95cc390098d0f278",
     "code-reviewer-implement": "ab2c3e16d54e195bdf856574b7702042",
     "error-handling": "9afba2e99b90a8d5771c75e7f0615d96",
@@ -32,7 +32,7 @@
   "PROMPT_VERSIONS": {
     "feature-ideas": 9,
     "plan-task": 8,
-    "claim-issue": 1,
+    "claim-issue": 2,
     "pr-reviewer": 3,
     "code-reviewer-a": 1,
     "code-reviewer-b": 1,
@@ -65,6 +65,9 @@
     "reference-watch": [
       "f9322140bff7d3f603799c09ce468da9"
     ],
-    "pr-watcher": []
+    "pr-watcher": [],
+    "claim-issue": [
+      "06190b8089adf1cb2c84bddeb6596af7"
+    ]
   }
 }

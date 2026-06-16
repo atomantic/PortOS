@@ -9,7 +9,7 @@
 export const PROMPT_VERSIONS = {
   'feature-ideas': 9,  // v9: drop DONE.md reads — use `.changelog/` + `git log` (last 50) as the completed-work signal
   'plan-task': 8,      // v8: Phase-6 merge fallback prefers --merge over --squash (after --auto), matching the /do:pr + review-loop default and PortOS's merge-only policy
-  'claim-issue': 1,    // v1: /claim --issues flow — pick next open GitHub issue (owner-filtered or any-author), claim/issue-<num> worktree + assignee/in-progress markers, PR closes the issue
+  'claim-issue': 2,    // v2: stop treating the bare `plan` label as a skip — `plan` is the claimable-queue label (do-replan --issues labels every migrated backlog item `plan`), so v1's exclusion emptied the whole actionable queue; now skip only true epics (`epic` label or "(epic)" title)
   'pr-reviewer': 3,    // v3: multi-stage pipeline (security scan → code review + merge)
   'code-reviewer-a': 1, // v1: 2-stage pipeline (codebase review → triage & implement)
   'code-reviewer-b': 1, // v1: 2-stage pipeline (codebase review → triage & implement)
