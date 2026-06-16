@@ -7,6 +7,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('../universeBuilder.js', () => ({
   getUniverse: vi.fn(),
   joinInfluenceList: (a) => (Array.isArray(a) ? a.filter(Boolean).join(', ') : ''),
+  ERR_NOT_FOUND: 'NOT_FOUND',
 }));
 vi.mock('./series.js', async (importOriginal) => {
   const actual = await importOriginal();
@@ -100,6 +101,23 @@ describe('generateSeriesConcept', () => {
     await expect(generateSeriesConcept('uni-1')).rejects.toMatchObject({
       code: 'PIPELINE_SERIES_CONCEPT_EMPTY',
     });
+  });
+
+  it('maps a missing universe to a 404 (not a 500)', async () => {
+    getUniverse.mockRejectedValue(Object.assign(new Error('Universe not found: uni-x'), { code: 'NOT_FOUND' }));
+    await expect(generateSeriesConcept('uni-x')).rejects.toMatchObject({
+      status: 404,
+      code: 'PIPELINE_SERIES_CONCEPT_UNIVERSE_NOT_FOUND',
+    });
+    // The LLM must never be invoked when the seed universe is missing.
+    expect(runPromptRefineRaw).not.toHaveBeenCalled();
+  });
+
+  it('propagates a listSeries storage failure instead of swallowing it', async () => {
+    listSeries.mockRejectedValue(new Error('db unavailable'));
+    await expect(generateSeriesConcept('uni-1')).rejects.toThrow('db unavailable');
+    // No generation off an incomplete duplicate-avoidance brief.
+    expect(runPromptRefineRaw).not.toHaveBeenCalled();
   });
 
   it('passes the universe and existing-series context into the prompt', async () => {
