@@ -421,15 +421,31 @@ const runBeats = (seriesId, seasonId, record) => runChildToCompletion(record, {
   isActive: volumeBeatsRunner.isVolumeBeatsRunActive,
 });
 
-const runText = (issueId, record) => runChildToCompletion(record, {
-  attemptedSet: record.runState.textAttempted,
-  kind: 'text',
-  id: issueId,
+async function runText(issueId, record) {
+  record.runState.textAttempted.add(issueId);
   // Forward the run's provider/model override so prose + scripts honor it like
   // every other step (autoRunner threads these into generateStage).
-  start: () => autoRunner.startAutoRunTextStages(issueId, { force: false, ...providerIdOpts(record) }),
-  isActive: autoRunner.isAutoRunActive,
-});
+  await autoRunner.startAutoRunTextStages(issueId, { force: false, ...providerIdOpts(record) });
+  record.activeChild = { kind: 'text', id: issueId };
+  await waitForChild(() => autoRunner.isAutoRunActive(issueId), record);
+  record.activeChild = null;
+  await recordDomainUsage('cos', { actions: 1 });
+  // A delegated text run can end with required stages still empty (the child's
+  // LLM call failed). The issue is already marked attempted, so the resolver
+  // would skip it and the run could reach 'done' with no script — verify the
+  // required stages landed and pause for review if they didn't.
+  const issue = await getIssue(issueId);
+  const series = await getSeries(issue.seriesId).catch(() => null);
+  if (!textReady(issue, series)) {
+    const missing = requiredScriptStages(series).filter((s) => !isStageReady(issue.stages?.[s]));
+    return {
+      pause: true,
+      reason: `text generation for issue ${issue.number ?? issueId} did not produce required stage(s): ${missing.join(', ')}`,
+      residual: missing.map((s) => ({ severity: 'high', location: `issue ${issue.number ?? '?'} / ${s}`, problem: 'stage is still empty after the text run (likely an LLM failure)' })),
+    };
+  }
+  return {};
+}
 
 async function runScriptVerify(sId, issueId, record) {
   record.runState.scriptChecked.add(issueId);

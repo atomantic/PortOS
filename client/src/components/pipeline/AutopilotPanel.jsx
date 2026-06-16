@@ -100,13 +100,22 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
   const onIssuesUpdateRef = useRef(onIssuesUpdate);
   onSeriesUpdateRef.current = onSeriesUpdate;
   onIssuesUpdateRef.current = onIssuesUpdate;
+  // The runId of the run THIS panel is currently tracking. After a run ends,
+  // useSseProgress leaves the terminal frame in `latest`; without this guard a
+  // fresh Run/Resume would see that stale terminal frame and immediately tear
+  // the new run down. Terminal frames whose runId doesn't match are ignored.
+  const activeRunIdRef = useRef(null);
 
   // Re-attach to an in-flight run on (re)mount.
   useEffect(() => {
     if (!seriesId) return undefined;
     let canceled = false;
     getPipelineAutopilotStatus(seriesId, { silent: true })
-      .then((s) => { if (!canceled && s?.active) setActive(true); })
+      .then((s) => {
+        if (canceled || !s?.active) return;
+        activeRunIdRef.current = s.autopilot?.runId || null;
+        setActive(true);
+      })
       .catch(() => null);
     return () => { canceled = true; };
   }, [seriesId]);
@@ -122,6 +131,8 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
   // Run-ended handling: refresh series (for the marker) + issues, toast outcome.
   useEffect(() => {
     if (!active || !latest || !RUN_ENDED.has(latest.type)) return;
+    // Ignore a terminal frame left over from a previous run (stale `latest`).
+    if (activeRunIdRef.current && latest.runId && latest.runId !== activeRunIdRef.current) return;
     setActive(false);
     getPipelineSeries(seriesId, { silent: true }).then((s) => { if (s) onSeriesUpdateRef.current?.(s); }).catch(() => null);
     listPipelineIssues(seriesId, { silent: true }).then((is) => onIssuesUpdateRef.current?.(Array.isArray(is) ? is : [])).catch(() => null);
@@ -140,6 +151,9 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
     if (!res) return;
     setMode(res.mode || null);
     setShowOpts(false);
+    // Track this run's id BEFORE enabling the stream so the terminal-frame
+    // effect can reject a stale terminal frame from the previous run.
+    activeRunIdRef.current = res.runId || null;
     setActive(true);
   }, [seriesId, includeVisual, fileGaps]);
 

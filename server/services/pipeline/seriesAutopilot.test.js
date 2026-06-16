@@ -453,6 +453,22 @@ describe('autopilot conductor', () => {
     expect(last?.type).toBe('complete'); // gap filed, run still finishes
   });
 
+  it('pauses when a delegated text run leaves required stages empty', async () => {
+    // idea ready but comicScript missing → resolver routes textStages; the
+    // autoRunner mock is a no-op so comicScript stays empty after the run.
+    const series = await seriesSvc.createSeries({ name: 'S', logline: 'L', premise: 'P', targetFormat: 'comic' });
+    await seriesSvc.updateSeries(series.id, { arc: { logline: 'A', summary: 'S' } });
+    const season = await seasonsSvc.createSeason(series.id, { number: 1, title: 'V1' });
+    const issue = await issuesSvc.createIssue({ seriesId: series.id, seasonId: season.id, title: 'I1', number: 1 });
+    await issuesSvc.updateStage(issue.id, 'idea', ready('beats'));
+    await autopilot.startSeriesAutopilot(series.id, { includeVisual: false });
+    await waitFor(runFinished(series.id));
+    const last = autopilot.__testing.runs.get(series.id)?.lastPayload;
+    expect(last?.type).toBe('paused');
+    expect(last?.scope).toBe('textStages');
+    expect(last?.reason).toMatch(/comicScript/);
+  });
+
   it('does not file gap tasks when fileGaps is off', async () => {
     const { seriesId } = await seedComplete({ script: 'just prose, no comic pages here' });
     await autopilot.startSeriesAutopilot(seriesId, { includeVisual: false });
