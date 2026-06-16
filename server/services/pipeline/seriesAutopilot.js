@@ -226,8 +226,11 @@ export function resolveNextStep(series, issues, runState = {}, options = {}) {
     return { kind: 'generateArc', reason: seasons.length === 0 && !noArc ? 'series has no volumes' : 'series has no arc' };
   }
 
-  // STEP 2 — a season with zero issues (in season order).
+  // STEP 2 — a season with zero issues (in season order). Skip volumes already
+  // attempted this run so an empty episode generation can't re-loop (the
+  // dispatch pauses when it produces no issues).
   for (const season of seasons) {
+    if (setHas(runState.episodesAttempted, season.id)) continue;
     const inSeason = ordered.filter((i) => i.seasonId === season.id);
     if (inSeason.length === 0) {
       return { kind: 'generateEpisodes', seasonId: season.id, reason: `volume ${season.number ?? '?'} has no issues` };
@@ -481,21 +484,23 @@ async function runScriptVerify(sId, issueId, record) {
   const issue = await getIssue(issueId);
 
   // Gate 1 — STRUCTURAL (pure, cheap): does the script parse into pages/panels?
-  // A structural failure blocks page extraction, so surface + file a gap.
+  // This is the only structural validation before completion in text-only /
+  // visual-disabled comic runs, so a failure must BLOCK (pause), not just mark
+  // the issue checked — otherwise the run could report done with a script that
+  // can't become pages.
   if (!scriptStructurallyReady(issue)) {
-    broadcast(sId, {
-      type: 'step:skip',
-      kind: 'scriptVerify',
-      issueId,
-      reason: 'comic script did not parse into pages/panels — flagged for review',
-    });
     await fileGap(record, sId, {
       gapKind: 'script-unparseable',
       issueId,
       summary: 'The comic script for this issue does not parse into pages/panels, so comic pages can\'t be extracted. It likely needs a manual fix or regeneration of the comicScript stage.',
       context: `issueId=${issueId}`,
     });
-    return {};
+    return {
+      pause: true,
+      gapFiled: true,
+      reason: `comic script for issue ${issue.number ?? issueId} does not parse into pages/panels`,
+      residual: [{ severity: 'high', location: `issue ${issue.number ?? '?'} / comicScript`, problem: 'script did not parse into pages/panels — cannot extract comic pages' }],
+    };
   }
 
   // Gate 2 — CRAFT (LLM): does the script function as a comic script? This is
@@ -782,10 +787,20 @@ async function dispatchStep(sId, step, record) {
       return {};
     }
     case 'generateEpisodes': {
+      // Mark attempted up front so an empty/invalid episode list can't re-loop
+      // the resolver back into generateEpisodes for the same still-empty volume.
+      record.runState.episodesAttempted.add(step.seasonId);
       const r = await generateSeasonEpisodes(sId, step.seasonId, providerOverrideOpts(record));
       const cur = await getSeries(sId);
-      await commitEpisodesToIssues(sId, step.seasonId, r.episodes, { preloadedSeries: cur });
+      const created = await commitEpisodesToIssues(sId, step.seasonId, r.episodes, { preloadedSeries: cur });
       await recordDomainUsage('cos', { actions: 1 });
+      if (!Array.isArray(created) || created.length === 0) {
+        return {
+          pause: true,
+          reason: `episode generation produced no issues for volume ${step.seasonId} — review the volume outline and regenerate`,
+          residual: [{ severity: 'high', location: `volume ${step.seasonId}`, problem: 'episode breakdown returned zero episodes/issues' }],
+        };
+      }
       return {};
     }
     case 'verifyArc':
@@ -885,6 +900,7 @@ export async function startSeriesAutopilot(sId, options = {}) {
       arcVerified: false,
       editorialReviewed: false,
       canonVerified: false,
+      episodesAttempted: new Set(),
       beatsAttempted: new Set(),
       textAttempted: new Set(),
       scriptChecked: new Set(),

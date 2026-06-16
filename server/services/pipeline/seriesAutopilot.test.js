@@ -393,6 +393,19 @@ describe('autopilot conductor', () => {
     expect(series.autopilot?.residualFindings?.[0]?.problem).toBe('plot hole');
   });
 
+  it('pauses (no infinite loop) when episode generation produces no issues', async () => {
+    const series = await seriesSvc.createSeries({ name: 'S', logline: 'L', premise: 'P', targetFormat: 'comic' });
+    await seriesSvc.updateSeries(series.id, { arc: { logline: 'A', summary: 'S' } });
+    await seasonsSvc.createSeason(series.id, { number: 1, title: 'V1' }); // volume with no issues
+    // commitEpisodesToIssues mock returns [] → no issues created.
+    await autopilot.startSeriesAutopilot(series.id, { includeVisual: false });
+    await waitFor(runFinished(series.id));
+    const last = autopilot.__testing.runs.get(series.id)?.lastPayload;
+    expect(last?.type).toBe('paused');
+    expect(last?.scope).toBe('generateEpisodes');
+    expect(arcSpies.generateSeasonEpisodes).toHaveBeenCalledTimes(1); // not looping
+  });
+
   it('pauses (no infinite loop) when arc generation yields no volumes', async () => {
     const series = await seriesSvc.createSeries({ name: 'S', logline: 'L', premise: 'P', targetFormat: 'comic' });
     await seriesSvc.updateSeries(series.id, { arc: { logline: 'A', summary: 'S' } }); // arc but no seasons
@@ -502,13 +515,15 @@ describe('autopilot conductor', () => {
     expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('complete');
   });
 
-  it('pauses visual draft (no art) when the comic script does not parse into pages', async () => {
+  it('blocks before visuals when the comic script does not parse (structural gate)', async () => {
+    // scriptVerify runs before canon/visual, so an unparseable script pauses
+    // there and no art is queued.
     const { seriesId } = await seedComplete({ script: 'just prose, no comic pages here' });
     await autopilot.startSeriesAutopilot(seriesId, { includeVisual: true });
     await waitFor(runFinished(seriesId));
     const last = autopilot.__testing.runs.get(seriesId)?.lastPayload;
     expect(last?.type).toBe('paused');
-    expect(last?.scope).toBe('visualDraft');
+    expect(last?.scope).toBe('scriptVerify');
     expect(visualSpies.enqueueComicCover).not.toHaveBeenCalled();
   });
 
@@ -529,17 +544,16 @@ describe('autopilot conductor', () => {
     expect(visualSpies.enqueueVisualComicPage).not.toHaveBeenCalled();
   });
 
-  it('files a CoS gap task for an unparseable script when fileGaps is set', async () => {
+  it('pauses on an unparseable comic script and files a gap (fileGaps)', async () => {
     const { seriesId } = await seedComplete({ script: 'just prose, no comic pages here' });
     await autopilot.startSeriesAutopilot(seriesId, { fileGaps: true, includeVisual: false });
     await waitFor(runFinished(seriesId));
-    expect(addTask).toHaveBeenCalled();
-    const [taskData, taskType] = addTask.mock.calls[0];
-    expect(taskType).toBe('user');
-    expect(taskData.app).toBe('pipeline');
-    expect(taskData.description).toMatch(/script-unparseable/);
     const last = autopilot.__testing.runs.get(seriesId)?.lastPayload;
-    expect(last?.type).toBe('complete'); // gap filed, run still finishes
+    expect(last?.type).toBe('paused'); // structural gate blocks completion
+    expect(last?.scope).toBe('scriptVerify');
+    const descs = addTask.mock.calls.map((c) => c[0].description);
+    expect(descs.some((d) => /script-unparseable/.test(d))).toBe(true);
+    expect(descs.some((d) => /scriptVerify-stalled/.test(d))).toBe(false); // gapFiled → no dup
   });
 
   it('pauses when a delegated text run leaves required stages empty', async () => {
