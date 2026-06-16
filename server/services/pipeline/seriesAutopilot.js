@@ -578,7 +578,6 @@ async function enqueuePageDraft(issueId, pageIndex) {
 }
 
 async function runVisualDraft(sId, issueId, record) {
-  record.runState.visualDrafted.add(issueId);
   let issue = await getIssue(issueId);
   let cp = issue.stages?.comicPages;
 
@@ -606,8 +605,15 @@ async function runVisualDraft(sId, issueId, record) {
 
   const pageCount = Array.isArray(cp?.pages) ? cp.pages.length : 0;
   if (pageCount === 0) {
-    broadcast(sId, { type: 'step:skip', kind: 'visualDraft', issueId, reason: 'no comic pages to render (script did not parse)' });
-    return {};
+    // Nothing to draw — the comic script never parsed into pages. This is a real
+    // production blocker, so pause for review rather than marking the issue done.
+    await fileGap(record, sId, {
+      gapKind: 'visual-no-pages',
+      issueId,
+      summary: 'Cannot draft comic art — the comic script did not parse into any pages. Fix the comicScript stage (PAGE/PANEL structure) first.',
+      context: `issueId=${issueId}`,
+    });
+    return { pause: true, reason: `issue ${issue.number ?? issueId} has no comic pages to render — the script did not parse`, residual: [{ severity: 'high', location: `issue ${issue.number ?? '?'} / comicPages`, problem: 'comic script did not parse into pages' }] };
   }
 
   // Budget-gate + bill each render individually — a comic is many GPU jobs.
@@ -656,6 +662,20 @@ async function runVisualDraft(sId, issueId, record) {
     const r = await enqueueOne(`page ${i + 1}`, () => enqueuePageDraft(issueId, i));
     if (r.pause) return r;
   }
+  // Only consider the issue drafted once every drawable slot is actually
+  // enqueued. If a render errored (e.g. an un-renderable page), visualReady is
+  // still false — mark it attempted so the resolver doesn't re-loop, but pause
+  // for review instead of letting the run report a complete draft.
+  const after = await getIssue(issueId);
+  if (!visualReady(after)) {
+    record.runState.visualDrafted.add(issueId);
+    return {
+      pause: true,
+      reason: `issue ${after.number ?? issueId} could not be fully drafted — some cover/page renders did not enqueue`,
+      residual: [{ severity: 'high', location: `issue ${after.number ?? '?'} / comicPages`, problem: 'not every drawable cover/page render was enqueued (likely an un-renderable page or missing panels)' }],
+    };
+  }
+  record.runState.visualDrafted.add(issueId);
   return {};
 }
 

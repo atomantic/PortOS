@@ -23,7 +23,11 @@
 import { getIssue, listIssues } from './issues.js';
 import { getSeries } from './series.js';
 import { getSeriesCanon } from './seriesCanon.js';
-import { matchCharactersInText, matchPlacesInText, matchObjectsInText } from '../../lib/scenePrompt.js';
+import { parseComicScript } from '../../lib/comicScriptParser.js';
+import {
+  matchCharactersInText, matchPlacesInText, matchObjectsInText,
+  matchSceneCharacters, buildCharByKey,
+} from '../../lib/scenePrompt.js';
 
 // Below this many characters a description is "thin" — present but too sparse to
 // reliably render from. Advisory only; `none` (no description at all) is the
@@ -60,54 +64,120 @@ export function gradeCanonDescription(descOf, entry, thinChars = CANON_THIN_CHAR
   return 'sufficient';
 }
 
-/**
- * PURE: grade every canon noun that appears in `text`. Returns
- * `{ referenced, none[], thin[], ready }`. `none`/`thin` entries carry
- * `{ id, name, kind, locked }`. No I/O — caller supplies the text + canon.
- */
-export function gradeReferencedNouns(text, canon, thinChars = CANON_THIN_CHARS) {
+// Grade pre-matched entries per kind into none/thin buckets.
+function gradeMatched({ characters = [], places = [], objects = [] }, thinChars) {
   const none = [];
   const thin = [];
   let referenced = 0;
-  if (text && text.trim()) {
-    for (const { kind, listKey, match, descOf } of KINDS) {
-      const list = Array.isArray(canon?.[listKey]) ? canon[listKey] : [];
-      for (const entry of match(text, list)) {
-        referenced += 1;
-        const grade = gradeCanonDescription(descOf, entry, thinChars);
-        if (grade === 'none') none.push({ id: entry.id, name: entry.name, kind, locked: entry.locked === true });
-        else if (grade === 'thin') thin.push({ id: entry.id, name: entry.name, kind, locked: entry.locked === true });
-      }
-    }
-  }
+  const descOfKind = { character: KINDS[0].descOf, place: KINDS[1].descOf, object: KINDS[2].descOf };
+  const push = (entry, kind) => {
+    referenced += 1;
+    const grade = gradeCanonDescription(descOfKind[kind], entry, thinChars);
+    if (grade === 'none') none.push({ id: entry.id, name: entry.name, kind, locked: entry.locked === true });
+    else if (grade === 'thin') thin.push({ id: entry.id, name: entry.name, kind, locked: entry.locked === true });
+  };
+  for (const c of characters) push(c, 'character');
+  for (const p of places) push(p, 'place');
+  for (const o of objects) push(o, 'object');
   return { referenced, none, thin, ready: none.length === 0 };
 }
 
-// The text where nouns are actually depicted, by target format. Comic targets
-// draw from the comic-script panel descriptions; TV from the teleplay. Fall
-// back to prose only when the visual source is empty so a not-yet-adapted issue
-// can still be sanity-checked.
-function visualSourceText(issue, series) {
-  const fmt = series?.targetFormat || 'comic+tv';
-  const comic = issue.stages?.comicScript?.output || '';
-  const tele = issue.stages?.teleplay?.output || '';
-  const prose = issue.stages?.prose?.output || '';
-  if (fmt === 'tv') return tele || prose;
-  return comic || tele || prose;
+/**
+ * PURE: grade every canon noun that appears in free `text`. Used for the TV /
+ * fallback path (whole teleplay/prose). For comics use
+ * `gradeComicReferencedNouns`, which matches only the drawable panel text.
+ */
+export function gradeReferencedNouns(text, canon, thinChars = CANON_THIN_CHARS) {
+  if (!text || !text.trim()) return { referenced: 0, none: [], thin: [], ready: true };
+  return gradeMatched({
+    characters: matchCharactersInText(text, canon?.characters || []),
+    places: matchPlacesInText(text, canon?.places || []),
+    objects: matchObjectsInText(text, canon?.objects || []),
+  }, thinChars);
+}
+
+// A panel-body line like `MAGGIE: Kai called.` or `CAPTION: Years later.` —
+// captures the leading ALL-CAPS label and the body. parseComicScript folds
+// these into the panel `description` rather than a structured dialogue[], so we
+// classify them here: the body is spoken/caption text (NOT drawn), the label is
+// a potential speaker.
+const PANEL_LABEL_LINE = /^\s*([A-Z][A-Z0-9 .'’_-]{0,30})(?:\s*\([^)]*\))?:\s*\S/;
+// Labels that are not characters (their "speaker" must not count as drawn).
+const NON_SPEAKER_LABELS = new Set(['CAPTION', 'SFX', 'SOUND', 'NARRATION', 'NARRATOR', 'TITLE', 'NOTE', 'LETTERING', 'TEXT']);
+
+/**
+ * PURE: grade canon nouns that appear where they'd actually be DRAWN in a comic.
+ * Splits each panel's text into visual ACTION lines vs `LABEL:` dialogue/caption
+ * lines: characters/places/objects are matched against the action lines only,
+ * plus characters who SPEAK (a dialogue label or a structured dialogue speaker).
+ * So a character merely named inside someone's dialogue body ("Kai called") is
+ * NOT treated as a drawn reference, while a character shown in a panel or
+ * speaking a line is.
+ */
+export function gradeComicReferencedNouns(comicScript, canon, thinChars = CANON_THIN_CHARS) {
+  const { pages } = parseComicScript(comicScript || '');
+  const actionLines = [];
+  const speakers = [];
+  const consume = (text) => {
+    for (const line of String(text || '').split('\n')) {
+      const m = line.match(PANEL_LABEL_LINE);
+      if (m) {
+        const label = m[1].trim();
+        if (!NON_SPEAKER_LABELS.has(label.toUpperCase())) speakers.push(label);
+        // the body of a dialogue/caption line is spoken/overlaid text, not drawn
+      } else {
+        actionLines.push(line);
+      }
+    }
+  };
+  for (const pg of Array.isArray(pages) ? pages : []) {
+    for (const pa of Array.isArray(pg.panels) ? pg.panels : []) {
+      consume(pa.description);
+      for (const d of Array.isArray(pa.dialogue) ? pa.dialogue : []) {
+        if (d.character) speakers.push(d.character);
+      }
+    }
+  }
+  const haystack = actionLines.join('\n');
+  const chars = canon?.characters || [];
+  // Characters drawn = named in panel action ∪ speaking a line.
+  const drawn = new Map();
+  for (const c of matchCharactersInText(haystack, chars)) drawn.set(c.id || c.name, c);
+  for (const c of matchSceneCharacters(speakers, buildCharByKey(chars))) drawn.set(c.id || c.name, c);
+  return gradeMatched({
+    characters: [...drawn.values()],
+    places: matchPlacesInText(haystack, canon?.places || []),
+    objects: matchObjectsInText(haystack, canon?.objects || []),
+  }, thinChars);
+}
+
+// Fallback free-text source when there's no parseable comic script: TV draws
+// from the teleplay, anything else from teleplay-or-prose. (Comic targets with
+// a comic script go through gradeComicReferencedNouns, not this.)
+function fallbackSourceText(issue) {
+  return issue.stages?.teleplay?.output || issue.stages?.prose?.output || '';
 }
 
 /**
  * Canon readiness for one issue. Pass `canon`/`series` to avoid re-reads when
  * checking many issues. Returns
  * `{ issueId, number, title, referenced, none[], thin[], ready }`.
+ *
+ * Comic targets with a comic script grade against the DRAWABLE text only (panel
+ * descriptions + dialogue speakers) so an off-page character named only in
+ * narration/dialogue body isn't a false blocker; everything else grades the
+ * teleplay/prose.
  */
 export async function checkIssueCanonReadiness(issueId, { canon = null, series = null, thinChars = CANON_THIN_CHARS } = {}) {
   const issue = await getIssue(issueId);
   const ser = series || await getSeries(issue.seriesId).catch(() => null);
   const c = canon || (ser ? await getSeriesCanon(ser).catch(() => null) : null) || { characters: [], places: [], objects: [] };
-  const text = visualSourceText(issue, ser);
-  const { referenced, none, thin, ready } = gradeReferencedNouns(text, c, thinChars);
-  return { issueId, number: issue.number, title: issue.title, referenced, none, thin, ready };
+  const fmt = ser?.targetFormat || 'comic+tv';
+  const comic = (issue.stages?.comicScript?.output || '').trim();
+  const graded = (fmt !== 'tv' && comic)
+    ? gradeComicReferencedNouns(comic, c, thinChars)
+    : gradeReferencedNouns(fallbackSourceText(issue), c, thinChars);
+  return { issueId, number: issue.number, title: issue.title, referenced: graded.referenced, none: graded.none, thin: graded.thin, ready: graded.ready };
 }
 
 /**
