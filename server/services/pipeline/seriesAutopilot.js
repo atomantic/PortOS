@@ -37,12 +37,16 @@
  * script parse into pages+panels). A real craft-level LLM script-verify prompt
  * is a deliberate Phase-3 follow-up, not silently assumed solved.
  *
- * NOT YET IMPLEMENTED — draft visuals (cover + all interior pages). The render
- * endpoints persist their job ids at the ROUTE layer (the enqueue helpers only
- * return a jobId the caller must record), so faithful draft rendering needs that
- * persistence replicated per slot. Gated behind VISUAL_DRAFT_ENABLED (false) so
- * the Phase-1 terminal is "text-ready + editorial review"; flip the flag and
- * implement `runVisualDraft` in Phase 2.
+ * DRAFT VISUALS (Phase 2, VISUAL_DRAFT_ENABLED): once a story is text-ready,
+ * extract comic pages from the script (if not already), then enqueue PROOF
+ * (draft) renders for the front cover, back cover, and every interior page —
+ * replicating the per-slot jobId persistence the render routes do at the route
+ * layer (buildRenderSlot → updateStageWithLatest). Renders are async media jobs:
+ * we fire the kickoff, persist the in-flight slot, and do NOT block on pixels
+ * (mirrors autoRunner's episodeVideo fire-and-forget). Each render is one
+ * billable cos action and is budget-gated individually (a comic is many GPU
+ * jobs), and already-enqueued slots are skipped so a resumed run doesn't
+ * re-render. Gated behind `options.includeVisual`.
  */
 
 import { randomUUID } from 'crypto';
@@ -52,8 +56,11 @@ import { parseComicScript } from '../../lib/comicScriptParser.js';
 import { loadState } from '../cosState.js';
 import { getDomainBudgetStatus, recordDomainUsage } from '../domainUsage.js';
 import { getSeries, updateSeries } from './series.js';
-import { listIssues, getIssue, isStageReady } from './issues.js';
+import { listIssues, getIssue, isStageReady, updateStageWithLatest } from './issues.js';
 import { compareIssuesByPosition } from './arcPlanner.js';
+import { enqueueComicCover, enqueueComicBackCover, enqueueVisualComicPage } from './visualStages.js';
+import { slotKeyForVariant } from './owners.js';
+import { buildRenderSlot } from '../../lib/renderSlot.js';
 import {
   generateArcOverview,
   commitSeasonsWithRemap,
@@ -77,8 +84,9 @@ const runs = new Map();
 export const MAX_ARC_VERIFY_ROUNDS = 3;
 export const MAX_EDITORIAL_ROUNDS = 2;
 
-// Phase-2 flag — see module header. While false the terminal is text + editorial.
-export const VISUAL_DRAFT_ENABLED = false;
+// When true, a comic-target run with `includeVisual` proceeds past the text +
+// editorial terminal into draft cover/page rendering (see runVisualDraft).
+export const VISUAL_DRAFT_ENABLED = true;
 
 // Severities that block a verify/review gate (low is informational).
 const ARC_BLOCKING = new Set(['high', 'medium']);
@@ -128,6 +136,34 @@ export function scriptStructurallyReady(issue) {
   const { pages } = parseComicScript(output);
   if (!Array.isArray(pages) || pages.length === 0) return false;
   return pages.some((p) => Array.isArray(p.panels) && p.panels.length > 0);
+}
+
+// A render slot counts as "enqueued" once it carries a jobId or a stamped
+// filename (proof or final). Draft rendering only kicks off proof renders, but
+// we accept either so a re-run never re-renders a slot the user already
+// finalized manually.
+const slotEnqueued = (slot) => !!(
+  slot && (slot.proofImage?.jobId || slot.proofImage?.filename
+    || slot.finalImage?.jobId || slot.finalImage?.filename)
+);
+const pageEnqueued = (page) => !!(
+  page && (page.proofImage?.jobId || page.proofImage?.filename
+    || page.finalImage?.jobId || page.finalImage?.filename)
+);
+
+/**
+ * Has an issue's comic art been drafted? True once pages exist, the front cover
+ * is enqueued, any authored back cover is enqueued, and every page that HAS
+ * panels is enqueued. Pages with no panels can't be rendered, so they don't
+ * block readiness.
+ */
+export function visualReady(issue) {
+  const cp = issue.stages?.comicPages;
+  const pages = Array.isArray(cp?.pages) ? cp.pages : [];
+  if (pages.length === 0) return false;
+  if (!slotEnqueued(cp?.cover)) return false;
+  if (cp?.backCover?.script && !slotEnqueued(cp?.backCover)) return false;
+  return pages.every((p) => (Array.isArray(p.panels) && p.panels.length > 0 ? pageEnqueued(p) : true));
 }
 
 /**
@@ -192,10 +228,11 @@ export function resolveNextStep(series, issues, runState = {}, options = {}) {
     return { kind: 'editorialReview', reason: 'editorial review not yet run this run' };
   }
 
-  // STEP 6 — draft visuals (Phase 2; gated off for now).
+  // STEP 6 — draft visuals (cover + back + all interior pages).
   if (VISUAL_DRAFT_ENABLED && options.includeVisual && isComicTarget(series)) {
     for (const issue of ordered) {
       if (setHas(runState.visualDrafted, issue.id)) continue;
+      if (visualReady(issue)) continue;
       return { kind: 'visualDraft', issueId: issue.id, reason: 'comic pages not yet drafted' };
     }
   }
@@ -403,6 +440,108 @@ async function runEditorial(sId, record) {
   return {};
 }
 
+// Turn a render-enqueue result into the { slotKey, slot } pair the render
+// routes persist (proof → proofImage, final → finalImage).
+const slotFromRenderResult = (result) => {
+  const slotKey = slotKeyForVariant(result.variant);
+  return { slotKey, slot: buildRenderSlot({ slotKey, jobId: result.jobId, prompt: result.prompt, fromProof: result.fromProof }) };
+};
+
+// Persist an in-flight render slot the way the render routes do: enqueue the
+// proof render, then splice the returned jobId onto the freshest persisted
+// cover/backCover slot via updateStageWithLatest.
+async function enqueueCoverDraft(issueId, slotField, enqueueFn) {
+  const { slotKey, slot } = slotFromRenderResult(await enqueueFn(issueId, { target: 'proof' }));
+  await updateStageWithLatest(issueId, 'comicPages', (current) => {
+    const currentSlot = current?.[slotField] || {};
+    return { [slotField]: { ...currentSlot, [slotKey]: slot } };
+  });
+}
+
+async function enqueuePageDraft(issueId, pageIndex) {
+  const { slotKey, slot } = slotFromRenderResult(await enqueueVisualComicPage(issueId, { pageIndex, target: 'proof' }));
+  await updateStageWithLatest(issueId, 'comicPages', (current) => {
+    const pages = Array.isArray(current?.pages) ? current.pages : [];
+    if (!pages[pageIndex]) return {};
+    const next = [...pages];
+    next[pageIndex] = { ...pages[pageIndex], [slotKey]: slot };
+    return { status: 'edited', pages: next };
+  });
+}
+
+async function runVisualDraft(sId, issueId, record) {
+  record.runState.visualDrafted.add(issueId);
+  let issue = await getIssue(issueId);
+  let cp = issue.stages?.comicPages;
+
+  // 1. Seed pages + cover concepts from the comic script if not already done
+  //    (mirrors the extract-pages route; pure parse, no LLM).
+  if (!(Array.isArray(cp?.pages) && cp.pages.length > 0)) {
+    const source = (issue.stages?.comicScript?.output || '').trim();
+    if (source) {
+      const { pages, coverConcept, backCoverConcept } = parseComicScript(source);
+      await updateStageWithLatest(issueId, 'comicPages', (current) => {
+        const coverScript = current?.cover?.script || '';
+        const backScript = current?.backCover?.script || '';
+        return {
+          status: pages.length ? 'ready' : 'empty',
+          pages,
+          cover: coverConcept && !coverScript ? { script: coverConcept, imageJobId: null, prompt: null } : (current?.cover ?? null),
+          backCover: backCoverConcept && !backScript ? { script: backCoverConcept, imageJobId: null, prompt: null } : (current?.backCover ?? null),
+          errorMessage: '',
+        };
+      });
+      issue = await getIssue(issueId);
+      cp = issue.stages?.comicPages;
+    }
+  }
+
+  const pageCount = Array.isArray(cp?.pages) ? cp.pages.length : 0;
+  if (pageCount === 0) {
+    broadcast(sId, { type: 'step:skip', kind: 'visualDraft', issueId, reason: 'no comic pages to render (script did not parse)' });
+    return {};
+  }
+
+  // Budget-gate + bill each render individually — a comic is many GPU jobs.
+  // A failed enqueue (e.g. a page with no panels) is surfaced and skipped.
+  const enqueueOne = async (target, fn) => {
+    const budget = await getDomainBudgetStatus('cos');
+    if (!budget.withinBudget) return { pause: true, reason: `daily cos ${budget.exceeded} budget reached` };
+    try {
+      await fn();
+      await recordDomainUsage('cos', { actions: 1 });
+      broadcast(sId, { type: 'render:queued', issueId, target });
+    } catch (err) {
+      broadcast(sId, { type: 'step:skip', kind: 'visualDraft', issueId, target, reason: (err?.message || String(err)).slice(0, 200) });
+    }
+    return {};
+  };
+
+  // 2. Front cover.
+  if (!slotEnqueued(cp?.cover)) {
+    const r = await enqueueOne('cover', () => enqueueCoverDraft(issueId, 'cover', enqueueComicCover));
+    if (r.pause) return r;
+  }
+  // 3. Back cover (only when a concept/script exists to render).
+  issue = await getIssue(issueId);
+  cp = issue.stages?.comicPages;
+  if (cp?.backCover?.script && !slotEnqueued(cp?.backCover)) {
+    const r = await enqueueOne('backCover', () => enqueueCoverDraft(issueId, 'backCover', enqueueComicBackCover));
+    if (r.pause) return r;
+  }
+  // 4. Every interior page (re-read per page so each splice merges fresh state).
+  for (let i = 0; i < pageCount; i += 1) {
+    if (record.cancelRequested) return { canceled: true };
+    const fresh = await getIssue(issueId);
+    const page = fresh.stages?.comicPages?.pages?.[i];
+    if (!page || !Array.isArray(page.panels) || page.panels.length === 0) continue;
+    if (pageEnqueued(page)) continue;
+    const r = await enqueueOne(`page ${i + 1}`, () => enqueuePageDraft(issueId, i));
+    if (r.pause) return r;
+  }
+  return {};
+}
+
 async function dispatchStep(sId, step, record) {
   switch (step.kind) {
     case 'generateArc': {
@@ -429,6 +568,8 @@ async function dispatchStep(sId, step, record) {
       return runScriptVerify(sId, step.issueId, record);
     case 'editorialReview':
       return runEditorial(sId, record);
+    case 'visualDraft':
+      return runVisualDraft(sId, step.issueId, record);
     default:
       return {};
   }
@@ -458,7 +599,8 @@ function buildDryRunPlan(series, issues, options) {
   if (isComicTarget(series)) plan.push({ kind: 'scriptVerify', count: ordered.length });
   plan.push({ kind: 'editorialReview', count: 1, note: `up to ${MAX_EDITORIAL_ROUNDS} rounds` });
   if (VISUAL_DRAFT_ENABLED && options.includeVisual && isComicTarget(series)) {
-    plan.push({ kind: 'visualDraft', count: ordered.length });
+    const visualNeeded = ordered.filter((i) => !visualReady(i)).length;
+    if (visualNeeded) plan.push({ kind: 'visualDraft', count: visualNeeded, note: 'cover + back + all pages (draft)' });
   }
   return plan;
 }
