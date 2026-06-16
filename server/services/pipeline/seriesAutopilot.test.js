@@ -1,0 +1,303 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { mockNoPeerSync, mockNoPeers } from '../../lib/mockPathsDataRoot.js';
+
+// ---- File-backed store (like autoRunner.test.js) so the REAL series/issues
+// services run against an in-memory map instead of Postgres. ------------------
+const fileStore = new Map();
+vi.mock('../../lib/fileUtils.js', () => ({
+  tryReadFile: vi.fn().mockResolvedValue(null),
+  PATHS: { data: '/mock/data', cos: '/mock/data/cos' },
+  ensureDir: vi.fn().mockResolvedValue(undefined),
+  atomicWrite: vi.fn(async (path, data) => { fileStore.set(path, data); }),
+  readJSONFile: vi.fn(async (path, fallback) => (fileStore.has(path) ? fileStore.get(path) : fallback)),
+}));
+
+let uuidCounter = 0;
+vi.mock('crypto', async () => {
+  const actual = await vi.importActual('crypto');
+  return { ...actual, randomUUID: () => `uuid-${++uuidCounter}` };
+});
+
+vi.mock('../instances.js', () => mockNoPeers());
+vi.mock('../sharing/peerSync.js', () => mockNoPeerSync());
+
+// ---- Controllable test doubles for the autonomy + LLM-calling deps. ----------
+let cosMode = 'execute';
+vi.mock('../cosState.js', () => ({
+  loadState: vi.fn(async () => ({ config: { domainAutonomy: { cos: cosMode } } })),
+}));
+
+let budgetStatus = { withinBudget: true, exceeded: null };
+const recordDomainUsage = vi.fn(async () => {});
+vi.mock('../domainUsage.js', () => ({
+  getDomainBudgetStatus: vi.fn(async () => budgetStatus),
+  recordDomainUsage,
+}));
+
+// arcPlanner: keep the REAL barrel (for compareIssuesByPosition) and override
+// only the LLM-calling passes with spies whose return values the tests drive.
+let verifyFindings = [];
+let editorialFindings = [];
+const arcSpies = {
+  generateArcOverview: vi.fn(async () => ({ arc: { logline: 'A', summary: 'S' }, seasons: [] })),
+  commitSeasonsWithRemap: vi.fn(async (series) => ({ series })),
+  generateSeasonEpisodes: vi.fn(async () => ({ episodes: [] })),
+  commitEpisodesToIssues: vi.fn(async () => []),
+  verifyArc: vi.fn(async () => ({ issues: verifyFindings })),
+  resolveVerifyIssues: vi.fn(async () => ({ applied: true })),
+  analyzeManuscriptCompleteness: vi.fn(async () => ({ issues: editorialFindings, runId: 'run-comp' })),
+};
+vi.mock('./arcPlanner.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, ...arcSpies };
+});
+
+const volumeBeatsSpies = {
+  startVolumeBeatsRun: vi.fn(async () => ({ runId: 'vb', alreadyRunning: false })),
+  isVolumeBeatsRunActive: vi.fn(() => false),
+  cancelVolumeBeatsRun: vi.fn(() => true),
+};
+vi.mock('./volumeBeatsRunner.js', () => volumeBeatsSpies);
+
+const autoRunnerSpies = {
+  startAutoRunTextStages: vi.fn(async () => ({ runId: 'ar', alreadyRunning: false })),
+  isAutoRunActive: vi.fn(() => false),
+  cancelAutoRun: vi.fn(() => true),
+};
+vi.mock('./autoRunner.js', () => autoRunnerSpies);
+
+vi.mock('./manuscriptReview.js', () => ({
+  seedReviewFromFindings: vi.fn(async () => ({ comments: [] })),
+  getReview: vi.fn(async () => ({ comments: [] })),
+}));
+vi.mock('./manuscriptFix.js', () => ({
+  generateManuscriptFix: vi.fn(async () => ({})),
+  acceptManuscriptFix: vi.fn(async () => ({})),
+}));
+
+// Real services + the unit under test (imported AFTER the mocks above).
+const seriesSvc = await import('./series.js');
+const seasonsSvc = await import('./seasons.js');
+const issuesSvc = await import('./issues.js');
+const autopilot = await import('./seriesAutopilot.js');
+const { resolveNextStep, requiredScriptStages, scriptStructurallyReady } = autopilot;
+
+// A comic script string that parseComicScript turns into >=1 page/panel.
+const VALID_SCRIPT = 'PAGE 1\nPANEL 1\nA scene.';
+
+const ready = (output = 'x') => ({ status: 'ready', output });
+const empty = () => ({ status: 'empty', output: '' });
+
+const waitFor = async (predicate, { timeoutMs = 2000, intervalMs = 5 } = {}) => {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (predicate()) return;
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  throw new Error('waitFor: predicate never became true');
+};
+const runFinished = (sId) => () => autopilot.__testing.runs.get(sId)?.finished === true;
+
+beforeEach(() => {
+  fileStore.clear();
+  uuidCounter = 0;
+  cosMode = 'execute';
+  budgetStatus = { withinBudget: true, exceeded: null };
+  verifyFindings = [];
+  editorialFindings = [];
+  autopilot.__testing.runs.clear();
+  vi.clearAllMocks();
+});
+
+// ---------------------------------------------------------------------------
+// Pure resolver — the highest-value unit (no I/O, table-driven).
+// ---------------------------------------------------------------------------
+describe('resolveNextStep (pure)', () => {
+  const comic = { targetFormat: 'comic', arc: { logline: 'L', summary: 'S' }, seasons: [{ id: 'se1', number: 1 }] };
+  const issue = (over = {}) => ({ id: 'iss1', seasonId: 'se1', number: 1, arcPosition: 1, stages: {}, ...over });
+
+  it('asks for arc generation when there is no arc', () => {
+    expect(resolveNextStep({ targetFormat: 'comic', seasons: [] }, []).kind).toBe('generateArc');
+  });
+
+  it('treats a present arc summary (no logline) as having an arc', () => {
+    const step = resolveNextStep({ targetFormat: 'comic', arc: { summary: 'S' }, seasons: [] }, []);
+    expect(step.kind).not.toBe('generateArc');
+  });
+
+  it('asks to generate episodes for a season with no issues', () => {
+    const step = resolveNextStep(comic, []);
+    expect(step).toMatchObject({ kind: 'generateEpisodes', seasonId: 'se1' });
+  });
+
+  it('verifies the arc before drafting issues', () => {
+    const step = resolveNextStep(comic, [issue()]);
+    expect(step.kind).toBe('verifyArc');
+  });
+
+  it('asks for beat sheets when an issue has no idea (post-verify)', () => {
+    const step = resolveNextStep(comic, [issue()], { arcVerified: true });
+    expect(step).toMatchObject({ kind: 'beatSheet', seasonId: 'se1' });
+  });
+
+  it('skips a season already attempted for beats (no infinite loop)', () => {
+    const step = resolveNextStep(comic, [issue()], { arcVerified: true, beatsAttempted: new Set(['se1']) });
+    // beats skipped → falls through to text stages
+    expect(step).toMatchObject({ kind: 'textStages', issueId: 'iss1' });
+  });
+
+  it('asks for text stages once beats exist but scripts do not', () => {
+    const step = resolveNextStep(comic, [issue({ stages: { idea: ready() } })], { arcVerified: true });
+    expect(step).toMatchObject({ kind: 'textStages', issueId: 'iss1' });
+  });
+
+  it('asks for structural script verify once comic script is ready', () => {
+    const step = resolveNextStep(
+      comic,
+      [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
+      { arcVerified: true },
+    );
+    expect(step).toMatchObject({ kind: 'scriptVerify', issueId: 'iss1' });
+  });
+
+  it('asks for editorial review once all issues are script-checked', () => {
+    const step = resolveNextStep(
+      comic,
+      [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
+      { arcVerified: true, scriptChecked: new Set(['iss1']) },
+    );
+    expect(step.kind).toBe('editorialReview');
+  });
+
+  it('is done once editorial review has run', () => {
+    const step = resolveNextStep(
+      comic,
+      [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
+      { arcVerified: true, scriptChecked: new Set(['iss1']), editorialReviewed: true },
+    );
+    expect(step.kind).toBe('done');
+  });
+
+  it('does not run script verify for a tv-only target', () => {
+    const tv = { targetFormat: 'tv', arc: { logline: 'L' }, seasons: [{ id: 'se1', number: 1 }] };
+    const step = resolveNextStep(
+      tv,
+      [issue({ stages: { idea: ready(), teleplay: ready() } })],
+      { arcVerified: true },
+    );
+    expect(step.kind).toBe('editorialReview');
+  });
+});
+
+describe('requiredScriptStages / scriptStructurallyReady', () => {
+  it('maps targetFormat to required scripts', () => {
+    expect(requiredScriptStages({ targetFormat: 'comic' })).toEqual(['comicScript']);
+    expect(requiredScriptStages({ targetFormat: 'tv' })).toEqual(['teleplay']);
+    expect(requiredScriptStages({ targetFormat: 'comic+tv' })).toEqual(['comicScript', 'teleplay']);
+    expect(requiredScriptStages({})).toEqual(['comicScript', 'teleplay']);
+  });
+
+  it('passes a parseable comic script and fails an unparseable one', () => {
+    expect(scriptStructurallyReady({ stages: { comicScript: ready(VALID_SCRIPT) } })).toBe(true);
+    expect(scriptStructurallyReady({ stages: { comicScript: ready('just some prose, no pages') } })).toBe(false);
+    expect(scriptStructurallyReady({ stages: {} })).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Conductor lifecycle + gating (uses real series/issues against file store).
+// ---------------------------------------------------------------------------
+async function seedComplete() {
+  const series = await seriesSvc.createSeries({ name: 'S', logline: 'L', premise: 'P', targetFormat: 'comic' });
+  await seriesSvc.updateSeries(series.id, { arc: { logline: 'A', summary: 'S' } });
+  const season = await seasonsSvc.createSeason(series.id, { number: 1, title: 'V1' });
+  const seasonId = season.id;
+  const issue = await issuesSvc.createIssue({ seriesId: series.id, seasonId, title: 'I1', number: 1 });
+  await issuesSvc.updateStage(issue.id, 'idea', ready('beats'));
+  await issuesSvc.updateStage(issue.id, 'comicScript', ready(VALID_SCRIPT));
+  return { seriesId: series.id, seasonId, issueId: issue.id };
+}
+
+describe('autopilot conductor', () => {
+  it('rejects start when the cos domain is off (no run created)', async () => {
+    cosMode = 'off';
+    const { seriesId } = await seedComplete();
+    const res = await autopilot.startSeriesAutopilot(seriesId, {});
+    expect(res).toMatchObject({ rejected: true, mode: 'off' });
+    expect(autopilot.__testing.runs.has(seriesId)).toBe(false);
+  });
+
+  it('dry-run emits a plan without calling any generator', async () => {
+    cosMode = 'dry-run';
+    const { seriesId } = await seedComplete();
+    const { runId } = await autopilot.startSeriesAutopilot(seriesId, {});
+    expect(runId).toBeTruthy();
+    await waitFor(runFinished(seriesId));
+    const last = autopilot.__testing.runs.get(seriesId)?.lastPayload;
+    expect(last?.type).toBe('complete');
+    expect(last?.dryRun).toBe(true);
+    expect(arcSpies.generateArcOverview).not.toHaveBeenCalled();
+    expect(arcSpies.verifyArc).not.toHaveBeenCalled();
+  });
+
+  it('drives a ready series to done in execute mode', async () => {
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, {});
+    await waitFor(runFinished(seriesId));
+    expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('complete');
+    expect(arcSpies.verifyArc).toHaveBeenCalled();
+    expect(arcSpies.analyzeManuscriptCompleteness).toHaveBeenCalled();
+    const series = await seriesSvc.getSeries(seriesId);
+    expect(series.autopilot?.status).toBe('done');
+  });
+
+  it('pauses for review when arc verify never converges', async () => {
+    verifyFindings = [{ severity: 'high', problem: 'plot hole', location: 'V1' }];
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { maxArcVerifyRounds: 2 });
+    await waitFor(runFinished(seriesId));
+    const last = autopilot.__testing.runs.get(seriesId)?.lastPayload;
+    expect(last?.type).toBe('paused');
+    expect(last?.scope).toBe('verifyArc');
+    // bounded: verifyArc called exactly maxRounds times, resolve called rounds-1.
+    expect(arcSpies.verifyArc).toHaveBeenCalledTimes(2);
+    expect(arcSpies.resolveVerifyIssues).toHaveBeenCalledTimes(1);
+    const series = await seriesSvc.getSeries(seriesId);
+    expect(series.autopilot?.status).toBe('paused');
+    expect(series.autopilot?.residualFindings?.[0]?.problem).toBe('plot hole');
+  });
+
+  it('pauses when the cos daily budget is exhausted', async () => {
+    budgetStatus = { withinBudget: false, exceeded: 'actions' };
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, {});
+    await waitFor(runFinished(seriesId));
+    const last = autopilot.__testing.runs.get(seriesId)?.lastPayload;
+    expect(last?.type).toBe('paused');
+    expect(last?.reason).toMatch(/budget/);
+    expect(arcSpies.verifyArc).not.toHaveBeenCalled();
+  });
+
+  it('a second start while active resolves to alreadyRunning', async () => {
+    // Hold the run open by making the verify loop wait on a never-converging
+    // finding plus a slow child so the first run is still active.
+    verifyFindings = [{ severity: 'high', problem: 'x' }];
+    arcSpies.resolveVerifyIssues.mockImplementationOnce(() => new Promise(() => {})); // never resolves
+    const { seriesId } = await seedComplete();
+    const first = await autopilot.startSeriesAutopilot(seriesId, { maxArcVerifyRounds: 5 });
+    expect(first.alreadyRunning).toBe(false);
+    const second = await autopilot.startSeriesAutopilot(seriesId, {});
+    expect(second.alreadyRunning).toBe(true);
+    expect(second.runId).toBe(first.runId);
+    autopilot.cancelSeriesAutopilot(seriesId);
+  });
+
+  it('recoverStuckAutopilots demotes a running marker to paused', async () => {
+    const series = await seriesSvc.createSeries({ name: 'S', logline: 'L', premise: 'P' });
+    await seriesSvc.updateSeries(series.id, { autopilot: { status: 'running', runId: 'dead' } });
+    const n = await autopilot.recoverStuckAutopilots();
+    expect(n).toBe(1);
+    const fresh = await seriesSvc.getSeries(series.id);
+    expect(fresh.autopilot?.status).toBe('paused');
+  });
+});
