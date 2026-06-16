@@ -354,6 +354,13 @@
       "returnsJson": true,
       "variables": []
     },
+    "pipeline-script-verify": {
+      "name": "Pipeline — Comic Script Verification",
+      "description": "Craft pass over ONE issue's comic script before art: catches un-renderable panels, missing/malformed page-panel structure, panel-to-panel flow breaks, dialogue/art imbalance, within-issue continuity, and page-turn/beat placement. Used by Series Autopilot's per-issue script gate (advisory — surfaces findings, doesn't auto-rewrite). Returns actionable { severity, location, problem, suggestion } issues — empty list means sound.",
+      "model": "heavy",
+      "returnsJson": true,
+      "variables": []
+    },
     "pipeline-manuscript-completeness": {
       "name": "Pipeline — Manuscript Completeness",
       "description": "Developmental editor pass over the ACTUAL drafted manuscript (comic script / prose / teleplay across all issues), not synopses. Surfaces what's missing to FINISH a near-complete draft: missing-content (beats/pages/scenes), arc-gap (themes/protagonist turns the draft doesn't yet deliver), character-gap (under-developed cast), pacing, and continuity. Returns categorized { severity, category, issueNumber, anchorQuote, location, problem, suggestion } findings — issueNumber + anchorQuote anchor each finding to a manuscript spot so the editor can jump to it; empty list means complete.",

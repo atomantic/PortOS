@@ -86,6 +86,10 @@ let nextTaskId = 0;
 const addTask = vi.fn(async () => ({ id: `task-gap-${++nextTaskId}` }));
 vi.mock('../cosTaskStore.js', () => ({ addTask }));
 
+let scriptVerifyFindings = [];
+const verifyComicScript = vi.fn(async () => ({ issues: scriptVerifyFindings }));
+vi.mock('./scriptVerify.js', () => ({ verifyComicScript }));
+
 // Real services + the unit under test (imported AFTER the mocks above).
 const seriesSvc = await import('./series.js');
 const seasonsSvc = await import('./seasons.js');
@@ -116,6 +120,7 @@ beforeEach(() => {
   budgetStatus = { withinBudget: true, exceeded: null };
   verifyFindings = [];
   editorialFindings = [];
+  scriptVerifyFindings = [];
   nextTaskId = 0;
   autopilot.__testing.runs.clear();
   vi.clearAllMocks();
@@ -397,6 +402,25 @@ describe('autopilot conductor', () => {
     await autopilot.startSeriesAutopilot(seriesId, { includeVisual: false });
     await waitFor(runFinished(seriesId));
     expect(addTask).not.toHaveBeenCalled();
+  });
+
+  it('runs the LLM craft script verify and continues (advisory) when it is clean', async () => {
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { includeVisual: false });
+    await waitFor(runFinished(seriesId));
+    expect(verifyComicScript).toHaveBeenCalledTimes(1);
+    expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('complete');
+  });
+
+  it('files a gap for blocking script-craft findings but does not block the run', async () => {
+    scriptVerifyFindings = [{ severity: 'high', problem: 'page 2 panel 1 has no description' }];
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { fileGaps: true, includeVisual: false });
+    await waitFor(runFinished(seriesId));
+    // advisory: run still completes
+    expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('complete');
+    const gapKinds = addTask.mock.calls.map((c) => c[0].description);
+    expect(gapKinds.some((d) => /script-craft/.test(d))).toBe(true);
   });
 
   it('files a CoS gap task when a verify gate stalls (fileGaps)', async () => {

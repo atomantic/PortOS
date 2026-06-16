@@ -38,12 +38,13 @@
  * error — it files a deduped CoS task (`fileGap`) so the gap is tracked instead
  * of silently swallowed.
  *
- * KNOWN GAP — "script verification": there is no dedicated comic-script verify
- * endpoint. The scriptVerify step is a STRUCTURAL gate only (does the comic
- * script parse into pages+panels); deeper craft issues are caught by the
- * series-level editorial completeness pass, which already analyzes comic
- * scripts. A dedicated craft-level LLM script-verify prompt is a deferred
- * follow-up (see PLAN.md), not silently assumed solved.
+ * SCRIPT VERIFICATION — the per-issue scriptVerify step has two gates: a
+ * STRUCTURAL gate (does the script parse into pages/panels — a failure blocks
+ * page extraction, so it files a gap) and a CRAFT gate (the
+ * `pipeline-script-verify` LLM pass via verifyComicScript). The craft gate is
+ * ADVISORY: script craft is subjective and the gating quality pass is the
+ * series-level editorial review, so blocking craft findings are surfaced + filed
+ * (not auto-rewritten, not a hard pause) and the run keeps moving toward a draft.
  *
  * DRAFT VISUALS (Phase 2, VISUAL_DRAFT_ENABLED): once a story is text-ready,
  * extract comic pages from the script (if not already), then enqueue PROOF
@@ -83,6 +84,7 @@ import * as volumeBeatsRunner from './volumeBeatsRunner.js';
 import * as autoRunner from './autoRunner.js';
 import { seedReviewFromFindings, getReview } from './manuscriptReview.js';
 import { generateManuscriptFix, acceptManuscriptFix } from './manuscriptFix.js';
+import { verifyComicScript } from './scriptVerify.js';
 
 // runs: Map<seriesId, { runId, clients[], lastPayload, cancelRequested, finished,
 //   cleanupTimer, startedAt, mode, options, runState, activeChild }>
@@ -403,8 +405,10 @@ const runText = (issueId, record) => runChildToCompletion(record, {
 async function runScriptVerify(sId, issueId, record) {
   record.runState.scriptChecked.add(issueId);
   const issue = await getIssue(issueId);
+
+  // Gate 1 — STRUCTURAL (pure, cheap): does the script parse into pages/panels?
+  // A structural failure blocks page extraction, so surface + file a gap.
   if (!scriptStructurallyReady(issue)) {
-    // Structural gap — surface it but don't block the run. Not billable.
     broadcast(sId, {
       type: 'step:skip',
       kind: 'scriptVerify',
@@ -416,6 +420,33 @@ async function runScriptVerify(sId, issueId, record) {
       issueId,
       summary: 'The comic script for this issue does not parse into pages/panels, so comic pages can\'t be extracted. It likely needs a manual fix or regeneration of the comicScript stage.',
       context: `issueId=${issueId}`,
+    });
+    return {};
+  }
+
+  // Gate 2 — CRAFT (LLM): does the script function as a comic script? This is
+  // ADVISORY — unlike arc continuity, script craft is subjective and the
+  // gating quality pass is the series-level editorial review, so blocking
+  // findings are surfaced + filed (not auto-rewritten, not a hard pause) and
+  // the autopilot keeps moving toward a draft. Wrapped so an LLM failure
+  // downgrades to a skip instead of aborting the whole run.
+  let issues = [];
+  try {
+    const result = await verifyComicScript(issueId, providerIdOpts(record));
+    issues = result.issues || [];
+    await recordDomainUsage('cos', { actions: 1 });
+  } catch (err) {
+    broadcast(sId, { type: 'step:skip', kind: 'scriptVerify', issueId, reason: `craft verify unavailable: ${(err?.message || err).toString().slice(0, 200)}` });
+    return {};
+  }
+  const blocking = issues.filter((i) => i.severity === 'high');
+  broadcast(sId, { type: 'verify:round', scope: 'script', issueId, round: 1, findings: issues.length, blocking: blocking.length });
+  if (blocking.length) {
+    await fileGap(record, sId, {
+      gapKind: 'script-craft',
+      issueId,
+      summary: `Comic script craft review found ${blocking.length} blocking issue(s): ${blocking.map((b) => b.problem).join(' | ').slice(0, 600)}`,
+      context: JSON.stringify(blocking).slice(0, 1000),
     });
   }
   return {};
