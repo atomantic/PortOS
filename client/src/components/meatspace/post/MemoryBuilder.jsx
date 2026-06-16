@@ -31,14 +31,16 @@ export default function MemoryBuilder({ onBack, onNavigateElements }) {
     loadItems();
   }, []);
 
+  // Returns true if the server list was fetched and applied, false if the
+  // fetch failed. null = fetch failed (request() already toasts the error) —
+  // keep the known-good list rather than blanking it; a real empty server
+  // response is `[]` and still clears. Callers (notably handleDelete) use the
+  // return value to fall back to a local update when the refresh fails.
   async function loadItems() {
-    // null = fetch failed (request() already toasts the error) — keep the
-    // known-good list rather than blanking it; a real empty server response
-    // is `[]` and still clears. Distinguishing the two matters most after a
-    // delete, where a transient reload failure would otherwise wipe every
-    // remaining item (including the built-in) off the screen.
     const data = await getMemoryItems().catch(() => null);
-    if (Array.isArray(data)) setItems(data);
+    if (!Array.isArray(data)) return false;
+    setItems(data);
+    return true;
   }
 
   function handleSelect(item) {
@@ -56,7 +58,13 @@ export default function MemoryBuilder({ onBack, onNavigateElements }) {
 
   async function handleDelete(id) {
     await deleteMemoryItem(id);
-    await loadItems();
+    // Reload from the server so the list reflects server truth (ordering,
+    // normalization, re-seeded built-ins). If the reload fails, the delete
+    // still succeeded server-side — splice the confirmed-deleted id out
+    // locally so the stale row can't linger (and can't be re-deleted into a
+    // 404); loadItems left the rest of the known-good list intact.
+    const reloaded = await loadItems();
+    if (!reloaded) setItems(prev => prev.filter(i => i.id !== id));
   }
 
   function resetCreateForm() {
