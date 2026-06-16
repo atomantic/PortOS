@@ -75,12 +75,19 @@ vi.mock('./manuscriptFix.js', () => ({
   acceptManuscriptFix: vi.fn(async () => ({})),
 }));
 
+const visualSpies = {
+  enqueueComicCover: vi.fn(async () => ({ jobId: 'job-cover', prompt: 'p', variant: 'proof', fromProof: false })),
+  enqueueComicBackCover: vi.fn(async () => ({ jobId: 'job-back', prompt: 'p', variant: 'proof', fromProof: false })),
+  enqueueVisualComicPage: vi.fn(async (_issueId, { pageIndex }) => ({ jobId: `job-page-${pageIndex}`, prompt: 'p', variant: 'proof', fromProof: false })),
+};
+vi.mock('./visualStages.js', () => visualSpies);
+
 // Real services + the unit under test (imported AFTER the mocks above).
 const seriesSvc = await import('./series.js');
 const seasonsSvc = await import('./seasons.js');
 const issuesSvc = await import('./issues.js');
 const autopilot = await import('./seriesAutopilot.js');
-const { resolveNextStep, requiredScriptStages, scriptStructurallyReady } = autopilot;
+const { resolveNextStep, requiredScriptStages, scriptStructurallyReady, visualReady } = autopilot;
 
 // A comic script string that parseComicScript turns into >=1 page/panel.
 const VALID_SCRIPT = 'PAGE 1\nPANEL 1\nA scene.';
@@ -169,11 +176,39 @@ describe('resolveNextStep (pure)', () => {
     expect(step.kind).toBe('editorialReview');
   });
 
-  it('is done once editorial review has run', () => {
+  it('is done once editorial review has run (no visuals requested)', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
       { arcVerified: true, scriptChecked: new Set(['iss1']), editorialReviewed: true },
+    );
+    expect(step.kind).toBe('done');
+  });
+
+  it('asks for visual draft when includeVisual and pages are not rendered', () => {
+    const step = resolveNextStep(
+      comic,
+      [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
+      { arcVerified: true, scriptChecked: new Set(['iss1']), editorialReviewed: true },
+      { includeVisual: true },
+    );
+    expect(step).toMatchObject({ kind: 'visualDraft', issueId: 'iss1' });
+  });
+
+  it('is done when visuals are already rendered', () => {
+    const renderedStages = {
+      idea: ready(),
+      comicScript: ready(VALID_SCRIPT),
+      comicPages: {
+        cover: { proofImage: { jobId: 'j' } },
+        pages: [{ panels: [{ description: 'x' }], proofImage: { jobId: 'p0' } }],
+      },
+    };
+    const step = resolveNextStep(
+      comic,
+      [issue({ stages: renderedStages })],
+      { arcVerified: true, scriptChecked: new Set(['iss1']), editorialReviewed: true },
+      { includeVisual: true },
     );
     expect(step.kind).toBe('done');
   });
@@ -201,6 +236,30 @@ describe('requiredScriptStages / scriptStructurallyReady', () => {
     expect(scriptStructurallyReady({ stages: { comicScript: ready(VALID_SCRIPT) } })).toBe(true);
     expect(scriptStructurallyReady({ stages: { comicScript: ready('just some prose, no pages') } })).toBe(false);
     expect(scriptStructurallyReady({ stages: {} })).toBe(false);
+  });
+});
+
+describe('visualReady', () => {
+  it('is false with no pages, true once cover + all paneled pages are enqueued', () => {
+    expect(visualReady({ stages: { comicPages: { pages: [] } } })).toBe(false);
+    // pages but cover not enqueued
+    expect(visualReady({ stages: { comicPages: { pages: [{ panels: [{}], proofImage: { jobId: 'p' } }] } } })).toBe(false);
+    // cover + page enqueued
+    expect(visualReady({
+      stages: { comicPages: { cover: { proofImage: { jobId: 'c' } }, pages: [{ panels: [{}], proofImage: { jobId: 'p' } }] } },
+    })).toBe(true);
+  });
+
+  it('does not block on a page that has no panels', () => {
+    expect(visualReady({
+      stages: { comicPages: { cover: { finalImage: { filename: 'c.png' } }, pages: [{ panels: [] }] } },
+    })).toBe(true);
+  });
+
+  it('requires an authored back cover to be enqueued', () => {
+    expect(visualReady({
+      stages: { comicPages: { cover: { proofImage: { jobId: 'c' } }, backCover: { script: 'back' }, pages: [{ panels: [{}], proofImage: { jobId: 'p' } }] } },
+    })).toBe(false);
   });
 });
 
@@ -290,6 +349,29 @@ describe('autopilot conductor', () => {
     expect(second.alreadyRunning).toBe(true);
     expect(second.runId).toBe(first.runId);
     autopilot.cancelSeriesAutopilot(seriesId);
+  });
+
+  it('drafts cover + interior pages when includeVisual is set', async () => {
+    const { seriesId, issueId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { includeVisual: true });
+    await waitFor(runFinished(seriesId));
+    expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('complete');
+    expect(visualSpies.enqueueComicCover).toHaveBeenCalledTimes(1);
+    expect(visualSpies.enqueueVisualComicPage).toHaveBeenCalled();
+    // The returned jobIds were persisted onto the comicPages slots.
+    const issue = await issuesSvc.getIssue(issueId);
+    expect(issue.stages.comicPages.cover.proofImage.jobId).toBe('job-cover');
+    expect(issue.stages.comicPages.pages[0].proofImage.jobId).toBe('job-page-0');
+    const series = await seriesSvc.getSeries(seriesId);
+    expect(series.autopilot?.status).toBe('done');
+  });
+
+  it('does not render visuals when includeVisual is false', async () => {
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { includeVisual: false });
+    await waitFor(runFinished(seriesId));
+    expect(visualSpies.enqueueComicCover).not.toHaveBeenCalled();
+    expect(visualSpies.enqueueVisualComicPage).not.toHaveBeenCalled();
   });
 
   it('recoverStuckAutopilots demotes a running marker to paused', async () => {
