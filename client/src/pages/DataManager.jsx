@@ -156,7 +156,7 @@ function CategoryRow({ cat, maxSize, onExpand, expanded, detail, onArchive, onPu
             <InlineConfirmRow
               variant="separator"
               question={`Purge all ${cat.fileCount.toLocaleString()} files (${formatBytes(cat.size)}) in ${cat.label}? This permanently deletes the data and cannot be undone.`}
-              confirmText={purging ? 'Purging…' : 'Purge'}
+              confirmText="Purge"
               confirmTitle="Confirm purge"
               cancelTitle="Cancel purge"
               onConfirm={() => onConfirmPurge(cat.key)}

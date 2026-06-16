@@ -243,7 +243,9 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, a
           {confirmingClear && (
             <InlineConfirmRow
               className="mb-3"
-              question={`Clear ALL completed agents? This removes ${totalCount} agent record${totalCount === 1 ? '' : 's'} and cannot be undone.`}
+              question={totalCount > 0
+                ? `Clear ALL completed agents? This removes ${totalCount} agent record${totalCount === 1 ? '' : 's'} and cannot be undone.`
+                : 'Clear ALL completed agents? This cannot be undone.'}
               confirmText="Clear all"
               confirmTitle="Confirm clear all completed agents"
               cancelTitle="Cancel clear"
