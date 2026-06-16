@@ -32,8 +32,13 @@ export default function MemoryBuilder({ onBack, onNavigateElements }) {
   }, []);
 
   async function loadItems() {
-    const data = await getMemoryItems().catch(() => []);
-    setItems(data || []);
+    // null = fetch failed (request() already toasts the error) — keep the
+    // known-good list rather than blanking it; a real empty server response
+    // is `[]` and still clears. Distinguishing the two matters most after a
+    // delete, where a transient reload failure would otherwise wipe every
+    // remaining item (including the built-in) off the screen.
+    const data = await getMemoryItems().catch(() => null);
+    if (Array.isArray(data)) setItems(data);
   }
 
   function handleSelect(item) {
