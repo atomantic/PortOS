@@ -264,6 +264,7 @@ describe('resolveNextStep (pure)', () => {
       comicScript: ready(VALID_SCRIPT),
       comicPages: {
         cover: { proofImage: { jobId: 'j' } },
+        backCover: { proofImage: { jobId: 'jb' } },
         pages: [{ panels: [{ description: 'x' }], proofImage: { jobId: 'p0' } }],
       },
     };
@@ -303,26 +304,34 @@ describe('requiredScriptStages / scriptStructurallyReady', () => {
 });
 
 describe('visualReady', () => {
-  it('is false with no pages, true once cover + all paneled pages are enqueued', () => {
+  const cover = { proofImage: { jobId: 'c' } };
+  const backCover = { proofImage: { jobId: 'b' } };
+  it('is false with no pages, true once cover + back + all paneled pages are enqueued', () => {
     expect(visualReady({ stages: { comicPages: { pages: [] } } })).toBe(false);
     // pages but cover not enqueued
     expect(visualReady({ stages: { comicPages: { pages: [{ panels: [{}], proofImage: { jobId: 'p' } }] } } })).toBe(false);
-    // cover + page enqueued
+    // cover + back + page enqueued
     expect(visualReady({
-      stages: { comicPages: { cover: { proofImage: { jobId: 'c' } }, pages: [{ panels: [{}], proofImage: { jobId: 'p' } }] } },
+      stages: { comicPages: { cover, backCover, pages: [{ panels: [{}], proofImage: { jobId: 'p' } }] } },
+    })).toBe(true);
+  });
+
+  it('requires the back cover to be enqueued (always drafted)', () => {
+    expect(visualReady({
+      stages: { comicPages: { cover, pages: [{ panels: [{}], proofImage: { jobId: 'p' } }] } },
+    })).toBe(false);
+  });
+
+  it('counts a legacy rendered slot (imageJobId/filename) as enqueued', () => {
+    expect(visualReady({
+      stages: { comicPages: { cover: { imageJobId: 'legacy' }, backCover: { filename: 'b.png' }, pages: [{ panels: [{}], imageJobId: 'lp' }] } },
     })).toBe(true);
   });
 
   it('does not block on a page that has no panels', () => {
     expect(visualReady({
-      stages: { comicPages: { cover: { finalImage: { filename: 'c.png' } }, pages: [{ panels: [] }] } },
+      stages: { comicPages: { cover: { finalImage: { filename: 'c.png' } }, backCover, pages: [{ panels: [] }] } },
     })).toBe(true);
-  });
-
-  it('requires an authored back cover to be enqueued', () => {
-    expect(visualReady({
-      stages: { comicPages: { cover: { proofImage: { jobId: 'c' } }, backCover: { script: 'back' }, pages: [{ panels: [{}], proofImage: { jobId: 'p' } }] } },
-    })).toBe(false);
   });
 });
 

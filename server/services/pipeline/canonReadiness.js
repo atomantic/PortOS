@@ -101,9 +101,23 @@ export function gradeReferencedNouns(text, canon, thinChars = CANON_THIN_CHARS) 
 // these into the panel `description` rather than a structured dialogue[], so we
 // classify them here: the body is spoken/caption text (NOT drawn), the label is
 // a potential speaker.
-const PANEL_LABEL_LINE = /^\s*([A-Z][A-Z0-9 .'’_-]{0,30})(?:\s*\([^)]*\))?:\s*\S/;
+// Group 2 captures the parenthetical modifier (if any) so we can tell an
+// on-panel delivery (WHISPERED, CONT'D) from an off-panel one.
+const PANEL_LABEL_LINE = /^\s*([A-Z][A-Z0-9 .'’_-]{0,30})(\s*\([^)]*\))?:\s*\S/;
 // Labels that are not characters (their "speaker" must not count as drawn).
 const NON_SPEAKER_LABELS = new Set(['CAPTION', 'SFX', 'SOUND', 'NARRATION', 'NARRATOR', 'TITLE', 'NOTE', 'LETTERING', 'TEXT']);
+// A dialogue modifier marking the speaker as NOT in frame — off-panel /
+// off-screen / voice-over. Such a speaker is heard, not drawn, so it must not
+// count as a rendered character.
+const OFF_PANEL_MODIFIER = /\b(?:off[\s-]?panel|off[\s-]?screen|o\.?\s*p\.?|o\.?\s*s\.?|v\.?\s*o\.?|voice[\s-]?over)\b/i;
+
+// Resolve a raw "NAME (MODIFIER)" speaker token to the drawn character name, or
+// null when the modifier marks them off-panel/voice-over (heard, not drawn).
+const drawnSpeakerName = (label, modifier) => {
+  if (OFF_PANEL_MODIFIER.test(modifier || '')) return null;
+  const name = (label || '').trim();
+  return name || null;
+};
 
 /**
  * PURE: grade canon nouns that appear where they'd actually be DRAWN in a comic.
@@ -123,7 +137,10 @@ export function gradeComicReferencedNouns(comicScript, canon, thinChars = CANON_
       const m = line.match(PANEL_LABEL_LINE);
       if (m) {
         const label = m[1].trim();
-        if (!NON_SPEAKER_LABELS.has(label.toUpperCase())) speakers.push(label);
+        if (!NON_SPEAKER_LABELS.has(label.toUpperCase())) {
+          const name = drawnSpeakerName(label, m[2]); // null if off-panel/V.O.
+          if (name) speakers.push(name);
+        }
         // the body of a dialogue/caption line is spoken/overlaid text, not drawn
       } else {
         actionLines.push(line);
@@ -134,10 +151,11 @@ export function gradeComicReferencedNouns(comicScript, canon, thinChars = CANON_
     for (const pa of Array.isArray(pg.panels) ? pg.panels : []) {
       consume(pa.description);
       for (const d of Array.isArray(pa.dialogue) ? pa.dialogue : []) {
-        // Strip a trailing dialogue modifier — `KAI (WHISPERED)` → `KAI` — so
-        // the speaker matches its canon name (the description-line path already
-        // strips it via PANEL_LABEL_LINE; structured dialogue needs it too).
-        const name = d.character && d.character.replace(/\s*\([^)]*\)\s*$/, '').trim();
+        // Split a `KAI (WHISPERED)` / `KAI (OFF-PANEL)` speaker into name +
+        // modifier so the name matches canon and an off-panel speaker (heard,
+        // not drawn) is dropped — same rule as the description-line path.
+        const parts = (d.character || '').match(/^(.*?)(\s*\([^)]*\))?\s*$/);
+        const name = parts && drawnSpeakerName(parts[1], parts[2]);
         if (name) speakers.push(name);
       }
     }

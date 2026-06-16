@@ -130,6 +130,13 @@ describe('checkIssueCanonReadiness (matches the visual source)', () => {
     expect(report.none.map((n) => n.name)).toContain('Kai');
   });
 
+  it('does NOT count an off-panel speaker (KAI (OFF-PANEL): …) as drawn', async () => {
+    canon = { characters: [{ id: 'c1', name: 'Kai', physicalDescription: '' }], places: [], objects: [] };
+    const issueId = await seedIssue({ comicScript: 'PAGE 1\nPANEL 1\nMaggie stares at the screen.\nKAI (OFF-PANEL): I built it.' });
+    const report = await checkIssueCanonReadiness(issueId);
+    expect(report.none.map((n) => n.name)).not.toContain('Kai'); // heard, not drawn
+  });
+
   it('does NOT flag an off-page character (in prose only, not in panels)', async () => {
     // Aria appears only in prose narration, never in the comic-script panels.
     canon = { characters: [{ id: 'c1', name: 'Aria', physicalDescription: '' }], places: [], objects: [] };
