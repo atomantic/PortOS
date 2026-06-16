@@ -426,6 +426,17 @@ describe('autopilot conductor', () => {
     expect(series.autopilot?.status).toBe('paused');
   });
 
+  it('files only the specific gap (not also the generic stalled) when canon pauses', async () => {
+    canonReady = false;
+    canonUndescribed = [{ id: 'c1', name: 'Kai', kind: 'character' }];
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { includeVisual: true, fileGaps: true });
+    await waitFor(runFinished(seriesId));
+    const descs = addTask.mock.calls.map((c) => c[0].description);
+    expect(descs.some((d) => /canon-undescribed/.test(d))).toBe(true);
+    expect(descs.some((d) => /canonVerify-stalled/.test(d))).toBe(false);
+  });
+
   it('proceeds to visuals once canon is ready', async () => {
     canonReady = true;
     const { seriesId } = await seedComplete();
