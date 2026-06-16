@@ -235,7 +235,15 @@ export const memoryInputSchema = z.object({
   title: z.string().min(1).max(200),
   content: z.string().max(10000).optional(),
   mood: z.string().max(50).optional(),
-  tags: z.array(z.string().max(50)).optional()
+  tags: z.array(z.string().max(50)).optional(),
+  // Provenance fields stamped by importers (e.g. chatgptImport) — kept on the
+  // create/update payload shape so schema validation matches what createMemoryEntry
+  // persists. `sourceCreatedAt`/`sourceUpdatedAt` drive the recency sort in the
+  // memory list (see memoryRecencyMs in brainStorage.js).
+  source: z.string().max(100).optional(),
+  sourceRef: z.string().max(300).optional(),
+  sourceCreatedAt: z.string().datetime().nullable().optional(),
+  sourceUpdatedAt: z.string().datetime().nullable().optional()
 });
 
 // Settings update input schema

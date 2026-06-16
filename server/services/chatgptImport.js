@@ -396,7 +396,11 @@ export async function importConversations(parsed, options = {}) {
       tags,
       source: 'chatgpt-import',
       sourceRef: archiveName,
-      sourceCreatedAt: summary.createTime || null
+      // Both source clocks are persisted so the memory list can order imports by
+      // the original conversation recency (updateTime preferred) rather than the
+      // shared bulk-import timestamp. See `memoryRecencyMs` in brainStorage.js.
+      sourceCreatedAt: summary.createTime || null,
+      sourceUpdatedAt: summary.updateTime || null
     });
 
     results.push({

@@ -556,7 +556,11 @@ export default function MemoryTab({ onRefresh }) {
             )}
 
             <p className="text-xs text-gray-500 mt-2">
-              Updated {timeAgo(record.updatedAt)}
+              {activeType === 'memories' && record.source === 'chatgpt-import'
+                // Imported entries all share the bulk-import updatedAt, so show the
+                // original conversation recency instead (matches the list sort order).
+                ? `Conversation ${timeAgo(record.sourceUpdatedAt || record.sourceCreatedAt || record.updatedAt)}`
+                : `Updated ${timeAgo(record.updatedAt)}`}
             </p>
           </div>
 

@@ -33,7 +33,8 @@ import {
   bucketUpdateInputSchema,
   bucketReorderSchema,
   brainSyncQuerySchema,
-  brainSyncPushSchema
+  brainSyncPushSchema,
+  memoryInputSchema
 } from './brainValidation.js';
 
 describe('brainValidation.js', () => {
@@ -725,6 +726,29 @@ describe('brainValidation.js', () => {
       const { originInstanceId, record, ...minimal } = validChange;
       const result = brainSyncPushSchema.safeParse({ changes: [minimal] });
       expect(result.success).toBe(true);
+    });
+  });
+
+  describe('memoryInputSchema', () => {
+    it('accepts a minimal hand-written memory', () => {
+      expect(memoryInputSchema.safeParse({ title: 'A thought' }).success).toBe(true);
+    });
+
+    it('accepts importer provenance fields, including null source clocks', () => {
+      const result = memoryInputSchema.safeParse({
+        title: 'Imported chat',
+        content: 'transcript',
+        source: 'chatgpt-import',
+        sourceRef: 'conv-1.json',
+        sourceCreatedAt: '2024-07-14T18:16:33.622Z',
+        sourceUpdatedAt: null
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('rejects a non-ISO source timestamp', () => {
+      const result = memoryInputSchema.safeParse({ title: 'x', sourceCreatedAt: 'last week' });
+      expect(result.success).toBe(false);
     });
   });
 });

@@ -12,7 +12,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import EventEmitter from 'events';
-import { ensureDir, readJSONFile, safeJSONParse, PATHS } from '../lib/fileUtils.js';
+import { ensureDir, readJSONFile, safeJSONParse, safeDate, PATHS } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { getInstanceId } from './instances.js';
 import * as brainSyncLog from './brainSyncLog.js';
@@ -698,7 +698,40 @@ export const updateAdminItem = (id, data) => update('admin', id, data);
 export const deleteAdminItem = (id) => remove('admin', id);
 
 // Memories
-export const getMemoryEntries = () => getAll('memories');
+/**
+ * Effective recency timestamp (ms epoch) for ordering a memory entry newest-first.
+ *
+ * Imported conversations (ChatGPT) carry the original conversation clock in
+ * `sourceUpdatedAt` / `sourceCreatedAt`. A ChatGPT export is NOT ordered
+ * chronologically, and every entry from one bulk import shares the same
+ * `createdAt`/`updatedAt` (the import time) — so sorting on the storage clock
+ * leaves imports in arbitrary export order (the user-reported bug). Prefer the
+ * source clock when present, falling back to the storage clock for hand-written
+ * entries. Returns 0 for a missing/unparseable timestamp so it sorts last.
+ */
+export const memoryRecencyMs = (record) => {
+  for (const candidate of [
+    record?.sourceUpdatedAt,
+    record?.sourceCreatedAt,
+    record?.updatedAt,
+    record?.createdAt,
+  ]) {
+    const t = safeDate(candidate); // epoch ms, or 0 for missing/unparseable
+    if (t) return t;
+  }
+  return 0;
+};
+
+export const getMemoryEntries = async () => {
+  const entries = await getAll('memories');
+  // Decorate-sort-undecorate: compute each record's recency once (a bulk ChatGPT
+  // import can be hundreds of entries — recomputing it inside the comparator
+  // would parse every timestamp O(n log n) times).
+  return entries
+    .map((entry) => ({ entry, recency: memoryRecencyMs(entry) }))
+    .sort((a, b) => b.recency - a.recency)
+    .map(({ entry }) => entry);
+};
 export const getMemoryEntryById = (id) => getById('memories', id);
 export const createMemoryEntry = (data) => create('memories', data);
 export const updateMemoryEntry = (id, data) => update('memories', id, data);

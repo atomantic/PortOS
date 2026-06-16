@@ -194,6 +194,10 @@ describe('chatgptImport service', () => {
       expect(firstCall.tags).toEqual(expect.arrayContaining(['chatgpt-import', 'archive']));
       expect(firstCall.source).toBe('chatgpt-import');
       expect(firstCall.content).toContain('What is 2+2?');
+      // Both source clocks persist so the memory list can order imports by the
+      // original conversation recency (not the shared bulk-import timestamp).
+      expect(firstCall.sourceCreatedAt).toBe(new Date(1700000000 * 1000).toISOString());
+      expect(firstCall.sourceUpdatedAt).toBe(new Date(1700000100 * 1000).toISOString());
 
       const archives = await readdir(join(TMP, 'imports', 'chatgpt'));
       expect(archives.length).toBe(2);
