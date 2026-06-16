@@ -102,6 +102,16 @@ export const generateSeriesTitleLogo = (id, opts = {}, requestOptions = {}) =>
     ...requestOptions,
   });
 
+// Generate a fresh series concept (name / logline / premise / story shape) from
+// a universe, used as seed material. Returns the concept WITHOUT persisting —
+// the New Series form pre-fills it for the user to edit before creating.
+export const generateSeriesConcept = (universeId, opts = {}, requestOptions = {}) =>
+  request('/pipeline/series/generate-concept', {
+    method: 'POST',
+    body: JSON.stringify({ universeId, ...opts }),
+    ...requestOptions,
+  });
+
 // Mirror server caps in `server/services/pipeline/series.js` — bump both sides.
 export const SERIES_TITLE_LOGO_MAX = 2000;
 export const SERIES_AUTHOR_MAX = 120;

@@ -9,7 +9,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Plus, Workflow as WorkflowIcon, Trash2, Loader2, Globe2, FileInput } from 'lucide-react';
+import { Plus, Workflow as WorkflowIcon, Trash2, Loader2, Globe2, FileInput, Sparkles } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import ShareToButton from '../components/sharing/ShareToButton';
 import SyncToPeerButton from '../components/sharing/SyncToPeerButton';
@@ -21,6 +21,7 @@ import {
   createPipelineSeries,
   deletePipelineSeries,
   generateSeriesTitleLogo,
+  generateSeriesConcept,
   listUniverses,
   WORLD_LOGLINE_MAX,
   WORLD_PREMISE_MAX,
@@ -50,6 +51,7 @@ export default function Pipeline() {
 
   const sync = useSyncIntegrity('series');
   const [creating, setCreating] = useState(false);
+  const [generating, setGenerating] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(emptyForm);
 
@@ -90,6 +92,38 @@ export default function Pipeline() {
       }
       return next;
     });
+  };
+
+  // Generate a fresh series concept from the selected universe and overwrite
+  // the form's story fields (name / logline / premise / shape) so the user can
+  // edit before creating. The user clicked "Generate" explicitly, so this
+  // replaces whatever's there — but an empty field from the LLM keeps the prior
+  // value as a fallback. styleNotes is left to the universe-pull (it's a
+  // world-level aesthetic, not a per-series story choice).
+  const handleGenerate = async () => {
+    if (!form.universeId) {
+      toast.error('Pick a universe first — the generator uses it as seed material');
+      return;
+    }
+    setGenerating(true);
+    const concept = await generateSeriesConcept(form.universeId).catch((err) => {
+      toast.error(err.message || 'Failed to generate a series concept');
+      return null;
+    });
+    setGenerating(false);
+    if (!concept) return;
+    setForm((f) => ({
+      ...f,
+      name: concept.name || f.name,
+      logline: concept.logline || f.logline,
+      premise: concept.premise || f.premise,
+      shape: concept.shape || f.shape,
+    }));
+    toast.success(
+      concept.rationale
+        ? `Generated "${concept.name}" — ${concept.rationale}`
+        : `Generated "${concept.name}"`,
+    );
   };
 
   const handleCreate = async (e) => {
@@ -253,6 +287,23 @@ export default function Pipeline() {
                     : 'Series carry style + canon from their universe — pick one to continue.'}
               </p>
             </div>
+          </div>
+          <div className="flex items-center gap-3 flex-wrap">
+            <button
+              type="button"
+              onClick={handleGenerate}
+              disabled={generating || !form.universeId}
+              className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-port-accent/50 bg-port-accent/10 text-port-accent hover:bg-port-accent/20 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+              title={!form.universeId
+                ? 'Pick a universe first — the generator uses it as seed material'
+                : 'Invent a fresh series (name, logline, premise, story shape) from this universe'}
+            >
+              {generating ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} aria-hidden="true" />}
+              {generating ? 'Generating…' : 'Generate with AI'}
+            </button>
+            <span className="text-[11px] text-gray-500">
+              Invents a different story set in the chosen universe — name, logline, premise & story shape. Edit anything before creating.
+            </span>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-[1fr_240px] gap-3">
             <div>
