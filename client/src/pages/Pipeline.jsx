@@ -106,7 +106,7 @@ export default function Pipeline() {
       return;
     }
     setGenerating(true);
-    const concept = await generateSeriesConcept(form.universeId).catch((err) => {
+    const concept = await generateSeriesConcept(form.universeId, {}, { silent: true }).catch((err) => {
       toast.error(err.message || 'Failed to generate a series concept');
       return null;
     });
