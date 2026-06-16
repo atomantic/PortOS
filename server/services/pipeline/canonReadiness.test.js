@@ -123,6 +123,13 @@ describe('checkIssueCanonReadiness (matches the visual source)', () => {
     expect(report.none.map((n) => n.name)).toContain('Kai');
   });
 
+  it('matches a speaker even with a dialogue modifier (KAI (WHISPERED): …)', async () => {
+    canon = { characters: [{ id: 'c1', name: 'Kai', physicalDescription: '' }], places: [], objects: [] };
+    const issueId = await seedIssue({ comicScript: 'PAGE 1\nPANEL 1\nTwo figures in shadow.\nKAI (WHISPERED): I built it.' });
+    const report = await checkIssueCanonReadiness(issueId);
+    expect(report.none.map((n) => n.name)).toContain('Kai');
+  });
+
   it('does NOT flag an off-page character (in prose only, not in panels)', async () => {
     // Aria appears only in prose narration, never in the comic-script panels.
     canon = { characters: [{ id: 'c1', name: 'Aria', physicalDescription: '' }], places: [], objects: [] };

@@ -66,9 +66,18 @@ export async function startAutoRunTextStages(issueId, options = {}) {
   // permitted boundary use of try/catch in this module — without it an LLM
   // rejection would surface as an unhandledRejection on Node ≥15 and kill the
   // process. See ~/.claude skill `nodejs-async-event-listener-unhandled-rejection`.
+  // Which script stages to adapt from prose. Defaults to both (manual auto-run
+  // from the UI); callers targeting a single format (e.g. Series Autopilot on a
+  // comic-only series) pass `scripts: ['comicScript']` to skip the off-target
+  // stage and its LLM call. Unknown entries are filtered out.
+  const VALID_SCRIPTS = ['comicScript', 'teleplay'];
+  const scripts = Array.isArray(options.scripts) && options.scripts.length
+    ? VALID_SCRIPTS.filter((s) => options.scripts.includes(s))
+    : VALID_SCRIPTS;
+
   (async () => {
     await updateIssue(issueId, { status: 'running' }).catch(() => null);
-    broadcast(issueId, { type: 'start', runId, stages: ['idea', 'prose', 'comicScript', 'teleplay'] });
+    broadcast(issueId, { type: 'start', runId, stages: ['idea', 'prose', ...scripts] });
 
     try {
       // Stage 1: idea — skip if already ready/edited and not force-rerun
@@ -103,7 +112,7 @@ export async function startAutoRunTextStages(issueId, options = {}) {
       // the authored script runs through runStageIfNeeded and is skipped as
       // already-ready. `force` still regenerates everything.
       if (!record.cancelRequested) {
-        await Promise.all(['comicScript', 'teleplay'].map(async (stageId) => {
+        await Promise.all(scripts.map(async (stageId) => {
           if (scriptFirstSkip && !options.force) {
             const iss = await getIssue(issueId);
             if (!isStageReady(iss.stages?.[stageId])) {
