@@ -1069,61 +1069,77 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   proc.on('close', async (code, signal) => {
     clearCompletionWatchdog();
     activeProcess = null;
-    // Cleanup the resized temp images if we made them. Track via flags rather
-    // than a path-prefix check — tmpdir() can return a symlinked path
-    // (macOS /var → /private/var) so startsWith() can silently miss.
-    if (resizedSrcTempPath) await unlink(resizedSrcTempPath).catch(() => {});
-    if (resizedLastTempPath) await unlink(resizedLastTempPath).catch(() => {});
-    for (const p of resizedKeyframeTempPaths) await unlink(p).catch(() => {});
-    // Cleanup the original multipart upload temp file too — without this,
-    // every i2v request leaves a file in os.tmpdir() forever.
-    if (uploadedTempPath) await unlink(uploadedTempPath).catch(() => {});
-    for (const p of uploadedTempPaths) await unlink(p).catch(() => {});
-    // Defensive: catch audioFilePath too in case a direct caller passed it
-    // without threading through uploadedTempPaths. Skip when the route
-    // already covered it (extraUploadedTempPaths.push(audioFilePath)).
-    if (audioFilePath && !uploadedTempPaths.includes(audioFilePath)) {
-      await unlink(audioFilePath).catch(() => {});
-    }
+    // Wrap the whole teardown so a throw from finalizeGeneratedVideo (history
+    // save, thumbnail, file move) can't leak as an unhandled rejection — on
+    // Node ≥15 that kills the process AND strands the media job `running` with
+    // no terminal SSE. The catch routes any failure through the job's error
+    // finalizer so the client still gets a terminal 'failed' event.
+    try {
+      // Cleanup the resized temp images if we made them. Track via flags rather
+      // than a path-prefix check — tmpdir() can return a symlinked path
+      // (macOS /var → /private/var) so startsWith() can silently miss.
+      if (resizedSrcTempPath) await unlink(resizedSrcTempPath).catch(() => {});
+      if (resizedLastTempPath) await unlink(resizedLastTempPath).catch(() => {});
+      for (const p of resizedKeyframeTempPaths) await unlink(p).catch(() => {});
+      // Cleanup the original multipart upload temp file too — without this,
+      // every i2v request leaves a file in os.tmpdir() forever.
+      if (uploadedTempPath) await unlink(uploadedTempPath).catch(() => {});
+      for (const p of uploadedTempPaths) await unlink(p).catch(() => {});
+      // Defensive: catch audioFilePath too in case a direct caller passed it
+      // without threading through uploadedTempPaths. Skip when the route
+      // already covered it (extraUploadedTempPaths.push(audioFilePath)).
+      if (audioFilePath && !uploadedTempPaths.includes(audioFilePath)) {
+        await unlink(audioFilePath).catch(() => {});
+      }
 
-    // A watchdog-triggered SIGKILL means the render already emitted its
-    // completion marker and only the python teardown hung — the output file is
-    // on disk, so treat it as success (not the generic "killed, likely OOM"
-    // failure). Guard on the file actually existing + being non-empty so a
-    // marker without a real output (a malformed runtime) still fails loudly.
-    const watchdogSuccess = isWatchdogSuccess({ completionWatchdogFired, signal, outputPath });
+      // A watchdog-triggered SIGKILL means the render already emitted its
+      // completion marker and only the python teardown hung — the output file is
+      // on disk, so treat it as success (not the generic "killed, likely OOM"
+      // failure). Guard on the file actually existing + being non-empty so a
+      // marker without a real output (a malformed runtime) still fails loudly.
+      const watchdogSuccess = isWatchdogSuccess({ completionWatchdogFired, signal, outputPath });
 
-    if (code !== 0 && !watchdogSuccess) {
-      job.status = 'error';
-      let reason;
-      if (missingPyModule) {
-        const runtimeInfo = BYOV_RUNTIME_INFO[model.runtime];
-        if (runtimeInfo) {
-          // The probe believed the venv was ready but a runtime import
-          // disagreed — drop the cached "ready" so the next /runtime-status
-          // re-probes and the install banner re-appears.
-          invalidateByovReadyCache(runtimeInfo.id);
-          reason = `Python module '${missingPyModule}' is missing from the ${runtimeInfo.label} venv. Re-run the installer via Settings → Video (or \`${runtimeInfo.installEnvVar}=1 bash scripts/setup-image-video.sh\`).`;
+      if (code !== 0 && !watchdogSuccess) {
+        job.status = 'error';
+        let reason;
+        if (missingPyModule) {
+          const runtimeInfo = BYOV_RUNTIME_INFO[model.runtime];
+          if (runtimeInfo) {
+            // The probe believed the venv was ready but a runtime import
+            // disagreed — drop the cached "ready" so the next /runtime-status
+            // re-probes and the install banner re-appears.
+            invalidateByovReadyCache(runtimeInfo.id);
+            reason = `Python module '${missingPyModule}' is missing from the ${runtimeInfo.label} venv. Re-run the installer via Settings → Video (or \`${runtimeInfo.installEnvVar}=1 bash scripts/setup-image-video.sh\`).`;
+          } else {
+            reason = `Python module '${missingPyModule}' is missing. Install it into the configured Python environment and retry.`;
+          }
+        } else if (signal === 'SIGKILL') {
+          reason = 'Process killed (likely out of memory — try a smaller model or resolution)';
+        } else if (signal) {
+          reason = `Killed by signal ${signal}`;
         } else {
-          reason = `Python module '${missingPyModule}' is missing. Install it into the configured Python environment and retry.`;
+          reason = `Exit code ${code}`;
         }
-      } else if (signal === 'SIGKILL') {
-        reason = 'Process killed (likely out of memory — try a smaller model or resolution)';
-      } else if (signal) {
-        reason = `Killed by signal ${signal}`;
+        console.log(`❌ Video generation failed [${jobId.slice(0, 8)}]: ${reason}`);
+        broadcastSse(job, { type: 'error', error: `Generation failed: ${reason}` });
+        videoGenEvents.emit('failed', { generationId: jobId, error: reason });
       } else {
-        reason = `Exit code ${code}`;
+        if (watchdogSuccess) {
+          console.log(`⚠️ video child force-killed after completion teardown hang — output is intact [${jobId.slice(0, 8)}]`);
+        }
+        await finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta, actualSeed, loadHistory, saveHistory });
       }
-      console.log(`❌ Video generation failed [${jobId.slice(0, 8)}]: ${reason}`);
-      broadcastSse(job, { type: 'error', error: `Generation failed: ${reason}` });
-      videoGenEvents.emit('failed', { generationId: jobId, error: reason });
-    } else {
-      if (watchdogSuccess) {
-        console.log(`⚠️ video child force-killed after completion teardown hang — output is intact [${jobId.slice(0, 8)}]`);
-      }
-      await finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta, actualSeed, loadHistory, saveHistory });
+    } catch (err) {
+      // Finalize/teardown threw — fail the job loudly instead of crashing the
+      // process. The job may already be partway through finalize, so force the
+      // error state and emit the terminal event the client is waiting on.
+      job.status = 'error';
+      console.error(`❌ Video close handler failed [${jobId.slice(0, 8)}]: ${err.message}`);
+      broadcastSse(job, { type: 'error', error: `Generation failed: ${err.message}` });
+      videoGenEvents.emit('failed', { generationId: jobId, error: err.message });
+    } finally {
+      closeJobAfterDelay(jobs, jobId);
     }
-    closeJobAfterDelay(jobs, jobId);
   });
 
   return { jobId, generationId: jobId, filename, mode: 'local', model: modelId };
@@ -1431,20 +1447,27 @@ export async function extractLastFrame(historyId) {
     // any partial file from a prior failed run instead of erroring.
     const proc = spawn(ffmpeg, ['-sseof', '-1.0', '-i', videoPath, '-update', '1', '-vframes', '1', '-q:v', '2', '-y', framePath], { env: safeChildProcessEnv(), stdio: 'ignore' });
     proc.on('close', async (code) => {
-      // safeStatSize swallows throws so the async handler can't leak an
-      // unhandled rejection on transient stat errors — null is treated as
-      // "extraction failed".
-      const writtenSize = safeStatSize(framePath);
-      if (code !== 0 || writtenSize == null || writtenSize === 0) {
-        // A 0-byte file is a partial extraction, not a cache-worthy result —
-        // delete it so the next call retries instead of returning a broken
-        // image from the cache hit above.
-        if (writtenSize === 0) await unlink(framePath).catch(() => {});
-        return reject(new ServerError('Failed to extract last frame', { status: 500, code: 'FFMPEG_FAILED' }));
+      // Wrap the body so a throw (e.g. writeSidecar) routes to reject() instead
+      // of leaking an unhandled rejection AND leaving this Promise forever
+      // pending — the executor only settles via the explicit resolve/reject.
+      try {
+        // safeStatSize swallows throws so the async handler can't leak an
+        // unhandled rejection on transient stat errors — null is treated as
+        // "extraction failed".
+        const writtenSize = safeStatSize(framePath);
+        if (code !== 0 || writtenSize == null || writtenSize === 0) {
+          // A 0-byte file is a partial extraction, not a cache-worthy result —
+          // delete it so the next call retries instead of returning a broken
+          // image from the cache hit above.
+          if (writtenSize === 0) await unlink(framePath).catch(() => {});
+          return reject(new ServerError('Failed to extract last frame', { status: 500, code: 'FFMPEG_FAILED' }));
+        }
+        await writeSidecar();
+        console.log(`🎞️ Extracted last frame: ${frameFilename}`);
+        resolve({ filename: frameFilename, path: `/data/images/${frameFilename}` });
+      } catch (err) {
+        reject(err instanceof ServerError ? err : new ServerError(`Failed to extract last frame: ${err.message}`, { status: 500, code: 'FFMPEG_FAILED' }));
       }
-      await writeSidecar();
-      console.log(`🎞️ Extracted last frame: ${frameFilename}`);
-      resolve({ filename: frameFilename, path: `/data/images/${frameFilename}` });
     });
     proc.on('error', (err) => {
       reject(new ServerError(`ffmpeg failed to spawn: ${err.message}`, { status: 500, code: 'FFMPEG_FAILED' }));

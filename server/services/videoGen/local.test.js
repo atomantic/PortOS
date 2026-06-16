@@ -1026,3 +1026,36 @@ describe('generateVideo — LoRA history-record contract (Remix round-trip)', ()
     expect(startedMeta.loras).toBeUndefined();
   });
 });
+
+describe('generateVideo — close-handler resilience (issue #1334)', () => {
+  // A throw from finalizeGeneratedVideo inside proc.on('close') must NOT leak as
+  // an unhandled rejection (process-killing on Node ≥15) or strand the job
+  // `running` with no terminal SSE — it has to surface as a 'failed' event.
+  it('routes a finalize throw to a terminal failed event instead of an unhandled rejection', async () => {
+    vi.resetModules();
+    vi.doMock('./generateVideoHelpers.js', () => ({
+      makeVideoGenLineHandler: () => () => true,
+      isWatchdogSuccess: () => false,
+      finalizeGeneratedVideo: vi.fn(async () => { throw new Error('boom finalize'); }),
+    }));
+    const { generateVideo: gv } = await import('./local.js');
+    const { videoGenEvents: events } = await import('./events.js');
+
+    const failed = new Promise((resolve) => events.once('failed', resolve));
+
+    await gv({
+      jobId: 'close-handler-finalize-throw',
+      pythonPath: '/usr/bin/python3',
+      modelId: 'ltx2_unified',
+      prompt: 'a clip',
+      width: 512, height: 512, numFrames: 25, fps: 24,
+      mode: 'text',
+    });
+
+    const evt = await failed;
+    expect(evt.generationId).toBe('close-handler-finalize-throw');
+    expect(evt.error).toMatch(/boom finalize/);
+
+    vi.doUnmock('./generateVideoHelpers.js');
+  });
+});
