@@ -609,6 +609,14 @@ async function runVisualDraft(sId, issueId, record) {
   let issue = await getIssue(issueId);
   let cp = issue.stages?.comicPages;
 
+  // Respect an explicit lock — the user froze this stage, so don't seed pages
+  // or render. Skip (intentional, not a gap) and mark drafted so we don't loop.
+  if (cp?.locked === true) {
+    broadcast(sId, { type: 'step:skip', kind: 'visualDraft', issueId, reason: 'comicPages stage is locked — skipping draft render' });
+    record.runState.visualDrafted.add(issueId);
+    return {};
+  }
+
   // 1. Seed pages + cover concepts from the comic script if not already done
   //    (mirrors the extract-pages route; pure parse, no LLM).
   if (!(Array.isArray(cp?.pages) && cp.pages.length > 0)) {
@@ -804,7 +812,10 @@ function buildDryRunPlan(series, issues, options) {
   const plan = [];
   const ordered = orderedIssues(issues);
   const seasons = Array.isArray(series?.seasons) ? [...series.seasons].sort(byNumber) : [];
-  if (!series?.arc?.logline && !series?.arc?.summary) plan.push({ kind: 'generateArc', count: 1 });
+  // Mirror the resolver: generateArc runs when arc text is missing OR there are
+  // no volumes at all (an arc-only series), so a dry-run plan must show it too.
+  const noArc = !series?.arc?.logline && !series?.arc?.summary;
+  if (noArc || seasons.length === 0) plan.push({ kind: 'generateArc', count: 1 });
   const emptySeasons = seasons.filter((s) => !ordered.some((i) => i.seasonId === s.id));
   if (emptySeasons.length) plan.push({ kind: 'generateEpisodes', count: emptySeasons.length });
   plan.push({ kind: 'verifyArc', count: 1, note: `up to ${MAX_ARC_VERIFY_ROUNDS} rounds` });
