@@ -164,6 +164,12 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
   const comicPages = issue.stages?.comicPages || { status: 'empty', pages: [] };
   const pages = Array.isArray(comicPages.pages) ? comicPages.pages : [];
   const hasScript = !!(script.output || '').trim();
+  // Page-delete confirmation is owned here, not per-PageRow: pages are keyed
+  // and deleted by array index, so a single shared "armed page" guarantees
+  // only one delete is armed at a time — without it, arming two pages then
+  // confirming one shifts the indices and the still-armed confirm would point
+  // at (and delete) the wrong page.
+  const { isConfirming: isPageConfirmingDelete, requestDelete: requestPageDelete, cancelDelete: cancelPageDelete, confirmDelete: confirmPageDelete } = useConfirmDelete();
 
   const [localGenerating, setLocalGenerating] = useState(false);
   const [serverGenerating, setServerGenerating] = useState(script.status === 'generating');
@@ -712,6 +718,10 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
             onStageUpdate={onStageUpdate}
             onPreview={openPreview}
             onFilenameKnown={onFilenameKnown}
+            confirmingDelete={isPageConfirmingDelete(pi)}
+            onArmDelete={() => requestPageDelete(pi)}
+            onCancelDelete={cancelPageDelete}
+            onConfirmDelete={confirmPageDelete}
           />
         ))}
       </ul>
@@ -749,6 +759,7 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
 function PageRow({
   issue, pageIndex, page, renderOpts = {},
   onStageUpdate, onPreview, onFilenameKnown,
+  confirmingDelete, onArmDelete, onCancelDelete, onConfirmDelete,
 }) {
   const rawText = useMemo(
     () => page.rawText || panelsToMarkdown(page.panels, pageIndex + 1),
@@ -759,7 +770,6 @@ function PageRow({
   const [renderingProof, setRenderingProof] = useState(false);
   const [renderingFinal, setRenderingFinal] = useState(false);
   const [useProofForFinal, setUseProofForFinal] = useState(true);
-  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   // Sync local edits with parent updates (re-extract / re-render persist).
   useEffect(() => { setDraft(rawText); }, [rawText]);
   const dirty = draft !== rawText;
@@ -878,17 +888,17 @@ function PageRow({
             {(renderingFinal || finalInFlight) ? <Loader2 size={12} className="animate-spin" /> : <Layers size={12} />}
             Final
           </button>
-          {isConfirming(pageIndex) ? (
+          {confirmingDelete ? (
             <ConfirmButtonPair
               prompt="Delete page?"
-              onConfirm={() => confirmDelete(handleDelete)}
-              onCancel={cancelDelete}
+              onConfirm={() => onConfirmDelete(handleDelete)}
+              onCancel={onCancelDelete}
               ariaLabel={`Confirm delete page ${pageIndex + 1}`}
             />
           ) : (
             <button
               type="button"
-              onClick={() => requestDelete(pageIndex)}
+              onClick={onArmDelete}
               className="p-1 text-gray-500 hover:text-port-error"
               aria-label={`Delete page ${pageIndex + 1}`}
               title="Delete page"
