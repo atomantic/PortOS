@@ -139,6 +139,17 @@ export function isComicTarget(series) {
   return (series?.targetFormat || 'comic+tv').includes('comic');
 }
 
+// Effective "produce draft visuals?" decision. The `target` option overrides
+// the `includeVisual` flag: 'text' forces text-only (no canon gate, no render),
+// 'visual' forces visuals, and 'auto' (the default) honors `includeVisual`
+// (which itself defaults true). Without this, a `target:'text'` request on a
+// comic series would still run canonVerify + queue draft renders.
+export function wantsVisual(options = {}) {
+  if (options.target === 'text') return false;
+  if (options.target === 'visual') return true;
+  return options.includeVisual !== false;
+}
+
 function orderedIssues(issues) {
   return [...(Array.isArray(issues) ? issues : [])].sort(compareIssuesByPosition);
 }
@@ -251,12 +262,12 @@ export function resolveNextStep(series, issues, runState = {}, options = {}) {
   // canon noun that appears where it'd be drawn must be described (an artist
   // can't render a name). Runs once per run; the gate blocks (pauses) on
   // undescribed drawn nouns. Only relevant when visuals will be produced.
-  if (VISUAL_DRAFT_ENABLED && options.includeVisual && isComicTarget(series) && !runState.canonVerified) {
+  if (VISUAL_DRAFT_ENABLED && wantsVisual(options) && isComicTarget(series) && !runState.canonVerified) {
     return { kind: 'canonVerify', reason: 'canon descriptive integrity not yet verified this run' };
   }
 
   // STEP 6 — draft visuals (cover + back + all interior pages).
-  if (VISUAL_DRAFT_ENABLED && options.includeVisual && isComicTarget(series)) {
+  if (VISUAL_DRAFT_ENABLED && wantsVisual(options) && isComicTarget(series)) {
     for (const issue of ordered) {
       if (setHas(runState.visualDrafted, issue.id)) continue;
       if (visualReady(issue)) continue;
@@ -414,7 +425,9 @@ const runText = (issueId, record) => runChildToCompletion(record, {
   attemptedSet: record.runState.textAttempted,
   kind: 'text',
   id: issueId,
-  start: () => autoRunner.startAutoRunTextStages(issueId, { force: false }),
+  // Forward the run's provider/model override so prose + scripts honor it like
+  // every other step (autoRunner threads these into generateStage).
+  start: () => autoRunner.startAutoRunTextStages(issueId, { force: false, ...providerIdOpts(record) }),
   isActive: autoRunner.isAutoRunActive,
 });
 
@@ -719,7 +732,7 @@ function buildDryRunPlan(series, issues, options) {
   if (textNeeded) plan.push({ kind: 'textStages', count: textNeeded });
   if (isComicTarget(series)) plan.push({ kind: 'scriptVerify', count: ordered.length });
   plan.push({ kind: 'editorialReview', count: 1, note: `up to ${MAX_EDITORIAL_ROUNDS} rounds` });
-  if (VISUAL_DRAFT_ENABLED && options.includeVisual && isComicTarget(series)) {
+  if (VISUAL_DRAFT_ENABLED && wantsVisual(options) && isComicTarget(series)) {
     plan.push({ kind: 'canonVerify', count: 1, note: 'descriptive integrity of drawn nouns' });
     const visualNeeded = ordered.filter((i) => !visualReady(i)).length;
     if (visualNeeded) plan.push({ kind: 'visualDraft', count: visualNeeded, note: 'cover + back + all pages (draft)' });

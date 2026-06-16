@@ -228,23 +228,27 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
             {mode === 'dry-run' ? <span className="uppercase tracking-wider text-[10px] text-port-accent">dry-run</span> : null}
             {liveLabel}
           </div>
-          {plan ? (
-            <div className="mt-2 text-[11px] text-gray-400">
-              <div className="uppercase tracking-wider text-gray-500 mb-1">Planned steps</div>
-              <ul className="space-y-0.5">
-                {plan.map((p, i) => (
-                  <li key={i} className="flex items-center gap-1.5">
-                    <ChevronRight size={10} /> {stepLabel(p.kind)} ×{p.count}{p.note ? ` — ${p.note}` : ''}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ) : null}
           {frames?.length ? (
             <div className="mt-2 max-h-28 overflow-y-auto text-[11px] text-gray-500 space-y-0.5">
               {frames.slice(-6).map((f, i) => <div key={i}>{frameLabel(f)}</div>)}
             </div>
           ) : null}
+        </div>
+      ) : null}
+
+      {/* Dry-run plan — rendered whenever a plan exists, so it survives after the
+          dry-run stream closes (a dry-run persists no marker and completes
+          immediately). Cleared when the next run starts. */}
+      {plan?.length ? (
+        <div className="px-3 pb-3 border-t border-port-border pt-2 text-[11px] text-gray-400">
+          <div className="uppercase tracking-wider text-gray-500 mb-1">{active ? 'Planned steps' : 'Dry-run plan'}</div>
+          <ul className="space-y-0.5">
+            {plan.map((p, i) => (
+              <li key={i} className="flex items-center gap-1.5">
+                <ChevronRight size={10} /> {stepLabel(p.kind)} ×{p.count}{p.note ? ` — ${p.note}` : ''}
+              </li>
+            ))}
+          </ul>
         </div>
       ) : null}
 

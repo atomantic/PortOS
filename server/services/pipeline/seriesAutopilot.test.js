@@ -200,6 +200,17 @@ describe('resolveNextStep (pure)', () => {
       comic,
       [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
       { arcVerified: true, scriptChecked: new Set(['iss1']), editorialReviewed: true },
+      { includeVisual: false },
+    );
+    expect(step.kind).toBe('done');
+  });
+
+  it('is done (no canon/visual) when target is text, even on a comic series', () => {
+    const step = resolveNextStep(
+      comic,
+      [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
+      { arcVerified: true, scriptChecked: new Set(['iss1']), editorialReviewed: true },
+      { includeVisual: true, target: 'text' },
     );
     expect(step.kind).toBe('done');
   });
