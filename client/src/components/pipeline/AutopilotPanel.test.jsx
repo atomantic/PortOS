@@ -95,6 +95,14 @@ describe('AutopilotPanel', () => {
     expect(screen.getByRole('button', { name: /stop/i })).toBeInTheDocument();
   });
 
+  it('renders a dry-run plan delivered only on the terminal frame', async () => {
+    sseLatest = { type: 'complete', dryRun: true, runId: 'r1', plan: [{ kind: 'verifyArc', count: 1 }, { kind: 'visualDraft', count: 2, note: 'draft' }] };
+    renderPanel({ id: 's1', targetFormat: 'comic' });
+    await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
+    expect(await screen.findByText(/Dry-run plan/i)).toBeInTheDocument();
+    expect(screen.getByText(/Verifying arc/i)).toBeInTheDocument();
+  });
+
   it('renders canon readiness gaps with a link to the issue Nouns page', async () => {
     getPipelineSeriesCanonReadiness.mockResolvedValue({
       ready: false,

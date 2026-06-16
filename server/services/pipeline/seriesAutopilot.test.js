@@ -335,6 +335,10 @@ describe('autopilot conductor', () => {
     const last = autopilot.__testing.runs.get(seriesId)?.lastPayload;
     expect(last?.type).toBe('complete');
     expect(last?.dryRun).toBe(true);
+    // plan rides the terminal frame too, so a late SSE subscriber (the common
+    // case for a fast dry-run) still gets it via lastPayload replay.
+    expect(Array.isArray(last?.plan)).toBe(true);
+    expect(last.plan.length).toBeGreaterThan(0);
     expect(arcSpies.generateArcOverview).not.toHaveBeenCalled();
     expect(arcSpies.verifyArc).not.toHaveBeenCalled();
   });

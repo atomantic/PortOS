@@ -838,7 +838,11 @@ export async function startSeriesAutopilot(sId, options = {}) {
         const issues = await listIssues({ seriesId: sId });
         const plan = buildDryRunPlan(series, issues, options);
         broadcast(sId, { type: 'start', runId, mode, target: series.targetFormat, plan });
-        broadcast(sId, { type: 'complete', runId, dryRun: true, steps: plan.length, completedAt: new Date().toISOString() });
+        // Carry the plan on the terminal frame too: a dry-run emits start +
+        // complete synchronously, often before the client attaches, and
+        // attachSseClient replays only the LAST frame — so the plan would be
+        // lost if it lived solely on the start frame.
+        broadcast(sId, { type: 'complete', runId, dryRun: true, steps: plan.length, plan, completedAt: new Date().toISOString() });
         console.log(`🧭 autopilot dry-run — series=${sId.slice(0, 12)} steps=${plan.length}`);
         return;
       }

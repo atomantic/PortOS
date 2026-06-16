@@ -120,11 +120,15 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
     return () => { canceled = true; };
   }, [seriesId]);
 
-  // Capture dry-run plan + mode off the start frame.
+  // Capture dry-run plan + mode. The plan rides the start frame, but a fast
+  // dry-run can complete before the client attaches and only the terminal frame
+  // is replayed — so also read the plan off a dry-run complete frame.
   useEffect(() => {
     if (latest?.type === 'start') {
       setMode(latest.mode || null);
       if (Array.isArray(latest.plan)) setPlan(latest.plan);
+    } else if (latest?.type === 'complete' && latest.dryRun && Array.isArray(latest.plan)) {
+      setPlan(latest.plan);
     }
   }, [latest]);
 
