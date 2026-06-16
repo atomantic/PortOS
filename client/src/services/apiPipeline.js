@@ -595,6 +595,38 @@ export const getSeriesEditorialStatus = (seriesId, options = {}) =>
 export const pipelineEditorialSseUrl = (seriesId) =>
   `/api/pipeline/series/${encodeURIComponent(seriesId)}/editorial/analyze/progress`;
 
+// ---- Series Autopilot (full autonomous mode) ----
+// Drives a series from its current state to story-ready (+ draft visuals) by
+// composing every pipeline pass. SSE-backed; gated on the cos autonomy domain
+// (off → 409, dry-run → plan only, execute → full run).
+export const startPipelineAutopilot = (seriesId, opts = {}, options = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/autopilot/start`, {
+    method: 'POST',
+    body: JSON.stringify(opts),
+    ...options,
+  });
+
+export const cancelPipelineAutopilot = (seriesId) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/autopilot/cancel`, {
+    method: 'POST',
+  });
+
+// { autopilot: { status, runId, currentStep, residualFindings, ... } | null, active }
+export const getPipelineAutopilotStatus = (seriesId, options = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/autopilot/status`, options);
+
+export const pipelineAutopilotSseUrl = (seriesId) =>
+  `/api/pipeline/series/${encodeURIComponent(seriesId)}/autopilot/progress`;
+
+// ---- Canon descriptive-integrity (production readiness) ----
+// Read-only: which canon nouns appear where they'd be drawn but lack a
+// description (blocking visual production).
+export const getPipelineIssueCanonReadiness = (issueId, options = {}) =>
+  request(`/pipeline/issues/${encodeURIComponent(issueId)}/canon-readiness`, options);
+
+export const getPipelineSeriesCanonReadiness = (seriesId, options = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/canon-readiness`, options);
+
 // ---- Audio stage ----
 // Flat list of every voice the active engines expose, namespaced as
 // `engine:voiceName` (e.g. `kokoro:af_bella`, `piper:lessac-medium`). The

@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import ArcCanvas from '../components/pipeline/ArcCanvas';
+import AutopilotPanel from '../components/pipeline/AutopilotPanel';
 import CatalogCastPanel from '../components/CatalogCastPanel';
 import TabPills from '../components/ui/TabPills';
 import {
@@ -204,6 +205,12 @@ export default function PipelineSeries() {
               Save series
             </button>
           </header>
+
+          <AutopilotPanel
+            series={series}
+            onSeriesUpdate={updateSeriesFromServer}
+            onIssuesUpdate={handleIssuesUpdate}
+          />
 
           <ArcCanvas
             series={series}
