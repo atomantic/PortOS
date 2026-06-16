@@ -103,6 +103,18 @@ describe('generateSeriesConcept', () => {
     });
   });
 
+  it('renders slugline-only places (no name) into the canon context', async () => {
+    getUniverse.mockResolvedValue({
+      ...baseUniverse,
+      places: [{ slugline: 'INT. FOUNDRY — NIGHT' }, { name: 'The Docks', role: 'port' }],
+    });
+    mockLLM({ name: 'X', logline: 'l', premise: 'p', shape: 'tragedy' });
+    await generateSeriesConcept('uni-1');
+    const call = runPromptRefineRaw.mock.calls[0][0];
+    expect(call.variables.places).toContain('INT. FOUNDRY — NIGHT');
+    expect(call.variables.places).toContain('The Docks — port');
+  });
+
   it('maps a missing universe to a 404 (not a 500)', async () => {
     getUniverse.mockRejectedValue(Object.assign(new Error('Universe not found: uni-x'), { code: 'NOT_FOUND' }));
     await expect(generateSeriesConcept('uni-x')).rejects.toMatchObject({
@@ -131,6 +143,7 @@ describe('generateSeriesConcept', () => {
     expect(call.templateName).toBe('pipeline-series-generate');
     expect(call.variables.universe.name).toBe('Saltworks');
     expect(call.variables.characters).toContain('Ash — survivor');
+    expect(call.variables.places).toContain('The Foundry');
     // Only the same-universe series is listed; the other-universe one is excluded.
     expect(call.variables.existingSeries).toContain('First Tale');
     expect(call.variables.existingSeries).not.toContain('Elsewhere');

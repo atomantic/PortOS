@@ -25,17 +25,20 @@ const CANON_LIST_MAX = 24; // cap per canon kind in the brief — keeps the prom
 const EXISTING_SERIES_MAX = 30;
 
 // Render a universe canon list (characters / places / objects) as a compact
-// "Name — role; Name — role" string the LLM can scan. Empty / nameless entries
-// drop out; an empty (or all-nameless) list becomes an explicit "(none)" so the
-// prompt never renders a dangling label.
+// "Name — role; Name — role" string the LLM can scan. Entries with no
+// identifier drop out; an empty (or all-unidentified) list becomes an explicit
+// "(none)" so the prompt never renders a dangling label.
 function renderCanonList(entries) {
   const rendered = (Array.isArray(entries) ? entries : [])
     .slice(0, CANON_LIST_MAX)
     .map((e) => {
-      const name = (e?.name || '').trim();
-      if (!name) return null;
+      // Places may carry only a `slugline` and no `name` — the bible sanitizer
+      // accepts either as the identifier (storyBible.js), so fall back to it.
+      // Characters/objects always have a name, so the fallback is a no-op there.
+      const label = (e?.name || e?.slugline || '').trim();
+      if (!label) return null;
       const role = (e?.role || '').trim();
-      return role ? `${name} — ${role}` : name;
+      return role ? `${label} — ${role}` : label;
     })
     .filter(Boolean)
     .join('; ');
