@@ -95,6 +95,13 @@ describe('AutopilotPanel', () => {
     expect(screen.getByRole('button', { name: /stop/i })).toBeInTheDocument();
   });
 
+  it('shows a generic Paused label when the marker has no current step', async () => {
+    renderPanel({ id: 's1', targetFormat: 'comic', autopilot: { status: 'paused', currentStep: null } });
+    await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
+    expect(screen.getByText('Paused')).toBeInTheDocument();
+    expect(screen.queryByText(/Paused at null/i)).not.toBeInTheDocument();
+  });
+
   it('renders a dry-run plan delivered only on the terminal frame', async () => {
     sseLatest = { type: 'complete', dryRun: true, runId: 'r1', plan: [{ kind: 'verifyArc', count: 1 }, { kind: 'visualDraft', count: 2, note: 'draft' }] };
     renderPanel({ id: 's1', targetFormat: 'comic' });

@@ -97,6 +97,9 @@ const checkSeriesCanonReadiness = vi.fn(async (seriesId) => ({
 }));
 vi.mock('./canonReadiness.js', () => ({ checkSeriesCanonReadiness }));
 
+// Mocked domainUsage binding, so a test can drive the budget per call.
+const { getDomainBudgetStatus } = await import('../domainUsage.js');
+
 // Real services + the unit under test (imported AFTER the mocks above).
 const seriesSvc = await import('./series.js');
 const seasonsSvc = await import('./seasons.js');
@@ -133,6 +136,9 @@ beforeEach(() => {
   nextTaskId = 0;
   autopilot.__testing.runs.clear();
   vi.clearAllMocks();
+  // Reset the budget mock to read the `budgetStatus` var (clearAllMocks keeps
+  // implementations, but a prior test may have set a call-count-keyed one).
+  getDomainBudgetStatus.mockImplementation(async () => budgetStatus);
 });
 
 // ---------------------------------------------------------------------------
@@ -147,8 +153,18 @@ describe('resolveNextStep (pure)', () => {
   });
 
   it('treats a present arc summary (no logline) as having an arc', () => {
-    const step = resolveNextStep({ targetFormat: 'comic', arc: { summary: 'S' }, seasons: [] }, []);
+    const step = resolveNextStep(
+      { targetFormat: 'comic', arc: { summary: 'S' }, seasons: [{ id: 'se1', number: 1 }] },
+      [{ id: 'i1', seasonId: 'se1', number: 1, arcPosition: 1, stages: {} }],
+    );
     expect(step.kind).not.toBe('generateArc');
+  });
+
+  it('regenerates the arc for an arc-only series with no volumes', () => {
+    const arcOnly = { targetFormat: 'comic', arc: { logline: 'L', summary: 'S' }, seasons: [] };
+    expect(resolveNextStep(arcOnly, []).kind).toBe('generateArc');
+    // once arc generation has been attempted, it does not re-loop into generateArc
+    expect(resolveNextStep(arcOnly, [], { arcAttempted: true }).kind).not.toBe('generateArc');
   });
 
   it('asks to generate episodes for a season with no issues', () => {
@@ -368,6 +384,38 @@ describe('autopilot conductor', () => {
     const series = await seriesSvc.getSeries(seriesId);
     expect(series.autopilot?.status).toBe('paused');
     expect(series.autopilot?.residualFindings?.[0]?.problem).toBe('plot hole');
+  });
+
+  it('pauses (no infinite loop) when arc generation yields no volumes', async () => {
+    const series = await seriesSvc.createSeries({ name: 'S', logline: 'L', premise: 'P', targetFormat: 'comic' });
+    await seriesSvc.updateSeries(series.id, { arc: { logline: 'A', summary: 'S' } }); // arc but no seasons
+    // generateArcOverview mock returns seasons:[] → commit yields no volumes.
+    await autopilot.startSeriesAutopilot(series.id, { includeVisual: false });
+    await waitFor(runFinished(series.id));
+    const last = autopilot.__testing.runs.get(series.id)?.lastPayload;
+    expect(last?.type).toBe('paused');
+    expect(last?.scope).toBe('generateArc');
+    expect(last?.reason).toMatch(/no volumes/);
+    expect(arcSpies.generateArcOverview).toHaveBeenCalledTimes(1); // not looping
+  });
+
+  it('rechecks budget mid arc-verify loop and pauses before resolveVerifyIssues', async () => {
+    verifyFindings = [{ severity: 'high', problem: 'x' }];
+    // Budget is fine until verifyArc has run once, then exhausted — so the
+    // pre-resolve recheck must pause instead of billing resolveVerifyIssues.
+    getDomainBudgetStatus.mockImplementation(async () => (
+      arcSpies.verifyArc.mock.calls.length >= 1
+        ? { withinBudget: false, exceeded: 'actions' }
+        : { withinBudget: true, exceeded: null }
+    ));
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { maxArcVerifyRounds: 3 });
+    await waitFor(runFinished(seriesId));
+    const last = autopilot.__testing.runs.get(seriesId)?.lastPayload;
+    expect(last?.type).toBe('paused');
+    expect(last?.reason).toMatch(/budget/);
+    expect(arcSpies.verifyArc).toHaveBeenCalledTimes(1);
+    expect(arcSpies.resolveVerifyIssues).not.toHaveBeenCalled();
   });
 
   it('pauses when the cos daily budget is exhausted', async () => {

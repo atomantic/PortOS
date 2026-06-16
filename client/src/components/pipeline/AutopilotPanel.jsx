@@ -278,7 +278,7 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
               : ap.status === 'done' ? <CheckCircle2 size={13} className="text-port-success" />
                 : <AlertCircle size={13} className="text-port-error" />}
             <span className={ap.status === 'paused' ? 'text-port-warning' : ap.status === 'done' ? 'text-port-success' : 'text-port-error'}>
-              {ap.status === 'paused' ? `Paused at ${stepLabel(ap.currentStep)}` : ap.status === 'done' ? 'Last run completed — draft is production-ready' : 'Last run errored'}
+              {ap.status === 'paused' ? (ap.currentStep ? `Paused at ${stepLabel(ap.currentStep)}` : 'Paused') : ap.status === 'done' ? 'Last run completed — draft is production-ready' : 'Last run errored'}
             </span>
           </div>
           {ap.lastError && ap.status !== 'done' ? <p className="text-[11px] text-gray-400 mt-1">{ap.lastError}</p> : null}

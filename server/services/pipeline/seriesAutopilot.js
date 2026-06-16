@@ -210,9 +210,15 @@ export function resolveNextStep(series, issues, runState = {}, options = {}) {
   const seasons = Array.isArray(series?.seasons) ? [...series.seasons].sort(byNumber) : [];
   const ordered = orderedIssues(issues);
 
-  // STEP 1 — arc.
-  if (!series?.arc?.logline && !series?.arc?.summary) {
-    return { kind: 'generateArc', reason: 'series has no arc' };
+  // STEP 1 — arc. Also (re)generate when there are no seasons at all: an
+  // arc-only series (arc text present, seasons: []) has nothing for the
+  // episode/issue steps to expand, and would otherwise sail through verify/
+  // review of an empty issue list and be marked done with no volumes. The
+  // attempted-guard stops a re-loop if arc generation yields no seasons (the
+  // dispatch pauses in that case).
+  const noArc = !series?.arc?.logline && !series?.arc?.summary;
+  if (!runState.arcAttempted && (noArc || seasons.length === 0)) {
+    return { kind: 'generateArc', reason: seasons.length === 0 && !noArc ? 'series has no volumes' : 'series has no arc' };
   }
 
   // STEP 2 — a season with zero issues (in season order).
@@ -357,6 +363,18 @@ const providerIdOpts = (record) => ({
   model: record.options.modelOverride,
 });
 
+// Pause result when the cos action budget is exhausted, else null. Used to gate
+// EACH billable call inside the multi-call verify/editorial convergence loops —
+// the conductor's per-step budget check only fires once before the step, so
+// without this a single step could bill several actions past the daily cap.
+// gapFiled:true so a budget pause doesn't also file a generic stalled gap
+// (mirrors the conductor's own loop-level budget pause, which files none).
+async function budgetPause() {
+  const budget = await getDomainBudgetStatus('cos');
+  if (budget.withinBudget) return null;
+  return { pause: true, gapFiled: true, reason: `daily cos ${budget.exceeded || 'actions'} budget reached` };
+}
+
 // ---------------------------------------------------------------------------
 // Step dispatch.
 // ---------------------------------------------------------------------------
@@ -379,6 +397,8 @@ async function runArcVerify(seriesId, record) {
   }
   for (let round = 1; round <= maxRounds; round += 1) {
     if (record.cancelRequested) return { canceled: true };
+    const beforeVerify = await budgetPause();
+    if (beforeVerify) return beforeVerify;
     const { issues } = await verifyArc(seriesId, providerOverrideOpts(record));
     await recordDomainUsage('cos', { actions: 1 });
     const blocking = issues.filter((i) => ARC_BLOCKING.has(i.severity));
@@ -393,6 +413,10 @@ async function runArcVerify(seriesId, record) {
       return { pause: true, reason: `arc verification did not converge after ${maxRounds} rounds`, residual: blocking };
     }
     if (record.cancelRequested) return { canceled: true };
+    // resolveVerifyIssues bills another action — recheck the budget so a single
+    // step can't overspend the daily cap mid-loop.
+    const beforeResolve = await budgetPause();
+    if (beforeResolve) return beforeResolve;
     await resolveVerifyIssues(seriesId, { findings: blocking, ...providerOverrideOpts(record) });
     await recordDomainUsage('cos', { actions: 1 });
   }
@@ -508,6 +532,8 @@ async function runEditorial(sId, record) {
   }
   for (let round = 1; round <= maxRounds; round += 1) {
     if (record.cancelRequested) return { canceled: true };
+    const beforeAnalyze = await budgetPause();
+    if (beforeAnalyze) return beforeAnalyze;
     const { issues, runId } = await analyzeManuscriptCompleteness(sId, {
       withEdits: true,
       ...providerOverrideOpts(record),
@@ -532,6 +558,8 @@ async function runEditorial(sId, record) {
     // Bounded auto-fix: apply a fix for each open high-severity comment, then
     // the loop re-analyzes. Each fix is wrapped so one bad anchor doesn't abort
     // the pass (boundary use of try/catch — these call into LLM/file paths).
+    const beforeFix = await budgetPause();
+    if (beforeFix) return beforeFix;
     const review = await getReview(sId).catch(() => ({ comments: [] }));
     const open = (review.comments || []).filter((c) => c.status === 'open' && EDITORIAL_BLOCKING.has(c.severity));
     for (const comment of open) {
@@ -721,10 +749,21 @@ async function runCanonVerify(sId, record) {
 async function dispatchStep(sId, step, record) {
   switch (step.kind) {
     case 'generateArc': {
+      // Mark attempted up front so the resolver won't re-route here if arc
+      // generation yields no seasons (avoids an infinite generateArc loop).
+      record.runState.arcAttempted = true;
       const r = await generateArcOverview(sId, providerOverrideOpts(record));
-      const cur = await getSeries(sId);
-      await commitSeasonsWithRemap(cur, { arc: r.arc, seasons: r.seasons });
+      const committed = await commitSeasonsWithRemap(await getSeries(sId), { arc: r.arc, seasons: r.seasons });
       await recordDomainUsage('cos', { actions: 1 });
+      const seasonCount = committed?.series?.seasons?.length ?? (await getSeries(sId)).seasons?.length ?? 0;
+      if (seasonCount === 0) {
+        // No specific gap filed here — let the conductor file generateArc-stalled.
+        return {
+          pause: true,
+          reason: 'arc generation produced no volumes — cannot create issues; review the series bible and regenerate the arc',
+          residual: [{ severity: 'high', location: 'arc', problem: 'arc overview returned zero seasons/volumes' }],
+        };
+      }
       return {};
     }
     case 'generateEpisodes': {
@@ -824,6 +863,7 @@ export async function startSeriesAutopilot(sId, options = {}) {
     mode,
     options,
     runState: {
+      arcAttempted: false,
       arcVerified: false,
       editorialReviewed: false,
       canonVerified: false,
