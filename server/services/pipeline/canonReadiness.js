@@ -134,7 +134,11 @@ export function gradeComicReferencedNouns(comicScript, canon, thinChars = CANON_
     for (const pa of Array.isArray(pg.panels) ? pg.panels : []) {
       consume(pa.description);
       for (const d of Array.isArray(pa.dialogue) ? pa.dialogue : []) {
-        if (d.character) speakers.push(d.character);
+        // Strip a trailing dialogue modifier — `KAI (WHISPERED)` → `KAI` — so
+        // the speaker matches its canon name (the description-line path already
+        // strips it via PANEL_LABEL_LINE; structured dialogue needs it too).
+        const name = d.character && d.character.replace(/\s*\([^)]*\)\s*$/, '').trim();
+        if (name) speakers.push(name);
       }
     }
   }

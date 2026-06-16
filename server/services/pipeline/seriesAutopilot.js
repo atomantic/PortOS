@@ -455,9 +455,14 @@ const runBeats = (seriesId, seasonId, record) => runChildToCompletion(record, {
 
 async function runText(issueId, record) {
   record.runState.textAttempted.add(issueId);
+  // Only adapt the target format's script(s) — a single-format series shouldn't
+  // spend LLM calls populating the off-target script across every issue.
+  const preIssue = await getIssue(issueId);
+  const preSeries = await getSeries(preIssue.seriesId).catch(() => null);
+  const scripts = requiredScriptStages(preSeries);
   // Forward the run's provider/model override so prose + scripts honor it like
   // every other step (autoRunner threads these into generateStage).
-  await autoRunner.startAutoRunTextStages(issueId, { force: false, ...providerIdOpts(record) });
+  await autoRunner.startAutoRunTextStages(issueId, { force: false, scripts, ...providerIdOpts(record) });
   record.activeChild = { kind: 'text', id: issueId };
   await waitForChild(() => autoRunner.isAutoRunActive(issueId), record);
   record.activeChild = null;

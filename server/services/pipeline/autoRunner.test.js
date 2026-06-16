@@ -101,6 +101,19 @@ describe('pipeline auto-runner', () => {
     expect(final.status).toBe('needs-review');
   });
 
+  it('only generates the requested script stages via the scripts option', async () => {
+    const { issue } = await seed();
+    await autoRunner.startAutoRunTextStages(issue.id, { scripts: ['comicScript'] });
+    await waitFor(() => {
+      const run = autoRunner.__testing.runs.get(issue.id);
+      return run?.lastPayload?.type === 'complete';
+    });
+    expect(generated).toContain('idea');
+    expect(generated).toContain('prose');
+    expect(generated).toContain('comicScript');
+    expect(generated).not.toContain('teleplay');
+  });
+
   it('skips a stage that is already ready (no force)', async () => {
     const { issue } = await seed();
     await issuesSvc.updateStage(issue.id, 'idea', { status: 'ready', output: 'PREFILLED-IDEA' });
