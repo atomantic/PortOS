@@ -1,6 +1,8 @@
 import { X, AlertTriangle, Calendar, Activity, Tag, Check, Trash2 } from 'lucide-react';
 import Pill from '../ui/Pill';
 import ProvenanceChip from '../ui/ProvenanceChip';
+import InlineConfirmRow from '../ui/InlineConfirmRow';
+import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import {
   CATEGORY_CONFIG, HORIZON_OPTIONS, GOAL_TYPE_CONFIG, GOAL_TYPE_OPTIONS, DEFAULT_NEW_GOAL
 } from './goalConstants';
@@ -41,6 +43,7 @@ const READING_PROVENANCE = {
 
 export default function GoalDetailPanel({ goal, allGoals, onClose, onRefresh }) {
   const s = useGoalDetail({ goal, allGoals, onClose, onRefresh });
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
   if (!goal) return null;
 
@@ -277,13 +280,23 @@ export default function GoalDetailPanel({ goal, allGoals, onClose, onRefresh }) 
               </button>
             )}
             <button
-              onClick={s.handleDelete}
+              onClick={() => requestDelete(goal.id)}
               className="flex items-center gap-1 px-3 py-1.5 text-xs rounded bg-red-500/20 text-red-400 hover:bg-red-500/30"
             >
               <Trash2 className="w-3 h-3" />
               Delete
             </button>
           </div>
+          {isConfirming(goal.id) && (
+            <InlineConfirmRow
+              question="Delete this goal and all its todos & progress? This cannot be undone."
+              confirmText="Delete goal"
+              confirmTitle="Confirm delete goal"
+              cancelTitle="Cancel delete"
+              onConfirm={() => confirmDelete(() => s.handleDelete())}
+              onCancel={cancelDelete}
+            />
+          )}
         </>
       )}
     </div>

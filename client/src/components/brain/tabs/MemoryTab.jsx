@@ -23,6 +23,8 @@ import {
 } from '../constants';
 import { timeAgo } from '../../../utils/formatters';
 import BrailleSpinner from '../../BrailleSpinner';
+import InlineConfirmRow from '../../ui/InlineConfirmRow';
+import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 
 export default function MemoryTab({ onRefresh }) {
   const [activeType, setActiveType] = useState('memories');
@@ -37,6 +39,7 @@ export default function MemoryTab({ onRefresh }) {
   const [backendStatus, setBackendStatus] = useState(null);
   // The chatgpt-import conversation currently open in the full-transcript viewer.
   const [viewerRecord, setViewerRecord] = useState(null);
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
   const fetchRecords = useCallback(async () => {
     setLoading(true);
@@ -578,7 +581,7 @@ export default function MemoryTab({ onRefresh }) {
               <Edit2 size={14} />
             </button>
             <button
-              onClick={() => handleDelete(record.id)}
+              onClick={() => requestDelete(record.id)}
               className="p-1.5 text-gray-400 hover:text-port-error rounded hover:bg-port-error/20"
               title="Delete"
             >
@@ -586,6 +589,16 @@ export default function MemoryTab({ onRefresh }) {
             </button>
           </div>
         </div>
+        {isConfirming(record.id) && (
+          <InlineConfirmRow
+            className="mt-3"
+            question="Delete this entry? This cannot be undone."
+            confirmTitle="Confirm delete"
+            cancelTitle="Cancel delete"
+            onConfirm={() => confirmDelete(() => handleDelete(record.id))}
+            onCancel={cancelDelete}
+          />
+        )}
       </div>
     );
   };

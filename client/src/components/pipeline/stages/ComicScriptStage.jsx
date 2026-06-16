@@ -26,6 +26,8 @@ import {
 } from '../../../services/api';
 import { getSettings, patchSettingsSlice } from '../../../services/apiSystem';
 import { listImageModels } from '../../../services/apiImageVideo';
+import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
+import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 import MediaJobThumb from '../MediaJobThumb';
 import MediaPreview from '../../media/MediaPreview';
 import usePreviewRoute from '../../../hooks/usePreviewRoute';
@@ -757,6 +759,7 @@ function PageRow({
   const [renderingProof, setRenderingProof] = useState(false);
   const [renderingFinal, setRenderingFinal] = useState(false);
   const [useProofForFinal, setUseProofForFinal] = useState(true);
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   // Sync local edits with parent updates (re-extract / re-render persist).
   useEffect(() => { setDraft(rawText); }, [rawText]);
   const dirty = draft !== rawText;
@@ -875,15 +878,24 @@ function PageRow({
             {(renderingFinal || finalInFlight) ? <Loader2 size={12} className="animate-spin" /> : <Layers size={12} />}
             Final
           </button>
-          <button
-            type="button"
-            onClick={handleDelete}
-            className="p-1 text-gray-500 hover:text-port-error"
-            aria-label={`Delete page ${pageIndex + 1}`}
-            title="Delete page"
-          >
-            <Trash2 size={12} />
-          </button>
+          {isConfirming(pageIndex) ? (
+            <ConfirmButtonPair
+              prompt="Delete page?"
+              onConfirm={() => confirmDelete(handleDelete)}
+              onCancel={cancelDelete}
+              ariaLabel={`Confirm delete page ${pageIndex + 1}`}
+            />
+          ) : (
+            <button
+              type="button"
+              onClick={() => requestDelete(pageIndex)}
+              className="p-1 text-gray-500 hover:text-port-error"
+              aria-label={`Delete page ${pageIndex + 1}`}
+              title="Delete page"
+            >
+              <Trash2 size={12} />
+            </button>
+          )}
         </div>
       </div>
       <div className="grid md:grid-cols-2 gap-3 p-3">

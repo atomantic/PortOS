@@ -4,11 +4,13 @@ import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
 import AgentCard from './AgentCard';
 import ResumeAgentModal from './ResumeAgentModal';
+import InlineConfirmRow from '../../ui/InlineConfirmRow';
 
 export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, apps }) {
   const [resumingAgent, setResumingAgent] = useState(null);
   const [durations, setDurations] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [confirmingClear, setConfirmingClear] = useState(false);
 
   // Date-based lazy loading for completed agents
   const [dateBuckets, setDateBuckets] = useState([]); // [{ date, count }, ...]
@@ -109,6 +111,7 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, a
   };
 
   const handleClearCompleted = async () => {
+    setConfirmingClear(false);
     const result = await api.clearCompletedCosAgents().catch(err => { toast.error(err.message); return null; });
     if (!result) return;
     setLoadedAgents([]);
@@ -229,7 +232,7 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, a
               </span>
             </h3>
             <button
-              onClick={handleClearCompleted}
+              onClick={() => setConfirmingClear(true)}
               className="flex items-center gap-1 text-sm text-gray-500 hover:text-port-error transition-colors"
               aria-label="Clear all completed agents"
             >
@@ -237,6 +240,17 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, a
               Clear
             </button>
           </div>
+          {confirmingClear && (
+            <InlineConfirmRow
+              className="mb-3"
+              question={`Clear ALL completed agents? This removes ${totalCount} agent record${totalCount === 1 ? '' : 's'} and cannot be undone.`}
+              confirmText="Clear all"
+              confirmTitle="Confirm clear all completed agents"
+              cancelTitle="Cancel clear"
+              onConfirm={handleClearCompleted}
+              onCancel={() => setConfirmingClear(false)}
+            />
+          )}
           {/* Search */}
           <div className="flex gap-2 mb-3">
             <div className="relative flex-1">

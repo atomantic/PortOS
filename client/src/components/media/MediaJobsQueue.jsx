@@ -1,9 +1,11 @@
 import { useMemo, useState, useCallback } from 'react';
 import { ListOrdered, Image as ImageIcon, Film, X, RefreshCw, ChevronDown, ChevronRight, Trash2, RotateCw, Zap, Pencil } from 'lucide-react';
 import toast from '../ui/Toast';
+import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import { listMediaJobs, cancelMediaJob, cancelQueuedMediaJobs, deleteMediaJob, retryMediaJob, runMediaJobNow } from '../../services/apiMediaJobs.js';
 import { IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
 import { useAutoRefetch } from '../../hooks/useAutoRefetch';
+import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 
 const STATUS_BADGE = {
   queued: 'bg-port-border text-port-text-muted',
@@ -199,6 +201,7 @@ function JobRow({ job, onCancel, onRetry, onRunNow, onDelete }) {
   // Inline edit form for retry-with-overrides.
   const [editing, setEditing] = useState(false);
   const canEdit = canRetry;
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   return (
     <div className="bg-port-bg border border-port-border rounded p-2.5">
       <div className="flex items-center justify-between gap-3">
@@ -268,14 +271,24 @@ function JobRow({ job, onCancel, onRetry, onRunNow, onDelete }) {
             </button>
           )}
           {canDelete && (
-            <button
-              onClick={() => onDelete(job.id)}
-              className="flex items-center gap-1 px-2 py-1 bg-port-bg border border-port-border rounded text-xs text-gray-500 hover:text-port-error hover:border-port-error/50"
-              title="Remove this row from the history"
-              aria-label="Delete from history"
-            >
-              <Trash2 className="w-3 h-3" />
-            </button>
+            isConfirming(job.id) ? (
+              <ConfirmButtonPair
+                prompt="Remove?"
+                confirmText="Remove"
+                onConfirm={() => confirmDelete(() => onDelete(job.id))}
+                onCancel={cancelDelete}
+                ariaLabel="Confirm remove job from history"
+              />
+            ) : (
+              <button
+                onClick={() => requestDelete(job.id)}
+                className="flex items-center gap-1 px-2 py-1 bg-port-bg border border-port-border rounded text-xs text-gray-500 hover:text-port-error hover:border-port-error/50"
+                title="Remove this row from the history"
+                aria-label="Delete from history"
+              >
+                <Trash2 className="w-3 h-3" />
+              </button>
+            )
           )}
         </div>
       </div>

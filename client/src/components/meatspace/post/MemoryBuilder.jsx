@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import { Brain, ChevronLeft, Plus, Trash2, BookOpen, Zap, FlaskConical, Eye, X, Save } from 'lucide-react';
 import { getMemoryItems, createMemoryItem, deleteMemoryItem } from '../../../services/api';
+import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
+import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 import MemoryPractice from './MemoryPractice';
 import ElementsSong from './ElementsSong';
 
@@ -23,6 +25,7 @@ export default function MemoryBuilder({ onBack, onNavigateElements }) {
   const [newType, setNewType] = useState('text');
   const [newContent, setNewContent] = useState('');
   const [saving, setSaving] = useState(false);
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
   useEffect(() => {
     loadItems();
@@ -229,12 +232,22 @@ export default function MemoryBuilder({ onBack, onNavigateElements }) {
                   Practice
                 </button>
                 {!item.builtin && (
-                  <button
-                    onClick={() => handleDelete(item.id)}
-                    className="p-1.5 text-gray-500 hover:text-port-error transition-colors"
-                  >
-                    <Trash2 size={14} />
-                  </button>
+                  isConfirming(item.id) ? (
+                    <ConfirmButtonPair
+                      prompt="Delete?"
+                      confirmIcon={Trash2}
+                      ariaLabel={`Confirm delete ${item.title}`}
+                      onConfirm={() => confirmDelete(() => handleDelete(item.id))}
+                      onCancel={cancelDelete}
+                    />
+                  ) : (
+                    <button
+                      onClick={() => requestDelete(item.id)}
+                      className="p-1.5 text-gray-500 hover:text-port-error transition-colors"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  )
                 )}
               </div>
             </div>

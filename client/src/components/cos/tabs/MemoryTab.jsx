@@ -13,6 +13,8 @@ import MemoryEditModal from './MemoryEditModal';
 import ProviderModelSelector from '../../ProviderModelSelector';
 import useProviderModels from '../../../hooks/useProviderModels';
 import BrailleSpinner from '../../BrailleSpinner';
+import InlineConfirmRow from '../../ui/InlineConfirmRow';
+import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 
 export default function MemoryTab({ apps = [] }) {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -36,6 +38,7 @@ export default function MemoryTab({ apps = [] }) {
   const [embeddingStatus, setEmbeddingStatus] = useState(null);
   const [backendStatus, setBackendStatus] = useState(null);
   const [editingMemory, setEditingMemory] = useState(null);
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
   // Embedding provider/model configuration
   const { providers, availableModels, setSelectedProviderId: setProviderHook, setSelectedModel: setModelHook, selectedProviderId: hookProviderId, selectedModel: hookModel } = useProviderModels();
@@ -442,7 +445,7 @@ export default function MemoryTab({ apps = [] }) {
                       <Pencil size={18} />
                     </button>
                     <button
-                      onClick={() => handleDelete(memory.id)}
+                      onClick={() => requestDelete(memory.id)}
                       className="p-3 min-h-[40px] min-w-[40px] flex items-center justify-center text-gray-500 hover:text-port-error transition-colors"
                       title="Archive memory"
                       aria-label="Archive memory"
@@ -451,6 +454,17 @@ export default function MemoryTab({ apps = [] }) {
                     </button>
                   </div>
                 </div>
+                {isConfirming(memory.id) && (
+                  <InlineConfirmRow
+                    className="mt-3"
+                    question="Archive this memory? This cannot be undone."
+                    confirmText="Archive"
+                    confirmTitle="Confirm archive"
+                    cancelTitle="Cancel archive"
+                    onConfirm={() => confirmDelete(() => handleDelete(memory.id))}
+                    onCancel={cancelDelete}
+                  />
+                )}
               </div>
             ))
           )}

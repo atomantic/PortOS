@@ -1,5 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Upload, Trash2, Download, FileText, Image, File, FolderOpen, RefreshCw } from 'lucide-react';
+import { useConfirmDelete } from '../hooks/useConfirmDelete';
+import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
+import InlineConfirmRow from '../components/ui/InlineConfirmRow';
 import toast from '../components/ui/Toast';
 import BrailleSpinner from '../components/BrailleSpinner';
 import * as api from '../services/api';
@@ -24,6 +27,8 @@ export default function Uploads() {
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [dragActive, setDragActive] = useState(false);
+  const [confirmingDeleteAll, setConfirmingDeleteAll] = useState(false);
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   const fileInputRef = useRef(null);
 
   const fetchUploads = useCallback(async () => {
@@ -114,6 +119,7 @@ export default function Uploads() {
       toast.success(`Deleted ${result.deleted} files (${result.freedSpaceFormatted})`);
       fetchUploads();
     }
+    setConfirmingDeleteAll(false);
   };
 
   const handleDrag = (e) => {
@@ -162,13 +168,24 @@ export default function Uploads() {
             <RefreshCw size={16} />
           </button>
           {uploads.length > 0 && (
-            <button
-              onClick={handleDeleteAll}
-              className="flex items-center gap-2 px-3 py-2 bg-port-error/20 border border-port-error/50 rounded-lg text-port-error hover:bg-port-error/30 transition-colors"
-            >
-              <Trash2 size={16} />
-              Delete All
-            </button>
+            confirmingDeleteAll ? (
+              <ConfirmButtonPair
+                prompt={`Delete all ${uploads.length} files? This cannot be undone.`}
+                confirmText="Delete all"
+                confirmIcon={Trash2}
+                onConfirm={handleDeleteAll}
+                onCancel={() => setConfirmingDeleteAll(false)}
+                ariaLabel="Confirm delete all uploads"
+              />
+            ) : (
+              <button
+                onClick={() => setConfirmingDeleteAll(true)}
+                className="flex items-center gap-2 px-3 py-2 bg-port-error/20 border border-port-error/50 rounded-lg text-port-error hover:bg-port-error/30 transition-colors"
+              >
+                <Trash2 size={16} />
+                Delete All
+              </button>
+            )
           )}
         </div>
       </div>
@@ -265,13 +282,22 @@ export default function Uploads() {
                   >
                     <Download size={18} />
                   </a>
-                  <button
-                    onClick={() => handleDelete(file.filename)}
-                    className="p-2 text-gray-500 hover:text-port-error transition-colors"
-                    title="Delete"
-                  >
-                    <Trash2 size={18} />
-                  </button>
+                  {isConfirming(file.filename) ? (
+                    <ConfirmButtonPair
+                      prompt="Delete?"
+                      onConfirm={() => confirmDelete(() => handleDelete(file.filename))}
+                      onCancel={cancelDelete}
+                      ariaLabel={`Confirm delete ${file.filename}`}
+                    />
+                  ) : (
+                    <button
+                      onClick={() => requestDelete(file.filename)}
+                      className="p-2 text-gray-500 hover:text-port-error transition-colors"
+                      title="Delete"
+                    >
+                      <Trash2 size={18} />
+                    </button>
+                  )}
                 </div>
               </div>
             ))}

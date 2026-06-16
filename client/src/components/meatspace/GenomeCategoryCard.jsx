@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
+import InlineConfirmRow from '../ui/InlineConfirmRow';
+import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 
 const STATUS_DOT = {
   beneficial: 'bg-green-400',
@@ -51,6 +53,7 @@ const COLOR_MAP = {
 export default function GenomeCategoryCard({ category: _category, label, emoji, color, markers, defaultExpanded = true, onEditNotes, onDeleteMarker }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
   const [expandedMarker, setExpandedMarker] = useState(null);
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
   const statusSummary = markers.reduce((acc, m) => {
     acc[m.status] = (acc[m.status] || 0) + 1;
@@ -195,14 +198,25 @@ export default function GenomeCategoryCard({ category: _category, label, emoji, 
                       )}
 
                       {/* Delete */}
-                      <div className="flex justify-end">
-                        <button
-                          onClick={(e) => { e.stopPropagation(); onDeleteMarker(marker.id); }}
-                          className="text-xs text-red-400 hover:text-red-300 transition-colors"
-                        >
-                          Remove marker
-                        </button>
-                      </div>
+                      {isConfirming(marker.id) ? (
+                        <InlineConfirmRow
+                          question="Remove this marker? This cannot be undone."
+                          confirmText="Remove"
+                          confirmTitle="Confirm remove marker"
+                          cancelTitle="Cancel remove marker"
+                          onConfirm={() => confirmDelete(() => onDeleteMarker(marker.id))}
+                          onCancel={cancelDelete}
+                        />
+                      ) : (
+                        <div className="flex justify-end">
+                          <button
+                            onClick={(e) => { e.stopPropagation(); requestDelete(marker.id); }}
+                            className="text-xs text-red-400 hover:text-red-300 transition-colors"
+                          >
+                            Remove marker
+                          </button>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

@@ -1,11 +1,14 @@
 import { useState, useEffect, useCallback } from 'react';
-import { HardDrive, RefreshCw, Archive, Trash2, ChevronDown, ChevronRight, FolderOpen, File, AlertTriangle, Package } from 'lucide-react';
+import { HardDrive, RefreshCw, Archive, Trash2, ChevronDown, ChevronRight, FolderOpen, File, Package } from 'lucide-react';
 import * as api from '../services/api';
 import { formatBytes } from '../utils/formatters';
 import BrailleSpinner from '../components/BrailleSpinner';
 import toast from '../components/ui/Toast';
 import socket from '../services/socket';
 import { useAsyncAction } from '../hooks/useAsyncAction';
+import { useConfirmDelete } from '../hooks/useConfirmDelete';
+import InlineConfirmRow from '../components/ui/InlineConfirmRow';
+import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
 
 // Plural labels for tombstone record kinds — shared between the in-page
 // TombstoneGcSection toast and `scripts/gc-tombstones-now.js` (the CLI
@@ -123,7 +126,7 @@ function SizeBar({ size, maxSize }) {
   );
 }
 
-function CategoryRow({ cat, maxSize, onExpand, expanded, detail, onArchive, onPurge, archiving, purging }) {
+function CategoryRow({ cat, maxSize, onExpand, expanded, detail, onArchive, onPurge, onConfirmPurge, onCancelPurge, confirmingPurge, archiving, purging }) {
   return (
     <div className="border border-port-border rounded-lg overflow-hidden">
       <button
@@ -149,31 +152,43 @@ function CategoryRow({ cat, maxSize, onExpand, expanded, detail, onArchive, onPu
       {expanded && (
         <div className="border-t border-port-border bg-port-bg/50">
           {/* Actions */}
-          <div className="flex items-center gap-2 p-3 border-b border-port-border/50">
-            {cat.archivable && (
-              <button
-                onClick={() => onArchive(cat.key)}
-                disabled={archiving}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-port-accent/10 text-port-accent rounded hover:bg-port-accent/20 transition-colors disabled:opacity-50"
-              >
-                <Archive size={12} />
-                {archiving ? 'Archiving...' : 'Archive'}
-              </button>
-            )}
-            {cat.deletable && (
-              <button
-                onClick={() => onPurge(cat.key)}
-                disabled={purging}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-port-error/10 text-port-error rounded hover:bg-port-error/20 transition-colors disabled:opacity-50"
-              >
-                <Trash2 size={12} />
-                {purging ? 'Purging...' : 'Purge'}
-              </button>
-            )}
-            {!cat.archivable && !cat.deletable && (
-              <span className="text-xs text-gray-500">This category is protected and cannot be archived or deleted</span>
-            )}
-          </div>
+          {confirmingPurge ? (
+            <InlineConfirmRow
+              variant="separator"
+              question={`Purge all ${cat.fileCount.toLocaleString()} files (${formatBytes(cat.size)}) in ${cat.label}? This permanently deletes the data and cannot be undone.`}
+              confirmText={purging ? 'Purging…' : 'Purge'}
+              confirmTitle="Confirm purge"
+              cancelTitle="Cancel purge"
+              onConfirm={() => onConfirmPurge(cat.key)}
+              onCancel={onCancelPurge}
+            />
+          ) : (
+            <div className="flex items-center gap-2 p-3 border-b border-port-border/50">
+              {cat.archivable && (
+                <button
+                  onClick={() => onArchive(cat.key)}
+                  disabled={archiving}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-port-accent/10 text-port-accent rounded hover:bg-port-accent/20 transition-colors disabled:opacity-50"
+                >
+                  <Archive size={12} />
+                  {archiving ? 'Archiving...' : 'Archive'}
+                </button>
+              )}
+              {cat.deletable && (
+                <button
+                  onClick={() => onPurge(cat.key)}
+                  disabled={purging}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-port-error/10 text-port-error rounded hover:bg-port-error/20 transition-colors disabled:opacity-50"
+                >
+                  <Trash2 size={12} />
+                  {purging ? 'Purging...' : 'Purge'}
+                </button>
+              )}
+              {!cat.archivable && !cat.deletable && (
+                <span className="text-xs text-gray-500">This category is protected and cannot be archived or deleted</span>
+              )}
+            </div>
+          )}
 
           {/* Detail items */}
           {detail ? (
@@ -216,6 +231,7 @@ function CategoryRow({ cat, maxSize, onExpand, expanded, detail, onArchive, onPu
 }
 
 function BackupsSection({ backups, loading, onDelete }) {
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   if (loading) return null;
   if (!backups.length) return null;
 
@@ -246,13 +262,23 @@ function BackupsSection({ backups, loading, onDelete }) {
                 <td className="p-2 text-right text-gray-400 font-mono">{formatBytes(b.size)}</td>
                 <td className="p-2 text-right text-gray-500">{b.created ? new Date(b.created).toLocaleDateString() : '—'}</td>
                 <td className="p-2 pr-3 text-right">
-                  <button
-                    onClick={() => onDelete(b.name)}
-                    className="text-gray-500 hover:text-port-error transition-colors"
-                    title="Delete backup"
-                  >
-                    <Trash2 size={12} />
-                  </button>
+                  {isConfirming(b.name) ? (
+                    <ConfirmButtonPair
+                      className="justify-end"
+                      prompt="Delete?"
+                      onConfirm={() => confirmDelete(() => onDelete(b.name))}
+                      onCancel={cancelDelete}
+                      ariaLabel={`Confirm delete backup ${b.name}`}
+                    />
+                  ) : (
+                    <button
+                      onClick={() => requestDelete(b.name)}
+                      className="text-gray-500 hover:text-port-error transition-colors"
+                      title="Delete backup"
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  )}
                 </td>
               </tr>
             ))}
@@ -307,15 +333,6 @@ export default function DataManager() {
     const result = await api.archiveDataCategory(key).catch(() => null);
     setArchiving(null);
     if (result) refreshAfterAction(key);
-  };
-
-  const handlePurge = (key) => {
-    if (confirmPurge === key) {
-      executePurge(key);
-    } else {
-      setConfirmPurge(key);
-      setTimeout(() => setConfirmPurge(null), 5000);
-    }
   };
 
   const executePurge = async (key) => {
@@ -406,20 +423,15 @@ export default function DataManager() {
               detail={expandedCat === cat.key ? detail : null}
               onExpand={handleExpand}
               onArchive={handleArchive}
-              onPurge={handlePurge}
+              onPurge={setConfirmPurge}
+              onConfirmPurge={executePurge}
+              onCancelPurge={() => setConfirmPurge(null)}
+              confirmingPurge={confirmPurge === cat.key}
               archiving={archiving === cat.key}
               purging={purging === cat.key}
             />
           ))}
         </div>
-
-        {/* Confirm purge banner */}
-        {confirmPurge && (
-          <div className="fixed bottom-4 left-1/2 -translate-x-1/2 bg-port-error/90 text-white px-4 py-2 rounded-lg flex items-center gap-3 text-sm shadow-lg z-50">
-            <AlertTriangle size={16} />
-            <span>Click Purge again to confirm deletion of <strong>{confirmPurge}</strong></span>
-          </div>
-        )}
 
         {/* Backups section */}
         <BackupsSection

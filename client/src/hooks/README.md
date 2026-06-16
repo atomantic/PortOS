@@ -79,6 +79,7 @@ grep -i "what you want to do" client/src/hooks/README.md
 | `useAutoRefetch` | Poll-based refetch on an interval. `{ pollOnly: true }` skips internal data/loading state for side-effect-only callers (returns `{ refetch }` only). | Data needs periodic refresh (no socket / SSE available). |
 | `useAutoSizeTextarea` | `[ref, resize]` — grows a `<textarea>` to fit its content (no scroll / hand-resize); recomputes before paint on value change. | A textarea that should auto-fit content. Prefer the `AutoSizeTextarea` UI component, which wraps this. |
 | `useClickOutside` | Fire `onOutside` on mousedown outside a ref. | Popovers, menus, drawers. |
+| `useConfirmDelete` | Single-at-a-time `{ confirmingId, isConfirming, requestDelete, cancelDelete, confirmDelete }` for arming one list/card row at a time. | New destructive list action — pair with `<InlineConfirmRow>` / `<ConfirmButtonPair>` instead of deleting on the raw trash click. |
 | `useEscapeKey` | `useEscapeKey(active, handler)` — call `handler` on Escape while `active`. | Non-modal dismissables (in-context popovers/cards); Modal owns Esc for true modals. |
 | `useCmdKSearch` | `⌘K` open/close state. | Anywhere that needs to toggle the palette. |
 | `useContainerWidth` | `[ref, width]` via ResizeObserver. | Layout responds to a specific container's width. |

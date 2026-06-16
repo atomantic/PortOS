@@ -4,6 +4,8 @@ import toast from '../ui/Toast';
 import * as api from '../../services/api';
 import ProviderModelSelector from '../ProviderModelSelector';
 import useProviderModels from '../../hooks/useProviderModels';
+import InlineConfirmRow from '../ui/InlineConfirmRow';
+import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 
 const TYPE_ICONS = { gmail: Mail, outlook: Globe, teams: MessageSquare };
 const TYPE_LABELS = { gmail: 'Gmail (API)', outlook: 'Outlook (Playwright)', teams: 'Teams (Playwright)' };
@@ -41,6 +43,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
   const [deleting, setDeleting] = useState(null);
   const [clearingCache, setClearingCache] = useState(null);
   const [confirmClear, setConfirmClear] = useState(null);
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
   // Google OAuth status for Gmail accounts
   const [googleAuth, setGoogleAuth] = useState(null);
@@ -335,8 +338,9 @@ export default function ConfigTab({ accounts, setAccounts }) {
             return (
               <div
                 key={account.id}
-                className="flex items-center justify-between p-4 bg-port-card rounded-lg border border-port-border"
+                className="p-4 bg-port-card rounded-lg border border-port-border"
               >
+                <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
                   <Icon size={20} className={account.enabled ? 'text-port-accent' : 'text-gray-600'} />
                   <div>
@@ -376,7 +380,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
                     {clearingCache === account.id ? 'Clearing...' : confirmClear === account.id ? 'Are you sure?' : 'Clear Cache'}
                   </button>
                   <button
-                    onClick={() => handleDelete(account.id)}
+                    onClick={() => requestDelete(account.id)}
                     disabled={deleting === account.id}
                     className="p-1 text-gray-500 hover:text-port-error transition-colors"
                     title="Delete account"
@@ -388,6 +392,18 @@ export default function ConfigTab({ accounts, setAccounts }) {
                     )}
                   </button>
                 </div>
+                </div>
+                {isConfirming(account.id) && (
+                  <InlineConfirmRow
+                    className="mt-2"
+                    question="Remove this account? This cannot be undone."
+                    confirmText="Remove"
+                    confirmTitle="Remove account"
+                    cancelTitle="Cancel"
+                    onConfirm={() => confirmDelete(() => handleDelete(account.id))}
+                    onCancel={cancelDelete}
+                  />
+                )}
               </div>
             );
           })}

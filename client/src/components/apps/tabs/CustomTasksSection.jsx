@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback } from 'react';
 import { Plus, Play, Trash2, Edit3, Save, X, Clock } from 'lucide-react';
 import toast from '../../ui/Toast';
 import ToggleSwitch from '../../ToggleSwitch';
+import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
+import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 import * as api from '../../../services/api';
 import { timeAgo } from '../../../utils/formatters';
 import { CRON_PRESETS, describeCron } from '../../../utils/cronHelpers';
@@ -241,6 +243,7 @@ export default function CustomTasksSection({ appId, appName }) {
   const [editingId, setEditingId] = useState(null);
   const [editForm, setEditForm] = useState(emptyForm);
   const [triggering, setTriggering] = useState(null);
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
   const fetchTasks = useCallback(async () => {
     const data = await api.getCosJobs().catch(() => null);
@@ -365,9 +368,18 @@ export default function CustomTasksSection({ appId, appName }) {
                       <button onClick={() => startEdit(job)} className="p-1.5 text-gray-500 hover:text-white transition-colors" title="Edit">
                         <Edit3 size={14} />
                       </button>
-                      <button onClick={() => handleDelete(job)} className="p-1.5 text-red-400/60 hover:text-red-400 transition-colors" title="Delete">
-                        <Trash2 size={14} />
-                      </button>
+                      {isConfirming(job.id) ? (
+                        <ConfirmButtonPair
+                          prompt="Delete?"
+                          onConfirm={() => confirmDelete(() => handleDelete(job))}
+                          onCancel={cancelDelete}
+                          ariaLabel="Confirm delete custom task"
+                        />
+                      ) : (
+                        <button onClick={() => requestDelete(job.id)} className="p-1.5 text-red-400/60 hover:text-red-400 transition-colors" title="Delete">
+                          <Trash2 size={14} />
+                        </button>
+                      )}
                     </div>
                   </div>
                   {job.description && <p className="text-xs text-gray-500 pl-12">{job.description}</p>}

@@ -3,6 +3,8 @@ import toast from '../ui/Toast';
 import {Plus, Trash2, ChevronDown, ChevronRight,
   Activity, Pill, Heart, CheckCircle, Calendar, FlameKindling} from 'lucide-react';
 import BrailleSpinner from '../BrailleSpinner';
+import ConfirmButtonPair from '../ui/ConfirmButtonPair';
+import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import * as api from '../../services/api';
 
 const CATEGORY_ICONS = {
@@ -27,6 +29,7 @@ export default function EpigeneticTracker({ markerCategories = [] }) {
   const [expandedTracked, setExpandedTracked] = useState({});
   const [logAmounts, setLogAmounts] = useState({});
   const [loggingId, setLoggingId] = useState(null);
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
   // Custom intervention form
   const [customForm, setCustomForm] = useState({
@@ -307,12 +310,22 @@ export default function EpigeneticTracker({ markerCategories = [] }) {
                       >
                         {intervention.active ? 'Pause' : 'Resume'}
                       </button>
-                      <button
-                        onClick={() => handleDelete(key, intervention.name)}
-                        className="px-2 py-1 bg-red-500/10 border border-red-500/20 rounded text-red-400 hover:bg-red-500/20"
-                      >
-                        <Trash2 size={12} />
-                      </button>
+                      {isConfirming(key) ? (
+                        <ConfirmButtonPair
+                          prompt="Delete?"
+                          confirmIcon={Trash2}
+                          ariaLabel={`Confirm delete ${intervention.name}`}
+                          onConfirm={() => confirmDelete(() => handleDelete(key, intervention.name))}
+                          onCancel={cancelDelete}
+                        />
+                      ) : (
+                        <button
+                          onClick={() => requestDelete(key)}
+                          className="px-2 py-1 bg-red-500/10 border border-red-500/20 rounded text-red-400 hover:bg-red-500/20"
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      )}
                     </div>
                   </div>
                 )}

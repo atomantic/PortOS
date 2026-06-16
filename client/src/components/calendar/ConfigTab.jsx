@@ -4,6 +4,8 @@ import { Plus, Trash2, RefreshCw, Globe, Calendar, Eye, EyeOff, ChevronDown, Che
 import toast from '../ui/Toast';
 import * as api from '../../services/api';
 import FeatureProviderPicker from '../FeatureProviderPicker';
+import InlineConfirmRow from '../ui/InlineConfirmRow';
+import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 
 const TYPE_ICONS = { 'outlook-calendar': Globe, 'google-calendar': Calendar };
 const TYPE_LABELS = { 'outlook-calendar': 'Outlook Calendar (API)', 'google-calendar': 'Google Calendar' };
@@ -13,6 +15,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
   const [form, setForm] = useState({ name: '', type: 'outlook-calendar', email: '' });
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(null);
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   const [expandedAccounts, setExpandedAccounts] = useState({});
   const [savingSubcals, setSavingSubcals] = useState(null);
   const [discovering, setDiscovering] = useState(null);
@@ -313,7 +316,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
                       {account.enabled ? 'Enabled' : 'Disabled'}
                     </button>
                     <button
-                      onClick={() => handleDelete(account.id)}
+                      onClick={() => requestDelete(account.id)}
                       disabled={deleting === account.id}
                       className="p-1 text-gray-500 hover:text-port-error transition-colors"
                       title="Delete account"
@@ -326,6 +329,18 @@ export default function ConfigTab({ accounts, setAccounts }) {
                     </button>
                   </div>
                 </div>
+
+                {isConfirming(account.id) && (
+                  <InlineConfirmRow
+                    className="mx-4 mb-3"
+                    question="Remove this account? This cannot be undone."
+                    confirmText="Remove"
+                    confirmTitle="Remove account"
+                    cancelTitle="Cancel"
+                    onConfirm={() => confirmDelete(() => handleDelete(account.id))}
+                    onCancel={cancelDelete}
+                  />
+                )}
 
                 {/* Google Calendar expanded settings */}
                 {isGoogle && isExpanded && (

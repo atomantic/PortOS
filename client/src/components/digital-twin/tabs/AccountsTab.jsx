@@ -23,8 +23,10 @@ import {
   X,
 } from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
+import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import * as api from '../../../services/api';
 import toast from '../../ui/Toast';
+import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 
 // Platform icon mapping
 const PLATFORM_ICONS = {
@@ -104,6 +106,7 @@ export default function AccountsTab() {
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(null);
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
   useEffect(() => {
     loadData();
@@ -436,8 +439,9 @@ export default function AccountsTab() {
               return (
                 <div
                   key={account.id}
-                  className="bg-port-card border border-port-border rounded-lg p-3 flex items-start gap-3 group hover:border-gray-600 transition-colors"
+                  className="bg-port-card border border-port-border rounded-lg p-3 group hover:border-gray-600 transition-colors"
                 >
+                  <div className="flex items-start gap-3">
                   {/* Platform icon */}
                   <div className={`shrink-0 w-10 h-10 rounded-lg border flex items-center justify-center ${colorClass}`}>
                     <Icon className="w-5 h-5" />
@@ -484,7 +488,7 @@ export default function AccountsTab() {
                       <Edit3 className="w-4 h-4" />
                     </button>
                     <button
-                      onClick={() => handleDelete(account.id)}
+                      onClick={() => requestDelete(account.id)}
                       disabled={deleting === account.id}
                       className="p-1.5 text-gray-400 hover:text-red-400 rounded transition-colors min-h-[40px] min-w-[40px] flex items-center justify-center"
                       title="Remove"
@@ -496,6 +500,18 @@ export default function AccountsTab() {
                       )}
                     </button>
                   </div>
+                  </div>
+                  {isConfirming(account.id) && (
+                    <InlineConfirmRow
+                      className="mt-2"
+                      question="Disconnect this account? It will be removed from your digital identity profile. This cannot be undone."
+                      confirmText="Disconnect"
+                      confirmTitle="Confirm disconnect"
+                      cancelTitle="Cancel"
+                      onConfirm={() => confirmDelete(() => handleDelete(account.id))}
+                      onCancel={cancelDelete}
+                    />
+                  )}
                 </div>
               );
             })}

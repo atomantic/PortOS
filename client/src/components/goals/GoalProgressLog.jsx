@@ -1,10 +1,13 @@
 import { NotebookPen, Plus, Clock, Trash2 } from 'lucide-react';
 import { formatDurationMin } from '../../utils/formatters';
+import InlineConfirmRow from '../ui/InlineConfirmRow';
+import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 
 export default function GoalProgressLog({
   goal, showProgressForm, setShowProgressForm, progressForm, setProgressForm,
   handleAddProgress, resetProgressForm, handleDeleteProgress
 }) {
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   return (
     <div>
       <div className="flex items-center justify-between mb-2">
@@ -74,7 +77,8 @@ export default function GoalProgressLog({
       {goal.progressLog?.length > 0 && (
         <div className="space-y-1.5 max-h-40 overflow-y-auto">
           {[...goal.progressLog].reverse().map(entry => (
-            <div key={entry.id} className="flex items-start gap-2 text-xs group">
+            <div key={entry.id}>
+            <div className="flex items-start gap-2 text-xs group">
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-1.5 text-gray-500">
                   <span>{new Date(entry.date + 'T00:00:00').toLocaleDateString()}</span>
@@ -88,12 +92,23 @@ export default function GoalProgressLog({
                 <p className="text-gray-300 mt-0.5">{entry.note}</p>
               </div>
               <button
-                onClick={() => handleDeleteProgress(entry.id)}
+                onClick={() => requestDelete(entry.id)}
                 className="p-0.5 text-gray-700 hover:text-red-400 opacity-0 group-hover:opacity-100 shrink-0"
                 title="Delete"
               >
                 <Trash2 className="w-3 h-3" />
               </button>
+            </div>
+            {isConfirming(entry.id) && (
+              <InlineConfirmRow
+                className="mt-2"
+                question="Delete this progress entry? This cannot be undone."
+                confirmTitle="Confirm delete"
+                cancelTitle="Cancel delete"
+                onConfirm={() => confirmDelete(() => handleDeleteProgress(entry.id))}
+                onCancel={cancelDelete}
+              />
+            )}
             </div>
           ))}
         </div>
