@@ -20,6 +20,10 @@
  *   POST   /issues/:id/auto-run-text            → { runId, alreadyRunning, sseUrl }
  *   GET    /issues/:id/auto-run-text/progress   → SSE (text/event-stream)
  *   POST   /issues/:id/auto-run-text/cancel     → { canceled }
+ *   POST   /series/:id/autopilot/start          → { runId, alreadyRunning, mode, sseUrl }
+ *   GET    /series/:id/autopilot/progress       → SSE (text/event-stream)
+ *   POST   /series/:id/autopilot/cancel         → { canceled }
+ *   GET    /series/:id/autopilot/status         → { autopilot, active }
  *
  * Assembled from domain sub-routers (mirrors the cos.js pattern). Mount
  * order preserves the original single-file registration order; the only
@@ -36,6 +40,7 @@ import manuscriptRoutes from './manuscript.js';
 import coverRoutes from './covers.js';
 import issueRoutes from './issues.js';
 import editorialRoutes from './editorial.js';
+import autopilotRoutes from './autopilot.js';
 
 const router = Router();
 
@@ -46,5 +51,6 @@ router.use(manuscriptRoutes);
 router.use(coverRoutes);
 router.use(issueRoutes);
 router.use(editorialRoutes);
+router.use(autopilotRoutes);
 
 export default router;

@@ -90,6 +90,47 @@ export const ARC_LOCKABLE_FIELDS = Object.freeze([
   'logline', 'summary', 'protagonistArc', 'themes', 'shape', 'readerMap',
 ]);
 
+// Series Autopilot run marker (full autonomous mode). A thin, persisted
+// breadcrumb of the in-memory orchestrator run (server/services/pipeline/
+// seriesAutopilot.js) — NOT a step cursor. Resume is derived from the
+// canonical series/issue state by the pure resolver, so all this needs to do
+// is survive a restart for the "resume available / paused" UI and the
+// boot-recovery demotion (running → paused). Persisted only when set so a
+// series that never uses autopilot keeps its on-disk + wire shape stable
+// (mirrors the `ephemeral` / `importDraft` conditional-spread convention).
+export const AUTOPILOT_STATUSES = Object.freeze(['idle', 'running', 'paused', 'done', 'error']);
+export const AUTOPILOT_STEP_MAX = 80;
+export const AUTOPILOT_ERROR_MAX = 1000;
+const AUTOPILOT_FINDING_SEVERITIES = ['high', 'medium', 'low'];
+
+export const sanitizeAutopilot = (raw) => {
+  if (!raw || typeof raw !== 'object') return null;
+  const status = AUTOPILOT_STATUSES.includes(raw.status) ? raw.status : 'idle';
+  const residualFindings = Array.isArray(raw.residualFindings)
+    ? raw.residualFindings
+      .map((f) => {
+        if (!f || typeof f !== 'object') return null;
+        const problem = trimTo(f.problem, 2000);
+        if (!problem) return null;
+        return {
+          ...(AUTOPILOT_FINDING_SEVERITIES.includes(f.severity) ? { severity: f.severity } : {}),
+          location: trimTo(f.location, 200),
+          problem,
+        };
+      })
+      .filter(Boolean)
+      .slice(0, 50)
+    : [];
+  return {
+    status,
+    runId: trimTo(raw.runId, 64) || null,
+    currentStep: trimTo(raw.currentStep, AUTOPILOT_STEP_MAX) || null,
+    residualFindings,
+    lastError: trimTo(raw.lastError, AUTOPILOT_ERROR_MAX) || null,
+    updatedAt: isStr(raw.updatedAt) ? raw.updatedAt : null,
+  };
+};
+
 const sanitizeSeriesLocked = (raw = {}) => {
   if (!raw || typeof raw !== 'object') return {};
   const out = {};
@@ -123,6 +164,7 @@ const sanitizeSeries = (raw) => {
     : { provider: null, model: null };
   const createdAt = isStr(raw.createdAt) ? raw.createdAt : new Date().toISOString();
   const updatedAt = isStr(raw.updatedAt) ? raw.updatedAt : createdAt;
+  const autopilot = sanitizeAutopilot(raw.autopilot);
   return {
     id: raw.id,
     name,
@@ -178,6 +220,11 @@ const sanitizeSeries = (raw) => {
     // commitImport clears it. Server-set only — never from a route body — and
     // persisted only when true so every other record's shape stays stable.
     ...(raw.importDraft === true ? { importDraft: true } : {}),
+    // Autopilot run marker — persisted only when present so series that never
+    // run the autonomous pipeline keep their on-disk + wire shape unchanged.
+    // Older peers' sanitizeSeries simply drops the unknown field (forward/
+    // back-compatible).
+    ...(autopilot ? { autopilot } : {}),
   };
 };
 
@@ -382,6 +429,10 @@ export async function updateSeries(id, patch = {}) {
       // Importer-orphan marker (issue #727) — commitImport clears it via
       // `{ importDraft: false }`; sanitizer normalizes non-true back to absent.
       ...('importDraft' in patch ? { importDraft: patch.importDraft } : {}),
+      // Autopilot run marker — server-set by seriesAutopilot.js (and the
+      // boot-recovery demotion). Wholesale replace; sanitizer normalizes a
+      // non-object back to absent.
+      ...('autopilot' in patch ? { autopilot: patch.autopilot } : {}),
       llm: mergedLlm,
       updatedAt: new Date().toISOString(),
     });

@@ -159,6 +159,7 @@ import { startBrainScheduler } from './services/brainScheduler.js';
 import { recoverStuckClassifications } from './services/brain.js';
 import { recoverStuckAnalyses } from './services/writersRoom/evaluator.js';
 import { recoverStuckAutoRuns } from './services/pipeline/autoRunner.js';
+import { recoverStuckAutopilots } from './services/pipeline/seriesAutopilot.js';
 import { startOrphanShellGc } from './services/importerOrphanGc.js';
 import { startImageRefsGc } from './services/imageRefsGc.js';
 import { initBridge as initBrainMemoryBridge } from './services/brainMemoryBridge.js';
@@ -567,6 +568,7 @@ try {
 // corrupt peer cursors.
 recoverStuckAnalyses().catch(err => console.error(`❌ Writers Room recovery failed: ${err.message}`));
 recoverStuckAutoRuns().catch(err => console.error(`❌ Pipeline auto-run recovery failed: ${err.message}`));
+recoverStuckAutopilots().catch(err => console.error(`❌ Pipeline autopilot recovery failed: ${err.message}`));
 // Initialize brain scheduler for daily digests and weekly reviews
 startBrainScheduler();
 // Initialize brain→memory bridge (mirrors brain data into CoS memory for semantic search)

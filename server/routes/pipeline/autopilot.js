@@ -1,0 +1,74 @@
+/**
+ * Pipeline Autopilot routes — full autonomous mode.
+ *
+ * Drives a whole series from its current state to story-ready by composing the
+ * existing pipeline passes (server/services/pipeline/seriesAutopilot.js).
+ *
+ *   POST /series/:id/autopilot/start    → { runId, alreadyRunning, mode, sseUrl }
+ *                                          (404 series missing; 409 cos domain off)
+ *   GET  /series/:id/autopilot/progress → SSE (text/event-stream)
+ *   POST /series/:id/autopilot/cancel   → { canceled }
+ *   GET  /series/:id/autopilot/status   → { autopilot }   (resume / paused UI)
+ */
+
+import { Router } from 'express';
+import { z } from 'zod';
+import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
+import { validateRequest } from '../../lib/validation.js';
+import * as seriesSvc from '../../services/pipeline/series.js';
+import * as autopilot from '../../services/pipeline/seriesAutopilot.js';
+import { mapServiceError, providerOverrideShape } from './shared.js';
+
+const router = Router();
+
+const autopilotStartSchema = z.object({
+  ...providerOverrideShape,
+  // Draft cover + all interior pages once a story is ready. Accepted now;
+  // honored when VISUAL_DRAFT_ENABLED ships (Phase 2). Defaults true per the
+  // product decision (whole-series, full draft visuals).
+  includeVisual: z.boolean().optional().default(true),
+  // 'auto' derives the terminal from the series targetFormat.
+  target: z.enum(['auto', 'text', 'visual']).optional().default('auto'),
+  // Create CoS tasks for capability gaps (Phase 3).
+  fileGaps: z.boolean().optional().default(false),
+  // Convergence bounds for the verify/review loops (0 = skip that gate).
+  maxArcVerifyRounds: z.number().int().min(0).max(5).optional(),
+  maxEditorialRounds: z.number().int().min(0).max(5).optional(),
+});
+
+router.post('/series/:id/autopilot/start', asyncHandler(async (req, res) => {
+  // 404 before we kick off if the series doesn't exist.
+  await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
+  const body = validateRequest(autopilotStartSchema, req.body ?? {});
+  const result = await autopilot.startSeriesAutopilot(req.params.id, body)
+    .catch((err) => { throw mapServiceError(err); });
+  if (result.rejected) {
+    throw new ServerError(
+      'Autonomous spend is disabled — set the CoS auto-run domain to dry-run or execute to run autopilot.',
+      { status: 409, code: 'PIPELINE_AUTOPILOT_DISABLED' },
+    );
+  }
+  res.json({
+    ...result,
+    sseUrl: `/api/pipeline/series/${req.params.id}/autopilot/progress`,
+  });
+}));
+
+router.get('/series/:id/autopilot/progress', (req, res) => {
+  const attached = autopilot.attachClient(req.params.id, res);
+  if (!attached) {
+    throw new ServerError('No active autopilot run for this series', { status: 404 });
+  }
+});
+
+router.post('/series/:id/autopilot/cancel', asyncHandler(async (req, res) => {
+  const canceled = autopilot.cancelSeriesAutopilot(req.params.id);
+  res.json({ canceled });
+}));
+
+router.get('/series/:id/autopilot/status', asyncHandler(async (req, res) => {
+  const series = await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
+  res.json({ autopilot: series.autopilot || null, active: autopilot.isAutopilotActive(req.params.id) });
+}));
+
+export default router;
