@@ -15,7 +15,7 @@
  * surfaces a uniform "try again" toast.
  */
 
-import { getUniverse, joinInfluenceList } from '../universeBuilder.js';
+import { getUniverse, joinInfluenceList, ERR_NOT_FOUND as UNIVERSE_ERR_NOT_FOUND } from '../universeBuilder.js';
 import { listSeries, NAME_MAX, LOGLINE_MAX, PREMISE_MAX } from './series.js';
 import { ARC_SHAPES, ARC_SHAPE_IDS } from '../../lib/storyArc.js';
 import { runPromptRefineRaw } from './refineHelpers.js';
@@ -76,8 +76,23 @@ function buildContext(universe, existingSeries) {
 }
 
 export async function generateSeriesConcept(universeId, options = {}) {
-  const universe = await getUniverse(universeId);
-  const all = await listSeries().catch(() => []);
+  // getUniverse throws the universe service's generic NOT_FOUND code, which the
+  // pipeline route's mapServiceError doesn't translate — leaving a stale/deleted
+  // universeId to surface as a 500. Translate it here to a proper 404 so bad
+  // user input reads as bad input, not a server fault.
+  const universe = await getUniverse(universeId).catch((err) => {
+    if (err?.code === UNIVERSE_ERR_NOT_FOUND) {
+      throw new ServerError(`Universe not found: ${universeId} — pick an existing universe.`, {
+        status: 404, code: 'PIPELINE_SERIES_CONCEPT_UNIVERSE_NOT_FOUND',
+      });
+    }
+    throw err;
+  });
+  // Let a storage failure propagate (→ 500) rather than swallowing it: a
+  // silently-empty list would feed the model a "no existing series" brief for a
+  // universe that actually has some, weakening duplicate-avoidance while still
+  // reporting success.
+  const all = await listSeries();
   const existingSeries = all.filter((s) => s.universeId === universeId);
   const emptyError = {
     code: 'PIPELINE_SERIES_CONCEPT_EMPTY',
