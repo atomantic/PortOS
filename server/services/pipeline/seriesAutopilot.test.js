@@ -82,6 +82,10 @@ const visualSpies = {
 };
 vi.mock('./visualStages.js', () => visualSpies);
 
+let nextTaskId = 0;
+const addTask = vi.fn(async () => ({ id: `task-gap-${++nextTaskId}` }));
+vi.mock('../cosTaskStore.js', () => ({ addTask }));
+
 // Real services + the unit under test (imported AFTER the mocks above).
 const seriesSvc = await import('./series.js');
 const seasonsSvc = await import('./seasons.js');
@@ -112,6 +116,7 @@ beforeEach(() => {
   budgetStatus = { withinBudget: true, exceeded: null };
   verifyFindings = [];
   editorialFindings = [];
+  nextTaskId = 0;
   autopilot.__testing.runs.clear();
   vi.clearAllMocks();
 });
@@ -266,14 +271,14 @@ describe('visualReady', () => {
 // ---------------------------------------------------------------------------
 // Conductor lifecycle + gating (uses real series/issues against file store).
 // ---------------------------------------------------------------------------
-async function seedComplete() {
+async function seedComplete({ script = VALID_SCRIPT } = {}) {
   const series = await seriesSvc.createSeries({ name: 'S', logline: 'L', premise: 'P', targetFormat: 'comic' });
   await seriesSvc.updateSeries(series.id, { arc: { logline: 'A', summary: 'S' } });
   const season = await seasonsSvc.createSeason(series.id, { number: 1, title: 'V1' });
   const seasonId = season.id;
   const issue = await issuesSvc.createIssue({ seriesId: series.id, seasonId, title: 'I1', number: 1 });
   await issuesSvc.updateStage(issue.id, 'idea', ready('beats'));
-  await issuesSvc.updateStage(issue.id, 'comicScript', ready(VALID_SCRIPT));
+  await issuesSvc.updateStage(issue.id, 'comicScript', ready(script));
   return { seriesId: series.id, seasonId, issueId: issue.id };
 }
 
@@ -372,6 +377,35 @@ describe('autopilot conductor', () => {
     await waitFor(runFinished(seriesId));
     expect(visualSpies.enqueueComicCover).not.toHaveBeenCalled();
     expect(visualSpies.enqueueVisualComicPage).not.toHaveBeenCalled();
+  });
+
+  it('files a CoS gap task for an unparseable script when fileGaps is set', async () => {
+    const { seriesId } = await seedComplete({ script: 'just prose, no comic pages here' });
+    await autopilot.startSeriesAutopilot(seriesId, { fileGaps: true, includeVisual: false });
+    await waitFor(runFinished(seriesId));
+    expect(addTask).toHaveBeenCalled();
+    const [taskData, taskType] = addTask.mock.calls[0];
+    expect(taskType).toBe('user');
+    expect(taskData.app).toBe('pipeline');
+    expect(taskData.description).toMatch(/script-unparseable/);
+    const last = autopilot.__testing.runs.get(seriesId)?.lastPayload;
+    expect(last?.type).toBe('complete'); // gap filed, run still finishes
+  });
+
+  it('does not file gap tasks when fileGaps is off', async () => {
+    const { seriesId } = await seedComplete({ script: 'just prose, no comic pages here' });
+    await autopilot.startSeriesAutopilot(seriesId, { includeVisual: false });
+    await waitFor(runFinished(seriesId));
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
+  it('files a CoS gap task when a verify gate stalls (fileGaps)', async () => {
+    verifyFindings = [{ severity: 'high', problem: 'unresolved plot hole' }];
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { fileGaps: true, maxArcVerifyRounds: 1 });
+    await waitFor(runFinished(seriesId));
+    expect(addTask).toHaveBeenCalled();
+    expect(addTask.mock.calls[0][0].description).toMatch(/verifyArc-stalled/);
   });
 
   it('recoverStuckAutopilots demotes a running marker to paused', async () => {

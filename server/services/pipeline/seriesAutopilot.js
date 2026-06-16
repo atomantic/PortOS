@@ -32,10 +32,18 @@
  * run to `paused` with the residual findings for human review rather than
  * looping forever.
  *
+* CoS gap-filing (opt-in via `options.fileGaps`): when the autopilot hits a
+ * capability/quality gap it can't resolve — a script that won't parse, a render
+ * that keeps failing, a verify/editorial gate that stalls, or a run-ending
+ * error — it files a deduped CoS task (`fileGap`) so the gap is tracked instead
+ * of silently swallowed.
+ *
  * KNOWN GAP — "script verification": there is no dedicated comic-script verify
  * endpoint. The scriptVerify step is a STRUCTURAL gate only (does the comic
- * script parse into pages+panels). A real craft-level LLM script-verify prompt
- * is a deliberate Phase-3 follow-up, not silently assumed solved.
+ * script parse into pages+panels); deeper craft issues are caught by the
+ * series-level editorial completeness pass, which already analyzes comic
+ * scripts. A dedicated craft-level LLM script-verify prompt is a deferred
+ * follow-up (see PLAN.md), not silently assumed solved.
  *
  * DRAFT VISUALS (Phase 2, VISUAL_DRAFT_ENABLED): once a story is text-ready,
  * extract comic pages from the script (if not already), then enqueue PROOF
@@ -55,6 +63,7 @@ import { getDomainMode } from '../../lib/domainAutonomy.js';
 import { parseComicScript } from '../../lib/comicScriptParser.js';
 import { loadState } from '../cosState.js';
 import { getDomainBudgetStatus, recordDomainUsage } from '../domainUsage.js';
+import * as cosTaskStore from '../cosTaskStore.js';
 import { getSeries, updateSeries } from './series.js';
 import { listIssues, getIssue, isStageReady, updateStageWithLatest } from './issues.js';
 import { compareIssuesByPosition } from './arcPlanner.js';
@@ -292,6 +301,24 @@ async function persistMarker(seriesId, patch) {
 // Two override shapes because the delegated services disagree on field names:
 // the arc/episode/verify passes take { providerOverride, modelOverride }; the
 // child runners (volumeBeatsRunner, autoRunner) take { providerId, model }.
+// File a CoS task for a capability/quality gap the autopilot can't resolve on
+// its own (a script that won't parse, a render that keeps failing, a stalled
+// verify, a run-ending error). Opt-in via `options.fileGaps`; never fires in
+// dry-run. The first description line is kept STABLE per (series, gapKind,
+// issue) so cosTaskStore.addTask's pending/in_progress dedup collapses repeats
+// instead of spamming a task per page / per run. Best-effort — a task-store
+// failure must never abort the autopilot.
+async function fileGap(record, sId, { gapKind, issueId = null, summary, context = '' }) {
+  if (!record.options.fileGaps || record.mode !== 'execute') return;
+  const idTag = `series ${sId}${issueId ? ` issue ${issueId}` : ''}`;
+  const description = `Autopilot ${gapKind} gap — ${idTag}\n\n${summary}`;
+  const result = await cosTaskStore.addTask({ description, context, app: 'pipeline' }, 'user')
+    .catch((err) => { console.log(`⚠️ autopilot: fileGap (${gapKind}) failed: ${err.message}`); return null; });
+  if (result && !result.duplicate) {
+    broadcast(sId, { type: 'gap:filed', gapKind, issueId, taskId: result.id });
+  }
+}
+
 const providerOverrideOpts = (record) => ({
   providerOverride: record.options.providerOverride,
   modelOverride: record.options.modelOverride,
@@ -377,13 +404,18 @@ async function runScriptVerify(sId, issueId, record) {
   record.runState.scriptChecked.add(issueId);
   const issue = await getIssue(issueId);
   if (!scriptStructurallyReady(issue)) {
-    // Structural gap — surface it but don't block the run (Phase 3 will file a
-    // CoS task / run a craft-level LLM verify). Not billable.
+    // Structural gap — surface it but don't block the run. Not billable.
     broadcast(sId, {
       type: 'step:skip',
       kind: 'scriptVerify',
       issueId,
       reason: 'comic script did not parse into pages/panels — flagged for review',
+    });
+    await fileGap(record, sId, {
+      gapKind: 'script-unparseable',
+      issueId,
+      summary: 'The comic script for this issue does not parse into pages/panels, so comic pages can\'t be extracted. It likely needs a manual fix or regeneration of the comicScript stage.',
+      context: `issueId=${issueId}`,
     });
   }
   return {};
@@ -512,7 +544,16 @@ async function runVisualDraft(sId, issueId, record) {
       await recordDomainUsage('cos', { actions: 1 });
       broadcast(sId, { type: 'render:queued', issueId, target });
     } catch (err) {
-      broadcast(sId, { type: 'step:skip', kind: 'visualDraft', issueId, target, reason: (err?.message || String(err)).slice(0, 200) });
+      const reason = (err?.message || String(err)).slice(0, 200);
+      broadcast(sId, { type: 'step:skip', kind: 'visualDraft', issueId, target, reason });
+      // Dedups to one task per issue (idTag has no target), so a broken page
+      // doesn't file a task per page.
+      await fileGap(record, sId, {
+        gapKind: 'render-failed',
+        issueId,
+        summary: `A draft render failed for this issue (first failure: ${target} — ${reason}). The comic page/panel structure may be incomplete.`,
+        context: `issueId=${issueId} target=${target}`,
+      });
     }
     return {};
   };
@@ -712,6 +753,12 @@ export async function startSeriesAutopilot(sId, options = {}) {
         if (result?.pause) {
           await persistMarker(sId, { status: 'paused', runId, currentStep: step.kind, residualFindings: result.residual || [], lastError: result.reason });
           broadcast(sId, { type: 'paused', runId, scope: step.kind, reason: result.reason, residualFindings: result.residual || [], completedAt: new Date().toISOString() });
+          await fileGap(record, sId, {
+            gapKind: `${step.kind}-stalled`,
+            issueId: step.issueId || null,
+            summary: `Autopilot paused: ${result.reason}. Needs human review of the residual findings before it can continue.`,
+            context: JSON.stringify(result.residual || []).slice(0, 1000),
+          });
           console.log(`⏸️  autopilot paused (${step.kind}) — series=${sId.slice(0, 12)}: ${result.reason}`);
           return;
         }
@@ -727,6 +774,11 @@ export async function startSeriesAutopilot(sId, options = {}) {
       console.error(`❌ autopilot failed — series=${sId.slice(0, 12)} ${message}`);
       await persistMarker(sId, { status: 'error', runId, lastError: message });
       broadcast(sId, { type: 'error', runId, error: message, failedAt: new Date().toISOString() });
+      await fileGap(record, sId, {
+        gapKind: 'run-error',
+        summary: `The autonomous run failed and stopped: ${message}`,
+        context: message,
+      }).catch(() => {});
     } finally {
       record.finished = true;
       scheduleCleanup(sId, record);
