@@ -51,7 +51,7 @@ export default function MemoryBuilder({ onBack, onNavigateElements }) {
 
   async function handleDelete(id) {
     await deleteMemoryItem(id);
-    setItems(prev => prev.filter(i => i.id !== id));
+    await loadItems();
   }
 
   function resetCreateForm() {
