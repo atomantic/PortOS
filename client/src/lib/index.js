@@ -60,6 +60,7 @@ export * from './voiceLabel.js';
 // === Page-scoped pure helpers ===
 export * from './cityPlaybackFrame.js';
 export * from './colorMatch.js';
+export * from './editorialChecks.js';
 export * from './metronome.js';
 export * from './pianoKeyboard.js';
 export * from './pitchDetect.js';

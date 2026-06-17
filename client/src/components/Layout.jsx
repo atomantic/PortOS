@@ -49,6 +49,7 @@ import {
   Cigarette,
   HeartPulse,
   ClipboardList,
+  ListChecks,
   Compass,
   Scale,
   LayoutDashboard,
@@ -199,6 +200,7 @@ const navItems = [
     children: [
       { to: '/authors', label: 'Authors', icon: FilePen },
       { to: '/catalog', label: 'Catalog', icon: Sparkles },
+      { to: '/pipeline/editorial-checks', label: 'Editorial Checks', icon: ListChecks },
       { to: '/importer', label: 'Importer', icon: FileInput },
       { to: '/media', label: 'Media Gen', icon: Layers },
       { to: '/pipeline', label: 'Series Pipeline', icon: WorkflowIcon, dynamic: 'pipelineSeries' },

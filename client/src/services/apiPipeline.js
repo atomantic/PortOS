@@ -595,6 +595,47 @@ export const getSeriesEditorialStatus = (seriesId, options = {}) =>
 export const pipelineEditorialSseUrl = (seriesId) =>
   `/api/pipeline/series/${encodeURIComponent(seriesId)}/editorial/analyze/progress`;
 
+// ---- Editorial checks (#1284 registry-driven review) ----
+// The full check catalog merged with persisted enable/config state:
+// { checks: [{ id, label, description, scope, kind, category, severityDefault,
+//             enabled, config, configFields }] }. The catalog is GLOBAL (settings-
+// backed); only the run + findings are series-scoped.
+export const getEditorialChecks = (options = {}) =>
+  request('/pipeline/editorial/checks', options);
+
+// Enable/disable a check or update its config. `patch` is { enabled?, config? };
+// `config` is validated against the check's own schema server-side. Returns the
+// updated resolved-state row. Pass { silent: true } when you own the error UI.
+export const patchEditorialCheck = (checkId, patch, options = {}) =>
+  request(`/pipeline/editorial/checks/${encodeURIComponent(checkId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+    ...options,
+  });
+
+// Start a series-wide checks run (or a named subset). { runId, alreadyRunning,
+// sseUrl } — subscribe via editorialChecksRunSseUrl, then re-fetch the manuscript
+// review on `complete` (the runner seeds findings into the review store).
+export const startEditorialChecksRun = (seriesId, opts = {}, options = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/editorial/checks/run`, {
+    method: 'POST',
+    body: JSON.stringify(opts),
+    ...options,
+  });
+
+// { active: boolean } — lets a (re)mounting view re-attach to an in-flight run.
+export const getEditorialChecksRunStatus = (seriesId, options = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/editorial/checks/run/status`, options);
+
+export const cancelEditorialChecksRun = (seriesId, options = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/editorial/checks/run/cancel`, {
+    method: 'POST',
+    ...options,
+  });
+
+export const editorialChecksRunSseUrl = (seriesId) =>
+  `/api/pipeline/series/${encodeURIComponent(seriesId)}/editorial/checks/run/progress`;
+
 // ---- Reverse Outline (scene segmentation + plotline tagging) ----
 // The stored outline: { plotlines, scenes, stale, status }. `status:'none'`
 // when never generated, `'no-content'` shell while nothing is drafted yet.

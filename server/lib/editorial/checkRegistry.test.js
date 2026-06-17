@@ -78,6 +78,19 @@ describe('editorial check registry — fail-fast guards', () => {
   it('throws on a duplicate id', () => {
     expect(() => assertValidChecks([valid, { ...valid }])).toThrow(/duplicate id/);
   });
+
+  it('accepts a check with no configFields (optional)', () => {
+    expect(() => assertValidChecks([{ ...valid, configFields: undefined }])).not.toThrow();
+  });
+
+  it('throws when configFields is not an array', () => {
+    expect(() => assertValidChecks([{ ...valid, configFields: {} }])).toThrow(/configFields must be an array/);
+  });
+
+  it('throws on a malformed configField (missing key/label or bad type)', () => {
+    expect(() => assertValidChecks([{ ...valid, configFields: [{ label: 'x', type: 'number' }] }])).toThrow(/malformed configField/);
+    expect(() => assertValidChecks([{ ...valid, configFields: [{ key: 'k', label: 'x', type: 'galaxy' }] }])).toThrow(/malformed configField/);
+  });
 });
 
 describe('editorial check registry — config + state resolution', () => {
@@ -100,6 +113,23 @@ describe('editorial check registry — config + state resolution', () => {
     expect(naming.config.minSharedSignals).toBe(3);
     // Unconfigured check keeps its default-enabled state.
     expect(rows.find((r) => r.id === INFODUMP).enabled).toBe(true);
+  });
+
+  it('resolveCheckState surfaces each check\'s serializable configFields', () => {
+    const rows = resolveCheckState({});
+    const naming = rows.find((r) => r.id === NAMING);
+    expect(Array.isArray(naming.configFields)).toBe(true);
+    const field = naming.configFields.find((f) => f.key === 'minSharedSignals');
+    expect(field).toMatchObject({ type: 'number', min: 1, max: 5 });
+    expect(field.label).toBeTruthy();
+    // Every declared config field is renderable (key + label + known type).
+    for (const row of rows) {
+      for (const f of row.configFields) {
+        expect(f.key, `${row.id} field key`).toBeTruthy();
+        expect(f.label, `${row.id} field label`).toBeTruthy();
+        expect(['number', 'boolean', 'text'], `${row.id} field type`).toContain(f.type);
+      }
+    }
   });
 
   it('getEnabledChecks honors disable + subset narrowing', () => {

@@ -27,6 +27,15 @@ export const CHECK_SCOPES = Object.freeze(['series', 'issue', 'scene', 'noun']);
 export const CHECK_KINDS = Object.freeze(['deterministic', 'llm']);
 const SEVERITIES = Object.freeze(['high', 'medium', 'low']);
 
+// The serializable config-field types a check can declare for its UI form.
+// `configSchema` (a Zod schema) stays the validation authority on the server;
+// `configFields` is the wire-safe *render* descriptor the Editorial Checks UI
+// reads to build the per-check config form (the Zod schema can't cross the wire).
+// Keep this in lockstep with the controls EditorialCheckCard's ConfigField
+// renders — only advertise a type the UI can actually draw (no 'select' until
+// the <select> control + an `options` contract land).
+export const CHECK_FIELD_TYPES = Object.freeze(['number', 'boolean', 'text']);
+
 // Stage name for the info-dumping LLM check. The prompt ships in
 // data.reference/prompts/stages/ and its config in stage-config.json; both
 // propagate to existing installs via setup-data.js (missing-file copy +
@@ -75,6 +84,17 @@ export const EDITORIAL_CHECKS = [
       // How many similarity signals two names must share before they're flagged.
       minSharedSignals: z.number().int().min(1).max(5).default(2),
     }),
+    configFields: [
+      {
+        key: 'minSharedSignals',
+        label: 'Minimum shared signals to flag',
+        type: 'number',
+        min: 1,
+        max: 5,
+        step: 1,
+        help: 'How many similarity signals (first letter, length, vowel pattern, opening, ending) two names must share before they are flagged.',
+      },
+    ],
     run: (ctx) => {
       const min = ctx.config?.minSharedSignals ?? 2;
       const names = (ctx.canon?.characters || [])
@@ -122,6 +142,26 @@ export const EDITORIAL_CHECKS = [
       // context-window chunking (à la completenessPass) is tracked separately.
       maxManuscriptChars: z.number().int().min(2000).max(200_000).default(48_000),
     }),
+    configFields: [
+      {
+        key: 'maxFindings',
+        label: 'Max findings per run',
+        type: 'number',
+        min: 1,
+        max: 50,
+        step: 1,
+        help: 'Cap findings so a long manuscript can not flood the review.',
+      },
+      {
+        key: 'maxManuscriptChars',
+        label: 'Max manuscript characters analyzed',
+        type: 'number',
+        min: 2000,
+        max: 200_000,
+        step: 1000,
+        help: 'Bounds the prompt so a long series can not overflow a small provider context window.',
+      },
+    ],
     gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
     run: async (ctx) => {
       const cap = ctx.config?.maxManuscriptChars ?? 48_000;
@@ -177,6 +217,20 @@ export function assertValidChecks(checks) {
     if (!check.configSchema || typeof check.configSchema.safeParse !== 'function') {
       throw new Error(`checkRegistry: ${check.id} is missing a Zod configSchema`);
     }
+    // configFields is optional, but when present each entry must be a renderable
+    // descriptor (key + label + known type) so the UI never has to guess a
+    // field's control. The Zod configSchema remains the validation authority —
+    // configFields only drives the form, so we don't cross-check key coverage.
+    if (check.configFields !== undefined) {
+      if (!Array.isArray(check.configFields)) {
+        throw new Error(`checkRegistry: ${check.id} configFields must be an array`);
+      }
+      for (const field of check.configFields) {
+        if (!field || !field.key || !field.label || !CHECK_FIELD_TYPES.includes(field.type)) {
+          throw new Error(`checkRegistry: ${check.id} has a malformed configField ${JSON.stringify(field)} (need key, label, type ∈ ${CHECK_FIELD_TYPES.join('/')})`);
+        }
+      }
+    }
     if (seen.has(check.id)) throw new Error(`checkRegistry: duplicate id ${check.id}`);
     seen.add(check.id);
   }
@@ -214,9 +268,11 @@ export const readChecksSlice = (settings) => {
  * Merge the static registry with persisted per-check state from settings.
  * Returns one row per registered check:
  *   { id, label, description, scope, kind, category, severityDefault,
- *     enabled, config }
+ *     enabled, config, configFields }
  * `enabled` falls back to the check's `defaultEnabled`; `config` is validated
- * through the check's schema (with defaults).
+ * through the check's schema (with defaults); `configFields` is the wire-safe
+ * render descriptor the UI builds its config form from (empty array when the
+ * check declares none).
  */
 export function resolveCheckState(settings) {
   const stored = readChecksSlice(settings);
@@ -233,6 +289,7 @@ export function resolveCheckState(settings) {
       severityDefault: check.severityDefault,
       enabled,
       config: resolveCheckConfig(check, row.config),
+      configFields: Array.isArray(check.configFields) ? check.configFields : [],
     };
   });
 }

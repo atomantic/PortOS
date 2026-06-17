@@ -28,7 +28,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useParams, useNavigate } from 'react-router-dom';
+import { Link, useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeft, Loader2, Sparkles, FileText, Star, ClipboardCheck, Layers, PencilLine, BookOpen, GitCompare, X,
 } from 'lucide-react';
@@ -67,6 +67,7 @@ export default function PipelineManuscriptEditor() {
   const params = useParams();
   const { seriesId } = params;
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   // The issue (by number) the editor is focused on — one issue per view,
   // deep-linkable at /pipeline/series/:id/manuscript/:issueNumber. Read from the
   // route splat (a single splat route, not two :param routes, so issue→issue
@@ -167,6 +168,24 @@ export default function PipelineManuscriptEditor() {
       .catch(() => {});
     return () => { canceled = true; };
   }, []);
+
+  // Deep-link from the Editorial Checks triage view: `?comment=<id>` opens that
+  // finding's card. Wait until comments have loaded, match the id, reveal it in
+  // review mode (where the card renders inline), then strip the param so a
+  // refresh/back doesn't re-trigger it. No-op when the comment isn't present
+  // (e.g. it was already dismissed-and-pruned, or belongs to another series).
+  useEffect(() => {
+    const wanted = searchParams.get('comment');
+    if (!wanted || loading) return;
+    if (comments.some((c) => c.id === wanted)) {
+      setViewMode('review');
+      setOpenCommentId(wanted);
+    }
+    const next = new URLSearchParams(searchParams);
+    next.delete('comment');
+    setSearchParams(next, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, comments, searchParams]);
 
   const overrideProvider = providers.find((p) => p.id === overrideProviderId) || null;
   const localModels = useLocalModels();
