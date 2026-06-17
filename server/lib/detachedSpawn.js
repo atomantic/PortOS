@@ -99,6 +99,17 @@ d="$1"; shift
  */
 export async function spawnDetached(bin, args = [], { env, cwd, controlDir, pollMs = DEFAULT_POLL_MS, cleanup = false } = {}) {
   if (!controlDir) throw new Error('spawnDetached requires a controlDir');
+
+  // Windows has no POSIX `sh` for the double-fork, and pm2's process management
+  // there is taskkill-based rather than the PPID-walk this works around. Fall
+  // back to a normal child process: a real ChildProcess already satisfies the
+  // handle contract (pid / stdout / stderr / on('close',code,signal) / kill /
+  // exitCode / signalCode), so callers are unaffected. Surviving a pm2 restart
+  // is a POSIX-only guarantee; Windows keeps its prior spawn semantics.
+  if (process.platform === 'win32') {
+    return spawn(bin, args, { env, cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+  }
+
   await ensureDir(controlDir);
   // Clear any stale control files from a prior run reusing this dir, so the
   // PID/exit pollers can't latch onto a previous job's results.

@@ -141,4 +141,24 @@ describe('spawnDetached', () => {
   it('requires a controlDir', async () => {
     await expect(spawnDetached('sh', ['-c', 'true'], {})).rejects.toThrow(/controlDir/);
   });
+
+  it('falls back to a plain spawn on win32 (no POSIX sh double-fork)', async () => {
+    const original = process.platform;
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    try {
+      const controlDir = await tmpControlDir();
+      // Real `sh` exists on the test runner, so the plain-spawn fallback runs;
+      // the point is that it returns a working ChildProcess, not the file-tailed
+      // handle. (controlDir is unused on this path but still required.)
+      const handle = await spawnDetached('sh', ['-c', 'printf "hi\\n"; exit 0'], { controlDir });
+      expect(handle.pid).toBeGreaterThan(0);
+      expect(typeof handle.kill).toBe('function');
+      const getOut = collect(handle.stdout);
+      const { code } = await onClose(handle);
+      expect(code).toBe(0);
+      expect(getOut()).toBe('hi\n');
+    } finally {
+      Object.defineProperty(process, 'platform', { value: original, configurable: true });
+    }
+  });
 });
