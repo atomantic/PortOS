@@ -806,6 +806,78 @@ describe('classifyImportContent', () => {
 });
 
 // ---------------------------------------------------------------------------
+// reformatSeededExcerpts (importer AI cleanup — issue #1335)
+// ---------------------------------------------------------------------------
+
+describe('reformatSeededExcerpts', () => {
+  // Collect importer progress frames the helper emits so we can assert the
+  // per-issue checklist is broadcast.
+  function captureFrames() {
+    const frames = [];
+    const onFrame = (f) => frames.push(f);
+    importerSvc.importerEvents.on('progress', onFrame);
+    return { frames, stop: () => importerSvc.importerEvents.off('progress', onFrame) };
+  }
+
+  it('returns the input unchanged (no LLM call) when no issue has a proseExcerpt', async () => {
+    const issues = [{ title: 'A', arcPosition: 1 }, { title: 'B', arcPosition: 2 }];
+    const out = await importerSvc.reformatSeededExcerpts(issues, { contentType: 'short-story' });
+    expect(out).toBe(issues); // same reference — nothing to do
+    expect(mockRunStagedLLM).not.toHaveBeenCalled();
+  });
+
+  it('replaces each excerpt with the cleaned text and emits per-issue progress frames', async () => {
+    // Cleaned output must preserve the word skeleton or the integrity guard
+    // rejects it — collapse the doubled space, nothing else.
+    mockRunStagedLLM.mockResolvedValue({ content: 'The vault loomed in the dark.', runId: 'r1' });
+    const { frames, stop } = captureFrames();
+    const issues = [{ title: 'Cold Iron', arcPosition: 1, proseExcerpt: 'The vault  loomed in the\ndark.' }];
+    const out = await importerSvc.reformatSeededExcerpts(issues, { contentType: 'short-story' });
+    stop();
+
+    expect(out[0].proseExcerpt).toBe('The vault loomed in the dark.');
+    expect(out).not.toBe(issues); // fresh array, input untouched
+    expect(issues[0].proseExcerpt).toBe('The vault  loomed in the\ndark.');
+    // start + (running, done) + done
+    expect(frames.find((f) => f.type === 'start')?.stages).toHaveLength(1);
+    expect(frames.some((f) => f.type === 'stage' && f.status === 'running')).toBe(true);
+    expect(frames.some((f) => f.type === 'stage' && f.status === 'done')).toBe(true);
+    expect(frames.some((f) => f.type === 'done')).toBe(true);
+  });
+
+  it('routes a comic-script import through the comicScript reformat format', async () => {
+    mockRunStagedLLM.mockResolvedValue({ content: 'PAGE 1 PANEL 1 Giant descends.', runId: 'r1' });
+    await importerSvc.reformatSeededExcerpts(
+      [{ title: 'P', arcPosition: 1, proseExcerpt: 'PAGE 1\nPANEL 1\nGiant descends.' }],
+      { contentType: 'comic-script' },
+    );
+    const call = mockRunStagedLLM.mock.calls.find((c) => c[0] === 'manuscript-reformat');
+    expect(call).toBeDefined();
+    expect(call[1].format).toBe('Comic script');
+  });
+
+  it('falls back to the verbatim excerpt when the reformat fails (best-effort, never throws)', async () => {
+    // Default reset mock resolves undefined → reformatManuscriptText throws
+    // "model returned no text" → helper swallows and keeps the original.
+    const { frames, stop } = captureFrames();
+    const issues = [{ title: 'Cold Iron', arcPosition: 1, proseExcerpt: 'The vault loomed.' }];
+    const out = await importerSvc.reformatSeededExcerpts(issues, { contentType: 'short-story' });
+    stop();
+    expect(out[0].proseExcerpt).toBe('The vault loomed.');
+    // A failed pass surfaces as 'error' in the checklist (warning icon).
+    expect(frames.some((f) => f.type === 'stage' && f.status === 'error')).toBe(true);
+  });
+
+  it('falls back when the integrity guard rejects a word-altering reformat', async () => {
+    mockRunStagedLLM.mockResolvedValue({ content: 'The castle loomed.', runId: 'r1' });
+    const out = await importerSvc.reformatSeededExcerpts(
+      [{ title: 'Cold Iron', arcPosition: 1, proseExcerpt: 'The vault loomed.' }],
+      { contentType: 'short-story' },
+    );
+    expect(out[0].proseExcerpt).toBe('The vault loomed.'); // guard tripped → verbatim kept
+  });
+});
+
 // commitImport
 // ---------------------------------------------------------------------------
 
@@ -892,6 +964,38 @@ describe('commitImport', () => {
     expect(issue.stages.idea.input).toContain('Synopsis: Aria finds the letter.');
     // Issue was wired to the first season.
     expect(issue.seasonId).toBe(result.series.seasons[0].id);
+  });
+
+  it('cleanupFormatting:true seeds the AI-reformatted excerpt (issue #1335)', async () => {
+    mockRunStagedLLM.mockResolvedValue({ content: 'The vault loomed in the dark.', runId: 'r1' });
+    const { uni, ser } = await setupForCommit();
+    const result = await importerSvc.commitImport({
+      universeId: uni.id,
+      seriesId: ser.id,
+      contentType: 'short-story',
+      cleanupFormatting: true,
+      issues: [{ title: 'Cold Iron', arcPosition: 1, proseExcerpt: 'The vault  loomed in the\ndark.' }],
+    });
+    const issue = await issuesSvc.getIssue(result.createdIssueIds[0]);
+    expect(issue.stages.prose.output).toBe('The vault loomed in the dark.');
+    expect(issue.stages.prose.status).toBe('ready');
+    expect(mockRunStagedLLM.mock.calls.some((c) => c[0] === 'manuscript-reformat')).toBe(true);
+  });
+
+  it('cleanupFormatting:true is best-effort — a failed reformat seeds the verbatim excerpt', async () => {
+    // Reset mock resolves undefined → reformat throws → fall back to verbatim;
+    // the commit still succeeds and creates the issue.
+    const { uni, ser } = await setupForCommit();
+    const result = await importerSvc.commitImport({
+      universeId: uni.id,
+      seriesId: ser.id,
+      contentType: 'short-story',
+      cleanupFormatting: true,
+      issues: [{ title: 'Cold Iron', arcPosition: 1, proseExcerpt: 'The vault loomed in the dark.' }],
+    });
+    expect(result.createdIssueIds).toHaveLength(1);
+    const issue = await issuesSvc.getIssue(result.createdIssueIds[0]);
+    expect(issue.stages.prose.output).toBe('The vault loomed in the dark.');
   });
 
   it('seeds stages.comicScript (not prose) for a comic-script import', async () => {

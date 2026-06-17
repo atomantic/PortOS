@@ -288,6 +288,11 @@ export const importerCommitSchema = z.object({
   // defaulting to prose-seed keeps older clients (which don't send it) on the
   // prior behavior.
   contentType: z.enum(IMPORTER_CONTENT_TYPES).optional(),
+  // Opt-in AI formatting cleanup: when true, each seeded excerpt is run through
+  // the manuscript-reformat pass at commit time so imported text arrives clean
+  // (issue #1335). One LLM call per issue + best-effort fallback, so it defaults
+  // off; older clients that don't send it keep the verbatim-seed behavior.
+  cleanupFormatting: z.boolean().optional().default(false),
   // Replace-mode flag — when true, every existing issue on the series is
   // deleted before the incoming `issues` are created, and `series.arc` +
   // `series.seasons[]` are written verbatim (not merged). Canon is still

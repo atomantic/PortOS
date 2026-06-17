@@ -31,6 +31,7 @@ import {
   updateSeries,
 } from './pipeline/series.js';
 import { createIssue, deleteIssue, listIssues } from './pipeline/issues.js';
+import { reformatManuscriptText } from './pipeline/manuscriptFix.js';
 import { sanitizeArc, sanitizeSeasonList, buildSeason, ARC_SHAPE_IDS, ARC_ROLES } from '../lib/storyArc.js';
 import { COMIC_NUM, COMIC_HEADER_TAIL } from '../lib/comicScriptParser.js';
 import { IMPORTER_CONTENT_TYPES, IMPORTER_PROSE_EXCERPT_MAX } from '../lib/validation.js';
@@ -105,6 +106,66 @@ const CONTENT_TYPE_SEED_STAGE = Object.freeze({
 });
 const DEFAULT_SEED_STAGE = 'prose';
 const seedStageFor = (contentType) => CONTENT_TYPE_SEED_STAGE[contentType] || DEFAULT_SEED_STAGE;
+
+/**
+ * Best-effort AI cleanup of seeded excerpts at import time (issue #1335). The
+ * importer seeds each issue's verbatim `proseExcerpt` straight into its seed
+ * stage — which is exactly the PDF/paste-mangled text the editor's Reformat
+ * button repairs. Running it through the SAME `reformatManuscriptText` pass at
+ * import time lets manuscripts arrive already-clean instead of needing a
+ * per-section Reformat pass afterward.
+ *
+ * Opt-in (caller passes `cleanupFormatting`) because it's one LLM call per
+ * issue — a 20+ issue import would otherwise add minutes to commit. The seed
+ * stage id (prose / comicScript / teleplay — every `seedStageFor` value is a
+ * valid manuscript reformat type) selects the reformat's format label, so
+ * comic-script and screenplay imports route through too.
+ *
+ * Best-effort: a failed or integrity-guard-rejected reformat (the guard rejects
+ * any pass that altered wording) falls back to the verbatim excerpt so import
+ * never breaks. Emits importer progress frames (one checklist row per cleaned
+ * issue) so the blocking commit can show live status. Returns a NEW array;
+ * never mutates the caller's input.
+ */
+export async function reformatSeededExcerpts(issues, { contentType = null } = {}) {
+  const stageId = seedStageFor(contentType);
+  const targets = (Array.isArray(issues) ? issues : []).filter((p) => p?.proseExcerpt);
+  if (targets.length === 0) return issues;
+  const runId = randomUUID();
+  // Emitting is best-effort UI sugar — never let a listener throw abort the
+  // commit, so swallow + log at this boundary (mirrors analyze's emitProgress).
+  const emit = (frame) => {
+    try {
+      emitImporterProgress({ runId, ...frame });
+    } catch (err) {
+      console.error(`❌ importer reformat progress emit failed: ${err.message}`);
+    }
+  };
+  // Index cleaned text by the original proposal reference so the returned array
+  // can be rebuilt without mutating the input objects.
+  const cleaned = new Map();
+  emit({
+    type: 'start',
+    stages: targets.map((p, idx) => ({ id: `reformat-${idx}`, label: `Clean up formatting: ${p.title}` })),
+  });
+  for (let idx = 0; idx < targets.length; idx++) {
+    const proposal = targets[idx];
+    emit({ type: 'stage', id: `reformat-${idx}`, status: 'running' });
+    const result = await reformatManuscriptText(proposal.proseExcerpt, { stageId }).catch((err) => {
+      // Best-effort: keep the verbatim excerpt so import never breaks on an LLM
+      // error, empty output, or the integrity guard rejecting a word-altering
+      // reformat. The stage row shows 'error' (warning icon) to flag the fallback.
+      console.error(`❌ importer reformat fell back to verbatim for "${proposal.title}": ${err.message}`);
+      return null;
+    });
+    if (result?.text) cleaned.set(proposal, result.text);
+    // Map both clean outcomes to 'done' and the fallback to 'error' so the
+    // client's existing icon set renders them (no new status to teach the UI).
+    emit({ type: 'stage', id: `reformat-${idx}`, status: result ? 'done' : 'error' });
+  }
+  emit({ type: 'done' });
+  return issues.map((p) => (cleaned.has(p) ? { ...p, proseExcerpt: cleaned.get(p) } : p));
+}
 
 const normName = (s) => String(s || '').trim().toLowerCase();
 const isStr = (v) => typeof v === 'string';
@@ -941,6 +1002,10 @@ export async function commitImport({
   // Content type drives which stage each issue's verbatim excerpt seeds (see
   // the stage-seed block below). Absent → prose-seed (prior behavior).
   contentType = null,
+  // Opt-in AI cleanup: run each seeded excerpt through the manuscript-reformat
+  // pass before seeding so imported prose/scripts arrive already-clean (issue
+  // #1335). Best-effort + per-issue (one LLM call each), so it defaults off.
+  cleanupFormatting = false,
   // Destructive replace: wipes existing issues, overwrites arc + seasons.
   // Universe canon still merges additively (it's shared across series, so
   // a per-series destructive replace would be too coarse). Default false.
@@ -1125,6 +1190,17 @@ export async function commitImport({
     }
   }
 
+  // Optional AI cleanup of the seeded excerpts (issue #1335). Runs AFTER all
+  // the cheap fail-fast validation (so a bad payload never burns LLM calls) but
+  // BEFORE any destructive write (the wipe + universe/series writes below), so
+  // the heavy per-issue reformat happens while the on-disk state is untouched.
+  // Best-effort — `reformatSeededExcerpts` falls back to the verbatim excerpt
+  // per issue, so import never breaks. Returns a fresh array; the create loop
+  // below seeds from it.
+  const issuesToCreate = cleanupFormatting
+    ? await reformatSeededExcerpts(issuesWithPositions, { contentType })
+    : issuesWithPositions;
+
   // Wipe BEFORE universe + series writes so any delete failure aborts the
   // commit cleanly — universe canon + series arc are still in their
   // pre-import state, and no new issues have been created yet. Without this
@@ -1290,7 +1366,7 @@ export async function commitImport({
   // user-confirmed data; only the issue set is all-or-nothing from the
   // commit's perspective.
   try {
-    for (const proposal of issuesWithPositions) {
+    for (const proposal of issuesToCreate) {
       let seasonId = fallbackSeasonId;
       if (proposal.seasonNumber != null) {
         const matched = seasonByNumber.get(proposal.seasonNumber);
