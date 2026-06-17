@@ -872,7 +872,12 @@ function GenerateImageControl({ name, description, onComplete }) {
     setStarting(false);
     if (!queued) return;
     if (queued.jobId) {
-      // Local/Codex modes enqueue a job — track it live via MediaJobThumb.
+      // Local/Codex modes enqueue a job — track it live via MediaJobThumb,
+      // which fires onFilename on completion to attach the result. NOTE: this
+      // attach is mounted-callback-bound — navigating away before a long render
+      // finishes leaves the image in the gallery unattached (same limitation as
+      // UniverseCanonSection's section-local renders). A durable job→ingredient
+      // attach is tracked in #1359.
       setJobId(queued.jobId);
       toast.success('Generating image…');
     } else if (queued.filename) {
