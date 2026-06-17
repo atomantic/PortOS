@@ -23,7 +23,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { v4 as uuidv4 } from '../../lib/uuid.js';
 import { hfTokenEnv } from '../../lib/hfToken.js';
 import { safeChildProcessEnv } from '../../lib/processEnv.js';
-import { spawnDetached } from '../../lib/detachedSpawn.js';
+import { spawnDetached, reapDetached } from '../../lib/detachedSpawn.js';
 import { getImageModels } from '../../lib/mediaModels.js';
 import { resolveFlux2Python, isFlux2VenvHealthy } from '../../lib/pythonSetup.js';
 import { getSettings } from '../settings.js';
@@ -221,6 +221,13 @@ export async function resumeTrainingRun(runId) {
       status: 409, code: 'RUN_NOT_RESUMABLE',
     });
   }
+  // A run can be marked failed (boot reconcile / cancel) while its detached
+  // trainer is still alive — reap it before resuming so we never run two
+  // trainers against the same checkpoint dir. Idempotent: a no-op when nothing
+  // survives. Belt-and-suspenders with the boot-reconcile reap, since resume
+  // can race the reconcile's SIGTERM grace window.
+  const reaped = await reapDetached(join(runDir(runId), '.detached')).catch(() => ({ reaped: false }));
+  if (reaped.reaped) console.log(`🧹 reaped surviving trainer pid ${reaped.pid} before resuming run ${shortId(runId)}`);
   // Both runtimes restore optimizer state + the step counter on resume, so
   // training picks up mid-run and finishes at the original total: mflux via
   // `mflux-train --resume <zip>`, and the torch FLUX.2 trainer via
@@ -944,6 +951,12 @@ export async function initLoraTraining() {
   for (const run of active) {
     const job = run.jobId ? getJob(run.jobId) : null;
     if (!job || ['failed', 'canceled', 'completed'].includes(job.status)) {
+      // The trainer is a detached child that survives a pm2 restart, so it may
+      // STILL be running even though its in-memory job is gone. Reap it (clean
+      // SIGTERM → checkpoint → SIGKILL) before marking the run failed/resumable,
+      // so a resume can't spawn a second trainer into the same checkpoint dir.
+      const reaped = await reapDetached(join(runDir(run.id), '.detached')).catch(() => ({ reaped: false }));
+      if (reaped.reaped) console.log(`🧹 reaped surviving trainer pid ${reaped.pid} for run ${shortId(run.id)}`);
       await runsDb.updateRun(run.id, {
         status: 'failed', error: 'interrupted by restart', completedAt: new Date().toISOString(),
       }).catch(() => {});
