@@ -364,13 +364,22 @@ export function analyzeCaptionInvariants(images, triggerWord, {
  * matched by normalized form, so case/whitespace differences still strip. A
  * caption left with no descriptive body collapses to just the trigger word
  * (still a valid binding-only caption). Idempotent — re-running strips nothing.
+ *
+ * Works at the comma-fragment level. A bare-trigger fragment that sits MID-
+ * caption (the trigger appears as its own fragment but not as the leading
+ * prefix) is also dropped: prefixCaption re-adds the trigger once at the front,
+ * so keeping the stray one would duplicate the token in the rewritten caption.
  */
 export function stripSharedFragments(caption, fragmentsToStrip, triggerWord) {
   const stripSet = new Set((Array.isArray(fragmentsToStrip) ? fragmentsToStrip : [])
     .map(normalizeFragment)
     .filter(Boolean));
   if (!stripSet.size) return trim(caption);
-  const kept = splitCaptionFragments(caption, triggerWord)
-    .filter((frag) => !stripSet.has(normalizeFragment(frag)));
-  return prefixCaption(triggerWord, kept.join(', '));
+  const word = trim(triggerWord);
+  const wordNorm = word.toLowerCase();
+  const kept = splitCaptionFragments(caption, word).filter((frag) => {
+    const norm = normalizeFragment(frag);
+    return !stripSet.has(norm) && (!wordNorm || norm !== wordNorm);
+  });
+  return prefixCaption(word, kept.join(', '));
 }

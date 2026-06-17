@@ -358,6 +358,15 @@ describe('stripSharedFragments', () => {
     expect(stripSharedFragments(caption, [], trigger)).toBe(caption);
   });
 
+  it('drops a stray mid-caption trigger fragment instead of duplicating the prefix', () => {
+    // Non-canonical caption: trigger appears as a fragment but not as the lead.
+    const caption = `white hair, ${trigger}, standing`;
+    const out = stripSharedFragments(caption, ['white hair'], trigger);
+    expect(out).toBe(`${trigger}, standing`);
+    // Exactly one trigger token in the result.
+    expect(out.split(trigger)).toHaveLength(2);
+  });
+
   it('round-trips with analyzeCaptionInvariants — stripping clears the shared set', () => {
     const ready = (id, body) => ({ id, status: 'ready', caption: prefixCaption(trigger, body) });
     const images = [
