@@ -488,10 +488,15 @@ export function queueResync(records) {
   if (!Array.isArray(records)) return;
   for (const { type, id, hardDelete } of records) {
     if (!id || !TYPE_MAP[type]) continue;
-    // Last touch wins on coalesce. A real local `{type}:deleted` carries
-    // hardDelete:true; upserts and synced applies leave it false so a tombstone
-    // they reach stays soft-archived (resurrectable).
-    pendingResync.set(bridgeKey(type, id), { type, id, hardDelete: !!hardDelete });
+    const key = bridgeKey(type, id);
+    // Sticky hard-delete on coalesce: once a real local `{type}:deleted` marks a
+    // key for a hard prune, a later touch for the same key before the flush — a
+    // concurrent `sync:applied` carrying no flag, say — must NOT downgrade it to
+    // a soft archive, or the dead embedding lingers. Safe to keep sticky because
+    // resyncBrainRecord's record-present branch upserts a resurrected record
+    // regardless of the flag, so a true intent can never hard-delete a live row.
+    const prevHardDelete = pendingResync.get(key)?.hardDelete;
+    pendingResync.set(key, { type, id, hardDelete: !!hardDelete || !!prevHardDelete });
   }
   if (pendingResync.size === 0 || resyncTimer || resyncFlushing) return;
   resyncTimer = setTimeout(() => {

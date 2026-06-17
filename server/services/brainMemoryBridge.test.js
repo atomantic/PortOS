@@ -188,6 +188,21 @@ describe('brainMemoryBridge — queueResync debounce + dedup', () => {
     expect(getById).toHaveBeenCalledWith('people', 'p1');
   });
 
+  it('keeps a hard-delete sticky when a later soft touch coalesces onto the same key (#1318)', async () => {
+    const bridge = await loadBridge();
+    bridgeFileContents = JSON.stringify({ [bridge.bridgeKey('people', 'p1')]: 'mem-del' });
+    getById.mockResolvedValue(null); // still tombstoned at flush time
+
+    // Local delete marks p1 for a hard prune; a concurrent sync:applied (no flag)
+    // coalesces onto the same key before the flush. The hard intent must survive.
+    bridge.queueResync([{ type: 'people', id: 'p1', hardDelete: true }]);
+    bridge.queueResync([{ type: 'people', id: 'p1' }]);
+    await bridge.flushPendingResync();
+
+    expect(deleteMemory).toHaveBeenCalledWith('mem-del', true);
+    expect(updateMemory).not.toHaveBeenCalledWith('mem-del', { status: 'archived' });
+  });
+
   it('processes the queue sequentially across multiple records', async () => {
     const bridge = await loadBridge();
     getById.mockImplementation(async (_type, id) => ({ id, name: id }));
