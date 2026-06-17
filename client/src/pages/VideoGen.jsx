@@ -67,7 +67,7 @@ import {
 import LoraPicker from '../components/imageGen/LoraPicker';
 import { videoLoraFamily, VIDEO_LORA_FAMILIES } from '../lib/runnerFamilies';
 import { randomSeed } from '../lib/genUtils';
-import { VIDEO_RESOLUTIONS } from '../lib/videoGenResolutions';
+import { VIDEO_RESOLUTIONS, snapAspectToImage } from '../lib/videoGenResolutions';
 import { VIDEO_TILING_OPTIONS, VIDEO_TILING_ENUM_SET } from '../lib/videoTilingOptions';
 import { resolveResolutionLabel } from '../lib/imageGenResolutions';
 
@@ -153,6 +153,13 @@ export default function VideoGen() {
   const [modelId, setModelId] = useState('');
   const [width, setWidth] = useState(768);
   const [height, setHeight] = useState(512);
+  // Set once the size has been chosen deliberately — the user picking a preset,
+  // or an explicit size arriving via Continue/Remix/restore. While it's false,
+  // selecting an I2V source image auto-snaps W×H to the source's aspect ratio
+  // (so the default frame doesn't cover-crop the subject). The snap itself does
+  // NOT set this, so re-picking a different source still re-snaps until the user
+  // takes the size into their own hands.
+  const sizeManuallySetRef = useRef(false);
   const [numFrames, setNumFrames] = useState(121);
   const [fps, setFps] = useState(24);
   const [chunks, setChunks] = useState(1);
@@ -225,8 +232,8 @@ export default function VideoGen() {
   useEffect(() => {
     const w = Number(incomingWidth);
     const h = Number(incomingHeight);
-    if (Number.isFinite(w) && w > 0) setWidth(w);
-    if (Number.isFinite(h) && h > 0) setHeight(h);
+    if (Number.isFinite(w) && w > 0) { setWidth(w); sizeManuallySetRef.current = true; }
+    if (Number.isFinite(h) && h > 0) { setHeight(h); sizeManuallySetRef.current = true; }
   }, [incomingWidth, incomingHeight]);
 
   // Remix payload from MediaPreview (?modelId=…&numFrames=…&seed=…). Populate
@@ -301,6 +308,30 @@ export default function VideoGen() {
     setLastUploadUrl(url);
     return () => URL.revokeObjectURL(url);
   }, [lastImageUpload]);
+
+  // Auto-snap the default W×H to a selected I2V source image's aspect ratio so
+  // the server's cover-crop (force_original_aspect_ratio=increase,crop in
+  // local.js#resizeImage) doesn't silently cut the subject out of a mismatched
+  // frame. Only fires while the user hasn't taken the size into their own hands
+  // (sizeManuallySetRef) — the inputs stay fully editable for power users, and
+  // the server keeps its own 64-grid clamp. Gallery picks resolve to
+  // /data/images/<file>; uploads reuse the object URL built above. The load is
+  // async, so guard the apply against a newer pick (cancelled) and a late-
+  // arriving manual size change (the ref re-check).
+  useEffect(() => {
+    if (sizeManuallySetRef.current) return;
+    const src = sourceImageFile ? `/data/images/${sourceImageFile}` : sourceUploadUrl;
+    if (!src) return;
+    let cancelled = false;
+    const img = new Image();
+    img.onload = () => {
+      if (cancelled || sizeManuallySetRef.current) return;
+      const snapped = snapAspectToImage(VIDEO_RESOLUTIONS, img.naturalWidth, img.naturalHeight);
+      if (snapped) { setWidth(snapped.w); setHeight(snapped.h); }
+    };
+    img.src = src;
+    return () => { cancelled = true; };
+  }, [sourceImageFile, sourceUploadUrl]);
 
   const refreshHistory = useCallback(() => {
     listVideoHistory().then((items) => setHistory(Array.isArray(items) ? items : [])).catch(() => {});
@@ -443,8 +474,8 @@ export default function VideoGen() {
     // post-load validation effect (`Validate modelId once models are loaded`)
     // will fall back to defaultModel if the id doesn't end up in the catalog.
     if (item.modelId) setModelId(item.modelId);
-    if (item.width) setWidth(item.width);
-    if (item.height) setHeight(item.height);
+    if (item.width) { setWidth(item.width); sizeManuallySetRef.current = true; }
+    if (item.height) { setHeight(item.height); sizeManuallySetRef.current = true; }
     if (item.numFrames) setNumFrames(item.numFrames);
     if (item.fps) setFps(item.fps);
     if (item.seed != null) setSeed(String(item.seed));
@@ -604,8 +635,8 @@ export default function VideoGen() {
       if (p.prompt) setPrompt(p.prompt);
       if (p.negativePrompt) setNegativePrompt(p.negativePrompt);
       if (p.modelId) setModelId(p.modelId);
-      if (p.width) setWidth(p.width);
-      if (p.height) setHeight(p.height);
+      if (p.width) { setWidth(p.width); sizeManuallySetRef.current = true; }
+      if (p.height) { setHeight(p.height); sizeManuallySetRef.current = true; }
       if (p.numFrames) setNumFrames(p.numFrames);
       if (p.fps) setFps(p.fps);
       if (p.steps != null) setSteps(String(p.steps));
@@ -855,7 +886,7 @@ export default function VideoGen() {
 
   const handleResolutionChange = (e) => {
     const r = VIDEO_RESOLUTIONS.find((r) => r.label === e.target.value);
-    if (r) { setWidth(r.w); setHeight(r.h); }
+    if (r) { setWidth(r.w); setHeight(r.h); sizeManuallySetRef.current = true; }
   };
   const handleRandomSeed = () => setSeed(randomSeed());
 
