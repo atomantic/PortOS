@@ -17,6 +17,7 @@ import * as arcPlanner from '../../services/pipeline/arcPlanner.js';
 import * as manuscriptReview from '../../services/pipeline/manuscriptReview.js';
 import * as manuscriptFix from '../../services/pipeline/manuscriptFix.js';
 import * as completenessRunner from '../../services/pipeline/manuscriptCompletenessRunner.js';
+import { getReviewWithStaleness } from '../../services/pipeline/editorial/checkRunner.js';
 import { mapServiceError, providerOverrideShape } from './shared.js';
 
 const router = Router();
@@ -153,7 +154,10 @@ router.get('/series/:id/manuscript', asyncHandler(async (req, res) => {
 
 router.get('/series/:id/manuscript/review', asyncHandler(async (req, res) => {
   await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
-  res.json(await manuscriptReview.getReview(req.params.id));
+  // Annotates each editorial-check finding with a `stale` flag when its analyzed
+  // content has drifted since the check ran (#1345); completeness-only reviews
+  // pass through untouched.
+  res.json(await getReviewWithStaleness(req.params.id));
 }));
 
 router.patch('/series/:id/manuscript/review/comments/:commentId', asyncHandler(async (req, res) => {

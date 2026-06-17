@@ -15,16 +15,54 @@
  * late-connecting clients via lib/sseUtils.js.
  */
 
-import { randomUUID } from 'crypto';
+import { randomUUID, createHash } from 'crypto';
 import { createSseRunner } from '../../../lib/sseUtils.js';
 import { runStagedLLM } from '../../../lib/stageRunner.js';
-import { getEnabledChecks, getEnabledCheckRows } from '../../../lib/editorial/index.js';
+import { getEnabledChecks, getEnabledCheckRows, getCheck } from '../../../lib/editorial/index.js';
 import { getSettings } from '../../settings.js';
 import { getSeries } from '../series.js';
 import { listIssues } from '../issues.js';
 import { getSeriesCanon } from '../seriesCanon.js';
 import { collectManuscriptSections, sectionsCorpus } from '../arcPlanner.js';
-import { seedReviewFromFindings } from '../manuscriptReview.js';
+import { seedReviewFromFindings, getReview } from '../manuscriptReview.js';
+import { canonicalStringify } from '../../../lib/objects.js';
+
+// Source-content fingerprinting for finding staleness (#1345). Each finding is
+// stamped with a hash of the exact content its check analyzed; the manuscript
+// editor / triage view flags a finding `stale` once that content drifts.
+//
+// Two segments cover the inputs the checks actually read: a manuscript-consuming
+// check (`needsManuscript`) hashes the stitched corpus + canon + style guide; a
+// canon-only check hashes canon + the arc's ticking clock — so a canon-only
+// finding (naming, object-attachment, ticking-clock) doesn't go stale on a pure
+// prose edit, and a manuscript finding doesn't go stale on a ticking-clock edit.
+// `canonicalStringify` (key-sorted) keeps the hash stable across machines so a
+// synced finding isn't falsely flagged stale after an import re-orders keys.
+//
+// NOTE: the input set is derived from `needsManuscript` + a fixed series field
+// set, NOT a per-check source declaration — so editing the style guide or ticking
+// clock marks ALL findings in that segment stale, not only the checks that read
+// it. That over-flag is the deliberate SAFE direction (never under-flag): a check
+// added later that reads `styleGuide` still auto-stales, whereas a per-check
+// allow-list would silently false-fresh it. Precise-and-safe scoping via declared
+// per-check sources is tracked in #1387. NUL separates the segments so they can't
+// run together ambiguously.
+const HASH_SEP = '\u0000';
+const sha256 = (text) => createHash('sha256').update(text || '').digest('hex');
+function computeSourceHashes(manuscript, canon, series) {
+  const canonStr = canonicalStringify(canon ?? null);
+  const styleGuide = canonicalStringify(series?.styleGuide ?? null);
+  const tickingClock = canonicalStringify(series?.arc?.tickingClock ?? null);
+  return {
+    // Manuscript checks (style.reading-level / style.conformance + the prose/object
+    // LLM checks) read the corpus + canon + style guide.
+    withManuscript: sha256([manuscript || '', canonStr, styleGuide].join(HASH_SEP)),
+    // Canon-only checks read canon; arc.ticking-clock-hygiene also reads the arc's
+    // ticking clock (folded in here since it's the only non-canon input they consult).
+    canonOnly: sha256([canonStr, tickingClock].join(HASH_SEP)),
+  };
+}
+const hashForCheck = (hashes, needsManuscript) => (needsManuscript ? hashes.withManuscript : hashes.canonOnly);
 
 /**
  * Run the enabled editorial checks for a series and seed their findings into the
@@ -60,6 +98,9 @@ export async function runEditorialChecks(seriesId, options = {}) {
     listIssues({ seriesId }).catch(() => []),
   ]);
   const manuscript = sectionsCorpus(sections);
+  // Fingerprint the analyzed content once per run — stamped onto every finding
+  // below so the editor can flag it `stale` when the manuscript/canon/series-meta drifts (#1345).
+  const sourceHashes = computeSourceHashes(manuscript, canon, series);
   const baseCtx = {
     seriesId,
     series,
@@ -92,7 +133,8 @@ export async function runEditorialChecks(seriesId, options = {}) {
         continue;
       }
       const raw = (await check.run(ctx)) || [];
-      const stamped = raw.map((f) => ({ ...f, checkId: check.id }));
+      const sourceContentHash = hashForCheck(sourceHashes, !!check.needsManuscript);
+      const stamped = raw.map((f) => ({ ...f, checkId: check.id, sourceContentHash }));
       findings.push(...stamped);
       perCheck.push({ checkId: check.id, count: stamped.length });
       onProgress?.({ type: 'check:complete', checkId: check.id, count: stamped.length });
@@ -130,6 +172,42 @@ export async function buildEditorialCheckPlan(seriesId, { checkIds = null, setti
   const checks = getEnabledCheckRows(resolved, checkIds)
     .map((row) => ({ id: row.id, label: row.label, kind: row.kind, scope: row.scope }));
   return { seriesId, checks, enabledCount: checks.length };
+}
+
+/**
+ * Read the manuscript review and annotate each editorial-check finding with a
+ * `stale` flag (#1345): true when the content the check analyzed has changed
+ * since the finding was seeded. Mirrors `editorialAnalysis.isSnapshotStale` —
+ * recompute the current source hash and compare against the one stamped on the
+ * finding. Findings without a `sourceContentHash` (completeness-pass comments,
+ * older peers, legacy records) or whose check is no longer registered are left
+ * unannotated → the UI treats absent `stale` as not-stale.
+ *
+ * Staleness is derived per-read (never stored), so it stays local to each
+ * install's current content and never rides the synced review document.
+ */
+export async function getReviewWithStaleness(seriesId) {
+  const review = await getReview(seriesId);
+  // Only recompute hashes when there's at least one hash-stamped finding from a
+  // still-registered check — a pure completeness review pays no extra I/O.
+  const evaluable = review.comments.filter((c) => c.checkId && c.sourceContentHash && getCheck(c.checkId));
+  if (!evaluable.length) return review;
+  const needsManuscript = evaluable.some((c) => getCheck(c.checkId).needsManuscript);
+  const series = await getSeries(seriesId);
+  const [sections, canon] = await Promise.all([
+    needsManuscript ? collectManuscriptSections(seriesId) : Promise.resolve([]),
+    getSeriesCanon(series),
+  ]);
+  const sourceHashes = computeSourceHashes(sectionsCorpus(sections), canon, series);
+  return {
+    ...review,
+    comments: review.comments.map((c) => {
+      const check = c.checkId && c.sourceContentHash ? getCheck(c.checkId) : null;
+      if (!check) return c;
+      const current = hashForCheck(sourceHashes, !!check.needsManuscript);
+      return { ...c, stale: c.sourceContentHash !== current };
+    }),
+  };
 }
 
 // ---------------------------------------------------------------------------
