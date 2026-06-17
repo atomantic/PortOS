@@ -463,4 +463,24 @@ describe('stripSharedCaptionFragments', () => {
     expect(second.removedFragments).toEqual([]);
     expect(second.updatedImages).toBe(0);
   });
+
+  it('leaves captions without the trigger word untouched (never prefixes them)', async () => {
+    const id = await seedFreydisDataset();
+    // Add a ready caption that shares an identity fragment but lacks the trigger
+    // — it was excluded from the analysis, so the strip must not touch it (and
+    // must not silently prepend the trigger, which would inflate readiness).
+    const tmpPath = join(TEST_DATA_ROOT, 'untriggered.png');
+    await makePng(tmpPath);
+    const entry = await addUploadedImage(id, { tmpPath });
+    await updateImageCaption(id, entry.id, 'white hair, circlet, lurking in shadow');
+
+    const before = await getDataset(id);
+    const captionedBefore = before.readiness.captioned;
+    const { dataset } = await stripSharedCaptionFragments(id);
+
+    const untriggered = dataset.images.find((i) => i.id === entry.id);
+    expect(untriggered.caption).toBe('white hair, circlet, lurking in shadow');
+    // Strip didn't convert the untriggered caption into a trigger-bearing one.
+    expect(dataset.readiness.captioned).toBe(captionedBefore);
+  });
 });

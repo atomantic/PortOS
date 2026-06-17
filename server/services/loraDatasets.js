@@ -24,6 +24,7 @@ import {
   LORA_DATASET_SCHEMA_VERSION,
   LORA_DATASET_ENTRY_KINDS,
   analyzeCaptionInvariants,
+  captionHasTriggerWord,
   computeDatasetReadiness,
   deriveTriggerWord,
   isValidTriggerWord,
@@ -454,7 +455,12 @@ export async function stripSharedCaptionFragments(id) {
   const next = await updateDataset(id, (record) => ({
     ...record,
     images: record.images.map((img) => {
-      if (img.status !== 'ready' || !img.caption) return img;
+      // Only rewrite the captions the analysis actually looked at — ready AND
+      // trigger-bearing. A ready caption that lacks the trigger was excluded
+      // from analyzeCaptionInvariants; rewriting it would re-`prefixCaption` the
+      // trigger onto it, silently making an unrelated caption count toward
+      // readiness/the training manifest even when no shared fragment matched.
+      if (img.status !== 'ready' || !captionHasTriggerWord(img.caption, record.triggerWord)) return img;
       const stripped = stripSharedFragments(img.caption, toStrip, record.triggerWord);
       if (stripped === img.caption) return img;
       updatedImages += 1;
