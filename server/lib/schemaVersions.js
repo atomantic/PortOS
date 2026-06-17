@@ -35,7 +35,16 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // Type-level (storage layout) version for `data/universes/{id}/index.json`.
   // v5 = post-split. Migration 034 introduced it. The per-record-shape version
   // stays at 4 (stamped inside each record by `sanitizeTemplate`).
-  universes: 5,
+  // v6 = canon characters gained `relationshipLinks[]` (structured
+  // character-to-character links + opposing-force tags, #1287). Additive +
+  // gracefully degrading, but version-gated for the same reason as
+  // `pipelineIssues`/`pipelineSeries` v2: a not-yet-upgraded peer that receives
+  // and re-sanitizes a universe through its relationshipLinks-unaware
+  // `sanitizeCharacter` would silently strip the field and last-writer-wins the
+  // loss back onto the newer peer. Bumping makes the older peer reject the
+  // ahead-version universe transfer instead. Per-category gate → only universe
+  // sync pauses with old peers; pipeline/catalog/etc keep flowing.
+  universes: 6,
   // v1 = post-split. Migrations 035/036 introduced the pipeline collection
   // layout for issues and series.
   // v2 = `stages.audio.audioMode` + `stages.audio.cues[]` added (whole-episode

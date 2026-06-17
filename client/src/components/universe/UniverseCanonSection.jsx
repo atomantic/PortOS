@@ -874,8 +874,12 @@ function KindSection({ kind, universeId, all, totalCount, filtered, usage, rende
   // per-card memoization and isn't worth the complexity at typical cast
   // sizes.
   const characterExtensions = useMemo(
-    () => (kind.key === 'characters' ? { universeId, onExpandCharacter, onSheetCompleted, onSheetDeleted } : null),
-    [kind.key, universeId, onExpandCharacter, onSheetCompleted, onSheetDeleted],
+    () => (kind.key === 'characters'
+      // `castList` is the universe-wide character list — feeds the
+      // relationship-link target picker in CharacterDetailEditor (#1287).
+      ? { universeId, onExpandCharacter, onSheetCompleted, onSheetDeleted, castList: fullList }
+      : null),
+    [kind.key, universeId, onExpandCharacter, onSheetCompleted, onSheetDeleted, fullList],
   );
   const Icon = kind.icon;
 

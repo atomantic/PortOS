@@ -18,7 +18,9 @@ describe('PORTOS_SCHEMA_VERSIONS', () => {
     // If this changes, the corresponding migration in scripts/migrations/
     // must ship alongside it. The test exists to make a layout bump a
     // deliberate two-file edit.
-    expect(PORTOS_SCHEMA_VERSIONS.universes).toBe(5);
+    // v6 = canon characters gained relationshipLinks[] (#1287); additive +
+    // version-gated so an older peer can't strip-then-LWW the field back.
+    expect(PORTOS_SCHEMA_VERSIONS.universes).toBe(6);
   });
 
   it('declares pipeline collection layout versions', () => {
@@ -37,14 +39,14 @@ describe('buildPortosMeta', () => {
   it('returns { portosVersion, schemaVersions } with the live registry', async () => {
     const meta = await buildPortosMeta();
     expect(meta.portosVersion).toMatch(/^\d+\.\d+\.\d+/);
-    expect(meta.schemaVersions.universes).toBe(5);
+    expect(meta.schemaVersions.universes).toBe(6);
     expect(meta.schemaVersions.pipelineIssues).toBe(2);
     expect(meta.schemaVersions.pipelineSeries).toBe(2);
   });
 
   it('overrides merge into schemaVersions', async () => {
     const meta = await buildPortosMeta({ schemaVersions: { future: 1 } });
-    expect(meta.schemaVersions.universes).toBe(5);
+    expect(meta.schemaVersions.universes).toBe(6);
     expect(meta.schemaVersions.future).toBe(1);
   });
 });
@@ -192,7 +194,7 @@ describe('scopeVersionDiff', () => {
     // Sender is ahead on mediaCollections only; a universe transfer scopes to
     // ['universes'] and stays compatible even though the union diff is not.
     const union = compareSchemaVersions(
-      { universes: 5, pipelineSeries: 2, pipelineIssues: 2, mediaCollections: 2 },
+      { universes: 6, pipelineSeries: 2, pipelineIssues: 2, mediaCollections: 2 },
       PORTOS_SCHEMA_VERSIONS,
     );
     expect(union.compatible).toBe(false); // mediaCollections 2 > 1

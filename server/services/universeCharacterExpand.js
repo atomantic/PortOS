@@ -28,6 +28,10 @@ const STRING_FIELDS = Object.freeze([
 const LIST_FIELDS = Object.freeze([
   'stats', 'colorPalette', 'props', 'expressions', 'handGestures',
 ]);
+// `relationshipLinks` (#1287) is INTENTIONALLY excluded from both lists: each
+// link points at a sibling character by `targetCharacterId`, an id the LLM
+// expand call has no way to produce. The `{ ...target }` spread above
+// preserves any existing links untouched; the writer authors them in the UI.
 
 // Distinct from universeCanon's peerForPrompt: the expand prompt benefits from
 // the extended visual / theme fields for richer distinctness signals.

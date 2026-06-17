@@ -291,6 +291,128 @@ describe('storyBible — sanitizeCharacter', () => {
     });
   });
 
+  describe('relationshipLinks (#1287)', () => {
+    it('defaults a missing relationshipLinks field to an empty array (legacy shape)', () => {
+      expect(sanitizeCharacter({ name: 'A' }).relationshipLinks).toEqual([]);
+    });
+
+    it('coerces a non-array relationshipLinks field to an empty array', () => {
+      expect(sanitizeCharacter({ name: 'A', relationshipLinks: 'nope' }).relationshipLinks).toEqual([]);
+    });
+
+    it('sanitizes a well-formed link + mints a rel- id when none supplied', () => {
+      const out = sanitizeCharacter({
+        name: 'A',
+        relationshipLinks: [{ targetCharacterId: 'chr-bob', type: 'ally', description: 'old friends' }],
+      });
+      expect(out.relationshipLinks).toHaveLength(1);
+      expect(out.relationshipLinks[0].id).toMatch(/^rel-/);
+      expect(out.relationshipLinks[0].targetCharacterId).toBe('chr-bob');
+      expect(out.relationshipLinks[0].type).toBe('ally');
+      expect(out.relationshipLinks[0].description).toBe('old friends');
+      expect(out.relationshipLinks[0].opposition).toBeUndefined();
+    });
+
+    it('preserves a supplied link id', () => {
+      const out = sanitizeCharacter({
+        name: 'A',
+        relationshipLinks: [{ id: 'rel-fixed-1', targetCharacterId: 'chr-bob' }],
+      });
+      expect(out.relationshipLinks[0].id).toBe('rel-fixed-1');
+    });
+
+    it('drops a link with no targetCharacterId', () => {
+      const out = sanitizeCharacter({
+        name: 'A',
+        relationshipLinks: [{ type: 'ally', description: 'dangling' }, { targetCharacterId: 'chr-bob' }],
+      });
+      expect(out.relationshipLinks).toHaveLength(1);
+      expect(out.relationshipLinks[0].targetCharacterId).toBe('chr-bob');
+    });
+
+    it('coerces an unrecognized type to custom (keeps the link + its prose)', () => {
+      const out = sanitizeCharacter({
+        name: 'A',
+        relationshipLinks: [{ targetCharacterId: 'chr-bob', type: 'frenemy', description: 'complicated' }],
+      });
+      expect(out.relationshipLinks[0].type).toBe('custom');
+      expect(out.relationshipLinks[0].description).toBe('complicated');
+    });
+
+    it('defaults a missing type to custom', () => {
+      const out = sanitizeCharacter({ name: 'A', relationshipLinks: [{ targetCharacterId: 'chr-bob' }] });
+      expect(out.relationshipLinks[0].type).toBe('custom');
+    });
+
+    it('sanitizes opposition + coerces an unrecognized axis to custom', () => {
+      const out = sanitizeCharacter({
+        name: 'A',
+        relationshipLinks: [{
+          targetCharacterId: 'chr-bob',
+          type: 'antagonist',
+          opposition: { axis: 'cat/mouse', thisRole: 'hunter', targetRole: 'prey', note: 'will it flip?' },
+        }],
+      });
+      const opp = out.relationshipLinks[0].opposition;
+      expect(opp.axis).toBe('custom');
+      expect(opp.thisRole).toBe('hunter');
+      expect(opp.targetRole).toBe('prey');
+      expect(opp.note).toBe('will it flip?');
+    });
+
+    it('keeps a recognized opposition axis verbatim', () => {
+      const out = sanitizeCharacter({
+        name: 'A',
+        relationshipLinks: [{ targetCharacterId: 'chr-bob', opposition: { axis: 'hunter/prey' } }],
+      });
+      expect(out.relationshipLinks[0].opposition.axis).toBe('hunter/prey');
+    });
+
+    it('drops an opposition with no axis (collapses to absent)', () => {
+      const out = sanitizeCharacter({
+        name: 'A',
+        relationshipLinks: [{ targetCharacterId: 'chr-bob', opposition: { thisRole: 'hunter' } }],
+      });
+      expect(out.relationshipLinks[0].opposition).toBeUndefined();
+    });
+
+    it('persists explicit locked true/false but drops a non-boolean', () => {
+      const out = sanitizeCharacter({
+        name: 'A',
+        relationshipLinks: [
+          { targetCharacterId: 'b', locked: true },
+          { targetCharacterId: 'c', locked: false },
+          { targetCharacterId: 'd', locked: 'yes' },
+        ],
+      });
+      expect(out.relationshipLinks[0].locked).toBe(true);
+      expect(out.relationshipLinks[1].locked).toBe(false);
+      expect(out.relationshipLinks[2].locked).toBeUndefined();
+    });
+
+    it('caps the list at RELATIONSHIP_LINKS_PER_CHARACTER_MAX', () => {
+      const tooMany = Array.from(
+        { length: BIBLE_LIMITS.RELATIONSHIP_LINKS_PER_CHARACTER_MAX + 5 },
+        (_, i) => ({ targetCharacterId: `chr-${i}` }),
+      );
+      const out = sanitizeCharacter({ name: 'A', relationshipLinks: tooMany });
+      expect(out.relationshipLinks).toHaveLength(BIBLE_LIMITS.RELATIONSHIP_LINKS_PER_CHARACTER_MAX);
+    });
+
+    it('clamps over-long description + opposition fields', () => {
+      const out = sanitizeCharacter({
+        name: 'A',
+        relationshipLinks: [{
+          targetCharacterId: 'chr-bob',
+          description: 'x'.repeat(BIBLE_LIMITS.RELATIONSHIP_DESCRIPTION_MAX + 50),
+          opposition: { axis: 'hunter/prey', note: 'y'.repeat(BIBLE_LIMITS.RELATIONSHIP_OPPOSITION_NOTE_MAX + 50) },
+        }],
+      });
+      expect(out.relationshipLinks[0].description.length).toBe(BIBLE_LIMITS.RELATIONSHIP_DESCRIPTION_MAX);
+      expect(out.relationshipLinks[0].opposition.note.length).toBe(BIBLE_LIMITS.RELATIONSHIP_OPPOSITION_NOTE_MAX);
+    });
+  });
+
   describe('extended character fields (novelist + graphic-novelist depth)', () => {
     it('defaults every new string field to empty + every list field to []', () => {
       const out = sanitizeCharacter({ name: 'Bare' });

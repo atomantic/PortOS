@@ -15,7 +15,8 @@ import {
   createCosTaskSchema,
   featureProviderConfigSchema,
   codeReviewSettingsSchema,
-  locationSettingsSchema
+  locationSettingsSchema,
+  writersRoomCharacterUpdateSchema
 } from './validation.js';
 
 describe('validation.js', () => {
@@ -789,6 +790,41 @@ describe('validation.js', () => {
 
     it('rejects unknown keys (strict)', () => {
       expect(locationSettingsSchema.safeParse({ lat: 1, lon: 1, alt: 100 }).success).toBe(false);
+    });
+  });
+
+  describe('writersRoomCharacterUpdateSchema — relationshipLinks (#1287)', () => {
+    it('accepts a well-formed relationship link with opposition', () => {
+      const result = writersRoomCharacterUpdateSchema.safeParse({
+        relationshipLinks: [{
+          targetCharacterId: 'chr-bob',
+          type: 'antagonist',
+          description: 'mortal enemies',
+          opposition: { axis: 'hunter/prey', thisRole: 'hunter', targetRole: 'prey', note: 'will it flip?' },
+        }],
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('accepts a link with no id (server mints it) and a custom type', () => {
+      const result = writersRoomCharacterUpdateSchema.safeParse({
+        relationshipLinks: [{ targetCharacterId: 'chr-bob', type: 'frenemy' }],
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('rejects a link missing targetCharacterId', () => {
+      const result = writersRoomCharacterUpdateSchema.safeParse({
+        relationshipLinks: [{ type: 'ally' }],
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it('rejects an unknown key inside a link (strict)', () => {
+      const result = writersRoomCharacterUpdateSchema.safeParse({
+        relationshipLinks: [{ targetCharacterId: 'chr-bob', bogus: true }],
+      });
+      expect(result.success).toBe(false);
     });
   });
 });

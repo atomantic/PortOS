@@ -121,6 +121,130 @@ export const EDITORIAL_CHECKS = [
     },
   },
   {
+    id: 'relationships.reciprocity',
+    label: 'Relationship reciprocity',
+    description:
+      'Flags one-sided structured relationship links — character A links to B, but B has no link back to A.',
+    scope: 'series',
+    kind: 'deterministic',
+    category: 'continuity',
+    severityDefault: 'low',
+    defaultEnabled: true,
+    configSchema: z.object({}),
+    run: (ctx) => {
+      const chars = (ctx.canon?.characters || []).filter((c) => c && c.id);
+      const nameById = new Map(chars.map((c) => [c.id, c.name || c.id]));
+      // For O(1) "does B link back to A?" lookups, index every link as a
+      // "<source>→<target>" pair key.
+      const linkPairs = new Set();
+      for (const c of chars) {
+        for (const link of (Array.isArray(c.relationshipLinks) ? c.relationshipLinks : [])) {
+          if (link?.targetCharacterId) linkPairs.add(`${c.id}→${link.targetCharacterId}`);
+        }
+      }
+      const findings = [];
+      for (const c of chars) {
+        for (const link of (Array.isArray(c.relationshipLinks) ? c.relationshipLinks : [])) {
+          const targetId = link?.targetCharacterId;
+          // A dangling target (B doesn't exist) is the dangling-target check's
+          // job; reciprocity only speaks to links between two real characters.
+          if (!targetId || !nameById.has(targetId)) continue;
+          if (linkPairs.has(`${targetId}→${c.id}`)) continue;
+          const aName = nameById.get(c.id);
+          const bName = nameById.get(targetId);
+          findings.push({
+            severity: ctx.severityDefault,
+            category: 'continuity',
+            location: `Characters: ${aName} → ${bName}`,
+            problem: `"${aName}" has a ${link.type || 'custom'} link to "${bName}", but "${bName}" has no link back to "${aName}".`,
+            suggestion: `Add a reciprocal relationship link from "${bName}" to "${aName}" (or remove the one-sided link if it's intentional).`,
+            anchorQuote: aName,
+            issueNumber: null,
+          });
+        }
+      }
+      return findings;
+    },
+  },
+  {
+    id: 'relationships.dangling-target',
+    label: 'Relationship dangling target',
+    description:
+      'Flags structured relationship links that point at a character id no longer present in the canon (deleted or renamed away).',
+    scope: 'series',
+    kind: 'deterministic',
+    category: 'continuity',
+    severityDefault: 'medium',
+    defaultEnabled: true,
+    configSchema: z.object({}),
+    run: (ctx) => {
+      const chars = (ctx.canon?.characters || []).filter((c) => c && c.id);
+      const idSet = new Set(chars.map((c) => c.id));
+      const nameById = new Map(chars.map((c) => [c.id, c.name || c.id]));
+      const findings = [];
+      for (const c of chars) {
+        for (const link of (Array.isArray(c.relationshipLinks) ? c.relationshipLinks : [])) {
+          const targetId = link?.targetCharacterId;
+          if (!targetId || idSet.has(targetId)) continue;
+          const aName = nameById.get(c.id);
+          findings.push({
+            severity: ctx.severityDefault,
+            category: 'continuity',
+            location: `Character: ${aName}`,
+            problem: `"${aName}" has a ${link.type || 'custom'} relationship link pointing at a character id (${targetId}) that no longer exists in the canon.`,
+            suggestion: 'Re-point the link at an existing character, or delete the stale link.',
+            anchorQuote: aName,
+            issueNumber: null,
+          });
+        }
+      }
+      return findings;
+    },
+  },
+  {
+    id: 'relationships.opposition-reversal',
+    label: 'Opposition role-reversal payoff',
+    description:
+      'Advisory — surfaces every tagged opposing-force pair (hunter/prey, winner/loser…) so you can confirm whether the reader ever sees the roles reverse, or deliberately not.',
+    scope: 'series',
+    kind: 'deterministic',
+    category: 'arc',
+    severityDefault: 'low',
+    defaultEnabled: false,
+    configSchema: z.object({}),
+    run: (ctx) => {
+      const chars = (ctx.canon?.characters || []).filter((c) => c && c.id);
+      const nameById = new Map(chars.map((c) => [c.id, c.name || c.id]));
+      const findings = [];
+      // Dedupe by the unordered character pair so a reciprocally-tagged
+      // opposition (A→B and B→A both carry an axis) surfaces once, not twice.
+      const seenPairs = new Set();
+      for (const c of chars) {
+        for (const link of (Array.isArray(c.relationshipLinks) ? c.relationshipLinks : [])) {
+          const targetId = link?.targetCharacterId;
+          if (!targetId || !link.opposition?.axis || !nameById.has(targetId)) continue;
+          const pairKey = [c.id, targetId].sort().join('|');
+          if (seenPairs.has(pairKey)) continue;
+          seenPairs.add(pairKey);
+          const aName = nameById.get(c.id);
+          const bName = nameById.get(targetId);
+          const { axis, thisRole, targetRole } = link.opposition;
+          const roles = thisRole && targetRole ? ` (${aName}: ${thisRole}, ${bName}: ${targetRole})` : '';
+          findings.push({
+            severity: ctx.severityDefault,
+            category: 'arc',
+            location: `Characters: ${aName} / ${bName}`,
+            problem: `Opposing-force pair tagged on "${aName}" / "${bName}" — axis "${axis}"${roles}.`,
+            suggestion: 'Confirm the reader sees these roles reverse at some point in the arc (or that holding them fixed is the intended payoff).',
+            anchorQuote: aName,
+            issueNumber: null,
+          });
+        }
+      }
+      return findings;
+    },
+  },
+  {
     id: 'prose.info-dumping',
     label: 'Info-dumping / "as you know, Bob" exposition',
     description:

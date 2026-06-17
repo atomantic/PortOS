@@ -2487,17 +2487,17 @@ describe('peerSync', () => {
 
     describe('receiver — applyIncomingPush', () => {
       it('rejects when sender schemaVersions.universes is AHEAD of local code', async () => {
-        // Local code is at universes:5 (see server/lib/schemaVersions.js).
-        // A push from a sender on universes:6 must NOT touch local state.
+        // Local code is at universes:6 (see server/lib/schemaVersions.js).
+        // A push from a sender on universes:7 must NOT touch local state.
         const rejection = await applyIncomingPush({
           kind: 'universe',
           record: { id: 'u1', name: 'Foo' },
           assetManifest: [],
           sourceInstanceId: 'peer-a',
-          portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 6 } },
+          portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 7 } },
         }).catch((err) => err);
         expect(rejection.code).toBe('PEER_SYNC_SCHEMA_VERSION_AHEAD');
-        expect(rejection.details.ahead).toEqual([{ category: 'universes', senderV: 6, receiverV: 5 }]);
+        expect(rejection.details.ahead).toEqual([{ category: 'universes', senderV: 7, receiverV: 6 }]);
         expect(rejection.details.senderPortosVersion).toBe('99.0.0');
         // Receiver MUST stamp its OWN PortOS version so the sender can show
         // the user "peer X is on PortOS vY" — without this, the sender would
@@ -2516,7 +2516,7 @@ describe('peerSync', () => {
           record: { id: 'u1', name: 'Foo' },
           assetManifest: [],
           sourceInstanceId: 'peer-a',
-          portosMeta: { portosVersion: '2.7.0', schemaVersions: { universes: 5 } },
+          portosMeta: { portosVersion: '2.7.0', schemaVersions: { universes: 6 } },
         });
         expect(mergeUniversesFromSync).toHaveBeenCalledWith(
           [expect.objectContaining({ id: 'u1' })],
@@ -2525,7 +2525,7 @@ describe('peerSync', () => {
       });
 
       it('passes through when sender is BEHIND local (sanitizer handles the backfill)', async () => {
-        // Older peer pushes a v4-shape universe. Receiver is on v5 but the
+        // Older peer pushes a v4-shape universe. Receiver is on v6 but the
         // record-shape sanitizer can backfill, so we apply rather than reject.
         await applyIncomingPush({
           kind: 'universe',
@@ -2710,7 +2710,7 @@ describe('peerSync', () => {
         expect(call).toBeDefined();
         const body = JSON.parse(call[1].body);
         expect(body.portosMeta).toBeDefined();
-        expect(body.portosMeta.schemaVersions.universes).toBe(5);
+        expect(body.portosMeta.schemaVersions.universes).toBe(6);
         expect(typeof body.portosMeta.portosVersion).toBe('string');
       });
 

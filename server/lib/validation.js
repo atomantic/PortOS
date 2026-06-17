@@ -3,7 +3,7 @@ import { ServerError } from './errorHandler.js';
 import { partialWithoutDefaults, emptyToUndefined, emptyToNull } from './zodCompat.js';
 import { WORK_KINDS, WORK_STATUSES, ANALYSIS_KINDS } from './writersRoomPresets.js';
 import { ALL_STYLE_IDS, STYLE_ID } from './writersRoomStylePresets.js';
-import { BIBLE_LIMITS } from './storyBible.js';
+import { BIBLE_LIMITS, RELATIONSHIP_LINK_TYPES, RELATIONSHIP_OPPOSITION_AXES } from './storyBible.js';
 import { MIN_TIMEOUT as STAGE_TIMEOUT_MIN_MS, MAX_TIMEOUT as STAGE_TIMEOUT_MAX_MS } from './aiToolkit/constants.js';
 
 // gpt-image-2 (codex backend) caps at 3840px per edge and 8,294,400 total
@@ -1085,6 +1085,25 @@ const wrWardrobeField = z.array(z.object({
   createdAt: z.string().optional(),
   updatedAt: z.string().optional(),
 }).strict()).max(BIBLE_LIMITS.WARDROBES_PER_CHARACTER_MAX);
+// Structured relationship links (#1287). `id` is omitted on POSTs — the
+// sanitizer mints it. `type` / `opposition.axis` accept the known enum tokens;
+// an unrecognized value (legacy/peer payload) is coerced to `custom` by the
+// sanitizer, not rejected here, so older clients never 400. Limits sourced
+// from BIBLE_LIMITS so bumping a constant updates Zod automatically.
+const wrOppositionField = z.object({
+  axis: z.enum(RELATIONSHIP_OPPOSITION_AXES).or(z.string().trim().max(BIBLE_LIMITS.RELATIONSHIP_OPPOSITION_AXIS_MAX)),
+  thisRole: z.string().max(BIBLE_LIMITS.RELATIONSHIP_OPPOSITION_ROLE_MAX).optional(),
+  targetRole: z.string().max(BIBLE_LIMITS.RELATIONSHIP_OPPOSITION_ROLE_MAX).optional(),
+  note: z.string().max(BIBLE_LIMITS.RELATIONSHIP_OPPOSITION_NOTE_MAX).optional(),
+}).strict();
+const wrRelationshipLinksField = z.array(z.object({
+  id: z.string().trim().max(64).optional(),
+  targetCharacterId: z.string().trim().min(1).max(BIBLE_LIMITS.RELATIONSHIP_TARGET_ID_MAX),
+  type: z.enum(RELATIONSHIP_LINK_TYPES).or(z.string().trim().max(BIBLE_LIMITS.RELATIONSHIP_OPPOSITION_AXIS_MAX)).optional(),
+  description: z.string().max(BIBLE_LIMITS.RELATIONSHIP_DESCRIPTION_MAX).optional(),
+  opposition: wrOppositionField.nullable().optional(),
+  locked: z.boolean().optional(),
+}).strict()).max(BIBLE_LIMITS.RELATIONSHIP_LINKS_PER_CHARACTER_MAX);
 export const writersRoomCharacterCreateSchema = z.object({
   name: z.string().trim().min(1).max(200),
   aliases: z.array(z.string().trim().min(1).max(200)).max(20).optional(),
@@ -1095,6 +1114,7 @@ export const writersRoomCharacterCreateSchema = z.object({
   notes: wrCharTextField.optional(),
   voiceId: wrVoiceIdField.optional(),
   wardrobes: wrWardrobeField.optional(),
+  relationshipLinks: wrRelationshipLinksField.optional(),
 }).strict();
 export const writersRoomCharacterUpdateSchema = z.object({
   name: z.string().trim().min(1).max(200).optional(),
@@ -1106,6 +1126,7 @@ export const writersRoomCharacterUpdateSchema = z.object({
   notes: wrCharTextField.optional(),
   voiceId: wrVoiceIdField.optional(),
   wardrobes: wrWardrobeField.optional(),
+  relationshipLinks: wrRelationshipLinksField.optional(),
 }).strict();
 
 const wrPlaceTextField = z.string().max(2000);

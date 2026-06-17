@@ -2202,7 +2202,7 @@ describe('sharing round-trip', () => {
       const exp = await exporter.exportSeries(s.id, bucket.id);
       const manifest = JSON.parse(readFileSync(join(tempBucket, 'manifests', exp.filename), 'utf-8'));
       expect(manifest.portosSchemaVersions).toBeDefined();
-      expect(manifest.portosSchemaVersions.universes).toBe(5);
+      expect(manifest.portosSchemaVersions.universes).toBe(6);
     });
 
     it('importer rejects a manifest when the sender is AHEAD on a category the manifest CARRIES', async () => {
@@ -2214,7 +2214,7 @@ describe('sharing round-trip', () => {
       // PortOS instance landing in an OLDER instance's bucket.
       const manifestPath = join(tempBucket, 'manifests', exp.filename);
       const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
-      manifest.portosSchemaVersions = { universes: 5, pipelineSeries: 99, pipelineIssues: 1, mediaCollections: 1 };
+      manifest.portosSchemaVersions = { universes: 6, pipelineSeries: 99, pipelineIssues: 1, mediaCollections: 1 };
       manifest.producedByVersion = '99.0.0';
       writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
       // Delete the local series so the auto-merge would normally re-create it.

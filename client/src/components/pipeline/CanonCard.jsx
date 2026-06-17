@@ -276,7 +276,9 @@ export default function CanonCard({
   // CanonCard reveals an Expand → CharacterDetailEditor section and a
   // Reference Sheet panel. NounsStage (series view) omits this so the
   // per-series cast list stays focused on naming + visual refs.
-  // Shape: { universeId, onExpandCharacter, expanding, onSheetCompleted, onSheetDeleted }
+  // Shape: { universeId, onExpandCharacter, expanding, onSheetCompleted, onSheetDeleted, castList }
+  // `castList` (the universe-wide character list) feeds the relationship-link
+  // target picker in CharacterDetailEditor (#1287).
   characterExtensions = null,
 }) {
   const description = kind.descFor(entry);
@@ -395,6 +397,7 @@ export default function CanonCard({
         <CharacterDetailsToggle>
           <CharacterDetailEditor
             entry={entry}
+            characters={characterExtensions.castList || []}
             onPatch={(patch) => onPatchEntry(entry.id, patch)}
             onExpand={characterExtensions.onExpandCharacter ? () => characterExtensions.onExpandCharacter(entry.id) : null}
             expanding={!!characterExtensions.expanding}

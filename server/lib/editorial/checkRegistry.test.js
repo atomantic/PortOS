@@ -215,3 +215,91 @@ describe('naming.dissimilar-names — deterministic check', () => {
     expect(run([{}, { name: '' }])).toEqual([]);
   });
 });
+
+describe('relationships.reciprocity — deterministic check', () => {
+  const run = (characters) =>
+    getCheck('relationships.reciprocity').run({ canon: { characters }, config: {}, severityDefault: 'low' });
+
+  it('flags a one-sided link', () => {
+    const findings = run([
+      { id: 'a', name: 'Aria', relationshipLinks: [{ targetCharacterId: 'b', type: 'ally' }] },
+      { id: 'b', name: 'Bram', relationshipLinks: [] },
+    ]);
+    expect(findings).toHaveLength(1);
+    expect(findings[0].category).toBe('continuity');
+    expect(findings[0].problem).toMatch(/no link back/i);
+  });
+
+  it('does not flag a reciprocated pair', () => {
+    const findings = run([
+      { id: 'a', name: 'Aria', relationshipLinks: [{ targetCharacterId: 'b' }] },
+      { id: 'b', name: 'Bram', relationshipLinks: [{ targetCharacterId: 'a' }] },
+    ]);
+    expect(findings).toEqual([]);
+  });
+
+  it('ignores links to nonexistent characters (the dangling-target check owns those)', () => {
+    const findings = run([
+      { id: 'a', name: 'Aria', relationshipLinks: [{ targetCharacterId: 'ghost' }] },
+    ]);
+    expect(findings).toEqual([]);
+  });
+
+  it('tolerates empty / link-less canon', () => {
+    expect(run([])).toEqual([]);
+    expect(run([{ id: 'a', name: 'Aria' }])).toEqual([]);
+  });
+});
+
+describe('relationships.dangling-target — deterministic check', () => {
+  const run = (characters) =>
+    getCheck('relationships.dangling-target').run({ canon: { characters }, config: {}, severityDefault: 'medium' });
+
+  it('flags a link pointing at a missing character id', () => {
+    const findings = run([
+      { id: 'a', name: 'Aria', relationshipLinks: [{ targetCharacterId: 'deleted-id', type: 'rival' }] },
+    ]);
+    expect(findings).toHaveLength(1);
+    expect(findings[0].problem).toMatch(/no longer exists/i);
+    expect(findings[0].problem).toContain('deleted-id');
+  });
+
+  it('does not flag a link to an existing character', () => {
+    const findings = run([
+      { id: 'a', name: 'Aria', relationshipLinks: [{ targetCharacterId: 'b' }] },
+      { id: 'b', name: 'Bram' },
+    ]);
+    expect(findings).toEqual([]);
+  });
+
+  it('tolerates empty canon', () => {
+    expect(run([])).toEqual([]);
+  });
+});
+
+describe('relationships.opposition-reversal — deterministic advisory', () => {
+  const run = (characters) =>
+    getCheck('relationships.opposition-reversal').run({ canon: { characters }, config: {}, severityDefault: 'low' });
+
+  it('surfaces a tagged opposition pair once (deduped across reciprocal links)', () => {
+    const findings = run([
+      { id: 'a', name: 'Aria', relationshipLinks: [{ targetCharacterId: 'b', opposition: { axis: 'hunter/prey', thisRole: 'hunter', targetRole: 'prey' } }] },
+      { id: 'b', name: 'Bram', relationshipLinks: [{ targetCharacterId: 'a', opposition: { axis: 'hunter/prey', thisRole: 'prey', targetRole: 'hunter' } }] },
+    ]);
+    expect(findings).toHaveLength(1);
+    expect(findings[0].category).toBe('arc');
+    expect(findings[0].problem).toMatch(/hunter\/prey/);
+  });
+
+  it('does not surface links without an opposition tag', () => {
+    const findings = run([
+      { id: 'a', name: 'Aria', relationshipLinks: [{ targetCharacterId: 'b', type: 'ally' }] },
+      { id: 'b', name: 'Bram' },
+    ]);
+    expect(findings).toEqual([]);
+  });
+
+  it('is disabled by default (advisory)', () => {
+    expect(getCheck('relationships.opposition-reversal').defaultEnabled).toBe(false);
+  });
+});

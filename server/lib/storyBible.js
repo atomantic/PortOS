@@ -49,6 +49,16 @@ export const BIBLE_LIMITS = Object.freeze({
   DISLIKES_MAX: 1500,
   MANNERISMS_MAX: 1500,
   RELATIONSHIPS_MAX: 2000,
+  // Structured character-to-character relationship links (#1287). The legacy
+  // prose `relationships` field above stays; `relationshipLinks[]` is additive.
+  // `description` is per-link prose; `opposition` captures a binary-tension
+  // axis (hunter/prey, winner/loser…) the reader watches to see reverse.
+  RELATIONSHIP_TARGET_ID_MAX: 64,
+  RELATIONSHIP_DESCRIPTION_MAX: 1000,
+  RELATIONSHIP_OPPOSITION_AXIS_MAX: 60,
+  RELATIONSHIP_OPPOSITION_ROLE_MAX: 120,
+  RELATIONSHIP_OPPOSITION_NOTE_MAX: 600,
+  RELATIONSHIP_LINKS_PER_CHARACTER_MAX: 40,
   SKILLS_MAX: 2000,
   // Flexible stats list — open key/value so non-humans aren't forced into
   // human anatomy ("Number of eyes: 8", "Form: spectral vapor", etc).
@@ -127,6 +137,22 @@ export const BIBLE_KIND = Object.freeze({
   PLACE: 'place',
   OBJECT: 'object',
 });
+
+// Structured relationship-link taxonomy (#1287). `type` is the dynamic
+// between two characters; `custom` lets the writer name one the list misses
+// (the free-text `description` carries the specifics). `opposition.axis`
+// tags a binary-force tension (hunter/prey, winner/loser…) the reader tracks
+// to see whether the roles ever reverse. Both default to `custom` on an
+// unrecognized value rather than dropping the link, so a legacy/peer payload
+// with a future type still round-trips (its prose description is preserved).
+export const RELATIONSHIP_LINK_TYPES = Object.freeze([
+  'ally', 'antagonist', 'rival', 'mentor', 'love-interest', 'family', 'custom',
+]);
+export const RELATIONSHIP_OPPOSITION_AXES = Object.freeze([
+  'winner/loser', 'smart/dumb', 'hunter/prey', 'predator/prey', 'custom',
+]);
+const RELATIONSHIP_LINK_TYPE_SET = new Set(RELATIONSHIP_LINK_TYPES);
+const RELATIONSHIP_OPPOSITION_AXIS_SET = new Set(RELATIONSHIP_OPPOSITION_AXES);
 
 // Enums for the location-classification fields on Place canon entries.
 // Mirrors AnyFilm's INT/EXT + time-of-day taxonomy so generated panels and
@@ -606,6 +632,45 @@ function sanitizeHandGesture(raw) {
   return { id: ensureId(raw.id, 'gesture-'), name, description: trimTo(raw.description, BIBLE_LIMITS.GESTURE_DESC_MAX) };
 }
 
+// Structured relationship link (#1287). Requires a `targetCharacterId` — a
+// link with nothing to point at is meaningless, so a blank target drops the
+// row (matches the name-required pattern in the other list sanitizers). `type`
+// and `opposition.axis` normalize an unrecognized value to `custom` rather
+// than dropping it, so a peer/legacy payload carrying a future enum value
+// still round-trips with its prose intact. `opposition` collapses to absent
+// unless an axis is present, and `locked` persists explicit true/false only.
+function sanitizeOpposition(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const axisRaw = trimTo(raw.axis, BIBLE_LIMITS.RELATIONSHIP_OPPOSITION_AXIS_MAX);
+  if (!axisRaw) return null;
+  const axis = RELATIONSHIP_OPPOSITION_AXIS_SET.has(axisRaw) ? axisRaw : 'custom';
+  return {
+    axis,
+    thisRole: trimTo(raw.thisRole, BIBLE_LIMITS.RELATIONSHIP_OPPOSITION_ROLE_MAX),
+    targetRole: trimTo(raw.targetRole, BIBLE_LIMITS.RELATIONSHIP_OPPOSITION_ROLE_MAX),
+    note: trimTo(raw.note, BIBLE_LIMITS.RELATIONSHIP_OPPOSITION_NOTE_MAX),
+  };
+}
+
+function sanitizeRelationshipLink(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const targetCharacterId = trimTo(raw.targetCharacterId, BIBLE_LIMITS.RELATIONSHIP_TARGET_ID_MAX);
+  if (!targetCharacterId) return null;
+  const typeRaw = trimTo(raw.type, BIBLE_LIMITS.RELATIONSHIP_OPPOSITION_AXIS_MAX);
+  const type = RELATIONSHIP_LINK_TYPE_SET.has(typeRaw) ? typeRaw : 'custom';
+  const out = {
+    id: ensureId(raw.id, 'rel-'),
+    targetCharacterId,
+    type,
+    description: trimTo(raw.description, BIBLE_LIMITS.RELATIONSHIP_DESCRIPTION_MAX),
+  };
+  const opposition = sanitizeOpposition(raw.opposition);
+  if (opposition) out.opposition = opposition;
+  if (raw.locked === true) out.locked = true;
+  else if (raw.locked === false) out.locked = false;
+  return out;
+}
+
 // Shared canon extras applied to every kind. Persists explicit `locked: true`
 // AND `locked: false` so a Universe-Builder caller can flip the bit and have
 // the change survive round-trips. Missing `locked` still collapses to absent
@@ -675,6 +740,14 @@ export function sanitizeCharacter(raw, { idPrefix = DEFAULT_ID_PREFIX.character,
     dislikes: trimTo(raw.dislikes, BIBLE_LIMITS.DISLIKES_MAX),
     mannerisms: trimTo(raw.mannerisms, BIBLE_LIMITS.MANNERISMS_MAX),
     relationships: trimTo(raw.relationships, BIBLE_LIMITS.RELATIONSHIPS_MAX),
+    // Structured character-to-character links + opposing-force tags (#1287).
+    // Additive to the legacy prose `relationships` field above. Empty array
+    // stays the legacy shape — every existing character keeps round-tripping.
+    relationshipLinks: sanitizeListWith(
+      raw.relationshipLinks,
+      sanitizeRelationshipLink,
+      BIBLE_LIMITS.RELATIONSHIP_LINKS_PER_CHARACTER_MAX,
+    ),
     skills: trimTo(raw.skills, BIBLE_LIMITS.SKILLS_MAX),
     notes: trimTo(raw.notes, BIBLE_LIMITS.NOTES_MAX),
     // Flexible stats list. Open key/value so ghosts/spiders/clouds aren't
