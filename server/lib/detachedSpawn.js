@@ -46,7 +46,7 @@ import { spawn } from 'child_process';
 import { EventEmitter } from 'events';
 import { constants as osConstants } from 'os';
 import { join } from 'path';
-import { open, readFile, rm, stat } from 'fs/promises';
+import { open, readFile, rm, stat, readdir } from 'fs/promises';
 import { ensureDir, sleep } from './fileUtils.js';
 
 // Default cadence for tailing the job's log files and polling for completion.
@@ -349,4 +349,29 @@ export async function reapDetached(controlDir, { graceMs = REAP_GRACE_MS, pollMs
     if (waited >= graceMs && isAlive(pid)) { try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ } }
   }
   return { reaped: wasAlive, pid };
+}
+
+/**
+ * Boot-time sweep of a parent dir holding per-job control dirs (e.g.
+ * `data/videos/.detached/<jobId>`). Reaps any surviving orphan in each and then
+ * removes the dir. Used where job ids aren't enumerable from persisted state —
+ * notably chained video renders, whose live child lives under a random INNER
+ * chunk id, not the outer queue job id. Safe to call only at boot, before any
+ * new job starts (every dir present then is an orphan from the prior process).
+ *
+ * @param {string} parentDir - the `.detached` parent (e.g. PATHS.videos/.detached)
+ * @returns {Promise<{reaped: number, scanned: number}>}
+ */
+export async function reapAndCleanDetachedDirs(parentDir) {
+  const entries = await readdir(parentDir).catch(() => []);
+  let reaped = 0;
+  for (const name of entries) {
+    const dir = join(parentDir, name);
+    // eslint-disable-next-line no-await-in-loop
+    const res = await reapDetached(dir).catch(() => ({ reaped: false }));
+    if (res.reaped) reaped += 1;
+    // eslint-disable-next-line no-await-in-loop
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+  return { reaped, scanned: entries.length };
 }
