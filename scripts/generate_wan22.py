@@ -26,6 +26,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+# Same-dir sibling import (mirrors generate_ltx2.py). _runner_common is
+# stdlib-only at import time, so this is safe from the wan2.2-mlx venv.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _runner_common import emit_runtime_fingerprint  # noqa: E402
+
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="PortOS Wan 2.2 MLX helper")
@@ -46,6 +51,10 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+
+    # Runtime fingerprint at startup — recorded by PortOS so output can be tied
+    # to a specific wan/mlx/torch stack on this chip.
+    emit_runtime_fingerprint("wan22", ["wan", "mlx", "mlx_metal", "torch"])
 
     repo_dir = Path(args.repo_dir).expanduser().resolve()
     if not repo_dir.is_dir():

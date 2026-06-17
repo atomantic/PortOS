@@ -21,6 +21,8 @@ walker that turns a buried `GatedRepoError` into a friendly link — belongs her
 import json
 import logging
 import os
+import platform
+import subprocess
 import sys
 import threading
 from contextlib import contextmanager
@@ -97,6 +99,87 @@ def parse_user_loras(raw: "str | None") -> "list[tuple[str, float]]":
             raise SystemExit(f"user-loras[{i}].strength must be a number")
         specs.append((path, strength))
     return specs
+
+
+def _mac_chip() -> str:
+    """Human chip name on macOS ('Apple M5 Max'). Falls back to
+    platform.processor()/machine() so the field is never empty."""
+    try:
+        out = subprocess.run(
+            ["sysctl", "-n", "machdep.cpu.brand_string"],
+            capture_output=True, text=True, timeout=2,
+        )
+        if out.returncode == 0 and out.stdout.strip():
+            return out.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return platform.processor() or platform.machine() or "unknown"
+
+
+def _resolve_pkg_version(pkg: str) -> "str | None":
+    """importlib.metadata.version for `pkg`, tolerant of the
+    underscore/dash skew between import names and distribution names
+    (callers pass whichever they know). Returns None when not installed."""
+    from importlib.metadata import PackageNotFoundError, version as _version
+    for candidate in (pkg, pkg.replace("_", "-"), pkg.replace("-", "_")):
+        try:
+            return _version(candidate)
+        except PackageNotFoundError:
+            continue
+        except Exception:
+            # An odd/transient metadata error on one spelling shouldn't skip the
+            # remaining variants — keep trying, give up (None) only after all do.
+            continue
+    return None
+
+
+def build_runtime_fingerprint(runtime_id: str, packages, extra_versions=None) -> dict:
+    """Build a runtime-fingerprint dict — which runtime + resolved package
+    versions + chip/os/python — so a render (or a bug report) self-documents the
+    exact numerical stack it ran on. Garbled/"mosaic" video output is often a
+    per-chip/per-runtime numerical bug rather than a crash, and the version trio
+    is what makes those reports actionable (see issue #1325).
+
+    Pure (no printing) so the on-demand /status probe (scripts/runtime_fingerprint.py)
+    and the inline render-time emit share one definition. Best-effort: a package
+    that isn't installed is simply omitted from `versions` rather than raising.
+    """
+    versions = {}
+    for pkg in packages or []:
+        v = _resolve_pkg_version(pkg)
+        if v is not None:
+            versions[pkg] = v
+    # Caller-supplied versions that aren't pip distributions (e.g. the CUDA
+    # toolkit version from torch.version.cuda) — merge into `versions` so they
+    # render in the same list the log + /status UI already show, instead of a
+    # top-level field nothing displays.
+    for name, val in (extra_versions or {}).items():
+        if val is not None:
+            versions[name] = val
+    fp = {
+        "runtime": runtime_id,
+        "versions": versions,
+        "chip": _mac_chip() if sys.platform == "darwin"
+        else (platform.processor() or platform.machine() or "unknown"),
+        "os": platform.platform(),
+        "python": platform.python_version(),
+    }
+    return fp
+
+
+def emit_runtime_fingerprint(runtime_id: str, packages, extra_versions=None) -> dict:
+    """Print a single `RUNTIME:<json>` line to stderr — the channel PortOS's
+    videoGen line handler (makeVideoGenLineHandler) parses to stamp the
+    fingerprint onto the render job + history record. Best-effort: never raises
+    (a fingerprint failure must not abort a render). Returns the dict it emitted
+    (or {} on failure) so callers can also log it locally if they want."""
+    try:
+        fp = build_runtime_fingerprint(runtime_id, packages, extra_versions)
+        print(f"RUNTIME:{json.dumps(fp)}", file=sys.stderr, flush=True)
+        return fp
+    except Exception as err:  # pragma: no cover - defensive
+        print(f"⚠️ runtime fingerprint failed: {err}", file=sys.stderr, flush=True)
+        return {}
 
 
 class _ClipTruncationFilter(logging.Filter):

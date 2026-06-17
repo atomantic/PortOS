@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { writeFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { makeVideoGenLineHandler, isWatchdogSuccess } from './generateVideoHelpers.js';
+import { makeVideoGenLineHandler, isWatchdogSuccess, finalizeGeneratedVideo } from './generateVideoHelpers.js';
 
 // broadcastSse + videoGenEvents are the two output sinks the line handler
 // writes to; capture both so we can assert the parse → frame mapping.
@@ -87,6 +87,55 @@ describe('makeVideoGenLineHandler', () => {
 
   it('returns false for an unrecognized line (caller raw-logs it)', () => {
     expect(handle('🐍 some unexpected diagnostic')).toBe(false);
+  });
+
+  it('RUNTIME:<json> → stamps job.runtime and suppresses raw logging', () => {
+    const fp = { runtime: 'ltx2', versions: { mlx: '0.22.0' }, chip: 'Apple M5 Max', os: 'macOS-15.4-arm64' };
+    expect(handle(`RUNTIME:${JSON.stringify(fp)}`)).toBe(true);
+    expect(job.runtime).toEqual(fp);
+    // It's a one-shot metadata line, not progress/status — no SSE frame.
+    expect(sse).not.toHaveBeenCalled();
+  });
+
+  it('malformed RUNTIME: line falls through to raw-logging and leaves job.runtime unset', () => {
+    expect(handle('RUNTIME:{not json')).toBe(false);
+    expect(job.runtime).toBeUndefined();
+  });
+});
+
+describe('finalizeGeneratedVideo runtime persistence', () => {
+  const baseCtx = (job) => ({
+    job,
+    jobId: 'job-abcdef12',
+    outputPath: '/tmp/out.mp4',
+    filename: 'out.mp4',
+    meta: { id: 'job-abcdef12', prompt: 'hi', modelId: 'ltx2_unified' },
+    actualSeed: 7,
+  });
+
+  it('persists job.runtime onto the saved history record', async () => {
+    const fp = { runtime: 'ltx2', versions: { mlx: '0.22.0' }, chip: 'Apple M5 Max' };
+    const job = { id: 'job-abcdef12', clients: [], runtime: fp };
+    let saved = null;
+    await finalizeGeneratedVideo({
+      ...baseCtx(job),
+      loadHistory: async () => [],
+      saveHistory: async (h) => { saved = h; },
+    });
+    expect(saved).toHaveLength(1);
+    expect(saved[0].runtime).toEqual(fp);
+  });
+
+  it('omits runtime when the child never emitted a fingerprint (absent sentinel)', async () => {
+    const job = { id: 'job-abcdef12', clients: [] };
+    let saved = null;
+    await finalizeGeneratedVideo({
+      ...baseCtx(job),
+      loadHistory: async () => [],
+      saveHistory: async (h) => { saved = h; },
+    });
+    expect(saved).toHaveLength(1);
+    expect('runtime' in saved[0]).toBe(false);
   });
 });
 

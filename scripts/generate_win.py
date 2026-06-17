@@ -17,6 +17,11 @@ import numpy as np
 import cv2
 from PIL import Image
 
+# Same-dir sibling import (mirrors generate_ltx2.py). _runner_common is
+# stdlib-only at import time, so this is safe even on a partial install.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _runner_common import emit_runtime_fingerprint  # noqa: E402
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -74,6 +79,13 @@ def main():
                         'consume two keyframes; flag is accepted for forward '
                         'compatibility with multi-keyframe pipelines.')
     args = p.parse_args()
+
+    # Runtime fingerprint at startup — recorded by PortOS so output can be tied
+    # to a specific torch+CUDA/diffusers stack on this GPU.
+    emit_runtime_fingerprint(
+        'win', ['torch', 'diffusers', 'transformers'],
+        extra_versions={'cuda': getattr(torch.version, 'cuda', None)},
+    )
     # The current LTX-Video 0.9.5 diffusers pipelines only accept a single
     # conditioning image, so --last-image is forward-compat only. Tailor the
     # STATUS log to the actual branch the script will take based on whether

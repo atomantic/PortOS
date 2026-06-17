@@ -1067,3 +1067,42 @@ describe('generateVideo — close-handler resilience (issue #1334)', () => {
     vi.doUnmock('./generateVideoHelpers.js');
   });
 });
+
+describe('runtime fingerprint (/status)', () => {
+  it('hostRuntimeFingerprint reports chip/os/platform/arch/node', async () => {
+    const { hostRuntimeFingerprint } = await import('./local.js');
+    const fp = hostRuntimeFingerprint();
+    expect(typeof fp.chip).toBe('string');
+    expect(fp.chip.length).toBeGreaterThan(0);
+    expect(typeof fp.os).toBe('string');
+    expect(fp.platform).toBe(process.platform);
+    expect(fp.arch).toBe(process.arch);
+    expect(fp.node).toBe(process.version);
+  });
+
+  it('resolveRuntimeFingerprint returns host info immediately + only resolved runtimes (non-blocking)', async () => {
+    // /status must not block on probes, so resolveRuntimeFingerprint never
+    // awaits a probe: `runtimes` contains only fingerprints already resolved in
+    // cache (uncached installed runtimes are warmed in the background). Whether
+    // any are present depends on the machine (CI: none; a dev box warms async),
+    // so assert the shape — host always present, every included runtime entry is
+    // a resolved fingerprint with a `versions` object and NO `error` (errors are
+    // never cached) — rather than a specific machine's install set.
+    const { resolveRuntimeFingerprint } = await import('./local.js');
+    const block = await resolveRuntimeFingerprint();
+    expect(block.host).toBeDefined();
+    expect(typeof block.host.chip).toBe('string');
+    expect(block.runtimes && typeof block.runtimes === 'object').toBe(true);
+    for (const [id, fp] of Object.entries(block.runtimes)) {
+      expect(typeof id).toBe('string');
+      expect(fp.error).toBeUndefined();
+      expect(typeof fp.versions).toBe('object');
+    }
+  });
+
+  it('invalidateRuntimeFingerprintCache is callable for a single id and for all', async () => {
+    const { invalidateRuntimeFingerprintCache } = await import('./local.js');
+    expect(() => invalidateRuntimeFingerprintCache('ltx2')).not.toThrow();
+    expect(() => invalidateRuntimeFingerprintCache()).not.toThrow();
+  });
+});

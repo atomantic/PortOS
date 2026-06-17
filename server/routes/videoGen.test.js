@@ -50,6 +50,13 @@ vi.mock('../services/videoGen/local.js', () => ({
   isByovRuntimeInstalled: vi.fn(() => false),
   isByovRuntimeReady: vi.fn(async () => false),
   invalidateByovReadyCache: vi.fn(),
+  invalidateRuntimeFingerprintCache: vi.fn(),
+  // /status now surfaces a runtime block (host chip/os + per-runtime versions).
+  // Mock returns a fixed shape so the status test can assert it's wired through.
+  resolveRuntimeFingerprint: vi.fn(async () => ({
+    host: { chip: 'Apple M5 Max', os: 'Darwin 25.5.0', platform: 'darwin', arch: 'arm64', node: 'v22' },
+    runtimes: { ltx2: { runtime: 'ltx2', versions: { mlx: '0.22.0' }, chip: 'Apple M5 Max' } },
+  })),
 }));
 
 // Render submissions go through the mediaJobQueue. Mock its surface so the
@@ -197,6 +204,10 @@ describe('videoGen routes', () => {
       // clamp without hardcoding the constant. Pin presence + type.
       expect(typeof r.body.fflfLtx2PixelBudget).toBe('number');
       expect(r.body.fflfLtx2PixelBudget).toBeGreaterThan(0);
+      // runtime fingerprint block — host chip/os + per-runtime resolved
+      // versions so the UI (and bug reports) can show the exact stack (#1325).
+      expect(r.body.runtime?.host?.chip).toBe('Apple M5 Max');
+      expect(r.body.runtime?.runtimes?.ltx2?.versions?.mlx).toBe('0.22.0');
     });
 
     it('reports disconnected with reason + missingPackages when packages fail to import', async () => {

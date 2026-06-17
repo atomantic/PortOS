@@ -29,6 +29,8 @@ import {
   isByovRuntimeInstalled,
   isByovRuntimeReady,
   invalidateByovReadyCache,
+  invalidateRuntimeFingerprintCache,
+  resolveRuntimeFingerprint,
   loadHistory,
   deleteHistoryItem,
   setHistoryItemHidden,
@@ -202,6 +204,15 @@ router.get('/status', asyncHandler(async (_req, res) => {
     // back-solve so it can reject out-of-budget keyframe indices before
     // submit instead of letting the worker 400 mid-render.
     fflfLtx2PixelBudget: resolveFflfLtx2PixelBudget(),
+    // Runtime fingerprint — host chip/os + resolved ltx/mlx/torch versions per
+    // installed BYOV runtime — so the UI can show the exact numerical stack and
+    // bug reports for garbled/"mosaic" output carry the version info that makes
+    // them actionable (#1325). Best-effort: a venv that fails to probe reports
+    // `{ error }` and never blocks the rest of the status payload. The resolver
+    // is already non-throwing (each probe resolves to `{ error }`), but guard
+    // with a catch as defense-in-depth so a runtime-block failure can never
+    // reject the whole /status response.
+    runtime: await resolveRuntimeFingerprint().catch(() => null),
   });
 }));
 
@@ -279,8 +290,10 @@ router.get('/setup/runtime-install', asyncHandler(async (req, res) => {
   }
   // The install may add/remove packages; drop any cached "ready" so the
   // post-install /runtime-status response reflects the new state instead of
-  // a stale "true" from before a deliberate cleanup.
+  // a stale "true" from before a deliberate cleanup. Same for the cached
+  // runtime fingerprint — a reinstall can bump ltx/mlx/torch versions.
   invalidateByovReadyCache(info.id);
+  invalidateRuntimeFingerprintCache(info.id);
 
   const scriptPath = join(PATHS.root, 'scripts', 'setup-image-video.sh');
   if (!existsSync(scriptPath)) {
