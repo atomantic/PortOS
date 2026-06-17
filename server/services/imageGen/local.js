@@ -841,10 +841,12 @@ const MAX_GALLERY_UPLOAD_BYTES = 16 * 1024 * 1024;
  * Persist user-uploaded image bytes (base64) into the gallery dir under
  * `data/images/` so the file rides the existing `image` peer-sync asset path
  * (a record pointing at `/data/images/<f>` ships its bytes to peers; a
- * `/api/uploads/<f>` path does not). The real format is sniffed from the
- * leading bytes — the client-supplied name/extension is not trusted — and a
- * non-image payload is rejected with a 400. Returns the bare gallery filename
- * and its `/data/images/` mount path for the caller to store on the record.
+ * `/api/uploads/<f>` path does not). The payload is sniffed by magic bytes —
+ * the client-supplied name/extension is not trusted — and a non-image is
+ * rejected with a 400, then re-encoded to **PNG** so the saved file is a
+ * first-class gallery citizen: it lists in `/image-gen/gallery` and deletes via
+ * `deleteImage`, both of which only manage `.png`. Returns the bare gallery
+ * filename and its `/data/images/` mount path for the caller to store.
  *
  * @param {string} base64Data - Raw base64 (no data: URI prefix) image bytes
  * @returns {Promise<{ filename: string, path: string }>}
@@ -861,10 +863,12 @@ export async function saveUploadedGalleryImage(base64Data) {
   if (!detected) {
     throw new ServerError('Unsupported image format (expected PNG, JPEG, WebP, or GIF)', { status: 400, code: 'UNSUPPORTED_IMAGE' });
   }
-  const filename = `upload-${randomUUID().slice(0, 8)}${detected.ext}`;
+  // Normalize to PNG so the gallery's PNG-only list/delete paths manage it.
+  const png = await sharp(buffer).png().toBuffer();
+  const filename = `upload-${randomUUID().slice(0, 8)}.png`;
   await ensureDir(PATHS.images);
-  await writeFile(join(PATHS.images, filename), buffer);
-  console.log(`📥 Saved uploaded gallery image: ${filename} (${(buffer.length / 1024).toFixed(0)}KB, ${detected.mime})`);
+  await writeFile(join(PATHS.images, filename), png);
+  console.log(`📥 Saved uploaded gallery image: ${filename} (${(png.length / 1024).toFixed(0)}KB PNG, from ${detected.mime})`);
   return { filename, path: `/data/images/${filename}` };
 }
 
