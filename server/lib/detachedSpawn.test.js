@@ -4,7 +4,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { spawnDetached, reapDetached } from './detachedSpawn.js';
+import { spawnDetached, reapDetached, reapAndCleanDetachedDirs } from './detachedSpawn.js';
 
 const execFileAsync = promisify(execFile);
 const dirs = [];
@@ -209,6 +209,31 @@ describe('spawnDetached', () => {
       const controlDir = await tmpControlDir();
       const res = await reapDetached(controlDir, { graceMs: 200, pollMs: 25 });
       expect(res.reaped).toBe(false);
+    });
+  });
+
+  describe('reapAndCleanDetachedDirs', () => {
+    it('reaps every surviving orphan under the parent and removes the dirs', async () => {
+      const parent = await tmpControlDir();
+      const a = join(parent, 'job-a');
+      const b = join(parent, 'job-b');
+      const hA = await spawnDetached('sh', ['-c', 'sleep 30'], { controlDir: a, pollMs: 25 });
+      const hB = await spawnDetached('sh', ['-c', 'sleep 30'], { controlDir: b, pollMs: 25 });
+      const closedA = onClose(hA);
+      const closedB = onClose(hB);
+      await new Promise((r) => setTimeout(r, 50));
+      const res = await reapAndCleanDetachedDirs(parent);
+      expect(res.reaped).toBe(2);
+      expect(res.scanned).toBe(2);
+      expect(await stat(a).then(() => true).catch(() => false)).toBe(false);
+      expect(await stat(b).then(() => true).catch(() => false)).toBe(false);
+      await Promise.all([closedA, closedB]);
+    });
+
+    it('returns zero for a missing or empty parent', async () => {
+      const parent = await tmpControlDir();
+      const res = await reapAndCleanDetachedDirs(join(parent, 'does-not-exist'));
+      expect(res).toEqual({ reaped: 0, scanned: 0 });
     });
   });
 });

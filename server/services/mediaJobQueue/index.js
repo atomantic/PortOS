@@ -33,7 +33,7 @@ import { randomUUID } from 'crypto';
 import { unlink } from 'fs/promises';
 import { join, resolve as pathResolve, sep as PATH_SEP } from 'path';
 import { PATHS, readJSONFile, atomicWrite, ensureDir, sleep } from '../../lib/fileUtils.js';
-import { reapDetached } from '../../lib/detachedSpawn.js';
+import { reapAndCleanDetachedDirs } from '../../lib/detachedSpawn.js';
 import {
   broadcastSse,
   attachSseClient as attachSse,
@@ -258,18 +258,19 @@ export async function initMediaJobQueue() {
     const data = await readJSONFile(JOBS_FILE, { jobs: [] });
     const persistedJobs = Array.isArray(data?.jobs) ? data.jobs : [];
     const restartedFailedIds = [];
+    // Video renders spawn a detached child that survives a pm2 restart, so an
+    // interrupted render may still be alive and holding the GPU. Reap every
+    // orphan under data/videos/.detached (and clean the scratch dirs) BEFORE
+    // freeing lanes below — a job-id keyed reap would miss chained renders,
+    // whose live child lives under a random inner chunk id, not the outer queue
+    // job id. (Training children are reaped in initLoraTraining, which knows
+    // each run's dir.) This runs before the worker starts, so every dir present
+    // is an orphan from the prior process.
+    const videoReap = await reapAndCleanDetachedDirs(join(PATHS.videos, '.detached')).catch(() => ({ reaped: 0 }));
+    if (videoReap.reaped) console.log(`🧹 reaped ${videoReap.reaped} surviving render(s) on boot`);
+
     for (const j of persistedJobs) {
       if (j.status === 'running') {
-        // Video renders spawn a detached child that survives a pm2 restart, so
-        // the persisted 'running' job may still be alive. Reap it (SIGTERM →
-        // SIGKILL) before freeing the lane, else the orphan keeps consuming the
-        // GPU while a newly-dequeued job runs concurrently. (Training children
-        // are reaped in initLoraTraining, which knows their run dir.)
-        if (j.kind === 'video') {
-          // eslint-disable-next-line no-await-in-loop
-          const reaped = await reapDetached(join(PATHS.videos, '.detached', j.id)).catch(() => ({ reaped: false }));
-          if (reaped.reaped) console.log(`🧹 reaped surviving render pid ${reaped.pid} for job ${j.id.slice(0, 8)}`);
-        }
         const failed = {
           ...j,
           status: 'failed',
