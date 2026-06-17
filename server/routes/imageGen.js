@@ -402,7 +402,7 @@ router.post('/models/verify', asyncHandler(async (req, res) => {
   const results = await Promise.all(models.map(async (m) => {
     const required = requiredReposForModel(m) || [];
     const verifies = await Promise.all(required.map((r) => verifyModelCache(r, { deep })));
-    return { id: m.id, ...(aggregateVerifies(verifies) || { status: 'missing', badFiles: [] }) };
+    return { id: m.id, ...(aggregateVerifies(verifies) || { status: 'missing', checkedDeep: deep, badFiles: [] }) };
   }));
   res.json({ deep, models: results });
 }));

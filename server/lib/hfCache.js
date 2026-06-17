@@ -143,13 +143,23 @@ export const isModelCached = async (repoId) => (await inspectModelCache(repoId))
 //     header-length prefix + the JSON header and confirm the file is at least
 //     `8 + headerLen + max(data_offsets.end)` bytes long. Catches truncation
 //     and corrupt headers without loading a single tensor.
-//   deep (opt-in) — hash each weight file and compare against HuggingFace's
+//   deep (opt-in) — hash a weight file and compare against HuggingFace's
 //     published content hash. We get that hash for free, *with no network*:
 //     HF names each cache blob by its etag, which for LFS weight files IS the
 //     sha256 of the content. The snapshot file is a symlink into
 //     `../../blobs/<sha256>`, so the symlink target's basename is the expected
 //     digest. (Non-LFS files are named by a git sha1 — skipped, they're tiny
 //     config/tokenizer files we don't treat as weights anyway.)
+//
+// Coverage caveat: the structural check is `.safetensors`-only, and the deep
+// check only fires for a sha256-named LFS cache blob. A weight file that is
+// neither — a non-`.safetensors` format (`.ckpt`/`.bin`/`.pt`/`.gguf`), or a
+// real on-disk copy materialized by a `--local-dir` BYOV install rather than a
+// symlinked cache blob — gets only the existence/non-zero check and is reported
+// `ok` with reason `'size-only'` (its bytes were NOT content-verified). The
+// targeted "mosaic" failure mode is a corrupt LFS-cached `.safetensors`, which
+// both checks cover; `'size-only'` is surfaced per-file so a caller can tell a
+// verified file from one that was only existence-checked.
 // ---------------------------------------------------------------------------
 
 const SAFETENSORS_MAX_HEADER_BYTES = 100_000_000; // 100MB — far above any real header
