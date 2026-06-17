@@ -281,7 +281,7 @@ export const SHAPE_GUIDANCE_NONE = '(no Vonnegut story shape selected — the ve
 // generation without adding a new template variable — and therefore without a
 // stage-prompt migration. Returns the guidance unchanged when there's no
 // enabled clock.
-function appendTickingClock(shapeGuidance, arc) {
+export function appendTickingClock(shapeGuidance, arc) {
   const clock = renderTickingClock(arc?.tickingClock);
   return clock ? `${shapeGuidance}\n\n${clock}` : shapeGuidance;
 }
