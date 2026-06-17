@@ -342,6 +342,10 @@ export default function Importer() {
     setIssueSplitError(result.issueSplitError || null);
     setArcAlreadyPersisted(false);
     setReplaceMode(false);
+    // Re-arm the AI-cleanup opt-in off for each fresh analysis — it's
+    // off-by-default (one LLM call per issue), so a prior import's choice must
+    // not silently carry into a different source analyzed in the same session.
+    setCleanupFormatting(false);
     setConfig((c) => ({
       ...c,
       ...(Number.isFinite(result.limits?.sourceCharLimit) ? { sourceCharLimit: result.limits.sourceCharLimit } : {}),
