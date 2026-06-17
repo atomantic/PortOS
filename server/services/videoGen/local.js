@@ -18,6 +18,7 @@ import { homedir, tmpdir, totalmem } from 'os';
 import { randomUUID } from 'crypto';
 import { promisify } from 'util';
 import { ensureDir, PATHS, readJSONFile, atomicWrite, UUID_RE } from '../../lib/fileUtils.js';
+import { spawnDetached } from '../../lib/detachedSpawn.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { videoGenEvents } from './events.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, PYTHON_NOISE_RE } from '../../lib/sseUtils.js';
@@ -943,7 +944,20 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   // long inference loops emit nothing to handleLine() for minutes — the UI
   // looks dead even when the model is making progress.
   childEnv.PYTHONUNBUFFERED = '1';
-  const proc = spawn(bin, args, { env: childEnv, stdio: ['ignore', 'pipe', 'pipe'] });
+  // `spawnDetached` double-forks the render child so it reparents to init
+  // (PPID=1) and leaves pm2's process tree — without this a `pm2 restart
+  // portos-server` (e.g. on the memory ceiling) SIGINTs the in-flight render
+  // mid-inference, since pm2's TreeKill walks PPIDs. (This child previously had
+  // no detach at all, so it was fully exposed.) Output streams through on-disk
+  // log files under `data/videos/.detached/<jobId>` that the server tails; we
+  // still `proc.kill()` it directly by PID on cancel / watchdog. `cleanup: true`
+  // lets the helper drop that scratch dir on every terminal path (close/error)
+  // so it can't accumulate under data/videos.
+  const proc = await spawnDetached(bin, args, {
+    env: childEnv,
+    controlDir: join(PATHS.videos, '.detached', jobId),
+    cleanup: true,
+  });
   activeProcess = proc;
 
   // Panel-side completion watchdog. Armed once we see the render's completion

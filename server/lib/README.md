@@ -122,6 +122,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `openFolder.js` | `openFolderInSystemExplorer(localPath)` — cross-platform "open in Finder/Explorer/Nautilus" via detached spawn; child `error` handler prevents spawn failures from crashing the process. |
 | `bufferedSpawn.js` | `bufferedSpawn(cmd, args, opts)` (structured non-throwing result) + `bufferedSpawnOrThrow` (throwing adapter), plus `killProcessTree`, `needsShell`, `IS_WIN32`, `WIN_CMD_SHIMS`, `MAX_OUTPUT_BYTES` — shared buffered-spawn machinery with capped stdout/stderr, timeout-kill, and Windows `taskkill /T /F` tree-kill. Used by `appBuilder.js` and `appUpdater.js`. |
 | `commandSecurity.js` | Allowlist of safe shell commands. |
+| `detachedSpawn.js` | `spawnDetached(bin, args, {controlDir,env,cwd})` → ChildProcess-like handle for a long media job that SURVIVES `pm2 restart portos-server`. A pure-`sh` double-fork reparents the job to init (escaping pm2's PPID-based TreeKill — `detached:true` alone doesn't, since it only changes the process group); the server tails on-disk log files for `stdout`/`stderr`/`close`. Used by loraTraining + videoGen. |
 | `execGit.js` | `execGit` utility imported by `git.js` + worktree manager. |
 | `ffmpeg.js` | Shared ffmpeg helpers (videoGen + videoTimeline). |
 | `gitArgs.js` | `PROTECTED_BRANCHES`, `validateFilePaths(files)` — pure command-arg builders/validators for `git.js` (reject injection/traversal in staged paths). |

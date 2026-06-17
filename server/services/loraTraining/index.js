@@ -23,6 +23,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { v4 as uuidv4 } from '../../lib/uuid.js';
 import { hfTokenEnv } from '../../lib/hfToken.js';
 import { safeChildProcessEnv } from '../../lib/processEnv.js';
+import { spawnDetached } from '../../lib/detachedSpawn.js';
 import { getImageModels } from '../../lib/mediaModels.js';
 import { resolveFlux2Python, isFlux2VenvHealthy } from '../../lib/pythonSetup.js';
 import { getSettings } from '../settings.js';
@@ -527,18 +528,19 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
   childEnv.PYTHONUNBUFFERED = '1';
 
   console.log(`🏋️ training [${shortId(jobId)}] spawn ${basename(bin)} ${run.runtime} steps=${run.params.steps} rank=${run.params.rank} images=${manifest.images.length}${resumeCheckpoint ? ` resume=${basename(resumeCheckpoint)}` : ''}`);
-  // `detached: true` puts the trainer in its OWN process group. Without it the
-  // child sits in the server's group, so when pm2 restarts portos-server — e.g.
-  // on the `max_memory_restart` 2 GB ceiling, which a long session crosses
-  // routinely — the SIGINT pm2 sends to the group reaches the trainer too and
-  // kills it mid-run (observed twice: SIGINT/KeyboardInterrupt at the exact
-  // second of a server restart, losing hours of GPU work to a process unrelated
-  // to training). Detaching isolates the multi-hour trainer from the server's
-  // lifecycle. We still keep `proc` and `proc.kill()` it directly on cancel
-  // (signals the child PID, not the group), and DON'T `.unref()` — the queue
-  // worker awaits the 'close' event, so the child must keep the worker's
-  // promise alive for the run lifecycle.
-  const proc = spawn(bin, args, { env: childEnv, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+  // `spawnDetached` double-forks the trainer so it reparents to init (PPID=1)
+  // and leaves pm2's process tree entirely. A plain `detached: true` child only
+  // gets its OWN process group — but pm2's TreeKill keys on PPID, not the group,
+  // so the still-PPID-linked trainer was found and SIGINT'd anyway whenever
+  // portos-server restarted (e.g. on the memory ceiling, which a long session
+  // crosses routinely — observed twice: SIGINT/KeyboardInterrupt at the exact
+  // second of a server restart, losing hours of GPU work). The detached trainer
+  // streams stdout/stderr through on-disk log files under `<runDir>/.detached`
+  // that the server tails. We still `proc.kill()` it directly by PID on cancel,
+  // and the queue worker awaits the 'close' event for the run lifecycle. No
+  // `cleanup` — those logs are the only copy of raw trainer stdout/stderr, kept
+  // in the run dir for post-mortem and removed when the run dir is deleted.
+  const proc = await spawnDetached(bin, args, { env: childEnv, controlDir: join(dir, '.detached') });
   activeProcess = proc;
   activeJobId = jobId;
 

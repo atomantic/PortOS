@@ -82,10 +82,12 @@ vi.mock('fs/promises', () => ({
   copyFile: vi.fn(async () => {}),
 }));
 
-// Spawn mock — returns a fake EventEmitter-like process that completes
-// immediately with exit code 0.
-vi.mock('child_process', () => {
-  const makeProc = () => {
+// Fake EventEmitter-like process that completes immediately with exit code 0.
+// Shared shape for both the child_process spawn mock (ffmpeg/probe) and the
+// detachedSpawn mock (the render child). Hoisted so the vi.mock factories
+// (themselves hoisted above normal declarations) can reference it.
+const { makeProc } = vi.hoisted(() => ({
+  makeProc: () => {
     const listeners = {};
     const proc = {
       pid: 12345,
@@ -103,12 +105,20 @@ vi.mock('child_process', () => {
       listeners.close?.(0, null);
     });
     return proc;
-  };
-  return {
-    spawn: vi.fn(() => makeProc()),
-    execFile: vi.fn((_bin, _args, _opts, cb) => cb?.(null, '', '')),
-  };
-});
+  },
+}));
+
+vi.mock('child_process', () => ({
+  spawn: vi.fn(() => makeProc()),
+  execFile: vi.fn((_bin, _args, _opts, cb) => cb?.(null, '', '')),
+}));
+
+// The render child now goes through spawnDetached (double-fork survival of a
+// pm2 restart). Mock it to the same fake proc, async since spawnDetached
+// resolves once the PID is known.
+vi.mock('../../lib/detachedSpawn.js', () => ({
+  spawnDetached: vi.fn(async () => makeProc()),
+}));
 
 // ─── module under test ───────────────────────────────────────────────────────
 // Import AFTER all vi.mock calls so the hoisted mocks are in place.
@@ -355,9 +365,10 @@ describe('generateChainedVideo — extend chain arg routing', () => {
 
 describe('generateVideo — ltx2 FFLF image resizing', () => {
   it('resizes both start and end frames before passing them to the ltx2 helper', async () => {
-    const { execFile, spawn } = await import('child_process');
+    const { execFile } = await import('child_process');
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
     const execFileMock = vi.mocked(execFile);
-    const spawnMock = vi.mocked(spawn);
+    const spawnMock = vi.mocked(spawnDetached);
     execFileMock.mockClear();
     spawnMock.mockClear();
 
@@ -407,8 +418,8 @@ describe('generateVideo — PORTOS_T2V_TWO_STAGE arg threading', () => {
   // Node-side override + --stage2-steps threading is observable end-to-end
   // (the pure-helper test can't see buildLtx2Args).
   const renderArgsFor = async (jobId) => {
-    const { spawn } = await import('child_process');
-    const spawnMock = vi.mocked(spawn);
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const spawnMock = vi.mocked(spawnDetached);
     spawnMock.mockClear();
     await generateVideo({
       jobId,
@@ -647,10 +658,7 @@ describe('generateVideo — panel-side completion watchdog', () => {
     };
   }
 
-  let restoreSpawn;
   beforeEach(async () => {
-    const { spawn } = await import('child_process');
-    restoreSpawn = vi.mocked(spawn).getMockImplementation();
     vi.useFakeTimers();
   });
 
@@ -665,9 +673,9 @@ describe('generateVideo — panel-side completion watchdog', () => {
     vi.resetModules();
     ({ generateVideo } = await import('./local.js'));
 
-    const { spawn } = await import('child_process');
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
     const hang = makeHangingProc();
-    vi.mocked(spawn).mockImplementationOnce(() => hang.proc);
+    vi.mocked(spawnDetached).mockImplementationOnce(async () => hang.proc);
 
     generateVideo({
       jobId: 'watchdog-json-hang',
@@ -699,9 +707,9 @@ describe('generateVideo — panel-side completion watchdog', () => {
     vi.resetModules();
     ({ generateVideo } = await import('./local.js'));
 
-    const { spawn } = await import('child_process');
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
     const hang = makeHangingProc();
-    vi.mocked(spawn).mockImplementationOnce(() => hang.proc);
+    vi.mocked(spawnDetached).mockImplementationOnce(async () => hang.proc);
 
     generateVideo({
       jobId: 'watchdog-mux-hang',
@@ -730,9 +738,9 @@ describe('generateVideo — panel-side completion watchdog', () => {
     vi.mocked(existsSync).mockReturnValue(true);
     vi.mocked(statSync).mockReturnValue({ size: 1000 });
 
-    const { spawn } = await import('child_process');
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
     const hang = makeHangingProc();
-    vi.mocked(spawn).mockImplementationOnce(() => hang.proc);
+    vi.mocked(spawnDetached).mockImplementationOnce(async () => hang.proc);
 
     const events = [];
     const onCompleted = (e) => events.push(['completed', e]);
@@ -773,9 +781,9 @@ describe('generateVideo — panel-side completion watchdog', () => {
     ({ generateVideo } = await import('./local.js'));
     ({ videoGenEvents } = await import('./events.js'));
 
-    const { spawn } = await import('child_process');
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
     const hang = makeHangingProc();
-    vi.mocked(spawn).mockImplementationOnce(() => hang.proc);
+    vi.mocked(spawnDetached).mockImplementationOnce(async () => hang.proc);
 
     const events = [];
     const onCompleted = (e) => events.push(['completed', e]);
@@ -810,9 +818,9 @@ describe('generateVideo — panel-side completion watchdog', () => {
     vi.resetModules();
     ({ generateVideo } = await import('./local.js'));
 
-    const { spawn } = await import('child_process');
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
     const hang = makeHangingProc();
-    vi.mocked(spawn).mockImplementationOnce(() => hang.proc);
+    vi.mocked(spawnDetached).mockImplementationOnce(async () => hang.proc);
 
     generateVideo({
       jobId: 'watchdog-clean-exit',
@@ -842,9 +850,9 @@ describe('generateVideo — panel-side completion watchdog', () => {
     vi.resetModules();
     ({ generateVideo } = await import('./local.js'));
 
-    const { spawn } = await import('child_process');
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
     const hang = makeHangingProc();
-    vi.mocked(spawn).mockImplementationOnce(() => hang.proc);
+    vi.mocked(spawnDetached).mockImplementationOnce(async () => hang.proc);
 
     generateVideo({
       jobId: 'watchdog-no-marker',
@@ -866,8 +874,8 @@ describe('generateVideo — panel-side completion watchdog', () => {
 
 describe('generateVideo — video LoRA (--user-loras) arg threading', () => {
   it('emits --user-loras JSON with resolved path + strength for ltx2 renders', async () => {
-    const { spawn } = await import('child_process');
-    const spawnMock = vi.mocked(spawn);
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const spawnMock = vi.mocked(spawnDetached);
     spawnMock.mockClear();
 
     await generateVideo({
@@ -893,8 +901,8 @@ describe('generateVideo — video LoRA (--user-loras) arg threading', () => {
   });
 
   it('defaults missing scale to 1.0', async () => {
-    const { spawn } = await import('child_process');
-    const spawnMock = vi.mocked(spawn);
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const spawnMock = vi.mocked(spawnDetached);
     spawnMock.mockClear();
 
     await generateVideo({
@@ -915,8 +923,8 @@ describe('generateVideo — video LoRA (--user-loras) arg threading', () => {
   });
 
   it('omits --user-loras when no LoRAs are passed', async () => {
-    const { spawn } = await import('child_process');
-    const spawnMock = vi.mocked(spawn);
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const spawnMock = vi.mocked(spawnDetached);
     spawnMock.mockClear();
 
     await generateVideo({
@@ -935,8 +943,8 @@ describe('generateVideo — video LoRA (--user-loras) arg threading', () => {
   });
 
   it('routes a bf16 mlx_video LTX model through the generate_av_lora.py wrapper with --user-loras', async () => {
-    const { spawn } = await import('child_process');
-    const spawnMock = vi.mocked(spawn);
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const spawnMock = vi.mocked(spawnDetached);
     spawnMock.mockClear();
 
     await generateVideo({
@@ -968,8 +976,8 @@ describe('generateVideo — video LoRA (--user-loras) arg threading', () => {
   });
 
   it('a non-LoRA mlx_video render still uses the bare generate_av module (no wrapper)', async () => {
-    const { spawn } = await import('child_process');
-    const spawnMock = vi.mocked(spawn);
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const spawnMock = vi.mocked(spawnDetached);
     spawnMock.mockClear();
 
     await generateVideo({
