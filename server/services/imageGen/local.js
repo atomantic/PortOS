@@ -836,6 +836,10 @@ export async function readImageSidecar(filename) {
 // a hand-crafted request can't write an arbitrarily large file into the
 // gallery dir. The Authors page caps its own headshot upload well below this.
 const MAX_GALLERY_UPLOAD_BYTES = 16 * 1024 * 1024;
+// Cap decoded pixels too: a small compressed payload can still decode to a huge
+// canvas (decompression bomb), so the byte ceiling alone isn't enough. Mirrors
+// the cleaner's guard (lib/imageClean.js MAX_PIXELS) — sharp throws past it.
+const MAX_GALLERY_UPLOAD_PIXELS = 96 * 1000 * 1000;
 
 /**
  * Persist user-uploaded image bytes (base64) into the gallery dir under
@@ -866,7 +870,7 @@ export async function saveUploadedGalleryImage(base64Data) {
   // Normalize to PNG so the gallery's PNG-only list/delete paths manage it.
   // `.rotate()` with no args bakes in EXIF orientation before the metadata is
   // dropped, so a camera-JPEG portrait isn't saved sideways/upside-down.
-  const png = await sharp(buffer).rotate().png().toBuffer();
+  const png = await sharp(buffer, { limitInputPixels: MAX_GALLERY_UPLOAD_PIXELS }).rotate().png().toBuffer();
   const filename = `upload-${randomUUID().slice(0, 8)}.png`;
   await ensureDir(PATHS.images);
   await writeFile(join(PATHS.images, filename), png);
