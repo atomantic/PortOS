@@ -19,6 +19,7 @@ import {
   getCatalogStats,
   rerunCatalogMigration,
 } from '../services/apiCatalog';
+import MediaImage from '../components/MediaImage';
 import { payloadSnippet } from '../lib/catalogTypes';
 import { useCatalogTypes } from '../hooks/useCatalogTypes.jsx';
 
@@ -38,21 +39,20 @@ function TypeBadge({ type, getType }) {
 }
 
 // Card thumbnail: the ingredient's portrait (or most recent reference image),
-// resolved from the media library at /data/images/<key>. Falls back to a dimmed
-// Sparkles placeholder when there's no image or the file fails to load, so every
-// card keeps the same footprint and the grid stays aligned.
+// resolved from the media library at /data/images/<key>. With no image we show a
+// dimmed Sparkles placeholder; with one we render through <MediaImage>, which
+// tolerates a not-yet-arrived peer asset (shows "Syncing" and auto-swaps to the
+// live image on the asset-arrived event) instead of permanently breaking on a
+// transient 404. Either way the slot keeps a fixed footprint so the grid aligns.
 function CardThumb({ mediaKey, alt }) {
-  const [failed, setFailed] = useState(false);
-  const showImage = !!mediaKey && !failed;
   return (
     <div className="w-14 h-14 shrink-0 rounded-md overflow-hidden border border-port-border bg-port-bg flex items-center justify-center">
-      {showImage ? (
-        <img
+      {mediaKey ? (
+        <MediaImage
           src={`/data/images/${mediaKey}`}
           alt={alt}
           className="w-full h-full object-cover"
           loading="lazy"
-          onError={() => setFailed(true)}
         />
       ) : (
         <Sparkles size={18} className="text-gray-600" aria-hidden="true" />

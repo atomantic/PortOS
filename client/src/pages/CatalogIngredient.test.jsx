@@ -77,8 +77,14 @@ vi.mock('../services/apiSystem', () => ({ generateImage: vi.fn() }));
 // handed in, simulating a completed render without the socket/job machinery.
 vi.mock('../components/pipeline/MediaJobThumb', async () => {
   const { useEffect } = await import('react');
-  function MockMediaJobThumb({ jobId, onFilename }) {
-    useEffect(() => { if (jobId && onFilename) onFilename(`${jobId}.png`); }, [jobId, onFilename]);
+  // A jobId of 'fail-job' simulates a failed render (drives onStatus); any other
+  // id simulates a completed render (drives onFilename).
+  function MockMediaJobThumb({ jobId, onFilename, onStatus }) {
+    useEffect(() => {
+      if (!jobId) return;
+      if (jobId === 'fail-job') onStatus?.('failed');
+      else onFilename?.(`${jobId}.png`);
+    }, [jobId, onFilename, onStatus]);
     return null;
   }
   return { default: MockMediaJobThumb };
@@ -197,6 +203,21 @@ describe('CatalogIngredient — character sheet', () => {
     await waitFor(() => expect(setCatalogIngredientPortrait).toHaveBeenCalledWith(
       'cat-chr-1', { mediaKey: 'job-1.png' }, { silent: true },
     ));
+  });
+
+  it('re-enables Generate after a failed render (does not get stuck)', async () => {
+    const { generateImage } = await import('../services/apiSystem');
+    generateImage.mockResolvedValue({ jobId: 'fail-job' });
+    renderPage();
+    await waitFor(() => expect(screen.getByDisplayValue('Sharp eyes, ink-stained cuffs.')).toBeTruthy());
+
+    fireEvent.click(screen.getByRole('button', { name: /^Generate$/i }));
+    // The MediaJobThumb stub drives onStatus('failed') for 'fail-job'; the
+    // control must clear the job and re-enable rather than hang on "Generating…".
+    await waitFor(() => {
+      const btn = screen.getByRole('button', { name: /^Generate$/i });
+      expect(btn).toHaveProperty('disabled', false);
+    });
   });
 
   it('disables Generate when the ingredient has no description text', async () => {
