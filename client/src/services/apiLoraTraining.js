@@ -30,6 +30,11 @@ export const createLoraDataset = ({
 
 export const getLoraDataset = (id) => request(`/lora-datasets/${id}`);
 
+// Server-derived variation axes (expressions/outfits for characters; lighting/
+// settings for objects & places) — seeds the generate-batch override chips.
+export const getLoraDatasetVariationAxes = (id, options = {}) =>
+  request(`/lora-datasets/${id}/variation-axes`, options);
+
 export const patchLoraDataset = (id, patch) =>
   request(`/lora-datasets/${id}`, { method: 'PATCH', body: JSON.stringify(patch) });
 

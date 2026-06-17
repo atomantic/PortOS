@@ -208,6 +208,20 @@ export function deriveVariationAxes(character) {
   };
 }
 
+/**
+ * Live variation axes (expression/outfit for characters; lighting/setting for
+ * objects & places) for a dataset's subject — the same vocab the generator
+ * defaults to. Exposed so the generate-batch dialog can seed its override
+ * chips from the server vocab instead of mirroring the object/place axis
+ * constants client-side. Throws 409 when the subject was deleted (mirrors
+ * the generate/slice paths); the caller fetches it silently.
+ */
+export async function getDatasetVariationAxes(datasetId) {
+  const dataset = await getDataset(datasetId);
+  const { subject } = await loadDatasetSubject(dataset);
+  return deriveVariationAxes(subject);
+}
+
 // Load the dataset's live canon subject (generation + slicing both need
 // the current canon, not the dataset's snapshot). 409 when the subject
 // was deleted from the universe after the dataset was created.

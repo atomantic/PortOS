@@ -25,7 +25,7 @@ import {
   reconcileRenderingImages,
   updateImageCaption,
 } from '../services/loraDatasets.js';
-import { generateDatasetImages, sliceReferenceSheet } from '../services/loraDatasetGenerate.js';
+import { generateDatasetImages, getDatasetVariationAxes, sliceReferenceSheet } from '../services/loraDatasetGenerate.js';
 import { attachCaptionSseClient, startCaptionRun } from '../services/loraDatasetCaption.js';
 import { LORA_DATASET_ENTRY_KINDS, computeDatasetReadiness } from '../lib/loraDataset.js';
 
@@ -63,6 +63,13 @@ router.get('/:id', asyncHandler(async (req, res) => {
   // completion hook) before returning — the grid then shows truth.
   const dataset = await reconcileRenderingImages(req.params.id);
   res.json({ ...dataset, readiness: computeDatasetReadiness(dataset) });
+}));
+
+// Live variation axes (expressions/outfits for characters; lighting/settings
+// for objects & places) so the generate-batch dialog seeds its override chips
+// from the server vocab instead of duplicating the object/place axis constants.
+router.get('/:id/variation-axes', asyncHandler(async (req, res) => {
+  res.json(await getDatasetVariationAxes(req.params.id));
 }));
 
 const patchSchema = z.object({

@@ -23,6 +23,7 @@ import ImportGalleryDialog from '../components/loraTraining/ImportGalleryDialog'
 import UniverseCharacterPicker from '../components/loraTraining/UniverseCharacterPicker';
 import {
   getLoraDataset,
+  getLoraDatasetVariationAxes,
   patchLoraDataset,
   uploadLoraDatasetImages,
   sliceLoraDatasetRefSheet,
@@ -205,6 +206,7 @@ export default function LoraDatasetDetail() {
   const [dataset, setDataset] = useState(null);
   const [loadError, setLoadError] = useState(null);
   const [subject, setSubject] = useState(null);
+  const [variationAxes, setVariationAxes] = useState(null);
   const [triggerDraft, setTriggerDraft] = useState(null);
   const [triggerSaving, setTriggerSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -237,6 +239,21 @@ export default function LoraDatasetDetail() {
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dataset?.character?.universeId, dataset?.character?.entryKind, dataset?.character?.entryId]);
+
+  // Object/place variation axes (Lighting/Settings) live as server-side
+  // constants in deriveVariationAxes — fetch them so the generate-batch
+  // override chips render without mirroring the vocab client-side. Characters
+  // seed their chips from live canon (expressions/wardrobes) instead.
+  useEffect(() => {
+    if (!datasetId || subjectKind(dataset) === 'characters') {
+      setVariationAxes(null);
+      return;
+    }
+    getLoraDatasetVariationAxes(datasetId, { silent: true })
+      .then(setVariationAxes)
+      .catch(() => setVariationAxes(null));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [datasetId, dataset?.character?.entryKind]);
 
   // Readiness is derived from the live local images (not the server's snapshot
   // on `dataset.readiness`) so manual caption edits / deletes reflect in the
@@ -353,12 +370,16 @@ export default function LoraDatasetDetail() {
   const recaptionAll = () => startCaption(true);
 
   const expressionOptions = useMemo(
-    () => (subjectKind(dataset) === 'characters' ? (subject?.expressions || []).map((e) => e?.name).filter(Boolean) : []),
-    [dataset, subject],
+    () => (subjectKind(dataset) === 'characters'
+      ? (subject?.expressions || []).map((e) => e?.name).filter(Boolean)
+      : (variationAxes?.expressions || [])),
+    [dataset, subject, variationAxes],
   );
   const outfitOptions = useMemo(
-    () => (subjectKind(dataset) === 'characters' ? (subject?.wardrobes || []).map((w) => w?.name).filter(Boolean) : []),
-    [dataset, subject],
+    () => (subjectKind(dataset) === 'characters'
+      ? (subject?.wardrobes || []).map((w) => w?.name).filter(Boolean)
+      : (variationAxes?.outfits || [])),
+    [dataset, subject, variationAxes],
   );
   const hasReferenceSheet = !!(subject?.referenceSheetImageRef
     || Object.values(subject?.referenceSheets || {}).some(Boolean));

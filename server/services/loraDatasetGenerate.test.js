@@ -1,5 +1,21 @@
-import { describe, it, expect } from 'vitest';
-import { buildDatasetImagePrompt, deriveVariationAxes } from './loraDatasetGenerate.js';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+// Mock the data deps so getDatasetVariationAxes can be exercised without a
+// real universe/dataset store — it's a thin getDataset → live-subject →
+// deriveVariationAxes wrapper, and the live-subject lookup is the part the
+// pure-function tests above can't cover.
+vi.mock('./loraDatasets.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getDataset: vi.fn(),
+}));
+vi.mock('./universeBuilder.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getUniverse: vi.fn(),
+}));
+
+import { buildDatasetImagePrompt, deriveVariationAxes, getDatasetVariationAxes } from './loraDatasetGenerate.js';
+import { getDataset } from './loraDatasets.js';
+import { getUniverse } from './universeBuilder.js';
 
 // Pure-function coverage for the kind-aware prompt builder + variation axes.
 // These are the highest-risk new logic in the object/place feature: a
@@ -104,5 +120,39 @@ describe('deriveVariationAxes', () => {
     const axes = deriveVariationAxes({});
     expect(axes.expressions.length).toBeGreaterThan(0);
     expect(axes.outfits).toEqual(['signature outfit']);
+  });
+});
+
+describe('getDatasetVariationAxes', () => {
+  beforeEach(() => {
+    getDataset.mockReset();
+    getUniverse.mockReset();
+  });
+
+  it('returns lighting/setting axes for an object subject', async () => {
+    getDataset.mockResolvedValue({ character: { entryKind: 'objects', universeId: 'u1', entryId: 'o1' } });
+    getUniverse.mockResolvedValue({ objects: [{ id: 'o1', name: 'Runed Blade' }] });
+
+    const axes = await getDatasetVariationAxes('ds1');
+    expect(axes.expressions).toContain('soft studio lighting');
+    expect(axes.outfits).toContain('plain studio plinth');
+  });
+
+  it('derives character axes from the live canon subject', async () => {
+    getDataset.mockResolvedValue({ character: { entryKind: 'characters', universeId: 'u1', entryId: 'c1' } });
+    getUniverse.mockResolvedValue({
+      characters: [{ id: 'c1', name: 'Kessa', expressions: [{ name: 'smiling' }], wardrobes: [{ name: 'ranger cloak' }] }],
+    });
+
+    const axes = await getDatasetVariationAxes('ds1');
+    expect(axes.expressions).toEqual(['smiling']);
+    expect(axes.outfits).toEqual(['ranger cloak']);
+  });
+
+  it('throws 409 when the subject was deleted from the universe', async () => {
+    getDataset.mockResolvedValue({ character: { entryKind: 'places', universeId: 'u1', entryId: 'gone' } });
+    getUniverse.mockResolvedValue({ places: [] });
+
+    await expect(getDatasetVariationAxes('ds1')).rejects.toMatchObject({ status: 409 });
   });
 });
