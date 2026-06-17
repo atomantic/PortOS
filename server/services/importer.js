@@ -108,6 +108,26 @@ const DEFAULT_SEED_STAGE = 'prose';
 const seedStageFor = (contentType) => CONTENT_TYPE_SEED_STAGE[contentType] || DEFAULT_SEED_STAGE;
 
 /**
+ * One importer progress run: a fresh `runId` plus an `emitProgress(frame)` that
+ * stamps it on each frame and broadcasts via `emitImporterProgress`. The client
+ * uses `runId` to ignore stragglers from a prior run. Emitting is best-effort
+ * UI sugar — a listener throwing must never abort the importer, so the emit
+ * swallows + logs at this boundary. Shared by the analyze phase and the
+ * commit-time reformat pass so both runs broadcast identically.
+ */
+function makeImporterProgressEmitter() {
+  const runId = randomUUID();
+  const emitProgress = (frame) => {
+    try {
+      emitImporterProgress({ runId, ...frame });
+    } catch (err) {
+      console.error(`❌ importer progress emit failed: ${err.message}`);
+    }
+  };
+  return { runId, emitProgress };
+}
+
+/**
  * Best-effort AI cleanup of seeded excerpts at import time (issue #1335). The
  * importer seeds each issue's verbatim `proseExcerpt` straight into its seed
  * stage — which is exactly the PDF/paste-mangled text the editor's Reformat
@@ -131,16 +151,7 @@ export async function reformatSeededExcerpts(issues, { contentType = null } = {}
   const stageId = seedStageFor(contentType);
   const targets = (Array.isArray(issues) ? issues : []).filter((p) => p?.proseExcerpt);
   if (targets.length === 0) return issues;
-  const runId = randomUUID();
-  // Emitting is best-effort UI sugar — never let a listener throw abort the
-  // commit, so swallow + log at this boundary (mirrors analyze's emitProgress).
-  const emit = (frame) => {
-    try {
-      emitImporterProgress({ runId, ...frame });
-    } catch (err) {
-      console.error(`❌ importer reformat progress emit failed: ${err.message}`);
-    }
-  };
+  const { emitProgress: emit } = makeImporterProgressEmitter();
   // Index cleaned text by the original proposal reference so the returned array
   // can be rebuilt without mutating the input objects.
   const cleaned = new Map();
@@ -148,6 +159,9 @@ export async function reformatSeededExcerpts(issues, { contentType = null } = {}
     type: 'start',
     stages: targets.map((p, idx) => ({ id: `reformat-${idx}`, label: `Clean up formatting: ${p.title}` })),
   });
+  // Sequential on purpose: one provider call at a time keeps a 20+ issue import
+  // from fanning out concurrent LLM calls (rough on a local model) and lets the
+  // checklist fill in reading order.
   for (let idx = 0; idx < targets.length; idx++) {
     const proposal = targets[idx];
     emit({ type: 'stage', id: `reformat-${idx}`, status: 'running' });
@@ -159,8 +173,8 @@ export async function reformatSeededExcerpts(issues, { contentType = null } = {}
       return null;
     });
     if (result?.text) cleaned.set(proposal, result.text);
-    // Map both clean outcomes to 'done' and the fallback to 'error' so the
-    // client's existing icon set renders them (no new status to teach the UI).
+    // Clean outcomes → 'done', the verbatim fallback → 'error' (the warning icon
+    // that flags "not cleaned"), reusing the client's existing status icon set.
     emit({ type: 'stage', id: `reformat-${idx}`, status: result ? 'done' : 'error' });
   }
   emit({ type: 'done' });
@@ -763,14 +777,7 @@ export async function analyzeImport({
   // `emitImporterProgress` records each frame into the live snapshot before
   // broadcasting so a socket that (re)connects mid-analyze can be replayed the
   // checklist (see importerEvents.js / socket.js).
-  const runId = randomUUID();
-  const emitProgress = (frame) => {
-    try {
-      emitImporterProgress({ runId, ...frame });
-    } catch (err) {
-      console.error(`❌ importer progress emit failed: ${err.message}`);
-    }
-  };
+  const { emitProgress } = makeImporterProgressEmitter();
   const emitStage = (id, status) => emitProgress({ type: 'stage', id, status });
   emitProgress({ type: 'start', stages: ANALYZE_STAGES });
 

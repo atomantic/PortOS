@@ -749,12 +749,12 @@ function IntakeForm({
 // Live checklist of the analyze phase's AI passes. `stages` is null until the
 // server's first `importer:progress` frame arrives — show a generic spinner in
 // that window so the panel never looks empty between click and first frame.
-function ImporterProgress({ stages }) {
+function ImporterProgress({ stages, message = 'Analyzing source — this runs several AI passes and can take a minute or two.' }) {
   return (
     <div className="bg-port-bg border border-port-border rounded-lg p-4 space-y-2">
       <p className="text-sm font-medium flex items-center gap-2">
         <Loader2 className="w-4 h-4 animate-spin text-port-accent" />
-        Analyzing source — this runs several AI passes and can take a minute or two.
+        {message}
       </p>
       {Array.isArray(stages) && stages.length > 0 ? (
         <ul className="space-y-1.5 mt-2">
@@ -951,26 +951,8 @@ function ReviewPanel({
 
       <IssuesReviewSection issues={issuesDraft} setIssues={setIssuesDraft} seasons={seasonsDraft} arcRoles={arcRoles} excerptLabel={excerptLabel} />
 
-      {committing && cleanupFormatting && Array.isArray(commitProgress) && commitProgress.length > 0 && (
-        <div className="bg-port-bg border border-port-border rounded-lg p-4 space-y-2">
-          <p className="text-sm font-medium flex items-center gap-2">
-            <Loader2 className="w-4 h-4 animate-spin text-port-accent" />
-            Cleaning up formatting — one AI pass per issue.
-          </p>
-          <ul className="space-y-1.5 mt-2">
-            {commitProgress.map((s) => {
-              const { Icon, className } = stageStatusIcon(s.status);
-              return (
-                <li key={s.id} className="flex items-center gap-2 text-sm">
-                  <Icon className={className} />
-                  <span className={s.status === 'running' ? 'text-port-text' : 'text-port-text-muted'}>
-                    {s.label}
-                  </span>
-                </li>
-              );
-            })}
-          </ul>
-        </div>
+      {committing && cleanupFormatting && (
+        <ImporterProgress stages={commitProgress} message="Cleaning up formatting — one AI pass per issue." />
       )}
 
       <div className="sticky bottom-4 flex items-center justify-end gap-2 bg-port-card border border-port-border rounded-lg p-3 shadow-lg">
