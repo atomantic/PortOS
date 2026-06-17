@@ -145,6 +145,56 @@ describe('loraTraining/checkpoints', () => {
     expect(after.previewUrl).toContain('0001188_preview_image_preview_1.png');
   });
 
+  it('dedupes checkpoint cards by step (manual resume re-emits the same step)', () => {
+    // A manual resume is a fresh watcher with an empty `seen` set, so it
+    // re-appends checkpoints that already exist. Same step → one card, and the
+    // entry that captured a real loss wins over a loss-less re-emit; for two
+    // real-loss records the latest (later in append order) wins.
+    const run = buildRun({
+      artifacts: {
+        checkpoints: [
+          { step: 250, path: '0000250_checkpoint.zip', loss: 0.64 },
+          { step: 250, path: '0000250_checkpoint.zip', loss: null }, // re-emit, no loss
+          { step: 500, path: '0000500_checkpoint.zip', loss: 0.7 },
+          { step: 500, path: '0000500_checkpoint.zip', loss: 0.53 }, // later real-loss wins
+        ],
+        samples: ['0000250_preview_image_preview_1.png', '0000500_preview_image_preview_1.png'],
+      },
+    });
+    const list = listRunCheckpoints(run);
+    expect(list.map((c) => c.step)).toEqual([250, 500]); // not [250, 250, 500, 500]
+    expect(list[0].loss).toBe(0.64); // real loss kept over the loss-less re-emit
+    expect(list[1].loss).toBe(0.53); // latest real-loss record wins the tie
+  });
+
+  it('hides the untrained step-0 checkpoint from the deployable list', () => {
+    // mflux's num_iterations==0 monitoring block writes 0000000_checkpoint.zip —
+    // the untrained adapter. Reproduces run 90043893: three step-0 cards with
+    // identical base-model previews collapse to nothing deployable.
+    const run = buildRun({
+      artifacts: {
+        checkpoints: [
+          { step: 0, path: '0000000_checkpoint.zip', loss: null },
+          { step: 0, path: '0000000_checkpoint.zip', loss: null },
+          { step: 0, path: '0000000_checkpoint.zip', loss: null },
+        ],
+        samples: ['0000000_preview_image_preview_1.png'],
+      },
+    });
+    expect(listRunCheckpoints(run)).toEqual([]);
+    // Step 0 is dropped even when real trained checkpoints sit alongside it.
+    const mixed = listRunCheckpoints(buildRun({
+      artifacts: {
+        checkpoints: [
+          { step: 0, path: '0000000_checkpoint.zip', loss: null },
+          { step: 250, path: '0000250_checkpoint.zip', loss: 0.64 },
+        ],
+        samples: ['0000250_preview_image_preview_1.png'],
+      },
+    }));
+    expect(mixed.map((c) => c.step)).toEqual([250]);
+  });
+
   it('resolves the latest on-disk checkpoint zip as the mflux resume point', () => {
     const latest = resolveLatestCheckpointArtifact(buildRun());
     expect(latest).toMatchObject({ step: 500 });
