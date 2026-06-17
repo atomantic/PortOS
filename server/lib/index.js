@@ -112,6 +112,7 @@ export * from './zipStream.js';
 export * from './bashResolver.js';
 export * from './bufferedSpawn.js';
 export * from './commandSecurity.js';
+export * from './detachedSpawn.js';
 export * from './execGit.js';
 export * from './ffmpeg.js';
 export * from './gitArgs.js';
