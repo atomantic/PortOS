@@ -11,6 +11,7 @@ let bridgeFileContents = null; // null = file absent
 const createMemory = vi.fn(async (data) => ({ id: `mem-${data.content?.slice(0, 6) || 'x'}` }));
 const updateMemory = vi.fn(async () => ({ id: 'updated' }));
 const updateMemoryEmbedding = vi.fn(async () => {});
+const deleteMemory = vi.fn(async () => ({ success: true }));
 const generateMemoryEmbedding = vi.fn(async () => [0.1, 0.2, 0.3]);
 const getById = vi.fn();
 const getAll = vi.fn(async () => []);
@@ -28,7 +29,7 @@ vi.mock('../lib/fileUtils.js', () => ({
   PATHS: { brain: '/tmp/test-brain' },
   ensureDir: vi.fn(async () => {}),
 }));
-vi.mock('./memoryBackend.js', () => ({ createMemory, updateMemory, updateMemoryEmbedding }));
+vi.mock('./memoryBackend.js', () => ({ createMemory, updateMemory, updateMemoryEmbedding, deleteMemory }));
 vi.mock('./memoryEmbeddings.js', () => ({ generateMemoryEmbedding }));
 vi.mock('./brainStorage.js', () => {
   const { EventEmitter } = require('events');
@@ -109,6 +110,51 @@ describe('brainMemoryBridge — resyncBrainRecord (issue #1080)', () => {
 
     expect(updateMemory).not.toHaveBeenCalled();
     expect(createMemory).not.toHaveBeenCalled();
+  });
+
+  it('hard-deletes the mapped memory for a tombstoned record when hardDelete:true (local delete, #1318)', async () => {
+    const bridge = await loadBridge();
+    bridgeFileContents = JSON.stringify({ [bridge.bridgeKey('people', 'p2')]: 'mem-existing' });
+    getById.mockResolvedValue(null); // tombstoned
+
+    await bridge.resyncBrainRecord('people', 'p2', { hardDelete: true });
+
+    expect(deleteMemory).toHaveBeenCalledWith('mem-existing', true);
+    expect(updateMemory).not.toHaveBeenCalled();
+    expect(createMemory).not.toHaveBeenCalled();
+  });
+
+  it('soft-archives (never hard-deletes) a tombstoned record when hardDelete is absent (synced delete stays recoverable)', async () => {
+    const bridge = await loadBridge();
+    bridgeFileContents = JSON.stringify({ [bridge.bridgeKey('people', 'p2')]: 'mem-existing' });
+    getById.mockResolvedValue(null);
+
+    await bridge.resyncBrainRecord('people', 'p2'); // sync:applied path — no hardDelete
+
+    expect(updateMemory).toHaveBeenCalledWith('mem-existing', { status: 'archived' });
+    expect(deleteMemory).not.toHaveBeenCalled();
+  });
+
+  it('soft-archives (never hard-deletes) a present-but-archived record even when hardDelete:true', async () => {
+    const bridge = await loadBridge();
+    bridgeFileContents = JSON.stringify({ [bridge.bridgeKey('projects', 'pr1')]: 'mem-proj' });
+    getById.mockResolvedValue({ id: 'pr1', name: 'X', status: 'done', archived: true });
+
+    await bridge.resyncBrainRecord('projects', 'pr1', { hardDelete: true });
+
+    // Archived ≠ deleted — keep it recoverable, do not drop the row.
+    expect(updateMemory).toHaveBeenCalledWith('mem-proj', { status: 'archived' });
+    expect(deleteMemory).not.toHaveBeenCalled();
+  });
+
+  it('no hard-delete call when a deleted record was never mapped', async () => {
+    const bridge = await loadBridge();
+    getById.mockResolvedValue(null);
+
+    await bridge.resyncBrainRecord('people', 'never-seen', { hardDelete: true });
+
+    expect(deleteMemory).not.toHaveBeenCalled();
+    expect(updateMemory).not.toHaveBeenCalled();
   });
 
   it('reactivates an archived memory when its record comes back live (status:active)', async () => {
@@ -246,7 +292,7 @@ describe('brainMemoryBridge — entity :upserted/:deleted route through queueRes
     expect(createMemory).toHaveBeenCalledTimes(50);
   });
 
-  it('routes :deleted through the resync path, archiving the mapped memory', async () => {
+  it('routes a local :deleted through the resync path, HARD-deleting the mapped memory (issue #1318)', async () => {
     const bridge = await loadBridge();
     const { brainEvents } = await import('./brainStorage.js');
     bridge.initBridge();
@@ -256,8 +302,38 @@ describe('brainMemoryBridge — entity :upserted/:deleted route through queueRes
     brainEvents.emit('people:deleted', { id: 'p9' });
     await bridge.flushPendingResync();
 
-    expect(updateMemory).toHaveBeenCalledWith('mem-del', { status: 'archived' });
+    // Real local delete → hard prune (drop row + embedding), NOT soft archive.
+    expect(deleteMemory).toHaveBeenCalledWith('mem-del', true);
+    expect(updateMemory).not.toHaveBeenCalledWith('mem-del', { status: 'archived' });
     expect(createMemory).not.toHaveBeenCalled();
+  });
+
+  it('drops the bridge-map entry after a local hard-delete so a re-create starts fresh', async () => {
+    const bridge = await loadBridge();
+    const { brainEvents } = await import('./brainStorage.js');
+    bridge.initBridge();
+    bridgeFileContents = JSON.stringify({ [bridge.bridgeKey('people', 'p9')]: 'mem-del' });
+    getById.mockResolvedValue(null);
+
+    brainEvents.emit('people:deleted', { id: 'p9' });
+    await bridge.flushPendingResync();
+
+    const map = await bridge.loadBridgeMap();
+    expect(map[bridge.bridgeKey('people', 'p9')]).toBeUndefined();
+  });
+
+  it('hard-deletes the mapped memory on a local journals:deleted (issue #1318)', async () => {
+    const bridge = await loadBridge();
+    const { brainEvents } = await import('./brainStorage.js');
+    bridge.initBridge();
+    bridgeFileContents = JSON.stringify({ [bridge.bridgeKey('journals', '2026-06-09')]: 'mem-day' });
+
+    brainEvents.emit('journals:deleted', { date: '2026-06-09', entry: { id: '2026-06-09' } });
+    // handleJournalDeleted is async; flush the microtask queue.
+    await new Promise((r) => setImmediate(r));
+
+    expect(deleteMemory).toHaveBeenCalledWith('mem-day', true);
+    expect(updateMemory).not.toHaveBeenCalled();
   });
 });
 

@@ -366,7 +366,7 @@ export async function syncAllBrainData({ dryRun = false, refresh = false } = {})
 // we re-read each record's canonical state and re-embed or archive accordingly.
 
 const RESYNC_DEBOUNCE_MS = 250;
-const pendingResync = new Map(); // bridgeKey → { type, id } (dedups repeated touches)
+const pendingResync = new Map(); // bridgeKey → { type, id, hardDelete } (dedups repeated touches)
 let resyncTimer = null;
 let resyncFlushing = false; // single-flight guard so two flushes can't overlap
 
@@ -385,23 +385,61 @@ async function archiveMappedMemory(brainType, id) {
 }
 
 /**
+ * Hard-delete the memory entry mapped to a brain record (issue #1318). Used for
+ * a GENUINE local user delete: archiving the row would hide it from search but
+ * leave the row + its 768-dim embedding in Postgres forever (e.g. ~1,482 dead
+ * vectors after a cleared ChatGPT import). A hard delete drops the row and its
+ * embedding and removes the bridge-map entry so a later create can't collide
+ * with a stale mapping. NOT used for synced-in deletes — those stay soft-
+ * archived (see resyncBrainRecord) so a peer un-delete can resurrect them.
+ */
+async function hardDeleteMappedMemory(brainType, id) {
+  const map = await loadBridgeMap();
+  const key = bridgeKey(brainType, id);
+  const memoryId = map[key];
+  if (!memoryId) return false;
+  await memory.deleteMemory(memoryId, true); // hard: DELETE row + drop embedding
+  delete map[key];
+  await saveBridgeMap();
+  console.log(`🧠🔗 Hard-deleted brain→memory: ${brainType}/${id} → ${memoryId}`);
+  return true;
+}
+
+/**
  * Re-vectorize (or archive) a single brain record from its CANONICAL stored
  * state — used after a peer sync applies a change. Reading the store rather
  * than trusting an event payload makes this self-healing and order-independent:
  * whatever the final converged state is (live record, archived, or tombstoned),
  * the memory copy is brought into line.
  *   - record present & not archived → upsert + re-embed (syncBrainRecord)
- *   - record absent (tombstoned) or archived → archive the mapped memory entry
+ *   - record absent (tombstoned) → hard-delete on a genuine local delete
+ *     (hardDelete), else archive the mapped memory entry (synced/recoverable)
+ *   - record present but archived → archive (always soft — recoverable)
  *   - type not mirrored by the bridge (links/buckets/inbox) → no-op
+ *
+ * @param {object}  [opts]
+ * @param {boolean} [opts.hardDelete=false] The trigger was a real local user
+ *   delete (a `{type}:deleted` event), so a tombstoned record should hard-prune
+ *   the mapped memory row + embedding rather than soft-archive it (issue #1318).
+ *   Synced-in deletes (sync:applied) pass false so they stay resurrectable.
  */
-export async function resyncBrainRecord(brainType, id) {
+export async function resyncBrainRecord(brainType, id, { hardDelete = false } = {}) {
   if (!id || !TYPE_MAP[brainType]) return;
   // getById returns null for tombstones (deleted records), so a synced-in
-  // delete naturally lands in the archive branch.
+  // delete naturally lands in the archive/hard-delete branch.
   const record = brainType === 'journals'
     ? await getJournal(id)
     : await brainStorage.getById(brainType, id);
-  if (!record || record.archived) {
+  if (!record) {
+    // Truly gone (tombstoned). A genuine local user delete hard-prunes the row;
+    // a sync-driven delete stays soft so a peer un-delete can resurrect it.
+    if (hardDelete) await hardDeleteMappedMemory(brainType, id);
+    else await archiveMappedMemory(brainType, id);
+    return;
+  }
+  if (record.archived) {
+    // Present but archived (not deleted) — always soft, never hard-delete, even
+    // if the queued trigger carried a hardDelete intent.
     await archiveMappedMemory(brainType, id);
     return;
   }
@@ -429,8 +467,8 @@ export async function flushPendingResync() {
     while (pendingResync.size > 0) {
       const batch = [...pendingResync.values()];
       pendingResync.clear();
-      for (const { type, id } of batch) {
-        await resyncBrainRecord(type, id).catch((err) => {
+      for (const { type, id, hardDelete } of batch) {
+        await resyncBrainRecord(type, id, { hardDelete }).catch((err) => {
           console.error(`❌ Brain bridge resync failed for ${type}/${id}: ${err.message}`);
         });
       }
@@ -448,9 +486,12 @@ export async function flushPendingResync() {
  */
 export function queueResync(records) {
   if (!Array.isArray(records)) return;
-  for (const { type, id } of records) {
+  for (const { type, id, hardDelete } of records) {
     if (!id || !TYPE_MAP[type]) continue;
-    pendingResync.set(bridgeKey(type, id), { type, id });
+    // Last touch wins on coalesce. A real local `{type}:deleted` carries
+    // hardDelete:true; upserts and synced applies leave it false so a tombstone
+    // they reach stays soft-archived (resurrectable).
+    pendingResync.set(bridgeKey(type, id), { type, id, hardDelete: !!hardDelete });
   }
   if (pendingResync.size === 0 || resyncTimer || resyncFlushing) return;
   resyncTimer = setTimeout(() => {
@@ -498,7 +539,10 @@ export function initBridge() {
   // payload is already stale by flush time still converges correctly.
   for (const type of ['people', 'projects', 'ideas', 'admin', 'memories']) {
     brainEvents.on(`${type}:upserted`, ({ id }) => queueResync([{ type, id }]));
-    brainEvents.on(`${type}:deleted`, ({ id }) => queueResync([{ type, id }]));
+    // A `:deleted` event is a genuine LOCAL user delete (remove() emits it;
+    // applyRemoteRecord is event-silent), so hard-prune the mapped vector row
+    // rather than soft-archive it forever (issue #1318).
+    brainEvents.on(`${type}:deleted`, ({ id }) => queueResync([{ type, id, hardDelete: true }]));
   }
 
   // JSONL appends (digests, reviews)
@@ -541,11 +585,9 @@ function handleJournalUpserted(entry) {
 
 async function handleJournalDeleted(entry) {
   if (!entry?.id) return;
-  const map = await loadBridgeMap();
-  const key = bridgeKey('journals', entry.id);
-  const memoryId = map[key];
-  if (!memoryId) return;
-  memory.updateMemory(memoryId, { status: 'archived' }).catch((err) => {
-    console.error(`❌ Brain bridge archive failed for journals/${entry.id}: ${err.message}`);
-  });
+  // deleteJournal (the local user action) is the only emitter of
+  // 'journals:deleted'; synced-in journal deletes flow through sync:applied →
+  // resyncBrainRecord and stay soft-archived. So a local journal delete hard-
+  // prunes the mapped memory row + embedding (issue #1318).
+  await hardDeleteMappedMemory('journals', entry.id);
 }
