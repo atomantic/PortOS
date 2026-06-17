@@ -82,16 +82,55 @@ export function isTestRunner() {
 // series/issues/story-builder fixtures leaked into the real `portos` DB and
 // federated to peers. INSERT/UPDATE are now blocked too. Schema DDL
 // (CREATE/ALTER/DROP) is still allowed: it is idempotent, carries no row-data,
-// and ensureSchema() needs it to stand up portos_test. Skips leading
-// line/block comments + whitespace before the verb.
-const ROW_WRITE_SQL =
-  /^\s*(?:--[^\n]*\n|\/\*[\s\S]*?\*\/|\s)*(INSERT\s+INTO|UPDATE\s|DELETE\s+FROM|TRUNCATE)\b/i;
+// and ensureSchema() needs it to stand up portos_test.
+//
+// The first cut was `^`-anchored on a single leading verb, which let four
+// less-obvious write forms slip past the "absolute backstop": data-modifying
+// CTEs (`WITH … DELETE …`), `COPY … FROM` imports, `MERGE INTO`, and a write
+// hiding after a leading read in a multi-statement batch (`SELECT 1; DELETE …`).
+// No current store issues those forms, so this was latent rather than
+// exploitable — but the guard is billed as the last line of defense, so it now
+// matches a write verb ANYWHERE, after stripping comments so a keyword named in
+// a comment can't trip it (and a write after a comment can't slip past).
+//
+// Comments are stripped first (not just a leading block) so `-- DELETE FROM x`
+// in a header doesn't false-positive a harmless SELECT, and a write hidden after
+// a non-leading comment is still caught. A `--`/`/*` inside a string literal is a
+// theoretical edge this test-only backstop accepts.
+function stripSqlComments(text) {
+  return text.replace(/--[^\n]*/g, ' ').replace(/\/\*[\s\S]*?\*\//g, ' ');
+}
+
+const ROW_WRITE_PATTERNS = [
+  /\bINSERT\s+INTO\b/i,
+  /\bDELETE\s+FROM\b/i,
+  /\bMERGE\s+INTO\b/i,
+  /\bTRUNCATE\b/i,
+  // UPDATE … SET — the SET clause is what makes it a write, and distinguishes it
+  // from a `SELECT … FOR UPDATE` / `FOR NO KEY UPDATE` row-lock read. `[^;]+?`
+  // keeps the match inside one statement so `… FOR UPDATE; SET search_path …`
+  // (a read followed by a session command) doesn't read as an UPDATE write.
+  /\bUPDATE\b\s+[^;]+?\bSET\b/i,
+  // COPY <table> FROM — an import writes rows. `COPY (query) TO` / `COPY <table>
+  // TO` is an export (read): the `(?!\()` rejects the subquery-export form whose
+  // inner FROM would otherwise match, and requiring FROM before the next `;`
+  // leaves `COPY <table> TO …` (no FROM) alone.
+  /\bCOPY\s+(?!\()[^;]*?\bFROM\b/i,
+];
+
+// True when the SQL performs a row write in any of the recognized forms.
+function isRowWriteSql(text) {
+  const sql = stripSqlComments(text);
+  return ROW_WRITE_PATTERNS.some((re) => re.test(sql));
+}
 
 /**
  * Hard backstop: under the test runner, refuse to MUTATE a non-test database.
- * Throws (fail loudly) on any row write (INSERT/UPDATE/DELETE/TRUNCATE) instead
- * of silently writing — or stranding — real data. Reads (SELECT) and schema DDL
- * are left alone so health/version probes and ensureSchema() still work.
+ * Throws (fail loudly) on any row write — INSERT/UPDATE/DELETE/TRUNCATE/MERGE,
+ * COPY … FROM imports, data-modifying CTEs, and a write hidden in a multi-
+ * statement batch — instead of silently writing (or stranding) real data. Reads
+ * (SELECT, including COPY … TO exports) and schema DDL are left alone so
+ * health/version probes and ensureSchema() still work.
  *
  * Shared by BOTH the pool `query()` wrapper and the per-transaction client in
  * `withTransaction()`. The transaction path is critical: nearly every store
@@ -108,7 +147,7 @@ export function assertWriteAllowed(text) {
     isTestRunner() &&
     !isTestDatabase() &&
     typeof text === 'string' &&
-    ROW_WRITE_SQL.test(text)
+    isRowWriteSql(text)
   ) {
     throw new Error(
       `🛑 Refusing to mutate non-test database '${process.env.PGDATABASE || 'portos'}' under the test runner. ` +
