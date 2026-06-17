@@ -157,6 +157,21 @@ describe('chatgptZipImport service', () => {
       expect(assets.get('file-DOC').file).toBe('file-DOC.csv');
     });
 
+    it('cleans up the streamed temp file when the stream fails (corrupt asset-name map)', async () => {
+      // The asset streams to a <id>.part temp before the name map is parsed; a
+      // corrupt name map throws mid-stream, so the temp must be unlinked rather
+      // than orphaned on disk (the new stream-to-disk cleanup path).
+      const zipPath = await writeZip([
+        ['conversations-000.json', JSON.stringify([{ id: 'c1', title: 'A', mapping: {} }])],
+        ['file-IMG.dat', PNG],
+        ['conversation_asset_file_names.json', 'this is { not valid json'],
+      ]);
+      const assetDir = join(TMP, 'assets');
+      await expect(extractChatgptZip(zipPath, { assetDir })).rejects.toThrow();
+      const written = await readdir(assetDir).catch(() => []);
+      expect(written).toEqual([]);   // no <id>.part temp left behind
+    });
+
     it('cleans up already-written assets and throws a 400 when a conversation shard is corrupt JSON', async () => {
       const zipPath = await writeZip([
         ['conversations-000.json', '[{ "id": "c1", "title": "A", "mapping": {} '], // truncated → JSON.parse throws

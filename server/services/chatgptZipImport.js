@@ -140,7 +140,13 @@ const streamAssetToFile = (entry, filePath, max) => new Promise((resolve, reject
     write(chunk, _enc, cb) {
       size += chunk.length;
       if (size > max) { cb(new Error(`ZIP member exceeds ${max} byte limit`)); return; }
-      if (headLen < SNIFF_BYTES) { head.push(chunk); headLen += chunk.length; }
+      if (headLen < SNIFF_BYTES) {
+        // Keep only the bytes still needed to reach SNIFF_BYTES, so `head` holds
+        // at most SNIFF_BYTES regardless of how the producer chunks the asset.
+        const slice = chunk.subarray(0, SNIFF_BYTES - headLen);
+        head.push(slice);
+        headLen += slice.length;
+      }
       if (out.write(chunk)) cb();
       else out.once('drain', cb);
     },
