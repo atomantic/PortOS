@@ -433,44 +433,48 @@ export async function updateImageCaption(id, imageId, caption) {
 /**
  * Strip the invariant identity fragments shared across most captions (issue
  * #1320) — phrases repeated in nearly every caption bind the character to the
- * caption text instead of the trigger token. Recomputes the shared set
- * server-side (never trusts a client-supplied fragment list) and rewrites every
- * captioned image, leaving each caption with the trigger word + only what
- * varies shot-to-shot. Returns `{ dataset, removedFragments, updatedImages }`;
- * a no-op (nothing shared, or too few captions to analyze) leaves the record
- * untouched and returns an empty `removedFragments`.
+ * caption text instead of the trigger token. The analysis and the rewrite both
+ * run inside the write lock against the SAME record, so the shared set is never
+ * computed from a stale snapshot and applied to a newer one. Recomputes the
+ * shared set server-side (never trusts a client-supplied fragment list) and
+ * rewrites every captioned image, leaving each caption with the trigger word +
+ * only what varies shot-to-shot. Returns `{ dataset, removedFragments,
+ * updatedImages }`; a no-op (nothing shared, or too few captions to analyze)
+ * leaves the record untouched (no write, no updatedAt bump) and returns an empty
+ * `removedFragments`.
  */
 export async function stripSharedCaptionFragments(id) {
-  const current = await requireDataset(id);
-  const { sharedFragments } = analyzeCaptionInvariants(current.images, current.triggerWord);
-  if (!sharedFragments.length) {
-    return {
-      dataset: { ...current, readiness: computeDatasetReadiness(current) },
-      removedFragments: [],
-      updatedImages: 0,
-    };
-  }
-  const toStrip = sharedFragments.map((f) => f.fragment);
+  let removedFragments = [];
   let updatedImages = 0;
-  const next = await updateDataset(id, (record) => ({
-    ...record,
-    images: record.images.map((img) => {
-      // Only rewrite the captions the analysis actually looked at — ready AND
-      // trigger-bearing. A ready caption that lacks the trigger was excluded
-      // from analyzeCaptionInvariants; rewriting it would re-`prefixCaption` the
-      // trigger onto it, silently making an unrelated caption count toward
-      // readiness/the training manifest even when no shared fragment matched.
-      if (img.status !== 'ready' || !captionHasTriggerWord(img.caption, record.triggerWord)) return img;
-      const stripped = stripSharedFragments(img.caption, toStrip, record.triggerWord);
-      if (stripped === img.caption) return img;
-      updatedImages += 1;
-      return { ...img, caption: stripped };
-    }),
-  }));
-  console.log(`🧹 Stripped ${sharedFragments.length} shared caption fragment(s) across ${updatedImages} image(s) — dataset=${id}`);
+  const next = await updateDataset(id, (record) => {
+    const { sharedFragments } = analyzeCaptionInvariants(record.images, record.triggerWord);
+    removedFragments = sharedFragments;
+    // Returning null skips the write entirely (see updateDataset) so a no-op
+    // doesn't bump updatedAt.
+    if (!sharedFragments.length) return null;
+    const toStrip = sharedFragments.map((f) => f.fragment);
+    return {
+      ...record,
+      images: record.images.map((img) => {
+        // Only rewrite the captions the analysis actually looked at — ready AND
+        // trigger-bearing. A ready caption that lacks the trigger was excluded
+        // from analyzeCaptionInvariants; rewriting it would re-`prefixCaption`
+        // the trigger onto it, silently making an unrelated caption count toward
+        // readiness/the training manifest even when no shared fragment matched.
+        if (img.status !== 'ready' || !captionHasTriggerWord(img.caption, record.triggerWord)) return img;
+        const stripped = stripSharedFragments(img.caption, toStrip, record.triggerWord);
+        if (stripped === img.caption) return img;
+        updatedImages += 1;
+        return { ...img, caption: stripped };
+      }),
+    };
+  });
+  if (removedFragments.length) {
+    console.log(`🧹 Stripped ${removedFragments.length} shared caption fragment(s) across ${updatedImages} image(s) — dataset=${id}`);
+  }
   return {
     dataset: { ...next, readiness: computeDatasetReadiness(next) },
-    removedFragments: sharedFragments,
+    removedFragments,
     updatedImages,
   };
 }
