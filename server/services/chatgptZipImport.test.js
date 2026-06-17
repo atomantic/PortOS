@@ -125,6 +125,28 @@ describe('chatgptZipImport service', () => {
       expect(written).not.toContain('chat.html');
     });
 
+    it('streams a large multi-chunk asset to disk intact with the sniffed extension, leaving no .part temp', async () => {
+      // A multi-MB asset forces the read stream to deliver the `.dat` member in
+      // many chunks, exercising the stream-to-disk path (leading bytes sniffed,
+      // the rest written without buffering) and the cross-chunk head capture.
+      const bigPng = Buffer.concat([PNG, Buffer.alloc(5 * 1024 * 1024, 0x7a)]);
+      const assetDir = join(TMP, 'assets');
+      const zipPath = await writeZip([
+        ['conversations-000.json', JSON.stringify([{ id: 'c1', title: 'A', mapping: {} }])],
+        ['file-BIG.dat', bigPng],
+      ]);
+      const { assets, stats } = await extractChatgptZip(zipPath, { assetDir });
+
+      expect(stats.assetCount).toBe(1);
+      expect(assets.get('file-BIG').file).toBe('file-BIG.png');   // sniffed from leading bytes
+
+      const written = (await readdir(assetDir)).sort();
+      expect(written).toEqual(['file-BIG.png']);                  // renamed; no `.part` left behind
+      const bytes = await readFile(join(assetDir, 'file-BIG.png'));
+      expect(bytes.length).toBe(bigPng.length);                   // every chunk landed on disk
+      expect(bytes.equals(bigPng)).toBe(true);                    // content intact end to end
+    });
+
     it('falls back to the friendly-name extension when magic bytes are unknown', async () => {
       const zipPath = await writeZip([
         ['conversations-000.json', JSON.stringify([{ id: 'c1', title: 'A', mapping: {} }])],
