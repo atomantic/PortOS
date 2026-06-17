@@ -167,6 +167,14 @@ const avatarSchema = z.object({
   prompt: z.string().max(2000).optional(),
 });
 
+// Upload a user-supplied image straight into the gallery (`data/images/`) so it
+// rides the existing `image` peer-sync asset path. `data` is base64 (no data:
+// URI prefix); the real format is sniffed server-side, so the schema only caps
+// the encoded string length (~16MB decoded ≈ 21.8M base64 chars).
+const uploadImageSchema = z.object({
+  data: z.string().min(1).max(24 * 1024 * 1024),
+});
+
 // SynthID-defeat regen (issue #912). Body is optional — every field defaults
 // server-side (strength → DEFAULT_REGEN_STRENGTH, steps → the model default,
 // prompt → empty for minimal mutation). An empty/whitespace `prompt` is treated
@@ -332,6 +340,15 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
 router.post('/avatar', asyncHandler(async (req, res) => {
   const data = validateRequest(avatarSchema, req.body);
   res.json(await imageGen.generateAvatar(data));
+}));
+
+// Save an uploaded image into the gallery dir so callers (e.g. author
+// headshots) get a `/data/images/<f>` URL that the peer-sync `image` asset
+// path can transfer — unlike `/api/uploads/<f>`, which is not a pullable
+// asset kind and 404s on a peer.
+router.post('/upload', asyncHandler(async (req, res) => {
+  const { data } = validateRequest(uploadImageSchema, req.body);
+  res.json(await local.saveUploadedGalleryImage(data));
 }));
 
 // Local-only: list image models and LoRAs the local backend can use.

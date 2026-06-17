@@ -19,7 +19,7 @@ import { existsSync, watch as fsWatch } from 'fs';
 import { join, dirname, resolve as resolvePath, sep as PATH_SEP, basename } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
-import { assertSafeFilename, ensureDir, listDirectoryByExtension, PATHS, safeJSONParse, resolveGalleryImage, resolveImageInputPath, tryReadFile } from '../../lib/fileUtils.js';
+import { assertSafeFilename, detectImageFormat, ensureDir, listDirectoryByExtension, PATHS, safeJSONParse, resolveGalleryImage, resolveImageInputPath, tryReadFile } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
 import { imageGenEvents } from '../imageGenEvents.js';
@@ -829,6 +829,43 @@ export async function readImageSidecar(filename) {
     if (raw != null) return { path, metadata: safeJSONParse(raw, {}) };
   }
   return { path: portosSidecar, metadata: {} };
+}
+
+// Cap on uploaded gallery image bytes (decoded). Headshots and similar
+// uploads never need more than a few MB; this is a defense-in-depth ceiling so
+// a hand-crafted request can't write an arbitrarily large file into the
+// gallery dir. The Authors page caps its own headshot upload well below this.
+const MAX_GALLERY_UPLOAD_BYTES = 16 * 1024 * 1024;
+
+/**
+ * Persist user-uploaded image bytes (base64) into the gallery dir under
+ * `data/images/` so the file rides the existing `image` peer-sync asset path
+ * (a record pointing at `/data/images/<f>` ships its bytes to peers; a
+ * `/api/uploads/<f>` path does not). The real format is sniffed from the
+ * leading bytes — the client-supplied name/extension is not trusted — and a
+ * non-image payload is rejected with a 400. Returns the bare gallery filename
+ * and its `/data/images/` mount path for the caller to store on the record.
+ *
+ * @param {string} base64Data - Raw base64 (no data: URI prefix) image bytes
+ * @returns {Promise<{ filename: string, path: string }>}
+ */
+export async function saveUploadedGalleryImage(base64Data) {
+  const buffer = Buffer.from(base64Data, 'base64');
+  if (buffer.length === 0) {
+    throw new ServerError('Empty image upload', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  if (buffer.length > MAX_GALLERY_UPLOAD_BYTES) {
+    throw new ServerError(`Image exceeds maximum size of ${MAX_GALLERY_UPLOAD_BYTES / 1024 / 1024}MB`, { status: 400, code: 'FILE_TOO_LARGE' });
+  }
+  const detected = detectImageFormat(buffer);
+  if (!detected) {
+    throw new ServerError('Unsupported image format (expected PNG, JPEG, WebP, or GIF)', { status: 400, code: 'UNSUPPORTED_IMAGE' });
+  }
+  const filename = `upload-${randomUUID().slice(0, 8)}${detected.ext}`;
+  await ensureDir(PATHS.images);
+  await writeFile(join(PATHS.images, filename), buffer);
+  console.log(`📥 Saved uploaded gallery image: ${filename} (${(buffer.length / 1024).toFixed(0)}KB, ${detected.mime})`);
+  return { filename, path: `/data/images/${filename}` };
 }
 
 export async function listGallery() {

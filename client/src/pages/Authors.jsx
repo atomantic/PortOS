@@ -18,7 +18,7 @@ import useMediaJobProgress from '../hooks/useMediaJobProgress';
 import { DEFAULT_NEGATIVE_PROMPT } from '../lib/imageGenDefaults';
 import { readFileAsBase64 } from '../utils/fileUpload';
 import {
-  listAuthors, createAuthor, updateAuthor, deleteAuthor, uploadFile, generateImage,
+  listAuthors, createAuthor, updateAuthor, deleteAuthor, uploadGalleryImage, generateImage,
   AUTHOR_NAME_MAX, AUTHOR_WRITING_STYLE_MAX, AUTHOR_BIO_MAX,
   AUTHOR_PHYSICAL_DESCRIPTION_MAX, AUTHOR_HEADSHOT_STYLE_MAX, AUTHOR_HEADSHOT_IMAGE_URL_MAX,
 } from '../services/api';
@@ -157,7 +157,10 @@ export default function Authors() {
     setUploadingHeadshot(true);
     const base64 = await readFileAsBase64(file).catch(() => null);
     if (!base64) { setUploadingHeadshot(false); toast.error('Could not read that file'); return; }
-    const uploaded = await uploadFile(base64, file.name).catch((err) => {
+    // Route through the gallery (`/data/images/`) — NOT the generic /uploads
+    // path — so the stored headshot URL rides the `image` peer-sync asset path
+    // and the bytes actually transfer to federated peers (issue #1327).
+    const uploaded = await uploadGalleryImage(base64, { silent: true }).catch((err) => {
       toast.error(err.message || 'Upload failed');
       return null;
     });

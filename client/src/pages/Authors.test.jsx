@@ -10,7 +10,7 @@ vi.mock('../services/api', () => ({
   createAuthor: vi.fn(),
   updateAuthor: vi.fn(),
   deleteAuthor: vi.fn(),
-  uploadFile: vi.fn(),
+  uploadGalleryImage: vi.fn(),
   generateImage: (...a) => generateImage(...a),
   AUTHOR_NAME_MAX: 120,
   AUTHOR_WRITING_STYLE_MAX: 4000,

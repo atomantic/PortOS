@@ -35,6 +35,7 @@ vi.mock('../services/imageGen/index.js', () => ({
     deleteImage: vi.fn(async () => ({ ok: true })),
     assertGalleryFilename: vi.fn(),
     readImageSidecar: vi.fn(async () => ({ path: '', metadata: {} })),
+    saveUploadedGalleryImage: vi.fn(async () => ({ filename: 'upload-abcd1234.png', path: '/data/images/upload-abcd1234.png' })),
   },
 }));
 
@@ -536,6 +537,35 @@ describe('Image Gen Routes', () => {
       expect(response.body.generationId).toBe('gen-004');
       expect(response.body.filename).toBe('default.png');
       expect(response.body.path).toBe('/data/images/default.png');
+    });
+  });
+
+  describe('POST /api/image-gen/upload', () => {
+    it('saves uploaded bytes into the gallery and returns a /data/images path', async () => {
+      imageGen.local.saveUploadedGalleryImage.mockResolvedValue({
+        filename: 'upload-deadbeef.png',
+        path: '/data/images/upload-deadbeef.png',
+      });
+
+      const response = await request(app)
+        .post('/api/image-gen/upload')
+        .send({ data: Buffer.from('fake-png-bytes').toString('base64') });
+
+      expect(response.status).toBe(200);
+      expect(response.body.path).toBe('/data/images/upload-deadbeef.png');
+      // The service receives the raw base64 string (route doesn't pre-decode).
+      expect(imageGen.local.saveUploadedGalleryImage).toHaveBeenCalledWith(
+        Buffer.from('fake-png-bytes').toString('base64'),
+      );
+    });
+
+    it('rejects a missing data field with 400', async () => {
+      const response = await request(app)
+        .post('/api/image-gen/upload')
+        .send({});
+
+      expect(response.status).toBe(400);
+      expect(imageGen.local.saveUploadedGalleryImage).not.toHaveBeenCalled();
     });
   });
 

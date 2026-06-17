@@ -208,6 +208,14 @@ export const generateAvatar = (data) => request('/image-gen/avatar', {
   method: 'POST',
   body: JSON.stringify(data)
 });
+// Save an uploaded image into the gallery (`/data/images/`) and get back its
+// `{ filename, path }`. Use this (not the generic `uploadFile`) when the stored
+// URL must sync to peers — the `image` asset path only ships `/data/images/<f>`.
+export const uploadGalleryImage = (base64Data, options = {}) => request('/image-gen/upload', {
+  method: 'POST',
+  body: JSON.stringify({ data: base64Data }),
+  ...options,
+});
 
 // Tools Registry
 export const getToolsList = () => request('/tools');
