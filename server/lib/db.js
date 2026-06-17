@@ -93,19 +93,39 @@ export function isTestRunner() {
 // matches a write verb ANYWHERE, after stripping comments so a keyword named in
 // a comment can't trip it (and a write after a comment can't slip past).
 //
-// Comments are stripped first (not just a leading block) so `-- DELETE FROM x`
-// in a header doesn't false-positive a harmless SELECT, and a write hidden after
-// a non-leading comment is still caught. A `--`/`/*` inside a string literal is a
-// theoretical edge this test-only backstop accepts.
-function stripSqlComments(text) {
-  return text.replace(/--[^\n]*/g, ' ').replace(/\/\*[\s\S]*?\*\//g, ' ');
+// Normalize the SQL before keyword-matching, in two passes whose order matters:
+//   1. Blank out single-quoted string literals (`''` is Postgres's escaped quote,
+//      consumed by the alternation). This must come FIRST so a literal can neither
+//      HIDE a real write — `SELECT '/*'; DELETE …; SELECT '*/'` would otherwise have
+//      its quote-embedded `/*…*/` stripped as a comment, taking the DELETE with it —
+//      nor MASQUERADE as one (`SELECT 'UPDATE x SET y' AS note` is a read).
+//   2. Strip line/block comments, so a verb named only in a comment (`-- DELETE FROM x`
+//      in a header) doesn't false-positive a harmless SELECT, and a write hidden after
+//      a non-leading comment is still caught.
+// Dollar-quoted bodies (`$$…$$`, used in function definitions) are not unwrapped —
+// stores don't send them, so this test-only backstop accepts that edge.
+function normalizeSqlForMatch(text) {
+  return text
+    .replace(/'(?:''|[^'])*'/g, "''")
+    .replace(/--[^\n]*/g, ' ')
+    .replace(/\/\*[\s\S]*?\*\//g, ' ');
 }
 
+// CREATE TABLE … AS SELECT (CTAS) and the broader DDL family (CREATE/ALTER/DROP)
+// are knowingly NOT matched: ensureSchema() needs DDL to stand up portos_test, and
+// distinguishing a row-copying CTAS from a plain `CREATE TABLE … (col … GENERATED
+// ALWAYS AS (…))` reliably needs paren-aware parsing this regex set deliberately
+// avoids. No store issues CTAS, and the worst case on a mis-pointed run is a stray
+// new table (schema pollution) rather than corruption of existing rows.
 const ROW_WRITE_PATTERNS = [
   /\bINSERT\s+INTO\b/i,
   /\bDELETE\s+FROM\b/i,
   /\bMERGE\s+INTO\b/i,
   /\bTRUNCATE\b/i,
+  // SELECT … INTO <table> creates and populates a new table (a real row write, not
+  // DDL). Reads never carry a standalone INTO, so requiring SELECT before it keeps
+  // this off ordinary queries; INSERT/MERGE INTO are caught by their own patterns.
+  /\bSELECT\b[\s\S]+?\bINTO\b/i,
   // UPDATE … SET — the SET clause is what makes it a write, and distinguishes it
   // from a `SELECT … FOR UPDATE` / `FOR NO KEY UPDATE` row-lock read. `[^;]+?`
   // keeps the match inside one statement so `… FOR UPDATE; SET search_path …`
@@ -120,7 +140,7 @@ const ROW_WRITE_PATTERNS = [
 
 // True when the SQL performs a row write in any of the recognized forms.
 function isRowWriteSql(text) {
-  const sql = stripSqlComments(text);
+  const sql = normalizeSqlForMatch(text);
   return ROW_WRITE_PATTERNS.some((re) => re.test(sql));
 }
 

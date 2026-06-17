@@ -338,6 +338,36 @@ describe('assertWriteAllowed broadened write forms (#1333)', () => {
     ).not.toThrow();
   });
 
+  it('throws on SELECT … INTO (creates and populates a new table)', () => {
+    armProd();
+    expect(() => assertWriteAllowed('SELECT 1 AS x INTO scratch_tbl')).toThrow(
+      /Refusing to mutate/i,
+    );
+    expect(() => assertWriteAllowed('SELECT * INTO copy_authors FROM authors')).toThrow(
+      /Refusing to mutate/i,
+    );
+  });
+
+  it('masks string literals so a quote-embedded comment cannot hide a real write', () => {
+    armProd();
+    // Without literal-masking, the `/*`/`*/` inside the string literals would be
+    // stripped as a block comment, taking the DELETE between them with it — a
+    // false-negative. Masking the literals first leaves the DELETE exposed.
+    expect(() =>
+      assertWriteAllowed("SELECT '/*'; DELETE FROM universes; SELECT '*/'"),
+    ).toThrow(/Refusing to mutate/i);
+  });
+
+  it('does not false-positive on a write phrase that only appears inside a string literal', () => {
+    armProd();
+    expect(() =>
+      assertWriteAllowed("SELECT 'UPDATE x SET y' AS note FROM authors"),
+    ).not.toThrow();
+    expect(() =>
+      assertWriteAllowed("SELECT data FROM authors WHERE note = 'please DELETE FROM me'"),
+    ).not.toThrow();
+  });
+
   it('does not false-positive on SELECT … FOR UPDATE / FOR NO KEY UPDATE row locks', () => {
     armProd();
     expect(() =>
