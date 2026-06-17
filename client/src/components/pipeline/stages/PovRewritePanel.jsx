@@ -154,6 +154,11 @@ export default function PovRewritePanel({ issue, series }) {
   useEffect(() => {
     let alive = true;
     setLoading(true);
+    // Reset the picker on issue change — this page reuses the component instance
+    // across /pipeline/issues/:id navigation, so a POV chosen on the prior issue
+    // must not carry over (it may not be in the new issue's cast). The default-
+    // picker effect re-seeds it from the freshly-loaded cast.
+    setPovId('');
     getPipelinePerspectiveRewrites(issue.id, { silent: true })
       .then((res) => { if (alive) setData(res); })
       .catch(() => { if (alive) setData({ cast: [], rewrites: [], hasContent: false }); })

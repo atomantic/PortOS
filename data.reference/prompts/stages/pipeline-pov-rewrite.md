@@ -11,7 +11,7 @@ You are a fiction author performing a **revision exercise**: rewrite a passage o
 ### Characters
 
 {{#series.characters}}
-- **{{name}}**{{#role}} ({{role}}){{/role}} — {{#physicalDescription}}{{physicalDescription}}{{/physicalDescription}}{{^physicalDescription}}{{description}}{{/physicalDescription}}{{#personality}} | personality: {{personality}}{{/personality}}{{#background}} | background: {{background}}{{/background}}{{#speechAccent}} | accent: {{speechAccent}}{{/speechAccent}}{{#speechPattern}} | speech: {{speechPattern}}{{/speechPattern}}
+- **{{name}}**{{#role}} ({{role}}){{/role}}{{#descriptor}} — {{descriptor}}{{/descriptor}}
 {{/series.characters}}
 
 ## This issue
