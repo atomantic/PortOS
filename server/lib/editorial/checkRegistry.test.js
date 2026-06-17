@@ -291,6 +291,23 @@ describe('relationships.opposition-reversal — deterministic advisory', () => {
     expect(findings[0].problem).toMatch(/hunter\/prey/);
   });
 
+  it('surfaces two DIFFERENT axes on the same pair separately', () => {
+    const findings = run([
+      {
+        id: 'a',
+        name: 'Aria',
+        relationshipLinks: [
+          { id: 'r1', targetCharacterId: 'b', opposition: { axis: 'hunter/prey' } },
+          { id: 'r2', targetCharacterId: 'b', opposition: { axis: 'winner/loser' } },
+        ],
+      },
+      { id: 'b', name: 'Bram' },
+    ]);
+    expect(findings).toHaveLength(2);
+    expect(findings.map((f) => f.problem.match(/axis "([^"]+)"/)[1]).sort())
+      .toEqual(['hunter/prey', 'winner/loser']);
+  });
+
   it('does not surface links without an opposition tag', () => {
     const findings = run([
       { id: 'a', name: 'Aria', relationshipLinks: [{ targetCharacterId: 'b', type: 'ally' }] },

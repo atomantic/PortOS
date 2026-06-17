@@ -326,6 +326,11 @@ function RelationshipRow({ link, idx, others, onUpdate, onRemove, disabled }) {
   const toggleOpposition = () => onUpdate({
     opposition: hasOpposition ? null : { axis: 'custom', thisRole: '', targetRole: '', note: '' },
   });
+  // A link whose target was deleted points at an id no longer in the cast. Show
+  // it as an explicit "(missing)" option so the dangling state is visible and
+  // the select still reflects the stored value (rather than silently snapping to
+  // the first cast member) — the user can re-point it or delete the row.
+  const targetMissing = !!link.targetCharacterId && !others.some((c) => c.id === link.targetCharacterId);
   return (
     <div className={`rounded border ${hasOpposition ? 'border-port-warning/40' : 'border-port-border'} bg-port-bg/40 p-2 space-y-1.5`}>
       <div className="flex items-center gap-1.5">
@@ -336,6 +341,9 @@ function RelationshipRow({ link, idx, others, onUpdate, onRemove, disabled }) {
           aria-label={`relationship ${idx + 1} target character`}
           className={REL_SELECT_CLASS}
         >
+          {targetMissing ? (
+            <option value={link.targetCharacterId}>(missing: {link.targetCharacterId})</option>
+          ) : null}
           {others.map((c) => <option key={c.id} value={c.id}>{c.name || c.id}</option>)}
         </select>
         <select
@@ -413,34 +421,36 @@ function RelationshipsSection({ entry, characters, onPatch, disabled }) {
     : `${links.length} link${links.length === 1 ? '' : 's'}${oppositionCount ? ` · ${oppositionCount} opposing` : ''}`;
   return (
     <CollapsibleSection icon={Users} label="Relationships" summary={summary}>
-      {others.length === 0 ? (
-        <p className="text-[11px] text-gray-500 italic">Add another character to the cast to link relationships.</p>
+      {/* Always render existing rows — even with no other cast — so a stale
+          link (its target was deleted, leaving this the only character) stays
+          removable/repointable instead of being stranded behind the add-cast
+          prompt where the dangling-target check can flag what the UI hides. */}
+      {links.length > 0 ? (
+        <div className="space-y-2">
+          {links.map((link, idx) => (
+            <RelationshipRow
+              key={link.id || `rel-${idx}`}
+              link={link}
+              idx={idx}
+              others={others}
+              onUpdate={(patch) => updateLink(idx, patch)}
+              onRemove={() => removeLink(idx)}
+              disabled={disabled}
+            />
+          ))}
+        </div>
       ) : (
-        <>
-          {links.length === 0 ? (
-            <p className="text-[11px] text-gray-500 italic">No relationships yet.</p>
-          ) : (
-            <div className="space-y-2">
-              {links.map((link, idx) => (
-                <RelationshipRow
-                  key={link.id || `rel-${idx}`}
-                  link={link}
-                  idx={idx}
-                  others={others}
-                  onUpdate={(patch) => updateLink(idx, patch)}
-                  onRemove={() => removeLink(idx)}
-                  disabled={disabled}
-                />
-              ))}
-            </div>
-          )}
-          <button
-            type="button" onClick={addLink} disabled={disabled}
-            className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded border border-port-border text-gray-400 hover:text-white hover:border-gray-500 disabled:opacity-40"
-          >
-            <Plus size={10} /> Add relationship
-          </button>
-        </>
+        <p className="text-[11px] text-gray-500 italic">No relationships yet.</p>
+      )}
+      {others.length === 0 ? (
+        <p className="text-[11px] text-gray-500 italic">Add another character to the cast to {links.length ? 're-point these links' : 'link relationships'}.</p>
+      ) : (
+        <button
+          type="button" onClick={addLink} disabled={disabled}
+          className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded border border-port-border text-gray-400 hover:text-white hover:border-gray-500 disabled:opacity-40"
+        >
+          <Plus size={10} /> Add relationship
+        </button>
       )}
     </CollapsibleSection>
   );

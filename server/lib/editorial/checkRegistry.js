@@ -224,12 +224,14 @@ export const EDITORIAL_CHECKS = [
     run: (ctx) => {
       const { chars, nameById } = relationshipCanon(ctx);
       const findings = [];
-      // Dedupe by the unordered character pair so a reciprocally-tagged
-      // opposition (A→B and B→A both carry an axis) surfaces once, not twice.
+      // Dedupe by the unordered character pair + axis so a reciprocally-tagged
+      // opposition (A→B and B→A on the SAME axis) surfaces once — but two
+      // DIFFERENT axes on the same pair (hunter/prey AND winner/loser) each
+      // surface, since they're distinct payoffs the reader tracks separately.
       const seenPairs = new Set();
       for (const { c, link, targetId } of eachRelationshipLink(chars)) {
         if (!link.opposition?.axis || !nameById.has(targetId)) continue;
-        const pairKey = [c.id, targetId].sort().join('|');
+        const pairKey = `${[c.id, targetId].sort().join('|')}|${link.opposition.axis}`;
         if (seenPairs.has(pairKey)) continue;
         seenPairs.add(pairKey);
         const aName = nameById.get(c.id);

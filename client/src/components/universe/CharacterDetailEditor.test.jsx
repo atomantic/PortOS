@@ -81,6 +81,24 @@ describe('CharacterDetailEditor — Relationships (#1287)', () => {
     });
   });
 
+  it('keeps an existing link removable even when there is no other cast', () => {
+    // Target was deleted, leaving Aria the only character. The link must still
+    // render (with a delete button) instead of being hidden behind the
+    // add-more-cast prompt — otherwise the dangling-target check flags a
+    // problem the UI won't let the user fix.
+    const onPatch = vi.fn();
+    const entry = {
+      ...ARIA,
+      relationshipLinks: [{ id: 'rel-1', targetCharacterId: 'chr-deleted', type: 'rival' }],
+    };
+    render(<CharacterDetailEditor entry={entry} characters={[ARIA]} onPatch={onPatch} />);
+    openRelationships();
+    // Dangling target is surfaced as a "(missing: …)" option.
+    expect(screen.getByText(/missing: chr-deleted/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /remove relationship 1/i }));
+    expect(onPatch).toHaveBeenCalledWith({ relationshipLinks: [] });
+  });
+
   it('shows the opposition count in the collapsed summary', () => {
     const entry = {
       ...ARIA,
