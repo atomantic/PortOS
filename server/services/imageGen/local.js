@@ -864,7 +864,9 @@ export async function saveUploadedGalleryImage(base64Data) {
     throw new ServerError('Unsupported image format (expected PNG, JPEG, WebP, or GIF)', { status: 400, code: 'UNSUPPORTED_IMAGE' });
   }
   // Normalize to PNG so the gallery's PNG-only list/delete paths manage it.
-  const png = await sharp(buffer).png().toBuffer();
+  // `.rotate()` with no args bakes in EXIF orientation before the metadata is
+  // dropped, so a camera-JPEG portrait isn't saved sideways/upside-down.
+  const png = await sharp(buffer).rotate().png().toBuffer();
   const filename = `upload-${randomUUID().slice(0, 8)}.png`;
   await ensureDir(PATHS.images);
   await writeFile(join(PATHS.images, filename), png);
