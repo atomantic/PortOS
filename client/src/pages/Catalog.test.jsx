@@ -199,6 +199,19 @@ describe('Catalog page', () => {
     expect(listCatalogIngredients.mock.calls.length).toBe(callsBefore);
   });
 
+  it('surfaces an error toast (not a success) when the sync reports errors', async () => {
+    rerunCatalogMigration.mockResolvedValue({ stats: { promoted: 0, errors: 2 } });
+    renderCatalog();
+    await waitFor(() => expect(screen.getByText('Echo Saint')).toBeTruthy());
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Sync from Universes/i }));
+    });
+
+    expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/Sync hit 2 errors/i));
+    expect(toast.success).not.toHaveBeenCalledWith(expect.stringMatching(/up to date/i));
+  });
+
   it('renders a card thumbnail when the ingredient has a thumbnail key', async () => {
     listCatalogIngredients.mockResolvedValue({
       items: [{ ...sample[0], thumbnailKey: 'hero.png' }],

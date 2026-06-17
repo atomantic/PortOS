@@ -194,12 +194,23 @@ export default function Catalog() {
     });
     setSyncing(false);
     if (!result) return;
-    const promoted = result?.stats?.promoted ?? result?.promoted ?? 0;
-    toast.success(
-      promoted > 0
-        ? `Synced ${promoted} canon item${promoted === 1 ? '' : 's'} into the catalog`
-        : 'Catalog already up to date with your universes',
-    );
+    // migrateBibleToCatalog catches per-entry failures and reports them in
+    // stats.errors — don't let a partial/failed walk read as "all good."
+    const stats = result?.stats ?? result ?? {};
+    const promoted = stats.promoted ?? 0;
+    const errors = stats.errors ?? 0;
+    if (errors > 0) {
+      toast.error(
+        `Sync hit ${errors} error${errors === 1 ? '' : 's'}` +
+        `${promoted > 0 ? ` (${promoted} promoted)` : ''} — some canon items may still be missing`,
+      );
+    } else {
+      toast.success(
+        promoted > 0
+          ? `Synced ${promoted} canon item${promoted === 1 ? '' : 's'} into the catalog`
+          : 'Catalog already up to date with your universes',
+      );
+    }
     if (promoted > 0) {
       loadItems();
       loadStats();

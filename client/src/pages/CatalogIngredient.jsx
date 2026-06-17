@@ -463,7 +463,7 @@ export default function CatalogIngredient() {
           onAttach={handleAttachMedia}
           onSetPortrait={handleSetPortrait}
           onDetach={handleDetachMedia}
-          genName={record.name}
+          genName={name}
           genDescription={genDescription}
           onGenerated={handleGeneratedImage}
         />
