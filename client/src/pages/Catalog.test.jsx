@@ -7,6 +7,7 @@ vi.mock('../services/apiCatalog', () => ({
   createCatalogIngredient: vi.fn(),
   deleteCatalogIngredient: vi.fn(),
   getCatalogStats: vi.fn(),
+  rerunCatalogMigration: vi.fn(),
 }));
 
 vi.mock('../components/ui/Toast', () => ({
@@ -25,6 +26,7 @@ import {
   createCatalogIngredient,
   deleteCatalogIngredient,
   getCatalogStats,
+  rerunCatalogMigration,
 } from '../services/apiCatalog';
 import { listCatalogTypes } from '../services/apiCatalogTypes';
 import toast from '../components/ui/Toast';
@@ -44,6 +46,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   listCatalogIngredients.mockResolvedValue({ items: sample });
   getCatalogStats.mockResolvedValue({ total: 2, byType: { character: 1, place: 1 } });
+  rerunCatalogMigration.mockResolvedValue({ stats: { promoted: 0 } });
   // Default: system registry only (the hook merges with the static fallback).
   listCatalogTypes.mockResolvedValue({ types: [] });
 });
@@ -156,6 +159,47 @@ describe('Catalog page', () => {
     listCatalogIngredients.mockRejectedValue(new Error('load failed'));
     renderCatalog();
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('load failed'));
+  });
+
+  it('syncs from universes and reloads the list when items were promoted', async () => {
+    rerunCatalogMigration.mockResolvedValue({ stats: { promoted: 3 } });
+    renderCatalog();
+    await waitFor(() => expect(screen.getByText('Echo Saint')).toBeTruthy());
+    const callsBefore = listCatalogIngredients.mock.calls.length;
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Sync from Universes/i }));
+    });
+
+    expect(rerunCatalogMigration).toHaveBeenCalledWith(
+      expect.objectContaining({ force: true, silent: true }),
+    );
+    // A non-zero promote count reloads the list + stats so new items appear.
+    await waitFor(() => expect(listCatalogIngredients.mock.calls.length).toBeGreaterThan(callsBefore));
+    expect(toast.success).toHaveBeenCalledWith(expect.stringMatching(/Synced 3 canon items/i));
+  });
+
+  it('reports an up-to-date catalog without reloading when nothing was promoted', async () => {
+    rerunCatalogMigration.mockResolvedValue({ stats: { promoted: 0 } });
+    renderCatalog();
+    await waitFor(() => expect(screen.getByText('Echo Saint')).toBeTruthy());
+    const callsBefore = listCatalogIngredients.mock.calls.length;
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Sync from Universes/i }));
+    });
+
+    expect(toast.success).toHaveBeenCalledWith(expect.stringMatching(/already up to date/i));
+    expect(listCatalogIngredients.mock.calls.length).toBe(callsBefore);
+  });
+
+  it('renders a card thumbnail when the ingredient has a thumbnail key', async () => {
+    listCatalogIngredients.mockResolvedValue({
+      items: [{ ...sample[0], thumbnailKey: 'hero.png' }],
+    });
+    renderCatalog();
+    const img = await screen.findByAltText('Echo Saint');
+    expect(img.getAttribute('src')).toBe('/data/images/hero.png');
   });
 
   it('renders a user-defined type as a filter chip from the merged registry', async () => {

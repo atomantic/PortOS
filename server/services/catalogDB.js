@@ -686,6 +686,20 @@ export async function reviveDeletedIngredient(id, { type, name, payload = {}, ta
 // directly instead of fetching-then-JS-filtering.
 const INGREDIENT_LIGHT_COLS = 'id, type, name, payload, tags, embedding_model, origin_instance_id, created_at, updated_at, deleted, deleted_at, sync_sequence';
 
+// Correlated subquery that yields the card-thumbnail media key for each row:
+// the live portrait when set, otherwise the most recent live reference image.
+// Non-image media kinds (audio/video/document) are excluded so a card never
+// points an <img> at an unrenderable key. Used only by listIngredients' light
+// path (see the note there).
+const THUMBNAIL_KEY_SUBQUERY = `(
+    SELECT m.media_key FROM catalog_ingredient_media m
+     WHERE m.ingredient_id = catalog_ingredients.id
+       AND m.deleted = false
+       AND m.kind IN ('portrait', 'reference')
+     ORDER BY (m.kind = 'portrait') DESC, m.created_at DESC
+     LIMIT 1
+  ) AS thumbnail_key`;
+
 export async function listIngredients({ type, tag, query: q, limit = 50, offset = 0, includeEmbedding = false, embeddingMissing = false, staleEmbeddingModel = null } = {}) {
   const conditions = ['deleted = false'];
   const params = [];
@@ -721,12 +735,23 @@ export async function listIngredients({ type, tag, query: q, limit = 50, offset 
     ? `ORDER BY ts_rank_cd(search_tsv, websearch_to_tsquery('english', $${qIdx})) DESC, created_at DESC`
     : `ORDER BY created_at DESC`;
   params.push(limit, offset);
-  const cols = includeEmbedding ? '*' : INGREDIENT_LIGHT_COLS;
+  // Card-thumbnail key: the live portrait if one exists, else the most recent
+  // reference image. Mirrors listMediaForIngredient's `(kind='portrait') DESC,
+  // created_at DESC` ordering so the card shows the same image the detail page
+  // treats as the avatar. Scoped to the light-column list path only — the
+  // includeEmbedding admin paths (re-embed/backfill) don't render cards and
+  // don't pay for the correlated subquery. The field rides ALONGSIDE
+  // rowToIngredient's shape (attached below), so the sync/revision payloads
+  // that share rowToIngredient stay untouched.
+  const cols = includeEmbedding ? '*' : `${INGREDIENT_LIGHT_COLS}, ${THUMBNAIL_KEY_SUBQUERY}`;
   const result = await query(
     `SELECT ${cols} FROM catalog_ingredients ${where} ${orderBy} LIMIT $${idx++} OFFSET $${idx}`,
     params,
   );
-  return { items: result.rows.map(rowToIngredient), nextOffset: offset + result.rows.length };
+  return {
+    items: result.rows.map((row) => ({ ...rowToIngredient(row), thumbnailKey: row.thumbnail_key ?? null })),
+    nextOffset: offset + result.rows.length,
+  };
 }
 
 

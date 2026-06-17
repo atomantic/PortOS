@@ -8,15 +8,16 @@
  * extract page. Delete uses an armed two-click confirm (no window.confirm).
  */
 
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { Sparkles, Plus, Search, FileInput, Trash2, Loader2 } from 'lucide-react';
+import { Sparkles, Plus, Search, FileInput, Trash2, Loader2, RefreshCw } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import {
   listCatalogIngredients,
   createCatalogIngredient,
   deleteCatalogIngredient,
   getCatalogStats,
+  rerunCatalogMigration,
 } from '../services/apiCatalog';
 import { payloadSnippet } from '../lib/catalogTypes';
 import { useCatalogTypes } from '../hooks/useCatalogTypes.jsx';
@@ -33,6 +34,30 @@ function TypeBadge({ type, getType }) {
     <span className={`inline-block text-[10px] uppercase tracking-wider px-2 py-0.5 rounded border ${meta.badgeColor}`}>
       {meta.label}
     </span>
+  );
+}
+
+// Card thumbnail: the ingredient's portrait (or most recent reference image),
+// resolved from the media library at /data/images/<key>. Falls back to a dimmed
+// Sparkles placeholder when there's no image or the file fails to load, so every
+// card keeps the same footprint and the grid stays aligned.
+function CardThumb({ mediaKey, alt }) {
+  const [failed, setFailed] = useState(false);
+  const showImage = !!mediaKey && !failed;
+  return (
+    <div className="w-14 h-14 shrink-0 rounded-md overflow-hidden border border-port-border bg-port-bg flex items-center justify-center">
+      {showImage ? (
+        <img
+          src={`/data/images/${mediaKey}`}
+          alt={alt}
+          className="w-full h-full object-cover"
+          loading="lazy"
+          onError={() => setFailed(true)}
+        />
+      ) : (
+        <Sparkles size={18} className="text-gray-600" aria-hidden="true" />
+      )}
+    </div>
   );
 }
 
@@ -57,6 +82,10 @@ export default function Catalog() {
   const [creating, setCreating] = useState(false);
   // Armed-row id for two-click delete (no window.confirm).
   const [armedId, setArmedId] = useState(null);
+  // "Sync from Universes" — re-runs the bible→catalog backfill so canon
+  // characters/places/objects added after the one-time boot promotion show up
+  // in the catalog. In flight while the server walks every universe.
+  const [syncing, setSyncing] = useState(false);
 
   useEffect(() => {
     const t = setTimeout(() => setQ(searchInput.trim()), 300);
@@ -152,6 +181,31 @@ export default function Catalog() {
     loadStats();
   };
 
+  // Re-run the bible→catalog backfill to pull in canon entities that aren't in
+  // the catalog yet (the boot-time promotion only runs once per install, so
+  // characters added to a universe later never get promoted without this).
+  // `force: true` ignores the one-time marker. Idempotent — already-promoted
+  // entries are skipped server-side — so it's safe to click repeatedly.
+  const handleSync = async () => {
+    setSyncing(true);
+    const result = await rerunCatalogMigration({ force: true, silent: true }).catch((err) => {
+      toast.error(err?.message || 'Sync from universes failed');
+      return null;
+    });
+    setSyncing(false);
+    if (!result) return;
+    const promoted = result?.stats?.promoted ?? result?.promoted ?? 0;
+    toast.success(
+      promoted > 0
+        ? `Synced ${promoted} canon item${promoted === 1 ? '' : 's'} into the catalog`
+        : 'Catalog already up to date with your universes',
+    );
+    if (promoted > 0) {
+      loadItems();
+      loadStats();
+    }
+  };
+
   // Single reset path used by Cancel + toolbar toggle + post-submit so all
   // three "form dismissed" paths leave the same clean state — without this,
   // stale name/content text reappears the next time the form opens.
@@ -171,6 +225,18 @@ export default function Catalog() {
           </span>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={handleSync}
+            disabled={syncing}
+            title="Pull canon characters, places, and objects from your universes into the catalog"
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-port-border bg-port-card hover:bg-port-bg text-white text-sm font-medium disabled:opacity-50"
+          >
+            {syncing
+              ? <Loader2 size={16} className="animate-spin" aria-hidden="true" />
+              : <RefreshCw size={16} aria-hidden="true" />}
+            {syncing ? 'Syncing…' : 'Sync from Universes'}
+          </button>
           <Link
             to="/catalog/ingest"
             className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-port-border bg-port-card hover:bg-port-bg text-white text-sm font-medium"
@@ -321,20 +387,23 @@ export default function Catalog() {
               <li key={it.id} className="relative bg-port-card border border-port-border rounded-lg hover:border-port-accent/60 transition-colors">
                 <Link
                   to={`/catalog/${encodeURIComponent(it.type)}/${encodeURIComponent(it.id)}`}
-                  className={`flex flex-col gap-2 p-3 min-h-[88px] ${armed ? 'pr-32' : 'pr-10'}`}
+                  className={`flex gap-3 p-3 min-h-[88px] ${armed ? 'pr-32' : 'pr-10'}`}
                 >
-                  <span className="block text-white font-medium truncate">{name}</span>
-                  <span className="flex items-center gap-1.5 flex-wrap">
-                    <TypeBadge type={it.type} getType={getType} />
-                    {(it.tags || []).slice(0, 4).map((tag) => (
-                      <span key={tag} className="text-[10px] px-1.5 py-0.5 rounded bg-port-bg border border-port-border text-gray-400">
-                        {tag}
-                      </span>
-                    ))}
+                  <CardThumb mediaKey={it.thumbnailKey} alt={name} />
+                  <span className="flex flex-col gap-2 min-w-0 flex-1">
+                    <span className="block text-white font-medium truncate">{name}</span>
+                    <span className="flex items-center gap-1.5 flex-wrap">
+                      <TypeBadge type={it.type} getType={getType} />
+                      {(it.tags || []).slice(0, 4).map((tag) => (
+                        <span key={tag} className="text-[10px] px-1.5 py-0.5 rounded bg-port-bg border border-port-border text-gray-400">
+                          {tag}
+                        </span>
+                      ))}
+                    </span>
+                    {payloadSnippet(it.payload, it.type, 120, getType) ? (
+                      <span className="text-xs text-gray-400 line-clamp-2">{payloadSnippet(it.payload, it.type, 120, getType)}</span>
+                    ) : null}
                   </span>
-                  {payloadSnippet(it.payload, it.type, 120, getType) ? (
-                    <span className="text-xs text-gray-400 line-clamp-3">{payloadSnippet(it.payload, it.type, 120, getType)}</span>
-                  ) : null}
                 </Link>
                 <div className="absolute top-2 right-2">
                   {/* The delete control is a sibling of the <Link>, not a

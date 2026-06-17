@@ -141,6 +141,39 @@ describe('upsertMediaFromPeer', () => {
   });
 });
 
+describe('listIngredients card thumbnail', () => {
+  const ingredientRow = (overrides = {}) => ({
+    id: 'cat-chr-1', type: 'character', name: 'Echo', payload: {}, tags: [],
+    embedding_model: null, origin_instance_id: null,
+    created_at: new Date('2026-01-01T00:00:00Z'), updated_at: new Date('2026-01-01T00:00:00Z'),
+    deleted: false, deleted_at: null, sync_sequence: 1,
+    ...overrides,
+  });
+
+  it('selects the portrait-or-latest-reference media key as thumbnail_key', async () => {
+    const db = await import('../lib/db.js');
+    db.query.mockResolvedValueOnce({ rows: [ingredientRow({ thumbnail_key: 'hero.png' })] });
+    const { items } = await catalogDB.listIngredients({ limit: 10 });
+    // mockResolvedValueOnce bypasses the factory's `calls` push, so read the
+    // captured SQL from the mock's own call log (as the getMaxSequences test does).
+    const sql = db.query.mock.calls.at(-1)[0].replace(/\s+/g, ' ');
+    // The correlated subquery prefers a live portrait, then the most recent
+    // live reference, and excludes unrenderable (audio/video/document) kinds.
+    expect(sql).toMatch(/FROM catalog_ingredient_media m/i);
+    expect(sql).toMatch(/m\.kind IN \('portrait', 'reference'\)/i);
+    expect(sql).toMatch(/ORDER BY \(m\.kind = 'portrait'\) DESC, m\.created_at DESC/i);
+    expect(sql).toMatch(/AS thumbnail_key/i);
+    expect(items[0].thumbnailKey).toBe('hero.png');
+  });
+
+  it('maps a null thumbnail_key (no image attached) to null', async () => {
+    const db = await import('../lib/db.js');
+    db.query.mockResolvedValueOnce({ rows: [ingredientRow({ thumbnail_key: null })] });
+    const { items } = await catalogDB.listIngredients({ limit: 10 });
+    expect(items[0].thumbnailKey).toBeNull();
+  });
+});
+
 describe('getMaxSequences includes the media cursor', () => {
   it('selects MAX(sync_sequence) from catalog_ingredient_media AS media', async () => {
     const db = await import('../lib/db.js');
