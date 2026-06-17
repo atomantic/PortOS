@@ -66,6 +66,28 @@ function nameSimilaritySignals(a, b) {
 }
 
 // ---------------------------------------------------------------------------
+// Shared scaffolding for the relationship-link checks (#1287). All three walk
+// `canon.characters × relationshipLinks`, so the id-bearing character list,
+// the id→name lookup, and the link iteration live here once.
+// ---------------------------------------------------------------------------
+
+// Id-bearing characters + an id→name lookup (falling back to the id when a
+// character is unnamed). The three checks index off this same pair.
+function relationshipCanon(ctx) {
+  const chars = (ctx.canon?.characters || []).filter((c) => c && c.id);
+  return { chars, nameById: new Map(chars.map((c) => [c.id, c.name || c.id])) };
+}
+
+// Yields every relationship link that points somewhere, as { c, link, targetId }.
+function* eachRelationshipLink(chars) {
+  for (const c of chars) {
+    for (const link of (Array.isArray(c.relationshipLinks) ? c.relationshipLinks : [])) {
+      if (link?.targetCharacterId) yield { c, link, targetId: link.targetCharacterId };
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Registry entries.
 // ---------------------------------------------------------------------------
 
@@ -132,36 +154,28 @@ export const EDITORIAL_CHECKS = [
     defaultEnabled: true,
     configSchema: z.object({}),
     run: (ctx) => {
-      const chars = (ctx.canon?.characters || []).filter((c) => c && c.id);
-      const nameById = new Map(chars.map((c) => [c.id, c.name || c.id]));
+      const { chars, nameById } = relationshipCanon(ctx);
       // For O(1) "does B link back to A?" lookups, index every link as a
       // "<source>→<target>" pair key.
       const linkPairs = new Set();
-      for (const c of chars) {
-        for (const link of (Array.isArray(c.relationshipLinks) ? c.relationshipLinks : [])) {
-          if (link?.targetCharacterId) linkPairs.add(`${c.id}→${link.targetCharacterId}`);
-        }
-      }
+      for (const { c, targetId } of eachRelationshipLink(chars)) linkPairs.add(`${c.id}→${targetId}`);
       const findings = [];
-      for (const c of chars) {
-        for (const link of (Array.isArray(c.relationshipLinks) ? c.relationshipLinks : [])) {
-          const targetId = link?.targetCharacterId;
-          // A dangling target (B doesn't exist) is the dangling-target check's
-          // job; reciprocity only speaks to links between two real characters.
-          if (!targetId || !nameById.has(targetId)) continue;
-          if (linkPairs.has(`${targetId}→${c.id}`)) continue;
-          const aName = nameById.get(c.id);
-          const bName = nameById.get(targetId);
-          findings.push({
-            severity: ctx.severityDefault,
-            category: 'continuity',
-            location: `Characters: ${aName} → ${bName}`,
-            problem: `"${aName}" has a ${link.type || 'custom'} link to "${bName}", but "${bName}" has no link back to "${aName}".`,
-            suggestion: `Add a reciprocal relationship link from "${bName}" to "${aName}" (or remove the one-sided link if it's intentional).`,
-            anchorQuote: aName,
-            issueNumber: null,
-          });
-        }
+      for (const { c, link, targetId } of eachRelationshipLink(chars)) {
+        // A dangling target (B doesn't exist) is the dangling-target check's
+        // job; reciprocity only speaks to links between two real characters.
+        if (!nameById.has(targetId)) continue;
+        if (linkPairs.has(`${targetId}→${c.id}`)) continue;
+        const aName = nameById.get(c.id);
+        const bName = nameById.get(targetId);
+        findings.push({
+          severity: ctx.severityDefault,
+          category: 'continuity',
+          location: `Characters: ${aName} → ${bName}`,
+          problem: `"${aName}" has a ${link.type || 'custom'} link to "${bName}", but "${bName}" has no link back to "${aName}".`,
+          suggestion: `Add a reciprocal relationship link from "${bName}" to "${aName}" (or remove the one-sided link if it's intentional).`,
+          anchorQuote: aName,
+          issueNumber: null,
+        });
       }
       return findings;
     },
@@ -178,25 +192,20 @@ export const EDITORIAL_CHECKS = [
     defaultEnabled: true,
     configSchema: z.object({}),
     run: (ctx) => {
-      const chars = (ctx.canon?.characters || []).filter((c) => c && c.id);
-      const idSet = new Set(chars.map((c) => c.id));
-      const nameById = new Map(chars.map((c) => [c.id, c.name || c.id]));
+      const { chars, nameById } = relationshipCanon(ctx);
       const findings = [];
-      for (const c of chars) {
-        for (const link of (Array.isArray(c.relationshipLinks) ? c.relationshipLinks : [])) {
-          const targetId = link?.targetCharacterId;
-          if (!targetId || idSet.has(targetId)) continue;
-          const aName = nameById.get(c.id);
-          findings.push({
-            severity: ctx.severityDefault,
-            category: 'continuity',
-            location: `Character: ${aName}`,
-            problem: `"${aName}" has a ${link.type || 'custom'} relationship link pointing at a character id (${targetId}) that no longer exists in the canon.`,
-            suggestion: 'Re-point the link at an existing character, or delete the stale link.',
-            anchorQuote: aName,
-            issueNumber: null,
-          });
-        }
+      for (const { c, link, targetId } of eachRelationshipLink(chars)) {
+        if (nameById.has(targetId)) continue;
+        const aName = nameById.get(c.id);
+        findings.push({
+          severity: ctx.severityDefault,
+          category: 'continuity',
+          location: `Character: ${aName}`,
+          problem: `"${aName}" has a ${link.type || 'custom'} relationship link pointing at a character id (${targetId}) that no longer exists in the canon.`,
+          suggestion: 'Re-point the link at an existing character, or delete the stale link.',
+          anchorQuote: aName,
+          issueNumber: null,
+        });
       }
       return findings;
     },
@@ -213,33 +222,29 @@ export const EDITORIAL_CHECKS = [
     defaultEnabled: false,
     configSchema: z.object({}),
     run: (ctx) => {
-      const chars = (ctx.canon?.characters || []).filter((c) => c && c.id);
-      const nameById = new Map(chars.map((c) => [c.id, c.name || c.id]));
+      const { chars, nameById } = relationshipCanon(ctx);
       const findings = [];
       // Dedupe by the unordered character pair so a reciprocally-tagged
       // opposition (A→B and B→A both carry an axis) surfaces once, not twice.
       const seenPairs = new Set();
-      for (const c of chars) {
-        for (const link of (Array.isArray(c.relationshipLinks) ? c.relationshipLinks : [])) {
-          const targetId = link?.targetCharacterId;
-          if (!targetId || !link.opposition?.axis || !nameById.has(targetId)) continue;
-          const pairKey = [c.id, targetId].sort().join('|');
-          if (seenPairs.has(pairKey)) continue;
-          seenPairs.add(pairKey);
-          const aName = nameById.get(c.id);
-          const bName = nameById.get(targetId);
-          const { axis, thisRole, targetRole } = link.opposition;
-          const roles = thisRole && targetRole ? ` (${aName}: ${thisRole}, ${bName}: ${targetRole})` : '';
-          findings.push({
-            severity: ctx.severityDefault,
-            category: 'arc',
-            location: `Characters: ${aName} / ${bName}`,
-            problem: `Opposing-force pair tagged on "${aName}" / "${bName}" — axis "${axis}"${roles}.`,
-            suggestion: 'Confirm the reader sees these roles reverse at some point in the arc (or that holding them fixed is the intended payoff).',
-            anchorQuote: aName,
-            issueNumber: null,
-          });
-        }
+      for (const { c, link, targetId } of eachRelationshipLink(chars)) {
+        if (!link.opposition?.axis || !nameById.has(targetId)) continue;
+        const pairKey = [c.id, targetId].sort().join('|');
+        if (seenPairs.has(pairKey)) continue;
+        seenPairs.add(pairKey);
+        const aName = nameById.get(c.id);
+        const bName = nameById.get(targetId);
+        const { axis, thisRole, targetRole } = link.opposition;
+        const roles = thisRole && targetRole ? ` (${aName}: ${thisRole}, ${bName}: ${targetRole})` : '';
+        findings.push({
+          severity: ctx.severityDefault,
+          category: 'arc',
+          location: `Characters: ${aName} / ${bName}`,
+          problem: `Opposing-force pair tagged on "${aName}" / "${bName}" — axis "${axis}"${roles}.`,
+          suggestion: 'Confirm the reader sees these roles reverse at some point in the arc (or that holding them fixed is the intended payoff).',
+          anchorQuote: aName,
+          issueNumber: null,
+        });
       }
       return findings;
     },

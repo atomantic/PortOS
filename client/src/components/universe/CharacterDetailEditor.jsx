@@ -387,6 +387,13 @@ function RelationshipRow({ link, idx, others, onUpdate, onRemove, disabled }) {
 // Relationships section — structured character-to-character links + opposing
 // forces (#1287). Needs the sibling cast (`characters`) to populate the target
 // picker; renders a prompt to add more cast when the character is the only one.
+//
+// Unlike the generic LIST_SECTIONS (ListSectionEditor), this section does NOT
+// use `usePendingListRows`: its primary control is a <select> that commits a
+// VALID row immediately (a new link defaults targetCharacterId to a real cast
+// id), so there's never a pending blank-row-awaiting-required-column to hold.
+// Patching the whole array on each mutation mirrors the list-section
+// onPatchList contract; text fields buffer via useFieldDraft and commit on blur.
 function RelationshipsSection({ entry, characters, onPatch, disabled }) {
   const links = Array.isArray(entry.relationshipLinks) ? entry.relationshipLinks : [];
   const others = (Array.isArray(characters) ? characters : []).filter((c) => c?.id && c.id !== entry.id);
@@ -397,7 +404,10 @@ function RelationshipsSection({ entry, characters, onPatch, disabled }) {
   };
   const updateLink = (idx, patch) => commit(links.map((l, i) => (i === idx ? { ...l, ...patch } : l)));
   const removeLink = (idx) => commit(links.filter((_, i) => i !== idx));
-  const oppositionCount = links.filter((l) => l.opposition?.axis).length;
+  // `!!l.opposition` matches RelationshipRow's `hasOpposition` test — the toggle
+  // always seeds `axis: 'custom'`, so a tagged link always has an axis; using
+  // the same predicate keeps the summary count and the per-row border in sync.
+  const oppositionCount = links.filter((l) => !!l.opposition).length;
   const summary = links.length === 0
     ? 'empty'
     : `${links.length} link${links.length === 1 ? '' : 's'}${oppositionCount ? ` · ${oppositionCount} opposing` : ''}`;

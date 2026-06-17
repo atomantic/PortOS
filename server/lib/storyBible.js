@@ -54,6 +54,7 @@ export const BIBLE_LIMITS = Object.freeze({
   // `description` is per-link prose; `opposition` captures a binary-tension
   // axis (hunter/prey, winner/loser…) the reader watches to see reverse.
   RELATIONSHIP_TARGET_ID_MAX: 64,
+  RELATIONSHIP_TYPE_MAX: 60,
   RELATIONSHIP_DESCRIPTION_MAX: 1000,
   RELATIONSHIP_OPPOSITION_AXIS_MAX: 60,
   RELATIONSHIP_OPPOSITION_ROLE_MAX: 120,
@@ -656,7 +657,7 @@ function sanitizeRelationshipLink(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const targetCharacterId = trimTo(raw.targetCharacterId, BIBLE_LIMITS.RELATIONSHIP_TARGET_ID_MAX);
   if (!targetCharacterId) return null;
-  const typeRaw = trimTo(raw.type, BIBLE_LIMITS.RELATIONSHIP_OPPOSITION_AXIS_MAX);
+  const typeRaw = trimTo(raw.type, BIBLE_LIMITS.RELATIONSHIP_TYPE_MAX);
   const type = RELATIONSHIP_LINK_TYPE_SET.has(typeRaw) ? typeRaw : 'custom';
   const out = {
     id: ensureId(raw.id, 'rel-'),

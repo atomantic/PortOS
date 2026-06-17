@@ -1099,7 +1099,7 @@ const wrOppositionField = z.object({
 const wrRelationshipLinksField = z.array(z.object({
   id: z.string().trim().max(64).optional(),
   targetCharacterId: z.string().trim().min(1).max(BIBLE_LIMITS.RELATIONSHIP_TARGET_ID_MAX),
-  type: z.enum(RELATIONSHIP_LINK_TYPES).or(z.string().trim().max(BIBLE_LIMITS.RELATIONSHIP_OPPOSITION_AXIS_MAX)).optional(),
+  type: z.enum(RELATIONSHIP_LINK_TYPES).or(z.string().trim().max(BIBLE_LIMITS.RELATIONSHIP_TYPE_MAX)).optional(),
   description: z.string().max(BIBLE_LIMITS.RELATIONSHIP_DESCRIPTION_MAX).optional(),
   opposition: wrOppositionField.nullable().optional(),
   locked: z.boolean().optional(),
