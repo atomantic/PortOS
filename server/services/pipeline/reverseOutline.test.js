@@ -125,9 +125,16 @@ describe('generateReverseOutline', () => {
 });
 
 describe('getReverseOutline + staleness', () => {
-  it('returns a none shell when never generated', async () => {
+  it('returns a none shell when never generated but a draft exists', async () => {
     const out = await svc.getReverseOutline(SERIES_ID);
     expect(out.status).toBe('none');
+    expect(out.scenes).toEqual([]);
+  });
+
+  it('returns no-content (not none) when nothing is drafted yet', async () => {
+    sectionsFixture = []; // empty manuscript corpus
+    const out = await svc.getReverseOutline(SERIES_ID);
+    expect(out.status).toBe('no-content');
     expect(out.scenes).toEqual([]);
   });
 

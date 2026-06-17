@@ -295,15 +295,21 @@ function isOutlineStale(outline, corpus) {
 }
 
 /**
- * Read the stored reverse outline with a `stale` flag. Returns a
- * `{ status:'none' }` shell (never null) when one has never been generated, so
- * the route/UI has a consistent shape to render.
+ * Read the stored reverse outline with a `stale` flag. Returns a shell (never
+ * null) when one has never been generated, so the route/UI has a consistent
+ * shape to render — and distinguishes `none` (no outline yet, but there IS
+ * draftable manuscript) from `no-content` (nothing drafted yet). Without that
+ * split the UI prompts the user to "Generate" again after a no-content run
+ * instead of telling them to draft/import first (the generate run reports
+ * `no-content`, so the GET must agree once the page refetches).
  */
 export async function getReverseOutline(seriesId) {
   assertValidSeriesId(seriesId);
   const outline = await readOutline(seriesId);
-  if (!outline) return { ...emptyOutline(), seriesId };
   const { corpus } = await buildManuscriptCorpus(seriesId);
+  if (!outline) {
+    return { ...emptyOutline(), seriesId, status: corpus.trim() ? 'none' : 'no-content' };
+  }
   return { ...outline, seriesId, stale: isOutlineStale(outline, corpus) };
 }
 
