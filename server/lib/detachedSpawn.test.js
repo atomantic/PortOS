@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdtemp, rm, stat } from 'fs/promises';
+import { mkdtemp, rm, stat, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { execFile } from 'child_process';
@@ -140,6 +140,19 @@ describe('spawnDetached', () => {
 
   it('requires a controlDir', async () => {
     await expect(spawnDetached('sh', ['-c', 'true'], {})).rejects.toThrow(/controlDir/);
+  });
+
+  it('surfaces a setup failure as an error event, not a rejection', async () => {
+    // controlDir under a regular FILE → ensureDir fails (ENOTDIR). spawnDetached
+    // must still resolve a handle and emit 'error' so the caller's on('error')
+    // finalization runs (rejecting would strand the run / leak temps).
+    const base = await tmpControlDir();
+    const filePath = join(base, 'not-a-dir');
+    await writeFile(filePath, 'x');
+    const handle = await spawnDetached('sh', ['-c', 'true'], { controlDir: join(filePath, 'sub') });
+    const err = await new Promise((resolve) => handle.on('error', resolve));
+    expect(err).toBeInstanceOf(Error);
+    expect(handle.pid).toBeNull();
   });
 
   it('falls back to a plain spawn on win32 (no POSIX sh double-fork)', async () => {
