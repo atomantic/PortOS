@@ -1024,6 +1024,43 @@ export async function pushRecordToPeer(sub, options = {}) {
       res = await postPayload(legacyPayload);
     }
   }
+  // UNKNOWN-KIND 400 → schema-version block (NOT a bare http-400 retry). When we
+  // introduce a NEW federated record kind (authors did this; mediaCollection had
+  // the same gap when it landed), a peer on an older PortOS whose
+  // `peerSyncPushSchema` discriminated union has no arm for that `kind` rejects
+  // the push at Zod validation with a generic 400 — BEFORE `applyIncomingPush`'s
+  // version gate (the 409 path below) ever runs. So unlike the strip-retry above
+  // there's no smuggled envelope key to drop: the record KIND itself is what the
+  // peer can't parse, and retrying changes nothing. Treat it like the 409:
+  // persist an (empty-gap) `peer-pre-feature` block so the SchemaGapBadge surfaces
+  // "peer needs to update PortOS to sync <kind>" and the edit-push cooldown engages,
+  // instead of letting the sub churn as a bare `http-400` the UI never explains.
+  // The block clears on the next successful push once the peer upgrades (same
+  // recovery as the 409 path). Signal: a VALIDATION_ERROR whose offending field is
+  // the `kind` discriminator — a value WE always send as a valid literal, so the
+  // only reason a receiver faults on `kind` is that its schema doesn't know this
+  // record kind yet (Zod reports `path: ['kind']` with an "Invalid discriminator
+  // value" / "Invalid enum value" message; `validateRequest` keeps path + message).
+  if (res && res.status === 400) {
+    const errBody = await res.clone().json().catch(() => null);
+    const details = Array.isArray(errBody?.context?.details) ? errBody.context.details : [];
+    const unknownKind = errBody?.code === 'VALIDATION_ERROR'
+      && details.some((d) => d?.path === 'kind' && /discriminator|enum/i.test(d?.message || ''));
+    if (unknownKind) {
+      await persistSchemaVersionBlock(sub.id, {
+        ahead: [],
+        behind: [],
+        peerPortosVersion: null,
+        peerSchemaVersions: null,
+        reason: 'peer-pre-feature',
+      });
+      console.warn(
+        `⚠️ peerSync: ${peer.name || peer.instanceId} rejected push — its PortOS doesn't recognize the ` +
+        `'${sub.recordKind}' record kind yet. Re-tries pause until they upgrade.`,
+      );
+      return { pushed: false, reason: 'peer-schema-behind', blockedBySchema: true };
+    }
+  }
   // 409 with `code: SCHEMA_VERSION_AHEAD` means the receiver is on an OLDER
   // PortOS and can't parse our newer storage layout. Persist the gap on the
   // subscription so the Instances UI can surface "Peer X needs to update
@@ -1186,7 +1223,7 @@ async function persistPushSuccess(subId, hash, { confirmedAtMs = Date.now() } = 
  * what the peer has that we don't — informational) along with the peer's
  * PortOS version string for the user-visible message.
  */
-async function persistSchemaVersionBlock(subId, { ahead, behind, peerPortosVersion, peerSchemaVersions }) {
+async function persistSchemaVersionBlock(subId, { ahead, behind, peerPortosVersion, peerSchemaVersions, reason = 'schema-version-ahead' }) {
   // Capture peerId inside the lock so the emitted event carries it — lets each
   // Instances PeerCard filter on its own peer instead of every card refetching.
   let blockedPeerId = null;
@@ -1198,6 +1235,13 @@ async function persistSchemaVersionBlock(subId, { ahead, behind, peerPortosVersi
     const now = new Date().toISOString();
     sub.blockedBySchema = {
       detectedAt: now,
+      // `schema-version-ahead` = the 409 version-gate path (the peer parsed our
+      // envelope but its per-category gate rejected an ahead schema). `peer-pre-feature`
+      // = the 400 unknown-kind path below (the peer's push schema has no arm for
+      // this record kind at all, so it 400s at Zod before the gate runs). Both
+      // surface the same SchemaGapBadge + engage the same cooldown; the marker just
+      // distinguishes them in state/logs.
+      reason,
       ahead: Array.isArray(ahead) ? ahead : [],
       behind: Array.isArray(behind) ? behind : [],
       peerPortosVersion: peerPortosVersion || null,

@@ -3000,6 +3000,89 @@ describe('peerSync', () => {
         // Only ONE call — no retry.
         expect(vi.mocked(peerFetch).mock.calls.length).toBe(1);
       });
+
+      it('records a peer-pre-feature blockedBySchema marker when a peer rejects an unknown record kind (400 invalid discriminator)', async () => {
+        // A peer on an older PortOS whose `peerSyncPushSchema` discriminated
+        // union has no arm for this record kind (authors / mediaCollection when
+        // they first landed) rejects the push at Zod with a generic 400 whose
+        // offending field is the `kind` discriminator — BEFORE its version gate
+        // (the 409 path) ever runs. The sender must NOT treat this as a bare
+        // http-400 (which churns silently); it routes the sub into an empty-gap
+        // schema-version block so the SchemaGapBadge surfaces "peer needs to
+        // update" and the edit-push cooldown engages, exactly like the 409 path.
+        vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo' });
+        const errBody = { ok: false, status: 400, json: async () => ({
+          code: 'VALIDATION_ERROR',
+          message: 'Validation failed',
+          context: { details: [{ path: 'kind', message: "Invalid discriminator value. Expected 'universe' | 'series'" }] },
+        }) };
+        errBody.clone = () => errBody;
+        vi.mocked(peerFetch).mockResolvedValueOnce(errBody);
+        const sub = await subscribePeer({
+          peerId: 'peer-a', recordKind: 'universe', recordId: 'u1',
+        }, { adoptedFromReverse: true });
+        const result = await pushRecordToPeer(sub);
+        expect(result.pushed).toBe(false);
+        expect(result.reason).toBe('peer-schema-behind');
+        expect(result.blockedBySchema).toBe(true);
+        // No retry — the kind itself is unrecognized, so re-sending changes nothing.
+        expect(vi.mocked(peerFetch).mock.calls.length).toBe(1);
+        // Block persisted with the pre-feature marker + an empty gap (the peer
+        // 400'd before sending any schemaVersions to populate ahead/behind).
+        const after = await findPeerSubscription('peer-a', 'universe', 'u1');
+        expect(after.blockedBySchema).toBeDefined();
+        expect(after.blockedBySchema.reason).toBe('peer-pre-feature');
+        expect(after.blockedBySchema.ahead).toEqual([]);
+        expect(after.blockedBySchema.behind).toEqual([]);
+        expect(after.blockedBySchema.peerPortosVersion).toBeNull();
+        expect(typeof after.blockedBySchema.detectedAt).toBe('string');
+        // lastPushedHash must NOT have advanced — the record didn't land.
+        expect(after.lastPushedHash).toBeFalsy();
+      });
+
+      it('engages the push cooldown after a pre-feature block so the next edit-push short-circuits', async () => {
+        // The pre-feature block must behave like the 409 block: a subsequent
+        // push (no bypass) short-circuits on the cooldown instead of re-probing
+        // the peer on every local edit.
+        vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo' });
+        const errBody = { ok: false, status: 400, json: async () => ({
+          code: 'VALIDATION_ERROR',
+          message: 'Validation failed',
+          context: { details: [{ path: 'kind', message: 'Invalid discriminator value. Expected ...' }] },
+        }) };
+        errBody.clone = () => errBody;
+        vi.mocked(peerFetch).mockResolvedValue(errBody);
+        const sub = await subscribePeer({
+          peerId: 'peer-a', recordKind: 'universe', recordId: 'u1',
+        }, { adoptedFromReverse: true });
+        await pushRecordToPeer(sub);
+        const callsAfterFirst = vi.mocked(peerFetch).mock.calls.length;
+        const blocked = await findPeerSubscription('peer-a', 'universe', 'u1');
+        const result = await pushRecordToPeer(blocked);
+        expect(result.reason).toBe('peer-schema-behind-cooldown');
+        expect(vi.mocked(peerFetch).mock.calls.length).toBe(callsAfterFirst);
+      });
+
+      it('does NOT misclassify a non-discriminator field 400 as a pre-feature block', async () => {
+        // Guard: only a `kind`-path discriminator/enum error is the unknown-kind
+        // signal. A 400 on any other field (oversized record, etc.) stays a
+        // genuine http-400 — not a silently-swallowed schema block.
+        vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo' });
+        const errBody = { ok: false, status: 400, json: async () => ({
+          code: 'VALIDATION_ERROR',
+          message: 'Validation failed',
+          context: { details: [{ path: 'record.name', message: 'String too long' }] },
+        }) };
+        errBody.clone = () => errBody;
+        vi.mocked(peerFetch).mockResolvedValueOnce(errBody);
+        const sub = await subscribePeer({
+          peerId: 'peer-a', recordKind: 'universe', recordId: 'u1',
+        }, { adoptedFromReverse: true });
+        const result = await pushRecordToPeer(sub);
+        expect(result.reason).toBe('http-400');
+        const after = await findPeerSubscription('peer-a', 'universe', 'u1');
+        expect(after.blockedBySchema).toBeUndefined();
+      });
     });
   });
 
