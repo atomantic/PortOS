@@ -110,15 +110,6 @@ export async function spawnDetached(bin, args = [], { env, cwd, controlDir, poll
     return spawn(bin, args, { env, cwd, stdio: ['ignore', 'pipe', 'pipe'] });
   }
 
-  await ensureDir(controlDir);
-  // Clear any stale control files from a prior run reusing this dir, so the
-  // PID/exit pollers can't latch onto a previous job's results.
-  const pidFile = join(controlDir, 'pid');
-  const exitFile = join(controlDir, 'exit');
-  const stdoutLog = join(controlDir, 'stdout.log');
-  const stderrLog = join(controlDir, 'stderr.log');
-  await Promise.all([pidFile, exitFile, stdoutLog, stderrLog].map((f) => rm(f, { force: true })));
-
   const handle = new EventEmitter();
   handle.stdout = new EventEmitter();
   handle.stderr = new EventEmitter();
@@ -126,6 +117,30 @@ export async function spawnDetached(bin, args = [], { env, cwd, controlDir, poll
   handle.killed = false;
   handle.exitCode = null;
   handle.signalCode = null;
+  // Default no-op so a setup failure (below) returns a usable handle.
+  handle.kill = () => false;
+
+  const pidFile = join(controlDir, 'pid');
+  const exitFile = join(controlDir, 'exit');
+  const stdoutLog = join(controlDir, 'stdout.log');
+  const stderrLog = join(controlDir, 'stderr.log');
+
+  // Setup is filesystem I/O that can fail (permissions, a stale non-dir path,
+  // disk full). Surface those as the handle's 'error' event — like a real
+  // ChildProcess spawn failure — rather than rejecting: callers attach
+  // `on('error')` AFTER the await for their finalization/cleanup, and a reject
+  // would bypass that and strand a `running` run or leak temp files. Deferred
+  // so the listener is attached before it fires.
+  const ensureControlDir = await ensureDir(controlDir).then(
+    () => Promise.all([pidFile, exitFile, stdoutLog, stderrLog].map((f) => rm(f, { force: true }))),
+  ).then(() => null, (err) => err);
+  if (ensureControlDir) {
+    setImmediate(() => {
+      if (cleanup) rm(controlDir, { recursive: true, force: true }).catch(() => {});
+      handle.emit('error', ensureControlDir);
+    });
+    return handle;
+  }
 
   // Launch the double-fork. `detached` gives the outer sh its own session;
   // `stdio: 'ignore'` because all job output is redirected to files by the
