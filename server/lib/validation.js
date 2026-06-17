@@ -864,6 +864,12 @@ export const loraTrainingConfigSchema = z.object({
   // the GPU-driver hang. Cooldown is the GPU idle gap (seconds) between segments.
   segmentation: z.boolean().optional(),
   segmentCooldownSec: z.number().int().min(0).max(3600).optional(),
+  // Phase-aware soft-hang stall watchdog (issue #1330, default ON in
+  // services/loraTraining/index.js). Detects a wedged GPU mid-training (steps
+  // stop arriving within a step-rate-derived budget) and SIGKILLs + auto-resumes
+  // from the newest checkpoint. Set false to fall back to only the flat 30-min
+  // idle watchdog (e.g. if a future driver fix makes soft hangs impossible).
+  stallWatchdog: z.boolean().optional(),
 });
 
 // POST /api/lora-training/runs — start a training run for a dataset.

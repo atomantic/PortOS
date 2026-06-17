@@ -40,6 +40,7 @@ import {
   MFLUX_DEFAULT_COOLDOWN_SEC,
 } from './runtimes.js';
 import { makeTrainingLineHandler } from './progress.js';
+import { makeStallDetector } from './stallDetector.js';
 import { prepareMemoryForTraining, TRAINING_MIN_HEADROOM_GB } from './memoryPrep.js';
 import { classifyTrainingFailure } from './failure.js';
 import { buildTrainedSidecar, trainedLoraFilename } from './sidecar.js';
@@ -78,6 +79,20 @@ export const isMfluxTrainAvailable = (pythonPath) =>
 // newer run.
 let activeProcess = null;
 let activeJobId = null;
+
+// Phase-aware stall watchdog (issue #1330): how many times a single run may be
+// auto-resumed after a *soft* GPU hang before we give up and let it stay failed.
+// Bounded so a config that wedges every segment can't resume-loop forever — the
+// user sees a failed run after N attempts and intervenes. Counted separately
+// from manual resumes (run.resume.autoCount). Env-overridable.
+const STALL_MAX_AUTO_RESUMES = (() => {
+  const n = Number(process.env.LORA_TRAIN_STALL_MAX_AUTO_RESUMES);
+  return Number.isFinite(n) && n >= 0 ? n : 2;
+})();
+// How often the watchdog polls checkStall while a trainer is running. Well
+// under the 90s floor budget so a stall is caught within ~one tick of the
+// budget elapsing (worst-case detection lag = budget + one tick).
+const STALL_TICK_MS = 30_000;
 
 export const cancel = (jobId) => {
   if (!activeProcess || (jobId && activeJobId !== jobId)) return false;
@@ -214,7 +229,7 @@ export async function startTrainingRun({ datasetId, baseModelId, name = null, pa
  * usual. Progress may briefly read low if the trainer restarts its step bar at
  * the resume point — cosmetic; the durable record catches up on the next flush.
  */
-export async function resumeTrainingRun(runId) {
+export async function resumeTrainingRun(runId, { auto = false } = {}) {
   const run = await runsDb.getRunRequired(runId);
   if (!['failed', 'canceled'].includes(run.status)) {
     throw new ServerError(`Can only resume a failed or canceled run (status: ${run.status})`, {
@@ -293,13 +308,17 @@ export async function resumeTrainingRun(runId) {
     completedAt: null,
     resume: {
       count: (current.resume?.count || 0) + 1,
+      // Auto (stall-watchdog) resumes are counted separately so the watchdog
+      // can cap its own retries without a manual resume resetting the budget.
+      autoCount: (current.resume?.autoCount || 0) + (auto ? 1 : 0),
       fromStep: checkpoint.step,
       resumedAt: new Date().toISOString(),
+      lastReason: auto ? 'stall-watchdog' : 'manual',
     },
   }));
   await stampDatasetTrainingStatus(run, queued.jobId);
 
-  console.log(`🏋️ Training run ${shortId(runId)} resumed from step ${checkpoint.step} — job=${shortId(queued.jobId)}`);
+  console.log(`🏋️ Training run ${shortId(runId)} ${auto ? 'auto-resumed (stall watchdog)' : 'resumed'} from step ${checkpoint.step} — job=${shortId(queued.jobId)}`);
   return { runId, jobId: queued.jobId, position: queued.position, status: 'queued', fromStep: checkpoint.step };
 }
 
@@ -614,12 +633,30 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
     sampleUrl: (path) => `/api/lora-training/runs/${runId}/samples/${basename(path)}`,
   });
 
+  // Phase-aware soft-hang stall watchdog (issue #1330). The queue's flat 30-min
+  // idle watchdog only trips on TOTAL silence and can't see a soft GPU hang
+  // mid-training (the python heartbeat/telemetry threads keep emitting lines, so
+  // the flat watchdog never fires). This detector keys off the STAGE/STEP
+  // protocol to apply a tight, step-rate-derived budget ONLY during
+  // STAGE:training — load/encode/sampling/cooldown stay on the flat watchdog so
+  // a legitimately slow phase is never false-killed. On a training-phase stall
+  // we SIGKILL the wedged child; the close handler auto-resumes from the newest
+  // checkpoint. Disable via settings.loraTraining.stallWatchdog = false.
+  const stallWatchdogOn = (settings?.loraTraining?.stallWatchdog !== false);
+  const stallDetector = makeStallDetector();
+  let stallKilled = false; // set when the tick SIGKILLs — close handler reads it
+  let stallTimer = null;
+  const stopStallWatchdog = () => { if (stallTimer) { clearInterval(stallTimer); stallTimer = null; } };
+
   const makeSplitter = (stream) => {
     let buf = '';
     const safeLine = (text) => {
       // try/catch: this runs inside a child-process data/end callback — an
       // uncaught throw here would crash the server process.
-      try { handleLine(text, stream); } catch (err) {
+      try {
+        handleLine(text, stream);
+        if (stallWatchdogOn) stallDetector.observe(text);
+      } catch (err) {
         console.error(`❌ training [${shortId(jobId)}] line handler failed: ${err?.message}`);
       }
     };
@@ -646,7 +683,31 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
   proc.stderr.on('data', stderrSplitter.push);
   proc.stderr.on('end', stderrSplitter.flush);
 
+  if (stallWatchdogOn) {
+    stallTimer = setInterval(() => {
+      // setInterval callback — runs outside the request lifecycle, so guard
+      // against any throw (a crash here would take down the server process).
+      try {
+        if (stallKilled || activeProcess !== proc) return;
+        const { stalled, idleMs, budgetMs } = stallDetector.checkStall();
+        if (!stalled) return;
+        stallKilled = true;
+        stopStallWatchdog();
+        console.log(`⏱️ training [${shortId(jobId)}] phase-aware watchdog: training stalled ${Math.round(idleMs / 1000)}s (budget ${Math.round(budgetMs / 1000)}s) — SIGKILL + auto-resume`);
+        // Soft hang: SIGKILL straight away (SIGTERM relies on the GIL the hang
+        // holds, so the 8s escalation in cancel() would just waste the window).
+        // The newest checkpoint is the resume point; the close handler picks it
+        // up. Direct PID kill via the detached handle.
+        proc.kill('SIGKILL');
+      } catch (err) {
+        console.error(`❌ training [${shortId(jobId)}] stall watchdog tick failed: ${err?.message}`);
+      }
+    }, STALL_TICK_MS);
+    stallTimer.unref?.();
+  }
+
   proc.on('error', (err) => {
+    stopStallWatchdog();
     if (activeProcess === proc) { activeProcess = null; activeJobId = null; }
     // A launch failure after the run was marked `running` — a genuine spawn
     // error, or (with spawnDetached) the control dir failing to create/clear.
@@ -659,13 +720,14 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
   });
 
   proc.on('close', (code, signal) => {
+    stopStallWatchdog();
     if (activeProcess === proc) { activeProcess = null; activeJobId = null; }
     // Flush the debounced progress (final checkpoint + last sample) BEFORE
     // finalize reads the run record — the collapse guard and previewImageUrl
     // both read run.artifacts. Async finalize wrapped so a rejection can't
     // escape the event handler (unhandled rejection kills the process on Node ≥15).
     Promise.resolve(flushProgress())
-      .then(() => finalizeTraining({ jobId, runId, code, signal, state: getState() }))
+      .then(() => finalizeTraining({ jobId, runId, code, signal, state: getState(), stallKilled }))
       .catch((err) => {
         console.error(`❌ training [${shortId(jobId)}] finalize failed: ${err?.message}`);
         fail(`finalize failed: ${err?.message}`);
@@ -673,7 +735,31 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
   });
 }
 
-async function finalizeTraining({ jobId, runId, code, signal, state }) {
+/**
+ * After a phase-aware-watchdog SIGKILL, auto-resume the run from its newest
+ * checkpoint (issue #1330) — bounded by STALL_MAX_AUTO_RESUMES so a config that
+ * wedges every segment can't resume-loop forever. Best-effort: any failure
+ * leaves the run in its finalize-set `failed` state for manual resume. Runs
+ * outside the request lifecycle (called from the close handler), so it owns its
+ * own error handling rather than bubbling.
+ */
+async function autoResumeAfterStall(runId, jobId) {
+  const run = await runsDb.getRun(runId).catch(() => null);
+  if (!run) return;
+  const autoCount = run.resume?.autoCount || 0;
+  if (autoCount >= STALL_MAX_AUTO_RESUMES) {
+    console.log(`⚠️ training [${shortId(jobId)}] stall auto-resume budget exhausted (${autoCount}/${STALL_MAX_AUTO_RESUMES}) — leaving run failed for manual resume`);
+    return;
+  }
+  // resumeTrainingRun requires a failed/canceled status + a resumable checkpoint;
+  // finalize has already flipped the run to failed by the time this runs.
+  await resumeTrainingRun(runId, { auto: true }).then(
+    (res) => console.log(`🔁 training [${shortId(jobId)}] auto-resumed run ${shortId(runId)} from step ${res.fromStep} (attempt ${autoCount + 1}/${STALL_MAX_AUTO_RESUMES})`),
+    (err) => console.error(`❌ training [${shortId(jobId)}] stall auto-resume failed: ${err?.message} — run stays failed for manual resume`),
+  );
+}
+
+async function finalizeTraining({ jobId, runId, code, signal, state, stallKilled = false }) {
   const run = await runsDb.getRun(runId);
   const job = getJob(jobId);
   const canceled = !!job?.cancelRequested;
@@ -765,6 +851,12 @@ async function finalizeTraining({ jobId, runId, code, signal, state }) {
   await flipDatasetAfterRun(run, { trained: false });
   console.error(`❌ training [${shortId(jobId)}] ${failCode}: ${message}`);
   trainingEvents.emit('failed', { generationId: jobId, error: message, code: failCode, repo: failRepo });
+
+  // Phase-aware watchdog SIGKILL (issue #1330): the run is now `failed`, so
+  // resumeTrainingRun's status precondition is satisfied — auto-resume from the
+  // newest checkpoint. Bounded by STALL_MAX_AUTO_RESUMES; awaited so the resume
+  // (re-enqueue + run-record flip back to queued) completes within finalize.
+  if (stallKilled) await autoResumeAfterStall(runId, jobId);
 }
 
 /**

@@ -94,4 +94,29 @@ describe('resumeTrainingRun — flux2 path', () => {
     await expect(resumeTrainingRun('run-flux2')).rejects.toMatchObject({ code: 'RUN_NOT_RESUMABLE' });
     expect(enqueueJobMock).not.toHaveBeenCalled();
   });
+
+  // Issue #1330: the phase-aware stall watchdog auto-resumes with { auto: true }.
+  // The resume bookkeeping must increment autoCount (the watchdog's own budget,
+  // separate from total count) and stamp lastReason so the cap is enforceable.
+  it('stamps auto-resume bookkeeping (autoCount + lastReason) when auto:true', async () => {
+    getRunRequiredMock.mockResolvedValue(flux2Run({ resume: { count: 1, autoCount: 1 } }));
+    resolveLatestCheckpointArtifactMock.mockReturnValue({ step: 300, path: '/runs/run-flux2/checkpoints/step-000300' });
+
+    await resumeTrainingRun('run-flux2', { auto: true });
+
+    const updater = updateRunMock.mock.calls.find((c) => c[0] === 'run-flux2' && typeof c[1] === 'function')[1];
+    const next = updater(flux2Run({ resume: { count: 1, autoCount: 1 } }));
+    expect(next.resume).toMatchObject({ count: 2, autoCount: 2, fromStep: 300, lastReason: 'stall-watchdog' });
+  });
+
+  it('manual resume does not bump autoCount and stamps lastReason manual', async () => {
+    getRunRequiredMock.mockResolvedValue(flux2Run({ resume: { count: 2, autoCount: 2 } }));
+    resolveLatestCheckpointArtifactMock.mockReturnValue({ step: 300, path: '/runs/run-flux2/checkpoints/step-000300' });
+
+    await resumeTrainingRun('run-flux2');
+
+    const updater = updateRunMock.mock.calls.find((c) => c[0] === 'run-flux2' && typeof c[1] === 'function')[1];
+    const next = updater(flux2Run({ resume: { count: 2, autoCount: 2 } }));
+    expect(next.resume).toMatchObject({ count: 3, autoCount: 2, lastReason: 'manual' });
+  });
 });
