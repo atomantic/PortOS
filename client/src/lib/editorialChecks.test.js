@@ -63,6 +63,18 @@ describe('groupFindingsByCheck', () => {
   it('openFindingsTotal sums open findings across groups', () => {
     expect(openFindingsTotal(groupFindingsByCheck(comments, rows))).toBe(3);
   });
+
+  it('tallies the per-group stale count from OPEN findings only (#1345)', () => {
+    const staleComments = [
+      { id: '1', checkId: 'a.series', status: 'open', severity: 'high', stale: true },
+      { id: '2', checkId: 'a.series', status: 'open', severity: 'low' }, // fresh
+      { id: '3', checkId: 'a.series', status: 'dismissed', severity: 'high', stale: true }, // dismissed → not counted
+      { id: '4', checkId: 'b.issue', status: 'open', severity: 'medium' }, // no stale field
+    ];
+    const groups = groupFindingsByCheck(staleComments, rows);
+    expect(groups.find((g) => g.checkId === 'a.series').stale).toBe(1);
+    expect(groups.find((g) => g.checkId === 'b.issue').stale).toBe(0);
+  });
 });
 
 describe('findingManuscriptLink', () => {

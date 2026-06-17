@@ -7,7 +7,7 @@
  * only, so triage logic stays in one place.
  */
 import { Link } from 'react-router-dom';
-import { ChevronDown, ChevronRight, ExternalLink } from 'lucide-react';
+import { ChevronDown, ChevronRight, ExternalLink, History } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { groupFindingsByCheck, findingManuscriptLink, openFindingsTotal } from '../../../lib/editorialChecks';
 
@@ -35,6 +35,22 @@ function CountPills({ counts }) {
   );
 }
 
+// Findings whose analyzed manuscript/canon changed since the check last ran
+// (#1345) — re-run the check (or dismiss) so the finding reflects current content.
+function StaleBadge({ count }) {
+  return (
+    <span
+      className="flex items-center gap-1 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-400"
+      title={count != null
+        ? `${count} open finding${count === 1 ? '' : 's'} analyzed content that has since changed — re-run this check`
+        : 'Analyzed content has changed since this check ran — re-run the check'}
+    >
+      <History size={10} className="shrink-0" />
+      {count != null ? `${count} stale` : 'Stale'}
+    </span>
+  );
+}
+
 function CheckGroup({ seriesId, group }) {
   const [open, setOpen] = useState(group.open > 0);
   return (
@@ -50,7 +66,10 @@ function CheckGroup({ seriesId, group }) {
           <span className="text-sm font-medium text-gray-100 truncate">{group.label}</span>
           <span className="text-[10px] text-gray-500 shrink-0">{group.open} open · {group.total} total</span>
         </span>
-        <CountPills counts={group.counts} />
+        <span className="flex items-center gap-1.5 shrink-0">
+          {group.stale > 0 ? <StaleBadge count={group.stale} /> : null}
+          <CountPills counts={group.counts} />
+        </span>
       </button>
       {open ? (
         <ul className="divide-y divide-port-border/60 border-t border-port-border/60">
@@ -65,7 +84,10 @@ function CheckGroup({ seriesId, group }) {
                     <span className={`mr-1.5 inline-block h-2 w-2 rounded-full align-middle ${SEVERITY_DOT[c.severity] || SEVERITY_DOT.low}`} />
                     {c.problem}
                   </span>
-                  {c.location ? <span className="block text-[11px] text-gray-500">{c.location}</span> : null}
+                  <span className="flex items-center gap-2">
+                    {c.location ? <span className="block text-[11px] text-gray-500">{c.location}</span> : null}
+                    {c.status === 'open' && c.stale ? <StaleBadge /> : null}
+                  </span>
                 </span>
                 <ExternalLink size={13} className="mt-0.5 shrink-0 text-gray-600 group-hover:text-port-accent" />
               </Link>

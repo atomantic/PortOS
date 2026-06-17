@@ -44,10 +44,12 @@ const emptyCounts = () => ({ high: 0, medium: 0, low: 0 });
  * Group review comments that came from an editorial check into per-check
  * sections for the triage view. Only comments carrying a `checkId` are
  * included (completeness findings have none). Returns
- *   `[{ checkId, label, scope, kind, comments, open, total, counts }]`
+ *   `[{ checkId, label, scope, kind, comments, open, total, counts, stale }]`
  * ordered by the catalog's scope order then label, with `counts` tallying the
- * OPEN comments by severity. `rowsById` is a Map/object of catalog rows so each
- * group can show its human label even when the check is currently disabled.
+ * OPEN comments by severity and `stale` counting the OPEN findings whose
+ * analyzed content has drifted since the check ran (#1345). `rowsById` is a
+ * Map/object of catalog rows so each group can show its human label even when
+ * the check is currently disabled.
  */
 export function groupFindingsByCheck(comments = [], rowsById = {}) {
   const lookup = rowsById instanceof Map ? rowsById : new Map(Object.entries(rowsById || {}));
@@ -65,6 +67,7 @@ export function groupFindingsByCheck(comments = [], rowsById = {}) {
         open: 0,
         total: 0,
         counts: emptyCounts(),
+        stale: 0,
       });
     }
     const g = groups.get(c.checkId);
@@ -74,6 +77,7 @@ export function groupFindingsByCheck(comments = [], rowsById = {}) {
       g.open += 1;
       const sev = SEVERITY_ORDER.includes(c.severity) ? c.severity : 'low';
       g.counts[sev] += 1;
+      if (c.stale) g.stale += 1;
     }
   }
   const scopeRank = (s) => {

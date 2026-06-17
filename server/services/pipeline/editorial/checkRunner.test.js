@@ -41,12 +41,18 @@ const seedReviewFromFindings = vi.fn(async (_seriesId, findings) => {
   }
   return { comments: seedStore };
 });
-vi.mock('../manuscriptReview.js', () => ({ seedReviewFromFindings: (...a) => seedReviewFromFindings(...a) }));
+// `getReview` is backed by a mutable fixture the staleness tests set per-case.
+let reviewState = { comments: [] };
+vi.mock('../manuscriptReview.js', () => ({
+  seedReviewFromFindings: (...a) => seedReviewFromFindings(...a),
+  getReview: async () => reviewState,
+}));
 
-const { runEditorialChecks, buildEditorialCheckPlan } = await import('./checkRunner.js');
+const { runEditorialChecks, buildEditorialCheckPlan, getReviewWithStaleness } = await import('./checkRunner.js');
 const { runStagedLLM } = await import('../../../lib/stageRunner.js');
 const { collectManuscriptSections } = await import('../arcPlanner.js');
-const { listChecks } = await import('../../../lib/editorial/index.js');
+const { getSeriesCanon } = await import('../seriesCanon.js');
+const { listChecks, getCheck } = await import('../../../lib/editorial/index.js');
 
 // Build a `pipelineEditorialChecks.checks` map that disables every check
 // matching `predicate` — keeps these fixtures robust as the registry grows
@@ -59,9 +65,11 @@ const disableWhere = (predicate) => ({
 
 beforeEach(() => {
   seedStore.length = 0;
+  reviewState = { comments: [] };
   seedReviewFromFindings.mockClear();
   runStagedLLM.mockClear();
   collectManuscriptSections.mockClear();
+  getSeriesCanon.mockClear();
 });
 
 describe('runEditorialChecks', () => {
@@ -145,6 +153,80 @@ describe('runEditorialChecks', () => {
     expect(result.findings.some((f) => f.checkId === 'naming.dissimilar-names')).toBe(true);
     const infodump = result.perCheck.find((p) => p.checkId === 'prose.info-dumping');
     expect(infodump.error).toMatch(/provider down/);
+  });
+});
+
+describe('source-content hash stamping (#1345)', () => {
+  it('stamps every finding with a non-empty sourceContentHash', async () => {
+    const result = await runEditorialChecks('s1');
+    expect(result.findings.length).toBeGreaterThan(0);
+    for (const f of result.findings) {
+      expect(typeof f.sourceContentHash).toBe('string');
+      expect(f.sourceContentHash.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('hashes canon-only checks differently from manuscript-consuming checks', async () => {
+    const result = await runEditorialChecks('s1');
+    const naming = result.findings.find((f) => f.checkId === 'naming.dissimilar-names');
+    const infodump = result.findings.find((f) => f.checkId === 'prose.info-dumping');
+    // Naming is canon-only (no needsManuscript); info-dumping reads the manuscript.
+    expect(getCheck('naming.dissimilar-names').needsManuscript).toBeFalsy();
+    expect(getCheck('prose.info-dumping').needsManuscript).toBe(true);
+    expect(naming.sourceContentHash).not.toBe(infodump.sourceContentHash);
+  });
+});
+
+describe('getReviewWithStaleness (#1345)', () => {
+  // Seed the review fixture from a real run so each comment carries the exact
+  // hash the runner stamped, then re-read under (un)changed content.
+  const seedReviewFromRun = async () => {
+    const { findings } = await runEditorialChecks('s1');
+    reviewState = { comments: findings.map((f) => ({ ...f, status: 'open' })) };
+    return findings;
+  };
+
+  it('flags nothing stale when the content is unchanged', async () => {
+    await seedReviewFromRun();
+    const review = await getReviewWithStaleness('s1');
+    expect(review.comments.length).toBeGreaterThan(0);
+    for (const c of review.comments) expect(c.stale).toBe(false);
+  });
+
+  it('flags manuscript-consuming findings stale when the manuscript changes (canon-only stay fresh)', async () => {
+    await seedReviewFromRun();
+    // Only the manuscript drifts — canon is unchanged.
+    collectManuscriptSections.mockResolvedValueOnce([
+      { number: 1, title: 'Pilot', stageId: 'prose', content: 'A completely rewritten opening paragraph.' },
+    ]);
+    const review = await getReviewWithStaleness('s1');
+    const naming = review.comments.find((c) => c.checkId === 'naming.dissimilar-names');
+    const infodump = review.comments.find((c) => c.checkId === 'prose.info-dumping');
+    expect(infodump.stale).toBe(true);
+    expect(naming.stale).toBe(false);
+  });
+
+  it('flags canon-only findings stale when the canon changes', async () => {
+    await seedReviewFromRun();
+    getSeriesCanon.mockResolvedValueOnce({ characters: [{ name: 'Reardon' }], places: [], objects: [] });
+    const review = await getReviewWithStaleness('s1');
+    const naming = review.comments.find((c) => c.checkId === 'naming.dissimilar-names');
+    expect(naming.stale).toBe(true);
+  });
+
+  it('leaves legacy findings (no hash), completeness comments (no checkId), and unknown checks unannotated', async () => {
+    reviewState = {
+      comments: [
+        { id: 'a', checkId: 'naming.dissimilar-names', anchorQuote: 'x', problem: 'legacy', status: 'open' }, // no hash
+        { id: 'b', checkId: null, anchorQuote: 'y', problem: 'completeness', status: 'open', sourceContentHash: 'abc' },
+        { id: 'c', checkId: 'does.not-exist', anchorQuote: 'z', problem: 'unknown check', status: 'open', sourceContentHash: 'abc' },
+      ],
+    };
+    const review = await getReviewWithStaleness('s1');
+    // No evaluable comment → passthrough, no recompute, no `stale` key added.
+    for (const c of review.comments) expect(c).not.toHaveProperty('stale');
+    expect(collectManuscriptSections).not.toHaveBeenCalled();
+    expect(getSeriesCanon).not.toHaveBeenCalled();
   });
 });
 
