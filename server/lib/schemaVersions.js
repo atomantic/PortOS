@@ -50,6 +50,16 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // a not-yet-upgraded peer that re-sanitizes a universe through its
   // attachments-unaware `sanitizeObject` can't silently strip the field and
   // LWW the loss back onto the newer peer.
+  //
+  // NOTE — `catalog` is intentionally NOT bumped for this field (matches the
+  // #1287 relationshipLinks precedent). A bible object promoted to the catalog
+  // carries `attachments` in `catalog_ingredients.payload`; an older peer's
+  // `updateIngredient` → `sanitizeObject` would drop it on a local edit and a
+  // catalog sync back could clobber the newer copy. We accept that graceful
+  // degradation rather than gate `catalog` — bumping it would pause ALL catalog
+  // sync with version-mismatched peers for one additive field, the heavier
+  // tradeoff this project has chosen against for additive bible fields. The
+  // `universes` gate above already protects the canonical (embedded) copy.
   universes: 7,
   // v1 = post-split. Migrations 035/036 introduced the pipeline collection
   // layout for issues and series.
