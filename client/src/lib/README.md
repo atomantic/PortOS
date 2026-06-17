@@ -44,6 +44,7 @@ grep -i "what you want to do" client/src/lib/README.md
 | Module | Purpose |
 |---|---|
 | `pipelineImageDefaults.js` | Pipeline comic-page image-gen defaults + settings reader. |
+| `reverseOutlineGrid.js` | `buildPlotlineGrid` (reverse-outline scenes + plotlines → plotline-by-sequence grid rows/cells) + `sceneComponentCount`. Used by the Reverse Outline page. |
 | `wrImageDefaults.js` | Writers Room per-scene image-gen defaults + style discriminators. |
 | `imageGenBackends.js` | `IMAGE_GEN_MODE` enum (local / codex / external) + metadata; `deriveAvailableBackends`; `I2I_CAPABLE_MODES` / `isI2iCapableMode(mode)` / `pickI2iMode(backends)` — image-to-image capability gating + best-backend selection. |
 | `imageGenDefaults.js` | Shared `DEFAULT_NEGATIVE_PROMPT` used by the Image Gen form and quick-submit entry points. Mirrors server-side default. |

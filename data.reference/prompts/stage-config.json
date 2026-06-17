@@ -289,6 +289,13 @@
       "returnsJson": true,
       "variables": []
     },
+    "pipeline-reverse-outline": {
+      "name": "Pipeline — Reverse Outline (scene segmentation + plotline tagging)",
+      "description": "Read the whole drafted manuscript and produce a reverse outline: identify the recurring plotlines, then segment the prose into scenes (each tagged to the plotline it advances, with POV, setting, and narrative/action/dialogue mix). Feeds the color-coded Reverse Outline view and is the canonical scene-segmentation substrate other editorial checks read. Runs at `heavy` tier — reads the full stitched manuscript.",
+      "model": "heavy",
+      "returnsJson": true,
+      "variables": []
+    },
     "pipeline-extract-scenes": {
       "name": "Pipeline — Extract Scenes from TV Teleplay",
       "description": "Parse an already-formatted TV teleplay into a structured scenes[] list (one entry per slugline) the storyboards stage can render. Defers to character / setting bibles for canonical names and slugline reuse.",

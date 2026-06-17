@@ -595,6 +595,33 @@ export const getSeriesEditorialStatus = (seriesId, options = {}) =>
 export const pipelineEditorialSseUrl = (seriesId) =>
   `/api/pipeline/series/${encodeURIComponent(seriesId)}/editorial/analyze/progress`;
 
+// ---- Reverse Outline (scene segmentation + plotline tagging) ----
+// The stored outline: { plotlines, scenes, stale, status }. `status:'none'`
+// when never generated, `'no-content'` shell while nothing is drafted yet.
+export const getReverseOutline = (seriesId, options = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/reverse-outline`, options);
+
+// Kick off a (re)generation. { runId, alreadyRunning, sseUrl } — subscribe via
+// pipelineReverseOutlineSseUrl to stream progress, then re-fetch on `complete`.
+export const generateReverseOutline = (seriesId, opts = {}, options = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/reverse-outline/generate`, {
+    method: 'POST',
+    body: JSON.stringify(opts),
+    ...options,
+  });
+
+export const cancelReverseOutline = (seriesId) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/reverse-outline/generate/cancel`, {
+    method: 'POST',
+  });
+
+// { active: boolean } — lets a (re)mounting view re-attach to an in-flight run.
+export const getReverseOutlineStatus = (seriesId, options = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/reverse-outline/generate/status`, options);
+
+export const pipelineReverseOutlineSseUrl = (seriesId) =>
+  `/api/pipeline/series/${encodeURIComponent(seriesId)}/reverse-outline/generate/progress`;
+
 // ---- Series Autopilot (full autonomous mode) ----
 // Drives a series from its current state to story-ready (+ draft visuals) by
 // composing every pipeline pass. SSE-backed; gated on the cos autonomy domain

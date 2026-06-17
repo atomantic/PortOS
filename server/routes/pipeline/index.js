@@ -26,6 +26,10 @@
  *   GET    /series/:id/autopilot/status         → { autopilot, active }
  *   GET    /issues/:id/canon-readiness          → { referenced, none, thin, ready }
  *   GET    /series/:id/canon-readiness          → { ready, issues, blockingIssues, undescribed }
+ *   GET    /series/:id/reverse-outline               → { plotlines, scenes, stale, status }
+ *   POST   /series/:id/reverse-outline/generate      → { runId, alreadyRunning, sseUrl }
+ *   GET    /series/:id/reverse-outline/generate/progress → SSE (text/event-stream)
+ *   POST   /series/:id/reverse-outline/generate/cancel   → { canceled }
  *
  * Assembled from domain sub-routers (mirrors the cos.js pattern). Mount
  * order preserves the original single-file registration order; the only
@@ -42,6 +46,7 @@ import manuscriptRoutes from './manuscript.js';
 import coverRoutes from './covers.js';
 import issueRoutes from './issues.js';
 import editorialRoutes from './editorial.js';
+import reverseOutlineRoutes from './reverseOutline.js';
 import autopilotRoutes from './autopilot.js';
 import canonRoutes from './canon.js';
 
@@ -54,6 +59,7 @@ router.use(manuscriptRoutes);
 router.use(coverRoutes);
 router.use(issueRoutes);
 router.use(editorialRoutes);
+router.use(reverseOutlineRoutes);
 router.use(autopilotRoutes);
 router.use(canonRoutes);
 
