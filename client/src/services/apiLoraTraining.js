@@ -73,6 +73,11 @@ export const updateLoraDatasetImageCaption = (id, imageId, caption) =>
 export const deleteLoraDatasetImage = (id, imageId) =>
   request(`/lora-datasets/${id}/images/${imageId}`, { method: 'DELETE' });
 
+// Strip the identity fragments shared across most captions so the trigger token
+// learns the character (issue #1320). Returns { dataset, removedFragments, updatedImages }.
+export const stripLoraDatasetSharedCaptionFragments = (id) =>
+  request(`/lora-datasets/${id}/strip-shared-fragments`, { method: 'POST' });
+
 // ---- Training runs ----
 
 export const getLoraTrainingStatus = () => request('/lora-training/status');

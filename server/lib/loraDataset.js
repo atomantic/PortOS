@@ -278,3 +278,99 @@ export function computeDatasetReadiness(dataset) {
     quality: trainable ? datasetQualityTier(captioned.length) : 'insufficient',
   };
 }
+
+// A fragment shared by at least this fraction of the captioned images counts
+// as "invariant identity" the trigger token should absorb instead. Set high
+// (80%) on purpose: a *varying* attribute (pose, framing, a single view) shows
+// up in only a slice of the set, while baked-in identity (white hair, circlet,
+// tooth necklace) repeats in nearly every caption — so the threshold separates
+// "describe who she is" from "describe what changes shot-to-shot" without
+// flagging legitimate per-shot variation.
+export const INVARIANT_SHARE_THRESHOLD = 0.8;
+// Below this many captioned images "shared across most captions" is noise — a
+// 3-image dataset where 3/3 repeat a fragment proves nothing. Gate the analysis
+// so the warning only fires once there's enough signal to trust.
+export const MIN_CAPTIONS_FOR_INVARIANT_ANALYSIS = 4;
+
+// Strip a single leading `"<triggerWord>"` token from a caption, returning the
+// descriptive body. Mirrors prefixCaption's own strip (same `(?=[\s,]|$)`
+// boundary so a trigger that prefixes a real word isn't amputated).
+const captionBody = (caption, triggerWord) => {
+  const word = trim(triggerWord);
+  let body = trim(caption);
+  if (word) {
+    body = body.replace(new RegExp(`^${escapeRe(word)}(?=[\\s,]|$)\\s*,?\\s*`, 'i'), '');
+  }
+  return body;
+};
+
+// Split a caption's descriptive body into comma-separated fragments. The
+// captioner (and the manual-caption convention) emit ONE comma-separated list,
+// so commas are the fragment boundary. Empty fragments are dropped.
+const splitCaptionFragments = (caption, triggerWord) => captionBody(caption, triggerWord)
+  .split(',')
+  .map((f) => f.trim())
+  .filter(Boolean);
+
+// Normalize a fragment for cross-caption comparison: lowercase, collapse
+// internal whitespace. "White Hair" and "white  hair" are the same invariant.
+const normalizeFragment = (f) => trim(f).toLowerCase().replace(/\s+/g, ' ');
+
+/**
+ * Analyze the captioned images for invariant identity fragments — descriptive
+ * phrases (hair/eyes/skin/signature items) that repeat across most captions and
+ * therefore bind the character's identity to the caption PHRASES instead of the
+ * trigger token (the failure mode in issue #1320). Pure — callers pass the
+ * sanitized record's images.
+ *
+ * Counts each fragment once per caption (a caption repeating "white hair" twice
+ * still counts once) and flags fragments present in ≥`threshold` of the
+ * captioned images. Returns `{ analyzable, total, sharedFragments }` where each
+ * shared fragment is `{ fragment, normalized, count, ratio }`, ordered most-
+ * common first. `analyzable` is false (and `sharedFragments` empty) below
+ * `minCaptions` — not enough signal to trust.
+ */
+export function analyzeCaptionInvariants(images, triggerWord, {
+  threshold = INVARIANT_SHARE_THRESHOLD,
+  minCaptions = MIN_CAPTIONS_FOR_INVARIANT_ANALYSIS,
+} = {}) {
+  const list = Array.isArray(images) ? images : [];
+  const word = trim(triggerWord);
+  const captioned = list.filter((img) => img?.status === 'ready' && captionHasTriggerWord(img.caption, word));
+  const total = captioned.length;
+  if (total < minCaptions) return { analyzable: false, total, sharedFragments: [] };
+  const counts = new Map(); // normalized → { fragment (first-seen display), count }
+  for (const img of captioned) {
+    const seen = new Set(); // de-dupe within one caption
+    for (const frag of splitCaptionFragments(img.caption, word)) {
+      const norm = normalizeFragment(frag);
+      if (!norm || seen.has(norm)) continue;
+      seen.add(norm);
+      const cur = counts.get(norm) || { fragment: frag, count: 0 };
+      cur.count += 1;
+      counts.set(norm, cur);
+    }
+  }
+  const sharedFragments = [...counts.entries()]
+    .filter(([, v]) => v.count >= 2 && v.count / total >= threshold)
+    .map(([normalized, v]) => ({ fragment: v.fragment, normalized, count: v.count, ratio: v.count / total }))
+    .sort((a, b) => b.count - a.count || a.fragment.localeCompare(b.fragment));
+  return { analyzable: true, total, sharedFragments };
+}
+
+/**
+ * Remove the given shared fragments from one caption, preserving the trigger
+ * prefix and the fragment order of everything kept. `fragmentsToStrip` is
+ * matched by normalized form, so case/whitespace differences still strip. A
+ * caption left with no descriptive body collapses to just the trigger word
+ * (still a valid binding-only caption). Idempotent — re-running strips nothing.
+ */
+export function stripSharedFragments(caption, fragmentsToStrip, triggerWord) {
+  const stripSet = new Set((Array.isArray(fragmentsToStrip) ? fragmentsToStrip : [])
+    .map(normalizeFragment)
+    .filter(Boolean));
+  if (!stripSet.size) return trim(caption);
+  const kept = splitCaptionFragments(caption, triggerWord)
+    .filter((frag) => !stripSet.has(normalizeFragment(frag)));
+  return prefixCaption(triggerWord, kept.join(', '));
+}

@@ -23,11 +23,13 @@ import { createCollectionStore } from '../lib/collectionStore.js';
 import {
   LORA_DATASET_SCHEMA_VERSION,
   LORA_DATASET_ENTRY_KINDS,
+  analyzeCaptionInvariants,
   computeDatasetReadiness,
   deriveTriggerWord,
   isValidTriggerWord,
   prefixCaption,
   sanitizeLoraDataset,
+  stripSharedFragments,
 } from '../lib/loraDataset.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { v4 as uuidv4 } from '../lib/uuid.js';
@@ -425,6 +427,46 @@ export async function updateImageCaption(id, imageId, caption) {
     };
   });
   return next.images.find((img) => img.id === imageId);
+}
+
+/**
+ * Strip the invariant identity fragments shared across most captions (issue
+ * #1320) — phrases repeated in nearly every caption bind the character to the
+ * caption text instead of the trigger token. Recomputes the shared set
+ * server-side (never trusts a client-supplied fragment list) and rewrites every
+ * captioned image, leaving each caption with the trigger word + only what
+ * varies shot-to-shot. Returns `{ dataset, removedFragments, updatedImages }`;
+ * a no-op (nothing shared, or too few captions to analyze) leaves the record
+ * untouched and returns an empty `removedFragments`.
+ */
+export async function stripSharedCaptionFragments(id) {
+  const current = await requireDataset(id);
+  const { sharedFragments } = analyzeCaptionInvariants(current.images, current.triggerWord);
+  if (!sharedFragments.length) {
+    return {
+      dataset: { ...current, readiness: computeDatasetReadiness(current) },
+      removedFragments: [],
+      updatedImages: 0,
+    };
+  }
+  const toStrip = sharedFragments.map((f) => f.fragment);
+  let updatedImages = 0;
+  const next = await updateDataset(id, (record) => ({
+    ...record,
+    images: record.images.map((img) => {
+      if (img.status !== 'ready' || !img.caption) return img;
+      const stripped = stripSharedFragments(img.caption, toStrip, record.triggerWord);
+      if (stripped === img.caption) return img;
+      updatedImages += 1;
+      return { ...img, caption: stripped };
+    }),
+  }));
+  console.log(`🧹 Stripped ${sharedFragments.length} shared caption fragment(s) across ${updatedImages} image(s) — dataset=${id}`);
+  return {
+    dataset: { ...next, readiness: computeDatasetReadiness(next) },
+    removedFragments: sharedFragments,
+    updatedImages,
+  };
 }
 
 export async function deleteImage(id, imageId) {

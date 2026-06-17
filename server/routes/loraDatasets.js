@@ -23,6 +23,7 @@ import {
   listDatasets,
   patchDataset,
   reconcileRenderingImages,
+  stripSharedCaptionFragments,
   updateImageCaption,
 } from '../services/loraDatasets.js';
 import { generateDatasetImages, getDatasetVariationAxes, sliceReferenceSheet } from '../services/loraDatasetGenerate.js';
@@ -164,6 +165,13 @@ router.get('/:id/caption-runs/:runId/events', asyncHandler(async (req, res) => {
   if (!attachCaptionSseClient(req.params.runId, res)) {
     throw new ServerError(`Caption run not found: ${req.params.runId}`, { status: 404, code: 'NOT_FOUND' });
   }
+}));
+
+// Bulk caption lint — strip the identity fragments shared across most captions
+// so the trigger token (not the caption phrases) learns the character. The
+// server recomputes the shared set itself; no request body.
+router.post('/:id/strip-shared-fragments', asyncHandler(async (req, res) => {
+  res.json(await stripSharedCaptionFragments(req.params.id));
 }));
 
 const imagePatchSchema = z.object({ caption: z.string().max(2000) });
