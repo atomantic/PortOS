@@ -50,11 +50,12 @@ beforeEach(() => {
 
 describe('PovRewritePanel', () => {
   it('loads cast + rewrites and generates a new POV rewrite', async () => {
-    getPipelinePerspectiveRewrites.mockResolvedValue({
-      cast: [{ id: 'char-ada', name: 'Ada', role: 'protagonist' }, { id: 'char-bly', name: 'Bly', role: 'rival' }],
-      rewrites: [],
-      hasContent: true,
-    });
+    const cast = [{ id: 'char-ada', name: 'Ada', role: 'protagonist' }, { id: 'char-bly', name: 'Bly', role: 'rival' }];
+    // Initial load: empty. After generate, the panel refetches (server-
+    // authoritative, capped) — return the new rewrite on subsequent calls.
+    getPipelinePerspectiveRewrites
+      .mockResolvedValueOnce({ cast, rewrites: [], hasContent: true })
+      .mockResolvedValue({ cast, rewrites: [REWRITE], hasContent: true });
     createPipelinePerspectiveRewrite.mockResolvedValue({ status: 'complete', rewrite: REWRITE });
 
     render(<PovRewritePanel issue={ISSUE} series={{}} />);
@@ -68,7 +69,7 @@ describe('PovRewritePanel', () => {
       'iss-1',
       expect.objectContaining({ povCharacterId: 'char-ada' }),
     ));
-    // newly generated rewrite appears
+    // newly generated rewrite appears via the post-generate refetch
     await waitFor(() => expect(screen.getByText('Ada')).toBeInTheDocument());
   });
 

@@ -202,8 +202,14 @@ export default function PovRewritePanel({ issue, series }) {
   const handleGenerate = async () => {
     const result = await runGenerate();
     if (!result?.rewrite) return;
-    setData((prev) => ({ ...prev, rewrites: [result.rewrite, ...(prev?.rewrites || [])] }));
     toast.success(`Rewrote in ${result.rewrite.povCharacterName}'s POV`);
+    // Refetch rather than optimistically prepend — the server caps stored
+    // rewrites per issue, so a blind prepend could show a row the server just
+    // pruned (which would then refuse to delete). The refetch also carries the
+    // authoritative stale flags. Generate doesn't touch issue.stages, so the
+    // source-change effect won't fire on its own.
+    const res = await getPipelinePerspectiveRewrites(issue.id, { silent: true }).catch(() => null);
+    if (res) setData(res);
   };
 
   const handleDelete = (rewriteId) =>
