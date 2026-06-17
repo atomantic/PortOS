@@ -43,14 +43,25 @@ export default function ManuscriptReadAloud({ open, onClose, section }) {
   const [elapsedMs, setElapsedMs] = useState(0);
 
   const audioRef = useRef(null);
+  // Set true on (re)mount, false on unmount. The body-set is required because
+  // the app runs under React.StrictMode, which does mount→cleanup→mount on the
+  // initial mount; a cleanup-only guard would be left false and freeze every
+  // later narration at the mounted check.
   const mountedRef = useRef(true);
-  useEffect(() => () => { mountedRef.current = false; }, []);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
   // Live mirror of the prose the modal is showing, so an in-flight narration
   // response can detect that the section's text changed (edit, reformat, accepted
   // fix, or a section swap) while it was synthesizing and discard itself rather
   // than apply stale audio/offsets to different prose.
   const contentRef = useRef(content);
   contentRef.current = content;
+  // Live mirror of `open` so a narration that resolves after the modal was
+  // closed doesn't auto-start playback into an unmounted <audio> element.
+  const openRef = useRef(open);
+  openRef.current = open;
 
   // Reset narration when the prose being read changes — a different issue/stage,
   // or the SAME section edited under it. The cached segments + their char offsets
@@ -109,7 +120,10 @@ export default function ManuscriptReadAloud({ open, onClose, section }) {
     const segs = Array.isArray(result.segments) ? result.segments : [];
     setSegments(segs);
     setElapsedMs(0);
-    if (segs.length) { setCurrentIndex(0); setIsPlaying(true); }
+    // Only auto-start when the modal is still open — otherwise the <audio> is
+    // unmounted and the play effect would set "Pause" with nothing playing. The
+    // segments still load, so reopening shows the prose ready to Play.
+    if (segs.length && openRef.current) { setCurrentIndex(0); setIsPlaying(true); }
   };
 
   const togglePlay = () => {

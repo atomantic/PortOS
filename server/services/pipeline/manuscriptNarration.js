@@ -39,8 +39,8 @@ const isAbbreviation = (word) => {
   const w = word.toLowerCase().replace(/[^a-z.]/g, '');
   if (ABBREVIATIONS.has(w) || ABBREVIATIONS.has(w.replace(/\.$/, ''))) return true;
   // Single-letter initials ("J." in "J. R. R. Tolkien") and dotted acronyms
-  // ("U.S.A.") — a lone capital before the period.
-  return /^[a-z]\.?$/i.test(w);
+  // ("U.S.", "U.S.A.") — a run of single letters each followed by a period.
+  return /^(?:[a-z]\.){1,}[a-z]?$/.test(w);
 };
 
 /**

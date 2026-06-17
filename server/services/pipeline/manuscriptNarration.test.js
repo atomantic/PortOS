@@ -39,9 +39,16 @@ describe('splitProseIntoSentences', () => {
     expect(segs[1].text).toBe('They talked.');
   });
 
-  it('does not split a decimal number or dotted acronym mid-token', () => {
+  it('does not split a decimal number mid-token', () => {
     expect(splitProseIntoSentences('Pi is 3.14 today.').map((s) => s.text))
       .toEqual(['Pi is 3.14 today.']);
+  });
+
+  it('does not split a dotted acronym followed by another word', () => {
+    expect(splitProseIntoSentences('He joined the U.S. Navy last year. It changed him.').map((s) => s.text))
+      .toEqual(['He joined the U.S. Navy last year.', 'It changed him.']);
+    expect(splitProseIntoSentences('She wrote to J. R. R. Tolkien once.').map((s) => s.text))
+      .toEqual(['She wrote to J. R. R. Tolkien once.']);
   });
 
   it('keeps trailing quotes/brackets with the sentence', () => {
