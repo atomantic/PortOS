@@ -74,9 +74,11 @@ export default function PipelineEditorialChecks() {
   const loadFindings = useCallback((id) => {
     if (!id) { setComments([]); return; }
     setLoadingFindings(true);
+    // getPipelineManuscriptReview has no silent option, so request() already
+    // toasts on failure — just clear + swallow here (single-layer toast).
     getPipelineManuscriptReview(id)
       .then((review) => setComments(Array.isArray(review?.comments) ? review.comments : []))
-      .catch((err) => toast.error(err.message || 'Failed to load findings'))
+      .catch(() => setComments([]))
       .finally(() => setLoadingFindings(false));
   }, []);
 
