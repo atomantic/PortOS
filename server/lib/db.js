@@ -93,22 +93,24 @@ export function isTestRunner() {
 // matches a write verb ANYWHERE, after stripping comments so a keyword named in
 // a comment can't trip it (and a write after a comment can't slip past).
 //
-// Normalize the SQL before keyword-matching, in two passes whose order matters:
-//   1. Blank out single-quoted string literals (`''` is Postgres's escaped quote,
-//      consumed by the alternation). This must come FIRST so a literal can neither
-//      HIDE a real write — `SELECT '/*'; DELETE …; SELECT '*/'` would otherwise have
-//      its quote-embedded `/*…*/` stripped as a comment, taking the DELETE with it —
-//      nor MASQUERADE as one (`SELECT 'UPDATE x SET y' AS note` is a read).
-//   2. Strip line/block comments, so a verb named only in a comment (`-- DELETE FROM x`
-//      in a header) doesn't false-positive a harmless SELECT, and a write hidden after
-//      a non-leading comment is still caught.
+// Normalize the SQL before keyword-matching in a SINGLE left-to-right pass that
+// alternates over comments AND string literals, so whichever delimiter appears
+// FIRST consumes its own span. Order matters and a two-pass "mask strings, then
+// strip comments" is WRONG: an apostrophe inside a comment (`-- don't touch …`)
+// would open a spurious string mask that swallows a real write on the next line
+// (a false-negative — the exact failure this guard exists to prevent). Processing
+// left-to-right keeps a comment's apostrophe part of the comment, and keeps a
+// `/*` or `--` inside a string literal from starting a comment. Comments collapse
+// to a space; string literals collapse to `''` (Postgres's escaped-quote form),
+// so a write verb appearing only inside a literal can't trip the guard, and a
+// quote-embedded comment delimiter can't hide a write between two literals.
 // Dollar-quoted bodies (`$$…$$`, used in function definitions) are not unwrapped —
 // stores don't send them, so this test-only backstop accepts that edge.
 function normalizeSqlForMatch(text) {
-  return text
-    .replace(/'(?:''|[^'])*'/g, "''")
-    .replace(/--[^\n]*/g, ' ')
-    .replace(/\/\*[\s\S]*?\*\//g, ' ');
+  return text.replace(
+    /--[^\n]*|\/\*[\s\S]*?\*\/|'(?:''|[^'])*'/g,
+    (m) => (m[0] === "'" ? "''" : ' '),
+  );
 }
 
 // CREATE TABLE … AS SELECT (CTAS) and the broader DDL family (CREATE/ALTER/DROP)
@@ -132,10 +134,13 @@ const ROW_WRITE_PATTERNS = [
   // (a read followed by a session command) doesn't read as an UPDATE write.
   /\bUPDATE\b\s+[^;]+?\bSET\b/i,
   // COPY <table> FROM — an import writes rows. `COPY (query) TO` / `COPY <table>
-  // TO` is an export (read): the `(?!\()` rejects the subquery-export form whose
-  // inner FROM would otherwise match, and requiring FROM before the next `;`
-  // leaves `COPY <table> TO …` (no FROM) alone.
-  /\bCOPY\s+(?!\()[^;]*?\bFROM\b/i,
+  // TO` is an export (read): requiring the first non-blank token after COPY to be
+  // a non-`(` char (`[^\s(]`) rejects the subquery-export form whose inner FROM
+  // would otherwise match, and requiring FROM before the next `;` leaves `COPY
+  // <table> TO …` (no FROM) alone. `[^\s(]` (not a `(?!\()` lookahead) is load-
+  // bearing: a lookahead lets `\s+` backtrack and pass the assertion mid-whitespace
+  // on `COPY   (SELECT … FROM …) TO`, so the export would false-positive.
+  /\bCOPY\s+[^\s(][^;]*?\bFROM\b/i,
 ];
 
 // True when the SQL performs a row write in any of the recognized forms.

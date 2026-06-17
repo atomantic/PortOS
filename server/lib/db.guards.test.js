@@ -309,10 +309,18 @@ describe('assertWriteAllowed broadened write forms (#1333)', () => {
   it('allows COPY … TO exports (a read), including the subquery form', () => {
     armProd();
     // COPY <table> TO and COPY (query) TO are exports — the inner FROM of the
-    // subquery must NOT read as a write.
+    // subquery must NOT read as a write. The spaced/tabbed/newline-separated forms
+    // are regression cases: a `(?!\()` lookahead let `\s+` backtrack and match the
+    // subquery's FROM when extra whitespace preceded the `(`.
     expect(() => assertWriteAllowed('COPY authors TO STDOUT')).not.toThrow();
     expect(() =>
       assertWriteAllowed('COPY (SELECT * FROM authors) TO STDOUT'),
+    ).not.toThrow();
+    expect(() =>
+      assertWriteAllowed('COPY   (SELECT * FROM authors) TO STDOUT'),
+    ).not.toThrow();
+    expect(() =>
+      assertWriteAllowed('COPY\t(SELECT * FROM authors) TO STDOUT'),
     ).not.toThrow();
   });
 
@@ -355,6 +363,17 @@ describe('assertWriteAllowed broadened write forms (#1333)', () => {
     // false-negative. Masking the literals first leaves the DELETE exposed.
     expect(() =>
       assertWriteAllowed("SELECT '/*'; DELETE FROM universes; SELECT '*/'"),
+    ).toThrow(/Refusing to mutate/i);
+  });
+
+  it('keeps an apostrophe inside a comment from hiding the write on the next line', () => {
+    armProd();
+    // Regression: a two-pass "mask strings then strip comments" normalizer let the
+    // apostrophe in `don't` (inside the comment) pair with the `'x'` literal of the
+    // DELETE, masking the DELETE away — a false-negative. The single-pass alternation
+    // consumes the comment first, so the apostrophe stays inside it.
+    expect(() =>
+      assertWriteAllowed("-- don't touch prod\nDELETE FROM universes WHERE name = 'x'"),
     ).toThrow(/Refusing to mutate/i);
   });
 
