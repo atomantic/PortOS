@@ -8,15 +8,16 @@
  *      into one buffer; members are handled one at a time as they arrive.
  *      - `conversations*.json` + `conversation_asset_file_names.json` are
  *        buffered in memory (small relative to the assets).
- *      - `*.dat` asset files (images / voice audio / PDFs) are each buffered
- *        (so their magic bytes can be sniffed for the real extension) and then
- *        written to the served assets dir (`PATHS.brainImportAssets`) keyed by
- *        their global asset id, falling back to the friendly name in the
- *        asset-name map. `chat.html` and other bulky members are drained
- *        without buffering. A running `MAX_TOTAL_BUFFERED_BYTES` budget caps
- *        the aggregate held in memory so a pathological export can't OOM the
- *        process (the per-asset hold is bounded; true per-asset streaming to
- *        disk is tracked in PLAN.md).
+ *      - `*.dat` asset files (images / voice audio / PDFs) are **streamed
+ *        straight to a temp file** in the served assets dir
+ *        (`PATHS.brainImportAssets`) as they arrive — only the leading bytes are
+ *        held to sniff the real extension, so peak RAM stays bounded to one chunk
+ *        no matter how large the export is. After the stream closes (the
+ *        asset-name map may arrive after the `.dat` members) each temp file is
+ *        renamed to its final `<assetId><ext>` served name, keyed by the global
+ *        asset id and falling back to the friendly name in the asset-name map
+ *        for the extension when magic-byte sniffing comes up empty. `chat.html`
+ *        and other bulky members are drained without buffering.
  *   2. Build a `pointer -> { url, name, mime }` resolver so transcript rendering
  *      can inline `![](url)` images and `[🔊 audio](url)` / `[📎 file](url)`
  *      links pointing at the extracted assets.
@@ -28,28 +29,26 @@
  * only difference is the `assetResolver`.
  */
 
-import { createReadStream } from 'fs';
-import { mkdir, unlink, writeFile } from 'fs/promises';
+import { createReadStream, createWriteStream } from 'fs';
+import { mkdir, rename, unlink } from 'fs/promises';
 import { Writable } from 'stream';
 import { PATHS, getMimeType } from '../lib/fileUtils.js';
 import { parseZip } from '../lib/zipStream.js';
 import { parseExport, importConversations, assetPointerId } from './chatgptImport.js';
 import { ServerError } from '../lib/errorHandler.js';
 
-// Cap an individual buffered member (JSON shard or `.dat` asset). The largest
-// conversation shard in a real export is ~6 MB and assets run KB–few MB; 100 MB
-// is a generous per-member backstop against a malicious zip claiming one member
-// is enormous.
+// Cap an individual member (JSON shard buffered in memory, or `.dat` asset
+// streamed to disk). The largest conversation shard in a real export is ~6 MB
+// and assets run KB–few MB; 100 MB is a generous per-member backstop against a
+// malicious zip claiming one member is enormous. Assets stream straight to disk
+// (peak RAM is one chunk), so there is no aggregate in-memory ceiling to keep —
+// a legitimately large multi-GB export imports without an arbitrary budget.
 const MAX_MEMBER_BYTES = 100 * 1024 * 1024;
 
-// Cap the AGGREGATE bytes held in memory at once. Asset buffers accumulate in
-// `pendingAssets` until the stream closes (the asset-name map may arrive after
-// the `.dat` members, so we can't resolve+flush each in isolation), so without
-// an aggregate ceiling a pathological multi-GB export — the route allows up to
-// 2 GB — could exhaust the heap before the write loop runs. 1 GB comfortably
-// holds any real export's assets; beyond that we fail fast rather than OOM.
-// (True per-asset stream-to-disk would remove this ceiling — tracked in PLAN.md.)
-const MAX_TOTAL_BUFFERED_BYTES = 1024 * 1024 * 1024;
+// Leading bytes captured from each streamed asset to sniff its magic-byte type
+// (the widest sniff — WAV/WebP — reads bytes 8–11). Everything past this streams
+// straight to the temp file without being held.
+const SNIFF_BYTES = 12;
 
 // Magic-byte sniffers — `.dat` files carry no extension, so we detect the real
 // type from the leading bytes and give the served file a correct extension.
@@ -124,6 +123,34 @@ const collect = (entry, max) => new Promise((resolve, reject) => {
   entry.pipe(sink);
 });
 
+// Stream a `.dat` entry straight to `filePath`, holding only the leading
+// `SNIFF_BYTES` so the asset's real extension can be sniffed without buffering
+// the whole file (peak RAM is one chunk). Enforces the per-member size cap.
+// Resolves with the sniffed extension (or null when the magic bytes aren't
+// recognized — the caller then falls back to the friendly name / `.bin`).
+const streamAssetToFile = (entry, filePath, max) => new Promise((resolve, reject) => {
+  const out = createWriteStream(filePath);
+  const head = [];
+  let headLen = 0;
+  let size = 0;
+  let done = false;
+  const fail = (err) => { if (done) return; done = true; out.destroy(); reject(err); };
+  out.on('error', fail);
+  const sink = new Writable({
+    write(chunk, _enc, cb) {
+      size += chunk.length;
+      if (size > max) { cb(new Error(`ZIP member exceeds ${max} byte limit`)); return; }
+      if (headLen < SNIFF_BYTES) { head.push(chunk); headLen += chunk.length; }
+      if (out.write(chunk)) cb();
+      else out.once('drain', cb);
+    },
+    final(cb) { out.end(cb); },
+  });
+  sink.on('error', fail);
+  out.on('finish', () => { if (done) return; done = true; resolve(sniffExtension(Buffer.concat(head))); });
+  entry.pipe(sink);
+});
+
 /**
  * Stream-extract a ChatGPT export ZIP at `zipPath`.
  *
@@ -143,11 +170,13 @@ export async function extractChatgptZip(zipPath, { assetDir = PATHS.brainImportA
 
   const convoBuffers = [];          // { path, buffer }
   let assetNameMap = {};
-  // assetId -> { datPath, buffer } collected during the stream; we resolve
-  // extensions + write files after, because the name map may arrive after the
-  // .dat members (member order in the ZIP isn't guaranteed).
+  // assetId -> { datPath, tempPath, sniffedExt } recorded as each `.dat` streams
+  // to a temp file; we rename to the final `<assetId><ext>` name after the
+  // stream closes, because the name map may arrive after the .dat members
+  // (member order in the ZIP isn't guaranteed). `tempPaths` tracks every temp
+  // file written so a mid-stream failure can clean partial writes off disk.
   const pendingAssets = new Map();
-  let totalBuffered = 0;            // running aggregate-memory guard (see MAX_TOTAL_BUFFERED_BYTES)
+  const tempPaths = new Set();
 
   await new Promise((resolve, reject) => {
     let settled = false;
@@ -155,8 +184,9 @@ export async function extractChatgptZip(zipPath, { assetDir = PATHS.brainImportA
     const parser = parseZip();
     // On any error/settle, tear down both streams. Rejecting the Promise alone
     // doesn't stop ingestion — the read stream keeps flowing into the parser and
-    // collect() keeps buffering members, so a charge() overflow would otherwise
-    // exhaust the heap *after* the budget guard already fired, defeating it.
+    // entries keep streaming to disk, so a per-member overflow would otherwise
+    // keep writing *after* the failure already fired. Temp files left behind are
+    // cleaned by `tempPaths` below.
     const settle = (fn) => (arg) => {
       if (settled) return;
       settled = true;
@@ -165,16 +195,6 @@ export async function extractChatgptZip(zipPath, { assetDir = PATHS.brainImportA
     };
     const onErr = settle(reject);
     const inFlight = [];
-    // Charge buffered bytes against the aggregate budget the moment they land,
-    // failing fast before the heap is exhausted (collect()'s per-member cap
-    // alone can't bound the sum across hundreds of assets held until flush).
-    const charge = (buf) => {
-      totalBuffered += buf.length;
-      if (totalBuffered > MAX_TOTAL_BUFFERED_BYTES) {
-        throw new Error(`ChatGPT export exceeds the ${MAX_TOTAL_BUFFERED_BYTES}-byte in-memory budget`);
-      }
-      return buf;
-    };
 
     src
       .on('error', onErr)
@@ -183,22 +203,22 @@ export async function extractChatgptZip(zipPath, { assetDir = PATHS.brainImportA
         const { path } = entry;
         if (IS_ASSET_NAME_MAP(path)) {
           inFlight.push(collect(entry, MAX_MEMBER_BYTES)
-            .then(charge)
             .then((buf) => { assetNameMap = JSON.parse(buf.toString('utf8')); })
             .catch(onErr));
         } else if (IS_CONVO_JSON(path)) {
           inFlight.push(collect(entry, MAX_MEMBER_BYTES)
-            .then(charge)
             .then((buf) => { convoBuffers.push({ path, buffer: buf }); })
             .catch(onErr));
         } else if (IS_DAT(path)) {
-          // Buffer the asset bytes. Asset `.dat` files in real exports are
-          // individual media files (KB–few MB); collecting one at a time lets
-          // us sniff magic bytes for the extension. The aggregate `charge`
-          // guard bounds the sum held across all assets until the write loop.
-          inFlight.push(collect(entry, MAX_MEMBER_BYTES)
-            .then(charge)
-            .then((buf) => { pendingAssets.set(datAssetId(path), { datPath: path, buffer: buf }); })
+          // Stream the asset straight to a temp file, holding only its leading
+          // bytes to sniff the extension. Peak RAM is one chunk regardless of
+          // asset size, so there is no aggregate ceiling and a multi-GB export
+          // imports without OOM risk. Renamed to its final served name below.
+          const assetId = datAssetId(path);
+          const tempPath = `${assetDir}/${assetId}.part`;
+          tempPaths.add(tempPath);
+          inFlight.push(streamAssetToFile(entry, tempPath, MAX_MEMBER_BYTES)
+            .then((sniffedExt) => { pendingAssets.set(assetId, { datPath: path, tempPath, sniffedExt }); })
             .catch(onErr));
         } else {
           // chat.html, export_manifest.json, library_files.json, user.json, etc.
@@ -208,27 +228,39 @@ export async function extractChatgptZip(zipPath, { assetDir = PATHS.brainImportA
       })
       .on('close', () => { Promise.all(inFlight).then(settle(resolve), onErr); })
       .on('error', onErr);
+  }).catch(async (err) => {
+    // Streaming failed (size cap, parser error, …) — assets already streamed to
+    // temp files would otherwise be orphaned on disk. Remove them before
+    // re-throwing so a bad upload can't accumulate `.part` files.
+    await cleanupTempFiles(tempPaths);
+    throw err;
   });
 
-  // Resolve each buffered asset's extension + write it to the served dir,
-  // dropping each buffer from the Map as it's flushed so the held memory falls
-  // as the loop progresses rather than staying at its peak until the end.
+  // Rename each streamed temp file to its final served name, resolving the
+  // extension from the sniffed magic bytes, then the friendly-name fallback,
+  // then `.bin`. On any failure, clean up both the renamed assets and any
+  // still-unfinalized temp files so nothing is orphaned.
   const assets = new Map();
-  for (const [assetId, { datPath, buffer }] of pendingAssets) {
-    const friendlyName = assetNameMap[`${assetId}.dat`] || assetNameMap[datPath] || null;
-    const ext = sniffExtension(buffer) || extFromName(friendlyName) || '.bin';
-    const fileName = `${assetId}${ext}`;
-    const filePath = `${assetDir}/${fileName}`;
-    // eslint-disable-next-line no-await-in-loop -- sequential write keeps peak
-    // disk/IO bounded; an export has a few hundred assets, not millions.
-    await writeFile(filePath, buffer);
-    pendingAssets.delete(assetId);   // release the buffer for GC
-    assets.set(assetId, {
-      url: `/data/brain-imports/${fileName}`,
-      name: friendlyName || fileName,
-      mime: getMimeType(ext),
-      file: fileName,
-    });
+  try {
+    for (const [assetId, { datPath, tempPath, sniffedExt }] of pendingAssets) {
+      const friendlyName = assetNameMap[`${assetId}.dat`] || assetNameMap[datPath] || null;
+      const ext = sniffedExt || extFromName(friendlyName) || '.bin';
+      const fileName = `${assetId}${ext}`;
+      const filePath = `${assetDir}/${fileName}`;
+      // eslint-disable-next-line no-await-in-loop -- sequential rename keeps peak
+      // disk/IO bounded; an export has a few hundred assets, not millions.
+      await rename(tempPath, filePath);
+      assets.set(assetId, {
+        url: `/data/brain-imports/${fileName}`,
+        name: friendlyName || fileName,
+        mime: getMimeType(ext),
+        file: fileName,
+      });
+    }
+  } catch (err) {
+    await cleanupExtractedAssets(assets, assetDir);
+    await cleanupTempFiles(tempPaths);
+    throw err;
   }
 
   const conversationFiles = [];
@@ -283,6 +315,14 @@ async function cleanupExtractedAssets(assets, assetDir = PATHS.brainImportAssets
   await Promise.all(
     [...assets.values()].map((a) => unlink(`${assetDir}/${a.file}`).catch(() => {}))
   );
+}
+
+// Remove the `.part` temp files written while streaming assets to disk. Called
+// when extraction fails before (or during) the rename-to-final step so a
+// partial/aborted import doesn't leave orphaned temp files behind. Already-
+// renamed temps no longer exist — the unlink simply no-ops on them.
+async function cleanupTempFiles(tempPaths) {
+  await Promise.all([...tempPaths].map((p) => unlink(p).catch(() => {})));
 }
 
 /**
