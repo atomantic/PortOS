@@ -1309,6 +1309,14 @@ function TickingClockEditor({ clock, disabled, onChange }) {
   const enabled = c.enabled === true;
   const patch = (p) => onChange({ ...c, ...p });
   const numOrNull = (v) => (v === '' ? null : Math.max(0, Math.min(9999, Math.floor(Number(v) || 0))));
+  const reminders = Array.isArray(c.reminders) ? c.reminders : [];
+  // Mint an `rm-`-prefixed id the server sanitizer accepts verbatim (its
+  // ensureRmId regex is /^rm-[a-zA-Z0-9-]+$/). Avoid crypto.randomUUID — the app
+  // is reachable over plain HTTP via Tailscale, where it's unavailable.
+  const newReminderId = () => `rm-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const addReminder = () => patch({ reminders: [...reminders, { id: newReminderId(), note: '', atIssue: null }] });
+  const updateReminder = (idx, field, value) => patch({ reminders: reminders.map((r, i) => (i === idx ? { ...r, [field]: value } : r)) });
+  const removeReminder = (idx) => patch({ reminders: reminders.filter((_, i) => i !== idx) });
   return (
     <fieldset className="rounded border border-port-border bg-port-bg/50 p-2 space-y-2">
       <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
@@ -1382,9 +1390,57 @@ function TickingClockEditor({ clock, disabled, onChange }) {
             disabled={disabled}
             className="w-full px-2 py-1 bg-port-bg border border-port-border rounded text-white text-sm"
           />
-          {Array.isArray(c.reminders) && c.reminders.length ? (
-            <p className="text-[10px] text-gray-500 italic">{c.reminders.length} reminder beat(s) — authored via the reader map.</p>
-          ) : null}
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] uppercase tracking-wider text-gray-500">Reminder beats</span>
+              <button
+                type="button"
+                onClick={addReminder}
+                disabled={disabled}
+                className="inline-flex items-center gap-1 text-[11px] text-port-accent hover:underline disabled:opacity-50"
+              >
+                <Plus size={11} /> Add reminder
+              </button>
+            </div>
+            {reminders.length === 0 ? (
+              <p className="text-[10px] text-gray-500 italic">No reminders yet — add beats that keep the countdown in the reader’s mind through the middle.</p>
+            ) : (
+              reminders.map((r, idx) => (
+                <div key={r.id || idx} className="flex items-center gap-1.5">
+                  <input
+                    type="text"
+                    value={r.note || ''}
+                    onChange={(e) => updateReminder(idx, 'note', e.target.value)}
+                    placeholder="Reminder beat (e.g. “the barometer drops”)"
+                    maxLength={500}
+                    disabled={disabled}
+                    aria-label={`Reminder ${idx + 1} note`}
+                    className="flex-1 px-2 py-1 bg-port-bg border border-port-border rounded text-white text-xs"
+                  />
+                  <input
+                    type="number"
+                    min={0}
+                    max={9999}
+                    value={r.atIssue ?? ''}
+                    onChange={(e) => updateReminder(idx, 'atIssue', numOrNull(e.target.value))}
+                    placeholder="Issue #"
+                    disabled={disabled}
+                    aria-label={`Reminder ${idx + 1} issue number`}
+                    className="w-20 px-2 py-1 bg-port-bg border border-port-border rounded text-white text-xs"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removeReminder(idx)}
+                    disabled={disabled}
+                    aria-label={`Remove reminder ${idx + 1}`}
+                    className="p-1 text-gray-500 hover:text-port-error disabled:opacity-50"
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
         </div>
       ) : null}
     </fieldset>
