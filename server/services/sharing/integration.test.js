@@ -2223,7 +2223,7 @@ describe('sharing round-trip', () => {
       const result = await importer.processManifest(bucket.id, exp.filename);
       expect(result.skipped).toBe(true);
       expect(result.reason).toBe('portos-schema-ahead');
-      expect(result.ahead).toEqual([{ category: 'pipelineSeries', senderV: 99, receiverV: 2 }]);
+      expect(result.ahead).toEqual([{ category: 'pipelineSeries', senderV: 99, receiverV: 3 }]);
       expect(result.producedByVersion).toBe('99.0.0');
       // Series stayed tombstoned (or absent) — apply was refused.
       await expect(series.getSeries(s.id)).rejects.toThrow();

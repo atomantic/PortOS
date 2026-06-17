@@ -61,7 +61,13 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // round-trip a series through its readerMap-unaware sanitizer and LWW-strip
   // the field back onto a newer peer. Per-category gate → only series sync
   // pauses with old peers; issues/universes keep flowing.
-  pipelineSeries: 2,
+  // v3 = `series.arc.tickingClock` added (#1289). Same situation as readerMap:
+  // an additive field INSIDE the series.arc payload, so a ≤v2 peer that receives
+  // and re-sanitizes a series through its tickingClock-unaware `sanitizeArc`
+  // would silently strip the countdown and last-writer-wins the loss back onto
+  // the newer peer. Bump makes the older peer reject the ahead-version series
+  // transfer instead. Per-category gate → only series sync pauses with old peers.
+  pipelineSeries: 3,
   // NOT bumped for the manuscript-review sibling doc now bundled on series
   // pushes/exports (`data/pipeline-series/{id}/manuscript-review.json`).
   // Unlike `readerMap` (v2), the review is NOT a field inside the series
