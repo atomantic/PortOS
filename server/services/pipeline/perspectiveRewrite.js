@@ -183,6 +183,22 @@ function pickSource(issue, sourceStage) {
 const formatLabel = (stage) =>
   stage === 'comicScript' ? 'comic script' : stage === 'teleplay' ? 'teleplay' : 'prose';
 
+// Resolve a stage's usable content budget in chars, scaled to the (possibly
+// per-stage-pinned) model's context window and never below CONTENT_MAX. The
+// rewrite and analysis stages can be pinned to different providers/models, so
+// each must be budgeted against its OWN window — and `overheadText` must cover
+// every non-content token the stage's prompt renders (e.g. the full cast roster
+// the rewrite prompt prints), or a large cast silently overfills the window.
+async function resolveStageContentMax(stage, { providerId, model, overheadText, outputReserveTokens }) {
+  const { contextWindow } = await resolveStageContext(stage, { providerOverride: providerId, modelOverride: model });
+  const budgetChars = usableInputTokens({
+    contextWindow,
+    overheadTokens: 1_500 + estimateTokens(overheadText),
+    outputReserveTokens,
+  }) * CHARS_PER_TOKEN;
+  return Math.max(CONTENT_MAX, budgetChars);
+}
+
 // ---------- generation ----------
 
 /**
@@ -208,21 +224,6 @@ export async function generatePerspectiveRewrite(issueId, { povCharacterId, sour
   const pov = cast.find((c) => c.id === povCharacterId || c.name === povCharacterId);
   if (!pov) return { status: 'unknown-character', issueId, seriesId: issue.seriesId, povCharacterId };
 
-  // Scale the content cap to the rewrite model's context window — never below
-  // CONTENT_MAX, so a big-context model re-lenses the whole passage.
-  const { contextWindow } = await resolveStageContext(REWRITE_STAGE, { providerOverride: providerId, modelOverride: model });
-  const overheadTokens = 1_500 + estimateTokens([series?.name || '', series?.styleNotes || '', pov.descriptor].join(' '));
-  const budgetChars = usableInputTokens({
-    contextWindow,
-    overheadTokens,
-    outputReserveTokens: REWRITE_OUTPUT_RESERVE_TOKENS,
-  }) * CHARS_PER_TOKEN;
-  const contentMax = Math.max(CONTENT_MAX, budgetChars);
-  const truncated = picked.text.length > contentMax;
-  const originalContent = truncated
-    ? `${picked.text.slice(0, contentMax)}\n\n[passage truncated for rewrite — ${picked.text.length} chars total]`
-    : picked.text;
-
   const seriesVars = {
     name: series?.name || 'Untitled series',
     logline: series?.logline || '',
@@ -231,6 +232,21 @@ export async function generatePerspectiveRewrite(issueId, { povCharacterId, sour
   };
   const issueVars = { number: issue.number, title: issue.title };
   const povVars = { name: pov.name, role: pov.role, descriptor: pov.descriptor };
+
+  // Scale the content cap to the rewrite model's context window — the rewrite
+  // prompt renders the FULL cast roster, so it's counted in the overhead too
+  // (a large/verbose cast otherwise silently overfills the window).
+  const rosterText = cast.map((c) => `${c.name} ${c.role} ${c.descriptor}`).join(' ');
+  const contentMax = await resolveStageContentMax(REWRITE_STAGE, {
+    providerId,
+    model,
+    overheadText: [seriesVars.name, seriesVars.styleNotes, pov.descriptor, rosterText].join(' '),
+    outputReserveTokens: REWRITE_OUTPUT_RESERVE_TOKENS,
+  });
+  const truncated = picked.text.length > contentMax;
+  const originalContent = truncated
+    ? `${picked.text.slice(0, contentMax)}\n\n[passage truncated for rewrite — ${picked.text.length} chars total]`
+    : picked.text;
 
   // 1. Rewrite the passage in the new POV (freeform prose).
   const rewriteResult = await runStagedLLM(REWRITE_STAGE, {
@@ -248,9 +264,16 @@ export async function generatePerspectiveRewrite(issueId, { povCharacterId, sour
   const rewriteText = str(rewriteResult.content, REWRITE_MAX_CHARS);
   if (!rewriteText) return { status: 'empty-rewrite', issueId, seriesId: issue.seriesId };
 
-  // 2. Analyze original vs rewrite (structured JSON). Both passages must fit the
-  // analysis window — split the budget across the two.
-  const halfMax = Math.floor(contentMax / 2);
+  // 2. Analyze original vs rewrite (structured JSON). Budget against the
+  // ANALYSIS stage's own window (it may be pinned to a different provider/model
+  // than the rewrite stage), then split it across the two passages it must hold.
+  const analysisMax = await resolveStageContentMax(ANALYSIS_STAGE, {
+    providerId,
+    model,
+    overheadText: [seriesVars.name, pov.name, pov.role].join(' '),
+    outputReserveTokens: ANALYSIS_OUTPUT_RESERVE_TOKENS,
+  });
+  const halfMax = Math.floor(analysisMax / 2);
   const clipForAnalysis = (text, label) =>
     text.length > halfMax ? `${text.slice(0, halfMax)}\n\n[${label} truncated for analysis]` : text;
   const analysisResult = await runStagedLLM(ANALYSIS_STAGE, {
