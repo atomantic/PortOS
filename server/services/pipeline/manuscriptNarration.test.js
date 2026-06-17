@@ -10,6 +10,7 @@ const {
   analyzeSentenceReadability,
   narrateProse,
   MAX_NARRATION_SEGMENTS,
+  MAX_SEGMENT_CHARS,
 } = await import('./manuscriptNarration.js');
 
 describe('splitProseIntoSentences', () => {
@@ -148,6 +149,23 @@ describe('narrateProse', () => {
   it('passes the requested voiceId through to synthesis', async () => {
     await narrateProse({ text: 'Hello there.', voiceId: 'piper:lessac' });
     expect(synthesizeToFileMock).toHaveBeenCalledWith(expect.objectContaining({ voiceId: 'piper:lessac' }));
+  });
+
+  it('sub-splits an over-long single sentence so no segment exceeds the TTS cap', async () => {
+    // One "sentence" of ~9000 chars with no terminal punctuation.
+    const word = 'word ';
+    const huge = word.repeat(Math.ceil(9000 / word.length)).trim();
+    const result = await narrateProse({ text: huge });
+    expect(result.segments.length).toBeGreaterThan(1);
+    result.segments.forEach((seg) => {
+      expect(seg.text.length).toBeLessThanOrEqual(MAX_SEGMENT_CHARS);
+      // Offsets still index the original text verbatim.
+      expect(huge.slice(seg.start, seg.end)).toBe(seg.text);
+    });
+    // Every synthesized chunk was within the engine cap.
+    synthesizeToFileMock.mock.calls.forEach(([{ text }]) => {
+      expect(text.length).toBeLessThanOrEqual(MAX_SEGMENT_CHARS);
+    });
   });
 
   it('rejects prose with more than MAX_NARRATION_SEGMENTS sentences', async () => {

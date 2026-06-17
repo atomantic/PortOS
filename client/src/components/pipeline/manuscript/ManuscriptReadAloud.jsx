@@ -96,8 +96,15 @@ export default function ManuscriptReadAloud({ open, onClose, section }) {
     const audio = audioRef.current;
     if (!audio) return;
     if (currentIndex < 0) { audio.pause(); return; }
-    if (isPlaying) audio.play().catch(() => {});
-    else audio.pause();
+    if (isPlaying) {
+      // play() rejects when the browser's autoplay policy blocks it — e.g. the
+      // user-activation window lapsed while a long section synthesized. Fall
+      // back to paused so the UI shows "Play" (a click is a fresh gesture the
+      // browser will honor) instead of a "Pause" button over silence.
+      audio.play().catch(() => { if (mountedRef.current) setIsPlaying(false); });
+    } else {
+      audio.pause();
+    }
   }, [currentIndex, isPlaying]);
 
   const runNarration = async () => {

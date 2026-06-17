@@ -27,6 +27,40 @@ import { synthesizeToFile } from './audio.js';
 // cap it and tell the caller to narrate a smaller selection rather than hang.
 export const MAX_NARRATION_SEGMENTS = 400;
 
+// Per-segment character cap handed to the TTS engine — matches the 4000-char
+// limit the other TTS REST endpoints enforce. A run-on sentence (or prose with
+// no terminal punctuation) can yield one huge segment; sending that straight to
+// the engine can fail or wedge local synthesis, so we sub-split it on word
+// boundaries first (the sub-spans are still highlightable, offsets preserved).
+export const MAX_SEGMENT_CHARS = 4000;
+
+/**
+ * Break a single over-long segment into sub-spans no longer than `max`,
+ * cutting on the last whitespace within each window (hard-cut only when a
+ * single token exceeds `max`). Offsets stay anchored to the original text so
+ * the client still reconstructs it verbatim. Returns [seg] unchanged when it
+ * already fits.
+ */
+function chunkLongSegment(seg, text, max) {
+  if (seg.end - seg.start <= max) return [seg];
+  const out = [];
+  let s = seg.start;
+  while (seg.end - s > max) {
+    let cut = -1;
+    for (let p = s + max; p > s; p -= 1) {
+      if (/\s/.test(text[p])) { cut = p; break; }
+    }
+    if (cut === -1) cut = s + max; // no whitespace to break on — hard cut
+    let e = cut;
+    while (e > s && /\s/.test(text[e - 1])) e -= 1;
+    if (e > s) out.push({ text: text.slice(s, e), start: s, end: e });
+    s = cut;
+    while (s < seg.end && /\s/.test(text[s])) s += 1;
+  }
+  if (seg.end > s) out.push({ text: text.slice(s, seg.end), start: s, end: seg.end });
+  return out;
+}
+
 // Abbreviations whose trailing period must NOT end a sentence — otherwise
 // "Dr. Vane" or "U.S. Navy" split mid-phrase and the highlight stutters.
 const ABBREVIATIONS = new Set([
@@ -179,7 +213,8 @@ export async function narrateProse({ text, voiceId, signal } = {}) {
   if (!trimmed) {
     throw new ServerError('text is required', { status: 400, code: 'PIPELINE_NARRATION_EMPTY_TEXT' });
   }
-  const sentences = splitProseIntoSentences(text);
+  const sentences = splitProseIntoSentences(text)
+    .flatMap((seg) => chunkLongSegment(seg, text, MAX_SEGMENT_CHARS));
   if (sentences.length === 0) {
     throw new ServerError('no narratable sentences found', {
       status: 400, code: 'PIPELINE_NARRATION_NO_SENTENCES',
