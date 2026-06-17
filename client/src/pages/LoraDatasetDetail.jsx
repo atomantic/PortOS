@@ -247,11 +247,15 @@ export default function LoraDatasetDetail() {
   useEffect(() => {
     if (!datasetId || subjectKind(dataset) === 'characters') {
       setVariationAxes(null);
-      return;
+      return undefined;
     }
+    // Cancel-on-cleanup so a late response from a previous dataset/kind can't
+    // overwrite the axes for the one now displayed (object↔place switch race).
+    let cancelled = false;
     getLoraDatasetVariationAxes(datasetId, { silent: true })
-      .then(setVariationAxes)
-      .catch(() => setVariationAxes(null));
+      .then((axes) => { if (!cancelled) setVariationAxes(axes); })
+      .catch(() => { if (!cancelled) setVariationAxes(null); });
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [datasetId, dataset?.character?.entryKind]);
 
