@@ -641,7 +641,14 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
 
   proc.on('error', (err) => {
     if (activeProcess === proc) { activeProcess = null; activeJobId = null; }
-    fail(`trainer spawn failed: ${err.message}`);
+    // A launch failure after the run was marked `running` — a genuine spawn
+    // error, or (with spawnDetached) the control dir failing to create/clear.
+    // Route through the same terminal cleanup as pre-spawn failures so the run
+    // row doesn't stay stuck `running` and the dataset's `training` chip is
+    // released; `fail()` alone only logs + emits. Async + guarded since this
+    // runs outside the request lifecycle.
+    Promise.resolve(failBeforeSpawn(`trainer spawn failed: ${err.message}`))
+      .catch((e) => console.error(`❌ training [${shortId(jobId)}] failure cleanup failed: ${e?.message}`));
   });
 
   proc.on('close', (code, signal) => {
