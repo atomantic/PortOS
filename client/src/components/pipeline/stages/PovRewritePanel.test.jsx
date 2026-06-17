@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 vi.mock('../../../services/api', () => ({
@@ -103,6 +103,20 @@ describe('PovRewritePanel', () => {
 
     await waitFor(() => expect(screen.getByRole('button', { name: /Rewrite in another POV/i })).toBeDisabled());
     expect(screen.getByText(/Draft prose/i)).toBeInTheDocument();
+  });
+
+  it('refetches when the source draft changes on the same issue', async () => {
+    getPipelinePerspectiveRewrites.mockResolvedValue({ cast: [], rewrites: [], hasContent: false });
+
+    const { rerender } = render(<PovRewritePanel issue={ISSUE} series={{}} />);
+    await waitFor(() => expect(getPipelinePerspectiveRewrites).toHaveBeenCalledTimes(1));
+
+    // Edit the prose output on the same issue → panel should refetch (so
+    // hasContent / stale flags track the live draft, not just navigation).
+    const edited = { ...ISSUE, stages: { prose: { output: 'Now there is drafted prose.' } } };
+    await act(async () => { rerender(<PovRewritePanel issue={edited} series={{}} />); });
+
+    await waitFor(() => expect(getPipelinePerspectiveRewrites).toHaveBeenCalledTimes(2));
   });
 
   it('deletes a stored rewrite', async () => {

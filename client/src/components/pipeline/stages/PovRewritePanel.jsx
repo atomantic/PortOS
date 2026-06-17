@@ -8,7 +8,7 @@
  * artifacts server-side; the canonical draft is never touched here.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2, Sparkles, Trash2, ChevronDown, ChevronRight, Drama } from 'lucide-react';
 import toast from '../../ui/Toast';
 import {
@@ -150,21 +150,36 @@ export default function PovRewritePanel({ issue, series }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [povId, setPovId] = useState('');
+  // True until the first fetch resolves — gates the full-panel spinner so a
+  // background refetch (source edit) refreshes in place without hiding the list.
+  const loadedRef = useRef(false);
+
+  // The rewritable source — refetch whenever any of these change so `hasContent`
+  // (can-generate gate) and each rewrite's `stale` flag track edits to the live
+  // draft, not just navigation. The issue prop updates on discrete save/
+  // generate/restore events (not keystrokes), so this isn't a hot path.
+  const proseOut = issue.stages?.prose?.output || '';
+  const comicOut = issue.stages?.comicScript?.output || '';
+  const teleOut = issue.stages?.teleplay?.output || '';
+
+  // Reset the picker on issue change — this page reuses the component instance
+  // across /pipeline/issues/:id navigation, so a POV chosen on the prior issue
+  // must not carry over (it may not be in the new issue's cast). The default-
+  // picker effect re-seeds it from the freshly-loaded cast. Scoped to issue.id
+  // so a same-issue source edit doesn't clear the user's selection. Also resets
+  // the first-load gate so a new issue shows the spinner instead of the prior
+  // issue's list while its fetch is in flight.
+  useEffect(() => { setPovId(''); loadedRef.current = false; }, [issue.id]);
 
   useEffect(() => {
     let alive = true;
-    setLoading(true);
-    // Reset the picker on issue change — this page reuses the component instance
-    // across /pipeline/issues/:id navigation, so a POV chosen on the prior issue
-    // must not carry over (it may not be in the new issue's cast). The default-
-    // picker effect re-seeds it from the freshly-loaded cast.
-    setPovId('');
+    if (!loadedRef.current) setLoading(true);
     getPipelinePerspectiveRewrites(issue.id, { silent: true })
       .then((res) => { if (alive) setData(res); })
       .catch(() => { if (alive) setData({ cast: [], rewrites: [], hasContent: false }); })
-      .finally(() => { if (alive) setLoading(false); });
+      .finally(() => { if (alive) { loadedRef.current = true; setLoading(false); } });
     return () => { alive = false; };
-  }, [issue.id]);
+  }, [issue.id, proseOut, comicOut, teleOut]);
 
   const cast = data?.cast || [];
   const rewrites = data?.rewrites || [];
