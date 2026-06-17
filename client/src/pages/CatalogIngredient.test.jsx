@@ -205,6 +205,21 @@ describe('CatalogIngredient — character sheet', () => {
     ));
   });
 
+  it('attaches a synchronously-returned image (external mode, no jobId)', async () => {
+    const { generateImage } = await import('../services/apiSystem');
+    const { setCatalogIngredientPortrait } = await import('../services/apiCatalog');
+    generateImage.mockResolvedValue({ filename: 'ext.png' }); // external SD-API: no jobId
+    setCatalogIngredientPortrait.mockResolvedValue({});
+    renderPage();
+    await waitFor(() => expect(screen.getByDisplayValue('Sharp eyes, ink-stained cuffs.')).toBeTruthy());
+
+    fireEvent.click(screen.getByRole('button', { name: /^Generate$/i }));
+
+    await waitFor(() => expect(setCatalogIngredientPortrait).toHaveBeenCalledWith(
+      'cat-chr-1', { mediaKey: 'ext.png' }, { silent: true },
+    ));
+  });
+
   it('re-enables Generate after a failed render (does not get stuck)', async () => {
     const { generateImage } = await import('../services/apiSystem');
     generateImage.mockResolvedValue({ jobId: 'fail-job' });

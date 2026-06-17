@@ -870,9 +870,18 @@ function GenerateImageControl({ name, description, onComplete }) {
     ).catch((err) => { toast.error(err?.message || 'Image generation failed'); return null; });
     if (!mountedRef.current) return;
     setStarting(false);
-    if (!queued?.jobId) return;
-    setJobId(queued.jobId);
-    toast.success('Generating image…');
+    if (!queued) return;
+    if (queued.jobId) {
+      // Local/Codex modes enqueue a job — track it live via MediaJobThumb.
+      setJobId(queued.jobId);
+      toast.success('Generating image…');
+    } else if (queued.filename) {
+      // External SD-API mode renders synchronously and returns the finished
+      // filename with no jobId — attach it directly.
+      onComplete?.(queued.filename);
+    } else {
+      toast.error('Image generation returned no result');
+    }
   };
 
   // Fires once when the in-flight job completes (MediaJobThumb forwards the
