@@ -33,6 +33,7 @@ import { randomUUID } from 'crypto';
 import { unlink } from 'fs/promises';
 import { join, resolve as pathResolve, sep as PATH_SEP } from 'path';
 import { PATHS, readJSONFile, atomicWrite, ensureDir, sleep } from '../../lib/fileUtils.js';
+import { reapDetached } from '../../lib/detachedSpawn.js';
 import {
   broadcastSse,
   attachSseClient as attachSse,
@@ -259,6 +260,16 @@ export async function initMediaJobQueue() {
     const restartedFailedIds = [];
     for (const j of persistedJobs) {
       if (j.status === 'running') {
+        // Video renders spawn a detached child that survives a pm2 restart, so
+        // the persisted 'running' job may still be alive. Reap it (SIGTERM →
+        // SIGKILL) before freeing the lane, else the orphan keeps consuming the
+        // GPU while a newly-dequeued job runs concurrently. (Training children
+        // are reaped in initLoraTraining, which knows their run dir.)
+        if (j.kind === 'video') {
+          // eslint-disable-next-line no-await-in-loop
+          const reaped = await reapDetached(join(PATHS.videos, '.detached', j.id)).catch(() => ({ reaped: false }));
+          if (reaped.reaped) console.log(`🧹 reaped surviving render pid ${reaped.pid} for job ${j.id.slice(0, 8)}`);
+        }
         const failed = {
           ...j,
           status: 'failed',

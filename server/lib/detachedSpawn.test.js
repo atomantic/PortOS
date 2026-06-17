@@ -4,7 +4,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { spawnDetached } from './detachedSpawn.js';
+import { spawnDetached, reapDetached } from './detachedSpawn.js';
 
 const execFileAsync = promisify(execFile);
 const dirs = [];
@@ -173,5 +173,42 @@ describe('spawnDetached', () => {
     } finally {
       Object.defineProperty(process, 'platform', { value: original, configurable: true });
     }
+  });
+
+  describe('reapDetached', () => {
+    const aliveByPs = async (pid) => {
+      const { stdout } = await execFileAsync('ps', ['-o', 'pid=', '-p', String(pid)]).catch(() => ({ stdout: '' }));
+      return stdout.trim().length > 0;
+    };
+
+    it('SIGTERMs a surviving orphan and reports it reaped', async () => {
+      const controlDir = await tmpControlDir();
+      const handle = await spawnDetached('sh', ['-c', 'sleep 30'], { controlDir, pollMs: 25 });
+      const pid = handle.pid;
+      expect(pid).toBeGreaterThan(0);
+      // Attach the close listener BEFORE reaping — the killed sleeper writes
+      // exit and the handle's own tail loop can fire 'close' before reap returns.
+      const closed = onClose(handle);
+      await new Promise((r) => setTimeout(r, 50));
+      const res = await reapDetached(controlDir, { graceMs: 3000, pollMs: 25 });
+      expect(res.reaped).toBe(true);
+      expect(res.pid).toBe(pid);
+      expect(await aliveByPs(pid)).toBe(false);
+      await closed;
+    });
+
+    it('is a no-op when the job already recorded an exit', async () => {
+      const controlDir = await tmpControlDir();
+      const handle = await spawnDetached('sh', ['-c', 'exit 0'], { controlDir, pollMs: 25 });
+      await onClose(handle);
+      const res = await reapDetached(controlDir, { graceMs: 200, pollMs: 25 });
+      expect(res.reaped).toBe(false);
+    });
+
+    it('is a no-op when no pid was ever recorded', async () => {
+      const controlDir = await tmpControlDir();
+      const res = await reapDetached(controlDir, { graceMs: 200, pollMs: 25 });
+      expect(res.reaped).toBe(false);
+    });
   });
 });

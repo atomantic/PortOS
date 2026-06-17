@@ -57,6 +57,10 @@ const DEFAULT_POLL_MS = 250;
 // the launch a failure. The supervisor writes it the instant the job spawns;
 // 10s is generous slack for a loaded machine.
 const PID_TIMEOUT_MS = 10000;
+// How long reapDetached lets a SIGTERM'd orphan checkpoint+exit before
+// escalating to SIGKILL. Matches the in-session cancel escalation (8s) plus
+// slack for a final checkpoint write.
+const REAP_GRACE_MS = 12000;
 
 // `wait` reports a signal-terminated child as 128+signum. Invert os signal
 // constants once so we can decode that back into Node's ('code', 'signal')
@@ -297,4 +301,44 @@ export async function spawnDetached(bin, args = [], { env, cwd, controlDir, poll
   });
 
   return handle;
+}
+
+const isAlive = (pid) => {
+  try { process.kill(pid, 0); return true; } catch { return false; }
+};
+
+/**
+ * Reap a detached job that outlived the server (boot recovery). Because
+ * spawnDetached children reparent to init, a `pm2 restart` leaves them running
+ * with no in-process handle — and the boot reconcile then marks their run/job
+ * failed. If such an orphan is still alive it must be stopped before that run
+ * is marked resumable (else a resume spawns a SECOND trainer into the same
+ * checkpoint dir) and before the GPU lane is freed (else a new job contends
+ * with it). SIGTERM first so the trainer/render checkpoints, then escalate to
+ * SIGKILL after the grace window — turning a restart from a mid-op SIGINT
+ * crash into a clean checkpointed stop the existing resume path recovers from.
+ * (Full re-attach instead of reap is tracked in #1332.)
+ *
+ * @param {string} controlDir - the job's spawnDetached control dir
+ * @returns {Promise<{reaped: boolean, pid?: number}>}
+ */
+export async function reapDetached(controlDir, { graceMs = REAP_GRACE_MS, pollMs = DEFAULT_POLL_MS } = {}) {
+  const pidRaw = await readFile(join(controlDir, 'pid'), 'utf8').catch(() => '');
+  const pid = Number.parseInt(pidRaw, 10);
+  if (!Number.isFinite(pid) || pid <= 0) return { reaped: false };
+  // Supervisor already recorded an exit → the job finished; nothing to reap.
+  const exitRaw = await readFile(join(controlDir, 'exit'), 'utf8').catch(() => '');
+  if (exitRaw.length > 0) return { reaped: false };
+  // Note: trusts the persisted PID. A reused PID (the job exited without the
+  // supervisor recording it AND the OS recycled the number within the few
+  // seconds before boot) is vanishingly unlikely on a single-user box; the same
+  // trust the in-session cancel path places in the child PID.
+  if (!isAlive(pid)) return { reaped: false };
+  try { process.kill(pid, 'SIGTERM'); } catch { return { reaped: false }; }
+  for (let waited = 0; waited < graceMs; waited += pollMs) {
+    await sleep(pollMs);
+    if (!isAlive(pid)) return { reaped: true, pid };
+  }
+  try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
+  return { reaped: true, pid };
 }
