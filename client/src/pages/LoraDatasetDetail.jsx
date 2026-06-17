@@ -249,9 +249,11 @@ export default function LoraDatasetDetail() {
       setVariationAxes(null);
       return undefined;
     }
-    // Cancel-on-cleanup so a late response from a previous dataset/kind can't
-    // overwrite the axes for the one now displayed (object↔place switch race).
+    // Clear first so a direct object↔place switch can't seed the generate
+    // dialog from the previous kind's axes while the new fetch is in flight,
+    // and cancel-on-cleanup so a late response can't overwrite the current one.
     let cancelled = false;
+    setVariationAxes(null);
     getLoraDatasetVariationAxes(datasetId, { silent: true })
       .then((axes) => { if (!cancelled) setVariationAxes(axes); })
       .catch(() => { if (!cancelled) setVariationAxes(null); });
