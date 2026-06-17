@@ -69,7 +69,7 @@ os.environ.setdefault("LTX2_GEMMA_EVAL_EVERY", "1")
 # (mirrors generate_hunyuan.py). _runner_common is stdlib-only at import time, so
 # this is safe from the ltx-2-mlx venv (no torch pulled in).
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _runner_common import parse_user_loras  # noqa: E402
+from _runner_common import emit_runtime_fingerprint, parse_user_loras  # noqa: E402
 
 
 def emit_status(msg: str) -> None:
@@ -810,6 +810,9 @@ def maybe_strip_audio(output_path: str) -> None:
 
 def main() -> NoReturn:
     args = parse_args()
+    # One-line runtime fingerprint at startup — captured by PortOS onto the
+    # render record so garbled output can be tied to a specific ltx/mlx stack.
+    emit_runtime_fingerprint("ltx2", ["ltx_pipelines_mlx", "ltx_core_mlx", "mlx", "mlx_metal"])
     Path(args.output).parent.mkdir(parents=True, exist_ok=True)
     # Parse user LoRAs once up-front (strict validation surfaces bad input
     # before any model load). Each run_* sets pipe._pending_loras from this.

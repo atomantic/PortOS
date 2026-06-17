@@ -1067,3 +1067,39 @@ describe('generateVideo — close-handler resilience (issue #1334)', () => {
     vi.doUnmock('./generateVideoHelpers.js');
   });
 });
+
+describe('runtime fingerprint (/status)', () => {
+  it('hostRuntimeFingerprint reports chip/os/platform/arch/node', async () => {
+    const { hostRuntimeFingerprint } = await import('./local.js');
+    const fp = hostRuntimeFingerprint();
+    expect(typeof fp.chip).toBe('string');
+    expect(fp.chip.length).toBeGreaterThan(0);
+    expect(typeof fp.os).toBe('string');
+    expect(fp.platform).toBe(process.platform);
+    expect(fp.arch).toBe(process.arch);
+    expect(fp.node).toBe(process.version);
+  });
+
+  it('resolveRuntimeFingerprint returns a host block + a per-runtime map', async () => {
+    // `runtimes` only contains BYOV runtimes whose venv is installed; whether
+    // any are present depends on the machine (CI: none; a dev box may have
+    // some). Assert the shape — host always present, every runtime entry is
+    // either a resolved fingerprint or a best-effort `{ error }` — rather than
+    // a specific machine's install set.
+    const { resolveRuntimeFingerprint } = await import('./local.js');
+    const block = await resolveRuntimeFingerprint();
+    expect(block.host).toBeDefined();
+    expect(typeof block.host.chip).toBe('string');
+    expect(block.runtimes && typeof block.runtimes === 'object').toBe(true);
+    for (const [id, fp] of Object.entries(block.runtimes)) {
+      expect(typeof id).toBe('string');
+      expect(fp.error !== undefined || typeof fp.versions === 'object').toBe(true);
+    }
+  });
+
+  it('invalidateRuntimeFingerprintCache is callable for a single id and for all', async () => {
+    const { invalidateRuntimeFingerprintCache } = await import('./local.js');
+    expect(() => invalidateRuntimeFingerprintCache('ltx2')).not.toThrow();
+    expect(() => invalidateRuntimeFingerprintCache()).not.toThrow();
+  });
+});

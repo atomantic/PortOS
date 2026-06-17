@@ -39,7 +39,7 @@ from pathlib import Path
 # insert defensively (mirrors generate_hunyuan.py). _runner_common is
 # stdlib-only at import time, so this is safe from the MLX venv.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _runner_common import parse_user_loras  # noqa: E402
+from _runner_common import emit_runtime_fingerprint, parse_user_loras  # noqa: E402
 
 
 def emit_status(msg: str) -> None:
@@ -129,6 +129,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
     parser.add_argument("--user-loras", default=None)
     ns, passthrough = parser.parse_known_args()
+
+    # Runtime fingerprint for the mlx_video LoRA path — stamped onto the render
+    # record so output can be tied to a specific mlx_video/mlx stack.
+    emit_runtime_fingerprint("mlx_video", ["mlx_video", "mlx", "mlx_metal"])
 
     specs = parse_user_loras(ns.user_loras)
     if not specs:

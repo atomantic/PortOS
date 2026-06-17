@@ -32,6 +32,26 @@ export function makeVideoGenLineHandler({ job, jobId, pythonNoiseRe }) {
     const line = raw.trim();
     if (!line) return true;
     if (pythonNoiseRe.test(line)) return true;
+    // Runtime fingerprint emitted once at child startup (RUNTIME:<json> — see
+    // scripts/_runner_common.py emit_runtime_fingerprint). Stamp it onto the
+    // job so finalizeGeneratedVideo can persist it on the history record, and
+    // log a single self-documenting line so a render that produced garbled
+    // output can be tied to a specific ltx/mlx/torch + chip + OS stack.
+    if (line.startsWith('RUNTIME:')) {
+      try {
+        const fp = JSON.parse(line.slice('RUNTIME:'.length));
+        job.runtime = fp;
+        const vers = fp.versions && typeof fp.versions === 'object'
+          ? Object.entries(fp.versions).map(([k, v]) => `${k} ${v}`).join(', ')
+          : '';
+        console.log(`🏷️ runtime [${jobId.slice(0, 8)}] ${fp.runtime || '?'}${vers ? ` | ${vers}` : ''}${fp.chip ? ` | ${fp.chip}` : ''}${fp.os ? ` | ${fp.os}` : ''}`);
+        return true;
+      } catch {
+        // Malformed fingerprint line — fall through to raw-logging so the
+        // broken payload is visible rather than silently swallowed.
+        return false;
+      }
+    }
     // Heartbeat for the queue's idle watchdog (see imageGen/local.js).
     videoGenEvents.emit('activity', { generationId: jobId });
     if (line.startsWith('STATUS:')) {
@@ -138,7 +158,12 @@ export async function finalizeGeneratedVideo({ job, jobId, outputPath, filename,
   await optimizeForStreaming(outputPath);
   const thumbnail = await generateThumbnail(outputPath, jobId);
   const history = await loadHistory();
-  history.unshift({ ...meta, thumbnail });
+  // Persist the runtime fingerprint captured from the child's startup RUNTIME:
+  // line (set on `job` by makeVideoGenLineHandler) so each history record
+  // self-documents the exact ltx/mlx/torch + chip + OS stack it rendered on.
+  // Absent (sentinel) when the runtime didn't emit one — e.g. the bare
+  // `mlx_video.generate_av` path we don't control.
+  history.unshift({ ...meta, thumbnail, ...(job.runtime ? { runtime: job.runtime } : {}) });
   await saveHistory(history);
   console.log(`✅ Video generated [${jobId.slice(0, 8)}]: ${filename}`);
   broadcastSse(job, { type: 'complete', result: { filename, seed: actualSeed, thumbnail, path: `/data/videos/${filename}` } });

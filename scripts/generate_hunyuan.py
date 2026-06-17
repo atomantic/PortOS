@@ -24,7 +24,7 @@ import unittest.mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _runner_common import heartbeat, install_hf_error_handler  # noqa: E402
+from _runner_common import emit_runtime_fingerprint, heartbeat, install_hf_error_handler  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
@@ -238,6 +238,10 @@ def stage_hunyuan_model_base(repo_dir, snapshot_dir):
 @install_hf_error_handler
 def main() -> int:
     cli = parse_args()
+
+    # Runtime fingerprint at startup — recorded by PortOS so garbled output can
+    # be tied to a specific torch/diffusers/mlx stack on this chip.
+    emit_runtime_fingerprint("hunyuan", ["torch", "diffusers", "transformers", "mlx"])
 
     repo_dir = Path(cli.repo_dir).expanduser().resolve()
     if not repo_dir.is_dir():
