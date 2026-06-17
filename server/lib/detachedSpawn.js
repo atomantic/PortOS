@@ -323,22 +323,30 @@ const isAlive = (pid) => {
  * @returns {Promise<{reaped: boolean, pid?: number}>}
  */
 export async function reapDetached(controlDir, { graceMs = REAP_GRACE_MS, pollMs = DEFAULT_POLL_MS } = {}) {
+  const exitFile = join(controlDir, 'exit');
   const pidRaw = await readFile(join(controlDir, 'pid'), 'utf8').catch(() => '');
   const pid = Number.parseInt(pidRaw, 10);
   if (!Number.isFinite(pid) || pid <= 0) return { reaped: false };
+  const exitWritten = async () => (await readFile(exitFile, 'utf8').catch(() => '')).length > 0;
   // Supervisor already recorded an exit → the job finished; nothing to reap.
-  const exitRaw = await readFile(join(controlDir, 'exit'), 'utf8').catch(() => '');
-  if (exitRaw.length > 0) return { reaped: false };
+  if (await exitWritten()) return { reaped: false };
   // Note: trusts the persisted PID. A reused PID (the job exited without the
   // supervisor recording it AND the OS recycled the number within the few
   // seconds before boot) is vanishingly unlikely on a single-user box; the same
   // trust the in-session cancel path places in the child PID.
-  if (!isAlive(pid)) return { reaped: false };
-  try { process.kill(pid, 'SIGTERM'); } catch { return { reaped: false }; }
-  for (let waited = 0; waited < graceMs; waited += pollMs) {
+  const wasAlive = isAlive(pid);
+  if (wasAlive) { try { process.kill(pid, 'SIGTERM'); } catch { /* raced its own exit */ } }
+  // Wait for the supervisor's `exit` sentinel — its FINAL act after the child
+  // dies — not just child death. That sentinel means the supervisor is fully
+  // done writing into controlDir, so a resume that reuses the dir can't race a
+  // stale late write (which would prematurely close the new handle). Escalate
+  // to SIGKILL at the grace deadline; hard-cap so a wedged supervisor can't
+  // hang boot.
+  const hardCapMs = graceMs + 5000;
+  for (let waited = 0; waited < hardCapMs; waited += pollMs) {
     await sleep(pollMs);
-    if (!isAlive(pid)) return { reaped: true, pid };
+    if (await exitWritten()) return { reaped: wasAlive, pid };
+    if (waited >= graceMs && isAlive(pid)) { try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ } }
   }
-  try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
-  return { reaped: true, pid };
+  return { reaped: wasAlive, pid };
 }
