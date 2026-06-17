@@ -1005,55 +1005,48 @@ export async function pushRecordToPeer(sub, options = {}) {
   // supports `portosMeta` but not `catalogBundle`/`manuscriptReview` keeps its
   // version-gate handshake. Zod `.strict()` lists all unrecognized keys in one
   // issue, so a single retry covers all of them.
-  if (res && res.status === 400 && (payload.portosMeta || payload.catalogBundle || payload.manuscriptReview)) {
+  // A 400 from the receiver is Zod rejecting our envelope BEFORE its schema-version
+  // gate (the 409 path below) runs. Parse the body ONCE and route on which part it
+  // couldn't accept — two distinct mixed-version cases share this block:
+  if (res && res.status === 400) {
     const errBody = await res.clone().json().catch(() => null);
+    const isValidationError = errBody?.code === 'VALIDATION_ERROR';
     const details = Array.isArray(errBody?.context?.details) ? errBody.context.details : [];
     const mentions = (key) => details.some((d) => new RegExp(key).test(`${d?.path || ''} ${d?.message || ''}`));
-    if (errBody?.code === 'VALIDATION_ERROR' && (mentions('portosMeta') || mentions('catalogBundle') || mentions('manuscriptReview'))) {
+    if (
+      isValidationError
+      && (payload.portosMeta || payload.catalogBundle || payload.manuscriptReview)
+      && (mentions('portosMeta') || mentions('catalogBundle') || mentions('manuscriptReview'))
+    ) {
+      // (1) UNKNOWN ENVELOPE KEY — the peer recognizes the record `kind` but its
+      // `.strict()` schema predates a newer top-level key we sent. Strip whichever
+      // key(s) it named and retry so the record/issues still land; the stripped
+      // feature reaches it once it upgrades (the re-push re-includes the key).
       const legacyPayload = { ...payload };
       const stripped = [];
       if (mentions('portosMeta') && 'portosMeta' in legacyPayload) { delete legacyPayload.portosMeta; stripped.push('portosMeta'); }
       if (mentions('catalogBundle') && 'catalogBundle' in legacyPayload) { delete legacyPayload.catalogBundle; stripped.push('catalogBundle'); }
       if (mentions('manuscriptReview') && 'manuscriptReview' in legacyPayload) { delete legacyPayload.manuscriptReview; stripped.push('manuscriptReview'); reviewStrippedForLegacyPeer = true; }
-      // The series + issues still land; on a pre-feature peer the review simply
-      // doesn't propagate until it upgrades, and a re-push after it upgrades
-      // re-includes the stripped key(s).
       console.log(
         `ℹ️ peerSync: ${peer.name || peer.instanceId} rejected newer envelope key(s) ${stripped.join(', ')} — retrying push without them`,
       );
       res = await postPayload(legacyPayload);
-    }
-  }
-  // UNKNOWN-KIND 400 → schema-version block (NOT a bare http-400 retry). When we
-  // introduce a NEW federated record kind (authors did this; mediaCollection had
-  // the same gap when it landed), a peer on an older PortOS whose
-  // `peerSyncPushSchema` discriminated union has no arm for that `kind` rejects
-  // the push at Zod validation with a generic 400 — BEFORE `applyIncomingPush`'s
-  // version gate (the 409 path below) ever runs. So unlike the strip-retry above
-  // there's no smuggled envelope key to drop: the record KIND itself is what the
-  // peer can't parse, and retrying changes nothing. Treat it like the 409:
-  // persist an (empty-gap) `peer-pre-feature` block so the SchemaGapBadge surfaces
-  // "peer needs to update PortOS to sync <kind>" and the edit-push cooldown engages,
-  // instead of letting the sub churn as a bare `http-400` the UI never explains.
-  // The block clears on the next successful push once the peer upgrades (same
-  // recovery as the 409 path). Signal: a VALIDATION_ERROR whose offending field is
-  // the `kind` discriminator — a value WE always send as a valid literal, so the
-  // only reason a receiver faults on `kind` is that its schema doesn't know this
-  // record kind yet (Zod reports `path: ['kind']` with an "Invalid discriminator
-  // value" / "Invalid enum value" message; `validateRequest` keeps path + message).
-  if (res && res.status === 400) {
-    const errBody = await res.clone().json().catch(() => null);
-    const details = Array.isArray(errBody?.context?.details) ? errBody.context.details : [];
-    const unknownKind = errBody?.code === 'VALIDATION_ERROR'
-      && details.some((d) => d?.path === 'kind' && /discriminator|enum/i.test(d?.message || ''));
-    if (unknownKind) {
-      await persistSchemaVersionBlock(sub.id, {
-        ahead: [],
-        behind: [],
-        peerPortosVersion: null,
-        peerSchemaVersions: null,
-        reason: 'peer-pre-feature',
-      });
+    } else if (isValidationError && details.some((d) => d?.path === 'kind' && /discriminator|enum/i.test(d?.message || ''))) {
+      // (2) UNKNOWN RECORD KIND → schema-version block (NOT a bare http-400 retry).
+      // When we introduce a NEW federated record kind (authors did this;
+      // mediaCollection had the same gap when it landed), a peer on an older PortOS
+      // whose `peerSyncPushSchema` discriminated union has no arm for that `kind`
+      // rejects the push at the discriminator — so unlike case (1) there's no
+      // smuggled key to drop: the record KIND itself is what the peer can't parse,
+      // and retrying changes nothing. Treat it like the 409: persist an empty-gap
+      // `peer-pre-feature` block so the SchemaGapBadge surfaces "peer needs to update
+      // PortOS to sync <kind>" and the edit-push cooldown engages, instead of letting
+      // the sub churn as a bare `http-400` the UI never explains. The block clears on
+      // the next successful push once the peer upgrades (same recovery as the 409
+      // path). The signal is a `kind`-path discriminator/enum error — a value WE
+      // always send as a valid literal, so the only reason a receiver faults on
+      // `kind` is that its schema doesn't know this record kind yet.
+      await persistSchemaVersionBlock(sub.id, { reason: 'peer-pre-feature' });
       console.warn(
         `⚠️ peerSync: ${peer.name || peer.instanceId} rejected push — its PortOS doesn't recognize the ` +
         `'${sub.recordKind}' record kind yet. Re-tries pause until they upgrade.`,
