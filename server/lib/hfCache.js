@@ -191,6 +191,13 @@ async function verifySafetensorsStructure(path, size) {
     } catch {
       return { ok: false, reason: 'unparseable-header' };
     }
+    // A valid safetensors header is a JSON object. Anything else that happens
+    // to parse (null, an array, a bare number/string) is corrupt — and
+    // `Object.entries(null)` would throw, turning a repairable bad file into a
+    // 500 on the status/verify/repair endpoints.
+    if (!header || typeof header !== 'object' || Array.isArray(header)) {
+      return { ok: false, reason: 'unparseable-header' };
+    }
     // The largest tensor end-offset (relative to the byte buffer after the
     // header) is the minimum payload length the file must contain.
     let maxEnd = 0;

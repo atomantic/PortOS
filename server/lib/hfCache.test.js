@@ -238,6 +238,24 @@ describe('verifyModelCache', () => {
     expect(r.files[0].reason).toBe('bad-header-length');
   });
 
+  it('flags a parseable-but-non-object header (e.g. JSON null) as bad without throwing', async () => {
+    // Header length points at valid JSON `null` — Object.entries(null) would
+    // throw, which must surface as status:'bad', not a 500.
+    const headerBuf = Buffer.from('null', 'utf8');
+    const lenBuf = Buffer.alloc(8);
+    lenBuf.writeBigUInt64LE(BigInt(headerBuf.length), 0);
+    const content = Buffer.concat([lenBuf, headerBuf, Buffer.alloc(8)]);
+    const { root } = buildContentCache({
+      repoId: 'org/nullheader',
+      files: { 'model.safetensors': { content } },
+    });
+    roots.push(root);
+    process.env.HF_HUB_CACHE = root;
+    const r = await verifyModelCache('org/nullheader');
+    expect(r.status).toBe('bad');
+    expect(r.files[0].reason).toBe('unparseable-header');
+  });
+
   it('deep check passes when content sha256 matches the blob name', async () => {
     const { root } = buildContentCache({
       repoId: 'org/deepok',
