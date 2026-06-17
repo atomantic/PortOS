@@ -11,7 +11,7 @@
  * Deep-linkable at /pipeline/editorial-checks (optionally ?series=<id> to
  * preselect a series, e.g. from a series page).
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, ListChecks, Loader2, Play, Square } from 'lucide-react';
 import toast from '../components/ui/Toast';
@@ -71,15 +71,22 @@ export default function PipelineEditorialChecks() {
   }, []);
 
   // ---- Load findings + re-attach to an in-flight run when the series changes. ----
+  // Tracks the currently-selected series so a slow findings fetch for a series
+  // the user has since navigated away from can't overwrite the new series'
+  // comments (which would also point the deep-links at the wrong series).
+  const activeSeriesRef = useRef(seriesId);
+  useEffect(() => { activeSeriesRef.current = seriesId; }, [seriesId]);
+
   const loadFindings = useCallback((id) => {
     if (!id) { setComments([]); return; }
     setLoadingFindings(true);
     // getPipelineManuscriptReview has no silent option, so request() already
-    // toasts on failure — just clear + swallow here (single-layer toast).
+    // toasts on failure — just clear + swallow here (single-layer toast). Guard
+    // every state write on the series still being current (stale-response race).
     getPipelineManuscriptReview(id)
-      .then((review) => setComments(Array.isArray(review?.comments) ? review.comments : []))
-      .catch(() => setComments([]))
-      .finally(() => setLoadingFindings(false));
+      .then((review) => { if (activeSeriesRef.current === id) setComments(Array.isArray(review?.comments) ? review.comments : []); })
+      .catch(() => { if (activeSeriesRef.current === id) setComments([]); })
+      .finally(() => { if (activeSeriesRef.current === id) setLoadingFindings(false); });
   }, []);
 
   useEffect(() => {
