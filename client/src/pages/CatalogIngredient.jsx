@@ -884,10 +884,21 @@ function GenerateImageControl({ name, description, onComplete }) {
     onComplete?.(filename);
   }, [onComplete]);
 
+  // A failed/canceled render never fires onFilename, so without this the button
+  // would stay disabled+"Generating…" with no retry path. Clear the job on a
+  // terminal non-success status to re-enable Generate.
+  const handleStatus = useCallback((status) => {
+    if (status === 'failed' || status === 'canceled') {
+      setJobId(null);
+      if (status === 'failed') toast.error('Image generation failed');
+    }
+  }, []);
+
   return (
     <span className="inline-flex items-center gap-2">
       {jobId && (
-        <MediaJobThumb jobId={jobId} label="Generated image" size="xs" onFilename={handleFilename} />
+        <MediaJobThumb jobId={jobId} label="Generated image" size="xs"
+          onFilename={handleFilename} onStatus={handleStatus} />
       )}
       <button
         type="button"
