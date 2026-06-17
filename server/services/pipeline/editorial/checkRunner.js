@@ -17,13 +17,14 @@
 
 import { randomUUID } from 'crypto';
 import { createSseRunner } from '../../../lib/sseUtils.js';
-import { runStagedLLM } from '../../../lib/stageRunner.js';
+import { runStagedLLM, resolveStageContext } from '../../../lib/stageRunner.js';
+import { planManuscriptPass } from '../../../lib/contextBudget.js';
 import { getEnabledChecks, getEnabledCheckRows } from '../../../lib/editorial/index.js';
 import { getSettings } from '../../settings.js';
 import { getSeries } from '../series.js';
 import { listIssues } from '../issues.js';
 import { getSeriesCanon } from '../seriesCanon.js';
-import { collectManuscriptSections, sectionsCorpus } from '../arcPlanner.js';
+import { collectManuscriptSections, sectionsCorpus, manuscriptSectionHeader } from '../arcPlanner.js';
 import { seedReviewFromFindings } from '../manuscriptReview.js';
 
 /**
@@ -73,6 +74,24 @@ export async function runEditorialChecks(seriesId, options = {}) {
     // provider/model overrides so an LLM check honors the autopilot's choice.
     callStagedLLM: (stage, vars, opts = {}) =>
       runStagedLLM(stage, vars, { providerOverride, modelOverride, ...opts }),
+    // Injected manuscript chunker — plans the stitched manuscript into chunks
+    // sized to `stage`'s resolved provider context window (reusing the same
+    // budgeter as the completeness pass), so a long series is fully reviewed
+    // instead of truncated on a small/local provider. Returns the chunk-corpus
+    // strings (one for a whole-fits provider) for an LLM check to iterate.
+    // Lives here (not the pure registry) because it resolves the provider.
+    planManuscriptChunks: async (stage, { overheadTokens = 0 } = {}) => {
+      if (!sections.length) return [];
+      const { contextWindow } = await resolveStageContext(stage, { providerOverride, modelOverride });
+      const plan = planManuscriptPass({
+        contextWindow,
+        // Each section's full contribution = header + body, matching sectionsCorpus.
+        sections: sections.map((s) => ({ ...s, text: `${manuscriptSectionHeader(s)}\n\n${s.content || ''}` })),
+        overheadTokens,
+      });
+      if (plan.mode === 'whole') return [manuscript.slice(0, plan.usableChars)];
+      return plan.chunks.map((c) => sectionsCorpus(c.sections).slice(0, plan.usableChars));
+    },
   };
 
   const findings = [];

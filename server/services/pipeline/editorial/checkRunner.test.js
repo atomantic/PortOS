@@ -17,6 +17,7 @@ vi.mock('../arcPlanner.js', () => ({
     { number: 1, title: 'Pilot', stageId: 'prose', content: 'As you know, Bob, the kingdom fell.' },
   ]),
   sectionsCorpus: vi.fn((sections) => sections.map((s) => s.content).join('\n')),
+  manuscriptSectionHeader: vi.fn((s) => `# Issue ${s.number}`),
 }));
 vi.mock('../../../lib/stageRunner.js', () => ({
   runStagedLLM: vi.fn(async () => ({
@@ -27,6 +28,8 @@ vi.mock('../../../lib/stageRunner.js', () => ({
       ],
     },
   })),
+  // A roomy window by default → manuscript LLM checks run in one whole-corpus call.
+  resolveStageContext: vi.fn(async () => ({ provider: { type: 'cli' }, model: 'm', contextWindow: 1_000_000 })),
 }));
 
 // A real-ish seed that applies the same checkId-aware dedup key the store uses,
@@ -44,7 +47,7 @@ const seedReviewFromFindings = vi.fn(async (_seriesId, findings) => {
 vi.mock('../manuscriptReview.js', () => ({ seedReviewFromFindings: (...a) => seedReviewFromFindings(...a) }));
 
 const { runEditorialChecks, buildEditorialCheckPlan } = await import('./checkRunner.js');
-const { runStagedLLM } = await import('../../../lib/stageRunner.js');
+const { runStagedLLM, resolveStageContext } = await import('../../../lib/stageRunner.js');
 const { collectManuscriptSections } = await import('../arcPlanner.js');
 const { listChecks } = await import('../../../lib/editorial/index.js');
 
@@ -61,6 +64,7 @@ beforeEach(() => {
   seedStore.length = 0;
   seedReviewFromFindings.mockClear();
   runStagedLLM.mockClear();
+  resolveStageContext.mockClear();
   collectManuscriptSections.mockClear();
 });
 
@@ -133,6 +137,29 @@ describe('runEditorialChecks', () => {
     const result = await runEditorialChecks('s1', { signal: controller.signal });
     expect(result.canceled).toBe(true);
     expect(seedReviewFromFindings).not.toHaveBeenCalled();
+  });
+
+  it('chunks the manuscript per provider window and reviews every section (issue #1340)', async () => {
+    // Three big sections + a small context window → the manuscript can't fit in
+    // one call, so the runner chunks it. Every chunk must reach the model, so a
+    // long series is fully reviewed instead of truncated.
+    const big = (marker) => `${marker} ${'A'.repeat(12_000)}`;
+    collectManuscriptSections.mockResolvedValueOnce([
+      { number: 1, title: 'One', stageId: 'prose', content: big('SEC1') },
+      { number: 2, title: 'Two', stageId: 'prose', content: big('SEC2') },
+      { number: 3, title: 'Three', stageId: 'prose', content: big('SEC3') },
+    ]);
+    resolveStageContext.mockResolvedValueOnce({ provider: { type: 'api', endpoint: 'http://localhost:11434' }, model: 'm', contextWindow: 15_000 });
+
+    await runEditorialChecks('s1', { checkIds: ['prose.info-dumping'] });
+
+    // More than one model call ⇒ the corpus was split across the small window.
+    expect(runStagedLLM.mock.calls.length).toBeGreaterThan(1);
+    // Across all chunks, every section's content was sent to the model.
+    const allSent = runStagedLLM.mock.calls.map((c) => c[1].manuscript).join('\n');
+    expect(allSent).toContain('SEC1');
+    expect(allSent).toContain('SEC2');
+    expect(allSent).toContain('SEC3');
   });
 
   it('one failing check does not abort the pass', async () => {

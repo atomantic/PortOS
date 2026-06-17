@@ -8,8 +8,13 @@ optional gate, and a `run(ctx)` that returns findings shaped for the existing
 the enabled checks, and seeds findings lives at
 `server/services/pipeline/editorial/checkRunner.js`.
 
-This directory is **pure** (no side-effecting imports). LLM-kind checks get
-their model caller through `ctx.callStagedLLM`, injected by the runner.
+This directory is **pure** (no side-effecting imports — only `zod` and the pure
+`estimateTokens` budgeter). LLM-kind checks get their model caller through
+`ctx.callStagedLLM`, and a manuscript-consuming LLM check plans the corpus into
+provider-sized chunks through `ctx.planManuscriptChunks` — both injected by the
+runner. Per-chunk findings are merged first-wins (capped at the check's
+`maxFindings`) via `mergeChunkFindings`/`editorialFindingKey`, so a long series
+is fully reviewed regardless of the provider's context window (#1340).
 
 ## Discovery rule
 

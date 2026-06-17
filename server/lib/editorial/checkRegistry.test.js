@@ -144,43 +144,76 @@ describe('editorial check registry — config + state resolution', () => {
 });
 
 describe('prose.info-dumping — LLM check', () => {
-  it('caps the manuscript sent to the model so a long corpus cannot overflow context', async () => {
-    let sent = null;
-    const ctx = {
-      manuscript: 'x'.repeat(100_000),
-      config: { maxManuscriptChars: 10_000, maxFindings: 12 },
-      severityDefault: 'medium',
-      callStagedLLM: async (_stage, vars) => { sent = vars.manuscript; return { content: { findings: [] } }; },
-    };
-    await getCheck(INFODUMP).run(ctx);
-    expect(sent.length).toBeLessThan(11_000); // 10k cap + a short truncation note
-    expect(sent).toContain('truncated');
+  // Default ctx: the runner-injected chunker resolves to a single whole-corpus
+  // chunk (the common "provider fits the book" case). Tests that exercise
+  // chunking override `planManuscriptChunks`.
+  const wholeCtx = (overrides = {}) => ({
+    manuscript: 'As you know, Bob, the kingdom fell.',
+    config: { maxFindings: 12 },
+    severityDefault: 'medium',
+    planManuscriptChunks: async () => [overrides.manuscript ?? 'As you know, Bob, the kingdom fell.'],
+    callStagedLLM: async () => ({ content: { findings: [] } }),
+    ...overrides,
   });
 
-  it('passes a short manuscript through untruncated and shapes findings', async () => {
-    const ctx = {
-      manuscript: 'As you know, Bob, the kingdom fell.',
-      config: { maxManuscriptChars: 48_000, maxFindings: 12 },
-      severityDefault: 'medium',
+  it('feeds each planned manuscript chunk to the model and merges findings across them', async () => {
+    // A long series the provider can't hold in one call → chunked into two.
+    const seen = [];
+    const ctx = wholeCtx({
+      config: { maxFindings: 12 },
+      planManuscriptChunks: async (_stage, opts) => {
+        // The check passes a fixed prompt-overhead budget so the chunker leaves
+        // room for the template.
+        expect(opts.overheadTokens).toBeGreaterThan(0);
+        return ['# Issue 1\n\nchunk one', '# Issue 2\n\nchunk two'];
+      },
       callStagedLLM: async (_stage, vars) => {
-        expect(vars.manuscript).not.toContain('truncated');
+        seen.push(vars.manuscript);
+        const n = seen.length;
+        return { content: { findings: [{ severity: 'medium', issueNumber: n, problem: `dump ${n}`, anchorQuote: `a${n}` }] } };
+      },
+    });
+    const findings = await getCheck(INFODUMP).run(ctx);
+    expect(seen).toEqual(['# Issue 1\n\nchunk one', '# Issue 2\n\nchunk two']);
+    // One finding per chunk, merged across both.
+    expect(findings).toHaveLength(2);
+    expect(findings.map((f) => f.issueNumber).sort()).toEqual([1, 2]);
+    expect(findings.every((f) => f.category === 'exposition')).toBe(true);
+  });
+
+  it('dedups a finding surfaced in more than one chunk (first-wins)', async () => {
+    const dup = { severity: 'high', issueNumber: 1, problem: 'same dump', anchorQuote: 'As you know' };
+    const ctx = wholeCtx({
+      planManuscriptChunks: async () => ['chunk a', 'chunk b'],
+      callStagedLLM: async () => ({ content: { findings: [dup] } }),
+    });
+    const findings = await getCheck(INFODUMP).run(ctx);
+    expect(findings).toHaveLength(1);
+    expect(findings[0].problem).toBe('same dump');
+  });
+
+  it('passes the whole corpus through in one call when the provider fits it', async () => {
+    const ctx = wholeCtx({
+      callStagedLLM: async (_stage, vars) => {
+        expect(vars.manuscript).toBe('As you know, Bob, the kingdom fell.');
         return { content: { findings: [{ severity: 'high', issueNumber: 1, problem: 'dump', anchorQuote: 'As you know', suggestion: 'cut' }] } };
       },
-    };
+    });
     const findings = await getCheck(INFODUMP).run(ctx);
     expect(findings).toHaveLength(1);
     expect(findings[0].category).toBe('exposition');
     expect(findings[0].issueNumber).toBe(1);
   });
 
-  it('respects maxFindings', async () => {
-    const many = Array.from({ length: 30 }, (_, i) => ({ severity: 'low', problem: `p${i}`, anchorQuote: `a${i}` }));
-    const ctx = {
-      manuscript: 'short',
-      config: { maxManuscriptChars: 48_000, maxFindings: 5 },
-      severityDefault: 'medium',
-      callStagedLLM: async () => ({ content: { findings: many } }),
-    };
+  it('respects maxFindings as a whole-run cap (across chunks)', async () => {
+    // Two chunks each return 30 distinct findings; the run cap of 5 bounds the merged total.
+    const many = (tag) => Array.from({ length: 30 }, (_, i) => ({ severity: 'low', problem: `${tag}-p${i}`, anchorQuote: `${tag}-a${i}` }));
+    let call = 0;
+    const ctx = wholeCtx({
+      config: { maxFindings: 5 },
+      planManuscriptChunks: async () => ['c1', 'c2'],
+      callStagedLLM: async () => ({ content: { findings: many(call++ === 0 ? 'x' : 'y') } }),
+    });
     const findings = await getCheck(INFODUMP).run(ctx);
     expect(findings).toHaveLength(5);
   });
@@ -428,17 +461,22 @@ describe('objects.unattached-significant — deterministic check (#1288)', () =>
 });
 
 describe('objects.unmotivated-interaction — LLM check (#1288)', () => {
-  const baseCtx = (overrides = {}) => ({
-    manuscript: 'She clutched the watch as if it meant everything.',
-    canon: {
-      objects: [{ id: 'o1', name: 'Watch', significance: 'heirloom', attachments: [{ characterId: 'c1', emotion: 'grief' }] }],
-      characters: [{ id: 'c1', name: 'Mara' }],
-    },
-    config: { maxManuscriptChars: 48_000, maxFindings: 12 },
-    severityDefault: 'low',
-    callStagedLLM: async () => ({ content: { findings: [] } }),
-    ...overrides,
-  });
+  const baseCtx = (overrides = {}) => {
+    const manuscript = overrides.manuscript ?? 'She clutched the watch as if it meant everything.';
+    return {
+      manuscript,
+      canon: {
+        objects: [{ id: 'o1', name: 'Watch', significance: 'heirloom', attachments: [{ characterId: 'c1', emotion: 'grief' }] }],
+        characters: [{ id: 'c1', name: 'Mara' }],
+      },
+      config: { maxFindings: 12 },
+      severityDefault: 'low',
+      // Default chunker: a single whole-corpus chunk.
+      planManuscriptChunks: async () => [manuscript],
+      callStagedLLM: async () => ({ content: { findings: [] } }),
+      ...overrides,
+    };
+  };
 
   it('passes the manuscript AND an objects-attachment summary to the model', async () => {
     let vars = null;
@@ -450,21 +488,24 @@ describe('objects.unmotivated-interaction — LLM check (#1288)', () => {
     expect(vars.objects).toContain('Mara'); // resolved character name, not the id
   });
 
-  it('caps the manuscript so a long corpus cannot overflow context', async () => {
-    let sent = null;
+  it('budgets the objects summary as prompt overhead and re-sends it on every chunk', async () => {
+    let overhead = null;
+    const objectsSeen = [];
     await getCheck('objects.unmotivated-interaction').run(baseCtx({
-      manuscript: 'x'.repeat(100_000),
-      config: { maxManuscriptChars: 10_000, maxFindings: 12 },
-      callStagedLLM: async (_stage, v) => { sent = v.manuscript; return { content: { findings: [] } }; },
+      planManuscriptChunks: async (_stage, opts) => { overhead = opts.overheadTokens; return ['chunk a', 'chunk b']; },
+      callStagedLLM: async (_stage, v) => { objectsSeen.push(v.objects); return { content: { findings: [] } }; },
     }));
-    expect(sent.length).toBeLessThan(11_000);
-    expect(sent).toContain('truncated');
+    // Overhead exceeds the fixed template reserve because the objects summary is counted in.
+    expect(overhead).toBeGreaterThan(0);
+    // The objects summary rides every chunk (it's not part of the chunked manuscript).
+    expect(objectsSeen).toHaveLength(2);
+    expect(objectsSeen.every((o) => o.includes('Watch'))).toBe(true);
   });
 
   it('shapes findings into the continuity category and respects maxFindings', async () => {
     const many = Array.from({ length: 30 }, (_, i) => ({ severity: 'low', problem: `p${i}`, anchorQuote: `a${i}` }));
     const findings = await getCheck('objects.unmotivated-interaction').run(baseCtx({
-      config: { maxManuscriptChars: 48_000, maxFindings: 4 },
+      config: { maxFindings: 4 },
       callStagedLLM: async () => ({ content: { findings: many } }),
     }));
     expect(findings).toHaveLength(4);
@@ -598,11 +639,13 @@ describe('style.conformance — LLM check (#1303)', () => {
 
   it('passes the declared expectations + manuscript to the model and maps findings', async () => {
     let sentVars = null;
+    const manuscript = '# Issue 2 — Drift (prose)\n\nI walk to the door.';
     const findings = await check.run({
       series: { styleGuide: { tense: 'past', povPerson: 'first', contentRating: 'PG' } },
-      manuscript: '# Issue 2 — Drift (prose)\n\nI walk to the door.',
+      manuscript,
       config: { maxFindings: 5 },
       severityDefault: 'medium',
+      planManuscriptChunks: async () => [manuscript],
       callStagedLLM: async (_stage, vars) => {
         sentVars = vars;
         return { content: { findings: [{ severity: 'high', issueNumber: 2, problem: 'present-tense slip', anchorQuote: 'I walk' }] } };

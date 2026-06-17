@@ -10,9 +10,12 @@
  * existing `manuscriptReview` comment store.
  *
  * This module is intentionally PURE — it imports nothing with side effects
- * (only `zod`). LLM-kind checks receive their model caller through
- * `ctx.callStagedLLM`, injected by `server/services/pipeline/editorial/checkRunner.js`,
- * so the registry stays side-effect-free and unit-testable in isolation.
+ * (only `zod` and the pure `estimateTokens` budgeter). LLM-kind checks receive
+ * their model caller through `ctx.callStagedLLM`, and a manuscript-consuming LLM
+ * check plans the manuscript into provider-sized chunks through
+ * `ctx.planManuscriptChunks` — both injected by
+ * `server/services/pipeline/editorial/checkRunner.js`, so the registry stays
+ * side-effect-free and unit-testable in isolation.
  *
  * A finding returned by `run(ctx)` is a partial `manuscriptReview` comment:
  *   { severity?, category?, location?, problem (required), suggestion?,
@@ -22,6 +25,7 @@
  */
 
 import { z } from 'zod';
+import { estimateTokens } from '../contextBudget.js';
 
 export const CHECK_SCOPES = Object.freeze(['series', 'issue', 'scene', 'noun']);
 export const CHECK_KINDS = Object.freeze(['deterministic', 'llm']);
@@ -178,20 +182,64 @@ function attachmentBackstoryRows(ctx) {
 }
 
 // ---------------------------------------------------------------------------
-// Shared LLM-check helpers. Every `kind: 'llm'` check truncates an over-long
-// manuscript before the call and normalizes the model's raw findings into the
-// manuscriptReview comment shape afterward — these collapse those two repeated
-// blocks so the cap message + field validation live once.
+// Shared LLM-check helpers. Every `kind: 'llm'` check normalizes the model's
+// raw findings into the manuscriptReview comment shape, and a manuscript-
+// consuming check additionally feeds the whole corpus to the model in
+// provider-sized chunks (so a long series isn't truncated on a small/local
+// provider) and merges the per-chunk findings. These collapse those repeated
+// blocks so the field validation + chunk-merge live once.
 // ---------------------------------------------------------------------------
 
-// Truncate `full` to `cap` chars with a note so a long corpus can't overflow a
-// small/local provider's context window. A single-call safeguard; full
-// per-provider context chunking is tracked separately.
-function capManuscript(full, cap) {
-  const text = full || '';
-  return text.length > cap
-    ? `${text.slice(0, cap)}\n\n[manuscript truncated to the first ${cap} characters for this check]`
-    : text;
+// Fixed per-call prompt overhead (template scaffolding + JSON-shape
+// instructions) reserved on top of any check-specific static vars, so the
+// chunk budget leaves room for the prompt the manuscript rides inside.
+export const EDITORIAL_PROMPT_OVERHEAD_TOKENS = 1_500;
+
+// First-wins dedup key for an editorial finding, used to merge results across
+// manuscript chunks. Mirrors completenessPass.findingKey: a finding identical on
+// (issue, category, anchor, problem) is kept once even if two chunks surface it.
+export const editorialFindingKey = (f) => [
+  f.issueNumber ?? '',
+  f.category ?? '',
+  (f.anchorQuote || '').trim().toLowerCase().slice(0, 120),
+  (f.problem || '').trim().toLowerCase().slice(0, 120),
+].join('|');
+
+// Merge per-chunk finding lists first-wins, capped at `max`. The cap bounds the
+// WHOLE run (not each chunk) so a long, many-chunk manuscript can't flood the
+// review — preserving `maxFindings`'s original single-call meaning.
+export function mergeChunkFindings(lists, max = Infinity) {
+  const merged = new Map();
+  for (const list of (Array.isArray(lists) ? lists : [])) {
+    for (const f of (Array.isArray(list) ? list : [])) {
+      const k = editorialFindingKey(f);
+      if (!merged.has(k)) merged.set(k, f);
+    }
+  }
+  return [...merged.values()].slice(0, Math.max(0, max));
+}
+
+// Shared body for a manuscript-consuming LLM check. Plans the manuscript into
+// provider-sized chunks for `stage` (via the runner-injected
+// `ctx.planManuscriptChunks`), runs the model on each chunk, and merges the
+// findings first-wins (capped at the check's `maxFindings`). `buildVars(chunk)`
+// returns the stage vars — only the manuscript var changes per chunk. These
+// checks are all manuscript-scoped, so findings keep a model-supplied issue
+// number (`withIssueNumber: true`).
+async function runManuscriptLlmCheck(ctx, { stage, category, overheadTokens = 0, buildVars }) {
+  const max = ctx.config?.maxFindings ?? 12;
+  const chunks = await ctx.planManuscriptChunks(stage, { overheadTokens });
+  const perChunk = [];
+  for (const manuscript of chunks) {
+    const { content } = await ctx.callStagedLLM(stage, buildVars(manuscript), { returnsJson: true, source: stage });
+    perChunk.push(mapLlmFindings(content?.findings, {
+      severityDefault: ctx.severityDefault,
+      category,
+      max,
+      withIssueNumber: true,
+    }));
+  }
+  return mergeChunkFindings(perChunk, max);
 }
 
 // Normalize raw LLM findings into partial manuscriptReview comments: validate
@@ -574,9 +622,6 @@ export const EDITORIAL_CHECKS = [
     configSchema: z.object({
       // Cap findings per run so a long manuscript can't flood the review.
       maxFindings: z.number().int().min(1).max(50).default(12),
-      // Bound the prompt so a long series can't overflow a small/local provider's
-      // context window. Single-call safeguard — mirrors the info-dumping check.
-      maxManuscriptChars: z.number().int().min(2000).max(200_000).default(48_000),
     }),
     configFields: [
       {
@@ -588,29 +633,16 @@ export const EDITORIAL_CHECKS = [
         step: 1,
         help: 'Cap findings so a long manuscript can not flood the review.',
       },
-      {
-        key: 'maxManuscriptChars',
-        label: 'Max manuscript characters analyzed',
-        type: 'number',
-        min: 2000,
-        max: 200_000,
-        step: 1000,
-        help: 'Bounds the prompt so a long series can not overflow a small provider context window.',
-      },
     ],
     gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
-    run: async (ctx) => {
-      const manuscript = capManuscript(ctx.manuscript, ctx.config?.maxManuscriptChars ?? 48_000);
-      const { content } = await ctx.callStagedLLM(
-        OBJECT_MOTIVATION_STAGE,
-        { manuscript, objects: describeObjectAttachments(ctx) },
-        { returnsJson: true, source: OBJECT_MOTIVATION_STAGE },
-      );
-      return mapLlmFindings(content?.findings, {
-        severityDefault: ctx.severityDefault,
+    run: (ctx) => {
+      const objects = describeObjectAttachments(ctx);
+      return runManuscriptLlmCheck(ctx, {
+        stage: OBJECT_MOTIVATION_STAGE,
         category: 'continuity',
-        max: ctx.config?.maxFindings ?? 12,
-        withIssueNumber: true,
+        // The objects-attachment summary is fixed per-call overhead.
+        overheadTokens: EDITORIAL_PROMPT_OVERHEAD_TOKENS + estimateTokens(objects),
+        buildVars: (manuscript) => ({ manuscript, objects }),
       });
     },
   },
@@ -680,11 +712,6 @@ export const EDITORIAL_CHECKS = [
     configSchema: z.object({
       // Cap findings per run so a long manuscript can't flood the review.
       maxFindings: z.number().int().min(1).max(50).default(12),
-      // Bound the prompt so a long series can't overflow a small/local
-      // provider's context window (which would reject/clip the call and yield
-      // zero findings). This is a single-call safeguard — full per-provider
-      // context-window chunking (à la completenessPass) is tracked separately.
-      maxManuscriptChars: z.number().int().min(2000).max(200_000).default(48_000),
     }),
     configFields: [
       {
@@ -696,31 +723,14 @@ export const EDITORIAL_CHECKS = [
         step: 1,
         help: 'Cap findings so a long manuscript can not flood the review.',
       },
-      {
-        key: 'maxManuscriptChars',
-        label: 'Max manuscript characters analyzed',
-        type: 'number',
-        min: 2000,
-        max: 200_000,
-        step: 1000,
-        help: 'Bounds the prompt so a long series can not overflow a small provider context window.',
-      },
     ],
     gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
-    run: async (ctx) => {
-      const manuscript = capManuscript(ctx.manuscript, ctx.config?.maxManuscriptChars ?? 48_000);
-      const { content } = await ctx.callStagedLLM(
-        INFO_DUMPING_STAGE,
-        { manuscript },
-        { returnsJson: true, source: INFO_DUMPING_STAGE },
-      );
-      return mapLlmFindings(content?.findings, {
-        severityDefault: ctx.severityDefault,
-        category: 'exposition',
-        max: ctx.config?.maxFindings ?? 12,
-        withIssueNumber: true,
-      });
-    },
+    run: (ctx) => runManuscriptLlmCheck(ctx, {
+      stage: INFO_DUMPING_STAGE,
+      category: 'exposition',
+      overheadTokens: EDITORIAL_PROMPT_OVERHEAD_TOKENS,
+      buildVars: (manuscript) => ({ manuscript }),
+    }),
   },
   {
     id: 'style.reading-level',
@@ -791,9 +801,6 @@ export const EDITORIAL_CHECKS = [
     configSchema: z.object({
       // Cap findings per run so a long manuscript can't flood the review.
       maxFindings: z.number().int().min(1).max(50).default(12),
-      // Bound the prompt so a long series can't overflow a small/local
-      // provider's context window. Single-call safeguard — mirrors info-dumping.
-      maxManuscriptChars: z.number().int().min(2000).max(200_000).default(48_000),
     }),
     configFields: [
       {
@@ -805,34 +812,20 @@ export const EDITORIAL_CHECKS = [
         step: 1,
         help: 'Cap findings so a long manuscript can not flood the review.',
       },
-      {
-        key: 'maxManuscriptChars',
-        label: 'Max manuscript characters analyzed',
-        type: 'number',
-        min: 2000,
-        max: 200_000,
-        step: 1000,
-        help: 'Bounds the prompt so a long series can not overflow a small provider context window.',
-      },
     ],
     // Skip unless there's prose AND the style guide declares at least one
     // conformance-relevant field (tense / POV / rating / profanity / audience).
     gate: (ctx) => (ctx.manuscript || '').trim().length > 0
       && hasConformanceFields(ctx.series?.styleGuide),
-    run: async (ctx) => {
+    run: (ctx) => {
       const expectations = styleGuideExpectations(ctx.series?.styleGuide);
       if (!expectations) return [];
-      const manuscript = capManuscript(ctx.manuscript, ctx.config?.maxManuscriptChars ?? 48_000);
-      const { content } = await ctx.callStagedLLM(
-        STYLE_CONFORMANCE_STAGE,
-        { manuscript, styleGuide: expectations },
-        { returnsJson: true, source: STYLE_CONFORMANCE_STAGE },
-      );
-      return mapLlmFindings(content?.findings, {
-        severityDefault: ctx.severityDefault,
+      return runManuscriptLlmCheck(ctx, {
+        stage: STYLE_CONFORMANCE_STAGE,
         category: 'style',
-        max: ctx.config?.maxFindings ?? 12,
-        withIssueNumber: true,
+        // The style-guide expectations are fixed per-call overhead.
+        overheadTokens: EDITORIAL_PROMPT_OVERHEAD_TOKENS + estimateTokens(expectations),
+        buildVars: (manuscript) => ({ manuscript, styleGuide: expectations }),
       });
     },
   },
