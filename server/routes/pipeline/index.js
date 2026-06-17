@@ -30,6 +30,10 @@
  *   POST   /series/:id/reverse-outline/generate      → { runId, alreadyRunning, sseUrl }
  *   GET    /series/:id/reverse-outline/generate/progress → SSE (text/event-stream)
  *   POST   /series/:id/reverse-outline/generate/cancel   → { canceled }
+ *   GET    /series/:id/continuity-bible              → { facts, stale, status }
+ *   POST   /series/:id/continuity-bible/generate     → { runId, alreadyRunning, sseUrl }
+ *   GET    /series/:id/continuity-bible/generate/progress → SSE (text/event-stream)
+ *   POST   /series/:id/continuity-bible/generate/cancel   → { canceled }
  *   GET    /issues/:id/pov-rewrites                   → { cast, rewrites, hasContent }
  *   POST   /issues/:id/pov-rewrites                   → { status, rewrite }
  *   DELETE /issues/:id/pov-rewrites/:rewriteId        → { removed }
@@ -50,6 +54,7 @@ import coverRoutes from './covers.js';
 import issueRoutes from './issues.js';
 import editorialRoutes from './editorial.js';
 import reverseOutlineRoutes from './reverseOutline.js';
+import continuityBibleRoutes from './continuityBible.js';
 import perspectiveRewriteRoutes from './perspectiveRewrite.js';
 import autopilotRoutes from './autopilot.js';
 import canonRoutes from './canon.js';
@@ -64,6 +69,7 @@ router.use(coverRoutes);
 router.use(issueRoutes);
 router.use(editorialRoutes);
 router.use(reverseOutlineRoutes);
+router.use(continuityBibleRoutes);
 router.use(perspectiveRewriteRoutes);
 router.use(autopilotRoutes);
 router.use(canonRoutes);

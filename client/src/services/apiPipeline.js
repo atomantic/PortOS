@@ -684,6 +684,33 @@ export const getReverseOutlineStatus = (seriesId, options = {}) =>
 export const pipelineReverseOutlineSseUrl = (seriesId) =>
   `/api/pipeline/series/${encodeURIComponent(seriesId)}/reverse-outline/generate/progress`;
 
+// ---- Continuity Bible (established-facts ledger) ----
+// The stored ledger: { facts, stale, status }. `status:'none'` when never
+// generated, `'no-content'` shell while there's no canon and nothing drafted.
+export const getContinuityBible = (seriesId, options = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/continuity-bible`, options);
+
+// Kick off a (re)generation. { runId, alreadyRunning, sseUrl } — subscribe via
+// pipelineContinuityBibleSseUrl to stream progress, then re-fetch on `complete`.
+export const generateContinuityBible = (seriesId, opts = {}, options = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/continuity-bible/generate`, {
+    method: 'POST',
+    body: JSON.stringify(opts),
+    ...options,
+  });
+
+export const cancelContinuityBible = (seriesId) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/continuity-bible/generate/cancel`, {
+    method: 'POST',
+  });
+
+// { active: boolean } — lets a (re)mounting view re-attach to an in-flight run.
+export const getContinuityBibleStatus = (seriesId, options = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/continuity-bible/generate/status`, options);
+
+export const pipelineContinuityBibleSseUrl = (seriesId) =>
+  `/api/pipeline/series/${encodeURIComponent(seriesId)}/continuity-bible/generate/progress`;
+
 // ---- Series Autopilot (full autonomous mode) ----
 // Drives a series from its current state to story-ready (+ draft visuals) by
 // composing every pipeline pass. SSE-backed; gated on the cos autonomy domain

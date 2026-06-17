@@ -296,6 +296,13 @@
       "returnsJson": true,
       "variables": []
     },
+    "pipeline-continuity-bible": {
+      "name": "Pipeline — Continuity Bible (established-facts ledger)",
+      "description": "Read the whole drafted manuscript and extract concrete, checkable facts about the story world — physical traits, ages, dates/elapsed time, locations, possessions, world rules, and who-knows-what-when. Auto-seeded from universe canon (locked canon = ground truth) and learned from prose; feeds the browsable Series Continuity view and is the substrate the canon-contradiction / timeline / knowledge-leak checks read. Runs at `heavy` tier — reads the full stitched manuscript.",
+      "model": "heavy",
+      "returnsJson": true,
+      "variables": []
+    },
     "pipeline-extract-scenes": {
       "name": "Pipeline — Extract Scenes from TV Teleplay",
       "description": "Parse an already-formatted TV teleplay into a structured scenes[] list (one entry per slugline) the storyboards stage can render. Defers to character / setting bibles for canonical names and slugline reuse.",

@@ -14,7 +14,7 @@ import { useEffect, useState } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, Save, Loader2, Workflow as WorkflowIcon, Globe, NotebookPen,
-  PanelLeftClose, PanelLeftOpen, Sparkles, BookOpen, FileInput, Compass,
+  PanelLeftClose, PanelLeftOpen, Sparkles, BookOpen, FileInput, Compass, BookMarked,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import ArcCanvas from '../components/pipeline/ArcCanvas';
@@ -213,6 +213,13 @@ export default function PipelineSeries() {
               title="Map the drafted manuscript into a color-coded scene-by-plotline reverse outline"
             >
               <Compass size={12} /> Reverse Outline
+            </Link>
+            <Link
+              to={`/pipeline/series/${series.id}/continuity-bible`}
+              className="ml-2 inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-gray-400 hover:text-white border border-port-border bg-port-card"
+              title="Browse the established-facts ledger — physical traits, ages, dates, places, possessions, world rules, and who knows what"
+            >
+              <BookMarked size={12} /> Continuity
             </Link>
             <Link
               to={buildImporterLink({ universeId: series.universeId, seriesId: series.id })}
