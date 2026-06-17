@@ -12,7 +12,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { unlink, stat } from 'fs/promises';
-import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
 import {
   validateRequest, imageEdgeSchema, refineImagePixelCap, PIXEL_CAP_MESSAGE,
 } from '../lib/validation.js';
@@ -24,7 +24,7 @@ import { getSettings, updateSettingsWith } from '../services/settings.js';
 import { getHfToken, getHfTokenInfo, HF_TOKEN_REGEX } from '../lib/hfToken.js';
 import { getImageModels, isFlux2, isEditOnly, repoForModel, requiredReposForModel } from '../lib/mediaModels.js';
 import { usesDiffusersRunner } from '../lib/runners.js';
-import { inspectModelCache } from '../lib/hfCache.js';
+import { inspectModelCache, verifyModelCache, repairModelCache } from '../lib/hfCache.js';
 import { startHfDownloadStream, openSseStream } from '../lib/sseDownload.js';
 import {
   REQUIRED_PACKAGES, detectPython, installPackages,
@@ -375,9 +375,68 @@ router.get('/models/status', asyncHandler(async (_req, res) => {
     const cached = inspections.every((i) => i.cached);
     const sizeBytes = inspections.reduce((sum, i) => sum + (i.sizeBytes || 0), 0);
     const pendingRepos = required.filter((_, i) => !inspections[i].cached);
-    return { id: m.id, repo: required[0], cached, sizeBytes, requiredRepos: required, pendingRepos };
+    // Integrity is only meaningful for repos that finished downloading — run
+    // the cheap structural check across every cached required repo and report
+    // the worst result, so a corrupt aux encoder still surfaces a Repair state.
+    const integrity = cached ? aggregateIntegrity(await Promise.all(required.map((r) => verifyModelCache(r)))) : null;
+    return { id: m.id, repo: required[0], cached, sizeBytes, requiredRepos: required, pendingRepos, integrity };
   }));
   res.json(statuses);
+}));
+
+// Condense one-or-more verifyModelCache() results into the UI-facing shape
+// `{ status, badFiles }`. 'bad' wins over 'ok' wins over 'missing' so a model
+// whose main weights verify but whose aux encoder is corrupt still reports bad.
+function aggregateIntegrity(verifies) {
+  const list = verifies.filter(Boolean);
+  if (list.length === 0) return null;
+  const status = list.some((v) => v.status === 'bad') ? 'bad'
+    : list.every((v) => v.status === 'ok') ? 'ok'
+      : 'missing';
+  const badFiles = list.flatMap((v) => v.files.filter((f) => !f.ok).map((f) => ({ repo: v.repoId, name: f.name, reason: f.reason })));
+  return { status, checkedDeep: list.every((v) => v.checkedDeep), badFiles };
+}
+
+// POST /models/verify — on-demand integrity re-scan. `deep:true` adds the
+// per-file sha256 comparison on top of the structural check. With no `modelId`
+// it scans every model.
+const verifyImageBodySchema = z.object({
+  modelId: z.string().min(1).optional(),
+  deep: z.boolean().optional(),
+});
+router.post('/models/verify', asyncHandler(async (req, res) => {
+  const parsed = verifyImageBodySchema.safeParse(req.body || {});
+  if (!parsed.success) failValidation(parsed);
+  const { modelId, deep = false } = parsed.data;
+  const models = getImageModels().filter((m) => (modelId ? m.id === modelId : true));
+  if (modelId && models.length === 0) {
+    throw new ServerError(`Unknown model id: ${modelId}`, { status: 404, code: 'UNKNOWN_MODEL' });
+  }
+  const results = await Promise.all(models.map(async (m) => {
+    const required = requiredReposForModel(m) || [];
+    const verifies = await Promise.all(required.map((r) => verifyModelCache(r, { deep })));
+    return { id: m.id, ...(aggregateIntegrity(verifies) || { status: 'missing', badFiles: [] }) };
+  }));
+  res.json({ deep, models: results });
+}));
+
+// POST /models/:modelId/repair — delete the flagged weight files across the
+// model's required repos so the existing resumable HF fetch path re-downloads
+// them. Returns the deleted-file list; the client then re-triggers the normal
+// download SSE to pull clean copies with progress.
+router.post('/models/:modelId/repair', asyncHandler(async (req, res) => {
+  const model = getImageModels().find((m) => m.id === req.params.modelId);
+  if (!model) throw new ServerError(`Unknown model id: ${req.params.modelId}`, { status: 404, code: 'UNKNOWN_MODEL' });
+  const parsed = z.object({ deep: z.boolean().optional() }).safeParse(req.body || {});
+  if (!parsed.success) failValidation(parsed);
+  const deep = parsed.data.deep || false;
+  const required = requiredReposForModel(model);
+  if (!required) {
+    throw new ServerError(`Model "${model.id}" has no HuggingFace repo on file.`, { status: 400, code: 'NO_REPO_FOR_MODEL' });
+  }
+  const repaired = await Promise.all(required.map((repo) => repairModelCache(repo, { deep })));
+  const deleted = repaired.flatMap((r) => r.deleted.map((name) => ({ repo: r.repoId, name })));
+  res.json({ deep, deleted, repos: required });
 }));
 
 // SSE-driven model download. Cancels the python child if the client

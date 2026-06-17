@@ -41,7 +41,7 @@ import {
 import { enqueueJob, attachSseClient, cancelJob, listJobs } from '../services/mediaJobQueue/index.js';
 import { repoForModel, getTextEncoderRepo, isHfRepoId } from '../lib/mediaModels.js';
 import { videoLoraFamily } from '../lib/runners.js';
-import { inspectModelCache } from '../lib/hfCache.js';
+import { inspectModelCache, verifyModelCache, repairModelCache } from '../lib/hfCache.js';
 import { startHfDownloadStream, openSseStream } from '../lib/sseDownload.js';
 
 const router = Router();
@@ -371,6 +371,34 @@ router.get('/models', (_req, res) => {
   res.json(listVideoModels());
 });
 
+// Condense a verifyModelCache() result down to the UI-facing integrity shape:
+// `{ status, badFiles: [{ name, reason }] }`. The full per-file list is kept
+// out of the polled payload — the banner only needs the status + which files
+// to name.
+const summarizeIntegrity = (verify) => {
+  if (!verify) return null;
+  return {
+    status: verify.status,
+    checkedDeep: verify.checkedDeep,
+    badFiles: verify.files.filter((f) => !f.ok).map((f) => ({ name: f.name, reason: f.reason })),
+  };
+};
+
+// Resolve the repo set an integrity scan should cover. A specific `modelId`
+// scopes to that model's repo; no modelId scans every model repo plus the
+// shared text encoder.
+const reposToVerify = (modelId) => {
+  if (modelId) {
+    const m = listVideoModels().find((x) => x.id === modelId);
+    const repo = m ? repoForModel(m) : null;
+    return repo ? [repo] : [];
+  }
+  const repos = listVideoModels().map(repoForModel).filter(Boolean);
+  const enc = getTextEncoderRepo();
+  if (isHfRepoId(enc)) repos.push(enc);
+  return [...new Set(repos)];
+};
+
 // Per-model download status — see /api/image-gen/models/status for the
 // shape contract. We also surface the active text-encoder repo so the
 // video form can warn when the Gemma encoder isn't downloaded yet (a
@@ -381,19 +409,64 @@ router.get('/models/status', asyncHandler(async (_req, res) => {
   // surface both the repo-cache status and the resolved local path so the UI
   // can distinguish "not downloaded" from "served from LM Studio".
   const encoderRepo = getTextEncoderRepo();
-  const [models, encoderInspection] = await Promise.all([
+  const [models, encoderInspection, encoderIntegrity] = await Promise.all([
     Promise.all(listVideoModels().map(async (m) => {
       const repo = repoForModel(m);
-      if (!repo) return { id: m.id, repo: null, cached: null, sizeBytes: 0 };
+      if (!repo) return { id: m.id, repo: null, cached: null, sizeBytes: 0, integrity: null };
       const { cached, sizeBytes } = await inspectModelCache(repo);
-      return { id: m.id, repo, cached, sizeBytes };
+      // Only run the (header-reading) integrity check for repos that are
+      // actually downloaded — a not-yet-cached model gets the Download badge,
+      // not a Repair banner.
+      const integrity = cached ? summarizeIntegrity(await verifyModelCache(repo)) : null;
+      return { id: m.id, repo, cached, sizeBytes, integrity };
     })),
     isHfRepoId(encoderRepo) ? inspectModelCache(encoderRepo) : Promise.resolve(null),
+    isHfRepoId(encoderRepo) ? verifyModelCache(encoderRepo) : Promise.resolve(null),
   ]);
   const textEncoder = encoderInspection
-    ? { repo: encoderRepo, ...encoderInspection }
-    : { repo: encoderRepo, cached: true, sizeBytes: 0 };
+    ? { repo: encoderRepo, ...encoderInspection, integrity: encoderInspection.cached ? summarizeIntegrity(encoderIntegrity) : null }
+    : { repo: encoderRepo, cached: true, sizeBytes: 0, integrity: null };
   res.json({ models, textEncoder });
+}));
+
+// POST /models/verify — force an integrity re-scan on demand. `deep:true` adds
+// the per-file sha256 comparison (slower; reads every weight byte) on top of
+// the cheap structural check the status poll already runs. With no `modelId`
+// it scans every cached model + the text encoder.
+const verifyBodySchema = z.object({
+  modelId: z.string().min(1).optional(),
+  deep: z.boolean().optional(),
+});
+router.post('/models/verify', asyncHandler(async (req, res) => {
+  const parsed = verifyBodySchema.safeParse(req.body || {});
+  if (!parsed.success) failValidation(parsed);
+  const { modelId, deep = false } = parsed.data;
+  const repos = reposToVerify(modelId);
+  if (modelId && repos.length === 0) {
+    throw new ServerError(`Unknown video model: ${modelId}`, { status: 404, code: 'UNKNOWN_MODEL' });
+  }
+  const results = await Promise.all(repos.map(async (repo) => verifyModelCache(repo, { deep })));
+  res.json({ deep, models: results.map((r) => ({ repo: r.repoId, ...summarizeIntegrity(r) })) });
+}));
+
+// POST /models/:modelId/repair — delete the flagged (corrupt/truncated) weight
+// files for the model's repo(s) so the existing resumable HF fetch path
+// re-downloads them. Returns the deleted-file list; the client then re-triggers
+// the normal `/models/:id/download` SSE stream to pull clean copies with
+// progress. `deep:true` uses the sha256 comparison to decide what's corrupt.
+router.post('/models/:modelId/repair', asyncHandler(async (req, res) => {
+  const model = listVideoModels().find((m) => m.id === req.params.modelId);
+  if (!model) throw new ServerError(`Unknown video model: ${req.params.modelId}`, { status: 404, code: 'UNKNOWN_MODEL' });
+  const parsed = z.object({ deep: z.boolean().optional() }).safeParse(req.body || {});
+  if (!parsed.success) failValidation(parsed);
+  const deep = parsed.data.deep || false;
+  const repos = reposToVerify(model.id);
+  if (repos.length === 0) {
+    throw new ServerError(`Model "${model.id}" has no HuggingFace repo on file.`, { status: 400, code: 'NO_REPO_FOR_MODEL' });
+  }
+  const repaired = await Promise.all(repos.map((repo) => repairModelCache(repo, { deep })));
+  const deleted = repaired.flatMap((r) => r.deleted.map((name) => ({ repo: r.repoId, name })));
+  res.json({ deep, deleted, repos });
 }));
 
 router.get('/models/:modelId/download', asyncHandler(async (req, res) => {

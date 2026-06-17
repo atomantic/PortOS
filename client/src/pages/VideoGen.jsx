@@ -874,6 +874,16 @@ export default function VideoGen() {
       : textEncoderInfo)
     : null;
 
+  // Weight-integrity (issue #1324). A corrupt/truncated model decodes to
+  // garbled "mosaic" video that a clean re-download fixes; surface a Repair
+  // banner keyed on the cheap structural check the status poll already ran so
+  // the user can delete + re-fetch the bad files instead of debugging a render.
+  const modelIntegrity = modelStatus && !modelStatus.downloading ? modelStatus.integrity : null;
+  const integrityBad = modelIntegrity?.status === 'bad';
+  const integrityKey = integrityBad ? `${modelId}:${(modelIntegrity.badFiles || []).map((f) => f.name).join(',')}` : null;
+  const [dismissedIntegrityKey, setDismissedIntegrityKey] = useState(null);
+  const showIntegrityBanner = integrityBad && dismissedIntegrityKey !== integrityKey && !modelDownload.downloading;
+
   const { matched: matchedResolution, label: resolutionLabel } = resolveResolutionLabel(VIDEO_RESOLUTIONS, width, height);
   const progressPct = progress?.progress != null ? Math.round(progress.progress * 100) : null;
 
@@ -1402,6 +1412,35 @@ export default function VideoGen() {
                 <Sparkles size={14} />
                 Install {byovStatus.label}
               </button>
+            </div>
+          )}
+          {showIntegrityBanner && (
+            <div className="rounded-lg border border-port-error/40 bg-port-error/10 px-3 py-3 text-xs text-port-error flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                <div>
+                  <strong className="font-semibold">{currentModel?.name || modelId}</strong> has {(modelIntegrity.badFiles || []).length || 'corrupt'} damaged weight file{(modelIntegrity.badFiles || []).length === 1 ? '' : 's'} — renders may come out garbled.
+                  Repair deletes the bad file{(modelIntegrity.badFiles || []).length === 1 ? '' : 's'} and re-downloads clean copies.
+                </div>
+              </div>
+              <div className="flex items-center gap-2 self-start sm:self-auto">
+                <button
+                  type="button"
+                  onClick={() => { setDismissedIntegrityKey(integrityKey); modelDownload.repair(modelId); }}
+                  disabled={modelDownload.repairing || modelDownload.downloading}
+                  className="whitespace-nowrap inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-port-error text-white text-xs font-medium hover:bg-port-error/80 disabled:opacity-50"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${modelDownload.repairing ? 'animate-spin' : ''}`} />
+                  Repair model
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDismissedIntegrityKey(integrityKey)}
+                  className="text-gray-400 hover:text-gray-200 text-xs"
+                >
+                  Dismiss
+                </button>
+              </div>
             </div>
           )}
           <StylePresetPicker

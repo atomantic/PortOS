@@ -20,9 +20,10 @@
 // route — which inspects every registered model — doesn't block the Node
 // event loop while walking large snapshot directories.
 
-import { promises as fs } from 'node:fs';
+import { promises as fs, createReadStream } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname, resolve as resolvePath } from 'node:path';
+import { createHash } from 'node:crypto';
 
 // HF cache root resolution mirrors huggingface_hub's own precedence:
 // HF_HUB_CACHE > HF_HOME/hub > $XDG_CACHE_HOME/huggingface/hub
@@ -127,3 +128,200 @@ export async function inspectModelCache(repoId) {
 }
 
 export const isModelCached = async (repoId) => (await inspectModelCache(repoId)).cached;
+
+// ---------------------------------------------------------------------------
+// Weight-integrity verification (issue #1324)
+//
+// `inspectModelCache` only confirms each weight blob *exists* and is non-zero.
+// That misses the failure mode upstream proved out: a corrupt/partial download
+// with the *right size but wrong bytes* (e.g. an interrupted resumable fetch
+// that left a truncated tensor region, or bit-rot) decodes to garbled "mosaic"
+// renders that a clean re-download fixes. `verifyModelCache` adds two cheap,
+// no-tensor-load integrity checks on top of the existence check:
+//
+//   structural — for every `.safetensors` file, read the 8-byte little-endian
+//     header-length prefix + the JSON header and confirm the file is at least
+//     `8 + headerLen + max(data_offsets.end)` bytes long. Catches truncation
+//     and corrupt headers without loading a single tensor.
+//   deep (opt-in) — hash each weight file and compare against HuggingFace's
+//     published content hash. We get that hash for free, *with no network*:
+//     HF names each cache blob by its etag, which for LFS weight files IS the
+//     sha256 of the content. The snapshot file is a symlink into
+//     `../../blobs/<sha256>`, so the symlink target's basename is the expected
+//     digest. (Non-LFS files are named by a git sha1 — skipped, they're tiny
+//     config/tokenizer files we don't treat as weights anyway.)
+// ---------------------------------------------------------------------------
+
+const SAFETENSORS_MAX_HEADER_BYTES = 100_000_000; // 100MB — far above any real header
+const SHA256_RE = /^[0-9a-f]{64}$/;
+
+// Cheap structural check for a single .safetensors file. Reads only the header
+// region (a few KB), never the tensor payload. Returns { ok, reason, ... }.
+async function verifySafetensorsStructure(path, size) {
+  if (size < 8) return { ok: false, reason: 'truncated-header' };
+  let fd;
+  try {
+    fd = await fs.open(path, 'r');
+  } catch {
+    return { ok: false, reason: 'unreadable' };
+  }
+  try {
+    const head = Buffer.alloc(8);
+    await fd.read(head, 0, 8, 0);
+    const headerLen = Number(head.readBigUInt64LE(0));
+    if (!Number.isSafeInteger(headerLen) || headerLen <= 0
+      || headerLen > SAFETENSORS_MAX_HEADER_BYTES || 8 + headerLen > size) {
+      return { ok: false, reason: 'bad-header-length' };
+    }
+    const jsonBuf = Buffer.alloc(headerLen);
+    await fd.read(jsonBuf, 0, headerLen, 8);
+    let header;
+    try {
+      header = JSON.parse(jsonBuf.toString('utf8'));
+    } catch {
+      return { ok: false, reason: 'unparseable-header' };
+    }
+    // The largest tensor end-offset (relative to the byte buffer after the
+    // header) is the minimum payload length the file must contain.
+    let maxEnd = 0;
+    for (const [name, tensor] of Object.entries(header)) {
+      if (name === '__metadata__') continue;
+      const off = tensor?.data_offsets;
+      if (Array.isArray(off) && off.length === 2 && Number.isFinite(off[1]) && off[1] > maxEnd) {
+        maxEnd = off[1];
+      }
+    }
+    const expectedBytes = 8 + headerLen + maxEnd;
+    if (size < expectedBytes) {
+      return { ok: false, reason: 'truncated-data', expectedBytes, actualBytes: size };
+    }
+    return { ok: true, reason: 'structural-ok' };
+  } finally {
+    await fd.close().catch(() => {});
+  }
+}
+
+// The expected sha256 for a cache blob is the symlink target's basename (HF
+// names LFS blobs by their sha256 etag). Returns null when the snapshot entry
+// is a real file (local_dir copy) or a git-sha1-named non-LFS blob — both
+// cases have no usable sha256 to compare against.
+async function expectedBlobSha256(path) {
+  const lst = await fs.lstat(path).catch(() => null);
+  if (!lst || !lst.isSymbolicLink()) return null;
+  const target = await fs.readlink(path).catch(() => null);
+  if (!target) return null;
+  const base = target.split('/').pop();
+  return SHA256_RE.test(base) ? base : null;
+}
+
+async function sha256OfFile(path) {
+  return new Promise((resolve, reject) => {
+    const hash = createHash('sha256');
+    const stream = createReadStream(path);
+    stream.on('error', reject);
+    stream.on('data', (chunk) => hash.update(chunk));
+    stream.on('end', () => resolve(hash.digest('hex')));
+  });
+}
+
+// Verify a single weight file. `deep` adds the sha256 comparison on top of the
+// structural check.
+async function verifyWeightFile(file, { deep }) {
+  const stat = await fs.stat(file.path).catch(() => null); // follows symlink
+  if (!stat) return { name: file.name, ok: false, reason: 'missing-blob', sizeBytes: 0 };
+  if (stat.size === 0) return { name: file.name, ok: false, reason: 'empty', sizeBytes: 0 };
+
+  const entry = { name: file.name, ok: true, reason: 'size-only', sizeBytes: stat.size };
+  if (file.name.endsWith('.safetensors')) {
+    const structural = await verifySafetensorsStructure(file.path, stat.size);
+    if (!structural.ok) {
+      return { ...entry, ok: false, reason: structural.reason, expectedBytes: structural.expectedBytes };
+    }
+    entry.reason = 'structural-ok';
+  }
+  if (deep) {
+    const expectedSha = await expectedBlobSha256(file.path);
+    if (expectedSha) {
+      const actualSha = await sha256OfFile(file.path).catch(() => null);
+      if (actualSha && actualSha !== expectedSha) {
+        return { ...entry, ok: false, reason: 'sha256-mismatch' };
+      }
+      if (actualSha) entry.reason = 'sha256-ok';
+    }
+  }
+  return entry;
+}
+
+// Returns `{ repoId, status, cached, sizeBytes, snapshotPath, checkedDeep, files }`.
+// `status` is one of:
+//   'missing' — no snapshot / no weight files (nothing downloaded to verify)
+//   'ok'      — every weight file passed its checks
+//   'bad'     — at least one weight file is corrupt/truncated/missing-blob
+// `files` carries a per-file `{ name, ok, reason, sizeBytes }` breakdown so the
+// repair path knows exactly which files to delete and the UI can explain why.
+export async function verifyModelCache(repoId, { deep = false } = {}) {
+  const base = {
+    repoId, status: 'missing', cached: false, sizeBytes: 0,
+    snapshotPath: null, checkedDeep: deep, files: [],
+  };
+  if (!repoId || typeof repoId !== 'string') return base;
+  const root = getHfCacheRoot();
+  const repoDir = join(root, repoToDirName(repoId));
+  const snapshotPath = await latestSnapshotDir(repoDir);
+  if (!snapshotPath) return base;
+  const weights = [];
+  await collectWeightFiles(snapshotPath, weights);
+  if (weights.length === 0) return { ...base, snapshotPath };
+
+  const files = await Promise.all(weights.map((w) => verifyWeightFile(w, { deep })));
+  let sizeBytes = 0;
+  let anyBad = false;
+  for (const f of files) {
+    if (f.ok) sizeBytes += f.sizeBytes || 0;
+    else anyBad = true;
+  }
+  return {
+    repoId,
+    status: anyBad ? 'bad' : 'ok',
+    cached: !anyBad,
+    sizeBytes,
+    snapshotPath,
+    checkedDeep: deep,
+    files,
+  };
+}
+
+// Delete the flagged (corrupt/truncated/missing-blob) weight files so the
+// existing resumable HF fetch path re-downloads them. For symlinked cache
+// entries we unlink BOTH the snapshot symlink and the blob it points at — a
+// stale blob with the right name but wrong bytes would otherwise be trusted by
+// `hf_hub_download` (it keys on the cached etag, not the content) and never
+// re-fetched. Returns `{ repoId, status, deleted: [names] }`; an 'ok' or
+// 'missing' status deletes nothing (caller just re-downloads from scratch).
+export async function repairModelCache(repoId, { deep = false } = {}) {
+  const verify = await verifyModelCache(repoId, { deep });
+  if (verify.status !== 'bad') {
+    return { repoId, status: verify.status, deleted: [] };
+  }
+  const snapshotPath = verify.snapshotPath;
+  const weights = [];
+  await collectWeightFiles(snapshotPath, weights);
+  const byName = new Map(weights.map((w) => [w.name, w.path]));
+  const badNames = verify.files.filter((f) => !f.ok).map((f) => f.name);
+  const deleted = [];
+  for (const name of badNames) {
+    const path = byName.get(name);
+    if (!path) continue;
+    const lst = await fs.lstat(path).catch(() => null);
+    if (lst?.isSymbolicLink()) {
+      const target = await fs.readlink(path).catch(() => null);
+      if (target) {
+        const blobPath = resolvePath(dirname(path), target);
+        await fs.unlink(blobPath).catch(() => {});
+      }
+    }
+    await fs.unlink(path).catch(() => {});
+    deleted.push(name);
+  }
+  return { repoId, status: 'bad', deleted };
+}

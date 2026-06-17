@@ -1,7 +1,10 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useSseProgress } from './useSseProgress.js';
 import toast from '../components/ui/Toast';
-import { getImageModelStatuses, getVideoModelStatuses } from '../services/apiImageVideo.js';
+import {
+  getImageModelStatuses, getVideoModelStatuses,
+  verifyImageModels, verifyVideoModels, repairImageModel, repairVideoModel,
+} from '../services/apiImageVideo.js';
 
 // Sentinel `modelId` used to drive a text-encoder download instead of a model
 // download. The video form passes this to `start()`; the URL builder below
@@ -77,6 +80,40 @@ export function useModelDownloadStatus({ kind = 'image' } = {}) {
     setActiveModelId(modelId);
   }, []);
 
+  // Force a deep integrity re-scan (per-file sha256). Returns the server's
+  // result and refreshes the status list so the structural badge stays current.
+  // `verifying` flips while in flight so the caller can disable the button.
+  const [verifying, setVerifying] = useState(false);
+  const verify = useCallback(async ({ modelId, deep = true } = {}) => {
+    setVerifying(true);
+    const fn = kind === 'video' ? verifyVideoModels : verifyImageModels;
+    const result = await fn({ modelId, deep }).catch((err) => {
+      toast.error(err?.message || 'Integrity scan failed');
+      return null;
+    });
+    await fetchStatuses();
+    setVerifying(false);
+    return result;
+  }, [kind, fetchStatuses]);
+
+  // Repair = delete the flagged corrupt files, then re-download them through
+  // the same SSE path the Download button uses (progress + auto status-refresh
+  // on completion come for free). `repairing` gates the button while the
+  // deletion request is in flight.
+  const [repairing, setRepairing] = useState(false);
+  const repair = useCallback(async (modelId, { deep = false } = {}) => {
+    if (!modelId) return;
+    setRepairing(true);
+    const fn = kind === 'video' ? repairVideoModel : repairImageModel;
+    const result = await fn(modelId, { deep }).catch((err) => {
+      toast.error(err?.message || 'Repair failed');
+      return null;
+    });
+    setRepairing(false);
+    if (result) start(modelId); // re-download clean copies via the existing SSE
+    return result;
+  }, [kind, start]);
+
   // Manual cancel: refetch directly because `sse.close()` followed by
   // setActiveModelId(null) clears the URL, which causes useSseProgress to
   // reset `closed → false` before the close-effect can observe `true`.
@@ -113,6 +150,10 @@ export function useModelDownloadStatus({ kind = 'image' } = {}) {
     refresh: fetchStatuses,
     start,
     cancel,
+    verify,
+    verifying,
+    repair,
+    repairing,
     getStatus,
     activeModelId,
     progress: sse.latest,
