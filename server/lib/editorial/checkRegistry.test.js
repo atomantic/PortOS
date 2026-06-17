@@ -320,3 +320,143 @@ describe('relationships.opposition-reversal — deterministic advisory', () => {
     expect(getCheck('relationships.opposition-reversal').defaultEnabled).toBe(false);
   });
 });
+
+describe('objects.unattached-significant — deterministic check (#1288)', () => {
+  const run = (objects) =>
+    getCheck('objects.unattached-significant').run({ canon: { objects }, config: {}, severityDefault: 'low' });
+
+  it('flags an object with significance but no attachments', () => {
+    const findings = run([
+      { id: 'o1', name: 'Pocket Watch', significance: 'her father gave it to her' },
+    ]);
+    expect(findings).toHaveLength(1);
+    expect(findings[0].category).toBe('continuity');
+    expect(findings[0].location).toContain('Pocket Watch');
+    expect(findings[0].problem).toMatch(/mean to anyone/i);
+  });
+
+  it('does not flag an object that has at least one attachment', () => {
+    const findings = run([
+      { id: 'o1', name: 'Pocket Watch', significance: 'matters', attachments: [{ characterId: 'c1' }] },
+    ]);
+    expect(findings).toEqual([]);
+  });
+
+  it('does not flag an object with no significance (pure set dressing)', () => {
+    const findings = run([{ id: 'o1', name: 'A Chair' }]);
+    expect(findings).toEqual([]);
+  });
+
+  it('tolerates empty / id-less canon', () => {
+    expect(run([])).toEqual([]);
+    expect(run([{ significance: 'orphan, no id' }])).toEqual([]);
+  });
+});
+
+describe('objects.unmotivated-interaction — LLM check (#1288)', () => {
+  const baseCtx = (overrides = {}) => ({
+    manuscript: 'She clutched the watch as if it meant everything.',
+    canon: {
+      objects: [{ id: 'o1', name: 'Watch', significance: 'heirloom', attachments: [{ characterId: 'c1', emotion: 'grief' }] }],
+      characters: [{ id: 'c1', name: 'Mara' }],
+    },
+    config: { maxManuscriptChars: 48_000, maxFindings: 12 },
+    severityDefault: 'low',
+    callStagedLLM: async () => ({ content: { findings: [] } }),
+    ...overrides,
+  });
+
+  it('passes the manuscript AND an objects-attachment summary to the model', async () => {
+    let vars = null;
+    await getCheck('objects.unmotivated-interaction').run(baseCtx({
+      callStagedLLM: async (_stage, v) => { vars = v; return { content: { findings: [] } }; },
+    }));
+    expect(vars.manuscript).toContain('clutched the watch');
+    expect(vars.objects).toContain('Watch');
+    expect(vars.objects).toContain('Mara'); // resolved character name, not the id
+  });
+
+  it('caps the manuscript so a long corpus cannot overflow context', async () => {
+    let sent = null;
+    await getCheck('objects.unmotivated-interaction').run(baseCtx({
+      manuscript: 'x'.repeat(100_000),
+      config: { maxManuscriptChars: 10_000, maxFindings: 12 },
+      callStagedLLM: async (_stage, v) => { sent = v.manuscript; return { content: { findings: [] } }; },
+    }));
+    expect(sent.length).toBeLessThan(11_000);
+    expect(sent).toContain('truncated');
+  });
+
+  it('shapes findings into the continuity category and respects maxFindings', async () => {
+    const many = Array.from({ length: 30 }, (_, i) => ({ severity: 'low', problem: `p${i}`, anchorQuote: `a${i}` }));
+    const findings = await getCheck('objects.unmotivated-interaction').run(baseCtx({
+      config: { maxManuscriptChars: 48_000, maxFindings: 4 },
+      callStagedLLM: async () => ({ content: { findings: many } }),
+    }));
+    expect(findings).toHaveLength(4);
+    expect(findings.every((f) => f.category === 'continuity')).toBe(true);
+  });
+
+  it('gates off when the manuscript is empty', () => {
+    expect(getCheck('objects.unmotivated-interaction').gate(baseCtx({ manuscript: '   ' }))).toBe(false);
+  });
+});
+
+describe('objects.backstory-consistency — LLM check (#1288)', () => {
+  const canonWithRow = () => ({
+    objects: [{ id: 'o1', name: 'Watch', attachments: [{ characterId: 'c1', emotion: 'grief', origin: 'gift from her father in 1990' }] }],
+    characters: [{ id: 'c1', name: 'Mara', background: 'orphaned at birth, never knew her parents' }],
+  });
+
+  it('gates on whether any attachment has both an origin and a character with a background', () => {
+    const check = getCheck('objects.backstory-consistency');
+    expect(check.gate({ canon: canonWithRow() })).toBe(true);
+    // origin present but no background → nothing to contradict
+    expect(check.gate({ canon: {
+      objects: [{ id: 'o1', name: 'Watch', attachments: [{ characterId: 'c1', origin: 'x' }] }],
+      characters: [{ id: 'c1', name: 'Mara' }],
+    } })).toBe(false);
+    // origin missing → skip
+    expect(check.gate({ canon: {
+      objects: [{ id: 'o1', name: 'Watch', attachments: [{ characterId: 'c1' }] }],
+      characters: [{ id: 'c1', name: 'Mara', background: 'x' }],
+    } })).toBe(false);
+    // dangling characterId → not this check's job
+    expect(check.gate({ canon: {
+      objects: [{ id: 'o1', name: 'Watch', attachments: [{ characterId: 'ghost', origin: 'x' }] }],
+      characters: [{ id: 'c1', name: 'Mara', background: 'x' }],
+    } })).toBe(false);
+  });
+
+  it('feeds origin + background rows to the model and shapes findings', async () => {
+    let vars = null;
+    const findings = await getCheck('objects.backstory-consistency').run({
+      canon: canonWithRow(),
+      config: { maxFindings: 12 },
+      severityDefault: 'medium',
+      callStagedLLM: async (_stage, v) => {
+        vars = v;
+        return { content: { findings: [{ severity: 'high', problem: 'orphan cannot receive a gift from her father', suggestion: 'fix', location: 'Object "Watch" — Mara\'s attachment' }] } };
+      },
+    });
+    expect(vars.attachments).toContain('Watch');
+    expect(vars.attachments).toContain('Mara');
+    expect(vars.attachments).toContain('orphaned at birth'); // the background side
+    expect(vars.attachments).toContain('gift from her father'); // the origin side
+    expect(findings).toHaveLength(1);
+    expect(findings[0].category).toBe('continuity');
+    expect(findings[0].issueNumber).toBeNull();
+  });
+
+  it('returns no findings (and never calls the model) when no row qualifies', async () => {
+    let called = false;
+    const findings = await getCheck('objects.backstory-consistency').run({
+      canon: { objects: [{ id: 'o1', name: 'Watch' }], characters: [] },
+      config: {},
+      severityDefault: 'medium',
+      callStagedLLM: async () => { called = true; return { content: { findings: [] } }; },
+    });
+    expect(findings).toEqual([]);
+    expect(called).toBe(false);
+  });
+});

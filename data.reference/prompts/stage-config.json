@@ -477,6 +477,20 @@
       "model": "default",
       "returnsJson": true,
       "variables": []
+    },
+    "pipeline-editorial-object-motivation": {
+      "name": "Pipeline — Editorial Check: Unmotivated object interaction",
+      "description": "Editorial check (#1288): flags moments where a character treats an object as significant without earned motivation — no recorded attachment and no on-page setup. Reads the stitched manuscript plus the canon object↔character attachments. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-editorial-object-backstory": {
+      "name": "Pipeline — Editorial Check: Attachment backstory consistency",
+      "description": "Editorial check (#1288): flags object↔character attachments whose origin story contradicts the attached character's established background — conflicting people, places, eras, or timelines. Canon-only (no manuscript). Returns canon-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
     }
   }
 }

@@ -813,6 +813,9 @@ export default function UniverseCanonSection({
           onBulkLock={(nextLocked) => handleBulkLockKind(kind, nextLocked)}
           bulkLocking={bulkLockingKindKey === kind.key}
           fullList={Array.isArray(universe[kind.key]) ? universe[kind.key] : []}
+          // The universe-wide character list — feeds the attachment target
+          // picker in ObjectAttachmentsEditor for the objects kind (#1288).
+          castList={Array.isArray(universe.characters) ? universe.characters : []}
           externalPendingByEntryId={externalPendingByEntryId}
           // Single-kind view (`?kind=places`, sidebar deep-links) — the
           // outer canon section already supplies the h2 + description + card
@@ -864,7 +867,7 @@ export default function UniverseCanonSection({
   );
 }
 
-function KindSection({ kind, universeId, all, totalCount, filtered, usage, renderingJobs, onRender, onJobCompleted, onJobFailed, onPreview, onRefine, refiningId, onExpandCharacter, expandingId, onSheetCompleted, onSheetDeleted, onToggleLock, togglingLockId, onPatchEntry, onRenderCleanPlate, onDescribeImages = null, seriesNameMap, onBulkLock, bulkLocking, fullList, externalPendingByEntryId = null, compact = false, onRenderAll = null, renderingAll = false, onPickFromCatalog = null, catalogLinking = false, onAddEntry = null, creating = false }) {
+function KindSection({ kind, universeId, all, totalCount, filtered, usage, renderingJobs, onRender, onJobCompleted, onJobFailed, onPreview, onRefine, refiningId, onExpandCharacter, expandingId, onSheetCompleted, onSheetDeleted, onToggleLock, togglingLockId, onPatchEntry, onRenderCleanPlate, onDescribeImages = null, seriesNameMap, onBulkLock, bulkLocking, fullList, castList = [], externalPendingByEntryId = null, compact = false, onRenderAll = null, renderingAll = false, onPickFromCatalog = null, catalogLinking = false, onAddEntry = null, creating = false }) {
   // Universe-only character wiring — `null` for non-character kinds so
   // CanonCard's gate stays `kind === 'characters' && characterExtensions`.
   // Memoized so the BASE object is stable across re-renders that aren't
@@ -880,6 +883,15 @@ function KindSection({ kind, universeId, all, totalCount, filtered, usage, rende
       ? { universeId, onExpandCharacter, onSheetCompleted, onSheetDeleted, castList: fullList }
       : null),
     [kind.key, universeId, onExpandCharacter, onSheetCompleted, onSheetDeleted, fullList],
+  );
+  // Universe-only object wiring (#1288) — `null` for non-object kinds so
+  // CanonCard's gate stays `kind === 'objects' && objectExtensions`. `castList`
+  // is the universe-wide character list (passed in directly, since `fullList`
+  // for the objects kind is the objects, not the cast) feeding the attachment
+  // target picker in ObjectAttachmentsEditor.
+  const objectExtensions = useMemo(
+    () => (kind.key === 'objects' ? { castList } : null),
+    [kind.key, castList],
   );
   const Icon = kind.icon;
 
@@ -1071,6 +1083,7 @@ function KindSection({ kind, universeId, all, totalCount, filtered, usage, rende
           characterExtensions={characterExtensions
             ? { ...characterExtensions, expanding: expandingId === entry.id }
             : null}
+          objectExtensions={objectExtensions}
         />
       ))}
     </ul>

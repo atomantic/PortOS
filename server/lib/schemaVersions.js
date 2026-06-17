@@ -44,7 +44,13 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // loss back onto the newer peer. Bumping makes the older peer reject the
   // ahead-version universe transfer instead. Per-category gate → only universe
   // sync pauses with old peers; pipeline/catalog/etc keep flowing.
-  universes: 6,
+  // v7 = canon objects gained `attachments[]` (structured object↔character
+  // emotional-attachment links — emotion/significance/origin/role, #1288).
+  // Same rationale as v6: additive + gracefully degrading, but version-gated so
+  // a not-yet-upgraded peer that re-sanitizes a universe through its
+  // attachments-unaware `sanitizeObject` can't silently strip the field and
+  // LWW the loss back onto the newer peer.
+  universes: 7,
   // v1 = post-split. Migrations 035/036 introduced the pipeline collection
   // layout for issues and series.
   // v2 = `stages.audio.audioMode` + `stages.audio.cues[]` added (whole-episode
