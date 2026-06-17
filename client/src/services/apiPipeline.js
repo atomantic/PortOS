@@ -595,6 +595,27 @@ export const getSeriesEditorialStatus = (seriesId, options = {}) =>
 export const pipelineEditorialSseUrl = (seriesId) =>
   `/api/pipeline/series/${encodeURIComponent(seriesId)}/editorial/analyze/progress`;
 
+// ---- Perspective rewrite (#1290 — rewrite a passage in another POV + analyze) ----
+// Stored alternate-POV rewrites + cast (for the picker) + per-rewrite stale flags:
+// { issueId, seriesId, cast[], hasContent, rewrites[] }
+export const getPipelinePerspectiveRewrites = (issueId, options = {}) =>
+  request(`/pipeline/issues/${encodeURIComponent(issueId)}/pov-rewrites`, options);
+
+// Generate one alternate-POV rewrite + analysis (synchronous; returns { status, rewrite }).
+export const createPipelinePerspectiveRewrite = (issueId, opts = {}, options = {}) =>
+  request(`/pipeline/issues/${encodeURIComponent(issueId)}/pov-rewrites`, {
+    method: 'POST',
+    body: JSON.stringify(opts),
+    ...options,
+  });
+
+// Remove one stored rewrite artifact ({ removed }).
+export const deletePipelinePerspectiveRewrite = (issueId, rewriteId, options = {}) =>
+  request(`/pipeline/issues/${encodeURIComponent(issueId)}/pov-rewrites/${encodeURIComponent(rewriteId)}`, {
+    method: 'DELETE',
+    ...options,
+  });
+
 // ---- Editorial checks (#1284 registry-driven review) ----
 // The full check catalog merged with persisted enable/config state:
 // { checks: [{ id, label, description, scope, kind, category, severityDefault,

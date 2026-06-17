@@ -491,6 +491,20 @@
       "model": "default",
       "returnsJson": true,
       "variables": []
+    },
+    "pipeline-pov-rewrite": {
+      "name": "Pipeline — Perspective Rewrite (alternate POV)",
+      "description": "Rewrite one issue's drafted passage (prose, comic script, or teleplay) from a different cast character's point of view — the same events re-lensed through another character's interiority, wants, and blind spots. A non-destructive revision exercise; the canonical draft is untouched. Runs at `heavy` tier — re-renders the full passage.",
+      "model": "heavy",
+      "returnsJson": false,
+      "variables": []
+    },
+    "pipeline-pov-analysis": {
+      "name": "Pipeline — Perspective Rewrite Analysis (what we learn)",
+      "description": "Compare an original passage with its alternate-POV rewrite and report what the exercise reveals: new interiority surfaced, information the original POV was hiding, whether the new POV has a stronger claim to the scene, and concrete fold-back edits. Runs at `heavy` tier — reads both passages.",
+      "model": "heavy",
+      "returnsJson": true,
+      "variables": []
     }
   }
 }
