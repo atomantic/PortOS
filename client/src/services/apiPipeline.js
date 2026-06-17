@@ -736,6 +736,19 @@ export const previewPipelineTtsVoice = (voiceId, text) =>
     silent: true,
   });
 
+// Narrate manuscript prose for read-aloud proofing (#1304). Splits the text
+// into sentence segments, synthesizes each via the local TTS engines, and
+// returns `{ segments: [{ index, text, start, end, filename, durationMs,
+// readability }], voiceId, engine }` so the manuscript editor can play a
+// karaoke-style read-along. Non-destructive. `options` lets the caller opt into
+// silent mode when it owns its own error UI.
+export const narratePipelineProse = (text, voiceId, options = {}) =>
+  request('/pipeline/tts/narrate', {
+    method: 'POST',
+    body: JSON.stringify(voiceId ? { text, voiceId } : { text }),
+    ...options,
+  });
+
 // Walks storyboards.scenes[].dialogue and populates stages.audio.lines[].
 // Pass { force: true } to replace existing lines wholesale (server defaults
 // to a 409 when lines[] is already populated so a stray click can't wipe

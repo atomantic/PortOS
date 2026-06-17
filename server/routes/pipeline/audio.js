@@ -13,6 +13,7 @@ import * as issuesSvc from '../../services/pipeline/issues.js';
 import { getSeriesCanon } from '../../services/pipeline/seriesCanon.js';
 import { resolveSeriesLlmOverride } from '../../lib/seriesLlmOverride.js';
 import { listAllVoices, synthesizeToFile, parseVoiceId, extractDialogueLines, resolveVoiceForLine } from '../../services/pipeline/audio.js';
+import { narrateProse } from '../../services/pipeline/manuscriptNarration.js';
 import { synthesize as synthesizeVoice } from '../../services/voice/tts.js';
 import {
   listMusicLibrary,
@@ -85,6 +86,25 @@ const ttsSynthesizeSchema = z.object({
 router.post('/tts/synthesize', asyncHandler(async (req, res) => {
   const body = validateRequest(ttsSynthesizeSchema, req.body ?? {});
   const result = await synthesizeToFile({ text: body.text, voiceId: body.voiceId })
+    .catch((err) => { throw mapServiceError(err); });
+  res.json(result);
+}));
+
+// Narrate arbitrary manuscript prose for read-aloud proofing (#1304). Splits
+// the text into sentence segments, synthesizes each via the local TTS engines,
+// and returns per-segment audio + duration + readability flags so the
+// manuscript editor can play a karaoke-style read-along. Non-destructive — the
+// WAVs land in PATHS.audio exactly like /tts/preview + the dialogue render.
+const ttsNarrateSchema = z.object({
+  // Do NOT trim: the segment start/end offsets are computed against this exact
+  // string and the client slices its original `content` with them, so trimming
+  // here would shift every span. narrateProse rejects all-whitespace text.
+  text: z.string().min(1).max(12000),
+  voiceId: z.string().trim().max(200).optional(),
+});
+router.post('/tts/narrate', asyncHandler(async (req, res) => {
+  const body = validateRequest(ttsNarrateSchema, req.body ?? {});
+  const result = await narrateProse({ text: body.text, voiceId: body.voiceId })
     .catch((err) => { throw mapServiceError(err); });
   res.json(result);
 }));

@@ -30,7 +30,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import {
-  ArrowLeft, Loader2, Sparkles, FileText, Star, ClipboardCheck, Layers, PencilLine, BookOpen, GitCompare, X,
+  ArrowLeft, Loader2, Sparkles, FileText, Star, ClipboardCheck, Layers, PencilLine, BookOpen, GitCompare, Volume2, X,
 } from 'lucide-react';
 import { formatManuscript } from '../lib/manuscriptFormat';
 import toast from '../components/ui/Toast';
@@ -44,6 +44,7 @@ import AnnotatedManuscriptSection from '../components/pipeline/manuscript/Annota
 import ManuscriptCommentIndex from '../components/pipeline/manuscript/ManuscriptCommentIndex';
 import ManuscriptIssueTabs from '../components/pipeline/manuscript/ManuscriptIssueTabs';
 import ManuscriptImpactPreview from '../components/pipeline/manuscript/ManuscriptImpactPreview';
+import ManuscriptReadAloud from '../components/pipeline/manuscript/ManuscriptReadAloud';
 import { MANUSCRIPT_TYPES, STAGE_LABEL } from '../components/pipeline/manuscript/constants';
 import {
   getPipelineSeries, updatePipelineSeries, getPipelineManuscript, getPipelineManuscriptReview,
@@ -105,6 +106,7 @@ export default function PipelineManuscriptEditor() {
   // Which section (issueId) is in textarea edit mode in Review.
   const [editingIssueId, setEditingIssueId] = useState(null);
   const [showImpact, setShowImpact] = useState(false);
+  const [showReadAloud, setShowReadAloud] = useState(false);
   // Per-comment fix-edit drafts, keyed by comment id and shared across every
   // place the card renders (sidebar reveal, in-context card, impact preview).
   const [fixDrafts, setFixDrafts] = useState({});
@@ -657,6 +659,16 @@ export default function PipelineManuscriptEditor() {
 
               <button
                 type="button"
+                onClick={() => setShowReadAloud(true)}
+                disabled={!activeSection}
+                title="Read this section aloud (TTS) with synced highlighting to catch clunky rhythm by ear"
+                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded text-xs font-medium border bg-port-bg text-gray-300 border-port-border hover:border-port-accent/40 disabled:opacity-40"
+              >
+                <Volume2 size={13} /> Read aloud
+              </button>
+
+              <button
+                type="button"
                 onClick={() => setShowImpact(true)}
                 title="Preview how the selected fixes change the whole manuscript"
                 className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded text-xs font-medium border bg-port-bg text-gray-300 border-port-border hover:border-port-accent/40"
@@ -879,6 +891,12 @@ export default function PipelineManuscriptEditor() {
         comments={comments.filter((c) => c.status === 'open' && c.fix)}
         fixDrafts={fixDrafts}
         onAccepted={applyAccepted}
+      />
+
+      <ManuscriptReadAloud
+        open={showReadAloud}
+        onClose={() => setShowReadAloud(false)}
+        section={activeSection}
       />
     </div>
   );
