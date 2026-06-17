@@ -46,6 +46,16 @@ vi.mock('../manuscriptReview.js', () => ({ seedReviewFromFindings: (...a) => see
 const { runEditorialChecks, buildEditorialCheckPlan } = await import('./checkRunner.js');
 const { runStagedLLM } = await import('../../../lib/stageRunner.js');
 const { collectManuscriptSections } = await import('../arcPlanner.js');
+const { listChecks } = await import('../../../lib/editorial/index.js');
+
+// Build a `pipelineEditorialChecks.checks` map that disables every check
+// matching `predicate` — keeps these fixtures robust as the registry grows
+// (new checks shouldn't silently break a "no LLM" / "no checks" assertion).
+const disableWhere = (predicate) => ({
+  pipelineEditorialChecks: {
+    checks: Object.fromEntries(listChecks().filter(predicate).map((c) => [c.id, { enabled: false }])),
+  },
+});
 
 beforeEach(() => {
   seedStore.length = 0;
@@ -100,18 +110,16 @@ describe('runEditorialChecks', () => {
   });
 
   it('skips disabled checks', async () => {
-    const settings = { pipelineEditorialChecks: { checks: { 'prose.info-dumping': { enabled: false } } } };
+    // Disable every LLM check → no provider call, only deterministic findings.
+    // The mock canon has no objects/links, so naming is the only producer.
+    const settings = disableWhere((c) => c.kind === 'llm');
     const result = await runEditorialChecks('s1', { settings });
     expect(runStagedLLM).not.toHaveBeenCalled();
     expect(result.findings.every((f) => f.checkId === 'naming.dissimilar-names')).toBe(true);
   });
 
   it('returns an empty result when no checks are enabled', async () => {
-    const settings = {
-      pipelineEditorialChecks: {
-        checks: { 'naming.dissimilar-names': { enabled: false }, 'prose.info-dumping': { enabled: false } },
-      },
-    };
+    const settings = disableWhere(() => true);
     const result = await runEditorialChecks('s1', { settings });
     expect(result.findings).toEqual([]);
     expect(seedReviewFromFindings).not.toHaveBeenCalled();
@@ -128,8 +136,11 @@ describe('runEditorialChecks', () => {
   });
 
   it('one failing check does not abort the pass', async () => {
+    // Make info-dumping the only enabled LLM check so the single rejection lands
+    // on it (the object LLM checks would otherwise consume the mockRejectedOnce).
+    const settings = disableWhere((c) => c.kind === 'llm' && c.id !== 'prose.info-dumping');
     runStagedLLM.mockRejectedValueOnce(new Error('provider down'));
-    const result = await runEditorialChecks('s1');
+    const result = await runEditorialChecks('s1', { settings });
     // Naming still produced findings; info-dump recorded an error in perCheck.
     expect(result.findings.some((f) => f.checkId === 'naming.dissimilar-names')).toBe(true);
     const infodump = result.perCheck.find((p) => p.checkId === 'prose.info-dumping');

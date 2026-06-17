@@ -2202,7 +2202,7 @@ describe('sharing round-trip', () => {
       const exp = await exporter.exportSeries(s.id, bucket.id);
       const manifest = JSON.parse(readFileSync(join(tempBucket, 'manifests', exp.filename), 'utf-8'));
       expect(manifest.portosSchemaVersions).toBeDefined();
-      expect(manifest.portosSchemaVersions.universes).toBe(6);
+      expect(manifest.portosSchemaVersions.universes).toBe(7);
     });
 
     it('importer rejects a manifest when the sender is AHEAD on a category the manifest CARRIES', async () => {

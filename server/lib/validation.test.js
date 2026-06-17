@@ -16,7 +16,8 @@ import {
   featureProviderConfigSchema,
   codeReviewSettingsSchema,
   locationSettingsSchema,
-  writersRoomCharacterUpdateSchema
+  writersRoomCharacterUpdateSchema,
+  writersRoomObjectUpdateSchema
 } from './validation.js';
 
 describe('validation.js', () => {
@@ -823,6 +824,42 @@ describe('validation.js', () => {
     it('rejects an unknown key inside a link (strict)', () => {
       const result = writersRoomCharacterUpdateSchema.safeParse({
         relationshipLinks: [{ targetCharacterId: 'chr-bob', bogus: true }],
+      });
+      expect(result.success).toBe(false);
+    });
+  });
+
+  describe('writersRoomObjectUpdateSchema — attachments (#1288)', () => {
+    it('accepts a well-formed attachment', () => {
+      const result = writersRoomObjectUpdateSchema.safeParse({
+        attachments: [{
+          characterId: 'chr-mara',
+          emotion: 'grief',
+          significance: 'her father gave it to her',
+          origin: 'inherited at his funeral',
+          role: 'memento',
+        }],
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('accepts an attachment with no id (server mints it) and a custom role', () => {
+      const result = writersRoomObjectUpdateSchema.safeParse({
+        attachments: [{ characterId: 'chr-mara', role: 'heirloom' }],
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('rejects an attachment missing characterId', () => {
+      const result = writersRoomObjectUpdateSchema.safeParse({
+        attachments: [{ emotion: 'grief' }],
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it('rejects an unknown key inside an attachment (strict)', () => {
+      const result = writersRoomObjectUpdateSchema.safeParse({
+        attachments: [{ characterId: 'chr-mara', bogus: true }],
       });
       expect(result.success).toBe(false);
     });

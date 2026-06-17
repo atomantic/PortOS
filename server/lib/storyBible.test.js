@@ -413,6 +413,96 @@ describe('storyBible — sanitizeCharacter', () => {
     });
   });
 
+  describe('attachments (#1288)', () => {
+    it('defaults a missing attachments field to an empty array (legacy shape)', () => {
+      expect(sanitizeObject({ name: 'Watch' }).attachments).toEqual([]);
+    });
+
+    it('coerces a non-array attachments field to an empty array', () => {
+      expect(sanitizeObject({ name: 'Watch', attachments: 'nope' }).attachments).toEqual([]);
+    });
+
+    it('sanitizes a complete attachment and mints an att- id', () => {
+      const out = sanitizeObject({
+        name: 'Watch',
+        attachments: [{ characterId: 'chr-mara', emotion: 'grief', significance: 'her father\'s', origin: 'inherited', role: 'memento' }],
+      });
+      expect(out.attachments).toHaveLength(1);
+      expect(out.attachments[0].id).toMatch(/^att-/);
+      expect(out.attachments[0].characterId).toBe('chr-mara');
+      expect(out.attachments[0].emotion).toBe('grief');
+      expect(out.attachments[0].significance).toBe('her father\'s');
+      expect(out.attachments[0].origin).toBe('inherited');
+      expect(out.attachments[0].role).toBe('memento');
+    });
+
+    it('preserves a provided id verbatim', () => {
+      const out = sanitizeObject({ name: 'Watch', attachments: [{ id: 'att-fixed-1', characterId: 'chr-mara' }] });
+      expect(out.attachments[0].id).toBe('att-fixed-1');
+    });
+
+    it('drops an attachment with no characterId (meaningless link)', () => {
+      const out = sanitizeObject({
+        name: 'Watch',
+        attachments: [{ emotion: 'grief' }, { characterId: 'chr-mara' }],
+      });
+      expect(out.attachments).toHaveLength(1);
+      expect(out.attachments[0].characterId).toBe('chr-mara');
+    });
+
+    it('coerces an unrecognized role to custom (keeps prose intact)', () => {
+      const out = sanitizeObject({
+        name: 'Watch',
+        attachments: [{ characterId: 'chr-mara', role: 'heirloom', significance: 'matters' }],
+      });
+      expect(out.attachments[0].role).toBe('custom');
+      expect(out.attachments[0].significance).toBe('matters');
+    });
+
+    it('defaults a missing role to custom', () => {
+      const out = sanitizeObject({ name: 'Watch', attachments: [{ characterId: 'chr-mara' }] });
+      expect(out.attachments[0].role).toBe('custom');
+    });
+
+    it('persists explicit locked true/false but drops a non-boolean', () => {
+      const out = sanitizeObject({
+        name: 'Watch',
+        attachments: [
+          { characterId: 'a', locked: true },
+          { characterId: 'b', locked: false },
+          { characterId: 'c', locked: 'yes' },
+        ],
+      });
+      expect(out.attachments[0].locked).toBe(true);
+      expect(out.attachments[1].locked).toBe(false);
+      expect(out.attachments[2].locked).toBeUndefined();
+    });
+
+    it('caps the list at ATTACHMENTS_PER_OBJECT_MAX', () => {
+      const tooMany = Array.from(
+        { length: BIBLE_LIMITS.ATTACHMENTS_PER_OBJECT_MAX + 5 },
+        (_, i) => ({ characterId: `chr-${i}` }),
+      );
+      const out = sanitizeObject({ name: 'Watch', attachments: tooMany });
+      expect(out.attachments).toHaveLength(BIBLE_LIMITS.ATTACHMENTS_PER_OBJECT_MAX);
+    });
+
+    it('clamps over-long prose fields', () => {
+      const out = sanitizeObject({
+        name: 'Watch',
+        attachments: [{
+          characterId: 'chr-mara',
+          significance: 'x'.repeat(BIBLE_LIMITS.ATTACHMENT_SIGNIFICANCE_MAX + 50),
+          origin: 'y'.repeat(BIBLE_LIMITS.ATTACHMENT_ORIGIN_MAX + 50),
+          emotion: 'z'.repeat(BIBLE_LIMITS.ATTACHMENT_EMOTION_MAX + 50),
+        }],
+      });
+      expect(out.attachments[0].significance.length).toBe(BIBLE_LIMITS.ATTACHMENT_SIGNIFICANCE_MAX);
+      expect(out.attachments[0].origin.length).toBe(BIBLE_LIMITS.ATTACHMENT_ORIGIN_MAX);
+      expect(out.attachments[0].emotion.length).toBe(BIBLE_LIMITS.ATTACHMENT_EMOTION_MAX);
+    });
+  });
+
   describe('extended character fields (novelist + graphic-novelist depth)', () => {
     it('defaults every new string field to empty + every list field to []', () => {
       const out = sanitizeCharacter({ name: 'Bare' });

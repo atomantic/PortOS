@@ -44,7 +44,23 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // loss back onto the newer peer. Bumping makes the older peer reject the
   // ahead-version universe transfer instead. Per-category gate → only universe
   // sync pauses with old peers; pipeline/catalog/etc keep flowing.
-  universes: 6,
+  // v7 = canon objects gained `attachments[]` (structured object↔character
+  // emotional-attachment links — emotion/significance/origin/role, #1288).
+  // Same rationale as v6: additive + gracefully degrading, but version-gated so
+  // a not-yet-upgraded peer that re-sanitizes a universe through its
+  // attachments-unaware `sanitizeObject` can't silently strip the field and
+  // LWW the loss back onto the newer peer.
+  //
+  // NOTE — `catalog` is intentionally NOT bumped for this field (matches the
+  // #1287 relationshipLinks precedent). A bible object promoted to the catalog
+  // carries `attachments` in `catalog_ingredients.payload`; an older peer's
+  // `updateIngredient` → `sanitizeObject` would drop it on a local edit and a
+  // catalog sync back could clobber the newer copy. We accept that graceful
+  // degradation rather than gate `catalog` — bumping it would pause ALL catalog
+  // sync with version-mismatched peers for one additive field, the heavier
+  // tradeoff this project has chosen against for additive bible fields. The
+  // `universes` gate above already protects the canonical (embedded) copy.
+  universes: 7,
   // v1 = post-split. Migrations 035/036 introduced the pipeline collection
   // layout for issues and series.
   // v2 = `stages.audio.audioMode` + `stages.audio.cues[]` added (whole-episode

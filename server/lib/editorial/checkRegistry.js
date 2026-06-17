@@ -42,6 +42,15 @@ export const CHECK_FIELD_TYPES = Object.freeze(['number', 'boolean', 'text']);
 // JSON_MERGE_TARGETS stage merge), so no migration is needed for a NEW stage.
 export const INFO_DUMPING_STAGE = 'pipeline-editorial-info-dumping';
 
+// Stage names for the two object-attachment LLM checks (#1288). Like the
+// info-dumping stage, each prompt ships in data.reference/prompts/stages/ and
+// its config in stage-config.json; both propagate to fresh installs via
+// setup-data.js and to existing installs via migration 094 (boot runs
+// migrations but NOT setup-data, so the migration is required — see
+// scripts/migrations/094-object-attachment-check-stages.js).
+export const OBJECT_MOTIVATION_STAGE = 'pipeline-editorial-object-motivation';
+export const OBJECT_BACKSTORY_STAGE = 'pipeline-editorial-object-backstory';
+
 // ---------------------------------------------------------------------------
 // Deterministic helpers for the character-name dissimilarity check.
 // ---------------------------------------------------------------------------
@@ -85,6 +94,116 @@ function* eachRelationshipLink(chars) {
       if (link?.targetCharacterId) yield { c, link, targetId: link.targetCharacterId };
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Shared scaffolding for the object-attachment checks (#1288). All three walk
+// `canon.objects × attachments`, resolving each attachment's `characterId`
+// against the cast, so the id-bearing object/character lists, the id→character
+// lookup, and the attachment iteration live here once.
+// ---------------------------------------------------------------------------
+
+function attachmentCanon(ctx) {
+  const objects = (ctx.canon?.objects || []).filter((o) => o && o.id);
+  const chars = (ctx.canon?.characters || []).filter((c) => c && c.id);
+  return {
+    objects,
+    chars,
+    nameById: new Map(chars.map((c) => [c.id, c.name || c.id])),
+    charById: new Map(chars.map((c) => [c.id, c])),
+  };
+}
+
+// Yields every attachment that points at a character, as { o, att }.
+function* eachAttachment(objects) {
+  for (const o of objects) {
+    for (const att of (Array.isArray(o.attachments) ? o.attachments : [])) {
+      if (att?.characterId) yield { o, att };
+    }
+  }
+}
+
+// A human-readable summary of every object + who's attached to it, fed to the
+// unmotivated-interaction LLM so it knows which objects already carry an
+// established stake (and which don't) before judging a prose interaction.
+function describeObjectAttachments(ctx) {
+  const { objects, nameById } = attachmentCanon(ctx);
+  const lines = [];
+  for (const o of objects) {
+    const atts = Array.isArray(o.attachments) ? o.attachments : [];
+    const sig = (o.significance || '').trim();
+    const attText = atts.length
+      ? atts.map((a) => {
+        const who = nameById.get(a.characterId) || a.characterId;
+        const emotion = a.emotion ? ` (${a.emotion})` : '';
+        const why = a.significance ? ` — ${a.significance}` : '';
+        return `${who}${emotion}${why}`;
+      }).join('; ')
+      : 'nobody';
+    lines.push(`- ${o.name || o.id}${sig ? ` — significance: ${sig}` : ''}\n  attached to: ${attText}`);
+  }
+  return lines.join('\n') || '(no objects in canon)';
+}
+
+// The attachment rows whose `origin` can be checked against the attached
+// character's `background` — both must be present, and the character must
+// still exist (a dangling characterId is the UI/sanitizer's concern, not this
+// check's). Shared by the backstory-consistency check's `gate` (cheap presence
+// test) and its `run` (the actual prompt rows) so they never disagree.
+function attachmentBackstoryRows(ctx) {
+  const { objects, charById } = attachmentCanon(ctx);
+  const rows = [];
+  for (const { o, att } of eachAttachment(objects)) {
+    const origin = (att.origin || '').trim();
+    if (!origin) continue;
+    const char = charById.get(att.characterId);
+    if (!char) continue;
+    const background = (char.background || '').trim();
+    if (!background) continue;
+    rows.push({
+      object: o.name || o.id,
+      character: char.name || char.id,
+      emotion: (att.emotion || '').trim(),
+      origin,
+      background,
+    });
+  }
+  return rows;
+}
+
+// ---------------------------------------------------------------------------
+// Shared LLM-check helpers. Every `kind: 'llm'` check truncates an over-long
+// manuscript before the call and normalizes the model's raw findings into the
+// manuscriptReview comment shape afterward — these collapse those two repeated
+// blocks so the cap message + field validation live once.
+// ---------------------------------------------------------------------------
+
+// Truncate `full` to `cap` chars with a note so a long corpus can't overflow a
+// small/local provider's context window. A single-call safeguard; full
+// per-provider context chunking is tracked separately.
+function capManuscript(full, cap) {
+  const text = full || '';
+  return text.length > cap
+    ? `${text.slice(0, cap)}\n\n[manuscript truncated to the first ${cap} characters for this check]`
+    : text;
+}
+
+// Normalize raw LLM findings into partial manuscriptReview comments: validate
+// severity against the allow-list (fall back to the check default), force the
+// check's `category`, coerce each string field, cap the count, and drop any
+// finding with no `problem`. `withIssueNumber` keeps a model-supplied issue
+// number (manuscript-scoped checks) vs. forcing null (canon-scoped checks).
+function mapLlmFindings(raw, { severityDefault, category, max, withIssueNumber }) {
+  const list = Array.isArray(raw) ? raw : [];
+  return list.slice(0, max).map((f) => ({
+    severity: SEVERITIES.includes(f?.severity) ? f.severity : severityDefault,
+    category,
+    location: typeof f?.location === 'string' ? f.location : '',
+    problem: typeof f?.problem === 'string' ? f.problem : '',
+    suggestion: typeof f?.suggestion === 'string' ? f.suggestion : '',
+    anchorQuote: typeof f?.anchorQuote === 'string' ? f.anchorQuote : '',
+    issueNumber: withIssueNumber && Number.isInteger(f?.issueNumber) ? f.issueNumber : null,
+  })).filter((f) => f.problem);
 }
 
 // ---------------------------------------------------------------------------
@@ -252,6 +371,147 @@ export const EDITORIAL_CHECKS = [
     },
   },
   {
+    id: 'objects.unattached-significant',
+    label: 'Unattached significant object',
+    description:
+      'Flags objects with written significance but no character attachment — the object clearly matters to the story, yet nobody in the cast is on record caring about it.',
+    scope: 'series',
+    kind: 'deterministic',
+    category: 'continuity',
+    severityDefault: 'low',
+    defaultEnabled: true,
+    configSchema: z.object({}),
+    run: (ctx) => {
+      const { objects, nameById } = attachmentCanon(ctx);
+      const findings = [];
+      for (const o of objects) {
+        // Only a LIVE attachment (one whose characterId still resolves to a
+        // cast member) counts as "someone cares" — an object whose sole
+        // attachment dangles at a deleted character is effectively unattached
+        // (the UI shows it as "(missing)"), so it should still be flagged.
+        const attachments = Array.isArray(o.attachments) ? o.attachments : [];
+        const hasLiveAttachment = attachments.some((a) => a?.characterId && nameById.has(a.characterId));
+        const significance = (o.significance || '').trim();
+        if (hasLiveAttachment || !significance) continue;
+        const name = o.name || o.id;
+        findings.push({
+          severity: ctx.severityDefault,
+          category: 'continuity',
+          location: `Object: ${name}`,
+          problem: `"${name}" has written significance but no character is attached to it — what does this object mean to anyone in the cast?`,
+          suggestion: 'Add an attachment linking this object to the character whose backstory or emotional stake it carries (or clear its significance if it is purely set dressing).',
+          anchorQuote: name,
+          issueNumber: null,
+        });
+      }
+      return findings;
+    },
+  },
+  {
+    id: 'objects.unmotivated-interaction',
+    label: 'Unmotivated object interaction',
+    description:
+      'LLM scan — flags moments where a character interacts meaningfully with an object the prose (and the canon attachments) have given them no reason to care about.',
+    scope: 'issue',
+    kind: 'llm',
+    category: 'continuity',
+    severityDefault: 'low',
+    defaultEnabled: true,
+    needsManuscript: true,
+    configSchema: z.object({
+      // Cap findings per run so a long manuscript can't flood the review.
+      maxFindings: z.number().int().min(1).max(50).default(12),
+      // Bound the prompt so a long series can't overflow a small/local provider's
+      // context window. Single-call safeguard — mirrors the info-dumping check.
+      maxManuscriptChars: z.number().int().min(2000).max(200_000).default(48_000),
+    }),
+    configFields: [
+      {
+        key: 'maxFindings',
+        label: 'Max findings per run',
+        type: 'number',
+        min: 1,
+        max: 50,
+        step: 1,
+        help: 'Cap findings so a long manuscript can not flood the review.',
+      },
+      {
+        key: 'maxManuscriptChars',
+        label: 'Max manuscript characters analyzed',
+        type: 'number',
+        min: 2000,
+        max: 200_000,
+        step: 1000,
+        help: 'Bounds the prompt so a long series can not overflow a small provider context window.',
+      },
+    ],
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    run: async (ctx) => {
+      const manuscript = capManuscript(ctx.manuscript, ctx.config?.maxManuscriptChars ?? 48_000);
+      const { content } = await ctx.callStagedLLM(
+        OBJECT_MOTIVATION_STAGE,
+        { manuscript, objects: describeObjectAttachments(ctx) },
+        { returnsJson: true, source: OBJECT_MOTIVATION_STAGE },
+      );
+      return mapLlmFindings(content?.findings, {
+        severityDefault: ctx.severityDefault,
+        category: 'continuity',
+        max: ctx.config?.maxFindings ?? 12,
+        withIssueNumber: true,
+      });
+    },
+  },
+  {
+    id: 'objects.backstory-consistency',
+    label: 'Attachment backstory consistency',
+    description:
+      "LLM check — flags object attachments whose origin story contradicts the attached character's established background.",
+    scope: 'noun',
+    kind: 'llm',
+    category: 'continuity',
+    severityDefault: 'medium',
+    defaultEnabled: true,
+    // Canon-only (no manuscript): compares each attachment's `origin` against the
+    // attached character's `background`, both of which live on the canon.
+    configSchema: z.object({
+      maxFindings: z.number().int().min(1).max(50).default(12),
+    }),
+    configFields: [
+      {
+        key: 'maxFindings',
+        label: 'Max findings per run',
+        type: 'number',
+        min: 1,
+        max: 50,
+        step: 1,
+        help: 'Cap findings so a large cast can not flood the review.',
+      },
+    ],
+    // Skip the LLM call entirely when no attachment has both an origin AND an
+    // attached character with a background to contradict.
+    gate: (ctx) => attachmentBackstoryRows(ctx).length > 0,
+    run: async (ctx) => {
+      const rows = attachmentBackstoryRows(ctx);
+      if (!rows.length) return [];
+      const attachments = rows.map((r, i) =>
+        `${i + 1}. Object "${r.object}" — ${r.character}'s attachment${r.emotion ? ` (${r.emotion})` : ''}\n`
+        + `   Origin (how ${r.character} came to have it): ${r.origin}\n`
+        + `   ${r.character}'s established background: ${r.background}`,
+      ).join('\n\n');
+      const { content } = await ctx.callStagedLLM(
+        OBJECT_BACKSTORY_STAGE,
+        { attachments },
+        { returnsJson: true, source: OBJECT_BACKSTORY_STAGE },
+      );
+      return mapLlmFindings(content?.findings, {
+        severityDefault: ctx.severityDefault,
+        category: 'continuity',
+        max: ctx.config?.maxFindings ?? 12,
+        withIssueNumber: false,
+      });
+    },
+  },
+  {
     id: 'prose.info-dumping',
     label: 'Info-dumping / "as you know, Bob" exposition',
     description:
@@ -295,27 +555,18 @@ export const EDITORIAL_CHECKS = [
     ],
     gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
     run: async (ctx) => {
-      const cap = ctx.config?.maxManuscriptChars ?? 48_000;
-      const full = ctx.manuscript || '';
-      const manuscript = full.length > cap
-        ? `${full.slice(0, cap)}\n\n[manuscript truncated to the first ${cap} characters for this check]`
-        : full;
+      const manuscript = capManuscript(ctx.manuscript, ctx.config?.maxManuscriptChars ?? 48_000);
       const { content } = await ctx.callStagedLLM(
         INFO_DUMPING_STAGE,
         { manuscript },
         { returnsJson: true, source: INFO_DUMPING_STAGE },
       );
-      const raw = Array.isArray(content?.findings) ? content.findings : [];
-      const max = ctx.config?.maxFindings ?? 12;
-      return raw.slice(0, max).map((f) => ({
-        severity: SEVERITIES.includes(f?.severity) ? f.severity : ctx.severityDefault,
+      return mapLlmFindings(content?.findings, {
+        severityDefault: ctx.severityDefault,
         category: 'exposition',
-        location: typeof f?.location === 'string' ? f.location : '',
-        problem: typeof f?.problem === 'string' ? f.problem : '',
-        suggestion: typeof f?.suggestion === 'string' ? f.suggestion : '',
-        anchorQuote: typeof f?.anchorQuote === 'string' ? f.anchorQuote : '',
-        issueNumber: Number.isInteger(f?.issueNumber) ? f.issueNumber : null,
-      })).filter((f) => f.problem);
+        max: ctx.config?.maxFindings ?? 12,
+        withIssueNumber: true,
+      });
     },
   },
 ];

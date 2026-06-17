@@ -3,7 +3,7 @@ import { ServerError } from './errorHandler.js';
 import { partialWithoutDefaults, emptyToUndefined, emptyToNull } from './zodCompat.js';
 import { WORK_KINDS, WORK_STATUSES, ANALYSIS_KINDS } from './writersRoomPresets.js';
 import { ALL_STYLE_IDS, STYLE_ID } from './writersRoomStylePresets.js';
-import { BIBLE_LIMITS, RELATIONSHIP_LINK_TYPES, RELATIONSHIP_OPPOSITION_AXES } from './storyBible.js';
+import { BIBLE_LIMITS, RELATIONSHIP_LINK_TYPES, RELATIONSHIP_OPPOSITION_AXES, ATTACHMENT_ROLES } from './storyBible.js';
 import { MIN_TIMEOUT as STAGE_TIMEOUT_MIN_MS, MAX_TIMEOUT as STAGE_TIMEOUT_MAX_MS } from './aiToolkit/constants.js';
 
 // gpt-image-2 (codex backend) caps at 3840px per edge and 8,294,400 total
@@ -1180,11 +1180,26 @@ export const writersRoomPlaceUpdateSchema = z.object({
 }).strict();
 
 const wrObjectTextField = z.string().max(2000);
+// Structured object↔character attachment links (#1288). `id` is omitted on
+// POSTs — the sanitizer mints it. `role` accepts the known archetype tokens; an
+// unrecognized value (legacy/peer payload) is coerced to `custom` by the
+// sanitizer, not rejected here, so older clients never 400. Limits sourced from
+// BIBLE_LIMITS so bumping a constant updates Zod automatically.
+const wrAttachmentsField = z.array(z.object({
+  id: z.string().trim().max(64).optional(),
+  characterId: z.string().trim().min(1).max(BIBLE_LIMITS.ATTACHMENT_CHARACTER_ID_MAX),
+  emotion: z.string().max(BIBLE_LIMITS.ATTACHMENT_EMOTION_MAX).optional(),
+  significance: z.string().max(BIBLE_LIMITS.ATTACHMENT_SIGNIFICANCE_MAX).optional(),
+  origin: z.string().max(BIBLE_LIMITS.ATTACHMENT_ORIGIN_MAX).optional(),
+  role: z.enum(ATTACHMENT_ROLES).or(z.string().trim().max(60)).optional(),
+  locked: z.boolean().optional(),
+}).strict()).max(BIBLE_LIMITS.ATTACHMENTS_PER_OBJECT_MAX);
 export const writersRoomObjectCreateSchema = z.object({
   name: z.string().trim().min(1).max(200),
   aliases: z.array(z.string().trim().min(1).max(200)).max(20).optional(),
   description: wrObjectTextField.optional(),
   significance: wrObjectTextField.optional(),
+  attachments: wrAttachmentsField.optional(),
   notes: wrObjectTextField.optional(),
 }).strict();
 export const writersRoomObjectUpdateSchema = z.object({
@@ -1192,6 +1207,7 @@ export const writersRoomObjectUpdateSchema = z.object({
   aliases: z.array(z.string().trim().min(1).max(200)).max(20).optional(),
   description: wrObjectTextField.optional(),
   significance: wrObjectTextField.optional(),
+  attachments: wrAttachmentsField.optional(),
   notes: wrObjectTextField.optional(),
 }).strict();
 

@@ -101,6 +101,17 @@ export const BIBLE_LIMITS = Object.freeze({
   // Objects
   OBJECT_DESCRIPTION_MAX: 2000,
   SIGNIFICANCE_MAX: 1000,
+  // Structured object↔character attachment links (#1288). The legacy prose
+  // `significance` field above stays; `attachments[]` is additive. Each link
+  // ties an object to ONE character and captures the emotion/significance/origin
+  // of that bond plus a `role` archetype. `characterId` caps match the canon id
+  // format; the prose fields are roomy because writers describe backstory at
+  // length, but tighter than NOTES so a runaway extraction stays bounded.
+  ATTACHMENT_CHARACTER_ID_MAX: 64,
+  ATTACHMENT_EMOTION_MAX: 120,
+  ATTACHMENT_SIGNIFICANCE_MAX: 1000,
+  ATTACHMENT_ORIGIN_MAX: 1000,
+  ATTACHMENTS_PER_OBJECT_MAX: 40,
   // Per-bible cap (universal — protects against runaway extraction)
   ENTRIES_PER_BIBLE_MAX: 200,
   PROMPT_MAX: 2000,
@@ -154,6 +165,16 @@ export const RELATIONSHIP_OPPOSITION_AXES = Object.freeze([
 ]);
 const RELATIONSHIP_LINK_TYPE_SET = new Set(RELATIONSHIP_LINK_TYPES);
 const RELATIONSHIP_OPPOSITION_AXIS_SET = new Set(RELATIONSHIP_OPPOSITION_AXES);
+
+// Object↔character attachment archetypes (#1288). `role` tags WHAT the object
+// is to the character narratively; `custom` lets the writer name one the list
+// misses (the prose `significance`/`origin` carry the specifics). An
+// unrecognized value coerces to `custom` rather than dropping the link, so a
+// legacy/peer payload carrying a future role still round-trips with its prose.
+export const ATTACHMENT_ROLES = Object.freeze([
+  'talisman', 'macguffin', 'memento', 'tool', 'symbol', 'custom',
+]);
+const ATTACHMENT_ROLE_SET = new Set(ATTACHMENT_ROLES);
 
 // Enums for the location-classification fields on Place canon entries.
 // Mirrors AnyFilm's INT/EXT + time-of-day taxonomy so generated panels and
@@ -672,6 +693,31 @@ function sanitizeRelationshipLink(raw) {
   return out;
 }
 
+// Structured object↔character attachment (#1288). Requires a `characterId` — an
+// attachment with nothing to bind to is meaningless, so a blank target drops the
+// row (matches the targetCharacterId-required pattern in sanitizeRelationshipLink).
+// `role` normalizes an unrecognized value to `custom` rather than dropping it, so
+// a peer/legacy payload carrying a future role still round-trips with its prose
+// (emotion/significance/origin) intact. `locked` persists explicit true/false only.
+function sanitizeAttachment(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const characterId = trimTo(raw.characterId, BIBLE_LIMITS.ATTACHMENT_CHARACTER_ID_MAX);
+  if (!characterId) return null;
+  const roleRaw = trimTo(raw.role, 60);
+  const role = ATTACHMENT_ROLE_SET.has(roleRaw) ? roleRaw : 'custom';
+  const out = {
+    id: ensureId(raw.id, 'att-'),
+    characterId,
+    emotion: trimTo(raw.emotion, BIBLE_LIMITS.ATTACHMENT_EMOTION_MAX),
+    significance: trimTo(raw.significance, BIBLE_LIMITS.ATTACHMENT_SIGNIFICANCE_MAX),
+    origin: trimTo(raw.origin, BIBLE_LIMITS.ATTACHMENT_ORIGIN_MAX),
+    role,
+  };
+  if (raw.locked === true) out.locked = true;
+  else if (raw.locked === false) out.locked = false;
+  return out;
+}
+
 // Shared canon extras applied to every kind. Persists explicit `locked: true`
 // AND `locked: false` so a Universe-Builder caller can flip the bit and have
 // the change survive round-trips. Missing `locked` still collapses to absent
@@ -843,6 +889,14 @@ export function sanitizeObject(raw, { idPrefix = DEFAULT_ID_PREFIX.object, prese
     aliases: cleanStringArray(raw.aliases, BIBLE_LIMITS.ALIAS_MAX, BIBLE_LIMITS.ALIASES_PER_ENTRY_MAX),
     description: trimTo(raw.description, BIBLE_LIMITS.OBJECT_DESCRIPTION_MAX),
     significance: trimTo(raw.significance, BIBLE_LIMITS.SIGNIFICANCE_MAX),
+    // Structured object↔character attachment links (#1288). Additive to the
+    // legacy prose `significance` field above. Empty array stays the legacy
+    // shape — every existing object keeps round-tripping unchanged.
+    attachments: sanitizeListWith(
+      raw.attachments,
+      sanitizeAttachment,
+      BIBLE_LIMITS.ATTACHMENTS_PER_OBJECT_MAX,
+    ),
     notes: trimTo(raw.notes, BIBLE_LIMITS.NOTES_MAX),
     imageRefs,
     // A5: canonical prop / hero-object reference render.
