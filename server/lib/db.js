@@ -82,16 +82,80 @@ export function isTestRunner() {
 // series/issues/story-builder fixtures leaked into the real `portos` DB and
 // federated to peers. INSERT/UPDATE are now blocked too. Schema DDL
 // (CREATE/ALTER/DROP) is still allowed: it is idempotent, carries no row-data,
-// and ensureSchema() needs it to stand up portos_test. Skips leading
-// line/block comments + whitespace before the verb.
-const ROW_WRITE_SQL =
-  /^\s*(?:--[^\n]*\n|\/\*[\s\S]*?\*\/|\s)*(INSERT\s+INTO|UPDATE\s|DELETE\s+FROM|TRUNCATE)\b/i;
+// and ensureSchema() needs it to stand up portos_test.
+//
+// The first cut was `^`-anchored on a single leading verb, which let four
+// less-obvious write forms slip past the "absolute backstop": data-modifying
+// CTEs (`WITH … DELETE …`), `COPY … FROM` imports, `MERGE INTO`, and a write
+// hiding after a leading read in a multi-statement batch (`SELECT 1; DELETE …`).
+// No current store issues those forms, so this was latent rather than
+// exploitable — but the guard is billed as the last line of defense, so it now
+// matches a write verb ANYWHERE, after stripping comments so a keyword named in
+// a comment can't trip it (and a write after a comment can't slip past).
+//
+// Normalize the SQL before keyword-matching in a SINGLE left-to-right pass that
+// alternates over comments AND string literals, so whichever delimiter appears
+// FIRST consumes its own span. Order matters and a two-pass "mask strings, then
+// strip comments" is WRONG: an apostrophe inside a comment (`-- don't touch …`)
+// would open a spurious string mask that swallows a real write on the next line
+// (a false-negative — the exact failure this guard exists to prevent). Processing
+// left-to-right keeps a comment's apostrophe part of the comment, and keeps a
+// `/*` or `--` inside a string literal from starting a comment. Comments collapse
+// to a space; string literals collapse to `''` (Postgres's escaped-quote form),
+// so a write verb appearing only inside a literal can't trip the guard, and a
+// quote-embedded comment delimiter can't hide a write between two literals.
+// Dollar-quoted bodies (`$$…$$`, used in function definitions) are not unwrapped —
+// stores don't send them, so this test-only backstop accepts that edge.
+function normalizeSqlForMatch(text) {
+  return text.replace(
+    /--[^\n]*|\/\*[\s\S]*?\*\/|'(?:''|[^'])*'/g,
+    (m) => (m[0] === "'" ? "''" : ' '),
+  );
+}
+
+// CREATE TABLE … AS SELECT (CTAS) and the broader DDL family (CREATE/ALTER/DROP)
+// are knowingly NOT matched: ensureSchema() needs DDL to stand up portos_test, and
+// distinguishing a row-copying CTAS from a plain `CREATE TABLE … (col … GENERATED
+// ALWAYS AS (…))` reliably needs paren-aware parsing this regex set deliberately
+// avoids. No store issues CTAS, and the worst case on a mis-pointed run is a stray
+// new table (schema pollution) rather than corruption of existing rows.
+const ROW_WRITE_PATTERNS = [
+  /\bINSERT\s+INTO\b/i,
+  /\bDELETE\s+FROM\b/i,
+  /\bMERGE\s+INTO\b/i,
+  /\bTRUNCATE\b/i,
+  // SELECT … INTO <table> creates and populates a new table (a real row write, not
+  // DDL). Reads never carry a standalone INTO, so requiring SELECT before it keeps
+  // this off ordinary queries; INSERT/MERGE INTO are caught by their own patterns.
+  /\bSELECT\b[\s\S]+?\bINTO\b/i,
+  // UPDATE … SET — the SET clause is what makes it a write, and distinguishes it
+  // from a `SELECT … FOR UPDATE` / `FOR NO KEY UPDATE` row-lock read. `[^;]+?`
+  // keeps the match inside one statement so `… FOR UPDATE; SET search_path …`
+  // (a read followed by a session command) doesn't read as an UPDATE write.
+  /\bUPDATE\b\s+[^;]+?\bSET\b/i,
+  // COPY <table> FROM — an import writes rows. `COPY (query) TO` / `COPY <table>
+  // TO` is an export (read): requiring the first non-blank token after COPY to be
+  // a non-`(` char (`[^\s(]`) rejects the subquery-export form whose inner FROM
+  // would otherwise match, and requiring FROM before the next `;` leaves `COPY
+  // <table> TO …` (no FROM) alone. `[^\s(]` (not a `(?!\()` lookahead) is load-
+  // bearing: a lookahead lets `\s+` backtrack and pass the assertion mid-whitespace
+  // on `COPY   (SELECT … FROM …) TO`, so the export would false-positive.
+  /\bCOPY\s+[^\s(][^;]*?\bFROM\b/i,
+];
+
+// True when the SQL performs a row write in any of the recognized forms.
+function isRowWriteSql(text) {
+  const sql = normalizeSqlForMatch(text);
+  return ROW_WRITE_PATTERNS.some((re) => re.test(sql));
+}
 
 /**
  * Hard backstop: under the test runner, refuse to MUTATE a non-test database.
- * Throws (fail loudly) on any row write (INSERT/UPDATE/DELETE/TRUNCATE) instead
- * of silently writing — or stranding — real data. Reads (SELECT) and schema DDL
- * are left alone so health/version probes and ensureSchema() still work.
+ * Throws (fail loudly) on any row write — INSERT/UPDATE/DELETE/TRUNCATE/MERGE,
+ * COPY … FROM imports, data-modifying CTEs, and a write hidden in a multi-
+ * statement batch — instead of silently writing (or stranding) real data. Reads
+ * (SELECT, including COPY … TO exports) and schema DDL are left alone so
+ * health/version probes and ensureSchema() still work.
  *
  * Shared by BOTH the pool `query()` wrapper and the per-transaction client in
  * `withTransaction()`. The transaction path is critical: nearly every store
@@ -108,7 +172,7 @@ export function assertWriteAllowed(text) {
     isTestRunner() &&
     !isTestDatabase() &&
     typeof text === 'string' &&
-    ROW_WRITE_SQL.test(text)
+    isRowWriteSql(text)
   ) {
     throw new Error(
       `🛑 Refusing to mutate non-test database '${process.env.PGDATABASE || 'portos'}' under the test runner. ` +
