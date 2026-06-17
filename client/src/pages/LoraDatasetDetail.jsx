@@ -266,6 +266,10 @@ export default function LoraDatasetDetail() {
   // runs pass the explicit selection.
   const [captionModel, setCaptionModel] = useState({ providerId: null, model: null });
   const [strippingFragments, setStrippingFragments] = useState(false);
+  // Bumped after a bulk caption rewrite (strip) so the image grid drops any
+  // unsaved caption drafts the rewrite superseded — otherwise a stale draft
+  // blur-saves the old text back, undoing the strip.
+  const [captionDraftResetToken, setCaptionDraftResetToken] = useState(0);
   const fileInputRef = useRef(null);
 
   const refresh = useCallback(() => getLoraDataset(datasetId)
@@ -328,6 +332,7 @@ export default function LoraDatasetDetail() {
     try {
       const { dataset: next, removedFragments, updatedImages } = await stripLoraDatasetSharedCaptionFragments(datasetId);
       setDataset(next);
+      setCaptionDraftResetToken((n) => n + 1);
       if (removedFragments.length) {
         toast.success(`Stripped ${removedFragments.length} shared identity fragment${removedFragments.length === 1 ? '' : 's'} from ${updatedImages} caption${updatedImages === 1 ? '' : 's'}`);
       } else {
@@ -680,6 +685,7 @@ export default function LoraDatasetDetail() {
           onImagesChange={onImagesChange}
           onCaptionRunStarted={setCaptionRun}
           captionModel={captionModel}
+          draftResetToken={captionDraftResetToken}
         />
         <TrainingPanel
           dataset={dataset}
