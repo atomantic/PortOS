@@ -700,8 +700,17 @@ function buildRosterAppearances(ctx) {
     const matcher = characterMatcher(characterNameTokens(c));
     if (!matcher) continue;
     const appearedInIssues = [];
+    // Capture the ACTUAL matched token (name OR alias) from the first issue the
+    // character appears in, so a finding's anchorQuote lands on real prose — an
+    // alias-only mention ("Bob" for canonical "Robert") must anchor on "Bob", not
+    // the canonical name the editor would never find. `matcher` is non-global, so
+    // exec starts at 0 on each section. Falls back to the name for unmatched rows.
+    let anchorQuote = '';
     for (const s of sections) {
-      if (matcher.test(s.content || '')) appearedInIssues.push(s.number);
+      const m = matcher.exec(s.content || '');
+      if (!m) continue;
+      appearedInIssues.push(s.number);
+      if (!anchorQuote) anchorQuote = m[0];
     }
     rows.push({
       id: c.id || name,
@@ -709,6 +718,7 @@ function buildRosterAppearances(ctx) {
       locked: c.locked === true,
       appearedInIssues,
       firstIssueNumber: appearedInIssues.length ? appearedInIssues[0] : null,
+      anchorQuote: anchorQuote || name,
     });
   }
   return rows;
@@ -969,12 +979,19 @@ export const EDITORIAL_CHECKS = [
         for (const r of rows) {
           const n = r.appearedInIssues.length;
           if (n === 0 || n >= minAppear) continue;
+          const issuesList = r.appearedInIssues.join(', ');
+          // "never recurs" is only true for a one-issue character; with a higher
+          // minAppearancesToWarn, a 2+-issue character DOES recur (just under the
+          // threshold), so word that case factually.
+          const problem = n === 1
+            ? `"${r.name}" is a named character who appears in only 1 issue (${issuesList}) — a named body readers are told to remember but who never recurs.`
+            : `"${r.name}" is a named character who appears in only ${n} issues (${issuesList}) — fewer than your ${minAppear}-issue recurrence threshold, so they barely register as part of the cast.`;
           flag({
             severity: escalateSeverity(ctx.severityDefault, lengthBump),
             location: r.firstIssueNumber != null ? `Issue ${r.firstIssueNumber}: ${r.name}` : `Character: ${r.name}`,
-            problem: `"${r.name}" is a named character who appears in only ${n} issue${n === 1 ? '' : 's'} (${r.appearedInIssues.join(', ')}) — a named body readers are told to remember but who never recurs.`,
+            problem,
             suggestion: `Cut "${r.name}", merge them into another character, or leave them unnamed (a description) unless they are meant to recur.`,
-            anchorQuote: r.name,
+            anchorQuote: r.anchorQuote,
             issueNumber: r.firstIssueNumber,
           });
         }
@@ -984,7 +1001,7 @@ export const EDITORIAL_CHECKS = [
       //    the opening issue dilutes the ones that matter.
       if (sectionCount > 0 && maxFirst > 0) {
         const firstNumber = sections[0].number;
-        const inFirst = rows.filter((r) => r.appearedInIssues.includes(firstNumber)).map((r) => r.name);
+        const inFirst = rows.filter((r) => r.appearedInIssues.includes(firstNumber));
         if (inFirst.length > maxFirst) {
           // Low by default; escalate to medium only when crowding is well over the
           // threshold (≥1.5×) — it's a pacing nudge, not a correctness error.
@@ -992,9 +1009,11 @@ export const EDITORIAL_CHECKS = [
           flag({
             severity: escalateSeverity(ctx.severityDefault, heavy ? 1 : 0),
             location: `Issue ${firstNumber} (opening)`,
-            problem: `${inFirst.length} named characters appear in the opening issue (${inFirst.join(', ')}) — more than ${maxFirst}. Too many introductions at once makes it hard for readers to tell who matters.`,
+            problem: `${inFirst.length} named characters appear in the opening issue (${inFirst.map((r) => r.name).join(', ')}) — more than ${maxFirst}. Too many introductions at once makes it hard for readers to tell who matters.`,
             suggestion: 'Introduce fewer named characters up front — delay, merge, or leave some unnamed until readers have anchored to the leads.',
-            anchorQuote: inFirst[0],
+            // Anchor on a real matched token from the opening issue (these rows all
+            // first appear there), not the canonical name which may be an alias-only mention.
+            anchorQuote: inFirst[0].anchorQuote,
             issueNumber: firstNumber,
           });
         }

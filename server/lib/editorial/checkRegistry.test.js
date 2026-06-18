@@ -464,14 +464,30 @@ describe('roster.economy — deterministic check', () => {
     expect(throwaways(findings).some((f) => /"J\.R\."/.test(f.problem))).toBe(true);
   });
 
-  it('counts appearances via aliases, attributing to the canonical name', () => {
+  it('counts appearances via aliases, anchoring on the matched alias not the canonical name', () => {
     const findings = runRoster(
       [{ name: 'Robert', aliases: ['Bob'] }, { name: 'Aria' }],
       [sec(1, 'Bob arrived.'), sec(2, 'Aria stayed; Aria thought of him.')],
     );
-    // Robert appears only via "Bob" in issue 1 → throwaway, named as Robert.
-    const tw = throwaways(findings);
-    expect(tw.some((f) => /"Robert"/.test(f.problem))).toBe(true);
+    // Robert appears only via "Bob" in issue 1 → throwaway named as Robert, but the
+    // anchorQuote must be the prose token "Bob" so the editor's jump-to-highlight lands.
+    const tw = throwaways(findings).find((f) => /"Robert"/.test(f.problem));
+    expect(tw).toBeTruthy();
+    expect(tw.anchorQuote).toBe('Bob');
+  });
+
+  it('words the throwaway finding for the recurrence threshold, not always "never recurs"', () => {
+    // minAppearancesToWarn=3: a 2-issue character DOES recur but is under threshold.
+    const findings = runRoster(
+      [{ name: 'Bram' }, { name: 'Aria' }],
+      [sec(1, 'Bram and Aria met.'), sec(2, 'Bram and Aria parted.'), sec(3, 'Aria went on.')],
+      { minAppearancesToWarn: 3, maxFirstIssueCharacters: 0, maxCastPerIssue: 0 },
+    );
+    const f = findings.find((x) => /"Bram"/.test(x.problem)); // Bram in 1,2 (n=2); Aria in all 3
+    expect(f).toBeTruthy();
+    expect(f.problem).not.toMatch(/never recurs/);
+    expect(f.problem).toMatch(/2 issues/);
+    expect(f.problem).toMatch(/recurrence threshold/);
   });
 
   it('flags first-issue crowding and lists the introduced names', () => {
