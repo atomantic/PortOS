@@ -275,23 +275,31 @@ describe('getReviewWithStaleness (#1345)', () => {
     expect(naming.stale).toBe(true);
   });
 
-  it('stales a manuscript-check finding (not a canon-only one) when the series style guide changes', async () => {
-    getSeries.mockResolvedValueOnce({ id: 's1', universeId: 'u1', styleGuide: { readingLevel: 8 } });
+  it('stales only the style-guide-reading checks when the series style guide changes (#1387 precision)', async () => {
+    // style.conformance declares 'series.styleGuide'; prose.info-dumping is
+    // manuscript-only and naming is canon-only — so editing the style guide must
+    // stale ONLY the style check, not every manuscript-consuming finding (the
+    // pre-#1387 heuristic over-flagged info-dumping here).
+    getSeries.mockResolvedValueOnce({ id: 's1', universeId: 'u1', styleGuide: { tense: 'past' } });
     await seedReviewFromRun();
-    getSeries.mockResolvedValueOnce({ id: 's1', universeId: 'u1', styleGuide: { readingLevel: 12 } });
+    getSeries.mockResolvedValueOnce({ id: 's1', universeId: 'u1', styleGuide: { tense: 'present' } });
     const review = await getReviewWithStaleness('s1');
-    expect(review.comments.find((c) => c.checkId === 'prose.info-dumping').stale).toBe(true);
-    // styleGuide is in the manuscript segment only → a canon-only finding stays fresh.
+    expect(review.comments.find((c) => c.checkId === 'style.conformance').stale).toBe(true);
+    expect(review.comments.find((c) => c.checkId === 'prose.info-dumping').stale).toBe(false);
     expect(review.comments.find((c) => c.checkId === 'naming.dissimilar-names').stale).toBe(false);
   });
 
-  it('stales a canon-only finding (not a manuscript one) when the arc ticking clock changes', async () => {
-    getSeries.mockResolvedValueOnce({ id: 's1', universeId: 'u1', arc: { tickingClock: { name: 'storm' } } });
+  it('stales only the ticking-clock check when the arc ticking clock changes (#1387 precision)', async () => {
+    // arc.ticking-clock-hygiene declares 'series.arc.tickingClock'; naming is
+    // canon-only and info-dumping manuscript-only — so editing the ticking clock
+    // must stale ONLY the ticking-clock finding (the pre-#1387 heuristic folded the
+    // clock into the shared canon segment and over-flagged naming/object findings).
+    getSeries.mockResolvedValueOnce({ id: 's1', universeId: 'u1', arc: { tickingClock: { enabled: true } } });
     await seedReviewFromRun();
-    getSeries.mockResolvedValueOnce({ id: 's1', universeId: 'u1', arc: { tickingClock: { name: 'eclipse' } } });
+    getSeries.mockResolvedValueOnce({ id: 's1', universeId: 'u1', arc: { tickingClock: { enabled: true, label: 'eclipse' } } });
     const review = await getReviewWithStaleness('s1');
-    // tickingClock is in the canon segment only → the manuscript finding stays fresh.
-    expect(review.comments.find((c) => c.checkId === 'naming.dissimilar-names').stale).toBe(true);
+    expect(review.comments.find((c) => c.checkId === 'arc.ticking-clock-hygiene').stale).toBe(true);
+    expect(review.comments.find((c) => c.checkId === 'naming.dissimilar-names').stale).toBe(false);
     expect(review.comments.find((c) => c.checkId === 'prose.info-dumping').stale).toBe(false);
   });
 

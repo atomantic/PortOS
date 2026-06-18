@@ -23,6 +23,15 @@ Before adding an editorial rule, check whether an existing registry entry covers
 it. To add a new built-in check, append an entry to `EDITORIAL_CHECKS` in
 `checkRegistry.js` (the fail-fast guards enforce shape, enum, and unique-id).
 
+Declare every input the check's `run(ctx)` reads in its `sources` array (a
+non-empty subset of `EDITORIAL_SOURCES`: `manuscript`, `canon`,
+`series.styleGuide`, `series.arc.tickingClock`). The staleness runner
+fingerprints exactly those sources, so a finding goes stale only when content the
+check actually analyzed drifts — declare too few and a finding stays falsely
+fresh; a `manuscript` source must pair with `needsManuscript: true`. When a new
+check reads a `ctx.series` field that isn't yet a token, add the token to
+`EDITORIAL_SOURCES` and a matching resolver in the runner's `SOURCE_RESOLVERS`.
+
 ## User-defined checks (#1346)
 
 Users author their own LLM checks (name + prompt + scope) from the Editorial
@@ -40,5 +49,5 @@ runner-injected `ctx.callInlineLLM` (an inline-prompt sibling of
 
 | Module | Purpose |
 |---|---|
-| `checkRegistry.js` | `EDITORIAL_CHECKS` array + fail-fast guards + lookup/state helpers (`getCheck`, `getCheckById`, `getAllChecks`, `listChecks`, `resolveCheckState`, `getEnabledChecks`, `resolveCheckConfig`). User-defined-check helpers (`buildCustomCheck`, `buildCustomCheckPrompt`, `readCustomCheckDefs`, `isCustomCheckId`, `isValidCustomCheckDef`). Ships two reference checks: `naming.dissimilar-names` (deterministic) and `prose.info-dumping` (LLM). |
+| `checkRegistry.js` | `EDITORIAL_CHECKS` array + `EDITORIAL_SOURCES` (the per-check `sources` vocabulary the staleness runner fingerprints, #1387) + fail-fast guards + lookup/state helpers (`getCheck`, `getCheckById`, `getAllChecks`, `listChecks`, `resolveCheckState`, `getEnabledChecks`, `resolveCheckConfig`). User-defined-check helpers (`buildCustomCheck`, `buildCustomCheckPrompt`, `readCustomCheckDefs`, `isCustomCheckId`, `isValidCustomCheckDef`). Ships two reference checks: `naming.dissimilar-names` (deterministic) and `prose.info-dumping` (LLM). |
 | `index.js` | Barrel re-export of the above. |

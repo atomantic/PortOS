@@ -32,6 +32,24 @@ export const CHECK_KINDS = Object.freeze(['deterministic', 'llm']);
 export const CHECK_SEVERITIES = Object.freeze(['high', 'medium', 'low']);
 const SEVERITIES = CHECK_SEVERITIES;
 
+// The inputs a check can read, declared per-check via `sources` (#1387). The
+// staleness runner (server/services/pipeline/editorial/checkRunner.js) fingerprints
+// EXACTLY a check's declared sources, so a finding only goes stale when content
+// the check actually analyzed drifts — editing the style guide no longer marks a
+// naming finding stale, and editing the ticking clock no longer marks every
+// canon-only finding stale. Every token here must have a matching resolver in the
+// runner's `SOURCE_RESOLVERS` (a load-time guard there fails fast if they drift).
+//   - 'manuscript'              — the stitched manuscript corpus (implies needsManuscript)
+//   - 'canon'                   — the universe/series canon (characters, relationships, objects)
+//   - 'series.styleGuide'       — the series style guide (tense/POV/rating/reading level)
+//   - 'series.arc.tickingClock' — the series arc's ticking clock
+export const EDITORIAL_SOURCES = Object.freeze([
+  'manuscript',
+  'canon',
+  'series.styleGuide',
+  'series.arc.tickingClock',
+]);
+
 // Default per-run finding cap for user-defined checks (#1346) — mirrors the
 // built-in LLM checks' `maxFindings` default so a long manuscript can't flood
 // the review. Defined up here so the custom-check prompt builder and config
@@ -407,6 +425,7 @@ const hasConformanceFields = (sg) => styleGuideExpectations(sg).length > 0;
 export const EDITORIAL_CHECKS = [
   {
     id: 'naming.dissimilar-names',
+    sources: ['canon'],
     label: 'Character name dissimilarity',
     description:
       'Flags pairs of character names a reader could confuse — sharing a first letter, length, vowel pattern, opening, or ending.',
@@ -457,6 +476,7 @@ export const EDITORIAL_CHECKS = [
   },
   {
     id: 'relationships.reciprocity',
+    sources: ['canon'],
     label: 'Relationship reciprocity',
     description:
       'Flags one-sided structured relationship links — character A links to B, but B has no link back to A.',
@@ -495,6 +515,7 @@ export const EDITORIAL_CHECKS = [
   },
   {
     id: 'relationships.dangling-target',
+    sources: ['canon'],
     label: 'Relationship dangling target',
     description:
       'Flags structured relationship links that point at a character id no longer present in the canon (deleted or renamed away).',
@@ -525,6 +546,7 @@ export const EDITORIAL_CHECKS = [
   },
   {
     id: 'relationships.opposition-reversal',
+    sources: ['canon'],
     label: 'Opposition role-reversal payoff',
     description:
       'Advisory — surfaces every tagged opposing-force pair (hunter/prey, winner/loser…) so you can confirm whether the reader ever sees the roles reverse, or deliberately not.',
@@ -566,6 +588,7 @@ export const EDITORIAL_CHECKS = [
   },
   {
     id: 'arc.ticking-clock-hygiene',
+    sources: ['series.arc.tickingClock'],
     label: 'Ticking-clock hygiene',
     description:
       'Advisory — checks the series ticking clock/countdown is fully specified: named, with stakes, a plant→due span, and reminder beats so the reader does not forget it through the long middle.',
@@ -659,6 +682,7 @@ export const EDITORIAL_CHECKS = [
   },
   {
     id: 'objects.unattached-significant',
+    sources: ['canon'],
     label: 'Unattached significant object',
     description:
       'Flags objects with written significance but no character attachment — the object clearly matters to the story, yet nobody in the cast is on record caring about it.',
@@ -696,6 +720,7 @@ export const EDITORIAL_CHECKS = [
   },
   {
     id: 'objects.unmotivated-interaction',
+    sources: ['manuscript', 'canon'],
     label: 'Unmotivated object interaction',
     description:
       'LLM scan — flags moments where a character interacts meaningfully with an object the prose (and the canon attachments) have given them no reason to care about.',
@@ -734,6 +759,7 @@ export const EDITORIAL_CHECKS = [
   },
   {
     id: 'objects.backstory-consistency',
+    sources: ['canon'],
     label: 'Attachment backstory consistency',
     description:
       "LLM check — flags object attachments whose origin story contradicts the attached character's established background.",
@@ -784,6 +810,7 @@ export const EDITORIAL_CHECKS = [
   },
   {
     id: 'prose.info-dumping',
+    sources: ['manuscript'],
     label: 'Info-dumping / "as you know, Bob" exposition',
     description:
       'Flags passages that dump backstory or world rules through unnatural exposition — characters telling each other what they both already know.',
@@ -820,6 +847,7 @@ export const EDITORIAL_CHECKS = [
   },
   {
     id: 'style.reading-level',
+    sources: ['manuscript', 'series.styleGuide'],
     label: 'Reading-level conformance',
     description:
       "Measures the drafted manuscript's reading grade level (Flesch–Kincaid) and flags it when it drifts beyond a tolerance from the series style guide's target reading level.",
@@ -875,6 +903,7 @@ export const EDITORIAL_CHECKS = [
   },
   {
     id: 'style.conformance',
+    sources: ['manuscript', 'series.styleGuide'],
     label: 'Style-guide conformance (tense / POV / rating)',
     description:
       "LLM scan — flags passages where the prose drifts from the series style guide's tense, point-of-view person, or content rating (profanity/violence/sexual content beyond the configured ceiling).",
@@ -944,6 +973,22 @@ export function assertValidChecks(checks) {
     }
     if (!check.configSchema || typeof check.configSchema.safeParse !== 'function') {
       throw new Error(`checkRegistry: ${check.id} is missing a Zod configSchema`);
+    }
+    // `sources` declares the inputs the check reads so the runner can fingerprint
+    // exactly those for staleness (#1387). Required + non-empty + known tokens.
+    // A 'manuscript' source implies `needsManuscript` (the runner gates the
+    // corpus-collection I/O on that flag) — keeping the two consistent prevents a
+    // check that fingerprints the manuscript but never triggers its collection.
+    if (!Array.isArray(check.sources) || check.sources.length === 0) {
+      throw new Error(`checkRegistry: ${check.id} must declare a non-empty sources array (one of ${EDITORIAL_SOURCES.join(', ')})`);
+    }
+    for (const source of check.sources) {
+      if (!EDITORIAL_SOURCES.includes(source)) {
+        throw new Error(`checkRegistry: ${check.id} declares unknown source "${source}" (must be one of ${EDITORIAL_SOURCES.join(', ')})`);
+      }
+    }
+    if (check.sources.includes('manuscript') && !check.needsManuscript) {
+      throw new Error(`checkRegistry: ${check.id} reads the 'manuscript' source but is not marked needsManuscript`);
     }
     // configFields is optional, but when present each entry must be a renderable
     // descriptor (key + label + known type) so the UI never has to guess a
@@ -1112,6 +1157,9 @@ export function buildCustomCheck(def) {
     severityDefault: def.severityDefault,
     defaultEnabled: true,
     needsManuscript: true,
+    // Custom checks read only the stitched manuscript (the inline prompt is fed
+    // the corpus, nothing else), so their findings stale on a prose edit alone (#1387).
+    sources: ['manuscript'],
     isCustom: true,
     prompt: instructions,
     configSchema: customCheckConfigSchema,
