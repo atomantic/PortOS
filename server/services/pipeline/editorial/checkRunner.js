@@ -25,6 +25,7 @@ import { getSeries } from '../series.js';
 import { listIssues } from '../issues.js';
 import { getSeriesCanon } from '../seriesCanon.js';
 import { collectManuscriptSections, sectionsCorpus, manuscriptSectionHeader } from '../arcPlanner.js';
+import { getReverseOutline } from '../reverseOutline.js';
 import { seedReviewFromFindings, getReview } from '../manuscriptReview.js';
 import { canonicalStringify } from '../../../lib/objects.js';
 
@@ -53,6 +54,10 @@ const SOURCE_RESOLVERS = {
   canon: ({ canon }) => canonicalStringify(canon ?? null),
   'series.styleGuide': ({ series }) => canonicalStringify(series?.styleGuide ?? null),
   'series.arc.tickingClock': ({ series }) => canonicalStringify(series?.arc?.tickingClock ?? null),
+  // The reverse-outline scenes the check reads (#1296). Fingerprinting the whole
+  // scenes array is intentionally over-eager (any scene edit stales a finding)
+  // rather than under: safe vs. false-fresh, and the check reads several scene fields.
+  reverseOutline: ({ reverseOutline }) => canonicalStringify(reverseOutline ?? null),
 };
 for (const token of EDITORIAL_SOURCES) {
   if (typeof SOURCE_RESOLVERS[token] !== 'function') {
@@ -135,22 +140,28 @@ export async function runEditorialChecks(seriesId, options = {}) {
   // the stitched corpus (deterministic checks like naming use only the canon).
   const series = await getSeries(seriesId);
   const needsManuscript = enabled.some(({ check }) => check.needsManuscript);
-  const [sections, canon, issues] = await Promise.all([
+  // Reverse-outline fetch is gated on the declared source (#1296) so a run with no
+  // scene-segmentation check pays no extra I/O — mirrors the needsManuscript gate.
+  const needsReverseOutline = enabled.some(({ check }) => checkSources(check).includes('reverseOutline'));
+  const [sections, canon, issues, outline] = await Promise.all([
     needsManuscript ? collectManuscriptSections(seriesId) : Promise.resolve([]),
     getSeriesCanon(series),
     listIssues({ seriesId }).catch(() => []),
+    needsReverseOutline ? getReverseOutline(seriesId).catch(() => null) : Promise.resolve(null),
   ]);
   const manuscript = sectionsCorpus(sections);
+  const reverseOutline = Array.isArray(outline?.scenes) ? outline.scenes : [];
   // Resolve every source token once — each finding's fingerprint reads from this
   // so the editor flags it `stale` when the content that check actually read (its
   // declared `sources`) drifts (#1345, #1387).
-  const resolvedSources = resolveSources({ manuscript, canon, series });
+  const resolvedSources = resolveSources({ manuscript, canon, series, reverseOutline });
   const baseCtx = {
     seriesId,
     series,
     issues,
     sections,
     manuscript,
+    reverseOutline,
     canon,
     providerOverride,
     modelOverride,
@@ -293,12 +304,15 @@ export async function getReviewWithStaleness(seriesId) {
   // a source (mirrors the run path's gate, now source-derived rather than the bare
   // needsManuscript flag so it stays correct as the source vocabulary grows).
   const needsManuscript = evaluable.some((c) => checkSources(checkFor(c.checkId)).includes('manuscript'));
+  const needsReverseOutline = evaluable.some((c) => checkSources(checkFor(c.checkId)).includes('reverseOutline'));
   const series = await getSeries(seriesId);
-  const [sections, canon] = await Promise.all([
+  const [sections, canon, outline] = await Promise.all([
     needsManuscript ? collectManuscriptSections(seriesId) : Promise.resolve([]),
     getSeriesCanon(series),
+    needsReverseOutline ? getReverseOutline(seriesId).catch(() => null) : Promise.resolve(null),
   ]);
-  const resolvedSources = resolveSources({ manuscript: sectionsCorpus(sections), canon, series });
+  const reverseOutline = Array.isArray(outline?.scenes) ? outline.scenes : [];
+  const resolvedSources = resolveSources({ manuscript: sectionsCorpus(sections), canon, series, reverseOutline });
   return {
     ...review,
     comments: review.comments.map((c) => {

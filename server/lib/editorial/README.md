@@ -56,11 +56,13 @@ it. To add a new built-in check, append an entry to `EDITORIAL_CHECKS` in
 
 Declare every input the check's `run(ctx)` reads in its `sources` array (a
 non-empty subset of `EDITORIAL_SOURCES`: `manuscript`, `canon`,
-`series.styleGuide`, `series.arc.tickingClock`). The staleness runner
-fingerprints exactly those sources, so a finding goes stale only when content the
-check actually analyzed drifts — declare too few and a finding stays falsely
-fresh; a `manuscript` source must pair with `needsManuscript: true`. When a new
-check reads a `ctx.series` field that isn't yet a token, add the token to
+`series.styleGuide`, `series.arc.tickingClock`, `reverseOutline`). The staleness
+runner fingerprints exactly those sources, so a finding goes stale only when
+content the check actually analyzed drifts — declare too few and a finding stays
+falsely fresh; a `manuscript` source must pair with `needsManuscript: true`, and
+`reverseOutline` makes the runner fetch the cached reverse-outline (#1286) and
+inject `ctx.reverseOutline` (the scenes array). When a new check reads a
+`ctx.series` field (or another artifact) that isn't yet a token, add the token to
 `EDITORIAL_SOURCES` and a matching resolver in the runner's `SOURCE_RESOLVERS`.
 
 ## User-defined checks (#1346)

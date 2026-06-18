@@ -59,6 +59,10 @@ vi.mock('../manuscriptReview.js', () => ({
   seedReviewFromFindings: (...a) => seedReviewFromFindings(...a),
   getReview: async () => reviewState,
 }));
+// Reverse-outline source (#1296) — backed by a mutable fixture; default empty so
+// the scene.component-balance check is gated off unless a test populates scenes.
+let outlineState = { scenes: [] };
+vi.mock('../reverseOutline.js', () => ({ getReverseOutline: vi.fn(async () => outlineState) }));
 
 const { runEditorialChecks, buildEditorialCheckPlan, getReviewWithStaleness } = await import('./checkRunner.js');
 const { runStagedLLM, resolveStageContext } = await import('../../../lib/stageRunner.js');
@@ -80,6 +84,7 @@ const disableWhere = (predicate) => ({
 beforeEach(() => {
   seedStore.length = 0;
   reviewState = { comments: [] };
+  outlineState = { scenes: [] };
   seedReviewFromFindings.mockClear();
   runStagedLLM.mockClear();
   resolveStageContext.mockClear();
@@ -337,6 +342,31 @@ describe('getReviewWithStaleness (#1345)', () => {
     expect(review.comments.find((c) => c.checkId === 'arc.ticking-clock-hygiene').stale).toBe(true);
     expect(review.comments.find((c) => c.checkId === 'naming.dissimilar-names').stale).toBe(false);
     expect(review.comments.find((c) => c.checkId === 'prose.info-dumping').stale).toBe(false);
+  });
+
+  it('stales only the reverse-outline-reading check when the scene segmentation changes (#1296/#1387 precision)', async () => {
+    // scene.component-balance declares 'reverseOutline'; naming is canon-only and
+    // info-dumping manuscript-only — so editing the scenes must stale ONLY the scene
+    // finding, and the scene finding must NOT stale on manuscript/canon edits.
+    outlineState = { scenes: [{ id: 'scene-001', issueNumber: 1, heading: 'Talking heads', anchorQuote: 'q', components: { narrative: false, action: false, dialogue: true } }] };
+    await seedReviewFromRun();
+    expect(reviewState.comments.find((c) => c.checkId === 'scene.component-balance')).toBeTruthy();
+    // Mutate only the scene components (give it a second mode) — the outline drifts.
+    outlineState = { scenes: [{ id: 'scene-001', issueNumber: 1, heading: 'Talking heads', anchorQuote: 'q', components: { narrative: true, action: false, dialogue: true } }] };
+    const review = await getReviewWithStaleness('s1');
+    expect(review.comments.find((c) => c.checkId === 'scene.component-balance').stale).toBe(true);
+    expect(review.comments.find((c) => c.checkId === 'naming.dissimilar-names').stale).toBe(false);
+    expect(review.comments.find((c) => c.checkId === 'prose.info-dumping').stale).toBe(false);
+  });
+
+  it('keeps a scene finding fresh when the manuscript changes (reverseOutline-only source)', async () => {
+    outlineState = { scenes: [{ id: 'scene-001', issueNumber: 1, heading: 'Talking heads', anchorQuote: 'q', components: { narrative: false, action: false, dialogue: true } }] };
+    await seedReviewFromRun();
+    collectManuscriptSections.mockResolvedValueOnce([
+      { number: 1, title: 'Pilot', stageId: 'prose', content: 'A completely rewritten opening.' },
+    ]);
+    const review = await getReviewWithStaleness('s1');
+    expect(review.comments.find((c) => c.checkId === 'scene.component-balance').stale).toBe(false);
   });
 
   it('stales a custom-check finding when its authored prompt changes, even if the manuscript is unchanged (#1387)', async () => {

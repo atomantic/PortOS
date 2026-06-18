@@ -44,11 +44,16 @@ const SEVERITIES = CHECK_SEVERITIES;
 //   - 'canon'                   — the universe/series canon (characters, relationships, objects)
 //   - 'series.styleGuide'       — the series style guide (tense/POV/rating/reading level)
 //   - 'series.arc.tickingClock' — the series arc's ticking clock
+//   - 'reverseOutline'          — the cached reverse-outline scene segmentation (#1286);
+//                                 scenes carry components/povCharacter/charactersPresent.
+//                                 The runner fetches it (gated on this source) and injects
+//                                 `ctx.reverseOutline` (the scenes array).
 export const EDITORIAL_SOURCES = Object.freeze([
   'manuscript',
   'canon',
   'series.styleGuide',
   'series.arc.tickingClock',
+  'reverseOutline',
 ]);
 
 // Default per-run finding cap for user-defined checks (#1346) — mirrors the
@@ -731,6 +736,40 @@ function buildRosterAppearances(ctx) {
 }
 
 // ---------------------------------------------------------------------------
+// Scene component balance (#1296) — reads the cached reverse-outline (#1286)
+// scene segmentation, where each scene carries a `components` boolean signal
+// { narrative, action, dialogue }. The editorial rule: a scene should mix at
+// least 2 of the 3; a single-mode scene (a narration wall, talking heads with
+// no action, pure action with no interiority or voice) reads flat and is flagged.
+//
+// A scene with NO component flagged (all three false) is treated as
+// "unclassified" (an older outline, or a scene the segmenter didn't tag), not
+// "zero components" — it is skipped rather than flagged as a false positive,
+// per the absent-vs-empty rule.
+// ---------------------------------------------------------------------------
+
+const SCENE_COMPONENT_KEYS = ['narrative', 'action', 'dialogue'];
+
+// The present/missing component lists for a scene's `components` signal.
+function sceneComponentMix(components) {
+  const c = components && typeof components === 'object' ? components : {};
+  const present = SCENE_COMPONENT_KEYS.filter((k) => c[k] === true);
+  const missing = SCENE_COMPONENT_KEYS.filter((k) => c[k] !== true);
+  return { present, missing };
+}
+
+// A scene's display label for finding text/location — its heading, falling back
+// to the summary, then a sequence-based label. Type-guarded because the reverse
+// outline rides peer sync (#1348): a hand-edited / older-peer scene could carry a
+// non-string heading, and a bare `.trim()` on it would throw and abort the check.
+const sceneLabel = (s) => {
+  const heading = typeof s?.heading === 'string' ? s.heading.trim() : '';
+  const summary = typeof s?.summary === 'string' ? s.summary.trim() : '';
+  const seq = typeof s?.sequence === 'number' ? s.sequence + 1 : '?';
+  return heading || summary || `scene ${seq}`;
+};
+
+// ---------------------------------------------------------------------------
 // Registry entries.
 // ---------------------------------------------------------------------------
 
@@ -1040,6 +1079,70 @@ export const EDITORIAL_CHECKS = [
         }
       }
 
+      return findings;
+    },
+  },
+  {
+    id: 'scene.component-balance',
+    sources: ['reverseOutline'],
+    label: 'Scene component balance (narrative / action / dialogue)',
+    description:
+      'Flags scenes that lean on a single mode — a wall of narration, talking heads with no action, or pure action with no interiority or voice. Reads the reverse-outline scene segmentation; a balanced scene mixes at least two of narrative, action, and dialogue.',
+    scope: 'scene',
+    kind: 'deterministic',
+    category: 'pacing',
+    severityDefault: 'low',
+    defaultEnabled: true,
+    configSchema: z.object({
+      // Minimum distinct components (narrative/action/dialogue) a scene should
+      // carry. Default 2 (the "at least 2 of 3" rule); 3 demands all three; 1
+      // disables the check (every scene with any signal trivially passes).
+      minComponents: z.number().int().min(1).max(3).default(2),
+    }),
+    configFields: [
+      {
+        key: 'minComponents',
+        label: 'Minimum scene components',
+        type: 'number',
+        min: 1,
+        max: 3,
+        step: 1,
+        help: 'How many of narrative / action / dialogue a scene should mix. 2 flags single-mode scenes (a narration wall, talking heads, pure action); 3 demands all three; 1 disables the check.',
+      },
+    ],
+    // Needs a generated reverse outline with at least one scene to read.
+    gate: (ctx) => Array.isArray(ctx.reverseOutline) && ctx.reverseOutline.length > 0,
+    run: (ctx) => {
+      const minComponents = ctx.config?.minComponents ?? 2;
+      if (minComponents <= 1) return []; // disabled — every classified scene passes
+      const scenes = Array.isArray(ctx.reverseOutline) ? ctx.reverseOutline : [];
+      const findings = [];
+      for (const s of scenes) {
+        if (!s || typeof s !== 'object') continue;
+        const { present, missing } = sceneComponentMix(s.components);
+        // Skip unclassified scenes (no component signal at all) — absent ≠ "zero
+        // components"; flagging them would be a false positive on older outlines.
+        if (present.length === 0 || present.length >= minComponents) continue;
+        const label = sceneLabel(s);
+        const issueNumber = Number.isInteger(s.issueNumber) ? s.issueNumber : null;
+        // How many more modes reach the configured target, and whether ALL the
+        // missing ones are required to get there — so the guidance honors
+        // minComponents=3 (a single-mode scene must add BOTH missing modes, not one).
+        const needed = minComponents - present.length;
+        const addJoiner = needed >= missing.length ? ' and ' : ' or ';
+        const problem = present.length === 1
+          ? `Scene "${label}" is all ${present[0]} — no ${missing.join(' or ')}. A single-mode scene reads flat; aim for at least ${minComponents} of narrative, action, and dialogue.`
+          : `Scene "${label}" has ${present.join(' and ')} but no ${missing.join(' or ')} — only ${present.length} of the ${minComponents} components you expect.`;
+        findings.push({
+          severity: ctx.severityDefault,
+          category: 'pacing',
+          location: issueNumber != null ? `Issue ${issueNumber}: ${label}` : `Scene: ${label}`,
+          problem,
+          suggestion: `Add ${missing.join(addJoiner)} so the scene isn't a ${present.join('/')}-only beat (e.g. ground talking heads in the room, give a narration wall a beat of action, or let an action scene breathe with a line of dialogue or interiority).`,
+          anchorQuote: typeof s.anchorQuote === 'string' ? s.anchorQuote : '',
+          issueNumber,
+        });
+      }
       return findings;
     },
   },
