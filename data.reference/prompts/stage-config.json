@@ -485,6 +485,13 @@
       "returnsJson": true,
       "variables": []
     },
+    "pipeline-editorial-interiority": {
+      "name": "Pipeline — Editorial Check: Protagonist interiority",
+      "description": "Editorial check (#1294): flags POV scenes that move a viewpoint character through events without developing their interiority across four dimensions — mind, objective, emotional response, and decision-making. Reads the stitched manuscript, infers POV when untagged, and names the missing dimension per finding. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
     "pipeline-editorial-object-motivation": {
       "name": "Pipeline — Editorial Check: Unmotivated object interaction",
       "description": "Editorial check (#1288): flags moments where a character treats an object as significant without earned motivation — no recorded attachment and no on-page setup. Reads the stitched manuscript plus the canon object↔character attachments. Returns issue-anchored findings.",
