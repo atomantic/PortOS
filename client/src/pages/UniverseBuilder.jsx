@@ -3029,7 +3029,14 @@ function BibleTab({
               only that field into the draft so unsaved style edits aren't lost.
               `styleDirty` blocks the render while influences have unsaved edits —
               otherwise the probe pins to a saved record that lacks that style. */}
+          {/* Key by universe id so the probe's in-flight render state (the
+              EntryThumbSlot spinner + the async completion handler) is scoped
+              to one universe. Without the key the editor stays mounted across a
+              `/universes/:id` switch and the prior universe's spinner — and its
+              completion — would leak onto the next universe's slot. The server
+              still files the abandoned render into its own collection. */}
           <StyleProbeImage
+            key={draft.id || 'new'}
             universe={draft}
             onUniverseChange={(updated) => updateDraft({ styleImageRefs: updated?.styleImageRefs || [] })}
             onPreview={onPreview}

@@ -11,7 +11,10 @@
  * renders (generateImage + EntryThumbSlot spinner/display) and persists the
  * resulting filename onto the universe's `styleImageRefs[]` so it survives
  * reload and shows in both the Universe Builder and the Story Builder
- * aesthetic step.
+ * aesthetic step. The render also carries a `universeRun` collection target so
+ * the server files the finished image into the universe's "Universe: <name>"
+ * media collection — the same auto-filing path batch renders and character
+ * reference sheets use — instead of the front-end doing it post-generation.
  */
 import { useRef } from 'react';
 import { Sparkles } from 'lucide-react';
@@ -110,7 +113,15 @@ export default function StyleProbeImage({ universe, onUniverseChange, canRender 
     // Capture the style key the moment the job is queued so the async completion
     // can detect mid-render style drift.
     const probe = buildStyleProbePrompt(universe);
-    const queuedJobId = await queueRender(imageCfg);
+    // Tag the render with the universe's collection target so the SERVER files
+    // the finished image into the "Universe: <name>" collection (the same
+    // auto-filing path batch renders use), alongside persisting the ref onto
+    // `styleImageRefs` in onComplete. The collectionId is resolved server-side
+    // from this identity — the client never does collection bookkeeping.
+    const universeRun = universe?.id && universe?.name
+      ? { universeId: universe.id, universeName: universe.name, label: 'Base style', category: 'style' }
+      : undefined;
+    const queuedJobId = await queueRender(imageCfg, undefined, universeRun && { universeRun });
     if (queuedJobId) probeStyleKeyRef.current = JSON.stringify(probe);
   };
 

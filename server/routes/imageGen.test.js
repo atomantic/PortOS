@@ -52,6 +52,13 @@ vi.mock('../services/mediaJobQueue/index.js', () => ({
   listJobs: vi.fn(() => []),
 }));
 
+// The /generate route resolves an optional universeRun collection target via
+// findOrCreateUniverseCollection. Mock it so the universeRun test asserts the
+// tag-resolution wiring without touching real collection storage.
+vi.mock('../services/mediaCollections.js', () => ({
+  findOrCreateUniverseCollection: vi.fn(async ({ universeId }) => ({ id: `col-${universeId}` })),
+}));
+
 // HOST_ARCH is read at request time inside `buildSetupCheck`, so backing it
 // with a hoisted mutable holder + getter lets tests flip between arm64 and
 // x86_64 hosts without re-mocking. Default arm64 keeps every existing test
@@ -88,6 +95,7 @@ vi.mock('fs/promises', async (importOriginal) => {
 import * as imageGen from '../services/imageGen/index.js';
 import * as mediaJobQueue from '../services/mediaJobQueue/index.js';
 import { getSettings } from '../services/settings.js';
+import { findOrCreateUniverseCollection } from '../services/mediaCollections.js';
 
 describe('Image Gen Routes', () => {
   let app;
@@ -293,6 +301,71 @@ describe('Image Gen Routes', () => {
       expect(response.body.status).toBe('queued');
       expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({ kind: 'image' }));
       expect(imageGen.generateImage).not.toHaveBeenCalled();
+    });
+
+    // The base-style probe passes a `universeRun` identity so the SERVER files
+    // the finished render into the universe collection. The route must resolve
+    // the collectionId server-side and tag the queued job — the front-end never
+    // sends a collectionId or does post-generation bookkeeping.
+    describe('universeRun collection target', () => {
+      it('resolves the collection server-side and tags the queued job', async () => {
+        getSettings.mockResolvedValueOnce({ imageGen: { mode: 'local', local: { pythonPath: '/usr/bin/python3' } } });
+        mediaJobQueue.enqueueJob.mockReturnValueOnce({ jobId: 'queued-style', position: 1, status: 'queued' });
+
+        const response = await request(app)
+          .post('/api/image-gen/generate')
+          .send({
+            prompt: 'a moody noir skyline',
+            universeRun: { universeId: 'uni-1', universeName: 'NoirVerse', label: 'Base style', category: 'style' },
+          });
+
+        expect(response.status).toBe(200);
+        expect(findOrCreateUniverseCollection).toHaveBeenCalledWith(
+          expect.objectContaining({ universeId: 'uni-1', universeName: 'NoirVerse' }),
+        );
+        const [call] = mediaJobQueue.enqueueJob.mock.calls;
+        // collectionId is server-resolved (never client-supplied), runId minted,
+        // label/category preserved — exactly what universeBuilderCollectionHook reads.
+        expect(call[0].params.universeRun).toEqual(expect.objectContaining({
+          universeId: 'uni-1',
+          collectionId: 'col-uni-1',
+          label: 'Base style',
+          category: 'style',
+        }));
+        expect(typeof call[0].params.universeRun.runId).toBe('string');
+      });
+
+      it('drops the tag (still renders) when collection provisioning fails', async () => {
+        getSettings.mockResolvedValueOnce({ imageGen: { mode: 'local', local: { pythonPath: '/usr/bin/python3' } } });
+        mediaJobQueue.enqueueJob.mockReturnValueOnce({ jobId: 'queued-style-2', position: 1, status: 'queued' });
+        findOrCreateUniverseCollection.mockRejectedValueOnce(new Error('db down'));
+
+        const response = await request(app)
+          .post('/api/image-gen/generate')
+          .send({
+            prompt: 'a moody noir skyline',
+            universeRun: { universeId: 'uni-2', universeName: 'FailVerse', label: 'Base style', category: 'style' },
+          });
+
+        // The render still proceeds — a collection-filing miss must not fail it.
+        expect(response.status).toBe(200);
+        const [call] = mediaJobQueue.enqueueJob.mock.calls;
+        expect(call[0].params.universeRun).toBeUndefined();
+      });
+
+      it('ignores universeRun without a universeId (no collection resolution)', async () => {
+        getSettings.mockResolvedValueOnce({ imageGen: { mode: 'local', local: { pythonPath: '/usr/bin/python3' } } });
+        mediaJobQueue.enqueueJob.mockReturnValueOnce({ jobId: 'queued-plain', position: 1, status: 'queued' });
+
+        const response = await request(app)
+          .post('/api/image-gen/generate')
+          .send({ prompt: 'a plain render' });
+
+        expect(response.status).toBe(200);
+        expect(findOrCreateUniverseCollection).not.toHaveBeenCalled();
+        const [call] = mediaJobQueue.enqueueJob.mock.calls;
+        expect(call[0].params.universeRun).toBeUndefined();
+      });
     });
 
     // Local mode without a configured pythonPath now rejects up-front (400)
