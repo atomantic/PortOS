@@ -103,6 +103,14 @@ export const repairVideoModel = (modelId, { deep = false } = {}) => request(`/vi
   body: JSON.stringify({ deep }),
   silent: true,
 });
+// Repair the shared text encoder — delete its corrupt files so the existing
+// /text-encoder/download SSE re-fetches clean copies. The encoder isn't a model
+// id, so it needs this scalar endpoint rather than repairVideoModel.
+export const repairTextEncoder = ({ deep = false } = {}) => request('/video-gen/text-encoder/repair', {
+  method: 'POST',
+  body: JSON.stringify({ deep }),
+  silent: true,
+});
 export const cancelVideoGen = () => request('/video-gen/cancel', { method: 'POST' });
 // Currently-running (or next-queued) video job — used on VideoGen mount to
 // resume progress display after a page reload. Silent so a 5xx during status

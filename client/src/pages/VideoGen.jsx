@@ -885,6 +885,17 @@ export default function VideoGen() {
   const [dismissedIntegrityKey, setDismissedIntegrityKey] = useState(null);
   const showIntegrityBanner = integrityBad && dismissedIntegrityKey !== integrityKey && !modelDownload.downloading;
 
+  // Text-encoder integrity. The shared Gemma encoder is a separate HF repo, so a
+  // corrupt encoder needs its own Repair banner — the model-keyed repair above
+  // can't reach it (it isn't a listVideoModels() entry). Local-path encoders
+  // report `integrity: null`, so this only fires for a damaged HF-cached encoder.
+  const encoderIntegrity = textEncoderStatus && !textEncoderStatus.downloading ? textEncoderStatus.integrity : null;
+  const encoderIntegrityBad = encoderIntegrity?.status === 'bad';
+  const encoderIntegrityBadCount = encoderIntegrityBad ? (encoderIntegrity.badFiles || []).length : 0;
+  const encoderIntegrityKey = encoderIntegrityBad ? `text-encoder:${(encoderIntegrity.badFiles || []).map((f) => f.name).join(',')}` : null;
+  const [dismissedEncoderIntegrityKey, setDismissedEncoderIntegrityKey] = useState(null);
+  const showEncoderIntegrityBanner = encoderIntegrityBad && dismissedEncoderIntegrityKey !== encoderIntegrityKey && !modelDownload.downloading;
+
   const { matched: matchedResolution, label: resolutionLabel } = resolveResolutionLabel(VIDEO_RESOLUTIONS, width, height);
   const progressPct = progress?.progress != null ? Math.round(progress.progress * 100) : null;
 
@@ -1471,6 +1482,35 @@ export default function VideoGen() {
                 <button
                   type="button"
                   onClick={() => setDismissedIntegrityKey(integrityKey)}
+                  className="text-gray-400 hover:text-gray-200 text-xs"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          )}
+          {showEncoderIntegrityBanner && (
+            <div className="rounded-lg border border-port-error/40 bg-port-error/10 px-3 py-3 text-xs text-port-error flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                <div>
+                  The shared <strong className="font-semibold">text encoder</strong> ({textEncoderStatus?.repo}) has {encoderIntegrityBadCount || 'corrupt'} damaged weight file{encoderIntegrityBadCount === 1 ? '' : 's'} — renders may come out garbled.
+                  Repair deletes the bad file{encoderIntegrityBadCount === 1 ? '' : 's'} and re-downloads clean copies.
+                </div>
+              </div>
+              <div className="flex items-center gap-2 self-start sm:self-auto">
+                <button
+                  type="button"
+                  onClick={() => { setDismissedEncoderIntegrityKey(encoderIntegrityKey); modelDownload.repair(TEXT_ENCODER_DOWNLOAD_ID); }}
+                  disabled={modelDownload.repairing || modelDownload.downloading}
+                  className="whitespace-nowrap inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-port-error text-white text-xs font-medium hover:bg-port-error/80 disabled:opacity-50"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${modelDownload.repairing ? 'animate-spin' : ''}`} />
+                  Repair encoder
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDismissedEncoderIntegrityKey(encoderIntegrityKey)}
                   className="text-gray-400 hover:text-gray-200 text-xs"
                 >
                   Dismiss

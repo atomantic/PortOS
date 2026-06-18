@@ -478,6 +478,25 @@ router.get('/models/:modelId/download', asyncHandler(async (req, res) => {
   await startHfDownloadStream({ req, res, repo });
 }));
 
+// POST /text-encoder/repair — delete the flagged (corrupt/truncated) weight
+// files for the active text encoder repo so the existing /text-encoder/download
+// SSE re-fetches clean copies. The encoder is shared across all video renders
+// and is NOT a listVideoModels() entry, so the model-id-keyed
+// /models/:modelId/repair can't cover it — this scalar route does. A local-path
+// encoder (e.g. an LM Studio install) isn't an HF repo and has nothing to
+// repair through the cache.
+router.post('/text-encoder/repair', asyncHandler(async (req, res) => {
+  const repo = getTextEncoderRepo();
+  if (!isHfRepoId(repo)) {
+    throw new ServerError('Active text encoder is a local-path entry, not an HF repo.', { status: 400, code: 'NOT_DOWNLOADABLE' });
+  }
+  const parsed = z.object({ deep: z.boolean().optional() }).safeParse(req.body || {});
+  if (!parsed.success) failValidation(parsed);
+  const deep = parsed.data.deep || false;
+  const result = await repairModelCache(repo, { deep });
+  res.json({ deep, deleted: result.deleted.map((name) => ({ repo: result.repoId, name })), repos: [repo] });
+}));
+
 // Text encoder pre-fetch. The Gemma encoder is a separate ~7-25 GB pull from
 // the video model itself, so it gets its own button on the video form.
 router.get('/text-encoder/download', asyncHandler(async (req, res) => {

@@ -4,6 +4,7 @@ import toast from '../components/ui/Toast';
 import {
   getImageModelStatuses, getVideoModelStatuses,
   verifyImageModels, verifyVideoModels, repairImageModel, repairVideoModel,
+  repairTextEncoder,
 } from '../services/apiImageVideo.js';
 
 // Sentinel `modelId` used to drive a text-encoder download instead of a model
@@ -104,8 +105,14 @@ export function useModelDownloadStatus({ kind = 'image' } = {}) {
   const repair = useCallback(async (modelId, { deep = false } = {}) => {
     if (!modelId) return;
     setRepairing(true);
-    const fn = kind === 'video' ? repairVideoModel : repairImageModel;
-    const result = await fn(modelId, { deep }).catch((err) => {
+    // The shared text encoder isn't a model id, so its repair hits the scalar
+    // /text-encoder/repair endpoint; the sentinel `start()` below already maps
+    // to the dedicated /text-encoder/download SSE for the clean re-fetch.
+    const isTextEncoder = kind === 'video' && modelId === TEXT_ENCODER_DOWNLOAD_ID;
+    const run = isTextEncoder
+      ? () => repairTextEncoder({ deep })
+      : () => (kind === 'video' ? repairVideoModel : repairImageModel)(modelId, { deep });
+    const result = await run().catch((err) => {
       toast.error(err?.message || 'Repair failed');
       return null;
     });

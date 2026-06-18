@@ -77,6 +77,7 @@ vi.mock('fs/promises', () => ({ unlink: vi.fn(async () => {}), copyFile: vi.fn(a
 
 import videoGenRoutes from './videoGen.js';
 import { verifyModelCache, repairModelCache } from '../lib/hfCache.js';
+import { isHfRepoId } from '../lib/mediaModels.js';
 
 describe('Video Gen integrity routes', () => {
   let app;
@@ -113,5 +114,27 @@ describe('Video Gen integrity routes', () => {
   it('POST /models/:id/repair 404s for an unknown model', async () => {
     const res = await request(app).post('/api/video-gen/models/nope/repair').send({});
     expect(res.status).toBe(404);
+  });
+
+  it('POST /text-encoder/repair deletes the encoder repo flagged files', async () => {
+    const res = await request(app).post('/api/video-gen/text-encoder/repair').send({});
+    expect(res.status).toBe(200);
+    expect(res.body.repos).toEqual(['org/text-encoder']);
+    expect(res.body.deleted).toEqual([{ repo: 'org/text-encoder', name: 'model.safetensors' }]);
+    expect(repairModelCache).toHaveBeenCalledWith('org/text-encoder', { deep: false });
+  });
+
+  it('POST /text-encoder/repair passes deep through', async () => {
+    const res = await request(app).post('/api/video-gen/text-encoder/repair').send({ deep: true });
+    expect(res.status).toBe(200);
+    expect(res.body.deep).toBe(true);
+    expect(repairModelCache).toHaveBeenCalledWith('org/text-encoder', { deep: true });
+  });
+
+  it('POST /text-encoder/repair 400s for a local-path (non-HF) encoder', async () => {
+    isHfRepoId.mockReturnValueOnce(false);
+    const res = await request(app).post('/api/video-gen/text-encoder/repair').send({});
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('NOT_DOWNLOADABLE');
   });
 });
