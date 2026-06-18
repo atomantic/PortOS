@@ -260,9 +260,11 @@ export async function getBrainGraphNeighborhood({ focusId, limit } = {}) {
     if (w >= SHARED_TAG_MIN_JACCARD) consider(id, 'shared_tag', w);
   }
 
-  // Rank candidates and take the top `cap` neighbors.
+  // Rank candidates and take the top `cap` neighbors. Final tiebreak on id keeps
+  // which neighbors survive the cap deterministic when priority+weight are equal
+  // (e.g. many identically-tagged neighbors at Jaccard 1.0).
   const neighborIds = [...candidates.entries()]
-    .sort((a, b) => (b[1].priority - a[1].priority) || (b[1].weight - a[1].weight))
+    .sort((a, b) => (b[1].priority - a[1].priority) || (b[1].weight - a[1].weight) || a[0].localeCompare(b[0]))
     .slice(0, cap)
     .map(([id]) => id);
 

@@ -380,8 +380,10 @@ export async function syncAllBrainData({ dryRun = false, refresh = false, onlyMi
  * Count how many active brain records lack an embedding — the headline number
  * for the "N memories missing embeddings · Embed missing" affordance on the
  * graph. A record is "missing" when it's unmapped OR its mapped memory has a
- * NULL embedding. Read-only; walks the same stores as the onlyMissing sync so
- * the count matches what "Embed missing" would actually process.
+ * NULL embedding — scoped to ACTIVE memories, since getMemoryIdsMissingEmbedding
+ * only reports active rows (an archived/non-active mapped memory is treated as
+ * embedded and is not a backfill target). Read-only; walks the same stores as
+ * the onlyMissing sync so the count matches what "Embed missing" would process.
  */
 export async function getEmbeddingCoverage() {
   const map = await loadBridgeMap();
