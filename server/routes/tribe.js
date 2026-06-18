@@ -50,10 +50,28 @@ const memoryLinkSchema = z.object({
   note: z.string().max(1000).optional().default(''),
 });
 
+const listQuerySchema = z.object({
+  search: z.string().max(200).optional(),
+  ring: ringSchema.or(z.literal('all')).optional(),
+});
+
+// Validate UUID path params before they hit the UUID-typed columns; otherwise a
+// non-UUID segment raises a raw Postgres "invalid input syntax for type uuid"
+// 500 (leaking the column type) instead of a clean 400.
+const guidParam = (label) => (req, res, next, value) => {
+  if (!z.string().guid().safeParse(value).success) {
+    return next(new ServerError(`Invalid ${label}`, { status: 400 }));
+  }
+  return next();
+};
+router.param('id', guidParam('person id'));
+router.param('memoryId', guidParam('memory id'));
+
 router.get('/people', asyncHandler(async (req, res) => {
+  const { search, ring } = validateRequest(listQuerySchema, req.query);
   const people = await tribe.listPeople({
-    search: req.query.search || undefined,
-    ring: req.query.ring || undefined,
+    search: search || undefined,
+    ring: ring || undefined,
   });
   res.json({ people });
 }));

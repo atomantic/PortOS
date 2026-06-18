@@ -1,7 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
+import { errorEvents } from '../lib/errorHandler.js';
 import tribeRoutes from './tribe.js';
+
+// asyncHandler emits to errorEvents on every route failure when `io` is set; an
+// EventEmitter with no 'error' listener would rethrow and hang the response, so
+// swallow it (matches routes/voice.test.js, routes/localLlm.test.js).
+errorEvents.on('error', () => {});
 
 vi.mock('../services/tribe.js', () => ({
   listPeople: vi.fn(),
@@ -75,7 +81,7 @@ describe('Tribe Routes', () => {
     expect(emit).toHaveBeenCalledWith('tribe:changed', { personId: PERSON_ID });
   });
 
-  it('logs touchpoints with calendar-ready metadata', async () => {
+  it('forwards calendar fields on a manual touchpoint', async () => {
     const touchpoint = {
       id: 'touch-1',
       personId: PERSON_ID,
@@ -145,16 +151,92 @@ describe('Tribe Routes', () => {
     expect(tribe.unlinkMemory).toHaveBeenCalledWith(PERSON_ID, MEMORY_ID);
   });
 
-  it('rejects invalid person payloads before service calls', async () => {
-    const validationApp = express();
-    validationApp.use(express.json());
-    validationApp.use('/api/tribe', tribeRoutes);
-
-    const response = await request(validationApp)
+  it('rejects an empty name before service calls', async () => {
+    const response = await request(app)
       .post('/api/tribe/people')
-      .send({ name: '', ring: 'outer-space' });
+      .send({ name: '', ring: 'core' });
 
     expect(response.status).toBe(400);
     expect(tribe.createPerson).not.toHaveBeenCalled();
+  });
+
+  it('rejects an out-of-enum ring before service calls', async () => {
+    const response = await request(app)
+      .post('/api/tribe/people')
+      .send({ name: 'Ada', ring: 'outer-space' });
+
+    expect(response.status).toBe(400);
+    expect(tribe.createPerson).not.toHaveBeenCalled();
+  });
+
+  it('rejects a blank lastContact (must be a date or null, not "")', async () => {
+    const response = await request(app)
+      .post('/api/tribe/people')
+      .send({ name: 'Ada', ring: 'core', lastContact: '' });
+
+    expect(response.status).toBe(400);
+    expect(tribe.createPerson).not.toHaveBeenCalled();
+  });
+
+  it('accepts a create payload with lastContact: null', async () => {
+    tribe.createPerson.mockResolvedValue({ id: PERSON_ID, name: 'Ada' });
+
+    const response = await request(app)
+      .post('/api/tribe/people')
+      .send({ name: 'Ada', ring: 'core', lastContact: null });
+
+    expect(response.status).toBe(201);
+    expect(tribe.createPerson).toHaveBeenCalledWith(expect.objectContaining({ lastContact: null }));
+  });
+
+  it('rejects a PUT body that carries an id (id comes from the URL)', async () => {
+    const response = await request(app)
+      .put(`/api/tribe/people/${PERSON_ID}`)
+      .send({ id: PERSON_ID, name: 'Ada' });
+
+    expect(response.status).toBe(400);
+    expect(tribe.updatePerson).not.toHaveBeenCalled();
+  });
+
+  it('rejects a non-UUID person id path param with 400', async () => {
+    const response = await request(app).get('/api/tribe/people/not-a-uuid');
+
+    expect(response.status).toBe(400);
+    expect(tribe.getPerson).not.toHaveBeenCalled();
+  });
+
+  it('rejects an out-of-enum ring query param with 400', async () => {
+    const response = await request(app).get('/api/tribe/people?ring=outer-space');
+
+    expect(response.status).toBe(400);
+    expect(tribe.listPeople).not.toHaveBeenCalled();
+  });
+
+  it('returns 404 when getting a missing person', async () => {
+    tribe.getPerson.mockResolvedValue(null);
+
+    const response = await request(app).get(`/api/tribe/people/${PERSON_ID}`);
+
+    expect(response.status).toBe(404);
+  });
+
+  it('returns 404 when updating a missing person', async () => {
+    tribe.updatePerson.mockResolvedValue(null);
+
+    const response = await request(app)
+      .put(`/api/tribe/people/${PERSON_ID}`)
+      .send({ nextMove: 'Coffee' });
+
+    expect(response.status).toBe(404);
+    expect(emit).not.toHaveBeenCalledWith('tribe:changed', expect.anything());
+  });
+
+  it('returns 404 when deleting a missing person', async () => {
+    tribe.deletePerson.mockResolvedValue(false);
+
+    const response = await request(app).delete(`/api/tribe/people/${PERSON_ID}`);
+
+    expect(response.status).toBe(404);
+    expect(emit).not.toHaveBeenCalledWith('tribe:changed', expect.anything());
   });
 });
