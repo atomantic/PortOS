@@ -43,8 +43,7 @@ import {
   resolveRegenStrengthDefault,
 } from '../services/imageGen/regen.js';
 import { purgeImageRefFromAllUniverses } from '../services/universeCanon.js';
-import { findOrCreateUniverseCollection } from '../services/mediaCollections.js';
-import { randomUUID } from 'crypto';
+import { buildUniverseRunTag } from '../services/universeRunTag.js';
 
 const router = Router();
 
@@ -313,27 +312,19 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
   // auto-file) rather than failing the user's generation over a side-effect.
   if (params.universeRun?.universeId) {
     const { universeId, universeName, label, category, entryRef } = params.universeRun;
-    const collection = await findOrCreateUniverseCollection({
+    // The helper provisions the universe collection (best-effort) and assembles
+    // the tag. It preserves `entryRef` even when provisioning fails — the
+    // durable `imageRefs[]` append (#1395) must not depend on the gallery
+    // collection existing — and returns `undefined` (dropping the tag) only
+    // when there's nothing left to do (no collection AND no entryRef).
+    params.universeRun = await buildUniverseRunTag({
       universeId,
       universeName,
-      description: `Universe Builder renders for "${universeName}"`,
-    }).catch((err) => {
-      console.error(`❌ image-gen → universe collection provision failed: ${err?.message || err}`);
-      return null;
+      label,
+      category,
+      entryRef,
+      errorContext: 'image-gen → universe collection provision failed',
     });
-    // Preserve `entryRef` even when collection provisioning fails — the durable
-    // `imageRefs[]` append (#1395) must not depend on the gallery collection
-    // existing. Drop the tag entirely only when there's nothing left to do
-    // (no collection to file into AND no entry to append to).
-    params.universeRun = (collection || entryRef)
-      ? {
-          universeId,
-          ...(collection ? { runId: randomUUID(), collectionId: collection.id } : {}),
-          ...(label ? { label } : {}),
-          ...(category ? { category } : {}),
-          ...(entryRef ? { entryRef } : {}),
-        }
-      : undefined;
   }
 
   // Collapse the catalog-attach params into a single job tag the completion

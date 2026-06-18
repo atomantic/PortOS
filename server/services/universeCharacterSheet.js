@@ -15,7 +15,6 @@
 
 import { copyFile, unlink } from 'fs/promises';
 import { join, basename } from 'path';
-import { randomUUID } from 'crypto';
 import { PATHS, ensureDir, shortId, assertSafeFilename } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { getSettings } from './settings.js';
@@ -23,7 +22,7 @@ import { getUniverse, updateUniverse } from './universeBuilder.js';
 import { buildStyleClause, purgeReferenceSheetFromAllUniverses } from './universeCanon.js';
 import { getImageModels } from '../lib/mediaModels.js';
 import { enqueueJob, mediaJobEvents } from './mediaJobQueue/index.js';
-import { findOrCreateUniverseCollection } from './mediaCollections.js';
+import { buildUniverseRunTag } from './universeRunTag.js';
 import { IMAGE_GEN_MODE } from './imageGen/modes.js';
 import {
   flattenStats, flattenPalette, flattenWardrobes, flattenProps, flattenNamedList,
@@ -476,22 +475,15 @@ export async function renderCharacterReferenceSheet(universeId, entryId, options
   // into the same "Universe: <name>" bucket as the rest of the universe's
   // concept art. Bookkeeping is best-effort — if provisioning fails we still
   // run the render, just without the collection-filing side-effect.
-  const collection = await findOrCreateUniverseCollection({
+  const universeRun = await buildUniverseRunTag({
     universeId: universe.id,
     universeName: universe.name,
-    description: `Universe Builder renders for "${universe.name}"`,
-  }).catch((err) => {
-    console.error(`❌ character sheet → universe collection provision failed: ${err?.message || err}`);
-    return null;
+    label: character.name,
+    category: variantConfig.collectionCategory,
+    errorContext: 'character sheet → universe collection provision failed',
   });
-  if (collection) {
-    params.universeRun = {
-      runId: randomUUID(),
-      universeId: universe.id,
-      collectionId: collection.id,
-      category: variantConfig.collectionCategory,
-      label: character.name,
-    };
+  if (universeRun) {
+    params.universeRun = universeRun;
   }
 
   // Enqueue through mediaJobQueue so the render serializes through the right
