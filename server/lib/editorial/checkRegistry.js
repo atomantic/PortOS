@@ -950,6 +950,10 @@ export const EDITORIAL_CHECKS = [
       const sectionCount = sections.length;
       const rows = buildRosterAppearances(ctx);
       const findings = [];
+      // All roster findings share category 'casting' and the same shape — collapse
+      // the per-block boilerplate (mirrors arc.ticking-clock-hygiene's `flag`).
+      const flag = ({ severity, location, problem, suggestion, anchorQuote = '', issueNumber = null }) =>
+        findings.push({ severity, category: 'casting', location, problem, suggestion, anchorQuote, issueNumber });
       // A long story makes a one-issue-only named character read as noise more
       // clearly than a one-shot in a 2-issue story — escalate above the low floor.
       const lengthBump = sectionCount >= 8 ? 1 : 0;
@@ -961,9 +965,8 @@ export const EDITORIAL_CHECKS = [
         for (const r of rows) {
           const n = r.appearedInIssues.length;
           if (n === 0 || n >= minAppear) continue;
-          findings.push({
+          flag({
             severity: escalateSeverity(ctx.severityDefault, lengthBump),
-            category: 'casting',
             location: r.firstIssueNumber != null ? `Issue ${r.firstIssueNumber}: ${r.name}` : `Character: ${r.name}`,
             problem: `"${r.name}" is a named character who appears in only ${n} issue${n === 1 ? '' : 's'} (${r.appearedInIssues.join(', ')}) — a named body readers are told to remember but who never recurs.`,
             suggestion: `Cut "${r.name}", merge them into another character, or leave them unnamed (a description) unless they are meant to recur.`,
@@ -982,9 +985,8 @@ export const EDITORIAL_CHECKS = [
           // Low by default; escalate to medium only when crowding is well over the
           // threshold (≥1.5×) — it's a pacing nudge, not a correctness error.
           const heavy = inFirst.length >= Math.ceil(maxFirst * 1.5);
-          findings.push({
+          flag({
             severity: escalateSeverity(ctx.severityDefault, heavy ? 1 : 0),
-            category: 'casting',
             location: `Issue ${firstNumber} (opening)`,
             problem: `${inFirst.length} named characters appear in the opening issue (${inFirst.join(', ')}) — more than ${maxFirst}. Too many introductions at once makes it hard for readers to tell who matters.`,
             suggestion: 'Introduce fewer named characters up front — delay, merge, or leave some unnamed until readers have anchored to the leads.',
@@ -1000,14 +1002,11 @@ export const EDITORIAL_CHECKS = [
       if (castPerIssue > 0 && sectionCount > 0) {
         const appearingCast = rows.filter((r) => r.appearedInIssues.length > 0).length;
         if (appearingCast > castPerIssue * sectionCount) {
-          findings.push({
+          flag({
             severity: ctx.severityDefault,
-            category: 'casting',
             location: 'Series roster',
             problem: `The drafted story has ${appearingCast} named characters across ${sectionCount} issue${sectionCount === 1 ? '' : 's'} (about ${(appearingCast / sectionCount).toFixed(1)} per issue) — a large roster relative to its length can overwhelm readers.`,
             suggestion: 'Consider consolidating minor named characters or spreading their introductions across more of the story.',
-            anchorQuote: '',
-            issueNumber: null,
           });
         }
       }
