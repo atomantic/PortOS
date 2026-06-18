@@ -21,7 +21,6 @@ import {
   editorialPriorFindingsDigest,
   EDITORIAL_PRIOR_DIGEST_MAX,
   EDITORIAL_PRIOR_DIGEST_CHARS,
-  EDITORIAL_PRIOR_DIGEST_TOKENS,
 } from './checkRegistry.js';
 
 const NAMING = 'naming.dissimilar-names';
@@ -568,13 +567,12 @@ describe('cross-chunk continuity digest (#1383)', () => {
       expect(digest).toMatch(/\(\+5 more earlier findings\)/);
     });
 
-    it('caps the whole digest to EDITORIAL_PRIOR_DIGEST_CHARS so the reserve is an exact upper bound', () => {
+    it('caps the whole digest to EDITORIAL_PRIOR_DIGEST_CHARS so it stays within the safety margin', () => {
       const huge = Array.from({ length: EDITORIAL_PRIOR_DIGEST_MAX }, (_, i) => ({
         issueNumber: i + 1, category: 'continuity', problem: 'x'.repeat(500),
       }));
       const digest = editorialPriorFindingsDigest(huge);
       expect(digest.length).toBeLessThanOrEqual(EDITORIAL_PRIOR_DIGEST_CHARS);
-      expect(EDITORIAL_PRIOR_DIGEST_TOKENS * 4).toBeGreaterThanOrEqual(EDITORIAL_PRIOR_DIGEST_CHARS);
     });
 
     it('keeps the trailing --- separator intact even when the body overflows the cap', () => {
@@ -625,8 +623,10 @@ describe('cross-chunk continuity digest (#1383)', () => {
     expect(seen[1]).toContain('EARLIER parts of this manuscript');
     expect(seen[1]).toContain('tense slip in chapter one');
     expect(seen[1].endsWith('CHUNK_TWO')).toBe(true);
-    // The digest reserve is folded into the chunk-planner overhead.
-    expect(overhead).toBeGreaterThanOrEqual(EDITORIAL_PRIOR_DIGEST_TOKENS);
+    // The style-guide expectations are budgeted as prompt overhead; the digest is
+    // NOT reserved (it rides the safety margin, so the first/only chunk keeps its
+    // full budget).
+    expect(overhead).toBeGreaterThan(0);
   });
 
   it('objects.unmotivated-interaction feeds the prior-chunk digest to later chunks', async () => {
