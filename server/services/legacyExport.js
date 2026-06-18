@@ -40,12 +40,16 @@ const BRAIN_LEGACY_TYPES = ['people', 'projects', 'ideas', 'journals', 'links'];
 
 // Health metrics surfaced in the summary, with the human label used in Markdown.
 // Each value carries its own freshness date (last sync) as the source caveat.
+// Keys are the canonical stored metric names — `heart_rate_variability_sdnn`
+// (the alias in appleHealthQuery resolves it to `heart_rate_variability` too).
+// Only metrics whose points expose a numeric `qty`/`Avg`/`value` are listed:
+// `getLatestMetricValues` can't extract sleep (stored as `totalSleep`), so sleep
+// is left to the dedicated health follow-up rather than perpetually reported absent.
 const HEALTH_METRICS = [
   ['resting_heart_rate', 'Resting heart rate', 'bpm'],
-  ['heart_rate_variability', 'Heart rate variability', 'ms'],
+  ['heart_rate_variability_sdnn', 'Heart rate variability', 'ms'],
   ['weight_body_mass', 'Body mass', ''],
   ['step_count', 'Daily steps', ''],
-  ['sleep_analysis', 'Sleep', ''],
   ['vo2_max', 'VO₂ max', ''],
 ];
 
@@ -74,8 +78,14 @@ export function redactSecrets(text) {
     .replace(/\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g, '[REDACTED]')
     // Bearer tokens in headers
     .replace(/\bBearer\s+[A-Za-z0-9._-]{20,}\b/g, 'Bearer [REDACTED]')
-    // "password": "...", password=..., api_key: ...
-    .replace(/("?(?:password|passwd|secret|api[_-]?key|token)"?\s*[:=]\s*"?)([^"\s,}]{6,})/gi, '$1[REDACTED]');
+    // PEM private-key blocks
+    .replace(/-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----/g, '[REDACTED PRIVATE KEY]')
+    // Quoted config/JSON secret assignments — `"password": "..."`, `api_key='...'`.
+    // Require the value to be QUOTE-DELIMITED so free-text prose like
+    // `my secret: I never learned to swim` is not mangled (a real false-positive
+    // risk in autobiography/journal content). Token-shaped secrets pasted into
+    // prose are already caught by the specific patterns above, quoted or not.
+    .replace(/(["']?(?:password|passwd|secret|api[_-]?key|token)["']?\s*[:=]\s*)(["'])[^"'\n]{6,}\2/gi, '$1$2[REDACTED]$2');
 }
 
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
@@ -259,7 +269,7 @@ function buildIdentityProfileMd(d) {
   }
   if (d.genome?.uploaded) {
     out.push('## Genome\n');
-    const g = [`- **SNPs analyzed**: ${num(d.genome.snpCount)?.toLocaleString() || 'unknown'}`];
+    const g = [`- **SNPs analyzed**: ${num(d.genome.snpCount) != null ? d.genome.snpCount.toLocaleString() : 'unknown'}`];
     if (d.genome.markerCount) g.push(`- **Markers tracked**: ${d.genome.markerCount}`);
     out.push(g.join('\n'));
   }
@@ -375,8 +385,12 @@ function titleize(s) {
     .replace(/^./, c => c.toUpperCase());
 }
 
+// Serialize to JSON with the SAME secret redaction the Markdown renderers
+// apply — the `data/*.json` mirror is the half of the bundle most likely to be
+// machine-scraped, so a token pasted into a note must not ride along in it
+// either. The replacer touches every string value.
 function jsonFile(obj) {
-  return JSON.stringify(obj, null, 2);
+  return JSON.stringify(obj, (_key, value) => (typeof value === 'string' ? redactSecrets(value) : value), 2);
 }
 
 // === Bundle assembly ===

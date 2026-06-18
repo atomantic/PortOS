@@ -62,9 +62,25 @@ describe('redactSecrets', () => {
   it('masks a GitHub PAT', () => {
     expect(redactSecrets('ghp_0123456789abcdefghijklmnopqrstuvwx')).toBe('[REDACTED]');
   });
-  it('masks a password assignment', () => {
+  it('masks a quoted password/secret assignment', () => {
     expect(redactSecrets('"password": "hunter2hunter2"')).toContain('[REDACTED]');
     expect(redactSecrets('"password": "hunter2hunter2"')).not.toContain('hunter2');
+    expect(redactSecrets("api_key='abcdef123456'")).not.toContain('abcdef123456');
+  });
+  it('masks a PEM private-key block', () => {
+    const pem = '-----BEGIN PRIVATE KEY-----\nMIIEv...base64...\n-----END PRIVATE KEY-----';
+    expect(redactSecrets(pem)).toBe('[REDACTED PRIVATE KEY]');
+  });
+  it('does NOT mangle free-text prose that mentions secret/password words', () => {
+    // Regression for the tightened quoted-value rule — these are autobiography/journal
+    // sentences, not config, and must survive verbatim.
+    for (const prose of [
+      'My biggest secret: I never learned to swim properly.',
+      'The secret: always be kind to strangers.',
+      'password = freedom, in my philosophy of life.',
+    ]) {
+      expect(redactSecrets(prose)).toBe(prose);
+    }
   });
   it('leaves ordinary prose untouched', () => {
     const prose = 'I grew up near the ocean and loved skateboarding.';
@@ -113,13 +129,26 @@ describe('buildBundleFiles', () => {
     expect(files.some(f => f.name.startsWith('autobiography/'))).toBe(false);
   });
 
-  it('redacts secrets pasted into brain content', () => {
+  it('redacts secrets pasted into brain content — in BOTH the Markdown and the JSON mirror', () => {
     const d = sampleData();
     d.brain.journals[0].content = 'token ghp_0123456789abcdefghijklmnopqrstuvwx end';
     const { files } = buildBundleFiles(d);
     const journal = files.find(f => f.name === 'brain/journals.md');
     expect(journal.data.toString()).toContain('[REDACTED]');
     expect(journal.data.toString()).not.toContain('ghp_0123');
+    // The machine-readable mirror must not leak it either (review finding).
+    const brainJson = files.find(f => f.name === 'data/brain.json');
+    expect(brainJson.data.toString()).toContain('[REDACTED]');
+    expect(brainJson.data.toString()).not.toContain('ghp_0123');
+  });
+
+  it('surfaces HRV stored under the canonical sdnn key', () => {
+    const d = sampleData();
+    d.health.heart_rate_variability_sdnn = { value: 45, date: '2026-06-11' };
+    const { files, sections } = buildBundleFiles(d);
+    expect(sections.health.metrics).toBeGreaterThanOrEqual(2);
+    const health = files.find(f => f.name === 'health/health-summary.md');
+    expect(health.data.toString()).toMatch(/Heart rate variability.*45/);
   });
 
   it('includes a health source caveat', () => {
