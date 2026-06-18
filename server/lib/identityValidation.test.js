@@ -13,6 +13,7 @@ import {
   addMilestoneInputSchema,
   aiProviderInputSchema,
   acceptPhasesInputSchema,
+  acceptDecompositionInputSchema,
   addProgressEntrySchema,
   addTodoInputSchema,
   updateTodoInputSchema,
@@ -228,6 +229,37 @@ describe('identityValidation', () => {
         title: `P${i}`, targetDate: '2030-01-01', order: i
       }));
       expect(acceptPhasesInputSchema.safeParse({ phases }).success).toBe(false);
+    });
+  });
+
+  describe('acceptDecompositionInputSchema', () => {
+    it('accepts a milestone with nested tasks', () => {
+      const r = acceptDecompositionInputSchema.safeParse({
+        milestones: [{ title: 'M1', targetDate: '2030-01-01', order: 0,
+          tasks: [{ title: 'T1', priority: 'high', estimateMinutes: 60 }] }]
+      });
+      expect(r.success).toBe(true);
+    });
+
+    it('tolerates null targetDate and null estimateMinutes (common LLM output)', () => {
+      const r = acceptDecompositionInputSchema.safeParse({
+        milestones: [{ title: 'M1', targetDate: null, order: 0,
+          tasks: [{ title: 'T1', estimateMinutes: null }] }]
+      });
+      expect(r.success).toBe(true);
+      expect(r.data.milestones[0].tasks[0].priority).toBe('medium');
+    });
+
+    it('defaults tasks to an empty array when omitted', () => {
+      const r = acceptDecompositionInputSchema.safeParse({
+        milestones: [{ title: 'M1', order: 0 }]
+      });
+      expect(r.success).toBe(true);
+      expect(r.data.milestones[0].tasks).toEqual([]);
+    });
+
+    it('rejects an empty milestones array', () => {
+      expect(acceptDecompositionInputSchema.safeParse({ milestones: [] }).success).toBe(false);
     });
   });
 

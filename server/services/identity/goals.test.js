@@ -140,6 +140,16 @@ describe('goal decomposition', () => {
     expect(await completeMilestoneTask('goal-1', msId, 'missing')).toBeNull();
   });
 
+  it('acceptGoalDecomposition tolerates null estimateMinutes / targetDate from the LLM', async () => {
+    const goal = await acceptGoalDecomposition('goal-1', [
+      { title: 'Outline', order: 0, targetDate: null, tasks: [
+        { title: 'Beat sheet', priority: 'high', estimateMinutes: null }
+      ] }
+    ]);
+    expect(goal.milestones[0].targetDate).toBeNull();
+    expect(goal.milestones[0].tasks[0].estimateMinutes).toBeNull();
+  });
+
   it('getGoals lazily backfills milestone.tasks = [] on legacy milestones', async () => {
     h.goalsData.goals[0].milestones = [{ id: 'ms-legacy', title: 'Old', completedAt: null }];
     const data = await getGoals();
