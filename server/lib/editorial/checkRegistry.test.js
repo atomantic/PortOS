@@ -455,6 +455,15 @@ describe('roster.economy — deterministic check', () => {
     expect(findings).toEqual([]); // 0 appearances → nothing to flag
   });
 
+  it('matches names that end in punctuation as whole tokens (lookaround, not \\b)', () => {
+    // A trailing \b can't match a token ending in "." — lookarounds handle any edge.
+    const findings = runRoster(
+      [{ name: 'J.R.' }, { name: 'Aria' }],
+      [sec(1, 'J.R. arrived at dawn.'), sec(2, 'Aria mused; Aria left.')],
+    );
+    expect(throwaways(findings).some((f) => /"J\.R\."/.test(f.problem))).toBe(true);
+  });
+
   it('counts appearances via aliases, attributing to the canonical name', () => {
     const findings = runRoster(
       [{ name: 'Robert', aliases: ['Bob'] }, { name: 'Aria' }],

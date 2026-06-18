@@ -670,7 +670,7 @@ function characterNameTokens(c) {
   return [...new Set(tokens)];
 }
 
-// A case-insensitive, word-bounded matcher for a character's tokens (built once
+// A case-insensitive, whole-token matcher for a character's tokens (built once
 // per character and reused across every section so a long manuscript isn't
 // re-compiling a regex per section), or null when there are no tokens.
 function characterMatcher(tokens) {
@@ -678,7 +678,11 @@ function characterMatcher(tokens) {
   // Longest-first so a token that's a prefix of another can't shadow it under
   // leftmost-match alternation (cosmetic for .test, but keeps intent clear).
   const alt = tokens.slice().sort((a, b) => b.length - a.length).map(escapeRegExp).join('|');
-  return new RegExp(`\\b(?:${alt})\\b`, 'i');
+  // Lookarounds, not \b: a token that begins or ends with punctuation ("Mr.",
+  // "T.A.R.D.I.S.", "J.R.") has no word char at that edge, so a leading/trailing
+  // \b would never match it in prose. (?<!\w)…(?!\w) enforces whole-token matching
+  // at any edge while still rejecting substrings (Sam ≠ "Samuel").
+  return new RegExp(`(?<!\\w)(?:${alt})(?!\\w)`, 'i');
 }
 
 // One row per NAMED canon character: { id, name, locked, appearedInIssues,
