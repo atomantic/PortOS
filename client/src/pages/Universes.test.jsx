@@ -125,6 +125,20 @@ describe('Universes page — row thumbnail', () => {
     expect(img.getAttribute('src')).not.toContain('contact-sheet.png');
   });
 
+  it('treats an empty styleImageRefs array like a missing one and falls back to the media image', async () => {
+    // Key-present-but-empty must behave like key-absent (the `refs.length` guard),
+    // not crash on `refs[refs.length - 1]` (which would yield refs[-1] → undefined).
+    api.listUniverses.mockResolvedValue([
+      { id: 'u3', name: 'Void', styleImageRefs: [], updatedAt: '2026-06-01T00:00:00Z' },
+    ]);
+    api.listMediaCollections.mockResolvedValue([
+      { universeId: 'u3', items: [{ kind: 'image', ref: 'media.png', addedAt: '2026-06-10T00:00:00Z' }] },
+    ]);
+    const { container } = renderPage();
+    await waitFor(() => expect(screen.getAllByText('Void').length).toBeGreaterThan(0));
+    expect(container.querySelector('img').getAttribute('src')).toContain('media.png');
+  });
+
   it('falls back to the latest media-collection image when no base style image exists', async () => {
     api.listUniverses.mockResolvedValue([
       { id: 'u2', name: 'Reality', updatedAt: '2026-06-01T00:00:00Z' },
