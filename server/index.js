@@ -108,6 +108,7 @@ import universeBuilderRoutes from './routes/universeBuilder.js';
 import authorsRoutes from './routes/authors.js';
 import conflictJournalRoutes from './routes/conflictJournal.js';
 import { initUniverseBuilderCollectionHook } from './services/universeBuilderCollectionHook.js';
+import { initCatalogImageAttachHook } from './services/catalogImageAttachHook.js';
 import { initComicPagesFilenameHook } from './services/pipeline/comicPagesFilenameHook.js';
 import { initStoryboardsFilenameHook } from './services/pipeline/storyboardsFilenameHook.js';
 import { initSeasonCoverFilenameHook } from './services/pipeline/seasonCoverFilenameHook.js';
@@ -757,6 +758,10 @@ ensureSelf()
     // Universe Builder needs the media job queue running before it can listen
     // for `completed` events — so initialize the hook here.
     initUniverseBuilderCollectionHook();
+    // Catalog image-attach hook — durably files a queued render onto its target
+    // ingredient on completion, even if the editor page unmounted mid-render
+    // (#1359). Also depends on the media job queue being loaded.
+    initCatalogImageAttachHook();
     // Pipeline filename hooks — stamp `filename` onto stage records on
     // media-job completion so the UI can still render them after the
     // 24h media-job archive TTL elapses.

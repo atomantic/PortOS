@@ -115,6 +115,16 @@ const generateSchema = z.object({
     label: z.string().max(200).optional(),
     category: z.string().max(64).optional(),
   }).optional(),
+  // Durable catalog attach (#1359). When present, the mediaJobQueue completion
+  // hook (catalogImageAttachHook) files the finished render onto this catalog
+  // ingredient even if the page that started the render has since unmounted —
+  // so a long queued local/Codex render is no longer lost to navigation.
+  // `catalogMediaKind` forces portrait/reference; omitted = auto (first image →
+  // portrait, later → reference, mirroring the client's optimistic path). Only
+  // the async (local/codex) lanes need this — the synchronous external SD-API
+  // path returns the filename to the client, which attaches it directly.
+  catalogIngredientId: z.string().min(1).max(200).optional(),
+  catalogMediaKind: z.enum(['portrait', 'reference']).optional(),
 }).refine(refineImagePixelCap, { message: PIXEL_CAP_MESSAGE, path: ['width'] });
 
 // JSON callers (SDAPI bridge, avatar route, the Imagine page's old payload
@@ -283,6 +293,19 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
       ? { runId: randomUUID(), universeId, collectionId: collection.id, label, category }
       : undefined;
   }
+
+  // Collapse the catalog-attach params into a single job tag the completion
+  // hook understands (#1359). Folded into `params` so it rides into both the
+  // local and codex `enqueueJob` branches below via `...params`; the raw fields
+  // are dropped so persisted job.params carries only the canonical tag.
+  if (params.catalogIngredientId) {
+    params.catalogAttach = {
+      ingredientId: params.catalogIngredientId,
+      ...(params.catalogMediaKind ? { kind: params.catalogMediaKind } : {}),
+    };
+  }
+  delete params.catalogIngredientId;
+  delete params.catalogMediaKind;
 
   // Multer's tmp upload is no longer needed once we've copied it into
   // PATHS.images. Use res.on('close') so the temp files are cleaned up whether
