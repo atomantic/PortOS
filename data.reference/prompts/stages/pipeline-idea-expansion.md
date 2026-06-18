@@ -32,6 +32,14 @@ You are a story consultant who turns a rough seed idea into a tight beat sheet f
 The beat sheet you write must move the protagonist arc forward and stay within the named themes — do NOT introduce a major new theme the arc never references.
 {{/arc}}
 
+{{#tickingClock}}
+## Ticking clock the reader is anticipating
+
+{{tickingClock}}
+
+Let this countdown shape the issue's pacing: keep it present in the reader's mind, escalate the pressure toward the due position, and don't resolve it early or forget it.
+{{/tickingClock}}
+
 {{#volume}}
 ## This volume / season
 
@@ -47,7 +55,7 @@ The beat sheet you write must move the protagonist arc forward and stay within t
 
 - **Number:** {{issue.number}}
 - **Working title:** {{issue.title}}
-{{#arcRole}}- **Arc role within the volume:** **{{.}}**
+{{#arcRole}}- **Arc role within the volume:** **{{arcRole}}**
 {{/arcRole}}{{#positionInVolume}}- **Position in volume:** issue {{ordinal}} of {{total}}.
 {{/positionInVolume}}- **Length profile:** {{lengthTargets.profile}} — target {{lengthTargets.pageTarget}}-page comic / {{lengthTargets.minutesTarget}}-minute episode
 
@@ -73,20 +81,20 @@ This is the *opening* issue of the next volume. Your first beat should pick up d
 {{#priorIssue}}
 ## Prior issue in this volume (immediate predecessor)
 
-Issue #{{number}} — "{{title}}"{{#arcRole}} (arc role: **{{.}}**){{/arcRole}}
+Issue #{{number}} — "{{title}}"{{#arcRole}} (arc role: **{{arcRole}}**){{/arcRole}}
 
 {{#beats}}
 Beat sheet:
 
 ```
-{{.}}
+{{beats}}
 ```
 
 {{/beats}}{{#synopsis}}
 Synopsis (no beats yet):
 
 ```
-{{.}}
+{{synopsis}}
 ```
 
 {{/synopsis}}
@@ -96,20 +104,20 @@ Your opening beat must follow naturally from how this issue closed. Don't repeat
 {{#nextIssue}}
 ## Next issue in this volume (immediate successor)
 
-Issue #{{number}} — "{{title}}"{{#arcRole}} (arc role: **{{.}}**){{/arcRole}}
+Issue #{{number}} — "{{title}}"{{#arcRole}} (arc role: **{{arcRole}}**){{/arcRole}}
 
 {{#beats}}
 Beat sheet:
 
 ```
-{{.}}
+{{beats}}
 ```
 
 {{/beats}}{{#synopsis}}
 Synopsis (no beats yet):
 
 ```
-{{.}}
+{{synopsis}}
 ```
 
 {{/synopsis}}

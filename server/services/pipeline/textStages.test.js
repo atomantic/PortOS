@@ -249,6 +249,39 @@ describe('pipeline text stage generator', () => {
     });
   });
 
+  it('idea context: surfaces the ticking clock as a rendered string when enabled', async () => {
+    const { series, issue } = await seed();
+    await seriesSvc.updateSeries(series.id, {
+      arc: {
+        tickingClock: {
+          enabled: true,
+          label: 'The tide returns',
+          kind: 'deadline',
+          stakes: 'the foundry floods',
+          dueAtArcPosition: 0.9,
+        },
+      },
+    });
+    await textStages.generateStage(issue.id, 'idea');
+    const ctx = ctxFromCall(llmCalls[0]);
+    expect(typeof ctx.tickingClock).toBe('string');
+    expect(ctx.tickingClock).toContain('The tide returns');
+    expect(ctx.tickingClock).toContain('the foundry floods');
+    // A clock-only arc carries no logline/themes — the clock must still surface
+    // even though the arc text block is omitted.
+    expect(ctx.arc).toBe(null);
+  });
+
+  it('idea context: omits the ticking clock when it is toggled off', async () => {
+    const { series, issue } = await seed();
+    await seriesSvc.updateSeries(series.id, {
+      arc: { logline: 'L', tickingClock: { enabled: false, label: 'draft clock' } },
+    });
+    await textStages.generateStage(issue.id, 'idea');
+    const ctx = ctxFromCall(llmCalls[0]);
+    expect(ctx.tickingClock).toBe(null);
+  });
+
   it('idea context: volume + position-in-volume + arcRole when issue is grouped', async () => {
     const { series } = await seed();
     await seriesSvc.updateSeries(series.id, { arc: { logline: 'L' } });

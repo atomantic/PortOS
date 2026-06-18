@@ -25,6 +25,7 @@ export const ACCEPTED_OLD_MD5 = {
     '1ee44cf95851ff8debf18729ebcd40b4', // post-004 / pre-025
     '1f3c5d077a5ef9a4b610335d5e3edd9c', // post-025 / pre-054
     'b5c47c94ffc74637983c95761ab0c66c', // post-054 / pre-054-fence
+    '49a208628290543ba2607a5ed48fdc8c', // post-054-fence / pre-098
   ],
   'pipeline-prose.md': [
     'bfea5aeeb471aae9749baee765b473a7', // pre-003 (original)
@@ -48,7 +49,7 @@ export const ACCEPTED_OLD_MD5 = {
 };
 
 export const NEW_SHIPPED_MD5 = {
-  'pipeline-idea-expansion.md':  '49a208628290543ba2607a5ed48fdc8c', // post-054-fence
+  'pipeline-idea-expansion.md':  'c50f016639d41cd8244f5ff13429f997', // post-098 (ticking clock + {{.}} fixes)
   'pipeline-prose.md':           '84523d531eeafa60959c65c553b2563f', // post-054-fence
   'pipeline-comic-script.md':    'e9ee70bf18888492edada6633cd9928a', // post-063
   'pipeline-tv-script.md':       '376f779f4687b598f1c92ca4e770fd5a', // retired upstream (no data.reference)

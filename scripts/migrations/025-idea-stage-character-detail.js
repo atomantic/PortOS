@@ -31,12 +31,13 @@ export const ACCEPTED_OLD_MD5 = {
     'aee25112b2c596f643b17c559b772c22', // pre-003, still in setup-data.js OLD list
     '1f3c5d077a5ef9a4b610335d5e3edd9c', // post-025 / pre-054
     'b5c47c94ffc74637983c95761ab0c66c', // post-054 / pre-054-fence
+    '49a208628290543ba2607a5ed48fdc8c', // post-054-fence / pre-098
   ],
 };
 
 // New shipped hash — what data.reference carries post-migration.
 export const NEW_SHIPPED_MD5 = {
-  'pipeline-idea-expansion.md': '49a208628290543ba2607a5ed48fdc8c', // post-054-fence
+  'pipeline-idea-expansion.md': 'c50f016639d41cd8244f5ff13429f997', // post-098 (ticking clock + {{.}} fixes)
 };
 
 const { applyMigration, up } = makePromptReplaceMigration({

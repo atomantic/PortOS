@@ -24,6 +24,7 @@ import { compareIssuesByPosition, NO_LINKED_UNIVERSE_PLACEHOLDER } from './arcPl
 import { computeIssueTargets } from '../../lib/issueLength.js';
 import { renderEntitiesSummary } from '../../lib/universePromptRenderers.js';
 import { composeStyleNotes } from '../../lib/styleGuide.js';
+import { renderTickingClock } from '../../lib/storyArc.js';
 
 const STAGE_TO_TEMPLATE = Object.freeze({
   idea: 'pipeline-idea-expansion',
@@ -93,9 +94,18 @@ async function buildIdeaContextAugment(series, issue) {
       }
     : null;
 
+  // Ticking clock — a pre-rendered guidance string (or null when the clock is
+  // absent or toggled off). Surfaced as its own template section, independent
+  // of `arcBlock`: a clock is the author's explicit decision that the story
+  // *has* a countdown, so it must steer the beats even on a clock-only arc with
+  // no logline/summary/themes. `renderTickingClock` already gates on
+  // `tickingClock.enabled === true`.
+  const tickingClock = renderTickingClock(arc?.tickingClock);
+
   if (!season) {
     return {
       arc: arcBlock,
+      tickingClock,
       volume: null,
       arcRole: issue.arcRole || null,
       positionInVolume: null,
@@ -139,6 +149,7 @@ async function buildIdeaContextAugment(series, issue) {
 
   return {
     arc: arcBlock,
+    tickingClock,
     volume: {
       number: season.number,
       title: season.title || '',

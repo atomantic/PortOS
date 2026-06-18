@@ -24,7 +24,7 @@ import { makePromptReplaceMigration } from './_lib.js';
 
 // Pre-change shipped hashes (the source-slot templates before this change).
 export const ACCEPTED_OLD_MD5 = {
-  'pipeline-idea-expansion.md': ['1f3c5d077a5ef9a4b610335d5e3edd9c', 'b5c47c94ffc74637983c95761ab0c66c'],
+  'pipeline-idea-expansion.md': ['1f3c5d077a5ef9a4b610335d5e3edd9c', 'b5c47c94ffc74637983c95761ab0c66c', '49a208628290543ba2607a5ed48fdc8c'],
   'pipeline-prose.md':          ['d1f8e3f1d214725b5aa67f309a81cd7d', 'bef1bc2767b78f585f2bd89f3d615130'],
   'pipeline-comic-script.md':   ['133d200d069c2e8173b7c129eea58f53', 'e530fc76b89cedaef848ad7ec99c934c', 'dea7d497d1cb38e7574f236f4ff8e644'],
   'pipeline-teleplay.md':       ['1280ef6b1ad68fa44070ca7478ec2a5f', '2568e14beaa574d43f8018a5def51d04'],
@@ -33,7 +33,7 @@ export const ACCEPTED_OLD_MD5 = {
 // Post-change shipped hashes (the source-agnostic + tilde-fence templates this
 // migration installs). Mirror these into setup-data.js's drift table.
 export const NEW_SHIPPED_MD5 = {
-  'pipeline-idea-expansion.md': '49a208628290543ba2607a5ed48fdc8c',
+  'pipeline-idea-expansion.md': 'c50f016639d41cd8244f5ff13429f997', // post-098 (ticking clock + {{.}} fixes)
   'pipeline-prose.md':          '84523d531eeafa60959c65c553b2563f',
   'pipeline-comic-script.md':   'e9ee70bf18888492edada6633cd9928a',
   'pipeline-teleplay.md':       'afa4215330bf856429d70d7e2f856605',
