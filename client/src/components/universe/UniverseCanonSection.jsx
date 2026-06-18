@@ -38,40 +38,15 @@ import useMounted from '../../hooks/useMounted';
 import { useCanonPatch } from '../../hooks/useCanonPatch';
 import CanonCard from '../pipeline/CanonCard';
 import { pipelineImageCfgToRenderOpts } from '../../lib/pipelineImageDefaults';
+import { buildUniverseSectionRenderTag } from '../../lib/universeRunTag';
 import { universeStylePreset } from '../../lib/universeStylePreset';
 import { descriptorForCanonEntry } from '../../lib/canonPrompt';
 import { applySheetPointer } from '../../lib/sheetPointers';
-import { BIBLE_LIMITS } from '../../lib/bibleLimits';
-
-const capImageRefs = (refs) => (
-  refs.length > BIBLE_LIMITS.IMAGE_REFS_PER_ENTRY_MAX
-    ? refs.slice(-BIBLE_LIMITS.IMAGE_REFS_PER_ENTRY_MAX)
-    : refs
-);
+import { BIBLE_LIMITS, capImageRefs } from '../../lib/bibleLimits';
 
 // A universe's canon list for a kind is sometimes absent on a freshly-created
 // record; normalize to [] so callers can spread/map without a guard each time.
 const getKindList = (u, kindKey) => (Array.isArray(u?.[kindKey]) ? u[kindKey] : []);
-
-// Durable section-local render tag (#1395). Carries the canon `entryRef` so the
-// server-side completion hook (universeBuilderCollectionHook) appends the
-// finished render to the entry's `imageRefs[]` even after this page unmounts —
-// converging these renders onto the same durable path batch renders use, so the
-// client no longer needs to PATCH the universe on completion. `universeName`
-// lets the route resolve the universe gallery collection (renders also land
-// there, matching the base-style probe + batch paths). Returns null when the
-// universe/entry identity isn't resolvable yet (render still proceeds untagged).
-const buildSectionRenderTag = (universe, kindKey, entry) => (
-  universe?.id && universe?.name && entry?.id
-    ? {
-        universeId: universe.id,
-        universeName: universe.name,
-        entryRef: { kind: 'canon', kindKey, id: entry.id },
-        label: entry.name || kindKey,
-        category: kindKey,
-      }
-    : null
-);
 
 // Build an embedded canon entry from a picked catalog ingredient. The
 // ingredient's `payload` already carries the same field names the universe
@@ -426,7 +401,7 @@ export default function UniverseCanonSection({
       universe,
       baseNegative: baseOpts.negativePrompt,
     });
-    const universeRun = buildSectionRenderTag(universe, kind.key, entry);
+    const universeRun = buildUniverseSectionRenderTag(universe, kind.key, entry);
     const queued = await generateImage({
       ...baseOpts,
       prompt: styled.prompt,
@@ -488,7 +463,7 @@ export default function UniverseCanonSection({
       plate.negativePrompt,
       universe ? universeStylePreset(universe) : null,
     );
-    const universeRun = buildSectionRenderTag(universe, kind.key, entry);
+    const universeRun = buildUniverseSectionRenderTag(universe, kind.key, entry);
     const queued = await generateImage({
       ...baseOpts,
       prompt: styled.prompt,
@@ -530,7 +505,7 @@ export default function UniverseCanonSection({
   }, [onUniverseChange]);
 
   // Section-local renders now carry a durable `universeRun.entryRef` tag
-  // (buildSectionRenderTag), so the server-side `appendEntryImageRef` hook
+  // (buildUniverseSectionRenderTag), so the server-side `appendEntryImageRef` hook
   // persists the new filename even if this page unmounts mid-render — the
   // client just clears the spinner and mirrors the ref into the draft (no
   // PATCH). The durable hook is idempotent against this optimistic stamp.

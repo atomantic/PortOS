@@ -4,6 +4,8 @@ import { filterSelectableModels } from '../utils/providers';
 import { composeCanonStyledPrompt } from '../lib/composeStyledPrompt';
 import { descriptorForCanonEntry } from '../lib/canonPrompt';
 import { pipelineImageCfgToRenderOpts } from '../lib/pipelineImageDefaults';
+import { buildUniverseSectionRenderTag } from '../lib/universeRunTag';
+import { capImageRefs } from '../lib/bibleLimits';
 import useImageRenderSettings from '../hooks/useImageRenderSettings';
 import useSingleImageRender from '../hooks/useSingleImageRender';
 import EntryThumbSlot from '../components/universe/EntryThumbSlot';
@@ -24,7 +26,7 @@ import {
   setStorySessionSync, reconcileStorySession, storyStepProgressSseUrl,
   getUniverse, getPipelineSeries, listPipelineIssues,
   analyzeImport, commitImport, retryImporterIssues, IMPORTER_CONTENT_TYPES,
-  getProviders, updateUniverse,
+  getProviders,
 } from '../services/api';
 import ArcCanvas from '../components/pipeline/ArcCanvas';
 import { useArcCanvasSync } from '../hooks/useArcCanvasSync';
@@ -601,7 +603,7 @@ function RefineBox({ onRefine, disabled, busy, running, phase }) {
   );
 }
 
-function StepPanel({ session, universe, series, issues, stepId, locked, onChanged, onSeriesUpdate, onIssuesUpdate, onFlushPending }) {
+function StepPanel({ session, universe, series, issues, stepId, locked, onChanged, onSeriesUpdate, onIssuesUpdate, onFlushPending, onUniverseCharRef }) {
   const { start, busy, phase, op } = useStepStream(session.id, stepId);
   const arc = series?.arc || {};
   const isRunning = (which) => busy && op === which;
@@ -761,7 +763,7 @@ function StepPanel({ session, universe, series, issues, stepId, locked, onChange
     );
   }
   if (stepId === 'characters') {
-    return <StepCharacters session={session} universe={universe} locked={locked} onChanged={onChanged} />;
+    return <StepCharacters session={session} universe={universe} locked={locked} onChanged={onChanged} onUniverseCharRef={onUniverseCharRef} />;
   }
   if (stepId === 'issues') {
     return <IssuesPanel session={session} series={series} issues={issues} onChanged={onChanged} />;
@@ -793,27 +795,21 @@ function StepPanel({ session, universe, series, issues, stepId, locked, onChange
 // `composeCanonStyledPrompt` helper + `useSingleImageRender` jobId lifecycle →
 // EntryThumbSlot (spinner → image), and persists the resulting filename onto
 // the universe canon entry's imageRefs.
-function StepCharacters({ session, universe, locked, onChanged }) {
+function StepCharacters({ session, universe, locked, onChanged, onUniverseCharRef }) {
   const cast = universe?.characters || [];
   const { imageCfg } = useImageRenderSettings();
   const [refiningId, setRefiningId] = useState(null);
   const { start: startRefine, busy: refineBusy, phase: refinePhase } = useStepStream(session.id, 'characters');
 
-  // Section-local renders don't carry a universeRun tag, so the server's
-  // imageRef append hook never fires — persist the filename ourselves. Refetch
-  // the freshest universe before appending so a sibling character's just-
-  // persisted imageRef isn't clobbered by a stale full-array PATCH.
-  const onCharRendered = async (filename, charId) => {
-    if (!universe?.id) return;
-    const fresh = await getUniverse(universe.id, { silent: true }).catch(() => null);
-    const chars = (fresh?.characters) || universe.characters || [];
-    const list = chars.map((e) => (
-      e.id === charId
-        ? { ...e, imageRefs: (e.imageRefs || []).includes(filename) ? e.imageRefs : [...(e.imageRefs || []), filename] }
-        : e
-    ));
-    await updateUniverse(universe.id, { characters: list }, { silent: true }).catch(() => {});
-    onChanged();
+  // Section-local renders now carry a durable `universeRun.entryRef` tag (#1362),
+  // so the server-side `appendEntryImageRef` hook persists the filename onto the
+  // character's `imageRefs[]` — the client no longer refetches + PATCHes (a
+  // full-array `updateUniverse` could clobber a sibling's just-persisted ref
+  // with a stale list). Just mirror the ref into the loaded universe draft
+  // optimistically for an instant thumbnail.
+  const onCharRendered = (filename, charId) => {
+    if (!universe?.id || !filename) return;
+    onUniverseCharRef?.(charId, filename);
   };
 
   // One render per character, keyed by char id. `buildPrompt(charId)` composes
@@ -833,7 +829,13 @@ function StepCharacters({ session, universe, locked, onChanged }) {
     onError: (err) => toast.error(err?.message || 'Render failed'),
   });
 
-  const renderChar = (c) => queueCharRender(imageCfg, c.id);
+  const renderChar = (c) => {
+    // Tag the render so the server auto-files it onto the character's
+    // `imageRefs[]` (#1362). `useSingleImageRender.render` merges the third arg
+    // into the generate payload.
+    const tag = buildUniverseSectionRenderTag(universe, 'characters', c);
+    queueCharRender(imageCfg, c.id, tag ? { universeRun: tag } : undefined);
+  };
 
   const refineChar = (entryId) => {
     if (refineBusy) return;
@@ -1027,6 +1029,27 @@ function StoryBuilderDetail({ storyId, stepParam }) {
     }
     setLoading(false);
   }, [storyId]);
+
+  // Optimistically mirror a completed character render onto the loaded
+  // universe's `imageRefs[]`. The Story Builder characters step now tags its
+  // render with a durable `universeRun.entryRef` (#1362), so the server-side
+  // `appendEntryImageRef` hook persists the ref — this stamp just drives an
+  // instant thumbnail without a refetch (which could race the durable write).
+  // Dedup-guarded + last-N capped to mirror the server append.
+  const applyUniverseCharRef = useCallback((charId, filename) => {
+    if (!charId || !filename) return;
+    setUniverse((cur) => {
+      if (!cur) return cur;
+      const chars = Array.isArray(cur.characters) ? cur.characters : [];
+      const nextChars = chars.map((c) => {
+        if (c?.id !== charId) return c;
+        const refs = Array.isArray(c.imageRefs) ? c.imageRefs : [];
+        if (refs.includes(filename)) return c;
+        return { ...c, imageRefs: capImageRefs([...refs, filename]) };
+      });
+      return { ...cur, characters: nextChars };
+    });
+  }, []);
 
   // ── Embedded ArcCanvas wiring (plotArc step) ──────────────────────────────
   // The Arc Canvas edits series.arc + the issue roadmap in place, so it needs
@@ -1279,6 +1302,7 @@ function StoryBuilderDetail({ storyId, stepParam }) {
               onSeriesUpdate={updateSeriesFromServer}
               onIssuesUpdate={handleIssuesUpdate}
               onFlushPending={flushPending}
+              onUniverseCharRef={applyUniverseCharRef}
             />
 
             {/* Footer: lock + navigation */}
