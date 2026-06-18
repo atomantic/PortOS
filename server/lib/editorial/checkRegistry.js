@@ -87,6 +87,12 @@ export const OBJECT_BACKSTORY_STAGE = 'pipeline-editorial-object-backstory';
 // migrations but NOT setup-data, so the migration is required).
 export const STYLE_CONFORMANCE_STAGE = 'pipeline-editorial-style-conformance';
 
+// Stage name for the protagonist-interiority LLM check (#1294). Ships in
+// data.reference/prompts/stages/ + stage-config.json (fresh installs via
+// setup-data.js) and migrates to existing installs via migration 099 (boot runs
+// migrations but NOT setup-data, so the migration is required).
+export const INTERIORITY_STAGE = 'pipeline-editorial-interiority';
+
 // ---------------------------------------------------------------------------
 // Character-name dissimilarity (#1291) reads cast names + aliases and respects
 // locked entries. The pure similarity primitives live in ./nameSimilarity.js;
@@ -1414,6 +1420,46 @@ export const EDITORIAL_CHECKS = [
     run: (ctx) => runManuscriptLlmCheck(ctx, {
       stage: INFO_DUMPING_STAGE,
       category: 'exposition',
+      overheadTokens: EDITORIAL_PROMPT_OVERHEAD_TOKENS,
+      buildVars: (manuscript) => ({ manuscript }),
+    }),
+  },
+  {
+    id: 'interiority.protagonist',
+    sources: ['manuscript'],
+    label: 'Protagonist interiority (mind / objective / emotion / decision)',
+    description:
+      'Flags POV scenes that move a viewpoint character through events without developing their interiority — their thoughts and feelings, what they want and why, their emotional response to twists, and the reasoning behind their decisions. Infers POV from the prose when it is not explicitly tagged.',
+    scope: 'issue',
+    kind: 'llm',
+    category: 'character',
+    severityDefault: 'medium',
+    defaultEnabled: true,
+    // Reads the stitched manuscript corpus — so the runner only pays the
+    // section-collection I/O when a manuscript-consuming check is enabled.
+    needsManuscript: true,
+    configSchema: z.object({
+      // Cap findings per run so a long manuscript can't flood the review.
+      maxFindings: z.number().int().min(1).max(50).default(12),
+    }),
+    configFields: [
+      {
+        key: 'maxFindings',
+        label: 'Max findings per run',
+        type: 'number',
+        min: 1,
+        max: 50,
+        step: 1,
+        help: 'Cap findings so a long manuscript can not flood the review.',
+      },
+    ],
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    // Per-scene, localized findings (one interiority gap = one scene), so this
+    // stays a plain per-chunk run with no cross-chunk digest — mirrors
+    // prose.info-dumping.
+    run: (ctx) => runManuscriptLlmCheck(ctx, {
+      stage: INTERIORITY_STAGE,
+      category: 'character',
       overheadTokens: EDITORIAL_PROMPT_OVERHEAD_TOKENS,
       buildVars: (manuscript) => ({ manuscript }),
     }),

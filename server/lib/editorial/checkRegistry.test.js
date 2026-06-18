@@ -31,6 +31,7 @@ import {
 
 const NAMING = 'naming.dissimilar-names';
 const INFODUMP = 'prose.info-dumping';
+const INTERIORITY = 'interiority.protagonist';
 
 // A minimal valid stored custom-check definition.
 const customDef = (over = {}) => ({
@@ -270,6 +271,64 @@ describe('prose.info-dumping — LLM check', () => {
     });
     const findings = await getCheck(INFODUMP).run(ctx);
     expect(findings).toHaveLength(5);
+  });
+});
+
+describe('interiority.protagonist — LLM check (#1294)', () => {
+  const wholeCtx = (overrides = {}) => ({
+    manuscript: '# Issue 1\n\nShe walked into the room and sat down.',
+    config: { maxFindings: 12 },
+    severityDefault: 'medium',
+    planManuscriptChunks: async () => [overrides.manuscript ?? '# Issue 1\n\nShe walked into the room and sat down.'],
+    callStagedLLM: async () => ({ content: { findings: [] } }),
+    ...overrides,
+  });
+
+  it('is registered as a manuscript-scoped LLM check', () => {
+    const check = getCheck(INTERIORITY);
+    expect(check.kind).toBe('llm');
+    expect(check.category).toBe('character');
+    expect(check.sources).toEqual(['manuscript']);
+    expect(check.needsManuscript).toBe(true);
+  });
+
+  it('only runs when there is drafted prose to scan', () => {
+    const check = getCheck(INTERIORITY);
+    expect(check.gate({ manuscript: '' })).toBe(false);
+    expect(check.gate({ manuscript: '# Issue 1\n\nprose' })).toBeTruthy();
+  });
+
+  it('passes the planned manuscript chunk to the model and forces the character category', async () => {
+    let seen = null;
+    const ctx = wholeCtx({
+      planManuscriptChunks: async (_stage, opts) => {
+        // The check reserves prompt-overhead budget so the chunker leaves room for the template.
+        expect(opts.overheadTokens).toBeGreaterThan(0);
+        return ['# Issue 2\n\nHe nodded and left.'];
+      },
+      callStagedLLM: async (_stage, vars) => {
+        seen = vars.manuscript;
+        return { content: { findings: [{ severity: 'high', issueNumber: 2, location: 'Issue 2 — Objective', problem: 'No want', anchorQuote: 'He nodded' }] } };
+      },
+    });
+    const findings = await getCheck(INTERIORITY).run(ctx);
+    expect(seen).toBe('# Issue 2\n\nHe nodded and left.');
+    expect(findings).toHaveLength(1);
+    expect(findings[0].category).toBe('character');
+    expect(findings[0].issueNumber).toBe(2);
+    expect(findings[0].location).toBe('Issue 2 — Objective');
+  });
+
+  it('merges findings across chunks and respects maxFindings as a whole-run cap', async () => {
+    const many = (tag) => Array.from({ length: 30 }, (_, i) => ({ severity: 'low', problem: `${tag}-p${i}`, anchorQuote: `${tag}-a${i}` }));
+    let call = 0;
+    const ctx = wholeCtx({
+      config: { maxFindings: 4 },
+      planManuscriptChunks: async () => ['c1', 'c2'],
+      callStagedLLM: async () => ({ content: { findings: many(call++ === 0 ? 'x' : 'y') } }),
+    });
+    const findings = await getCheck(INTERIORITY).run(ctx);
+    expect(findings).toHaveLength(4);
   });
 });
 
