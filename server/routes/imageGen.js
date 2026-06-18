@@ -43,6 +43,8 @@ import {
   resolveRegenStrengthDefault,
 } from '../services/imageGen/regen.js';
 import { purgeImageRefFromAllUniverses } from '../services/universeCanon.js';
+import { findOrCreateUniverseCollection } from '../services/mediaCollections.js';
+import { randomUUID } from 'crypto';
 
 const router = Router();
 
@@ -99,6 +101,20 @@ const generateSchema = z.object({
   cleanC2PA: z.boolean().optional(),
   denoise: z.boolean().optional(),
   autoClean: z.boolean().optional(),
+  // Optional universe-collection target. When present, the route resolves the
+  // universe's media collection server-side and tags the queued job so
+  // `universeBuilderCollectionHook` files the finished render into that
+  // collection — the same auto-filing path batch renders and character
+  // reference sheets use. The client passes only the universe identity (never
+  // a collectionId — that's server-resolved), so the front-end does no
+  // collection bookkeeping. The base-style probe (StyleProbeImage) is the sole
+  // caller today; JSON-only (the multipart ImageGen page never sends it).
+  universeRun: z.object({
+    universeId: z.string().min(1).max(200),
+    universeName: z.string().min(1).max(200),
+    label: z.string().max(200).optional(),
+    category: z.string().max(64).optional(),
+  }).optional(),
 }).refine(refineImagePixelCap, { message: PIXEL_CAP_MESSAGE, path: ['width'] });
 
 // JSON callers (SDAPI bridge, avatar route, the Imagine page's old payload
@@ -246,6 +262,27 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
     files: req.files,
     referenceImageFields: REFERENCE_IMAGE_FIELDS,
   });
+
+  // Resolve an optional universe-collection target into a job tag the
+  // completion hook understands. Done server-side so a base-style probe lands
+  // in the same "Universe: <name>" bucket as batch renders without the
+  // front-end doing any collection bookkeeping. Best-effort: a provisioning
+  // failure drops the tag and the render still proceeds (it just won't
+  // auto-file) rather than failing the user's generation over a side-effect.
+  if (params.universeRun?.universeId) {
+    const { universeId, universeName, label, category } = params.universeRun;
+    const collection = await findOrCreateUniverseCollection({
+      universeId,
+      universeName,
+      description: `Universe Builder renders for "${universeName}"`,
+    }).catch((err) => {
+      console.error(`❌ image-gen → universe collection provision failed: ${err?.message || err}`);
+      return null;
+    });
+    params.universeRun = collection
+      ? { runId: randomUUID(), universeId, collectionId: collection.id, label, category }
+      : undefined;
+  }
 
   // Multer's tmp upload is no longer needed once we've copied it into
   // PATHS.images. Use res.on('close') so the temp files are cleaned up whether

@@ -682,7 +682,9 @@ function StepPanel({ session, universe, series, issues, stepId, locked, onChange
         <FieldBlock label="Influences — embrace" value={(universe?.influences?.embrace || []).join(', ')} />
         <FieldBlock label="Influences — avoid" value={(universe?.influences?.avoid || []).join(', ')} />
         <div className="border-t border-port-border pt-3">
-          <StyleProbeImage universe={universe} onUniverseChange={() => onChanged()} canRender={!locked} />
+          {/* Keyed by universe id so an in-flight base-style render's spinner +
+              completion stay scoped to one universe across a selection change. */}
+          <StyleProbeImage key={universe?.id || 'new'} universe={universe} onUniverseChange={() => onChanged()} canRender={!locked} />
         </div>
         <div className="flex items-center gap-2">
           {!locked && genButton('Expand aesthetic', Boolean((universe?.premise || universe?.styleNotes || '').trim()))}

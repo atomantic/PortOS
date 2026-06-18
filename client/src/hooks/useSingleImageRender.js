@@ -38,7 +38,9 @@ const SINGLE_KEY = '__single__';
  *   - `jobId` — the single in-flight job's id (or null). Convenience for
  *     single-target callers; multi-target callers read `renderingJobs[key]`.
  *   - `renderingJobs` — `{ [key]: jobId }` for callers rendering several subjects.
- *   - `render(imageCfg, key)` — queue a render; returns the queued jobId or null.
+ *   - `render(imageCfg, key, extraParams)` — queue a render; returns the queued
+ *     jobId or null. `extraParams` is merged into the generate payload (e.g. a
+ *     `universeRun` collection target the server routes the finished render to).
  *   - `handleComplete(filename, key)` — clear the job + run the guarded onComplete.
  */
 export default function useSingleImageRender({ buildPrompt, onComplete, onError } = {}) {
@@ -56,12 +58,16 @@ export default function useSingleImageRender({ buildPrompt, onComplete, onError 
   const onErrorRef = useRef(onError);
   onErrorRef.current = onError;
 
-  const render = useCallback(async (imageCfg, key = SINGLE_KEY) => {
+  const render = useCallback(async (imageCfg, key = SINGLE_KEY, extraParams = undefined) => {
     const built = buildPromptRef.current?.(key);
     if (!built) return null; // caller aborted (already toasted why)
     const baseOpts = pipelineImageCfgToRenderOpts(imageCfg);
+    // `extraParams` lets a caller attach extra fields to the generate payload
+    // (e.g. the base-style probe's `universeRun` collection target) so the
+    // server can route the finished render — the front-end does no
+    // post-generation bookkeeping of its own.
     const queued = await generateImage(
-      { ...baseOpts, prompt: built.prompt, negativePrompt: built.negativePrompt || undefined },
+      { ...baseOpts, prompt: built.prompt, negativePrompt: built.negativePrompt || undefined, ...(extraParams || {}) },
       { silent: true },
     ).catch((err) => { onErrorRef.current?.(err); return null; });
     if (!queued?.jobId) return null;

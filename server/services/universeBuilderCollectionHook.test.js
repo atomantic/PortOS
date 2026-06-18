@@ -347,4 +347,42 @@ describe('universeBuilderCollectionHook', () => {
       expect(sc.universeName).toBe('BatchVerse');
     }
   });
+
+  it('files a base-style probe render (universeRun tag, no entryRef) into the collection', async () => {
+    const seeded = await seedUniverse({ name: 'StyleVerse' });
+    const c = await makeCollection(seeded.id);
+    const filename = 'base-style.png';
+    writeSidecar(filename, { id: 'base-style', prompt: 'a moody noir skyline', seed: 7 });
+    hook.registerUniverseBuilderRun({ runId: 'r-style', universeId: seeded.id, jobCount: 1 });
+
+    // Mirrors the job the generic /image-gen/generate route enqueues for the
+    // base-style probe: a universeRun tag carrying the resolved collectionId +
+    // a 'style' label/category, but NO entryRef (the probe isn't a canon entry).
+    mediaJobEvents.emit('completed', {
+      kind: 'image',
+      result: { filename },
+      params: {
+        universeRun: {
+          runId: 'r-style',
+          universeId: seeded.id,
+          collectionId: c.id,
+          category: 'style',
+          label: 'Base style',
+        },
+      },
+    });
+
+    await waitFor(() => hook.__testing.getActiveRuns().size === 0);
+    const col = await collections.getCollection(c.id);
+    expect(col.items.some((it) => it.kind === 'image' && it.ref === filename)).toBe(true);
+    // Sidecar gains universe context (so the collection lightbox shows the world)
+    // without clobbering the original generation metadata.
+    const sc = readSidecar(filename);
+    expect(sc.universeId).toBe(seeded.id);
+    expect(sc.universeName).toBe('StyleVerse');
+    expect(sc.entryLabel).toBe('Base style');
+    expect(sc.entryCategory).toBe('style');
+    expect(sc.prompt).toBe('a moody noir skyline');
+    expect(sc.seed).toBe(7);
+  });
 });
