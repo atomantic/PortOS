@@ -375,7 +375,9 @@ export function buildSetupDigestPrompt({ focus, priorSummary, manuscript }) {
 async function runChunkedManuscriptCheck(ctx, { chunks, category, max, callChunk, crossChunkDigest = false, summarizeChunk = null }) {
   const usableChars = Number.isFinite(chunks?.usableChars) ? chunks.usableChars : Infinity;
   const merged = new Map();
-  const crossChunkSetup = typeof summarizeChunk === 'function';
+  // The presence of `summarizeChunk` (set only when the check opts into the
+  // clean-setup digest AND an inline LLM caller is available) is itself the gate —
+  // no separate flag, so the null-checks below can't drift from it.
   let setupSummary = '';
   for (let i = 0; i < chunks.length; i++) {
     const manuscript = chunks[i];
@@ -390,7 +392,7 @@ async function runChunkedManuscriptCheck(ctx, { chunks, category, max, callChunk
       // manuscript (would drop review coverage) or overflow the window.
       if (digest && digest.length <= usableChars - text.length) text = `${digest}${manuscript}`;
     }
-    if (crossChunkSetup && setupSummary) {
+    if (summarizeChunk && setupSummary) {
       const setup = editorialSetupDigest(setupSummary);
       // Fits into whatever spare room remains AFTER the findings digest — manuscript
       // coverage and the findings digest both win over the setup digest if budget is tight.
@@ -410,7 +412,7 @@ async function runChunkedManuscriptCheck(ctx, { chunks, category, max, callChunk
     // (nothing consumes it) and on cancellation (its result would be discarded).
     // Summarize the RAW chunk, never the digest-prefixed text. A summarizer failure
     // must not abort the check — keep the prior summary and continue.
-    if (crossChunkSetup && i < chunks.length - 1 && !ctx.signal?.aborted) {
+    if (summarizeChunk && i < chunks.length - 1 && !ctx.signal?.aborted) {
       const next = await summarizeChunk(setupSummary, manuscript).catch(() => setupSummary);
       if (typeof next === 'string' && next.trim()) setupSummary = next.trim();
     }
