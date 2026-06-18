@@ -58,6 +58,7 @@ grep -i "what you want to do" client/src/lib/README.md
 
 | Module | Purpose |
 |---|---|
+| `brainGraphFocus.js` | Pure focus-trail (breadcrumb) transitions for BrainGraph re-focus navigation. |
 | `graphSimulation.js` | 3D force simulation parameters for BrainGraph / CyberCity. |
 
 ## Generic UI / collection utilities

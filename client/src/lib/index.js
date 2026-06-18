@@ -32,6 +32,7 @@ export * from './videoTilingOptions.js';
 export * from './wrImageDefaults.js';
 
 // === Graph & sim ===
+export * from './brainGraphFocus.js';
 export * from './graphSimulation.js';
 
 // === Generic UI / collection utilities ===

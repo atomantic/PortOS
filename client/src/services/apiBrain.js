@@ -207,16 +207,30 @@ export const reorderBrainBuckets = (ids) => request('/brain/buckets/reorder', {
   body: JSON.stringify({ ids })
 });
 
-// Brain - Graph
-export const getBrainGraph = () => request('/brain/graph');
+// Brain - Graph. Bounded by design: no `focus` returns an overview of the
+// most-connected nodes; a `focus` returns that node's neighborhood. The full
+// graph is never returned (it crashes the browser at scale).
+export const getBrainGraph = ({ focus, limit } = {}) => {
+  const params = new URLSearchParams();
+  if (focus) params.set('focus', focus);
+  if (limit) params.set('limit', limit);
+  const qs = params.toString();
+  return request(`/brain/graph${qs ? `?${qs}` : ''}`);
+};
+// Lightweight {id,label,brainType} list of every node, for the search box.
+export const getBrainGraphSearchIndex = () => request('/brain/graph/search-index');
+// Count of active records missing an embedding (powers "Embed missing").
+export const getEmbeddingsStatus = () => request('/brain/embeddings/status');
 
 // Brain - Bridge Sync (brain data to CoS memory system).
 // refresh:true re-embeds already-mapped records to heal memory entries that
 // went stale before the per-record sync signal existed (issue #1080).
+// onlyMissing:true is the cheap targeted backfill — embeds only records lacking
+// an embedding, skipping everything healthy.
 // `options` (e.g. { silent: true }) passes through to the request helper so a
 // caller with its own error toast doesn't get a duplicate from the helper.
-export const syncBrainData = ({ refresh = false } = {}, options = {}) =>
-  request('/brain/bridge-sync', { method: 'POST', body: JSON.stringify({ refresh }), ...options });
+export const syncBrainData = ({ refresh = false, onlyMissing = false } = {}, options = {}) =>
+  request('/brain/bridge-sync', { method: 'POST', body: JSON.stringify({ refresh, onlyMissing }), ...options });
 
 // Brain - Daily Log
 export const listDailyLogs = (options = {}) => {

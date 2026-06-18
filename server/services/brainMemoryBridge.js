@@ -232,9 +232,25 @@ export async function syncBrainRecord(brainType, record) {
  *   the live-record walks can't reach) — reported as `archived`.
  * @returns {Promise<{synced:number, skipped:number, errors:number, archived:number}>}
  */
-export async function syncAllBrainData({ dryRun = false, refresh = false } = {}) {
+// True when a record is already embedded: mapped AND its memory has a vector.
+// Shared by the onlyMissing sync path and the read-only coverage tally.
+const makeEmbeddedChecker = (map, missingMemIds) => (key) => {
+  const memId = map[key];
+  return !!memId && !missingMemIds.has(memId);
+};
+
+export async function syncAllBrainData({ dryRun = false, refresh = false, onlyMissing = false } = {}) {
   const map = await loadBridgeMap();
   const stats = { synced: 0, skipped: 0, errors: 0, archived: 0 };
+
+  // `onlyMissing` is the cheap, targeted backfill: embed only records that lack
+  // an embedding (unmapped, or mapped to a memory whose vector is NULL because
+  // generation failed) and skip everything already embedded. Unlike `refresh`
+  // it never re-embeds healthy records, so it's safe to run without a warning.
+  const missingMemIds = onlyMissing
+    ? await memory.getMemoryIdsMissingEmbedding().catch(() => new Set())
+    : null;
+  const isEmbedded = makeEmbeddedChecker(map, missingMemIds);
 
   // Entity stores (JSON-based)
   const entityTypes = ['people', 'projects', 'ideas', 'admin', 'memories'];
@@ -247,7 +263,9 @@ export async function syncAllBrainData({ dryRun = false, refresh = false } = {})
         continue;
       }
       const key = bridgeKey(type, record.id);
-      if (map[key] && !dryRun && !refresh) {
+      if (onlyMissing) {
+        if (isEmbedded(key)) { stats.skipped++; continue; }
+      } else if (map[key] && !dryRun && !refresh) {
         stats.skipped++;
         continue;
       }
@@ -277,7 +295,9 @@ export async function syncAllBrainData({ dryRun = false, refresh = false } = {})
       // Already-mapped days are skipped in both real and dry-run modes so
       // dry-run stats match actual-run stats (rather than claiming to
       // re-sync every day every time) — unless refresh is forcing a re-embed.
-      if (map[key] && !refresh) {
+      if (onlyMissing) {
+        if (isEmbedded(key)) { stats.skipped += 1; continue; }
+      } else if (map[key] && !refresh) {
         stats.skipped += 1;
         continue;
       }
@@ -302,7 +322,9 @@ export async function syncAllBrainData({ dryRun = false, refresh = false } = {})
     const records = await getter(1000); // get all
     for (const record of records) {
       const key = bridgeKey(type, record.id);
-      if (map[key] && !dryRun && !refresh) {
+      if (onlyMissing) {
+        if (isEmbedded(key)) { stats.skipped++; continue; }
+      } else if (map[key] && !dryRun && !refresh) {
         stats.skipped++;
         continue;
       }
@@ -352,6 +374,41 @@ export async function syncAllBrainData({ dryRun = false, refresh = false } = {})
   }
 
   return stats;
+}
+
+/**
+ * Count how many active brain records lack an embedding — the headline number
+ * for the "N memories missing embeddings · Embed missing" affordance on the
+ * graph. A record is "missing" when it's unmapped OR its mapped memory has a
+ * NULL embedding. Read-only; walks the same stores as the onlyMissing sync so
+ * the count matches what "Embed missing" would actually process.
+ */
+export async function getEmbeddingCoverage() {
+  const map = await loadBridgeMap();
+  const missingMemIds = await memory.getMemoryIdsMissingEmbedding().catch(() => new Set());
+  const isEmbedded = makeEmbeddedChecker(map, missingMemIds);
+
+  let total = 0;
+  let missing = 0;
+  const tally = (key) => { total += 1; if (!isEmbedded(key)) missing += 1; };
+
+  for (const type of ['people', 'projects', 'ideas', 'admin', 'memories']) {
+    const records = await brainStorage.getAll(type);
+    for (const record of records) {
+      if (record.archived) continue;
+      tally(bridgeKey(type, record.id));
+    }
+  }
+
+  const { records: journals } = await listJournals({ limit: 10000, includeContent: false });
+  for (const record of journals) tally(bridgeKey('journals', record.id));
+
+  for (const [type, getter] of [['digests', brainStorage.getDigests], ['reviews', brainStorage.getReviews]]) {
+    const records = await getter(1000);
+    for (const record of records) tally(bridgeKey(type, record.id));
+  }
+
+  return { total, missing };
 }
 
 // ─── Synced-in record resync (issue #1080) ──────────────────────────────────

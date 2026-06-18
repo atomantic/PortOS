@@ -2,11 +2,14 @@ import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
-import {Search, AlertTriangle, Zap, RefreshCw} from 'lucide-react';
+import {AlertTriangle, Zap, RefreshCw, X, ChevronRight, ArrowLeft, Compass} from 'lucide-react';
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
 import { BRAIN_TYPE_HEX, DESTINATIONS } from '../constants';
 import { buildGraph } from '../../../lib/graphSimulation';
+import { pushFocus, popFocus, currentFocusId } from '../../../lib/brainGraphFocus';
+import EntityCombobox from '../../EntityCombobox';
+import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import BrailleSpinner from '../../BrailleSpinner';
 
 const EDGE_COLORS = {
@@ -65,7 +68,7 @@ function GraphEdges({ simEdges, selectedId }) {
   );
 }
 
-function GraphScene({ graph, selectedId, adjacentIds, onSelect, onHover }) {
+function GraphScene({ graph, selectedId, adjacentIds, onSelect, onFocus, onHover }) {
   const sphereGeo = useMemo(() => new THREE.SphereGeometry(1, 16, 12), []);
 
   const selNode = selectedId ? graph.idMap.get(selectedId) : null;
@@ -93,6 +96,7 @@ function GraphScene({ graph, selectedId, adjacentIds, onSelect, onHover }) {
             scale={radius}
             position={[node.x, node.y, node.z]}
             onClick={(e) => { e.stopPropagation(); onSelect(node); }}
+            onDoubleClick={(e) => { e.stopPropagation(); onFocus(node); }}
             onPointerOver={(e) => { e.stopPropagation(); onHover(node); }}
             onPointerOut={() => onHover(null)}
           >
@@ -119,13 +123,18 @@ function GraphScene({ graph, selectedId, adjacentIds, onSelect, onHover }) {
 export default function BrainGraph() {
   const [graphData, setGraphData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [subLoading, setSubLoading] = useState(false);
   const [selectedNode, setSelectedNode] = useState(null);
   const [fullRecord, setFullRecord] = useState(null);
   const [hoveredNode, setHoveredNode] = useState(null);
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
   const [layoutKey, setLayoutKey] = useState(0);
-  const [searchQuery, setSearchQuery] = useState('');
   const [syncing, setSyncing] = useState(false);
+  const [confirmingRefresh, setConfirmingRefresh] = useState(false);
+  const [searchIndex, setSearchIndex] = useState([]);
+  const [searchValue, setSearchValue] = useState('');
+  const [focusTrail, setFocusTrail] = useState([]);
+  const [embeddingStatus, setEmbeddingStatus] = useState(null);
   const [typeFilters, setTypeFilters] = useState(() =>
     Object.fromEntries(BRAIN_TYPES.map(t => [t, true]))
   );
@@ -133,23 +142,63 @@ export default function BrainGraph() {
   const graphRef = useRef(null);
   const dragStartRef = useRef(null);
 
+  const focusId = currentFocusId(focusTrail);
+
+  // Initial load: bounded overview + lightweight search index + embedding gaps.
   useEffect(() => {
-    api.getBrainGraph().then(setGraphData).catch(() => setGraphData(null)).finally(() => setLoading(false));
+    let cancelled = false;
+    Promise.all([
+      api.getBrainGraph().catch(() => null),
+      api.getBrainGraphSearchIndex().catch(() => ({ nodes: [] })),
+      api.getEmbeddingsStatus().catch(() => null)
+    ]).then(([graph, index, status]) => {
+      if (cancelled) return;
+      setGraphData(graph);
+      setSearchIndex(index?.nodes || []);
+      setEmbeddingStatus(status);
+    }).finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
   }, []);
 
-  // Filter nodes based on type toggles and search
+  // Load a bounded view (overview when focusId is null, else that node's
+  // neighborhood) and reconcile the breadcrumb trail.
+  const loadView = useCallback(async (targetFocusId, { trail } = {}) => {
+    setSubLoading(true);
+    const data = await api.getBrainGraph(targetFocusId ? { focus: targetFocusId } : {}).catch(() => null);
+    setSubLoading(false);
+    if (!data || data.notFound) {
+      toast.error('Could not load those connections');
+      return false;
+    }
+    setGraphData(data);
+    if (trail !== undefined) setFocusTrail(trail);
+    setSelectedNode(targetFocusId ? (data.nodes.find(n => n.id === targetFocusId) || null) : null);
+    return true;
+  }, []);
+
+  const focusNode = useCallback(async (node) => {
+    if (!node?.id || node.id === focusId) return;
+    const nextTrail = pushFocus(focusTrail, { id: node.id, label: node.label || node.id });
+    await loadView(node.id, { trail: nextTrail });
+  }, [focusId, focusTrail, loadView]);
+
+  const goBack = useCallback(async () => {
+    const { trail, focusId: prevFocus } = popFocus(focusTrail);
+    await loadView(prevFocus, { trail });
+  }, [focusTrail, loadView]);
+
+  const goToOverview = useCallback(async () => {
+    await loadView(null, { trail: [] });
+  }, [loadView]);
+
+  // Filter the (already bounded) loaded nodes by type toggles.
   const filteredData = useMemo(() => {
     if (!graphData?.nodes?.length) return null;
-    const query = searchQuery.toLowerCase();
-    const filteredNodes = graphData.nodes.filter(n => {
-      if (!typeFilters[n.brainType]) return false;
-      if (query && !n.label.toLowerCase().includes(query) && !n.summary?.toLowerCase().includes(query)) return false;
-      return true;
-    });
+    const filteredNodes = graphData.nodes.filter(n => typeFilters[n.brainType]);
     const nodeIds = new Set(filteredNodes.map(n => n.id));
     const filteredEdges = graphData.edges.filter(e => nodeIds.has(e.source) && nodeIds.has(e.target));
     return { nodes: filteredNodes, edges: filteredEdges };
-  }, [graphData, typeFilters, searchQuery]);
+  }, [graphData, typeFilters]);
 
   const graph = useMemo(() => {
     if (!filteredData?.nodes?.length) return null;
@@ -202,6 +251,17 @@ export default function BrainGraph() {
     setHoveredNode(node);
   }, []);
 
+  // Escape always clears selection. Clicking "empty space" is unreliable for
+  // un-isolating: unselected nodes are only dimmed (not removed), so they still
+  // capture clicks, and onPointerMissed ignores any orbit drag — leaving the
+  // user stuck on an isolated node with no obvious way out.
+  useEffect(() => {
+    if (!selectedNode) return;
+    const onKey = (e) => { if (e.key === 'Escape') setSelectedNode(null); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selectedNode]);
+
   const handlePointerMissed = useCallback((e) => {
     const start = dragStartRef.current;
     if (!start) return;
@@ -212,21 +272,36 @@ export default function BrainGraph() {
 
   // refresh:true re-embeds already-mapped records — the recovery path for
   // memory entries that diverged before synced-in records were re-vectorized
-  // automatically (issue #1080). The default sync only embeds new records.
-  const handleSync = async ({ refresh = false } = {}) => {
+  // automatically (issue #1080). onlyMissing:true embeds just the records that
+  // lack an embedding (cheap; no confirm). Default sync only embeds new records.
+  const handleSync = async ({ refresh = false, onlyMissing = false } = {}) => {
     setSyncing(true);
-    // silent:true — this catch owns the error toast, so suppress the helper's
-    // own toast to avoid a duplicate (CLAUDE.md: custom catch ⇒ silent).
-    const stats = await api.syncBrainData({ refresh }, { silent: true }).catch(err => {
-      toast.error(err.message || 'Sync failed');
+    setConfirmingRefresh(false);
+    // The server has no progress stream for this, so a persistent loading toast
+    // is the only honest signal that work is in flight. A fixed id lets the
+    // success/error call swap the same toast in place.
+    const toastId = 'brain-embeddings-sync';
+    toast.loading(
+      refresh
+        ? 'Refreshing embeddings — re-embedding all brain records. This can take a while…'
+        : onlyMissing
+          ? 'Embedding records that are missing embeddings…'
+          : 'Syncing brain data to memory…',
+      { id: toastId }
+    );
+    // silent:true — this catch owns the error toast (CLAUDE.md: custom catch ⇒ silent).
+    const stats = await api.syncBrainData({ refresh, onlyMissing }, { silent: true }).catch(err => {
+      toast.error(err.message || 'Sync failed', { id: toastId });
       return null;
     });
     setSyncing(false);
     if (stats) {
       const archivedNote = stats.archived ? `, ${stats.archived} archived` : '';
-      toast.success(`Synced ${stats.synced} records (${stats.skipped} skipped${archivedNote})`);
-      // Reload graph data to pick up new embeddings
-      const fresh = await api.getBrainGraph().catch(() => null);
+      toast.success(`Synced ${stats.synced} records (${stats.skipped} skipped${archivedNote})`, { id: toastId });
+      // Refresh the missing-embeddings count and reload the current view to pick
+      // up the new edges.
+      api.getEmbeddingsStatus().then(setEmbeddingStatus).catch(() => {});
+      const fresh = await api.getBrainGraph(focusId ? { focus: focusId } : {}).catch(() => null);
       if (fresh) setGraphData(fresh);
     }
   };
@@ -244,13 +319,15 @@ export default function BrainGraph() {
     );
   }
 
-  if (!graphData || !graphData.nodes?.length) {
+  if (!graphData?.nodes?.length) {
     return (
       <div className="text-center py-12 text-gray-500">
         No brain entities to graph. Add people, projects, ideas, admin items, or memories to see relationships.
       </div>
     );
   }
+
+  const missingCount = embeddingStatus?.missing || 0;
 
   return (
     // Full-bleed tab: own the scroll (the Brain wrapper is overflow-hidden) and
@@ -264,7 +341,7 @@ export default function BrainGraph() {
             No embeddings found. Sync brain data to CoS memory to enable semantic similarity edges.
           </div>
           <button
-            onClick={() => handleSync()}
+            onClick={() => handleSync({ onlyMissing: true })}
             disabled={syncing}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-port-warning/20 text-port-warning border border-port-warning/30 rounded-lg hover:bg-port-warning/30 transition-colors disabled:opacity-50"
           >
@@ -274,10 +351,64 @@ export default function BrainGraph() {
         </div>
       )}
 
-      {/* Controls bar */}
+      {/* Search — jump to any memory across the whole brain (not just the
+          loaded view) and focus its neighborhood. */}
+      <div className="flex items-center gap-2">
+        <EntityCombobox
+          items={searchIndex.map(n => ({ id: n.id, name: n.label, subtitle: DESTINATIONS[n.brainType]?.label || n.brainType }))}
+          value={searchValue}
+          onChange={setSearchValue}
+          onPick={(item) => { focusNode({ id: item.id, label: item.name }); setSearchValue(''); }}
+          inputId="brain-graph-search"
+          noun="memory"
+          placeholder="Search memories to explore…"
+          className="flex-1 min-w-[200px]"
+        />
+        {missingCount > 0 && (
+          <button
+            onClick={() => handleSync({ onlyMissing: true })}
+            disabled={syncing}
+            title={`${missingCount} of ${embeddingStatus?.total ?? '?'} records have no embedding yet — embed just those (fast)`}
+            className="flex items-center gap-1.5 px-3 py-2 min-h-[36px] text-xs whitespace-nowrap bg-port-warning/15 text-port-warning border border-port-warning/30 rounded-lg hover:bg-port-warning/25 transition-colors disabled:opacity-50"
+          >
+            {syncing ? <BrailleSpinner /> : <Zap size={14} />}
+            {missingCount} missing · Embed
+          </button>
+        )}
+      </div>
+
+      {/* Breadcrumb trail + controls bar */}
       <div className="flex items-center gap-3 bg-port-card border border-port-border rounded-lg px-4 py-2 flex-wrap">
+        {/* Breadcrumb */}
+        <div className="flex items-center gap-1 text-xs min-w-0">
+          {focusTrail.length > 0 && (
+            <button
+              onClick={goBack}
+              title="Back"
+              className="flex items-center gap-1 px-2 py-1 text-gray-400 hover:text-white rounded transition-colors"
+            >
+              <ArrowLeft size={13} />
+            </button>
+          )}
+          <button
+            onClick={goToOverview}
+            disabled={focusTrail.length === 0}
+            className={`px-1.5 py-1 rounded transition-colors ${focusTrail.length === 0 ? 'text-white font-medium' : 'text-gray-400 hover:text-white'}`}
+          >
+            Overview
+          </button>
+          {focusTrail.map((entry, i) => (
+            <span key={entry.id} className="flex items-center gap-1 min-w-0">
+              <ChevronRight size={12} className="text-gray-600 shrink-0" />
+              <span className={`px-1 truncate max-w-[140px] ${i === focusTrail.length - 1 ? 'text-white font-medium' : 'text-gray-500'}`}>
+                {entry.label}
+              </span>
+            </span>
+          ))}
+        </div>
+
         {/* Type filter checkboxes */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 ml-auto">
           {BRAIN_TYPES.map(type => {
             const dest = DESTINATIONS[type];
             return (
@@ -300,20 +431,8 @@ export default function BrainGraph() {
           })}
         </div>
 
-        {/* Search */}
-        <div className="flex-1 min-w-[140px] max-w-xs relative">
-          <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-500" />
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Filter nodes..."
-            className="w-full bg-port-bg border border-port-border rounded-lg pl-8 pr-3 py-1.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-port-accent"
-          />
-        </div>
-
         {/* Stats + re-layout */}
-        <span className="text-sm text-gray-400 ml-auto">
+        <span className="text-sm text-gray-400">
           {filteredData?.nodes?.length || 0} nodes &middot; {filteredData?.edges?.length || 0} edges
         </span>
         <button
@@ -323,18 +442,30 @@ export default function BrainGraph() {
           Re-layout
         </button>
         {/* Recovery action (issue #1080): re-embed already-synced records whose
-            memory copy may be stale — e.g. a peer edited a record that this
-            machine received via sync before auto re-vectorization existed. */}
+            memory copy may be stale. Confirmed first — it re-embeds every record
+            and can run for many minutes. The cheaper "Embed missing" above is the
+            usual path; this is the heavy reset. */}
         <button
-          onClick={() => handleSync({ refresh: true })}
-          disabled={syncing}
-          title="Re-embed all brain records, including ones synced from peers, to refresh stale memory entries"
+          onClick={() => setConfirmingRefresh(true)}
+          disabled={syncing || confirmingRefresh}
+          title="Re-embed ALL brain records, including ones synced from peers. Slow — use 'Embed missing' for the common case."
           className="flex items-center gap-1.5 px-3 py-1.5 min-h-[36px] text-xs bg-port-border text-gray-400 hover:text-white rounded-lg transition-colors disabled:opacity-50"
         >
           {syncing ? <BrailleSpinner /> : <RefreshCw size={14} />}
-          Refresh embeddings
+          Refresh all
         </button>
       </div>
+
+      {confirmingRefresh && (
+        <InlineConfirmRow
+          tone="warning"
+          question={`Re-embed all ${embeddingStatus?.total ?? ''} brain records? This can take several minutes.`}
+          confirmText="Refresh all"
+          cancelText="Cancel"
+          onConfirm={() => handleSync({ refresh: true })}
+          onCancel={() => setConfirmingRefresh(false)}
+        />
+      )}
 
       {/* 3D Canvas */}
       <div
@@ -356,15 +487,37 @@ export default function BrainGraph() {
               selectedId={selectedNode?.id}
               adjacentIds={adjacentIds}
               onSelect={handleSelect}
+              onFocus={focusNode}
               onHover={handleHover}
             />
           </Canvas>
         )}
 
-        {!graph && filteredData?.nodes?.length === 0 && (
+        {!graph && (
           <div className="flex items-center justify-center h-full text-gray-500 text-sm">
             No nodes match the current filters.
           </div>
+        )}
+
+        {/* Loading overlay while switching focus */}
+        {subLoading && (
+          <div className="absolute inset-0 flex items-center justify-center bg-port-bg/60 z-20">
+            <BrailleSpinner text="Loading connections" />
+          </div>
+        )}
+
+        {/* Always-reachable un-isolate control. Dimmed nodes still capture
+            clicks, so clicking "empty space" can't be relied on to clear the
+            selection — give the user an unmissable exit (also bound to Esc). */}
+        {selectedNode && (
+          <button
+            onClick={() => setSelectedNode(null)}
+            title="Clear selection (Esc)"
+            className="absolute top-3 right-3 z-10 flex items-center gap-1.5 px-3 py-1.5 text-xs bg-port-bg/90 border border-port-border text-gray-300 hover:text-white rounded-lg transition-colors"
+          >
+            <X size={14} />
+            Clear selection
+          </button>
         )}
 
         {/* Legend */}
@@ -409,6 +562,7 @@ export default function BrainGraph() {
             {hoveredNode.summary && (
               <p className="text-[10px] text-gray-400 mt-0.5 line-clamp-2">{hoveredNode.summary}</p>
             )}
+            <p className="text-[10px] text-gray-600 mt-1">Double-click to explore connections</p>
           </div>
         )}
       </div>
@@ -453,12 +607,24 @@ export default function BrainGraph() {
                 <p className="text-sm text-gray-300">{selectedNode.summary}</p>
               )}
             </div>
-            <button
-              onClick={() => setSelectedNode(null)}
-              className="text-gray-500 hover:text-white transition-colors p-1 shrink-0"
-            >
-              &times;
-            </button>
+            <div className="flex flex-col items-end gap-2 shrink-0">
+              <button
+                onClick={() => setSelectedNode(null)}
+                title="Clear selection (Esc)"
+                className="text-gray-500 hover:text-white transition-colors p-1"
+              >
+                &times;
+              </button>
+              {selectedNode.id !== focusId && (
+                <button
+                  onClick={() => focusNode(selectedNode)}
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs bg-port-accent/20 text-port-accent border border-port-accent/30 rounded-lg hover:bg-port-accent/30 transition-colors whitespace-nowrap"
+                >
+                  <Compass size={13} />
+                  Explore connections
+                </button>
+              )}
+            </div>
           </div>
           {connectedNodes.length > 0 && (
             <div>
@@ -471,6 +637,8 @@ export default function BrainGraph() {
                       const node = graphRef.current?.idMap.get(cn.id);
                       if (node) setSelectedNode(node);
                     }}
+                    onDoubleClick={() => focusNode(cn)}
+                    title="Click to select · double-click to explore its connections"
                     className="w-full text-left flex items-center gap-2 px-2 py-1.5 rounded hover:bg-port-border/50 transition-colors"
                   >
                     <span className="inline-block w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: BRAIN_TYPE_HEX[cn.brainType] }} />

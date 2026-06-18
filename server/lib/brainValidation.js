@@ -485,9 +485,20 @@ export const brainSyncPushSchema = z.object({
 // Brain bridge-sync body (POST /api/brain/bridge-sync). `refresh` forces a
 // re-embed of already-mapped records — the recovery path for memory entries
 // that diverged before the per-record sync:applied signal existed (issue
-// #1080). Optional + default-false so the existing no-body call is unchanged.
+// #1080). `onlyMissing` is the cheap targeted backfill: embed just the records
+// that lack an embedding (unmapped, or mapped to a NULL-embedding memory) and
+// skip everything healthy. Both optional + default-false so the existing
+// no-body call is unchanged.
 export const brainBridgeSyncSchema = z.object({
-  refresh: z.boolean().optional().default(false)
+  refresh: z.boolean().optional().default(false),
+  onlyMissing: z.boolean().optional().default(false)
+});
+
+// Brain graph query (GET /api/brain/graph?focus=<id>&limit=<n>). No `focus`
+// returns the bounded overview; a `focus` returns that node's neighborhood.
+export const brainGraphQuerySchema = z.object({
+  focus: z.string().min(1).optional(),
+  limit: z.coerce.number().int().min(1).max(250).optional()
 });
 
 // Daily log settings schema (PUT /api/brain/daily-log/settings body).
