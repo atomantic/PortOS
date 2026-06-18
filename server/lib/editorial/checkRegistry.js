@@ -123,7 +123,11 @@ export function authoredSetupPayoffSummary(readerMap) {
     const label = typeof e?.label === 'string' ? e.label.trim() : '';
     const note = typeof e?.note === 'string' ? e.note.trim() : '';
     const text = label && note ? `${label} — ${note}` : (label || note);
-    return text ? `- ${text}` : '';
+    if (!text) return '';
+    // A coarse expected-location hint so the model can reason about WHERE an
+    // authored hook should have paid off (reconciliation signal, #1299).
+    const pos = Number.isFinite(e?.atArcPosition) ? ` (arc position ${e.atArcPosition})` : '';
+    return `- ${text}${pos}`;
   };
   const hookLines = hooks.map(line).filter(Boolean);
   const payoffLines = payoffs.map(line).filter(Boolean);

@@ -399,14 +399,16 @@ describe('authoredSetupPayoffSummary (#1299)', () => {
     expect(authoredSetupPayoffSummary({ hooks: [], payoffs: [] })).toBe('');
   });
 
-  it('renders authored hooks and payoffs as labelled bullet lists', () => {
+  it('renders authored hooks and payoffs as labelled bullet lists, with an arc-position hint when present', () => {
     const out = authoredSetupPayoffSummary({
-      hooks: [{ label: 'Who killed the duke?', note: 'planted Issue 1' }, { label: 'The hidden heir' }],
+      hooks: [{ label: 'Who killed the duke?', note: 'planted Issue 1', atArcPosition: 2 }, { label: 'The hidden heir' }],
       payoffs: [{ label: 'The butler confesses', note: 'Issue 8' }],
     });
     expect(out).toContain('Authored hooks');
-    expect(out).toContain('- Who killed the duke? — planted Issue 1');
+    expect(out).toContain('- Who killed the duke? — planted Issue 1 (arc position 2)');
+    // No position hint when atArcPosition is absent.
     expect(out).toContain('- The hidden heir');
+    expect(out).not.toContain('The hidden heir (arc position');
     expect(out).toContain('Authored payoffs');
     expect(out).toContain('- The butler confesses — Issue 8');
   });
