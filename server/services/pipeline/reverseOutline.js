@@ -30,6 +30,7 @@ import { usableInputTokens, estimateTokens, CHARS_PER_TOKEN } from '../../lib/co
 import { seriesStore, getSeries } from './series.js';
 import { getSeriesCanon } from './seriesCanon.js';
 import { collectManuscriptSections, sectionsCorpus } from './arcPlanner.js';
+import { emitRecordUpdated } from '../sharing/recordEvents.js';
 
 const STAGE = 'pipeline-reverse-outline';
 
@@ -50,6 +51,12 @@ const ANCHOR_MAX = 240;
 const NAME_MAX = 80;
 const SETTING_MAX = 120;
 const PLOTLINE_ID_MAX = 40;
+// Series issue ids are `iss-<uuid>`; the content hash is a 64-char hex digest.
+// Used only by the peer-sync sanitizer, which trusts the sender's resolved
+// refs rather than recomputing them against a manuscript the receiver may lack.
+const ISSUE_ID_MAX = 64;
+const HASH_MAX = 128;
+const PROVIDER_MAX = 120;
 
 // Floor on manuscript chars sent to the model — scaled UP to the target model's
 // context window in generateReverseOutline (mirrors editorialAnalysis), so a
@@ -280,6 +287,13 @@ export async function generateReverseOutline(seriesId, { providerId, model, forc
     ...body,
   };
   await queueOutlineWrite(seriesId, () => writeOutline(seriesId, outline));
+  // The outline is a sibling of the series record, so regenerating it doesn't
+  // move the series `index.json` — emit a series `updated` event so the
+  // peer-sync push + bucket re-export fire (both hash the outline into their
+  // payload, defeating the lastPushedHash short-circuit). Skipped on the sync
+  // RECEIVE path (`mergeOutlineFromSync`) to avoid an echo loop. Mirrors
+  // manuscriptReview.seedReviewFromFindings.
+  emitRecordUpdated('series', seriesId);
   console.log(`🧭 reverse outline: series=${String(seriesId).slice(0, 12)} plotlines=${body.plotlines.length} scenes=${body.scenes.length}${truncated ? ' (truncated)' : ''}`);
   return { ...outline, stale: false };
 }
@@ -329,6 +343,121 @@ export async function getSceneSegmentation(seriesId) {
     status: outline.status || 'none',
     stale: outline.stale === true,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Cross-install peer sync (#1348) — the outline rides the series push/export as
+// a sibling doc (same as manuscript-review), so a regenerate-only change still
+// propagates even though it doesn't move the series record. Unlike the review's
+// per-comment LWW, the outline is a single regenerated document, so the merge
+// is whole-doc LWW on `generatedAt`.
+// ---------------------------------------------------------------------------
+
+/**
+ * Lightweight accessor for the push/export bundle: the raw stored outline doc
+ * (or null when none exists), WITHOUT the staleness recompute getReverseOutline
+ * does (that re-reads the whole manuscript). Only a `complete` outline is worth
+ * propagating — callers gate on `status === 'complete'`.
+ */
+export async function getStoredOutline(seriesId) {
+  assertValidSeriesId(seriesId);
+  return readOutline(seriesId);
+}
+
+// Sanitize one scene arriving over peer sync. Unlike sanitizeScene (which
+// rebuilds issueId/issueTitle from the LOCAL manuscript via byNumber), this
+// trusts + clamps the issue refs the sender already resolved — the receiving
+// peer may not hold the drafted manuscript, and the issues sync separately.
+function sanitizeSyncedScene(raw, idx, plotlineIds) {
+  if (!raw || typeof raw !== 'object') return null;
+  const summary = clampStr(raw.summary, SUMMARY_MAX);
+  const heading = clampStr(raw.heading, LABEL_MAX);
+  if (!summary && !heading) return null;
+  const primary = clampStr(raw.plotlineId, PLOTLINE_ID_MAX);
+  const secondary = clampStr(raw.secondaryPlotlineId, PLOTLINE_ID_MAX);
+  return {
+    id: `scene-${String(idx + 1).padStart(3, '0')}`,
+    sequence: idx,
+    issueNumber: Number.isInteger(raw.issueNumber) ? raw.issueNumber : null,
+    issueId: clampStr(raw.issueId, ISSUE_ID_MAX) || null,
+    issueTitle: clampStr(raw.issueTitle, LABEL_MAX),
+    heading: heading || summary.slice(0, LABEL_MAX),
+    summary,
+    anchorQuote: clampStr(raw.anchorQuote, ANCHOR_MAX),
+    povCharacter: clampStr(raw.povCharacter, NAME_MAX) || null,
+    plotlineId: plotlineIds.has(primary) ? primary : UNASSIGNED_PLOTLINE.id,
+    secondaryPlotlineId: secondary && plotlineIds.has(secondary) && secondary !== primary ? secondary : null,
+    components: sanitizeComponents(raw.components),
+    setting: clampStr(raw.setting, SETTING_MAX),
+    charactersPresent: Array.isArray(raw.charactersPresent)
+      ? raw.charactersPresent.map((n) => clampStr(n, NAME_MAX)).filter(Boolean).slice(0, MAX_CHARS_PRESENT)
+      : [],
+  };
+}
+
+/**
+ * Shape a full stored outline document arriving over peer sync into the local
+ * stored shape. Returns null for anything that isn't a complete, timestamped
+ * outline — only complete outlines propagate, and `generatedAt` is the LWW
+ * clock. Defense-in-depth on top of the peer-sync Zod schema: never trust a
+ * peer's payload past the wire shape. Exported via __testing.
+ */
+function sanitizeSyncedOutline(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  if (raw.status !== 'complete') return null;
+  const generatedAt = typeof raw.generatedAt === 'string' ? raw.generatedAt : null;
+  if (!generatedAt || Number.isNaN(new Date(generatedAt).getTime())) return null;
+  const plotlines = sanitizePlotlines(raw.plotlines);
+  const plotlineIds = new Set(plotlines.map((pl) => pl.id));
+  const scenes = (Array.isArray(raw.scenes) ? raw.scenes : [])
+    .slice(0, MAX_SCENES)
+    .map((s, idx) => sanitizeSyncedScene(s, idx, plotlineIds))
+    .filter(Boolean);
+  // Re-append the synthetic catch-all only if a scene landed on it and the
+  // sender didn't already include the row (mirrors sanitizeOutline).
+  if (scenes.some((s) => s.plotlineId === UNASSIGNED_PLOTLINE.id) && !plotlineIds.has(UNASSIGNED_PLOTLINE.id)) {
+    plotlines.push({ ...UNASSIGNED_PLOTLINE });
+  }
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    status: 'complete',
+    sourceContentHash: clampStr(raw.sourceContentHash, HASH_MAX) || null,
+    truncated: raw.truncated === true,
+    providerId: clampStr(raw.providerId, PROVIDER_MAX) || null,
+    model: clampStr(raw.model, PROVIDER_MAX) || null,
+    runId: clampStr(raw.runId, PROVIDER_MAX) || null,
+    generatedAt,
+    plotlines,
+    scenes,
+  };
+}
+
+/**
+ * Merge a reverse outline received from a peer, whole-doc LWW on `generatedAt`
+ * (strict-newer wins, so an equal-clock echo is a skip — matching
+ * mergeReviewFromSync's `>` guard). Returns the doc now on disk (local kept on a
+ * stale/equal push, remote adopted on a newer one) or null when the payload
+ * isn't a propagatable outline. Does NOT emit a record event (the local write
+ * paths do) so a received outline can't echo back into a push loop. Serializes
+ * on the same per-series tail as local writes.
+ */
+export async function mergeOutlineFromSync(seriesId, remoteOutline) {
+  assertValidSeriesId(seriesId);
+  const remote = sanitizeSyncedOutline(remoteOutline);
+  if (!remote) return null;
+  return queueOutlineWrite(seriesId, async () => {
+    const local = await readOutline(seriesId);
+    const localRaw = local && typeof local.generatedAt === 'string'
+      ? new Date(local.generatedAt).getTime()
+      : NaN;
+    // A corrupt/missing local clock sorts oldest so a valid remote always wins.
+    const localTime = Number.isNaN(localRaw) ? -Infinity : localRaw;
+    const remoteTime = new Date(remote.generatedAt).getTime();
+    if (!(remoteTime > localTime)) return local;
+    const next = { ...remote, seriesId };
+    await writeOutline(seriesId, next);
+    return next;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -385,4 +514,4 @@ export function startReverseOutlineRun(seriesId, options = {}) {
 }
 
 // Export internals for tests.
-export const __testing = { sanitizeOutline, sanitizePlotlines, sanitizeScene, isOutlineStale, contentHash, runs: runner.runs };
+export const __testing = { sanitizeOutline, sanitizePlotlines, sanitizeScene, sanitizeSyncedOutline, sanitizeSyncedScene, isOutlineStale, contentHash, runs: runner.runs };

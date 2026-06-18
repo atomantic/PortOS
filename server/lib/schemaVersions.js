@@ -110,6 +110,18 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // SCHEMA_VERSION 1→2, where an older peer's sanitizer would strip a field and
   // LWW it back) MUST introduce a gate then — mirroring the catalog
   // payloadSchemaVersion lockstep note below.
+  // ALSO not bumped for the reverse-outline sibling doc (#1348), bundled on
+  // series pushes/exports as `data/pipeline-series/{id}/reverse-outline.json`
+  // via a dedicated `reverseOutline` payload key. Identical reasoning to the
+  // manuscript-review note above: it's a separate doc (not a series field), so
+  // an older peer never round-trips it through `sanitizeSeries`; it's additive +
+  // gracefully degrading (a pre-#1348 receiver ignores the unknown key and ships
+  // none back, so the newer peer's `if (reverseOutline)` receive guard is a
+  // no-op and the local outline is preserved); and the sender's legacy-strip
+  // retry drops the key so the record/issues still land. Whole-doc LWW on
+  // `generatedAt` means there's no per-field strip-then-LWW-back corruption to
+  // gate against. The FIRST incompatible outline-doc shape change (reverseOutline.js
+  // SCHEMA_VERSION 1→2) MUST introduce a gate then, same as the review above.
   mediaCollections: 1,
   // v1 = author personas (PostgreSQL `authors` table) federated via the
   // per-record peer-sync push pipeline (record kind `author`, sync category

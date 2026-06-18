@@ -26,6 +26,7 @@ import { buildManifest, writeManifest, pruneBucketManifests } from './manifest.j
 import { listSeries, getSeries } from '../pipeline/series.js';
 import { listIssues } from '../pipeline/issues.js';
 import { getReview } from '../pipeline/manuscriptReview.js';
+import { getStoredOutline } from '../pipeline/reverseOutline.js';
 import { getUniverse } from '../universeBuilder.js';
 import { findCollectionByUniverseId, findCollectionBySeriesId } from '../mediaCollections.js';
 import { getJob } from '../mediaJobQueue/index.js';
@@ -426,6 +427,17 @@ export async function exportSeries(seriesId, bucketId, opts = {}) {
     reviewRefs.push(series.id);
   }
 
+  // Bundle the reverse-outline sibling doc (#1348) on the same terms as the
+  // review: keyed by seriesId under records/outlines/, NOT in `recordIds` (read
+  // by seriesId after the series merges). Only a `complete` outline is shipped;
+  // an importer that finds no file leaves the local outline untouched.
+  const outline = await getStoredOutline(series.id).catch(() => null);
+  const outlineRefs = [];
+  if (outline && outline.status === 'complete') {
+    await atomicWrite(bucketRecordPath(bucket.path, 'outlines', series.id), outline);
+    outlineRefs.push(series.id);
+  }
+
   for (const issue of issues) {
     recordIds.push(issue.id);
     const stamped = stampOrigin(issue, { bucket, source, sourceBio, manifestId });
@@ -471,7 +483,7 @@ export async function exportSeries(seriesId, bucketId, opts = {}) {
     return [...jobRefGroups.flat(), ...imageRefs.filter(Boolean), ...videoRefs.filter(Boolean), ...imageRefRefs.filter(Boolean)];
   });
 
-  const manifest = { ...manifestStub, recordIds, assetRefs, reviewRefs };
+  const manifest = { ...manifestStub, recordIds, assetRefs, reviewRefs, outlineRefs };
   const filename = await writeManifest(bucket.path, manifest);
   await pruneAfterExport(bucket, senderInstanceId);
   return { manifestId, filename, recordCount: recordIds.length, assetCount: assetRefs.length };

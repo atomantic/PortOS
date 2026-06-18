@@ -132,11 +132,29 @@ const manuscriptReviewField = {
     }).passthrough()).max(5000),
   }).passthrough().optional(),
 };
+// Optional bundled reverse-outline sibling doc (#1348) — a series push carries
+// the scene-by-scene segmentation (data/pipeline-series/{id}/reverse-outline.json)
+// so a regenerate-only change propagates via the per-record push pipeline. ONLY
+// valid on series pushes. `.passthrough()` on the doc + each scene/plotline
+// (same rationale as manuscriptReview) so a newer sender that adds a field
+// doesn't 400 at this receiver BEFORE its merge — `sanitizeSyncedOutline`
+// clamps/drops everything on apply. Arrays are bounded so the payload can't
+// force unbounded work (the sanitizer caps them again at 600 scenes / 10 plotlines).
+const reverseOutlineField = {
+  reverseOutline: z.object({
+    schemaVersion: z.number().int().min(0).max(1_000_000).optional(),
+    status: z.string().max(40).optional(),
+    generatedAt: z.string().max(64).optional(),
+    plotlines: z.array(z.object({}).passthrough()).max(64).optional(),
+    scenes: z.array(z.object({}).passthrough()).max(2000).optional(),
+  }).passthrough().optional(),
+};
 const seriesPushSchema = z.object({
   kind: z.literal('series'),
   ...peerSyncPushBase,
   ...linkedCollectionField,
   ...manuscriptReviewField,
+  ...reverseOutlineField,
   issues: z.array(peerWireRecordSchema).max(1000).optional(),
 }).strict();
 const mediaCollectionPushSchema = z.object({

@@ -45,6 +45,12 @@ vi.mock('./arcPlanner.js', () => ({
   sectionsCorpus: (sections) => sections.map((s) => `# Issue ${s.number}\n\n${s.content}`).join('\n\n---\n\n'),
 }));
 
+// Record-event emitter — spied so we can assert generate emits a series
+// `updated` event (firing peer-sync) while mergeOutlineFromSync stays silent
+// (the echo-loop guard).
+const { emitRecordUpdatedMock } = vi.hoisted(() => ({ emitRecordUpdatedMock: vi.fn() }));
+vi.mock('../sharing/recordEvents.js', () => ({ emitRecordUpdated: emitRecordUpdatedMock }));
+
 const svc = await import('./reverseOutline.js');
 
 const SERIES_ID = 'ser-abc';
@@ -70,6 +76,7 @@ function cannedOutline() {
 
 beforeEach(() => {
   fileStore.clear();
+  emitRecordUpdatedMock.mockClear();
   llmQueue.length = 0;
   llmCalls.length = 0;
   sectionsFixture = [{ issueId: 'iss-1', number: 1, title: 'One', stageId: 'prose', content: 'It was dusk on the pier.' }];
@@ -183,5 +190,98 @@ describe('sanitizeOutline (pure)', () => {
       scenes: [{ summary: 'x', plotlineId: 'A' }],
     });
     expect(plotlines.map((p) => p.id)).not.toContain('_unassigned');
+  });
+});
+
+describe('emits a series updated event on generate (peer-sync trigger)', () => {
+  it('fires emitRecordUpdated after a successful generation', async () => {
+    llmQueue.push(cannedOutline());
+    await svc.generateReverseOutline(SERIES_ID, {});
+    expect(emitRecordUpdatedMock).toHaveBeenCalledWith('series', SERIES_ID);
+  });
+
+  it('does not emit again when returning a cached (unchanged-manuscript) outline', async () => {
+    llmQueue.push(cannedOutline());
+    await svc.generateReverseOutline(SERIES_ID, {});
+    emitRecordUpdatedMock.mockClear();
+    // Same manuscript hash → cached short-circuit, no write, no emit.
+    await svc.generateReverseOutline(SERIES_ID, {});
+    expect(emitRecordUpdatedMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('sanitizeSyncedOutline (peer sync)', () => {
+  const { sanitizeSyncedOutline } = svc.__testing;
+
+  it('returns null for a non-complete or untimestamped outline', () => {
+    expect(sanitizeSyncedOutline({ status: 'none', generatedAt: '2026-06-02T00:00:00Z' })).toBeNull();
+    expect(sanitizeSyncedOutline({ status: 'complete' })).toBeNull();
+    expect(sanitizeSyncedOutline({ status: 'complete', generatedAt: 'not-a-date' })).toBeNull();
+    expect(sanitizeSyncedOutline(null)).toBeNull();
+  });
+
+  it('preserves the sender-resolved issue refs instead of recomputing them', () => {
+    // Unlike sanitizeOutline (byNumber-driven), the synced sanitizer trusts the
+    // issueId/issueTitle the sender already resolved — the receiver may not hold
+    // the manuscript.
+    const out = sanitizeSyncedOutline({
+      status: 'complete', generatedAt: '2026-06-02T00:00:00Z',
+      plotlines: [{ id: 'A', label: 'Main', kind: 'main' }],
+      scenes: [{ summary: 'A beat.', issueNumber: 3, issueId: 'iss-xyz', issueTitle: 'Chapter Three', plotlineId: 'A' }],
+    });
+    expect(out.scenes[0].issueId).toBe('iss-xyz');
+    expect(out.scenes[0].issueTitle).toBe('Chapter Three');
+    expect(out.scenes[0].issueNumber).toBe(3);
+  });
+
+  it('drops empty scenes and maps unknown plotlines to _unassigned', () => {
+    const out = sanitizeSyncedOutline({
+      status: 'complete', generatedAt: '2026-06-02T00:00:00Z',
+      plotlines: [{ id: 'A', label: 'Main', kind: 'main' }],
+      scenes: [{ summary: 'kept', plotlineId: 'Z' }, { nonsense: true }],
+    });
+    expect(out.scenes).toHaveLength(1);
+    expect(out.scenes[0].plotlineId).toBe('_unassigned');
+    expect(out.plotlines.map((p) => p.id)).toContain('_unassigned');
+  });
+});
+
+describe('mergeOutlineFromSync (whole-doc LWW)', () => {
+  const remote = (generatedAt, summary = 'remote') => ({
+    status: 'complete', generatedAt,
+    plotlines: [{ id: 'A', label: 'Main', kind: 'main' }],
+    scenes: [{ summary, plotlineId: 'A' }],
+  });
+
+  it('adopts a remote outline when none exists locally', async () => {
+    const merged = await svc.mergeOutlineFromSync(SERIES_ID, remote('2026-06-02T00:00:00Z'));
+    expect(merged.scenes[0].summary).toBe('remote');
+    expect(merged.seriesId).toBe(SERIES_ID);
+    // Receive path must NOT emit (echo-loop guard).
+    expect(emitRecordUpdatedMock).not.toHaveBeenCalled();
+  });
+
+  it('adopts a strictly-newer remote over an older local outline', async () => {
+    await svc.mergeOutlineFromSync(SERIES_ID, remote('2026-06-02T00:00:00Z', 'old'));
+    const merged = await svc.mergeOutlineFromSync(SERIES_ID, remote('2026-06-03T00:00:00Z', 'new'));
+    expect(merged.scenes[0].summary).toBe('new');
+  });
+
+  it('keeps the local outline on an equal-clock echo (strict-newer wins)', async () => {
+    await svc.mergeOutlineFromSync(SERIES_ID, remote('2026-06-02T00:00:00Z', 'first'));
+    const merged = await svc.mergeOutlineFromSync(SERIES_ID, remote('2026-06-02T00:00:00Z', 'echo'));
+    expect(merged.scenes[0].summary).toBe('first');
+  });
+
+  it('keeps the local outline when the remote is older', async () => {
+    await svc.mergeOutlineFromSync(SERIES_ID, remote('2026-06-03T00:00:00Z', 'newer-local'));
+    const merged = await svc.mergeOutlineFromSync(SERIES_ID, remote('2026-06-01T00:00:00Z', 'stale-remote'));
+    expect(merged.scenes[0].summary).toBe('newer-local');
+  });
+
+  it('returns null and writes nothing for a non-propagatable (non-complete) remote', async () => {
+    const merged = await svc.mergeOutlineFromSync(SERIES_ID, { status: 'none', generatedAt: '2026-06-02T00:00:00Z' });
+    expect(merged).toBeNull();
+    expect(await svc.getStoredOutline(SERIES_ID)).toBeNull();
   });
 });

@@ -106,8 +106,8 @@ export function bucketBlobSidecarPath(bucketPath, hash) {
 export function bucketBlobIndexPath(bucketPath) { return join(bucketBlobsDir(bucketPath), '.index.json'); }
 export function imageSidecarName(filename) { return filename.replace(IMAGE_EXT_RE, '') + '.metadata.json'; }
 
-// Per-bucket record store — series/issues/universes/media/reviews JSON live
-// under `records/<type>/<id>.json`. Unlike the blob helpers above, these do
+// Per-bucket record store — series/issues/universes/media/reviews/outlines JSON
+// live under `records/<type>/<id>.json`. Unlike the blob helpers above, these do
 // NOT validate `id`: every callsite supplies an id that's either locally
 // authored (the exporter) or already screened by `isSafeRecordId` (the
 // importer) before it reaches the path. Keeping them as plain joins preserves
@@ -145,6 +145,7 @@ export async function ensureBucketLayout(bucket) {
   await ensureDir(bucketRecordsDir(base, 'universes'));
   await ensureDir(bucketRecordsDir(base, 'media'));
   await ensureDir(bucketRecordsDir(base, 'reviews'));
+  await ensureDir(bucketRecordsDir(base, 'outlines'));
   await ensureDir(join(base, 'assets', 'images'));
   await ensureDir(join(base, 'assets', 'videos'));
   await ensureDir(join(base, 'assets', 'blobs'));

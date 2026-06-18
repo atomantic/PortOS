@@ -951,6 +951,7 @@ export async function pushRecordToPeer(sub, options = {}) {
     issues: payload.issues ?? null,
     linkedCollection: payload.linkedCollection ?? null,
     manuscriptReview: payload.manuscriptReview ?? null,
+    reverseOutline: payload.reverseOutline ?? null,
     assetManifest: payload.assetManifest ?? [],
   });
   if (sub.lastPushedHash && sub.lastPushedHash === hash) {
@@ -983,6 +984,10 @@ export async function pushRecordToPeer(sub, options = {}) {
   // review once that peer upgrades. Withhold the hash (like reviewSyncPending)
   // so the next cycle re-sends.
   let reviewStrippedForLegacyPeer = false;
+  // Same as reviewStrippedForLegacyPeer, for the bundled reverse-outline doc —
+  // a pre-#1348 peer's strict series schema rejects the `reverseOutline` key, so
+  // the retry strips it and we withhold the hash to re-send once it upgrades.
+  let outlineStrippedForLegacyPeer = false;
   // MIXED-VERSION COMPAT: an older receiver's push schema is still `.strict()`
   // without a `portosMeta` field, so it 400-rejects our envelope at Zod
   // validation BEFORE its schema-version gate code (which doesn't exist on
@@ -1015,8 +1020,8 @@ export async function pushRecordToPeer(sub, options = {}) {
     const mentions = (key) => details.some((d) => new RegExp(key).test(`${d?.path || ''} ${d?.message || ''}`));
     if (
       isValidationError
-      && (payload.portosMeta || payload.catalogBundle || payload.manuscriptReview)
-      && (mentions('portosMeta') || mentions('catalogBundle') || mentions('manuscriptReview'))
+      && (payload.portosMeta || payload.catalogBundle || payload.manuscriptReview || payload.reverseOutline)
+      && (mentions('portosMeta') || mentions('catalogBundle') || mentions('manuscriptReview') || mentions('reverseOutline'))
     ) {
       // (1) UNKNOWN ENVELOPE KEY — the peer recognizes the record `kind` but its
       // `.strict()` schema predates a newer top-level key we sent. Strip whichever
@@ -1027,6 +1032,7 @@ export async function pushRecordToPeer(sub, options = {}) {
       if (mentions('portosMeta') && 'portosMeta' in legacyPayload) { delete legacyPayload.portosMeta; stripped.push('portosMeta'); }
       if (mentions('catalogBundle') && 'catalogBundle' in legacyPayload) { delete legacyPayload.catalogBundle; stripped.push('catalogBundle'); }
       if (mentions('manuscriptReview') && 'manuscriptReview' in legacyPayload) { delete legacyPayload.manuscriptReview; stripped.push('manuscriptReview'); reviewStrippedForLegacyPeer = true; }
+      if (mentions('reverseOutline') && 'reverseOutline' in legacyPayload) { delete legacyPayload.reverseOutline; stripped.push('reverseOutline'); outlineStrippedForLegacyPeer = true; }
       console.log(
         `ℹ️ peerSync: ${peer.name || peer.instanceId} rejected newer envelope key(s) ${stripped.join(', ')} — retrying push without them`,
       );
@@ -1125,6 +1131,11 @@ export async function pushRecordToPeer(sub, options = {}) {
   // of short-circuiting on `unchanged` — the review has no independent
   // reconciliation path, so a saved hash here would strand the update.
   const reviewSyncPending = body?.reviewSyncPending === true || reviewStrippedForLegacyPeer;
+  // OUTLINE-STRANDED GUARD: same as the review above — the receiver merged the
+  // record/issues but its bundled reverse-outline merge threw (or we stripped
+  // the key for a pre-#1348 peer). The outline has no independent reconciliation
+  // path, so withhold lastPushedHash to re-send next cycle.
+  const outlineSyncPending = body?.outlineSyncPending === true || outlineStrippedForLegacyPeer;
   // This push landed (receiver returned 2xx). Stamp the per-record confirmed-
   // delivery water-mark so tombstoneGc won't prune THIS record's tombstone
   // until its delete-push has been confirmed — even if a later push for a
@@ -1134,7 +1145,7 @@ export async function pushRecordToPeer(sub, options = {}) {
   // the tombstone's deletedAt once it lands. The `missingAssets` case still
   // counts as confirmed delivery of the RECORD (merge ran on the receiver);
   // only the asset-stranded hash is withheld, not the confirmation mark.
-  await persistPushSuccess(sub.id, (missingCount > 0 || reviewSyncPending) ? null : hash, { confirmedAtMs: Date.now() });
+  await persistPushSuccess(sub.id, (missingCount > 0 || reviewSyncPending || outlineSyncPending) ? null : hash, { confirmedAtMs: Date.now() });
   if (Number.isFinite(body?.ackedDeletesUpTo) && body.ackedDeletesUpTo > 0) {
     await ackDeletesUpTo(sub.peerId, body.ackedDeletesUpTo).catch(() => {});
   }
@@ -1363,6 +1374,17 @@ async function buildPushPayload(sub, sourceInstanceId) {
       : await import('../pipeline/manuscriptReview.js')
         .then(({ getReview }) => getReview(sub.recordId))
         .catch(() => null);
+    // Bundle the reverse-outline sibling doc (the scene-by-scene segmentation)
+    // on the same terms as the review above: a regenerate-only change doesn't
+    // move the series record, so without bundling it the per-record push would
+    // short-circuit and the receiver's outline would diverge. Only a `complete`
+    // outline is worth shipping. Skip for tombstones. Dynamic import keeps
+    // reverseOutline's arcPlanner graph off peerSync's boot load path.
+    const reverseOutline = record.deleted === true
+      ? null
+      : await import('../pipeline/reverseOutline.js')
+        .then(({ getStoredOutline }) => getStoredOutline(sub.recordId))
+        .catch(() => null);
     return {
       kind: 'series',
       record: sanitized,
@@ -1372,6 +1394,7 @@ async function buildPushPayload(sub, sourceInstanceId) {
       portosMeta,
       ...(linkedCollection ? { linkedCollection } : {}),
       ...(manuscriptReview && manuscriptReview.comments?.length ? { manuscriptReview } : {}),
+      ...(reverseOutline && reverseOutline.status === 'complete' ? { reverseOutline } : {}),
     };
   }
   if (sub.recordKind === 'mediaCollection') {
@@ -1574,7 +1597,7 @@ export async function applyIncomingPush(payload) {
   if (!isPlainObject(payload)) {
     throw makeErr('payload must be an object', ERR_VALIDATION);
   }
-  const { kind, record, issues, linkedCollection, catalogBundle, manuscriptReview, assetManifest, sourceInstanceId, portosMeta } = payload;
+  const { kind, record, issues, linkedCollection, catalogBundle, manuscriptReview, reverseOutline, assetManifest, sourceInstanceId, portosMeta } = payload;
   if (!PEER_SUBSCRIBABLE_KINDS.includes(kind)) {
     throw makeErr(`unknown kind: ${kind}`, ERR_VALIDATION);
   }
@@ -1703,6 +1726,8 @@ export async function applyIncomingPush(payload) {
   // sender so it withholds lastPushedHash and retries (the review has no other
   // reconciliation path; see the merge block below).
   let reviewSyncPending = false;
+  // Same contract as reviewSyncPending, for the bundled reverse-outline doc.
+  let outlineSyncPending = false;
   if (kind === 'universe') {
     await mergeUniversesFromSync([record], { source });
   } else if (kind === 'series') {
@@ -1731,6 +1756,18 @@ export async function applyIncomingPush(payload) {
       await mergeReviewFromSync(record.id, manuscriptReview).catch((err) => {
         console.log(`⚠️ peerSync: manuscriptReview merge failed: ${err.message}`);
         reviewSyncPending = true;
+      });
+    }
+    // Merge the bundled reverse-outline sibling doc, whole-doc LWW on
+    // generatedAt. Same ephemeral/tombstone guards + pending-signal contract as
+    // the review above: a merge failure must withhold the sender's hash so the
+    // outline (which has no independent reconciliation cycle) re-sends next
+    // cycle. Dynamic import keeps the arcPlanner graph off peerSync's load path.
+    if (!localEphemeral && record.deleted !== true && isPlainObject(reverseOutline)) {
+      const { mergeOutlineFromSync } = await import('../pipeline/reverseOutline.js');
+      await mergeOutlineFromSync(record.id, reverseOutline).catch((err) => {
+        console.log(`⚠️ peerSync: reverseOutline merge failed: ${err.message}`);
+        outlineSyncPending = true;
       });
     }
   } else if (kind === 'mediaCollection') {
@@ -1835,6 +1872,7 @@ export async function applyIncomingPush(payload) {
     reverseSubscriptionCreated,
     ackedDeletesUpTo,
     ...(reviewSyncPending ? { reviewSyncPending: true } : {}),
+    ...(outlineSyncPending ? { outlineSyncPending: true } : {}),
   };
 }
 

@@ -49,6 +49,14 @@ vi.mock('../pipeline/manuscriptReview.js', async () => ({
   mergeReviewFromSync: vi.fn(),
 }));
 
+// reverseOutline is dynamic-imported inside the series push/receive helpers (and
+// statically by exporter.js, which peerSync.js imports) — mock both entry points
+// so the outline bundle path is exercisable without loading the arcPlanner graph.
+vi.mock('../pipeline/reverseOutline.js', async () => ({
+  getStoredOutline: vi.fn(),
+  mergeOutlineFromSync: vi.fn(),
+}));
+
 vi.mock('../mediaCollections.js', async () => ({
   getCollection: vi.fn(),
   listCollections: vi.fn(),
@@ -110,6 +118,7 @@ import { getUniverse, mergeUniversesFromSync, listUniverses } from '../universeB
 import { getSeries, mergeSeriesFromSync, listSeries } from '../pipeline/series.js';
 import { listIssues, mergeIssuesFromSync } from '../pipeline/issues.js';
 import { getReview, mergeReviewFromSync } from '../pipeline/manuscriptReview.js';
+import { getStoredOutline, mergeOutlineFromSync } from '../pipeline/reverseOutline.js';
 import {
   getCollection,
   listCollections,
@@ -189,6 +198,10 @@ beforeEach(async () => {
   // review-bundle path override getReview per-call.
   vi.mocked(getReview).mockReset().mockResolvedValue({ schemaVersion: 1, comments: [] });
   vi.mocked(mergeReviewFromSync).mockReset().mockResolvedValue({ schemaVersion: 1, comments: [] });
+  // Default: no stored reverse outline for any series. Tests that exercise the
+  // outline-bundle path override getStoredOutline per-call.
+  vi.mocked(getStoredOutline).mockReset().mockResolvedValue(null);
+  vi.mocked(mergeOutlineFromSync).mockReset().mockResolvedValue(null);
   // Default: no linked collection for any record. Tests that exercise the
   // bundle path override these per-call.
   vi.mocked(getCollection).mockReset().mockRejectedValue(Object.assign(new Error('Collection not found'), { code: 'NOT_FOUND' }));
@@ -1572,6 +1585,49 @@ describe('peerSync', () => {
       expect(vi.mocked(getReview)).not.toHaveBeenCalled();
     });
 
+    it('bundles the reverse outline with a series push so regenerate-only edits propagate', async () => {
+      vi.mocked(getSeries).mockResolvedValue({ id: 's1', name: 'Series' });
+      vi.mocked(getStoredOutline).mockResolvedValue({
+        seriesId: 's1', schemaVersion: 1, status: 'complete', generatedAt: '2026-06-02T00:00:00Z',
+        plotlines: [{ id: 'a', label: 'A-plot', kind: 'main', color: '#3b82f6' }],
+        scenes: [{ id: 'scene-001', sequence: 0, summary: 'opening', plotlineId: 'a' }],
+      });
+      let captured = null;
+      vi.mocked(peerFetch).mockImplementation(async (_url, opts) => {
+        captured = JSON.parse(opts.body);
+        return { ok: true, json: async () => ({}) };
+      });
+      await pushRecordToPeer({ id: 's', peerId: 'peer-a', recordKind: 'series', recordId: 's1' });
+      expect(captured.reverseOutline).toBeTruthy();
+      expect(captured.reverseOutline.scenes).toHaveLength(1);
+      expect(captured.reverseOutline.generatedAt).toBe('2026-06-02T00:00:00Z');
+    });
+
+    it('omits the reverseOutline key when no complete outline exists', async () => {
+      vi.mocked(getSeries).mockResolvedValue({ id: 's1', name: 'Series' });
+      // A never-generated / in-progress outline (status !== 'complete') is not shipped.
+      vi.mocked(getStoredOutline).mockResolvedValue({ seriesId: 's1', schemaVersion: 1, status: 'none', plotlines: [], scenes: [] });
+      let captured = null;
+      vi.mocked(peerFetch).mockImplementation(async (_url, opts) => {
+        captured = JSON.parse(opts.body);
+        return { ok: true, json: async () => ({}) };
+      });
+      await pushRecordToPeer({ id: 's', peerId: 'peer-a', recordKind: 'series', recordId: 's1' });
+      expect(captured.reverseOutline).toBeUndefined();
+    });
+
+    it('does not fetch an outline for a tombstone series push', async () => {
+      vi.mocked(getSeries).mockResolvedValue({ id: 's1', name: 'Series', deleted: true, deletedAt: '2026-06-02T00:00:00Z', updatedAt: '2026-06-02T00:00:00Z' });
+      let captured = null;
+      vi.mocked(peerFetch).mockImplementation(async (_url, opts) => {
+        captured = JSON.parse(opts.body);
+        return { ok: true, json: async () => ({}) };
+      });
+      await pushRecordToPeer({ id: 's', peerId: 'peer-a', recordKind: 'series', recordId: 's1' });
+      expect(captured.reverseOutline).toBeUndefined();
+      expect(vi.mocked(getStoredOutline)).not.toHaveBeenCalled();
+    });
+
     it('re-pushes when only the manuscript review changes (series record byte-identical)', async () => {
       vi.mocked(getSeries).mockResolvedValue({ id: 's1', name: 'Series' });
       vi.mocked(getReview)
@@ -2106,6 +2162,76 @@ describe('peerSync', () => {
       // The series/issues merge still succeeded — the push isn't failed — but
       // the sender is told to withhold its hash and retry the review.
       expect(res.reviewSyncPending).toBe(true);
+    });
+
+    const sampleOutline = (generatedAt = '2026-06-02T00:00:00Z') => ({
+      schemaVersion: 1, status: 'complete', generatedAt,
+      plotlines: [{ id: 'a', label: 'A', kind: 'main' }],
+      scenes: [{ id: 'scene-001', sequence: 0, summary: 'opening', plotlineId: 'a' }],
+    });
+
+    it('routes a bundled reverseOutline through mergeOutlineFromSync on a series push', async () => {
+      const reverseOutline = sampleOutline();
+      await applyIncomingPush({
+        kind: 'series',
+        record: { id: 's1', name: 'S', deleted: false, deletedAt: null },
+        issues: [],
+        reverseOutline,
+        assetManifest: [],
+        sourceInstanceId: 'peer-a',
+      });
+      expect(mergeOutlineFromSync).toHaveBeenCalledWith('s1', reverseOutline);
+    });
+
+    it('skips mergeOutlineFromSync when no reverseOutline is bundled', async () => {
+      await applyIncomingPush({
+        kind: 'series',
+        record: { id: 's1', name: 'S', deleted: false, deletedAt: null },
+        issues: [],
+        assetManifest: [],
+        sourceInstanceId: 'peer-a',
+      });
+      expect(mergeOutlineFromSync).not.toHaveBeenCalled();
+    });
+
+    it('refuses to merge reverseOutline when the incoming series record is a tombstone', async () => {
+      await applyIncomingPush({
+        kind: 'series',
+        record: { id: 's1', deleted: true, deletedAt: '2026-06-02T00:00:00Z', updatedAt: '2026-06-02T00:00:00Z' },
+        issues: [],
+        reverseOutline: sampleOutline(),
+        assetManifest: [],
+        sourceInstanceId: 'peer-a',
+      });
+      expect(mergeOutlineFromSync).not.toHaveBeenCalled();
+    });
+
+    it('skips mergeOutlineFromSync when the LOCAL series is ephemeral', async () => {
+      vi.mocked(getSeries).mockResolvedValue({ id: 's1', ephemeral: true });
+      await applyIncomingPush({
+        kind: 'series',
+        record: { id: 's1', name: 'S', deleted: false, deletedAt: null },
+        issues: [],
+        reverseOutline: sampleOutline(),
+        assetManifest: [],
+        sourceInstanceId: 'peer-a',
+      });
+      expect(mergeOutlineFromSync).not.toHaveBeenCalled();
+    });
+
+    it('returns outlineSyncPending when the bundled outline merge throws (so the sender retries)', async () => {
+      vi.mocked(mergeOutlineFromSync).mockRejectedValueOnce(new Error('disk full'));
+      const res = await applyIncomingPush({
+        kind: 'series',
+        record: { id: 's1', name: 'S', deleted: false, deletedAt: null },
+        issues: [],
+        reverseOutline: sampleOutline(),
+        assetManifest: [],
+        sourceInstanceId: 'peer-a',
+      });
+      // Series/issues merge still succeeded — the outline has no independent
+      // reconciliation path, so the sender withholds its hash and retries.
+      expect(res.outlineSyncPending).toBe(true);
     });
 
     it('refuses to merge linkedCollection when the incoming record is a tombstone', async () => {
@@ -2975,6 +3101,46 @@ describe('peerSync', () => {
         // Hash withheld so the review re-sends once the peer upgrades (the
         // retry landed with the review stripped, so saving the full-payload
         // hash would short-circuit the next push as 'unchanged').
+        const refreshed = await findPeerSubscription('peer-a', 'series', 's1');
+        expect(refreshed.lastPushedHash).toBeFalsy();
+      });
+
+      it('falls back without reverseOutline when a pre-#1348 peer rejects the new key, keeping series + issues', async () => {
+        // Same graceful-degradation contract as the manuscriptReview strip above:
+        // a pre-#1348 peer's `.strict()` series schema 400-rejects the
+        // reverseOutline key, so the sender strips ONLY it and retries, then
+        // withholds the hash so the outline re-sends once the peer upgrades.
+        vi.mocked(getSeries).mockResolvedValue({ id: 's1', name: 'Series' });
+        vi.mocked(listIssues).mockResolvedValue([{ id: 'i1', seriesId: 's1', number: 1 }]);
+        vi.mocked(getStoredOutline).mockResolvedValue({
+          seriesId: 's1', schemaVersion: 1, status: 'complete', generatedAt: '2026-06-02T00:00:00Z',
+          plotlines: [{ id: 'a', label: 'A', kind: 'main', color: '#3b82f6' }],
+          scenes: [{ id: 'scene-001', sequence: 0, summary: 'opening', plotlineId: 'a' }],
+        });
+        const firstCallBody = { ok: false, status: 400, json: async () => ({
+          code: 'VALIDATION_ERROR',
+          message: 'Validation failed',
+          context: { details: [{ path: '', message: "Unrecognized key(s) in object: 'reverseOutline'" }] },
+        }) };
+        firstCallBody.clone = () => firstCallBody;
+        const retryBody = { ok: true, status: 200, json: async () => ({}) };
+        vi.mocked(peerFetch).mockResolvedValueOnce(firstCallBody).mockResolvedValueOnce(retryBody);
+        const sub = await subscribePeer({
+          peerId: 'peer-a', recordKind: 'series', recordId: 's1',
+        }, { adoptedFromReverse: true });
+        const result = await pushRecordToPeer(sub);
+        expect(result.pushed).toBe(true);
+        const calls = vi.mocked(peerFetch).mock.calls;
+        expect(calls.length).toBe(2);
+        const firstPayload = JSON.parse(calls[0][1].body);
+        const retryPayload = JSON.parse(calls[1][1].body);
+        expect(firstPayload.reverseOutline).toBeDefined();
+        expect(retryPayload.reverseOutline).toBeUndefined();
+        // Surgical strip: portosMeta + series + issues still land.
+        expect(retryPayload.portosMeta).toBeDefined();
+        expect(retryPayload.record.id).toBe('s1');
+        expect(retryPayload.issues).toHaveLength(1);
+        // Hash withheld so the outline re-sends once the peer upgrades.
         const refreshed = await findPeerSubscription('peer-a', 'series', 's1');
         expect(refreshed.lastPushedHash).toBeFalsy();
       });
