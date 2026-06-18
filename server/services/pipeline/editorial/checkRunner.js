@@ -191,7 +191,12 @@ export async function runEditorialChecks(seriesId, options = {}) {
       const corpora = plan.mode === 'whole'
         ? [manuscript]
         : plan.chunks.map((c) => sectionsCorpus(c.sections));
-      return corpora.map((c) => c.slice(0, plan.usableChars));
+      const chunks = corpora.map((c) => c.slice(0, plan.usableChars));
+      // Expose the per-chunk budget so a cross-chunk-digest check can fit its
+      // digest into each chunk's spare room without overflowing the window or
+      // displacing manuscript text (see runChunkedManuscriptCheck).
+      chunks.usableChars = plan.usableChars;
+      return chunks;
     },
   };
 

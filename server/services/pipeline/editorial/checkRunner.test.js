@@ -181,6 +181,32 @@ describe('runEditorialChecks', () => {
     expect(allSent).toContain('SEC3');
   });
 
+  it('feeds a prior-chunk digest to later chunks for a cross-chunk-digest check, but not the first (#1383)', async () => {
+    // A long manuscript + small window → chunked. style.conformance opts into the
+    // cross-chunk digest, so chunks AFTER the first carry a digest of prior findings.
+    const big = (marker) => `${marker} ${'A'.repeat(12_000)}`;
+    getSeries.mockResolvedValueOnce({ id: 's1', universeId: 'u1', styleGuide: { tense: 'past', povPerson: 'first' } });
+    collectManuscriptSections.mockResolvedValueOnce([
+      { number: 1, title: 'One', stageId: 'prose', content: big('SEC1') },
+      { number: 2, title: 'Two', stageId: 'prose', content: big('SEC2') },
+      { number: 3, title: 'Three', stageId: 'prose', content: big('SEC3') },
+    ]);
+    resolveStageContext.mockResolvedValueOnce({ provider: { type: 'api', endpoint: 'http://localhost:11434' }, model: 'm', contextWindow: 10_000 });
+    // The default runStagedLLM mock returns a finding on every call, so the first
+    // chunk seeds the digest fed to later chunks (no custom impl needed — that
+    // would leak past this test).
+
+    await runEditorialChecks('s1', { checkIds: ['style.conformance'] });
+    const sent = runStagedLLM.mock.calls.map((c) => c[1].manuscript);
+    expect(sent.length).toBeGreaterThan(1);
+    // First chunk: no digest preamble.
+    expect(sent[0]).not.toContain('EARLIER parts of this manuscript');
+    // At least one later chunk carries the digest of the first chunk's finding.
+    const withDigest = sent.slice(1).filter((m) => m.includes('EARLIER parts of this manuscript'));
+    expect(withDigest.length).toBeGreaterThan(0);
+    expect(withDigest[0]).toContain('Info dump in opening');
+  });
+
   it('still sends a non-empty manuscript on a small/fallback context window (issue #1340)', async () => {
     // An unknown local provider falls back to the 8K window. With the contextBudget
     // default 8K output reserve this would leave a 0-char input budget and feed the
