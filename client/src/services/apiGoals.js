@@ -63,6 +63,9 @@ export const deleteGoalTodo = (goalId, todoId) => request(`/digital-twin/identit
 // Goal AI Planning & Scheduling
 export const generateGoalPhases = (goalId, options = {}) => request(`/digital-twin/identity/goals/${goalId}/generate-phases`, { method: 'POST', body: JSON.stringify(options) });
 export const acceptGoalPhases = (goalId, phases) => request(`/digital-twin/identity/goals/${goalId}/accept-phases`, { method: 'POST', body: JSON.stringify({ phases }) });
+export const decomposeGoal = (goalId, options = {}) => request(`/digital-twin/identity/goals/${goalId}/decompose`, { method: 'POST', body: JSON.stringify(options) });
+export const acceptGoalDecomposition = (goalId, milestones) => request(`/digital-twin/identity/goals/${goalId}/accept-decomposition`, { method: 'POST', body: JSON.stringify({ milestones }) });
+export const completeMilestoneTask = (goalId, milestoneId, taskId) => request(`/digital-twin/identity/goals/${goalId}/milestones/${milestoneId}/tasks/${taskId}/complete`, { method: 'PUT' });
 export const organizeGoals = (options = {}) => request('/digital-twin/identity/goals/organize', { method: 'POST', body: JSON.stringify(options) });
 export const applyGoalOrganization = (organization) => request('/digital-twin/identity/goals/organize/apply', { method: 'POST', body: JSON.stringify({ organization }) });
 export const checkInGoal = (goalId, options = {}) => request(`/digital-twin/identity/goals/${goalId}/check-in`, { method: 'POST', body: JSON.stringify(options) });

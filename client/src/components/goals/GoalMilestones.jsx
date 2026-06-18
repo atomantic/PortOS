@@ -1,7 +1,9 @@
 import { Milestone, Check, Calendar } from 'lucide-react';
+import { PRIORITY_BADGE } from './goalConstants';
 
 export default function GoalMilestones({
-  goal, newMilestone, setNewMilestone, handleAddMilestone, handleCompleteMilestone
+  goal, newMilestone, setNewMilestone, handleAddMilestone, handleCompleteMilestone,
+  handleCompleteMilestoneTask
 }) {
   return (
     <div>
@@ -14,25 +16,57 @@ export default function GoalMilestones({
       {goal.milestones?.length > 0 && (
         <div className="space-y-1 mb-2">
           {goal.milestones.map(ms => (
-            <div key={ms.id} className="flex items-center gap-2 text-sm">
-              <button
-                onClick={() => !ms.completedAt && handleCompleteMilestone(ms.id)}
-                className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${
-                  ms.completedAt
-                    ? 'bg-green-500/20 border-green-500 text-green-400'
-                    : 'border-gray-600 hover:border-port-accent'
-                }`}
-              >
-                {ms.completedAt && <Check className="w-3 h-3" />}
-              </button>
-              <span className={`text-xs ${ms.completedAt ? 'text-gray-500 line-through' : 'text-gray-300'}`}>
-                {ms.title}
-              </span>
-              {ms.targetDate && (
-                <span className="text-xs text-gray-600 ml-auto flex items-center gap-1">
-                  <Calendar className="w-3 h-3" />
-                  {new Date(ms.targetDate).toLocaleDateString()}
+            <div key={ms.id} className="space-y-1">
+              <div className="flex items-center gap-2 text-sm">
+                <button
+                  onClick={() => !ms.completedAt && handleCompleteMilestone(ms.id)}
+                  className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${
+                    ms.completedAt
+                      ? 'bg-green-500/20 border-green-500 text-green-400'
+                      : 'border-gray-600 hover:border-port-accent'
+                  }`}
+                >
+                  {ms.completedAt && <Check className="w-3 h-3" />}
+                </button>
+                <span className={`text-xs ${ms.completedAt ? 'text-gray-500 line-through' : 'text-gray-300'}`}>
+                  {ms.title}
                 </span>
+                {ms.targetDate && (
+                  <span className="text-xs text-gray-600 ml-auto flex items-center gap-1">
+                    <Calendar className="w-3 h-3" />
+                    {new Date(ms.targetDate).toLocaleDateString()}
+                  </span>
+                )}
+              </div>
+              {ms.tasks?.length > 0 && (
+                <div className="pl-6 space-y-0.5">
+                  {ms.tasks.map(task => {
+                    const done = task.status === 'done';
+                    return (
+                      <div key={task.id} className="flex items-center gap-1.5 text-[11px]">
+                        <button
+                          onClick={() => handleCompleteMilestoneTask?.(ms.id, task.id)}
+                          className={`w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0 ${
+                            done
+                              ? 'bg-green-500/20 border-green-500 text-green-400'
+                              : 'border-gray-600 hover:border-port-accent'
+                          }`}
+                        >
+                          {done && <Check className="w-2.5 h-2.5" />}
+                        </button>
+                        <span className={`flex-1 min-w-0 truncate ${done ? 'text-gray-600 line-through' : 'text-gray-400'}`}>
+                          {task.title}
+                        </span>
+                        {task.estimateMinutes != null && (
+                          <span className="text-gray-600 shrink-0">{task.estimateMinutes}m</span>
+                        )}
+                        <span className={`shrink-0 px-1 rounded ${PRIORITY_BADGE[task.priority] || PRIORITY_BADGE.medium}`}>
+                          {task.priority || 'medium'}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
               )}
             </div>
           ))}

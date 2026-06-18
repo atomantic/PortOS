@@ -193,6 +193,7 @@ export default function GoalDetailPanel({ goal, allGoals, onClose, onRefresh }) 
             setNewMilestone={s.setNewMilestone}
             handleAddMilestone={s.handleAddMilestone}
             handleCompleteMilestone={s.handleCompleteMilestone}
+            handleCompleteMilestoneTask={s.handleCompleteMilestoneTask}
           />
 
           {/* Target Date */}
@@ -213,6 +214,11 @@ export default function GoalDetailPanel({ goal, allGoals, onClose, onRefresh }) 
             proposedPhases={s.proposedPhases}
             setProposedPhases={s.setProposedPhases}
             handleAcceptPhases={s.handleAcceptPhases}
+            decomposing={s.decomposing}
+            handleDecompose={s.handleDecompose}
+            proposedDecomposition={s.proposedDecomposition}
+            setProposedDecomposition={s.setProposedDecomposition}
+            handleAcceptDecomposition={s.handleAcceptDecomposition}
             schedulingBusy={s.schedulingBusy}
             handleSchedule={s.handleSchedule}
             handleReschedule={s.handleReschedule}

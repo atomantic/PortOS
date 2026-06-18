@@ -1,6 +1,7 @@
 import { ListTodo, Check, CircleDot, Trash2 } from 'lucide-react';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
+import { PRIORITY_BADGE } from './goalConstants';
 
 export default function GoalTodoList({
   goal, newTodoTitle, setNewTodoTitle, newTodoPriority, setNewTodoPriority,
@@ -37,11 +38,7 @@ export default function GoalTodoList({
                 {todo.title}
               </span>
               {/* Not <Pill>: px-1 is tighter than Pill's xs (px-1.5) and would be overridden. */}
-              <span className={`shrink-0 px-1 py-0.5 rounded text-[10px] ${
-                todo.priority === 'high' ? 'bg-red-500/20 text-red-400' :
-                todo.priority === 'low' ? 'bg-gray-700 text-gray-500' :
-                'bg-yellow-500/20 text-yellow-400'
-              }`}>
+              <span className={`shrink-0 px-1 py-0.5 rounded text-[10px] ${PRIORITY_BADGE[todo.priority] || PRIORITY_BADGE.medium}`}>
                 {todo.priority}
               </span>
               {todo.estimateMinutes && (

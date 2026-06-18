@@ -40,3 +40,10 @@ export const CHECK_IN_STATUS_CONFIG = {
 };
 
 export const CHECK_IN_DOT_COLORS = { 'on-track': 'bg-green-500', 'behind': 'bg-yellow-500', 'at-risk': 'bg-red-500' };
+
+// Shared priority pill styling for todos and milestone tasks.
+export const PRIORITY_BADGE = {
+  high: 'bg-red-500/20 text-red-400',
+  medium: 'bg-yellow-500/20 text-yellow-400',
+  low: 'bg-gray-700 text-gray-500'
+};
