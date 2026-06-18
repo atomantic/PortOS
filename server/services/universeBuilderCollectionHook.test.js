@@ -353,11 +353,13 @@ describe('universeBuilderCollectionHook', () => {
     const c = await makeCollection(seeded.id);
     const filename = 'base-style.png';
     writeSidecar(filename, { id: 'base-style', prompt: 'a moody noir skyline', seed: 7 });
-    hook.registerUniverseBuilderRun({ runId: 'r-style', universeId: seeded.id, jobCount: 1 });
 
     // Mirrors the job the generic /image-gen/generate route enqueues for the
     // base-style probe: a universeRun tag carrying the resolved collectionId +
     // a 'style' label/category, but NO entryRef (the probe isn't a canon entry).
+    // The route mints a fresh runId and never calls registerUniverseBuilderRun,
+    // so leave the run UNregistered here — filing must work via the hook's
+    // per-completion fallback path (getActiveRuns stays empty throughout).
     mediaJobEvents.emit('completed', {
       kind: 'image',
       result: { filename },
@@ -372,7 +374,10 @@ describe('universeBuilderCollectionHook', () => {
       },
     });
 
-    await waitFor(() => hook.__testing.getActiveRuns().size === 0);
+    // Untracked run, so synchronize on the observable side effect (the sidecar
+    // enrich) rather than activeRuns draining — which is already empty here.
+    await waitFor(() => readSidecar(filename).universeName === 'StyleVerse');
+    expect(hook.__testing.getActiveRuns().size).toBe(0);
     const col = await collections.getCollection(c.id);
     expect(col.items.some((it) => it.kind === 'image' && it.ref === filename)).toBe(true);
     // Sidecar gains universe context (so the collection lightbox shows the world)
