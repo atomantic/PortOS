@@ -251,6 +251,14 @@ export const referenceRepoSchema = z.object({
 });
 
 // App schema for registration/update
+// Workspace Context (#902) — the only input is an app id (the apps-registry
+// key, or the fixed 'portos-default' baseline). Mirrors the apps-registry id
+// shape: uuid-style ids plus the literal baseline id, so a hand-crafted path
+// segment can't reach the service with a junk id.
+export const workspaceContextParamsSchema = z.object({
+  appId: z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/, 'invalid app id')
+});
+
 export const appSchema = z.object({
   name: z.string().min(1).max(100),
   repoPath: z.string().min(1),

@@ -103,6 +103,7 @@ export const NAV_COMMANDS = [
   { id: 'nav.shell', path: '/shell', label: 'Shell', section: 'Dev Tools', aliases: ['shell', 'terminal'] },
   { id: 'nav.devtools.submodules', path: '/devtools/submodules', label: 'Submodules', section: 'Dev Tools', aliases: ['devtools-submodules'] },
   { id: 'nav.devtools.usage', path: '/devtools/usage', label: 'Usage', section: 'Dev Tools', aliases: ['devtools-usage'] },
+  { id: 'nav.workspace-contexts', path: '/workspace-contexts', label: 'Workspaces', section: 'Dev Tools', aliases: ['workspaces', 'workspace-contexts', 'project-contexts', 'project-switcher'], keywords: ['project', 'context', 'switch project', 'branch', 'shell', 'tasks', 'restore', 'working context'] },
 
   { id: 'nav.twin.overview', path: '/digital-twin/overview', label: 'Overview', section: 'Identity', aliases: ['digital-twin', 'twin'] },
   { id: 'nav.twin.accounts', path: '/digital-twin/accounts', label: 'Accounts', section: 'Identity', aliases: ['twin-accounts'] },

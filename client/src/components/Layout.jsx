@@ -239,6 +239,7 @@ const navItems = [
       { to: '/system-health', label: 'System Health', icon: Activity },
       { to: '/uploads', label: 'Uploads', icon: Upload },
       { to: '/devtools/usage', label: 'Usage', icon: BarChart3 },
+      { to: '/workspace-contexts', label: 'Workspaces', icon: Layers },
     ],
   },
   { to: '/goals/list', label: 'Goals', icon: Target, single: true },
