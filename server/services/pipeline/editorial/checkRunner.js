@@ -18,7 +18,7 @@
 import { randomUUID, createHash } from 'crypto';
 import { createSseRunner } from '../../../lib/sseUtils.js';
 import { runStagedLLM, runInlineLLM, resolveStageContext } from '../../../lib/stageRunner.js';
-import { planManuscriptPass, CHARS_PER_TOKEN } from '../../../lib/contextBudget.js';
+import { planManuscriptPass } from '../../../lib/contextBudget.js';
 import { getEnabledChecks, getEnabledCheckRows, getAllChecks } from '../../../lib/editorial/index.js';
 import { getSettings } from '../../settings.js';
 import { getSeries } from '../series.js';
@@ -138,7 +138,7 @@ export async function runEditorialChecks(seriesId, options = {}) {
     // instead of truncated on a small/local provider. Returns the chunk-corpus
     // strings (one for a whole-fits provider) for an LLM check to iterate.
     // Lives here (not the pure registry) because it resolves the provider.
-    planManuscriptChunks: async (stage, { overheadTokens = 0, digestReserveTokens = 0 } = {}) => {
+    planManuscriptChunks: async (stage, { overheadTokens = 0 } = {}) => {
       if (!sections.length) return [];
       const { contextWindow } = await resolveStageContext(stage, { providerOverride, modelOverride });
       const plan = planManuscriptPass({
@@ -156,12 +156,12 @@ export async function runEditorialChecks(seriesId, options = {}) {
       const corpora = plan.mode === 'whole'
         ? [manuscript]
         : plan.chunks.map((c) => sectionsCorpus(c.sections));
-      // A cross-chunk-digest check prepends a digest to every chunk AFTER the
-      // first. Carve that room out of the later chunks ONLY (the first/only chunk
-      // carries no digest, so it keeps the full budget) — so `digest + manuscript`
-      // never exceeds the planned per-chunk window even on a small provider.
-      const reserveChars = Math.max(0, digestReserveTokens) * CHARS_PER_TOKEN;
-      return corpora.map((c, i) => c.slice(0, Math.max(0, plan.usableChars - (i === 0 ? 0 : reserveChars))));
+      const chunks = corpora.map((c) => c.slice(0, plan.usableChars));
+      // Expose the per-chunk budget so a cross-chunk-digest check can fit its
+      // digest into each chunk's spare room without overflowing the window or
+      // displacing manuscript text (see runChunkedManuscriptCheck).
+      chunks.usableChars = plan.usableChars;
+      return chunks;
     },
   };
 

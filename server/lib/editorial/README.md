@@ -21,11 +21,12 @@ Checks whose problems span chapters can opt into a **cross-chunk continuity
 digest** (#1383): pass `crossChunkDigest: true` to `runManuscriptLlmCheck` and
 each chunk after the first is prefixed with `editorialPriorFindingsDigest` of the
 findings gathered so far (it rides INSIDE the manuscript var, so no prompt
-template change). The digest body is capped (`EDITORIAL_PRIOR_DIGEST_CHARS`); the
-planner carves that room (`EDITORIAL_PRIOR_DIGEST_TOKENS`) out of the chunks
-AFTER the first only — the first/only chunk carries no digest and keeps its full
-budget, while later chunks reserve exactly enough that `digest + manuscript`
-can't overrun the provider window. `style.conformance` (tense/POV established earlier) and
+template change). The digest body is capped (`EDITORIAL_PRIOR_DIGEST_CHARS`) and
+**yields to manuscript coverage**: the runner's chunker reports each chunk's
+`usableChars` budget, and the digest is prepended only when it fits the chunk's
+spare room — so it never displaces manuscript text or overflows the provider
+window (a chunk packed to the budget just runs without a digest).
+`style.conformance` (tense/POV established earlier) and
 `objects.unmotivated-interaction` (setup/payoff across chapters) opt in;
 `prose.info-dumping` stays per-chunk (its problems are localized).
 

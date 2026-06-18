@@ -21,7 +21,6 @@ import {
   editorialPriorFindingsDigest,
   EDITORIAL_PRIOR_DIGEST_MAX,
   EDITORIAL_PRIOR_DIGEST_CHARS,
-  EDITORIAL_PRIOR_DIGEST_TOKENS,
 } from './checkRegistry.js';
 
 const NAMING = 'naming.dissimilar-names';
@@ -596,13 +595,13 @@ describe('cross-chunk continuity digest (#1383)', () => {
   const runTwoChunks = async (checkId, ctxExtras) => {
     const seen = [];
     let overhead = null;
-    let digestReserve = null;
     await getCheck(checkId).run({
       config: { maxFindings: 12 },
       severityDefault: 'medium',
+      // No usableChars on the returned array → unbounded headroom, so the digest
+      // always fits (the fits-in-budget gate is exercised separately below).
       planManuscriptChunks: async (_stage, opts) => {
         overhead = opts.overheadTokens;
-        digestReserve = opts.digestReserveTokens;
         return ['CHUNK_ONE', 'CHUNK_TWO'];
       },
       callStagedLLM: async (_stage, vars) => {
@@ -616,11 +615,11 @@ describe('cross-chunk continuity digest (#1383)', () => {
       },
       ...ctxExtras,
     });
-    return { seen, overhead, digestReserve };
+    return { seen, overhead };
   };
 
-  it('style.conformance feeds the prior-chunk digest to later chunks and reserves budget for it', async () => {
-    const { seen, overhead, digestReserve } = await runTwoChunks('style.conformance', {
+  it('style.conformance feeds the prior-chunk digest to later chunks', async () => {
+    const { seen, overhead } = await runTwoChunks('style.conformance', {
       series: { styleGuide: { tense: 'past', povPerson: 'first' } },
     });
     // First chunk is untouched (no prior findings yet).
@@ -629,10 +628,35 @@ describe('cross-chunk continuity digest (#1383)', () => {
     expect(seen[1]).toContain('EARLIER parts of this manuscript');
     expect(seen[1]).toContain('tense slip in chapter one');
     expect(seen[1].endsWith('CHUNK_TWO')).toBe(true);
-    // The style-guide expectations are budgeted as prompt overhead, and the digest
-    // reserve is passed to the planner so it can carve room out of later chunks.
+    // The style-guide expectations are budgeted as prompt overhead.
     expect(overhead).toBeGreaterThan(0);
-    expect(digestReserve).toBe(EDITORIAL_PRIOR_DIGEST_TOKENS);
+  });
+
+  it('skips the digest (sends the manuscript whole) when it would not fit the chunk budget', async () => {
+    const seen = [];
+    // usableChars is just barely above the chunk text, so the (larger) digest can't
+    // fit — manuscript coverage must win, so the chunk is sent without a digest.
+    await getCheck('style.conformance').run({
+      config: { maxFindings: 12 },
+      severityDefault: 'medium',
+      series: { styleGuide: { tense: 'past', povPerson: 'first' } },
+      planManuscriptChunks: async () => {
+        const chunks = ['CHUNK_ONE', 'CHUNK_TWO'];
+        chunks.usableChars = 'CHUNK_TWO'.length; // no spare room for any digest
+        return chunks;
+      },
+      callStagedLLM: async (_stage, vars) => {
+        seen.push(vars.manuscript);
+        const findings = seen.length === 1
+          ? [{ severity: 'high', issueNumber: 1, problem: 'tense slip', anchorQuote: 'q' }]
+          : [];
+        return { content: { findings } };
+      },
+    });
+    // Even though chunk one produced a finding, the tight budget means chunk two is
+    // sent verbatim — no digest, no dropped manuscript text.
+    expect(seen[1]).toBe('CHUNK_TWO');
+    expect(seen[1]).not.toContain('EARLIER parts of this manuscript');
   });
 
   it('objects.unmotivated-interaction feeds the prior-chunk digest to later chunks', async () => {
@@ -648,7 +672,7 @@ describe('cross-chunk continuity digest (#1383)', () => {
   });
 
   it('prose.info-dumping stays per-chunk — no digest is prepended (its problems are localized)', async () => {
-    const { seen, digestReserve } = await runTwoChunks(INFODUMP, {
+    const { seen } = await runTwoChunks(INFODUMP, {
       manuscript: 'CHUNK_ONE',
     });
     expect(seen[0]).toBe('CHUNK_ONE');
@@ -656,8 +680,6 @@ describe('cross-chunk continuity digest (#1383)', () => {
     // produced a finding.
     expect(seen[1]).toBe('CHUNK_TWO');
     expect(seen[1]).not.toContain('EARLIER parts of this manuscript');
-    // And it reserves no digest budget (so chunks keep their full size).
-    expect(digestReserve).toBe(0);
   });
 });
 
