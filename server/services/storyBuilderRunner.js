@@ -23,7 +23,7 @@
  * the frame (matches the pipeline auto-run's refetch-on-terminal pattern).
  */
 
-import { broadcastSse, createSseRunner } from '../lib/sseUtils.js';
+import { createSseRunner } from '../lib/sseUtils.js';
 import { generateStep, refineStep } from './storyBuilder.js';
 
 // Shared SSE run-lifecycle keyed by `${sessionId}::${stepId}`. This runner uses
@@ -41,12 +41,6 @@ export function isStepRunActive(sessionId, stepId) {
 
 export function attachClient(sessionId, stepId, res) {
   return runner.attachClient(runKey(sessionId, stepId), res);
-}
-
-function broadcast(key, payload) {
-  const run = runner.runs.get(key);
-  if (!run) return;
-  broadcastSse(run, payload);
 }
 
 /**
@@ -77,13 +71,13 @@ export function startStepRun(sessionId, stepId, { op = 'generate', ...options } 
   // `meta`) instead — the client then refuses to bind its success handler to the
   // running request's frame. A finished run lingering in the replay grace window
   // does NOT block: the factory starts a fresh run that replaces it.
-  return runner.start(key, async ({ runId }) => {
-    broadcast(key, { type: 'start', runId, stepId, op });
+  return runner.start(key, async ({ runId, broadcast }) => {
+    broadcast({ type: 'start', runId, stepId, op });
     // Best-effort phase emitter handed to the conductor; an onProgress throw
     // must never break the run.
     const onProgress = (frame) => {
       try {
-        broadcast(key, { type: 'progress', runId, ...frame });
+        broadcast({ type: 'progress', runId, ...frame });
       } catch (err) {
         console.error(`❌ story-builder progress emit failed: ${err?.message || err}`);
       }
@@ -95,7 +89,7 @@ export function startStepRun(sessionId, stepId, { op = 'generate', ...options } 
       const result = op === 'refine'
         ? await refineStep(sessionId, stepId, { ...options, onProgress })
         : await generateStep(sessionId, stepId, { ...options, onProgress });
-      broadcast(key, {
+      broadcast({
         type: 'complete',
         runId,
         stepId,
@@ -112,7 +106,7 @@ export function startStepRun(sessionId, stepId, { op = 'generate', ...options } 
     } catch (err) {
       const message = (err?.message || String(err)).slice(0, 1000);
       console.error(`❌ story-builder ${op} failed — session=${sessionId.slice(0, 8)} step=${stepId} ${message}`);
-      broadcast(key, { type: 'error', runId, stepId, op, error: message, failedAt: new Date().toISOString() });
+      broadcast({ type: 'error', runId, stepId, op, error: message, failedAt: new Date().toISOString() });
     }
   }, { sig, meta: { op } });
 }
