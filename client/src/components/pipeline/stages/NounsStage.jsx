@@ -20,7 +20,6 @@ import {
 } from 'lucide-react';
 import toast from '../../ui/Toast';
 import {
-  updateUniverse,
   refineUniverseCharacter,
   getUniverseSeriesNames,
 } from '../../../services/apiUniverseBuilder';
@@ -34,6 +33,7 @@ import {
 import { composeStyledPrompt } from '../../../lib/composeStyledPrompt';
 import { composeCleanPlatePrompt } from '../../../lib/cleanPlatePrompt';
 import { universeStylePreset } from '../../../lib/universeStylePreset';
+import { buildUniverseSectionRenderTag } from '../../../lib/universeRunTag';
 import useMounted from '../../../hooks/useMounted';
 import useUniverse from '../../../hooks/useUniverse';
 import { useCanonPatch } from '../../../hooks/useCanonPatch';
@@ -48,7 +48,7 @@ import {
   readPipelineImageSettings,
   pipelineImageCfgToRenderOpts,
 } from '../../../lib/pipelineImageDefaults';
-import { BIBLE_LIMITS } from '../../../lib/bibleLimits';
+import { BIBLE_LIMITS, capImageRefs } from '../../../lib/bibleLimits';
 
 // Per-kind metadata. `descFor` picks the most visual field for ref-image
 // generation; `descField`/`descFieldFallback`/`descFieldMax` bind CanonCard's
@@ -370,10 +370,16 @@ export default function NounsStage({ issue, series, onStageUpdate }) {
       baseOpts.negativePrompt || '',
       universeStylePreset(universe, series),
     );
+    // Durable section-local render tag (#1362): the server resolves the
+    // universe collection + appends the finished render to the entry's
+    // `imageRefs[]` via `appendEntryImageRef`, so the client no longer PATCHes
+    // on completion (see handleRefCompleted).
+    const universeRun = buildUniverseSectionRenderTag(universe, kind.key, entry);
     const payload = {
       ...baseOpts,
       prompt: styled.prompt,
       negativePrompt: styled.negativePrompt || undefined,
+      ...(universeRun ? { universeRun } : {}),
     };
     const queued = await generateImage(payload)
       .catch((err) => { toast.error(err.message || 'Render failed'); return null; });
@@ -382,7 +388,7 @@ export default function NounsStage({ issue, series, onStageUpdate }) {
     toast.success(`Rendering reference for ${entry.name}`);
   };
 
-  const handleRenderCleanPlate = async (entry) => {
+  const handleRenderCleanPlate = async (kind, entry) => {
     // Match CanonCard's button-enable predicate (descFor includes palette +
     // recurringDetails for settings) — composeCleanPlatePrompt builds a valid
     // prompt from any of {description, palette, recurringDetails}, so gating
@@ -400,36 +406,47 @@ export default function NounsStage({ issue, series, onStageUpdate }) {
       plate.negativePrompt,
       universeStylePreset(universe, series),
     );
+    const universeRun = buildUniverseSectionRenderTag(universe, kind.key, entry);
     const queued = await generateImage({
       ...baseOpts,
       prompt: styled.prompt,
       negativePrompt: styled.negativePrompt || undefined,
+      ...(universeRun ? { universeRun } : {}),
     }).catch((err) => { toast.error(err.message || 'Clean plate render failed'); return null; });
     if (!queued?.jobId || !mountedRef.current) return;
     setRenderingJobs((prev) => ({ ...prev, [entry.id]: queued.jobId }));
     toast.success(`Rendering clean plate for ${entry.name}`);
   };
 
-  // Pin a freshly-completed render onto the universe's imageRefs[]. Server
-  // replaces the full kind list on PATCH, so we send the entire kind array
-  // with this entry mutated. Single-user app — no race.
-  const handleRefCompleted = useCallback(async (kindKey, entryId, filename) => {
-    if (!filename || !universe) return;
+  // Clear the spinner + optimistically mirror the completed render onto the
+  // entry's `imageRefs[]`. As of #1362 the section-local render carries a
+  // durable `universeRun.entryRef` tag, so the server-side
+  // `appendEntryImageRef` completion hook persists the ref — the client no
+  // longer PATCHes here (a full-array `updateUniverse` would be redundant and
+  // could clobber a concurrent sibling append with a stale list). The optimistic
+  // stamp is dedup-guarded (`includes`) and last-N capped to mirror the durable
+  // write; functional `setUniverse` reads the freshest draft so back-to-back
+  // sibling completions chain instead of clobbering.
+  const handleRefCompleted = useCallback((kindKey, entryId, filename) => {
     setRenderingJobs((prev) => {
       if (!prev[entryId]) return prev;
       const next = { ...prev };
       delete next[entryId];
       return next;
     });
-    const list = (universe[kindKey] || []).map((e) =>
-      e.id === entryId
-        ? { ...e, imageRefs: [...(e.imageRefs || []), filename] }
-        : e,
-    );
-    const updated = await updateUniverse(universe.id, { [kindKey]: list })
-      .catch((err) => { toast.error(`Save failed: ${err.message}`); return null; });
-    if (updated && mountedRef.current) setUniverse(updated);
-  }, [universe, setUniverse, mountedRef]);
+    if (!filename) return;
+    setUniverse((cur) => {
+      if (!cur) return cur;
+      const list = Array.isArray(cur[kindKey]) ? cur[kindKey] : [];
+      const nextList = list.map((e) => {
+        if (e?.id !== entryId) return e;
+        const refs = Array.isArray(e.imageRefs) ? e.imageRefs : [];
+        if (refs.includes(filename)) return e;
+        return { ...e, imageRefs: capImageRefs([...refs, filename]) };
+      });
+      return { ...cur, [kindKey]: nextList };
+    });
+  }, [setUniverse]);
 
   // Inline-edit channel for canon fields the user picks directly (today:
   // setting intExt + timeOfDay chips). Optimistic — UI updates before the
@@ -573,7 +590,7 @@ export default function NounsStage({ issue, series, onStageUpdate }) {
           onRefine={handleRefineCharacter}
           refiningCharacterId={refiningCharacterId}
           onPatchEntry={(entryId, patch) => handlePatchEntry(kind, entryId, patch)}
-          onRenderCleanPlate={handleRenderCleanPlate}
+          onRenderCleanPlate={(entry) => handleRenderCleanPlate(kind, entry)}
           seriesNameMap={seriesNameMap}
         />
       ))}

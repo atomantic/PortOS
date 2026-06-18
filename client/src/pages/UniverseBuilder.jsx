@@ -54,20 +54,10 @@ import { hasCanonDescriptorContent, descriptorForCanonEntry } from '../lib/canon
 import { listSheetPointers } from '../lib/sheetPointers';
 import { upsertByIdPrepend } from '../lib/upsertByIdPrepend';
 import { sameJsonShape } from '../lib/sameJsonShape';
-import { BIBLE_LIMITS } from '../lib/bibleLimits';
+import { capImageRefs } from '../lib/bibleLimits';
 import {
   mergeVariations, mergeCanonByName, mergeExpandIntoDraft, extractPreservedFromDraft,
 } from '../lib/universeBuilderExpand';
-
-// Mirror of server-side appendEntryImageRef cap (most recent N wins). Used
-// so optimistic on-completion appends produce the same final array shape
-// the server would, preventing a brief window where a save round-trip
-// could reorder the visible thumbnails.
-const capImageRefs = (refs) => (
-  refs.length > BIBLE_LIMITS.IMAGE_REFS_PER_ENTRY_MAX
-    ? refs.slice(-BIBLE_LIMITS.IMAGE_REFS_PER_ENTRY_MAX)
-    : refs
-);
 
 const CATEGORY_LABELS = {
   landscapes: 'Landscapes',

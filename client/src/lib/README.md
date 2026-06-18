@@ -31,6 +31,7 @@ grep -i "what you want to do" client/src/lib/README.md
 | `seasonStructure.js` | Mirror of `server/lib/seasonStructure.js`. |
 | `sheetPointers.js` | Mirror of the character-sheet pointer helpers from `server/lib/storyBible.js`. `LEGACY_SHEET_VARIANT_ID` + `readSheetPointer` / `listSheetPointers` / `applySheetPointer` for traversing both the legacy `referenceSheetImageRef` field and the `referenceSheets` map. |
 | `universeStylePreset.js` | Build the client-side style preset that `composeStyledPrompt` layers on top. |
+| `universeRunTag.js` | `buildUniverseSectionRenderTag(universe, kindKey, entry)` — the durable `universeRun` job tag the canon-render call sites (UniverseCanonSection, NounsStage, Story Builder characters step) pass to `generateImage` so the server auto-files the render into the universe collection AND appends it to the entry's `imageRefs[]` (no client follow-up PATCH). |
 | `beatColors.js` | `BEAT_KIND_COLORS` + `getBeatKindColor(kind)` — per-kind display colors for reader-map emotional beats (kinds defined server-side in `storyArc.js`). Keeps every beat visualization consistent. |
 | `bibleLimits.js` | Mirror of `server/lib/storyBible.js` `BIBLE_LIMITS`. |
 | `catalogTypes.js` | Client mirror of `server/lib/catalogTypes.js` — catalog ingredient type registry (label, badge color, primary-content key/label, snippet fallback chain, per-type editor field list) for the Catalog list/picker/editor. |
