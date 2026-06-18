@@ -414,7 +414,13 @@ async function runChunkedManuscriptCheck(ctx, { chunks, category, max, callChunk
     // must not abort the check — keep the prior summary and continue.
     if (summarizeChunk && i < chunks.length - 1 && !ctx.signal?.aborted) {
       const next = await summarizeChunk(setupSummary, manuscript).catch(() => setupSummary);
-      if (typeof next === 'string' && next.trim()) setupSummary = next.trim();
+      // Cap the STORED summary, not just the rendered digest: a verbose/echoing
+      // summarizer response is fed back into the next summarization prompt as the
+      // prior summary, so an uncapped string would compound and could overflow the
+      // provider context. Trimming here bounds both the next prompt and the digest.
+      if (typeof next === 'string' && next.trim()) {
+        setupSummary = next.trim().slice(0, EDITORIAL_SETUP_DIGEST_BODY_CHARS);
+      }
     }
   }
   return [...merged.values()].slice(0, Math.max(0, max));

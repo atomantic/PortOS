@@ -870,6 +870,28 @@ describe('cross-chunk clean-setup digest (#1403)', () => {
     expect(seen[1]).not.toContain('Setup already established in EARLIER parts');
   });
 
+  it('caps the STORED rolling summary so a verbose summarizer response cannot compound across chunks', async () => {
+    // The summarizer echoes a huge response; the prior summary fed into the NEXT
+    // summarization prompt must be capped, not the full string.
+    const priorSummariesSeen = [];
+    await getCheck('style.conformance').run({
+      config: { maxFindings: 12 },
+      severityDefault: 'medium',
+      series: { styleGuide: { tense: 'past', povPerson: 'first' } },
+      planManuscriptChunks: async () => ['CHUNK_ONE', 'CHUNK_TWO', 'CHUNK_THREE'],
+      callStagedLLM: async () => ({ content: { findings: [] } }),
+      callInlineLLM: async (prompt) => {
+        // Capture the "Setup recorded so far" section the prompt embedded.
+        const m = prompt.match(/# Setup recorded so far \(from earlier parts\)\n([\s\S]*?)\n\n# New manuscript part/);
+        priorSummariesSeen.push(m ? m[1] : '');
+        return { content: 'y'.repeat(EDITORIAL_SETUP_DIGEST_BODY_CHARS + 5000) };
+      },
+    });
+    // First summarizer call has no prior summary; the second sees the capped first.
+    expect(priorSummariesSeen[0]).toBe('(none yet)');
+    expect(priorSummariesSeen[1].length).toBeLessThanOrEqual(EDITORIAL_SETUP_DIGEST_BODY_CHARS);
+  });
+
   it('keeps the prior summary when the summarizer throws (a bad call must not abort the check)', async () => {
     const seen = [];
     let inlineCalls = 0;
