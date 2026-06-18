@@ -597,22 +597,32 @@ export async function purgeImageRefFromAllUniverses(filename) {
   const universes = await listUniverses();
   let removed = 0;
   for (const universe of universes) {
-    let touched = false;
-    const patch = {};
-    for (const key of BIBLE_KEYS) {
-      const list = Array.isArray(universe[key]) ? universe[key] : null;
-      if (!list) continue;
-      const nextList = list.map((entry) => {
-        const refs = Array.isArray(entry.imageRefs) ? entry.imageRefs : null;
-        if (!refs || !refs.includes(filename)) return entry;
-        const trimmed = refs.filter((f) => f !== filename);
-        removed += refs.length - trimmed.length;
-        touched = true;
-        return { ...entry, imageRefs: trimmed };
-      });
-      if (touched) patch[key] = nextList;
-    }
-    if (touched) await updateUniverse(universe.id, patch);
+    let perUniverse = 0;
+    // Mutator form (reads `cur`, returns the trimmed arrays) so this intentional
+    // removal bypasses updateUniverse's imageRefs-preservation guard (#1395): a
+    // literal PATCH carrying FEWER refs looks "stale" to that guard and would be
+    // restored, undoing the purge. Reset the counter at the top so a retried
+    // mutator can't double-count. Returns null (no-op) when nothing matches.
+    await updateUniverse(universe.id, (cur) => {
+      perUniverse = 0;
+      const patch = {};
+      for (const key of BIBLE_KEYS) {
+        const list = Array.isArray(cur[key]) ? cur[key] : null;
+        if (!list) continue;
+        let keyTouched = false;
+        const nextList = list.map((entry) => {
+          const refs = Array.isArray(entry.imageRefs) ? entry.imageRefs : null;
+          if (!refs || !refs.includes(filename)) return entry;
+          const trimmed = refs.filter((f) => f !== filename);
+          perUniverse += refs.length - trimmed.length;
+          keyTouched = true;
+          return { ...entry, imageRefs: trimmed };
+        });
+        if (keyTouched) patch[key] = nextList;
+      }
+      return Object.keys(patch).length > 0 ? patch : null;
+    });
+    removed += perUniverse;
   }
   return { removed };
 }

@@ -395,6 +395,26 @@ describe('Image Gen Routes', () => {
         }));
       });
 
+      it('rejects a canon entryRef missing its kindKey (would no-op the append)', async () => {
+        // Zod validation rejects before prepareGenerateParams reads settings, so
+        // no getSettings/enqueueJob mock is primed here — priming an unconsumed
+        // mockResolvedValueOnce would leak into the next test (clearAllMocks does
+        // not drain the once-queue).
+        const response = await request(app)
+          .post('/api/image-gen/generate')
+          .send({
+            prompt: 'a confident pyromancer',
+            universeRun: {
+              universeId: 'uni-5',
+              universeName: 'CanonVerse',
+              entryRef: { kind: 'canon', id: 'char-ash' }, // no kindKey
+            },
+          });
+
+        expect(response.status).toBe(400);
+        expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+      });
+
       it('preserves the entryRef even when collection provisioning fails', async () => {
         getSettings.mockResolvedValueOnce({ imageGen: { mode: 'local', local: { pythonPath: '/usr/bin/python3' } } });
         mediaJobQueue.enqueueJob.mockReturnValueOnce({ jobId: 'queued-section-2', position: 1, status: 'queued' });

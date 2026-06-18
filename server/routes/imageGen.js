@@ -125,7 +125,12 @@ const generateSchema = z.object({
       kindKey: z.string().min(1).max(64).optional(),
       categoryKey: z.string().min(1).max(64).optional(),
       id: z.string().min(1).max(200),
-    }).optional(),
+    }).refine(
+      // Each kind needs its locating key, else appendEntryImageRef silently
+      // no-ops: canon→kindKey, variation→categoryKey (sheet needs neither).
+      (r) => (r.kind === 'canon' ? !!r.kindKey : r.kind === 'variation' ? !!r.categoryKey : true),
+      { message: 'entryRef requires its locating key (canon→kindKey, variation→categoryKey)' },
+    ).optional(),
   }).optional(),
   // Durable catalog attach (#1359). When present, the mediaJobQueue completion
   // hook (catalogImageAttachHook) files the finished render onto this catalog
