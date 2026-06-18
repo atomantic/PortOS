@@ -48,11 +48,16 @@ const SEVERITIES = CHECK_SEVERITIES;
 //                                 scenes carry components/povCharacter/charactersPresent.
 //                                 The runner fetches it (gated on this source) and injects
 //                                 `ctx.reverseOutline` (the scenes array).
+//   - 'series.arc.readerMap'    — the series arc's authored reader-map (#1299): the
+//                                 writer-logged hooks (questions planted) and payoffs
+//                                 (their resolutions). The Chekhov check reconciles its
+//                                 detected setups/payoffs against these authored ones.
 export const EDITORIAL_SOURCES = Object.freeze([
   'manuscript',
   'canon',
   'series.styleGuide',
   'series.arc.tickingClock',
+  'series.arc.readerMap',
   'reverseOutline',
 ]);
 
@@ -97,6 +102,37 @@ export const STYLE_CONFORMANCE_STAGE = 'pipeline-editorial-style-conformance';
 // setup-data.js) and migrates to existing installs via migration 099 (boot runs
 // migrations but NOT setup-data, so the migration is required).
 export const INTERIORITY_STAGE = 'pipeline-editorial-interiority';
+
+// Stage name for the Chekhov's-guns setup/payoff LLM check (#1299). Ships in
+// data.reference/prompts/stages/ + stage-config.json (fresh installs via
+// setup-data.js) and migrates to existing installs via migration 100 (boot runs
+// migrations but NOT setup-data, so the migration is required).
+export const CHEKHOV_STAGE = 'pipeline-editorial-chekhov';
+
+// Render the authored reader-map hooks/payoffs (#1299) into a compact text block
+// the Chekhov check passes alongside the manuscript so the model reconciles its
+// DETECTED setups/payoffs against what the writer has already LOGGED — e.g. an
+// authored hook with no detected payoff, or a detected payoff the writer never
+// logged. Pure + deterministic so it's unit-testable and so its token cost can be
+// counted into the per-chunk overhead. Returns '' when nothing is authored (the
+// prompt's `{{#authoredSetups}}` section then renders nothing).
+export function authoredSetupPayoffSummary(readerMap) {
+  const hooks = Array.isArray(readerMap?.hooks) ? readerMap.hooks : [];
+  const payoffs = Array.isArray(readerMap?.payoffs) ? readerMap.payoffs : [];
+  const line = (e) => {
+    const label = typeof e?.label === 'string' ? e.label.trim() : '';
+    const note = typeof e?.note === 'string' ? e.note.trim() : '';
+    const text = label && note ? `${label} — ${note}` : (label || note);
+    return text ? `- ${text}` : '';
+  };
+  const hookLines = hooks.map(line).filter(Boolean);
+  const payoffLines = payoffs.map(line).filter(Boolean);
+  if (!hookLines.length && !payoffLines.length) return '';
+  const parts = [];
+  if (hookLines.length) parts.push(`Authored hooks (questions the writer planted):\n${hookLines.join('\n')}`);
+  if (payoffLines.length) parts.push(`Authored payoffs (resolutions the writer logged):\n${payoffLines.join('\n')}`);
+  return parts.join('\n\n');
+}
 
 // ---------------------------------------------------------------------------
 // Character-name dissimilarity (#1291) reads cast names + aliases and respects
@@ -1672,6 +1708,57 @@ export const EDITORIAL_CHECKS = [
         crossChunkSetup: true,
         setupFocus: 'The narrative tense (past/present), the point-of-view person (first/third/etc.), '
           + 'and the content rating / profanity / violence level in force.',
+      });
+    },
+  },
+  {
+    id: 'chekhov.setups-payoffs',
+    sources: ['manuscript', 'series.arc.readerMap'],
+    label: "Chekhov's guns (setups & payoffs)",
+    description:
+      'Flags planted elements that never pay off (a weapon, clue, secret, stated fear, promise, or threat introduced and then dropped) and payoffs that arrive with no setup (a skill, antidote, or revelation that appears unearned). Reconciles its detected setups/payoffs against the authored reader-map hooks/payoffs.',
+    scope: 'series',
+    kind: 'llm',
+    category: 'continuity',
+    severityDefault: 'medium',
+    defaultEnabled: true,
+    // Reads the stitched manuscript corpus — so the runner only pays the
+    // section-collection I/O when a manuscript-consuming check is enabled.
+    needsManuscript: true,
+    configSchema: z.object({
+      // Cap findings per run so a long manuscript can't flood the review.
+      maxFindings: z.number().int().min(1).max(50).default(12),
+    }),
+    configFields: [
+      {
+        key: 'maxFindings',
+        label: 'Max findings per run',
+        type: 'number',
+        min: 1,
+        max: 50,
+        step: 1,
+        help: 'Cap findings so a long manuscript can not flood the review.',
+      },
+    ],
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    run: (ctx) => {
+      // Authored hooks/payoffs are fixed per-call overhead (re-sent on each chunk).
+      const authoredSetups = authoredSetupPayoffSummary(ctx.series?.arc?.readerMap);
+      return runManuscriptLlmCheck(ctx, {
+        stage: CHEKHOV_STAGE,
+        category: 'continuity',
+        overheadTokens: EDITORIAL_PROMPT_OVERHEAD_TOKENS + estimateTokens(authoredSetups),
+        buildVars: (manuscript) => ({ manuscript, authoredSetups }),
+        // A setup planted in chapter 2 and paid off (or NOT) in chapter 9 spans
+        // chunks — the cross-chunk digest keeps prior findings in view so a later
+        // chunk doesn't re-flag, and the clean-setup digest rolls forward which
+        // elements have been planted-but-not-yet-paid so a payoff isn't mis-flagged
+        // "no setup" and a never-fired plant is caught at the end.
+        crossChunkDigest: true,
+        crossChunkSetup: true,
+        setupFocus: 'Planted elements that a later scene should pay off — weapons/objects/clues, '
+          + 'secrets, stated fears, promises/vows, threats, and notable skills — and, for each, '
+          + 'whether it has already been paid off (fired, spilled, confronted, kept) or is still open.',
       });
     },
   },
