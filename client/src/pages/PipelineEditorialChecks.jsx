@@ -342,7 +342,11 @@ export default function PipelineEditorialChecks() {
               ) : null}
             </div>
             {formOpen ? (
+              // Key on the target so switching new↔edit (or check A→B) while the
+              // form stays mounted remounts it with a fresh draft — otherwise the
+              // mount-only useState initializer would save the previous draft.
               <EditorialCustomCheckForm
+                key={editingCheck?.id || 'new'}
                 check={editingCheck}
                 saving={formSaving}
                 onSave={handleSaveCustom}

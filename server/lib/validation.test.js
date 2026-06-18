@@ -17,7 +17,9 @@ import {
   codeReviewSettingsSchema,
   locationSettingsSchema,
   writersRoomCharacterUpdateSchema,
-  writersRoomObjectUpdateSchema
+  writersRoomObjectUpdateSchema,
+  editorialCustomCheckUpdateSchema,
+  pipelineEditorialChecksSettingsSchema
 } from './validation.js';
 
 describe('validation.js', () => {
@@ -862,6 +864,30 @@ describe('validation.js', () => {
         attachments: [{ characterId: 'chr-mara', bogus: true }],
       });
       expect(result.success).toBe(false);
+    });
+  });
+
+  describe('editorial custom checks (#1346)', () => {
+    it('the update schema applies NO defaults (omitted field stays absent)', () => {
+      const parsed = editorialCustomCheckUpdateSchema.parse({ label: 'Renamed' });
+      // A defaulted optional would inject scope/category/description here and
+      // silently reset the stored values on a field-specific PATCH.
+      expect(parsed).toEqual({ label: 'Renamed' });
+    });
+
+    it('the update schema still rejects bad enum values and unknown keys', () => {
+      expect(editorialCustomCheckUpdateSchema.safeParse({ scope: 'bogus' }).success).toBe(false);
+      expect(editorialCustomCheckUpdateSchema.safeParse({ nope: 1 }).success).toBe(false);
+    });
+
+    it('the settings slice accepts forward/older-peer custom-check shapes (lenient)', () => {
+      // A def carrying a future field (or a not-yet-known scope) must not 400 an
+      // unrelated settings save — runtime buildCustomCheck decides runnability.
+      const result = pipelineEditorialChecksSettingsSchema.safeParse({
+        customChecks: [{ id: 'custom.x', label: 'Future', prompt: 'p', scope: 'galaxy', futureField: { nested: true } }],
+      });
+      expect(result.success).toBe(true);
+      expect(result.data.customChecks[0].futureField).toEqual({ nested: true }); // unknown keys preserved
     });
   });
 });

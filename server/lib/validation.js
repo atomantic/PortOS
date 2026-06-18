@@ -1048,24 +1048,19 @@ export const editorialCustomCheckCreateSchema = z.object({
 // field is left unchanged rather than reset.
 export const editorialCustomCheckUpdateSchema = z.object(editorialCustomCheckShape).partial().strict();
 
-// The STORED definition shape (settings.pipelineEditorialChecks.customChecks[]):
-// the authored fields + the generated id and timestamps. Validated as part of
-// the settings slice below so a hand-edited / synced file is bounded.
-export const editorialCustomCheckDefSchema = z.object({
-  id: z.string().trim().min(1).max(120),
-  ...editorialCustomCheckShape,
-  description: editorialCustomCheckShape.description.optional().default(''),
-  category: editorialCustomCheckShape.category.optional().default('custom'),
-  createdAt: z.string().optional(),
-  updatedAt: z.string().optional(),
-}).strict();
-
 // settings.pipelineEditorialChecks slice (validated on PUT /api/settings when
 // present). `checks` maps a checkId → its persisted enable/config; `customChecks`
 // holds the user-defined check definitions (#1346).
+//
+// `customChecks` items are gated LENIENTLY (any object, unknown keys preserved):
+// the authoring CRUD routes (editorialCustomCheck{Create,Update}Schema) are the
+// strict input gate, while this wholesale-settings path must stay forward/older-
+// peer compatible — a def carrying a future field (or a newer scope value) must
+// not 400 an unrelated settings save. `buildCustomCheck`/`isValidCustomCheckDef`
+// decide at read time which stored defs are actually runnable.
 export const pipelineEditorialChecksSettingsSchema = z.object({
   checks: z.record(editorialCheckConfigSchema).optional(),
-  customChecks: z.array(editorialCustomCheckDefSchema).optional(),
+  customChecks: z.array(z.object({}).passthrough()).optional(),
 }).strict();
 
 // Cursor-context payload for the CD-bridge suggest route — identical shape to
