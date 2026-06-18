@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import * as api from '../services/api';
 import { BookOpen, Search, Network, FileText, BarChart3, Activity } from 'lucide-react';
 import BrailleSpinner from '../components/BrailleSpinner';
+import PageHeader from '../components/PageHeader';
 import TabPills from '../components/ui/TabPills';
 
 import WikiOverviewTab from '../components/wiki/tabs/OverviewTab';
@@ -118,32 +119,28 @@ export default function Wiki() {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Header */}
-      <div className="flex items-center justify-between p-4 border-b border-port-border">
-        <div className="flex items-center gap-3">
-          <BookOpen className="w-8 h-8 text-port-accent" />
-          <div>
-            <h1 className="text-xl font-bold text-white">Wiki</h1>
-            <p className="text-sm text-gray-500">LLM-maintained knowledge base</p>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-4 text-sm">
-          <span className="text-gray-500">{stats.total} wiki pages</span>
-          <span className="text-gray-500">{stats.rawSources} sources</span>
-          {vaults.length > 1 && (
-            <select
-              value={selectedVaultId || ''}
-              onChange={e => setSelectedVaultId(e.target.value)}
-              className="bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-white"
-            >
-              {vaults.map(v => (
-                <option key={v.id} value={v.id}>{v.name}</option>
-              ))}
-            </select>
-          )}
-        </div>
-      </div>
+      <PageHeader
+        icon={BookOpen}
+        title="Wiki"
+        subtitle="LLM-maintained knowledge base"
+        actions={
+          <>
+            <span className="text-sm text-gray-500">{stats.total} wiki pages</span>
+            <span className="text-sm text-gray-500">{stats.rawSources} sources</span>
+            {vaults.length > 1 && (
+              <select
+                value={selectedVaultId || ''}
+                onChange={e => setSelectedVaultId(e.target.value)}
+                className="bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-white"
+              >
+                {vaults.map(v => (
+                  <option key={v.id} value={v.id}>{v.name}</option>
+                ))}
+              </select>
+            )}
+          </>
+        }
+      />
 
       <TabPills tabs={TABS} activeTab={activeTab} onChange={(id) => navigate(`/wiki/${id}`)} ariaLabel="Wiki sections" />
 
