@@ -215,7 +215,7 @@ export const getBrainGoal = (id) =>
 
 // Brain - Journal entries (Daily Log)
 export const getBrainJournalEntry = (date) =>
-  request(`/brain/daily-log/${encodeURIComponent(date)}`).then(r => r?.entry ?? r);
+  request(`/brain/daily-log/${encodeURIComponent(date)}`).then(r => r?.entry ?? null);
 
 // Brain - Graph. Bounded by design: no `focus` returns an overview of the
 // most-connected nodes; a `focus` returns that node's neighborhood. The full

@@ -324,7 +324,7 @@ export default function BrainGraph() {
   if (!graphData?.nodes?.length) {
     return (
       <div className="text-center py-12 text-gray-500">
-        No brain entities to graph. Add people, projects, ideas, admin items, or memories to see relationships.
+        No brain entities to graph. Add people, projects, ideas, admin items, memories, goals, or journal entries to see relationships.
       </div>
     );
   }
@@ -597,7 +597,7 @@ export default function BrainGraph() {
                   {typeof fullRecord.progress === 'number' && (
                     <div className="flex items-center gap-2">
                       <div className="flex-1 h-1.5 bg-port-border rounded-full overflow-hidden">
-                        <div className="h-full bg-port-accent rounded-full" style={{ width: `${fullRecord.progress}%` }} />
+                        <div className="h-full bg-port-accent rounded-full" style={{ width: `${Math.min(100, Math.max(0, fullRecord.progress))}%` }} />
                       </div>
                       <span className="text-xs text-gray-500">{fullRecord.progress}%</span>
                     </div>

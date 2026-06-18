@@ -13,9 +13,14 @@ vi.mock('./brainMemoryBridge.js', () => ({
   bridgeKey: (type, id) => `${type}:${id}`
 }));
 
+vi.mock('./identity.js', () => ({
+  getGoals: vi.fn()
+}));
+
 import * as brainStorage from './brainStorage.js';
 import * as memoryBackend from './memoryBackend.js';
 import { loadBridgeMap } from './brainMemoryBridge.js';
+import { getGoals } from './identity.js';
 import {
   getBrainGraphSearchIndex,
   getBrainGraphOverview,
@@ -27,6 +32,7 @@ beforeEach(() => {
   loadBridgeMap.mockResolvedValue({});
   memoryBackend.getGraphData.mockResolvedValue(null);
   brainStorage.getAll.mockResolvedValue([]);
+  getGoals.mockResolvedValue({ goals: [] });
 });
 
 // A small node set fits entirely inside one overview page, so getBrainGraphOverview
@@ -231,5 +237,61 @@ describe('getBrainGraphNeighborhood', () => {
     const { nodes, edges } = await getBrainGraphNeighborhood({ focusId: 'focus' });
     expect(nodes.map(n => n.id).sort()).toEqual(['focus', 'friend']);
     expect(edges.some(e => e.type === 'linked')).toBe(true);
+  });
+});
+
+describe('goals and journal nodes', () => {
+  it('includes active goals as graph nodes with correct shape', async () => {
+    getGoals.mockResolvedValue({ goals: [
+      { id: 'g1', title: 'Run a marathon', description: 'sub-3h', tags: ['fitness'], status: 'active', progress: 42 }
+    ] });
+    const { nodes } = await getBrainGraphSearchIndex();
+    const goalNode = nodes.find(n => n.id === 'g1');
+    expect(goalNode).toBeDefined();
+    expect(goalNode.brainType).toBe('goals');
+    expect(goalNode.label).toBe('Run a marathon');
+  });
+
+  it('excludes completed and abandoned goals', async () => {
+    getGoals.mockResolvedValue({ goals: [
+      { id: 'g1', title: 'Done goal', status: 'completed', tags: [], progress: 100 },
+      { id: 'g2', title: 'Dropped goal', status: 'abandoned', tags: [], progress: 0 },
+      { id: 'g3', title: 'Active goal', status: 'active', tags: [], progress: 10 }
+    ] });
+    const { nodes } = await getBrainGraphSearchIndex();
+    const ids = nodes.map(n => n.id);
+    expect(ids).not.toContain('g1');
+    expect(ids).not.toContain('g2');
+    expect(ids).toContain('g3');
+  });
+
+  it('treats a getGoals failure as an empty goal list', async () => {
+    getGoals.mockRejectedValue(new Error('identity unavailable'));
+    const result = await getBrainGraphOverview();
+    expect(result.nodes).toEqual([]);
+  });
+
+  it('includes non-empty journal entries as graph nodes', async () => {
+    brainStorage.getAll.mockImplementation(async (type) =>
+      type === 'journals' ? [{ id: '2026-01-01', content: 'Hello world' }] : []
+    );
+    const { nodes } = await getBrainGraphSearchIndex();
+    const journalNode = nodes.find(n => n.id === '2026-01-01');
+    expect(journalNode).toBeDefined();
+    expect(journalNode.brainType).toBe('journals');
+    expect(journalNode.label).toBe('2026-01-01');
+  });
+
+  it('skips empty journal entries (no content and no segments)', async () => {
+    brainStorage.getAll.mockImplementation(async (type) =>
+      type === 'journals' ? [
+        { id: '2026-01-01', content: '' },
+        { id: '2026-01-02', content: 'Has content' }
+      ] : []
+    );
+    const { nodes } = await getBrainGraphSearchIndex();
+    const ids = nodes.map(n => n.id);
+    expect(ids).not.toContain('2026-01-01');
+    expect(ids).toContain('2026-01-02');
   });
 });

@@ -67,10 +67,10 @@ async function loadNodes() {
     }
   }
 
-  // Goals (identity system): active + paused goals as graph nodes
+  // Goals (identity system): active goals only (completed/abandoned excluded)
   const goalsData = await getGoals().catch(() => null);
   for (const goal of goalsData?.goals ?? []) {
-    if (goal.status === 'archived' || goal.status === 'deleted') continue;
+    if (goal.status === 'completed' || goal.status === 'abandoned') continue;
     nodes.push({
       id: goal.id,
       brainType: 'goals',
