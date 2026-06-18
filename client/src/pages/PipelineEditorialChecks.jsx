@@ -255,7 +255,10 @@ export default function PipelineEditorialChecks() {
     setSearchParams(next, { replace: true });
   };
 
-  const runDisabled = !seriesId || runActive || runStarting || anySaving;
+  // Gate runs on formSaving too: a run reads server-side settings, so starting
+  // one while a custom-check create/edit PATCH is in flight would run the stale
+  // (pre-save) definition. Mirrors the savingIds gate for per-check config saves.
+  const runDisabled = !seriesId || runActive || runStarting || anySaving || formSaving;
 
   return (
     <div className="mx-auto max-w-6xl space-y-4">
