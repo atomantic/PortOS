@@ -5,6 +5,7 @@ import { WORK_KINDS, WORK_STATUSES, ANALYSIS_KINDS } from './writersRoomPresets.
 import { ALL_STYLE_IDS, STYLE_ID } from './writersRoomStylePresets.js';
 import { BIBLE_LIMITS, RELATIONSHIP_LINK_TYPES, RELATIONSHIP_OPPOSITION_AXES, ATTACHMENT_ROLES } from './storyBible.js';
 import { MIN_TIMEOUT as STAGE_TIMEOUT_MIN_MS, MAX_TIMEOUT as STAGE_TIMEOUT_MAX_MS } from './aiToolkit/constants.js';
+import { CHECK_SCOPES, CHECK_SEVERITIES } from './editorial/checkRegistry.js';
 
 // gpt-image-2 (codex backend) caps at 3840px per edge and 8,294,400 total
 // pixels. Mirror the ceiling for every image-gen route. Local mflux can
@@ -1017,10 +1018,45 @@ export const editorialChecksRunSchema = z.object({
   model: z.string().trim().max(200).optional(),
 }).strict();
 
+// User-defined editorial check (#1346) — the authored input shape for
+// POST .../editorial/custom-checks. The user only describes WHAT to look for;
+// the JSON output contract is enforced server-side (buildCustomCheckPrompt), so
+// no schema field captures it. `scope`/`severityDefault` reuse the registry's
+// own enums so the wire gate can't drift from what `buildCustomCheck` accepts.
+export const editorialCustomCheckCreateSchema = z.object({
+  label: z.string().trim().min(1).max(120),
+  description: z.string().trim().max(500).optional().default(''),
+  prompt: z.string().trim().min(1).max(8_000),
+  scope: z.enum([...CHECK_SCOPES]).optional().default('issue'),
+  category: z.string().trim().max(60).optional().default('custom'),
+  severityDefault: z.enum([...CHECK_SEVERITIES]).optional().default('medium'),
+}).strict();
+
+// Edit is the same shape, all-optional (the id is in the URL). `.partial()`
+// drops the `.default()`s so an unspecified field is simply left unchanged.
+export const editorialCustomCheckUpdateSchema = editorialCustomCheckCreateSchema.partial();
+
+// The STORED definition shape (settings.pipelineEditorialChecks.customChecks[]):
+// the authored fields + the generated id and timestamps. Validated as part of
+// the settings slice below so a hand-edited / synced file is bounded.
+export const editorialCustomCheckDefSchema = z.object({
+  id: z.string().trim().min(1).max(120),
+  label: z.string().trim().min(1).max(120),
+  description: z.string().trim().max(500).optional().default(''),
+  prompt: z.string().trim().min(1).max(8_000),
+  scope: z.enum([...CHECK_SCOPES]),
+  category: z.string().trim().max(60).optional().default('custom'),
+  severityDefault: z.enum([...CHECK_SEVERITIES]),
+  createdAt: z.string().optional(),
+  updatedAt: z.string().optional(),
+}).strict();
+
 // settings.pipelineEditorialChecks slice (validated on PUT /api/settings when
-// present). `checks` maps a checkId → its persisted enable/config.
+// present). `checks` maps a checkId → its persisted enable/config; `customChecks`
+// holds the user-defined check definitions (#1346).
 export const pipelineEditorialChecksSettingsSchema = z.object({
   checks: z.record(editorialCheckConfigSchema).optional(),
+  customChecks: z.array(editorialCustomCheckDefSchema).optional(),
 }).strict();
 
 // Cursor-context payload for the CD-bridge suggest route — identical shape to

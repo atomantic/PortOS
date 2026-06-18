@@ -10,10 +10,30 @@ import {
   resolveCheckConfig,
   resolveCheckState,
   getEnabledChecks,
+  buildCustomCheck,
+  buildCustomCheckPrompt,
+  isValidCustomCheckDef,
+  isCustomCheckId,
+  getCheckById,
+  getAllChecks,
+  CUSTOM_CHECK_ID_PREFIX,
+  CUSTOM_CHECK_MAX_FINDINGS_DEFAULT,
 } from './checkRegistry.js';
 
 const NAMING = 'naming.dissimilar-names';
 const INFODUMP = 'prose.info-dumping';
+
+// A minimal valid stored custom-check definition.
+const customDef = (over = {}) => ({
+  id: `${CUSTOM_CHECK_ID_PREFIX}abc`,
+  label: 'Anachronisms',
+  prompt: 'Flag modern technology in a period setting.',
+  scope: 'issue',
+  category: 'continuity',
+  severityDefault: 'medium',
+  ...over,
+});
+const settingsWith = (defs) => ({ pipelineEditorialChecks: { customChecks: defs } });
 
 describe('editorial check registry — shape invariants', () => {
   it('every entry has a valid shape', () => {
@@ -663,5 +683,136 @@ describe('style.conformance — LLM check (#1303)', () => {
 
   it('is enabled by default', () => {
     expect(check.defaultEnabled).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// User-defined checks (#1346)
+// ---------------------------------------------------------------------------
+
+describe('custom checks (#1346)', () => {
+  describe('isValidCustomCheckDef', () => {
+    it('accepts a well-formed definition', () => {
+      expect(isValidCustomCheckDef(customDef())).toBe(true);
+    });
+    it('rejects missing/blank required fields and bad enums', () => {
+      expect(isValidCustomCheckDef(null)).toBe(false);
+      expect(isValidCustomCheckDef(customDef({ id: 'naming.x' }))).toBe(false); // not a custom id
+      expect(isValidCustomCheckDef(customDef({ label: '   ' }))).toBe(false);
+      expect(isValidCustomCheckDef(customDef({ prompt: '' }))).toBe(false);
+      expect(isValidCustomCheckDef(customDef({ scope: 'bogus' }))).toBe(false);
+      expect(isValidCustomCheckDef(customDef({ severityDefault: 'urgent' }))).toBe(false);
+    });
+  });
+
+  describe('isCustomCheckId', () => {
+    it('matches the custom prefix only', () => {
+      expect(isCustomCheckId('custom.abc')).toBe(true);
+      expect(isCustomCheckId('prose.info-dumping')).toBe(false);
+      expect(isCustomCheckId(null)).toBe(false);
+    });
+  });
+
+  describe('buildCustomCheck', () => {
+    it('synthesizes a runnable LLM check matching the built-in shape', () => {
+      const check = buildCustomCheck(customDef());
+      expect(check).toBeTruthy();
+      expect(check.kind).toBe('llm');
+      expect(check.isCustom).toBe(true);
+      expect(check.needsManuscript).toBe(true);
+      expect(check.defaultEnabled).toBe(true);
+      expect(check.scope).toBe('issue');
+      expect(check.category).toBe('continuity');
+      expect(typeof check.run).toBe('function');
+      expect(typeof check.gate).toBe('function');
+      // Passes the registry's own structural guards.
+      expect(() => assertValidChecks([check])).not.toThrow();
+    });
+    it('defaults category to "custom" and returns null for a bad def', () => {
+      expect(buildCustomCheck(customDef({ category: '  ' })).category).toBe('custom');
+      expect(buildCustomCheck(customDef({ id: 'x' }))).toBeNull();
+    });
+    it('gate skips when there is no manuscript', () => {
+      const check = buildCustomCheck(customDef());
+      expect(check.gate({ manuscript: '' })).toBe(false);
+      expect(check.gate({ manuscript: 'Chapter 1...' })).toBe(true);
+    });
+  });
+
+  describe('buildCustomCheckPrompt', () => {
+    it('wraps instructions + manuscript in the findings JSON contract', () => {
+      const prompt = buildCustomCheckPrompt({ instructions: 'Find anachronisms', manuscript: 'A knight checks his phone.', maxFindings: 7 });
+      expect(prompt).toContain('Find anachronisms');
+      expect(prompt).toContain('A knight checks his phone.');
+      expect(prompt).toContain('"findings"');
+      expect(prompt).toContain('at most 7 findings');
+      expect(prompt).toContain('{"findings": []}');
+    });
+    it('falls back to the default cap on a bad maxFindings', () => {
+      const prompt = buildCustomCheckPrompt({ instructions: 'x', manuscript: 'y', maxFindings: 0 });
+      expect(prompt).toContain(`at most ${CUSTOM_CHECK_MAX_FINDINGS_DEFAULT} findings`);
+    });
+  });
+
+  describe('integration with the resolver/runner helpers', () => {
+    it('getAllChecks / getCheckById include valid custom checks and skip invalid ones', () => {
+      const settings = settingsWith([customDef(), customDef({ id: 'custom.bad', scope: 'nope' })]);
+      const ids = getAllChecks(settings).map((c) => c.id);
+      expect(ids).toContain('custom.abc');
+      expect(ids).not.toContain('custom.bad');
+      expect(getCheckById(settings, 'custom.abc')?.label).toBe('Anachronisms');
+      expect(getCheckById(settings, 'custom.bad')).toBeNull();
+      expect(getCheckById(settings, NAMING)?.id).toBe(NAMING); // built-ins still resolve
+    });
+
+    it('resolveCheckState surfaces a custom check with isCustom + prompt + default-enabled', () => {
+      const row = resolveCheckState(settingsWith([customDef()])).find((r) => r.id === 'custom.abc');
+      expect(row).toBeTruthy();
+      expect(row.isCustom).toBe(true);
+      expect(row.prompt).toContain('modern technology');
+      expect(row.enabled).toBe(true);
+      expect(row.config.maxFindings).toBe(CUSTOM_CHECK_MAX_FINDINGS_DEFAULT);
+    });
+
+    it('the shared checks[id] override toggles a custom check off', () => {
+      const settings = {
+        pipelineEditorialChecks: {
+          customChecks: [customDef()],
+          checks: { 'custom.abc': { enabled: false } },
+        },
+      };
+      const row = resolveCheckState(settings).find((r) => r.id === 'custom.abc');
+      expect(row.enabled).toBe(false);
+      expect(getEnabledChecks(settings).some((x) => x.check.id === 'custom.abc')).toBe(false);
+    });
+
+    it('getEnabledChecks resolves the synthesized custom check for execution', () => {
+      const enabled = getEnabledChecks(settingsWith([customDef()]));
+      const entry = enabled.find((x) => x.check.id === 'custom.abc');
+      expect(entry).toBeTruthy();
+      expect(entry.check.kind).toBe('llm');
+      expect(entry.config.maxFindings).toBe(CUSTOM_CHECK_MAX_FINDINGS_DEFAULT);
+    });
+
+    it('a custom check run calls callInlineLLM per chunk and maps findings', async () => {
+      const check = buildCustomCheck(customDef());
+      let sentPrompt;
+      const findings = await check.run({
+        config: { maxFindings: 5 },
+        severityDefault: 'medium',
+        manuscript: 'Chapter 1. A knight checks his phone.',
+        planManuscriptChunks: async () => ['Chapter 1. A knight checks his phone.'],
+        callInlineLLM: async (prompt) => {
+          sentPrompt = prompt;
+          return { content: { findings: [{ severity: 'high', issueNumber: 1, problem: 'anachronistic phone', anchorQuote: 'his phone' }] } };
+        },
+      });
+      expect(sentPrompt).toContain('modern technology');
+      expect(sentPrompt).toContain('A knight checks his phone.');
+      expect(findings).toHaveLength(1);
+      expect(findings[0].category).toBe('continuity');
+      expect(findings[0].severity).toBe('high');
+      expect(findings[0].issueNumber).toBe(1);
+    });
   });
 });

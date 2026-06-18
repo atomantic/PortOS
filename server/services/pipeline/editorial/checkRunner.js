@@ -17,9 +17,9 @@
 
 import { randomUUID, createHash } from 'crypto';
 import { createSseRunner } from '../../../lib/sseUtils.js';
-import { runStagedLLM, resolveStageContext } from '../../../lib/stageRunner.js';
+import { runStagedLLM, runInlineLLM, resolveStageContext } from '../../../lib/stageRunner.js';
 import { planManuscriptPass } from '../../../lib/contextBudget.js';
-import { getEnabledChecks, getEnabledCheckRows, getCheck } from '../../../lib/editorial/index.js';
+import { getEnabledChecks, getEnabledCheckRows, getCheckById } from '../../../lib/editorial/index.js';
 import { getSettings } from '../../settings.js';
 import { getSeries } from '../series.js';
 import { listIssues } from '../issues.js';
@@ -127,6 +127,11 @@ export async function runEditorialChecks(seriesId, options = {}) {
     // provider/model overrides so an LLM check honors the autopilot's choice.
     callStagedLLM: (stage, vars, opts = {}) =>
       runStagedLLM(stage, vars, { providerOverride, modelOverride, ...opts }),
+    // Injected inline-prompt caller for user-defined checks (#1346) whose prompt
+    // body is authored from the UI (no shipped stage template). Same provider/
+    // model overrides as callStagedLLM so a custom check honors the run's choice.
+    callInlineLLM: (prompt, opts = {}) =>
+      runInlineLLM(prompt, { providerOverride, modelOverride, ...opts }),
     // Injected manuscript chunker — plans the stitched manuscript into chunks
     // sized to `stage`'s resolved provider context window (reusing the same
     // budgeter as the completeness pass), so a long series is fully reviewed
@@ -227,11 +232,15 @@ export async function buildEditorialCheckPlan(seriesId, { checkIds = null, setti
  */
 export async function getReviewWithStaleness(seriesId) {
   const review = await getReview(seriesId);
+  // Resolve checks against built-ins + the user's custom checks (#1346) so a
+  // custom-check finding still gets staleness annotation. Read settings once.
+  const settings = await getSettings();
+  const checkFor = (id) => getCheckById(settings, id);
   // Only recompute hashes when there's at least one hash-stamped finding from a
   // still-registered check — a pure completeness review pays no extra I/O.
-  const evaluable = review.comments.filter((c) => c.checkId && c.sourceContentHash && getCheck(c.checkId));
+  const evaluable = review.comments.filter((c) => c.checkId && c.sourceContentHash && checkFor(c.checkId));
   if (!evaluable.length) return review;
-  const needsManuscript = evaluable.some((c) => getCheck(c.checkId).needsManuscript);
+  const needsManuscript = evaluable.some((c) => checkFor(c.checkId).needsManuscript);
   const series = await getSeries(seriesId);
   const [sections, canon] = await Promise.all([
     needsManuscript ? collectManuscriptSections(seriesId) : Promise.resolve([]),
@@ -241,7 +250,7 @@ export async function getReviewWithStaleness(seriesId) {
   return {
     ...review,
     comments: review.comments.map((c) => {
-      const check = c.checkId && c.sourceContentHash ? getCheck(c.checkId) : null;
+      const check = c.checkId && c.sourceContentHash ? checkFor(c.checkId) : null;
       if (!check) return c;
       const current = hashForCheck(sourceHashes, !!check.needsManuscript);
       return { ...c, stale: c.sourceContentHash !== current };

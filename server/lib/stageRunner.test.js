@@ -21,7 +21,7 @@ vi.mock('../services/runner.js', () => ({
 const providers = await import('../services/providers.js');
 const prompts = await import('../services/promptService.js');
 const runner = await import('../services/runner.js');
-const { runStagedLLM, resolveModel, extractJson } = await import('./stageRunner.js');
+const { runStagedLLM, runInlineLLM, resolveModel, extractJson } = await import('./stageRunner.js');
 
 const apiProvider = (extra = {}) => ({
   id: 'mock-api', name: 'Mock', type: 'api', enabled: true, defaultModel: 'm-default', ...extra,
@@ -189,6 +189,30 @@ describe('stageRunner — runStagedLLM provider resolution', () => {
     prompts.getStage.mockReturnValue(null);
     providers.getActiveProvider.mockResolvedValue(null);
     await expect(runStagedLLM('s', {})).rejects.toMatchObject({ code: 'NO_PROVIDER' });
+  });
+});
+
+describe('stageRunner — runInlineLLM (#1346)', () => {
+  it('runs a caller-supplied prompt with no stage (active provider, no buildPrompt)', async () => {
+    providers.getActiveProvider.mockResolvedValue(apiProvider());
+    let executedPrompt;
+    runner.executeApiRun.mockImplementation(async ({ prompt, onData, onComplete }) => {
+      executedPrompt = prompt;
+      onData('{"findings": []}');
+      onComplete({ success: true });
+    });
+    const out = await runInlineLLM('my inline prompt body', { returnsJson: true, source: 'pipeline-editorial-custom' });
+    expect(out.providerId).toBe('mock-api');
+    expect(out.content).toEqual({ findings: [] });
+    // The prompt is passed through verbatim — buildPrompt/getStage are not consulted.
+    expect(executedPrompt).toBe('my inline prompt body');
+    expect(prompts.buildPrompt).not.toHaveBeenCalled();
+    expect(prompts.getStage).not.toHaveBeenCalled();
+  });
+
+  it('rejects an empty prompt', async () => {
+    await expect(runInlineLLM('   ')).rejects.toMatchObject({ code: 'INLINE_PROMPT_REQUIRED' });
+    await expect(runInlineLLM(null)).rejects.toMatchObject({ code: 'INLINE_PROMPT_REQUIRED' });
   });
 });
 

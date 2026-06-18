@@ -3,11 +3,25 @@
  * per-issue and series-wide (batch with SSE progress).
  */
 
+import { randomUUID } from 'crypto';
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
-import { validateRequest, editorialCheckConfigSchema, editorialChecksRunSchema } from '../../lib/validation.js';
-import { getCheck, resolveCheckState, readChecksSlice } from '../../lib/editorial/index.js';
+import {
+  validateRequest,
+  editorialCheckConfigSchema,
+  editorialChecksRunSchema,
+  editorialCustomCheckCreateSchema,
+  editorialCustomCheckUpdateSchema,
+} from '../../lib/validation.js';
+import {
+  resolveCheckState,
+  readChecksSlice,
+  getCheckById,
+  readCustomCheckDefs,
+  isCustomCheckId,
+  CUSTOM_CHECK_ID_PREFIX,
+} from '../../lib/editorial/index.js';
 import * as seriesSvc from '../../services/pipeline/series.js';
 import * as issuesSvc from '../../services/pipeline/issues.js';
 import * as editorialAnalysis from '../../services/pipeline/editorialAnalysis.js';
@@ -88,7 +102,10 @@ router.get('/editorial/checks', asyncHandler(async (req, res) => {
 // check's own Zod schema before persisting (the wire shape is gated by
 // editorialCheckConfigSchema first).
 router.patch('/editorial/checks/:id', asyncHandler(async (req, res) => {
-  const check = getCheck(req.params.id);
+  // Resolve against built-ins + custom checks so a custom check's enable/config
+  // override goes through the same path as a built-in's (#1346).
+  const settings = await getSettings();
+  const check = getCheckById(settings, req.params.id);
   if (!check) throw new ServerError(`Unknown editorial check: ${req.params.id}`, { status: 404 });
   const body = validateRequest(editorialCheckConfigSchema, req.body ?? {});
   if (body.config !== undefined) {
@@ -110,13 +127,85 @@ router.patch('/editorial/checks/:id', asyncHandler(async (req, res) => {
   res.json(resolveCheckState(updated).find((r) => r.id === check.id));
 }));
 
+// ---------------------------------------------------------------------------
+// User-defined checks (#1346) — author LLM checks (name + prompt + scope) with
+// no code change. The DEFINITION lives in settings.pipelineEditorialChecks.
+// customChecks[]; enable/config still flow through PATCH /editorial/checks/:id.
+// ---------------------------------------------------------------------------
+
+const editorialChecksSlice = (current) =>
+  (current.pipelineEditorialChecks && typeof current.pipelineEditorialChecks === 'object'
+    ? current.pipelineEditorialChecks : {});
+
+// Create a custom check. Returns its resolved catalog row (so the UI can append
+// it without a refetch).
+router.post('/editorial/custom-checks', asyncHandler(async (req, res) => {
+  const body = validateRequest(editorialCustomCheckCreateSchema, req.body ?? {});
+  const id = `${CUSTOM_CHECK_ID_PREFIX}${randomUUID()}`;
+  const now = new Date().toISOString();
+  const def = { id, ...body, createdAt: now, updatedAt: now };
+  const updated = await updateSettingsWith((current) => {
+    const slice = editorialChecksSlice(current);
+    const defs = Array.isArray(slice.customChecks) ? slice.customChecks : [];
+    return { ...current, pipelineEditorialChecks: { ...slice, customChecks: [...defs, def] } };
+  });
+  res.status(201).json(resolveCheckState(updated).find((r) => r.id === id));
+}));
+
+// Edit a custom check's definition (label / prompt / scope / category / severity).
+router.patch('/editorial/custom-checks/:id', asyncHandler(async (req, res) => {
+  const id = req.params.id;
+  if (!isCustomCheckId(id)) throw new ServerError('Not a custom check id', { status: 400 });
+  const body = validateRequest(editorialCustomCheckUpdateSchema, req.body ?? {});
+  const settings = await getSettings();
+  if (!readCustomCheckDefs(settings).some((d) => d?.id === id)) {
+    throw new ServerError(`Unknown custom check: ${id}`, { status: 404 });
+  }
+  const updated = await updateSettingsWith((current) => {
+    const slice = editorialChecksSlice(current);
+    const defs = Array.isArray(slice.customChecks) ? slice.customChecks : [];
+    // Preserve id + createdAt; apply only the supplied fields; stamp updatedAt.
+    const next = defs.map((d) => (d?.id === id
+      ? { ...d, ...body, id: d.id, createdAt: d.createdAt, updatedAt: new Date().toISOString() }
+      : d));
+    return { ...current, pipelineEditorialChecks: { ...slice, customChecks: next } };
+  });
+  res.json(resolveCheckState(updated).find((r) => r.id === id));
+}));
+
+// Delete a custom check — drops both its definition and its enable/config override.
+router.delete('/editorial/custom-checks/:id', asyncHandler(async (req, res) => {
+  const id = req.params.id;
+  if (!isCustomCheckId(id)) throw new ServerError('Not a custom check id', { status: 400 });
+  const settings = await getSettings();
+  if (!readCustomCheckDefs(settings).some((d) => d?.id === id)) {
+    throw new ServerError(`Unknown custom check: ${id}`, { status: 404 });
+  }
+  await updateSettingsWith((current) => {
+    const slice = editorialChecksSlice(current);
+    const defs = Array.isArray(slice.customChecks) ? slice.customChecks : [];
+    const checks = readChecksSlice(current);
+    const { [id]: _removed, ...remainingChecks } = checks;
+    return {
+      ...current,
+      pipelineEditorialChecks: {
+        ...slice,
+        customChecks: defs.filter((d) => d?.id !== id),
+        checks: remainingChecks,
+      },
+    };
+  });
+  res.json({ deleted: true, id });
+}));
+
 // Run all enabled checks (or a named subset) for a series — progress via SSE.
 router.post('/series/:id/editorial/checks/run', asyncHandler(async (req, res) => {
   const body = validateRequest(editorialChecksRunSchema, req.body ?? {});
   // Reject unknown check ids up front — otherwise a typo'd subset is silently
   // filtered to a zero-check run that reports success (PATCH 404s unknown ids too).
   if (body.checkIds?.length) {
-    const unknown = body.checkIds.filter((id) => !getCheck(id));
+    const settings = await getSettings();
+    const unknown = body.checkIds.filter((id) => !getCheckById(settings, id));
     if (unknown.length) {
       throw new ServerError(`Unknown editorial check(s): ${unknown.join(', ')}`, { status: 400 });
     }

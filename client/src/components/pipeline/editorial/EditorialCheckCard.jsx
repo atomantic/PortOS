@@ -10,7 +10,7 @@
  * down through `check.config`.
  */
 import { memo, useEffect, useState } from 'react';
-import { ChevronDown, ChevronRight, Loader2, Sliders } from 'lucide-react';
+import { ChevronDown, ChevronRight, Loader2, Pencil, Sliders, Trash2 } from 'lucide-react';
 import ToggleSwitch from '../../ToggleSwitch';
 
 const KIND_BADGE = {
@@ -77,9 +77,11 @@ function ConfigField({ checkId, field, value, disabled, onCommit }) {
   );
 }
 
-function EditorialCheckCard({ check, saving = false, onToggle, onConfigSave }) {
+function EditorialCheckCard({ check, saving = false, onToggle, onConfigSave, onEdit, onDelete }) {
   const [expanded, setExpanded] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const hasConfig = Array.isArray(check.configFields) && check.configFields.length > 0;
+  const isCustom = !!check.isCustom;
 
   return (
     <div className="rounded-lg border border-port-border bg-port-card p-3 space-y-2">
@@ -93,6 +95,11 @@ function EditorialCheckCard({ check, saving = false, onToggle, onConfigSave }) {
             <span className={`text-[10px] px-1.5 py-0.5 rounded ${SEVERITY_BADGE[check.severityDefault] || SEVERITY_BADGE.low}`}>
               {check.severityDefault}
             </span>
+            {isCustom ? (
+              <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border border-emerald-500/30 bg-emerald-500/15 text-emerald-300">
+                custom
+              </span>
+            ) : null}
           </div>
           <p className="text-xs text-gray-400">{check.description}</p>
         </div>
@@ -133,6 +140,54 @@ function EditorialCheckCard({ check, saving = false, onToggle, onConfigSave }) {
               ))}
             </div>
           ) : null}
+        </div>
+      ) : null}
+
+      {isCustom && (onEdit || onDelete) ? (
+        <div className="flex items-center justify-end gap-2 border-t border-port-border/60 pt-2">
+          {confirmDelete ? (
+            <>
+              <span className="mr-auto text-[11px] text-gray-400">Delete this check?</span>
+              <button
+                type="button"
+                onClick={() => { setConfirmDelete(false); onDelete?.(check.id); }}
+                disabled={saving}
+                className="inline-flex items-center gap-1 rounded bg-port-error/20 px-2 py-1 text-[11px] text-rose-300 hover:bg-port-error/30 disabled:opacity-50"
+              >
+                <Trash2 size={12} /> Delete
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirmDelete(false)}
+                className="rounded border border-port-border px-2 py-1 text-[11px] text-gray-300 hover:bg-port-border/40"
+              >
+                Cancel
+              </button>
+            </>
+          ) : (
+            <>
+              {onEdit ? (
+                <button
+                  type="button"
+                  onClick={() => onEdit(check.id)}
+                  disabled={saving}
+                  className="inline-flex items-center gap-1 text-[11px] text-gray-400 hover:text-gray-200 disabled:opacity-50"
+                >
+                  <Pencil size={12} /> Edit
+                </button>
+              ) : null}
+              {onDelete ? (
+                <button
+                  type="button"
+                  onClick={() => setConfirmDelete(true)}
+                  disabled={saving}
+                  className="inline-flex items-center gap-1 text-[11px] text-rose-400 hover:text-rose-300 disabled:opacity-50"
+                >
+                  <Trash2 size={12} /> Delete
+                </button>
+              ) : null}
+            </>
+          )}
         </div>
       ) : null}
     </div>

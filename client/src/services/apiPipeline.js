@@ -634,6 +634,29 @@ export const patchEditorialCheck = (checkId, patch, options = {}) =>
     ...options,
   });
 
+// User-defined checks (#1346): author an LLM check (name + prompt + scope) with
+// no code change. Create/update return the new check's resolved catalog row (the
+// same shape getEditorialChecks rows carry, with `isCustom: true` + `prompt`).
+export const createEditorialCustomCheck = (def, options = {}) =>
+  request('/pipeline/editorial/custom-checks', {
+    method: 'POST',
+    body: JSON.stringify(def),
+    ...options,
+  });
+
+export const updateEditorialCustomCheck = (checkId, patch, options = {}) =>
+  request(`/pipeline/editorial/custom-checks/${encodeURIComponent(checkId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+    ...options,
+  });
+
+export const deleteEditorialCustomCheck = (checkId, options = {}) =>
+  request(`/pipeline/editorial/custom-checks/${encodeURIComponent(checkId)}`, {
+    method: 'DELETE',
+    ...options,
+  });
+
 // Start a series-wide checks run (or a named subset). { runId, alreadyRunning,
 // sseUrl } — subscribe via editorialChecksRunSseUrl, then re-fetch the manuscript
 // review on `complete` (the runner seeds findings into the review store).

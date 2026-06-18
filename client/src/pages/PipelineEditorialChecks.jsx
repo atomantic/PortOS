@@ -13,9 +13,10 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, ListChecks, Loader2, Play, Square } from 'lucide-react';
+import { ArrowLeft, ListChecks, Loader2, Play, Plus, Square } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import EditorialCheckCard from '../components/pipeline/editorial/EditorialCheckCard';
+import EditorialCustomCheckForm from '../components/pipeline/editorial/EditorialCustomCheckForm';
 import EditorialFindingsTriage from '../components/pipeline/editorial/EditorialFindingsTriage';
 import { groupChecksByScope } from '../lib/editorialChecks';
 import { usePipelineProgress } from '../hooks/usePipelineProgress';
@@ -23,6 +24,9 @@ import {
   listPipelineSeries,
   getEditorialChecks,
   patchEditorialCheck,
+  createEditorialCustomCheck,
+  updateEditorialCustomCheck,
+  deleteEditorialCustomCheck,
   startEditorialChecksRun,
   cancelEditorialChecksRun,
   getEditorialChecksRunStatus,
@@ -163,6 +167,54 @@ export default function PipelineEditorialChecks() {
       .finally(() => setSavingIds((s) => { const n = new Set(s); n.delete(checkId); return n; }));
   }, []);
 
+  // ---- Custom-check authoring (#1346). The form is URL-driven (?custom=new |
+  // ?custom=<checkId>) so it's deep-linkable, not a stateful modal. ----
+  const customParam = searchParams.get('custom') || '';
+  const editingCheck = customParam && customParam !== 'new'
+    ? checks.find((c) => c.id === customParam && c.isCustom) || null
+    : null;
+  // Form is open for 'new', or for a custom id that resolves to a check.
+  const formOpen = customParam === 'new' || !!editingCheck;
+  const [formSaving, setFormSaving] = useState(false);
+
+  // useCallback so the memo'd custom cards (which take onEdit) only re-render on
+  // an actual param change, not every parent run/selection state tick.
+  const openCustomForm = useCallback((id) => {
+    setSearchParams((prev) => { const next = new URLSearchParams(prev); next.set('custom', id); return next; }, { replace: true });
+  }, [setSearchParams]);
+  const closeCustomForm = useCallback(() => {
+    setSearchParams((prev) => { const next = new URLSearchParams(prev); next.delete('custom'); return next; }, { replace: true });
+  }, [setSearchParams]);
+
+  const handleSaveCustom = (values) => {
+    setFormSaving(true);
+    const editingId = editingCheck?.id;
+    const req = editingId
+      ? updateEditorialCustomCheck(editingId, values, { silent: true })
+      : createEditorialCustomCheck(values, { silent: true });
+    req
+      .then((row) => {
+        if (!row) return;
+        setChecks((rows) => (editingId
+          ? rows.map((r) => (r.id === editingId ? row : r))
+          : [...rows, row]));
+        toast.success(editingId ? 'Custom check saved' : 'Custom check created');
+        closeCustomForm();
+      })
+      .catch((err) => toast.error(err.message || 'Failed to save custom check'))
+      .finally(() => setFormSaving(false));
+  };
+
+  const handleDeleteCustom = useCallback((checkId) => {
+    setSavingIds((s) => new Set(s).add(checkId));
+    // Drop from the targeted-run selection so a deleted id can't ride a run.
+    setSelectedIds((s) => { if (!s.has(checkId)) return s; const n = new Set(s); n.delete(checkId); return n; });
+    deleteEditorialCustomCheck(checkId, { silent: true })
+      .then(() => { setChecks((rows) => rows.filter((r) => r.id !== checkId)); toast.success('Custom check deleted'); })
+      .catch((err) => toast.error(err.message || 'Failed to delete custom check'))
+      .finally(() => setSavingIds((s) => { const n = new Set(s); n.delete(checkId); return n; }));
+  }, []);
+
   const toggleSelected = (checkId) => setSelectedIds((s) => {
     const n = new Set(s);
     if (n.has(checkId)) n.delete(checkId); else n.add(checkId);
@@ -277,7 +329,26 @@ export default function PipelineEditorialChecks() {
         <div className="grid gap-6 lg:grid-cols-2">
           {/* Catalog */}
           <section className="space-y-3">
-            <h2 className="text-sm font-semibold uppercase tracking-wide text-gray-400">Catalog</h2>
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="text-sm font-semibold uppercase tracking-wide text-gray-400">Catalog</h2>
+              {!formOpen ? (
+                <button
+                  type="button"
+                  onClick={() => openCustomForm('new')}
+                  className="inline-flex items-center gap-1 rounded border border-port-border px-2 py-1 text-xs text-gray-300 hover:bg-port-border/40"
+                >
+                  <Plus size={13} /> New custom check
+                </button>
+              ) : null}
+            </div>
+            {formOpen ? (
+              <EditorialCustomCheckForm
+                check={editingCheck}
+                saving={formSaving}
+                onSave={handleSaveCustom}
+                onCancel={closeCustomForm}
+              />
+            ) : null}
             {checks.length === 0 ? (
               <p className="rounded-lg border border-dashed border-port-border p-4 text-center text-xs text-gray-500">No editorial checks are registered.</p>
             ) : scopeGroups.map((group) => (
@@ -301,6 +372,8 @@ export default function PipelineEditorialChecks() {
                         saving={savingIds.has(check.id)}
                         onToggle={handleToggle}
                         onConfigSave={handleConfigSave}
+                        onEdit={check.isCustom ? openCustomForm : undefined}
+                        onDelete={check.isCustom ? handleDeleteCustom : undefined}
                       />
                     </div>
                   </div>

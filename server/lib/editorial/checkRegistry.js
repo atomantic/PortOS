@@ -29,7 +29,14 @@ import { estimateTokens } from '../contextBudget.js';
 
 export const CHECK_SCOPES = Object.freeze(['series', 'issue', 'scene', 'noun']);
 export const CHECK_KINDS = Object.freeze(['deterministic', 'llm']);
-const SEVERITIES = Object.freeze(['high', 'medium', 'low']);
+export const CHECK_SEVERITIES = Object.freeze(['high', 'medium', 'low']);
+const SEVERITIES = CHECK_SEVERITIES;
+
+// Default per-run finding cap for user-defined checks (#1346) — mirrors the
+// built-in LLM checks' `maxFindings` default so a long manuscript can't flood
+// the review. Defined up here so the custom-check prompt builder and config
+// schema (both below) share one source.
+export const CUSTOM_CHECK_MAX_FINDINGS_DEFAULT = 12;
 
 // The serializable config-field types a check can declare for its UI form.
 // `configSchema` (a Zod schema) stays the validation authority on the server;
@@ -268,6 +275,75 @@ function mapLlmFindings(raw, { severityDefault, category, max, withIssueNumber }
     anchorQuote: typeof f?.anchorQuote === 'string' ? f.anchorQuote : '',
     issueNumber: withIssueNumber && Number.isInteger(f?.issueNumber) ? f.issueNumber : null,
   })).filter((f) => f.problem);
+}
+
+// ---------------------------------------------------------------------------
+// User-defined (custom) LLM checks (#1346). A custom check has no shipped stage
+// template — its prompt body is authored from the UI. The fixed JSON output
+// contract is enforced HERE (not by the user), so an author only describes WHAT
+// to look for; the response is parsed by the same `mapLlmFindings` the built-in
+// stage prompts feed. Kept pure: the model caller (`ctx.callInlineLLM`) and the
+// chunk planner (`ctx.planManuscriptChunks`) are injected by the runner.
+// ---------------------------------------------------------------------------
+
+// Free-form tag persisted on the run record so /runs can filter custom-check
+// calls apart from the named-stage editorial checks.
+export const CUSTOM_CHECK_RUN_SOURCE = 'pipeline-editorial-custom';
+
+// Wrap a user's authored instructions in the fixed findings JSON contract. Pure
+// and deterministic so it's unit-testable and so `runManuscriptLlmCheckInline`
+// can render it once with an empty manuscript to measure per-call overhead.
+export function buildCustomCheckPrompt({ instructions, manuscript, maxFindings = CUSTOM_CHECK_MAX_FINDINGS_DEFAULT }) {
+  const cap = Number.isInteger(maxFindings) && maxFindings > 0 ? maxFindings : CUSTOM_CHECK_MAX_FINDINGS_DEFAULT;
+  return [
+    'You are an editorial reviewer analyzing a draft manuscript for one specific issue.',
+    '',
+    '# What to look for',
+    String(instructions || '').trim(),
+    '',
+    '# Manuscript',
+    String(manuscript || ''),
+    '',
+    '# How to respond',
+    `Return ONLY a JSON object of the form {"findings": [...]} with at most ${cap} findings.`,
+    'Each finding is an object with these fields:',
+    '- "severity": one of "high", "medium", "low"',
+    '- "location": a short human-readable pointer to where the problem is (e.g. a chapter or section name)',
+    '- "problem": one sentence stating what is wrong (REQUIRED — omit the finding if you cannot name a concrete problem)',
+    '- "suggestion": one sentence on how to fix it',
+    '- "anchorQuote": a short verbatim quote from the manuscript at the problem location',
+    '- "issueNumber": the issue/chapter number the problem is in, or null',
+    'If nothing matches, return {"findings": []}. Do not include any prose outside the JSON object.',
+  ].join('\n');
+}
+
+// Inline-prompt sibling of `runManuscriptLlmCheck` for custom checks: same
+// provider-sized chunking + first-wins merge, but the prompt is the authored
+// instructions wrapped by `buildCustomCheckPrompt` instead of a named stage.
+// `ctx.planManuscriptChunks(null, …)` resolves the active/overridden provider's
+// window (a custom check has no stage to pin), and `ctx.callInlineLLM` runs the
+// built prompt. Findings keep a model-supplied issue number (manuscript-scoped).
+async function runManuscriptLlmCheckInline(ctx, { category, instructions }) {
+  const max = ctx.config?.maxFindings ?? CUSTOM_CHECK_MAX_FINDINGS_DEFAULT;
+  // Fixed per-call overhead = the contract wrapper + the instructions (only the
+  // manuscript var changes per chunk). Measure it by rendering the prompt with an
+  // empty manuscript so the chunk budget accounts for everything riding along.
+  const overheadTokens = EDITORIAL_PROMPT_OVERHEAD_TOKENS
+    + estimateTokens(buildCustomCheckPrompt({ instructions, manuscript: '', maxFindings: max }));
+  const chunks = await ctx.planManuscriptChunks(null, { overheadTokens });
+  const perChunk = [];
+  for (const manuscript of chunks) {
+    if (ctx.signal?.aborted) break;
+    const prompt = buildCustomCheckPrompt({ instructions, manuscript, maxFindings: max });
+    const { content } = await ctx.callInlineLLM(prompt, { returnsJson: true, source: CUSTOM_CHECK_RUN_SOURCE });
+    perChunk.push(mapLlmFindings(content?.findings, {
+      severityDefault: ctx.severityDefault,
+      category,
+      max,
+      withIssueNumber: true,
+    }));
+  }
+  return mergeChunkFindings(perChunk, max);
 }
 
 // ---------------------------------------------------------------------------
@@ -928,7 +1004,10 @@ export const readChecksSlice = (settings) => {
  */
 export function resolveCheckState(settings) {
   const stored = readChecksSlice(settings);
-  return EDITORIAL_CHECKS.map((check) => {
+  // Built-ins + the user's synthesized custom checks (#1346) — a custom check
+  // resolves identically; `isCustom` (and the authored `prompt`) mark it so the
+  // UI can offer edit/delete and prefill the author form.
+  return getAllChecks(settings).map((check) => {
     const row = stored[check.id] || {};
     const enabled = typeof row.enabled === 'boolean' ? row.enabled : check.defaultEnabled !== false;
     return {
@@ -942,6 +1021,8 @@ export function resolveCheckState(settings) {
       enabled,
       config: resolveCheckConfig(check, row.config),
       configFields: Array.isArray(check.configFields) ? check.configFields : [],
+      isCustom: !!check.isCustom,
+      ...(check.isCustom ? { prompt: check.prompt } : {}),
     };
   });
 }
@@ -962,7 +1043,100 @@ export function getEnabledCheckRows(settings, subsetIds = null) {
  * config) for every enabled check, narrowed to `subsetIds` when provided.
  */
 export function getEnabledChecks(settings, subsetIds = null) {
+  // Resolve against built-ins + custom checks (getCheck only knows built-ins).
+  const byId = new Map(getAllChecks(settings).map((c) => [c.id, c]));
   return getEnabledCheckRows(settings, subsetIds)
-    .map((row) => ({ check: getCheck(row.id), config: row.config }))
+    .map((row) => ({ check: byId.get(row.id), config: row.config }))
     .filter((x) => x.check);
+}
+
+// ---------------------------------------------------------------------------
+// User-defined checks (#1346) — definition storage + synthesis.
+//
+// A custom check's DEFINITION lives in settings
+// (`pipelineEditorialChecks.customChecks`), while its enable/config override
+// reuses the SAME `checks[id]` slice the built-ins use — so the existing
+// toggle/config PATCH path works unchanged. `buildCustomCheck` synthesizes a
+// definition into the exact shape the registry/runner consume, so a custom check
+// flows through resolveCheckState / getEnabledChecks / the runner like a built-in.
+// ---------------------------------------------------------------------------
+
+export const CUSTOM_CHECK_ID_PREFIX = 'custom.';
+export const isCustomCheckId = (id) => typeof id === 'string' && id.startsWith(CUSTOM_CHECK_ID_PREFIX);
+
+// One tunable (the per-run cap), mirroring the built-in LLM checks so the
+// existing config form renders for custom checks with no special-casing.
+const customCheckConfigSchema = z.object({
+  maxFindings: z.number().int().min(1).max(50).default(CUSTOM_CHECK_MAX_FINDINGS_DEFAULT),
+});
+const CUSTOM_CHECK_CONFIG_FIELDS = Object.freeze([
+  {
+    key: 'maxFindings',
+    label: 'Max findings per run',
+    type: 'number',
+    min: 1,
+    max: 50,
+    step: 1,
+    help: 'Cap findings so a long manuscript can not flood the review.',
+  },
+]);
+
+// True when a stored definition has the minimum viable shape. Defensive against
+// a hand-edited settings.json or an older/newer peer — an invalid def is skipped
+// (never throws), so one bad row can't break the whole catalog.
+export function isValidCustomCheckDef(def) {
+  return !!def
+    && typeof def === 'object'
+    && isCustomCheckId(def.id)
+    && typeof def.label === 'string' && def.label.trim().length > 0
+    && typeof def.prompt === 'string' && def.prompt.trim().length > 0
+    && CHECK_SCOPES.includes(def.scope)
+    && CHECK_SEVERITIES.includes(def.severityDefault);
+}
+
+// Synthesize a runnable check from a stored definition (or null when malformed).
+// The result matches the built-in shape so the runner/resolver treat it the
+// same; `isCustom` + `prompt` mark it for the UI. Custom checks are always
+// manuscript-consuming LLM checks (the useful editorial case), gated on prose.
+export function buildCustomCheck(def) {
+  if (!isValidCustomCheckDef(def)) return null;
+  const instructions = def.prompt;
+  const category = typeof def.category === 'string' && def.category.trim() ? def.category.trim() : 'custom';
+  return {
+    id: def.id,
+    label: def.label.trim(),
+    description: typeof def.description === 'string' ? def.description.trim() : '',
+    scope: def.scope,
+    kind: 'llm',
+    category,
+    severityDefault: def.severityDefault,
+    defaultEnabled: true,
+    needsManuscript: true,
+    isCustom: true,
+    prompt: instructions,
+    configSchema: customCheckConfigSchema,
+    configFields: CUSTOM_CHECK_CONFIG_FIELDS,
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    run: (ctx) => runManuscriptLlmCheckInline(ctx, { category, instructions }),
+  };
+}
+
+// The stored custom-check definitions, tolerant of a hand-edited / older-peer
+// file (returns [] when absent or not an array).
+export const readCustomCheckDefs = (settings) => {
+  const defs = settings?.pipelineEditorialChecks?.customChecks;
+  return Array.isArray(defs) ? defs : [];
+};
+
+// Synthesized custom checks for the current settings (invalid defs skipped).
+export const buildCustomChecks = (settings) =>
+  readCustomCheckDefs(settings).map(buildCustomCheck).filter(Boolean);
+
+// All checks (built-in + custom) for the current settings.
+export const getAllChecks = (settings) => [...EDITORIAL_CHECKS, ...buildCustomChecks(settings)];
+
+// Settings-aware lookup spanning built-ins + custom checks. `getCheck` only
+// knows built-ins, so the route + staleness path use this to resolve a custom id.
+export function getCheckById(settings, id) {
+  return CHECK_BY_ID.get(id) || buildCustomChecks(settings).find((c) => c.id === id) || null;
 }

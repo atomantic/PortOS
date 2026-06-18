@@ -112,4 +112,81 @@ describe('POST /api/pipeline/series/:id/editorial/checks/run', () => {
     expect(res.status).toBe(400);
     expect(startEditorialChecksRun).not.toHaveBeenCalled();
   });
+
+  it('accepts a created custom check id in a targeted run', async () => {
+    const created = await request(app)
+      .post('/api/pipeline/editorial/custom-checks')
+      .send({ label: 'Runnable', prompt: 'Find X' });
+    const res = await request(app)
+      .post('/api/pipeline/series/s1/editorial/checks/run')
+      .send({ checkIds: [created.body.id] });
+    expect(res.status).toBe(200);
+    expect(startEditorialChecksRun).toHaveBeenCalled();
+  });
+});
+
+describe('custom checks CRUD (#1346)', () => {
+  const create = (body) => request(app).post('/api/pipeline/editorial/custom-checks').send(body);
+
+  it('creates a custom check and returns its resolved row', async () => {
+    const res = await create({ label: 'Anachronisms', prompt: 'Flag modern tech in a period setting.' });
+    expect(res.status).toBe(201);
+    expect(res.body.id.startsWith('custom.')).toBe(true);
+    expect(res.body.isCustom).toBe(true);
+    expect(res.body.kind).toBe('llm');
+    expect(res.body.enabled).toBe(true);
+    expect(res.body.prompt).toContain('modern tech');
+    expect(settingsStore.pipelineEditorialChecks.customChecks).toHaveLength(1);
+    const list = await request(app).get('/api/pipeline/editorial/checks');
+    expect(list.body.checks.some((c) => c.id === res.body.id)).toBe(true);
+  });
+
+  it('400s a create with no prompt or label', async () => {
+    expect((await create({ label: 'No prompt' })).status).toBe(400);
+    expect((await create({ prompt: 'No label' })).status).toBe(400);
+  });
+
+  it('reuses the shared toggle path to enable/disable a custom check', async () => {
+    const { body } = await create({ label: 'Toggle me', prompt: 'do thing' });
+    const res = await request(app)
+      .patch(`/api/pipeline/editorial/checks/${encodeURIComponent(body.id)}`)
+      .send({ enabled: false });
+    expect(res.status).toBe(200);
+    expect(res.body.enabled).toBe(false);
+    expect(settingsStore.pipelineEditorialChecks.checks[body.id].enabled).toBe(false);
+  });
+
+  it('edits a custom check definition, preserving id/createdAt', async () => {
+    const { body } = await create({ label: 'Old name', prompt: 'old prompt' });
+    const createdAt = settingsStore.pipelineEditorialChecks.customChecks[0].createdAt;
+    const res = await request(app)
+      .patch(`/api/pipeline/editorial/custom-checks/${encodeURIComponent(body.id)}`)
+      .send({ label: 'New name', severityDefault: 'high' });
+    expect(res.status).toBe(200);
+    expect(res.body.label).toBe('New name');
+    expect(res.body.severityDefault).toBe('high');
+    const def = settingsStore.pipelineEditorialChecks.customChecks[0];
+    expect(def.id).toBe(body.id);
+    expect(def.createdAt).toBe(createdAt);
+    expect(def.prompt).toBe('old prompt'); // untouched fields preserved
+  });
+
+  it('404s editing an unknown custom id and 400s a non-custom id', async () => {
+    expect((await request(app).patch('/api/pipeline/editorial/custom-checks/custom.nope').send({ label: 'x' })).status).toBe(404);
+    expect((await request(app).patch('/api/pipeline/editorial/custom-checks/prose.info-dumping').send({ label: 'x' })).status).toBe(400);
+  });
+
+  it('deletes a custom check and its enable/config override', async () => {
+    const { body } = await create({ label: 'Delete me', prompt: 'p' });
+    await request(app).patch(`/api/pipeline/editorial/checks/${encodeURIComponent(body.id)}`).send({ enabled: false });
+    const res = await request(app).delete(`/api/pipeline/editorial/custom-checks/${encodeURIComponent(body.id)}`);
+    expect(res.status).toBe(200);
+    expect(res.body.deleted).toBe(true);
+    expect(settingsStore.pipelineEditorialChecks.customChecks).toHaveLength(0);
+    expect(settingsStore.pipelineEditorialChecks.checks[body.id]).toBeUndefined();
+  });
+
+  it('404s deleting an unknown custom id', async () => {
+    expect((await request(app).delete('/api/pipeline/editorial/custom-checks/custom.nope')).status).toBe(404);
+  });
 });

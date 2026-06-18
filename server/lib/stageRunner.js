@@ -259,8 +259,38 @@ export function extractJson(text, { promptToStrip } = {}) {
  */
 export async function runStagedLLM(stageName, variables, options = {}) {
   const stage = getStage(stageName);
-  const provider = await resolveProviderForStage(stage, options);
   const prompt = await buildPrompt(stageName, variables);
+  return executeStagePrompt({ stage, label: stageName, prompt, options });
+}
+
+/**
+ * Run an INLINE (caller-supplied) prompt end-to-end — no named stage template.
+ * Same provider/model resolution, runner.js transcript persistence, runtime
+ * fallback, and JSON extraction as `runStagedLLM`, but the prompt body is passed
+ * directly. With no stage there is no stage-pinned provider/model/timeout, so it
+ * resolves to `options.providerOverride` (or the active provider). Used by
+ * user-defined editorial checks (#1346) whose prompt is authored from the UI.
+ *
+ * Same options as runStagedLLM (providerOverride / modelOverride /
+ * timeoutOverride / returnsJson / source).
+ */
+export async function runInlineLLM(prompt, options = {}) {
+  if (typeof prompt !== 'string' || !prompt.trim()) {
+    throw new ServerError('runInlineLLM requires a non-empty prompt', { status: 400, code: 'INLINE_PROMPT_REQUIRED' });
+  }
+  return executeStagePrompt({ stage: null, label: options.source || 'inline-llm', prompt, options });
+}
+
+/**
+ * Shared execution body for runStagedLLM / runInlineLLM. Takes an already-built
+ * prompt + an optional resolved stage (null for inline), resolves the provider/
+ * model/timeout, creates the run record, executes through the shared runner
+ * (with runtime fallback reconciliation), and returns
+ * `{ content, model, providerId, runId }`. `label` is the free-form name used in
+ * the log line (the stage name, or the inline source tag).
+ */
+async function executeStagePrompt({ stage, label, prompt, options }) {
+  const provider = await resolveProviderForStage(stage, options);
   const resolvedModel = resolveModel(provider, options.modelOverride || stage?.model);
   // resolveEffectiveModel gates the override per provider type and, for
   // CLI providers with a baked --model/-m flag in args, extracts the
@@ -326,7 +356,7 @@ export async function runStagedLLM(stageName, variables, options = {}) {
     metadataPatch.providerName = effectiveProvider.name;
   }
   patchRunMetadata(runId, metadataPatch).catch(() => { /* best-effort */ });
-  console.log(`📝 stage: ${effectiveProvider.id} / ${effectiveModel || '(default)'} / ${stageName} → ${runId.slice(0, 8)}`);
+  console.log(`📝 stage: ${effectiveProvider.id} / ${effectiveModel || '(default)'} / ${label} → ${runId.slice(0, 8)}`);
 
   // Stage runs pre-create the run record (so the runId can be logged BEFORE
   // the LLM call starts), then thread that id through the shared runner.
@@ -350,7 +380,7 @@ export async function runStagedLLM(stageName, variables, options = {}) {
     finalRunId = runResult2.runId;
     finalProvider = runResult2.fallbackProvider;
     finalModel = runResult2.model ?? finalModel;
-    console.log(`⚡ stage fallback succeeded: ${finalProvider.id} / ${finalModel || '(default)'} / ${stageName} → ${finalRunId.slice(0, 8)}`);
+    console.log(`⚡ stage fallback succeeded: ${finalProvider.id} / ${finalModel || '(default)'} / ${label} → ${finalRunId.slice(0, 8)}`);
   }
   // Codex CLI dumps the full transcript (banner + metadata + echoed prompt +
   // `codex\n<reply>` + token-stats footer). Carve out the assistant reply
