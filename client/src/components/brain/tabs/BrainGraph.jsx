@@ -385,6 +385,7 @@ export default function BrainGraph() {
             <button
               onClick={goBack}
               title="Back"
+              aria-label="Back"
               className="flex items-center gap-1 px-2 py-1 text-gray-400 hover:text-white rounded transition-colors"
             >
               <ArrowLeft size={13} />
@@ -611,6 +612,7 @@ export default function BrainGraph() {
               <button
                 onClick={() => setSelectedNode(null)}
                 title="Clear selection (Esc)"
+                aria-label="Clear selection"
                 className="text-gray-500 hover:text-white transition-colors p-1"
               >
                 &times;
