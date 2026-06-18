@@ -107,6 +107,24 @@ function parseStoredContacts(value) {
   }
 }
 
+function getLegacyContacts() {
+  if (typeof window === 'undefined') return [];
+  try {
+    return parseStoredContacts(window.localStorage.getItem(STORAGE_KEY));
+  } catch {
+    return [];
+  }
+}
+
+function clearLegacyContacts() {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.removeItem(STORAGE_KEY);
+  } catch {
+    // Storage can be unavailable in restricted browser contexts.
+  }
+}
+
 function StatTile({ icon: Icon, label, value, detail, className = '' }) {
   return (
     <div className={`border border-port-border bg-port-card rounded p-4 min-w-0 ${className}`}>
@@ -152,67 +170,56 @@ function ContactCard({ contact, active, onSelect, onLogTouch }) {
   const tags = tagsToArray(contact.tags).slice(0, 3);
 
   return (
-    <button
-      type="button"
-      onClick={onSelect}
+    <article
       className={`w-full text-left border rounded p-4 transition-colors bg-port-card ${
         active ? 'border-port-accent/70 ring-1 ring-port-accent/30' : 'border-port-border hover:border-port-accent/40'
       }`}
     >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2 min-w-0">
-            <UserRound size={16} className="shrink-0 text-gray-500" aria-hidden="true" />
-            <h3 className="font-semibold text-white truncate">{contact.name || 'Unnamed person'}</h3>
+      <button type="button" onClick={onSelect} className="block w-full text-left">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 min-w-0">
+              <UserRound size={16} className="shrink-0 text-gray-500" aria-hidden="true" />
+              <h3 className="font-semibold text-white truncate">{contact.name || 'Unnamed person'}</h3>
+            </div>
+            <p className="mt-1 text-sm text-gray-400 truncate">{contact.relationship || 'Relationship'}</p>
           </div>
-          <p className="mt-1 text-sm text-gray-400 truncate">{contact.relationship || 'Relationship'}</p>
+          <span className={`shrink-0 rounded border px-2 py-1 text-xs ${ring.bg} ${ring.border} ${ring.tone}`}>
+            {ring.label}
+          </span>
         </div>
-        <span className={`shrink-0 rounded border px-2 py-1 text-xs ${ring.bg} ${ring.border} ${ring.tone}`}>
-          {ring.label}
-        </span>
-      </div>
 
-      <div className="mt-4 flex flex-wrap items-center gap-2">
-        <span className={`rounded border px-2 py-1 text-xs ${energy.className}`}>{energy.label}</span>
-        <span className={`text-xs ${status.tone}`}>{status.label}</span>
-        {contact.channel && <span className="text-xs text-gray-500">{contact.channel}</span>}
-      </div>
-
-      {tags.length > 0 && (
-        <div className="mt-3 flex flex-wrap gap-1.5">
-          {tags.map((tag) => (
-            <span key={tag} className="rounded bg-port-bg px-2 py-1 text-[11px] text-gray-400">{tag}</span>
-          ))}
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          <span className={`rounded border px-2 py-1 text-xs ${energy.className}`}>{energy.label}</span>
+          <span className={`text-xs ${status.tone}`}>{status.label}</span>
+          {contact.channel && <span className="text-xs text-gray-500">{contact.channel}</span>}
         </div>
-      )}
 
-      {contact.nextMove && (
-        <p className="mt-3 text-sm text-gray-300 line-clamp-2">{contact.nextMove}</p>
-      )}
+        {tags.length > 0 && (
+          <div className="mt-3 flex flex-wrap gap-1.5">
+            {tags.map((tag) => (
+              <span key={tag} className="rounded bg-port-bg px-2 py-1 text-[11px] text-gray-400">{tag}</span>
+            ))}
+          </div>
+        )}
+
+        {contact.nextMove && (
+          <p className="mt-3 text-sm text-gray-300 line-clamp-2">{contact.nextMove}</p>
+        )}
+      </button>
 
       <div className="mt-4 flex items-center justify-between gap-3 text-xs text-gray-500">
         <span>{contact.lastContact ? `Last ${contact.lastContact}` : 'No date logged'}</span>
-        <span
-          role="button"
-          tabIndex={0}
-          onClick={(event) => {
-            event.stopPropagation();
-            onLogTouch();
-          }}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' || event.key === ' ') {
-              event.preventDefault();
-              event.stopPropagation();
-              onLogTouch();
-            }
-          }}
+        <button
+          type="button"
+          onClick={onLogTouch}
           className="inline-flex items-center gap-1 rounded px-2 py-1 text-port-accent hover:bg-port-accent/10"
         >
           <MessageCircle size={13} aria-hidden="true" />
           Touch
-        </span>
+        </button>
       </div>
-    </button>
+    </article>
   );
 }
 
@@ -405,7 +412,11 @@ function MemoryLinksPanel({ personId }) {
   };
 
   const unlinkMemory = async (id) => {
-    await api.unlinkTribeMemory(personId, id).catch((err) => toast.error(err.message || 'Failed to unlink memory'));
+    const result = await api.unlinkTribeMemory(personId, id).catch((err) => {
+      toast.error(err.message || 'Failed to unlink memory');
+      return null;
+    });
+    if (!result?.success) return;
     setLinks((current) => current.filter((link) => link.memoryId !== id));
   };
 
@@ -628,9 +639,7 @@ export default function Tribe() {
     });
     let people = result?.people || [];
 
-    const legacy = typeof localStorage === 'undefined'
-      ? []
-      : parseStoredContacts(localStorage.getItem(STORAGE_KEY));
+    const legacy = getLegacyContacts();
     if (people.length === 0 && legacy.length > 0) {
       const imported = [];
       for (const contact of legacy) {
@@ -650,7 +659,7 @@ export default function Tribe() {
       }
       if (imported.length > 0) {
         people = imported;
-        localStorage.removeItem(STORAGE_KEY);
+        clearLegacyContacts();
         toast.success(`Imported ${imported.length} Tribe relationship${imported.length === 1 ? '' : 's'} into Postgres`);
       }
     }
@@ -726,17 +735,18 @@ export default function Tribe() {
 
   const deleteDraft = async () => {
     if (!draft.id) return;
-    await api.deleteTribePerson(draft.id).catch((err) => {
+    const result = await api.deleteTribePerson(draft.id).catch((err) => {
       toast.error(err.message || 'Failed to delete relationship');
       return null;
     });
+    if (!result?.success) return;
     setContacts((current) => current.filter((contact) => contact.id !== draft.id));
     setDraft(emptyDraft());
   };
 
   const logTouch = async (id) => {
     const date = todayISO();
-    await api.createTribeTouchpoint(id, {
+    const result = await api.createTribeTouchpoint(id, {
       happenedAt: new Date().toISOString(),
       channel: contacts.find((contact) => contact.id === id)?.channel || '',
       summary: 'Manual touchpoint',
@@ -745,6 +755,7 @@ export default function Tribe() {
       toast.error(err.message || 'Failed to log touchpoint');
       return null;
     });
+    if (!result?.id) return;
     setContacts((current) => current.map((contact) => (
       contact.id === id ? { ...contact, lastContact: date } : contact
     )));
