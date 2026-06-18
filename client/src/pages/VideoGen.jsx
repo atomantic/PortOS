@@ -1660,7 +1660,7 @@ export default function VideoGen() {
                     estimateLabel={deriveSizeEstimate(currentModel?.name)}
                   />
                 )}
-                {textEncoderStatus && textEncoderStatus.cached === false && (
+                {textEncoderStatus && (textEncoderStatus.cached === false || textEncoderStatus.downloading) && (
                   <div className="mt-1">
                     <p className="text-[10px] text-gray-500">Text encoder ({textEncoderStatus.repo}) is also required:</p>
                     <ModelDownloadBadge
