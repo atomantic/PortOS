@@ -107,6 +107,7 @@ export * from './safetensors.js';
 export * from './assetHash.js';
 export * from './pdfImageEmbed.js';
 export * from './zipStream.js';
+export * from './zipWriter.js';
 
 // === Process execution ===
 export * from './bashResolver.js';

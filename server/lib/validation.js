@@ -1739,6 +1739,16 @@ export const documentUpdateSchema = z.object({
   commitMessage: z.string().max(200).optional()
 });
 
+// Legacy Export (issue #901) — portable identity bundle. `sections` optionally
+// narrows the bundle to a subset of domains; omitted/empty means "all present
+// sections". The enum is kept in sync with `legacyExport.js#getSectionKeys()`
+// (asserted in legacyExport's tests) — validation.js must not import from
+// services (cycle), so the keys are inlined here.
+export const LEGACY_EXPORT_SECTIONS = ['identity', 'autobiography', 'brain', 'goals', 'decisions', 'health'];
+export const legacyExportSchema = z.object({
+  sections: z.array(z.enum(LEGACY_EXPORT_SECTIONS)).optional()
+});
+
 // =============================================================================
 // TRANSITIONAL RE-EXPORTS (issue #1151 split)
 // =============================================================================
