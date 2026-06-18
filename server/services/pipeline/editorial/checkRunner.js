@@ -17,7 +17,7 @@
 
 import { randomUUID, createHash } from 'crypto';
 import { createSseRunner } from '../../../lib/sseUtils.js';
-import { runStagedLLM, runInlineLLM, resolveStageContext } from '../../../lib/stageRunner.js';
+import { runStagedLLM, runInlineLLM, runStageScopedInlineLLM, resolveStageContext } from '../../../lib/stageRunner.js';
 import { planManuscriptPass } from '../../../lib/contextBudget.js';
 import { getEnabledChecks, getEnabledCheckRows, getAllChecks, EDITORIAL_SOURCES } from '../../../lib/editorial/index.js';
 import { getSettings } from '../../settings.js';
@@ -167,6 +167,13 @@ export async function runEditorialChecks(seriesId, options = {}) {
     // model overrides as callStagedLLM so a custom check honors the run's choice.
     callInlineLLM: (prompt, opts = {}) =>
       runInlineLLM(prompt, { providerOverride, modelOverride, ...opts }),
+    // Inline-prompt caller that resolves the provider/model from a NAMED STAGE's
+    // pin (#1403). The cross-chunk setup-summary call rides alongside a stage-
+    // pinned manuscript check, so it must run on the SAME provider as that stage —
+    // routing it through the active provider (plain callInlineLLM) could leak
+    // manuscript text to a different (e.g. cloud) provider than the stage chose.
+    callStageScopedInlineLLM: (stage, prompt, opts = {}) =>
+      runStageScopedInlineLLM(stage, prompt, { providerOverride, modelOverride, ...opts }),
     // Injected manuscript chunker — plans the stitched manuscript into chunks
     // sized to `stage`'s resolved provider context window (reusing the same
     // budgeter as the completeness pass), so a long series is fully reviewed

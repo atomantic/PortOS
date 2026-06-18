@@ -778,7 +778,7 @@ describe('cross-chunk clean-setup digest (#1403)', () => {
         seen.push(vars.manuscript);
         return { content: { findings: [] } }; // no findings → isolate the setup digest
       },
-      callInlineLLM: async (prompt) => {
+      callStageScopedInlineLLM: async (_stage, prompt) => {
         setupPrompts.push(prompt);
         return { content: '- SETUP: past tense, first person' };
       },
@@ -815,20 +815,25 @@ describe('cross-chunk clean-setup digest (#1403)', () => {
     expect(seen[1].endsWith('CHUNK_TWO')).toBe(true);
   });
 
-  it('uses the dedicated run source tag for setup-summary calls', async () => {
+  it('runs the setup-summary on the check STAGE (so it follows the stage provider pin) with the dedicated source tag', async () => {
     let source = null;
+    let stageSeen = null;
     await getCheck('style.conformance').run({
       config: { maxFindings: 12 },
       severityDefault: 'medium',
       series: { styleGuide: { tense: 'past', povPerson: 'first' } },
       planManuscriptChunks: async () => ['CHUNK_ONE', 'CHUNK_TWO'],
       callStagedLLM: async () => ({ content: { findings: [] } }),
-      callInlineLLM: async (_prompt, opts) => {
+      callStageScopedInlineLLM: async (stage, _prompt, opts) => {
+        stageSeen = stage;
         source = opts?.source;
         return { content: 'summary' };
       },
     });
     expect(source).toBe(EDITORIAL_SETUP_DIGEST_SOURCE);
+    // Pinned to the same stage the findings call uses, so the summary call resolves
+    // the stage's provider rather than the active/cloud one.
+    expect(stageSeen).toBe('pipeline-editorial-style-conformance');
   });
 
   it('does not summarize a single-chunk run (no later chunk consumes it)', async () => {
@@ -840,7 +845,7 @@ describe('cross-chunk clean-setup digest (#1403)', () => {
       series: { styleGuide: { tense: 'past', povPerson: 'first' } },
       planManuscriptChunks: async () => ['ONLY_CHUNK'],
       callStagedLLM: async (_stage, vars) => { seen.push(vars.manuscript); return { content: { findings: [] } }; },
-      callInlineLLM: async () => { inlineCalls += 1; return { content: 'summary' }; },
+      callStageScopedInlineLLM: async () => { inlineCalls += 1; return { content: 'summary' }; },
     });
     expect(seen).toEqual(['ONLY_CHUNK']);
     expect(inlineCalls).toBe(0);
@@ -857,7 +862,7 @@ describe('cross-chunk clean-setup digest (#1403)', () => {
   });
 
   it('degrades to findings-only when no inline LLM caller is injected (no setup digest, no crash)', async () => {
-    // No callInlineLLM in ctx → the setup-summary path stays off entirely.
+    // No callStageScopedInlineLLM in ctx → the setup-summary path stays off entirely.
     const seen = [];
     await getCheck('style.conformance').run({
       config: { maxFindings: 12 },
@@ -880,7 +885,7 @@ describe('cross-chunk clean-setup digest (#1403)', () => {
       series: { styleGuide: { tense: 'past', povPerson: 'first' } },
       planManuscriptChunks: async () => ['CHUNK_ONE', 'CHUNK_TWO', 'CHUNK_THREE'],
       callStagedLLM: async () => ({ content: { findings: [] } }),
-      callInlineLLM: async (prompt) => {
+      callStageScopedInlineLLM: async (_stage, prompt) => {
         // Capture the "Setup recorded so far" section the prompt embedded.
         const m = prompt.match(/# Setup recorded so far \(from earlier parts\)\n([\s\S]*?)\n\n# New manuscript part/);
         priorSummariesSeen.push(m ? m[1] : '');
@@ -901,7 +906,7 @@ describe('cross-chunk clean-setup digest (#1403)', () => {
       series: { styleGuide: { tense: 'past', povPerson: 'first' } },
       planManuscriptChunks: async () => ['CHUNK_ONE', 'CHUNK_TWO'],
       callStagedLLM: async (_stage, vars) => { seen.push(vars.manuscript); return { content: { findings: [] } }; },
-      callInlineLLM: async () => { inlineCalls += 1; throw new Error('summarizer down'); },
+      callStageScopedInlineLLM: async () => { inlineCalls += 1; throw new Error('summarizer down'); },
     });
     // The summarizer was attempted but threw → no setup digest, and the run still
     // processed both chunks to completion.

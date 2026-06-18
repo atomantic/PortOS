@@ -282,6 +282,27 @@ export async function runInlineLLM(prompt, options = {}) {
 }
 
 /**
+ * Run a caller-supplied (inline) prompt but resolve the provider/model/timeout
+ * from a NAMED STAGE's pin — not just the active/overridden provider. Use this for
+ * an inline helper call that SUPPORTS a stage-pinned check (e.g. a cross-chunk
+ * setup summary for an editorial stage pinned to a private local provider): the
+ * helper then runs on the SAME provider as the stage, so manuscript text is never
+ * silently routed to a different (e.g. cloud) provider than the stage chose. The
+ * prompt body is still caller-supplied (no stage template is rendered). With a
+ * falsy `stageName` this is identical to `runInlineLLM` (active/overridden provider).
+ *
+ * Same options as runStagedLLM (providerOverride / modelOverride /
+ * timeoutOverride / returnsJson / source).
+ */
+export async function runStageScopedInlineLLM(stageName, prompt, options = {}) {
+  if (typeof prompt !== 'string' || !prompt.trim()) {
+    throw new ServerError('runStageScopedInlineLLM requires a non-empty prompt', { status: 400, code: 'INLINE_PROMPT_REQUIRED' });
+  }
+  const stage = stageName ? getStage(stageName) : null;
+  return executeStagePrompt({ stage, label: options.source || stageName || 'inline-llm', prompt, options });
+}
+
+/**
  * Shared execution body for runStagedLLM / runInlineLLM. Takes an already-built
  * prompt + an optional resolved stage (null for inline), resolves the provider/
  * model/timeout, creates the run record, executes through the shared runner

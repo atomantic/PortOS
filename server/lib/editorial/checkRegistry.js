@@ -447,12 +447,15 @@ async function runManuscriptLlmCheck(ctx, { stage, category, overheadTokens = 0,
   const chunks = await ctx.planManuscriptChunks(stage, { overheadTokens });
   // Clean-setup digest (#1403): roll a short "setup so far" summary forward via an
   // inline summarization call. Only wired when the check opts in AND the runner
-  // injected an inline LLM caller — absent it (unit tests of the findings-digest
-  // path), the check degrades to findings-only with no extra calls.
-  const summarizeChunk = crossChunkSetup && typeof ctx.callInlineLLM === 'function'
+  // injected the stage-scoped inline caller — absent it (unit tests of the
+  // findings-digest path), the check degrades to findings-only with no extra calls.
+  // The call is STAGE-SCOPED (not plain callInlineLLM) so the summary runs on the
+  // same provider the stage is pinned to — never leaking manuscript text to the
+  // active/cloud provider when the check's stage targets a private/local one.
+  const summarizeChunk = crossChunkSetup && typeof ctx.callStageScopedInlineLLM === 'function'
     ? async (priorSummary, manuscript) => {
         const prompt = buildSetupDigestPrompt({ focus: setupFocus, priorSummary, manuscript });
-        const { content } = await ctx.callInlineLLM(prompt, { source: EDITORIAL_SETUP_DIGEST_SOURCE });
+        const { content } = await ctx.callStageScopedInlineLLM(stage, prompt, { source: EDITORIAL_SETUP_DIGEST_SOURCE });
         return typeof content === 'string' ? content : '';
       }
     : null;
