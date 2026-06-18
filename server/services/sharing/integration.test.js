@@ -427,6 +427,30 @@ describe('sharing round-trip', () => {
     expect((await manuscriptReview.getReview(s.id)).comments).toHaveLength(1);
   });
 
+  it('promoteInboxItem keeps the inbox row when the bundled outline merge fails', async () => {
+    const bucket = await buckets.createBucket({ name: 'PromoteOutlineFailBucket', path: tempBucket, mode: 'inbox' });
+    const s = await series.createSeries({ name: 'Promote Outline Fail Series', logline: 'A' });
+    await issues.createIssue({ seriesId: s.id, title: 'Issue 1' });
+    seedOutline(s.id);
+    const exp = await exporter.exportSeries(s.id, bucket.id);
+    simulateRemoteSender(tempBucket, exp.filename);
+    await importer.processManifest(bucket.id, exp.filename); // queues to inbox
+    expect(await importer.listInbox(bucket.id)).toHaveLength(1);
+
+    // Force a transient outline-merge failure during the manual promote.
+    const spy = vi.spyOn(reverseOutline, 'mergeOutlineFromSync').mockRejectedValueOnce(new Error('disk full'));
+    await expect(importer.promoteInboxItem(bucket.id, exp.manifestId)).rejects.toMatchObject({
+      code: 'SHARING_OUTLINE_MERGE_FAILED',
+    });
+    spy.mockRestore();
+    // Inbox row preserved so the user can re-promote.
+    expect(await importer.listInbox(bucket.id)).toHaveLength(1);
+
+    // Re-promote now succeeds and the outline lands.
+    await importer.promoteInboxItem(bucket.id, exp.manifestId);
+    expect((await reverseOutline.getStoredOutline(s.id)).status).toBe('complete');
+  });
+
   it('keeps a manifest retryable when the bundled review merge fails (no silent drop)', async () => {
     const bucket = await buckets.createBucket({ name: 'ReviewFailBucket', path: tempBucket, mode: 'auto-merge' });
     const s = await series.createSeries({ name: 'Review Fail Series', logline: 'A' });

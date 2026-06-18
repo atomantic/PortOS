@@ -1255,6 +1255,14 @@ export async function promoteInboxItem(bucketId, manifestId) {
       reviewMergeFailures: outcome.reviewMergeFailures,
     });
   }
+  // Same for a transient reverse-outline merge failure (#1348) — the outline has
+  // no independent reconciliation cycle either, so keep the inbox row for retry.
+  if (outcome.outlineMergeFailures) {
+    throw Object.assign(new Error(`Reverse-outline merge failed for ${outcome.outlineMergeFailures.join(', ')} — retry after resolving the underlying error`), {
+      code: 'SHARING_OUTLINE_MERGE_FAILED',
+      outlineMergeFailures: outcome.outlineMergeFailures,
+    });
+  }
   // Drop from inbox.
   inbox.items.splice(idx, 1);
   await writeInbox(bucketId, inbox);
