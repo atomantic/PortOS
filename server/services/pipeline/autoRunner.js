@@ -15,32 +15,32 @@
  * grace window in lib/sseUtils.js.
  */
 
-import { randomUUID } from 'crypto';
-import { broadcastSse, attachSseClient, closeJobAfterDelay } from '../../lib/sseUtils.js';
+import { broadcastSse, createSseRunner } from '../../lib/sseUtils.js';
 import { generateStage } from './textStages.js';
 import { getIssue, updateIssue, isStageReady } from './issues.js';
 import { startEpisodeVideoForIssue, ERR_NO_STORYBOARDS } from './episodeVideo.js';
 
-// runs: Map<issueId, { runId, clients[], lastPayload, cancelRequested, startedAt }>
-const runs = new Map();
+// Shared SSE run-lifecycle: a `runs` map keyed by issueId, plus the
+// coalesce/restart/grace-window/finished/cleanup semantics. This runner keeps
+// its own error handling inside `work` (it must flip the issue to
+// 'needs-review' and emit a matching error frame), so the factory's generic
+// catch is only the safety net.
+const runner = createSseRunner({ logLabel: 'pipeline auto-run' });
 
 export function isAutoRunActive(issueId) {
-  return runs.has(issueId);
+  return runner.isActive(issueId);
 }
 
 export function attachClient(issueId, res) {
-  return attachSseClient(runs, issueId, res);
+  return runner.attachClient(issueId, res);
 }
 
 export function cancelAutoRun(issueId) {
-  const run = runs.get(issueId);
-  if (!run) return false;
-  run.cancelRequested = true;
-  return true;
+  return runner.cancel(issueId);
 }
 
 function broadcast(issueId, payload) {
-  const run = runs.get(issueId);
+  const run = runner.runs.get(issueId);
   if (!run) return;
   broadcastSse(run, payload);
 }
@@ -51,21 +51,9 @@ function broadcast(issueId, payload) {
  * run is in flight resolves to the existing runId.
  */
 export async function startAutoRunTextStages(issueId, options = {}) {
-  if (runs.has(issueId)) return { runId: runs.get(issueId).runId, alreadyRunning: true };
-  const runId = randomUUID();
-  const record = {
-    runId,
-    clients: [],
-    lastPayload: null,
-    cancelRequested: false,
-    startedAt: new Date().toISOString(),
-  };
-  runs.set(issueId, record);
-
-  // Kick off the coordinator without awaiting. The outer try/catch is the one
-  // permitted boundary use of try/catch in this module — without it an LLM
-  // rejection would surface as an unhandledRejection on Node ≥15 and kill the
-  // process. See ~/.claude skill `nodejs-async-event-listener-unhandled-rejection`.
+  if (runner.isActive(issueId)) {
+    return { runId: runner.runs.get(issueId).runId, alreadyRunning: true };
+  }
   // Which script stages to adapt from prose. Defaults to both (manual auto-run
   // from the UI); callers targeting a single format (e.g. Series Autopilot on a
   // comic-only series) pass `scripts: ['comicScript']` to skip the off-target
@@ -75,10 +63,13 @@ export async function startAutoRunTextStages(issueId, options = {}) {
     ? VALID_SCRIPTS.filter((s) => options.scripts.includes(s))
     : VALID_SCRIPTS;
 
-  (async () => {
+  return runner.start(issueId, async ({ runId, record }) => {
     await updateIssue(issueId, { status: 'running' }).catch(() => null);
     broadcast(issueId, { type: 'start', runId, stages: ['idea', 'prose', ...scripts] });
 
+    // Own the error frame + status flip here (and swallow) so the factory's
+    // generic catch doesn't double-emit; without it an LLM rejection would
+    // surface as an unhandledRejection on Node ≥15 and kill the process.
     try {
       // Stage 1: idea — skip if already ready/edited and not force-rerun
       if (!record.cancelRequested) {
@@ -166,14 +157,11 @@ export async function startAutoRunTextStages(issueId, options = {}) {
       console.error(`❌ Pipeline auto-run failed — issue=${issueId.slice(0, 8)} ${message}`);
       await updateIssue(issueId, { status: 'needs-review' }).catch(() => null);
       broadcast(issueId, { type: 'error', runId, error: message, failedAt: new Date().toISOString() });
-    } finally {
-      // Hold the SSE list open briefly so late-attaching clients still see
-      // the terminal frame via replay (matches mediaJobQueue's behavior).
-      closeJobAfterDelay(runs, issueId);
+      // Swallow: the error frame + status flip above are the terminal handling.
+      // The factory's finally marks the run finished and schedules the replay
+      // grace-window cleanup.
     }
-  })();
-
-  return { runId, alreadyRunning: false };
+  });
 }
 
 async function runStageIfNeeded(issueId, stageId, options) {
@@ -220,4 +208,4 @@ export async function recoverStuckAutoRuns() {
 }
 
 // Export internals for tests.
-export const __testing = { runs };
+export const __testing = { runs: runner.runs };

@@ -97,13 +97,25 @@ export const closeJobAfterDelay = (jobs, jobId, delay = SSE_CLEANUP_DELAY_MS, ex
 // The caller supplies only the per-run `work({ runId, signal, record, broadcast })`
 // async function — it owns its own `start`/`complete`/`canceled` frames and any
 // seeding; the factory owns the `error` frame, `finished` flag, and cleanup.
+// (A caller whose error frame carries extra fields — e.g. `stepId`/`op`, or a
+// status side-effect like the auto-runner's `updateIssue('needs-review')` — keeps
+// its own try/catch inside `work` and swallows, so the factory's generic catch is
+// only the safety net for an unexpected throw.)
 //
 // `logLabel` is interpolated into the failure log (`❌ <logLabel> failed — …`).
+//
+// `start(key, work, { sig, meta })` supports OPTIONAL signature-based coalescing
+// for callers (e.g. storyBuilderRunner) that key a single map slot to work whose
+// identity depends on more than the key. When `sig` is passed, a second kickoff
+// while a run is in flight coalesces only if the signatures match; a DIFFERENT
+// signature returns `{ alreadyRunning: true, conflict: true, ...meta }` (the live
+// run's `meta`, e.g. `{ op }`) so the caller can refuse to bind onto unrelated
+// work. Omit `sig` (the default) and any in-flight run coalesces unconditionally.
 //
 // Returns `{ runs, isActive, attachClient, cancel, start }`. `runs` is exposed
 // so a module can re-export it as `__testing.runs`.
 export function createSseRunner({ logLabel = 'sse run' } = {}) {
-  // runs: Map<key, { runId, clients[], lastPayload, cancelRequested, finished, cleanupTimer, startedAt, abort }>
+  // runs: Map<key, { runId, clients[], lastPayload, cancelRequested, finished, cleanupTimer, startedAt, abort, sig, meta }>
   // A finished run lingers in the map for SSE_CLEANUP_DELAY_MS so late-attaching
   // clients can replay its terminal frame — but `finished` lets `isActive` and
   // the restart guard treat it as done, so an immediate re-run isn't swallowed.
@@ -136,10 +148,18 @@ export function createSseRunner({ logLabel = 'sse run' } = {}) {
   };
 
   // Kick off a run for `key`. Re-calling while a run is in flight resolves to the
-  // existing runId (no second coordinator). `work` runs inside the IIFE below.
-  const start = (key, work) => {
+  // existing runId (no second coordinator) — unless `sig` is passed and differs
+  // from the in-flight run's, in which case it reports a `conflict` instead of
+  // coalescing (see the factory doc above). `work` runs inside the IIFE below.
+  const start = (key, work, { sig = null, meta = null } = {}) => {
     const existing = runs.get(key);
     if (existing && !existing.finished) {
+      // A different signature means different work — refuse to coalesce so the
+      // caller doesn't bind onto an unrelated in-flight run; surface the live
+      // run's meta (e.g. its `op`) for the conflict report.
+      if (sig !== null && existing.sig !== sig) {
+        return { runId: existing.runId, alreadyRunning: true, conflict: true, ...(existing.meta || {}) };
+      }
       return { runId: existing.runId, alreadyRunning: true };
     }
     if (existing) {
@@ -159,6 +179,8 @@ export function createSseRunner({ logLabel = 'sse run' } = {}) {
       cleanupTimer: null,
       startedAt: new Date().toISOString(),
       abort,
+      sig,
+      meta,
     };
     runs.set(key, record);
 

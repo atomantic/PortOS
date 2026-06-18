@@ -218,6 +218,34 @@ describe('createSseRunner', () => {
     expect(work2).not.toHaveBeenCalled();
   });
 
+  it('coalesces a same-signature second start but reports a conflict (+ meta) for a different one', () => {
+    const runner = createSseRunner({ logLabel: 'test' });
+    const first = runner.start('k1', () => pending(), { sig: 'a', meta: { op: 'generate' } });
+
+    // Same signature → safe re-attach onto the in-flight run.
+    const same = runner.start('k1', () => pending(), { sig: 'a', meta: { op: 'generate' } });
+    expect(same.runId).toBe(first.runId);
+    expect(same.alreadyRunning).toBe(true);
+    expect(same.conflict).toBeUndefined();
+
+    // Different signature → different work; refuse to coalesce and surface the
+    // live run's meta (e.g. its op) so the caller won't bind onto it.
+    const other = runner.start('k1', () => pending(), { sig: 'b', meta: { op: 'refine' } });
+    expect(other.runId).toBe(first.runId);
+    expect(other.alreadyRunning).toBe(true);
+    expect(other.conflict).toBe(true);
+    expect(other.op).toBe('generate'); // the in-flight run's op, not the caller's
+  });
+
+  it('without a sig, any in-flight run coalesces (no conflict)', () => {
+    const runner = createSseRunner({ logLabel: 'test' });
+    const first = runner.start('k1', () => pending());
+    const second = runner.start('k1', () => pending(), { meta: { op: 'x' } });
+    expect(second.runId).toBe(first.runId);
+    expect(second.alreadyRunning).toBe(true);
+    expect(second.conflict).toBeUndefined();
+  });
+
   it('broadcasts frames to attached clients and caches the last frame for replay', async () => {
     const runner = createSseRunner({ logLabel: 'test' });
     let release;

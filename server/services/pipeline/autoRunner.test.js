@@ -217,8 +217,9 @@ describe('pipeline auto-runner', () => {
     await waitFor(() => generated.length >= 1);
     autoRunner.cancelAutoRun(issue.id);
     // Coordinator must broadcast a terminal frame (canceled or complete)
-    // before we assert. `isAutoRunActive` stays true for the SSE cleanup
-    // grace window (5s), so we read the broadcast frame directly.
+    // before we assert. The finished run lingers in `runs` for the SSE replay
+    // grace window (so its `lastPayload` is still readable) even though
+    // `isAutoRunActive` already reports false — so we read the frame directly.
     await waitFor(() => {
       const run = autoRunner.__testing.runs.get(issue.id);
       const t = run?.lastPayload?.type;
