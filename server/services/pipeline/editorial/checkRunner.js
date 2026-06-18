@@ -54,6 +54,8 @@ const SOURCE_RESOLVERS = {
   canon: ({ canon }) => canonicalStringify(canon ?? null),
   'series.styleGuide': ({ series }) => canonicalStringify(series?.styleGuide ?? null),
   'series.arc.tickingClock': ({ series }) => canonicalStringify(series?.arc?.tickingClock ?? null),
+  // The authored reader-map hooks/payoffs the Chekhov check reconciles against (#1299).
+  'series.arc.readerMap': ({ series }) => canonicalStringify(series?.arc?.readerMap ?? null),
   // The reverse-outline scenes the check reads (#1296). Fingerprinting the whole
   // scenes array is intentionally over-eager (any scene edit stales a finding)
   // rather than under: safe vs. false-fresh, and the check reads several scene fields.

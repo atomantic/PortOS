@@ -27,11 +27,13 @@ import {
   EDITORIAL_SETUP_DIGEST_BODY_CHARS,
   EDITORIAL_SETUP_DIGEST_CHARS,
   EDITORIAL_SETUP_DIGEST_SOURCE,
+  authoredSetupPayoffSummary,
 } from './checkRegistry.js';
 
 const NAMING = 'naming.dissimilar-names';
 const INFODUMP = 'prose.info-dumping';
 const INTERIORITY = 'interiority.protagonist';
+const CHEKHOV = 'chekhov.setups-payoffs';
 
 // A minimal valid stored custom-check definition.
 const customDef = (over = {}) => ({
@@ -329,6 +331,115 @@ describe('interiority.protagonist — LLM check (#1294)', () => {
     });
     const findings = await getCheck(INTERIORITY).run(ctx);
     expect(findings).toHaveLength(4);
+  });
+});
+
+describe('chekhov.setups-payoffs — LLM check (#1299)', () => {
+  const wholeCtx = (overrides = {}) => ({
+    manuscript: '# Issue 1\n\nHe slid the loaded revolver into the drawer and locked it.',
+    config: { maxFindings: 12 },
+    severityDefault: 'medium',
+    series: {},
+    planManuscriptChunks: async () => [overrides.manuscript ?? '# Issue 1\n\nHe slid the loaded revolver into the drawer and locked it.'],
+    callStagedLLM: async () => ({ content: { findings: [] } }),
+    ...overrides,
+  });
+
+  it('is registered as a series-scoped LLM check reading manuscript + reader-map', () => {
+    const check = getCheck(CHEKHOV);
+    expect(check.kind).toBe('llm');
+    expect(check.scope).toBe('series');
+    expect(check.category).toBe('continuity');
+    expect(check.sources).toEqual(['manuscript', 'series.arc.readerMap']);
+    expect(check.needsManuscript).toBe(true);
+  });
+
+  it('only runs when there is drafted prose to scan', () => {
+    const check = getCheck(CHEKHOV);
+    expect(check.gate({ manuscript: '' })).toBe(false);
+    expect(check.gate({ manuscript: '# Issue 1\n\nprose' })).toBeTruthy();
+  });
+
+  it('passes the manuscript + authored reader-map setups to the model and forces the continuity category', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      series: { arc: { readerMap: { hooks: [{ label: 'The locked drawer', note: 'planted in Issue 1' }], payoffs: [] } } },
+      planManuscriptChunks: async (_stage, opts) => {
+        // Authored hooks/payoffs ride alongside the manuscript as fixed overhead.
+        expect(opts.overheadTokens).toBeGreaterThan(0);
+        return ['# Issue 1\n\nThe drawer stayed locked forever.'];
+      },
+      callStagedLLM: async (_stage, vars) => {
+        seenVars = vars;
+        return { content: { findings: [{ severity: 'high', issueNumber: 1, location: 'Issue 1 — planted, never fired', problem: 'The drawer never opens', anchorQuote: 'locked drawer' }] } };
+      },
+    });
+    const findings = await getCheck(CHEKHOV).run(ctx);
+    expect(seenVars.manuscript).toBe('# Issue 1\n\nThe drawer stayed locked forever.');
+    expect(seenVars.authoredSetups).toContain('The locked drawer');
+    expect(findings).toHaveLength(1);
+    expect(findings[0].category).toBe('continuity');
+    expect(findings[0].location).toBe('Issue 1 — planted, never fired');
+  });
+
+  it('passes an empty authoredSetups var when the series has no reader-map', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      callStagedLLM: async (_stage, vars) => { seenVars = vars; return { content: { findings: [] } }; },
+    });
+    await getCheck(CHEKHOV).run(ctx);
+    expect(seenVars.authoredSetups).toBe('');
+  });
+
+  it('marks a single-chunk run as the final part so whole-corpus "never fired" judgments are enabled', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      callStagedLLM: async (_stage, vars) => { seenVars = vars; return { content: { findings: [] } }; },
+    });
+    await getCheck(CHEKHOV).run(ctx);
+    expect(seenVars.finalPart).toBe('true');
+  });
+
+  it('flags only the LAST part as final across a chunked manuscript (#1299)', async () => {
+    const finals = [];
+    const ctx = wholeCtx({
+      planManuscriptChunks: async () => ['# Issue 1\n\npart one', '# Issue 2\n\npart two', '# Issue 3\n\npart three'],
+      callStagedLLM: async (_stage, vars) => { finals.push(vars.finalPart); return { content: { findings: [] } }; },
+    });
+    await getCheck(CHEKHOV).run(ctx);
+    // Earlier parts can't know a setup pays off later → not final; only the last is.
+    expect(finals).toEqual(['', '', 'true']);
+  });
+});
+
+describe('authoredSetupPayoffSummary (#1299)', () => {
+  it('returns an empty string when there are no authored hooks or payoffs', () => {
+    expect(authoredSetupPayoffSummary(null)).toBe('');
+    expect(authoredSetupPayoffSummary({})).toBe('');
+    expect(authoredSetupPayoffSummary({ hooks: [], payoffs: [] })).toBe('');
+  });
+
+  it('renders authored hooks and payoffs as labelled bullet lists, with an arc-position hint when present', () => {
+    const out = authoredSetupPayoffSummary({
+      hooks: [{ label: 'Who killed the duke?', note: 'planted Issue 1', atArcPosition: 2 }, { label: 'The hidden heir' }],
+      payoffs: [{ label: 'The butler confesses', note: 'Issue 8' }],
+    });
+    expect(out).toContain('Authored hooks');
+    expect(out).toContain('- Who killed the duke? — planted Issue 1 (arc position 2)');
+    // No position hint when atArcPosition is absent.
+    expect(out).toContain('- The hidden heir');
+    expect(out).not.toContain('The hidden heir (arc position');
+    expect(out).toContain('Authored payoffs');
+    expect(out).toContain('- The butler confesses — Issue 8');
+  });
+
+  it('drops entries with neither label nor note and falls back to note-only', () => {
+    const out = authoredSetupPayoffSummary({
+      hooks: [{ atArcPosition: 3 }, { note: 'a wordless dread' }],
+      payoffs: [],
+    });
+    expect(out).toContain('- a wordless dread');
+    expect(out).not.toContain('Authored payoffs');
   });
 });
 

@@ -492,6 +492,13 @@
       "returnsJson": true,
       "variables": []
     },
+    "pipeline-editorial-chekhov": {
+      "name": "Pipeline — Editorial Check: Chekhov's guns (setups & payoffs)",
+      "description": "Editorial check (#1299): flags planted elements that never pay off (weapon, clue, secret, stated fear, promise, threat, skill introduced then dropped) and payoffs that arrive with no setup. Reads the stitched manuscript across chunks with a cross-chunk setup digest, and reconciles detected setups/payoffs against the authored reader-map hooks/payoffs. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
     "pipeline-editorial-object-motivation": {
       "name": "Pipeline — Editorial Check: Unmotivated object interaction",
       "description": "Editorial check (#1288): flags moments where a character treats an object as significant without earned motivation — no recorded attachment and no on-page setup. Reads the stitched manuscript plus the canon object↔character attachments. Returns issue-anchored findings.",
