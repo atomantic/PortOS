@@ -1,4 +1,4 @@
-import { MessageSquare, Database, Calendar, Rss, Shield, Users, FolderKanban, Lightbulb, ClipboardList, Settings, Link2, BookOpen, Network, FileText, NotebookPen, Upload } from 'lucide-react';
+import { MessageSquare, Database, Calendar, Rss, Shield, Users, FolderKanban, Lightbulb, ClipboardList, Settings, Link2, BookOpen, Network, FileText, NotebookPen, Upload, Target, BookText } from 'lucide-react';
 
 // Main navigation tabs.
 // `fullBleed: true` marks a tab that fills the available height and owns its
@@ -56,6 +56,16 @@ export const DESTINATIONS = {
     label: 'Memories',
     icon: BookOpen,
     color: 'bg-pink-500/20 text-pink-400 border-pink-500/30'
+  },
+  goals: {
+    label: 'Goals',
+    icon: Target,
+    color: 'bg-orange-500/20 text-orange-400 border-orange-500/30'
+  },
+  journals: {
+    label: 'Journal',
+    icon: BookText,
+    color: 'bg-teal-500/20 text-teal-400 border-teal-500/30'
   },
   unknown: {
     label: 'Unknown',
@@ -115,6 +125,8 @@ export const BRAIN_TYPE_HEX = {
   projects: '#3b82f6',
   ideas: '#eab308',
   admin: '#22c55e',
-  memories: '#ec4899'
+  memories: '#ec4899',
+  goals: '#f97316',
+  journals: '#14b8a6'
 };
 

@@ -207,6 +207,16 @@ export const reorderBrainBuckets = (ids) => request('/brain/buckets/reorder', {
   body: JSON.stringify({ ids })
 });
 
+// Brain - Goals (identity system, read-only view for the graph detail panel)
+export const getBrainGoal = (id) =>
+  request('/digital-twin/identity/goals').then(data =>
+    (data?.goals ?? []).find(g => g.id === id) ?? null
+  );
+
+// Brain - Journal entries (Daily Log)
+export const getBrainJournalEntry = (date) =>
+  request(`/brain/daily-log/${encodeURIComponent(date)}`).then(r => r?.entry ?? null);
+
 // Brain - Graph. Bounded by design: no `focus` returns an overview of the
 // most-connected nodes; a `focus` returns that node's neighborhood. The full
 // graph is never returned (it crashes the browser at scale).

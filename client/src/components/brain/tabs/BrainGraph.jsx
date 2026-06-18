@@ -18,7 +18,7 @@ const EDGE_COLORS = {
   linked: '#ffffff'
 };
 
-const BRAIN_TYPES = ['people', 'projects', 'ideas', 'admin', 'memories'];
+const BRAIN_TYPES = ['people', 'projects', 'ideas', 'admin', 'memories', 'goals', 'journals'];
 
 // Per-type API getters for detail panel
 const TYPE_GETTERS = {
@@ -26,7 +26,9 @@ const TYPE_GETTERS = {
   projects: api.getBrainProject,
   ideas: api.getBrainIdea,
   admin: api.getBrainAdminItem,
-  memories: api.getBrainMemory
+  memories: api.getBrainMemory,
+  goals: api.getBrainGoal,
+  journals: api.getBrainJournalEntry
 };
 
 function GraphEdges({ simEdges, selectedId }) {
@@ -322,7 +324,7 @@ export default function BrainGraph() {
   if (!graphData?.nodes?.length) {
     return (
       <div className="text-center py-12 text-gray-500">
-        No brain entities to graph. Add people, projects, ideas, admin items, or memories to see relationships.
+        No brain entities to graph. Add people, projects, ideas, admin items, memories, goals, or journal entries to see relationships.
       </div>
     );
   }
@@ -587,10 +589,18 @@ export default function BrainGraph() {
               <h3 className="text-sm font-medium text-white mb-1">{selectedNode.label}</h3>
               {fullRecord ? (
                 <div className="space-y-3">
-                  {(fullRecord.context || fullRecord.oneLiner || fullRecord.notes || fullRecord.content) && (
+                  {(fullRecord.description || fullRecord.context || fullRecord.oneLiner || fullRecord.notes || fullRecord.content) && (
                     <p className="text-sm text-gray-300 whitespace-pre-wrap">
-                      {fullRecord.context || fullRecord.oneLiner || fullRecord.notes || fullRecord.content}
+                      {fullRecord.description || fullRecord.context || fullRecord.oneLiner || fullRecord.notes || fullRecord.content}
                     </p>
+                  )}
+                  {typeof fullRecord.progress === 'number' && (
+                    <div className="flex items-center gap-2">
+                      <div className="flex-1 h-1.5 bg-port-border rounded-full overflow-hidden">
+                        <div className="h-full bg-port-accent rounded-full" style={{ width: `${Math.min(100, Math.max(0, fullRecord.progress))}%` }} />
+                      </div>
+                      <span className="text-xs text-gray-500">{fullRecord.progress}%</span>
+                    </div>
                   )}
                   {fullRecord.tags?.length > 0 && (
                     <div className="flex flex-wrap gap-1">
@@ -602,6 +612,8 @@ export default function BrainGraph() {
                   <div className="text-xs text-gray-500 flex flex-wrap gap-3">
                     {fullRecord.createdAt && <span>Created: {new Date(fullRecord.createdAt).toLocaleDateString()}</span>}
                     {fullRecord.nextAction && <span>Next: {fullRecord.nextAction}</span>}
+                    {fullRecord.horizon && <span>Horizon: {fullRecord.horizon}</span>}
+                    {fullRecord.targetDate && <span>Target: {fullRecord.targetDate}</span>}
                   </div>
                 </div>
               ) : (
