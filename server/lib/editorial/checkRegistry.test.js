@@ -794,13 +794,34 @@ describe('pov.justified — deterministic check', () => {
     expect(driveBy[0].problem).toMatch(/only 1 scene/);
   });
 
-  it('degrades gracefully with no arc model: only the structural drive-by check runs', () => {
-    const findings = runPov([scene('Aria'), scene('Aria'), scene('Solo')]); // no arcs passed
-    // No arc data → no "unjustified" findings, but Solo (1 scene) is still a drive-by.
+  it('degrades gracefully when analysis has not run: only the structural drive-by check runs', () => {
+    // No arcs AND not complete (no analysis yet) → can't tell justified from not.
+    const findings = runPov([scene('Aria'), scene('Aria'), scene('Solo')], { arcs: [], arcsComplete: false });
     expect(findings.every((f) => !/no detected character arc/.test(f.problem))).toBe(true);
     const driveBy = findings.filter((f) => /drive-by viewpoint/.test(f.problem));
     expect(driveBy).toHaveLength(1);
     expect(driveBy[0].problem).toMatch(/"Solo"/);
+  });
+
+  it('treats a complete-but-empty analysis as a usable model: every POV holder is flagged arc-less', () => {
+    // Analysis completed and detected zero characters → every POV holder genuinely
+    // has no arc, so the no-arc finding must still fire (not silently suppressed).
+    const findings = runPov(
+      [scene('Aria'), scene('Aria'), scene('Bram'), scene('Bram')],
+      { config: { driveByMaxScenes: 0 }, arcs: [], arcsComplete: true },
+    );
+    const unjustified = findings.filter((f) => /not present in the detected arcs/.test(f.problem));
+    expect(unjustified).toHaveLength(2);
+    expect(unjustified.map((f) => f.problem).join(' ')).toMatch(/"Aria".*"Bram"|"Bram".*"Aria"/s);
+  });
+
+  it('stays silent on an empty analysis that is NOT complete (can\'t tell)', () => {
+    // Zero arcs and incomplete → indistinguishable from "not analyzed yet".
+    const findings = runPov(
+      [scene('Aria'), scene('Aria')],
+      { config: { driveByMaxScenes: 0 }, arcs: [], arcsComplete: false },
+    );
+    expect(findings).toEqual([]);
   });
 
   it('collapses casing/spacing variants of a POV name into one holder', () => {

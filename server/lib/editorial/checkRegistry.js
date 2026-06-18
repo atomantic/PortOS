@@ -1231,6 +1231,11 @@ export const EDITORIAL_CHECKS = [
       // that absence would be a false positive. A character who IS present but
       // reads flat was definitively analyzed, so that finding stands regardless.
       const arcsComplete = ctx.editorialArcsComplete === true;
+      // We can judge POV justification when there are detected arcs to compare
+      // against OR when analysis is verified complete — a complete pass that
+      // detected zero arcs still means every POV holder genuinely lacks one, so
+      // an empty-but-complete model must not silently suppress the no-arc finding.
+      const canJudgeArcs = haveArcModel || arcsComplete;
 
       const findings = [];
       const flag = ({ severity, location, problem, suggestion, anchorQuote = '', issueNumber = null }) =>
@@ -1244,10 +1249,10 @@ export const EDITORIAL_CHECKS = [
         const anchorQuote = typeof first?.anchorQuote === 'string' ? first.anchorQuote : '';
 
         // 1) Unjustified POV — narrates a viewpoint but has no detected arc. Only
-        //    when an arc model exists to judge against (else we can't tell). The
-        //    absent-from-arcs sub-case additionally requires complete coverage so
-        //    a not-yet-analyzed POV holder isn't mistaken for an arc-less one.
-        if (flagUnjustified && haveArcModel) {
+        //    when we can judge arcs at all (else we can't tell). The absent-from-
+        //    arcs sub-case additionally requires complete coverage so a not-yet-
+        //    analyzed POV holder isn't mistaken for an arc-less one.
+        if (flagUnjustified && canJudgeArcs) {
           const arc = arcByName.get(holder.key) || null;
           const arcIsFlat = !arc || typeof arc.arcDirection !== 'string' || arc.arcDirection === 'flat';
           // A present-but-flat character was definitively analyzed → real "no arc".
