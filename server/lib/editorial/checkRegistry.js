@@ -117,6 +117,12 @@ export const INTERIORITY_STAGE = 'pipeline-editorial-interiority';
 // migrations but NOT setup-data, so the migration is required).
 export const CHEKHOV_STAGE = 'pipeline-editorial-chekhov';
 
+// Stage name for the chapter-ending cliffhanger LLM check (#1298). Ships in
+// data.reference/prompts/stages/ + stage-config.json (fresh installs via
+// setup-data.js) and migrates to existing installs via migration 102 (boot runs
+// migrations but NOT setup-data, so the migration is required).
+export const ENDINGS_CLIFFHANGER_STAGE = 'pipeline-editorial-endings-cliffhanger';
+
 // Render the authored reader-map hooks/payoffs (#1299) into a compact text block
 // the Chekhov check passes alongside the manuscript so the model reconciles its
 // DETECTED setups/payoffs against what the writer has already LOGGED — e.g. an
@@ -152,6 +158,73 @@ export function authoredSetupPayoffSummary(readerMap) {
 // runs migrations but NOT setup-data, so the migration is required). The
 // deterministic siblings (prose.cliches, prose.modifier-stacking) need no stage.
 export const DEAD_METAPHOR_STAGE = 'pipeline-editorial-dead-metaphor';
+
+// Render the authored reader-map cliffhangers (#1298) into a compact text block
+// the chapter-ending check passes alongside the manuscript so the model
+// reconciles its DETECTED endings against the issue-boundary tugs the writer
+// already LOGGED — an authored cliffhanger the prose doesn't deliver, or a
+// settled ending where the writer planned one. Pure + deterministic so it's
+// unit-testable and its token cost can be counted into the per-chunk overhead.
+// Returns '' when nothing is authored (the prompt's `{{#authoredCliffhangers}}`
+// section then renders nothing). `atIssueBoundary` is the issue the cliffhanger
+// caps (the cut falls between it and the next), so it's surfaced as a location hint.
+export function authoredCliffhangerSummary(readerMap) {
+  const cliffs = Array.isArray(readerMap?.cliffhangers) ? readerMap.cliffhangers : [];
+  const lines = cliffs.map((c) => {
+    const note = typeof c?.note === 'string' ? c.note.trim() : '';
+    if (!note) return '';
+    const at = Number.isFinite(c?.atIssueBoundary) ? ` (ending issue ${c.atIssueBoundary})` : '';
+    return `- ${note}${at}`;
+  }).filter(Boolean);
+  if (!lines.length) return '';
+  return `Authored cliffhangers (issue-boundary tugs the writer planned):\n${lines.join('\n')}`;
+}
+
+// ---------------------------------------------------------------------------
+// Chapter-ending POV switch (#1298) — deterministic over the reverse-outline POV
+// map + the authored reader-map cliffhangers. The editorial rule: in a multi-POV
+// story, after a chapter ends on a cliffhanger, the NEXT chapter should cut to a
+// DIFFERENT POV character (the cut sustains tension across the break). The LLM
+// cliffhanger check above judges WHICH endings are cliffhangers; this check uses
+// the writer's AUTHORED cliffhangers as the deterministic trigger so it never
+// needs the model. No authored cliffhangers ⇒ nothing to reconcile (no-op);
+// single-POV series ⇒ no-op (there's no other POV to cut to).
+// ---------------------------------------------------------------------------
+
+// Group POV-tagged scenes by issue number, preserving outline (sequence) order
+// within each issue and first-seen story order across issues. Scenes without an
+// integer issueNumber can't be mapped to a chapter boundary and are dropped.
+function scenesByIssue(scenes) {
+  const byIssue = new Map();
+  for (const s of scenes) {
+    if (!s || typeof s !== 'object') continue;
+    const n = Number.isInteger(s.issueNumber) ? s.issueNumber : null;
+    if (n == null) continue;
+    if (!byIssue.has(n)) byIssue.set(n, []);
+    byIssue.get(n).push(s);
+  }
+  return byIssue;
+}
+
+// The POV holder of a scene, trimmed, or '' when untagged.
+const scenePov = (s) => (typeof s?.povCharacter === 'string' ? s.povCharacter.trim() : '');
+
+// The last / first POV-tagged scene of an issue's scene list (sequence-ordered),
+// as { name, scene }, or null when no scene in the issue carries a POV.
+function lastPovScene(list) {
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    const name = scenePov(list[i]);
+    if (name) return { name, scene: list[i] };
+  }
+  return null;
+}
+function firstPovScene(list) {
+  for (const s of list) {
+    const name = scenePov(s);
+    if (name) return { name, scene: s };
+  }
+  return null;
+}
 
 // ---------------------------------------------------------------------------
 // Character-name dissimilarity (#1291) reads cast names + aliases and respects
@@ -2106,6 +2179,130 @@ export const EDITORIAL_CHECKS = [
       overheadTokens: EDITORIAL_PROMPT_OVERHEAD_TOKENS,
       buildVars: (manuscript) => ({ manuscript }),
     }),
+  },
+  {
+    id: 'endings.cliffhanger',
+    sources: ['manuscript', 'series.arc.readerMap'],
+    label: 'Chapter-ending cliffhangers (soft landings)',
+    description:
+      'LLM scan — flags chapter/issue endings that resolve and settle instead of leaving a question open. Every chapter is an episode and should end on an unresolved beat that pulls the reader forward; a "soft landing" that ties everything off mid-story bleeds momentum. Reconciles detected endings against the authored reader-map cliffhangers, and leaves a clearly terminal final-chapter ending alone.',
+    scope: 'series',
+    kind: 'llm',
+    category: 'pacing',
+    // A soft landing is advisory by default; the prompt tells the model to return
+    // medium when a mid-story chapter fully resolves and settles (mapLlmFindings
+    // keeps a valid model severity and only falls back to this default for an
+    // invalid/absent one).
+    severityDefault: 'low',
+    defaultEnabled: true,
+    needsManuscript: true,
+    configSchema: z.object({
+      // Cap findings per run so a long manuscript can't flood the review.
+      maxFindings: z.number().int().min(1).max(50).default(12),
+    }),
+    configFields: [
+      {
+        key: 'maxFindings',
+        label: 'Max findings per run',
+        type: 'number',
+        min: 1,
+        max: 50,
+        step: 1,
+        help: 'Cap findings so a long manuscript can not flood the review.',
+      },
+    ],
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    run: (ctx) => {
+      // Authored cliffhangers are fixed per-call overhead (re-sent on each chunk).
+      const authoredCliffhangers = authoredCliffhangerSummary(ctx.series?.arc?.readerMap);
+      return runManuscriptLlmCheck(ctx, {
+        stage: ENDINGS_CLIFFHANGER_STAGE,
+        category: 'pacing',
+        overheadTokens: EDITORIAL_PROMPT_OVERHEAD_TOKENS + estimateTokens(authoredCliffhangers),
+        // `finalPart` gates the "leave the terminal chapter alone" exemption (#1298):
+        // on a chunked manuscript, only the LAST part can contain the series finale,
+        // so an earlier part must NOT treat its last visible chapter as terminal
+        // (that would false-negative a soft landing at a chunk boundary). A
+        // single-chunk run is its own final part. Mirrors the Chekhov check.
+        buildVars: (manuscript, meta) => ({ manuscript, authoredCliffhangers, finalPart: meta?.isFinal ? 'true' : '' }),
+      });
+    },
+  },
+  {
+    id: 'endings.pov-switch',
+    sources: ['reverseOutline', 'series.arc.readerMap'],
+    label: 'Cliffhanger POV switch (multi-POV)',
+    description:
+      'Deterministic check over the reverse-outline POV map. In a multi-POV story, when a chapter ends on an authored cliffhanger the next chapter should cut to a DIFFERENT POV character — staying with the same viewpoint releases the tension just built. Flags each authored cliffhanger whose following chapter keeps the same POV. No-op for single-POV series and when no cliffhangers are authored.',
+    scope: 'series',
+    kind: 'deterministic',
+    category: 'pacing',
+    severityDefault: 'low',
+    defaultEnabled: true,
+    configSchema: z.object({}),
+    // Needs a reverse outline with POV-tagged scenes AND at least one authored
+    // cliffhanger to reconcile against — the multi-POV no-op is decided in run().
+    gate: (ctx) => Array.isArray(ctx.reverseOutline)
+      && ctx.reverseOutline.some((s) => s && typeof s.povCharacter === 'string' && s.povCharacter.trim())
+      && Array.isArray(ctx.series?.arc?.readerMap?.cliffhangers)
+      && ctx.series.arc.readerMap.cliffhangers.length > 0,
+    run: (ctx) => {
+      const scenes = Array.isArray(ctx.reverseOutline) ? ctx.reverseOutline : [];
+      const cliffs = Array.isArray(ctx.series?.arc?.readerMap?.cliffhangers)
+        ? ctx.series.arc.readerMap.cliffhangers : [];
+      if (!scenes.length || !cliffs.length) return [];
+
+      // Multi-POV gate: a single-POV story has no other viewpoint to cut to, so
+      // the "switch after a cliffhanger" rule doesn't apply — no-op (per spec).
+      const povKeys = new Set();
+      for (const s of scenes) {
+        const key = normalizeName(scenePov(s));
+        if (key) povKeys.add(key);
+      }
+      if (povKeys.size <= 1) return [];
+
+      const byIssue = scenesByIssue(scenes);
+      // Issue numbers in story order (Map preserves first-seen order; scenes arrive
+      // sequence-ordered, so this is the chapter sequence).
+      const orderedIssues = [...byIssue.keys()];
+      const findings = [];
+      // One finding per ending issue even if the writer logged several cliffhangers
+      // at the same boundary.
+      const flagged = new Set();
+      for (const c of cliffs) {
+        const endIssue = Number.isInteger(c?.atIssueBoundary) ? c.atIssueBoundary : null;
+        if (endIssue == null || flagged.has(endIssue)) continue;
+        const idx = orderedIssues.indexOf(endIssue);
+        // Skip a boundary we can't resolve to an outlined issue, or one with no
+        // following chapter (a cliffhanger on the last drafted chapter has nowhere
+        // to cut to — and the final chapter is allowed to resolve).
+        if (idx === -1 || idx === orderedIssues.length - 1) continue;
+        const nextIssue = orderedIssues[idx + 1];
+        // Only judge the cut when the IMMEDIATELY-following chapter is the next one
+        // in the outline. If issue endIssue+1 is undrafted / not yet segmented (the
+        // outline jumps to a later issue), there's no adjacent chapter to cut away
+        // to — comparing across the gap would mis-attribute the cliffhanger to a
+        // non-adjacent chapter, so skip (favor under-flagging).
+        if (nextIssue !== endIssue + 1) continue;
+        const ending = lastPovScene(byIssue.get(endIssue));
+        const opening = firstPovScene(byIssue.get(nextIssue));
+        if (!ending || !opening) continue;
+        // POV switched across the cut — exactly what the rule wants. Nothing to flag.
+        if (normalizeName(ending.name) !== normalizeName(opening.name)) continue;
+        flagged.add(endIssue);
+        const note = typeof c?.note === 'string' && c.note.trim() ? ` ("${c.note.trim()}")` : '';
+        findings.push({
+          severity: ctx.severityDefault,
+          category: 'pacing',
+          location: `Issue ${endIssue} → Issue ${nextIssue}`,
+          problem: `Issue ${endIssue} ends on a cliffhanger${note} but Issue ${nextIssue} stays with the same POV character (${opening.name}). In a multi-POV story, holding the viewpoint straight through a cliffhanger releases the tension the cut is meant to sustain.`,
+          suggestion: `Open Issue ${nextIssue} from a different POV character and return to ${opening.name}'s thread a chapter later — cutting away holds the reader on the unresolved beat.`,
+          anchorQuote: typeof opening.scene?.anchorQuote === 'string' ? opening.scene.anchorQuote : '',
+          issueNumber: nextIssue,
+        });
+      }
+      return findings;
+    },
   },
 ];
 

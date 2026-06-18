@@ -28,12 +28,15 @@ import {
   EDITORIAL_SETUP_DIGEST_CHARS,
   EDITORIAL_SETUP_DIGEST_SOURCE,
   authoredSetupPayoffSummary,
+  authoredCliffhangerSummary,
 } from './checkRegistry.js';
 
 const NAMING = 'naming.dissimilar-names';
 const INFODUMP = 'prose.info-dumping';
 const INTERIORITY = 'interiority.protagonist';
 const CHEKHOV = 'chekhov.setups-payoffs';
+const ENDINGS_CLIFF = 'endings.cliffhanger';
+const POV_SWITCH = 'endings.pov-switch';
 
 // A minimal valid stored custom-check definition.
 const customDef = (over = {}) => ({
@@ -440,6 +443,208 @@ describe('authoredSetupPayoffSummary (#1299)', () => {
     });
     expect(out).toContain('- a wordless dread');
     expect(out).not.toContain('Authored payoffs');
+  });
+});
+
+describe('endings.cliffhanger — LLM check (#1298)', () => {
+  const wholeCtx = (overrides = {}) => ({
+    manuscript: '# Issue 1\n\nAnd so, with the war finally over, they all went home and rested.',
+    config: { maxFindings: 12 },
+    severityDefault: 'low',
+    series: {},
+    planManuscriptChunks: async () => [overrides.manuscript ?? '# Issue 1\n\nThey all went home and rested.'],
+    callStagedLLM: async () => ({ content: { findings: [] } }),
+    ...overrides,
+  });
+
+  it('is registered as a series-scoped LLM pacing check reading manuscript + reader-map', () => {
+    const check = getCheck(ENDINGS_CLIFF);
+    expect(check.kind).toBe('llm');
+    expect(check.scope).toBe('series');
+    expect(check.category).toBe('pacing');
+    expect(check.sources).toEqual(['manuscript', 'series.arc.readerMap']);
+    expect(check.needsManuscript).toBe(true);
+  });
+
+  it('only runs when there is drafted prose to scan', () => {
+    const check = getCheck(ENDINGS_CLIFF);
+    expect(check.gate({ manuscript: '' })).toBe(false);
+    expect(check.gate({ manuscript: '# Issue 1\n\nprose' })).toBeTruthy();
+  });
+
+  it('passes the manuscript + authored cliffhangers and forces the pacing category', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      series: { arc: { readerMap: { cliffhangers: [{ note: 'the door opens', atIssueBoundary: 1 }] } } },
+      planManuscriptChunks: async (_stage, opts) => {
+        // Authored cliffhangers ride alongside the manuscript as fixed overhead.
+        expect(opts.overheadTokens).toBeGreaterThan(0);
+        return ['# Issue 1\n\nThe war ended and everyone went home.'];
+      },
+      callStagedLLM: async (_stage, vars) => {
+        seenVars = vars;
+        return { content: { findings: [{ severity: 'medium', issueNumber: 1, location: 'Issue 1 — ending', problem: 'The chapter fully resolves', anchorQuote: 'went home' }] } };
+      },
+    });
+    const findings = await getCheck(ENDINGS_CLIFF).run(ctx);
+    expect(seenVars.manuscript).toBe('# Issue 1\n\nThe war ended and everyone went home.');
+    expect(seenVars.authoredCliffhangers).toContain('the door opens');
+    expect(findings).toHaveLength(1);
+    expect(findings[0].category).toBe('pacing');
+    expect(findings[0].severity).toBe('medium');
+  });
+
+  it('passes an empty authoredCliffhangers var when the series has no reader-map', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      callStagedLLM: async (_stage, vars) => { seenVars = vars; return { content: { findings: [] } }; },
+    });
+    await getCheck(ENDINGS_CLIFF).run(ctx);
+    expect(seenVars.authoredCliffhangers).toBe('');
+  });
+
+  it('marks a single-chunk run as the final part so the terminal-chapter exemption applies', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      callStagedLLM: async (_stage, vars) => { seenVars = vars; return { content: { findings: [] } }; },
+    });
+    await getCheck(ENDINGS_CLIFF).run(ctx);
+    expect(seenVars.finalPart).toBe('true');
+  });
+
+  it('flags only the LAST part as final so an earlier chunk does not treat its last chapter as terminal (#1298)', async () => {
+    const finals = [];
+    const ctx = wholeCtx({
+      planManuscriptChunks: async () => ['# Issue 1\n\npart one', '# Issue 2\n\npart two', '# Issue 3\n\npart three'],
+      callStagedLLM: async (_stage, vars) => { finals.push(vars.finalPart); return { content: { findings: [] } }; },
+    });
+    await getCheck(ENDINGS_CLIFF).run(ctx);
+    expect(finals).toEqual(['', '', 'true']);
+  });
+});
+
+describe('authoredCliffhangerSummary (#1298)', () => {
+  it('returns an empty string when there are no authored cliffhangers', () => {
+    expect(authoredCliffhangerSummary(null)).toBe('');
+    expect(authoredCliffhangerSummary({})).toBe('');
+    expect(authoredCliffhangerSummary({ cliffhangers: [] })).toBe('');
+  });
+
+  it('renders cliffhangers as a bullet list with an ending-issue hint when present', () => {
+    const out = authoredCliffhangerSummary({
+      cliffhangers: [{ note: 'the door opens', atIssueBoundary: 2 }, { note: 'a scream cuts off' }],
+    });
+    expect(out).toContain('Authored cliffhangers');
+    expect(out).toContain('- the door opens (ending issue 2)');
+    // No boundary hint when atIssueBoundary is absent.
+    expect(out).toContain('- a scream cuts off');
+    expect(out).not.toContain('a scream cuts off (ending issue');
+  });
+
+  it('drops cliffhangers with no note', () => {
+    expect(authoredCliffhangerSummary({ cliffhangers: [{ atIssueBoundary: 1 }, { note: '' }] })).toBe('');
+  });
+});
+
+describe('endings.pov-switch — deterministic check (#1298)', () => {
+  // scene helper: pov + the issue it belongs to (sequence-ordered by array order).
+  const scene = (pov, issueNumber, over = {}) => ({
+    heading: `${pov || 'no'}-pov scene`, issueNumber, anchorQuote: `q-${issueNumber}`, povCharacter: pov, ...over,
+  });
+  const runSwitch = (scenes, cliffhangers) =>
+    getCheck(POV_SWITCH).run({
+      reverseOutline: scenes,
+      series: { arc: { readerMap: { cliffhangers } } },
+      config: {},
+      severityDefault: 'low',
+    });
+
+  it('declares reverseOutline + reader-map sources and is series-scoped deterministic', () => {
+    const c = getCheck(POV_SWITCH);
+    expect(c.scope).toBe('series');
+    expect(c.kind).toBe('deterministic');
+    expect(c.category).toBe('pacing');
+    expect(c.sources).toEqual(['reverseOutline', 'series.arc.readerMap']);
+  });
+
+  it('gate requires a POV-tagged scene AND at least one authored cliffhanger', () => {
+    const c = getCheck(POV_SWITCH);
+    const scenes = [scene('Aria', 1), scene('Bram', 2)];
+    expect(c.gate({ reverseOutline: scenes, series: { arc: { readerMap: { cliffhangers: [] } } } })).toBeFalsy();
+    expect(c.gate({ reverseOutline: [scene('', 1)], series: { arc: { readerMap: { cliffhangers: [{ atIssueBoundary: 1 }] } } } })).toBe(false);
+    expect(c.gate({ reverseOutline: scenes, series: { arc: { readerMap: { cliffhangers: [{ atIssueBoundary: 1 }] } } } })).toBeTruthy();
+  });
+
+  it('flags a cliffhanger whose next chapter keeps the same POV (multi-POV series)', () => {
+    const scenes = [
+      scene('Aria', 1), scene('Aria', 1), // issue 1 ends on Aria
+      scene('Aria', 2),                    // issue 2 opens on Aria — no switch
+      scene('Bram', 3),                    // a second POV makes the series multi-POV
+    ];
+    const findings = runSwitch(scenes, [{ note: 'the door opens', atIssueBoundary: 1 }]);
+    expect(findings).toHaveLength(1);
+    const f = findings[0];
+    expect(f.category).toBe('pacing');
+    expect(f.location).toBe('Issue 1 → Issue 2');
+    expect(f.problem).toMatch(/same POV character \(Aria\)/);
+    expect(f.problem).toMatch(/the door opens/);
+    expect(f.issueNumber).toBe(2);
+    expect(f.anchorQuote).toBe('q-2');
+  });
+
+  it('does not flag when the next chapter switches POV', () => {
+    const scenes = [scene('Aria', 1), scene('Bram', 2)];
+    expect(runSwitch(scenes, [{ atIssueBoundary: 1 }])).toEqual([]);
+  });
+
+  it('no-ops on a single-POV series even with an authored cliffhanger', () => {
+    const scenes = [scene('Aria', 1), scene('Aria', 2)];
+    expect(runSwitch(scenes, [{ atIssueBoundary: 1 }])).toEqual([]);
+  });
+
+  it('no-ops when no cliffhangers are authored', () => {
+    const scenes = [scene('Aria', 1), scene('Aria', 2), scene('Bram', 3)];
+    expect(runSwitch(scenes, [])).toEqual([]);
+  });
+
+  it('skips a cliffhanger on the last drafted chapter (nowhere to cut to)', () => {
+    const scenes = [scene('Aria', 1), scene('Bram', 2)];
+    // Boundary 2 is the final chapter — no next issue, so no finding.
+    expect(runSwitch(scenes, [{ atIssueBoundary: 2 }])).toEqual([]);
+  });
+
+  it('skips a cliffhanger whose boundary matches no outlined issue', () => {
+    const scenes = [scene('Aria', 1), scene('Aria', 2), scene('Bram', 3)];
+    // No issue 7 in the outline — nothing to resolve, no finding.
+    expect(runSwitch(scenes, [{ atIssueBoundary: 7 }])).toEqual([]);
+  });
+
+  it('does not flag across an undrafted gap (next outlined issue is not endIssue+1)', () => {
+    // Issue 2 is undrafted/unsegmented: the outline jumps 1 → 3. A cliffhanger
+    // ending issue 1 has no adjacent chapter to cut to, so it must NOT compare
+    // issue 1's ending POV against issue 3's opening POV.
+    const scenes = [scene('Aria', 1), scene('Aria', 3), scene('Bram', 4)];
+    expect(runSwitch(scenes, [{ atIssueBoundary: 1 }])).toEqual([]);
+  });
+
+  it('emits one finding per ending issue even if multiple cliffhangers share the boundary', () => {
+    const scenes = [scene('Aria', 1), scene('Aria', 2), scene('Bram', 3)];
+    const findings = runSwitch(scenes, [
+      { note: 'first', atIssueBoundary: 1 },
+      { note: 'second', atIssueBoundary: 1 },
+    ]);
+    expect(findings).toHaveLength(1);
+  });
+
+  it('treats casing/spacing variants of the POV name as the same holder', () => {
+    const scenes = [scene('Aria Vance', 1), scene('aria  vance', 2), scene('Bram', 3)];
+    const findings = runSwitch(scenes, [{ atIssueBoundary: 1 }]);
+    expect(findings).toHaveLength(1);
+  });
+
+  it('tolerates an empty / malformed outline', () => {
+    expect(runSwitch([], [{ atIssueBoundary: 1 }])).toEqual([]);
+    expect(runSwitch([null, 'x', {}], [{ atIssueBoundary: 1 }])).toEqual([]);
   });
 });
 

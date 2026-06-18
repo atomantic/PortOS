@@ -506,6 +506,13 @@
       "returnsJson": true,
       "variables": []
     },
+    "pipeline-editorial-endings-cliffhanger": {
+      "name": "Pipeline — Editorial Check: Chapter-ending cliffhangers",
+      "description": "Editorial check (#1298): flags chapter/issue endings that resolve and settle (\"soft landings\") instead of ending on an unresolved beat that pulls the reader forward, leaving a clearly terminal final chapter alone. Reads the stitched manuscript and reconciles detected endings against the authored reader-map cliffhangers. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
     "pipeline-editorial-object-motivation": {
       "name": "Pipeline — Editorial Check: Unmotivated object interaction",
       "description": "Editorial check (#1288): flags moments where a character treats an object as significant without earned motivation — no recorded attachment and no on-page setup. Reads the stitched manuscript plus the canon object↔character attachments. Returns issue-anchored findings.",
