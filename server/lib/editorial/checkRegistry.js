@@ -212,20 +212,6 @@ export const editorialFindingKey = (f) => [
   (f.problem || '').trim().toLowerCase().slice(0, 120),
 ].join('|');
 
-// Merge per-chunk finding lists first-wins, capped at `max`. The cap bounds the
-// WHOLE run (not each chunk) so a long, many-chunk manuscript can't flood the
-// review — preserving `maxFindings`'s original single-call meaning.
-export function mergeChunkFindings(lists, max = Infinity) {
-  const merged = new Map();
-  for (const list of (Array.isArray(lists) ? lists : [])) {
-    for (const f of (Array.isArray(list) ? list : [])) {
-      const k = editorialFindingKey(f);
-      if (!merged.has(k)) merged.set(k, f);
-    }
-  }
-  return [...merged.values()].slice(0, Math.max(0, max));
-}
-
 // Cross-chunk continuity digest (#1383). When a manuscript is too long for the
 // provider window it is reviewed chunk-by-chunk; a check whose problems span
 // chapters (an object set up early and paid off late; tense/POV established in
