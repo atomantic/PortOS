@@ -463,6 +463,7 @@ export default function CatalogIngredient() {
           onAttach={handleAttachMedia}
           onSetPortrait={handleSetPortrait}
           onDetach={handleDetachMedia}
+          genIngredientId={record.id}
           genName={name}
           genDescription={genDescription}
           onGenerated={handleGeneratedImage}
@@ -851,7 +852,7 @@ function RelationsPanel({ record, relations, onAdd, onRemove }) {
 // `MediaJobThumb` surfaces the live diffusion preview and fires `onFilename`
 // once complete, which routes to `onComplete` to attach it onto the ingredient.
 // Disabled when the description is blank — there's nothing to render from.
-function GenerateImageControl({ name, description, onComplete }) {
+function GenerateImageControl({ ingredientId, name, description, onComplete }) {
   const mountedRef = useMounted();
   const [jobId, setJobId] = useState(null);
   const [starting, setStarting] = useState(false);
@@ -865,7 +866,16 @@ function GenerateImageControl({ name, description, onComplete }) {
     setStarting(true);
     const styled = composeCanonStyledPrompt({ name: name || 'Subject', description, universe: null });
     const queued = await generateImage(
-      { prompt: styled.prompt, negativePrompt: styled.negativePrompt || undefined },
+      {
+        prompt: styled.prompt,
+        negativePrompt: styled.negativePrompt || undefined,
+        // Durable attach (#1359): tag the queued job with the target ingredient
+        // so the server-side completion hook files the render even if this page
+        // unmounts before a long local/Codex render finishes. The onComplete
+        // callback below stays as the optimistic/immediate-refresh path; the
+        // hook is idempotent so the two never double-attach.
+        ...(ingredientId ? { catalogIngredientId: ingredientId } : {}),
+      },
       { silent: true },
     ).catch((err) => { toast.error(err?.message || 'Image generation failed'); return null; });
     if (!mountedRef.current) return;
@@ -873,11 +883,9 @@ function GenerateImageControl({ name, description, onComplete }) {
     if (!queued) return;
     if (queued.jobId) {
       // Local/Codex modes enqueue a job — track it live via MediaJobThumb,
-      // which fires onFilename on completion to attach the result. NOTE: this
-      // attach is mounted-callback-bound — navigating away before a long render
-      // finishes leaves the image in the gallery unattached (same limitation as
-      // UniverseCanonSection's section-local renders). A durable job→ingredient
-      // attach is tracked in #1359.
+      // which fires onFilename on completion to attach the result optimistically.
+      // If this page unmounts before the render finishes the server-side
+      // catalogImageAttachHook still attaches it durably (#1359).
       setJobId(queued.jobId);
       toast.success('Generating image…');
     } else if (queued.filename) {
@@ -932,7 +940,7 @@ function GenerateImageControl({ name, description, onComplete }) {
   );
 }
 
-function MediaPanel({ media, missingMedia, onAttach, onSetPortrait, onDetach, genName, genDescription, onGenerated }) {
+function MediaPanel({ media, missingMedia, onAttach, onSetPortrait, onDetach, genIngredientId, genName, genDescription, onGenerated }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const list = Array.isArray(media) ? media : [];
@@ -955,7 +963,7 @@ function MediaPanel({ media, missingMedia, onAttach, onSetPortrait, onDetach, ge
           <ImageIcon size={14} aria-hidden="true" /> Media
         </h2>
         <div className="flex items-center gap-2">
-          <GenerateImageControl name={genName} description={genDescription} onComplete={onGenerated} />
+          <GenerateImageControl ingredientId={genIngredientId} name={genName} description={genDescription} onComplete={onGenerated} />
           <button type="button" onClick={() => setPickerOpen(true)}
             className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-port-border text-gray-300 hover:text-white hover:border-port-accent">
             <Plus size={12} aria-hidden="true" /> Pick from gallery

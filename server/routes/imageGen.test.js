@@ -368,6 +368,62 @@ describe('Image Gen Routes', () => {
       });
     });
 
+    // Durable catalog attach (#1359): the Catalog ingredient editor's Generate
+    // button passes `catalogIngredientId` so the queued job carries a
+    // `catalogAttach` tag the completion hook reads to file the render even if
+    // the page unmounts. The route collapses the raw fields into the tag and
+    // drops them from params.
+    describe('catalogAttach tag', () => {
+      it('folds catalogIngredientId into a catalogAttach job tag and drops the raw field', async () => {
+        getSettings.mockResolvedValueOnce({ imageGen: { mode: 'local', local: { pythonPath: '/usr/bin/python3' } } });
+        mediaJobQueue.enqueueJob.mockReturnValueOnce({ jobId: 'queued-cat', position: 1, status: 'queued' });
+
+        const response = await request(app)
+          .post('/api/image-gen/generate')
+          .send({ prompt: 'a catalog hero', catalogIngredientId: 'ing-42' });
+
+        expect(response.status).toBe(200);
+        const [call] = mediaJobQueue.enqueueJob.mock.calls;
+        expect(call[0].params.catalogAttach).toEqual({ ingredientId: 'ing-42' });
+        // Raw fields are stripped — only the canonical tag persists in job.params.
+        expect(call[0].params.catalogIngredientId).toBeUndefined();
+        expect(call[0].params.catalogMediaKind).toBeUndefined();
+      });
+
+      it('preserves an explicit catalogMediaKind in the tag', async () => {
+        getSettings.mockResolvedValueOnce({ imageGen: { mode: 'local', local: { pythonPath: '/usr/bin/python3' } } });
+        mediaJobQueue.enqueueJob.mockReturnValueOnce({ jobId: 'queued-cat-kind', position: 1, status: 'queued' });
+
+        const response = await request(app)
+          .post('/api/image-gen/generate')
+          .send({ prompt: 'a reference shot', catalogIngredientId: 'ing-7', catalogMediaKind: 'reference' });
+
+        expect(response.status).toBe(200);
+        const [call] = mediaJobQueue.enqueueJob.mock.calls;
+        expect(call[0].params.catalogAttach).toEqual({ ingredientId: 'ing-7', kind: 'reference' });
+      });
+
+      it('rejects an invalid catalogMediaKind', async () => {
+        const response = await request(app)
+          .post('/api/image-gen/generate')
+          .send({ prompt: 'x', catalogIngredientId: 'ing-9', catalogMediaKind: 'thumbnail' });
+        expect(response.status).toBe(400);
+      });
+
+      it('omits catalogAttach when no catalogIngredientId is sent', async () => {
+        getSettings.mockResolvedValueOnce({ imageGen: { mode: 'local', local: { pythonPath: '/usr/bin/python3' } } });
+        mediaJobQueue.enqueueJob.mockReturnValueOnce({ jobId: 'queued-nocat', position: 1, status: 'queued' });
+
+        const response = await request(app)
+          .post('/api/image-gen/generate')
+          .send({ prompt: 'untagged render' });
+
+        expect(response.status).toBe(200);
+        const [call] = mediaJobQueue.enqueueJob.mock.calls;
+        expect(call[0].params.catalogAttach).toBeUndefined();
+      });
+    });
+
     // Local mode without a configured pythonPath now rejects up-front (400)
     // rather than enqueueing a job that can never run. The queue is meant to
     // serialize concurrent renders, not to absorb hard configuration errors.
