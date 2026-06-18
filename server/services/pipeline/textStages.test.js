@@ -1,5 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { readFileSync } from 'fs';
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
 import { mockNoPeerSync, mockNoPeers } from '../../lib/mockPathsDataRoot.js';
+// Real (unmocked) engine + clock renderer, for the end-to-end template-render
+// guard at the bottom of this file. promptTemplate.js is pure and storyArc.js
+// is not mocked here, so importing them directly is safe alongside the mocks.
+import { applyTemplate } from '../../lib/promptTemplate.js';
+import { renderTickingClock } from '../../lib/storyArc.js';
 
 const fileStore = new Map();
 
@@ -501,5 +509,49 @@ describe('pipeline text stage generator', () => {
     const ctx = ctxFromCall(llmCalls[0]);
     expect(ctx.sourceMaterials).toEqual([]);
     expect(ctx.hasSourceMaterials).toBe(false);
+  });
+});
+
+// End-to-end render guard for the shipped idea template. The tests above assert
+// the *context object* buildIdeaContextAugment produces, but mock buildPrompt —
+// so a regression in the template itself (e.g. reverting the named-ref fix back
+// to `{{.}}`, which renders the literal "[object Object]" inside string-valued
+// Mustache sections) would not fail any of them. This block renders the real
+// data.reference template through the production engine to pin that contract.
+describe('pipeline-idea-expansion template render', () => {
+  const ideaTemplate = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), '../../../data.reference/prompts/stages/pipeline-idea-expansion.md'),
+    'utf-8',
+  );
+
+  const renderCtx = (overrides = {}) => ({
+    series: { name: 'S', logline: 'L', premise: 'P', styleNotes: '', characters: [] },
+    issue: { number: 3, title: 'T' },
+    lengthTargets: { profile: 'std', pageTarget: 22, minutesTarget: 22, beatsMin: 8, beatsMax: 12, proseWordsMin: 2000, proseWordsMax: 3000 },
+    arcRole: 'midpoint',
+    priorIssue: { number: 2, title: 'Prev', arcRole: 'complication', beats: 'PRIOR-BEAT-ONE\nPRIOR-BEAT-TWO' },
+    nextIssue: { number: 4, title: 'Next', arcRole: 'all-is-lost', synopsis: 'NEXT-SYNOPSIS-LINE' },
+    ...overrides,
+  });
+
+  it('renders neighbor beats / synopsis / arc-role as real text, never "[object Object]"', () => {
+    const out = applyTemplate(ideaTemplate, renderCtx());
+    expect(out).not.toContain('[object Object]');
+    expect(out).toContain('**midpoint**');        // this issue's arc role
+    expect(out).toContain('**complication**');     // prior neighbor's arc role
+    expect(out).toContain('**all-is-lost**');      // next neighbor's arc role
+    expect(out).toContain('PRIOR-BEAT-ONE');       // prior neighbor's beat sheet
+    expect(out).toContain('NEXT-SYNOPSIS-LINE');   // next neighbor's synopsis
+  });
+
+  it('renders the ticking-clock section when enabled and omits it otherwise', () => {
+    const clock = renderTickingClock({ enabled: true, label: 'TICK-LABEL', kind: 'deadline', stakes: 'TICK-STAKES' });
+    const withClock = applyTemplate(ideaTemplate, renderCtx({ tickingClock: clock }));
+    expect(withClock).toContain('Ticking clock the reader is anticipating');
+    expect(withClock).toContain('TICK-LABEL');
+    expect(withClock).toContain('TICK-STAKES');
+
+    const withoutClock = applyTemplate(ideaTemplate, renderCtx({ tickingClock: renderTickingClock({ enabled: false, label: 'x' }) }));
+    expect(withoutClock).not.toContain('Ticking clock the reader is anticipating');
   });
 });

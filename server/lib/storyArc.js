@@ -387,9 +387,11 @@ export function sanitizeTickingClock(raw) {
 /**
  * Block of ticking-clock guidance for prompt contexts. Returns a single-line
  * string only when the clock is *enabled* (a disabled draft clock must not
- * steer generation), or null otherwise — call sites OR-fold it into the
- * existing `shapeGuidance` block so no stage-prompt template needs a new
- * variable (and thus no migration). Mirrors `renderArcShapeGuidance`.
+ * steer generation), or null otherwise. The arc-level call sites OR-fold it
+ * into the existing `shapeGuidance` block so no stage-prompt template needs a
+ * new variable (and thus no migration); the per-issue idea stage instead
+ * surfaces it as its own `{{tickingClock}}` template variable, which DID need a
+ * migration (098, #1356). Mirrors `renderArcShapeGuidance`.
  */
 export function renderTickingClock(clock) {
   if (!clock || clock.enabled !== true) return null;
