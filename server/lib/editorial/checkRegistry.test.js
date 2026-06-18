@@ -398,6 +398,136 @@ describe('naming.dissimilar-names — deterministic check', () => {
   });
 });
 
+describe('roster.economy — deterministic check', () => {
+  const ROSTER = 'roster.economy';
+  const sec = (number, content) => ({ number, content });
+  const runRoster = (characters, sections, config = {}) =>
+    getCheck(ROSTER).run({ canon: { characters }, sections, config, severityDefault: 'low' });
+  const throwaways = (findings) => findings.filter((f) => /never recurs/.test(f.problem));
+  const crowding = (findings) => findings.find((f) => f.location.endsWith('(opening)'));
+  const pressure = (findings) => findings.find((f) => f.location === 'Series roster');
+
+  it('declares the expected scope / kind / sources', () => {
+    const c = getCheck(ROSTER);
+    expect(c.kind).toBe('deterministic');
+    expect(c.scope).toBe('series');
+    expect(c.needsManuscript).toBe(true);
+    expect(c.sources).toEqual(expect.arrayContaining(['manuscript', 'canon']));
+  });
+
+  it('flags a named character who appears in only one issue (throwaway)', () => {
+    const findings = runRoster(
+      [{ name: 'Aria' }, { name: 'Bram' }, { name: 'Cleo' }],
+      [sec(1, 'Aria met Bram at dawn.'), sec(2, 'Aria walked on alone.')],
+    );
+    const tw = throwaways(findings);
+    expect(tw).toHaveLength(1); // Bram (issue 1 only); Aria recurs; Cleo never appears
+    expect(tw[0].category).toBe('casting');
+    expect(tw[0].severity).toBe('low');
+    expect(tw[0].issueNumber).toBe(1);
+    expect(tw[0].problem).toMatch(/"Bram".*only 1 issue/);
+    expect(tw[0].problem).toMatch(/never recurs/);
+  });
+
+  it('leaves a never-appearing canon character alone (may be undrafted)', () => {
+    const findings = runRoster(
+      [{ name: 'Ghost' }],
+      [sec(1, 'Nobody named shows up here.')],
+    );
+    expect(throwaways(findings)).toEqual([]);
+  });
+
+  it('minAppearancesToWarn=1 disables the throwaway check', () => {
+    const findings = runRoster(
+      [{ name: 'Bram' }],
+      [sec(1, 'Bram waved once.')],
+      { minAppearancesToWarn: 1, maxCastPerIssue: 0, maxFirstIssueCharacters: 0 },
+    );
+    expect(findings).toEqual([]);
+  });
+
+  it('matches whole words only — a name is not a substring of a longer word', () => {
+    // "Sam" must not match "Samuel" / "Samantha".
+    const findings = runRoster(
+      [{ name: 'Sam' }],
+      [sec(1, 'Samuel and Samantha spoke.')],
+    );
+    expect(findings).toEqual([]); // 0 appearances → nothing to flag
+  });
+
+  it('counts appearances via aliases, attributing to the canonical name', () => {
+    const findings = runRoster(
+      [{ name: 'Robert', aliases: ['Bob'] }, { name: 'Aria' }],
+      [sec(1, 'Bob arrived.'), sec(2, 'Aria stayed; Aria thought of him.')],
+    );
+    // Robert appears only via "Bob" in issue 1 → throwaway, named as Robert.
+    const tw = throwaways(findings);
+    expect(tw.some((f) => /"Robert"/.test(f.problem))).toBe(true);
+  });
+
+  it('flags first-issue crowding and lists the introduced names', () => {
+    const six = ['Ann', 'Bob', 'Cyd', 'Dan', 'Eve', 'Fox'].map((name) => ({ name }));
+    const findings = runRoster(
+      six,
+      [sec(1, 'Ann, Bob, Cyd, Dan, Eve, and Fox all gathered.')],
+      { minAppearancesToWarn: 1 }, // suppress throwaways to isolate crowding
+    );
+    const cr = crowding(findings);
+    expect(cr).toBeTruthy();
+    expect(cr.severity).toBe('low'); // 6 named, not ≥1.5× the default 5
+    expect(cr.problem).toMatch(/6 named characters appear in the opening issue/);
+    expect(cr.problem).toMatch(/Fox/);
+    expect(cr.issueNumber).toBe(1);
+  });
+
+  it('escalates crowding to medium when well over the threshold', () => {
+    const six = ['Ann', 'Bob', 'Cyd', 'Dan', 'Eve', 'Fox'].map((name) => ({ name }));
+    const findings = runRoster(
+      six,
+      [sec(1, 'Ann, Bob, Cyd, Dan, Eve, and Fox all gathered.')],
+      { minAppearancesToWarn: 1, maxFirstIssueCharacters: 2, maxCastPerIssue: 0 },
+    );
+    expect(crowding(findings).severity).toBe('medium'); // 6 ≥ ceil(2×1.5)=3
+  });
+
+  it('maxFirstIssueCharacters=0 disables the crowding check', () => {
+    const six = ['Ann', 'Bob', 'Cyd', 'Dan', 'Eve', 'Fox'].map((name) => ({ name }));
+    const findings = runRoster(
+      six,
+      [sec(1, 'Ann, Bob, Cyd, Dan, Eve, and Fox all gathered.')],
+      { minAppearancesToWarn: 1, maxFirstIssueCharacters: 0, maxCastPerIssue: 0 },
+    );
+    expect(findings).toEqual([]);
+  });
+
+  it('flags roster-size pressure (advisory, whole-series)', () => {
+    const findings = runRoster(
+      [{ name: 'Ann' }, { name: 'Bob' }, { name: 'Cyd' }],
+      [sec(1, 'Ann, Bob, and Cyd met.')],
+      { minAppearancesToWarn: 1, maxFirstIssueCharacters: 0, maxCastPerIssue: 2 },
+    );
+    const pr = pressure(findings);
+    expect(pr).toBeTruthy();
+    expect(pr.severity).toBe('low');
+    expect(pr.issueNumber).toBeNull();
+    expect(pr.problem).toMatch(/3 named characters across 1 issue/);
+  });
+
+  it('scales throwaway severity up in a long story', () => {
+    const sections = Array.from({ length: 8 }, (_, i) => sec(i + 1, i === 0 ? 'Aria meets Solo.' : 'Aria continues.'));
+    const findings = runRoster([{ name: 'Aria' }, { name: 'Solo' }], sections);
+    const tw = throwaways(findings);
+    expect(tw).toHaveLength(1); // Solo appears in issue 1 only; Aria in all 8
+    expect(tw[0].problem).toMatch(/"Solo"/);
+    expect(tw[0].severity).toBe('medium'); // 8 sections → escalated above the low floor
+  });
+
+  it('tolerates empty canon / no sections', () => {
+    expect(runRoster([], [])).toEqual([]);
+    expect(runRoster([{}, { name: '' }], [sec(1, 'text')])).toEqual([]);
+  });
+});
+
 describe('relationships.reciprocity — deterministic check', () => {
   const run = (characters) =>
     getCheck('relationships.reciprocity').run({ canon: { characters }, config: {}, severityDefault: 'low' });

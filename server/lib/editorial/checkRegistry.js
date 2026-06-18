@@ -643,6 +643,74 @@ function styleGuideExpectations(sg) {
 const hasConformanceFields = (sg) => styleGuideExpectations(sg).length > 0;
 
 // ---------------------------------------------------------------------------
+// Roster economy (#1292) — character-appearance accounting over the stitched
+// manuscript. Reads canon names + aliases and counts the DISTINCT issues each
+// named character is mentioned in (recurrence), which issue they first appear
+// in, and the named cast present in the opening issue. Pure: the per-issue
+// `ctx.sections` and `ctx.canon` are injected by the runner.
+//
+// The match is a deterministic word-bounded name scan. A character whose name
+// is a common word (Hope, Grace, Reed) can over-match prose — which biases the
+// check toward UNDER-flagging throwaways (safe) at the cost of possibly
+// over-counting first-issue crowding. Classifying unmodeled proper nouns as
+// characters needs an LLM pass and is tracked as its own check (see the issue).
+// ---------------------------------------------------------------------------
+
+// Escape a name so it rides inside a RegExp alternation literally — names carry
+// regex-significant punctuation ("D'Argo", "Anne-Marie", "T.A.R.D.I.S.").
+const escapeRegExp = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// A character's match tokens: its name plus every alias, trimmed + de-duped.
+// Empty when the character has no usable name.
+function characterNameTokens(c) {
+  const tokens = [];
+  const push = (v) => { const t = typeof v === 'string' ? v.trim() : ''; if (t) tokens.push(t); };
+  push(c?.name);
+  for (const a of (Array.isArray(c?.aliases) ? c.aliases : [])) push(a);
+  return [...new Set(tokens)];
+}
+
+// A case-insensitive, word-bounded matcher for a character's tokens (built once
+// per character and reused across every section so a long manuscript isn't
+// re-compiling a regex per section), or null when there are no tokens.
+function characterMatcher(tokens) {
+  if (!tokens.length) return null;
+  // Longest-first so a token that's a prefix of another can't shadow it under
+  // leftmost-match alternation (cosmetic for .test, but keeps intent clear).
+  const alt = tokens.slice().sort((a, b) => b.length - a.length).map(escapeRegExp).join('|');
+  return new RegExp(`\\b(?:${alt})\\b`, 'i');
+}
+
+// One row per NAMED canon character: { id, name, locked, appearedInIssues,
+// firstIssueNumber }. `appearedInIssues` is the distinct issue numbers the
+// character is mentioned in, in story order (sections are one-per-issue, ordered
+// by arc position). Unnamed canon entries aren't a roster-economy concern.
+function buildRosterAppearances(ctx) {
+  const chars = Array.isArray(ctx.canon?.characters) ? ctx.canon.characters : [];
+  const sections = Array.isArray(ctx.sections) ? ctx.sections : [];
+  const rows = [];
+  for (const c of chars) {
+    if (!c || typeof c !== 'object') continue;
+    const name = typeof c.name === 'string' ? c.name.trim() : '';
+    if (!name) continue;
+    const matcher = characterMatcher(characterNameTokens(c));
+    if (!matcher) continue;
+    const appearedInIssues = [];
+    for (const s of sections) {
+      if (matcher.test(s.content || '')) appearedInIssues.push(s.number);
+    }
+    rows.push({
+      id: c.id || name,
+      name,
+      locked: c.locked === true,
+      appearedInIssues,
+      firstIssueNumber: appearedInIssues.length ? appearedInIssues[0] : null,
+    });
+  }
+  return rows;
+}
+
+// ---------------------------------------------------------------------------
 // Registry entries.
 // ---------------------------------------------------------------------------
 
@@ -807,6 +875,138 @@ export const EDITORIAL_CHECKS = [
             problem: `${cluster.names.length} of ${primaries.length} character names start with "${cluster.letter.toUpperCase()}" (${cluster.names.join(', ')}) — readers can confuse names that all open the same way.`,
             suggestion: renameHint,
             anchorQuote: cluster.names[0],
+            issueNumber: null,
+          });
+        }
+      }
+
+      return findings;
+    },
+  },
+  {
+    id: 'roster.economy',
+    sources: ['manuscript', 'canon'],
+    label: 'Character roster economy / throwaway names',
+    description:
+      'Flags named characters who appear in only one issue (a named body the reader is told to remember but who never recurs), too many named characters crowded into the opening issue, and overall roster size relative to the drafted length. Reads canon names + aliases against the stitched manuscript.',
+    scope: 'series',
+    kind: 'deterministic',
+    category: 'casting',
+    severityDefault: 'low',
+    defaultEnabled: true,
+    // Reads the stitched manuscript (per-issue sections) to build the appearance
+    // map — so the runner only pays the section-collection I/O when enabled.
+    needsManuscript: true,
+    configSchema: z.object({
+      // A named character appearing in fewer than this many issues is flagged as
+      // a non-recurring throwaway. 1 disables the throwaway check (never warn).
+      minAppearancesToWarn: z.number().int().min(1).max(10).default(2),
+      // Flag the opening issue when more than this many distinct named characters
+      // appear in it. 0 disables the first-issue-crowding check.
+      maxFirstIssueCharacters: z.number().int().min(0).max(30).default(5),
+      // Advisory roster-pressure threshold: flag when the appearing named cast
+      // exceeds this many characters per drafted issue. 0 disables it.
+      maxCastPerIssue: z.number().min(0).max(50).default(6),
+    }),
+    configFields: [
+      {
+        key: 'minAppearancesToWarn',
+        label: 'Warn below this many appearances',
+        type: 'number',
+        min: 1,
+        max: 10,
+        step: 1,
+        help: 'Flag a named character who appears in fewer than this many issues (1 = never warn; 2 = flag one-issue-only names). Characters who never appear at all are left alone — they may simply be undrafted.',
+      },
+      {
+        key: 'maxFirstIssueCharacters',
+        label: 'Max named characters in opening issue',
+        type: 'number',
+        min: 0,
+        max: 30,
+        step: 1,
+        help: 'Flag when more than this many distinct named characters appear in the first issue — too many introductions at once dilutes the ones that matter. 0 disables the check.',
+      },
+      {
+        key: 'maxCastPerIssue',
+        label: 'Roster-pressure ratio (cast per issue)',
+        type: 'number',
+        min: 0,
+        max: 50,
+        step: 0.5,
+        help: 'Advisory: flag when the appearing named cast exceeds this many characters per drafted issue. 0 disables the pressure check.',
+      },
+    ],
+    // Need both prose to scan AND at least one named canon character to scan for.
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0
+      && Array.isArray(ctx.canon?.characters)
+      && ctx.canon.characters.some((c) => typeof c?.name === 'string' && c.name.trim()),
+    run: (ctx) => {
+      const cfg = ctx.config || {};
+      const minAppear = cfg.minAppearancesToWarn ?? 2;
+      const maxFirst = cfg.maxFirstIssueCharacters ?? 5;
+      const castPerIssue = cfg.maxCastPerIssue ?? 6;
+      const sections = Array.isArray(ctx.sections) ? ctx.sections : [];
+      const sectionCount = sections.length;
+      const rows = buildRosterAppearances(ctx);
+      const findings = [];
+      // A long story makes a one-issue-only named character read as noise more
+      // clearly than a one-shot in a 2-issue story — escalate above the low floor.
+      const lengthBump = sectionCount >= 8 ? 1 : 0;
+
+      // 1) Throwaway / non-recurring named characters: appears at least once but
+      //    in fewer than minAppearancesToWarn issues. Zero-appearance canon
+      //    characters are left alone (possibly undrafted — a different concern).
+      if (minAppear > 1) {
+        for (const r of rows) {
+          const n = r.appearedInIssues.length;
+          if (n === 0 || n >= minAppear) continue;
+          findings.push({
+            severity: escalateSeverity(ctx.severityDefault, lengthBump),
+            category: 'casting',
+            location: r.firstIssueNumber != null ? `Issue ${r.firstIssueNumber}: ${r.name}` : `Character: ${r.name}`,
+            problem: `"${r.name}" is a named character who appears in only ${n} issue${n === 1 ? '' : 's'} (${r.appearedInIssues.join(', ')}) — a named body readers are told to remember but who never recurs.`,
+            suggestion: `Cut "${r.name}", merge them into another character, or leave them unnamed (a description) unless they are meant to recur.`,
+            anchorQuote: r.name,
+            issueNumber: r.firstIssueNumber,
+          });
+        }
+      }
+
+      // 2) First-issue crowding: too many distinct named characters introduced in
+      //    the opening issue dilutes the ones that matter.
+      if (sectionCount > 0 && maxFirst > 0) {
+        const firstNumber = sections[0].number;
+        const inFirst = rows.filter((r) => r.appearedInIssues.includes(firstNumber)).map((r) => r.name);
+        if (inFirst.length > maxFirst) {
+          // Low by default; escalate to medium only when crowding is well over the
+          // threshold (≥1.5×) — it's a pacing nudge, not a correctness error.
+          const heavy = inFirst.length >= Math.ceil(maxFirst * 1.5);
+          findings.push({
+            severity: escalateSeverity(ctx.severityDefault, heavy ? 1 : 0),
+            category: 'casting',
+            location: `Issue ${firstNumber} (opening)`,
+            problem: `${inFirst.length} named characters appear in the opening issue (${inFirst.join(', ')}) — more than ${maxFirst}. Too many introductions at once makes it hard for readers to tell who matters.`,
+            suggestion: 'Introduce fewer named characters up front — delay, merge, or leave some unnamed until readers have anchored to the leads.',
+            anchorQuote: inFirst[0],
+            issueNumber: firstNumber,
+          });
+        }
+      }
+
+      // 3) Roster size pressure (advisory): the cast that ACTUALLY appears vs the
+      //    drafted length — tied to prose appearances so canon bloat alone (named
+      //    characters who never show up) doesn't trip it.
+      if (castPerIssue > 0 && sectionCount > 0) {
+        const appearingCast = rows.filter((r) => r.appearedInIssues.length > 0).length;
+        if (appearingCast > castPerIssue * sectionCount) {
+          findings.push({
+            severity: ctx.severityDefault,
+            category: 'casting',
+            location: 'Series roster',
+            problem: `The drafted story has ${appearingCast} named characters across ${sectionCount} issue${sectionCount === 1 ? '' : 's'} (about ${(appearingCast / sectionCount).toFixed(1)} per issue) — a large roster relative to its length can overwhelm readers.`,
+            suggestion: 'Consider consolidating minor named characters or spreading their introductions across more of the story.',
+            anchorQuote: '',
             issueNumber: null,
           });
         }
