@@ -32,8 +32,12 @@ describe('catalogImageAttachHook', () => {
   beforeEach(() => {
     hook.__testing.reset();
     hook.initCatalogImageAttachHook();
-    attachMedia.mockClear();
-    setPortraitMedia.mockClear();
+    // mockReset (not mockClear) so a per-test mockImplementation — e.g. the
+    // stateful store in the serialization test — can't leak into later tests.
+    attachMedia.mockReset();
+    attachMedia.mockResolvedValue({});
+    setPortraitMedia.mockReset();
+    setPortraitMedia.mockResolvedValue({});
     listMediaForIngredient.mockReset();
     listMediaForIngredient.mockResolvedValue([]);
     getIngredient.mockReset();
@@ -95,6 +99,41 @@ describe('catalogImageAttachHook', () => {
     await new Promise((r) => setTimeout(r, 30));
     expect(setPortraitMedia).not.toHaveBeenCalled();
     expect(attachMedia).not.toHaveBeenCalled();
+  });
+
+  it('serializes two same-ingredient completions — first becomes portrait, second a reference (no demote/loss)', async () => {
+    // Stateful media store so the SECOND attach observes the FIRST's write.
+    // Without per-ingredient serialization both would read [] and both pick
+    // 'portrait', and the second setPortraitMedia would demote the first.
+    const rows = [];
+    listMediaForIngredient.mockImplementation(async () => rows.map((r) => ({ ...r })));
+    setPortraitMedia.mockImplementation(async (id, key) => {
+      // Demote any other live portrait (mirrors the real helper), then attach.
+      for (let i = rows.length - 1; i >= 0; i--) {
+        if (rows[i].kind === 'portrait' && rows[i].mediaKey !== key) rows.splice(i, 1);
+      }
+      rows.push({ mediaKey: key, kind: 'portrait' });
+      return {};
+    });
+    attachMedia.mockImplementation(async (id, key, kind) => {
+      rows.push({ mediaKey: key, kind });
+      return {};
+    });
+
+    // Two catalog-tagged jobs for the SAME ingredient complete back-to-back.
+    mediaJobEvents.emit('completed', completedImageJob({ catalogAttach: { ingredientId: 'ing-race' } }, 'a.png'));
+    mediaJobEvents.emit('completed', completedImageJob({ catalogAttach: { ingredientId: 'ing-race' } }, 'b.png'));
+    await waitFor(() => rows.length === 2);
+
+    expect(setPortraitMedia).toHaveBeenCalledTimes(1);
+    expect(setPortraitMedia).toHaveBeenCalledWith('ing-race', 'a.png');
+    expect(attachMedia).toHaveBeenCalledTimes(1);
+    expect(attachMedia).toHaveBeenCalledWith('ing-race', 'b.png', 'reference');
+    // First render survives as the portrait; second is a reference — nothing lost.
+    expect(rows).toEqual([
+      { mediaKey: 'a.png', kind: 'portrait' },
+      { mediaKey: 'b.png', kind: 'reference' },
+    ]);
   });
 
   it('skips attaching when the target ingredient was deleted before the render completed', async () => {

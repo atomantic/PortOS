@@ -53,6 +53,31 @@ async function attachGeneratedImage({ ingredientId, kind, filename }) {
   return target;
 }
 
+// Serialize the read→decide→write per ingredient. Two renders for the SAME
+// ingredient completing close together (e.g. two parallel Codex jobs, or a
+// regenerate after navigating back) would otherwise both read an empty media
+// list, both pick 'portrait', and have the second `setPortraitMedia` demote the
+// first — losing the earlier render entirely. Chaining each attach onto the
+// prior one for that ingredient makes the later job observe the first's write,
+// so it correctly falls through to 'reference'. Keyed by ingredientId, so
+// different ingredients still attach concurrently (their Postgres rows don't
+// conflict). In-memory tail, evicted once settled; lost on restart, which is
+// fine — the whole hook is best-effort.
+const attachTails = new Map();
+
+function serializePerIngredient(ingredientId, work) {
+  const prev = attachTails.get(ingredientId) || Promise.resolve();
+  // `work` on both fulfil AND reject so a prior failure doesn't stall the chain.
+  const next = prev.then(work, work);
+  attachTails.set(ingredientId, next);
+  // Evict once settled, but only if nothing newer has chained on. Swallow here
+  // (the eviction branch never rethrows) so it can't surface as an unhandled
+  // rejection — the caller attaches its own `.catch` to the returned promise.
+  const evict = () => { if (attachTails.get(ingredientId) === next) attachTails.delete(ingredientId); };
+  next.then(evict, evict);
+  return next;
+}
+
 let completedHandler = null;
 
 export function initCatalogImageAttachHook() {
@@ -73,11 +98,12 @@ export function initCatalogImageAttachHook() {
       const filename = job.result?.filename;
       if (!filename || typeof filename !== 'string') return;
 
-      const status = await attachGeneratedImage({ ingredientId, kind: tag.kind, filename })
-        .catch((err) => {
-          console.log(`⚠️ catalog image-attach hook failed for ${filename} → ${ingredientId}: ${err?.message || String(err)}`);
-          return 'failed';
-        });
+      const status = await serializePerIngredient(ingredientId, () =>
+        attachGeneratedImage({ ingredientId, kind: tag.kind, filename }),
+      ).catch((err) => {
+        console.log(`⚠️ catalog image-attach hook failed for ${filename} → ${ingredientId}: ${err?.message || String(err)}`);
+        return 'failed';
+      });
       if (status === 'portrait' || status === 'reference') {
         console.log(`🏷️ catalog ingredient ${ingredientId.slice(0, 8)} ← ${status} ${filename}`);
       }
@@ -99,5 +125,6 @@ export const __testing = {
       mediaJobEvents.off('completed', completedHandler);
       completedHandler = null;
     }
+    attachTails.clear();
   },
 };
