@@ -30,6 +30,20 @@ window (a chunk packed to the budget just runs without a digest).
 `objects.unmotivated-interaction` (setup/payoff across chapters) opt in;
 `prose.info-dumping` stays per-chunk (its problems are localized).
 
+The findings digest carries prior *problems* forward but not clean prior *setup*
+— a payoff in a later chunk can be mis-flagged "missing setup" when the earlier
+chunk established it without producing a finding. A check can additionally opt
+into a **cross-chunk clean-setup digest** (#1403): pass `crossChunkSetup: true`
+(plus a per-check `setupFocus` string) to `runManuscriptLlmCheck`, and after each
+non-final chunk one extra inline summarization call (`ctx.callInlineLLM`, tagged
+`EDITORIAL_SETUP_DIGEST_SOURCE`, built by `buildSetupDigestPrompt`) rolls a short
+"setup so far" summary forward. `editorialSetupDigest` wraps it and prepends it to
+later chunks alongside the findings digest — also yielding to spare budget, and
+fitted *after* the findings digest so manuscript coverage and the findings digest
+both win when budget is tight. A single-chunk (whole-fits) run never summarizes,
+so it pays nothing. When the reverse-outline (#1349) or continuity-bible (#1305)
+artifacts land, either could feed this context more cheaply than a per-chunk call.
+
 ## Discovery rule
 
 Before adding an editorial rule, check whether an existing registry entry covers

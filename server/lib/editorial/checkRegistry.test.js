@@ -22,6 +22,11 @@ import {
   editorialPriorFindingsDigest,
   EDITORIAL_PRIOR_DIGEST_MAX,
   EDITORIAL_PRIOR_DIGEST_CHARS,
+  editorialSetupDigest,
+  buildSetupDigestPrompt,
+  EDITORIAL_SETUP_DIGEST_BODY_CHARS,
+  EDITORIAL_SETUP_DIGEST_CHARS,
+  EDITORIAL_SETUP_DIGEST_SOURCE,
 } from './checkRegistry.js';
 
 const NAMING = 'naming.dissimilar-names';
@@ -706,6 +711,181 @@ describe('cross-chunk continuity digest (#1383)', () => {
     // produced a finding.
     expect(seen[1]).toBe('CHUNK_TWO');
     expect(seen[1]).not.toContain('EARLIER parts of this manuscript');
+  });
+});
+
+describe('cross-chunk clean-setup digest (#1403)', () => {
+  describe('editorialSetupDigest formatter', () => {
+    it('returns empty string for empty / non-string summaries', () => {
+      expect(editorialSetupDigest('')).toBe('');
+      expect(editorialSetupDigest('   ')).toBe('');
+      expect(editorialSetupDigest(null)).toBe('');
+      expect(editorialSetupDigest(undefined)).toBe('');
+    });
+
+    it('wraps the summary in the clean-setup header + trailing separator', () => {
+      const digest = editorialSetupDigest('- past tense, first person\n- Watch = grief over father');
+      expect(digest).toMatch(/Setup already established in EARLIER parts/);
+      expect(digest).toContain('past tense, first person');
+      expect(digest).toContain('Watch = grief over father');
+      expect(digest.endsWith('\n\n---\n\n')).toBe(true);
+    });
+
+    it('caps the whole digest and keeps the trailing --- separator after a body overflow', () => {
+      const digest = editorialSetupDigest('x'.repeat(EDITORIAL_SETUP_DIGEST_BODY_CHARS + 500));
+      expect(digest.length).toBeLessThanOrEqual(EDITORIAL_SETUP_DIGEST_CHARS);
+      expect(digest.endsWith('\n\n---\n\n')).toBe(true);
+      // A following chunk stays clearly separated from the digest body.
+      expect(`${digest}NEXT_CHUNK`).toContain('---\n\nNEXT_CHUNK');
+    });
+  });
+
+  describe('buildSetupDigestPrompt', () => {
+    it('embeds the focus, the prior summary, and the new chunk; asks for summary-only output', () => {
+      const prompt = buildSetupDigestPrompt({
+        focus: 'tense/POV/rating in force',
+        priorSummary: '- past tense established',
+        manuscript: 'CHAPTER TWO TEXT',
+      });
+      expect(prompt).toContain('tense/POV/rating in force');
+      expect(prompt).toContain('- past tense established');
+      expect(prompt).toContain('CHAPTER TWO TEXT');
+      expect(prompt).toMatch(/summary text only/i);
+    });
+
+    it('falls back to a default focus + "(none yet)" prior summary', () => {
+      const prompt = buildSetupDigestPrompt({ manuscript: 'CHAPTER ONE' });
+      expect(prompt).toContain('(none yet)');
+      expect(prompt).toMatch(/narrative tense, point-of-view person, and content rating/);
+    });
+  });
+
+  // Drive a two-chunk run with an inline LLM caller wired so the clean-setup digest
+  // path activates. Returns the manuscript text each findings call saw + the inline
+  // prompts the summarizer was given.
+  const runTwoChunksWithSetup = async (checkId, ctxExtras, { usableChars } = {}) => {
+    const seen = [];
+    const setupPrompts = [];
+    await getCheck(checkId).run({
+      config: { maxFindings: 12 },
+      severityDefault: 'medium',
+      planManuscriptChunks: async () => {
+        const chunks = ['CHUNK_ONE', 'CHUNK_TWO'];
+        if (Number.isFinite(usableChars)) chunks.usableChars = usableChars;
+        return chunks;
+      },
+      callStagedLLM: async (_stage, vars) => {
+        seen.push(vars.manuscript);
+        return { content: { findings: [] } }; // no findings → isolate the setup digest
+      },
+      callInlineLLM: async (prompt) => {
+        setupPrompts.push(prompt);
+        return { content: '- SETUP: past tense, first person' };
+      },
+      ...ctxExtras,
+    });
+    return { seen, setupPrompts };
+  };
+
+  it('style.conformance rolls a setup summary forward into the next chunk', async () => {
+    const { seen, setupPrompts } = await runTwoChunksWithSetup('style.conformance', {
+      series: { styleGuide: { tense: 'past', povPerson: 'first' } },
+    });
+    // First chunk untouched (no prior setup yet).
+    expect(seen[0]).toBe('CHUNK_ONE');
+    // The summarizer ran once (after chunk one, before chunk two) and saw chunk one.
+    expect(setupPrompts).toHaveLength(1);
+    expect(setupPrompts[0]).toContain('CHUNK_ONE');
+    // The second chunk is prefixed with the clean-setup digest, then its text.
+    expect(seen[1]).toContain('Setup already established in EARLIER parts');
+    expect(seen[1]).toContain('past tense, first person');
+    expect(seen[1].endsWith('CHUNK_TWO')).toBe(true);
+  });
+
+  it('objects.unmotivated-interaction rolls a setup summary forward', async () => {
+    const { seen, setupPrompts } = await runTwoChunksWithSetup('objects.unmotivated-interaction', {
+      canon: {
+        objects: [{ id: 'o1', name: 'Watch', attachments: [{ characterId: 'c1', emotion: 'grief' }] }],
+        characters: [{ id: 'c1', name: 'Mara' }],
+      },
+    });
+    expect(seen[0]).toBe('CHUNK_ONE');
+    expect(setupPrompts).toHaveLength(1);
+    expect(seen[1]).toContain('Setup already established in EARLIER parts');
+    expect(seen[1].endsWith('CHUNK_TWO')).toBe(true);
+  });
+
+  it('uses the dedicated run source tag for setup-summary calls', async () => {
+    let source = null;
+    await getCheck('style.conformance').run({
+      config: { maxFindings: 12 },
+      severityDefault: 'medium',
+      series: { styleGuide: { tense: 'past', povPerson: 'first' } },
+      planManuscriptChunks: async () => ['CHUNK_ONE', 'CHUNK_TWO'],
+      callStagedLLM: async () => ({ content: { findings: [] } }),
+      callInlineLLM: async (_prompt, opts) => {
+        source = opts?.source;
+        return { content: 'summary' };
+      },
+    });
+    expect(source).toBe(EDITORIAL_SETUP_DIGEST_SOURCE);
+  });
+
+  it('does not summarize a single-chunk run (no later chunk consumes it)', async () => {
+    let inlineCalls = 0;
+    const seen = [];
+    await getCheck('style.conformance').run({
+      config: { maxFindings: 12 },
+      severityDefault: 'medium',
+      series: { styleGuide: { tense: 'past', povPerson: 'first' } },
+      planManuscriptChunks: async () => ['ONLY_CHUNK'],
+      callStagedLLM: async (_stage, vars) => { seen.push(vars.manuscript); return { content: { findings: [] } }; },
+      callInlineLLM: async () => { inlineCalls += 1; return { content: 'summary' }; },
+    });
+    expect(seen).toEqual(['ONLY_CHUNK']);
+    expect(inlineCalls).toBe(0);
+  });
+
+  it('skips the setup digest when it would not fit the chunk budget (manuscript coverage wins)', async () => {
+    const { seen } = await runTwoChunksWithSetup(
+      'style.conformance',
+      { series: { styleGuide: { tense: 'past', povPerson: 'first' } } },
+      { usableChars: 'CHUNK_TWO'.length }, // no spare room for any digest
+    );
+    expect(seen[1]).toBe('CHUNK_TWO');
+    expect(seen[1]).not.toContain('Setup already established in EARLIER parts');
+  });
+
+  it('degrades to findings-only when no inline LLM caller is injected (no setup digest, no crash)', async () => {
+    // No callInlineLLM in ctx → the setup-summary path stays off entirely.
+    const seen = [];
+    await getCheck('style.conformance').run({
+      config: { maxFindings: 12 },
+      severityDefault: 'medium',
+      series: { styleGuide: { tense: 'past', povPerson: 'first' } },
+      planManuscriptChunks: async () => ['CHUNK_ONE', 'CHUNK_TWO'],
+      callStagedLLM: async (_stage, vars) => { seen.push(vars.manuscript); return { content: { findings: [] } }; },
+    });
+    expect(seen).toEqual(['CHUNK_ONE', 'CHUNK_TWO']);
+    expect(seen[1]).not.toContain('Setup already established in EARLIER parts');
+  });
+
+  it('keeps the prior summary when the summarizer throws (a bad call must not abort the check)', async () => {
+    const seen = [];
+    let inlineCalls = 0;
+    await getCheck('style.conformance').run({
+      config: { maxFindings: 12 },
+      severityDefault: 'medium',
+      series: { styleGuide: { tense: 'past', povPerson: 'first' } },
+      planManuscriptChunks: async () => ['CHUNK_ONE', 'CHUNK_TWO'],
+      callStagedLLM: async (_stage, vars) => { seen.push(vars.manuscript); return { content: { findings: [] } }; },
+      callInlineLLM: async () => { inlineCalls += 1; throw new Error('summarizer down'); },
+    });
+    // The summarizer was attempted but threw → no setup digest, and the run still
+    // processed both chunks to completion.
+    expect(inlineCalls).toBe(1);
+    expect(seen).toEqual(['CHUNK_ONE', 'CHUNK_TWO']);
+    expect(seen[1]).not.toContain('Setup already established in EARLIER parts');
   });
 });
 
