@@ -14,8 +14,18 @@ This directory is **pure** (no side-effecting imports — only `zod` and the pur
 manuscript-consuming LLM check plans the corpus into provider-sized chunks
 through `ctx.planManuscriptChunks` — all injected by the runner. Per-chunk
 findings are merged first-wins (capped at the check's `maxFindings`) via
-`mergeChunkFindings`/`editorialFindingKey`, so a long series is fully reviewed
+`editorialFindingKey` (the pure `mergeChunkFindings` helper exposes the same
+merge for callers that collect-then-merge), so a long series is fully reviewed
 regardless of the provider's context window (#1340).
+
+Checks whose problems span chapters can opt into a **cross-chunk continuity
+digest** (#1383): pass `crossChunkDigest: true` to `runManuscriptLlmCheck` and
+each chunk after the first is prefixed with `editorialPriorFindingsDigest` of the
+findings gathered so far (it rides INSIDE the manuscript var, so no prompt
+template change). The chunk planner reserves `EDITORIAL_PRIOR_DIGEST_TOKENS` for
+it. `style.conformance` (tense/POV established earlier) and
+`objects.unmotivated-interaction` (setup/payoff across chapters) opt in;
+`prose.info-dumping` stays per-chunk (its problems are localized).
 
 ## Discovery rule
 

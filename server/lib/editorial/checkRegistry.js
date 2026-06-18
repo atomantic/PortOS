@@ -25,7 +25,7 @@
  */
 
 import { z } from 'zod';
-import { estimateTokens } from '../contextBudget.js';
+import { estimateTokens, CHARS_PER_TOKEN } from '../contextBudget.js';
 
 export const CHECK_SCOPES = Object.freeze(['series', 'issue', 'scene', 'noun']);
 export const CHECK_KINDS = Object.freeze(['deterministic', 'llm']);
@@ -226,6 +226,68 @@ export function mergeChunkFindings(lists, max = Infinity) {
   return [...merged.values()].slice(0, Math.max(0, max));
 }
 
+// Cross-chunk continuity digest (#1383). When a manuscript is too long for the
+// provider window it is reviewed chunk-by-chunk; a check whose problems span
+// chapters (an object set up early and paid off late; tense/POV established in
+// chapter 1 judged against chapter 3) can't see that with a per-chunk view.
+// These constants bound the rolling digest of prior-chunk findings fed to later
+// chunks so it stays small enough to ride in the chunk's spare budget.
+export const EDITORIAL_PRIOR_DIGEST_MAX = 40;
+export const EDITORIAL_PRIOR_DIGEST_CHARS = 2_400;
+// Token budget the chunk planner reserves for the digest so prepending it can't
+// push a chunk over the provider window (the digest string is capped to
+// EDITORIAL_PRIOR_DIGEST_CHARS, so this reserve is an exact upper bound).
+export const EDITORIAL_PRIOR_DIGEST_TOKENS = Math.ceil(EDITORIAL_PRIOR_DIGEST_CHARS / CHARS_PER_TOKEN);
+
+// One-block digest of findings already recorded for earlier chunks, prepended
+// INSIDE the next chunk's manuscript var so no prompt template changes (mirrors
+// completenessPass.priorFindingsDigest). Pure + capped for unit-testing. Returns
+// '' when there are no prior findings so the first chunk is untouched.
+export function editorialPriorFindingsDigest(findings) {
+  if (!Array.isArray(findings) || !findings.length) return '';
+  const lines = findings.slice(0, EDITORIAL_PRIOR_DIGEST_MAX).map((f) => {
+    const where = Number.isInteger(f.issueNumber) ? `Issue ${f.issueNumber}` : (f.location || 'general');
+    return `- [${where}] ${f.category}: ${f.problem}`;
+  });
+  const more = findings.length > EDITORIAL_PRIOR_DIGEST_MAX
+    ? `\n(+${findings.length - EDITORIAL_PRIOR_DIGEST_MAX} more earlier findings)` : '';
+  const header = '# Editorial findings already recorded for EARLIER parts of this manuscript\n'
+    + 'Do not repeat these. Flag only NEW problems in the text below, plus any cross-chapter '
+    + 'continuity these earlier findings reveal (e.g. an object set up earlier, or a tense/POV '
+    + 'choice established in an earlier chapter).\n\n';
+  return `${header}${lines.join('\n')}${more}\n\n---\n\n`.slice(0, EDITORIAL_PRIOR_DIGEST_CHARS);
+}
+
+// Shared chunk loop for the manuscript-consuming LLM checks: run `callChunk` on
+// each provider-sized chunk, normalize + merge findings first-wins (capped at
+// `max` across the whole run). When `crossChunkDigest` is set, each chunk after
+// the first is prefixed with a digest of the findings gathered so far so the
+// model keeps cross-chapter continuity in view; the digest rides INSIDE the
+// chunk text passed to `callChunk`, so the per-check prompt template is
+// unchanged. Merges incrementally (vs collect-then-merge) so the digest is O(1)
+// to derive from the running map.
+async function runChunkedManuscriptCheck(ctx, { chunks, category, max, callChunk, crossChunkDigest = false }) {
+  const merged = new Map();
+  for (const manuscript of chunks) {
+    // Stop launching further chunk calls once the run is cancelled — the runner
+    // only checks the signal around the whole check, so without this a multi-
+    // chunk check keeps paying for LLM calls whose results will be discarded.
+    if (ctx.signal?.aborted) break;
+    const digest = crossChunkDigest && merged.size ? editorialPriorFindingsDigest([...merged.values()]) : '';
+    const content = await callChunk(`${digest}${manuscript}`);
+    for (const f of mapLlmFindings(content?.findings, {
+      severityDefault: ctx.severityDefault,
+      category,
+      max,
+      withIssueNumber: true,
+    })) {
+      const k = editorialFindingKey(f);
+      if (!merged.has(k)) merged.set(k, f);
+    }
+  }
+  return [...merged.values()].slice(0, Math.max(0, max));
+}
+
 // Shared body for a manuscript-consuming LLM check. Plans the manuscript into
 // provider-sized chunks for `stage` (via the runner-injected
 // `ctx.planManuscriptChunks`), runs the model on each chunk, and merges the
@@ -239,24 +301,23 @@ export function mergeChunkFindings(lists, max = Infinity) {
 // etc.) on top of EDITORIAL_PROMPT_OVERHEAD_TOKENS — those vars ride alongside
 // the chunked manuscript, so under-counting them lets a chunk overrun the
 // provider window.
-async function runManuscriptLlmCheck(ctx, { stage, category, overheadTokens = 0, buildVars }) {
+async function runManuscriptLlmCheck(ctx, { stage, category, overheadTokens = 0, buildVars, crossChunkDigest = false }) {
   const max = ctx.config?.maxFindings ?? 12;
-  const chunks = await ctx.planManuscriptChunks(stage, { overheadTokens });
-  const perChunk = [];
-  for (const manuscript of chunks) {
-    // Stop launching further chunk calls once the run is cancelled — the runner
-    // only checks the signal around the whole check, so without this a multi-
-    // chunk check keeps paying for LLM calls whose results will be discarded.
-    if (ctx.signal?.aborted) break;
-    const { content } = await ctx.callStagedLLM(stage, buildVars(manuscript), { returnsJson: true, source: stage });
-    perChunk.push(mapLlmFindings(content?.findings, {
-      severityDefault: ctx.severityDefault,
-      category,
-      max,
-      withIssueNumber: true,
-    }));
-  }
-  return mergeChunkFindings(perChunk, max);
+  // Reserve room for the prior-findings digest later chunks ride so prepending
+  // it can't push a chunk over the provider window (only when this check opts in).
+  const chunks = await ctx.planManuscriptChunks(stage, {
+    overheadTokens: overheadTokens + (crossChunkDigest ? EDITORIAL_PRIOR_DIGEST_TOKENS : 0),
+  });
+  return runChunkedManuscriptCheck(ctx, {
+    chunks,
+    category,
+    max,
+    crossChunkDigest,
+    callChunk: async (manuscript) => {
+      const { content } = await ctx.callStagedLLM(stage, buildVars(manuscript), { returnsJson: true, source: stage });
+      return content;
+    },
+  });
 }
 
 // Normalize raw LLM findings into partial manuscriptReview comments: validate
@@ -331,19 +392,18 @@ async function runManuscriptLlmCheckInline(ctx, { category, instructions }) {
   const overheadTokens = EDITORIAL_PROMPT_OVERHEAD_TOKENS
     + estimateTokens(buildCustomCheckPrompt({ instructions, manuscript: '', maxFindings: max }));
   const chunks = await ctx.planManuscriptChunks(null, { overheadTokens });
-  const perChunk = [];
-  for (const manuscript of chunks) {
-    if (ctx.signal?.aborted) break;
-    const prompt = buildCustomCheckPrompt({ instructions, manuscript, maxFindings: max });
-    const { content } = await ctx.callInlineLLM(prompt, { returnsJson: true, source: CUSTOM_CHECK_RUN_SOURCE });
-    perChunk.push(mapLlmFindings(content?.findings, {
-      severityDefault: ctx.severityDefault,
-      category,
-      max,
-      withIssueNumber: true,
-    }));
-  }
-  return mergeChunkFindings(perChunk, max);
+  return runChunkedManuscriptCheck(ctx, {
+    chunks,
+    category,
+    max,
+    // Custom checks are localized to the authored instruction — no cross-chunk
+    // digest (the built-in continuity/style checks opt in explicitly).
+    callChunk: async (manuscript) => {
+      const prompt = buildCustomCheckPrompt({ instructions, manuscript, maxFindings: max });
+      const { content } = await ctx.callInlineLLM(prompt, { returnsJson: true, source: CUSTOM_CHECK_RUN_SOURCE });
+      return content;
+    },
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -729,6 +789,10 @@ export const EDITORIAL_CHECKS = [
         // The objects-attachment summary is fixed per-call overhead.
         overheadTokens: EDITORIAL_PROMPT_OVERHEAD_TOKENS + estimateTokens(objects),
         buildVars: (manuscript) => ({ manuscript, objects }),
+        // An object's motivation can be set up in an earlier chapter and paid off
+        // later; without the digest a later chunk may flag a "missing setup" an
+        // earlier chunk already accounted for (#1383).
+        crossChunkDigest: true,
       });
     },
   },
@@ -912,6 +976,9 @@ export const EDITORIAL_CHECKS = [
         // The style-guide expectations are fixed per-call overhead.
         overheadTokens: EDITORIAL_PROMPT_OVERHEAD_TOKENS + estimateTokens(expectations),
         buildVars: (manuscript) => ({ manuscript, styleGuide: expectations }),
+        // Tense/POV drift is inherently cross-chapter — a per-chunk view can't see
+        // that chapter 1 established past-tense when judging chapter 3 (#1383).
+        crossChunkDigest: true,
       });
     },
   },

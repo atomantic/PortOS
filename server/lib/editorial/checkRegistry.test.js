@@ -18,6 +18,10 @@ import {
   getAllChecks,
   CUSTOM_CHECK_ID_PREFIX,
   CUSTOM_CHECK_MAX_FINDINGS_DEFAULT,
+  editorialPriorFindingsDigest,
+  EDITORIAL_PRIOR_DIGEST_MAX,
+  EDITORIAL_PRIOR_DIGEST_CHARS,
+  EDITORIAL_PRIOR_DIGEST_TOKENS,
 } from './checkRegistry.js';
 
 const NAMING = 'naming.dissimilar-names';
@@ -534,6 +538,104 @@ describe('objects.unmotivated-interaction — LLM check (#1288)', () => {
 
   it('gates off when the manuscript is empty', () => {
     expect(getCheck('objects.unmotivated-interaction').gate(baseCtx({ manuscript: '   ' }))).toBe(false);
+  });
+});
+
+describe('cross-chunk continuity digest (#1383)', () => {
+  describe('editorialPriorFindingsDigest formatter', () => {
+    it('returns empty string for no / non-array findings', () => {
+      expect(editorialPriorFindingsDigest([])).toBe('');
+      expect(editorialPriorFindingsDigest(null)).toBe('');
+      expect(editorialPriorFindingsDigest(undefined)).toBe('');
+    });
+
+    it('lists prior findings by issue (or location) + category + problem under a header', () => {
+      const digest = editorialPriorFindingsDigest([
+        { issueNumber: 1, category: 'style', problem: 'past tense established' },
+        { location: 'Prologue', category: 'continuity', problem: 'watch introduced' },
+      ]);
+      expect(digest).toMatch(/EARLIER parts of this manuscript/);
+      expect(digest).toContain('- [Issue 1] style: past tense established');
+      expect(digest).toContain('- [Prologue] continuity: watch introduced');
+      expect(digest.endsWith('---\n\n')).toBe(true);
+    });
+
+    it('caps the listed findings and notes how many more were omitted', () => {
+      const many = Array.from({ length: EDITORIAL_PRIOR_DIGEST_MAX + 5 }, (_, i) => ({
+        issueNumber: i + 1, category: 'style', problem: `p${i}`,
+      }));
+      const digest = editorialPriorFindingsDigest(many);
+      expect(digest).toMatch(/\(\+5 more earlier findings\)/);
+    });
+
+    it('caps the whole digest to EDITORIAL_PRIOR_DIGEST_CHARS so the reserve is an exact upper bound', () => {
+      const huge = Array.from({ length: EDITORIAL_PRIOR_DIGEST_MAX }, (_, i) => ({
+        issueNumber: i + 1, category: 'continuity', problem: 'x'.repeat(500),
+      }));
+      const digest = editorialPriorFindingsDigest(huge);
+      expect(digest.length).toBeLessThanOrEqual(EDITORIAL_PRIOR_DIGEST_CHARS);
+      expect(EDITORIAL_PRIOR_DIGEST_TOKENS * 4).toBeGreaterThanOrEqual(EDITORIAL_PRIOR_DIGEST_CHARS);
+    });
+  });
+
+  // A check that opts into the digest prefixes every chunk AFTER the first with a
+  // digest of the findings gathered so far, riding inside the manuscript var.
+  const runTwoChunks = async (checkId, ctxExtras) => {
+    const seen = [];
+    let overhead = null;
+    await getCheck(checkId).run({
+      config: { maxFindings: 12 },
+      severityDefault: 'medium',
+      planManuscriptChunks: async (_stage, opts) => { overhead = opts.overheadTokens; return ['CHUNK_ONE', 'CHUNK_TWO']; },
+      callStagedLLM: async (_stage, vars) => {
+        seen.push(vars.manuscript);
+        // Only the first chunk surfaces a finding, so the digest fed to chunk two
+        // carries exactly that one.
+        const findings = seen.length === 1
+          ? [{ severity: 'high', issueNumber: 1, problem: 'tense slip in chapter one', anchorQuote: 'I walk' }]
+          : [];
+        return { content: { findings } };
+      },
+      ...ctxExtras,
+    });
+    return { seen, overhead };
+  };
+
+  it('style.conformance feeds the prior-chunk digest to later chunks and reserves budget for it', async () => {
+    const { seen, overhead } = await runTwoChunks('style.conformance', {
+      series: { styleGuide: { tense: 'past', povPerson: 'first' } },
+    });
+    // First chunk is untouched (no prior findings yet).
+    expect(seen[0]).toBe('CHUNK_ONE');
+    // Second chunk is prefixed with the digest of chunk one's finding, then its text.
+    expect(seen[1]).toContain('EARLIER parts of this manuscript');
+    expect(seen[1]).toContain('tense slip in chapter one');
+    expect(seen[1].endsWith('CHUNK_TWO')).toBe(true);
+    // The digest reserve is folded into the chunk-planner overhead.
+    expect(overhead).toBeGreaterThanOrEqual(EDITORIAL_PRIOR_DIGEST_TOKENS);
+  });
+
+  it('objects.unmotivated-interaction feeds the prior-chunk digest to later chunks', async () => {
+    const { seen } = await runTwoChunks('objects.unmotivated-interaction', {
+      canon: {
+        objects: [{ id: 'o1', name: 'Watch', attachments: [{ characterId: 'c1', emotion: 'grief' }] }],
+        characters: [{ id: 'c1', name: 'Mara' }],
+      },
+    });
+    expect(seen[0]).toBe('CHUNK_ONE');
+    expect(seen[1]).toContain('EARLIER parts of this manuscript');
+    expect(seen[1].endsWith('CHUNK_TWO')).toBe(true);
+  });
+
+  it('prose.info-dumping stays per-chunk — no digest is prepended (its problems are localized)', async () => {
+    const { seen } = await runTwoChunks(INFODUMP, {
+      manuscript: 'CHUNK_ONE',
+    });
+    expect(seen[0]).toBe('CHUNK_ONE');
+    // Second chunk is the raw text — no continuity digest even though chunk one
+    // produced a finding.
+    expect(seen[1]).toBe('CHUNK_TWO');
+    expect(seen[1]).not.toContain('EARLIER parts of this manuscript');
   });
 });
 
