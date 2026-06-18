@@ -1147,6 +1147,10 @@ export default function Layout() {
             location.pathname === '/shell' ||
             location.pathname.startsWith('/shell/') ||
             location.pathname.startsWith('/city') ||
+            // Tribe is a full-bleed two-pane page that owns its own internal
+            // scroll (PageHeader + a `flex-1 overflow-auto` main); keep it out
+            // of the default padded+scrolling main or it double-pads and clips.
+            location.pathname === '/tribe' ||
             // Only the App DETAIL editor (/apps/:id, /apps/:id/:tab) is
             // full-width and owns its own scroll; the Add App form
             // (/apps/create) is a plain scrolling page and must stay OUT of

@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 
 import * as api from '../services/api';
+import socket from '../services/socket';
 import BrailleSpinner from '../components/BrailleSpinner';
 import PageHeader from '../components/PageHeader';
 import toast from '../components/ui/Toast';
@@ -631,16 +632,21 @@ export default function Tribe() {
 
   const selectedId = draft.id;
 
-  const loadContacts = async () => {
+  const loadContacts = async (isCancelled = () => false) => {
     setLoading(true);
     const result = await api.getTribePeople({ silent: true }).catch((err) => {
-      toast.error(err.message || 'Failed to load Tribe');
-      return { people: [] };
+      if (!isCancelled()) toast.error(err.message || 'Failed to load Tribe');
+      // null (not an empty list) so a failed fetch is distinguishable from a
+      // genuinely-empty server — otherwise a transient error would trigger the
+      // one-shot legacy localStorage import and duplicate data on recovery.
+      return null;
     });
+    if (isCancelled()) return;
+    const fetchFailed = result === null;
     let people = result?.people || [];
 
     const legacy = getLegacyContacts();
-    if (people.length === 0 && legacy.length > 0) {
+    if (!fetchFailed && people.length === 0 && legacy.length > 0) {
       const imported = [];
       for (const contact of legacy) {
         const created = await api.createTribePerson({
@@ -664,12 +670,24 @@ export default function Tribe() {
       }
     }
 
+    if (isCancelled()) return;
     setContacts(people);
     setLoading(false);
   };
 
   useEffect(() => {
-    loadContacts();
+    let cancelled = false;
+    const isCancelled = () => cancelled;
+    loadContacts(isCancelled);
+    // Mutations broadcast `tribe:changed` from the server; reconcile against
+    // server truth (covers other tabs/devices and the GREATEST last-contact
+    // merge that optimistic updates can't predict).
+    const handleChanged = () => loadContacts(isCancelled);
+    socket.on('tribe:changed', handleChanged);
+    return () => {
+      cancelled = true;
+      socket.off('tribe:changed', handleChanged);
+    };
   }, []);
 
   const filteredContacts = useMemo(() => {
@@ -701,24 +719,29 @@ export default function Tribe() {
   });
 
   const saveDraft = async () => {
-    const normalized = {
-      ...draft,
+    // Send only the editable fields the schema accepts. The PUT route rejects a
+    // body `id` (`z.never()`) — it comes from the URL — and `lastContact` must be
+    // null (not '') when empty, so a bare `{ ...draft }` would 400 on both counts.
+    const payload = {
       name: draft.name.trim() || 'Unnamed person',
       relationship: draft.relationship.trim(),
+      ring: draft.ring,
+      cadenceDays: Math.max(1, Number(draft.cadenceDays) || ringFor(draft.ring).cadenceDays),
+      lastContact: draft.lastContact || null,
       channel: draft.channel.trim(),
+      energy: draft.energy,
       tags: tagsToArray(draft.tags),
       nextMove: draft.nextMove.trim(),
       notes: draft.notes.trim(),
-      cadenceDays: Math.max(1, Number(draft.cadenceDays) || ringFor(draft.ring).cadenceDays),
     };
 
     setSaving(true);
     const saved = draft.id
-      ? await api.updateTribePerson(draft.id, normalized).catch((err) => {
+      ? await api.updateTribePerson(draft.id, payload).catch((err) => {
           toast.error(err.message || 'Failed to save relationship');
           return null;
         })
-      : await api.createTribePerson(normalized).catch((err) => {
+      : await api.createTribePerson(payload).catch((err) => {
           toast.error(err.message || 'Failed to save relationship');
           return null;
         });

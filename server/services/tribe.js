@@ -3,38 +3,44 @@ import { ensureSchema, query, withTransaction } from '../lib/db.js';
 import { ServerError } from '../lib/errorHandler.js';
 import * as calendarSync from './calendarSync.js';
 
-const DEFAULT_RING_CADENCE = {
+// Default check-in cadence (days) per ring. Mirrored on the client in
+// `client/src/pages/Tribe.jsx` (the RINGS array's `cadenceDays`); the SQL column
+// default is a flat 45 (`cadence_days` in db.js / init-db.sql) because the
+// ring-aware default is resolved here before insert. Keep all three in sync.
+export const DEFAULT_RING_CADENCE = {
   support: 7,
   core: 21,
   tribe: 45,
   village: 90,
 };
 
-function isoDate(value) {
+export function isoDate(value) {
   if (!value) return null;
   if (value instanceof Date) return value.toISOString().slice(0, 10);
   return String(value).slice(0, 10);
 }
 
-function isoDateTime(value) {
+export function isoDateTime(value) {
   if (!value) return null;
   if (value instanceof Date) return value.toISOString();
-  return new Date(value).toISOString();
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
 }
 
-function normalizeTags(tags) {
+export function normalizeTags(tags) {
   if (!tags) return [];
   if (Array.isArray(tags)) return tags.map((tag) => String(tag).trim()).filter(Boolean);
   return String(tags).split(',').map((tag) => tag.trim()).filter(Boolean);
 }
 
-function rowToPerson(row) {
+export function rowToPerson(row) {
   return {
     id: row.id,
     name: row.name,
     relationship: row.relationship || '',
     ring: row.ring || 'tribe',
-    cadenceDays: row.cadence_days ?? DEFAULT_RING_CADENCE[row.ring] ?? 45,
+    // cadence_days is NOT NULL DEFAULT 45, so it's always present on a real row.
+    cadenceDays: row.cadence_days,
     lastContact: isoDate(row.last_contact_on),
     channel: row.channel || '',
     energy: row.energy || 'steady',
@@ -48,7 +54,7 @@ function rowToPerson(row) {
   };
 }
 
-function rowToTouchpoint(row) {
+export function rowToTouchpoint(row) {
   return {
     id: row.id,
     personId: row.person_id,
@@ -63,7 +69,7 @@ function rowToTouchpoint(row) {
   };
 }
 
-function rowToMemoryLink(row) {
+export function rowToMemoryLink(row) {
   return {
     personId: row.person_id,
     memoryId: row.memory_id,
