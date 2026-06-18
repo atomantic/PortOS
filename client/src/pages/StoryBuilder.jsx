@@ -686,7 +686,10 @@ function StepPanel({ session, universe, series, issues, stepId, locked, onChange
         <div className="border-t border-port-border pt-3">
           {/* Keyed by universe id so an in-flight base-style render's spinner +
               completion stay scoped to one universe across a selection change. */}
-          <StyleProbeImage key={universe?.id || 'new'} universe={universe} onUniverseChange={() => onChanged()} canRender={!locked} />
+          {/* No `key` remount — `useSingleImageRender` scopes the probe per
+              universe via `scopeId`, so the in-flight render/completion follows
+              the displayed universe without a settings refetch on each switch. */}
+          <StyleProbeImage universe={universe} onUniverseChange={() => onChanged()} canRender={!locked} />
         </div>
         <div className="flex items-center gap-2">
           {!locked && genButton('Expand aesthetic', Boolean((universe?.premise || universe?.styleNotes || '').trim()))}
