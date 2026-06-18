@@ -92,7 +92,10 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
     setDecomposing(true);
     const milestones = await api.decomposeGoal(goal.id).catch(() => null);
     setDecomposing(false);
-    if (milestones) setProposedDecomposition(milestones);
+    // Stamp a stable client key so the reorderable/editable proposal list keys
+    // on identity, not array index (index keys mis-associate controlled-input
+    // state across a swap). `_key` is stripped by the accept Zod schema.
+    if (milestones) setProposedDecomposition(milestones.map((m, i) => ({ ...m, _key: `prop-${i}` })));
   };
 
   const handleAcceptDecomposition = async () => {

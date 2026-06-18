@@ -148,7 +148,7 @@ export default function GoalPlanSection({
             <div className="space-y-1.5">
               <p className="text-[10px] text-gray-500">{proposedDecomposition.length} milestones proposed</p>
               {proposedDecomposition.map((ms, idx) => (
-                <div key={idx} className="p-2 rounded bg-port-bg border border-port-border space-y-1.5">
+                <div key={ms._key ?? idx} className="p-2 rounded bg-port-bg border border-port-border space-y-1.5">
                   <div className="flex items-start gap-2">
                     <div className="flex flex-col gap-0.5 pt-0.5">
                       <button
@@ -156,8 +156,7 @@ export default function GoalPlanSection({
                           if (idx === 0) return;
                           const next = [...proposedDecomposition];
                           [next[idx - 1], next[idx]] = [next[idx], next[idx - 1]];
-                          next.forEach((m, i) => { m.order = i; });
-                          setProposedDecomposition(next);
+                          setProposedDecomposition(next.map((m, i) => ({ ...m, order: i })));
                         }}
                         disabled={idx === 0}
                         className="text-gray-600 hover:text-white disabled:opacity-30"
@@ -169,8 +168,7 @@ export default function GoalPlanSection({
                           if (idx === proposedDecomposition.length - 1) return;
                           const next = [...proposedDecomposition];
                           [next[idx], next[idx + 1]] = [next[idx + 1], next[idx]];
-                          next.forEach((m, i) => { m.order = i; });
-                          setProposedDecomposition(next);
+                          setProposedDecomposition(next.map((m, i) => ({ ...m, order: i })));
                         }}
                         disabled={idx === proposedDecomposition.length - 1}
                         className="text-gray-600 hover:text-white disabled:opacity-30"
