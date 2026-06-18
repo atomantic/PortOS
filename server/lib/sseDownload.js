@@ -34,7 +34,7 @@ export function openSseStream(res) {
   return { send, safeEnd };
 }
 
-export async function startHfDownloadStream({ req, res, repo, repos, alreadyDownloadedMessage }) {
+export async function startHfDownloadStream({ req, res, repo, repos, alreadyDownloadedMessage, force = false }) {
   // Caller passes either `repo` (single string, legacy callers) OR `repos`
   // (ordered array, used when a model has auxiliary repos that must be
   // present alongside the main weights — e.g. HiDream's separate Llama-3.1
@@ -68,7 +68,13 @@ export async function startHfDownloadStream({ req, res, repo, repos, alreadyDown
     if (aborted) return;
     const existing = await inspectModelCache(r);
     if (aborted) return;
-    if (existing.cached) {
+    // `force` is set by a repair-initiated re-download: repairModelCache()
+    // deleted the corrupt file(s), but for a multi-shard repo the remaining
+    // shards still make inspectModelCache() report `cached` — so skipping here
+    // would leave the just-deleted shard missing and never re-fetched. Forcing
+    // re-runs the HF fetch, which is a cheap no-op for files already present
+    // (etag match) and pulls only what's gone.
+    if (existing.cached && !force) {
       totalSize += existing.sizeBytes || 0;
       send({ type: 'log', message: `${r} already cached (${existing.sizeBytes} bytes).`, repo: r, sizeBytes: existing.sizeBytes });
       continue;

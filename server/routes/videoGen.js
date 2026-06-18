@@ -475,7 +475,7 @@ router.get('/models/:modelId/download', asyncHandler(async (req, res) => {
   if (!model) throw new ServerError(`Unknown video model: ${req.params.modelId}`, { status: 404 });
   const repo = repoForModel(model);
   if (!repo) throw new ServerError(`Model "${model.id}" has no HuggingFace repo on file.`, { status: 400, code: 'NO_REPO_FOR_MODEL' });
-  await startHfDownloadStream({ req, res, repo });
+  await startHfDownloadStream({ req, res, repo, force: req.query.force === '1' });
 }));
 
 // POST /text-encoder/repair — delete the flagged (corrupt/truncated) weight
@@ -506,7 +506,10 @@ router.get('/text-encoder/download', asyncHandler(async (req, res) => {
   if (!isHfRepoId(repo)) {
     throw new ServerError('Active text encoder is a local-path entry, not an HF repo.', { status: 400, code: 'NOT_DOWNLOADABLE' });
   }
-  await startHfDownloadStream({ req, res, repo });
+  // `?force=1` (sent by the repair-initiated re-download) re-fetches even when
+  // the repo still looks cached — a deleted shard from a multi-file encoder
+  // would otherwise be skipped.
+  await startHfDownloadStream({ req, res, repo, force: req.query.force === '1' });
 }));
 
 router.post('/', frameImageUpload, asyncHandler(async (req, res) => {

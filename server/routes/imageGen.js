@@ -504,8 +504,9 @@ router.get('/models/:modelId/download', asyncHandler(async (req, res) => {
   }
   // Sequentially fetch every required repo (main + aux text encoders for
   // HiDream). The SSE stream tags each event with `repo` so the client can
-  // show per-repo progress / log lines.
-  await startHfDownloadStream({ req, res, repos });
+  // show per-repo progress / log lines. `?force=1` (repair-initiated) re-fetches
+  // even when the repo still looks cached, so a deleted shard isn't skipped.
+  await startHfDownloadStream({ req, res, repos, force: req.query.force === '1' });
 }));
 
 router.get('/loras', asyncHandler(async (_req, res) => {

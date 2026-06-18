@@ -13,12 +13,17 @@ import {
 // callers and the hook agree on the magic string.
 export const TEXT_ENCODER_DOWNLOAD_ID = '__text_encoder__';
 
-const buildDownloadUrl = (kind, modelId) => {
+const buildDownloadUrl = (kind, modelId, force = false) => {
   if (!modelId) return null;
+  // A repair-initiated re-download appends `?force=1` so the server re-fetches
+  // even when the repo still looks cached — repairModelCache() deleted the bad
+  // file(s), but a multi-shard repo's surviving shards otherwise mask the gap
+  // and the deleted shard would never be pulled back.
+  const q = force ? '?force=1' : '';
   if (kind === 'video' && modelId === TEXT_ENCODER_DOWNLOAD_ID) {
-    return '/api/video-gen/text-encoder/download';
+    return `/api/video-gen/text-encoder/download${q}`;
   }
-  return `/api/${kind}-gen/models/${encodeURIComponent(modelId)}/download`;
+  return `/api/${kind}-gen/models/${encodeURIComponent(modelId)}/download${q}`;
 };
 
 // Model download-status hook. Drives the inline "Available · 7.8 GB" /
@@ -33,6 +38,9 @@ export function useModelDownloadStatus({ kind = 'image' } = {}) {
   const [extra, setExtra] = useState({}); // video: { textEncoder: {...} }
   const [loading, setLoading] = useState(false);
   const [activeModelId, setActiveModelId] = useState(null);
+  // True only for a repair-initiated re-download — appends `?force=1` so the
+  // server re-fetches a repo whose surviving shards still read as cached.
+  const [forceDownload, setForceDownload] = useState(false);
 
   const fetchStatuses = useCallback(async () => {
     setLoading(true);
@@ -57,7 +65,7 @@ export function useModelDownloadStatus({ kind = 'image' } = {}) {
 
   // EventSource for the active download. `null` URL = idle (useSseProgress's
   // `enabled: false` cleanup tears the connection down on cancel).
-  const downloadUrl = buildDownloadUrl(kind, activeModelId);
+  const downloadUrl = buildDownloadUrl(kind, activeModelId, forceDownload);
   const sse = useSseProgress(downloadUrl, { enabled: !!downloadUrl });
 
   // Refetch on natural stream close. useSseProgress flips `closed:true` once
@@ -74,10 +82,12 @@ export function useModelDownloadStatus({ kind = 'image' } = {}) {
       }
       fetchStatuses();
       setActiveModelId(null);
+      setForceDownload(false);
     }
   }, [sse.closed, sse.latest, fetchStatuses]);
 
-  const start = useCallback((modelId) => {
+  const start = useCallback((modelId, { force = false } = {}) => {
+    setForceDownload(force);
     setActiveModelId(modelId);
   }, []);
 
@@ -117,7 +127,10 @@ export function useModelDownloadStatus({ kind = 'image' } = {}) {
       return null;
     });
     setRepairing(false);
-    if (result) start(modelId); // re-download clean copies via the existing SSE
+    // Force the re-download: repair deleted the bad file(s), but a multi-shard
+    // repo's surviving shards keep it reading as cached, so a non-forced pull
+    // would skip the deleted shard.
+    if (result) start(modelId, { force: true });
     return result;
   }, [kind, start]);
 
@@ -129,6 +142,7 @@ export function useModelDownloadStatus({ kind = 'image' } = {}) {
   const cancel = useCallback(() => {
     sse.close();
     setActiveModelId(null);
+    setForceDownload(false);
     fetchStatuses();
   }, [sse, fetchStatuses]);
 
