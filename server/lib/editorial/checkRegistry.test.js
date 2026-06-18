@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
 import {
   EDITORIAL_CHECKS,
+  EDITORIAL_SOURCES,
   CHECK_SCOPES,
   CHECK_KINDS,
   getCheck,
@@ -45,6 +46,15 @@ describe('editorial check registry — shape invariants', () => {
       expect(['high', 'medium', 'low'], `${check.id} severity`).toContain(check.severityDefault);
       expect(typeof check.run, `${check.id} run`).toBe('function');
       expect(typeof check.configSchema?.safeParse, `${check.id} configSchema`).toBe('function');
+      // Every check declares a non-empty source set drawn from EDITORIAL_SOURCES,
+      // and a manuscript source pairs with needsManuscript (#1387).
+      expect(Array.isArray(check.sources) && check.sources.length, `${check.id} sources`).toBeTruthy();
+      for (const source of check.sources) {
+        expect(EDITORIAL_SOURCES, `${check.id} source "${source}"`).toContain(source);
+      }
+      if (check.sources.includes('manuscript')) {
+        expect(check.needsManuscript, `${check.id} manuscript source ⇒ needsManuscript`).toBe(true);
+      }
     }
   });
 
@@ -64,7 +74,8 @@ describe('editorial check registry — shape invariants', () => {
 describe('editorial check registry — fail-fast guards', () => {
   const valid = {
     id: 'x.ok', label: 'ok', scope: 'series', kind: 'deterministic',
-    category: 'naming', severityDefault: 'low', configSchema: z.object({}), run: () => [],
+    category: 'naming', severityDefault: 'low', sources: ['canon'],
+    configSchema: z.object({}), run: () => [],
   };
 
   it('accepts a valid set', () => {
@@ -110,6 +121,21 @@ describe('editorial check registry — fail-fast guards', () => {
   it('throws on a malformed configField (missing key/label or bad type)', () => {
     expect(() => assertValidChecks([{ ...valid, configFields: [{ label: 'x', type: 'number' }] }])).toThrow(/malformed configField/);
     expect(() => assertValidChecks([{ ...valid, configFields: [{ key: 'k', label: 'x', type: 'galaxy' }] }])).toThrow(/malformed configField/);
+  });
+
+  it('throws on a missing or empty sources array (#1387)', () => {
+    expect(() => assertValidChecks([{ ...valid, sources: undefined }])).toThrow(/non-empty sources array/);
+    expect(() => assertValidChecks([{ ...valid, sources: [] }])).toThrow(/non-empty sources array/);
+  });
+
+  it('throws on an unknown source token (#1387)', () => {
+    expect(() => assertValidChecks([{ ...valid, sources: ['series.readerMap'] }])).toThrow(/unknown source/);
+  });
+
+  it('throws when a manuscript source is not paired with needsManuscript (#1387)', () => {
+    expect(() => assertValidChecks([{ ...valid, sources: ['manuscript'] }])).toThrow(/not marked needsManuscript/);
+    // Pairing them is accepted.
+    expect(() => assertValidChecks([{ ...valid, sources: ['manuscript'], needsManuscript: true }])).not.toThrow();
   });
 });
 

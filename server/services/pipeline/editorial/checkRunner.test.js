@@ -28,6 +28,15 @@ vi.mock('../../../lib/stageRunner.js', () => ({
       ],
     },
   })),
+  // Inline sibling for user-defined (custom) checks (#1346) — same finding shape.
+  runInlineLLM: vi.fn(async () => ({
+    runId: 'inline-run',
+    content: {
+      findings: [
+        { severity: 'medium', issueNumber: 1, location: 'p1', problem: 'Anachronism in opening', suggestion: 'Cut it', anchorQuote: 'As you know, Bob' },
+      ],
+    },
+  })),
   // A roomy window by default → manuscript LLM checks run in one whole-corpus call.
   resolveStageContext: vi.fn(async () => ({ provider: { type: 'cli' }, model: 'm', contextWindow: 1_000_000 })),
 }));
@@ -56,6 +65,7 @@ const { runStagedLLM, resolveStageContext } = await import('../../../lib/stageRu
 const { collectManuscriptSections } = await import('../arcPlanner.js');
 const { getSeriesCanon } = await import('../seriesCanon.js');
 const { getSeries } = await import('../series.js');
+const { getSettings } = await import('../../settings.js');
 const { listChecks, getCheck } = await import('../../../lib/editorial/index.js');
 
 // Build a `pipelineEditorialChecks.checks` map that disables every check
@@ -275,24 +285,57 @@ describe('getReviewWithStaleness (#1345)', () => {
     expect(naming.stale).toBe(true);
   });
 
-  it('stales a manuscript-check finding (not a canon-only one) when the series style guide changes', async () => {
-    getSeries.mockResolvedValueOnce({ id: 's1', universeId: 'u1', styleGuide: { readingLevel: 8 } });
+  it('stales only the style-guide-reading checks when the series style guide changes (#1387 precision)', async () => {
+    // style.conformance declares 'series.styleGuide'; prose.info-dumping is
+    // manuscript-only and naming is canon-only — so editing the style guide must
+    // stale ONLY the style check, not every manuscript-consuming finding (the
+    // pre-#1387 heuristic over-flagged info-dumping here).
+    getSeries.mockResolvedValueOnce({ id: 's1', universeId: 'u1', styleGuide: { tense: 'past' } });
     await seedReviewFromRun();
-    getSeries.mockResolvedValueOnce({ id: 's1', universeId: 'u1', styleGuide: { readingLevel: 12 } });
+    getSeries.mockResolvedValueOnce({ id: 's1', universeId: 'u1', styleGuide: { tense: 'present' } });
     const review = await getReviewWithStaleness('s1');
-    expect(review.comments.find((c) => c.checkId === 'prose.info-dumping').stale).toBe(true);
-    // styleGuide is in the manuscript segment only → a canon-only finding stays fresh.
+    expect(review.comments.find((c) => c.checkId === 'style.conformance').stale).toBe(true);
+    expect(review.comments.find((c) => c.checkId === 'prose.info-dumping').stale).toBe(false);
     expect(review.comments.find((c) => c.checkId === 'naming.dissimilar-names').stale).toBe(false);
   });
 
-  it('stales a canon-only finding (not a manuscript one) when the arc ticking clock changes', async () => {
-    getSeries.mockResolvedValueOnce({ id: 's1', universeId: 'u1', arc: { tickingClock: { name: 'storm' } } });
+  it('stales only the ticking-clock check when the arc ticking clock changes (#1387 precision)', async () => {
+    // arc.ticking-clock-hygiene declares 'series.arc.tickingClock'; naming is
+    // canon-only and info-dumping manuscript-only — so editing the ticking clock
+    // must stale ONLY the ticking-clock finding (the pre-#1387 heuristic folded the
+    // clock into the shared canon segment and over-flagged naming/object findings).
+    getSeries.mockResolvedValueOnce({ id: 's1', universeId: 'u1', arc: { tickingClock: { enabled: true } } });
     await seedReviewFromRun();
-    getSeries.mockResolvedValueOnce({ id: 's1', universeId: 'u1', arc: { tickingClock: { name: 'eclipse' } } });
+    getSeries.mockResolvedValueOnce({ id: 's1', universeId: 'u1', arc: { tickingClock: { enabled: true, label: 'eclipse' } } });
     const review = await getReviewWithStaleness('s1');
-    // tickingClock is in the canon segment only → the manuscript finding stays fresh.
-    expect(review.comments.find((c) => c.checkId === 'naming.dissimilar-names').stale).toBe(true);
+    expect(review.comments.find((c) => c.checkId === 'arc.ticking-clock-hygiene').stale).toBe(true);
+    expect(review.comments.find((c) => c.checkId === 'naming.dissimilar-names').stale).toBe(false);
     expect(review.comments.find((c) => c.checkId === 'prose.info-dumping').stale).toBe(false);
+  });
+
+  it('stales a custom-check finding when its authored prompt changes, even if the manuscript is unchanged (#1387)', async () => {
+    // A custom check's run logic is its prompt (user data), so a prompt edit must
+    // stale its prior findings — the manuscript source alone can't catch that.
+    const settingsWithPrompt = (prompt) => ({
+      pipelineEditorialChecks: {
+        customChecks: [{ id: 'custom.anachronism', label: 'Anachronisms', prompt, scope: 'issue', severityDefault: 'medium' }],
+      },
+    });
+    getSettings.mockResolvedValueOnce(settingsWithPrompt('Flag modern tech in a period setting.'));
+    const { findings } = await runEditorialChecks('s1');
+    reviewState = { comments: findings.map((f) => ({ ...f, status: 'open' })) };
+    const custom = findings.find((f) => f.checkId === 'custom.anachronism');
+    expect(custom, 'custom check produced a finding').toBeTruthy();
+
+    // Same prompt → fresh (the manuscript-only segment is unchanged).
+    getSettings.mockResolvedValueOnce(settingsWithPrompt('Flag modern tech in a period setting.'));
+    const fresh = await getReviewWithStaleness('s1');
+    expect(fresh.comments.find((c) => c.checkId === 'custom.anachronism').stale).toBe(false);
+
+    // Edited prompt → stale, despite the unchanged manuscript.
+    getSettings.mockResolvedValueOnce(settingsWithPrompt('Flag anachronistic slang in dialogue.'));
+    const stale = await getReviewWithStaleness('s1');
+    expect(stale.comments.find((c) => c.checkId === 'custom.anachronism').stale).toBe(true);
   });
 
   it('leaves legacy findings (no hash), completeness comments (no checkId), and unknown checks unannotated', async () => {

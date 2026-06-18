@@ -19,7 +19,7 @@ import { randomUUID, createHash } from 'crypto';
 import { createSseRunner } from '../../../lib/sseUtils.js';
 import { runStagedLLM, runInlineLLM, resolveStageContext } from '../../../lib/stageRunner.js';
 import { planManuscriptPass } from '../../../lib/contextBudget.js';
-import { getEnabledChecks, getEnabledCheckRows, getAllChecks } from '../../../lib/editorial/index.js';
+import { getEnabledChecks, getEnabledCheckRows, getAllChecks, EDITORIAL_SOURCES } from '../../../lib/editorial/index.js';
 import { getSettings } from '../../settings.js';
 import { getSeries } from '../series.js';
 import { listIssues } from '../issues.js';
@@ -28,42 +28,76 @@ import { collectManuscriptSections, sectionsCorpus, manuscriptSectionHeader } fr
 import { seedReviewFromFindings, getReview } from '../manuscriptReview.js';
 import { canonicalStringify } from '../../../lib/objects.js';
 
-// Source-content fingerprinting for finding staleness (#1345). Each finding is
-// stamped with a hash of the exact content its check analyzed; the manuscript
+// Source-content fingerprinting for finding staleness (#1345, #1387). Each finding
+// is stamped with a hash of the exact content its check analyzed; the manuscript
 // editor / triage view flags a finding `stale` once that content drifts.
 //
-// Two segments cover the inputs the checks actually read: a manuscript-consuming
-// check (`needsManuscript`) hashes the stitched corpus + canon + style guide; a
-// canon-only check hashes canon + the arc's ticking clock — so a canon-only
-// finding (naming, object-attachment, ticking-clock) doesn't go stale on a pure
-// prose edit, and a manuscript finding doesn't go stale on a ticking-clock edit.
-// `canonicalStringify` (key-sorted) keeps the hash stable across machines so a
-// synced finding isn't falsely flagged stale after an import re-orders keys.
+// Per-check declared sources (#1387): a check declares the inputs its run() reads
+// via `check.sources` (a subset of EDITORIAL_SOURCES), and we fingerprint EXACTLY
+// those — so a naming finding (sources: ['canon']) doesn't go stale on a prose or
+// style-guide edit, and editing the ticking clock stales only the
+// arc.ticking-clock-hygiene finding (sources: ['series.arc.tickingClock']) instead
+// of every canon-only finding. This replaces the prior two-segment heuristic
+// (manuscript-vs-canon) that over-flagged because it folded the style guide +
+// ticking clock into shared segments.
 //
-// NOTE: the input set is derived from `needsManuscript` + a fixed series field
-// set, NOT a per-check source declaration — so editing the style guide or ticking
-// clock marks ALL findings in that segment stale, not only the checks that read
-// it. That over-flag is the deliberate SAFE direction (never under-flag): a check
-// added later that reads `styleGuide` still auto-stales, whereas a per-check
-// allow-list would silently false-fresh it. Precise-and-safe scoping via declared
-// per-check sources is tracked in #1387. NUL separates the segments so they can't
-// run together ambiguously.
+// `SOURCE_RESOLVERS` maps each declared token to the exact content hashed.
+// `canonicalStringify` (key-sorted) keeps the hash stable across machines so a
+// synced finding isn't falsely flagged stale after an import re-orders keys. A
+// load-time guard asserts every EDITORIAL_SOURCES token has a resolver here — a
+// token with no resolver would silently contribute nothing (false-fresh).
 const HASH_SEP = '\u0000';
 const sha256 = (text) => createHash('sha256').update(text || '').digest('hex');
-function computeSourceHashes(manuscript, canon, series) {
-  const canonStr = canonicalStringify(canon ?? null);
-  const styleGuide = canonicalStringify(series?.styleGuide ?? null);
-  const tickingClock = canonicalStringify(series?.arc?.tickingClock ?? null);
-  return {
-    // Manuscript checks (style.reading-level / style.conformance + the prose/object
-    // LLM checks) read the corpus + canon + style guide.
-    withManuscript: sha256([manuscript || '', canonStr, styleGuide].join(HASH_SEP)),
-    // Canon-only checks read canon; arc.ticking-clock-hygiene also reads the arc's
-    // ticking clock (folded in here since it's the only non-canon input they consult).
-    canonOnly: sha256([canonStr, tickingClock].join(HASH_SEP)),
-  };
+const SOURCE_RESOLVERS = {
+  manuscript: ({ manuscript }) => manuscript || '',
+  canon: ({ canon }) => canonicalStringify(canon ?? null),
+  'series.styleGuide': ({ series }) => canonicalStringify(series?.styleGuide ?? null),
+  'series.arc.tickingClock': ({ series }) => canonicalStringify(series?.arc?.tickingClock ?? null),
+};
+for (const token of EDITORIAL_SOURCES) {
+  if (typeof SOURCE_RESOLVERS[token] !== 'function') {
+    throw new Error(`checkRunner: editorial source "${token}" has no fingerprint resolver — keep SOURCE_RESOLVERS in sync with EDITORIAL_SOURCES`);
+  }
 }
-const hashForCheck = (hashes, needsManuscript) => (needsManuscript ? hashes.withManuscript : hashes.canonOnly);
+
+// A check's declared sources, falling back to the legacy needsManuscript heuristic
+// for any check synthesized before the declaration existed (e.g. an older custom
+// check). Unknown tokens are dropped so a typo can't corrupt the hash.
+function checkSources(check) {
+  const declared = Array.isArray(check?.sources) && check.sources.length
+    ? check.sources
+    : (check?.needsManuscript ? ['manuscript', 'canon'] : ['canon']);
+  return declared.filter((token) => SOURCE_RESOLVERS[token]);
+}
+
+// Resolve every source token's content ONCE for a given inputs object
+// (`{ manuscript, canon, series }`), so fingerprinting many checks/comments doesn't
+// re-stringify the canon per call. Returns a token→string map the fingerprint reads.
+function resolveSources(inputs) {
+  const resolved = {};
+  for (const token of EDITORIAL_SOURCES) resolved[token] = SOURCE_RESOLVERS[token](inputs);
+  return resolved;
+}
+
+// Fingerprint exactly the inputs a check reads, from a pre-resolved token→content
+// map (see `resolveSources`). Tokens are de-duped and sorted so the hash is
+// independent of declaration order; each segment is prefixed with its token so two
+// source sets can't collide on equal content. NUL joins segments (it can't appear
+// in the JSON the resolvers emit) so they can't run together ambiguously.
+function fingerprintForCheck(check, resolved) {
+  const segments = [...new Set(checkSources(check))]
+    .sort()
+    .map((token) => `${token}=${resolved[token]}`);
+  // A custom check's run logic IS its authored prompt (user data, not code), so a
+  // prompt edit must stale its prior findings even when the manuscript is unchanged
+  // — fold it into the fingerprint. Built-in checks' logic lives in code (a code
+  // change isn't user content and isn't fingerprinted), so only their declared
+  // content sources matter. (#1346, #1387)
+  if (check?.isCustom && typeof check.prompt === 'string') {
+    segments.push(`definition=${check.prompt}`);
+  }
+  return sha256(segments.join(HASH_SEP));
+}
 
 // Output room reserved for an editorial check's findings JSON. Sized for the
 // editorial output (a bounded findings list — far smaller than the completeness
@@ -107,9 +141,10 @@ export async function runEditorialChecks(seriesId, options = {}) {
     listIssues({ seriesId }).catch(() => []),
   ]);
   const manuscript = sectionsCorpus(sections);
-  // Fingerprint the analyzed content once per run — stamped onto every finding
-  // below so the editor can flag it `stale` when the manuscript/canon/series-meta drifts (#1345).
-  const sourceHashes = computeSourceHashes(manuscript, canon, series);
+  // Resolve every source token once — each finding's fingerprint reads from this
+  // so the editor flags it `stale` when the content that check actually read (its
+  // declared `sources`) drifts (#1345, #1387).
+  const resolvedSources = resolveSources({ manuscript, canon, series });
   const baseCtx = {
     seriesId,
     series,
@@ -177,7 +212,7 @@ export async function runEditorialChecks(seriesId, options = {}) {
         continue;
       }
       const raw = (await check.run(ctx)) || [];
-      const sourceContentHash = hashForCheck(sourceHashes, !!check.needsManuscript);
+      const sourceContentHash = fingerprintForCheck(check, resolvedSources);
       const stamped = raw.map((f) => ({ ...f, checkId: check.id, sourceContentHash }));
       findings.push(...stamped);
       perCheck.push({ checkId: check.id, count: stamped.length });
@@ -242,19 +277,22 @@ export async function getReviewWithStaleness(seriesId) {
   // still-registered check — a pure completeness review pays no extra I/O.
   const evaluable = review.comments.filter((c) => c.checkId && c.sourceContentHash && checkFor(c.checkId));
   if (!evaluable.length) return review;
-  const needsManuscript = evaluable.some((c) => checkFor(c.checkId).needsManuscript);
+  // Only pay the manuscript-collection I/O when an evaluable check declares it as
+  // a source (mirrors the run path's gate, now source-derived rather than the bare
+  // needsManuscript flag so it stays correct as the source vocabulary grows).
+  const needsManuscript = evaluable.some((c) => checkSources(checkFor(c.checkId)).includes('manuscript'));
   const series = await getSeries(seriesId);
   const [sections, canon] = await Promise.all([
     needsManuscript ? collectManuscriptSections(seriesId) : Promise.resolve([]),
     getSeriesCanon(series),
   ]);
-  const sourceHashes = computeSourceHashes(sectionsCorpus(sections), canon, series);
+  const resolvedSources = resolveSources({ manuscript: sectionsCorpus(sections), canon, series });
   return {
     ...review,
     comments: review.comments.map((c) => {
       const check = c.checkId && c.sourceContentHash ? checkFor(c.checkId) : null;
       if (!check) return c;
-      const current = hashForCheck(sourceHashes, !!check.needsManuscript);
+      const current = fingerprintForCheck(check, resolvedSources);
       return { ...c, stale: c.sourceContentHash !== current };
     }),
   };
