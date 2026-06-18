@@ -35,9 +35,13 @@ The findings digest carries prior *problems* forward but not clean prior *setup*
 chunk established it without producing a finding. A check can additionally opt
 into a **cross-chunk clean-setup digest** (#1403): pass `crossChunkSetup: true`
 (plus a per-check `setupFocus` string) to `runManuscriptLlmCheck`, and after each
-non-final chunk one extra inline summarization call (`ctx.callInlineLLM`, tagged
-`EDITORIAL_SETUP_DIGEST_SOURCE`, built by `buildSetupDigestPrompt`) rolls a short
-"setup so far" summary forward. `editorialSetupDigest` wraps it and prepends it to
+non-final chunk one extra inline summarization call (`ctx.callStageScopedInlineLLM`,
+tagged `EDITORIAL_SETUP_DIGEST_SOURCE`, built by `buildSetupDigestPrompt`) rolls a
+short "setup so far" summary forward. The summary call is **stage-scoped** — it
+resolves the same provider/model the check's stage is pinned to (not the active
+provider), so manuscript text never routes to a different (e.g. cloud) provider
+than the stage chose. The stored summary is capped to `EDITORIAL_SETUP_DIGEST_BODY_CHARS`
+so a verbose summarizer response can't compound across chunks. `editorialSetupDigest` wraps it and prepends it to
 later chunks alongside the findings digest — also yielding to spare budget, and
 fitted *after* the findings digest so manuscript coverage and the findings digest
 both win when budget is tight. A single-chunk (whole-fits) run never summarizes,
