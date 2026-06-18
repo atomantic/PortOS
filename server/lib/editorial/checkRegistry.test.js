@@ -1710,3 +1710,74 @@ describe('custom checks (#1346)', () => {
     });
   });
 });
+
+describe('prose.cliches / prose.modifier-stacking / prose.dead-metaphor (#1308)', () => {
+  const CLICHES = 'prose.cliches';
+  const STACKING = 'prose.modifier-stacking';
+  const DEADMETA = 'prose.dead-metaphor';
+
+  it('registers all three as manuscript-scoped style checks of the right kind', () => {
+    expect(getCheck(CLICHES).kind).toBe('deterministic');
+    expect(getCheck(STACKING).kind).toBe('deterministic');
+    expect(getCheck(DEADMETA).kind).toBe('llm');
+    for (const id of [CLICHES, STACKING, DEADMETA]) {
+      const c = getCheck(id);
+      expect(c.category).toBe('style');
+      expect(c.sources).toEqual(['manuscript']);
+      expect(c.needsManuscript).toBe(true);
+      expect(c.gate({ manuscript: '' })).toBe(false);
+      expect(c.gate({ manuscript: '# Issue 1\n\nprose' })).toBeTruthy();
+    }
+  });
+
+  it('prose.cliches anchors a stock phrase to its issue and dedupes across the draft', () => {
+    const sections = [
+      { number: 1, content: 'And then time stood still in the hall.' },
+      { number: 2, content: 'Once more, time stood still — but also all hell broke loose.' },
+    ];
+    const findings = getCheck(CLICHES).run({ sections, config: {}, severityDefault: 'low' });
+    // "time stood still" deduped to issue 1; "all hell broke loose" from issue 2.
+    expect(findings.map((f) => f.anchorQuote)).toEqual(['time stood still', 'all hell broke loose']);
+    expect(findings[0].issueNumber).toBe(1);
+    expect(findings[0].category).toBe('style');
+    expect(findings[1].issueNumber).toBe(2);
+  });
+
+  it('prose.cliches honors the house-style allowlist and the findings cap', () => {
+    const sections = [{ number: 1, content: 'time stood still and all hell broke loose' }];
+    const muted = getCheck(CLICHES).run({ sections, config: { allowPhrases: 'time stood still' }, severityDefault: 'low' });
+    expect(muted.map((f) => f.anchorQuote)).toEqual(['all hell broke loose']);
+    const capped = getCheck(CLICHES).run({ sections, config: { maxFindings: 1 }, severityDefault: 'low' });
+    expect(capped).toHaveLength(1);
+  });
+
+  it('prose.modifier-stacking flags a no-comma adjective pile and escalates a long run', () => {
+    const sections = [{ number: 3, content: 'a big red shiny new old battered car rolled by' }];
+    const findings = getCheck(STACKING).run({ sections, config: {}, severityDefault: 'low' });
+    expect(findings).toHaveLength(1);
+    expect(findings[0].issueNumber).toBe(3);
+    // 6-modifier pile (>=5) escalates above the low floor.
+    expect(findings[0].severity).toBe('medium');
+  });
+
+  it('prose.dead-metaphor passes the planned chunk to the model and forces the style category', async () => {
+    let seen = null;
+    const findings = await getCheck(DEADMETA).run({
+      manuscript: '# Issue 4\n\nThe beacon of hope shone.',
+      config: { maxFindings: 12 },
+      severityDefault: 'low',
+      planManuscriptChunks: async (_stage, opts) => {
+        expect(opts.overheadTokens).toBeGreaterThan(0);
+        return ['# Issue 4\n\nThe beacon of hope shone.'];
+      },
+      callStagedLLM: async (_stage, vars) => {
+        seen = vars.manuscript;
+        return { content: { findings: [{ severity: 'low', issueNumber: 4, location: 'Issue 4 — cliché', problem: 'dead metaphor', anchorQuote: 'beacon of hope' }] } };
+      },
+    });
+    expect(seen).toBe('# Issue 4\n\nThe beacon of hope shone.');
+    expect(findings).toHaveLength(1);
+    expect(findings[0].category).toBe('style');
+    expect(findings[0].issueNumber).toBe(4);
+  });
+});

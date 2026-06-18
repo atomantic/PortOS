@@ -499,6 +499,13 @@
       "returnsJson": true,
       "variables": []
     },
+    "pipeline-editorial-dead-metaphor": {
+      "name": "Pipeline — Editorial Check: Dead / mixed metaphor & overwriting",
+      "description": "Editorial check (#1308): the judgment layer for tired language the deterministic cliché scan can't catch — dead or mixed metaphors, lightly-reworded novel clichés, and overwrought / purple prose. Reads the stitched manuscript; severity is advisory; skips knowing in-voice clichés. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
     "pipeline-editorial-object-motivation": {
       "name": "Pipeline — Editorial Check: Unmotivated object interaction",
       "description": "Editorial check (#1288): flags moments where a character treats an object as significant without earned motivation — no recorded attachment and no on-page setup. Reads the stitched manuscript plus the canon object↔character attachments. Returns issue-anchored findings.",

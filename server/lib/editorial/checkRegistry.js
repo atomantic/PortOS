@@ -27,6 +27,7 @@
 import { z } from 'zod';
 import { estimateTokens } from '../contextBudget.js';
 import { analyzeNamePair, findFirstLetterClusters, normalizeName } from './nameSimilarity.js';
+import { findCliches, findModifierStacking } from './cliches.js';
 
 export const CHECK_SCOPES = Object.freeze(['series', 'issue', 'scene', 'noun']);
 export const CHECK_KINDS = Object.freeze(['deterministic', 'llm']);
@@ -137,6 +138,13 @@ export function authoredSetupPayoffSummary(readerMap) {
   if (payoffLines.length) parts.push(`Authored payoffs (resolutions the writer logged):\n${payoffLines.join('\n')}`);
   return parts.join('\n\n');
 }
+
+// Stage name for the cliché / dead-metaphor / overwriting LLM check (#1308).
+// Ships in data.reference/prompts/stages/ + stage-config.json (fresh installs
+// via setup-data.js) and migrates to existing installs via migration 101 (boot
+// runs migrations but NOT setup-data, so the migration is required). The
+// deterministic siblings (prose.cliches, prose.modifier-stacking) need no stage.
+export const DEAD_METAPHOR_STAGE = 'pipeline-editorial-dead-metaphor';
 
 // ---------------------------------------------------------------------------
 // Character-name dissimilarity (#1291) reads cast names + aliases and respects
@@ -820,6 +828,13 @@ const sceneLabel = (s) => {
 // ---------------------------------------------------------------------------
 // Registry entries.
 // ---------------------------------------------------------------------------
+
+// Split a UI text field holding a phrase list (comma- or newline-separated) into
+// trimmed, non-empty phrases — used by prose.cliches' allow/extra config fields.
+function splitPhraseList(value) {
+  if (typeof value !== 'string' || !value.trim()) return [];
+  return value.split(/[,\n]/).map((p) => p.trim()).filter(Boolean);
+}
 
 export const EDITORIAL_CHECKS = [
   {
@@ -1778,6 +1793,189 @@ export const EDITORIAL_CHECKS = [
           + 'whether it has already been paid off (fired, spilled, confronted, kept) or is still open.',
       });
     },
+  },
+  {
+    id: 'prose.cliches',
+    sources: ['manuscript'],
+    label: 'Cliché phrases (stock similes / idioms)',
+    description:
+      'Flags stock similes and idioms — "heart pounding like a drum", "time stood still", "little did they know" — tired phrasing that pulls readers out. Deterministic scan of a seed phrase list; extend or mute entries per house style. The LLM sibling catches novel clichés the list misses.',
+    scope: 'issue',
+    kind: 'deterministic',
+    category: 'style',
+    severityDefault: 'low',
+    defaultEnabled: true,
+    // Reads the stitched manuscript (per-issue sections) to anchor each cliché.
+    needsManuscript: true,
+    configSchema: z.object({
+      // Cap findings per run so a cliché-heavy draft can't flood the review.
+      maxFindings: z.number().int().min(1).max(50).default(20),
+      // House-style allowlist: clichés to leave alone (one per line or comma-separated)
+      // — an intentional cliché in a character's voice or a genre beat.
+      allowPhrases: z.string().default(''),
+      // Series-specific clichés to add to the seed list (one per line or comma-separated).
+      extraPhrases: z.string().default(''),
+    }),
+    configFields: [
+      {
+        key: 'maxFindings',
+        label: 'Max findings per run',
+        type: 'number',
+        min: 1,
+        max: 50,
+        step: 1,
+        help: 'Cap findings so a cliché-heavy draft can not flood the review.',
+      },
+      {
+        key: 'allowPhrases',
+        label: 'House-style allowlist',
+        type: 'text',
+        help: 'Clichés to leave alone (comma-separated or one per line) — intentional voice or genre beats.',
+      },
+      {
+        key: 'extraPhrases',
+        label: 'Extra clichés to flag',
+        type: 'text',
+        help: 'Series-specific stock phrases to add to the seed list (comma-separated or one per line).',
+      },
+    ],
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    run: (ctx) => {
+      const cfg = ctx.config || {};
+      const max = cfg.maxFindings ?? 20;
+      const allowPhrases = splitPhraseList(cfg.allowPhrases);
+      const extraPhrases = splitPhraseList(cfg.extraPhrases);
+      const sections = Array.isArray(ctx.sections) ? ctx.sections : [];
+      const findings = [];
+      // One finding per distinct cliché (anchored to the first issue it appears
+      // in) — a cliché repeated across the draft is one tic to fix, not many.
+      const seenPhrases = new Set();
+      for (const s of sections) {
+        if (findings.length >= max) break;
+        const hits = findCliches(s?.content || '', { allowPhrases, extraPhrases });
+        for (const hit of hits) {
+          if (findings.length >= max) break;
+          const key = hit.phrase.toLowerCase();
+          if (seenPhrases.has(key)) continue;
+          seenPhrases.add(key);
+          const issueNumber = Number.isInteger(s?.number) ? s.number : null;
+          findings.push({
+            severity: ctx.severityDefault,
+            category: 'style',
+            location: issueNumber != null ? `Issue ${issueNumber}` : 'Manuscript',
+            problem: `Cliché phrase "${hit.anchor}" — a stock simile/idiom that reads as filler and pulls readers out of the prose.`,
+            suggestion: 'Replace with fresh, specific phrasing true to this moment — or add it to this check\'s house-style allowlist if the cliché is intentional voice.',
+            anchorQuote: hit.anchor,
+            issueNumber,
+          });
+        }
+      }
+      return findings;
+    },
+  },
+  {
+    id: 'prose.modifier-stacking',
+    sources: ['manuscript'],
+    label: 'Overwriting — stacked adjectives / adverbs',
+    description:
+      'Flags overwriting: runs of three or more piled-up single-word modifiers ("big red shiny new") before a noun. Deterministic and high-precision (cumulative, no-comma runs only); coordinate lists and purple prose beyond a simple stack are left to the LLM sibling.',
+    scope: 'issue',
+    kind: 'deterministic',
+    category: 'style',
+    severityDefault: 'low',
+    defaultEnabled: true,
+    needsManuscript: true,
+    configSchema: z.object({
+      // Run length (consecutive modifiers) to flag. 3 is the classic "too many
+      // adjectives" threshold; raise it to only catch the most egregious piles.
+      minStack: z.number().int().min(3).max(8).default(3),
+      // Cap findings per run so an adjective-heavy draft can't flood the review.
+      maxFindings: z.number().int().min(1).max(50).default(20),
+    }),
+    configFields: [
+      {
+        key: 'minStack',
+        label: 'Modifiers in a row to flag',
+        type: 'number',
+        min: 3,
+        max: 8,
+        step: 1,
+        help: 'How many consecutive single-word modifiers (with no commas between them) before a noun trips the check. 3 catches "big red shiny new"; raise it for only the worst piles.',
+      },
+      {
+        key: 'maxFindings',
+        label: 'Max findings per run',
+        type: 'number',
+        min: 1,
+        max: 50,
+        step: 1,
+        help: 'Cap findings so an adjective-heavy draft can not flood the review.',
+      },
+    ],
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    run: (ctx) => {
+      const cfg = ctx.config || {};
+      const minStack = cfg.minStack ?? 3;
+      const max = cfg.maxFindings ?? 20;
+      const sections = Array.isArray(ctx.sections) ? ctx.sections : [];
+      const findings = [];
+      for (const s of sections) {
+        if (findings.length >= max) break;
+        const runs = findModifierStacking(s?.content || '', { minStack });
+        for (const run of runs) {
+          if (findings.length >= max) break;
+          const issueNumber = Number.isInteger(s?.number) ? s.number : null;
+          findings.push({
+            // A longer pile (5+) is more clearly overwriting — escalate above the low floor.
+            severity: escalateSeverity(ctx.severityDefault, run.count >= 5 ? 1 : 0),
+            category: 'style',
+            location: issueNumber != null ? `Issue ${issueNumber}` : 'Manuscript',
+            problem: `${run.count} modifiers stacked in a row ("${run.anchor}") — piling adjectives/adverbs dilutes each one and reads as overwriting.`,
+            suggestion: 'Cut to the one or two strongest, most specific modifiers (or replace the noun phrase with a stronger noun/verb).',
+            anchorQuote: run.anchor,
+            issueNumber,
+          });
+        }
+      }
+      return findings;
+    },
+  },
+  {
+    id: 'prose.dead-metaphor',
+    sources: ['manuscript'],
+    label: 'Dead / mixed metaphor, novel clichés & overwriting (LLM)',
+    description:
+      'LLM scan for tired stock language the deterministic checks miss — mixed or dead metaphors that collide or have gone invisible, novel clichés beyond the seed list, and overwrought / purple description. Complements the kill-your-darlings check (#1300) by targeting stock rather than precious prose.',
+    scope: 'issue',
+    kind: 'llm',
+    category: 'style',
+    severityDefault: 'low',
+    defaultEnabled: true,
+    needsManuscript: true,
+    configSchema: z.object({
+      // Cap findings per run so a long manuscript can't flood the review.
+      maxFindings: z.number().int().min(1).max(50).default(12),
+    }),
+    configFields: [
+      {
+        key: 'maxFindings',
+        label: 'Max findings per run',
+        type: 'number',
+        min: 1,
+        max: 50,
+        step: 1,
+        help: 'Cap findings so a long manuscript can not flood the review.',
+      },
+    ],
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    // Localized prose-level findings (one tired phrase = one spot), so this stays
+    // a plain per-chunk run with no cross-chunk digest — mirrors prose.info-dumping.
+    run: (ctx) => runManuscriptLlmCheck(ctx, {
+      stage: DEAD_METAPHOR_STAGE,
+      category: 'style',
+      overheadTokens: EDITORIAL_PROMPT_OVERHEAD_TOKENS,
+      buildVars: (manuscript) => ({ manuscript }),
+    }),
   },
 ];
 
