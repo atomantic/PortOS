@@ -103,3 +103,38 @@ describe('Universes page — duplicate detection', () => {
     await waitFor(() => expect(screen.queryByText(/duplicate-named/)).not.toBeInTheDocument());
   });
 });
+
+describe('Universes page — row thumbnail', () => {
+  beforeEach(() => {
+    api.listUniverseDuplicates.mockResolvedValue({ groups: [] });
+  });
+
+  it('shows the base style image (last styleImageRef), matching the detail page', async () => {
+    api.listUniverses.mockResolvedValue([
+      { id: 'u1', name: 'Neon Expanse', styleImageRefs: ['old-style.png', 'base-style.png'], updatedAt: '2026-06-01T00:00:00Z' },
+    ]);
+    // A media-collection image exists too, but the base style image wins.
+    api.listMediaCollections.mockResolvedValue([
+      { universeId: 'u1', items: [{ kind: 'image', ref: 'contact-sheet.png', addedAt: '2026-06-10T00:00:00Z' }] },
+    ]);
+    const { container } = renderPage();
+    await waitFor(() => expect(screen.getAllByText('Neon Expanse').length).toBeGreaterThan(0));
+    const img = container.querySelector('img');
+    expect(img).toBeTruthy();
+    expect(img.getAttribute('src')).toContain('base-style.png');
+    expect(img.getAttribute('src')).not.toContain('contact-sheet.png');
+  });
+
+  it('falls back to the latest media-collection image when no base style image exists', async () => {
+    api.listUniverses.mockResolvedValue([
+      { id: 'u2', name: 'Reality', updatedAt: '2026-06-01T00:00:00Z' },
+    ]);
+    api.listMediaCollections.mockResolvedValue([
+      { universeId: 'u2', items: [{ kind: 'image', ref: 'fallback.png', addedAt: '2026-06-10T00:00:00Z' }] },
+    ]);
+    const { container } = renderPage();
+    await waitFor(() => expect(screen.getAllByText('Reality').length).toBeGreaterThan(0));
+    const img = container.querySelector('img');
+    expect(img.getAttribute('src')).toContain('fallback.png');
+  });
+});
