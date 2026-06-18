@@ -88,6 +88,7 @@ export const NAV_COMMANDS = [
   { id: 'nav.messages.sync', path: '/messages/sync', label: 'Sync', section: 'Brain', aliases: ['messages-sync'] },
   { id: 'nav.openclaw', path: '/openclaw', label: 'OpenClaw', section: 'Brain', aliases: ['openclaw'] },
   { id: 'nav.social-agents', path: '/agents', label: 'Social Agents', section: 'Brain', aliases: ['social-agents'] },
+  { id: 'nav.tribe', path: '/tribe', label: 'Tribe', section: 'Brain', aliases: ['tribe', 'relationships', 'relationship-manager', 'people'], keywords: ['dunbar', 'friends', 'family', 'network', 'social graph', 'care cadence'] },
 
   { id: 'nav.devtools.runs', path: '/devtools/runs', label: 'AI Runs', section: 'Dev Tools', aliases: ['ai-runs', 'devtools'] },
   { id: 'nav.devtools.agents', path: '/devtools/agents', label: 'AI Agents', section: 'Dev Tools', aliases: ['ai-agents'] },

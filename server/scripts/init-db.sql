@@ -76,6 +76,52 @@ CREATE TABLE IF NOT EXISTS memory_links (
   PRIMARY KEY (source_id, target_id)
 );
 
+-- Relationship / Tribe graph. People live in Postgres so they can be joined to
+-- Brain memories, touchpoint history, and calendar event references.
+CREATE TABLE IF NOT EXISTS tribe_people (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name TEXT NOT NULL,
+  relationship TEXT DEFAULT '',
+  ring VARCHAR(32) NOT NULL DEFAULT 'tribe',
+  cadence_days INTEGER NOT NULL DEFAULT 45,
+  last_contact_on DATE,
+  channel TEXT DEFAULT '',
+  energy VARCHAR(32) NOT NULL DEFAULT 'steady',
+  tags TEXT[] DEFAULT '{}',
+  next_move TEXT DEFAULT '',
+  notes TEXT DEFAULT '',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  deleted BOOLEAN DEFAULT FALSE,
+  deleted_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_tribe_people_live ON tribe_people (deleted, ring, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_tribe_people_tags ON tribe_people USING gin (tags);
+
+CREATE TABLE IF NOT EXISTS tribe_touchpoints (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  person_id UUID NOT NULL REFERENCES tribe_people(id) ON DELETE CASCADE,
+  happened_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  channel TEXT DEFAULT '',
+  summary TEXT DEFAULT '',
+  source VARCHAR(32) NOT NULL DEFAULT 'user',
+  calendar_account_id TEXT,
+  calendar_event_id TEXT,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_tribe_touchpoints_person ON tribe_touchpoints (person_id, happened_at DESC);
+CREATE INDEX IF NOT EXISTS idx_tribe_touchpoints_calendar ON tribe_touchpoints (calendar_account_id, calendar_event_id);
+
+CREATE TABLE IF NOT EXISTS tribe_memory_links (
+  person_id UUID NOT NULL REFERENCES tribe_people(id) ON DELETE CASCADE,
+  memory_id UUID NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+  note TEXT DEFAULT '',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  PRIMARY KEY (person_id, memory_id)
+);
+CREATE INDEX IF NOT EXISTS idx_tribe_memory_links_memory ON tribe_memory_links (memory_id);
+
 -- Auto-update updated_at and sync_sequence on content/metadata changes.
 -- Skips bump for access-stat-only updates (access_count, last_accessed)
 -- to avoid sync noise from read operations.
@@ -969,3 +1015,7 @@ DROP TRIGGER IF EXISTS trg_lora_training_runs_audit ON lora_training_runs;
 CREATE TRIGGER trg_lora_training_runs_audit AFTER UPDATE OR DELETE ON lora_training_runs FOR EACH ROW EXECUTE FUNCTION record_audit_log();
 DROP TRIGGER IF EXISTS trg_authors_audit ON authors;
 CREATE TRIGGER trg_authors_audit AFTER UPDATE OR DELETE ON authors FOR EACH ROW EXECUTE FUNCTION record_audit_log();
+DROP TRIGGER IF EXISTS trg_tribe_people_audit ON tribe_people;
+CREATE TRIGGER trg_tribe_people_audit AFTER UPDATE OR DELETE ON tribe_people FOR EACH ROW EXECUTE FUNCTION record_audit_log();
+DROP TRIGGER IF EXISTS trg_tribe_touchpoints_audit ON tribe_touchpoints;
+CREATE TRIGGER trg_tribe_touchpoints_audit AFTER UPDATE OR DELETE ON tribe_touchpoints FOR EACH ROW EXECUTE FUNCTION record_audit_log();

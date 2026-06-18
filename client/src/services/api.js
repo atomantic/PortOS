@@ -32,6 +32,7 @@ export * from './apiGSD.js';
 export * from './apiGithub.js';
 export * from './apiLoops.js';
 export * from './apiMemory.js';
+export * from './apiTribe.js';
 export * from './apiBrain.js';
 export * from './apiNotes.js';
 export * from './apiDigitalTwin.js';

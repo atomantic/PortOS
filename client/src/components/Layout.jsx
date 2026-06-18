@@ -154,6 +154,7 @@ const navItems = [
       { to: '/openclaw', label: 'OpenClaw', icon: MessagesSquare },
       { to: '/rapid-reader', label: 'Rapid Reader', icon: Zap },
       { to: '/agents', label: 'Social Agents', icon: Users },
+      { to: '/tribe', label: 'Tribe', icon: Users },
       { to: '/brain/trust', label: 'Trust', icon: Shield },
       { to: '/wiki/overview', label: 'Wiki', icon: BookOpen },
     ],

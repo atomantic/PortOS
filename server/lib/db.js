@@ -354,6 +354,47 @@ async function ensureSchemaImpl() {
       id TEXT PRIMARY KEY,
       applied_at TIMESTAMPTZ DEFAULT NOW()
     )`,
+    `CREATE TABLE IF NOT EXISTS tribe_people (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      name TEXT NOT NULL,
+      relationship TEXT DEFAULT '',
+      ring VARCHAR(32) NOT NULL DEFAULT 'tribe',
+      cadence_days INTEGER NOT NULL DEFAULT 45,
+      last_contact_on DATE,
+      channel TEXT DEFAULT '',
+      energy VARCHAR(32) NOT NULL DEFAULT 'steady',
+      tags TEXT[] DEFAULT '{}',
+      next_move TEXT DEFAULT '',
+      notes TEXT DEFAULT '',
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      deleted BOOLEAN DEFAULT FALSE,
+      deleted_at TIMESTAMPTZ
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_tribe_people_live ON tribe_people (deleted, ring, updated_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_tribe_people_tags ON tribe_people USING gin (tags)`,
+    `CREATE TABLE IF NOT EXISTS tribe_touchpoints (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      person_id UUID NOT NULL REFERENCES tribe_people(id) ON DELETE CASCADE,
+      happened_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      channel TEXT DEFAULT '',
+      summary TEXT DEFAULT '',
+      source VARCHAR(32) NOT NULL DEFAULT 'user',
+      calendar_account_id TEXT,
+      calendar_event_id TEXT,
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_tribe_touchpoints_person ON tribe_touchpoints (person_id, happened_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_tribe_touchpoints_calendar ON tribe_touchpoints (calendar_account_id, calendar_event_id)`,
+    `CREATE TABLE IF NOT EXISTS tribe_memory_links (
+      person_id UUID NOT NULL REFERENCES tribe_people(id) ON DELETE CASCADE,
+      memory_id UUID NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+      note TEXT DEFAULT '',
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      PRIMARY KEY (person_id, memory_id)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_tribe_memory_links_memory ON tribe_memory_links (memory_id)`,
   ];
   for (const sql of upgrades) {
     await pool.query(sql);
@@ -1159,7 +1200,7 @@ async function ensureSchemaImpl() {
     'story_builder_sessions', 'writers_room_works', 'writers_room_folders',
     'writers_room_draft_versions', 'catalog_ingredients', 'catalog_scraps',
     'catalog_user_types', 'creative_director_projects', 'lora_training_runs',
-    'authors',
+    'authors', 'tribe_people', 'tribe_touchpoints',
   ];
   for (const t of auditedTables) {
     catalogDDL.push(`DROP TRIGGER IF EXISTS trg_${t}_audit ON ${t}`);
