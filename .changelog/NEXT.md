@@ -237,3 +237,4 @@
 ## Internal
 
 - Removed a stray `.changelogs/` (plural) directory created by an earlier commit alongside the real `.changelog/` (singular); its lone entry was already superseded in the canonical changelog. (`.changelogs/`)
+- Updated the bundled slashdo submodule from v3.15.0 to v3.16.0. (`lib/slashdo`)
