@@ -65,9 +65,15 @@ export async function backfillSeriesCoverImages({ force = false } = {}) {
   // cover — and load every issue just ONCE, grouped by series, rather than a
   // per-series store scan. Drop run history (not needed to read a cover slot).
   const issuesBySeries = new Map();
+  let issueScanFailed = false;
   if (series.some((s) => !pickVolumeCoverFilename(s?.seasons))) {
     const all = await listAllIssues({ withHistory: false }).catch((err) => {
+      // A transient store/DB failure here would otherwise be treated as "no
+      // issues" and the marker below would still be written, permanently
+      // skipping issue-cover backfill for volume-less series. Flag it so we
+      // leave the marker unwritten and retry on the next boot instead.
       console.error(`❌ series cover backfill: listAllIssues failed: ${err?.message || err}`);
+      issueScanFailed = true;
       return [];
     });
     for (const issue of all) {
@@ -89,6 +95,13 @@ export async function backfillSeriesCoverImages({ force = false } = {}) {
     await setSeriesCoverImage(s.id, next).catch((err) => {
       console.error(`❌ series cover backfill: setSeriesCoverImage failed for ${String(s.id).slice(0, 8)}: ${err?.message || err}`);
     });
+  }
+
+  // Don't mark the backfill applied if the issue scan failed — the volume-less
+  // series were never actually scanned, so re-run on the next boot.
+  if (issueScanFailed) {
+    console.warn(`⚠️  series cover backfill: issue scan failed — leaving marker unwritten to retry next boot (scanned ${scanned} series, ${decorated} have a cover)`);
+    return { skipped: false, scanned, decorated, issueScanFailed: true };
   }
 
   await writeMarker({ version: MARKER_VERSION, appliedAt: new Date().toISOString(), scanned });

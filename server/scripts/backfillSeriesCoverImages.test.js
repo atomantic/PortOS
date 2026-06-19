@@ -87,6 +87,14 @@ describe('backfillSeriesCoverImages', () => {
     expect(listSeries).toHaveBeenCalled(); // force re-ran the walk
   });
 
+  it('leaves the marker unwritten (retry next boot) when the issue scan fails', async () => {
+    listSeries.mockResolvedValue([{ id: 'ser-1', coverImage: null, seasons: [] }]); // no volume cover → needs issue scan
+    listAllIssues.mockRejectedValue(new Error('db down'));
+    const res = await backfillSeriesCoverImages();
+    expect(res).toMatchObject({ skipped: false, issueScanFailed: true });
+    expect(existsSync(MARKER())).toBe(false); // not applied — will retry
+  });
+
   it('writes the marker even when there are no series', async () => {
     listSeries.mockResolvedValue([]);
     const res = await backfillSeriesCoverImages();

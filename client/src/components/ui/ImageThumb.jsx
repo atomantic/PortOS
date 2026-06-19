@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 
 /**
  * List-card thumbnail with graceful fallback. Renders the image from
@@ -10,6 +10,11 @@ import { useState } from 'react';
  */
 export default function ImageThumb({ imageRef, FallbackIcon, alt = '', sizeClass = 'w-12 h-12' }) {
   const [broken, setBroken] = useState(false);
+  // Reset the error state when the ref changes — otherwise a stale/404 ref that
+  // tripped `broken` would keep the fallback icon stuck even after `imageRef`
+  // updates to a valid filename (cover rendered / synced while the list stayed
+  // mounted), until a remount.
+  useEffect(() => { setBroken(false); }, [imageRef]);
   const showImage = imageRef && !broken;
   return (
     <div className={`flex-shrink-0 ${sizeClass} rounded-md overflow-hidden bg-port-bg border border-port-border flex items-center justify-center`}>

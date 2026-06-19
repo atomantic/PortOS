@@ -1178,7 +1178,17 @@ export function deleteIssue(id) {
       // Series export bundles every issue, so a deletion is an update on the
       // parent series for any active share-bucket subscription.
       emitRecordUpdated('series', seriesId);
-      return { id };
+      return { id, seriesId };
+    }).then(async (result) => {
+      // The deleted issue may have owned the series' list thumbnail
+      // (`series.coverImage`). Recompute outside the queue (it reads fresh
+      // post-delete state) so the Pipeline list falls back to the next eligible
+      // cover instead of pointing at a tombstone. Dynamic import dodges the
+      // static cycle (seriesCoverImage → issues). Best-effort — a cosmetic
+      // thumbnail must never fail the delete.
+      const { refreshSeriesCoverImage } = await import('./seriesCoverImage.js');
+      await refreshSeriesCoverImage(result.seriesId).catch(() => {});
+      return { id: result.id };
     })
   );
 }
