@@ -80,7 +80,6 @@ export default function SongRecordings({ recordings = [], layers = [], onChange,
   useEffect(() => {
     if (liveStream && hasMusic && !matchRunning && startMatch()) armedThisTakeRef.current = true;
     // start is stable; react only to stream/hasMusic (the arm trigger).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [liveStream, hasMusic]);
 
   // A persisted take selected for review — repaints its saved grades onto the

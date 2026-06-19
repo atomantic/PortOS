@@ -89,7 +89,7 @@ export function useOpenClawStream({ selectedSessionId, attachments, setAttachmen
         extraInstructions: context.extraInstructions
       }).filter(([, value]) => String(value || '').trim())
     );
-    const payloadAttachments = attachments.map(({ id, size, previewUrl, ...attachment }) => attachment);
+    const payloadAttachments = attachments.map(({ id: _id, size: _size, previewUrl: _previewUrl, ...attachment }) => attachment);
 
     setSending(true);
     setActivityLabel('Connecting…');
@@ -101,7 +101,7 @@ export function useOpenClawStream({ selectedSessionId, attachments, setAttachmen
       content: message || 'Please inspect the attached context and respond.',
       createdAt: new Date().toISOString(),
       status: 'completed',
-      attachments: attachments.map(({ id, data, previewUrl, ...attachment }) => ({ id, ...attachment }))
+      attachments: attachments.map(({ id, data: _data, previewUrl: _previewUrl, ...attachment }) => ({ id, ...attachment }))
     };
 
     setMessages(current => [...current, userMessage, {

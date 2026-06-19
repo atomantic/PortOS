@@ -33,7 +33,7 @@ export default function AnnotatedManuscriptSection({
   // that actually owns the open comment scrolls.
   useEffect(() => {
     if (openComment) cardRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
-  }, [openComment?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [openComment?.id]);
 
   // Esc closes the open note — parity with the Live popover.
   useEscapeKey(openComment, onCloseComment);

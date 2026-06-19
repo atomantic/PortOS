@@ -105,7 +105,6 @@ export default function CollectionPickerShell({
       },
     );
     return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, collectionsProp]);
 
   const filtered = useMemo(() => {

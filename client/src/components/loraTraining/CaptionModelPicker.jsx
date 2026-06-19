@@ -51,7 +51,6 @@ export default function CaptionModelPicker({ onChange }) {
     });
     return () => { alive = false; };
     // onChange is a stable setter from the parent; intentionally run once.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleChange = async (next) => {

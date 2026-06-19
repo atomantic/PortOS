@@ -124,7 +124,6 @@ export default function PipelineEditorialChecks() {
     if (type === 'complete') { loadFindings(seriesId); toast.success('Editorial checks complete'); }
     else if (type === 'canceled') toast.success('Editorial checks canceled');
     else toast.error(runLatest.error || 'Editorial checks failed');
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runActive, runClosed, runLatest, seriesId]);
 
   // Recovery: the stream died WITHOUT a terminal frame — don't strand the UI;
@@ -135,7 +134,6 @@ export default function PipelineEditorialChecks() {
     if (t === 'complete' || t === 'canceled' || t === 'error') return; // handled above
     setRunActive(false);
     loadFindings(seriesId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runActive, runClosed, runLatest, seriesId]);
 
   // ---- Catalog mutations (reactive local updates; the API owns the toast).

@@ -82,7 +82,7 @@ function RenderControls({ aspectRatio, setAspectRatio, quality, setQuality, mode
   );
 }
 
-export default function EpisodeVideoStage({ issue, series, onStageUpdate }) {
+export default function EpisodeVideoStage({ issue, onStageUpdate }) {
   const stage = issue.stages?.episodeVideo || {};
   const cdProjectId = stage.cdProjectId || null;
   const storyboardScenes = issue.stages?.storyboards?.scenes || [];

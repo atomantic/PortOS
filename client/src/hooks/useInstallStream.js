@@ -168,7 +168,6 @@ export function useInstallStream(url, {
       closeThis();
     };
     // onComplete intentionally excluded — it lives in onCompleteRef.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [url, enabled, maxLogLines, flushMs]);
 
   // Auto-scroll on every new line. behavior:'auto' (instant) avoids queueing

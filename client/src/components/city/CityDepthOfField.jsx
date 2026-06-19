@@ -45,7 +45,6 @@ export default function CityDepthOfField({ presetId, enabled = true, composerRef
     return { composer: comp, bokehPass: bokeh };
     // gl/scene/camera are stable for the lifetime of this mount; presetId is applied via the
     // effect below so changing it doesn't rebuild the whole composer.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gl, scene, camera]);
 
   // Expose the composer so the capture path (CityPhotoCamera) renders the DoF frame too, instead

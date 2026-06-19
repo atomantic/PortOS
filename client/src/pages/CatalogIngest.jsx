@@ -317,7 +317,6 @@ export default function CatalogIngest() {
         const c = arr[i];
         const name = (c.name || '').trim();
         if (!name) continue;
-        // eslint-disable-next-line no-unused-vars
         const { id: _id, type: _type, name: _name, tags: _tags, payload: nestedPayload, description, ...rest } = c;
         const payload = { ...rest, ...(nestedPayload && typeof nestedPayload === 'object' ? nestedPayload : {}) };
         if (description !== undefined) payload.description = description;

@@ -327,7 +327,7 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
               disabled={updating}
               onChange={({ reviewers, stopMode, reviewerApplies }) => {
                 // Drop the legacy single `reviewer` key so storage converges on `reviewers`.
-                const { reviewer, ...rest } = config.taskMetadata || {};
+                const { reviewer: _reviewer, ...rest } = config.taskMetadata || {};
                 onUpdate(taskType, {
                   taskMetadata: { ...rest, reviewers, reviewStopMode: stopMode, reviewerApplies }
                 });

@@ -117,7 +117,6 @@ export default function SongTraining({
   useEffect(() => {
     if (stream && !running && hasMusic && activeScope.score) start();
     // start is stable from the hook; only react to the stream arriving.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stream]);
 
   // When a run finishes NATURALLY and we're not looping, close the mic and drop

@@ -9,7 +9,7 @@ import { parseScore } from '../lib/scoreNotation.js';
 const trackerStop = vi.fn();
 const analyserClose = vi.fn();
 const metronomeStop = vi.fn();
-let lastMetronome = null;
+let _lastMetronome = null;
 
 vi.mock('../lib/audioRecorder.js', () => ({
   createStreamAnalyser: vi.fn(() => ({ analyser: { fftSize: 2048 }, context: { currentTime: 0, sampleRate: 44100 }, close: analyserClose })),
@@ -23,7 +23,7 @@ vi.mock('../lib/metronome.js', async (importActual) => {
   return {
     ...actual,
     createMetronome: vi.fn((opts) => {
-      lastMetronome = opts;
+      _lastMetronome = opts;
       // Resolve start() but never fire onCountInComplete — we only exercise the
       // arm/stop bookkeeping, not the rAF grading loop.
       return { start: vi.fn(() => Promise.resolve()), stop: metronomeStop };
@@ -42,7 +42,7 @@ describe('useColorMatch — start()/stop() contract (#1092)', () => {
     trackerStop.mockClear();
     analyserClose.mockClear();
     metronomeStop.mockClear();
-    lastMetronome = null;
+    _lastMetronome = null;
   });
 
   it('start() returns false with no stream', () => {

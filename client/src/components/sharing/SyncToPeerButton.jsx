@@ -100,7 +100,6 @@ export default function SyncToPeerButton({
 
   useEffect(() => {
     if (open) refresh();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   // Anchor the portaled menu to the trigger while open, and keep it pinned as

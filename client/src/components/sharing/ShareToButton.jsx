@@ -94,7 +94,6 @@ export default function ShareToButton({ kind, ids, items, label = 'Share', compa
 
   useEffect(() => {
     if (open) refresh();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   useLayoutEffect(() => {

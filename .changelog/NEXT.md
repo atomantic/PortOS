@@ -115,6 +115,8 @@
 
 ## Changed
 
+- **Social-platform icons updated.** lucide-react v1 removed its brand glyphs (GitHub, Instagram, Facebook, LinkedIn, X, YouTube), so the Digital Twin accounts list and the GitHub dev-tools link now use generic line icons in their place.
+
 - **Refreshed the seeded Claude Bedrock provider defaults to current model ids.** The shipped `claude-code-bedrock` (CLI) and `claude-code-tui-bedrock` (TUI) provider entries in the seed config now default to the current Claude on Bedrock model set — `us.anthropic.claude-haiku-4-5` (light), `us.anthropic.claude-sonnet-4-6` (medium), and `global.anthropic.claude-opus-4-8[1m]` (default/heavy), with `global.anthropic.claude-opus-4-8` also listed — replacing the stale `claude-opus-4-6` / dated-snapshot ids. Both stay `enabled: false` (opt-in) and ship with an empty `AWS_BEARER_TOKEN_BEDROCK`; the CLI entry also gains the `secretEnvVars` marker so the token is treated as a secret. (`data.reference/providers.json`)
 
 - **Updated the bundled `slashdo` submodule from v3.14.0 → v3.15.0.** (`lib/slashdo`)
@@ -162,6 +164,9 @@
 - **Harden the test-runner database write-guard against less-obvious write forms.** The backstop that stops a misconfigured test run from mutating the real database was anchored on a single leading verb, so data-modifying CTEs (`WITH … DELETE …`), `COPY … FROM` imports, `MERGE`, and a write hidden after a leading read in a multi-statement batch slipped past it. It now matches those verbs anywhere (after stripping comments) while still allowing `COPY … TO` exports and `SELECT … FOR UPDATE` row locks. No store used those forms, so this was latent; the guard is billed as the last line of defense, so it now lives up to it. No user-visible behavior change. (`server/lib/db.js`, #1333)
 
 ## Fixed
+
+- **The element-symbol quiz no longer reshuffles on every keystroke.** The Elements practice quiz rebuilt its question deck with a fresh random shuffle on every render, so typing an answer reshuffled the deck and swapped the current question out from under you. The deck is now built once per item and stays put while you answer.
+- **CyberCity lightning flashes no longer teleport.** The lightning flash light re-rolled its position on every render, making the flash jump around the scene; its origin is now chosen once.
 
 - **[issue-1449] Fixed a flaky VoicePicker test whose `waitFor` guards never actually waited.** Five tests in `VoicePicker.test.jsx` guarded the async voice load with `await waitFor(() => document.querySelector('option[value="kokoro:af_bella"]'))` — but `waitFor` only retries while its callback *throws*, and returning `null` (option not yet rendered) isn't a throw, so it resolved on the first tick and the subsequent `user.selectOptions` could run before `listPipelineTtsVoices` populated the `<option>`s (`Value "kokoro:af_bella" not found in options` in CI). Every non-asserting guard now uses the asserting form (`expect(...).toBeInTheDocument()`), matching the one sibling test that was already correct, so the suite stops losing the load race on slow runners. (`client/src/components/voice/VoicePicker.test.jsx`, #1449)
 
@@ -245,3 +250,5 @@
 
 - Removed a stray `.changelogs/` (plural) directory created by an earlier commit alongside the real `.changelog/` (singular); its lone entry was already superseded in the canonical changelog. (`.changelogs/`)
 - Updated the bundled slashdo submodule from v3.15.0 to v3.16.0. (`lib/slashdo`)
+- Bumped dependencies to current releases: `pg`, `sharp`, `vitest` + `@vitest/coverage-v8`, `tailwindcss` + `@tailwindcss/postcss`, `react-router-dom`, `recharts`, `jsdom`, `rollup-plugin-visualizer`, `eslint-plugin-react-hooks` (v7), and `lucide-react` (v1). Pinned `js-yaml` to `4.2.0` via package `overrides` to resolve a moderate quadratic-complexity (ReDoS) advisory it carries transitively through `pm2`. `eslint`/`@eslint/js` are held at 9.x because `eslint-plugin-react` has no eslint-10-compatible release yet. (`package.json`, `server/package.json`, `client/package.json`)
+- Reworked the client ESLint policy to be strictly binary — every rule is `error` or `off`, never `warn` (a warning nobody acts on is just noise that hides real errors). `no-unused-vars` is now enforced (and existing violations cleared); the React-Compiler rule set newly enabled by `eslint-plugin-react-hooks` v7 is disabled (PortOS doesn't run the React Compiler, and those rules flag intentional idioms en masse), as is `exhaustive-deps`; `rules-of-hooks` stays enforced. Now-dead inline `eslint-disable` directives were removed. (`client/eslint.config.js`)

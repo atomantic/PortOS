@@ -287,7 +287,6 @@ export default function LoraDatasetDetail() {
         setSubject(entries.find((entry) => entry.id === dataset.character.entryId) || null);
       })
       .catch(() => {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dataset?.character?.universeId, dataset?.character?.entryKind, dataset?.character?.entryId]);
 
   // Object/place variation axes (Lighting/Settings) live as server-side
@@ -308,7 +307,6 @@ export default function LoraDatasetDetail() {
       .then((axes) => { if (!cancelled) setVariationAxes(axes); })
       .catch(() => { if (!cancelled) setVariationAxes(null); });
     return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [datasetId, dataset?.character?.entryKind]);
 
   // Readiness is derived from the live local images (not the server's snapshot

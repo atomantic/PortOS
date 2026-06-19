@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useParams, Link, useNavigate } from 'react-router-dom';
+import { useParams, Link } from 'react-router-dom';
 import { ArrowLeft, CheckSquare, Copy, DatabaseZap, FolderInput, Inbox, Lock, Pencil, Star, StarOff, Trash2, X } from 'lucide-react';
 import ShareToButton from '../components/sharing/ShareToButton';
 import toast from '../components/ui/Toast';
@@ -45,7 +45,6 @@ const hydrate = (collection, imagesByName, videosById) => {
 export default function MediaCollectionDetail() {
   const { id } = useParams();
   const isUnsorted = id === UNSORTED_ID;
-  const navigate = useNavigate();
   const [collection, setCollection] = useState(null);
   // Full collections list — fetched once for the bulk move/copy picker so it
   // doesn't pay a per-mount listMediaCollections() round-trip when opened.

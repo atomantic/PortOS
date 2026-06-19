@@ -1,11 +1,11 @@
 import { useState, useEffect } from 'react';
 import {
-  Github,
-  Instagram,
-  Facebook,
-  Linkedin,
-  Twitter,
-  Youtube,
+  GitBranch,
+  Camera,
+  Users,
+  Briefcase,
+  Bird,
+  Play,
   Music,
   MessageCircle,
   Cloud,
@@ -30,12 +30,12 @@ import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 
 // Platform icon mapping
 const PLATFORM_ICONS = {
-  github: Github,
-  instagram: Instagram,
-  facebook: Facebook,
-  linkedin: Linkedin,
-  x: Twitter,
-  youtube: Youtube,
+  github: GitBranch,
+  instagram: Camera,
+  facebook: Users,
+  linkedin: Briefcase,
+  x: Bird,
+  youtube: Play,
   tiktok: Music,
   reddit: MessageCircle,
   bluesky: Cloud,

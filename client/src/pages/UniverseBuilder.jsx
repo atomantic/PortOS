@@ -1623,7 +1623,6 @@ export default function UniverseBuilder() {
     const next = new URLSearchParams(searchParams);
     next.delete('tab');
     setSearchParams(next, { replace: true });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [requestedTab, hasOtherBuckets]);
 
   // Drop a stale `?bucket=` if the bucket no longer exists under the current

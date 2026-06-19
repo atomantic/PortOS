@@ -6,7 +6,7 @@ import PlaygroundOutput from '../components/localLlm/PlaygroundOutput';
 import toast from '../components/ui/Toast';
 import { copyToClipboard } from '../lib/clipboard';
 import { localLlmTargetKey } from '../lib/localLlmTargetKey';
-import { formatBytes, parseSizeGb, recommendedRamGb } from '../utils/formatters';
+import { formatBytes, recommendedRamGb } from '../utils/formatters';
 import { compareLocalLlmModels, getLocalLlmCatalog, getLocalLlmStatus, streamLocalLlmTest } from '../services/api';
 
 const BACKEND_LABEL = { ollama: 'Ollama', lmstudio: 'LM Studio' };

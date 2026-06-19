@@ -4,7 +4,7 @@ import { Cpu, Box, ArrowRightLeft, Download, Trash2, RefreshCw, Search, Plus, Ex
 import toast from '../ui/Toast';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import BrailleSpinner from '../BrailleSpinner';
-import { formatBytes, formatContextLength, timeAgo, parseSizeGb, recommendedRamGb } from '../../utils/formatters';
+import { formatBytes, formatContextLength, timeAgo, recommendedRamGb } from '../../utils/formatters';
 import { localLlmTargetKey } from '../../lib/localLlmTargetKey';
 import {
   getLocalLlmStatus, getLocalLlmCatalog, getLocalLlmHuggingFaceSearch, installLocalLlmModel,

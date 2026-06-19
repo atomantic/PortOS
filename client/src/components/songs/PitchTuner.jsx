@@ -108,7 +108,6 @@ export default function PitchTuner({ stream = null, a4 = 440 }) {
     // teardownTracker and the constant a4), so the only live trigger here is
     // `stream` changing — and every branch reads the current standaloneOn. The
     // standalone start/stop paths own their own attach/teardown directly.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stream, attach, teardownTracker]);
 
   // Stop standalone tuning: tear down the tracker AND close the mic we opened.

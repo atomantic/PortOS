@@ -34,7 +34,6 @@ export default function StageHistoryModal({
   useEffect(() => {
     if (open && runHistory.length > 0) setSelectedRunId(runHistory[0].runId);
     else if (!open) setSelectedRunId(null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   const selected = runHistory.find((e) => e.runId === selectedRunId) || null;

@@ -161,7 +161,7 @@ export default function PipelineManuscriptEditor() {
     // Keyed on seriesId only — `navigate`'s identity changes when the issue-tab
     // URL changes, and including it would re-run this initial load (clobbering a
     // format switch with a stale default-format refetch).
-  }, [seriesId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [seriesId]);
 
   useEffect(() => {
     let canceled = false;
@@ -186,7 +186,6 @@ export default function PipelineManuscriptEditor() {
     const next = new URLSearchParams(searchParams);
     next.delete('comment');
     setSearchParams(next, { replace: true });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loading, comments, searchParams]);
 
   const overrideProvider = providers.find((p) => p.id === overrideProviderId) || null;
@@ -293,7 +292,6 @@ export default function PipelineManuscriptEditor() {
     if (type === 'complete') reloadReviewAfterRun(reviewLatest);
     else if (type === 'canceled') toast.success('Editorial review canceled');
     else toast.error(reviewLatest.error || 'Editorial review failed');
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reviewActive, reviewClosed, reviewLatest, seriesId]);
 
   // Recovery: the stream died WITHOUT a terminal frame (attach 404, dropped
@@ -306,7 +304,6 @@ export default function PipelineManuscriptEditor() {
     if (t === 'complete' || t === 'canceled' || t === 'error') return; // handled above
     setReviewActive(false);
     reloadReviewAfterRun(null, { recovered: true });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reviewActive, reviewClosed, reviewLatest, seriesId]);
 
   const startGenerateEditsReview = async (mode) => {

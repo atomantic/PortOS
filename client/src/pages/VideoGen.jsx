@@ -60,7 +60,7 @@ import {
   listVideoHistory, deleteVideoHistoryItem, setVideoHidden, extractLastFrame,
   upscaleVideo,
   listImageGallery,
-  getSettings, patchSettingsSlice,
+  patchSettingsSlice,
   getActiveVideoJob,
   listLorasFull,
 } from '../services/api';
@@ -282,7 +282,6 @@ export default function VideoGen() {
       stripKeys.forEach((k) => n.delete(k));
       return n;
     }, { replace: true });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const [history, setHistory] = useState([]);
@@ -376,7 +375,6 @@ export default function VideoGen() {
       }
     }
     setSearchParams((prev) => { const next = new URLSearchParams(prev); next.delete('lora'); return next; }, { replace: true });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [availableLoras, models]);
 
   const { visibleHistory, hiddenHistory } = useMemo(() => ({
@@ -678,7 +676,6 @@ export default function VideoGen() {
       const isCurrent = () => myToken === runTokenRef.current;
       attachJobEvents(job.jobId, { isCurrent, withToast: false });
     }).catch(() => {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleSavePythonPath = useCallback(async (path) => {
@@ -1279,7 +1276,6 @@ export default function VideoGen() {
     // unmount during the 1.5s BUSY backoff would fire setRunningQueueId on
     // a torn-down component (React warning + leaked state).
     return () => { if (busyRetryTimer) clearTimeout(busyRetryTimer); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queue, generating, runningQueueId]);
 
   const handleCancel = async () => {

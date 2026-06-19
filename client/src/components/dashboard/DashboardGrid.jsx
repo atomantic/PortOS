@@ -247,7 +247,6 @@ export default function DashboardGrid({ items, editable, onChange, renderItem })
     };
   // dragGhost in the deps array re-installs the listeners only when the
   // gesture starts/ends — pointermove updates dragRef.current directly.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dragGhost ? 'active' : 'idle', items, onChange, containerWidth]);
 
   // Single render tree across mobile and desktop — only the className/style

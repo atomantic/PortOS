@@ -62,7 +62,6 @@ export default function CreativeDirector() {
       const preferred = (m || []).find((entry) => !entry.deprecated) || (m || [])[0];
       if (preferred && !form.modelId) setForm((f) => ({ ...f, modelId: preferred.id }));
     }).catch(() => {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fetchProjects]);
 
   const handleCreate = async (e) => {

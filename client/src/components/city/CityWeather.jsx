@@ -37,6 +37,9 @@ const RAIN_FRAG = `
 function LightningFlash({ active, playSfx }) {
   const lightRef = useRef();
   const flashState = useRef({ nextFlash: 0, intensity: 0, flickerCount: 0 });
+  // Pick the flash origin once — inlining Math.random() in the JSX below re-rolls the
+  // light position on every render, teleporting the lightning flash around the scene.
+  const flashPosition = useMemo(() => [Math.random() * 40 - 20, 30, Math.random() * 40 - 20], []);
 
   useFrame(({ clock }) => {
     if (!lightRef.current || !active) {
@@ -70,7 +73,7 @@ function LightningFlash({ active, playSfx }) {
   return (
     <pointLight
       ref={lightRef}
-      position={[Math.random() * 40 - 20, 30, Math.random() * 40 - 20]}
+      position={flashPosition}
       color="#b4d4ff"
       intensity={0}
       distance={100}

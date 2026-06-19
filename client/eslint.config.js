@@ -91,7 +91,10 @@ export default [
       'react/no-unknown-property': 'off',
       'react/no-unescaped-entities': 'off',
       'react/jsx-no-comment-textnodes': 'off',
-      'no-unused-vars': ['warn', {
+      // Lint policy: every rule is either 'error' (enforced) or 'off' (gone). We do
+      // not use 'warn' — a warning is a rule nobody acts on, i.e. noise that hides
+      // real errors. If we don't want to enforce a rule, we disable it outright.
+      'no-unused-vars': ['error', {
         argsIgnorePattern: '^_',
         varsIgnorePattern: '^_',
         caughtErrorsIgnorePattern: '^_'
@@ -99,7 +102,23 @@ export default [
       'no-undef': 'error',
       'no-useless-escape': 'error',
       'react-hooks/rules-of-hooks': 'error',
-      'react-hooks/exhaustive-deps': 'warn',
+      // exhaustive-deps is dominated by the deliberate run-once-on-mount pattern across
+      // this codebase; rather than enforce-and-suppress it everywhere we turn it off and
+      // manage effect dependencies by review. rules-of-hooks (above) stays enforced.
+      'react-hooks/exhaustive-deps': 'off',
+      // eslint-plugin-react-hooks v7's `recommended` preset newly enables the React
+      // Compiler rule set. PortOS does not run the React Compiler, and these rules
+      // flag intentional, correct idioms across the codebase (async-loader effects,
+      // the mirror-prop-into-ref pattern for animation/async callbacks, and THREE.js
+      // useFrame mutations). We disable the compiler-specific rules rather than scatter
+      // hundreds of inline suppressions. Revisit if/when PortOS adopts the React Compiler.
+      'react-hooks/set-state-in-effect': 'off',
+      'react-hooks/refs': 'off',
+      'react-hooks/purity': 'off',
+      'react-hooks/immutability': 'off',
+      'react-hooks/preserve-manual-memoization': 'off',
+      'react-hooks/static-components': 'off',
+      'react-hooks/globals': 'off',
     },
   },
 ];

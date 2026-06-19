@@ -20,7 +20,7 @@
  * save pending, etc.) so the button shape is still visible but inert.
  */
 import { useState, useEffect } from 'react';
-import { Sparkles, Loader2, Star } from 'lucide-react';
+import { Sparkles, Star } from 'lucide-react';
 import MediaJobThumb from '../pipeline/MediaJobThumb';
 
 export default function EntryThumbSlot({

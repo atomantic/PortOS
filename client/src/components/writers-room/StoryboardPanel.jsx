@@ -224,7 +224,6 @@ export default function StoryboardPanel({
     if (runningKind === 'script') setTab(TAB.BOARDS);
     // setTab intentionally omitted — caller may not memoize it, and the
     // effect should only fire on runningKind transitions.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runningKind]);
 
   const persistCfg = useCallback(async (next) => {
@@ -251,7 +250,6 @@ export default function StoryboardPanel({
     // We intentionally key on latestScript identity rather than scenes (which
     // is recreated each render) — array identity changes coincide with the
     // analysis snapshot changing.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [latestScript]);
 
   // Surface everything the Phase 5 live render preview needs to render the
@@ -269,7 +267,6 @@ export default function StoryboardPanel({
       imageCfg,
       imageStyle,
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [latestScript, charByKey, placeByKey, imageCfg, imageStyle]);
 
   // Expose an imperative "merge a freshly-attached sceneImages map" up to
