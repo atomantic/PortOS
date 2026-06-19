@@ -293,6 +293,11 @@ async function readMarkdownDocuments() {
       readFile(join(DIR, name), 'utf-8').then((content) => [name, content], () => [name, null])
     )
   );
+  // Sort by filename before building the map: readdir() order is
+  // filesystem-dependent, and the documents object's key insertion order feeds
+  // the snapshot checksum via JSON.stringify — without a stable order two peers
+  // with identical documents compute different checksums and never converge.
+  reads.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
   const out = {};
   for (const [name, content] of reads) if (typeof content === 'string') out[name] = content;
   return out;
