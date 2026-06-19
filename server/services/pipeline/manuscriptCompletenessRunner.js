@@ -20,6 +20,9 @@
 import { createSseRunner } from '../../lib/sseUtils.js';
 import { analyzeManuscriptCompleteness } from './arcPlanner.js';
 import { seedReviewFromFindings } from './manuscriptReview.js';
+import { recordTrendSnapshot } from './editorialScore.js';
+import { readReadinessGate } from '../../lib/editorial/index.js';
+import { getSettings } from '../settings.js';
 
 const runner = createSseRunner({ logLabel: 'completeness review' });
 
@@ -72,6 +75,12 @@ export function startCompletenessReview(seriesId, options = {}) {
       mode: options.mode,
     });
     const openCount = review.comments.filter((c) => c.status === 'open').length;
+    // Revision-trend snapshot (#1316): this completeness run is a revision
+    // boundary. Best-effort telemetry — never fail the run on a ledger write.
+    const gate = readReadinessGate(await getSettings().catch(() => null)) || undefined;
+    await recordTrendSnapshot(seriesId, { runId: result.runId, gate, comments: review.comments }).catch((err) => {
+      console.error(`⚠️ editorial trend snapshot failed — series=${String(seriesId).slice(0, 12)} ${err.message}`);
+    });
     broadcast({
       type: 'complete',
       runId,

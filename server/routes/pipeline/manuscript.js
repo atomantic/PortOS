@@ -18,6 +18,9 @@ import * as manuscriptReview from '../../services/pipeline/manuscriptReview.js';
 import * as manuscriptFix from '../../services/pipeline/manuscriptFix.js';
 import * as completenessRunner from '../../services/pipeline/manuscriptCompletenessRunner.js';
 import { getReviewWithStaleness } from '../../services/pipeline/editorial/checkRunner.js';
+import { recordTrendSnapshot } from '../../services/pipeline/editorialScore.js';
+import { readReadinessGate } from '../../lib/editorial/index.js';
+import { getSettings } from '../../services/settings.js';
 import { mapServiceError, providerOverrideShape } from './shared.js';
 
 const router = Router();
@@ -91,6 +94,11 @@ router.post('/series/:id/manuscript/completeness', asyncHandler(async (req, res)
   // existing ArcHeader caller — the editor reads the merged `review`.
   const review = await manuscriptReview.seedReviewFromFindings(req.params.id, result.issues, { runId: result.runId, mode: body.mode })
     .catch((err) => { throw mapServiceError(err); });
+  // Revision-trend snapshot (#1316): this completeness pass is a revision
+  // boundary. Best-effort — never fail the request on a ledger-write error.
+  const gate = readReadinessGate(await getSettings().catch(() => null)) || undefined;
+  await recordTrendSnapshot(req.params.id, { runId: result.runId, gate, comments: review.comments })
+    .catch((err) => { console.error(`⚠️ editorial trend snapshot failed — series=${String(req.params.id).slice(0, 12)} ${err.message}`); });
   res.json({ ...result, review });
 }));
 

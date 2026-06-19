@@ -1076,9 +1076,14 @@ export const editorialCustomCheckUpdateSchema = z.object(editorialCustomCheckSha
 // peer compatible — a def carrying a future field (or a newer scope value) must
 // not 400 an unrelated settings save. `buildCustomCheck`/`isValidCustomCheckDef`
 // decide at read time which stored defs are actually runnable.
+// `readinessGate` (#1316) is the editorial health convergence gate the autopilot
+// loop + UI read as "manuscript clean": 'noOpenHigh' (default), the stricter
+// 'noOpenHighOrMedium', or 'none' (disable). Optional + additive, so older peers
+// and a never-configured install fall through to the service default.
 export const pipelineEditorialChecksSettingsSchema = z.object({
   checks: z.record(editorialCheckConfigSchema).optional(),
   customChecks: z.array(z.object({}).passthrough()).optional(),
+  readinessGate: z.enum(['noOpenHigh', 'noOpenHighOrMedium', 'none']).optional(),
 }).strict();
 
 // Cursor-context payload for the CD-bridge suggest route — identical shape to

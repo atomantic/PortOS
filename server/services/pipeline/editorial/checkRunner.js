@@ -28,6 +28,8 @@ import { collectManuscriptSections, sectionsCorpus, manuscriptSectionHeader } fr
 import { getReverseOutline } from '../reverseOutline.js';
 import { getSeriesEditorial } from '../editorialAnalysis.js';
 import { seedReviewFromFindings, getReview } from '../manuscriptReview.js';
+import { recordTrendSnapshot } from '../editorialScore.js';
+import { readReadinessGate } from '../../../lib/editorial/index.js';
 import { canonicalStringify } from '../../../lib/objects.js';
 
 // Source-content fingerprinting for finding staleness (#1345, #1387). Each finding
@@ -417,6 +419,13 @@ export async function runEditorialChecks(seriesId, options = {}) {
   // review with partial findings collected before the abort.
   if (findings.length && !canceled) {
     await seedReviewFromFindings(seriesId, findings, { runId, mode: 'merge' });
+    // Record a revision-trend snapshot (#1316): this run is a revision boundary,
+    // so snapshot the post-seed open-finding counts for the health-trend ledger.
+    // Best-effort — a ledger write must never fail the check run (it's telemetry).
+    const gate = readReadinessGate(settings) || undefined;
+    await recordTrendSnapshot(seriesId, { runId, gate }).catch((err) => {
+      console.error(`⚠️ editorial trend snapshot failed — series=${String(seriesId).slice(0, 12)} ${err.message}`);
+    });
   }
   return { runId, findings, perCheck, canceled };
 }

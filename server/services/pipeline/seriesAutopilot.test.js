@@ -237,11 +237,21 @@ describe('resolveNextStep (pure)', () => {
     expect(step.kind).toBe('editorialChecks');
   });
 
-  it('is done once editorial review has run (no visuals requested)', () => {
+  it('runs the editorial health gate after both editorial passes (#1316)', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
       { arcVerified: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, editorialChecksReviewed: true },
+      { includeVisual: false },
+    );
+    expect(step.kind).toBe('editorialHealthGate');
+  });
+
+  it('is done once the editorial health gate is clean (no visuals requested)', () => {
+    const step = resolveNextStep(
+      comic,
+      [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
+      { arcVerified: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, editorialChecksReviewed: true, editorialHealthReady: true },
       { includeVisual: false },
     );
     expect(step.kind).toBe('done');
@@ -251,7 +261,7 @@ describe('resolveNextStep (pure)', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
-      { arcVerified: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, editorialChecksReviewed: true },
+      { arcVerified: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, editorialChecksReviewed: true, editorialHealthReady: true },
       { includeVisual: true, target: 'text' },
     );
     expect(step.kind).toBe('done');
@@ -261,7 +271,7 @@ describe('resolveNextStep (pure)', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
-      { arcVerified: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, editorialChecksReviewed: true },
+      { arcVerified: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, editorialChecksReviewed: true, editorialHealthReady: true },
       { includeVisual: true },
     );
     expect(step.kind).toBe('canonVerify');
@@ -271,7 +281,7 @@ describe('resolveNextStep (pure)', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
-      { arcVerified: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, editorialChecksReviewed: true, canonVerified: true },
+      { arcVerified: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, editorialChecksReviewed: true, editorialHealthReady: true, canonVerified: true },
       { includeVisual: true },
     );
     expect(step).toMatchObject({ kind: 'visualDraft', issueId: 'iss1' });
@@ -290,7 +300,7 @@ describe('resolveNextStep (pure)', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: renderedStages })],
-      { arcVerified: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, editorialChecksReviewed: true, canonVerified: true },
+      { arcVerified: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, editorialChecksReviewed: true, editorialHealthReady: true, canonVerified: true },
       { includeVisual: true },
     );
     expect(step.kind).toBe('done');
@@ -485,6 +495,24 @@ describe('autopilot conductor', () => {
     expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('complete');
     // Skipping the editorial gate must also skip the registry checks pass.
     expect(checkRunnerSpies.runEditorialChecks).not.toHaveBeenCalled();
+  });
+
+  it('pauses at the editorial health gate when a blocking finding remains open (#1316)', async () => {
+    const manuscriptReview = await import('./manuscriptReview.js');
+    // Completeness + checks converge clean, but the post-pass review still holds
+    // an open high finding (e.g. surfaced by the registry checks) — the health
+    // gate must catch it and pause before visuals.
+    manuscriptReview.getReview.mockResolvedValue({
+      comments: [{ id: 'c1', status: 'open', severity: 'high', category: 'continuity', issueNumber: 1, problem: 'timeline contradiction' }],
+    });
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { includeVisual: false });
+    await waitFor(runFinished(seriesId));
+    const last = autopilot.__testing.runs.get(seriesId)?.lastPayload;
+    expect(last?.type).toBe('paused');
+    expect(last?.scope).toBe('editorialHealthGate');
+    expect(last?.residualFindings?.[0]?.problem).toBe('timeline contradiction');
+    manuscriptReview.getReview.mockResolvedValue({ comments: [] }); // restore
   });
 
   it('a second start while active resolves to alreadyRunning', async () => {

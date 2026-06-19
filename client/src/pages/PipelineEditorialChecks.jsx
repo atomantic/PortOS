@@ -18,6 +18,7 @@ import toast from '../components/ui/Toast';
 import EditorialCheckCard from '../components/pipeline/editorial/EditorialCheckCard';
 import EditorialCustomCheckForm from '../components/pipeline/editorial/EditorialCustomCheckForm';
 import EditorialFindingsTriage from '../components/pipeline/editorial/EditorialFindingsTriage';
+import EditorialHealthPanel from '../components/pipeline/editorial/EditorialHealthPanel';
 import { groupChecksByScope } from '../lib/editorialChecks';
 import { usePipelineProgress } from '../hooks/usePipelineProgress';
 import {
@@ -45,6 +46,10 @@ export default function PipelineEditorialChecks() {
   const seriesId = searchParams.get('series') || '';
   const [comments, setComments] = useState([]);
   const [loadingFindings, setLoadingFindings] = useState(false);
+  // Bumped whenever the findings are (re)loaded so the health panel refetches
+  // its score/trend in lockstep — a run that seeds new findings also moves the
+  // health score + records a trend snapshot server-side.
+  const [healthRefresh, setHealthRefresh] = useState(0);
 
   const [runActive, setRunActive] = useState(false);
   const [runStarting, setRunStarting] = useState(false);
@@ -90,7 +95,12 @@ export default function PipelineEditorialChecks() {
     getPipelineManuscriptReview(id)
       .then((review) => { if (activeSeriesRef.current === id) setComments(Array.isArray(review?.comments) ? review.comments : []); })
       .catch(() => { if (activeSeriesRef.current === id) setComments([]); })
-      .finally(() => { if (activeSeriesRef.current === id) setLoadingFindings(false); });
+      .finally(() => {
+        if (activeSeriesRef.current === id) {
+          setLoadingFindings(false);
+          setHealthRefresh((n) => n + 1); // re-pull the health score/trend in lockstep
+        }
+      });
   }, []);
 
   useEffect(() => {
@@ -392,10 +402,15 @@ export default function PipelineEditorialChecks() {
             <h2 className="text-sm font-semibold uppercase tracking-wide text-gray-400">Findings</h2>
             {!seriesId ? (
               <p className="rounded-lg border border-dashed border-port-border p-4 text-center text-xs text-gray-500">Select a series to view its findings.</p>
-            ) : loadingFindings ? (
-              <p className="flex items-center gap-2 text-sm text-gray-400"><Loader2 size={16} className="animate-spin" /> Loading findings…</p>
             ) : (
-              <EditorialFindingsTriage seriesId={seriesId} comments={comments} checksById={checksById} />
+              <>
+                <EditorialHealthPanel seriesId={seriesId} refreshKey={healthRefresh} />
+                {loadingFindings ? (
+                  <p className="flex items-center gap-2 text-sm text-gray-400"><Loader2 size={16} className="animate-spin" /> Loading findings…</p>
+                ) : (
+                  <EditorialFindingsTriage seriesId={seriesId} comments={comments} checksById={checksById} />
+                )}
+              </>
             )}
           </section>
         </div>

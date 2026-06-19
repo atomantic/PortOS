@@ -91,7 +91,9 @@ import * as volumeBeatsRunner from './volumeBeatsRunner.js';
 import * as autoRunner from './autoRunner.js';
 import { seedReviewFromFindings, getReview } from './manuscriptReview.js';
 import { runEditorialChecks, buildEditorialCheckPlan } from './editorial/checkRunner.js';
+import { computeHealth } from './editorialScore.js';
 import { getSettings } from '../settings.js';
+import { readReadinessGate } from '../../lib/editorial/index.js';
 import { generateManuscriptFix, acceptManuscriptFix } from './manuscriptFix.js';
 import { verifyComicScript } from './scriptVerify.js';
 import { checkSeriesCanonReadiness } from './canonReadiness.js';
@@ -279,6 +281,16 @@ export function resolveNextStep(series, issues, runState = {}, options = {}) {
   // manuscript-review comment set. A no-op when no checks are enabled.
   if (!runState.editorialChecksReviewed) {
     return { kind: 'editorialChecks', reason: 'editorial checks not yet run this run' };
+  }
+
+  // STEP 5.3 — editorial health convergence gate (#1316). After BOTH editorial
+  // passes have seeded their findings, read the aggregate "ready" signal (no open
+  // findings above the configured readiness gate). The completeness loop only
+  // gates on its OWN high findings; the registry checks (5.2) can surface fresh
+  // blockers after it converged, so this final gate reconciles the whole review
+  // before visuals. Pauses with the residual blockers when not clean.
+  if (!runState.editorialHealthReady) {
+    return { kind: 'editorialHealthGate', reason: 'editorial health not yet confirmed clean this run' };
   }
 
   // STEP 5.5 — canon descriptive integrity. Before ANY visual production, every
@@ -557,6 +569,9 @@ async function runEditorial(sId, record) {
   if (maxRounds === 0) {
     record.runState.editorialReviewed = true;
     record.runState.editorialChecksReviewed = true;
+    // Skipping the editorial gate also skips its health convergence check (#1316)
+    // — the resolver must advance past editorialHealthGate too.
+    record.runState.editorialHealthReady = true;
     return {};
   }
   for (let round = 1; round <= maxRounds; round += 1) {
@@ -641,6 +656,36 @@ async function runEditorialChecksPass(sId, record) {
   }
   record.runState.editorialChecksReviewed = true;
   return {};
+}
+
+// STEP 5.3 — editorial health convergence gate (#1316). A cheap, no-LLM gate:
+// read the persisted review, compute the aggregate health under the configured
+// readiness gate, and either mark the run clean (proceed to visuals) or PAUSE
+// with the open blockers for human triage. This is the consolidated "ready"
+// signal — distinct from the completeness loop's own per-round high-only gate —
+// so a blocker the registry checks (5.2) surfaced after completeness converged
+// still stops the run. No auto-fix here: the completeness loop already attempted
+// fixes; remaining blockers need a human (or a re-run after edits).
+async function runEditorialHealthGate(sId, record) {
+  if (record.cancelRequested) return { canceled: true };
+  const settings = await getSettings().catch(() => null);
+  const gate = readReadinessGate(settings) || undefined;
+  const review = await getReview(sId).catch(() => ({ comments: [] }));
+  const health = computeHealth(review.comments || [], gate);
+  broadcast(sId, {
+    type: 'verify:round', scope: 'editorialHealth', round: 1,
+    findings: health.open, blocking: health.ready ? 0 : health.open, score: health.score,
+  });
+  if (health.ready) {
+    record.runState.editorialHealthReady = true;
+    return {};
+  }
+  // Not clean — surface the open blockers (the gate-relevant severities) as the
+  // residual the pause records, so the human sees exactly what's left.
+  const blockers = (review.comments || []).filter(
+    (c) => c.status === 'open' && (gate === 'noOpenHighOrMedium' ? ARC_BLOCKING.has(c.severity) : EDITORIAL_BLOCKING.has(c.severity)),
+  );
+  return { pause: true, reason: `editorial health not clean (score ${health.score}, ${health.open} open finding(s))`, residual: blockers };
 }
 
 // Turn a render-enqueue result into the { slotKey, slot } pair the render
@@ -872,6 +917,8 @@ async function dispatchStep(sId, step, record) {
       return runEditorial(sId, record);
     case 'editorialChecks':
       return runEditorialChecksPass(sId, record);
+    case 'editorialHealthGate':
+      return runEditorialHealthGate(sId, record);
     case 'canonVerify':
       return runCanonVerify(sId, record);
     case 'visualDraft':
@@ -908,6 +955,7 @@ function buildDryRunPlan(series, issues, options) {
   if (isComicTarget(series)) plan.push({ kind: 'scriptVerify', count: ordered.length });
   plan.push({ kind: 'editorialReview', count: 1, note: `up to ${MAX_EDITORIAL_ROUNDS} rounds` });
   plan.push({ kind: 'editorialChecks', count: 1, note: 'enabled editorial checks (#1284)' });
+  plan.push({ kind: 'editorialHealthGate', count: 1, note: 'editorial health readiness gate (#1316)' });
   if (VISUAL_DRAFT_ENABLED && wantsVisual(options) && isComicTarget(series)) {
     plan.push({ kind: 'canonVerify', count: 1, note: 'descriptive integrity of drawn nouns' });
     const visualNeeded = ordered.filter((i) => !visualReady(i)).length;
@@ -960,6 +1008,7 @@ export async function startSeriesAutopilot(sId, options = {}) {
       arcVerified: false,
       editorialReviewed: false,
       editorialChecksReviewed: false,
+      editorialHealthReady: false,
       canonVerified: false,
       episodesAttempted: new Set(),
       beatsAttempted: new Set(),
@@ -1017,8 +1066,11 @@ export async function startSeriesAutopilot(sId, options = {}) {
         // self-gates: runEditorialChecksPass only pauses/bills the budget when an
         // enabled LLM check will actually run (returning a pause result this loop
         // still handles), so a deterministic-only or all-disabled checks step can
-        // complete a text-ready series even with the budget exhausted.
-        if (step.kind !== 'editorialChecks') {
+        // complete a text-ready series even with the budget exhausted. The
+        // editorialHealthGate (#1316) is likewise exempt — it's a pure read +
+        // score with no LLM cost, so a budget-exhausted run can still produce its
+        // readiness verdict (and pause on the findings, not the budget).
+        if (step.kind !== 'editorialChecks' && step.kind !== 'editorialHealthGate') {
           const budget = await getDomainBudgetStatus('cos');
           if (!budget.withinBudget) {
             await persistMarker(sId, { status: 'paused', runId, currentStep: step.kind, lastError: `daily cos ${budget.exceeded} budget reached` });

@@ -4066,6 +4066,15 @@ export const readChecksSlice = (settings) => {
   return slice && typeof slice === 'object' && !Array.isArray(slice) ? slice : {};
 };
 
+// The editorial-health readiness gate (#1316) the autopilot loop + UI read as
+// "manuscript clean". Returns the raw stored value (or null) — the caller
+// resolves an unknown/absent value to the default via `resolveReadinessGate` in
+// editorialScore.js (kept there so the gate vocabulary lives with the scorer).
+export const readReadinessGate = (settings) => {
+  const gate = settings?.pipelineEditorialChecks?.readinessGate;
+  return typeof gate === 'string' && gate ? gate : null;
+};
+
 /**
  * Merge the static registry with persisted per-check state from settings.
  * Returns one row per registered check:

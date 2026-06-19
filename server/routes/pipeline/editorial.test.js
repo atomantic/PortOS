@@ -36,6 +36,14 @@ vi.mock('../../services/pipeline/editorial/checkRunner.js', () => ({
   cancelEditorialChecks: vi.fn(() => true),
 }));
 
+// Health service (#1316) — stub the read so the route test exercises the route
+// wiring (series-resolve + settings-gate resolution) without the file store.
+const getSeriesHealth = vi.fn(async (seriesId, opts) => ({ seriesId, score: 100, ready: true, gate: opts?.gate }));
+vi.mock('../../services/pipeline/editorialScore.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getSeriesHealth: (...a) => getSeriesHealth(...a),
+}));
+
 const editorialRoutes = (await import('./editorial.js')).default;
 
 const app = express();
@@ -46,6 +54,7 @@ app.use(errorMiddleware);
 beforeEach(() => {
   settingsStore = {};
   startEditorialChecksRun.mockClear();
+  getSeriesHealth.mockClear();
 });
 
 describe('GET /api/pipeline/editorial/checks', () => {
@@ -204,5 +213,47 @@ describe('custom checks CRUD (#1346)', () => {
 
   it('404s deleting an unknown custom id', async () => {
     expect((await request(app).delete('/api/pipeline/editorial/custom-checks/custom.nope')).status).toBe(404);
+  });
+});
+
+describe('editorial health (#1316)', () => {
+  it('GET .../editorial/health returns the health payload with the default gate', async () => {
+    const res = await request(app).get('/api/pipeline/series/s1/editorial/health');
+    expect(res.status).toBe(200);
+    expect(res.body.seriesId).toBe('s1');
+    expect(res.body.score).toBe(100);
+    // No gate configured → service called with the default.
+    expect(getSeriesHealth).toHaveBeenCalledWith('s1', { gate: 'noOpenHigh' });
+  });
+
+  it('GET .../editorial/health resolves the configured gate from settings', async () => {
+    await request(app).patch('/api/pipeline/editorial/readiness-gate').send({ readinessGate: 'noOpenHighOrMedium' });
+    await request(app).get('/api/pipeline/series/s1/editorial/health');
+    expect(getSeriesHealth).toHaveBeenLastCalledWith('s1', { gate: 'noOpenHighOrMedium' });
+  });
+
+  it('GET .../editorial/health 404s a missing series', async () => {
+    const res = await request(app).get('/api/pipeline/series/missing/editorial/health');
+    expect(res.status).toBe(404);
+    expect(getSeriesHealth).not.toHaveBeenCalled();
+  });
+
+  it('PATCH .../editorial/readiness-gate persists into the editorial-checks slice', async () => {
+    const res = await request(app).patch('/api/pipeline/editorial/readiness-gate').send({ readinessGate: 'none' });
+    expect(res.status).toBe(200);
+    expect(res.body.readinessGate).toBe('none');
+    expect(settingsStore.pipelineEditorialChecks.readinessGate).toBe('none');
+  });
+
+  it('PATCH .../editorial/readiness-gate 400s an unknown gate value', async () => {
+    const res = await request(app).patch('/api/pipeline/editorial/readiness-gate').send({ readinessGate: 'whenever' });
+    expect(res.status).toBe(400);
+  });
+
+  it('PATCH .../editorial/readiness-gate does not clobber existing check overrides', async () => {
+    await request(app).patch('/api/pipeline/editorial/checks/prose.info-dumping').send({ enabled: false });
+    await request(app).patch('/api/pipeline/editorial/readiness-gate').send({ readinessGate: 'noOpenHigh' });
+    expect(settingsStore.pipelineEditorialChecks.checks['prose.info-dumping'].enabled).toBe(false);
+    expect(settingsStore.pipelineEditorialChecks.readinessGate).toBe('noOpenHigh');
   });
 });

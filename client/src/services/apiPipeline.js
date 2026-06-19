@@ -698,6 +698,24 @@ export const cancelEditorialChecksRun = (seriesId, options = {}) =>
 export const editorialChecksRunSseUrl = (seriesId) =>
   `/api/pipeline/series/${encodeURIComponent(seriesId)}/editorial/checks/run/progress`;
 
+// ---- Editorial health score + revision trend (#1316) ----
+// The transparent severity-weighted health score (per series + per issue), the
+// readiness signal, and the revision trend + per-category regressions:
+// { seriesId, score, ready, open, openBySeverity, openByCategory, gate, weights,
+//   perIssue: [...], trend: { points, regressions, latest, previous, delta } }.
+export const getEditorialHealth = (seriesId, options = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/editorial/health`, options);
+
+// Set the editorial-health readiness gate ('noOpenHigh' | 'noOpenHighOrMedium' |
+// 'none') the autopilot loop + UI read as "manuscript clean". Returns the
+// persisted { readinessGate }.
+export const setEditorialReadinessGate = (readinessGate, options = {}) =>
+  request('/pipeline/editorial/readiness-gate', {
+    method: 'PATCH',
+    body: JSON.stringify({ readinessGate }),
+    ...options,
+  });
+
 // ---- Reverse Outline (scene segmentation + plotline tagging) ----
 // The stored outline: { plotlines, scenes, stale, status }. `status:'none'`
 // when never generated, `'no-content'` shell while nothing is drafted yet.
