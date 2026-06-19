@@ -135,12 +135,7 @@ export default function VisionDescribeModal({
       context: context.trim() || undefined,
       ...imagePayload(),
     }, { silent: true });
-    if (res?.description) {
-      setResult(res.description);
-      // Drop any prior structured proposal so the two result panels don't
-      // linger side-by-side after switching flows.
-      setProposed(null);
-    }
+    if (res?.description) setResult(res.description);
     return res;
   }, { errorMessage: 'Failed to describe image(s)' });
 
@@ -150,8 +145,8 @@ export default function VisionDescribeModal({
       context: context.trim() || undefined,
       ...imagePayload(),
     }, { silent: true });
-    // Drop any prior prose result so the two panels don't linger side-by-side.
-    setResult('');
+    // Keep any prose description that's already shown — both the description and
+    // the structured proposals stay open so the user can apply each in turn.
     if (res?.locked) {
       toast.error(`${entryName || 'This character'} is locked — unlock it to fill from an image`);
       return res;
@@ -168,10 +163,16 @@ export default function VisionDescribeModal({
     return res;
   }, { errorMessage: 'Failed to build details from image(s)' });
 
+  // Whether the structured-attributes panel still has unsaved proposals.
+  const hasPendingAttributes = !!proposed && proposed.updatedFields.length > 0;
+
   const applyDescription = () => {
     onApply(result.trim());
     toast.success(`Applied description to ${entryName || `this ${noun}`}`);
-    onClose();
+    // Clear just the description (it's saved); keep the modal open if the
+    // structured proposals are still unsaved so the user can apply those too.
+    setResult('');
+    if (!hasPendingAttributes) onClose();
   };
 
   const toggleField = (f) => {
@@ -198,7 +199,12 @@ export default function VisionDescribeModal({
     }
     onApplyFields(patch);
     toast.success(`Applied ${Object.keys(patch).length} detail${Object.keys(patch).length > 1 ? 's' : ''} to ${entryName || `this ${noun}`}`);
-    onClose();
+    // Clear just the proposals (they're saved); keep the modal open if a prose
+    // description is still unsaved so the user can apply that too.
+    setProposed(null);
+    setSelectedFields(new Set());
+    setFieldEdits({});
+    if (!result.trim()) onClose();
   };
 
   // A vision model must be explicitly selected — otherwise the request sends

@@ -78,4 +78,41 @@ describe('VisionDescribeModal', () => {
     // Edited value wins; unchecked field is dropped.
     expect(onApplyFields).toHaveBeenCalledWith({ pronouns: 'she/they' });
   });
+
+  it('keeps the description and attribute panels both open, closing only after the last is applied', async () => {
+    const onApply = vi.fn();
+    const onApplyFields = vi.fn();
+    const onClose = vi.fn();
+    apiMocks.describeEntityFromImages.mockResolvedValue({ description: 'a weathered barbarian', llm: {} });
+    apiMocks.expandEntityFromImages.mockResolvedValue({
+      fields: { pronouns: 'she/her' }, updatedFields: ['pronouns'], llm: {},
+    });
+    render(
+      <VisionDescribeModal {...baseProps} kind="character"
+        onApply={onApply} onApplyFields={onApplyFields} onClose={onClose} />,
+    );
+    fireEvent.change(document.querySelector('input[type="file"]'), {
+      target: { files: [new File(['x'], 'up.png', { type: 'image/png' })] },
+    });
+    // Describe → prose panel appears.
+    const describeBtn = screen.getByRole('button', { name: /Describe from image/i });
+    await waitFor(() => expect(describeBtn).not.toBeDisabled());
+    fireEvent.click(describeBtn);
+    await screen.findByRole('textbox', { name: /Generated description/i });
+
+    // Build → structured panel appears WITHOUT clearing the description.
+    fireEvent.click(screen.getByRole('button', { name: /Build character details/i }));
+    await screen.findByRole('textbox', { name: 'Pronouns' });
+    expect(screen.getByRole('textbox', { name: /Generated description/i })).toBeInTheDocument();
+
+    // Apply the attributes → modal stays open (description still unsaved).
+    fireEvent.click(screen.getByRole('button', { name: /Apply 1 detail/i }));
+    expect(onApplyFields).toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+
+    // Apply the description → now the modal closes.
+    fireEvent.click(screen.getByRole('button', { name: /Apply description/i }));
+    expect(onApply).toHaveBeenCalledWith('a weathered barbarian');
+    expect(onClose).toHaveBeenCalled();
+  });
 });
