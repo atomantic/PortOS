@@ -596,6 +596,13 @@
       "model": "heavy",
       "returnsJson": true,
       "variables": []
+    },
+    "pipeline-editorial-telling-emotion": {
+      "name": "Pipeline — Editorial Check: Telling-not-showing emotion",
+      "description": "Editorial check (#1306): the judgment layer for named-emotion statements (\"she was sad\", \"he felt nervous\") worth dramatizing through action/sensation/subtext. Reads the stitched manuscript; severity is advisory; skips dialogue, deliberate pacing, and already-shown emotion. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
     }
   }
 }

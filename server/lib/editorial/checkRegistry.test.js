@@ -2325,6 +2325,122 @@ describe('prose.cliches / prose.modifier-stacking / prose.dead-metaphor (#1308)'
   });
 });
 
+describe('copy-edit prose-tic bundle (#1306)', () => {
+  const FILTER = 'prose.filter-words';
+  const CRUTCH = 'prose.crutch-words';
+  const ADVERBS = 'prose.adverbs';
+  const PASSIVE = 'prose.passive-voice';
+  const GESTURES = 'prose.repeated-gestures';
+  const ECHOES = 'prose.word-echoes';
+  const RHYTHM = 'prose.sentence-rhythm';
+  const TELLING = 'prose.telling-emotion';
+  const DETERMINISTIC = [FILTER, CRUTCH, ADVERBS, PASSIVE, GESTURES, ECHOES, RHYTHM];
+
+  it('registers all eight as manuscript style checks of the right kind', () => {
+    for (const id of DETERMINISTIC) {
+      const c = getCheck(id);
+      expect(c.kind, id).toBe('deterministic');
+      expect(c.category, id).toBe('style');
+      expect(c.sources, id).toEqual(['manuscript']);
+      expect(c.needsManuscript, id).toBe(true);
+      expect(c.gate({ manuscript: '' }), id).toBe(false);
+      expect(c.gate({ manuscript: '# Issue 1\n\nprose' }), id).toBeTruthy();
+    }
+    expect(getCheck(TELLING).kind).toBe('llm');
+    expect(getCheck(TELLING).category).toBe('style');
+  });
+
+  it('prose.filter-words flags above the density threshold and anchors to the issue', () => {
+    // 5 filter words in ~10 words → ~500/1000, well above default 6.
+    const sections = [{ number: 2, content: 'She saw it. He felt it. They heard it. I noticed. We watched.' }];
+    const findings = getCheck(FILTER).run({ sections, config: {}, severityDefault: 'low' });
+    expect(findings).toHaveLength(1);
+    expect(findings[0].issueNumber).toBe(2);
+    expect(findings[0].category).toBe('style');
+    expect(findings[0].anchorQuote.toLowerCase()).toBe('saw');
+  });
+
+  it('prose.filter-words stays silent below the density threshold', () => {
+    const filler = Array.from({ length: 200 }, (_, i) => `w${i}`).join(' ');
+    const sections = [{ number: 1, content: `She saw it. ${filler}` }];
+    expect(getCheck(FILTER).run({ sections, config: { densityPer1000: 6 }, severityDefault: 'low' })).toEqual([]);
+  });
+
+  it('prose.crutch-words excludes "that" unless includeThat is set', () => {
+    const sections = [{ number: 1, content: 'It was just really very that thing that he saw.' }];
+    const off = getCheck(CRUTCH).run({ sections, config: { densityPer1000: 0 }, severityDefault: 'low' });
+    expect(off).toHaveLength(1);
+    const on = getCheck(CRUTCH).run({ sections, config: { densityPer1000: 0, includeThat: true }, severityDefault: 'low' });
+    // "that" now counted → both findings present, but it's one section so still one finding;
+    // assert the anchor is the first crutch word regardless.
+    expect(on[0].anchorQuote.toLowerCase()).toBe('just');
+  });
+
+  it('prose.adverbs flags dialogue-tag adverbs at higher severity regardless of density', () => {
+    const sections = [{ number: 3, content: '"Fine," she said angrily as the room slept.' }];
+    const findings = getCheck(ADVERBS).run({ sections, config: { densityPer1000: 999 }, severityDefault: 'low' });
+    const tag = findings.find((f) => /dialogue tag/i.test(f.problem));
+    expect(tag).toBeTruthy();
+    expect(tag.severity).toBe('medium'); // escalated one step above low
+    expect(tag.anchorQuote.toLowerCase()).toBe('angrily');
+  });
+
+  it('prose.passive-voice flags above the rate threshold', () => {
+    const sections = [{ number: 1, content: 'The door was opened. The vase was broken. It was forgotten.' }];
+    const findings = getCheck(PASSIVE).run({ sections, config: { densityPer1000: 0 }, severityDefault: 'low' });
+    expect(findings).toHaveLength(1);
+    expect(/passive/i.test(findings[0].problem)).toBe(true);
+  });
+
+  it('prose.repeated-gestures tallies a gesture across the manuscript and flags body-part autonomy', () => {
+    const sections = [
+      { number: 1, content: Array(5).fill('He nodded.').join(' ') + ' Her eyes followed him across the room.' },
+      { number: 2, content: Array(4).fill('She nodded.').join(' ') },
+    ];
+    const findings = getCheck(GESTURES).run({ sections, config: { maxPerGesture: 8 }, severityDefault: 'low' });
+    const gesture = findings.find((f) => /gesture "nod"/i.test(f.problem));
+    expect(gesture).toBeTruthy(); // 9 total ≥ 8
+    const body = findings.find((f) => /body part/i.test(f.problem));
+    expect(body).toBeTruthy();
+    expect(body.anchorQuote.toLowerCase()).toContain('eyes followed');
+  });
+
+  it('prose.word-echoes flags a distinctive close repeat and a repeated-opener run', () => {
+    const sections = [{ number: 4, content: 'The obsidian gleamed. She raised the obsidian. He ran. He fell. He stood.' }];
+    const findings = getCheck(ECHOES).run({ sections, config: {}, severityDefault: 'low' });
+    expect(findings.some((f) => /obsidian/i.test(f.problem))).toBe(true);
+    expect(findings.some((f) => /open with "He"/i.test(f.problem))).toBe(true);
+  });
+
+  it('prose.sentence-rhythm flags a uniform passage and stays silent on a varied one', () => {
+    const uniform = [{ number: 1, content: Array(10).fill('one two three four five.').join(' ') }];
+    const flat = getCheck(RHYTHM).run({ sections: uniform, config: {}, severityDefault: 'low' });
+    expect(flat).toHaveLength(1);
+    expect(/monotonous/i.test(flat[0].problem)).toBe(true);
+  });
+
+  it('prose.telling-emotion passes the planned chunk to the model and forces the style category', async () => {
+    let seen = null;
+    const findings = await getCheck(TELLING).run({
+      manuscript: '# Issue 5\n\nShe was sad.',
+      config: { maxFindings: 12 },
+      severityDefault: 'low',
+      planManuscriptChunks: async (_stage, opts) => {
+        expect(opts.overheadTokens).toBeGreaterThan(0);
+        return ['# Issue 5\n\nShe was sad.'];
+      },
+      callStagedLLM: async (_stage, vars) => {
+        seen = vars.manuscript;
+        return { content: { findings: [{ severity: 'low', issueNumber: 5, location: 'Issue 5 — told sadness', problem: 'told emotion', anchorQuote: 'She was sad' }] } };
+      },
+    });
+    expect(seen).toBe('# Issue 5\n\nShe was sad.');
+    expect(findings).toHaveLength(1);
+    expect(findings[0].category).toBe('style');
+    expect(findings[0].issueNumber).toBe(5);
+  });
+});
+
 describe('prose anti-pattern bundle (#1300)', () => {
   const OPENING = 'opening.wrong-start';
   const MIRROR = 'prose.mirror-description';

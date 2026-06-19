@@ -30,6 +30,18 @@ import { renderCharacterArcsForPrompt } from '../seriesCharacterArc.js';
 import { analyzeNamePair, findFirstLetterClusters, normalizeName } from './nameSimilarity.js';
 import { findCliches, findModifierStacking } from './cliches.js';
 import { findItalicThoughts } from './italicThoughts.js';
+import {
+  findFilterWords,
+  findCrutchWords,
+  findAdverbs,
+  findPassiveVoice,
+  findGestures,
+} from './proseTics.js';
+import {
+  findWordEchoes,
+  findRepeatedOpeners,
+  measureSentenceRhythm,
+} from './repetition.js';
 
 export const CHECK_SCOPES = Object.freeze(['series', 'issue', 'scene', 'noun']);
 export const CHECK_KINDS = Object.freeze(['deterministic', 'llm']);
@@ -195,6 +207,15 @@ export const WHITE_ROOM_STAGE = 'pipeline-editorial-white-room';
 // stitched manuscript plus the reverse-outline scene map and the AUTHORED
 // per-character arcs to surface genuine change moments + flat-arc warnings.
 export const ARC_TRANSITIONS_STAGE = 'pipeline-editorial-arc-transitions';
+
+// Stage name for the telling-not-showing-emotion LLM check (#1306). Ships in
+// data.reference/prompts/stages/ + stage-config.json (fresh installs via
+// setup-data.js) and migrates to existing installs via migration 110 (boot runs
+// migrations but NOT setup-data, so the migration is required). The deterministic
+// copy-edit siblings (prose.filter-words, prose.crutch-words, prose.adverbs,
+// prose.passive-voice, prose.repeated-gestures, prose.word-echoes,
+// prose.sentence-rhythm) need no stage.
+export const TELLING_EMOTION_STAGE = 'pipeline-editorial-telling-emotion';
 
 // Render the authored reader-map cliffhangers (#1298) into a compact text block
 // the chapter-ending check passes alongside the manuscript so the model
@@ -980,6 +1001,62 @@ export function sceneGroundingSummary(scenes) {
 function splitPhraseList(value) {
   if (typeof value !== 'string' || !value.trim()) return [];
   return value.split(/[,\n]/).map((p) => p.trim()).filter(Boolean);
+}
+
+// ---------------------------------------------------------------------------
+// Copy-edit prose-tic checks (#1306). The deterministic word-level scanners live
+// in proseTics.js / repetition.js; these helpers turn raw occurrences into the
+// density-scaled findings the registry emits. Density matters: one "just" is
+// fine, forty is a tic — so each check measures per-1000-word frequency against
+// a configurable threshold and only flags when the rate (not the raw count) is
+// high. Findings anchor on the FIRST offending occurrence in each section.
+// ---------------------------------------------------------------------------
+
+// Word count of a section's prose (for per-1000-word density). Cheap word
+// tokenization — apostrophes kept inside words so contractions count once.
+function countWords(text) {
+  return (String(text || '').match(/[A-Za-z][A-Za-z']*/g) || []).length;
+}
+
+// Map a section to its issue label/number once (used by every prose-tic check).
+function sectionIssue(s) {
+  const number = Number.isInteger(s?.number) ? s.number : null;
+  return { number, location: number != null ? `Issue ${number}` : 'Manuscript' };
+}
+
+// Shared driver for the per-1000-word density checks (filter words, crutch
+// words, passive voice). For each section it runs the supplied `scan`, computes
+// the per-1000-word rate, and emits one finding per section whose rate is at or
+// above the configured `densityPer1000` — anchored to the first occurrence.
+// `opts` declares the section scan, a noun for messages, and problem/suggestion
+// builders. `scan(text, cfg)` returns `[{ index, anchor }, …]` occurrences.
+function runDensityCheck(ctx, opts) {
+  const cfg = ctx.config || {};
+  const max = cfg.maxFindings ?? 20;
+  const density = cfg.densityPer1000 ?? 0;
+  const sections = Array.isArray(ctx.sections) ? ctx.sections : [];
+  const findings = [];
+  for (const s of sections) {
+    if (findings.length >= max) break;
+    const text = s?.content || '';
+    const words = countWords(text);
+    if (words === 0) continue;
+    const hits = opts.scan(text, cfg);
+    if (!hits.length) continue;
+    const rate = Math.round((hits.length / words) * 1000 * 10) / 10;
+    if (rate < density) continue;
+    const { number, location } = sectionIssue(s);
+    findings.push({
+      severity: ctx.severityDefault,
+      category: 'style',
+      location,
+      problem: opts.problem(hits.length, rate, hits[0].anchor),
+      suggestion: opts.suggestion,
+      anchorQuote: hits[0].anchor,
+      issueNumber: number,
+    });
+  }
+  return findings;
 }
 
 export const EDITORIAL_CHECKS = [
@@ -2351,6 +2428,398 @@ export const EDITORIAL_CHECKS = [
       }
       return findings;
     },
+  },
+  {
+    id: 'prose.filter-words',
+    sources: ['manuscript'],
+    label: 'Filter words (distancing verbs)',
+    description:
+      'Flags distancing verbs that narrate experience instead of dramatizing it — "she saw the door open", "he felt the cold", "they noticed a shadow". Density-scaled: a high per-1000-word rate of saw/watched/noticed/realized/felt/heard/seemed/wondered/began-to is the tic. Collapse to direct experience ("the door opened").',
+    scope: 'issue',
+    kind: 'deterministic',
+    category: 'style',
+    severityDefault: 'low',
+    defaultEnabled: true,
+    needsManuscript: true,
+    configSchema: z.object({
+      // Per-1000-word rate at/above which a section is flagged.
+      densityPer1000: z.number().min(0).max(50).default(6),
+      // Cap findings per run so a heavy draft can't flood the review.
+      maxFindings: z.number().int().min(1).max(50).default(20),
+      // House-style allowlist / extra filter words (comma- or newline-separated).
+      allowWords: z.string().default(''),
+      extraWords: z.string().default(''),
+    }),
+    configFields: [
+      { key: 'densityPer1000', label: 'Filter-word rate to flag (per 1000 words)', type: 'number', min: 0, max: 50, step: 1, help: 'Flag a section whose filter-word frequency per 1000 words is at or above this. One "saw" is fine; a steady drumbeat is the tic.' },
+      { key: 'maxFindings', label: 'Max findings per run', type: 'number', min: 1, max: 50, step: 1, help: 'Cap findings so a heavy draft can not flood the review.' },
+      { key: 'allowWords', label: 'House-style allowlist', type: 'text', help: 'Filter words to leave alone (comma-separated or one per line).' },
+      { key: 'extraWords', label: 'Extra filter words to flag', type: 'text', help: 'Series-specific distancing verbs to add (comma-separated or one per line).' },
+    ],
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    run: (ctx) => runDensityCheck(ctx, {
+      scan: (text, cfg) => findFilterWords(text, { allowWords: splitPhraseList(cfg.allowWords), extraWords: splitPhraseList(cfg.extraWords) }),
+      noun: 'filter words',
+      problem: (count, rate, anchor) => `${count} filter word${count === 1 ? '' : 's'} (e.g. "${anchor}") — about ${rate}/1000 words. Distancing verbs put a layer of narration between the reader and the experience.`,
+      suggestion: 'Collapse to direct experience — "she saw the door open" → "the door opened" — or add intentional uses to the allowlist.',
+    }),
+  },
+  {
+    id: 'prose.crutch-words',
+    sources: ['manuscript'],
+    label: 'Crutch / filler words',
+    description:
+      'Flags intensifier/hedge crutch words that almost always delete cleanly — just, really, very, quite, somewhat, suddenly, actually, basically, "in order to". Density-scaled per-1000-word frequency. Bare "that" (usually deletable) is included only when the toggle is on, since grammatical "that" would swamp the count.',
+    scope: 'issue',
+    kind: 'deterministic',
+    category: 'style',
+    severityDefault: 'low',
+    defaultEnabled: true,
+    needsManuscript: true,
+    configSchema: z.object({
+      densityPer1000: z.number().min(0).max(50).default(8),
+      maxFindings: z.number().int().min(1).max(50).default(20),
+      // Include bare "that" (the deletable relative-clause "that"). Off by default
+      // — grammatical "that" is common enough to swamp the density signal.
+      includeThat: z.boolean().default(false),
+      allowWords: z.string().default(''),
+      extraWords: z.string().default(''),
+    }),
+    configFields: [
+      { key: 'densityPer1000', label: 'Crutch-word rate to flag (per 1000 words)', type: 'number', min: 0, max: 50, step: 1, help: 'Flag a section whose crutch-word frequency per 1000 words is at or above this.' },
+      { key: 'maxFindings', label: 'Max findings per run', type: 'number', min: 1, max: 50, step: 1, help: 'Cap findings so a heavy draft can not flood the review.' },
+      { key: 'includeThat', label: 'Include deletable "that"', type: 'boolean', help: 'Count bare "that" as a crutch word. Off by default — grammatical "that" is common and would swamp the signal.' },
+      { key: 'allowWords', label: 'House-style allowlist', type: 'text', help: 'Crutch words to leave alone (comma-separated or one per line).' },
+      { key: 'extraWords', label: 'Extra crutch words to flag', type: 'text', help: 'Series-specific fillers to add (comma-separated or one per line).' },
+    ],
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    run: (ctx) => runDensityCheck(ctx, {
+      scan: (text, cfg) => findCrutchWords(text, { includeThat: cfg.includeThat === true, allowWords: splitPhraseList(cfg.allowWords), extraWords: splitPhraseList(cfg.extraWords) }),
+      noun: 'crutch words',
+      problem: (count, rate, anchor) => `${count} crutch/filler word${count === 1 ? '' : 's'} (e.g. "${anchor}") — about ${rate}/1000 words. Intensifiers and hedges like these usually delete cleanly and tighten the prose.`,
+      suggestion: 'Delete the filler or replace the propped-up word with a stronger one ("really big" → "enormous").',
+    }),
+  },
+  {
+    id: 'prose.adverbs',
+    sources: ['manuscript'],
+    label: 'Adverb overuse (-ly + dialogue tags)',
+    description:
+      'Flags overuse of -ly adverbs, especially those propping up weak verbs ("ran quickly" → "sprinted") and adverb-laden dialogue tags ("she said angrily"). Density-scaled; dialogue-tag adverbs ("said X-ly") are reported as the higher-severity sub-signal because the tag should carry its weight through the dialogue itself.',
+    scope: 'issue',
+    kind: 'deterministic',
+    category: 'style',
+    severityDefault: 'low',
+    defaultEnabled: true,
+    needsManuscript: true,
+    configSchema: z.object({
+      densityPer1000: z.number().min(0).max(80).default(15),
+      maxFindings: z.number().int().min(1).max(50).default(20),
+      allowWords: z.string().default(''),
+    }),
+    configFields: [
+      { key: 'densityPer1000', label: 'Adverb rate to flag (per 1000 words)', type: 'number', min: 0, max: 80, step: 1, help: 'Flag a section whose -ly adverb frequency per 1000 words is at or above this.' },
+      { key: 'maxFindings', label: 'Max findings per run', type: 'number', min: 1, max: 50, step: 1, help: 'Cap findings so a heavy draft can not flood the review.' },
+      { key: 'allowWords', label: 'House-style allowlist', type: 'text', help: 'Adverbs to leave alone (comma-separated or one per line).' },
+    ],
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    run: (ctx) => {
+      const cfg = ctx.config || {};
+      const max = cfg.maxFindings ?? 20;
+      const density = cfg.densityPer1000 ?? 15;
+      const allowWords = splitPhraseList(cfg.allowWords);
+      const sections = Array.isArray(ctx.sections) ? ctx.sections : [];
+      const findings = [];
+      for (const s of sections) {
+        if (findings.length >= max) break;
+        const text = s?.content || '';
+        const words = countWords(text);
+        if (words === 0) continue;
+        const hits = findAdverbs(text, { allowWords });
+        if (!hits.length) continue;
+        const rate = Math.round((hits.length / words) * 1000 * 10) / 10;
+        const tagHits = hits.filter((h) => h.dialogueTag);
+        const { number, location } = sectionIssue(s);
+        // Dialogue-tag adverbs are flagged regardless of overall density (one
+        // "said angrily" is already a tell); the bulk -ly density is gated on rate.
+        if (tagHits.length) {
+          findings.push({
+            severity: escalateSeverity(ctx.severityDefault, 1),
+            category: 'style',
+            location,
+            problem: `${tagHits.length} adverb-laden dialogue tag${tagHits.length === 1 ? '' : 's'} (e.g. "${tagHits[0].anchor}") — a dialogue tag propped up by an adverb usually means the line itself should carry the tone.`,
+            suggestion: 'Cut the adverb and let the dialogue + action beat convey the tone ("she said angrily" → "she slammed the cup down. “Fine.”").',
+            anchorQuote: tagHits[0].anchor,
+            issueNumber: number,
+          });
+          if (findings.length >= max) break;
+        }
+        if (rate >= density) {
+          findings.push({
+            severity: ctx.severityDefault,
+            category: 'style',
+            location,
+            problem: `${hits.length} -ly adverbs (about ${rate}/1000 words) — adverb overuse, especially propping up weak verbs ("ran quickly").`,
+            suggestion: 'Replace verb+adverb pairs with one strong verb ("ran quickly" → "sprinted"); keep only the adverbs that change the meaning.',
+            anchorQuote: hits[0].anchor,
+            issueNumber: number,
+          });
+        }
+      }
+      return findings;
+    },
+  },
+  {
+    id: 'prose.passive-voice',
+    sources: ['manuscript'],
+    label: 'Passive voice (overuse)',
+    description:
+      'Advisory flag for passive-voice overuse — a be-verb + past participle heuristic ("the door was opened", "mistakes were made"). Density-scaled per-1000-word frequency; passive voice is a legitimate choice, so this only flags when the rate is high.',
+    scope: 'issue',
+    kind: 'deterministic',
+    category: 'style',
+    severityDefault: 'low',
+    defaultEnabled: true,
+    needsManuscript: true,
+    configSchema: z.object({
+      densityPer1000: z.number().min(0).max(50).default(10),
+      maxFindings: z.number().int().min(1).max(50).default(20),
+    }),
+    configFields: [
+      { key: 'densityPer1000', label: 'Passive-voice rate to flag (per 1000 words)', type: 'number', min: 0, max: 50, step: 1, help: 'Flag a section whose passive-construction frequency per 1000 words is at or above this. Advisory — passive voice is sometimes the right choice.' },
+      { key: 'maxFindings', label: 'Max findings per run', type: 'number', min: 1, max: 50, step: 1, help: 'Cap findings so a heavy draft can not flood the review.' },
+    ],
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    run: (ctx) => runDensityCheck(ctx, {
+      scan: (text) => findPassiveVoice(text),
+      noun: 'passive constructions',
+      problem: (count, rate, anchor) => `${count} passive construction${count === 1 ? '' : 's'} (e.g. "${anchor}") — about ${rate}/1000 words. Heavy passive voice distances the reader from who is acting.`,
+      suggestion: 'Rephrase to active voice where it sharpens the prose ("the door was opened by Sam" → "Sam opened the door"). Keep passive where the actor is unknown or beside the point.',
+    }),
+  },
+  {
+    id: 'prose.repeated-gestures',
+    sources: ['manuscript'],
+    label: 'Repeated gestures / body-part autonomy',
+    description:
+      'Flags overused body-language gestures (nodded, smiled, shrugged, sighed, frowned) tallied across the manuscript, plus "body-part autonomy" — detached body parts that act on their own ("her eyes followed him across the room", "his hand shot out"). A reader-pet-peeve goldmine.',
+    scope: 'series',
+    kind: 'deterministic',
+    category: 'style',
+    severityDefault: 'low',
+    defaultEnabled: true,
+    needsManuscript: true,
+    configSchema: z.object({
+      // A gesture tallied this many times across the manuscript is flagged.
+      maxPerGesture: z.number().int().min(2).max(50).default(8),
+      maxFindings: z.number().int().min(1).max(50).default(20),
+      allowWords: z.string().default(''),
+      extraWords: z.string().default(''),
+    }),
+    configFields: [
+      { key: 'maxPerGesture', label: 'Gesture count to flag', type: 'number', min: 2, max: 50, step: 1, help: 'Flag a gesture verb (nodded, smiled, shrugged…) once its total count across the manuscript reaches this.' },
+      { key: 'maxFindings', label: 'Max findings per run', type: 'number', min: 1, max: 50, step: 1, help: 'Cap findings so a heavy draft can not flood the review.' },
+      { key: 'allowWords', label: 'House-style allowlist', type: 'text', help: 'Gesture verbs to leave alone (comma-separated or one per line).' },
+      { key: 'extraWords', label: 'Extra gestures to track', type: 'text', help: 'Series-specific gestures to add (comma-separated or one per line).' },
+    ],
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    run: (ctx) => {
+      const cfg = ctx.config || {};
+      const max = cfg.maxFindings ?? 20;
+      const maxPerGesture = cfg.maxPerGesture ?? 8;
+      const allowWords = splitPhraseList(cfg.allowWords);
+      const extraWords = splitPhraseList(cfg.extraWords);
+      const sections = Array.isArray(ctx.sections) ? ctx.sections : [];
+      const findings = [];
+      // Manuscript-wide gesture tally (an overused gesture is a whole-corpus tic,
+      // not a per-issue one); track the first anchor + issue for each gesture.
+      const tally = new Map(); // base → { count, anchor, issueNumber }
+      const bodyParts = [];
+      for (const s of sections) {
+        const { gestures, bodyParts: bp } = findGestures(s?.content || '', { allowWords, extraWords });
+        const { number } = sectionIssue(s);
+        for (const g of gestures) {
+          const cur = tally.get(g.base) || { count: 0, anchor: g.anchor, issueNumber: number };
+          cur.count += 1;
+          tally.set(g.base, cur);
+        }
+        for (const b of bp) bodyParts.push({ ...b, issueNumber: number });
+      }
+      // Overused-gesture findings (sorted by count, worst first).
+      const overused = [...tally.entries()]
+        .filter(([, v]) => v.count >= maxPerGesture)
+        .sort((a, b) => b[1].count - a[1].count);
+      for (const [base, info] of overused) {
+        if (findings.length >= max) break;
+        findings.push({
+          severity: escalateSeverity(ctx.severityDefault, info.count >= maxPerGesture * 2 ? 1 : 0),
+          category: 'style',
+          location: info.issueNumber != null ? `Issue ${info.issueNumber}` : 'Manuscript',
+          problem: `The gesture "${base}" appears about ${info.count} times across the manuscript — a repeated body-language tic readers notice.`,
+          suggestion: 'Vary the beat or cut some entirely — let dialogue and context carry the emotion instead of a recurring nod/smile/shrug.',
+          anchorQuote: info.anchor,
+          issueNumber: info.issueNumber,
+        });
+      }
+      // Body-part-autonomy findings (one per occurrence, capped).
+      for (const b of bodyParts) {
+        if (findings.length >= max) break;
+        findings.push({
+          severity: ctx.severityDefault,
+          category: 'style',
+          location: b.issueNumber != null ? `Issue ${b.issueNumber}` : 'Manuscript',
+          problem: `Detached body part acting on its own ("${b.anchor}") — "body-part autonomy" reads oddly literal and is a common reader pet peeve.`,
+          suggestion: 'Re-anchor the action to the character ("her eyes followed him" → "she watched him cross the room").',
+          anchorQuote: b.anchor,
+          issueNumber: b.issueNumber,
+        });
+      }
+      return findings;
+    },
+  },
+  {
+    id: 'prose.word-echoes',
+    sources: ['manuscript'],
+    label: 'Word repetition / echoes',
+    description:
+      'Flags a distinctive word repeated within a short window ("obsidian… obsidian" three sentences apart) and runs of sentences that open with the same word ("He… He… He…"). Common words are ignored; only conspicuous echoes are flagged.',
+    scope: 'issue',
+    kind: 'deterministic',
+    category: 'style',
+    severityDefault: 'low',
+    defaultEnabled: true,
+    needsManuscript: true,
+    configSchema: z.object({
+      // How close (in words) two occurrences must be to count as an echo.
+      windowWords: z.number().int().min(5).max(200).default(50),
+      // Sentences in a row sharing an opener before it's flagged.
+      minOpenerRun: z.number().int().min(2).max(8).default(3),
+      maxFindings: z.number().int().min(1).max(50).default(20),
+    }),
+    configFields: [
+      { key: 'windowWords', label: 'Echo window (words)', type: 'number', min: 5, max: 200, step: 5, help: 'A distinctive word repeated within this many words counts as an echo.' },
+      { key: 'minOpenerRun', label: 'Repeated-opener run to flag', type: 'number', min: 2, max: 8, step: 1, help: 'How many sentences in a row starting with the same word trips the repeated-opener flag.' },
+      { key: 'maxFindings', label: 'Max findings per run', type: 'number', min: 1, max: 50, step: 1, help: 'Cap findings so a heavy draft can not flood the review.' },
+    ],
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    run: (ctx) => {
+      const cfg = ctx.config || {};
+      const max = cfg.maxFindings ?? 20;
+      const windowWords = cfg.windowWords ?? 50;
+      const minRun = cfg.minOpenerRun ?? 3;
+      const sections = Array.isArray(ctx.sections) ? ctx.sections : [];
+      const findings = [];
+      for (const s of sections) {
+        if (findings.length >= max) break;
+        const text = s?.content || '';
+        const { number, location } = sectionIssue(s);
+        for (const echo of findWordEchoes(text, { windowWords })) {
+          if (findings.length >= max) break;
+          findings.push({
+            severity: ctx.severityDefault,
+            category: 'style',
+            location,
+            problem: `The distinctive word "${echo.word}" repeats within ${echo.gap} words — a close echo readers notice.`,
+            suggestion: 'Vary the wording or move one instance further away (close repetition of an ordinary word is invisible; a distinctive one echoes).',
+            anchorQuote: echo.anchor,
+            issueNumber: number,
+          });
+        }
+        for (const run of findRepeatedOpeners(text, { minRun })) {
+          if (findings.length >= max) break;
+          findings.push({
+            severity: ctx.severityDefault,
+            category: 'style',
+            location,
+            problem: `${run.count} sentences in a row open with "${run.word}" — monotonous sentence-start rhythm ("${run.word}… ${run.word}… ${run.word}…").`,
+            suggestion: 'Recast some openers — lead with a different subject, a subordinate clause, or merge sentences to break the pattern.',
+            anchorQuote: run.anchor,
+            issueNumber: number,
+          });
+        }
+      }
+      return findings;
+    },
+  },
+  {
+    id: 'prose.sentence-rhythm',
+    sources: ['manuscript'],
+    label: 'Sentence rhythm & variety',
+    description:
+      'Advisory flag for monotonous sentence rhythm — when nearly every sentence in an issue is the same length (low variation in word count). Varied sentence length is what gives prose its music; a uniform cadence reads flat.',
+    scope: 'issue',
+    kind: 'deterministic',
+    category: 'style',
+    severityDefault: 'low',
+    defaultEnabled: true,
+    needsManuscript: true,
+    configSchema: z.object({
+      // Coefficient of variation (stddev/mean of sentence lengths) at/below which
+      // the rhythm is "monotonous". Lower = stricter (only the flattest passages).
+      minVariation: z.number().min(0).max(1).default(0.35),
+      // Don't judge rhythm on a passage shorter than this many sentences.
+      minSentences: z.number().int().min(3).max(50).default(8),
+      maxFindings: z.number().int().min(1).max(50).default(20),
+    }),
+    configFields: [
+      { key: 'minVariation', label: 'Variation threshold', type: 'number', min: 0, max: 1, step: 0.05, help: 'Flag an issue whose sentence-length variation (stddev / mean) is at or below this. Lower = only the flattest, most uniform passages.' },
+      { key: 'minSentences', label: 'Minimum sentences to judge', type: 'number', min: 3, max: 50, step: 1, help: 'Skip passages shorter than this many sentences (too few to judge rhythm).' },
+      { key: 'maxFindings', label: 'Max findings per run', type: 'number', min: 1, max: 50, step: 1, help: 'Cap findings so a heavy draft can not flood the review.' },
+    ],
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    run: (ctx) => {
+      const cfg = ctx.config || {};
+      const max = cfg.maxFindings ?? 20;
+      const minVariation = cfg.minVariation ?? 0.35;
+      const minSentences = cfg.minSentences ?? 8;
+      const sections = Array.isArray(ctx.sections) ? ctx.sections : [];
+      const findings = [];
+      for (const s of sections) {
+        if (findings.length >= max) break;
+        const r = measureSentenceRhythm(s?.content || '', { minSentences });
+        if (!r || r.cv > minVariation) continue;
+        const { number, location } = sectionIssue(s);
+        const meanRounded = Math.round(r.mean);
+        findings.push({
+          severity: ctx.severityDefault,
+          category: 'style',
+          location,
+          problem: `Monotonous sentence rhythm — ${r.count} sentences averaging ${meanRounded} words with little length variation (variation ${Math.round(r.cv * 100) / 100}). A uniform cadence reads flat.`,
+          suggestion: 'Vary sentence length deliberately — cut a long sentence with a short punchy one, or combine choppy sentences to build momentum.',
+          anchorQuote: '',
+          issueNumber: number,
+        });
+      }
+      return findings;
+    },
+  },
+  {
+    id: 'prose.telling-emotion',
+    sources: ['manuscript'],
+    label: 'Telling-not-showing emotion (LLM)',
+    description:
+      'LLM scan for named-emotion statements ("she was sad", "he felt nervous", "they were afraid") that the prose tells rather than dramatizes. Flags strong candidates to convert to showing (action, sensation, subtext) — LLM-judged to avoid the false positives a bare keyword scan would produce.',
+    scope: 'issue',
+    kind: 'llm',
+    category: 'style',
+    severityDefault: 'low',
+    defaultEnabled: true,
+    needsManuscript: true,
+    configSchema: z.object({
+      maxFindings: z.number().int().min(1).max(50).default(12),
+    }),
+    configFields: [
+      { key: 'maxFindings', label: 'Max findings per run', type: 'number', min: 1, max: 50, step: 1, help: 'Cap findings so a long manuscript can not flood the review.' },
+    ],
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    // Localized prose-level findings (one told emotion = one spot), so this stays
+    // a plain per-chunk run with no cross-chunk digest — mirrors prose.dead-metaphor.
+    run: (ctx) => runManuscriptLlmCheck(ctx, {
+      stage: TELLING_EMOTION_STAGE,
+      category: 'style',
+      overheadTokens: EDITORIAL_PROMPT_OVERHEAD_TOKENS,
+      buildVars: (manuscript) => ({ manuscript }),
+    }),
   },
   {
     id: 'prose.dead-metaphor',
