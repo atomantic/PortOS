@@ -32,7 +32,9 @@ describe('buildingHasInteriorWindows', () => {
 });
 
 describe('computeWindowGrid', () => {
-  const dims = { width: 2, depth: 2, height: 5, seed: 42 };
+  // Asymmetric width !== depth so the per-face extent logic is actually
+  // exercised (a width/depth swap in the placement math would change results).
+  const dims = { width: 3, depth: 2, height: 5, seed: 42 };
 
   it('tiles all four vertical faces', () => {
     const windows = computeWindowGrid(dims);
@@ -65,15 +67,18 @@ describe('computeWindowGrid', () => {
     }
   });
 
-  it('keeps every pane within the usable vertical band and face width', () => {
-    const { width, height } = dims;
+  it('keeps every pane within the usable vertical band and its own face width', () => {
+    const { width, depth, height } = dims;
     for (const w of computeWindowGrid(dims)) {
       const [x, y, z] = w.position;
       expect(y).toBeGreaterThanOrEqual(INTERIOR_WINDOW.marginBottom);
       expect(y).toBeLessThanOrEqual(height - INTERIOR_WINDOW.marginTop);
-      // The horizontal axis of each face stays inside the face half-width.
-      const horiz = w.rotationY === 0 || w.rotationY === Math.PI ? x : z;
-      expect(Math.abs(horiz)).toBeLessThanOrEqual(width / 2);
+      // Front/back faces span `width` (along x); side faces span `depth` (along
+      // z). Each pane must stay inside the half-extent of its own face.
+      const frontBack = w.rotationY === 0 || w.rotationY === Math.PI;
+      const horiz = frontBack ? x : z;
+      const halfExtent = (frontBack ? width : depth) / 2;
+      expect(Math.abs(horiz)).toBeLessThanOrEqual(halfExtent);
     }
   });
 
