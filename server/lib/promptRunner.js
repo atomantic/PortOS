@@ -487,7 +487,17 @@ async function markProviderUnavailableFromError(failed, errorMessage, runnerAnal
   // provider is healthy and other prompts still work. Don't bench it (which
   // would route every subsequent task to the fallback for a full cooldown);
   // this single call still falls back via the caller's retry path.
-  if (category === ERROR_CATEGORIES.CONTENT_REFUSAL) return;
+  //
+  // A model-not-found is REQUEST-specific the same way: the request named a
+  // model id the (reachable) endpoint doesn't have — a bad caller/config model,
+  // not the provider being down. Benching the whole provider would take its
+  // OTHER valid models offline for the full cooldown (e.g. one bad
+  // `codex-configured-default` vision call benching Ollama so a correct
+  // `qwen2.5vl` call then proactively swaps to a non-vision fallback). The
+  // single failing call still falls back via the retry path; the provider stays
+  // available for its working models. A genuine endpoint outage surfaces as
+  // NETWORK_ERROR, not MODEL_NOT_FOUND, so it is still benched.
+  if (category === ERROR_CATEGORIES.CONTENT_REFUSAL || category === ERROR_CATEGORIES.MODEL_NOT_FOUND) return;
 
   if (category === ERROR_CATEGORIES.USAGE_LIMIT) {
     await providerStatus.markUsageLimit(failed.id, {
