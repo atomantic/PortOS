@@ -19,7 +19,7 @@ import { randomUUID, createHash } from 'crypto';
 import { createSseRunner } from '../../../lib/sseUtils.js';
 import { runStagedLLM, runInlineLLM, runStageScopedInlineLLM, resolveStageContext } from '../../../lib/stageRunner.js';
 import { planManuscriptPass } from '../../../lib/contextBudget.js';
-import { getEnabledChecks, getEnabledCheckRows, getAllChecks, EDITORIAL_SOURCES } from '../../../lib/editorial/index.js';
+import { getEnabledChecks, getEnabledCheckRows, getAllChecks, EDITORIAL_SOURCES, comicLetteringIssues } from '../../../lib/editorial/index.js';
 import { getSettings } from '../../settings.js';
 import { getSeries } from '../series.js';
 import { listIssues } from '../issues.js';
@@ -81,7 +81,37 @@ const SOURCE_RESOLVERS = {
   // against (#1293). Lives on the already-loaded series record, so no extra I/O
   // — fingerprint the whole array so any arc/transition edit stales the findings.
   'series.characterArcs': ({ series }) => canonicalStringify(series?.characterArcs ?? null),
+  // Every issue's AUTHORITATIVE comic lettering content, keyed by issue number
+  // (#1313). The lettering-density check reads the edited comic-pages split (or the
+  // generated script when unsplit) — NOT the prose manuscript — so it gets its own
+  // source token: editing a comic script/page stales lettering findings without
+  // staling prose findings, and vice-versa. `projectComicLetteringContent` builds
+  // the stable [{ number, panels: [{ caption, dialogue, sfx }] }] off the SAME
+  // `comicLetteringIssues` the check analyzes, so a finding stales exactly when the
+  // text it read changes (and an unrelated image render — `panel.imageJobId` — does
+  // NOT stale it, since only the lettering fields are projected).
+  comicScript: ({ comicScripts }) => canonicalStringify(comicScripts ?? null),
 };
+
+// Project the loaded issues down to the lettering-relevant comic content the check
+// analyzes, via the registry's shared `comicLetteringIssues` (so the fingerprint
+// can't drift from what `run` reads). Keeps ONLY caption/dialogue/SFX — the fields
+// `panelLetteringMetrics` consumes — so the hash is stable across image renders and
+// description edits that don't change lettering. PAGE GROUPING is preserved (not
+// flattened): the check reports per-page totals and page/panel locations, so moving
+// panels between pages must change the hash even when the lettering text is identical.
+function projectComicLetteringContent(issues) {
+  return comicLetteringIssues(issues).map(({ number, pages }) => ({
+    number,
+    pages: pages.map((p) => ({
+      panels: (Array.isArray(p?.panels) ? p.panels : []).map((panel) => ({
+        caption: typeof panel?.caption === 'string' ? panel.caption : '',
+        dialogue: Array.isArray(panel?.dialogue) ? panel.dialogue : [],
+        sfx: typeof panel?.sfx === 'string' ? panel.sfx : '',
+      })),
+    })),
+  }));
+}
 
 // Stable projection of the series editorial aggregate down to the arc fields a
 // POV/arc check reads — drops the volatile `generatedAt` (and the rest) so the
@@ -219,10 +249,14 @@ export async function runEditorialChecks(seriesId, options = {}) {
   // series (canceled/early-stopped batch) doesn't flag a not-yet-analyzed POV
   // holder as arc-less (#1295). Folded into the editorialArcs fingerprint below.
   const editorialArcsComplete = editorialCoverageComplete(editorial);
+  // The comic lettering content the check (#1313) reads — derived from the
+  // already-loaded issues (no extra I/O), so a finding stales when an issue's comic
+  // pages / script are edited.
+  const comicScripts = projectComicLetteringContent(issues);
   // Resolve every source token once — each finding's fingerprint reads from this
   // so the editor flags it `stale` when the content that check actually read (its
   // declared `sources`) drifts (#1345, #1387).
-  const resolvedSources = resolveSources({ manuscript, canon, series, reverseOutline, reverseOutlinePlotlines, editorialArcs, editorialArcsComplete });
+  const resolvedSources = resolveSources({ manuscript, canon, series, reverseOutline, reverseOutlinePlotlines, editorialArcs, editorialArcsComplete, comicScripts });
   const baseCtx = {
     seriesId,
     series,
@@ -380,19 +414,24 @@ export async function getReviewWithStaleness(seriesId) {
     return sources.includes('reverseOutline') || sources.includes('reverseOutline.plotlines');
   });
   const needsEditorialArcs = evaluable.some((c) => checkSources(checkFor(c.checkId)).includes('editorialArcs'));
+  // Issues are only fetched here when a comic-script-sourced finding (#1313) needs
+  // re-fingerprinting — mirrors the other per-source I/O gates.
+  const needsComicScript = evaluable.some((c) => checkSources(checkFor(c.checkId)).includes('comicScript'));
   const series = await getSeries(seriesId);
-  const [sections, canon, outline, editorial] = await Promise.all([
+  const [sections, canon, outline, editorial, issues] = await Promise.all([
     needsManuscript ? collectManuscriptSections(seriesId) : Promise.resolve([]),
     getSeriesCanon(series),
     needsReverseOutline ? getReverseOutline(seriesId).catch(() => null) : Promise.resolve(null),
-    // Reuse the already-loaded series (issues isn't fetched on this path).
+    // Reuse the already-loaded series.
     needsEditorialArcs ? getSeriesEditorial(seriesId, { series }).catch(() => null) : Promise.resolve(null),
+    needsComicScript ? listIssues({ seriesId }).catch(() => []) : Promise.resolve([]),
   ]);
   const reverseOutline = Array.isArray(outline?.scenes) ? outline.scenes : [];
   const reverseOutlinePlotlines = Array.isArray(outline?.plotlines) ? outline.plotlines : [];
   const editorialArcs = projectEditorialArcs(editorial);
   const editorialArcsComplete = editorialCoverageComplete(editorial);
-  const resolvedSources = resolveSources({ manuscript: sectionsCorpus(sections), canon, series, reverseOutline, reverseOutlinePlotlines, editorialArcs, editorialArcsComplete });
+  const comicScripts = projectComicLetteringContent(issues);
+  const resolvedSources = resolveSources({ manuscript: sectionsCorpus(sections), canon, series, reverseOutline, reverseOutlinePlotlines, editorialArcs, editorialArcsComplete, comicScripts });
   return {
     ...review,
     comments: review.comments.map((c) => {

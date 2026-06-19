@@ -27,6 +27,11 @@
 import { z } from 'zod';
 import { estimateTokens } from '../contextBudget.js';
 import { renderCharacterArcsForPrompt } from '../seriesCharacterArc.js';
+import { parseComicScript } from '../comicScriptParser.js';
+import {
+  analyzeComicLettering,
+  DEFAULT_LETTERING_THRESHOLDS,
+} from './letteringDensity.js';
 import { analyzeNamePair, findFirstLetterClusters, normalizeName } from './nameSimilarity.js';
 import { findCliches, findModifierStacking } from './cliches.js';
 import { findSaidBookisms, findUnattributedDialogueRuns } from './dialogue.js';
@@ -86,6 +91,14 @@ const SEVERITIES = CHECK_SEVERITIES;
 //                                 want, need, startState, endState, transitions[] }`). The
 //                                 arc.transitions check reconciles detected change moments
 //                                 against these authored transitions + flat-arc warnings.
+//   - 'comicScript'             — every issue's AUTHORITATIVE comic content, keyed by
+//                                 issue number: the edited comic-pages split
+//                                 (`stages.comicPages.pages[]`) when present, else the
+//                                 generated `stages.comicScript.output`. The
+//                                 lettering-density check (#1313) counts per-panel/per-page
+//                                 word + balloon load over it. The runner fingerprints the
+//                                 lettering-relevant fields so a finding goes stale when the
+//                                 comic text (not the prose manuscript) is edited.
 export const EDITORIAL_SOURCES = Object.freeze([
   'manuscript',
   'canon',
@@ -96,6 +109,7 @@ export const EDITORIAL_SOURCES = Object.freeze([
   'reverseOutline.plotlines',
   'editorialArcs',
   'series.characterArcs',
+  'comicScript',
 ]);
 
 // Default per-run finding cap for user-defined checks (#1346) — mirrors the
@@ -1214,6 +1228,122 @@ function runDensityCheck(ctx, opts) {
   return findings;
 }
 
+// ---------------------------------------------------------------------------
+// Comic lettering density / balloon load (#1313) — deterministic over each
+// issue's parsed comic script. The pure word/balloon accounting + threshold
+// evaluation lives in ./letteringDensity.js (shared with the client comic-script
+// stage's inline warnings); the helpers below turn its violations into
+// manuscriptReview findings and pre-flight whether any issue even has a script
+// (the check's gate). Scope is 'issue' — findings carry the issue number so the
+// editor groups them per issue / per page.
+// ---------------------------------------------------------------------------
+
+// The AUTHORITATIVE comic pages for an issue (parser-shaped `[{ panels: [...] }]`).
+// A POPULATED per-page split (`stages.comicPages.pages[]`) WINS over the generated
+// markdown (`stages.comicScript.output`): once a script is split into pages, edits
+// in the Comic tab persist to `comicPages.pages[].rawText/panels` and never flow
+// back to `comicScript.output`, so reading the raw script would analyze stale text
+// (flag balloons the user already cut, miss ones they added). The client
+// comic-script stage reads the same `comicPages.pages[].panels`, so both surfaces
+// judge the same edited content.
+//
+// We key on `pages.length`, not `Array.isArray(pages)`, on purpose: the issue
+// sanitizer (`sanitizeVisualStage`) ALWAYS materializes `comicPages.pages` as `[]`,
+// so an EMPTY array can't distinguish "never split" from "split then all pages
+// deleted" — they are byte-identical on disk. Falling back to the still-present
+// generated script when the split is empty means an UNSPLIT or IMPORTED script
+// (the common pre-render case, where lettering feedback matters most) is still
+// checked; the script remains the issue's authored comic text even if a prior
+// split was emptied.
+export function comicIssuePages(issue) {
+  const pages = issue?.stages?.comicPages?.pages;
+  if (Array.isArray(pages) && pages.length) {
+    return pages.filter((p) => p && typeof p === 'object');
+  }
+  const output = typeof issue?.stages?.comicScript?.output === 'string' ? issue.stages.comicScript.output : '';
+  return output.trim() ? parseComicScript(output).pages : [];
+}
+
+// Issues with analyzable comic content, as { number, pages }, sorted by issue
+// number for a stable scan order. Shared by the lettering check's `run` AND the
+// staleness runner's fingerprint (which projects the lettering-relevant fields off
+// this), so the fingerprinted content is exactly what the check analyzes.
+export function comicLetteringIssues(issues) {
+  return (Array.isArray(issues) ? issues : [])
+    .map((i) => ({
+      number: Number.isInteger(i?.number) ? i.number : null,
+      pages: comicIssuePages(i),
+    }))
+    .filter((i) => i.pages.length)
+    .sort((a, b) => (a.number ?? 0) - (b.number ?? 0));
+}
+
+// Cheap presence test for the check's gate — true when any issue has an edited
+// comic-pages split OR a non-empty generated script — without paying the parse
+// that `comicLetteringIssues` does.
+function hasComicContent(issues) {
+  return (Array.isArray(issues) ? issues : []).some((i) => {
+    const pages = i?.stages?.comicPages?.pages;
+    if (Array.isArray(pages) && pages.length) return true;
+    return (typeof i?.stages?.comicScript?.output === 'string' ? i.stages.comicScript.output : '').trim();
+  });
+}
+
+// One human-readable { problem, suggestion } per violation kind. Kept here (not
+// in the pure helper) because the wording is PortOS-facing copy, while the helper
+// stays a reusable counting primitive.
+function comicLetteringText(v) {
+  const who = v.speaker ? ` (${v.speaker})` : '';
+  switch (v.kind) {
+    case 'balloon-words':
+      return {
+        problem: `A balloon${who} runs ${v.count} words — over the ~${v.threshold}-word balloon limit. A wall of text crammed into one balloon is the #1 reader gripe in comics.`,
+        suggestion: 'Split the balloon in two, move some of it to a caption, or trim the line.',
+      };
+    case 'caption-words':
+      return {
+        problem: `A caption box runs ${v.count} words — over the ~${v.threshold}-word limit. A dense narration box buries the art the same way an over-stuffed balloon does.`,
+        suggestion: 'Tighten the caption, split it across panels, or cut it down.',
+      };
+    case 'panel-words':
+      return {
+        problem: `This panel carries ${v.count} words of lettering — over the ~${v.threshold}-word panel limit, crowding the art.`,
+        suggestion: 'Spread the lettering across more panels, or cut copy so the art can breathe.',
+      };
+    case 'panel-balloons':
+      return {
+        problem: `This panel has ${v.count} balloons — more than the ~${v.threshold} a single panel reads cleanly with.`,
+        suggestion: 'Break the exchange across more panels, or merge balloons from the same speaker.',
+      };
+    case 'page-words':
+    default:
+      return {
+        problem: `This page carries ${v.count} words of lettering — over the ~${v.threshold}-word page ceiling; the text load would overwhelm the art.`,
+        suggestion: 'Move some beats to adjacent pages, or trim copy so the page is not text-heavy.',
+      };
+  }
+}
+
+// Map a lettering violation to a manuscriptReview finding for issue `number`.
+// `panelNumber` is absent for page-level findings, so the location degrades to
+// "Issue N · Page P" cleanly. Severity rides the violation's overflow-scaled
+// value (#1313).
+function comicLetteringFinding(v, number) {
+  const { problem, suggestion } = comicLetteringText(v);
+  const where = v.panelNumber != null
+    ? `Page ${v.pageNumber} · Panel ${v.panelNumber}`
+    : `Page ${v.pageNumber}`;
+  return {
+    severity: v.severity,
+    category: 'lettering',
+    location: number != null ? `Issue ${number} · ${where}` : where,
+    problem,
+    suggestion,
+    anchorQuote: typeof v.anchorQuote === 'string' ? v.anchorQuote : '',
+    issueNumber: number,
+  };
+}
+
 export const EDITORIAL_CHECKS = [
   {
     id: 'naming.dissimilar-names',
@@ -1520,6 +1650,80 @@ export const EDITORIAL_CHECKS = [
         }
       }
 
+      return findings;
+    },
+  },
+  {
+    id: 'comic.lettering-density',
+    sources: ['comicScript'],
+    label: 'Comic lettering density / balloon load',
+    description:
+      'Flags over-stuffed comic panels — the #1 reader gripe in comics: a wall of text crammed into one balloon, too many balloons fighting for room, or a page whose total lettering load overwhelms the art. Parses each issue\'s comic script and counts words + balloons per panel and per page against configurable industry rules-of-thumb.',
+    scope: 'issue',
+    kind: 'deterministic',
+    category: 'lettering',
+    severityDefault: 'low',
+    defaultEnabled: true,
+    configSchema: z.object({
+      // Per-balloon word ceiling (~20–25 reads cleanly; much past it is a wall of text).
+      maxWordsPerBalloon: z.number().int().min(1).max(200).default(DEFAULT_LETTERING_THRESHOLDS.maxWordsPerBalloon),
+      // Per-panel total lettering word ceiling (dialogue + caption + SFX).
+      maxWordsPerPanel: z.number().int().min(1).max(500).default(DEFAULT_LETTERING_THRESHOLDS.maxWordsPerPanel),
+      // Distinct balloons (dialogue + caption boxes) a single panel reads cleanly with.
+      maxBalloonsPerPanel: z.number().int().min(1).max(20).default(DEFAULT_LETTERING_THRESHOLDS.maxBalloonsPerPanel),
+      // Whole-page lettering word ceiling — past it the text load buries the art.
+      maxWordsPerPage: z.number().int().min(1).max(2000).default(DEFAULT_LETTERING_THRESHOLDS.maxWordsPerPage),
+    }),
+    configFields: [
+      {
+        key: 'maxWordsPerBalloon',
+        label: 'Max words per balloon',
+        type: 'number',
+        min: 1,
+        max: 200,
+        step: 1,
+        help: 'Flag a single speech balloon / caption box over this many words (~25 is the industry rule-of-thumb).',
+      },
+      {
+        key: 'maxWordsPerPanel',
+        label: 'Max words per panel',
+        type: 'number',
+        min: 1,
+        max: 500,
+        step: 1,
+        help: 'Flag a panel whose total lettering (dialogue + caption + SFX) exceeds this many words (~50).',
+      },
+      {
+        key: 'maxBalloonsPerPanel',
+        label: 'Max balloons per panel',
+        type: 'number',
+        min: 1,
+        max: 20,
+        step: 1,
+        help: 'Flag a panel with more than this many distinct balloons + caption boxes (~3).',
+      },
+      {
+        key: 'maxWordsPerPage',
+        label: 'Max words per page',
+        type: 'number',
+        min: 1,
+        max: 2000,
+        step: 10,
+        help: 'Flag a page whose total lettering load would overwhelm the art (~150).',
+      },
+    ],
+    // Needs at least one issue with comic content (an edited page split or a
+    // generated script). A cheap presence test — run() builds the full parsed
+    // projection only when the gate passes.
+    gate: (ctx) => hasComicContent(ctx.issues),
+    run: (ctx) => {
+      const config = ctx.config || {};
+      const findings = [];
+      for (const { number, pages } of comicLetteringIssues(ctx.issues)) {
+        for (const v of analyzeComicLettering(pages, config)) {
+          findings.push(comicLetteringFinding(v, number));
+        }
+      }
       return findings;
     },
   },

@@ -4,6 +4,7 @@ export * from './checkRegistry.js';
 export * from './cliches.js';
 export * from './dialogue.js';
 export * from './italicThoughts.js';
+export * from './letteringDensity.js';
 export * from './nameSimilarity.js';
 export * from './proseTics.js';
 export * from './repetition.js';

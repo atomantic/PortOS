@@ -58,7 +58,7 @@ Declare every input the check's `run(ctx)` reads in its `sources` array (a
 non-empty subset of `EDITORIAL_SOURCES`: `manuscript`, `canon`,
 `series.styleGuide`, `series.arc.tickingClock`, `series.arc.readerMap`,
 `reverseOutline`, `reverseOutline.plotlines`, `editorialArcs`,
-`series.characterArcs`). The staleness
+`series.characterArcs`, `comicScript`). The staleness
 runner fingerprints exactly those sources, so a finding goes stale only when
 content the check actually analyzed drifts — declare too few and a finding stays
 falsely fresh; a `manuscript` source must pair with `needsManuscript: true`, and
@@ -76,7 +76,13 @@ because not-yet-analyzed" under a partial coverage batch. `series.characterArcs`
 (#1293) reads the AUTHORED per-character arcs off the already-loaded series
 record (`series.characterArcs[]` — want/need, start → end state, transition
 beats), which the `arc.transitions` check reconciles detected change moments
-against. When a new check reads a
+against. `comicScript` (#1313) fingerprints every issue's AUTHORITATIVE comic content,
+keyed by issue number — the edited comic-pages split (`stages.comicPages.pages[]`)
+when present, else the generated `stages.comicScript.output` (derived from the
+already-loaded `ctx.issues`, no extra fetch). The `comic.lettering-density` check
+reads the same content (via the shared `comicLetteringIssues`) to count
+balloon/panel/page word load, so a finding stales exactly when the comic text the
+check read changes — not when an unrelated image renders. When a new check reads a
 `ctx.series` field (or another artifact) that isn't yet a token, add the token to
 `EDITORIAL_SOURCES` and a matching resolver in the runner's `SOURCE_RESOLVERS`.
 
@@ -104,4 +110,5 @@ runner-injected `ctx.callInlineLLM` (an inline-prompt sibling of
 | `proseTics.js` | Pure, dependency-free copy-edit prose-tic primitives for the #1306 line-edit group: `tokenizeWords` / `splitSentences` (shared tokenization), `findFilterWords` (`prose.filter-words`), `findCrutchWords` (`prose.crutch-words`), `findAdverbs` (`prose.adverbs` — `-ly` adverbs + dialogue-tag adverbs), `findPassiveVoice` (`prose.passive-voice` — be-verb + past-participle heuristic), `findGestures` (`prose.repeated-gestures` — gesture tally + body-part autonomy), plus the seed `FILTER_WORDS` / `CRUTCH_WORDS` / `GESTURE_WORDS` lists. The LLM sibling `prose.telling-emotion` handles the named-emotion judgment case. |
 | `repetition.js` | Pure, dependency-free word-echo & rhythm primitives for #1306: `findWordEchoes` (`prose.word-echoes` — distinctive word repeated within a window), `findRepeatedOpeners` (runs of sentences sharing an opener, "He… He… He…"), and `measureSentenceRhythm` (`prose.sentence-rhythm` — sentence-length variation). Reuses `tokenizeWords` / `splitSentences` from `proseTics.js`. |
 | `dialogue.js` | Pure, dependency-free dialogue-tag primitives for the #1307 dialogue-craft group: `findSaidBookisms` (`dialogue.said-bookisms` — ornate speech tags like *expostulated*/*opined* and non-speech tags like "she smiled", matched only when adjacent to a double-quote span) and `findUnattributedDialogueRuns` (`dialogue.attribution-clarity` — runs of consecutive untagged/unbeated dialogue lines where the speaker can't be tracked), plus the seed `SAID_BOOKISMS` / `NON_SPEECH_TAGS` lists. The LLM siblings `dialogue.on-the-nose` (subtext-free / "as you know, Bob" dialogue) and `dialogue.voice-distinctiveness` (per-character voice against canon `speechPattern`/`speechAccent`) handle the judgment cases. |
+| `letteringDensity.js` | Pure, dependency-free comic lettering-density primitives for `comic.lettering-density` (#1313): `countWords`, `panelLetteringMetrics` (per-panel balloon/caption/SFX word + balloon tally over the `comicScriptParser` output), `analyzeComicLettering` (flags balloons/panels/pages over the configurable thresholds in `DEFAULT_LETTERING_THRESHOLDS`), `overflowSeverity` (severity scaled by how far over the limit), and `sanitizeLetteringThresholds`. Mirrored to `client/src/lib/letteringDensity.js` for the comic-script stage's inline warnings — keep the two in sync. |
 | `index.js` | Barrel re-export of the above. |
