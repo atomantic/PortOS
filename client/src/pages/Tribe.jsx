@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Calendar,
   Clock,
@@ -224,11 +224,12 @@ function ContactCard({ contact, active, onSelect, onLogTouch }) {
   );
 }
 
-function ContactForm({ draft, onChange, onSave, onDelete, onNew, isExisting, saving }) {
+function ContactForm({ draft, onChange, onSave, onDelete, onNew, isExisting, saving, nameInputRef, formRef }) {
   const update = (field, value) => onChange({ ...draft, [field]: value });
 
   return (
     <form
+      ref={formRef}
       className="border border-port-border bg-port-card rounded p-4"
       onSubmit={(event) => {
         event.preventDefault();
@@ -255,6 +256,7 @@ function ContactForm({ draft, onChange, onSave, onDelete, onNew, isExisting, sav
         <label className="block">
           <span className="text-xs text-gray-500">Name</span>
           <input
+            ref={nameInputRef}
             value={draft.name}
             onChange={(event) => update('name', event.target.value)}
             className="mt-1 w-full rounded border border-port-border bg-port-bg px-3 py-2 text-sm text-white outline-none focus:border-port-accent"
@@ -629,6 +631,13 @@ export default function Tribe() {
   const [activeTab, setActiveTab] = useState('circle');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  // Bumped by every "Add / new relationship" trigger so the form can be
+  // surfaced (scrolled into view + Name focused). The form is statically
+  // rendered, so resetting an already-empty draft is otherwise invisible —
+  // especially on narrow screens where it sits below the fold.
+  const [focusTick, setFocusTick] = useState(0);
+  const nameInputRef = useRef(null);
+  const formRef = useRef(null);
 
   const selectedId = draft.id;
 
@@ -690,6 +699,25 @@ export default function Tribe() {
     };
   }, []);
 
+  // Surface the contact form after an Add trigger. Runs after the tab switch +
+  // draft reset have rendered, so the form is mounted in whichever tab is active.
+  useEffect(() => {
+    if (focusTick === 0) return;
+    const frame = requestAnimationFrame(() => {
+      formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      nameInputRef.current?.focus();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [focusTick]);
+
+  // Reset to a blank draft and surface the form. The Focus tab has no form, so
+  // fall back to Circle there; otherwise keep the user's current tab.
+  const startNewRelationship = () => {
+    setActiveTab((tab) => (tab === 'focus' ? 'circle' : tab));
+    setDraft(emptyDraft());
+    setFocusTick((tick) => tick + 1);
+  };
+
   const filteredContacts = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     return contacts.filter((contact) => {
@@ -735,6 +763,7 @@ export default function Tribe() {
       notes: draft.notes.trim(),
     };
 
+    const isCreate = !draft.id;
     setSaving(true);
     const saved = draft.id
       ? await api.updateTribePerson(draft.id, payload).catch((err) => {
@@ -753,7 +782,14 @@ export default function Tribe() {
         ? current.map((contact) => (contact.id === saved.id ? saved : contact))
         : [saved, ...current]
     ));
-    selectContact(saved);
+    // After creating a NEW person, clear back to a blank form (and re-focus Name)
+    // so the next entry adds another person instead of overwriting the one just
+    // saved. When editing an existing person, keep them selected.
+    if (isCreate) {
+      startNewRelationship();
+    } else {
+      selectContact(saved);
+    }
   };
 
   const deleteDraft = async () => {
@@ -793,7 +829,7 @@ export default function Tribe() {
   const actions = (
     <button
       type="button"
-      onClick={() => setDraft(emptyDraft())}
+      onClick={startNewRelationship}
       className="inline-flex items-center gap-2 rounded border border-port-border px-3 py-2 text-sm text-gray-300 hover:bg-port-border/40 hover:text-white"
     >
       <Plus size={15} aria-hidden="true" />
@@ -878,7 +914,7 @@ export default function Tribe() {
                 </div>
 
                 {contacts.length === 0 ? (
-                  <EmptyState onNew={() => setDraft(emptyDraft())} />
+                  <EmptyState onNew={startNewRelationship} />
                 ) : (
                   <div className="grid gap-3 md:grid-cols-2">
                     {filteredContacts.map((contact) => (
@@ -905,9 +941,11 @@ export default function Tribe() {
                   onChange={setDraft}
                   onSave={saveDraft}
                   onDelete={deleteDraft}
-                  onNew={() => setDraft(emptyDraft())}
+                  onNew={startNewRelationship}
                   isExisting={Boolean(draft.id)}
                   saving={saving}
+                  nameInputRef={nameInputRef}
+                  formRef={formRef}
                 />
                 {draft.id && <MemoryLinksPanel personId={draft.id} />}
                 {draft.id && <TouchpointsPanel personId={draft.id} />}
@@ -921,16 +959,18 @@ export default function Tribe() {
                 contacts={contacts}
                 onSelect={(contact) => { selectContact(contact); setActiveTab('circle'); }}
                 onLogTouch={logTouch}
-                onNew={() => setDraft(emptyDraft())}
+                onNew={startNewRelationship}
               />
               <ContactForm
                 draft={draft}
                 onChange={setDraft}
                 onSave={saveDraft}
                 onDelete={deleteDraft}
-                onNew={() => setDraft(emptyDraft())}
+                onNew={startNewRelationship}
                 isExisting={Boolean(draft.id)}
                 saving={saving}
+                nameInputRef={nameInputRef}
+                formRef={formRef}
               />
             </div>
           )}
