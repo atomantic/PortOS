@@ -32,8 +32,7 @@ import useUniverseAction from '../hooks/useUniverseAction';
 import { useUniverseNav } from '../hooks/useUniverseNav';
 import InfluenceChipsInput from '../components/universeBuilder/InfluenceChipsInput';
 import ProviderModelSelector from '../components/ProviderModelSelector';
-import useProviderModels from '../hooks/useProviderModels';
-import { enabledApiProviderFilter, visionLocalModelFilter } from '../utils/providers';
+import VisionProviderPicker from '../components/universe/VisionProviderPicker';
 import GalleryImagePicker from '../components/imageGen/GalleryImagePicker';
 import ImageGenSettingsForm from '../components/imageGen/ImageGenSettingsForm';
 import { RUNNER_FAMILIES, loraCompatKey } from '../lib/runnerFamilies';
@@ -2859,12 +2858,11 @@ function BibleTab({
   } = refine;
   // Local-only: gallery picker visibility for the optional style-reference image.
   const [refineGalleryOpen, setRefineGalleryOpen] = useState(false);
-  // Vision provider/model picker shown when a style-reference image is attached
-  // — the refine then runs through this (a vision-capable API provider), not the
-  // universe's default expansion LLM. Local backends are scoped to vision models.
-  const visionPicker = useProviderModels({
-    filter: enabledApiProviderFilter, modelFilter: visionLocalModelFilter, silent: true,
-  });
+  // Vision provider/model selection, lifted from VisionProviderPicker — which is
+  // mounted only when a style-reference image is attached, so the refine runs
+  // through a vision-capable API provider (not the universe's default expansion
+  // LLM) and the provider fetch is deferred until it's actually needed.
+  const [refineVision, setRefineVision] = useState({ providerId: '', model: '', hasProviders: false, noVisionModel: false });
   return (
     <>
       <section className="bg-port-card border border-port-border rounded p-4 flex flex-col gap-3">
@@ -2981,32 +2979,18 @@ function BibleTab({
               ) : null}
             </div>
             {/* Vision provider/model picker — only when an image is attached, since
-                the server forces a vision-capable API provider for image refine. */}
+                the server forces a vision-capable API provider for image refine.
+                Mounting it conditionally also defers its provider fetch. */}
             {refineImage ? (
-              visionPicker.providers.length > 0 ? (
-                <ProviderModelSelector
-                  providers={visionPicker.providers}
-                  selectedProviderId={visionPicker.selectedProviderId}
-                  selectedModel={visionPicker.selectedModel}
-                  availableModels={visionPicker.availableModels}
-                  onProviderChange={visionPicker.setSelectedProviderId}
-                  onModelChange={visionPicker.setSelectedModel}
-                  label="Vision provider (for image refine)"
-                  layout="row"
-                />
-              ) : (
-                <p className="text-[11px] text-port-warning">
-                  No API provider with a vision-capable model configured — add one under Settings → Providers to refine from an image.
-                </p>
-              )
+              <VisionProviderPicker label="Vision provider (for image refine)" onChange={setRefineVision} />
             ) : null}
             <div className="flex items-center gap-2 flex-wrap">
               <button
                 type="button"
                 onClick={() => runRefine(refineImage
-                  ? { providerId: visionPicker.selectedProviderId, model: visionPicker.selectedModel }
+                  ? { providerId: refineVision.providerId, model: refineVision.model }
                   : null)}
-                disabled={refining || !refineFeedback.trim() || !draft.starterPrompt?.trim() || (!!refineImage && !visionPicker.selectedModel)}
+                disabled={refining || !refineFeedback.trim() || !draft.starterPrompt?.trim() || (!!refineImage && !refineVision.model)}
                 className="px-3 py-2 bg-port-accent hover:bg-port-accent/90 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded flex items-center gap-2 min-h-[40px]"
               >
                 {refining ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />}

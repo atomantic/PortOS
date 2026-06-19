@@ -21,17 +21,11 @@ import { useState, useCallback, useRef } from 'react';
 import { Loader2, ImagePlus, Images, Sparkles, X } from 'lucide-react';
 import Modal from '../ui/Modal';
 import toast from '../ui/Toast';
-import ProviderModelSelector from '../ProviderModelSelector';
 import GalleryImagePicker from '../imageGen/GalleryImagePicker';
-import useProviderModels from '../../hooks/useProviderModels';
-import { visionLocalModelFilter } from '../../utils/providers';
+import VisionProviderPicker from './VisionProviderPicker';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
 import { processScreenshotUploads } from '../../utils/fileUpload';
 import { describeEntityFromImages, expandEntityFromImages } from '../../services/apiUniverseBuilder';
-
-// Vision is an API-provider-only capability (the runner only base64-inlines
-// images on the API path) — so the picker only offers enabled API providers.
-const apiProviderFilter = (p) => p.enabled !== false && p.type === 'api';
 
 // Mirror server VISION_MAX_IMAGES so the UI stops the user before the request
 // 400s.
@@ -67,10 +61,8 @@ export default function VisionDescribeModal({
   const [context, setContext] = useState('');
   const fileInputRef = useRef(null);
 
-  const {
-    providers, selectedProviderId, selectedModel, availableModels,
-    setSelectedProviderId, setSelectedModel, loading: providersLoading,
-  } = useProviderModels({ filter: apiProviderFilter, modelFilter: visionLocalModelFilter, silent: true });
+  // Current vision provider/model selection, lifted from VisionProviderPicker.
+  const [vision, setVision] = useState({ providerId: '', model: '', hasProviders: false, noVisionModel: false });
 
   const noun = KIND_NOUN[kind] || 'subject';
   const isCharacter = kind === 'character';
@@ -124,8 +116,8 @@ export default function VisionDescribeModal({
   // Payload shared by both vision calls.
   const imagePayload = () => ({
     images: images.map((img) => ({ source: img.source, filename: img.filename })),
-    providerId: selectedProviderId || undefined,
-    model: selectedModel || undefined,
+    providerId: vision.providerId || undefined,
+    model: vision.model || undefined,
   });
 
   const [runDescribe, describing] = useAsyncAction(async () => {
@@ -210,12 +202,10 @@ export default function VisionDescribeModal({
   // A vision model must be explicitly selected — otherwise the request sends
   // `model: undefined` and the server resolves the provider's default, which on
   // a local backend is often a text-only model that silently drops the images.
-  // When the selected provider is a local backend with no vision-capable model,
-  // `availableModels` is empty and `selectedModel` is '' — block the run and
-  // tell the user why.
-  const noVisionModel = providers.length > 0 && !selectedModel;
+  // VisionProviderPicker surfaces the "no vision model" case via `vision.model`
+  // being '' (it also shows the explanatory warning).
   const canRun = images.length > 0 && !describing && !building && !uploading
-    && providers.length > 0 && !!selectedModel;
+    && vision.hasProviders && !!vision.model;
   const multi = images.length > 1;
 
   return (
@@ -293,32 +283,7 @@ export default function VisionDescribeModal({
           </div>
 
           {/* Provider + model picker (API/vision-capable providers only) */}
-          {providers.length > 0 ? (
-            <>
-              <ProviderModelSelector
-                providers={providers}
-                selectedProviderId={selectedProviderId}
-                selectedModel={selectedModel}
-                availableModels={availableModels}
-                onProviderChange={setSelectedProviderId}
-                onModelChange={setSelectedModel}
-                label="Vision provider"
-                layout="row"
-              />
-              {noVisionModel ? (
-                <p className="text-xs text-port-warning">
-                  This provider has no vision-capable model installed. Pick another provider, or install a
-                  vision model (e.g. a qwen-vl or llava model) to analyze images.
-                </p>
-              ) : null}
-            </>
-          ) : (
-            <p className="text-xs text-port-warning">
-              {providersLoading
-                ? 'Loading providers…'
-                : 'No API provider configured. Add one with a vision-capable model under Settings → Providers to analyze images.'}
-            </p>
-          )}
+          <VisionProviderPicker onChange={setVision} />
 
           {/* Optional context to disambiguate the subject for the model. */}
           <div>
