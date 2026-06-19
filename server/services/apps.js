@@ -6,6 +6,7 @@ import { NON_PM2_TYPES, usesPm2 } from './streamingDetect.js';
 import { listProcessesStrict } from './pm2.js';
 import { SELF_IMPROVEMENT_TASK_TYPES } from './taskSchedule.js';
 import { sanitizeTaskMetadata } from '../lib/validation.js';
+import { resolveAppWorkTracker } from '../lib/workTracker.js';
 import { PORTS } from '../lib/ports.js';
 import { hasTailscaleCert } from '../../lib/tailscale-https.js';
 import { certPaths } from '../../lib/certPaths.js';
@@ -312,6 +313,10 @@ export async function createApp(appData) {
       || (NON_PM2_TYPES.has(appData.type) && process.platform === 'darwin' ? 'xed .' : 'code .'),
     archived: false,
     jira: appData.jira || null,
+    // Where this app's autonomous work items live. 'auto' resolves to a
+    // concrete tracker (PLAN.md / GitHub / GitLab / JIRA) from the git origin
+    // host at dispatch time — see server/lib/workTracker.js.
+    workTracker: appData.workTracker || 'auto',
     taskTypeOverrides: Object.fromEntries(
       SELF_IMPROVEMENT_TASK_TYPES.map(t => [t, { enabled: false }])
     ),
@@ -403,6 +408,17 @@ async function migrateTaskTypeOverrides(id) {
   delete app.disabledTaskTypes;
   await saveApps(data);
   console.log(`📋 Migrated ${id} from disabledTaskTypes to taskTypeOverrides`);
+}
+
+/**
+ * Resolve an app's effective work tracker (the single source its `claim-work`
+ * task ships from). Returns `{ configured, resolved, host, forge, source }`;
+ * see resolveAppWorkTracker. Returns null when the app id is unknown.
+ */
+export async function getAppWorkTracker(id) {
+  const app = await getAppById(id);
+  if (!app) return null;
+  return resolveAppWorkTracker(app);
 }
 
 /**

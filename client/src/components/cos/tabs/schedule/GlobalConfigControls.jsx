@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Play, RotateCcw, ChevronDown, AlertCircle, Package, Info } from 'lucide-react';
 import CronInput from '../../../CronInput';
-import { AGENT_OPTIONS, DEFAULT_REVIEW_STOP_MODE, PR_AUTHOR_FILTER_OPTIONS, ISSUE_AUTHOR_FILTER_OPTIONS } from '../../constants';
+import { AGENT_OPTIONS, DEFAULT_REVIEW_STOP_MODE, PR_AUTHOR_FILTER_OPTIONS, ISSUE_AUTHOR_FILTER_OPTIONS, ISSUE_AUTHOR_FILTER_TASK_TYPES } from '../../constants';
 import ReviewerPicker from '../../ReviewerPicker';
 import Banner from '../../../ui/Banner';
 import { useCodeReviewDefaults } from '../../../../hooks/useCodeReviewDefaults';
@@ -248,7 +248,7 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
         </div>
       )}
 
-      {taskType === 'claim-issue' && (
+      {ISSUE_AUTHOR_FILTER_TASK_TYPES.has(taskType) && (
         <div>
           <label htmlFor={`issue-author-filter-${taskType}`} className="text-sm text-gray-400 block mb-2">Issue Author Filter</label>
           <select

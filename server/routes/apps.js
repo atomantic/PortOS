@@ -492,6 +492,16 @@ router.get('/:id/task-types', loadApp, asyncHandler(async (req, res) => {
   res.json({ appId: app.id, appName: app.name, taskTypeOverrides: overrides });
 }));
 
+// GET /api/apps/:id/work-tracker - Resolve where this app's autonomous work
+// items live (PLAN.md / GitHub / GitLab / JIRA). 'auto' resolves from the git
+// origin host; see server/lib/workTracker.js. Read-only — the value itself is
+// saved through the generic PUT /api/apps/:id (appUpdateSchema.workTracker).
+router.get('/:id/work-tracker', loadApp, asyncHandler(async (req, res) => {
+  const app = req.loadedApp;
+  const info = await appsService.getAppWorkTracker(app.id);
+  res.json({ appId: app.id, appName: app.name, ...info });
+}));
+
 // PUT /api/apps/:id/task-types/all - Toggle all task types for an app
 router.put('/:id/task-types/all', loadApp, asyncHandler(async (req, res) => {
   const { enabled } = req.body;

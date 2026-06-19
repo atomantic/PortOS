@@ -9,6 +9,18 @@ import Modal from '../ui/Modal';
 import Banner from '../ui/Banner';
 import { copyToClipboard } from '../../lib/clipboard';
 
+const WORK_TRACKER_OPTIONS = [
+  { value: 'auto', label: 'Auto (detect from git origin)' },
+  { value: 'plan', label: 'PLAN.md' },
+  { value: 'github', label: 'GitHub Issues' },
+  { value: 'gitlab', label: 'GitLab Issues' },
+  { value: 'jira', label: 'JIRA' }
+];
+
+const WORK_TRACKER_LABELS = Object.fromEntries(
+  WORK_TRACKER_OPTIONS.map(o => [o.value, o.label])
+);
+
 export default function EditAppModal({ app, onClose, onSave }) {
   const [formData, setFormData] = useState({
     name: app.name,
@@ -22,6 +34,7 @@ export default function EditAppModal({ app, onClose, onSave }) {
     startCommands: (app.startCommands || []).join('\n'),
     pm2ProcessNames: (app.pm2ProcessNames || []).join(', '),
     editorCommand: app.editorCommand || 'code .',
+    workTracker: app.workTracker || 'auto',
     defaultOpenPR: app.defaultOpenPR || false,
     defaultUseWorktree: app.defaultUseWorktree || app.defaultOpenPR || false,
     jiraEnabled: app.jira?.enabled || false,
@@ -72,6 +85,7 @@ export default function EditAppModal({ app, onClose, onSave }) {
       setTlsUpgrading(false);
     }
   };
+  const [workTrackerInfo, setWorkTrackerInfo] = useState(null);
   const [jiraExpanded, setJiraExpanded] = useState(app.jira?.enabled || false);
   const [jiraInstances, setJiraInstances] = useState([]);
   const [datadogExpanded, setDatadogExpanded] = useState(app.datadog?.enabled || false);
@@ -91,6 +105,12 @@ export default function EditAppModal({ app, onClose, onSave }) {
       setDatadogInstances(datadog);
     });
   }, []);
+
+  useEffect(() => {
+    api.getAppWorkTracker(app.id)
+      .then(setWorkTrackerInfo)
+      .catch(() => setWorkTrackerInfo(null));
+  }, [app.id]);
 
   useEffect(() => {
     if (!formData.jiraInstanceId) {
@@ -130,6 +150,7 @@ export default function EditAppModal({ app, onClose, onSave }) {
         ? formData.pm2ProcessNames.split(',').map(s => s.trim()).filter(Boolean)
         : undefined,
       editorCommand: formData.editorCommand || undefined,
+      workTracker: formData.workTracker || 'auto',
       defaultUseWorktree: formData.defaultUseWorktree || formData.defaultOpenPR,
       defaultOpenPR: formData.defaultOpenPR,
       jira: formData.jiraEnabled ? {
@@ -347,6 +368,31 @@ export default function EditAppModal({ app, onClose, onSave }) {
               onChange={e => setFormData({ ...formData, editorCommand: e.target.value })}
               className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
             />
+          </div>
+
+          <div>
+            <label htmlFor="edit-app-work-tracker" className="block text-sm text-gray-400 mb-1">Work Tracker</label>
+            <select
+              id="edit-app-work-tracker"
+              value={formData.workTracker}
+              onChange={e => setFormData(prev => ({ ...prev, workTracker: e.target.value }))}
+              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
+            >
+              {WORK_TRACKER_OPTIONS.map(opt => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+            {workTrackerInfo && (() => {
+              const isAuto = formData.workTracker === 'auto';
+              const tracker = isAuto ? workTrackerInfo.resolved : formData.workTracker;
+              const label = WORK_TRACKER_LABELS[tracker] || tracker;
+              const host = workTrackerInfo.host;
+              return (
+                <p className="text-xs text-gray-500 mt-1">
+                  {isAuto ? 'Auto → ' : 'Resolved: '}{label}{host ? ` (origin: ${host})` : ''}
+                </p>
+              );
+            })()}
           </div>
 
           <label className="flex items-center gap-2 cursor-pointer">

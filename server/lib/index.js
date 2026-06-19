@@ -197,6 +197,7 @@ export * from './singleFlight.js';
 export * from './streamBackpressure.js';
 export * from './sseUtils.js';
 export * from './uuid.js';
+export * from './workTracker.js';
 export * from './workspaceRoots.js';
 export * from './zodCompat.js';
 

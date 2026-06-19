@@ -1,7 +1,7 @@
 import { useState, memo } from 'react';
 import AppIcon from '../../../AppIcon';
 import CronInput from '../../../CronInput';
-import { AGENT_OPTIONS, ISSUE_AUTHOR_FILTER_OPTIONS, toggleAppMetadataOverride, agentOptionButtonClass } from '../../constants';
+import { AGENT_OPTIONS, ISSUE_AUTHOR_FILTER_OPTIONS, ISSUE_AUTHOR_FILTER_TASK_TYPES, toggleAppMetadataOverride, agentOptionButtonClass } from '../../constants';
 import { isCronExpression, describeCron } from '../../../../utils/cronHelpers';
 import ToggleSwitch from '../../../ToggleSwitch';
 import { INTERVAL_LABELS } from './scheduleConstants';
@@ -133,7 +133,7 @@ const AppOverrideRow = memo(function AppOverrideRow({ app, taskType, globalInter
           })}
         </div>
 
-        {taskType === 'claim-issue' && (
+        {ISSUE_AUTHOR_FILTER_TASK_TYPES.has(taskType) && (
           <select
             value={override?.taskMetadata?.issueAuthorFilter || ''}
             onChange={(e) => handleIssueAuthorFilterChange(e.target.value)}

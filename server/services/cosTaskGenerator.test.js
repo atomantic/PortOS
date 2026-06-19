@@ -78,6 +78,40 @@ describe('{reviewers} interpolation honors Code Review Defaults', () => {
   });
 });
 
+// claim-work is the single-source router: one toggle that resolves the app's
+// workTracker (default 'auto' → git origin host) and delegates to the matching
+// claim prompt body — plan→plan-task, github→claim-issue, gitlab→claim-issue-gitlab,
+// jira→jira-sprint-manager. These source-level guards pin that wiring so a
+// future edit can't silently drop the resolution, the delegated prompt
+// selection, the PLAN gate routing, or the GitLab forge directive.
+describe('claim-work single-source routing', () => {
+  it('resolves the app work tracker and maps it to a concrete claim task type', () => {
+    expect(GEN_SRC).toContain("taskType === 'claim-work'");
+    expect(GEN_SRC).toContain('resolveAppWorkTracker, trackerToClaimTaskType');
+    // Pin the call shape without coupling to the local variable name.
+    expect(GEN_SRC).toMatch(/trackerToClaimTaskType\(\w+\.resolved\)/);
+  });
+
+  it('selects the delegated prompt body (promptTaskType), honoring a direct claim-work customization', () => {
+    expect(GEN_SRC).toContain('promptKeyForBody');
+    expect(GEN_SRC).toContain('await getTaskPrompt(promptKeyForBody)');
+    // A claim-work customization (interval.prompt) wins; otherwise delegate.
+    expect(GEN_SRC).toMatch(/promptKeyForBody\s*=\s*\(taskType === 'claim-work' && !interval\.prompt\)\s*\?\s*promptTaskType\s*:\s*taskType/);
+  });
+
+  it('gates PLAN.md on the RESOLVED type so a claim-work→plan run still skips an empty queue', () => {
+    expect(GEN_SRC).toContain('applyPlanIdMetadata(promptTaskType,');
+    // The only other occurrence is the function definition's parameter list;
+    // the CALL must route the resolved type, never the raw 'claim-work' type.
+    expect(GEN_SRC).not.toContain('await applyPlanIdMetadata(taskType,');
+  });
+
+  it('emits a GitLab (glab) author-filter directive for the claim-issue-gitlab body', () => {
+    expect(GEN_SRC).toContain("promptTaskType === 'claim-issue-gitlab' ? 'glab'");
+    expect(GEN_SRC).toContain('glab issue list');
+  });
+});
+
 describe('exceedsMaxSpawns', () => {
   it('is false below the ceiling and true at/above it — no mutation', () => {
     expect(exceedsMaxSpawns(task('a', { totalSpawnCount: 0 }))).toBe(false);

@@ -1,0 +1,120 @@
+// Per-app "work tracker" resolution — where a managed app's autonomous work
+// items live: PLAN.md, a GitHub issue tracker, a GitLab issue tracker, or JIRA.
+//
+// Each managed app carries a `workTracker` field (default `'auto'`). `'auto'`
+// resolves to a concrete tracker from the app's git `origin` host: a github.com
+// remote → GitHub issues, a gitlab.* remote → GitLab issues, anything else (or
+// no remote) → PLAN.md. JIRA is never auto-selected — it requires explicit
+// per-app JIRA config (`app.jira`) — so a user picks it deliberately.
+//
+// The pure mappers (hostToWorkTracker / forgeCliForTracker / trackerToClaimTaskType
+// / resolveWorkTracker) are side-effect-free and unit-tested. resolveAppWorkTracker
+// is the async wrapper that reads the app's origin host via getOriginInfo — it
+// shells out to git, mirroring gitRemote.js (which also lives in lib/ despite
+// running `git`). See server/services/cosTaskGenerator.js for the claim-work
+// router that consumes trackerToClaimTaskType.
+
+import { getOriginInfo } from './gitRemote.js';
+
+// Every selectable value (UI + Zod enum). `'auto'` is the default; the rest are
+// concrete sources.
+export const WORK_TRACKERS = ['auto', 'plan', 'github', 'gitlab', 'jira'];
+
+// The concrete sources `'auto'` can resolve to (i.e. WORK_TRACKERS minus auto).
+export const CONCRETE_WORK_TRACKERS = WORK_TRACKERS.filter(t => t !== 'auto');
+
+export const DEFAULT_WORK_TRACKER = 'auto';
+
+const TRACKER_LABELS = {
+  auto: 'Auto (detect from git origin)',
+  plan: 'PLAN.md',
+  github: 'GitHub Issues',
+  gitlab: 'GitLab Issues',
+  jira: 'JIRA',
+};
+
+/** Human-readable label for a tracker value (falls back to the raw value). */
+export function workTrackerLabel(tracker) {
+  return TRACKER_LABELS[tracker] || tracker;
+}
+
+/**
+ * Map a git remote host to its concrete forge work tracker, or null when the
+ * host isn't a recognized forge (so the caller falls back to PLAN.md). Mirrors
+ * the host classification in gitForge.detectForgeCli — covers github.com /
+ * gitlab.com plus self-hosted enterprise hosts (github.*, gitlab.*).
+ */
+export function hostToWorkTracker(host) {
+  if (!host || typeof host !== 'string') return null;
+  const h = host.toLowerCase();
+  if (h === 'github.com' || /(^|\.)github\./.test(h)) return 'github';
+  if (h === 'gitlab.com' || /(^|\.)gitlab\./.test(h)) return 'gitlab';
+  return null;
+}
+
+/**
+ * Which forge CLI a concrete tracker drives: github → `gh`, gitlab → `glab`.
+ * PLAN.md and JIRA have no forge CLI, so they return null.
+ */
+export function forgeCliForTracker(tracker) {
+  if (tracker === 'github') return 'gh';
+  if (tracker === 'gitlab') return 'glab';
+  return null;
+}
+
+/**
+ * The CoS claim task type that ships work from a concrete tracker. The
+ * claim-work router (cosTaskGenerator) delegates to one of these prompt bodies
+ * after resolving the app's tracker:
+ *   plan   → plan-task            (PLAN.md flow)
+ *   github → claim-issue          (gh issue flow)
+ *   gitlab → claim-issue-gitlab   (glab issue flow)
+ *   jira   → jira-sprint-manager  (JIRA flow)
+ * Returns null for an unknown tracker.
+ */
+export function trackerToClaimTaskType(tracker) {
+  switch (tracker) {
+    case 'plan': return 'plan-task';
+    case 'github': return 'claim-issue';
+    case 'gitlab': return 'claim-issue-gitlab';
+    case 'jira': return 'jira-sprint-manager';
+    default: return null;
+  }
+}
+
+/**
+ * Pure resolution: given a configured `workTracker` value (possibly `'auto'`,
+ * undefined, or junk) and a known origin `host`, produce the concrete tracker.
+ *
+ * Returns `{ configured, resolved, source }`:
+ *   - configured: the normalized stored value ('auto' for absent/invalid)
+ *   - resolved:   the concrete tracker ('plan' | 'github' | 'gitlab' | 'jira')
+ *   - source:     'configured' (explicit choice), 'origin' (auto → host), or
+ *                 'fallback' (auto with no recognizable forge host → PLAN.md)
+ */
+export function resolveWorkTracker({ configured, host } = {}) {
+  const value = CONCRETE_WORK_TRACKERS.includes(configured) ? configured : 'auto';
+  if (value !== 'auto') {
+    return { configured: value, resolved: value, source: 'configured' };
+  }
+  const fromHost = hostToWorkTracker(host);
+  if (fromHost) return { configured: 'auto', resolved: fromHost, source: 'origin' };
+  return { configured: 'auto', resolved: 'plan', source: 'fallback' };
+}
+
+/**
+ * Resolve a managed app's effective work tracker, reading its git origin host
+ * when needed. Returns `{ configured, resolved, host, forge, source }` where
+ * `forge` is the CLI ('gh' | 'glab' | null) for the resolved tracker. Never
+ * throws — a missing repo / origin degrades to host=null (→ PLAN.md fallback).
+ */
+export async function resolveAppWorkTracker(app) {
+  const configured = app?.workTracker;
+  let host = null;
+  if (app?.repoPath) {
+    const info = await getOriginInfo(app.repoPath).catch(() => null);
+    host = info?.host || null;
+  }
+  const base = resolveWorkTracker({ configured, host });
+  return { ...base, host, forge: forgeCliForTracker(base.resolved) };
+}

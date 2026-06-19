@@ -94,6 +94,12 @@ export const ISSUE_AUTHOR_FILTER_OPTIONS = [
   { value: 'any', label: 'Any author', description: 'Claim the next eligible open issue regardless of who filed it' }
 ];
 
+// Task types that claim from a forge issue tracker and therefore expose the
+// issueAuthorFilter control. `claim-work` resolves to a concrete claim flow
+// (github/gitlab) at dispatch but configures the filter here too. Add any new
+// issue-claiming task type here rather than OR-ing literals across components.
+export const ISSUE_AUTHOR_FILTER_TASK_TYPES = new Set(['claim-issue', 'claim-work']);
+
 export const DEFAULT_REVIEWER = 'copilot';
 export const DEFAULT_REVIEWERS = ['copilot'];
 

@@ -6,6 +6,7 @@ import { ALL_STYLE_IDS, STYLE_ID } from './writersRoomStylePresets.js';
 import { BIBLE_LIMITS, RELATIONSHIP_LINK_TYPES, RELATIONSHIP_OPPOSITION_AXES, ATTACHMENT_ROLES } from './storyBible.js';
 import { MIN_TIMEOUT as STAGE_TIMEOUT_MIN_MS, MAX_TIMEOUT as STAGE_TIMEOUT_MAX_MS } from './aiToolkit/constants.js';
 import { CHECK_SCOPES, CHECK_SEVERITIES } from './editorial/checkRegistry.js';
+import { WORK_TRACKERS } from './workTracker.js';
 
 // gpt-image-2 (codex backend) caps at 3840px per edge and 8,294,400 total
 // pixels. Mirror the ceiling for every image-gen route. Local mflux can
@@ -290,7 +291,13 @@ export const appSchema = z.object({
   defaultUseWorktree: z.boolean().optional(),
   defaultOpenPR: z.boolean().optional(),
   jira: jiraConfigSchema.optional().nullable(),
-  datadog: datadogConfigSchema.optional().nullable()
+  datadog: datadogConfigSchema.optional().nullable(),
+  // Where this app's autonomous work items live (single source per app).
+  // 'auto' (default) resolves to a concrete tracker from the git origin host
+  // — see server/lib/workTracker.js + the `claim-work` router in
+  // cosTaskGenerator.js. WORK_TRACKERS is the single source of truth for the
+  // value set.
+  workTracker: z.enum(WORK_TRACKERS).optional()
   // referenceRepos is INTENTIONALLY not part of the create/update API
   // surface. createApp() doesn't persist it and updateApp() (via the
   // omit() in appUpdateSchema) ignores it — the dedicated

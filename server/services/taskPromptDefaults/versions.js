@@ -10,6 +10,7 @@ export const PROMPT_VERSIONS = {
   'feature-ideas': 9,  // v9: drop DONE.md reads — use `.changelog/` + `git log` (last 50) as the completed-work signal
   'plan-task': 8,      // v8: Phase-6 merge fallback prefers --merge over --squash (after --auto), matching the /do:pr + review-loop default and PortOS's merge-only policy
   'claim-issue': 2,    // v2: stop treating the bare `plan` label as a skip — `plan` is the claimable-queue label (do-replan --issues labels every migrated backlog item `plan`), so v1's exclusion emptied the whole actionable queue; now skip only true epics (`epic` label or "(epic)" title)
+  'claim-issue-gitlab': 1, // v1: GitLab sibling of claim-issue — same 7-phase /claim --issues flow over `glab` issues + merge requests. Reached via the claim-work router when an app's resolved workTracker is 'gitlab'.
   'pr-reviewer': 3,    // v3: multi-stage pipeline (security scan → code review + merge)
   'code-reviewer-a': 1, // v1: 2-stage pipeline (codebase review → triage & implement)
   'code-reviewer-b': 1, // v1: 2-stage pipeline (codebase review → triage & implement)
