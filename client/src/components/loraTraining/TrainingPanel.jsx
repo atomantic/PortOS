@@ -309,12 +309,13 @@ export default function TrainingPanel({ dataset, readiness, triggerSaving, onRun
             />
           </div>
         )}
-        {/* Frozen-base overrides (issue #1407 / #1321), mflux runtime only.
-            "Auto" leaves the param absent so the server keeps its memory-derived
-            tier; an explicit pick overrides it (still clamped by the install's
-            LORA_TRAIN_MAX_QUANT_BITS cap). Numeric/boolean → undefined so the
-            key drops out of the JSON payload entirely (true "absent"). */}
-        {params && (
+        {/* Frozen-base overrides (issue #1407 / #1321) — only feed the mflux
+            config builder, so gate on the mflux engine being the one that'll
+            run (the torch/FLUX2 path always trains the bf16 base and ignores
+            these). "Auto" → param absent → server keeps its memory-derived tier
+            (still clamped by LORA_TRAIN_MAX_QUANT_BITS); '' → undefined so the
+            key drops out of the payload entirely (true "absent"). */}
+        {params && status?.runtimes?.mflux?.ready && (
           <div>
             <label htmlFor="lt-param-baseQuant" className="block text-xs text-gray-400 mb-1">Base quant</label>
             <select
@@ -330,7 +331,7 @@ export default function TrainingPanel({ dataset, readiness, triggerSaving, onRun
             </select>
           </div>
         )}
-        {params && (
+        {params && status?.runtimes?.mflux?.ready && (
           <div>
             <label htmlFor="lt-param-lowRam" className="block text-xs text-gray-400 mb-1">Low RAM spill</label>
             <select
