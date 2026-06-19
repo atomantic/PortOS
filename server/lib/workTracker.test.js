@@ -96,11 +96,13 @@ describe('hostFromOriginUrl', () => {
     expect(hostFromOriginUrl('ssh://git@github.com:22/atomantic/PortOS.git')).toBe('github.com');
   });
 
-  it('resolves the host for GitLab subgroup remotes (>2 path segments)', () => {
-    // The strict owner/repo parser rejects these; the subgroup-tolerant
-    // fallback must still surface the host so auto → GitLab (not PLAN.md).
+  it('resolves the host for GitLab subgroup remotes across every URL form', () => {
+    // owner/repo-only parsers reject these; host extraction must still surface
+    // the host so auto → GitLab (not PLAN.md). Covers scp, https, and ssh://.
     expect(hostFromOriginUrl('git@gitlab.com:group/subgroup/repo.git')).toBe('gitlab.com');
     expect(hostFromOriginUrl('https://gitlab.example.com/group/sub/deep/repo.git')).toBe('gitlab.example.com');
+    expect(hostFromOriginUrl('ssh://git@gitlab.com/group/subgroup/repo.git')).toBe('gitlab.com');
+    expect(hostFromOriginUrl('ssh://git@gitlab.com:2222/group/subgroup/repo.git')).toBe('gitlab.com');
   });
 
   it('returns null for empty / unparseable input', () => {

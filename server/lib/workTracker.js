@@ -8,14 +8,14 @@
 // per-app JIRA config (`app.jira`) — so a user picks it deliberately.
 //
 // The pure mappers (hostToWorkTracker / forgeCliForTracker / trackerToClaimTaskType
-// / resolveWorkTracker) are side-effect-free and unit-tested. resolveAppWorkTracker
-// is the async wrapper that reads the app's origin host via getOriginInfo — it
-// shells out to git, mirroring gitRemote.js (which also lives in lib/ despite
-// running `git`). See server/services/cosTaskGenerator.js for the claim-work
-// router that consumes trackerToClaimTaskType.
+// / resolveWorkTracker / hostFromOriginUrl) are side-effect-free and unit-tested.
+// resolveAppWorkTracker is the async wrapper that reads the app's origin URL via
+// readOriginRemoteUrl and extracts the host with hostFromOriginUrl — it shells
+// out to git, mirroring gitRemote.js (which also lives in lib/ despite running
+// `git`). See server/services/cosTaskGenerator.js for the claim-work router
+// that consumes trackerToClaimTaskType.
 
-import { readOriginRemoteUrl, parseGitRemoteUrl } from './gitRemote.js';
-import { parseGitRemote } from './gitForge.js';
+import { readOriginRemoteUrl } from './gitRemote.js';
 
 // Every selectable value (UI + Zod enum). `'auto'` is the default; the rest are
 // concrete sources.
@@ -104,21 +104,30 @@ export function resolveWorkTracker({ configured, host } = {}) {
 }
 
 /**
- * Extract just the host from a git origin URL. Tries the strict
- * owner/repo parser first (handles ssh:// scheme + ports), then falls back to
- * the GitLab-subgroup-tolerant parser (`group/subgroup/repo`) — otherwise a
- * subgroup remote yields no host and `'auto'` wrongly falls back to PLAN.md
- * instead of GitLab. Returns null for unparseable input.
+ * Extract just the host from a git origin URL — only the host is needed to
+ * classify the forge, so this handles EVERY remote form in one pass rather than
+ * chaining structure-validating owner/repo parsers (which variously reject
+ * GitLab subgroup paths, `ssh://` scheme + subgroups, or ports). Returns null
+ * for unparseable input. Handles:
+ *   - scheme URLs: `https://`, `ssh://`, `git://` … with optional `user[:pw]@`
+ *     and `:port`, and ANY path depth (so GitLab `group/subgroup/repo` works)
+ *   - scp-style: `[user@]host:path`
  *
- * URL-form credentials (`https://user:token@host/…`) are stripped FIRST: the
- * subgroup fallback parser would otherwise capture `user:token@host` as the
- * host and leak the PAT through `GET /api/apps/:id/work-tracker`. SCP-style
- * `git@host:…` carries only an ssh username (no secret), so it's left intact.
+ * Embedded credentials are dropped inherently — the `user[:token]@` segment is
+ * matched and discarded, never returned — so a PAT in an https remote can't
+ * leak through `GET /api/apps/:id/work-tracker`. Ports are stripped too.
  */
 export function hostFromOriginUrl(url) {
-  if (!url) return null;
-  const cleaned = url.replace(/^([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)[^/@]+@/, '$1');
-  return parseGitRemoteUrl(cleaned)?.host || parseGitRemote(cleaned)?.host || null;
+  if (typeof url !== 'string') return null;
+  const trimmed = url.trim();
+  if (!trimmed) return null;
+  // scheme://[userinfo@]host[:port]/...  — host is the run up to the next / : @
+  const scheme = trimmed.match(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\/(?:[^/@]+@)?([^/:]+)/);
+  if (scheme) return scheme[1] || null;
+  // scp-style [user@]host:path
+  const scp = trimmed.match(/^(?:[^@/]+@)?([^/:]+):/);
+  if (scp) return scp[1] || null;
+  return null;
 }
 
 /**
