@@ -20,7 +20,8 @@
  *                            enrichment, fill-missing settings
  *   - *.md documents       — content shipped by filename, ADD-ONLY on the
  *                            receiver (a local doc is never overwritten)
- *   - autobiography/        — stories union by id (LWW), config stays local
+ *   - autobiography/        — stories union by id (LWW); config (the prompt
+ *                            schedule) is NOT synced — it's machine-local
  *
  * Merge philosophy mirrors the rest of dataSync: union semantics, no data is
  * ever lost, and every field is key-presence guarded so an OLDER peer that only
@@ -45,7 +46,6 @@ const TASTE_FILE = join(DIR, 'taste-profile.json');
 const META_FILE = join(DIR, 'meta.json');
 const AUTOBIO_DIR = join(DIR, 'autobiography');
 const AUTOBIO_STORIES_FILE = join(AUTOBIO_DIR, 'stories.json');
-const AUTOBIO_CONFIG_FILE = join(AUTOBIO_DIR, 'config.json');
 
 // Paths whose fingerprints feed the dataSync checksum cache. The whole
 // digital-twin dir is watched (two levels deep — covers top-level files, the
@@ -307,7 +307,11 @@ export async function getDigitalTwinSnapshot() {
   // The reads are independent — run them concurrently. The snapshot is
   // re-materialized whenever the dir fingerprint changes (every sync cycle on a
   // checksum-cache miss), so the parallelism is worth it.
-  const [identity, chronotype, longevity, feedback, taste, meta, documents, stories, config] =
+  // autobiography/config.json (the prompt schedule: enabled, intervalHours,
+  // lastPromptAt) is deliberately NOT in the snapshot — it is machine-local
+  // scheduling state, and a fresh peer must not inherit another machine's
+  // cadence or have prompts enabled without local opt-in. Only the stories sync.
+  const [identity, chronotype, longevity, feedback, taste, meta, documents, stories] =
     await Promise.all([
       readJSONFile(IDENTITY_FILE, null),
       readJSONFile(CHRONOTYPE_FILE, null),
@@ -317,9 +321,8 @@ export async function getDigitalTwinSnapshot() {
       readJSONFile(META_FILE, null),
       readMarkdownDocuments(),
       readJSONFile(AUTOBIO_STORIES_FILE, null),
-      readJSONFile(AUTOBIO_CONFIG_FILE, null),
     ]);
-  const data = { identity, chronotype, longevity, feedback, taste, meta, documents, autobiography: { stories, config } };
+  const data = { identity, chronotype, longevity, feedback, taste, meta, documents, autobiography: { stories } };
   return { data, checksum: computeChecksum(data) };
 }
 
@@ -352,14 +355,6 @@ async function applyDocuments(documents) {
     count++;
   }
   return count;
-}
-
-async function applyAutobiographyConfigIfAbsent(config) {
-  if (!isPlainObject(config)) return 0;
-  if (existsSync(AUTOBIO_CONFIG_FILE)) return 0; // prompt schedule stays machine-local
-  await ensureDir(AUTOBIO_DIR);
-  await atomicWrite(AUTOBIO_CONFIG_FILE, config);
-  return 1;
 }
 
 // taste-questionnaire and digital-twin-meta keep their own in-memory caches (the
@@ -399,14 +394,18 @@ export async function applyDigitalTwinRemote(remoteData) {
   count += await applyMerge(LONGEVITY_FILE, remoteData.longevity, (l, r) => mergeDeepUnion(l, r, 'derivedAt'));
   count += await applyMerge(FEEDBACK_FILE, remoteData.feedback, (l, r) => mergeObjectLWW(l, r, 'updatedAt'));
   count += await applyTaste(remoteData.taste);
-  // Documents before meta: if loadMeta has to rebuild meta from a disk scan, the
-  // newly-written .md files should already be present to be catalogued.
-  count += await applyDocuments(remoteData.documents);
+  // Meta BEFORE documents: applyMeta()'s loadMeta() rebuilds meta from a disk
+  // .md scan when no meta.json exists, creating DEFAULT document entries. If the
+  // peer's .md files were written first, that rebuild would manufacture default
+  // entries and mergeMeta's add-only policy would then keep them, discarding the
+  // sender's real document metadata (title/category/priority/weight). Merging
+  // meta first preserves the sender's entries; the files are written after.
   count += await applyMeta(remoteData.meta);
+  count += await applyDocuments(remoteData.documents);
 
   if (isPlainObject(remoteData.autobiography)) {
+    // stories only — config (prompt schedule) is intentionally machine-local.
     count += await applyMerge(AUTOBIO_STORIES_FILE, remoteData.autobiography.stories, mergeAutobiographyStories, { dir: AUTOBIO_DIR });
-    count += await applyAutobiographyConfigIfAbsent(remoteData.autobiography.config);
   }
 
   if (count > 0) console.log(`🔄 Digital twin sync: updated ${count} items`);
