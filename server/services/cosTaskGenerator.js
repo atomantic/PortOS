@@ -1288,9 +1288,11 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
     emitLog('info', `claim-work for ${app.name}: tracker=${wt.resolved} (${wt.source}) → ${promptTaskType}`, { appId: app.id, analysisType: taskType });
   }
   // Honor a direct claim-work prompt customization if the user set one;
-  // otherwise delegate to the resolved tracker's (possibly itself customized)
-  // prompt body. getTaskPrompt(promptTaskType) reads THAT type's interval.prompt
-  // override, so a user's claim-issue/plan-task customization flows through too.
+  // otherwise delegate to the resolved tracker's prompt body via
+  // getTaskPrompt(promptTaskType), which reads THAT type's interval.prompt
+  // override — so a user's claim-issue / plan-task / jira-sprint-manager
+  // customization flows through. (The GitLab body, claim-issue-gitlab, has no
+  // schedule/UI customization slot, so it always renders the shipped default.)
   const promptKeyForBody = (taskType === 'claim-work' && !interval.prompt) ? promptTaskType : taskType;
 
   const promptTemplate = metadata.pipeline?.stages
