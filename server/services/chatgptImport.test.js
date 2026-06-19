@@ -297,6 +297,19 @@ describe('chatgptImport service', () => {
       expect([...extractAssetFileNames(content)]).toEqual(['file-ok.png']);
     });
 
+    it('rejects non-asset-charset tails (query strings, url-encoded dots) the basename guard let through', () => {
+      // Both names below contain no bare `/`, `\\`, or literal `..`, so they
+      // passed the looser prior `!includes()` guard — but neither can name a
+      // real on-disk asset. The flat-charset anchor is what rejects them, so
+      // this pins the hardening (it would fail under the prior guard).
+      const content = [
+        '![q](/data/brain-imports/file-q.png?sig=abc)',  // query-string tail
+        '![pct](/data/brain-imports/file%2e%2e.png)',    // url-encoded dots (not literal `..`)
+        '![ok](/data/brain-imports/file-ok2.png)',
+      ].join('\n');
+      expect([...extractAssetFileNames(content)]).toEqual(['file-ok2.png']);
+    });
+
     it('returns an empty set for non-string / asset-free content', () => {
       expect(extractAssetFileNames(null).size).toBe(0);
       expect(extractAssetFileNames('plain memory text').size).toBe(0);
