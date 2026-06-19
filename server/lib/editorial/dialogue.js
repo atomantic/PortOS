@@ -80,8 +80,10 @@ function inflectVerb(base) {
     forms.add(`${b}d`);
   } else {
     forms.add(`${b}ed`);
-    // Short CVC base doubles its final consonant: nod → nodded.
-    if (/[^aeiou][aeiou][^aeiouwxy]$/.test(b)) {
+    // Short CVC base doubles its final consonant: nod → nodded. The `qu…` arm
+    // catches words where the `u` is part of a `qu` onset rather than the vowel
+    // (quip → quipped), which the plain CVC test would miss (it reads `u` as a vowel).
+    if (/[^aeiou][aeiou][^aeiouwxy]$/.test(b) || /qu[aeiou][^aeiouwxy]$/.test(b)) {
       forms.add(`${b}${b.slice(-1)}ed`);
     }
   }
@@ -105,7 +107,7 @@ function buildVerbForms(seed, opts = {}) {
 }
 
 // Build the two dialogue-tag regexes for a set of inflected verb forms:
-//   after-quote:  "…" she opined   /   "…" opined Marlon
+//   after-quote:  "…," she opined   /   "…," opined Marlon
 //   before-quote: She opined, "…"
 // The verb must sit immediately beside a double-quote span and a speaker, so a
 // bare narrated verb ("the dog growled") never matches. Returns null when the
@@ -115,12 +117,31 @@ function buildTagMatchers(forms) {
   // Longest-first so "expostulated" wins over a shorter prefix under alternation.
   const alt = forms.slice().sort((a, b) => b.length - a.length).map(escapeRegExp).join('|');
   const VERB = `(${alt})`;
-  // After a closing quote: optional comma/period already lives inside the quote,
-  // so we expect quote → space → (optional speaker) → verb  OR  verb → speaker.
-  const after = new RegExp(`${DQUOTE_CLASS}[\\s]+(?:${SPEAKER}\\s+)?${VERB}\\b`, 'gi');
-  // Before an opening quote: speaker → verb → optional comma/colon → quote.
+  // After a closing quote: capture the terminal punctuation that sits INSIDE the
+  // quote (`," ` vs `." `) so the caller can tell a real tag from an action beat.
+  // Group 1 = that punctuation (may be empty); group 2 = the verb. Standard prose
+  // ends a quote with a comma when a tag follows ("…," she said) and a period
+  // when the dialogue is a complete sentence and the next clause is a separate
+  // action beat ("…." She smiled.) — a period-terminated quote is NOT a tag.
+  const after = new RegExp(`([,.!?])?${DQUOTE_CLASS}\\s+(?:${SPEAKER}\\s+)?${VERB}\\b`, 'gi');
+  // Before an opening quote: speaker → verb → optional comma/colon → quote. This
+  // ordering is unambiguously a tag, so no punctuation gate is needed. Group 1 = verb.
   const before = new RegExp(`\\b${SPEAKER}\\s+${VERB}\\s*[,:]?\\s*${DQUOTE_CLASS}`, 'gi');
   return { after, before };
+}
+
+// Given a tag's `kind` and the punctuation that terminated the preceding quote,
+// decide whether it reads as a real dialogue tag (worth flagging) vs an action
+// beat that merely follows a complete line of dialogue (legitimate — leave it):
+//   - non-speech ("she smiled"): a misuse ONLY when comma-attached like a speech
+//     tag ("Of course," she smiled). After a period/!/? the quote is a complete
+//     sentence and "She smiled." is a separate, correct action beat.
+//   - bookism ("she opined"): an ornate SPEECH verb is a valid (if ugly) tag after
+//     a comma/?/! or a tag-continuing quote with no terminal mark — but not after a
+//     period, where the following clause is a new sentence, not a tag.
+function punctAllowsTag(kind, punct) {
+  if (kind === 'non-speech') return punct === ',';
+  return punct !== '.';
 }
 
 /**
@@ -153,13 +174,25 @@ export function findSaidBookisms(text, opts = {}) {
 
   const out = [];
   const seen = new Set();
-  for (const re of [matchers.after, matchers.before]) {
+  // The `after` matcher captures the quote's terminal punctuation in group 1 and
+  // the verb in group 2 (so a tag can be told from an action beat); the `before`
+  // matcher captures only the verb in group 1 (its word order is unambiguously a
+  // tag). Iterate them with their per-matcher group layout.
+  const passes = [
+    { re: matchers.after, verbGroup: 2, punctGroup: 1 },
+    { re: matchers.before, verbGroup: 1, punctGroup: null },
+  ];
+  for (const { re, verbGroup, punctGroup } of passes) {
     re.lastIndex = 0;
     let m;
     while ((m = re.exec(text)) !== null) {
-      const form = m[1].toLowerCase();
+      const form = m[verbGroup].toLowerCase();
       const info = kindByForm.get(form);
       if (!info) continue;
+      // For the after-quote pass, gate on the in-quote terminal punctuation so an
+      // action beat following a complete sentence ("…." She smiled.) isn't flagged
+      // as a misused tag. The before-quote pass has no punctuation to weigh.
+      if (punctGroup !== null && !punctAllowsTag(info.kind, m[punctGroup] || '')) continue;
       const key = `${info.base}@${m.index}`;
       if (seen.has(key)) continue;
       seen.add(key);

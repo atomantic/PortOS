@@ -39,9 +39,35 @@ describe('findSaidBookisms', () => {
     expect(findSaidBookisms('"Hello," she said. "How are you?" he asked.')).toEqual([]);
   });
 
-  it('matches inflected forms (base, -s, -ed)', () => {
+  it('does NOT flag an action beat after a complete (period-terminated) line', () => {
+    // "Of course." is a complete sentence; "She smiled." is a separate, correct
+    // action beat — the very construction the non-speech suggestion recommends.
+    expect(findSaidBookisms('"Of course." She smiled.')).toEqual([]);
+    expect(findSaidBookisms('"I quit." Marlon shrugged and left.')).toEqual([]);
+  });
+
+  it('flags a comma-attached non-speech tag but not its period-terminated beat form', () => {
+    expect(findSaidBookisms('"Of course," she smiled.')).toHaveLength(1); // comma → misused tag
+    expect(findSaidBookisms('"Of course." She smiled.')).toEqual([]);     // period → action beat
+  });
+
+  it('flags an ornate speech verb after ? or ! but not after a period', () => {
+    expect(findSaidBookisms('"Why?" he expostulated.').map((h) => h.verb)).toContain('expostulate');
+    // After a period the following clause is a new sentence, not a tag.
+    expect(findSaidBookisms('"I see." He opined for a while.')).toEqual([]);
+  });
+
+  it('anchors the verb-before-speaker branch ("…," opined Marlon)', () => {
+    const hits = findSaidBookisms('"Indeed," opined Marlon.');
+    expect(hits).toHaveLength(1);
+    expect(hits[0].verb).toBe('opine');
+  });
+
+  it('matches inflected forms (base, -s, -ed) including qu-stem doubling', () => {
     expect(findSaidBookisms('"No," he snarls.').map((h) => h.verb)).toContain('snarl');
     expect(findSaidBookisms('"No," he snarled.').map((h) => h.verb)).toContain('snarl');
+    // quip → quipped: the `u` is a qu-onset, not the vowel (regression for the CVC gap).
+    expect(findSaidBookisms('"Ha," he quipped.').map((h) => h.verb)).toContain('quip');
   });
 
   it('honors allowWords (mutes a base) and extraWords (adds a base)', () => {
