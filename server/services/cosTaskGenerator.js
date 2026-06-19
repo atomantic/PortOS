@@ -1286,6 +1286,19 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
     const wt = await resolveAppWorkTracker(app);
     promptTaskType = trackerToClaimTaskType(wt.resolved) || 'plan-task';
     emitLog('info', `claim-work for ${app.name}: tracker=${wt.resolved} (${wt.source}) → ${promptTaskType}`, { appId: app.id, analysisType: taskType });
+    // Inherit the resolved flow's isolation posture, overriding claim-work's
+    // own useWorktree/openPR=false defaults. The plan/github/gitlab claim
+    // prompts self-manage their worktree + PR (false/false is correct), but
+    // jira-sprint-manager relies on CoS-MANAGED isolation (useWorktree/openPR
+    // true) and implements directly in {repoPath} — so without this the JIRA
+    // route would run against the live checkout. Pull the delegated type's
+    // managed-agent defaults; a prompt-only type with no DEFAULT_TASK_INTERVALS
+    // entry (e.g. claim-issue-gitlab) keeps claim-work's self-managed false.
+    const delegatedMeta = taskSchedule.DEFAULT_TASK_INTERVALS[promptTaskType]?.taskMetadata;
+    if (delegatedMeta) {
+      if ('useWorktree' in delegatedMeta) metadata.useWorktree = delegatedMeta.useWorktree;
+      if ('openPR' in delegatedMeta) metadata.openPR = delegatedMeta.openPR;
+    }
   }
   // Honor a direct claim-work prompt customization if the user set one;
   // otherwise delegate to the resolved tracker's prompt body via

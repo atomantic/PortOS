@@ -110,6 +110,15 @@ describe('claim-work single-source routing', () => {
     expect(GEN_SRC).toContain("promptTaskType === 'claim-issue-gitlab' ? 'glab'");
     expect(GEN_SRC).toContain('glab issue list');
   });
+
+  it('inherits the delegated flow isolation posture so the JIRA route keeps CoS worktree+PR', () => {
+    // claim-work forces useWorktree/openPR=false (correct for the self-managing
+    // plan/github/gitlab claim prompts) but jira-sprint-manager needs CoS-managed
+    // isolation — pull the delegated type's DEFAULT_TASK_INTERVALS metadata.
+    expect(GEN_SRC).toContain('taskSchedule.DEFAULT_TASK_INTERVALS[promptTaskType]?.taskMetadata');
+    expect(GEN_SRC).toContain("'useWorktree' in delegatedMeta");
+    expect(GEN_SRC).toContain("'openPR' in delegatedMeta");
+  });
 });
 
 describe('exceedsMaxSpawns', () => {

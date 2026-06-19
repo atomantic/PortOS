@@ -14,7 +14,8 @@
 // running `git`). See server/services/cosTaskGenerator.js for the claim-work
 // router that consumes trackerToClaimTaskType.
 
-import { getOriginInfo } from './gitRemote.js';
+import { readOriginRemoteUrl, parseGitRemoteUrl } from './gitRemote.js';
+import { parseGitRemote } from './gitForge.js';
 
 // Every selectable value (UI + Zod enum). `'auto'` is the default; the rest are
 // concrete sources.
@@ -103,6 +104,18 @@ export function resolveWorkTracker({ configured, host } = {}) {
 }
 
 /**
+ * Extract just the host from a git origin URL. Tries the strict
+ * owner/repo parser first (handles ssh:// scheme + ports), then falls back to
+ * the GitLab-subgroup-tolerant parser (`group/subgroup/repo`) — otherwise a
+ * subgroup remote yields no host and `'auto'` wrongly falls back to PLAN.md
+ * instead of GitLab. Returns null for unparseable input.
+ */
+export function hostFromOriginUrl(url) {
+  if (!url) return null;
+  return parseGitRemoteUrl(url)?.host || parseGitRemote(url)?.host || null;
+}
+
+/**
  * Resolve a managed app's effective work tracker, reading its git origin host
  * when needed. Returns `{ configured, resolved, host, forge, source }` where
  * `forge` is the CLI ('gh' | 'glab' | null) for the resolved tracker. Never
@@ -112,8 +125,8 @@ export async function resolveAppWorkTracker(app) {
   const configured = app?.workTracker;
   let host = null;
   if (app?.repoPath) {
-    const info = await getOriginInfo(app.repoPath).catch(() => null);
-    host = info?.host || null;
+    const url = await readOriginRemoteUrl(app.repoPath).catch(() => null);
+    host = hostFromOriginUrl(url);
   }
   const base = resolveWorkTracker({ configured, host });
   return { ...base, host, forge: forgeCliForTracker(base.resolved) };

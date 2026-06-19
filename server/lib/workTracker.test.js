@@ -8,6 +8,7 @@ import {
   forgeCliForTracker,
   trackerToClaimTaskType,
   resolveWorkTracker,
+  hostFromOriginUrl,
 } from './workTracker.js';
 
 describe('workTracker constants', () => {
@@ -85,6 +86,32 @@ describe('resolveWorkTracker (pure)', () => {
     expect(resolveWorkTracker({ configured: 'garbage', host: 'gitlab.com' }))
       .toEqual({ configured: 'auto', resolved: 'gitlab', source: 'origin' });
     expect(resolveWorkTracker({}).resolved).toBe('plan');
+  });
+});
+
+describe('hostFromOriginUrl', () => {
+  it('extracts the host from standard owner/repo remotes (ssh, scp, https)', () => {
+    expect(hostFromOriginUrl('git@github.com:atomantic/PortOS.git')).toBe('github.com');
+    expect(hostFromOriginUrl('https://github.com/atomantic/PortOS.git')).toBe('github.com');
+    expect(hostFromOriginUrl('ssh://git@github.com:22/atomantic/PortOS.git')).toBe('github.com');
+  });
+
+  it('resolves the host for GitLab subgroup remotes (>2 path segments)', () => {
+    // The strict owner/repo parser rejects these; the subgroup-tolerant
+    // fallback must still surface the host so auto → GitLab (not PLAN.md).
+    expect(hostFromOriginUrl('git@gitlab.com:group/subgroup/repo.git')).toBe('gitlab.com');
+    expect(hostFromOriginUrl('https://gitlab.example.com/group/sub/deep/repo.git')).toBe('gitlab.example.com');
+  });
+
+  it('returns null for empty / unparseable input', () => {
+    expect(hostFromOriginUrl('')).toBeNull();
+    expect(hostFromOriginUrl(null)).toBeNull();
+    expect(hostFromOriginUrl('not a url')).toBeNull();
+  });
+
+  it('a subgroup GitLab remote resolves to the gitlab tracker end-to-end', () => {
+    const host = hostFromOriginUrl('git@gitlab.com:group/subgroup/repo.git');
+    expect(resolveWorkTracker({ configured: 'auto', host }).resolved).toBe('gitlab');
   });
 });
 
