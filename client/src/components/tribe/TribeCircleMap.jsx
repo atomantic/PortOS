@@ -86,7 +86,12 @@ function externalLayout(total) {
 }
 
 export default function TribeCircleMap({ contacts, selectedId, onSelect, onLogTouch }) {
+  // `hovered` drives the transient tooltip/enlarge and clears on mouse-leave.
+  // `activeId` is sticky — it survives mouse-leave so the aside "Log touchpoint"
+  // button stays mounted while the pointer travels from the node to the button
+  // (otherwise leaving the node would unmount the button before the click lands).
   const [hovered, setHovered] = useState(null);
+  const [activeId, setActiveId] = useState(null);
 
   // Split contacts: Dunbar rings get banded placement; external people get the
   // open outer region. Incoming order is preserved for stable positions.
@@ -115,6 +120,9 @@ export default function TribeCircleMap({ contacts, selectedId, onSelect, onLogTo
   // External glyphs only carry initials when the nodes are large enough to read.
   const showExternalText = placed.externalR >= 8;
   const hoveredNode = hovered ? placed.nodes.find((n) => n.contact.id === hovered) : null;
+  // The sticky-active node drives the persistent "Log touchpoint" action; falls
+  // back to null once its contact leaves the list (e.g. after a ring change).
+  const activeNode = activeId ? placed.nodes.find((n) => n.contact.id === activeId) : null;
 
   return (
     <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(220px,300px)]">
@@ -220,8 +228,10 @@ export default function TribeCircleMap({ contacts, selectedId, onSelect, onLogTo
                 transform={`translate(${x} ${y})`}
                 className="cursor-pointer"
                 onClick={() => onSelect?.(contact)}
-                onMouseEnter={() => setHovered(contact.id)}
+                onMouseEnter={() => { setHovered(contact.id); setActiveId(contact.id); }}
                 onMouseLeave={() => setHovered((cur) => (cur === contact.id ? null : cur))}
+                onFocus={() => { setHovered(contact.id); setActiveId(contact.id); }}
+                onBlur={() => setHovered((cur) => (cur === contact.id ? null : cur))}
                 tabIndex={0}
                 role="button"
                 aria-label={`${contact.name || 'Unnamed'} — ${ringLabel}, ${status.label}`}
@@ -327,13 +337,13 @@ export default function TribeCircleMap({ contacts, selectedId, onSelect, onLogTo
           </div>
         </div>
 
-        {hoveredNode && onLogTouch && (
+        {activeNode && onLogTouch && (
           <button
             type="button"
-            onClick={() => onLogTouch(hoveredNode.contact.id)}
+            onClick={() => onLogTouch(activeNode.contact.id)}
             className="rounded border border-port-border px-3 py-2 text-xs text-port-accent hover:bg-port-accent/10"
           >
-            Log touchpoint for {hoveredNode.contact.name || 'this person'}
+            Log touchpoint for {activeNode.contact.name || 'this person'}
           </button>
         )}
       </aside>

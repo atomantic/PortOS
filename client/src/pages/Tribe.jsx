@@ -690,10 +690,10 @@ export default function Tribe() {
     return () => cancelAnimationFrame(frame);
   }, [focusTick, loading, activeTab]);
 
-  // Reset to a blank draft and surface the form. The Focus tab has no form, so
-  // fall back to Circle there; otherwise keep the user's current tab.
+  // Reset to a blank draft and surface the form. The Focus and Map tabs have no
+  // form, so fall back to Circle there; otherwise keep the user's current tab.
   const startNewRelationship = () => {
-    setActiveTab((tab) => (tab === 'focus' ? 'circle' : tab));
+    setActiveTab((tab) => (tab === 'focus' || tab === 'map' ? 'circle' : tab));
     setDraft(emptyDraft());
     pendingFocusRef.current = true;
     setFocusTick((tick) => tick + 1);
