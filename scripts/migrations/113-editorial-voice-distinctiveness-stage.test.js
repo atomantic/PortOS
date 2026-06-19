@@ -4,19 +4,19 @@ import { tmpdir } from 'os';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
-import migration from './111-editorial-on-the-nose-stage.js';
+import migration from './113-editorial-voice-distinctiveness-stage.js';
 
 // scripts/migrations/<this> → ../.. is the repo root (matches _testHelpers.js).
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
-// First-shipment seed migration (mirrors 110) — no MD5 bookkeeping, so the
+// First-shipment seed migration (mirrors 110/111) — no MD5 bookkeeping, so the
 // seed / no-clobber behavior is asserted directly.
 
-const FILENAME = 'pipeline-editorial-on-the-nose.md';
-const STAGE_KEY = 'pipeline-editorial-on-the-nose';
-const BODY = '# On-the-nose dialogue\n\nshipped body\n';
+const FILENAME = 'pipeline-editorial-voice-distinctiveness.md';
+const STAGE_KEY = 'pipeline-editorial-voice-distinctiveness';
+const BODY = '# Voice distinctiveness\n\nshipped body\n';
 
-describe('migration 111 — seed editorial-on-the-nose stage', () => {
+describe('migration 113 — seed editorial-voice-distinctiveness stage', () => {
   let rootDir;
   let stagesDir;
   let refStagesDir;
@@ -34,7 +34,7 @@ describe('migration 111 — seed editorial-on-the-nose stage', () => {
   };
 
   beforeEach(() => {
-    rootDir = mkdtempSync(join(tmpdir(), 'migration-111-'));
+    rootDir = mkdtempSync(join(tmpdir(), 'migration-112-'));
     stagesDir = join(rootDir, 'data', 'prompts', 'stages');
     refStagesDir = join(rootDir, 'data.reference', 'prompts', 'stages');
     installedConfigPath = join(rootDir, 'data', 'prompts', 'stage-config.json');

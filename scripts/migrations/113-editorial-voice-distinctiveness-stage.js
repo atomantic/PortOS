@@ -2,7 +2,7 @@
  * Seed the `pipeline-editorial-voice-distinctiveness` stage into existing
  * installs (#1307).
  *
- * Mirrors `111-editorial-on-the-nose-stage.js`: copies the `.md` template from
+ * Mirrors `112-editorial-on-the-nose-stage.js`: copies the `.md` template from
  * `data.reference/prompts/stages/` and merges the stage-config entry into
  * `data/prompts/stage-config.json`. Boot runs migrations (server/index.js) but
  * NOT `setup-data.js`, so an upgrade that pulls + `pm2 restart`s (rather than

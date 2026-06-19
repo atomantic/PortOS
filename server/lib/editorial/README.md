@@ -57,12 +57,16 @@ it. To add a new built-in check, append an entry to `EDITORIAL_CHECKS` in
 Declare every input the check's `run(ctx)` reads in its `sources` array (a
 non-empty subset of `EDITORIAL_SOURCES`: `manuscript`, `canon`,
 `series.styleGuide`, `series.arc.tickingClock`, `series.arc.readerMap`,
-`reverseOutline`, `editorialArcs`, `series.characterArcs`). The staleness
+`reverseOutline`, `reverseOutline.plotlines`, `editorialArcs`,
+`series.characterArcs`). The staleness
 runner fingerprints exactly those sources, so a finding goes stale only when
 content the check actually analyzed drifts — declare too few and a finding stays
 falsely fresh; a `manuscript` source must pair with `needsManuscript: true`, and
 `reverseOutline` makes the runner fetch the cached reverse-outline (#1286) and
-inject `ctx.reverseOutline` (the scenes array). `editorialArcs` (#1295) makes the
+inject `ctx.reverseOutline` (the scenes array); `reverseOutline.plotlines` (#1310)
+injects `ctx.reverseOutlinePlotlines` (the outline's plotline list) off that same
+fetch, so the `plot.structure-momentum` check can reconcile dropped subplots
+against the author's tagged threads. `editorialArcs` (#1295) makes the
 runner fetch the series editorial aggregate and inject `ctx.editorialArcs` (the
 detected per-character `{ name, arcDirection, issueCount, isProtagonist }`
 projection — the coarse DETECTED arc signal) plus a derived
