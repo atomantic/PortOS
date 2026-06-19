@@ -25,8 +25,11 @@ import {
   enqueueStoryboardShotStartFrame,
   refineComicPanelPrompt,
   refineStoryboardScenePrompt,
+  generateComicPanelImagePrompts,
+  generateStoryboardSceneImagePrompts,
   buildRenderSlot,
 } from '../../services/pipeline/visualStages.js';
+import { IMAGE_PROMPT_CANDIDATE_MAX } from '../../services/pipeline/refineHelpers.js';
 import {
   extractCanonFromProse, summarizeCanonExtraction,
   describeCanonFromProse, summarizeDescribeGaps,
@@ -248,6 +251,14 @@ const sceneVideoSchema = z.object({
 const promptRefineSchema = z.object({
   providerId: z.string().trim().max(80).optional(),
   model: z.string().trim().max(200).optional(),
+});
+
+// Same picker plus a `count` for the non-destructive N-candidate fan-out
+// (issue #904). `count` is clamped server-side to IMAGE_PROMPT_CANDIDATE_MAX,
+// but bound it here too so an out-of-range value is a clean 400 rather than a
+// silently-clamped surprise.
+const imagePromptsSchema = promptRefineSchema.extend({
+  count: z.number().int().min(1).max(IMAGE_PROMPT_CANDIDATE_MAX).optional().default(3),
 });
 
 // Source for scene extraction: which text stage to read from (`prose` →
@@ -824,12 +835,41 @@ router.post('/issues/:id/stages/comicPages/pages/:pageIndex/panels/:panelIndex/r
   }),
 );
 
+// Non-destructive N-candidate variant: generate `count` alternative image-gen
+// prompts for one comic panel without touching the panel description. The
+// client lists them and lets the user copy or apply one (issue #904).
+router.post('/issues/:id/stages/comicPages/pages/:pageIndex/panels/:panelIndex/image-prompts',
+  asyncHandler(async (req, res) => {
+    const body = validateRequest(imagePromptsSchema, req.body ?? {});
+    const result = await generateComicPanelImagePrompts(
+      req.params.id,
+      Number(req.params.pageIndex),
+      Number(req.params.panelIndex),
+      body,
+    ).catch((err) => { throw mapServiceError(err); });
+    res.json(result);
+  }),
+);
+
 // AI-driven prompt refinement for a single storyboard scene. Mirror of the
 // comic-panel refine but uses pipeline-storyboard-image-prompt.
 router.post('/issues/:id/stages/storyboards/scenes/:index/refine-prompt',
   asyncHandler(async (req, res) => {
     const body = validateRequest(promptRefineSchema, req.body ?? {});
     const result = await refineStoryboardScenePrompt(
+      req.params.id,
+      Number(req.params.index),
+      body,
+    ).catch((err) => { throw mapServiceError(err); });
+    res.json(result);
+  }),
+);
+
+// Non-destructive N-candidate variant for a storyboard scene (issue #904).
+router.post('/issues/:id/stages/storyboards/scenes/:index/image-prompts',
+  asyncHandler(async (req, res) => {
+    const body = validateRequest(imagePromptsSchema, req.body ?? {});
+    const result = await generateStoryboardSceneImagePrompts(
       req.params.id,
       Number(req.params.index),
       body,

@@ -17,20 +17,22 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Plus, Trash2, Sparkles, Loader2, Wand2, Film, WandSparkles, Shirt } from 'lucide-react';
+import { Plus, Trash2, Sparkles, Loader2, Wand2, Film, WandSparkles, Shirt, Layers } from 'lucide-react';
 import toast from '../../ui/Toast';
 import {
   generatePipelineVisualImage,
   generatePipelineSceneVideo,
   generatePipelineShotStartFrame,
   refinePipelineSceneImagePrompt,
+  generatePipelineSceneImagePrompts,
   updatePipelineIssue,
   extractPipelineStoryboardScenes,
 } from '../../../services/api';
 import useUniverse from '../../../hooks/useUniverse';
 import { matchCharactersInText } from '../../../lib/scenePrompt';
 import MediaJobThumb from '../MediaJobThumb';
-import { genConfigToImageOptions, genConfigToRefineOptions } from './VisualGenSettings';
+import ImagePromptCandidates, { PromptCountInput } from '../ImagePromptCandidates';
+import { genConfigToImageOptions, genConfigToRefineOptions, IMAGE_PROMPT_COUNT_DEFAULT } from './VisualGenSettings';
 
 export default function StoryboardsStage({ issue, series, onStageUpdate, actionsGated = false }) {
   const stage = issue.stages?.storyboards || { status: 'empty', scenes: [] };
@@ -40,6 +42,13 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
   const [savingIdx, setSavingIdx] = useState(null);
   const [renderingVideoIdx, setRenderingVideoIdx] = useState(null);
   const [refiningIdx, setRefiningIdx] = useState(null);
+  // Non-destructive N-candidate image-prompt fan-out (issue #904). Tracks the
+  // scene currently generating, the candidates keyed by scene index, the
+  // user-chosen count, and which candidate is being applied.
+  const [promptingIdx, setPromptingIdx] = useState(null);
+  const [sceneCandidates, setSceneCandidates] = useState({});
+  const [promptCount, setPromptCount] = useState(IMAGE_PROMPT_COUNT_DEFAULT);
+  const [applyingCandidate, setApplyingCandidate] = useState(null);
   // Active per-shot renders keyed by `${sceneIdx}:${shotIdx}` so multiple
   // shots can render concurrently with independent spinners. A single ref
   // would race when the user starts a second render before the first settles.
@@ -242,6 +251,48 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
     toast.success(`Refined scene ${i + 1}${summary}`);
   };
 
+  // Generate N non-destructive image-prompt candidates for the scene (issue
+  // #904). Unlike "AI: refine", this never overwrites the description — the
+  // user copies one or clicks "Use" to apply it explicitly.
+  const handleGenerateImagePrompts = async (i) => {
+    const scene = scenes[i];
+    if (!scene.description?.trim()) {
+      toast.error('Add a description first');
+      return;
+    }
+    setPromptingIdx(i);
+    const result = await generatePipelineSceneImagePrompts(
+      issue.id, i, { count: promptCount, ...genConfigToRefineOptions(genConfig) },
+    ).catch((err) => {
+      toast.error(err.message || 'Prompt generation failed');
+      return null;
+    });
+    setPromptingIdx(null);
+    if (!result) return;
+    setSceneCandidates((prev) => ({ ...prev, [i]: result.candidates }));
+    toast.success(`Generated ${result.candidates.length} prompt${result.candidates.length === 1 ? '' : 's'} for scene ${i + 1}`);
+  };
+
+  // Apply one candidate prompt to the scene description (the only mutating
+  // path — copy stays clipboard-only). Persists via the shared write queue.
+  const handleApplyCandidate = async (i, prompt, candidateIndex) => {
+    setApplyingCandidate(`${i}:${candidateIndex}`);
+    await persist(scenes.map((s, j) => j === i ? { ...s, description: prompt } : s));
+    setApplyingCandidate(null);
+    setSceneCandidates((prev) => {
+      const next = { ...prev };
+      delete next[i];
+      return next;
+    });
+    toast.success(`Applied prompt to scene ${i + 1}`);
+  };
+
+  const dismissCandidates = (i) => setSceneCandidates((prev) => {
+    const next = { ...prev };
+    delete next[i];
+    return next;
+  });
+
   // Render this one scene as a video clip — independent of the full
   // episode-video stitch. Server persists sceneVideoJobId on the scene.
   const handleGenerateVideo = async (i) => {
@@ -304,6 +355,7 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
               : <Wand2 size={14} />}
             {extractingFrom === 'arm:prose' ? 'Click again to replace' : 'From prose'}
           </button>
+          <PromptCountInput id="storyboard-prompt-count" value={promptCount} onChange={setPromptCount} />
           <button
             type="button"
             onClick={addScene}
@@ -361,6 +413,16 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
                   </button>
                   <button
                     type="button"
+                    onClick={() => handleGenerateImagePrompts(i)}
+                    disabled={promptingIdx !== null || actionsGated}
+                    title={actionsGated ? 'Saving settings…' : `Generate ${promptCount} alternative image-gen prompts without changing the description`}
+                    className="inline-flex items-center justify-center gap-1 px-2 py-1.5 rounded bg-port-card border border-port-border text-white text-xs hover:border-port-accent/50 disabled:opacity-50"
+                  >
+                    {promptingIdx === i ? <Loader2 size={12} className="animate-spin" /> : <Layers size={12} />}
+                    AI: {promptCount} prompts
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => handleGenerate(i)}
                     disabled={savingIdx === i || actionsGated}
                     title={actionsGated ? 'Saving settings…' : undefined}
@@ -393,6 +455,14 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
                   ) : null}
                 </div>
               </div>
+              {sceneCandidates[i] ? (
+                <ImagePromptCandidates
+                  candidates={sceneCandidates[i]}
+                  applyingIndex={applyingCandidate?.startsWith(`${i}:`) ? Number(applyingCandidate.split(':')[1]) : null}
+                  onApply={(prompt, ci) => handleApplyCandidate(i, prompt, ci)}
+                  onDismiss={() => dismissCandidates(i)}
+                />
+              ) : null}
               {wardrobeChars.length > 0 ? (
                 <WardrobePicker
                   characters={wardrobeChars}

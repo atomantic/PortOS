@@ -1,16 +1,18 @@
 import { useRef, useState } from 'react';
-import { Plus, Trash2, Sparkles, Loader2, Wand2, WandSparkles, ImagePlus } from 'lucide-react';
+import { Plus, Trash2, Sparkles, Loader2, Wand2, WandSparkles, ImagePlus, Layers } from 'lucide-react';
 import toast from '../../ui/Toast';
 import { useArmedAction } from '../../../hooks/useArmedAction';
 import {
   generatePipelineVisualImage,
   generatePipelineComicPage,
   refinePipelineComicPanelPrompt,
+  generatePipelineComicPanelImagePrompts,
   updatePipelineIssue,
   extractPipelineComicPages,
 } from '../../../services/api';
 import MediaJobThumb from '../MediaJobThumb';
-import { genConfigToImageOptions, genConfigToRefineOptions } from './VisualGenSettings';
+import ImagePromptCandidates, { PromptCountInput } from '../ImagePromptCandidates';
+import { genConfigToImageOptions, genConfigToRefineOptions, IMAGE_PROMPT_COUNT_DEFAULT } from './VisualGenSettings';
 
 // NOTE: `ComicPagesStage` is currently unreachable in the running app —
 // `PipelineIssue.jsx` redirects /comicPages URLs to /comicScript, where
@@ -25,6 +27,12 @@ export default function ComicPagesStage({ issue, onStageUpdate, actionsGated = f
   const genConfig = stage.genConfig || null;
   const [savingIdx, setSavingIdx] = useState(null);
   const [refiningKey, setRefiningKey] = useState(null);
+  // Non-destructive N-candidate image-prompt fan-out (issue #904), keyed by
+  // `${pi}:${ni}` so each panel tracks its own in-flight + candidate state.
+  const [promptingKey, setPromptingKey] = useState(null);
+  const [panelCandidates, setPanelCandidates] = useState({});
+  const [promptCount, setPromptCount] = useState(IMAGE_PROMPT_COUNT_DEFAULT);
+  const [applyingCandidate, setApplyingCandidate] = useState(null);
   // Per-page in-flight state. Codex can render multiple pages in parallel, so
   // tracking a single index would flip the spinner off the wrong button when
   // the first request finished while a second was still pending.
@@ -152,6 +160,50 @@ export default function ComicPagesStage({ issue, onStageUpdate, actionsGated = f
     toast.success(`Refined panel ${pi + 1}.${ni + 1}${summary}`);
   };
 
+  // Generate N non-destructive image-prompt candidates for a panel (issue
+  // #904). Never overwrites the description — the user copies or applies one.
+  const handleGenerateImagePrompts = async (pi, ni) => {
+    const panel = pages[pi]?.panels?.[ni];
+    if (!panel?.description?.trim()) {
+      toast.error('Add a description first');
+      return;
+    }
+    const key = `${pi}:${ni}`;
+    setPromptingKey(key);
+    const result = await generatePipelineComicPanelImagePrompts(
+      issue.id, pi, ni, { count: promptCount, ...genConfigToRefineOptions(genConfig) },
+    ).catch((err) => {
+      toast.error(err.message || 'Prompt generation failed');
+      return null;
+    });
+    setPromptingKey(null);
+    if (!result) return;
+    setPanelCandidates((prev) => ({ ...prev, [key]: result.candidates }));
+    toast.success(`Generated ${result.candidates.length} prompt${result.candidates.length === 1 ? '' : 's'} for panel ${pi + 1}.${ni + 1}`);
+  };
+
+  const handleApplyCandidate = async (pi, ni, prompt, candidateIndex) => {
+    const key = `${pi}:${ni}`;
+    setApplyingCandidate(`${key}:${candidateIndex}`);
+    const next = pages.map((p, i) => i === pi
+      ? { ...p, panels: (p.panels || []).map((q, j) => j === ni ? { ...q, description: prompt } : q) }
+      : p);
+    await persist(next);
+    setApplyingCandidate(null);
+    setPanelCandidates((prev) => {
+      const rest = { ...prev };
+      delete rest[key];
+      return rest;
+    });
+    toast.success(`Applied prompt to panel ${pi + 1}.${ni + 1}`);
+  };
+
+  const dismissCandidates = (pi, ni) => setPanelCandidates((prev) => {
+    const rest = { ...prev };
+    delete rest[`${pi}:${ni}`];
+    return rest;
+  });
+
   const handleGeneratePanel = async (pi, ni) => {
     const panel = pages[pi].panels[ni];
     if (!panel.description?.trim()) {
@@ -196,6 +248,7 @@ export default function ComicPagesStage({ issue, onStageUpdate, actionsGated = f
             {extracting ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />}
             {extractArmed ? 'Click again to replace' : 'From comic script'}
           </button>
+          <PromptCountInput id="comic-prompt-count" value={promptCount} onChange={setPromptCount} />
           <button
             type="button"
             onClick={addPage}
@@ -247,53 +300,73 @@ export default function ComicPagesStage({ issue, onStageUpdate, actionsGated = f
               </div>
               <ul className="space-y-2">
                 {(page.panels || []).map((panel, ni) => (
-                  <li key={ni} className="flex items-start gap-2">
-                    <span className="text-xs text-gray-600 mt-2 w-8 shrink-0">P{ni + 1}</span>
-                    <textarea
-                      value={panel.description || ''}
-                      onChange={(e) => updatePanel(pi, ni, { description: e.target.value })}
-                      onBlur={() => persist(pagesRef.current)}
-                      placeholder="Panel subject: wide shot, foundry crucible, dusk light, Lina silhouetted against the glow."
-                      rows={2}
-                      className="flex-1 px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm"
-                      maxLength={8000}
-                    />
-                    <div className="flex flex-col gap-1 items-stretch w-32">
+                  <li key={ni} className="space-y-2">
+                    <div className="flex items-start gap-2">
+                      <span className="text-xs text-gray-600 mt-2 w-8 shrink-0">P{ni + 1}</span>
+                      <textarea
+                        value={panel.description || ''}
+                        onChange={(e) => updatePanel(pi, ni, { description: e.target.value })}
+                        onBlur={() => persist(pagesRef.current)}
+                        placeholder="Panel subject: wide shot, foundry crucible, dusk light, Lina silhouetted against the glow."
+                        rows={2}
+                        className="flex-1 px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm"
+                        maxLength={8000}
+                      />
+                      <div className="flex flex-col gap-1 items-stretch w-32">
+                        <button
+                          type="button"
+                          onClick={() => handleRefinePanel(pi, ni)}
+                          disabled={refiningKey !== null || actionsGated}
+                          title={actionsGated ? 'Saving settings…' : 'Elaborate this panel description into a richer image-gen prompt (LLM call — replaces the current text)'}
+                          className="inline-flex items-center justify-center gap-1 px-2 py-1.5 rounded bg-port-card border border-port-border text-white text-xs hover:border-port-accent/50 disabled:opacity-50"
+                        >
+                          {refiningKey === `${pi}:${ni}` ? <Loader2 size={12} className="animate-spin" /> : <WandSparkles size={12} />}
+                          AI: refine
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleGenerateImagePrompts(pi, ni)}
+                          disabled={promptingKey !== null || actionsGated}
+                          title={actionsGated ? 'Saving settings…' : `Generate ${promptCount} alternative image-gen prompts without changing the description`}
+                          className="inline-flex items-center justify-center gap-1 px-2 py-1.5 rounded bg-port-card border border-port-border text-white text-xs hover:border-port-accent/50 disabled:opacity-50"
+                        >
+                          {promptingKey === `${pi}:${ni}` ? <Loader2 size={12} className="animate-spin" /> : <Layers size={12} />}
+                          AI: {promptCount} prompts
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleGeneratePanel(pi, ni)}
+                          disabled={savingIdx === `${pi}:${ni}` || actionsGated}
+                          title={actionsGated ? 'Saving settings…' : undefined}
+                          className="inline-flex items-center justify-center gap-1 px-2 py-1.5 rounded bg-port-accent text-white text-xs disabled:opacity-50"
+                        >
+                          {savingIdx === `${pi}:${ni}` ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
+                          Image
+                        </button>
+                        {panel.imageJobId ? (
+                          <>
+                            <MediaJobThumb jobId={panel.imageJobId} label={`Panel ${ni + 1}`} size="sm" />
+                            <span className="text-[10px] text-gray-500 font-mono break-all">job {panel.imageJobId.slice(0, 8)}</span>
+                          </>
+                        ) : null}
+                      </div>
                       <button
                         type="button"
-                        onClick={() => handleRefinePanel(pi, ni)}
-                        disabled={refiningKey !== null || actionsGated}
-                        title={actionsGated ? 'Saving settings…' : 'Elaborate this panel description into a richer image-gen prompt (LLM call — replaces the current text)'}
-                        className="inline-flex items-center justify-center gap-1 px-2 py-1.5 rounded bg-port-card border border-port-border text-white text-xs hover:border-port-accent/50 disabled:opacity-50"
+                        onClick={() => removePanel(pi, ni)}
+                        className="text-gray-500 hover:text-port-error p-2"
+                        aria-label="Remove panel"
                       >
-                        {refiningKey === `${pi}:${ni}` ? <Loader2 size={12} className="animate-spin" /> : <WandSparkles size={12} />}
-                        AI: refine
+                        <Trash2 size={14} />
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => handleGeneratePanel(pi, ni)}
-                        disabled={savingIdx === `${pi}:${ni}` || actionsGated}
-                        title={actionsGated ? 'Saving settings…' : undefined}
-                        className="inline-flex items-center justify-center gap-1 px-2 py-1.5 rounded bg-port-accent text-white text-xs disabled:opacity-50"
-                      >
-                        {savingIdx === `${pi}:${ni}` ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
-                        Image
-                      </button>
-                      {panel.imageJobId ? (
-                        <>
-                          <MediaJobThumb jobId={panel.imageJobId} label={`Panel ${ni + 1}`} size="sm" />
-                          <span className="text-[10px] text-gray-500 font-mono break-all">job {panel.imageJobId.slice(0, 8)}</span>
-                        </>
-                      ) : null}
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => removePanel(pi, ni)}
-                      className="text-gray-500 hover:text-port-error p-2"
-                      aria-label="Remove panel"
-                    >
-                      <Trash2 size={14} />
-                    </button>
+                    {panelCandidates[`${pi}:${ni}`] ? (
+                      <ImagePromptCandidates
+                        candidates={panelCandidates[`${pi}:${ni}`]}
+                        applyingIndex={applyingCandidate?.startsWith(`${pi}:${ni}:`) ? Number(applyingCandidate.split(':')[2]) : null}
+                        onApply={(prompt, ci) => handleApplyCandidate(pi, ni, prompt, ci)}
+                        onDismiss={() => dismissCandidates(pi, ni)}
+                      />
+                    ) : null}
                   </li>
                 ))}
               </ul>
