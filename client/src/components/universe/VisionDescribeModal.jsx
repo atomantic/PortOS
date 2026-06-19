@@ -381,6 +381,7 @@ export default function VisionDescribeModal({
                           onChange={(e) => setFieldEdits((prev) => ({ ...prev, [f]: e.target.value }))}
                           disabled={!checked}
                           rows={2}
+                          aria-label={humanizeField(f)}
                           className="w-full px-2 py-1 text-xs bg-port-card border border-port-border rounded text-gray-200 disabled:opacity-50"
                         />
                       )}
