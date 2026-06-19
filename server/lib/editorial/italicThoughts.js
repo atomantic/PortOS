@@ -44,8 +44,11 @@ function wordCount(text) {
 export function findItalicThoughts(text, opts = {}) {
   if (typeof text !== 'string' || !text) return [];
   const minWords = Math.max(1, Number.isInteger(opts.minWords) ? opts.minWords : 4);
-  const found = [];
-  const seen = new Set();
+  // Collect matches from BOTH delimiters first, then sort by position before
+  // deduping — so "FIRST occurrence" is the first in the TEXT, regardless of
+  // which delimiter the dedup-winner uses (an earlier `_…_` span must win over a
+  // later `*…*` span with identical text).
+  const matches = [];
   const scan = (re) => {
     re.lastIndex = 0;
     let m;
@@ -53,13 +56,19 @@ export function findItalicThoughts(text, opts = {}) {
       const inner = m[1].trim();
       const words = wordCount(inner);
       if (words < minWords) continue;
-      const key = inner.toLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      found.push({ inner, index: m.index, anchor: m[0], words });
+      matches.push({ inner, index: m.index, anchor: m[0], words });
     }
   };
   scan(ASTERISK_ITALIC_RE);
   scan(UNDERSCORE_ITALIC_RE);
-  return found.sort((a, b) => a.index - b.index);
+  matches.sort((a, b) => a.index - b.index);
+  const found = [];
+  const seen = new Set();
+  for (const match of matches) {
+    const key = match.inner.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    found.push(match);
+  }
+  return found;
 }

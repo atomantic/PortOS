@@ -49,6 +49,15 @@ describe('findItalicThoughts', () => {
     expect(hits[0].inner).toBe('What now?');
   });
 
+  it('keeps the earliest occurrence when the same thought appears under both delimiters', () => {
+    // The underscore span comes first in the text; dedup must keep it over the
+    // later asterisk span with identical text (FIRST-in-text wins, not first-scanned).
+    const hits = findItalicThoughts('first _the same words here_ then *the same words here* end');
+    expect(hits).toHaveLength(1);
+    expect(hits[0].index).toBe(6);
+    expect(hits[0].anchor).toBe('_the same words here_');
+  });
+
   it('returns runs sorted by position across both delimiters', () => {
     const hits = findItalicThoughts('_The first thought arrives._ Then *the second thought lands hard.*');
     expect(hits.map((h) => h.inner)).toEqual([
