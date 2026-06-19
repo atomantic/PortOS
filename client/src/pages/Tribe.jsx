@@ -638,6 +638,11 @@ export default function Tribe() {
   const [focusTick, setFocusTick] = useState(0);
   const nameInputRef = useRef(null);
   const formRef = useRef(null);
+  // The form only mounts when `!loading`. An Add can fire while a reload is in
+  // flight (e.g. the post-save `tribe:changed` broadcast sets loading=true), so
+  // record a pending request and let the effect retry once the form mounts
+  // instead of consuming the tick against an unmounted form.
+  const pendingFocusRef = useRef(false);
 
   const selectedId = draft.id;
 
@@ -699,22 +704,27 @@ export default function Tribe() {
     };
   }, []);
 
-  // Surface the contact form after an Add trigger. Runs after the tab switch +
-  // draft reset have rendered, so the form is mounted in whichever tab is active.
+  // Surface the contact form after an Add trigger. The form only exists once
+  // loading is done and a form-bearing tab is active, so this also re-runs on
+  // `loading`/`activeTab` and waits (keeping the pending flag set) until the
+  // form actually mounts — otherwise a tick that fires mid-reload is lost.
   useEffect(() => {
-    if (focusTick === 0) return;
+    if (!pendingFocusRef.current || loading) return;
     const frame = requestAnimationFrame(() => {
-      formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      if (!formRef.current) return; // still unmounted — retry on next dep change
+      formRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
       nameInputRef.current?.focus();
+      pendingFocusRef.current = false;
     });
     return () => cancelAnimationFrame(frame);
-  }, [focusTick]);
+  }, [focusTick, loading, activeTab]);
 
   // Reset to a blank draft and surface the form. The Focus tab has no form, so
   // fall back to Circle there; otherwise keep the user's current tab.
   const startNewRelationship = () => {
     setActiveTab((tab) => (tab === 'focus' ? 'circle' : tab));
     setDraft(emptyDraft());
+    pendingFocusRef.current = true;
     setFocusTick((tick) => tick + 1);
   };
 
