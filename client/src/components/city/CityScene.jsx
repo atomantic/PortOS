@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect, Suspense } from 'react';
+import { useState, useCallback, useRef, useEffect, useMemo, Suspense } from 'react';
 import * as THREE from 'three';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
@@ -51,11 +51,14 @@ import { cityDayMix } from './cityConstants';
 import { CityPaletteProvider } from './CityPaletteContext';
 import ErrorBoundary from '../ErrorBoundary';
 
+const STARTUP_PARTICLE_DENSITY = 0.49;
+
 export default function CityScene({ apps, agentMap, onBuildingClick, onToggleCameraView, cosStatus, reviewCounts, instances, backupStatus, cosTasks, healthMetrics, voiceState, aiActivity, productivityData, activityCalendar, goals, character, chronotype, memoryGraph, inboxDepth, jiraTickets, introspection, playback = false, photoMode, photoPresetId, photoDof, onPhotoCaptureReady, settings, playSfx, keysRef, dimmedAppIds, background, palette }) {
   const [positions, setPositions] = useState(null);
   const [proximityApp, setProximityApp] = useState(null);
   const [transitioning, setTransitioning] = useState(false);
   const [webglLost, setWebglLost] = useState(false);
+  const [startupSettled, setStartupSettled] = useState(false);
   const prevExplorationRef = useRef(false);
   const orbitRef = useRef(null);
   const contextCleanupRef = useRef(null);
@@ -67,6 +70,27 @@ export default function CityScene({ apps, agentMap, onBuildingClick, onToggleCam
   const photoComposerRef = useRef(null);
 
   const explorationMode = settings?.explorationMode || false;
+
+  useEffect(() => {
+    if (photoMode) {
+      setStartupSettled(true);
+      return undefined;
+    }
+
+    setStartupSettled(false);
+    const timer = window.setTimeout(() => setStartupSettled(true), 1200);
+    return () => window.clearTimeout(timer);
+  }, [apps.length, photoMode]);
+
+  const renderSettings = useMemo(() => {
+    if (photoMode || startupSettled) return settings;
+    return {
+      ...settings,
+      reflectionsEnabled: false,
+      particleDensity: Math.min(settings?.particleDensity ?? 1, STARTUP_PARTICLE_DENSITY),
+      dpr: [1, 1],
+    };
+  }, [photoMode, settings, startupSettled]);
 
   const clearContextTimer = useCallback(() => {
     if (contextLostTimerRef.current) {
@@ -120,10 +144,10 @@ export default function CityScene({ apps, agentMap, onBuildingClick, onToggleCam
   // Quality presets always express dpr as a [min, max] pair. Cap it to the live
   // ceiling so a high preset can't push a context-losing pixel ratio; photo mode
   // gets a touch more for crisp postcards.
-  const rawDpr = settings?.dpr || [1, 1.25];
+  const rawDpr = renderSettings?.dpr || [1, 1.25];
   const dprLimit = photoMode ? 1.5 : 1.25;
   const dpr = rawDpr.map(value => Math.min(value, dprLimit));
-  const showGradientBackground = cityDayMix(settings) > 0.5;
+  const showGradientBackground = cityDayMix(renderSettings) > 0.5;
   const sceneClearColor = background || '#030308';
   const fallbackBackground = showGradientBackground
     ? 'linear-gradient(180deg, #0f4f9a 0%, #1e78bf 48%, #58a9dc 100%)'
@@ -199,39 +223,39 @@ export default function CityScene({ apps, agentMap, onBuildingClick, onToggleCam
       {!showGradientBackground && (
         <ErrorBoundary fallback={null}>
           <Suspense fallback={null}>
-            <CityGalaxySky settings={settings} />
+            <CityGalaxySky settings={renderSettings} />
           </Suspense>
         </ErrorBoundary>
       )}
-      <CitySky settings={settings} />
-      <CityLights settings={settings} />
-      <CityLandscape settings={settings} />
-      <CityWater settings={settings} />
-      <CityEnergyOverlay chronotype={chronotype} settings={settings} />
-      <CityStarfield settings={settings} />
-      <CityShootingStars playSfx={playSfx} settings={settings} />
-      {!explorationMode && <CityCelestial settings={settings} />}
-      <CitySkyline settings={settings} />
-      <CityFederationHorizon instances={instances} settings={settings} />
-      <CityBackupVault backupStatus={backupStatus} settings={settings} />
-      <CityTaskQueue cosTasks={cosTasks} settings={settings} />
-      <CityHealthTower healthMetrics={healthMetrics} settings={settings} />
-      <CityProductivityDistrict productivityData={productivityData} settings={settings} />
-      <CityActivityHeatmap calendarData={activityCalendar} settings={settings} />
-      <CityTaskFlowRiver cosTasks={cosTasks} productivityData={productivityData} calendarData={activityCalendar} settings={settings} />
-      <CityGoalMonuments goals={goals} settings={settings} />
-      <CityArtifacts character={character} goals={goals} productivityData={productivityData} settings={settings} />
-      <CitySeasonalDecor settings={settings} />
-      <CityEasterEggs character={character} goals={goals} productivityData={productivityData} settings={settings} />
-      <CityVoiceMarker voiceState={voiceState} settings={settings} />
-      <CityMemoryDistrict memoryGraph={memoryGraph} inboxDepth={inboxDepth} settings={settings} />
-      <CityDataHarbor introspection={introspection} settings={settings} />
-      <CityJiraDistrict jiraTickets={jiraTickets} settings={settings} />
-      <CityAiCore aiActivity={aiActivity} positions={positions} apps={apps} settings={settings} />
-      <CityGround settings={settings} />
-      <CityStreets settings={settings} />
-      <CityStreetProps settings={settings} />
-      <CityTransitLoop settings={settings} />
+      <CitySky settings={renderSettings} />
+      <CityLights settings={renderSettings} />
+      <CityLandscape settings={renderSettings} />
+      <CityWater settings={renderSettings} />
+      <CityEnergyOverlay chronotype={chronotype} settings={renderSettings} />
+      <CityStarfield settings={renderSettings} />
+      <CityShootingStars playSfx={playSfx} settings={renderSettings} />
+      {!explorationMode && <CityCelestial settings={renderSettings} />}
+      <CitySkyline settings={renderSettings} />
+      <CityFederationHorizon instances={instances} settings={renderSettings} />
+      <CityBackupVault backupStatus={backupStatus} settings={renderSettings} />
+      <CityTaskQueue cosTasks={cosTasks} settings={renderSettings} />
+      <CityHealthTower healthMetrics={healthMetrics} settings={renderSettings} />
+      <CityProductivityDistrict productivityData={productivityData} settings={renderSettings} />
+      <CityActivityHeatmap calendarData={activityCalendar} settings={renderSettings} />
+      <CityTaskFlowRiver cosTasks={cosTasks} productivityData={productivityData} calendarData={activityCalendar} settings={renderSettings} />
+      <CityGoalMonuments goals={goals} settings={renderSettings} />
+      <CityArtifacts character={character} goals={goals} productivityData={productivityData} settings={renderSettings} />
+      <CitySeasonalDecor settings={renderSettings} />
+      <CityEasterEggs character={character} goals={goals} productivityData={productivityData} settings={renderSettings} />
+      <CityVoiceMarker voiceState={voiceState} settings={renderSettings} />
+      <CityMemoryDistrict memoryGraph={memoryGraph} inboxDepth={inboxDepth} settings={renderSettings} />
+      <CityDataHarbor introspection={introspection} settings={renderSettings} />
+      <CityJiraDistrict jiraTickets={jiraTickets} settings={renderSettings} />
+      <CityAiCore aiActivity={aiActivity} positions={positions} apps={apps} settings={renderSettings} />
+      <CityGround settings={renderSettings} />
+      <CityStreets settings={renderSettings} />
+      <CityStreetProps settings={renderSettings} />
+      <CityTransitLoop settings={renderSettings} />
 
       <BuildingCluster
         apps={apps}
@@ -239,7 +263,7 @@ export default function CityScene({ apps, agentMap, onBuildingClick, onToggleCam
         onBuildingClick={onBuildingClick}
         onPositionsReady={handlePositionsReady}
         playSfx={playSfx}
-        settings={settings}
+        settings={renderSettings}
         proximityAppId={proximityApp?.id}
         dimmedAppIds={dimmedAppIds}
         playback={playback}
@@ -254,13 +278,13 @@ export default function CityScene({ apps, agentMap, onBuildingClick, onToggleCam
         instances={instances}
         productivityData={productivityData}
       />
-      <CitySignalBeacons positions={positions} reviewCounts={reviewCounts} instances={instances} settings={settings} />
-      <CityVolumetricLights positions={positions} settings={settings} />
+      <CitySignalBeacons positions={positions} reviewCounts={reviewCounts} instances={instances} settings={renderSettings} />
+      <CityVolumetricLights positions={positions} settings={renderSettings} />
       <CityNeonSigns positions={positions} />
       <CityWeather stoppedCount={stoppedCount} totalCount={totalCount} playSfx={playSfx} />
       <CityDataRain />
       <CityEmbers />
-      <CityParticles settings={settings} />
+      <CityParticles settings={renderSettings} />
       {explorationMode && (
         <PlayerController
           keysRef={keysRef}
