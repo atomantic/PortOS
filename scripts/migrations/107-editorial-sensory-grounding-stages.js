@@ -53,7 +53,7 @@ export default {
     const sampleConfigPath = join(rootDir, 'data.reference', 'prompts', 'stage-config.json');
     const sampleConfigExists = await access(sampleConfigPath, constants.F_OK).then(() => true, () => false);
     if (!sampleConfigExists) {
-      console.warn('⚠️  103-editorial-sensory-grounding-stages: data.reference stage-config.json missing — cannot resolve entries; skipping config write');
+      console.warn('⚠️  107-editorial-sensory-grounding-stages: data.reference stage-config.json missing — cannot resolve entries; skipping config write');
       return;
     }
     try {
@@ -71,7 +71,7 @@ export default {
           continue;
         }
         if (!sample?.stages?.[stageKey]) {
-          console.warn(`⚠️  103-editorial-sensory-grounding-stages: sample stage-config missing ${stageKey} — skipping`);
+          console.warn(`⚠️  107-editorial-sensory-grounding-stages: sample stage-config missing ${stageKey} — skipping`);
           continue;
         }
         installed.stages[stageKey] = sample.stages[stageKey];
@@ -79,15 +79,15 @@ export default {
       }
 
       if (added === 0) {
-        console.log('📝 103-editorial-sensory-grounding-stages: no stage-config entries to add');
+        console.log('📝 107-editorial-sensory-grounding-stages: no stage-config entries to add');
         return;
       }
       await mkdir(dirname(installedConfigPath), { recursive: true });
       await writeFile(installedConfigPath, JSON.stringify(installed, null, 2) + '\n', 'utf8');
       const action = installedExists ? 'merged' : 'created';
-      console.log(`📝 103-editorial-sensory-grounding-stages stage-config (${action}): ${added} added`);
+      console.log(`📝 107-editorial-sensory-grounding-stages stage-config (${action}): ${added} added`);
     } catch (err) {
-      console.warn(`⚠️  103-editorial-sensory-grounding-stages: stage-config merge failed: ${err.message}`);
+      console.warn(`⚠️  107-editorial-sensory-grounding-stages: stage-config merge failed: ${err.message}`);
     }
   },
 };

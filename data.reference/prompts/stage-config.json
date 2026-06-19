@@ -506,6 +506,34 @@
       "returnsJson": true,
       "variables": []
     },
+    "pipeline-editorial-opening-start": {
+      "name": "Pipeline — Editorial Check: Weak opening (wrong start)",
+      "description": "Editorial check (#1300): flags clichéd or mis-placed openings — \"he wakes up\" / alarm-clock / dream starts, weather and scene-setting preambles, and scenes that begin before the interesting moment. Reads the stitched manuscript, focusing on the story opening and each chapter/issue opening. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-editorial-mirror-description": {
+      "name": "Pipeline — Editorial Check: Mirror self-description",
+      "description": "Editorial check (#1300): flags the tired device of a character looking at themselves in a mirror or reflection so the prose can catalog their appearance, while leaving reflections that do real story work alone. Reads the stitched manuscript. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-editorial-dialogue-pleasantries": {
+      "name": "Pipeline — Editorial Check: Empty greeting / small-talk openings",
+      "description": "Editorial check (#1300): flags scenes that open on empty pleasantries — greeting rituals and logistical small talk that carry no tension or information — while leaving pleasantries laced with subtext alone. Reads the stitched manuscript. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-editorial-kill-your-darlings": {
+      "name": "Pipeline — Editorial Check: Kill your darlings",
+      "description": "Editorial check (#1300): surfaces precious, self-indulgent passages — showpiece descriptions, digressions, over-explaining, and favorite lines that stop the scene's momentum — as candidates to cut, judged by story need rather than quality. Reads the stitched manuscript. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
     "pipeline-editorial-endings-cliffhanger": {
       "name": "Pipeline — Editorial Check: Chapter-ending cliffhangers",
       "description": "Editorial check (#1298): flags chapter/issue endings that resolve and settle (\"soft landings\") instead of ending on an unresolved beat that pulls the reader forward, leaving a clearly terminal final chapter alone. Reads the stitched manuscript and reconciles detected endings against the authored reader-map cliffhangers. Returns issue-anchored findings.",

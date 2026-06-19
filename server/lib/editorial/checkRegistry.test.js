@@ -2242,3 +2242,104 @@ describe('prose.cliches / prose.modifier-stacking / prose.dead-metaphor (#1308)'
     expect(findings[0].issueNumber).toBe(4);
   });
 });
+
+describe('prose anti-pattern bundle (#1300)', () => {
+  const OPENING = 'opening.wrong-start';
+  const MIRROR = 'prose.mirror-description';
+  const PLEASANTRIES = 'dialogue.pleasantries';
+  const DARLINGS = 'prose.kill-your-darlings';
+  const ITALICS = 'prose.italic-thoughts';
+
+  // The four LLM checks share the manuscript-chunk harness — assert each is a
+  // registered manuscript-scoped LLM check that forces its own category and
+  // passes the planned chunk through.
+  const LLM_CHECKS = [
+    { id: OPENING, category: 'opening' },
+    { id: MIRROR, category: 'cliche' },
+    { id: PLEASANTRIES, category: 'dialogue' },
+    { id: DARLINGS, category: 'style' },
+  ];
+
+  it('registers all five bundle checks (4 LLM + 1 deterministic)', () => {
+    const ids = listChecks().map((c) => c.id);
+    for (const { id } of LLM_CHECKS) expect(ids).toContain(id);
+    expect(ids).toContain(ITALICS);
+  });
+
+  for (const { id, category } of LLM_CHECKS) {
+    it(`${id} is a manuscript-scoped LLM check gated on prose`, () => {
+      const c = getCheck(id);
+      expect(c.kind).toBe('llm');
+      expect(c.category).toBe(category);
+      expect(c.sources).toEqual(['manuscript']);
+      expect(c.needsManuscript).toBe(true);
+      expect(c.gate({ manuscript: '' })).toBe(false);
+      expect(c.gate({ manuscript: '# Issue 1\n\nprose' })).toBeTruthy();
+    });
+
+    it(`${id} passes the planned chunk to the model and forces its category`, async () => {
+      let seen = null;
+      const findings = await getCheck(id).run({
+        manuscript: '# Issue 2\n\nSome drafted prose.',
+        config: { maxFindings: 12 },
+        severityDefault: getCheck(id).severityDefault,
+        planManuscriptChunks: async (_stage, opts) => {
+          expect(opts.overheadTokens).toBeGreaterThan(0);
+          return ['# Issue 2\n\nSome drafted prose.'];
+        },
+        callStagedLLM: async (_stage, vars) => {
+          seen = vars.manuscript;
+          return { content: { findings: [{ severity: 'medium', issueNumber: 2, problem: 'p', anchorQuote: 'a' }] } };
+        },
+      });
+      expect(seen).toBe('# Issue 2\n\nSome drafted prose.');
+      expect(findings).toHaveLength(1);
+      expect(findings[0].category).toBe(category);
+      expect(findings[0].issueNumber).toBe(2);
+    });
+  }
+
+  describe('prose.italic-thoughts — deterministic check', () => {
+    const run = (sections, config = {}) =>
+      getCheck(ITALICS).run({ sections, config, severityDefault: 'low' });
+
+    it('declares the expected scope / kind / sources', () => {
+      const c = getCheck(ITALICS);
+      expect(c.kind).toBe('deterministic');
+      expect(c.category).toBe('style');
+      expect(c.sources).toEqual(['manuscript']);
+      expect(c.needsManuscript).toBe(true);
+    });
+
+    it('flags a multi-word italicized thought and anchors it to its issue', () => {
+      const findings = run([{ number: 3, content: 'She froze. *He knows I lied to him.* Then she ran.' }]);
+      expect(findings).toHaveLength(1);
+      expect(findings[0].issueNumber).toBe(3);
+      expect(findings[0].category).toBe('style');
+      expect(findings[0].severity).toBe('low');
+      expect(findings[0].anchorQuote).toBe('*He knows I lied to him.*');
+    });
+
+    it('ignores short emphasis spans below the word threshold', () => {
+      expect(run([{ number: 1, content: 'She would *never* do that.' }])).toEqual([]);
+    });
+
+    it('dedups the same thought across issues and honors maxFindings', () => {
+      const sections = [
+        { number: 1, content: '*I have to get out of here.*' },
+        { number: 2, content: '*I have to get out of here.* again' },
+        { number: 3, content: '*A completely different worried thought.*' },
+      ];
+      const deduped = run(sections);
+      expect(deduped).toHaveLength(2); // repeated thought counted once
+      const capped = run(sections, { maxFindings: 1 });
+      expect(capped).toHaveLength(1);
+    });
+
+    it('honors a custom minWords threshold', () => {
+      const sections = [{ number: 1, content: 'He paused. *What now?* he wondered.' }];
+      expect(run(sections)).toEqual([]); // 2 words < default 4
+      expect(run(sections, { minWords: 2 })).toHaveLength(1);
+    });
+  });
+});

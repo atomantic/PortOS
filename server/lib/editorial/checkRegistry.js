@@ -28,6 +28,7 @@ import { z } from 'zod';
 import { estimateTokens } from '../contextBudget.js';
 import { analyzeNamePair, findFirstLetterClusters, normalizeName } from './nameSimilarity.js';
 import { findCliches, findModifierStacking } from './cliches.js';
+import { findItalicThoughts } from './italicThoughts.js';
 
 export const CHECK_SCOPES = Object.freeze(['series', 'issue', 'scene', 'noun']);
 export const CHECK_KINDS = Object.freeze(['deterministic', 'llm']);
@@ -159,11 +160,22 @@ export function authoredSetupPayoffSummary(readerMap) {
 // deterministic siblings (prose.cliches, prose.modifier-stacking) need no stage.
 export const DEAD_METAPHOR_STAGE = 'pipeline-editorial-dead-metaphor';
 
+// Stage names for the four LLM prose anti-pattern checks (#1300). Each prompt
+// ships in data.reference/prompts/stages/ + stage-config.json (fresh installs via
+// setup-data.js) and migrates to existing installs via migrations 103–106 (boot
+// runs migrations but NOT setup-data, so the migration is required — see
+// scripts/migrations/103-…js … 106-…js). The deterministic sibling
+// (prose.italic-thoughts) needs no stage.
+export const OPENING_START_STAGE = 'pipeline-editorial-opening-start';
+export const MIRROR_DESCRIPTION_STAGE = 'pipeline-editorial-mirror-description';
+export const DIALOGUE_PLEASANTRIES_STAGE = 'pipeline-editorial-dialogue-pleasantries';
+export const KILL_YOUR_DARLINGS_STAGE = 'pipeline-editorial-kill-your-darlings';
+
 // Stage names for the two scene-grounding LLM checks (#1309): sensory balance
 // (all-visual / sensory-bare scenes) and white-room (ungrounded, setting-less
 // scenes). Each prompt ships in data.reference/prompts/stages/ + stage-config.json
 // (fresh installs via setup-data.js) and migrates to existing installs via
-// migration 103 (boot runs migrations but NOT setup-data, so the migration is
+// migration 107 (boot runs migrations but NOT setup-data, so the migration is
 // required). Both consume the reverse-outline scene segmentation as context and
 // degrade to a whole-issue manuscript scan when no outline exists.
 export const SENSORY_BALANCE_STAGE = 'pipeline-editorial-sensory-balance';
@@ -2304,6 +2316,224 @@ export const EDITORIAL_CHECKS = [
       overheadTokens: EDITORIAL_PROMPT_OVERHEAD_TOKENS,
       buildVars: (manuscript) => ({ manuscript }),
     }),
+  },
+  {
+    id: 'opening.wrong-start',
+    sources: ['manuscript'],
+    label: 'Weak opening (wrong place to start)',
+    description:
+      'LLM scan — flags clichéd or weak story/scene openers: "he wakes up" / alarm-clock / waking-from-a-dream starts, weather/scene-setting preambles, and openings that begin before the interesting moment. A scene should open as late into the action as it can.',
+    scope: 'issue',
+    kind: 'llm',
+    category: 'opening',
+    severityDefault: 'medium',
+    defaultEnabled: true,
+    needsManuscript: true,
+    configSchema: z.object({
+      // Cap findings per run so a long manuscript can't flood the review.
+      maxFindings: z.number().int().min(1).max(50).default(12),
+    }),
+    configFields: [
+      {
+        key: 'maxFindings',
+        label: 'Max findings per run',
+        type: 'number',
+        min: 1,
+        max: 50,
+        step: 1,
+        help: 'Cap findings so a long manuscript can not flood the review.',
+      },
+    ],
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    // Localized to chapter/scene openings (one finding per opener), so this stays
+    // a plain per-chunk run with no cross-chunk digest — mirrors prose.info-dumping.
+    run: (ctx) => runManuscriptLlmCheck(ctx, {
+      stage: OPENING_START_STAGE,
+      category: 'opening',
+      overheadTokens: EDITORIAL_PROMPT_OVERHEAD_TOKENS,
+      buildVars: (manuscript) => ({ manuscript }),
+    }),
+  },
+  {
+    id: 'prose.mirror-description',
+    sources: ['manuscript'],
+    label: 'Mirror self-description',
+    description:
+      'LLM scan — flags the "character looks at themselves in a mirror/reflection to describe their own appearance" trick, a tired device for slipping a viewpoint character\'s description onto the page.',
+    scope: 'issue',
+    kind: 'llm',
+    category: 'cliche',
+    severityDefault: 'medium',
+    defaultEnabled: true,
+    needsManuscript: true,
+    configSchema: z.object({
+      // Cap findings per run so a long manuscript can't flood the review.
+      maxFindings: z.number().int().min(1).max(50).default(12),
+    }),
+    configFields: [
+      {
+        key: 'maxFindings',
+        label: 'Max findings per run',
+        type: 'number',
+        min: 1,
+        max: 50,
+        step: 1,
+        help: 'Cap findings so a long manuscript can not flood the review.',
+      },
+    ],
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    // Each mirror moment is a localized spot — plain per-chunk run, no digest.
+    run: (ctx) => runManuscriptLlmCheck(ctx, {
+      stage: MIRROR_DESCRIPTION_STAGE,
+      category: 'cliche',
+      overheadTokens: EDITORIAL_PROMPT_OVERHEAD_TOKENS,
+      buildVars: (manuscript) => ({ manuscript }),
+    }),
+  },
+  {
+    id: 'dialogue.pleasantries',
+    sources: ['manuscript'],
+    label: 'Empty greeting / small-talk openings',
+    description:
+      'LLM scan — flags scenes that open on empty greeting or small-talk exchanges ("Hi." "Hi, how are you?") that carry no tension or information. Dialogue should start in the middle of the exchange that matters.',
+    scope: 'issue',
+    kind: 'llm',
+    category: 'dialogue',
+    severityDefault: 'low',
+    defaultEnabled: true,
+    needsManuscript: true,
+    configSchema: z.object({
+      // Cap findings per run so a long manuscript can't flood the review.
+      maxFindings: z.number().int().min(1).max(50).default(12),
+    }),
+    configFields: [
+      {
+        key: 'maxFindings',
+        label: 'Max findings per run',
+        type: 'number',
+        min: 1,
+        max: 50,
+        step: 1,
+        help: 'Cap findings so a long manuscript can not flood the review.',
+      },
+    ],
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    // Localized to scene openings — plain per-chunk run, no digest.
+    run: (ctx) => runManuscriptLlmCheck(ctx, {
+      stage: DIALOGUE_PLEASANTRIES_STAGE,
+      category: 'dialogue',
+      overheadTokens: EDITORIAL_PROMPT_OVERHEAD_TOKENS,
+      buildVars: (manuscript) => ({ manuscript }),
+    }),
+  },
+  {
+    id: 'prose.kill-your-darlings',
+    sources: ['manuscript'],
+    label: 'Kill your darlings (precious / self-indulgent passages)',
+    description:
+      'LLM scan — surfaces over-written, precious passages: a flourish, digression, or showpiece that serves the author more than the story and is a candidate to cut. Complements prose.dead-metaphor, which targets stock rather than self-indulgent prose.',
+    scope: 'issue',
+    kind: 'llm',
+    category: 'style',
+    severityDefault: 'low',
+    defaultEnabled: true,
+    needsManuscript: true,
+    configSchema: z.object({
+      // Cap findings per run so a long manuscript can't flood the review.
+      maxFindings: z.number().int().min(1).max(50).default(12),
+    }),
+    configFields: [
+      {
+        key: 'maxFindings',
+        label: 'Max findings per run',
+        type: 'number',
+        min: 1,
+        max: 50,
+        step: 1,
+        help: 'Cap findings so a long manuscript can not flood the review.',
+      },
+    ],
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    // Localized prose-level findings (one precious passage = one spot) — plain
+    // per-chunk run, no cross-chunk digest.
+    run: (ctx) => runManuscriptLlmCheck(ctx, {
+      stage: KILL_YOUR_DARLINGS_STAGE,
+      category: 'style',
+      overheadTokens: EDITORIAL_PROMPT_OVERHEAD_TOKENS,
+      buildVars: (manuscript) => ({ manuscript }),
+    }),
+  },
+  {
+    id: 'prose.italic-thoughts',
+    sources: ['manuscript'],
+    label: 'Italicized internal thoughts',
+    description:
+      'Deterministic scan — flags multi-word italicized internal-thought runs ("*He knows I lied.*"). The prose is already in the character\'s perspective, so italicizing a thought is a tell; the run usually reads cleaner as plain narration. Short italic spans (a stressed word, a title, a foreign term) are left alone as emphasis.',
+    scope: 'issue',
+    kind: 'deterministic',
+    category: 'style',
+    severityDefault: 'low',
+    defaultEnabled: true,
+    // Reads the stitched manuscript (per-issue sections) to anchor each run.
+    needsManuscript: true,
+    configSchema: z.object({
+      // Minimum word count for an italic span to count as a thought (vs emphasis).
+      minWords: z.number().int().min(1).max(20).default(4),
+      // Cap findings per run so a thought-italics-heavy draft can't flood the review.
+      maxFindings: z.number().int().min(1).max(50).default(20),
+    }),
+    configFields: [
+      {
+        key: 'minWords',
+        label: 'Minimum words to flag',
+        type: 'number',
+        min: 1,
+        max: 20,
+        step: 1,
+        help: 'How many words an italic span must have before it is treated as an internal thought rather than emphasis. 4 skips single stressed words, titles, and foreign terms.',
+      },
+      {
+        key: 'maxFindings',
+        label: 'Max findings per run',
+        type: 'number',
+        min: 1,
+        max: 50,
+        step: 1,
+        help: 'Cap findings so a thought-italics-heavy draft can not flood the review.',
+      },
+    ],
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    run: (ctx) => {
+      const cfg = ctx.config || {};
+      const minWords = cfg.minWords ?? 4;
+      const max = cfg.maxFindings ?? 20;
+      const sections = Array.isArray(ctx.sections) ? ctx.sections : [];
+      const findings = [];
+      // One finding per distinct thought run (anchored to the first issue it
+      // appears in) — the same italicized thought repeated is one tic to fix.
+      const seenRuns = new Set();
+      for (const s of sections) {
+        if (findings.length >= max) break;
+        const hits = findItalicThoughts(s?.content || '', { minWords });
+        for (const hit of hits) {
+          if (findings.length >= max) break;
+          const key = hit.inner.toLowerCase();
+          if (seenRuns.has(key)) continue;
+          seenRuns.add(key);
+          const issueNumber = Number.isInteger(s?.number) ? s.number : null;
+          findings.push({
+            severity: ctx.severityDefault,
+            category: 'style',
+            location: issueNumber != null ? `Issue ${issueNumber}` : 'Manuscript',
+            problem: `Italicized internal thought ("${hit.anchor}") — the prose is already in the character's perspective, so italicizing a thought is a tell that usually reads cleaner as plain narration.`,
+            suggestion: 'Drop the italics and let the thought stand as narration, or recast it as a beat of action/observation if it needs more grounding.',
+            anchorQuote: hit.anchor,
+            issueNumber,
+          });
+        }
+      }
+      return findings;
+    },
   },
   {
     id: 'endings.cliffhanger',

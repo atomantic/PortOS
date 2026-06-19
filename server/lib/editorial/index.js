@@ -2,4 +2,5 @@
 // (#1284). See README.md for the catalog. Re-export every public module here.
 export * from './checkRegistry.js';
 export * from './cliches.js';
+export * from './italicThoughts.js';
 export * from './nameSimilarity.js';

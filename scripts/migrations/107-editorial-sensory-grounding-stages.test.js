@@ -4,7 +4,7 @@ import { tmpdir } from 'os';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
-import migration from './103-editorial-sensory-grounding-stages.js';
+import migration from './107-editorial-sensory-grounding-stages.js';
 
 // scripts/migrations/<this> → ../.. is the repo root (matches _testHelpers.js).
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -17,7 +17,7 @@ const FILES = [
   { filename: 'pipeline-editorial-white-room.md', stageKey: 'pipeline-editorial-white-room', body: '# White room\n\nshipped body\n', returnsJson: true },
 ];
 
-describe('migration 103 — seed scene-grounding editorial stages', () => {
+describe('migration 107 — seed scene-grounding editorial stages', () => {
   let rootDir;
   let stagesDir;
   let refStagesDir;
@@ -38,7 +38,7 @@ describe('migration 103 — seed scene-grounding editorial stages', () => {
   };
 
   beforeEach(() => {
-    rootDir = mkdtempSync(join(tmpdir(), 'migration-103-'));
+    rootDir = mkdtempSync(join(tmpdir(), 'migration-107-'));
     stagesDir = join(rootDir, 'data', 'prompts', 'stages');
     refStagesDir = join(rootDir, 'data.reference', 'prompts', 'stages');
     installedConfigPath = join(rootDir, 'data', 'prompts', 'stage-config.json');
