@@ -40,6 +40,30 @@ import {
   readPipelineImageSettings,
   pipelineImageCfgToRenderOpts,
 } from '../../../lib/pipelineImageDefaults';
+import { analyzeComicLettering } from '../../../lib/letteringDensity';
+
+// Severity → Tailwind text color for the inline lettering warnings. Mirrors the
+// editorial check's overflow-scaled severity.
+const LETTERING_TONE = { high: 'text-port-error', medium: 'text-port-warning', low: 'text-gray-400' };
+
+// A short, page-row-scoped label for a lettering violation (the same accounting
+// the server `comic.lettering-density` check surfaces in the manuscript editor —
+// here it's shown inline as the author edits, using the default thresholds).
+function letteringWarningLabel(v) {
+  switch (v.kind) {
+    case 'balloon-words':
+      return `Panel ${v.panelNumber}: a balloon runs ${v.count} words (over ~${v.threshold})`;
+    case 'caption-words':
+      return `Panel ${v.panelNumber}: a caption box runs ${v.count} words (over ~${v.threshold})`;
+    case 'panel-words':
+      return `Panel ${v.panelNumber}: ${v.count} words of lettering (over ~${v.threshold})`;
+    case 'panel-balloons':
+      return `Panel ${v.panelNumber}: ${v.count} balloons (over ~${v.threshold})`;
+    case 'page-words':
+    default:
+      return `Page total ${v.count} words of lettering (over ~${v.threshold}) — would overwhelm the art`;
+  }
+}
 
 // Legacy records (pre-proof/final split) carry `imageJobId`/`filename` at
 // the record root; surface those as the proof slot so the UI keeps showing
@@ -765,6 +789,14 @@ function PageRow({
     () => page.rawText || panelsToMarkdown(page.panels, pageIndex + 1),
     [page.rawText, page.panels, pageIndex],
   );
+  // Inline lettering-density warnings (#1313): the same pure accounting the
+  // server `comic.lettering-density` editorial check runs, computed here from the
+  // parsed panels so over-stuffed panels surface in the comic-script stage itself,
+  // not only after an editorial-checks run. Uses the default thresholds.
+  const letteringWarnings = useMemo(
+    () => analyzeComicLettering([{ panels: page.panels }]),
+    [page.panels],
+  );
   const [draft, setDraft] = useState(rawText);
   const [saving, setSaving] = useState(false);
   const [renderingProof, setRenderingProof] = useState(false);
@@ -908,6 +940,17 @@ function PageRow({
           )}
         </div>
       </div>
+      {letteringWarnings.length > 0 ? (
+        <div className="px-3 pt-2">
+          <ul className="rounded border border-port-warning/30 bg-port-warning/5 px-2.5 py-1.5 space-y-0.5">
+            {letteringWarnings.map((v, i) => (
+              <li key={i} className={`text-[11px] ${LETTERING_TONE[v.severity] || 'text-gray-400'}`}>
+                ⚠ Lettering — {letteringWarningLabel(v)}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
       <div className="grid md:grid-cols-2 gap-3 p-3">
         <textarea
           value={draft}

@@ -42,6 +42,9 @@ export const CATEGORY_LABEL = {
   continuity: 'Continuity',
   style: 'Style',
   exposition: 'Exposition',
+  // Comic lettering-density findings (#1313): over-stuffed balloons/panels/pages
+  // from the comic.lettering-density editorial check.
+  lettering: 'Lettering',
   other: 'Note',
 };
 

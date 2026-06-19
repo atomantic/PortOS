@@ -2978,3 +2978,96 @@ describe('dialogue-craft bundle (#1307)', () => {
     });
   });
 });
+
+describe('comic.lettering-density — deterministic check (#1313)', () => {
+  const COMIC = 'comic.lettering-density';
+  // A canonical comic-script page with one over-stuffed balloon (60 words).
+  const stuffedScript = `## Page 1
+
+Panel 1
+**Description:** A crowded throne room.
+**Dialogue:**
+- KING: "${Array.from({ length: 60 }, (_, i) => `word${i}`).join(' ')}"
+`;
+  const cleanScript = `## Page 1
+
+Panel 1
+**Description:** A quiet field.
+**Dialogue:**
+- ANYA: "We should go."
+`;
+  const issue = (number, script) => ({ number, stages: { comicScript: { output: script } } });
+  const ctxFor = (issues, config = {}) => ({ issues, config, severityDefault: 'low' });
+
+  it('is a deterministic, issue-scoped check reading the comicScript source', () => {
+    const check = getCheck(COMIC);
+    expect(check.kind).toBe('deterministic');
+    expect(check.scope).toBe('issue');
+    expect(check.category).toBe('lettering');
+    expect(check.sources).toEqual(['comicScript']);
+  });
+
+  it('gate is false with no comic scripts, true when one has content', () => {
+    const check = getCheck(COMIC);
+    expect(check.gate(ctxFor([]))).toBe(false);
+    expect(check.gate(ctxFor([issue(1, '')]))).toBe(false);
+    expect(check.gate(ctxFor([issue(1, stuffedScript)]))).toBe(true);
+  });
+
+  it('flags an over-stuffed balloon and stamps the issue number + location', () => {
+    const findings = getCheck(COMIC).run(ctxFor([issue(7, stuffedScript)]));
+    expect(findings.length).toBeGreaterThan(0);
+    const balloon = findings.find((f) => f.problem.includes('balloon'));
+    expect(balloon).toBeTruthy();
+    expect(balloon.category).toBe('lettering');
+    expect(balloon.issueNumber).toBe(7);
+    expect(balloon.location).toContain('Issue 7');
+    expect(balloon.location).toContain('Page 1');
+    expect(balloon.severity).toBe('high'); // 60/25 = 2.4×
+    expect(balloon.anchorQuote).toContain('word0');
+  });
+
+  it('returns no findings for a well-lettered script', () => {
+    expect(getCheck(COMIC).run(ctxFor([issue(1, cleanScript)]))).toEqual([]);
+  });
+
+  it('honors configured thresholds', () => {
+    // cleanScript's single 3-word balloon trips only when the limit drops below 3.
+    expect(getCheck(COMIC).run(ctxFor([issue(1, cleanScript)], { maxWordsPerBalloon: 2 })))
+      .not.toEqual([]);
+  });
+
+  it('skips issues without a comic script and scans in issue-number order', () => {
+    const findings = getCheck(COMIC).run(ctxFor([issue(2, stuffedScript), issue(1, ''), issue(3, stuffedScript)]));
+    const issueNums = [...new Set(findings.map((f) => f.issueNumber))];
+    expect(issueNums).toEqual([2, 3]);
+  });
+
+  // The edited comicPages split is the source of truth once a script is split —
+  // edits there never flow back to comicScript.output, so the check must read it.
+  const overflowBalloon = { dialogue: [{ character: 'KING', line: Array.from({ length: 60 }, (_, i) => `w${i}`).join(' ') }] };
+  const cleanBalloon = { dialogue: [{ character: 'ANYA', line: 'Short line.' }] };
+  const withPages = (number, script, panels) => ({
+    number,
+    stages: { comicScript: { output: script }, comicPages: { pages: [{ panels }] } },
+  });
+
+  it('reads the edited comicPages split when present (it wins over comicScript.output)', () => {
+    // The raw script is clean, but the EDITED page added an over-stuffed balloon —
+    // the check must flag it (reading comicPages), not pass on the stale script.
+    const findings = getCheck(COMIC).run(ctxFor([withPages(5, cleanScript, [overflowBalloon])]));
+    expect(findings.some((f) => f.problem.includes('balloon'))).toBe(true);
+    expect(findings[0].issueNumber).toBe(5);
+  });
+
+  it('does NOT flag when the edited pages are clean even if the stale script was stuffed', () => {
+    // The user edited the over-stuffed script down to a clean page — no finding.
+    expect(getCheck(COMIC).run(ctxFor([withPages(5, stuffedScript, [cleanBalloon])]))).toEqual([]);
+  });
+
+  it('gate is true when only an edited comicPages split exists (no script output)', () => {
+    const ctx = ctxFor([{ number: 5, stages: { comicPages: { pages: [{ panels: [overflowBalloon] }] } } }]);
+    expect(getCheck(COMIC).gate(ctx)).toBe(true);
+    expect(getCheck(COMIC).run(ctx).length).toBeGreaterThan(0);
+  });
+});
