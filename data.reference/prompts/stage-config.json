@@ -513,6 +513,20 @@
       "returnsJson": true,
       "variables": []
     },
+    "pipeline-editorial-sensory-balance": {
+      "name": "Pipeline — Editorial Check: Sensory balance",
+      "description": "Editorial check (#1309): flags scenes that lean almost entirely on sight while sound, smell, touch, and taste are neglected, and sensory-bare scenes with almost no concrete grounding. Reads the stitched manuscript plus the reverse-outline scene segmentation (degrading to a whole-issue scan when absent), naming the missing sense per finding. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-editorial-white-room": {
+      "name": "Pipeline — Editorial Check: White-room / ungrounded scene",
+      "description": "Editorial check (#1309): flags \"white-room\" scenes — dialogue and action in an undescribed void with no setting, blocking, or spatial grounding. Reads the stitched manuscript plus the reverse-outline scene segmentation (using each scene's recorded setting as a candidate signal, degrading to a whole-issue scan when absent). Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
     "pipeline-editorial-object-motivation": {
       "name": "Pipeline — Editorial Check: Unmotivated object interaction",
       "description": "Editorial check (#1288): flags moments where a character treats an object as significant without earned motivation — no recorded attachment and no on-page setup. Reads the stitched manuscript plus the canon object↔character attachments. Returns issue-anchored findings.",

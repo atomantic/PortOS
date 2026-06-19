@@ -29,6 +29,7 @@ import {
   EDITORIAL_SETUP_DIGEST_SOURCE,
   authoredSetupPayoffSummary,
   authoredCliffhangerSummary,
+  sceneGroundingSummary,
 } from './checkRegistry.js';
 
 const NAMING = 'naming.dissimilar-names';
@@ -37,6 +38,8 @@ const INTERIORITY = 'interiority.protagonist';
 const CHEKHOV = 'chekhov.setups-payoffs';
 const ENDINGS_CLIFF = 'endings.cliffhanger';
 const POV_SWITCH = 'endings.pov-switch';
+const SENSORY_BALANCE = 'sensory.balance';
+const WHITE_ROOM = 'scene.white-room';
 
 // A minimal valid stored custom-check definition.
 const customDef = (over = {}) => ({
@@ -276,6 +279,113 @@ describe('prose.info-dumping — LLM check', () => {
     });
     const findings = await getCheck(INFODUMP).run(ctx);
     expect(findings).toHaveLength(5);
+  });
+});
+
+describe('sceneGroundingSummary (#1309)', () => {
+  it('renders each scene with its setting and characters present', () => {
+    const summary = sceneGroundingSummary([
+      { sequence: 0, issueNumber: 1, heading: 'The kitchen', setting: 'a cramped galley kitchen', charactersPresent: ['Mara', 'Joss'] },
+      { sequence: 1, issueNumber: 2, heading: 'On the call', setting: '', charactersPresent: ['Mara'] },
+    ]);
+    expect(summary).toContain('Scenes (from the reverse outline):');
+    expect(summary).toContain('Issue 1: The kitchen — setting: a cramped galley kitchen — present: Mara, Joss');
+    // A blank setting renders the explicit "(none recorded)" marker (the white-room signal).
+    expect(summary).toContain('Issue 2: On the call — setting: (none recorded) — present: Mara');
+  });
+
+  it('returns "" for an empty / non-array outline so the prompt section renders nothing', () => {
+    expect(sceneGroundingSummary([])).toBe('');
+    expect(sceneGroundingSummary(null)).toBe('');
+    expect(sceneGroundingSummary(undefined)).toBe('');
+  });
+
+  it('tolerates malformed scenes (peer-sync resilience) without throwing', () => {
+    const summary = sceneGroundingSummary([
+      null,
+      { sequence: 2, heading: 42, setting: 99, charactersPresent: 'not-an-array' },
+      { sequence: 3, summary: 'falls back to summary label' },
+    ]);
+    // Non-string heading falls back to the sequence label; bad setting → "(none recorded)".
+    expect(summary).toContain('scene 3 — setting: (none recorded)');
+    expect(summary).toContain('falls back to summary label');
+    expect(() => sceneGroundingSummary([{ charactersPresent: [1, 2, null] }])).not.toThrow();
+  });
+});
+
+describe.each([
+  { id: SENSORY_BALANCE, severityDefault: 'low', label: 'sensory.balance' },
+  { id: WHITE_ROOM, severityDefault: 'medium', label: 'scene.white-room' },
+])('$label — scene-grounding LLM check (#1309)', ({ id, severityDefault }) => {
+  const wholeCtx = (overrides = {}) => ({
+    manuscript: '# Issue 1\n\n"We have to go," she said.',
+    reverseOutline: [{ sequence: 0, issueNumber: 1, heading: 'The void', setting: '', charactersPresent: ['Mara'] }],
+    config: { maxFindings: 12 },
+    severityDefault,
+    planManuscriptChunks: async () => [overrides.manuscript ?? '# Issue 1\n\n"We have to go," she said.'],
+    callStagedLLM: async () => ({ content: { findings: [] } }),
+    ...overrides,
+  });
+
+  it('is registered as a manuscript+reverseOutline LLM check with category style', () => {
+    const check = getCheck(id);
+    expect(check.kind).toBe('llm');
+    expect(check.scope).toBe('scene');
+    expect(check.category).toBe('style');
+    expect(check.needsManuscript).toBe(true);
+    expect(check.sources).toEqual(expect.arrayContaining(['manuscript', 'reverseOutline']));
+    expect(check.severityDefault).toBe(severityDefault);
+  });
+
+  it('gates on a non-empty manuscript', () => {
+    const check = getCheck(id);
+    expect(check.gate({ manuscript: '' })).toBe(false);
+    expect(check.gate({ manuscript: '# Issue 1\n\nprose' })).toBeTruthy();
+  });
+
+  it('injects the scene map into the prompt vars and counts it into the chunk overhead', async () => {
+    let seenVars = null;
+    let seenOverhead = 0;
+    const ctx = wholeCtx({
+      planManuscriptChunks: async (_stage, opts) => {
+        seenOverhead = opts.overheadTokens;
+        return ['# Issue 1\n\nchunk'];
+      },
+      callStagedLLM: async (_stage, vars) => {
+        seenVars = vars;
+        return { content: { findings: [{ severity: severityDefault, issueNumber: 1, problem: 'flat scene', anchorQuote: 'go' }] } };
+      },
+    });
+    const findings = await getCheck(id).run(ctx);
+    // The scene map rode along as a prompt var and inflated the overhead budget.
+    expect(seenVars.sceneMap).toContain('Issue 1: The void');
+    expect(seenOverhead).toBeGreaterThan(0);
+    expect(findings).toHaveLength(1);
+    expect(findings[0].category).toBe('style');
+    expect(findings[0].issueNumber).toBe(1);
+  });
+
+  it('degrades to a whole-issue scan (empty scene map) when no reverse outline exists', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      reverseOutline: undefined,
+      callStagedLLM: async (_stage, vars) => {
+        seenVars = vars;
+        return { content: { findings: [] } };
+      },
+    });
+    await getCheck(id).run(ctx);
+    expect(seenVars.sceneMap).toBe('');
+  });
+
+  it('respects maxFindings as a whole-run cap', async () => {
+    const many = Array.from({ length: 30 }, (_, i) => ({ severity: 'low', problem: `p${i}`, anchorQuote: `a${i}` }));
+    const ctx = wholeCtx({
+      config: { maxFindings: 4 },
+      callStagedLLM: async () => ({ content: { findings: many } }),
+    });
+    const findings = await getCheck(id).run(ctx);
+    expect(findings).toHaveLength(4);
   });
 });
 

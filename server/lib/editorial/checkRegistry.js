@@ -159,6 +159,16 @@ export function authoredSetupPayoffSummary(readerMap) {
 // deterministic siblings (prose.cliches, prose.modifier-stacking) need no stage.
 export const DEAD_METAPHOR_STAGE = 'pipeline-editorial-dead-metaphor';
 
+// Stage names for the two scene-grounding LLM checks (#1309): sensory balance
+// (all-visual / sensory-bare scenes) and white-room (ungrounded, setting-less
+// scenes). Each prompt ships in data.reference/prompts/stages/ + stage-config.json
+// (fresh installs via setup-data.js) and migrates to existing installs via
+// migration 103 (boot runs migrations but NOT setup-data, so the migration is
+// required). Both consume the reverse-outline scene segmentation as context and
+// degrade to a whole-issue manuscript scan when no outline exists.
+export const SENSORY_BALANCE_STAGE = 'pipeline-editorial-sensory-balance';
+export const WHITE_ROOM_STAGE = 'pipeline-editorial-white-room';
+
 // Render the authored reader-map cliffhangers (#1298) into a compact text block
 // the chapter-ending check passes alongside the manuscript so the model
 // reconciles its DETECTED endings against the issue-boundary tugs the writer
@@ -905,6 +915,35 @@ const sceneLabel = (s) => {
   return heading || summary || `scene ${seq}`;
 };
 
+// Render the reverse-outline scenes into a compact text block the scene-grounding
+// LLM checks (#1309) pass alongside the manuscript so the model can attribute
+// findings to scenes and reason about each scene's recorded setting / characters.
+// Pure + deterministic so it's unit-testable and its token cost can be counted
+// into the per-chunk overhead. Returns '' when there are no scenes (the prompt's
+// `{{#sceneMap}}` section then renders nothing and the check degrades to a plain
+// whole-issue manuscript scan). Type-guarded throughout — the reverse outline
+// rides peer sync (#1348), so a hand-edited / older-peer scene could carry a
+// non-string field that a bare `.trim()` would throw on.
+export function sceneGroundingSummary(scenes) {
+  const list = Array.isArray(scenes) ? scenes : [];
+  const lines = list.map((s) => {
+    if (!s || typeof s !== 'object') return '';
+    const label = sceneLabel(s);
+    const issueNumber = Number.isInteger(s.issueNumber) ? s.issueNumber : null;
+    const where = issueNumber != null ? `Issue ${issueNumber}` : 'Scene';
+    const setting = typeof s.setting === 'string' ? s.setting.trim() : '';
+    const chars = Array.isArray(s.charactersPresent)
+      ? s.charactersPresent.filter((n) => typeof n === 'string' && n.trim()).map((n) => n.trim())
+      : [];
+    const parts = [`- ${where}: ${label}`];
+    parts.push(setting ? `setting: ${setting}` : 'setting: (none recorded)');
+    if (chars.length) parts.push(`present: ${chars.join(', ')}`);
+    return parts.join(' — ');
+  }).filter(Boolean);
+  if (!lines.length) return '';
+  return `Scenes (from the reverse outline):\n${lines.join('\n')}`;
+}
+
 // ---------------------------------------------------------------------------
 // Registry entries.
 // ---------------------------------------------------------------------------
@@ -1287,6 +1326,92 @@ export const EDITORIAL_CHECKS = [
         });
       }
       return findings;
+    },
+  },
+  {
+    id: 'sensory.balance',
+    sources: ['manuscript', 'reverseOutline'],
+    label: 'Sensory balance (all-visual / sensory-bare scenes)',
+    description:
+      'Flags scenes that lean almost entirely on sight while sound, smell, touch, and taste are neglected, and sensory-bare scenes with almost no concrete grounding. Reads the stitched manuscript plus the reverse-outline scene segmentation as context, naming the missing sense per finding.',
+    scope: 'scene',
+    kind: 'llm',
+    category: 'style',
+    severityDefault: 'low',
+    defaultEnabled: true,
+    // Reads the stitched manuscript corpus — so the runner only pays the
+    // section-collection I/O when a manuscript-consuming check is enabled.
+    needsManuscript: true,
+    configSchema: z.object({
+      // Cap findings per run so a long manuscript can't flood the review.
+      maxFindings: z.number().int().min(1).max(50).default(12),
+    }),
+    configFields: [
+      {
+        key: 'maxFindings',
+        label: 'Max findings per run',
+        type: 'number',
+        min: 1,
+        max: 50,
+        step: 1,
+        help: 'Cap findings so a long manuscript can not flood the review.',
+      },
+    ],
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    run: (ctx) => {
+      // The scene map is fixed per-call overhead (re-sent on each chunk). It's
+      // context only — the check degrades gracefully to a whole-issue scan when
+      // no reverse outline exists (the prompt's {{#sceneMap}} renders nothing).
+      const sceneMap = sceneGroundingSummary(ctx.reverseOutline);
+      return runManuscriptLlmCheck(ctx, {
+        stage: SENSORY_BALANCE_STAGE,
+        category: 'style',
+        overheadTokens: EDITORIAL_PROMPT_OVERHEAD_TOKENS + estimateTokens(sceneMap),
+        buildVars: (manuscript) => ({ manuscript, sceneMap }),
+      });
+    },
+  },
+  {
+    id: 'scene.white-room',
+    sources: ['manuscript', 'reverseOutline'],
+    label: 'White-room / ungrounded scene',
+    description:
+      'Flags "white-room" scenes — dialogue and action in an undescribed void with no setting, blocking, or spatial grounding. Reads the stitched manuscript plus the reverse-outline scene segmentation, using each scene\'s recorded setting as a candidate signal. Distinct from sensory balance (senses) and scene-component balance (narrative/action/dialogue mix) — the gap here is specifically spatial grounding.',
+    scope: 'scene',
+    kind: 'llm',
+    category: 'style',
+    severityDefault: 'medium',
+    defaultEnabled: true,
+    // Reads the stitched manuscript corpus — so the runner only pays the
+    // section-collection I/O when a manuscript-consuming check is enabled.
+    needsManuscript: true,
+    configSchema: z.object({
+      // Cap findings per run so a long manuscript can't flood the review.
+      maxFindings: z.number().int().min(1).max(50).default(12),
+    }),
+    configFields: [
+      {
+        key: 'maxFindings',
+        label: 'Max findings per run',
+        type: 'number',
+        min: 1,
+        max: 50,
+        step: 1,
+        help: 'Cap findings so a long manuscript can not flood the review.',
+      },
+    ],
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    run: (ctx) => {
+      // The scene map is fixed per-call overhead (re-sent on each chunk). Each
+      // scene's recorded `setting` is a strong white-room signal (blank ⇒ likely
+      // ungrounded); the check degrades to a whole-issue scan when no outline exists.
+      const sceneMap = sceneGroundingSummary(ctx.reverseOutline);
+      return runManuscriptLlmCheck(ctx, {
+        stage: WHITE_ROOM_STAGE,
+        category: 'style',
+        overheadTokens: EDITORIAL_PROMPT_OVERHEAD_TOKENS + estimateTokens(sceneMap),
+        buildVars: (manuscript) => ({ manuscript, sceneMap }),
+      });
     },
   },
   {
