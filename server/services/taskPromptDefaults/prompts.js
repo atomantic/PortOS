@@ -659,8 +659,11 @@ WORKTREE="data/cos/worktrees/claim-issue-\${NUM}"
 mkdir -p data/cos/worktrees
 git fetch origin "\${DEFAULT_BRANCH}"
 git worktree add -b "claim/issue-\${NUM}" "\${WORKTREE}" "origin/\${DEFAULT_BRANCH}"
-# Cross-machine claim markers (best-effort — do not abort the run if these fail):
-glab issue update "\${NUM}" --assignee @me 2>/dev/null || glab issue update "\${NUM}" --assignee "$(glab api user -F json | sed -n 's/.*"username":"\\([^"]*\\)".*/\\1/p')" 2>/dev/null
+# Cross-machine claim markers (best-effort — do not abort the run if these fail).
+# Resolve your own username first — glab's --assignee wants a username (the
+# \`@me\` gh-ism isn't universally supported), falling back to @me if the lookup fails:
+ME="$(glab api user 2>/dev/null | sed -n 's/.*"username":"\\([^"]*\\)".*/\\1/p')"
+glab issue update "\${NUM}" --assignee "\${ME:-@me}" 2>/dev/null
 glab issue update "\${NUM}" --label in-progress 2>/dev/null
 cd "\${WORKTREE}"
 \`\`\`
