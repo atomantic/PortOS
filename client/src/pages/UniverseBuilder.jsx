@@ -13,7 +13,7 @@ import {
   Plus, Trash2, Sparkles, Wand2, Loader2, Save, FolderOpen,
   Edit3, X, MessageSquarePlus, Play, Lock, Unlock,
   ArrowUpCircle, ArrowLeft,
-  BookOpen, Users, MapPin, Package, Layers, ImagePlus, FolderTree,
+  BookOpen, Users, MapPin, Package, Layers, ImagePlus, FolderTree, Images,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import {
@@ -32,6 +32,7 @@ import useUniverseAction from '../hooks/useUniverseAction';
 import { useUniverseNav } from '../hooks/useUniverseNav';
 import InfluenceChipsInput from '../components/universeBuilder/InfluenceChipsInput';
 import ProviderModelSelector from '../components/ProviderModelSelector';
+import GalleryImagePicker from '../components/imageGen/GalleryImagePicker';
 import ImageGenSettingsForm from '../components/imageGen/ImageGenSettingsForm';
 import { RUNNER_FAMILIES, loraCompatKey } from '../lib/runnerFamilies';
 import ShareToButton from '../components/sharing/ShareToButton';
@@ -663,12 +664,16 @@ export default function UniverseBuilder() {
   const [refining, setRefining] = useState(false);
   const [refineRationale, setRefineRationale] = useState('');
   const [refineChanges, setRefineChanges] = useState([]);
+  // Optional gallery image used as a visual style reference for refinement —
+  // { filename, preview }. When set, the server refines through a vision model.
+  const [refineImage, setRefineImage] = useState(null);
 
   const resetRefinePanel = () => {
     setRefineOpen(false);
     setRefineFeedback('');
     setRefineRationale('');
     setRefineChanges([]);
+    setRefineImage(null);
   };
 
   const refresh = async () => {
@@ -1125,6 +1130,7 @@ export default function UniverseBuilder() {
       compositeSheets: hasStructure ? draft.compositeSheets : undefined,
       locked: locks,
       feedback,
+      image: refineImage?.filename || undefined,
       providerId: draft.llm?.provider || activeProviderId || undefined,
       model: draft.llm?.model || undefined,
     }).catch(() => null);
@@ -1155,6 +1161,7 @@ export default function UniverseBuilder() {
     setRefineRationale(result.rationale || '');
     setRefineChanges(Array.isArray(result.changes) ? result.changes : []);
     setRefineFeedback('');
+    setRefineImage(null);
     toast.success('Refined world applied');
   };
 
@@ -1721,6 +1728,7 @@ export default function UniverseBuilder() {
               feedback: refineFeedback, setFeedback: setRefineFeedback,
               run: runRefine, running: refining, reset: resetRefinePanel,
               rationale: refineRationale, changes: refineChanges,
+              image: refineImage, setImage: setRefineImage,
             }}
             totalVariations={totalVariations}
             categoryKeyCount={categoryKeys.length}
@@ -2837,7 +2845,10 @@ function BibleTab({
     feedback: refineFeedback, setFeedback: setRefineFeedback,
     run: runRefine, running: refining, reset: resetRefinePanel,
     rationale: refineRationale, changes: refineChanges,
+    image: refineImage, setImage: setRefineImage,
   } = refine;
+  // Local-only: gallery picker visibility for the optional style-reference image.
+  const [refineGalleryOpen, setRefineGalleryOpen] = useState(false);
   return (
     <>
       <section className="bg-port-card border border-port-border rounded p-4 flex flex-col gap-3">
@@ -2917,6 +2928,42 @@ function BibleTab({
               disabled={refining}
               className="w-full bg-port-bg border border-port-border rounded p-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-port-accent resize-y disabled:opacity-60"
             />
+            {/* Optional visual style reference from the gallery — when set, the
+                server refines through a vision-capable API provider. */}
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-[11px] uppercase tracking-wide text-gray-500">Style reference (optional)</span>
+              {refineImage ? (
+                <div className="relative w-14 h-14">
+                  <img
+                    src={refineImage.preview || `/data/images/${encodeURIComponent(refineImage.filename)}`}
+                    alt="style reference"
+                    className="w-full h-full object-cover rounded border border-port-border"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setRefineImage(null)}
+                    title="Remove reference image"
+                    aria-label="Remove reference image"
+                    className="absolute -top-1.5 -right-1.5 bg-port-bg border border-port-border rounded-full p-0.5 text-gray-400 hover:text-port-error"
+                  >
+                    <X size={11} />
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setRefineGalleryOpen(true)}
+                  disabled={refining}
+                  className="px-2.5 py-1.5 text-xs text-port-accent border border-port-accent/40 rounded flex items-center gap-1.5 hover:bg-port-accent/10 disabled:opacity-50"
+                >
+                  <Images size={14} />
+                  Pick from gallery
+                </button>
+              )}
+              {refineImage ? (
+                <span className="text-[11px] text-gray-500">Folds the image's palette/mood into influences + style notes.</span>
+              ) : null}
+            </div>
             <div className="flex items-center gap-2 flex-wrap">
               <button
                 type="button"
@@ -2953,6 +3000,13 @@ function BibleTab({
                 )}
               </div>
             )}
+            <GalleryImagePicker
+              open={refineGalleryOpen}
+              onClose={() => setRefineGalleryOpen(false)}
+              onSelect={(item) => {
+                if (item?.filename) setRefineImage({ filename: item.filename, preview: item.previewUrl });
+              }}
+            />
           </div>
         )}
       </section>

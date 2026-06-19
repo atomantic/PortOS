@@ -7,12 +7,49 @@ import { mockNoPeers, mockNoPeerSync } from '../lib/mockPathsDataRoot.js';
 
 const fileStore = new Map();
 
+// Gallery resolver: any filename containing "missing" resolves to null (the
+// not-found path); everything else resolves to a deterministic absolute path.
+const resolveGalleryImageMock = vi.fn((filename) => (
+  typeof filename === 'string' && !filename.includes('missing') ? `/mock/data/images/${filename}` : null
+));
 vi.mock('../lib/fileUtils.js', () => ({
 tryReadFile: vi.fn().mockResolvedValue(null),
-  PATHS: { data: '/mock/data' },
+  PATHS: { data: '/mock/data', screenshots: '/mock/data/screenshots', images: '/mock/data/images' },
   ensureDir: vi.fn().mockResolvedValue(undefined),
   atomicWrite: vi.fn(async (path, data) => { fileStore.set(path, data); }),
   readJSONFile: vi.fn(async (path, fallback) => (fileStore.has(path) ? fileStore.get(path) : fallback)),
+  // sanitizeFilename: strip path components so a traversal attempt diverges
+  // from the input (the route 400s when safe !== input).
+  sanitizeFilename: vi.fn((f) => String(f).replace(/^.*[\\/]/, '').replace(/\.\./g, '')),
+  resolveGalleryImage: (...args) => resolveGalleryImageMock(...args),
+}));
+
+// existsSync gates uploaded-screenshot preflight: any name containing "absent"
+// is treated as missing; everything else exists.
+vi.mock('fs', async (importActual) => {
+  const actual = await importActual();
+  return { ...actual, existsSync: vi.fn((p) => !String(p).includes('absent')) };
+});
+
+// Stub the vision/refine services so the route tests exercise the image-source
+// resolution + schema glue, not a real LLM. Real constants pass through.
+const describeEntityFromImagesMock = vi.fn(async () => ({ description: 'mock prose', llm: { provider: 'mock', model: null } }));
+vi.mock('../services/universeVisionDescribe.js', async () => {
+  const actual = await vi.importActual('../services/universeVisionDescribe.js');
+  return { ...actual, describeEntityFromImages: (...args) => describeEntityFromImagesMock(...args) };
+});
+const expandEntityFromImagesMock = vi.fn(async () => ({ fields: { pronouns: 'she/her' }, updatedFields: ['pronouns'], llm: { provider: 'mock', model: null } }));
+vi.mock('../services/universeVisionExpand.js', async () => {
+  const actual = await vi.importActual('../services/universeVisionExpand.js');
+  return { ...actual, expandEntityFromImages: (...args) => expandEntityFromImagesMock(...args) };
+});
+const refineWorldPromptsMock = vi.fn(async (args) => ({
+  starterPrompt: 'refined', logline: '', premise: '', styleNotes: '',
+  influences: { embrace: [], avoid: [] }, locked: {}, rationale: 'r', changes: [],
+  providerId: 'mock', model: null, _imagePath: args?.imagePath ?? null,
+}));
+vi.mock('../services/universeBuilderRefine.js', () => ({
+  refineWorldPrompts: (...args) => refineWorldPromptsMock(...args),
 }));
 
 // Both mocks needed: vitest.setup.js's global `instances.js` mock uses importOriginal, which leaves the per-file `peerSync.js` mock unable to suppress the createUniverse dynamic-import hoist error alone.
@@ -1024,6 +1061,108 @@ describe('universe-builder routes', () => {
         .send({ survivorId: 'u-1', loserId: 'u-1', fields: ['logline'] });
       expect(res.status).toBe(400);
       expect(mergeFieldsWithAIMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('POST /describe-from-images (mixed image sources)', () => {
+    it('resolves an uploaded image to its bare filename', async () => {
+      const res = await request(buildApp())
+        .post('/api/universe-builder/describe-from-images')
+        .send({ kind: 'character', images: [{ source: 'upload', filename: 'a.png' }] });
+      expect(res.status).toBe(200);
+      expect(describeEntityFromImagesMock).toHaveBeenCalledWith(
+        expect.objectContaining({ screenshots: ['a.png'] }),
+      );
+    });
+
+    it('resolves a gallery image to its absolute path', async () => {
+      const res = await request(buildApp())
+        .post('/api/universe-builder/describe-from-images')
+        .send({ kind: 'place', images: [{ source: 'gallery', filename: 'g.png' }] });
+      expect(res.status).toBe(200);
+      expect(describeEntityFromImagesMock).toHaveBeenCalledWith(
+        expect.objectContaining({ screenshots: ['/mock/data/images/g.png'] }),
+      );
+    });
+
+    it('400 GALLERY_IMAGE_NOT_FOUND when the gallery image is missing', async () => {
+      const res = await request(buildApp())
+        .post('/api/universe-builder/describe-from-images')
+        .send({ kind: 'object', images: [{ source: 'gallery', filename: 'missing.png' }] });
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('GALLERY_IMAGE_NOT_FOUND');
+    });
+
+    it('400 SCREENSHOT_NOT_FOUND when the uploaded image is absent on disk', async () => {
+      const res = await request(buildApp())
+        .post('/api/universe-builder/describe-from-images')
+        .send({ kind: 'character', images: [{ source: 'upload', filename: 'absent.png' }] });
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('SCREENSHOT_NOT_FOUND');
+    });
+
+    it('400 VALIDATION_ERROR on a path-traversal upload filename', async () => {
+      const res = await request(buildApp())
+        .post('/api/universe-builder/describe-from-images')
+        .send({ kind: 'character', images: [{ source: 'upload', filename: '../secrets.png' }] });
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('VALIDATION_ERROR');
+    });
+  });
+
+  describe('POST /:id/characters/:entryId/expand-from-images', () => {
+    it('resolves mixed sources and forwards universeId/entryId', async () => {
+      const res = await request(buildApp())
+        .post('/api/universe-builder/uni-1/characters/chr-1/expand-from-images')
+        .send({ images: [{ source: 'gallery', filename: 'g.png' }, { source: 'upload', filename: 'a.png' }] });
+      expect(res.status).toBe(200);
+      expect(res.body.updatedFields).toEqual(['pronouns']);
+      expect(expandEntityFromImagesMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          universeId: 'uni-1', entryId: 'chr-1',
+          screenshots: ['/mock/data/images/g.png', 'a.png'],
+        }),
+      );
+    });
+
+    it('400 GALLERY_IMAGE_NOT_FOUND for a missing gallery image', async () => {
+      const res = await request(buildApp())
+        .post('/api/universe-builder/uni-1/characters/chr-1/expand-from-images')
+        .send({ images: [{ source: 'gallery', filename: 'missing.png' }] });
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('GALLERY_IMAGE_NOT_FOUND');
+    });
+  });
+
+  describe('POST /refine-prompts (style-reference image)', () => {
+    it('resolves the image filename to an absolute path before the service', async () => {
+      const res = await request(buildApp())
+        .post('/api/universe-builder/refine-prompts')
+        .send({ starterPrompt: 'seed', feedback: 'pull toward this', image: 'g.png' });
+      expect(res.status).toBe(200);
+      expect(refineWorldPromptsMock).toHaveBeenCalledWith(
+        expect.objectContaining({ imagePath: '/mock/data/images/g.png' }),
+      );
+    });
+
+    it('400 GALLERY_IMAGE_NOT_FOUND for a missing reference image', async () => {
+      refineWorldPromptsMock.mockClear();
+      const res = await request(buildApp())
+        .post('/api/universe-builder/refine-prompts')
+        .send({ starterPrompt: 'seed', feedback: 'x', image: 'missing.png' });
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('GALLERY_IMAGE_NOT_FOUND');
+      expect(refineWorldPromptsMock).not.toHaveBeenCalled();
+    });
+
+    it('passes imagePath null when no image is supplied', async () => {
+      const res = await request(buildApp())
+        .post('/api/universe-builder/refine-prompts')
+        .send({ starterPrompt: 'seed', feedback: 'x' });
+      expect(res.status).toBe(200);
+      expect(refineWorldPromptsMock).toHaveBeenCalledWith(
+        expect.objectContaining({ imagePath: null }),
+      );
     });
   });
 });

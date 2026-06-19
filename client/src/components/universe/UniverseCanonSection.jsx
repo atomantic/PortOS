@@ -850,12 +850,19 @@ export default function UniverseCanonSection({
           open
           kind={describeTarget.kind.apiKind}
           entryName={describeTarget.entry.name}
+          universeId={universeId}
+          entryId={describeTarget.entry.id}
           onApply={(description) => {
             if (describeTarget.kind.descField) {
               handlePatchEntry(describeTarget.kind, describeTarget.entry.id, {
                 [describeTarget.kind.descField]: description,
               });
             }
+          }}
+          // Structured attributes from a reference image (characters): apply the
+          // reviewed `{ field: value }` patch through the same entry-patch path.
+          onApplyFields={(patch) => {
+            handlePatchEntry(describeTarget.kind, describeTarget.entry.id, patch);
           }}
           onClose={() => setDescribeTarget(null)}
         />
