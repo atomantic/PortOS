@@ -435,7 +435,7 @@ export default function Pipeline() {
             return (
             <li key={s.id} className="flex items-start justify-between gap-3 p-3 bg-port-card border border-port-border rounded-lg hover:border-port-accent/40 transition-colors">
               <Link to={`/pipeline/series/${s.id}`} className="flex-1 min-w-0 flex items-start gap-3">
-                <ImageThumb imageRef={s.coverImage} FallbackIcon={BookOpen} />
+                <ImageThumb imageRef={s.coverImage} FallbackIcon={BookOpen} sizeClass="w-12 h-[4.5rem]" />
                 <div className="min-w-0 flex-1">
                   <div className="text-white font-medium flex items-center gap-2 flex-wrap">
                     <span>{s.name}</span>

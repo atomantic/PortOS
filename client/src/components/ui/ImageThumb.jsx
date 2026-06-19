@@ -1,16 +1,18 @@
 import { useState } from 'react';
 
 /**
- * Square list-card thumbnail with graceful fallback. Renders the image from
+ * List-card thumbnail with graceful fallback. Renders the image from
  * `/data/images/<imageRef>` and swaps to `FallbackIcon` when there's no ref or
  * the image 404s (e.g. a peer synced the pointer but not the bytes yet). Shared
- * by the universe reference thumbnail and the series cover thumbnail.
+ * by the universe reference thumbnail (square) and the series cover thumbnail
+ * (comic-book portrait — pass `sizeClass`). `sizeClass` sets only the box
+ * dimensions; the frame styling is constant.
  */
-export default function ImageThumb({ imageRef, FallbackIcon, alt = '' }) {
+export default function ImageThumb({ imageRef, FallbackIcon, alt = '', sizeClass = 'w-12 h-12' }) {
   const [broken, setBroken] = useState(false);
   const showImage = imageRef && !broken;
   return (
-    <div className="flex-shrink-0 w-12 h-12 rounded-md overflow-hidden bg-port-bg border border-port-border flex items-center justify-center">
+    <div className={`flex-shrink-0 ${sizeClass} rounded-md overflow-hidden bg-port-bg border border-port-border flex items-center justify-center`}>
       {showImage ? (
         <img
           src={`/data/images/${encodeURIComponent(imageRef)}`}
