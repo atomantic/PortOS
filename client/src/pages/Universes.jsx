@@ -12,6 +12,7 @@ import { useEffect, useMemo, useState, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Plus, Globe, Trash2, Users, Workflow as WorkflowIcon, Copy } from 'lucide-react';
 import toast from '../components/ui/Toast';
+import ImageThumb from '../components/ui/ImageThumb';
 import ShareToButton from '../components/sharing/ShareToButton';
 import SyncToPeerButton from '../components/sharing/SyncToPeerButton';
 import OriginBadge from '../components/sharing/OriginBadge';
@@ -66,27 +67,11 @@ const baseStyleImageRef = (u) => {
 
 // 48px square thumbnail showing the universe's base style image, falling back
 // to the latest image from its auto-managed media collection, then a Globe
-// placeholder when neither exists (or hasn't loaded yet). onError hides the
-// <img> so a stale ref pointing at a deleted file falls back to the placeholder
-// instead of a broken-image icon. Shared between desktop row and mobile card.
+// placeholder when neither exists (or hasn't loaded yet). The shared ImageThumb
+// hides the <img> on error so a stale ref pointing at a deleted file falls back
+// to the placeholder instead of a broken-image icon. Used by desktop row + card.
 function UniverseThumb({ imageRef }) {
-  const [broken, setBroken] = useState(false);
-  const showImage = imageRef && !broken;
-  return (
-    <div className="flex-shrink-0 w-12 h-12 rounded-md overflow-hidden bg-port-bg border border-port-border flex items-center justify-center">
-      {showImage ? (
-        <img
-          src={`/data/images/${encodeURIComponent(imageRef)}`}
-          alt=""
-          loading="lazy"
-          onError={() => setBroken(true)}
-          className="w-full h-full object-cover"
-        />
-      ) : (
-        <Globe className="w-5 h-5 text-gray-600" aria-hidden="true" />
-      )}
-    </div>
-  );
+  return <ImageThumb imageRef={imageRef} FallbackIcon={Globe} />;
 }
 
 // Shared between the desktop table row and the mobile card so the armed-state

@@ -1053,12 +1053,12 @@ describe('dataSync — per-category schema gate (cross-key isolation)', () => {
     const result = await dataSync.applyRemote('pipeline', {
       series: [{ id: 'ser-1', name: 'Foundry', updatedAt: '2026-05-17T11:00:00Z' }],
       issues: [],
-    }, { portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 5, pipelineSeries: 5, pipelineIssues: 1, mediaCollections: 1 } } });
+    }, { portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 5, pipelineSeries: 6, pipelineIssues: 1, mediaCollections: 1 } } });
     expect(result.applied).toBe(false);
     expect(result.blockedBySchema).toBeDefined();
     // The reported gap is scoped to the relevant category — NOT mis-attributed.
     expect(result.blockedBySchema.ahead).toEqual([
-      { category: 'pipelineSeries', senderV: 5, receiverV: 4 },
+      { category: 'pipelineSeries', senderV: 6, receiverV: 5 },
     ]);
     expect(readSeriesState()).toEqual([]); // nothing written
   });

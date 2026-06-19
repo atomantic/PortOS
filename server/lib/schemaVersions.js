@@ -90,7 +90,17 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // `sanitizeSeries`, drops the guide, and last-writer-wins the loss back onto
   // the newer peer. Bump makes the older peer reject the ahead-version series
   // transfer instead. Per-category gate → only series sync pauses with old peers.
-  pipelineSeries: 4,
+  // v5 = `series.coverImage` added — a top-level derived field holding the
+  // filename of a rendered volume/issue cover, shown as a thumbnail on the
+  // pipeline series list. Derived (any peer can recompute it from its own
+  // seasons/issues), but it's only recomputed on cover-render or the one-time
+  // boot backfill — never on every read — so a ≤v4 peer that re-sanitizes a
+  // series through its coverImage-unaware `sanitizeSeries` would drop the
+  // pointer and LWW the loss back onto the newer peer, where it may never
+  // recompute (a finished series renders no new cover). Gate so the older peer
+  // rejects the ahead-version transfer instead. Per-category gate → only series
+  // sync pauses with old peers.
+  pipelineSeries: 5,
   // NOT bumped for the manuscript-review sibling doc now bundled on series
   // pushes/exports (`data/pipeline-series/{id}/manuscript-review.json`).
   // Unlike `readerMap` (v2), the review is NOT a field inside the series

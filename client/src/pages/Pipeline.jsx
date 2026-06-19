@@ -9,8 +9,9 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Plus, Workflow as WorkflowIcon, Trash2, Loader2, Globe2, FileInput, Sparkles } from 'lucide-react';
+import { Plus, Workflow as WorkflowIcon, Trash2, Loader2, Globe2, FileInput, Sparkles, BookOpen } from 'lucide-react';
 import toast from '../components/ui/Toast';
+import ImageThumb from '../components/ui/ImageThumb';
 import ShareToButton from '../components/sharing/ShareToButton';
 import SyncToPeerButton from '../components/sharing/SyncToPeerButton';
 import OriginBadge from '../components/sharing/OriginBadge';
@@ -433,30 +434,33 @@ export default function Pipeline() {
             const shapeDef = s.arc?.shape ? getStoryShape(s.arc.shape) : null;
             return (
             <li key={s.id} className="flex items-start justify-between gap-3 p-3 bg-port-card border border-port-border rounded-lg hover:border-port-accent/40 transition-colors">
-              <Link to={`/pipeline/series/${s.id}`} className="flex-1 min-w-0">
-                <div className="text-white font-medium flex items-center gap-2 flex-wrap">
-                  <span>{s.name}</span>
-                  {s.origin ? <OriginBadge origin={s.origin} compact /> : null}
-                  {shapeDef ? (
-                    <span
-                      className="inline-flex items-center gap-1.5 text-[10px] uppercase tracking-wider px-2 py-0.5 rounded bg-port-bg border border-port-accent/40 text-port-accent"
-                      title={shapeDef.description}
-                    >
-                      <ArcShapeSparkline shape={shapeDef} width={40} height={14} />
-                      {shapeDef.label}
-                    </span>
+              <Link to={`/pipeline/series/${s.id}`} className="flex-1 min-w-0 flex items-start gap-3">
+                <ImageThumb imageRef={s.coverImage} FallbackIcon={BookOpen} />
+                <div className="min-w-0 flex-1">
+                  <div className="text-white font-medium flex items-center gap-2 flex-wrap">
+                    <span>{s.name}</span>
+                    {s.origin ? <OriginBadge origin={s.origin} compact /> : null}
+                    {shapeDef ? (
+                      <span
+                        className="inline-flex items-center gap-1.5 text-[10px] uppercase tracking-wider px-2 py-0.5 rounded bg-port-bg border border-port-accent/40 text-port-accent"
+                        title={shapeDef.description}
+                      >
+                        <ArcShapeSparkline shape={shapeDef} width={40} height={14} />
+                        {shapeDef.label}
+                      </span>
+                    ) : null}
+                  </div>
+                  {s.logline ? (
+                    <div className="text-xs text-gray-500 mt-1 whitespace-pre-wrap break-words">{s.logline}</div>
+                  ) : (
+                    <div className="text-xs text-gray-600 italic mt-1">No logline yet</div>
+                  )}
+                  {s.issueCountTarget ? (
+                    <div className="text-xs text-gray-600 mt-1">
+                      Target {s.issueCountTarget} issues / episodes
+                    </div>
                   ) : null}
                 </div>
-                {s.logline ? (
-                  <div className="text-xs text-gray-500 mt-1 whitespace-pre-wrap break-words">{s.logline}</div>
-                ) : (
-                  <div className="text-xs text-gray-600 italic mt-1">No logline yet</div>
-                )}
-                {s.issueCountTarget ? (
-                  <div className="text-xs text-gray-600 mt-1">
-                    Target {s.issueCountTarget} issues / episodes
-                  </div>
-                ) : null}
               </Link>
               <SyncBadge
                 status={syncBadgeStatus(sync, s.id)}

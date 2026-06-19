@@ -989,6 +989,20 @@ ensureSelf()
       }
     }
   })
+  .then(async () => {
+    // One-time series cover-thumbnail backfill: derive `series.coverImage` (the
+    // rendered volume/issue cover shown on the pipeline list) for series whose
+    // covers rendered before the feature shipped. Runs after the series + issues
+    // stores are warmed above so the derivation reads migrated records. Drives
+    // the services, so it works on both the PG backend and the file escape hatch.
+    // FIRE-AND-FORGET (not awaited): a cosmetic thumbnail backfill must never
+    // delay the server accepting requests, and it's marker-gated so it runs at
+    // most once regardless.
+    const { backfillSeriesCoverImages } = await import('./scripts/backfillSeriesCoverImages.js');
+    backfillSeriesCoverImages().catch((err) => {
+      console.error(`❌ series cover backfill failed at boot: ${err?.message ?? err}`);
+    });
+  })
   .then(() => {
     // Start server only after sync log + media job queue are initialized.
     // initMediaJobQueue failure is fatal: the queue owns persistence + SSE

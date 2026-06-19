@@ -63,6 +63,12 @@ export const STYLE_PROMPT_OVERRIDE_MODE_DEFAULT = 'prepend';
 // title-screen prompts as the "logo design" cue. Generated from the universe's
 // style notes on series creation; editable in the bible.
 export const TITLE_LOGO_MAX = 2000;
+// Derived cover thumbnail — the filename of a rendered volume/issue cover,
+// stamped by seriesCoverImage.refreshSeriesCoverImage so the pipeline series
+// list can show a thumbnail (like the universe reference image) without
+// scanning every issue at read time. Server-set/derived only — never accepted
+// from a route body. Sized to RENDER_FILENAME_MAX (renderSlot.js).
+export const COVER_IMAGE_MAX = 500;
 export const AUTHOR_MAX = 120;
 // FK to an Author persona (auth-<uuid>). The `author` string above stays as a
 // denormalized byline so a federated series renders the cover correctly even
@@ -188,6 +194,13 @@ const sanitizeSeries = (raw) => {
     // (which predate this field) migrate forward without a writer pass.
     styleGuide: sanitizeStyleGuide(raw.styleGuide),
     titleLogo: trimTo(raw.titleLogo, TITLE_LOGO_MAX),
+    // Derived cover thumbnail filename (a rendered volume/issue cover). Stamped
+    // by the cover filename hooks + the one-time boot backfill via
+    // setSeriesCoverImage; null until a cover renders. Additive + gracefully
+    // degrading (a pre-feature peer's sanitizeSeries drops it), but wire-gated
+    // (pipelineSeries schema v5) so an older peer can't strip-then-LWW the
+    // pointer back onto a newer peer.
+    coverImage: trimTo(raw.coverImage, COVER_IMAGE_MAX) || null,
     author: trimTo(raw.author, AUTHOR_MAX),
     authorId: trimTo(raw.authorId, AUTHOR_ID_MAX) || null,
     // Per-series override that prepends ahead of the linked universe's
@@ -531,6 +544,32 @@ export async function setArcFieldLock(id, field, locked) {
     await store().saveOneNow(next.id, next);
     emitRecordUpdated('series', next.id);
     return next;
+  });
+}
+
+/**
+ * Stamp the derived cover thumbnail (a rendered volume/issue cover filename)
+ * onto the series record so the pipeline list can show a thumbnail without
+ * scanning issues at read time. Server-set/derived only — see
+ * seriesCoverImage.refreshSeriesCoverImage for the recompute that calls this.
+ *
+ * No-op (no write, no `recordUpdated` emit) when the value is unchanged so
+ * repeat cover renders for an already-decorated series don't churn the record
+ * or re-broadcast to peers. Mirrors the empty-patch fast-path in
+ * `updateSeasonOnSeries`.
+ */
+export async function setSeriesCoverImage(id, filename) {
+  const next = isStr(filename) && filename ? filename.slice(0, COVER_IMAGE_MAX) : null;
+  return store().queueRecordWrite(id, async () => {
+    const cur = await store().loadOne(id);
+    if (!cur) throw makeErr(`Series not found: ${id}`, ERR_NOT_FOUND);
+    if (cur.deleted) throw makeErr(`Series not found: ${id}`, ERR_NOT_FOUND);
+    if ((cur.coverImage || null) === next) return cur; // no-op guard
+    const merged = sanitizeSeries({ ...cur, coverImage: next, updatedAt: new Date().toISOString() });
+    if (!merged) throw makeErr('Invalid series payload', ERR_VALIDATION);
+    await store().saveOneNow(merged.id, merged);
+    emitRecordUpdated('series', merged.id);
+    return merged;
   });
 }
 
