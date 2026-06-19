@@ -310,6 +310,18 @@ describe('chatgptImport service', () => {
       expect([...extractAssetFileNames(content)]).toEqual(['file-ok2.png']);
     });
 
+    it('rejects a literal `..` name the charset alone would admit (join → parent dir)', () => {
+      // The flat charset includes `.`, so `..` / `a..b` match it — but `..`
+      // resolves to the parent dir under join(). The explicit `..` reject keeps
+      // the guard a true superset of the prior path-traversal check.
+      const content = [
+        '![dd](/data/brain-imports/..)',
+        '![seg](/data/brain-imports/a..b.png)',
+        '![ok](/data/brain-imports/file-ok3.png)',
+      ].join('\n');
+      expect([...extractAssetFileNames(content)]).toEqual(['file-ok3.png']);
+    });
+
     it('returns an empty set for non-string / asset-free content', () => {
       expect(extractAssetFileNames(null).size).toBe(0);
       expect(extractAssetFileNames('plain memory text').size).toBe(0);

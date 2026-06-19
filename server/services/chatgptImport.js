@@ -337,12 +337,14 @@ export const extractAssetFileNames = (content) => {
   while ((m = re.exec(content)) !== null) {
     const name = m[1].replace(/[).,]+$/, '');
     // Served asset names are `<assetId><ext>` (see chatgptZipImport.js) and are
-    // flat in practice. This regex is the actual safety boundary regardless of
-    // how the producer names files: a strict superset of the path-traversal
-    // guard, it rejects `/`, `\`, `..`, null bytes, and stray
-    // query-string/punctuation tails that can never name a real on-disk asset —
-    // so a crafted link can't produce a name we'd hand to unlink().
-    if (/^[a-zA-Z0-9._-]+$/.test(name)) {
+    // flat in practice. These guards are the actual safety boundary regardless
+    // of how the producer names files: the charset anchor rejects `/`, `\`,
+    // null bytes, and stray query-string/punctuation tails, and the explicit
+    // `..` reject keeps it a strict superset of the prior path-traversal guard
+    // (the charset alone would admit a literal `..`, which `join` resolves to
+    // the parent dir). Together a crafted link can't produce a name we'd hand
+    // to unlink() that escapes — or names — the assets dir.
+    if (/^[a-zA-Z0-9._-]+$/.test(name) && !name.includes('..')) {
       names.add(name);
     }
   }
