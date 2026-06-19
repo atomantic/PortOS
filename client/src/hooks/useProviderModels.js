@@ -30,13 +30,20 @@ export default function useProviderModels({ filter, allowDefault = false, silent
   const [loading, setLoading] = useState(true);
   const hasSetInitialRef = useRef(false);
 
+  // The provider's selectable model source: its `models` list, or — when that
+  // list is empty (a cloud/manual provider configured with only a defaultModel,
+  // where `[]` is truthy so `||` wouldn't fall through) — its defaultModel.
+  const sourceModels = (provider) => (
+    provider?.models?.length ? provider.models : [provider?.defaultModel]
+  );
+
   // Resolve the model to pin when a provider is (auto-)selected. With a
   // modelFilter, the provider's defaultModel may not qualify (e.g. a vision
   // picker on a local backend whose default is a text model), so pick the first
   // model that passes the filter instead.
   const pickInitialModel = useCallback((provider) => {
     if (!modelFilter) return provider?.defaultModel || '';
-    const models = filterSelectableModels(provider?.models || [provider?.defaultModel])
+    const models = filterSelectableModels(sourceModels(provider))
       .filter((m) => modelFilter(m, provider));
     return models[0] || '';
   }, [modelFilter]);

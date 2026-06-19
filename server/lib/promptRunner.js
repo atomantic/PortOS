@@ -212,8 +212,18 @@ export function assertProvider(provider, { message, code, status = 503 } = {}) {
 export function assertVisionRunUsedImages(result, requestedProvider) {
   const ran = result?.provider || result?.fallbackProvider || requestedProvider;
   if (ran?.type && ran.type !== 'api') {
+    // Name both providers so the cause is actionable. The usual trigger is a
+    // proactive/retry swap because the requested API provider is in a temporary
+    // cooldown (e.g. a prior model-not-found benched it for several minutes) —
+    // NOT that the user picked a non-vision provider. Point them at the real fix.
+    const requestedName = requestedProvider?.name || requestedProvider?.id || 'the selected provider';
+    const ranName = ran?.name || ran?.id || 'a non-vision provider';
+    const swapped = ran?.id && requestedProvider?.id && ran.id !== requestedProvider.id;
+    const cause = swapped
+      ? `"${requestedName}" was unavailable (likely a temporary cooldown after an earlier failed request), so the run fell back to "${ranName}", which can't read images.`
+      : `"${ranName}" can't read images.`;
     throw new ServerError(
-      'The vision request fell back to a non-vision provider that cannot read images. Configure a reliable vision-capable API provider and retry.',
+      `${cause} Retry in a few minutes, or pick a different vision-capable API provider/model.`,
       { status: 502, code: 'VISION_FALLBACK_DROPPED_IMAGES' },
     );
   }

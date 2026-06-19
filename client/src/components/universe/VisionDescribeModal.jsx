@@ -201,7 +201,15 @@ export default function VisionDescribeModal({
     onClose();
   };
 
-  const canRun = images.length > 0 && !describing && !building && !uploading && providers.length > 0;
+  // A vision model must be explicitly selected — otherwise the request sends
+  // `model: undefined` and the server resolves the provider's default, which on
+  // a local backend is often a text-only model that silently drops the images.
+  // When the selected provider is a local backend with no vision-capable model,
+  // `availableModels` is empty and `selectedModel` is '' — block the run and
+  // tell the user why.
+  const noVisionModel = providers.length > 0 && !selectedModel;
+  const canRun = images.length > 0 && !describing && !building && !uploading
+    && providers.length > 0 && !!selectedModel;
   const multi = images.length > 1;
 
   return (
@@ -280,16 +288,24 @@ export default function VisionDescribeModal({
 
           {/* Provider + model picker (API/vision-capable providers only) */}
           {providers.length > 0 ? (
-            <ProviderModelSelector
-              providers={providers}
-              selectedProviderId={selectedProviderId}
-              selectedModel={selectedModel}
-              availableModels={availableModels}
-              onProviderChange={setSelectedProviderId}
-              onModelChange={setSelectedModel}
-              label="Vision provider"
-              layout="row"
-            />
+            <>
+              <ProviderModelSelector
+                providers={providers}
+                selectedProviderId={selectedProviderId}
+                selectedModel={selectedModel}
+                availableModels={availableModels}
+                onProviderChange={setSelectedProviderId}
+                onModelChange={setSelectedModel}
+                label="Vision provider"
+                layout="row"
+              />
+              {noVisionModel ? (
+                <p className="text-xs text-port-warning">
+                  This provider has no vision-capable model installed. Pick another provider, or install a
+                  vision model (e.g. a qwen-vl or llava model) to analyze images.
+                </p>
+              ) : null}
+            </>
           ) : (
             <p className="text-xs text-port-warning">
               {providersLoading
