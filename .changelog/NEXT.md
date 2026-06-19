@@ -95,6 +95,8 @@
 
 ## Changed
 
+- **[issue-1438] Hardened the client test suite against an environment where jsdom doesn't expose `localStorage`** — a guaranteed in-memory Web Storage shim is now installed before tests run, so suites that rely on `localStorage`/`sessionStorage` no longer fail intermittently across jsdom versions or CI environments (no user-visible app change).
+
 - **CyberCity now eases into full quality so the first second of startup doesn't drop frames.** Mounting the 3D city used to render every district at the full quality preset on frame one — reflections, full particle density, and the high-DPR pixel ratio all at once — which spiked the GPU and stuttered the opening camera move. The scene now renders a deliberately lightened first pass (reflections off, particle density capped, `dpr` pinned to `[1, 1]`) for ~1.2s, then restores your real settings once startup has settled. Photo mode is exempt (it needs full fidelity immediately). The same settle also re-runs when the app count changes, since that reshuffles building layout — another heavy frame worth easing into. (`client/src/components/city/CityScene.jsx`)
 
 - **[issue-1364] Generating a D&D character avatar now persists in one round-trip.** The character-sheet "Generate avatar" flow used to render the image and then make a *second* call to save the path onto your character. Since the avatar route already knows the character context, it now persists the rendered `avatarPath` itself when asked (`persistToCharacter`), so the client drops the follow-up `PUT /api/character` and keeps its optimistic update — same result, one fewer request. (`server/routes/imageGen.js`, `server/services/character.js`, `client/src/pages/CharacterSheet.jsx`, #1364)
