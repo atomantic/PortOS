@@ -110,6 +110,8 @@
 
 ## Changed
 
+- **Refreshed the seeded Claude Bedrock provider defaults to current model ids.** The shipped `claude-code-bedrock` (CLI) and `claude-code-tui-bedrock` (TUI) provider entries in the seed config now default to the current Claude on Bedrock model set — `us.anthropic.claude-haiku-4-5` (light), `us.anthropic.claude-sonnet-4-6` (medium), and `global.anthropic.claude-opus-4-8[1m]` (default/heavy), with `global.anthropic.claude-opus-4-8` also listed — replacing the stale `claude-opus-4-6` / dated-snapshot ids. Both stay `enabled: false` (opt-in) and ship with an empty `AWS_BEARER_TOKEN_BEDROCK`; the CLI entry also gains the `secretEnvVars` marker so the token is treated as a secret. (`data.reference/providers.json`)
+
 - **Updated the bundled `slashdo` submodule from v3.14.0 → v3.15.0.** (`lib/slashdo`)
 
 - **[issue-1438] Hardened the client test suite against an environment where jsdom doesn't expose `localStorage`** — a guaranteed in-memory Web Storage shim is now installed before tests run, so suites that rely on `localStorage`/`sessionStorage` no longer fail intermittently across jsdom versions or CI environments (no user-visible app change).
