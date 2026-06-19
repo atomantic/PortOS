@@ -185,6 +185,18 @@ describe("universeBuilderRefine.buildWorldRefinePrompt", () => {
     expect(out).toMatch(/Embrace: \(none\)/);
     expect(out).toMatch(/Avoid: \(none\)/);
   });
+
+  it("omits the reference-image guidance by default", () => {
+    const out = buildWorldRefinePrompt({ starterPrompt: "seed", feedback: "x" });
+    expect(out).not.toMatch(/REFERENCE IMAGE/);
+  });
+
+  it("injects reference-image guidance when hasImage is set", () => {
+    const out = buildWorldRefinePrompt({ starterPrompt: "seed", feedback: "x", hasImage: true });
+    expect(out).toMatch(/REFERENCE IMAGE/);
+    expect(out).toMatch(/VISUAL STYLE reference/);
+    expect(out).toMatch(/STYLE ONLY/);
+  });
 });
 
 describe("universeBuilderRefine.collapseStyleDirectionDupes", () => {

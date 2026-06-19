@@ -12,7 +12,8 @@
  */
 
 import { ServerError } from "../lib/errorHandler.js";
-import { assertProvider, resolveProviderAndModel, runPromptThroughProvider } from "../lib/promptRunner.js";
+import { assertProvider, resolveProviderAndModel, resolveEffectiveModel, runPromptThroughProvider, assertVisionRunUsedImages } from "../lib/promptRunner.js";
+import { resolveAPIProvider } from "../lib/aiProvider.js";
 import {
   renderCategoriesForPrompt as renderCategoriesShared,
   renderCompositesForPrompt as renderCompositesShared,
@@ -167,6 +168,7 @@ export function buildWorldRefinePrompt({
   compositeSheets = null,
   locked = {},
   feedback,
+  hasImage = false,
 }) {
   const lockedRules = lockedList(locked);
   const lockedSection = lockedRules.length
@@ -210,6 +212,12 @@ ${renderCategoriesForPrompt(categories) || "  (none)"}
 
 ORIGINAL COMPOSITE SHEETS (current draft):
 ${renderCompositesForPrompt(compositeSheets) || "  (none)"}
+`
+    : "";
+
+  const imageGuidance = hasImage
+    ? `
+REFERENCE IMAGE: A reference image is attached. Treat it as a VISUAL STYLE reference for this universe — read its palette, lighting, linework/brushwork, texture, era, and overall mood. Fold those qualities into "influences.embrace" (as short prompt tokens) and into "styleNotes" (as prose), and add "influences.avoid" tokens for qualities the image deliberately lacks. The image informs STYLE ONLY — do NOT invent narrative, characters, or plot from it, and do not contradict the user's written feedback below where they conflict.
 `
     : "";
 
@@ -264,7 +272,7 @@ ${styleNotes || "(empty)"}
 ORIGINAL INFLUENCES:
 Embrace: ${embrace.length ? embrace.join(", ") : "(none)"}
 Avoid: ${avoid.length ? avoid.join(", ") : "(none)"}
-${structureContext}
+${structureContext}${imageGuidance}
 USER FEEDBACK:
 ${feedback}`;
 }
@@ -331,9 +339,13 @@ const mergeCompositesWithLocks = (originalSheets, llmSheets) => {
 // per-CLI argv quirks (codex `exec -`, gemini stdin pipe, claude `-p -`) live
 // inside runner.js#buildCliArgs and the TUI paste/idle handshake lives in
 // tuiPromptRunner.js — both reached via runPromptThroughProvider.
-async function runRefine(provider, model, prompt) {
+async function runRefine(provider, model, prompt, screenshots = []) {
   return runPromptThroughProvider({
     provider, prompt, source: "universe-builder-refine", model,
+    // Vision style-reference path: API providers base64-inline these as
+    // image_url blocks; CLI/TUI providers ignore them (the caller forces an API
+    // provider when an image is supplied).
+    screenshots: Array.isArray(screenshots) ? screenshots : [],
   }).catch((err) => {
     throw new ServerError(err?.message || "Universe refinement failed", {
       status: 502,
@@ -378,6 +390,10 @@ export async function refineWorldPrompts({
   feedback,
   providerId,
   model,
+  // Absolute path to a gallery image used as a visual style reference (resolved
+  // by the route). When set, refinement runs through a vision-capable API
+  // provider so the model can read the image.
+  imagePath = null,
 } = {}) {
   if (!feedback || !feedback.trim()) {
     throw new ServerError("Feedback is required", {
@@ -408,7 +424,25 @@ export async function refineWorldPrompts({
     );
   }
 
-  const { provider, selectedModel } = await resolveProviderAndModel({ providerId, model });
+  const hasImage = typeof imagePath === "string" && imagePath.length > 0;
+  // With a style-reference image, vision is API-only (only executeApiRun
+  // base64-inlines images) — force an API provider so the model actually sees
+  // it rather than refining text-only. Without an image, keep the original
+  // resolution so CLI/TUI providers still work for text-only refines.
+  let provider;
+  let selectedModel;
+  if (hasImage) {
+    provider = await resolveAPIProvider(providerId);
+    assertProvider(provider, {
+      message:
+        "Refining with a reference image needs an API-based AI provider with a vision-capable model (e.g. Ollama with a llava/qwen-vl model, LM Studio, or an OpenAI-compatible endpoint). Configure one under Settings → Providers.",
+      code: "NO_API_PROVIDER",
+      status: 503,
+    });
+    selectedModel = resolveEffectiveModel(provider, model);
+  } else {
+    ({ provider, selectedModel } = await resolveProviderAndModel({ providerId, model }));
+  }
   assertProvider(provider, {
     message: "No AI provider available for universe refinement",
     code: "NO_PROVIDER",
@@ -444,9 +478,16 @@ export async function refineWorldPrompts({
     ...originals,
     locked: safeLocked,
     feedback: trimTo(feedback, MAX_FEEDBACK),
+    hasImage,
   });
 
-  const { text, runId } = await runRefine(provider, selectedModel, llmPrompt);
+  const runResult = await runRefine(provider, selectedModel, llmPrompt, hasImage ? [imagePath] : []);
+  const { text, runId } = runResult;
+
+  // A CLI/TUI fallback silently drops the image and would refine from the text
+  // prompt alone — reject it so the user isn't told the image was used when it
+  // wasn't.
+  if (hasImage) assertVisionRunUsedImages(runResult, provider);
 
   let parsed;
   try {

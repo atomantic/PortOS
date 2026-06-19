@@ -192,6 +192,35 @@ export function assertProvider(provider, { message, code, status = 503 } = {}) {
 }
 
 /**
+ * Guard a vision run against a silent fallback to a non-API provider.
+ *
+ * Vision only works on the API path (executeApiRun base64-inlines images);
+ * CLI/TUI providers drop the images and return a completion hallucinated from
+ * the text prompt alone. `runPromptThroughProvider` can swap the provider two
+ * ways — a proactive swap inside createRun (`result.provider`) or a retry
+ * fallback after failure (`result.fallbackProvider`) — so the provider that
+ * ACTUALLY ran is the first of those, else the requested one. Throw
+ * VISION_FALLBACK_DROPPED_IMAGES when it isn't an API provider so callers don't
+ * report image-grounded output that was really text-only.
+ *
+ * Returns the provider that ran so callers can read its id/type.
+ *
+ * @param {object} result — the runPromptThroughProvider result
+ * @param {object} requestedProvider — the provider the caller asked to run
+ * @returns {object} the effective provider that ran
+ */
+export function assertVisionRunUsedImages(result, requestedProvider) {
+  const ran = result?.provider || result?.fallbackProvider || requestedProvider;
+  if (ran?.type && ran.type !== 'api') {
+    throw new ServerError(
+      'The vision request fell back to a non-vision provider that cannot read images. Configure a reliable vision-capable API provider and retry.',
+      { status: 502, code: 'VISION_FALLBACK_DROPPED_IMAGES' },
+    );
+  }
+  return ran;
+}
+
+/**
  * Run a prompt through a provider and resolve with the streamed text +
  * run id. Rejects (via the strictest discriminator) on any runner-
  * reported failure.
