@@ -376,6 +376,14 @@ export const TASTE_SECTIONS = {
 
 let profileCache = null;
 
+// Invalidate the in-memory taste-profile cache. Federation sync writes
+// taste-profile.json directly (see digital-twin-sync.js applyDigitalTwinRemote);
+// without this the no-TTL cache would keep serving pre-sync data until the next
+// local save or a server restart — i.e. synced taste answers wouldn't appear.
+export function invalidateTasteProfileCache() {
+  profileCache = null;
+}
+
 async function loadTasteProfile() {
   if (profileCache) return profileCache;
 
