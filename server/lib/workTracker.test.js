@@ -109,6 +109,16 @@ describe('hostFromOriginUrl', () => {
     expect(hostFromOriginUrl('not a url')).toBeNull();
   });
 
+  it('strips embedded credentials so a PAT never surfaces as the host', () => {
+    // A token in an https remote must not leak through the host field — even on
+    // the subgroup fallback path where the strict parser bails. The host must be
+    // clean AND correct (so auto still resolves to GitLab).
+    expect(hostFromOriginUrl('https://oauth2:TOKEN@gitlab.com/group/sub/repo.git')).toBe('gitlab.com');
+    expect(hostFromOriginUrl('https://user:pat@github.com/owner/repo.git')).toBe('github.com');
+    // SCP-style git@host carries only an ssh user (no secret) — host unaffected.
+    expect(hostFromOriginUrl('git@gitlab.com:group/sub/repo.git')).toBe('gitlab.com');
+  });
+
   it('a subgroup GitLab remote resolves to the gitlab tracker end-to-end', () => {
     const host = hostFromOriginUrl('git@gitlab.com:group/subgroup/repo.git');
     expect(resolveWorkTracker({ configured: 'auto', host }).resolved).toBe('gitlab');

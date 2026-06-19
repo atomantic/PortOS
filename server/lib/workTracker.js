@@ -109,10 +109,16 @@ export function resolveWorkTracker({ configured, host } = {}) {
  * the GitLab-subgroup-tolerant parser (`group/subgroup/repo`) — otherwise a
  * subgroup remote yields no host and `'auto'` wrongly falls back to PLAN.md
  * instead of GitLab. Returns null for unparseable input.
+ *
+ * URL-form credentials (`https://user:token@host/…`) are stripped FIRST: the
+ * subgroup fallback parser would otherwise capture `user:token@host` as the
+ * host and leak the PAT through `GET /api/apps/:id/work-tracker`. SCP-style
+ * `git@host:…` carries only an ssh username (no secret), so it's left intact.
  */
 export function hostFromOriginUrl(url) {
   if (!url) return null;
-  return parseGitRemoteUrl(url)?.host || parseGitRemote(url)?.host || null;
+  const cleaned = url.replace(/^([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)[^/@]+@/, '$1');
+  return parseGitRemoteUrl(cleaned)?.host || parseGitRemote(cleaned)?.host || null;
 }
 
 /**

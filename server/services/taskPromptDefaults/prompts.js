@@ -709,12 +709,12 @@ The configured reviewers for this task, in order, are \`{reviewers}\`. \`claude\
 2. **Wait for each configured CLI reviewer's findings BEFORE merging.** For \`claude\` / \`codex\` / \`antigravity\`, invoke that CLI headless against the MR diff, apply fixes, run tests, re-push — capped at 3 rounds — then advance to the next reviewer.
 
    **Review-stuck cleanup** (after 3 unresolved rounds): post one summarizing MR note (\`glab mr note\`), then run the worktree-only cleanup (\`cd {repoPath} && git worktree remove "\${WORKTREE}"\`). Leave the local branch, the open MR, the assignee, and the \`in-progress\` label in place so the human picks up cold. Do NOT run Phase 7.
-3. **Merge via \`glab mr merge\`** — NEVER a local \`git merge\`:
+3. **Merge via \`glab mr merge\`** — NEVER a local \`git merge\`. \`glab mr merge\` takes the **MR IID**, which is NOT the issue number — resolve it from the source branch first, then merge by that IID:
    \`\`\`bash
-   glab mr merge "\${NUM}" --yes --remove-source-branch \\
-     || glab mr merge "\${NUM}" --yes --squash --remove-source-branch
+   MR_IID="$(glab mr list --source-branch "claim/issue-\${NUM}" -F json | sed -n 's/.*"iid":\\([0-9]\\{1,\\}\\).*/\\1/p' | head -1)"
+   glab mr merge "\${MR_IID}" --yes --remove-source-branch \\
+     || glab mr merge "\${MR_IID}" --yes --squash --remove-source-branch
    \`\`\`
-   (\`glab mr merge\` takes the MR IID; if it differs from the issue number, resolve it with \`glab mr list --source-branch "claim/issue-\${NUM}" -F json\` first.)
 
 ## Phase 7 — Clean up (post-merge ONLY)
 
