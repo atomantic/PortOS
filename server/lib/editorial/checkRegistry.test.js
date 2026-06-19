@@ -31,6 +31,7 @@ import {
   authoredCliffhangerSummary,
   sceneGroundingSummary,
   plotlineCoverageSummary,
+  scenePovSummary,
 } from './checkRegistry.js';
 
 const NAMING = 'naming.dissimilar-names';
@@ -42,6 +43,7 @@ const POV_SWITCH = 'endings.pov-switch';
 const SENSORY_BALANCE = 'sensory.balance';
 const WHITE_ROOM = 'scene.white-room';
 const PLOT_STRUCTURE = 'plot.structure-momentum';
+const HEAD_HOPPING = 'pov.head-hopping';
 
 // A minimal valid stored custom-check definition.
 const customDef = (over = {}) => ({
@@ -312,6 +314,123 @@ describe('sceneGroundingSummary (#1309)', () => {
     expect(summary).toContain('scene 3 — setting: (none recorded)');
     expect(summary).toContain('falls back to summary label');
     expect(() => sceneGroundingSummary([{ charactersPresent: [1, 2, null] }])).not.toThrow();
+  });
+});
+
+describe('scenePovSummary (#1311)', () => {
+  it('renders each POV-tagged scene with its POV holder and the OTHER characters present', () => {
+    const summary = scenePovSummary([
+      { sequence: 0, issueNumber: 1, heading: 'The kitchen', povCharacter: 'Mara', charactersPresent: ['Mara', 'Joss'] },
+      { sequence: 1, issueNumber: 2, heading: 'Alone', povCharacter: 'Joss', charactersPresent: ['Joss'] },
+    ]);
+    expect(summary).toContain('POV per scene (from the reverse outline):');
+    // The POV holder is excluded from "others present" — only candidate other heads remain.
+    expect(summary).toContain('Issue 1: The kitchen — POV: Mara — others present: Joss');
+    // A scene where only the POV holder is present lists no others.
+    expect(summary).toContain('Issue 2: Alone — POV: Joss');
+    expect(summary).not.toContain('Issue 2: Alone — POV: Joss — others present');
+  });
+
+  it('drops scenes with no POV character (nothing to police) and returns "" when none are tagged', () => {
+    expect(scenePovSummary([{ sequence: 0, issueNumber: 1, heading: 'Untagged', charactersPresent: ['Mara'] }])).toBe('');
+    expect(scenePovSummary([])).toBe('');
+    expect(scenePovSummary(null)).toBe('');
+    expect(scenePovSummary(undefined)).toBe('');
+  });
+
+  it('tolerates malformed scenes (peer-sync resilience) without throwing', () => {
+    expect(() => scenePovSummary([
+      null,
+      { sequence: 2, povCharacter: 99, charactersPresent: 'not-an-array' },
+      { sequence: 3, povCharacter: 'Mara', charactersPresent: [1, 2, null, 'Joss'] },
+    ])).not.toThrow();
+    const summary = scenePovSummary([{ sequence: 3, povCharacter: 'Mara', charactersPresent: [1, 2, null, 'Joss'] }]);
+    // Non-string entries in charactersPresent are filtered out; the real other head survives.
+    expect(summary).toContain('POV: Mara — others present: Joss');
+  });
+});
+
+describe('pov.head-hopping — LLM check (#1311)', () => {
+  const wholeCtx = (overrides = {}) => ({
+    manuscript: '# Issue 1\n\nShe watched him. He was secretly relieved, though he hid it.',
+    reverseOutline: [{ sequence: 0, issueNumber: 1, heading: 'The room', povCharacter: 'Mara', charactersPresent: ['Mara', 'Joss'] }],
+    series: { styleGuide: { povPerson: 'third-limited' } },
+    config: { maxFindings: 12 },
+    severityDefault: 'medium',
+    planManuscriptChunks: async () => [overrides.manuscript ?? '# Issue 1\n\nprose'],
+    callStagedLLM: async () => ({ content: { findings: [] } }),
+    ...overrides,
+  });
+
+  it('is registered as a manuscript+reverseOutline+styleGuide LLM check with category style', () => {
+    const check = getCheck(HEAD_HOPPING);
+    expect(check.kind).toBe('llm');
+    expect(check.scope).toBe('scene');
+    expect(check.category).toBe('style');
+    expect(check.needsManuscript).toBe(true);
+    expect(check.sources).toEqual(expect.arrayContaining(['manuscript', 'reverseOutline', 'series.styleGuide']));
+    expect(check.severityDefault).toBe('medium');
+  });
+
+  it('gates on a non-empty manuscript', () => {
+    const check = getCheck(HEAD_HOPPING);
+    expect(check.gate({ manuscript: '' })).toBe(false);
+    expect(check.gate({ manuscript: '# Issue 1\n\nprose' })).toBeTruthy();
+  });
+
+  it('no-ops (gate false) when the style guide is third-person omniscient', () => {
+    const check = getCheck(HEAD_HOPPING);
+    expect(check.gate({ manuscript: '# Issue 1\n\nprose', series: { styleGuide: { povPerson: 'third-omniscient' } } })).toBe(false);
+    // Any other (limited) POV person — or none — still runs.
+    expect(check.gate({ manuscript: '# Issue 1\n\nprose', series: { styleGuide: { povPerson: 'first' } } })).toBeTruthy();
+    expect(check.gate({ manuscript: '# Issue 1\n\nprose', series: {} })).toBeTruthy();
+  });
+
+  it('injects the POV map + POV person into the prompt vars and counts them into the chunk overhead', async () => {
+    let seenVars = null;
+    let seenOverhead = 0;
+    const ctx = wholeCtx({
+      planManuscriptChunks: async (_stage, opts) => {
+        seenOverhead = opts.overheadTokens;
+        return ['# Issue 1\n\nchunk'];
+      },
+      callStagedLLM: async (_stage, vars) => {
+        seenVars = vars;
+        return { content: { findings: [{ severity: 'high', issueNumber: 1, problem: "entered Joss's head", anchorQuote: 'secretly relieved' }] } };
+      },
+    });
+    const findings = await getCheck(HEAD_HOPPING).run(ctx);
+    expect(seenVars.povMap).toContain('Issue 1: The room — POV: Mara — others present: Joss');
+    expect(seenVars.povPerson).toBe('third-person limited');
+    expect(seenOverhead).toBeGreaterThan(0);
+    expect(findings).toHaveLength(1);
+    expect(findings[0].category).toBe('style');
+    expect(findings[0].issueNumber).toBe(1);
+  });
+
+  it('degrades to a whole-issue scan (empty POV map) and a neutral POV label when no outline / style guide exists', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      reverseOutline: undefined,
+      series: {},
+      callStagedLLM: async (_stage, vars) => {
+        seenVars = vars;
+        return { content: { findings: [] } };
+      },
+    });
+    await getCheck(HEAD_HOPPING).run(ctx);
+    expect(seenVars.povMap).toBe('');
+    expect(seenVars.povPerson).toBe('a limited point of view');
+  });
+
+  it('respects maxFindings as a whole-run cap', async () => {
+    const many = Array.from({ length: 30 }, (_, i) => ({ severity: 'medium', problem: `p${i}`, anchorQuote: `a${i}` }));
+    const ctx = wholeCtx({
+      config: { maxFindings: 4 },
+      callStagedLLM: async () => ({ content: { findings: many } }),
+    });
+    const findings = await getCheck(HEAD_HOPPING).run(ctx);
+    expect(findings).toHaveLength(4);
   });
 });
 

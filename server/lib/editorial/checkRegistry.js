@@ -235,6 +235,15 @@ export const TELLING_EMOTION_STAGE = 'pipeline-editorial-telling-emotion';
 // subplots reconciled against the tagged plotlines.
 export const PLOT_STRUCTURE_STAGE = 'pipeline-editorial-plot-structure';
 
+// Stage name for the head-hopping / POV-discipline LLM check (#1311). Ships in
+// data.reference/prompts/stages/ + stage-config.json (fresh installs via
+// setup-data.js) and migrates to existing installs via migration 112 (boot runs
+// migrations but NOT setup-data, so the migration is required). Distinct from
+// pov.justified (#1295, which asks whether each POV character earns an arc); this
+// check polices POV *discipline* within a scene — narration that enters another
+// character's head or reports what the POV character can't perceive.
+export const HEAD_HOPPING_STAGE = 'pipeline-editorial-head-hopping';
+
 // Render the authored reader-map cliffhangers (#1298) into a compact text block
 // the chapter-ending check passes alongside the manuscript so the model
 // reconciles its DETECTED endings against the issue-boundary tugs the writer
@@ -1047,6 +1056,52 @@ export function plotlineCoverageSummary(plotlines, scenes) {
   return `Plotlines (from the reverse outline — reconcile dropped subplots against these):\n${rows.join('\n')}`;
 }
 
+// Human-readable POV-person labels for the head-hopping check's prompt (#1311).
+// Inlined (not imported from styleGuide.js) to keep this registry pure — mirrors
+// the labels in server/lib/styleGuide.js so generation and the check describe a
+// POV person identically. An omniscient style guide no-ops via the check's gate,
+// so it's intentionally absent here.
+const POV_PERSON_LABELS = Object.freeze({
+  first: 'first person',
+  'third-limited': 'third-person limited',
+  second: 'second person',
+});
+
+// Render the reverse-outline scenes into a compact POV-focused block the
+// head-hopping check (#1311) passes alongside the manuscript so the model knows
+// WHOSE head each limited-POV scene is anchored to — and which other characters
+// are on-stage (candidate heads a head-hop would slip into). Pure + deterministic
+// so it's unit-testable and its token cost can be counted into the per-chunk
+// overhead. Returns '' when no scene carries a POV character (the prompt's
+// `{{#povMap}}` section then renders nothing and the check degrades to a plain
+// whole-issue scan). Type-guarded throughout — the reverse outline rides peer
+// sync (#1348), so a hand-edited / older-peer scene could carry a non-string
+// field that a bare `.trim()` would throw on.
+export function scenePovSummary(scenes) {
+  const list = Array.isArray(scenes) ? scenes : [];
+  const lines = list.map((s) => {
+    if (!s || typeof s !== 'object') return '';
+    const pov = scenePov(s);
+    if (!pov) return '';
+    const label = sceneLabel(s);
+    const issueNumber = Number.isInteger(s.issueNumber) ? s.issueNumber : null;
+    const where = issueNumber != null ? `Issue ${issueNumber}` : 'Scene';
+    // Other on-stage characters are the candidate heads a head-hop slips into —
+    // exclude the POV holder themselves so the list names only "other" heads.
+    const povKey = normalizeName(pov);
+    const others = Array.isArray(s.charactersPresent)
+      ? s.charactersPresent
+        .filter((n) => typeof n === 'string' && n.trim() && normalizeName(n) !== povKey)
+        .map((n) => n.trim())
+      : [];
+    const parts = [`- ${where}: ${label} — POV: ${pov}`];
+    if (others.length) parts.push(`others present: ${others.join(', ')}`);
+    return parts.join(' — ');
+  }).filter(Boolean);
+  if (!lines.length) return '';
+  return `POV per scene (from the reverse outline):\n${lines.join('\n')}`;
+}
+
 // ---------------------------------------------------------------------------
 // Registry entries.
 // ---------------------------------------------------------------------------
@@ -1694,6 +1749,60 @@ export const EDITORIAL_CHECKS = [
         }
       }
       return findings;
+    },
+  },
+  {
+    id: 'pov.head-hopping',
+    sources: ['manuscript', 'reverseOutline', 'series.styleGuide'],
+    label: 'Head-hopping / POV discipline within scenes',
+    description:
+      'LLM scan — in a limited-POV scene, flags narration that enters another character\'s head (reports interior thoughts/feelings the POV character can\'t know), reports knowledge or perception the POV character couldn\'t have (offstage events, things behind them), or switches POV mid-scene without a break. Anchors each finding to the POV character and names whose head was entered. Distinct from pov.justified (which asks whether each viewpoint earns an arc). No-op when the style guide sets third-person omniscient — there the wandering viewpoint is intentional.',
+    scope: 'scene',
+    kind: 'llm',
+    category: 'style',
+    severityDefault: 'medium',
+    defaultEnabled: true,
+    // Reads the stitched manuscript corpus — so the runner only pays the
+    // section-collection I/O when a manuscript-consuming check is enabled.
+    needsManuscript: true,
+    configSchema: z.object({
+      // Cap findings per run so a long manuscript can't flood the review.
+      maxFindings: z.number().int().min(1).max(50).default(12),
+    }),
+    configFields: [
+      {
+        key: 'maxFindings',
+        label: 'Max findings per run',
+        type: 'number',
+        min: 1,
+        max: 50,
+        step: 1,
+        help: 'Cap findings so a long manuscript can not flood the review.',
+      },
+    ],
+    // Skip when there's no prose, OR when the style guide declares third-person
+    // omniscient — an omniscient narrator may freely roam between heads, so
+    // "head-hopping" is intentional and there's nothing to police (#1311).
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0
+      && ctx.series?.styleGuide?.povPerson !== 'third-omniscient',
+    run: (ctx) => {
+      // The POV-per-scene map is fixed per-call overhead (re-sent on each chunk).
+      // It's context only — the check degrades gracefully to a whole-issue scan
+      // when no reverse outline exists (the prompt's {{#povMap}} renders nothing).
+      const povMap = scenePovSummary(ctx.reverseOutline);
+      // Surface the configured POV person so the prompt names the discipline in
+      // force (first / third-limited / second). Falls back to a neutral default
+      // when unset — the check still runs (head-hopping is a problem in any
+      // limited POV); only an explicit omniscient style guide no-ops via the gate.
+      const povPerson = POV_PERSON_LABELS[ctx.series?.styleGuide?.povPerson]
+        || 'a limited point of view';
+      return runManuscriptLlmCheck(ctx, {
+        stage: HEAD_HOPPING_STAGE,
+        category: 'style',
+        overheadTokens: EDITORIAL_PROMPT_OVERHEAD_TOKENS
+          + estimateTokens(povMap) + estimateTokens(povPerson),
+        buildVars: (manuscript) => ({ manuscript, povMap, povPerson }),
+      });
     },
   },
   {

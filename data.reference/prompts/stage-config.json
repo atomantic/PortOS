@@ -610,6 +610,13 @@
       "model": "default",
       "returnsJson": true,
       "variables": []
+    },
+    "pipeline-editorial-head-hopping": {
+      "name": "Pipeline — Editorial Check: Head-hopping / POV discipline",
+      "description": "Editorial check (#1311): in a limited-POV scene, flags narration that enters another character's head, reports knowledge/perception the POV character couldn't have, or switches POV mid-scene without a break. Reads the stitched manuscript plus the reverse-outline POV-per-scene map (degrading to a whole-issue scan when absent) and the series style guide's POV person; no-ops for third-person omniscient. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
     }
   }
 }
