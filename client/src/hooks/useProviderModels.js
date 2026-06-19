@@ -2,6 +2,13 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import * as api from '../services/api';
 import { filterSelectableModels } from '../utils/providers';
 
+// The provider's selectable model source: its `models` list, or — when that
+// list is empty (a cloud/manual provider configured with only a defaultModel,
+// where `[]` is truthy so `||` wouldn't fall through) — its defaultModel.
+const sourceModels = (provider) => (
+  provider?.models?.length ? provider.models : [provider?.defaultModel]
+);
+
 /**
  * Hook for loading AI providers and managing two-step provider > model selection.
  * @param {Object} options
@@ -29,13 +36,6 @@ export default function useProviderModels({ filter, allowDefault = false, silent
   const [selectedModel, setSelectedModel] = useState('');
   const [loading, setLoading] = useState(true);
   const hasSetInitialRef = useRef(false);
-
-  // The provider's selectable model source: its `models` list, or — when that
-  // list is empty (a cloud/manual provider configured with only a defaultModel,
-  // where `[]` is truthy so `||` wouldn't fall through) — its defaultModel.
-  const sourceModels = (provider) => (
-    provider?.models?.length ? provider.models : [provider?.defaultModel]
-  );
 
   // Resolve the model to pin when a provider is (auto-)selected. With a
   // modelFilter, the provider's defaultModel may not qualify (e.g. a vision
@@ -81,7 +81,10 @@ export default function useProviderModels({ filter, allowDefault = false, silent
     // vision-only) is applied after the sentinel strip.
     () => {
       if (!currentProvider) return [];
-      const models = filterSelectableModels(currentProvider.models || [currentProvider.defaultModel]);
+      // sourceModels falls back to [defaultModel] when `models` is empty (an
+      // `[]` is truthy, so a bare `||` would leave the dropdown empty for a
+      // cloud/manual provider configured with only a defaultModel).
+      const models = filterSelectableModels(sourceModels(currentProvider));
       return modelFilter ? models.filter((m) => modelFilter(m, currentProvider)) : models;
     },
     [currentProvider, modelFilter]
