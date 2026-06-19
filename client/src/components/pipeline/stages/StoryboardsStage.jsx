@@ -91,7 +91,12 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
   };
 
   const addScene = () => persist([...scenes, { slugline: '', description: '', imageJobId: null }]);
-  const removeScene = (i) => persist(scenes.filter((_, j) => j !== i));
+  const removeScene = (i) => {
+    // Removing a scene reindexes everything after it, so any index-keyed
+    // candidate state would now point at the wrong scene — drop it all.
+    setSceneCandidates({});
+    persist(scenes.filter((_, j) => j !== i));
+  };
   const updateScene = (i, patch) => {
     const next = scenes.map((s, j) => j === i ? { ...s, ...patch } : s);
     setScenes(next);
@@ -197,6 +202,9 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
     if (!result) return;
     const next = result.stage?.scenes || [];
     setScenes(next);
+    // Extraction replaces the whole scene list — stale index-keyed candidates
+    // would now belong to different scenes.
+    setSceneCandidates({});
     onStageUpdate?.('storyboards', result.stage, result.issue);
     toast.success(`Extracted ${result.sceneCount} scene${result.sceneCount === 1 ? '' : 's'}`);
   };
@@ -262,6 +270,10 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
       return;
     }
     setPromptingIdx(i);
+    // Flush any pending textarea edit before the server reads scene.description
+    // (the server builds the prompt from the persisted text). Same guard the
+    // shot-render path uses against the blur-save race.
+    await persist(scenes);
     const result = await generatePipelineSceneImagePrompts(
       issue.id, i, { count: promptCount, ...genConfigToRefineOptions(genConfig) },
     ).catch((err) => {

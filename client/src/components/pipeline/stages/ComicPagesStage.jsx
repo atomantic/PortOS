@@ -63,8 +63,14 @@ export default function ComicPagesStage({ issue, onStageUpdate, actionsGated = f
     const next = pages.map((p, i) => i === pi ? { ...p, panels: [...(p.panels || []), { description: '', imageJobId: null }] } : p);
     persist(next);
   };
-  const removePage = (pi) => persist(pages.filter((_, i) => i !== pi));
+  // Removing a page or panel reindexes the `${pi}:${ni}`-keyed candidates after
+  // it, so any open candidate list would point at the wrong panel — drop them.
+  const removePage = (pi) => {
+    setPanelCandidates({});
+    persist(pages.filter((_, i) => i !== pi));
+  };
   const removePanel = (pi, ni) => {
+    setPanelCandidates({});
     const next = pages.map((p, i) => i === pi
       ? { ...p, panels: (p.panels || []).filter((_, j) => j !== ni) }
       : p);
@@ -93,6 +99,9 @@ export default function ComicPagesStage({ issue, onStageUpdate, actionsGated = f
     setExtracting(false);
     if (!result) return;
     setPages(result.stage?.pages || []);
+    // Extraction replaces the whole page/panel tree — stale candidates would
+    // now belong to different panels.
+    setPanelCandidates({});
     onStageUpdate?.('comicPages', result.stage, result.issue);
     toast.success(`Extracted ${result.pageCount} page${result.pageCount === 1 ? '' : 's'} / ${result.panelCount} panel${result.panelCount === 1 ? '' : 's'}`);
   };
@@ -171,6 +180,10 @@ export default function ComicPagesStage({ issue, onStageUpdate, actionsGated = f
     }
     const key = `${pi}:${ni}`;
     setPromptingKey(key);
+    // Flush any pending textarea edit before the server reads the panel
+    // description (it builds the prompt from the persisted text). pagesRef
+    // holds the latest keystroke that onBlur may not have committed yet.
+    await persist(pagesRef.current);
     const result = await generatePipelineComicPanelImagePrompts(
       issue.id, pi, ni, { count: promptCount, ...genConfigToRefineOptions(genConfig) },
     ).catch((err) => {
