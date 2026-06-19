@@ -58,12 +58,13 @@ vi.mock('../universeBuilder.js', () => ({
 const enqueueJobMock = vi.fn(() => ({ jobId: 'job-fake-1234' }));
 vi.mock('../mediaJobQueue/index.js', () => ({ enqueueJob: (...a) => enqueueJobMock(...a) }));
 
-const runStagedLLMMock = vi.fn(async () => ({
+const DEFAULT_RUN_STAGED_LLM = async () => ({
   content: { prompt: 'refined prompt body', changes: ['tightened the framing'] },
   runId: 'run-abc12345',
   providerId: 'codex',
   model: 'gpt-4o',
-}));
+});
+const runStagedLLMMock = vi.fn(DEFAULT_RUN_STAGED_LLM);
 vi.mock('../../lib/stageRunner.js', () => ({ runStagedLLM: (...a) => runStagedLLMMock(...a) }));
 
 vi.mock('../../lib/mediaModels.js', () => ({
@@ -91,6 +92,8 @@ const {
   enqueueStoryboardShotStartFrame,
   refineComicPanelPrompt,
   refineStoryboardScenePrompt,
+  generateComicPanelImagePrompts,
+  generateStoryboardSceneImagePrompts,
   assertCharacterAppearancesResolve,
   enqueueVisualImage,
 } = await import('./visualStages.js');
@@ -104,7 +107,11 @@ beforeEach(() => {
   updateStageMock.mockClear();
   assertStageUnlockedMock.mockClear();
   enqueueJobMock.mockClear();
-  runStagedLLMMock.mockClear();
+  // Restore the default implementation — several #904 tests install a
+  // per-test mockImplementation/mockRejectedValue that would otherwise leak
+  // into the next test (mockClear resets calls, not the implementation).
+  runStagedLLMMock.mockReset();
+  runStagedLLMMock.mockImplementation(DEFAULT_RUN_STAGED_LLM);
 });
 
 const SERIES = {
@@ -541,6 +548,61 @@ describe('refineComicPanelPrompt', () => {
   });
 });
 
+describe('generateComicPanelImagePrompts', () => {
+  it('reuses the panel validation (404 on a missing panel)', async () => {
+    await expect(generateComicPanelImagePrompts('iss-test', 0, 99, { count: 2 }))
+      .rejects.toThrow(/panel.*out of range|PIPELINE_COMIC_PANEL_NOT_FOUND/);
+  });
+
+  it('runs the template `count` times and returns that many candidates without persisting', async () => {
+    let n = 0;
+    runStagedLLMMock.mockImplementation(async () => {
+      n += 1;
+      return { content: { prompt: `candidate ${n}`, changes: [`c${n}`] }, runId: `run-${n}`, providerId: 'codex', model: 'gpt-4o' };
+    });
+    const result = await generateComicPanelImagePrompts('iss-test', 0, 0, { count: 3 });
+    expect(runStagedLLMMock).toHaveBeenCalledTimes(3);
+    expect(result.requested).toBe(3);
+    expect(result.candidates).toHaveLength(3);
+    expect(result.candidates.map((c) => c.prompt)).toEqual(['candidate 1', 'candidate 2', 'candidate 3']);
+    expect(result).toMatchObject({ pageIndex: 0, panelIndex: 0 });
+    // Non-destructive: must NOT write the stage back.
+    expect(updateStageMock).not.toHaveBeenCalled();
+  });
+
+  it('tolerates partial failure — returns survivors when some calls reject', async () => {
+    let n = 0;
+    runStagedLLMMock.mockImplementation(async () => {
+      n += 1;
+      if (n === 2) throw new Error('provider hiccup');
+      return { content: { prompt: `ok ${n}`, changes: [] }, runId: `run-${n}`, providerId: 'codex', model: 'm' };
+    });
+    const result = await generateComicPanelImagePrompts('iss-test', 0, 0, { count: 3 });
+    expect(result.requested).toBe(3);
+    expect(result.candidates).toHaveLength(2);
+  });
+
+  it('throws when every candidate call fails', async () => {
+    runStagedLLMMock.mockRejectedValue(new Error('all down'));
+    await expect(generateComicPanelImagePrompts('iss-test', 0, 0, { count: 2 })).rejects.toThrow(/all down/);
+  });
+
+  it('clamps an oversized count to the candidate cap', async () => {
+    runStagedLLMMock.mockResolvedValue({
+      content: { prompt: 'x', changes: [] }, runId: 'r', providerId: 'p', model: 'm',
+    });
+    const result = await generateComicPanelImagePrompts('iss-test', 0, 0, { count: 99 });
+    expect(result.requested).toBe(6);
+    expect(runStagedLLMMock).toHaveBeenCalledTimes(6);
+  });
+
+  it('defaults to a single candidate when count is omitted', async () => {
+    const result = await generateComicPanelImagePrompts('iss-test', 0, 0);
+    expect(result.requested).toBe(1);
+    expect(runStagedLLMMock).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('composeComicCoverPrompt', () => {
   const SERIES_NAMED = { name: 'Bone Walker', styleNotes: 'gritty ink-wash' };
 
@@ -864,6 +926,31 @@ describe('refineStoryboardScenePrompt', () => {
         expect.objectContaining({ description: 'refined prompt body' }),
       ]),
     }));
+  });
+});
+
+describe('generateStoryboardSceneImagePrompts', () => {
+  it('reuses the scene validation (404 on a missing scene)', async () => {
+    await expect(generateStoryboardSceneImagePrompts('iss-test', 99, { count: 2 }))
+      .rejects.toThrow(/out of range|PIPELINE_SCENE_NOT_FOUND/);
+  });
+
+  it('runs the storyboard template `count` times and returns candidates without persisting', async () => {
+    let n = 0;
+    runStagedLLMMock.mockImplementation(async () => {
+      n += 1;
+      return { content: { prompt: `scene candidate ${n}`, changes: [] }, runId: `run-${n}`, providerId: 'codex', model: 'm' };
+    });
+    const result = await generateStoryboardSceneImagePrompts('iss-test', 1, { count: 2 });
+    expect(runStagedLLMMock).toHaveBeenCalledTimes(2);
+    expect(runStagedLLMMock).toHaveBeenCalledWith(
+      'pipeline-storyboard-image-prompt',
+      expect.objectContaining({ sceneNumber: 2 }),
+      expect.objectContaining({ returnsJson: true }),
+    );
+    expect(result).toMatchObject({ sceneIndex: 1, requested: 2 });
+    expect(result.candidates).toHaveLength(2);
+    expect(updateStageMock).not.toHaveBeenCalled();
   });
 });
 

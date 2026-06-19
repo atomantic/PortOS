@@ -345,6 +345,24 @@ export const refinePipelineSceneImagePrompt = (issueId, sceneIndex, opts = {}) =
     body: JSON.stringify(opts),
   });
 
+// Non-destructive N-candidate variant of the panel refine: returns
+// `count` alternative image-gen prompts WITHOUT mutating the panel
+// description (issue #904). Resolves to { candidates, requested, pageIndex,
+// panelIndex } where each candidate is { prompt, changes, runId, ... }.
+export const generatePipelineComicPanelImagePrompts = (issueId, pageIndex, panelIndex, opts = {}) =>
+  request(`/pipeline/issues/${encodeURIComponent(issueId)}/stages/comicPages/pages/${encodeURIComponent(pageIndex)}/panels/${encodeURIComponent(panelIndex)}/image-prompts`, {
+    method: 'POST',
+    body: JSON.stringify(opts),
+  });
+
+// Non-destructive N-candidate variant for a storyboard scene (issue #904).
+// Resolves to { candidates, requested, sceneIndex }.
+export const generatePipelineSceneImagePrompts = (issueId, sceneIndex, opts = {}) =>
+  request(`/pipeline/issues/${encodeURIComponent(issueId)}/stages/storyboards/scenes/${encodeURIComponent(sceneIndex)}/image-prompts`, {
+    method: 'POST',
+    body: JSON.stringify(opts),
+  });
+
 // ---- Seasons (Phase 2 of Story Arc Planning) ----
 export const listPipelineSeasons = (seriesId) =>
   request(`/pipeline/series/${encodeURIComponent(seriesId)}/seasons`);
