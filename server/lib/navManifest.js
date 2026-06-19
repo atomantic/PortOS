@@ -116,6 +116,7 @@ export const NAV_COMMANDS = [
   { id: 'nav.twin.documents', path: '/digital-twin/documents', label: 'Documents', section: 'Identity', aliases: ['twin-documents'] },
   { id: 'nav.twin.enrich', path: '/digital-twin/enrich', label: 'Enrich', section: 'Identity', aliases: ['twin-enrich'] },
   { id: 'nav.twin.export', path: '/digital-twin/export', label: 'Export', section: 'Identity', aliases: ['twin-export'] },
+  { id: 'nav.twin.legacy', path: '/digital-twin/legacy', label: 'Legacy Bundle', section: 'Identity', aliases: ['legacy-export', 'legacy-bundle', 'legacy'], keywords: ['legacy', 'bundle', 'backup', 'portable', 'pdf', 'archive', 'time capsule', 'export'] },
   { id: 'nav.goals', path: '/goals/list', label: 'Goals', section: 'Goals', aliases: ['goals'] },
   { id: 'nav.goals.tree', path: '/goals/tree', label: 'Goals Tree', section: 'Goals', aliases: ['goals-tree', 'goal-tree'], keywords: ['hierarchy', 'decomposition', 'subgoals', 'breakdown'] },
   { id: 'nav.twin.goals', path: '/digital-twin/goals', label: 'Twin Goals', section: 'Identity', aliases: ['twin-goals'] },

@@ -74,6 +74,18 @@ export const exportDigitalTwin = (format, documentIds = null, includeDisabled = 
   body: JSON.stringify({ format, documentIds, includeDisabled })
 });
 
+// Legacy Export (portable identity bundle) — #901 Phase 1 server foundation:
+// `GET /api/legacy-export/preview` + `POST /api/legacy-export`. The preview is
+// cheap enough to call on page load; the bundle build streams a zip attachment.
+export const getLegacyExportPreview = (options) => request('/legacy-export/preview', options);
+export const downloadLegacyExport = ({ sections = null, includePdf = false } = {}, options = {}) =>
+  request('/legacy-export', {
+    method: 'POST',
+    body: JSON.stringify({ ...(sections ? { sections } : {}), ...(includePdf ? { includePdf } : {}) }),
+    responseType: 'arraybuffer',
+    ...options,
+  });
+
 // Digital Twin - Settings
 export const getDigitalTwinSettings = (options) => request('/digital-twin/settings', options);
 export const updateDigitalTwinSettings = (settings) => request('/digital-twin/settings', {

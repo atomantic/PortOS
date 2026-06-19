@@ -45,6 +45,7 @@ export * from './compareHelpers.js';
 export * from './consoleFilters.js';
 export * from './diffLines.js';
 export * from './diffWords.js';
+export * from './downloadBlob.js';
 export * from './genUtils.js';
 export * from './healthProvenance.js';
 export * from './joinInfluenceList.js';

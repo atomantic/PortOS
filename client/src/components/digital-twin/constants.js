@@ -28,7 +28,8 @@ import {
   Archive,
   Drama,
   Mic,
-  Camera
+  Camera,
+  Package
 } from 'lucide-react';
 
 // Main navigation tabs
@@ -48,6 +49,7 @@ export const TABS = [
   { id: 'autobiography', label: 'Autobiography', icon: PenLine },
   { id: 'import', label: 'Import', icon: Upload },
   { id: 'export', label: 'Export', icon: Download },
+  { id: 'legacy', label: 'Legacy', icon: Package },
   { id: 'time-capsule', label: 'Time Capsule', icon: Archive }
 ];
 

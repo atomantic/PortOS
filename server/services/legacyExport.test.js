@@ -119,6 +119,18 @@ describe('buildBundleFiles', () => {
     expect(sections.goals.included).toBe(true);
   });
 
+  it('stamps each section with its human label so the UI need not duplicate a key→label map', () => {
+    const { sections } = buildBundleFiles(sampleData());
+    expect(sections.identity.label).toBe('Identity & Values');
+    expect(sections.goals.label).toBe('Goals & Milestones');
+    // Labels are present even for absent sections (driven off the descriptor, not data).
+    const empty = { twinPrompt: '', claudeMd: '', stories: [], genome: { uploaded: false },
+      taste: { sections: [] }, chronotype: null, longevity: null, traits: null,
+      brain: { people: [], projects: [], ideas: [], journals: [], links: [] },
+      memories: [], goals: [], health: {} };
+    expect(buildBundleFiles(empty).sections.health.label).toBe('Health Summary');
+  });
+
   it('marks absent sections present:false and emits no files for them', () => {
     const empty = { twinPrompt: '', claudeMd: '', stories: [], genome: { uploaded: false },
       taste: { sections: [] }, chronotype: null, longevity: null, traits: null,

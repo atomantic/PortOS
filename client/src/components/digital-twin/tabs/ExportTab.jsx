@@ -12,6 +12,7 @@ import BrailleSpinner from '../../BrailleSpinner';
 import * as api from '../../../services/api';
 import toast from '../../ui/Toast';
 import { copyToClipboard } from '../../../lib/clipboard';
+import { downloadBlob } from '../../../lib/downloadBlob';
 
 import { DOCUMENT_CATEGORIES } from '../constants';
 
@@ -92,15 +93,7 @@ export default function ExportTab({ onRefresh: _onRefresh }) {
       ? `legacy-portrait-${new Date().toISOString().slice(0, 10)}.md`
       : `soul-export.${extension}`;
 
-    const blob = new Blob([content], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    downloadBlob(content, filename, 'text/plain');
 
     toast.success(`Downloaded ${filename}`);
   };

@@ -428,6 +428,7 @@ export function buildBundleFiles(data, { sections: selected = null } = {}) {
     const present = section.present(data);
     const included = wanted.includes(section);
     sectionMeta[section.key] = {
+      label: section.label,
       present,
       included: included && present,
       ...(present ? section.counts(data) : {}),
