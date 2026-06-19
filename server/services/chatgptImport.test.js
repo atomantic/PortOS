@@ -336,11 +336,27 @@ describe('chatgptImport service', () => {
         source: 'chatgpt-import',
         sourceRef: 'gone.json',
         content: '![s](/data/brain-imports/file-shared.png)\n![x](/data/brain-imports/file-solo.png)',
-      }, ['![still](/data/brain-imports/file-shared.png)']);
+      }, [{ id: 'mem-2', sourceRef: 'other.json', content: '![still](/data/brain-imports/file-shared.png)' }]);
 
       // Shared asset survives (another memory uses it); solo asset is removed.
       expect(existsSync(join(ASSETS_DIR, 'file-shared.png'))).toBe(true);
       expect(existsSync(join(ASSETS_DIR, 'file-solo.png'))).toBe(false);
+    });
+
+    it('keeps the archived transcript when a surviving memory shares its sourceRef (same export imported twice)', async () => {
+      await importConversations(parseExport([sampleConversation()])); // writes conv-1.json archive
+      expect(existsSync(join(TMP, 'imports', 'chatgpt', 'conv-1.json'))).toBe(true);
+
+      await deleteMemoryAssets({
+        id: 'mem-1',
+        source: 'chatgpt-import',
+        sourceRef: 'conv-1.json',
+        content: '',
+      }, [{ id: 'mem-2', source: 'chatgpt-import', sourceRef: 'conv-1.json', content: '' }]);
+
+      // A duplicate import points at the same archive — it must survive so the
+      // surviving memory's "View full conversation" still resolves.
+      expect(existsSync(join(TMP, 'imports', 'chatgpt', 'conv-1.json'))).toBe(true);
     });
 
     it('is a no-op for non-import memories', async () => {

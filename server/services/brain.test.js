@@ -1136,12 +1136,13 @@ describe('brain service', () => {
 
     it('cleans up assets for a deleted chatgpt-import memory, passing the OTHER imports as survivors', async () => {
       const deleted = { id: 'm1', source: 'chatgpt-import', sourceRef: 'c1.json', content: '![a](/data/brain-imports/file-a.png)' };
+      const survivor = { id: 'm2', source: 'chatgpt-import', sourceRef: 'c2.json', content: '![b](/data/brain-imports/file-b.png)' };
       storage.getMemoryEntryById.mockResolvedValue(deleted);
       storage.deleteMemoryEntry.mockResolvedValue(true);
       // getMemoryEntries already strips the tombstoned record; include a hand-
       // written (non-import) memory to prove the survivor filter keeps only imports.
       storage.getMemoryEntries.mockResolvedValue([
-        { id: 'm2', source: 'chatgpt-import', content: '![b](/data/brain-imports/file-b.png)' },
+        survivor,
         { id: 'm3', source: undefined, content: 'hand-written note' },
       ]);
 
@@ -1149,7 +1150,9 @@ describe('brain service', () => {
 
       expect(result).toBe(true);
       expect(deleteMemoryAssets).toHaveBeenCalledTimes(1);
-      expect(deleteMemoryAssets).toHaveBeenCalledWith(deleted, ['![b](/data/brain-imports/file-b.png)']);
+      // Survivors are full records (so cleanup can guard a shared sourceRef too),
+      // and only the other chatgpt-import is passed — never the hand-written note.
+      expect(deleteMemoryAssets).toHaveBeenCalledWith(deleted, [survivor]);
     });
 
     it('skips asset cleanup when the record was already gone (delete returned false)', async () => {

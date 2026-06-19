@@ -778,15 +778,15 @@ export const updateMemoryEntry = storage.updateMemoryEntry;
  * `content`. The storage-level delete only tombstones the JSON record — without
  * this wrapper those files orphan forever under `data/brain/imports/`. We load
  * the record first (to know what it referenced) and the surviving import
- * memories (so a shared asset still in use isn't pulled out from under them).
+ * memories (so a shared transcript/asset still in use — e.g. the same export
+ * imported twice — isn't pulled out from under them).
  */
 export async function deleteMemoryEntry(id) {
   const record = await storage.getMemoryEntryById(id);
   const deleted = await storage.deleteMemoryEntry(id);
   if (deleted && record?.source === 'chatgpt-import') {
     const survivors = (await storage.getMemoryEntries())
-      .filter((m) => m.id !== id && m.source === 'chatgpt-import')
-      .map((m) => m.content);
+      .filter((m) => m.id !== id && m.source === 'chatgpt-import');
     await deleteMemoryAssets(record, survivors);
   }
   return deleted;

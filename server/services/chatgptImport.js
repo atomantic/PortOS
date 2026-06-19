@@ -348,22 +348,29 @@ export const extractAssetFileNames = (content) => {
  * Delete the on-disk assets + archived transcript that belonged to a deleted
  * `chatgpt-import` memory, leaving no orphans under `data/brain/imports/`.
  *
- * `survivingContents` is the `content` of every OTHER live import memory — an
- * asset id can legitimately appear in more than one conversation (ChatGPT
- * reuses a `file-service://` id across chats), so an asset is only unlinked when
- * NO surviving memory still references it. The archived transcript JSON is keyed
- * 1:1 by `sourceRef`, so it's always safe to remove with its memory.
+ * `survivors` is every OTHER live import memory. Neither the archive nor an
+ * asset is unlinked while a survivor still references it:
+ *   - The transcript JSON is keyed on the conversation id (`sourceRef`), so
+ *     importing the same export twice yields two memories pointing at ONE
+ *     archive — deleting one must not strand the other's "View full
+ *     conversation" / re-summarize path. Keep the archive while any survivor
+ *     shares its `sourceRef`.
+ *   - An asset id can likewise recur across conversations (ChatGPT reuses a
+ *     `file-service://` id), so an asset is only unlinked when NO survivor
+ *     still references it.
  *
  * Best-effort: a missing file is a no-op (already gone), and any unlink failure
  * is logged but never thrown — cleanup must not turn a successful delete into a
  * request error.
  */
-export async function deleteMemoryAssets(record, survivingContents = []) {
+export async function deleteMemoryAssets(record, survivors = []) {
   if (!record || record.source !== 'chatgpt-import') return;
 
-  // 1. Archived transcript — 1:1 with this memory's sourceRef, always removable.
+  // 1. Archived transcript — remove only when no surviving import shares it (a
+  // re-import of the same conversation reuses the same `<id>.json` archive).
   const ref = String(record.sourceRef || '');
-  if (/^[a-zA-Z0-9-_]+\.json$/.test(ref)) {
+  const refStillUsed = survivors.some((m) => m?.sourceRef === ref);
+  if (/^[a-zA-Z0-9-_]+\.json$/.test(ref) && !refStillUsed) {
     await unlink(join(importRoot(), ref)).catch((err) => {
       if (err?.code !== 'ENOENT') console.error(`⚠️ Failed to remove archived transcript ${ref}: ${err.message}`);
     });
@@ -381,8 +388,8 @@ export async function deleteMemoryAssets(record, survivingContents = []) {
   const referenced = extractAssetFileNames(record.content);
   if (referenced.size === 0) return;
   const stillUsed = new Set();
-  for (const content of survivingContents) {
-    for (const name of extractAssetFileNames(content)) stillUsed.add(name);
+  for (const m of survivors) {
+    for (const name of extractAssetFileNames(m?.content)) stillUsed.add(name);
   }
   const orphaned = [...referenced].filter((name) => !stillUsed.has(name));
   await Promise.all(orphaned.map((name) =>
