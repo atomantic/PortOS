@@ -312,16 +312,19 @@ export default function TrainingPanel({ dataset, readiness, triggerSaving, onRun
         {/* Frozen-base overrides (issue #1407 / #1321) — only feed the mflux
             config builder, so gate on the mflux engine being the one that'll
             run (the torch/FLUX2 path always trains the bf16 base and ignores
-            these). "Auto" → param absent → server keeps its memory-derived tier
-            (still clamped by LORA_TRAIN_MAX_QUANT_BITS); '' → undefined so the
-            key drops out of the payload entirely (true "absent"). */}
+            these). "Auto" sends an explicit `null` (NOT absent): the server
+            re-merges saved settings.loraTraining.defaults into the run, so an
+            omitted key would silently keep a configured default — `null` is a
+            deliberate clear that forces the memory-derived tier (still clamped
+            by LORA_TRAIN_MAX_QUANT_BITS). buildMfluxTrainConfig treats a
+            null/non-boolean as "no override". */}
         {params && status?.runtimes?.mflux?.ready && (
           <div>
             <label htmlFor="lt-param-baseQuant" className="block text-xs text-gray-400 mb-1">Base quant</label>
             <select
               id="lt-param-baseQuant"
               value={params.baseQuant ?? ''}
-              onChange={(e) => setParam('baseQuant', e.target.value === '' ? undefined : Number(e.target.value))}
+              onChange={(e) => setParam('baseQuant', e.target.value === '' ? null : Number(e.target.value))}
               className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white"
             >
               <option value="">Auto</option>
@@ -337,7 +340,7 @@ export default function TrainingPanel({ dataset, readiness, triggerSaving, onRun
             <select
               id="lt-param-lowRam"
               value={params.lowRam === true ? 'on' : params.lowRam === false ? 'off' : ''}
-              onChange={(e) => setParam('lowRam', e.target.value === '' ? undefined : e.target.value === 'on')}
+              onChange={(e) => setParam('lowRam', e.target.value === '' ? null : e.target.value === 'on')}
               className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white"
             >
               <option value="">Auto</option>

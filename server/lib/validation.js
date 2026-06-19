@@ -848,14 +848,16 @@ const loraTrainingParamsSchema = z.object({
   checkpointEvery: z.number().int().min(0).max(5000).optional(),
   sampleEvery: z.number().int().min(0).max(5000).optional(),
   samplePrompt: z.string().max(2000).optional(),
-  // Per-run frozen-base overrides (issue #1321), mflux runtime only. `baseQuant`
-  // picks the quant of the frozen base — 16 = unquantized bf16, 8/4 = QLoRA
-  // bit-width — letting a run opt into a heavier/lighter base than the
+  // Per-run frozen-base overrides (issue #1321/#1407), mflux runtime only.
+  // `baseQuant` picks the quant of the frozen base — 16 = unquantized bf16, 8/4
+  // = QLoRA bit-width — letting a run opt into a heavier/lighter base than the
   // memory-derived default without a code change. `lowRam` toggles the on-disk
-  // latent-cache spill. Both absent → the deriveMfluxMemoryConfig tier; an
+  // latent-cache spill. `null` is the form's "Auto": a deliberate clear that
+  // forces the deriveMfluxMemoryConfig tier even when a saved default exists
+  // (distinct from absent, which lets the saved default merge through). An
   // explicit value still cannot exceed the LORA_TRAIN_MAX_QUANT_BITS cap.
-  baseQuant: z.union([z.literal(4), z.literal(8), z.literal(16)]).optional(),
-  lowRam: z.boolean().optional(),
+  baseQuant: z.union([z.literal(4), z.literal(8), z.literal(16)]).nullable().optional(),
+  lowRam: z.boolean().nullable().optional(),
 });
 
 // LoRA training settings slice (`settings.loraTraining`) — vision-caption

@@ -198,6 +198,15 @@ describe('buildMfluxTrainConfig', () => {
     // No override → memory-derived tier is untouched (128 GB → bf16).
     expect(buildMfluxTrainConfig({ ...base, totalMemGb: 128 }).quantize).toBeNull();
   });
+
+  it('treats null baseQuant/lowRam ("Auto") as no override (issue #1407)', () => {
+    // The form sends an explicit `null` for "Auto" (a deliberate clear that
+    // beats a saved default), which must behave identically to absent: the
+    // memory-derived tier wins. A null baseQuant must NOT be coerced to 0.
+    const cfg = buildMfluxTrainConfig({ ...base, totalMemGb: 48, params: { baseQuant: null, lowRam: null } });
+    expect(cfg.quantize).toBe(4); // 48 GB tier, not touched by the null clear
+    expect(cfg.low_ram).toBe(true);
+  });
 });
 
 describe('buildMfluxTrainArgs / buildFlux2TrainArgs', () => {
