@@ -35,6 +35,9 @@ export const CATEGORY_LABEL = {
   // flat-arc warnings from the arc.transitions editorial check.
   arc: 'Character arc',
   'character-gap': 'Character gap',
+  // Plot-structure findings (#1310): passive protagonist, deus ex machina, idiot
+  // plot, flat stakes, sagging middle, dropped subplots from plot.structure-momentum.
+  plot: 'Plot structure',
   pacing: 'Pacing',
   continuity: 'Continuity',
   style: 'Style',

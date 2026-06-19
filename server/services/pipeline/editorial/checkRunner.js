@@ -61,6 +61,12 @@ const SOURCE_RESOLVERS = {
   // scenes array is intentionally over-eager (any scene edit stales a finding)
   // rather than under: safe vs. false-fresh, and the check reads several scene fields.
   reverseOutline: ({ reverseOutline }) => canonicalStringify(reverseOutline ?? null),
+  // The reverse-outline PLOTLINES the plot-structure check reconciles dropped
+  // subplots against (#1310). Separate token from `reverseOutline` so a scene
+  // edit that doesn't touch the plotline list doesn't needlessly stale a
+  // plotline-only finding (and vice-versa) — same over-eager-but-safe policy.
+  'reverseOutline.plotlines': ({ reverseOutlinePlotlines }) =>
+    canonicalStringify(reverseOutlinePlotlines ?? null),
   // The detected per-character arc directions a POV check reads (#1295). The
   // injected `editorialArcs` is the stable projection (name/arcDirection/issueCount/
   // isProtagonist) — NOT the raw getSeriesEditorial output, which carries a
@@ -182,7 +188,12 @@ export async function runEditorialChecks(seriesId, options = {}) {
   const needsManuscript = enabled.some(({ check }) => check.needsManuscript);
   // Reverse-outline fetch is gated on the declared source (#1296) so a run with no
   // scene-segmentation check pays no extra I/O — mirrors the needsManuscript gate.
-  const needsReverseOutline = enabled.some(({ check }) => checkSources(check).includes('reverseOutline'));
+  // Either the scenes (`reverseOutline`) OR the plotline list (`reverseOutline.plotlines`,
+  // #1310) is served by the same single outline fetch.
+  const needsReverseOutline = enabled.some(({ check }) => {
+    const sources = checkSources(check);
+    return sources.includes('reverseOutline') || sources.includes('reverseOutline.plotlines');
+  });
   // Editorial-arc fetch is gated on the declared source (#1295) so a run with no
   // POV/arc check pays no extra snapshot I/O — mirrors the needsReverseOutline gate.
   const needsEditorialArcs = enabled.some(({ check }) => checkSources(check).includes('editorialArcs'));
@@ -198,6 +209,10 @@ export async function runEditorialChecks(seriesId, options = {}) {
   ]);
   const manuscript = sectionsCorpus(sections);
   const reverseOutline = Array.isArray(outline?.scenes) ? outline.scenes : [];
+  // The outline's plotline list (#1310) — injected separately from the scenes so a
+  // plotline-reading check (plot.structure-momentum) can reconcile dropped subplots
+  // against the author's tagged threads.
+  const reverseOutlinePlotlines = Array.isArray(outline?.plotlines) ? outline.plotlines : [];
   const editorialArcs = projectEditorialArcs(editorial);
   // Whether every analyzable issue has been analyzed and is fresh — gates the
   // pov.justified "absent from detected arcs" finding so a partially-analyzed
@@ -207,7 +222,7 @@ export async function runEditorialChecks(seriesId, options = {}) {
   // Resolve every source token once — each finding's fingerprint reads from this
   // so the editor flags it `stale` when the content that check actually read (its
   // declared `sources`) drifts (#1345, #1387).
-  const resolvedSources = resolveSources({ manuscript, canon, series, reverseOutline, editorialArcs, editorialArcsComplete });
+  const resolvedSources = resolveSources({ manuscript, canon, series, reverseOutline, reverseOutlinePlotlines, editorialArcs, editorialArcsComplete });
   const baseCtx = {
     seriesId,
     series,
@@ -215,6 +230,7 @@ export async function runEditorialChecks(seriesId, options = {}) {
     sections,
     manuscript,
     reverseOutline,
+    reverseOutlinePlotlines,
     editorialArcs,
     editorialArcsComplete,
     canon,
@@ -359,7 +375,10 @@ export async function getReviewWithStaleness(seriesId) {
   // a source (mirrors the run path's gate, now source-derived rather than the bare
   // needsManuscript flag so it stays correct as the source vocabulary grows).
   const needsManuscript = evaluable.some((c) => checkSources(checkFor(c.checkId)).includes('manuscript'));
-  const needsReverseOutline = evaluable.some((c) => checkSources(checkFor(c.checkId)).includes('reverseOutline'));
+  const needsReverseOutline = evaluable.some((c) => {
+    const sources = checkSources(checkFor(c.checkId));
+    return sources.includes('reverseOutline') || sources.includes('reverseOutline.plotlines');
+  });
   const needsEditorialArcs = evaluable.some((c) => checkSources(checkFor(c.checkId)).includes('editorialArcs'));
   const series = await getSeries(seriesId);
   const [sections, canon, outline, editorial] = await Promise.all([
@@ -370,9 +389,10 @@ export async function getReviewWithStaleness(seriesId) {
     needsEditorialArcs ? getSeriesEditorial(seriesId, { series }).catch(() => null) : Promise.resolve(null),
   ]);
   const reverseOutline = Array.isArray(outline?.scenes) ? outline.scenes : [];
+  const reverseOutlinePlotlines = Array.isArray(outline?.plotlines) ? outline.plotlines : [];
   const editorialArcs = projectEditorialArcs(editorial);
   const editorialArcsComplete = editorialCoverageComplete(editorial);
-  const resolvedSources = resolveSources({ manuscript: sectionsCorpus(sections), canon, series, reverseOutline, editorialArcs, editorialArcsComplete });
+  const resolvedSources = resolveSources({ manuscript: sectionsCorpus(sections), canon, series, reverseOutline, reverseOutlinePlotlines, editorialArcs, editorialArcsComplete });
   return {
     ...review,
     comments: review.comments.map((c) => {

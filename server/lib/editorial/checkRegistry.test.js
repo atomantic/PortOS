@@ -30,6 +30,7 @@ import {
   authoredSetupPayoffSummary,
   authoredCliffhangerSummary,
   sceneGroundingSummary,
+  plotlineCoverageSummary,
 } from './checkRegistry.js';
 
 const NAMING = 'naming.dissimilar-names';
@@ -40,6 +41,7 @@ const ENDINGS_CLIFF = 'endings.cliffhanger';
 const POV_SWITCH = 'endings.pov-switch';
 const SENSORY_BALANCE = 'sensory.balance';
 const WHITE_ROOM = 'scene.white-room';
+const PLOT_STRUCTURE = 'plot.structure-momentum';
 
 // A minimal valid stored custom-check definition.
 const customDef = (over = {}) => ({
@@ -553,6 +555,132 @@ describe('authoredSetupPayoffSummary (#1299)', () => {
     });
     expect(out).toContain('- a wordless dread');
     expect(out).not.toContain('Authored payoffs');
+  });
+});
+
+describe('plot.structure-momentum — LLM check (#1310)', () => {
+  const wholeCtx = (overrides = {}) => ({
+    manuscript: '# Issue 1\n\nThings happened to her, and then more things happened.',
+    config: { maxFindings: 12 },
+    severityDefault: 'medium',
+    series: {},
+    reverseOutline: [{ sequence: 0, issueNumber: 1, heading: 'Opening', setting: 'a dock', plotlineId: 'a' }],
+    reverseOutlinePlotlines: [{ id: 'a', label: 'A-plot', kind: 'main' }, { id: 'b', label: 'The missing brother', kind: 'subplot' }],
+    planManuscriptChunks: async () => [overrides.manuscript ?? '# Issue 1\n\nThings happened to her.'],
+    callStagedLLM: async () => ({ content: { findings: [] } }),
+    ...overrides,
+  });
+
+  it('is registered as a series-scoped LLM check reading manuscript + outline + plotlines + reader-map', () => {
+    const check = getCheck(PLOT_STRUCTURE);
+    expect(check.kind).toBe('llm');
+    expect(check.scope).toBe('series');
+    expect(check.category).toBe('plot');
+    expect(check.sources).toEqual(['manuscript', 'reverseOutline', 'reverseOutline.plotlines', 'series.arc.readerMap']);
+    expect(check.needsManuscript).toBe(true);
+  });
+
+  it('only runs when there is drafted prose to scan', () => {
+    const check = getCheck(PLOT_STRUCTURE);
+    expect(check.gate({ manuscript: '' })).toBe(false);
+    expect(check.gate({ manuscript: '# Issue 1\n\nprose' })).toBeTruthy();
+  });
+
+  it('passes the manuscript, scene map, plotline coverage, and authored setups to the model and forces the plot category', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      series: { arc: { readerMap: { hooks: [{ label: 'Where is the brother?', note: 'planted Issue 1' }], payoffs: [] } } },
+      planManuscriptChunks: async (_stage, opts) => {
+        // Scene map + plotline coverage + authored setups all ride as fixed overhead.
+        expect(opts.overheadTokens).toBeGreaterThan(0);
+        return ['# Issue 1\n\nThe brother thread is never mentioned again.'];
+      },
+      callStagedLLM: async (_stage, vars) => {
+        seenVars = vars;
+        return { content: { findings: [{ severity: 'high', issueNumber: 1, location: 'Dropped subplot — the missing brother', problem: 'The thread fizzles' }] } };
+      },
+    });
+    const findings = await getCheck(PLOT_STRUCTURE).run(ctx);
+    expect(seenVars.manuscript).toBe('# Issue 1\n\nThe brother thread is never mentioned again.');
+    expect(seenVars.sceneMap).toContain('Issue 1: Opening');
+    expect(seenVars.plotlineMap).toContain('The missing brother');
+    expect(seenVars.authoredSetups).toContain('Where is the brother?');
+    expect(findings).toHaveLength(1);
+    expect(findings[0].category).toBe('plot');
+    expect(findings[0].location).toBe('Dropped subplot — the missing brother');
+  });
+
+  it('passes empty context vars when the series has no outline or reader-map', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      reverseOutline: undefined,
+      reverseOutlinePlotlines: undefined,
+      callStagedLLM: async (_stage, vars) => { seenVars = vars; return { content: { findings: [] } }; },
+    });
+    await getCheck(PLOT_STRUCTURE).run(ctx);
+    expect(seenVars.sceneMap).toBe('');
+    expect(seenVars.plotlineMap).toBe('');
+    expect(seenVars.authoredSetups).toBe('');
+  });
+
+  it('marks a single-chunk run as the final part so whole-arc judgments are enabled', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      callStagedLLM: async (_stage, vars) => { seenVars = vars; return { content: { findings: [] } }; },
+    });
+    await getCheck(PLOT_STRUCTURE).run(ctx);
+    expect(seenVars.finalPart).toBe('true');
+  });
+
+  it('flags only the LAST part as final across a chunked manuscript', async () => {
+    const finals = [];
+    const ctx = wholeCtx({
+      planManuscriptChunks: async () => ['# Issue 1\n\np1', '# Issue 2\n\np2', '# Issue 3\n\np3'],
+      callStagedLLM: async (_stage, vars) => { finals.push(vars.finalPart); return { content: { findings: [] } }; },
+    });
+    await getCheck(PLOT_STRUCTURE).run(ctx);
+    expect(finals).toEqual(['', '', 'true']);
+  });
+});
+
+describe('plotlineCoverageSummary (#1310)', () => {
+  it('returns an empty string when there are no plotlines', () => {
+    expect(plotlineCoverageSummary(null, [])).toBe('');
+    expect(plotlineCoverageSummary([], [])).toBe('');
+    expect(plotlineCoverageSummary(undefined, undefined)).toBe('');
+  });
+
+  it('renders per-plotline scene counts and the issue span the scenes touch', () => {
+    const plotlines = [
+      { id: 'a', label: 'A-plot', kind: 'main' },
+      { id: 'b', label: 'The missing brother', kind: 'subplot' },
+    ];
+    const scenes = [
+      { issueNumber: 1, plotlineId: 'a' },
+      { issueNumber: 2, plotlineId: 'a', secondaryPlotlineId: 'b' },
+      { issueNumber: 5, plotlineId: 'a' },
+    ];
+    const out = plotlineCoverageSummary(plotlines, scenes);
+    expect(out).toContain('Plotlines (from the reverse outline');
+    expect(out).toContain('- A-plot (main): 3 scenes, issues 1–5');
+    // The subplot is carried only as a secondary tag on the Issue 2 scene.
+    expect(out).toContain('- The missing brother (subplot): 1 scene, issue 2');
+  });
+
+  it('reports a plotline with no tagged scenes (a candidate dropped subplot)', () => {
+    const out = plotlineCoverageSummary([{ id: 'c', label: 'Orphan thread', kind: 'subplot' }], []);
+    expect(out).toContain('- Orphan thread (subplot): 0 scenes, no tagged scenes');
+  });
+
+  it('is type-guarded against hand-edited / older-peer plotline rows', () => {
+    const out = plotlineCoverageSummary(
+      [null, { id: '' }, { id: 'x', label: 42, kind: null }],
+      [{ issueNumber: 3, plotlineId: 'x' }],
+    );
+    // Falls back to the id for a non-string label and 'other' for a missing kind.
+    expect(out).toContain('- x (other): 1 scene, issue 3');
+    // The null and id-less rows are dropped.
+    expect(out.split('\n').filter((l) => l.startsWith('- '))).toHaveLength(1);
   });
 });
 

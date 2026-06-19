@@ -63,6 +63,13 @@ const SEVERITIES = CHECK_SEVERITIES;
 //                                 scenes carry components/povCharacter/charactersPresent.
 //                                 The runner fetches it (gated on this source) and injects
 //                                 `ctx.reverseOutline` (the scenes array).
+//   - 'reverseOutline.plotlines' — the cached reverse-outline's PLOTLINE list (#1286):
+//                                 `[{ id, label, kind, color }]` plus the per-scene
+//                                 `plotlineId`/`secondaryPlotlineId` tags. The runner fetches
+//                                 the outline (gated on this source) and injects
+//                                 `ctx.reverseOutlinePlotlines`. The plot-structure check (#1310)
+//                                 reconciles dropped subplots against these tagged plotlines —
+//                                 which start and then fizzle without a resolution scene.
 //   - 'series.arc.readerMap'    — the series arc's authored reader-map (#1299): the
 //                                 writer-logged hooks (questions planted) and payoffs
 //                                 (their resolutions). The Chekhov check reconciles its
@@ -85,6 +92,7 @@ export const EDITORIAL_SOURCES = Object.freeze([
   'series.arc.tickingClock',
   'series.arc.readerMap',
   'reverseOutline',
+  'reverseOutline.plotlines',
   'editorialArcs',
   'series.characterArcs',
 ]);
@@ -216,6 +224,16 @@ export const ARC_TRANSITIONS_STAGE = 'pipeline-editorial-arc-transitions';
 // prose.passive-voice, prose.repeated-gestures, prose.word-echoes,
 // prose.sentence-rhythm) need no stage.
 export const TELLING_EMOTION_STAGE = 'pipeline-editorial-telling-emotion';
+
+// Stage name for the plot-structure & momentum LLM check (#1310). Ships in
+// data.reference/prompts/stages/ + stage-config.json (fresh installs via
+// setup-data.js) and migrates to existing installs via migration 111 (boot runs
+// migrations but NOT setup-data, so the migration is required). Reads the
+// stitched manuscript plus the reverse-outline scene map + plotline coverage and
+// the authored reader-map/arc to surface macro pathologies — passive protagonist,
+// deus ex machina, idiot plot, flat/unclear stakes, sagging middle, and dropped
+// subplots reconciled against the tagged plotlines.
+export const PLOT_STRUCTURE_STAGE = 'pipeline-editorial-plot-structure';
 
 // Render the authored reader-map cliffhangers (#1298) into a compact text block
 // the chapter-ending check passes alongside the manuscript so the model
@@ -992,6 +1010,43 @@ export function sceneGroundingSummary(scenes) {
   return `Scenes (from the reverse outline):\n${lines.join('\n')}`;
 }
 
+// Render the reverse-outline PLOTLINES (#1286) into a compact text block the
+// plot-structure check (#1310) passes alongside the manuscript so the model can
+// reconcile dropped subplots against the author's tagged plotlines — a plotline
+// that opens early and is never returned to is a dropped subplot. For each
+// plotline we count the scenes tagged to it (primary OR secondary) and report the
+// span of issues those scenes touch, so the model sees which threads fizzle.
+// Pure + deterministic so it's unit-testable and its token cost can be counted
+// into the per-chunk overhead. Returns '' when there are no plotlines (the
+// prompt's `{{#plotlineMap}}` section then renders nothing and the check degrades
+// to reasoning about subplots from the prose alone). Type-guarded throughout —
+// the reverse outline rides peer sync (#1348), so a hand-edited / older-peer
+// plotline could carry a non-string field a bare `.trim()` would throw on.
+export function plotlineCoverageSummary(plotlines, scenes) {
+  const lines = Array.isArray(plotlines) ? plotlines : [];
+  const sceneList = Array.isArray(scenes) ? scenes : [];
+  const rows = lines.map((pl) => {
+    if (!pl || typeof pl !== 'object') return '';
+    const id = typeof pl.id === 'string' ? pl.id : '';
+    if (!id) return '';
+    const label = typeof pl.label === 'string' && pl.label.trim() ? pl.label.trim() : id;
+    const kind = typeof pl.kind === 'string' && pl.kind.trim() ? pl.kind.trim() : 'other';
+    // Scenes tagged to this plotline (primary or secondary), in outline order.
+    const tagged = sceneList.filter((s) => s && (s.plotlineId === id || s.secondaryPlotlineId === id));
+    const issues = [...new Set(
+      tagged
+        .map((s) => (Number.isInteger(s.issueNumber) ? s.issueNumber : null))
+        .filter((n) => n != null),
+    )].sort((a, b) => a - b);
+    const span = issues.length
+      ? (issues.length === 1 ? `issue ${issues[0]}` : `issues ${issues[0]}–${issues[issues.length - 1]}`)
+      : 'no tagged scenes';
+    return `- ${label} (${kind}): ${tagged.length} scene${tagged.length === 1 ? '' : 's'}, ${span}`;
+  }).filter(Boolean);
+  if (!rows.length) return '';
+  return `Plotlines (from the reverse outline — reconcile dropped subplots against these):\n${rows.join('\n')}`;
+}
+
 // ---------------------------------------------------------------------------
 // Registry entries.
 // ---------------------------------------------------------------------------
@@ -1695,6 +1750,80 @@ export const EDITORIAL_CHECKS = [
         crossChunkSetup: true,
         setupFocus:
           'For each named character, note any genuine change moment so far (a decision, realization, point of no return, relapse, or sacrifice) and where it landed. Carry forward who has changed and who is still flat, so a later chunk can tell a truly flat arc from one whose turn simply has not arrived yet.',
+      });
+    },
+  },
+  {
+    id: 'plot.structure-momentum',
+    sources: ['manuscript', 'reverseOutline', 'reverseOutline.plotlines', 'series.arc.readerMap'],
+    label: 'Plot structure & momentum',
+    description:
+      'LLM scan for the macro pathologies editors flag at the manuscript/arc level: a passive protagonist (events happen TO them), deus ex machina / convenient coincidence, idiot plot (conflict that only persists because characters avoid the obvious), flat or unclear stakes that never escalate, a sagging middle with no try-fail rhythm, and dropped subplots. Reads the stitched manuscript plus the reverse-outline scene map + plotline coverage (reconciling fizzled threads against tagged plotlines) and the authored reader-map hooks/payoffs; degrades to a whole-manuscript scan when no outline exists.',
+    scope: 'series',
+    kind: 'llm',
+    category: 'plot',
+    severityDefault: 'medium',
+    defaultEnabled: true,
+    // Reads the stitched manuscript corpus — so the runner only pays the
+    // section-collection I/O when a manuscript-consuming check is enabled.
+    needsManuscript: true,
+    configSchema: z.object({
+      // Cap findings per run so a long manuscript can't flood the review.
+      maxFindings: z.number().int().min(1).max(50).default(12),
+    }),
+    configFields: [
+      {
+        key: 'maxFindings',
+        label: 'Max findings per run',
+        type: 'number',
+        min: 1,
+        max: 50,
+        step: 1,
+        help: 'Cap findings so a long manuscript can not flood the review.',
+      },
+    ],
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    run: (ctx) => {
+      // All three blocks are fixed per-call overhead (re-sent on each chunk) and
+      // pure context: the scene map lets the model attribute pacing/stakes findings
+      // to scenes, the plotline coverage lets it reconcile dropped subplots against
+      // the author's tagged threads, and the authored hooks/payoffs ground the
+      // stakes/escalation judgment. The check degrades gracefully — no outline ⇒
+      // {{#sceneMap}}/{{#plotlineMap}} render nothing; no reader map ⇒ {{#authoredSetups}}
+      // renders nothing and the model reasons from the prose alone.
+      const sceneMap = sceneGroundingSummary(ctx.reverseOutline);
+      const plotlineMap = plotlineCoverageSummary(ctx.reverseOutlinePlotlines, ctx.reverseOutline);
+      const authoredSetups = authoredSetupPayoffSummary(ctx.series?.arc?.readerMap);
+      return runManuscriptLlmCheck(ctx, {
+        stage: PLOT_STRUCTURE_STAGE,
+        category: 'plot',
+        overheadTokens:
+          EDITORIAL_PROMPT_OVERHEAD_TOKENS
+          + estimateTokens(sceneMap)
+          + estimateTokens(plotlineMap)
+          + estimateTokens(authoredSetups),
+        // `isFinal` gates the whole-corpus judgments — a sagging middle, a never-
+        // escalating arc, and a dropped subplot can only be judged once the whole
+        // manuscript is in view; an earlier chunk can't know a thread is picked back
+        // up (or stakes rise) later, so it would false-flag. A single-chunk run is
+        // its own final part and judges the whole text.
+        buildVars: (manuscript, meta) => ({
+          manuscript,
+          sceneMap,
+          plotlineMap,
+          authoredSetups,
+          finalPart: meta?.isFinal ? 'true' : '',
+        }),
+        // Plot pathologies span the whole arc — the cross-chunk findings digest keeps
+        // prior findings in view so a later chunk doesn't re-flag, and the clean-setup
+        // digest rolls forward which subplots/stakes have been opened so a later
+        // payoff (or escalation) isn't mis-read as a dropped/flat thread.
+        crossChunkDigest: true,
+        crossChunkSetup: true,
+        setupFocus: 'Open plot threads/subplots and whether each has been resolved yet; '
+          + 'the stakes established so far and whether they have escalated; and any setup '
+          + '(a planted problem, a coincidence, a try-fail attempt) a later part should pay off, '
+          + 'so a later chunk can tell a genuinely dropped subplot or flat-stakes arc from one whose payoff simply has not arrived yet.',
       });
     },
   },
