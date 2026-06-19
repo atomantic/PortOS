@@ -125,6 +125,13 @@ describe('mergeTaste', () => {
     const remote = { updatedAt: '2026-03-01', sections: { movies: { status: 'in_progress', responses: [], summary: null } } };
     expect(mergeTaste(null, remote)).toEqual({ merged: remote, changed: true });
   });
+
+  it('sorts merged responses by questionId (stable on-disk order)', () => {
+    const local = { updatedAt: '2026-03-01', sections: { movies: { status: 'in_progress', responses: [{ questionId: 'movies-core-3', answer: 'c' }], summary: null } } };
+    const remote = { updatedAt: '2026-03-01', sections: { movies: { status: 'in_progress', responses: [{ questionId: 'movies-core-1', answer: 'a' }, { questionId: 'movies-core-2', answer: 'b' }], summary: null } } };
+    const { merged } = mergeTaste(local, remote);
+    expect(merged.sections.movies.responses.map((r) => r.questionId)).toEqual(['movies-core-1', 'movies-core-2', 'movies-core-3']);
+  });
 });
 
 describe('mergeMeta', () => {
@@ -196,6 +203,14 @@ describe('mergeAutobiographyStories', () => {
   it('is a no-op when remote has nothing new', () => {
     const local = { stories: [{ id: 's1', createdAt: '2026-01-01' }], usedPrompts: ['a'] };
     expect(mergeAutobiographyStories(local, { stories: [{ id: 's1', createdAt: '2026-01-01' }], usedPrompts: ['a'] }).changed).toBe(false);
+  });
+
+  it('sorts merged stories by id (stable on-disk order for checksum convergence)', () => {
+    const local = { stories: [{ id: 's3', createdAt: '2026-01-03' }], usedPrompts: ['z'] };
+    const remote = { stories: [{ id: 's1', createdAt: '2026-01-01' }, { id: 's2', createdAt: '2026-01-02' }], usedPrompts: ['a'] };
+    const { merged } = mergeAutobiographyStories(local, remote);
+    expect(merged.stories.map((s) => s.id)).toEqual(['s1', 's2', 's3']);
+    expect(merged.usedPrompts).toEqual(['a', 'z']);
   });
 });
 

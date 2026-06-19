@@ -170,7 +170,11 @@ export function mergeTaste(local, remote) {
       const rt = rr.updatedAt || rr.answeredAt || '';
       if (rt > lt) { byId.set(rr.questionId, rr); secChanged = true; }
     }
-    const mergedResponses = Array.from(byId.values());
+    // Sort by questionId for a stable on-disk order — this file feeds the
+    // snapshot checksum, and union-by-Map order would otherwise diverge between
+    // peers and prevent convergence. (Display filters by questionId, not order.)
+    const mergedResponses = Array.from(byId.values())
+      .sort((a, b) => (a.questionId < b.questionId ? -1 : a.questionId > b.questionId ? 1 : 0));
 
     const status = pickStatus(localSec.status, remoteSec.status);
     const summary = localSec.summary ?? remoteSec.summary ?? null;
@@ -250,7 +254,14 @@ export function mergeMeta(local, remote) {
   return { merged, changed };
 }
 
-/** Merge autobiography stories: union by id (LWW on updatedAt||createdAt), union usedPrompts. */
+/**
+ * Merge autobiography stories: union by id (LWW on updatedAt||createdAt), union
+ * usedPrompts. Both outputs are sorted by a stable key — this file feeds the
+ * snapshot checksum (via JSON.stringify), and union-by-Map preserves insertion
+ * order, so without a stable sort two peers with identical stories would emit
+ * different array orders → different checksums → never converge. (getStories
+ * re-sorts by createdAt for display, so the on-disk order is presentation-free.)
+ */
 export function mergeAutobiographyStories(local, remote) {
   if (!isPlainObject(remote)) return { merged: local, changed: false };
   if (!isPlainObject(local)) return { merged: remote, changed: true };
@@ -267,10 +278,11 @@ export function mergeAutobiographyStories(local, remote) {
   }
 
   const localUsed = Array.isArray(local.usedPrompts) ? local.usedPrompts : [];
-  const usedPrompts = [...new Set([...localUsed, ...(Array.isArray(remote.usedPrompts) ? remote.usedPrompts : [])])];
+  const usedPrompts = [...new Set([...localUsed, ...(Array.isArray(remote.usedPrompts) ? remote.usedPrompts : [])])].sort();
   if (usedPrompts.length !== localUsed.length) changed = true;
 
-  return { merged: { ...local, stories: Array.from(byId.values()), usedPrompts }, changed };
+  const stories = Array.from(byId.values()).sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  return { merged: { ...local, stories, usedPrompts }, changed };
 }
 
 // Sanitize a peer-supplied document name down to a safe `*.md` basename so a
