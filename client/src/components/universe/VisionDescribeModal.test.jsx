@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import VisionDescribeModal from './VisionDescribeModal';
 
 // One enabled API provider so the action buttons are enabled-by-provider.
@@ -18,6 +18,13 @@ vi.mock('../../hooks/useProviderModels', () => ({
 // The gallery picker pulls in the media/socket layer — stub it.
 vi.mock('../imageGen/GalleryImagePicker', () => ({ default: () => null }));
 vi.mock('../ProviderModelSelector', () => ({ default: () => null }));
+
+// Stub the upload helper so adding an image enables the actions without real I/O.
+vi.mock('../../utils/fileUpload', () => ({
+  processScreenshotUploads: vi.fn(async (files, { onSuccess }) => {
+    onSuccess({ filename: 'up.png', preview: 'data:image/png;base64,x' });
+  }),
+}));
 
 const apiMocks = vi.hoisted(() => ({
   describeEntityFromImages: vi.fn(),
@@ -43,5 +50,32 @@ describe('VisionDescribeModal', () => {
     expect(screen.queryByRole('button', { name: /Build character details/i })).not.toBeInTheDocument();
     // The prose describe action is still present for places.
     expect(screen.getByRole('button', { name: /Describe from image/i })).toBeInTheDocument();
+  });
+
+  it('applies only the checked, edited attributes to onApplyFields', async () => {
+    const onApplyFields = vi.fn();
+    apiMocks.expandEntityFromImages.mockResolvedValue({
+      fields: { pronouns: 'she/her', age: 'late 20s' },
+      updatedFields: ['pronouns', 'age'],
+      llm: { provider: 'ollama', model: 'qwen-vl' },
+    });
+    render(<VisionDescribeModal {...baseProps} kind="character" onApplyFields={onApplyFields} />);
+    // Add an image so the actions enable (the file helper is stubbed). The modal
+    // portals to document.body, so query the document, not the render container.
+    fireEvent.change(document.querySelector('input[type="file"]'), {
+      target: { files: [new File(['x'], 'up.png', { type: 'image/png' })] },
+    });
+    const buildBtn = screen.getByRole('button', { name: /Build character details/i });
+    await waitFor(() => expect(buildBtn).not.toBeDisabled());
+    fireEvent.click(buildBtn);
+
+    // Review list renders both proposed fields; edit pronouns and uncheck age.
+    const pronouns = await screen.findByRole('textbox', { name: 'Pronouns' });
+    fireEvent.change(pronouns, { target: { value: 'she/they' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: /Age/i }));
+
+    fireEvent.click(screen.getByRole('button', { name: /Apply 1 detail/i }));
+    // Edited value wins; unchecked field is dropped.
+    expect(onApplyFields).toHaveBeenCalledWith({ pronouns: 'she/they' });
   });
 });

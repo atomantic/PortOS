@@ -24,6 +24,7 @@ import toast from '../ui/Toast';
 import ProviderModelSelector from '../ProviderModelSelector';
 import GalleryImagePicker from '../imageGen/GalleryImagePicker';
 import useProviderModels from '../../hooks/useProviderModels';
+import { visionLocalModelFilter } from '../../utils/providers';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
 import { processScreenshotUploads } from '../../utils/fileUpload';
 import { describeEntityFromImages, expandEntityFromImages } from '../../services/apiUniverseBuilder';
@@ -69,7 +70,7 @@ export default function VisionDescribeModal({
   const {
     providers, selectedProviderId, selectedModel, availableModels,
     setSelectedProviderId, setSelectedModel, loading: providersLoading,
-  } = useProviderModels({ filter: apiProviderFilter, silent: true });
+  } = useProviderModels({ filter: apiProviderFilter, modelFilter: visionLocalModelFilter, silent: true });
 
   const noun = KIND_NOUN[kind] || 'subject';
   const isCharacter = kind === 'character';
@@ -134,7 +135,12 @@ export default function VisionDescribeModal({
       context: context.trim() || undefined,
       ...imagePayload(),
     }, { silent: true });
-    if (res?.description) setResult(res.description);
+    if (res?.description) {
+      setResult(res.description);
+      // Drop any prior structured proposal so the two result panels don't
+      // linger side-by-side after switching flows.
+      setProposed(null);
+    }
     return res;
   }, { errorMessage: 'Failed to describe image(s)' });
 
@@ -144,6 +150,8 @@ export default function VisionDescribeModal({
       context: context.trim() || undefined,
       ...imagePayload(),
     }, { silent: true });
+    // Drop any prior prose result so the two panels don't linger side-by-side.
+    setResult('');
     if (res?.locked) {
       toast.error(`${entryName || 'This character'} is locked — unlock it to fill from an image`);
       return res;
@@ -197,7 +205,7 @@ export default function VisionDescribeModal({
   const multi = images.length > 1;
 
   return (
-    <Modal open={open} onClose={onClose} size="lg" closeOnBackdrop={false} ariaLabel={`Describe ${noun} from images`}>
+    <Modal open={open} onClose={onClose} size="lg" closeOnBackdrop={false} usePortal ariaLabel={`Describe ${noun} from images`}>
       <div className="bg-port-card border border-port-border rounded-lg shadow-xl flex flex-col max-h-[85vh]">
         <div className="flex items-center justify-between px-4 py-3 border-b border-port-border">
           <h3 className="text-sm font-semibold text-white flex items-center gap-2">

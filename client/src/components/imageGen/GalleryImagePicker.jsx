@@ -54,6 +54,13 @@ export default function GalleryImagePicker({ open, onClose, onSelect }) {
       open={open}
       onClose={onClose}
       size="3xl"
+      // Portal to <body> so the picker escapes every page/modal stacking
+      // context. Without this it renders inline and, under themes that ship a
+      // non-none --port-backdrop-filter (Lumen Glass, Blueprint Ops), each
+      // ancestor .bg-port-card becomes a stacking context that traps the fixed
+      // overlay beneath the page header/cards (and beneath a host modal when the
+      // picker is opened from inside one).
+      usePortal
       panelClassName="bg-port-card border border-port-border rounded-xl max-h-[85vh] flex flex-col"
       ariaLabel="Pick an image from your gallery"
     >
