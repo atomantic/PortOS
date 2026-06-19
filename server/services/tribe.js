@@ -12,6 +12,10 @@ export const DEFAULT_RING_CADENCE = {
   core: 21,
   tribe: 45,
   village: 90,
+  // `external` is for people outside the active tribe (former contacts, a nemesis):
+  // no care cadence is owed, so this default is a neutral yearly nudge and the UI
+  // excludes external people from the care queue entirely.
+  external: 365,
 };
 
 export function isoDate(value) {
@@ -116,7 +120,7 @@ export async function listPeople(options = {}) {
      FROM tribe_people p
      WHERE ${conditions.join(' AND ')}
      ORDER BY
-       CASE ring WHEN 'support' THEN 1 WHEN 'core' THEN 2 WHEN 'tribe' THEN 3 WHEN 'village' THEN 4 ELSE 5 END,
+       CASE ring WHEN 'support' THEN 1 WHEN 'core' THEN 2 WHEN 'tribe' THEN 3 WHEN 'village' THEN 4 WHEN 'external' THEN 5 ELSE 6 END,
        COALESCE(last_contact_on, DATE '1900-01-01') ASC,
        name ASC`,
     params,

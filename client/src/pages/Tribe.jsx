@@ -7,6 +7,7 @@ import {
   Heart,
   MessageCircle,
   Network,
+  Orbit,
   Plus,
   Save,
   Search,
@@ -22,25 +23,22 @@ import BrailleSpinner from '../components/BrailleSpinner';
 import PageHeader from '../components/PageHeader';
 import toast from '../components/ui/Toast';
 import TabPills from '../components/ui/TabPills';
+import TribeCircleMap from '../components/tribe/TribeCircleMap.jsx';
+import {
+  RINGS,
+  ENERGY,
+  contactStatus,
+  ringFor,
+  energyFor,
+  tagsToArray,
+  tagsToInput,
+} from '../lib/tribe.js';
 
 const STORAGE_KEY = 'portos-tribe-v1';
 
-const RINGS = [
-  { id: 'support', label: 'Support', cap: 5, cadenceDays: 7, tone: 'text-rose-300', bg: 'bg-rose-500/10', border: 'border-rose-500/30' },
-  { id: 'core', label: 'Core', cap: 15, cadenceDays: 21, tone: 'text-amber-300', bg: 'bg-amber-500/10', border: 'border-amber-500/30' },
-  { id: 'tribe', label: 'Tribe', cap: 50, cadenceDays: 45, tone: 'text-teal-300', bg: 'bg-teal-500/10', border: 'border-teal-500/30' },
-  { id: 'village', label: 'Village', cap: 150, cadenceDays: 90, tone: 'text-sky-300', bg: 'bg-sky-500/10', border: 'border-sky-500/30' },
-];
-
-const ENERGY = [
-  { id: 'nourishing', label: 'Nourishing', className: 'text-emerald-300 bg-emerald-500/10 border-emerald-500/30' },
-  { id: 'steady', label: 'Steady', className: 'text-sky-300 bg-sky-500/10 border-sky-500/30' },
-  { id: 'complex', label: 'Complex', className: 'text-amber-300 bg-amber-500/10 border-amber-500/30' },
-  { id: 'draining', label: 'Draining', className: 'text-rose-300 bg-rose-500/10 border-rose-500/30' },
-];
-
 const TABS = [
   { id: 'circle', label: 'Circle', icon: Network },
+  { id: 'map', label: 'Map', icon: Orbit },
   { id: 'care', label: 'Care Queue', icon: Clock },
   { id: 'focus', label: 'Focus', icon: Heart },
 ];
@@ -61,41 +59,6 @@ const emptyDraft = () => ({
 
 function todayISO() {
   return new Date().toISOString().slice(0, 10);
-}
-
-function daysBetween(date) {
-  if (!date) return null;
-  const start = new Date(`${date}T00:00:00`);
-  if (Number.isNaN(start.getTime())) return null;
-  const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  return Math.floor((today - start) / 86400000);
-}
-
-function contactStatus(contact) {
-  const elapsed = daysBetween(contact.lastContact);
-  if (elapsed == null) return { label: 'No touchpoint', tone: 'text-gray-300', state: 'missing', daysRemaining: null };
-  const daysRemaining = Number(contact.cadenceDays || 45) - elapsed;
-  if (daysRemaining < 0) return { label: `${Math.abs(daysRemaining)}d overdue`, tone: 'text-rose-300', state: 'overdue', daysRemaining };
-  if (daysRemaining <= 7) return { label: `${daysRemaining}d left`, tone: 'text-amber-300', state: 'soon', daysRemaining };
-  return { label: `${daysRemaining}d left`, tone: 'text-emerald-300', state: 'steady', daysRemaining };
-}
-
-function ringFor(id) {
-  return RINGS.find((ring) => ring.id === id) || RINGS[2];
-}
-
-function energyFor(id) {
-  return ENERGY.find((energy) => energy.id === id) || ENERGY[1];
-}
-
-function tagsToArray(tags) {
-  if (Array.isArray(tags)) return tags.map((tag) => String(tag).trim()).filter(Boolean);
-  return String(tags || '').split(',').map((tag) => tag.trim()).filter(Boolean);
-}
-
-function tagsToInput(tags) {
-  return tagsToArray(tags).join(', ');
 }
 
 function parseStoredContacts(value) {
@@ -143,7 +106,10 @@ function StatTile({ icon: Icon, label, value, detail, className = '' }) {
 
 function RingMeter({ ring, contacts, active, onClick }) {
   const count = contacts.filter((contact) => contact.ring === ring.id).length;
-  const fill = Math.min(100, Math.round((count / ring.cap) * 100));
+  // `external` is uncapped (cap === null): show a count only, no fill bar or
+  // cadence, since it's outside the tribe and carries no care commitment.
+  const uncapped = ring.cap == null;
+  const fill = uncapped ? 0 : Math.min(100, Math.round((count / ring.cap) * 100));
   return (
     <button
       type="button"
@@ -153,13 +119,15 @@ function RingMeter({ ring, contacts, active, onClick }) {
       <div className="flex items-center justify-between gap-3">
         <div>
           <p className={`text-sm font-semibold ${ring.tone}`}>{ring.label}</p>
-          <p className="text-xs text-gray-500">{count} / {ring.cap}</p>
+          <p className="text-xs text-gray-500">{uncapped ? `${count}` : `${count} / ${ring.cap}`}</p>
         </div>
-        <span className="text-xs text-gray-400">{ring.cadenceDays}d</span>
+        <span className="text-xs text-gray-400">{uncapped ? 'outside tribe' : `${ring.cadenceDays}d`}</span>
       </div>
-      <div className="mt-3 h-2 rounded-full bg-black/30 overflow-hidden">
-        <div className="h-full rounded-full bg-current text-port-accent" style={{ width: `${fill}%` }} />
-      </div>
+      {!uncapped && (
+        <div className="mt-3 h-2 rounded-full bg-black/30 overflow-hidden">
+          <div className="h-full rounded-full bg-current text-port-accent" style={{ width: `${fill}%` }} />
+        </div>
+      )}
     </button>
   );
 }
@@ -539,7 +507,10 @@ function EmptyState({ onNew }) {
 }
 
 function CareQueue({ contacts, onSelect, onLogTouch, onNew }) {
-  const queue = [...contacts].sort((a, b) => {
+  // External people are outside the tribe — no care cadence is owed, so they
+  // never appear in the queue (otherwise their null daysRemaining would sort
+  // them to the top alongside genuinely-overdue contacts).
+  const queue = contacts.filter((contact) => contact.ring !== 'external').sort((a, b) => {
     const aStatus = contactStatus(a);
     const bStatus = contactStatus(b);
     const aScore = aStatus.daysRemaining == null ? -999 : aStatus.daysRemaining;
@@ -745,9 +716,13 @@ export default function Tribe() {
     });
   }, [contacts, query, ringFilter]);
 
+  // overdue/soon already exclude external (its status state is 'external', not in
+  // these lists). Capacity is the Dunbar tribe horizon, so it excludes external too.
   const overdueCount = contacts.filter((contact) => ['missing', 'overdue'].includes(contactStatus(contact).state)).length;
   const soonCount = contacts.filter((contact) => contactStatus(contact).state === 'soon').length;
   const supportCount = contacts.filter((contact) => contact.ring === 'support').length;
+  const tribeCount = contacts.filter((contact) => contact.ring !== 'external').length;
+  const externalCount = contacts.length - tribeCount;
 
   const selectContact = (contact) => setDraft({
     ...emptyDraft(),
@@ -868,10 +843,10 @@ export default function Tribe() {
           {!loading && (
             <>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <StatTile icon={Users} label="Relationships" value={contacts.length} detail={`${supportCount} support ring`} />
+            <StatTile icon={Users} label="Relationships" value={contacts.length} detail={externalCount ? `${supportCount} support · ${externalCount} external` : `${supportCount} support ring`} />
             <StatTile icon={Clock} label="Needs Care" value={overdueCount} detail="missing or overdue" />
             <StatTile icon={Calendar} label="Coming Up" value={soonCount} detail="due within 7 days" />
-            <StatTile icon={Heart} label="Capacity" value={`${contacts.length}/150`} detail="village horizon" />
+            <StatTile icon={Heart} label="Capacity" value={`${tribeCount}/150`} detail="village horizon" />
           </div>
 
           {activeTab === 'circle' && (
@@ -961,6 +936,19 @@ export default function Tribe() {
                 {draft.id && <TouchpointsPanel personId={draft.id} />}
               </aside>
             </div>
+          )}
+
+          {activeTab === 'map' && (
+            contacts.length === 0 ? (
+              <EmptyState onNew={startNewRelationship} />
+            ) : (
+              <TribeCircleMap
+                contacts={contacts}
+                selectedId={selectedId}
+                onSelect={(contact) => { selectContact(contact); setActiveTab('circle'); }}
+                onLogTouch={logTouch}
+              />
+            )
           )}
 
           {activeTab === 'care' && (

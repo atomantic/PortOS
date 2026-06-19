@@ -8,7 +8,7 @@ import * as tribe from '../services/tribe.js';
 
 const router = Router();
 
-const ringSchema = z.enum(['support', 'core', 'tribe', 'village']);
+const ringSchema = z.enum(['support', 'core', 'tribe', 'village', 'external']);
 const energySchema = z.enum(['nourishing', 'steady', 'complex', 'draining']);
 
 const personSchema = z.object({
