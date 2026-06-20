@@ -108,6 +108,9 @@ vi.mock('./canonReadiness.js', () => ({ checkSeriesCanonReadiness }));
 
 // Mocked domainUsage binding, so a test can drive the budget per call.
 const { getDomainBudgetStatus } = await import('../domainUsage.js');
+// Mocked settings binding, so a test can drive the persisted convergence-round
+// defaults the autopilot reads at start.
+const { getSettings } = await import('../settings.js');
 
 // Real services + the unit under test (imported AFTER the mocks above).
 const seriesSvc = await import('./series.js');
@@ -148,6 +151,9 @@ beforeEach(() => {
   // Reset the budget mock to read the `budgetStatus` var (clearAllMocks keeps
   // implementations, but a prior test may have set a call-count-keyed one).
   getDomainBudgetStatus.mockImplementation(async () => budgetStatus);
+  // Reset settings to empty so a test that set persisted convergence rounds
+  // doesn't leak its default into the next test.
+  getSettings.mockImplementation(async () => ({}));
 });
 
 // ---------------------------------------------------------------------------
@@ -167,6 +173,28 @@ describe('resolveNextStep (pure)', () => {
       [{ id: 'i1', seasonId: 'se1', number: 1, arcPosition: 1, stages: {} }],
     );
     expect(step.kind).not.toBe('generateArc');
+  });
+
+  it('resolveAutopilotRounds: per-run option wins, else setting, else default', () => {
+    const { resolveAutopilotRounds, MAX_ARC_VERIFY_ROUNDS, MAX_EDITORIAL_ROUNDS } = autopilot;
+    // per-run option wins (including an explicit 0 = skip)
+    expect(resolveAutopilotRounds(
+      { maxArcVerifyRounds: 7, maxEditorialRounds: 0 },
+      { pipelineEditorialChecks: { maxArcVerifyRounds: 4, maxEditorialRounds: 4 } },
+    )).toEqual({ maxArcVerifyRounds: 7, maxEditorialRounds: 0 });
+    // persisted setting fills in when no per-run override
+    const fromSetting = resolveAutopilotRounds({}, { pipelineEditorialChecks: { maxArcVerifyRounds: 6 } });
+    expect(fromSetting.maxArcVerifyRounds).toBe(6);
+    expect(fromSetting.maxEditorialRounds).toBe(MAX_EDITORIAL_ROUNDS);
+    // module default when neither is set
+    expect(resolveAutopilotRounds({}, null)).toEqual({
+      maxArcVerifyRounds: MAX_ARC_VERIFY_ROUNDS, maxEditorialRounds: MAX_EDITORIAL_ROUNDS,
+    });
+    // a non-integer at any layer falls through
+    expect(resolveAutopilotRounds(
+      { maxArcVerifyRounds: 2.5 },
+      { pipelineEditorialChecks: { maxArcVerifyRounds: 'x' } },
+    ).maxArcVerifyRounds).toBe(MAX_ARC_VERIFY_ROUNDS);
   });
 
   it('regenerates the arc for an arc-only series with no volumes', () => {
@@ -429,6 +457,28 @@ describe('autopilot conductor', () => {
     const series = await seriesSvc.getSeries(seriesId);
     expect(series.autopilot?.status).toBe('paused');
     expect(series.autopilot?.residualFindings?.[0]?.problem).toBe('plot hole');
+  });
+
+  it('uses the persisted maxArcVerifyRounds setting when no per-run override is given', async () => {
+    verifyFindings = [{ severity: 'high', problem: 'plot hole', location: 'V1' }];
+    getSettings.mockImplementation(async () => ({ pipelineEditorialChecks: { maxArcVerifyRounds: 4 } }));
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, {}); // no per-run rounds — settings drives it
+    await waitFor(runFinished(seriesId));
+    // 4 verify rounds (the persisted setting), 3 resolves, then a pause.
+    expect(arcSpies.verifyArc).toHaveBeenCalledTimes(4);
+    expect(arcSpies.resolveVerifyIssues).toHaveBeenCalledTimes(3);
+    expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('paused');
+  });
+
+  it('a per-run override beats the persisted maxArcVerifyRounds setting', async () => {
+    verifyFindings = [{ severity: 'high', problem: 'plot hole', location: 'V1' }];
+    getSettings.mockImplementation(async () => ({ pipelineEditorialChecks: { maxArcVerifyRounds: 4 } }));
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { maxArcVerifyRounds: 1 });
+    await waitFor(runFinished(seriesId));
+    expect(arcSpies.verifyArc).toHaveBeenCalledTimes(1);
+    expect(arcSpies.resolveVerifyIssues).not.toHaveBeenCalled();
   });
 
   it('pauses (no infinite loop) when episode generation produces no issues', async () => {

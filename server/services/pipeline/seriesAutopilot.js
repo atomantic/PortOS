@@ -103,9 +103,29 @@ import { checkSeriesCanonReadiness } from './canonReadiness.js';
 const runs = new Map();
 
 // Bounded convergence loops — re-verify/re-review at most this many rounds, then
-// pause for human review with the residual findings (see module header).
+// pause for human review with the residual findings (see module header). These
+// are the floor defaults; an install can raise them persistently via
+// pipelineEditorialChecks.{maxArcVerifyRounds,maxEditorialRounds} (or a single
+// run can override per-run through the autopilot start options).
 export const MAX_ARC_VERIFY_ROUNDS = 3;
 export const MAX_EDITORIAL_ROUNDS = 2;
+
+// Resolve the effective round bounds for a run: an explicit per-run option wins,
+// then the persisted pipelineEditorialChecks setting, then the module default.
+// Returns integers only — a non-integer at any layer falls through to the next.
+// Centralized so the loops, the dry-run plan, and the resume path all agree.
+export function resolveAutopilotRounds(options = {}, settings = null) {
+  const pec = settings?.pipelineEditorialChecks || {};
+  const pick = (optKey, setKey, fallback) => {
+    if (Number.isInteger(options?.[optKey])) return options[optKey];
+    if (Number.isInteger(pec?.[setKey])) return pec[setKey];
+    return fallback;
+  };
+  return {
+    maxArcVerifyRounds: pick('maxArcVerifyRounds', 'maxArcVerifyRounds', MAX_ARC_VERIFY_ROUNDS),
+    maxEditorialRounds: pick('maxEditorialRounds', 'maxEditorialRounds', MAX_EDITORIAL_ROUNDS),
+  };
+}
 
 // When true, a comic-target run with `includeVisual` proceeds past the text +
 // editorial terminal into draft cover/page rendering (see runVisualDraft).
@@ -439,7 +459,12 @@ async function runArcVerify(seriesId, record) {
       return {};
     }
     if (round === maxRounds) {
-      return { pause: true, reason: `arc verification did not converge after ${maxRounds} rounds`, residual: blocking };
+      const plural = maxRounds === 1 ? 'round' : 'rounds';
+      return {
+        pause: true,
+        reason: `Arc verification couldn't auto-resolve ${blocking.length} blocking finding(s) in ${maxRounds} ${plural} — paused for review. Edit the arc/volumes to address them, or raise the verify-rounds limit in Options and resume.`,
+        residual: blocking,
+      };
     }
     if (record.cancelRequested) return { canceled: true };
     // resolveVerifyIssues bills another action — recheck the budget so a single
@@ -597,7 +622,12 @@ async function runEditorial(sId, record) {
       return {};
     }
     if (round === maxRounds) {
-      return { pause: true, reason: `editorial review did not converge after ${maxRounds} round(s)`, residual: blocking };
+      const plural = maxRounds === 1 ? 'round' : 'rounds';
+      return {
+        pause: true,
+        reason: `Editorial review couldn't auto-resolve ${blocking.length} blocking finding(s) in ${maxRounds} ${plural} — paused for review. Address them in the manuscript editor, or raise the editorial-rounds limit in Options and resume.`,
+        residual: blocking,
+      };
     }
     // Bounded auto-fix: apply a fix for each open high-severity comment, then
     // the loop re-analyzes. Each fix is wrapped so one bad anchor doesn't abort
@@ -949,14 +979,16 @@ function buildDryRunPlan(series, issues, options) {
   if (noArc || seasons.length === 0) plan.push({ kind: 'generateArc', count: 1 });
   const emptySeasons = seasons.filter((s) => !ordered.some((i) => i.seasonId === s.id));
   if (emptySeasons.length) plan.push({ kind: 'generateEpisodes', count: emptySeasons.length });
-  plan.push({ kind: 'verifyArc', count: 1, note: `up to ${MAX_ARC_VERIFY_ROUNDS} rounds` });
+  const arcRounds = Number.isInteger(options?.maxArcVerifyRounds) ? options.maxArcVerifyRounds : MAX_ARC_VERIFY_ROUNDS;
+  plan.push({ kind: 'verifyArc', count: 1, note: arcRounds === 0 ? 'skipped (0 rounds)' : `up to ${arcRounds} rounds` });
   const beatsNeeded = seasons.filter((s) =>
     ordered.some((i) => i.seasonId === s.id && !isStageReady(i.stages?.idea))).length;
   if (beatsNeeded) plan.push({ kind: 'beatSheet', count: beatsNeeded });
   const textNeeded = ordered.filter((i) => !textReady(i, series)).length;
   if (textNeeded) plan.push({ kind: 'textStages', count: textNeeded });
   if (isComicTarget(series)) plan.push({ kind: 'scriptVerify', count: ordered.length });
-  plan.push({ kind: 'editorialReview', count: 1, note: `up to ${MAX_EDITORIAL_ROUNDS} rounds` });
+  const edRounds = Number.isInteger(options?.maxEditorialRounds) ? options.maxEditorialRounds : MAX_EDITORIAL_ROUNDS;
+  plan.push({ kind: 'editorialReview', count: 1, note: edRounds === 0 ? 'skipped (0 rounds)' : `up to ${edRounds} rounds` });
   plan.push({ kind: 'editorialChecks', count: 1, note: 'enabled editorial checks (#1284)' });
   plan.push({ kind: 'editorialHealthGate', count: 1, note: 'editorial health readiness gate (#1316)' });
   if (VISUAL_DRAFT_ENABLED && wantsVisual(options) && isComicTarget(series)) {
@@ -988,6 +1020,14 @@ export async function startSeriesAutopilot(sId, options = {}) {
     return { rejected: true, mode: 'off' };
   }
 
+  // Resolve the convergence-round bounds ONCE at start (per-run option →
+  // persisted setting → default) and stamp them onto the run's options so the
+  // synchronous loops, the dry-run plan, and a later resume all read the same
+  // effective values. A resume reuses this same path, so a raised persisted
+  // setting takes effect on the next Resume without re-specifying it.
+  const settings = await getSettings().catch(() => null);
+  const runOptions = { ...options, ...resolveAutopilotRounds(options, settings) };
+
   if (existing) {
     // A finished run still in its replay window — evict it so this fresh run
     // fully replaces it (mirrors editorialAnalysisRunner).
@@ -1005,7 +1045,7 @@ export async function startSeriesAutopilot(sId, options = {}) {
     cleanupTimer: null,
     startedAt: new Date().toISOString(),
     mode,
-    options,
+    options: runOptions,
     runState: {
       arcAttempted: false,
       arcVerified: false,
@@ -1031,7 +1071,7 @@ export async function startSeriesAutopilot(sId, options = {}) {
       if (mode === 'dry-run') {
         const series = await getSeries(sId);
         const issues = await listIssues({ seriesId: sId });
-        const plan = buildDryRunPlan(series, issues, options);
+        const plan = buildDryRunPlan(series, issues, runOptions);
         broadcast(sId, { type: 'start', runId, mode, target: series.targetFormat, plan });
         // Carry the plan on the terminal frame too: a dry-run emits start +
         // complete synchronously, often before the client attaches, and
@@ -1046,7 +1086,7 @@ export async function startSeriesAutopilot(sId, options = {}) {
       const series0 = await getSeries(sId);
       broadcast(sId, { type: 'start', runId, mode, target: series0.targetFormat });
       await persistMarker(sId, { status: 'running', runId, currentStep: null, residualFindings: [], lastError: null });
-      if (options.includeVisual && !VISUAL_DRAFT_ENABLED) {
+      if (runOptions.includeVisual && !VISUAL_DRAFT_ENABLED) {
         broadcast(sId, { type: 'note', message: 'Draft visual rendering is not enabled in this build — running to text-ready + editorial review.' });
       }
 
@@ -1054,7 +1094,7 @@ export async function startSeriesAutopilot(sId, options = {}) {
       while (!record.cancelRequested) {
         const series = await getSeries(sId);
         const issues = await listIssues({ seriesId: sId });
-        const step = resolveNextStep(series, issues, record.runState, options);
+        const step = resolveNextStep(series, issues, record.runState, runOptions);
 
         if (step.kind === 'done') {
           await persistMarker(sId, { status: 'done', runId, currentStep: null });

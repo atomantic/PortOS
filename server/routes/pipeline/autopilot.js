@@ -31,9 +31,13 @@ const autopilotStartSchema = z.object({
   target: z.enum(['auto', 'text', 'visual']).optional().default('auto'),
   // Create CoS tasks for capability gaps (Phase 3).
   fileGaps: z.boolean().optional().default(false),
-  // Convergence bounds for the verify/review loops (0 = skip that gate).
-  maxArcVerifyRounds: z.number().int().min(0).max(5).optional(),
-  maxEditorialRounds: z.number().int().min(0).max(5).optional(),
+  // Per-run convergence bounds for the verify/review loops (0 = skip that gate).
+  // When omitted, the autopilot falls back to the persisted
+  // pipelineEditorialChecks.{maxArcVerifyRounds,maxEditorialRounds} setting, then
+  // to the module default. Cap mirrors the settings schema so the UI knob and a
+  // direct API call agree on the ceiling.
+  maxArcVerifyRounds: z.number().int().min(0).max(20).optional(),
+  maxEditorialRounds: z.number().int().min(0).max(20).optional(),
 });
 
 router.post('/series/:id/autopilot/start', asyncHandler(async (req, res) => {

@@ -1080,10 +1080,16 @@ export const editorialCustomCheckUpdateSchema = z.object(editorialCustomCheckSha
 // loop + UI read as "manuscript clean": 'noOpenHigh' (default), the stricter
 // 'noOpenHighOrMedium', or 'none' (disable). Optional + additive, so older peers
 // and a never-configured install fall through to the service default.
+// `maxArcVerifyRounds` / `maxEditorialRounds` bound the autopilot's verify→resolve
+// convergence loops before it pauses for human review (0 = skip that gate
+// entirely). Persisted defaults the autopilot reads when a run doesn't pass a
+// per-run override; raised cap (20) so a stubborn arc can be given more rounds.
 export const pipelineEditorialChecksSettingsSchema = z.object({
   checks: z.record(editorialCheckConfigSchema).optional(),
   customChecks: z.array(z.object({}).passthrough()).optional(),
   readinessGate: z.enum(['noOpenHigh', 'noOpenHighOrMedium', 'none']).optional(),
+  maxArcVerifyRounds: z.number().int().min(0).max(20).optional(),
+  maxEditorialRounds: z.number().int().min(0).max(20).optional(),
 }).strict();
 
 // Cursor-context payload for the CD-bridge suggest route — identical shape to
