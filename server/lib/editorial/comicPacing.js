@@ -42,9 +42,16 @@ export function comicSpreadLayout(pageCount) {
   return layout;
 }
 
-// Collapse whitespace and truncate a text field to `max` chars for the digest.
+// Collapse whitespace, neutralize markdown fence delimiters, and truncate a text
+// field to `max` chars for the digest. The rendered layout is embedded inside a
+// ``` fenced block in the page-turn prompt, so a backtick run in authored script
+// text (a panel that quotes code/markdown) could otherwise close the fence early
+// and turn the rest of the prompt into unstructured text. Backtick fidelity is
+// irrelevant to the model's pacing judgment, so collapse any run of backticks to a
+// single quote — a delimiter-safe transform applied at the one chokepoint every
+// user-authored snippet (description / caption / dialogue / SFX) passes through.
 const clip = (s, max) => {
-  const t = typeof s === 'string' ? s.trim().replace(/\s+/g, ' ') : '';
+  const t = typeof s === 'string' ? s.trim().replace(/\s+/g, ' ').replace(/`+/g, "'") : '';
   return t.length > max ? `${t.slice(0, max)}…` : t;
 };
 

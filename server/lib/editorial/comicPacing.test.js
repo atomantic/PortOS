@@ -60,6 +60,15 @@ describe('summarizeComicPages', () => {
     expect(pg.panels[0]).toContain('sfx: BOOM');
   });
 
+  it('neutralizes markdown fence delimiters in authored text (prompt-fence safety)', () => {
+    const pages = [{ panels: [{ description: 'a ```code``` beat', caption: 'cap ```', dialogue: [], sfx: '' }] }];
+    const [pg] = summarizeComicPages(pages);
+    // The page layout is embedded in a ``` fenced prompt block — no raw backtick
+    // run may survive, or it could close the fence early.
+    expect(pg.panels[0]).not.toContain('`');
+    expect(pg.panels[0]).toContain("'code'");
+  });
+
   it('truncates long text fields and tolerates a bare-string dialogue entry', () => {
     const longLine = 'word '.repeat(40).trim(); // 199 chars
     const pages = [{ panels: [{ description: 'd', caption: '', dialogue: ['a bare line'], sfx: '' }, { description: 'e', caption: longLine, dialogue: [], sfx: '' }] }];
