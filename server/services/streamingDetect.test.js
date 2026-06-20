@@ -368,6 +368,15 @@ module.exports = { apps: [{ name: 'x', script: 's.js', env: { PORT: API_PORT, CD
     expect(parseEcosystemConfig(out).processes[0].ports.api).toBe(6000);
   });
 
+  it('rewrites fallback-expression defaults (process.env.PORT || N) the parser derives', () => {
+    const content = `module.exports = { apps: [{ name: 'x', script: 's.js', env: { PORT: process.env.PORT || 4420, RETRIES: 4420 } }] };
+`;
+    const out = rewriteEcosystemPorts(content, [[4420, 6000]]);
+    expect(out).toContain('process.env.PORT || 6000');
+    expect(out).toContain('RETRIES: 4420'); // not a port key, and not a `|| N` fallback — untouched
+    expect(parseEcosystemConfig(out).processes[0].ports.api).toBe(6000);
+  });
+
   it('is a no-op when remap is empty or only contains identity pairs', () => {
     const content = `module.exports = { apps: [{ name: 'x', script: 's.js', env: { PORT: 5173 } }] };`;
     expect(rewriteEcosystemPorts(content, [])).toBe(content);
