@@ -560,6 +560,31 @@ module.exports = { apps: [
     expect(parseEcosystemConfig(r.content).processes[0].ports.api).toBe(7000);
   });
 
+  it('does not rewrite a bare lowercase port: field when an inline ports object is the source', () => {
+    // parseEcosystemConfig reads ports.api and ignores `metadata.port`; the bare
+    // `port:` fallback is last-resort (only when there's no ports object), so it
+    // must NOT fire here and corrupt the unrelated same-valued metadata field.
+    const content = `module.exports = { apps: [
+  { name: 'srv', script: 's.js', ports: { api: 6000, ui: 5556 }, metadata: { port: 6000 } }
+] };
+`;
+    const r = rewriteEcosystemPortsByProcess(content, [
+      { processName: 'srv', label: 'api', oldPort: 6000, newPort: 7000 },
+    ]);
+    expect(r.applied).toHaveLength(1);
+    expect(r.content).toContain('api: 7000');
+    expect(r.content).toContain('metadata: { port: 6000 }'); // untouched
+  });
+
+  it('still rewrites a bare legacy port: field when it is the only source (no ports object)', () => {
+    const content = `module.exports = { apps: [{ name: 'srv', script: 's.js', port: 6000 }] };`;
+    const r = rewriteEcosystemPortsByProcess(content, [
+      { processName: 'srv', label: 'api', oldPort: 6000, newPort: 7000 },
+    ]);
+    expect(r.applied).toHaveLength(1);
+    expect(r.content).toContain('port: 7000');
+  });
+
   it('does NOT match a same-valued lowercase metadata field in a ports-reference block (no false api success)', () => {
     // api is derived from `ports: PORTS.server` (external const). The block also
     // carries a lowercase metadata field that happens to share the value. An
