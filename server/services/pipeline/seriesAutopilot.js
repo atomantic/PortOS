@@ -127,6 +127,22 @@ export function resolveAutopilotRounds(options = {}, settings = null) {
   };
 }
 
+// Per-gate copy for the non-convergence pause — shared by the arc-verify and
+// editorial loops so the two messages can't drift.
+const PAUSE_GATES = {
+  arc: { label: 'Arc verification', fix: 'Edit the arc/volumes to address them', limit: 'verify-rounds' },
+  editorial: { label: 'Editorial review', fix: 'Address them in the manuscript editor', limit: 'editorial-rounds' },
+};
+function convergencePauseReason(gate, maxRounds, blockingCount) {
+  const { label, fix, limit } = PAUSE_GATES[gate];
+  const plural = maxRounds === 1 ? 'round' : 'rounds';
+  return `${label} couldn't auto-resolve ${blockingCount} blocking finding(s) in ${maxRounds} ${plural} — `
+    + `paused for review. ${fix}, or raise the ${limit} limit in Options and resume.`;
+}
+
+// Dry-run plan note for a bounded gate: "skipped (0 rounds)" or "up to N rounds".
+const roundsNote = (rounds) => (rounds === 0 ? 'skipped (0 rounds)' : `up to ${rounds} rounds`);
+
 // When true, a comic-target run with `includeVisual` proceeds past the text +
 // editorial terminal into draft cover/page rendering (see runVisualDraft).
 export const VISUAL_DRAFT_ENABLED = true;
@@ -459,12 +475,7 @@ async function runArcVerify(seriesId, record) {
       return {};
     }
     if (round === maxRounds) {
-      const plural = maxRounds === 1 ? 'round' : 'rounds';
-      return {
-        pause: true,
-        reason: `Arc verification couldn't auto-resolve ${blocking.length} blocking finding(s) in ${maxRounds} ${plural} — paused for review. Edit the arc/volumes to address them, or raise the verify-rounds limit in Options and resume.`,
-        residual: blocking,
-      };
+      return { pause: true, reason: convergencePauseReason('arc', maxRounds, blocking.length), residual: blocking };
     }
     if (record.cancelRequested) return { canceled: true };
     // resolveVerifyIssues bills another action — recheck the budget so a single
@@ -622,12 +633,7 @@ async function runEditorial(sId, record) {
       return {};
     }
     if (round === maxRounds) {
-      const plural = maxRounds === 1 ? 'round' : 'rounds';
-      return {
-        pause: true,
-        reason: `Editorial review couldn't auto-resolve ${blocking.length} blocking finding(s) in ${maxRounds} ${plural} — paused for review. Address them in the manuscript editor, or raise the editorial-rounds limit in Options and resume.`,
-        residual: blocking,
-      };
+      return { pause: true, reason: convergencePauseReason('editorial', maxRounds, blocking.length), residual: blocking };
     }
     // Bounded auto-fix: apply a fix for each open high-severity comment, then
     // the loop re-analyzes. Each fix is wrapped so one bad anchor doesn't abort
@@ -980,7 +986,7 @@ function buildDryRunPlan(series, issues, options) {
   const emptySeasons = seasons.filter((s) => !ordered.some((i) => i.seasonId === s.id));
   if (emptySeasons.length) plan.push({ kind: 'generateEpisodes', count: emptySeasons.length });
   const arcRounds = Number.isInteger(options?.maxArcVerifyRounds) ? options.maxArcVerifyRounds : MAX_ARC_VERIFY_ROUNDS;
-  plan.push({ kind: 'verifyArc', count: 1, note: arcRounds === 0 ? 'skipped (0 rounds)' : `up to ${arcRounds} rounds` });
+  plan.push({ kind: 'verifyArc', count: 1, note: roundsNote(arcRounds) });
   const beatsNeeded = seasons.filter((s) =>
     ordered.some((i) => i.seasonId === s.id && !isStageReady(i.stages?.idea))).length;
   if (beatsNeeded) plan.push({ kind: 'beatSheet', count: beatsNeeded });
@@ -988,7 +994,7 @@ function buildDryRunPlan(series, issues, options) {
   if (textNeeded) plan.push({ kind: 'textStages', count: textNeeded });
   if (isComicTarget(series)) plan.push({ kind: 'scriptVerify', count: ordered.length });
   const edRounds = Number.isInteger(options?.maxEditorialRounds) ? options.maxEditorialRounds : MAX_EDITORIAL_ROUNDS;
-  plan.push({ kind: 'editorialReview', count: 1, note: edRounds === 0 ? 'skipped (0 rounds)' : `up to ${edRounds} rounds` });
+  plan.push({ kind: 'editorialReview', count: 1, note: roundsNote(edRounds) });
   plan.push({ kind: 'editorialChecks', count: 1, note: 'enabled editorial checks (#1284)' });
   plan.push({ kind: 'editorialHealthGate', count: 1, note: 'editorial health readiness gate (#1316)' });
   if (VISUAL_DRAFT_ENABLED && wantsVisual(options) && isComicTarget(series)) {

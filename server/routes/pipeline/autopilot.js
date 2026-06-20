@@ -14,7 +14,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
-import { validateRequest } from '../../lib/validation.js';
+import { validateRequest, MAX_CONVERGENCE_ROUNDS } from '../../lib/validation.js';
 import * as seriesSvc from '../../services/pipeline/series.js';
 import * as autopilot from '../../services/pipeline/seriesAutopilot.js';
 import { mapServiceError, providerOverrideShape } from './shared.js';
@@ -36,8 +36,8 @@ const autopilotStartSchema = z.object({
   // pipelineEditorialChecks.{maxArcVerifyRounds,maxEditorialRounds} setting, then
   // to the module default. Cap mirrors the settings schema so the UI knob and a
   // direct API call agree on the ceiling.
-  maxArcVerifyRounds: z.number().int().min(0).max(20).optional(),
-  maxEditorialRounds: z.number().int().min(0).max(20).optional(),
+  maxArcVerifyRounds: z.number().int().min(0).max(MAX_CONVERGENCE_ROUNDS).optional(),
+  maxEditorialRounds: z.number().int().min(0).max(MAX_CONVERGENCE_ROUNDS).optional(),
 });
 
 router.post('/series/:id/autopilot/start', asyncHandler(async (req, res) => {
