@@ -444,37 +444,29 @@ export async function parseEcosystemFromPath(dirPath) {
 }
 
 /**
- * Locate the `const PORTS = { ... }` literal in an ecosystem config and return
- * its `{ start, end }` byte offsets (inclusive of the opening/closing braces),
- * or null when there's no PORTS object. Brace-counted so nested objects
- * (`{ server: { api: 5555 } }`) are captured whole.
- */
-function findPortsBlock(content) {
-  const m = content.match(/(?:const|let|var)\s+PORTS\s*=\s*\{/);
-  if (!m) return null;
-  const start = m.index + m[0].length - 1; // index of the opening '{'
-  // Reuse the parser's brace matcher — it correctly ignores braces inside
-  // strings/comments/`${...}`, which a bare depth counter would miscount.
-  const end = findMatchingBrace(content, start);
-  return end < 0 ? null : { start, end };
-}
-
-/**
  * Brace-matched `{ start, end }` regions whose numeric values are rewritten
- * by VALUE regardless of key name: the `const PORTS = {...}` block AND every
+ * by VALUE regardless of key name: every `const PORTS = {...}` block AND every
  * per-app `ports: { api: N, ui: N }` object. parseEcosystemConfig reads the
  * per-app `ports:` object FIRST when deriving uiPort/apiPort/devUiPort, so a
  * rewrite that skipped it would let the edit silently revert on the next
  * config refresh — the exact bug the write-back exists to prevent.
+ *
+ * Commented-out matches are skipped: rewriting a port inside a commented
+ * `const PORTS = {...}` would make writeEcosystemPorts report success while the
+ * executable config is untouched (the per-region slice starts at the `{`, so
+ * the region's own comment scan can no longer see the leading `//`/`/*`).
  */
 function findValuePortRegions(content) {
+  const comments = commentRanges(content);
+  const inComment = (pos) => comments.some(([s, e]) => pos >= s && pos < e);
   const regions = [];
-  const portsConst = findPortsBlock(content);
-  if (portsConst) regions.push(portsConst);
-  // Lowercase, case-sensitive `ports:` — won't match `const PORTS` or `reports:`.
-  const re = /\bports\s*:\s*\{/g;
+  // `const PORTS = {` (uppercase, any declarator) OR a lowercase `ports: {`
+  // object value — the latter is case-sensitive so it won't match `const PORTS`
+  // or `reports:`.
+  const re = /(?:(?:const|let|var)\s+PORTS\s*=\s*|\bports\s*:\s*)\{/g;
   let m;
   while ((m = re.exec(content)) !== null) {
+    if (inComment(m.index)) continue;
     const open = m.index + m[0].length - 1;
     const end = findMatchingBrace(content, open);
     if (end >= 0) regions.push({ start: open, end });

@@ -395,6 +395,15 @@ module.exports = { apps: [{ name: 'x', script: 's.js', env: { PORT: API_PORT, CD
     expect(out).toContain('// default was 5173'); // comment untouched
   });
 
+  it('does not rewrite a port inside a commented-out PORTS block', () => {
+    const content = `/* legacy: const PORTS = { API: 5173 } */
+const PORTS = { API: 4000 };
+module.exports = { apps: [{ name: 'x', script: 's.js', env: { PORT: PORTS.API } }] };
+`;
+    const out = rewriteEcosystemPorts(content, [[5173, 6000]]);
+    expect(out).toBe(content); // the only 5173 is in a comment → untouched
+  });
+
   it('is a no-op when remap is empty or only contains identity pairs', () => {
     const content = `module.exports = { apps: [{ name: 'x', script: 's.js', env: { PORT: 5173 } }] };`;
     expect(rewriteEcosystemPorts(content, [])).toBe(content);

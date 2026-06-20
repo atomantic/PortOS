@@ -389,28 +389,40 @@ router.put('/:id', asyncHandler(async (req, res, next) => {
   // surfaces as a failed request instead of a 200 that leaves apps.json and
   // PM2 disagreeing (the write throws and bubbles to the error middleware).
   if (existing && usesPm2(existing.type) && await pathExists(existing.repoPath)) {
+    // Diff the submitted ports against the ACTUAL config values (not apps.json,
+    // whose top-level fields may be stale or absent for derived ports). This
+    // is the single source of truth for both "did it change" and "what's the
+    // old literal to rewrite": EditAppModal submits every field even on a
+    // rename, so a value equal to the config's current port is a no-op echo,
+    // and a value that differs is a genuine edit to persist.
+    const { processes: cfgProcs } = await parseEcosystemFromPath(existing.repoPath);
+    const LABEL_BY_KEY = { apiPort: 'api', uiPort: 'ui', devUiPort: 'devUi' };
+    const currentPort = {};
+    for (const proc of cfgProcs || []) {
+      for (const [key, label] of Object.entries(LABEL_BY_KEY)) {
+        if (currentPort[key] === undefined && Number.isInteger(proc.ports?.[label])) {
+          currentPort[key] = proc.ports[label];
+        }
+      }
+    }
     // Count current values so a value-keyed rewrite never fires on a number
     // shared by another port field (e.g. uiPort derived from apiPort, both
     // 6000) — that would rewrite every occurrence and clobber the field the
     // user didn't touch. Such a change is unpersistable by value alone.
     const valueCounts = new Map();
     for (const key of PORT_KEYS) {
-      const v = existing[key];
+      const v = currentPort[key];
       if (Number.isInteger(v)) valueCounts.set(v, (valueCounts.get(v) || 0) + 1);
     }
-    // A port the user actually changed. Require a STORED integer old value:
-    // EditAppModal submits every field (even on a rename), and for an app whose
-    // top-level port isn't stored in apps.json (derived from processes) the
-    // submitted value is just the echoed derived display value — comparing it
-    // against an undefined registry value would misread an unchanged field as a
-    // change and wrongly reject the edit. Without a stored old value there's
-    // also no literal to diff/rewrite, so such fields are left to a config edit.
+    // A port is "changed" when the submitted value differs from the config's
+    // current value for that label. A field the config doesn't define has no
+    // literal to rewrite, so it isn't treated as a config edit here.
     const changedKeys = PORT_KEYS.filter(key =>
-      Number.isInteger(existing[key]) && Number.isInteger(data[key]) && data[key] !== existing[key]);
+      Number.isInteger(currentPort[key]) && Number.isInteger(data[key]) && data[key] !== currentPort[key]);
     const remap = [];
     const unpersistable = [];
     for (const key of changedKeys) {
-      const oldPort = existing[key]; // guaranteed integer by the filter above
+      const oldPort = currentPort[key]; // guaranteed integer by the filter above
       // Value shared with another field (can't disambiguate by value) → can't
       // safely write it to the config without clobbering the other field.
       if (valueCounts.get(oldPort) > 1) {

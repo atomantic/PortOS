@@ -262,6 +262,7 @@ describe('Apps Routes', () => {
       // repoPath must exist on disk so the pathExists guard passes.
       const mockApp = { id: 'app-001', name: 'App', type: 'node', repoPath: process.cwd(), apiPort: 5173, uiPort: 5174 };
       appsService.getAppById.mockResolvedValue(mockApp);
+      streamingDetect.parseEcosystemFromPath.mockResolvedValue({ processes: [{ name: 'a', ports: { api: 5173, ui: 5174 } }] });
       appsService.updateApp.mockResolvedValue({ ...mockApp, apiPort: 6000, uiPort: 6001 });
 
       const response = await request(app)
@@ -291,6 +292,7 @@ describe('Apps Routes', () => {
       // rather than persist a registry value PM2 will contradict.
       const mockApp = { id: 'app-001', name: 'App', type: 'node', repoPath: process.cwd(), apiPort: 6000, uiPort: 6000 };
       appsService.getAppById.mockResolvedValue(mockApp);
+      streamingDetect.parseEcosystemFromPath.mockResolvedValue({ processes: [{ name: 'a', ports: { api: 6000, ui: 6000 } }] });
 
       const response = await request(app).put('/api/apps/app-001').send({ uiPort: 7000 });
 
@@ -304,6 +306,8 @@ describe('Apps Routes', () => {
       // submits the echoed display values. Those must not read as port changes.
       const mockApp = { id: 'app-001', name: 'App', type: 'node', repoPath: process.cwd() };
       appsService.getAppById.mockResolvedValue(mockApp);
+      // Config currently serves these derived ports; the modal echoes them back.
+      streamingDetect.parseEcosystemFromPath.mockResolvedValue({ processes: [{ name: 'a', ports: { api: 5555, ui: 5556 } }] });
       appsService.updateApp.mockResolvedValue({ ...mockApp, name: 'Renamed' });
 
       const response = await request(app)
@@ -318,6 +322,7 @@ describe('Apps Routes', () => {
     it('rejects (422) when the port literal is not found in the config (changed:false)', async () => {
       const mockApp = { id: 'app-001', name: 'App', type: 'node', repoPath: process.cwd(), apiPort: 5173 };
       appsService.getAppById.mockResolvedValue(mockApp);
+      streamingDetect.parseEcosystemFromPath.mockResolvedValue({ processes: [{ name: 'a', ports: { api: 5173 } }] });
       streamingDetect.writeEcosystemPorts.mockResolvedValueOnce({ file: 'ecosystem.config.cjs', changed: false });
 
       const response = await request(app).put('/api/apps/app-001').send({ apiPort: 6000 });
@@ -329,6 +334,7 @@ describe('Apps Routes', () => {
     it('fails the request (and does not update the registry) when the config write throws', async () => {
       const mockApp = { id: 'app-001', name: 'App', type: 'node', repoPath: process.cwd(), apiPort: 5173 };
       appsService.getAppById.mockResolvedValue(mockApp);
+      streamingDetect.parseEcosystemFromPath.mockResolvedValue({ processes: [{ name: 'a', ports: { api: 5173 } }] });
       streamingDetect.writeEcosystemPorts.mockRejectedValueOnce(new Error('EACCES'));
 
       const response = await request(app).put('/api/apps/app-001').send({ apiPort: 6000 });
