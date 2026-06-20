@@ -34,6 +34,7 @@ import {
   plotlineCoverageSummary,
   scenePovSummary,
   declaredThemesSummary,
+  canonRosterNamesSummary,
 } from './checkRegistry.js';
 
 const NAMING = 'naming.dissimilar-names';
@@ -47,6 +48,7 @@ const WHITE_ROOM = 'scene.white-room';
 const PLOT_STRUCTURE = 'plot.structure-momentum';
 const HEAD_HOPPING = 'pov.head-hopping';
 const THEME_COHERENCE = 'theme.coherence';
+const UNMODELED_NAMES = 'roster.unmodeled-names';
 
 // A minimal valid stored custom-check definition.
 const customDef = (over = {}) => ({
@@ -910,6 +912,188 @@ describe('declaredThemesSummary (#1317)', () => {
   it('is type-guarded against hand-edited / older-peer rows and trims whitespace', () => {
     const out = declaredThemesSummary([42, null, '  identity  ', { x: 1 }]);
     expect(out.split('\n').filter((l) => l.startsWith('- '))).toEqual(['- identity']);
+  });
+});
+
+describe('roster.unmodeled-names — LLM check (#1412)', () => {
+  // The deterministic recurrence pass reads ctx.sections (one per issue), so a
+  // surfaced name's appearances are counted across the WHOLE manuscript — not just
+  // the chunk the model saw. `llmFinds` stubs the LLM to surface the given names.
+  const wholeCtx = (overrides = {}) => ({
+    manuscript: '# Issue 1\n\nMarguerite drew her sword as the bells of Veridia rang.',
+    config: { maxFindings: 12 },
+    severityDefault: 'low',
+    canon: { characters: [{ name: 'Robert', aliases: ['Bob'] }] },
+    sections: [{ number: 1, content: 'Marguerite drew her sword as the bells of Veridia rang.' }],
+    planManuscriptChunks: async () => ['# Issue 1\n\nMarguerite drew her sword.'],
+    callStagedLLM: async () => ({ content: { findings: [] } }),
+    ...overrides,
+  });
+  const llmFinds = (...names) => async () => ({
+    content: { findings: names.map((n) => ({ severity: 'low', issueNumber: 1, location: `Unmodeled character — "${n}"`, problem: `${n} is not in canon` })) },
+  });
+
+  it('is registered as a series-scoped LLM casting check reading manuscript + canon', () => {
+    const check = getCheck(UNMODELED_NAMES);
+    expect(check.kind).toBe('llm');
+    expect(check.scope).toBe('series');
+    expect(check.category).toBe('casting');
+    expect(check.sources).toEqual(['manuscript', 'canon']);
+    expect(check.needsManuscript).toBe(true);
+  });
+
+  it('runs whenever there is prose — even with an EMPTY canon (every name is unmodeled)', () => {
+    const check = getCheck(UNMODELED_NAMES);
+    expect(check.gate({ manuscript: '' })).toBe(false);
+    // Unlike roster.economy, it does NOT require a populated canon.
+    expect(check.gate({ manuscript: '# Issue 1\n\nprose', canon: { characters: [] } })).toBeTruthy();
+    expect(check.gate({ manuscript: '# Issue 1\n\nprose' })).toBeTruthy();
+  });
+
+  it('passes the manuscript + known-character roster to the model and forces the casting category', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      planManuscriptChunks: async (_stage, opts) => {
+        // The known-character roster rides as fixed overhead.
+        expect(opts.overheadTokens).toBeGreaterThan(0);
+        return ['# Issue 1\n\nMarguerite drew her sword.'];
+      },
+      callStagedLLM: async (_stage, vars) => {
+        seenVars = vars;
+        return { content: { findings: [{ severity: 'medium', issueNumber: 1, location: 'Unmodeled character — "Marguerite"', problem: 'Named but not in canon' }] } };
+      },
+    });
+    const findings = await getCheck(UNMODELED_NAMES).run(ctx);
+    expect(seenVars.manuscript).toBe('# Issue 1\n\nMarguerite drew her sword.');
+    expect(seenVars.knownCharacters).toContain('Robert');
+    expect(seenVars.knownCharacters).toContain('Bob');
+    expect(findings).toHaveLength(1);
+    expect(findings[0].category).toBe('casting');
+  });
+
+  it('passes an empty roster var when the canon has no characters', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      canon: { characters: [] },
+      callStagedLLM: async (_stage, vars) => { seenVars = vars; return { content: { findings: [] } }; },
+    });
+    await getCheck(UNMODELED_NAMES).run(ctx);
+    expect(seenVars.knownCharacters).toBe('');
+  });
+
+  it('relabels a one-appearance surfaced name as a low-severity throwaway', async () => {
+    const ctx = wholeCtx({
+      sections: [{ number: 1, content: 'Old Henrik nodded once and was never seen again.' }],
+      callStagedLLM: llmFinds('Old Henrik'),
+    });
+    const findings = await getCheck(UNMODELED_NAMES).run(ctx);
+    expect(findings).toHaveLength(1);
+    expect(findings[0].location).toBe('Throwaway name — "Old Henrik" (1 appearance)');
+    expect(findings[0].severity).toBe('low');
+    // problem/suggestion are authored deterministically (not the LLM's free text),
+    // so the frequency narrative can never contradict the label.
+    expect(findings[0].problem).toContain('only one issue');
+    expect(findings[0].suggestion).toContain('recast them as an unnamed description');
+  });
+
+  it('counts appearances across ALL sections (not just the seen chunk) and labels a recurring name medium', async () => {
+    // Marguerite appears in issues 1 and 3 — the deterministic pass must see both,
+    // so a chunk that only showed issue 3 can't mislabel her a one-appearance throwaway.
+    const ctx = wholeCtx({
+      sections: [
+        { number: 1, content: 'Marguerite drew her sword.' },
+        { number: 2, content: 'A quiet interlude with no new names.' },
+        { number: 3, content: 'Marguerite returned to the war room.' },
+      ],
+      callStagedLLM: llmFinds('Marguerite'),
+    });
+    const findings = await getCheck(UNMODELED_NAMES).run(ctx);
+    expect(findings).toHaveLength(1);
+    expect(findings[0].location).toBe('Unmodeled character — "Marguerite" (2 issues)');
+    expect(findings[0].severity).toBe('medium');
+    expect(findings[0].problem).toContain('across 2 issues');
+    expect(findings[0].suggestion).toContain('add "Marguerite" to canon');
+  });
+
+  it('authors problem/suggestion deterministically — a contradicting LLM frequency claim cannot survive', async () => {
+    // The model (wrongly) calls a recurring name a one-off in its free text. Because
+    // the post-pass OWNS problem/suggestion (it doesn't append to the model's text),
+    // the recurring verdict + count win and the false "appears only once" never shows.
+    const ctx = wholeCtx({
+      sections: [
+        { number: 1, content: 'Marguerite drew her sword.' },
+        { number: 2, content: 'Marguerite returned to the war room.' },
+      ],
+      callStagedLLM: async () => ({ content: { findings: [{
+        severity: 'low', issueNumber: 1, location: 'Unmodeled character — "Marguerite"',
+        problem: 'Marguerite appears only once and should be cut.',
+        suggestion: 'Recast Marguerite as an unnamed description.',
+      }] } }),
+    });
+    const findings = await getCheck(UNMODELED_NAMES).run(ctx);
+    expect(findings).toHaveLength(1);
+    expect(findings[0].location).toBe('Unmodeled character — "Marguerite" (2 issues)');
+    expect(findings[0].problem).not.toContain('only once');
+    expect(findings[0].problem).toContain('across 2 issues');
+    expect(findings[0].suggestion).not.toContain('unnamed description');
+  });
+
+  it('collapses the same surfaced name reported from two different chunks into one finding', async () => {
+    const ctx = wholeCtx({
+      sections: [
+        { number: 1, content: 'Marguerite drew her sword.' },
+        { number: 2, content: 'Marguerite sheathed it again.' },
+      ],
+      // Two chunks each surface Marguerite — the dedupe keeps one.
+      callStagedLLM: llmFinds('Marguerite', 'Marguerite'),
+    });
+    const findings = await getCheck(UNMODELED_NAMES).run(ctx);
+    expect(findings).toHaveLength(1);
+    expect(findings[0].location).toBe('Unmodeled character — "Marguerite" (2 issues)');
+  });
+
+  it('drops malformed findings — no quoted name, or a quoted name absent from the prose', async () => {
+    const ctx = wholeCtx({
+      sections: [{ number: 1, content: 'Nothing matching here.' }],
+      callStagedLLM: async () => ({ content: { findings: [
+        // Quote-less ⇒ can't verify the name against the prose, and we won't pass the
+        // model's un-vetted text through ⇒ dropped.
+        { severity: 'low', issueNumber: 1, location: 'General note (no quoted name)', problem: 'malformed, appears only once' },
+        // Quoted but matches 0 sections (garbled token) ⇒ dropped.
+        { severity: 'low', issueNumber: 1, location: 'Unmodeled character — "Ghostname"', problem: 'not actually in prose' },
+      ] } }),
+    });
+    const findings = await getCheck(UNMODELED_NAMES).run(ctx);
+    expect(findings).toEqual([]);
+  });
+});
+
+describe('canonRosterNamesSummary (#1412)', () => {
+  it('returns an empty string when there are no usable canon names', () => {
+    expect(canonRosterNamesSummary(null)).toBe('');
+    expect(canonRosterNamesSummary(undefined)).toBe('');
+    expect(canonRosterNamesSummary({ characters: [] })).toBe('');
+    expect(canonRosterNamesSummary({ characters: [{ name: '   ' }, { aliases: ['x'] }] })).toBe('');
+  });
+
+  it('renders one bullet per character with aliases appended', () => {
+    const out = canonRosterNamesSummary({ characters: [
+      { name: 'Robert', aliases: ['Bob', 'Bobby'] },
+      { name: 'Alice' },
+    ] });
+    expect(out).toContain('do NOT flag these');
+    expect(out).toContain('- Robert (also: Bob, Bobby)');
+    expect(out).toContain('- Alice');
+  });
+
+  it('is type-guarded against hand-edited / older-peer rows and de-dups name vs alias', () => {
+    const out = canonRosterNamesSummary({ characters: [
+      42,
+      null,
+      { name: '  Henrik  ', aliases: ['Henrik', '  ', 7] },
+    ] });
+    // Name trimmed; the alias equal to the name is de-duped, blanks/non-strings dropped.
+    expect(out.split('\n').filter((l) => l.startsWith('- '))).toEqual(['- Henrik']);
   });
 });
 

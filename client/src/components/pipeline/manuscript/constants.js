@@ -41,6 +41,9 @@ export const CATEGORY_LABEL = {
   // Theme-coherence findings (#1317): stated-but-undramatized / dropped / unpaid
   // themes and emergent-theme suggestions from the theme.coherence check.
   theme: 'Theme',
+  // Casting findings (#1292/#1312/#1412): roster economy / throwaway names, cast
+  // representation balance, and unmodeled proper nouns used as character names.
+  casting: 'Casting',
   pacing: 'Pacing',
   continuity: 'Continuity',
   style: 'Style',

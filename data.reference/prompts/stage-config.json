@@ -638,6 +638,13 @@
       "model": "default",
       "returnsJson": true,
       "variables": []
+    },
+    "pipeline-editorial-unmodeled-names": {
+      "name": "Pipeline — Editorial Check: Unmodeled proper nouns used as character names",
+      "description": "Editorial check (#1412): the LLM-assisted half of roster economy (#1292). Surfaces capitalized proper nouns used as apparent CHARACTER names that are ABSENT from the story bible (canon.characters names + aliases), and classifies each (named person vs. place / organization / brand / honorific the deterministic roster.economy scan can't distinguish). Flags throwaway one-appearance unmodeled names, suggesting adding them to canon or leaving them unnamed. Reads the stitched manuscript plus the canon roster; treats an empty bible as every named proper noun being a candidate. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
     }
   }
 }

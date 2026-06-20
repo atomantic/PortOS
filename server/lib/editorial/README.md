@@ -26,9 +26,24 @@ template change). The digest body is capped (`EDITORIAL_PRIOR_DIGEST_CHARS`) and
 `usableChars` budget, and the digest is prepended only when it fits the chunk's
 spare room — so it never displaces manuscript text or overflows the provider
 window (a chunk packed to the budget just runs without a digest).
-`style.conformance` (tense/POV established earlier) and
-`objects.unmotivated-interaction` (setup/payoff across chapters) opt in;
-`prose.info-dumping` stays per-chunk (its problems are localized).
+`style.conformance` (tense/POV established earlier),
+`objects.unmotivated-interaction` (setup/payoff across chapters), and
+`roster.unmodeled-names` (so a later part doesn't re-describe an unmodeled name an
+earlier part already surfaced) opt in; `prose.info-dumping` stays per-chunk (its
+problems are localized).
+
+`roster.unmodeled-names` also shows the LLM/deterministic split that keeps a
+chunked judgment correct: the model does ONLY what it alone can — surface a proper
+noun used as a character name and confirm it's a person (not a place/org/brand/
+honorific). A deterministic post-pass in `run()` then counts each surfaced name's
+distinct-issue appearances across the WHOLE `ctx.sections` corpus and **authors the
+final `location` / `problem` / `suggestion` / severity itself** from that count
+(keeping only the model's `anchorQuote` + `issueNumber`). It does NOT append to the
+model's free text — owning the frequency narrative outright means a stray model
+claim ("appears only once") can't contradict the deterministic verdict. Recurrence
+is a whole-corpus count the model can't make per-chunk (a name in issues 1 and 12
+looks like a one-off to whichever chunk sees it), so it never trusts the model for
+it; a surfaced name the matcher can't find in any section is dropped, not reported.
 
 The findings digest carries prior *problems* forward but not clean prior *setup*
 — a payoff in a later chunk can be mis-flagged "missing setup" when the earlier
