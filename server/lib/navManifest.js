@@ -78,6 +78,7 @@ export const NAV_COMMANDS = [
   { id: 'nav.cos.learning', path: '/cos/learning', label: 'Learning', section: 'Chief of Staff', aliases: ['cos-learning'] },
   { id: 'nav.cos.memory', path: '/cos/memory', label: 'Memory', section: 'Chief of Staff', aliases: ['cos-memory'] },
   { id: 'nav.cos.schedule', path: '/cos/schedule', label: 'Schedule', section: 'Chief of Staff', aliases: ['schedule', 'cos-schedule'] },
+  { id: 'nav.social-agents', path: '/agents', label: 'Social Agents', section: 'Chief of Staff', aliases: ['social-agents'] },
   // Note: `pipeline` is intentionally NOT an alias here — that token now
   // resolves to the dedicated /pipeline page (nav.create.pipeline). CoS still
   // surfaces "task pipeline" via the `pipeline` keyword in the palette.
@@ -89,7 +90,6 @@ export const NAV_COMMANDS = [
   { id: 'nav.messages.config', path: '/messages/config', label: 'Config', section: 'Brain', aliases: ['messages-config'] },
   { id: 'nav.messages.sync', path: '/messages/sync', label: 'Sync', section: 'Brain', aliases: ['messages-sync'] },
   { id: 'nav.openclaw', path: '/openclaw', label: 'OpenClaw', section: 'Brain', aliases: ['openclaw'] },
-  { id: 'nav.social-agents', path: '/agents', label: 'Social Agents', section: 'Brain', aliases: ['social-agents'] },
   { id: 'nav.tribe', path: '/tribe', label: 'Tribe', section: 'Brain', aliases: ['tribe', 'relationships', 'relationship-manager', 'people'], keywords: ['dunbar', 'friends', 'family', 'network', 'social graph', 'care cadence'] },
 
   { id: 'nav.devtools.runs', path: '/devtools/runs', label: 'AI Runs', section: 'Dev Tools', aliases: ['ai-runs', 'devtools'] },
