@@ -1217,31 +1217,41 @@ function formatRelativeTime(timestamp) {
   return 'just now';
 }
 
+// Short human-readable blurb per task type, shown in the schedule UI's
+// upcoming-tasks list. Every entry in SELF_IMPROVEMENT_TASK_TYPES must have a
+// key here — a missing one falls back to a dasherized label ("claim work"),
+// which reads as an orphaned/legacy task. A parity guard in taskSchedule.test.js
+// fails the suite if the two ever drift apart.
+export const TASK_TYPE_DESCRIPTIONS = {
+  'ui-bugs': 'Find and fix UI bugs',
+  'mobile-responsive': 'Check mobile responsiveness',
+  'security': 'Security vulnerability audit',
+  'code-quality': 'Code quality improvements',
+  'console-errors': 'Fix console errors',
+  'performance': 'Performance optimization',
+  'test-coverage': 'Improve test coverage',
+  'documentation': 'Update documentation',
+  'feature-ideas': 'Implement next planned feature or brainstorm new one',
+  'plan-task': 'Execute next PLAN.md item, remove it from PLAN.md, log to changelog (worktree+PR)',
+  'claim-issue': 'Claim and ship the next open GitHub issue (owner-filed or any author), PR closes it',
+  'claim-work': "Ship the next work item from the app's configured tracker (PLAN.md, GitHub/GitLab issues, or JIRA), routed automatically",
+  'accessibility': 'Accessibility audit',
+  'branch-cleanup': 'Clean up merged branches',
+  'dependency-updates': 'Update dependencies',
+  'release-check': 'Check for release readiness',
+  'error-handling': 'Improve error handling',
+  'typing': 'Improve TypeScript types',
+  'pr-reviewer': 'Review open PRs from contributors',
+  'pr-watcher': 'Run a custom prompt on PRs newly opened against the default branch',
+  'code-reviewer-a': 'Review the codebase and triage/implement findings (independent provider/model instance A)',
+  'code-reviewer-b': 'Review the codebase and triage/implement findings (independent provider/model instance B)',
+  'do-replan': 'Audit and prune PLAN.md after merges and branch cleanup so it reflects what actually shipped',
+  'jira-sprint-manager': 'Triage and implement JIRA sprint tickets',
+  'jira-status-report': 'Generate JIRA weekly status report',
+  'reference-watch': 'Watch reference repos and append PLAN.md items for new upstream work',
+  'refresh-local-llm-catalog': "Refresh PortOS's bundled suggested local-model catalog + editorial ranking (PortOS repo only)"
+};
+
 function getTaskTypeDescription(taskType) {
-  const descriptions = {
-    'ui-bugs': 'Find and fix UI bugs',
-    'mobile-responsive': 'Check mobile responsiveness',
-    'security': 'Security vulnerability audit',
-    'code-quality': 'Code quality improvements',
-    'console-errors': 'Fix console errors',
-    'performance': 'Performance optimization',
-    'test-coverage': 'Improve test coverage',
-    'documentation': 'Update documentation',
-    'feature-ideas': 'Implement next planned feature or brainstorm new one',
-    'plan-task': 'Execute next PLAN.md item, remove it from PLAN.md, log to changelog (worktree+PR)',
-    'claim-issue': 'Claim and ship the next open GitHub issue (owner-filed or any author), PR closes it',
-    'accessibility': 'Accessibility audit',
-    'branch-cleanup': 'Clean up merged branches',
-    'dependency-updates': 'Update dependencies',
-    'release-check': 'Check for release readiness',
-    'error-handling': 'Improve error handling',
-    'typing': 'Improve TypeScript types',
-    'pr-reviewer': 'Review open PRs from contributors',
-    'pr-watcher': 'Run a custom prompt on PRs newly opened against the default branch',
-    'jira-sprint-manager': 'Triage and implement JIRA sprint tickets',
-    'jira-status-report': 'Generate JIRA weekly status report',
-    'reference-watch': 'Watch reference repos and append PLAN.md items for new upstream work',
-    'refresh-local-llm-catalog': "Refresh PortOS's bundled suggested local-model catalog + editorial ranking (PortOS repo only)"
-  };
-  return descriptions[taskType] || taskType.replace(/-/g, ' ');
+  return TASK_TYPE_DESCRIPTIONS[taskType] || taskType.replace(/-/g, ' ');
 }

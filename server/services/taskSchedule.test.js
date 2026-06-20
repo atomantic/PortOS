@@ -95,6 +95,7 @@ import {
   PROMPT_VERSIONS,
   DEFAULT_TASK_INTERVALS,
   MANAGED_AGENT_OPTIONS,
+  TASK_TYPE_DESCRIPTIONS,
   REFERENCE_WATCH_AUDITED_VERSION
 } from './taskSchedule.js'
 
@@ -165,6 +166,33 @@ describe('taskSchedule', () => {
       expect(SELF_IMPROVEMENT_TASK_TYPES).toContain('performance')
       expect(SELF_IMPROVEMENT_TASK_TYPES).toContain('dependency-updates')
       expect(SELF_IMPROVEMENT_TASK_TYPES).toContain('do-replan')
+    })
+  })
+
+  describe('TASK_TYPE_DESCRIPTIONS', () => {
+    // Guards against the "orphaned task" bug: a task type with no description
+    // entry falls back to a dasherized label ("claim work") in the schedule UI,
+    // which reads as a legacy leftover. Every scheduled task type must carry an
+    // explicit, human-readable blurb.
+    it('has an explicit description for every SELF_IMPROVEMENT_TASK_TYPES entry', () => {
+      const missing = SELF_IMPROVEMENT_TASK_TYPES.filter(
+        (t) => !Object.prototype.hasOwnProperty.call(TASK_TYPE_DESCRIPTIONS, t)
+      )
+      expect(missing).toEqual([])
+    })
+
+    it('has no description keys that are not real task types', () => {
+      const orphaned = Object.keys(TASK_TYPE_DESCRIPTIONS).filter(
+        (t) => !SELF_IMPROVEMENT_TASK_TYPES.includes(t)
+      )
+      expect(orphaned).toEqual([])
+    })
+
+    it('every description is a non-empty string', () => {
+      for (const [taskType, desc] of Object.entries(TASK_TYPE_DESCRIPTIONS)) {
+        expect(typeof desc, taskType).toBe('string')
+        expect(desc.trim().length, taskType).toBeGreaterThan(0)
+      }
     })
   })
 
