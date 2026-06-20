@@ -366,6 +366,21 @@ describe('requiredScriptStages / scriptStructurallyReady', () => {
     expect(requiredScriptStages({})).toEqual(['comicScript', 'teleplay']);
   });
 
+  it('restricts a comic+tv series to one format via options.targetFormats', () => {
+    const series = { targetFormat: 'comic+tv' };
+    expect(requiredScriptStages(series, { targetFormats: ['comic'] })).toEqual(['comicScript']);
+    expect(requiredScriptStages(series, { targetFormats: ['tv'] })).toEqual(['teleplay']);
+    expect(requiredScriptStages(series, { targetFormats: ['comic', 'tv'] })).toEqual(['comicScript', 'teleplay']);
+  });
+
+  it('ignores a restriction the series cannot satisfy (never strands the run with zero scripts)', () => {
+    // A comic-only series asked to produce tv-only falls back to its own format.
+    expect(requiredScriptStages({ targetFormat: 'comic' }, { targetFormats: ['tv'] })).toEqual(['comicScript']);
+    // Empty / non-array restrictions are no-ops.
+    expect(requiredScriptStages({ targetFormat: 'comic+tv' }, { targetFormats: [] })).toEqual(['comicScript', 'teleplay']);
+    expect(requiredScriptStages({ targetFormat: 'comic+tv' }, {})).toEqual(['comicScript', 'teleplay']);
+  });
+
   it('passes a parseable comic script and fails an unparseable one', () => {
     expect(scriptStructurallyReady({ stages: { comicScript: ready(VALID_SCRIPT) } })).toBe(true);
     expect(scriptStructurallyReady({ stages: { comicScript: ready('just some prose, no pages') } })).toBe(false);

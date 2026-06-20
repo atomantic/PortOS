@@ -11,12 +11,12 @@ import { runStagedLLM } from '../../../lib/stageRunner.js';
 import { ServerError } from '../../../lib/errorHandler.js';
 import { stripAnsi } from '../../../lib/ansiStrip.js';
 import { ARC_LOCKABLE_FIELDS, getSeries, updateSeries } from '../series.js';
-import { listIssues, recomputeIssueNumbersForSeries, updateIssue } from '../issues.js';
+import { listIssues, recomputeIssueNumbersForSeries, updateIssue, updateStageWithLatest } from '../issues.js';
 import { emitRecordUpdated, withReexportSuppressed } from '../../sharing/recordEvents.js';
 import { getSeason } from '../seasons.js';
 import { READER_MAP_BEAT_KINDS, buildSeason, cleanThemes, renderArcShapeGuidance, renderArcShapePositionSummary, sanitizeArc, sanitizeReaderMap, sanitizeSeason, sanitizeSeasonList } from '../../../lib/storyArc.js';
 import { runPromptRefineRaw, trimChanges } from '../refineHelpers.js';
-import { ERR_VALIDATION, SHAPE_GUIDANCE_NONE, appendTickingClock, buildArcBaseContext, buildArcOverviewContext, buildNeighborVolumes, buildReaderMapContext, buildResolveContext, buildVerifyContext, compareIssuesByPosition, makeErr, renderVolumeIssue, resolveWorldContext, shapeFindings, shapeSeasonOutlines, shapeVerifyIssues } from './context.js';
+import { ERR_VALIDATION, SHAPE_GUIDANCE_NONE, appendTickingClock, buildArcBaseContext, buildArcOverviewContext, buildNeighborVolumes, buildReaderMapContext, buildResolveContext, buildVerifyContext, compareIssuesByPosition, makeErr, renderVolumeIssue, resolveWorldContext, shapeEpisodeResolutions, shapeFindings, shapeSeasonOutlines, shapeVerifyIssues } from './context.js';
 
 export async function generateArcOverview(seriesId, options = {}) {
   const series = await getSeries(seriesId);
@@ -427,16 +427,84 @@ export async function resolveVerifyIssues(seriesId, options = {}) {
 
   const { series: updated } = await commitSeasonsWithRemap(series, { arc, seasons });
 
+  // Apply any episode-level synopsis corrections the resolver returned. This is
+  // the heal capability that lets episode-scoped findings converge: when a
+  // contradiction originates inside one episode's planning synopsis (e.g. it
+  // stages an event a later volume reserves as its own "first"), the only fix is
+  // to rewrite that episode — the volume/arc layer can't make it go away. Done
+  // here (after the arc+season commit) against the freshest issue set.
+  const episodesResolved = await applyEpisodeResolutions(
+    seriesId,
+    updated,
+    shapeEpisodeResolutions(content?.episodes),
+  );
+
   const notes = typeof content?.notes === 'string' ? content.notes.trim().slice(0, 2000) : '';
   return {
     series: updated,
     applied: true,
     notes,
     findings,
+    episodesResolved,
     runId,
     providerId,
     model,
   };
+}
+
+/**
+ * Apply the auto-resolve pass's episode-synopsis corrections to the canonical
+ * issue records. Each correction targets one issue by its series-global episode
+ * number (with `seasonNumber` as a disambiguating cross-check). Writes the new
+ * synopsis to the issue's `idea.input` seed. If that issue already has expanded
+ * beats (`idea.output`) — only possible on a resume where beats ran in a prior
+ * pass — they are cleared and the stage reset to `empty` so the beat-sheet step
+ * regenerates them from the corrected synopsis instead of leaving stale beats
+ * that still encode the contradiction.
+ *
+ * A locked `idea` stage is left untouched (the user froze it) and reported as
+ * skipped. Returns `[{ issueId, number, seasonNumber, clearedBeats, skipped }]`
+ * for the conductor to surface; never throws — a bad match is dropped, not fatal.
+ */
+export async function applyEpisodeResolutions(seriesId, series, episodes) {
+  if (!Array.isArray(episodes) || episodes.length === 0) return [];
+  const issues = await listIssues({ seriesId });
+  const seasonIdByNumber = new Map(
+    (series?.seasons || []).filter((s) => Number.isInteger(s?.number)).map((s) => [s.number, s.id]),
+  );
+  const applied = [];
+  for (const edit of episodes) {
+    const wantSeasonId = edit.seasonNumber != null ? seasonIdByNumber.get(edit.seasonNumber) : null;
+    // Prefer an issue that matches BOTH season and number; fall back to the
+    // series-global number alone (issue numbers are unique across the series).
+    const issue = issues.find((i) => i.number === edit.episodeNumber && (!wantSeasonId || i.seasonId === wantSeasonId))
+      || issues.find((i) => i.number === edit.episodeNumber);
+    if (!issue) {
+      // A correction we can't land is a silent path to non-convergence — log it
+      // so a number-scheme mismatch (per-season vs series-global) is diagnosable.
+      console.log(`⚠️ arc-resolve: no issue matched episode correction (season ${edit.seasonNumber}, episode ${edit.episodeNumber})`);
+      applied.push({ seasonNumber: edit.seasonNumber, episodeNumber: edit.episodeNumber, skipped: 'no-match' });
+      continue;
+    }
+    if (issue.stages?.idea?.locked === true) {
+      applied.push({ issueId: issue.id, number: issue.number, seasonNumber: edit.seasonNumber, skipped: 'locked' });
+      continue;
+    }
+    const hadBeats = !!(issue.stages?.idea?.output && issue.stages.idea.output.trim());
+    await updateStageWithLatest(issue.id, 'idea', (current) => (
+      hadBeats
+        ? { input: edit.synopsis, output: '', status: 'empty', errorMessage: '' }
+        : { input: edit.synopsis }
+    )).catch((err) => {
+      console.log(`⚠️ arc-resolve: episode ${edit.episodeNumber} synopsis edit failed: ${err.message}`);
+    });
+    applied.push({ issueId: issue.id, number: issue.number, seasonNumber: edit.seasonNumber, clearedBeats: hadBeats });
+  }
+  if (applied.length) {
+    const fixed = applied.filter((a) => !a.skipped).length;
+    console.log(`📝 arc-resolve: corrected ${fixed} episode synopsis(es) for series ${seriesId.slice(0, 12)}`);
+  }
+  return applied;
 }
 
 // Preserve per-field arc locks. When `currentSeries.locked.arcFields[k]` is

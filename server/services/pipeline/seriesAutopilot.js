@@ -168,11 +168,26 @@ const byNumber = (a, b) => (a?.number ?? 9999) - (b?.number ?? 9999);
 // from its targetFormat. prose is the intermediate source the scripts adapt
 // from — we gate on the final scripts so a script-first import (prose empty,
 // script authored) is already considered ready and never regenerated.
-export function requiredScriptStages(series) {
+export function requiredScriptStages(series, options = {}) {
   const fmt = series?.targetFormat || 'comic+tv';
-  if (fmt === 'comic') return ['comicScript'];
-  if (fmt === 'tv') return ['teleplay'];
-  return ['comicScript', 'teleplay'];
+  // Per-run format restriction: a multi-format (comic+tv) series can be driven
+  // to just one format's scripts in a single autopilot run — e.g. "produce the
+  // comic draft only, skip the 24 teleplays." `options.targetFormats` is a
+  // subset of ['comic','tv']; absent/empty means "all formats the series wants".
+  const restrict = Array.isArray(options?.targetFormats) && options.targetFormats.length
+    ? options.targetFormats
+    : null;
+  const wantComic = fmt.includes('comic') && (!restrict || restrict.includes('comic'));
+  const wantTv = fmt.includes('tv') && (!restrict || restrict.includes('tv'));
+  const stages = [];
+  if (wantComic) stages.push('comicScript');
+  if (wantTv) stages.push('teleplay');
+  // Never strand the run with zero required script stages (which would mark every
+  // issue text-ready with no script authored). If the restriction excludes
+  // everything this series supports, ignore it and fall back to the series' own
+  // formats.
+  if (stages.length === 0) return requiredScriptStages(series);
+  return stages;
 }
 
 export function isComicTarget(series) {
@@ -194,8 +209,8 @@ function orderedIssues(issues) {
   return [...(Array.isArray(issues) ? issues : [])].sort(compareIssuesByPosition);
 }
 
-function textReady(issue, series) {
-  return requiredScriptStages(series).every((stageId) => isStageReady(issue.stages?.[stageId]));
+function textReady(issue, series, options = {}) {
+  return requiredScriptStages(series, options).every((stageId) => isStageReady(issue.stages?.[stageId]));
 }
 
 // Structural script gate (pure): does the comic script parse into >=1 page with
@@ -294,7 +309,7 @@ export function resolveNextStep(series, issues, runState = {}, options = {}) {
   // STEP 4b — per-issue text stages (prose + required scripts).
   for (const issue of ordered) {
     if (setHas(runState.textAttempted, issue.id)) continue;
-    if (!textReady(issue, series)) {
+    if (!textReady(issue, series, options)) {
       return { kind: 'textStages', issueId: issue.id, reason: 'prose / scripts not ready' };
     }
   }
@@ -482,8 +497,12 @@ async function runArcVerify(seriesId, record) {
     // step can't overspend the daily cap mid-loop.
     const beforeResolve = await budgetPause();
     if (beforeResolve) return beforeResolve;
-    await resolveVerifyIssues(seriesId, { findings: blocking, ...providerOverrideOpts(record) });
+    const resolved = await resolveVerifyIssues(seriesId, { findings: blocking, ...providerOverrideOpts(record) });
     await recordDomainUsage('cos', { actions: 1 });
+    broadcast(seriesId, {
+      type: 'resolve:round', scope: 'arc', round,
+      episodesEdited: Array.isArray(resolved?.episodesResolved) ? resolved.episodesResolved.length : 0,
+    });
   }
   return {};
 }
@@ -516,7 +535,7 @@ async function runText(issueId, record) {
   // spend LLM calls populating the off-target script across every issue.
   const preIssue = await getIssue(issueId);
   const preSeries = await getSeries(preIssue.seriesId).catch(() => null);
-  const scripts = requiredScriptStages(preSeries);
+  const scripts = requiredScriptStages(preSeries, record.options);
   // Forward the run's provider/model override so prose + scripts honor it like
   // every other step (autoRunner threads these into generateStage).
   await autoRunner.startAutoRunTextStages(issueId, { force: false, scripts, ...providerIdOpts(record) });
@@ -530,8 +549,8 @@ async function runText(issueId, record) {
   // required stages landed and pause for review if they didn't.
   const issue = await getIssue(issueId);
   const series = await getSeries(issue.seriesId).catch(() => null);
-  if (!textReady(issue, series)) {
-    const missing = requiredScriptStages(series).filter((s) => !isStageReady(issue.stages?.[s]));
+  if (!textReady(issue, series, record.options)) {
+    const missing = requiredScriptStages(series, record.options).filter((s) => !isStageReady(issue.stages?.[s]));
     return {
       pause: true,
       reason: `text generation for issue ${issue.number ?? issueId} did not produce required stage(s): ${missing.join(', ')}`,
@@ -990,7 +1009,7 @@ function buildDryRunPlan(series, issues, options) {
   const beatsNeeded = seasons.filter((s) =>
     ordered.some((i) => i.seasonId === s.id && !isStageReady(i.stages?.idea))).length;
   if (beatsNeeded) plan.push({ kind: 'beatSheet', count: beatsNeeded });
-  const textNeeded = ordered.filter((i) => !textReady(i, series)).length;
+  const textNeeded = ordered.filter((i) => !textReady(i, series, options)).length;
   if (textNeeded) plan.push({ kind: 'textStages', count: textNeeded });
   if (isComicTarget(series)) plan.push({ kind: 'scriptVerify', count: ordered.length });
   const edRounds = Number.isInteger(options?.maxEditorialRounds) ? options.maxEditorialRounds : MAX_EDITORIAL_ROUNDS;

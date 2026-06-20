@@ -8,7 +8,7 @@
  */
 
 import { MANUSCRIPT_TYPES } from '../series.js';
-import { listIssues } from '../issues.js';
+import { listIssues, STAGE_INPUT_MAX } from '../issues.js';
 import { ARC_ROLES as ARC_ROLE_LIST, ARC_SHAPE_IDS, READER_MAP_BEAT_KINDS, buildSeason, renderArcShapeGuidance, renderTickingClock, sanitizeSeasonList } from '../../../lib/storyArc.js';
 import { composeStyleNotes } from '../../../lib/styleGuide.js';
 import { describeStructure, recommendStructure } from '../../../lib/seasonStructure.js';
@@ -487,6 +487,37 @@ export function shapeVerifyIssues(rawIssues) {
       problem: problem.slice(0, 2000),
       suggestion: typeof raw?.suggestion === 'string' ? raw.suggestion.trim().slice(0, 2000) : '',
     });
+  }
+  return out;
+}
+
+// Max episode-synopsis corrections an auto-resolve pass may apply in one round.
+// A bound (mirrors RESOLVE_FINDING_MAX) so a runaway LLM response can't rewrite
+// the entire episode lineup in a single convergence step.
+export const RESOLVE_EPISODE_MAX = 50;
+
+/**
+ * Shape the auto-resolve pass's optional `episodes[]` output — a SPARSE list of
+ * episode-synopsis corrections the resolver applies when a finding originates at
+ * the episode level (see pipeline-arc-resolve.md rule 8). Each entry must carry
+ * an integer `episodeNumber` and a non-empty `synopsis`; `seasonNumber` is
+ * optional disambiguation. Malformed entries are dropped so a partial response
+ * never throws.
+ */
+export function shapeEpisodeResolutions(rawEpisodes) {
+  if (!Array.isArray(rawEpisodes)) return [];
+  const out = [];
+  for (const raw of rawEpisodes) {
+    const synopsis = typeof raw?.synopsis === 'string' ? raw.synopsis.trim() : '';
+    const episodeNumber = Number(raw?.episodeNumber);
+    if (!synopsis || !Number.isInteger(episodeNumber)) continue;
+    const seasonNumberRaw = Number(raw?.seasonNumber);
+    out.push({
+      seasonNumber: Number.isInteger(seasonNumberRaw) ? seasonNumberRaw : null,
+      episodeNumber,
+      synopsis: synopsis.slice(0, STAGE_INPUT_MAX),
+    });
+    if (out.length >= RESOLVE_EPISODE_MAX) break;
   }
   return out;
 }
