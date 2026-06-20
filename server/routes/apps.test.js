@@ -311,6 +311,38 @@ describe('Apps Routes', () => {
       expect(appsService.updateApp).toHaveBeenCalled();
     });
 
+    it('persists a request mixing a distinct port (value-keyed) and a shared port (targeted) in one PUT', async () => {
+      // devUiPort is distinct (5556) so it goes through the value-keyed rewrite;
+      // apiPort/uiPort share 6000 so the uiPort edit goes through the targeted
+      // rewrite. Both writers run, the edit succeeds, and neither pass clobbers
+      // the other (their old-value sets are disjoint).
+      const mockApp = { id: 'app-001', name: 'App', type: 'node', repoPath: process.cwd(), apiPort: 6000, uiPort: 6000, devUiPort: 5556 };
+      appsService.getAppById.mockResolvedValue(mockApp);
+      streamingDetect.parseEcosystemFromPath.mockResolvedValue({
+        processes: [
+          { name: 'srv', ports: { api: 6000, ui: 6000 } },
+          { name: 'srv-ui', ports: { devUi: 5556 } }
+        ]
+      });
+      appsService.updateApp.mockResolvedValue({ ...mockApp, uiPort: 7000, devUiPort: 7001 });
+
+      const response = await request(app)
+        .put('/api/apps/app-001')
+        .send({ uiPort: 7000, devUiPort: 7001 });
+
+      expect(response.status).toBe(200);
+      // devUiPort (distinct) → value-keyed; uiPort (shared with api) → targeted.
+      expect(streamingDetect.writeEcosystemPorts).toHaveBeenCalledWith(
+        process.cwd(),
+        [[5556, 7001]]
+      );
+      expect(streamingDetect.writeEcosystemPortsByProcess).toHaveBeenCalledWith(
+        process.cwd(),
+        [{ processName: 'srv', label: 'ui', oldPort: 6000, newPort: 7000 }]
+      );
+      expect(appsService.updateApp).toHaveBeenCalled();
+    });
+
     it('rejects (422) a shared-value port change the targeted rewrite cannot apply', async () => {
       // Shared value, but the targeted rewrite finds no matching literal to
       // change (e.g. derived from a const the block doesn't contain) → 422.
