@@ -10,6 +10,7 @@ import ScenePreview from '../../creative-director/ScenePreview';
 import ModelSelect from '../../ModelSelect';
 import { useAsyncAction } from '../../../hooks/useAsyncAction';
 import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
+import { sceneShotWarnings } from '../../../lib/shotContinuity';
 
 // Monotonic snapshot: a poll is logically equivalent when the project's id,
 // updatedAt, and status all match. Including `id` guards against the restart
@@ -87,6 +88,20 @@ export default function EpisodeVideoStage({ issue, onStageUpdate }) {
   const cdProjectId = stage.cdProjectId || null;
   const storyboardScenes = issue.stages?.storyboards?.scenes || [];
   const usableScenes = storyboardScenes.filter((s) => (s?.description || '').trim().length > 0);
+
+  // Pre-render continuity gate (#1468): the same deterministic shot-continuity
+  // hazards (180°-rule axis jumps, shot-type monotony) the server
+  // `visual.shot-continuity` editorial check surfaces, aggregated across every
+  // scene's shot list so the user is warned before spending episode-render time.
+  // Soft gate — the warning surfaces below the Generate button (which stays
+  // enabled); the fix lives in the Storyboards stage's shot-grammar editor.
+  const continuityWarnings = useMemo(
+    () => storyboardScenes.flatMap((scene, i) => {
+      const sceneName = (scene?.slugline || scene?.heading || `Scene ${i + 1}`).trim() || `Scene ${i + 1}`;
+      return sceneShotWarnings(scene).map((w) => ({ ...w, scene: sceneName }));
+    }),
+    [storyboardScenes],
+  );
 
   const [confirmRestart, setConfirmRestart] = useState(false);
   // Initialize from the persisted stage values so a page reload (or a fresh
@@ -291,6 +306,18 @@ export default function EpisodeVideoStage({ issue, onStageUpdate }) {
               Ready to render {usableScenes.length} scene{usableScenes.length === 1 ? '' : 's'}. Each one becomes a short video clip; the first is text-to-video and every subsequent scene chains from the prior scene's last frame for visual continuity. Audio is disabled and scenes are auto-accepted (no LLM evaluator round-trip).
             </p>
           )}
+          {continuityWarnings.length > 0 ? (
+            <ul className="rounded border border-port-warning/30 bg-port-warning/5 px-2.5 py-1.5 space-y-0.5">
+              <li className="text-[11px] text-gray-400">
+                Shot-continuity check flagged {continuityWarnings.length} issue{continuityWarnings.length === 1 ? '' : 's'} — fix in the Storyboards stage before rendering to avoid wasted render time:
+              </li>
+              {continuityWarnings.map((w, i) => (
+                <li key={i} className="text-[11px] text-port-warning">
+                  ⚠ {w.scene}: {w.message}
+                </li>
+              ))}
+            </ul>
+          ) : null}
         </div>
       ) : (
         <div className="p-4 bg-port-card border border-port-border rounded-lg space-y-3">

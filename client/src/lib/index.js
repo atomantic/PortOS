@@ -10,6 +10,8 @@ export * from './personaTraitBlend.js';
 export * from './scenePrompt.js';
 export * from './seasonStructure.js';
 export * from './sheetPointers.js';
+export * from './shotContinuity.js';
+export * from './shotGrammar.js';
 export * from './universeRunTag.js';
 export * from './universeStylePreset.js';
 

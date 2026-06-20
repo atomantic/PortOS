@@ -19,6 +19,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Plus, Trash2, Sparkles, Loader2, Wand2, Film, WandSparkles, Shirt, Layers } from 'lucide-react';
 import toast from '../../ui/Toast';
+import { SHOT_TYPES, SCREEN_DIRECTIONS, SHOT_TYPE_LABELS, SCREEN_DIRECTION_LABELS } from '../../../lib/shotGrammar';
+import { sceneShotWarnings } from '../../../lib/shotContinuity';
 import {
   generatePipelineVisualImage,
   generatePipelineSceneVideo,
@@ -145,10 +147,20 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
     // screenDirection (#1315) were inferred from the OLD text and are now stale —
     // clear them to null ("not captured") so the deterministic visual.shot-continuity
     // check skips this shot rather than reporting an axis reversal that contradicts
-    // the new description. (A dedicated editor for these fields is tracked separately.)
+    // the new description. The user can re-set them explicitly via the shot-grammar
+    // selects below (setShotGrammar), which bypass this reset.
     const grammarReset = 'description' in patch ? { shotType: null, screenDirection: null } : {};
     updateShots(sceneIdx, (shots) => shots.map((sh, j) => j === shotIdx ? { ...sh, ...patch, ...grammarReset } : sh));
   };
+
+  // Shot-grammar selects (#1468) are discrete picks (no blur), so persist
+  // immediately — mirrors the wardrobe picker. Explicit user intent, so this
+  // path NEVER applies updateShot's description-driven grammar reset. An empty
+  // select value clears the field to null ("not captured"), which the
+  // visual.shot-continuity check reads as ABSENT (skips the shot).
+  const setShotGrammar = (sceneIdx, shotIdx, patch) =>
+    persist(updateShots(sceneIdx, (shots) =>
+      shots.map((sh, j) => j === shotIdx ? { ...sh, ...patch } : sh)));
 
   const handleRenderShot = async (sceneIdx, shotIdx) => {
     const shot = scenes[sceneIdx].shots[shotIdx];
@@ -519,6 +531,7 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
                 onAddShot={() => addShot(i)}
                 onRemoveShot={(j) => removeShot(i, j)}
                 onUpdateShot={(j, patch) => updateShot(i, j, patch)}
+                onSetShotGrammar={(j, patch) => setShotGrammar(i, j, patch)}
                 onBlurShot={() => persist(scenes)}
                 onRenderShot={(j) => handleRenderShot(i, j)}
               />
@@ -532,9 +545,16 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
 
 function ShotList({
   sceneIdx, shots, renderingShots, actionsGated,
-  onAddShot, onRemoveShot, onUpdateShot, onBlurShot, onRenderShot,
+  onAddShot, onRemoveShot, onUpdateShot, onSetShotGrammar, onBlurShot, onRenderShot,
 }) {
   const hasShots = shots.length > 0;
+  // Inline pre-render continuity warnings (#1468): the same hazards the server
+  // `visual.shot-continuity` editorial check surfaces, computed here from the
+  // shots' shotType / screenDirection / continuityFromShotId so the user sees a
+  // 180°-axis jump or shot-type monotony BEFORE spending render time — without a
+  // round-trip through an editorial-checks run. Mirrors the inline lettering
+  // warning pattern (#1313) in ComicScriptStage.
+  const continuityWarnings = useMemo(() => sceneShotWarnings({ shots }), [shots]);
   return (
     <div className="mt-3 pt-3 border-t border-port-border/60">
       <div className="flex items-center justify-between mb-2">
@@ -549,6 +569,15 @@ function ShotList({
           <Plus size={11} /> Add shot
         </button>
       </div>
+      {continuityWarnings.length > 0 ? (
+        <ul className="mb-2 rounded border border-port-warning/30 bg-port-warning/5 px-2.5 py-1.5 space-y-0.5">
+          {continuityWarnings.map((w, i) => (
+            <li key={i} className="text-[11px] text-port-warning">
+              ⚠ Continuity — {w.message}
+            </li>
+          ))}
+        </ul>
+      ) : null}
       {hasShots ? (
         <ul className="space-y-2">
           {shots.map((shot, j) => {
@@ -556,15 +585,49 @@ function ShotList({
             return (
               <li key={shot.id || j} className="flex items-start gap-2 p-2 bg-port-bg/40 border border-port-border/60 rounded">
                 <span className="text-[10px] text-gray-500 font-mono pt-1.5 w-6">{j + 1}</span>
-                <textarea
-                  value={shot.description || ''}
-                  onChange={(e) => onUpdateShot(j, { description: e.target.value })}
-                  onBlur={onBlurShot}
-                  placeholder="One camera setup. Subject + framing + motion + mood."
-                  rows={2}
-                  className="flex-1 px-2 py-1 bg-port-bg border border-port-border rounded text-white text-xs"
-                  maxLength={4000}
-                />
+                <div className="flex-1 flex flex-col gap-1">
+                  <textarea
+                    value={shot.description || ''}
+                    onChange={(e) => onUpdateShot(j, { description: e.target.value })}
+                    onBlur={onBlurShot}
+                    placeholder="One camera setup. Subject + framing + motion + mood."
+                    rows={2}
+                    className="px-2 py-1 bg-port-bg border border-port-border rounded text-white text-xs"
+                    maxLength={4000}
+                  />
+                  {/* Shot-grammar editor (#1468): set/correct the film-grammar
+                      fields the visual.shot-continuity check reads. Discrete
+                      picks persist immediately and skip the description-driven
+                      reset. '' = clear to "not captured" (skipped by the check). */}
+                  <div className="flex gap-1">
+                    <select
+                      value={shot.shotType || ''}
+                      onChange={(e) => onSetShotGrammar(j, { shotType: e.target.value || null })}
+                      disabled={actionsGated}
+                      aria-label={`Shot ${j + 1} framing`}
+                      title="Camera framing — feeds the shot-type variety check"
+                      className="flex-1 min-w-0 px-1.5 py-1 bg-port-bg border border-port-border rounded text-gray-300 text-[10px] disabled:opacity-50"
+                    >
+                      <option value="">— framing —</option>
+                      {SHOT_TYPES.map((t) => (
+                        <option key={t} value={t}>{SHOT_TYPE_LABELS[t] || t}</option>
+                      ))}
+                    </select>
+                    <select
+                      value={shot.screenDirection || ''}
+                      onChange={(e) => onSetShotGrammar(j, { screenDirection: e.target.value || null })}
+                      disabled={actionsGated}
+                      aria-label={`Shot ${j + 1} screen direction`}
+                      title="Which way the subject faces / moves — feeds the 180°-rule axis check"
+                      className="flex-1 min-w-0 px-1.5 py-1 bg-port-bg border border-port-border rounded text-gray-300 text-[10px] disabled:opacity-50"
+                    >
+                      <option value="">— direction —</option>
+                      {SCREEN_DIRECTIONS.map((d) => (
+                        <option key={d} value={d}>{SCREEN_DIRECTION_LABELS[d] || d}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
                 <div className="flex flex-col gap-1 w-24">
                   <input
                     type="number"
