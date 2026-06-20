@@ -356,6 +356,43 @@ describe('Apps Routes', () => {
       expect(appsService.updateApp).not.toHaveBeenCalled();
     });
 
+    it('rejects (422) a change to a derived uiPort (prod UI served by the API, no literal ui port)', async () => {
+      // App has an API process + Vite dev UI but no literal ports.ui, so the
+      // displayed uiPort is derived (= apiPort). Changing it can't persist —
+      // the user must change the API port instead → 422, config untouched.
+      const mockApp = { id: 'app-001', name: 'App', type: 'node', repoPath: process.cwd(), apiPort: 6000, uiPort: 6000, devUiPort: 5556 };
+      appsService.getAppById.mockResolvedValue(mockApp);
+      // Parser yields api + devUi only; ui is derived from api (served-by-API).
+      streamingDetect.parseEcosystemFromPath.mockResolvedValue({
+        processes: [{ name: 'srv', ports: { api: 6000, devUi: 5556 } }]
+      });
+
+      const response = await request(app).put('/api/apps/app-001').send({ uiPort: 7000 });
+
+      expect(response.status).toBe(422);
+      expect(streamingDetect.writeEcosystemPortEdits).not.toHaveBeenCalled();
+      expect(appsService.updateApp).not.toHaveBeenCalled();
+    });
+
+    it('does not reject when a rename echoes the derived uiPort unchanged (served-by-API)', async () => {
+      // Same served-by-API shape, but the modal echoes the derived uiPort (6000)
+      // unchanged on a rename — a no-op that must NOT 422.
+      const mockApp = { id: 'app-001', name: 'App', type: 'node', repoPath: process.cwd(), apiPort: 6000, uiPort: 6000, devUiPort: 5556 };
+      appsService.getAppById.mockResolvedValue(mockApp);
+      streamingDetect.parseEcosystemFromPath.mockResolvedValue({
+        processes: [{ name: 'srv', ports: { api: 6000, devUi: 5556 } }]
+      });
+      appsService.updateApp.mockResolvedValue({ ...mockApp, name: 'Renamed' });
+
+      const response = await request(app)
+        .put('/api/apps/app-001')
+        .send({ name: 'Renamed', uiPort: 6000 });
+
+      expect(response.status).toBe(200);
+      expect(streamingDetect.writeEcosystemPortEdits).not.toHaveBeenCalled();
+      expect(appsService.updateApp).toHaveBeenCalled();
+    });
+
     it('does not reject a non-port edit on an app whose top-level ports are not stored (derived)', async () => {
       // apps.json has no apiPort/uiPort (derived from processes); a rename
       // submits the echoed display values. Those must not read as port changes.

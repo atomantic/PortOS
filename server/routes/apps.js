@@ -508,6 +508,21 @@ router.put('/:id', asyncHandler(async (req, res, next) => {
     // literal to rewrite, so it isn't treated as a config edit here.
     const changedKeys = PORT_KEYS.filter(key =>
       Number.isInteger(currentPort[key]) && Number.isInteger(data[key]) && data[key] !== currentPort[key]);
+
+    // Derived-uiPort guard. When an app has an API process plus a Vite dev UI
+    // but no literal `ports.ui`, the prod UI is served by the API and the
+    // displayed `uiPort` is *derived* (= apiPort). There's no independent ui
+    // literal to rewrite, so a uiPort edit to anything OTHER than that derived
+    // value can't persist — the modal echoes the derived value unchanged on a
+    // rename (a no-op), but a genuine change must be rejected rather than
+    // silently stored in apps.json only to revert on the next config refresh.
+    // The user changes this port by editing the API port instead.
+    const derivedUiPort = deriveUiPort(currentPort.uiPort, currentPort.apiPort, currentPort.devUiPort);
+    const derivedUiChangeRejected =
+      currentPort.uiPort === undefined &&
+      Number.isInteger(derivedUiPort) &&
+      Number.isInteger(data.uiPort) &&
+      data.uiPort !== derivedUiPort;
     const remap = [];
     const targetedEdits = []; // shared-value keys: rewritten by process + label
     for (const key of changedKeys) {
@@ -520,6 +535,17 @@ router.put('/:id', asyncHandler(async (req, res, next) => {
         continue;
       }
       remap.push([oldPort, data[key]]);
+    }
+
+    // Reject a derived-uiPort change before touching the config (it has no
+    // literal to write — the user must change the API port). Doing this first
+    // keeps the rejected request from persisting any OTHER port edit in the
+    // same PUT.
+    if (derivedUiChangeRejected) {
+      throw new ServerError(
+        `Cannot change ${existing.name}'s UI port directly — its prod UI is served by the API server, so the UI port follows the API port. Change the API port instead.`,
+        { status: 422, code: 'PORT_NOT_PERSISTABLE' }
+      );
     }
 
     // Persist the value-keyed remap (distinct ports) and the targeted edits
