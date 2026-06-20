@@ -2590,6 +2590,67 @@ describe('objects.backstory-consistency — LLM check (#1288)', () => {
   });
 });
 
+describe('visual.eyeline-match — LLM check (#1466)', () => {
+  const sceneEntry = (issueNumber, scene) => ({ issueNumber, scene });
+  // A comparable scene: two characters whose gaze does not reciprocate.
+  const comparableScenes = () => [
+    sceneEntry(4, {
+      heading: 'INT. KITCHEN',
+      shots: [
+        { id: 'shot-01', shotType: 'medium', screenDirection: 'right', description: 'Anna faces Ben, looking screen-right' },
+        { id: 'shot-02', shotType: 'medium', screenDirection: 'right', continuityFromShotId: 'shot-01', description: 'Ben answers Anna but also looks screen-right' },
+      ],
+    }),
+  ];
+
+  it('gates on whether any scene has two-or-more described shots to compare', () => {
+    const check = getCheck('visual.eyeline-match');
+    expect(check.gate({ storyboardScenes: comparableScenes() })).toBe(true);
+    // A single described shot → nothing to match an eyeline across.
+    expect(check.gate({ storyboardScenes: [sceneEntry(1, { heading: 'A', shots: [{ id: 's1', description: 'alone' }] })] })).toBe(false);
+    expect(check.gate({ storyboardScenes: [] })).toBe(false);
+    expect(check.gate({ storyboardScenes: null })).toBe(false);
+  });
+
+  it('feeds the rendered shot block to the model and shapes findings (issue-anchored)', async () => {
+    let vars = null;
+    const findings = await getCheck('visual.eyeline-match').run({
+      storyboardScenes: comparableScenes(),
+      config: { maxFindings: 12 },
+      severityDefault: 'medium',
+      callStagedLLM: async (_stage, v) => {
+        vars = v;
+        return { content: { findings: [{
+          severity: 'high',
+          issueNumber: 4,
+          location: 'Issue 4 — INT. KITCHEN: shots shot-01 ↔ shot-02',
+          problem: 'Both characters look screen-right, so their eyelines do not reciprocate across the cut.',
+          suggestion: 'Flip shot-02 to screen-left so Ben looks back toward Anna.',
+          anchorQuote: 'also looks screen-right',
+        }] } };
+      },
+    });
+    expect(vars.shots).toContain('Scene 1 (Issue 4): INT. KITCHEN');
+    expect(vars.shots).toContain('shot-01');
+    expect(findings).toHaveLength(1);
+    expect(findings[0].category).toBe('continuity');
+    expect(findings[0].issueNumber).toBe(4);
+    expect(findings[0].severity).toBe('high');
+  });
+
+  it('returns no findings (and never calls the model) when no scene qualifies', async () => {
+    let called = false;
+    const findings = await getCheck('visual.eyeline-match').run({
+      storyboardScenes: [sceneEntry(1, { heading: 'A', shots: [{ id: 's1', description: 'alone' }] })],
+      config: {},
+      severityDefault: 'medium',
+      callStagedLLM: async () => { called = true; return { content: { findings: [] } }; },
+    });
+    expect(findings).toEqual([]);
+    expect(called).toBe(false);
+  });
+});
+
 describe('style.reading-level — deterministic check (#1303)', () => {
   const check = getCheck('style.reading-level');
   const run = (styleGuide, manuscript, config = {}) =>

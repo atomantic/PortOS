@@ -645,6 +645,13 @@
       "model": "default",
       "returnsJson": true,
       "variables": []
+    },
+    "pipeline-editorial-eyeline-match": {
+      "name": "Pipeline — Editorial Check: Storyboard eyeline match",
+      "description": "Editorial check (#1466): LLM scan of a scene's storyboard shot list for eyeline-match breaks — two characters in conversation whose gaze directions don't reciprocate across the cut, or a described eyeline that contradicts the shot's tagged screen direction. The judgment sibling of the deterministic visual.shot-continuity check; reads the per-issue storyboard shots (storyboard.shots). Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
     }
   }
 }

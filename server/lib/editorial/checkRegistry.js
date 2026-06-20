@@ -48,7 +48,7 @@ import {
   findRepeatedOpeners,
   measureSentenceRhythm,
 } from './repetition.js';
-import { findAxisReversals, findShotTypeMonotony } from './shotContinuity.js';
+import { findAxisReversals, findShotTypeMonotony, summarizeStoryboardShots } from './shotContinuity.js';
 
 export const CHECK_SCOPES = Object.freeze(['series', 'issue', 'scene', 'noun']);
 export const CHECK_KINDS = Object.freeze(['deterministic', 'llm']);
@@ -346,6 +346,18 @@ export function declaredThemesSummary(themes) {
 // `roster.economy` scan deliberately leaves alone (it can't tell a person from a
 // place/org/brand/honorific).
 export const UNMODELED_NAMES_STAGE = 'pipeline-editorial-unmodeled-names';
+
+// Stage name for the eyeline-match continuity LLM check (#1466). Ships in
+// data.reference/prompts/stages/ + stage-config.json (fresh installs via
+// setup-data.js) and migrates to existing installs via migration 117 (boot runs
+// migrations but NOT setup-data, so the migration is required). Reads the per-issue
+// storyboard shots (`ctx.storyboardScenes`, wired by #1315 — the same source the
+// deterministic `visual.shot-continuity` check reads) and asks the model to flag
+// eyeline-match breaks WITHIN a scene: two characters in conversation whose gaze
+// directions don't reciprocate across the cut, or a described eyeline that
+// contradicts the shot's screen direction. The judgment sibling the deterministic
+// 180°/shot-type scan deliberately leaves to an LLM (see shotContinuity.js).
+export const EYELINE_MATCH_STAGE = 'pipeline-editorial-eyeline-match';
 
 // Render the canon roster's names + aliases (#1412) into a compact text block the
 // unmodeled-names check passes alongside the manuscript, so the model knows which
@@ -2352,6 +2364,55 @@ export const EDITORIAL_CHECKS = [
         }
       }
       return findings;
+    },
+  },
+  {
+    id: 'visual.eyeline-match',
+    sources: ['storyboard.shots'],
+    label: 'Storyboard eyeline match (gaze continuity)',
+    description:
+      'LLM scan of a scene\'s storyboard shot list for eyeline-match breaks — two characters in conversation whose gaze directions don\'t reciprocate across the cut (both look the same way instead of toward each other), or a described eyeline that contradicts the shot\'s tagged screen direction. The judgment sibling of the deterministic visual.shot-continuity check (180° rule / shot-type variety): an eyeline match needs semantic reading of the free-text shot descriptions, not a vocabulary scan, so it runs an LLM over the per-issue storyboard shots. Anchors each finding to the offending shot pair.',
+    scope: 'scene',
+    kind: 'llm',
+    category: 'continuity',
+    severityDefault: 'medium',
+    defaultEnabled: true,
+    configSchema: z.object({
+      // Cap findings per run so a long storyboard can't flood the review.
+      maxFindings: z.number().int().min(1).max(50).default(12),
+    }),
+    configFields: [
+      {
+        key: 'maxFindings',
+        label: 'Max findings per run',
+        type: 'number',
+        min: 1,
+        max: 50,
+        step: 1,
+        help: 'Cap findings so a long storyboard can not flood the review.',
+      },
+    ],
+    // Skip the LLM call entirely unless at least one scene has two-or-more
+    // described shots to compare an eyeline across (mirrors the deterministic
+    // sibling's storyboardScenes gate, but tightened to "comparable" scenes —
+    // summarizeStoryboardShots returns '' when nothing qualifies).
+    gate: (ctx) => !!summarizeStoryboardShots(ctx.storyboardScenes),
+    run: async (ctx) => {
+      const shots = summarizeStoryboardShots(ctx.storyboardScenes);
+      if (!shots) return [];
+      const { content } = await ctx.callStagedLLM(
+        EYELINE_MATCH_STAGE,
+        { shots },
+        { returnsJson: true, source: EYELINE_MATCH_STAGE },
+      );
+      return mapLlmFindings(content?.findings, {
+        severityDefault: ctx.severityDefault,
+        category: 'continuity',
+        max: ctx.config?.maxFindings ?? 12,
+        // Storyboard scenes carry their source issue number (rendered into the
+        // block header), so a finding keeps the model-supplied issue anchor.
+        withIssueNumber: true,
+      });
     },
   },
   {
