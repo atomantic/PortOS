@@ -35,8 +35,13 @@ const clampRound = (n, fallback) => {
 };
 
 // A single convergence-round field for the Options popover. Allows '' mid-edit
-// (so the field can be cleared) and clamps + persists the chosen value on blur.
+// (so the field can be cleared) and clamps + persists the chosen value on blur —
+// but ONLY when the user actually changed it. A bare focus+blur (tabbing through
+// Options) must not persist the display fallback or mark the field dirty, or it
+// would clobber a saved limit before settings load and block the load from
+// applying it.
 function RoundInput({ id, label, settingKey, value, setValue, defaultValue, persist }) {
+  const dirtyRef = useRef(false);
   return (
     <div className="flex items-center gap-2">
       <label htmlFor={id} className="text-xs text-gray-300">{label}</label>
@@ -46,8 +51,10 @@ function RoundInput({ id, label, settingKey, value, setValue, defaultValue, pers
         min={ROUND_MIN}
         max={ROUND_MAX}
         value={value}
-        onChange={(e) => setValue(e.target.value === '' ? '' : Number(e.target.value))}
+        onChange={(e) => { dirtyRef.current = true; setValue(e.target.value === '' ? '' : Number(e.target.value)); }}
         onBlur={() => {
+          if (!dirtyRef.current) return; // untouched — don't persist/clamp/mark dirty
+          dirtyRef.current = false;
           const v = clampRound(value, defaultValue);
           setValue(v);
           persist({ [settingKey]: v });
