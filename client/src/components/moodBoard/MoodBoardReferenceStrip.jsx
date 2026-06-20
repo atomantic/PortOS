@@ -44,30 +44,30 @@ export default function MoodBoardReferenceStrip({ storageKey = 'create', classNa
     return () => { cancelled = true; };
   }, [expanded, boards]);
 
-  // Once we have the list, default the selection to the first board when the
-  // remembered id is gone (deleted board) or never set.
-  useEffect(() => {
-    if (!Array.isArray(boards) || boards.length === 0) return;
-    if (selectedId && boards.some((b) => b.id === selectedId)) return;
-    setSelectedId(boards[0].id);
-  }, [boards, selectedId]);
+  // The board actually shown: the user's pick when it's still in the list, else
+  // the first board. Derived (not state) so display drives off it immediately —
+  // no render tick where the <select> value matches no option (which would log
+  // a controlled-select warning and flash the empty state before an effect
+  // catches up). The remembered id is persisted only on an explicit pick.
+  const effectiveId = (Array.isArray(boards) && boards.length > 0)
+    ? ((selectedId && boards.some((b) => b.id === selectedId)) ? selectedId : boards[0].id)
+    : '';
 
-  // Fetch the selected board's full record (the list payload already carries
-  // items, but a board could be picked before the list loads on a remembered
-  // id; getMoodBoard guarantees the freshest items).
+  // Fetch the shown board's full record (the list payload already carries
+  // items, but getMoodBoard guarantees the freshest items).
   useEffect(() => {
-    if (!expanded || !selectedId) { setDetail(null); return undefined; }
+    if (!expanded || !effectiveId) { setDetail(null); return undefined; }
     // Fast path: the list entry already has items — show it immediately.
-    const fromList = Array.isArray(boards) ? boards.find((b) => b.id === selectedId) : null;
+    const fromList = Array.isArray(boards) ? boards.find((b) => b.id === effectiveId) : null;
     if (fromList && Array.isArray(fromList.items)) setDetail(fromList);
     let cancelled = false;
     setLoadingDetail(true);
-    getMoodBoard(selectedId, { silent: true }).then(
+    getMoodBoard(effectiveId, { silent: true }).then(
       (data) => { if (!cancelled && data) setDetail(data); },
       () => { /* keep the list fallback */ },
     ).finally(() => { if (!cancelled) setLoadingDetail(false); });
     return () => { cancelled = true; };
-  }, [expanded, selectedId, boards]);
+  }, [expanded, effectiveId, boards]);
 
   const handleSelect = useCallback((id) => {
     setSelectedId(id);
@@ -115,7 +115,7 @@ export default function MoodBoardReferenceStrip({ storageKey = 'create', classNa
                 <label htmlFor={`mb-ref-${storageKey}`} className="text-[11px] text-gray-500 shrink-0">Board</label>
                 <select
                   id={`mb-ref-${storageKey}`}
-                  value={selectedId}
+                  value={effectiveId}
                   onChange={(e) => handleSelect(e.target.value)}
                   className="flex-1 min-w-0 bg-port-card border border-port-border rounded px-2 py-1 text-[12px] text-white focus:outline-none focus:border-port-accent"
                 >
@@ -123,9 +123,9 @@ export default function MoodBoardReferenceStrip({ storageKey = 'create', classNa
                     <option key={b.id} value={b.id}>{b.name}</option>
                   ))}
                 </select>
-                {selectedId && (
+                {effectiveId && (
                   <a
-                    href={`/mood-boards/${encodeURIComponent(selectedId)}`}
+                    href={`/mood-boards/${encodeURIComponent(effectiveId)}`}
                     target="_blank"
                     rel="noopener noreferrer"
                     title="Open board in new tab"
@@ -146,7 +146,7 @@ export default function MoodBoardReferenceStrip({ storageKey = 'create', classNa
                   {thumbs.map((t) => (
                     <a
                       key={t.id}
-                      href={`/mood-boards/${encodeURIComponent(selectedId)}`}
+                      href={`/mood-boards/${encodeURIComponent(effectiveId)}`}
                       target="_blank"
                       rel="noopener noreferrer"
                       title={t.caption || 'Open board'}
