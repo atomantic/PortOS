@@ -5,6 +5,7 @@ import { MemoryRouter } from 'react-router-dom';
 vi.mock('../services/api', () => ({
   getLocalLlmStatus: vi.fn(),
   getLocalLlmCatalog: vi.fn(),
+  getLoadedLlmModels: vi.fn(),
   testLocalLlmModel: vi.fn(),
   streamLocalLlmTest: vi.fn(),
   compareLocalLlmModels: vi.fn(),
@@ -15,7 +16,7 @@ vi.mock('../components/ui/Toast', () => ({
 }));
 
 import LocalLlmPlayground from './LocalLlmPlayground';
-import { getLocalLlmCatalog, getLocalLlmStatus, streamLocalLlmTest } from '../services/api';
+import { getLoadedLlmModels, getLocalLlmCatalog, getLocalLlmStatus, streamLocalLlmTest } from '../services/api';
 
 const renderPlayground = () => render(
   <MemoryRouter initialEntries={['/local-llm/playground?backend=ollama&model=command-r-plus%3A104b']}>
@@ -41,6 +42,7 @@ beforeEach(() => {
     },
     lmstudio: { models: [] },
   });
+  getLoadedLlmModels.mockResolvedValue({ ollama: [] });
   getLocalLlmCatalog.mockResolvedValue({
     backend: 'ollama',
     models: [
@@ -68,6 +70,54 @@ describe('LocalLlmPlayground', () => {
     expect(screen.getByText('104B · 59 GB · ~71 GB RAM')).toBeTruthy();
     expect(screen.getByText('Tool use')).toBeTruthy();
     expect(screen.getByText('Multilingual')).toBeTruthy();
+  });
+
+  it('flags a resident model with VRAM size + eviction countdown, reconciling a case/tag-mismatched id', async () => {
+    getLoadedLlmModels.mockResolvedValue({
+      ollama: [
+        // /api/ps reports a differently-cased id than the installed row
+        // (COMMAND-R-PLUS vs command-r-plus); normalizeCatalogId must reconcile
+        // them, or the badge never matches. Also carries VRAM + a future
+        // eviction time so the "frees in" countdown branch runs.
+        {
+          id: 'COMMAND-R-PLUS:104B',
+          name: 'COMMAND-R-PLUS:104B',
+          size: 59 * 1024 ** 3,
+          sizeVram: 60 * 1024 ** 3,
+          expiresAt: new Date(Date.now() + 90 * 60 * 1000).toISOString(),
+        },
+      ],
+    });
+
+    renderPlayground();
+
+    // The badge reports residency AND the model's VRAM footprint (60 GB), the
+    // countdown renders ("frees in 1h"), and the header chip counts it.
+    await waitFor(() => expect(screen.getByText(/In memory · 60 GB/)).toBeTruthy());
+    expect(screen.getByText(/frees in 1h/)).toBeTruthy();
+    expect(screen.getByText(/1 in memory/)).toBeTruthy();
+  });
+
+  it('marks the model row "Processing" (not "In memory") while a chat run is in flight', async () => {
+    // No model is resident (default mock), but the in-flight run drives the
+    // selected model — the row should show the run-derived "Processing" badge,
+    // not residency. Hold the run open so the badge stays mounted while asserting.
+    let releaseRun;
+    const runGate = new Promise((resolve) => { releaseRun = resolve; });
+    streamLocalLlmTest.mockImplementation(async () => {
+      await runGate;
+      return { backend: 'ollama', modelId: 'command-r-plus:104b', text: 'ok', runId: 'r1', timings: {} };
+    });
+
+    renderPlayground();
+    await waitFor(() => expect(screen.getAllByText('command-r-plus:104b').length).toBeGreaterThan(0));
+
+    fireEvent.click(screen.getByText('Run chat'));
+
+    await waitFor(() => expect(screen.getByText('Processing')).toBeTruthy());
+    expect(screen.queryByText(/In memory/)).toBeNull();
+
+    releaseRun();
   });
 
   it('renders a live "Thinking" block for streamed reasoning, separate from the answer', async () => {

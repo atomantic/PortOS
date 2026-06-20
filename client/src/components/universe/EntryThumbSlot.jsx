@@ -20,7 +20,7 @@
  * save pending, etc.) so the button shape is still visible but inert.
  */
 import { useState, useEffect } from 'react';
-import { Sparkles, Loader2, Star } from 'lucide-react';
+import { Sparkles, Star } from 'lucide-react';
 import MediaJobThumb from '../pipeline/MediaJobThumb';
 
 export default function EntryThumbSlot({
@@ -58,6 +58,13 @@ export default function EntryThumbSlot({
         size={pendingSize}
         onPreview={onPreview}
         onFilename={onComplete}
+        // A terminal failure/cancel never yields a filename, so `onComplete`
+        // (which clears the in-flight job) would otherwise never fire and the
+        // job stays pinned. Callers that scope render state per entity keep that
+        // state across switches (no remount to reset it), so a failed job would
+        // leave the slot stuck — clear it via the no-filename path so the slot
+        // returns to an actionable state and the entity can be re-rendered.
+        onStatus={(s) => { if (s === 'failed' || s === 'canceled') onComplete?.(null); }}
       />
     );
   }

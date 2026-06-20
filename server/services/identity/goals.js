@@ -2,7 +2,11 @@ import { v4 as uuidv4 } from '../../lib/uuid.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { getActivities } from '../meatspaceCalendar.js';
 import { callProviderAISimple, parseLLMJSON } from '../../lib/aiProvider.js';
-import { goalTypeEnum } from '../../lib/identityValidation.js';
+import {
+  goalTypeEnum,
+  goalPhasesProposalSchema,
+  goalDecompositionProposalSchema
+} from '../../lib/identityValidation.js';
 import {
   GOALS_FILE,
   LONGEVITY_FILE,
@@ -193,6 +197,7 @@ export async function getGoals() {
     for (const ms of (goal.milestones || [])) {
       if (ms.description === undefined) { ms.description = ''; needsSave = true; }
       if (ms.order === undefined) { ms.order = 0; needsSave = true; }
+      if (!Array.isArray(ms.tasks)) { ms.tasks = []; needsSave = true; }
     }
   }
   if (needsSave) await saveJSON(GOALS_FILE, data);
@@ -432,6 +437,7 @@ export async function addMilestone(goalId, { title, targetDate }) {
     title,
     targetDate: targetDate || null,
     completedAt: null,
+    tasks: [],
     createdAt: new Date().toISOString()
   };
 
@@ -567,6 +573,24 @@ export async function getGoalCalendarEvents(goalId, startDate, endDate) {
 // AI Phase Planning
 // =============================================================================
 
+// Re-planning (acceptGoalPhases / acceptGoalDecomposition) replaces
+// goal.milestones wholesale, which would orphan any goal.scheduledEvents — each
+// references an old milestone id AND a live Google Calendar block. Refuse to
+// overwrite milestones while scheduled events exist so calendar blocks aren't
+// silently stranded; the user unschedules first (removeScheduledEvents /
+// rescheduleTimeBlocks). A 409 reject is chosen over auto-deleting here because
+// deletion requires live Google OAuth — coupling accept to calendar auth would
+// either fail the accept (no token) or silently orphan events if swallowed.
+// Applied identically by both accept paths to keep them consistent.
+function assertNoScheduledEvents(goal) {
+  if (goal.scheduledEvents?.length) {
+    throw new ServerError(
+      'Goal has scheduled calendar events tied to the current milestones. Unschedule them before re-planning so the calendar blocks are not orphaned.',
+      { status: 409, code: 'GOAL_HAS_SCHEDULED_EVENTS' }
+    );
+  }
+}
+
 export async function generateGoalPhases(goalId, { providerId, model } = {}) {
   const { getActiveProvider, getProviderById } = await import('../providers.js');
   const goals = await loadJSON(GOALS_FILE, DEFAULT_GOALS);
@@ -607,16 +631,21 @@ Respond with a JSON array only (no markdown fences, no explanation). Each elemen
   } catch (e) {
     throw new ServerError(`AI returned invalid phase data: ${e.message}`, { status: 502, code: 'AI_PARSE_ERROR' });
   }
-  if (!Array.isArray(parsed)) throw new ServerError('AI returned invalid phase data', { status: 502, code: 'AI_PARSE_ERROR' });
+  const validated = goalPhasesProposalSchema.safeParse(parsed);
+  if (!validated.success) {
+    const detail = validated.error.issues[0]?.message || 'shape mismatch';
+    throw new ServerError(`AI returned invalid phase data: ${detail}`, { status: 502, code: 'AI_PARSE_ERROR' });
+  }
 
-  console.log(`🎯 Generated ${parsed.length} phases for goal "${goal.title}"`);
-  return parsed;
+  console.log(`🎯 Generated ${validated.data.length} phases for goal "${goal.title}"`);
+  return validated.data;
 }
 
 export async function acceptGoalPhases(goalId, phases) {
   const goals = await loadJSON(GOALS_FILE, DEFAULT_GOALS);
   const goal = goals.goals.find(g => g.id === goalId);
   if (!goal) throw new ServerError('Goal not found', { status: 404, code: 'NOT_FOUND' });
+  assertNoScheduledEvents(goal);
 
   goal.milestones = phases.map((phase, idx) => ({
     id: `ms-${uuidv4()}`,
@@ -625,6 +654,7 @@ export async function acceptGoalPhases(goalId, phases) {
     targetDate: phase.targetDate || null,
     order: phase.order ?? idx,
     completedAt: null,
+    tasks: [],
     createdAt: new Date().toISOString()
   }));
 
@@ -633,6 +663,125 @@ export async function acceptGoalPhases(goalId, phases) {
   await saveJSON(GOALS_FILE, goals);
   console.log(`🎯 Accepted ${phases.length} phases for goal "${goal.title}"`);
   return goal;
+}
+
+// =============================================================================
+// Goal Decomposition (LLM-powered) — milestones pre-populated with tasks
+// =============================================================================
+
+// Builds a single-pass proposal: ordered milestones, each carrying concrete
+// tasks. Unlike generateGoalPhases (flat milestones, no tasks) this closes the
+// "now hand-add every todo" gap. Returns the proposal WITHOUT persisting so the
+// user can review/edit before accept (mirrors generate → accept-phases).
+export async function decomposeGoal(goalId, { providerId, model } = {}) {
+  const { getActiveProvider, getProviderById } = await import('../providers.js');
+  const goals = await loadJSON(GOALS_FILE, DEFAULT_GOALS);
+  const goal = goals.goals.find(g => g.id === goalId);
+  if (!goal) throw new ServerError('Goal not found', { status: 404, code: 'NOT_FOUND' });
+
+  const provider = providerId ? await getProviderById(providerId) : await getActiveProvider();
+  if (!provider) throw new ServerError('No AI provider available', { status: 503, code: 'NO_PROVIDER' });
+  const selectedModel = model ?? provider.defaultModel;
+
+  const today = new Date().toISOString().slice(0, 10);
+  // targetDate is optional for decomposition (relative ordering only) — unlike
+  // generateGoalPhases which hard-requires it for date distribution.
+  const dateGuidance = goal.targetDate
+    ? `Distribute milestone target dates chronologically (YYYY-MM-DD) between today (${today}) and the goal's target date (${goal.targetDate}); the last milestone should land on or near the target date.`
+    : `The goal has no target date — order milestones relatively and OMIT the "targetDate" field.`;
+
+  const prompt = `You are a goal decomposition assistant. Break the goal below into an ordered sequence of milestones, each pre-populated with concrete, actionable tasks.
+
+Goal title: ${goal.title}
+Goal description: ${goal.description || 'No description provided'}
+Today's date: ${today}
+${goal.targetDate ? `Target completion date: ${goal.targetDate}` : 'Target completion date: none set'}
+
+Produce 3-7 milestones, each with 2-5 tasks. ${dateGuidance}
+
+Respond with a JSON array only (no markdown fences, no explanation). Each element must have:
+- "title": string (milestone name)
+- "description": string (1-2 sentences)
+${goal.targetDate ? '- "targetDate": string (YYYY-MM-DD format)\n' : ''}- "order": number (0-based index)
+- "tasks": array of { "title": string, "priority": "low"|"medium"|"high", "estimateMinutes": number (whole minutes) }`;
+
+  const result = await callProviderAISimple(provider, selectedModel, prompt, { max_tokens: 4000, temperature: 0.4 });
+  if (result.error) throw new ServerError(`AI decomposition failed: ${result.error}`, { status: 502, code: 'AI_ERROR' });
+
+  let parsed;
+  try {
+    parsed = parseLLMJSON(result.text);
+  } catch (e) {
+    throw new ServerError(`AI returned invalid decomposition data: ${e.message}`, { status: 502, code: 'AI_PARSE_ERROR' });
+  }
+  const validated = goalDecompositionProposalSchema.safeParse(parsed);
+  if (!validated.success) {
+    const detail = validated.error.issues[0]?.message || 'shape mismatch';
+    throw new ServerError(`AI returned invalid decomposition data: ${detail}`, { status: 502, code: 'AI_PARSE_ERROR' });
+  }
+
+  const milestones = validated.data;
+  const taskCount = milestones.reduce((sum, ms) => sum + ms.tasks.length, 0);
+  console.log(`🧩 Decomposed goal "${goal.title}" into ${milestones.length} milestones / ${taskCount} tasks`);
+  return milestones;
+}
+
+// Persists a reviewed decomposition proposal, normalizing each milestone's
+// tasks into the stored shape (mirrors acceptGoalPhases). Overwrites
+// goal.milestones — the proposal is the new plan.
+export async function acceptGoalDecomposition(goalId, milestones) {
+  const goals = await loadJSON(GOALS_FILE, DEFAULT_GOALS);
+  const goal = goals.goals.find(g => g.id === goalId);
+  if (!goal) throw new ServerError('Goal not found', { status: 404, code: 'NOT_FOUND' });
+  assertNoScheduledEvents(goal);
+
+  const now = new Date().toISOString();
+  goal.milestones = milestones.map((ms, idx) => ({
+    id: `ms-${uuidv4()}`,
+    title: ms.title,
+    description: ms.description || '',
+    targetDate: ms.targetDate || null,
+    order: ms.order ?? idx,
+    completedAt: null,
+    tasks: (Array.isArray(ms.tasks) ? ms.tasks : []).map(t => ({
+      id: `ms-task-${uuidv4()}`,
+      title: t.title,
+      priority: t.priority || 'medium',
+      estimateMinutes: t.estimateMinutes ?? null,
+      status: 'pending',
+      completedAt: null,
+      createdAt: now
+    })),
+    createdAt: now
+  }));
+
+  goal.updatedAt = now;
+  goals.updatedAt = now;
+  await saveJSON(GOALS_FILE, goals);
+  const taskCount = goal.milestones.reduce((sum, ms) => sum + ms.tasks.length, 0);
+  console.log(`🧩 Accepted decomposition for "${goal.title}": ${goal.milestones.length} milestones / ${taskCount} tasks`);
+  return goal;
+}
+
+// Toggles a milestone task's done state (mirrors updateTodo's done/pending flip).
+export async function completeMilestoneTask(goalId, milestoneId, taskId) {
+  const goals = await loadJSON(GOALS_FILE, DEFAULT_GOALS);
+  const goal = goals.goals.find(g => g.id === goalId);
+  if (!goal) return null;
+
+  const milestone = goal.milestones?.find(m => m.id === milestoneId);
+  if (!milestone) return null;
+
+  const task = milestone.tasks?.find(t => t.id === taskId);
+  if (!task) return null;
+
+  const done = task.status === 'done';
+  task.status = done ? 'pending' : 'done';
+  task.completedAt = done ? null : new Date().toISOString();
+  goal.updatedAt = new Date().toISOString();
+  goals.updatedAt = new Date().toISOString();
+  await saveJSON(GOALS_FILE, goals);
+  return task;
 }
 
 // =============================================================================

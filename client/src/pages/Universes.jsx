@@ -12,6 +12,7 @@ import { useEffect, useMemo, useState, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Plus, Globe, Trash2, Users, Workflow as WorkflowIcon, Copy } from 'lucide-react';
 import toast from '../components/ui/Toast';
+import ImageThumb from '../components/ui/ImageThumb';
 import ShareToButton from '../components/sharing/ShareToButton';
 import SyncToPeerButton from '../components/sharing/SyncToPeerButton';
 import OriginBadge from '../components/sharing/OriginBadge';
@@ -53,29 +54,24 @@ const buildLatestImageByUniverse = (collections) => {
   return out;
 };
 
-// 48px square thumbnail showing the latest image from the universe's
-// auto-managed media collection (or a Globe placeholder when the collection
-// is empty or hasn't loaded yet). onError hides the <img> so a stale
-// collection entry pointing at a deleted file falls back to the placeholder
-// instead of a broken-image icon. Shared between desktop row and mobile card.
+// The universe's base style image — the subject-less "style probe" the detail
+// page (StyleProbeImage → EntryThumbSlot) shows. Mirror that component's
+// selection (last entry in `styleImageRefs`, no primaryImageRef concept here)
+// so the row thumbnail matches what the Universe Builder displays rather than
+// drifting to whatever the latest media-collection render happened to be (a
+// contact sheet, a character ref, etc.).
+const baseStyleImageRef = (u) => {
+  const refs = Array.isArray(u?.styleImageRefs) ? u.styleImageRefs : [];
+  return refs.length ? refs[refs.length - 1] : null;
+};
+
+// 48px square thumbnail showing the universe's base style image, falling back
+// to the latest image from its auto-managed media collection, then a Globe
+// placeholder when neither exists (or hasn't loaded yet). The shared ImageThumb
+// hides the <img> on error so a stale ref pointing at a deleted file falls back
+// to the placeholder instead of a broken-image icon. Used by desktop row + card.
 function UniverseThumb({ imageRef }) {
-  const [broken, setBroken] = useState(false);
-  const showImage = imageRef && !broken;
-  return (
-    <div className="flex-shrink-0 w-12 h-12 rounded-md overflow-hidden bg-port-bg border border-port-border flex items-center justify-center">
-      {showImage ? (
-        <img
-          src={`/data/images/${encodeURIComponent(imageRef)}`}
-          alt=""
-          loading="lazy"
-          onError={() => setBroken(true)}
-          className="w-full h-full object-cover"
-        />
-      ) : (
-        <Globe className="w-5 h-5 text-gray-600" aria-hidden="true" />
-      )}
-    </div>
-  );
+  return <ImageThumb imageRef={imageRef} FallbackIcon={Globe} />;
 }
 
 // Shared between the desktop table row and the mobile card so the armed-state
@@ -285,7 +281,7 @@ export default function Universes() {
                     <td className="px-4 py-3 align-top">
                       <div className="flex items-start gap-2 min-w-0">
                         <Link to={`/universes/${encodeURIComponent(u.id)}`} className="flex items-start gap-3 min-w-0 group flex-1">
-                          <UniverseThumb imageRef={latestImageByUniverse.get(u.id)} />
+                          <UniverseThumb imageRef={baseStyleImageRef(u) || latestImageByUniverse.get(u.id)} />
                           <div className="min-w-0 flex-1">
                             <div className="text-white font-medium flex items-center gap-2 flex-wrap group-hover:text-port-accent transition-colors">
                               <span>{u.name || '(untitled universe)'}</span>
@@ -324,7 +320,7 @@ export default function Universes() {
               <li key={u.id} className="p-3 bg-port-card border border-port-border rounded-lg">
                 <div className="flex items-start justify-between gap-3">
                   <Link to={`/universes/${encodeURIComponent(u.id)}`} className="flex items-start gap-3 flex-1 min-w-0">
-                    <UniverseThumb imageRef={latestImageByUniverse.get(u.id)} />
+                    <UniverseThumb imageRef={baseStyleImageRef(u) || latestImageByUniverse.get(u.id)} />
                     <div className="min-w-0 flex-1">
                       <div className="text-white font-medium flex items-center gap-2 flex-wrap">
                         <span>{u.name || '(untitled universe)'}</span>

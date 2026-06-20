@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import { Brain, ChevronLeft, Plus, Trash2, BookOpen, Zap, FlaskConical, Eye, X, Save } from 'lucide-react';
 import { getMemoryItems, createMemoryItem, deleteMemoryItem } from '../../../services/api';
+import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
+import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 import MemoryPractice from './MemoryPractice';
 import ElementsSong from './ElementsSong';
 
@@ -23,14 +25,22 @@ export default function MemoryBuilder({ onBack, onNavigateElements }) {
   const [newType, setNewType] = useState('text');
   const [newContent, setNewContent] = useState('');
   const [saving, setSaving] = useState(false);
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
   useEffect(() => {
     loadItems();
   }, []);
 
+  // Returns true if the server list was fetched and applied, false if the
+  // fetch failed. null = fetch failed (request() already toasts the error) —
+  // keep the known-good list rather than blanking it; a real empty server
+  // response is `[]` and still clears. Callers (notably handleDelete) use the
+  // return value to fall back to a local update when the refresh fails.
   async function loadItems() {
-    const data = await getMemoryItems().catch(() => []);
-    setItems(data || []);
+    const data = await getMemoryItems().catch(() => null);
+    if (!Array.isArray(data)) return false;
+    setItems(data);
+    return true;
   }
 
   function handleSelect(item) {
@@ -48,7 +58,13 @@ export default function MemoryBuilder({ onBack, onNavigateElements }) {
 
   async function handleDelete(id) {
     await deleteMemoryItem(id);
-    setItems(prev => prev.filter(i => i.id !== id));
+    // Reload from the server so the list reflects server truth (ordering,
+    // normalization, re-seeded built-ins). If the reload fails, the delete
+    // still succeeded server-side — splice the confirmed-deleted id out
+    // locally so the stale row can't linger (and can't be re-deleted into a
+    // 404); loadItems left the rest of the known-good list intact.
+    const reloaded = await loadItems();
+    if (!reloaded) setItems(prev => prev.filter(i => i.id !== id));
   }
 
   function resetCreateForm() {
@@ -229,12 +245,22 @@ export default function MemoryBuilder({ onBack, onNavigateElements }) {
                   Practice
                 </button>
                 {!item.builtin && (
-                  <button
-                    onClick={() => handleDelete(item.id)}
-                    className="p-1.5 text-gray-500 hover:text-port-error transition-colors"
-                  >
-                    <Trash2 size={14} />
-                  </button>
+                  isConfirming(item.id) ? (
+                    <ConfirmButtonPair
+                      prompt="Delete?"
+                      confirmIcon={Trash2}
+                      ariaLabel={`Confirm delete ${item.title}`}
+                      onConfirm={() => confirmDelete(() => handleDelete(item.id))}
+                      onCancel={cancelDelete}
+                    />
+                  ) : (
+                    <button
+                      onClick={() => requestDelete(item.id)}
+                      className="p-1.5 text-gray-500 hover:text-port-error transition-colors"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  )
                 )}
               </div>
             </div>

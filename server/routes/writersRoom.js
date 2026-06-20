@@ -32,10 +32,9 @@ import {
   listWorks, getWorkWithBody, createWork, updateWork, deleteWork,
   saveDraftBody, snapshotDraft, setActiveDraft, getDraftBody,
   listExercises, createExercise, finishExercise, discardExercise,
-  ensureWorkMediaCollection,
 } from '../services/writersRoom/local.js';
 import {
-  runAnalysis, listAnalyses, getAnalysis, attachSceneImage,
+  runAnalysis, listAnalyses, getAnalysis, persistSceneImage,
 } from '../services/writersRoom/evaluator.js';
 import { getSyncedReview } from '../services/writersRoom/syncedReview.js';
 import {
@@ -51,7 +50,6 @@ import {
   listObjects, createObject, updateObject, deleteObject,
 } from '../services/writersRoom/objects.js';
 import { promoteWorkToPipeline, ERR_NO_DRAFT_BODY } from '../services/writersRoom/promoteToPipeline.js';
-import { addItem as addCollectionItem, ERR_DUPLICATE } from '../services/mediaCollections.js';
 import { scanProseForIngredientRefs } from '../services/catalogExtraction.js';
 
 const router = Router();
@@ -306,17 +304,16 @@ router.delete('/works/:id/objects/:objectId', asyncHandler(async (req, res) => {
 
 // Persist a scene→generated-image link on the analysis snapshot, AND mirror
 // the image into the work's auto-collection so it appears in MediaGen's
-// Collections view. Called by SceneCard when image-gen:completed fires.
+// Collections view. Retained for the synchronous (external SD-API) render lane,
+// which returns its filename inline and never rides the media-job queue the
+// `writersRoomSceneImageHook` listens to (#1363); the async local/Codex lanes
+// now file durably via that hook instead.
 router.post('/works/:id/analysis/:analysisId/scene-image', asyncHandler(async (req, res) => {
   const { sceneId, filename, jobId, prompt } = req.body || {};
-  const updated = await attachSceneImage(req.params.id, req.params.analysisId, { sceneId, filename, jobId, prompt });
-  // Add to the per-work collection. Best-effort — a duplicate (same render
-  // already in the collection) is a no-op, not an error.
-  const collection = await ensureWorkMediaCollection(req.params.id);
-  await addCollectionItem(collection.id, { kind: 'image', ref: filename }).catch((err) => {
-    if (err?.code !== ERR_DUPLICATE) throw err;
-  });
-  res.json({ analysis: updated, collectionId: collection.id });
+  const { analysis, collectionId } = await persistSceneImage(
+    req.params.id, req.params.analysisId, { sceneId, filename, jobId, prompt },
+  );
+  res.json({ analysis, collectionId });
 }));
 
 export default router;

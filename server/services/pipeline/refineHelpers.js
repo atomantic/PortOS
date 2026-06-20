@@ -44,6 +44,50 @@ export function trimChanges(raw, limit = 12) {
     : [];
 }
 
+// Upper bound on how many image-prompt candidates a single fan-out request
+// may ask for. Each candidate is an independent LLM call, so the cap keeps a
+// runaway `count` from spawning dozens of provider hits in one click.
+export const IMAGE_PROMPT_CANDIDATE_MAX = 6;
+
+// Fan-out wrapper around `runPromptRefine`: run the same refine template N
+// times in parallel and collect the distinct candidate prompts. Sampling
+// variance across the independent calls yields N different image-gen prompts
+// from one script fragment (issue #904). Partial failure is tolerated — a few
+// provider hiccups still return the survivors; only an all-failed batch throws
+// (surfacing the first underlying error so the caller sees the real cause).
+export async function runImagePromptCandidates({
+  count,
+  templateName,
+  variables,
+  options = {},
+  source,
+  logTag,
+}) {
+  const n = Math.min(Math.max(Math.trunc(Number(count) || 1), 1), IMAGE_PROMPT_CANDIDATE_MAX);
+  const settled = await Promise.allSettled(
+    Array.from({ length: n }, () => runPromptRefine({ templateName, variables, options, source })),
+  );
+  const candidates = [];
+  let firstError = null;
+  for (const r of settled) {
+    if (r.status === 'fulfilled') {
+      const { refined, changes, runId, providerId, model } = r.value;
+      candidates.push({ prompt: refined, changes, runId, providerId, model });
+    } else if (!firstError) {
+      firstError = r.reason;
+    }
+  }
+  if (!candidates.length) {
+    throw firstError || new ServerError('LLM returned no image-prompt candidates', {
+      status: 502, code: 'PIPELINE_IMAGE_PROMPTS_EMPTY',
+    });
+  }
+  if (logTag) {
+    console.log(`✨ ${logTag} candidates=${candidates.length}/${n}`);
+  }
+  return { candidates, requested: n };
+}
+
 // Single-field refine wrapper for the comic-panel / storyboard-scene /
 // character-physicalDescription paths. `resultField` keeps the helper
 // prompt-agnostic; `changes` are trimmed + capped on the way out.

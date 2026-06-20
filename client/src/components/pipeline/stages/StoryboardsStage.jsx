@@ -17,20 +17,24 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Plus, Trash2, Sparkles, Loader2, Wand2, Film, WandSparkles, Shirt } from 'lucide-react';
+import { Plus, Trash2, Sparkles, Loader2, Wand2, Film, WandSparkles, Shirt, Layers } from 'lucide-react';
 import toast from '../../ui/Toast';
+import { SHOT_TYPES, SCREEN_DIRECTIONS, SHOT_TYPE_LABELS, SCREEN_DIRECTION_LABELS } from '../../../lib/shotGrammar';
+import { sceneShotWarnings } from '../../../lib/shotContinuity';
 import {
   generatePipelineVisualImage,
   generatePipelineSceneVideo,
   generatePipelineShotStartFrame,
   refinePipelineSceneImagePrompt,
+  generatePipelineSceneImagePrompts,
   updatePipelineIssue,
   extractPipelineStoryboardScenes,
 } from '../../../services/api';
 import useUniverse from '../../../hooks/useUniverse';
 import { matchCharactersInText } from '../../../lib/scenePrompt';
 import MediaJobThumb from '../MediaJobThumb';
-import { genConfigToImageOptions, genConfigToRefineOptions } from './VisualGenSettings';
+import ImagePromptCandidates, { PromptCountInput } from '../ImagePromptCandidates';
+import { genConfigToImageOptions, genConfigToRefineOptions, IMAGE_PROMPT_COUNT_DEFAULT } from './VisualGenSettings';
 
 export default function StoryboardsStage({ issue, series, onStageUpdate, actionsGated = false }) {
   const stage = issue.stages?.storyboards || { status: 'empty', scenes: [] };
@@ -40,6 +44,18 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
   const [savingIdx, setSavingIdx] = useState(null);
   const [renderingVideoIdx, setRenderingVideoIdx] = useState(null);
   const [refiningIdx, setRefiningIdx] = useState(null);
+  // Non-destructive N-candidate image-prompt fan-out (issue #904). Tracks the
+  // scene currently generating, the candidates keyed by scene index, the
+  // user-chosen count, and which candidate is being applied.
+  const [promptingIdx, setPromptingIdx] = useState(null);
+  const [sceneCandidates, setSceneCandidates] = useState({});
+  const [promptCount, setPromptCount] = useState(IMAGE_PROMPT_COUNT_DEFAULT);
+  const [applyingCandidate, setApplyingCandidate] = useState(null);
+  // Bumped whenever the scene list reindexes (remove / extract). A generate
+  // request captures it before its await and drops a late response whose
+  // generation is stale — otherwise an in-flight result could repopulate
+  // candidates under an index now owned by a different scene.
+  const candidateGenRef = useRef(0);
   // Active per-shot renders keyed by `${sceneIdx}:${shotIdx}` so multiple
   // shots can render concurrently with independent spinners. A single ref
   // would race when the user starts a second render before the first settles.
@@ -71,6 +87,11 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
 
   const persist = async (nextScenes) => {
     setScenes(nextScenes);
+    // Keep the ref coherent for every write path (not just the ones that set it
+    // explicitly), so a discrete pick fired between a persist and the next
+    // render — e.g. a wardrobe/shot select right after a removeScene reindex —
+    // reads the freshly-persisted array instead of a stale render-scope snapshot.
+    scenesRef.current = nextScenes;
     const updated = await updatePipelineIssue(issue.id, {
       stages: { storyboards: { status: nextScenes.length ? 'edited' : 'empty', scenes: nextScenes } },
     }).catch((err) => {
@@ -78,30 +99,65 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
       return null;
     });
     if (updated) onStageUpdate?.('storyboards', updated.stages.storyboards, updated);
+    return !!updated;
   };
 
   const addScene = () => persist([...scenes, { slugline: '', description: '', imageJobId: null }]);
-  const removeScene = (i) => persist(scenes.filter((_, j) => j !== i));
+  const removeScene = (i) => {
+    // Removing a scene reindexes everything after it, so any index-keyed
+    // candidate state would now point at the wrong scene — drop it all and
+    // invalidate any in-flight generate so its late response can't reappear.
+    candidateGenRef.current += 1;
+    setSceneCandidates({});
+    persist(scenes.filter((_, j) => j !== i));
+  };
+  // Ref mirrors the latest scenes so an async flush (e.g. the image-prompt
+  // generate) reads the most recent keystroke rather than the render-scope
+  // snapshot captured when the handler started. Mirrors ComicPagesStage's
+  // pagesRef pattern.
+  const scenesRef = useRef(scenes);
+  scenesRef.current = scenes;
   const updateScene = (i, patch) => {
     const next = scenes.map((s, j) => j === i ? { ...s, ...patch } : s);
+    scenesRef.current = next;
     setScenes(next);
   };
 
   // Wardrobe picks are discrete selections (no blur), so persist immediately.
-  const setSceneAppearances = (i, nextAppearances) =>
-    persist(scenes.map((s, j) => j === i ? { ...s, characterAppearances: nextAppearances } : s));
+  // Takes a transform over the scene's CURRENT appearances applied against
+  // scenesRef.current — not a pre-built array — so two back-to-back picks on
+  // different characters in the same scene accumulate instead of clobbering.
+  // (A pre-built payload would have been derived from the stale render-scope
+  // scene, dropping the prior pick under last-write-wins server persistence.)
+  // Mirrors updateShots' ref discipline.
+  const setSceneAppearances = (i, transform) => {
+    const next = scenesRef.current.map((s, j) => {
+      if (j !== i) return s;
+      const prev = Array.isArray(s.characterAppearances) ? s.characterAppearances : [];
+      return { ...s, characterAppearances: transform(prev) };
+    });
+    scenesRef.current = next;
+    return persist(next);
+  };
 
   // Shot id stable enough for React keys + filename-hook correlation. Local
   // generation (vs server-assigned) is fine — every later persist round-trips
   // through the server which keeps whatever id the client wrote.
   const mintShotId = () => `shot-${Math.random().toString(36).slice(2, 10)}`;
 
+  // Reads + writes scenesRef (not the render-scope `scenes`) so two discrete
+  // picks fired back-to-back — e.g. setting shotType then screenDirection on the
+  // same shot before a re-render — each build on the prior pick's result. Without
+  // this, the second persist would ship a snapshot missing the first field and,
+  // since the server serializes scenes writes (last-write-wins on the whole
+  // array), silently clobber it. Mirrors updateScene's ref discipline.
   const updateShots = (sceneIdx, transform) => {
-    const next = scenes.map((s, j) => {
+    const next = scenesRef.current.map((s, j) => {
       if (j !== sceneIdx) return s;
       const shots = Array.isArray(s.shots) ? s.shots : [];
       return { ...s, shots: transform(shots) };
     });
+    scenesRef.current = next;
     setScenes(next);
     return next;
   };
@@ -112,8 +168,24 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
     shots.filter((_, j) => j !== shotIdx)));
   const updateShot = (sceneIdx, shotIdx, patch) => {
     // Local edit only — caller flushes via onBlur → persist(scenes).
-    updateShots(sceneIdx, (shots) => shots.map((sh, j) => j === shotIdx ? { ...sh, ...patch } : sh));
+    // When the description is hand-edited, the extractor-derived shotType /
+    // screenDirection (#1315) were inferred from the OLD text and are now stale —
+    // clear them to null ("not captured") so the deterministic visual.shot-continuity
+    // check skips this shot rather than reporting an axis reversal that contradicts
+    // the new description. The user can re-set them explicitly via the shot-grammar
+    // selects below (setShotGrammar), which bypass this reset.
+    const grammarReset = 'description' in patch ? { shotType: null, screenDirection: null } : {};
+    updateShots(sceneIdx, (shots) => shots.map((sh, j) => j === shotIdx ? { ...sh, ...patch, ...grammarReset } : sh));
   };
+
+  // Shot-grammar selects (#1468) are discrete picks (no blur), so persist
+  // immediately — mirrors the wardrobe picker. Explicit user intent, so this
+  // path NEVER applies updateShot's description-driven grammar reset. An empty
+  // select value clears the field to null ("not captured"), which the
+  // visual.shot-continuity check reads as ABSENT (skips the shot).
+  const setShotGrammar = (sceneIdx, shotIdx, patch) =>
+    persist(updateShots(sceneIdx, (shots) =>
+      shots.map((sh, j) => j === shotIdx ? { ...sh, ...patch } : sh)));
 
   const handleRenderShot = async (sceneIdx, shotIdx) => {
     const shot = scenes[sceneIdx].shots[shotIdx];
@@ -187,6 +259,10 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
     if (!result) return;
     const next = result.stage?.scenes || [];
     setScenes(next);
+    // Extraction replaces the whole scene list — stale index-keyed candidates
+    // would now belong to different scenes; invalidate in-flight generates too.
+    candidateGenRef.current += 1;
+    setSceneCandidates({});
     onStageUpdate?.('storyboards', result.stage, result.issue);
     toast.success(`Extracted ${result.sceneCount} scene${result.sceneCount === 1 ? '' : 's'}`);
   };
@@ -241,6 +317,59 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
     const summary = result.changes?.[0] ? ` — ${result.changes[0]}` : '';
     toast.success(`Refined scene ${i + 1}${summary}`);
   };
+
+  // Generate N non-destructive image-prompt candidates for the scene (issue
+  // #904). Unlike "AI: refine", this never overwrites the description — the
+  // user copies one or clicks "Use" to apply it explicitly.
+  const handleGenerateImagePrompts = async (i) => {
+    const scene = scenes[i];
+    if (!scene.description?.trim()) {
+      toast.error('Add a description first');
+      return;
+    }
+    setPromptingIdx(i);
+    // Flush any pending textarea edit before the server reads scene.description
+    // (the server builds the prompt from the persisted text). Same guard the
+    // shot-render path uses against the blur-save race.
+    const gen = candidateGenRef.current;
+    await persist(scenesRef.current);
+    const result = await generatePipelineSceneImagePrompts(
+      issue.id, i, { count: promptCount, ...genConfigToRefineOptions(genConfig) },
+    ).catch((err) => {
+      toast.error(err.message || 'Prompt generation failed');
+      return null;
+    });
+    setPromptingIdx(null);
+    if (!result) return;
+    // Scene list reindexed (remove / extract) while we were generating — index
+    // `i` no longer means the same scene, so discard the now-orphaned result.
+    if (gen !== candidateGenRef.current) return;
+    setSceneCandidates((prev) => ({ ...prev, [i]: result.candidates }));
+    toast.success(`Generated ${result.candidates.length} prompt${result.candidates.length === 1 ? '' : 's'} for scene ${i + 1}`);
+  };
+
+  // Apply one candidate prompt to the scene description (the only mutating
+  // path — copy stays clipboard-only). Persists via the shared write queue.
+  const handleApplyCandidate = async (i, prompt, candidateIndex) => {
+    setApplyingCandidate(`${i}:${candidateIndex}`);
+    const ok = await persist(scenes.map((s, j) => j === i ? { ...s, description: prompt } : s));
+    setApplyingCandidate(null);
+    // Leave the candidates list up on a save failure so the user can retry —
+    // persist already toasted the error.
+    if (!ok) return;
+    setSceneCandidates((prev) => {
+      const next = { ...prev };
+      delete next[i];
+      return next;
+    });
+    toast.success(`Applied prompt to scene ${i + 1}`);
+  };
+
+  const dismissCandidates = (i) => setSceneCandidates((prev) => {
+    const next = { ...prev };
+    delete next[i];
+    return next;
+  });
 
   // Render this one scene as a video clip — independent of the full
   // episode-video stitch. Server persists sceneVideoJobId on the scene.
@@ -304,6 +433,7 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
               : <Wand2 size={14} />}
             {extractingFrom === 'arm:prose' ? 'Click again to replace' : 'From prose'}
           </button>
+          <PromptCountInput id="storyboard-prompt-count" value={promptCount} onChange={setPromptCount} />
           <button
             type="button"
             onClick={addScene}
@@ -361,6 +491,16 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
                   </button>
                   <button
                     type="button"
+                    onClick={() => handleGenerateImagePrompts(i)}
+                    disabled={promptingIdx !== null || actionsGated}
+                    title={actionsGated ? 'Saving settings…' : `Generate ${promptCount} alternative image-gen prompts without changing the description`}
+                    className="inline-flex items-center justify-center gap-1 px-2 py-1.5 rounded bg-port-card border border-port-border text-white text-xs hover:border-port-accent/50 disabled:opacity-50"
+                  >
+                    {promptingIdx === i ? <Loader2 size={12} className="animate-spin" /> : <Layers size={12} />}
+                    AI: {promptCount} prompts
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => handleGenerate(i)}
                     disabled={savingIdx === i || actionsGated}
                     title={actionsGated ? 'Saving settings…' : undefined}
@@ -393,11 +533,19 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
                   ) : null}
                 </div>
               </div>
+              {sceneCandidates[i] ? (
+                <ImagePromptCandidates
+                  candidates={sceneCandidates[i]}
+                  applyingIndex={applyingCandidate?.startsWith(`${i}:`) ? Number(applyingCandidate.split(':')[1]) : null}
+                  onApply={(prompt, ci) => handleApplyCandidate(i, prompt, ci)}
+                  onDismiss={() => dismissCandidates(i)}
+                />
+              ) : null}
               {wardrobeChars.length > 0 ? (
                 <WardrobePicker
                   characters={wardrobeChars}
                   scene={scene}
-                  onChange={(next) => setSceneAppearances(i, next)}
+                  onChange={(transform) => setSceneAppearances(i, transform)}
                 />
               ) : null}
               <ShotList
@@ -408,6 +556,7 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
                 onAddShot={() => addShot(i)}
                 onRemoveShot={(j) => removeShot(i, j)}
                 onUpdateShot={(j, patch) => updateShot(i, j, patch)}
+                onSetShotGrammar={(j, patch) => setShotGrammar(i, j, patch)}
                 onBlurShot={() => persist(scenes)}
                 onRenderShot={(j) => handleRenderShot(i, j)}
               />
@@ -421,9 +570,16 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
 
 function ShotList({
   sceneIdx, shots, renderingShots, actionsGated,
-  onAddShot, onRemoveShot, onUpdateShot, onBlurShot, onRenderShot,
+  onAddShot, onRemoveShot, onUpdateShot, onSetShotGrammar, onBlurShot, onRenderShot,
 }) {
   const hasShots = shots.length > 0;
+  // Inline pre-render continuity warnings (#1468): the same hazards the server
+  // `visual.shot-continuity` editorial check surfaces, computed here from the
+  // shots' shotType / screenDirection / continuityFromShotId so the user sees a
+  // 180°-axis jump or shot-type monotony BEFORE spending render time — without a
+  // round-trip through an editorial-checks run. Mirrors the inline lettering
+  // warning pattern (#1313) in ComicScriptStage.
+  const continuityWarnings = useMemo(() => sceneShotWarnings({ shots }), [shots]);
   return (
     <div className="mt-3 pt-3 border-t border-port-border/60">
       <div className="flex items-center justify-between mb-2">
@@ -438,6 +594,15 @@ function ShotList({
           <Plus size={11} /> Add shot
         </button>
       </div>
+      {continuityWarnings.length > 0 ? (
+        <ul className="mb-2 rounded border border-port-warning/30 bg-port-warning/5 px-2.5 py-1.5 space-y-0.5">
+          {continuityWarnings.map((w, i) => (
+            <li key={i} className="text-[11px] text-port-warning">
+              ⚠ Continuity — {w.message}
+            </li>
+          ))}
+        </ul>
+      ) : null}
       {hasShots ? (
         <ul className="space-y-2">
           {shots.map((shot, j) => {
@@ -445,15 +610,49 @@ function ShotList({
             return (
               <li key={shot.id || j} className="flex items-start gap-2 p-2 bg-port-bg/40 border border-port-border/60 rounded">
                 <span className="text-[10px] text-gray-500 font-mono pt-1.5 w-6">{j + 1}</span>
-                <textarea
-                  value={shot.description || ''}
-                  onChange={(e) => onUpdateShot(j, { description: e.target.value })}
-                  onBlur={onBlurShot}
-                  placeholder="One camera setup. Subject + framing + motion + mood."
-                  rows={2}
-                  className="flex-1 px-2 py-1 bg-port-bg border border-port-border rounded text-white text-xs"
-                  maxLength={4000}
-                />
+                <div className="flex-1 flex flex-col gap-1">
+                  <textarea
+                    value={shot.description || ''}
+                    onChange={(e) => onUpdateShot(j, { description: e.target.value })}
+                    onBlur={onBlurShot}
+                    placeholder="One camera setup. Subject + framing + motion + mood."
+                    rows={2}
+                    className="px-2 py-1 bg-port-bg border border-port-border rounded text-white text-xs"
+                    maxLength={4000}
+                  />
+                  {/* Shot-grammar editor (#1468): set/correct the film-grammar
+                      fields the visual.shot-continuity check reads. Discrete
+                      picks persist immediately and skip the description-driven
+                      reset. '' = clear to "not captured" (skipped by the check). */}
+                  <div className="flex gap-1">
+                    <select
+                      value={shot.shotType || ''}
+                      onChange={(e) => onSetShotGrammar(j, { shotType: e.target.value || null })}
+                      disabled={actionsGated}
+                      aria-label={`Shot ${j + 1} framing`}
+                      title="Camera framing — feeds the shot-type variety check"
+                      className="flex-1 min-w-0 px-1.5 py-1 bg-port-bg border border-port-border rounded text-gray-300 text-[10px] disabled:opacity-50"
+                    >
+                      <option value="">— framing —</option>
+                      {SHOT_TYPES.map((t) => (
+                        <option key={t} value={t}>{SHOT_TYPE_LABELS[t] || t}</option>
+                      ))}
+                    </select>
+                    <select
+                      value={shot.screenDirection || ''}
+                      onChange={(e) => onSetShotGrammar(j, { screenDirection: e.target.value || null })}
+                      disabled={actionsGated}
+                      aria-label={`Shot ${j + 1} screen direction`}
+                      title="Which way the subject faces / moves — feeds the 180°-rule axis check"
+                      className="flex-1 min-w-0 px-1.5 py-1 bg-port-bg border border-port-border rounded text-gray-300 text-[10px] disabled:opacity-50"
+                    >
+                      <option value="">— direction —</option>
+                      {SCREEN_DIRECTIONS.map((d) => (
+                        <option key={d} value={d}>{SCREEN_DIRECTION_LABELS[d] || d}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
                 <div className="flex flex-col gap-1 w-24">
                   <input
                     type="number"
@@ -512,9 +711,14 @@ function WardrobePicker({ characters, scene, onChange }) {
     appearances.find((a) => a && a.characterId === charId)?.wardrobeId || '';
   const pickCount = matched.filter((c) => wardrobeFor(c.id)).length;
 
+  // Pass a transform (not a pre-built array) so the parent applies it against
+  // the freshest persisted appearances — `appearances` here is the render-scope
+  // prop and may lag a back-to-back pick on another character in this scene.
   const setWardrobe = (charId, wardrobeId) => {
-    const rest = appearances.filter((a) => a && a.characterId !== charId);
-    onChange(wardrobeId ? [...rest, { characterId: charId, wardrobeId }] : rest);
+    onChange((prev) => {
+      const rest = (Array.isArray(prev) ? prev : []).filter((a) => a && a.characterId !== charId);
+      return wardrobeId ? [...rest, { characterId: charId, wardrobeId }] : rest;
+    });
   };
 
   if (matched.length === 0) return null;

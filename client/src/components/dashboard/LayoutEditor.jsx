@@ -53,7 +53,6 @@ export default function LayoutEditor({ layouts, activeLayoutId, limits, onClose,
     setMode('idle');
     setDupName('');
     setPendingSwitchId(null);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editingId, layouts]);
 
   // Guard layout switches when there are unsaved edits: instead of silently

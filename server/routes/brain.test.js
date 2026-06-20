@@ -74,12 +74,15 @@ vi.mock('../services/brain.js', () => ({
 
 // Mock the brain graph service
 vi.mock('../services/brainGraph.js', () => ({
-  getBrainGraphData: vi.fn()
+  getBrainGraphSearchIndex: vi.fn(),
+  getBrainGraphOverview: vi.fn(),
+  getBrainGraphNeighborhood: vi.fn()
 }));
 
 // Mock the brain memory bridge
 vi.mock('../services/brainMemoryBridge.js', () => ({
-  syncAllBrainData: vi.fn()
+  syncAllBrainData: vi.fn(),
+  getEmbeddingCoverage: vi.fn()
 }));
 
 // Mock the brain sync log service
@@ -125,8 +128,8 @@ vi.mock('../services/brainJournal.js', () => ({
 
 // Import mocked modules
 import * as brainService from '../services/brain.js';
-import { getBrainGraphData } from '../services/brainGraph.js';
-import { syncAllBrainData } from '../services/brainMemoryBridge.js';
+import { getBrainGraphSearchIndex, getBrainGraphOverview, getBrainGraphNeighborhood } from '../services/brainGraph.js';
+import { syncAllBrainData, getEmbeddingCoverage } from '../services/brainMemoryBridge.js';
 import { getChangesSince } from '../services/brainSyncLog.js';
 import { getBrainChecksum, getBrainSnapshot } from '../services/brainReconcile.js';
 import { applyRemoteChanges } from '../services/brainSync.js';
@@ -947,21 +950,50 @@ describe('Brain Routes', () => {
   // ===========================================================================
 
   describe('GET /api/brain/graph', () => {
-    it('should return graph data', async () => {
-      const mockGraph = { nodes: [{ id: '1', label: 'Test' }], edges: [], hasEmbeddings: false };
-      getBrainGraphData.mockResolvedValue(mockGraph);
+    it('returns the bounded overview when no focus is given', async () => {
+      const mockGraph = { nodes: [{ id: '1', label: 'Test' }], edges: [], hasEmbeddings: false, mode: 'overview' };
+      getBrainGraphOverview.mockResolvedValue(mockGraph);
 
       const response = await request(app).get('/api/brain/graph');
       expect(response.status).toBe(200);
       expect(response.body.nodes).toHaveLength(1);
       expect(response.body.hasEmbeddings).toBe(false);
+      expect(getBrainGraphOverview).toHaveBeenCalled();
+      expect(getBrainGraphNeighborhood).not.toHaveBeenCalled();
+    });
+
+    it('returns a node neighborhood when a focus is given', async () => {
+      getBrainGraphNeighborhood.mockResolvedValue({ nodes: [{ id: 'f' }], edges: [], hasEmbeddings: true, mode: 'neighborhood', focusId: 'f' });
+
+      const response = await request(app).get('/api/brain/graph?focus=f&limit=20');
+      expect(response.status).toBe(200);
+      expect(response.body.mode).toBe('neighborhood');
+      expect(getBrainGraphNeighborhood).toHaveBeenCalledWith({ focusId: 'f', limit: 20 });
     });
 
     it('should return 500 when service throws', async () => {
-      getBrainGraphData.mockRejectedValue(new Error('Graph build failed'));
+      getBrainGraphOverview.mockRejectedValue(new Error('Graph build failed'));
 
       const response = await request(app).get('/api/brain/graph');
       expect(response.status).toBe(500);
+    });
+  });
+
+  describe('GET /api/brain/graph/search-index', () => {
+    it('returns the lightweight node index', async () => {
+      getBrainGraphSearchIndex.mockResolvedValue({ nodes: [{ id: '1', label: 'A', brainType: 'memories' }] });
+      const response = await request(app).get('/api/brain/graph/search-index');
+      expect(response.status).toBe(200);
+      expect(response.body.nodes).toHaveLength(1);
+    });
+  });
+
+  describe('GET /api/brain/embeddings/status', () => {
+    it('returns embedding coverage', async () => {
+      getEmbeddingCoverage.mockResolvedValue({ total: 10, missing: 3 });
+      const response = await request(app).get('/api/brain/embeddings/status');
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({ total: 10, missing: 3 });
     });
   });
 
@@ -979,8 +1011,8 @@ describe('Brain Routes', () => {
       expect(response.body.synced).toBe(5);
       expect(response.body.skipped).toBe(2);
       expect(response.body.errors).toBe(0);
-      // No body → refresh defaults false (issue #1080).
-      expect(syncAllBrainData).toHaveBeenCalledWith({ refresh: false });
+      // No body → refresh + onlyMissing default false (issue #1080).
+      expect(syncAllBrainData).toHaveBeenCalledWith({ refresh: false, onlyMissing: false });
     });
 
     it('passes refresh:true through for the recovery re-embed path (issue #1080)', async () => {
@@ -989,7 +1021,16 @@ describe('Brain Routes', () => {
       const response = await request(app).post('/api/brain/bridge-sync').send({ refresh: true });
       expect(response.status).toBe(200);
       expect(response.body.archived).toBe(1);
-      expect(syncAllBrainData).toHaveBeenCalledWith({ refresh: true });
+      expect(syncAllBrainData).toHaveBeenCalledWith({ refresh: true, onlyMissing: false });
+    });
+
+    it('passes onlyMissing:true through for the targeted backfill path', async () => {
+      syncAllBrainData.mockResolvedValue({ synced: 2, skipped: 8, errors: 0, archived: 0 });
+
+      const response = await request(app).post('/api/brain/bridge-sync').send({ onlyMissing: true });
+      expect(response.status).toBe(200);
+      expect(response.body.synced).toBe(2);
+      expect(syncAllBrainData).toHaveBeenCalledWith({ refresh: false, onlyMissing: true });
     });
 
     it('should return 500 when sync fails', async () => {

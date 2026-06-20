@@ -24,6 +24,10 @@ import {
   detachCatalogIngredientMedia,
 } from '../services/apiCatalog';
 import { listImageGallery } from '../services/apiImageVideo';
+import { generateImage } from '../services/apiSystem';
+import { composeCanonStyledPrompt } from '../lib/composeStyledPrompt';
+import useMounted from '../hooks/useMounted';
+import MediaJobThumb from '../components/pipeline/MediaJobThumb';
 import IngredientPicker from '../components/IngredientPicker';
 import MediaImage from '../components/MediaImage';
 import CharacterLoraChip from '../components/loraTraining/CharacterLoraChip';
@@ -57,6 +61,24 @@ function REFKIND_LABEL(kind) {
   if (kind === 'issue')      return 'Issues';
   if (kind === 'writers-room' || kind === 'writersRoom') return "Writers' Room";
   return kind;
+}
+
+// Build the image-generation prompt source from the (live, editable) payload:
+// the type's primary content field first, then a curated set of *visual*
+// description fields, so a character renders from physicalDescription and a
+// place/object/idea from description/summary. Intentionally narrower than the
+// type's full snippetFallbackKeys — keys like `role`/`notes`/`significance`
+// describe the entity but don't depict it, and would seed weak prompts.
+// Returns '' when nothing usable is present — the generate button gates on it.
+const GENERATION_DESCRIPTION_KEYS = ['physicalDescription', 'description', 'summary'];
+function deriveGenerationDescription(payload, typeDef) {
+  if (!payload || typeof payload !== 'object') return '';
+  const keys = [typeDef?.primaryContentKey, ...GENERATION_DESCRIPTION_KEYS].filter(Boolean);
+  for (const k of keys) {
+    const v = payload[k];
+    if (typeof v === 'string' && v.trim()) return v.trim();
+  }
+  return '';
 }
 
 export default function CatalogIngredient() {
@@ -214,6 +236,21 @@ export default function CatalogIngredient() {
     setMedia((prev) => prev.filter((m) => !(m.mediaKey === mediaKey && m.kind === kind)));
   };
 
+  // A freshly-generated image lands in the media library as `<jobId>.png`; wire
+  // it onto this ingredient. First image becomes the portrait (so it shows as
+  // the card thumbnail immediately); later ones attach as references.
+  const handleGeneratedImage = useCallback(async (filename) => {
+    if (!record || !filename) return;
+    const hasPortrait = media.some((m) => m.kind === 'portrait');
+    const ok = await (hasPortrait
+      ? attachCatalogIngredientMedia(record.id, { mediaKey: filename, kind: 'reference' }, { silent: true })
+      : setCatalogIngredientPortrait(record.id, { mediaKey: filename }, { silent: true })
+    ).then(() => true).catch((err) => { toast.error(err?.message || 'Failed to attach generated image'); return false; });
+    if (!ok) return;
+    refreshMedia();
+    toast.success(hasPortrait ? 'Generated image attached' : 'Generated portrait set');
+  }, [record, media, refreshMedia]);
+
   const handleSave = async () => {
     if (!record) return;
     const trimmedName = name.trim();
@@ -293,6 +330,9 @@ export default function CatalogIngredient() {
   // generic field renderer for it. System types keep their existing branches.
   const isUserType = typeDef.system === false;
   const badgeClass = CATALOG_BADGE_BY_ID[record.type] || 'bg-gray-500/20 text-gray-300 border-gray-500/40';
+  // Prompt source for the Media panel's "Generate" affordance — derived from the
+  // currently-edited payload so tweaks to the description feed the next render.
+  const genDescription = deriveGenerationDescription(payload, typeDef);
 
   // Group refs by kind for the "Appears in" panel. Tolerates either an array
   // of `{ refKind, refId, role }` or a server-grouped shape.
@@ -423,6 +463,10 @@ export default function CatalogIngredient() {
           onAttach={handleAttachMedia}
           onSetPortrait={handleSetPortrait}
           onDetach={handleDetachMedia}
+          genIngredientId={record.id}
+          genName={name}
+          genDescription={genDescription}
+          onGenerated={handleGeneratedImage}
         />
 
         <RevisionsPanel
@@ -802,7 +846,101 @@ function RelationsPanel({ record, relations, onAdd, onRemove }) {
 // file-upload + voice-memo capture are intentionally out of scope here and
 // land via the separate `[catalog-source-kinds-url-file-voice]` item — the
 // `onAttach(mediaKey, kind)` seam is all those paths need to reuse.
-function MediaPanel({ media, missingMedia, onAttach, onSetPortrait, onDetach }) {
+// "Generate" affordance for the Media panel — turns the ingredient's
+// description into an image via the same image-gen queue the Universe canon
+// renders use. The generated file lands in the media library as `<jobId>.png`;
+// `MediaJobThumb` surfaces the live diffusion preview and fires `onFilename`
+// once complete, which routes to `onComplete` to attach it onto the ingredient.
+// Disabled when the description is blank — there's nothing to render from.
+function GenerateImageControl({ ingredientId, name, description, onComplete }) {
+  const mountedRef = useMounted();
+  const [jobId, setJobId] = useState(null);
+  const [starting, setStarting] = useState(false);
+  const canGenerate = !!(description && description.trim());
+
+  const handleGenerate = async () => {
+    if (!canGenerate) {
+      toast.error('Add a description before generating an image');
+      return;
+    }
+    setStarting(true);
+    const styled = composeCanonStyledPrompt({ name: name || 'Subject', description, universe: null });
+    const queued = await generateImage(
+      {
+        prompt: styled.prompt,
+        negativePrompt: styled.negativePrompt || undefined,
+        // Durable attach (#1359): tag the queued job with the target ingredient
+        // so the server-side completion hook files the render even if this page
+        // unmounts before a long local/Codex render finishes. The onComplete
+        // callback below stays as the optimistic/immediate-refresh path; the
+        // hook is idempotent so the two never double-attach.
+        ...(ingredientId ? { catalogIngredientId: ingredientId } : {}),
+      },
+      { silent: true },
+    ).catch((err) => { toast.error(err?.message || 'Image generation failed'); return null; });
+    if (!mountedRef.current) return;
+    setStarting(false);
+    if (!queued) return;
+    if (queued.jobId) {
+      // Local/Codex modes enqueue a job — track it live via MediaJobThumb,
+      // which fires onFilename on completion to attach the result optimistically.
+      // If this page unmounts before the render finishes the server-side
+      // catalogImageAttachHook still attaches it durably (#1359).
+      setJobId(queued.jobId);
+      toast.success('Generating image…');
+    } else if (queued.filename) {
+      // External SD-API mode renders synchronously and returns the finished
+      // filename with no jobId — attach it directly.
+      onComplete?.(queued.filename);
+    } else {
+      toast.error('Image generation returned no result');
+    }
+  };
+
+  // Fires once when the in-flight job completes (MediaJobThumb forwards the
+  // rendered filename). Clear the job so the thumb unmounts, then hand the
+  // filename up to be attached as portrait/reference.
+  const handleFilename = useCallback((filename) => {
+    if (!filename) return;
+    setJobId(null);
+    onComplete?.(filename);
+  }, [onComplete]);
+
+  // A failed/canceled render never fires onFilename, so without this the button
+  // would stay disabled+"Generating…" with no retry path. Clear the job on a
+  // terminal non-success status to re-enable Generate.
+  const handleStatus = useCallback((status) => {
+    if (status === 'failed' || status === 'canceled') {
+      setJobId(null);
+      if (status === 'failed') toast.error('Image generation failed');
+    }
+  }, []);
+
+  return (
+    <span className="inline-flex items-center gap-2">
+      {jobId && (
+        <MediaJobThumb jobId={jobId} label="Generated image" size="xs"
+          onFilename={handleFilename} onStatus={handleStatus} />
+      )}
+      <button
+        type="button"
+        onClick={handleGenerate}
+        disabled={!canGenerate || starting || !!jobId}
+        title={canGenerate
+          ? 'Generate an image from this item’s description'
+          : 'Add a description first to generate an image'}
+        className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-port-border text-gray-300 hover:text-white hover:border-port-accent disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        {starting || jobId
+          ? <Loader2 size={12} className="animate-spin" aria-hidden="true" />
+          : <Sparkles size={12} aria-hidden="true" />}
+        {jobId ? 'Generating…' : 'Generate'}
+      </button>
+    </span>
+  );
+}
+
+function MediaPanel({ media, missingMedia, onAttach, onSetPortrait, onDetach, genIngredientId, genName, genDescription, onGenerated }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const list = Array.isArray(media) ? media : [];
@@ -820,14 +958,17 @@ function MediaPanel({ media, missingMedia, onAttach, onSetPortrait, onDetach }) 
 
   return (
     <section className="bg-port-card border border-port-border rounded-lg p-4">
-      <div className="flex items-center justify-between mb-3">
+      <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
         <h2 className="text-sm font-semibold text-white flex items-center gap-1.5">
           <ImageIcon size={14} aria-hidden="true" /> Media
         </h2>
-        <button type="button" onClick={() => setPickerOpen(true)}
-          className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-port-border text-gray-300 hover:text-white hover:border-port-accent">
-          <Plus size={12} aria-hidden="true" /> Pick from gallery
-        </button>
+        <div className="flex items-center gap-2">
+          <GenerateImageControl ingredientId={genIngredientId} name={genName} description={genDescription} onComplete={onGenerated} />
+          <button type="button" onClick={() => setPickerOpen(true)}
+            className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-port-border text-gray-300 hover:text-white hover:border-port-accent">
+            <Plus size={12} aria-hidden="true" /> Pick from gallery
+          </button>
+        </div>
       </div>
 
       <div

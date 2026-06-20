@@ -6,6 +6,12 @@ vi.mock('./providers.js', () => ({
   getProviderById: vi.fn()
 }));
 
+// Mock the CLI vision path so the CLI-dispatch branch is asserted without
+// spawning a real child process.
+vi.mock('./visionCli.js', () => ({
+  describeImageViaCli: vi.fn(),
+}));
+
 // Mock fs/promises for image loading and directory listing
 vi.mock('fs/promises', () => ({
   readFile: vi.fn(),
@@ -19,6 +25,7 @@ vi.mock('fs', () => ({
 
 // Import mocked modules
 import { getProviderById } from './providers.js';
+import { describeImageViaCli } from './visionCli.js';
 import { readFile, readdir } from 'fs/promises';
 import { existsSync } from 'fs';
 
@@ -298,6 +305,30 @@ describe('Vision Test Service', () => {
       const out = await callWith({ content: '<think>I should refuse</think>' }, { finish_reason: 'stop' });
       expect(out.text).toBe('');
       expect(out.reasoning).toBe('I should refuse');
+    });
+
+    it('delegates a CLI provider to the CLI vision path (not the API call)', async () => {
+      getProviderById.mockResolvedValue({ id: 'codex', type: 'cli', command: 'codex', defaultModel: 'gpt-5' });
+      describeImageViaCli.mockResolvedValue({ text: 'a portrait', finishReason: null, usage: null, reasoning: '' });
+      const out = await describeImageDataUrlDetailed({ dataUrl: DATA_URL, prompt: 'caption', providerId: 'codex' });
+      expect(out.text).toBe('a portrait');
+      expect(describeImageViaCli).toHaveBeenCalledWith(expect.objectContaining({
+        provider: expect.objectContaining({ id: 'codex' }), dataUrl: DATA_URL, prompt: 'caption',
+      }));
+      expect(global.fetch).not.toHaveBeenCalled();
+    });
+
+    it('still rejects a non-api / non-cli provider (e.g. tui)', async () => {
+      getProviderById.mockResolvedValue({ id: 'codex-tui', type: 'tui', command: 'codex' });
+      await expect(describeImageDataUrlDetailed({ dataUrl: DATA_URL, prompt: 'x', providerId: 'codex-tui' }))
+        .rejects.toThrow(/not an API provider/);
+    });
+
+    it('forwards the CLI provider timeout to the CLI vision path', async () => {
+      getProviderById.mockResolvedValue({ id: 'codex', type: 'cli', command: 'codex', timeout: 300000 });
+      describeImageViaCli.mockResolvedValue({ text: 'ok', finishReason: null, usage: null, reasoning: '' });
+      await describeImageDataUrlDetailed({ dataUrl: DATA_URL, prompt: 'caption', providerId: 'codex' });
+      expect(describeImageViaCli).toHaveBeenCalledWith(expect.objectContaining({ timeout: 300000 }));
     });
   });
 

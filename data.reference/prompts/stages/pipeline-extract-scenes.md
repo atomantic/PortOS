@@ -42,6 +42,8 @@ Within each scene, produce **3–8 shots** — distinct camera setups that cover
   - **`description`** — one camera setup (~20–50 words): subject + framing + motion + mood. Be specific about lens choice cues if implied (wide / medium / close, low angle, handheld, slow push-in). Do not name characters — describe them physically.
   - **`durationSeconds`** — integer 2–10. Default 4 for standard coverage, 2–3 for reaction inserts, 6–10 for held establishing or emotionally weighted shots. The shot durations across a scene should roughly match the dramatic time the scene occupies on the page.
   - **`continuityFromShotId`** — id of an earlier shot in the SAME scene whose final frame should bridge into this shot's first frame (visual continuity for i2v video chaining). Use `null` for the first shot of a scene, or any shot that intentionally breaks continuity (new angle from scratch, hard cut, time jump within scene). When a shot is a natural progression — a push-in on the same subject, a reaction shot of the same set, a continuation of motion — reference the prior shot's id. This is what makes the rendered video feel like a scene instead of a slideshow.
+  - **`shotType`** — the camera framing, one of: `extreme-wide`, `wide`, `medium`, `close`, `extreme-close`, `over-the-shoulder`, `two-shot`, `pov`. Pick the size that matches the shot's dramatic job (a master/establishing beat is `wide`; a reaction or emotional beat is `close`; an exchange between two characters is `over-the-shoulder` or `two-shot`). Use `null` only if the framing is genuinely ambiguous.
+  - **`screenDirection`** — the dominant on-screen direction the shot's subject faces or moves, from the viewer's perspective: `left`, `right`, or `neutral` (head-on, or no clear left/right). This is what lets the pipeline catch 180-degree-rule violations: within a continuous run of shots, keep a character on a consistent side of the action axis — if they faced screen-`left` in one shot they should not suddenly face screen-`right` in a shot that continues from it. Use `neutral` for head-on framing or when there is no meaningful axis.
 - **`sourceSegmentIds`** — keep empty.
 
 ## Output contract
@@ -69,7 +71,9 @@ Return ONLY valid JSON matching this shape — no prose, no markdown fence, no c
           "id": "shot-01",
           "description": "string",
           "durationSeconds": 4,
-          "continuityFromShotId": null
+          "continuityFromShotId": null,
+          "shotType": "wide",
+          "screenDirection": "neutral"
         }
       ],
       "sourceSegmentIds": []

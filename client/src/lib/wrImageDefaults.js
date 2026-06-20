@@ -30,7 +30,12 @@ export const WR_IMAGE_DEFAULTS = Object.freeze({
 // the payload shape both SceneCard and the live render preview send. Keeping
 // the steps/seed parsing in one place means the two render entry points can't
 // drift on what "use the model default" means.
-export function buildSceneRenderPayload({ prompt, negativePrompt = '', imageCfg = WR_IMAGE_DEFAULTS }) {
+//
+// `writersRoom` ({ workId, analysisId, sceneId }), when provided, tags the
+// render so the server-side completion hook files it onto the analysis snapshot
+// durably — sparing the client a generate-then-attach round-trip on the async
+// local/Codex lanes (#1363).
+export function buildSceneRenderPayload({ prompt, negativePrompt = '', imageCfg = WR_IMAGE_DEFAULTS, writersRoom = null }) {
   const stepsNum = imageCfg.steps ? Number(imageCfg.steps) : undefined;
   const seedNum = imageCfg.seed && Number(imageCfg.seed) >= 0 ? Number(imageCfg.seed) : undefined;
   return {
@@ -42,6 +47,7 @@ export function buildSceneRenderPayload({ prompt, negativePrompt = '', imageCfg 
     height: imageCfg.height,
     ...(Number.isFinite(stepsNum) ? { steps: stepsNum } : {}),
     ...(Number.isFinite(seedNum) ? { seed: seedNum } : {}),
+    ...(writersRoom ? { writersRoom } : {}),
   };
 }
 

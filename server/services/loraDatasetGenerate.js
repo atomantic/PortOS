@@ -15,14 +15,17 @@
  * timeout. See that module for the rationale on each piece.
  */
 
-import { copyFile } from 'fs/promises';
+import { copyFile, readFile } from 'fs/promises';
 import { join, basename } from 'path';
 import sharp from 'sharp';
 import { PATHS, ensureDir, shortId } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { buildVariationMatrix } from '../lib/loraDataset.js';
+import { extractJson } from '../lib/jsonExtract.js';
 import { readSheetPointer, LEGACY_SHEET_VARIANT_ID } from '../lib/storyBible.js';
+import { describeImageDataUrlDetailed } from './visionTest.js';
+import { resolveCaptionModel, withCaptionVisionLock } from './loraDatasetCaption.js';
 import { getSettings } from './settings.js';
 import { getUniverse } from './universeBuilder.js';
 import { buildStyleClause } from './universeCanon.js';
@@ -206,6 +209,20 @@ export function deriveVariationAxes(character) {
     expressions: expressions.length ? expressions : [...REFERENCE_SHEET_CONSTANTS.DEFAULT_EXPRESSIONS],
     outfits: outfits.length ? outfits : ['signature outfit'],
   };
+}
+
+/**
+ * Live variation axes (expression/outfit for characters; lighting/setting for
+ * objects & places) for a dataset's subject — the same vocab the generator
+ * defaults to. Exposed so the generate-batch dialog can seed its override
+ * chips from the server vocab instead of mirroring the object/place axis
+ * constants client-side. Throws 409 when the subject was deleted (mirrors
+ * the generate/slice paths); the caller fetches it silently.
+ */
+export async function getDatasetVariationAxes(datasetId) {
+  const dataset = await getDataset(datasetId);
+  const { subject } = await loadDatasetSubject(dataset);
+  return deriveVariationAxes(subject);
 }
 
 // Load the dataset's live canon subject (generation + slicing both need
@@ -399,13 +416,143 @@ export async function generateDatasetImages(datasetId, options = {}) {
   return { images: launched, mode: activeMode, modelId };
 }
 
+// Crops smaller than this on either axis are below FLUX's training floor and
+// (for vision proposals) usually a label strip or palette swatch the model
+// mistook for a panel — reject them. Mirrors the grid path's 64px guard.
+const MIN_CROP_PX = 64;
+
+// Ask the vision model to locate each distinct figure on the turnaround sheet
+// and return its bounding box. Normalized [0,1] fractions (not pixels) so the
+// model doesn't need to reason about the exact resolution — we scale to pixels
+// ourselves. The JSON-only instruction + example keeps the reply parseable by
+// extractJson, which already tolerates CLI banners and code fences.
+export const CROP_PROPOSAL_PROMPT = [
+  'This is a character/object reference sheet — a turnaround grid with several',
+  'distinct figures (front, side, back views, expression heads, etc.).',
+  'Return a tight bounding box around EACH separate figure so it can be cropped',
+  'into its own training image. Ignore label text, color-palette swatches, and',
+  'empty background. Reply with ONLY a JSON object of the form',
+  '{"boxes":[{"x":0.0,"y":0.0,"w":0.33,"h":0.5}, ...]} where x,y is the',
+  'top-left corner and w,h the width/height, all as fractions of the image',
+  '(0.0–1.0). No prose, no code fence.',
+].join(' ');
+
 /**
- * Slice the subject's existing reference-sheet turnaround into a fixed
- * `cols × rows` grid of training crops. Each crop lands as a `ready`
- * dataset image with source 'refsheet-slice' — the user prunes bad crops
- * (label strips, palette swatches) in the grid UI.
+ * Validate + clamp the vision model's normalized bounding boxes against the
+ * sheet's real pixel dimensions, returning sharp-ready
+ * `{ left, top, width, height }` extract rects. Pure — exported for tests.
+ *
+ * Drops a box when it: isn't a finite {x,y,w,h}; falls fully outside the image;
+ * or clamps to a region smaller than `MIN_CROP_PX` on either axis (label strips
+ * / swatches the model mistook for a figure). Returns `[]` when nothing
+ * survives so the caller can fall back to the fixed grid — an empty/garbage
+ * vision reply must never produce zero crops silently.
+ *
+ * @param {unknown} parsed — the parsed `{ boxes: [...] }` (or a bare array)
+ * @param {{width:number,height:number}} dims — the sheet's pixel dimensions
  */
-export async function sliceReferenceSheet(datasetId, { variant = LEGACY_SHEET_VARIANT_ID, cols = 3, rows = 2 } = {}) {
+export function normalizeCropProposals(parsed, { width, height } = {}) {
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return [];
+  const boxes = Array.isArray(parsed) ? parsed : (Array.isArray(parsed?.boxes) ? parsed.boxes : null);
+  if (!Array.isArray(boxes)) return [];
+
+  const rects = [];
+  for (const b of boxes) {
+    if (!b || typeof b !== 'object') continue;
+    const { x, y, w, h } = b;
+    if (![x, y, w, h].every((n) => typeof n === 'number' && Number.isFinite(n))) continue;
+    // Clamp the normalized rect into [0,1] before scaling, so a box that
+    // overhangs the edge (common — the model rounds generously) is trimmed
+    // to the sheet rather than throwing in sharp.extract.
+    const left = Math.round(Math.max(0, Math.min(1, x)) * width);
+    const top = Math.round(Math.max(0, Math.min(1, y)) * height);
+    const right = Math.round(Math.max(0, Math.min(1, x + w)) * width);
+    const bottom = Math.round(Math.max(0, Math.min(1, y + h)) * height);
+    const cw = right - left;
+    const ch = bottom - top;
+    if (cw < MIN_CROP_PX || ch < MIN_CROP_PX) continue;
+    rects.push({ left, top, width: cw, height: ch });
+  }
+  return rects;
+}
+
+/**
+ * Propose per-figure crop rectangles for a reference sheet via a vision model.
+ * Returns sharp-ready `{ left, top, width, height }` rects, or `[]` on any
+ * failure (no vision model, transport error, unparseable reply, all boxes
+ * rejected) so `sliceReferenceSheet` falls back to the fixed grid. Never
+ * throws — vision slicing is an optional enhancement over the grid.
+ *
+ * `describeImage` / `resolveModel` / `readImage` are injectable for tests.
+ */
+export async function proposeCropRegions(sheetPath, dims, {
+  providerId = null, model = null, settings = null,
+  describeImage = describeImageDataUrlDetailed,
+  resolveModel = resolveCaptionModel,
+  readImage = readFile,
+} = {}) {
+  const resolved = await resolveModel({ providerId, model, settings }).catch((err) => {
+    console.log(`⚠️ Vision crop slicing skipped — no vision model: ${err?.message || err}`);
+    return null;
+  });
+  if (!resolved) return [];
+
+  const bytes = await readImage(sheetPath).catch(() => null);
+  if (!bytes) return [];
+  const dataUrl = `data:image/png;base64,${bytes.toString('base64')}`;
+
+  // Funnel the vision call through the SAME mutex the caption loop uses, so a
+  // slice-while-captioning can't fire two concurrent requests at a single-GPU
+  // local backend (doubled KV-cache VRAM, no throughput win — see the lock's
+  // header in loraDatasetCaption.js).
+  const result = await withCaptionVisionLock(() => describeImage({
+    dataUrl,
+    prompt: CROP_PROPOSAL_PROMPT,
+    providerId: resolved.providerId,
+    model: resolved.model,
+    // Boxes are short, but a thinking model needs headroom — match the
+    // captioner's reasoning budget rather than the 500-token short default.
+    maxTokens: 600,
+  })).catch((err) => {
+    console.log(`⚠️ Vision crop slicing failed (${resolved.model}): ${err?.message || err}`);
+    return null;
+  });
+  if (!result?.text) return [];
+
+  // The model may answer with the documented `{"boxes":[…]}` OR a bare top-level
+  // array `[{…}]`. extractJson defaults to walking `{…}` blocks — for a bare
+  // array it would return the first inner box OBJECT (its no-predicate-match
+  // fallback), which normalizeCropProposals can't use. So accept the object
+  // form only when it actually carries a `boxes` array; otherwise walk for a
+  // top-level array block. This keeps a valid bare-array reply from silently
+  // falling back to the grid.
+  const objValue = extractJson(result.text, {
+    shapePredicate: (v) => Array.isArray(v?.boxes),
+  }).value;
+  const value = Array.isArray(objValue?.boxes)
+    ? objValue
+    : extractJson(result.text, { blockType: 'array' }).value;
+  const rects = normalizeCropProposals(value, dims);
+  if (rects.length) {
+    console.log(`🔎 Vision proposed ${rects.length} crop region(s) via ${resolved.model}`);
+  }
+  return rects;
+}
+
+/**
+ * Slice the subject's existing reference-sheet turnaround into individual
+ * training crops. With `useVision` (default), a vision-LLM pass proposes a
+ * bounding box per figure (turnaround layouts are model-generated and
+ * non-deterministic, so a fixed grid mis-cuts them); the fixed `cols × rows`
+ * grid is the fallback when no vision model is available or the pass yields
+ * nothing usable. Each crop lands as a `ready` dataset image with source
+ * 'refsheet-slice' — the user prunes bad crops (label strips, palette
+ * swatches) in the grid UI.
+ */
+export async function sliceReferenceSheet(datasetId, {
+  variant = LEGACY_SHEET_VARIANT_ID, cols = 3, rows = 2, useVision = true,
+  captionProviderId = null, captionModel = null,
+} = {}) {
   const dataset = await getDataset(datasetId);
   const { subject, entryKind } = await loadDatasetSubject(dataset);
   const sheetFilename = readSheetPointer(subject, variant);
@@ -423,42 +570,60 @@ export async function sliceReferenceSheet(datasetId, { variant = LEGACY_SHEET_VA
       status: 422, code: 'INVALID_IMAGE',
     });
   });
-  const cellW = Math.floor(meta.width / cols);
-  const cellH = Math.floor(meta.height / rows);
-  if (cellW < 64 || cellH < 64) {
-    throw new ServerError(
-      `Grid ${cols}×${rows} produces cells smaller than 64px on this sheet (${meta.width}×${meta.height})`,
-      { status: 400, code: 'VALIDATION_ERROR' },
-    );
+
+  // Vision-proposed boxes first; fall back to the fixed grid when the pass
+  // returns nothing usable (no model / error / all boxes rejected).
+  let rects = [];
+  let method = 'grid';
+  if (useVision) {
+    const settings = await getSettings();
+    rects = await proposeCropRegions(sheetPath, { width: meta.width, height: meta.height }, {
+      providerId: captionProviderId, model: captionModel, settings,
+    });
+    if (rects.length) method = 'vision';
+  }
+
+  if (!rects.length) {
+    const cellW = Math.floor(meta.width / cols);
+    const cellH = Math.floor(meta.height / rows);
+    if (cellW < MIN_CROP_PX || cellH < MIN_CROP_PX) {
+      throw new ServerError(
+        `Grid ${cols}×${rows} produces cells smaller than ${MIN_CROP_PX}px on this sheet (${meta.width}×${meta.height})`,
+        { status: 400, code: 'VALIDATION_ERROR' },
+      );
+    }
+    for (let r = 0; r < rows; r += 1) {
+      for (let c = 0; c < cols; c += 1) {
+        rects.push({ left: c * cellW, top: r * cellH, width: cellW, height: cellH });
+      }
+    }
   }
 
   await ensureDir(datasetImagesDir(datasetId));
   const entries = [];
-  for (let r = 0; r < rows; r += 1) {
-    for (let c = 0; c < cols; c += 1) {
-      const imageId = uuidv4();
-      const file = `${imageId}.png`;
-      await sharp(sheetPath)
-        .extract({ left: c * cellW, top: r * cellH, width: cellW, height: cellH })
-        .png()
-        .toFile(datasetImagePath(datasetId, file));
-      entries.push({
-        id: imageId,
-        file,
-        caption: '',
-        captionSource: null,
-        captionedAt: null,
-        source: 'refsheet-slice',
-        sourceJobId: null,
-        variation: null,
-        status: 'ready',
-        width: cellW,
-        height: cellH,
-        createdAt: new Date().toISOString(),
-      });
-    }
+  for (const rect of rects) {
+    const imageId = uuidv4();
+    const file = `${imageId}.png`;
+    await sharp(sheetPath)
+      .extract(rect)
+      .png()
+      .toFile(datasetImagePath(datasetId, file));
+    entries.push({
+      id: imageId,
+      file,
+      caption: '',
+      captionSource: null,
+      captionedAt: null,
+      source: 'refsheet-slice',
+      sourceJobId: null,
+      variation: null,
+      status: 'ready',
+      width: rect.width,
+      height: rect.height,
+      createdAt: new Date().toISOString(),
+    });
   }
   await updateDataset(datasetId, (current) => ({ ...current, images: [...current.images, ...entries] }));
-  console.log(`✂️ Dataset ${shortId(datasetId)} ← ${entries.length} crops from ${basename(sheetFilename)} (${cols}×${rows})`);
-  return { images: entries, sheet: basename(sheetFilename) };
+  console.log(`✂️ Dataset ${shortId(datasetId)} ← ${entries.length} crops from ${basename(sheetFilename)} (${method}${method === 'grid' ? ` ${cols}×${rows}` : ''})`);
+  return { images: entries, sheet: basename(sheetFilename), method };
 }

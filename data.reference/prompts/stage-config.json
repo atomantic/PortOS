@@ -14,6 +14,13 @@
       "returnsJson": false,
       "variables": []
     },
+    "manuscript-reformat": {
+      "name": "Manuscript — Reformat (fix paste artifacts)",
+      "description": "Repair PDF/paste formatting artifacts in a manuscript section — hard-wrapped paragraphs, split drop-caps, hyphen-broken words, and orphaned/duplicated quotation marks — WITHOUT changing any words. Returns the reformatted text only; an integrity guard rejects the result if any letters/digits changed.",
+      "model": "default",
+      "returnsJson": false,
+      "variables": []
+    },
     "writers-room-script": {
       "name": "Writers Room — Adapt to Scene Script",
       "description": "Adapt a Writers Room prose draft into a scene-by-scene screenplay-style breakdown with sluglines, action, dialogue, and per-scene visual prompts the image-gen pipeline can render.",
@@ -82,7 +89,12 @@
       "description": "Analyze a project directory and detect its configuration",
       "model": "default",
       "returnsJson": true,
-      "variables": ["jsonOutputFormat", "appDetectionSchema", "portDetectionRules", "pm2NamingConvention"]
+      "variables": [
+        "jsonOutputFormat",
+        "appDetectionSchema",
+        "portDetectionRules",
+        "pm2NamingConvention"
+      ]
     },
     "cos-agent-briefing": {
       "name": "CoS Agent Briefing",
@@ -277,6 +289,20 @@
       "returnsJson": true,
       "variables": []
     },
+    "pipeline-reverse-outline": {
+      "name": "Pipeline — Reverse Outline (scene segmentation + plotline tagging)",
+      "description": "Read the whole drafted manuscript and produce a reverse outline: identify the recurring plotlines, then segment the prose into scenes (each tagged to the plotline it advances, with POV, setting, and narrative/action/dialogue mix). Feeds the color-coded Reverse Outline view and is the canonical scene-segmentation substrate other editorial checks read. Runs at `heavy` tier — reads the full stitched manuscript.",
+      "model": "heavy",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-continuity-bible": {
+      "name": "Pipeline — Continuity Bible (established-facts ledger)",
+      "description": "Read the whole drafted manuscript and extract concrete, checkable facts about the story world — physical traits, ages, dates/elapsed time, locations, possessions, world rules, and who-knows-what-when. Auto-seeded from universe canon (locked canon = ground truth) and learned from prose; feeds the browsable Series Continuity view and is the substrate the canon-contradiction / timeline / knowledge-leak checks read. Runs at `heavy` tier — reads the full stitched manuscript.",
+      "model": "heavy",
+      "returnsJson": true,
+      "variables": []
+    },
     "pipeline-extract-scenes": {
       "name": "Pipeline — Extract Scenes from TV Teleplay",
       "description": "Parse an already-formatted TV teleplay into a structured scenes[] list (one entry per slugline) the storyboards stage can render. Defers to character / setting bibles for canonical names and slugline reuse.",
@@ -347,6 +373,13 @@
       "returnsJson": true,
       "variables": []
     },
+    "pipeline-script-verify": {
+      "name": "Pipeline — Comic Script Verification",
+      "description": "Craft pass over ONE issue's comic script before art: catches un-renderable panels, missing/malformed page-panel structure, panel-to-panel flow breaks, dialogue/art imbalance, within-issue continuity, and page-turn/beat placement. Used by Series Autopilot's per-issue script gate (advisory — surfaces findings, doesn't auto-rewrite). Returns actionable { severity, location, problem, suggestion } issues — empty list means sound.",
+      "model": "heavy",
+      "returnsJson": true,
+      "variables": []
+    },
     "pipeline-manuscript-completeness": {
       "name": "Pipeline — Manuscript Completeness",
       "description": "Developmental editor pass over the ACTUAL drafted manuscript (comic script / prose / teleplay across all issues), not synopses. Surfaces what's missing to FINISH a near-complete draft: missing-content (beats/pages/scenes), arc-gap (themes/protagonist turns the draft doesn't yet deliver), character-gap (under-developed cast), pacing, and continuity. Returns categorized { severity, category, issueNumber, anchorQuote, location, problem, suggestion } findings — issueNumber + anchorQuote anchor each finding to a manuscript spot so the editor can jump to it; empty list means complete.",
@@ -378,6 +411,13 @@
     "pipeline-series-title-logo": {
       "name": "Pipeline — Series Title / Logo Design",
       "description": "Design the series masthead / logo typography from the series name + logline + style notes + universe influences. Returns a {titleLogo} JSON object — a single prose paragraph describing typography treatment, finish, color hints, and motifs to inject into cover prompts and TV title screens. Runs once on series creation from a universe; user can regenerate from the bible sidebar.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-series-generate": {
+      "name": "Pipeline — Generate Series Concept",
+      "description": "Invent a new series within a universe — returns a {name, logline, premise, shape} JSON concept that tells a different story from existing series in the same universe, using the universe premise / style / influences / canon as seed material. Drives the 'Generate with AI' button on the New Series form; the concept pre-fills the form for the user to edit before creating.",
       "model": "default",
       "returnsJson": true,
       "variables": []
@@ -428,6 +468,202 @@
       "name": "Importer — Issue Proposal",
       "description": "Split a finished work into PortOS pipeline issues with titles + arcPosition + arcRole + verbatim prose excerpts. Honors source-marked issue / chapter / volume headers.",
       "model": "heavy",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-canon-describe-from-prose": {
+      "name": "Pipeline — Describe Nouns From Prose",
+      "description": "Backfill descriptions for canon nouns (characters/places/objects) that have none, using ONLY what the manuscript prose establishes. Grades each noun prose support (sufficient/thin/none) so nouns the prose never describes surface as a manuscript-quality red flag instead of being invented.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-editorial-info-dumping": {
+      "name": "Pipeline — Editorial Check: Info-dumping",
+      "description": "Editorial check (#1284): flags info-dumping / 'as you know, Bob' exposition in the drafted manuscript — backstory bricks, maid-and-butler dialogue, front-loaded world rules — and suggests how to dramatize or trim each instead. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-editorial-interiority": {
+      "name": "Pipeline — Editorial Check: Protagonist interiority",
+      "description": "Editorial check (#1294): flags POV scenes that move a viewpoint character through events without developing their interiority across four dimensions — mind, objective, emotional response, and decision-making. Reads the stitched manuscript, infers POV when untagged, and names the missing dimension per finding. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-editorial-chekhov": {
+      "name": "Pipeline — Editorial Check: Chekhov's guns (setups & payoffs)",
+      "description": "Editorial check (#1299): flags planted elements that never pay off (weapon, clue, secret, stated fear, promise, threat, skill introduced then dropped) and payoffs that arrive with no setup. Reads the stitched manuscript across chunks with a cross-chunk setup digest, and reconciles detected setups/payoffs against the authored reader-map hooks/payoffs. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-editorial-comic-page-turn": {
+      "name": "Pipeline — Editorial Check: Comic page-turn beats",
+      "description": "Editorial check (#1314): flags comic reveals/cliffhangers placed where the reader sees them early — on a page that shares its two-page spread with earlier pages rather than the first page after a page turn. Reads each issue's parsed comic-page layout and reconciles placement against the authored reader-map reveals/cliffhangers. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-editorial-dead-metaphor": {
+      "name": "Pipeline — Editorial Check: Dead / mixed metaphor & overwriting",
+      "description": "Editorial check (#1308): the judgment layer for tired language the deterministic cliché scan can't catch — dead or mixed metaphors, lightly-reworded novel clichés, and overwrought / purple prose. Reads the stitched manuscript; severity is advisory; skips knowing in-voice clichés. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-editorial-opening-start": {
+      "name": "Pipeline — Editorial Check: Weak opening (wrong start)",
+      "description": "Editorial check (#1300): flags clichéd or mis-placed openings — \"he wakes up\" / alarm-clock / dream starts, weather and scene-setting preambles, and scenes that begin before the interesting moment. Reads the stitched manuscript, focusing on the story opening and each chapter/issue opening. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-editorial-mirror-description": {
+      "name": "Pipeline — Editorial Check: Mirror self-description",
+      "description": "Editorial check (#1300): flags the tired device of a character looking at themselves in a mirror or reflection so the prose can catalog their appearance, while leaving reflections that do real story work alone. Reads the stitched manuscript. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-editorial-dialogue-pleasantries": {
+      "name": "Pipeline — Editorial Check: Empty greeting / small-talk openings",
+      "description": "Editorial check (#1300): flags scenes that open on empty pleasantries — greeting rituals and logistical small talk that carry no tension or information — while leaving pleasantries laced with subtext alone. Reads the stitched manuscript. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-editorial-kill-your-darlings": {
+      "name": "Pipeline — Editorial Check: Kill your darlings",
+      "description": "Editorial check (#1300): surfaces precious, self-indulgent passages — showpiece descriptions, digressions, over-explaining, and favorite lines that stop the scene's momentum — as candidates to cut, judged by story need rather than quality. Reads the stitched manuscript. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-editorial-endings-cliffhanger": {
+      "name": "Pipeline — Editorial Check: Chapter-ending cliffhangers",
+      "description": "Editorial check (#1298): flags chapter/issue endings that resolve and settle (\"soft landings\") instead of ending on an unresolved beat that pulls the reader forward, leaving a clearly terminal final chapter alone. Reads the stitched manuscript and reconciles detected endings against the authored reader-map cliffhangers. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-editorial-sensory-balance": {
+      "name": "Pipeline — Editorial Check: Sensory balance",
+      "description": "Editorial check (#1309): flags scenes that lean almost entirely on sight while sound, smell, touch, and taste are neglected, and sensory-bare scenes with almost no concrete grounding. Reads the stitched manuscript plus the reverse-outline scene segmentation (degrading to a whole-issue scan when absent), naming the missing sense per finding. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-editorial-white-room": {
+      "name": "Pipeline — Editorial Check: White-room / ungrounded scene",
+      "description": "Editorial check (#1309): flags \"white-room\" scenes — dialogue and action in an undescribed void with no setting, blocking, or spatial grounding. Reads the stitched manuscript plus the reverse-outline scene segmentation (using each scene's recorded setting as a candidate signal, degrading to a whole-issue scan when absent). Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-editorial-arc-transitions": {
+      "name": "Pipeline — Editorial Check: Character-arc transitions",
+      "description": "Editorial check (#1293): scans each character's scenes for genuine change moments (decision, realization, point-of-no-return, relapse, sacrifice) and proposes transition beats with anchor quotes. Reconciles detected change moments against the authored per-character arcs (series.characterArcs) and flags flat arcs — a carrying character with no transition scenes. Reads the stitched manuscript plus the reverse-outline scene map (degrading to a whole-issue scan when absent). Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-editorial-object-motivation": {
+      "name": "Pipeline — Editorial Check: Unmotivated object interaction",
+      "description": "Editorial check (#1288): flags moments where a character treats an object as significant without earned motivation — no recorded attachment and no on-page setup. Reads the stitched manuscript plus the canon object↔character attachments. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-editorial-object-backstory": {
+      "name": "Pipeline — Editorial Check: Attachment backstory consistency",
+      "description": "Editorial check (#1288): flags object↔character attachments whose origin story contradicts the attached character's established background — conflicting people, places, eras, or timelines. Canon-only (no manuscript). Returns canon-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-editorial-style-conformance": {
+      "name": "Pipeline — Editorial Check: Style-guide conformance",
+      "description": "Editorial check (#1303): flags prose that drifts from the series style guide — wrong narrative tense, point-of-view person drift, or content/profanity beyond the configured rating ceiling. Reads the stitched manuscript plus the declared style-guide expectations. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-pov-rewrite": {
+      "name": "Pipeline — Perspective Rewrite (alternate POV)",
+      "description": "Rewrite one issue's drafted passage (prose, comic script, or teleplay) from a different cast character's point of view — the same events re-lensed through another character's interiority, wants, and blind spots. A non-destructive revision exercise; the canonical draft is untouched. Runs at `heavy` tier — re-renders the full passage.",
+      "model": "heavy",
+      "returnsJson": false,
+      "variables": []
+    },
+    "pipeline-pov-analysis": {
+      "name": "Pipeline — Perspective Rewrite Analysis (what we learn)",
+      "description": "Compare an original passage with its alternate-POV rewrite and report what the exercise reveals: new interiority surfaced, information the original POV was hiding, whether the new POV has a stronger claim to the scene, and concrete fold-back edits. Runs at `heavy` tier — reads both passages.",
+      "model": "heavy",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-editorial-telling-emotion": {
+      "name": "Pipeline — Editorial Check: Telling-not-showing emotion",
+      "description": "Editorial check (#1306): the judgment layer for named-emotion statements (\"she was sad\", \"he felt nervous\") worth dramatizing through action/sensation/subtext. Reads the stitched manuscript; severity is advisory; skips dialogue, deliberate pacing, and already-shown emotion. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-editorial-on-the-nose": {
+      "name": "Pipeline — Editorial Check: On-the-nose / subtext-free dialogue",
+      "description": "Editorial check (#1307): the judgment layer for dialogue that states feeling/meaning outright with no subtext and \"maid-and-butler\" exchanges where characters tell each other what they both already know. Reads the stitched manuscript; severity is advisory; skips earned directness, functional exchanges, and dialogue whose subtext already works. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-editorial-voice-distinctiveness": {
+      "name": "Pipeline — Editorial Check: Character voice distinctiveness",
+      "description": "Editorial check (#1307): samples each character dialogue and flags interchangeable voices (everyone sounds like one narrator) plus drafted lines that contradict the canon speechPattern/speechAccent. Reads the stitched manuscript + authored voice profiles; rolls a per-character voice-sample digest across chunks. Returns issue-anchored findings naming differentiating tics.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-editorial-plot-structure": {
+      "name": "Pipeline — Editorial Check: Plot structure & momentum",
+      "description": "Editorial check (#1310): the macro pathologies editors flag at the manuscript/arc level — a passive protagonist, deus ex machina / convenient coincidence, idiot plot, flat or unclear stakes that never escalate, a sagging middle with no try-fail rhythm, and dropped subplots. Reads the stitched manuscript plus the reverse-outline scene map + plotline coverage (reconciling fizzled threads against tagged plotlines) and the authored reader-map hooks/payoffs; degrades to a whole-manuscript scan when no outline exists. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-editorial-head-hopping": {
+      "name": "Pipeline — Editorial Check: Head-hopping / POV discipline",
+      "description": "Editorial check (#1311): in a limited-POV scene, flags narration that enters another character's head, reports knowledge/perception the POV character couldn't have, or switches POV mid-scene without a break. Reads the stitched manuscript plus the reverse-outline POV-per-scene map (degrading to a whole-issue scan when absent) and the series style guide's POV person; no-ops for third-person omniscient. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-editorial-theme-coherence": {
+      "name": "Pipeline — Editorial Check: Theme coherence / thematic throughline",
+      "description": "Editorial check (#1317): whether the manuscript actually DELIVERS its declared themes (series.arc.themes), not just states them. Builds a per-theme setup/complication/payoff coverage map, flags a theme that is stated but never dramatized or dropped after the opening, detects a strong EMERGENT theme not in the arc, and checks that the climax lands the thematic argument. Reads the stitched manuscript plus the authored arc themes and the reverse-outline scene map; degrades to a whole-manuscript scan when no outline or no themes exist. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-editorial-unmodeled-names": {
+      "name": "Pipeline — Editorial Check: Unmodeled proper nouns used as character names",
+      "description": "Editorial check (#1412): the LLM-assisted half of roster economy (#1292). Surfaces capitalized proper nouns used as apparent CHARACTER names that are ABSENT from the story bible (canon.characters names + aliases), and classifies each (named person vs. place / organization / brand / honorific the deterministic roster.economy scan can't distinguish). Flags throwaway one-appearance unmodeled names, suggesting adding them to canon or leaving them unnamed. Reads the stitched manuscript plus the canon roster; treats an empty bible as every named proper noun being a candidate. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-editorial-eyeline-match": {
+      "name": "Pipeline — Editorial Check: Storyboard eyeline match",
+      "description": "Editorial check (#1466): LLM scan of a scene's storyboard shot list for eyeline-match breaks — two characters in conversation whose gaze directions don't reciprocate across the cut, or a described eyeline that contradicts the shot's tagged screen direction. The judgment sibling of the deterministic visual.shot-continuity check; reads the per-issue storyboard shots (storyboard.shots). Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-editorial-appearance-continuity": {
+      "name": "Pipeline — Editorial Check: Storyboard appearance / prop continuity",
+      "description": "Editorial check (#1467): LLM diff of a scene's storyboard shot descriptions for appearance/prop continuity breaks — the same character described with conflicting wardrobe/hair/state, a prop that appears/vanishes/transforms, or a setting whose weather/time/layout contradicts across shots, with no action justifying the change. The semantic sibling of the deterministic visual.shot-continuity check (the shot parser matches characters by name but never diffs their descriptions); reads the per-issue storyboard shots (storyboard.shots). Returns issue-anchored findings.",
+      "model": "default",
       "returnsJson": true,
       "variables": []
     }

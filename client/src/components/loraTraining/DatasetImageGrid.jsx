@@ -88,8 +88,14 @@ const SOURCE_BADGE = {
   gallery: { label: 'gallery', cls: 'bg-sky-600/20 text-sky-300' },
 };
 
-export default function DatasetImageGrid({ dataset, onImagesChange, onCaptionRunStarted, captionModel = null }) {
+export default function DatasetImageGrid({
+  dataset, onImagesChange, onCaptionRunStarted, captionModel = null, draftResetToken = 0,
+}) {
   const [drafts, setDrafts] = useState({});
+  // A bulk caption rewrite in the parent (e.g. strip-shared-fragments) replaces
+  // dataset.images out from under any unsaved per-cell draft. Drop the drafts on
+  // that signal so the next blur doesn't PATCH the superseded text back.
+  useEffect(() => { setDrafts({}); }, [draftResetToken]);
   const [savingId, setSavingId] = useState(null);
   const [confirmingId, setConfirmingId] = useState(null);
   const [deletingId, setDeletingId] = useState(null);

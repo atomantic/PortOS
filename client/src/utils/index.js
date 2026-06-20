@@ -48,6 +48,7 @@ export * from './cityFilter.js';
 export * from './cityFlowLines.js';
 export * from './cityGoalMonuments.js';
 export * from './cityHealthTower.js';
+export * from './cityInteriorWindows.js';
 export * from './cityJiraDistrict.js';
 export * from './cityMemoryDistrict.js';
 export * from './cityMiniMap.js';

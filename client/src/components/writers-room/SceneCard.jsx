@@ -10,9 +10,6 @@ import {
 } from 'lucide-react';
 import toast from '../ui/Toast';
 import { generateImage } from '../../services/apiSystem';
-import {
-  attachWritersRoomSceneImage,
-} from '../../services/apiWritersRoom';
 import socket from '../../services/socket';
 import useClickOutside from '../../hooks/useClickOutside';
 import { WR_IMAGE_DEFAULTS, buildSceneRenderPayload } from '../../lib/wrImageDefaults';
@@ -113,21 +110,13 @@ const SceneCard = forwardRef(function SceneCard({
     };
     const onCompleted = (data) => {
       if (!jobIdRef.current || data.generationId !== jobIdRef.current) return;
-      const completedJobId = jobIdRef.current;
+      // The optimistic preview already shows this render; the durable attach
+      // onto the analysis snapshot is filed server-side by writersRoomSceneImageHook
+      // off the same job's `writersRoom` tag (#1363), so no client round-trip here.
       setGenerated((prev) => prev ? { ...prev, path: data.path || prev.path } : prev);
       setGenStatus('done');
       setProgress(null);
       jobIdRef.current = null;
-      if (workId && analysisId && scene.id) {
-        attachWritersRoomSceneImage(workId, analysisId, {
-          sceneId: scene.id,
-          filename: `${completedJobId}.png`,
-          jobId: completedJobId,
-          prompt: data.prompt || null,
-        }, { silent: true }).catch((err) => {
-          console.warn(`scene-image persist failed: ${err.message}`);
-        });
-      }
     };
     const onFailed = (data) => {
       if (!jobIdRef.current || data.generationId !== jobIdRef.current) return;
@@ -163,6 +152,9 @@ const SceneCard = forwardRef(function SceneCard({
       prompt,
       negativePrompt: imageStyle?.negativePrompt || '',
       imageCfg,
+      writersRoom: workId && analysisId && scene.id
+        ? { workId, analysisId, sceneId: scene.id }
+        : null,
     }), { silent: true }).catch((err) => {
       setError(err.message);
       setGenStatus('error');

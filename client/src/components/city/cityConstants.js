@@ -220,6 +220,13 @@ export const cityDayMix = (settings) => {
 // boundary is exact-0.5-excluded on purpose: the low preset renders structure only.
 export const cityShowDetail = (settings) => (settings?.particleDensity ?? 1) > 0.5;
 
+// True when the active quality preset is "high" or above (particleDensity ≥ 1.0)
+// — the gate for the heavier three-fenestra interior-mapping window panes, which
+// ray-march a fake interior per pane and so cost more than the flat window
+// texture. Held one tier above cityShowDetail so medium-tier machines keep the
+// rest of the set dressing but skip the per-pane interior shader.
+export const cityShowInteriorWindows = (settings) => (settings?.particleDensity ?? 1) >= 1;
+
 // Drei <Text> props for an informational in-world label that stays legible in both
 // the night-neon scene AND the bright daytime scene. At night (dayMix→0) the label
 // keeps its neon fill with no outline, so the established look is untouched. As day

@@ -4,6 +4,8 @@ import { filterSelectableModels } from '../utils/providers';
 import { composeCanonStyledPrompt } from '../lib/composeStyledPrompt';
 import { descriptorForCanonEntry } from '../lib/canonPrompt';
 import { pipelineImageCfgToRenderOpts } from '../lib/pipelineImageDefaults';
+import { buildUniverseSectionRenderTag } from '../lib/universeRunTag';
+import { capImageRefs } from '../lib/bibleLimits';
 import useImageRenderSettings from '../hooks/useImageRenderSettings';
 import useSingleImageRender from '../hooks/useSingleImageRender';
 import EntryThumbSlot from '../components/universe/EntryThumbSlot';
@@ -24,7 +26,7 @@ import {
   setStorySessionSync, reconcileStorySession, storyStepProgressSseUrl,
   getUniverse, getPipelineSeries, listPipelineIssues,
   analyzeImport, commitImport, retryImporterIssues, IMPORTER_CONTENT_TYPES,
-  getProviders, updateUniverse,
+  getProviders,
 } from '../services/api';
 import ArcCanvas from '../components/pipeline/ArcCanvas';
 import { useArcCanvasSync } from '../hooks/useArcCanvasSync';
@@ -464,8 +466,30 @@ function ReaderMapBeatTimeline({ readerMap }) {
   );
 }
 
-function ReaderMapView({ readerMap }) {
-  if (!readerMap) return <p className="text-gray-600 italic text-sm">No reader map yet. Generate one to plan the audience experience.</p>;
+// Compact read-only summary of the arc's ticking clock — shown above the reader
+// map so the countdown the reader anticipates sits alongside the hooks/payoffs
+// it threads through. Authored in the Arc Canvas; null/disabled clocks hide.
+function TickingClockSummary({ clock }) {
+  if (!clock || clock.enabled !== true) return null;
+  const span = clock.plantedAtArcPosition != null || clock.dueAtArcPosition != null
+    ? ` · arc ${clock.plantedAtArcPosition ?? '?'} → ${clock.dueAtArcPosition ?? '?'}` : '';
+  const reminderCount = Array.isArray(clock.reminders) ? clock.reminders.length : 0;
+  return (
+    <div className="rounded border border-port-warning/40 bg-port-bg/50 px-2 py-1.5">
+      <div className="text-xs uppercase tracking-wide text-gray-500 mb-0.5">Ticking clock</div>
+      <div className="text-sm text-gray-300">
+        ⏱ {clock.label || '(unnamed countdown)'} <span className="text-gray-500">({clock.kind || 'custom'}{span})</span>
+      </div>
+      {clock.stakes ? <div className="text-xs text-gray-400 mt-0.5">{clock.stakes}</div> : null}
+      {reminderCount ? <div className="text-[11px] text-gray-500 mt-0.5">{reminderCount} reminder beat(s)</div> : null}
+    </div>
+  );
+}
+
+function ReaderMapView({ readerMap, tickingClock }) {
+  if (!readerMap && !(tickingClock && tickingClock.enabled === true)) {
+    return <p className="text-gray-600 italic text-sm">No reader map yet. Generate one to plan the audience experience.</p>;
+  }
   const Section = ({ title, items, render }) => (
     items?.length ? (
       <div>
@@ -476,10 +500,11 @@ function ReaderMapView({ readerMap }) {
   );
   return (
     <div className="space-y-3">
-      <Section title="Hooks" items={readerMap.hooks} render={(h) => `${h.atArcPosition != null ? `@${h.atArcPosition} · ` : ''}${h.label}${h.note ? ` — ${h.note}` : ''}`} />
-      <Section title="Payoffs" items={readerMap.payoffs} render={(p) => `${p.atArcPosition != null ? `@${p.atArcPosition} · ` : ''}${p.label}`} />
-      <Section title="Beats" items={readerMap.beats} render={(b) => `[${b.kind}${b.intensity != null ? ` ${Math.round(b.intensity * 100)}%` : ''}] ${b.note || ''}`} />
-      <Section title="Cliffhangers" items={readerMap.cliffhangers} render={(c) => `after #${c.atIssueBoundary ?? '?'} — ${c.note || ''}`} />
+      <TickingClockSummary clock={tickingClock} />
+      <Section title="Hooks" items={readerMap?.hooks} render={(h) => `${h.atArcPosition != null ? `@${h.atArcPosition} · ` : ''}${h.label}${h.note ? ` — ${h.note}` : ''}`} />
+      <Section title="Payoffs" items={readerMap?.payoffs} render={(p) => `${p.atArcPosition != null ? `@${p.atArcPosition} · ` : ''}${p.label}`} />
+      <Section title="Beats" items={readerMap?.beats} render={(b) => `[${b.kind}${b.intensity != null ? ` ${Math.round(b.intensity * 100)}%` : ''}] ${b.note || ''}`} />
+      <Section title="Cliffhangers" items={readerMap?.cliffhangers} render={(c) => `after #${c.atIssueBoundary ?? '?'} — ${c.note || ''}`} />
     </div>
   );
 }
@@ -578,7 +603,7 @@ function RefineBox({ onRefine, disabled, busy, running, phase }) {
   );
 }
 
-function StepPanel({ session, universe, series, issues, stepId, locked, onChanged, onSeriesUpdate, onIssuesUpdate, onFlushPending }) {
+function StepPanel({ session, universe, series, issues, stepId, locked, onChanged, onSeriesUpdate, onIssuesUpdate, onFlushPending, onUniverseCharRef }) {
   const { start, busy, phase, op } = useStepStream(session.id, stepId);
   const arc = series?.arc || {};
   const isRunning = (which) => busy && op === which;
@@ -659,6 +684,11 @@ function StepPanel({ session, universe, series, issues, stepId, locked, onChange
         <FieldBlock label="Influences — embrace" value={(universe?.influences?.embrace || []).join(', ')} />
         <FieldBlock label="Influences — avoid" value={(universe?.influences?.avoid || []).join(', ')} />
         <div className="border-t border-port-border pt-3">
+          {/* Keyed by universe id so an in-flight base-style render's spinner +
+              completion stay scoped to one universe across a selection change. */}
+          {/* No `key` remount — `useSingleImageRender` scopes the probe per
+              universe via `scopeId`, so the in-flight render/completion follows
+              the displayed universe without a settings refetch on each switch. */}
           <StyleProbeImage universe={universe} onUniverseChange={() => onChanged()} canRender={!locked} />
         </div>
         <div className="flex items-center gap-2">
@@ -729,14 +759,14 @@ function StepPanel({ session, universe, series, issues, stepId, locked, onChange
     return (
       <div className="space-y-3">
         <ReaderMapBeatTimeline readerMap={arc.readerMap} />
-        <ReaderMapView readerMap={arc.readerMap} />
+        <ReaderMapView readerMap={arc.readerMap} tickingClock={arc.tickingClock} />
         {!locked && genButton('Generate reader map', Boolean(arc.readerMap))}
         {!locked && arc.readerMap && <RefineBox onRefine={(fb) => runRefine(fb)} busy={busy} running={isRunning('refine')} phase={phase} />}
       </div>
     );
   }
   if (stepId === 'characters') {
-    return <StepCharacters session={session} universe={universe} locked={locked} onChanged={onChanged} />;
+    return <StepCharacters session={session} universe={universe} locked={locked} onChanged={onChanged} onUniverseCharRef={onUniverseCharRef} />;
   }
   if (stepId === 'issues') {
     return <IssuesPanel session={session} series={series} issues={issues} onChanged={onChanged} />;
@@ -768,27 +798,21 @@ function StepPanel({ session, universe, series, issues, stepId, locked, onChange
 // `composeCanonStyledPrompt` helper + `useSingleImageRender` jobId lifecycle →
 // EntryThumbSlot (spinner → image), and persists the resulting filename onto
 // the universe canon entry's imageRefs.
-function StepCharacters({ session, universe, locked, onChanged }) {
+function StepCharacters({ session, universe, locked, onChanged, onUniverseCharRef }) {
   const cast = universe?.characters || [];
   const { imageCfg } = useImageRenderSettings();
   const [refiningId, setRefiningId] = useState(null);
   const { start: startRefine, busy: refineBusy, phase: refinePhase } = useStepStream(session.id, 'characters');
 
-  // Section-local renders don't carry a universeRun tag, so the server's
-  // imageRef append hook never fires — persist the filename ourselves. Refetch
-  // the freshest universe before appending so a sibling character's just-
-  // persisted imageRef isn't clobbered by a stale full-array PATCH.
-  const onCharRendered = async (filename, charId) => {
-    if (!universe?.id) return;
-    const fresh = await getUniverse(universe.id, { silent: true }).catch(() => null);
-    const chars = (fresh?.characters) || universe.characters || [];
-    const list = chars.map((e) => (
-      e.id === charId
-        ? { ...e, imageRefs: (e.imageRefs || []).includes(filename) ? e.imageRefs : [...(e.imageRefs || []), filename] }
-        : e
-    ));
-    await updateUniverse(universe.id, { characters: list }, { silent: true }).catch(() => {});
-    onChanged();
+  // Section-local renders now carry a durable `universeRun.entryRef` tag (#1362),
+  // so the server-side `appendEntryImageRef` hook persists the filename onto the
+  // character's `imageRefs[]` — the client no longer refetches + PATCHes (a
+  // full-array `updateUniverse` could clobber a sibling's just-persisted ref
+  // with a stale list). Just mirror the ref into the loaded universe draft
+  // optimistically for an instant thumbnail.
+  const onCharRendered = (filename, charId) => {
+    if (!universe?.id || !filename) return;
+    onUniverseCharRef?.(charId, filename);
   };
 
   // One render per character, keyed by char id. `buildPrompt(charId)` composes
@@ -808,7 +832,13 @@ function StepCharacters({ session, universe, locked, onChanged }) {
     onError: (err) => toast.error(err?.message || 'Render failed'),
   });
 
-  const renderChar = (c) => queueCharRender(imageCfg, c.id);
+  const renderChar = (c) => {
+    // Tag the render so the server auto-files it onto the character's
+    // `imageRefs[]` (#1362). `useSingleImageRender.render` merges the third arg
+    // into the generate payload.
+    const tag = buildUniverseSectionRenderTag(universe, 'characters', c);
+    queueCharRender(imageCfg, c.id, tag ? { universeRun: tag } : undefined);
+  };
 
   const refineChar = (entryId) => {
     if (refineBusy) return;
@@ -1002,6 +1032,27 @@ function StoryBuilderDetail({ storyId, stepParam }) {
     }
     setLoading(false);
   }, [storyId]);
+
+  // Optimistically mirror a completed character render onto the loaded
+  // universe's `imageRefs[]`. The Story Builder characters step now tags its
+  // render with a durable `universeRun.entryRef` (#1362), so the server-side
+  // `appendEntryImageRef` hook persists the ref — this stamp just drives an
+  // instant thumbnail without a refetch (which could race the durable write).
+  // Dedup-guarded + last-N capped to mirror the server append.
+  const applyUniverseCharRef = useCallback((charId, filename) => {
+    if (!charId || !filename) return;
+    setUniverse((cur) => {
+      if (!cur) return cur;
+      const chars = Array.isArray(cur.characters) ? cur.characters : [];
+      const nextChars = chars.map((c) => {
+        if (c?.id !== charId) return c;
+        const refs = Array.isArray(c.imageRefs) ? c.imageRefs : [];
+        if (refs.includes(filename)) return c;
+        return { ...c, imageRefs: capImageRefs([...refs, filename]) };
+      });
+      return { ...cur, characters: nextChars };
+    });
+  }, []);
 
   // ── Embedded ArcCanvas wiring (plotArc step) ──────────────────────────────
   // The Arc Canvas edits series.arc + the issue roadmap in place, so it needs
@@ -1254,6 +1305,7 @@ function StoryBuilderDetail({ storyId, stepParam }) {
               onSeriesUpdate={updateSeriesFromServer}
               onIssuesUpdate={handleIssuesUpdate}
               onFlushPending={flushPending}
+              onUniverseCharRef={applyUniverseCharRef}
             />
 
             {/* Footer: lock + navigation */}

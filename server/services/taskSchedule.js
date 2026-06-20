@@ -139,7 +139,7 @@ async function getPerformanceAdjustedInterval(taskType, baseIntervalMs) {
 export const SELF_IMPROVEMENT_TASK_TYPES = [
   'security', 'code-quality', 'test-coverage', 'performance',
   'accessibility', 'branch-cleanup', 'console-errors', 'dependency-updates', 'documentation',
-  'ui-bugs', 'mobile-responsive', 'feature-ideas', 'plan-task', 'claim-issue', 'error-handling',
+  'ui-bugs', 'mobile-responsive', 'feature-ideas', 'plan-task', 'claim-issue', 'claim-work', 'error-handling',
   'typing', 'release-check', 'pr-reviewer', 'code-reviewer-a', 'code-reviewer-b',
   'jira-sprint-manager', 'jira-status-report', 'do-replan',
   // Polls the app's GitHub repo for pull requests newly opened against the
@@ -199,6 +199,18 @@ export const DEFAULT_TASK_INTERVALS = {
   // matching /claim --issues) only claims issues the repo owner filed; 'any'
   // claims any open issue. Per-app override supported via taskTypeOverrides.
   'claim-issue':         { type: INTERVAL_TYPES.DAILY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: false, openPR: false, simplify: true, issueAuthorFilter: 'owner' } },
+  // claim-work is the SINGLE-SOURCE router: one toggle per app that ships the
+  // next work item from whatever tracker the app is configured for
+  // (app.workTracker, default 'auto' → resolved from the git origin host). At
+  // dispatch the generator resolves the tracker and delegates to the matching
+  // prompt body — plan→plan-task, github→claim-issue, gitlab→claim-issue-gitlab,
+  // jira→jira-sprint-manager — so the agent still creates its OWN worktree and
+  // opens its OWN PR. Both `useWorktree` and `openPR` are OFF on the CoS side
+  // for the SAME reasons as plan-task/claim-issue (a CoS-managed worktree would
+  // hide the claim slug and trigger cleanupAgentWorktree's auto-merge).
+  // `issueAuthorFilter` applies only when the resolved tracker is a forge
+  // (github/gitlab); it's inert for plan/jira.
+  'claim-work':          { type: INTERVAL_TYPES.DAILY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: false, openPR: false, simplify: true, issueAuthorFilter: 'owner' } },
   'error-handling':      { type: INTERVAL_TYPES.ROTATION, enabled: false, providerId: null, model: null, prompt: null },
   'typing':              { type: INTERVAL_TYPES.ONCE, enabled: false, providerId: null, model: null, prompt: null },
   'release-check':       { type: INTERVAL_TYPES.ON_DEMAND, enabled: false, providerId: null, model: null, prompt: null },
@@ -248,7 +260,10 @@ export const MANAGED_AGENT_OPTIONS = {
   'plan-task': ['useWorktree', 'openPR'],
   // claim-issue's prompt creates its own claim/issue-<num> worktree (same
   // rationale as plan-task), so CoS must not pre-create one or open the PR.
-  'claim-issue': ['useWorktree', 'openPR']
+  'claim-issue': ['useWorktree', 'openPR'],
+  // claim-work delegates to one of the above prompt bodies, each of which
+  // creates its own worktree + PR — so the same lock applies to the router.
+  'claim-work': ['useWorktree', 'openPR']
 };
 
 // Strip managed-agent fields from a per-app override map before merging on top

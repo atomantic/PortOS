@@ -161,5 +161,11 @@ export async function deleteSeason(seriesId, seasonId, { reassignTo = null } = {
     await seriesSvc.updateSeries(seriesId, { seasons: merged });
   });
   emitRecordUpdated('series', seriesId);
+  // The deleted season may have owned the series' list thumbnail (a volume
+  // cover). Recompute so the Pipeline list falls back to the next eligible
+  // cover (the next volume, then the earliest issue cover) instead of pointing
+  // at the removed season. Dynamic import dodges the static cycle; best-effort.
+  const { refreshSeriesCoverImage } = await import('./seriesCoverImage.js');
+  await refreshSeriesCoverImage(seriesId).catch(() => {});
   return { id: seasonId, reassignedIssueCount, reassignedTo: reassignTo };
 }

@@ -21,6 +21,8 @@ import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
 import { filterSelectableModels } from '../../../utils/providers';
 import { formatDurationMin, formatBytes } from '../../../utils/formatters';
+import InlineConfirmRow from '../../ui/InlineConfirmRow';
+import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 
 const statusIcons = {
   pending: <Clock size={16} aria-hidden="true" className="text-yellow-500" />,
@@ -102,6 +104,7 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
   });
   const [showBlockedModal, setShowBlockedModal] = useState(false);
   const [blockedReason, setBlockedReason] = useState('');
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   const blockedInputRef = useRef(null);
 
   // Focus input when modal opens
@@ -422,7 +425,7 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
                 <Edit3 size={14} aria-hidden="true" />
               </button>
               <button
-                onClick={handleDelete}
+                onClick={() => requestDelete(task.id)}
                 className="p-1 text-gray-500 hover:text-port-error transition-colors"
                 title="Delete"
                 aria-label="Delete task"
@@ -433,6 +436,17 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
           )}
         </div>
       </div>
+
+      {isConfirming(task.id) && (
+        <InlineConfirmRow
+          className="mt-2"
+          question="Delete this task? This cannot be undone."
+          confirmTitle="Confirm delete"
+          cancelTitle="Cancel delete"
+          onConfirm={() => confirmDelete(handleDelete)}
+          onCancel={cancelDelete}
+        />
+      )}
 
       {/* Blocked Reason Modal */}
       {showBlockedModal && (

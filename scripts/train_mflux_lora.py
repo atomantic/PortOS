@@ -66,9 +66,48 @@ STOP_REQUESTED = False
 # real error, not just the exit code). See the loop in main().
 OUTPUT_TAIL_LINES = 40
 
+# Packages whose resolved versions form the LoRA-training stack fingerprint. The
+# macOS GPU watchdog kernel panics (docs/research/2026-06-13-mflux-training-watchdog-panic.md)
+# are version-specific to this trio + mlx-lm, so emitting them at startup makes
+# every run log and any future paniclog self-document the exact stack it ran on
+# (mirrors the video-gen runtime fingerprint — _runner_common.emit_runtime_fingerprint).
+RUNTIME_FINGERPRINT_PACKAGES = ["mflux", "mlx", "mlx-metal", "mlx-lm"]
+
 
 def log(msg: str) -> None:
     print(msg, flush=True)
+
+
+def format_runtime_fingerprint_line(fp: dict) -> str:
+    """Render a build_runtime_fingerprint() dict to the one-line STATUS string
+    the trainer logs at startup. Pure (no I/O) so it is unit-testable without a
+    real mflux/mlx install. Absent packages are simply omitted from `versions`
+    by the builder, so they never appear here."""
+    versions = fp.get("versions") or {}
+    parts = [f"{name} {ver}" for name, ver in versions.items()] or ["versions unavailable"]
+    for field in ("chip", "os", "python"):
+        val = fp.get(field)
+        if val:
+            parts.append(f"{field} {val}" if field == "python" else str(val))
+    return "STATUS:runtime · " + " · ".join(parts)
+
+
+def emit_runtime_fingerprint() -> dict:
+    """Log a one-line runtime fingerprint (mflux/mlx/mlx-metal/mlx-lm versions +
+    Apple chip + macOS + python) at trainer startup. Best-effort: a fingerprint
+    failure must never abort a training run, so all of it is guarded. Reuses the
+    shared _runner_common.build_runtime_fingerprint so the trainer log and the
+    video-gen /status probe never drift. Returns the dict it emitted (or {})."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from _runner_common import build_runtime_fingerprint  # noqa: PLC0415
+
+        fp = build_runtime_fingerprint("mflux-lora", RUNTIME_FINGERPRINT_PACKAGES)
+        log(format_runtime_fingerprint_line(fp))
+        return fp
+    except Exception as err:  # pragma: no cover - defensive; never abort a run
+        log(f"STATUS:runtime fingerprint unavailable ({err})")
+        return {}
 
 
 def _on_sigterm(_sig, _frame):
@@ -574,6 +613,9 @@ def run_segment(cmd, *, segment_target, state, last_reported, output_tail,
 
 def main():
     args = parse_args()
+    # Self-document the exact numerical stack BEFORE anything can fail — the run
+    # log + any watchdog paniclog then carry the mflux/mlx/mlx-metal trio inline.
+    emit_runtime_fingerprint()
     output_dir = Path(args.output_dir)
     samples_dir = output_dir / "samples"
     samples_dir.mkdir(parents=True, exist_ok=True)

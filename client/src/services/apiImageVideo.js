@@ -7,6 +7,21 @@ export const listImageModels = () => request('/image-gen/models');
 // Per-model download status: `[{ id, repo, cached, sizeBytes }]`. Drives the
 // inline Available/Download badge on the image gen form.
 export const getImageModelStatuses = () => request('/image-gen/models/status', { silent: true });
+// Force an integrity re-scan of downloaded models. `deep:true` adds the
+// per-file sha256 comparison (slower) on top of the cheap structural check the
+// status poll already runs. Silent — callers own their own error UI.
+export const verifyImageModels = ({ modelId, deep = false } = {}) => request('/image-gen/models/verify', {
+  method: 'POST',
+  body: JSON.stringify({ ...(modelId ? { modelId } : {}), deep }),
+  silent: true,
+});
+// Delete the corrupt/truncated weight files for a model so the existing
+// download path re-fetches clean copies. Returns `{ deleted, repos }`.
+export const repairImageModel = (modelId, { deep = false } = {}) => request(`/image-gen/models/${encodeURIComponent(modelId)}/repair`, {
+  method: 'POST',
+  body: JSON.stringify({ deep }),
+  silent: true,
+});
 export const listLoras = () => request('/image-gen/loras');
 export const listImageGallery = () => request('/image-gen/gallery');
 export const getActiveImageJob = () => request('/image-gen/active');
@@ -77,6 +92,25 @@ export const listVideoModels = (options) => request('/video-gen/models', options
 // contract as the image variant + a text-encoder block since the active
 // encoder is a separate multi-GB pull.
 export const getVideoModelStatuses = () => request('/video-gen/models/status', { silent: true });
+// Integrity re-scan / repair — mirrors the image-gen helpers above.
+export const verifyVideoModels = ({ modelId, deep = false } = {}) => request('/video-gen/models/verify', {
+  method: 'POST',
+  body: JSON.stringify({ ...(modelId ? { modelId } : {}), deep }),
+  silent: true,
+});
+export const repairVideoModel = (modelId, { deep = false } = {}) => request(`/video-gen/models/${encodeURIComponent(modelId)}/repair`, {
+  method: 'POST',
+  body: JSON.stringify({ deep }),
+  silent: true,
+});
+// Repair the shared text encoder — delete its corrupt files so the existing
+// /text-encoder/download SSE re-fetches clean copies. The encoder isn't a model
+// id, so it needs this scalar endpoint rather than repairVideoModel.
+export const repairTextEncoder = ({ deep = false } = {}) => request('/video-gen/text-encoder/repair', {
+  method: 'POST',
+  body: JSON.stringify({ deep }),
+  silent: true,
+});
 export const cancelVideoGen = () => request('/video-gen/cancel', { method: 'POST' });
 // Currently-running (or next-queued) video job — used on VideoGen mount to
 // resume progress display after a page reload. Silent so a 5xx during status

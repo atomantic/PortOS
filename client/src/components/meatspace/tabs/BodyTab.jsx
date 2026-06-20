@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react';
 import { Scale, Eye, Plus, Pencil, Trash2, Check, X } from 'lucide-react';
 import * as api from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
+import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
+import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 import BodyCompChart from '../BodyCompChart';
 import BloodPressureCard from '../BloodPressureCard';
 
@@ -36,6 +38,7 @@ export default function BodyTab() {
   const [showEyeForm, setShowEyeForm] = useState(false);
   const [eyeForm, setEyeForm] = useState(EMPTY_EYE_FORM);
   const [editingEyeIdx, setEditingEyeIdx] = useState(null);
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
   useEffect(() => {
     api.getEyeExams().catch(() => ({ exams: [] })).then(eyes => {
@@ -227,13 +230,23 @@ export default function BodyTab() {
                           >
                             <Pencil size={12} />
                           </button>
-                          <button
-                            onClick={() => handleDeleteEye(realIdx)}
-                            className="p-1 text-gray-600 hover:text-port-error transition-colors"
-                            title="Delete"
-                          >
-                            <Trash2 size={12} />
-                          </button>
+                          {isConfirming(realIdx) ? (
+                            <ConfirmButtonPair
+                              prompt="Delete?"
+                              confirmIcon={Trash2}
+                              ariaLabel={`Confirm delete eye exam ${exam.date}`}
+                              onConfirm={() => confirmDelete(() => handleDeleteEye(realIdx))}
+                              onCancel={cancelDelete}
+                            />
+                          ) : (
+                            <button
+                              onClick={() => requestDelete(realIdx)}
+                              className="p-1 text-gray-600 hover:text-port-error transition-colors"
+                              title="Delete"
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>

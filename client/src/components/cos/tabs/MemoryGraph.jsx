@@ -131,7 +131,6 @@ export default function MemoryGraph() {
     const g = buildGraph(graphData.nodes, graphData.edges);
     graphRef.current = g;
     return g;
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- layoutKey intentionally triggers rebuild on re-layout
   }, [graphData, layoutKey]);
 
   const adjacentIds = useMemo(() => {

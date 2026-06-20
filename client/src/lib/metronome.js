@@ -107,7 +107,7 @@ export const beatDescriptor = (idx, { beatsPerBar = DEFAULT_BEATS_PER_BAR, count
 export function createMetronome({
   bpm = DEFAULT_BPM,
   beatsPerBar = DEFAULT_BEATS_PER_BAR,
-  beatValue = 4,
+  beatValue: _beatValue = 4,
   countInBars = 0,
   accentBeat = 1,
   onBeat = null,

@@ -78,7 +78,7 @@ function TerrainPlane({ dayMix, accent }) {
     // accent intentionally NOT a dep — a theme switch updates the uniform in
     // place (effect below) rather than recompiling the GLSL program. Matches the
     // imperative-uniform pattern in CitySky / CityBillboards / CityVolumetricLights.
-  }), [dayMix]); // eslint-disable-line react-hooks/exhaustive-deps
+  }), [dayMix]);
 
   // Push the accent into the existing material on theme change — no rebuild.
   useEffect(() => { material.uniforms.uAccent.value.set(accent); }, [material, accent]);

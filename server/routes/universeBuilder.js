@@ -8,6 +8,7 @@
  *   DELETE /api/universe-builder/:id                    → { id }
  *   POST   /api/universe-builder/expand                 → { logline, premise, styleNotes, influences, categories, compositeSheets, characters, places, objects, llm }
  *   POST   /api/universe-builder/describe-from-images   → { description, llm }
+ *   POST   /api/universe-builder/:id/characters/:entryId/expand-from-images → { fields, updatedFields, llm }
  *   POST   /api/universe-builder/:id/render             → { runId, collectionId, jobIds, promptCount }
  *   GET    /api/universe-builder/:id/runs               → Run[]
  */
@@ -28,7 +29,8 @@ import { BIBLE_KINDS, BIBLE_LIMITS, pruneStaleReferenceSheets } from '../lib/sto
 import { getUniverseCanonUsage, listLinkedSeriesNames } from '../services/canonUsage.js';
 import { expandWorldTemplate, generateCategoryVariations } from '../services/universeBuilderExpand.js';
 import { describeEntityFromImages, VISION_KINDS, VISION_MAX_IMAGES } from '../services/universeVisionDescribe.js';
-import { sanitizeFilename, PATHS } from '../lib/fileUtils.js';
+import { expandEntityFromImages, VISION_EXPAND_MAX_IMAGES } from '../services/universeVisionExpand.js';
+import { sanitizeFilename, PATHS, resolveGalleryImage } from '../lib/fileUtils.js';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { refineWorldPrompts } from '../services/universeBuilderRefine.js';
@@ -288,6 +290,11 @@ const refinePromptsSchema = z.object({
   // of what the LLM tries to write.
   locked: lockedSchema.optional().default({}),
   feedback: z.string().trim().min(1).max(3000),
+  // Optional gallery image used as a VISUAL style reference — when present the
+  // refiner forces a vision-capable API provider and folds the image's
+  // palette/lighting/mood into influences + styleNotes. Resolved to an absolute
+  // path in the handler before reaching the service.
+  image: z.string().trim().min(1).max(300).optional(),
   providerId: z.string().trim().max(80).optional(),
   // Whitespace-only model → undefined so the refiner's defaultModel /
   // models[0] fallback kicks in instead of a blank string reaching the
@@ -398,44 +405,66 @@ router.post('/generate-variations', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
-// Vision-to-prose: turn one or more reference images of a character/place/
-// object into an image-gen-ready prose description (multiple images → the
-// shared/common description). Stateless — the client decides which entry
-// field to write the result into. `screenshots` are filenames the client
-// already uploaded via POST /api/screenshots (server-sanitized again here as
-// defense-in-depth before the runner resolves them under data/screenshots).
-// Keep ahead of `/:id` so "describe-from-images" isn't parsed as a universe id.
-const describeFromImagesSchema = z.object({
-  kind: z.enum(VISION_KINDS),
-  name: z.string().trim().max(BIBLE_LIMITS.NAME_MAX).optional(),
-  context: z.string().trim().max(2000).optional(),
-  screenshots: z.array(z.string().trim().min(1).max(300)).min(1).max(VISION_MAX_IMAGES),
-  providerId: z.string().trim().max(80).optional(),
-  model: z.string().trim().max(200).optional(),
+// A reference image the vision routes accept from one of two sources:
+//   - 'upload'  → a filename the client already POSTed to /api/screenshots
+//                 (lives under data/screenshots; passed to the runner as a bare
+//                 filename, which it resolves under that dir).
+//   - 'gallery' → a generated-gallery filename under data/images; resolved here
+//                 to an ABSOLUTE path, which the runner's loadImageAsBase64
+//                 accepts as-is (it only prefixes data/screenshots for bare
+//                 names).
+const imageSourceSchema = z.object({
+  source: z.enum(['upload', 'gallery']),
+  filename: z.string().trim().min(1).max(300),
 });
-router.post('/describe-from-images', asyncHandler(async (req, res) => {
-  const body = validateRequest(describeFromImagesSchema, req.body ?? {});
-  // The upload route already sanitizes on write, so a legitimately-uploaded
-  // filename round-trips unchanged here. A hand-crafted body with path
-  // components is rejected outright (a 400, not a silent rewrite to a name
-  // that won't exist on disk — which would surface as a confusing generic
-  // "Image not found" from the runner), keeping a traversal attempt
-  // distinguishable from a deleted/never-uploaded file.
-  const screenshots = body.screenshots.map((f) => {
-    const safe = sanitizeFilename(f);
-    if (safe !== f) {
-      throw new ServerError(`Invalid screenshot filename: ${f}`, { status: 400, code: 'VALIDATION_ERROR' });
+
+// Resolve a mixed `[{ source, filename }]` list into runner-loadable paths,
+// failing loudly per the source's rules. The runner silently DROPS a missing
+// image and still sends the text prompt, so a stale/never-uploaded reference
+// would let the model describe with fewer references — or hallucinate from the
+// prompt alone if all are missing. Reject up front instead.
+function resolveImageSources(images) {
+  return images.map(({ source, filename }) => {
+    if (source === 'gallery') {
+      const abs = resolveGalleryImage(filename);
+      if (!abs) {
+        throw new ServerError(`Gallery image not found: ${filename} — pick another and retry.`, { status: 400, code: 'GALLERY_IMAGE_NOT_FOUND' });
+      }
+      return abs;
     }
-    // Preflight existence: the runner's loadImageAsBase64 silently DROPS a
-    // missing image and still sends the text prompt, so a stale/never-uploaded
-    // filename would otherwise let the model describe with fewer references —
-    // or, if all are missing, hallucinate from the prompt alone. Fail loudly
-    // here instead. data/screenshots is where POST /api/screenshots writes.
+    // 'upload' — the upload route already sanitizes on write, so a legitimately
+    // uploaded name round-trips unchanged. A hand-crafted name with path
+    // components is rejected outright (a 400, not a silent rewrite to a name
+    // that won't exist), keeping a traversal attempt distinguishable from a
+    // deleted/never-uploaded file.
+    const safe = sanitizeFilename(filename);
+    if (safe !== filename) {
+      throw new ServerError(`Invalid screenshot filename: ${filename}`, { status: 400, code: 'VALIDATION_ERROR' });
+    }
     if (!existsSync(join(PATHS.screenshots, safe))) {
       throw new ServerError(`Screenshot not found: ${safe} — re-upload the image and retry.`, { status: 400, code: 'SCREENSHOT_NOT_FOUND' });
     }
     return safe;
   });
+}
+
+// Vision-to-prose: turn one or more reference images of a character/place/
+// object into an image-gen-ready prose description (multiple images → the
+// shared/common description). Stateless — the client decides which entry
+// field to write the result into. Images come from upload OR the gallery (see
+// resolveImageSources). Keep ahead of `/:id` so "describe-from-images" isn't
+// parsed as a universe id.
+const describeFromImagesSchema = z.object({
+  kind: z.enum(VISION_KINDS),
+  name: z.string().trim().max(BIBLE_LIMITS.NAME_MAX).optional(),
+  context: z.string().trim().max(2000).optional(),
+  images: z.array(imageSourceSchema).min(1).max(VISION_MAX_IMAGES),
+  providerId: z.string().trim().max(80).optional(),
+  model: z.string().trim().max(200).optional(),
+});
+router.post('/describe-from-images', asyncHandler(async (req, res) => {
+  const body = validateRequest(describeFromImagesSchema, req.body ?? {});
+  const screenshots = resolveImageSources(body.images);
   const result = await describeEntityFromImages({ ...body, screenshots });
   res.json(result);
 }));
@@ -445,7 +474,17 @@ router.post('/describe-from-images', asyncHandler(async (req, res) => {
 // result back to a saved universe. Keep ahead of `/:id`.
 router.post('/refine-prompts', asyncHandler(async (req, res) => {
   const body = validateRequest(refinePromptsSchema, req.body ?? {});
-  res.json(await refineWorldPrompts(body));
+  // Resolve the optional style-reference image to an absolute gallery path
+  // before the service runs — fail loudly on a stale/bogus filename rather than
+  // letting the runner silently drop it and refine text-only.
+  let imagePath = null;
+  if (body.image) {
+    imagePath = resolveGalleryImage(body.image);
+    if (!imagePath) {
+      throw new ServerError(`Gallery image not found: ${body.image} — pick another and retry.`, { status: 400, code: 'GALLERY_IMAGE_NOT_FOUND' });
+    }
+  }
+  res.json(await refineWorldPrompts({ ...body, imagePath }));
 }));
 
 // Static-path GETs must register BEFORE `/:id` so they aren't swallowed by
@@ -638,6 +677,34 @@ router.post('/:id/characters/:entryId/expand', asyncHandler(async (req, res) => 
   const body = validateRequest(refineCharSchema, req.body ?? {});
   const result = await expandUniverseCharacter(req.params.id, req.params.entryId, body)
     .catch((err) => { throw mapServiceError(err); });
+  res.json(result);
+}));
+
+// Vision-driven expand — a vision model reads reference image(s) (upload or
+// gallery) and PROPOSES values for the character's still-blank structured
+// fields (palette/visual notes/expressions/...). Review-only: returns the
+// proposed `{ field: value }` map; the client applies the kept/edited values
+// via the normal entry-PATCH path. No-clobber, characters-only, locked
+// characters return `{ locked: true }` with no LLM call.
+const expandFromImagesSchema = z.object({
+  name: z.string().trim().max(BIBLE_LIMITS.NAME_MAX).optional(),
+  context: z.string().trim().max(2000).optional(),
+  images: z.array(imageSourceSchema).min(1).max(VISION_EXPAND_MAX_IMAGES),
+  providerId: z.string().trim().max(80).optional(),
+  model: z.string().trim().max(200).optional(),
+});
+router.post('/:id/characters/:entryId/expand-from-images', asyncHandler(async (req, res) => {
+  const body = validateRequest(expandFromImagesSchema, req.body ?? {});
+  const screenshots = resolveImageSources(body.images);
+  const result = await expandEntityFromImages({
+    universeId: req.params.id,
+    entryId: req.params.entryId,
+    name: body.name,
+    context: body.context,
+    screenshots,
+    providerId: body.providerId,
+    model: body.model,
+  }).catch((err) => { throw mapServiceError(err); });
   res.json(result);
 }));
 

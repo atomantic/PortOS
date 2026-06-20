@@ -67,7 +67,13 @@ const ERROR_PATTERNS = [
     suggestedFix: 'Check API key configuration for this provider'
   },
   {
-    pattern: /model.*(not found|does not exist|unavailable)|invalid model/i,
+    // "model identifier is invalid" is Bedrock's wording when the runner passes
+    // a model id the backend doesn't recognize (e.g. a bare Anthropic id like
+    // `claude-opus-4-8` to a Bedrock-backed Claude Code, which wants
+    // `global.anthropic.claude-opus-4-8`). Categorize it alongside the
+    // not-found/invalid-model phrasings so the cooldown + fallback path treats
+    // it as the config problem it is.
+    pattern: /model.*(not found|does not exist|unavailable)|invalid model|model identifier is invalid/i,
     category: ERROR_CATEGORIES.MODEL_NOT_FOUND,
     requiresFallback: true,
     actionable: true,
@@ -105,6 +111,60 @@ const IMMEDIATE_FALLBACK_SIGNALS = [
     suggestedFix: 'Provider usage limit reached. Using fallback provider or wait for limit reset.'
   }
 ];
+
+// Claude Code renders a non-recoverable *model id* rejection inline as
+// `⏺ API Error (<model>): 400 The provided model identifier is invalid…`
+// (Bedrock) or `API Error: 404 … not_found_error` (Anthropic) and then sits at an
+// unanswered prompt — it does NOT auto-retry the way it does a 429/500. Without an
+// early-fail signal the one-shot TUI runner idles out, reports success, and scrapes
+// the error screen as a bogus "response" (which then trips downstream guards like
+// the manuscript-reformat integrity check).
+//
+// This is DELIBERATELY NOT in IMMEDIATE_FALLBACK_SIGNALS: that detector is shared
+// by the long-running agent spawn paths (agentTuiSpawning / agentCliSpawning) and
+// the CLI runner, which stream arbitrary agent output through it. An agent that
+// legitimately prints this error line — `cat`-ing a prior run's output.txt, running
+// the error-detection tests, or investigating this very failure — commonly puts the
+// raw error at a LINE START, where line-anchoring alone wouldn't save it, and a
+// healthy run would be killed and misclassified MODEL_NOT_FOUND. So only the one-shot
+// TUI runner (tuiPromptRunner) consults this, via `createTerminalModelErrorDetector`:
+// it runs a single prompt whose only `API Error` rendering is Claude Code's own, so
+// the false-positive surface is negligible. CLI runs detect the same failure via the
+// process's non-zero exit code; they don't need an in-stream signal.
+//
+// Two precision constraints (belt-and-suspenders for the one-shot path):
+//   1. Line-anchored (`^…/m`) — the real signal is at a line start (or the
+//      512-char buffer's slice boundary, which `^` also matches).
+//   2. The 400/404 status must immediately follow the `API Error[(model)]:` prefix
+//      — so a retryable `API Error: 429 … 404 not found` (incidental 404) is left
+//      alone for Claude Code to auto-retry.
+const TERMINAL_MODEL_ERROR_PATTERN = /^\s*(?:⏺\s*)?API Error(?:\s*\([^)]*\))?:\s*(?:400|404)\b[^\n]{0,160}(?:model identifier is invalid|not[_\s]?found)/im;
+
+export function detectTerminalModelError(text) {
+  if (!text) return null;
+  const match = String(text).match(TERMINAL_MODEL_ERROR_PATTERN);
+  if (!match) return null;
+  return {
+    hasError: true,
+    category: ERROR_CATEGORIES.MODEL_NOT_FOUND,
+    message: match[0].trim() || 'Provider rejected the configured model id',
+    waitTime: null,
+    requiresFallback: true,
+    actionable: true,
+    suggestedFix: 'The provider does not recognize this model id — check the model name/availability for this provider; retrying with a fallback model.'
+  };
+}
+
+export function createTerminalModelErrorDetector({ maxBuffer = 512 } = {}) {
+  let buffer = '';
+  const cap = Number.isFinite(maxBuffer) && maxBuffer > 0 ? maxBuffer : 512;
+
+  return (chunk) => {
+    if (!chunk) return null;
+    buffer = `${buffer}${String(chunk)}`.slice(-cap);
+    return detectTerminalModelError(buffer);
+  };
+}
 
 export function extractWaitTime(text) {
   if (!text) return null;

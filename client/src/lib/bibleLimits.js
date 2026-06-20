@@ -27,6 +27,13 @@ export const BIBLE_LIMITS = Object.freeze({
   DISLIKES_MAX: 1500,
   MANNERISMS_MAX: 1500,
   RELATIONSHIPS_MAX: 2000,
+  RELATIONSHIP_TARGET_ID_MAX: 64,
+  RELATIONSHIP_TYPE_MAX: 60,
+  RELATIONSHIP_DESCRIPTION_MAX: 1000,
+  RELATIONSHIP_OPPOSITION_AXIS_MAX: 60,
+  RELATIONSHIP_OPPOSITION_ROLE_MAX: 120,
+  RELATIONSHIP_OPPOSITION_NOTE_MAX: 600,
+  RELATIONSHIP_LINKS_PER_CHARACTER_MAX: 40,
   SKILLS_MAX: 2000,
   STAT_LABEL_MAX: 80,
   STAT_VALUE_MAX: 200,
@@ -59,6 +66,11 @@ export const BIBLE_LIMITS = Object.freeze({
   PLACE_DESCRIPTION_MAX: 2000,
   OBJECT_DESCRIPTION_MAX: 2000,
   SIGNIFICANCE_MAX: 1000,
+  ATTACHMENT_CHARACTER_ID_MAX: 64,
+  ATTACHMENT_EMOTION_MAX: 120,
+  ATTACHMENT_SIGNIFICANCE_MAX: 1000,
+  ATTACHMENT_ORIGIN_MAX: 1000,
+  ATTACHMENTS_PER_OBJECT_MAX: 40,
   ENTRIES_PER_BIBLE_MAX: 200,
   PROMPT_MAX: 2000,
   TAG_MAX: 60,
@@ -67,3 +79,14 @@ export const BIBLE_LIMITS = Object.freeze({
   VOICE_ID_MAX: 200,
   INGREDIENT_ID_MAX: 64,
 });
+
+// Client-only helper (the cap *value* IMAGE_REFS_PER_ENTRY_MAX is mirrored from
+// the server; this convenience function is not). Trims an imageRefs list to that
+// last-N cap, mirroring the server's `appendEntryImageRef` rotation. Shared by
+// the optimistic imageRefs-append paths in the universe/canon render surfaces so
+// a local stamp never grows past what the durable server append keeps.
+export const capImageRefs = (refs) => (
+  refs.length > BIBLE_LIMITS.IMAGE_REFS_PER_ENTRY_MAX
+    ? refs.slice(-BIBLE_LIMITS.IMAGE_REFS_PER_ENTRY_MAX)
+    : refs
+);

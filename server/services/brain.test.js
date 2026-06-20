@@ -60,6 +60,13 @@ vi.mock('./brainStorage.js', () => {
   };
 });
 
+// Mock chatgptImport — brain.js's deleteMemoryEntry wrapper delegates the
+// on-disk asset cleanup to deleteMemoryAssets; stub it so the wrapper test
+// asserts the wiring (gating + survivor computation) without touching the FS.
+vi.mock('./chatgptImport.js', () => ({
+  deleteMemoryAssets: vi.fn()
+}));
+
 // Mock providers
 vi.mock('./providers.js', () => ({
   getActiveProvider: vi.fn(),
@@ -113,6 +120,7 @@ assertProvider: (provider, { message, code, status = 503 } = {}) => {
 
 import { runPromptThroughProvider } from '../lib/promptRunner.js';
 import * as storage from './brainStorage.js';
+import { deleteMemoryAssets } from './chatgptImport.js';
 import { getProviderById } from './providers.js';
 import {
   captureThought,
@@ -124,6 +132,7 @@ import {
   markInboxDone,
   updateInboxEntry,
   deleteInboxEntry,
+  deleteMemoryEntry,
   recoverStuckClassifications
 } from './brain.js';
 
@@ -1114,6 +1123,58 @@ describe('brain service', () => {
       expect(storage.updateLink).toHaveBeenCalledWith('l3', { bucketId: null });
       expect(storage.updateLink).not.toHaveBeenCalledWith('l2', { bucketId: null });
       expect(storage.deleteBucket).toHaveBeenCalledWith('b1');
+    });
+  });
+
+  describe('deleteMemoryEntry (asset cleanup wrapper)', () => {
+    beforeEach(() => {
+      deleteMemoryAssets.mockClear();
+      storage.getMemoryEntryById.mockReset();
+      storage.deleteMemoryEntry.mockReset();
+      storage.getMemoryEntries.mockReset();
+    });
+
+    it('cleans up assets for a deleted chatgpt-import memory, passing the OTHER imports as survivors', async () => {
+      const deleted = { id: 'm1', source: 'chatgpt-import', sourceRef: 'c1.json', content: '![a](/data/brain-imports/file-a.png)' };
+      const survivor = { id: 'm2', source: 'chatgpt-import', sourceRef: 'c2.json', content: '![b](/data/brain-imports/file-b.png)' };
+      storage.getMemoryEntryById.mockResolvedValue(deleted);
+      storage.deleteMemoryEntry.mockResolvedValue(true);
+      // getMemoryEntries already strips the tombstoned record; include a hand-
+      // written (non-import) memory to prove the survivor filter keeps only imports.
+      storage.getMemoryEntries.mockResolvedValue([
+        survivor,
+        { id: 'm3', source: undefined, content: 'hand-written note' },
+      ]);
+
+      const result = await deleteMemoryEntry('m1');
+
+      expect(result).toBe(true);
+      expect(deleteMemoryAssets).toHaveBeenCalledTimes(1);
+      // Survivors are full records (so cleanup can guard a shared sourceRef too),
+      // and only the other chatgpt-import is passed — never the hand-written note.
+      expect(deleteMemoryAssets).toHaveBeenCalledWith(deleted, [survivor]);
+    });
+
+    it('skips asset cleanup when the record was already gone (delete returned false)', async () => {
+      storage.getMemoryEntryById.mockResolvedValue({ id: 'm1', source: 'chatgpt-import' });
+      storage.deleteMemoryEntry.mockResolvedValue(false);
+
+      const result = await deleteMemoryEntry('m1');
+
+      expect(result).toBe(false);
+      expect(deleteMemoryAssets).not.toHaveBeenCalled();
+      expect(storage.getMemoryEntries).not.toHaveBeenCalled();
+    });
+
+    it('skips asset cleanup for a non-import (hand-written) memory', async () => {
+      storage.getMemoryEntryById.mockResolvedValue({ id: 'm1', source: undefined, content: 'note' });
+      storage.deleteMemoryEntry.mockResolvedValue(true);
+
+      const result = await deleteMemoryEntry('m1');
+
+      expect(result).toBe(true);
+      expect(deleteMemoryAssets).not.toHaveBeenCalled();
+      expect(storage.getMemoryEntries).not.toHaveBeenCalled();
     });
   });
 });

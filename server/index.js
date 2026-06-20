@@ -17,6 +17,7 @@ import avatarRoutes from './routes/avatar.js';
 import systemHealthRoutes from './routes/systemHealth.js';
 import capabilitiesRoutes from './routes/capabilities.js';
 import appsRoutes from './routes/apps.js';
+import workspaceContextsRoutes from './routes/workspaceContexts.js';
 import referenceReposRoutes from './routes/referenceRepos.js';
 import portsRoutes from './routes/ports.js';
 import networkExposureRoutes from './routes/networkExposure.js';
@@ -44,6 +45,7 @@ import feedsRoutes from './routes/feeds.js';
 import gsdRoutes from './routes/gsd.js';
 import catalogRoutes from './routes/catalog.js';
 import memoryRoutes from './routes/memory.js';
+import tribeRoutes from './routes/tribe.js';
 import notificationsRoutes from './routes/notifications.js';
 import standardizeRoutes from './routes/standardize.js';
 import brainRoutes from './routes/brain.js';
@@ -71,6 +73,7 @@ import dataManagerRoutes from './routes/dataManager.js';
 import jiraRoutes from './routes/jira.js';
 import autobiographyRoutes from './routes/autobiography.js';
 import backupRoutes from './routes/backup.js';
+import legacyExportRoutes from './routes/legacyExport.js';
 import cityRoutes from './routes/cityRoutes.js';
 import databaseRoutes from './routes/database.js';
 import localLlmRoutes from './routes/localLlm.js';
@@ -103,11 +106,14 @@ import videoGenRoutes from './routes/videoGen.js';
 import videoTimelineRoutes from './routes/videoTimeline.js';
 import mediaJobsRoutes from './routes/mediaJobs.js';
 import creativeDirectorRoutes from './routes/creativeDirector.js';
+import moodBoardRoutes from './routes/moodBoard.js';
 import writersRoomRoutes from './routes/writersRoom.js';
 import universeBuilderRoutes from './routes/universeBuilder.js';
 import authorsRoutes from './routes/authors.js';
 import conflictJournalRoutes from './routes/conflictJournal.js';
 import { initUniverseBuilderCollectionHook } from './services/universeBuilderCollectionHook.js';
+import { initCatalogImageAttachHook } from './services/catalogImageAttachHook.js';
+import { initWritersRoomSceneImageHook } from './services/writersRoomSceneImageHook.js';
 import { initComicPagesFilenameHook } from './services/pipeline/comicPagesFilenameHook.js';
 import { initStoryboardsFilenameHook } from './services/pipeline/storyboardsFilenameHook.js';
 import { initSeasonCoverFilenameHook } from './services/pipeline/seasonCoverFilenameHook.js';
@@ -159,6 +165,7 @@ import { startBrainScheduler } from './services/brainScheduler.js';
 import { recoverStuckClassifications } from './services/brain.js';
 import { recoverStuckAnalyses } from './services/writersRoom/evaluator.js';
 import { recoverStuckAutoRuns } from './services/pipeline/autoRunner.js';
+import { recoverStuckAutopilots } from './services/pipeline/seriesAutopilot.js';
 import { startOrphanShellGc } from './services/importerOrphanGc.js';
 import { startImageRefsGc } from './services/imageRefsGc.js';
 import { initBridge as initBrainMemoryBridge } from './services/brainMemoryBridge.js';
@@ -425,6 +432,7 @@ app.use('/api/avatar', avatarRoutes);
 app.use('/api/system', systemHealthRoutes);
 app.use('/api/capabilities', capabilitiesRoutes);
 app.use('/api/apps', appsRoutes);
+app.use('/api/workspace-contexts', workspaceContextsRoutes);
 app.use('/api/apps/:appId/reference-repos', referenceReposRoutes);
 app.use('/api/ports', portsRoutes);
 app.use('/api/network-exposure', networkExposureRoutes);
@@ -450,6 +458,7 @@ app.use('/api/media/annotations', mediaAnnotationsRoutes);
 app.use('/api/attachments', attachmentsRoutes);
 app.use('/api/client-errors', clientErrorsRoutes);
 app.use('/api/backup', backupRoutes);
+app.use('/api/legacy-export', legacyExportRoutes);
 app.use('/api/city', cityRoutes);
 app.use('/api/database', databaseRoutes);
 app.use('/api/uploads', uploadsRoutes);
@@ -470,6 +479,7 @@ app.use('/api/feature-agents', featureAgentsRoutes);
 app.use('/api/feeds', feedsRoutes);
 app.use('/api/catalog', catalogRoutes);
 app.use('/api/memory', memoryRoutes);
+app.use('/api/tribe', tribeRoutes);
 app.use('/api/notifications', notificationsRoutes);
 app.use('/api/standardize', standardizeRoutes);
 app.use('/api/brain/import', brainImportRoutes);
@@ -517,6 +527,7 @@ app.use('/api/video-gen', videoGenRoutes);
 app.use('/api/video-timeline', videoTimelineRoutes);
 app.use('/api/media-jobs', mediaJobsRoutes);
 app.use('/api/creative-director', creativeDirectorRoutes);
+app.use('/api/mood-boards', moodBoardRoutes);
 app.use('/api/writers-room', writersRoomRoutes);
 app.use('/api/universe-builder', universeBuilderRoutes);
 app.use('/api/authors', authorsRoutes);
@@ -567,6 +578,7 @@ try {
 // corrupt peer cursors.
 recoverStuckAnalyses().catch(err => console.error(`❌ Writers Room recovery failed: ${err.message}`));
 recoverStuckAutoRuns().catch(err => console.error(`❌ Pipeline auto-run recovery failed: ${err.message}`));
+recoverStuckAutopilots().catch(err => console.error(`❌ Pipeline autopilot recovery failed: ${err.message}`));
 // Initialize brain scheduler for daily digests and weekly reviews
 startBrainScheduler();
 // Initialize brain→memory bridge (mirrors brain data into CoS memory for semantic search)
@@ -755,6 +767,14 @@ ensureSelf()
     // Universe Builder needs the media job queue running before it can listen
     // for `completed` events — so initialize the hook here.
     initUniverseBuilderCollectionHook();
+    // Catalog image-attach hook — durably files a queued render onto its target
+    // ingredient on completion, even if the editor page unmounted mid-render
+    // (#1359). Also depends on the media job queue being loaded.
+    initCatalogImageAttachHook();
+    // Writers-Room scene-image hook — durably files a queued storyboard render
+    // onto its analysis snapshot + work collection on completion, even if the
+    // editor unmounted mid-render (#1363). Also depends on the queue being loaded.
+    initWritersRoomSceneImageHook();
     // Pipeline filename hooks — stamp `filename` onto stage records on
     // media-job completion so the UI can still render them after the
     // 24h media-job archive TTL elapses.
@@ -971,6 +991,20 @@ ensureSelf()
       }
     }
   })
+  .then(async () => {
+    // One-time series cover-thumbnail backfill: derive `series.coverImage` (the
+    // rendered volume/issue cover shown on the pipeline list) for series whose
+    // covers rendered before the feature shipped. Runs after the series + issues
+    // stores are warmed above so the derivation reads migrated records. Drives
+    // the services, so it works on both the PG backend and the file escape hatch.
+    // FIRE-AND-FORGET (not awaited): a cosmetic thumbnail backfill must never
+    // delay the server accepting requests, and it's marker-gated so it runs at
+    // most once regardless.
+    const { backfillSeriesCoverImages } = await import('./scripts/backfillSeriesCoverImages.js');
+    backfillSeriesCoverImages().catch((err) => {
+      console.error(`❌ series cover backfill failed at boot: ${err?.message ?? err}`);
+    });
+  })
   .then(() => {
     // Start server only after sync log + media job queue are initialized.
     // initMediaJobQueue failure is fatal: the queue owns persistence + SSE
@@ -984,18 +1018,26 @@ ensureSelf()
       // mirror that only spawns when HTTPS is active. See docs/PORTS.md.
       console.log(`🚀 PortOS listening on :${PORT} (${scheme})`);
       if (httpsEnabled) {
-        const selfHost = getSelfHost();
-        if (selfHost) console.log(`   ✅ https://${selfHost}:${PORT} (trusted via Tailscale)`);
-        console.log(`   🔐 https://<tailscale-ip>:${PORT} (cert warning unless using the hostname above)`);
-        initCertRenewer(httpServer);
         const localHttpPort = Number(process.env.PORTOS_HTTP_PORT) || PORTS.API_LOCAL;
+        // Lead with the URL that works from THIS machine with no cert warnings:
+        // the loopback HTTP mirror. http://localhost:${PORT} does NOT work in
+        // HTTPS mode (the :${PORT} socket speaks TLS only), so local users who
+        // type it land on a dead port — point them here instead.
+        console.log(`   👉 http://localhost:${localHttpPort} (open locally — no cert warnings)`);
+        // Only advertise the Tailscale hostname when it's actually usable. A cert
+        // provisioned while MagicDNS was down can carry a bogus host like
+        // "undefined.<tailnet>.ts.net"; printing it as "trusted" just misleads.
+        const selfHost = getSelfHost();
+        if (selfHost && !/^(undefined|null)\b/i.test(selfHost)) {
+          console.log(`   ✅ https://${selfHost}:${PORT} (remote via Tailscale, trusted)`);
+        }
+        console.log(`   🔐 https://<tailscale-ip>:${PORT} (remote via Tailscale; cert warning unless using the hostname above)`);
+        initCertRenewer(httpServer);
         if (localHttpServer) {
           io.attach(localHttpServer);
-          localHttpServer.listen(localHttpPort, '127.0.0.1', () => {
-            console.log(`   🔓 http://localhost:${localHttpPort} (loopback HTTP mirror, no cert warnings)`);
-          });
+          localHttpServer.listen(localHttpPort, '127.0.0.1');
           localHttpServer.on('error', (err) => {
-            console.warn(`⚠️  Loopback HTTP mirror on :${localHttpPort} failed: ${err.message} — HTTPS still active`);
+            console.warn(`⚠️  Loopback HTTP mirror on :${localHttpPort} failed: ${err.message} — http://localhost:${localHttpPort} won't work; use https://...:${PORT}`);
           });
         }
       } else {

@@ -12,6 +12,7 @@ import {
 } from '../services/apiCreativeDirector.js';
 import { listVideoModels } from '../services/apiImageVideo.js';
 import ModelSelect from '../components/ModelSelect';
+import PageHeader from '../components/PageHeader';
 
 const ASPECT_RATIOS = ['16:9', '9:16', '1:1'];
 const QUALITIES = ['draft', 'standard', 'high'];
@@ -61,7 +62,6 @@ export default function CreativeDirector() {
       const preferred = (m || []).find((entry) => !entry.deprecated) || (m || [])[0];
       if (preferred && !form.modelId) setForm((f) => ({ ...f, modelId: preferred.id }));
     }).catch(() => {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fetchProjects]);
 
   const handleCreate = async (e) => {
@@ -133,16 +133,12 @@ export default function CreativeDirector() {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="shrink-0 px-6 pt-6 pb-4 border-b border-port-border">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Film className="w-6 h-6 text-port-accent" />
-            <div>
-              <h1 className="text-xl font-semibold">Creative Director</h1>
-              <p className="text-sm text-port-text-muted">Long-form video projects driven by an autonomous CoS agent</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
+      <PageHeader
+        icon={Film}
+        title="Creative Director"
+        subtitle="Long-form video projects driven by an autonomous CoS agent"
+        actions={
+          <>
             <button
               onClick={async () => {
                 const created = await createSmokeTestCreativeDirectorProject().catch((e) => {
@@ -166,9 +162,9 @@ export default function CreativeDirector() {
               <Plus className="w-4 h-4" />
               New project
             </button>
-          </div>
-        </div>
-      </div>
+          </>
+        }
+      />
 
       {showForm && (
         <form onSubmit={handleCreate} className="shrink-0 p-6 border-b border-port-border bg-port-card/40 space-y-3">

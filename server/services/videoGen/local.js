@@ -14,10 +14,11 @@ import { execFile, spawn } from 'child_process';
 import { existsSync, statSync } from 'fs';
 import { unlink, writeFile, copyFile } from 'fs/promises';
 import { join, basename } from 'path';
-import { homedir, tmpdir, totalmem } from 'os';
+import { homedir, tmpdir, totalmem, cpus, type as osType, release as osRelease } from 'os';
 import { randomUUID } from 'crypto';
 import { promisify } from 'util';
 import { ensureDir, PATHS, readJSONFile, atomicWrite, UUID_RE } from '../../lib/fileUtils.js';
+import { spawnDetached } from '../../lib/detachedSpawn.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { videoGenEvents } from './events.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, PYTHON_NOISE_RE } from '../../lib/sseUtils.js';
@@ -27,6 +28,7 @@ import { hfTokenEnv } from '../../lib/hfToken.js';
 import { safeChildProcessEnv } from '../../lib/processEnv.js';
 import { makeVideoGenLineHandler, finalizeGeneratedVideo, isWatchdogSuccess } from './generateVideoHelpers.js';
 import { assertSafeLoraFilename } from '../loras.js';
+import { isMlxVideoLtxLoraCapable } from '../../lib/runners.js';
 
 // Path to the dgrauet/ltx-2-mlx venv populated by `INSTALL_LTX2=1
 // scripts/setup-image-video.sh`. Used when a model entry has
@@ -35,6 +37,15 @@ import { assertSafeLoraFilename } from '../loras.js';
 // progress protocol (STAGE:/STATUS:/DOWNLOAD:) as the mlx_video CLI.
 const LTX2_VENV_PYTHON = join(homedir(), '.portos', 'ltx-2-mlx', '.venv', 'bin', 'python3');
 const LTX2_HELPER_SCRIPT = join(PATHS.root, 'scripts', 'generate_ltx2.py');
+
+// LoRA wrapper for the notapalindrome `mlx_video` runtime. The stock
+// `mlx_video.generate_av` CLI has no --lora flag, but the package ships an
+// LTX-aware LoRA subsystem (`mlx_video.lora`) — this helper imports generate_av,
+// merges the user LoRAs into the transformer weights, then runs generate_av's
+// own main(), so it emits the identical STAGE:/STATUS:/DOWNLOAD: protocol. Runs
+// in the SAME venv as the bare `-m mlx_video.generate_av` path (the configured
+// pythonPath), not a separate BYOV venv. See isMlxVideoLtxLoraCapable.
+const AV_LORA_HELPER_SCRIPT = join(PATHS.root, 'scripts', 'generate_av_lora.py');
 
 // Wan 2.2 MLX runtime — osama-ata/Wan2.2-mlx cloned at
 // ~/.portos/wan2.2-mlx/. The wrapper at scripts/generate_wan22.py
@@ -51,6 +62,12 @@ const WAN22_REPO_DIR = join(homedir(), '.portos', 'wan2.2-mlx');
 const HUNYUAN_VENV_PYTHON = join(homedir(), '.portos', 'hunyuan-video-mlx', '.venv', 'bin', 'python3');
 const HUNYUAN_HELPER_SCRIPT = join(PATHS.root, 'scripts', 'generate_hunyuan.py');
 const HUNYUAN_REPO_DIR = join(homedir(), '.portos', 'hunyuan-video-mlx');
+
+// Standalone runtime-fingerprint probe (scripts/runtime_fingerprint.py). Run in
+// each installed BYOV venv by resolveRuntimeFingerprint() to surface resolved
+// package versions on GET /api/video-gen/status without running a render. Shares
+// its fingerprint definition with the inline render-time emit (_runner_common).
+const RUNTIME_FINGERPRINT_SCRIPT = join(PATHS.root, 'scripts', 'runtime_fingerprint.py');
 
 const execFileAsync = promisify(execFile);
 
@@ -107,6 +124,9 @@ export const BYOV_RUNTIME_INFO = Object.freeze({
     // `hyvideo` isn't pip-installed — mirror the runner's sys.path prepend so
     // the probe walks the same transitive import chain (loguru, diffusers, …).
     importProbe: `import sys; sys.path.insert(0, ${JSON.stringify(HUNYUAN_REPO_DIR)}); import hyvideo.inference`,
+    // Distributions the /status runtime-fingerprint probe resolves versions for
+    // (must match scripts/generate_hunyuan.py's emit_runtime_fingerprint call).
+    fingerprintPackages: ['torch', 'diffusers', 'transformers', 'mlx'],
   },
   wan22: {
     id: 'wan22',
@@ -119,6 +139,8 @@ export const BYOV_RUNTIME_INFO = Object.freeze({
     // upstream's pyproject.toml (e.g. einops, imported by wan/modules/vae2_1.py)
     // fail the probe instead of slipping past a flat torch/transformers check.
     importProbe: 'import wan',
+    // Mirror scripts/generate_wan22.py's emit_runtime_fingerprint package list.
+    fingerprintPackages: ['wan', 'mlx', 'mlx_metal', 'torch'],
   },
   ltx2: {
     id: 'ltx2',
@@ -131,6 +153,8 @@ export const BYOV_RUNTIME_INFO = Object.freeze({
     // `uv sync` (`import ltx_pipelines_mlx` is the canonical health signal
     // for this venv).
     importProbe: 'import ltx_pipelines_mlx',
+    // Mirror scripts/generate_ltx2.py's emit_runtime_fingerprint package list.
+    fingerprintPackages: ['ltx_pipelines_mlx', 'ltx_core_mlx', 'mlx', 'mlx_metal'],
   },
 });
 
@@ -184,6 +208,104 @@ export function assertByovRuntimeInstalled(runtimeId) {
     `${info.label} venv not found at ${info.venvPython}. Run \`${info.installEnvVar}=1 bash scripts/setup-image-video.sh\` to install.`,
     { status: 500, code: `${runtimeId.toUpperCase()}_VENV_MISSING` },
   );
+}
+
+// Cache runtime fingerprints per BYOV runtime for the life of the process.
+// An entry holds EITHER a resolved fingerprint object (success — stable until a
+// reinstall) OR the in-flight Promise while a probe runs, so overlapping
+// /status calls await one shared probe instead of spawning a stampede of python
+// children. Errors (timeout / spawn-fail / unparseable) are NOT cached — the
+// entry is dropped on failure so a freshly finished install reflects on the
+// next /status. invalidate on (re)install.
+const fingerprintCache = new Map();
+export function invalidateRuntimeFingerprintCache(runtimeId) {
+  if (runtimeId) fingerprintCache.delete(runtimeId); else fingerprintCache.clear();
+}
+
+// Max bytes of probe stdout to buffer — the fingerprint JSON is a few hundred
+// bytes; cap it so a misbehaving venv that spews warnings to stdout can't bloat
+// the Node heap. A truncated payload simply fails to parse → { error }.
+const FINGERPRINT_STDOUT_CAP = 64 * 1024;
+
+// Run the standalone probe in one installed BYOV venv → its fingerprint object
+// ({ runtime, versions, chip, os, python }) or { error } on any failure.
+// Best-effort and bounded (15s SIGKILL) so a wedged venv can't hang /status.
+async function probeRuntimeFingerprint(runtimeId) {
+  const info = BYOV_RUNTIME_INFO[runtimeId];
+  if (!info || !existsSync(info.venvPython)) return null;
+  // A resolved object OR an in-flight Promise both short-circuit here; only a
+  // missing/dropped entry (undefined) triggers a fresh probe.
+  const cached = fingerprintCache.get(runtimeId);
+  if (cached !== undefined) return cached;
+  const inFlight = (async () => {
+    const result = await new Promise((resolve) => {
+      let out = '';
+      const child = spawn(
+        info.venvPython,
+        [RUNTIME_FINGERPRINT_SCRIPT, runtimeId, ...(info.fingerprintPackages || [])],
+        { env: safeChildProcessEnv(), stdio: ['ignore', 'pipe', 'ignore'] },
+      );
+      const timer = setTimeout(() => { if (!child.killed) child.kill('SIGKILL'); resolve({ error: 'timeout' }); }, 15000);
+      child.stdout.on('data', (c) => { if (out.length < FINGERPRINT_STDOUT_CAP) out += c.toString(); });
+      child.on('close', (code) => {
+        clearTimeout(timer);
+        if (code !== 0) return resolve({ error: `exit ${code}` });
+        // The probe prints exactly one JSON line; take the last non-empty line
+        // defensively in case a venv import prints a stray warning to stdout.
+        const lastLine = out.trim().split('\n').filter(Boolean).pop() || '';
+        try { resolve(JSON.parse(lastLine)); } catch { resolve({ error: 'unparseable' }); }
+      });
+      child.on('error', () => { clearTimeout(timer); resolve({ error: 'spawn-failed' }); });
+    });
+    // Keep successful results cached; drop the in-flight entry on failure so the
+    // next request re-probes (don't cache errors).
+    if (result && !result.error) fingerprintCache.set(runtimeId, result);
+    else fingerprintCache.delete(runtimeId);
+    return result;
+  })();
+  fingerprintCache.set(runtimeId, inFlight);
+  return inFlight;
+}
+
+// Host runtime fingerprint computed in Node — cheap, always present (no python).
+// chip/os/arch are useful even before any BYOV runtime is installed.
+export function hostRuntimeFingerprint() {
+  return {
+    chip: cpus()?.[0]?.model || 'unknown',
+    os: `${osType()} ${osRelease()}`,
+    platform: process.platform,
+    arch: process.arch,
+    node: process.version,
+  };
+}
+
+// Full runtime block for GET /api/video-gen/status: the Node-side host info plus
+// per-installed-BYOV-runtime resolved package versions. Surfaces "what am I
+// running" so a garbled-output bug report carries the exact numerical stack
+// without running a render (#1325).
+//
+// NON-BLOCKING: /status is the page-load probe that populates the models list +
+// install/runtime gates, so it must never wait on a python fingerprint probe (a
+// cold or wedged venv could otherwise stall the whole Video Gen page for up to
+// the 15s probe timeout). We therefore return host info immediately plus only
+// the fingerprints already resolved in cache, and kick off a background warm for
+// any uncached installed runtime so its versions appear on the next /status.
+export async function resolveRuntimeFingerprint() {
+  const runtimes = {};
+  for (const id of Object.keys(BYOV_RUNTIME_INFO)) {
+    if (!isByovRuntimeInstalled(id)) continue;
+    const cached = fingerprintCache.get(id);
+    if (cached && typeof cached.then !== 'function') {
+      // A resolved fingerprint object (never an error — errors aren't cached).
+      runtimes[id] = cached;
+    } else if (cached === undefined) {
+      // Not cached and not already in flight — warm it in the background; the
+      // result lands in the cache for a subsequent /status. Fire-and-forget.
+      probeRuntimeFingerprint(id).catch(() => {});
+    }
+    // An in-flight Promise means a warm is already running — skip (don't await).
+  }
+  return { host: hostRuntimeFingerprint(), runtimes };
 }
 
 export const listVideoModels = () => getVideoModels();
@@ -590,13 +712,19 @@ const buildArgs = ({ pythonPath, modelId, model, prompt, negativePrompt, width, 
   if (model.runtime === 'ltx2') {
     return buildLtx2Args({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, mode, imageStrength, disableAudio, outputPath, textEncoderRepo, loras });
   }
-  // Defense-in-depth: only the ltx2 runtime can fuse user LoRAs. The route
-  // already rejects this combination, but a non-route caller (test, queue
-  // replay) could reach here — fail clearly rather than silently dropping the
-  // LoRAs and producing a base render the user thinks is LoRA-styled.
-  if (Array.isArray(loras) && loras.length > 0) {
+  const hasLoras = Array.isArray(loras) && loras.length > 0;
+  // Defense-in-depth: LoRAs fuse only on ltx2 (handled above) or a non-quantized
+  // LTX-2.x mlx_video model (the wrapper below), and the wrapper path is
+  // macOS/mlx-only. The route already rejects other runtimes, but a non-route
+  // caller (test, queue replay) — or a Windows install with a hand-edited/synced
+  // mlx_video LTX-2.x entry — could reach here. Fail clearly rather than fall
+  // through to the IS_WIN generate_win.py branch below, which would silently drop
+  // the LoRAs and produce a base render the user thinks is LoRA-styled.
+  if (hasLoras && (!isMlxVideoLtxLoraCapable(model) || IS_WIN)) {
     throw new ServerError(
-      `LoRAs are only supported on the ltx2 runtime. Model "${modelId}" runs on "${model.runtime || 'mlx_video'}".`,
+      IS_WIN
+        ? `LoRA fusion runs through the macOS-only mlx_video path; model "${modelId}" can't fuse LoRAs on Windows.`
+        : `LoRAs aren't supported on this model. Model "${modelId}" runs on "${model.runtime || 'mlx_video'}".`,
       { status: 400, code: 'LORAS_REQUIRE_LTX2' },
     );
   }
@@ -626,8 +754,9 @@ const buildArgs = ({ pythonPath, modelId, model, prompt, negativePrompt, width, 
     if (lastImagePath) args.push('--last-image', lastImagePath);
     return { bin: pythonPath, args };
   }
-  const args = [
-    '-m', 'mlx_video.generate_av',
+  // Flags shared by the bare `mlx_video.generate_av` CLI and the LoRA wrapper
+  // (scripts/generate_av_lora.py forwards these untouched to generate_av.main()).
+  const flags = [
     '--prompt', prompt,
     '--height', String(height),
     '--width', String(width),
@@ -641,8 +770,8 @@ const buildArgs = ({ pythonPath, modelId, model, prompt, negativePrompt, width, 
     '--text-encoder-repo', textEncoderRepo,
     '--tiling', tiling,
   ];
-  if (negativePrompt) args.push('--negative-prompt', negativePrompt);
-  if (disableAudio) args.push('--no-audio');
+  if (negativePrompt) flags.push('--negative-prompt', negativePrompt);
+  if (disableAudio) flags.push('--no-audio');
 
   // Pick a single conditioning image and frame index. mlx_video.generate_av
   // accepts only one --image so true FFLF (both keyframes) isn't supported;
@@ -659,15 +788,26 @@ const buildArgs = ({ pythonPath, modelId, model, prompt, negativePrompt, width, 
     console.log(`⚠️ FFLF requested but mlx_video CLI only supports single-frame conditioning — last image ignored`);
   }
   if (condImage) {
-    args.push('--image', condImage);
-    if (condFrameIdx != null) args.push('--image-frame-idx', String(condFrameIdx));
+    flags.push('--image', condImage);
+    if (condFrameIdx != null) flags.push('--image-frame-idx', String(condFrameIdx));
     // --image-strength uses mask = 1.0 - strength: 1.0 preserves the source
     // latent, 0.0 fully denoises (= T2V). mlx_video's help text describes
     // this inverted. Omit when no caller value so mlx_video's default (1.0)
     // applies.
-    if (imageStrength != null) args.push('--image-strength', String(imageStrength));
+    if (imageStrength != null) flags.push('--image-strength', String(imageStrength));
   }
-  return { bin: pythonPath, args };
+
+  // LoRA renders on a capable LTX-2.x mlx_video model go through the wrapper,
+  // which merges the LoRA deltas into the transformer before running
+  // generate_av.main(). `--user-loras` carries the resolved {path,strength}
+  // pairs — the same JSON shape buildLtx2Args emits for the dgrauet runtime.
+  if (hasLoras) {
+    return {
+      bin: pythonPath,
+      args: [AV_LORA_HELPER_SCRIPT, ...flags, '--user-loras', JSON.stringify(loras.map((l) => ({ path: l.path, strength: l.strength })))],
+    };
+  }
+  return { bin: pythonPath, args: ['-m', 'mlx_video.generate_av', ...flags] };
 };
 
 // Default frame count for LTX renders, matching the 8k+1 latent-boundary
@@ -915,7 +1055,20 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   // long inference loops emit nothing to handleLine() for minutes — the UI
   // looks dead even when the model is making progress.
   childEnv.PYTHONUNBUFFERED = '1';
-  const proc = spawn(bin, args, { env: childEnv, stdio: ['ignore', 'pipe', 'pipe'] });
+  // `spawnDetached` double-forks the render child so it reparents to init
+  // (PPID=1) and leaves pm2's process tree — without this a `pm2 restart
+  // portos-server` (e.g. on the memory ceiling) SIGINTs the in-flight render
+  // mid-inference, since pm2's TreeKill walks PPIDs. (This child previously had
+  // no detach at all, so it was fully exposed.) Output streams through on-disk
+  // log files under `data/videos/.detached/<jobId>` that the server tails; we
+  // still `proc.kill()` it directly by PID on cancel / watchdog. `cleanup: true`
+  // lets the helper drop that scratch dir on every terminal path (close/error)
+  // so it can't accumulate under data/videos.
+  const proc = await spawnDetached(bin, args, {
+    env: childEnv,
+    controlDir: join(PATHS.videos, '.detached', jobId),
+    cleanup: true,
+  });
   activeProcess = proc;
 
   // Panel-side completion watchdog. Armed once we see the render's completion
@@ -1041,61 +1194,77 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   proc.on('close', async (code, signal) => {
     clearCompletionWatchdog();
     activeProcess = null;
-    // Cleanup the resized temp images if we made them. Track via flags rather
-    // than a path-prefix check — tmpdir() can return a symlinked path
-    // (macOS /var → /private/var) so startsWith() can silently miss.
-    if (resizedSrcTempPath) await unlink(resizedSrcTempPath).catch(() => {});
-    if (resizedLastTempPath) await unlink(resizedLastTempPath).catch(() => {});
-    for (const p of resizedKeyframeTempPaths) await unlink(p).catch(() => {});
-    // Cleanup the original multipart upload temp file too — without this,
-    // every i2v request leaves a file in os.tmpdir() forever.
-    if (uploadedTempPath) await unlink(uploadedTempPath).catch(() => {});
-    for (const p of uploadedTempPaths) await unlink(p).catch(() => {});
-    // Defensive: catch audioFilePath too in case a direct caller passed it
-    // without threading through uploadedTempPaths. Skip when the route
-    // already covered it (extraUploadedTempPaths.push(audioFilePath)).
-    if (audioFilePath && !uploadedTempPaths.includes(audioFilePath)) {
-      await unlink(audioFilePath).catch(() => {});
-    }
+    // Wrap the whole teardown so a throw from finalizeGeneratedVideo (history
+    // save, thumbnail, file move) can't leak as an unhandled rejection — on
+    // Node ≥15 that kills the process AND strands the media job `running` with
+    // no terminal SSE. The catch routes any failure through the job's error
+    // finalizer so the client still gets a terminal 'failed' event.
+    try {
+      // Cleanup the resized temp images if we made them. Track via flags rather
+      // than a path-prefix check — tmpdir() can return a symlinked path
+      // (macOS /var → /private/var) so startsWith() can silently miss.
+      if (resizedSrcTempPath) await unlink(resizedSrcTempPath).catch(() => {});
+      if (resizedLastTempPath) await unlink(resizedLastTempPath).catch(() => {});
+      for (const p of resizedKeyframeTempPaths) await unlink(p).catch(() => {});
+      // Cleanup the original multipart upload temp file too — without this,
+      // every i2v request leaves a file in os.tmpdir() forever.
+      if (uploadedTempPath) await unlink(uploadedTempPath).catch(() => {});
+      for (const p of uploadedTempPaths) await unlink(p).catch(() => {});
+      // Defensive: catch audioFilePath too in case a direct caller passed it
+      // without threading through uploadedTempPaths. Skip when the route
+      // already covered it (extraUploadedTempPaths.push(audioFilePath)).
+      if (audioFilePath && !uploadedTempPaths.includes(audioFilePath)) {
+        await unlink(audioFilePath).catch(() => {});
+      }
 
-    // A watchdog-triggered SIGKILL means the render already emitted its
-    // completion marker and only the python teardown hung — the output file is
-    // on disk, so treat it as success (not the generic "killed, likely OOM"
-    // failure). Guard on the file actually existing + being non-empty so a
-    // marker without a real output (a malformed runtime) still fails loudly.
-    const watchdogSuccess = isWatchdogSuccess({ completionWatchdogFired, signal, outputPath });
+      // A watchdog-triggered SIGKILL means the render already emitted its
+      // completion marker and only the python teardown hung — the output file is
+      // on disk, so treat it as success (not the generic "killed, likely OOM"
+      // failure). Guard on the file actually existing + being non-empty so a
+      // marker without a real output (a malformed runtime) still fails loudly.
+      const watchdogSuccess = isWatchdogSuccess({ completionWatchdogFired, signal, outputPath });
 
-    if (code !== 0 && !watchdogSuccess) {
-      job.status = 'error';
-      let reason;
-      if (missingPyModule) {
-        const runtimeInfo = BYOV_RUNTIME_INFO[model.runtime];
-        if (runtimeInfo) {
-          // The probe believed the venv was ready but a runtime import
-          // disagreed — drop the cached "ready" so the next /runtime-status
-          // re-probes and the install banner re-appears.
-          invalidateByovReadyCache(runtimeInfo.id);
-          reason = `Python module '${missingPyModule}' is missing from the ${runtimeInfo.label} venv. Re-run the installer via Settings → Video (or \`${runtimeInfo.installEnvVar}=1 bash scripts/setup-image-video.sh\`).`;
+      if (code !== 0 && !watchdogSuccess) {
+        job.status = 'error';
+        let reason;
+        if (missingPyModule) {
+          const runtimeInfo = BYOV_RUNTIME_INFO[model.runtime];
+          if (runtimeInfo) {
+            // The probe believed the venv was ready but a runtime import
+            // disagreed — drop the cached "ready" so the next /runtime-status
+            // re-probes and the install banner re-appears.
+            invalidateByovReadyCache(runtimeInfo.id);
+            reason = `Python module '${missingPyModule}' is missing from the ${runtimeInfo.label} venv. Re-run the installer via Settings → Video (or \`${runtimeInfo.installEnvVar}=1 bash scripts/setup-image-video.sh\`).`;
+          } else {
+            reason = `Python module '${missingPyModule}' is missing. Install it into the configured Python environment and retry.`;
+          }
+        } else if (signal === 'SIGKILL') {
+          reason = 'Process killed (likely out of memory — try a smaller model or resolution)';
+        } else if (signal) {
+          reason = `Killed by signal ${signal}`;
         } else {
-          reason = `Python module '${missingPyModule}' is missing. Install it into the configured Python environment and retry.`;
+          reason = `Exit code ${code}`;
         }
-      } else if (signal === 'SIGKILL') {
-        reason = 'Process killed (likely out of memory — try a smaller model or resolution)';
-      } else if (signal) {
-        reason = `Killed by signal ${signal}`;
+        console.log(`❌ Video generation failed [${jobId.slice(0, 8)}]: ${reason}`);
+        broadcastSse(job, { type: 'error', error: `Generation failed: ${reason}` });
+        videoGenEvents.emit('failed', { generationId: jobId, error: reason });
       } else {
-        reason = `Exit code ${code}`;
+        if (watchdogSuccess) {
+          console.log(`⚠️ video child force-killed after completion teardown hang — output is intact [${jobId.slice(0, 8)}]`);
+        }
+        await finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta, actualSeed, loadHistory, saveHistory });
       }
-      console.log(`❌ Video generation failed [${jobId.slice(0, 8)}]: ${reason}`);
-      broadcastSse(job, { type: 'error', error: `Generation failed: ${reason}` });
-      videoGenEvents.emit('failed', { generationId: jobId, error: reason });
-    } else {
-      if (watchdogSuccess) {
-        console.log(`⚠️ video child force-killed after completion teardown hang — output is intact [${jobId.slice(0, 8)}]`);
-      }
-      await finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta, actualSeed, loadHistory, saveHistory });
+    } catch (err) {
+      // Finalize/teardown threw — fail the job loudly instead of crashing the
+      // process. The job may already be partway through finalize, so force the
+      // error state and emit the terminal event the client is waiting on.
+      job.status = 'error';
+      console.error(`❌ Video close handler failed [${jobId.slice(0, 8)}]: ${err.message}`);
+      broadcastSse(job, { type: 'error', error: `Generation failed: ${err.message}` });
+      videoGenEvents.emit('failed', { generationId: jobId, error: err.message });
+    } finally {
+      closeJobAfterDelay(jobs, jobId);
     }
-    closeJobAfterDelay(jobs, jobId);
   });
 
   return { jobId, generationId: jobId, filename, mode: 'local', model: modelId };
@@ -1403,20 +1572,27 @@ export async function extractLastFrame(historyId) {
     // any partial file from a prior failed run instead of erroring.
     const proc = spawn(ffmpeg, ['-sseof', '-1.0', '-i', videoPath, '-update', '1', '-vframes', '1', '-q:v', '2', '-y', framePath], { env: safeChildProcessEnv(), stdio: 'ignore' });
     proc.on('close', async (code) => {
-      // safeStatSize swallows throws so the async handler can't leak an
-      // unhandled rejection on transient stat errors — null is treated as
-      // "extraction failed".
-      const writtenSize = safeStatSize(framePath);
-      if (code !== 0 || writtenSize == null || writtenSize === 0) {
-        // A 0-byte file is a partial extraction, not a cache-worthy result —
-        // delete it so the next call retries instead of returning a broken
-        // image from the cache hit above.
-        if (writtenSize === 0) await unlink(framePath).catch(() => {});
-        return reject(new ServerError('Failed to extract last frame', { status: 500, code: 'FFMPEG_FAILED' }));
+      // Wrap the body so a throw (e.g. writeSidecar) routes to reject() instead
+      // of leaking an unhandled rejection AND leaving this Promise forever
+      // pending — the executor only settles via the explicit resolve/reject.
+      try {
+        // safeStatSize swallows throws so the async handler can't leak an
+        // unhandled rejection on transient stat errors — null is treated as
+        // "extraction failed".
+        const writtenSize = safeStatSize(framePath);
+        if (code !== 0 || writtenSize == null || writtenSize === 0) {
+          // A 0-byte file is a partial extraction, not a cache-worthy result —
+          // delete it so the next call retries instead of returning a broken
+          // image from the cache hit above.
+          if (writtenSize === 0) await unlink(framePath).catch(() => {});
+          return reject(new ServerError('Failed to extract last frame', { status: 500, code: 'FFMPEG_FAILED' }));
+        }
+        await writeSidecar();
+        console.log(`🎞️ Extracted last frame: ${frameFilename}`);
+        resolve({ filename: frameFilename, path: `/data/images/${frameFilename}` });
+      } catch (err) {
+        reject(err instanceof ServerError ? err : new ServerError(`Failed to extract last frame: ${err.message}`, { status: 500, code: 'FFMPEG_FAILED' }));
       }
-      await writeSidecar();
-      console.log(`🎞️ Extracted last frame: ${frameFilename}`);
-      resolve({ filename: frameFilename, path: `/data/images/${frameFilename}` });
     });
     proc.on('error', (err) => {
       reject(new ServerError(`ffmpeg failed to spawn: ${err.message}`, { status: 500, code: 'FFMPEG_FAILED' }));

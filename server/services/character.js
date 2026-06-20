@@ -90,6 +90,17 @@ export async function saveCharacter(data) {
   return data;
 }
 
+// Persist a freshly-rendered avatar path onto the singleton character. Lets the
+// avatar-generation route fold persistence in (it already knows the character
+// context) instead of forcing a second `PUT /api/character` round-trip.
+export async function setAvatar(avatarPath) {
+  const character = await getCharacter();
+  character.avatarPath = avatarPath;
+  await saveCharacter(character);
+  console.log(`🖼️ Character avatar set → ${avatarPath}`);
+  return character;
+}
+
 export function rollDice(notation) {
   const match = notation.match(/^(\d+)d(\d+)([+-]\d+)?$/);
   if (!match) throw new Error(`Invalid dice notation: ${notation}`);

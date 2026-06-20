@@ -49,6 +49,14 @@ vi.mock('../pipeline/manuscriptReview.js', async () => ({
   mergeReviewFromSync: vi.fn(),
 }));
 
+// reverseOutline is dynamic-imported inside the series push/receive helpers (and
+// statically by exporter.js, which peerSync.js imports) — mock both entry points
+// so the outline bundle path is exercisable without loading the arcPlanner graph.
+vi.mock('../pipeline/reverseOutline.js', async () => ({
+  getStoredOutline: vi.fn(),
+  mergeOutlineFromSync: vi.fn(),
+}));
+
 vi.mock('../mediaCollections.js', async () => ({
   getCollection: vi.fn(),
   listCollections: vi.fn(),
@@ -110,6 +118,7 @@ import { getUniverse, mergeUniversesFromSync, listUniverses } from '../universeB
 import { getSeries, mergeSeriesFromSync, listSeries } from '../pipeline/series.js';
 import { listIssues, mergeIssuesFromSync } from '../pipeline/issues.js';
 import { getReview, mergeReviewFromSync } from '../pipeline/manuscriptReview.js';
+import { getStoredOutline, mergeOutlineFromSync } from '../pipeline/reverseOutline.js';
 import {
   getCollection,
   listCollections,
@@ -189,6 +198,10 @@ beforeEach(async () => {
   // review-bundle path override getReview per-call.
   vi.mocked(getReview).mockReset().mockResolvedValue({ schemaVersion: 1, comments: [] });
   vi.mocked(mergeReviewFromSync).mockReset().mockResolvedValue({ schemaVersion: 1, comments: [] });
+  // Default: no stored reverse outline for any series. Tests that exercise the
+  // outline-bundle path override getStoredOutline per-call.
+  vi.mocked(getStoredOutline).mockReset().mockResolvedValue(null);
+  vi.mocked(mergeOutlineFromSync).mockReset().mockResolvedValue(null);
   // Default: no linked collection for any record. Tests that exercise the
   // bundle path override these per-call.
   vi.mocked(getCollection).mockReset().mockRejectedValue(Object.assign(new Error('Collection not found'), { code: 'NOT_FOUND' }));
@@ -1572,6 +1585,49 @@ describe('peerSync', () => {
       expect(vi.mocked(getReview)).not.toHaveBeenCalled();
     });
 
+    it('bundles the reverse outline with a series push so regenerate-only edits propagate', async () => {
+      vi.mocked(getSeries).mockResolvedValue({ id: 's1', name: 'Series' });
+      vi.mocked(getStoredOutline).mockResolvedValue({
+        seriesId: 's1', schemaVersion: 1, status: 'complete', generatedAt: '2026-06-02T00:00:00Z',
+        plotlines: [{ id: 'a', label: 'A-plot', kind: 'main', color: '#3b82f6' }],
+        scenes: [{ id: 'scene-001', sequence: 0, summary: 'opening', plotlineId: 'a' }],
+      });
+      let captured = null;
+      vi.mocked(peerFetch).mockImplementation(async (_url, opts) => {
+        captured = JSON.parse(opts.body);
+        return { ok: true, json: async () => ({}) };
+      });
+      await pushRecordToPeer({ id: 's', peerId: 'peer-a', recordKind: 'series', recordId: 's1' });
+      expect(captured.reverseOutline).toBeTruthy();
+      expect(captured.reverseOutline.scenes).toHaveLength(1);
+      expect(captured.reverseOutline.generatedAt).toBe('2026-06-02T00:00:00Z');
+    });
+
+    it('omits the reverseOutline key when no complete outline exists', async () => {
+      vi.mocked(getSeries).mockResolvedValue({ id: 's1', name: 'Series' });
+      // A never-generated / in-progress outline (status !== 'complete') is not shipped.
+      vi.mocked(getStoredOutline).mockResolvedValue({ seriesId: 's1', schemaVersion: 1, status: 'none', plotlines: [], scenes: [] });
+      let captured = null;
+      vi.mocked(peerFetch).mockImplementation(async (_url, opts) => {
+        captured = JSON.parse(opts.body);
+        return { ok: true, json: async () => ({}) };
+      });
+      await pushRecordToPeer({ id: 's', peerId: 'peer-a', recordKind: 'series', recordId: 's1' });
+      expect(captured.reverseOutline).toBeUndefined();
+    });
+
+    it('does not fetch an outline for a tombstone series push', async () => {
+      vi.mocked(getSeries).mockResolvedValue({ id: 's1', name: 'Series', deleted: true, deletedAt: '2026-06-02T00:00:00Z', updatedAt: '2026-06-02T00:00:00Z' });
+      let captured = null;
+      vi.mocked(peerFetch).mockImplementation(async (_url, opts) => {
+        captured = JSON.parse(opts.body);
+        return { ok: true, json: async () => ({}) };
+      });
+      await pushRecordToPeer({ id: 's', peerId: 'peer-a', recordKind: 'series', recordId: 's1' });
+      expect(captured.reverseOutline).toBeUndefined();
+      expect(vi.mocked(getStoredOutline)).not.toHaveBeenCalled();
+    });
+
     it('re-pushes when only the manuscript review changes (series record byte-identical)', async () => {
       vi.mocked(getSeries).mockResolvedValue({ id: 's1', name: 'Series' });
       vi.mocked(getReview)
@@ -2108,6 +2164,76 @@ describe('peerSync', () => {
       expect(res.reviewSyncPending).toBe(true);
     });
 
+    const sampleOutline = (generatedAt = '2026-06-02T00:00:00Z') => ({
+      schemaVersion: 1, status: 'complete', generatedAt,
+      plotlines: [{ id: 'a', label: 'A', kind: 'main' }],
+      scenes: [{ id: 'scene-001', sequence: 0, summary: 'opening', plotlineId: 'a' }],
+    });
+
+    it('routes a bundled reverseOutline through mergeOutlineFromSync on a series push', async () => {
+      const reverseOutline = sampleOutline();
+      await applyIncomingPush({
+        kind: 'series',
+        record: { id: 's1', name: 'S', deleted: false, deletedAt: null },
+        issues: [],
+        reverseOutline,
+        assetManifest: [],
+        sourceInstanceId: 'peer-a',
+      });
+      expect(mergeOutlineFromSync).toHaveBeenCalledWith('s1', reverseOutline);
+    });
+
+    it('skips mergeOutlineFromSync when no reverseOutline is bundled', async () => {
+      await applyIncomingPush({
+        kind: 'series',
+        record: { id: 's1', name: 'S', deleted: false, deletedAt: null },
+        issues: [],
+        assetManifest: [],
+        sourceInstanceId: 'peer-a',
+      });
+      expect(mergeOutlineFromSync).not.toHaveBeenCalled();
+    });
+
+    it('refuses to merge reverseOutline when the incoming series record is a tombstone', async () => {
+      await applyIncomingPush({
+        kind: 'series',
+        record: { id: 's1', deleted: true, deletedAt: '2026-06-02T00:00:00Z', updatedAt: '2026-06-02T00:00:00Z' },
+        issues: [],
+        reverseOutline: sampleOutline(),
+        assetManifest: [],
+        sourceInstanceId: 'peer-a',
+      });
+      expect(mergeOutlineFromSync).not.toHaveBeenCalled();
+    });
+
+    it('skips mergeOutlineFromSync when the LOCAL series is ephemeral', async () => {
+      vi.mocked(getSeries).mockResolvedValue({ id: 's1', ephemeral: true });
+      await applyIncomingPush({
+        kind: 'series',
+        record: { id: 's1', name: 'S', deleted: false, deletedAt: null },
+        issues: [],
+        reverseOutline: sampleOutline(),
+        assetManifest: [],
+        sourceInstanceId: 'peer-a',
+      });
+      expect(mergeOutlineFromSync).not.toHaveBeenCalled();
+    });
+
+    it('returns outlineSyncPending when the bundled outline merge throws (so the sender retries)', async () => {
+      vi.mocked(mergeOutlineFromSync).mockRejectedValueOnce(new Error('disk full'));
+      const res = await applyIncomingPush({
+        kind: 'series',
+        record: { id: 's1', name: 'S', deleted: false, deletedAt: null },
+        issues: [],
+        reverseOutline: sampleOutline(),
+        assetManifest: [],
+        sourceInstanceId: 'peer-a',
+      });
+      // Series/issues merge still succeeded — the outline has no independent
+      // reconciliation path, so the sender withholds its hash and retries.
+      expect(res.outlineSyncPending).toBe(true);
+    });
+
     it('refuses to merge linkedCollection when the incoming record is a tombstone', async () => {
       // Defense in depth: the sender's buildPushPayload already skips the
       // bundle for tombstones, but a buggy or malicious peer could send
@@ -2487,17 +2613,17 @@ describe('peerSync', () => {
 
     describe('receiver — applyIncomingPush', () => {
       it('rejects when sender schemaVersions.universes is AHEAD of local code', async () => {
-        // Local code is at universes:5 (see server/lib/schemaVersions.js).
-        // A push from a sender on universes:6 must NOT touch local state.
+        // Local code is at universes:7 (see server/lib/schemaVersions.js).
+        // A push from a sender on universes:8 must NOT touch local state.
         const rejection = await applyIncomingPush({
           kind: 'universe',
           record: { id: 'u1', name: 'Foo' },
           assetManifest: [],
           sourceInstanceId: 'peer-a',
-          portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 6 } },
+          portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 8 } },
         }).catch((err) => err);
         expect(rejection.code).toBe('PEER_SYNC_SCHEMA_VERSION_AHEAD');
-        expect(rejection.details.ahead).toEqual([{ category: 'universes', senderV: 6, receiverV: 5 }]);
+        expect(rejection.details.ahead).toEqual([{ category: 'universes', senderV: 8, receiverV: 7 }]);
         expect(rejection.details.senderPortosVersion).toBe('99.0.0');
         // Receiver MUST stamp its OWN PortOS version so the sender can show
         // the user "peer X is on PortOS vY" — without this, the sender would
@@ -2516,7 +2642,7 @@ describe('peerSync', () => {
           record: { id: 'u1', name: 'Foo' },
           assetManifest: [],
           sourceInstanceId: 'peer-a',
-          portosMeta: { portosVersion: '2.7.0', schemaVersions: { universes: 5 } },
+          portosMeta: { portosVersion: '2.7.0', schemaVersions: { universes: 6 } },
         });
         expect(mergeUniversesFromSync).toHaveBeenCalledWith(
           [expect.objectContaining({ id: 'u1' })],
@@ -2525,7 +2651,7 @@ describe('peerSync', () => {
       });
 
       it('passes through when sender is BEHIND local (sanitizer handles the backfill)', async () => {
-        // Older peer pushes a v4-shape universe. Receiver is on v5 but the
+        // Older peer pushes a v4-shape universe. Receiver is on v6 but the
         // record-shape sanitizer can backfill, so we apply rather than reject.
         await applyIncomingPush({
           kind: 'universe',
@@ -2710,7 +2836,7 @@ describe('peerSync', () => {
         expect(call).toBeDefined();
         const body = JSON.parse(call[1].body);
         expect(body.portosMeta).toBeDefined();
-        expect(body.portosMeta.schemaVersions.universes).toBe(5);
+        expect(body.portosMeta.schemaVersions.universes).toBe(7);
         expect(typeof body.portosMeta.portosVersion).toBe('string');
       });
 
@@ -2979,6 +3105,46 @@ describe('peerSync', () => {
         expect(refreshed.lastPushedHash).toBeFalsy();
       });
 
+      it('falls back without reverseOutline when a pre-#1348 peer rejects the new key, keeping series + issues', async () => {
+        // Same graceful-degradation contract as the manuscriptReview strip above:
+        // a pre-#1348 peer's `.strict()` series schema 400-rejects the
+        // reverseOutline key, so the sender strips ONLY it and retries, then
+        // withholds the hash so the outline re-sends once the peer upgrades.
+        vi.mocked(getSeries).mockResolvedValue({ id: 's1', name: 'Series' });
+        vi.mocked(listIssues).mockResolvedValue([{ id: 'i1', seriesId: 's1', number: 1 }]);
+        vi.mocked(getStoredOutline).mockResolvedValue({
+          seriesId: 's1', schemaVersion: 1, status: 'complete', generatedAt: '2026-06-02T00:00:00Z',
+          plotlines: [{ id: 'a', label: 'A', kind: 'main', color: '#3b82f6' }],
+          scenes: [{ id: 'scene-001', sequence: 0, summary: 'opening', plotlineId: 'a' }],
+        });
+        const firstCallBody = { ok: false, status: 400, json: async () => ({
+          code: 'VALIDATION_ERROR',
+          message: 'Validation failed',
+          context: { details: [{ path: '', message: "Unrecognized key(s) in object: 'reverseOutline'" }] },
+        }) };
+        firstCallBody.clone = () => firstCallBody;
+        const retryBody = { ok: true, status: 200, json: async () => ({}) };
+        vi.mocked(peerFetch).mockResolvedValueOnce(firstCallBody).mockResolvedValueOnce(retryBody);
+        const sub = await subscribePeer({
+          peerId: 'peer-a', recordKind: 'series', recordId: 's1',
+        }, { adoptedFromReverse: true });
+        const result = await pushRecordToPeer(sub);
+        expect(result.pushed).toBe(true);
+        const calls = vi.mocked(peerFetch).mock.calls;
+        expect(calls.length).toBe(2);
+        const firstPayload = JSON.parse(calls[0][1].body);
+        const retryPayload = JSON.parse(calls[1][1].body);
+        expect(firstPayload.reverseOutline).toBeDefined();
+        expect(retryPayload.reverseOutline).toBeUndefined();
+        // Surgical strip: portosMeta + series + issues still land.
+        expect(retryPayload.portosMeta).toBeDefined();
+        expect(retryPayload.record.id).toBe('s1');
+        expect(retryPayload.issues).toHaveLength(1);
+        // Hash withheld so the outline re-sends once the peer upgrades.
+        const refreshed = await findPeerSubscription('peer-a', 'series', 's1');
+        expect(refreshed.lastPushedHash).toBeFalsy();
+      });
+
       it('does NOT retry on a 400 whose validation error is unrelated to portosMeta', async () => {
         // The retry is keyed on the `portosMeta` mention in the validation
         // details — any other 400 (oversized field, unknown record key, etc.)
@@ -2999,6 +3165,89 @@ describe('peerSync', () => {
         expect(result.reason).toBe('http-400');
         // Only ONE call — no retry.
         expect(vi.mocked(peerFetch).mock.calls.length).toBe(1);
+      });
+
+      it('records a peer-pre-feature blockedBySchema marker when a peer rejects an unknown record kind (400 invalid discriminator)', async () => {
+        // A peer on an older PortOS whose `peerSyncPushSchema` discriminated
+        // union has no arm for this record kind (authors / mediaCollection when
+        // they first landed) rejects the push at Zod with a generic 400 whose
+        // offending field is the `kind` discriminator — BEFORE its version gate
+        // (the 409 path) ever runs. The sender must NOT treat this as a bare
+        // http-400 (which churns silently); it routes the sub into an empty-gap
+        // schema-version block so the SchemaGapBadge surfaces "peer needs to
+        // update" and the edit-push cooldown engages, exactly like the 409 path.
+        vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo' });
+        const errBody = { ok: false, status: 400, json: async () => ({
+          code: 'VALIDATION_ERROR',
+          message: 'Validation failed',
+          context: { details: [{ path: 'kind', message: "Invalid discriminator value. Expected 'universe' | 'series'" }] },
+        }) };
+        errBody.clone = () => errBody;
+        vi.mocked(peerFetch).mockResolvedValueOnce(errBody);
+        const sub = await subscribePeer({
+          peerId: 'peer-a', recordKind: 'universe', recordId: 'u1',
+        }, { adoptedFromReverse: true });
+        const result = await pushRecordToPeer(sub);
+        expect(result.pushed).toBe(false);
+        expect(result.reason).toBe('peer-schema-behind');
+        expect(result.blockedBySchema).toBe(true);
+        // No retry — the kind itself is unrecognized, so re-sending changes nothing.
+        expect(vi.mocked(peerFetch).mock.calls.length).toBe(1);
+        // Block persisted with the pre-feature marker + an empty gap (the peer
+        // 400'd before sending any schemaVersions to populate ahead/behind).
+        const after = await findPeerSubscription('peer-a', 'universe', 'u1');
+        expect(after.blockedBySchema).toBeDefined();
+        expect(after.blockedBySchema.reason).toBe('peer-pre-feature');
+        expect(after.blockedBySchema.ahead).toEqual([]);
+        expect(after.blockedBySchema.behind).toEqual([]);
+        expect(after.blockedBySchema.peerPortosVersion).toBeNull();
+        expect(typeof after.blockedBySchema.detectedAt).toBe('string');
+        // lastPushedHash must NOT have advanced — the record didn't land.
+        expect(after.lastPushedHash).toBeFalsy();
+      });
+
+      it('engages the push cooldown after a pre-feature block so the next edit-push short-circuits', async () => {
+        // The pre-feature block must behave like the 409 block: a subsequent
+        // push (no bypass) short-circuits on the cooldown instead of re-probing
+        // the peer on every local edit.
+        vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo' });
+        const errBody = { ok: false, status: 400, json: async () => ({
+          code: 'VALIDATION_ERROR',
+          message: 'Validation failed',
+          context: { details: [{ path: 'kind', message: 'Invalid discriminator value. Expected ...' }] },
+        }) };
+        errBody.clone = () => errBody;
+        vi.mocked(peerFetch).mockResolvedValue(errBody);
+        const sub = await subscribePeer({
+          peerId: 'peer-a', recordKind: 'universe', recordId: 'u1',
+        }, { adoptedFromReverse: true });
+        await pushRecordToPeer(sub);
+        const callsAfterFirst = vi.mocked(peerFetch).mock.calls.length;
+        const blocked = await findPeerSubscription('peer-a', 'universe', 'u1');
+        const result = await pushRecordToPeer(blocked);
+        expect(result.reason).toBe('peer-schema-behind-cooldown');
+        expect(vi.mocked(peerFetch).mock.calls.length).toBe(callsAfterFirst);
+      });
+
+      it('does NOT misclassify a non-discriminator field 400 as a pre-feature block', async () => {
+        // Guard: only a `kind`-path discriminator/enum error is the unknown-kind
+        // signal. A 400 on any other field (oversized record, etc.) stays a
+        // genuine http-400 — not a silently-swallowed schema block.
+        vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo' });
+        const errBody = { ok: false, status: 400, json: async () => ({
+          code: 'VALIDATION_ERROR',
+          message: 'Validation failed',
+          context: { details: [{ path: 'record.name', message: 'String too long' }] },
+        }) };
+        errBody.clone = () => errBody;
+        vi.mocked(peerFetch).mockResolvedValueOnce(errBody);
+        const sub = await subscribePeer({
+          peerId: 'peer-a', recordKind: 'universe', recordId: 'u1',
+        }, { adoptedFromReverse: true });
+        const result = await pushRecordToPeer(sub);
+        expect(result.reason).toBe('http-400');
+        const after = await findPeerSubscription('peer-a', 'universe', 'u1');
+        expect(after.blockedBySchema).toBeUndefined();
       });
     });
   });

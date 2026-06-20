@@ -443,6 +443,16 @@ describe('StoryBuilder — detail stepper', () => {
     const arg = api.generateImage.mock.calls[0][0];
     expect(arg.prompt).toContain('Kessa');
     expect(arg.prompt.toLowerCase()).toContain('noir');
+    // #1362: the render carries the durable universeRun.entryRef tag so the
+    // server-side appendEntryImageRef hook files it — no client follow-up PATCH.
+    expect(arg.universeRun).toEqual({
+      universeId: 'u1',
+      universeName: 'Giant',
+      entryRef: { kind: 'canon', kindKey: 'characters', id: 'ch1' },
+      label: 'Kessa',
+      category: 'characters',
+    });
+    expect(api.updateUniverse).not.toHaveBeenCalled();
   });
 
   it('persists the provider/model picker choice to session.llm', async () => {

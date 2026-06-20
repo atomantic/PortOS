@@ -3,6 +3,8 @@ import { Cigarette, Plus, Trash2, Pencil, Check, X, Settings } from 'lucide-reac
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
+import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
+import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 import NicotineChart from '../NicotineChart';
 import NicotineHealthCorrelation from '../NicotineHealthCorrelation';
 import { dayOfWeek, localDateStr } from '../constants';
@@ -16,6 +18,7 @@ export default function NicotineTab() {
   const [logging, setLogging] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const [visibleDays, setVisibleDays] = useState(DAYS_PER_PAGE);
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
   // Custom product buttons
   const [productButtons, setProductButtons] = useState([]);
@@ -270,7 +273,18 @@ export default function NicotineTab() {
                     <span className="flex-1 text-xs text-gray-300">{btn.name}</span>
                     <span className="text-xs text-gray-500">{btn.mgPerUnit}mg</span>
                     <button onClick={() => startEditButton(idx)} className="p-1.5 text-gray-600 hover:text-port-accent"><Pencil size={12} /></button>
-                    <button onClick={() => handleRemoveButton(idx)} className="p-1.5 text-gray-600 hover:text-port-error"><Trash2 size={12} /></button>
+                    {isConfirming(`btn:${idx}`) ? (
+                      <ConfirmButtonPair
+                        prompt="Remove?"
+                        confirmText="Remove"
+                        confirmIcon={Trash2}
+                        ariaLabel={`Confirm remove product button ${btn.name}`}
+                        onConfirm={() => confirmDelete(() => handleRemoveButton(idx))}
+                        onCancel={cancelDelete}
+                      />
+                    ) : (
+                      <button onClick={() => requestDelete(`btn:${idx}`)} className="p-1.5 text-gray-600 hover:text-port-error"><Trash2 size={12} /></button>
+                    )}
                   </>
                 )}
               </div>
@@ -486,7 +500,18 @@ export default function NicotineTab() {
                             <td className="px-3 py-1.5 text-right">
                               <div className="flex items-center justify-end gap-1">
                                 <button onClick={() => startEdit(entry.date, idx, item)} className="p-1 text-gray-600 hover:text-port-accent"><Pencil size={12} /></button>
-                                <button onClick={() => handleRemove(entry.date, idx)} className="p-1 text-gray-600 hover:text-port-error"><Trash2 size={12} /></button>
+                                {isConfirming(key) ? (
+                                  <ConfirmButtonPair
+                                    prompt="Remove?"
+                                    confirmText="Remove"
+                                    confirmIcon={Trash2}
+                                    ariaLabel={`Confirm remove nicotine entry ${item.product || ''}`}
+                                    onConfirm={() => confirmDelete(() => handleRemove(entry.date, idx))}
+                                    onCancel={cancelDelete}
+                                  />
+                                ) : (
+                                  <button onClick={() => requestDelete(key)} className="p-1 text-gray-600 hover:text-port-error"><Trash2 size={12} /></button>
+                                )}
                               </div>
                             </td>
                           </>

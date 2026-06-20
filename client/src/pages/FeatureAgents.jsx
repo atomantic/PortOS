@@ -6,6 +6,7 @@ import * as api from '../services/api';
 import socket from '../services/socket';
 import FeatureAgentCard from '../components/feature-agents/FeatureAgentCard';
 import BrailleSpinner from '../components/BrailleSpinner';
+import PageHeader from '../components/PageHeader';
 
 export default function FeatureAgents() {
   const [agents, setAgents] = useState([]);
@@ -75,18 +76,12 @@ export default function FeatureAgents() {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="shrink-0 px-6 pt-6 pb-4 border-b border-port-border">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Wand2 size={24} className="text-port-accent" />
-            <div>
-              <h1 className="text-xl font-bold text-white">Feature Agents</h1>
-              <p className="text-sm text-gray-500">
-                {agents.length} agent{agents.length !== 1 ? 's' : ''} &middot; {activeCount} active &middot; {totalRuns} total runs
-              </p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
+      <PageHeader
+        icon={Wand2}
+        title="Feature Agents"
+        subtitle={`${agents.length} agent${agents.length !== 1 ? 's' : ''} · ${activeCount} active · ${totalRuns} total runs`}
+        actions={
+          <>
             <button
               onClick={fetchAgents}
               className="p-2 text-gray-400 hover:text-white hover:bg-port-border/50 rounded-lg transition-colors"
@@ -100,9 +95,9 @@ export default function FeatureAgents() {
             >
               <Plus size={16} /> New Agent
             </Link>
-          </div>
-        </div>
-      </div>
+          </>
+        }
+      />
 
       <div className="flex-1 overflow-auto p-6">
         {loading ? (

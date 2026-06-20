@@ -66,7 +66,6 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
     if (!formData) return;
     setTopicsText(formData.personality.topics.join(', '));
     setQuirksText(formData.personality.quirks.join(', '));
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally keyed on serialized arrays to avoid clobbering in-progress text edits
   }, [topicsKey, quirksKey]);
 
   const fetchAccounts = useCallback(async () => {

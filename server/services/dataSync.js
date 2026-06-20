@@ -28,15 +28,20 @@ import { mergeMediaCollectionsFromSync, listCollections, itemKey } from './media
 import { listSyncableSessionsForWire, mergeStorySessionsFromSync } from './storyBuilder.js';
 import { getStoryBuilderMutationEpoch } from './storyBuilderStore/store.js';
 import { sanitizeStateForWire } from '../lib/syncWire.js';
+import {
+  getDigitalTwinSnapshot,
+  applyDigitalTwinRemote,
+  DIGITAL_TWIN_CHECKSUM_PATHS,
+} from './digital-twin-sync.js';
 
 // --- Category Definitions ---
 
 const GOALS_FILE = join(PATHS.digitalTwin, 'goals.json');
 const CHARACTER_FILE = join(PATHS.data, 'character.json');
-const IDENTITY_FILE = join(PATHS.digitalTwin, 'identity.json');
-const CHRONOTYPE_FILE = join(PATHS.digitalTwin, 'chronotype.json');
-const LONGEVITY_FILE = join(PATHS.digitalTwin, 'longevity.json');
-const FEEDBACK_FILE = join(PATHS.digitalTwin, 'feedback.json');
+// Digital Twin snapshot + merge lives in ./digital-twin-sync.js (it now covers
+// the FULL identity dataset — taste, documents, autobiography — not just the
+// four core JSON files). dataSync delegates to it the same way it delegates
+// universe/pipeline merges to their owning services.
 const MEATSPACE_DIR = PATHS.meatspace;
 // Pipeline series + issues used to live under data/pipeline-series/<id> and
 // data/pipeline-issues/<id>; #1015 moved the RECORDS into PostgreSQL
@@ -317,44 +322,8 @@ async function applyCharacterRemote(remoteData) {
 }
 
 // --- Category: Digital Twin ---
-
-const DIGITAL_TWIN_FILES = {
-  identity: { path: IDENTITY_FILE, timestampField: 'updatedAt', merge: 'lww' },
-  chronotype: { path: CHRONOTYPE_FILE, timestampField: 'derivedAt', merge: 'deepUnion' },
-  longevity: { path: LONGEVITY_FILE, timestampField: 'derivedAt', merge: 'deepUnion' },
-  feedback: { path: FEEDBACK_FILE, timestampField: 'updatedAt', merge: 'lww' }
-};
-
-async function getDigitalTwinSnapshot() {
-  const result = {};
-  for (const [key, { path }] of Object.entries(DIGITAL_TWIN_FILES)) {
-    result[key] = await readJSONFile(path, null);
-  }
-  return { data: result, checksum: computeChecksum(result) };
-}
-
-async function applyDigitalTwinRemote(remoteData) {
-  if (!remoteData) return { applied: false, count: 0 };
-
-  let totalApplied = 0;
-  for (const [key, { path, timestampField, merge }] of Object.entries(DIGITAL_TWIN_FILES)) {
-    const remoteFile = remoteData[key];
-    if (!remoteFile) continue;
-
-    const local = await readJSONFile(path, null);
-    const mergeFn = merge === 'deepUnion' ? mergeDeepUnion : mergeObjectLWW;
-    const { merged, changed } = mergeFn(local, remoteFile, timestampField);
-    if (changed) {
-      await atomicWrite(path, merged);
-      totalApplied++;
-    }
-  }
-
-  if (totalApplied > 0) {
-    console.log(`🔄 Digital twin sync: updated ${totalApplied} files`);
-  }
-  return { applied: totalApplied > 0, count: totalApplied };
-}
+// getDigitalTwinSnapshot / applyDigitalTwinRemote are imported from
+// ./digital-twin-sync.js (see import block at top).
 
 // --- Category: Meatspace ---
 
@@ -763,7 +732,9 @@ async function applyStoryBuilderRemote(remoteData) {
 const CHECKSUM_PATHS = {
   goals: [GOALS_FILE],
   character: [CHARACTER_FILE],
-  digitalTwin: Object.values(DIGITAL_TWIN_FILES).map((f) => f.path),
+  // The whole digital-twin dir is watched (taste, meta, .md documents,
+  // autobiography/) — see DIGITAL_TWIN_CHECKSUM_PATHS in digital-twin-sync.js.
+  digitalTwin: DIGITAL_TWIN_CHECKSUM_PATHS,
   meatspace: Object.keys(MEATSPACE_FILES).map((f) => join(MEATSPACE_DIR, f)),
   // PEER_SUBSCRIPTIONS_FILE is in the scoped categories' paths so a
   // subscribe/unsubscribe invalidates the per-peer snapshot checksum cache —

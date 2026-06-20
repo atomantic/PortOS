@@ -107,9 +107,41 @@ describe('sanitizeSceneList', () => {
       }],
     });
     expect(out.scenes[0].shots).toEqual([
-      { id: 'shot-01', description: 'wide on the kitchen', durationSeconds: 5, continuityFromShotId: null },
-      { id: 'shot-02', description: 'close on the kettle', durationSeconds: 3, continuityFromShotId: 'shot-01' },
+      { id: 'shot-01', description: 'wide on the kitchen', durationSeconds: 5, continuityFromShotId: null, shotType: null, screenDirection: null },
+      { id: 'shot-02', description: 'close on the kettle', durationSeconds: 3, continuityFromShotId: 'shot-01', shotType: null, screenDirection: null },
     ]);
+  });
+
+  it('captures + normalizes shot-grammar fields (shotType / screenDirection)', () => {
+    const out = sanitizeSceneList({
+      scenes: [{
+        shots: [
+          { id: 'shot-01', description: 'master', shotType: 'WIDE', screenDirection: 'Left' },
+          { id: 'shot-02', description: 'reverse', shotType: 'CU', screenDirection: 'right' },   // alias + canonical
+          { id: 'shot-03', description: 'insert', shotType: 'over the shoulder', screenDirection: 'head-on' }, // alias + neutral synonym
+        ],
+      }],
+    });
+    const shots = out.scenes[0].shots;
+    expect(shots[0]).toMatchObject({ shotType: 'wide', screenDirection: 'left' });
+    expect(shots[1]).toMatchObject({ shotType: 'close', screenDirection: 'right' });
+    expect(shots[2]).toMatchObject({ shotType: 'over-the-shoulder', screenDirection: 'neutral' });
+  });
+
+  it('defaults shot-grammar fields to null when absent or unrecognized', () => {
+    const out = sanitizeSceneList({
+      scenes: [{
+        shots: [
+          { id: 'shot-01', description: 'untagged' },                                   // absent → null
+          { id: 'shot-02', description: 'garbage', shotType: 'banana', screenDirection: 'sideways' }, // unknown → null
+          { id: 'shot-03', description: 'wrong type', shotType: 42, screenDirection: {} },            // non-string → null
+        ],
+      }],
+    });
+    for (const s of out.scenes[0].shots) {
+      expect(s.shotType).toBe(null);
+      expect(s.screenDirection).toBe(null);
+    }
   });
 
   it('drops continuity references that point to unknown or forward shots', () => {

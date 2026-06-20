@@ -1274,9 +1274,43 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
   initializePipelineMetadata(metadata);
   if (!skipPreconditions && shouldSkipForPrecondition(metadata, app, taskType)) return null;
 
+  // claim-work is the single-source router: one toggle that ships the next
+  // work item from whatever tracker the app is configured for. Resolve
+  // the app's workTracker (default 'auto' → git origin host) and delegate to the
+  // concrete claim flow's prompt body. `taskType` stays 'claim-work' for
+  // interval/cadence/recording; `promptTaskType` drives prompt selection, PLAN
+  // gating, and the forge-specific author-filter directive below.
+  let promptTaskType = taskType;
+  if (taskType === 'claim-work') {
+    const { resolveAppWorkTracker, trackerToClaimTaskType } = await import('../lib/workTracker.js');
+    const wt = await resolveAppWorkTracker(app);
+    promptTaskType = trackerToClaimTaskType(wt.resolved) || 'plan-task';
+    emitLog('info', `claim-work for ${app.name}: tracker=${wt.resolved} (${wt.source}) → ${promptTaskType}`, { appId: app.id, analysisType: taskType });
+    // Inherit the resolved flow's isolation posture, overriding claim-work's
+    // own useWorktree/openPR=false defaults. The plan/github/gitlab claim
+    // prompts self-manage their worktree + PR (false/false is correct), but
+    // jira-sprint-manager relies on CoS-MANAGED isolation (useWorktree/openPR
+    // true) and implements directly in {repoPath} — so without this the JIRA
+    // route would run against the live checkout. Pull the delegated type's
+    // managed-agent defaults; a prompt-only type with no DEFAULT_TASK_INTERVALS
+    // entry (e.g. claim-issue-gitlab) keeps claim-work's self-managed false.
+    const delegatedMeta = taskSchedule.DEFAULT_TASK_INTERVALS[promptTaskType]?.taskMetadata;
+    if (delegatedMeta) {
+      if ('useWorktree' in delegatedMeta) metadata.useWorktree = delegatedMeta.useWorktree;
+      if ('openPR' in delegatedMeta) metadata.openPR = delegatedMeta.openPR;
+    }
+  }
+  // Honor a direct claim-work prompt customization if the user set one;
+  // otherwise delegate to the resolved tracker's prompt body via
+  // getTaskPrompt(promptTaskType), which reads THAT type's interval.prompt
+  // override — so a user's claim-issue / plan-task / jira-sprint-manager
+  // customization flows through. (The GitLab body, claim-issue-gitlab, has no
+  // schedule/UI customization slot, so it always renders the shipped default.)
+  const promptKeyForBody = (taskType === 'claim-work' && !interval.prompt) ? promptTaskType : taskType;
+
   const promptTemplate = metadata.pipeline?.stages
     ? await getStagePrompt(taskType, 0)
-    : await getTaskPrompt(taskType);
+    : await getTaskPrompt(promptKeyForBody);
 
   // reference-watch: dynamically inject {referenceData} — a Markdown chunk
   // describing each ref configured on the app + commits since lastReviewedSha.
@@ -1378,7 +1412,10 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
     emitLog('info', `pr-watcher dispatching for ${app.name}: ${check.newPrs.length} new PR(s)`, { appId: app.id, analysisType: taskType });
   }
 
-  const planMeta = await applyPlanIdMetadata(taskType, app.repoPath, metadata);
+  // Gate on PLAN.md using the RESOLVED type so a claim-work run routed to the
+  // PLAN.md flow still skips cleanly on an empty/all-in-flight queue. For
+  // standalone tasks promptTaskType === taskType, so behavior is unchanged.
+  const planMeta = await applyPlanIdMetadata(promptTaskType, app.repoPath, metadata);
   if (planMeta.skipReason) {
     emitLog('info', `Skipping ${taskType} for ${app.name}: ${planMeta.skipReason}`, { appId: app.id });
     return null;
@@ -1407,9 +1444,27 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
   // (global → per-app override) and value-constrained by sanitizeTaskMetadata,
   // so read it from `metadata`. 'owner' (the default, matching /claim --issues)
   // restricts to repo-owner-filed issues; 'any' claims any open issue.
-  const issueAuthorFilterBlock = (metadata.issueAuthorFilter || 'owner') === 'any'
-    ? '**Author filter: any author.** Claim the next eligible open issue regardless of who filed it — omit `--author` from `gh issue list` entirely.'
-    : '**Author filter: repository owner only.** Only claim issues filed by the repository owner/creator. Resolve the owner with `OWNER="$(gh repo view --json owner -q .owner.login)"` and pass `--author "$OWNER"` (a quoted single token) to `gh issue list`; skip issues opened by anyone else.';
+  // The forge whose CLI the resolved prompt body documents — `glab` for the
+  // GitLab claim flow, `gh` for the GitHub one, null for plan/jira (whose
+  // prompts carry no {issueAuthorFilter} placeholder, so the replace is a
+  // harmless no-op there).
+  const issueForge = promptTaskType === 'claim-issue-gitlab' ? 'glab'
+    : promptTaskType === 'claim-issue' ? 'gh'
+    : null;
+  const authorFilterMode = (metadata.issueAuthorFilter || 'owner') === 'any' ? 'any' : 'owner';
+  const ISSUE_AUTHOR_FILTER_BLOCKS = {
+    gh: {
+      any: '**Author filter: any author.** Claim the next eligible open issue regardless of who filed it — omit `--author` from `gh issue list` entirely.',
+      owner: '**Author filter: repository owner only.** Only claim issues filed by the repository owner/creator. Resolve the owner with `OWNER="$(gh repo view --json owner -q .owner.login)"` and pass `--author "$OWNER"` (a quoted single token) to `gh issue list`; skip issues opened by anyone else.'
+    },
+    glab: {
+      any: '**Author filter: any author.** Claim the next eligible open issue regardless of who opened it — omit `--author` from `glab issue list`.',
+      owner: '**Author filter: project owner only.** Only claim issues opened by the project owner. Resolve the owner from the project namespace (e.g. `glab repo view`), then pass `--author <owner>` to `glab issue list`; skip issues opened by anyone else.'
+    }
+  };
+  // Default to the gh block for plan/jira (null forge) — their prompts have no
+  // {issueAuthorFilter} placeholder so the value is never substituted anyway.
+  const issueAuthorFilterBlock = (ISSUE_AUTHOR_FILTER_BLOCKS[issueForge] || ISSUE_AUTHOR_FILTER_BLOCKS.gh)[authorFilterMode];
 
   const description = promptTemplate
     .replace(/\{appName\}/g, app.name)

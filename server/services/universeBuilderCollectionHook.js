@@ -136,20 +136,34 @@ export function initUniverseBuilderCollectionHook() {
     void (async () => {
       if (!job || job.kind !== 'image') return;
       const tag = job.params?.universeRun;
-      if (!tag?.collectionId) return;
+      if (!tag) return;
+      const hasCollection = typeof tag.collectionId === 'string' && tag.collectionId.length > 0;
+      const hasEntryAppend = !!(tag.entryRef && tag.universeId);
+      // Section-local canon renders (#1395) carry an `entryRef` + `universeId`
+      // but no `collectionId` — they durably append the render to the entry's
+      // `imageRefs[]` without filing into a gallery collection. Batch + base-
+      // style-probe renders carry a `collectionId`. Bail only when neither
+      // piece of work is requested.
+      if (!hasCollection && !hasEntryAppend) return;
       const filename = job.result?.filename;
       if (!filename || typeof filename !== 'string') return;
 
       const runActive = tag.runId ? activeRuns.has(tag.runId) : false;
-      const addItemCall = () => addItem(tag.collectionId, { kind: 'image', ref: filename })
-        .then(() => 'added')
-        .catch((err) => {
-          // A duplicate (same filename rendered twice in the same run) is
-          // expected when batchPerVariation > 1 and the gen output collides.
-          if (err?.code === ERR_DUPLICATE) return 'duplicate';
-          console.log(`⚠️ universe-builder collection hook failed for ${filename}: ${err?.message || String(err)}`);
-          return 'failed';
-        });
+      // Collection filing only when a collection target is present — section-
+      // local renders skip it (no gallery membership, just the entry-ref
+      // append below).
+      const addItemCall = () => {
+        if (!hasCollection) return Promise.resolve(null);
+        return addItem(tag.collectionId, { kind: 'image', ref: filename })
+          .then(() => 'added')
+          .catch((err) => {
+            // A duplicate (same filename rendered twice in the same run) is
+            // expected when batchPerVariation > 1 and the gen output collides.
+            if (err?.code === ERR_DUPLICATE) return 'duplicate';
+            console.log(`⚠️ universe-builder collection hook failed for ${filename}: ${err?.message || String(err)}`);
+            return 'failed';
+          });
+      };
 
       // Append the rendered filename to the source entry's `imageRefs[]` so
       // the Universe Builder can show the latest render as an avatar. Wrapped
@@ -158,10 +172,12 @@ export function initUniverseBuilderCollectionHook() {
       // bookkeeping must never crash the server or fail the user's render.
       const appendEntryRefCall = () => {
         if (!tag.entryRef || !tag.universeId) return Promise.resolve(null);
-        return appendEntryImageRef(tag.universeId, tag.entryRef, filename).catch((err) => {
-          console.log(`⚠️ universe-builder entry-ref append failed for ${filename}: ${err?.message || String(err)}`);
-          return null;
-        });
+        return appendEntryImageRef(tag.universeId, tag.entryRef, filename)
+          .then((res) => (res ? 'appended' : null))
+          .catch((err) => {
+            console.log(`⚠️ universe-builder entry-ref append failed for ${filename}: ${err?.message || String(err)}`);
+            return null;
+          });
       };
 
       // Enrich the image's sidecar with universe + entity context so
@@ -195,17 +211,21 @@ export function initUniverseBuilderCollectionHook() {
         // dependency — fire them in parallel so a large batch doesn't pay
         // the per-completion serialization cost on every job.
         const work = async () => {
-          const [s] = await Promise.all([addItemCall(), appendEntryRefCall(), enrichSidecarCall()]);
-          return s;
+          const [filed, appended] = await Promise.all([addItemCall(), appendEntryRefCall(), enrichSidecarCall()]);
+          return { filed, appended };
         };
-        const status = runActive && tag.universeId
+        const { filed, appended } = runActive && tag.universeId
           ? await withReexportSuppressed('universe', tag.universeId, work)
           : await work();
 
-        if (status === 'added') {
+        if (filed === 'added') {
           console.log(`🌍 universe-builder run=${tag.runId?.slice(0, 8)} category=${tag.category} → ${filename}`);
-        } else if (status === 'duplicate') {
+        } else if (filed === 'duplicate') {
           console.log(`🌍 universe-builder run=${tag.runId?.slice(0, 8)} category=${tag.category} duplicate skipped: ${filename}`);
+        } else if (!hasCollection && appended === 'appended') {
+          // Section-local render: no collection filing, just the durable
+          // imageRefs[] append onto the canon entry.
+          console.log(`🌍 universe section-local render → entry ${tag.entryRef?.id?.slice(0, 8)} ← ${filename}`);
         }
       } finally {
         // `finally` (not the happy path) so an unexpected throw still

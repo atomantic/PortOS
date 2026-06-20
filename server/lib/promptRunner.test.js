@@ -61,6 +61,7 @@ const tuiRunner = await import('./tuiPromptRunner.js');
 const providers = await import('../services/providers.js');
 const autoFixer = await import('../services/autoFixer.js');
 const toolkitState = await import('./aiToolkitState.js');
+const { ERROR_CATEGORIES } = await import('./aiToolkit/errorDetection.js');
 const { runPromptThroughProvider, resolveProviderAndModel, resolveEffectiveModel } = await import('./promptRunner.js');
 
 const apiProvider = (extra = {}) => ({
@@ -723,6 +724,31 @@ describe('promptRunner — retry-with-fallback', () => {
       model: 'primary-model',
     });
     expect(autoFixer.noteFallbackFailed).not.toHaveBeenCalled();
+  });
+
+  it('does NOT bench the provider on a model-not-found (request-specific bad model id), but still falls back for this call', async () => {
+    const status = mockToolkitWithFallback();
+
+    // Primary API fails with a model-not-found — a bad model id in the request,
+    // not a provider outage. The provider must stay available for its other
+    // (valid) models; only this call falls back.
+    runner.executeApiRun
+      .mockImplementationOnce(async ({ onComplete }) => {
+        onComplete({ success: false, error: "model 'bogus' not found", errorAnalysis: { category: ERROR_CATEGORIES.MODEL_NOT_FOUND } });
+      })
+      .mockImplementationOnce(async ({ onData, onComplete }) => {
+        onData('fallback content');
+        onComplete({ success: true });
+      });
+
+    const out = await runPromptThroughProvider({ provider: primaryApi, prompt: 'p', source: 'test' });
+
+    expect(out.text).toBe('fallback content');
+    expect(out.usedFallback).toBe(true);
+    // The carve-out: the provider was NOT benched (mirrors CONTENT_REFUSAL).
+    expect(status.markUnavailable).not.toHaveBeenCalled();
+    // …but the failing call still recovered via the fallback.
+    expect(status.getFallbackProvider).toHaveBeenCalledWith('primary-api', expect.any(Object));
   });
 
   it('runs the configured fallbackModel on the fallback (never the primary model) when one is pinned', async () => {

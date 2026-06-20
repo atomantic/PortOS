@@ -29,6 +29,8 @@ import {
   isByovRuntimeInstalled,
   isByovRuntimeReady,
   invalidateByovReadyCache,
+  invalidateRuntimeFingerprintCache,
+  resolveRuntimeFingerprint,
   loadHistory,
   deleteHistoryItem,
   setHistoryItemHidden,
@@ -40,7 +42,8 @@ import {
 } from '../services/videoGen/local.js';
 import { enqueueJob, attachSseClient, cancelJob, listJobs } from '../services/mediaJobQueue/index.js';
 import { repoForModel, getTextEncoderRepo, isHfRepoId } from '../lib/mediaModels.js';
-import { inspectModelCache } from '../lib/hfCache.js';
+import { videoLoraFamily } from '../lib/runners.js';
+import { inspectModelCache, verifyModelCache, repairModelCache, summarizeVerify } from '../lib/hfCache.js';
 import { startHfDownloadStream, openSseStream } from '../lib/sseDownload.js';
 
 const router = Router();
@@ -201,6 +204,15 @@ router.get('/status', asyncHandler(async (_req, res) => {
     // back-solve so it can reject out-of-budget keyframe indices before
     // submit instead of letting the worker 400 mid-render.
     fflfLtx2PixelBudget: resolveFflfLtx2PixelBudget(),
+    // Runtime fingerprint — host chip/os + resolved ltx/mlx/torch versions per
+    // installed BYOV runtime — so the UI can show the exact numerical stack and
+    // bug reports for garbled/"mosaic" output carry the version info that makes
+    // them actionable (#1325). Best-effort: a venv that fails to probe reports
+    // `{ error }` and never blocks the rest of the status payload. The resolver
+    // is already non-throwing (each probe resolves to `{ error }`), but guard
+    // with a catch as defense-in-depth so a runtime-block failure can never
+    // reject the whole /status response.
+    runtime: await resolveRuntimeFingerprint().catch(() => null),
   });
 }));
 
@@ -278,8 +290,10 @@ router.get('/setup/runtime-install', asyncHandler(async (req, res) => {
   }
   // The install may add/remove packages; drop any cached "ready" so the
   // post-install /runtime-status response reflects the new state instead of
-  // a stale "true" from before a deliberate cleanup.
+  // a stale "true" from before a deliberate cleanup. Same for the cached
+  // runtime fingerprint — a reinstall can bump ltx/mlx/torch versions.
   invalidateByovReadyCache(info.id);
+  invalidateRuntimeFingerprintCache(info.id);
 
   const scriptPath = join(PATHS.root, 'scripts', 'setup-image-video.sh');
   if (!existsSync(scriptPath)) {
@@ -370,6 +384,21 @@ router.get('/models', (_req, res) => {
   res.json(listVideoModels());
 });
 
+// Resolve the repo set an integrity scan should cover. A specific `modelId`
+// scopes to that model's repo; no modelId scans every model repo plus the
+// shared text encoder.
+const reposToVerify = (modelId) => {
+  if (modelId) {
+    const m = listVideoModels().find((x) => x.id === modelId);
+    const repo = m ? repoForModel(m) : null;
+    return repo ? [repo] : [];
+  }
+  const repos = listVideoModels().map(repoForModel).filter(Boolean);
+  const enc = getTextEncoderRepo();
+  if (isHfRepoId(enc)) repos.push(enc);
+  return [...new Set(repos)];
+};
+
 // Per-model download status — see /api/image-gen/models/status for the
 // shape contract. We also surface the active text-encoder repo so the
 // video form can warn when the Gemma encoder isn't downloaded yet (a
@@ -380,19 +409,65 @@ router.get('/models/status', asyncHandler(async (_req, res) => {
   // surface both the repo-cache status and the resolved local path so the UI
   // can distinguish "not downloaded" from "served from LM Studio".
   const encoderRepo = getTextEncoderRepo();
-  const [models, encoderInspection] = await Promise.all([
+  const [models, textEncoder] = await Promise.all([
     Promise.all(listVideoModels().map(async (m) => {
       const repo = repoForModel(m);
-      if (!repo) return { id: m.id, repo: null, cached: null, sizeBytes: 0 };
+      if (!repo) return { id: m.id, repo: null, cached: null, sizeBytes: 0, integrity: null };
       const { cached, sizeBytes } = await inspectModelCache(repo);
-      return { id: m.id, repo, cached, sizeBytes };
+      // Only run the (header-reading) integrity check for repos that are
+      // actually downloaded — a not-yet-cached model gets the Download badge,
+      // not a Repair banner.
+      const integrity = cached ? summarizeVerify(await verifyModelCache(repo)) : null;
+      return { id: m.id, repo, cached, sizeBytes, integrity };
     })),
-    isHfRepoId(encoderRepo) ? inspectModelCache(encoderRepo) : Promise.resolve(null),
+    (async () => {
+      if (!isHfRepoId(encoderRepo)) return { repo: encoderRepo, cached: true, sizeBytes: 0, integrity: null };
+      const enc = await inspectModelCache(encoderRepo);
+      const integrity = enc.cached ? summarizeVerify(await verifyModelCache(encoderRepo)) : null;
+      return { repo: encoderRepo, ...enc, integrity };
+    })(),
   ]);
-  const textEncoder = encoderInspection
-    ? { repo: encoderRepo, ...encoderInspection }
-    : { repo: encoderRepo, cached: true, sizeBytes: 0 };
   res.json({ models, textEncoder });
+}));
+
+// POST /models/verify — force an integrity re-scan on demand. `deep:true` adds
+// the per-file sha256 comparison (slower; reads every weight byte) on top of
+// the cheap structural check the status poll already runs. With no `modelId`
+// it scans every cached model + the text encoder.
+const verifyBodySchema = z.object({
+  modelId: z.string().min(1).optional(),
+  deep: z.boolean().optional(),
+});
+router.post('/models/verify', asyncHandler(async (req, res) => {
+  const parsed = verifyBodySchema.safeParse(req.body || {});
+  if (!parsed.success) failValidation(parsed);
+  const { modelId, deep = false } = parsed.data;
+  const repos = reposToVerify(modelId);
+  if (modelId && repos.length === 0) {
+    throw new ServerError(`Unknown video model: ${modelId}`, { status: 404, code: 'UNKNOWN_MODEL' });
+  }
+  const results = await Promise.all(repos.map(async (repo) => verifyModelCache(repo, { deep })));
+  res.json({ deep, models: results.map((r) => ({ repo: r.repoId, ...summarizeVerify(r) })) });
+}));
+
+// POST /models/:modelId/repair — delete the flagged (corrupt/truncated) weight
+// files for the model's repo(s) so the existing resumable HF fetch path
+// re-downloads them. Returns the deleted-file list; the client then re-triggers
+// the normal `/models/:id/download` SSE stream to pull clean copies with
+// progress. `deep:true` uses the sha256 comparison to decide what's corrupt.
+router.post('/models/:modelId/repair', asyncHandler(async (req, res) => {
+  const model = listVideoModels().find((m) => m.id === req.params.modelId);
+  if (!model) throw new ServerError(`Unknown video model: ${req.params.modelId}`, { status: 404, code: 'UNKNOWN_MODEL' });
+  const parsed = z.object({ deep: z.boolean().optional() }).safeParse(req.body || {});
+  if (!parsed.success) failValidation(parsed);
+  const deep = parsed.data.deep || false;
+  const repos = reposToVerify(model.id);
+  if (repos.length === 0) {
+    throw new ServerError(`Model "${model.id}" has no HuggingFace repo on file.`, { status: 400, code: 'NO_REPO_FOR_MODEL' });
+  }
+  const repaired = await Promise.all(repos.map((repo) => repairModelCache(repo, { deep })));
+  const deleted = repaired.flatMap((r) => r.deleted.map((name) => ({ repo: r.repoId, name })));
+  res.json({ deep, deleted, repos });
 }));
 
 router.get('/models/:modelId/download', asyncHandler(async (req, res) => {
@@ -400,7 +475,26 @@ router.get('/models/:modelId/download', asyncHandler(async (req, res) => {
   if (!model) throw new ServerError(`Unknown video model: ${req.params.modelId}`, { status: 404 });
   const repo = repoForModel(model);
   if (!repo) throw new ServerError(`Model "${model.id}" has no HuggingFace repo on file.`, { status: 400, code: 'NO_REPO_FOR_MODEL' });
-  await startHfDownloadStream({ req, res, repo });
+  await startHfDownloadStream({ req, res, repo, force: req.query.force === '1' });
+}));
+
+// POST /text-encoder/repair — delete the flagged (corrupt/truncated) weight
+// files for the active text encoder repo so the existing /text-encoder/download
+// SSE re-fetches clean copies. The encoder is shared across all video renders
+// and is NOT a listVideoModels() entry, so the model-id-keyed
+// /models/:modelId/repair can't cover it — this scalar route does. A local-path
+// encoder (e.g. an LM Studio install) isn't an HF repo and has nothing to
+// repair through the cache.
+router.post('/text-encoder/repair', asyncHandler(async (req, res) => {
+  const repo = getTextEncoderRepo();
+  if (!isHfRepoId(repo)) {
+    throw new ServerError('Active text encoder is a local-path entry, not an HF repo.', { status: 400, code: 'NOT_DOWNLOADABLE' });
+  }
+  const parsed = z.object({ deep: z.boolean().optional() }).safeParse(req.body || {});
+  if (!parsed.success) failValidation(parsed);
+  const deep = parsed.data.deep || false;
+  const result = await repairModelCache(repo, { deep });
+  res.json({ deep, deleted: result.deleted.map((name) => ({ repo: result.repoId, name })), repos: [repo] });
 }));
 
 // Text encoder pre-fetch. The Gemma encoder is a separate ~7-25 GB pull from
@@ -412,7 +506,10 @@ router.get('/text-encoder/download', asyncHandler(async (req, res) => {
   if (!isHfRepoId(repo)) {
     throw new ServerError('Active text encoder is a local-path entry, not an HF repo.', { status: 400, code: 'NOT_DOWNLOADABLE' });
   }
-  await startHfDownloadStream({ req, res, repo });
+  // `?force=1` (sent by the repair-initiated re-download) re-fetches even when
+  // the repo still looks cached — a deleted shard from a multi-file encoder
+  // would otherwise be skipped.
+  await startHfDownloadStream({ req, res, repo, force: req.query.force === '1' });
 }));
 
 router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
@@ -714,14 +811,16 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
       }))
     : undefined;
 
-  // Video LoRAs are an ltx2-runtime primitive — the dgrauet pipeline fuses
-  // them via _pending_loras (see scripts/generate_ltx2.py). Reject up-front on
-  // any other runtime so a bad modelId can't enqueue a doomed job that only
-  // fails in the worker.
-  if (loras && effectiveModel && effectiveModel.runtime !== 'ltx2') {
+  // Video LoRAs fuse on two runtimes: dgrauet's `ltx2` (via the pipeline's
+  // _pending_loras hook, see scripts/generate_ltx2.py) and non-quantized
+  // LTX-2.x `mlx_video` models (merged offline by scripts/generate_av_lora.py).
+  // videoLoraFamily() returns null for everything else (wan22 / hunyuan /
+  // quantized mlx_video) — reject up-front so a bad modelId can't enqueue a
+  // doomed job that only fails in the worker.
+  if (loras && effectiveModel && !videoLoraFamily(effectiveModel)) {
     await cleanupAllStaged();
     throw new ServerError(
-      `LoRAs require an ltx2-runtime model. Model "${effectiveModelId}" runs on "${effectiveModel.runtime || 'mlx_video'}".`,
+      `LoRAs aren't supported on this model. Model "${effectiveModelId}" runs on "${effectiveModel.runtime || 'mlx_video'}" — use an LTX-2.x model (dgrauet ltx2, or the bf16 Unified Beta).`,
       { status: 400, code: 'LORAS_REQUIRE_LTX2' },
     );
   }

@@ -113,7 +113,6 @@ export default function usePopoverPosition({
       return;
     }
     reposition();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, reposition, ...contentDeps]);
 
   useEffect(() => {

@@ -1,5 +1,16 @@
 import { describe, it, expect } from 'vitest';
-import { applyExpansion } from './universeCharacterExpand.js';
+import { applyExpansion, STRING_FIELDS, LIST_FIELDS } from './universeCharacterExpand.js';
+
+describe('universeCharacterExpand — exported field lists', () => {
+  // These are the single source of truth for both the text expand and the
+  // vision-driven expand (universeVisionExpand.js). A drift here means one of
+  // the two flows silently stops filling a field.
+  it('exports the 16 string fields + 5 list fields', () => {
+    expect(STRING_FIELDS).toHaveLength(16);
+    expect(LIST_FIELDS).toHaveLength(5);
+    expect(LIST_FIELDS).toEqual(['stats', 'colorPalette', 'props', 'expressions', 'handGestures']);
+  });
+});
 
 describe('universeCharacterExpand — applyExpansion (no-clobber merge semantics)', () => {
   it('fills blank string fields from the LLM response', () => {

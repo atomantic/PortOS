@@ -24,11 +24,13 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
 import {
   Plus, Trash2, Loader2, Sparkles, ShieldCheck, ChevronRight, ChevronDown,
   ChevronsUpDown, AlertCircle, Wand2, Info, ListChecks, X, Lock, Unlock,
   ImageIcon, Layers, FileDown, BookOpen, ChartSpline, FileSearch, BookText, FileText,
+  Clock,
 } from 'lucide-react';
 import toast from '../ui/Toast';
 import { timeAgo } from '../../utils/formatters';
@@ -128,26 +130,53 @@ function VerifyScopeHint({ scope }) {
   );
 }
 
-// Hover-revealed tooltip variant — anchors below a parent with the `group`
-// class. Use this when the scope hint should sit on the button itself
-// instead of taking up vertical space in the layout. The `id` is exposed so
-// the triggering button can wire `aria-describedby` for screen readers.
-function VerifyScopeTooltip({ scope, id }) {
+// Hover-revealed tooltip variant — wraps its trigger and renders the popover
+// through a portal to <body> with fixed positioning, anchored below-right of
+// the trigger. The portal escapes the horizontally-scrolling button row's
+// `overflow` clipping and any ancestor stacking context (a plain
+// `absolute`/`z-index` popover got clipped and painted under the nav). The
+// `id` is exposed so the trigger can wire `aria-describedby` for screen readers.
+function VerifyScopeTooltip({ scope, id, children }) {
+  const anchorRef = useRef(null);
+  const [pos, setPos] = useState(null);
+
+  const show = useCallback(() => {
+    const el = anchorRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    setPos({ top: r.bottom + 8, right: Math.max(8, window.innerWidth - r.right) });
+  }, []);
+  const hide = useCallback(() => setPos(null), []);
+
   return (
     <div
-      id={id}
-      role="tooltip"
-      className="absolute top-full right-0 mt-2 w-80 max-w-[calc(100vw-2rem)] bg-port-card border border-port-border rounded-lg shadow-lg p-3 z-30 opacity-0 invisible group-hover:opacity-100 group-hover:visible group-focus-within:opacity-100 group-focus-within:visible transition-opacity pointer-events-none text-left normal-case tracking-normal"
+      ref={anchorRef}
+      className="relative"
+      onMouseEnter={show}
+      onMouseLeave={hide}
+      onFocus={show}
+      onBlur={hide}
     >
-      <p className="text-[10px] text-gray-300 font-medium mb-1 flex items-center gap-1">
-        <Info size={10} /> What this checks
-      </p>
-      <p className="text-[10px] text-gray-400 italic mb-2">{scope.depth}</p>
-      <ul className="list-disc pl-4 space-y-0.5 text-[10px] text-gray-400">
-        {scope.checks.map((c) => (
-          <li key={c}>{c}</li>
-        ))}
-      </ul>
+      {children}
+      {pos && createPortal(
+        <div
+          id={id}
+          role="tooltip"
+          style={{ position: 'fixed', top: pos.top, right: pos.right }}
+          className="w-80 max-w-[calc(100vw-1rem)] bg-port-card border border-port-border rounded-lg shadow-lg p-3 z-[60] text-left normal-case tracking-normal pointer-events-none"
+        >
+          <p className="text-[10px] text-gray-300 font-medium mb-1 flex items-center gap-1">
+            <Info size={10} /> What this checks
+          </p>
+          <p className="text-[10px] text-gray-400 italic mb-2">{scope.depth}</p>
+          <ul className="list-disc pl-4 space-y-0.5 text-[10px] text-gray-400">
+            {scope.checks.map((c) => (
+              <li key={c}>{c}</li>
+            ))}
+          </ul>
+        </div>,
+        document.body,
+      )}
     </div>
   );
 }
@@ -763,7 +792,7 @@ function ArcHeader({ series, onSeriesUpdate, onIssuesUpdate, onFlushPending }) {
             {generateBtnLabel}
           </button>
           {hasGeneratedArc ? (
-            <div className="relative group">
+            <VerifyScopeTooltip scope={VERIFY_ARC_SCOPE} id="verify-arc-scope-tooltip">
               <button
                 type="button"
                 onClick={runVerify}
@@ -774,8 +803,7 @@ function ArcHeader({ series, onSeriesUpdate, onIssuesUpdate, onFlushPending }) {
                 {running === 'verify' ? <Loader2 size={14} className="animate-spin" /> : <ShieldCheck size={14} />}
                 Verify arc
               </button>
-              <VerifyScopeTooltip scope={VERIFY_ARC_SCOPE} id="verify-arc-scope-tooltip" />
-            </div>
+            </VerifyScopeTooltip>
           ) : null}
           <button
             type="button"
@@ -1267,6 +1295,189 @@ function FieldLockToggle({ series, field, label, onSeriesUpdate }) {
   );
 }
 
+// Mirror of TICKING_CLOCK_KINDS in server/lib/storyArc.js. The server is the
+// validation authority (unknown kinds fall back to 'custom'); this list only
+// drives the picker options.
+const TICKING_CLOCK_KINDS = ['deadline', 'event', 'countdown', 'prophecy', 'bomb', 'custom'];
+
+// Inline editor for the arc's singular ticking clock / countdown. Edits merge
+// into a single `tickingClock` object the parent stores under `draft`; the
+// reminder beats themselves are authored via the reader map, so this editor
+// shows their count but doesn't manage the list.
+function TickingClockEditor({ clock, disabled, onChange }) {
+  const c = clock || {};
+  const enabled = c.enabled === true;
+  const patch = (p) => onChange({ ...c, ...p });
+  const numOrNull = (v) => (v === '' ? null : Math.max(0, Math.min(9999, Math.floor(Number(v) || 0))));
+  const reminders = Array.isArray(c.reminders) ? c.reminders : [];
+  // Mint an `rm-`-prefixed id the server sanitizer accepts verbatim (its
+  // ensureRmId regex is /^rm-[a-zA-Z0-9-]+$/). Avoid crypto.randomUUID — the app
+  // is reachable over plain HTTP via Tailscale, where it's unavailable.
+  const newReminderId = () => `rm-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const addReminder = () => patch({ reminders: [...reminders, { id: newReminderId(), note: '', atIssue: null }] });
+  const updateReminder = (idx, field, value) => patch({ reminders: reminders.map((r, i) => (i === idx ? { ...r, [field]: value } : r)) });
+  const removeReminder = (idx) => patch({ reminders: reminders.filter((_, i) => i !== idx) });
+  return (
+    <fieldset className="rounded border border-port-border bg-port-bg/50 p-2 space-y-2">
+      <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
+        <input
+          type="checkbox"
+          checked={enabled}
+          disabled={disabled}
+          onChange={(e) => patch({ enabled: e.target.checked })}
+        />
+        <span className="inline-flex items-center gap-1.5"><Clock size={12} /> Ticking clock / countdown</span>
+      </label>
+      {enabled ? (
+        <div className="space-y-2 pl-1">
+          <input
+            id="ticking-clock-label"
+            type="text"
+            value={c.label || ''}
+            onChange={(e) => patch({ label: e.target.value })}
+            placeholder="What the reader counts down to (e.g. “The storm makes landfall”)"
+            maxLength={200}
+            disabled={disabled}
+            className="w-full px-2 py-1 bg-port-bg border border-port-border rounded text-white text-sm"
+          />
+          <div className="flex flex-wrap gap-x-3 gap-y-2">
+            <div className="flex items-center gap-1.5">
+              <label htmlFor="ticking-clock-kind" className="text-[10px] uppercase tracking-wider text-gray-500">Kind</label>
+              <select
+                id="ticking-clock-kind"
+                value={c.kind || 'custom'}
+                onChange={(e) => patch({ kind: e.target.value })}
+                disabled={disabled}
+                className="px-2 py-1 bg-port-bg border border-port-border rounded text-white text-xs"
+              >
+                {TICKING_CLOCK_KINDS.map((k) => <option key={k} value={k}>{k}</option>)}
+              </select>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <label htmlFor="ticking-clock-planted" className="text-[10px] uppercase tracking-wider text-gray-500">Planted at</label>
+              <input
+                id="ticking-clock-planted"
+                type="number"
+                min={0}
+                max={9999}
+                value={c.plantedAtArcPosition ?? ''}
+                onChange={(e) => patch({ plantedAtArcPosition: numOrNull(e.target.value) })}
+                disabled={disabled}
+                className="w-20 px-2 py-1 bg-port-bg border border-port-border rounded text-white text-xs"
+              />
+            </div>
+            <div className="flex items-center gap-1.5">
+              <label htmlFor="ticking-clock-due" className="text-[10px] uppercase tracking-wider text-gray-500">Due at</label>
+              <input
+                id="ticking-clock-due"
+                type="number"
+                min={0}
+                max={9999}
+                value={c.dueAtArcPosition ?? ''}
+                onChange={(e) => patch({ dueAtArcPosition: numOrNull(e.target.value) })}
+                disabled={disabled}
+                className="w-20 px-2 py-1 bg-port-bg border border-port-border rounded text-white text-xs"
+              />
+            </div>
+          </div>
+          <textarea
+            id="ticking-clock-stakes"
+            value={c.stakes || ''}
+            onChange={(e) => patch({ stakes: e.target.value })}
+            placeholder="Stakes — what happens if the clock runs out"
+            rows={2}
+            maxLength={1000}
+            disabled={disabled}
+            className="w-full px-2 py-1 bg-port-bg border border-port-border rounded text-white text-sm"
+          />
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] uppercase tracking-wider text-gray-500">Reminder beats</span>
+              <button
+                type="button"
+                onClick={addReminder}
+                disabled={disabled}
+                className="inline-flex items-center gap-1 text-[11px] text-port-accent hover:underline disabled:opacity-50"
+              >
+                <Plus size={11} /> Add reminder
+              </button>
+            </div>
+            {reminders.length === 0 ? (
+              <p className="text-[10px] text-gray-500 italic">No reminders yet — add beats that keep the countdown in the reader’s mind through the middle.</p>
+            ) : (
+              reminders.map((r, idx) => (
+                <div key={r.id || idx} className="flex items-center gap-1.5">
+                  <input
+                    type="text"
+                    value={r.note || ''}
+                    onChange={(e) => updateReminder(idx, 'note', e.target.value)}
+                    placeholder="Reminder beat (e.g. “the barometer drops”)"
+                    maxLength={500}
+                    disabled={disabled}
+                    aria-label={`Reminder ${idx + 1} note`}
+                    className="flex-1 px-2 py-1 bg-port-bg border border-port-border rounded text-white text-xs"
+                  />
+                  <input
+                    type="number"
+                    min={0}
+                    max={9999}
+                    value={r.atIssue ?? ''}
+                    onChange={(e) => updateReminder(idx, 'atIssue', numOrNull(e.target.value))}
+                    placeholder="Issue #"
+                    disabled={disabled}
+                    aria-label={`Reminder ${idx + 1} issue number`}
+                    className="w-20 px-2 py-1 bg-port-bg border border-port-border rounded text-white text-xs"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removeReminder(idx)}
+                    disabled={disabled}
+                    aria-label={`Remove reminder ${idx + 1}`}
+                    className="p-1 text-gray-500 hover:text-port-error disabled:opacity-50"
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      ) : null}
+    </fieldset>
+  );
+}
+
+// Read-only ticking-clock card for the arc view. Hidden unless the clock is
+// enabled (a disabled/absent clock means "this story has no countdown").
+function TickingClockCard({ clock, series, onSeriesUpdate }) {
+  if (!clock || clock.enabled !== true) return null;
+  const span = clock.plantedAtArcPosition != null || clock.dueAtArcPosition != null
+    ? `${clock.plantedAtArcPosition ?? '?'} → ${clock.dueAtArcPosition ?? '?'}`
+    : null;
+  const reminders = Array.isArray(clock.reminders) ? clock.reminders : [];
+  return (
+    <div className="rounded border border-port-warning/40 bg-port-bg/50 px-2 py-1.5 space-y-1">
+      <div className="flex items-center gap-1.5">
+        <Clock size={12} className="text-port-warning shrink-0" />
+        <span className="text-xs font-medium text-white truncate">{clock.label || 'Ticking clock'}</span>
+        <span className="text-[10px] uppercase tracking-wider text-gray-500">{clock.kind || 'custom'}</span>
+        {span ? <span className="text-[10px] text-gray-400 ml-auto">arc {span}</span> : null}
+        <span className={span ? '' : 'ml-auto'}>
+          <FieldLockToggle series={series} field="tickingClock" label="Ticking clock" onSeriesUpdate={onSeriesUpdate} />
+        </span>
+      </div>
+      {clock.stakes ? <p className="text-[11px] text-gray-400 whitespace-pre-wrap">{clock.stakes}</p> : null}
+      {reminders.length ? (
+        <ul className="text-[11px] text-gray-500 list-disc list-inside">
+          {reminders.map((r) => (
+            <li key={r.id}>{r.note || `Reminder at issue ${r.atIssue ?? '?'}`}{r.note && r.atIssue != null ? ` (issue ${r.atIssue})` : ''}</li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
 function ArcContent({ series, onSeriesUpdate }) {
   const arc = series.arc;
   const [editing, setEditing] = useState(false);
@@ -1329,6 +1540,11 @@ function ArcContent({ series, onSeriesUpdate }) {
           onChange={(shape) => setDraft({ ...draft, shape })}
           disabled={saving}
         />
+        <TickingClockEditor
+          clock={draft.tickingClock}
+          disabled={saving}
+          onChange={(tickingClock) => setDraft({ ...draft, tickingClock })}
+        />
         <p className="text-[10px] text-gray-500 italic">Themes are edited inline above — click a pill to rename, hover for ×, or use the dashed “+ Add theme” chip.</p>
         <div className="flex items-center gap-2">
           <button
@@ -1376,6 +1592,7 @@ function ArcContent({ series, onSeriesUpdate }) {
             <FieldLockToggle series={series} field="shape" label="Shape" onSeriesUpdate={onSeriesUpdate} />
           </div>
         ) : null}
+        <TickingClockCard clock={arc.tickingClock} series={series} onSeriesUpdate={onSeriesUpdate} />
         <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
           {arc.summary ? (
             <details

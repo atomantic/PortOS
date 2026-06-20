@@ -1,9 +1,13 @@
 import { ListTodo, Check, CircleDot, Trash2 } from 'lucide-react';
+import InlineConfirmRow from '../ui/InlineConfirmRow';
+import { useConfirmDelete } from '../../hooks/useConfirmDelete';
+import { PRIORITY_BADGE } from './goalConstants';
 
 export default function GoalTodoList({
   goal, newTodoTitle, setNewTodoTitle, newTodoPriority, setNewTodoPriority,
   newTodoEstimate, setNewTodoEstimate, handleAddTodo, handleToggleTodo, handleDeleteTodo
 }) {
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   return (
     <div>
       <div className="flex items-center gap-1 mb-2">
@@ -15,7 +19,8 @@ export default function GoalTodoList({
       {goal.todos?.length > 0 && (
         <div className="space-y-1 mb-2">
           {goal.todos.map(todo => (
-            <div key={todo.id} className="flex items-center gap-2 text-xs group">
+            <div key={todo.id}>
+            <div className="flex items-center gap-2 text-xs group">
               <button
                 onClick={() => handleToggleTodo(todo)}
                 className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${
@@ -33,23 +38,30 @@ export default function GoalTodoList({
                 {todo.title}
               </span>
               {/* Not <Pill>: px-1 is tighter than Pill's xs (px-1.5) and would be overridden. */}
-              <span className={`shrink-0 px-1 py-0.5 rounded text-[10px] ${
-                todo.priority === 'high' ? 'bg-red-500/20 text-red-400' :
-                todo.priority === 'low' ? 'bg-gray-700 text-gray-500' :
-                'bg-yellow-500/20 text-yellow-400'
-              }`}>
+              <span className={`shrink-0 px-1 py-0.5 rounded text-[10px] ${PRIORITY_BADGE[todo.priority] || PRIORITY_BADGE.medium}`}>
                 {todo.priority}
               </span>
               {todo.estimateMinutes && (
                 <span className="shrink-0 text-gray-600">{todo.estimateMinutes}m</span>
               )}
               <button
-                onClick={() => handleDeleteTodo(todo.id)}
+                onClick={() => requestDelete(todo.id)}
                 className="p-0.5 text-gray-700 hover:text-red-400 opacity-0 group-hover:opacity-100 shrink-0"
                 title="Delete"
               >
                 <Trash2 className="w-3 h-3" />
               </button>
+            </div>
+            {isConfirming(todo.id) && (
+              <InlineConfirmRow
+                className="mt-2"
+                question="Delete this todo? This cannot be undone."
+                confirmTitle="Confirm delete"
+                cancelTitle="Cancel delete"
+                onConfirm={() => confirmDelete(() => handleDeleteTodo(todo.id))}
+                onCancel={cancelDelete}
+              />
+            )}
             </div>
           ))}
         </div>

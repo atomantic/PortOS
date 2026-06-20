@@ -44,6 +44,7 @@ let mockedSettings = { imageGen: { mode: 'local', local: { pythonPath: '/usr/bin
 vi.mock('../services/settings.js', () => ({
 tryReadFile: vi.fn().mockResolvedValue(null),
   getSettings: vi.fn(async () => mockedSettings),
+  settingsEvents: { on: () => {}, emit: () => {} },
 }));
 
 vi.mock('../services/mediaJobQueue/index.js', () => ({

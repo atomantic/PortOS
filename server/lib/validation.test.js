@@ -15,7 +15,13 @@ import {
   createCosTaskSchema,
   featureProviderConfigSchema,
   codeReviewSettingsSchema,
-  locationSettingsSchema
+  locationSettingsSchema,
+  writersRoomCharacterUpdateSchema,
+  writersRoomObjectUpdateSchema,
+  editorialCustomCheckUpdateSchema,
+  pipelineEditorialChecksSettingsSchema,
+  storyboardShotSchema,
+  storyboardSceneSchema
 } from './validation.js';
 
 describe('validation.js', () => {
@@ -789,6 +795,149 @@ describe('validation.js', () => {
 
     it('rejects unknown keys (strict)', () => {
       expect(locationSettingsSchema.safeParse({ lat: 1, lon: 1, alt: 100 }).success).toBe(false);
+    });
+  });
+
+  describe('writersRoomCharacterUpdateSchema — relationshipLinks (#1287)', () => {
+    it('accepts a well-formed relationship link with opposition', () => {
+      const result = writersRoomCharacterUpdateSchema.safeParse({
+        relationshipLinks: [{
+          targetCharacterId: 'chr-bob',
+          type: 'antagonist',
+          description: 'mortal enemies',
+          opposition: { axis: 'hunter/prey', thisRole: 'hunter', targetRole: 'prey', note: 'will it flip?' },
+        }],
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('accepts a link with no id (server mints it) and a custom type', () => {
+      const result = writersRoomCharacterUpdateSchema.safeParse({
+        relationshipLinks: [{ targetCharacterId: 'chr-bob', type: 'frenemy' }],
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('rejects a link missing targetCharacterId', () => {
+      const result = writersRoomCharacterUpdateSchema.safeParse({
+        relationshipLinks: [{ type: 'ally' }],
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it('rejects an unknown key inside a link (strict)', () => {
+      const result = writersRoomCharacterUpdateSchema.safeParse({
+        relationshipLinks: [{ targetCharacterId: 'chr-bob', bogus: true }],
+      });
+      expect(result.success).toBe(false);
+    });
+  });
+
+  describe('writersRoomObjectUpdateSchema — attachments (#1288)', () => {
+    it('accepts a well-formed attachment', () => {
+      const result = writersRoomObjectUpdateSchema.safeParse({
+        attachments: [{
+          characterId: 'chr-mara',
+          emotion: 'grief',
+          significance: 'her father gave it to her',
+          origin: 'inherited at his funeral',
+          role: 'memento',
+        }],
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('accepts an attachment with no id (server mints it) and a custom role', () => {
+      const result = writersRoomObjectUpdateSchema.safeParse({
+        attachments: [{ characterId: 'chr-mara', role: 'heirloom' }],
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('rejects an attachment missing characterId', () => {
+      const result = writersRoomObjectUpdateSchema.safeParse({
+        attachments: [{ emotion: 'grief' }],
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it('rejects an unknown key inside an attachment (strict)', () => {
+      const result = writersRoomObjectUpdateSchema.safeParse({
+        attachments: [{ characterId: 'chr-mara', bogus: true }],
+      });
+      expect(result.success).toBe(false);
+    });
+  });
+
+  describe('editorial custom checks (#1346)', () => {
+    it('the update schema applies NO defaults (omitted field stays absent)', () => {
+      const parsed = editorialCustomCheckUpdateSchema.parse({ label: 'Renamed' });
+      // A defaulted optional would inject scope/category/description here and
+      // silently reset the stored values on a field-specific PATCH.
+      expect(parsed).toEqual({ label: 'Renamed' });
+    });
+
+    it('the update schema still rejects bad enum values and unknown keys', () => {
+      expect(editorialCustomCheckUpdateSchema.safeParse({ scope: 'bogus' }).success).toBe(false);
+      expect(editorialCustomCheckUpdateSchema.safeParse({ nope: 1 }).success).toBe(false);
+    });
+
+    it('the settings slice accepts forward/older-peer custom-check shapes (lenient)', () => {
+      // A def carrying a future field (or a not-yet-known scope) must not 400 an
+      // unrelated settings save — runtime buildCustomCheck decides runnability.
+      const result = pipelineEditorialChecksSettingsSchema.safeParse({
+        customChecks: [{ id: 'custom.x', label: 'Future', prompt: 'p', scope: 'galaxy', futureField: { nested: true } }],
+      });
+      expect(result.success).toBe(true);
+      expect(result.data.customChecks[0].futureField).toEqual({ nested: true }); // unknown keys preserved
+    });
+  });
+
+  describe('storyboardShotSchema / storyboardSceneSchema (#1315)', () => {
+    it('accepts valid shot-grammar enums', () => {
+      const r = storyboardShotSchema.safeParse({ id: 'shot-01', description: 'x', shotType: 'wide', screenDirection: 'left' });
+      expect(r.success).toBe(true);
+      expect(r.data).toMatchObject({ shotType: 'wide', screenDirection: 'left' });
+    });
+
+    it('rejects an unknown shotType / screenDirection', () => {
+      expect(storyboardShotSchema.safeParse({ id: 's', shotType: 'banana' }).success).toBe(false);
+      expect(storyboardShotSchema.safeParse({ id: 's', screenDirection: 'sideways' }).success).toBe(false);
+    });
+
+    it('tolerates the UI sentinels: null and empty-string clear', () => {
+      expect(storyboardShotSchema.safeParse({ id: 's', shotType: null, screenDirection: null }).success).toBe(true);
+      const r = storyboardShotSchema.safeParse({ id: 's', shotType: '', screenDirection: '' });
+      expect(r.success).toBe(true);
+      expect(r.data.shotType).toBeNull();      // '' → null (treated as "not captured")
+      expect(r.data.screenDirection).toBeNull();
+    });
+
+    it('accepts a long description (2001–4000) the UI permits — the sanitizer truncates, the route must not 400', () => {
+      // Regression: the route cap must match the UI textarea (maxLength=4000),
+      // NOT the sanitizer's 2000 — rejecting a UI-allowed edit would turn the
+      // previously-passthrough scenes PATCH into a 400.
+      const r = storyboardShotSchema.safeParse({ id: 's', description: 'x'.repeat(3500) });
+      expect(r.success).toBe(true);
+      expect(storyboardShotSchema.safeParse({ id: 's', description: 'x'.repeat(4001) }).success).toBe(false);
+    });
+
+    it('passes through render-time fields stamped onto a shot (startFrameJobId)', () => {
+      const r = storyboardShotSchema.safeParse({ id: 's', description: 'x', startFrameJobId: 'job-9' });
+      expect(r.success).toBe(true);
+      expect(r.data.startFrameJobId).toBe('job-9');
+    });
+
+    it('scene schema validates shots[] but passes the rest of the scene through', () => {
+      const r = storyboardSceneSchema.safeParse({
+        heading: 'INT. ROOM', slugline: 'INT. ROOM — DAY', sceneVideoJobId: 'v1',
+        shots: [{ id: 'shot-01', description: 'x', shotType: 'medium', screenDirection: 'right' }],
+      });
+      expect(r.success).toBe(true);
+      expect(r.data.heading).toBe('INT. ROOM');
+      expect(r.data.sceneVideoJobId).toBe('v1');
+      // A bad enum inside shots[] fails the whole scene.
+      expect(storyboardSceneSchema.safeParse({ shots: [{ id: 's', shotType: 'nope' }] }).success).toBe(false);
     });
   });
 });

@@ -36,6 +36,7 @@ const {
   listDatasets,
   patchDataset,
   reconcileRenderingImages,
+  stripSharedCaptionFragments,
   updateDataset,
   updateImageCaption,
 } = await import('./loraDatasets.js');
@@ -402,5 +403,84 @@ describe('deleteDataset', () => {
     await deleteDataset(dataset.id);
     expect(existsSync(join(TEST_DATA_ROOT, 'lora-datasets', dataset.id))).toBe(false);
     await expect(getDataset(dataset.id)).rejects.toMatchObject({ status: 404 });
+  });
+});
+
+describe('stripSharedCaptionFragments', () => {
+  // Build a captioned dataset where identity repeats and pose varies — the
+  // issue-#1320 failure mode. char-1's derived trigger is kessa_brightwater.
+  const seedFreydisDataset = async () => {
+    const { dataset } = await createDataset({ universeId: 'uni-1', entryId: 'char-1' });
+    const captions = [
+      'white hair, circlet, tooth necklace, standing',
+      'white hair, circlet, tooth necklace, walking',
+      'white hair, circlet, tooth necklace, sitting',
+      'white hair, circlet, tooth necklace, action pose',
+    ];
+    for (let i = 0; i < captions.length; i += 1) {
+      const tmpPath = join(TEST_DATA_ROOT, `seed-${i}.png`);
+      await makePng(tmpPath);
+      const entry = await addUploadedImage(dataset.id, { tmpPath });
+      await updateImageCaption(dataset.id, entry.id, `kessa_brightwater, ${captions[i]}`);
+    }
+    return dataset.id;
+  };
+
+  it('strips shared identity fragments and keeps per-shot detail + the trigger', async () => {
+    const id = await seedFreydisDataset();
+    const { dataset, removedFragments, updatedImages } = await stripSharedCaptionFragments(id);
+    expect(updatedImages).toBe(4);
+    expect(removedFragments.map((f) => f.normalized).sort())
+      .toEqual(['circlet', 'tooth necklace', 'white hair']);
+    for (const img of dataset.images) {
+      expect(img.caption).toMatch(/^kessa_brightwater,/);
+      expect(img.caption).not.toContain('white hair');
+      expect(img.caption).not.toContain('circlet');
+      // The varying pose fragment survives.
+      expect(img.caption).toMatch(/standing|walking|sitting|action pose/);
+    }
+    // Every image still carries the trigger token → readiness unchanged on that axis.
+    expect(dataset.readiness.captioned).toBe(4);
+  });
+
+  it('is a no-op when no fragment is shared across most captions', async () => {
+    const { dataset } = await createDataset({ universeId: 'uni-1', entryId: 'char-1' });
+    const tmpPath = join(TEST_DATA_ROOT, 'lonely.png');
+    await makePng(tmpPath);
+    const entry = await addUploadedImage(dataset.id, { tmpPath });
+    await updateImageCaption(dataset.id, entry.id, 'kessa_brightwater, unique pose');
+    const { removedFragments, updatedImages } = await stripSharedCaptionFragments(dataset.id);
+    expect(removedFragments).toEqual([]);
+    expect(updatedImages).toBe(0);
+    const after = await getDataset(dataset.id);
+    expect(after.images[0].caption).toBe('kessa_brightwater, unique pose');
+  });
+
+  it('is idempotent — a second strip removes nothing', async () => {
+    const id = await seedFreydisDataset();
+    await stripSharedCaptionFragments(id);
+    const second = await stripSharedCaptionFragments(id);
+    expect(second.removedFragments).toEqual([]);
+    expect(second.updatedImages).toBe(0);
+  });
+
+  it('leaves captions without the trigger word untouched (never prefixes them)', async () => {
+    const id = await seedFreydisDataset();
+    // Add a ready caption that shares an identity fragment but lacks the trigger
+    // — it was excluded from the analysis, so the strip must not touch it (and
+    // must not silently prepend the trigger, which would inflate readiness).
+    const tmpPath = join(TEST_DATA_ROOT, 'untriggered.png');
+    await makePng(tmpPath);
+    const entry = await addUploadedImage(id, { tmpPath });
+    await updateImageCaption(id, entry.id, 'white hair, circlet, lurking in shadow');
+
+    const before = await getDataset(id);
+    const captionedBefore = before.readiness.captioned;
+    const { dataset } = await stripSharedCaptionFragments(id);
+
+    const untriggered = dataset.images.find((i) => i.id === entry.id);
+    expect(untriggered.caption).toBe('white hair, circlet, lurking in shadow');
+    // Strip didn't convert the untriggered caption into a trigger-bearing one.
+    expect(dataset.readiness.captioned).toBe(captionedBefore);
   });
 });

@@ -674,6 +674,22 @@ export async function getGraphData() {
 }
 
 /**
+ * Ids of active memories that have no embedding vector yet — the backfill
+ * target for "embed missing" (a record whose embedding generation failed or
+ * never ran). Mirrors the memoryDB.js implementation against the file store.
+ */
+export async function getMemoryIdsMissingEmbedding() {
+  const index = await loadIndex();
+  const embeddings = await loadEmbeddings();
+  const missing = new Set();
+  for (const m of index.memories) {
+    if (m.status !== 'active') continue;
+    if (!embeddings.vectors[m.id]) missing.add(m.id);
+  }
+  return missing;
+}
+
+/**
  * Link two memories
  */
 export async function linkMemories(sourceId, targetId) {

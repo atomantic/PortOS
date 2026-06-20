@@ -156,19 +156,19 @@ describe('dataSync — universe category', () => {
     const snap = await dataSync.getSnapshot('universe');
     expect(snap.portosMeta).toBeDefined();
     expect(typeof snap.portosMeta.portosVersion).toBe('string');
-    expect(snap.portosMeta.schemaVersions.universes).toBe(5);
+    expect(snap.portosMeta.schemaVersions.universes).toBe(7);
   });
 
   it('applyRemote rejects when sender schemaVersions are AHEAD of local code', async () => {
     writeUniverseState({ universes: [], runs: [] });
     const result = await dataSync.applyRemote('universe', {
       universes: [{ id: 'u-new', name: 'Foundry', updatedAt: '2026-05-17T10:00:00Z' }],
-    }, { portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 6 } } });
+    }, { portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 8 } } });
     expect(result.applied).toBe(false);
     expect(result.count).toBe(0);
     expect(result.blockedBySchema).toBeDefined();
     expect(result.blockedBySchema.ahead).toEqual([
-      { category: 'universes', senderV: 6, receiverV: 5 },
+      { category: 'universes', senderV: 8, receiverV: 7 },
     ]);
     expect(result.blockedBySchema.senderPortosVersion).toBe('99.0.0');
     // Nothing was written.
@@ -1053,12 +1053,12 @@ describe('dataSync — per-category schema gate (cross-key isolation)', () => {
     const result = await dataSync.applyRemote('pipeline', {
       series: [{ id: 'ser-1', name: 'Foundry', updatedAt: '2026-05-17T11:00:00Z' }],
       issues: [],
-    }, { portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 5, pipelineSeries: 3, pipelineIssues: 1, mediaCollections: 1 } } });
+    }, { portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 5, pipelineSeries: 7, pipelineIssues: 1, mediaCollections: 1 } } });
     expect(result.applied).toBe(false);
     expect(result.blockedBySchema).toBeDefined();
     // The reported gap is scoped to the relevant category — NOT mis-attributed.
     expect(result.blockedBySchema.ahead).toEqual([
-      { category: 'pipelineSeries', senderV: 3, receiverV: 2 },
+      { category: 'pipelineSeries', senderV: 7, receiverV: 6 },
     ]);
     expect(readSeriesState()).toEqual([]); // nothing written
   });

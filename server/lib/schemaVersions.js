@@ -35,7 +35,32 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // Type-level (storage layout) version for `data/universes/{id}/index.json`.
   // v5 = post-split. Migration 034 introduced it. The per-record-shape version
   // stays at 4 (stamped inside each record by `sanitizeTemplate`).
-  universes: 5,
+  // v6 = canon characters gained `relationshipLinks[]` (structured
+  // character-to-character links + opposing-force tags, #1287). Additive +
+  // gracefully degrading, but version-gated for the same reason as
+  // `pipelineIssues`/`pipelineSeries` v2: a not-yet-upgraded peer that receives
+  // and re-sanitizes a universe through its relationshipLinks-unaware
+  // `sanitizeCharacter` would silently strip the field and last-writer-wins the
+  // loss back onto the newer peer. Bumping makes the older peer reject the
+  // ahead-version universe transfer instead. Per-category gate → only universe
+  // sync pauses with old peers; pipeline/catalog/etc keep flowing.
+  // v7 = canon objects gained `attachments[]` (structured object↔character
+  // emotional-attachment links — emotion/significance/origin/role, #1288).
+  // Same rationale as v6: additive + gracefully degrading, but version-gated so
+  // a not-yet-upgraded peer that re-sanitizes a universe through its
+  // attachments-unaware `sanitizeObject` can't silently strip the field and
+  // LWW the loss back onto the newer peer.
+  //
+  // NOTE — `catalog` is intentionally NOT bumped for this field (matches the
+  // #1287 relationshipLinks precedent). A bible object promoted to the catalog
+  // carries `attachments` in `catalog_ingredients.payload`; an older peer's
+  // `updateIngredient` → `sanitizeObject` would drop it on a local edit and a
+  // catalog sync back could clobber the newer copy. We accept that graceful
+  // degradation rather than gate `catalog` — bumping it would pause ALL catalog
+  // sync with version-mismatched peers for one additive field, the heavier
+  // tradeoff this project has chosen against for additive bible fields. The
+  // `universes` gate above already protects the canonical (embedded) copy.
+  universes: 7,
   // v1 = post-split. Migrations 035/036 introduced the pipeline collection
   // layout for issues and series.
   // v2 = `stages.audio.audioMode` + `stages.audio.cues[]` added (whole-episode
@@ -52,7 +77,37 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // round-trip a series through its readerMap-unaware sanitizer and LWW-strip
   // the field back onto a newer peer. Per-category gate → only series sync
   // pauses with old peers; issues/universes keep flowing.
-  pipelineSeries: 2,
+  // v3 = `series.arc.tickingClock` added (#1289). Same situation as readerMap:
+  // an additive field INSIDE the series.arc payload, so a ≤v2 peer that receives
+  // and re-sanitizes a series through its tickingClock-unaware `sanitizeArc`
+  // would silently strip the countdown and last-writer-wins the loss back onto
+  // the newer peer. Bump makes the older peer reject the ahead-version series
+  // transfer instead. Per-category gate → only series sync pauses with old peers.
+  // v4 = `series.styleGuide` added (#1303) — a top-level series house-style
+  // field (tense/POV/audience/rating/reading-level/tone/conventions). Same
+  // silent-strip-then-LWW corruption as readerMap/tickingClock, just one level
+  // up: a ≤v3 peer re-sanitizes a series through its styleGuide-unaware
+  // `sanitizeSeries`, drops the guide, and last-writer-wins the loss back onto
+  // the newer peer. Bump makes the older peer reject the ahead-version series
+  // transfer instead. Per-category gate → only series sync pauses with old peers.
+  // v5 = `series.coverImage` added — a top-level derived field holding the
+  // filename of a rendered volume/issue cover, shown as a thumbnail on the
+  // pipeline series list. Derived (any peer can recompute it from its own
+  // seasons/issues), but it's only recomputed on cover-render or the one-time
+  // boot backfill — never on every read — so a ≤v4 peer that re-sanitizes a
+  // series through its coverImage-unaware `sanitizeSeries` would drop the
+  // pointer and LWW the loss back onto the newer peer, where it may never
+  // recompute (a finished series renders no new cover). Gate so the older peer
+  // rejects the ahead-version transfer instead. Per-category gate → only series
+  // sync pauses with old peers.
+  // v6 = `series.characterArcs[]` added (#1293) — per-character story arcs
+  // (want/need, start → end state, transition beats). Same silent-strip-then-LWW
+  // corruption as readerMap/tickingClock/styleGuide: a ≤v5 peer that re-sanitizes
+  // a series through its characterArcs-unaware `sanitizeSeries` would drop the
+  // arcs and last-writer-wins the loss back onto the newer peer. Bump makes the
+  // older peer reject the ahead-version series transfer instead. Per-category
+  // gate → only series sync pauses with old peers.
+  pipelineSeries: 6,
   // NOT bumped for the manuscript-review sibling doc now bundled on series
   // pushes/exports (`data/pipeline-series/{id}/manuscript-review.json`).
   // Unlike `readerMap` (v2), the review is NOT a field inside the series
@@ -72,6 +127,18 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // SCHEMA_VERSION 1→2, where an older peer's sanitizer would strip a field and
   // LWW it back) MUST introduce a gate then — mirroring the catalog
   // payloadSchemaVersion lockstep note below.
+  // ALSO not bumped for the reverse-outline sibling doc (#1348), bundled on
+  // series pushes/exports as `data/pipeline-series/{id}/reverse-outline.json`
+  // via a dedicated `reverseOutline` payload key. Identical reasoning to the
+  // manuscript-review note above: it's a separate doc (not a series field), so
+  // an older peer never round-trips it through `sanitizeSeries`; it's additive +
+  // gracefully degrading (a pre-#1348 receiver ignores the unknown key and ships
+  // none back, so the newer peer's `if (reverseOutline)` receive guard is a
+  // no-op and the local outline is preserved); and the sender's legacy-strip
+  // retry drops the key so the record/issues still land. Whole-doc LWW on
+  // `generatedAt` means there's no per-field strip-then-LWW-back corruption to
+  // gate against. The FIRST incompatible outline-doc shape change (reverseOutline.js
+  // SCHEMA_VERSION 1→2) MUST introduce a gate then, same as the review above.
   mediaCollections: 1,
   // v1 = author personas (PostgreSQL `authors` table) federated via the
   // per-record peer-sync push pipeline (record kind `author`, sync category

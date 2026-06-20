@@ -5,12 +5,16 @@
 //
 // Tones pre-compose full Tailwind class names — the JIT scans for complete
 // tokens, so `bg-port-${tone}/10` would NOT generate the utility. Spell it out.
-// Only `error` ships today (every confirm row is destructive); add a map entry
-// when a non-destructive tone is actually needed.
+// `error` for destructive confirms; `warning` for expensive-but-safe confirms
+// (e.g. a long-running re-embed) where the action isn't destructive.
 const TONES = {
   error: {
     wrapper: 'bg-port-error/10 border-port-error/30',
     confirm: 'bg-port-error text-white hover:bg-port-error/80',
+  },
+  warning: {
+    wrapper: 'bg-port-warning/10 border-port-warning/30',
+    confirm: 'bg-port-warning text-black hover:bg-port-warning/80',
   },
 };
 

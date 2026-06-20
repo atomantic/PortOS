@@ -144,7 +144,7 @@ export function hasBeenProcessed(cursor, manifestFilename, manifestId = null) {
  * content-changes re-process correctly.
  */
 export function buildManifest({
-  kind, senderInstanceId, source, sourceBio, recordIds, assetRefs, reviewRefs,
+  kind, senderInstanceId, source, sourceBio, recordIds, assetRefs, reviewRefs, outlineRefs,
   bucketId, bucketName, note, producedByVersion, subscription, collection,
   portosSchemaVersions,
 }) {
@@ -187,6 +187,12 @@ export function buildManifest({
     // (cloud-relayed buckets deliver files out of order). Absent on legacy
     // manifests → importer treats as "no declared reviews".
     reviewRefs: Array.isArray(reviewRefs) ? reviewRefs : [],
+    // Series ids whose reverse-outline sibling doc (records/outlines/<id>.json)
+    // is bundled (#1348). Same out-of-band-by-seriesId rationale as reviewRefs:
+    // the outline has no record id of its own, so the importer waits for the
+    // declared file before markProcessed (cloud-relayed buckets deliver out of
+    // order). Absent on legacy manifests → importer treats as "no outlines".
+    outlineRefs: Array.isArray(outlineRefs) ? outlineRefs : [],
     // Optional payload for universe/series shares — the linked media
     // collection so recipients gain the same set of generated images and
     // the link is restored on their side. Either `universeId` (universe-

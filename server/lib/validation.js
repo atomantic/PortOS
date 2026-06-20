@@ -3,8 +3,11 @@ import { ServerError } from './errorHandler.js';
 import { partialWithoutDefaults, emptyToUndefined, emptyToNull } from './zodCompat.js';
 import { WORK_KINDS, WORK_STATUSES, ANALYSIS_KINDS } from './writersRoomPresets.js';
 import { ALL_STYLE_IDS, STYLE_ID } from './writersRoomStylePresets.js';
-import { BIBLE_LIMITS } from './storyBible.js';
+import { BIBLE_LIMITS, RELATIONSHIP_LINK_TYPES, RELATIONSHIP_OPPOSITION_AXES, ATTACHMENT_ROLES } from './storyBible.js';
 import { MIN_TIMEOUT as STAGE_TIMEOUT_MIN_MS, MAX_TIMEOUT as STAGE_TIMEOUT_MAX_MS } from './aiToolkit/constants.js';
+import { CHECK_SCOPES, CHECK_SEVERITIES } from './editorial/checkRegistry.js';
+import { SHOT_TYPES, SCREEN_DIRECTIONS } from './shotGrammar.js';
+import { WORK_TRACKERS } from './workTracker.js';
 
 // gpt-image-2 (codex backend) caps at 3840px per edge and 8,294,400 total
 // pixels. Mirror the ceiling for every image-gen route. Local mflux can
@@ -250,6 +253,14 @@ export const referenceRepoSchema = z.object({
 });
 
 // App schema for registration/update
+// Workspace Context (#902) — the only input is an app id (the apps-registry
+// key, or the fixed 'portos-default' baseline). Mirrors the apps-registry id
+// shape: uuid-style ids plus the literal baseline id, so a hand-crafted path
+// segment can't reach the service with a junk id.
+export const workspaceContextParamsSchema = z.object({
+  appId: z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/, 'invalid app id')
+});
+
 export const appSchema = z.object({
   name: z.string().min(1).max(100),
   repoPath: z.string().min(1),
@@ -281,7 +292,13 @@ export const appSchema = z.object({
   defaultUseWorktree: z.boolean().optional(),
   defaultOpenPR: z.boolean().optional(),
   jira: jiraConfigSchema.optional().nullable(),
-  datadog: datadogConfigSchema.optional().nullable()
+  datadog: datadogConfigSchema.optional().nullable(),
+  // Where this app's autonomous work items live (single source per app).
+  // 'auto' (default) resolves to a concrete tracker from the git origin host
+  // — see server/lib/workTracker.js + the `claim-work` router in
+  // cosTaskGenerator.js. WORK_TRACKERS is the single source of truth for the
+  // value set.
+  workTracker: z.enum(WORK_TRACKERS).optional()
   // referenceRepos is INTENTIONALLY not part of the create/update API
   // surface. createApp() doesn't persist it and updateApp() (via the
   // omit() in appUpdateSchema) ignores it — the dedicated
@@ -839,6 +856,16 @@ const loraTrainingParamsSchema = z.object({
   checkpointEvery: z.number().int().min(0).max(5000).optional(),
   sampleEvery: z.number().int().min(0).max(5000).optional(),
   samplePrompt: z.string().max(2000).optional(),
+  // Per-run frozen-base overrides (issue #1321/#1407), mflux runtime only.
+  // `baseQuant` picks the quant of the frozen base — 16 = unquantized bf16, 8/4
+  // = QLoRA bit-width — letting a run opt into a heavier/lighter base than the
+  // memory-derived default without a code change. `lowRam` toggles the on-disk
+  // latent-cache spill. `null` is the form's "Auto": a deliberate clear that
+  // forces the deriveMfluxMemoryConfig tier even when a saved default exists
+  // (distinct from absent, which lets the saved default merge through). An
+  // explicit value still cannot exceed the LORA_TRAIN_MAX_QUANT_BITS cap.
+  baseQuant: z.union([z.literal(4), z.literal(8), z.literal(16)]).nullable().optional(),
+  lowRam: z.boolean().nullable().optional(),
 });
 
 // LoRA training settings slice (`settings.loraTraining`) — vision-caption
@@ -856,6 +883,12 @@ export const loraTrainingConfigSchema = z.object({
   // the GPU-driver hang. Cooldown is the GPU idle gap (seconds) between segments.
   segmentation: z.boolean().optional(),
   segmentCooldownSec: z.number().int().min(0).max(3600).optional(),
+  // Phase-aware soft-hang stall watchdog (issue #1330, default ON in
+  // services/loraTraining/index.js). Detects a wedged GPU mid-training (steps
+  // stop arriving within a step-rate-derived budget) and SIGKILLs + auto-resumes
+  // from the newest checkpoint. Set false to fall back to only the flat 30-min
+  // idle watchdog (e.g. if a future driver fix makes soft hangs impossible).
+  stallWatchdog: z.boolean().optional(),
 });
 
 // POST /api/lora-training/runs — start a training run for a dataset.
@@ -984,6 +1017,75 @@ export const writersRoomLiveSuggestSchema = z.object({
 // payload (e.g. an attempt to smuggle a usage counter) instead of ignoring it.
 export const writersRoomLiveRenderPreviewSchema = z.object({}).strict();
 
+// =============================================================================
+// EDITORIAL CHECKS (#1284) — registry-driven editorial review
+// =============================================================================
+// Per-check enable/config. `config` is a free-form blob validated a second time
+// against the check's own Zod `configSchema` in the registry (resolveCheckConfig)
+// — this gate just bounds the wire shape so a malformed PATCH can't write junk.
+export const editorialCheckConfigSchema = z.object({
+  enabled: z.boolean().optional(),
+  config: z.record(z.unknown()).optional(),
+}).strict();
+
+// POST .../editorial/checks/run — run all enabled checks, or a named subset.
+// providerId/model are optional overrides forwarded to LLM-kind checks.
+export const editorialChecksRunSchema = z.object({
+  checkIds: z.array(z.string().trim().min(1).max(120)).max(50).optional(),
+  providerId: z.string().trim().max(80).optional(),
+  model: z.string().trim().max(200).optional(),
+}).strict();
+
+// User-defined editorial check (#1346). The base authored-field shapes carry NO
+// `.default()` so the UPDATE schema (a `.partial()` of them) leaves an omitted
+// field unchanged — a defaulted optional would silently RESET the stored value
+// on a field-specific PATCH (Zod's `.partial()` keeps the inner `.default()`,
+// which still fires when the key is absent). `scope`/`severityDefault` reuse the
+// registry's own enums so the wire gate can't drift from `buildCustomCheck`.
+const editorialCustomCheckShape = {
+  label: z.string().trim().min(1).max(120),
+  description: z.string().trim().max(500),
+  prompt: z.string().trim().min(1).max(8_000),
+  scope: z.enum([...CHECK_SCOPES]),
+  category: z.string().trim().max(60),
+  severityDefault: z.enum([...CHECK_SEVERITIES]),
+};
+
+// Create: label + prompt required; the rest optional with sensible defaults (so
+// a new check is fully-formed). The JSON output contract is enforced server-side
+// (buildCustomCheckPrompt), so no schema field captures it.
+export const editorialCustomCheckCreateSchema = z.object({
+  ...editorialCustomCheckShape,
+  description: editorialCustomCheckShape.description.optional().default(''),
+  scope: editorialCustomCheckShape.scope.optional().default('issue'),
+  category: editorialCustomCheckShape.category.optional().default('custom'),
+  severityDefault: editorialCustomCheckShape.severityDefault.optional().default('medium'),
+}).strict();
+
+// Edit (the id is in the URL): every field optional, NO defaults, so an omitted
+// field is left unchanged rather than reset.
+export const editorialCustomCheckUpdateSchema = z.object(editorialCustomCheckShape).partial().strict();
+
+// settings.pipelineEditorialChecks slice (validated on PUT /api/settings when
+// present). `checks` maps a checkId → its persisted enable/config; `customChecks`
+// holds the user-defined check definitions (#1346).
+//
+// `customChecks` items are gated LENIENTLY (any object, unknown keys preserved):
+// the authoring CRUD routes (editorialCustomCheck{Create,Update}Schema) are the
+// strict input gate, while this wholesale-settings path must stay forward/older-
+// peer compatible — a def carrying a future field (or a newer scope value) must
+// not 400 an unrelated settings save. `buildCustomCheck`/`isValidCustomCheckDef`
+// decide at read time which stored defs are actually runnable.
+// `readinessGate` (#1316) is the editorial health convergence gate the autopilot
+// loop + UI read as "manuscript clean": 'noOpenHigh' (default), the stricter
+// 'noOpenHighOrMedium', or 'none' (disable). Optional + additive, so older peers
+// and a never-configured install fall through to the service default.
+export const pipelineEditorialChecksSettingsSchema = z.object({
+  checks: z.record(editorialCheckConfigSchema).optional(),
+  customChecks: z.array(z.object({}).passthrough()).optional(),
+  readinessGate: z.enum(['noOpenHigh', 'noOpenHighOrMedium', 'none']).optional(),
+}).strict();
+
 // Cursor-context payload for the CD-bridge suggest route — identical shape to
 // the live continuation suggest (the server only needs a window around the
 // cursor, not the whole manuscript).
@@ -1025,6 +1127,48 @@ export const writersRoomSnapshotSchema = z.object({
   label: z.string().trim().min(1).max(100).optional()
 }).strict();
 
+// A single storyboard shot within `stages.storyboards.scenes[].shots[]` (#1315).
+// Validates the known shot fields and the new film-grammar enums (`shotType`,
+// `screenDirection`) — each nullable + tolerant of the UI's "not captured"
+// sentinel (null) and an empty-string clear (preprocessed to undefined). It is
+// `.passthrough()` (NOT strip) because render-time hooks stamp extra fields onto
+// a shot (`startFrameJobId`) that must survive a re-PATCH of the scenes array;
+// the load-bearing normalization still happens in `sanitizeShot`
+// (sceneExtractor.js) on the auto-extract path, but the route validates the
+// enums up front so an invalid framing/direction is rejected, not silently kept.
+export const storyboardShotSchema = z.object({
+  // id / description are optional here (not at the sanitizer) so the route stays
+  // as tolerant as `sanitizeShot`, which synthesizes a missing id and drops a
+  // description-less shot — the route's job is only to reject a bad enum, not to
+  // tighten the existing client contract.
+  id: z.string().trim().max(80).optional(),
+  // Bound loosely to the UI's textarea limit (maxLength=4000), NOT the
+  // sanitizer's SHOT_DESCRIPTION_MAX (2000). The sanitizer truncates a long
+  // description to 2000 downstream; the route must not REJECT one the UI lets a
+  // user type (2001–4000) — that would turn the previously-passthrough scenes
+  // contract into a 400. The route's job here is only to reject a bad enum.
+  description: z.string().max(4000).optional(),
+  durationSeconds: z.number().int().min(1).max(30).optional(),
+  continuityFromShotId: z.string().trim().max(80).nullable().optional(),
+  shotType: z.preprocess(
+    (v) => (v === '' ? null : v),
+    z.enum(SHOT_TYPES).nullable().optional(),
+  ),
+  screenDirection: z.preprocess(
+    (v) => (v === '' ? null : v),
+    z.enum(SCREEN_DIRECTIONS).nullable().optional(),
+  ),
+}).passthrough();
+
+// A storyboard scene as submitted through the visual-stage PATCH. Kept
+// `.passthrough()` so the rich, evolving scene shape (heading, slugline,
+// dialogue, sceneVideoJobId, …) flows through untouched — only `shots[]` is
+// validated (through storyboardShotSchema) so a bad shotType/screenDirection
+// is caught at the route instead of persisting unnormalized.
+export const storyboardSceneSchema = z.object({
+  shots: z.array(storyboardShotSchema).max(64).optional(),
+}).passthrough();
+
 export const writersRoomExerciseCreateSchema = z.object({
   workId: wrIdNullable.optional(),
   prompt: z.string().max(2000).optional().default(''),
@@ -1060,6 +1204,25 @@ const wrWardrobeField = z.array(z.object({
   createdAt: z.string().optional(),
   updatedAt: z.string().optional(),
 }).strict()).max(BIBLE_LIMITS.WARDROBES_PER_CHARACTER_MAX);
+// Structured relationship links (#1287). `id` is omitted on POSTs — the
+// sanitizer mints it. `type` / `opposition.axis` accept the known enum tokens;
+// an unrecognized value (legacy/peer payload) is coerced to `custom` by the
+// sanitizer, not rejected here, so older clients never 400. Limits sourced
+// from BIBLE_LIMITS so bumping a constant updates Zod automatically.
+const wrOppositionField = z.object({
+  axis: z.enum(RELATIONSHIP_OPPOSITION_AXES).or(z.string().trim().max(BIBLE_LIMITS.RELATIONSHIP_OPPOSITION_AXIS_MAX)),
+  thisRole: z.string().max(BIBLE_LIMITS.RELATIONSHIP_OPPOSITION_ROLE_MAX).optional(),
+  targetRole: z.string().max(BIBLE_LIMITS.RELATIONSHIP_OPPOSITION_ROLE_MAX).optional(),
+  note: z.string().max(BIBLE_LIMITS.RELATIONSHIP_OPPOSITION_NOTE_MAX).optional(),
+}).strict();
+const wrRelationshipLinksField = z.array(z.object({
+  id: z.string().trim().max(64).optional(),
+  targetCharacterId: z.string().trim().min(1).max(BIBLE_LIMITS.RELATIONSHIP_TARGET_ID_MAX),
+  type: z.enum(RELATIONSHIP_LINK_TYPES).or(z.string().trim().max(BIBLE_LIMITS.RELATIONSHIP_TYPE_MAX)).optional(),
+  description: z.string().max(BIBLE_LIMITS.RELATIONSHIP_DESCRIPTION_MAX).optional(),
+  opposition: wrOppositionField.nullable().optional(),
+  locked: z.boolean().optional(),
+}).strict()).max(BIBLE_LIMITS.RELATIONSHIP_LINKS_PER_CHARACTER_MAX);
 export const writersRoomCharacterCreateSchema = z.object({
   name: z.string().trim().min(1).max(200),
   aliases: z.array(z.string().trim().min(1).max(200)).max(20).optional(),
@@ -1070,6 +1233,7 @@ export const writersRoomCharacterCreateSchema = z.object({
   notes: wrCharTextField.optional(),
   voiceId: wrVoiceIdField.optional(),
   wardrobes: wrWardrobeField.optional(),
+  relationshipLinks: wrRelationshipLinksField.optional(),
 }).strict();
 export const writersRoomCharacterUpdateSchema = z.object({
   name: z.string().trim().min(1).max(200).optional(),
@@ -1081,6 +1245,7 @@ export const writersRoomCharacterUpdateSchema = z.object({
   notes: wrCharTextField.optional(),
   voiceId: wrVoiceIdField.optional(),
   wardrobes: wrWardrobeField.optional(),
+  relationshipLinks: wrRelationshipLinksField.optional(),
 }).strict();
 
 const wrPlaceTextField = z.string().max(2000);
@@ -1134,11 +1299,26 @@ export const writersRoomPlaceUpdateSchema = z.object({
 }).strict();
 
 const wrObjectTextField = z.string().max(2000);
+// Structured object↔character attachment links (#1288). `id` is omitted on
+// POSTs — the sanitizer mints it. `role` accepts the known archetype tokens; an
+// unrecognized value (legacy/peer payload) is coerced to `custom` by the
+// sanitizer, not rejected here, so older clients never 400. Limits sourced from
+// BIBLE_LIMITS so bumping a constant updates Zod automatically.
+const wrAttachmentsField = z.array(z.object({
+  id: z.string().trim().max(64).optional(),
+  characterId: z.string().trim().min(1).max(BIBLE_LIMITS.ATTACHMENT_CHARACTER_ID_MAX),
+  emotion: z.string().max(BIBLE_LIMITS.ATTACHMENT_EMOTION_MAX).optional(),
+  significance: z.string().max(BIBLE_LIMITS.ATTACHMENT_SIGNIFICANCE_MAX).optional(),
+  origin: z.string().max(BIBLE_LIMITS.ATTACHMENT_ORIGIN_MAX).optional(),
+  role: z.enum(ATTACHMENT_ROLES).or(z.string().trim().max(60)).optional(),
+  locked: z.boolean().optional(),
+}).strict()).max(BIBLE_LIMITS.ATTACHMENTS_PER_OBJECT_MAX);
 export const writersRoomObjectCreateSchema = z.object({
   name: z.string().trim().min(1).max(200),
   aliases: z.array(z.string().trim().min(1).max(200)).max(20).optional(),
   description: wrObjectTextField.optional(),
   significance: wrObjectTextField.optional(),
+  attachments: wrAttachmentsField.optional(),
   notes: wrObjectTextField.optional(),
 }).strict();
 export const writersRoomObjectUpdateSchema = z.object({
@@ -1146,6 +1326,7 @@ export const writersRoomObjectUpdateSchema = z.object({
   aliases: z.array(z.string().trim().min(1).max(200)).max(20).optional(),
   description: wrObjectTextField.optional(),
   significance: wrObjectTextField.optional(),
+  attachments: wrAttachmentsField.optional(),
   notes: wrObjectTextField.optional(),
 }).strict();
 
@@ -1623,6 +1804,19 @@ export const documentUpdateSchema = z.object({
   commitMessage: z.string().max(200).optional()
 });
 
+// Legacy Export (issue #901) — portable identity bundle. `sections` optionally
+// narrows the bundle to a subset of domains; omitted/empty means "all present
+// sections". The enum is kept in sync with `legacyExport.js#getSectionKeys()`
+// (asserted in legacyExport's tests) — validation.js must not import from
+// services (cycle), so the keys are inlined here.
+export const LEGACY_EXPORT_SECTIONS = ['identity', 'autobiography', 'brain', 'goals', 'decisions', 'health'];
+export const legacyExportSchema = z.object({
+  sections: z.array(z.enum(LEGACY_EXPORT_SECTIONS)).optional(),
+  // Phase 2: render a `legacy-portrait.pdf` from the section Markdown. Default
+  // false — the Markdown/JSON bundle is the primary artifact.
+  includePdf: z.boolean().optional()
+});
+
 // =============================================================================
 // TRANSITIONAL RE-EXPORTS (issue #1151 split)
 // =============================================================================
@@ -1638,3 +1832,4 @@ export const documentUpdateSchema = z.object({
 export * from './peerSyncValidation.js';
 export * from './creativeDirectorValidation.js';
 export * from './storyBuilderValidation.js';
+export * from './moodBoardValidation.js';

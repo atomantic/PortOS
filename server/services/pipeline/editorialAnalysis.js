@@ -316,10 +316,14 @@ function resolveDirection(directions) {
  * Aggregate every analyzed issue in a series into the Editorial Roadmap:
  * Plot / Character / Reader curves, character arcs (with protagonist detection),
  * and coverage stats.
+ *
+ * A caller that already holds the series and/or issue list (e.g. the editorial
+ * check runner, which loads both for its shared ctx) can pass them in to avoid a
+ * redundant `getSeries` + `listIssues` round-trip; both default to a fresh fetch.
  */
-export async function getSeriesEditorial(seriesId) {
-  const series = await getSeries(seriesId).catch(() => null);
-  const issues = await listIssues({ seriesId });
+export async function getSeriesEditorial(seriesId, { series: seriesArg, issues: issuesArg } = {}) {
+  const series = seriesArg !== undefined ? seriesArg : await getSeries(seriesId).catch(() => null);
+  const issues = Array.isArray(issuesArg) ? issuesArg : await listIssues({ seriesId });
   const ordered = [...issues].sort(
     (a, b) => (a.arcPosition ?? 9999) - (b.arcPosition ?? 9999) || (a.number || 0) - (b.number || 0)
   );

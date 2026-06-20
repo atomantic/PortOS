@@ -26,38 +26,30 @@
  *   { type: 'error',         runId, error, failedAt }
  */
 
-import { randomUUID } from 'crypto';
-import { broadcastSse, attachSseClient, closeJobAfterDelay } from '../../lib/sseUtils.js';
+import { createSseRunner } from '../../lib/sseUtils.js';
 import { generateStage } from './textStages.js';
 import { listIssues, isStageReady } from './issues.js';
 import { getSeries } from './series.js';
 import { compareIssuesByPosition } from './arcPlanner.js';
 import { getSeason } from './seasons.js';
 
-// runs: Map<seasonId, { runId, clients[], lastPayload, cancelRequested, startedAt }>
-const runs = new Map();
+// Shared SSE run-lifecycle keyed by seasonId. This runner keeps its own error
+// frame + per-issue catch inside `work`, so the factory's generic catch is only
+// the safety net.
+const runner = createSseRunner({ logLabel: 'pipeline volume-beats' });
 
 export const VOLUME_BEATS_MODES = Object.freeze(['skip-existing', 'regenerate-all']);
 
 export function isVolumeBeatsRunActive(seasonId) {
-  return runs.has(seasonId);
+  return runner.isActive(seasonId);
 }
 
 export function attachClient(seasonId, res) {
-  return attachSseClient(runs, seasonId, res);
+  return runner.attachClient(seasonId, res);
 }
 
 export function cancelVolumeBeatsRun(seasonId) {
-  const run = runs.get(seasonId);
-  if (!run) return false;
-  run.cancelRequested = true;
-  return true;
-}
-
-function broadcast(seasonId, payload) {
-  const run = runs.get(seasonId);
-  if (!run) return;
-  broadcastSse(run, payload);
+  return runner.cancel(seasonId);
 }
 
 /**
@@ -65,8 +57,8 @@ function broadcast(seasonId, payload) {
  * progress lands via SSE. Idempotent when a run is in flight for this volume.
  */
 export async function startVolumeBeatsRun(seriesId, seasonId, options = {}) {
-  if (runs.has(seasonId)) {
-    return { runId: runs.get(seasonId).runId, alreadyRunning: true };
+  if (runner.isActive(seasonId)) {
+    return { runId: runner.runs.get(seasonId).runId, alreadyRunning: true };
   }
   // Validate scope up front — bad ids should 404 before we kick off, not
   // surface as a deferred SSE error frame.
@@ -74,26 +66,18 @@ export async function startVolumeBeatsRun(seriesId, seasonId, options = {}) {
   await getSeason(seriesId, seasonId);
 
   const mode = VOLUME_BEATS_MODES.includes(options.mode) ? options.mode : 'skip-existing';
-  const runId = randomUUID();
-  const record = {
-    runId,
-    clients: [],
-    lastPayload: null,
-    cancelRequested: false,
-    startedAt: new Date().toISOString(),
-  };
-  runs.set(seasonId, record);
 
-  (async () => {
-    // Outer try/catch is the one permitted boundary — without it an LLM
-    // rejection would surface as an unhandledRejection and kill the process.
+  return runner.start(seasonId, async ({ runId, record, broadcast }) => {
+    // Own the error frame here (and swallow) so the factory's generic catch
+    // doesn't double-emit; without it an LLM rejection would surface as an
+    // unhandledRejection and kill the process.
     try {
       const all = await listIssues({ seriesId });
       const volumeIssues = all
         .filter((i) => i.seasonId === seasonId)
         .sort(compareIssuesByPosition);
 
-      broadcast(seasonId, {
+      broadcast({
         type: 'start',
         runId,
         seasonId,
@@ -114,7 +98,7 @@ export async function startVolumeBeatsRun(seriesId, seasonId, options = {}) {
 
         if (mode === 'skip-existing' && isStageReady(issue.stages?.idea)) {
           skipped += 1;
-          broadcast(seasonId, {
+          broadcast({
             type: 'issue:skip',
             issueId: issue.id,
             issueNumber: issue.number,
@@ -126,7 +110,7 @@ export async function startVolumeBeatsRun(seriesId, seasonId, options = {}) {
           continue;
         }
 
-        broadcast(seasonId, {
+        broadcast({
           type: 'issue:start',
           issueId: issue.id,
           issueNumber: issue.number,
@@ -144,7 +128,7 @@ export async function startVolumeBeatsRun(seriesId, seasonId, options = {}) {
             model: options.model,
           });
           generated += 1;
-          broadcast(seasonId, {
+          broadcast({
             type: 'issue:complete',
             issueId: issue.id,
             ordinal,
@@ -155,7 +139,7 @@ export async function startVolumeBeatsRun(seriesId, seasonId, options = {}) {
           });
         } catch (err) {
           errored += 1;
-          broadcast(seasonId, {
+          broadcast({
             type: 'issue:error',
             issueId: issue.id,
             ordinal,
@@ -165,7 +149,7 @@ export async function startVolumeBeatsRun(seriesId, seasonId, options = {}) {
         }
       }
 
-      broadcast(seasonId, {
+      broadcast({
         type: record.cancelRequested ? 'canceled' : 'complete',
         runId,
         generated,
@@ -177,14 +161,12 @@ export async function startVolumeBeatsRun(seriesId, seasonId, options = {}) {
     } catch (err) {
       const message = (err?.message || String(err)).slice(0, 1000);
       console.error(`❌ Pipeline volume-beats failed — season=${seasonId.slice(0, 8)} ${message}`);
-      broadcast(seasonId, { type: 'error', runId, error: message, failedAt: new Date().toISOString() });
-    } finally {
-      closeJobAfterDelay(runs, seasonId);
+      broadcast({ type: 'error', runId, error: message, failedAt: new Date().toISOString() });
+      // Swallow: the error frame above is the terminal handling. The factory's
+      // finally marks the run finished and schedules the replay-window cleanup.
     }
-  })();
-
-  return { runId, alreadyRunning: false };
+  });
 }
 
 // Export internals for tests.
-export const __testing = { runs };
+export const __testing = { runs: runner.runs };

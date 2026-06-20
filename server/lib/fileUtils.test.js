@@ -33,6 +33,7 @@ import {
   sanitizeFilename,
   getFileExtension,
   getMimeType,
+  detectImageFormat,
   EXTENSION_MIME_MAP,
   ATTACHMENT_ALLOWED_EXTENSIONS,
 } from './fileUtils.js';
@@ -891,5 +892,49 @@ describe('ATTACHMENT_ALLOWED_EXTENSIONS', () => {
     for (const ext of ATTACHMENT_ALLOWED_EXTENSIONS) {
       expect(EXTENSION_MIME_MAP).toHaveProperty(ext);
     }
+  });
+});
+
+describe('detectImageFormat', () => {
+  const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00]);
+  const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]);
+  const WEBP = Buffer.from([0x52, 0x49, 0x46, 0x46, 0x00, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50]);
+  const GIF87 = Buffer.from([0x47, 0x49, 0x46, 0x38, 0x37, 0x61, 0x00]);
+  const GIF89 = Buffer.from([0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x00]);
+
+  it('detects PNG', () => {
+    expect(detectImageFormat(PNG)).toEqual({ format: 'png', ext: '.png', mime: 'image/png' });
+  });
+
+  it('detects JPEG', () => {
+    expect(detectImageFormat(JPEG)).toEqual({ format: 'jpeg', ext: '.jpg', mime: 'image/jpeg' });
+  });
+
+  it('detects WebP', () => {
+    expect(detectImageFormat(WEBP)).toEqual({ format: 'webp', ext: '.webp', mime: 'image/webp' });
+  });
+
+  it('detects both GIF variants', () => {
+    expect(detectImageFormat(GIF87)?.format).toBe('gif');
+    expect(detectImageFormat(GIF89)?.format).toBe('gif');
+  });
+
+  it('returns null for non-image bytes', () => {
+    expect(detectImageFormat(Buffer.from('not an image'))).toBeNull();
+  });
+
+  it('returns null for a RIFF container that is not WebP', () => {
+    // RIFF header but "AVI " instead of "WEBP" at offset 8.
+    const avi = Buffer.from([0x52, 0x49, 0x46, 0x46, 0x00, 0x00, 0x00, 0x00, 0x41, 0x56, 0x49, 0x20]);
+    expect(detectImageFormat(avi)).toBeNull();
+  });
+
+  it('returns null for a truncated/too-short buffer', () => {
+    expect(detectImageFormat(Buffer.from([0x89, 0x50]))).toBeNull();
+  });
+
+  it('returns null for a non-Buffer input', () => {
+    expect(detectImageFormat('AAAA')).toBeNull();
+    expect(detectImageFormat(null)).toBeNull();
   });
 });

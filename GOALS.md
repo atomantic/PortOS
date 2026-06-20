@@ -85,7 +85,10 @@ PortOS is built for Adam Eivy — a single developer managing active git repos, 
 
 ## Current State
 
-See [PLAN.md](./PLAN.md) for detailed milestone tracking and roadmap.
+The active roadmap lives in the GitHub issue tracker — open issues labeled
+[`plan`](https://github.com/atomantic/PortOS/issues?q=is%3Aissue+is%3Aopen+label%3Aplan)
+(claimable) and [`future`](https://github.com/atomantic/PortOS/issues?q=is%3Aissue+is%3Aopen+label%3Afuture)
+(parked ideas). See [PLAN.md](./PLAN.md) for the pointer.
 
 | Goal | Status | Notes |
 |------|--------|-------|
@@ -97,7 +100,7 @@ See [PLAN.md](./PLAN.md) for detailed milestone tracking and roadmap.
 | Developer Productivity Toolkit | Complete | Shell, git, browser, history, usage, JIRA, code runner, submodules, reference repos, CyberCity all shipped. |
 | Self-Improving Intelligence | Ongoing | Task learning, self-improvement analysis, autonomous jobs, self-healing metrics active. |
 | Full Digital Autonomy | Ongoing | Agent tools, Moltworld, scheduling, skill system operational. Expanding platform coverage and autonomy tiers. |
-| Knowledge Legacy | Early | Autobiography, genome, behavioral profiles, written work, built worlds captured. Legacy export format not yet built. |
+| Knowledge Legacy | Ongoing | Autobiography, genome, behavioral profiles, written work, built worlds captured. Portable Legacy Export bundle (Digital Twin → Legacy Bundle) ships a self-contained Markdown + JSON + manifest archive, with optional rendered PDF. Richer key-decisions sourcing and deeper domain coverage continue. |
 | Anywhere Access | Complete | Tailscale integration working. Mobile-responsive UI. All features accessible remotely. |
 | Health & Longevity | Ongoing | MeatSpace shipped with death clock, LEV tracker, alcohol/blood/body/epigenetic/eye/genome/lifestyle tracking. Apple Health integration planned. |
 | Personal Productivity & Life Management | Ongoing | Calendar (agenda/day/week/month/lifetime/review), Messages inbox + drafts, voice agent, Telegram bot, OpenClaw operator chat all shipped. Proactive CoS speech triggers and voice-tool coverage expanding. |

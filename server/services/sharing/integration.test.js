@@ -62,6 +62,19 @@ const series = await import('../pipeline/series.js');
 const issues = await import('../pipeline/issues.js');
 const universeSvc = await import('../universeBuilder.js');
 const manuscriptReview = await import('../pipeline/manuscriptReview.js');
+const reverseOutline = await import('../pipeline/reverseOutline.js');
+
+// Seed a stored reverse outline directly (generateReverseOutline needs an LLM).
+// Writes the sibling doc at the same path reverseOutline.js reads/writes.
+function seedOutline(seriesId, generatedAt = '2026-06-02T00:00:00Z', summary = 'Opening beat') {
+  const dir = series.seriesStore().recordDir(seriesId);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'reverse-outline.json'), JSON.stringify({
+    seriesId, schemaVersion: 1, status: 'complete', generatedAt,
+    plotlines: [{ id: 'A', label: 'A-plot', kind: 'main', color: '#3b82f6' }],
+    scenes: [{ id: 'scene-001', sequence: 0, summary, plotlineId: 'A', issueId: 'iss-1', issueTitle: 'One', issueNumber: 1 }],
+  }));
+}
 
 // Rewrite a manifest's senderInstanceId on disk so the importer sees it as
 // coming from a remote peer. The mocked `getInstanceId` returns the same
@@ -236,6 +249,79 @@ describe('sharing round-trip', () => {
     expect(existsSync(join(tempBucket, 'records', 'reviews', `${s.id}.json`))).toBe(false);
   });
 
+  it('round-trips the reverse outline with a series export/import', async () => {
+    const bucket = await buckets.createBucket({ name: 'OutlineBucket', path: tempBucket, mode: 'auto-merge' });
+    const s = await series.createSeries({ name: 'Outline Series', logline: 'A' });
+    await issues.createIssue({ seriesId: s.id, title: 'Issue 1' });
+    seedOutline(s.id);
+    expect((await reverseOutline.getStoredOutline(s.id)).status).toBe('complete');
+
+    const exp = await exporter.exportSeries(s.id, bucket.id);
+    // The outline rides under records/outlines/<seriesId>.json, NOT in recordIds.
+    expect(existsSync(join(tempBucket, 'records', 'outlines', `${s.id}.json`))).toBe(true);
+
+    await series.deleteSeries(s.id);
+    simulateRemoteSender(tempBucket, exp.filename);
+    await importer.processManifest(bucket.id, exp.filename);
+
+    const restored = await reverseOutline.getStoredOutline(s.id);
+    expect(restored.status).toBe('complete');
+    expect(restored.scenes[0].summary).toBe('Opening beat');
+    expect(restored.scenes[0].issueId).toBe('iss-1');
+  });
+
+  it('skips writing an outline file when the series has no complete outline', async () => {
+    const bucket = await buckets.createBucket({ name: 'NoOutlineBucket', path: tempBucket, mode: 'auto-merge' });
+    const s = await series.createSeries({ name: 'No Outline Series', logline: 'A' });
+    await exporter.exportSeries(s.id, bucket.id);
+    expect(existsSync(join(tempBucket, 'records', 'outlines', `${s.id}.json`))).toBe(false);
+  });
+
+  it('keeps a manifest pending when a declared outline file has not synced yet (out-of-order delivery)', async () => {
+    const bucket = await buckets.createBucket({ name: 'OutlineLagBucket', path: tempBucket, mode: 'auto-merge' });
+    const s = await series.createSeries({ name: 'Outline Lag Series', logline: 'A' });
+    await issues.createIssue({ seriesId: s.id, title: 'Issue 1' });
+    seedOutline(s.id);
+    const exp = await exporter.exportSeries(s.id, bucket.id);
+    const outlineFile = join(tempBucket, 'records', 'outlines', `${s.id}.json`);
+    expect(existsSync(outlineFile)).toBe(true);
+
+    // Manifest + series arrive before the outline file (cloud relay reorders).
+    const stashed = readFileSync(outlineFile, 'utf-8');
+    rmSync(outlineFile);
+    await series.deleteSeries(s.id);
+    simulateRemoteSender(tempBucket, exp.filename);
+
+    const r1 = await importer.processManifest(bucket.id, exp.filename);
+    expect(r1.pending).toBe(true);
+    expect(r1.outcome.pendingOutlines).toContain(s.id);
+
+    writeFileSync(outlineFile, stashed);
+    const r2 = await importer.processManifest(bucket.id, exp.filename);
+    expect(r2.pending).toBeFalsy();
+    expect((await reverseOutline.getStoredOutline(s.id)).status).toBe('complete');
+  });
+
+  it('keeps a manifest retryable when the bundled outline merge fails (no silent drop)', async () => {
+    const bucket = await buckets.createBucket({ name: 'OutlineFailBucket', path: tempBucket, mode: 'auto-merge' });
+    const s = await series.createSeries({ name: 'Outline Fail Series', logline: 'A' });
+    await issues.createIssue({ seriesId: s.id, title: 'Issue 1' });
+    seedOutline(s.id);
+    const exp = await exporter.exportSeries(s.id, bucket.id);
+    await series.deleteSeries(s.id);
+
+    const spy = vi.spyOn(reverseOutline, 'mergeOutlineFromSync').mockRejectedValueOnce(new Error('disk full'));
+    simulateRemoteSender(tempBucket, exp.filename);
+    const r1 = await importer.processManifest(bucket.id, exp.filename);
+    expect(r1.pending).toBe(true);
+    expect(r1.outcome.pendingOutlineMergeFailures).toContain(s.id);
+    spy.mockRestore();
+
+    const r2 = await importer.processManifest(bucket.id, exp.filename);
+    expect(r2.pending).toBeFalsy();
+    expect((await reverseOutline.getStoredOutline(s.id)).status).toBe('complete');
+  });
+
   it('keeps a manifest pending when a declared review file has not synced yet (out-of-order delivery)', async () => {
     const bucket = await buckets.createBucket({ name: 'ReviewLagBucket', path: tempBucket, mode: 'auto-merge' });
     const s = await series.createSeries({ name: 'Review Lag Series', logline: 'A' });
@@ -339,6 +425,30 @@ describe('sharing round-trip', () => {
     // Re-promote now succeeds and the review lands.
     await importer.promoteInboxItem(bucket.id, exp.manifestId);
     expect((await manuscriptReview.getReview(s.id)).comments).toHaveLength(1);
+  });
+
+  it('promoteInboxItem keeps the inbox row when the bundled outline merge fails', async () => {
+    const bucket = await buckets.createBucket({ name: 'PromoteOutlineFailBucket', path: tempBucket, mode: 'inbox' });
+    const s = await series.createSeries({ name: 'Promote Outline Fail Series', logline: 'A' });
+    await issues.createIssue({ seriesId: s.id, title: 'Issue 1' });
+    seedOutline(s.id);
+    const exp = await exporter.exportSeries(s.id, bucket.id);
+    simulateRemoteSender(tempBucket, exp.filename);
+    await importer.processManifest(bucket.id, exp.filename); // queues to inbox
+    expect(await importer.listInbox(bucket.id)).toHaveLength(1);
+
+    // Force a transient outline-merge failure during the manual promote.
+    const spy = vi.spyOn(reverseOutline, 'mergeOutlineFromSync').mockRejectedValueOnce(new Error('disk full'));
+    await expect(importer.promoteInboxItem(bucket.id, exp.manifestId)).rejects.toMatchObject({
+      code: 'SHARING_OUTLINE_MERGE_FAILED',
+    });
+    spy.mockRestore();
+    // Inbox row preserved so the user can re-promote.
+    expect(await importer.listInbox(bucket.id)).toHaveLength(1);
+
+    // Re-promote now succeeds and the outline lands.
+    await importer.promoteInboxItem(bucket.id, exp.manifestId);
+    expect((await reverseOutline.getStoredOutline(s.id)).status).toBe('complete');
   });
 
   it('keeps a manifest retryable when the bundled review merge fails (no silent drop)', async () => {
@@ -2202,7 +2312,7 @@ describe('sharing round-trip', () => {
       const exp = await exporter.exportSeries(s.id, bucket.id);
       const manifest = JSON.parse(readFileSync(join(tempBucket, 'manifests', exp.filename), 'utf-8'));
       expect(manifest.portosSchemaVersions).toBeDefined();
-      expect(manifest.portosSchemaVersions.universes).toBe(5);
+      expect(manifest.portosSchemaVersions.universes).toBe(7);
     });
 
     it('importer rejects a manifest when the sender is AHEAD on a category the manifest CARRIES', async () => {
@@ -2214,7 +2324,7 @@ describe('sharing round-trip', () => {
       // PortOS instance landing in an OLDER instance's bucket.
       const manifestPath = join(tempBucket, 'manifests', exp.filename);
       const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
-      manifest.portosSchemaVersions = { universes: 5, pipelineSeries: 99, pipelineIssues: 1, mediaCollections: 1 };
+      manifest.portosSchemaVersions = { universes: 6, pipelineSeries: 99, pipelineIssues: 1, mediaCollections: 1 };
       manifest.producedByVersion = '99.0.0';
       writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
       // Delete the local series so the auto-merge would normally re-create it.
@@ -2223,7 +2333,7 @@ describe('sharing round-trip', () => {
       const result = await importer.processManifest(bucket.id, exp.filename);
       expect(result.skipped).toBe(true);
       expect(result.reason).toBe('portos-schema-ahead');
-      expect(result.ahead).toEqual([{ category: 'pipelineSeries', senderV: 99, receiverV: 2 }]);
+      expect(result.ahead).toEqual([{ category: 'pipelineSeries', senderV: 99, receiverV: 6 }]);
       expect(result.producedByVersion).toBe('99.0.0');
       // Series stayed tombstoned (or absent) — apply was refused.
       await expect(series.getSeries(s.id)).rejects.toThrow();

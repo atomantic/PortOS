@@ -1,0 +1,102 @@
+import { describe, it, expect } from 'vitest';
+import {
+  sanitizeStyleGuide,
+  renderStyleGuide,
+  STYLE_GUIDE_LIMITS,
+} from './styleGuide.js';
+
+describe('sanitizeStyleGuide', () => {
+  it('returns null for absent / non-object / empty input (legacy-tolerant)', () => {
+    expect(sanitizeStyleGuide(undefined)).toBeNull();
+    expect(sanitizeStyleGuide(null)).toBeNull();
+    expect(sanitizeStyleGuide('past')).toBeNull();
+    expect(sanitizeStyleGuide({})).toBeNull();
+    // Every field invalid → no identifying content → null.
+    expect(sanitizeStyleGuide({
+      tense: 'future', povPerson: 'fourth', targetAudience: 'aliens',
+      contentRating: 'NC-17', profanity: 'extreme', readingLevel: 'x', tone: 'noir',
+    })).toBeNull();
+  });
+
+  it('keeps valid enum fields and drops invalid ones', () => {
+    const sg = sanitizeStyleGuide({
+      tense: 'present',
+      povPerson: 'third-limited',
+      targetAudience: 'YA',
+      contentRating: 'PG-13',
+      profanity: 'mild',
+    });
+    expect(sg).toMatchObject({
+      tense: 'present',
+      povPerson: 'third-limited',
+      targetAudience: 'YA',
+      contentRating: 'PG-13',
+      profanity: 'mild',
+    });
+  });
+
+  it('clamps readingLevel to [1,18] and rounds; non-finite → null', () => {
+    expect(sanitizeStyleGuide({ readingLevel: 7.4 }).readingLevel).toBe(7);
+    expect(sanitizeStyleGuide({ readingLevel: 99 }).readingLevel).toBe(STYLE_GUIDE_LIMITS.READING_LEVEL_MAX);
+    expect(sanitizeStyleGuide({ readingLevel: 0 }).readingLevel).toBe(STYLE_GUIDE_LIMITS.READING_LEVEL_MIN);
+    expect(sanitizeStyleGuide({ tense: 'past', readingLevel: 'nope' }).readingLevel).toBeNull();
+  });
+
+  it('cleans tone: trims, dedupes case-insensitively, caps', () => {
+    const sg = sanitizeStyleGuide({ tone: ['Noir', '  noir ', 'hopeful', '', 42] });
+    expect(sg.tone).toEqual(['Noir', 'hopeful']);
+    const many = sanitizeStyleGuide({ tone: Array.from({ length: 50 }, (_, i) => `t${i}`) });
+    expect(many.tone).toHaveLength(STYLE_GUIDE_LIMITS.TONES_MAX);
+  });
+
+  it('sanitizes conventions tri-state; all-unset → null conventions', () => {
+    expect(sanitizeStyleGuide({ tense: 'past', conventions: {} }).conventions).toBeNull();
+    const sg = sanitizeStyleGuide({
+      conventions: { oxfordComma: true, spelling: 'UK', italicizeThoughts: false, junk: 1 },
+    });
+    expect(sg.conventions).toEqual({ oxfordComma: true, spelling: 'UK', italicizeThoughts: false });
+    // A non-boolean oxfordComma is "unspecified", not false.
+    const sg2 = sanitizeStyleGuide({ conventions: { oxfordComma: 'yes', spelling: 'US' } });
+    expect(sg2.conventions).toEqual({ oxfordComma: null, spelling: 'US', italicizeThoughts: null });
+  });
+
+  it('survives when only one field is set', () => {
+    expect(sanitizeStyleGuide({ tense: 'past' })).toMatchObject({ tense: 'past', povPerson: null });
+  });
+});
+
+describe('renderStyleGuide', () => {
+  it('returns null for empty/absent guide', () => {
+    expect(renderStyleGuide(null)).toBeNull();
+    expect(renderStyleGuide(sanitizeStyleGuide({}))).toBeNull();
+  });
+
+  it('renders directives for the set fields', () => {
+    const block = renderStyleGuide(sanitizeStyleGuide({
+      tense: 'present',
+      povPerson: 'first',
+      targetAudience: 'YA',
+      contentRating: 'PG',
+      profanity: 'none',
+      readingLevel: 8,
+      tone: ['noir', 'hopeful'],
+      conventions: { oxfordComma: true, spelling: 'UK', italicizeThoughts: true },
+    }));
+    expect(block).toContain('present tense');
+    expect(block).toContain('first person');
+    expect(block).toContain('young-adult');
+    expect(block).toContain('PG');
+    expect(block).toContain('no profanity');
+    expect(block).toContain('grade-8');
+    expect(block).toContain('noir, hopeful');
+    expect(block).toContain('UK spelling');
+    expect(block).toContain('Oxford');
+    expect(block).toContain('italics');
+  });
+
+  it('omits the content-rating directive when rating is "custom"', () => {
+    const block = renderStyleGuide(sanitizeStyleGuide({ contentRating: 'custom', tense: 'past' }));
+    expect(block).not.toContain('rating');
+    expect(block).toContain('past tense');
+  });
+});

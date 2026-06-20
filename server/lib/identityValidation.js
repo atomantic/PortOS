@@ -106,6 +106,64 @@ export const acceptPhasesInputSchema = z.object({
   })).min(1).max(20)
 });
 
+// --- Goal Decomposition Schemas (milestones pre-populated with tasks) ---
+
+export const decomposeGoalInputSchema = aiProviderInputSchema;
+
+// Mirrors addTodoInputSchema; estimateMinutes optional — tolerate the explicit
+// `null` an LLM commonly emits (the service normalizes it to null anyway).
+export const decomposedTaskSchema = z.object({
+  title: z.string().min(1).max(200),
+  priority: z.enum(['low', 'medium', 'high']).optional().default('medium'),
+  estimateMinutes: z.number().int().min(1).max(14400).nullable().optional()
+});
+
+export const acceptDecompositionInputSchema = z.object({
+  milestones: z.array(z.object({
+    title: z.string().min(1).max(200),
+    description: z.string().max(2000).optional().default(''),
+    // targetDate optional/nullable — decomposition works without a goal target
+    // date, and the LLM may emit an explicit `null` for a dateless milestone.
+    targetDate: validCalendarDate.nullable().optional(),
+    order: z.number().int().min(0),
+    tasks: z.array(decomposedTaskSchema).max(20).optional().default([])
+  })).min(1).max(20)
+});
+
+// --- Goal Proposal Schemas (generation-time validation of raw LLM output) ---
+//
+// generateGoalPhases / decomposeGoal return the LLM proposal to the review UI
+// WITHOUT persisting it, so the user can edit before accept. These schemas
+// validate/coerce that raw output at generation time and fail fast with a clear
+// AI_PARSE_ERROR instead of passing a malformed shape (non-object element,
+// missing title, wrong-typed tasks) downstream to only blow up at accept-time.
+//
+// Intentionally looser than the accept schemas: `targetDate` is a free string
+// here (the LLM commonly emits a near-miss date the user fixes in review; the
+// strict validCalendarDate check still runs at accept) and unknown keys are
+// stripped. The strictness is on structural shape — title present, tasks
+// well-formed. `order` is optional on each element but the array-level transform
+// below stamps it from the index when absent, so the proposal the review UI
+// hands back always satisfies the accept route's required `order` field.
+export const goalPhaseProposalSchema = z.object({
+  title: z.string().min(1).max(500),
+  description: z.string().max(5000).optional().default(''),
+  targetDate: z.string().max(40).nullable().optional(),
+  order: z.number().int().min(0).optional()
+});
+
+// Fill a missing `order` from the array index so generation output is always
+// accept-ready (the accept route requires `order`); an LLM-supplied order wins.
+const stampOrder = (arr) => arr.map((el, i) => ({ ...el, order: el.order ?? i }));
+
+export const goalPhasesProposalSchema = z.array(goalPhaseProposalSchema).min(1).max(50).transform(stampOrder);
+
+export const goalDecompositionMilestoneProposalSchema = goalPhaseProposalSchema.extend({
+  tasks: z.array(decomposedTaskSchema).max(50).optional().default([])
+});
+
+export const goalDecompositionProposalSchema = z.array(goalDecompositionMilestoneProposalSchema).min(1).max(50).transform(stampOrder);
+
 // --- Goal Progress Log Schemas ---
 
 export const addProgressEntrySchema = z.object({

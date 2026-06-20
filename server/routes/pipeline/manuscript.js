@@ -17,6 +17,10 @@ import * as arcPlanner from '../../services/pipeline/arcPlanner.js';
 import * as manuscriptReview from '../../services/pipeline/manuscriptReview.js';
 import * as manuscriptFix from '../../services/pipeline/manuscriptFix.js';
 import * as completenessRunner from '../../services/pipeline/manuscriptCompletenessRunner.js';
+import { getReviewWithStaleness } from '../../services/pipeline/editorial/checkRunner.js';
+import { recordTrendSnapshot } from '../../services/pipeline/editorialScore.js';
+import { readReadinessGate } from '../../lib/editorial/index.js';
+import { getSettings } from '../../services/settings.js';
 import { mapServiceError, providerOverrideShape } from './shared.js';
 
 const router = Router();
@@ -72,6 +76,12 @@ const manuscriptSectionSaveSchema = z.object({
   output: z.string().max(issuesSvc.STAGE_OUTPUT_MAX),
 });
 
+const manuscriptReformatSchema = z.object({
+  stageId: z.enum(seriesSvc.MANUSCRIPT_TYPES),
+  content: z.string().max(issuesSvc.STAGE_OUTPUT_MAX),
+  ...providerOverrideShape,
+});
+
 // Manuscript-completeness editor pass — categorized "finish the draft"
 // suggestions read from the actual drafted script (not synopses). Advisory.
 router.post('/series/:id/manuscript/completeness', asyncHandler(async (req, res) => {
@@ -84,6 +94,11 @@ router.post('/series/:id/manuscript/completeness', asyncHandler(async (req, res)
   // existing ArcHeader caller — the editor reads the merged `review`.
   const review = await manuscriptReview.seedReviewFromFindings(req.params.id, result.issues, { runId: result.runId, mode: body.mode })
     .catch((err) => { throw mapServiceError(err); });
+  // Revision-trend snapshot (#1316): this completeness pass is a revision
+  // boundary. Best-effort — never fail the request on a ledger-write error.
+  const gate = readReadinessGate(await getSettings().catch(() => null)) || undefined;
+  await recordTrendSnapshot(req.params.id, { runId: result.runId, gate, comments: review.comments })
+    .catch((err) => { console.error(`⚠️ editorial trend snapshot failed — series=${String(req.params.id).slice(0, 12)} ${err.message}`); });
   res.json({ ...result, review });
 }));
 
@@ -147,7 +162,10 @@ router.get('/series/:id/manuscript', asyncHandler(async (req, res) => {
 
 router.get('/series/:id/manuscript/review', asyncHandler(async (req, res) => {
   await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
-  res.json(await manuscriptReview.getReview(req.params.id));
+  // Annotates each editorial-check finding with a `stale` flag when its analyzed
+  // content has drifted since the check ran (#1345); completeness-only reviews
+  // pass through untouched.
+  res.json(await getReviewWithStaleness(req.params.id));
 }));
 
 router.patch('/series/:id/manuscript/review/comments/:commentId', asyncHandler(async (req, res) => {
@@ -183,6 +201,20 @@ router.put('/series/:id/manuscript/sections/:issueId', asyncHandler(async (req, 
   await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
   const body = validateRequest(manuscriptSectionSaveSchema, req.body ?? {});
   const result = await manuscriptFix.saveManuscriptSection(req.params.id, { issueId: req.params.issueId, ...body })
+    .catch((err) => { throw mapServiceError(err); });
+  res.json(result);
+}));
+
+// AI reformat of manuscript text — repair PDF/paste artifacts (wrapping, split
+// drop-caps, orphaned quotes) WITHOUT changing words. Compute-only: it returns
+// the cleaned `{ text, changed }` and does NOT persist — the client sends its
+// live (possibly unsaved) content and owns the save, so unsaved edits aren't
+// clobbered and a mid-call edit can skip the write. An integrity guard in the
+// service discards (400s) any result that altered the wording.
+router.post('/series/:id/manuscript/reformat', asyncHandler(async (req, res) => {
+  await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
+  const { content, ...opts } = validateRequest(manuscriptReformatSchema, req.body ?? {});
+  const result = await manuscriptFix.reformatManuscriptStageText(content, opts)
     .catch((err) => { throw mapServiceError(err); });
   res.json(result);
 }));

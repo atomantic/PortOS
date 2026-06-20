@@ -16,6 +16,10 @@ const {
   sanitizeSeasonList,
   buildSeason,
   sanitizeReaderMap,
+  sanitizeTickingClock,
+  renderTickingClock,
+  TICKING_CLOCK_LIMITS,
+  TICKING_CLOCK_KINDS,
   ARC_LIMITS,
   ARC_SHAPES,
   ARC_SHAPE_IDS,
@@ -49,6 +53,7 @@ describe('storyArc — sanitizeArc', () => {
       themes: [],
       shape: null,
       readerMap: null,
+      tickingClock: null,
       status: 'draft',
     });
   });
@@ -97,6 +102,100 @@ describe('storyArc — sanitizeArc', () => {
     expect(arc.readerMap.hooks).toHaveLength(1);
     // An empty reader map alone is NOT identifying content.
     expect(sanitizeArc({ readerMap: { hooks: [], payoffs: [], beats: [], cliffhangers: [] } })).toBe(null);
+  });
+
+  it('includes tickingClock (null when absent) and survives an arc with only an enabled clock', () => {
+    expect(sanitizeArc({ logline: 'x' }).tickingClock).toBe(null);
+    const arc = sanitizeArc({ tickingClock: { enabled: true, label: 'The storm lands' } });
+    expect(arc).not.toBe(null);
+    expect(arc.logline).toBe('');
+    expect(arc.tickingClock.enabled).toBe(true);
+    expect(arc.tickingClock.label).toBe('The storm lands');
+    // A disabled, content-free clock is NOT identifying content.
+    expect(sanitizeArc({ tickingClock: { enabled: false } })).toBe(null);
+  });
+});
+
+describe('storyArc — sanitizeTickingClock', () => {
+  it('returns null for non-objects and content-free disabled clocks', () => {
+    expect(sanitizeTickingClock(null)).toBe(null);
+    expect(sanitizeTickingClock('x')).toBe(null);
+    expect(sanitizeTickingClock({})).toBe(null);
+    expect(sanitizeTickingClock({ enabled: false, label: '', stakes: '' })).toBe(null);
+  });
+
+  it('keeps an enabled clock even when otherwise blank', () => {
+    const c = sanitizeTickingClock({ enabled: true });
+    expect(c).not.toBe(null);
+    expect(c.enabled).toBe(true);
+    expect(c.kind).toBe('custom');
+    expect(c.label).toBe('');
+    expect(c.plantedAtArcPosition).toBe(null);
+    expect(c.reminders).toEqual([]);
+  });
+
+  it('keeps a disabled-but-authored clock (label is identifying content)', () => {
+    const c = sanitizeTickingClock({ enabled: false, label: 'Drafted countdown' });
+    expect(c).not.toBe(null);
+    expect(c.enabled).toBe(false);
+    expect(c.label).toBe('Drafted countdown');
+  });
+
+  it('round-trips fields, defaults unknown kind to custom, and clamps positions', () => {
+    const c = sanitizeTickingClock({
+      enabled: true,
+      label: 'The prophecy hour',
+      kind: 'not-a-kind',
+      plantedAtArcPosition: -5,
+      dueAtArcPosition: 99999,
+      stakes: 'The seal breaks.',
+      reminders: [{ atIssue: 3, note: 'omen' }, { note: '' }],
+    });
+    expect(c.kind).toBe('custom');
+    expect(c.plantedAtArcPosition).toBe(0);
+    expect(c.dueAtArcPosition).toBe(TICKING_CLOCK_LIMITS.ARC_POSITION_MAX);
+    expect(c.stakes).toBe('The seal breaks.');
+    // The empty reminder (no note, no issue) is dropped; the valid one keeps a minted id.
+    expect(c.reminders).toHaveLength(1);
+    expect(c.reminders[0].atIssue).toBe(3);
+    expect(c.reminders[0].id).toMatch(/^rm-/);
+  });
+
+  it('preserves a known kind and caps the reminders list', () => {
+    expect(sanitizeTickingClock({ enabled: true, kind: 'deadline' }).kind).toBe('deadline');
+    const many = Array.from({ length: TICKING_CLOCK_LIMITS.REMINDERS_MAX + 5 }, (_, i) => ({ note: `r${i}` }));
+    expect(sanitizeTickingClock({ enabled: true, reminders: many }).reminders)
+      .toHaveLength(TICKING_CLOCK_LIMITS.REMINDERS_MAX);
+  });
+
+  it('exposes a non-empty kind vocabulary', () => {
+    expect(TICKING_CLOCK_KINDS).toContain('deadline');
+    expect(TICKING_CLOCK_KINDS).toContain('custom');
+  });
+});
+
+describe('storyArc — renderTickingClock', () => {
+  it('returns null when absent or disabled', () => {
+    expect(renderTickingClock(null)).toBe(null);
+    expect(renderTickingClock({ enabled: false, label: 'x' })).toBe(null);
+  });
+
+  it('renders a guidance line with label, stakes, span, and reminders when enabled', () => {
+    const text = renderTickingClock({
+      enabled: true,
+      label: 'The storm makes landfall',
+      kind: 'event',
+      plantedAtArcPosition: 1,
+      dueAtArcPosition: 8,
+      stakes: 'The town floods.',
+      reminders: [{ atIssue: 4, note: 'barometer drops' }],
+    });
+    expect(text).toContain('The storm makes landfall');
+    expect(text).toContain('event');
+    expect(text).toContain('The town floods.');
+    expect(text).toContain('arc position 1');
+    expect(text).toContain('arc position 8');
+    expect(text).toContain('barometer drops');
   });
 });
 

@@ -62,7 +62,7 @@ export default function ListEnrichment({
       setItems([mkItem()]);
     }
     setLoadingItems(false);
-  }, [categoryId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [categoryId]);
 
   useEffect(() => {
     loadExistingItems();

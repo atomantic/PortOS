@@ -52,7 +52,7 @@ export default function RoundStack({ songs = [] }) {
     }))),
     // `songs` intentionally excluded — takesKey is its content signature, so an
     // equivalent-but-new songs array doesn't churn `takes`.
-    [takesKey], // eslint-disable-line react-hooks/exhaustive-deps
+    [takesKey],
   );
   const audibleCount = useMemo(() => takes.filter((t) => !t.muted).length, [takes]);
 

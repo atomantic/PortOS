@@ -37,6 +37,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | File | Purpose |
 |---|---|
 | `apiApps.js` | App CRUD + PM2 ops (start/stop/restart/logs). |
+| `apiWorkspaceContexts.js` | Per-project working-context save/restore (branch, shells, tasks). |
 | `apiAccounts.js` | Platform accounts. |
 | `apiAgents.js` | Running-agent process management. |
 | `apiCommands.js` | CLI command dispatch. |
@@ -71,6 +72,8 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiHealth.js` | Apple Health. |
 | `apiMeatspace.js` | MeatSpace (genome + location). |
 | `apiMortalLoom.js` | Mortality tracking. |
+| `apiMoodBoard.js` | Mood boards (inspiration canvas + items). |
+| `apiTribe.js` | Tribe people (relationship rings + contacts). |
 | `apiCalendar.js` | Calendar events. |
 | `apiMessages.js` | Messages / notifications. |
 | `apiPersonalities.js` | Agent personality profiles. |

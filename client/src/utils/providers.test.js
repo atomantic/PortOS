@@ -7,6 +7,7 @@ import {
   filterGenerationModels,
   isEmbeddingModel,
   isVisionModel,
+  visionLocalModelFilter,
   localBackendForProvider,
   mergeModelLists,
   modelOptionLabel,
@@ -256,5 +257,30 @@ describe('mergeModelLists', () => {
   it('returns [] for no input', () => {
     expect(mergeModelLists()).toEqual([]);
     expect(mergeModelLists(undefined, null)).toEqual([]);
+  });
+});
+
+describe('visionLocalModelFilter', () => {
+  const ollama = { name: 'Ollama', endpoint: 'http://localhost:11434' };
+  const lmstudio = { name: 'LM Studio', endpoint: 'http://localhost:1234' };
+  const cloud = { name: 'OpenAI', endpoint: 'https://api.openai.com/v1' };
+
+  it('keeps only vision models for local backends (ollama/lm studio)', () => {
+    expect(visionLocalModelFilter('qwen2.5vl:32b', ollama)).toBe(true);
+    expect(visionLocalModelFilter('llava:latest', lmstudio)).toBe(true);
+    // Text-only / embedding local models are filtered out.
+    expect(visionLocalModelFilter('qwen2.5-coder:32b', ollama)).toBe(false);
+    expect(visionLocalModelFilter('nomic-embed-text', ollama)).toBe(false);
+  });
+
+  it('leaves cloud/API providers untouched (multimodal ids that miss the local regex pass)', () => {
+    // gpt-4o / claude are multimodal but their ids do not encode "vision";
+    // a local-name heuristic must NOT hide them on a cloud provider.
+    expect(visionLocalModelFilter('gpt-4o', cloud)).toBe(true);
+    expect(visionLocalModelFilter('claude-opus-4-8', cloud)).toBe(true);
+  });
+
+  it('treats an unknown/undefined provider as non-local (no filtering)', () => {
+    expect(visionLocalModelFilter('some-text-model', undefined)).toBe(true);
   });
 });

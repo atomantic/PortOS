@@ -485,7 +485,7 @@ const SYNC_CATEGORY_META = [
   { key: 'memory', label: 'Memory', icon: Database, description: 'CoS agent memories (PostgreSQL)' },
   { key: 'goals', label: 'Goals', icon: Target, description: 'Life goals, milestones, progress tracking' },
   { key: 'character', label: 'Character', icon: Sword, description: 'XP, HP, level, events, character sheet' },
-  { key: 'digitalTwin', label: 'Digital Twin', icon: Fingerprint, description: 'Identity, chronotype, longevity, feedback' },
+  { key: 'digitalTwin', label: 'Digital Twin', icon: Fingerprint, description: 'Identity, taste, documents, autobiography, social accounts, personality traits, chronotype, longevity, feedback' },
   { key: 'meatspace', label: 'Meatspace', icon: HeartPulse, description: 'Daily logs, blood tests, body metrics, eyes' },
   { key: 'universe', label: 'Universe', icon: Sparkles, description: 'Universe Builder canon: characters, places, objects' },
   { key: 'pipeline', label: 'Pipeline', icon: Film, description: 'Series + issues record state (no image/video blobs)' },

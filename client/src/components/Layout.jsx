@@ -49,12 +49,12 @@ import {
   Cigarette,
   HeartPulse,
   ClipboardList,
+  ListChecks,
   Compass,
   Scale,
   LayoutDashboard,
   Lightbulb,
   GitBranch,
-  Github,
   Link2,
   Database,
   Shield,
@@ -153,6 +153,7 @@ const navItems = [
       { to: '/openclaw', label: 'OpenClaw', icon: MessagesSquare },
       { to: '/rapid-reader', label: 'Rapid Reader', icon: Zap },
       { to: '/agents', label: 'Social Agents', icon: Users },
+      { to: '/tribe', label: 'Tribe', icon: Users },
       { to: '/brain/trust', label: 'Trust', icon: Shield },
       { to: '/wiki/overview', label: 'Wiki', icon: BookOpen },
     ],
@@ -199,8 +200,10 @@ const navItems = [
     children: [
       { to: '/authors', label: 'Authors', icon: FilePen },
       { to: '/catalog', label: 'Catalog', icon: Sparkles },
+      { to: '/pipeline/editorial-checks', label: 'Editorial Checks', icon: ListChecks },
       { to: '/importer', label: 'Importer', icon: FileInput },
       { to: '/media', label: 'Media Gen', icon: Layers },
+      { to: '/mood-boards', label: 'Mood Boards', icon: Palette },
       { to: '/pipeline', label: 'Series Pipeline', icon: WorkflowIcon, dynamic: 'pipelineSeries' },
       { to: '/sharing', label: 'Sharing', icon: Share2 },
       { to: '/songs', label: 'Songs', icon: Music },
@@ -223,7 +226,7 @@ const navItems = [
       { to: '/data', label: 'Data', icon: HardDrive },
       { to: '/devtools/datadog', label: 'DataDog', icon: Dog },
       { to: '/feature-agents', label: 'Feature Agents', icon: Wand2 },
-      { to: '/devtools/github', label: 'GitHub', icon: Github },
+      { to: '/devtools/github', label: 'GitHub', icon: GitBranch },
       { to: '/devtools/history', label: 'History', icon: History },
       { to: '/devtools/image-clean', label: 'Image Cleaner', icon: Eraser },
       { to: '/instances', label: 'Instances', icon: Network },
@@ -237,6 +240,7 @@ const navItems = [
       { to: '/system-health', label: 'System Health', icon: Activity },
       { to: '/uploads', label: 'Uploads', icon: Upload },
       { to: '/devtools/usage', label: 'Usage', icon: BarChart3 },
+      { to: '/workspace-contexts', label: 'Workspaces', icon: Layers },
     ],
   },
   { to: '/goals/list', label: 'Goals', icon: Target, single: true },
@@ -1143,6 +1147,10 @@ export default function Layout() {
             location.pathname === '/shell' ||
             location.pathname.startsWith('/shell/') ||
             location.pathname.startsWith('/city') ||
+            // Tribe is a full-bleed two-pane page that owns its own internal
+            // scroll (PageHeader + a `flex-1 overflow-auto` main); keep it out
+            // of the default padded+scrolling main or it double-pads and clips.
+            location.pathname === '/tribe' ||
             // Only the App DETAIL editor (/apps/:id, /apps/:id/:tab) is
             // full-width and owns its own scroll; the Add App form
             // (/apps/create) is a plain scrolling page and must stay OUT of

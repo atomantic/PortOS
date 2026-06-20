@@ -1,6 +1,6 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { FileInput, Loader2, ArrowLeft, CheckCircle2, AlertTriangle, ChevronDown, ChevronRight, Wand2 } from 'lucide-react';
+import { FileInput, Loader2, ArrowLeft, CheckCircle2, AlertTriangle, ChevronDown, ChevronRight, Wand2, Sparkles } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import { useImporterProgress, stageStatusIcon } from '../hooks/useImporterProgress';
@@ -254,6 +254,9 @@ export default function Importer() {
   const [arcAlreadyPersisted, setArcAlreadyPersisted] = useState(false);
   // Destructive opt-in for existing series — wipes issues + overwrites arc.
   const [replaceMode, setReplaceMode] = useState(false);
+  // Opt-in AI cleanup of seeded excerpts at commit time (issue #1335). Default
+  // off — it's one LLM call per issue, so a large import opts in explicitly.
+  const [cleanupFormatting, setCleanupFormatting] = useState(false);
   const [classifyHint, setClassifyHint] = useState(null);
   // Set when analyze succeeded on canon+arc but the issue split failed — the
   // Review panel shows a retry affordance instead of throwing the run away.
@@ -339,6 +342,10 @@ export default function Importer() {
     setIssueSplitError(result.issueSplitError || null);
     setArcAlreadyPersisted(false);
     setReplaceMode(false);
+    // Re-arm the AI-cleanup opt-in off for each fresh analysis — it's
+    // off-by-default (one LLM call per issue), so a prior import's choice must
+    // not silently carry into a different source analyzed in the same session.
+    setCleanupFormatting(false);
     setConfig((c) => ({
       ...c,
       ...(Number.isFinite(result.limits?.sourceCharLimit) ? { sourceCharLimit: result.limits.sourceCharLimit } : {}),
@@ -372,6 +379,9 @@ export default function Importer() {
 
   const [runCommit, committing] = useAsyncAction(async () => {
     if (!preview) return null;
+    // Clear any prior (analyze) checklist so the commit-time reformat run
+    // repopulates it cleanly via the same `importer:progress` stream.
+    if (cleanupFormatting) resetAnalyzeStages();
     // arcAlreadyPersisted retry: server kept arc/seasons/canon from the
     // failed commit, so resending them would clobber any subsequent edits.
     const base = {
@@ -383,6 +393,9 @@ export default function Importer() {
       // seeds that script stage (ready) so the pipeline renders the user's
       // script as-is instead of regenerating it.
       contentType: intake.contentType,
+      // Opt-in: clean up each seeded excerpt with the AI reformat pass at
+      // commit time (best-effort server-side; falls back to verbatim).
+      cleanupFormatting,
     };
     const payload = arcAlreadyPersisted
       ? { ...base, canonSelections: { characters: [], places: [], objects: [] }, arc: null, seasons: [] }
@@ -517,6 +530,9 @@ export default function Importer() {
           onStructureModeChange={handleStructureMode}
           replaceMode={replaceMode}
           setReplaceMode={setReplaceMode}
+          cleanupFormatting={cleanupFormatting}
+          setCleanupFormatting={setCleanupFormatting}
+          commitProgress={analyzeStages}
           committing={committing}
           onCommit={runCommit}
           onBack={() => setPhase('intake')}
@@ -737,12 +753,12 @@ function IntakeForm({
 // Live checklist of the analyze phase's AI passes. `stages` is null until the
 // server's first `importer:progress` frame arrives — show a generic spinner in
 // that window so the panel never looks empty between click and first frame.
-function ImporterProgress({ stages }) {
+function ImporterProgress({ stages, message = 'Analyzing source — this runs several AI passes and can take a minute or two.' }) {
   return (
     <div className="bg-port-bg border border-port-border rounded-lg p-4 space-y-2">
       <p className="text-sm font-medium flex items-center gap-2">
         <Loader2 className="w-4 h-4 animate-spin text-port-accent" />
-        Analyzing source — this runs several AI passes and can take a minute or two.
+        {message}
       </p>
       {Array.isArray(stages) && stages.length > 0 ? (
         <ul className="space-y-1.5 mt-2">
@@ -814,6 +830,8 @@ function ReviewPanel({
   arcRoles, arcShapeIds,
   structureMode, onStructureModeChange,
   replaceMode, setReplaceMode,
+  cleanupFormatting, setCleanupFormatting,
+  commitProgress,
   committing, onCommit, onBack,
   issueSplitFailed, issueSplitError, onRetryIssues, retryingIssues,
 }) {
@@ -861,6 +879,18 @@ function ReviewPanel({
               </span>
             </label>
           )}
+          <label className="text-xs mt-2 flex items-center gap-2 cursor-pointer text-port-text-muted">
+            <input
+              type="checkbox"
+              checked={cleanupFormatting}
+              onChange={(e) => setCleanupFormatting(e.target.checked)}
+              className="accent-port-accent"
+            />
+            <Sparkles className="w-3 h-3" />
+            <span>
+              <strong>Clean up formatting with AI</strong> — repair paste/PDF artifacts (line wraps, split drop-caps, hyphen splits) in each excerpt before seeding. One AI pass per issue, so a large import adds time; wording is never changed and a failed pass keeps the original text.
+            </span>
+          </label>
         </div>
         <button onClick={onBack} className="text-xs text-port-text-muted hover:text-port-text flex items-center gap-1">
           <ArrowLeft className="w-3 h-3" /> Back
@@ -924,6 +954,10 @@ function ReviewPanel({
       )}
 
       <IssuesReviewSection issues={issuesDraft} setIssues={setIssuesDraft} seasons={seasonsDraft} arcRoles={arcRoles} excerptLabel={excerptLabel} />
+
+      {committing && cleanupFormatting && (
+        <ImporterProgress stages={commitProgress} message="Cleaning up formatting — one AI pass per issue." />
+      )}
 
       <div className="sticky bottom-4 flex items-center justify-end gap-2 bg-port-card border border-port-border rounded-lg p-3 shadow-lg">
         <button

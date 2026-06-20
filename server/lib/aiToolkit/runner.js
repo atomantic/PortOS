@@ -123,7 +123,14 @@ export function createRunnerService(config = {}) {
           effectiveProviderId = fallback.provider.id;
           usedFallback = true;
           fallbackModelHint = fallback.model || null;
-          console.log(`⚡ Using fallback provider: ${fallback.provider.name} (source: ${fallback.source})`);
+          // Name the benched PRIMARY and why it was skipped, not just the
+          // fallback — otherwise the log reads as an unexplained provider switch
+          // ("why is my enabled provider not being used?"). `enabled` is the user
+          // toggle; this swap is driven by the separate runtime availability state.
+          const benched = providerStatusService.getStatus(providerId) || {};
+          const recovery = providerStatusService.getTimeUntilRecovery(providerId);
+          const primaryName = providersMap[providerId]?.name || providerId;
+          console.log(`⚡ Primary ${primaryName} unavailable (${benched.reason || 'unknown'}${recovery ? `, recovers in ${recovery}` : ''}) — using fallback ${fallback.provider.name} (source: ${fallback.source})`);
         } else {
           const timeUntilRecovery = providerStatusService.getTimeUntilRecovery(providerId);
           throw new Error(

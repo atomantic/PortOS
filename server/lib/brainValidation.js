@@ -235,7 +235,15 @@ export const memoryInputSchema = z.object({
   title: z.string().min(1).max(200),
   content: z.string().max(10000).optional(),
   mood: z.string().max(50).optional(),
-  tags: z.array(z.string().max(50)).optional()
+  tags: z.array(z.string().max(50)).optional(),
+  // Provenance fields stamped by importers (e.g. chatgptImport) — kept on the
+  // create/update payload shape so schema validation matches what createMemoryEntry
+  // persists. `sourceCreatedAt`/`sourceUpdatedAt` drive the recency sort in the
+  // memory list (see memoryRecencyMs in brainStorage.js).
+  source: z.string().max(100).optional(),
+  sourceRef: z.string().max(300).optional(),
+  sourceCreatedAt: z.string().datetime().nullable().optional(),
+  sourceUpdatedAt: z.string().datetime().nullable().optional()
 });
 
 // Settings update input schema
@@ -477,9 +485,20 @@ export const brainSyncPushSchema = z.object({
 // Brain bridge-sync body (POST /api/brain/bridge-sync). `refresh` forces a
 // re-embed of already-mapped records — the recovery path for memory entries
 // that diverged before the per-record sync:applied signal existed (issue
-// #1080). Optional + default-false so the existing no-body call is unchanged.
+// #1080). `onlyMissing` is the cheap targeted backfill: embed just the records
+// that lack an embedding (unmapped, or mapped to a NULL-embedding memory) and
+// skip everything healthy. Both optional + default-false so the existing
+// no-body call is unchanged.
 export const brainBridgeSyncSchema = z.object({
-  refresh: z.boolean().optional().default(false)
+  refresh: z.boolean().optional().default(false),
+  onlyMissing: z.boolean().optional().default(false)
+});
+
+// Brain graph query (GET /api/brain/graph?focus=<id>&limit=<n>). No `focus`
+// returns the bounded overview; a `focus` returns that node's neighborhood.
+export const brainGraphQuerySchema = z.object({
+  focus: z.string().min(1).optional(),
+  limit: z.coerce.number().int().min(1).max(250).optional()
 });
 
 // Daily log settings schema (PUT /api/brain/daily-log/settings body).

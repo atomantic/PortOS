@@ -46,7 +46,17 @@ export default function TrainingPanel({ dataset, readiness, triggerSaving, onRun
       // torch fallback trains the same bf16 Klein bases.
       const trainable = (Array.isArray(list) ? list : []).filter((m) => m.runner === 'flux2');
       setModels(trainable);
-      setBaseModelId((prev) => prev || trainable[0]?.id || '');
+      // Default to the 9B base — it captures identity better than 4B and trains
+      // fine via 4-bit QLoRA (the server forces the panic-safe quant tier
+      // regardless of which inference id is picked). Prefer the plain 9B id we
+      // validated (flux2-klein-9b); avoid the explicit *-bf16 variant (the heavy
+      // path that GPU-watchdog-panics this M5). Fall back to any 9B, then first.
+      setBaseModelId((prev) => {
+        if (prev) return prev;
+        const nineB = trainable.filter((m) => /9b/i.test(m.id));
+        const nonBf16 = nineB.find((m) => !/bf16/i.test(m.id));
+        return (nonBf16 || nineB[0] || trainable[0])?.id || '';
+      });
     }).catch(() => setModels([]));
   }, []);
 
@@ -297,6 +307,46 @@ export default function TrainingPanel({ dataset, readiness, triggerSaving, onRun
               onChange={(e) => setParam('learningRate', Number(e.target.value))}
               className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white"
             />
+          </div>
+        )}
+        {/* Frozen-base overrides (issue #1407 / #1321) — only feed the mflux
+            config builder, so gate on the mflux engine being the one that'll
+            run (the torch/FLUX2 path always trains the bf16 base and ignores
+            these). "Auto" sends an explicit `null` (NOT absent): the server
+            re-merges saved settings.loraTraining.defaults into the run, so an
+            omitted key would silently keep a configured default — `null` is a
+            deliberate clear that forces the memory-derived tier (still clamped
+            by LORA_TRAIN_MAX_QUANT_BITS). buildMfluxTrainConfig treats a
+            null/non-boolean as "no override". */}
+        {params && status?.runtimes?.mflux?.ready && (
+          <div>
+            <label htmlFor="lt-param-baseQuant" className="block text-xs text-gray-400 mb-1">Base quant</label>
+            <select
+              id="lt-param-baseQuant"
+              value={params.baseQuant ?? ''}
+              onChange={(e) => setParam('baseQuant', e.target.value === '' ? null : Number(e.target.value))}
+              className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white"
+            >
+              <option value="">Auto</option>
+              <option value={16}>bf16 (heaviest)</option>
+              <option value={8}>8-bit</option>
+              <option value={4}>4-bit (lightest)</option>
+            </select>
+          </div>
+        )}
+        {params && status?.runtimes?.mflux?.ready && (
+          <div>
+            <label htmlFor="lt-param-lowRam" className="block text-xs text-gray-400 mb-1">Low RAM spill</label>
+            <select
+              id="lt-param-lowRam"
+              value={params.lowRam === true ? 'on' : params.lowRam === false ? 'off' : ''}
+              onChange={(e) => setParam('lowRam', e.target.value === '' ? null : e.target.value === 'on')}
+              className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white"
+            >
+              <option value="">Auto</option>
+              <option value="on">On</option>
+              <option value="off">Off</option>
+            </select>
           </div>
         )}
       </div>

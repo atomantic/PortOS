@@ -23,6 +23,12 @@ import { deriveAvailableBackends, IMAGE_GEN_MODE } from '../../../lib/imageGenBa
 import BackendChipStrip from '../../media/BackendChipStrip';
 import ProviderModelSelector from '../../ProviderModelSelector';
 
+// Non-destructive image-prompt fan-out (issue #904). MAX mirrors the
+// server's IMAGE_PROMPT_CANDIDATE_MAX in refineHelpers.js — keep the two in
+// sync so the client never requests a count the server would reject.
+export const IMAGE_PROMPT_COUNT_DEFAULT = 3;
+export const IMAGE_PROMPT_COUNT_MAX = 6;
+
 const DEFAULT_CONFIG = Object.freeze({
   imageMode: 'auto',
   imageModelId: null,

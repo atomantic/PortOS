@@ -20,7 +20,7 @@ import { rowsFor } from './constants';
 export default function AnnotatedManuscriptSection({
   section, comments, spans, saveState, editing, onToggleEdit,
   openCommentId, onOpenComment, onCloseComment,
-  onContentChange, onBlurSave, onRevert, registerRef, commentCardProps,
+  onContentChange, onBlurSave, onFormat, onReformat, onRevert, registerRef, commentCardProps,
 }) {
   const content = section.content || '';
   const byId = useMemo(() => new Map(comments.map((c) => [c.id, c])), [comments]);
@@ -33,7 +33,7 @@ export default function AnnotatedManuscriptSection({
   // that actually owns the open comment scrolls.
   useEffect(() => {
     if (openComment) cardRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
-  }, [openComment?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [openComment?.id]);
 
   // Esc closes the open note — parity with the Live popover.
   useEscapeKey(openComment, onCloseComment);
@@ -65,7 +65,7 @@ export default function AnnotatedManuscriptSection({
   );
 
   return (
-    <ManuscriptSectionFrame section={section} saveState={saveState} onRevert={onRevert} headerExtra={editToggle} registerRef={registerRef}>
+    <ManuscriptSectionFrame section={section} saveState={saveState} onRevert={onRevert} onFormat={onFormat} onReformat={onReformat} headerExtra={editToggle} registerRef={registerRef}>
       {editing ? (
         <textarea
           value={content}

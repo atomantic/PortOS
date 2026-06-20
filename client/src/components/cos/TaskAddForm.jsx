@@ -95,7 +95,6 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
     setCreateJiraTicket(!!selectedApp?.jira?.enabled);
     setUseWorktree(defaultUseWorktree);
     setOpenPR(defaultOpenPR);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- selectedApp intentionally omitted; appDefaultsSig encodes every field the effect reads, so depending on the object reference would re-fire on identical-content polling refreshes and stomp manual toggles
   }, [appDefaultsSig]);
 
   // Get models for selected provider

@@ -22,6 +22,7 @@ import { loopEvents } from './loops.js';
 import { imageGenEvents } from './imageGenEvents.js';
 import { importerEvents, getImporterProgressFrames } from './importerEvents.js';
 import { catalogEvents } from './catalogEvents.js';
+import { writersRoomEvents } from './writersRoomEvents.js';
 import { videoGenEvents } from './videoGen/events.js';
 import { aiStatusEvents } from './aiStatusEvents.js';
 import { wireProactiveTriggers } from './voice/proactiveTriggers.js';
@@ -642,6 +643,9 @@ export function initSocket(io) {
   // Set up catalog extraction-progress forwarding (broadcast to all clients)
   setupCatalogEventForwarding();
 
+  // Set up Writers-Room scene-image forwarding (broadcast to all clients)
+  setupWritersRoomEventForwarding();
+
   // Wire proactive voice (CoS speaks first on high-severity errors, new tasks,
   // and high-priority notifications — rate-limited per source).
   setupProactiveSpeechForwarding();
@@ -666,6 +670,17 @@ function setupCatalogEventForwarding() {
   catalogForwardingSetup = true;
   catalogEvents.on('progress', (data) => {
     if (ioInstance) ioInstance.emit('catalog:extract:progress', data);
+  });
+}
+
+let writersRoomForwardingSetup = false;
+function setupWritersRoomEventForwarding() {
+  if (writersRoomForwardingSetup) return;
+  writersRoomForwardingSetup = true;
+  // A storyboard render filed durably by writersRoomSceneImageHook — bridge it
+  // so the boards update reactively without a refetch (#1363).
+  writersRoomEvents.on('scene-image', (data) => {
+    if (ioInstance) ioInstance.emit('writers-room:scene-image', data);
   });
 }
 

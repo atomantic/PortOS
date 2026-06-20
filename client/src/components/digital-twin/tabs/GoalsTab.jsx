@@ -3,7 +3,9 @@ import {Target, Plus, Trash2, Check, ChevronDown, ChevronUp,
   Heart, DollarSign, Lightbulb, Users, Flame,
   Clock, AlertTriangle, Activity, Milestone} from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
+import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import * as api from '../../../services/api';
+import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 
 const CATEGORY_CONFIG = {
   creative: { label: 'Creative', icon: Lightbulb, color: 'text-purple-400', bg: 'bg-purple-500/20' },
@@ -48,6 +50,7 @@ export default function GoalsTab({ onRefresh }) {
   const [birthDateInput, setBirthDateInput] = useState('');
   const [newMilestone, setNewMilestone] = useState({ title: '', targetDate: '' });
   const [derivingLongevity, setDerivingLongevity] = useState(false);
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
   const loadData = useCallback(async () => {
     const [goals, longevityData] = await Promise.all([
@@ -465,13 +468,23 @@ export default function GoalsTab({ onRefresh }) {
                           Complete
                         </button>
                         <button
-                          onClick={() => handleDeleteGoal(goal.id)}
+                          onClick={() => requestDelete(goal.id)}
                           className="flex items-center gap-1 px-2 py-1 text-xs rounded bg-red-500/20 text-red-400 hover:bg-red-500/30"
                         >
                           <Trash2 className="w-3 h-3" />
                           Delete
                         </button>
                       </div>
+
+                      {isConfirming(goal.id) && (
+                        <InlineConfirmRow
+                          question="Delete this goal? This cannot be undone."
+                          confirmTitle="Confirm delete"
+                          cancelTitle="Cancel delete"
+                          onConfirm={() => confirmDelete(() => handleDeleteGoal(goal.id))}
+                          onCancel={cancelDelete}
+                        />
+                      )}
                     </div>
                   )}
                 </div>

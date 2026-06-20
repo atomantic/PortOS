@@ -114,7 +114,7 @@ The scheduled-cron handler in `backupScheduler.js` re-reads settings on every in
 
 ### Slashdo Commands (`lib/slashdo`)
 
-PortOS bundles [slashdo](https://github.com/atomantic/slashdo) as a git submodule at `lib/slashdo`. This provides slash commands (`/do:review`, `/do:pr`, `/do:push`, `/do:release`, etc.) and shared libraries without requiring a separate global install.
+PortOS bundles [slashdo](https://github.com/atomantic/slashdo) as a git submodule at `lib/slashdo`. This provides slash commands (`/do:next`, `/do:review`, `/do:pr`, `/do:push`, `/do:release`, etc.) and shared libraries without requiring a separate global install. `/do:next` is the slashdo replacement for the former repo-local `/claim` command — claim the next PLAN.md item (or GitHub issue with `--issues`) in an isolated worktree and ship a PR.
 
 **Key points:**
 - Submodule lives at `lib/slashdo`, symlinked into `.claude/commands/do/` and `.claude/lib/`

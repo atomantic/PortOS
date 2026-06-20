@@ -6,6 +6,8 @@ import { timeAgo } from '../../../utils/formatters';
 import { CRON_PRESETS, describeCron } from '../../../utils/cronHelpers';
 import { filterSelectableModels } from '../../../utils/providers';
 import ProviderModelSelector from '../../ProviderModelSelector';
+import InlineConfirmRow from '../../ui/InlineConfirmRow';
+import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 
 const INTERVAL_OPTIONS = [
   { value: 'hourly', label: 'Every Hour' },
@@ -270,6 +272,7 @@ function JobCard({ job, apps, providers, onToggle, onTrigger, onDelete, onUpdate
   const [expanded, setExpanded] = useState(false);
   const [editing, setEditing] = useState(false);
   const [editData, setEditData] = useState({});
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   const appName = job.appId ? (apps.find(a => a.id === job.appId)?.name || job.appId) : null;
 
   const isShell = job.type === 'shell';
@@ -581,14 +584,24 @@ function JobCard({ job, apps, providers, onToggle, onTrigger, onDelete, onUpdate
                   </pre>
                 </details>
               )}
-              <div className="flex justify-end">
-                <button
-                  onClick={() => onDelete(job.id)}
-                  className="flex items-center gap-1 px-2 py-1 text-xs text-red-400/60 hover:text-red-400 transition-colors"
-                >
-                  <Trash2 size={12} /> Delete
-                </button>
-              </div>
+              {isConfirming(job.id) ? (
+                <InlineConfirmRow
+                  question="Delete this job? This cannot be undone."
+                  confirmTitle="Confirm delete"
+                  cancelTitle="Cancel delete"
+                  onConfirm={() => confirmDelete(() => onDelete(job.id))}
+                  onCancel={cancelDelete}
+                />
+              ) : (
+                <div className="flex justify-end">
+                  <button
+                    onClick={() => requestDelete(job.id)}
+                    className="flex items-center gap-1 px-2 py-1 text-xs text-red-400/60 hover:text-red-400 transition-colors"
+                  >
+                    <Trash2 size={12} /> Delete
+                  </button>
+                </div>
+              )}
             </>
           )}
         </div>

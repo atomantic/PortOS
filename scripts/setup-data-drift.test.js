@@ -24,7 +24,7 @@ const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), 'migrations'
 // sample-existence filter drops downstream — so its presence here documents
 // that the sweep itself is expected to carry it.
 const EXPECTED_STAGE_OLD = {
-  'pipeline-idea-expansion.md': ['1ee44cf95851ff8debf18729ebcd40b4', '1f3c5d077a5ef9a4b610335d5e3edd9c', '41facefbc0c0549d456bef9111f95ab9', 'aee25112b2c596f643b17c559b772c22', 'b5c47c94ffc74637983c95761ab0c66c'],
+  'pipeline-idea-expansion.md': ['1ee44cf95851ff8debf18729ebcd40b4', '1f3c5d077a5ef9a4b610335d5e3edd9c', '41facefbc0c0549d456bef9111f95ab9', '49a208628290543ba2607a5ed48fdc8c', 'aee25112b2c596f643b17c559b772c22', 'b5c47c94ffc74637983c95761ab0c66c'],
   'pipeline-prose.md': ['30ac30ec2b9d3e2a9eb869c181732cc6', 'bef1bc2767b78f585f2bd89f3d615130', 'bfea5aeeb471aae9749baee765b473a7', 'd1f8e3f1d214725b5aa67f309a81cd7d'],
   'pipeline-comic-script.md': ['133d200d069c2e8173b7c129eea58f53', '1e0af305c27d0c80c4b482d2ebcb4a0d', '40e5fdc1a1e68a7419b7dad936366c1a', 'beab031951859ca13579cdb9c4dbe769', 'dea7d497d1cb38e7574f236f4ff8e644', 'e530fc76b89cedaef848ad7ec99c934c'],
   'pipeline-teleplay.md': ['1280ef6b1ad68fa44070ca7478ec2a5f', '2568e14beaa574d43f8018a5def51d04', '376f779f4687b598f1c92ca4e770fd5a', '3f6fecc25573ed054b47db392250034a'],
@@ -33,7 +33,7 @@ const EXPECTED_STAGE_OLD = {
   'pipeline-arc-verify.md': ['52e31abc93e3105176236fcaa5d1575a', 'ff56d8387162017e08d5d0491060ddd6'],
   'pipeline-volume-verify.md': ['03f3c874cb80e1c98abcf03168fa7a92', 'c6ea28e972ad6e229bafb2d602b4dda3'],
   'pipeline-arc-resolve.md': ['87bc5c01f1a8a97b681727a38b05edc6', '8e348f3d1894382889f9f0ee7d5c6792', 'a8677bbe1eb38f871fb152a5b0fec7c6'],
-  'pipeline-extract-scenes.md': ['59fa5ee305ce53d91eb15224d8b546d3'],
+  'pipeline-extract-scenes.md': ['59fa5ee305ce53d91eb15224d8b546d3', 'c51fb208568d0d903eb43b437478b0ba'],
   'writers-room-places.md': ['24a33628cc94d80fa5ca60831d973daf', '7f1f80eb63d67a21161994cde115045e'],
   'universe-character-expand.md': ['ef109eb8e12ddb664c11c790271b5139'],
   'story-builder-idea-expand.md': ['778c86e2caa120856c36e4d5a4da3355', 'a23939626a226f7420cebfb45d47950c'],
@@ -44,7 +44,7 @@ const EXPECTED_STAGE_OLD = {
   'pipeline-tv-script.md': ['3f6fecc25573ed054b47db392250034a'],
 };
 const EXPECTED_STAGE_NEW = {
-  'pipeline-idea-expansion.md': '49a208628290543ba2607a5ed48fdc8c',
+  'pipeline-idea-expansion.md': 'c50f016639d41cd8244f5ff13429f997',
   'pipeline-prose.md': '84523d531eeafa60959c65c553b2563f',
   'pipeline-comic-script.md': 'e9ee70bf18888492edada6633cd9928a',
   'pipeline-teleplay.md': 'afa4215330bf856429d70d7e2f856605',
@@ -53,7 +53,7 @@ const EXPECTED_STAGE_NEW = {
   'pipeline-arc-verify.md': '36aa70cdfc25d7549573a4d556e7702c',
   'pipeline-volume-verify.md': '49458d36700cb94e34806d536ffe2940',
   'pipeline-arc-resolve.md': '5b340885c6e8f8afc63424d6b5bc7eb7',
-  'pipeline-extract-scenes.md': 'c51fb208568d0d903eb43b437478b0ba',
+  'pipeline-extract-scenes.md': '9f404b0c4721b23932a6d2dcfc1fba43',
   'writers-room-places.md': 'a7f68e51dd6b4421d20f5bd9d855d9b4',
   'cos-agent-briefing.md': 'dccb392a43cbd3dac900fee12c31619a',
   'universe-character-expand.md': '67b6e73ed47f318451a730088b4cff14',

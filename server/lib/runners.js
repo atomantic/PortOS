@@ -46,14 +46,43 @@ export const VIDEO_LORA_FAMILIES = Object.freeze({
 const VIDEO_LORA_FAMILY_SET = new Set(Object.values(VIDEO_LORA_FAMILIES));
 export const isVideoLoraFamily = (family) => VIDEO_LORA_FAMILY_SET.has(family);
 
+// A LoRA-quantization marker (`q4` / `q8`) in a model's id/repo/name. Anchored
+// on a leading boundary (so it doesn't match inside `seq4uence`) and a trailing
+// non-digit lookahead, which catches both delimited (`-q4`, `q8_0`) AND suffixed
+// (`q4bit`, `q8gguf`) forms while not matching `q40`. Used to scope mlx_video
+// LoRA fusion to the bf16 unified models (see isMlxVideoLtxLoraCapable).
+const QUANTIZED_LTX_RE = /(?:^|[-_/\s])q(?:4|8)(?![0-9])/i;
+
+// True when an mlx_video-runtime model is an LTX-2.x model whose LoRAs PortOS
+// can fuse. notapalindrome's `mlx_video.generate_av` CLI has no `--lora` flag,
+// but the package ships an LTX-aware LoRA subsystem (`mlx_video.lora`) — so
+// scripts/generate_av_lora.py drives generate_av and merges the LoRA deltas into
+// the transformer weights before generation. Scoped to NON-quantized (bf16)
+// LTX-2.x models for now: the quantized q4/q8 variants need a separate
+// dequantize→merge→requantize validation pass. The Windows LTX-Video 0.9.5
+// model ("ltx_video" / "LTX-Video 0.9.5") is excluded — it has no "ltx-2"
+// marker and runs through generate_win.py, not generate_av.
+export const isMlxVideoLtxLoraCapable = (model) => {
+  if (model?.runtime !== 'mlx_video') return false;
+  const hay = `${model?.id || ''} ${model?.repo || ''} ${model?.name || ''}`;
+  if (!/ltx-?2/i.test(hay)) return false;          // must be an LTX-2.x model
+  if (QUANTIZED_LTX_RE.test(hay)) return false;    // bf16-only scope (no q4/q8)
+  return true;
+};
+
 // Map a video-model registry entry (which carries `runtime`, not `runner`) to
-// the LoRA family the picker filters on. Only dgrauet's `ltx2` runtime can
-// fuse arbitrary user LoRAs today — its `ltx_pipelines_mlx` pipelines honor a
-// `_pending_loras` hook (see scripts/generate_ltx2.py). The legacy mlx_video /
-// wan22 / hunyuan runtimes have no general LoRA path, so they return null
-// ("no LoRA support") and the VideoGen picker hides itself.
+// the LoRA family the picker filters on. Two runtimes can fuse user LoRAs:
+//   - dgrauet's `ltx2` — its `ltx_pipelines_mlx` pipelines honor a
+//     `_pending_loras` hook (see scripts/generate_ltx2.py), any LTX-2.3 quant.
+//   - notapalindrome's `mlx_video` on a non-quantized LTX-2.x model — fused
+//     offline into the transformer weights (see isMlxVideoLtxLoraCapable +
+//     scripts/generate_av_lora.py).
+// The wan22 / hunyuan runtimes (and quantized mlx_video models) have no LoRA
+// path, so they return null ("no LoRA support") and the VideoGen picker hides.
 export const videoLoraFamily = (model) =>
-  model?.runtime === 'ltx2' ? VIDEO_LORA_FAMILIES.LTX_VIDEO : null;
+  (model?.runtime === 'ltx2' || isMlxVideoLtxLoraCapable(model))
+    ? VIDEO_LORA_FAMILIES.LTX_VIDEO
+    : null;
 
 // Convenience predicate helpers — match the semantics of the existing
 // `isFlux2()` / `isZImage()` / `isErnie()` exports in `mediaModels.js`

@@ -18,6 +18,7 @@ import { createFilenameHook } from './filenameHookFactory.js';
 import { buildRenderSlot } from './visualStages.js';
 import { getIssue } from './issues.js';
 import { fileCoverIntoAutoCollection } from './coverUniverseFiler.js';
+import { refreshSeriesCoverImage } from './seriesCoverImage.js';
 
 // Slot record for a legacy in-flight completion (job enqueued before the
 // proof/final split). `job.params` carries the originally-requested width
@@ -114,6 +115,11 @@ const hook = createFilenameHook({
     const issue = await getIssue(parsed.issueId).catch(() => null);
     if (!issue?.seriesId) return;
     await fileCoverIntoAutoCollection({ seriesId: issue.seriesId, filename });
+    // Refresh the series' list thumbnail. Only a FRONT cover render can change
+    // it (the thumbnail derives from front covers, never back covers), so a
+    // back-cover landing skips the recompute + its issue scan. The recompute
+    // no-ops the write when the chosen cover is unchanged.
+    if (parsed.target === 'cover') await refreshSeriesCoverImage(issue.seriesId);
   },
 });
 

@@ -909,7 +909,7 @@ function LayeredSheetMusic({ tabs }) {
   // swatches so every surface agrees on which color is which voice.
   const colorByKey = useMemo(
     () => new Map(tabs.map((t, i) => [t.key, layerColor(i)])),
-    [tabsKey], // eslint-disable-line react-hooks/exhaustive-deps
+    [tabsKey],
   );
   // Default: every part checked, so Play gives the full stack out of the box.
   // Reconcile across tab-set changes — keep checks for parts that still exist,
@@ -921,7 +921,7 @@ function LayeredSheetMusic({ tabs }) {
       if (next.size === 0) tabs.forEach((t) => next.add(t.key));
       return next;
     });
-  }, [tabsKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [tabsKey]);
 
   const melodyScore = tabs[0].score;
   const tempoFromMelody = useMemo(() => {
@@ -998,7 +998,7 @@ function LayeredSheetMusic({ tabs }) {
   // plus the shared per-layer color.
   const pianoParts = useMemo(
     () => tabs.filter((t) => selected.has(t.key)).map((t) => ({ id: t.key, label: t.label, color: colorByKey.get(t.key), score: t.score })),
-    [tabs, selectionKey, colorByKey], // eslint-disable-line react-hooks/exhaustive-deps
+    [tabs, selectionKey, colorByKey],
   );
 
   const transportBtn = 'flex items-center gap-1 rounded-md border border-port-border bg-port-card px-2 py-1 text-white hover:border-port-accent transition-colors disabled:opacity-40 disabled:hover:border-port-border';

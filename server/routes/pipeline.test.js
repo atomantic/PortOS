@@ -8,8 +8,14 @@ const fileStore = new Map();
 
 vi.mock('../lib/fileUtils.js', () => ({
 tryReadFile: vi.fn().mockResolvedValue(null),
-  PATHS: { data: '/mock/data' },
+  // Series Autopilot gates on the cos autonomy domain, so the pipeline route
+  // graph now transitively imports `services/cosState.js`, which computes
+  // `join(PATHS.cos, …)` at module load. The mock must therefore carry the
+  // CoS/reports/scripts/root path keys it reads, not just `data`.
+  PATHS: { data: '/mock/data', cos: '/mock/cos', reports: '/mock/reports', scripts: '/mock/scripts', root: '/mock/root' },
   ensureDir: vi.fn().mockResolvedValue(undefined),
+  ensureDirs: vi.fn().mockResolvedValue(undefined),
+  safeJSONParse: vi.fn((s, fallback) => { try { return JSON.parse(s); } catch { return fallback; } }),
   atomicWrite: vi.fn(async (path, data) => { fileStore.set(path, data); }),
   readJSONFile: vi.fn(async (path, fallback) => (fileStore.has(path) ? fileStore.get(path) : fallback)),
 }));

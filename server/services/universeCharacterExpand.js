@@ -19,15 +19,21 @@ import { sanitizeCharacter } from '../lib/storyBible.js';
 import { shortId } from '../lib/fileUtils.js';
 
 // Adding a new extended field on `sanitizeCharacter` requires adding it here
-// too — otherwise the expand response key is silently dropped.
-const STRING_FIELDS = Object.freeze([
+// too — otherwise the expand response key is silently dropped. Exported so the
+// vision-driven expand (`universeVisionExpand.js`) fills the SAME canonical set
+// of fields from one source of truth rather than a drifting second copy.
+export const STRING_FIELDS = Object.freeze([
   'pronouns', 'age', 'coreTheme', 'speechAccent', 'speechPattern', 'visualNotes',
   'silhouetteNotes', 'postureNotes', 'specialTraits', 'visualIdentity',
   'motivations', 'likes', 'dislikes', 'mannerisms', 'relationships', 'skills',
 ]);
-const LIST_FIELDS = Object.freeze([
+export const LIST_FIELDS = Object.freeze([
   'stats', 'colorPalette', 'props', 'expressions', 'handGestures',
 ]);
+// `relationshipLinks` (#1287) is INTENTIONALLY excluded from both lists: each
+// link points at a sibling character by `targetCharacterId`, an id the LLM
+// expand call has no way to produce. The `{ ...target }` spread above
+// preserves any existing links untouched; the writer authors them in the UI.
 
 // Distinct from universeCanon's peerForPrompt: the expand prompt benefits from
 // the extended visual / theme fields for richer distinctness signals.
@@ -42,8 +48,10 @@ const peerForExpandPrompt = (entry) => ({
 });
 
 const isAbsent = (v) => v === undefined || v === null;
-const isBlankString = (v) => typeof v !== 'string' || v.trim() === '';
-const isBlankArray = (v) => !Array.isArray(v) || v.length === 0;
+// Exported so the vision-expand path can compute the same "which fields are
+// still blank" set it narrows the LLM ask to.
+export const isBlankString = (v) => typeof v !== 'string' || v.trim() === '';
+export const isBlankArray = (v) => !Array.isArray(v) || v.length === 0;
 
 /**
  * Pure no-clobber merge of an LLM payload onto a character. Exported so the

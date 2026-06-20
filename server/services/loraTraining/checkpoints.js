@@ -105,7 +105,30 @@ const sampleUrl = (runId, name) =>
 export function listRunCheckpoints(run) {
   const samples = sampleByStep(run);
   const deployedStep = run.output?.selectedCheckpointStep ?? null;
-  const checkpoints = (run.artifacts?.checkpoints || [])
+
+  // Collapse the raw checkpoint records to one entry per (filename-derived)
+  // step before rendering cards. Two distinct artifacts of the run can pollute
+  // this list:
+  //   - Duplicates: a MANUAL resume is a fresh job/wrapper/watcher with an empty
+  //     `seen` set, so it re-emits checkpoints that already exist → the same
+  //     step appears N times. Keep the entry that captured a real loss; tie-break
+  //     on the latest record (later in append order).
+  //   - The untrained step-0 checkpoint: mflux writes a `0000000_checkpoint.zip`
+  //     from its num_iterations==0 monitoring block — the initial, zero-training
+  //     adapter whose preview is the identical base-model frame and whose deploy
+  //     is a no-op. Drop it so it can't masquerade as a "Use this" option.
+  const byStep = new Map();
+  for (const c of run.artifacts?.checkpoints || []) {
+    const step = checkpointStep(c);
+    if (step === 0) continue;
+    const existing = byStep.get(step);
+    // Replace unless the existing entry has a real loss and this one doesn't.
+    if (!existing || !(Number.isFinite(existing.loss) && !Number.isFinite(c.loss))) {
+      byStep.set(step, c);
+    }
+  }
+
+  return [...byStep.values()]
     .map((c) => {
       const step = checkpointStep(c);
       const preview = samples.get(step) || null;
@@ -118,7 +141,6 @@ export function listRunCheckpoints(run) {
       };
     })
     .sort((a, b) => a.step - b.step);
-  return checkpoints;
 }
 
 /**

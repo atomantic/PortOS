@@ -13,6 +13,7 @@ import {
   imageEdgeSchema,
   refineImagePixelCap,
   PIXEL_CAP_MESSAGE,
+  storyboardSceneSchema,
 } from '../../lib/validation.js';
 import * as seriesSvc from '../../services/pipeline/series.js';
 import * as issuesSvc from '../../services/pipeline/issues.js';
@@ -25,9 +26,15 @@ import {
   enqueueStoryboardShotStartFrame,
   refineComicPanelPrompt,
   refineStoryboardScenePrompt,
+  generateComicPanelImagePrompts,
+  generateStoryboardSceneImagePrompts,
   buildRenderSlot,
 } from '../../services/pipeline/visualStages.js';
-import { extractCanonFromProse, summarizeCanonExtraction } from '../../services/universeCanon.js';
+import { IMAGE_PROMPT_CANDIDATE_MAX } from '../../services/pipeline/refineHelpers.js';
+import {
+  extractCanonFromProse, summarizeCanonExtraction,
+  describeCanonFromProse, summarizeDescribeGaps,
+} from '../../services/universeCanon.js';
 import { getSeriesCanon } from '../../services/pipeline/seriesCanon.js';
 import { startEpisodeVideoForIssue } from '../../services/pipeline/episodeVideo.js';
 import { COMIC_PAGE_VARIANTS, slotKeyForVariant } from '../../services/pipeline/owners.js';
@@ -83,7 +90,11 @@ const audioCueInputSchema = z.object({
 // migration; the service-level sanitizer caps array length.
 const visualStageInputSchema = stageInputSchema.extend({
   pages: z.array(z.any()).max(200).optional(),
-  scenes: z.array(z.any()).max(200).optional(),
+  // Scenes stay passthrough (the rich scene shape evolves freely), but each
+  // scene's shots[] is validated through storyboardSceneSchema so a bad
+  // shotType/screenDirection enum is rejected at the route (#1315) instead of
+  // persisting unnormalized. Non-storyboard visual stages simply carry no shots.
+  scenes: z.array(storyboardSceneSchema).max(200).optional(),
   cdProjectId: z.string().trim().max(64).nullable().optional(),
   videoPath: z.string().trim().max(1000).nullable().optional(),
   aspectRatio: z.enum(ASPECT_RATIOS).nullable().optional(),
@@ -247,6 +258,14 @@ const promptRefineSchema = z.object({
   model: z.string().trim().max(200).optional(),
 });
 
+// Same picker plus a `count` for the non-destructive N-candidate fan-out
+// (issue #904). `count` is clamped server-side to IMAGE_PROMPT_CANDIDATE_MAX,
+// but bound it here too so an out-of-range value is a clean 400 rather than a
+// silently-clamped surprise.
+const imagePromptsSchema = promptRefineSchema.extend({
+  count: z.number().int().min(1).max(IMAGE_PROMPT_CANDIDATE_MAX).optional().default(3),
+});
+
 // Source for scene extraction: which text stage to read from (`prose` →
 // granular paragraph-grain breakdown via `writers-room-script`; `teleplay`
 // → slugline-grain parse via `pipeline-extract-scenes`). `force` overrides
@@ -267,6 +286,17 @@ const extractComicPagesSchema = z.object({
 const extractCanonFromScriptSchema = z.object({
   providerOverride: z.string().trim().max(80).optional(),
   model: z.string().trim().max(128).optional(),
+});
+
+const describeCanonFromProseSchema = z.object({
+  providerOverride: z.string().trim().max(80).optional(),
+  model: z.string().trim().max(128).optional(),
+  // Nouns to backfill — typically the appears-in-this-issue entries that lack
+  // a description. The server re-validates each against the universe canon.
+  targets: z.array(z.object({
+    id: z.string().trim().min(1).max(80),
+    kind: z.enum(['character', 'place', 'object']),
+  })).min(1).max(500),
 });
 
 // Stages whose `output` can be mined for canon. `prose` is the conventional
@@ -623,6 +653,66 @@ router.post('/issues/:id/stages/:stageId/extract-canon', asyncHandler(async (req
   });
 }));
 
+// Backfill descriptions for canon nouns that have none, using ONLY what this
+// stage's prose establishes. Distinct from extract-canon: extraction invents +
+// flags missing renderable axes (so it never leaves a blank), while this pass
+// is strictly prose-grounded — a noun the prose never describes comes back in
+// the `descGaps` marker so the Nouns UI can flag the manuscript as thin instead
+// of fabricating a description that the prose can't support.
+router.post('/issues/:id/stages/:stageId/describe-canon', asyncHandler(async (req, res) => {
+  const { id, stageId } = req.params;
+  if (!CANON_EXTRACT_STAGES.includes(stageId)) {
+    throw new ServerError(
+      `Stage "${stageId}" does not support canon description — supported: ${CANON_EXTRACT_STAGES.join(', ')}`,
+      { status: 400, code: 'PIPELINE_CANON_DESCRIBE_BAD_STAGE' },
+    );
+  }
+  const body = validateRequest(describeCanonFromProseSchema, req.body ?? {});
+  const issue = await issuesSvc.getIssue(id).catch((err) => { throw mapServiceError(err); });
+  const rawCorpus = (issue.stages?.[stageId]?.output || '').trim();
+  if (!rawCorpus) {
+    throw new ServerError(
+      `Cannot describe canon — issue's ${stageId} stage is empty`,
+      { status: 400, code: 'PIPELINE_CANON_DESCRIBE_NO_CORPUS' },
+    );
+  }
+  const corpus = rawCorpus.length > EXTRACT_CANON_CORPUS_MAX
+    ? rawCorpus.slice(0, EXTRACT_CANON_CORPUS_MAX)
+    : rawCorpus;
+  const series = await seriesSvc.getSeries(issue.seriesId).catch((err) => { throw mapServiceError(err); });
+  if (!series.universeId) {
+    throw new ServerError(
+      `Cannot describe canon — series has no linked universe. Link a universe in the series settings first.`,
+      { status: 400, code: 'PIPELINE_CANON_DESCRIBE_NO_UNIVERSE' },
+    );
+  }
+  // Same provider/model resolution as extract-canon so a manual describe honors
+  // the series-header LLM (or the per-attempt picker override).
+  const { provider, model } = resolveSeriesLlmOverride(series, {
+    overrideProvider: body.providerOverride,
+    overrideModel: body.model,
+  });
+
+  const result = await describeCanonFromProse(series.universeId, {
+    corpus,
+    targets: body.targets,
+    providerOverride: provider,
+    modelOverride: model,
+  }).catch((err) => { throw mapServiceError(err); });
+
+  const marker = summarizeDescribeGaps({ report: result.report, provider, model });
+  const { issue: stampedIssue } = await issuesSvc.updateStage(id, stageId, { descGaps: marker })
+    .catch((err) => { throw mapServiceError(err); });
+
+  res.json({
+    universe: result.universe,
+    issue: stampedIssue,
+    descGaps: marker,
+    report: result.report,
+    sourceStage: stageId,
+  });
+}));
+
 // Per-page rawText patch — re-parses panels from the edited markdown so a
 // subsequent render still gets a structured prompt. Page's `imageJobId` is
 // preserved so the user doesn't lose an in-flight render after a save.
@@ -750,12 +840,41 @@ router.post('/issues/:id/stages/comicPages/pages/:pageIndex/panels/:panelIndex/r
   }),
 );
 
+// Non-destructive N-candidate variant: generate `count` alternative image-gen
+// prompts for one comic panel without touching the panel description. The
+// client lists them and lets the user copy or apply one (issue #904).
+router.post('/issues/:id/stages/comicPages/pages/:pageIndex/panels/:panelIndex/image-prompts',
+  asyncHandler(async (req, res) => {
+    const body = validateRequest(imagePromptsSchema, req.body ?? {});
+    const result = await generateComicPanelImagePrompts(
+      req.params.id,
+      Number(req.params.pageIndex),
+      Number(req.params.panelIndex),
+      body,
+    ).catch((err) => { throw mapServiceError(err); });
+    res.json(result);
+  }),
+);
+
 // AI-driven prompt refinement for a single storyboard scene. Mirror of the
 // comic-panel refine but uses pipeline-storyboard-image-prompt.
 router.post('/issues/:id/stages/storyboards/scenes/:index/refine-prompt',
   asyncHandler(async (req, res) => {
     const body = validateRequest(promptRefineSchema, req.body ?? {});
     const result = await refineStoryboardScenePrompt(
+      req.params.id,
+      Number(req.params.index),
+      body,
+    ).catch((err) => { throw mapServiceError(err); });
+    res.json(result);
+  }),
+);
+
+// Non-destructive N-candidate variant for a storyboard scene (issue #904).
+router.post('/issues/:id/stages/storyboards/scenes/:index/image-prompts',
+  asyncHandler(async (req, res) => {
+    const body = validateRequest(imagePromptsSchema, req.body ?? {});
+    const result = await generateStoryboardSceneImagePrompts(
       req.params.id,
       Number(req.params.index),
       body,

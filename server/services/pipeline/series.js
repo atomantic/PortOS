@@ -15,6 +15,8 @@ import { randomUUID } from 'crypto';
 import { getSeriesStore } from './seriesStore/store.js';
 import { isStr, trimTo } from '../../lib/storyBible.js';
 import { sanitizeArc, sanitizeSeasonList } from '../../lib/storyArc.js';
+import { sanitizeCharacterArcList } from '../../lib/seriesCharacterArc.js';
+import { sanitizeStyleGuide } from '../../lib/styleGuide.js';
 import { sanitizeOrigin } from '../../lib/sharingOrigin.js';
 import { sanitizeSoftDeleteFields } from '../../lib/syncWire.js';
 import {
@@ -62,6 +64,12 @@ export const STYLE_PROMPT_OVERRIDE_MODE_DEFAULT = 'prepend';
 // title-screen prompts as the "logo design" cue. Generated from the universe's
 // style notes on series creation; editable in the bible.
 export const TITLE_LOGO_MAX = 2000;
+// Derived cover thumbnail — the filename of a rendered volume/issue cover,
+// stamped by seriesCoverImage.refreshSeriesCoverImage so the pipeline series
+// list can show a thumbnail (like the universe reference image) without
+// scanning every issue at read time. Server-set/derived only — never accepted
+// from a route body. Sized to RENDER_FILENAME_MAX (renderSlot.js).
+export const COVER_IMAGE_MAX = 500;
 export const AUTHOR_MAX = 120;
 // FK to an Author persona (auth-<uuid>). The `author` string above stays as a
 // denormalized byline so a federated series renders the cover correctly even
@@ -87,8 +95,49 @@ export const LOCKABLE_STAGES = Object.freeze(['arc']);
 // while preserving locked ones verbatim. Sibling to the binary `locked.arc`
 // (which freezes everything); the two stack — `locked.arc: true` always wins.
 export const ARC_LOCKABLE_FIELDS = Object.freeze([
-  'logline', 'summary', 'protagonistArc', 'themes', 'shape', 'readerMap',
+  'logline', 'summary', 'protagonistArc', 'themes', 'shape', 'readerMap', 'tickingClock',
 ]);
+
+// Series Autopilot run marker (full autonomous mode). A thin, persisted
+// breadcrumb of the in-memory orchestrator run (server/services/pipeline/
+// seriesAutopilot.js) — NOT a step cursor. Resume is derived from the
+// canonical series/issue state by the pure resolver, so all this needs to do
+// is survive a restart for the "resume available / paused" UI and the
+// boot-recovery demotion (running → paused). Persisted only when set so a
+// series that never uses autopilot keeps its on-disk + wire shape stable
+// (mirrors the `ephemeral` / `importDraft` conditional-spread convention).
+export const AUTOPILOT_STATUSES = Object.freeze(['idle', 'running', 'paused', 'done', 'error']);
+export const AUTOPILOT_STEP_MAX = 80;
+export const AUTOPILOT_ERROR_MAX = 1000;
+const AUTOPILOT_FINDING_SEVERITIES = ['high', 'medium', 'low'];
+
+export const sanitizeAutopilot = (raw) => {
+  if (!raw || typeof raw !== 'object') return null;
+  const status = AUTOPILOT_STATUSES.includes(raw.status) ? raw.status : 'idle';
+  const residualFindings = Array.isArray(raw.residualFindings)
+    ? raw.residualFindings
+      .map((f) => {
+        if (!f || typeof f !== 'object') return null;
+        const problem = trimTo(f.problem, 2000);
+        if (!problem) return null;
+        return {
+          ...(AUTOPILOT_FINDING_SEVERITIES.includes(f.severity) ? { severity: f.severity } : {}),
+          location: trimTo(f.location, 200),
+          problem,
+        };
+      })
+      .filter(Boolean)
+      .slice(0, 50)
+    : [];
+  return {
+    status,
+    runId: trimTo(raw.runId, 64) || null,
+    currentStep: trimTo(raw.currentStep, AUTOPILOT_STEP_MAX) || null,
+    residualFindings,
+    lastError: trimTo(raw.lastError, AUTOPILOT_ERROR_MAX) || null,
+    updatedAt: isStr(raw.updatedAt) ? raw.updatedAt : null,
+  };
+};
 
 const sanitizeSeriesLocked = (raw = {}) => {
   if (!raw || typeof raw !== 'object') return {};
@@ -123,6 +172,7 @@ const sanitizeSeries = (raw) => {
     : { provider: null, model: null };
   const createdAt = isStr(raw.createdAt) ? raw.createdAt : new Date().toISOString();
   const updatedAt = isStr(raw.updatedAt) ? raw.updatedAt : createdAt;
+  const autopilot = sanitizeAutopilot(raw.autopilot);
   return {
     id: raw.id,
     name,
@@ -137,9 +187,27 @@ const sanitizeSeries = (raw) => {
     // files migrate forward without a writer pass — first save backfills.
     arc: sanitizeArc(raw.arc),
     seasons: sanitizeSeasonList(raw.seasons),
+    // Per-character story arcs (#1293) — each cast member's want/need, start →
+    // end transformation, and explicit transition beats. Defaults to [] so
+    // existing series.json files (which predate this field) migrate forward
+    // without a writer pass — first save backfills. Wire-gated (pipelineSeries
+    // schema v6) so a characterArcs-unaware peer can't strip-then-LWW the loss.
+    characterArcs: sanitizeCharacterArcList(raw.characterArcs),
     locked: sanitizeSeriesLocked(raw.locked),
     styleNotes: trimTo(raw.styleNotes, STYLE_NOTES_MAX),
+    // Per-series house style (tense/POV/audience/rating/reading-level/tone/
+    // conventions). Structured companion to the free-text styleNotes above;
+    // sanitizeStyleGuide returns null when empty so existing series.json files
+    // (which predate this field) migrate forward without a writer pass.
+    styleGuide: sanitizeStyleGuide(raw.styleGuide),
     titleLogo: trimTo(raw.titleLogo, TITLE_LOGO_MAX),
+    // Derived cover thumbnail filename (a rendered volume/issue cover). Stamped
+    // by the cover filename hooks + the one-time boot backfill via
+    // setSeriesCoverImage; null until a cover renders. Additive + gracefully
+    // degrading (a pre-feature peer's sanitizeSeries drops it), but wire-gated
+    // (pipelineSeries schema v5) so an older peer can't strip-then-LWW the
+    // pointer back onto a newer peer.
+    coverImage: trimTo(raw.coverImage, COVER_IMAGE_MAX) || null,
     author: trimTo(raw.author, AUTHOR_MAX),
     authorId: trimTo(raw.authorId, AUTHOR_ID_MAX) || null,
     // Per-series override that prepends ahead of the linked universe's
@@ -178,6 +246,11 @@ const sanitizeSeries = (raw) => {
     // commitImport clears it. Server-set only — never from a route body — and
     // persisted only when true so every other record's shape stays stable.
     ...(raw.importDraft === true ? { importDraft: true } : {}),
+    // Autopilot run marker — persisted only when present so series that never
+    // run the autonomous pipeline keep their on-disk + wire shape unchanged.
+    // Older peers' sanitizeSeries simply drops the unknown field (forward/
+    // back-compatible).
+    ...(autopilot ? { autopilot } : {}),
   };
 };
 
@@ -207,8 +280,10 @@ export async function createSeries(input = {}) {
     writersRoomWorkId: input.writersRoomWorkId || null,
     arc: input.arc || null,
     seasons: input.seasons || [],
+    characterArcs: input.characterArcs || [],
     locked: input.locked || {},
     styleNotes: input.styleNotes || '',
+    styleGuide: input.styleGuide || null,
     titleLogo: input.titleLogo || '',
     author: input.author || '',
     authorId: input.authorId || null,
@@ -364,9 +439,15 @@ export async function updateSeries(id, patch = {}) {
       ...('writersRoomWorkId' in patch ? { writersRoomWorkId: patch.writersRoomWorkId } : {}),
       ...('arc' in patch ? { arc: patch.arc } : {}),
       ...('seasons' in patch ? { seasons: patch.seasons } : {}),
+      // Wholesale replace — `characterArcs: []` clears all arcs; omission
+      // preserves. sanitizeCharacterArcList drops empties + dedupes by identity.
+      ...('characterArcs' in patch ? { characterArcs: patch.characterArcs } : {}),
       // Wholesale replace — `locked: {}` clears every lock; omission preserves.
       ...('locked' in patch ? { locked: patch.locked } : {}),
       ...('styleNotes' in patch ? { styleNotes: patch.styleNotes } : {}),
+      // Wholesale replace — sanitizeStyleGuide normalizes an empty object back
+      // to null (clear); omission preserves. Mirrors the arc/readerMap pattern.
+      ...('styleGuide' in patch ? { styleGuide: patch.styleGuide } : {}),
       ...('titleLogo' in patch ? { titleLogo: patch.titleLogo } : {}),
       ...('author' in patch ? { author: patch.author } : {}),
       ...('authorId' in patch ? { authorId: patch.authorId } : {}),
@@ -382,6 +463,10 @@ export async function updateSeries(id, patch = {}) {
       // Importer-orphan marker (issue #727) — commitImport clears it via
       // `{ importDraft: false }`; sanitizer normalizes non-true back to absent.
       ...('importDraft' in patch ? { importDraft: patch.importDraft } : {}),
+      // Autopilot run marker — server-set by seriesAutopilot.js (and the
+      // boot-recovery demotion). Wholesale replace; sanitizer normalizes a
+      // non-object back to absent.
+      ...('autopilot' in patch ? { autopilot: patch.autopilot } : {}),
       llm: mergedLlm,
       updatedAt: new Date().toISOString(),
     });
@@ -474,6 +559,32 @@ export async function setArcFieldLock(id, field, locked) {
 }
 
 /**
+ * Stamp the derived cover thumbnail (a rendered volume/issue cover filename)
+ * onto the series record so the pipeline list can show a thumbnail without
+ * scanning issues at read time. Server-set/derived only — see
+ * seriesCoverImage.refreshSeriesCoverImage for the recompute that calls this.
+ *
+ * No-op (no write, no `recordUpdated` emit) when the value is unchanged so
+ * repeat cover renders for an already-decorated series don't churn the record
+ * or re-broadcast to peers. Mirrors the empty-patch fast-path in
+ * `updateSeasonOnSeries`.
+ */
+export async function setSeriesCoverImage(id, filename) {
+  const next = isStr(filename) && filename ? filename.slice(0, COVER_IMAGE_MAX) : null;
+  return store().queueRecordWrite(id, async () => {
+    const cur = await store().loadOne(id);
+    if (!cur) throw makeErr(`Series not found: ${id}`, ERR_NOT_FOUND);
+    if (cur.deleted) throw makeErr(`Series not found: ${id}`, ERR_NOT_FOUND);
+    if ((cur.coverImage || null) === next) return cur; // no-op guard
+    const merged = sanitizeSeries({ ...cur, coverImage: next, updatedAt: new Date().toISOString() });
+    if (!merged) throw makeErr('Invalid series payload', ERR_VALIDATION);
+    await store().saveOneNow(merged.id, merged);
+    emitRecordUpdated('series', merged.id);
+    return merged;
+  });
+}
+
+/**
  * Apply a structured patch to one season inside a series. Routes through the
  * per-series collection-store queue so a season-cover render PATCH, the
  * season-cover filename hook landing, and a user-driven season metadata edit
@@ -558,6 +669,46 @@ async function cascadeDeleteSideEffects(id) {
   emitRecordDeleted('series', id);
 }
 
+// Top-level additive content fields whose ABSENCE in a remote payload must not
+// erase a locally-authored value. `sanitizeSeries` collapses an absent key to
+// the same null/[]/'' as an explicit clear, so on the sync-merge path we
+// consult the RAW remote payload to tell the two apart: key absent → preserve
+// local; key present (even null/empty) → honor the intentional clear. Mirrors
+// the `universeId` hierarchy guard. See issue #1361.
+const ADDITIVE_SERIES_FIELDS = ['arc', 'seasons', 'styleGuide', 'styleNotes', 'characterArcs'];
+// Additive sub-fields nested inside `arc`. A peer that predates these (readerMap
+// shipped at schema v2, tickingClock at #1289/v3) still sends an `arc` object —
+// just without these keys — so the erasure for them happens one level down.
+const ADDITIVE_ARC_FIELDS = ['readerMap', 'tickingClock'];
+
+const keyAbsent = (obj, key) => !obj || typeof obj !== 'object' || !(key in obj) || obj[key] === undefined;
+
+/**
+ * Re-inject locally-authored additive fields into a freshly-sanitized remote
+ * record when the RAW remote payload omitted the key entirely. Mutates and
+ * returns `sanitized`. Skips tombstones (a deleted record carries no content to
+ * protect). Operates both at the top level and on the additive sub-fields nested
+ * inside `arc`. An explicitly-present null/empty from an up-to-date peer is left
+ * untouched so an intentional clear still applies. See issue #1361.
+ */
+export const preserveAbsentAdditiveFields = (sanitized, rawRemote, local) => {
+  if (!sanitized || sanitized.deleted || !local || typeof local !== 'object') return sanitized;
+  for (const field of ADDITIVE_SERIES_FIELDS) {
+    if (keyAbsent(rawRemote, field)) sanitized[field] = local[field];
+  }
+  // Nested arc sub-fields: only when the remote DID send an `arc` object (so the
+  // top-level preserve above didn't already restore the whole arc) and both the
+  // sanitized result and the local record carry an arc object to merge into.
+  if (!keyAbsent(rawRemote, 'arc')
+    && sanitized.arc && typeof sanitized.arc === 'object'
+    && local.arc && typeof local.arc === 'object') {
+    for (const sub of ADDITIVE_ARC_FIELDS) {
+      if (keyAbsent(rawRemote.arc, sub)) sanitized.arc[sub] = local.arc[sub];
+    }
+  }
+  return sanitized;
+};
+
 /**
  * Sync-orchestrator entry point. Merges a remote peer's series array into
  * local state through per-record collection-store queues. Each incoming record
@@ -612,6 +763,14 @@ export async function mergeSeriesFromSync(remoteSeries, { source = { via: 'sync'
           if (!sanitized.deleted && !sanitized.universeId && local.universeId) {
             sanitized.universeId = local.universeId;
           }
+          // Additive content fields: a behind/legacy peer (or one that never
+          // authored the field) pushes a newer payload that simply OMITS the
+          // key. `sanitizeSeries` already flattened that absence to null/[]/'',
+          // so re-inject the local value from the raw remote payload — otherwise
+          // LWW silently erases styleGuide/readerMap/tickingClock/styleNotes/
+          // seasons. An explicit null/empty from an up-to-date peer still
+          // applies. See issue #1361.
+          preserveAbsentAdditiveFields(sanitized, remote, local);
           // Non-blocking conflict journal — archive the losing local version on
           // a true 3-way divergence; always advances the base hash. Never throws.
           await maybeJournalBeforeOverwrite({ kind: 'series', id: sanitized.id, local, remote: sanitized, source });

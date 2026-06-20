@@ -153,6 +153,60 @@ describe('buildMfluxTrainConfig', () => {
       else process.env.LORA_TRAIN_MAX_QUANT_BITS = prev;
     }
   });
+
+  it('per-run overrides replace the memory-derived tier (issue #1321)', () => {
+    // quantize override wins over the budget tier — heavier (bf16) on a 48 GB
+    // box, or lighter than the box would otherwise pick.
+    expect(deriveMfluxMemoryConfig(48, { quantize: null })).toEqual({ quantize: null, low_ram: true });
+    expect(deriveMfluxMemoryConfig(128, { quantize: 4 })).toEqual({ quantize: 4, low_ram: true });
+    // low_ram override flips the spill independently of quantize.
+    expect(deriveMfluxMemoryConfig(128, { low_ram: false })).toEqual({ quantize: null, low_ram: false });
+    // Absent keys keep the memory-derived value; an empty override is a no-op.
+    expect(deriveMfluxMemoryConfig(64, {})).toEqual({ quantize: 8, low_ram: true });
+    // An explicit quantize: null (bf16) is honored as a deliberate clear, not
+    // mistaken for "absent" — distinguishes intentional-empty from absent.
+    expect(deriveMfluxMemoryConfig(48, { quantize: null }).quantize).toBeNull();
+  });
+
+  it('LORA_TRAIN_MAX_QUANT_BITS clamps a per-run override (cap is the ceiling)', () => {
+    const prev = process.env.LORA_TRAIN_MAX_QUANT_BITS;
+    try {
+      // A run asks for bf16 (heaviest) but the install caps at 8-bit — the cap
+      // wins, so a per-run opt-in can never breach the box's panic guard.
+      process.env.LORA_TRAIN_MAX_QUANT_BITS = '8';
+      expect(deriveMfluxMemoryConfig(48, { quantize: null })).toEqual({ quantize: 8, low_ram: true });
+      // A run can still go LIGHTER than the cap.
+      expect(deriveMfluxMemoryConfig(128, { quantize: 4 })).toEqual({ quantize: 4, low_ram: true });
+    } finally {
+      if (prev === undefined) delete process.env.LORA_TRAIN_MAX_QUANT_BITS;
+      else process.env.LORA_TRAIN_MAX_QUANT_BITS = prev;
+    }
+  });
+
+  it('maps baseQuant/lowRam request params into the mflux config (issue #1321)', () => {
+    // baseQuant 16 → unquantized bf16 (mflux quantize: null), overriding the
+    // null-budget tier (which would otherwise be 4-bit).
+    const bf16 = buildMfluxTrainConfig({ ...base, params: { baseQuant: 16, lowRam: false } });
+    expect(bf16.quantize).toBeNull();
+    expect(bf16.low_ram).toBe(false);
+    // baseQuant 8/4 map straight through as the QLoRA bit-width.
+    expect(buildMfluxTrainConfig({ ...base, params: { baseQuant: 8 } }).quantize).toBe(8);
+    expect(buildMfluxTrainConfig({ ...base, totalMemGb: 128, params: { baseQuant: 4 } }).quantize).toBe(4);
+    // lowRam alone flips the spill at the config-builder level, leaving the
+    // memory-derived quant (128 GB → bf16) untouched.
+    expect(buildMfluxTrainConfig({ ...base, totalMemGb: 128, params: { lowRam: false } }).low_ram).toBe(false);
+    // No override → memory-derived tier is untouched (128 GB → bf16).
+    expect(buildMfluxTrainConfig({ ...base, totalMemGb: 128 }).quantize).toBeNull();
+  });
+
+  it('treats null baseQuant/lowRam ("Auto") as no override (issue #1407)', () => {
+    // The form sends an explicit `null` for "Auto" (a deliberate clear that
+    // beats a saved default), which must behave identically to absent: the
+    // memory-derived tier wins. A null baseQuant must NOT be coerced to 0.
+    const cfg = buildMfluxTrainConfig({ ...base, totalMemGb: 48, params: { baseQuant: null, lowRam: null } });
+    expect(cfg.quantize).toBe(4); // 48 GB tier, not touched by the null clear
+    expect(cfg.low_ram).toBe(true);
+  });
 });
 
 describe('buildMfluxTrainArgs / buildFlux2TrainArgs', () => {

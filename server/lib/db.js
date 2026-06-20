@@ -82,16 +82,80 @@ export function isTestRunner() {
 // series/issues/story-builder fixtures leaked into the real `portos` DB and
 // federated to peers. INSERT/UPDATE are now blocked too. Schema DDL
 // (CREATE/ALTER/DROP) is still allowed: it is idempotent, carries no row-data,
-// and ensureSchema() needs it to stand up portos_test. Skips leading
-// line/block comments + whitespace before the verb.
-const ROW_WRITE_SQL =
-  /^\s*(?:--[^\n]*\n|\/\*[\s\S]*?\*\/|\s)*(INSERT\s+INTO|UPDATE\s|DELETE\s+FROM|TRUNCATE)\b/i;
+// and ensureSchema() needs it to stand up portos_test.
+//
+// The first cut was `^`-anchored on a single leading verb, which let four
+// less-obvious write forms slip past the "absolute backstop": data-modifying
+// CTEs (`WITH … DELETE …`), `COPY … FROM` imports, `MERGE INTO`, and a write
+// hiding after a leading read in a multi-statement batch (`SELECT 1; DELETE …`).
+// No current store issues those forms, so this was latent rather than
+// exploitable — but the guard is billed as the last line of defense, so it now
+// matches a write verb ANYWHERE, after stripping comments so a keyword named in
+// a comment can't trip it (and a write after a comment can't slip past).
+//
+// Normalize the SQL before keyword-matching in a SINGLE left-to-right pass that
+// alternates over comments AND string literals, so whichever delimiter appears
+// FIRST consumes its own span. Order matters and a two-pass "mask strings, then
+// strip comments" is WRONG: an apostrophe inside a comment (`-- don't touch …`)
+// would open a spurious string mask that swallows a real write on the next line
+// (a false-negative — the exact failure this guard exists to prevent). Processing
+// left-to-right keeps a comment's apostrophe part of the comment, and keeps a
+// `/*` or `--` inside a string literal from starting a comment. Comments collapse
+// to a space; string literals collapse to `''` (Postgres's escaped-quote form),
+// so a write verb appearing only inside a literal can't trip the guard, and a
+// quote-embedded comment delimiter can't hide a write between two literals.
+// Dollar-quoted bodies (`$$…$$`, used in function definitions) are not unwrapped —
+// stores don't send them, so this test-only backstop accepts that edge.
+function normalizeSqlForMatch(text) {
+  return text.replace(
+    /--[^\n]*|\/\*[\s\S]*?\*\/|'(?:''|[^'])*'/g,
+    (m) => (m[0] === "'" ? "''" : ' '),
+  );
+}
+
+// CREATE TABLE … AS SELECT (CTAS) and the broader DDL family (CREATE/ALTER/DROP)
+// are knowingly NOT matched: ensureSchema() needs DDL to stand up portos_test, and
+// distinguishing a row-copying CTAS from a plain `CREATE TABLE … (col … GENERATED
+// ALWAYS AS (…))` reliably needs paren-aware parsing this regex set deliberately
+// avoids. No store issues CTAS, and the worst case on a mis-pointed run is a stray
+// new table (schema pollution) rather than corruption of existing rows.
+const ROW_WRITE_PATTERNS = [
+  /\bINSERT\s+INTO\b/i,
+  /\bDELETE\s+FROM\b/i,
+  /\bMERGE\s+INTO\b/i,
+  /\bTRUNCATE\b/i,
+  // SELECT … INTO <table> creates and populates a new table (a real row write, not
+  // DDL). Reads never carry a standalone INTO, so requiring SELECT before it keeps
+  // this off ordinary queries; INSERT/MERGE INTO are caught by their own patterns.
+  /\bSELECT\b[\s\S]+?\bINTO\b/i,
+  // UPDATE … SET — the SET clause is what makes it a write, and distinguishes it
+  // from a `SELECT … FOR UPDATE` / `FOR NO KEY UPDATE` row-lock read. `[^;]+?`
+  // keeps the match inside one statement so `… FOR UPDATE; SET search_path …`
+  // (a read followed by a session command) doesn't read as an UPDATE write.
+  /\bUPDATE\b\s+[^;]+?\bSET\b/i,
+  // COPY <table> FROM — an import writes rows. `COPY (query) TO` / `COPY <table>
+  // TO` is an export (read): requiring the first non-blank token after COPY to be
+  // a non-`(` char (`[^\s(]`) rejects the subquery-export form whose inner FROM
+  // would otherwise match, and requiring FROM before the next `;` leaves `COPY
+  // <table> TO …` (no FROM) alone. `[^\s(]` (not a `(?!\()` lookahead) is load-
+  // bearing: a lookahead lets `\s+` backtrack and pass the assertion mid-whitespace
+  // on `COPY   (SELECT … FROM …) TO`, so the export would false-positive.
+  /\bCOPY\s+[^\s(][^;]*?\bFROM\b/i,
+];
+
+// True when the SQL performs a row write in any of the recognized forms.
+function isRowWriteSql(text) {
+  const sql = normalizeSqlForMatch(text);
+  return ROW_WRITE_PATTERNS.some((re) => re.test(sql));
+}
 
 /**
  * Hard backstop: under the test runner, refuse to MUTATE a non-test database.
- * Throws (fail loudly) on any row write (INSERT/UPDATE/DELETE/TRUNCATE) instead
- * of silently writing — or stranding — real data. Reads (SELECT) and schema DDL
- * are left alone so health/version probes and ensureSchema() still work.
+ * Throws (fail loudly) on any row write — INSERT/UPDATE/DELETE/TRUNCATE/MERGE,
+ * COPY … FROM imports, data-modifying CTEs, and a write hidden in a multi-
+ * statement batch — instead of silently writing (or stranding) real data. Reads
+ * (SELECT, including COPY … TO exports) and schema DDL are left alone so
+ * health/version probes and ensureSchema() still work.
  *
  * Shared by BOTH the pool `query()` wrapper and the per-transaction client in
  * `withTransaction()`. The transaction path is critical: nearly every store
@@ -108,7 +172,7 @@ export function assertWriteAllowed(text) {
     isTestRunner() &&
     !isTestDatabase() &&
     typeof text === 'string' &&
-    ROW_WRITE_SQL.test(text)
+    isRowWriteSql(text)
   ) {
     throw new Error(
       `🛑 Refusing to mutate non-test database '${process.env.PGDATABASE || 'portos'}' under the test runner. ` +
@@ -290,6 +354,47 @@ async function ensureSchemaImpl() {
       id TEXT PRIMARY KEY,
       applied_at TIMESTAMPTZ DEFAULT NOW()
     )`,
+    `CREATE TABLE IF NOT EXISTS tribe_people (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      name TEXT NOT NULL,
+      relationship TEXT DEFAULT '',
+      ring VARCHAR(32) NOT NULL DEFAULT 'tribe',
+      cadence_days INTEGER NOT NULL DEFAULT 45,
+      last_contact_on DATE,
+      channel TEXT DEFAULT '',
+      energy VARCHAR(32) NOT NULL DEFAULT 'steady',
+      tags TEXT[] DEFAULT '{}',
+      next_move TEXT DEFAULT '',
+      notes TEXT DEFAULT '',
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      deleted BOOLEAN DEFAULT FALSE,
+      deleted_at TIMESTAMPTZ
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_tribe_people_live ON tribe_people (deleted, ring, updated_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_tribe_people_tags ON tribe_people USING gin (tags)`,
+    `CREATE TABLE IF NOT EXISTS tribe_touchpoints (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      person_id UUID NOT NULL REFERENCES tribe_people(id) ON DELETE CASCADE,
+      happened_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      channel TEXT DEFAULT '',
+      summary TEXT DEFAULT '',
+      source VARCHAR(32) NOT NULL DEFAULT 'user',
+      calendar_account_id TEXT,
+      calendar_event_id TEXT,
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_tribe_touchpoints_person ON tribe_touchpoints (person_id, happened_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_tribe_touchpoints_calendar ON tribe_touchpoints (calendar_account_id, calendar_event_id)`,
+    `CREATE TABLE IF NOT EXISTS tribe_memory_links (
+      person_id UUID NOT NULL REFERENCES tribe_people(id) ON DELETE CASCADE,
+      memory_id UUID NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+      note TEXT DEFAULT '',
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      PRIMARY KEY (person_id, memory_id)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_tribe_memory_links_memory ON tribe_memory_links (memory_id)`,
   ];
   for (const sql of upgrades) {
     await pool.query(sql);
@@ -718,6 +823,27 @@ async function ensureSchemaImpl() {
       updated_at TIMESTAMPTZ DEFAULT NOW()
     )`,
 
+    // Mood boards (issue #911). A dedicated inspiration/mood-board canvas,
+    // distinct from raw Media History, for collecting visual + textual
+    // references that feed the Create suite. One row per board, the full record
+    // (name/description/items[]) in `data` JSONB. Items (image-by-media-key or
+    // external URL, or a text note + optional caption/source backref) live
+    // inline in the board's JSONB rather than a child table — a board is read/
+    // written whole, has a small bounded item list, and there are no cross-board
+    // item queries. `name` mirrors a column for the live-list sort. Mood boards
+    // are db-primary and LOCAL-ONLY (no sync_sequence/tombstone) — like
+    // creative_director_projects, they don't federate to peers in v1. Mirrors
+    // the mood_boards block in init-db.sql.
+    `CREATE TABLE IF NOT EXISTS mood_boards (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      data JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    // updated_at DESC is the board-list "recently touched" sort.
+    `CREATE INDEX IF NOT EXISTS idx_mood_boards_updated ON mood_boards (updated_at DESC)`,
+
     // Media asset index (Phase 3.2, issue #1000). One row per generated image
     // or video; the bytes stay on disk (data/images, data/videos) and the
     // sidecar/.json history files remain authoritative — this table is a
@@ -1094,8 +1220,8 @@ async function ensureSchemaImpl() {
     'universes', 'universe_runs', 'pipeline_series', 'pipeline_issues',
     'story_builder_sessions', 'writers_room_works', 'writers_room_folders',
     'writers_room_draft_versions', 'catalog_ingredients', 'catalog_scraps',
-    'catalog_user_types', 'creative_director_projects', 'lora_training_runs',
-    'authors',
+    'catalog_user_types', 'creative_director_projects', 'mood_boards',
+    'lora_training_runs', 'authors', 'tribe_people', 'tribe_touchpoints',
   ];
   for (const t of auditedTables) {
     catalogDDL.push(`DROP TRIGGER IF EXISTS trg_${t}_audit ON ${t}`);

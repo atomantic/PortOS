@@ -9,8 +9,9 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Plus, Workflow as WorkflowIcon, Trash2, Loader2, Globe2, FileInput } from 'lucide-react';
+import { Plus, Workflow as WorkflowIcon, Trash2, Loader2, Globe2, FileInput, Sparkles, BookOpen } from 'lucide-react';
 import toast from '../components/ui/Toast';
+import ImageThumb from '../components/ui/ImageThumb';
 import ShareToButton from '../components/sharing/ShareToButton';
 import SyncToPeerButton from '../components/sharing/SyncToPeerButton';
 import OriginBadge from '../components/sharing/OriginBadge';
@@ -21,6 +22,7 @@ import {
   createPipelineSeries,
   deletePipelineSeries,
   generateSeriesTitleLogo,
+  generateSeriesConcept,
   listUniverses,
   WORLD_LOGLINE_MAX,
   WORLD_PREMISE_MAX,
@@ -28,6 +30,7 @@ import {
 } from '../services/api';
 import { ArcShapePicker, ArcShapeSparkline, getStoryShape } from '../components/pipeline/StoryShapes';
 import AuthorPicker from '../components/pipeline/AuthorPicker';
+import MoodBoardReferenceStrip from '../components/moodBoard/MoodBoardReferenceStrip';
 import { buildImporterLink } from '../lib/importerDeepLink';
 
 const emptyForm = () => ({
@@ -50,6 +53,7 @@ export default function Pipeline() {
 
   const sync = useSyncIntegrity('series');
   const [creating, setCreating] = useState(false);
+  const [generating, setGenerating] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(emptyForm);
 
@@ -90,6 +94,54 @@ export default function Pipeline() {
       }
       return next;
     });
+  };
+
+  // Generate a fresh series concept from the selected universe and overwrite
+  // the form's story fields (name / logline / premise / shape) so the user can
+  // edit before creating. The user clicked "Generate" explicitly, so this
+  // replaces whatever's there — but an empty field from the LLM keeps the prior
+  // value as a fallback. styleNotes is left to the universe-pull (it's a
+  // world-level aesthetic, not a per-series story choice).
+  const handleGenerate = async () => {
+    if (!form.universeId) {
+      toast.error('Pick a universe first — the generator uses it as seed material');
+      return;
+    }
+    const requestedUniverseId = form.universeId;
+    setGenerating(true);
+    const concept = await generateSeriesConcept(requestedUniverseId, {}, { silent: true }).catch((err) => {
+      toast.error(err.message || 'Failed to generate a series concept');
+      return null;
+    });
+    setGenerating(false);
+    if (!concept) return;
+    // The request can outlive the selection: if the user switched universes
+    // while it was in flight, applying a concept seeded from the old universe
+    // would pair the new universeId with a mismatched story. Gate the merge on
+    // the LIVE state inside the functional updater (race-free — `f` is the
+    // committed value, unlike a passively-synced ref), and gate the toast on
+    // whether the merge actually applied.
+    let applied = false;
+    setForm((f) => {
+      if (f.universeId !== requestedUniverseId) return f;
+      applied = true;
+      return {
+        ...f,
+        name: concept.name || f.name,
+        logline: concept.logline || f.logline,
+        premise: concept.premise || f.premise,
+        // The generated concept owns the story shape — apply it verbatim,
+        // including null (LLM picked none), so a stale earlier pick can't
+        // misrepresent the freshly generated concept.
+        shape: concept.shape,
+      };
+    });
+    if (!applied) return;
+    toast.success(
+      concept.rationale
+        ? `Generated "${concept.name}" — ${concept.rationale}`
+        : `Generated "${concept.name}"`,
+    );
   };
 
   const handleCreate = async (e) => {
@@ -254,6 +306,23 @@ export default function Pipeline() {
               </p>
             </div>
           </div>
+          <div className="flex items-center gap-3 flex-wrap">
+            <button
+              type="button"
+              onClick={handleGenerate}
+              disabled={generating || !form.universeId}
+              className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-port-accent/50 bg-port-accent/10 text-port-accent hover:bg-port-accent/20 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+              title={!form.universeId
+                ? 'Pick a universe first — the generator uses it as seed material'
+                : 'Invent a fresh series (name, logline, premise, story shape) from this universe'}
+            >
+              {generating ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} aria-hidden="true" />}
+              {generating ? 'Generating…' : 'Generate with AI'}
+            </button>
+            <span className="text-[11px] text-gray-500">
+              Invents a different story set in the chosen universe — name, logline, premise & story shape. Edit anything before creating.
+            </span>
+          </div>
           <div className="grid grid-cols-1 sm:grid-cols-[1fr_240px] gap-3">
             <div>
               <label htmlFor="series-logline" className="block text-xs uppercase tracking-wider text-gray-500 mb-1">
@@ -335,6 +404,7 @@ export default function Pipeline() {
               />
             </div>
           </div>
+          <MoodBoardReferenceStrip storageKey="pipeline-series" />
           <div className="flex gap-2">
             <button
               type="submit"
@@ -366,30 +436,33 @@ export default function Pipeline() {
             const shapeDef = s.arc?.shape ? getStoryShape(s.arc.shape) : null;
             return (
             <li key={s.id} className="flex items-start justify-between gap-3 p-3 bg-port-card border border-port-border rounded-lg hover:border-port-accent/40 transition-colors">
-              <Link to={`/pipeline/series/${s.id}`} className="flex-1 min-w-0">
-                <div className="text-white font-medium flex items-center gap-2 flex-wrap">
-                  <span>{s.name}</span>
-                  {s.origin ? <OriginBadge origin={s.origin} compact /> : null}
-                  {shapeDef ? (
-                    <span
-                      className="inline-flex items-center gap-1.5 text-[10px] uppercase tracking-wider px-2 py-0.5 rounded bg-port-bg border border-port-accent/40 text-port-accent"
-                      title={shapeDef.description}
-                    >
-                      <ArcShapeSparkline shape={shapeDef} width={40} height={14} />
-                      {shapeDef.label}
-                    </span>
+              <Link to={`/pipeline/series/${s.id}`} className="flex-1 min-w-0 flex items-start gap-3">
+                <ImageThumb imageRef={s.coverImage} FallbackIcon={BookOpen} sizeClass="w-12 h-[4.5rem]" />
+                <div className="min-w-0 flex-1">
+                  <div className="text-white font-medium flex items-center gap-2 flex-wrap">
+                    <span>{s.name}</span>
+                    {s.origin ? <OriginBadge origin={s.origin} compact /> : null}
+                    {shapeDef ? (
+                      <span
+                        className="inline-flex items-center gap-1.5 text-[10px] uppercase tracking-wider px-2 py-0.5 rounded bg-port-bg border border-port-accent/40 text-port-accent"
+                        title={shapeDef.description}
+                      >
+                        <ArcShapeSparkline shape={shapeDef} width={40} height={14} />
+                        {shapeDef.label}
+                      </span>
+                    ) : null}
+                  </div>
+                  {s.logline ? (
+                    <div className="text-xs text-gray-500 mt-1 whitespace-pre-wrap break-words">{s.logline}</div>
+                  ) : (
+                    <div className="text-xs text-gray-600 italic mt-1">No logline yet</div>
+                  )}
+                  {s.issueCountTarget ? (
+                    <div className="text-xs text-gray-600 mt-1">
+                      Target {s.issueCountTarget} issues / episodes
+                    </div>
                   ) : null}
                 </div>
-                {s.logline ? (
-                  <div className="text-xs text-gray-500 mt-1 whitespace-pre-wrap break-words">{s.logline}</div>
-                ) : (
-                  <div className="text-xs text-gray-600 italic mt-1">No logline yet</div>
-                )}
-                {s.issueCountTarget ? (
-                  <div className="text-xs text-gray-600 mt-1">
-                    Target {s.issueCountTarget} issues / episodes
-                  </div>
-                ) : null}
               </Link>
               <SyncBadge
                 status={syncBadgeStatus(sync, s.id)}

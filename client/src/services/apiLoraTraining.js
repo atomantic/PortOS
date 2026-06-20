@@ -30,6 +30,11 @@ export const createLoraDataset = ({
 
 export const getLoraDataset = (id) => request(`/lora-datasets/${id}`);
 
+// Server-derived variation axes (expressions/outfits for characters; lighting/
+// settings for objects & places) — seeds the generate-batch override chips.
+export const getLoraDatasetVariationAxes = (id, options = {}) =>
+  request(`/lora-datasets/${id}/variation-axes`, options);
+
 export const patchLoraDataset = (id, patch) =>
   request(`/lora-datasets/${id}`, { method: 'PATCH', body: JSON.stringify(patch) });
 
@@ -51,10 +56,18 @@ export const importLoraDatasetGalleryImages = (id, filenames) =>
 export const generateLoraDatasetImages = (id, options = {}) =>
   request(`/lora-datasets/${id}/generate`, { method: 'POST', body: JSON.stringify(options) });
 
-export const sliceLoraDatasetRefSheet = (id, { variant, cols, rows } = {}) =>
+// `useVision` (default true) lets a vision model propose a bounding box per
+// figure; the fixed cols×rows grid is the fallback (and what `useVision: false`
+// forces). When omitted, the server auto-resolves a vision model.
+export const sliceLoraDatasetRefSheet = (id, { variant, cols, rows, useVision } = {}) =>
   request(`/lora-datasets/${id}/slice-reference-sheet`, {
     method: 'POST',
-    body: JSON.stringify({ ...(variant ? { variant } : {}), ...(cols ? { cols } : {}), ...(rows ? { rows } : {}) }),
+    body: JSON.stringify({
+      ...(variant ? { variant } : {}),
+      ...(cols ? { cols } : {}),
+      ...(rows ? { rows } : {}),
+      ...(useVision === false ? { useVision: false } : {}),
+    }),
   });
 
 export const startLoraCaptionRun = (id, options = {}) =>
@@ -67,6 +80,11 @@ export const updateLoraDatasetImageCaption = (id, imageId, caption) =>
 
 export const deleteLoraDatasetImage = (id, imageId) =>
   request(`/lora-datasets/${id}/images/${imageId}`, { method: 'DELETE' });
+
+// Strip the identity fragments shared across most captions so the trigger token
+// learns the character (issue #1320). Returns { dataset, removedFragments, updatedImages }.
+export const stripLoraDatasetSharedCaptionFragments = (id) =>
+  request(`/lora-datasets/${id}/strip-shared-fragments`, { method: 'POST' });
 
 // ---- Training runs ----
 

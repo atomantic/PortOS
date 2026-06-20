@@ -36,6 +36,14 @@ const inFlightFallbacks = new Set(); // errorKey
 // Store pending tasks when CoS is not running (for later pickup)
 const pendingAutoFixTasks = [];
 
+// Collapse a (possibly multi-line) error string to one capped line for logging
+// — the single-line logging convention forbids multi-line blobs; the untruncated
+// text always remains in the run record's `error` field.
+const oneLine = (s, max = 300) => {
+  const t = String(s ?? '').replace(/\s+/g, ' ').trim();
+  return t.length > max ? `${t.slice(0, max - 1)}…` : t;
+};
+
 function aiProviderErrorKey(providerName, model) {
   // NUL separator: provider names ("Claude Code CLI") and model ids
   // ("gpt-4o-mini") both commonly contain `-`, so a `-`-joined key would
@@ -218,7 +226,13 @@ async function handleAIProviderError(error) {
     return;
   }
 
-  console.log(`🤖 AI provider error detected: ${ctx.provider} - run ${ctx.runId} (deferring ${TASK_DEFER_MS}ms for possible fallback retry)`);
+  // Surface the actual failure reason + category inline so pm2 logs explain
+  // WHY a run failed without spelunking into data/runs/<id>/metadata.json. The
+  // reason is collapsed to a single line and capped (logging convention: no
+  // multi-line blobs) — the full text stays in the run record's `error` field.
+  const reason = oneLine(ctx.errorDetails || ctx.errorAnalysis?.message) || 'no error text captured';
+  const category = ctx.errorAnalysis?.category || 'unknown';
+  console.log(`🤖 AI provider error detected: ${ctx.provider} (${ctx.model}) [${category}] exit=${ctx.exitCode ?? '?'} - run ${ctx.runId}: ${reason} (deferring ${TASK_DEFER_MS}ms for possible fallback retry)`);
 
   const timer = setTimeout(() => {
     deferredTasks.delete(errorKey);

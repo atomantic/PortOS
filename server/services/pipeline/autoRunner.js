@@ -15,65 +15,57 @@
  * grace window in lib/sseUtils.js.
  */
 
-import { randomUUID } from 'crypto';
-import { broadcastSse, attachSseClient, closeJobAfterDelay } from '../../lib/sseUtils.js';
+import { createSseRunner } from '../../lib/sseUtils.js';
 import { generateStage } from './textStages.js';
 import { getIssue, updateIssue, isStageReady } from './issues.js';
 import { startEpisodeVideoForIssue, ERR_NO_STORYBOARDS } from './episodeVideo.js';
 
-// runs: Map<issueId, { runId, clients[], lastPayload, cancelRequested, startedAt }>
-const runs = new Map();
+// Shared SSE run-lifecycle: a `runs` map keyed by issueId, plus the
+// coalesce/restart/grace-window/finished/cleanup semantics. This runner keeps
+// its own error handling inside `work` (it must flip the issue to
+// 'needs-review' and emit a matching error frame), so the factory's generic
+// catch is only the safety net.
+const runner = createSseRunner({ logLabel: 'pipeline auto-run' });
 
 export function isAutoRunActive(issueId) {
-  return runs.has(issueId);
+  return runner.isActive(issueId);
 }
 
 export function attachClient(issueId, res) {
-  return attachSseClient(runs, issueId, res);
+  return runner.attachClient(issueId, res);
 }
 
 export function cancelAutoRun(issueId) {
-  const run = runs.get(issueId);
-  if (!run) return false;
-  run.cancelRequested = true;
-  return true;
-}
-
-function broadcast(issueId, payload) {
-  const run = runs.get(issueId);
-  if (!run) return;
-  broadcastSse(run, payload);
+  return runner.cancel(issueId);
 }
 
 /**
  * Kick off the text-stage chain for an issue. Returns the runId immediately;
  * progress lands via SSE. Idempotent in the sense that re-calling while a
- * run is in flight resolves to the existing runId.
+ * run is in flight resolves to the existing runId (the factory's start()
+ * coalesces an in-flight run on its own — no pre-check needed here).
  */
 export async function startAutoRunTextStages(issueId, options = {}) {
-  if (runs.has(issueId)) return { runId: runs.get(issueId).runId, alreadyRunning: true };
-  const runId = randomUUID();
-  const record = {
-    runId,
-    clients: [],
-    lastPayload: null,
-    cancelRequested: false,
-    startedAt: new Date().toISOString(),
-  };
-  runs.set(issueId, record);
+  // Which script stages to adapt from prose. Defaults to both (manual auto-run
+  // from the UI); callers targeting a single format (e.g. Series Autopilot on a
+  // comic-only series) pass `scripts: ['comicScript']` to skip the off-target
+  // stage and its LLM call. Unknown entries are filtered out.
+  const VALID_SCRIPTS = ['comicScript', 'teleplay'];
+  const scripts = Array.isArray(options.scripts) && options.scripts.length
+    ? VALID_SCRIPTS.filter((s) => options.scripts.includes(s))
+    : VALID_SCRIPTS;
 
-  // Kick off the coordinator without awaiting. The outer try/catch is the one
-  // permitted boundary use of try/catch in this module — without it an LLM
-  // rejection would surface as an unhandledRejection on Node ≥15 and kill the
-  // process. See ~/.claude skill `nodejs-async-event-listener-unhandled-rejection`.
-  (async () => {
+  return runner.start(issueId, async ({ runId, record, broadcast }) => {
     await updateIssue(issueId, { status: 'running' }).catch(() => null);
-    broadcast(issueId, { type: 'start', runId, stages: ['idea', 'prose', 'comicScript', 'teleplay'] });
+    broadcast({ type: 'start', runId, stages: ['idea', 'prose', ...scripts] });
 
+    // Own the error frame + status flip here (and swallow) so the factory's
+    // generic catch doesn't double-emit; without it an LLM rejection would
+    // surface as an unhandledRejection on Node ≥15 and kill the process.
     try {
       // Stage 1: idea — skip if already ready/edited and not force-rerun
       if (!record.cancelRequested) {
-        await runStageIfNeeded(issueId, 'idea', options);
+        await runStageIfNeeded(issueId, 'idea', options, broadcast);
       }
       // Stage 2: prose — depends on idea. SKIP when the issue arrived
       // script-first (an imported comic seeds stages.comicScript ready with
@@ -91,9 +83,9 @@ export async function startAutoRunTextStages(issueId, options = {}) {
           || isStageReady(proseIssue.stages?.teleplay);
         if (proseEmpty && scriptAuthored && !options.force) {
           scriptFirstSkip = true;
-          broadcast(issueId, { type: 'skip', stage: 'prose', reason: 'script already authored (imported script-first) — not back-filling prose' });
+          broadcast({ type: 'skip', stage: 'prose', reason: 'script already authored (imported script-first) — not back-filling prose' });
         } else {
-          await runStageIfNeeded(issueId, 'prose', options);
+          await runStageIfNeeded(issueId, 'prose', options, broadcast);
         }
       }
       // Stage 3: comicScript + teleplay in parallel — both derive from prose.
@@ -103,15 +95,15 @@ export async function startAutoRunTextStages(issueId, options = {}) {
       // the authored script runs through runStageIfNeeded and is skipped as
       // already-ready. `force` still regenerates everything.
       if (!record.cancelRequested) {
-        await Promise.all(['comicScript', 'teleplay'].map(async (stageId) => {
+        await Promise.all(scripts.map(async (stageId) => {
           if (scriptFirstSkip && !options.force) {
             const iss = await getIssue(issueId);
             if (!isStageReady(iss.stages?.[stageId])) {
-              broadcast(issueId, { type: 'skip', stage: stageId, reason: 'no prose to adapt (imported script-first)' });
+              broadcast({ type: 'skip', stage: stageId, reason: 'no prose to adapt (imported script-first)' });
               return;
             }
           }
-          return runStageIfNeeded(issueId, stageId, options);
+          return runStageIfNeeded(issueId, stageId, options, broadcast);
         }));
       }
 
@@ -121,21 +113,21 @@ export async function startAutoRunTextStages(issueId, options = {}) {
       // fire-and-forget the kickoff and surface the cdProjectId via SSE so
       // the UI can switch to polling the CD project for progress.
       if (options.includeVideo && !record.cancelRequested) {
-        broadcast(issueId, { type: 'stage:start', stage: 'episodeVideo' });
+        broadcast({ type: 'stage:start', stage: 'episodeVideo' });
         const kickoff = await startEpisodeVideoForIssue(issueId, {
           aspectRatio: options.aspectRatio,
           quality: options.quality,
           modelId: options.modelId,
         }).catch((err) => {
           if (err?.code === ERR_NO_STORYBOARDS) {
-            broadcast(issueId, { type: 'skip', stage: 'episodeVideo', reason: 'storyboards stage has no scenes — fill it in first' });
+            broadcast({ type: 'skip', stage: 'episodeVideo', reason: 'storyboards stage has no scenes — fill it in first' });
             return null;
           }
-          broadcast(issueId, { type: 'stage:error', stage: 'episodeVideo', error: (err?.message || String(err)).slice(0, 500) });
+          broadcast({ type: 'stage:error', stage: 'episodeVideo', error: (err?.message || String(err)).slice(0, 500) });
           return null;
         });
         if (kickoff) {
-          broadcast(issueId, {
+          broadcast({
             type: 'stage:complete',
             stage: 'episodeVideo',
             cdProjectId: kickoff.cdProjectId,
@@ -146,7 +138,7 @@ export async function startAutoRunTextStages(issueId, options = {}) {
       }
 
       await updateIssue(issueId, { status: 'needs-review' }).catch(() => null);
-      broadcast(issueId, {
+      broadcast({
         type: record.cancelRequested ? 'canceled' : 'complete',
         runId,
         completedAt: new Date().toISOString(),
@@ -156,26 +148,23 @@ export async function startAutoRunTextStages(issueId, options = {}) {
       const message = (err?.message || String(err)).slice(0, 1000);
       console.error(`❌ Pipeline auto-run failed — issue=${issueId.slice(0, 8)} ${message}`);
       await updateIssue(issueId, { status: 'needs-review' }).catch(() => null);
-      broadcast(issueId, { type: 'error', runId, error: message, failedAt: new Date().toISOString() });
-    } finally {
-      // Hold the SSE list open briefly so late-attaching clients still see
-      // the terminal frame via replay (matches mediaJobQueue's behavior).
-      closeJobAfterDelay(runs, issueId);
+      broadcast({ type: 'error', runId, error: message, failedAt: new Date().toISOString() });
+      // Swallow: the error frame + status flip above are the terminal handling.
+      // The factory's finally marks the run finished and schedules the replay
+      // grace-window cleanup.
     }
-  })();
-
-  return { runId, alreadyRunning: false };
+  });
 }
 
-async function runStageIfNeeded(issueId, stageId, options) {
+async function runStageIfNeeded(issueId, stageId, options, broadcast) {
   const issue = await getIssue(issueId);
   if (!options.force && isStageReady(issue.stages?.[stageId])) {
-    broadcast(issueId, { type: 'skip', stage: stageId, reason: 'already populated' });
+    broadcast({ type: 'skip', stage: stageId, reason: 'already populated' });
     return;
   }
-  broadcast(issueId, { type: 'stage:start', stage: stageId });
+  broadcast({ type: 'stage:start', stage: stageId });
   const { stage } = await generateStage(issueId, stageId, options);
-  broadcast(issueId, {
+  broadcast({
     type: 'stage:complete',
     stage: stageId,
     status: stage.status,
@@ -211,4 +200,4 @@ export async function recoverStuckAutoRuns() {
 }
 
 // Export internals for tests.
-export const __testing = { runs };
+export const __testing = { runs: runner.runs };

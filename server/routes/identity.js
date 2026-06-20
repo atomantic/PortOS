@@ -16,6 +16,8 @@ import {
   updateProgressSchema,
   generatePhasesInputSchema,
   acceptPhasesInputSchema,
+  decomposeGoalInputSchema,
+  acceptDecompositionInputSchema,
   organizeGoalsInputSchema,
   applyOrganizationInputSchema,
   checkInGoalInputSchema
@@ -272,6 +274,29 @@ router.post('/goals/:id/accept-phases', asyncHandler(async (req, res) => {
   const data = validateRequest(acceptPhasesInputSchema, req.body);
   const goal = await identityService.acceptGoalPhases(req.params.id, data.phases);
   res.json(goal);
+}));
+
+// POST /api/digital-twin/identity/goals/:id/decompose — AI-decompose into milestones + tasks (no persist)
+router.post('/goals/:id/decompose', asyncHandler(async (req, res) => {
+  const data = validateRequest(decomposeGoalInputSchema, req.body);
+  const milestones = await identityService.decomposeGoal(req.params.id, data);
+  res.json(milestones);
+}));
+
+// POST /api/digital-twin/identity/goals/:id/accept-decomposition — Persist milestones + nested tasks
+router.post('/goals/:id/accept-decomposition', asyncHandler(async (req, res) => {
+  const data = validateRequest(acceptDecompositionInputSchema, req.body);
+  const goal = await identityService.acceptGoalDecomposition(req.params.id, data.milestones);
+  res.json(goal);
+}));
+
+// PUT /api/digital-twin/identity/goals/:id/milestones/:milestoneId/tasks/:taskId/complete — Toggle milestone task done
+router.put('/goals/:id/milestones/:milestoneId/tasks/:taskId/complete', asyncHandler(async (req, res) => {
+  const task = await identityService.completeMilestoneTask(req.params.id, req.params.milestoneId, req.params.taskId);
+  if (!task) {
+    throw new ServerError('Goal, milestone, or task not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  res.json(task);
 }));
 
 // POST /api/digital-twin/identity/goals/organize — AI-organize goals into hierarchy

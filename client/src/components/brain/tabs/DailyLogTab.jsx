@@ -134,7 +134,6 @@ export default function DailyLogTab() {
     }).catch(() => null);
     return () => { cancelled = true; };
     // Only on mount — we intentionally don't re-run when date changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {

@@ -24,7 +24,29 @@ tryReadFile: vi.fn().mockResolvedValue(null),
   VALID_ENGINES: new Set(['kokoro', 'piper']),
 }));
 
-const { parseVoiceId, listAllVoices, synthesizeToFile, extractDialogueLines, resolveVoiceForLine } = await import('./audio.js');
+const { parseVoiceId, listAllVoices, synthesizeToFile, extractDialogueLines, resolveVoiceForLine, wavDurationMs } = await import('./audio.js');
+
+// Build a minimal canonical PCM WAV header for `dataBytes` of audio at the given
+// sample rate / channels / bit depth, so duration math is exercised end-to-end.
+function makeWav({ sampleRate = 24000, channels = 1, bitsPerSample = 16, dataBytes = 0 } = {}) {
+  const byteRate = sampleRate * channels * (bitsPerSample / 8);
+  const blockAlign = channels * (bitsPerSample / 8);
+  const buf = Buffer.alloc(44 + dataBytes);
+  buf.write('RIFF', 0, 'ascii');
+  buf.writeUInt32LE(36 + dataBytes, 4);
+  buf.write('WAVE', 8, 'ascii');
+  buf.write('fmt ', 12, 'ascii');
+  buf.writeUInt32LE(16, 16);
+  buf.writeUInt16LE(1, 20); // PCM
+  buf.writeUInt16LE(channels, 22);
+  buf.writeUInt32LE(sampleRate, 24);
+  buf.writeUInt32LE(byteRate, 28);
+  buf.writeUInt16LE(blockAlign, 32);
+  buf.writeUInt16LE(bitsPerSample, 34);
+  buf.write('data', 36, 'ascii');
+  buf.writeUInt32LE(dataBytes, 40);
+  return buf;
+}
 
 beforeEach(async () => {
   synthesizeMock.mockReset();
@@ -120,6 +142,36 @@ describe('synthesizeToFile', () => {
     const passed = synthesizeMock.mock.calls.at(-1)[1];
     expect(passed).not.toHaveProperty('engine');
     expect(passed).not.toHaveProperty('voice');
+  });
+
+  it('returns the measured WAV duration (ms) for the narration timeline', async () => {
+    // 24000 samples of 16-bit mono @ 24kHz = exactly 1 second.
+    synthesizeMock.mockResolvedValue({ wav: makeWav({ dataBytes: 24000 * 2 }), latencyMs: 5, engine: 'kokoro' });
+    const result = await synthesizeToFile({ text: 'one second please', voiceId: 'kokoro:af_heart' });
+    expect(result.durationMs).toBe(1000);
+  });
+});
+
+describe('wavDurationMs', () => {
+  it('computes duration from the data chunk and byte rate', () => {
+    expect(wavDurationMs(makeWav({ sampleRate: 24000, dataBytes: 24000 * 2 }))).toBe(1000);
+    expect(wavDurationMs(makeWav({ sampleRate: 16000, dataBytes: 16000 * 2 }))).toBe(1000);
+    // Half a second.
+    expect(wavDurationMs(makeWav({ sampleRate: 24000, dataBytes: 24000 }))).toBe(500);
+  });
+
+  it('returns 0 for non-buffer / too-short / non-RIFF input', () => {
+    expect(wavDurationMs(null)).toBe(0);
+    expect(wavDurationMs(Buffer.alloc(4))).toBe(0);
+    expect(wavDurationMs(Buffer.from('NOT-A-WAV-FILE-AT-ALL'))).toBe(0);
+  });
+
+  it('clamps a declared data size larger than the actual buffer', () => {
+    const buf = makeWav({ sampleRate: 24000, dataBytes: 24000 * 2 });
+    // Lie about the data size (claim 10x the bytes present) — duration must
+    // reflect the bytes actually in the buffer, not the inflated header value.
+    buf.writeUInt32LE(24000 * 2 * 10, 40);
+    expect(wavDurationMs(buf)).toBe(1000);
   });
 });
 

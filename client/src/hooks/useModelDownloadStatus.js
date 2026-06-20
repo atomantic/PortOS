@@ -1,7 +1,11 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useSseProgress } from './useSseProgress.js';
 import toast from '../components/ui/Toast';
-import { getImageModelStatuses, getVideoModelStatuses } from '../services/apiImageVideo.js';
+import {
+  getImageModelStatuses, getVideoModelStatuses,
+  verifyImageModels, verifyVideoModels, repairImageModel, repairVideoModel,
+  repairTextEncoder,
+} from '../services/apiImageVideo.js';
 
 // Sentinel `modelId` used to drive a text-encoder download instead of a model
 // download. The video form passes this to `start()`; the URL builder below
@@ -9,12 +13,17 @@ import { getImageModelStatuses, getVideoModelStatuses } from '../services/apiIma
 // callers and the hook agree on the magic string.
 export const TEXT_ENCODER_DOWNLOAD_ID = '__text_encoder__';
 
-const buildDownloadUrl = (kind, modelId) => {
+const buildDownloadUrl = (kind, modelId, force = false) => {
   if (!modelId) return null;
+  // A repair-initiated re-download appends `?force=1` so the server re-fetches
+  // even when the repo still looks cached — repairModelCache() deleted the bad
+  // file(s), but a multi-shard repo's surviving shards otherwise mask the gap
+  // and the deleted shard would never be pulled back.
+  const q = force ? '?force=1' : '';
   if (kind === 'video' && modelId === TEXT_ENCODER_DOWNLOAD_ID) {
-    return '/api/video-gen/text-encoder/download';
+    return `/api/video-gen/text-encoder/download${q}`;
   }
-  return `/api/${kind}-gen/models/${encodeURIComponent(modelId)}/download`;
+  return `/api/${kind}-gen/models/${encodeURIComponent(modelId)}/download${q}`;
 };
 
 // Model download-status hook. Drives the inline "Available · 7.8 GB" /
@@ -29,6 +38,9 @@ export function useModelDownloadStatus({ kind = 'image' } = {}) {
   const [extra, setExtra] = useState({}); // video: { textEncoder: {...} }
   const [loading, setLoading] = useState(false);
   const [activeModelId, setActiveModelId] = useState(null);
+  // True only for a repair-initiated re-download — appends `?force=1` so the
+  // server re-fetches a repo whose surviving shards still read as cached.
+  const [forceDownload, setForceDownload] = useState(false);
 
   const fetchStatuses = useCallback(async () => {
     setLoading(true);
@@ -53,7 +65,7 @@ export function useModelDownloadStatus({ kind = 'image' } = {}) {
 
   // EventSource for the active download. `null` URL = idle (useSseProgress's
   // `enabled: false` cleanup tears the connection down on cancel).
-  const downloadUrl = buildDownloadUrl(kind, activeModelId);
+  const downloadUrl = buildDownloadUrl(kind, activeModelId, forceDownload);
   const sse = useSseProgress(downloadUrl, { enabled: !!downloadUrl });
 
   // Refetch on natural stream close. useSseProgress flips `closed:true` once
@@ -70,12 +82,57 @@ export function useModelDownloadStatus({ kind = 'image' } = {}) {
       }
       fetchStatuses();
       setActiveModelId(null);
+      setForceDownload(false);
     }
   }, [sse.closed, sse.latest, fetchStatuses]);
 
-  const start = useCallback((modelId) => {
+  const start = useCallback((modelId, { force = false } = {}) => {
+    setForceDownload(force);
     setActiveModelId(modelId);
   }, []);
+
+  // Force a deep integrity re-scan (per-file sha256). Returns the server's
+  // result and refreshes the status list so the structural badge stays current.
+  // `verifying` flips while in flight so the caller can disable the button.
+  const [verifying, setVerifying] = useState(false);
+  const verify = useCallback(async ({ modelId, deep = true } = {}) => {
+    setVerifying(true);
+    const fn = kind === 'video' ? verifyVideoModels : verifyImageModels;
+    const result = await fn({ modelId, deep }).catch((err) => {
+      toast.error(err?.message || 'Integrity scan failed');
+      return null;
+    });
+    await fetchStatuses();
+    setVerifying(false);
+    return result;
+  }, [kind, fetchStatuses]);
+
+  // Repair = delete the flagged corrupt files, then re-download them through
+  // the same SSE path the Download button uses (progress + auto status-refresh
+  // on completion come for free). `repairing` gates the button while the
+  // deletion request is in flight.
+  const [repairing, setRepairing] = useState(false);
+  const repair = useCallback(async (modelId, { deep = false } = {}) => {
+    if (!modelId) return;
+    setRepairing(true);
+    // The shared text encoder isn't a model id, so its repair hits the scalar
+    // /text-encoder/repair endpoint; the sentinel `start()` below already maps
+    // to the dedicated /text-encoder/download SSE for the clean re-fetch.
+    const isTextEncoder = kind === 'video' && modelId === TEXT_ENCODER_DOWNLOAD_ID;
+    const run = isTextEncoder
+      ? () => repairTextEncoder({ deep })
+      : () => (kind === 'video' ? repairVideoModel : repairImageModel)(modelId, { deep });
+    const result = await run().catch((err) => {
+      toast.error(err?.message || 'Repair failed');
+      return null;
+    });
+    setRepairing(false);
+    // Force the re-download: repair deleted the bad file(s), but a multi-shard
+    // repo's surviving shards keep it reading as cached, so a non-forced pull
+    // would skip the deleted shard.
+    if (result) start(modelId, { force: true });
+    return result;
+  }, [kind, start]);
 
   // Manual cancel: refetch directly because `sse.close()` followed by
   // setActiveModelId(null) clears the URL, which causes useSseProgress to
@@ -85,6 +142,7 @@ export function useModelDownloadStatus({ kind = 'image' } = {}) {
   const cancel = useCallback(() => {
     sse.close();
     setActiveModelId(null);
+    setForceDownload(false);
     fetchStatuses();
   }, [sse, fetchStatuses]);
 
@@ -113,6 +171,10 @@ export function useModelDownloadStatus({ kind = 'image' } = {}) {
     refresh: fetchStatuses,
     start,
     cancel,
+    verify,
+    verifying,
+    repair,
+    repairing,
     getStatus,
     activeModelId,
     progress: sse.latest,

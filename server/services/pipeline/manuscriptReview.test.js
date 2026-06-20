@@ -25,7 +25,7 @@ vi.mock('./arcPlanner.js', () => ({
 
 import { recordEvents } from '../sharing/recordEvents.js';
 import { collectManuscriptSections } from './arcPlanner.js';
-import { seedReviewFromFindings, updateComment, mergeReviewFromSync } from './manuscriptReview.js';
+import { seedReviewFromFindings, updateComment, mergeReviewFromSync, getReview } from './manuscriptReview.js';
 
 describe('manuscriptReview — record-event emission on write', () => {
   let updates;
@@ -187,6 +187,26 @@ describe('manuscriptReview — re-run merge vs fresh reconcile', () => {
     expect(kept).toHaveLength(1);
     expect(kept[0].status).toBe('dismissed');
   });
+
+  it('fresh scopes auto-dismissal to its own checkId — leaves other checks open', async () => {
+    // A registry check seeds an open finding (its own checkId).
+    await seedReviewFromFindings(
+      'ser-fresh-scope',
+      [{ problem: 'info dump', anchorQuote: 'as you know', checkId: 'prose.info-dumping' }],
+      { mode: 'merge' },
+    );
+    // A completeness pass (no checkId) re-runs in fresh mode and finds something
+    // else entirely. It must NOT dismiss the registry check's open finding.
+    const next = await seedReviewFromFindings(
+      'ser-fresh-scope',
+      [{ problem: 'Act II sags', anchorQuote: 'the road' }],
+      { mode: 'fresh' },
+    );
+    const infoDump = next.comments.find((c) => c.problem === 'info dump');
+    expect(infoDump.status).toBe('open');
+    expect(infoDump.checkId).toBe('prose.info-dumping');
+    expect(next.comments.find((c) => c.problem === 'Act II sags').status).toBe('open');
+  });
 });
 
 describe('manuscriptReview — with-edits fix seeding', () => {
@@ -282,5 +302,49 @@ describe('manuscriptReview — with-edits fix seeding', () => {
       { problem: 'abrupt ending', anchorQuote: 'She left.', replace: 'A DIFFERENT rewrite.', issueNumber: 1 },
     ]);
     expect(second.comments[0].fix.replace).toBe(original); // untouched
+  });
+});
+
+describe('manuscriptReview — sourceContentHash staleness fingerprint (#1345)', () => {
+  beforeEach(() => { fileStore.clear(); });
+
+  it('preserves a stamped sourceContentHash through seed + read (survives sanitize/sync round-trip)', async () => {
+    const seeded = await seedReviewFromFindings('ser-hash', [
+      { problem: 'naming clash', anchorQuote: 'Alina', checkId: 'naming.x', sourceContentHash: 'hash-v1' },
+    ]);
+    expect(seeded.comments[0].sourceContentHash).toBe('hash-v1');
+    // Read back through sanitizeComment (the same shaper the sync importer uses).
+    const review = await getReview('ser-hash');
+    expect(review.comments[0].sourceContentHash).toBe('hash-v1');
+  });
+
+  it('defaults legacy findings with no hash to null', async () => {
+    const seeded = await seedReviewFromFindings('ser-legacy', [
+      { problem: 'no hash here', anchorQuote: 'q', checkId: 'naming.x' },
+    ]);
+    expect(seeded.comments[0].sourceContentHash).toBeNull();
+  });
+
+  it('refreshes the hash on a re-surfaced open finding when content changed (clears stale after re-run)', async () => {
+    await seedReviewFromFindings('ser-refresh', [
+      { problem: 'naming clash', anchorQuote: 'Alina', checkId: 'naming.x', sourceContentHash: 'hash-v1' },
+    ]);
+    // Same finding (same key) re-surfaces from a run against edited content → new hash.
+    const second = await seedReviewFromFindings('ser-refresh', [
+      { problem: 'naming clash', anchorQuote: 'Alina', checkId: 'naming.x', sourceContentHash: 'hash-v2' },
+    ]);
+    expect(second.comments).toHaveLength(1); // deduped, not appended
+    expect(second.comments[0].sourceContentHash).toBe('hash-v2'); // refreshed
+  });
+
+  it('does NOT churn updatedAt when the re-surfaced finding has the same hash', async () => {
+    const first = await seedReviewFromFindings('ser-nochurn', [
+      { problem: 'naming clash', anchorQuote: 'Alina', checkId: 'naming.x', sourceContentHash: 'hash-v1' },
+    ]);
+    const stamp = first.comments[0].updatedAt;
+    const second = await seedReviewFromFindings('ser-nochurn', [
+      { problem: 'naming clash', anchorQuote: 'Alina', checkId: 'naming.x', sourceContentHash: 'hash-v1' },
+    ]);
+    expect(second.comments[0].updatedAt).toBe(stamp); // unchanged — no rewrite
   });
 });

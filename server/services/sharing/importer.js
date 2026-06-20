@@ -34,6 +34,7 @@ import { PORTOS_SCHEMA_VERSIONS, RECORD_KIND_SCHEMA_CATEGORIES, compareSchemaVer
 import { insertSeriesWithId, updateSeries, getSeries } from '../pipeline/series.js';
 import { insertIssueWithId, updateIssue, getIssue } from '../pipeline/issues.js';
 import { mergeReviewFromSync } from '../pipeline/manuscriptReview.js';
+import { mergeOutlineFromSync } from '../pipeline/reverseOutline.js';
 import { insertUniverseWithId, updateUniverse, getUniverse } from '../universeBuilder.js';
 import { applyLegacySeriesCanonToUniverse } from '../pipeline/migrateSeriesCanon.js';
 import { findOrCreateUniverseCollection, findOrCreateSeriesCollection, addItem as addCollectionItem, ERR_DUPLICATE as COLLECTION_ERR_DUPLICATE } from '../mediaCollections.js';
@@ -378,6 +379,20 @@ async function missingDeclaredReviews(bucketPath, manifest) {
   return checks.filter(Boolean);
 }
 
+// Declared reverse-outline files (records/outlines/<seriesId>.json) the manifest
+// says are bundled but aren't yet readable on disk (#1348). Same parse-not-
+// existsSync semantics as missingDeclaredReviews: a present-but-corrupt file mid-
+// cloud-sync counts as "not ready" and keeps the manifest pending. Legacy
+// manifests (no outlineRefs) → [].
+async function missingDeclaredOutlines(bucketPath, manifest) {
+  const refs = (Array.isArray(manifest.outlineRefs) ? manifest.outlineRefs : []).filter(isSafeRecordId);
+  const checks = await Promise.all(refs.map(async (sid) => {
+    const r = await readJSONFile(bucketRecordPath(bucketPath, 'outlines', sid), null, { logError: false });
+    return r == null ? sid : null;
+  }));
+  return checks.filter(Boolean);
+}
+
 async function readReferencedRecords(bucketPath, manifest) {
   const records = { series: [], issues: [], universes: [], media: [] };
   const missing = [];
@@ -681,6 +696,26 @@ async function applyAutoMerge(bucket, manifest, records, { availableAssetKeys = 
     }
   }
 
+  // Merge the bundled reverse-outline sibling doc (#1348), whole-doc LWW on
+  // generatedAt. Same authoritative-refs + pending-on-failure contract as the
+  // review above: `outlineRefs` is authoritative (a stale lingering file from a
+  // prior export is ignored unless THIS manifest declared it), and a merge
+  // failure surfaces as a retryable pending condition rather than silently
+  // advancing the cursor. `mergeOutlineFromSync` emits no record event → no
+  // re-export loop.
+  const declaredOutlines = new Set((Array.isArray(manifest.outlineRefs) ? manifest.outlineRefs : []).filter(isSafeRecordId));
+  const outlineMergeFailures = [];
+  for (const s of records.series) {
+    if (skipSeriesMerge.has(s.id) || !declaredOutlines.has(s.id)) continue;
+    const outline = await readJSONFile(bucketRecordPath(bucket.path, 'outlines', s.id), null, { logError: false });
+    if (outline) {
+      await mergeOutlineFromSync(s.id, outline).catch((err) => {
+        console.log(`⚠️ sharing.importer: reverse-outline merge for ${s.id} failed: ${err.message}`);
+        outlineMergeFailures.push(s.id);
+      });
+    }
+  }
+
   // Universe and series shares can both carry a linked media collection
   // payload. Items are unioned into a local "Universe: <name>" or
   // "Series: <name>" collection so peer-generated images appear alongside
@@ -743,6 +778,7 @@ async function applyAutoMerge(bucket, manifest, records, { availableAssetKeys = 
     legacyCanonPendingFailures: legacyCanonPendingFailures.length > 0 ? legacyCanonPendingFailures : null,
     recordImportFailures: failedInserts.length > 0 ? failedInserts : null,
     reviewMergeFailures: reviewMergeFailures.length > 0 ? reviewMergeFailures : null,
+    outlineMergeFailures: outlineMergeFailures.length > 0 ? outlineMergeFailures : null,
     adoptedSubscription: adoptedSubscription
       ? { id: adoptedSubscription.id, bucketId: adoptedSubscription.bucketId, recordKind: adoptedSubscription.recordKind, recordId: adoptedSubscription.recordId }
       : null,
@@ -983,6 +1019,9 @@ export async function processManifest(bucketId, manifestFilename) {
   // dropping the review. Mirror the missingRecords pending gate. Legacy
   // manifests have no `reviewRefs` → empty → no wait (back-compat).
   const missingReviews = await missingDeclaredReviews(bucket.path, manifest);
+  // Declared reverse-outline files not yet on disk (#1348) — same out-of-order
+  // cloud-delivery wait as missingReviews. Legacy manifests → empty → no wait.
+  const missingOutlines = await missingDeclaredOutlines(bucket.path, manifest);
 
   // Always copy assets + media-job records ahead of the merge so canon and
   // pipeline records that reference them point at present files. Asset and
@@ -1013,6 +1052,7 @@ export async function processManifest(bucketId, manifestFilename) {
   const legacyCanonPendingFailures = outcome?.legacyCanonPendingFailures || null;
   const recordImportFailures = outcome?.recordImportFailures || null;
   const reviewMergeFailures = outcome?.reviewMergeFailures || null;
+  const outlineMergeFailures = outcome?.outlineMergeFailures || null;
   // Tombstoned universe: the collection owner IS on disk but locally deleted.
   // Unlike the truly-missing case this will never self-resolve via sync, so we
   // advance the cursor (no infinite pending loop) and emit a clear signal. The
@@ -1023,18 +1063,20 @@ export async function processManifest(bucketId, manifestFilename) {
     console.log(`⚠️ sharing: bucket=${bucket.name} manifest=${manifest.id} kind=${manifest.kind} collectionUniverse=${collectionTombstonedUniverse} is deleted locally — ${outcome.collectionItemsDeferred ?? 0} item(s) skipped; restore universe to import`);
     return { processed: true, manifest, outcome };
   }
-  if (assetCopy.missing.length > 0 || missingRecords.length > 0 || missingReviews.length > 0 || collectionPendingUniverse || collectionPendingSeries || legacyCanonPendingUniverses || legacyCanonPendingFailures || recordImportFailures || reviewMergeFailures) {
+  if (assetCopy.missing.length > 0 || missingRecords.length > 0 || missingReviews.length > 0 || missingOutlines.length > 0 || collectionPendingUniverse || collectionPendingSeries || legacyCanonPendingUniverses || legacyCanonPendingFailures || recordImportFailures || reviewMergeFailures || outlineMergeFailures) {
     if (assetCopy.missing.length > 0) outcome.pendingAssets = assetCopy.missing;
     if (missingRecords.length > 0) outcome.pendingRecords = missingRecords;
     if (missingReviews.length > 0) outcome.pendingReviews = missingReviews;
+    if (missingOutlines.length > 0) outcome.pendingOutlines = missingOutlines;
     if (collectionPendingUniverse) outcome.pendingCollectionUniverse = collectionPendingUniverse;
     if (collectionPendingSeries) outcome.pendingCollectionSeries = collectionPendingSeries;
     if (legacyCanonPendingUniverses) outcome.pendingLegacyCanonUniverses = legacyCanonPendingUniverses;
     if (legacyCanonPendingFailures) outcome.pendingLegacyCanonFailures = legacyCanonPendingFailures;
     if (recordImportFailures) outcome.pendingRecordImportFailures = recordImportFailures;
     if (reviewMergeFailures) outcome.pendingReviewMergeFailures = reviewMergeFailures;
+    if (outlineMergeFailures) outcome.pendingOutlineMergeFailures = outlineMergeFailures;
     sharingEvents.emit('manifest-processed', { bucketId, manifestId: manifest.id, manifestFilename, outcome });
-    console.log(`⏳ sharing: bucket=${bucket.name} manifest=${manifest.id} kind=${manifest.kind} mode=${bucket.mode} waitingForAssets=${assetCopy.missing.length} waitingForRecords=${missingRecords.length}${missingReviews.length > 0 ? ` waitingForReviews=${missingReviews.length}` : ''}${collectionPendingUniverse ? ` waitingForUniverse=${collectionPendingUniverse}` : ''}${collectionPendingSeries ? ` waitingForSeries=${collectionPendingSeries}` : ''}${legacyCanonPendingUniverses ? ` waitingForLegacyCanonUniverses=${legacyCanonPendingUniverses.join(',')}` : ''}${legacyCanonPendingFailures ? ` legacyCanonFailures=${legacyCanonPendingFailures.join(',')}` : ''}${recordImportFailures ? ` recordImportFailures=${recordImportFailures.join(',')}` : ''}${reviewMergeFailures ? ` reviewMergeFailures=${reviewMergeFailures.join(',')}` : ''}`);
+    console.log(`⏳ sharing: bucket=${bucket.name} manifest=${manifest.id} kind=${manifest.kind} mode=${bucket.mode} waitingForAssets=${assetCopy.missing.length} waitingForRecords=${missingRecords.length}${missingReviews.length > 0 ? ` waitingForReviews=${missingReviews.length}` : ''}${missingOutlines.length > 0 ? ` waitingForOutlines=${missingOutlines.length}` : ''}${collectionPendingUniverse ? ` waitingForUniverse=${collectionPendingUniverse}` : ''}${collectionPendingSeries ? ` waitingForSeries=${collectionPendingSeries}` : ''}${legacyCanonPendingUniverses ? ` waitingForLegacyCanonUniverses=${legacyCanonPendingUniverses.join(',')}` : ''}${legacyCanonPendingFailures ? ` legacyCanonFailures=${legacyCanonPendingFailures.join(',')}` : ''}${recordImportFailures ? ` recordImportFailures=${recordImportFailures.join(',')}` : ''}${reviewMergeFailures ? ` reviewMergeFailures=${reviewMergeFailures.join(',')}` : ''}${outlineMergeFailures ? ` outlineMergeFailures=${outlineMergeFailures.join(',')}` : ''}`);
     return { processed: true, pending: true, manifest, outcome };
   }
   await markProcessed(bucketId, manifestFilename, manifest.id);
@@ -1153,6 +1195,14 @@ export async function promoteInboxItem(bucketId, manifestId) {
       missingReviews,
     });
   }
+  // Same out-of-order delivery guard for the reverse-outline sibling doc (#1348).
+  const missingOutlines = await missingDeclaredOutlines(bucket.path, manifest);
+  if (missingOutlines.length > 0) {
+    throw Object.assign(new Error(`Manifest outlines are still syncing (${missingOutlines.length} missing)`), {
+      code: 'SHARING_OUTLINES_PENDING',
+      missingOutlines,
+    });
+  }
   await mergeMediaJobRecords(bucket.path, manifest.recordIds);
   const availableAssetKeys = new Set(assetCopy.available.map((ref) => `${ref.kind}:${ref.ref}`));
   const outcome = await applyAutoMerge(bucket, manifest, records, { availableAssetKeys });
@@ -1203,6 +1253,14 @@ export async function promoteInboxItem(bucketId, manifestId) {
     throw Object.assign(new Error(`Manuscript-review merge failed for ${outcome.reviewMergeFailures.join(', ')} — retry after resolving the underlying error`), {
       code: 'SHARING_REVIEW_MERGE_FAILED',
       reviewMergeFailures: outcome.reviewMergeFailures,
+    });
+  }
+  // Same for a transient reverse-outline merge failure (#1348) — the outline has
+  // no independent reconciliation cycle either, so keep the inbox row for retry.
+  if (outcome.outlineMergeFailures) {
+    throw Object.assign(new Error(`Reverse-outline merge failed for ${outcome.outlineMergeFailures.join(', ')} — retry after resolving the underlying error`), {
+      code: 'SHARING_OUTLINE_MERGE_FAILED',
+      outlineMergeFailures: outcome.outlineMergeFailures,
     });
   }
   // Drop from inbox.

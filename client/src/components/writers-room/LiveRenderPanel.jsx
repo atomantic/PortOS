@@ -67,12 +67,15 @@ export default function LiveRenderPanel({
   const scenes = useMemo(() => (Array.isArray(ctx.scenes) ? ctx.scenes : []), [ctx.scenes]);
   const imageCfg = ctx.imageCfg || WR_IMAGE_DEFAULTS;
 
-  // Persist a finished render onto the script analysis (best-effort, mirroring
-  // SceneCard) AND fold the returned sceneImages map up so the storyboard
-  // updates reactively without a refetch. Shared by the socket-completion path
-  // and the fast synchronous-completion path. Takes a job snapshot so it never
-  // reads live state. { silent: true } because we own the error UI here (a
-  // console.warn) — without it the helper would also toast.
+  // Persist a finished render onto the script analysis AND fold the returned
+  // sceneImages map up so the storyboard updates reactively without a refetch.
+  // Used ONLY by the fast synchronous-completion path (external SD-API), which
+  // returns its filename inline and never rides the media-job queue the
+  // server-side writersRoomSceneImageHook listens to (#1363). The async
+  // local/Codex lanes file durably via that hook and refresh the boards through
+  // the `writers-room:scene-image` socket event below — no client round-trip.
+  // Takes a job snapshot so it never reads live state. { silent: true } because
+  // we own the error UI here (a console.warn) — without it the helper would also toast.
   const persistAttach = useCallback((job) => {
     if (!workId || !job?.analysisId || !job.jobId || !job.sceneId) return;
     attachWritersRoomSceneImage(workId, job.analysisId, {
@@ -103,9 +106,10 @@ export default function LiveRenderPanel({
       if (!job || data.generationId !== job.jobId) return;
       pendingJobRef.current = null;
       if (mountedRef.current) setGenStatus('idle');
-      // Prefer the prompt captured at kickoff (queued completion events from
-      // local/codex don't echo the prompt); fall back to the event's if present.
-      persistAttach({ ...job, prompt: job.prompt || data.prompt });
+      // The async render's durable attach is filed server-side by
+      // writersRoomSceneImageHook off this job's `writersRoom` tag (#1363); the
+      // boards refresh via the `writers-room:scene-image` event below, so there's
+      // no client attach here. Button state only.
     };
     const onFailed = (data) => {
       const job = pendingJobRef.current;
@@ -113,15 +117,28 @@ export default function LiveRenderPanel({
       pendingJobRef.current = null;
       if (mountedRef.current) setGenStatus('idle');
     };
+    // The hook fires `writers-room:scene-image` once an async render lands on the
+    // analysis snapshot — fold that entry up so the boards update reactively.
+    // Gate on workId (the event is broadcast to every client); the downstream
+    // merge guards on analysis id, so a stale analysisId is dropped there.
+    const onSceneImage = (data) => {
+      if (!data || data.workId !== workId || !data.analysisId || !data.sceneId) return;
+      if (mountedRef.current) {
+        onAttachedRef.current?.({ id: data.analysisId, sceneImages: { [data.sceneId]: data.image } });
+      }
+    };
     socket.on('image-gen:completed', onCompleted);
     socket.on('image-gen:failed', onFailed);
+    socket.on('writers-room:scene-image', onSceneImage);
     return () => {
       socket.off('image-gen:completed', onCompleted);
       socket.off('image-gen:failed', onFailed);
+      socket.off('writers-room:scene-image', onSceneImage);
     };
-    // The job snapshot is read from pendingJobRef (set at kickoff); persistAttach
-    // is identity-stable, so this effect binds once.
-  }, [persistAttach, mountedRef]);
+    // The job snapshot is read from pendingJobRef (set at kickoff); the attach
+    // bridge is read through onAttachedRef. Re-bind when workId changes so the
+    // scene-image gate matches the current work.
+  }, [mountedRef, workId]);
 
   const renderCursorScene = useCallback(async () => {
     if (reserving || genStatus === 'running') return;
@@ -169,6 +186,7 @@ export default function LiveRenderPanel({
       prompt,
       negativePrompt: ctx.imageStyle?.negativePrompt || '',
       imageCfg,
+      writersRoom: { workId, analysisId, sceneId: scene.id },
     }), { silent: true }).catch((err) => {
       if (mountedRef.current) {
         toast.error(`Render failed: ${err.message}`);

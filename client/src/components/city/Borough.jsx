@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { getBuildingHeight, BOROUGH_PARAMS, cityDayMix, cityShowDetail } from './cityConstants';
+import { getBuildingHeight, BOROUGH_PARAMS, cityDayMix, cityShowDetail, cityShowInteriorWindows } from './cityConstants';
 import { hashString } from '../../utils/hashString';
 import Building from './Building';
 import AgentEntity from './AgentEntity';
@@ -47,6 +47,7 @@ export default function Borough({ app, position, agentMap, onBuildingClick, play
         onClick={() => onBuildingClick?.(app)}
         playSfx={playSfx}
         rooftops={cityShowDetail(settings)}
+        interiorWindows={cityShowInteriorWindows(settings)}
         neonBrightness={neonBrightness}
         isProximity={isProximity}
         dimmed={dimmed}

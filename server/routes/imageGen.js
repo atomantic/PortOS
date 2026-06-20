@@ -12,7 +12,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { unlink, stat } from 'fs/promises';
-import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
 import {
   validateRequest, imageEdgeSchema, refineImagePixelCap, PIXEL_CAP_MESSAGE,
 } from '../lib/validation.js';
@@ -24,7 +24,7 @@ import { getSettings, updateSettingsWith } from '../services/settings.js';
 import { getHfToken, getHfTokenInfo, HF_TOKEN_REGEX } from '../lib/hfToken.js';
 import { getImageModels, isFlux2, isEditOnly, repoForModel, requiredReposForModel } from '../lib/mediaModels.js';
 import { usesDiffusersRunner } from '../lib/runners.js';
-import { inspectModelCache } from '../lib/hfCache.js';
+import { inspectModelCache, verifyModelCache, repairModelCache, aggregateVerifies } from '../lib/hfCache.js';
 import { startHfDownloadStream, openSseStream } from '../lib/sseDownload.js';
 import {
   REQUIRED_PACKAGES, detectPython, installPackages,
@@ -43,6 +43,10 @@ import {
   resolveRegenStrengthDefault,
 } from '../services/imageGen/regen.js';
 import { purgeImageRefFromAllUniverses } from '../services/universeCanon.js';
+import { findOrCreateUniverseCollection } from '../services/mediaCollections.js';
+import * as characterService from '../services/character.js';
+import { randomUUID } from 'crypto';
+import { buildUniverseRunTag } from '../services/universeRunTag.js';
 
 const router = Router();
 
@@ -99,6 +103,62 @@ const generateSchema = z.object({
   cleanC2PA: z.boolean().optional(),
   denoise: z.boolean().optional(),
   autoClean: z.boolean().optional(),
+  // Optional universe-collection target. When present, the route resolves the
+  // universe's media collection server-side and tags the queued job so
+  // `universeBuilderCollectionHook` files the finished render into that
+  // collection — the same auto-filing path batch renders and character
+  // reference sheets use. The client passes only the universe identity (never
+  // a collectionId — that's server-resolved), so the front-end does no
+  // collection bookkeeping. The base-style probe (StyleProbeImage) and the
+  // Universe canon section-local renders (#1395) are the callers; JSON-only
+  // (the multipart ImageGen page never sends it).
+  universeRun: z.object({
+    universeId: z.string().min(1).max(200),
+    universeName: z.string().min(1).max(200),
+    label: z.string().max(200).optional(),
+    category: z.string().max(64).optional(),
+    // Section-local canon renders (#1395) tag the target entry so the
+    // completion hook durably appends the render to its `imageRefs[]` even
+    // after the originating page unmounts — converging these renders onto the
+    // same durable path batch renders use. Shape mirrors the batch path's
+    // entryRef (server/services/universeBuilder.js `ENTRY_REF_KIND`).
+    entryRef: z.object({
+      kind: z.enum(['canon', 'variation', 'sheet']),
+      kindKey: z.string().min(1).max(64).optional(),
+      categoryKey: z.string().min(1).max(64).optional(),
+      id: z.string().min(1).max(200),
+    }).refine(
+      // Each kind needs its locating key, else appendEntryImageRef silently
+      // no-ops: canon→kindKey, variation→categoryKey (sheet needs neither).
+      (r) => (r.kind === 'canon' ? !!r.kindKey : r.kind === 'variation' ? !!r.categoryKey : true),
+      { message: 'entryRef requires its locating key (canon→kindKey, variation→categoryKey)' },
+    ).optional(),
+  }).optional(),
+  // Writers-Room storyboard scene render (#1363). When present, the mediaJobQueue
+  // completion hook (`writersRoomSceneImageHook`) files the finished render onto
+  // the analysis snapshot's `sceneImages[sceneId]` AND mirrors it into the work's
+  // auto-collection — durably, even if the editor unmounted mid-render (the
+  // "navigated away → image never attached" failure mode the synchronous attach
+  // suffered). Only the async local/Codex lanes ride the queue this hook listens
+  // to; the synchronous external SD-API lane still attaches via the scene-image
+  // route. The scene prompt is read from the job's own `prompt` param, so the tag
+  // carries only the destination identity. JSON-only (the multipart ImageGen page
+  // never sends it).
+  writersRoom: z.object({
+    workId: z.string().min(1).max(200),
+    analysisId: z.string().min(1).max(200),
+    sceneId: z.string().min(1).max(200),
+  }).optional(),
+  // Durable catalog attach (#1359). When present, the mediaJobQueue completion
+  // hook (catalogImageAttachHook) files the finished render onto this catalog
+  // ingredient even if the page that started the render has since unmounted —
+  // so a long queued local/Codex render is no longer lost to navigation.
+  // `catalogMediaKind` forces portrait/reference; omitted = auto (first image →
+  // portrait, later → reference, mirroring the client's optimistic path). Only
+  // the async (local/codex) lanes need this — the synchronous external SD-API
+  // path returns the filename to the client, which attaches it directly.
+  catalogIngredientId: z.string().min(1).max(200).optional(),
+  catalogMediaKind: z.enum(['portrait', 'reference']).optional(),
 }).refine(refineImagePixelCap, { message: PIXEL_CAP_MESSAGE, path: ['width'] });
 
 // JSON callers (SDAPI bridge, avatar route, the Imagine page's old payload
@@ -165,6 +225,18 @@ const avatarSchema = z.object({
   name: z.string().max(100).optional(),
   characterClass: z.string().max(100).optional(),
   prompt: z.string().max(2000).optional(),
+  // When set, the route persists the rendered path onto the singleton
+  // character record itself (the character store has no id), so the client
+  // skips the follow-up PUT /api/character round-trip.
+  persistToCharacter: z.boolean().optional(),
+});
+
+// Upload a user-supplied image straight into the gallery (`data/images/`) so it
+// rides the existing `image` peer-sync asset path. `data` is base64 (no data:
+// URI prefix); the real format is sniffed server-side, so the schema only caps
+// the encoded string length (~16MB decoded ≈ 21.8M base64 chars).
+const uploadImageSchema = z.object({
+  data: z.string().min(1).max(24 * 1024 * 1024),
 });
 
 // SynthID-defeat regen (issue #912). Body is optional — every field defaults
@@ -238,6 +310,42 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
     files: req.files,
     referenceImageFields: REFERENCE_IMAGE_FIELDS,
   });
+
+  // Resolve an optional universe-collection target into a job tag the
+  // completion hook understands. Done server-side so a base-style probe lands
+  // in the same "Universe: <name>" bucket as batch renders without the
+  // front-end doing any collection bookkeeping. Best-effort: a provisioning
+  // failure drops the tag and the render still proceeds (it just won't
+  // auto-file) rather than failing the user's generation over a side-effect.
+  if (params.universeRun?.universeId) {
+    const { universeId, universeName, label, category, entryRef } = params.universeRun;
+    // The helper provisions the universe collection (best-effort) and assembles
+    // the tag. It preserves `entryRef` even when provisioning fails — the
+    // durable `imageRefs[]` append (#1395) must not depend on the gallery
+    // collection existing — and returns `undefined` (dropping the tag) only
+    // when there's nothing left to do (no collection AND no entryRef).
+    params.universeRun = await buildUniverseRunTag({
+      universeId,
+      universeName,
+      label,
+      category,
+      entryRef,
+      errorContext: 'image-gen → universe collection provision failed',
+    });
+  }
+
+  // Collapse the catalog-attach params into a single job tag the completion
+  // hook understands (#1359). Folded into `params` so it rides into both the
+  // local and codex `enqueueJob` branches below via `...params`; the raw fields
+  // are dropped so persisted job.params carries only the canonical tag.
+  if (params.catalogIngredientId) {
+    params.catalogAttach = {
+      ingredientId: params.catalogIngredientId,
+      ...(params.catalogMediaKind ? { kind: params.catalogMediaKind } : {}),
+    };
+  }
+  delete params.catalogIngredientId;
+  delete params.catalogMediaKind;
 
   // Multer's tmp upload is no longer needed once we've copied it into
   // PATHS.images. Use res.on('close') so the temp files are cleaned up whether
@@ -331,7 +439,23 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
 
 router.post('/avatar', asyncHandler(async (req, res) => {
   const data = validateRequest(avatarSchema, req.body);
-  res.json(await imageGen.generateAvatar(data));
+  const result = await imageGen.generateAvatar(data);
+  // `result.path` is server-generated as `/data/images/<file>` (the same value
+  // the client previously round-tripped through PUT /api/character), so it's
+  // safe to persist directly without re-validating against the path regex.
+  if (data.persistToCharacter && result?.path) {
+    await characterService.setAvatar(result.path);
+  }
+  res.json(result);
+}));
+
+// Save an uploaded image into the gallery dir so callers (e.g. author
+// headshots) get a `/data/images/<f>` URL that the peer-sync `image` asset
+// path can transfer — unlike `/api/uploads/<f>`, which is not a pullable
+// asset kind and 404s on a peer.
+router.post('/upload', asyncHandler(async (req, res) => {
+  const { data } = validateRequest(uploadImageSchema, req.body);
+  res.json(await local.saveUploadedGalleryImage(data));
 }));
 
 // Local-only: list image models and LoRAs the local backend can use.
@@ -358,9 +482,55 @@ router.get('/models/status', asyncHandler(async (_req, res) => {
     const cached = inspections.every((i) => i.cached);
     const sizeBytes = inspections.reduce((sum, i) => sum + (i.sizeBytes || 0), 0);
     const pendingRepos = required.filter((_, i) => !inspections[i].cached);
-    return { id: m.id, repo: required[0], cached, sizeBytes, requiredRepos: required, pendingRepos };
+    // Integrity is only meaningful for repos that finished downloading — run
+    // the cheap structural check across every cached required repo and report
+    // the worst result, so a corrupt aux encoder still surfaces a Repair state.
+    const integrity = cached ? aggregateVerifies(await Promise.all(required.map((r) => verifyModelCache(r)))) : null;
+    return { id: m.id, repo: required[0], cached, sizeBytes, requiredRepos: required, pendingRepos, integrity };
   }));
   res.json(statuses);
+}));
+
+// POST /models/verify — on-demand integrity re-scan. `deep:true` adds the
+// per-file sha256 comparison on top of the structural check. With no `modelId`
+// it scans every model.
+const verifyImageBodySchema = z.object({
+  modelId: z.string().min(1).optional(),
+  deep: z.boolean().optional(),
+});
+router.post('/models/verify', asyncHandler(async (req, res) => {
+  const parsed = verifyImageBodySchema.safeParse(req.body || {});
+  if (!parsed.success) failValidation(parsed);
+  const { modelId, deep = false } = parsed.data;
+  const models = getImageModels().filter((m) => (modelId ? m.id === modelId : true));
+  if (modelId && models.length === 0) {
+    throw new ServerError(`Unknown model id: ${modelId}`, { status: 404, code: 'UNKNOWN_MODEL' });
+  }
+  const results = await Promise.all(models.map(async (m) => {
+    const required = requiredReposForModel(m) || [];
+    const verifies = await Promise.all(required.map((r) => verifyModelCache(r, { deep })));
+    return { id: m.id, ...(aggregateVerifies(verifies) || { status: 'missing', checkedDeep: deep, badFiles: [] }) };
+  }));
+  res.json({ deep, models: results });
+}));
+
+// POST /models/:modelId/repair — delete the flagged weight files across the
+// model's required repos so the existing resumable HF fetch path re-downloads
+// them. Returns the deleted-file list; the client then re-triggers the normal
+// download SSE to pull clean copies with progress.
+router.post('/models/:modelId/repair', asyncHandler(async (req, res) => {
+  const model = getImageModels().find((m) => m.id === req.params.modelId);
+  if (!model) throw new ServerError(`Unknown model id: ${req.params.modelId}`, { status: 404, code: 'UNKNOWN_MODEL' });
+  const parsed = z.object({ deep: z.boolean().optional() }).safeParse(req.body || {});
+  if (!parsed.success) failValidation(parsed);
+  const deep = parsed.data.deep || false;
+  const required = requiredReposForModel(model);
+  if (!required) {
+    throw new ServerError(`Model "${model.id}" has no HuggingFace repo on file.`, { status: 400, code: 'NO_REPO_FOR_MODEL' });
+  }
+  const repaired = await Promise.all(required.map((repo) => repairModelCache(repo, { deep })));
+  const deleted = repaired.flatMap((r) => r.deleted.map((name) => ({ repo: r.repoId, name })));
+  res.json({ deep, deleted, repos: required });
 }));
 
 // SSE-driven model download. Cancels the python child if the client
@@ -381,8 +551,9 @@ router.get('/models/:modelId/download', asyncHandler(async (req, res) => {
   }
   // Sequentially fetch every required repo (main + aux text encoders for
   // HiDream). The SSE stream tags each event with `repo` so the client can
-  // show per-repo progress / log lines.
-  await startHfDownloadStream({ req, res, repos });
+  // show per-repo progress / log lines. `?force=1` (repair-initiated) re-fetches
+  // even when the repo still looks cached, so a deleted shard isn't skipped.
+  await startHfDownloadStream({ req, res, repos, force: req.query.force === '1' });
 }));
 
 router.get('/loras', asyncHandler(async (_req, res) => {

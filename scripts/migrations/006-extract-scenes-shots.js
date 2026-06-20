@@ -10,11 +10,18 @@
 import { makePromptReplaceMigration } from './_lib.js';
 
 export const ACCEPTED_OLD_MD5 = {
-  'pipeline-extract-scenes.md': ['59fa5ee305ce53d91eb15224d8b546d3'],
+  'pipeline-extract-scenes.md': [
+    '59fa5ee305ce53d91eb15224d8b546d3', // pre-006 (original, no shots[])
+    'c51fb208568d0d903eb43b437478b0ba', // post-006 / pre-114 — the hash this migration originally produced
+  ],
 };
 
+// Tracks the LATEST shipped body. Bumped to the post-114 hash (shot-grammar
+// fields) so this migration still upgrades a post-006/pre-114 install straight
+// to current rather than classifying it "customized". The intermediate hash
+// moved to ACCEPTED_OLD_MD5 above. See migration 114.
 export const NEW_SHIPPED_MD5 = {
-  'pipeline-extract-scenes.md': 'c51fb208568d0d903eb43b437478b0ba',
+  'pipeline-extract-scenes.md': '9f404b0c4721b23932a6d2dcfc1fba43', // post-114 (shotType + screenDirection)
 };
 
 const { applyMigration, up } = makePromptReplaceMigration({

@@ -26,6 +26,8 @@ import {
 } from '../../../services/api';
 import { getSettings, patchSettingsSlice } from '../../../services/apiSystem';
 import { listImageModels } from '../../../services/apiImageVideo';
+import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
+import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 import MediaJobThumb from '../MediaJobThumb';
 import MediaPreview from '../../media/MediaPreview';
 import usePreviewRoute from '../../../hooks/usePreviewRoute';
@@ -38,6 +40,30 @@ import {
   readPipelineImageSettings,
   pipelineImageCfgToRenderOpts,
 } from '../../../lib/pipelineImageDefaults';
+import { analyzeComicLettering } from '../../../lib/letteringDensity';
+
+// Severity → Tailwind text color for the inline lettering warnings. Mirrors the
+// editorial check's overflow-scaled severity.
+const LETTERING_TONE = { high: 'text-port-error', medium: 'text-port-warning', low: 'text-gray-400' };
+
+// A short, page-row-scoped label for a lettering violation (the same accounting
+// the server `comic.lettering-density` check surfaces in the manuscript editor —
+// here it's shown inline as the author edits, using the default thresholds).
+function letteringWarningLabel(v) {
+  switch (v.kind) {
+    case 'balloon-words':
+      return `Panel ${v.panelNumber}: a balloon runs ${v.count} words (over ~${v.threshold})`;
+    case 'caption-words':
+      return `Panel ${v.panelNumber}: a caption box runs ${v.count} words (over ~${v.threshold})`;
+    case 'panel-words':
+      return `Panel ${v.panelNumber}: ${v.count} words of lettering (over ~${v.threshold})`;
+    case 'panel-balloons':
+      return `Panel ${v.panelNumber}: ${v.count} balloons (over ~${v.threshold})`;
+    case 'page-words':
+    default:
+      return `Page total ${v.count} words of lettering (over ~${v.threshold}) — would overwhelm the art`;
+  }
+}
 
 // Legacy records (pre-proof/final split) carry `imageJobId`/`filename` at
 // the record root; surface those as the proof slot so the UI keeps showing
@@ -162,6 +188,12 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
   const comicPages = issue.stages?.comicPages || { status: 'empty', pages: [] };
   const pages = Array.isArray(comicPages.pages) ? comicPages.pages : [];
   const hasScript = !!(script.output || '').trim();
+  // Page-delete confirmation is owned here, not per-PageRow: pages are keyed
+  // and deleted by array index, so a single shared "armed page" guarantees
+  // only one delete is armed at a time — without it, arming two pages then
+  // confirming one shifts the indices and the still-armed confirm would point
+  // at (and delete) the wrong page.
+  const { isConfirming: isPageConfirmingDelete, requestDelete: requestPageDelete, cancelDelete: cancelPageDelete, confirmDelete: confirmPageDelete } = useConfirmDelete();
 
   const [localGenerating, setLocalGenerating] = useState(false);
   const [serverGenerating, setServerGenerating] = useState(script.status === 'generating');
@@ -710,6 +742,10 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
             onStageUpdate={onStageUpdate}
             onPreview={openPreview}
             onFilenameKnown={onFilenameKnown}
+            confirmingDelete={isPageConfirmingDelete(pi)}
+            onArmDelete={() => requestPageDelete(pi)}
+            onCancelDelete={cancelPageDelete}
+            onConfirmDelete={confirmPageDelete}
           />
         ))}
       </ul>
@@ -747,10 +783,19 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
 function PageRow({
   issue, pageIndex, page, renderOpts = {},
   onStageUpdate, onPreview, onFilenameKnown,
+  confirmingDelete, onArmDelete, onCancelDelete, onConfirmDelete,
 }) {
   const rawText = useMemo(
     () => page.rawText || panelsToMarkdown(page.panels, pageIndex + 1),
     [page.rawText, page.panels, pageIndex],
+  );
+  // Inline lettering-density warnings (#1313): the same pure accounting the
+  // server `comic.lettering-density` editorial check runs, computed here from the
+  // parsed panels so over-stuffed panels surface in the comic-script stage itself,
+  // not only after an editorial-checks run. Uses the default thresholds.
+  const letteringWarnings = useMemo(
+    () => analyzeComicLettering([{ panels: page.panels }]),
+    [page.panels],
   );
   const [draft, setDraft] = useState(rawText);
   const [saving, setSaving] = useState(false);
@@ -875,17 +920,37 @@ function PageRow({
             {(renderingFinal || finalInFlight) ? <Loader2 size={12} className="animate-spin" /> : <Layers size={12} />}
             Final
           </button>
-          <button
-            type="button"
-            onClick={handleDelete}
-            className="p-1 text-gray-500 hover:text-port-error"
-            aria-label={`Delete page ${pageIndex + 1}`}
-            title="Delete page"
-          >
-            <Trash2 size={12} />
-          </button>
+          {confirmingDelete ? (
+            <ConfirmButtonPair
+              prompt="Delete page?"
+              onConfirm={() => onConfirmDelete(handleDelete)}
+              onCancel={onCancelDelete}
+              ariaLabel={`Confirm delete page ${pageIndex + 1}`}
+            />
+          ) : (
+            <button
+              type="button"
+              onClick={onArmDelete}
+              className="p-1 text-gray-500 hover:text-port-error"
+              aria-label={`Delete page ${pageIndex + 1}`}
+              title="Delete page"
+            >
+              <Trash2 size={12} />
+            </button>
+          )}
         </div>
       </div>
+      {letteringWarnings.length > 0 ? (
+        <div className="px-3 pt-2">
+          <ul className="rounded border border-port-warning/30 bg-port-warning/5 px-2.5 py-1.5 space-y-0.5">
+            {letteringWarnings.map((v, i) => (
+              <li key={i} className={`text-[11px] ${LETTERING_TONE[v.severity] || 'text-gray-400'}`}>
+                ⚠ Lettering — {letteringWarningLabel(v)}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
       <div className="grid md:grid-cols-2 gap-3 p-3">
         <textarea
           value={draft}

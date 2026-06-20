@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from train_mflux_lora import (  # noqa: E402
     is_preview_progress_bar,
     compute_effective_total,
+    format_runtime_fingerprint_line,
     TQDM_RE,
     STEP_LOSS_RE,
 )
@@ -99,6 +100,34 @@ with tempfile.TemporaryDirectory() as d:
 # Unexpected shape → falls back to the requested count.
 check("compute_effective_total falls back on bad config",
       compute_effective_total({}, 777) == 777)
+
+# --- format_runtime_fingerprint_line: one-line startup stack fingerprint -------
+# Full stack as the M5 panic reports capture it.
+full_fp = {
+    "runtime": "mflux-lora",
+    "versions": {"mflux": "0.17.5", "mlx": "0.30.6", "mlx-metal": "0.30.6", "mlx-lm": "0.29.1"},
+    "chip": "Apple M5 Max",
+    "os": "macOS-26.5.1-arm64-arm-64bit",
+    "python": "3.11.9",
+}
+full_line = format_runtime_fingerprint_line(full_fp)
+check("fingerprint line is a single STATUS line",
+      full_line.startswith("STATUS:runtime · ") and "\n" not in full_line)
+check("fingerprint line carries the mflux/mlx/mlx-metal/mlx-lm versions",
+      all(s in full_line for s in ("mflux 0.17.5", "mlx 0.30.6", "mlx-metal 0.30.6", "mlx-lm 0.29.1")))
+check("fingerprint line carries chip/os/python",
+      all(s in full_line for s in ("Apple M5 Max", "macOS-26.5.1-arm64-arm-64bit", "python 3.11.9")))
+
+# Absent packages omitted by the builder → line still renders, no crash, no empty
+# fragment for the missing pin.
+partial_line = format_runtime_fingerprint_line({"versions": {"mflux": "0.17.5"}, "chip": "Apple M5 Max"})
+check("partial fingerprint omits absent packages cleanly",
+      "mflux 0.17.5" in partial_line and "mlx " not in partial_line and "· ·" not in partial_line)
+
+# Empty dict (everything failed to resolve) → still a single, non-throwing line.
+empty_line = format_runtime_fingerprint_line({})
+check("empty fingerprint degrades to a 'versions unavailable' line",
+      empty_line == "STATUS:runtime · versions unavailable")
 
 print()
 if FAILS:

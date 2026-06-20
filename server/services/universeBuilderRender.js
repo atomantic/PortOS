@@ -14,6 +14,7 @@ import * as svc from './universeBuilder.js';
 import { enqueueJob } from './mediaJobQueue/index.js';
 import { getSettings } from './settings.js';
 import { findOrCreateUniverseCollection } from './mediaCollections.js';
+import { buildUniverseRunTag } from './universeRunTag.js';
 import { registerUniverseBuilderRun } from './universeBuilderCollectionHook.js';
 import { getImageModels, isFlux2 } from '../lib/mediaModels.js';
 import { usesDiffusersRunner } from '../lib/runners.js';
@@ -160,15 +161,17 @@ export async function renderUniverseJobs(universeId, body, mapServiceError) {
       // through the current sanitizer) lets the hook also append the
       // rendered filename to the source variation/sheet/canon entry's
       // `imageRefs[]` so the Universe Builder can show the latest render
-      // as an avatar next to each item.
-      universeRun: {
-        runId,
+      // as an avatar next to each item. The pre-resolved `collection` +
+      // shared `runId` are passed so each per-item tag reuses them without
+      // re-provisioning the collection.
+      universeRun: await buildUniverseRunTag({
         universeId: universe.id,
-        collectionId: collection.id,
+        collection,
+        runId,
         category: item.category,
         label: item.label,
-        ...(item.entryRef ? { entryRef: item.entryRef } : {}),
-      },
+        entryRef: item.entryRef,
+      }),
     };
     let queued;
     // The queue dispatches directly to imageGen/{codex,local}.generateImage,

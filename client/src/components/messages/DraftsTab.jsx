@@ -2,10 +2,13 @@ import { useState, useEffect, useCallback } from 'react';
 import { FileText, Trash2, Send, Check, RefreshCw } from 'lucide-react';
 import toast from '../ui/Toast';
 import * as api from '../../services/api';
+import InlineConfirmRow from '../ui/InlineConfirmRow';
+import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 
 export default function DraftsTab({ accounts }) {
   const [drafts, setDrafts] = useState([]);
   const [loading, setLoading] = useState(true);
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
   const fetchDrafts = useCallback(async () => {
     setLoading(true);
@@ -110,7 +113,7 @@ export default function DraftsTab({ accounts }) {
                 )}
                 {['draft', 'pending_review', 'failed'].includes(draft.status) && (
                   <button
-                    onClick={() => handleDelete(draft.id)}
+                    onClick={() => requestDelete(draft.id)}
                     className="p-1 text-gray-400 hover:text-port-error transition-colors"
                     title="Delete"
                   >
@@ -126,6 +129,16 @@ export default function DraftsTab({ accounts }) {
             <div className="text-sm text-gray-400 whitespace-pre-wrap line-clamp-3">
               {draft.body}
             </div>
+            {isConfirming(draft.id) && (
+              <InlineConfirmRow
+                question="Delete this draft? This cannot be undone."
+                confirmText="Delete"
+                confirmTitle="Delete draft"
+                cancelTitle="Cancel"
+                onConfirm={() => confirmDelete(() => handleDelete(draft.id))}
+                onCancel={cancelDelete}
+              />
+            )}
           </div>
         ))}
       </div>

@@ -13,7 +13,7 @@ import {
   Plus, Trash2, Sparkles, Wand2, Loader2, Save, FolderOpen,
   Edit3, X, MessageSquarePlus, Play, Lock, Unlock,
   ArrowUpCircle, ArrowLeft,
-  BookOpen, Users, MapPin, Package, Layers, ImagePlus, FolderTree,
+  BookOpen, Users, MapPin, Package, Layers, ImagePlus, FolderTree, Images,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import {
@@ -32,11 +32,14 @@ import useUniverseAction from '../hooks/useUniverseAction';
 import { useUniverseNav } from '../hooks/useUniverseNav';
 import InfluenceChipsInput from '../components/universeBuilder/InfluenceChipsInput';
 import ProviderModelSelector from '../components/ProviderModelSelector';
+import VisionProviderPicker from '../components/universe/VisionProviderPicker';
+import GalleryImagePicker from '../components/imageGen/GalleryImagePicker';
 import ImageGenSettingsForm from '../components/imageGen/ImageGenSettingsForm';
 import { RUNNER_FAMILIES, loraCompatKey } from '../lib/runnerFamilies';
 import ShareToButton from '../components/sharing/ShareToButton';
 import SyncToPeerButton from '../components/sharing/SyncToPeerButton';
 import OriginBadge from '../components/sharing/OriginBadge';
+import MoodBoardReferenceStrip from '../components/moodBoard/MoodBoardReferenceStrip';
 import UniverseCanonSection from '../components/universe/UniverseCanonSection';
 import StyleProbeImage from '../components/universe/StyleProbeImage';
 import EntryCard from '../components/universe/EntryCard';
@@ -54,20 +57,10 @@ import { hasCanonDescriptorContent, descriptorForCanonEntry } from '../lib/canon
 import { listSheetPointers } from '../lib/sheetPointers';
 import { upsertByIdPrepend } from '../lib/upsertByIdPrepend';
 import { sameJsonShape } from '../lib/sameJsonShape';
-import { BIBLE_LIMITS } from '../lib/bibleLimits';
+import { capImageRefs } from '../lib/bibleLimits';
 import {
   mergeVariations, mergeCanonByName, mergeExpandIntoDraft, extractPreservedFromDraft,
 } from '../lib/universeBuilderExpand';
-
-// Mirror of server-side appendEntryImageRef cap (most recent N wins). Used
-// so optimistic on-completion appends produce the same final array shape
-// the server would, preventing a brief window where a save round-trip
-// could reorder the visible thumbnails.
-const capImageRefs = (refs) => (
-  refs.length > BIBLE_LIMITS.IMAGE_REFS_PER_ENTRY_MAX
-    ? refs.slice(-BIBLE_LIMITS.IMAGE_REFS_PER_ENTRY_MAX)
-    : refs
-);
 
 const CATEGORY_LABELS = {
   landscapes: 'Landscapes',
@@ -673,12 +666,16 @@ export default function UniverseBuilder() {
   const [refining, setRefining] = useState(false);
   const [refineRationale, setRefineRationale] = useState('');
   const [refineChanges, setRefineChanges] = useState([]);
+  // Optional gallery image used as a visual style reference for refinement —
+  // { filename, preview }. When set, the server refines through a vision model.
+  const [refineImage, setRefineImage] = useState(null);
 
   const resetRefinePanel = () => {
     setRefineOpen(false);
     setRefineFeedback('');
     setRefineRationale('');
     setRefineChanges([]);
+    setRefineImage(null);
   };
 
   const refresh = async () => {
@@ -1104,7 +1101,7 @@ export default function UniverseBuilder() {
     }
   };
 
-  const runRefine = async () => {
+  const runRefine = async (visionOverride = null) => {
     const feedback = refineFeedback.trim();
     if (!feedback) {
       toast.error('Add feedback to refine');
@@ -1135,8 +1132,17 @@ export default function UniverseBuilder() {
       compositeSheets: hasStructure ? draft.compositeSheets : undefined,
       locked: locks,
       feedback,
-      providerId: draft.llm?.provider || activeProviderId || undefined,
-      model: draft.llm?.model || undefined,
+      image: refineImage?.filename || undefined,
+      // With a style-reference image the server forces a vision-capable API
+      // provider, so use the form's vision picker selection (not the universe's
+      // default expansion LLM, which may be a text-only/CLI provider). Without
+      // an image, keep the universe's configured LLM.
+      providerId: refineImage
+        ? (visionOverride?.providerId || undefined)
+        : (draft.llm?.provider || activeProviderId || undefined),
+      model: refineImage
+        ? (visionOverride?.model || undefined)
+        : (draft.llm?.model || undefined),
     }).catch(() => null);
     setRefining(false);
     if (!result) return;
@@ -1165,6 +1171,7 @@ export default function UniverseBuilder() {
     setRefineRationale(result.rationale || '');
     setRefineChanges(Array.isArray(result.changes) ? result.changes : []);
     setRefineFeedback('');
+    setRefineImage(null);
     toast.success('Refined world applied');
   };
 
@@ -1617,7 +1624,6 @@ export default function UniverseBuilder() {
     const next = new URLSearchParams(searchParams);
     next.delete('tab');
     setSearchParams(next, { replace: true });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [requestedTab, hasOtherBuckets]);
 
   // Drop a stale `?bucket=` if the bucket no longer exists under the current
@@ -1731,6 +1737,7 @@ export default function UniverseBuilder() {
               feedback: refineFeedback, setFeedback: setRefineFeedback,
               run: runRefine, running: refining, reset: resetRefinePanel,
               rationale: refineRationale, changes: refineChanges,
+              image: refineImage, setImage: setRefineImage,
             }}
             totalVariations={totalVariations}
             categoryKeyCount={categoryKeys.length}
@@ -2847,7 +2854,15 @@ function BibleTab({
     feedback: refineFeedback, setFeedback: setRefineFeedback,
     run: runRefine, running: refining, reset: resetRefinePanel,
     rationale: refineRationale, changes: refineChanges,
+    image: refineImage, setImage: setRefineImage,
   } = refine;
+  // Local-only: gallery picker visibility for the optional style-reference image.
+  const [refineGalleryOpen, setRefineGalleryOpen] = useState(false);
+  // Vision provider/model selection, lifted from VisionProviderPicker — which is
+  // mounted only when a style-reference image is attached, so the refine runs
+  // through a vision-capable API provider (not the universe's default expansion
+  // LLM) and the provider fetch is deferred until it's actually needed.
+  const [refineVision, setRefineVision] = useState({ providerId: '', model: '', hasProviders: false, noVisionModel: false });
   return (
     <>
       <section className="bg-port-card border border-port-border rounded p-4 flex flex-col gap-3">
@@ -2886,6 +2901,8 @@ function BibleTab({
             />
           </div>
         </div>
+
+        <MoodBoardReferenceStrip storageKey="universe-builder" />
 
         <div className="flex items-center gap-2 flex-wrap">
           <button
@@ -2927,11 +2944,55 @@ function BibleTab({
               disabled={refining}
               className="w-full bg-port-bg border border-port-border rounded p-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-port-accent resize-y disabled:opacity-60"
             />
+            {/* Optional visual style reference from the gallery — when set, the
+                server refines through a vision-capable API provider. */}
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-[11px] uppercase tracking-wide text-gray-500">Style reference (optional)</span>
+              {refineImage ? (
+                <div className="relative w-14 h-14">
+                  <img
+                    src={refineImage.preview || `/data/images/${encodeURIComponent(refineImage.filename)}`}
+                    alt="style reference"
+                    className="w-full h-full object-cover rounded border border-port-border"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setRefineImage(null)}
+                    title="Remove reference image"
+                    aria-label="Remove reference image"
+                    className="absolute -top-1.5 -right-1.5 bg-port-bg border border-port-border rounded-full p-0.5 text-gray-400 hover:text-port-error"
+                  >
+                    <X size={11} />
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setRefineGalleryOpen(true)}
+                  disabled={refining}
+                  className="px-2.5 py-1.5 text-xs text-port-accent border border-port-accent/40 rounded flex items-center gap-1.5 hover:bg-port-accent/10 disabled:opacity-50"
+                >
+                  <Images size={14} />
+                  Pick from gallery
+                </button>
+              )}
+              {refineImage ? (
+                <span className="text-[11px] text-gray-500">Folds the image's palette/mood into influences + style notes.</span>
+              ) : null}
+            </div>
+            {/* Vision provider/model picker — only when an image is attached, since
+                the server forces a vision-capable API provider for image refine.
+                Mounting it conditionally also defers its provider fetch. */}
+            {refineImage ? (
+              <VisionProviderPicker label="Vision provider (for image refine)" onChange={setRefineVision} />
+            ) : null}
             <div className="flex items-center gap-2 flex-wrap">
               <button
                 type="button"
-                onClick={runRefine}
-                disabled={refining || !refineFeedback.trim() || !draft.starterPrompt?.trim()}
+                onClick={() => runRefine(refineImage
+                  ? { providerId: refineVision.providerId, model: refineVision.model }
+                  : null)}
+                disabled={refining || !refineFeedback.trim() || !draft.starterPrompt?.trim() || (!!refineImage && !refineVision.model)}
                 className="px-3 py-2 bg-port-accent hover:bg-port-accent/90 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded flex items-center gap-2 min-h-[40px]"
               >
                 {refining ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />}
@@ -2963,6 +3024,13 @@ function BibleTab({
                 )}
               </div>
             )}
+            <GalleryImagePicker
+              open={refineGalleryOpen}
+              onClose={() => setRefineGalleryOpen(false)}
+              onSelect={(item) => {
+                if (item?.filename) setRefineImage({ filename: item.filename, preview: item.previewUrl });
+              }}
+            />
           </div>
         )}
       </section>
@@ -3029,6 +3097,12 @@ function BibleTab({
               only that field into the draft so unsaved style edits aren't lost.
               `styleDirty` blocks the render while influences have unsaved edits —
               otherwise the probe pins to a saved record that lacks that style. */}
+          {/* The probe's in-flight render state (the EntryThumbSlot spinner +
+              the async completion handler) is scoped to one universe by
+              `useSingleImageRender`'s `scopeId` (the universe id), so this stays
+              mounted across a `/universes/:id` switch WITHOUT a `key` remount —
+              no per-switch settings refetch, and switching back resumes a
+              still-running render instead of abandoning its completion. */}
           <StyleProbeImage
             universe={draft}
             onUniverseChange={(updated) => updateDraft({ styleImageRefs: updated?.styleImageRefs || [] })}

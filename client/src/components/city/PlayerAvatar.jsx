@@ -105,7 +105,11 @@ export default function PlayerAvatar({ rigRef }) {
     groundOffsetRef.current += (targetOffset - groundOffsetRef.current) * f;
     const bob = state === 'idle' ? Math.sin(t * 1.6) * 0.03 : hovering ? Math.sin(t * 2.2) * 0.06 : 0;
     root.position.set(rig.position.x, rig.position.y + groundOffsetRef.current + bob, rig.position.z);
-    root.rotation.y = rig.facing;
+    // The avatar geometry is modeled facing +Z (visor/chest/toes at +z, jet vents at -z),
+    // but the rig's forward convention is -Z (rig.facing's 0 points toward -z). Bridge the
+    // model-vs-rig 180° with a +π yaw offset so the runner faces its direction of travel
+    // instead of walking backward toward the camera.
+    root.rotation.y = rig.facing + Math.PI;
     root.rotation.z = rig.bank;
 
     // Gait phase advances while moving, settles to neutral at rest.

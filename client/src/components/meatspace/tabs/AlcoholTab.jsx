@@ -3,6 +3,8 @@ import { Beer, Plus, Trash2, AlertTriangle, TrendingDown, TrendingUp, Pencil, Ch
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
+import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
+import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 import AlcoholChart from '../AlcoholChart';
 import AlcoholHrvCorrelation from '../AlcoholHrvCorrelation';
 import StandardDrinkCalculator from '../StandardDrinkCalculator';
@@ -46,6 +48,7 @@ export default function AlcoholTab() {
   const [logging, setLogging] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const [visibleDays, setVisibleDays] = useState(DAYS_PER_PAGE);
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
   // Custom drink buttons
   const [drinkButtons, setDrinkButtons] = useState(DEFAULT_DRINKS);
@@ -391,9 +394,20 @@ export default function AlcoholTab() {
                     <button onClick={() => startEditButton(idx)} className="p-1.5 text-gray-600 hover:text-port-accent" title="Edit">
                       <Pencil size={12} />
                     </button>
-                    <button onClick={() => handleRemoveButton(idx)} className="p-1.5 text-gray-600 hover:text-port-error" title="Remove">
-                      <Trash2 size={12} />
-                    </button>
+                    {isConfirming(`btn:${idx}`) ? (
+                      <ConfirmButtonPair
+                        prompt="Remove?"
+                        confirmText="Remove"
+                        confirmIcon={Trash2}
+                        ariaLabel={`Confirm remove quick-add button ${drink.name}`}
+                        onConfirm={() => confirmDelete(() => handleRemoveButton(idx))}
+                        onCancel={cancelDelete}
+                      />
+                    ) : (
+                      <button onClick={() => requestDelete(`btn:${idx}`)} className="p-1.5 text-gray-600 hover:text-port-error" title="Remove">
+                        <Trash2 size={12} />
+                      </button>
+                    )}
                   </>
                 )}
               </div>
@@ -668,13 +682,24 @@ export default function AlcoholTab() {
                                 >
                                   <Pencil size={12} />
                                 </button>
-                                <button
-                                  onClick={() => handleRemove(entry.date, idx)}
-                                  className="p-1 text-gray-600 hover:text-port-error transition-colors"
-                                  title="Remove drink"
-                                >
-                                  <Trash2 size={12} />
-                                </button>
+                                {isConfirming(key) ? (
+                                  <ConfirmButtonPair
+                                    prompt="Remove?"
+                                    confirmText="Remove"
+                                    confirmIcon={Trash2}
+                                    ariaLabel={`Confirm remove drink ${drink.name || 'entry'}`}
+                                    onConfirm={() => confirmDelete(() => handleRemove(entry.date, idx))}
+                                    onCancel={cancelDelete}
+                                  />
+                                ) : (
+                                  <button
+                                    onClick={() => requestDelete(key)}
+                                    className="p-1 text-gray-600 hover:text-port-error transition-colors"
+                                    title="Remove drink"
+                                  >
+                                    <Trash2 size={12} />
+                                  </button>
+                                )}
                               </div>
                             </td>
                           </>

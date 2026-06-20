@@ -291,6 +291,218 @@ describe('storyBible — sanitizeCharacter', () => {
     });
   });
 
+  describe('relationshipLinks (#1287)', () => {
+    it('defaults a missing relationshipLinks field to an empty array (legacy shape)', () => {
+      expect(sanitizeCharacter({ name: 'A' }).relationshipLinks).toEqual([]);
+    });
+
+    it('coerces a non-array relationshipLinks field to an empty array', () => {
+      expect(sanitizeCharacter({ name: 'A', relationshipLinks: 'nope' }).relationshipLinks).toEqual([]);
+    });
+
+    it('sanitizes a well-formed link + mints a rel- id when none supplied', () => {
+      const out = sanitizeCharacter({
+        name: 'A',
+        relationshipLinks: [{ targetCharacterId: 'chr-bob', type: 'ally', description: 'old friends' }],
+      });
+      expect(out.relationshipLinks).toHaveLength(1);
+      expect(out.relationshipLinks[0].id).toMatch(/^rel-/);
+      expect(out.relationshipLinks[0].targetCharacterId).toBe('chr-bob');
+      expect(out.relationshipLinks[0].type).toBe('ally');
+      expect(out.relationshipLinks[0].description).toBe('old friends');
+      expect(out.relationshipLinks[0].opposition).toBeUndefined();
+    });
+
+    it('preserves a supplied link id', () => {
+      const out = sanitizeCharacter({
+        name: 'A',
+        relationshipLinks: [{ id: 'rel-fixed-1', targetCharacterId: 'chr-bob' }],
+      });
+      expect(out.relationshipLinks[0].id).toBe('rel-fixed-1');
+    });
+
+    it('drops a link with no targetCharacterId', () => {
+      const out = sanitizeCharacter({
+        name: 'A',
+        relationshipLinks: [{ type: 'ally', description: 'dangling' }, { targetCharacterId: 'chr-bob' }],
+      });
+      expect(out.relationshipLinks).toHaveLength(1);
+      expect(out.relationshipLinks[0].targetCharacterId).toBe('chr-bob');
+    });
+
+    it('coerces an unrecognized type to custom (keeps the link + its prose)', () => {
+      const out = sanitizeCharacter({
+        name: 'A',
+        relationshipLinks: [{ targetCharacterId: 'chr-bob', type: 'frenemy', description: 'complicated' }],
+      });
+      expect(out.relationshipLinks[0].type).toBe('custom');
+      expect(out.relationshipLinks[0].description).toBe('complicated');
+    });
+
+    it('defaults a missing type to custom', () => {
+      const out = sanitizeCharacter({ name: 'A', relationshipLinks: [{ targetCharacterId: 'chr-bob' }] });
+      expect(out.relationshipLinks[0].type).toBe('custom');
+    });
+
+    it('sanitizes opposition + coerces an unrecognized axis to custom', () => {
+      const out = sanitizeCharacter({
+        name: 'A',
+        relationshipLinks: [{
+          targetCharacterId: 'chr-bob',
+          type: 'antagonist',
+          opposition: { axis: 'cat/mouse', thisRole: 'hunter', targetRole: 'prey', note: 'will it flip?' },
+        }],
+      });
+      const opp = out.relationshipLinks[0].opposition;
+      expect(opp.axis).toBe('custom');
+      expect(opp.thisRole).toBe('hunter');
+      expect(opp.targetRole).toBe('prey');
+      expect(opp.note).toBe('will it flip?');
+    });
+
+    it('keeps a recognized opposition axis verbatim', () => {
+      const out = sanitizeCharacter({
+        name: 'A',
+        relationshipLinks: [{ targetCharacterId: 'chr-bob', opposition: { axis: 'hunter/prey' } }],
+      });
+      expect(out.relationshipLinks[0].opposition.axis).toBe('hunter/prey');
+    });
+
+    it('drops an opposition with no axis (collapses to absent)', () => {
+      const out = sanitizeCharacter({
+        name: 'A',
+        relationshipLinks: [{ targetCharacterId: 'chr-bob', opposition: { thisRole: 'hunter' } }],
+      });
+      expect(out.relationshipLinks[0].opposition).toBeUndefined();
+    });
+
+    it('persists explicit locked true/false but drops a non-boolean', () => {
+      const out = sanitizeCharacter({
+        name: 'A',
+        relationshipLinks: [
+          { targetCharacterId: 'b', locked: true },
+          { targetCharacterId: 'c', locked: false },
+          { targetCharacterId: 'd', locked: 'yes' },
+        ],
+      });
+      expect(out.relationshipLinks[0].locked).toBe(true);
+      expect(out.relationshipLinks[1].locked).toBe(false);
+      expect(out.relationshipLinks[2].locked).toBeUndefined();
+    });
+
+    it('caps the list at RELATIONSHIP_LINKS_PER_CHARACTER_MAX', () => {
+      const tooMany = Array.from(
+        { length: BIBLE_LIMITS.RELATIONSHIP_LINKS_PER_CHARACTER_MAX + 5 },
+        (_, i) => ({ targetCharacterId: `chr-${i}` }),
+      );
+      const out = sanitizeCharacter({ name: 'A', relationshipLinks: tooMany });
+      expect(out.relationshipLinks).toHaveLength(BIBLE_LIMITS.RELATIONSHIP_LINKS_PER_CHARACTER_MAX);
+    });
+
+    it('clamps over-long description + opposition fields', () => {
+      const out = sanitizeCharacter({
+        name: 'A',
+        relationshipLinks: [{
+          targetCharacterId: 'chr-bob',
+          description: 'x'.repeat(BIBLE_LIMITS.RELATIONSHIP_DESCRIPTION_MAX + 50),
+          opposition: { axis: 'hunter/prey', note: 'y'.repeat(BIBLE_LIMITS.RELATIONSHIP_OPPOSITION_NOTE_MAX + 50) },
+        }],
+      });
+      expect(out.relationshipLinks[0].description.length).toBe(BIBLE_LIMITS.RELATIONSHIP_DESCRIPTION_MAX);
+      expect(out.relationshipLinks[0].opposition.note.length).toBe(BIBLE_LIMITS.RELATIONSHIP_OPPOSITION_NOTE_MAX);
+    });
+  });
+
+  describe('attachments (#1288)', () => {
+    it('defaults a missing attachments field to an empty array (legacy shape)', () => {
+      expect(sanitizeObject({ name: 'Watch' }).attachments).toEqual([]);
+    });
+
+    it('coerces a non-array attachments field to an empty array', () => {
+      expect(sanitizeObject({ name: 'Watch', attachments: 'nope' }).attachments).toEqual([]);
+    });
+
+    it('sanitizes a complete attachment and mints an att- id', () => {
+      const out = sanitizeObject({
+        name: 'Watch',
+        attachments: [{ characterId: 'chr-mara', emotion: 'grief', significance: 'her father\'s', origin: 'inherited', role: 'memento' }],
+      });
+      expect(out.attachments).toHaveLength(1);
+      expect(out.attachments[0].id).toMatch(/^att-/);
+      expect(out.attachments[0].characterId).toBe('chr-mara');
+      expect(out.attachments[0].emotion).toBe('grief');
+      expect(out.attachments[0].significance).toBe('her father\'s');
+      expect(out.attachments[0].origin).toBe('inherited');
+      expect(out.attachments[0].role).toBe('memento');
+    });
+
+    it('preserves a provided id verbatim', () => {
+      const out = sanitizeObject({ name: 'Watch', attachments: [{ id: 'att-fixed-1', characterId: 'chr-mara' }] });
+      expect(out.attachments[0].id).toBe('att-fixed-1');
+    });
+
+    it('drops an attachment with no characterId (meaningless link)', () => {
+      const out = sanitizeObject({
+        name: 'Watch',
+        attachments: [{ emotion: 'grief' }, { characterId: 'chr-mara' }],
+      });
+      expect(out.attachments).toHaveLength(1);
+      expect(out.attachments[0].characterId).toBe('chr-mara');
+    });
+
+    it('coerces an unrecognized role to custom (keeps prose intact)', () => {
+      const out = sanitizeObject({
+        name: 'Watch',
+        attachments: [{ characterId: 'chr-mara', role: 'heirloom', significance: 'matters' }],
+      });
+      expect(out.attachments[0].role).toBe('custom');
+      expect(out.attachments[0].significance).toBe('matters');
+    });
+
+    it('defaults a missing role to custom', () => {
+      const out = sanitizeObject({ name: 'Watch', attachments: [{ characterId: 'chr-mara' }] });
+      expect(out.attachments[0].role).toBe('custom');
+    });
+
+    it('persists explicit locked true/false but drops a non-boolean', () => {
+      const out = sanitizeObject({
+        name: 'Watch',
+        attachments: [
+          { characterId: 'a', locked: true },
+          { characterId: 'b', locked: false },
+          { characterId: 'c', locked: 'yes' },
+        ],
+      });
+      expect(out.attachments[0].locked).toBe(true);
+      expect(out.attachments[1].locked).toBe(false);
+      expect(out.attachments[2].locked).toBeUndefined();
+    });
+
+    it('caps the list at ATTACHMENTS_PER_OBJECT_MAX', () => {
+      const tooMany = Array.from(
+        { length: BIBLE_LIMITS.ATTACHMENTS_PER_OBJECT_MAX + 5 },
+        (_, i) => ({ characterId: `chr-${i}` }),
+      );
+      const out = sanitizeObject({ name: 'Watch', attachments: tooMany });
+      expect(out.attachments).toHaveLength(BIBLE_LIMITS.ATTACHMENTS_PER_OBJECT_MAX);
+    });
+
+    it('clamps over-long prose fields', () => {
+      const out = sanitizeObject({
+        name: 'Watch',
+        attachments: [{
+          characterId: 'chr-mara',
+          significance: 'x'.repeat(BIBLE_LIMITS.ATTACHMENT_SIGNIFICANCE_MAX + 50),
+          origin: 'y'.repeat(BIBLE_LIMITS.ATTACHMENT_ORIGIN_MAX + 50),
+          emotion: 'z'.repeat(BIBLE_LIMITS.ATTACHMENT_EMOTION_MAX + 50),
+        }],
+      });
+      expect(out.attachments[0].significance.length).toBe(BIBLE_LIMITS.ATTACHMENT_SIGNIFICANCE_MAX);
+      expect(out.attachments[0].origin.length).toBe(BIBLE_LIMITS.ATTACHMENT_ORIGIN_MAX);
+      expect(out.attachments[0].emotion.length).toBe(BIBLE_LIMITS.ATTACHMENT_EMOTION_MAX);
+    });
+  });
+
   describe('extended character fields (novelist + graphic-novelist depth)', () => {
     it('defaults every new string field to empty + every list field to []', () => {
       const out = sanitizeCharacter({ name: 'Bare' });

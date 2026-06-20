@@ -32,6 +32,8 @@ import { copyToClipboard } from '../../../lib/clipboard';
 import { DEFAULT_REVIEWER, normalizeReviewers } from '../constants';
 import { formatDurationMs } from '../../../utils/formatters';
 import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
+import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
+import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 
 // Extract task type from description (matches server-side extractTaskType)
 function extractTaskType(description) {
@@ -112,6 +114,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
   const [loadingStageId, setLoadingStageId] = useState(null);
   const [processStats, setProcessStats] = useState(null);
   const [pausing, setPausing] = useState(false);
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   const [killing, setKilling] = useState(false);
   const [feedbackState, setFeedbackState] = useState(agent.feedback?.rating || null);
   const [btwInput, setBtwInput] = useState('');
@@ -479,13 +482,23 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
               </button>
             )}
             {(completed || paused) && onDelete && (
-              <button
-                onClick={() => onDelete(agent.id)}
-                className="p-1 text-gray-500 hover:text-port-error transition-colors"
-                aria-label="Remove agent"
-              >
-                <Trash2 size={14} aria-hidden="true" />
-              </button>
+              isConfirming(agent.id) ? (
+                <ConfirmButtonPair
+                  prompt="Remove?"
+                  confirmText="Remove"
+                  ariaLabel="Confirm remove agent"
+                  onConfirm={() => confirmDelete(() => onDelete(agent.id))}
+                  onCancel={cancelDelete}
+                />
+              ) : (
+                <button
+                  onClick={() => requestDelete(agent.id)}
+                  className="p-1 text-gray-500 hover:text-port-error transition-colors"
+                  aria-label="Remove agent"
+                >
+                  <Trash2 size={14} aria-hidden="true" />
+                </button>
+              )
             )}
           </div>
         </div>

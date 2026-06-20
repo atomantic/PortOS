@@ -824,6 +824,33 @@ describe('arcPlanner — resolveVerifyIssues', () => {
     expect(out.series.arc.shape).toBe('man-in-hole');
     expect(out.series.arc.readerMap?.hooks?.[0]?.label).toBe('why is the foundry silent');
   });
+
+  it('preserves series.arc.tickingClock when the resolve LLM does not author one', async () => {
+    // Same drift class as readerMap above — the resolve prompt never authors a
+    // ticking clock, so omitting it must not wipe the user's existing countdown.
+    const s = await setupSeries();
+    await seriesSvc.updateSeries(s.id, {
+      arc: {
+        logline: 'L', summary: 'S', shape: 'man-in-hole',
+        tickingClock: { enabled: true, label: 'The dam breaks', kind: 'deadline', stakes: 'town floods' },
+      },
+    });
+    stageRunnerSpy = vi.fn(async () => ({
+      content: {
+        arc: { logline: 'L2', summary: 'S2', themes: [], protagonistArc: '' },
+        seasons: [],
+        notes: '',
+      },
+      runId: 'r', providerId: 'p', model: 'm',
+    }));
+    const out = await planner.resolveVerifyIssues(s.id, {
+      findings: [{ severity: 'medium', problem: 'X', suggestion: 'Y' }],
+    });
+    expect(out.applied).toBe(true);
+    expect(out.series.arc.logline).toBe('L2');
+    expect(out.series.arc.tickingClock?.enabled).toBe(true);
+    expect(out.series.arc.tickingClock?.label).toBe('The dam breaks');
+  });
 });
 
 describe('arcPlanner — commitSeasonsWithRemap', () => {

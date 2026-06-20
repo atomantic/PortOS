@@ -199,6 +199,11 @@ export async function getGraphData() {
   return b.getGraphData();
 }
 
+export async function getMemoryIdsMissingEmbedding() {
+  const b = await getBackend();
+  return b.getMemoryIdsMissingEmbedding();
+}
+
 export async function linkMemories(sourceId, targetId) {
   const b = await getBackend();
   return b.linkMemories(sourceId, targetId);

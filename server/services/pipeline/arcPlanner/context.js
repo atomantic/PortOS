@@ -9,7 +9,8 @@
 
 import { MANUSCRIPT_TYPES } from '../series.js';
 import { listIssues } from '../issues.js';
-import { ARC_ROLES as ARC_ROLE_LIST, ARC_SHAPE_IDS, READER_MAP_BEAT_KINDS, buildSeason, renderArcShapeGuidance, sanitizeSeasonList } from '../../../lib/storyArc.js';
+import { ARC_ROLES as ARC_ROLE_LIST, ARC_SHAPE_IDS, READER_MAP_BEAT_KINDS, buildSeason, renderArcShapeGuidance, renderTickingClock, sanitizeSeasonList } from '../../../lib/storyArc.js';
+import { composeStyleNotes } from '../../../lib/styleGuide.js';
 import { describeStructure, recommendStructure } from '../../../lib/seasonStructure.js';
 import { DEFAULT_LENGTH_PROFILE, LENGTH_PROFILE_NAMES } from '../../../lib/issueLength.js';
 import { getUniverse } from '../../universeBuilder.js';
@@ -275,10 +276,21 @@ export async function collectManuscriptByType(seriesId) {
 // "the bible block" — both passes must see the same series identity.
 export const SHAPE_GUIDANCE_NONE = '(no Vonnegut story shape selected — the verifier should not flag shape adherence)';
 
+// Append the ticking-clock guidance (only when the clock is enabled) to an
+// arc-level shape-guidance block. Every arc/reader-map prompt already renders
+// `{{{shapeGuidance}}}`, so folding the countdown in here surfaces it to
+// generation without adding a new template variable — and therefore without a
+// stage-prompt migration. Returns the guidance unchanged when there's no
+// enabled clock.
+export function appendTickingClock(shapeGuidance, arc) {
+  const clock = renderTickingClock(arc?.tickingClock);
+  return clock ? `${shapeGuidance}\n\n${clock}` : shapeGuidance;
+}
+
 export async function buildArcBaseContext(series, preloadedWorld) {
   const arc = series.arc || {};
   const world = await resolveWorldContext(series, preloadedWorld);
-  const shapeGuidance = renderArcShapeGuidance(arc.shape) || SHAPE_GUIDANCE_NONE;
+  const shapeGuidance = appendTickingClock(renderArcShapeGuidance(arc.shape) || SHAPE_GUIDANCE_NONE, arc);
   return {
     series: {
       name: series.name,
@@ -311,14 +323,20 @@ export async function buildArcOverviewContext(series, preloadedWorld) {
   // section fires (honor mode); when it's empty the `{{^pickedShapeId}}`
   // inverted section fires (propose mode). promptTemplate.js treats `''` as
   // falsy per Mustache spec, so the empty string is the right sentinel.
-  const shapeGuidance = renderArcShapeGuidance(arc.shape)
-    || `(no shape selected — you must propose one of: ${ARC_SHAPE_IDS.join(', ')}. Return your pick as the JSON field "shape". Choose the shape that best matches the premise's emotional trajectory.)`;
+  const shapeGuidance = appendTickingClock(
+    renderArcShapeGuidance(arc.shape)
+      || `(no shape selected — you must propose one of: ${ARC_SHAPE_IDS.join(', ')}. Return your pick as the JSON field "shape". Choose the shape that best matches the premise's emotional trajectory.)`,
+    arc,
+  );
   return {
     series: {
       name: series.name,
       logline: series.logline,
       premise: series.premise,
-      styleNotes: series.styleNotes,
+      // Structured style guide folded into the free-text notes (see
+      // composeStyleNotes) so arc generation respects house style without a
+      // new template variable / migration.
+      styleNotes: composeStyleNotes(series),
       issueCountTarget: series.issueCountTarget,
     },
     ...world,
@@ -383,7 +401,7 @@ export async function buildReaderMapContext(series, preloadedWorld) {
       themesCsv: Array.isArray(arc.themes) ? arc.themes.join(', ') : '',
       shape: arc.shape || '',
     },
-    shapeGuidance: renderArcShapeGuidance(arc.shape) || SHAPE_GUIDANCE_NONE,
+    shapeGuidance: appendTickingClock(renderArcShapeGuidance(arc.shape) || SHAPE_GUIDANCE_NONE, arc),
     issueBoundaries,
     beatKindsCsv: READER_MAP_BEAT_KINDS.join(', '),
     existingReaderMapJson: arc.readerMap ? JSON.stringify(arc.readerMap, null, 2) : '(none yet)',

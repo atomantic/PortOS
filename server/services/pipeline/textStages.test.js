@@ -1,5 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { readFileSync } from 'fs';
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
 import { mockNoPeerSync, mockNoPeers } from '../../lib/mockPathsDataRoot.js';
+// Real (unmocked) engine + clock renderer, for the end-to-end template-render
+// guard at the bottom of this file. promptTemplate.js is pure and storyArc.js
+// is not mocked here, so importing them directly is safe alongside the mocks.
+import { applyTemplate } from '../../lib/promptTemplate.js';
+import { renderTickingClock } from '../../lib/storyArc.js';
 
 const fileStore = new Map();
 
@@ -99,6 +107,25 @@ describe('pipeline text stage generator', () => {
     expect(result.stage.lastRunId).toMatch(/^run-/);
     expect(llmCalls).toHaveLength(1);
     expect(llmCalls[0].prompt).toContain('RENDERED:pipeline-idea-expansion');
+  });
+
+  it('folds the structured style guide into series.styleNotes in the prompt context', async () => {
+    const series = await seriesSvc.createSeries({
+      name: 'Salt Run',
+      logline: 'A foundry city goes silent.',
+      premise: 'Salt-mining city.',
+      styleNotes: 'moebius linework',
+      styleGuide: { tense: 'present', povPerson: 'first', contentRating: 'PG-13' },
+    });
+    const issue = await issuesSvc.createIssue({ seriesId: series.id, title: 'The Hush' });
+    await textStages.generateStage(issue.id, 'prose', { seedInput: 'beats' });
+    const ctx = ctxFromCall(llmCalls[0]);
+    // The free-text notes are preserved AND the structured guide directives are
+    // prepended, so generation honors house style with no new template variable.
+    expect(ctx.series.styleNotes).toContain('moebius linework');
+    expect(ctx.series.styleNotes).toContain('present tense');
+    expect(ctx.series.styleNotes).toContain('first person');
+    expect(ctx.series.styleNotes).toContain('PG-13');
   });
 
   it('stage prompt context includes only PRIOR stages', async () => {
@@ -228,6 +255,39 @@ describe('pipeline text stage generator', () => {
       protagonistArc: 'falls and rises',
       themesCsv: 'legacy',
     });
+  });
+
+  it('idea context: surfaces the ticking clock as a rendered string when enabled', async () => {
+    const { series, issue } = await seed();
+    await seriesSvc.updateSeries(series.id, {
+      arc: {
+        tickingClock: {
+          enabled: true,
+          label: 'The tide returns',
+          kind: 'deadline',
+          stakes: 'the foundry floods',
+          dueAtArcPosition: 0.9,
+        },
+      },
+    });
+    await textStages.generateStage(issue.id, 'idea');
+    const ctx = ctxFromCall(llmCalls[0]);
+    expect(typeof ctx.tickingClock).toBe('string');
+    expect(ctx.tickingClock).toContain('The tide returns');
+    expect(ctx.tickingClock).toContain('the foundry floods');
+    // A clock-only arc carries no logline/themes — the clock must still surface
+    // even though the arc text block is omitted.
+    expect(ctx.arc).toBe(null);
+  });
+
+  it('idea context: omits the ticking clock when it is toggled off', async () => {
+    const { series, issue } = await seed();
+    await seriesSvc.updateSeries(series.id, {
+      arc: { logline: 'L', tickingClock: { enabled: false, label: 'draft clock' } },
+    });
+    await textStages.generateStage(issue.id, 'idea');
+    const ctx = ctxFromCall(llmCalls[0]);
+    expect(ctx.tickingClock).toBe(null);
   });
 
   it('idea context: volume + position-in-volume + arcRole when issue is grouped', async () => {
@@ -449,5 +509,49 @@ describe('pipeline text stage generator', () => {
     const ctx = ctxFromCall(llmCalls[0]);
     expect(ctx.sourceMaterials).toEqual([]);
     expect(ctx.hasSourceMaterials).toBe(false);
+  });
+});
+
+// End-to-end render guard for the shipped idea template. The tests above assert
+// the *context object* buildIdeaContextAugment produces, but mock buildPrompt —
+// so a regression in the template itself (e.g. reverting the named-ref fix back
+// to `{{.}}`, which renders the literal "[object Object]" inside string-valued
+// Mustache sections) would not fail any of them. This block renders the real
+// data.reference template through the production engine to pin that contract.
+describe('pipeline-idea-expansion template render', () => {
+  const ideaTemplate = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), '../../../data.reference/prompts/stages/pipeline-idea-expansion.md'),
+    'utf-8',
+  );
+
+  const renderCtx = (overrides = {}) => ({
+    series: { name: 'S', logline: 'L', premise: 'P', styleNotes: '', characters: [] },
+    issue: { number: 3, title: 'T' },
+    lengthTargets: { profile: 'std', pageTarget: 22, minutesTarget: 22, beatsMin: 8, beatsMax: 12, proseWordsMin: 2000, proseWordsMax: 3000 },
+    arcRole: 'midpoint',
+    priorIssue: { number: 2, title: 'Prev', arcRole: 'complication', beats: 'PRIOR-BEAT-ONE\nPRIOR-BEAT-TWO' },
+    nextIssue: { number: 4, title: 'Next', arcRole: 'all-is-lost', synopsis: 'NEXT-SYNOPSIS-LINE' },
+    ...overrides,
+  });
+
+  it('renders neighbor beats / synopsis / arc-role as real text, never "[object Object]"', () => {
+    const out = applyTemplate(ideaTemplate, renderCtx());
+    expect(out).not.toContain('[object Object]');
+    expect(out).toContain('**midpoint**');        // this issue's arc role
+    expect(out).toContain('**complication**');     // prior neighbor's arc role
+    expect(out).toContain('**all-is-lost**');      // next neighbor's arc role
+    expect(out).toContain('PRIOR-BEAT-ONE');       // prior neighbor's beat sheet
+    expect(out).toContain('NEXT-SYNOPSIS-LINE');   // next neighbor's synopsis
+  });
+
+  it('renders the ticking-clock section when enabled and omits it otherwise', () => {
+    const clock = renderTickingClock({ enabled: true, label: 'TICK-LABEL', kind: 'deadline', stakes: 'TICK-STAKES' });
+    const withClock = applyTemplate(ideaTemplate, renderCtx({ tickingClock: clock }));
+    expect(withClock).toContain('Ticking clock the reader is anticipating');
+    expect(withClock).toContain('TICK-LABEL');
+    expect(withClock).toContain('TICK-STAKES');
+
+    const withoutClock = applyTemplate(ideaTemplate, renderCtx({ tickingClock: renderTickingClock({ enabled: false, label: 'x' }) }));
+    expect(withoutClock).not.toContain('Ticking clock the reader is anticipating');
   });
 });

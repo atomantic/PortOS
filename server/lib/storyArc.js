@@ -58,6 +58,22 @@ export const READER_MAP_LIMITS = Object.freeze({
 export const READER_MAP_BEAT_KINDS = Object.freeze(['hook', 'reveal', 'payoff', 'emotional', 'cliffhanger']);
 export const READER_MAP_STATUSES = Object.freeze(['draft', 'verified']);
 
+// Ticking clock — the known future event the reader is building toward (a
+// deadline, a prophecy's hour, an incoming storm, "what is the story building
+// up to"). Where `readerMap.cliffhangers` are local issue-boundary tugs, the
+// ticking clock is a *first-class arc concept*: a single countdown planted
+// early, reminded through the middle, and paid off at a due position. Lives at
+// `series.arc.tickingClock` (a singular object, not a list).
+export const TICKING_CLOCK_LIMITS = Object.freeze({
+  LABEL_MAX: 200,
+  STAKES_MAX: 1000,
+  REMINDER_NOTE_MAX: 500,
+  REMINDERS_MAX: 40,
+  ARC_POSITION_MAX: 9999,
+  ISSUE_MAX: 9999,
+});
+export const TICKING_CLOCK_KINDS = Object.freeze(['deadline', 'event', 'countdown', 'prophecy', 'bomb', 'custom']);
+
 // Per-episode arc roles produced by the season-episodes generator and
 // persisted on the issue so downstream stages (idea-expansion in particular)
 // know whether they're writing a pilot vs. midpoint vs. finale episode.
@@ -332,6 +348,67 @@ export function sanitizeReaderMap(raw) {
   return { hooks, payoffs, beats, cliffhangers, status };
 }
 
+// One reminder beat that keeps the countdown alive in the reader's mind.
+// Reuses the `rm-<uuid>` id minter (reminders are reader-map-flavored entries)
+// so the client has a stable list key. Dropped when it carries no note and no
+// issue pointer — an empty reminder has nothing to render or reason about.
+function sanitizeTickingClockReminder(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const note = trimTo(raw.note, TICKING_CLOCK_LIMITS.REMINDER_NOTE_MAX);
+  const atIssue = optPosition(raw.atIssue, TICKING_CLOCK_LIMITS.ISSUE_MAX);
+  if (!note && atIssue == null) return null;
+  return { id: ensureRmId(raw.id), atIssue, note };
+}
+
+/**
+ * Sanitize the optional singular `series.arc.tickingClock`. Returns `null` when
+ * the clock carries no identifying content (disabled, no label/stakes/positions
+ * and no reminders) so callers store `null` to mean "no ticking clock" —
+ * mirroring `sanitizeReaderMap`. An explicit `enabled: true` is identifying
+ * content on its own (the author declared the story *has* a countdown), so a
+ * toggled-on-but-otherwise-blank clock survives. Unknown `kind` falls back to
+ * `custom` rather than dropping the clock.
+ */
+export function sanitizeTickingClock(raw) {
+  if (raw == null || typeof raw !== 'object') return null;
+  const label = trimTo(raw.label, TICKING_CLOCK_LIMITS.LABEL_MAX);
+  const stakes = trimTo(raw.stakes, TICKING_CLOCK_LIMITS.STAKES_MAX);
+  const kind = TICKING_CLOCK_KINDS.includes(raw.kind) ? raw.kind : 'custom';
+  const plantedAtArcPosition = optPosition(raw.plantedAtArcPosition, TICKING_CLOCK_LIMITS.ARC_POSITION_MAX);
+  const dueAtArcPosition = optPosition(raw.dueAtArcPosition, TICKING_CLOCK_LIMITS.ARC_POSITION_MAX);
+  const reminders = cleanReaderMapList(raw.reminders, sanitizeTickingClockReminder, TICKING_CLOCK_LIMITS.REMINDERS_MAX);
+  const enabled = raw.enabled === true;
+  if (!enabled && !label && !stakes && plantedAtArcPosition == null && dueAtArcPosition == null && reminders.length === 0) {
+    return null;
+  }
+  return { enabled, label, kind, plantedAtArcPosition, dueAtArcPosition, stakes, reminders };
+}
+
+/**
+ * Block of ticking-clock guidance for prompt contexts. Returns a single-line
+ * string only when the clock is *enabled* (a disabled draft clock must not
+ * steer generation), or null otherwise. The arc-level call sites OR-fold it
+ * into the existing `shapeGuidance` block so no stage-prompt template needs a
+ * new variable (and thus no migration); the per-issue idea stage instead
+ * surfaces it as its own `{{tickingClock}}` template variable, which DID need a
+ * migration (098, #1356). Mirrors `renderArcShapeGuidance`.
+ */
+export function renderTickingClock(clock) {
+  if (!clock || clock.enabled !== true) return null;
+  const parts = [`Ticking clock / countdown the reader is anticipating: **${clock.label || '(unnamed countdown)'}** (${clock.kind || 'custom'}).`];
+  if (clock.stakes) parts.push(`Stakes if it runs out: ${clock.stakes}.`);
+  const span = [];
+  if (clock.plantedAtArcPosition != null) span.push(`planted at arc position ${clock.plantedAtArcPosition}`);
+  if (clock.dueAtArcPosition != null) span.push(`due at arc position ${clock.dueAtArcPosition}`);
+  if (span.length) parts.push(`Timing: ${span.join(', ')}.`);
+  if (Array.isArray(clock.reminders) && clock.reminders.length) {
+    const notes = clock.reminders.map((r) => r.note || `(issue ${r.atIssue ?? '?'})`).join('; ');
+    parts.push(`Reminder beats keeping it in the reader's mind: ${notes}.`);
+  }
+  parts.push('Reinforce this countdown: plant it early, remind the reader through the middle, and pay it off at the due position.');
+  return parts.join(' ');
+}
+
 /**
  * Sanitize the optional `series.arc` field. Returns `null` if the input is
  * empty (no identifying fields) — callers store `null` to mean "no arc yet."
@@ -355,9 +432,12 @@ export function sanitizeArc(raw) {
   // The reader map is identifying content too — an arc that has only a reader
   // map (e.g. the Story Builder generated it before any logline) must survive.
   const readerMap = sanitizeReaderMap(raw.readerMap);
-  if (!logline && !summary && !protagonistArc && themes.length === 0 && !shape && !readerMap) return null;
+  // The ticking clock is identifying content as well — an arc whose only
+  // authored decision is "this story has a countdown" must round-trip.
+  const tickingClock = sanitizeTickingClock(raw.tickingClock);
+  if (!logline && !summary && !protagonistArc && themes.length === 0 && !shape && !readerMap && !tickingClock) return null;
   const status = ARC_STATUSES.includes(raw.status) ? raw.status : 'draft';
-  return { logline, summary, protagonistArc, themes, shape, readerMap, status };
+  return { logline, summary, protagonistArc, themes, shape, readerMap, tickingClock, status };
 }
 
 /**

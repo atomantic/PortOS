@@ -292,7 +292,7 @@ export async function detectConflict({ kind, id, local, remote }) {
 // schemaVersion/locked/origin/deleted are neither restorable nor shown).
 export const RESTORABLE_FIELDS = Object.freeze({
   universe: ['name', 'starterPrompt', 'logline', 'premise', 'styleNotes', 'categories', 'compositeSheets', 'influences', 'characters', 'places', 'objects'],
-  series: ['name', 'logline', 'premise', 'styleNotes', 'titleLogo', 'author', 'stylePromptOverride', 'stylePromptOverrideMode', 'targetFormat', 'issueCountTarget', 'arc', 'seasons'],
+  series: ['name', 'logline', 'premise', 'styleNotes', 'styleGuide', 'titleLogo', 'author', 'stylePromptOverride', 'stylePromptOverrideMode', 'targetFormat', 'issueCountTarget', 'arc', 'seasons'],
   // mediaCollection restores only the user-authored content scalars. `items`
   // are union-merged (never lost, nothing to restore); `universeId`/`seriesId`
   // are structural links managed by the link/unlink helpers, not `updateCollection`

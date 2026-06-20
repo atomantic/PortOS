@@ -28,10 +28,11 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useParams, useNavigate } from 'react-router-dom';
+import { Link, useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import {
-  ArrowLeft, Loader2, Sparkles, FileText, Star, ClipboardCheck, Layers, PencilLine, BookOpen, GitCompare, X,
+  ArrowLeft, Loader2, Sparkles, FileText, Star, ClipboardCheck, Layers, PencilLine, BookOpen, GitCompare, Volume2, X,
 } from 'lucide-react';
+import { formatManuscript } from '../lib/manuscriptFormat';
 import toast from '../components/ui/Toast';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import { usePipelineProgress } from '../hooks/usePipelineProgress';
@@ -43,10 +44,11 @@ import AnnotatedManuscriptSection from '../components/pipeline/manuscript/Annota
 import ManuscriptCommentIndex from '../components/pipeline/manuscript/ManuscriptCommentIndex';
 import ManuscriptIssueTabs from '../components/pipeline/manuscript/ManuscriptIssueTabs';
 import ManuscriptImpactPreview from '../components/pipeline/manuscript/ManuscriptImpactPreview';
+import ManuscriptReadAloud from '../components/pipeline/manuscript/ManuscriptReadAloud';
 import { MANUSCRIPT_TYPES, STAGE_LABEL } from '../components/pipeline/manuscript/constants';
 import {
   getPipelineSeries, updatePipelineSeries, getPipelineManuscript, getPipelineManuscriptReview,
-  savePipelineManuscriptSection, restorePipelineStageVersion,
+  savePipelineManuscriptSection, reformatPipelineManuscriptText, restorePipelineStageVersion,
   analyzePipelineManuscriptCompleteness, startPipelineManuscriptCompleteness,
   cancelPipelineManuscriptCompleteness, getPipelineManuscriptCompletenessStatus, getProviders,
   pipelineManuscriptCompletenessSseUrl,
@@ -66,6 +68,7 @@ export default function PipelineManuscriptEditor() {
   const params = useParams();
   const { seriesId } = params;
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   // The issue (by number) the editor is focused on — one issue per view,
   // deep-linkable at /pipeline/series/:id/manuscript/:issueNumber. Read from the
   // route splat (a single splat route, not two :param routes, so issue→issue
@@ -103,6 +106,7 @@ export default function PipelineManuscriptEditor() {
   // Which section (issueId) is in textarea edit mode in Review.
   const [editingIssueId, setEditingIssueId] = useState(null);
   const [showImpact, setShowImpact] = useState(false);
+  const [showReadAloud, setShowReadAloud] = useState(false);
   // Per-comment fix-edit drafts, keyed by comment id and shared across every
   // place the card renders (sidebar reveal, in-context card, impact preview).
   const [fixDrafts, setFixDrafts] = useState({});
@@ -117,6 +121,13 @@ export default function PipelineManuscriptEditor() {
 
   const patchSection = (issueId, fields) =>
     setSections((prev) => prev.map((s) => (s.issueId === issueId ? { ...s, ...fields } : s)));
+
+  // Live mirror of `sections` so async handlers (e.g. the slow AI reformat) can
+  // read the CURRENT content at resolution time and detect a mid-call edit
+  // instead of clobbering it via a stale closure.
+  const liveSectionsRef = useRef([]);
+  liveSectionsRef.current = sections;
+  const liveContentFor = (issueId) => liveSectionsRef.current.find((s) => s.issueId === issueId)?.content ?? '';
 
   useEffect(() => {
     if (typeof window !== 'undefined') window.localStorage.setItem(VIEW_MODE_KEY, viewMode);
@@ -150,7 +161,7 @@ export default function PipelineManuscriptEditor() {
     // Keyed on seriesId only — `navigate`'s identity changes when the issue-tab
     // URL changes, and including it would re-run this initial load (clobbering a
     // format switch with a stale default-format refetch).
-  }, [seriesId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [seriesId]);
 
   useEffect(() => {
     let canceled = false;
@@ -159,6 +170,23 @@ export default function PipelineManuscriptEditor() {
       .catch(() => {});
     return () => { canceled = true; };
   }, []);
+
+  // Deep-link from the Editorial Checks triage view: `?comment=<id>` opens that
+  // finding's card. Wait until comments have loaded, match the id, reveal it in
+  // review mode (where the card renders inline), then strip the param so a
+  // refresh/back doesn't re-trigger it. No-op when the comment isn't present
+  // (e.g. it was already dismissed-and-pruned, or belongs to another series).
+  useEffect(() => {
+    const wanted = searchParams.get('comment');
+    if (!wanted || loading) return;
+    if (comments.some((c) => c.id === wanted)) {
+      setViewMode('review');
+      setOpenCommentId(wanted);
+    }
+    const next = new URLSearchParams(searchParams);
+    next.delete('comment');
+    setSearchParams(next, { replace: true });
+  }, [loading, comments, searchParams]);
 
   const overrideProvider = providers.find((p) => p.id === overrideProviderId) || null;
   const localModels = useLocalModels();
@@ -264,7 +292,6 @@ export default function PipelineManuscriptEditor() {
     if (type === 'complete') reloadReviewAfterRun(reviewLatest);
     else if (type === 'canceled') toast.success('Editorial review canceled');
     else toast.error(reviewLatest.error || 'Editorial review failed');
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reviewActive, reviewClosed, reviewLatest, seriesId]);
 
   // Recovery: the stream died WITHOUT a terminal frame (attach 404, dropped
@@ -277,7 +304,6 @@ export default function PipelineManuscriptEditor() {
     if (t === 'complete' || t === 'canceled' || t === 'error') return; // handled above
     setReviewActive(false);
     reloadReviewAfterRun(null, { recovered: true });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reviewActive, reviewClosed, reviewLatest, seriesId]);
 
   const startGenerateEditsReview = async (mode) => {
@@ -355,14 +381,14 @@ export default function PipelineManuscriptEditor() {
 
   const setSectionContent = (issueId, content) => patchSection(issueId, { content });
 
-  const saveSection = async (section) => {
+  const saveSectionContent = async (section, content) => {
     const key = `${section.issueId}:${section.stageId}`;
-    if (baselineRef.current.get(key) === section.content) return;
+    if (baselineRef.current.get(key) === content) return;
     setSaveState((prev) => ({ ...prev, [section.issueId]: 'saving' }));
     const result = await savePipelineManuscriptSection(
       seriesId,
       section.issueId,
-      { stageId: section.stageId, output: section.content },
+      { stageId: section.stageId, output: content },
       { silent: true },
     ).catch((err) => {
       toast.error(err.message || 'Failed to save manuscript edit');
@@ -373,6 +399,63 @@ export default function PipelineManuscriptEditor() {
       patchSection(section.issueId, { versions: result.section.versions });
     }
     setSaveState((prev) => ({ ...prev, [section.issueId]: result ? 'saved' : undefined }));
+    return result;
+  };
+
+  const saveSection = (section) => saveSectionContent(section, section.content);
+
+  // Clean up paste artifacts (PDF drop-caps, hyphen splits, hard-wrapped lines)
+  // and persist. Prose reflows into paragraphs; comic/teleplay keep their
+  // structural line breaks. The prior text is snapshotted server-side, so the
+  // History ▸ Revert affordance undoes it — no confirm needed.
+  const formatSection = async (section) => {
+    const current = section.content || '';
+    const formatted = formatManuscript(current, section.stageId);
+    if (formatted === current) {
+      toast('Already well-formatted — nothing to clean up');
+      return;
+    }
+    setSectionContent(section.issueId, formatted);
+    // Only claim success once the save lands — saveSectionContent swallows its
+    // own error (toasts "Failed to save…") and resolves null, so an
+    // unconditional success toast would stack a green toast on the red one.
+    const saved = await saveSectionContent(section, formatted);
+    if (saved) toast.success('Formatting cleaned up');
+  };
+
+  // AI reformat: send the section's CURRENT (possibly unsaved) text to the LLM
+  // (selected provider override) to repair paste artifacts the deterministic
+  // Format can't. The endpoint only computes — it returns the cleaned text and
+  // never persists, so we own the save: if the user edited the section during
+  // the (slow) call we discard the result rather than clobber the edit;
+  // otherwise we apply it and save through the normal path (snapshotted →
+  // revertible). The server guard rejects (400) any result that changed wording.
+  const reformatSection = async (section) => {
+    const sent = section.content || '';
+    if (!sent.trim()) {
+      toast('There is no drafted text to reformat');
+      return;
+    }
+    const result = await reformatPipelineManuscriptText(
+      seriesId,
+      { stageId: section.stageId, content: sent, providerOverride, modelOverride },
+      { silent: true },
+    ).catch((err) => {
+      toast.error(err.message || 'AI reformat failed');
+      return null;
+    });
+    if (!result || typeof result.text !== 'string') return;
+    if (liveContentFor(section.issueId) !== sent) {
+      toast('Section changed while reformatting — discarded the AI result');
+      return;
+    }
+    if (!result.changed) {
+      toast('Already well-formatted — nothing to clean up');
+      return;
+    }
+    setSectionContent(section.issueId, result.text);
+    const saved = await saveSectionContent(section, result.text);
+    if (saved) toast.success('Reformatted with AI');
   };
 
   const revertSection = async (section, runId) => {
@@ -573,6 +656,16 @@ export default function PipelineManuscriptEditor() {
 
               <button
                 type="button"
+                onClick={() => setShowReadAloud(true)}
+                disabled={!activeSection}
+                title="Read this section aloud (TTS) with synced highlighting to catch clunky rhythm by ear"
+                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded text-xs font-medium border bg-port-bg text-gray-300 border-port-border hover:border-port-accent/40 disabled:opacity-40"
+              >
+                <Volume2 size={13} /> Read aloud
+              </button>
+
+              <button
+                type="button"
                 onClick={() => setShowImpact(true)}
                 title="Preview how the selected fixes change the whole manuscript"
                 className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded text-xs font-medium border bg-port-bg text-gray-300 border-port-border hover:border-port-accent/40"
@@ -647,6 +740,8 @@ export default function PipelineManuscriptEditor() {
                   onCloseComment: () => setOpenCommentId(null),
                   onContentChange: (content) => setSectionContent(section.issueId, content),
                   onBlurSave: () => saveSection(section),
+                  onFormat: () => formatSection(section),
+                  onReformat: () => reformatSection(section),
                   onRevert: (runId) => revertSection(section, runId),
                   registerRef: registerSectionRef(section.number),
                   commentCardProps,
@@ -793,6 +888,12 @@ export default function PipelineManuscriptEditor() {
         comments={comments.filter((c) => c.status === 'open' && c.fix)}
         fixDrafts={fixDrafts}
         onAccepted={applyAccepted}
+      />
+
+      <ManuscriptReadAloud
+        open={showReadAloud}
+        onClose={() => setShowReadAloud(false)}
+        section={activeSection}
       />
     </div>
   );

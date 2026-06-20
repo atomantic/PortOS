@@ -88,7 +88,7 @@ export default function Sharing() {
 
 function SharingBuckets() {
   const [buckets, setBuckets] = useState([]);
-  const [localSchemaVersion, setLocalSchemaVersion] = useState(null);
+  const [, setLocalSchemaVersion] = useState(null);
   const [loading, setLoading] = useState(true);
   const [selectedId, setSelectedId] = useState(null);
   const [showAdd, setShowAdd] = useState(false);

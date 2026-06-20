@@ -58,6 +58,25 @@ const VISION_RE = new RegExp([
   'kosmos', 'nanollava',
 ].join('|'), 'i');
 
+// CLI providers whose underlying model is vision-capable and whose CLI accepts
+// an image file (codex via `-i`, claude-code via a file in the working dir).
+// CLI providers expose no enumerable model list with capability tags, so this
+// command-based allow-list is how the captioner knows a CLI provider can read
+// images. Keyed on `command` so a renamed/duplicated provider still qualifies.
+const VISION_CLI_COMMANDS = new Set(['codex', 'claude']);
+
+/**
+ * Whether a CLI-type provider can caption images (its model reads vision and
+ * its CLI accepts an image file). Returns false for non-CLI providers.
+ *
+ * @param {{type?:string, command?:string}} provider
+ * @returns {boolean}
+ */
+export function isVisionCapableCliProvider(provider) {
+  if (!provider || provider.type !== 'cli') return false;
+  return VISION_CLI_COMMANDS.has(provider.command);
+}
+
 /**
  * Detect a vision-capable (multimodal) model from its id and/or backend
  * capability metadata. Prefers explicit metadata when present — LM Studio's

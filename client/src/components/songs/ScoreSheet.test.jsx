@@ -33,7 +33,6 @@ describe('ScoreSheet renderer', () => {
   });
 
   it('draws full five-line staves (a multiple of five staff lines)', () => {
-    const html = renderToStaticMarkup(<ScoreSheet text={FIVE_HUNDRED_MILES} />);
     // Staff lines are the horizontal <line>s spanning the page; barlines are
     // vertical. Count rows by staff lines / 5 — must be a whole number ≥ 1.
     const html2 = renderToStaticMarkup(<ScoreSheet text={'| C4q | C4q |'} />);

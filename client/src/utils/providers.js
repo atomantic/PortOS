@@ -69,6 +69,19 @@ export const filterGenerationModels = (models) =>
   filterSelectableModels(models).filter((m) => !isEmbeddingModel(m));
 
 /**
+ * Per-model filter for a VISION picker: restrict LOCAL backends (Ollama /
+ * LM Studio) to vision-capable models by id, but leave cloud/API providers'
+ * lists untouched — `isVisionModel` is a local-name heuristic and would wrongly
+ * hide multimodal cloud models whose ids don't encode vision (`gpt-4o`,
+ * `claude-*`). Pass as `useProviderModels({ modelFilter: visionLocalModelFilter })`.
+ * @param {string} id
+ * @param {{endpoint?:string,name?:string}} [provider]
+ * @returns {boolean}
+ */
+export const visionLocalModelFilter = (id, provider) =>
+  localBackendForProvider(provider) ? isVisionModel(id) : true;
+
+/**
  * Classify a provider as a local-LLM backend by its endpoint/name, so callers
  * can fold in live-installed models (Ollama/LM Studio) that aren't in the
  * provider's stored `models` list. Ollama's native + OpenAI-compat ports are

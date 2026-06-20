@@ -36,7 +36,13 @@ tryReadFile: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock('../../lib/mediaModels.js', () => ({
-  getVideoModels: vi.fn(() => [{ id: 'ltx2_unified', name: 'LTX-2 Unified', runtime: 'ltx2', repo: 'Lightricks/LTX-Video', steps: 30, guidance: 3.5 }]),
+  getVideoModels: vi.fn(() => [
+    { id: 'ltx2_unified', name: 'LTX-2 Unified', runtime: 'ltx2', repo: 'Lightricks/LTX-Video', steps: 30, guidance: 3.5 },
+    // bf16 LTX-2.x mlx_video model — LoRA-capable via the generate_av wrapper.
+    { id: 'ltx23_unified', name: 'LTX-2.3 Unified Beta', runtime: 'mlx_video', repo: 'notapalindrome/ltx23-mlx-av', steps: 25, guidance: 3.0 },
+    // quantized mlx_video model — NOT LoRA-capable (out of scope).
+    { id: 'ltx23_distilled_q4', name: 'LTX-2.3 Distilled Q4', runtime: 'mlx_video', repo: 'notapalindrome/ltx23-mlx-av-q4', steps: 25, guidance: 3.0 },
+  ]),
   getDefaultVideoModelId: vi.fn(() => 'ltx2_unified'),
   getTextEncoderRepo: vi.fn(() => 'some/text-encoder'),
 }));
@@ -76,10 +82,12 @@ vi.mock('fs/promises', () => ({
   copyFile: vi.fn(async () => {}),
 }));
 
-// Spawn mock — returns a fake EventEmitter-like process that completes
-// immediately with exit code 0.
-vi.mock('child_process', () => {
-  const makeProc = () => {
+// Fake EventEmitter-like process that completes immediately with exit code 0.
+// Shared shape for both the child_process spawn mock (ffmpeg/probe) and the
+// detachedSpawn mock (the render child). Hoisted so the vi.mock factories
+// (themselves hoisted above normal declarations) can reference it.
+const { makeProc } = vi.hoisted(() => ({
+  makeProc: () => {
     const listeners = {};
     const proc = {
       pid: 12345,
@@ -97,12 +105,20 @@ vi.mock('child_process', () => {
       listeners.close?.(0, null);
     });
     return proc;
-  };
-  return {
-    spawn: vi.fn(() => makeProc()),
-    execFile: vi.fn((_bin, _args, _opts, cb) => cb?.(null, '', '')),
-  };
-});
+  },
+}));
+
+vi.mock('child_process', () => ({
+  spawn: vi.fn(() => makeProc()),
+  execFile: vi.fn((_bin, _args, _opts, cb) => cb?.(null, '', '')),
+}));
+
+// The render child now goes through spawnDetached (double-fork survival of a
+// pm2 restart). Mock it to the same fake proc, async since spawnDetached
+// resolves once the PID is known.
+vi.mock('../../lib/detachedSpawn.js', () => ({
+  spawnDetached: vi.fn(async () => makeProc()),
+}));
 
 // ─── module under test ───────────────────────────────────────────────────────
 // Import AFTER all vi.mock calls so the hoisted mocks are in place.
@@ -349,9 +365,10 @@ describe('generateChainedVideo — extend chain arg routing', () => {
 
 describe('generateVideo — ltx2 FFLF image resizing', () => {
   it('resizes both start and end frames before passing them to the ltx2 helper', async () => {
-    const { execFile, spawn } = await import('child_process');
+    const { execFile } = await import('child_process');
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
     const execFileMock = vi.mocked(execFile);
-    const spawnMock = vi.mocked(spawn);
+    const spawnMock = vi.mocked(spawnDetached);
     execFileMock.mockClear();
     spawnMock.mockClear();
 
@@ -401,8 +418,8 @@ describe('generateVideo — PORTOS_T2V_TWO_STAGE arg threading', () => {
   // Node-side override + --stage2-steps threading is observable end-to-end
   // (the pure-helper test can't see buildLtx2Args).
   const renderArgsFor = async (jobId) => {
-    const { spawn } = await import('child_process');
-    const spawnMock = vi.mocked(spawn);
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const spawnMock = vi.mocked(spawnDetached);
     spawnMock.mockClear();
     await generateVideo({
       jobId,
@@ -641,10 +658,7 @@ describe('generateVideo — panel-side completion watchdog', () => {
     };
   }
 
-  let restoreSpawn;
   beforeEach(async () => {
-    const { spawn } = await import('child_process');
-    restoreSpawn = vi.mocked(spawn).getMockImplementation();
     vi.useFakeTimers();
   });
 
@@ -659,9 +673,9 @@ describe('generateVideo — panel-side completion watchdog', () => {
     vi.resetModules();
     ({ generateVideo } = await import('./local.js'));
 
-    const { spawn } = await import('child_process');
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
     const hang = makeHangingProc();
-    vi.mocked(spawn).mockImplementationOnce(() => hang.proc);
+    vi.mocked(spawnDetached).mockImplementationOnce(async () => hang.proc);
 
     generateVideo({
       jobId: 'watchdog-json-hang',
@@ -693,9 +707,9 @@ describe('generateVideo — panel-side completion watchdog', () => {
     vi.resetModules();
     ({ generateVideo } = await import('./local.js'));
 
-    const { spawn } = await import('child_process');
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
     const hang = makeHangingProc();
-    vi.mocked(spawn).mockImplementationOnce(() => hang.proc);
+    vi.mocked(spawnDetached).mockImplementationOnce(async () => hang.proc);
 
     generateVideo({
       jobId: 'watchdog-mux-hang',
@@ -724,9 +738,9 @@ describe('generateVideo — panel-side completion watchdog', () => {
     vi.mocked(existsSync).mockReturnValue(true);
     vi.mocked(statSync).mockReturnValue({ size: 1000 });
 
-    const { spawn } = await import('child_process');
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
     const hang = makeHangingProc();
-    vi.mocked(spawn).mockImplementationOnce(() => hang.proc);
+    vi.mocked(spawnDetached).mockImplementationOnce(async () => hang.proc);
 
     const events = [];
     const onCompleted = (e) => events.push(['completed', e]);
@@ -767,9 +781,9 @@ describe('generateVideo — panel-side completion watchdog', () => {
     ({ generateVideo } = await import('./local.js'));
     ({ videoGenEvents } = await import('./events.js'));
 
-    const { spawn } = await import('child_process');
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
     const hang = makeHangingProc();
-    vi.mocked(spawn).mockImplementationOnce(() => hang.proc);
+    vi.mocked(spawnDetached).mockImplementationOnce(async () => hang.proc);
 
     const events = [];
     const onCompleted = (e) => events.push(['completed', e]);
@@ -804,9 +818,9 @@ describe('generateVideo — panel-side completion watchdog', () => {
     vi.resetModules();
     ({ generateVideo } = await import('./local.js'));
 
-    const { spawn } = await import('child_process');
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
     const hang = makeHangingProc();
-    vi.mocked(spawn).mockImplementationOnce(() => hang.proc);
+    vi.mocked(spawnDetached).mockImplementationOnce(async () => hang.proc);
 
     generateVideo({
       jobId: 'watchdog-clean-exit',
@@ -836,9 +850,9 @@ describe('generateVideo — panel-side completion watchdog', () => {
     vi.resetModules();
     ({ generateVideo } = await import('./local.js'));
 
-    const { spawn } = await import('child_process');
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
     const hang = makeHangingProc();
-    vi.mocked(spawn).mockImplementationOnce(() => hang.proc);
+    vi.mocked(spawnDetached).mockImplementationOnce(async () => hang.proc);
 
     generateVideo({
       jobId: 'watchdog-no-marker',
@@ -860,8 +874,8 @@ describe('generateVideo — panel-side completion watchdog', () => {
 
 describe('generateVideo — video LoRA (--user-loras) arg threading', () => {
   it('emits --user-loras JSON with resolved path + strength for ltx2 renders', async () => {
-    const { spawn } = await import('child_process');
-    const spawnMock = vi.mocked(spawn);
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const spawnMock = vi.mocked(spawnDetached);
     spawnMock.mockClear();
 
     await generateVideo({
@@ -887,8 +901,8 @@ describe('generateVideo — video LoRA (--user-loras) arg threading', () => {
   });
 
   it('defaults missing scale to 1.0', async () => {
-    const { spawn } = await import('child_process');
-    const spawnMock = vi.mocked(spawn);
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const spawnMock = vi.mocked(spawnDetached);
     spawnMock.mockClear();
 
     await generateVideo({
@@ -909,8 +923,8 @@ describe('generateVideo — video LoRA (--user-loras) arg threading', () => {
   });
 
   it('omits --user-loras when no LoRAs are passed', async () => {
-    const { spawn } = await import('child_process');
-    const spawnMock = vi.mocked(spawn);
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const spawnMock = vi.mocked(spawnDetached);
     spawnMock.mockClear();
 
     await generateVideo({
@@ -926,6 +940,73 @@ describe('generateVideo — video LoRA (--user-loras) arg threading', () => {
       ([bin]) => String(bin).includes('.portos/ltx-2-mlx/.venv/bin/python3'),
     );
     expect(call[1]).not.toContain('--user-loras');
+  });
+
+  it('routes a bf16 mlx_video LTX model through the generate_av_lora.py wrapper with --user-loras', async () => {
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const spawnMock = vi.mocked(spawnDetached);
+    spawnMock.mockClear();
+
+    await generateVideo({
+      jobId: 'mlx-lora-test',
+      pythonPath: '/usr/bin/python3',
+      modelId: 'ltx23_unified', // runtime: mlx_video, bf16 → LoRA-capable
+      prompt: 'audio reactive clip',
+      width: 512, height: 512, numFrames: 25, fps: 24,
+      mode: 'text',
+      loras: [{ filename: 'lora-fal-ltx2-3-audio-reactive-lora-hf.safetensors', scale: 0.8 }],
+    });
+
+    const call = spawnMock.mock.calls.find(
+      ([bin, args]) => String(bin) === '/usr/bin/python3'
+        && Array.isArray(args) && args.includes('--user-loras'),
+    );
+    expect(call).toBeTruthy();
+    const args = call[1];
+    // wrapper script, NOT the bare `-m mlx_video.generate_av` module path
+    expect(args[0]).toBe(join(MOCK_PATHS.root, 'scripts', 'generate_av_lora.py'));
+    expect(args).not.toContain('-m');
+    // the generate_av flags still flow through the wrapper
+    expect(args).toContain('--model-repo');
+    expect(args[args.indexOf('--model-repo') + 1]).toBe('notapalindrome/ltx23-mlx-av');
+    const payload = JSON.parse(args[args.indexOf('--user-loras') + 1]);
+    expect(payload).toEqual([
+      { path: join(MOCK_PATHS.loras, 'lora-fal-ltx2-3-audio-reactive-lora-hf.safetensors'), strength: 0.8 },
+    ]);
+  });
+
+  it('a non-LoRA mlx_video render still uses the bare generate_av module (no wrapper)', async () => {
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const spawnMock = vi.mocked(spawnDetached);
+    spawnMock.mockClear();
+
+    await generateVideo({
+      jobId: 'mlx-no-lora',
+      pythonPath: '/usr/bin/python3',
+      modelId: 'ltx23_unified',
+      prompt: 'clip',
+      width: 512, height: 512, numFrames: 25, fps: 24,
+      mode: 'text',
+    });
+
+    const call = spawnMock.mock.calls.find(
+      ([bin, args]) => String(bin) === '/usr/bin/python3' && Array.isArray(args) && args.includes('mlx_video.generate_av'),
+    );
+    expect(call).toBeTruthy();
+    expect(call[1]).not.toContain('--user-loras');
+    expect(call[1]).not.toContain(join(MOCK_PATHS.root, 'scripts', 'generate_av_lora.py'));
+  });
+
+  it('rejects LoRAs on a quantized (out-of-scope) mlx_video model', async () => {
+    await expect(generateVideo({
+      jobId: 'mlx-q4-lora',
+      pythonPath: '/usr/bin/python3',
+      modelId: 'ltx23_distilled_q4', // runtime: mlx_video, quantized → NOT capable
+      prompt: 'clip',
+      width: 512, height: 512, numFrames: 25, fps: 24,
+      mode: 'text',
+      loras: [{ filename: 'style.safetensors', scale: 1.0 }],
+    })).rejects.toThrow(/LoRAs aren't supported/);
   });
 });
 
@@ -951,5 +1032,77 @@ describe('generateVideo — LoRA history-record contract (Remix round-trip)', ()
     expect(startedMeta.loraFilenames).toEqual(['a.safetensors', 'b.safetensors']);
     expect(startedMeta.loraScales).toEqual([0.7, 1.0]);
     expect(startedMeta.loras).toBeUndefined();
+  });
+});
+
+describe('generateVideo — close-handler resilience (issue #1334)', () => {
+  // A throw from finalizeGeneratedVideo inside proc.on('close') must NOT leak as
+  // an unhandled rejection (process-killing on Node ≥15) or strand the job
+  // `running` with no terminal SSE — it has to surface as a 'failed' event.
+  it('routes a finalize throw to a terminal failed event instead of an unhandled rejection', async () => {
+    vi.resetModules();
+    vi.doMock('./generateVideoHelpers.js', () => ({
+      makeVideoGenLineHandler: () => () => true,
+      isWatchdogSuccess: () => false,
+      finalizeGeneratedVideo: vi.fn(async () => { throw new Error('boom finalize'); }),
+    }));
+    const { generateVideo: gv } = await import('./local.js');
+    const { videoGenEvents: events } = await import('./events.js');
+
+    const failed = new Promise((resolve) => events.once('failed', resolve));
+
+    await gv({
+      jobId: 'close-handler-finalize-throw',
+      pythonPath: '/usr/bin/python3',
+      modelId: 'ltx2_unified',
+      prompt: 'a clip',
+      width: 512, height: 512, numFrames: 25, fps: 24,
+      mode: 'text',
+    });
+
+    const evt = await failed;
+    expect(evt.generationId).toBe('close-handler-finalize-throw');
+    expect(evt.error).toMatch(/boom finalize/);
+
+    vi.doUnmock('./generateVideoHelpers.js');
+  });
+});
+
+describe('runtime fingerprint (/status)', () => {
+  it('hostRuntimeFingerprint reports chip/os/platform/arch/node', async () => {
+    const { hostRuntimeFingerprint } = await import('./local.js');
+    const fp = hostRuntimeFingerprint();
+    expect(typeof fp.chip).toBe('string');
+    expect(fp.chip.length).toBeGreaterThan(0);
+    expect(typeof fp.os).toBe('string');
+    expect(fp.platform).toBe(process.platform);
+    expect(fp.arch).toBe(process.arch);
+    expect(fp.node).toBe(process.version);
+  });
+
+  it('resolveRuntimeFingerprint returns host info immediately + only resolved runtimes (non-blocking)', async () => {
+    // /status must not block on probes, so resolveRuntimeFingerprint never
+    // awaits a probe: `runtimes` contains only fingerprints already resolved in
+    // cache (uncached installed runtimes are warmed in the background). Whether
+    // any are present depends on the machine (CI: none; a dev box warms async),
+    // so assert the shape — host always present, every included runtime entry is
+    // a resolved fingerprint with a `versions` object and NO `error` (errors are
+    // never cached) — rather than a specific machine's install set.
+    const { resolveRuntimeFingerprint } = await import('./local.js');
+    const block = await resolveRuntimeFingerprint();
+    expect(block.host).toBeDefined();
+    expect(typeof block.host.chip).toBe('string');
+    expect(block.runtimes && typeof block.runtimes === 'object').toBe(true);
+    for (const [id, fp] of Object.entries(block.runtimes)) {
+      expect(typeof id).toBe('string');
+      expect(fp.error).toBeUndefined();
+      expect(typeof fp.versions).toBe('object');
+    }
+  });
+
+  it('invalidateRuntimeFingerprintCache is callable for a single id and for all', async () => {
+    const { invalidateRuntimeFingerprintCache } = await import('./local.js');
+    expect(() => invalidateRuntimeFingerprintCache('ltx2')).not.toThrow();
+    expect(() => invalidateRuntimeFingerprintCache()).not.toThrow();
   });
 });

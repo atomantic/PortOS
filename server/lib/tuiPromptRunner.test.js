@@ -680,6 +680,32 @@ describe('executeTuiRun', () => {
       }));
     });
 
+    it('early-fails with reason "fallback-signal" when the model id is rejected (Bedrock invalid identifier) instead of idling to a bogus-scrape success', async () => {
+      const provider = { id: 'claude', type: 'tui', command: 'claude' };
+      const onComplete = vi.fn();
+      const promise = executeTuiRun({ runId: 'run-bad-model', provider, prompt: 'a prompt long enough', workspacePath: '/cwd', onData: undefined, onComplete, timeout: 60000 });
+      await flushAsync();
+
+      // Claude Code renders the terminal model-id rejection inline and then sits
+      // idle — without the early-fail signal this would idle-complete as success
+      // and scrape the error screen as the "response".
+      ptyInstances[0].emitData('⏺ API Error (claude-opus-4-8): 400 The provided model identifier is invalid.. Try /model to switch to us.anthropic.claude-opus-4-1-20250805-v1:0.\n');
+
+      await promise;
+      expect(ptyInstances[0].kill).toHaveBeenCalled();
+      expect(runnerMocks.finalizeRunRecord).toHaveBeenCalledWith(expect.objectContaining({
+        runId: 'run-bad-model',
+        success: false,
+        exitCode: 1,
+        error: expect.stringContaining('model identifier is invalid'),
+        extras: expect.objectContaining({ completionReason: 'fallback-signal' }),
+      }));
+      expect(onComplete).toHaveBeenCalledWith(expect.objectContaining({
+        success: false,
+        completionReason: 'fallback-signal',
+      }));
+    });
+
     it('finishes with reason "exit" + exitCode 0 when the PTY closes cleanly', async () => {
       const provider = { id: 'claude', type: 'tui', command: 'echo' };
       const promise = executeTuiRun({ runId: 'run-exit', provider, prompt: 'a prompt long enough', workspacePath: '/cwd', onData: undefined, onComplete: undefined, timeout: 60000 });

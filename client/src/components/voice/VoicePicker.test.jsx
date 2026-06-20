@@ -46,7 +46,9 @@ describe('VoicePicker', () => {
     const onChange = vi.fn();
     const user = userEvent.setup();
     render(<VoicePicker value={null} onChange={onChange} />);
-    await waitFor(() => document.querySelector('option[value="kokoro:af_bella"]'));
+    await waitFor(() => {
+      expect(document.querySelector('option[value="kokoro:af_bella"]')).toBeInTheDocument();
+    });
     const select = screen.getByRole('combobox');
     await user.selectOptions(select, 'kokoro:af_bella');
     expect(onChange).toHaveBeenCalledWith('kokoro:af_bella');
@@ -57,7 +59,9 @@ describe('VoicePicker', () => {
     const onChange = vi.fn();
     const user = userEvent.setup();
     render(<VoicePicker value="kokoro:af_bella" onChange={onChange} placeholder="Project default voice" />);
-    await waitFor(() => document.querySelector('option[value="kokoro:af_bella"]'));
+    await waitFor(() => {
+      expect(document.querySelector('option[value="kokoro:af_bella"]')).toBeInTheDocument();
+    });
     const select = screen.getByRole('combobox');
     await user.selectOptions(select, '');
     expect(onChange).toHaveBeenCalledWith(null);
@@ -84,7 +88,9 @@ describe('VoicePicker', () => {
   it('preserves an unavailable saved voiceId so the user sees what was bound', async () => {
     listPipelineTtsVoices.mockResolvedValue({ voices: SAMPLE_VOICES });
     render(<VoicePicker value="kokoro:retired-voice" onChange={() => {}} />);
-    await waitFor(() => document.querySelector('option[value="kokoro:af_bella"]'));
+    await waitFor(() => {
+      expect(document.querySelector('option[value="kokoro:af_bella"]')).toBeInTheDocument();
+    });
     expect(screen.getByRole('option', { name: /retired-voice \(unavailable\)/i })).toBeInTheDocument();
   });
 
@@ -94,7 +100,9 @@ describe('VoicePicker', () => {
     previewPipelineTtsVoice.mockResolvedValue(buf);
     const user = userEvent.setup();
     render(<VoicePicker value="kokoro:af_bella" onChange={() => {}} previewText="hello" />);
-    await waitFor(() => document.querySelector('option[value="kokoro:af_bella"]'));
+    await waitFor(() => {
+      expect(document.querySelector('option[value="kokoro:af_bella"]')).toBeInTheDocument();
+    });
     const button = screen.getByRole('button', { name: /audition kokoro:af_bella/i });
     await user.click(button);
     await waitFor(() => {
@@ -106,7 +114,9 @@ describe('VoicePicker', () => {
   it('disables the audition button when no voice is selected', async () => {
     listPipelineTtsVoices.mockResolvedValue({ voices: SAMPLE_VOICES });
     render(<VoicePicker value={null} onChange={() => {}} />);
-    await waitFor(() => document.querySelector('option[value="kokoro:af_bella"]'));
+    await waitFor(() => {
+      expect(document.querySelector('option[value="kokoro:af_bella"]')).toBeInTheDocument();
+    });
     const button = screen.getByRole('button', { name: /audition voice/i });
     expect(button).toBeDisabled();
   });
@@ -134,10 +144,14 @@ describe('VoicePicker', () => {
   it('shares the module-local cache between mounts (single fetch)', async () => {
     listPipelineTtsVoices.mockResolvedValue({ voices: SAMPLE_VOICES });
     const { unmount } = render(<VoicePicker value={null} onChange={() => {}} />);
-    await waitFor(() => document.querySelector('option[value="kokoro:af_bella"]'));
+    await waitFor(() => {
+      expect(document.querySelector('option[value="kokoro:af_bella"]')).toBeInTheDocument();
+    });
     unmount();
     render(<VoicePicker value={null} onChange={() => {}} />);
-    await waitFor(() => document.querySelector('option[value="kokoro:af_bella"]'));
+    await waitFor(() => {
+      expect(document.querySelector('option[value="kokoro:af_bella"]')).toBeInTheDocument();
+    });
     expect(listPipelineTtsVoices).toHaveBeenCalledTimes(1);
   });
 
@@ -146,7 +160,9 @@ describe('VoicePicker', () => {
     try {
       listPipelineTtsVoices.mockResolvedValue({ voices: SAMPLE_VOICES });
       const { unmount } = render(<VoicePicker value={null} onChange={() => {}} />);
-      await waitFor(() => document.querySelector('option[value="kokoro:af_bella"]'));
+      await waitFor(() => {
+        expect(document.querySelector('option[value="kokoro:af_bella"]')).toBeInTheDocument();
+      });
       unmount();
       // Advance past the 15-second TTL.
       vi.advanceTimersByTime(20_000);

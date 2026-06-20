@@ -90,6 +90,43 @@ describe('useSingleImageRender', () => {
     expect(onComplete).toHaveBeenLastCalledWith('a.png', 'char-b');
   });
 
+  it('namespaces the single-target key per scopeId (jobId + completion key)', async () => {
+    generateImage.mockResolvedValue({ jobId: 'job-u1' });
+    const onComplete = vi.fn();
+    const { result } = renderHook(() =>
+      useSingleImageRender({ buildPrompt: () => ({ prompt: 'p' }), onComplete, scopeId: 'u1' }));
+
+    await act(async () => { await result.current.render(IMG_CFG); });
+    // The job is tracked under the scoped key, and `jobId` reads it back.
+    expect(result.current.renderingJobs).toEqual({ 'u1:__single__': 'job-u1' });
+    expect(result.current.jobId).toBe('job-u1');
+
+    await act(async () => { await result.current.handleComplete('out.png'); });
+    expect(onComplete).toHaveBeenCalledWith('out.png', 'u1:__single__');
+    expect(result.current.jobId).toBeNull();
+  });
+
+  it('reads the displayed scope and resumes a still-running job on switch-back', async () => {
+    generateImage.mockResolvedValueOnce({ jobId: 'job-u1' }).mockResolvedValueOnce({ jobId: 'job-u2' });
+    const onComplete = vi.fn();
+    const { result, rerender } = renderHook(
+      ({ scopeId }) => useSingleImageRender({ buildPrompt: () => ({ prompt: 'p' }), onComplete, scopeId }),
+      { initialProps: { scopeId: 'u1' } },
+    );
+
+    // Queue a render for u1, then switch to u2 (no remount) and queue one there.
+    await act(async () => { await result.current.render(IMG_CFG); });
+    rerender({ scopeId: 'u2' });
+    expect(result.current.jobId).toBeNull(); // u2 has nothing in flight yet
+    await act(async () => { await result.current.render(IMG_CFG); });
+    expect(result.current.jobId).toBe('job-u2');
+
+    // Switch back to u1 — its still-running job resurfaces instead of being lost.
+    rerender({ scopeId: 'u1' });
+    expect(result.current.jobId).toBe('job-u1');
+    expect(result.current.renderingJobs).toEqual({ 'u1:__single__': 'job-u1', 'u2:__single__': 'job-u2' });
+  });
+
   it('ignores a completion with no filename but still clears the job', async () => {
     generateImage.mockResolvedValue({ jobId: 'job-1' });
     const onComplete = vi.fn();

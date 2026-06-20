@@ -22,17 +22,17 @@
     "kokoro-js": "1.2.1",
     "node-pty": "1.2.0-beta.10",
     "pdf-lib": "^1.17.1",
-    "pg": "8.19.0",
+    "pg": "8.22.0",
     "pm2": "7.0.1",
     "sax": "^1.6.0",
-    "sharp": "0.34.5",
+    "sharp": "0.35.2",
     "socket.io": "4.8.3",
     "socket.io-client": "4.8.3",
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@vitest/coverage-v8": "4.1.8",
-    "vitest": "4.1.8"
+    "@vitest/coverage-v8": "4.1.9",
+    "vitest": "4.1.9"
   },
   "overrides": {
     "path-to-regexp": "8.4.2",
@@ -40,6 +40,7 @@
     "basic-ftp": "6.0.1",
     "follow-redirects": "1.16.0",
     "brace-expansion": "5.0.6",
+    "js-yaml": "4.2.0",
     "qs": "6.15.2",
     "socket.io-parser": "4.2.6",
     "protobufjs": "7.5.9",

@@ -40,7 +40,6 @@ export default function AnalysisHistory({ work, activeHash, onApplyFormat }) {
     setExpanded(null);
     setDetails({});
     refresh();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [work.id]);
 
   const expand = async (analysis) => {

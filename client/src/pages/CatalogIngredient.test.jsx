@@ -72,6 +72,23 @@ vi.mock('../services/apiCatalog', () => ({
   detachCatalogIngredientMedia: vi.fn(),
 }));
 
+vi.mock('../services/apiSystem', () => ({ generateImage: vi.fn() }));
+// Stand-in for the live image-gen thumb: fire onFilename as soon as a jobId is
+// handed in, simulating a completed render without the socket/job machinery.
+vi.mock('../components/pipeline/MediaJobThumb', async () => {
+  const { useEffect } = await import('react');
+  // A jobId of 'fail-job' simulates a failed render (drives onStatus); any other
+  // id simulates a completed render (drives onFilename).
+  function MockMediaJobThumb({ jobId, onFilename, onStatus }) {
+    useEffect(() => {
+      if (!jobId) return;
+      if (jobId === 'fail-job') onStatus?.('failed');
+      else onFilename?.(`${jobId}.png`);
+    }, [jobId, onFilename, onStatus]);
+    return null;
+  }
+  return { default: MockMediaJobThumb };
+});
 vi.mock('../services/apiImageVideo', () => ({ listImageGallery: vi.fn(async () => []) }));
 vi.mock('../components/IngredientPicker', () => ({ default: () => null }));
 vi.mock('../components/MediaImage', () => ({ default: ({ src, alt }) => <img src={src} alt={alt} /> }));
@@ -164,6 +181,68 @@ describe('CatalogIngredient — character sheet', () => {
       expect(img.getAttribute('src')).toBe('/data/image-refs/sheet-123.png');
     });
     expect(screen.getByText(/Re-render in Universe Builder/i)).toBeTruthy();
+  });
+
+  it('generates an image from the description and sets it as the portrait', async () => {
+    const { generateImage } = await import('../services/apiSystem');
+    const { setCatalogIngredientPortrait } = await import('../services/apiCatalog');
+    generateImage.mockResolvedValue({ jobId: 'job-1' });
+    setCatalogIngredientPortrait.mockResolvedValue({});
+    renderPage();
+    await waitFor(() => expect(screen.getByDisplayValue('Sharp eyes, ink-stained cuffs.')).toBeTruthy());
+
+    fireEvent.click(screen.getByRole('button', { name: /^Generate$/i }));
+
+    await waitFor(() => expect(generateImage).toHaveBeenCalled());
+    // Prompt is composed from the name + the type's primary description field.
+    const [genPayload] = generateImage.mock.calls[0];
+    expect(genPayload.prompt).toMatch(/Ada Lovelace/);
+    expect(genPayload.prompt).toMatch(/Sharp eyes/);
+    // The MediaJobThumb stub fires onFilename → with no existing portrait the
+    // render is attached as THE portrait.
+    await waitFor(() => expect(setCatalogIngredientPortrait).toHaveBeenCalledWith(
+      'cat-chr-1', { mediaKey: 'job-1.png' }, { silent: true },
+    ));
+  });
+
+  it('attaches a synchronously-returned image (external mode, no jobId)', async () => {
+    const { generateImage } = await import('../services/apiSystem');
+    const { setCatalogIngredientPortrait } = await import('../services/apiCatalog');
+    generateImage.mockResolvedValue({ filename: 'ext.png' }); // external SD-API: no jobId
+    setCatalogIngredientPortrait.mockResolvedValue({});
+    renderPage();
+    await waitFor(() => expect(screen.getByDisplayValue('Sharp eyes, ink-stained cuffs.')).toBeTruthy());
+
+    fireEvent.click(screen.getByRole('button', { name: /^Generate$/i }));
+
+    await waitFor(() => expect(setCatalogIngredientPortrait).toHaveBeenCalledWith(
+      'cat-chr-1', { mediaKey: 'ext.png' }, { silent: true },
+    ));
+  });
+
+  it('re-enables Generate after a failed render (does not get stuck)', async () => {
+    const { generateImage } = await import('../services/apiSystem');
+    generateImage.mockResolvedValue({ jobId: 'fail-job' });
+    renderPage();
+    await waitFor(() => expect(screen.getByDisplayValue('Sharp eyes, ink-stained cuffs.')).toBeTruthy());
+
+    fireEvent.click(screen.getByRole('button', { name: /^Generate$/i }));
+    // The MediaJobThumb stub drives onStatus('failed') for 'fail-job'; the
+    // control must clear the job and re-enable rather than hang on "Generating…".
+    await waitFor(() => {
+      const btn = screen.getByRole('button', { name: /^Generate$/i });
+      expect(btn).toHaveProperty('disabled', false);
+    });
+  });
+
+  it('disables Generate when the ingredient has no description text', async () => {
+    getCatalogIngredientDetails.mockImplementation(async () => detailsOf({
+      ...CHAR_FIXTURE,
+      payload: { role: 'Mentor' }, // no physicalDescription/description/summary
+    }));
+    renderPage();
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Generate$/i })).toBeTruthy());
+    expect(screen.getByRole('button', { name: /^Generate$/i })).toHaveProperty('disabled', true);
   });
 
   it('collapses a sheet section when its header is clicked', async () => {

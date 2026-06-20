@@ -62,6 +62,27 @@ describe('resolveCaptionModel', () => {
     await expect(resolveCaptionModel({ listVision }))
       .rejects.toMatchObject({ status: 409, code: 'LORA_CAPTION_NO_VISION_MODEL' });
   });
+
+  it('accepts a CLI provider/model the scan reports (codex / claude vision)', async () => {
+    // CLI model ids (e.g. claude-opus-4-8) aren't matched by the VLM id regex,
+    // so the resolver scans — and listVisionModels now surfaces vision-capable
+    // CLI providers, so the explicit pick is confirmed rather than rejected.
+    const listVision = vi.fn(async () => [
+      ...VISION,
+      { providerId: 'claude-code', backend: 'cli', id: 'claude-opus-4-8', name: 'Claude Code / claude-opus-4-8', vision: true },
+    ]);
+    const out = await resolveCaptionModel({ providerId: 'claude-code', model: 'claude-opus-4-8', listVision });
+    expect(out).toEqual({ providerId: 'claude-code', model: 'claude-opus-4-8' });
+    expect(listVision).toHaveBeenCalledOnce();
+  });
+
+  it('auto-picks a CLI vision provider when it is the only one available', async () => {
+    const listVision = vi.fn(async () => [
+      { providerId: 'codex', backend: 'cli', id: 'gpt-5', name: 'Codex / gpt-5', vision: true },
+    ]);
+    const out = await resolveCaptionModel({ listVision });
+    expect(out).toEqual({ providerId: 'codex', model: 'gpt-5' });
+  });
 });
 
 describe('buildCaption', () => {

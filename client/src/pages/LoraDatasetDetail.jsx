@@ -10,7 +10,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import {
-  ArrowLeft, Loader2, Upload, Wand2, Scissors, Tags, RefreshCw, AlertTriangle, Images, Replace, Lightbulb,
+  ArrowLeft, Loader2, Upload, Wand2, Scissors, Tags, RefreshCw, AlertTriangle, Images, Replace, Lightbulb, Eraser,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import Modal from '../components/ui/Modal';
@@ -23,10 +23,12 @@ import ImportGalleryDialog from '../components/loraTraining/ImportGalleryDialog'
 import UniverseCharacterPicker from '../components/loraTraining/UniverseCharacterPicker';
 import {
   getLoraDataset,
+  getLoraDatasetVariationAxes,
   patchLoraDataset,
   uploadLoraDatasetImages,
   sliceLoraDatasetRefSheet,
   startLoraCaptionRun,
+  stripLoraDatasetSharedCaptionFragments,
   getUniverse,
 } from '../services/api';
 
@@ -55,6 +57,50 @@ const captionHasTriggerWord = (caption, triggerWord) => {
   const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   return new RegExp(`(?:^|[^a-z0-9_])${escaped}(?:[^a-z0-9_]|$)`, 'i').test(text);
 };
+// Mirror of server/lib/loraDataset.js analyzeCaptionInvariants — flags the
+// identity fragments repeated across most captions (which bind the character to
+// the caption phrases instead of the trigger token, issue #1320). Page-local so
+// the advisory updates the instant a caption is edited, without a refetch; the
+// authoritative strip recomputes server-side. Port logic changes here when the
+// server helper changes.
+const INVARIANT_SHARE_THRESHOLD = 0.8;
+const MIN_CAPTIONS_FOR_INVARIANT_ANALYSIS = 4;
+const captionBody = (caption, triggerWord) => {
+  const word = (triggerWord || '').trim();
+  let body = (caption || '').trim();
+  if (word) {
+    const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    body = body.replace(new RegExp(`^${escaped}(?=[\\s,]|$)\\s*,?\\s*`, 'i'), '');
+  }
+  return body;
+};
+const splitCaptionFragments = (caption, triggerWord) => captionBody(caption, triggerWord)
+  .split(',').map((f) => f.trim()).filter(Boolean);
+const normalizeFragment = (f) => (f || '').trim().toLowerCase().replace(/\s+/g, ' ');
+const analyzeCaptionInvariants = (images, triggerWord) => {
+  const list = Array.isArray(images) ? images : [];
+  const word = (triggerWord || '').trim();
+  const captioned = list.filter((img) => img?.status === 'ready' && captionHasTriggerWord(img.caption, word));
+  const total = captioned.length;
+  if (total < MIN_CAPTIONS_FOR_INVARIANT_ANALYSIS) return { analyzable: false, total, sharedFragments: [] };
+  const counts = new Map();
+  for (const img of captioned) {
+    const seen = new Set();
+    for (const frag of splitCaptionFragments(img.caption, word)) {
+      const norm = normalizeFragment(frag);
+      if (!norm || seen.has(norm)) continue;
+      seen.add(norm);
+      const cur = counts.get(norm) || { fragment: frag, count: 0 };
+      cur.count += 1;
+      counts.set(norm, cur);
+    }
+  }
+  const sharedFragments = [...counts.entries()]
+    .filter(([, v]) => v.count >= 2 && v.count / total >= INVARIANT_SHARE_THRESHOLD)
+    .map(([normalized, v]) => ({ fragment: v.fragment, normalized, count: v.count, ratio: v.count / total }))
+    .sort((a, b) => b.count - a.count || a.fragment.localeCompare(b.fragment));
+  return { analyzable: true, total, sharedFragments };
+};
 const deriveReadiness = (images, triggerWord) => {
   const list = Array.isArray(images) ? images : [];
   const word = (triggerWord || '').trim();
@@ -78,13 +124,17 @@ const deriveReadiness = (images, triggerWord) => {
 function SliceDialog({ dataset, onClose, onSliced }) {
   const [cols, setCols] = useState(3);
   const [rows, setRows] = useState(2);
+  // Vision-auto detection is the default; the grid inputs are the fallback the
+  // user reaches for when no vision model is installed or auto-detect mis-cuts.
+  const [useVision, setUseVision] = useState(true);
   const [submitting, setSubmitting] = useState(false);
 
   const submit = async () => {
     setSubmitting(true);
     try {
-      const result = await sliceLoraDatasetRefSheet(dataset.id, { cols, rows });
-      toast.success(`Added ${result.images.length} crops from the reference sheet — prune any bad ones`);
+      const result = await sliceLoraDatasetRefSheet(dataset.id, { cols, rows, useVision });
+      const via = result.method === 'vision' ? 'auto-detected' : 'grid';
+      toast.success(`Added ${result.images.length} ${via} crops from the reference sheet — prune any bad ones`);
       onSliced(result);
     } finally {
       setSubmitting(false);
@@ -117,10 +167,26 @@ function SliceDialog({ dataset, onClose, onSliced }) {
       <div className="space-y-4">
         <h2 id="lt-slice-title" className="text-base font-semibold text-white">Slice reference sheet</h2>
         <p className="text-sm text-gray-400">
-          Cuts the character&apos;s reference-sheet turnaround into a fixed grid of training crops.
+          Cuts the character&apos;s reference-sheet turnaround into individual training crops.
           Sheet layouts vary, so expect to delete cells that caught labels or palette swatches.
         </p>
-        <div className="grid grid-cols-2 gap-3">
+        <label htmlFor="lt-slice-vision" className="flex items-start gap-2 text-sm text-gray-300">
+          <input
+            id="lt-slice-vision"
+            type="checkbox"
+            checked={useVision}
+            onChange={(e) => setUseVision(e.target.checked)}
+            className="mt-0.5"
+          />
+          <span>
+            Auto-detect figures with a vision model
+            <span className="block text-xs text-gray-500">
+              Proposes a crop per figure instead of a rigid grid. Falls back to the grid below if no
+              vision model is installed or detection finds nothing.
+            </span>
+          </span>
+        </label>
+        <div className={`grid grid-cols-2 gap-3 ${useVision ? 'opacity-50' : ''}`}>
           {numberInput('lt-slice-cols', 'Columns', cols, setCols)}
           {numberInput('lt-slice-rows', 'Rows', rows, setRows)}
         </div>
@@ -133,7 +199,7 @@ function SliceDialog({ dataset, onClose, onSliced }) {
             className="px-3 py-2 text-sm rounded bg-port-accent text-white disabled:opacity-50 flex items-center gap-2"
           >
             {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Scissors className="w-4 h-4" />}
-            Slice {cols}×{rows}
+            {useVision ? 'Auto-slice' : `Slice ${cols}×${rows}`}
           </button>
         </div>
       </div>
@@ -205,6 +271,7 @@ export default function LoraDatasetDetail() {
   const [dataset, setDataset] = useState(null);
   const [loadError, setLoadError] = useState(null);
   const [subject, setSubject] = useState(null);
+  const [variationAxes, setVariationAxes] = useState(null);
   const [triggerDraft, setTriggerDraft] = useState(null);
   const [triggerSaving, setTriggerSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -218,6 +285,11 @@ export default function LoraDatasetDetail() {
   // server auto-pick a vision model". Lifted from CaptionModelPicker so caption
   // runs pass the explicit selection.
   const [captionModel, setCaptionModel] = useState({ providerId: null, model: null });
+  const [strippingFragments, setStrippingFragments] = useState(false);
+  // Bumped after a bulk caption rewrite (strip) so the image grid drops any
+  // unsaved caption drafts the rewrite superseded — otherwise a stale draft
+  // blur-saves the old text back, undoing the strip.
+  const [captionDraftResetToken, setCaptionDraftResetToken] = useState(0);
   const fileInputRef = useRef(null);
 
   const refresh = useCallback(() => getLoraDataset(datasetId)
@@ -235,8 +307,27 @@ export default function LoraDatasetDetail() {
         setSubject(entries.find((entry) => entry.id === dataset.character.entryId) || null);
       })
       .catch(() => {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dataset?.character?.universeId, dataset?.character?.entryKind, dataset?.character?.entryId]);
+
+  // Object/place variation axes (Lighting/Settings) live as server-side
+  // constants in deriveVariationAxes — fetch them so the generate-batch
+  // override chips render without mirroring the vocab client-side. Characters
+  // seed their chips from live canon (expressions/wardrobes) instead.
+  useEffect(() => {
+    if (!datasetId || subjectKind(dataset) === 'characters') {
+      setVariationAxes(null);
+      return undefined;
+    }
+    // Clear first so a direct object↔place switch can't seed the generate
+    // dialog from the previous kind's axes while the new fetch is in flight,
+    // and cancel-on-cleanup so a late response can't overwrite the current one.
+    let cancelled = false;
+    setVariationAxes(null);
+    getLoraDatasetVariationAxes(datasetId, { silent: true })
+      .then((axes) => { if (!cancelled) setVariationAxes(axes); })
+      .catch(() => { if (!cancelled) setVariationAxes(null); });
+    return () => { cancelled = true; };
+  }, [datasetId, dataset?.character?.entryKind]);
 
   // Readiness is derived from the live local images (not the server's snapshot
   // on `dataset.readiness`) so manual caption edits / deletes reflect in the
@@ -245,6 +336,30 @@ export default function LoraDatasetDetail() {
     () => deriveReadiness(dataset?.images, dataset?.triggerWord),
     [dataset?.images, dataset?.triggerWord],
   );
+
+  // Caption-lint advisory: identity fragments repeated across most captions
+  // (issue #1320). Derived live so it tracks manual caption edits without a
+  // refetch; the "Strip" action recomputes server-side.
+  const captionInvariants = useMemo(
+    () => analyzeCaptionInvariants(dataset?.images, dataset?.triggerWord),
+    [dataset?.images, dataset?.triggerWord],
+  );
+
+  const stripSharedFragments = async () => {
+    setStrippingFragments(true);
+    try {
+      const { dataset: next, removedFragments, updatedImages } = await stripLoraDatasetSharedCaptionFragments(datasetId);
+      setDataset(next);
+      setCaptionDraftResetToken((n) => n + 1);
+      if (removedFragments.length) {
+        toast.success(`Stripped ${removedFragments.length} shared identity fragment${removedFragments.length === 1 ? '' : 's'} from ${updatedImages} caption${updatedImages === 1 ? '' : 's'}`);
+      } else {
+        toast.success('No shared identity fragments to strip');
+      }
+    } finally {
+      setStrippingFragments(false);
+    }
+  };
 
   // Poll while any image renders — the server heals stuck images on read.
   const renderingCount = readiness.rendering;
@@ -353,12 +468,16 @@ export default function LoraDatasetDetail() {
   const recaptionAll = () => startCaption(true);
 
   const expressionOptions = useMemo(
-    () => (subjectKind(dataset) === 'characters' ? (subject?.expressions || []).map((e) => e?.name).filter(Boolean) : []),
-    [dataset, subject],
+    () => (subjectKind(dataset) === 'characters'
+      ? (subject?.expressions || []).map((e) => e?.name).filter(Boolean)
+      : (variationAxes?.expressions || [])),
+    [dataset, subject, variationAxes],
   );
   const outfitOptions = useMemo(
-    () => (subjectKind(dataset) === 'characters' ? (subject?.wardrobes || []).map((w) => w?.name).filter(Boolean) : []),
-    [dataset, subject],
+    () => (subjectKind(dataset) === 'characters'
+      ? (subject?.wardrobes || []).map((w) => w?.name).filter(Boolean)
+      : (variationAxes?.outfits || [])),
+    [dataset, subject, variationAxes],
   );
   const hasReferenceSheet = !!(subject?.referenceSheetImageRef
     || Object.values(subject?.referenceSheets || {}).some(Boolean));
@@ -500,6 +619,48 @@ export default function LoraDatasetDetail() {
         <CaptionModelPicker onChange={onCaptionModelChange} />
       </div>
 
+      {captionInvariants.sharedFragments.length > 0 && (
+        <div className="bg-port-warning/10 border border-port-warning/40 rounded-lg p-3 text-sm">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="w-4 h-4 text-port-warning shrink-0 mt-0.5" />
+            <div className="min-w-0 flex-1 space-y-2">
+              <p className="text-gray-200">
+                <span className="font-medium text-port-warning">Identity is leaking into the captions.</span>
+                {' '}
+                These fragments repeat across most captions, so the model binds the look to the phrases instead of the
+                {' '}
+                <span className="font-mono text-gray-300">{dataset.triggerWord || 'trigger'}</span>
+                {' '}
+                token — the trigger then renders a generic subject. Keep only what changes shot-to-shot (pose, framing,
+                setting) and let the trigger absorb the fixed identity.
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {captionInvariants.sharedFragments.map((f) => (
+                  <span
+                    key={f.normalized}
+                    className="text-xs px-1.5 py-0.5 rounded bg-port-bg border border-port-border text-gray-300 font-mono"
+                    title={`in ${f.count} of ${captionInvariants.total} captions`}
+                  >
+                    {f.fragment}
+                    <span className="text-gray-500"> ·{f.count}/{captionInvariants.total}</span>
+                  </span>
+                ))}
+              </div>
+              <button
+                type="button"
+                onClick={stripSharedFragments}
+                disabled={strippingFragments || !!captionRun}
+                className="px-3 py-1.5 text-xs rounded bg-port-warning/20 text-port-warning hover:bg-port-warning/30 flex items-center gap-2 disabled:opacity-50"
+                title="Remove these shared fragments from every caption, keeping the trigger word and per-shot detail"
+              >
+                {strippingFragments ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Eraser className="w-3.5 h-3.5" />}
+                Strip shared identity from all captions
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <details className="bg-port-card border border-port-border rounded-lg text-sm">
         <summary className="cursor-pointer select-none px-3 py-2 flex items-center gap-2 text-gray-300 hover:text-white">
           <Lightbulb className="w-4 h-4 text-port-warning shrink-0" />
@@ -522,6 +683,17 @@ export default function LoraDatasetDetail() {
             <li><span className="text-gray-300">Keep it single-subject and on-model</span> — one clearly-visible subject per image, consistent identity, no clutter.</li>
             <li><span className="text-gray-300">Drop the weak ones</span> — blurry, occluded, or off-model frames hurt more than they help; avoid near-duplicates.</li>
           </ul>
+          <p className="pt-1 border-t border-port-border/60">
+            <span className="text-gray-300">Caption what changes shot-to-shot, not who the subject is.</span> The
+            {' '}
+            <span className="font-mono text-gray-400">{dataset.triggerWord || 'trigger word'}</span>
+            {' '}
+            token is what the LoRA binds the fixed identity to — describe pose, framing, expression, outfit, and setting
+            in each caption, and leave invariant features (hair, eyes, skin, signature items) out. Repeating the same
+            identity phrases in every caption teaches those words instead of the trigger, so the bare trigger then
+            renders a generic subject. Captions are auto-prefixed with the trigger; this page warns when identity
+            fragments repeat across most captions and offers a one-click strip.
+          </p>
         </div>
       </details>
 
@@ -531,6 +703,7 @@ export default function LoraDatasetDetail() {
           onImagesChange={onImagesChange}
           onCaptionRunStarted={setCaptionRun}
           captionModel={captionModel}
+          draftResetToken={captionDraftResetToken}
         />
         <TrainingPanel
           dataset={dataset}

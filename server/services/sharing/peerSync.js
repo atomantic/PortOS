@@ -951,6 +951,7 @@ export async function pushRecordToPeer(sub, options = {}) {
     issues: payload.issues ?? null,
     linkedCollection: payload.linkedCollection ?? null,
     manuscriptReview: payload.manuscriptReview ?? null,
+    reverseOutline: payload.reverseOutline ?? null,
     assetManifest: payload.assetManifest ?? [],
   });
   if (sub.lastPushedHash && sub.lastPushedHash === hash) {
@@ -983,6 +984,10 @@ export async function pushRecordToPeer(sub, options = {}) {
   // review once that peer upgrades. Withhold the hash (like reviewSyncPending)
   // so the next cycle re-sends.
   let reviewStrippedForLegacyPeer = false;
+  // Same as reviewStrippedForLegacyPeer, for the bundled reverse-outline doc —
+  // a pre-#1348 peer's strict series schema rejects the `reverseOutline` key, so
+  // the retry strips it and we withhold the hash to re-send once it upgrades.
+  let outlineStrippedForLegacyPeer = false;
   // MIXED-VERSION COMPAT: an older receiver's push schema is still `.strict()`
   // without a `portosMeta` field, so it 400-rejects our envelope at Zod
   // validation BEFORE its schema-version gate code (which doesn't exist on
@@ -1005,23 +1010,54 @@ export async function pushRecordToPeer(sub, options = {}) {
   // supports `portosMeta` but not `catalogBundle`/`manuscriptReview` keeps its
   // version-gate handshake. Zod `.strict()` lists all unrecognized keys in one
   // issue, so a single retry covers all of them.
-  if (res && res.status === 400 && (payload.portosMeta || payload.catalogBundle || payload.manuscriptReview)) {
+  // A 400 from the receiver is Zod rejecting our envelope BEFORE its schema-version
+  // gate (the 409 path below) runs. Parse the body ONCE and route on which part it
+  // couldn't accept — two distinct mixed-version cases share this block:
+  if (res && res.status === 400) {
     const errBody = await res.clone().json().catch(() => null);
+    const isValidationError = errBody?.code === 'VALIDATION_ERROR';
     const details = Array.isArray(errBody?.context?.details) ? errBody.context.details : [];
     const mentions = (key) => details.some((d) => new RegExp(key).test(`${d?.path || ''} ${d?.message || ''}`));
-    if (errBody?.code === 'VALIDATION_ERROR' && (mentions('portosMeta') || mentions('catalogBundle') || mentions('manuscriptReview'))) {
+    if (
+      isValidationError
+      && (payload.portosMeta || payload.catalogBundle || payload.manuscriptReview || payload.reverseOutline)
+      && (mentions('portosMeta') || mentions('catalogBundle') || mentions('manuscriptReview') || mentions('reverseOutline'))
+    ) {
+      // (1) UNKNOWN ENVELOPE KEY — the peer recognizes the record `kind` but its
+      // `.strict()` schema predates a newer top-level key we sent. Strip whichever
+      // key(s) it named and retry so the record/issues still land; the stripped
+      // feature reaches it once it upgrades (the re-push re-includes the key).
       const legacyPayload = { ...payload };
       const stripped = [];
       if (mentions('portosMeta') && 'portosMeta' in legacyPayload) { delete legacyPayload.portosMeta; stripped.push('portosMeta'); }
       if (mentions('catalogBundle') && 'catalogBundle' in legacyPayload) { delete legacyPayload.catalogBundle; stripped.push('catalogBundle'); }
       if (mentions('manuscriptReview') && 'manuscriptReview' in legacyPayload) { delete legacyPayload.manuscriptReview; stripped.push('manuscriptReview'); reviewStrippedForLegacyPeer = true; }
-      // The series + issues still land; on a pre-feature peer the review simply
-      // doesn't propagate until it upgrades, and a re-push after it upgrades
-      // re-includes the stripped key(s).
+      if (mentions('reverseOutline') && 'reverseOutline' in legacyPayload) { delete legacyPayload.reverseOutline; stripped.push('reverseOutline'); outlineStrippedForLegacyPeer = true; }
       console.log(
         `ℹ️ peerSync: ${peer.name || peer.instanceId} rejected newer envelope key(s) ${stripped.join(', ')} — retrying push without them`,
       );
       res = await postPayload(legacyPayload);
+    } else if (isValidationError && details.some((d) => d?.path === 'kind' && /discriminator|enum/i.test(d?.message || ''))) {
+      // (2) UNKNOWN RECORD KIND → schema-version block (NOT a bare http-400 retry).
+      // When we introduce a NEW federated record kind (authors did this;
+      // mediaCollection had the same gap when it landed), a peer on an older PortOS
+      // whose `peerSyncPushSchema` discriminated union has no arm for that `kind`
+      // rejects the push at the discriminator — so unlike case (1) there's no
+      // smuggled key to drop: the record KIND itself is what the peer can't parse,
+      // and retrying changes nothing. Treat it like the 409: persist an empty-gap
+      // `peer-pre-feature` block so the SchemaGapBadge surfaces "peer needs to update
+      // PortOS to sync <kind>" and the edit-push cooldown engages, instead of letting
+      // the sub churn as a bare `http-400` the UI never explains. The block clears on
+      // the next successful push once the peer upgrades (same recovery as the 409
+      // path). The signal is a `kind`-path discriminator/enum error — a value WE
+      // always send as a valid literal, so the only reason a receiver faults on
+      // `kind` is that its schema doesn't know this record kind yet.
+      await persistSchemaVersionBlock(sub.id, { reason: 'peer-pre-feature' });
+      console.warn(
+        `⚠️ peerSync: ${peer.name || peer.instanceId} rejected push — its PortOS doesn't recognize the ` +
+        `'${sub.recordKind}' record kind yet. Re-tries pause until they upgrade.`,
+      );
+      return { pushed: false, reason: 'peer-schema-behind', blockedBySchema: true };
     }
   }
   // 409 with `code: SCHEMA_VERSION_AHEAD` means the receiver is on an OLDER
@@ -1095,6 +1131,11 @@ export async function pushRecordToPeer(sub, options = {}) {
   // of short-circuiting on `unchanged` — the review has no independent
   // reconciliation path, so a saved hash here would strand the update.
   const reviewSyncPending = body?.reviewSyncPending === true || reviewStrippedForLegacyPeer;
+  // OUTLINE-STRANDED GUARD: same as the review above — the receiver merged the
+  // record/issues but its bundled reverse-outline merge threw (or we stripped
+  // the key for a pre-#1348 peer). The outline has no independent reconciliation
+  // path, so withhold lastPushedHash to re-send next cycle.
+  const outlineSyncPending = body?.outlineSyncPending === true || outlineStrippedForLegacyPeer;
   // This push landed (receiver returned 2xx). Stamp the per-record confirmed-
   // delivery water-mark so tombstoneGc won't prune THIS record's tombstone
   // until its delete-push has been confirmed — even if a later push for a
@@ -1104,7 +1145,7 @@ export async function pushRecordToPeer(sub, options = {}) {
   // the tombstone's deletedAt once it lands. The `missingAssets` case still
   // counts as confirmed delivery of the RECORD (merge ran on the receiver);
   // only the asset-stranded hash is withheld, not the confirmation mark.
-  await persistPushSuccess(sub.id, (missingCount > 0 || reviewSyncPending) ? null : hash, { confirmedAtMs: Date.now() });
+  await persistPushSuccess(sub.id, (missingCount > 0 || reviewSyncPending || outlineSyncPending) ? null : hash, { confirmedAtMs: Date.now() });
   if (Number.isFinite(body?.ackedDeletesUpTo) && body.ackedDeletesUpTo > 0) {
     await ackDeletesUpTo(sub.peerId, body.ackedDeletesUpTo).catch(() => {});
   }
@@ -1186,7 +1227,7 @@ async function persistPushSuccess(subId, hash, { confirmedAtMs = Date.now() } = 
  * what the peer has that we don't — informational) along with the peer's
  * PortOS version string for the user-visible message.
  */
-async function persistSchemaVersionBlock(subId, { ahead, behind, peerPortosVersion, peerSchemaVersions }) {
+async function persistSchemaVersionBlock(subId, { ahead, behind, peerPortosVersion, peerSchemaVersions, reason = 'schema-version-ahead' }) {
   // Capture peerId inside the lock so the emitted event carries it — lets each
   // Instances PeerCard filter on its own peer instead of every card refetching.
   let blockedPeerId = null;
@@ -1198,6 +1239,13 @@ async function persistSchemaVersionBlock(subId, { ahead, behind, peerPortosVersi
     const now = new Date().toISOString();
     sub.blockedBySchema = {
       detectedAt: now,
+      // `schema-version-ahead` = the 409 version-gate path (the peer parsed our
+      // envelope but its per-category gate rejected an ahead schema). `peer-pre-feature`
+      // = the 400 unknown-kind path below (the peer's push schema has no arm for
+      // this record kind at all, so it 400s at Zod before the gate runs). Both
+      // surface the same SchemaGapBadge + engage the same cooldown; the marker just
+      // distinguishes them in state/logs.
+      reason,
       ahead: Array.isArray(ahead) ? ahead : [],
       behind: Array.isArray(behind) ? behind : [],
       peerPortosVersion: peerPortosVersion || null,
@@ -1326,6 +1374,17 @@ async function buildPushPayload(sub, sourceInstanceId) {
       : await import('../pipeline/manuscriptReview.js')
         .then(({ getReview }) => getReview(sub.recordId))
         .catch(() => null);
+    // Bundle the reverse-outline sibling doc (the scene-by-scene segmentation)
+    // on the same terms as the review above: a regenerate-only change doesn't
+    // move the series record, so without bundling it the per-record push would
+    // short-circuit and the receiver's outline would diverge. Only a `complete`
+    // outline is worth shipping. Skip for tombstones. Dynamic import keeps
+    // reverseOutline's arcPlanner graph off peerSync's boot load path.
+    const reverseOutline = record.deleted === true
+      ? null
+      : await import('../pipeline/reverseOutline.js')
+        .then(({ getStoredOutline }) => getStoredOutline(sub.recordId))
+        .catch(() => null);
     return {
       kind: 'series',
       record: sanitized,
@@ -1335,6 +1394,7 @@ async function buildPushPayload(sub, sourceInstanceId) {
       portosMeta,
       ...(linkedCollection ? { linkedCollection } : {}),
       ...(manuscriptReview && manuscriptReview.comments?.length ? { manuscriptReview } : {}),
+      ...(reverseOutline && reverseOutline.status === 'complete' ? { reverseOutline } : {}),
     };
   }
   if (sub.recordKind === 'mediaCollection') {
@@ -1537,7 +1597,7 @@ export async function applyIncomingPush(payload) {
   if (!isPlainObject(payload)) {
     throw makeErr('payload must be an object', ERR_VALIDATION);
   }
-  const { kind, record, issues, linkedCollection, catalogBundle, manuscriptReview, assetManifest, sourceInstanceId, portosMeta } = payload;
+  const { kind, record, issues, linkedCollection, catalogBundle, manuscriptReview, reverseOutline, assetManifest, sourceInstanceId, portosMeta } = payload;
   if (!PEER_SUBSCRIBABLE_KINDS.includes(kind)) {
     throw makeErr(`unknown kind: ${kind}`, ERR_VALIDATION);
   }
@@ -1666,6 +1726,8 @@ export async function applyIncomingPush(payload) {
   // sender so it withholds lastPushedHash and retries (the review has no other
   // reconciliation path; see the merge block below).
   let reviewSyncPending = false;
+  // Same contract as reviewSyncPending, for the bundled reverse-outline doc.
+  let outlineSyncPending = false;
   if (kind === 'universe') {
     await mergeUniversesFromSync([record], { source });
   } else if (kind === 'series') {
@@ -1694,6 +1756,18 @@ export async function applyIncomingPush(payload) {
       await mergeReviewFromSync(record.id, manuscriptReview).catch((err) => {
         console.log(`⚠️ peerSync: manuscriptReview merge failed: ${err.message}`);
         reviewSyncPending = true;
+      });
+    }
+    // Merge the bundled reverse-outline sibling doc, whole-doc LWW on
+    // generatedAt. Same ephemeral/tombstone guards + pending-signal contract as
+    // the review above: a merge failure must withhold the sender's hash so the
+    // outline (which has no independent reconciliation cycle) re-sends next
+    // cycle. Dynamic import keeps the arcPlanner graph off peerSync's load path.
+    if (!localEphemeral && record.deleted !== true && isPlainObject(reverseOutline)) {
+      const { mergeOutlineFromSync } = await import('../pipeline/reverseOutline.js');
+      await mergeOutlineFromSync(record.id, reverseOutline).catch((err) => {
+        console.log(`⚠️ peerSync: reverseOutline merge failed: ${err.message}`);
+        outlineSyncPending = true;
       });
     }
   } else if (kind === 'mediaCollection') {
@@ -1798,6 +1872,7 @@ export async function applyIncomingPush(payload) {
     reverseSubscriptionCreated,
     ackedDeletesUpTo,
     ...(reviewSyncPending ? { reviewSyncPending: true } : {}),
+    ...(outlineSyncPending ? { outlineSyncPending: true } : {}),
   };
 }
 

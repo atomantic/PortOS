@@ -476,23 +476,27 @@ function LearnMode({ item, onBack, onComplete }) {
 
 function ElementFlashMode({ item, mastery, onBack, onComplete }) {
   const elementMap = item.content?.elementMap || {};
-  const allElements = Object.entries(elementMap);
 
-  // Prioritize weak elements
-  const sorted = [...allElements].sort((a, b) => {
-    const mA = mastery.elements?.[a[0]];
-    const mB = mastery.elements?.[b[0]];
-    const pctA = mA?.attempts > 0 ? mA.correct / mA.attempts : 0;
-    const pctB = mB?.attempts > 0 ? mB.correct / mB.attempts : 0;
-    return pctA - pctB;
-  });
-
-  const questions = sorted.slice(0, 15).sort(() => Math.random() - 0.5).map(([symbol, info]) => {
-    const askSymbol = Math.random() > 0.5;
-    return askSymbol
-      ? { prompt: info.name, expected: symbol, element: symbol, label: 'What symbol?' }
-      : { prompt: `${symbol} (${info.atomicNumber})`, expected: info.name, element: symbol, label: 'What element?' };
-  });
+  // Build the quiz once per item/mastery — without memoization the Math.random()
+  // shuffle below re-runs on every render (e.g. each keystroke), reshuffling the
+  // deck and swapping the current question mid-answer.
+  const questions = useMemo(() => {
+    const allElements = Object.entries(elementMap);
+    // Prioritize weak elements
+    const sorted = [...allElements].sort((a, b) => {
+      const mA = mastery.elements?.[a[0]];
+      const mB = mastery.elements?.[b[0]];
+      const pctA = mA?.attempts > 0 ? mA.correct / mA.attempts : 0;
+      const pctB = mB?.attempts > 0 ? mB.correct / mB.attempts : 0;
+      return pctA - pctB;
+    });
+    return sorted.slice(0, 15).sort(() => Math.random() - 0.5).map(([symbol, info]) => {
+      const askSymbol = Math.random() > 0.5;
+      return askSymbol
+        ? { prompt: info.name, expected: symbol, element: symbol, label: 'What symbol?' }
+        : { prompt: `${symbol} (${info.atomicNumber})`, expected: info.name, element: symbol, label: 'What element?' };
+    });
+  }, [elementMap, mastery]);
 
   const [idx, setIdx] = useState(0);
   const [answer, setAnswer] = useState('');

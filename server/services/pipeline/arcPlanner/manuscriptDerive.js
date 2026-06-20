@@ -64,6 +64,8 @@ export async function generateArcFromSource(seriesId, {
     shape: content?.shape ?? series.arc?.shape ?? null,
     // Preserve an existing reader map — the extraction doesn't author one.
     readerMap: series.arc?.readerMap ?? null,
+    // Likewise preserve an existing ticking clock the extraction doesn't author.
+    tickingClock: series.arc?.tickingClock ?? null,
     status: 'draft',
   });
   // importer-arc-extract returns `seasons` (number/title/logline/synopsis/

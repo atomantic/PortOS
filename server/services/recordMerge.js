@@ -258,7 +258,7 @@ const resolveScalars = (fields, survivor, loser, fieldChoices = {}, fieldOverrid
 
 const UNIVERSE_SCALARS = ['name', 'starterPrompt', 'logline', 'premise', 'styleNotes'];
 const SERIES_SCALARS = [
-  'name', 'logline', 'premise', 'styleNotes', 'titleLogo', 'author',
+  'name', 'logline', 'premise', 'styleNotes', 'styleGuide', 'titleLogo', 'author',
   'stylePromptOverride', 'stylePromptOverrideMode', 'targetFormat', 'issueCountTarget', 'arc',
   // Preserve a Writers Room promotion link: if only the loser is linked it must
   // be carried to the survivor (else the link is lost when the loser is

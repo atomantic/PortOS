@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import PromptRefineModal from './PromptRefineModal';
 import AddToCollectionMenu from './AddToCollectionMenu';
+import PinToMoodBoardMenu from './PinToMoodBoardMenu';
 import MediaImage from '../MediaImage';
 import { useScrollLock } from '../../hooks/useScrollLock';
 import { useSwipeNav } from '../../hooks/useSwipeNav';
@@ -770,6 +771,7 @@ function SettingsPane({
           </button>
         )}
         <AddToCollectionMenu item={item} size="md" />
+        <PinToMoodBoardMenu item={item} size="md" />
         <a
           href={item.downloadUrl}
           download

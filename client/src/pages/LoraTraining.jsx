@@ -13,6 +13,7 @@ import toast from '../components/ui/Toast';
 import Modal from '../components/ui/Modal';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
 import UniverseCharacterPicker from '../components/loraTraining/UniverseCharacterPicker';
+import MediaJobsQueue from '../components/media/MediaJobsQueue';
 import {
   listLoraDatasets,
   createLoraDataset,
@@ -184,6 +185,10 @@ export default function LoraTraining() {
             </div>
           </div>
         ))}
+      </div>
+
+      <div className="mt-6">
+        <MediaJobsQueue kind="training" />
       </div>
 
       {showNew && (

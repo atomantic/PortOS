@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isEmbeddingModel, isGenerationModel, isVisionModel, recommendEditorialModel } from './localModelHeuristics.js';
+import { isEmbeddingModel, isGenerationModel, isVisionModel, isVisionCapableCliProvider, recommendEditorialModel } from './localModelHeuristics.js';
 
 describe('localModelHeuristics', () => {
   describe('isEmbeddingModel', () => {
@@ -96,6 +96,21 @@ describe('localModelHeuristics', () => {
       expect(isVisionModel(undefined)).toBe(false);
       expect(isVisionModel('')).toBe(false);
       expect(isVisionModel(42)).toBe(false);
+    });
+  });
+
+  describe('isVisionCapableCliProvider', () => {
+    it('accepts codex / claude CLI providers', () => {
+      expect(isVisionCapableCliProvider({ type: 'cli', command: 'codex' })).toBe(true);
+      expect(isVisionCapableCliProvider({ type: 'cli', command: 'claude' })).toBe(true);
+    });
+
+    it('rejects non-vision CLI commands and non-CLI providers', () => {
+      expect(isVisionCapableCliProvider({ type: 'cli', command: 'agy' })).toBe(false);
+      expect(isVisionCapableCliProvider({ type: 'api', command: 'codex' })).toBe(false);
+      expect(isVisionCapableCliProvider({ type: 'tui', command: 'claude' })).toBe(false);
+      expect(isVisionCapableCliProvider(null)).toBe(false);
+      expect(isVisionCapableCliProvider({})).toBe(false);
     });
   });
 

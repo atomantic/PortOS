@@ -56,17 +56,34 @@ export const expandUniverse = ({
 });
 
 // Vision-to-prose: turn reference image(s) into an image-gen-ready prose
-// description for a canon entry. `screenshots` are filenames already uploaded
-// via uploadScreenshot(); multiple images → the model returns the description
-// common to all of them. `providerId`/`model` pick the (API/vision-capable)
-// provider on demand. Resolves to `{ description, llm: { provider, model } }`.
+// description for a canon entry. `images` is `[{ source: 'upload'|'gallery',
+// filename }]` — uploads were POSTed via uploadScreenshot(); gallery items are
+// generated-gallery filenames. Multiple images → the model returns the
+// description common to all of them. `providerId`/`model` pick the
+// (API/vision-capable) provider on demand. Resolves to `{ description, llm }`.
 export const describeEntityFromImages = ({
-  kind, name, context, screenshots, providerId, model,
+  kind, name, context, images, providerId, model,
 } = {}, options = {}) => request('/universe-builder/describe-from-images', {
   method: 'POST',
-  body: JSON.stringify({ kind, name, context, screenshots, providerId, model }),
+  body: JSON.stringify({ kind, name, context, images, providerId, model }),
   ...options,
 });
+
+// Vision-driven structured expand (characters only): a vision model reads
+// reference image(s) and PROPOSES values for the character's still-blank
+// structured fields. Review-only — resolves to `{ fields, updatedFields, llm }`
+// (or `{ locked: true }`); the caller applies the kept/edited values via the
+// normal entry patch. `images` shape matches describeEntityFromImages.
+export const expandEntityFromImages = (universeId, entryId, {
+  name, context, images, providerId, model,
+} = {}, options = {}) => request(
+  `/universe-builder/${encodeURIComponent(universeId)}/characters/${encodeURIComponent(entryId)}/expand-from-images`,
+  {
+    method: 'POST',
+    body: JSON.stringify({ name, context, images, providerId, model }),
+    ...options,
+  },
+);
 
 // Caller should dedupe the returned variations against its local list before
 // appending — the local list may have changed during the request.
@@ -95,6 +112,9 @@ export const refineWorldPrompts = ({
   // Omit (or pass empty/falsy) to get the bible-only behavior.
   categories, compositeSheets,
   locked,
+  // Optional gallery filename used as a visual style reference. When present the
+  // server forces a vision-capable API provider.
+  image,
   feedback, providerId, model,
 } = {}) => request('/universe-builder/refine-prompts', {
   method: 'POST',
@@ -105,6 +125,7 @@ export const refineWorldPrompts = ({
     ...(categories && Object.keys(categories).length ? { categories } : {}),
     ...(Array.isArray(compositeSheets) && compositeSheets.length ? { compositeSheets } : {}),
     locked,
+    ...(image ? { image } : {}),
     feedback, providerId, model,
   }),
 });

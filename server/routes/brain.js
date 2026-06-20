@@ -38,11 +38,16 @@ import {
   brainSyncQuerySchema,
   brainSyncPushSchema,
   brainBridgeSyncSchema,
+  brainGraphQuerySchema,
   dailyLogSettingsSchema
 } from '../lib/brainValidation.js';
 import * as githubCloner from '../services/githubCloner.js';
-import { getBrainGraphData } from '../services/brainGraph.js';
-import { syncAllBrainData } from '../services/brainMemoryBridge.js';
+import {
+  getBrainGraphSearchIndex,
+  getBrainGraphOverview,
+  getBrainGraphNeighborhood
+} from '../services/brainGraph.js';
+import { syncAllBrainData, getEmbeddingCoverage } from '../services/brainMemoryBridge.js';
 import * as brainSyncLog from '../services/brainSyncLog.js';
 import * as brainSync from '../services/brainSync.js';
 import * as brainReconcile from '../services/brainReconcile.js';
@@ -919,11 +924,26 @@ router.delete('/buckets/:id', asyncHandler(async (req, res) => {
 // =============================================================================
 
 /**
- * GET /api/brain/graph
- * Get brain entity graph data for visualization
+ * GET /api/brain/graph/search-index
+ * Lightweight {id,label,brainType} list of every node, for the client search
+ * box. No edges — cheap even at thousands of nodes.
+ */
+router.get('/graph/search-index', asyncHandler(async (_req, res) => {
+  const data = await getBrainGraphSearchIndex();
+  res.json(data);
+}));
+
+/**
+ * GET /api/brain/graph?focus=<id>&limit=<n>
+ * Bounded graph data for visualization. No `focus` → an overview of the most-
+ * connected nodes; a `focus` → that node's neighborhood. Never the full graph
+ * (which crashes the browser at scale).
  */
 router.get('/graph', asyncHandler(async (req, res) => {
-  const data = await getBrainGraphData();
+  const { focus, limit } = validateRequest(brainGraphQuerySchema, req.query);
+  const data = focus
+    ? await getBrainGraphNeighborhood({ focusId: focus, limit })
+    : await getBrainGraphOverview({ limit });
   res.json(data);
 }));
 
@@ -940,10 +960,21 @@ router.get('/graph', asyncHandler(async (req, res) => {
  * (Renamed from /sync to avoid conflict with federation sync)
  */
 router.post('/bridge-sync', asyncHandler(async (req, res) => {
-  const { refresh } = validateRequest(brainBridgeSyncSchema, req.body ?? {});
-  const stats = await syncAllBrainData({ refresh });
-  console.log(`🧠🔗 Brain bridge sync complete${refresh ? ' (refresh)' : ''}: ${stats.synced} synced, ${stats.skipped} skipped, ${stats.archived} archived, ${stats.errors} errors`);
+  const { refresh, onlyMissing } = validateRequest(brainBridgeSyncSchema, req.body ?? {});
+  const stats = await syncAllBrainData({ refresh, onlyMissing });
+  const mode = onlyMissing ? ' (missing-only)' : refresh ? ' (refresh)' : '';
+  console.log(`🧠🔗 Brain bridge sync complete${mode}: ${stats.synced} synced, ${stats.skipped} skipped, ${stats.archived} archived, ${stats.errors} errors`);
   res.json(stats);
+}));
+
+/**
+ * GET /api/brain/embeddings/status
+ * How many active brain records lack an embedding — powers the
+ * "N missing · Embed missing" affordance on the graph.
+ */
+router.get('/embeddings/status', asyncHandler(async (_req, res) => {
+  const coverage = await getEmbeddingCoverage();
+  res.json(coverage);
 }));
 
 /**

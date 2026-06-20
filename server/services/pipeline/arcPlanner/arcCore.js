@@ -16,7 +16,7 @@ import { emitRecordUpdated, withReexportSuppressed } from '../../sharing/recordE
 import { getSeason } from '../seasons.js';
 import { READER_MAP_BEAT_KINDS, buildSeason, cleanThemes, renderArcShapeGuidance, renderArcShapePositionSummary, sanitizeArc, sanitizeReaderMap, sanitizeSeason, sanitizeSeasonList } from '../../../lib/storyArc.js';
 import { runPromptRefineRaw, trimChanges } from '../refineHelpers.js';
-import { ERR_VALIDATION, SHAPE_GUIDANCE_NONE, buildArcBaseContext, buildArcOverviewContext, buildNeighborVolumes, buildReaderMapContext, buildResolveContext, buildVerifyContext, compareIssuesByPosition, makeErr, renderVolumeIssue, resolveWorldContext, shapeFindings, shapeSeasonOutlines, shapeVerifyIssues } from './context.js';
+import { ERR_VALIDATION, SHAPE_GUIDANCE_NONE, appendTickingClock, buildArcBaseContext, buildArcOverviewContext, buildNeighborVolumes, buildReaderMapContext, buildResolveContext, buildVerifyContext, compareIssuesByPosition, makeErr, renderVolumeIssue, resolveWorldContext, shapeFindings, shapeSeasonOutlines, shapeVerifyIssues } from './context.js';
 
 export async function generateArcOverview(seriesId, options = {}) {
   const series = await getSeries(seriesId);
@@ -53,6 +53,9 @@ export async function generateArcOverview(seriesId, options = {}) {
     // existing one (like `shape`) so regenerating the arc never silently wipes
     // a reader map the user already built on the next step.
     readerMap: series.arc?.readerMap ?? null,
+    // Same for the ticking clock — the overview prompt doesn't author it, so
+    // preserve any existing countdown across a regenerate.
+    tickingClock: series.arc?.tickingClock ?? null,
     status: 'draft',
   });
   const seasons = shapeSeasonOutlines(content?.seasonOutlines);
@@ -128,7 +131,7 @@ export async function refineReaderMap(seriesId, feedback, options = {}) {
       feedback: typeof feedback === 'string' ? feedback.trim().slice(0, 4000) : '',
       arcSummary: arc.summary || '',
       protagonistArc: arc.protagonistArc || '',
-      shapeGuidance: renderArcShapeGuidance(arc.shape) || SHAPE_GUIDANCE_NONE,
+      shapeGuidance: appendTickingClock(renderArcShapeGuidance(arc.shape) || SHAPE_GUIDANCE_NONE, arc),
       beatKindsCsv: READER_MAP_BEAT_KINDS.join(', '),
     },
     options,
@@ -184,7 +187,7 @@ export async function refineArc(seriesId, feedback, options = {}) {
       currentSummary: arc.summary || '',
       currentProtagonistArc: arc.protagonistArc || '',
       currentThemesCsv: Array.isArray(arc.themes) ? arc.themes.join(', ') : '',
-      shapeGuidance: renderArcShapeGuidance(arc.shape) || SHAPE_GUIDANCE_NONE,
+      shapeGuidance: appendTickingClock(renderArcShapeGuidance(arc.shape) || SHAPE_GUIDANCE_NONE, arc),
       series: { name: series.name, premise: series.premise },
       feedback: typeof feedback === 'string' ? feedback.trim().slice(0, 4000) : '',
     },
@@ -217,6 +220,9 @@ export async function refineArc(seriesId, feedback, options = {}) {
     themes: refinedThemes,
     shape: arc.shape ?? null,
     readerMap: arc.readerMap ?? null,
+    // The arc-refine prompt edits the narrative fields only — preserve the
+    // ticking clock (like readerMap/shape) so a refine never wipes it.
+    tickingClock: arc.tickingClock ?? null,
     status: 'draft',
   });
   // sanitizeArc returns null only when every identifying field is empty — which,
@@ -372,6 +378,8 @@ export async function resolveVerifyIssues(seriesId, options = {}) {
     // one so auto-resolve never silently wipes a reader map the user already
     // built on the next step. Mirrors `generateArcOverview` above.
     readerMap: series.arc?.readerMap ?? null,
+    // Same for the ticking clock — auto-resolve must not wipe the countdown.
+    tickingClock: series.arc?.tickingClock ?? null,
     status: 'draft',
   });
 

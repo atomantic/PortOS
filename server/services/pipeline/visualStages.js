@@ -42,7 +42,7 @@ import { getDefaultVideoModelId, getVideoModels, getImageModels } from '../../li
 import { loraCompatKey } from '../../lib/runners.js';
 import { resolveCharacterLoras } from '../characterLoraResolver.js';
 import { runStagedLLM } from '../../lib/stageRunner.js';
-import { runPromptRefine } from './refineHelpers.js';
+import { runPromptRefine, runImagePromptCandidates } from './refineHelpers.js';
 import { pickCanon } from './seriesCanon.js';
 import { STYLE_PROMPT_OVERRIDE_MODE_DEFAULT } from './series.js';
 import { ASPECT_PRESETS } from '../../lib/creativeDirectorPresets.js';
@@ -1141,12 +1141,11 @@ async function loadRefineContext(issueId) {
 }
 
 
-/**
- * Run the `pipeline-comic-panel-image-prompt` template against the current
- * panel + surrounding context, then persist the refined description on the
- * panel. Returns { panel, page, issue, stage, runId, changes, providerId }.
- */
-export async function refineComicPanelPrompt(issueId, pageIndex, panelIndex, options = {}) {
+// Validate the page/panel indices, lock, and non-empty description, then
+// build the `pipeline-comic-panel-image-prompt` template variables. Shared by
+// the 1:1 refine (replaces the description) and the N-candidate fan-out
+// (non-destructive) so both feed the LLM identical context.
+async function loadComicPanelPromptContext(issueId, pageIndex, panelIndex) {
   const pi = Number(pageIndex);
   const ni = Number(panelIndex);
   if (!Number.isInteger(pi) || pi < 0 || !Number.isInteger(ni) || ni < 0) {
@@ -1192,25 +1191,38 @@ export async function refineComicPanelPrompt(issueId, pageIndex, panelIndex, opt
       .join(' / ')
     : '';
 
+  const variables = {
+    series: seriesBibleCtx(series),
+    issue: issueCtx(issue),
+    pageNumber: pi + 1,
+    panelNumber: ni + 1,
+    panelCount: panels.length,
+    description: (panel.description || '').slice(0, 4000),
+    caption: (panel.caption || '').slice(0, 1000),
+    hasCaption: !!(panel.caption || '').trim(),
+    dialogue,
+    hasDialogue: !!dialogue,
+    sfx: (panel.sfx || '').slice(0, 500),
+    hasSfx: !!(panel.sfx || '').trim(),
+    hasNeighbors: !!(prev || next),
+    previousPanel: neighborText(prev),
+    nextPanel: neighborText(next),
+  };
+  return { issue, pi, ni, pages, page, panels, panel, variables };
+}
+
+/**
+ * Run the `pipeline-comic-panel-image-prompt` template against the current
+ * panel + surrounding context, then persist the refined description on the
+ * panel. Returns { panel, page, issue, stage, runId, changes, providerId }.
+ */
+export async function refineComicPanelPrompt(issueId, pageIndex, panelIndex, options = {}) {
+  const { pi, ni, pages, page, panels, panel, variables } =
+    await loadComicPanelPromptContext(issueId, pageIndex, panelIndex);
+
   const { refined, changes, runId, providerId } = await runPromptRefine({
     templateName: 'pipeline-comic-panel-image-prompt',
-    variables: {
-      series: seriesBibleCtx(series),
-      issue: issueCtx(issue),
-      pageNumber: pi + 1,
-      panelNumber: ni + 1,
-      panelCount: panels.length,
-      description: (panel.description || '').slice(0, 4000),
-      caption: (panel.caption || '').slice(0, 1000),
-      hasCaption: !!(panel.caption || '').trim(),
-      dialogue,
-      hasDialogue: !!dialogue,
-      sfx: (panel.sfx || '').slice(0, 500),
-      hasSfx: !!(panel.sfx || '').trim(),
-      hasNeighbors: !!(prev || next),
-      previousPanel: neighborText(prev),
-      nextPanel: neighborText(next),
-    },
+    variables,
     options,
     source: 'pipeline-comic-panel-prompt-refine',
     logTag: `Pipeline comic panel refine — issue=${issueId.slice(0, 8)} p=${pi + 1} panel=${ni + 1}`,
@@ -1226,11 +1238,28 @@ export async function refineComicPanelPrompt(issueId, pageIndex, panelIndex, opt
 }
 
 /**
- * Run the `pipeline-storyboard-image-prompt` template against the current
- * storyboard scene + surrounding context, then persist the refined
- * description on the scene. Returns { scene, issue, stage, runId, changes, providerId }.
+ * Generate N candidate image-gen prompts for a single comic panel WITHOUT
+ * mutating the panel (issue #904). The user copies one or applies it to the
+ * description via the existing refine/edit paths. Returns
+ * { candidates, requested, pageIndex, panelIndex }.
  */
-export async function refineStoryboardScenePrompt(issueId, sceneIndex, options = {}) {
+export async function generateComicPanelImagePrompts(issueId, pageIndex, panelIndex, { count, ...options } = {}) {
+  const { pi, ni, variables } = await loadComicPanelPromptContext(issueId, pageIndex, panelIndex);
+  const { candidates, requested } = await runImagePromptCandidates({
+    count,
+    templateName: 'pipeline-comic-panel-image-prompt',
+    variables,
+    options,
+    source: 'pipeline-comic-panel-image-prompts',
+    logTag: `Pipeline comic panel image-prompts — issue=${issueId.slice(0, 8)} p=${pi + 1} panel=${ni + 1}`,
+  });
+  return { candidates, requested, pageIndex: pi, panelIndex: ni };
+}
+
+// Validate the scene index, lock, and non-empty description, then build the
+// `pipeline-storyboard-image-prompt` template variables. Shared by the 1:1
+// refine and the N-candidate fan-out so both feed the LLM identical context.
+async function loadStoryboardScenePromptContext(issueId, sceneIndex) {
   const idx = Number(sceneIndex);
   if (!Number.isInteger(idx) || idx < 0) {
     throw new ServerError('sceneIndex must be a non-negative integer', {
@@ -1256,21 +1285,32 @@ export async function refineStoryboardScenePrompt(issueId, sceneIndex, options =
 
   const prev = scenes[idx - 1];
   const next = scenes[idx + 1];
+  const variables = {
+    series: seriesBibleCtx(series),
+    issue: issueCtx(issue),
+    sceneNumber: idx + 1,
+    sceneCount: scenes.length,
+    slugline: (scene.slugline || '').slice(0, 200),
+    hasSlugline: !!(scene.slugline || '').trim(),
+    description: (scene.description || '').slice(0, 4000),
+    hasNeighbors: !!(prev || next),
+    previousScene: neighborText(prev),
+    nextScene: neighborText(next),
+  };
+  return { issue, idx, scenes, scene, variables };
+}
+
+/**
+ * Run the `pipeline-storyboard-image-prompt` template against the current
+ * storyboard scene + surrounding context, then persist the refined
+ * description on the scene. Returns { scene, issue, stage, runId, changes, providerId }.
+ */
+export async function refineStoryboardScenePrompt(issueId, sceneIndex, options = {}) {
+  const { idx, scenes, scene, variables } = await loadStoryboardScenePromptContext(issueId, sceneIndex);
 
   const { refined, changes, runId, providerId } = await runPromptRefine({
     templateName: 'pipeline-storyboard-image-prompt',
-    variables: {
-      series: seriesBibleCtx(series),
-      issue: issueCtx(issue),
-      sceneNumber: idx + 1,
-      sceneCount: scenes.length,
-      slugline: (scene.slugline || '').slice(0, 200),
-      hasSlugline: !!(scene.slugline || '').trim(),
-      description: (scene.description || '').slice(0, 4000),
-      hasNeighbors: !!(prev || next),
-      previousScene: neighborText(prev),
-      nextScene: neighborText(next),
-    },
+    variables,
     options,
     source: 'pipeline-storyboard-prompt-refine',
     logTag: `Pipeline scene refine — issue=${issueId.slice(0, 8)} scene=${idx + 1}`,
@@ -1282,4 +1322,22 @@ export async function refineStoryboardScenePrompt(issueId, sceneIndex, options =
     scenes,
   });
   return { scene: scenes[idx], issue: updatedIssue, stage, runId, changes, providerId };
+}
+
+/**
+ * Generate N candidate image-gen prompts for a single storyboard scene
+ * WITHOUT mutating the scene (issue #904). Returns
+ * { candidates, requested, sceneIndex }.
+ */
+export async function generateStoryboardSceneImagePrompts(issueId, sceneIndex, { count, ...options } = {}) {
+  const { idx, variables } = await loadStoryboardScenePromptContext(issueId, sceneIndex);
+  const { candidates, requested } = await runImagePromptCandidates({
+    count,
+    templateName: 'pipeline-storyboard-image-prompt',
+    variables,
+    options,
+    source: 'pipeline-storyboard-image-prompts',
+    logTag: `Pipeline scene image-prompts — issue=${issueId.slice(0, 8)} scene=${idx + 1}`,
+  });
+  return { candidates, requested, sceneIndex: idx };
 }

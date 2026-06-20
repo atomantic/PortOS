@@ -31,9 +31,26 @@ export const SEVERITY_UNDERLINE = {
 export const CATEGORY_LABEL = {
   'missing-content': 'Missing content',
   'arc-gap': 'Arc gap',
+  // Character-arc findings (#1293/#1295): POV justification + transition beats /
+  // flat-arc warnings from the arc.transitions editorial check.
+  arc: 'Character arc',
   'character-gap': 'Character gap',
+  // Plot-structure findings (#1310): passive protagonist, deus ex machina, idiot
+  // plot, flat stakes, sagging middle, dropped subplots from plot.structure-momentum.
+  plot: 'Plot structure',
+  // Theme-coherence findings (#1317): stated-but-undramatized / dropped / unpaid
+  // themes and emergent-theme suggestions from the theme.coherence check.
+  theme: 'Theme',
+  // Casting findings (#1292/#1312/#1412): roster economy / throwaway names, cast
+  // representation balance, and unmodeled proper nouns used as character names.
+  casting: 'Casting',
   pacing: 'Pacing',
   continuity: 'Continuity',
+  style: 'Style',
+  exposition: 'Exposition',
+  // Comic lettering-density findings (#1313): over-stuffed balloons/panels/pages
+  // from the comic.lettering-density editorial check.
+  lettering: 'Lettering',
   other: 'Note',
 };
 

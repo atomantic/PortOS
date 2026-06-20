@@ -35,6 +35,7 @@ vi.mock('../services/imageGen/index.js', () => ({
     deleteImage: vi.fn(async () => ({ ok: true })),
     assertGalleryFilename: vi.fn(),
     readImageSidecar: vi.fn(async () => ({ path: '', metadata: {} })),
+    saveUploadedGalleryImage: vi.fn(async () => ({ filename: 'upload-abcd1234.png', path: '/data/images/upload-abcd1234.png' })),
   },
 }));
 
@@ -49,6 +50,20 @@ vi.mock('../services/mediaJobQueue/index.js', () => ({
   attachSseClient: vi.fn(() => false),
   cancelJob: vi.fn(async () => ({ ok: true, status: 'canceling' })),
   listJobs: vi.fn(() => []),
+}));
+
+// The /generate route resolves an optional universeRun collection target via
+// findOrCreateUniverseCollection. Mock it so the universeRun test asserts the
+// tag-resolution wiring without touching real collection storage.
+vi.mock('../services/mediaCollections.js', () => ({
+  findOrCreateUniverseCollection: vi.fn(async ({ universeId }) => ({ id: `col-${universeId}` })),
+}));
+
+// POST /avatar folds character-avatar persistence in when persistToCharacter is
+// set. Mock the service so the test asserts the wiring without touching the
+// real singleton character store.
+vi.mock('../services/character.js', () => ({
+  setAvatar: vi.fn(async (avatarPath) => ({ name: 'Gandalf', avatarPath })),
 }));
 
 // HOST_ARCH is read at request time inside `buildSetupCheck`, so backing it
@@ -85,8 +100,10 @@ vi.mock('fs/promises', async (importOriginal) => {
 });
 
 import * as imageGen from '../services/imageGen/index.js';
+import * as characterService from '../services/character.js';
 import * as mediaJobQueue from '../services/mediaJobQueue/index.js';
 import { getSettings } from '../services/settings.js';
+import { findOrCreateUniverseCollection } from '../services/mediaCollections.js';
 
 describe('Image Gen Routes', () => {
   let app;
@@ -292,6 +309,201 @@ describe('Image Gen Routes', () => {
       expect(response.body.status).toBe('queued');
       expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({ kind: 'image' }));
       expect(imageGen.generateImage).not.toHaveBeenCalled();
+    });
+
+    // The base-style probe passes a `universeRun` identity so the SERVER files
+    // the finished render into the universe collection. The route must resolve
+    // the collectionId server-side and tag the queued job — the front-end never
+    // sends a collectionId or does post-generation bookkeeping.
+    describe('universeRun collection target', () => {
+      it('resolves the collection server-side and tags the queued job', async () => {
+        getSettings.mockResolvedValueOnce({ imageGen: { mode: 'local', local: { pythonPath: '/usr/bin/python3' } } });
+        mediaJobQueue.enqueueJob.mockReturnValueOnce({ jobId: 'queued-style', position: 1, status: 'queued' });
+
+        const response = await request(app)
+          .post('/api/image-gen/generate')
+          .send({
+            prompt: 'a moody noir skyline',
+            universeRun: { universeId: 'uni-1', universeName: 'NoirVerse', label: 'Base style', category: 'style' },
+          });
+
+        expect(response.status).toBe(200);
+        expect(findOrCreateUniverseCollection).toHaveBeenCalledWith(
+          expect.objectContaining({ universeId: 'uni-1', universeName: 'NoirVerse' }),
+        );
+        const [call] = mediaJobQueue.enqueueJob.mock.calls;
+        // collectionId is server-resolved (never client-supplied), runId minted,
+        // label/category preserved — exactly what universeBuilderCollectionHook reads.
+        expect(call[0].params.universeRun).toEqual(expect.objectContaining({
+          universeId: 'uni-1',
+          collectionId: 'col-uni-1',
+          label: 'Base style',
+          category: 'style',
+        }));
+        expect(typeof call[0].params.universeRun.runId).toBe('string');
+      });
+
+      it('drops the tag (still renders) when collection provisioning fails', async () => {
+        getSettings.mockResolvedValueOnce({ imageGen: { mode: 'local', local: { pythonPath: '/usr/bin/python3' } } });
+        mediaJobQueue.enqueueJob.mockReturnValueOnce({ jobId: 'queued-style-2', position: 1, status: 'queued' });
+        findOrCreateUniverseCollection.mockRejectedValueOnce(new Error('db down'));
+
+        const response = await request(app)
+          .post('/api/image-gen/generate')
+          .send({
+            prompt: 'a moody noir skyline',
+            universeRun: { universeId: 'uni-2', universeName: 'FailVerse', label: 'Base style', category: 'style' },
+          });
+
+        // The render still proceeds — a collection-filing miss must not fail it.
+        expect(response.status).toBe(200);
+        const [call] = mediaJobQueue.enqueueJob.mock.calls;
+        expect(call[0].params.universeRun).toBeUndefined();
+      });
+
+      it('ignores universeRun without a universeId (no collection resolution)', async () => {
+        getSettings.mockResolvedValueOnce({ imageGen: { mode: 'local', local: { pythonPath: '/usr/bin/python3' } } });
+        mediaJobQueue.enqueueJob.mockReturnValueOnce({ jobId: 'queued-plain', position: 1, status: 'queued' });
+
+        const response = await request(app)
+          .post('/api/image-gen/generate')
+          .send({ prompt: 'a plain render' });
+
+        expect(response.status).toBe(200);
+        expect(findOrCreateUniverseCollection).not.toHaveBeenCalled();
+        const [call] = mediaJobQueue.enqueueJob.mock.calls;
+        expect(call[0].params.universeRun).toBeUndefined();
+      });
+
+      // #1395 — section-local canon renders carry an `entryRef` so the
+      // completion hook durably appends the render to the entry's imageRefs[].
+      it('carries the section-local entryRef into the queued job tag', async () => {
+        getSettings.mockResolvedValueOnce({ imageGen: { mode: 'local', local: { pythonPath: '/usr/bin/python3' } } });
+        mediaJobQueue.enqueueJob.mockReturnValueOnce({ jobId: 'queued-section', position: 1, status: 'queued' });
+
+        const response = await request(app)
+          .post('/api/image-gen/generate')
+          .send({
+            prompt: 'a confident pyromancer',
+            universeRun: {
+              universeId: 'uni-3',
+              universeName: 'CanonVerse',
+              label: 'Ash',
+              category: 'characters',
+              entryRef: { kind: 'canon', kindKey: 'characters', id: 'char-ash' },
+            },
+          });
+
+        expect(response.status).toBe(200);
+        const [call] = mediaJobQueue.enqueueJob.mock.calls;
+        expect(call[0].params.universeRun).toEqual(expect.objectContaining({
+          universeId: 'uni-3',
+          collectionId: 'col-uni-3',
+          entryRef: { kind: 'canon', kindKey: 'characters', id: 'char-ash' },
+        }));
+      });
+
+      it('rejects a canon entryRef missing its kindKey (would no-op the append)', async () => {
+        // Zod validation rejects before prepareGenerateParams reads settings, so
+        // no getSettings/enqueueJob mock is primed here — priming an unconsumed
+        // mockResolvedValueOnce would leak into the next test (clearAllMocks does
+        // not drain the once-queue).
+        const response = await request(app)
+          .post('/api/image-gen/generate')
+          .send({
+            prompt: 'a confident pyromancer',
+            universeRun: {
+              universeId: 'uni-5',
+              universeName: 'CanonVerse',
+              entryRef: { kind: 'canon', id: 'char-ash' }, // no kindKey
+            },
+          });
+
+        expect(response.status).toBe(400);
+        expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+      });
+
+      it('preserves the entryRef even when collection provisioning fails', async () => {
+        getSettings.mockResolvedValueOnce({ imageGen: { mode: 'local', local: { pythonPath: '/usr/bin/python3' } } });
+        mediaJobQueue.enqueueJob.mockReturnValueOnce({ jobId: 'queued-section-2', position: 1, status: 'queued' });
+        findOrCreateUniverseCollection.mockRejectedValueOnce(new Error('db down'));
+
+        const response = await request(app)
+          .post('/api/image-gen/generate')
+          .send({
+            prompt: 'a confident pyromancer',
+            universeRun: {
+              universeId: 'uni-4',
+              universeName: 'CanonVerse',
+              entryRef: { kind: 'canon', kindKey: 'characters', id: 'char-ash' },
+            },
+          });
+
+        expect(response.status).toBe(200);
+        const [call] = mediaJobQueue.enqueueJob.mock.calls;
+        // The durable imageRefs[] append must not depend on the gallery
+        // collection existing — entryRef survives, collectionId/runId don't.
+        expect(call[0].params.universeRun).toEqual({
+          universeId: 'uni-4',
+          entryRef: { kind: 'canon', kindKey: 'characters', id: 'char-ash' },
+        });
+      });
+    });
+
+    // Durable catalog attach (#1359): the Catalog ingredient editor's Generate
+    // button passes `catalogIngredientId` so the queued job carries a
+    // `catalogAttach` tag the completion hook reads to file the render even if
+    // the page unmounts. The route collapses the raw fields into the tag and
+    // drops them from params.
+    describe('catalogAttach tag', () => {
+      it('folds catalogIngredientId into a catalogAttach job tag and drops the raw field', async () => {
+        getSettings.mockResolvedValueOnce({ imageGen: { mode: 'local', local: { pythonPath: '/usr/bin/python3' } } });
+        mediaJobQueue.enqueueJob.mockReturnValueOnce({ jobId: 'queued-cat', position: 1, status: 'queued' });
+
+        const response = await request(app)
+          .post('/api/image-gen/generate')
+          .send({ prompt: 'a catalog hero', catalogIngredientId: 'ing-42' });
+
+        expect(response.status).toBe(200);
+        const [call] = mediaJobQueue.enqueueJob.mock.calls;
+        expect(call[0].params.catalogAttach).toEqual({ ingredientId: 'ing-42' });
+        // Raw fields are stripped — only the canonical tag persists in job.params.
+        expect(call[0].params.catalogIngredientId).toBeUndefined();
+        expect(call[0].params.catalogMediaKind).toBeUndefined();
+      });
+
+      it('preserves an explicit catalogMediaKind in the tag', async () => {
+        getSettings.mockResolvedValueOnce({ imageGen: { mode: 'local', local: { pythonPath: '/usr/bin/python3' } } });
+        mediaJobQueue.enqueueJob.mockReturnValueOnce({ jobId: 'queued-cat-kind', position: 1, status: 'queued' });
+
+        const response = await request(app)
+          .post('/api/image-gen/generate')
+          .send({ prompt: 'a reference shot', catalogIngredientId: 'ing-7', catalogMediaKind: 'reference' });
+
+        expect(response.status).toBe(200);
+        const [call] = mediaJobQueue.enqueueJob.mock.calls;
+        expect(call[0].params.catalogAttach).toEqual({ ingredientId: 'ing-7', kind: 'reference' });
+      });
+
+      it('rejects an invalid catalogMediaKind', async () => {
+        const response = await request(app)
+          .post('/api/image-gen/generate')
+          .send({ prompt: 'x', catalogIngredientId: 'ing-9', catalogMediaKind: 'thumbnail' });
+        expect(response.status).toBe(400);
+      });
+
+      it('omits catalogAttach when no catalogIngredientId is sent', async () => {
+        getSettings.mockResolvedValueOnce({ imageGen: { mode: 'local', local: { pythonPath: '/usr/bin/python3' } } });
+        mediaJobQueue.enqueueJob.mockReturnValueOnce({ jobId: 'queued-nocat', position: 1, status: 'queued' });
+
+        const response = await request(app)
+          .post('/api/image-gen/generate')
+          .send({ prompt: 'untagged render' });
+
+        expect(response.status).toBe(200);
+        const [call] = mediaJobQueue.enqueueJob.mock.calls;
+        expect(call[0].params.catalogAttach).toBeUndefined();
+      });
     });
 
     // Local mode without a configured pythonPath now rejects up-front (400)
@@ -536,6 +748,66 @@ describe('Image Gen Routes', () => {
       expect(response.body.generationId).toBe('gen-004');
       expect(response.body.filename).toBe('default.png');
       expect(response.body.path).toBe('/data/images/default.png');
+    });
+
+    it('persists the rendered path onto the character when persistToCharacter is set', async () => {
+      imageGen.generateAvatar.mockResolvedValue({
+        generationId: 'gen-005',
+        filename: 'avatar.png',
+        path: '/data/images/avatar.png',
+      });
+
+      const response = await request(app)
+        .post('/api/image-gen/avatar')
+        .send({ name: 'Gandalf', characterClass: 'Wizard', persistToCharacter: true });
+
+      expect(response.status).toBe(200);
+      expect(response.body.path).toBe('/data/images/avatar.png');
+      expect(characterService.setAvatar).toHaveBeenCalledWith('/data/images/avatar.png');
+    });
+
+    it('does NOT persist to the character when persistToCharacter is omitted', async () => {
+      imageGen.generateAvatar.mockResolvedValue({
+        generationId: 'gen-006',
+        filename: 'avatar.png',
+        path: '/data/images/avatar.png',
+      });
+
+      const response = await request(app)
+        .post('/api/image-gen/avatar')
+        .send({ name: 'Gandalf', characterClass: 'Wizard' });
+
+      expect(response.status).toBe(200);
+      expect(characterService.setAvatar).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('POST /api/image-gen/upload', () => {
+    it('saves uploaded bytes into the gallery and returns a /data/images path', async () => {
+      imageGen.local.saveUploadedGalleryImage.mockResolvedValue({
+        filename: 'upload-deadbeef.png',
+        path: '/data/images/upload-deadbeef.png',
+      });
+
+      const response = await request(app)
+        .post('/api/image-gen/upload')
+        .send({ data: Buffer.from('fake-png-bytes').toString('base64') });
+
+      expect(response.status).toBe(200);
+      expect(response.body.path).toBe('/data/images/upload-deadbeef.png');
+      // The service receives the raw base64 string (route doesn't pre-decode).
+      expect(imageGen.local.saveUploadedGalleryImage).toHaveBeenCalledWith(
+        Buffer.from('fake-png-bytes').toString('base64'),
+      );
+    });
+
+    it('rejects a missing data field with 400', async () => {
+      const response = await request(app)
+        .post('/api/image-gen/upload')
+        .send({});
+
+      expect(response.status).toBe(400);
+      expect(imageGen.local.saveUploadedGalleryImage).not.toHaveBeenCalled();
     });
   });
 

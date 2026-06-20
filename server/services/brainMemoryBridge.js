@@ -232,9 +232,25 @@ export async function syncBrainRecord(brainType, record) {
  *   the live-record walks can't reach) — reported as `archived`.
  * @returns {Promise<{synced:number, skipped:number, errors:number, archived:number}>}
  */
-export async function syncAllBrainData({ dryRun = false, refresh = false } = {}) {
+// True when a record is already embedded: mapped AND its memory has a vector.
+// Shared by the onlyMissing sync path and the read-only coverage tally.
+const makeEmbeddedChecker = (map, missingMemIds) => (key) => {
+  const memId = map[key];
+  return !!memId && !missingMemIds.has(memId);
+};
+
+export async function syncAllBrainData({ dryRun = false, refresh = false, onlyMissing = false } = {}) {
   const map = await loadBridgeMap();
   const stats = { synced: 0, skipped: 0, errors: 0, archived: 0 };
+
+  // `onlyMissing` is the cheap, targeted backfill: embed only records that lack
+  // an embedding (unmapped, or mapped to a memory whose vector is NULL because
+  // generation failed) and skip everything already embedded. Unlike `refresh`
+  // it never re-embeds healthy records, so it's safe to run without a warning.
+  const missingMemIds = onlyMissing
+    ? await memory.getMemoryIdsMissingEmbedding().catch(() => new Set())
+    : null;
+  const isEmbedded = makeEmbeddedChecker(map, missingMemIds);
 
   // Entity stores (JSON-based)
   const entityTypes = ['people', 'projects', 'ideas', 'admin', 'memories'];
@@ -247,7 +263,9 @@ export async function syncAllBrainData({ dryRun = false, refresh = false } = {})
         continue;
       }
       const key = bridgeKey(type, record.id);
-      if (map[key] && !dryRun && !refresh) {
+      if (onlyMissing) {
+        if (isEmbedded(key)) { stats.skipped++; continue; }
+      } else if (map[key] && !dryRun && !refresh) {
         stats.skipped++;
         continue;
       }
@@ -277,7 +295,9 @@ export async function syncAllBrainData({ dryRun = false, refresh = false } = {})
       // Already-mapped days are skipped in both real and dry-run modes so
       // dry-run stats match actual-run stats (rather than claiming to
       // re-sync every day every time) — unless refresh is forcing a re-embed.
-      if (map[key] && !refresh) {
+      if (onlyMissing) {
+        if (isEmbedded(key)) { stats.skipped += 1; continue; }
+      } else if (map[key] && !refresh) {
         stats.skipped += 1;
         continue;
       }
@@ -302,7 +322,9 @@ export async function syncAllBrainData({ dryRun = false, refresh = false } = {})
     const records = await getter(1000); // get all
     for (const record of records) {
       const key = bridgeKey(type, record.id);
-      if (map[key] && !dryRun && !refresh) {
+      if (onlyMissing) {
+        if (isEmbedded(key)) { stats.skipped++; continue; }
+      } else if (map[key] && !dryRun && !refresh) {
         stats.skipped++;
         continue;
       }
@@ -354,6 +376,43 @@ export async function syncAllBrainData({ dryRun = false, refresh = false } = {})
   return stats;
 }
 
+/**
+ * Count how many active brain records lack an embedding — the headline number
+ * for the "N memories missing embeddings · Embed missing" affordance on the
+ * graph. A record is "missing" when it's unmapped OR its mapped memory has a
+ * NULL embedding — scoped to ACTIVE memories, since getMemoryIdsMissingEmbedding
+ * only reports active rows (an archived/non-active mapped memory is treated as
+ * embedded and is not a backfill target). Read-only; walks the same stores as
+ * the onlyMissing sync so the count matches what "Embed missing" would process.
+ */
+export async function getEmbeddingCoverage() {
+  const map = await loadBridgeMap();
+  const missingMemIds = await memory.getMemoryIdsMissingEmbedding().catch(() => new Set());
+  const isEmbedded = makeEmbeddedChecker(map, missingMemIds);
+
+  let total = 0;
+  let missing = 0;
+  const tally = (key) => { total += 1; if (!isEmbedded(key)) missing += 1; };
+
+  for (const type of ['people', 'projects', 'ideas', 'admin', 'memories']) {
+    const records = await brainStorage.getAll(type);
+    for (const record of records) {
+      if (record.archived) continue;
+      tally(bridgeKey(type, record.id));
+    }
+  }
+
+  const { records: journals } = await listJournals({ limit: 10000, includeContent: false });
+  for (const record of journals) tally(bridgeKey('journals', record.id));
+
+  for (const [type, getter] of [['digests', brainStorage.getDigests], ['reviews', brainStorage.getReviews]]) {
+    const records = await getter(1000);
+    for (const record of records) tally(bridgeKey(type, record.id));
+  }
+
+  return { total, missing };
+}
+
 // ─── Synced-in record resync (issue #1080) ──────────────────────────────────
 // Peer-synced brain writes go through brainStorage.applyRemoteRecord, which is
 // deliberately event-silent (no brainEvents) to prevent cross-peer echo loops
@@ -366,7 +425,7 @@ export async function syncAllBrainData({ dryRun = false, refresh = false } = {})
 // we re-read each record's canonical state and re-embed or archive accordingly.
 
 const RESYNC_DEBOUNCE_MS = 250;
-const pendingResync = new Map(); // bridgeKey → { type, id } (dedups repeated touches)
+const pendingResync = new Map(); // bridgeKey → { type, id, hardDelete } (dedups repeated touches)
 let resyncTimer = null;
 let resyncFlushing = false; // single-flight guard so two flushes can't overlap
 
@@ -385,23 +444,61 @@ async function archiveMappedMemory(brainType, id) {
 }
 
 /**
+ * Hard-delete the memory entry mapped to a brain record (issue #1318). Used for
+ * a GENUINE local user delete: archiving the row would hide it from search but
+ * leave the row + its 768-dim embedding in Postgres forever (e.g. ~1,482 dead
+ * vectors after a cleared ChatGPT import). A hard delete drops the row and its
+ * embedding and removes the bridge-map entry so a later create can't collide
+ * with a stale mapping. NOT used for synced-in deletes — those stay soft-
+ * archived (see resyncBrainRecord) so a peer un-delete can resurrect them.
+ */
+async function hardDeleteMappedMemory(brainType, id) {
+  const map = await loadBridgeMap();
+  const key = bridgeKey(brainType, id);
+  const memoryId = map[key];
+  if (!memoryId) return false;
+  await memory.deleteMemory(memoryId, true); // hard: DELETE row + drop embedding
+  delete map[key];
+  await saveBridgeMap();
+  console.log(`🧠🔗 Hard-deleted brain→memory: ${brainType}/${id} → ${memoryId}`);
+  return true;
+}
+
+/**
  * Re-vectorize (or archive) a single brain record from its CANONICAL stored
  * state — used after a peer sync applies a change. Reading the store rather
  * than trusting an event payload makes this self-healing and order-independent:
  * whatever the final converged state is (live record, archived, or tombstoned),
  * the memory copy is brought into line.
  *   - record present & not archived → upsert + re-embed (syncBrainRecord)
- *   - record absent (tombstoned) or archived → archive the mapped memory entry
+ *   - record absent (tombstoned) → hard-delete on a genuine local delete
+ *     (hardDelete), else archive the mapped memory entry (synced/recoverable)
+ *   - record present but archived → archive (always soft — recoverable)
  *   - type not mirrored by the bridge (links/buckets/inbox) → no-op
+ *
+ * @param {object}  [opts]
+ * @param {boolean} [opts.hardDelete=false] The trigger was a real local user
+ *   delete (a `{type}:deleted` event), so a tombstoned record should hard-prune
+ *   the mapped memory row + embedding rather than soft-archive it (issue #1318).
+ *   Synced-in deletes (sync:applied) pass false so they stay resurrectable.
  */
-export async function resyncBrainRecord(brainType, id) {
+export async function resyncBrainRecord(brainType, id, { hardDelete = false } = {}) {
   if (!id || !TYPE_MAP[brainType]) return;
   // getById returns null for tombstones (deleted records), so a synced-in
-  // delete naturally lands in the archive branch.
+  // delete naturally lands in the archive/hard-delete branch.
   const record = brainType === 'journals'
     ? await getJournal(id)
     : await brainStorage.getById(brainType, id);
-  if (!record || record.archived) {
+  if (!record) {
+    // Truly gone (tombstoned). A genuine local user delete hard-prunes the row;
+    // a sync-driven delete stays soft so a peer un-delete can resurrect it.
+    if (hardDelete) await hardDeleteMappedMemory(brainType, id);
+    else await archiveMappedMemory(brainType, id);
+    return;
+  }
+  if (record.archived) {
+    // Present but archived (not deleted) — always soft, never hard-delete, even
+    // if the queued trigger carried a hardDelete intent.
     await archiveMappedMemory(brainType, id);
     return;
   }
@@ -429,8 +526,8 @@ export async function flushPendingResync() {
     while (pendingResync.size > 0) {
       const batch = [...pendingResync.values()];
       pendingResync.clear();
-      for (const { type, id } of batch) {
-        await resyncBrainRecord(type, id).catch((err) => {
+      for (const { type, id, hardDelete } of batch) {
+        await resyncBrainRecord(type, id, { hardDelete }).catch((err) => {
           console.error(`❌ Brain bridge resync failed for ${type}/${id}: ${err.message}`);
         });
       }
@@ -448,9 +545,17 @@ export async function flushPendingResync() {
  */
 export function queueResync(records) {
   if (!Array.isArray(records)) return;
-  for (const { type, id } of records) {
+  for (const { type, id, hardDelete } of records) {
     if (!id || !TYPE_MAP[type]) continue;
-    pendingResync.set(bridgeKey(type, id), { type, id });
+    const key = bridgeKey(type, id);
+    // Sticky hard-delete on coalesce: once a real local `{type}:deleted` marks a
+    // key for a hard prune, a later touch for the same key before the flush — a
+    // concurrent `sync:applied` carrying no flag, say — must NOT downgrade it to
+    // a soft archive, or the dead embedding lingers. Safe to keep sticky because
+    // resyncBrainRecord's record-present branch upserts a resurrected record
+    // regardless of the flag, so a true intent can never hard-delete a live row.
+    const prevHardDelete = pendingResync.get(key)?.hardDelete;
+    pendingResync.set(key, { type, id, hardDelete: !!hardDelete || !!prevHardDelete });
   }
   if (pendingResync.size === 0 || resyncTimer || resyncFlushing) return;
   resyncTimer = setTimeout(() => {
@@ -498,7 +603,10 @@ export function initBridge() {
   // payload is already stale by flush time still converges correctly.
   for (const type of ['people', 'projects', 'ideas', 'admin', 'memories']) {
     brainEvents.on(`${type}:upserted`, ({ id }) => queueResync([{ type, id }]));
-    brainEvents.on(`${type}:deleted`, ({ id }) => queueResync([{ type, id }]));
+    // A `:deleted` event is a genuine LOCAL user delete (remove() emits it;
+    // applyRemoteRecord is event-silent), so hard-prune the mapped vector row
+    // rather than soft-archive it forever (issue #1318).
+    brainEvents.on(`${type}:deleted`, ({ id }) => queueResync([{ type, id, hardDelete: true }]));
   }
 
   // JSONL appends (digests, reviews)
@@ -541,11 +649,9 @@ function handleJournalUpserted(entry) {
 
 async function handleJournalDeleted(entry) {
   if (!entry?.id) return;
-  const map = await loadBridgeMap();
-  const key = bridgeKey('journals', entry.id);
-  const memoryId = map[key];
-  if (!memoryId) return;
-  memory.updateMemory(memoryId, { status: 'archived' }).catch((err) => {
-    console.error(`❌ Brain bridge archive failed for journals/${entry.id}: ${err.message}`);
-  });
+  // deleteJournal (the local user action) is the only emitter of
+  // 'journals:deleted'; synced-in journal deletes flow through sync:applied →
+  // resyncBrainRecord and stay soft-archived. So a local journal delete hard-
+  // prunes the mapped memory row + embedding (issue #1318).
+  await hardDeleteMappedMemory('journals', entry.id);
 }

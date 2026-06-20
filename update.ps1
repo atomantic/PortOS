@@ -357,6 +357,18 @@ Write-SafeHost "  ✅ Update Complete!" -ForegroundColor Green
 Write-SafeHost "===================================" -ForegroundColor Green
 Write-SafeHost ""
 
+# Tell the user where to open PortOS — leads with the working local URL
+# (http://localhost:5553 mirror in HTTPS mode, :5555 in plain-HTTP mode) so they
+# don't land on a dead http://localhost:5555 when a Tailscale cert has forced
+# :5555 into TLS-only. Mirrors setup.sh's print_access_url banner; gated on the
+# same cert predicate the server uses, so we never advertise a URL it isn't serving.
+$accessUrl = & node scripts/print-access-url.js 2>$null
+$global:LASTEXITCODE = 0
+if ($accessUrl) {
+    $accessUrl | ForEach-Object { Write-SafeHost $_ -ForegroundColor Cyan }
+    Write-SafeHost ""
+}
+
 if ($stashedForBranch) {
     Write-SafeHost "ℹ️  Your local changes from '$stashedForBranch' were stashed for the update." -ForegroundColor Cyan
     if ($stashedForBranch -eq "detached HEAD") {

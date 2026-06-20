@@ -3,7 +3,9 @@ import {
   analyzeError,
   analyzeHttpError,
   createImmediateFallbackSignalDetector,
+  createTerminalModelErrorDetector,
   detectImmediateFallbackSignal,
+  detectTerminalModelError,
   extractWaitTime,
   ERROR_CATEGORIES
 } from './errorDetection.js';
@@ -83,6 +85,13 @@ describe('Error Detection', () => {
       expect(result.requiresFallback).toBe(true);
     });
 
+    it('classifies a Bedrock "model identifier is invalid" rejection as model-not-found', () => {
+      const result = analyzeError('API Error (claude-opus-4-8): 400 The provided model identifier is invalid.. Try /model to switch to us.anthropic.claude-opus-4-1-20250805-v1:0.');
+      expect(result.hasError).toBe(true);
+      expect(result.category).toBe(ERROR_CATEGORIES.MODEL_NOT_FOUND);
+      expect(result.requiresFallback).toBe(true);
+    });
+
     it('should detect network errors', () => {
       const result = analyzeError('Error: ECONNREFUSED 127.0.0.1:8080');
       expect(result.hasError).toBe(true);
@@ -148,6 +157,57 @@ describe('Error Detection', () => {
         category: ERROR_CATEGORIES.USAGE_LIMIT,
         requiresFallback: true
       });
+    });
+
+    it('does NOT catch a terminal model-id rejection — that is scoped to the one-shot TUI runner, not the shared detector the agent paths use', () => {
+      // The agent spawn paths route arbitrary agent output through this shared
+      // detector; a model-id rejection must NOT fire here (it lives in
+      // detectTerminalModelError, consulted only by tuiPromptRunner).
+      expect(detectImmediateFallbackSignal('⏺ API Error (claude-opus-4-8): 400 The provided model identifier is invalid.')).toBeNull();
+    });
+  });
+
+  describe('detectTerminalModelError', () => {
+    it('detects Claude Code\'s terminal "model identifier is invalid" (Bedrock 400) error line', () => {
+      const result = detectTerminalModelError('⏺ API Error (claude-opus-4-8): 400 The provided model identifier is invalid.. Try /model to switch to us.anthropic.claude-opus-4-1-20250805-v1:0.');
+      expect(result).toMatchObject({
+        hasError: true,
+        category: ERROR_CATEGORIES.MODEL_NOT_FOUND,
+        requiresFallback: true
+      });
+    });
+
+    it('detects an Anthropic 404 not_found_error model rejection', () => {
+      const result = detectTerminalModelError('API Error: 404 {"type":"error","error":{"type":"not_found_error","message":"model: claude-9"}}');
+      expect(result).toMatchObject({
+        hasError: true,
+        category: ERROR_CATEGORIES.MODEL_NOT_FOUND,
+        requiresFallback: true
+      });
+    });
+
+    it('does NOT fire on a recoverable 429/500 (Claude Code auto-retries those)', () => {
+      expect(detectTerminalModelError('⏺ API Error (claude-opus-4-8): 429 rate limited, retrying…')).toBeNull();
+      expect(detectTerminalModelError('⏺ API Error (claude-opus-4-8): 500 internal server error, retrying…')).toBeNull();
+    });
+
+    it('does NOT fire on an agent merely printing the phrase without the API Error prefix', () => {
+      expect(detectTerminalModelError('The Bedrock backend says the model identifier is invalid when you pass a bare id.')).toBeNull();
+    });
+
+    it('does NOT fire on a full error line quoted mid-sentence in prose (line-anchored)', () => {
+      expect(detectTerminalModelError('I fixed the `API Error (claude-opus-4-8): 400 The provided model identifier is invalid` bug in the runner.')).toBeNull();
+    });
+
+    it('does NOT fire on a retryable 429 line that incidentally contains 404 (status anchored to the prefix)', () => {
+      expect(detectTerminalModelError('API Error: 429 too many requests for the 404 page not found endpoint')).toBeNull();
+    });
+
+    it('buffers the error line across stream chunks', () => {
+      const detect = createTerminalModelErrorDetector();
+      expect(detect('⏺ API Error (claude-opus-4-8): 400 The provided ')).toBeNull();
+      const result = detect('model identifier is invalid.\n');
+      expect(result).toMatchObject({ category: ERROR_CATEGORIES.MODEL_NOT_FOUND, requiresFallback: true });
     });
   });
 

@@ -192,6 +192,45 @@ export function assertProvider(provider, { message, code, status = 503 } = {}) {
 }
 
 /**
+ * Guard a vision run against a silent fallback to a non-API provider.
+ *
+ * Vision only works on the API path (executeApiRun base64-inlines images);
+ * CLI/TUI providers drop the images and return a completion hallucinated from
+ * the text prompt alone. `runPromptThroughProvider` can swap the provider two
+ * ways — a proactive swap inside createRun (`result.provider`) or a retry
+ * fallback after failure (`result.fallbackProvider`) — so the provider that
+ * ACTUALLY ran is the first of those, else the requested one. Throw
+ * VISION_FALLBACK_DROPPED_IMAGES when it isn't an API provider so callers don't
+ * report image-grounded output that was really text-only.
+ *
+ * Returns the provider that ran so callers can read its id/type.
+ *
+ * @param {object} result — the runPromptThroughProvider result
+ * @param {object} requestedProvider — the provider the caller asked to run
+ * @returns {object} the effective provider that ran
+ */
+export function assertVisionRunUsedImages(result, requestedProvider) {
+  const ran = result?.provider || result?.fallbackProvider || requestedProvider;
+  if (ran?.type && ran.type !== 'api') {
+    // Name both providers so the cause is actionable. The usual trigger is a
+    // proactive/retry swap because the requested API provider is in a temporary
+    // cooldown (e.g. a prior model-not-found benched it for several minutes) —
+    // NOT that the user picked a non-vision provider. Point them at the real fix.
+    const requestedName = requestedProvider?.name || requestedProvider?.id || 'the selected provider';
+    const ranName = ran?.name || ran?.id || 'a non-vision provider';
+    const swapped = ran?.id && requestedProvider?.id && ran.id !== requestedProvider.id;
+    const cause = swapped
+      ? `"${requestedName}" was unavailable (likely a temporary cooldown after an earlier failed request), so the run fell back to "${ranName}", which can't read images.`
+      : `"${ranName}" can't read images.`;
+    throw new ServerError(
+      `${cause} Retry in a few minutes, or pick a different vision-capable API provider/model.`,
+      { status: 502, code: 'VISION_FALLBACK_DROPPED_IMAGES' },
+    );
+  }
+  return ran;
+}
+
+/**
  * Run a prompt through a provider and resolve with the streamed text +
  * run id. Rejects (via the strictest discriminator) on any runner-
  * reported failure.
@@ -448,7 +487,17 @@ async function markProviderUnavailableFromError(failed, errorMessage, runnerAnal
   // provider is healthy and other prompts still work. Don't bench it (which
   // would route every subsequent task to the fallback for a full cooldown);
   // this single call still falls back via the caller's retry path.
-  if (category === ERROR_CATEGORIES.CONTENT_REFUSAL) return;
+  //
+  // A model-not-found is REQUEST-specific the same way: the request named a
+  // model id the (reachable) endpoint doesn't have — a bad caller/config model,
+  // not the provider being down. Benching the whole provider would take its
+  // OTHER valid models offline for the full cooldown (e.g. one bad
+  // `codex-configured-default` vision call benching Ollama so a correct
+  // `qwen2.5vl` call then proactively swaps to a non-vision fallback). The
+  // single failing call still falls back via the retry path; the provider stays
+  // available for its working models. A genuine endpoint outage surfaces as
+  // NETWORK_ERROR, not MODEL_NOT_FOUND, so it is still benched.
+  if (category === ERROR_CATEGORIES.CONTENT_REFUSAL || category === ERROR_CATEGORIES.MODEL_NOT_FOUND) return;
 
   if (category === ERROR_CATEGORIES.USAGE_LIMIT) {
     await providerStatus.markUsageLimit(failed.id, {

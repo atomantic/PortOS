@@ -1220,6 +1220,23 @@ export async function updateUniverse(id, patchOrMutator = {}, options = {}) {
       scalarPatch.compositeSheets = preserveImageRefsById(scalarPatch.compositeSheets, cur.compositeSheets);
     }
 
+    // Server-stamped render history on canon entries (characters / places /
+    // objects). Like the variations + composite-sheet guards above, the
+    // collection hook appends to these `imageRefs[]` via the mutator form of
+    // updateUniverse (which bypasses this guard). A literal whole-array PATCH
+    // that round-trips a canon list the client loaded before a section-local
+    // or batch render completed (#1395) would otherwise clobber the freshly-
+    // appended filename. Preserve cur's imageRefs per-id when the patch is
+    // stale. (The characters array was already remapped above for sheet
+    // pointers — this preserves a different field and composes cleanly.)
+    if (!isMutator) {
+      for (const canonKey of ['characters', 'places', 'objects']) {
+        if (Array.isArray(scalarPatch[canonKey]) && Array.isArray(cur[canonKey])) {
+          scalarPatch[canonKey] = preserveImageRefsById(scalarPatch[canonKey], cur[canonKey]);
+        }
+      }
+    }
+
     const mergedRecord = sanitizeTemplate({
       ...cur,
       ...scalarPatch,

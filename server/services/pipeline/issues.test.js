@@ -1117,6 +1117,48 @@ describe('pipeline issues service', () => {
         expect(leanRec).toBeTruthy();
       });
     });
+
+    describe('listIssuesForSeries (#1469)', () => {
+      it('returns only the named series, sorted by number, live by default', async () => {
+        await svc.createIssue({ seriesId: 'ser-x', title: 'X1' });
+        await svc.createIssue({ seriesId: 'ser-y', title: 'Y1' });
+        const x2 = await svc.createIssue({ seriesId: 'ser-x', title: 'X2' });
+        await svc.deleteIssue(x2.id);
+        const got = await svc.listIssuesForSeries('ser-x');
+        expect(got.every((i) => i.seriesId === 'ser-x')).toBe(true);
+        expect(got.map((i) => i.id)).not.toContain(x2.id); // tombstoned excluded
+        // Sorted ascending by issue number.
+        const nums = got.map((i) => i.number);
+        expect(nums).toEqual([...nums].sort((a, b) => a - b));
+      });
+
+      it('includes deleted only when asked, strips history on request', async () => {
+        const a = await svc.createIssue({ seriesId: 'ser-fs', title: 'A' });
+        await svc.updateStage(a.id, 'idea', { status: 'ready', output: 'v1', lastRunId: 'r1' });
+        await svc.updateStage(a.id, 'idea', { status: 'ready', output: 'v2', lastRunId: 'r2' });
+        const b = await svc.createIssue({ seriesId: 'ser-fs', title: 'B' });
+        await svc.deleteIssue(b.id);
+        expect((await svc.listIssuesForSeries('ser-fs')).map((i) => i.id)).not.toContain(b.id);
+        expect((await svc.listIssuesForSeries('ser-fs', { includeDeleted: true })).map((i) => i.id)).toContain(b.id);
+        const lean = await svc.listIssuesForSeries('ser-fs', { withHistory: false });
+        const leanRec = lean.find((i) => i.id === a.id);
+        expect(leanRec.stages.idea.runHistory).toEqual([]);
+        expect(leanRec.stages.idea.output).toBe('v2'); // active fields survive
+      });
+
+      it('is uncapped — does not slice at ISSUES_PER_RESPONSE_MAX like listIssues', async () => {
+        // The editorial runner's storyboard / comic-lettering projections depend
+        // on seeing EVERY issue in a series: listIssues caps at 1000, this must
+        // not. Asserted structurally (cap math) rather than by seeding 1000+
+        // records, which is too slow for a unit test — listIssues slices with
+        // `.slice(0, ISSUES_PER_RESPONSE_MAX)`, listIssuesForSeries has no slice.
+        // We confirm a small set round-trips 1:1 (no accidental limit wired in).
+        const ids = [];
+        for (let i = 0; i < 5; i++) ids.push((await svc.createIssue({ seriesId: 'ser-cap', title: `C${i}` })).id);
+        const got = await svc.listIssuesForSeries('ser-cap');
+        expect(got.map((i) => i.id).filter((id) => ids.includes(id))).toHaveLength(5);
+      });
+    });
   });
 
   describe('isStageReady', () => {

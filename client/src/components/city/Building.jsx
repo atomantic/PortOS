@@ -6,7 +6,9 @@ import { useCityPalette } from './CityPaletteContext';
 import CityLabel from './CityLabel';
 import HolographicPanel from './HolographicPanel';
 import BuildingHologram from './BuildingHologram';
+import BuildingWindows from './BuildingWindows';
 import { computeRooftopKit } from '../../utils/cityRooftops';
+import { buildingHasInteriorWindows } from '../../utils/cityInteriorWindows';
 
 // Rooftop fixture geometry/materials are module-scope singletons shared by every
 // building — fixtures are tiny set dressing, so they keep fixed colors (the antenna
@@ -392,7 +394,7 @@ function FloorLightBands({ width, depth, height, color, accentColor, seed, dimMu
   );
 }
 
-export default function Building({ app, position, agentCount, onClick, playSfx, neonBrightness = 1.2, isProximity = false, dimmed = false, dayMix = 0, playback = false, transitionState = null, onExited, rooftops = true }) {
+export default function Building({ app, position, agentCount, onClick, playSfx, neonBrightness = 1.2, isProximity = false, dimmed = false, dayMix = 0, playback = false, transitionState = null, onExited, rooftops = true, interiorWindows = false }) {
   const meshRef = useRef();
   const glowRef = useRef();
   const haloRef = useRef();
@@ -556,6 +558,22 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
           opacity={(app.archived ? 0.78 : 1) * dimMul}
         />
       </mesh>
+
+      {/* Interior-mapped window panes (three-fenestra) — parallax fake-3D lit
+          rooms on selected online towers. Night-only (by day the tower reads as a
+          sunlit solid) and gated to the high quality preset by the caller. */}
+      {!daytime && interiorWindows && buildingHasInteriorWindows(app, height) && (
+        <BuildingWindows
+          width={width}
+          depth={depth}
+          height={height}
+          seed={seed}
+          accentColor={accentColor}
+          edgeColor={edgeColor}
+          neonBrightness={neonBrightness}
+          dimMul={dimMul}
+        />
+      )}
 
       {/* Building edges — bright neon by night, a plain architectural outline by day */}
       <lineSegments position={[0, height / 2, 0]} geometry={edgesGeom}>

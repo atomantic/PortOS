@@ -14,7 +14,7 @@
 import sharp from 'sharp';
 import { basename } from 'node:path';
 import { ServerError } from './errorHandler.js';
-import { tryReadFile, safeJSONParse, atomicWrite } from './fileUtils.js';
+import { tryReadFile, safeJSONParse, atomicWrite, detectImageFormat } from './fileUtils.js';
 
 /**
  * Read cleaner flags off a per-mode settings record. Pure: no I/O, no
@@ -59,21 +59,11 @@ export const CLEAN_LEVELS = ['aggressive'];
 
 // Magic-byte sniff so we re-encode as the source format and emit the right
 // MIME type — extension/header is supplied by the client and not trustworthy.
+// Delegates to the shared sniffer in fileUtils; cleaning only handles the three
+// formats sharp re-encodes here, so a detected GIF is treated as unsupported.
 function detectFormat(buf) {
-  if (buf.length >= 8 &&
-      buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47 &&
-      buf[4] === 0x0d && buf[5] === 0x0a && buf[6] === 0x1a && buf[7] === 0x0a) {
-    return 'png';
-  }
-  if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) {
-    return 'jpeg';
-  }
-  if (buf.length >= 12 &&
-      buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46 &&
-      buf[8] === 0x57 && buf[9] === 0x45 && buf[10] === 0x42 && buf[11] === 0x50) {
-    return 'webp';
-  }
-  return null;
+  const format = detectImageFormat(buf)?.format ?? null;
+  return format === 'gif' ? null : format;
 }
 
 // PNG chunk type bytes must be ASCII letters per the PNG spec (RFC 2083 §3.2).

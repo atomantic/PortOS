@@ -5,24 +5,31 @@ import toast from '../ui/Toast';
 import { listMediaCollections, createMediaCollection } from '../../services/api';
 import usePopoverPosition, { VIEWPORT_PADDING } from '../../hooks/usePopoverPosition.js';
 
-// Shared popover shell for the two collection pickers:
+// Shared popover shell for the list-pick-or-create pickers:
 //
 //   - AddToCollectionMenu (one item → many collections, toggles membership)
 //   - BulkTargetPicker     (many items → one destination, pick + dispatch)
+//   - PinToMoodBoardMenu   (one media item → many mood boards, toggles pin)
 //
-// Both portal a fixed-position popover into <body>, compute placement relative
+// All portal a fixed-position popover into <body>, compute placement relative
 // to a trigger element, ship a search input above a threshold, and end with a
 // "create new" inline form. This shell owns all of that plumbing; the caller
 // provides `renderItem` for the per-row UI and `onCreated`/`onPickCreated` for
 // what to do after the inline create succeeds.
 //
-// Collections data flow (per PLAN.md item 2):
-//   - If `collections` is provided by the parent, we never call
-//     `listMediaCollections()` ourselves — this lets MediaCollectionDetail
-//     reuse its already-fetched list instead of paying a per-mount round-trip.
+// Data flow (per PLAN.md item 2):
+//   - If `collections` is provided by the parent, we never call `loadItems()`
+//     ourselves — this lets MediaCollectionDetail reuse its already-fetched
+//     list instead of paying a per-mount round-trip.
 //   - If `collections` is `null`/omitted, the shell auto-loads on mount (old
 //     AddToCollectionMenu behavior). Use `onCollectionsLoaded` if the parent
 //     wants to learn the fetched list (e.g. for membership rendering).
+//
+// The data source is injectable: `loadItems`/`createItem` default to the media-
+// collection API so the two collection pickers need no extra wiring, but mood-
+// board (or any future `{ id, name, items }`-shaped) pickers pass their own
+// loader/creator + nouns. The record shape the shell assumes is minimal:
+// `{ id, name }` plus whatever `renderItem` reads.
 //
 // `excludeId` is a single-item allow-list filter so BulkTargetPicker can hide
 // the current collection from its move/copy target list.
@@ -52,6 +59,12 @@ export default function CollectionPickerShell({
   onCollectionsChange,
   onCreated,
   onClose,
+  // Injectable data source — defaults to the media-collection API so the two
+  // collection pickers stay zero-config. `loadItems()` resolves to an array of
+  // `{ id, name, ... }`; `createItem({ name })` resolves to the created record.
+  loadItems = listMediaCollections,
+  createItem = createMediaCollection,
+  searchPlaceholder = 'Search collections…',
 }) {
   const [collectionsState, setCollectionsState] = useState(collectionsProp ?? null);
   const [query, setQuery] = useState('');
@@ -91,7 +104,7 @@ export default function CollectionPickerShell({
     if (collectionsProp !== undefined) return undefined;
     if (!open) return undefined;
     let cancelled = false;
-    listMediaCollections().then(
+    loadItems().then(
       (data) => {
         if (cancelled) return;
         const list = Array.isArray(data) ? data : [];
@@ -100,13 +113,12 @@ export default function CollectionPickerShell({
       },
       (err) => {
         if (cancelled) return;
-        toast.error(err?.message || 'Failed to load collections');
+        toast.error(err?.message || 'Failed to load list');
         setCollectionsState([]);
       },
     );
     return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, collectionsProp]);
+  }, [open, collectionsProp, loadItems]);
 
   const filtered = useMemo(() => {
     if (!collectionsState) return null;
@@ -147,7 +159,7 @@ export default function CollectionPickerShell({
     const name = newName.trim();
     if (!name) return;
     setCreating(true);
-    const created = await createMediaCollection({ name }).catch((err) => {
+    const created = await createItem({ name }).catch((err) => {
       toast.error(err?.message || 'Create failed');
       return null;
     });
@@ -190,7 +202,7 @@ export default function CollectionPickerShell({
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search collections…"
+            placeholder={searchPlaceholder}
             className="w-full bg-port-bg border border-port-border rounded pl-7 pr-2 py-1 text-[11px] text-white focus:outline-none focus:border-port-accent"
             autoFocus
           />

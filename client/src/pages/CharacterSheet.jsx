@@ -213,10 +213,12 @@ export default function CharacterSheet() {
     setDiffusionProgress(null);
     generatingRef.current = true;
     generationIdRef.current = null;
-    generateAvatar({ name: char.name, characterClass: char.class })
+    // The route persists `avatarPath` onto the character server-side
+    // (persistToCharacter), so no follow-up charPut is needed — keep the
+    // optimistic setChar for instant feedback.
+    generateAvatar({ name: char.name, characterClass: char.class, persistToCharacter: true })
       .then(result => {
         setChar(prev => ({ ...prev, avatarPath: result.path }));
-        return charPut({ avatarPath: result.path });
       })
       .catch(err => toast.error(err.message || 'Failed to generate avatar'))
       .finally(() => {

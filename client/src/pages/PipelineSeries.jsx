@@ -14,10 +14,12 @@ import { useEffect, useState } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, Save, Loader2, Workflow as WorkflowIcon, Globe, NotebookPen,
-  PanelLeftClose, PanelLeftOpen, Sparkles, BookOpen, FileInput,
+  PanelLeftClose, PanelLeftOpen, Sparkles, BookOpen, FileInput, Compass, BookMarked,
+  Plus, Trash2,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import ArcCanvas from '../components/pipeline/ArcCanvas';
+import AutopilotPanel from '../components/pipeline/AutopilotPanel';
 import CatalogCastPanel from '../components/CatalogCastPanel';
 import TabPills from '../components/ui/TabPills';
 import {
@@ -48,8 +50,8 @@ const STYLE_OVERRIDE_MODE_TABS = [
 // empty-value defaults the server expects for the optional ones. Module-level
 // constants so the `useArcCanvasSync` callbacks keep a stable identity.
 const ARC_FLUSH_FIELDS = [
-  'name', 'logline', 'premise', 'styleNotes', 'titleLogo', 'author', 'authorId',
-  'stylePromptOverride', 'stylePromptOverrideMode', 'issueCountTarget', 'universeId',
+  'name', 'logline', 'premise', 'styleNotes', 'styleGuide', 'titleLogo', 'author', 'authorId',
+  'stylePromptOverride', 'stylePromptOverrideMode', 'issueCountTarget', 'universeId', 'characterArcs',
 ];
 const ARC_PAYLOAD_DEFAULTS = {
   titleLogo: '',
@@ -57,7 +59,29 @@ const ARC_PAYLOAD_DEFAULTS = {
   authorId: null,
   stylePromptOverride: '',
   stylePromptOverrideMode: STYLE_OVERRIDE_MODE_DEFAULT,
+  // Structured house style — null means "no style guide", which the server
+  // sanitizer also produces from an all-empty guide.
+  styleGuide: null,
+  // Per-character story arcs (#1293) — [] means "no authored arcs"; the server
+  // sanitizer drops empty arcs/beats and dedupes by character identity.
+  characterArcs: [],
 };
+
+// Style-guide option lists — mirror the enums in server/lib/styleGuide.js. Each
+// select carries a blank ("—") option so a field can be left unset (null).
+const STYLE_GUIDE_FIELDS = [
+  { key: 'tense', label: 'Tense', options: [['past', 'Past'], ['present', 'Present']] },
+  { key: 'povPerson', label: 'POV person', options: [['first', 'First person'], ['third-limited', 'Third — limited'], ['third-omniscient', 'Third — omniscient'], ['second', 'Second person']] },
+  { key: 'targetAudience', label: 'Target audience', options: [['children', 'Children'], ['middle-grade', 'Middle-grade'], ['YA', 'YA'], ['adult', 'Adult']] },
+  { key: 'contentRating', label: 'Content rating', options: [['G', 'G'], ['PG', 'PG'], ['PG-13', 'PG-13'], ['R', 'R'], ['custom', 'Custom']] },
+  { key: 'profanity', label: 'Profanity', options: [['none', 'None'], ['mild', 'Mild'], ['moderate', 'Moderate'], ['strong', 'Strong']] },
+];
+// Tri-state boolean conventions rendered as —/Yes/No selects so "unset" stays
+// distinct from "No" (matches the server's tri-state sanitizer).
+const STYLE_GUIDE_TRISTATE = [
+  { key: 'oxfordComma', label: 'Oxford comma' },
+  { key: 'italicizeThoughts', label: 'Italicize thoughts' },
+];
 
 export default function PipelineSeries() {
   const { seriesId } = useParams();
@@ -188,6 +212,20 @@ export default function PipelineSeries() {
               <BookOpen size={12} /> Manuscript
             </Link>
             <Link
+              to={`/pipeline/series/${series.id}/reverse-outline`}
+              className="ml-2 inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-gray-400 hover:text-white border border-port-border bg-port-card"
+              title="Map the drafted manuscript into a color-coded scene-by-plotline reverse outline"
+            >
+              <Compass size={12} /> Reverse Outline
+            </Link>
+            <Link
+              to={`/pipeline/series/${series.id}/continuity-bible`}
+              className="ml-2 inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-gray-400 hover:text-white border border-port-border bg-port-card"
+              title="Browse the established-facts ledger — physical traits, ages, dates, places, possessions, world rules, and who knows what"
+            >
+              <BookMarked size={12} /> Continuity
+            </Link>
+            <Link
               to={buildImporterLink({ universeId: series.universeId, seriesId: series.id })}
               className="ml-2 inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-gray-400 hover:text-white border border-port-border bg-port-card"
               title="Import an existing manuscript, novel, screenplay, or comic script into this series"
@@ -204,6 +242,12 @@ export default function PipelineSeries() {
               Save series
             </button>
           </header>
+
+          <AutopilotPanel
+            series={series}
+            onSeriesUpdate={updateSeriesFromServer}
+            onIssuesUpdate={handleIssuesUpdate}
+          />
 
           <ArcCanvas
             series={series}
@@ -341,6 +385,10 @@ function BibleSidebar({ series, universes, patchSeries, onSeriesUpdate, onFlushP
         />
       </Field>
 
+      <StyleGuideSection series={series} patchSeries={patchSeries} />
+
+      <CharacterArcsSection series={series} patchSeries={patchSeries} />
+
       <div className="block">
         <div className="flex items-center justify-between mb-1">
           <label
@@ -445,6 +493,278 @@ function BibleSidebar({ series, universes, patchSeries, onSeriesUpdate, onFlushP
         )}
       </div>
     </section>
+  );
+}
+
+// Per-series house style (#1303). Structured tense/POV/audience/rating/reading-
+// level/tone/conventions, edited into local series state via patchSeries and
+// persisted on Save (styleGuide is in ARC_FLUSH_FIELDS). Picking the blank
+// option clears a field to null; the server collapses an all-empty guide to
+// null. Each control is htmlFor/id paired for screen readers + click-to-focus.
+function StyleGuideSection({ series, patchSeries }) {
+  const sg = series.styleGuide || {};
+  const conv = sg.conventions || {};
+  const setSG = (patch) => patchSeries({ styleGuide: pruneEmpty({ ...sg, ...patch }) });
+  const setConv = (patch) => setSG({ conventions: pruneEmpty({ ...conv, ...patch }) });
+
+  return (
+    <div className="block">
+      <h3 className="text-xs uppercase tracking-wider text-gray-500 mb-2">Style guide (house style)</h3>
+      <p className="text-[11px] text-gray-500 mb-3 -mt-1">
+        Structured tense / POV / audience / rating fed into generation and checked by the editorial conformance checks.
+      </p>
+      <div className="grid grid-cols-2 gap-2">
+        {STYLE_GUIDE_FIELDS.map(({ key, label, options }) => (
+          <SgSelect
+            key={key}
+            id={`sg-${key}`}
+            label={label}
+            value={sg[key] || ''}
+            options={options}
+            onChange={(e) => setSG({ [key]: e.target.value || null })}
+          />
+        ))}
+        <div className="block">
+          <label htmlFor="sg-readingLevel" className="block text-[11px] text-gray-500 mb-1">Reading level (grade)</label>
+          <input
+            id="sg-readingLevel"
+            type="number"
+            min={1}
+            max={18}
+            value={Number.isFinite(sg.readingLevel) ? sg.readingLevel : ''}
+            onChange={(e) => {
+              const n = parseInt(e.target.value, 10);
+              setSG({ readingLevel: Number.isFinite(n) ? n : null });
+            }}
+            className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm"
+          />
+        </div>
+      </div>
+
+      <div className="mt-2">
+        <label htmlFor="sg-tone" className="block text-[11px] text-gray-500 mb-1">Tone (comma-separated)</label>
+        <input
+          id="sg-tone"
+          value={Array.isArray(sg.tone) ? sg.tone.join(', ') : ''}
+          onChange={(e) => {
+            const tone = e.target.value.split(',').map((t) => t.trim()).filter(Boolean);
+            setSG({ tone: tone.length ? tone : null });
+          }}
+          placeholder="noir, hopeful, wry"
+          className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm"
+        />
+      </div>
+
+      <div className="grid grid-cols-3 gap-2 mt-2">
+        <SgSelect
+          id="sg-spelling"
+          label="Spelling"
+          value={conv.spelling || ''}
+          options={[['US', 'US'], ['UK', 'UK']]}
+          onChange={(e) => setConv({ spelling: e.target.value || null })}
+        />
+        {STYLE_GUIDE_TRISTATE.map(({ key, label }) => (
+          <SgSelect
+            key={key}
+            id={`sg-${key}`}
+            label={label}
+            value={triValue(conv[key])}
+            options={TRISTATE_OPTIONS}
+            onChange={(e) => setConv({ [key]: triParse(e.target.value) })}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// The change-beat kinds the arc.transitions editorial check recognizes — mirror
+// TRANSITION_KINDS in server/lib/seriesCharacterArc.js.
+const TRANSITION_KIND_OPTIONS = [
+  ['decision', 'Decision'],
+  ['realization', 'Realization'],
+  ['point-of-no-return', 'Point of no return'],
+  ['relapse', 'Relapse'],
+  ['sacrifice', 'Sacrifice'],
+];
+
+// Per-character story arcs (#1293). Authored want/need, start → end state, and
+// explicit transition beats, edited into local series state via patchSeries and
+// persisted on Save (characterArcs is in ARC_FLUSH_FIELDS). The server sanitizer
+// drops empty arcs/beats and dedupes by character identity, so the editor stays
+// permissive — a freshly-added blank arc simply doesn't persist until named. The
+// arc.transitions editorial check reconciles its detected change moments against
+// what's authored here and flags characters with no transition scenes (flat arcs).
+function CharacterArcsSection({ series, patchSeries }) {
+  const arcs = Array.isArray(series.characterArcs) ? series.characterArcs : [];
+  const setArcs = (next) => patchSeries({ characterArcs: next });
+  const setArc = (i, patch) => setArcs(arcs.map((a, idx) => (idx === i ? { ...a, ...patch } : a)));
+  const addArc = () => setArcs([...arcs, { characterName: '', want: '', need: '', startState: '', endState: '', transitions: [] }]);
+  const removeArc = (i) => setArcs(arcs.filter((_, idx) => idx !== i));
+
+  const setTransitions = (i, next) => setArc(i, { transitions: next });
+  const addTransition = (i) => {
+    const cur = Array.isArray(arcs[i]?.transitions) ? arcs[i].transitions : [];
+    setTransitions(i, [...cur, { kind: 'decision', label: '', atIssue: null }]);
+  };
+  const setTransition = (i, j, patch) => {
+    const cur = Array.isArray(arcs[i]?.transitions) ? arcs[i].transitions : [];
+    setTransitions(i, cur.map((t, idx) => (idx === j ? { ...t, ...patch } : t)));
+  };
+  const removeTransition = (i, j) => {
+    const cur = Array.isArray(arcs[i]?.transitions) ? arcs[i].transitions : [];
+    setTransitions(i, cur.filter((_, idx) => idx !== j));
+  };
+
+  const inputCls = 'w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm';
+
+  return (
+    <div className="block">
+      <div className="flex items-center justify-between mb-1">
+        <h3 className="text-xs uppercase tracking-wider text-gray-500">Character arcs</h3>
+        <button
+          type="button"
+          onClick={addArc}
+          className="flex items-center gap-1 text-[11px] text-port-accent hover:text-blue-400"
+        >
+          <Plus size={12} /> Add arc
+        </button>
+      </div>
+      <p className="text-[11px] text-gray-500 mb-3 -mt-1">
+        Each cast member&apos;s want / need, start → end transformation, and the transition beats
+        where they actually change. The editorial &ldquo;Character-arc transitions&rdquo; check reconciles
+        these against the manuscript and flags characters with no change scenes.
+      </p>
+
+      {arcs.length === 0 && (
+        <p className="text-[11px] text-gray-600 italic mb-2">No character arcs yet.</p>
+      )}
+
+      <div className="space-y-3">
+        {arcs.map((arc, i) => {
+          const transitions = Array.isArray(arc.transitions) ? arc.transitions : [];
+          return (
+            <div key={i} className="border border-port-border rounded p-2 bg-port-bg/40">
+              <div className="flex items-center gap-2 mb-2">
+                <input
+                  aria-label="Character name"
+                  value={arc.characterName || ''}
+                  onChange={(e) => setArc(i, { characterName: e.target.value })}
+                  placeholder="Character name"
+                  className={`${inputCls} font-medium`}
+                />
+                <button
+                  type="button"
+                  onClick={() => removeArc(i)}
+                  className="text-gray-500 hover:text-port-error shrink-0"
+                  title="Remove this character arc"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <input aria-label="Want" value={arc.want || ''} onChange={(e) => setArc(i, { want: e.target.value })} placeholder="Wants (external goal)" className={inputCls} />
+                <input aria-label="Need" value={arc.need || ''} onChange={(e) => setArc(i, { need: e.target.value })} placeholder="Needs (internal lesson)" className={inputCls} />
+                <input aria-label="Start state" value={arc.startState || ''} onChange={(e) => setArc(i, { startState: e.target.value })} placeholder="Starts as…" className={inputCls} />
+                <input aria-label="End state" value={arc.endState || ''} onChange={(e) => setArc(i, { endState: e.target.value })} placeholder="Ends as…" className={inputCls} />
+              </div>
+
+              <div className="mt-2">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-[10px] uppercase tracking-wider text-gray-600">Transitions</span>
+                  <button
+                    type="button"
+                    onClick={() => addTransition(i)}
+                    className="flex items-center gap-1 text-[11px] text-port-accent hover:text-blue-400"
+                  >
+                    <Plus size={11} /> Add beat
+                  </button>
+                </div>
+                <div className="space-y-1.5">
+                  {transitions.map((t, j) => (
+                    <div key={j} className="flex items-center gap-1.5">
+                      <select
+                        aria-label="Transition kind"
+                        value={t.kind || 'decision'}
+                        onChange={(e) => setTransition(i, j, { kind: e.target.value })}
+                        className="px-1.5 py-1 bg-port-bg border border-port-border rounded text-white text-xs shrink-0"
+                      >
+                        {TRANSITION_KIND_OPTIONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                      </select>
+                      <input
+                        aria-label="Transition label"
+                        value={t.label || ''}
+                        onChange={(e) => setTransition(i, j, { label: e.target.value })}
+                        placeholder="What changes"
+                        className="flex-1 px-2 py-1 bg-port-bg border border-port-border rounded text-white text-xs"
+                      />
+                      <input
+                        aria-label="At issue"
+                        type="number"
+                        min={0}
+                        value={Number.isFinite(t.atIssue) ? t.atIssue : ''}
+                        onChange={(e) => {
+                          const n = parseInt(e.target.value, 10);
+                          setTransition(i, j, { atIssue: Number.isFinite(n) ? n : null });
+                        }}
+                        placeholder="#"
+                        className="w-14 px-1.5 py-1 bg-port-bg border border-port-border rounded text-white text-xs"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removeTransition(i, j)}
+                        className="text-gray-500 hover:text-port-error shrink-0"
+                        title="Remove this transition"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// Merge helper: drop keys cleared to null/undefined/empty-array, then collapse
+// an all-empty object to null so the style guide round-trips to null (matching
+// the server's empty-collapse) instead of an object full of nulls.
+function pruneEmpty(obj) {
+  const out = { ...obj };
+  for (const k of Object.keys(out)) {
+    const v = out[k];
+    if (v == null || (Array.isArray(v) && v.length === 0)) delete out[k];
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+// Tri-state boolean <-> select-value mapping for the convention toggles, so
+// "unset" stays distinct from "No".
+const TRISTATE_OPTIONS = [['yes', 'Yes'], ['no', 'No']];
+const triValue = (v) => (v === true ? 'yes' : v === false ? 'no' : '');
+const triParse = (v) => (v === 'yes' ? true : v === 'no' ? false : null);
+
+// A blank-first labeled <select> — the single render path for every style-guide
+// dropdown (enums, spelling, tri-state) so the markup + Tailwind classes live
+// once.
+function SgSelect({ id, label, value, options, onChange }) {
+  return (
+    <div className="block">
+      <label htmlFor={id} className="block text-[11px] text-gray-500 mb-1">{label}</label>
+      <select
+        id={id}
+        value={value}
+        onChange={onChange}
+        className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm"
+      >
+        <option value="">—</option>
+        {options.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+      </select>
+    </div>
   );
 }
 

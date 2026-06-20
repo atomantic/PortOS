@@ -13,11 +13,15 @@
  *                         that left NODE_ENV unset is still gated.
  *   - checkHealth()     — reports "disconnected" under the test runner on a real
  *                         DB so every db-backed suite skips via its existing branch.
- *   - query()           — hard backstop: throws on ANY row write (INSERT/UPDATE/
- *                         DELETE/TRUNCATE) under the test runner on a non-test DB
- *                         even if a suite reaches it without gating on checkHealth
- *                         first. (DELETE-only guarding let test INSERTs leak
- *                         fixtures into the real `portos` DB on 2026-06-14.)
+ *   - query()           — hard backstop: throws on ANY row write — INSERT/UPDATE/
+ *                         DELETE/TRUNCATE/MERGE, COPY … FROM imports, data-
+ *                         modifying CTEs, and a write hidden in a multi-statement
+ *                         batch — under the test runner on a non-test DB even if a
+ *                         suite reaches it without gating on checkHealth first.
+ *                         (DELETE-only guarding let test INSERTs leak fixtures
+ *                         into the real `portos` DB on 2026-06-14; the `^`-anchored
+ *                         single-verb match then let CTE/COPY/MERGE/multi-statement
+ *                         writes slip past — #1333.)
  *   - withTransaction() — the SAME backstop on the raw pg client it hands the
  *                         callback. client.query() bypasses query() entirely, so
  *                         every store mutation that writes inside a transaction
@@ -244,6 +248,161 @@ describe('assertWriteAllowed (shared query + transaction-client backstop)', () =
     // The transaction proxy passes config?.text; a parameterless control call
     // can surface undefined here — it must not throw on a non-string.
     expect(() => assertWriteAllowed(undefined)).not.toThrow();
+  });
+});
+
+// #1333: the original `^`-anchored single-verb match only saw the FIRST keyword,
+// so four less-obvious write forms slipped past the backstop. No current store
+// uses them (latent, not exploitable), but the guard is billed as the last line
+// of defense, so it must catch them — without false-positiving the read forms
+// they shadow (`COPY … TO` exports, `SELECT … FOR UPDATE` row locks).
+describe('assertWriteAllowed broadened write forms (#1333)', () => {
+  const armProd = () => {
+    setEnv('PGDATABASE', 'portos');
+    setEnv('TEST_DB_OK', undefined);
+  };
+
+  it('throws on a data-modifying CTE whose write is the leading statement', () => {
+    armProd();
+    expect(() =>
+      assertWriteAllowed(
+        'WITH doomed AS (SELECT id FROM universes LIMIT 1) ' +
+          'DELETE FROM universes WHERE id IN (SELECT id FROM doomed)',
+      ),
+    ).toThrow(/Refusing to mutate/i);
+  });
+
+  it('throws on a CTE whose write hides inside the WITH body', () => {
+    armProd();
+    expect(() =>
+      assertWriteAllowed(
+        "WITH ins AS (INSERT INTO authors (id) VALUES ('x') RETURNING id) SELECT * FROM ins",
+      ),
+    ).toThrow(/Refusing to mutate/i);
+    expect(() =>
+      assertWriteAllowed(
+        "WITH u AS (UPDATE pipeline_series SET name = 'x' RETURNING id) SELECT * FROM u",
+      ),
+    ).toThrow(/Refusing to mutate/i);
+  });
+
+  it('throws on MERGE INTO', () => {
+    armProd();
+    expect(() =>
+      assertWriteAllowed(
+        'MERGE INTO authors a USING src s ON a.id = s.id ' +
+          'WHEN MATCHED THEN UPDATE SET data = s.data',
+      ),
+    ).toThrow(/Refusing to mutate/i);
+  });
+
+  it('throws on COPY … FROM imports (table and column-list forms)', () => {
+    armProd();
+    expect(() => assertWriteAllowed("COPY authors FROM '/tmp/authors.csv' CSV")).toThrow(
+      /Refusing to mutate/i,
+    );
+    expect(() => assertWriteAllowed('COPY authors (id, data) FROM STDIN')).toThrow(
+      /Refusing to mutate/i,
+    );
+  });
+
+  it('allows COPY … TO exports (a read), including the subquery form', () => {
+    armProd();
+    // COPY <table> TO and COPY (query) TO are exports — the inner FROM of the
+    // subquery must NOT read as a write. The spaced/tabbed/newline-separated forms
+    // are regression cases: a `(?!\()` lookahead let `\s+` backtrack and match the
+    // subquery's FROM when extra whitespace preceded the `(`.
+    expect(() => assertWriteAllowed('COPY authors TO STDOUT')).not.toThrow();
+    expect(() =>
+      assertWriteAllowed('COPY (SELECT * FROM authors) TO STDOUT'),
+    ).not.toThrow();
+    expect(() =>
+      assertWriteAllowed('COPY   (SELECT * FROM authors) TO STDOUT'),
+    ).not.toThrow();
+    expect(() =>
+      assertWriteAllowed('COPY\t(SELECT * FROM authors) TO STDOUT'),
+    ).not.toThrow();
+  });
+
+  it('throws on a write hidden after a read in a multi-statement batch', () => {
+    armProd();
+    expect(() => assertWriteAllowed('SELECT 1; DELETE FROM universes')).toThrow(
+      /Refusing to mutate/i,
+    );
+  });
+
+  it('does not false-positive on a multi-statement read batch', () => {
+    armProd();
+    expect(() => assertWriteAllowed('SELECT 1; SELECT 2 FROM authors')).not.toThrow();
+  });
+
+  it('does not false-positive on a write verb that only appears in a comment', () => {
+    armProd();
+    expect(() =>
+      assertWriteAllowed('-- DELETE FROM old_universes (historical note)\nSELECT 1'),
+    ).not.toThrow();
+    expect(() =>
+      assertWriteAllowed('/* TODO: TRUNCATE legacy */ SELECT count(*) FROM authors'),
+    ).not.toThrow();
+  });
+
+  it('throws on SELECT … INTO (creates and populates a new table)', () => {
+    armProd();
+    expect(() => assertWriteAllowed('SELECT 1 AS x INTO scratch_tbl')).toThrow(
+      /Refusing to mutate/i,
+    );
+    expect(() => assertWriteAllowed('SELECT * INTO copy_authors FROM authors')).toThrow(
+      /Refusing to mutate/i,
+    );
+  });
+
+  it('masks string literals so a quote-embedded comment cannot hide a real write', () => {
+    armProd();
+    // Without literal-masking, the `/*`/`*/` inside the string literals would be
+    // stripped as a block comment, taking the DELETE between them with it — a
+    // false-negative. Masking the literals first leaves the DELETE exposed.
+    expect(() =>
+      assertWriteAllowed("SELECT '/*'; DELETE FROM universes; SELECT '*/'"),
+    ).toThrow(/Refusing to mutate/i);
+  });
+
+  it('keeps an apostrophe inside a comment from hiding the write on the next line', () => {
+    armProd();
+    // Regression: a two-pass "mask strings then strip comments" normalizer let the
+    // apostrophe in `don't` (inside the comment) pair with the `'x'` literal of the
+    // DELETE, masking the DELETE away — a false-negative. The single-pass alternation
+    // consumes the comment first, so the apostrophe stays inside it.
+    expect(() =>
+      assertWriteAllowed("-- don't touch prod\nDELETE FROM universes WHERE name = 'x'"),
+    ).toThrow(/Refusing to mutate/i);
+  });
+
+  it('does not false-positive on a write phrase that only appears inside a string literal', () => {
+    armProd();
+    expect(() =>
+      assertWriteAllowed("SELECT 'UPDATE x SET y' AS note FROM authors"),
+    ).not.toThrow();
+    expect(() =>
+      assertWriteAllowed("SELECT data FROM authors WHERE note = 'please DELETE FROM me'"),
+    ).not.toThrow();
+  });
+
+  it('does not false-positive on SELECT … FOR UPDATE / FOR NO KEY UPDATE row locks', () => {
+    armProd();
+    expect(() =>
+      assertWriteAllowed('SELECT data FROM authors WHERE id = $1 FOR UPDATE'),
+    ).not.toThrow();
+    expect(() =>
+      assertWriteAllowed('SELECT data FROM authors WHERE id = $1 FOR NO KEY UPDATE'),
+    ).not.toThrow();
+  });
+
+  it('allows the broadened write forms against a designated test DB', () => {
+    setEnv('PGDATABASE', 'portos_test');
+    setEnv('TEST_DB_OK', undefined);
+    expect(() => assertWriteAllowed('MERGE INTO authors a USING src s ON a.id = s.id')).not.toThrow();
+    expect(() => assertWriteAllowed("COPY authors FROM '/tmp/x.csv'")).not.toThrow();
+    expect(() => assertWriteAllowed('SELECT 1; DELETE FROM authors')).not.toThrow();
   });
 });
 

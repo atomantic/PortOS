@@ -196,6 +196,48 @@ describe('brainStorage tombstones', () => {
   });
 });
 
+describe('memory recency ordering', () => {
+  it('memoryRecencyMs prefers source clocks over storage clocks', () => {
+    // sourceUpdatedAt wins
+    expect(brainStorage.memoryRecencyMs({
+      sourceUpdatedAt: ISO('2024-07-14'), sourceCreatedAt: ISO('2024-01-01'),
+      updatedAt: ISO('2026-06-16'),
+    })).toBe(Date.parse(ISO('2024-07-14')));
+    // falls back to sourceCreatedAt, then updatedAt, then createdAt
+    expect(brainStorage.memoryRecencyMs({ sourceCreatedAt: ISO('2023-03-03'), updatedAt: ISO('2026-01-01') }))
+      .toBe(Date.parse(ISO('2023-03-03')));
+    expect(brainStorage.memoryRecencyMs({ updatedAt: ISO('2025-05-05') }))
+      .toBe(Date.parse(ISO('2025-05-05')));
+    expect(brainStorage.memoryRecencyMs({ createdAt: ISO('2025-02-02') }))
+      .toBe(Date.parse(ISO('2025-02-02')));
+    // missing/unparseable → 0 (sorts last)
+    expect(brainStorage.memoryRecencyMs({})).toBe(0);
+    expect(brainStorage.memoryRecencyMs({ sourceUpdatedAt: 'not-a-date', updatedAt: null })).toBe(0);
+  });
+
+  it('getMemoryEntries returns imports newest-first by source recency, not export/insertion order', async () => {
+    // Imported in non-chronological export order (the ChatGPT-export bug): the
+    // bulk import stamps every record's createdAt/updatedAt with ~the same time,
+    // so only the source clock distinguishes them.
+    await brainStorage.create('memories', {
+      title: 'oldest', source: 'chatgpt-import',
+      sourceCreatedAt: ISO('2024-07-14'), sourceUpdatedAt: ISO('2024-07-14'),
+    });
+    await brainStorage.create('memories', {
+      title: 'newest', source: 'chatgpt-import',
+      sourceCreatedAt: ISO('2026-01-10'), sourceUpdatedAt: ISO('2026-02-01'),
+    });
+    await brainStorage.create('memories', {
+      title: 'middle', source: 'chatgpt-import',
+      sourceCreatedAt: ISO('2025-05-05'), sourceUpdatedAt: ISO('2025-05-06'),
+    });
+
+    const entries = await brainStorage.getMemoryEntries();
+    const imported = entries.filter((e) => e.source === 'chatgpt-import');
+    expect(imported.map((e) => e.title)).toEqual(['newest', 'middle', 'oldest']);
+  });
+});
+
 // Read the raw stored record (including tombstones) by bypassing the read filter.
 async function rawRecord(type, id) {
   const { readFile } = await import('fs/promises');

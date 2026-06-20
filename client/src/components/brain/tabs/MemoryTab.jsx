@@ -23,6 +23,9 @@ import {
 } from '../constants';
 import { timeAgo } from '../../../utils/formatters';
 import BrailleSpinner from '../../BrailleSpinner';
+import InlineConfirmRow from '../../ui/InlineConfirmRow';
+import CopyableId from '../../ui/CopyableId';
+import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 
 export default function MemoryTab({ onRefresh }) {
   const [activeType, setActiveType] = useState('memories');
@@ -37,6 +40,7 @@ export default function MemoryTab({ onRefresh }) {
   const [backendStatus, setBackendStatus] = useState(null);
   // The chatgpt-import conversation currently open in the full-transcript viewer.
   const [viewerRecord, setViewerRecord] = useState(null);
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
   const fetchRecords = useCallback(async () => {
     setLoading(true);
@@ -555,9 +559,18 @@ export default function MemoryTab({ onRefresh }) {
               </>
             )}
 
-            <p className="text-xs text-gray-500 mt-2">
-              Updated {timeAgo(record.updatedAt)}
-            </p>
+            <div className="flex items-center gap-2 mt-2 flex-wrap">
+              <p className="text-xs text-gray-500">
+                {activeType === 'memories' && record.source === 'chatgpt-import' && (record.sourceUpdatedAt || record.sourceCreatedAt)
+                  // Imported entries all share the bulk-import updatedAt, so show the
+                  // original conversation recency instead (matches the list sort order) —
+                  // but only when a source clock exists; a clockless import falls back to
+                  // the honest "Updated {import time}" rather than mislabeling it.
+                  ? `Conversation ${timeAgo(record.sourceUpdatedAt || record.sourceCreatedAt)}`
+                  : `Updated ${timeAgo(record.updatedAt)}`}
+              </p>
+              <CopyableId id={record.id} />
+            </div>
           </div>
 
           <div className="flex items-center gap-1">
@@ -578,7 +591,7 @@ export default function MemoryTab({ onRefresh }) {
               <Edit2 size={14} />
             </button>
             <button
-              onClick={() => handleDelete(record.id)}
+              onClick={() => requestDelete(record.id)}
               className="p-1.5 text-gray-400 hover:text-port-error rounded hover:bg-port-error/20"
               title="Delete"
             >
@@ -586,6 +599,16 @@ export default function MemoryTab({ onRefresh }) {
             </button>
           </div>
         </div>
+        {isConfirming(record.id) && (
+          <InlineConfirmRow
+            className="mt-3"
+            question="Delete this entry? This cannot be undone."
+            confirmTitle="Confirm delete"
+            cancelTitle="Cancel delete"
+            onConfirm={() => confirmDelete(() => handleDelete(record.id))}
+            onCancel={cancelDelete}
+          />
+        )}
       </div>
     );
   };

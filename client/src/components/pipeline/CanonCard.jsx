@@ -20,6 +20,7 @@ import MediaJobThumb from './MediaJobThumb';
 import EntryCard from '../universe/EntryCard';
 import EntryThumbSlot from '../universe/EntryThumbSlot';
 import CharacterDetailEditor from '../universe/CharacterDetailEditor';
+import ObjectAttachmentsEditor from '../universe/ObjectAttachmentsEditor';
 import CharacterReferenceSheetPanel from '../universe/CharacterReferenceSheetPanel';
 import CharacterLoraChip from '../loraTraining/CharacterLoraChip';
 import { BIBLE_LIMITS } from '../../lib/bibleLimits';
@@ -276,8 +277,16 @@ export default function CanonCard({
   // CanonCard reveals an Expand → CharacterDetailEditor section and a
   // Reference Sheet panel. NounsStage (series view) omits this so the
   // per-series cast list stays focused on naming + visual refs.
-  // Shape: { universeId, onExpandCharacter, expanding, onSheetCompleted, onSheetDeleted }
+  // Shape: { universeId, onExpandCharacter, expanding, onSheetCompleted, onSheetDeleted, castList }
+  // `castList` (the universe-wide character list) feeds the relationship-link
+  // target picker in CharacterDetailEditor (#1287).
   characterExtensions = null,
+  // Universe-only object extensions. When provided + kind is 'objects',
+  // CanonCard reveals an Attachments editor (object↔character emotional
+  // attachment links, #1288). NounsStage (series view) omits this.
+  // Shape: { castList } — the universe-wide character list feeds the
+  // attachment target picker in ObjectAttachmentsEditor.
+  objectExtensions = null,
 }) {
   const description = kind.descFor(entry);
   const refs = Array.isArray(entry.imageRefs) ? entry.imageRefs : [];
@@ -395,6 +404,7 @@ export default function CanonCard({
         <CharacterDetailsToggle>
           <CharacterDetailEditor
             entry={entry}
+            characters={characterExtensions.castList || []}
             onPatch={(patch) => onPatchEntry(entry.id, patch)}
             onExpand={characterExtensions.onExpandCharacter ? () => characterExtensions.onExpandCharacter(entry.id) : null}
             expanding={!!characterExtensions.expanding}
@@ -418,6 +428,17 @@ export default function CanonCard({
             />
           </div>
         </CharacterDetailsToggle>
+      ) : null}
+      {/* Universe-only: object↔character attachment editor (#1288). Hidden when
+          the caller didn't pass `objectExtensions` (pipeline series view).
+          Locked objects render read-only inputs. */}
+      {kind.key === 'objects' && objectExtensions && onPatchEntry ? (
+        <ObjectAttachmentsEditor
+          entry={entry}
+          characters={objectExtensions.castList || []}
+          onPatch={(patch) => onPatchEntry(entry.id, patch)}
+          disabled={locked}
+        />
       ) : null}
     </>
   );

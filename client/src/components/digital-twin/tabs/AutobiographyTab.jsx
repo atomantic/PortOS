@@ -16,9 +16,11 @@ import {BookOpen,
   MessageCircle,
   ScrollText} from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
+import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import * as api from '../../../services/api';
 import { copyToClipboard } from '../../../lib/clipboard';
 import toast from '../../ui/Toast';
+import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 
 export default function AutobiographyTab({ onRefresh }) {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -53,6 +55,8 @@ export default function AutobiographyTab({ onRefresh }) {
   // Woven-narrative state
   const [narrative, setNarrative] = useState(null); // { storyId, text, storyCount }
   const [weavingStoryId, setWeavingStoryId] = useState(null);
+
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
   const loadData = useCallback(async () => {
     const [statsData, storiesData, themesData, configData] = await Promise.all([
@@ -593,13 +597,22 @@ export default function AutobiographyTab({ onRefresh }) {
                         Edit
                       </button>
                       <button
-                        onClick={() => handleDeleteStory(story.id)}
+                        onClick={() => requestDelete(story.id)}
                         className="flex items-center gap-1 px-2 py-1 text-xs text-gray-400 hover:text-red-400 transition-colors"
                       >
                         <Trash2 size={12} />
                         Delete
                       </button>
                     </div>
+                    {isConfirming(story.id) && (
+                      <InlineConfirmRow
+                        question="Delete this story? This cannot be undone."
+                        confirmTitle="Confirm delete"
+                        cancelTitle="Cancel delete"
+                        onConfirm={() => confirmDelete(() => handleDeleteStory(story.id))}
+                        onCancel={cancelDelete}
+                      />
+                    )}
                   </>
                 )}
               </div>

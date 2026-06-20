@@ -344,6 +344,93 @@ export async function saveManuscriptSection(seriesId, { issueId, stageId, output
   return { section: sectionFrom(issue, stageId, stage) };
 }
 
+// === AI Reformat (repair paste artifacts via the LLM) ===
+
+const MANUSCRIPT_FORMAT_LABEL = { prose: 'Prose', comicScript: 'Comic script', teleplay: 'Teleplay' };
+
+// The "skeleton" a pure reformat leaves identical: letters, digits, and
+// apostrophes (curly normalized to straight so a benign smart-quote pass isn't
+// flagged), CASE-PRESERVING. No reformat op (reflow, de-hyphenation, drop-cap
+// rejoin, quote re-attachment) changes case or touches an apostrophe, so
+// comparing this catches a substituted/dropped/inserted word, a case-only
+// rewrite ("US" → "us"), AND a mangled contraction ("don't" → "dont").
+//
+// Deliberately NOT guarded (these would break legitimate reformatting and are
+// instead forbidden by the prompt + caught by eye / undone via Revert): a
+// hyphen removed mid-word ("X-ray" → "Xray") is indistinguishable from the
+// de-hyphenation of a wrap-split word, and a removed inter-word boundary
+// ("now here" → "nowhere") is indistinguishable from a drop-cap rejoin
+// ("T\nhe" → "The") — both are whitespace/hyphen edits the skeleton ignores by
+// design so real reflow passes.
+const wordSkeleton = (s) => (typeof s === 'string'
+  ? s.replace(/[’ʼ]/g, '\'').replace(/[^\p{L}\p{N}']+/gu, '')
+  : '');
+
+// Reject any reformat that altered the actual wording. A pure reformat only
+// moves whitespace and quotation-mark/punctuation glyphs (all non-alphanumeric)
+// and de-hyphenates across a wrap (the hyphen is non-alphanumeric too) — so the
+// letter/digit skeleton is IDENTICAL before and after. We require an exact
+// skeleton match: no substitution, no insertion, and no deletion of even a
+// short word (e.g. dropping "not" from "do not go" would slip past any
+// deletion budget yet invert the meaning). A duplicated word the export left in
+// place stays in place — the deterministic Format button handles that dedup;
+// the AI pass is held to "change not one letter".
+function assertWordsPreserved(before, after) {
+  if (wordSkeleton(before) === wordSkeleton(after)) return;
+  throw makeErr(
+    'AI reformat changed the wording, so it was discarded and the text is unchanged. Try again or use the plain Format button.',
+    ERR_VALIDATION,
+  );
+}
+
+// Strip a stray ``` code fence or echoed ===MANUSCRIPT=== marker the model may
+// wrap the output in despite the prompt's contract.
+const stripReformatWrapper = (text) => String(text ?? '')
+  .replace(/^﻿?\s*```[\w-]*\s*\n?/, '').replace(/\n?```\s*$/, '')
+  .replace(/^\s*===MANUSCRIPT===\s*\n?/, '').replace(/\n?\s*===MANUSCRIPT===\s*$/, '')
+  .trim();
+
+/**
+ * Reformat a block of manuscript text with the LLM — repair paste artifacts
+ * (wrapping, split drop-caps, hyphen splits, orphaned/duplicated quotes)
+ * WITHOUT changing words. Returns `{ text, runId, changed }`. Throws
+ * ERR_VALIDATION when the model altered the wording (integrity guard), so a
+ * caller never persists silently-rewritten prose. Shared by the section
+ * endpoint and the importer.
+ */
+export async function reformatManuscriptText(text, { stageId = 'prose', providerOverride, modelOverride } = {}) {
+  const body = typeof text === 'string' ? text : '';
+  if (!body.trim()) return { text: body, runId: null, changed: false };
+  const format = MANUSCRIPT_FORMAT_LABEL[stageId] || MANUSCRIPT_FORMAT_LABEL.prose;
+  const r = await runStagedLLM('manuscript-reformat', { format, body }, {
+    providerOverride,
+    modelOverride,
+    returnsJson: false,
+    source: 'pipeline-manuscript-reformat',
+  });
+  const cleaned = stripReformatWrapper(r?.content);
+  if (!cleaned) throw makeErr('The model returned no text — try again', ERR_VALIDATION);
+  assertWordsPreserved(body, cleaned);
+  return { text: cleaned, runId: r?.runId || null, changed: cleaned !== body };
+}
+
+/**
+ * Compute-only reformat of a stage's worth of text for the editor endpoint —
+ * validates the stage and runs `reformatManuscriptText`, returning the cleaned
+ * text WITHOUT persisting. The client owns the save (so it can fold in unsaved
+ * edits and skip the write if the section changed during the call); the
+ * importer calls `reformatManuscriptText` directly.
+ */
+export async function reformatManuscriptStageText(text, { stageId, providerOverride, modelOverride } = {}) {
+  if (!MANUSCRIPT_TYPES.includes(stageId)) {
+    throw makeErr(`Not an editable manuscript stage: ${stageId}`, ERR_VALIDATION);
+  }
+  if (!(typeof text === 'string' && text.trim())) {
+    throw makeErr('There is no drafted text to reformat', ERR_VALIDATION);
+  }
+  return reformatManuscriptText(text, { stageId, providerOverride, modelOverride });
+}
+
 /**
  * Generate anchored fix edits for a comment and persist them on the comment
  * (status stays `open` — the user still has to accept). When an edit's `find`

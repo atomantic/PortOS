@@ -7,10 +7,11 @@ import { runStagedLLM } from '../../../lib/stageRunner.js';
 import { getSeries } from '../series.js';
 import { createIssue, listIssues } from '../issues.js';
 import { renderArcShapeGuidance, renderArcShapePositionSummary } from '../../../lib/storyArc.js';
+import { composeStyleNotes } from '../../../lib/styleGuide.js';
 import { extractCanonFromProse } from '../../universeCanon.js';
 import { resolveSeriesLlmOverride } from '../../../lib/seriesLlmOverride.js';
 import { getSeriesCanon } from '../seriesCanon.js';
-import { ARC_ROLES, ERR_VALIDATION, SEASON_LENGTH_PRESETS, SHAPE_GUIDANCE_NONE, lengthProfileForArcRole, makeErr, renderPriorSeason, resolveWorldContext } from './context.js';
+import { ARC_ROLES, ERR_VALIDATION, SEASON_LENGTH_PRESETS, SHAPE_GUIDANCE_NONE, appendTickingClock, lengthProfileForArcRole, makeErr, renderPriorSeason, resolveWorldContext } from './context.js';
 
 /**
  * Build the context for one season's episode breakdown. `priorSeasonsContext`
@@ -28,7 +29,7 @@ export async function buildSeasonEpisodesContext(series, season, priorSeasons, p
     getSeriesCanon(series),
   ]);
   const totalSeasons = (series.seasons || []).length || 1;
-  const arcGuidance = renderArcShapeGuidance(arc.shape) || SHAPE_GUIDANCE_NONE;
+  const arcGuidance = appendTickingClock(renderArcShapeGuidance(arc.shape) || SHAPE_GUIDANCE_NONE, arc);
   const shapePosition = renderArcShapePositionSummary(arc.shape, season.number, totalSeasons)
     || '(no story shape selected — pace episode beats by arcRole only)';
   return {
@@ -36,7 +37,10 @@ export async function buildSeasonEpisodesContext(series, season, priorSeasons, p
       name: series.name,
       logline: series.logline,
       premise: series.premise,
-      styleNotes: series.styleNotes,
+      // Fold the structured style guide into styleNotes so episode-beat
+      // generation honors house style (see composeStyleNotes) — same as the
+      // arc-overview and per-issue text contexts.
+      styleNotes: composeStyleNotes(series),
     },
     ...world,
     arc: {

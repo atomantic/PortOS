@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { deriveCityPalette, resolveCityTimeOfDay, cityLabelColors, tintTowardAccent, tintStructure, CITY_COLORS, getBuildingColor, getAccentColor, seededRand, smoothstepRange, cityDayMix, getTimeOfDayPreset } from './cityConstants';
+import { deriveCityPalette, resolveCityTimeOfDay, cityLabelColors, tintTowardAccent, tintStructure, CITY_COLORS, getBuildingColor, getAccentColor, seededRand, smoothstepRange, cityDayMix, getTimeOfDayPreset, cityShowDetail, cityShowInteriorWindows } from './cityConstants';
 
 const hexLum = (hex) => {
   const n = parseInt(hex.slice(1), 16);
@@ -296,5 +296,22 @@ describe('cityDayMix', () => {
 
   it('defaults to the night preset when unset', () => {
     expect(cityDayMix(undefined)).toBe(0);
+  });
+});
+
+describe('quality-preset gates', () => {
+  // Preset densities: low 0.5, medium 0.75, high 1.0, ultra 1.5.
+  it('cityShowDetail turns on above the low preset', () => {
+    expect(cityShowDetail({ particleDensity: 0.5 })).toBe(false);
+    expect(cityShowDetail({ particleDensity: 0.75 })).toBe(true);
+    expect(cityShowDetail(undefined)).toBe(true); // defaults to 1
+  });
+
+  it('cityShowInteriorWindows holds one tier above detail (high+)', () => {
+    expect(cityShowInteriorWindows({ particleDensity: 0.5 })).toBe(false);
+    expect(cityShowInteriorWindows({ particleDensity: 0.75 })).toBe(false);
+    expect(cityShowInteriorWindows({ particleDensity: 1.0 })).toBe(true);
+    expect(cityShowInteriorWindows({ particleDensity: 1.5 })).toBe(true);
+    expect(cityShowInteriorWindows(undefined)).toBe(true); // defaults to 1
   });
 });

@@ -170,7 +170,6 @@ export default function AudioStage({ issue, onStageUpdate }) {
     // Drop a pending re-derive confirm when leaving generated mode so it can't
     // resurface unprompted on return.
     else setConfirmRederive(false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [audioMode]);
 
   // Fetch the generators list (once) without opening the music Generate panel —

@@ -24,7 +24,7 @@ import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import FolderPicker from '../../FolderPicker';
 import { timeAgo, formatBytes } from '../../../utils/formatters';
 
-export default function NotesTab({ onRefresh }) {
+export default function NotesTab() {
   // Vault state
   const [vaults, setVaults] = useState([]);
   const [selectedVaultId, setSelectedVaultId] = useState(null);
@@ -49,11 +49,11 @@ export default function NotesTab({ onRefresh }) {
   // Search state
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState(null);
-  const [searching, setSearching] = useState(false);
+  const [, setSearching] = useState(false);
 
   // Filter state
   const [folderFilter, setFolderFilter] = useState('');
-  const [folders, setFolders] = useState([]);
+  const [, setFolders] = useState([]);
   const [expandedFolders, setExpandedFolders] = useState(new Set());
   const [tags, setTags] = useState([]);
   const [showTags, setShowTags] = useState(false);
@@ -133,16 +133,6 @@ export default function NotesTab({ onRefresh }) {
       await loadVaults();
       setSelectedVaultId(result.id);
     }
-  };
-
-  const handleRemoveVault = async (id) => {
-    await api.deleteNotesVault(id).catch(() => null);
-    toast.success('Vault removed');
-    setVaults(prev => prev.filter(v => v.id !== id));
-    if (selectedVaultId === id) {
-      setSelectedVaultId(vaults.find(v => v.id !== id)?.id || null);
-    }
-    setConfirmDelete(null);
   };
 
   const handleSelectNote = async (notePath) => {
@@ -840,7 +830,6 @@ function MarkdownPreview({ content, onLinkClick }) {
   const elements = [];
   let inCodeBlock = false;
   let codeLines = [];
-  let codeLanguage = '';
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -857,7 +846,6 @@ function MarkdownPreview({ content, onLinkClick }) {
         inCodeBlock = false;
       } else {
         inCodeBlock = true;
-        codeLanguage = line.trim().slice(3);
       }
       continue;
     }

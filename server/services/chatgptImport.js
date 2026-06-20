@@ -20,7 +20,7 @@
  */
 
 import { join } from 'path';
-import { writeFile } from 'fs/promises';
+import { writeFile, unlink } from 'fs/promises';
 import { ensureDir, PATHS, tryReadFile, safeJSONParse } from '../lib/fileUtils.js';
 import { createMemoryEntry } from './brainStorage.js';
 
@@ -28,7 +28,10 @@ const MAX_MEMORY_CONTENT = 9800;
 const MAX_TITLE_LEN = 200;
 const MAX_TAG_LEN = 50;
 const ROLE_LABEL = { user: 'You', assistant: 'ChatGPT', system: 'System', tool: 'Tool' };
-const IMPORT_ROOT = join(PATHS.brain, 'imports', 'chatgpt');
+// Resolve lazily — computing it at module load reads PATHS.brain, which is
+// undefined in suites that mock fileUtils with a partial PATHS (e.g.
+// brain.test.js) and would crash the import. Each call is a cheap path join.
+const importRoot = () => join(PATHS.brain, 'imports', 'chatgpt');
 
 const sanitizeTag = (s) => String(s || '')
   .toLowerCase()
@@ -307,9 +310,118 @@ export async function readArchivedConversation(archiveName) {
   const name = String(archiveName || '');
   // Reject path traversal — archive names are flat `<safe-id>.json`.
   if (!/^[a-zA-Z0-9-_]+\.json$/.test(name)) return null;
-  const raw = await tryReadFile(join(IMPORT_ROOT, name));
+  const raw = await tryReadFile(join(importRoot(), name));
   if (!raw) return null;
   return safeJSONParse(raw, null, { allowArray: false });
+}
+
+// Served-asset URL prefix every imported image/audio/file link points at (see
+// chatgptZipImport.js — assets land at `/data/brain-imports/<assetId><ext>`).
+const ASSET_URL_PREFIX = '/data/brain-imports/';
+
+/**
+ * Extract the bare asset filenames an imported memory's markdown `content`
+ * references (`/data/brain-imports/<file>`). Returns a Set of filenames (no
+ * directory, no query/hash). The leading-bytes restriction in the asset
+ * filename charset means a simple bounded match is safe against path traversal —
+ * we additionally reject any name that isn't a flat basename below.
+ */
+export const extractAssetFileNames = (content) => {
+  const names = new Set();
+  if (typeof content !== 'string') return names;
+  // Match the served prefix followed by a flat filename (no slash) up to the
+  // markdown link close `)`, whitespace, or end — then strip any trailing
+  // punctuation a transcript might place right after the URL.
+  const re = new RegExp(`${ASSET_URL_PREFIX.replace(/\//g, '\\/')}([^)\\s]+)`, 'g');
+  let m;
+  while ((m = re.exec(content)) !== null) {
+    const name = m[1].replace(/[).,]+$/, '');
+    // Served asset names are `<assetId><ext>` (see chatgptZipImport.js) and are
+    // flat in practice. These guards are the actual safety boundary regardless
+    // of how the producer names files: the charset anchor rejects `/`, `\`,
+    // null bytes, and stray query-string/punctuation tails, and the explicit
+    // `..` reject keeps it a strict superset of the prior path-traversal guard
+    // (the charset alone would admit a literal `..`, which `join` resolves to
+    // the parent dir). Together a crafted link can't produce a name we'd hand
+    // to unlink() that escapes — or names — the assets dir.
+    if (/^[a-zA-Z0-9._-]+$/.test(name) && !name.includes('..')) {
+      names.add(name);
+    }
+  }
+  return names;
+};
+
+/**
+ * Every asset filename an import memory references — across BOTH its (possibly
+ * truncated) `content` AND its full archived transcript. The memory `content`
+ * is capped at MAX_MEMORY_CONTENT, so an asset linked only past the truncation
+ * point is invisible in `content` but present in the archive; unioning the two
+ * catches it. Reads the archive only when the memory carries a `sourceRef`.
+ */
+const assetNamesForMemory = async (record) => {
+  const names = extractAssetFileNames(record?.content);
+  if (record?.sourceRef) {
+    const archive = await readArchivedConversation(record.sourceRef);
+    if (typeof archive?.transcript === 'string') {
+      for (const name of extractAssetFileNames(archive.transcript)) names.add(name);
+    }
+  }
+  return names;
+};
+
+/**
+ * Delete the on-disk assets + archived transcript that belonged to a deleted
+ * `chatgpt-import` memory, leaving no orphans under `data/brain/imports/`.
+ *
+ * `survivors` is every OTHER live import memory. Neither the archive nor an
+ * asset is unlinked while a survivor still references it:
+ *   - The transcript JSON is keyed on the conversation id (`sourceRef`), so
+ *     importing the same export twice yields two memories pointing at ONE
+ *     archive — deleting one must not strand the other's "View full
+ *     conversation" / re-summarize path. Keep the archive while any survivor
+ *     shares its `sourceRef`.
+ *   - An asset id can likewise recur across conversations (ChatGPT reuses a
+ *     `file-service://` id), so an asset is only unlinked when NO survivor
+ *     still references it — compared via the FULL archived transcript, not the
+ *     truncated `content`, so an asset linked only in a survivor's truncated
+ *     tail isn't wrongly pulled out from under it.
+ *
+ * Best-effort: a missing file is a no-op (already gone), and any unlink failure
+ * is logged but never thrown — cleanup must not turn a successful delete into a
+ * request error.
+ */
+export async function deleteMemoryAssets(record, survivors = []) {
+  if (!record || record.source !== 'chatgpt-import') return;
+
+  // Resolve the deleted record's full asset set BEFORE unlinking its transcript
+  // below (the transcript is one of the sources we read asset links from).
+  const referenced = await assetNamesForMemory(record);
+
+  // 1. Archived transcript — remove only when no surviving import shares it (a
+  // re-import of the same conversation reuses the same `<id>.json` archive).
+  const ref = String(record.sourceRef || '');
+  const refStillUsed = survivors.some((m) => m?.sourceRef === ref);
+  if (/^[a-zA-Z0-9-_]+\.json$/.test(ref) && !refStillUsed) {
+    await unlink(join(importRoot(), ref)).catch((err) => {
+      if (err?.code !== 'ENOENT') console.error(`⚠️ Failed to remove archived transcript ${ref}: ${err.message}`);
+    });
+  }
+
+  // 2. Served assets — only those no surviving import memory still references
+  // (in its content OR its full archive). Short-circuit when this memory had no
+  // assets so an asset-free conversation never reads a single survivor archive.
+  if (referenced.size === 0) return;
+  const stillUsed = new Set();
+  for (const m of survivors) {
+    for (const name of await assetNamesForMemory(m)) stillUsed.add(name);
+  }
+  const orphaned = [...referenced].filter((name) => !stillUsed.has(name));
+  await Promise.all(orphaned.map((name) =>
+    unlink(join(PATHS.brainImportAssets, name)).catch((err) => {
+      if (err?.code !== 'ENOENT') console.error(`⚠️ Failed to remove import asset ${name}: ${err.message}`);
+    })
+  ));
+  if (orphaned.length) console.log(`🧠 Removed ${orphaned.length} orphaned import asset(s) for memory ${record.id}`);
 }
 
 /**
@@ -317,10 +429,10 @@ export async function readArchivedConversation(archiveName) {
  * import archive directory.
  */
 async function archiveConversation(summary) {
-  await ensureDir(IMPORT_ROOT);
+  await ensureDir(importRoot());
   const id = summary.id || `conv-${Date.now()}`;
   const fname = `${safeFilename(id)}.json`;
-  const filePath = join(IMPORT_ROOT, fname);
+  const filePath = join(importRoot(), fname);
   const payload = {
     id,
     title: summary.title,
@@ -368,7 +480,7 @@ export async function importConversations(parsed, options = {}) {
     .filter(Boolean);
   const skipEmpty = options.skipEmpty !== false;
 
-  await ensureDir(IMPORT_ROOT);
+  await ensureDir(importRoot());
 
   const results = [];
   let imported = 0;
@@ -396,7 +508,11 @@ export async function importConversations(parsed, options = {}) {
       tags,
       source: 'chatgpt-import',
       sourceRef: archiveName,
-      sourceCreatedAt: summary.createTime || null
+      // Both source clocks are persisted so the memory list can order imports by
+      // the original conversation recency (updateTime preferred) rather than the
+      // shared bulk-import timestamp. See `memoryRecencyMs` in brainStorage.js.
+      sourceCreatedAt: summary.createTime || null,
+      sourceUpdatedAt: summary.updateTime || null
     });
 
     results.push({
@@ -416,9 +532,9 @@ export async function importConversations(parsed, options = {}) {
     imported,
     skipped,
     archived,
-    archiveDir: IMPORT_ROOT,
+    archiveDir: importRoot(),
     results
   };
 }
 
-export const __test = { sanitizeTag, cleanTitle, partsToText, buildContent, assetPointerId };
+export const __test = { sanitizeTag, cleanTitle, partsToText, buildContent, assetPointerId, extractAssetFileNames };

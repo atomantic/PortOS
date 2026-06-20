@@ -20,6 +20,7 @@
 
 import { runStagedLLM } from './stageRunner.js';
 import { BIBLE_KIND, pickPromptFields, isStr, trimTo } from './storyBible.js';
+import { normalizeShotType, normalizeScreenDirection } from './shotGrammar.js';
 
 export const SOURCE_KIND = Object.freeze({ PROSE: 'prose', TELEPLAY: 'teleplay' });
 
@@ -77,6 +78,11 @@ function sanitizeShot(sh, i) {
     description,
     durationSeconds,
     continuityFromShotId: continuityRaw || null,
+    // Film-grammar signals (#1315) — both null when the extractor/UI didn't
+    // tag them, so the continuity check skips an unclassified shot rather than
+    // guessing. Normalized against their controlled vocabularies above.
+    shotType: normalizeShotType(sh.shotType),
+    screenDirection: normalizeScreenDirection(sh.screenDirection),
   };
 }
 

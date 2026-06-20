@@ -25,6 +25,7 @@ export * as genomeValidation from './genomeValidation.js';
 export * as identityValidation from './identityValidation.js';
 export * as meatspaceValidation from './meatspaceValidation.js';
 export * as memoryValidation from './memoryValidation.js';
+export * as moodBoardValidation from './moodBoardValidation.js';
 export * as notesValidation from './notesValidation.js';
 export * as peerSyncValidation from './peerSyncValidation.js';
 export * as postValidation from './postValidation.js';
@@ -44,11 +45,18 @@ export * from './comicScriptParser.js';
 export * from './composeStyledPrompt.js';
 export * from './creativeDirectorPresets.js';
 export * from './creativeDirectorPrompts.js';
+// Namespaced: the editorial-check registry (#1284) lives in the editorial/
+// subdir with its own barrel — surface it under `editorial.*` so the root
+// discovery surface reaches EDITORIAL_CHECKS + the lookup helpers.
+export * as editorial from './editorial/index.js';
 export * from './sceneExtractor.js';
 export * from './scenePrompt.js';
+export * from './shotGrammar.js';
 export * from './seasonStructure.js';
+export * from './seriesCharacterArc.js';
 export * from './seriesLlmOverride.js';
 export * from './storyArc.js';
+export * from './styleGuide.js';
 export * from './storyBuilderIntegrity.js';
 export * from './storyBuilderSteps.js';
 // `storyBible.js` re-exports `normalizeSlugline` from `scenePrompt.js` for
@@ -102,11 +110,13 @@ export * from './safetensors.js';
 export * from './assetHash.js';
 export * from './pdfImageEmbed.js';
 export * from './zipStream.js';
+export * from './zipWriter.js';
 
 // === Process execution ===
 export * from './bashResolver.js';
 export * from './bufferedSpawn.js';
 export * from './commandSecurity.js';
+export * from './detachedSpawn.js';
 export * from './execGit.js';
 export * from './ffmpeg.js';
 export * from './gitArgs.js';
@@ -190,6 +200,7 @@ export * from './singleFlight.js';
 export * from './streamBackpressure.js';
 export * from './sseUtils.js';
 export * from './uuid.js';
+export * from './workTracker.js';
 export * from './workspaceRoots.js';
 export * from './zodCompat.js';
 

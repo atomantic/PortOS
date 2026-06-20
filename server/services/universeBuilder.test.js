@@ -532,6 +532,33 @@ describe("universeBuilder service", () => {
     expect(charAfterStamp?.referenceSheetImageRef).toBe("sheet-C.png");
   });
 
+  it("updateUniverse preserves canon entry imageRefs across a stale whole-array PATCH (#1395)", async () => {
+    // The collection hook appends section-local / batch renders onto a canon
+    // entry's imageRefs[] via appendEntryImageRef (mutator form). A literal
+    // whole-array PATCH (inline canon edit / add / lock) that round-trips a
+    // character list the client loaded BEFORE the render landed must not
+    // clobber the freshly-appended filename.
+    const w = await seedWorld({
+      characters: [{ id: "c-ref", name: "Ref", physicalDescription: "a face" }],
+    });
+    // Durable append — the hook's path (mutator form, bypasses preservation).
+    await svc.appendEntryImageRef(w.id, { kind: "canon", kindKey: "characters", id: "c-ref" }, "render-1.png");
+
+    // Stale client PATCH: round-trips the character WITHOUT the new ref.
+    const afterStale = await svc.updateUniverse(w.id, {
+      characters: [{ id: "c-ref", name: "Ref (renamed)", physicalDescription: "a face", imageRefs: [] }],
+    });
+    const refChar = afterStale.characters.find((c) => c.id === "c-ref");
+    expect(refChar?.imageRefs).toEqual(["render-1.png"]); // preserved
+    expect(refChar?.name).toBe("Ref (renamed)");          // other edits still apply
+
+    // Mutator path stays trusted — a subsequent append lands normally.
+    await svc.appendEntryImageRef(w.id, { kind: "canon", kindKey: "characters", id: "c-ref" }, "render-2.png");
+    const afterSecond = await svc.getUniverse(w.id);
+    const refChar2 = afterSecond.characters.find((c) => c.id === "c-ref");
+    expect(refChar2?.imageRefs).toEqual(["render-1.png", "render-2.png"]);
+  });
+
   it("updateUniverse preservation skips when cur's referenceSheetImageRef no longer resolves on disk", async () => {
     // GET /:id runs pruneStaleReferenceSheets, returning null when the
     // underlying file is gone. Client PATCHes carry the pruned null. The

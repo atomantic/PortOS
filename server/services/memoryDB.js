@@ -821,6 +821,18 @@ export async function getGraphData() {
 }
 
 /**
+ * Ids of active memories with a NULL embedding — the backfill target for
+ * "embed missing" (a record whose embedding generation failed or never ran).
+ * Returned as a Set for O(1) membership tests by the bridge.
+ */
+export async function getMemoryIdsMissingEmbedding() {
+  const result = await query(`
+    SELECT id FROM memories WHERE embedding IS NULL AND status = 'active'
+  `);
+  return new Set(result.rows.map(r => r.id));
+}
+
+/**
  * Link two memories
  */
 export async function linkMemories(sourceId, targetId) {

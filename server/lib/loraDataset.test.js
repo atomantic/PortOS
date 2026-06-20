@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  analyzeCaptionInvariants,
   buildVariationMatrix,
   captionHasTriggerWord,
   computeDatasetReadiness,
@@ -11,6 +12,7 @@ import {
   prefixCaption,
   sanitizeDatasetImage,
   sanitizeLoraDataset,
+  stripSharedFragments,
   LORA_DATASET_SCHEMA_VERSION,
 } from './loraDataset.js';
 
@@ -265,5 +267,117 @@ describe('captionHasTriggerWord', () => {
     expect(captionHasTriggerWord('', 'ai')).toBe(false);
     // No trigger configured → any non-empty caption counts.
     expect(captionHasTriggerWord('anything', '')).toBe(true);
+  });
+});
+
+describe('analyzeCaptionInvariants', () => {
+  const trigger = 'freydis_of_quaervarr';
+  // Identity (white hair, circlet, tooth necklace) repeated in every caption;
+  // pose/view varies — the issue-#1320 failure mode.
+  const ready = (id, body) => ({ id, status: 'ready', caption: prefixCaption(trigger, body) });
+  const freydisImages = [
+    ready('a', 'white hair, circlet, tooth necklace, standing, front view'),
+    ready('b', 'white hair, circlet, tooth necklace, walking, side profile'),
+    ready('c', 'white hair, circlet, tooth necklace, sitting, three-quarter view'),
+    ready('d', 'white hair, circlet, tooth necklace, action pose, back view'),
+    ready('e', 'white hair, circlet, tooth necklace, arms crossed, front view'),
+  ];
+
+  it('flags identity fragments shared across most captions, not per-shot variation', () => {
+    const { analyzable, total, sharedFragments } = analyzeCaptionInvariants(freydisImages, trigger);
+    expect(analyzable).toBe(true);
+    expect(total).toBe(5);
+    const flagged = sharedFragments.map((f) => f.normalized);
+    expect(flagged).toContain('white hair');
+    expect(flagged).toContain('circlet');
+    expect(flagged).toContain('tooth necklace');
+    // Pose/view fragments appear in ≤2 captions → below the 0.8 threshold.
+    expect(flagged).not.toContain('standing');
+    expect(flagged).not.toContain('front view');
+    expect(flagged).not.toContain('walking');
+  });
+
+  it('is not analyzable below the minimum captioned count', () => {
+    const { analyzable, sharedFragments } = analyzeCaptionInvariants(freydisImages.slice(0, 3), trigger);
+    expect(analyzable).toBe(false);
+    expect(sharedFragments).toEqual([]);
+  });
+
+  it('only counts ready, trigger-bearing captions', () => {
+    const images = [
+      ...freydisImages,
+      { id: 'rendering', status: 'rendering', caption: '' },
+      { id: 'untriggered', status: 'ready', caption: 'white hair, circlet, tooth necklace, no trigger here' },
+    ];
+    const { total } = analyzeCaptionInvariants(images, trigger);
+    expect(total).toBe(5); // rendering + untriggered excluded
+  });
+
+  it('counts a duplicated fragment once per caption', () => {
+    const images = [
+      ready('a', 'white hair, white hair, circlet, pose1'),
+      ready('b', 'white hair, circlet, pose2'),
+      ready('c', 'white hair, circlet, pose3'),
+      ready('d', 'white hair, circlet, pose4'),
+    ];
+    const { sharedFragments } = analyzeCaptionInvariants(images, trigger);
+    const whiteHair = sharedFragments.find((f) => f.normalized === 'white hair');
+    expect(whiteHair.count).toBe(4); // not 5 despite the doubled fragment in 'a'
+  });
+
+  it('returns nothing for an empty or tiny image set', () => {
+    expect(analyzeCaptionInvariants([], trigger).sharedFragments).toEqual([]);
+    expect(analyzeCaptionInvariants(null, trigger).analyzable).toBe(false);
+  });
+});
+
+describe('stripSharedFragments', () => {
+  const trigger = 'freydis_of_quaervarr';
+
+  it('removes shared fragments and preserves the trigger + per-shot detail', () => {
+    const caption = prefixCaption(trigger, 'white hair, circlet, tooth necklace, standing, front view');
+    const out = stripSharedFragments(caption, ['white hair', 'circlet', 'tooth necklace'], trigger);
+    expect(out).toBe(`${trigger}, standing, front view`);
+  });
+
+  it('matches fragments case- and whitespace-insensitively', () => {
+    const caption = prefixCaption(trigger, 'White  Hair, circlet, walking');
+    const out = stripSharedFragments(caption, ['white hair'], trigger);
+    expect(out).toBe(`${trigger}, circlet, walking`);
+  });
+
+  it('collapses to the bare trigger when only identity remained', () => {
+    const caption = prefixCaption(trigger, 'white hair, circlet');
+    const out = stripSharedFragments(caption, ['white hair', 'circlet'], trigger);
+    expect(out).toBe(trigger);
+  });
+
+  it('is idempotent and a no-op when nothing matches', () => {
+    const caption = prefixCaption(trigger, 'standing, front view');
+    expect(stripSharedFragments(caption, ['white hair'], trigger)).toBe(caption);
+    expect(stripSharedFragments(caption, [], trigger)).toBe(caption);
+  });
+
+  it('drops a stray mid-caption trigger fragment instead of duplicating the prefix', () => {
+    // Non-canonical caption: trigger appears as a fragment but not as the lead.
+    const caption = `white hair, ${trigger}, standing`;
+    const out = stripSharedFragments(caption, ['white hair'], trigger);
+    expect(out).toBe(`${trigger}, standing`);
+    // Exactly one trigger token in the result.
+    expect(out.split(trigger)).toHaveLength(2);
+  });
+
+  it('round-trips with analyzeCaptionInvariants — stripping clears the shared set', () => {
+    const ready = (id, body) => ({ id, status: 'ready', caption: prefixCaption(trigger, body) });
+    const images = [
+      ready('a', 'white hair, circlet, standing'),
+      ready('b', 'white hair, circlet, walking'),
+      ready('c', 'white hair, circlet, sitting'),
+      ready('d', 'white hair, circlet, action pose'),
+    ];
+    const { sharedFragments } = analyzeCaptionInvariants(images, trigger);
+    const toStrip = sharedFragments.map((f) => f.fragment);
+    const stripped = images.map((img) => ({ ...img, caption: stripSharedFragments(img.caption, toStrip, trigger) }));
+    expect(analyzeCaptionInvariants(stripped, trigger).sharedFragments).toEqual([]);
   });
 });

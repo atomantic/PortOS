@@ -45,6 +45,11 @@ tryReadFile: vi.fn().mockResolvedValue(null), jobId: 'whatever' })),
   cancelVideo: vi.fn(),
   cancelImage: vi.fn(),
   cancelImageCodex: vi.fn(),
+  // #1332: loraTraining is dynamically imported by the queue for runTraining
+  // (worker) and hasSurvivingTrainer (boot reconcile). Stub both so the boot
+  // re-attach decision is testable without loading the real trainer module.
+  runTraining: vi.fn(() => new Promise(() => {})),
+  hasSurvivingTrainer: vi.fn(async () => false),
 };
 
 vi.mock('../videoGen/local.js', () => ({
@@ -61,6 +66,12 @@ vi.mock('../imageGen/local.js', () => ({
 vi.mock('../imageGen/codex.js', () => ({
   generateImage: (...args) => stubs.generateImageCodex(...args),
   cancel: (...args) => stubs.cancelImageCodex(...args),
+}));
+
+vi.mock('../loraTraining/index.js', () => ({
+  runTraining: (...args) => stubs.runTraining(...args),
+  hasSurvivingTrainer: (...args) => stubs.hasSurvivingTrainer(...args),
+  cancel: () => {},
 }));
 
 // Import the queue + the gen-event emitters AFTER the mocks above are
@@ -85,6 +96,11 @@ beforeEach(async () => {
   // Default codex stub: hang (matches video/local defaults so tests that
   // don't care about codex don't accidentally complete too fast).
   stubs.generateImageCodex.mockImplementation(() => new Promise(() => {}));
+  // #1332 training stubs lose their implementations on mockReset above; restore
+  // safe defaults (no survivor; runTraining hangs so a re-attached run stays
+  // 'running'). Individual tests override hasSurvivingTrainer as needed.
+  stubs.runTraining.mockImplementation(() => new Promise(() => {}));
+  stubs.hasSurvivingTrainer.mockResolvedValue(false);
   await importFresh();
 });
 
@@ -442,6 +458,59 @@ describe('mediaJobQueue', () => {
     expect(recovered).toBeTruthy();
     expect(recovered.status).toBe('failed');
     expect(recovered.error).toMatch(/interrupted by restart/);
+  });
+
+  it('boot recovery (#1332): a "running" training job whose trainer survived is re-enqueued for re-attach', async () => {
+    const runId = 'run-survivor-1';
+    const trainingId = '00000000-0000-4000-8000-000000000010';
+    const persisted = {
+      jobs: [{
+        id: trainingId, kind: 'training', status: 'running',
+        queuedAt: '2026-04-30T10:00:00.000Z', startedAt: '2026-04-30T10:00:01.000Z',
+        params: { runId },
+      }],
+    };
+    writeFileSync(join(tempDataDir, 'media-jobs.json'), JSON.stringify(persisted, null, 2));
+
+    await importFresh();
+    stubs.hasSurvivingTrainer.mockResolvedValue(true); // trainer is still alive
+    await mediaJobQueue.initMediaJobQueue();
+
+    // The reconcile consulted the probe with the run id.
+    expect(stubs.hasSurvivingTrainer).toHaveBeenCalledWith(runId);
+    // The worker resumes it via runTraining flagged reattach:true (NOT failed) —
+    // the same job id so SSE clients keyed off it still resolve.
+    await waitFor(() => stubs.runTraining.mock.calls.length === 1);
+    expect(stubs.runTraining).toHaveBeenCalledWith(expect.objectContaining({
+      jobId: trainingId, runId, reattach: true,
+    }));
+    // It occupies the GPU lane as a running job rather than being archived failed.
+    const job = mediaJobQueue.getJob(trainingId);
+    expect(job.status).toBe('running');
+    expect(job.error).toBeUndefined();
+  });
+
+  it('boot recovery (#1332): a "running" training job with no surviving trainer is failed as before', async () => {
+    const runId = 'run-dead-1';
+    const trainingId = '00000000-0000-4000-8000-000000000011';
+    const persisted = {
+      jobs: [{
+        id: trainingId, kind: 'training', status: 'running',
+        queuedAt: '2026-04-30T10:00:00.000Z', startedAt: '2026-04-30T10:00:01.000Z',
+        params: { runId },
+      }],
+    };
+    writeFileSync(join(tempDataDir, 'media-jobs.json'), JSON.stringify(persisted, null, 2));
+
+    await importFresh();
+    stubs.hasSurvivingTrainer.mockResolvedValue(false); // trainer did not survive
+    await mediaJobQueue.initMediaJobQueue();
+
+    expect(stubs.hasSurvivingTrainer).toHaveBeenCalledWith(runId);
+    const job = mediaJobQueue.getJob(trainingId);
+    expect(job.status).toBe('failed');
+    expect(job.error).toMatch(/interrupted by restart/);
+    expect(stubs.runTraining).not.toHaveBeenCalled();
   });
 
   it('boot recovery: persisted "queued" jobs are re-enqueued for the worker', async () => {

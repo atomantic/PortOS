@@ -202,6 +202,33 @@ const sanitizeCanonExtraction = (raw) => {
   };
 };
 
+// Persisted outcome of the last strictly-prose-grounded "describe nouns from
+// prose" run (see universeCanon.describeCanonFromProse). `null` = never run.
+// `none`/`thin` carry the nouns the manuscript couldn't (or only thinly)
+// describe so the Nouns UI can render a persistent manuscript-quality banner.
+const sanitizeDescGapList = (arr) => (Array.isArray(arr) ? arr : [])
+  .filter((g) => g && typeof g === 'object' && CANON_KINDS.includes(g.kind))
+  .slice(0, 200)
+  .map((g) => ({
+    id: trimTo(g.id, 80),
+    name: trimTo(g.name, 200),
+    kind: g.kind,
+    note: trimTo(g.note, 600),
+  }));
+
+const sanitizeDescGaps = (raw) => {
+  if (!raw || typeof raw !== 'object') return null;
+  return {
+    at: isStr(raw.at) ? raw.at : null,
+    provider: trimTo(raw.provider, 80),
+    model: trimTo(raw.model, 128),
+    filled: Number.isFinite(raw.filled) && raw.filled > 0 ? Math.floor(raw.filled) : 0,
+    none: sanitizeDescGapList(raw.none),
+    thin: sanitizeDescGapList(raw.thin),
+    skippedLocked: sanitizeDescGapList(raw.skippedLocked),
+  };
+};
+
 const sanitizeStage = (raw) => {
   if (!raw || typeof raw !== 'object') return emptyStage();
   const status = STAGE_STATUSES.includes(raw.status) ? raw.status : 'empty';
@@ -229,6 +256,7 @@ const sanitizeStage = (raw) => {
 const sanitizeTextStage = (raw) => ({
   ...sanitizeStage(raw),
   canonExtraction: sanitizeCanonExtraction(raw?.canonExtraction),
+  descGaps: sanitizeDescGaps(raw?.descGaps),
 });
 
 /**
@@ -651,6 +679,30 @@ export async function listAllIssues({ includeDeleted = false, withHistory = true
   const { issues } = await readState();
   const live = includeDeleted ? issues : issues.filter((i) => !i.deleted);
   return withHistory ? live : live.map(stripRunHistoryFromIssue);
+}
+
+/**
+ * Every live issue record for one series — UNCAPPED, sorted by issue number.
+ *
+ * Same cap rationale as `listAllIssues`/`listIssueIds`: `listIssues({ seriesId })`
+ * slices at `ISSUES_PER_RESPONSE_MAX` (1000), so a series holding >1000 issues
+ * loses its tail. Per-series scans that MUST see every issue (the editorial
+ * runner's storyboard-continuity and comic-lettering projections, #1469) use
+ * this — with `listIssues` those checks would silently skip every storyboard
+ * scene / comic page past the 1000th issue. Sorted by `number` to match the
+ * ordering `listIssues` produces within a single series.
+ *
+ * @param {string} seriesId
+ * @param {object} [options]
+ * @param {boolean} [options.includeDeleted=false]
+ * @param {boolean} [options.withHistory=true] - false strips per-stage run history
+ */
+export async function listIssuesForSeries(seriesId, { includeDeleted = false, withHistory = true } = {}) {
+  const { issues } = await readState();
+  const live = includeDeleted ? issues : issues.filter((i) => !i.deleted);
+  const filtered = live.filter((i) => i.seriesId === seriesId);
+  const sorted = [...filtered].sort((a, b) => (a.number || 0) - (b.number || 0));
+  return withHistory ? sorted : sorted.map(stripRunHistoryFromIssue);
 }
 
 /**
@@ -1150,7 +1202,17 @@ export function deleteIssue(id) {
       // Series export bundles every issue, so a deletion is an update on the
       // parent series for any active share-bucket subscription.
       emitRecordUpdated('series', seriesId);
-      return { id };
+      return { id, seriesId };
+    }).then(async (result) => {
+      // The deleted issue may have owned the series' list thumbnail
+      // (`series.coverImage`). Recompute outside the queue (it reads fresh
+      // post-delete state) so the Pipeline list falls back to the next eligible
+      // cover instead of pointing at a tombstone. Dynamic import dodges the
+      // static cycle (seriesCoverImage → issues). Best-effort — a cosmetic
+      // thumbnail must never fail the delete.
+      const { refreshSeriesCoverImage } = await import('./seriesCoverImage.js');
+      await refreshSeriesCoverImage(result.seriesId).catch(() => {});
+      return { id: result.id };
     })
   );
 }

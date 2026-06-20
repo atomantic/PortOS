@@ -19,7 +19,7 @@
  */
 
 import { resolveAPIProvider, stripCodeFences } from '../lib/aiProvider.js';
-import { runPromptThroughProvider, assertProvider } from '../lib/promptRunner.js';
+import { runPromptThroughProvider, assertProvider, assertVisionRunUsedImages } from '../lib/promptRunner.js';
 import { ServerError } from '../lib/errorHandler.js';
 
 // Singular kind → render-prompt focus. Mirrors the descriptor emphasis the
@@ -131,13 +131,7 @@ export async function describeEntityFromImages({ kind, name, context, screenshot
   // completion would be prose hallucinated from the text prompt alone — reject
   // it outright (resolving an API provider up front was meant to guarantee the
   // model actually sees the references).
-  const ranProvider = result.provider || result.fallbackProvider || provider;
-  if (ranProvider.type && ranProvider.type !== 'api') {
-    throw new ServerError(
-      'The vision request fell back to a non-vision provider that cannot read images. Configure a reliable vision-capable API provider and retry.',
-      { status: 502, code: 'VISION_FALLBACK_DROPPED_IMAGES' },
-    );
-  }
+  const ranProvider = assertVisionRunUsedImages(result, provider);
 
   const description = stripCodeFences(result.text || '').trim();
   if (!description) {

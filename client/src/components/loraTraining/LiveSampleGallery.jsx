@@ -18,24 +18,15 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { ImageOff, Radio } from 'lucide-react';
 import { formatDurationMs } from '../../utils/formatters';
 import { useTimeTick } from '../../hooks/useTimeTick';
+import { lossSparklineGeometry } from '../../lib/lossSparkline';
 import { listLoraTrainingSamples } from '../../services/api';
 
 const SPARK_W = 240;
 const SPARK_H = 36;
 
 function LossSparkline({ series }) {
-  if (series.length < 2) return null;
-  const losses = series.map((p) => p.loss);
-  const min = Math.min(...losses);
-  const max = Math.max(...losses);
-  const points = series
-    .map((p, i) => {
-      const x = (i / (series.length - 1)) * SPARK_W;
-      const y = max === min ? SPARK_H / 2 : SPARK_H - ((p.loss - min) / (max - min)) * SPARK_H;
-      return `${x.toFixed(1)},${y.toFixed(1)}`;
-    })
-    .join(' ');
-  const last = series[series.length - 1].loss;
+  const { points, last } = lossSparklineGeometry(series, { width: SPARK_W, height: SPARK_H });
+  if (!points) return null;
   return (
     <div>
       <div className="flex items-center justify-between text-[11px] text-gray-500 mb-0.5">

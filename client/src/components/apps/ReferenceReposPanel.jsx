@@ -234,7 +234,7 @@ function RefRow({ reference, snapshot, checking, editingNotes, onCheck, onMarkRe
   const [notesDraft, setNotesDraft] = useState(reference.notes || '');
   useEffect(() => {
     if (editingNotes) setNotesDraft(reference.notes || '');
-  }, [editingNotes]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [editingNotes]);
 
   const lastReviewedShort = reference.lastReviewedSha ? reference.lastReviewedSha.slice(0, 8) : null;
   const lastCheckedAgo = reference.lastCheckedAt ? new Date(reference.lastCheckedAt).toLocaleString() : 'never';

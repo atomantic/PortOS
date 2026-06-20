@@ -60,14 +60,14 @@ import {
   listVideoHistory, deleteVideoHistoryItem, setVideoHidden, extractLastFrame,
   upscaleVideo,
   listImageGallery,
-  getSettings, patchSettingsSlice,
+  patchSettingsSlice,
   getActiveVideoJob,
   listLorasFull,
 } from '../services/api';
 import LoraPicker from '../components/imageGen/LoraPicker';
 import { videoLoraFamily, VIDEO_LORA_FAMILIES } from '../lib/runnerFamilies';
 import { randomSeed } from '../lib/genUtils';
-import { VIDEO_RESOLUTIONS } from '../lib/videoGenResolutions';
+import { VIDEO_RESOLUTIONS, snapAspectToImage } from '../lib/videoGenResolutions';
 import { VIDEO_TILING_OPTIONS, VIDEO_TILING_ENUM_SET } from '../lib/videoTilingOptions';
 import { resolveResolutionLabel } from '../lib/imageGenResolutions';
 
@@ -153,6 +153,13 @@ export default function VideoGen() {
   const [modelId, setModelId] = useState('');
   const [width, setWidth] = useState(768);
   const [height, setHeight] = useState(512);
+  // Set once the size has been chosen deliberately — the user picking a preset,
+  // or an explicit size arriving via Continue/Remix/restore. While it's false,
+  // selecting an I2V source image auto-snaps W×H to the source's aspect ratio
+  // (so the default frame doesn't cover-crop the subject). The snap itself does
+  // NOT set this, so re-picking a different source still re-snaps until the user
+  // takes the size into their own hands.
+  const sizeManuallySetRef = useRef(false);
   const [numFrames, setNumFrames] = useState(121);
   const [fps, setFps] = useState(24);
   const [chunks, setChunks] = useState(1);
@@ -225,8 +232,8 @@ export default function VideoGen() {
   useEffect(() => {
     const w = Number(incomingWidth);
     const h = Number(incomingHeight);
-    if (Number.isFinite(w) && w > 0) setWidth(w);
-    if (Number.isFinite(h) && h > 0) setHeight(h);
+    if (Number.isFinite(w) && w > 0) { setWidth(w); sizeManuallySetRef.current = true; }
+    if (Number.isFinite(h) && h > 0) { setHeight(h); sizeManuallySetRef.current = true; }
   }, [incomingWidth, incomingHeight]);
 
   // Remix payload from MediaPreview (?modelId=…&numFrames=…&seed=…). Populate
@@ -275,7 +282,6 @@ export default function VideoGen() {
       stripKeys.forEach((k) => n.delete(k));
       return n;
     }, { replace: true });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const [history, setHistory] = useState([]);
@@ -301,6 +307,30 @@ export default function VideoGen() {
     setLastUploadUrl(url);
     return () => URL.revokeObjectURL(url);
   }, [lastImageUpload]);
+
+  // Auto-snap the default W×H to a selected I2V source image's aspect ratio so
+  // the server's cover-crop (force_original_aspect_ratio=increase,crop in
+  // local.js#resizeImage) doesn't silently cut the subject out of a mismatched
+  // frame. Only fires while the user hasn't taken the size into their own hands
+  // (sizeManuallySetRef) — the inputs stay fully editable for power users, and
+  // the server keeps its own 64-grid clamp. Gallery picks resolve to
+  // /data/images/<file>; uploads reuse the object URL built above. The load is
+  // async, so guard the apply against a newer pick (cancelled) and a late-
+  // arriving manual size change (the ref re-check).
+  useEffect(() => {
+    if (sizeManuallySetRef.current) return;
+    const src = sourceImageFile ? `/data/images/${sourceImageFile}` : sourceUploadUrl;
+    if (!src) return;
+    let cancelled = false;
+    const img = new Image();
+    img.onload = () => {
+      if (cancelled || sizeManuallySetRef.current) return;
+      const snapped = snapAspectToImage(VIDEO_RESOLUTIONS, img.naturalWidth, img.naturalHeight);
+      if (snapped) { setWidth(snapped.w); setHeight(snapped.h); }
+    };
+    img.src = src;
+    return () => { cancelled = true; };
+  }, [sourceImageFile, sourceUploadUrl]);
 
   const refreshHistory = useCallback(() => {
     listVideoHistory().then((items) => setHistory(Array.isArray(items) ? items : [])).catch(() => {});
@@ -345,7 +375,6 @@ export default function VideoGen() {
       }
     }
     setSearchParams((prev) => { const next = new URLSearchParams(prev); next.delete('lora'); return next; }, { replace: true });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [availableLoras, models]);
 
   const { visibleHistory, hiddenHistory } = useMemo(() => ({
@@ -443,8 +472,8 @@ export default function VideoGen() {
     // post-load validation effect (`Validate modelId once models are loaded`)
     // will fall back to defaultModel if the id doesn't end up in the catalog.
     if (item.modelId) setModelId(item.modelId);
-    if (item.width) setWidth(item.width);
-    if (item.height) setHeight(item.height);
+    if (item.width) { setWidth(item.width); sizeManuallySetRef.current = true; }
+    if (item.height) { setHeight(item.height); sizeManuallySetRef.current = true; }
     if (item.numFrames) setNumFrames(item.numFrames);
     if (item.fps) setFps(item.fps);
     if (item.seed != null) setSeed(String(item.seed));
@@ -604,8 +633,8 @@ export default function VideoGen() {
       if (p.prompt) setPrompt(p.prompt);
       if (p.negativePrompt) setNegativePrompt(p.negativePrompt);
       if (p.modelId) setModelId(p.modelId);
-      if (p.width) setWidth(p.width);
-      if (p.height) setHeight(p.height);
+      if (p.width) { setWidth(p.width); sizeManuallySetRef.current = true; }
+      if (p.height) { setHeight(p.height); sizeManuallySetRef.current = true; }
       if (p.numFrames) setNumFrames(p.numFrames);
       if (p.fps) setFps(p.fps);
       if (p.steps != null) setSteps(String(p.steps));
@@ -647,7 +676,6 @@ export default function VideoGen() {
       const isCurrent = () => myToken === runTokenRef.current;
       attachJobEvents(job.jobId, { isCurrent, withToast: false });
     }).catch(() => {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleSavePythonPath = useCallback(async (path) => {
@@ -742,6 +770,23 @@ export default function VideoGen() {
     ? availableLoras.filter((l) => (l.loraCompatKey || l.runnerFamily) === loraFamily)
     : [];
 
+  // Installed LTX-video LoRAs regardless of the selected model's runtime. When
+  // the user picks an LTX-2.x model whose runtime can't fuse LoRAs (a quantized
+  // mlx_video model — loraFamily is null), the picker is correctly hidden, but
+  // silently doing so reads as a bug. Use this to explain *why* the LoRA is
+  // unavailable and point at the models that CAN run it. The `/ltx-?2/i` scope
+  // matches the server's LTX-2.x capability family (see isMlxVideoLtxLoraCapable)
+  // so the hint never fires for a non-LTX-2.x model where the advice wouldn't apply.
+  const installedVideoLoras = availableLoras.filter(
+    (l) => (l.loraCompatKey || l.runnerFamily) === VIDEO_LORA_FAMILIES.LTX_VIDEO,
+  );
+  // Gated on the quantized-mlx_video case specifically (runtime mlx_video +
+  // loraFamily null = a quantized LTX-2.x model) so the hint copy's "quantized
+  // runtime isn't supported yet" wording always matches what triggered it.
+  const showLtxLoraUnsupportedHint = !loraFamily && installedVideoLoras.length > 0
+    && currentModel?.runtime === 'mlx_video'
+    && /ltx-?2/i.test(`${currentModel?.id || ''} ${currentModel?.repo || ''} ${currentModel?.name || ''}`);
+
   // Multi-keyframe availability + validation. Keyframes are an ltx2-runtime
   // primitive (the route 400s with KEYFRAMES_REQUIRE_LTX2 otherwise), so the
   // picker only offers itself when the selected model runs on ltx2. Mirror
@@ -826,6 +871,28 @@ export default function VideoGen() {
       : textEncoderInfo)
     : null;
 
+  // Weight-integrity (issue #1324). A corrupt/truncated model decodes to
+  // garbled "mosaic" video that a clean re-download fixes; surface a Repair
+  // banner keyed on the cheap structural check the status poll already ran so
+  // the user can delete + re-fetch the bad files instead of debugging a render.
+  const modelIntegrity = modelStatus && !modelStatus.downloading ? modelStatus.integrity : null;
+  const integrityBad = modelIntegrity?.status === 'bad';
+  const integrityBadCount = integrityBad ? (modelIntegrity.badFiles || []).length : 0;
+  const integrityKey = integrityBad ? `${modelId}:${(modelIntegrity.badFiles || []).map((f) => f.name).join(',')}` : null;
+  const [dismissedIntegrityKey, setDismissedIntegrityKey] = useState(null);
+  const showIntegrityBanner = integrityBad && dismissedIntegrityKey !== integrityKey && !modelDownload.downloading;
+
+  // Text-encoder integrity. The shared Gemma encoder is a separate HF repo, so a
+  // corrupt encoder needs its own Repair banner — the model-keyed repair above
+  // can't reach it (it isn't a listVideoModels() entry). Local-path encoders
+  // report `integrity: null`, so this only fires for a damaged HF-cached encoder.
+  const encoderIntegrity = textEncoderStatus && !textEncoderStatus.downloading ? textEncoderStatus.integrity : null;
+  const encoderIntegrityBad = encoderIntegrity?.status === 'bad';
+  const encoderIntegrityBadCount = encoderIntegrityBad ? (encoderIntegrity.badFiles || []).length : 0;
+  const encoderIntegrityKey = encoderIntegrityBad ? `text-encoder:${(encoderIntegrity.badFiles || []).map((f) => f.name).join(',')}` : null;
+  const [dismissedEncoderIntegrityKey, setDismissedEncoderIntegrityKey] = useState(null);
+  const showEncoderIntegrityBanner = encoderIntegrityBad && dismissedEncoderIntegrityKey !== encoderIntegrityKey && !modelDownload.downloading;
+
   const { matched: matchedResolution, label: resolutionLabel } = resolveResolutionLabel(VIDEO_RESOLUTIONS, width, height);
   const progressPct = progress?.progress != null ? Math.round(progress.progress * 100) : null;
 
@@ -838,7 +905,7 @@ export default function VideoGen() {
 
   const handleResolutionChange = (e) => {
     const r = VIDEO_RESOLUTIONS.find((r) => r.label === e.target.value);
-    if (r) { setWidth(r.w); setHeight(r.h); }
+    if (r) { setWidth(r.w); setHeight(r.h); sizeManuallySetRef.current = true; }
   };
   const handleRandomSeed = () => setSeed(randomSeed());
 
@@ -1209,7 +1276,6 @@ export default function VideoGen() {
     // unmount during the 1.5s BUSY backoff would fire setRunningQueueId on
     // a torn-down component (React warning + leaked state).
     return () => { if (busyRetryTimer) clearTimeout(busyRetryTimer); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queue, generating, runningQueueId]);
 
   const handleCancel = async () => {
@@ -1285,6 +1351,40 @@ export default function VideoGen() {
         </div>
       </div>
 
+      {/* Runtime fingerprint — host chip/OS + resolved ltx/mlx/torch versions
+          per installed runtime. Lets a user (or a bug report for garbled
+          output) see the exact numerical stack without running a render. */}
+      {status?.runtime && (() => {
+        const host = status.runtime.host || {};
+        const runtimes = status.runtime.runtimes || {};
+        const ids = Object.keys(runtimes);
+        if (!host.chip && !host.os && ids.length === 0) return null;
+        return (
+          <div className="text-[10px] text-gray-500 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+            {(host.chip || host.os) && (
+              <span title="Host chip + OS">{[host.chip, host.os].filter(Boolean).join(' · ')}</span>
+            )}
+            {ids.map((id) => {
+              const fp = runtimes[id] || {};
+              if (fp.error) {
+                return (
+                  <span key={id} className="text-port-warning/70" title={`Version probe failed: ${fp.error}`}>
+                    · {id}: version probe failed
+                  </span>
+                );
+              }
+              const versions = fp.versions && typeof fp.versions === 'object' ? fp.versions : {};
+              const vers = Object.keys(versions).length
+                ? Object.entries(versions).map(([k, v]) => `${k} ${v}`).join(', ')
+                : 'no versions resolved';
+              return (
+                <span key={id} title={`${id} runtime`}>· {id}: {vers}</span>
+              );
+            })}
+          </div>
+        );
+      })()}
+
       {status && status.connected === false && (() => {
         const missingCount = status.missingPackages?.length || 0;
         const hasPath = !!status.pythonPath;
@@ -1354,6 +1454,64 @@ export default function VideoGen() {
                 <Sparkles size={14} />
                 Install {byovStatus.label}
               </button>
+            </div>
+          )}
+          {showIntegrityBanner && (
+            <div className="rounded-lg border border-port-error/40 bg-port-error/10 px-3 py-3 text-xs text-port-error flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                <div>
+                  <strong className="font-semibold">{currentModel?.name || modelId}</strong> has {integrityBadCount || 'corrupt'} damaged weight file{integrityBadCount === 1 ? '' : 's'} — renders may come out garbled.
+                  Repair deletes the bad file{integrityBadCount === 1 ? '' : 's'} and re-downloads clean copies.
+                </div>
+              </div>
+              <div className="flex items-center gap-2 self-start sm:self-auto">
+                <button
+                  type="button"
+                  onClick={() => { setDismissedIntegrityKey(integrityKey); modelDownload.repair(modelId); }}
+                  disabled={modelDownload.repairing || modelDownload.downloading}
+                  className="whitespace-nowrap inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-port-error text-white text-xs font-medium hover:bg-port-error/80 disabled:opacity-50"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${modelDownload.repairing ? 'animate-spin' : ''}`} />
+                  Repair model
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDismissedIntegrityKey(integrityKey)}
+                  className="text-gray-400 hover:text-gray-200 text-xs"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          )}
+          {showEncoderIntegrityBanner && (
+            <div className="rounded-lg border border-port-error/40 bg-port-error/10 px-3 py-3 text-xs text-port-error flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                <div>
+                  The shared <strong className="font-semibold">text encoder</strong> ({textEncoderStatus?.repo}) has {encoderIntegrityBadCount || 'corrupt'} damaged weight file{encoderIntegrityBadCount === 1 ? '' : 's'} — renders may come out garbled.
+                  Repair deletes the bad file{encoderIntegrityBadCount === 1 ? '' : 's'} and re-downloads clean copies.
+                </div>
+              </div>
+              <div className="flex items-center gap-2 self-start sm:self-auto">
+                <button
+                  type="button"
+                  onClick={() => { setDismissedEncoderIntegrityKey(encoderIntegrityKey); modelDownload.repair(TEXT_ENCODER_DOWNLOAD_ID); }}
+                  disabled={modelDownload.repairing || modelDownload.downloading}
+                  className="whitespace-nowrap inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-port-error text-white text-xs font-medium hover:bg-port-error/80 disabled:opacity-50"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${modelDownload.repairing ? 'animate-spin' : ''}`} />
+                  Repair encoder
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDismissedEncoderIntegrityKey(encoderIntegrityKey)}
+                  className="text-gray-400 hover:text-gray-200 text-xs"
+                >
+                  Dismiss
+                </button>
+              </div>
             </div>
           )}
           <StylePresetPicker
@@ -1498,7 +1656,7 @@ export default function VideoGen() {
                     estimateLabel={deriveSizeEstimate(currentModel?.name)}
                   />
                 )}
-                {textEncoderStatus && textEncoderStatus.cached === false && (
+                {textEncoderStatus && (textEncoderStatus.cached === false || textEncoderStatus.downloading) && (
                   <div className="mt-1">
                     <p className="text-[10px] text-gray-500">Text encoder ({textEncoderStatus.repo}) is also required:</p>
                     <ModelDownloadBadge
@@ -1528,6 +1686,15 @@ export default function VideoGen() {
                   })}
                   disabled={generating}
                 />
+              </div>
+            )}
+
+            {/* LTX model that can't fuse LoRAs (quantized mlx_video — q4/q8) with
+                compatible LoRAs on disk: explain the absence instead of hiding
+                silently, and point at the models that CAN run them. */}
+            {showLtxLoraUnsupportedHint && (
+              <div className="col-span-2 sm:col-span-3 rounded-lg border border-port-warning/40 bg-port-warning/10 px-3 py-2 text-xs text-port-warning leading-snug">
+                You have {installedVideoLoras.length} LTX video LoRA{installedVideoLoras.length === 1 ? '' : 's'} installed, but <strong className="font-semibold">{currentModel?.name}</strong> can't fuse LoRAs (its quantized <code>mlx_video</code> runtime isn't supported yet). Switch to the <strong className="font-semibold">LTX-2.3 Unified Beta</strong> (bf16) or an <strong className="font-semibold">LTX-2.3 dgrauet (Q4/Q8)</strong> model to use them.
               </div>
             )}
 

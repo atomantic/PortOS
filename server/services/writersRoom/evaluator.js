@@ -14,7 +14,8 @@ import { extractBible } from '../../lib/bibleExtractor.js';
 import { extractScenes, SOURCE_KIND } from '../../lib/sceneExtractor.js';
 import { BIBLE_KIND } from '../../lib/storyBible.js';
 import { ANALYSIS_KINDS } from '../../lib/writersRoomPresets.js';
-import { getWorkWithBody } from './local.js';
+import { getWorkWithBody, ensureWorkMediaCollection } from './local.js';
+import { addItem as addCollectionItem, ERR_DUPLICATE } from '../mediaCollections.js';
 import { listCharacters, mergeExtractedCharacters } from './characters.js';
 import { listPlaces, mergeExtractedPlaces } from './places.js';
 import { listObjects, mergeExtractedObjects } from './objects.js';
@@ -170,6 +171,22 @@ export async function attachSceneImage(workId, id, { sceneId, filename, jobId, p
   };
   await saveAnalysis(workId, next);
   return next;
+}
+
+// Persist a scene→generated-image link on the analysis snapshot AND mirror the
+// image into the work's auto-collection (so it appears in MediaGen's
+// Collections view). Shared by the HTTP `scene-image` route and the image-job
+// completion hook (#1363) so the render-then-attach flow converges on one
+// durable path — neither caller can drift on what "file this render" means.
+// Best-effort collection mirror: a duplicate (same render already filed) is a
+// no-op, not an error. Returns `{ analysis, collectionId }`.
+export async function persistSceneImage(workId, id, { sceneId, filename, jobId, prompt }) {
+  const analysis = await attachSceneImage(workId, id, { sceneId, filename, jobId, prompt });
+  const collection = await ensureWorkMediaCollection(workId);
+  await addCollectionItem(collection.id, { kind: 'image', ref: filename }).catch((err) => {
+    if (err?.code !== ERR_DUPLICATE) throw err;
+  });
+  return { analysis, collectionId: collection.id };
 }
 
 // ---------- startup recovery ----------

@@ -112,6 +112,16 @@ describe('recordMerge — pure union helpers', () => {
     expect(autoResolved).toContainEqual({ field: 'writersRoomWorkId', from: 'loser' });
   });
 
+  it('buildSeriesUnion preserves a loser-only style guide', () => {
+    const styleGuide = { tense: 'past', povPerson: 'third-limited', contentRating: 'PG-13' };
+    const { record, autoResolved } = merge.buildSeriesUnion(
+      { name: 'S', seasons: [], styleGuide: null },
+      { name: 'S', seasons: [], styleGuide },
+    );
+    expect(record.styleGuide).toEqual(styleGuide);
+    expect(autoResolved).toContainEqual({ field: 'styleGuide', from: 'loser' });
+  });
+
   it('buildUniverseUnion applies fieldChoices to resolve conflicts', () => {
     const { conflicts, record } = merge.buildUniverseUnion(
       { name: 'Dup', starterPrompt: 'A', categories: {}, influences: {}, characters: [], places: [], objects: [] },

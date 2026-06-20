@@ -11,7 +11,10 @@
  * renders (generateImage + EntryThumbSlot spinner/display) and persists the
  * resulting filename onto the universe's `styleImageRefs[]` so it survives
  * reload and shows in both the Universe Builder and the Story Builder
- * aesthetic step.
+ * aesthetic step. The render also carries a `universeRun` collection target so
+ * the server files the finished image into the universe's "Universe: <name>"
+ * media collection — the same auto-filing path batch renders and character
+ * reference sheets use — instead of the front-end doing it post-generation.
  */
 import { useRef } from 'react';
 import { Sparkles } from 'lucide-react';
@@ -60,8 +63,11 @@ export const shouldPersistProbe = ({ styleDirty, capturedKey, currentKey }) =>
 export default function StyleProbeImage({ universe, onUniverseChange, canRender = true, styleDirty = false, onPreview = null, onRenderComplete = null }) {
   const { imageCfg } = useImageRenderSettings();
   // The style key the in-flight probe was queued against, captured at render
-  // time so the async completion can detect mid-render style drift.
-  const probeStyleKeyRef = useRef(null);
+  // time so the async completion can detect mid-render style drift. Keyed by
+  // universe so this component can stay mounted across a universe switch (no
+  // remount) without one universe's captured key shadowing another's.
+  const probeStyleKeysRef = useRef(new Map());
+  const probeScope = universe?.id || '__new__';
 
   const styleReady = hasStyleForProbe(universe);
   // The probe prompt is built from the in-memory `influences`, but `onComplete`
@@ -77,8 +83,12 @@ export default function StyleProbeImage({ universe, onUniverseChange, canRender 
     // The probe job is async; only persist when the draft still equals the saved
     // record AND the live style matches what the probe was queued against — else
     // the image would pin to a record built from different influences (the very
-    // mismatch the render-time gate exists to prevent).
-    if (!shouldPersistProbe({ styleDirty, capturedKey: probeStyleKeyRef.current, currentKey: probeStyleKey(universe) })) {
+    // mismatch the render-time gate exists to prevent). The captured key has
+    // served its drift-check purpose now the job completed — drop it so the Map
+    // doesn't retain one entry per visited universe for the mounted lifetime.
+    const capturedKey = probeStyleKeysRef.current.get(probeScope) ?? null;
+    probeStyleKeysRef.current.delete(probeScope);
+    if (!shouldPersistProbe({ styleDirty, capturedKey, currentKey: probeStyleKey(universe) })) {
       toast.error('Style changed while the base style rendered — re-run the probe');
       return;
     }
@@ -102,6 +112,14 @@ export default function StyleProbeImage({ universe, onUniverseChange, canRender 
     buildPrompt: () => buildStyleProbePrompt(universe),
     onComplete,
     onError: (err) => toast.error(err?.message || 'Style render failed'),
+    // Scope the single-target render per universe so this component can stay
+    // mounted across a universe switch (no `key` remount) and still read the
+    // in-flight job / resume completion relative to the displayed universe.
+    // Invariant this relies on: completion is delivered only for the DISPLAYED
+    // job — `EntryThumbSlot` watches `inFlightJobId={jobId}`, so `onComplete`
+    // always runs against the displayed universe's closure. Keep that scoping if
+    // EntryThumbSlot's subscription ever changes.
+    scopeId: universe?.id,
   });
 
   const render = async () => {
@@ -110,8 +128,16 @@ export default function StyleProbeImage({ universe, onUniverseChange, canRender 
     // Capture the style key the moment the job is queued so the async completion
     // can detect mid-render style drift.
     const probe = buildStyleProbePrompt(universe);
-    const queuedJobId = await queueRender(imageCfg);
-    if (queuedJobId) probeStyleKeyRef.current = JSON.stringify(probe);
+    // Tag the render with the universe's collection target so the SERVER files
+    // the finished image into the "Universe: <name>" collection (the same
+    // auto-filing path batch renders use), alongside persisting the ref onto
+    // `styleImageRefs` in onComplete. The collectionId is resolved server-side
+    // from this identity — the client never does collection bookkeeping.
+    const universeRun = universe?.id && universe?.name
+      ? { universeId: universe.id, universeName: universe.name, label: 'Base style', category: 'style' }
+      : undefined;
+    const queuedJobId = await queueRender(imageCfg, undefined, universeRun && { universeRun });
+    if (queuedJobId) probeStyleKeysRef.current.set(probeScope, JSON.stringify(probe));
   };
 
   const hasExistingImage = Array.isArray(universe?.styleImageRefs) && universe.styleImageRefs.length > 0;

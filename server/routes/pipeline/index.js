@@ -20,6 +20,23 @@
  *   POST   /issues/:id/auto-run-text            → { runId, alreadyRunning, sseUrl }
  *   GET    /issues/:id/auto-run-text/progress   → SSE (text/event-stream)
  *   POST   /issues/:id/auto-run-text/cancel     → { canceled }
+ *   POST   /series/:id/autopilot/start          → { runId, alreadyRunning, mode, sseUrl }
+ *   GET    /series/:id/autopilot/progress       → SSE (text/event-stream)
+ *   POST   /series/:id/autopilot/cancel         → { canceled }
+ *   GET    /series/:id/autopilot/status         → { autopilot, active }
+ *   GET    /issues/:id/canon-readiness          → { referenced, none, thin, ready }
+ *   GET    /series/:id/canon-readiness          → { ready, issues, blockingIssues, undescribed }
+ *   GET    /series/:id/reverse-outline               → { plotlines, scenes, stale, status }
+ *   POST   /series/:id/reverse-outline/generate      → { runId, alreadyRunning, sseUrl }
+ *   GET    /series/:id/reverse-outline/generate/progress → SSE (text/event-stream)
+ *   POST   /series/:id/reverse-outline/generate/cancel   → { canceled }
+ *   GET    /series/:id/continuity-bible              → { facts, stale, status }
+ *   POST   /series/:id/continuity-bible/generate     → { runId, alreadyRunning, sseUrl }
+ *   GET    /series/:id/continuity-bible/generate/progress → SSE (text/event-stream)
+ *   POST   /series/:id/continuity-bible/generate/cancel   → { canceled }
+ *   GET    /issues/:id/pov-rewrites                   → { cast, rewrites, hasContent }
+ *   POST   /issues/:id/pov-rewrites                   → { status, rewrite }
+ *   DELETE /issues/:id/pov-rewrites/:rewriteId        → { removed }
  *
  * Assembled from domain sub-routers (mirrors the cos.js pattern). Mount
  * order preserves the original single-file registration order; the only
@@ -36,6 +53,11 @@ import manuscriptRoutes from './manuscript.js';
 import coverRoutes from './covers.js';
 import issueRoutes from './issues.js';
 import editorialRoutes from './editorial.js';
+import reverseOutlineRoutes from './reverseOutline.js';
+import continuityBibleRoutes from './continuityBible.js';
+import perspectiveRewriteRoutes from './perspectiveRewrite.js';
+import autopilotRoutes from './autopilot.js';
+import canonRoutes from './canon.js';
 
 const router = Router();
 
@@ -46,5 +68,10 @@ router.use(manuscriptRoutes);
 router.use(coverRoutes);
 router.use(issueRoutes);
 router.use(editorialRoutes);
+router.use(reverseOutlineRoutes);
+router.use(continuityBibleRoutes);
+router.use(perspectiveRewriteRoutes);
+router.use(autopilotRoutes);
+router.use(canonRoutes);
 
 export default router;

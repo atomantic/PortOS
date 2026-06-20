@@ -23,27 +23,24 @@
  * the frame (matches the pipeline auto-run's refetch-on-terminal pattern).
  */
 
-import { randomUUID } from 'crypto';
-import { broadcastSse, attachSseClient, closeJobAfterDelay } from '../lib/sseUtils.js';
+import { createSseRunner } from '../lib/sseUtils.js';
 import { generateStep, refineStep } from './storyBuilder.js';
 
-// runs: Map<runKey, { runId, clients[], lastPayload, startedAt, stepId, op }>
-const runs = new Map();
+// Shared SSE run-lifecycle keyed by `${sessionId}::${stepId}`. This runner uses
+// the factory's OPTIONAL signature-based coalescing (a `refine` of a different
+// target is different work and must not bind onto an in-flight `generate`), and
+// keeps its own error frame inside `work` (it carries `stepId`/`op`), so the
+// factory's generic catch is only the safety net.
+const runner = createSseRunner({ logLabel: 'story-builder' });
 
 const runKey = (sessionId, stepId) => `${sessionId}::${stepId}`;
 
 export function isStepRunActive(sessionId, stepId) {
-  return runs.has(runKey(sessionId, stepId));
+  return runner.isActive(runKey(sessionId, stepId));
 }
 
 export function attachClient(sessionId, stepId, res) {
-  return attachSseClient(runs, runKey(sessionId, stepId), res);
-}
-
-function broadcast(key, payload) {
-  const run = runs.get(key);
-  if (!run) return;
-  broadcastSse(run, payload);
+  return runner.attachClient(runKey(sessionId, stepId), res);
 }
 
 /**
@@ -67,56 +64,32 @@ const requestSig = (op, { entryId, feedback, fromDownstream } = {}) =>
 export function startStepRun(sessionId, stepId, { op = 'generate', ...options } = {}) {
   const key = runKey(sessionId, stepId);
   const sig = requestSig(op, options);
-  // Coalesce a second click onto the in-flight run only when it's doing the SAME
-  // work (matching signature) — a reload mid-run re-attaching to its own request.
-  // A different signature (different op, or a refine of a different target/note)
-  // would do different work, so we refuse to coalesce and report `conflict` so
-  // the client doesn't bind its success handler to the running request's frame.
-  //
-  // Only a still-WORKING run blocks. A completed run lingers in `runs` for the
-  // SSE replay grace window (closeJobAfterDelay); coalescing onto it would re-run
-  // no work and replay the stale terminal frame as a false success. A fresh
-  // kickoff in that window starts a new run that replaces the lingering record.
-  const inFlight = runs.get(key);
-  if (inFlight && !inFlight.done) {
-    if (inFlight.sig === sig) return { runId: inFlight.runId, alreadyRunning: true };
-    return { runId: inFlight.runId, alreadyRunning: true, conflict: true, op: inFlight.op };
-  }
-
-  const runId = randomUUID();
-  const record = {
-    runId,
-    clients: [],
-    lastPayload: null,
-    startedAt: new Date().toISOString(),
-    stepId,
-    op,
-    sig,
-    done: false,
-  };
-  runs.set(key, record);
-
-  // Fire-and-forget the work. The outer try/catch is the permitted boundary
-  // use of try/catch in this module — without it an LLM rejection would surface
-  // as an unhandledRejection and kill the process (the POST has already
-  // returned, so there's no `next(err)` to bubble to).
-  (async () => {
-    broadcast(key, { type: 'start', runId, stepId, op });
+  // The factory coalesces a second click onto the in-flight run only when the
+  // signatures match (a reload mid-run re-attaching to its own request). A
+  // different signature (different op, or a refine of a different target/note)
+  // does different work, so it reports `conflict` + the live run's `op` (via
+  // `meta`) instead — the client then refuses to bind its success handler to the
+  // running request's frame. A finished run lingering in the replay grace window
+  // does NOT block: the factory starts a fresh run that replaces it.
+  return runner.start(key, async ({ runId, broadcast }) => {
+    broadcast({ type: 'start', runId, stepId, op });
     // Best-effort phase emitter handed to the conductor; an onProgress throw
     // must never break the run.
     const onProgress = (frame) => {
       try {
-        broadcast(key, { type: 'progress', runId, ...frame });
+        broadcast({ type: 'progress', runId, ...frame });
       } catch (err) {
         console.error(`❌ story-builder progress emit failed: ${err?.message || err}`);
       }
     };
 
+    // Own the error frame here (and swallow) so the factory's generic catch
+    // doesn't double-emit; this frame carries `stepId`/`op` the client reads.
     try {
       const result = op === 'refine'
         ? await refineStep(sessionId, stepId, { ...options, onProgress })
         : await generateStep(sessionId, stepId, { ...options, onProgress });
-      broadcast(key, {
+      broadcast({
         type: 'complete',
         runId,
         stepId,
@@ -133,21 +106,10 @@ export function startStepRun(sessionId, stepId, { op = 'generate', ...options } 
     } catch (err) {
       const message = (err?.message || String(err)).slice(0, 1000);
       console.error(`❌ story-builder ${op} failed — session=${sessionId.slice(0, 8)} step=${stepId} ${message}`);
-      broadcast(key, { type: 'error', runId, stepId, op, error: message, failedAt: new Date().toISOString() });
-    } finally {
-      // Mark terminal so a kickoff during the grace window starts a fresh run
-      // instead of coalescing onto this finished one.
-      record.done = true;
-      // Hold the SSE list open briefly so a client that attached just after the
-      // terminal frame still replays it (matches the auto-runner / mediaJobQueue).
-      // Pass this record as `expectedJob` so a replacement run that took the key
-      // during the window isn't evicted by this timer.
-      closeJobAfterDelay(runs, key, undefined, record);
+      broadcast({ type: 'error', runId, stepId, op, error: message, failedAt: new Date().toISOString() });
     }
-  })();
-
-  return { runId, alreadyRunning: false };
+  }, { sig, meta: { op } });
 }
 
 // Export internals for tests.
-export const __testing = { runs, runKey };
+export const __testing = { runs: runner.runs, runKey };

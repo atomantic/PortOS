@@ -37,7 +37,7 @@ import { spawn as ptySpawn } from 'node-pty';
 import { join, resolve } from 'path';
 import { ensureDir, PATHS, tryReadFile } from './fileUtils.js';
 import { createStreamingAnsiStripper, stripAnsi } from './ansiStrip.js';
-import { createImmediateFallbackSignalDetector } from './aiToolkit/errorDetection.js';
+import { createImmediateFallbackSignalDetector, createTerminalModelErrorDetector } from './aiToolkit/errorDetection.js';
 import { getRunsPath, finalizeRunRecord, emitRunStarted, registerActiveRun, unregisterActiveRun } from '../services/runner.js';
 import { registerExternalSession, unregisterExternalSession, isExternalSessionAttached } from '../services/shell.js';
 import {
@@ -221,6 +221,12 @@ ${prompt}`;
   let firstResponseAt = null;
   let finalized = false;
   const detectImmediateFallbackSignal = createImmediateFallbackSignalDetector();
+  // One-shot-only: a terminal model-id rejection (Bedrock 400 / Anthropic 404)
+  // leaves the TUI idle at an unanswered prompt, so without this the run idles to
+  // a false success and the error screen is scraped as the "response". Scoped here
+  // (not in the shared fallback detector) so it can't kill a long-running agent
+  // that merely echoes the error line — see errorDetection.js for the rationale.
+  const detectTerminalModelError = createTerminalModelErrorDetector();
   // True once outputBuffer overflowed OUTPUT_BUFFER_HEADROOM and the head was
   // dropped. We warn once and surface it in the run record so /runs can flag
   // responses where the fallback path may have lost the start.
@@ -326,7 +332,7 @@ ${prompt}`;
         }
         onData?.(stripped);
 
-        const fallbackSignal = detectImmediateFallbackSignal(stripped);
+        const fallbackSignal = detectImmediateFallbackSignal(stripped) || detectTerminalModelError(stripped);
         if (fallbackSignal) {
           finish({
             success: false,

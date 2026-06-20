@@ -367,7 +367,6 @@ export default function ImageGen() {
       }).catch(() => {});
     }).catch(() => {});
     return () => eventSourceRef.current?.close();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Re-probe status whenever the effective backend changes — flipping the
@@ -413,7 +412,6 @@ export default function ImageGen() {
       setPrompt((p) => appendTriggerWords(p, match.triggerWords));
     }
     setSearchParams((prev) => { const next = new URLSearchParams(prev); next.delete('lora'); return next; }, { replace: true });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams, availableLoras]);
 
   // Inbound params from Media History / Send-to-i2i (?prompt=…&modelId=…&seed=…
@@ -448,7 +446,6 @@ export default function ImageGen() {
       n.delete('initImageFile');
       return n;
     }, { replace: true });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Strip EXIF orientation by re-encoding the image with rotation baked into

@@ -135,7 +135,7 @@ export default function Shell() {
     } else {
       initialOptsRef.current = {};
     }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 
   // Fetch app folders from the managed apps list
   useEffect(() => {

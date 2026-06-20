@@ -4,6 +4,11 @@ import { request, API_BASE } from './apiCore.js';
 // Apps
 export const getApps = (options) => request('/apps', options);
 export const getApp = (id) => request(`/apps/${id}`);
+// Resolves what the app's `workTracker` field ('auto' or explicit) actually
+// points to: { configured, resolved, host, forge, source }. Read-only — the
+// caller (EditAppModal) owns its own .catch fallback, so default to silent.
+export const getAppWorkTracker = (id, options) =>
+  request(`/apps/${id}/work-tracker`, { silent: true, ...options });
 export const createApp = (data) => request('/apps', {
   method: 'POST',
   body: JSON.stringify(data)

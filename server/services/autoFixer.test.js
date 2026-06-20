@@ -70,6 +70,38 @@ describe('autoFixer — defer + noteFallbackHandled', () => {
     });
   });
 
+  it('logs the actual failure reason + category + exit code inline (not just the provider)', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      errorEvents.emit('error', {
+        code: 'AI_PROVIDER_EXECUTION_FAILED',
+        message: 'AI provider Claude Code CLI execution failed: …',
+        severity: 'error',
+        canAutoFix: true,
+        timestamp: Date.now(),
+        context: {
+          runId: 'run-bad-model',
+          provider: 'Claude Code CLI',
+          providerId: 'claude-code',
+          model: 'claude-opus-4-8',
+          exitCode: 1,
+          errorDetails: 'API Error (claude-opus-4-8): 400 The provided model identifier is invalid.',
+          errorAnalysis: { category: 'model-not-found', message: 'API Error (claude-opus-4-8): 400 The provided model identifier is invalid.' },
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      const line = logSpy.mock.calls.map((c) => c[0]).find((m) => typeof m === 'string' && m.includes('AI provider error detected'));
+      expect(line).toBeTruthy();
+      expect(line).toContain('model identifier is invalid'); // the real reason, inline
+      expect(line).toContain('model-not-found'); // the category
+      expect(line).toContain('exit=1');
+      expect(line).toContain('claude-opus-4-8'); // the model
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
   it('never creates an investigation task for a content/safety refusal', async () => {
     // A refusal is self-explanatory (the model declined the prompt) — there's
     // nothing for a CoS agent to investigate, and the fallback path handles
