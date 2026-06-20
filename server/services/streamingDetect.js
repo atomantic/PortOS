@@ -611,10 +611,17 @@ function rewriteLabelInBlock(block, label, oldP, newP) {
   if (label === 'api') {
     if (hasInlinePortsObj) portsObjPats.push(`(\\bapi\\s*:\\s*)${NUM}`);  // ports: { api: N }
     if (!hasPortsReference) {
+      // The env `PORT` (and its `|| N` fallback) mirror the runtime API port,
+      // so they move WITH an inline ports object — fine to rewrite either way.
       blockPats.push(`(${PORT_KEY}[^,}\\n]*?\\|\\|\\s*['"]?)${NUM}`);     // PORT: … || N (fallback)
       blockPats.push(`(${PORT_KEY})${NUM}`);                             // env PORT: N
-      blockPats.push(`(\\bport\\s*:\\s*)${NUM}`);                        // port: N
     }
+    // A bare lowercase `port:` is parseEcosystemConfig's LAST-RESORT derivation
+    // (`directPortMatch`), consulted only when there's no ports object/env. So
+    // rewrite it ONLY when there's no explicit ports source — otherwise it'd
+    // hit an unrelated same-valued field (e.g. `metadata: { port: 6000 }`) the
+    // parser never read as the API port.
+    if (!hasExplicitPortsSource) blockPats.push(`(\\bport\\s*:\\s*)${NUM}`); // port: N
   } else {
     const hasDevUiKey = /\bdevUi\s*:\s*\d/.test(block);
     if (hasInlinePortsObj) {
@@ -919,6 +926,11 @@ export async function writeEcosystemPortEdits(repoPath, remap, edits) {
     const forwardCollision = hasRemap && hasEdits && targetedOlds.some(o => remapNews.includes(o));
     const reverseCollision = hasRemap && hasEdits && remapOlds.some(o => targetedNews.includes(o));
 
+    // Both directions collide ⇒ neither single ordering is safe (a true value
+    // cycle, e.g. swapping ui↔devUi between two same-block ports). Resolving it
+    // would need per-edit placeholder staging; that's an exotic intra-block port
+    // swap well outside the shared/derived cases this path targets, so we
+    // conservatively reject (a safe 422 — no corruption) rather than build it.
     if (forwardCollision && reverseCollision) {
       return { file: name, changed: false, remapApplied: false, applied: [], unapplied: edits || [] };
     }
