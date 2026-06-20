@@ -803,6 +803,16 @@ export async function writeEcosystemPorts(repoPath, remap) {
  * `{ file, changed, applied, unapplied }`; `unapplied` lists edits whose process
  * block or label literal wasn't found (caller decides whether that's a failure).
  *
+ * **All-or-nothing.** The rewrite is computed in full (pure) before any I/O, and
+ * the file is written ONLY when every edit applied (`unapplied` is empty). A
+ * batch where some labels are rewritable and others aren't (e.g. one port is a
+ * literal `PORT: 6000` but a same-valued sibling lives in an external
+ * `ports: PORTS.client` reference) must NOT persist its applied subset — the
+ * caller turns a non-empty `unapplied` into a 422 and skips the registry update,
+ * so a partial on-disk write would leave config and registry inconsistent for a
+ * request that "failed". When `unapplied` is non-empty the file is left
+ * untouched and `applied` is reported empty (nothing was persisted).
+ *
  * @param {string} repoPath
  * @param {Array<{processName:string,label:string,oldPort:number,newPort:number}>} edits
  */
@@ -812,6 +822,12 @@ export async function writeEcosystemPortsByProcess(repoPath, edits) {
     if (!existsSync(filePath)) continue;
     const content = await readFile(filePath, 'utf-8');
     const { content: updated, applied, unapplied } = rewriteEcosystemPortsByProcess(content, edits);
+    // Don't persist a partial batch: if any edit couldn't be applied, the
+    // caller rejects the whole request, so writing the applied subset would
+    // desync config from the (un-updated) registry.
+    if (unapplied.length > 0) {
+      return { file: name, changed: false, applied: [], unapplied };
+    }
     if (updated !== content) {
       await atomicWrite(filePath, updated);
       return { file: name, changed: true, applied, unapplied };

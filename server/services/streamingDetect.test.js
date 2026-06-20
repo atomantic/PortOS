@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { parseEcosystemConfig, rewriteEcosystemPorts, rewriteEcosystemPortsByProcess, writeEcosystemPorts } from './streamingDetect.js';
+import { parseEcosystemConfig, rewriteEcosystemPorts, rewriteEcosystemPortsByProcess, writeEcosystemPorts, writeEcosystemPortsByProcess } from './streamingDetect.js';
 
 describe('parseEcosystemConfig', () => {
   it('captures arbitrary *_PORT env vars and labels them by camelCased stem', () => {
@@ -604,5 +604,46 @@ describe('writeEcosystemPorts', () => {
     writeFileSync(join(dir, 'ecosystem.config.cjs'), `module.exports = { apps: [{ name: 'x', script: 's.js', env: { PORT: 4321 } }] };\n`);
     const result = await writeEcosystemPorts(dir, [[5173, 6000]]);
     expect(result).toEqual({ file: 'ecosystem.config.cjs', changed: false });
+  });
+});
+
+describe('writeEcosystemPortsByProcess', () => {
+  let dir;
+  afterEach(() => { if (dir) rmSync(dir, { recursive: true, force: true }); dir = null; });
+
+  it('writes the file when every targeted edit applies', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'eco-tgt-'));
+    writeFileSync(join(dir, 'ecosystem.config.cjs'),
+      `module.exports = { apps: [{ name: 'srv', script: 's.js', ports: { api: 6000, ui: 6000 } }] };\n`);
+    const result = await writeEcosystemPortsByProcess(dir, [
+      { processName: 'srv', label: 'ui', oldPort: 6000, newPort: 7000 },
+    ]);
+    expect(result.changed).toBe(true);
+    expect(result.unapplied).toHaveLength(0);
+    expect(readFileSync(join(dir, 'ecosystem.config.cjs'), 'utf-8')).toContain('ui: 7000');
+  });
+
+  it('does NOT persist a partial batch — leaves the file untouched when any edit is unapplied', async () => {
+    // 'srv' has a literal api PORT (rewritable) but the same-valued ui lives in
+    // a ports: PORTS.client reference (not reachable in-block). The route 422s
+    // such a request, so the applied subset must NOT be written to disk — else
+    // config diverges from the un-updated registry for a "failed" request.
+    dir = mkdtempSync(join(tmpdir(), 'eco-tgt-'));
+    const original = `const PORTS = { client: { ui: 6000 } };
+module.exports = { apps: [
+  { name: 'srv', script: 's.js', env: { PORT: 6000 } },
+  { name: 'srv-ui', script: 'npx', ports: PORTS.client }
+] };
+`;
+    writeFileSync(join(dir, 'ecosystem.config.cjs'), original);
+    const result = await writeEcosystemPortsByProcess(dir, [
+      { processName: 'srv', label: 'api', oldPort: 6000, newPort: 7000 },      // applies
+      { processName: 'srv-ui', label: 'ui', oldPort: 6000, newPort: 7001 },    // unapplied (external const)
+    ]);
+    expect(result.changed).toBe(false);
+    expect(result.applied).toHaveLength(0); // nothing persisted
+    expect(result.unapplied.length).toBeGreaterThan(0);
+    // File is byte-for-byte unchanged — no partial write.
+    expect(readFileSync(join(dir, 'ecosystem.config.cjs'), 'utf-8')).toBe(original);
   });
 });
