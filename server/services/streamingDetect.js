@@ -599,9 +599,15 @@ function rewriteLabelInBlock(block, label, oldP, newP) {
   // `PORT`/`'PORT'`/`` `PORT` `` followed by `:` and optional whitespace.
   const PORT_KEY = "['\"`]?\\bPORT\\b['\"`]?\\s*:\\s*";
 
+  // The `api:`/`ui:`/`devUi:` label-key patterns are only valid inside an
+  // INLINE `ports: { ... }` object — that's the only place parseEcosystemConfig
+  // reads them. In a `ports: PORTS.x` reference block (or a bare env/args
+  // block) an unscoped `api: N` could match a same-valued lowercase metadata
+  // field and falsely report applied while the real (external/env) source is
+  // untouched, so the label-key patterns are gated on hasInlinePortsObj.
   const pats = [];
   if (label === 'api') {
-    pats.push(`(\\bapi\\s*:\\s*)${NUM}`);                            // ports: { api: N }
+    if (hasInlinePortsObj) pats.push(`(\\bapi\\s*:\\s*)${NUM}`);     // ports: { api: N }
     if (!hasPortsReference) {
       pats.push(`(${PORT_KEY}[^,}\\n]*?\\|\\|\\s*['"]?)${NUM}`);     // PORT: … || N (fallback)
       pats.push(`(${PORT_KEY})${NUM}`);                             // env PORT: N
@@ -609,8 +615,10 @@ function rewriteLabelInBlock(block, label, oldP, newP) {
     }
   } else {
     const hasDevUiKey = /\bdevUi\s*:\s*\d/.test(block);
-    pats.push(label === 'devUi' ? `(\\bdevUi\\s*:\\s*)${NUM}` : `(\\bui\\s*:\\s*)${NUM}`); // exact key
-    if (label === 'devUi' && !hasDevUiKey) pats.push(`(\\bui\\s*:\\s*)${NUM}`); // relabeled-from-ui source
+    if (hasInlinePortsObj) {
+      pats.push(label === 'devUi' ? `(\\bdevUi\\s*:\\s*)${NUM}` : `(\\bui\\s*:\\s*)${NUM}`); // exact key
+      if (label === 'devUi' && !hasDevUiKey) pats.push(`(\\bui\\s*:\\s*)${NUM}`); // relabeled-from-ui source
+    }
     if (!hasPortsReference) {
       // VITE_PORT/--port mirror the runtime UI/dev port: rewrite them alongside
       // an inline ports key (desirable — config + runtime move together) or as
