@@ -542,6 +542,39 @@ module.exports = { apps: [
     expect(ports.devUi).toBe(6000); // sibling untouched
   });
 
+  it('does NOT report success from an env-only ui rewrite when the ui port comes from a ports reference', () => {
+    // ui is derived from `ports: PORTS.client` (external const), but the block
+    // ALSO carries a same-valued VITE_PORT. Rewriting only VITE_PORT would be
+    // false success — the parser re-derives ui from the unchanged const. So the
+    // env/args fallback must be skipped for a reference block → unapplied.
+    const content = `const PORTS = { client: { ui: 6000 } };
+module.exports = { apps: [
+  { name: 'srv-ui', script: 'npx', args: 'vite --host', ports: PORTS.client, env: { VITE_PORT: 6000 } }
+] };
+`;
+    const r = rewriteEcosystemPortsByProcess(content, [
+      { processName: 'srv-ui', label: 'ui', oldPort: 6000, newPort: 7000 },
+    ]);
+    expect(r.applied).toHaveLength(0);
+    expect(r.unapplied).toHaveLength(1);
+    expect(r.content).toBe(content); // VITE_PORT untouched, no false rewrite
+  });
+
+  it('still rewrites VITE_PORT/--port for a ui edit when there is no ports reference (inline or sole source)', () => {
+    // No ports reference → VITE_PORT is the real source; rewrite it.
+    const content = `module.exports = { apps: [
+  { name: 'srv', script: 's.js', env: { PORT: 5555 } },
+  { name: 'srv-ui', script: 'npx', args: 'vite --host --port 5556', env: { VITE_PORT: 5556 } }
+] };
+`;
+    const r = rewriteEcosystemPortsByProcess(content, [
+      { processName: 'srv-ui', label: 'ui', oldPort: 5556, newPort: 7000 },
+    ]);
+    expect(r.applied).toHaveLength(1);
+    expect(r.content).toContain('VITE_PORT: 7000');
+    expect(r.content).toContain('--port 7000');
+  });
+
   it('reports an edit as unapplied when the process name is not found', () => {
     const content = `module.exports = { apps: [{ name: 'srv', script: 's.js', env: { PORT: 6000 } }] };`;
     const r = rewriteEcosystemPortsByProcess(content, [

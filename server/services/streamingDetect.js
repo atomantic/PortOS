@@ -611,8 +611,16 @@ function rewriteLabelInBlock(block, label, oldP, newP) {
     const hasDevUiKey = /\bdevUi\s*:\s*\d/.test(block);
     pats.push(label === 'devUi' ? `(\\bdevUi\\s*:\\s*)${NUM}` : `(\\bui\\s*:\\s*)${NUM}`); // exact key
     if (label === 'devUi' && !hasDevUiKey) pats.push(`(\\bui\\s*:\\s*)${NUM}`); // relabeled-from-ui source
-    pats.push(`(['"\`]?\\bVITE_PORT\\b['"\`]?\\s*:\\s*)${NUM}`);    // env VITE_PORT: N
-    pats.push(`(--port\\s+)${NUM}`);                               // args --port N
+    if (!hasPortsReference) {
+      // VITE_PORT/--port mirror the runtime UI/dev port: rewrite them alongside
+      // an inline ports key (desirable — config + runtime move together) or as
+      // the sole source when there's no ports object. But NOT for a ports
+      // REFERENCE whose external const the parser actually reads — rewriting
+      // only the env/args value there is false success (the unchanged const
+      // re-derives the old port on the next refresh).
+      pats.push(`(['"\`]?\\bVITE_PORT\\b['"\`]?\\s*:\\s*)${NUM}`); // env VITE_PORT: N
+      pats.push(`(--port\\s+)${NUM}`);                            // args --port N
+    }
     if (!hasExplicitPortsSource) pats.push(`(${PORT_KEY})${NUM}`); // bare PORT of a UI-named process
   }
 
