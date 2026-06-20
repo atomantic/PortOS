@@ -54,10 +54,10 @@ describe('AutopilotPanel', () => {
     renderPanel({ id: 's1', targetFormat: 'comic' });
     await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
     fireEvent.click(screen.getByRole('button', { name: /run autopilot/i }));
+    // Rounds are NOT sent as per-run overrides — the server resolves them from
+    // the persisted setting (which start() saves first when loaded).
     await waitFor(() => expect(startPipelineAutopilot).toHaveBeenCalledWith(
-      's1',
-      { includeVisual: true, fileGaps: false, maxArcVerifyRounds: 3, maxEditorialRounds: 2 },
-      { silent: true },
+      's1', { includeVisual: true, fileGaps: false }, { silent: true },
     ));
   });
 
@@ -71,10 +71,40 @@ describe('AutopilotPanel', () => {
     fireEvent.click(checks[1]); // fileGaps -> true
     fireEvent.click(screen.getByRole('button', { name: /run autopilot/i }));
     await waitFor(() => expect(startPipelineAutopilot).toHaveBeenCalledWith(
-      's1',
-      { includeVisual: false, fileGaps: true, maxArcVerifyRounds: 3, maxEditorialRounds: 2 },
+      's1', { includeVisual: false, fileGaps: true }, { silent: true },
+    ));
+  });
+
+  it('persists edited rounds before starting and never sends them as overrides', async () => {
+    getSettings.mockResolvedValue({ pipelineEditorialChecks: { maxArcVerifyRounds: 6, maxEditorialRounds: 4 } });
+    renderPanel({ id: 's1', targetFormat: 'comic' });
+    await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('button', { name: /options/i }));
+    // Wait for the persisted setting to populate the input, then edit it.
+    await waitFor(() => expect(screen.getByLabelText('Arc verify rounds')).toHaveValue(6));
+    fireEvent.change(screen.getByLabelText('Arc verify rounds'), { target: { value: '9' } });
+    fireEvent.blur(screen.getByLabelText('Arc verify rounds'));
+    fireEvent.click(screen.getByRole('button', { name: /run autopilot/i }));
+    // The edited value is persisted (clamped) and the start payload omits rounds.
+    await waitFor(() => expect(patchSettingsSlice).toHaveBeenCalledWith(
+      'pipelineEditorialChecks',
+      expect.objectContaining({ maxArcVerifyRounds: 9 }),
       { silent: true },
     ));
+    expect(startPipelineAutopilot).toHaveBeenCalledWith(
+      's1', { includeVisual: true, fileGaps: false }, { silent: true },
+    );
+  });
+
+  it('clears to the default (not 0) when a round input is emptied', async () => {
+    renderPanel({ id: 's1', targetFormat: 'comic' });
+    await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('button', { name: /options/i }));
+    const input = screen.getByLabelText('Arc verify rounds');
+    fireEvent.change(input, { target: { value: '' } });
+    fireEvent.blur(input);
+    // Number('') === 0 would skip the gate — clearing must fall back to the default.
+    await waitFor(() => expect(input).toHaveValue(3));
   });
 
   it('shows a paused banner with residual findings and a Resume action', async () => {
