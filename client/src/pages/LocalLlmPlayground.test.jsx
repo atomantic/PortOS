@@ -83,7 +83,9 @@ describe('LocalLlmPlayground', () => {
 
     renderPlayground();
 
-    await waitFor(() => expect(screen.getByText(/In memory/)).toBeTruthy());
+    // The badge reports residency AND the model's VRAM footprint (60 GB), and
+    // the header chip summarizes the count.
+    await waitFor(() => expect(screen.getByText(/In memory · 60 GB/)).toBeTruthy());
     expect(screen.getByText(/1 in memory/)).toBeTruthy();
   });
 
