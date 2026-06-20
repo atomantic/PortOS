@@ -68,9 +68,22 @@ function applyProcPortRemap(proc, procRemap) {
 }
 
 export function reassignCollidingPorts(processes, takenPorts) {
-  // `used` accumulates every port that is off-limits: externally taken, plus
-  // each port a process is allowed to keep, plus each freshly assigned one.
-  const used = new Set((takenPorts || []).filter(Number.isInteger));
+  const taken = new Set((takenPorts || []).filter(Number.isInteger));
+
+  // Every non-taken port referenced anywhere will be KEPT by some process, so a
+  // replacement must avoid all of them up front — otherwise a colliding process
+  // listed BEFORE the process that owns a valid 6000-range port could be handed
+  // that port (LLM output order isn't guaranteed), needlessly moving the owner.
+  const keptValues = new Set();
+  for (const proc of processes || []) {
+    for (const value of collectPortRefs(proc)) {
+      if (!taken.has(value)) keptValues.add(value);
+    }
+  }
+
+  // `used` is everything off-limits to pickFree: taken + all kept values +
+  // freshly assigned. `assigned` also blocks reuse within this run.
+  const used = new Set([...taken, ...keptValues]);
   const assigned = new Set();
   const pickFree = () => {
     let p = REASSIGN_FROM;
@@ -85,17 +98,18 @@ export function reassignCollidingPorts(processes, takenPorts) {
   // map; but two DIFFERENT processes that both reference the same port — e.g.
   // both server PORT and client VITE_PORT at 5173 — must get DISTINCT ports, or
   // the "collision-free" guarantee fails. A process keeps its port only if it's
-  // free and not already claimed by an earlier process; otherwise it's bumped.
+  // not taken and not already claimed by an earlier process; otherwise it's bumped.
+  const claimed = new Set(); // non-taken values an earlier process already kept
   const reassignments = [];
   for (const proc of processes || []) {
     const procRemap = new Map(); // old -> new, scoped to this process
     for (const value of new Set(collectPortRefs(proc))) {
-      if (used.has(value)) {
+      if (taken.has(value) || claimed.has(value)) {
         const np = pickFree();
         procRemap.set(value, np);
         reassignments.push([value, np]);
       } else {
-        used.add(value); // claim it so a later process can't reuse it
+        claimed.add(value); // this process keeps it; a later dup will be bumped
       }
     }
     if (procRemap.size > 0) applyProcPortRemap(proc, procRemap);

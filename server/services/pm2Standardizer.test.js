@@ -45,6 +45,18 @@ describe('reassignCollidingPorts', () => {
     expect(reassigned).toEqual([[3000, 6000]]);
   });
 
+  it('does not bump a later process off its valid port to satisfy an earlier collision', () => {
+    // server (listed first) is on a taken port; client already holds a valid
+    // 6000. The replacement for server must skip 6000 rather than steal it.
+    const processes = [
+      { name: 'server', env: { PORT: 5173 } },
+      { name: 'client', env: { VITE_PORT: 6000 } }
+    ];
+    reassignCollidingPorts(processes, [5173]);
+    expect(processes[1].env.VITE_PORT).toBe(6000); // untouched
+    expect(processes[0].env.PORT).toBe(6001); // skipped 6000
+  });
+
   it('gives distinct ports to two processes that both reference the same taken port', () => {
     // The deterministic guarantee: even if the LLM puts both server PORT and
     // client VITE_PORT on 5173 (a taken default), the result must be collision-free.
