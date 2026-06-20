@@ -50,10 +50,15 @@ issue number shown in that scene's header when present (omit it otherwise).
 
 Do NOT flag: a deliberate change the description explains (a character who "pulls
 on a coat", a prop someone "sets down and walks away from"), a difference that is
-just a closer or wider framing of the same thing, a detail mentioned in only one
-shot (absence is not a contradiction), or framing/eyeline/shot-type issues (other
-checks cover those). Only a genuine contradiction for the SAME entity across two
-shots of the SAME scene is a break. If nothing breaks appearance/prop continuity,
+just a closer or wider framing of the same thing, an INCIDENTAL detail mentioned
+in passing in only one shot (background dressing the other shots simply don't
+re-describe — its absence elsewhere is not a contradiction), or framing/eyeline/
+shot-type issues (other checks cover those). Note the distinction for props: a
+prop that is ESTABLISHED as held, worn, or placed by a character and then silently
+gone (or transformed) in a later shot of the same scene with no action removing it
+IS a break and SHOULD be flagged — that is the vanish/appear/transform case above,
+not an incidental one-shot mention. Only a genuine contradiction for the SAME
+entity across two shots of the SAME scene is a break. If nothing breaks appearance/prop continuity,
 return an empty `findings` array — do not invent issues.
 
 ## Output contract
