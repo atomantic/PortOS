@@ -537,6 +537,37 @@ describe('getReviewWithStaleness (#1345)', () => {
     expect(review.comments.find((c) => c.checkId === 'comic.lettering-density').stale).toBe(false);
   });
 
+  it('keeps a comic.panel-rhythm finding fresh on a text-only edit but stales it on a panel-count change (#1314 layout source)', async () => {
+    // panel-rhythm reads only per-page panel COUNTS (comicScript.layout), so a
+    // text edit that leaves the counts intact must not stale it; adding a panel must.
+    const comicIssue = (extraDesc) => [{
+      id: 'i1', seriesId: 's1', number: 1,
+      stages: { comicPages: { pages: [
+        { panels: [{ description: 'p1a', caption: '', dialogue: [], sfx: '' }] },           // splash
+        { panels: [{ description: 'p1b', caption: '', dialogue: [], sfx: '' }] },           // splash → back-to-back splash run fires
+        ...(extraDesc ? [{ panels: [{ description: extraDesc, caption: '', dialogue: [], sfx: '' }] }] : []),
+      ] } },
+    }];
+    issuesState = comicIssue(null);
+    const { findings } = await runEditorialChecks('s1', { checkIds: ['comic.panel-rhythm'] });
+    expect(findings.some((f) => f.checkId === 'comic.panel-rhythm')).toBe(true);
+    reviewState = { comments: findings.map((f) => ({ ...f, status: 'open' })) };
+    // Text-only edit: reword page 1's description; panel counts [1,1] unchanged.
+    issuesState = [{
+      id: 'i1', seriesId: 's1', number: 1,
+      stages: { comicPages: { pages: [
+        { panels: [{ description: 'reworded entirely', caption: 'new caption', dialogue: [], sfx: '' }] },
+        { panels: [{ description: 'p1b', caption: '', dialogue: [], sfx: '' }] },
+      ] } },
+    }];
+    let review = await getReviewWithStaleness('s1');
+    expect(review.comments.find((c) => c.checkId === 'comic.panel-rhythm').stale).toBe(false);
+    // Adding a third page changes the layout → the finding stales.
+    issuesState = comicIssue('a new third page');
+    review = await getReviewWithStaleness('s1');
+    expect(review.comments.find((c) => c.checkId === 'comic.panel-rhythm').stale).toBe(true);
+  });
+
   it('keeps a scene finding fresh when the manuscript changes (reverseOutline-only source)', async () => {
     outlineState = { scenes: [{ id: 'scene-001', issueNumber: 1, heading: 'Talking heads', anchorQuote: 'q', components: { narrative: false, action: false, dialogue: true } }] };
     await seedReviewFromRun();

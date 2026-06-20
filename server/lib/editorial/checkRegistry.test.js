@@ -3278,12 +3278,13 @@ describe('comic-pacing bundle (#1314)', () => {
   const issue = (number, counts) => ({ number, stages: { comicPages: { pages: counts.map(page) } } });
 
   describe('comic.panel-rhythm — deterministic', () => {
-    it('is registered as an issue-scoped deterministic pacing check over comicScript.pacing', () => {
+    it('is registered as an issue-scoped deterministic pacing check over comicScript.layout', () => {
       const check = getCheck(PANEL_RHYTHM);
       expect(check.kind).toBe('deterministic');
       expect(check.scope).toBe('issue');
       expect(check.category).toBe('pacing');
-      expect(check.sources).toEqual(['comicScript.pacing']);
+      // Layout-only source: rhythm reads panel COUNTS, so a text edit must not stale it.
+      expect(check.sources).toEqual(['comicScript.layout']);
     });
 
     it('only runs when at least one issue has comic content', () => {

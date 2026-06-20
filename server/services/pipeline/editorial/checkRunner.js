@@ -105,11 +105,18 @@ const SOURCE_RESOLVERS = {
   // text it read changes (and an unrelated image render — `panel.imageJobId` — does
   // NOT stale it, since only the lettering fields are projected).
   comicScript: ({ comicScripts }) => canonicalStringify(comicScripts ?? null),
-  // The comic-pacing checks' content (#1314) — its own token so a visual
-  // `description` edit stales a page-turn finding without staling a lettering
-  // finding (which doesn't read `description`), and vice-versa. Same page-grouped
-  // shape as the lettering projection plus `description`.
+  // The page-turn check's content (#1314) — its own token because it reads each
+  // panel's visual `description` (+ caption/dialogue/SFX text) for the LLM digest.
+  // A description edit stales a page-turn finding without staling a lettering one
+  // (which doesn't read `description`), and vice-versa.
   'comicScript.pacing': ({ comicPacingContent }) => canonicalStringify(comicPacingContent ?? null),
+  // The panel-rhythm check's content (#1314) — LAYOUT ONLY: it reads nothing but
+  // the per-page panel COUNT (splash/crowding/grid-monotony verdicts), so its
+  // fingerprint is just the counts. A text-only edit (rewording a caption or
+  // description without adding/removing a panel) must NOT stale a rhythm finding —
+  // the verdict cannot have changed. Distinct from `comicScript.pacing` (which
+  // hashes the text the page-turn LLM reads).
+  'comicScript.layout': ({ comicLayoutContent }) => canonicalStringify(comicLayoutContent ?? null),
 };
 
 // Flatten the storyboard scenes across every issue into the `{ issueNumber, scene }`
@@ -192,6 +199,19 @@ function projectComicPacingContent(issues) {
         sfx: typeof panel?.sfx === 'string' ? panel.sfx : '',
       })),
     })),
+  }));
+}
+
+// Project the loaded issues down to LAYOUT ONLY — the per-page panel COUNT — for
+// the panel-rhythm check (#1314), which reads nothing but counts (`analyzePanelRhythm`).
+// Fingerprinting only the count means a text-only edit (reword a caption/description
+// without changing how many panels a page has) does NOT stale a rhythm finding,
+// while adding/removing/moving a panel does. Per-page array order is preserved so a
+// reordering that changes the run structure (splash runs, monotony) re-hashes.
+function projectComicLayoutContent(issues) {
+  return comicLetteringIssues(issues).map(({ number, pages }) => ({
+    number,
+    panelCounts: pages.map((p) => (Array.isArray(p?.panels) ? p.panels.length : 0)),
   }));
 }
 
@@ -340,10 +360,11 @@ export async function runEditorialChecks(seriesId, options = {}) {
   // description edit stales a pacing finding without staling a lettering one.
   const comicScripts = projectComicLetteringContent(issues);
   const comicPacingContent = projectComicPacingContent(issues);
+  const comicLayoutContent = projectComicLayoutContent(issues);
   // Resolve every source token once — each finding's fingerprint reads from this
   // so the editor flags it `stale` when the content that check actually read (its
   // declared `sources`) drifts (#1345, #1387).
-  const resolvedSources = resolveSources({ manuscript, canon, series, reverseOutline, reverseOutlinePlotlines, editorialArcs, editorialArcsComplete, storyboardScenes, comicScripts, comicPacingContent });
+  const resolvedSources = resolveSources({ manuscript, canon, series, reverseOutline, reverseOutlinePlotlines, editorialArcs, editorialArcsComplete, storyboardScenes, comicScripts, comicPacingContent, comicLayoutContent });
   const baseCtx = {
     seriesId,
     series,
@@ -522,7 +543,7 @@ export async function getReviewWithStaleness(seriesId) {
   const needsStoryboards = evaluable.some((c) => checkSources(checkFor(c.checkId)).includes('storyboard.shots'));
   const needsComicScript = evaluable.some((c) => {
     const s = checkSources(checkFor(c.checkId));
-    return s.includes('comicScript') || s.includes('comicScript.pacing');
+    return s.includes('comicScript') || s.includes('comicScript.pacing') || s.includes('comicScript.layout');
   });
   const needsIssues = needsStoryboards || needsComicScript;
   const series = await getSeries(seriesId);
@@ -541,7 +562,8 @@ export async function getReviewWithStaleness(seriesId) {
   const storyboardScenes = collectStoryboardScenes(issues);
   const comicScripts = projectComicLetteringContent(issues);
   const comicPacingContent = projectComicPacingContent(issues);
-  const resolvedSources = resolveSources({ manuscript: sectionsCorpus(sections), canon, series, reverseOutline, reverseOutlinePlotlines, editorialArcs, editorialArcsComplete, storyboardScenes, comicScripts, comicPacingContent });
+  const comicLayoutContent = projectComicLayoutContent(issues);
+  const resolvedSources = resolveSources({ manuscript: sectionsCorpus(sections), canon, series, reverseOutline, reverseOutlinePlotlines, editorialArcs, editorialArcsComplete, storyboardScenes, comicScripts, comicPacingContent, comicLayoutContent });
   return {
     ...review,
     comments: review.comments.map((c) => {

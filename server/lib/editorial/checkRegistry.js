@@ -117,13 +117,18 @@ const SEVERITIES = CHECK_SEVERITIES;
 //                                 the runner fingerprints ONLY the lettering fields for this
 //                                 token, so a visual-description edit doesn't stale a
 //                                 lettering finding.
-//   - 'comicScript.pacing'      — the same parsed comic pages, but for the comic-PACING
-//                                 checks (#1314: panel rhythm + page-turn beats). Distinct
-//                                 token from 'comicScript' because the page-turn check ALSO
-//                                 reads each panel's visual `description` — so its fingerprint
-//                                 must move on a description edit while the lettering token's
-//                                 stays put (and vice-versa). Same `ctx.issues` source, no
-//                                 extra I/O.
+//   - 'comicScript.pacing'      — the same parsed comic pages, for the page-turn-beats
+//                                 LLM check (#1314), which reads each panel's visual
+//                                 `description` (+ caption/dialogue/SFX text) for its prompt
+//                                 digest. Distinct token from 'comicScript' because that
+//                                 broader read means a description edit must stale a page-turn
+//                                 finding while the lettering token stays put (and vice-versa).
+//   - 'comicScript.layout'      — LAYOUT ONLY (per-page panel COUNT) for the panel-rhythm
+//                                 check (#1314), which reads nothing but counts. Separate from
+//                                 'comicScript.pacing' so a text-only edit (reword a caption /
+//                                 description without adding/removing a panel) does NOT stale a
+//                                 rhythm finding — the splash/crowding/grid verdict can't have
+//                                 changed. All three comic tokens share `ctx.issues` (no extra I/O).
 export const EDITORIAL_SOURCES = Object.freeze([
   'manuscript',
   'canon',
@@ -138,6 +143,7 @@ export const EDITORIAL_SOURCES = Object.freeze([
   'storyboard.shots',
   'comicScript',
   'comicScript.pacing',
+  'comicScript.layout',
 ]);
 
 // Default per-run finding cap for user-defined checks (#1346) — mirrors the
@@ -4509,7 +4515,7 @@ export const EDITORIAL_CHECKS = [
   },
   {
     id: 'comic.panel-rhythm',
-    sources: ['comicScript.pacing'],
+    sources: ['comicScript.layout'],
     label: 'Comic panel rhythm & splash usage',
     description:
       'Deterministic scan of each issue\'s parsed comic-page layout for reading-rhythm problems: splash-page overuse (too high a share of full-page splashes), back-to-back splashes that blow the page budget, overcrowded pages that cram too many beats, and monotonous grids (the same multi-panel count repeated page after page). Reads the parsed comic script (page → panel breakdown), not the prose manuscript.',

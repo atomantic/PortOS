@@ -163,4 +163,15 @@ describe('authoredRevealSummary', () => {
     expect(authoredRevealSummary(null)).toBe('');
     expect(authoredRevealSummary({ beats: [{ kind: 'hook', note: 'q' }] })).toBe('');
   });
+
+  it('neutralizes markdown fence delimiters in reveal/cliffhanger notes (prompt-fence safety)', () => {
+    // The summary is embedded in a ``` fenced block in the page-turn prompt, so a
+    // note containing backticks must not be able to close the fence early.
+    const out = authoredRevealSummary({
+      beats: [{ kind: 'reveal', note: 'the ```secret``` is revealed' }],
+      cliffhangers: [{ note: 'a ``` cliff' }],
+    });
+    expect(out).not.toContain('`');
+    expect(out).toContain("'secret'");
+  });
 });

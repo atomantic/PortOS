@@ -42,16 +42,19 @@ export function comicSpreadLayout(pageCount) {
   return layout;
 }
 
-// Collapse whitespace, neutralize markdown fence delimiters, and truncate a text
-// field to `max` chars for the digest. The rendered layout is embedded inside a
-// ``` fenced block in the page-turn prompt, so a backtick run in authored script
-// text (a panel that quotes code/markdown) could otherwise close the fence early
-// and turn the rest of the prompt into unstructured text. Backtick fidelity is
-// irrelevant to the model's pacing judgment, so collapse any run of backticks to a
-// single quote — a delimiter-safe transform applied at the one chokepoint every
-// user-authored snippet (description / caption / dialogue / SFX) passes through.
+// Collapse whitespace and neutralize markdown fence delimiters in an authored
+// string. BOTH renderers below (the page-layout digest AND the reader-map summary)
+// embed their output inside a ``` fenced block in the page-turn prompt, so a
+// backtick run in any authored text (a panel or a reveal note that quotes
+// code/markdown) could otherwise close the fence early and turn the rest of the
+// prompt into unstructured text. Backtick fidelity is irrelevant to the model's
+// pacing judgment, so collapse any run of backticks to a single quote. Every
+// user-authored snippet that reaches either fenced block passes through here.
+const fenceSafe = (s) => (typeof s === 'string' ? s.trim().replace(/\s+/g, ' ').replace(/`+/g, "'") : '');
+
+// fenceSafe + truncate to `max` chars, for the per-panel digest snippets.
 const clip = (s, max) => {
-  const t = typeof s === 'string' ? s.trim().replace(/\s+/g, ' ').replace(/`+/g, "'") : '';
+  const t = fenceSafe(s);
   return t.length > max ? `${t.slice(0, max)}…` : t;
 };
 
@@ -211,7 +214,8 @@ export function authoredRevealSummary(readerMap) {
   const revealLines = beats
     .filter((b) => b?.kind === 'reveal')
     .map((b) => {
-      const note = typeof b?.note === 'string' ? b.note.trim() : '';
+      // fenceSafe (not bare trim): the note is embedded in a ``` block in the prompt.
+      const note = fenceSafe(b?.note);
       if (!note) return '';
       const pos = Number.isFinite(b?.atArcPosition) ? ` (arc position ${b.atArcPosition})` : '';
       return `- ${note}${pos}`;
@@ -219,7 +223,7 @@ export function authoredRevealSummary(readerMap) {
     .filter(Boolean);
   const cliffLines = cliffs
     .map((c) => {
-      const note = typeof c?.note === 'string' ? c.note.trim() : '';
+      const note = fenceSafe(c?.note);
       if (!note) return '';
       const at = Number.isInteger(c?.atIssueBoundary) ? ` (ending issue ${c.atIssueBoundary})` : '';
       return `- ${note}${at}`;
