@@ -34,15 +34,29 @@ describe('reassignCollidingPorts', () => {
     expect(reassigned).toEqual([]);
   });
 
-  it('leaves an intra-config duplicate of a non-taken port untouched (value-keyed remap cannot split a shared value)', () => {
+  it('splits an intra-config duplicate so two processes never share one port', () => {
     const processes = [
       { name: 'a', env: { PORT: 3000 } },
       { name: 'b', env: { PORT: 3000 } }
     ];
     const reassigned = reassignCollidingPorts(processes, []);
-    expect(processes[0].env.PORT).toBe(3000);
-    expect(processes[1].env.PORT).toBe(3000);
-    expect(reassigned).toEqual([]);
+    expect(processes[0].env.PORT).toBe(3000); // first keeps the free port
+    expect(processes[1].env.PORT).toBe(6000); // duplicate bumped to a distinct one
+    expect(reassigned).toEqual([[3000, 6000]]);
+  });
+
+  it('gives distinct ports to two processes that both reference the same taken port', () => {
+    // The deterministic guarantee: even if the LLM puts both server PORT and
+    // client VITE_PORT on 5173 (a taken default), the result must be collision-free.
+    const processes = [
+      { name: 'srv', env: { PORT: 5173 } },
+      { name: 'cli', args: 'vite --host --port 5173', env: { VITE_PORT: 5173 } }
+    ];
+    reassignCollidingPorts(processes, [5173]);
+    expect(processes[0].env.PORT).toBe(6000);
+    expect(processes[1].env.VITE_PORT).toBe(6001);
+    expect(processes[1].args).toBe('vite --host --port 6001');
+    expect(processes[0].env.PORT).not.toBe(processes[1].env.VITE_PORT);
   });
 
   it('never reassigns a colliding port onto a port another process legitimately kept', () => {

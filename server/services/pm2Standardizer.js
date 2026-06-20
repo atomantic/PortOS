@@ -50,53 +50,58 @@ function collectPortRefs(proc) {
  * (env port values + `--port` args) and returns the list of `[old, new]`
  * reassignments. This is the guarantee the LLM prompt can't provide on its own.
  */
-export function reassignCollidingPorts(processes, takenPorts) {
-  const taken = new Set((takenPorts || []).filter(Number.isInteger));
-
-  // Every port the LLM referenced — a replacement must avoid these too, so a
-  // bumped port can't land on a port another process legitimately kept.
-  const referenced = new Set();
-  for (const proc of processes || []) {
-    for (const value of collectPortRefs(proc)) referenced.add(value);
+/** Apply a per-process old→new port map to a process's env values and args. */
+function applyProcPortRemap(proc, procRemap) {
+  if (proc.env && typeof proc.env === 'object') {
+    for (const [key, value] of Object.entries(proc.env)) {
+      if (!isPortKey(key)) continue;
+      const n = Number(value);
+      if (procRemap.has(n)) proc.env[key] = procRemap.get(n);
+    }
   }
+  if (typeof proc.args === 'string') {
+    proc.args = proc.args.replace(/(--port\s+)(\d+)/g, (full, pre, num) => {
+      const n = Number(num);
+      return procRemap.has(n) ? `${pre}${procRemap.get(n)}` : full;
+    });
+  }
+}
 
+export function reassignCollidingPorts(processes, takenPorts) {
+  // `used` accumulates every port that is off-limits: externally taken, plus
+  // each port a process is allowed to keep, plus each freshly assigned one.
+  const used = new Set((takenPorts || []).filter(Number.isInteger));
   const assigned = new Set();
   const pickFree = () => {
     let p = REASSIGN_FROM;
-    while (taken.has(p) || referenced.has(p) || assigned.has(p)) p++;
+    while (used.has(p) || assigned.has(p)) p++;
     assigned.add(p);
+    used.add(p);
     return p;
   };
 
-  // Remap is keyed by old value so every occurrence of a colliding port (env
-  // PORT, VITE_PORT, --port arg) moves together and stays consistent. Two
-  // processes that share an identical non-taken port are left as-is — splitting
-  // a shared value is ambiguous, and that runtime dup is the config's own
-  // choice, not the external collision this guards against.
-  const remap = new Map();
-  for (const value of referenced) {
-    if (taken.has(value)) remap.set(value, pickFree());
-  }
-
-  if (remap.size === 0) return [];
-
-  for (const proc of processes) {
-    if (proc.env && typeof proc.env === 'object') {
-      for (const [key, value] of Object.entries(proc.env)) {
-        if (!isPortKey(key)) continue;
-        const n = Number(value);
-        if (remap.has(n)) proc.env[key] = remap.get(n);
+  // Reassign PER PROCESS, not globally by value. Within one process a shared
+  // value (env PORT + VITE_PORT + --port arg) moves together via the per-proc
+  // map; but two DIFFERENT processes that both reference the same port — e.g.
+  // both server PORT and client VITE_PORT at 5173 — must get DISTINCT ports, or
+  // the "collision-free" guarantee fails. A process keeps its port only if it's
+  // free and not already claimed by an earlier process; otherwise it's bumped.
+  const reassignments = [];
+  for (const proc of processes || []) {
+    const procRemap = new Map(); // old -> new, scoped to this process
+    for (const value of new Set(collectPortRefs(proc))) {
+      if (used.has(value)) {
+        const np = pickFree();
+        procRemap.set(value, np);
+        reassignments.push([value, np]);
+      } else {
+        used.add(value); // claim it so a later process can't reuse it
       }
     }
-    if (typeof proc.args === 'string') {
-      proc.args = proc.args.replace(/(--port\s+)(\d+)/g, (full, pre, num) => {
-        const n = Number(num);
-        return remap.has(n) ? `${pre}${remap.get(n)}` : full;
-      });
-    }
+    if (procRemap.size > 0) applyProcPortRemap(proc, procRemap);
   }
 
-  return [...remap.entries()];
+  return reassignments;
 }
 
 /**
