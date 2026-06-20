@@ -356,22 +356,31 @@ describe('Apps Routes', () => {
       expect(appsService.updateApp).not.toHaveBeenCalled();
     });
 
-    it('rejects (422) a change to a derived uiPort (prod UI served by the API, no literal ui port)', async () => {
+    it('ignores a submitted uiPort on a derived (served-by-API) app and pins it to the derived value', async () => {
       // App has an API process + Vite dev UI but no literal ports.ui, so the
-      // displayed uiPort is derived (= apiPort). Changing it can't persist —
-      // the user must change the API port instead → 422, config untouched.
+      // displayed uiPort is derived (= apiPort). The drawer submits all fields
+      // and never syncs the UI field to a changed API field, so a stale/echoed
+      // or even hand-typed uiPort can't be distinguished from a deliberate
+      // (impossible) independent UI change. The route ignores the submitted
+      // value: no config write for the UI port, no 422, and the stored uiPort is
+      // pinned to the derived value so it keeps tracking the API port.
       const mockApp = { id: 'app-001', name: 'App', type: 'node', repoPath: process.cwd(), apiPort: 6000, uiPort: 6000, devUiPort: 5556 };
       appsService.getAppById.mockResolvedValue(mockApp);
       // Parser yields api + devUi only; ui is derived from api (served-by-API).
       streamingDetect.parseEcosystemFromPath.mockResolvedValue({
         processes: [{ name: 'srv', ports: { api: 6000, devUi: 5556 } }]
       });
+      appsService.updateApp.mockResolvedValue({ ...mockApp });
 
       const response = await request(app).put('/api/apps/app-001').send({ uiPort: 7000 });
 
-      expect(response.status).toBe(422);
+      expect(response.status).toBe(200);
+      // No API port change → no config rewrite for the (ignored) UI port.
       expect(streamingDetect.writeEcosystemPortEdits).not.toHaveBeenCalled();
-      expect(appsService.updateApp).not.toHaveBeenCalled();
+      // Stored uiPort pinned to the derived value (= unchanged apiPort 6000),
+      // NOT the submitted 7000.
+      const updateArg = appsService.updateApp.mock.calls[0][1];
+      expect(updateArg.uiPort).toBe(6000);
     });
 
     it('strips the echoed derived uiPort so it is never persisted as an explicit field', async () => {
@@ -428,23 +437,33 @@ describe('Apps Routes', () => {
       expect(updateArg.apiPort).toBe(7000);
     });
 
-    it('rejects (422) a served-by-API uiPort that diverges from the new API port', async () => {
-      // apiPort→7000 but uiPort sent as 6000: the user is asking for a UI port
-      // that does NOT follow the API port, which a served-by-API app can't do.
-      // Compared against the NEW derived value (7000), 6000 diverges → 422.
+    it('accepts the common API-only edit (drawer echoes the stale derived uiPort) and pins uiPort to the new API port', async () => {
+      // The drawer submits all fields and does NOT sync the UI field when the
+      // API field changes, so a normal API-only edit arrives as
+      // { apiPort: 7000, uiPort: 6000 (old derived) }. That stale echo must NOT
+      // 422 — the API port persists via the value-keyed rewrite and the stored
+      // uiPort is pinned to the NEW derived value (7000), not the echoed 6000.
       const mockApp = { id: 'app-001', name: 'App', type: 'node', repoPath: process.cwd(), apiPort: 6000, uiPort: 6000, devUiPort: 5556 };
       appsService.getAppById.mockResolvedValue(mockApp);
       streamingDetect.parseEcosystemFromPath.mockResolvedValue({
         processes: [{ name: 'srv', ports: { api: 6000, devUi: 5556 } }]
       });
+      appsService.updateApp.mockResolvedValue({ ...mockApp, apiPort: 7000, uiPort: 7000 });
 
       const response = await request(app)
         .put('/api/apps/app-001')
         .send({ apiPort: 7000, uiPort: 6000 });
 
-      expect(response.status).toBe(422);
-      expect(streamingDetect.writeEcosystemPortEdits).not.toHaveBeenCalled();
-      expect(appsService.updateApp).not.toHaveBeenCalled();
+      expect(response.status).toBe(200);
+      // API port persisted; the stale echoed UI port is ignored, not remapped.
+      expect(streamingDetect.writeEcosystemPortEdits).toHaveBeenCalledWith(
+        process.cwd(),
+        [[6000, 7000]],
+        []
+      );
+      const updateArg = appsService.updateApp.mock.calls[0][1];
+      expect(updateArg.uiPort).toBe(7000); // pinned to NEW derived value, not echoed 6000
+      expect(updateArg.apiPort).toBe(7000);
     });
 
     it('does not reject a non-port edit on an app whose top-level ports are not stored (derived)', async () => {

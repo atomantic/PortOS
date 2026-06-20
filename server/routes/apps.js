@@ -509,22 +509,21 @@ router.put('/:id', asyncHandler(async (req, res, next) => {
     const changedKeys = PORT_KEYS.filter(key =>
       Number.isInteger(currentPort[key]) && Number.isInteger(data[key]) && data[key] !== currentPort[key]);
 
-    // Derived-uiPort guard. When an app has an API process plus a Vite dev UI
-    // but no literal `ports.ui`, the prod UI is served by the API and the
-    // displayed `uiPort` is *derived* (= apiPort). There's no independent ui
-    // literal to rewrite, so a uiPort edit can't persist on its own. Compare the
-    // submitted uiPort against the NEW derived value — i.e. the API port AFTER
-    // this same request's apiPort change (if any), so a valid combined save like
-    // `apiPort: 6000→7000, uiPort: 7000` (UI still following the API) is accepted
-    // rather than rejected against the stale old value. Only a uiPort that
-    // diverges from the new API port is a genuine independent change → 422 (the
-    // user must change the API port instead). The modal echoes the derived value
-    // on every save; that echo is stripped below so it's never stored explicitly.
+    // Served-by-API detection. When an app has an API process plus a Vite dev
+    // UI but no literal `ports.ui`, the prod UI is served by the API server, so
+    // the `uiPort` is *derived* (= apiPort) and CANNOT be set independently —
+    // there's no separate UI port literal in the config to rewrite. The edit
+    // drawer always submits every port field and never syncs the UI field to a
+    // changed API field, so an API-only edit arrives as `{ apiPort: <new>,
+    // uiPort: <old derived> }`. We can't distinguish that stale echo from a
+    // deliberate (impossible) independent UI change, so the only coherent
+    // behavior is to IGNORE the submitted uiPort entirely and pin the stored
+    // value to the derived port (= the post-edit API port). That tracks the API
+    // port on every save, never reverts, and never spuriously 422s the common
+    // API-edit path. The user changes this UI port by changing the API port.
     const effectiveApiPort = Number.isInteger(data.apiPort) ? data.apiPort : currentPort.apiPort;
     const derivedUiPort = deriveUiPort(undefined, effectiveApiPort, currentPort.devUiPort);
     const uiIsDerived = currentPort.uiPort === undefined && Number.isInteger(derivedUiPort);
-    const derivedUiChangeRejected =
-      uiIsDerived && Number.isInteger(data.uiPort) && data.uiPort !== derivedUiPort;
     const remap = [];
     const targetedEdits = []; // shared-value keys: rewritten by process + label
     for (const key of changedKeys) {
@@ -539,25 +538,13 @@ router.put('/:id', asyncHandler(async (req, res, next) => {
       remap.push([oldPort, data[key]]);
     }
 
-    // Reject a derived-uiPort change before touching the config (it has no
-    // literal to write — the user must change the API port). Doing this first
-    // keeps the rejected request from persisting any OTHER port edit in the
-    // same PUT.
-    if (derivedUiChangeRejected) {
-      throw new ServerError(
-        `Cannot change ${existing.name}'s UI port directly — its prod UI is served by the API server, so the UI port follows the API port. Change the API port instead.`,
-        { status: 422, code: 'PORT_NOT_PERSISTABLE' }
-      );
-    }
-
-    // Served-by-API apps have NO explicit uiPort in the config — it's derived
-    // from apiPort on read. Pin the stored uiPort to the NEW derived value so it
-    // tracks the (possibly just-changed) API port. Deleting it from this partial
-    // update is NOT enough: updateApp merges omitted fields over the existing
-    // record, so a stale explicit `uiPort` left by an earlier refresh would
-    // survive (truthy) and block re-derivation — after API 6000→7000 the GET
-    // path would keep returning the old 6000. Writing the derived value
-    // overwrites any stale stored port and self-corrects on every API change.
+    // Pin the stored uiPort to the derived value for served-by-API apps (see
+    // above). This both overwrites the drawer's echoed/stale UI field and keeps
+    // the stored value tracking apiPort — deleting `data.uiPort` would NOT be
+    // enough, since updateApp merges omitted fields over the existing record, so
+    // a stale explicit `uiPort` from an earlier refresh would survive (truthy)
+    // and block re-derivation (after API 6000→7000 the GET path would keep
+    // returning 6000). Writing the derived value self-corrects on every save.
     // (uiIsDerived is computed from the parsed CONFIG, not apps.json, so it's
     // true even when apps.json already holds a stale explicit value.)
     if (uiIsDerived) {
