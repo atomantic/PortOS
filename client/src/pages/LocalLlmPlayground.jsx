@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, ArrowRightLeft, Brain, Check, ChevronDown, Clock, Copy, Gauge, MessageSquare, Play, RefreshCw, Send, TriangleAlert, X } from 'lucide-react';
+import { ArrowLeft, ArrowRightLeft, Brain, Check, ChevronDown, Clock, Copy, Cpu, Gauge, MessageSquare, Play, RefreshCw, Send, TriangleAlert, X } from 'lucide-react';
 import BrailleSpinner from '../components/BrailleSpinner';
 import PlaygroundOutput from '../components/localLlm/PlaygroundOutput';
 import toast from '../components/ui/Toast';
 import { copyToClipboard } from '../lib/clipboard';
 import { localLlmTargetKey } from '../lib/localLlmTargetKey';
-import { formatBytes, recommendedRamGb } from '../utils/formatters';
-import { compareLocalLlmModels, getLocalLlmCatalog, getLocalLlmStatus, streamLocalLlmTest } from '../services/api';
+import { formatBytes, recommendedRamGb, timeUntil } from '../utils/formatters';
+import { compareLocalLlmModels, getLoadedLlmModels, getLocalLlmCatalog, getLocalLlmStatus, streamLocalLlmTest } from '../services/api';
 
 const BACKEND_LABEL = { ollama: 'Ollama', lmstudio: 'LM Studio' };
 const DEFAULT_PROMPT = 'Write a short, vivid paragraph about a lighthouse computer waking up at dawn.';
@@ -40,6 +40,16 @@ function formatMs(ms) {
 function formatRate(value) {
   if (!Number.isFinite(value)) return 'n/a';
   return `${value.toFixed(value >= 10 ? 1 : 2)} chars/s`;
+}
+
+// Ollama auto-evicts an idle model after `keep_alive` (5m default). `/api/ps`
+// returns the absolute eviction time as `expires_at`; render it as a short
+// "frees in 5m" countdown so the badge says when the slot frees itself. Reuses
+// the shared future-relative formatter, returning null (badge hidden) once the
+// slot has expired or no eviction time is reported.
+function formatExpiresIn(expiresAt) {
+  const rel = timeUntil(expiresAt, null);
+  return rel ? rel.replace(/^in /, 'frees in ') : null;
 }
 
 function modelSizeLabel(model) {
@@ -91,6 +101,16 @@ function parseTargetsParam(searchParams) {
   const modelId = searchParams.get('model');
   if ((backend === 'ollama' || backend === 'lmstudio') && modelId) return [{ backend, modelId }];
   return [];
+}
+
+// Tiny status pill used for the sidebar memory badges (In memory / Processing /
+// frees-in). Keeps the shared chrome in one place; callers pass only the color.
+function Pill({ className, children }) {
+  return (
+    <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] leading-none ${className}`}>
+      {children}
+    </span>
+  );
 }
 
 function Metric({ icon: Icon, label, value }) {
@@ -201,6 +221,10 @@ export default function LocalLlmPlayground() {
   const [catalogByBackend, setCatalogByBackend] = useState({});
   const [loadingStatus, setLoadingStatus] = useState(true);
   const [modelLoadError, setModelLoadError] = useState('');
+  // Ollama models currently resident in VRAM/unified memory (from `/api/ps`),
+  // polled so the sidebar can flag which models are warm — and which one is
+  // actively serving the in-flight run.
+  const [loadedModels, setLoadedModels] = useState([]);
   const [selectedTargets, setSelectedTargets] = useState(() => parseTargetsParam(searchParams));
   const [activeMode, setActiveMode] = useState(() => searchParams.get('mode') === 'compare' ? 'compare' : 'chat');
   const [runMode, setRunMode] = useState('round-robin');
@@ -271,6 +295,20 @@ export default function LocalLlmPlayground() {
 
   useEffect(() => { loadStatus(); }, [loadStatus]);
 
+  const refreshLoaded = useCallback(() => {
+    return getLoadedLlmModels({ silent: true })
+      .then((res) => { if (mountedRef.current) setLoadedModels(res?.ollama || []); })
+      .catch(() => { if (mountedRef.current) setLoadedModels([]); });
+  }, []);
+
+  // Poll which models are warm in memory. A faster cadence while a run is busy
+  // so the "serving" flag and freed-slot countdown stay live; relaxed when idle.
+  useEffect(() => {
+    refreshLoaded();
+    const interval = setInterval(refreshLoaded, busy ? 2000 : 6000);
+    return () => clearInterval(interval);
+  }, [refreshLoaded, busy]);
+
   const installedTargets = useMemo(() => {
     const models = [];
     for (const backend of ['ollama', 'lmstudio']) {
@@ -292,12 +330,32 @@ export default function LocalLlmPlayground() {
     return models;
   }, [catalogByBackend, status]);
 
+  // Map each warm Ollama model to its installed-row key so the sidebar can
+  // match it. `/api/ps` reports the same tagged name `/api/tags` does, so the
+  // shared `normalizeCatalogId` reconciles `:latest` and casing on both sides.
+  const loadedByKey = useMemo(() => {
+    const map = new Map();
+    for (const m of loadedModels) {
+      const key = normalizeCatalogId('ollama', m.id || m.name);
+      if (key) map.set(key, m);
+    }
+    return map;
+  }, [loadedModels]);
+
   useEffect(() => {
     if (selectedTargets.length > 0 || installedTargets.length === 0) return;
     setSelectedTargets([{ backend: installedTargets[0].backend, modelId: installedTargets[0].modelId }]);
   }, [installedTargets, selectedTargets.length]);
 
   const selectedKeys = useMemo(() => new Set(selectedTargets.map(localLlmTargetKey)), [selectedTargets]);
+  // `/api/ps` reports what's resident but not which model is mid-generation, so
+  // derive the "processing" flag from our own in-flight run: the streaming chat
+  // target, or every target in a busy comparison.
+  const runningKeys = useMemo(() => {
+    if (!busy) return new Set();
+    if (activeMode === 'chat') return streamingChat ? new Set([localLlmTargetKey(streamingChat)]) : new Set();
+    return new Set(selectedTargets.map(localLlmTargetKey));
+  }, [busy, activeMode, streamingChat, selectedTargets]);
   const primaryTarget = selectedTargets[0] || null;
   const canRunChat = Boolean(primaryTarget && prompt.trim());
   const canCompare = selectedTargets.length > 0 && prompt.trim();
@@ -394,10 +452,15 @@ export default function LocalLlmPlayground() {
           </Link>
           <div className="min-w-0">
             <h1 className="text-lg md:text-2xl font-bold text-white truncate">Local LLM Playground</h1>
-            <p className="text-xs md:text-sm text-gray-500 truncate">{selectedTargets.length} model{selectedTargets.length === 1 ? '' : 's'} selected</p>
+            <p className="text-xs md:text-sm text-gray-500 truncate">
+              {selectedTargets.length} model{selectedTargets.length === 1 ? '' : 's'} selected
+              {loadedModels.length > 0 && (
+                <span className="text-port-success"> · {loadedModels.length} in memory</span>
+              )}
+            </p>
           </div>
         </div>
-        <button onClick={loadStatus} disabled={loadingStatus} className="p-2 text-gray-400 hover:text-white transition-colors" title="Refresh models" aria-label="Refresh models">
+        <button onClick={() => { loadStatus(); refreshLoaded(); }} disabled={loadingStatus} className="p-2 text-gray-400 hover:text-white transition-colors" title="Refresh models" aria-label="Refresh models">
           <RefreshCw size={16} className={loadingStatus ? 'animate-spin' : ''} />
         </button>
       </div>
@@ -438,6 +501,9 @@ export default function LocalLlmPlayground() {
                         const size = modelSizeLabel(target);
                         const ram = recommendedRamGb(target?.size, target?.catalog?.size);
                         const tags = getUseCaseTags(target);
+                        const loaded = backend === 'ollama' ? loadedByKey.get(normalizeCatalogId('ollama', target.modelId)) : null;
+                        const running = runningKeys.has(localLlmTargetKey(target));
+                        const freesIn = loaded ? formatExpiresIn(loaded.expiresAt) : null;
                         const detailParts = [
                           target.catalog?.params || target.params,
                           size,
@@ -455,6 +521,24 @@ export default function LocalLlmPlayground() {
                             <span className="min-w-0 flex-1 space-y-1">
                               <span className="block text-sm text-white truncate">{target.name}</span>
                               <span className="block text-xs text-gray-500 truncate">{target.modelId}</span>
+                              {(loaded || running) && (
+                                <span className="flex flex-wrap items-center gap-1 pt-0.5">
+                                  {running ? (
+                                    <Pill className="bg-port-accent/15 text-port-accent">
+                                      <BrailleSpinner />
+                                      Processing
+                                    </Pill>
+                                  ) : (
+                                    <Pill className="bg-port-success/15 text-port-success">
+                                      <Cpu size={10} />
+                                      In memory{Number.isFinite(loaded?.sizeVram) ? ` · ${formatBytes(loaded.sizeVram)}` : ''}
+                                    </Pill>
+                                  )}
+                                  {!running && freesIn && (
+                                    <Pill className="bg-port-border/70 text-gray-400">{freesIn}</Pill>
+                                  )}
+                                </span>
+                              )}
                               {detailParts.length > 0 && (
                                 <span className="block text-[11px] text-gray-400 truncate">{detailParts.join(' · ')}</span>
                               )}

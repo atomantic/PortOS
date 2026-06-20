@@ -5,6 +5,7 @@ import { MemoryRouter } from 'react-router-dom';
 vi.mock('../services/api', () => ({
   getLocalLlmStatus: vi.fn(),
   getLocalLlmCatalog: vi.fn(),
+  getLoadedLlmModels: vi.fn(),
   testLocalLlmModel: vi.fn(),
   streamLocalLlmTest: vi.fn(),
   compareLocalLlmModels: vi.fn(),
@@ -15,7 +16,7 @@ vi.mock('../components/ui/Toast', () => ({
 }));
 
 import LocalLlmPlayground from './LocalLlmPlayground';
-import { getLocalLlmCatalog, getLocalLlmStatus, streamLocalLlmTest } from '../services/api';
+import { getLoadedLlmModels, getLocalLlmCatalog, getLocalLlmStatus, streamLocalLlmTest } from '../services/api';
 
 const renderPlayground = () => render(
   <MemoryRouter initialEntries={['/local-llm/playground?backend=ollama&model=command-r-plus%3A104b']}>
@@ -41,6 +42,7 @@ beforeEach(() => {
     },
     lmstudio: { models: [] },
   });
+  getLoadedLlmModels.mockResolvedValue({ ollama: [] });
   getLocalLlmCatalog.mockResolvedValue({
     backend: 'ollama',
     models: [
@@ -68,6 +70,21 @@ describe('LocalLlmPlayground', () => {
     expect(screen.getByText('104B · 59 GB · ~71 GB RAM')).toBeTruthy();
     expect(screen.getByText('Tool use')).toBeTruthy();
     expect(screen.getByText('Multilingual')).toBeTruthy();
+  });
+
+  it('flags a model that is resident in memory with its VRAM size', async () => {
+    getLoadedLlmModels.mockResolvedValue({
+      ollama: [
+        // Ollama's /api/ps reports the tagged name and VRAM footprint; the
+        // sidebar should reconcile it to the installed row and show "In memory".
+        { id: 'command-r-plus:104b', name: 'command-r-plus:104b', size: 59 * 1024 ** 3, sizeVram: 60 * 1024 ** 3, expiresAt: null },
+      ],
+    });
+
+    renderPlayground();
+
+    await waitFor(() => expect(screen.getByText(/In memory/)).toBeTruthy());
+    expect(screen.getByText(/1 in memory/)).toBeTruthy();
   });
 
   it('renders a live "Thinking" block for streamed reasoning, separate from the answer', async () => {
