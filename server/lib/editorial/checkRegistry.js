@@ -34,7 +34,7 @@ import {
 } from './letteringDensity.js';
 import { analyzeNamePair, findFirstLetterClusters, normalizeName } from './nameSimilarity.js';
 import { findCliches, findModifierStacking } from './cliches.js';
-import { findSaidBookisms, findUnattributedDialogueRuns } from './dialogue.js';
+import { findSaidBookisms, findUnattributedDialogueRuns, attributeDialogueByOwner } from './dialogue.js';
 import { findItalicThoughts } from './italicThoughts.js';
 import {
   findFilterWords,
@@ -1021,6 +1021,82 @@ function buildRosterAppearances(ctx) {
 }
 
 // ---------------------------------------------------------------------------
+// Cast representation & balance (#1312) — three coarse, computable casting
+// signals over the canon + reverse-outline + stitched manuscript:
+//   1) Bechdel co-presence — does ANY scene put two+ non-male characters
+//      together (the structural precondition for two women talking)? Computed
+//      from the reverse-outline's per-scene charactersPresent against
+//      pronoun-inferred gender. A coarse signal, not the full Bechdel test
+//      (we can't read whether the conversation is about a man deterministically).
+//   2) Dialogue share — does one character dominate the spoken lines? Counts
+//      attributed dialogue paragraphs per character (attributeDialogueByOwner)
+//      and flags a lopsided distribution (top speaker over a configurable share).
+//   3) Screen-time balance — when gender is inferable, flag a strongly skewed
+//      appearing cast (e.g. a near-all-male roster) as a representation nudge.
+//
+// All three are advisory (low/medium): representation is an authorial choice and
+// these are signals, not correctness errors. Gender is inferred ONLY from the
+// canon `pronouns` field — absent/ambiguous pronouns yield 'unknown', and the
+// gender-dependent signals stay silent rather than guess (absent ≠ a category).
+// ---------------------------------------------------------------------------
+
+// Infer a coarse gender bucket from a character's canon `pronouns` string. Only
+// the unambiguous subject/object pronoun sets map; anything else (neopronouns,
+// "any", blank, a sentence) is 'unknown' so a gender-dependent signal can opt
+// out rather than miscategorize. Returns 'female' | 'male' | 'nonbinary' | 'unknown'.
+function inferGender(pronouns) {
+  const p = typeof pronouns === 'string' ? pronouns.toLowerCase() : '';
+  if (!p) return 'unknown';
+  const has = (re) => re.test(p);
+  const she = has(/\bshe\b/) || has(/\bher\b/) || has(/\bhers\b/);
+  const he = has(/\bhe\b/) || has(/\bhim\b/) || has(/\bhis\b/);
+  const they = has(/\bthey\b/) || has(/\bthem\b/) || has(/\btheir\b/);
+  // A clean single set wins; a mixed string ("she/they") is ambiguous → unknown,
+  // except she+they / he+they which still read as a definite female/male identity
+  // with a secondary set. Both she AND he present is genuinely ambiguous.
+  if (she && he) return 'unknown';
+  if (she) return 'female';
+  if (he) return 'male';
+  if (they) return 'nonbinary';
+  return 'unknown';
+}
+
+// Normalized name → { char, gender, key } for every named canon character, plus
+// the per-owner whole-token matcher reused for dialogue attribution. Built once
+// per run so the dialogue scan and the co-presence scan share one identity map.
+function buildCastIdentities(ctx) {
+  const chars = Array.isArray(ctx.canon?.characters) ? ctx.canon.characters : [];
+  const identities = [];
+  for (const c of chars) {
+    if (!c || typeof c !== 'object') continue;
+    const name = typeof c.name === 'string' ? c.name.trim() : '';
+    if (!name) continue;
+    const key = normalizeName(name);
+    if (!key) continue;
+    const matcher = characterMatcher(characterNameTokens(c));
+    identities.push({ key, name, gender: inferGender(c.pronouns), matcher });
+  }
+  return identities;
+}
+
+// Resolve a scene's charactersPresent names to canon identity keys (so a scene
+// that lists "Bob" maps to canonical "Robert"). A present name that matches no
+// canon character is dropped — the co-presence signal is canon-relative.
+function sceneCastKeys(scene, identityByKey, identities) {
+  const present = Array.isArray(scene?.charactersPresent) ? scene.charactersPresent : [];
+  const keys = new Set();
+  for (const raw of present) {
+    if (typeof raw !== 'string' || !raw.trim()) continue;
+    const direct = identityByKey.get(normalizeName(raw));
+    if (direct) { keys.add(direct.key); continue; }
+    // Fall back to a token match (the present-name might be an alias surface form).
+    const hit = identities.find((id) => id.matcher && id.matcher.test(raw));
+    if (hit) keys.add(hit.key);
+  }
+  return keys;
+}
+
+// ---------------------------------------------------------------------------
 // Scene component balance (#1296) — reads the cached reverse-outline (#1286)
 // scene segmentation, where each scene carries a `components` boolean signal
 // { narrative, action, dialogue }. The editorial rule: a scene should mix at
@@ -1735,6 +1811,188 @@ export const EDITORIAL_CHECKS = [
           findings.push(comicLetteringFinding(v, number));
         }
       }
+      return findings;
+    },
+  },
+  {
+    id: 'cast.representation-balance',
+    sources: ['manuscript', 'canon', 'reverseOutline'],
+    label: 'Cast representation & balance (Bechdel signal, dialogue share, screen time)',
+    description:
+      'Three coarse, computable casting signals: a Bechdel co-presence signal (does any scene put two or more non-male characters on the page together?), dialogue share (does one character dominate the spoken lines?), and screen-time balance (is the appearing named cast strongly skewed by inferred gender?). Gender is inferred only from the canon pronouns field — characters with absent or ambiguous pronouns are left out of the gender-dependent signals rather than guessed. Advisory: representation is an authorial choice, so these are nudges, not errors.',
+    scope: 'series',
+    kind: 'deterministic',
+    category: 'casting',
+    severityDefault: 'low',
+    defaultEnabled: true,
+    // Reads the stitched manuscript (per-issue sections) for the dialogue-share
+    // scan — so the runner only pays the section-collection I/O when enabled.
+    needsManuscript: true,
+    configSchema: z.object({
+      // Flag dialogue share when the top speaker holds more than this fraction of
+      // all attributed dialogue lines (and there are 2+ speakers). 1 disables it.
+      maxDialogueShare: z.number().min(0.1).max(1).default(0.6),
+      // Minimum attributed dialogue lines before the share check runs — a handful
+      // of lines isn't a meaningful distribution. 0 keeps the floor at 1.
+      minDialogueLines: z.number().int().min(0).max(500).default(12),
+      // Flag screen-time skew when one gender holds more than this fraction of the
+      // gender-known appearing cast (and 2+ are gender-known). 1 disables it.
+      maxGenderShare: z.number().min(0.1).max(1).default(0.8),
+      // Run the Bechdel co-presence signal (any scene with 2+ non-male characters).
+      bechdelSignal: z.boolean().default(true),
+    }),
+    configFields: [
+      {
+        key: 'maxDialogueShare',
+        label: 'Max dialogue share for one speaker',
+        type: 'number',
+        min: 0.1,
+        max: 1,
+        step: 0.05,
+        help: 'Flag when the top speaker holds more than this fraction of all attributed dialogue lines (with 2+ speakers). 1 disables the dialogue-share check.',
+      },
+      {
+        key: 'minDialogueLines',
+        label: 'Minimum attributed dialogue lines',
+        type: 'number',
+        min: 0,
+        max: 500,
+        step: 1,
+        help: 'Skip the dialogue-share check until at least this many dialogue lines can be attributed — a few lines is not a meaningful distribution.',
+      },
+      {
+        key: 'maxGenderShare',
+        label: 'Max screen-time share for one gender',
+        type: 'number',
+        min: 0.1,
+        max: 1,
+        step: 0.05,
+        help: 'Flag when one inferred gender holds more than this fraction of the gender-known appearing cast (with 2+ gender-known characters). 1 disables the screen-time check.',
+      },
+      {
+        key: 'bechdelSignal',
+        label: 'Bechdel co-presence signal',
+        type: 'boolean',
+        help: 'Flag when no scene puts two or more non-male characters on the page together — the structural precondition for the Bechdel test. Needs a reverse outline with charactersPresent.',
+      },
+    ],
+    // Need at least one named canon character to scan for; the per-signal gates
+    // (manuscript for dialogue, outline for Bechdel) are decided inside run().
+    gate: (ctx) => Array.isArray(ctx.canon?.characters)
+      && ctx.canon.characters.some((c) => typeof c?.name === 'string' && c.name.trim()),
+    run: (ctx) => {
+      const cfg = ctx.config || {};
+      const maxDialogueShare = cfg.maxDialogueShare ?? 0.6;
+      const minDialogueLines = Math.max(1, cfg.minDialogueLines ?? 12);
+      const maxGenderShare = cfg.maxGenderShare ?? 0.8;
+      const bechdelSignal = cfg.bechdelSignal !== false;
+
+      const identities = buildCastIdentities(ctx);
+      if (!identities.length) return [];
+      const identityByKey = new Map(identities.map((id) => [id.key, id]));
+      const nameByKey = new Map(identities.map((id) => [id.key, id.name]));
+      const genderByKey = new Map(identities.map((id) => [id.key, id.gender]));
+      const findings = [];
+      const flag = ({ severity, location, problem, suggestion, anchorQuote = '', issueNumber = null }) =>
+        findings.push({ severity, category: 'casting', location, problem, suggestion, anchorQuote, issueNumber });
+
+      // --- 1) Dialogue share ------------------------------------------------
+      // Longest-token-first owners so a beat naming two characters credits the
+      // more specific match first (mirrors characterMatcher's intent).
+      const sections = Array.isArray(ctx.sections) ? ctx.sections : [];
+      const manuscript = sections.map((s) => (typeof s?.content === 'string' ? s.content : '')).join('\n\n');
+      if (maxDialogueShare < 1 && manuscript.trim()) {
+        const owners = identities
+          .filter((id) => id.matcher)
+          .map((id) => ({ key: id.key, matcher: id.matcher }));
+        const { byOwner, attributed } = attributeDialogueByOwner(manuscript, owners);
+        if (attributed >= minDialogueLines && byOwner.size >= 2) {
+          let topKey = null;
+          let topCount = 0;
+          for (const [key, count] of byOwner) {
+            if (count > topCount) { topCount = count; topKey = key; }
+          }
+          const share = topCount / attributed;
+          if (topKey && share > maxDialogueShare) {
+            const pct = Math.round(share * 100);
+            // Escalate above the low floor when one voice utterly dominates (≥80%).
+            flag({
+              severity: escalateSeverity(ctx.severityDefault, share >= 0.8 ? 1 : 0),
+              location: 'Series dialogue',
+              problem: `"${nameByKey.get(topKey)}" speaks about ${pct}% of the attributed dialogue (${topCount} of ${attributed} lines across ${byOwner.size} speaking characters) — one voice dominating the page can flatten the rest of the cast.`,
+              suggestion: `Give other characters more of the conversation, or let scenes play out from a viewpoint where ${nameByKey.get(topKey)} isn't the one talking.`,
+            });
+          }
+        }
+      }
+
+      // --- 2) Bechdel co-presence signal -----------------------------------
+      // The structural precondition: at least one scene with two or more
+      // non-male (female / nonbinary) characters present. Coarse — we can't
+      // deterministically read whether they talk about something other than a
+      // man — so this is a "no scene even has the cast for it" nudge, and it
+      // only fires when gender is actually inferable for the cast.
+      if (bechdelSignal) {
+        const scenes = Array.isArray(ctx.reverseOutline) ? ctx.reverseOutline : [];
+        const scenesWithPresence = scenes.filter(
+          (s) => Array.isArray(s?.charactersPresent) && s.charactersPresent.length > 0
+        );
+        const haveNonMaleKnown = identities.some((id) => id.gender === 'female' || id.gender === 'nonbinary');
+        // Only meaningful when the outline records presence AND the cast has at
+        // least one known non-male character (otherwise "absent" is just unknown
+        // gender, not a representation gap).
+        if (scenesWithPresence.length > 0 && haveNonMaleKnown) {
+          const anyCopresent = scenesWithPresence.some((scene) => {
+            const keys = sceneCastKeys(scene, identityByKey, identities);
+            let nonMale = 0;
+            for (const k of keys) {
+              const g = genderByKey.get(k);
+              if (g === 'female' || g === 'nonbinary') nonMale += 1;
+              if (nonMale >= 2) return true;
+            }
+            return false;
+          });
+          if (!anyCopresent) {
+            flag({
+              severity: ctx.severityDefault,
+              location: 'Series cast',
+              problem: 'No scene puts two or more non-male characters on the page together (per the reverse-outline scene presence) — the structural precondition for the Bechdel test is never met. Two women (or non-male characters) are never in a scene to talk to each other.',
+              suggestion: 'Add at least one scene where two non-male characters share the page and a conversation that isn\'t about a man — or, if the story\'s premise genuinely calls for it, treat this as expected and disable the signal.',
+            });
+          }
+        }
+      }
+
+      // --- 3) Screen-time balance (gender skew) -----------------------------
+      // Over the APPEARING named cast (tied to prose appearances so canon-only
+      // bloat doesn't trip it), is one inferable gender strongly over-represented?
+      if (maxGenderShare < 1) {
+        const rows = buildRosterAppearances(ctx);
+        const appearingKeys = new Set(
+          rows.filter((r) => r.appearedInIssues.length > 0).map((r) => normalizeName(r.name))
+        );
+        const counts = { female: 0, male: 0, nonbinary: 0 };
+        for (const key of appearingKeys) {
+          const g = genderByKey.get(key);
+          if (g === 'female' || g === 'male' || g === 'nonbinary') counts[g] += 1;
+        }
+        const known = counts.female + counts.male + counts.nonbinary;
+        if (known >= 2) {
+          const entries = Object.entries(counts).filter(([, n]) => n > 0);
+          const [topGender, topN] = entries.reduce((a, b) => (b[1] > a[1] ? b : a));
+          const share = topN / known;
+          if (share > maxGenderShare) {
+            const pct = Math.round(share * 100);
+            flag({
+              severity: ctx.severityDefault,
+              location: 'Series cast',
+              problem: `Of the ${known} appearing named characters whose gender is inferable, ${pct}% are ${topGender} (${topN} of ${known}) — a strongly skewed cast. Representation is an authorial choice, but a near-monochrome roster is worth a deliberate look.`,
+              suggestion: 'Consider whether some named roles could be cast more diversely, or confirm the skew is intentional for the story and disable the screen-time signal.',
+            });
+          }
+        }
+      }
+
       return findings;
     },
   },

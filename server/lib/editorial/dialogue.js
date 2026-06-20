@@ -302,3 +302,62 @@ export function findUnattributedDialogueRuns(text, opts = {}) {
   flush();
   return out;
 }
+
+/**
+ * Attribute spoken dialogue paragraphs to the cast for a coarse dialogue-share
+ * signal (cast representation & balance, #1312). For each dialogue paragraph
+ * (one carrying a quoted span) the speaker is inferred from the NON-quoted beat
+ * around the quote — exactly the surface the attribution-clarity scan reads — so
+ * a name spoken INSIDE the dialogue ("I saw Bram") doesn't mis-attribute the
+ * line. A paragraph is credited to the FIRST owner whose token matches the beat;
+ * paragraphs whose speaker can't be resolved (no name/alias in the beat) are
+ * counted as `unattributed` rather than guessed, per the absent-vs-empty rule.
+ *
+ * Deliberately coarse: it measures *who is credited with speaking lines*, not a
+ * precise turn-by-turn transcript. That's the right grain for a balance ratio
+ * (does one character dominate the dialogue?), and it stays pure + dependency-
+ * free — the caller supplies the per-owner matchers it already builds for canon.
+ *
+ * @param {string} text
+ * @param {Array<{ key: string, matcher: RegExp }>} owners
+ *   one entry per character; `matcher` is a non-global whole-token regex (e.g.
+ *   the one checkRegistry's characterMatcher builds). Longest-token-first order
+ *   is the caller's responsibility (it governs which owner wins a beat that
+ *   names two characters — first match wins).
+ * @returns {{ byOwner: Map<string, number>, total: number, attributed: number, unattributed: number }}
+ *   byOwner — dialogue-paragraph count per matched owner key (only owners with ≥1
+ *   line appear); total — all dialogue paragraphs; attributed/unattributed split.
+ */
+export function attributeDialogueByOwner(text, owners) {
+  const byOwner = new Map();
+  const result = { byOwner, total: 0, attributed: 0, unattributed: 0 };
+  if (typeof text !== 'string' || !text) return result;
+  const list = (Array.isArray(owners) ? owners : []).filter(
+    (o) => o && typeof o.key === 'string' && o.matcher instanceof RegExp
+  );
+
+  const re = /[^\n]+/g;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    const para = m[0];
+    if (!para.trim() || !hasQuotedSpan(para)) continue;
+    result.total += 1;
+    // The beat is the narration around the quote — the only place a tag/name
+    // legitimately attributes the speaker (a name inside the quote is spoken text).
+    const beat = para.replace(QUOTED_SPAN_RE, ' ').replace(/\s+/g, ' ').trim();
+    let owner = null;
+    if (beat) {
+      for (const o of list) {
+        o.matcher.lastIndex = 0; // non-global, but reset defensively
+        if (o.matcher.test(beat)) { owner = o.key; break; }
+      }
+    }
+    if (owner) {
+      result.attributed += 1;
+      byOwner.set(owner, (byOwner.get(owner) || 0) + 1);
+    } else {
+      result.unattributed += 1;
+    }
+  }
+  return result;
+}

@@ -3071,3 +3071,136 @@ Panel 1
     expect(getCheck(COMIC).run(ctx).length).toBeGreaterThan(0);
   });
 });
+
+describe('cast.representation-balance — deterministic check (#1312)', () => {
+  const REP = 'cast.representation-balance';
+  const sec = (number, content) => ({ number, content });
+  const runRep = (canon, { sections = [], reverseOutline = [], config = {} } = {}) =>
+    getCheck(REP).run({ canon, sections, reverseOutline, config, severityDefault: 'low' });
+  const dialogue = (findings) => findings.find((f) => f.location === 'Series dialogue');
+  const bechdel = (findings) => findings.find((f) => /Bechdel/.test(f.problem));
+  const screenTime = (findings) => findings.find((f) => /strongly skewed cast/.test(f.problem));
+  // Config that silences the two OTHER signals so a test can isolate one.
+  const only = (over) => ({ maxDialogueShare: 1, maxGenderShare: 1, bechdelSignal: false, ...over });
+
+  it('declares the expected scope / kind / sources', () => {
+    const c = getCheck(REP);
+    expect(c.kind).toBe('deterministic');
+    expect(c.scope).toBe('series');
+    expect(c.category).toBe('casting');
+    expect(c.needsManuscript).toBe(true);
+    expect(c.sources).toEqual(expect.arrayContaining(['manuscript', 'canon', 'reverseOutline']));
+  });
+
+  it('flags a dominating speaker by dialogue share', () => {
+    const canon = { characters: [{ name: 'Aria', pronouns: 'she/her' }, { name: 'Bram', pronouns: 'he/him' }] };
+    // 4 Aria lines, 1 Bram line → Aria = 80% of 5 attributed lines.
+    const content = [
+      '"One," said Aria.',
+      '"Two," said Aria.',
+      '"Three," said Aria.',
+      '"Four," said Aria.',
+      '"Five," said Bram.',
+    ].join('\n');
+    const findings = runRep(canon, {
+      sections: [sec(1, content)],
+      config: only({ maxDialogueShare: 0.6, minDialogueLines: 5 }),
+    });
+    const f = dialogue(findings);
+    expect(f).toBeTruthy();
+    expect(f.category).toBe('casting');
+    expect(f.severity).toBe('medium'); // 80% → escalated above the low floor
+    expect(f.problem).toMatch(/"Aria" speaks about 80%/);
+  });
+
+  it('skips the dialogue-share check below the minimum line floor', () => {
+    const canon = { characters: [{ name: 'Aria' }, { name: 'Bram' }] };
+    const content = '"Hi," said Aria.\n"Hey," said Bram.';
+    const findings = runRep(canon, {
+      sections: [sec(1, content)],
+      config: only({ maxDialogueShare: 0.4, minDialogueLines: 12 }),
+    });
+    expect(dialogue(findings)).toBeUndefined();
+  });
+
+  it('flags a missing Bechdel co-presence signal when no scene pairs non-male characters', () => {
+    const canon = {
+      characters: [
+        { name: 'Aria', pronouns: 'she/her' },
+        { name: 'Mara', pronouns: 'she/her' },
+        { name: 'Bram', pronouns: 'he/him' },
+      ],
+    };
+    // Aria only ever shares the page with Bram; Aria + Mara never co-present.
+    const reverseOutline = [
+      { heading: 'S1', charactersPresent: ['Aria', 'Bram'] },
+      { heading: 'S2', charactersPresent: ['Mara', 'Bram'] },
+    ];
+    const findings = runRep(canon, { reverseOutline, config: only({ bechdelSignal: true }) });
+    expect(bechdel(findings)).toBeTruthy();
+  });
+
+  it('passes the Bechdel signal when two non-male characters share a scene', () => {
+    const canon = {
+      characters: [
+        { name: 'Aria', pronouns: 'she/her' },
+        { name: 'Mara', pronouns: 'they/them' },
+      ],
+    };
+    const reverseOutline = [{ heading: 'S1', charactersPresent: ['Aria', 'Mara'] }];
+    const findings = runRep(canon, { reverseOutline, config: only({ bechdelSignal: true }) });
+    expect(bechdel(findings)).toBeUndefined();
+  });
+
+  it('stays silent on Bechdel when no scene presence is recorded', () => {
+    const canon = { characters: [{ name: 'Aria', pronouns: 'she/her' }, { name: 'Mara', pronouns: 'she/her' }] };
+    const findings = runRep(canon, { reverseOutline: [], config: only({ bechdelSignal: true }) });
+    expect(bechdel(findings)).toBeUndefined();
+  });
+
+  it('flags a strongly gender-skewed appearing cast', () => {
+    const canon = {
+      characters: [
+        { name: 'Al', pronouns: 'he/him' },
+        { name: 'Bo', pronouns: 'he/him' },
+        { name: 'Cy', pronouns: 'he/him' },
+        { name: 'Di', pronouns: 'he/him' },
+        { name: 'Eve', pronouns: 'she/her' },
+      ],
+    };
+    // All five appear; 4/5 = 80% male → over an 80%? No, must EXCEED. Use 0.7.
+    const content = 'Al, Bo, Cy, Di, and Eve all gathered at dawn.';
+    const findings = runRep(canon, {
+      sections: [sec(1, content)],
+      config: only({ maxGenderShare: 0.7 }),
+    });
+    const f = screenTime(findings);
+    expect(f).toBeTruthy();
+    expect(f.problem).toMatch(/80% are male/);
+  });
+
+  it('leaves unknown/ambiguous-pronoun characters out of the gender signals', () => {
+    const canon = {
+      characters: [
+        { name: 'Al', pronouns: 'he/him' },
+        { name: 'Bo' }, // no pronouns → unknown
+        { name: 'Cy', pronouns: 'she/he' }, // ambiguous → unknown
+      ],
+    };
+    const content = 'Al, Bo, and Cy gathered.';
+    // Only Al is gender-known → known < 2 → no screen-time finding.
+    const findings = runRep(canon, { sections: [sec(1, content)], config: only({ maxGenderShare: 0.5 }) });
+    expect(screenTime(findings)).toBeUndefined();
+  });
+
+  it('gate requires at least one named canon character', () => {
+    const c = getCheck(REP);
+    expect(c.gate({ canon: { characters: [] } })).toBeFalsy();
+    expect(c.gate({ canon: { characters: [{ name: 'Aria' }] } })).toBe(true);
+  });
+
+  it('tolerates empty canon / sections / outline without throwing', () => {
+    expect(() => runRep({ characters: [] })).not.toThrow();
+    expect(runRep({ characters: [{}, { name: '' }] }, { sections: [sec(1, 'x')] })).toEqual([]);
+  });
+});
