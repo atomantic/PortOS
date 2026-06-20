@@ -75,31 +75,31 @@ describe('AutopilotPanel', () => {
     ));
   });
 
-  it('persists edited rounds before starting and never sends them as overrides', async () => {
+  it('sends only edited rounds as overrides AND persists them; untouched gates omitted', async () => {
     getSettings.mockResolvedValue({ pipelineEditorialChecks: { maxArcVerifyRounds: 6, maxEditorialRounds: 4 } });
     renderPanel({ id: 's1', targetFormat: 'comic' });
     await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
     fireEvent.click(screen.getByRole('button', { name: /options/i }));
-    // Wait for the persisted setting to populate the input, then edit it.
+    // Wait for the persisted setting to populate the input, then edit only arc.
     await waitFor(() => expect(screen.getByLabelText('Arc verify rounds')).toHaveValue(6));
     fireEvent.change(screen.getByLabelText('Arc verify rounds'), { target: { value: '9' } });
     fireEvent.blur(screen.getByLabelText('Arc verify rounds'));
     fireEvent.click(screen.getByRole('button', { name: /run autopilot/i }));
-    // The edited value is persisted (clamped) and the start payload omits rounds.
-    await waitFor(() => expect(patchSettingsSlice).toHaveBeenCalledWith(
+    // The edited value is BOTH persisted and sent as a per-run override (so it's
+    // effective even if the save fails), while the untouched editorial gate is
+    // sent in neither (server resolves it from the persisted setting).
+    await waitFor(() => expect(startPipelineAutopilot).toHaveBeenCalledWith(
+      's1', { includeVisual: true, fileGaps: false, maxArcVerifyRounds: 9 }, { silent: true },
+    ));
+    expect(patchSettingsSlice).toHaveBeenCalledWith(
       'pipelineEditorialChecks',
       expect.objectContaining({ maxArcVerifyRounds: 9 }),
       { silent: true },
-    ));
-    // Only the edited gate is persisted — the untouched editorial value must NOT
-    // be written (its on-disk value is preserved by the merge).
+    );
     expect(patchSettingsSlice).not.toHaveBeenCalledWith(
       'pipelineEditorialChecks',
       expect.objectContaining({ maxEditorialRounds: expect.anything() }),
       expect.anything(),
-    );
-    expect(startPipelineAutopilot).toHaveBeenCalledWith(
-      's1', { includeVisual: true, fileGaps: false }, { silent: true },
     );
   });
 

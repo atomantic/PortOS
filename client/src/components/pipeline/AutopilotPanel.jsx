@@ -245,16 +245,18 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
   const start = useCallback(async () => {
     setStarting(true);
     setPlan(null);
-    // Persist ONLY the gates the user edited (clamped), then start with no per-run
-    // round overrides — the server resolves the run from the saved setting.
-    // Persisting an untouched field would clobber its on-disk value with a display
-    // default; omitting it lets patchSettingsSlice's merge preserve it. Awaiting
-    // the persist closes the persist→read race.
-    const roundPatch = {};
-    if (arcEditedRef.current) roundPatch.maxArcVerifyRounds = clampRound(arcRounds, DEFAULT_ARC_ROUNDS);
-    if (editorialEditedRef.current) roundPatch.maxEditorialRounds = clampRound(editorialRounds, DEFAULT_EDITORIAL_ROUNDS);
-    if (Object.keys(roundPatch).length) await persistRounds(roundPatch);
-    const res = await startPipelineAutopilot(seriesId, { includeVisual, fileGaps }, { silent: true })
+    // Collect ONLY the gates the user edited (clamped, real values — never the
+    // display defaults of untouched gates, which would mask a saved setting). Send
+    // them as per-run overrides AND persist them: the override makes the edit
+    // effective for THIS run even if the save fails (persist is best-effort,
+    // server precedence is per-run → setting → default), and the persist makes it
+    // the saved default for next time. Untouched gates send nothing, so the server
+    // resolves them from the persisted setting.
+    const roundOverrides = {};
+    if (arcEditedRef.current) roundOverrides.maxArcVerifyRounds = clampRound(arcRounds, DEFAULT_ARC_ROUNDS);
+    if (editorialEditedRef.current) roundOverrides.maxEditorialRounds = clampRound(editorialRounds, DEFAULT_EDITORIAL_ROUNDS);
+    if (Object.keys(roundOverrides).length) await persistRounds(roundOverrides);
+    const res = await startPipelineAutopilot(seriesId, { includeVisual, fileGaps, ...roundOverrides }, { silent: true })
       .catch((err) => { toast.error(err.message || 'Could not start autopilot'); return null; });
     setStarting(false);
     if (!res) return;
