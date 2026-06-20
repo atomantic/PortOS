@@ -1083,13 +1083,16 @@ export const editorialCustomCheckUpdateSchema = z.object(editorialCustomCheckSha
 // `maxArcVerifyRounds` / `maxEditorialRounds` bound the autopilot's verify→resolve
 // convergence loops before it pauses for human review (0 = skip that gate
 // entirely). Persisted defaults the autopilot reads when a run doesn't pass a
-// per-run override; raised cap (20) so a stubborn arc can be given more rounds.
+// per-run override; raised cap so a stubborn arc can be given more rounds. The
+// cap is exported so the autopilot route schema (and any UI) share one ceiling
+// instead of re-hardcoding it and drifting.
+export const MAX_CONVERGENCE_ROUNDS = 20;
 export const pipelineEditorialChecksSettingsSchema = z.object({
   checks: z.record(editorialCheckConfigSchema).optional(),
   customChecks: z.array(z.object({}).passthrough()).optional(),
   readinessGate: z.enum(['noOpenHigh', 'noOpenHighOrMedium', 'none']).optional(),
-  maxArcVerifyRounds: z.number().int().min(0).max(20).optional(),
-  maxEditorialRounds: z.number().int().min(0).max(20).optional(),
+  maxArcVerifyRounds: z.number().int().min(0).max(MAX_CONVERGENCE_ROUNDS).optional(),
+  maxEditorialRounds: z.number().int().min(0).max(MAX_CONVERGENCE_ROUNDS).optional(),
 }).strict();
 
 // Cursor-context payload for the CD-bridge suggest route — identical shape to

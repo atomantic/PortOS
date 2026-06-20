@@ -30,6 +30,30 @@ const clampRound = (n, fallback) => {
   return Math.max(ROUND_MIN, Math.min(ROUND_MAX, Math.round(v)));
 };
 
+// A single convergence-round field for the Options popover. Allows '' mid-edit
+// (so the field can be cleared) and clamps + persists the chosen value on blur.
+function RoundInput({ id, label, settingKey, value, setValue, defaultValue, persist }) {
+  return (
+    <div className="flex items-center gap-2">
+      <label htmlFor={id} className="text-xs text-gray-300">{label}</label>
+      <input
+        id={id}
+        type="number"
+        min={ROUND_MIN}
+        max={ROUND_MAX}
+        value={value}
+        onChange={(e) => setValue(e.target.value === '' ? '' : Number(e.target.value))}
+        onBlur={() => {
+          const v = clampRound(value, defaultValue);
+          setValue(v);
+          persist({ [settingKey]: v });
+        }}
+        className="w-16 px-2 py-1 rounded text-xs bg-port-bg border border-port-border text-gray-200"
+      />
+    </div>
+  );
+}
+
 const SEVERITY_COLORS = {
   high: 'text-port-error border-port-error/40 bg-port-error/10',
   medium: 'text-port-warning border-port-warning/40 bg-port-warning/10',
@@ -275,40 +299,24 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
             File CoS tasks for gaps it can&apos;t resolve
           </label>
           <div className="flex flex-wrap gap-4 pt-1">
-            <div className="flex items-center gap-2">
-              <label htmlFor="autopilot-arc-rounds" className="text-xs text-gray-300">Arc verify rounds</label>
-              <input
-                id="autopilot-arc-rounds"
-                type="number"
-                min={ROUND_MIN}
-                max={ROUND_MAX}
-                value={arcRounds}
-                onChange={(e) => setArcRounds(e.target.value === '' ? '' : Number(e.target.value))}
-                onBlur={() => {
-                  const v = clampRound(arcRounds, DEFAULT_ARC_ROUNDS);
-                  setArcRounds(v);
-                  persistRounds({ maxArcVerifyRounds: v });
-                }}
-                className="w-16 px-2 py-1 rounded text-xs bg-port-bg border border-port-border text-gray-200"
-              />
-            </div>
-            <div className="flex items-center gap-2">
-              <label htmlFor="autopilot-editorial-rounds" className="text-xs text-gray-300">Editorial rounds</label>
-              <input
-                id="autopilot-editorial-rounds"
-                type="number"
-                min={ROUND_MIN}
-                max={ROUND_MAX}
-                value={editorialRounds}
-                onChange={(e) => setEditorialRounds(e.target.value === '' ? '' : Number(e.target.value))}
-                onBlur={() => {
-                  const v = clampRound(editorialRounds, DEFAULT_EDITORIAL_ROUNDS);
-                  setEditorialRounds(v);
-                  persistRounds({ maxEditorialRounds: v });
-                }}
-                className="w-16 px-2 py-1 rounded text-xs bg-port-bg border border-port-border text-gray-200"
-              />
-            </div>
+            <RoundInput
+              id="autopilot-arc-rounds"
+              label="Arc verify rounds"
+              settingKey="maxArcVerifyRounds"
+              value={arcRounds}
+              setValue={setArcRounds}
+              defaultValue={DEFAULT_ARC_ROUNDS}
+              persist={persistRounds}
+            />
+            <RoundInput
+              id="autopilot-editorial-rounds"
+              label="Editorial rounds"
+              settingKey="maxEditorialRounds"
+              value={editorialRounds}
+              setValue={setEditorialRounds}
+              defaultValue={DEFAULT_EDITORIAL_ROUNDS}
+              persist={persistRounds}
+            />
           </div>
           <p className="text-[11px] text-gray-500">
             How many auto-resolve rounds each gate attempts before pausing for human review (0 skips the gate, max {ROUND_MAX}). Saved as the default and reused on Resume.
