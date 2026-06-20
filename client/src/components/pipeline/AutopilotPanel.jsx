@@ -135,30 +135,31 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
   const [fileGaps, setFileGaps] = useState(false);
   const [arcRounds, setArcRounds] = useState(DEFAULT_ARC_ROUNDS);
   const [editorialRounds, setEditorialRounds] = useState(DEFAULT_EDITORIAL_ROUNDS);
-  // The round inputs only hold a *meaningful* value once settings have loaded OR
-  // the user has edited them — before that they show display defaults we must NOT
-  // persist or act on (doing so would clobber / ignore a higher saved setting).
-  const [roundsReady, setRoundsReady] = useState(false);
-  const roundsEditedRef = useRef(false);
+  // Per-field dirty flags. Until a field is edited its input shows a display
+  // default we must NOT persist (that would clobber a higher saved setting on
+  // the untouched gate). Tracked per-field so editing one gate never discards
+  // the loaded value of the other. start() persists ONLY the edited fields; the
+  // untouched ones keep their on-disk value via patchSettingsSlice's merge.
+  const arcEditedRef = useRef(false);
+  const editorialEditedRef = useRef(false);
   const [canon, setCanon] = useState(null);
   const [canonLoading, setCanonLoading] = useState(false);
 
   // Load the persisted convergence-round defaults so the Options inputs reflect
   // the install's setting. The autopilot reads the same setting server-side, so
   // we never send these as per-run overrides — we just keep the UI in sync and
-  // persist edits back. Skip applying the load if the user already edited (a
-  // fast edit must not be clobbered by a slow settings fetch).
+  // persist edits back. Apply the fetched value only to fields the user hasn't
+  // already edited, so a slow load can't clobber a fast edit (per-field).
   useEffect(() => {
     let canceled = false;
     getSettings({ silent: true })
       .then((s) => {
-        if (canceled || roundsEditedRef.current) return;
+        if (canceled) return;
         const pec = s?.pipelineEditorialChecks || {};
-        setArcRounds(Number.isInteger(pec.maxArcVerifyRounds) ? pec.maxArcVerifyRounds : DEFAULT_ARC_ROUNDS);
-        setEditorialRounds(Number.isInteger(pec.maxEditorialRounds) ? pec.maxEditorialRounds : DEFAULT_EDITORIAL_ROUNDS);
-        setRoundsReady(true);
+        if (!arcEditedRef.current) setArcRounds(Number.isInteger(pec.maxArcVerifyRounds) ? pec.maxArcVerifyRounds : DEFAULT_ARC_ROUNDS);
+        if (!editorialEditedRef.current) setEditorialRounds(Number.isInteger(pec.maxEditorialRounds) ? pec.maxEditorialRounds : DEFAULT_EDITORIAL_ROUNDS);
       })
-      .catch(() => null); // load failed → roundsReady stays false → server uses the on-disk setting
+      .catch(() => null); // load failed → inputs keep defaults but start() only persists EDITED fields
     return () => { canceled = true; };
   }, []);
 
@@ -177,10 +178,10 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
     return next;
   }, []);
 
-  // User edited an input — mark the values as real so a late settings load can't
-  // overwrite them and so start() knows they're worth persisting.
-  const editArcRounds = useCallback((v) => { roundsEditedRef.current = true; setRoundsReady(true); setArcRounds(v); }, []);
-  const editEditorialRounds = useCallback((v) => { roundsEditedRef.current = true; setRoundsReady(true); setEditorialRounds(v); }, []);
+  // User edited an input — mark that field dirty so a late settings load can't
+  // overwrite it and so start() knows to persist it.
+  const editArcRounds = useCallback((v) => { arcEditedRef.current = true; setArcRounds(v); }, []);
+  const editEditorialRounds = useCallback((v) => { editorialEditedRef.current = true; setEditorialRounds(v); }, []);
 
   const { latest, frames } = usePipelineProgress(pipelineAutopilotSseUrl, [seriesId], { enabled: active });
 
@@ -237,17 +238,15 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
   const start = useCallback(async () => {
     setStarting(true);
     setPlan(null);
-    // Persist the chosen rounds FIRST (only when they reflect a real value), then
-    // start with no per-run round overrides — the server resolves the run from
-    // the freshly-saved setting. Awaiting the persist closes the persist→read
-    // race; sending the inputs as overrides instead would mask a saved default
-    // whenever the settings load hadn't resolved yet.
-    if (roundsReady) {
-      await persistRounds({
-        maxArcVerifyRounds: clampRound(arcRounds, DEFAULT_ARC_ROUNDS),
-        maxEditorialRounds: clampRound(editorialRounds, DEFAULT_EDITORIAL_ROUNDS),
-      });
-    }
+    // Persist ONLY the gates the user edited (clamped), then start with no per-run
+    // round overrides — the server resolves the run from the saved setting.
+    // Persisting an untouched field would clobber its on-disk value with a display
+    // default; omitting it lets patchSettingsSlice's merge preserve it. Awaiting
+    // the persist closes the persist→read race.
+    const roundPatch = {};
+    if (arcEditedRef.current) roundPatch.maxArcVerifyRounds = clampRound(arcRounds, DEFAULT_ARC_ROUNDS);
+    if (editorialEditedRef.current) roundPatch.maxEditorialRounds = clampRound(editorialRounds, DEFAULT_EDITORIAL_ROUNDS);
+    if (Object.keys(roundPatch).length) await persistRounds(roundPatch);
     const res = await startPipelineAutopilot(seriesId, { includeVisual, fileGaps }, { silent: true })
       .catch((err) => { toast.error(err.message || 'Could not start autopilot'); return null; });
     setStarting(false);
@@ -258,7 +257,7 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
     // effect can reject a stale terminal frame from the previous run.
     activeRunIdRef.current = res.runId || null;
     setActive(true);
-  }, [seriesId, includeVisual, fileGaps, arcRounds, editorialRounds, roundsReady, persistRounds]);
+  }, [seriesId, includeVisual, fileGaps, arcRounds, editorialRounds, persistRounds]);
 
   const cancel = useCallback(async () => {
     await cancelPipelineAutopilot(seriesId).catch(() => null);
