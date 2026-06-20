@@ -598,6 +598,11 @@ function rewriteLabelInBlock(block, label, oldP, newP) {
   const hasExplicitPortsSource = hasInlinePortsObj || hasPortsReference;
   // `PORT`/`'PORT'`/`` `PORT` `` followed by `:` and optional whitespace.
   const PORT_KEY = "['\"`]?\\bPORT\\b['\"`]?\\s*:\\s*";
+  // Label-specific runtime env var, mirroring parseEcosystemConfig's
+  // `<STEM>_PORT` → camelCased-stem labeling (API_PORT→api, UI_PORT→ui,
+  // DEV_UI_PORT→devUi). PM2 launches the process WITH this env var, so a shared
+  // inline `ports` edit that left it on the old value would revert at runtime.
+  const LABEL_ENV_KEY = { api: 'API_PORT', ui: 'UI_PORT', devUi: 'DEV_UI_PORT' }[label];
 
   // Patterns are split by SCOPE:
   //   - portsObjPats run ONLY inside the inline `ports: { ... }` slice. The
@@ -615,6 +620,8 @@ function rewriteLabelInBlock(block, label, oldP, newP) {
       // so they move WITH an inline ports object — fine to rewrite either way.
       blockPats.push(`(${PORT_KEY}[^,}\\n]*?\\|\\|\\s*['"]?)${NUM}`);     // PORT: … || N (fallback)
       blockPats.push(`(${PORT_KEY})${NUM}`);                             // env PORT: N
+      // Label-specific runtime env var (API_PORT) — PM2 launches with it.
+      blockPats.push(`(['"\`]?\\b${LABEL_ENV_KEY}\\b['"\`]?\\s*:\\s*)${NUM}`); // env API_PORT: N
     }
     // A bare lowercase `port:` is parseEcosystemConfig's LAST-RESORT derivation
     // (`directPortMatch`), consulted only when there's no ports object/env. So
@@ -637,6 +644,8 @@ function rewriteLabelInBlock(block, label, oldP, newP) {
       // re-derives the old port on the next refresh).
       blockPats.push(`(['"\`]?\\bVITE_PORT\\b['"\`]?\\s*:\\s*)${NUM}`); // env VITE_PORT: N
       blockPats.push(`(--port\\s+)${NUM}`);                            // args --port N
+      // Label-specific runtime env var (UI_PORT / DEV_UI_PORT) — PM2 launches with it.
+      blockPats.push(`(['"\`]?\\b${LABEL_ENV_KEY}\\b['"\`]?\\s*:\\s*)${NUM}`); // env UI_PORT: N
     }
     if (!hasExplicitPortsSource) blockPats.push(`(${PORT_KEY})${NUM}`); // bare PORT of a UI-named process
   }

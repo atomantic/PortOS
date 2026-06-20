@@ -560,6 +560,24 @@ module.exports = { apps: [
     expect(parseEcosystemConfig(r.content).processes[0].ports.api).toBe(7000);
   });
 
+  it('also rewrites the matching label-specific runtime env var (UI_PORT) alongside the ports key', () => {
+    // ports.ui and a same-valued UI_PORT env var (which PM2 launches with).
+    // Editing ui must move BOTH, or the process restarts on the old UI_PORT.
+    // The sibling api/API_PORT (same value) must be left alone.
+    const content = `module.exports = { apps: [
+  { name: 'srv', script: 's.js', ports: { api: 6000, ui: 6000 }, env: { API_PORT: 6000, UI_PORT: 6000 } }
+] };
+`;
+    const r = rewriteEcosystemPortsByProcess(content, [
+      { processName: 'srv', label: 'ui', oldPort: 6000, newPort: 7000 },
+    ]);
+    expect(r.applied).toHaveLength(1);
+    expect(r.content).toContain('ui: 7000');
+    expect(r.content).toContain('UI_PORT: 7000');
+    expect(r.content).toContain('api: 6000');      // sibling untouched
+    expect(r.content).toContain('API_PORT: 6000'); // sibling env untouched
+  });
+
   it('does not rewrite a bare lowercase port: field when an inline ports object is the source', () => {
     // parseEcosystemConfig reads ports.api and ignores `metadata.port`; the bare
     // `port:` fallback is last-resort (only when there's no ports object), so it
