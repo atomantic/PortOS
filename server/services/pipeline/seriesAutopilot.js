@@ -995,8 +995,14 @@ function buildDryRunPlan(series, issues, options) {
   if (isComicTarget(series)) plan.push({ kind: 'scriptVerify', count: ordered.length });
   const edRounds = Number.isInteger(options?.maxEditorialRounds) ? options.maxEditorialRounds : MAX_EDITORIAL_ROUNDS;
   plan.push({ kind: 'editorialReview', count: 1, note: roundsNote(edRounds) });
-  plan.push({ kind: 'editorialChecks', count: 1, note: 'enabled editorial checks (#1284)' });
-  plan.push({ kind: 'editorialHealthGate', count: 1, note: 'editorial health readiness gate (#1316)' });
+  // maxEditorialRounds === 0 skips the whole editorial gate in execute mode
+  // (runEditorial marks editorialReviewed + editorialChecksReviewed +
+  // editorialHealthReady), so the plan must not advertise the registry checks or
+  // the health gate that won't run.
+  if (edRounds !== 0) {
+    plan.push({ kind: 'editorialChecks', count: 1, note: 'enabled editorial checks (#1284)' });
+    plan.push({ kind: 'editorialHealthGate', count: 1, note: 'editorial health readiness gate (#1316)' });
+  }
   if (VISUAL_DRAFT_ENABLED && wantsVisual(options) && isComicTarget(series)) {
     plan.push({ kind: 'canonVerify', count: 1, note: 'descriptive integrity of drawn nouns' });
     const visualNeeded = ordered.filter((i) => !visualReady(i)).length;

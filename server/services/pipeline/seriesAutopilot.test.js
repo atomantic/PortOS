@@ -211,6 +211,19 @@ describe('resolveNextStep (pure)', () => {
     expect(plan[0].kind).toBe('generateArc');
   });
 
+  it('dry-run plan omits editorialChecks + editorialHealthGate when editorial rounds are 0', () => {
+    const series = { targetFormat: 'comic', arc: { logline: 'L', summary: 'S' }, seasons: [{ id: 'se1', number: 1 }] };
+    const issues = [{ id: 'i1', seasonId: 'se1', number: 1, arcPosition: 1, stages: {} }];
+    const kinds = (opts) => autopilot.__testing.buildDryRunPlan(series, issues, opts).map((p) => p.kind);
+    // With editorial enabled (default), both registry checks + health gate appear.
+    expect(kinds({})).toEqual(expect.arrayContaining(['editorialReview', 'editorialChecks', 'editorialHealthGate']));
+    // With maxEditorialRounds:0, execute mode skips all three — the plan must too.
+    const skipped = kinds({ maxEditorialRounds: 0 });
+    expect(skipped).toContain('editorialReview'); // shown as "skipped (0 rounds)"
+    expect(skipped).not.toContain('editorialChecks');
+    expect(skipped).not.toContain('editorialHealthGate');
+  });
+
   it('asks to generate episodes for a season with no issues', () => {
     const step = resolveNextStep(comic, []);
     expect(step).toMatchObject({ kind: 'generateEpisodes', seasonId: 'se1' });

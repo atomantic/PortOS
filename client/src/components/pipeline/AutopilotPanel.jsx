@@ -25,6 +25,10 @@ const ROUND_MAX = 20;
 const DEFAULT_ARC_ROUNDS = 3;
 const DEFAULT_EDITORIAL_ROUNDS = 2;
 const clampRound = (n, fallback) => {
+  // A blank/cleared field falls back to the default — NOT 0. (Number('') === 0,
+  // and 0 means "skip the gate", so without this a cleared input would silently
+  // disable a verification gate.) An explicitly typed 0 is still honored.
+  if (n === '' || n === null || n === undefined) return fallback;
   const v = Number(n);
   if (!Number.isFinite(v)) return fallback;
   return Math.max(ROUND_MIN, Math.min(ROUND_MAX, Math.round(v)));
@@ -131,29 +135,43 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
   const [fileGaps, setFileGaps] = useState(false);
   const [arcRounds, setArcRounds] = useState(DEFAULT_ARC_ROUNDS);
   const [editorialRounds, setEditorialRounds] = useState(DEFAULT_EDITORIAL_ROUNDS);
+  // The round inputs only hold a *meaningful* value once settings have loaded OR
+  // the user has edited them — before that they show display defaults we must NOT
+  // persist or act on (doing so would clobber / ignore a higher saved setting).
+  const [roundsReady, setRoundsReady] = useState(false);
+  const roundsEditedRef = useRef(false);
   const [canon, setCanon] = useState(null);
   const [canonLoading, setCanonLoading] = useState(false);
 
   // Load the persisted convergence-round defaults so the Options inputs reflect
-  // the install's setting (the autopilot reads the same setting server-side when
-  // a run/resume doesn't carry a per-run override).
+  // the install's setting. The autopilot reads the same setting server-side, so
+  // we never send these as per-run overrides — we just keep the UI in sync and
+  // persist edits back. Skip applying the load if the user already edited (a
+  // fast edit must not be clobbered by a slow settings fetch).
   useEffect(() => {
     let canceled = false;
     getSettings({ silent: true })
       .then((s) => {
-        if (canceled) return;
+        if (canceled || roundsEditedRef.current) return;
         const pec = s?.pipelineEditorialChecks || {};
-        if (Number.isInteger(pec.maxArcVerifyRounds)) setArcRounds(pec.maxArcVerifyRounds);
-        if (Number.isInteger(pec.maxEditorialRounds)) setEditorialRounds(pec.maxEditorialRounds);
+        setArcRounds(Number.isInteger(pec.maxArcVerifyRounds) ? pec.maxArcVerifyRounds : DEFAULT_ARC_ROUNDS);
+        setEditorialRounds(Number.isInteger(pec.maxEditorialRounds) ? pec.maxEditorialRounds : DEFAULT_EDITORIAL_ROUNDS);
+        setRoundsReady(true);
       })
-      .catch(() => null);
+      .catch(() => null); // load failed → roundsReady stays false → server uses the on-disk setting
     return () => { canceled = true; };
   }, []);
 
   // Persist a round setting (clamped) so a later Resume picks it up server-side.
-  const persistRounds = useCallback((patch) => {
-    patchSettingsSlice('pipelineEditorialChecks', patch, { silent: true }).catch(() => null);
-  }, []);
+  // Returns the promise so start() can await it (close the persist→read race).
+  const persistRounds = useCallback((patch) => (
+    patchSettingsSlice('pipelineEditorialChecks', patch, { silent: true }).catch(() => null)
+  ), []);
+
+  // User edited an input — mark the values as real so a late settings load can't
+  // overwrite them and so start() knows they're worth persisting.
+  const editArcRounds = useCallback((v) => { roundsEditedRef.current = true; setRoundsReady(true); setArcRounds(v); }, []);
+  const editEditorialRounds = useCallback((v) => { roundsEditedRef.current = true; setRoundsReady(true); setEditorialRounds(v); }, []);
 
   const { latest, frames } = usePipelineProgress(pipelineAutopilotSseUrl, [seriesId], { enabled: active });
 
@@ -210,12 +228,18 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
   const start = useCallback(async () => {
     setStarting(true);
     setPlan(null);
-    const res = await startPipelineAutopilot(seriesId, {
-      includeVisual,
-      fileGaps,
-      maxArcVerifyRounds: clampRound(arcRounds, DEFAULT_ARC_ROUNDS),
-      maxEditorialRounds: clampRound(editorialRounds, DEFAULT_EDITORIAL_ROUNDS),
-    }, { silent: true })
+    // Persist the chosen rounds FIRST (only when they reflect a real value), then
+    // start with no per-run round overrides — the server resolves the run from
+    // the freshly-saved setting. Awaiting the persist closes the persist→read
+    // race; sending the inputs as overrides instead would mask a saved default
+    // whenever the settings load hadn't resolved yet.
+    if (roundsReady) {
+      await persistRounds({
+        maxArcVerifyRounds: clampRound(arcRounds, DEFAULT_ARC_ROUNDS),
+        maxEditorialRounds: clampRound(editorialRounds, DEFAULT_EDITORIAL_ROUNDS),
+      });
+    }
+    const res = await startPipelineAutopilot(seriesId, { includeVisual, fileGaps }, { silent: true })
       .catch((err) => { toast.error(err.message || 'Could not start autopilot'); return null; });
     setStarting(false);
     if (!res) return;
@@ -225,7 +249,7 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
     // effect can reject a stale terminal frame from the previous run.
     activeRunIdRef.current = res.runId || null;
     setActive(true);
-  }, [seriesId, includeVisual, fileGaps, arcRounds, editorialRounds]);
+  }, [seriesId, includeVisual, fileGaps, arcRounds, editorialRounds, roundsReady, persistRounds]);
 
   const cancel = useCallback(async () => {
     await cancelPipelineAutopilot(seriesId).catch(() => null);
@@ -304,7 +328,7 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
               label="Arc verify rounds"
               settingKey="maxArcVerifyRounds"
               value={arcRounds}
-              setValue={setArcRounds}
+              setValue={editArcRounds}
               defaultValue={DEFAULT_ARC_ROUNDS}
               persist={persistRounds}
             />
@@ -313,7 +337,7 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
               label="Editorial rounds"
               settingKey="maxEditorialRounds"
               value={editorialRounds}
-              setValue={setEditorialRounds}
+              setValue={editEditorialRounds}
               defaultValue={DEFAULT_EDITORIAL_ROUNDS}
               persist={persistRounds}
             />
