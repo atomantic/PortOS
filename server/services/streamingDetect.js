@@ -901,15 +901,42 @@ export async function writeEcosystemPortEdits(repoPath, remap, edits) {
     if (!existsSync(filePath)) continue;
     const content = await readFile(filePath, 'utf-8');
 
-    // Value-keyed pass first, then targeted — both against the in-memory result
-    // so the single write reflects both. The two passes operate on disjoint
-    // literals (distinct values vs shared values), so ordering can't clobber.
-    const afterRemap = hasRemap ? rewriteEcosystemPorts(content, remap) : content;
-    const { content: afterTargeted, applied, unapplied } = hasEdits
-      ? rewriteEcosystemPortsByProcess(afterRemap, edits)
-      : { content: afterRemap, applied: [], unapplied: [] };
+    // The two passes both run against the in-memory result of the other so a
+    // single write reflects both — but whichever runs SECOND can match a literal
+    // the first pass just created, chaining one edit into another. That happens
+    // when the second pass's match-value equals a value the first produced:
+    //   - value-keyed→targeted chains if a targeted OLD value equals a remap NEW
+    //     value (forward collision), and
+    //   - targeted→value-keyed chains if a remap OLD value equals a targeted NEW
+    //     value (reverse collision).
+    // Pick the order that avoids the collision present; if BOTH directions
+    // collide there's no safe order, so treat the whole batch as unpersistable
+    // (the caller 422s — honest, vs. silently corrupting a sibling port).
+    const remapOlds = remap.map(([o]) => o);
+    const remapNews = remap.map(([, n]) => n);
+    const targetedOlds = (edits || []).map(e => e.oldPort);
+    const targetedNews = (edits || []).map(e => e.newPort);
+    const forwardCollision = hasRemap && hasEdits && targetedOlds.some(o => remapNews.includes(o));
+    const reverseCollision = hasRemap && hasEdits && remapOlds.some(o => targetedNews.includes(o));
 
-    const remapApplied = afterRemap !== content;
+    if (forwardCollision && reverseCollision) {
+      return { file: name, changed: false, remapApplied: false, applied: [], unapplied: edits || [] };
+    }
+
+    let result, applied, unapplied, remapApplied;
+    if (forwardCollision) {
+      // Run targeted FIRST so the value-keyed pass can't feed it a fresh literal.
+      const t = hasEdits ? rewriteEcosystemPortsByProcess(content, edits) : { content, applied: [], unapplied: [] };
+      const afterRemap = hasRemap ? rewriteEcosystemPorts(t.content, remap) : t.content;
+      result = afterRemap; applied = t.applied; unapplied = t.unapplied;
+      remapApplied = hasRemap && afterRemap !== t.content;
+    } else {
+      // Default: value-keyed first, then targeted (safe when no forward collision).
+      const afterRemap = hasRemap ? rewriteEcosystemPorts(content, remap) : content;
+      const t = hasEdits ? rewriteEcosystemPortsByProcess(afterRemap, edits) : { content: afterRemap, applied: [], unapplied: [] };
+      result = t.content; applied = t.applied; unapplied = t.unapplied;
+      remapApplied = hasRemap && afterRemap !== content;
+    }
 
     // Persist NOTHING when ANY part of the request is unpersistable — the caller
     // rejects the whole update (422) in either of these cases, so a partial
@@ -922,8 +949,8 @@ export async function writeEcosystemPortEdits(repoPath, remap, edits) {
       return { file: name, changed: false, remapApplied: false, applied: [], unapplied };
     }
 
-    if (afterTargeted !== content) {
-      await atomicWrite(filePath, afterTargeted);
+    if (result !== content) {
+      await atomicWrite(filePath, result);
       return { file: name, changed: true, remapApplied, applied, unapplied };
     }
     return { file: name, changed: false, remapApplied, applied, unapplied };

@@ -792,6 +792,30 @@ module.exports = { apps: [
     expect(readFileSync(join(dir, 'ecosystem.config.cjs'), 'utf-8')).toBe(original);
   });
 
+  it('does not chain when a value-keyed NEW value equals a targeted OLD value (forward collision)', async () => {
+    // One process: ports {api:6000, ui:6000, devUi:5556} + VITE_PORT:5556.
+    // Save devUiPort 5556→6000 (value-keyed) AND uiPort 6000→7000 (targeted,
+    // shared with api). Naive value-keyed-first would rewrite devUi 5556→6000,
+    // then the targeted ui pass would see that fresh 6000 and chain it to 7000,
+    // corrupting devUi. Running targeted FIRST avoids it: ui→7000 lands, then
+    // devUi 5556→6000 — and api stays 6000.
+    dir = mkdtempSync(join(tmpdir(), 'eco-edits-'));
+    writeFileSync(join(dir, 'ecosystem.config.cjs'), `module.exports = { apps: [
+  { name: 'srv', script: 's.js', ports: { api: 6000, ui: 6000, devUi: 5556 } }
+] };
+`);
+    const result = await writeEcosystemPortEdits(
+      dir,
+      [[5556, 6000]],                                                          // devUiPort distinct → value-keyed
+      [{ processName: 'srv', label: 'ui', oldPort: 6000, newPort: 7000 }]      // uiPort shared → targeted
+    );
+    expect(result.changed).toBe(true);
+    const ports = parseEcosystemConfig(readFileSync(join(dir, 'ecosystem.config.cjs'), 'utf-8')).processes[0].ports;
+    expect(ports.ui).toBe(7000);    // edited
+    expect(ports.devUi).toBe(6000); // remapped, NOT chained to 7000
+    expect(ports.api).toBe(6000);   // untouched
+  });
+
   it('is a no-op when both remap and edits are empty', async () => {
     dir = mkdtempSync(join(tmpdir(), 'eco-edits-'));
     const original = `module.exports = { apps: [{ name: 'x', script: 's.js', env: { PORT: 6000 } }] };\n`;
