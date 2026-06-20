@@ -48,6 +48,7 @@ export * from './apiMediaJobs.js';
 export * from './apiWritersRoom.js';
 export * from './apiUniverseBuilder.js';
 export * from './apiAuthors.js';
+export * from './apiArtists.js';
 export * from './apiPipeline.js';
 export * from './apiSharing.js';
 export * from './apiRounds.js';

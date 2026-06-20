@@ -777,6 +777,25 @@ CREATE TABLE IF NOT EXISTS authors (
 -- The common path is "live authors sorted by name".
 CREATE INDEX IF NOT EXISTS idx_authors_live ON authors (deleted) WHERE deleted = FALSE;
 
+-- Music artists (the Music studio's persona store — analogue of authors). One
+-- row per artist, the full sanitized record (name, genre, bio, musicalStyle,
+-- physicalDescription, portraitStyle, portraitImageUrl) in `data` JSONB. `name`
+-- mirrors a column for the live-list sort; the LWW/tombstone trio is populated
+-- FROM the record body. Artists are db-primary and federation-ready (LWW merge
+-- mirrors authors), but the artist record kind is not yet registered in peerSync
+-- — local-only for now (see issue #1502). Mirrors the artists block in db.js.
+CREATE TABLE IF NOT EXISTS artists (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  data JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  deleted BOOLEAN DEFAULT FALSE,
+  deleted_at TIMESTAMPTZ
+);
+-- The common path is "live artists sorted by name".
+CREATE INDEX IF NOT EXISTS idx_artists_live ON artists (deleted) WHERE deleted = FALSE;
+
 -- Pipeline series (Phase 3 Create migration, issue #1015). One row per series,
 -- the full sanitized record (arc/seasons/locks/covers/style) in `data` JSONB,
 -- moved out of data/pipeline-series/{id}/index.json (collectionStore). Only the
@@ -1037,6 +1056,8 @@ DROP TRIGGER IF EXISTS trg_lora_training_runs_audit ON lora_training_runs;
 CREATE TRIGGER trg_lora_training_runs_audit AFTER UPDATE OR DELETE ON lora_training_runs FOR EACH ROW EXECUTE FUNCTION record_audit_log();
 DROP TRIGGER IF EXISTS trg_authors_audit ON authors;
 CREATE TRIGGER trg_authors_audit AFTER UPDATE OR DELETE ON authors FOR EACH ROW EXECUTE FUNCTION record_audit_log();
+DROP TRIGGER IF EXISTS trg_artists_audit ON artists;
+CREATE TRIGGER trg_artists_audit AFTER UPDATE OR DELETE ON artists FOR EACH ROW EXECUTE FUNCTION record_audit_log();
 DROP TRIGGER IF EXISTS trg_tribe_people_audit ON tribe_people;
 CREATE TRIGGER trg_tribe_people_audit AFTER UPDATE OR DELETE ON tribe_people FOR EACH ROW EXECUTE FUNCTION record_audit_log();
 DROP TRIGGER IF EXISTS trg_tribe_touchpoints_audit ON tribe_touchpoints;

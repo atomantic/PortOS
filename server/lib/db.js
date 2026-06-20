@@ -954,6 +954,25 @@ async function ensureSchemaImpl() {
     )`,
     `CREATE INDEX IF NOT EXISTS idx_authors_live ON authors (deleted) WHERE deleted = FALSE`,
 
+    // Music artists (the Music studio's persona store — analogue of authors).
+    // One row per artist, the full sanitized record (name, genre, bio,
+    // musicalStyle, physicalDescription, portraitStyle, portraitImageUrl) in
+    // `data` JSONB. `name` mirrors a column for the live-list sort; the LWW/
+    // tombstone trio is populated FROM the record body. Artists are db-primary
+    // and federation-ready (LWW merge mirrors authors), but the artist record
+    // kind is not yet registered in peerSync — local-only for now (see issue #1502).
+    // Mirrors the artists block in init-db.sql.
+    `CREATE TABLE IF NOT EXISTS artists (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      data JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      deleted BOOLEAN DEFAULT FALSE,
+      deleted_at TIMESTAMPTZ
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_artists_live ON artists (deleted) WHERE deleted = FALSE`,
+
     // Pipeline series (Phase 3 Create migration, issue #1015). One row per
     // series, the full sanitized record (arc/seasons/locks/covers/style) in
     // `data` JSONB, moved out of data/pipeline-series/{id}/index.json
@@ -1221,7 +1240,7 @@ async function ensureSchemaImpl() {
     'story_builder_sessions', 'writers_room_works', 'writers_room_folders',
     'writers_room_draft_versions', 'catalog_ingredients', 'catalog_scraps',
     'catalog_user_types', 'creative_director_projects', 'mood_boards',
-    'lora_training_runs', 'authors', 'tribe_people', 'tribe_touchpoints',
+    'lora_training_runs', 'authors', 'artists', 'tribe_people', 'tribe_touchpoints',
   ];
   for (const t of auditedTables) {
     catalogDDL.push(`DROP TRIGGER IF EXISTS trg_${t}_audit ON ${t}`);

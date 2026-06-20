@@ -48,6 +48,7 @@ const LoraDatasetDetail = lazyWithReload(() => import('./pages/LoraDatasetDetail
 const UniverseBuilder = lazyWithReload(() => import('./pages/UniverseBuilder'));
 const Universes = lazyWithReload(() => import('./pages/Universes'));
 const Authors = lazyWithReload(() => import('./pages/Authors'));
+const Music = lazyWithReload(() => import('./pages/Music'));
 const Catalog = lazyWithReload(() => import('./pages/Catalog'));
 const Rounds = lazyWithReload(() => import('./pages/Rounds'));
 const RoundEditor = lazyWithReload(() => import('./pages/RoundEditor'));
@@ -320,6 +321,8 @@ export default function App() {
           <Route path="story-builder/:storyId" element={<Navigate to="idea" replace />} />
           <Route path="story-builder/:storyId/:step" element={<StoryBuilder />} />
           <Route path="authors" element={<Authors />} />
+          <Route path="music" element={<Music />} />
+          <Route path="music/:tab" element={<Music />} />
           <Route path="pipeline" element={<Pipeline />} />
           <Route path="pipeline/editorial-checks" element={<PipelineEditorialChecks />} />
           <Route path="pipeline/series/:seriesId" element={<PipelineSeries />} />
