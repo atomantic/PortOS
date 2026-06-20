@@ -10,6 +10,8 @@ vi.mock('../../services/api', () => ({
   getPipelineSeriesCanonReadiness: vi.fn(),
   getPipelineSeries: vi.fn(),
   listPipelineIssues: vi.fn(),
+  getSettings: vi.fn(),
+  patchSettingsSlice: vi.fn(),
 }));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
 // Controllable SSE hook so tests don't touch EventSource. `sseLatest` lets a
@@ -24,6 +26,8 @@ import {
   startPipelineAutopilot,
   getPipelineAutopilotStatus,
   getPipelineSeriesCanonReadiness,
+  getSettings,
+  patchSettingsSlice,
 } from '../../services/api';
 import toast from '../ui/Toast';
 import AutopilotPanel from './AutopilotPanel';
@@ -41,6 +45,8 @@ beforeEach(() => {
   sseFrames = [];
   getPipelineAutopilotStatus.mockResolvedValue({ autopilot: null, active: false });
   startPipelineAutopilot.mockResolvedValue({ runId: 'r1', mode: 'execute', alreadyRunning: false });
+  getSettings.mockResolvedValue({ pipelineEditorialChecks: {} });
+  patchSettingsSlice.mockResolvedValue({});
 });
 
 describe('AutopilotPanel', () => {
@@ -49,7 +55,9 @@ describe('AutopilotPanel', () => {
     await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
     fireEvent.click(screen.getByRole('button', { name: /run autopilot/i }));
     await waitFor(() => expect(startPipelineAutopilot).toHaveBeenCalledWith(
-      's1', { includeVisual: true, fileGaps: false }, { silent: true },
+      's1',
+      { includeVisual: true, fileGaps: false, maxArcVerifyRounds: 3, maxEditorialRounds: 2 },
+      { silent: true },
     ));
   });
 
@@ -63,7 +71,9 @@ describe('AutopilotPanel', () => {
     fireEvent.click(checks[1]); // fileGaps -> true
     fireEvent.click(screen.getByRole('button', { name: /run autopilot/i }));
     await waitFor(() => expect(startPipelineAutopilot).toHaveBeenCalledWith(
-      's1', { includeVisual: false, fileGaps: true }, { silent: true },
+      's1',
+      { includeVisual: false, fileGaps: true, maxArcVerifyRounds: 3, maxEditorialRounds: 2 },
+      { silent: true },
     ));
   });
 

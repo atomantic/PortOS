@@ -14,7 +14,21 @@ import {
   getPipelineSeriesCanonReadiness,
   getPipelineSeries,
   listPipelineIssues,
+  getSettings,
+  patchSettingsSlice,
 } from '../../services/api';
+
+// Convergence-round bounds — mirror the server (seriesAutopilot.js + the
+// pipelineEditorialChecks settings schema). 0 = skip that gate entirely.
+const ROUND_MIN = 0;
+const ROUND_MAX = 20;
+const DEFAULT_ARC_ROUNDS = 3;
+const DEFAULT_EDITORIAL_ROUNDS = 2;
+const clampRound = (n, fallback) => {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return fallback;
+  return Math.max(ROUND_MIN, Math.min(ROUND_MAX, Math.round(v)));
+};
 
 const SEVERITY_COLORS = {
   high: 'text-port-error border-port-error/40 bg-port-error/10',
@@ -91,8 +105,31 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
   const [showOpts, setShowOpts] = useState(false);
   const [includeVisual, setIncludeVisual] = useState(true);
   const [fileGaps, setFileGaps] = useState(false);
+  const [arcRounds, setArcRounds] = useState(DEFAULT_ARC_ROUNDS);
+  const [editorialRounds, setEditorialRounds] = useState(DEFAULT_EDITORIAL_ROUNDS);
   const [canon, setCanon] = useState(null);
   const [canonLoading, setCanonLoading] = useState(false);
+
+  // Load the persisted convergence-round defaults so the Options inputs reflect
+  // the install's setting (the autopilot reads the same setting server-side when
+  // a run/resume doesn't carry a per-run override).
+  useEffect(() => {
+    let canceled = false;
+    getSettings({ silent: true })
+      .then((s) => {
+        if (canceled) return;
+        const pec = s?.pipelineEditorialChecks || {};
+        if (Number.isInteger(pec.maxArcVerifyRounds)) setArcRounds(pec.maxArcVerifyRounds);
+        if (Number.isInteger(pec.maxEditorialRounds)) setEditorialRounds(pec.maxEditorialRounds);
+      })
+      .catch(() => null);
+    return () => { canceled = true; };
+  }, []);
+
+  // Persist a round setting (clamped) so a later Resume picks it up server-side.
+  const persistRounds = useCallback((patch) => {
+    patchSettingsSlice('pipelineEditorialChecks', patch, { silent: true }).catch(() => null);
+  }, []);
 
   const { latest, frames } = usePipelineProgress(pipelineAutopilotSseUrl, [seriesId], { enabled: active });
 
@@ -149,7 +186,12 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
   const start = useCallback(async () => {
     setStarting(true);
     setPlan(null);
-    const res = await startPipelineAutopilot(seriesId, { includeVisual, fileGaps }, { silent: true })
+    const res = await startPipelineAutopilot(seriesId, {
+      includeVisual,
+      fileGaps,
+      maxArcVerifyRounds: clampRound(arcRounds, DEFAULT_ARC_ROUNDS),
+      maxEditorialRounds: clampRound(editorialRounds, DEFAULT_EDITORIAL_ROUNDS),
+    }, { silent: true })
       .catch((err) => { toast.error(err.message || 'Could not start autopilot'); return null; });
     setStarting(false);
     if (!res) return;
@@ -159,7 +201,7 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
     // effect can reject a stale terminal frame from the previous run.
     activeRunIdRef.current = res.runId || null;
     setActive(true);
-  }, [seriesId, includeVisual, fileGaps]);
+  }, [seriesId, includeVisual, fileGaps, arcRounds, editorialRounds]);
 
   const cancel = useCallback(async () => {
     await cancelPipelineAutopilot(seriesId).catch(() => null);
@@ -232,6 +274,45 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
             <input type="checkbox" checked={fileGaps} onChange={(e) => setFileGaps(e.target.checked)} />
             File CoS tasks for gaps it can&apos;t resolve
           </label>
+          <div className="flex flex-wrap gap-4 pt-1">
+            <div className="flex items-center gap-2">
+              <label htmlFor="autopilot-arc-rounds" className="text-xs text-gray-300">Arc verify rounds</label>
+              <input
+                id="autopilot-arc-rounds"
+                type="number"
+                min={ROUND_MIN}
+                max={ROUND_MAX}
+                value={arcRounds}
+                onChange={(e) => setArcRounds(e.target.value === '' ? '' : Number(e.target.value))}
+                onBlur={() => {
+                  const v = clampRound(arcRounds, DEFAULT_ARC_ROUNDS);
+                  setArcRounds(v);
+                  persistRounds({ maxArcVerifyRounds: v });
+                }}
+                className="w-16 px-2 py-1 rounded text-xs bg-port-bg border border-port-border text-gray-200"
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <label htmlFor="autopilot-editorial-rounds" className="text-xs text-gray-300">Editorial rounds</label>
+              <input
+                id="autopilot-editorial-rounds"
+                type="number"
+                min={ROUND_MIN}
+                max={ROUND_MAX}
+                value={editorialRounds}
+                onChange={(e) => setEditorialRounds(e.target.value === '' ? '' : Number(e.target.value))}
+                onBlur={() => {
+                  const v = clampRound(editorialRounds, DEFAULT_EDITORIAL_ROUNDS);
+                  setEditorialRounds(v);
+                  persistRounds({ maxEditorialRounds: v });
+                }}
+                className="w-16 px-2 py-1 rounded text-xs bg-port-bg border border-port-border text-gray-200"
+              />
+            </div>
+          </div>
+          <p className="text-[11px] text-gray-500">
+            How many auto-resolve rounds each gate attempts before pausing for human review (0 skips the gate, max {ROUND_MAX}). Saved as the default and reused on Resume.
+          </p>
           <p className="text-[11px] text-gray-500">
             Runs under the CoS auto-run autonomy domain. With it set to <em>dry-run</em>, this only previews the plan.
           </p>
