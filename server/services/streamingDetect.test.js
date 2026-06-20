@@ -560,6 +560,38 @@ module.exports = { apps: [
     expect(parseEcosystemConfig(r.content).processes[0].ports.api).toBe(7000);
   });
 
+  it('rewrites a UI process bare env PORT (its runtime UI port) even alongside an inline ports.ui', () => {
+    // A `-ui` process routes bare PORT → ui (parser semantics). With ports.ui
+    // AND env.PORT both 6000, editing ui must move BOTH so PM2 restarts on the
+    // new port — not just the displayed ports.ui.
+    const content = `module.exports = { apps: [
+  { name: 'app-ui', script: 's.js', ports: { ui: 6000 }, env: { PORT: 6000 } }
+] };
+`;
+    const r = rewriteEcosystemPortsByProcess(content, [
+      { processName: 'app-ui', label: 'ui', oldPort: 6000, newPort: 7000 },
+    ]);
+    expect(r.applied).toHaveLength(1);
+    expect(r.content).toContain('ui: 7000');
+    expect(r.content).toContain('PORT: 7000'); // runtime port moves too
+  });
+
+  it('an api (non-UI) process bare PORT is the API port — a ui edit leaves it untouched', () => {
+    // Bare PORT on a non-UI-named process routes → api. Editing the shared ui
+    // label must touch ports.ui only, NOT the bare PORT (which is the api port).
+    const content = `module.exports = { apps: [
+  { name: 'app-server', script: 's.js', ports: { api: 6000, ui: 6000 }, env: { PORT: 6000 } }
+] };
+`;
+    const r = rewriteEcosystemPortsByProcess(content, [
+      { processName: 'app-server', label: 'ui', oldPort: 6000, newPort: 7000 },
+    ]);
+    expect(r.applied).toHaveLength(1);
+    expect(r.content).toContain('ui: 7000');
+    expect(r.content).toContain('api: 6000');  // untouched
+    expect(r.content).toContain('PORT: 6000'); // bare PORT = api → untouched
+  });
+
   it('also rewrites the matching label-specific runtime env var (UI_PORT) alongside the ports key', () => {
     // ports.ui and a same-valued UI_PORT env var (which PM2 launches with).
     // Editing ui must move BOTH, or the process restarts on the old UI_PORT.

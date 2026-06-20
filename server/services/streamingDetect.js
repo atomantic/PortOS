@@ -580,7 +580,7 @@ function findAppBlock(content, processName) {
  *
  * @returns {{ block: string, changed: boolean }}
  */
-function rewriteLabelInBlock(block, label, oldP, newP) {
+function rewriteLabelInBlock(block, label, oldP, newP, processName = '') {
   // Swap the matched digits to a sentinel first, then resolve the sentinel to
   // the new value — so a label whose old/new values overlap another source in
   // the same block can't chain. Each prefix capture group is preserved, so only
@@ -598,6 +598,15 @@ function rewriteLabelInBlock(block, label, oldP, newP) {
   const hasExplicitPortsSource = hasInlinePortsObj || hasPortsReference;
   // `PORT`/`'PORT'`/`` `PORT` `` followed by `:` and optional whitespace.
   const PORT_KEY = "['\"`]?\\bPORT\\b['\"`]?\\s*:\\s*";
+  // Which label does a bare env `PORT` map to? Mirror parseEcosystemConfig:
+  // a `-ui`/`-client`-suffixed process routes bare PORT → ui; otherwise → api.
+  // (A browser process routes PORT → health, which is none of api/ui/devUi.)
+  // PM2 launches with this env var, so the bare PORT must move with its label's
+  // port even when an inline ports object is also present — otherwise the
+  // process restarts on the old port while the config/registry show the new.
+  const isUiProcess = /[-_](ui|client)$/i.test(processName);
+  const isBrowserProcess = /[-_]browser$/i.test(processName);
+  const barePortLabel = isBrowserProcess ? 'health' : (isUiProcess ? 'ui' : 'api');
   // Label-specific runtime env var, mirroring parseEcosystemConfig's
   // `<STEM>_PORT` → camelCased-stem labeling (API_PORT→api, UI_PORT→ui,
   // DEV_UI_PORT→devUi). PM2 launches the process WITH this env var, so a shared
@@ -613,13 +622,22 @@ function rewriteLabelInBlock(block, label, oldP, newP) {
   //   - blockPats run over the whole block (env keys, args, bare PORT).
   const portsObjPats = [];
   const blockPats = [];
+  // Bare env `PORT` should be rewritten whenever it maps to THIS label (per the
+  // process name), regardless of whether an inline ports object also exists —
+  // PM2 launches with it, so it must track the label's port. NOT for a ports
+  // REFERENCE block: there the parser reads the external const and ignores env,
+  // so rewriting the bare PORT would be a false-success runtime-only change.
+  const barePortIsThisLabel = barePortLabel === label;
+  const rewriteBarePort = barePortIsThisLabel && !hasPortsReference;
+
   if (label === 'api') {
     if (hasInlinePortsObj) portsObjPats.push(`(\\bapi\\s*:\\s*)${NUM}`);  // ports: { api: N }
-    if (!hasPortsReference) {
-      // The env `PORT` (and its `|| N` fallback) mirror the runtime API port,
-      // so they move WITH an inline ports object — fine to rewrite either way.
+    if (rewriteBarePort) {
+      // The env `PORT` (and its `|| N` fallback) is the runtime API port here.
       blockPats.push(`(${PORT_KEY}[^,}\\n]*?\\|\\|\\s*['"]?)${NUM}`);     // PORT: … || N (fallback)
       blockPats.push(`(${PORT_KEY})${NUM}`);                             // env PORT: N
+    }
+    if (!hasPortsReference) {
       // Label-specific runtime env var (API_PORT) — PM2 launches with it.
       blockPats.push(`(['"\`]?\\b${LABEL_ENV_KEY}\\b['"\`]?\\s*:\\s*)${NUM}`); // env API_PORT: N
     }
@@ -647,7 +665,9 @@ function rewriteLabelInBlock(block, label, oldP, newP) {
       // Label-specific runtime env var (UI_PORT / DEV_UI_PORT) — PM2 launches with it.
       blockPats.push(`(['"\`]?\\b${LABEL_ENV_KEY}\\b['"\`]?\\s*:\\s*)${NUM}`); // env UI_PORT: N
     }
-    if (!hasExplicitPortsSource) blockPats.push(`(${PORT_KEY})${NUM}`); // bare PORT of a UI-named process
+    // Bare env `PORT` is the UI port when this is a UI-named process — rewrite it
+    // even alongside an inline ports object (it's the runtime port PM2 uses).
+    if (rewriteBarePort) blockPats.push(`(${PORT_KEY})${NUM}`); // bare PORT of a UI-named process
   }
 
   let out = block;
@@ -720,7 +740,7 @@ export function rewriteEcosystemPortsByProcess(content, edits) {
   for (const blk of blocks) {
     let inner = out.slice(blk.range.start, blk.range.end + 1);
     for (const e of blk.edits) {
-      const r = rewriteLabelInBlock(inner, e.label, e.oldPort, e.newPort);
+      const r = rewriteLabelInBlock(inner, e.label, e.oldPort, e.newPort, e.processName);
       inner = r.block;
       (r.changed ? applied : unapplied).push(e);
     }
