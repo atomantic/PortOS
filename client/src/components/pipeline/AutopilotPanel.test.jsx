@@ -91,6 +91,13 @@ describe('AutopilotPanel', () => {
       expect.objectContaining({ maxArcVerifyRounds: 9 }),
       { silent: true },
     ));
+    // Only the edited gate is persisted — the untouched editorial value must NOT
+    // be written (its on-disk value is preserved by the merge).
+    expect(patchSettingsSlice).not.toHaveBeenCalledWith(
+      'pipelineEditorialChecks',
+      expect.objectContaining({ maxEditorialRounds: expect.anything() }),
+      expect.anything(),
+    );
     expect(startPipelineAutopilot).toHaveBeenCalledWith(
       's1', { includeVisual: true, fileGaps: false }, { silent: true },
     );
