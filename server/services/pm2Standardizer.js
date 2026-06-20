@@ -136,10 +136,16 @@ async function gatherTakenPorts(excludePorts = []) {
     getReservedPorts().catch(() => []),
     getListeningPorts().catch(() => []),
   ]);
+  // Exempt the app's own ports ONLY from the reserved-app registry — so
+  // re-standardizing keeps them. Do NOT exempt them from `listening`: if the
+  // app is stopped and another process now holds one of its old ports, that
+  // port is genuinely occupied and must stay off-limits regardless of which app
+  // recorded it. (Vite defaults are likewise never exempted — moving off them
+  // is the point.)
   const own = new Set(excludePorts.filter(Number.isInteger));
-  return Array.from(new Set([...reserved, ...listening, ...VITE_DEFAULT_PORTS]))
+  const reservedMinusOwn = reserved.filter((p) => !own.has(p));
+  return Array.from(new Set([...reservedMinusOwn, ...listening, ...VITE_DEFAULT_PORTS]))
     .filter(Number.isInteger)
-    .filter((p) => !own.has(p))
     .sort((a, b) => a - b);
 }
 

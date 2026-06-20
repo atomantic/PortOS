@@ -285,17 +285,29 @@ describe('Apps Routes', () => {
       expect(streamingDetect.writeEcosystemPorts).not.toHaveBeenCalled();
     });
 
-    it('skips the rewrite when the changed port shares its value with another port field', async () => {
-      // uiPort derived from apiPort — both 6000. Changing only uiPort must NOT
-      // value-rewrite every 6000 (which would clobber the unchanged apiPort).
+    it('rejects (422) a port change that cannot be written to the config, leaving the registry untouched', async () => {
+      // uiPort derived from apiPort — both 6000. Changing only uiPort can't be
+      // value-rewritten without clobbering apiPort, so the request must fail
+      // rather than persist a registry value PM2 will contradict.
       const mockApp = { id: 'app-001', name: 'App', type: 'node', repoPath: process.cwd(), apiPort: 6000, uiPort: 6000 };
       appsService.getAppById.mockResolvedValue(mockApp);
-      appsService.updateApp.mockResolvedValue({ ...mockApp, uiPort: 7000 });
 
       const response = await request(app).put('/api/apps/app-001').send({ uiPort: 7000 });
 
-      expect(response.status).toBe(200);
+      expect(response.status).toBe(422);
       expect(streamingDetect.writeEcosystemPorts).not.toHaveBeenCalled();
+      expect(appsService.updateApp).not.toHaveBeenCalled();
+    });
+
+    it('rejects (422) when the port literal is not found in the config (changed:false)', async () => {
+      const mockApp = { id: 'app-001', name: 'App', type: 'node', repoPath: process.cwd(), apiPort: 5173 };
+      appsService.getAppById.mockResolvedValue(mockApp);
+      streamingDetect.writeEcosystemPorts.mockResolvedValueOnce({ file: 'ecosystem.config.cjs', changed: false });
+
+      const response = await request(app).put('/api/apps/app-001').send({ apiPort: 6000 });
+
+      expect(response.status).toBe(422);
+      expect(appsService.updateApp).not.toHaveBeenCalled();
     });
 
     it('fails the request (and does not update the registry) when the config write throws', async () => {

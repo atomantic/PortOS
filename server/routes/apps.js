@@ -392,30 +392,41 @@ router.put('/:id', asyncHandler(async (req, res, next) => {
     // Count current values so a value-keyed rewrite never fires on a number
     // shared by another port field (e.g. uiPort derived from apiPort, both
     // 6000) — that would rewrite every occurrence and clobber the field the
-    // user didn't touch.
+    // user didn't touch. Such a change is unpersistable by value alone.
     const valueCounts = new Map();
     for (const key of PORT_KEYS) {
       const v = existing[key];
       if (Number.isInteger(v)) valueCounts.set(v, (valueCounts.get(v) || 0) + 1);
     }
+    // A port the user actually changed (valid new value, differs from current).
+    const changedKeys = PORT_KEYS.filter(key => Number.isInteger(data[key]) && data[key] !== existing[key]);
     const remap = [];
-    for (const key of PORT_KEYS) {
+    const unpersistable = [];
+    for (const key of changedKeys) {
       const oldPort = existing[key];
-      const newPort = data[key];
-      if (!Number.isInteger(oldPort) || !Number.isInteger(newPort) || oldPort === newPort) continue;
-      if (valueCounts.get(oldPort) > 1) {
-        console.warn(`⚠️ Skipped ecosystem rewrite of ${key} for ${existing.name}: ${oldPort} is shared by another port — can't disambiguate by value`);
+      // No old literal to find (derived/absent), or value shared with another
+      // field (can't disambiguate by value) → can't write it to the config.
+      if (!Number.isInteger(oldPort) || valueCounts.get(oldPort) > 1) {
+        unpersistable.push(key);
         continue;
       }
-      remap.push([oldPort, newPort]);
+      remap.push([oldPort, data[key]]);
     }
-    if (remap.length > 0) {
-      const result = await writeEcosystemPorts(existing.repoPath, remap);
-      if (result?.changed) {
-        console.log(`🔧 Updated ${result.file} ports for ${existing.name}: ${remap.map(([o, n]) => `${o}→${n}`).join(', ')} (restart the app to apply)`);
-      } else {
-        console.warn(`⚠️ Port edit for ${existing.name} found no matching literal in ecosystem config — registry updated, but restart/refresh won't pick up the new port`);
-      }
+
+    const result = remap.length > 0 ? await writeEcosystemPorts(existing.repoPath, remap) : { changed: false };
+    if (result.changed) {
+      console.log(`🔧 Updated ${result.file} ports for ${existing.name}: ${remap.map(([o, n]) => `${o}→${n}`).join(', ')} (restart the app to apply)`);
+    }
+
+    // Honesty gate: if the user changed a port we could NOT write to the
+    // source-of-truth config, reject the whole update rather than persist a
+    // registry value PM2 will contradict (and the next refresh will revert).
+    // `!result.changed` catches remap pairs whose literal wasn't found.
+    if (changedKeys.length > 0 && (unpersistable.length > 0 || (remap.length > 0 && !result.changed))) {
+      throw new ServerError(
+        `Could not persist port change to ${existing.name}'s ecosystem config — the port is shared with another field, derived from process config, or not a literal value. Edit the ecosystem.config.cjs directly to change this port.`,
+        { status: 422, code: 'PORT_NOT_PERSISTABLE' }
+      );
     }
   }
 
