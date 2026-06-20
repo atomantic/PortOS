@@ -846,6 +846,63 @@ export async function writeEcosystemPortsByProcess(repoPath, edits) {
 }
 
 /**
+ * Persist a mixed port edit — a value-keyed `remap` (distinct ports) AND a set
+ * of per-process-label-targeted `edits` (shared-value ports) — to an app's
+ * ecosystem config in ONE atomic write.
+ *
+ * Both rewrites are computed in memory against the same file content, then the
+ * file is written exactly once. This is the only way to keep a mixed edit
+ * all-or-nothing: writing the value-keyed pass and the targeted pass as two
+ * separate `atomicWrite`s lets the first land on disk before the second reports
+ * an unpersistable edit — so a request the caller then 422s would still have
+ * partially changed the config. Here, if ANY targeted edit is unapplied, the
+ * file is left untouched and the whole result is reported as not-persisted, so
+ * the caller's reject path never leaves a partial write behind.
+ *
+ * Returns `{ file, changed, remapApplied, applied, unapplied }`:
+ *   - `remapApplied` — true when the value-keyed remap matched a literal
+ *   - `applied`/`unapplied` — the targeted edits that did / didn't rewrite
+ *
+ * @param {string} repoPath
+ * @param {Array<[number,number]>} remap
+ * @param {Array<{processName:string,label:string,oldPort:number,newPort:number}>} edits
+ */
+export async function writeEcosystemPortEdits(repoPath, remap, edits) {
+  const hasRemap = (remap || []).length > 0;
+  const hasEdits = (edits || []).length > 0;
+  if (!hasRemap && !hasEdits) return { file: null, changed: false, remapApplied: false, applied: [], unapplied: [] };
+
+  for (const name of ECOSYSTEM_CONFIG_FILENAMES) {
+    const filePath = join(repoPath, name);
+    if (!existsSync(filePath)) continue;
+    const content = await readFile(filePath, 'utf-8');
+
+    // Value-keyed pass first, then targeted — both against the in-memory result
+    // so the single write reflects both. The two passes operate on disjoint
+    // literals (distinct values vs shared values), so ordering can't clobber.
+    const afterRemap = hasRemap ? rewriteEcosystemPorts(content, remap) : content;
+    const { content: afterTargeted, applied, unapplied } = hasEdits
+      ? rewriteEcosystemPortsByProcess(afterRemap, edits)
+      : { content: afterRemap, applied: [], unapplied: [] };
+
+    const remapApplied = afterRemap !== content;
+
+    // Any unpersistable targeted edit ⇒ the caller rejects the whole request,
+    // so persist NOTHING (not even the value-keyed pass that did match).
+    if (unapplied.length > 0) {
+      return { file: name, changed: false, remapApplied: false, applied: [], unapplied };
+    }
+
+    if (afterTargeted !== content) {
+      await atomicWrite(filePath, afterTargeted);
+      return { file: name, changed: true, remapApplied, applied, unapplied };
+    }
+    return { file: name, changed: false, remapApplied, applied, unapplied };
+  }
+  return { file: null, changed: false, remapApplied: false, applied: [], unapplied: edits || [] };
+}
+
+/**
  * Stream detection results to a socket as each step completes
  */
 export async function streamDetection(socket, dirPath) {

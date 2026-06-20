@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { parseEcosystemConfig, rewriteEcosystemPorts, rewriteEcosystemPortsByProcess, writeEcosystemPorts, writeEcosystemPortsByProcess } from './streamingDetect.js';
+import { parseEcosystemConfig, rewriteEcosystemPorts, rewriteEcosystemPortsByProcess, writeEcosystemPorts, writeEcosystemPortsByProcess, writeEcosystemPortEdits } from './streamingDetect.js';
 
 describe('parseEcosystemConfig', () => {
   it('captures arbitrary *_PORT env vars and labels them by camelCased stem', () => {
@@ -677,6 +677,67 @@ module.exports = { apps: [
     expect(result.applied).toHaveLength(0); // nothing persisted
     expect(result.unapplied.length).toBeGreaterThan(0);
     // File is byte-for-byte unchanged — no partial write.
+    expect(readFileSync(join(dir, 'ecosystem.config.cjs'), 'utf-8')).toBe(original);
+  });
+});
+
+describe('writeEcosystemPortEdits (combined value-keyed + targeted, atomic)', () => {
+  let dir;
+  afterEach(() => { if (dir) rmSync(dir, { recursive: true, force: true }); dir = null; });
+
+  it('persists a distinct (value-keyed) and a shared (targeted) edit in one write', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'eco-edits-'));
+    writeFileSync(join(dir, 'ecosystem.config.cjs'), `module.exports = { apps: [
+  { name: 'srv', script: 's.js', ports: { api: 6000, ui: 6000 } },
+  { name: 'srv-ui', script: 'npx', args: 'vite --host --port 5556', env: { VITE_PORT: 5556 } }
+] };
+`);
+    const result = await writeEcosystemPortEdits(
+      dir,
+      [[5556, 7001]],
+      [{ processName: 'srv', label: 'ui', oldPort: 6000, newPort: 7000 }]
+    );
+    expect(result.changed).toBe(true);
+    expect(result.remapApplied).toBe(true);
+    expect(result.unapplied).toHaveLength(0);
+    const out = readFileSync(join(dir, 'ecosystem.config.cjs'), 'utf-8');
+    expect(out).toContain('ui: 7000');     // targeted
+    expect(out).toContain('VITE_PORT: 7001'); // value-keyed
+    expect(out).toContain('api: 6000');    // sibling untouched
+  });
+
+  it('persists NOTHING (not even the value-keyed pass) when a targeted edit is unapplied', async () => {
+    // The atomicity bug: the value-keyed remap (devUiPort 5556→7001) is
+    // rewritable, but the shared uiPort lives in an external PORTS.server const
+    // the targeted pass can't reach → unapplied → the route 422s. The
+    // value-keyed change must NOT have already hit disk.
+    dir = mkdtempSync(join(tmpdir(), 'eco-edits-'));
+    const original = `const PORTS = { server: { api: 6000, ui: 6000 } };
+module.exports = { apps: [
+  { name: 'srv', script: 's.js', ports: PORTS.server, env: { PORT: 6000 } },
+  { name: 'srv-ui', script: 'npx', args: 'vite --host --port 5556', env: { VITE_PORT: 5556 } }
+] };
+`;
+    writeFileSync(join(dir, 'ecosystem.config.cjs'), original);
+    const result = await writeEcosystemPortEdits(
+      dir,
+      [[5556, 7001]],                                                          // distinct, rewritable
+      [{ processName: 'srv', label: 'ui', oldPort: 6000, newPort: 7000 }]      // shared, in external const → unapplied
+    );
+    expect(result.changed).toBe(false);
+    expect(result.remapApplied).toBe(false); // reported as not-persisted
+    expect(result.unapplied.length).toBeGreaterThan(0);
+    // Critical: the file is byte-for-byte unchanged — the value-keyed devUiPort
+    // edit did NOT land on disk despite being individually rewritable.
+    expect(readFileSync(join(dir, 'ecosystem.config.cjs'), 'utf-8')).toBe(original);
+  });
+
+  it('is a no-op when both remap and edits are empty', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'eco-edits-'));
+    const original = `module.exports = { apps: [{ name: 'x', script: 's.js', env: { PORT: 6000 } }] };\n`;
+    writeFileSync(join(dir, 'ecosystem.config.cjs'), original);
+    const result = await writeEcosystemPortEdits(dir, [], []);
+    expect(result.changed).toBe(false);
     expect(readFileSync(join(dir, 'ecosystem.config.cjs'), 'utf-8')).toBe(original);
   });
 });
