@@ -33,6 +33,7 @@ import {
   characterVoiceProfiles,
   plotlineCoverageSummary,
   scenePovSummary,
+  declaredThemesSummary,
 } from './checkRegistry.js';
 
 const NAMING = 'naming.dissimilar-names';
@@ -45,6 +46,7 @@ const SENSORY_BALANCE = 'sensory.balance';
 const WHITE_ROOM = 'scene.white-room';
 const PLOT_STRUCTURE = 'plot.structure-momentum';
 const HEAD_HOPPING = 'pov.head-hopping';
+const THEME_COHERENCE = 'theme.coherence';
 
 // A minimal valid stored custom-check definition.
 const customDef = (over = {}) => ({
@@ -805,6 +807,109 @@ describe('plotlineCoverageSummary (#1310)', () => {
     expect(out).toContain('- x (other): 1 scene, issue 3');
     // The null and id-less rows are dropped.
     expect(out.split('\n').filter((l) => l.startsWith('- '))).toHaveLength(1);
+  });
+});
+
+describe('theme.coherence — LLM check (#1317)', () => {
+  const wholeCtx = (overrides = {}) => ({
+    manuscript: '# Issue 1\n\nShe chose loyalty, and it cost her everything.',
+    config: { maxFindings: 12 },
+    severityDefault: 'medium',
+    series: { arc: { themes: ['the cost of loyalty', 'forgiveness'] } },
+    reverseOutline: [{ sequence: 0, issueNumber: 1, heading: 'Opening', setting: 'a war room' }],
+    planManuscriptChunks: async () => ['# Issue 1\n\nShe chose loyalty.'],
+    callStagedLLM: async () => ({ content: { findings: [] } }),
+    ...overrides,
+  });
+
+  it('is registered as a series-scoped LLM check reading manuscript + arc themes + outline', () => {
+    const check = getCheck(THEME_COHERENCE);
+    expect(check.kind).toBe('llm');
+    expect(check.scope).toBe('series');
+    expect(check.category).toBe('theme');
+    expect(check.sources).toEqual(['manuscript', 'series.arc.themes', 'reverseOutline']);
+    expect(check.needsManuscript).toBe(true);
+  });
+
+  it('only runs when there is drafted prose to scan', () => {
+    const check = getCheck(THEME_COHERENCE);
+    expect(check.gate({ manuscript: '' })).toBe(false);
+    expect(check.gate({ manuscript: '# Issue 1\n\nprose' })).toBeTruthy();
+  });
+
+  it('passes the manuscript, declared themes, and scene map to the model and forces the theme category', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      planManuscriptChunks: async (_stage, opts) => {
+        // Declared themes + scene map both ride as fixed overhead.
+        expect(opts.overheadTokens).toBeGreaterThan(0);
+        return ['# Issue 1\n\nForgiveness is never mentioned again.'];
+      },
+      callStagedLLM: async (_stage, vars) => {
+        seenVars = vars;
+        return { content: { findings: [{ severity: 'high', issueNumber: 1, location: 'Dropped theme — "forgiveness"', problem: 'Set up then abandoned' }] } };
+      },
+    });
+    const findings = await getCheck(THEME_COHERENCE).run(ctx);
+    expect(seenVars.manuscript).toBe('# Issue 1\n\nForgiveness is never mentioned again.');
+    expect(seenVars.declaredThemes).toContain('the cost of loyalty');
+    expect(seenVars.declaredThemes).toContain('forgiveness');
+    expect(seenVars.sceneMap).toContain('Issue 1: Opening');
+    expect(findings).toHaveLength(1);
+    expect(findings[0].category).toBe('theme');
+    expect(findings[0].location).toBe('Dropped theme — "forgiveness"');
+  });
+
+  it('passes empty context vars when the series has no themes or outline', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      series: {},
+      reverseOutline: undefined,
+      callStagedLLM: async (_stage, vars) => { seenVars = vars; return { content: { findings: [] } }; },
+    });
+    await getCheck(THEME_COHERENCE).run(ctx);
+    expect(seenVars.declaredThemes).toBe('');
+    expect(seenVars.sceneMap).toBe('');
+  });
+
+  it('marks a single-chunk run as the final part so whole-arc judgments are enabled', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      callStagedLLM: async (_stage, vars) => { seenVars = vars; return { content: { findings: [] } }; },
+    });
+    await getCheck(THEME_COHERENCE).run(ctx);
+    expect(seenVars.finalPart).toBe('true');
+  });
+
+  it('flags only the LAST part as final across a chunked manuscript', async () => {
+    const finals = [];
+    const ctx = wholeCtx({
+      planManuscriptChunks: async () => ['# Issue 1\n\np1', '# Issue 2\n\np2', '# Issue 3\n\np3'],
+      callStagedLLM: async (_stage, vars) => { finals.push(vars.finalPart); return { content: { findings: [] } }; },
+    });
+    await getCheck(THEME_COHERENCE).run(ctx);
+    expect(finals).toEqual(['', '', 'true']);
+  });
+});
+
+describe('declaredThemesSummary (#1317)', () => {
+  it('returns an empty string when there are no themes', () => {
+    expect(declaredThemesSummary(null)).toBe('');
+    expect(declaredThemesSummary(undefined)).toBe('');
+    expect(declaredThemesSummary([])).toBe('');
+    expect(declaredThemesSummary(['', '   '])).toBe('');
+  });
+
+  it('renders one bullet per theme under a header', () => {
+    const out = declaredThemesSummary(['the cost of loyalty', 'forgiveness']);
+    expect(out).toContain('Declared themes (authored on the story arc):');
+    expect(out).toContain('- the cost of loyalty');
+    expect(out).toContain('- forgiveness');
+  });
+
+  it('is type-guarded against hand-edited / older-peer rows and trims whitespace', () => {
+    const out = declaredThemesSummary([42, null, '  identity  ', { x: 1 }]);
+    expect(out.split('\n').filter((l) => l.startsWith('- '))).toEqual(['- identity']);
   });
 });
 

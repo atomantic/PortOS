@@ -631,6 +631,13 @@
       "model": "default",
       "returnsJson": true,
       "variables": []
+    },
+    "pipeline-editorial-theme-coherence": {
+      "name": "Pipeline — Editorial Check: Theme coherence / thematic throughline",
+      "description": "Editorial check (#1317): whether the manuscript actually DELIVERS its declared themes (series.arc.themes), not just states them. Builds a per-theme setup/complication/payoff coverage map, flags a theme that is stated but never dramatized or dropped after the opening, detects a strong EMERGENT theme not in the arc, and checks that the climax lands the thematic argument. Reads the stitched manuscript plus the authored arc themes and the reverse-outline scene map; degrades to a whole-manuscript scan when no outline or no themes exist. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
     }
   }
 }

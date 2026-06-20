@@ -121,8 +121,11 @@ export const PLATFORMS = {
   }
 };
 
-const loadAccounts = store.load;
-const saveAccounts = store.save;
+// Exported so the digital-twin peer-sync (digital-twin-sync.js) can read/merge/
+// write social accounts through the owning service — keeping the cache fresh and
+// any future save hooks intact rather than writing the file out from under it.
+export const loadAccounts = store.load;
+export const saveAccounts = store.save;
 export const invalidateCache = store.invalidateCache;
 
 export function notifyChanged(action = 'update', accountId = null) {

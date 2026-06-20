@@ -59,6 +59,10 @@ const SOURCE_RESOLVERS = {
   'series.arc.tickingClock': ({ series }) => canonicalStringify(series?.arc?.tickingClock ?? null),
   // The authored reader-map hooks/payoffs the Chekhov check reconciles against (#1299).
   'series.arc.readerMap': ({ series }) => canonicalStringify(series?.arc?.readerMap ?? null),
+  // The authored arc themes the theme.coherence check reconciles the prose against
+  // (#1317). Lives on the already-loaded series record, so no extra I/O — fingerprint
+  // the whole themes array so adding/editing a declared theme stales the findings.
+  'series.arc.themes': ({ series }) => canonicalStringify(series?.arc?.themes ?? null),
   // The reverse-outline scenes the check reads (#1296). Fingerprinting the whole
   // scenes array is intentionally over-eager (any scene edit stales a finding)
   // rather than under: safe vs. false-fresh, and the check reads several scene fields.

@@ -115,6 +115,7 @@ export const EDITORIAL_SOURCES = Object.freeze([
   'series.styleGuide',
   'series.arc.tickingClock',
   'series.arc.readerMap',
+  'series.arc.themes',
   'reverseOutline',
   'reverseOutline.plotlines',
   'editorialArcs',
@@ -307,6 +308,33 @@ export const PLOT_STRUCTURE_STAGE = 'pipeline-editorial-plot-structure';
 // check polices POV *discipline* within a scene — narration that enters another
 // character's head or reports what the POV character can't perceive.
 export const HEAD_HOPPING_STAGE = 'pipeline-editorial-head-hopping';
+
+// Stage name for the theme-coherence / thematic-throughline LLM check (#1317).
+// Ships in data.reference/prompts/stages/ + stage-config.json (fresh installs via
+// setup-data.js) and migrates to existing installs via migration 115 (boot runs
+// migrations but NOT setup-data, so the migration is required). Reads the stitched
+// manuscript plus the AUTHORED arc themes (series.arc.themes) and the reverse-outline
+// scene map, and reconciles whether each declared theme is set up / complicated /
+// paid off — surfacing stated-but-undramatized themes, dropped themes, a strong
+// emergent theme not in the arc, and a climax that resolves plot but not theme.
+export const THEME_COHERENCE_STAGE = 'pipeline-editorial-theme-coherence';
+
+// Render the authored arc themes (#1317) into a compact text block the
+// theme-coherence check passes alongside the manuscript, so the model reconciles
+// whether the prose actually sets up / complicates / pays off each DECLARED theme
+// (vs. stating it but never dramatizing it, or dropping it after the opening).
+// Pure + deterministic so it's unit-testable and its token cost can be counted
+// into the per-chunk overhead. Returns '' when no themes are authored (the
+// prompt's `{{#declaredThemes}}` section then renders nothing and the check still
+// runs to detect a strong emergent theme).
+export function declaredThemesSummary(themes) {
+  const lines = (Array.isArray(themes) ? themes : [])
+    .map((t) => (typeof t === 'string' ? t.trim() : ''))
+    .filter(Boolean)
+    .map((t) => `- ${t}`);
+  if (!lines.length) return '';
+  return `Declared themes (authored on the story arc):\n${lines.join('\n')}`;
+}
 
 // Render the authored reader-map cliffhangers (#1298) into a compact text block
 // the chapter-ending check passes alongside the manuscript so the model
@@ -2540,6 +2568,77 @@ export const EDITORIAL_CHECKS = [
           + 'the stakes established so far and whether they have escalated; and any setup '
           + '(a planted problem, a coincidence, a try-fail attempt) a later part should pay off, '
           + 'so a later chunk can tell a genuinely dropped subplot or flat-stakes arc from one whose payoff simply has not arrived yet.',
+      });
+    },
+  },
+  {
+    id: 'theme.coherence',
+    sources: ['manuscript', 'series.arc.themes', 'reverseOutline'],
+    label: 'Theme coherence / thematic throughline',
+    description:
+      'Checks whether the manuscript actually DELIVERS its declared themes (series.arc.themes), not just states them. For each authored theme it maps where the story sets it up, complicates it, and pays it off — flagging a theme that is stated but never dramatized, or dropped after the opening. Detects a strong EMERGENT theme the story is really telling that is not in the arc (offers to add it), and checks that the climax/resolution lands the thematic argument (vs. resolving plot but not theme). Reads the reverse-outline scene map to attribute setup/payoff to scenes; degrades to a whole-manuscript scan when no outline or no themes exist.',
+    scope: 'series',
+    kind: 'llm',
+    category: 'theme',
+    severityDefault: 'medium',
+    defaultEnabled: true,
+    // Reads the stitched manuscript corpus — so the runner only pays the
+    // section-collection I/O when a manuscript-consuming check is enabled.
+    needsManuscript: true,
+    configSchema: z.object({
+      // Cap findings per run so a long manuscript can't flood the review.
+      maxFindings: z.number().int().min(1).max(50).default(12),
+    }),
+    configFields: [
+      {
+        key: 'maxFindings',
+        label: 'Max findings per run',
+        type: 'number',
+        min: 1,
+        max: 50,
+        step: 1,
+        help: 'Cap findings so a long manuscript can not flood the review.',
+      },
+    ],
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    run: (ctx) => {
+      // Both blocks are fixed per-call overhead (re-sent on each chunk) and pure
+      // context: the declared themes let the model build a per-theme setup/
+      // complication/payoff coverage map and reconcile detected vs. authored
+      // themes; the scene map lets it attribute setup/payoff to a scene + issue.
+      // The check degrades gracefully — no authored themes ⇒ {{#declaredThemes}}
+      // renders nothing and the check works from the prose alone to surface a
+      // strong emergent theme; no outline ⇒ {{#sceneMap}} renders nothing.
+      const declaredThemes = declaredThemesSummary(ctx.series?.arc?.themes);
+      const sceneMap = sceneGroundingSummary(ctx.reverseOutline);
+      return runManuscriptLlmCheck(ctx, {
+        stage: THEME_COHERENCE_STAGE,
+        category: 'theme',
+        overheadTokens:
+          EDITORIAL_PROMPT_OVERHEAD_TOKENS
+          + estimateTokens(declaredThemes)
+          + estimateTokens(sceneMap),
+        // `isFinal` gates the whole-corpus judgments — a theme that is set up but
+        // never paid off, a theme dropped after the opening, and whether the
+        // climax lands the thematic argument can only be judged once the whole
+        // manuscript is in view; an earlier chunk can't know a theme is paid off
+        // later, so it would false-flag.
+        buildVars: (manuscript, meta) => ({
+          manuscript,
+          declaredThemes,
+          sceneMap,
+          finalPart: meta?.isFinal ? 'true' : '',
+        }),
+        // Theme coverage accrues across the whole manuscript — the findings digest
+        // keeps prior findings in view so a later chunk doesn't re-flag, and the
+        // clean-setup digest rolls forward which themes have been set up /
+        // complicated so a later payoff isn't mis-read as a dropped theme.
+        crossChunkDigest: true,
+        crossChunkSetup: true,
+        setupFocus: 'For each declared theme, note where it has been set up or complicated so far '
+          + 'and whether it has been paid off yet; and note any strong EMERGENT theme the story '
+          + 'is dramatizing that is not in the declared list, so a later chunk can tell a genuinely '
+          + 'dropped/undramatized theme from one whose payoff simply has not arrived yet.',
       });
     },
   },

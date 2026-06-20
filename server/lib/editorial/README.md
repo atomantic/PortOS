@@ -57,8 +57,12 @@ it. To add a new built-in check, append an entry to `EDITORIAL_CHECKS` in
 Declare every input the check's `run(ctx)` reads in its `sources` array (a
 non-empty subset of `EDITORIAL_SOURCES`: `manuscript`, `canon`,
 `series.styleGuide`, `series.arc.tickingClock`, `series.arc.readerMap`,
-`reverseOutline`, `reverseOutline.plotlines`, `editorialArcs`,
-`series.characterArcs`, `storyboard.shots`, `comicScript`). The staleness
+`series.arc.themes`, `reverseOutline`, `reverseOutline.plotlines`,
+`editorialArcs`, `series.characterArcs`, `storyboard.shots`, `comicScript`).
+The `series.arc.themes` token (#1317) fingerprints the AUTHORED arc themes the
+`theme.coherence` check reconciles the prose against (lives on the already-loaded
+series record, no extra I/O — adding/editing a declared theme stales its findings).
+The staleness
 runner fingerprints exactly those sources, so a finding goes stale only when
 content the check actually analyzed drifts — declare too few and a finding stays
 falsely fresh; a `manuscript` source must pair with `needsManuscript: true`, and

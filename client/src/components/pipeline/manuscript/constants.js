@@ -38,6 +38,9 @@ export const CATEGORY_LABEL = {
   // Plot-structure findings (#1310): passive protagonist, deus ex machina, idiot
   // plot, flat stakes, sagging middle, dropped subplots from plot.structure-momentum.
   plot: 'Plot structure',
+  // Theme-coherence findings (#1317): stated-but-undramatized / dropped / unpaid
+  // themes and emergent-theme suggestions from the theme.coherence check.
+  theme: 'Theme',
   pacing: 'Pacing',
   continuity: 'Continuity',
   style: 'Style',

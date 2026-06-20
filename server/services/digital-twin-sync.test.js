@@ -5,6 +5,8 @@ import {
   unionByKey,
   mergeTaste,
   mergeMeta,
+  mergeConfidence,
+  mergeSocialAccounts,
   mergeAutobiographyStories,
   safeMdName,
 } from './digital-twin-sync.js';
@@ -211,6 +213,90 @@ describe('mergeAutobiographyStories', () => {
     const { merged } = mergeAutobiographyStories(local, remote);
     expect(merged.stories.map((s) => s.id)).toEqual(['s1', 's2', 's3']);
     expect(merged.usedPrompts).toEqual(['a', 'z']);
+  });
+});
+
+describe('mergeConfidence (analyzed personality traits)', () => {
+  it('takes remote when local is missing/invalid', () => {
+    const remote = { dimensions: { openness: 0.6 }, overall: 0.6, gaps: [], lastCalculated: '2026-02-01' };
+    expect(mergeConfidence(null, remote)).toEqual({ merged: remote, changed: true });
+    expect(mergeConfidence(undefined, remote).changed).toBe(true);
+  });
+
+  it('keeps local and reports no change when remote is missing/empty', () => {
+    const local = { dimensions: { openness: 0.6 }, overall: 0.6, gaps: [], lastCalculated: '2026-02-01' };
+    expect(mergeConfidence(local, null).changed).toBe(false);
+    expect(mergeConfidence(local, undefined).merged).toBe(local);
+  });
+
+  it('maxes each dimension so no machine\'s analysis is lost', () => {
+    const local = { dimensions: { openness: 0.8, extraversion: 0.2 }, overall: 0.5, gaps: [], lastCalculated: '2026-01-01' };
+    const remote = { dimensions: { openness: 0.4, conscientiousness: 0.9 }, overall: 0.65, gaps: [], lastCalculated: '2026-02-01' };
+    const { merged, changed } = mergeConfidence(local, remote);
+    expect(merged.dimensions).toEqual({ openness: 0.8, extraversion: 0.2, conscientiousness: 0.9 });
+    expect(changed).toBe(true);
+  });
+
+  it('recomputes overall as the mean of merged dimensions (2dp)', () => {
+    const local = { dimensions: { a: 0.2 }, overall: 0.2, lastCalculated: '2026-01-01' };
+    const remote = { dimensions: { a: 0.6, b: 0.9 }, overall: 0.75, lastCalculated: '2026-02-01' };
+    const { merged } = mergeConfidence(local, remote);
+    // dims merge to { a: 0.6, b: 0.9 } → mean 0.75
+    expect(merged.overall).toBe(0.75);
+  });
+
+  it('carries gaps + lastCalculated from the more-recently-calculated side', () => {
+    const local = { dimensions: { a: 0.5 }, gaps: [{ dimension: 'a' }], lastCalculated: '2026-01-01' };
+    const remote = { dimensions: { a: 0.5 }, gaps: [{ dimension: 'b' }], lastCalculated: '2026-02-01' };
+    const { merged } = mergeConfidence(local, remote);
+    expect(merged.gaps).toEqual([{ dimension: 'b' }]);
+    expect(merged.lastCalculated).toBe('2026-02-01');
+  });
+});
+
+describe('mergeMeta wires confidence', () => {
+  it('brings over a peer\'s analyzed traits into a fresh local meta', () => {
+    const local = { documents: [], confidence: { dimensions: {}, overall: 0, gaps: [], lastCalculated: '' } };
+    const remote = { documents: [], confidence: { dimensions: { openness: 0.7 }, overall: 0.7, gaps: [], lastCalculated: '2026-03-01' } };
+    const { merged, changed } = mergeMeta(local, remote);
+    expect(changed).toBe(true);
+    expect(merged.confidence.dimensions.openness).toBe(0.7);
+    expect(merged.confidence.lastCalculated).toBe('2026-03-01');
+  });
+
+  it('does not blank local confidence when the peer sends none', () => {
+    const local = { documents: [], confidence: { dimensions: { openness: 0.7 }, overall: 0.7, lastCalculated: '2026-03-01' } };
+    const { merged } = mergeMeta(local, { documents: [] });
+    expect(merged.confidence.dimensions.openness).toBe(0.7);
+  });
+});
+
+describe('mergeSocialAccounts', () => {
+  it('takes remote when local is missing/invalid', () => {
+    const remote = { accounts: { a1: { platform: 'github', updatedAt: '2026-01-01' } } };
+    expect(mergeSocialAccounts(null, remote)).toEqual({ merged: remote, changed: true });
+  });
+
+  it('keeps local and reports no change when remote is missing', () => {
+    const local = { accounts: { a1: { platform: 'github' } } };
+    expect(mergeSocialAccounts(local, null).changed).toBe(false);
+  });
+
+  it('unions accounts by id, keeping each side\'s unique entries', () => {
+    const local = { accounts: { a1: { platform: 'github', updatedAt: '2026-01-01' } } };
+    const remote = { accounts: { a2: { platform: 'x', updatedAt: '2026-01-02' } } };
+    const { merged, changed } = mergeSocialAccounts(local, remote);
+    expect(Object.keys(merged.accounts).sort()).toEqual(['a1', 'a2']);
+    expect(changed).toBe(true);
+  });
+
+  it('LWW on a shared account by updatedAt', () => {
+    const local = { accounts: { a1: { username: 'old', updatedAt: '2026-01-01' } } };
+    const remote = { accounts: { a1: { username: 'new', updatedAt: '2026-02-01' } } };
+    expect(mergeSocialAccounts(local, remote).merged.accounts.a1.username).toBe('new');
+    const older = { accounts: { a1: { username: 'older', updatedAt: '2025-12-01' } } };
+    expect(mergeSocialAccounts(local, older).merged.accounts.a1.username).toBe('old');
+    expect(mergeSocialAccounts(local, older).changed).toBe(false);
   });
 });
 

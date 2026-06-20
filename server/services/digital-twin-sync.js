@@ -17,11 +17,14 @@
  *   - feedback.json        — LWW on updatedAt
  *   - taste-profile.json   — per-section union of responses (never lose answers)
  *   - meta.json            — union of documents/histories/personas, deep-union
- *                            enrichment, fill-missing settings
+ *                            enrichment, fill-missing settings, and the analyzed
+ *                            personality-trait confidence (max per dimension —
+ *                            see mergeConfidence)
  *   - *.md documents       — content shipped by filename, ADD-ONLY on the
  *                            receiver (a local doc is never overwritten)
  *   - autobiography/        — stories union by id (LWW); config (the prompt
  *                            schedule) is NOT synced — it's machine-local
+ *   - social-accounts.json  — the user's own social accounts, union by id (LWW)
  *
  * Merge philosophy mirrors the rest of dataSync: union semantics, no data is
  * ever lost, and every field is key-presence guarded so an OLDER peer that only
@@ -46,6 +49,7 @@ const TASTE_FILE = join(DIR, 'taste-profile.json');
 const META_FILE = join(DIR, 'meta.json');
 const AUTOBIO_DIR = join(DIR, 'autobiography');
 const AUTOBIO_STORIES_FILE = join(AUTOBIO_DIR, 'stories.json');
+const SOCIAL_ACCOUNTS_FILE = join(DIR, 'social-accounts.json');
 
 // Paths whose fingerprints feed the dataSync checksum cache. The whole
 // digital-twin dir is watched (two levels deep — covers top-level files, the
@@ -217,9 +221,56 @@ function mergeEnrichment(local, remote) {
 }
 
 /**
+ * Merge the analyzed personality-trait confidence block (meta.confidence). The
+ * per-dimension scores accumulate monotonically as enrichment answers are
+ * processed on a machine (digital-twin-enrichment.js boosts then clamps to 1),
+ * so the union that loses no analysis is max-per-dimension — mirroring how
+ * mergeEnrichment maxes questionsAnswered. `overall` is recomputed as the mean
+ * of the merged dimensions (matching the enrichment formula), `lastCalculated`
+ * takes the newer stamp, and `gaps` are carried from the more-recently-calculated
+ * side (advisory only — a local enrichment answer regenerates them). Key-presence
+ * guarded: a peer that sends no confidence can't blank the local analysis.
+ */
+export function mergeConfidence(local, remote) {
+  if (!isPlainObject(remote)) return { merged: local, changed: false };
+  if (!isPlainObject(local)) return { merged: remote, changed: true };
+
+  const lDims = isPlainObject(local.dimensions) ? local.dimensions : {};
+  const rDims = isPlainObject(remote.dimensions) ? remote.dimensions : {};
+  const dimensions = { ...lDims };
+  let changed = false;
+  for (const [k, rv] of Object.entries(rDims)) {
+    if (typeof rv !== 'number') continue;
+    const lv = typeof dimensions[k] === 'number' ? dimensions[k] : -Infinity;
+    if (rv > lv) { dimensions[k] = rv; changed = true; }
+  }
+
+  const dimValues = Object.values(dimensions).filter((v) => typeof v === 'number');
+  const overall = dimValues.length
+    ? Math.round((dimValues.reduce((a, b) => a + b, 0) / dimValues.length) * 100) / 100
+    : 0;
+
+  const localStamp = local.lastCalculated || '';
+  const remoteStamp = remote.lastCalculated || '';
+  const remoteNewer = remoteStamp > localStamp;
+  const gaps = remoteNewer && Array.isArray(remote.gaps) ? remote.gaps
+    : Array.isArray(local.gaps) ? local.gaps : [];
+  const lastCalculated = remoteNewer ? remoteStamp : localStamp;
+
+  const merged = { ...local, dimensions, overall, gaps, lastCalculated };
+  // gaps are derived from dimensions, so the dimension/overall/stamp checks
+  // already cover any real change — no separate gaps comparison needed.
+  if (!changed) {
+    changed = overall !== local.overall || lastCalculated !== (local.lastCalculated || '');
+  }
+  return { merged, changed };
+}
+
+/**
  * Merge digital-twin meta.json: documents union by filename (ADD-ONLY — a local
  * doc entry is never replaced), the four test histories + personas union by id,
- * enrichment deep-unions, settings fill missing keys (local values win).
+ * enrichment deep-unions, settings fill missing keys (local values win), and the
+ * analyzed personality-trait confidence max-per-dimension.
  */
 export function mergeMeta(local, remote) {
   if (!isPlainObject(remote)) return { merged: local, changed: false };
@@ -251,7 +302,35 @@ export function mergeMeta(local, remote) {
     }
   }
 
+  if (isPlainObject(remote.confidence)) {
+    const c = mergeConfidence(local.confidence, remote.confidence);
+    if (c.changed) { merged.confidence = c.merged; changed = true; }
+  }
+
   return { merged, changed };
+}
+
+/**
+ * Merge the user's own social accounts (social-accounts.json: `{ accounts: { id:
+ * {...} } }`). Accounts union by id, LWW on updatedAt — an account added on
+ * either machine survives, and the more-recently-edited copy wins a collision.
+ * Key-presence guarded: a peer that sends no socialAccounts can't blank local.
+ */
+export function mergeSocialAccounts(local, remote) {
+  if (!isPlainObject(remote)) return { merged: local, changed: false };
+  if (!isPlainObject(local)) return { merged: remote, changed: true };
+
+  const lAcc = isPlainObject(local.accounts) ? local.accounts : {};
+  const rAcc = isPlainObject(remote.accounts) ? remote.accounts : {};
+  const accounts = { ...lAcc };
+  let changed = false;
+  for (const [id, rv] of Object.entries(rAcc)) {
+    if (!isPlainObject(rv)) continue;
+    const lv = accounts[id];
+    if (!isPlainObject(lv)) { accounts[id] = rv; changed = true; continue; }
+    if ((rv.updatedAt || '') > (lv.updatedAt || '')) { accounts[id] = rv; changed = true; }
+  }
+  return { merged: { ...local, accounts }, changed };
 }
 
 /**
@@ -323,7 +402,7 @@ export async function getDigitalTwinSnapshot() {
   // lastPromptAt) is deliberately NOT in the snapshot — it is machine-local
   // scheduling state, and a fresh peer must not inherit another machine's
   // cadence or have prompts enabled without local opt-in. Only the stories sync.
-  const [identity, chronotype, longevity, feedback, taste, meta, documents, stories] =
+  const [identity, chronotype, longevity, feedback, taste, meta, documents, stories, socialAccounts] =
     await Promise.all([
       readJSONFile(IDENTITY_FILE, null),
       readJSONFile(CHRONOTYPE_FILE, null),
@@ -333,8 +412,9 @@ export async function getDigitalTwinSnapshot() {
       readJSONFile(META_FILE, null),
       readMarkdownDocuments(),
       readJSONFile(AUTOBIO_STORIES_FILE, null),
+      readJSONFile(SOCIAL_ACCOUNTS_FILE, null),
     ]);
-  const data = { identity, chronotype, longevity, feedback, taste, meta, documents, autobiography: { stories } };
+  const data = { identity, chronotype, longevity, feedback, taste, meta, documents, autobiography: { stories }, socialAccounts };
   return { data, checksum: computeChecksum(data) };
 }
 
@@ -397,6 +477,21 @@ async function applyMeta(remoteMeta) {
   return 1;
 }
 
+// Route through socialAccounts.js's own load/save (mirrors applyMeta) so the
+// service's cache stays fresh — a raw write would leave the UI serving pre-sync
+// data until the store's TTL lapses. saveAccounts updates the cache in place;
+// notifyChanged emits the change event so the Digital Twin UI updates at once.
+async function applySocialAccounts(remoteSocial) {
+  if (!isPlainObject(remoteSocial)) return 0;
+  const { loadAccounts, saveAccounts, notifyChanged } = await import('./socialAccounts.js');
+  const local = await loadAccounts();
+  const { merged, changed } = mergeSocialAccounts(local, remoteSocial);
+  if (!changed) return 0;
+  await saveAccounts(merged);
+  notifyChanged('sync');
+  return 1;
+}
+
 export async function applyDigitalTwinRemote(remoteData) {
   if (!isPlainObject(remoteData)) return { applied: false, count: 0 };
 
@@ -419,6 +514,8 @@ export async function applyDigitalTwinRemote(remoteData) {
     // stories only — config (prompt schedule) is intentionally machine-local.
     count += await applyMerge(AUTOBIO_STORIES_FILE, remoteData.autobiography.stories, mergeAutobiographyStories, { dir: AUTOBIO_DIR });
   }
+
+  count += await applySocialAccounts(remoteData.socialAccounts);
 
   if (count > 0) console.log(`🔄 Digital twin sync: updated ${count} items`);
   return { applied: count > 0, count };
