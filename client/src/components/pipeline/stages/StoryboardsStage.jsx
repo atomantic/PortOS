@@ -127,12 +127,19 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
   // through the server which keeps whatever id the client wrote.
   const mintShotId = () => `shot-${Math.random().toString(36).slice(2, 10)}`;
 
+  // Reads + writes scenesRef (not the render-scope `scenes`) so two discrete
+  // picks fired back-to-back — e.g. setting shotType then screenDirection on the
+  // same shot before a re-render — each build on the prior pick's result. Without
+  // this, the second persist would ship a snapshot missing the first field and,
+  // since the server serializes scenes writes (last-write-wins on the whole
+  // array), silently clobber it. Mirrors updateScene's ref discipline.
   const updateShots = (sceneIdx, transform) => {
-    const next = scenes.map((s, j) => {
+    const next = scenesRef.current.map((s, j) => {
       if (j !== sceneIdx) return s;
       const shots = Array.isArray(s.shots) ? s.shots : [];
       return { ...s, shots: transform(shots) };
     });
+    scenesRef.current = next;
     setScenes(next);
     return next;
   };
