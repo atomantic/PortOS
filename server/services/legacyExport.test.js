@@ -235,6 +235,17 @@ describe('key decisions section (enriched derivation)', () => {
     expect(md).toContain('[REDACTED]');
     expect(md).not.toContain('ghp_0123');
   });
+
+  it('redacts BEFORE truncating so a secret near the 280-char clip boundary cannot leak partially', () => {
+    // Pad so the token straddles the truncation point — redact-after-truncate
+    // would clip the token below the regex min-length and leak a `ghp_…` prefix.
+    const d = sampleData();
+    d.goals = [];
+    const padding = 'context '.repeat(34); // ~272 chars before the token
+    d.brain.journals = [{ id: 'j', title: 'Decision', content: `${padding}ghp_0123456789abcdefghijklmnopqrstuvwx tail`, tags: ['decision'] }];
+    const md = decisionsMd(d);
+    expect(md).not.toContain('ghp_0123');
+  });
 });
 
 describe('buildManifest', () => {

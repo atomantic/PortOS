@@ -411,7 +411,9 @@ function buildDecisionsMd(d) {
     const when = item.date ? ` _(${String(item.date).slice(0, 10)})_` : '';
     // The decisions section is a digest — truncate a long brain-entry body to a
     // single-line summary (the full text already lives in the Brain section).
-    const detail = item.detail ? ` — ${redactSecrets(truncateOneLine(String(item.detail), 280))}` : '';
+    // Redact BEFORE truncating: clipping first could cut a token-shaped secret
+    // below redactSecrets' min-length and leak a partial key (e.g. `ghp_0123…`).
+    const detail = item.detail ? ` — ${truncateOneLine(redactSecrets(String(item.detail)), 280)}` : '';
     out.push(`- **${redactSecrets(String(item.label || 'Decision'))}**${detail}${when}`);
   }
   return out.join('\n\n');
