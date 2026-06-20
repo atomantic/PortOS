@@ -561,10 +561,22 @@ function findAppBlock(content, processName) {
  * Sources rewritten per label mirror parseEcosystemConfig's derivation AND the
  * PM2 runtime env (so the config the parser reads and the env PM2 launches with
  * both move together):
- *   - api  → `ports: { api: N }`, env `PORT`, `PORT: … || N` fallback, `port:`
- *   - ui   → `ports: { ui|devUi: N }`, env `VITE_PORT`, `--port N`, and env
- *            `PORT` ONLY when the block has no `ports:` object (a UI-named
- *            process whose bare `PORT` IS the UI port).
+ *   - api  → `ports: { api: N }`, plus env `PORT`/`PORT: … || N`/`port:` ONLY
+ *            when the block has no `ports:` REFERENCE (`ports: PORTS.server`) —
+ *            for a reference the parser reads the external const, not env, so
+ *            rewriting env would falsely report success while the real source
+ *            (and displayed port) reverts on refresh.
+ *   - ui   → exact `ui:` key, env `VITE_PORT`, `--port N`, and bare env `PORT`
+ *            only when there's no explicit ports source (inline object OR
+ *            reference) — a UI-named process whose bare `PORT` IS the UI port.
+ *   - devUi → exact `devUi:` key (same env/args/bare-PORT sources as ui), PLUS
+ *            a Vite process's `ui:` literal when the block has no explicit
+ *            `devUi:` key (parseEcosystemConfig relabels ui→devUi when an api
+ *            sibling exists, so the on-disk source for that devUi IS `ui:`).
+ *
+ * Matching the EXACT label key (not a combined `ui|devUi`) means a block that
+ * carries both `ui:` and `devUi:` with the same value only rewrites the one the
+ * user edited — the sibling keeps its literal.
  *
  * @returns {{ block: string, changed: boolean }}
  */
@@ -575,26 +587,33 @@ function rewriteLabelInBlock(block, label, oldP, newP) {
   // the number changes (no whitespace artifact).
   const ph = 'PORT_TGT_PLACEHOLDER';
   const NUM = `${oldP}\\b`;
-  const hasPortsObj = /\bports\s*:\s*\{/.test(block);
+  // An explicit ports source is what parseEcosystemConfig derives from. An
+  // inline `ports: { ... }` object is rewritable in-block; a `ports: PORTS.x`
+  // REFERENCE points at an external const this block can't reach, so the
+  // same-valued env literal must NOT be used as a fallback for it (false
+  // success + silent runtime-env change). Both forms mean env `PORT` is
+  // metadata, not the parser's value.
+  const hasInlinePortsObj = /\bports\s*:\s*\{/.test(block);
+  const hasPortsReference = /\bports\s*:\s*[A-Za-z_$]/.test(block);
+  const hasExplicitPortsSource = hasInlinePortsObj || hasPortsReference;
+  // `PORT`/`'PORT'`/`` `PORT` `` followed by `:` and optional whitespace.
+  const PORT_KEY = "['\"`]?\\bPORT\\b['\"`]?\\s*:\\s*";
 
-  let pats;
+  const pats = [];
   if (label === 'api') {
-    pats = [
-      `(\\bapi\\s*:\\s*)${NUM}`,                                           // ports: { api: N }
-      `(['"\`]?\\bPORT\\b['"\`]?\\s*:\\s*[^,}\\n]*?\\|\\|\\s*['"]?)${NUM}`, // PORT: … || N (fallback)
-      `(['"\`]?\\bPORT\\b['"\`]?\\s*:\\s*)${NUM}`,                          // env PORT: N
-      `(\\bport\\s*:\\s*)${NUM}`,                                           // port: N
-    ];
+    pats.push(`(\\bapi\\s*:\\s*)${NUM}`);                            // ports: { api: N }
+    if (!hasPortsReference) {
+      pats.push(`(${PORT_KEY}[^,}\\n]*?\\|\\|\\s*['"]?)${NUM}`);     // PORT: … || N (fallback)
+      pats.push(`(${PORT_KEY})${NUM}`);                             // env PORT: N
+      pats.push(`(\\bport\\s*:\\s*)${NUM}`);                        // port: N
+    }
   } else {
-    // ui / devUi share on-disk sources (devUi is a parse-time relabel of ui).
-    pats = [
-      `(\\b(?:ui|devUi)\\s*:\\s*)${NUM}`,                                   // ports: { ui|devUi: N }
-      `(['"\`]?\\bVITE_PORT\\b['"\`]?\\s*:\\s*)${NUM}`,                     // env VITE_PORT: N
-      `(--port\\s+)${NUM}`,                                                 // args --port N
-    ];
-    // Bare PORT is the UI port only when there's no explicit ports object (a
-    // ports object means env is metadata-only and PORT belongs to the api).
-    if (!hasPortsObj) pats.push(`(['"\`]?\\bPORT\\b['"\`]?\\s*:\\s*)${NUM}`);
+    const hasDevUiKey = /\bdevUi\s*:\s*\d/.test(block);
+    pats.push(label === 'devUi' ? `(\\bdevUi\\s*:\\s*)${NUM}` : `(\\bui\\s*:\\s*)${NUM}`); // exact key
+    if (label === 'devUi' && !hasDevUiKey) pats.push(`(\\bui\\s*:\\s*)${NUM}`); // relabeled-from-ui source
+    pats.push(`(['"\`]?\\bVITE_PORT\\b['"\`]?\\s*:\\s*)${NUM}`);    // env VITE_PORT: N
+    pats.push(`(--port\\s+)${NUM}`);                               // args --port N
+    if (!hasExplicitPortsSource) pats.push(`(${PORT_KEY})${NUM}`); // bare PORT of a UI-named process
   }
 
   let out = block;
@@ -609,10 +628,14 @@ function rewriteLabelInBlock(block, label, oldP, newP) {
 /**
  * Per-process-label-targeted port rewrite — the disambiguating counterpart to
  * the value-keyed `rewriteEcosystemPorts`. Each edit names the process and the
- * label (`api`/`ui`/`devUi`) to change, so a value shared by two labels (e.g.
- * prod UI served by the API where `uiPort === apiPort`, or an explicit
- * `ports: { api: N, ui: N }` map) is rewritten on exactly the one the user
- * touched. Pure (no I/O) for unit-testability.
+ * label (`api`/`ui`/`devUi`) to change, so a value shared by two labels in the
+ * SAME block (e.g. an explicit `ports: { api: N, ui: N }` map, or a UI process
+ * whose bare `PORT` is its only port) is rewritten on exactly the one the user
+ * touched. An edit whose label has no rewritable literal inside the process
+ * block — e.g. the value lives in an external `const PORTS = {…}` reached via
+ * `ports: PORTS.server`, which this in-block rewrite can't see — is returned in
+ * `unapplied` (the caller 422s) rather than falsely rewriting a same-valued env
+ * literal the parser ignores. Pure (no I/O) for unit-testability.
  *
  * @param {string} content
  * @param {Array<{processName:string,label:string,oldPort:number,newPort:number}>} edits

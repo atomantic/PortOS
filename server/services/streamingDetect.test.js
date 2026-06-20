@@ -506,6 +506,42 @@ describe('rewriteEcosystemPortsByProcess', () => {
     expect(parseEcosystemConfig(r.content).processes.find(p => p.name === 'srv-ui').ports.devUi).toBe(7002);
   });
 
+  it('does NOT rewrite env PORT as a fallback for a ports: PORTS.x reference block (honest unapplied, no false success)', () => {
+    // The block derives api/ui from `ports: PORTS.server` (a reference to a
+    // const outside the app block), so the parser ignores env.PORT. A targeted
+    // edit can't reach the external const from inside the block — so it must
+    // report `unapplied` (→ caller 422s) rather than rewriting env.PORT, which
+    // would falsely report success while the displayed/derived port reverts AND
+    // silently change the runtime API env port.
+    const content = `const PORTS = { server: { api: 6000, ui: 6000 } };
+module.exports = { apps: [
+  { name: 'srv', script: 's.js', ports: PORTS.server, env: { PORT: 6000 } }
+] };
+`;
+    const r = rewriteEcosystemPortsByProcess(content, [
+      { processName: 'srv', label: 'api', oldPort: 6000, newPort: 7000 },
+    ]);
+    expect(r.applied).toHaveLength(0);
+    expect(r.unapplied).toHaveLength(1);
+    expect(r.content).toBe(content); // env.PORT untouched, nothing falsely rewritten
+  });
+
+  it('rewrites only the edited key when an inline ports object has ui and devUi sharing a value', () => {
+    // ui and devUi both 6000 in one block. Editing only ui must leave devUi at
+    // 6000 — a combined (ui|devUi) pattern would clobber the sibling.
+    const content = `module.exports = { apps: [
+  { name: 'srv', script: 's.js', ports: { ui: 6000, devUi: 6000 } }
+] };
+`;
+    const r = rewriteEcosystemPortsByProcess(content, [
+      { processName: 'srv', label: 'ui', oldPort: 6000, newPort: 7000 },
+    ]);
+    expect(r.applied).toHaveLength(1);
+    const ports = parseEcosystemConfig(r.content).processes[0].ports;
+    expect(ports.ui).toBe(7000);
+    expect(ports.devUi).toBe(6000); // sibling untouched
+  });
+
   it('reports an edit as unapplied when the process name is not found', () => {
     const content = `module.exports = { apps: [{ name: 'srv', script: 's.js', env: { PORT: 6000 } }] };`;
     const r = rewriteEcosystemPortsByProcess(content, [
