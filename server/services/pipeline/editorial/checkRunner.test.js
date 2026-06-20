@@ -76,6 +76,7 @@ const { getSeriesCanon } = await import('../seriesCanon.js');
 const { getSeries } = await import('../series.js');
 const { getSettings } = await import('../../settings.js');
 const { listChecks, getCheck } = await import('../../../lib/editorial/index.js');
+const { listIssues } = await import('../issues.js');
 
 // Build a `pipelineEditorialChecks.checks` map that disables every check
 // matching `predicate` — keeps these fixtures robust as the registry grows
@@ -96,6 +97,8 @@ beforeEach(() => {
   resolveStageContext.mockClear();
   collectManuscriptSections.mockClear();
   getSeriesCanon.mockClear();
+  listIssues.mockClear();
+  listIssues.mockResolvedValue([]);
 });
 
 describe('runEditorialChecks', () => {
@@ -141,6 +144,31 @@ describe('runEditorialChecks', () => {
     // The info-dump check (needsManuscript) does trigger the collection.
     await runEditorialChecks('s1', { checkIds: ['prose.info-dumping'] });
     expect(collectManuscriptSections).toHaveBeenCalled();
+  });
+
+  it('parses each issue comic script and feeds comic-pacing checks (#1314)', async () => {
+    // Two issues with comic scripts: issue 1 has a back-to-back splash run the
+    // deterministic comic.panel-rhythm check flags; issue 2 has none. The runner
+    // parses the stored scripts into pages and injects ctx.comicScripts.
+    listIssues.mockResolvedValueOnce([
+      { number: 1, stages: { comicScript: { output: 'PAGE 1\nPANEL 1\nSplash.\nPAGE 2\nPANEL 1\nSplash again.' } } },
+      { number: 2, stages: { comicScript: { output: 'PAGE 1\nPANEL 1\nA.\nPANEL 2\nB.\nPANEL 3\nC.' } } },
+    ]);
+    const result = await runEditorialChecks('s1', { checkIds: ['comic.panel-rhythm'] });
+    const comic = result.findings.filter((f) => f.checkId === 'comic.panel-rhythm');
+    expect(comic.length).toBeGreaterThan(0);
+    expect(comic.some((f) => f.issueNumber === 1)).toBe(true);
+    expect(comic.every((f) => f.category === 'pacing')).toBe(true);
+  });
+
+  it('skips comic-script parsing when no comic-pacing check is enabled', async () => {
+    listIssues.mockResolvedValueOnce([
+      { number: 1, stages: { comicScript: { output: 'PAGE 1\nPANEL 1\nSplash.' } } },
+    ]);
+    // Only the naming check runs — it never declares the comicScript source, so the
+    // parsed-pages gate keeps comic checks inert (no comic findings produced).
+    const result = await runEditorialChecks('s1', { checkIds: ['naming.dissimilar-names'] });
+    expect(result.findings.some((f) => f.checkId === 'comic.panel-rhythm')).toBe(false);
   });
 
   it('skips disabled checks', async () => {

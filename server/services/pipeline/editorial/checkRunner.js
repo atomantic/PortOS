@@ -29,6 +29,7 @@ import { getReverseOutline } from '../reverseOutline.js';
 import { getSeriesEditorial } from '../editorialAnalysis.js';
 import { seedReviewFromFindings, getReview } from '../manuscriptReview.js';
 import { canonicalStringify } from '../../../lib/objects.js';
+import { parseComicScript } from '../../../lib/comicScriptParser.js';
 
 // Source-content fingerprinting for finding staleness (#1345, #1387). Each finding
 // is stamped with a hash of the exact content its check analyzed; the manuscript
@@ -81,7 +82,29 @@ const SOURCE_RESOLVERS = {
   // against (#1293). Lives on the already-loaded series record, so no extra I/O
   // — fingerprint the whole array so any arc/transition edit stales the findings.
   'series.characterArcs': ({ series }) => canonicalStringify(series?.characterArcs ?? null),
+  // The per-issue PARSED comic scripts the comic-pacing checks read (#1314).
+  // Fingerprint the parsed page/panel structure so a comic-script edit stales the
+  // findings (and a prose-only edit that leaves the comic script untouched doesn't).
+  comicScript: ({ comicScripts }) => canonicalStringify(comicScripts ?? null),
 };
+
+// Parse each issue's stored comic script into `{ issueNumber, pages }` rows,
+// keeping only issues that parsed to at least one page (an issue without a comic
+// script, or one that parses to zero pages, contributes nothing the comic-pacing
+// checks can read). Lives in the runner (not the pure editorial registry) because
+// `parseComicScript` imports out to fileUtils — the registry stays import-pure and
+// reads the already-parsed rows off `ctx.comicScripts`.
+function parseComicScripts(issues) {
+  const rows = [];
+  for (const issue of Array.isArray(issues) ? issues : []) {
+    const source = (issue?.stages?.comicScript?.output || '').trim();
+    if (!source) continue;
+    const { pages } = parseComicScript(source);
+    if (!Array.isArray(pages) || pages.length === 0) continue;
+    rows.push({ issueNumber: Number.isInteger(issue.number) ? issue.number : null, pages });
+  }
+  return rows;
+}
 
 // Stable projection of the series editorial aggregate down to the arc fields a
 // POV/arc check reads — drops the volatile `generatedAt` (and the rest) so the
@@ -197,6 +220,9 @@ export async function runEditorialChecks(seriesId, options = {}) {
   // Editorial-arc fetch is gated on the declared source (#1295) so a run with no
   // POV/arc check pays no extra snapshot I/O — mirrors the needsReverseOutline gate.
   const needsEditorialArcs = enabled.some(({ check }) => checkSources(check).includes('editorialArcs'));
+  // Comic-script parsing is gated on the declared source (#1314) so a run with no
+  // comic-pacing check pays no parse cost — the issues are already fetched below.
+  const needsComicScript = enabled.some(({ check }) => checkSources(check).includes('comicScript'));
   const [sections, canon, issues, outline, editorial] = await Promise.all([
     needsManuscript ? collectManuscriptSections(seriesId) : Promise.resolve([]),
     getSeriesCanon(series),
@@ -214,6 +240,9 @@ export async function runEditorialChecks(seriesId, options = {}) {
   // against the author's tagged threads.
   const reverseOutlinePlotlines = Array.isArray(outline?.plotlines) ? outline.plotlines : [];
   const editorialArcs = projectEditorialArcs(editorial);
+  // Per-issue parsed comic scripts for the comic-pacing checks (#1314) — derived
+  // from the already-fetched issues (no extra I/O), only when a comic check is enabled.
+  const comicScripts = needsComicScript ? parseComicScripts(issues) : [];
   // Whether every analyzable issue has been analyzed and is fresh — gates the
   // pov.justified "absent from detected arcs" finding so a partially-analyzed
   // series (canceled/early-stopped batch) doesn't flag a not-yet-analyzed POV
@@ -222,7 +251,7 @@ export async function runEditorialChecks(seriesId, options = {}) {
   // Resolve every source token once — each finding's fingerprint reads from this
   // so the editor flags it `stale` when the content that check actually read (its
   // declared `sources`) drifts (#1345, #1387).
-  const resolvedSources = resolveSources({ manuscript, canon, series, reverseOutline, reverseOutlinePlotlines, editorialArcs, editorialArcsComplete });
+  const resolvedSources = resolveSources({ manuscript, canon, series, reverseOutline, reverseOutlinePlotlines, editorialArcs, editorialArcsComplete, comicScripts });
   const baseCtx = {
     seriesId,
     series,
@@ -233,6 +262,7 @@ export async function runEditorialChecks(seriesId, options = {}) {
     reverseOutlinePlotlines,
     editorialArcs,
     editorialArcsComplete,
+    comicScripts,
     canon,
     providerOverride,
     modelOverride,
@@ -380,19 +410,24 @@ export async function getReviewWithStaleness(seriesId) {
     return sources.includes('reverseOutline') || sources.includes('reverseOutline.plotlines');
   });
   const needsEditorialArcs = evaluable.some((c) => checkSources(checkFor(c.checkId)).includes('editorialArcs'));
+  // Comic-script parsing for staleness — gated like the run path, fetching the
+  // issues only when an evaluable comic-pacing finding needs them (#1314).
+  const needsComicScript = evaluable.some((c) => checkSources(checkFor(c.checkId)).includes('comicScript'));
   const series = await getSeries(seriesId);
-  const [sections, canon, outline, editorial] = await Promise.all([
+  const [sections, canon, outline, editorial, comicIssues] = await Promise.all([
     needsManuscript ? collectManuscriptSections(seriesId) : Promise.resolve([]),
     getSeriesCanon(series),
     needsReverseOutline ? getReverseOutline(seriesId).catch(() => null) : Promise.resolve(null),
     // Reuse the already-loaded series (issues isn't fetched on this path).
     needsEditorialArcs ? getSeriesEditorial(seriesId, { series }).catch(() => null) : Promise.resolve(null),
+    needsComicScript ? listIssues({ seriesId }).catch(() => []) : Promise.resolve([]),
   ]);
   const reverseOutline = Array.isArray(outline?.scenes) ? outline.scenes : [];
   const reverseOutlinePlotlines = Array.isArray(outline?.plotlines) ? outline.plotlines : [];
   const editorialArcs = projectEditorialArcs(editorial);
   const editorialArcsComplete = editorialCoverageComplete(editorial);
-  const resolvedSources = resolveSources({ manuscript: sectionsCorpus(sections), canon, series, reverseOutline, reverseOutlinePlotlines, editorialArcs, editorialArcsComplete });
+  const comicScripts = needsComicScript ? parseComicScripts(comicIssues) : [];
+  const resolvedSources = resolveSources({ manuscript: sectionsCorpus(sections), canon, series, reverseOutline, reverseOutlinePlotlines, editorialArcs, editorialArcsComplete, comicScripts });
   return {
     ...review,
     comments: review.comments.map((c) => {

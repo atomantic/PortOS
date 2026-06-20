@@ -43,6 +43,11 @@ import {
   findRepeatedOpeners,
   measureSentenceRhythm,
 } from './repetition.js';
+import {
+  analyzePanelRhythm,
+  comicPageTurnSummary,
+  authoredRevealSummary,
+} from './comicPacing.js';
 
 export const CHECK_SCOPES = Object.freeze(['series', 'issue', 'scene', 'noun']);
 export const CHECK_KINDS = Object.freeze(['deterministic', 'llm']);
@@ -86,6 +91,12 @@ const SEVERITIES = CHECK_SEVERITIES;
 //                                 want, need, startState, endState, transitions[] }`). The
 //                                 arc.transitions check reconciles detected change moments
 //                                 against these authored transitions + flat-arc warnings.
+//   - 'comicScript'             — the per-issue PARSED comic script (#1314): the runner parses
+//                                 each issue's `stages.comicScript.output` with the (impure)
+//                                 comicScriptParser and injects `ctx.comicScripts`
+//                                 (`[{ issueNumber, pages }]`, only issues that parsed to ≥1
+//                                 page). The comic-pacing checks read page/panel structure —
+//                                 splash usage, panel rhythm, page-turn beat placement.
 export const EDITORIAL_SOURCES = Object.freeze([
   'manuscript',
   'canon',
@@ -96,6 +107,7 @@ export const EDITORIAL_SOURCES = Object.freeze([
   'reverseOutline.plotlines',
   'editorialArcs',
   'series.characterArcs',
+  'comicScript',
 ]);
 
 // Default per-run finding cap for user-defined checks (#1346) — mirrors the
@@ -282,6 +294,17 @@ export const PLOT_STRUCTURE_STAGE = 'pipeline-editorial-plot-structure';
 // check polices POV *discipline* within a scene — narration that enters another
 // character's head or reports what the POV character can't perceive.
 export const HEAD_HOPPING_STAGE = 'pipeline-editorial-head-hopping';
+
+// Stage name for the comic page-turn-beats LLM check (#1314). Ships in
+// data.reference/prompts/stages/ + stage-config.json (fresh installs via
+// setup-data.js) and migrates to existing installs via migration 114 (boot runs
+// migrations but NOT setup-data, so the migration is required). Reads each issue's
+// parsed comic-page layout (`comicPageTurnSummary`) plus the authored reveals /
+// cliffhangers (`authoredRevealSummary`) and flags big reveals placed where the
+// reader sees them early (a page the reader has already been looking at across the
+// spread, rather than the first page after a turn). The deterministic sibling
+// (comic.panel-rhythm) needs no stage.
+export const COMIC_PAGE_TURN_STAGE = 'pipeline-editorial-comic-page-turn';
 
 // Render the authored reader-map cliffhangers (#1298) into a compact text block
 // the chapter-ending check passes alongside the manuscript so the model
@@ -3664,6 +3687,133 @@ export const EDITORIAL_CHECKS = [
           anchorQuote: typeof opening.scene?.anchorQuote === 'string' ? opening.scene.anchorQuote : '',
           issueNumber: nextIssue,
         });
+      }
+      return findings;
+    },
+  },
+  {
+    id: 'comic.panel-rhythm',
+    sources: ['comicScript'],
+    label: 'Comic panel rhythm & splash usage',
+    description:
+      'Deterministic scan of each issue\'s parsed comic-page layout for reading-rhythm problems: splash-page overuse (too high a share of full-page splashes), back-to-back splashes that blow the page budget, overcrowded pages that cram too many beats, and monotonous grids (the same multi-panel count repeated page after page). Reads the parsed comic script (page → panel breakdown), not the prose manuscript.',
+    scope: 'issue',
+    kind: 'deterministic',
+    category: 'pacing',
+    severityDefault: 'low',
+    defaultEnabled: true,
+    configSchema: z.object({
+      // Panels above this on one page reads as overcrowded / decompression-killing.
+      maxPanelsPerPage: z.number().int().min(2).max(20).default(9),
+      // Share of full-page splashes at/above which (with >1 splash) splash overuse fires.
+      splashRatioWarn: z.number().min(0.05).max(1).default(0.25),
+      // Identical multi-panel count repeated for this many pages reads as grid monotony.
+      monotonyRunLength: z.number().int().min(2).max(12).default(4),
+      // Cap findings per run so a long run of issues can't flood the review.
+      maxFindings: z.number().int().min(1).max(50).default(20),
+    }),
+    configFields: [
+      { key: 'maxPanelsPerPage', label: 'Max panels per page', type: 'number', min: 2, max: 20, step: 1, help: 'Panels above this on one page reads as overcrowded — too many beats compressed onto a single page.' },
+      { key: 'splashRatioWarn', label: 'Splash overuse ratio', type: 'number', min: 0.05, max: 1, step: 0.05, help: 'Share of full-page splashes (with more than one splash) at/above which the issue is flagged for splash overuse.' },
+      { key: 'monotonyRunLength', label: 'Grid monotony run length', type: 'number', min: 2, max: 12, step: 1, help: 'The same multi-panel page count repeated for this many pages in a row reads as a monotonous grid.' },
+      { key: 'maxFindings', label: 'Max findings per run', type: 'number', min: 1, max: 50, step: 1, help: 'Cap findings so a long run of comic issues can not flood the review.' },
+    ],
+    // Needs at least one issue that parsed to comic pages — the runner only
+    // populates ctx.comicScripts when a comic-pacing check is enabled.
+    gate: (ctx) => Array.isArray(ctx.comicScripts) && ctx.comicScripts.length > 0,
+    run: (ctx) => {
+      const cfg = ctx.config || {};
+      const max = cfg.maxFindings ?? 20;
+      const rows = Array.isArray(ctx.comicScripts) ? ctx.comicScripts : [];
+      const findings = [];
+      for (const { issueNumber, pages } of rows) {
+        if (findings.length >= max) break;
+        const r = analyzePanelRhythm(pages, cfg);
+        const location = Number.isInteger(issueNumber) ? `Issue ${issueNumber}` : 'Comic script';
+        const issueNum = Number.isInteger(issueNumber) ? issueNumber : null;
+        const push = (severity, problem, suggestion) => {
+          if (findings.length >= max) return;
+          findings.push({ severity, category: 'pacing', location, problem, suggestion, anchorQuote: '', issueNumber: issueNum });
+        };
+        if (r.splashOveruse) {
+          push(
+            ctx.severityDefault,
+            `${r.splashPages.length} of ${r.totalPages} pages are full-page splashes (${Math.round(r.splashRatio * 100)}%, pages ${r.splashPages.join(', ')}) — splashes spent this freely lose their impact and burn the page budget on low-movement beats.`,
+            'Reserve splash pages for the issue\'s biggest reveals or establishing shots; break the rest into multi-panel pages so each splash lands.',
+          );
+        }
+        for (const run of r.backToBackSplashes) {
+          push(
+            ctx.severityDefault,
+            `Pages ${run.startPage}–${run.endPage} are ${run.length} splash pages in a row — consecutive full-page splashes read as a slideshow and spend the page count fast.`,
+            'Intercut multi-panel pages between the splashes, or collapse the run to the single strongest splash.',
+          );
+        }
+        for (const page of r.overcrowded) {
+          push(
+            ctx.severityDefault,
+            `Page ${page.pageNumber} has ${page.panelCount} panels — past roughly ${cfg.maxPanelsPerPage ?? 9} panels a page cramps each beat and the art has no room to breathe.`,
+            'Split the page in two or cut the lowest-value panels so the key beats get space.',
+          );
+        }
+        for (const run of r.monotonyRuns) {
+          push(
+            ctx.severityDefault,
+            `Pages ${run.startPage}–${run.endPage} all use the same ${run.panelCount}-panel grid (${run.length} pages running) — an unvarying grid flattens the reading rhythm.`,
+            'Vary the panel count — open up a beat with fewer, larger panels or compress a fast exchange — so the page rhythm tracks the story\'s.',
+          );
+        }
+      }
+      return findings;
+    },
+  },
+  {
+    id: 'comic.page-turn-beats',
+    sources: ['comicScript', 'series.arc.readerMap'],
+    label: 'Comic page-turn beat placement (LLM)',
+    description:
+      'LLM scan of each issue\'s comic-page layout for reveals and cliffhangers placed where the reader can see them early. On a two-page spread both pages are visible at once, so a surprise on a page the reader has already been looking at is spoiled before they reach it — a big reveal should land on the first page after a page turn (the start of the next spread). Reconciles the placement against the authored reader-map reveals/cliffhangers and suggests which panel to move.',
+    scope: 'issue',
+    kind: 'llm',
+    category: 'pacing',
+    severityDefault: 'low',
+    defaultEnabled: true,
+    configSchema: z.object({
+      // Cap findings per run so a long run of issues can't flood the review.
+      maxFindings: z.number().int().min(1).max(50).default(12),
+    }),
+    configFields: [
+      { key: 'maxFindings', label: 'Max findings per run', type: 'number', min: 1, max: 50, step: 1, help: 'Cap findings so a long run of comic issues can not flood the review.' },
+    ],
+    // Needs at least one issue that parsed to comic pages.
+    gate: (ctx) => Array.isArray(ctx.comicScripts) && ctx.comicScripts.length > 0,
+    run: async (ctx) => {
+      const max = ctx.config?.maxFindings ?? 12;
+      // Authored reveals/cliffhangers are pure series-level context the model
+      // reconciles each issue's placement against; '' when nothing is authored.
+      const authoredReveals = authoredRevealSummary(ctx.series?.arc?.readerMap);
+      const rows = Array.isArray(ctx.comicScripts) ? ctx.comicScripts : [];
+      const findings = [];
+      for (const { issueNumber, pages } of rows) {
+        if (ctx.signal?.aborted || findings.length >= max) break;
+        const pageLayout = comicPageTurnSummary(pages, issueNumber);
+        if (!pageLayout) continue;
+        const { content } = await ctx.callStagedLLM(
+          COMIC_PAGE_TURN_STAGE,
+          { pageLayout, authoredReveals },
+          { returnsJson: true, source: COMIC_PAGE_TURN_STAGE },
+        );
+        const issueNum = Number.isInteger(issueNumber) ? issueNumber : null;
+        const mapped = mapLlmFindings(content?.findings, {
+          severityDefault: ctx.severityDefault,
+          category: 'pacing',
+          max: max - findings.length,
+          withIssueNumber: false,
+        });
+        // The page-turn check runs per-issue, so attribute every finding to the
+        // issue whose layout the model just read (the prompt has no issue header
+        // for the model to echo back like the manuscript checks do).
+        for (const f of mapped) findings.push({ ...f, issueNumber: issueNum });
       }
       return findings;
     },
