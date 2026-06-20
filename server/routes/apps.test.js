@@ -377,8 +377,8 @@ describe('Apps Routes', () => {
     it('strips the echoed derived uiPort so it is never persisted as an explicit field', async () => {
       // Same served-by-API shape; the modal echoes the derived uiPort (6000)
       // unchanged on a rename. That must NOT 422, but it also must NOT be stored
-      // as an explicit uiPort (which would stop it tracking apiPort) — the route
-      // strips it before updateApp.
+      // as a STALE explicit uiPort — the route pins it to the current derived
+      // value so it keeps tracking apiPort instead of freezing.
       const mockApp = { id: 'app-001', name: 'App', type: 'node', repoPath: process.cwd(), apiPort: 6000, uiPort: 6000, devUiPort: 5556 };
       appsService.getAppById.mockResolvedValue(mockApp);
       streamingDetect.parseEcosystemFromPath.mockResolvedValue({
@@ -392,24 +392,25 @@ describe('Apps Routes', () => {
 
       expect(response.status).toBe(200);
       expect(streamingDetect.writeEcosystemPortEdits).not.toHaveBeenCalled();
-      // uiPort stripped — updateApp must not receive it as an explicit field.
+      // uiPort pinned to the derived value (= unchanged apiPort 6000) so a stale
+      // stored value can't survive the merge.
       const updateArg = appsService.updateApp.mock.calls[0][1];
-      expect(updateArg).not.toHaveProperty('uiPort');
+      expect(updateArg.uiPort).toBe(6000);
       expect(updateArg.name).toBe('Renamed');
     });
 
-    it('changing apiPort on a served-by-API app (UI following the new API port) persists the API port and drops the echoed uiPort', async () => {
+    it('changing apiPort on a served-by-API app (UI following the new API port) persists the API port and pins uiPort to the new derived value', async () => {
       // Valid combined save: API 6000→7000 with the UI following to 7000 (the
       // derived port tracks the new API port). The apiPort edit persists via the
-      // value-keyed rewrite; the echoed uiPort is compared against the NEW
-      // derived value (7000), accepted, and stripped so it re-derives from the
-      // new apiPort rather than being frozen as an explicit field.
+      // value-keyed rewrite; the stored uiPort is overwritten with the NEW
+      // derived value (7000) so a stale 6000 can't survive the updateApp merge
+      // and block re-derivation.
       const mockApp = { id: 'app-001', name: 'App', type: 'node', repoPath: process.cwd(), apiPort: 6000, uiPort: 6000, devUiPort: 5556 };
       appsService.getAppById.mockResolvedValue(mockApp);
       streamingDetect.parseEcosystemFromPath.mockResolvedValue({
         processes: [{ name: 'srv', ports: { api: 6000, devUi: 5556 } }]
       });
-      appsService.updateApp.mockResolvedValue({ ...mockApp, apiPort: 7000 });
+      appsService.updateApp.mockResolvedValue({ ...mockApp, apiPort: 7000, uiPort: 7000 });
 
       const response = await request(app)
         .put('/api/apps/app-001')
@@ -423,7 +424,7 @@ describe('Apps Routes', () => {
         []
       );
       const updateArg = appsService.updateApp.mock.calls[0][1];
-      expect(updateArg).not.toHaveProperty('uiPort'); // re-derives from new apiPort
+      expect(updateArg.uiPort).toBe(7000); // pinned to new derived value
       expect(updateArg.apiPort).toBe(7000);
     });
 

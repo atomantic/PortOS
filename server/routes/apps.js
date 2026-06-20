@@ -550,15 +550,18 @@ router.put('/:id', asyncHandler(async (req, res, next) => {
       );
     }
 
-    // Served-by-API apps have NO explicit uiPort — it's always derived from
-    // apiPort on read. The modal still echoes the displayed (derived) uiPort on
-    // every save, so never let it be written to apps.json as an explicit field:
-    // doing so would freeze uiPort at its old value and stop it tracking a later
-    // apiPort change (e.g. API 6000→7000 must re-derive uiPort 7000, not keep a
-    // stored 6000). Any genuine change was already rejected above, so a
-    // remaining uiPort here is the harmless echo — strip it.
-    if (uiIsDerived && 'uiPort' in data) {
-      delete data.uiPort;
+    // Served-by-API apps have NO explicit uiPort in the config — it's derived
+    // from apiPort on read. Pin the stored uiPort to the NEW derived value so it
+    // tracks the (possibly just-changed) API port. Deleting it from this partial
+    // update is NOT enough: updateApp merges omitted fields over the existing
+    // record, so a stale explicit `uiPort` left by an earlier refresh would
+    // survive (truthy) and block re-derivation — after API 6000→7000 the GET
+    // path would keep returning the old 6000. Writing the derived value
+    // overwrites any stale stored port and self-corrects on every API change.
+    // (uiIsDerived is computed from the parsed CONFIG, not apps.json, so it's
+    // true even when apps.json already holds a stale explicit value.)
+    if (uiIsDerived) {
+      data.uiPort = derivedUiPort;
     }
 
     // Persist the value-keyed remap (distinct ports) and the targeted edits
