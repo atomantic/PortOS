@@ -497,7 +497,8 @@ function findValuePortRegions(content) {
  *      `ports: {...}` object (arbitrary keys — matched by value),
  *   2. `--port <n>` tokens in args strings,
  *   3. port-ish env keys (`PORT`, `*_PORT`, `VITE_PORT`) and `port:`,
- *   4. top-level port constants (`const API_PORT = <n>`).
+ *   4. top-level port constants (`const API_PORT = <n>`),
+ *   5. fallback-expression defaults (`PORT: process.env.PORT || <n>`).
  *
  * Each old value is first swapped to a unique placeholder, then placeholders
  * resolve to new values — so a remap like 6000→6001, 6001→6002 can't chain.
@@ -551,6 +552,18 @@ export function rewriteEcosystemPorts(content, remap) {
   pairs.forEach(([oldP], i) => {
     out = out.replace(
       new RegExp(`((?:const|let|var)\\s+\\w*PORT\\w*\\s*=\\s*)${oldP}\\b`, 'g'),
+      `$1${ph(i)}`
+    );
+  });
+
+  // 5) Fallback-expression defaults — `PORT: process.env.PORT || 4420`.
+  //    parseEcosystemConfig resolves the `|| <n>` literal, so it must be
+  //    rewritten too. The value isn't adjacent to the key (step 3 misses it),
+  //    so match the port-ish key, then any same-value expression up to `||`.
+  //    `[^,}\n]*?` keeps the match inside one value (no comma/brace/newline).
+  pairs.forEach(([oldP], i) => {
+    out = out.replace(
+      new RegExp(`(['"\`]?\\b${KEY}\\b['"\`]?\\s*:\\s*[^,}\\n]*?\\|\\|\\s*['"]?)${oldP}\\b`, 'g'),
       `$1${ph(i)}`
     );
   });
