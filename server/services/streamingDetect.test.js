@@ -542,6 +542,24 @@ module.exports = { apps: [
     expect(ports.devUi).toBe(6000); // sibling untouched
   });
 
+  it('rewrites only the ports-object key, not a same-named field elsewhere in the block', () => {
+    // The block has an inline ports.api AND a same-valued metadata.api. Editing
+    // apiPort must touch ONLY ports.api — the label-key pattern is scoped to the
+    // ports: { ... } slice, so metadata.api (config the parser never read as the
+    // port source) is left alone.
+    const content = `module.exports = { apps: [
+  { name: 'srv', script: 's.js', ports: { api: 6000, ui: 5556 }, metadata: { api: 6000 } }
+] };
+`;
+    const r = rewriteEcosystemPortsByProcess(content, [
+      { processName: 'srv', label: 'api', oldPort: 6000, newPort: 7000 },
+    ]);
+    expect(r.applied).toHaveLength(1);
+    expect(r.content).toContain('ports: { api: 7000');
+    expect(r.content).toContain('metadata: { api: 6000 }'); // untouched
+    expect(parseEcosystemConfig(r.content).processes[0].ports.api).toBe(7000);
+  });
+
   it('does NOT match a same-valued lowercase metadata field in a ports-reference block (no false api success)', () => {
     // api is derived from `ports: PORTS.server` (external const). The block also
     // carries a lowercase metadata field that happens to share the value. An

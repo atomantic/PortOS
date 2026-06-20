@@ -599,25 +599,27 @@ function rewriteLabelInBlock(block, label, oldP, newP) {
   // `PORT`/`'PORT'`/`` `PORT` `` followed by `:` and optional whitespace.
   const PORT_KEY = "['\"`]?\\bPORT\\b['\"`]?\\s*:\\s*";
 
-  // The `api:`/`ui:`/`devUi:` label-key patterns are only valid inside an
-  // INLINE `ports: { ... }` object — that's the only place parseEcosystemConfig
-  // reads them. In a `ports: PORTS.x` reference block (or a bare env/args
-  // block) an unscoped `api: N` could match a same-valued lowercase metadata
-  // field and falsely report applied while the real (external/env) source is
-  // untouched, so the label-key patterns are gated on hasInlinePortsObj.
-  const pats = [];
+  // Patterns are split by SCOPE:
+  //   - portsObjPats run ONLY inside the inline `ports: { ... }` slice. The
+  //     `api:`/`ui:`/`devUi:` keys are valid only there (the only place
+  //     parseEcosystemConfig reads them); applied over the whole block they'd
+  //     also hit a same-named field elsewhere (e.g. `metadata: { api: N }`) and
+  //     mutate config the parser never used as the port source.
+  //   - blockPats run over the whole block (env keys, args, bare PORT).
+  const portsObjPats = [];
+  const blockPats = [];
   if (label === 'api') {
-    if (hasInlinePortsObj) pats.push(`(\\bapi\\s*:\\s*)${NUM}`);     // ports: { api: N }
+    if (hasInlinePortsObj) portsObjPats.push(`(\\bapi\\s*:\\s*)${NUM}`);  // ports: { api: N }
     if (!hasPortsReference) {
-      pats.push(`(${PORT_KEY}[^,}\\n]*?\\|\\|\\s*['"]?)${NUM}`);     // PORT: … || N (fallback)
-      pats.push(`(${PORT_KEY})${NUM}`);                             // env PORT: N
-      pats.push(`(\\bport\\s*:\\s*)${NUM}`);                        // port: N
+      blockPats.push(`(${PORT_KEY}[^,}\\n]*?\\|\\|\\s*['"]?)${NUM}`);     // PORT: … || N (fallback)
+      blockPats.push(`(${PORT_KEY})${NUM}`);                             // env PORT: N
+      blockPats.push(`(\\bport\\s*:\\s*)${NUM}`);                        // port: N
     }
   } else {
     const hasDevUiKey = /\bdevUi\s*:\s*\d/.test(block);
     if (hasInlinePortsObj) {
-      pats.push(label === 'devUi' ? `(\\bdevUi\\s*:\\s*)${NUM}` : `(\\bui\\s*:\\s*)${NUM}`); // exact key
-      if (label === 'devUi' && !hasDevUiKey) pats.push(`(\\bui\\s*:\\s*)${NUM}`); // relabeled-from-ui source
+      portsObjPats.push(label === 'devUi' ? `(\\bdevUi\\s*:\\s*)${NUM}` : `(\\bui\\s*:\\s*)${NUM}`); // exact key
+      if (label === 'devUi' && !hasDevUiKey) portsObjPats.push(`(\\bui\\s*:\\s*)${NUM}`); // relabeled-from-ui source
     }
     if (!hasPortsReference) {
       // VITE_PORT/--port mirror the runtime UI/dev port: rewrite them alongside
@@ -626,14 +628,28 @@ function rewriteLabelInBlock(block, label, oldP, newP) {
       // REFERENCE whose external const the parser actually reads — rewriting
       // only the env/args value there is false success (the unchanged const
       // re-derives the old port on the next refresh).
-      pats.push(`(['"\`]?\\bVITE_PORT\\b['"\`]?\\s*:\\s*)${NUM}`); // env VITE_PORT: N
-      pats.push(`(--port\\s+)${NUM}`);                            // args --port N
+      blockPats.push(`(['"\`]?\\bVITE_PORT\\b['"\`]?\\s*:\\s*)${NUM}`); // env VITE_PORT: N
+      blockPats.push(`(--port\\s+)${NUM}`);                            // args --port N
     }
-    if (!hasExplicitPortsSource) pats.push(`(${PORT_KEY})${NUM}`); // bare PORT of a UI-named process
+    if (!hasExplicitPortsSource) blockPats.push(`(${PORT_KEY})${NUM}`); // bare PORT of a UI-named process
   }
 
   let out = block;
-  for (const p of pats) {
+  // Label-key patterns: rewrite only within the `ports: { ... }` object slice.
+  if (portsObjPats.length > 0) {
+    const open = out.search(/\bports\s*:\s*\{/);
+    if (open >= 0) {
+      const braceIdx = out.indexOf('{', open);
+      const end = findMatchingBrace(out, braceIdx);
+      if (end >= 0) {
+        let inner = out.slice(braceIdx, end + 1);
+        for (const p of portsObjPats) inner = replaceOutsideComments(inner, new RegExp(p, 'g'), ph);
+        out = out.slice(0, braceIdx) + inner + out.slice(end + 1);
+      }
+    }
+  }
+  // Env/args patterns: rewrite over the whole block.
+  for (const p of blockPats) {
     out = replaceOutsideComments(out, new RegExp(p, 'g'), ph);
   }
   const changed = out.includes(ph);
