@@ -2,7 +2,7 @@ import AppTaskTypeRow from './AppTaskTypeRow';
 import { TASK_FILTERS, DEFAULT_FILTER_ID } from './scheduleConstants';
 
 export default function AppTaskTypeSection({ tasks, onUpdate, onTrigger, onReset, providers, apps, onUpdateOverride, onBulkToggleOverride, improvementDisabled, filter, onFilterChange }) {
-  const taskEntries = Object.entries(tasks || {});
+  const taskEntries = Object.entries(tasks || {}).sort(([a], [b]) => a.localeCompare(b));
   if (taskEntries.length === 0) return null;
 
   const activeFilter = TASK_FILTERS.find(f => f.id === filter) || TASK_FILTERS[0];
