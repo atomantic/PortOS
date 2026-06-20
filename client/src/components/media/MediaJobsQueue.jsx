@@ -1,9 +1,11 @@
-import { useMemo, useState, useCallback } from 'react';
-import { ListOrdered, Image as ImageIcon, Film, X, RefreshCw, ChevronDown, ChevronRight, Trash2, RotateCw, Zap, Pencil } from 'lucide-react';
+import { useMemo, useState, useCallback, useEffect, useRef } from 'react';
+import { ListOrdered, Image as ImageIcon, Film, Cpu, X, RefreshCw, ChevronDown, ChevronRight, Trash2, RotateCw, Zap, Pencil } from 'lucide-react';
 import toast from '../ui/Toast';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import { listMediaJobs, cancelMediaJob, cancelQueuedMediaJobs, deleteMediaJob, retryMediaJob, runMediaJobNow } from '../../services/apiMediaJobs.js';
+import { listLoraTrainingCheckpoints } from '../../services/apiLoraTraining.js';
 import { IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
+import { lossSparklineGeometry } from '../../lib/lossSparkline';
 import { useAutoRefetch } from '../../hooks/useAutoRefetch';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 
@@ -15,13 +17,19 @@ const STATUS_BADGE = {
   canceled: 'bg-port-warning/30 text-port-warning',
 };
 
-const KIND_ICON = { video: Film, image: ImageIcon };
+const KIND_ICON = { video: Film, image: ImageIcon, training: Cpu };
 
 // Compact "engine / model" badge so a failed row tells the user *what* failed,
 // not just that it failed. Codex jobs carry `params.model`; local image/video
-// jobs carry `params.modelId`. Trims long HF repo paths to the tail segment.
+// jobs carry `params.modelId`; training jobs carry a runtime + character.
+// Trims long HF repo paths to the tail segment.
 function modelLabel(params) {
   if (!params) return null;
+  if (params.runtime || params.runId) {
+    // Training job — surface the engine + who's being trained, not a prompt.
+    const who = (params.characterName || '').trim();
+    return `${params.runtime || 'training'}${who ? ` / ${who}` : ''}`;
+  }
   if (params.mode === IMAGE_GEN_MODE.CODEX) {
     const m = (params.model || '').trim();
     return m ? `codex / ${m}` : 'codex';
@@ -107,7 +115,8 @@ export default function MediaJobsQueue({ kind, recentLimit = 10, className = '' 
       setJobs((prev) => prev.filter((j) => j.id !== id));
     })
     .catch((err) => toast.error(err?.message || 'Delete failed'));
-  const headerLabel = kind ? `${kind === 'image' ? 'Image' : 'Video'} Render Queue` : 'Render Queue';
+  const KIND_LABEL = { image: 'Image', video: 'Video', training: 'Training' };
+  const headerLabel = kind ? `${KIND_LABEL[kind] || ''} ${kind === 'training' ? 'Queue' : 'Render Queue'}`.trim() : 'Render Queue';
 
   const handleClearQueued = () => {
     if (!queuedCount) return;
@@ -153,7 +162,9 @@ export default function MediaJobsQueue({ kind, recentLimit = 10, className = '' 
       {loading ? (
         <div className="text-port-text-muted text-xs">Loading…</div>
       ) : live.length === 0 && recent.length === 0 ? (
-        <div className="text-port-text-muted text-xs">No {kind || 'media'} renders queued.</div>
+        <div className="text-port-text-muted text-xs">
+          No {kind || 'media'} {kind === 'training' ? 'runs' : 'renders'} queued.
+        </div>
       ) : (
         <div className="space-y-2">
           {live.map((j) => <JobRow key={j.id} job={j} onCancel={handleCancel} onRetry={handleRetry} onRunNow={handleRunNow} />)}
@@ -181,6 +192,103 @@ function formatCounts(live, recent, failedCount) {
   const canceledCount = recent.length - failedCount;
   if (canceledCount > 0) parts.push(`${canceledCount} canceled`);
   return parts.join(' • ');
+}
+
+// One-line training summary in place of the (absent) prompt: who's training,
+// the LoRA rank, and the step budget.
+function trainingSummary(params) {
+  if (!params) return 'training';
+  const who = (params.characterName || '').trim();
+  const bits = [
+    who ? `Training "${who}"` : 'Training',
+    Number.isFinite(params.rank) ? `rank ${params.rank}` : null,
+    Number.isFinite(params.steps) ? `${params.steps} steps` : null,
+  ].filter(Boolean);
+  return bits.join(' · ');
+}
+
+// Training-specific row treatment: a loss sparkline over the run's checkpoints
+// plus the latest sample thumbnails. The media-job record carries no loss /
+// sample data, so fetch the run's checkpoint list (step + loss + previewUrl).
+// Re-fetches while the run is live so the curve grows as checkpoints land.
+function TrainingJobDetail({ runId, status }) {
+  const [checkpoints, setCheckpoints] = useState(null); // null = loading; [] = none yet
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+
+  const load = useCallback(() => {
+    listLoraTrainingCheckpoints(runId)
+      .then((res) => {
+        if (mountedRef.current) setCheckpoints(Array.isArray(res?.checkpoints) ? res.checkpoints : []);
+      })
+      .catch(() => { if (mountedRef.current) setCheckpoints([]); });
+  }, [runId]);
+
+  useEffect(() => { load(); }, [load]);
+  // Poll only while the run is live — a terminal run's checkpoints are fixed.
+  useEffect(() => {
+    if (status !== 'running' && status !== 'queued') return undefined;
+    const t = setInterval(load, 5000);
+    return () => clearInterval(t);
+  }, [status, load]);
+
+  if (checkpoints === null) {
+    return <div className="mt-2 text-[11px] text-port-text-muted">Loading checkpoints…</div>;
+  }
+  if (!checkpoints.length) {
+    return (
+      <div className="mt-2 text-[11px] text-port-text-muted">
+        No checkpoints yet — samples + loss appear once the first one is saved.
+      </div>
+    );
+  }
+
+  const series = checkpoints
+    .filter((c) => Number.isFinite(c.loss))
+    .map((c) => ({ step: c.step, loss: c.loss }));
+  const geo = lossSparklineGeometry(series, { width: 240, height: 36 });
+  const withPreview = checkpoints.filter((c) => c.previewUrl);
+
+  return (
+    <div className="mt-2 space-y-2">
+      {geo.points && (
+        <div>
+          <div className="flex items-center justify-between text-[11px] text-port-text-muted mb-0.5">
+            <span>Loss · {series.length} checkpoints</span>
+            {geo.last != null && <span className="text-gray-400 font-mono">{geo.last.toFixed(4)}</span>}
+          </div>
+          <svg
+            viewBox="0 0 240 36"
+            preserveAspectRatio="none"
+            className="w-full h-9 bg-port-bg rounded border border-port-border"
+            role="img"
+            aria-label={`Training loss curve over ${series.length} checkpoints${geo.last != null ? `, latest ${geo.last.toFixed(4)}` : ''}`}
+          >
+            <polyline points={geo.points} fill="none" stroke="#3b82f6" strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+          </svg>
+        </div>
+      )}
+      {withPreview.length > 0 && (
+        <div className="flex gap-1.5 overflow-x-auto pb-1">
+          {withPreview.map((c) => (
+            <div key={c.step} className="shrink-0 text-center">
+              <img
+                src={c.previewUrl}
+                alt={`sample @ step ${c.step}`}
+                loading="lazy"
+                className={`w-14 h-14 object-cover rounded border ${c.deployed ? 'border-port-accent' : 'border-port-border'}`}
+              />
+              <div className="text-[10px] text-port-text-muted mt-0.5">{c.step}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function JobRow({ job, onCancel, onRetry, onRunNow, onDelete }) {
@@ -221,7 +329,9 @@ function JobRow({ job, onCancel, onRetry, onRunNow, onDelete }) {
               )}
             </div>
             <div className="text-xs text-port-text-muted truncate" title={job.params?.prompt || undefined}>
-              {job.params?.prompt ? `"${job.params.prompt.slice(0, 80)}${job.params.prompt.length > 80 ? '…' : ''}"` : 'no prompt'}
+              {job.kind === 'training'
+                ? trainingSummary(job.params)
+                : (job.params?.prompt ? `"${job.params.prompt.slice(0, 80)}${job.params.prompt.length > 80 ? '…' : ''}"` : 'no prompt')}
               {job.owner && <span> · {job.owner}</span>}
             </div>
           </div>
@@ -305,6 +415,9 @@ function JobRow({ job, onCancel, onRetry, onRunNow, onDelete }) {
             <div className="h-full bg-port-accent transition-all" style={{ width: `${progressPct}%` }} />
           </div>
         </div>
+      )}
+      {job.kind === 'training' && job.params?.runId && (
+        <TrainingJobDetail runId={job.params.runId} status={job.status} />
       )}
       <div className="text-xs text-port-text-muted mt-1">
         {job.queuedAt && `queued ${new Date(job.queuedAt).toLocaleTimeString()}`}

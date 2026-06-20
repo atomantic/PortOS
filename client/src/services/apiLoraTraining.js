@@ -56,10 +56,18 @@ export const importLoraDatasetGalleryImages = (id, filenames) =>
 export const generateLoraDatasetImages = (id, options = {}) =>
   request(`/lora-datasets/${id}/generate`, { method: 'POST', body: JSON.stringify(options) });
 
-export const sliceLoraDatasetRefSheet = (id, { variant, cols, rows } = {}) =>
+// `useVision` (default true) lets a vision model propose a bounding box per
+// figure; the fixed cols×rows grid is the fallback (and what `useVision: false`
+// forces). When omitted, the server auto-resolves a vision model.
+export const sliceLoraDatasetRefSheet = (id, { variant, cols, rows, useVision } = {}) =>
   request(`/lora-datasets/${id}/slice-reference-sheet`, {
     method: 'POST',
-    body: JSON.stringify({ ...(variant ? { variant } : {}), ...(cols ? { cols } : {}), ...(rows ? { rows } : {}) }),
+    body: JSON.stringify({
+      ...(variant ? { variant } : {}),
+      ...(cols ? { cols } : {}),
+      ...(rows ? { rows } : {}),
+      ...(useVision === false ? { useVision: false } : {}),
+    }),
   });
 
 export const startLoraCaptionRun = (id, options = {}) =>

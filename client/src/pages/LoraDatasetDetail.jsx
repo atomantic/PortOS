@@ -124,13 +124,17 @@ const deriveReadiness = (images, triggerWord) => {
 function SliceDialog({ dataset, onClose, onSliced }) {
   const [cols, setCols] = useState(3);
   const [rows, setRows] = useState(2);
+  // Vision-auto detection is the default; the grid inputs are the fallback the
+  // user reaches for when no vision model is installed or auto-detect mis-cuts.
+  const [useVision, setUseVision] = useState(true);
   const [submitting, setSubmitting] = useState(false);
 
   const submit = async () => {
     setSubmitting(true);
     try {
-      const result = await sliceLoraDatasetRefSheet(dataset.id, { cols, rows });
-      toast.success(`Added ${result.images.length} crops from the reference sheet — prune any bad ones`);
+      const result = await sliceLoraDatasetRefSheet(dataset.id, { cols, rows, useVision });
+      const via = result.method === 'vision' ? 'auto-detected' : 'grid';
+      toast.success(`Added ${result.images.length} ${via} crops from the reference sheet — prune any bad ones`);
       onSliced(result);
     } finally {
       setSubmitting(false);
@@ -163,10 +167,26 @@ function SliceDialog({ dataset, onClose, onSliced }) {
       <div className="space-y-4">
         <h2 id="lt-slice-title" className="text-base font-semibold text-white">Slice reference sheet</h2>
         <p className="text-sm text-gray-400">
-          Cuts the character&apos;s reference-sheet turnaround into a fixed grid of training crops.
+          Cuts the character&apos;s reference-sheet turnaround into individual training crops.
           Sheet layouts vary, so expect to delete cells that caught labels or palette swatches.
         </p>
-        <div className="grid grid-cols-2 gap-3">
+        <label htmlFor="lt-slice-vision" className="flex items-start gap-2 text-sm text-gray-300">
+          <input
+            id="lt-slice-vision"
+            type="checkbox"
+            checked={useVision}
+            onChange={(e) => setUseVision(e.target.checked)}
+            className="mt-0.5"
+          />
+          <span>
+            Auto-detect figures with a vision model
+            <span className="block text-xs text-gray-500">
+              Proposes a crop per figure instead of a rigid grid. Falls back to the grid below if no
+              vision model is installed or detection finds nothing.
+            </span>
+          </span>
+        </label>
+        <div className={`grid grid-cols-2 gap-3 ${useVision ? 'opacity-50' : ''}`}>
           {numberInput('lt-slice-cols', 'Columns', cols, setCols)}
           {numberInput('lt-slice-rows', 'Rows', rows, setRows)}
         </div>
@@ -179,7 +199,7 @@ function SliceDialog({ dataset, onClose, onSliced }) {
             className="px-3 py-2 text-sm rounded bg-port-accent text-white disabled:opacity-50 flex items-center gap-2"
           >
             {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Scissors className="w-4 h-4" />}
-            Slice {cols}×{rows}
+            {useVision ? 'Auto-slice' : `Slice ${cols}×${rows}`}
           </button>
         </div>
       </div>

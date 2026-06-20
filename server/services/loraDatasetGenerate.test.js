@@ -13,7 +13,10 @@ vi.mock('./universeBuilder.js', async (importOriginal) => ({
   getUniverse: vi.fn(),
 }));
 
-import { buildDatasetImagePrompt, deriveVariationAxes, getDatasetVariationAxes } from './loraDatasetGenerate.js';
+import {
+  buildDatasetImagePrompt, deriveVariationAxes, getDatasetVariationAxes,
+  normalizeCropProposals, proposeCropRegions,
+} from './loraDatasetGenerate.js';
 import { getDataset } from './loraDatasets.js';
 import { getUniverse } from './universeBuilder.js';
 
@@ -154,5 +157,101 @@ describe('getDatasetVariationAxes', () => {
     getUniverse.mockResolvedValue({ places: [] });
 
     await expect(getDatasetVariationAxes('ds1')).rejects.toMatchObject({ status: 409 });
+  });
+});
+
+describe('normalizeCropProposals', () => {
+  const dims = { width: 1000, height: 800 };
+
+  it('scales normalized boxes to pixel extract rects', () => {
+    const rects = normalizeCropProposals({ boxes: [{ x: 0, y: 0, w: 0.5, h: 0.5 }] }, dims);
+    expect(rects).toEqual([{ left: 0, top: 0, width: 500, height: 400 }]);
+  });
+
+  it('accepts a bare array of boxes (no wrapper object)', () => {
+    const rects = normalizeCropProposals([{ x: 0.5, y: 0.5, w: 0.5, h: 0.5 }], dims);
+    expect(rects).toEqual([{ left: 500, top: 400, width: 500, height: 400 }]);
+  });
+
+  it('clamps a box that overhangs the sheet edge instead of throwing', () => {
+    const rects = normalizeCropProposals({ boxes: [{ x: 0.8, y: 0.8, w: 0.5, h: 0.5 }] }, dims);
+    // x+w = 1.3 → clamped to 1.0; rect spans the bottom-right corner.
+    expect(rects).toEqual([{ left: 800, top: 640, width: 200, height: 160 }]);
+  });
+
+  it('drops sub-64px boxes (label strips / palette swatches)', () => {
+    const rects = normalizeCropProposals({
+      boxes: [
+        { x: 0, y: 0, w: 0.01, h: 0.5 }, // 10px wide → rejected
+        { x: 0, y: 0, w: 0.5, h: 0.5 },  // kept
+      ],
+    }, dims);
+    expect(rects).toHaveLength(1);
+    expect(rects[0]).toMatchObject({ width: 500 });
+  });
+
+  it('drops boxes with non-finite or missing coordinates', () => {
+    const rects = normalizeCropProposals({
+      boxes: [
+        { x: 0, y: 0, w: 0.5 },            // missing h
+        { x: NaN, y: 0, w: 0.5, h: 0.5 },  // NaN
+        { x: 0.5, y: 0.5, w: 0.5, h: 0.5 }, // kept
+      ],
+    }, dims);
+    expect(rects).toHaveLength(1);
+  });
+
+  it('returns [] for garbage, non-array boxes, or zero dims', () => {
+    expect(normalizeCropProposals(null, dims)).toEqual([]);
+    expect(normalizeCropProposals({ boxes: 'nope' }, dims)).toEqual([]);
+    expect(normalizeCropProposals({ boxes: [{ x: 0, y: 0, w: 0.5, h: 0.5 }] }, { width: 0, height: 0 })).toEqual([]);
+  });
+});
+
+describe('proposeCropRegions', () => {
+  const dims = { width: 900, height: 600 };
+  // Inject readImage so we don't touch disk — the function reads the sheet to
+  // base64 it before the (also-injected) vision call.
+  const readImage = vi.fn().mockResolvedValue(Buffer.from('fake-png'));
+
+  it('returns pixel rects from a clean vision reply', async () => {
+    const describeImage = vi.fn().mockResolvedValue({
+      text: '{"boxes":[{"x":0,"y":0,"w":0.5,"h":1.0}]}',
+    });
+    const resolveModel = vi.fn().mockResolvedValue({ providerId: 'lmstudio', model: 'qwen2.5-vl' });
+    const rects = await proposeCropRegions('/sheet.png', dims, { describeImage, resolveModel, readImage });
+    expect(rects).toEqual([{ left: 0, top: 0, width: 450, height: 600 }]);
+    expect(describeImage).toHaveBeenCalledOnce();
+  });
+
+  it('tolerates a CLI-banner-prefixed / code-fenced reply', async () => {
+    const describeImage = vi.fn().mockResolvedValue({
+      text: 'session id: abc\n```json\n{"boxes":[{"x":0.5,"y":0,"w":0.5,"h":1}]}\n```',
+    });
+    const resolveModel = vi.fn().mockResolvedValue({ providerId: 'codex', model: 'gpt-5' });
+    const rects = await proposeCropRegions('/sheet.png', dims, { describeImage, resolveModel, readImage });
+    expect(rects).toEqual([{ left: 450, top: 0, width: 450, height: 600 }]);
+  });
+
+  it('returns [] (→ grid fallback) when no vision model resolves', async () => {
+    const describeImage = vi.fn();
+    const resolveModel = vi.fn().mockRejectedValue(new Error('no vision model'));
+    const rects = await proposeCropRegions('/sheet.png', dims, { describeImage, resolveModel, readImage });
+    expect(rects).toEqual([]);
+    expect(describeImage).not.toHaveBeenCalled();
+  });
+
+  it('returns [] when the vision call throws (transport error)', async () => {
+    const describeImage = vi.fn().mockRejectedValue(new Error('timeout'));
+    const resolveModel = vi.fn().mockResolvedValue({ providerId: 'lmstudio', model: 'qwen2.5-vl' });
+    const rects = await proposeCropRegions('/sheet.png', dims, { describeImage, resolveModel, readImage });
+    expect(rects).toEqual([]);
+  });
+
+  it('returns [] when the reply has no parseable boxes', async () => {
+    const describeImage = vi.fn().mockResolvedValue({ text: 'I could not find any figures.' });
+    const resolveModel = vi.fn().mockResolvedValue({ providerId: 'lmstudio', model: 'qwen2.5-vl' });
+    const rects = await proposeCropRegions('/sheet.png', dims, { describeImage, resolveModel, readImage });
+    expect(rects).toEqual([]);
   });
 });

@@ -31,10 +31,10 @@ import { Readable } from 'stream'
 import { PATHS, atomicWrite } from '../lib/fileUtils.js'
 import { isBackend, mapModelToBackend } from '../lib/localLlmCatalog.js'
 import { sanitizeOllamaName } from '../lib/localLlmDisk.js'
-import { recommendEditorialModel, isVisionModel } from '../lib/localModelHeuristics.js'
+import { recommendEditorialModel, isVisionModel, isVisionCapableCliProvider } from '../lib/localModelHeuristics.js'
 import * as ollamaManager from './ollamaManager.js'
 import * as lmStudioManager from './lmStudioManager.js'
-import { getProviderById, updateProvider } from './providers.js'
+import { getProviderById, getAllProviders, updateProvider } from './providers.js'
 
 const execFileAsync = promisify(execFile)
 const ENV_PATH = join(PATHS.root, '.env')
@@ -637,9 +637,11 @@ export async function getStatus() {
 
 /**
  * Vision-capable installed models across both local backends, tagged with the
- * aiToolkit provider id (`ollama` / `lmstudio`) that serves them. Powers the
- * caption-model picker and the captioner's auto-resolution of a default vision
- * model. Each entry: `{ providerId, backend, id, name, vision: true }`.
+ * aiToolkit provider id (`ollama` / `lmstudio`) that serves them, PLUS
+ * vision-capable CLI providers (codex / claude-code) whose model reads images
+ * via a file. Powers the caption-model picker and the captioner's
+ * auto-resolution of a default vision model. Each entry:
+ * `{ providerId, backend, id, name, vision: true }`.
  */
 export async function listVisionModels() {
   // Cache-first for both backends (the model-list caches are busted on
@@ -662,7 +664,32 @@ export async function listVisionModels() {
   const tag = (backend, models) => models
     .filter((m) => m.vision)
     .map((m) => ({ providerId: PROVIDER_ID[backend], backend, id: m.id, name: m.name || m.id, vision: true }))
-  return [...tag('ollama', ollamaVision), ...tag('lmstudio', lmstudio)]
+  return [
+    ...tag('ollama', ollamaVision),
+    ...tag('lmstudio', lmstudio),
+    ...await listVisionCliModels(),
+  ]
+}
+
+/**
+ * Vision-capable CLI providers (codex / claude-code), expanded to one entry per
+ * configured model so the caption picker can offer e.g. "codex / gpt-5" or
+ * "claude-code / claude-opus-4-8". A disabled provider is skipped. Each entry
+ * mirrors the local-backend shape with `backend: 'cli'`. Best-effort: a load
+ * failure yields no CLI entries rather than breaking the whole picker.
+ */
+async function listVisionCliModels() {
+  const { providers } = await getAllProviders().catch(() => ({ providers: [] }))
+  const entries = []
+  for (const p of providers || []) {
+    if (p.enabled === false) continue
+    if (!isVisionCapableCliProvider(p)) continue
+    const models = Array.isArray(p.models) && p.models.length ? p.models : [p.defaultModel].filter(Boolean)
+    for (const id of models) {
+      entries.push({ providerId: p.id, backend: 'cli', id, name: `${p.name || p.id} / ${id}`, vision: true })
+    }
+  }
+  return entries
 }
 
 // ---- install / delete --------------------------------------------------------

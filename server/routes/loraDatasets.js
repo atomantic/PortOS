@@ -144,6 +144,13 @@ const sliceSchema = z.object({
   variant: z.string().max(64).default('standard'),
   cols: z.number().int().min(1).max(6).default(3),
   rows: z.number().int().min(1).max(6).default(2),
+  // When true (default) a vision-LLM proposes a bounding box per figure and the
+  // grid is the fallback; false forces the deterministic cols×rows grid.
+  useVision: z.boolean().default(true),
+  // Optional explicit vision model for the proposal pass — same provider/model
+  // pair the caption picker uses; omitted = server auto-pick.
+  captionProviderId: z.string().max(128).optional(),
+  captionModel: z.string().max(256).optional(),
 });
 router.post('/:id/slice-reference-sheet', asyncHandler(async (req, res) => {
   const body = validateRequest(sliceSchema, req.body);

@@ -12,6 +12,7 @@ import { getProviderById } from './providers.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
 import { ensureProviderReady as ensureOllamaProviderReady } from './ollamaManager.js';
+import { describeImageViaCli } from './visionCli.js';
 
 const SCREENSHOTS_DIR = PATHS.screenshots;
 const DEFAULT_VISION_TIMEOUT_MS = 60000;
@@ -256,6 +257,15 @@ export async function describeImageDataUrlDetailed({ dataUrl, prompt, providerId
   }
   const provider = await getProviderById(providerId);
   if (!provider) throw new Error(`Provider '${providerId}' not found`);
+  // CLI providers (codex / claude-code with vision) read the image from a file
+  // rather than an `image_url` block — delegate to the CLI vision path, which
+  // returns the same { text, finishReason, usage, reasoning } shape. maxTokens
+  // has no CLI analogue (the CLI manages its own budget) so it's dropped.
+  if (provider.type === 'cli') {
+    return describeImageViaCli({
+      provider, dataUrl, prompt: prompt || 'Describe what you see in this image.', model,
+    });
+  }
   if (provider.type !== 'api') throw new Error(`Provider '${providerId}' is not an API provider (type: ${provider.type})`);
   const visionModel = model || provider.defaultModel;
   if (!visionModel) throw new Error('No model specified and provider has no default model');
