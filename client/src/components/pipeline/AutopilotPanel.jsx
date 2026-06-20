@@ -163,10 +163,19 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
   }, []);
 
   // Persist a round setting (clamped) so a later Resume picks it up server-side.
-  // Returns the promise so start() can await it (close the persist→read race).
-  const persistRounds = useCallback((patch) => (
-    patchSettingsSlice('pipelineEditorialChecks', patch, { silent: true }).catch(() => null)
-  ), []);
+  // patchSettingsSlice is a GET-merge-PUT, so two overlapping calls (a blur save
+  // racing start()'s save) can lose an update — a slow earlier PUT lands after a
+  // newer one and clobbers it. Serialize every write onto one tail promise so the
+  // cycles can't interleave; start() awaiting its own enqueued write transitively
+  // awaits any in-flight blur save. Returns the promise so start() can await it.
+  const persistTailRef = useRef(Promise.resolve());
+  const persistRounds = useCallback((patch) => {
+    const next = persistTailRef.current
+      .catch(() => {})
+      .then(() => patchSettingsSlice('pipelineEditorialChecks', patch, { silent: true }).catch(() => null));
+    persistTailRef.current = next;
+    return next;
+  }, []);
 
   // User edited an input — mark the values as real so a late settings load can't
   // overwrite them and so start() knows they're worth persisting.
