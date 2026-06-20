@@ -1124,8 +1124,14 @@ export async function startSeriesAutopilot(sId, options = {}) {
         // complete a text-ready series even with the budget exhausted. The
         // editorialHealthGate (#1316) is likewise exempt — it's a pure read +
         // score with no LLM cost, so a budget-exhausted run can still produce its
-        // readiness verdict (and pause on the findings, not the budget).
-        if (step.kind !== 'editorialChecks' && step.kind !== 'editorialHealthGate') {
+        // readiness verdict (and pause on the findings, not the budget). A gate
+        // whose resolved rounds is 0 ("skip") is also exempt: runArcVerify /
+        // runEditorial short-circuit with no LLM spend, so "0 skips the gate" must
+        // hold even when the budget is exhausted (otherwise the run pauses on
+        // budget instead of skipping).
+        const zeroRoundSkip = (step.kind === 'verifyArc' && runOptions.maxArcVerifyRounds === 0)
+          || (step.kind === 'editorialReview' && runOptions.maxEditorialRounds === 0);
+        if (step.kind !== 'editorialChecks' && step.kind !== 'editorialHealthGate' && !zeroRoundSkip) {
           const budget = await getDomainBudgetStatus('cos');
           if (!budget.withinBudget) {
             await persistMarker(sId, { status: 'paused', runId, currentStep: step.kind, lastError: `daily cos ${budget.exceeded} budget reached` });

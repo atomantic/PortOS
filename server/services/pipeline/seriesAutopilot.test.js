@@ -550,6 +550,21 @@ describe('autopilot conductor', () => {
     expect(arcSpies.verifyArc).not.toHaveBeenCalled();
   });
 
+  it('a zero-round gate skips even when the budget is exhausted (no budget pause at that gate)', async () => {
+    budgetStatus = { withinBudget: false, exceeded: 'actions' };
+    const { seriesId } = await seedComplete();
+    // maxArcVerifyRounds:0 ⇒ runArcVerify short-circuits with no spend, so the
+    // budget gate must NOT pause at verifyArc — the run advances to the next
+    // non-exempt step (scriptVerify) and pauses there on budget instead.
+    await autopilot.startSeriesAutopilot(seriesId, { maxArcVerifyRounds: 0 });
+    await waitFor(runFinished(seriesId));
+    expect(arcSpies.verifyArc).not.toHaveBeenCalled();
+    const series = await seriesSvc.getSeries(seriesId);
+    expect(series.autopilot?.status).toBe('paused');
+    expect(series.autopilot?.currentStep).toBe('scriptVerify'); // not 'verifyArc'
+    expect(series.autopilot?.lastError).toMatch(/budget/);
+  });
+
   it('maxEditorialRounds:0 skips the editorial-checks step too (no budget spend)', async () => {
     checkRunnerSpies.runEditorialChecks.mockClear();
     const { seriesId } = await seedComplete();
