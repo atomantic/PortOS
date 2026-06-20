@@ -83,6 +83,7 @@ const { getSeriesCanon } = await import('../seriesCanon.js');
 const { getSeries } = await import('../series.js');
 const { getSettings } = await import('../../settings.js');
 const { listChecks, getCheck } = await import('../../../lib/editorial/index.js');
+const { listIssuesForSeries } = await import('../issues.js');
 
 // Build a `pipelineEditorialChecks.checks` map that disables every check
 // matching `predicate` — keeps these fixtures robust as the registry grows
@@ -104,6 +105,7 @@ beforeEach(() => {
   resolveStageContext.mockClear();
   collectManuscriptSections.mockClear();
   getSeriesCanon.mockClear();
+  listIssuesForSeries.mockClear();
 });
 
 describe('runEditorialChecks', () => {
@@ -149,6 +151,31 @@ describe('runEditorialChecks', () => {
     // The info-dump check (needsManuscript) does trigger the collection.
     await runEditorialChecks('s1', { checkIds: ['prose.info-dumping'] });
     expect(collectManuscriptSections).toHaveBeenCalled();
+  });
+
+  it('feeds the comic-pacing checks off each issue\'s comic script (#1314)', async () => {
+    // Issue 1 is two splash pages in a row — the deterministic comic.panel-rhythm
+    // check flags the back-to-back splash run. Both comic checks read the same
+    // parsed pages off ctx.issues via the shared comicLetteringIssues projection.
+    issuesState = [
+      { id: 'i1', seriesId: 's1', number: 1, stages: { comicScript: { output: 'PAGE 1\nPANEL 1\nSplash.\nPAGE 2\nPANEL 1\nSplash again.' } } },
+      { id: 'i2', seriesId: 's1', number: 2, stages: { comicScript: { output: 'PAGE 1\nPANEL 1\nA.\nPANEL 2\nB.\nPANEL 3\nC.' } } },
+    ];
+    const result = await runEditorialChecks('s1', { checkIds: ['comic.panel-rhythm'] });
+    const comic = result.findings.filter((f) => f.checkId === 'comic.panel-rhythm');
+    expect(comic.length).toBeGreaterThan(0);
+    expect(comic.some((f) => f.issueNumber === 1)).toBe(true);
+    expect(comic.every((f) => f.category === 'pacing')).toBe(true);
+  });
+
+  it('produces no comic-pacing findings when no comic-pacing check is enabled', async () => {
+    issuesState = [
+      { number: 1, stages: { comicScript: { output: 'PAGE 1\nPANEL 1\nSplash.' } } },
+    ];
+    // Only the naming check runs — its gate never reads comic content, so the
+    // comic checks stay inert (no comic findings produced).
+    const result = await runEditorialChecks('s1', { checkIds: ['naming.dissimilar-names'] });
+    expect(result.findings.some((f) => f.checkId === 'comic.panel-rhythm')).toBe(false);
   });
 
   it('skips disabled checks', async () => {
@@ -526,6 +553,74 @@ describe('getReviewWithStaleness (#1345)', () => {
     }];
     const review = await getReviewWithStaleness('s1');
     expect(review.comments.find((c) => c.checkId === 'visual.shot-continuity').stale).toBe(false);
+  });
+
+  it('a panel description edit stales the page-turn finding but NOT the lettering finding (#1314 vs #1313 source split)', async () => {
+    // The pacing checks (#1314) read each panel's visual `description`; the
+    // lettering check (#1313) reads only caption/dialogue/SFX. They use SEPARATE
+    // source tokens (`comicScript.pacing` vs `comicScript`) so a description-only
+    // edit stales a page-turn finding (it read the description) WITHOUT staling a
+    // lettering finding (it didn't) — and vice-versa. This pins both halves.
+    const comicIssue = (desc) => [{
+      id: 'i1', seriesId: 's1', number: 1,
+      stages: { comicPages: { pages: [
+        // A 30-word caption so the lettering check fires an over-stuffed-balloon finding too.
+        { panels: [{ description: desc, caption: 'word '.repeat(30).trim(), dialogue: [], sfx: '' }] },
+        { panels: [{ description: 'b1', caption: '', dialogue: [], sfx: '' }, { description: 'b2', caption: '', dialogue: [], sfx: '' }] },
+      ] } },
+    }];
+    issuesState = comicIssue('a reveal on the wrong page');
+    // Enable ONLY the two comic checks; the shared runStagedLLM mock returns a
+    // finding for the page-turn stage call.
+    const comicChecksOnly = {
+      pipelineEditorialChecks: {
+        checks: Object.fromEntries(
+          listChecks()
+            .filter((c) => c.id !== 'comic.page-turn-beats' && c.id !== 'comic.lettering-density')
+            .map((c) => [c.id, { enabled: false }]),
+        ),
+      },
+    };
+    const { findings } = await runEditorialChecks('s1', { settings: comicChecksOnly });
+    reviewState = { comments: findings.map((f) => ({ ...f, status: 'open' })) };
+    expect(reviewState.comments.find((c) => c.checkId === 'comic.page-turn-beats')).toBeTruthy();
+    expect(reviewState.comments.find((c) => c.checkId === 'comic.lettering-density')).toBeTruthy();
+    // Only a panel description changed — panel counts + all lettering text identical.
+    issuesState = comicIssue('a reveal moved to a reveal-safe page');
+    const review = await getReviewWithStaleness('s1');
+    expect(review.comments.find((c) => c.checkId === 'comic.page-turn-beats').stale).toBe(true);
+    expect(review.comments.find((c) => c.checkId === 'comic.lettering-density').stale).toBe(false);
+  });
+
+  it('keeps a comic.panel-rhythm finding fresh on a text-only edit but stales it on a panel-count change (#1314 layout source)', async () => {
+    // panel-rhythm reads only per-page panel COUNTS (comicScript.layout), so a
+    // text edit that leaves the counts intact must not stale it; adding a panel must.
+    const comicIssue = (extraDesc) => [{
+      id: 'i1', seriesId: 's1', number: 1,
+      stages: { comicPages: { pages: [
+        { panels: [{ description: 'p1a', caption: '', dialogue: [], sfx: '' }] },           // splash
+        { panels: [{ description: 'p1b', caption: '', dialogue: [], sfx: '' }] },           // splash → back-to-back splash run fires
+        ...(extraDesc ? [{ panels: [{ description: extraDesc, caption: '', dialogue: [], sfx: '' }] }] : []),
+      ] } },
+    }];
+    issuesState = comicIssue(null);
+    const { findings } = await runEditorialChecks('s1', { checkIds: ['comic.panel-rhythm'] });
+    expect(findings.some((f) => f.checkId === 'comic.panel-rhythm')).toBe(true);
+    reviewState = { comments: findings.map((f) => ({ ...f, status: 'open' })) };
+    // Text-only edit: reword page 1's description; panel counts [1,1] unchanged.
+    issuesState = [{
+      id: 'i1', seriesId: 's1', number: 1,
+      stages: { comicPages: { pages: [
+        { panels: [{ description: 'reworded entirely', caption: 'new caption', dialogue: [], sfx: '' }] },
+        { panels: [{ description: 'p1b', caption: '', dialogue: [], sfx: '' }] },
+      ] } },
+    }];
+    let review = await getReviewWithStaleness('s1');
+    expect(review.comments.find((c) => c.checkId === 'comic.panel-rhythm').stale).toBe(false);
+    // Adding a third page changes the layout → the finding stales.
+    issuesState = comicIssue('a new third page');
+    review = await getReviewWithStaleness('s1');
+    expect(review.comments.find((c) => c.checkId === 'comic.panel-rhythm').stale).toBe(true);
   });
 
   it('keeps a scene finding fresh when the manuscript changes (reverseOutline-only source)', async () => {

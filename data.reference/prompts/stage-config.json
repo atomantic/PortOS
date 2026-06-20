@@ -499,6 +499,13 @@
       "returnsJson": true,
       "variables": []
     },
+    "pipeline-editorial-comic-page-turn": {
+      "name": "Pipeline — Editorial Check: Comic page-turn beats",
+      "description": "Editorial check (#1314): flags comic reveals/cliffhangers placed where the reader sees them early — on a page that shares its two-page spread with earlier pages rather than the first page after a page turn. Reads each issue's parsed comic-page layout and reconciles placement against the authored reader-map reveals/cliffhangers. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
     "pipeline-editorial-dead-metaphor": {
       "name": "Pipeline — Editorial Check: Dead / mixed metaphor & overwriting",
       "description": "Editorial check (#1308): the judgment layer for tired language the deterministic cliché scan can't catch — dead or mixed metaphors, lightly-reworded novel clichés, and overwrought / purple prose. Reads the stitched manuscript; severity is advisory; skips knowing in-voice clichés. Returns issue-anchored findings.",

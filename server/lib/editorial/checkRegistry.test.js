@@ -3407,6 +3407,117 @@ describe('dialogue-craft bundle (#1307)', () => {
   });
 });
 
+describe('comic-pacing bundle (#1314)', () => {
+  const PANEL_RHYTHM = 'comic.panel-rhythm';
+  const PAGE_TURN = 'comic.page-turn-beats';
+  // The comic-pacing checks read each issue's pages off ctx.issues via the shared
+  // `comicLetteringIssues` projection — which prefers an edited `comicPages.pages`
+  // split (already panelized) over the generated script. Build pages by panel count.
+  const page = (n) => ({ panels: Array.from({ length: n }, (_, i) => ({ description: `p${i}`, caption: '', dialogue: [], sfx: '' })) });
+  const issue = (number, counts) => ({ number, stages: { comicPages: { pages: counts.map(page) } } });
+
+  describe('comic.panel-rhythm — deterministic', () => {
+    it('is registered as an issue-scoped deterministic pacing check over comicScript.layout', () => {
+      const check = getCheck(PANEL_RHYTHM);
+      expect(check.kind).toBe('deterministic');
+      expect(check.scope).toBe('issue');
+      expect(check.category).toBe('pacing');
+      // Layout-only source: rhythm reads panel COUNTS, so a text edit must not stale it.
+      expect(check.sources).toEqual(['comicScript.layout']);
+    });
+
+    it('only runs when at least one issue has comic content', () => {
+      const check = getCheck(PANEL_RHYTHM);
+      expect(check.gate({ issues: [] })).toBeFalsy();
+      expect(check.gate({ issues: undefined })).toBeFalsy();
+      expect(check.gate({ issues: [issue(1, [3])] })).toBe(true);
+    });
+
+    it('flags splash overuse, overcrowding, and grid monotony, attributing each to its issue', () => {
+      const ctx = {
+        config: {},
+        severityDefault: 'low',
+        issues: [issue(3, [1, 1, 3, 12, 4, 4, 4, 4])],
+      };
+      const findings = getCheck(PANEL_RHYTHM).run(ctx);
+      expect(findings.length).toBeGreaterThan(0);
+      expect(findings.every((f) => f.category === 'pacing')).toBe(true);
+      expect(findings.every((f) => f.issueNumber === 3)).toBe(true);
+      const problems = findings.map((f) => f.problem).join('\n');
+      expect(problems).toContain('full-page splashes');
+      expect(problems).toContain('12 panels');
+      expect(problems).toMatch(/same 4-panel grid/);
+    });
+
+    it('honors maxFindings as a hard cap across issues', () => {
+      const ctx = {
+        config: { maxFindings: 1 },
+        severityDefault: 'low',
+        issues: [issue(1, [1, 1, 1]), issue(2, [12, 12])],
+      };
+      const findings = getCheck(PANEL_RHYTHM).run(ctx);
+      expect(findings).toHaveLength(1);
+    });
+  });
+
+  describe('comic.page-turn-beats — LLM', () => {
+    it('is registered as an issue-scoped LLM pacing check reading comicScript.pacing + reader-map', () => {
+      const check = getCheck(PAGE_TURN);
+      expect(check.kind).toBe('llm');
+      expect(check.scope).toBe('issue');
+      expect(check.category).toBe('pacing');
+      expect(check.sources).toEqual(['comicScript.pacing', 'series.arc.readerMap']);
+    });
+
+    it('passes each issue page layout + authored reveals to the model and attributes findings to the issue', async () => {
+      const seenVars = [];
+      const ctx = {
+        config: {},
+        severityDefault: 'low',
+        series: { arc: { readerMap: { beats: [{ kind: 'reveal', note: 'The mentor is the villain' }], cliffhangers: [] } } },
+        issues: [issue(7, [1, 3, 2])],
+        callStagedLLM: async (_stage, vars) => {
+          seenVars.push(vars);
+          return { content: { findings: [{ severity: 'medium', location: 'Page 2', problem: 'Reveal exposed early' }] } };
+        },
+      };
+      const findings = await getCheck(PAGE_TURN).run(ctx);
+      expect(seenVars[0].pageLayout).toContain('Issue 7 page layout:');
+      expect(seenVars[0].authoredReveals).toContain('The mentor is the villain');
+      expect(findings).toHaveLength(1);
+      expect(findings[0].category).toBe('pacing');
+      expect(findings[0].issueNumber).toBe(7);
+    });
+
+    it('passes an empty authoredReveals var when the series has no reader-map', async () => {
+      let seen = null;
+      const ctx = {
+        config: {},
+        severityDefault: 'low',
+        series: {},
+        issues: [issue(1, [2, 2])],
+        callStagedLLM: async (_stage, vars) => { seen = vars; return { content: { findings: [] } }; },
+      };
+      await getCheck(PAGE_TURN).run(ctx);
+      expect(seen.authoredReveals).toBe('');
+    });
+
+    it('stops launching further issue calls once maxFindings is reached', async () => {
+      let calls = 0;
+      const ctx = {
+        config: { maxFindings: 1 },
+        severityDefault: 'low',
+        series: {},
+        issues: [issue(1, [2, 2]), issue(2, [3, 3])],
+        callStagedLLM: async () => { calls += 1; return { content: { findings: [{ problem: 'x' }] } }; },
+      };
+      const findings = await getCheck(PAGE_TURN).run(ctx);
+      expect(findings).toHaveLength(1);
+      expect(calls).toBe(1);
+    });
+  });
+});
+
 describe('comic.lettering-density — deterministic check (#1313)', () => {
   const COMIC = 'comic.lettering-density';
   // A canonical comic-script page with one over-stuffed balloon (60 words).
