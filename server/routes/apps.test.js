@@ -35,6 +35,7 @@ vi.mock('../services/history.js', () => ({
 
 vi.mock('../services/streamingDetect.js', () => ({
   parseEcosystemFromPath: vi.fn(),
+  writeEcosystemPorts: vi.fn().mockResolvedValue({ file: 'ecosystem.config.cjs', changed: true }),
   usesPm2: vi.fn((type) => !new Set(['ios-native', 'macos-native', 'xcode', 'swift']).has(type)),
   NON_PM2_TYPES: new Set(['ios-native', 'macos-native', 'xcode', 'swift'])
 }));
@@ -255,6 +256,33 @@ describe('Apps Routes', () => {
         .send({ name: 'Test' });
 
       expect(response.status).toBe(404);
+    });
+
+    it('writes changed ports back to the ecosystem config (source of truth)', async () => {
+      // repoPath must exist on disk so the pathExists guard passes.
+      const mockApp = { id: 'app-001', name: 'App', type: 'node', repoPath: process.cwd(), apiPort: 5173, uiPort: 5174 };
+      appsService.getAppById.mockResolvedValue(mockApp);
+      appsService.updateApp.mockResolvedValue({ ...mockApp, apiPort: 6000, uiPort: 6001 });
+
+      const response = await request(app)
+        .put('/api/apps/app-001')
+        .send({ apiPort: 6000, uiPort: 6001 });
+
+      expect(response.status).toBe(200);
+      expect(streamingDetect.writeEcosystemPorts).toHaveBeenCalledWith(
+        process.cwd(),
+        expect.arrayContaining([[5173, 6000], [5174, 6001]])
+      );
+    });
+
+    it('does not write to the ecosystem config when no port changed', async () => {
+      const mockApp = { id: 'app-001', name: 'App', type: 'node', repoPath: process.cwd(), apiPort: 5173 };
+      appsService.getAppById.mockResolvedValue(mockApp);
+      appsService.updateApp.mockResolvedValue({ ...mockApp, name: 'Renamed' });
+
+      await request(app).put('/api/apps/app-001').send({ name: 'Renamed' });
+
+      expect(streamingDetect.writeEcosystemPorts).not.toHaveBeenCalled();
     });
   });
 

@@ -260,6 +260,9 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
               />
             </div>
           </div>
+          <p className="text-xs text-gray-500">
+            Saving a changed port rewrites the matching value in this app's <code className="text-gray-400">ecosystem.config.cjs</code> (the source of truth PM2 reads). Restart the app for the new port to take effect.
+          </p>
 
           {app.id !== PORTOS_APP_ID && (
             <div className="bg-port-bg/50 border border-port-border rounded-lg p-3 space-y-2">

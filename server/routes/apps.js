@@ -15,7 +15,7 @@ import { validateRequest, appSchema, appUpdateSchema, sanitizeTaskMetadata, docu
 import * as git from '../services/git.js';
 import { parseCronToNextRun } from '../services/eventScheduler.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { parseEcosystemFromPath, usesPm2 } from '../services/streamingDetect.js';
+import { parseEcosystemFromPath, usesPm2, writeEcosystemPorts } from '../services/streamingDetect.js';
 import { detectAppIcon, getIconContentType, isUsableSvg } from '../services/appIconDetect.js';
 import { hasDeployScript } from '../services/appDeployer.js';
 import { checkScripts, installScripts, XCODE_SCRIPT_NAMES } from '../services/xcodeScripts.js';
@@ -373,10 +373,41 @@ router.post('/', asyncHandler(async (req, res, next) => {
 // PUT /api/apps/:id - Update app
 router.put('/:id', asyncHandler(async (req, res, next) => {
   const data = validateRequest(appUpdateSchema, req.body);
+
+  // Only port edits need the canonical-config write-back below; snapshot the
+  // pre-update ports just for those so ordinary updates (rename, archive,
+  // jira/datadog) don't pay the extra read + fs stat.
+  const PORT_KEYS = ['apiPort', 'uiPort', 'devUiPort', 'tlsPort'];
+  const hasPortUpdate = PORT_KEYS.some(key => key in data);
+  const existing = hasPortUpdate ? await appsService.getAppById(req.params.id) : null;
   const app = await appsService.updateApp(req.params.id, data);
 
   if (!app) {
     throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });
+  }
+
+  // Port fields in apps.json are *derived* from ecosystem.config.cjs by
+  // parseEcosystemConfig. Persisting an edit only to apps.json leaves PM2 on
+  // the old ports and lets the next config refresh clobber the change — so
+  // write the new ports back to the canonical config file too.
+  if (existing && usesPm2(app.type) && await pathExists(app.repoPath)) {
+    const remap = [];
+    for (const key of PORT_KEYS) {
+      const oldPort = existing[key];
+      const newPort = app[key];
+      if (Number.isInteger(oldPort) && Number.isInteger(newPort) && oldPort !== newPort) {
+        remap.push([oldPort, newPort]);
+      }
+    }
+    if (remap.length > 0) {
+      const result = await writeEcosystemPorts(app.repoPath, remap).catch((err) => {
+        console.error(`❌ Failed to write ports to ecosystem config for ${app.name}: ${err.message}`);
+        return null;
+      });
+      if (result?.changed) {
+        console.log(`🔧 Updated ${result.file} ports for ${app.name}: ${remap.map(([o, n]) => `${o}→${n}`).join(', ')} (restart the app to apply)`);
+      }
+    }
   }
 
   res.json(app);

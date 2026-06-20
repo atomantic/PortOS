@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseEcosystemConfig } from './streamingDetect.js';
+import { parseEcosystemConfig, rewriteEcosystemPorts } from './streamingDetect.js';
 
 describe('parseEcosystemConfig', () => {
   it('captures arbitrary *_PORT env vars and labels them by camelCased stem', () => {
@@ -274,5 +274,63 @@ describe('parseEcosystemConfig', () => {
     const { processes } = parseEcosystemConfig(content);
     const proc = processes.find(p => p.name === 'explicit-app');
     expect(proc.ports).toEqual({ api: 5590, ui: 5591 });
+  });
+});
+
+describe('rewriteEcosystemPorts', () => {
+  it('rewrites inline env PORT/VITE_PORT and --port args (the standardizer-generated shape)', () => {
+    const content = `module.exports = {
+  apps: [
+    { name: 'app-server', script: 'server.js', env: { NODE_ENV: 'development', PORT: 5173 } },
+    { name: 'app-client', script: 'npx', args: 'vite --host --port 5174', env: { VITE_PORT: 5174 } }
+  ]
+};
+`;
+    const out = rewriteEcosystemPorts(content, [[5173, 6000], [5174, 6001]]);
+    expect(out).toContain('PORT: 6000');
+    expect(out).toContain('--port 6001');
+    expect(out).toContain('VITE_PORT: 6001');
+    expect(out).not.toContain('5173');
+    expect(out).not.toContain('5174');
+    // Re-parsing the rewritten file yields the new ports.
+    const { processes } = parseEcosystemConfig(out);
+    expect(processes.find(p => p.name === 'app-server').ports.api).toBe(6000);
+  });
+
+  it('rewrites values inside a const PORTS = {...} block regardless of key name', () => {
+    const content = `const PORTS = { API: 5555, UI: 5173 };
+module.exports = { apps: [{ name: 'x', script: 's.js', env: { PORT: PORTS.API, VITE_PORT: PORTS.UI } }] };
+`;
+    const out = rewriteEcosystemPorts(content, [[5173, 6000]]);
+    expect(out).toContain('UI: 6000');
+    expect(out).toContain('API: 5555'); // untouched
+  });
+
+  it('does not touch unrelated numbers that merely equal an old port', () => {
+    const content = `module.exports = {
+  apps: [{ name: 'x', script: 's.js', watch_delay: 1000, env: { PORT: 1000 } }]
+};
+`;
+    const out = rewriteEcosystemPorts(content, [[1000, 6000]]);
+    expect(out).toContain('watch_delay: 1000'); // not a port key — preserved
+    expect(out).toContain('PORT: 6000');
+  });
+
+  it('does not chain when a new port equals another old port', () => {
+    const content = `module.exports = { apps: [
+  { name: 'a', script: 's.js', env: { PORT: 6000 } },
+  { name: 'b', script: 's.js', env: { PORT: 6001 } }
+] };
+`;
+    const out = rewriteEcosystemPorts(content, [[6000, 6001], [6001, 6002]]);
+    const { processes } = parseEcosystemConfig(out);
+    expect(processes.find(p => p.name === 'a').ports.api).toBe(6001);
+    expect(processes.find(p => p.name === 'b').ports.api).toBe(6002);
+  });
+
+  it('is a no-op when remap is empty or only contains identity pairs', () => {
+    const content = `module.exports = { apps: [{ name: 'x', script: 's.js', env: { PORT: 5173 } }] };`;
+    expect(rewriteEcosystemPorts(content, [])).toBe(content);
+    expect(rewriteEcosystemPorts(content, [[5173, 5173]])).toBe(content);
   });
 });

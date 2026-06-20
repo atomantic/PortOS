@@ -3,7 +3,7 @@ import { existsSync } from 'fs';
 import { join, basename } from 'path';
 import { homedir } from 'os';
 import { execPm2 } from './pm2.js';
-import { safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
+import { safeJSONParse, tryReadFile, atomicWrite } from '../lib/fileUtils.js';
 import { detectAppIcon } from './appIconDetect.js';
 
 /** App types that do not use PM2 for process management */
@@ -432,6 +432,114 @@ export async function parseEcosystemFromPath(dirPath) {
     }
   }
   return { processes: [], pm2Home: null };
+}
+
+/**
+ * Locate the `const PORTS = { ... }` literal in an ecosystem config and return
+ * its `{ start, end }` byte offsets (inclusive of the opening/closing braces),
+ * or null when there's no PORTS object. Brace-counted so nested objects
+ * (`{ server: { api: 5555 } }`) are captured whole.
+ */
+function findPortsBlock(content) {
+  const m = content.match(/(?:const|let|var)\s+PORTS\s*=\s*\{/);
+  if (!m) return null;
+  const start = m.index + m[0].length - 1; // index of the opening '{'
+  // Reuse the parser's brace matcher — it correctly ignores braces inside
+  // strings/comments/`${...}`, which a bare depth counter would miscount.
+  const end = findMatchingBrace(content, start);
+  return end < 0 ? null : { start, end };
+}
+
+/**
+ * Rewrite port literals in an ecosystem.config content string per a remap of
+ * old → new port numbers. Pure (no I/O) so it's unit-testable.
+ *
+ * `ecosystem.config.cjs` is the source of truth for an app's ports — PortOS
+ * *derives* uiPort/apiPort/devUiPort from it via parseEcosystemConfig. Editing
+ * ports in the UI therefore has to write back here, or PM2 keeps the old ports
+ * and the next config refresh re-derives them and clobbers the edit.
+ *
+ * Replacements are deliberately narrow so unrelated numbers (watch_delay,
+ * timeouts) are never touched:
+ *   1. numeric values inside a `const PORTS = {...}` block (arbitrary keys),
+ *   2. `--port <n>` tokens in args strings,
+ *   3. port-ish env keys (`PORT`, `*_PORT`, `VITE_PORT`) and `port:`.
+ *
+ * Each old value is first swapped to a unique placeholder, then placeholders
+ * resolve to new values — so a remap like 6000→6001, 6001→6002 can't chain.
+ *
+ * @param {string} content
+ * @param {Map<number,number>|Array<[number,number]>} remap
+ * @returns {string}
+ */
+export function rewriteEcosystemPorts(content, remap) {
+  const pairs = (remap instanceof Map ? [...remap.entries()] : remap || [])
+    .map(([o, n]) => [Number(o), Number(n)])
+    .filter(([o, n]) => Number.isInteger(o) && Number.isInteger(n) && o > 0 && n > 0 && o !== n);
+  if (pairs.length === 0) return content;
+
+  const ph = (i) => `PORT_REMAP_${i}`;
+  // Port-ish env keys: PORT, FOO_PORT, VITE_PORT (and quoted variants), plus `port:`.
+  const KEY = `(?:[A-Za-z][A-Za-z0-9_]*_PORT|PORT|port)`;
+
+  let out = content;
+
+  // 1) Within `const PORTS = {...}`, swap any `: <old>` value (keys there are
+  //    arbitrary — API, UI, WEB, …). Operate on the isolated block so the same
+  //    pattern outside the block isn't over-matched.
+  const block = findPortsBlock(out);
+  if (block) {
+    const before = out.slice(0, block.start);
+    let inner = out.slice(block.start, block.end + 1);
+    const after = out.slice(block.end + 1);
+    pairs.forEach(([oldP], i) => {
+      inner = inner.replace(new RegExp(`(:\\s*)${oldP}\\b`, 'g'), `$1${ph(i)}`);
+    });
+    out = before + inner + after;
+  }
+
+  // 2) `--port <old>` in args strings.
+  pairs.forEach(([oldP], i) => {
+    out = out.replace(new RegExp(`(--port\\s+)${oldP}\\b`, 'g'), `$1${ph(i)}`);
+  });
+
+  // 3) Port-ish key assignments anywhere (env blocks, ports objects).
+  pairs.forEach(([oldP], i) => {
+    out = out.replace(
+      new RegExp(`(['"\`]?\\b${KEY}\\b['"\`]?\\s*:\\s*)${oldP}\\b`, 'g'),
+      `$1${ph(i)}`
+    );
+  });
+
+  // Resolve placeholders → new values.
+  pairs.forEach(([, newP], i) => {
+    out = out.split(ph(i)).join(String(newP));
+  });
+
+  return out;
+}
+
+/**
+ * Persist a port remap to an app's on-disk ecosystem config (`.cjs` preferred,
+ * then `.js`). Returns `{ file, changed }`. No-op (changed:false) when nothing
+ * matched. See rewriteEcosystemPorts for why this is the canonical write path.
+ *
+ * @param {string} repoPath
+ * @param {Map<number,number>|Array<[number,number]>} remap
+ */
+export async function writeEcosystemPorts(repoPath, remap) {
+  for (const name of ['ecosystem.config.cjs', 'ecosystem.config.js']) {
+    const filePath = join(repoPath, name);
+    if (!existsSync(filePath)) continue;
+    const content = await readFile(filePath, 'utf-8');
+    const updated = rewriteEcosystemPorts(content, remap);
+    if (updated !== content) {
+      await atomicWrite(filePath, updated);
+      return { file: name, changed: true };
+    }
+    return { file: name, changed: false };
+  }
+  return { file: null, changed: false };
 }
 
 /**
