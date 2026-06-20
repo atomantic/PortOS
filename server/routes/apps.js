@@ -15,7 +15,7 @@ import { validateRequest, appSchema, appUpdateSchema, sanitizeTaskMetadata, docu
 import * as git from '../services/git.js';
 import { parseCronToNextRun } from '../services/eventScheduler.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { parseEcosystemFromPath, usesPm2, writeEcosystemPorts } from '../services/streamingDetect.js';
+import { parseEcosystemFromPath, usesPm2, writeEcosystemPorts, writeEcosystemPortsByProcess } from '../services/streamingDetect.js';
 import { checkViteHost, findViteConfig, rewriteAllowedHosts } from '../lib/viteAllowedHosts.js';
 import { detectAppIcon, getIconContentType, isUsableSvg } from '../services/appIconDetect.js';
 import { hasDeployScript } from '../services/appDeployer.js';
@@ -484,17 +484,20 @@ router.put('/:id', asyncHandler(async (req, res, next) => {
     const { processes: cfgProcs } = await parseEcosystemFromPath(existing.repoPath);
     const LABEL_BY_KEY = { apiPort: 'api', uiPort: 'ui', devUiPort: 'devUi' };
     const currentPort = {};
+    const procNameByKey = {}; // which process block owns each label (for targeted rewrites)
     for (const proc of cfgProcs || []) {
       for (const [key, label] of Object.entries(LABEL_BY_KEY)) {
         if (currentPort[key] === undefined && Number.isInteger(proc.ports?.[label])) {
           currentPort[key] = proc.ports[label];
+          procNameByKey[key] = proc.name;
         }
       }
     }
     // Count current values so a value-keyed rewrite never fires on a number
     // shared by another port field (e.g. uiPort derived from apiPort, both
     // 6000) — that would rewrite every occurrence and clobber the field the
-    // user didn't touch. Such a change is unpersistable by value alone.
+    // user didn't touch. Such a value can't be split by value alone; it falls
+    // through to the per-process-label-targeted rewrite below.
     const valueCounts = new Map();
     for (const key of PORT_KEYS) {
       const v = currentPort[key];
@@ -506,13 +509,14 @@ router.put('/:id', asyncHandler(async (req, res, next) => {
     const changedKeys = PORT_KEYS.filter(key =>
       Number.isInteger(currentPort[key]) && Number.isInteger(data[key]) && data[key] !== currentPort[key]);
     const remap = [];
-    const unpersistable = [];
+    const targetedEdits = []; // shared-value keys: rewritten by process + label
     for (const key of changedKeys) {
       const oldPort = currentPort[key]; // guaranteed integer by the filter above
-      // Value shared with another field (can't disambiguate by value) → can't
-      // safely write it to the config without clobbering the other field.
-      if (valueCounts.get(oldPort) > 1) {
-        unpersistable.push(key);
+      // Value shared with another field (can't disambiguate by value): target
+      // the specific process block + label so the edit lands on exactly the
+      // port the user touched, not every occurrence of the shared literal.
+      if (valueCounts.get(oldPort) > 1 && procNameByKey[key]) {
+        targetedEdits.push({ processName: procNameByKey[key], label: LABEL_BY_KEY[key], oldPort, newPort: data[key] });
         continue;
       }
       remap.push([oldPort, data[key]]);
@@ -523,13 +527,25 @@ router.put('/:id', asyncHandler(async (req, res, next) => {
       console.log(`🔧 Updated ${result.file} ports for ${existing.name}: ${remap.map(([o, n]) => `${o}→${n}`).join(', ')} (restart the app to apply)`);
     }
 
+    // Shared-value edits: rewrite the specific process block + label. Runs after
+    // the value-keyed pass so both touch the freshest on-disk content.
+    const targeted = targetedEdits.length > 0
+      ? await writeEcosystemPortsByProcess(existing.repoPath, targetedEdits)
+      : { changed: false, unapplied: [] };
+    if (targeted.changed) {
+      console.log(`🔧 Updated ${targeted.file} ports for ${existing.name}: ${targetedEdits.map(e => `${e.label} ${e.oldPort}→${e.newPort}`).join(', ')} (restart the app to apply)`);
+    }
+
     // Honesty gate: if the user changed a port we could NOT write to the
     // source-of-truth config, reject the whole update rather than persist a
     // registry value PM2 will contradict (and the next refresh will revert).
-    // `!result.changed` catches remap pairs whose literal wasn't found.
-    if (changedKeys.length > 0 && (unpersistable.length > 0 || (remap.length > 0 && !result.changed))) {
+    // `!result.changed` catches value-keyed remap pairs whose literal wasn't
+    // found; `targeted.unapplied` catches process/label edits that didn't match.
+    const valueKeyedFailed = remap.length > 0 && !result.changed;
+    const targetedFailed = (targeted.unapplied || []).length > 0;
+    if (changedKeys.length > 0 && (valueKeyedFailed || targetedFailed)) {
       throw new ServerError(
-        `Could not persist port change to ${existing.name}'s ecosystem config — the port is shared with another field, derived from process config, or not a literal value. Edit the ecosystem.config.cjs directly to change this port.`,
+        `Could not persist port change to ${existing.name}'s ecosystem config — the port is derived from process config or is not a literal value. Edit the ecosystem.config.cjs directly to change this port.`,
         { status: 422, code: 'PORT_NOT_PERSISTABLE' }
       );
     }

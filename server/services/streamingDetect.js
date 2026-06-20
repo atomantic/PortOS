@@ -515,6 +515,151 @@ function commentRanges(content) {
 }
 
 /**
+ * Replace every match of `re` in `str` with `${prefix}${replacement}`, EXCEPT
+ * matches whose port number falls inside a comment. `re` must have its port
+ * number as the final capture run so we can locate where the digits begin: a
+ * value living only in a comment (`// PORT: 5173`) must NOT count as a rewrite,
+ * or the writer would report changed:true while the executable config is
+ * untouched, recreating the apps.json-vs-PM2 mismatch the write-back prevents.
+ */
+function replaceOutsideComments(str, re, replacement) {
+  const ranges = commentRanges(str);
+  return str.replace(re, (full, prefix, offset) => {
+    const numStart = offset + prefix.length;
+    return ranges.some(([s, e]) => numStart >= s && numStart < e) ? full : `${prefix}${replacement}`;
+  });
+}
+
+/**
+ * Find the `{ start, end }` brace-matched region of the app block whose
+ * `name:` equals `processName`. Mirrors the block-scan parseEcosystemConfig
+ * uses, so a per-process rewrite targets exactly the block the parser derived
+ * that process's ports from. Returns the first match (parser semantics) or null.
+ */
+function findAppBlock(content, processName) {
+  const re = /\{\s*name\s*:\s*['"]([^'"]+)['"]/g;
+  let m;
+  while ((m = re.exec(content)) !== null) {
+    if (m[1] !== processName) continue;
+    const end = findMatchingBrace(content, m.index);
+    if (end >= 0) return { start: m.index, end };
+  }
+  return null;
+}
+
+/**
+ * Within a single app block, rewrite the port literal that belongs to `label`
+ * (`api`/`ui`/`devUi`) from `oldP` → `newP`, leaving sibling labels alone.
+ *
+ * The key insight that makes per-label targeting safe inside one block: `PORT`
+ * maps to exactly ONE label per process (api OR ui, decided by process name) —
+ * the two never collide in the same block. So when two labels share a literal
+ * value, they either live in different blocks (block scoping splits them) or in
+ * an explicit `ports: { api: N, ui: N }` map (the label KEY splits them). The
+ * value-keyed rewriter can't disambiguate either; this one can.
+ *
+ * Sources rewritten per label mirror parseEcosystemConfig's derivation AND the
+ * PM2 runtime env (so the config the parser reads and the env PM2 launches with
+ * both move together):
+ *   - api  → `ports: { api: N }`, env `PORT`, `PORT: … || N` fallback, `port:`
+ *   - ui   → `ports: { ui|devUi: N }`, env `VITE_PORT`, `--port N`, and env
+ *            `PORT` ONLY when the block has no `ports:` object (a UI-named
+ *            process whose bare `PORT` IS the UI port).
+ *
+ * @returns {{ block: string, changed: boolean }}
+ */
+function rewriteLabelInBlock(block, label, oldP, newP) {
+  // Swap the matched digits to a sentinel first, then resolve the sentinel to
+  // the new value — so a label whose old/new values overlap another source in
+  // the same block can't chain. Each prefix capture group is preserved, so only
+  // the number changes (no whitespace artifact).
+  const ph = 'PORT_TGT_PLACEHOLDER';
+  const NUM = `${oldP}\\b`;
+  const hasPortsObj = /\bports\s*:\s*\{/.test(block);
+
+  let pats;
+  if (label === 'api') {
+    pats = [
+      `(\\bapi\\s*:\\s*)${NUM}`,                                           // ports: { api: N }
+      `(['"\`]?\\bPORT\\b['"\`]?\\s*:\\s*[^,}\\n]*?\\|\\|\\s*['"]?)${NUM}`, // PORT: … || N (fallback)
+      `(['"\`]?\\bPORT\\b['"\`]?\\s*:\\s*)${NUM}`,                          // env PORT: N
+      `(\\bport\\s*:\\s*)${NUM}`,                                           // port: N
+    ];
+  } else {
+    // ui / devUi share on-disk sources (devUi is a parse-time relabel of ui).
+    pats = [
+      `(\\b(?:ui|devUi)\\s*:\\s*)${NUM}`,                                   // ports: { ui|devUi: N }
+      `(['"\`]?\\bVITE_PORT\\b['"\`]?\\s*:\\s*)${NUM}`,                     // env VITE_PORT: N
+      `(--port\\s+)${NUM}`,                                                 // args --port N
+    ];
+    // Bare PORT is the UI port only when there's no explicit ports object (a
+    // ports object means env is metadata-only and PORT belongs to the api).
+    if (!hasPortsObj) pats.push(`(['"\`]?\\bPORT\\b['"\`]?\\s*:\\s*)${NUM}`);
+  }
+
+  let out = block;
+  for (const p of pats) {
+    out = replaceOutsideComments(out, new RegExp(p, 'g'), ph);
+  }
+  const changed = out.includes(ph);
+  out = out.split(ph).join(String(newP));
+  return { block: out, changed };
+}
+
+/**
+ * Per-process-label-targeted port rewrite — the disambiguating counterpart to
+ * the value-keyed `rewriteEcosystemPorts`. Each edit names the process and the
+ * label (`api`/`ui`/`devUi`) to change, so a value shared by two labels (e.g.
+ * prod UI served by the API where `uiPort === apiPort`, or an explicit
+ * `ports: { api: N, ui: N }` map) is rewritten on exactly the one the user
+ * touched. Pure (no I/O) for unit-testability.
+ *
+ * @param {string} content
+ * @param {Array<{processName:string,label:string,oldPort:number,newPort:number}>} edits
+ * @returns {{ content: string, applied: Array, unapplied: Array }}
+ */
+export function rewriteEcosystemPortsByProcess(content, edits) {
+  const valid = (edits || []).filter(e =>
+    e && typeof e.processName === 'string' && typeof e.label === 'string' &&
+    Number.isInteger(e.oldPort) && Number.isInteger(e.newPort) &&
+    e.oldPort > 0 && e.newPort > 0 && e.oldPort !== e.newPort);
+  if (valid.length === 0) return { content, applied: [], unapplied: [] };
+
+  const applied = [];
+  const unapplied = [];
+
+  // Group edits by process so a block is sliced once even when several labels
+  // in it change (e.g. apiPort + uiPort that currently share a value).
+  const byProcess = new Map();
+  for (const e of valid) {
+    if (!byProcess.has(e.processName)) byProcess.set(e.processName, []);
+    byProcess.get(e.processName).push(e);
+  }
+
+  const blocks = [];
+  for (const [name, es] of byProcess) {
+    const range = findAppBlock(content, name);
+    if (!range) { es.forEach(e => unapplied.push(e)); continue; }
+    blocks.push({ range, edits: es });
+  }
+  // Rewrite back-to-front so each splice keeps earlier blocks' offsets valid.
+  blocks.sort((a, b) => b.range.start - a.range.start);
+
+  let out = content;
+  for (const blk of blocks) {
+    let inner = out.slice(blk.range.start, blk.range.end + 1);
+    for (const e of blk.edits) {
+      const r = rewriteLabelInBlock(inner, e.label, e.oldPort, e.newPort);
+      inner = r.block;
+      (r.changed ? applied : unapplied).push(e);
+    }
+    out = out.slice(0, blk.range.start) + inner + out.slice(blk.range.end + 1);
+  }
+
+  return { content: out, applied, unapplied };
+}
+
+/**
  * Rewrite port literals in an ecosystem.config content string per a remap of
  * old → new port numbers. Pure (no I/O) so it's unit-testable.
  *
@@ -550,18 +695,8 @@ export function rewriteEcosystemPorts(content, remap) {
   // Port-ish env keys: PORT, FOO_PORT, VITE_PORT (and quoted variants), plus `port:`.
   const KEY = `(?:[A-Za-z][A-Za-z0-9_]*_PORT|PORT|port)`;
 
-  // Replace `re` everywhere EXCEPT inside comments — `re` must have its port
-  // number as the last capture group so we know where the digits start. A port
-  // value living only in a comment (`// PORT: 5173`) must NOT count as a rewrite,
-  // or writeEcosystemPorts would report changed:true while the executable config
-  // is untouched, recreating the apps.json-vs-PM2 mismatch this prevents.
-  const replaceOutsideComments = (str, re, phI) => {
-    const ranges = commentRanges(str);
-    return str.replace(re, (full, prefix, offset) => {
-      const numStart = offset + prefix.length;
-      return ranges.some(([s, e]) => numStart >= s && numStart < e) ? full : `${prefix}${phI}`;
-    });
-  };
+  // replaceOutsideComments (module scope) skips matches whose port number sits
+  // inside a comment, so a commented `// PORT: 5173` never counts as a rewrite.
 
   let out = content;
 
@@ -635,6 +770,32 @@ export async function writeEcosystemPorts(repoPath, remap) {
     return { file: name, changed: false };
   }
   return { file: null, changed: false };
+}
+
+/**
+ * Persist a per-process-label-targeted port remap to an app's on-disk ecosystem
+ * config (`.cjs` preferred, then `.js`). The disambiguating counterpart to
+ * writeEcosystemPorts: use this when a port value is shared by two labels (e.g.
+ * `ports: { api: N, ui: N }`) and only one was edited. Returns
+ * `{ file, changed, applied, unapplied }`; `unapplied` lists edits whose process
+ * block or label literal wasn't found (caller decides whether that's a failure).
+ *
+ * @param {string} repoPath
+ * @param {Array<{processName:string,label:string,oldPort:number,newPort:number}>} edits
+ */
+export async function writeEcosystemPortsByProcess(repoPath, edits) {
+  for (const name of ECOSYSTEM_CONFIG_FILENAMES) {
+    const filePath = join(repoPath, name);
+    if (!existsSync(filePath)) continue;
+    const content = await readFile(filePath, 'utf-8');
+    const { content: updated, applied, unapplied } = rewriteEcosystemPortsByProcess(content, edits);
+    if (updated !== content) {
+      await atomicWrite(filePath, updated);
+      return { file: name, changed: true, applied, unapplied };
+    }
+    return { file: name, changed: false, applied, unapplied };
+  }
+  return { file: null, changed: false, applied: [], unapplied: edits || [] };
 }
 
 /**

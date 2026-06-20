@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { parseEcosystemConfig, rewriteEcosystemPorts, writeEcosystemPorts } from './streamingDetect.js';
+import { parseEcosystemConfig, rewriteEcosystemPorts, rewriteEcosystemPortsByProcess, writeEcosystemPorts } from './streamingDetect.js';
 
 describe('parseEcosystemConfig', () => {
   it('captures arbitrary *_PORT env vars and labels them by camelCased stem', () => {
@@ -408,6 +408,141 @@ module.exports = { apps: [{ name: 'x', script: 's.js', env: { PORT: PORTS.API } 
     const content = `module.exports = { apps: [{ name: 'x', script: 's.js', env: { PORT: 5173 } }] };`;
     expect(rewriteEcosystemPorts(content, [])).toBe(content);
     expect(rewriteEcosystemPorts(content, [[5173, 5173]])).toBe(content);
+  });
+});
+
+describe('rewriteEcosystemPortsByProcess', () => {
+  it('splits a shared value (prod UI served by API, uiPort === apiPort) — rewrites only the touched label', () => {
+    // Single process: bare PORT 6000 is BOTH the api port and (since no
+    // dedicated ui process) the derived ui port. Changing only ui must NOT
+    // touch the api — but here there's only one PORT literal and it IS the api,
+    // so a ui edit on a process that has no ui-specific literal is unapplied.
+    const content = `module.exports = { apps: [
+  { name: 'srv', script: 's.js', env: { PORT: 6000 } }
+] };
+`;
+    // Change the api port — the shared literal moves with it.
+    const r = rewriteEcosystemPortsByProcess(content, [
+      { processName: 'srv', label: 'api', oldPort: 6000, newPort: 7000 },
+    ]);
+    expect(r.applied).toHaveLength(1);
+    expect(r.unapplied).toHaveLength(0);
+    expect(parseEcosystemConfig(r.content).processes[0].ports.api).toBe(7000);
+  });
+
+  it('disambiguates an explicit ports: { api: N, ui: N } map sharing one value', () => {
+    // Both api and ui are literally 6000 in the same block. A value-keyed
+    // rewrite can't split them; the label KEY can.
+    const content = `module.exports = { apps: [
+  { name: 'srv', script: 's.js', ports: { api: 6000, ui: 6000 }, env: { PORT: 6000 } }
+] };
+`;
+    const r = rewriteEcosystemPortsByProcess(content, [
+      { processName: 'srv', label: 'ui', oldPort: 6000, newPort: 7000 },
+    ]);
+    expect(r.applied).toHaveLength(1);
+    expect(r.unapplied).toHaveLength(0);
+    const ports = parseEcosystemConfig(r.content).processes[0].ports;
+    expect(ports.ui).toBe(7000);
+    expect(ports.api).toBe(6000); // untouched — the api literal stays
+  });
+
+  it('rewrites a port that lives only under processes[] (no top-level field)', () => {
+    const content = `module.exports = { apps: [
+  { name: 'srv-api', script: 's.js', env: { PORT: 5555 } },
+  { name: 'srv-ui', script: 'npx', args: 'vite --host --port 5556', env: { VITE_PORT: 5556 } }
+] };
+`;
+    const r = rewriteEcosystemPortsByProcess(content, [
+      { processName: 'srv-ui', label: 'ui', oldPort: 5556, newPort: 7001 },
+    ]);
+    expect(r.applied).toHaveLength(1);
+    expect(r.content).toContain('--port 7001');
+    expect(r.content).toContain('VITE_PORT: 7001');
+    expect(r.content).toContain('PORT: 5555'); // sibling api block untouched
+  });
+
+  it('targets only the named process when two blocks share a port value', () => {
+    const content = `module.exports = { apps: [
+  { name: 'a', script: 's.js', env: { PORT: 6000 } },
+  { name: 'b', script: 's.js', env: { PORT: 6000 } }
+] };
+`;
+    const r = rewriteEcosystemPortsByProcess(content, [
+      { processName: 'b', label: 'api', oldPort: 6000, newPort: 7000 },
+    ]);
+    expect(r.applied).toHaveLength(1);
+    const procs = parseEcosystemConfig(r.content).processes;
+    expect(procs.find(p => p.name === 'a').ports.api).toBe(6000); // untouched
+    expect(procs.find(p => p.name === 'b').ports.api).toBe(7000);
+  });
+
+  it('applies multiple labels in the same block (api + ui that shared a value)', () => {
+    const content = `module.exports = { apps: [
+  { name: 'srv', script: 's.js', ports: { api: 6000, ui: 6000 } }
+] };
+`;
+    const r = rewriteEcosystemPortsByProcess(content, [
+      { processName: 'srv', label: 'api', oldPort: 6000, newPort: 7000 },
+      { processName: 'srv', label: 'ui', oldPort: 6000, newPort: 7001 },
+    ]);
+    expect(r.applied).toHaveLength(2);
+    const ports = parseEcosystemConfig(r.content).processes[0].ports;
+    expect(ports.api).toBe(7000);
+    expect(ports.ui).toBe(7001);
+  });
+
+  it('rewrites the devUi (Vite) port via the ui label', () => {
+    // With a sibling api process, the parser relabels the Vite port ui → devUi.
+    const content = `module.exports = { apps: [
+  { name: 'srv', script: 's.js', env: { PORT: 5555 } },
+  { name: 'srv-ui', script: 'npx', args: 'vite', env: { VITE_PORT: 5556 } }
+] };
+`;
+    const r = rewriteEcosystemPortsByProcess(content, [
+      { processName: 'srv-ui', label: 'ui', oldPort: 5556, newPort: 7002 },
+    ]);
+    expect(r.applied).toHaveLength(1);
+    expect(parseEcosystemConfig(r.content).processes.find(p => p.name === 'srv-ui').ports.devUi).toBe(7002);
+  });
+
+  it('reports an edit as unapplied when the process name is not found', () => {
+    const content = `module.exports = { apps: [{ name: 'srv', script: 's.js', env: { PORT: 6000 } }] };`;
+    const r = rewriteEcosystemPortsByProcess(content, [
+      { processName: 'ghost', label: 'api', oldPort: 6000, newPort: 7000 },
+    ]);
+    expect(r.applied).toHaveLength(0);
+    expect(r.unapplied).toHaveLength(1);
+    expect(r.content).toBe(content);
+  });
+
+  it('reports an edit as unapplied when the label has no literal in the block', () => {
+    // api-only process; a ui edit finds nothing to rewrite there.
+    const content = `module.exports = { apps: [{ name: 'srv', script: 's.js', ports: { api: 6000 } }] };`;
+    const r = rewriteEcosystemPortsByProcess(content, [
+      { processName: 'srv', label: 'ui', oldPort: 9999, newPort: 7000 },
+    ]);
+    expect(r.applied).toHaveLength(0);
+    expect(r.unapplied).toHaveLength(1);
+    expect(r.content).toBe(content);
+  });
+
+  it('does not rewrite a port that appears only in a comment', () => {
+    const content = `module.exports = { apps: [{ name: 'srv', script: 's.js', env: { /* old PORT: 5173 */ PORT: 4000 } }] };`;
+    const r = rewriteEcosystemPortsByProcess(content, [
+      { processName: 'srv', label: 'api', oldPort: 5173, newPort: 7000 },
+    ]);
+    expect(r.applied).toHaveLength(0);
+    expect(r.unapplied).toHaveLength(1);
+    expect(r.content).toBe(content);
+  });
+
+  it('is a no-op for empty / identity edits', () => {
+    const content = `module.exports = { apps: [{ name: 'srv', script: 's.js', env: { PORT: 6000 } }] };`;
+    expect(rewriteEcosystemPortsByProcess(content, []).content).toBe(content);
+    expect(rewriteEcosystemPortsByProcess(content, [
+      { processName: 'srv', label: 'api', oldPort: 6000, newPort: 6000 },
+    ]).content).toBe(content);
   });
 });
 

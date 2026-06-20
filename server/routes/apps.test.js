@@ -36,6 +36,7 @@ vi.mock('../services/history.js', () => ({
 vi.mock('../services/streamingDetect.js', () => ({
   parseEcosystemFromPath: vi.fn(),
   writeEcosystemPorts: vi.fn().mockResolvedValue({ file: 'ecosystem.config.cjs', changed: true }),
+  writeEcosystemPortsByProcess: vi.fn().mockResolvedValue({ file: 'ecosystem.config.cjs', changed: true, applied: [], unapplied: [] }),
   usesPm2: vi.fn((type) => !new Set(['ios-native', 'macos-native', 'xcode', 'swift']).has(type)),
   NON_PM2_TYPES: new Set(['ios-native', 'macos-native', 'xcode', 'swift'])
 }));
@@ -289,18 +290,41 @@ describe('Apps Routes', () => {
       expect(streamingDetect.writeEcosystemPorts).not.toHaveBeenCalled();
     });
 
-    it('rejects (422) a port change that cannot be written to the config, leaving the registry untouched', async () => {
-      // uiPort derived from apiPort — both 6000. Changing only uiPort can't be
-      // value-rewritten without clobbering apiPort, so the request must fail
-      // rather than persist a registry value PM2 will contradict.
+    it('persists a shared-value port change via the per-process-targeted rewrite', async () => {
+      // uiPort and apiPort both 6000 in the same process block. A value-keyed
+      // rewrite can't split them, so the route targets the specific process +
+      // label (ui) instead — the edit now persists rather than 422.
       const mockApp = { id: 'app-001', name: 'App', type: 'node', repoPath: process.cwd(), apiPort: 6000, uiPort: 6000 };
       appsService.getAppById.mockResolvedValue(mockApp);
-      streamingDetect.parseEcosystemFromPath.mockResolvedValue({ processes: [{ name: 'a', ports: { api: 6000, ui: 6000 } }] });
+      streamingDetect.parseEcosystemFromPath.mockResolvedValue({ processes: [{ name: 'srv', ports: { api: 6000, ui: 6000 } }] });
+      appsService.updateApp.mockResolvedValue({ ...mockApp, uiPort: 7000 });
+
+      const response = await request(app).put('/api/apps/app-001').send({ uiPort: 7000 });
+
+      expect(response.status).toBe(200);
+      // Value-keyed writer skipped (shared value); targeted writer used instead.
+      expect(streamingDetect.writeEcosystemPorts).not.toHaveBeenCalled();
+      expect(streamingDetect.writeEcosystemPortsByProcess).toHaveBeenCalledWith(
+        process.cwd(),
+        [{ processName: 'srv', label: 'ui', oldPort: 6000, newPort: 7000 }]
+      );
+      expect(appsService.updateApp).toHaveBeenCalled();
+    });
+
+    it('rejects (422) a shared-value port change the targeted rewrite cannot apply', async () => {
+      // Shared value, but the targeted rewrite finds no matching literal to
+      // change (e.g. derived from a const the block doesn't contain) → 422.
+      const mockApp = { id: 'app-001', name: 'App', type: 'node', repoPath: process.cwd(), apiPort: 6000, uiPort: 6000 };
+      appsService.getAppById.mockResolvedValue(mockApp);
+      streamingDetect.parseEcosystemFromPath.mockResolvedValue({ processes: [{ name: 'srv', ports: { api: 6000, ui: 6000 } }] });
+      streamingDetect.writeEcosystemPortsByProcess.mockResolvedValueOnce({
+        file: 'ecosystem.config.cjs', changed: false, applied: [],
+        unapplied: [{ processName: 'srv', label: 'ui', oldPort: 6000, newPort: 7000 }]
+      });
 
       const response = await request(app).put('/api/apps/app-001').send({ uiPort: 7000 });
 
       expect(response.status).toBe(422);
-      expect(streamingDetect.writeEcosystemPorts).not.toHaveBeenCalled();
       expect(appsService.updateApp).not.toHaveBeenCalled();
     });
 
