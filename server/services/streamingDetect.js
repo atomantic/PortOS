@@ -483,6 +483,46 @@ function findValuePortRegions(content) {
 }
 
 /**
+ * Byte ranges `[start, end)` covered by line comments and block comments,
+ * skipping comment markers that appear inside string/template literals. Used to
+ * keep the port rewrite from matching (and falsely "succeeding" on) a port that
+ * only appears in a comment.
+ */
+function commentRanges(content) {
+  const ranges = [];
+  let i = 0;
+  const n = content.length;
+  let inString = false;
+  let stringChar = null;
+  while (i < n) {
+    const c = content[i];
+    const nx = i + 1 < n ? content[i + 1] : '';
+    if (inString) {
+      if (c === '\\') { i += 2; continue; }
+      if (c === stringChar) inString = false;
+      i++;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === '`') { inString = true; stringChar = c; i++; continue; }
+    if (c === '/' && nx === '/') {
+      const start = i; i += 2;
+      while (i < n && content[i] !== '\n') i++;
+      ranges.push([start, i]);
+      continue;
+    }
+    if (c === '/' && nx === '*') {
+      const start = i; i += 2;
+      while (i < n && !(content[i] === '*' && content[i + 1] === '/')) i++;
+      i += 2;
+      ranges.push([start, Math.min(i, n)]);
+      continue;
+    }
+    i++;
+  }
+  return ranges;
+}
+
+/**
  * Rewrite port literals in an ecosystem.config content string per a remap of
  * old → new port numbers. Pure (no I/O) so it's unit-testable.
  *
@@ -518,6 +558,19 @@ export function rewriteEcosystemPorts(content, remap) {
   // Port-ish env keys: PORT, FOO_PORT, VITE_PORT (and quoted variants), plus `port:`.
   const KEY = `(?:[A-Za-z][A-Za-z0-9_]*_PORT|PORT|port)`;
 
+  // Replace `re` everywhere EXCEPT inside comments — `re` must have its port
+  // number as the last capture group so we know where the digits start. A port
+  // value living only in a comment (`// PORT: 5173`) must NOT count as a rewrite,
+  // or writeEcosystemPorts would report changed:true while the executable config
+  // is untouched, recreating the apps.json-vs-PM2 mismatch this prevents.
+  const replaceOutsideComments = (str, re, phI) => {
+    const ranges = commentRanges(str);
+    return str.replace(re, (full, prefix, offset) => {
+      const numStart = offset + prefix.length;
+      return ranges.some(([s, e]) => numStart >= s && numStart < e) ? full : `${prefix}${phI}`;
+    });
+  };
+
   let out = content;
 
   // 1) Within `const PORTS = {...}` and each per-app `ports: {...}` object,
@@ -528,32 +581,26 @@ export function rewriteEcosystemPorts(content, remap) {
   for (const region of regions) {
     let inner = out.slice(region.start, region.end + 1);
     pairs.forEach(([oldP], i) => {
-      inner = inner.replace(new RegExp(`(:\\s*)${oldP}\\b`, 'g'), `$1${ph(i)}`);
+      inner = replaceOutsideComments(inner, new RegExp(`(:\\s*)${oldP}\\b`, 'g'), ph(i));
     });
     out = out.slice(0, region.start) + inner + out.slice(region.end + 1);
   }
 
   // 2) `--port <old>` in args strings.
   pairs.forEach(([oldP], i) => {
-    out = out.replace(new RegExp(`(--port\\s+)${oldP}\\b`, 'g'), `$1${ph(i)}`);
+    out = replaceOutsideComments(out, new RegExp(`(--port\\s+)${oldP}\\b`, 'g'), ph(i));
   });
 
   // 3) Port-ish key assignments anywhere (env blocks, ports objects).
   pairs.forEach(([oldP], i) => {
-    out = out.replace(
-      new RegExp(`(['"\`]?\\b${KEY}\\b['"\`]?\\s*:\\s*)${oldP}\\b`, 'g'),
-      `$1${ph(i)}`
-    );
+    out = replaceOutsideComments(out, new RegExp(`(['"\`]?\\b${KEY}\\b['"\`]?\\s*:\\s*)${oldP}\\b`, 'g'), ph(i));
   });
 
   // 4) Top-level port constants — `const API_PORT = 5555` / `let CDP_PORT = …`.
   //    parseEcosystemConfig derives ports from these (a `\w*PORT\w*` name `=`
   //    number), so an edit that skipped them would revert on the next refresh.
   pairs.forEach(([oldP], i) => {
-    out = out.replace(
-      new RegExp(`((?:const|let|var)\\s+\\w*PORT\\w*\\s*=\\s*)${oldP}\\b`, 'g'),
-      `$1${ph(i)}`
-    );
+    out = replaceOutsideComments(out, new RegExp(`((?:const|let|var)\\s+\\w*PORT\\w*\\s*=\\s*)${oldP}\\b`, 'g'), ph(i));
   });
 
   // 5) Fallback-expression defaults — `PORT: process.env.PORT || 4420`.
@@ -562,10 +609,7 @@ export function rewriteEcosystemPorts(content, remap) {
   //    so match the port-ish key, then any same-value expression up to `||`.
   //    `[^,}\n]*?` keeps the match inside one value (no comma/brace/newline).
   pairs.forEach(([oldP], i) => {
-    out = out.replace(
-      new RegExp(`(['"\`]?\\b${KEY}\\b['"\`]?\\s*:\\s*[^,}\\n]*?\\|\\|\\s*['"]?)${oldP}\\b`, 'g'),
-      `$1${ph(i)}`
-    );
+    out = replaceOutsideComments(out, new RegExp(`(['"\`]?\\b${KEY}\\b['"\`]?\\s*:\\s*[^,}\\n]*?\\|\\|\\s*['"]?)${oldP}\\b`, 'g'), ph(i));
   });
 
   // Resolve placeholders → new values.

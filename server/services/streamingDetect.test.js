@@ -377,6 +377,24 @@ module.exports = { apps: [{ name: 'x', script: 's.js', env: { PORT: API_PORT, CD
     expect(parseEcosystemConfig(out).processes[0].ports.api).toBe(6000);
   });
 
+  it('does not rewrite a port that appears only in a comment (no false success)', () => {
+    // The executable port is 4000; 5173 lives only in a comment. Rewriting
+    // 5173 must change nothing — else writeEcosystemPorts would report success
+    // while the real config still serves 4000.
+    const content = `module.exports = { apps: [{ name: 'x', script: 's.js', env: { /* legacy PORT: 5173 */ PORT: 4000 } }] };
+// historical default PORT: 5173
+`;
+    const out = rewriteEcosystemPorts(content, [[5173, 6000]]);
+    expect(out).toBe(content); // unchanged
+  });
+
+  it('rewrites the executable port but leaves a same-valued trailing comment alone', () => {
+    const content = `module.exports = { apps: [{ name: 'x', script: 's.js', env: { PORT: 5173 } }] }; // default was 5173\n`;
+    const out = rewriteEcosystemPorts(content, [[5173, 6000]]);
+    expect(parseEcosystemConfig(out).processes[0].ports.api).toBe(6000);
+    expect(out).toContain('// default was 5173'); // comment untouched
+  });
+
   it('is a no-op when remap is empty or only contains identity pairs', () => {
     const content = `module.exports = { apps: [{ name: 'x', script: 's.js', env: { PORT: 5173 } }] };`;
     expect(rewriteEcosystemPorts(content, [])).toBe(content);

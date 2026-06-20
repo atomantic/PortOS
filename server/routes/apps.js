@@ -398,15 +398,22 @@ router.put('/:id', asyncHandler(async (req, res, next) => {
       const v = existing[key];
       if (Number.isInteger(v)) valueCounts.set(v, (valueCounts.get(v) || 0) + 1);
     }
-    // A port the user actually changed (valid new value, differs from current).
-    const changedKeys = PORT_KEYS.filter(key => Number.isInteger(data[key]) && data[key] !== existing[key]);
+    // A port the user actually changed. Require a STORED integer old value:
+    // EditAppModal submits every field (even on a rename), and for an app whose
+    // top-level port isn't stored in apps.json (derived from processes) the
+    // submitted value is just the echoed derived display value — comparing it
+    // against an undefined registry value would misread an unchanged field as a
+    // change and wrongly reject the edit. Without a stored old value there's
+    // also no literal to diff/rewrite, so such fields are left to a config edit.
+    const changedKeys = PORT_KEYS.filter(key =>
+      Number.isInteger(existing[key]) && Number.isInteger(data[key]) && data[key] !== existing[key]);
     const remap = [];
     const unpersistable = [];
     for (const key of changedKeys) {
-      const oldPort = existing[key];
-      // No old literal to find (derived/absent), or value shared with another
-      // field (can't disambiguate by value) → can't write it to the config.
-      if (!Number.isInteger(oldPort) || valueCounts.get(oldPort) > 1) {
+      const oldPort = existing[key]; // guaranteed integer by the filter above
+      // Value shared with another field (can't disambiguate by value) → can't
+      // safely write it to the config without clobbering the other field.
+      if (valueCounts.get(oldPort) > 1) {
         unpersistable.push(key);
         continue;
       }

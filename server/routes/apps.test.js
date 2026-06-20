@@ -299,6 +299,22 @@ describe('Apps Routes', () => {
       expect(appsService.updateApp).not.toHaveBeenCalled();
     });
 
+    it('does not reject a non-port edit on an app whose top-level ports are not stored (derived)', async () => {
+      // apps.json has no apiPort/uiPort (derived from processes); a rename
+      // submits the echoed display values. Those must not read as port changes.
+      const mockApp = { id: 'app-001', name: 'App', type: 'node', repoPath: process.cwd() };
+      appsService.getAppById.mockResolvedValue(mockApp);
+      appsService.updateApp.mockResolvedValue({ ...mockApp, name: 'Renamed' });
+
+      const response = await request(app)
+        .put('/api/apps/app-001')
+        .send({ name: 'Renamed', apiPort: 5555, uiPort: 5556 });
+
+      expect(response.status).toBe(200);
+      expect(streamingDetect.writeEcosystemPorts).not.toHaveBeenCalled();
+      expect(appsService.updateApp).toHaveBeenCalled();
+    });
+
     it('rejects (422) when the port literal is not found in the config (changed:false)', async () => {
       const mockApp = { id: 'app-001', name: 'App', type: 'node', repoPath: process.cwd(), apiPort: 5173 };
       appsService.getAppById.mockResolvedValue(mockApp);
