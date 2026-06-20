@@ -732,6 +732,29 @@ module.exports = { apps: [
     expect(readFileSync(join(dir, 'ecosystem.config.cjs'), 'utf-8')).toBe(original);
   });
 
+  it('persists NOTHING when the value-keyed remap matches no literal but a targeted edit would apply', async () => {
+    // Symmetric twin of the unapplied-targeted case: the distinct devUiPort
+    // remap (9999→7001) matches nothing in the config, but the shared uiPort
+    // targeted edit DOES apply. The route 422s on the failed remap, so the
+    // targeted rewrite must NOT have been written to disk.
+    dir = mkdtempSync(join(tmpdir(), 'eco-edits-'));
+    const original = `module.exports = { apps: [
+  { name: 'srv', script: 's.js', ports: { api: 6000, ui: 6000 } }
+] };
+`;
+    writeFileSync(join(dir, 'ecosystem.config.cjs'), original);
+    const result = await writeEcosystemPortEdits(
+      dir,
+      [[9999, 7001]],                                                          // remap matches nothing
+      [{ processName: 'srv', label: 'ui', oldPort: 6000, newPort: 7000 }]      // targeted would apply
+    );
+    expect(result.changed).toBe(false);
+    expect(result.remapApplied).toBe(false);
+    // File unchanged — the applicable targeted edit was NOT written because the
+    // remap failed and the whole request will be rejected.
+    expect(readFileSync(join(dir, 'ecosystem.config.cjs'), 'utf-8')).toBe(original);
+  });
+
   it('is a no-op when both remap and edits are empty', async () => {
     dir = mkdtempSync(join(tmpdir(), 'eco-edits-'));
     const original = `module.exports = { apps: [{ name: 'x', script: 's.js', env: { PORT: 6000 } }] };\n`;

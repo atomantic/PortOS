@@ -887,9 +887,14 @@ export async function writeEcosystemPortEdits(repoPath, remap, edits) {
 
     const remapApplied = afterRemap !== content;
 
-    // Any unpersistable targeted edit ⇒ the caller rejects the whole request,
-    // so persist NOTHING (not even the value-keyed pass that did match).
-    if (unapplied.length > 0) {
+    // Persist NOTHING when ANY part of the request is unpersistable — the caller
+    // rejects the whole update (422) in either of these cases, so a partial
+    // write would desync config from the un-updated registry:
+    //   - a requested value-keyed remap matched no literal (`hasRemap` &&
+    //     !remapApplied) — the symmetric twin of an unapplied targeted edit, and
+    //   - any targeted edit couldn't be applied (`unapplied`).
+    const remapFailed = hasRemap && !remapApplied;
+    if (remapFailed || unapplied.length > 0) {
       return { file: name, changed: false, remapApplied: false, applied: [], unapplied };
     }
 
