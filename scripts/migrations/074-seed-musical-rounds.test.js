@@ -4,7 +4,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 
 import migration, { ROUND_IDS, ROUND_SEEDS } from './074-seed-musical-rounds.js';
-import { SEED_SONGS, sanitizeSong } from '../../server/services/songs.js';
+import { SEED_ROUNDS, sanitizeRound } from '../../server/services/rounds.js';
 
 const writeJson = (path, value) => writeFileSync(path, JSON.stringify(value, null, 2) + '\n');
 const readJson = (path) => JSON.parse(readFileSync(path, 'utf-8'));
@@ -25,14 +25,14 @@ describe('migration 074 — backfill the four built-in rounds', () => {
   });
 
   it('does not drift from the shipped seed rounds', () => {
-    // ROUND_SEEDS is derived from SEED_SONGS, so this guards the id list and the
+    // ROUND_SEEDS is derived from SEED_ROUNDS, so this guards the id list and the
     // sanitized shape: every round id must resolve to a shipped seed.
     expect(ROUND_SEEDS).toHaveLength(ROUND_IDS.length);
     for (const id of ROUND_IDS) {
-      const seed = SEED_SONGS.find((s) => s.id === id);
-      expect(seed, `SEED_SONGS missing ${id}`).toBeTruthy();
+      const seed = SEED_ROUNDS.find((s) => s.id === id);
+      expect(seed, `SEED_ROUNDS missing ${id}`).toBeTruthy();
       const round = ROUND_SEEDS.find((s) => s.id === id);
-      expect(round).toEqual(sanitizeSong(seed));
+      expect(round).toEqual(sanitizeRound(seed));
     }
   });
 
@@ -51,7 +51,7 @@ describe('migration 074 — backfill the four built-in rounds', () => {
     const heyHo = readJson(songsPath).songs.find((s) => s.id === 'seed-hey-ho-nobody-home');
     expect(heyHo.title).toBe('Hey Ho Nobody Home');
     expect(heyHo.score).toContain('Hey');
-    expect(heyHo.partnerSongIds).toContain('seed-ah-poor-bird');
+    expect(heyHo.partnerRoundIds).toContain('seed-ah-poor-bird');
   });
 
   it('only adds the rounds that are missing', async () => {

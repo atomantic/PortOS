@@ -50,7 +50,7 @@ export * from './apiUniverseBuilder.js';
 export * from './apiAuthors.js';
 export * from './apiPipeline.js';
 export * from './apiSharing.js';
-export * from './apiSongs.js';
+export * from './apiRounds.js';
 export * from './apiPeerSync.js';
 export * from './apiSyncReview.js';
 export * from './apiCreativeDirector.js';

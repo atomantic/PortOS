@@ -1,11 +1,11 @@
 /**
- * Songs Guide — deep-linkable learning reference at /songs/guide.
+ * Rounds Guide — deep-linkable learning reference at /rounds/guide.
  *
  * Renders directly from the canonical reference data in lib/songCraft.js so the
  * dirge rhythm shapes, the foundation-first layer ladder, the practice
  * sequence, and the notation primers stay in sync with the Song editor's
  * pickers (which read the same arrays). The parent <main> is full-width /
- * overflow-hidden (Layout.jsx isFullWidth matches `/songs/`), so this page owns
+ * overflow-hidden (Layout.jsx isFullWidth matches `/rounds/`), so this page owns
  * its own vertical scroll — mirrors WritersRoomGuide.
  */
 
@@ -71,20 +71,20 @@ function SectionHeading({ icon: Icon, title, subtitle }) {
   );
 }
 
-export default function SongsGuide() {
+export default function RoundsGuide() {
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-center gap-3 px-4 py-3 border-b border-port-border bg-port-card shrink-0">
         <Link
-          to="/songs"
+          to="/rounds"
           className="p-1 text-gray-400 hover:text-white transition-colors"
-          title="Back to Songs"
-          aria-label="Back to Songs"
+          title="Back to Rounds"
+          aria-label="Back to Rounds"
         >
           <ArrowLeft size={18} />
         </Link>
         <Music size={18} className="text-port-accent shrink-0" />
-        <span className="text-white font-semibold">Songs · Learning Guide</span>
+        <span className="text-white font-semibold">Rounds · Learning Guide</span>
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 md:p-6">

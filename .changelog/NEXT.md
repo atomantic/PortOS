@@ -3,6 +3,7 @@
 ## Changed
 
 - The **Social Agents** page now lives under the **Chief of Staff** sidebar section instead of **Brain**, in both the sidebar and the ⌘K / voice nav manifest.
+- The **Songs** workbench is now called **Rounds** (its real subject is musical rounds — Hey Ho Nobody Home, the quodlibet trio, the "500 Miles" worked example). This is a full-stack rename: the page moved from `/songs` to `/rounds`, the API from `/api/songs` to `/api/rounds`, and the on-disk store from `data/songs.json` to `data/rounds.json` (top-level `songs[]` → `rounds[]`, per-record `partnerSongIds` → `partnerRoundIds`). An auto-running migration (120) converts existing installs on the next boot/update, preserving every saved round, recording, and training-progress record — nothing to do by hand. The ⌘K palette and voice navigation still resolve "songs"/"song" to the page, so old muscle memory keeps working.
 
 ## Fixed
 

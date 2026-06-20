@@ -1,5 +1,5 @@
 /**
- * Song editor — /songs/:id.
+ * Round editor — /rounds/:id.
  *
  * Two URL-param-driven modes (`?mode=read` default, `?mode=edit`):
  *  - READ: a clean, desktop-wide performance view — lyrics rendered in full
@@ -9,7 +9,7 @@
  *  - EDIT: the editing workbench — metadata, lyric sections, voice layers, and
  *    free-text notation + arrangement notes.
  *
- * Full-width route (Layout.jsx isFullWidth matches `/songs/`) so this page owns
+ * Full-width route (Layout.jsx isFullWidth matches `/rounds/`) so this page owns
  * its own vertical scroll, mirroring WritersRoomGuide's column layout. The mode
  * lives in the URL (not local state) so a view is linkable — per the project's
  * "linkable routes for all views" convention.
@@ -30,7 +30,7 @@ import {
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import { useAsyncAction } from '../hooks/useAsyncAction';
-import { getSong, updateSong, refreshSongTemplate, listSongs } from '../services/api';
+import { getRound, updateRound, refreshRoundTemplate, listRounds } from '../services/api';
 import { RHYTHM_SHAPES, VOICE_LAYERS, rhythmShapeLabel } from '../lib/songCraft';
 import Pill from '../components/ui/Pill';
 import SongAiPanel from '../components/songs/SongAiPanel';
@@ -45,7 +45,7 @@ import { scoreHasMusic, parseScore } from '../lib/scoreNotation';
 import { createMultiScorePlayer, DEFAULT_BPM } from '../lib/scorePlayback';
 import { harmonyPartOrder } from '../lib/songCraft';
 
-// Cap on partner songs — mirrors services/songs.js PARTNERS_MAX. Used only to
+// Cap on partner songs — mirrors services/rounds.js PARTNERS_MAX. Used only to
 // disable adding more in the editor; the server enforces the real bound.
 const PARTNERS_MAX = 12;
 
@@ -79,7 +79,7 @@ const localId = (prefix) => `${prefix}-new-${localSeq++}`;
 // (preset ids like `lead`, server-assigned uuids) so dedup + matching survive.
 const stripTempId = (row) => (TEMP_ID_RE.test(row.id) ? { ...row, id: '' } : row);
 
-// Mirror the server tempo band (services/songs.js TEMPO_MIN/MAX). We clamp on
+// Mirror the server tempo band (services/rounds.js TEMPO_MIN/MAX). We clamp on
 // BLUR, not on every keystroke — clamping each keystroke would turn typing
 // "68" into "208" (the lone "6" clamps up to 20 first). While editing we keep
 // the raw parsed number; clampTempo runs on blur so the saved value lands in
@@ -99,7 +99,7 @@ const clampTempo = (n) => {
   return Math.max(TEMPO_MIN, Math.min(TEMPO_MAX, Math.round(n)));
 };
 
-export default function SongEditor() {
+export default function RoundEditor() {
   const { id } = useParams();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -149,22 +149,22 @@ export default function SongEditor() {
     // hides the editor (and its Save button) until the new song arrives.
     setLoading(true);
     setSong(null);
-    getSong(id, { silent: true })
-      .then((data) => { if (!cancelled) setServerSong(data?.song || null); })
-      .catch((err) => { if (!cancelled) toast.error(err?.message || 'Failed to load song'); })
+    getRound(id, { silent: true })
+      .then((data) => { if (!cancelled) setServerSong(data?.round || null); })
+      .catch((err) => { if (!cancelled) toast.error(err?.message || 'Failed to load round'); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [id, setServerSong]);
 
   // Refresh the all-songs list whenever the open song changes — this component
-  // stays mounted across /songs/:id navigation, so a once-on-mount fetch would
+  // stays mounted across /rounds/:id navigation, so a once-on-mount fetch would
   // leave partner records (titles, saved takes) stale after editing a partner
   // and navigating back. The list is small and single-user, so re-fetching on
   // navigation is cheap and keeps the round stack honest.
   useEffect(() => {
     let cancelled = false;
-    listSongs({ silent: true })
-      .then((data) => { if (!cancelled) setAllSongs(data?.songs || []); })
+    listRounds({ silent: true })
+      .then((data) => { if (!cancelled) setAllSongs(data?.rounds || []); })
       .catch(() => { /* the page degrades to no partner resolution */ });
     return () => { cancelled = true; };
   }, [id]);
@@ -172,8 +172,8 @@ export default function SongEditor() {
   // Resolve this song's partner ids to records (skip any that no longer exist).
   const partnerSongs = useMemo(() => {
     const byId = new Map(allSongs.map((s) => [s.id, s]));
-    return (song?.partnerSongIds || []).map((pid) => byId.get(pid)).filter(Boolean);
-  }, [allSongs, song?.partnerSongIds]);
+    return (song?.partnerRoundIds || []).map((pid) => byId.get(pid)).filter(Boolean);
+  }, [allSongs, song?.partnerRoundIds]);
   // Other songs to offer as partners in the editor, alphabetical.
   const otherSongs = useMemo(
     () => allSongs.filter((s) => s.id !== id).sort((a, b) => (a.title || '').localeCompare(b.title || '')),
@@ -181,10 +181,10 @@ export default function SongEditor() {
   );
   const togglePartner = useCallback((pid) => setSong((prev) => {
     if (!prev) return prev;
-    const cur = prev.partnerSongIds || [];
-    if (cur.includes(pid)) return { ...prev, partnerSongIds: cur.filter((x) => x !== pid) };
+    const cur = prev.partnerRoundIds || [];
+    if (cur.includes(pid)) return { ...prev, partnerRoundIds: cur.filter((x) => x !== pid) };
     if (cur.length >= PARTNERS_MAX) return prev;
-    return { ...prev, partnerSongIds: [...cur, pid] };
+    return { ...prev, partnerRoundIds: [...cur, pid] };
   }), []);
 
   // Field setters merge into the in-memory draft; nothing persists until Save.
@@ -205,23 +205,23 @@ export default function SongEditor() {
       scoreParts: (song.scoreParts || []).map(stripTempId),
       recordings: (song.recordings || []).map(stripTempId),
       references: (song.references || []).map(stripTempId),
-      partnerSongIds: song.partnerSongIds || [],
+      partnerRoundIds: song.partnerRoundIds || [],
     };
-    const data = await updateSong(id, patch, { silent: true });
-    if (data?.song) setServerSong(data.song);
-    toast.success('Song saved');
-    return data?.song;
-  }, { errorMessage: 'Failed to save song' });
+    const data = await updateRound(id, patch, { silent: true });
+    if (data?.round) setServerSong(data.round);
+    toast.success('Round saved');
+    return data?.round;
+  }, { errorMessage: 'Failed to save round' });
 
   // Restore a built-in default to its shipped content (lyrics, layers,
   // references). Persists server-side immediately and preserves the user's
   // recordings + learned progress; replaces any local unsaved edits, so the
   // BuiltInBanner gates this behind an inline confirm.
   const [refreshTemplate, refreshing] = useAsyncAction(async () => {
-    const data = await refreshSongTemplate(id, { silent: true });
-    if (data?.song) setServerSong(data.song);
+    const data = await refreshRoundTemplate(id, { silent: true });
+    if (data?.round) setServerSong(data.round);
     toast.success('Refreshed from the bundled template');
-    return data?.song;
+    return data?.round;
   }, { errorMessage: 'Failed to refresh from template' });
 
   // Merge an AI-generated draft into the editor. The server returns canonical
@@ -301,13 +301,13 @@ export default function SongEditor() {
   }, [song?.layers]);
 
   if (loading) {
-    return <div className="p-6 text-sm text-gray-500">Loading song…</div>;
+    return <div className="p-6 text-sm text-gray-500">Loading round…</div>;
   }
   if (!song) {
     return (
       <div className="p-6">
-        <p className="text-sm text-gray-400 mb-4">Song not found.</p>
-        <Link to="/songs" className="text-port-accent hover:underline">← Back to Songs</Link>
+        <p className="text-sm text-gray-400 mb-4">Round not found.</p>
+        <Link to="/rounds" className="text-port-accent hover:underline">← Back to Rounds</Link>
       </div>
     );
   }
@@ -321,15 +321,15 @@ export default function SongEditor() {
       <div className="flex items-center gap-3 px-4 py-3 border-b border-port-border bg-port-card shrink-0">
         <button
           type="button"
-          onClick={() => navigate('/songs')}
+          onClick={() => navigate("/rounds")}
           className="p-1 text-gray-400 hover:text-white transition-colors"
-          title="Back to Songs"
-          aria-label="Back to Songs"
+          title="Back to Rounds"
+          aria-label="Back to Rounds"
         >
           <ArrowLeft size={18} />
         </button>
         <Music size={18} className="text-port-accent shrink-0" />
-        <span className="text-white font-semibold truncate flex-1 min-w-0">{song.title || 'Untitled song'}</span>
+        <span className="text-white font-semibold truncate flex-1 min-w-0">{song.title || 'Untitled round'}</span>
         {/* View / Edit toggle — mode lives in the URL so each view is linkable. */}
         <div className="flex items-center rounded-lg border border-port-border overflow-hidden shrink-0">
           <button
@@ -350,7 +350,7 @@ export default function SongEditor() {
           </button>
         </div>
         <Link
-          to="/songs/guide"
+          to="/rounds/guide"
           className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border border-port-border text-gray-300 hover:text-white hover:bg-port-border/50"
         >
           <BookOpen size={14} />
@@ -486,7 +486,7 @@ export default function SongEditor() {
             </div>
             <p className="text-xs text-gray-500 mb-2">
               Build foundation-first: melody, then bass, then the mid &amp; high harmonies. See the{' '}
-              <Link to="/songs/guide" className="text-port-accent hover:underline">Learning Guide</Link> for the full ladder.
+              <Link to="/rounds/guide" className="text-port-accent hover:underline">Learning Guide</Link> for the full ladder.
             </p>
             {remainingPresets.length > 0 && (
               <div className="flex flex-wrap gap-1.5 mb-3">
@@ -550,16 +550,16 @@ export default function SongEditor() {
               <Layers size={15} className="text-port-accent" /> Sings with (round partners)
             </h2>
             <p className="text-xs text-gray-500 mb-2">
-              Link songs that are sung at the same time — rounds that share a chord cycle. In View, a “Stack parts” button
+              Link rounds that are sung at the same time — rounds that share a chord cycle. In View, a “Stack parts” button
               renders them together and plays their takes layered.
             </p>
             {otherSongs.length === 0 ? (
-              <p className="text-xs text-gray-500">No other songs yet to pair with.</p>
+              <p className="text-xs text-gray-500">No other rounds yet to pair with.</p>
             ) : (
               <div className="flex flex-wrap gap-1.5">
                 {otherSongs.map((s) => {
-                  const checked = (song.partnerSongIds || []).includes(s.id);
-                  const atMax = !checked && (song.partnerSongIds || []).length >= PARTNERS_MAX;
+                  const checked = (song.partnerRoundIds || []).includes(s.id);
+                  const atMax = !checked && (song.partnerRoundIds || []).length >= PARTNERS_MAX;
                   return (
                     <button
                       key={s.id}
@@ -570,7 +570,7 @@ export default function SongEditor() {
                       title={atMax ? `Up to ${PARTNERS_MAX} partners` : undefined}
                       className={`px-2.5 py-1 text-xs rounded-full border transition-colors disabled:opacity-40 ${checked ? 'bg-port-accent/15 border-port-accent/60 text-white' : 'border-port-border text-gray-300 hover:text-white hover:border-port-accent/60'}`}
                     >
-                      {checked ? '✓ ' : '+ '}{s.title || 'Untitled song'}
+                      {checked ? '✓ ' : '+ '}{s.title || 'Untitled round'}
                     </button>
                   );
                 })}
@@ -741,8 +741,8 @@ function ReadView({ song, setField, onRefreshTemplate, refreshing, partnerSongs 
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-xs text-gray-500">Sings with:</span>
           {partnerSongs.map((p) => (
-            <Link key={p.id} to={`/songs/${p.id}`} className="px-2.5 py-1 text-xs rounded-full border border-port-border text-gray-300 hover:text-white hover:border-port-accent/60">
-              {p.title || 'Untitled song'}
+            <Link key={p.id} to={`/rounds/${p.id}`} className="px-2.5 py-1 text-xs rounded-full border border-port-border text-gray-300 hover:text-white hover:border-port-accent/60">
+              {p.title || 'Untitled round'}
             </Link>
           ))}
           <button

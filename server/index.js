@@ -131,7 +131,7 @@ import { initLoraTraining } from './services/loraTraining/index.js';
 import sdapiRoutes from './routes/sdapi.js';
 import openclawRoutes from './routes/openclaw.js';
 import sharingRoutes from './routes/sharing.js';
-import songsRoutes from './routes/songs.js';
+import roundsRoutes from './routes/rounds.js';
 import peerSyncRoutes from './routes/peerSync.js';
 import { initSharing } from './services/sharing/index.js';
 import askRoutes from './routes/ask.js';
@@ -544,7 +544,7 @@ app.use('/api/lora-training', loraTrainingRoutes);
 app.use('/sdapi/v1', sdapiRoutes);
 app.use('/api/openclaw', openclawRoutes);
 app.use('/api/sharing', sharingRoutes);
-app.use('/api/songs', songsRoutes);
+app.use('/api/rounds', roundsRoutes);
 app.use('/api/peer-sync', peerSyncRoutes);
 app.use('/api/ask', askRoutes);
 

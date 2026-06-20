@@ -49,9 +49,9 @@ const UniverseBuilder = lazyWithReload(() => import('./pages/UniverseBuilder'));
 const Universes = lazyWithReload(() => import('./pages/Universes'));
 const Authors = lazyWithReload(() => import('./pages/Authors'));
 const Catalog = lazyWithReload(() => import('./pages/Catalog'));
-const Songs = lazyWithReload(() => import('./pages/Songs'));
-const SongEditor = lazyWithReload(() => import('./pages/SongEditor'));
-const SongsGuide = lazyWithReload(() => import('./pages/SongsGuide'));
+const Rounds = lazyWithReload(() => import('./pages/Rounds'));
+const RoundEditor = lazyWithReload(() => import('./pages/RoundEditor'));
+const RoundsGuide = lazyWithReload(() => import('./pages/RoundsGuide'));
 const CatalogIngest = lazyWithReload(() => import('./pages/CatalogIngest'));
 const CatalogIngredient = lazyWithReload(() => import('./pages/CatalogIngredient'));
 const VideoTimeline = lazyWithReload(() => import('./pages/VideoTimeline'));
@@ -292,9 +292,9 @@ export default function App() {
               at `/universes/:universeId`; `new` is the create-mode sentinel
               (UniverseBuilder treats it as no-id → blank draft). Universe ids are
               UUIDs, so `new` can never collide with a real record. */}
-          <Route path="songs" element={<Songs />} />
-          <Route path="songs/guide" element={<SongsGuide />} />
-          <Route path="songs/:id" element={<SongEditor />} />
+          <Route path="rounds" element={<Rounds />} />
+          <Route path="rounds/guide" element={<RoundsGuide />} />
+          <Route path="rounds/:id" element={<RoundEditor />} />
           <Route path="catalog" element={<Catalog />} />
           <Route path="catalog/ingest" element={<CatalogIngest />} />
           <Route path="catalog/:type/:id" element={<CatalogIngredient />} />

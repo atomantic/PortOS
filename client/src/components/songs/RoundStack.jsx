@@ -127,7 +127,7 @@ export default function RoundStack({ songs = [] }) {
                   {i === 0 ? (
                     <span>{s.title || 'Untitled song'}</span>
                   ) : (
-                    <Link to={`/songs/${s.id}`} className="hover:text-port-accent transition-colors">
+                    <Link to={`/rounds/${s.id}`} className="hover:text-port-accent transition-colors">
                       {s.title || 'Untitled song'}
                     </Link>
                   )}

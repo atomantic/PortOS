@@ -1,21 +1,21 @@
 /**
- * Songs AI — generate & evaluate a cappella arrangements.
+ * Rounds AI — generate & evaluate a cappella arrangements.
  *
  * Two single-shot LLM calls (the synchronous universe-builder pattern, NOT
- * streaming): `generateSong` drafts a full arrangement from a title/brief, and
- * `evaluateSong` critiques an existing one. Both build the prompt inline (no
+ * streaming): `generateRound` drafts a full arrangement from a title/brief, and
+ * `evaluateRound` critiques an existing one. Both build the prompt inline (no
  * shipped stage-prompt file — these are one-shot JSON contracts, so the inline
  * pattern from recordMergeAI.js/agentContentGenerator.js fits) and parse the
  * response with the shared jsonExtract helper.
  *
- * Output is projected onto the canonical song shape via sanitizeSong (generate)
+ * Output is projected onto the canonical song shape via sanitizeRound (generate)
  * or a small verdict shape (evaluate) so a hallucinated/extra field can't leak
  * into storage. The rhythm-shape and voice-layer vocabularies are injected into
  * the prompt from songCraftRef.js so the model returns ids the editor's pickers
  * already understand — but unknown ids are accepted downstream (free-text
  * fallback), so a drifted model can't 400.
  *
- * Kept separate from services/songs.js (pure CRUD) so the AI dependency
+ * Kept separate from services/rounds.js (pure CRUD) so the AI dependency
  * (promptRunner → providers → runner) doesn't load on every plain song read.
  */
 
@@ -27,9 +27,9 @@ import {
   HARMONY_PARTS, DERIVABLE_HARMONY_PARTS,
 } from '../lib/songCraftRef.js';
 import {
-  sanitizeSong, FIELD_MAX_LENGTH, SECTIONS_MAX, LAYERS_MAX,
+  sanitizeRound, FIELD_MAX_LENGTH, SECTIONS_MAX, LAYERS_MAX,
   SCORE_MAX_LENGTH, SCORE_PARTS_MAX,
-} from './songs.js';
+} from './rounds.js';
 
 // Strip dangerous control chars that would corrupt the prompt or invite
 // structure-injection (a lyric containing a fake "# Output contract" header),
@@ -110,14 +110,14 @@ Keep lyrics original (do not reproduce copyrighted lyrics verbatim). Each string
 /**
  * Generate a full song arrangement from a brief. Returns the sanitized song
  * fields (NOT persisted — the route/caller merges into a stored record) plus an
- * `llm` attribution block. `existingSong` (optional) is folded into the prompt
+ * `llm` attribution block. `existingRound` (optional) is folded into the prompt
  * so "generate" doubles as "expand this draft".
  */
-export async function generateSong({ title, artist, brief, mood, existingSong, providerId, model } = {}) {
+export async function generateRound({ title, artist, brief, mood, existingRound, providerId, model } = {}) {
   const { provider, selectedModel } = await resolveProviderAndModel({ providerId, model });
   assertProvider(provider, { message: 'No AI provider available for song generation', code: 'NO_PROVIDER' });
 
-  const existing = existingSong ? summarizeSongForPrompt(existingSong) : '';
+  const existing = existingRound ? summarizeSongForPrompt(existingRound) : '';
   const prompt = buildGeneratePrompt({
     title: clean(title), artist: clean(artist), brief: clean(brief), mood: clean(mood), existing,
   });
@@ -127,9 +127,9 @@ export async function generateSong({ title, artist, brief, mood, existingSong, p
   });
 
   const parsed = parseOrThrow(raw, isGeneratedShape, 'generation');
-  // Project onto the canonical shape; sanitizeSong requires an id, so stamp a
+  // Project onto the canonical shape; sanitizeRound requires an id, so stamp a
   // placeholder the caller replaces — we only want the normalized fields back.
-  const song = sanitizeSong({ ...parsed, id: 'draft' });
+  const song = sanitizeRound({ ...parsed, id: 'draft' });
   if (!song) {
     throw new ServerError('The AI produced an unusable song. Try rerunning.', { status: 502, code: 'LLM_EMPTY' });
   }
@@ -193,7 +193,7 @@ Return ONLY a JSON object (no prose, no markdown fence):
  * strengths[], weaknesses[], suggestions[] } plus an `llm` block. Pure
  * read-side AI — does not mutate the song.
  */
-export async function evaluateSong({ song, providerId, model } = {}) {
+export async function evaluateRound({ song, providerId, model } = {}) {
   if (!song || typeof song !== 'object') {
     throw new ServerError('A song is required to evaluate', { status: 400, code: 'VALIDATION_ERROR' });
   }
@@ -325,7 +325,7 @@ const normalizeDerivedParts = (rawParts) =>
  * set; default is every derivable harmony part. Throws 400 if the song has no
  * base score to derive from.
  */
-export async function deriveSongParts({ song, partIds, providerId, model } = {}) {
+export async function deriveRoundParts({ song, partIds, providerId, model } = {}) {
   if (!song || typeof song !== 'object') {
     throw new ServerError('A song is required to derive parts', { status: 400, code: 'VALIDATION_ERROR' });
   }

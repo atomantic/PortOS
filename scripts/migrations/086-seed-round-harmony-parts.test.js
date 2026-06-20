@@ -4,7 +4,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 
 import migration from './086-seed-round-harmony-parts.js';
-import { SEED_ROUND_SCORE_PARTS, SEED_SONGS } from '../../server/services/songs.js';
+import { SEED_ROUND_SCORE_PARTS, SEED_ROUNDS } from '../../server/services/rounds.js';
 import { parseScore } from '../../client/src/lib/scoreNotation.js';
 
 const writeJson = (path, value) => writeFileSync(path, JSON.stringify(value, null, 2) + '\n');
@@ -28,7 +28,7 @@ describe('migration 086 — seed round harmony (canon voice) parts', () => {
 
   it('every round seed carries its shipped canon voice parts (single source)', () => {
     for (const id of ROUND_IDS) {
-      const seed = SEED_SONGS.find((s) => s.id === id);
+      const seed = SEED_ROUNDS.find((s) => s.id === id);
       expect(seed.scoreParts).toBe(SEED_ROUND_SCORE_PARTS[id]);
       expect(seed.scoreParts.length).toBeGreaterThan(0);
     }
@@ -36,7 +36,7 @@ describe('migration 086 — seed round harmony (canon voice) parts', () => {
 
   it('each canon voice is the melody delayed by whole-bar rests and parses cleanly', () => {
     for (const id of ROUND_IDS) {
-      const song = SEED_SONGS.find((s) => s.id === id);
+      const song = SEED_ROUNDS.find((s) => s.id === id);
       const melodyBars = parseScore(song.score).measures.length;
       song.scoreParts.forEach((part, i) => {
         const parsed = parseScore(part.score);

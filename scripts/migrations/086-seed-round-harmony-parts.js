@@ -4,7 +4,7 @@
  * rounds before they carried a voice stack.
  *
  * Background:
- *   `server/services/songs.js#SEED_SONGS` now ships each round (Hey Ho Nobody
+ *   `server/services/rounds.js#SEED_ROUNDS` now ships each round (Hey Ho Nobody
  *   Home, Ah Poor Bird, Rose Rose Rose Red, Zum Gali Gali) with its canonic voice
  *   stack (SEED_ROUND_SCORE_PARTS) — the melody entering a fixed number of bars
  *   late per voice. This is what gives every round (not just 500 Miles) the
@@ -23,7 +23,7 @@
 
 import { readFile, writeFile, stat } from 'fs/promises';
 import { join } from 'path';
-import { SEED_ROUND_SCORE_PARTS } from '../../server/services/songs.js';
+import { SEED_ROUND_SCORE_PARTS } from '../../server/services/rounds.js';
 
 const fileExists = (path) => stat(path).then(() => true, (err) => {
   if (err.code === 'ENOENT') return false;

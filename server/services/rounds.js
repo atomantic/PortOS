@@ -1,16 +1,16 @@
 /**
- * Songs workbench
+ * Rounds workbench
  *
- * Write, arrange, and learn a cappella songs (e.g. "500 Miles" by Peter, Paul
- * and Mary). Each song stores its key/tempo/rhythm-shape, lyric sections, and
+ * Write, arrange, and learn a cappella rounds (e.g. "500 Miles" by Peter, Paul
+ * and Mary). Each round stores its key/tempo/rhythm-shape, lyric sections, and
  * the voice layers (lead / bass / harmony / drone / counter-melody) the user is
- * stacking — plus per-layer learning notes. Persisted to data/songs.json.
+ * stacking — plus per-layer learning notes. Persisted to data/rounds.json.
  *
  * Pure-ish CRUD over a single JSON file: PortOS is single-user (see CLAUDE.md
  * "Security Model"), so a per-file write queue serializes the read-modify-write
  * cycle rather than guarding against competing humans.
  *
- * Shape bounds are exported so routes/songs.js builds its Zod schema from the
+ * Shape bounds are exported so routes/rounds.js builds its Zod schema from the
  * same source — sanitize-on-read and validate-at-the-boundary agree by
  * construction. The rhythm-shape and layer id vocabularies mirror
  * client/src/lib/songCraft.js; unknown ids are accepted (free-text fallback)
@@ -22,7 +22,7 @@ import { randomUUID } from 'crypto';
 import { PATHS, readJSONFile, atomicWrite } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 
-const STATE_PATH = join(PATHS.data, 'songs.json');
+const STATE_PATH = join(PATHS.data, 'rounds.json');
 
 // Service errors carry a `code` field so routes map to HTTP status without
 // string-matching on err.message (which breaks on rename).
@@ -32,7 +32,7 @@ export const ERR_NOT_FOUND = 'NOT_FOUND';
 export const ERR_NOT_BUILTIN = 'NOT_BUILTIN';
 const makeErr = (message, code) => Object.assign(new Error(message), { code });
 
-// --- Shape bounds (shared with routes/songs.js#songInputSchema) -------------
+// --- Shape bounds (shared with routes/rounds.js#roundInputSchema) -------------
 export const TITLE_MAX_LENGTH = 200;
 export const ARTIST_MAX_LENGTH = 200;
 export const KEY_MAX_LENGTH = 24;
@@ -52,7 +52,7 @@ export const PARTNERS_MAX = 12;        // partner-song ids (rounds sung together
 export const URL_MAX_LENGTH = 512;     // uploaded-file path/url
 // Per-take pitch analysis (#1027). The pitch track is a DOWNSAMPLED tuner trace
 // kept for replay/training so it isn't recomputed on every open; bound it so a
-// long take can't bloat data/songs.json. `accuracy.perNote` mirrors the
+// long take can't bloat data/rounds.json. `accuracy.perNote` mirrors the
 // color-match grade-per-note array (#1025), bounded the same way a score can't
 // be arbitrarily long.
 export const PITCH_TRACK_MAX = 4000;   // downsampled tuner samples per take
@@ -235,7 +235,7 @@ const sanitizeRecording = (r) => {
   };
   // Absent ⇒ omit (legacy/unscored take); present ⇒ sanitize + bound via the
   // shared sanitizeList. Keeping the keys off the object when there's no
-  // analysis avoids a wave of empty arrays in data/songs.json on every take.
+  // analysis avoids a wave of empty arrays in data/rounds.json on every take.
   const pitchTrack = sanitizeList(r.pitchTrack, sanitizePitchSample, PITCH_TRACK_MAX);
   if (pitchTrack.length) rec.pitchTrack = pitchTrack;
   const accuracy = sanitizeAccuracy(r.accuracy);
@@ -305,13 +305,13 @@ const sanitizePartnerIds = (arr, selfId) => {
 
 // Project a stored or inbound record onto the canonical song shape. Used on
 // read (defends hand-edited JSON) and on write (normalizes the input).
-export const sanitizeSong = (raw) => {
+export const sanitizeRound = (raw) => {
   if (!raw || typeof raw !== 'object') return null;
   const id = trimField(raw.id, ID_MAX_LENGTH);
   if (!id) return null;
   const song = {
     id,
-    title: trimField(raw.title, TITLE_MAX_LENGTH) || 'Untitled song',
+    title: trimField(raw.title, TITLE_MAX_LENGTH) || 'Untitled round',
     artist: trimField(raw.artist, ARTIST_MAX_LENGTH),
     key: trimField(raw.key, KEY_MAX_LENGTH),
     tempo: sanitizeTempo(raw.tempo),
@@ -333,11 +333,11 @@ export const sanitizeSong = (raw) => {
     recordings: sanitizeList(raw.recordings, sanitizeRecording, RECORDINGS_MAX),
     references: sanitizeList(raw.references, sanitizeReference, REFERENCES_MAX),
     // Ids of other songs this one is sung together with (round-stack partners).
-    partnerSongIds: sanitizePartnerIds(raw.partnerSongIds, id),
+    partnerRoundIds: sanitizePartnerIds(raw.partnerRoundIds, id),
     // Derived from the shipped-seed id set, NOT from `raw` — so the flag can't
     // be lost on edit or spoofed on a hand-edited custom song. A built-in
-    // default can be restored to its shipped content via refreshSongFromTemplate.
-    builtIn: BUILTIN_SONG_IDS.has(id),
+    // default can be restored to its shipped content via refreshRoundFromTemplate.
+    builtIn: BUILTIN_ROUND_IDS.has(id),
     createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : new Date().toISOString(),
     updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : new Date().toISOString(),
   };
@@ -355,7 +355,7 @@ export const sanitizeSong = (raw) => {
 // PortOS DSL, voiced from the chord-tone map (NOT parallel intervals): a
 // hymn-like root–fifth bass, two sustained inner pads, a sustained upper pad
 // that carries the F#→G leading tone on D7, and a sparse top descant that enters
-// late. Kept as a named export so SEED_SONGS and migration 076 share ONE source
+// late. Kept as a named export so SEED_ROUNDS and migration 076 share ONE source
 // (no drift). Voicing roles/ranges mirror songCraft.js HARMONY_PARTS.
 export const SEED_500_MILES_SCORE_PARTS = [
   {
@@ -435,7 +435,7 @@ export const SEED_500_MILES_SCORE_PARTS = [
 // itself, each voice entering a fixed number of bars late. Rather than hand-
 // transcribe the staggered voices (which could drift from the tune), we DERIVE
 // each canon voice from the one melody string below: every voice is provably the
-// same melody, just delayed by whole-bar rests. SEED_SONGS uses these for both a
+// same melody, just delayed by whole-bar rests. SEED_ROUNDS uses these for both a
 // round's base `score` and its `scoreParts`, and migration 086 backfills the
 // parts onto installs that seeded the rounds before they carried a voice stack.
 
@@ -538,7 +538,7 @@ const ZUM_SCORE_PARTS = [
 ];
 
 // The canonic voice stacks for the four rounds, keyed by song id. Shared by
-// SEED_SONGS (below) and migration 086 so there's ONE source — no drift.
+// SEED_ROUNDS (below) and migration 086 so there's ONE source — no drift.
 export const SEED_ROUND_SCORE_PARTS = {
   'seed-hey-ho-nobody-home': HEY_HO_SCORE_PARTS,
   'seed-ah-poor-bird': AH_POOR_BIRD_SCORE_PARTS,
@@ -549,7 +549,7 @@ export const SEED_ROUND_SCORE_PARTS = {
 // Seeded on first read so a fresh install opens on a worked example — the song
 // the feature was designed around. Mirrors the dirge `slow-4-4` rhythm shape
 // and the foundation-first layer ladder from songCraft.js.
-export const SEED_SONGS = [
+export const SEED_ROUNDS = [
   {
     id: 'seed-500-miles',
     title: '500 Miles',
@@ -657,7 +657,7 @@ export const SEED_SONGS = [
   // Hey Ho Nobody Home, Ah Poor Bird, Rose Rose Rose Red — are the classic
   // English quodlibet: all in the same minor key, they can be sung at the same
   // time. Zum Gali Gali shares the key and rounds out the set. Each links the
-  // others via partnerSongIds, so the editor's round-stack view can render them
+  // others via partnerRoundIds, so the editor's round-stack view can render them
   // together. Melodies are scored with no key signature (D Dorian / D minor,
   // all naturals) so they stack cleanly; the `key` field names the tonality.
   {
@@ -686,7 +686,7 @@ export const SEED_SONGS = [
       { id: 'voice-4', label: 'Voice 4', part: 'Any', notes: 'Optional fourth entry: comes in as Voice 1 loops back to the top, doubling the lead in unison or an octave up.' },
     ],
     references: [],
-    partnerSongIds: ['seed-ah-poor-bird', 'seed-rose-rose-rose-red', 'seed-zum-gali-gali'],
+    partnerRoundIds: ['seed-ah-poor-bird', 'seed-rose-rose-rose-red', 'seed-zum-gali-gali'],
     createdAt: '2026-06-07T00:00:00.000Z',
     updatedAt: '2026-06-07T00:00:00.000Z',
   },
@@ -715,7 +715,7 @@ export const SEED_SONGS = [
       { id: 'voice-4', label: 'Voice 4', part: 'Any', notes: 'Enters at "of this sad night" (bar 7) — four voices fill the lament.' },
     ],
     references: [],
-    partnerSongIds: ['seed-hey-ho-nobody-home', 'seed-rose-rose-rose-red', 'seed-zum-gali-gali'],
+    partnerRoundIds: ['seed-hey-ho-nobody-home', 'seed-rose-rose-rose-red', 'seed-zum-gali-gali'],
     createdAt: '2026-06-07T00:00:00.000Z',
     updatedAt: '2026-06-07T00:00:00.000Z',
   },
@@ -743,7 +743,7 @@ export const SEED_SONGS = [
       { id: 'voice-4', label: 'Voice 4', part: 'Any', notes: 'Enters at "At thy will" (bar 7) — four voices complete the harmony.' },
     ],
     references: [],
-    partnerSongIds: ['seed-hey-ho-nobody-home', 'seed-ah-poor-bird', 'seed-zum-gali-gali'],
+    partnerRoundIds: ['seed-hey-ho-nobody-home', 'seed-ah-poor-bird', 'seed-zum-gali-gali'],
     createdAt: '2026-06-07T00:00:00.000Z',
     updatedAt: '2026-06-07T00:00:00.000Z',
   },
@@ -770,18 +770,18 @@ export const SEED_SONGS = [
       { id: 'voice-2', label: 'Voice 2', part: 'Any', notes: 'Enters a phrase behind Voice 1 so the two halves of the chant overlap into harmony.' },
     ],
     references: [],
-    partnerSongIds: ['seed-hey-ho-nobody-home', 'seed-ah-poor-bird', 'seed-rose-rose-rose-red'],
+    partnerRoundIds: ['seed-hey-ho-nobody-home', 'seed-ah-poor-bird', 'seed-rose-rose-rose-red'],
     createdAt: '2026-06-07T00:00:00.000Z',
     updatedAt: '2026-06-07T00:00:00.000Z',
   },
 ];
 
 // Ids of the bundled built-in default songs. The sanitizer stamps each read
-// song with `builtIn` from this set, and refreshSongFromTemplate restores a
-// built-in's shipped content from the matching SEED_SONGS entry. A user who
+// song with `builtIn` from this set, and refreshRoundFromTemplate restores a
+// built-in's shipped content from the matching SEED_ROUNDS entry. A user who
 // already has the song installed (older shipped lyrics) renews it on demand.
-export const BUILTIN_SONG_IDS = new Set(SEED_SONGS.map((s) => s.id));
-const seedTemplate = (id) => SEED_SONGS.find((s) => s.id === id) || null;
+export const BUILTIN_ROUND_IDS = new Set(SEED_ROUNDS.map((s) => s.id));
+const seedTemplate = (id) => SEED_ROUNDS.find((s) => s.id === id) || null;
 
 // Serialize the read-modify-write cycle so two mutations issued back-to-back
 // (e.g. a rename PUT followed by a layer edit) each merge against the freshest
@@ -793,70 +793,70 @@ const enqueue = createFileWriteQueue();
 // malformed, returns the seed in-memory without persisting it. Mutations call
 // this inside their enqueue() so the read-modify-write cycle never re-enters
 // the queue (which would deadlock).
-async function readSongs() {
+async function readRounds() {
   const state = await readJSONFile(STATE_PATH, null, { allowArray: false });
-  if (!state || !Array.isArray(state.songs)) {
-    return SEED_SONGS.map(sanitizeSong).filter(Boolean);
+  if (!state || !Array.isArray(state.rounds)) {
+    return SEED_ROUNDS.map(sanitizeRound).filter(Boolean);
   }
-  return state.songs.map(sanitizeSong).filter(Boolean);
+  return state.rounds.map(sanitizeRound).filter(Boolean);
 }
 
 // Public read. On first read (file absent) it persists the seed so the example
 // is stable and editable — but the seed write is routed through the SAME queue
 // as mutations and re-checks inside the queue, so a create that landed first
 // can't be clobbered by a late seed write (read-path lazy-init race).
-export async function listSongs() {
+export async function listRounds() {
   const state = await readJSONFile(STATE_PATH, null, { allowArray: false });
-  if (state && Array.isArray(state.songs)) {
-    return state.songs.map(sanitizeSong).filter(Boolean);
+  if (state && Array.isArray(state.rounds)) {
+    return state.rounds.map(sanitizeRound).filter(Boolean);
   }
   return enqueue(async () => {
     // Re-check inside the queue: a queued create may have already written the
     // file (with seed + new song). If so, don't overwrite it with bare seed.
     const fresh = await readJSONFile(STATE_PATH, null, { allowArray: false });
-    if (fresh && Array.isArray(fresh.songs)) {
-      return fresh.songs.map(sanitizeSong).filter(Boolean);
+    if (fresh && Array.isArray(fresh.rounds)) {
+      return fresh.rounds.map(sanitizeRound).filter(Boolean);
     }
-    const seeded = SEED_SONGS.map(sanitizeSong).filter(Boolean);
-    await atomicWrite(STATE_PATH, { songs: seeded });
+    const seeded = SEED_ROUNDS.map(sanitizeRound).filter(Boolean);
+    await atomicWrite(STATE_PATH, { rounds: seeded });
     return seeded;
   });
 }
 
-export async function getSong(id) {
-  const songs = await listSongs();
+export async function getRound(id) {
+  const songs = await listRounds();
   return songs.find((s) => s.id === id) || null;
 }
 
-export async function createSong(input) {
+export async function createRound(input) {
   return enqueue(async () => {
-    const songs = await readSongs();
+    const songs = await readRounds();
     const now = new Date().toISOString();
-    const song = sanitizeSong({ ...input, id: `song-${randomUUID()}`, createdAt: now, updatedAt: now });
+    const song = sanitizeRound({ ...input, id: `round-${randomUUID()}`, createdAt: now, updatedAt: now });
     songs.unshift(song);
-    await atomicWrite(STATE_PATH, { songs });
+    await atomicWrite(STATE_PATH, { rounds: songs });
     console.log(`🎵 Created song "${song.title}" (${song.id})`);
     return song;
   });
 }
 
-export async function updateSong(id, patch) {
+export async function updateRound(id, patch) {
   return enqueue(async () => {
-    const songs = await readSongs();
+    const songs = await readRounds();
     const idx = songs.findIndex((s) => s.id === id);
     if (idx === -1) throw makeErr(`Song ${id} not found`, ERR_NOT_FOUND);
     // Merge field-by-field so an absent key preserves the stored value while a
     // present key (including empty string / empty array) applies the change.
     const merged = { ...songs[idx] };
-    for (const key of ['title', 'artist', 'key', 'tempo', 'rhythmShapeId', 'notation', 'score', 'scoreParts', 'notes', 'learned', 'progress', 'sections', 'layers', 'recordings', 'references', 'partnerSongIds']) {
+    for (const key of ['title', 'artist', 'key', 'tempo', 'rhythmShapeId', 'notation', 'score', 'scoreParts', 'notes', 'learned', 'progress', 'sections', 'layers', 'recordings', 'references', 'partnerRoundIds']) {
       if (key in patch) merged[key] = patch[key];
     }
     merged.id = id;
     merged.createdAt = songs[idx].createdAt;
     merged.updatedAt = new Date().toISOString();
-    const song = sanitizeSong(merged);
+    const song = sanitizeRound(merged);
     songs[idx] = song;
-    await atomicWrite(STATE_PATH, { songs });
+    await atomicWrite(STATE_PATH, { rounds: songs });
     console.log(`🎵 Updated song "${song.title}" (${id})`);
     return song;
   });
@@ -867,9 +867,9 @@ export async function updateSong(id, patch) {
 // an older version of the song and want the newer shipped one. User-owned state
 // is preserved: their recorded takes, their `learned` progress, and the
 // original createdAt. Throws ERR_NOT_BUILTIN for a non-default song.
-export async function refreshSongFromTemplate(id) {
+export async function refreshRoundFromTemplate(id) {
   return enqueue(async () => {
-    const songs = await readSongs();
+    const songs = await readRounds();
     const idx = songs.findIndex((s) => s.id === id);
     if (idx === -1) throw makeErr(`Song ${id} not found`, ERR_NOT_FOUND);
     const template = seedTemplate(id);
@@ -882,7 +882,7 @@ export async function refreshSongFromTemplate(id) {
     const recordings = (existing.recordings || []).map((r) => (
       r.layerId && !templateLayerIds.has(r.layerId) ? { ...r, layerId: '' } : r
     ));
-    const song = sanitizeSong({
+    const song = sanitizeRound({
       ...template,
       id,
       learned: existing.learned,
@@ -894,19 +894,19 @@ export async function refreshSongFromTemplate(id) {
       updatedAt: new Date().toISOString(),
     });
     songs[idx] = song;
-    await atomicWrite(STATE_PATH, { songs });
+    await atomicWrite(STATE_PATH, { rounds: songs });
     console.log(`🔄 Refreshed built-in song "${song.title}" (${id}) from template`);
     return song;
   });
 }
 
-export async function deleteSong(id) {
+export async function deleteRound(id) {
   return enqueue(async () => {
-    const songs = await readSongs();
+    const songs = await readRounds();
     const idx = songs.findIndex((s) => s.id === id);
     if (idx === -1) throw makeErr(`Song ${id} not found`, ERR_NOT_FOUND);
     const [removed] = songs.splice(idx, 1);
-    await atomicWrite(STATE_PATH, { songs });
+    await atomicWrite(STATE_PATH, { rounds: songs });
     console.log(`🗑️ Deleted song "${removed.title}" (${id})`);
     return { id };
   });

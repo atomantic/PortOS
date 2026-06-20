@@ -5,7 +5,7 @@
  * stack when sung together.
  *
  * Two ways to fill it:
- *   - "Derive with AI" → POST /api/songs/:id/derive-parts reads the song's SAVED
+ *   - "Derive with AI" → POST /api/rounds/:id/derive-parts reads the song's SAVED
  *     base melody and returns harmony parts; we merge them into the draft (the
  *     parent owns Save). Because the server reads the *persisted* base score, the
  *     button is gated on the base melody being saved (not the in-memory draft) —
@@ -23,7 +23,7 @@ import toast from '../ui/Toast';
 import ScoreSheet from './ScoreSheet.jsx';
 import ProviderModelSelector from '../ProviderModelSelector.jsx';
 import useProviderModels from '../../hooks/useProviderModels.js';
-import { deriveSongParts } from '../../services/api';
+import { deriveRoundParts } from '../../services/api';
 import { HARMONY_PARTS, harmonyPartLabel, harmonyPartOrder } from '../../lib/songCraft';
 import { scoreHasMusic } from '../../lib/scoreNotation';
 
@@ -73,7 +73,7 @@ export default function SongScoreParts({ songId, baseScore = '', baseDirty = fal
 
   const derive = async () => {
     setDeriving(true);
-    const data = await deriveSongParts(songId, { providerId: selectedProviderId, model: selectedModel }, { silent: true })
+    const data = await deriveRoundParts(songId, { providerId: selectedProviderId, model: selectedModel }, { silent: true })
       .catch((err) => { toast.error(err?.message || 'Could not derive harmony parts'); return null; });
     setDeriving(false);
     if (!data?.scoreParts?.length) return;

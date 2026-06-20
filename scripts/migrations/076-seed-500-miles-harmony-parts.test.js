@@ -4,7 +4,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 
 import migration from './076-seed-500-miles-harmony-parts.js';
-import { SEED_500_MILES_SCORE_PARTS, SEED_SONGS } from '../../server/services/songs.js';
+import { SEED_500_MILES_SCORE_PARTS, SEED_ROUNDS } from '../../server/services/rounds.js';
 import { parseScore } from '../../client/src/lib/scoreNotation.js';
 
 const writeJson = (path, value) => writeFileSync(path, JSON.stringify(value, null, 2) + '\n');
@@ -26,7 +26,7 @@ describe('migration 076 — seed 500 Miles harmony parts', () => {
   });
 
   it('the seed song carries the five shipped harmony parts (single source)', () => {
-    const seed = SEED_SONGS.find((s) => s.id === 'seed-500-miles');
+    const seed = SEED_ROUNDS.find((s) => s.id === 'seed-500-miles');
     expect(seed.scoreParts).toBe(SEED_500_MILES_SCORE_PARTS);
     expect(SEED_500_MILES_SCORE_PARTS.map((p) => p.role)).toEqual([
       'bass', 'mid-harmony-2', 'mid-harmony-1', 'high-harmony-2', 'high-harmony-1',

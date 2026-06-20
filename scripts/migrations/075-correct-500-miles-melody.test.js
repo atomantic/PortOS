@@ -5,7 +5,7 @@ import { join } from 'path';
 
 import migration from './075-correct-500-miles-melody.js';
 import { SCORE_500_MILES as NEW_SCORE } from './073-seed-500-miles-score.js';
-import { SEED_SONGS } from '../../server/services/songs.js';
+import { SEED_ROUNDS } from '../../server/services/rounds.js';
 
 // The OLD C-major placeholder the migration upgrades FROM (kept in lockstep with
 // the constant inside the migration; this is the version we detect and replace).
@@ -40,7 +40,7 @@ describe('migration 075 — correct 500 Miles melody to G major', () => {
   });
 
   it('the corrected score equals the shipped seed (no drift)', () => {
-    const seed = SEED_SONGS.find((s) => s.id === 'seed-500-miles');
+    const seed = SEED_ROUNDS.find((s) => s.id === 'seed-500-miles');
     expect(seed.score).toBe(NEW_SCORE);
     expect(seed.key).toBe('G major');
   });

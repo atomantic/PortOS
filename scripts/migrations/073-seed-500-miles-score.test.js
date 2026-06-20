@@ -4,7 +4,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 
 import migration, { SCORE_500_MILES } from './073-seed-500-miles-score.js';
-import { SEED_SONGS } from '../../server/services/songs.js';
+import { SEED_ROUNDS } from '../../server/services/rounds.js';
 
 const writeJson = (path, value) => writeFileSync(path, JSON.stringify(value, null, 2) + '\n');
 const readJson = (path) => JSON.parse(readFileSync(path, 'utf-8'));
@@ -25,7 +25,7 @@ describe('migration 073 — backfill 500 Miles sheet-music score', () => {
   });
 
   it('does not drift from the shipped seed score', () => {
-    const seed = SEED_SONGS.find((s) => s.id === 'seed-500-miles');
+    const seed = SEED_ROUNDS.find((s) => s.id === 'seed-500-miles');
     expect(seed.score).toBe(SCORE_500_MILES);
   });
 

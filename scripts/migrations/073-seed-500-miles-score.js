@@ -3,16 +3,16 @@
  * installs that seeded it before the Sheet music feature existed.
  *
  * Background:
- *   `server/services/songs.js#SEED_SONGS` now ships a `score` (the verse melody
+ *   `server/services/rounds.js#SEED_ROUNDS` now ships a `score` (the verse melody
  *   in the PortOS lead-sheet DSL), but that only reaches installs on their FIRST
  *   read of songs (when the file is seeded). An install that already persisted
  *   `data/songs.json` keeps its old `seed-500-miles` record, which has no score.
  *   This migration adds the shipped score to that record IF it has none — a
  *   user who already wrote their own score is never clobbered. The user can also
  *   pull the latest bundled content any time via the song's "Refresh from
- *   template" button (refreshSongFromTemplate), which carries the score too.
+ *   template" button (refreshRoundFromTemplate), which carries the score too.
  *
- *   Fresh installs need nothing here: SEED_SONGS already includes the score, so
+ *   Fresh installs need nothing here: SEED_ROUNDS already includes the score, so
  *   a missing file is a clean no-op. Re-runs detect the score is present and skip.
  */
 
@@ -21,8 +21,8 @@ import { join } from 'path';
 
 const SONG_ID = 'seed-500-miles';
 
-// The shipped melody — kept identical to SEED_SONGS[seed-500-miles].score in
-// server/services/songs.js (the migration test asserts they match, so a drift
+// The shipped melody — kept identical to SEED_ROUNDS[seed-500-miles].score in
+// server/services/rounds.js (the migration test asserts they match, so a drift
 // fails CI rather than silently shipping two different scores). Now the full
 // song (all verses + closing coda) in G major; migration 075 upgrades installs
 // that still hold the earlier C-major backfill.

@@ -1,11 +1,11 @@
 /**
- * Songs page — a cappella song workbench index.
+ * Rounds page — a cappella round workbench index.
  *
- * Lists every song the user is writing or learning and lets them create, open,
- * or delete any of them. The heavy editor lives at `/songs/:id`; the learning
+ * Lists every round the user is writing or learning and lets them create, open,
+ * or delete any of them. The heavy editor lives at `/rounds/:id`; the learning
  * reference (dirge rhythm shapes, the layer ladder, notation help) lives at
- * `/songs/guide`. Mirrors the Universes index — a plain padded+scrolling page
- * (NOT full-width), one card/row per song.
+ * `/rounds/guide`. Mirrors the Universes index — a plain padded+scrolling page
+ * (NOT full-width), one card/row per round.
  */
 
 import { useEffect, useState, useCallback } from 'react';
@@ -14,63 +14,65 @@ import { Music, Plus, Trash2, BookOpen, CheckCircle2, Circle, Wand2 } from 'luci
 import toast from '../components/ui/Toast';
 import { timeAgo } from '../utils/formatters';
 import { useAsyncAction } from '../hooks/useAsyncAction';
-import { listSongs, createSong, deleteSong, generateSong } from '../services/api';
+import { listRounds, createRound, deleteRound, generateRound } from '../services/api';
 import { RHYTHM_SHAPES } from '../lib/songCraft';
 
 const shapeLabel = (id) => RHYTHM_SHAPES.find((s) => s.id === id)?.label || null;
 
-export default function Songs() {
+export default function Rounds() {
   const navigate = useNavigate();
-  const [songs, setSongs] = useState([]);
+  const [rounds, setRounds] = useState([]);
   const [loading, setLoading] = useState(true);
   const [title, setTitle] = useState('');
   const [artist, setArtist] = useState('');
-  // Two-step delete confirm (no window.confirm) — the armed song id.
+  // Two-step delete confirm (no window.confirm) — the armed round id.
   const [armed, setArmed] = useState(null);
 
   useEffect(() => {
-    listSongs({ silent: true })
-      .then((data) => setSongs(Array.isArray(data?.songs) ? data.songs : []))
-      .catch((err) => toast.error(err?.message || 'Failed to load songs'))
+    listRounds({ silent: true })
+      .then((data) => setRounds(Array.isArray(data?.rounds) ? data.rounds : []))
+      .catch((err) => toast.error(err?.message || 'Failed to load rounds'))
       .finally(() => setLoading(false));
   }, []);
 
   const [create, creating] = useAsyncAction(async () => {
     const name = title.trim();
-    if (!name) { toast.error('Give the song a title'); return null; }
-    const data = await createSong({ title: name, artist: artist.trim() }, { silent: true });
-    const song = data?.song;
-    // A blank new song has nothing to read — open straight into edit mode.
-    if (song) navigate(`/songs/${song.id}?mode=edit`);
-    return song;
-  }, { errorMessage: 'Failed to create song' });
+    if (!name) { toast.error('Give the round a title'); return null; }
+    const data = await createRound({ title: name, artist: artist.trim() }, { silent: true });
+    const round = data?.round;
+    // A blank new round has nothing to read — open straight into edit mode.
+    if (round) navigate(`/rounds/${round.id}?mode=edit`);
+    return round;
+  }, { errorMessage: 'Failed to create round' });
 
   // Generate a full draft from the title/artist as a brief, persist it, then
-  // open the editor on the new song. Two server calls (generate → create) keep
+  // open the editor on the new round. Two server calls (generate → create) keep
   // the AI service stateless about storage; the editor's own Generate/Expand
-  // buttons drive subsequent rounds.
+  // buttons drive subsequent rounds. NOTE: the generate endpoint returns the
+  // drafted arrangement under `song` (the AI payload shape); create returns the
+  // stored record under `round`.
   const [generate, generating] = useAsyncAction(async () => {
     const name = title.trim();
-    const data = await generateSong(
+    const data = await generateRound(
       { title: name || undefined, artist: artist.trim() || undefined },
       { silent: true },
     );
     const fields = data?.song;
     if (!fields) { toast.error('Generation produced nothing — try again'); return null; }
-    const created = await createSong(fields, { silent: true });
-    const song = created?.song;
+    const created = await createRound(fields, { silent: true });
+    const round = created?.round;
     // Unlike a blank create, a generated draft already has lyrics — open the
     // read view so the user sees the result, then toggle to Edit to refine.
-    if (song) navigate(`/songs/${song.id}`);
-    return song;
-  }, { errorMessage: 'Failed to generate song' });
+    if (round) navigate(`/rounds/${round.id}`);
+    return round;
+  }, { errorMessage: 'Failed to generate round' });
 
-  const onDelete = useCallback(async (song) => {
-    if (armed !== song.id) { setArmed(song.id); return; }
+  const onDelete = useCallback(async (round) => {
+    if (armed !== round.id) { setArmed(round.id); return; }
     setArmed(null);
-    await deleteSong(song.id, { silent: true })
-      .then(() => setSongs((prev) => prev.filter((s) => s.id !== song.id)))
-      .catch((err) => toast.error(err?.message || 'Failed to delete song'));
+    await deleteRound(round.id, { silent: true })
+      .then(() => setRounds((prev) => prev.filter((s) => s.id !== round.id)))
+      .catch((err) => toast.error(err?.message || 'Failed to delete round'));
   }, [armed]);
 
   return (
@@ -78,10 +80,10 @@ export default function Songs() {
       <div className="flex items-center justify-between gap-3 mb-2">
         <div className="flex items-center gap-3">
           <Music className="w-6 h-6 text-port-accent" />
-          <h1 className="text-2xl font-bold text-white">Songs</h1>
+          <h1 className="text-2xl font-bold text-white">Rounds</h1>
         </div>
         <Link
-          to="/songs/guide"
+          to="/rounds/guide"
           className="flex items-center gap-2 px-3 py-2 text-sm rounded-lg border border-port-border text-gray-300 hover:text-white hover:bg-port-border/50"
         >
           <BookOpen size={16} />
@@ -89,7 +91,7 @@ export default function Songs() {
         </Link>
       </div>
       <p className="text-sm text-gray-400 mb-6">
-        Write and learn a cappella songs — dirges, ballads, and harmonies. Track lyrics,
+        Write and learn a cappella rounds — dirges, ballads, and harmonies. Track lyrics,
         rhythm shapes, and the voice layers you're stacking.
       </p>
 
@@ -99,9 +101,9 @@ export default function Songs() {
         className="bg-port-card border border-port-border rounded-lg p-4 mb-6 flex flex-col sm:flex-row gap-3 sm:items-end"
       >
         <div className="flex-1">
-          <label htmlFor="song-title" className="block text-xs text-gray-400 mb-1">Title</label>
+          <label htmlFor="round-title" className="block text-xs text-gray-400 mb-1">Title</label>
           <input
-            id="song-title"
+            id="round-title"
             type="text"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
@@ -110,9 +112,9 @@ export default function Songs() {
           />
         </div>
         <div className="flex-1">
-          <label htmlFor="song-artist" className="block text-xs text-gray-400 mb-1">Artist (optional)</label>
+          <label htmlFor="round-artist" className="block text-xs text-gray-400 mb-1">Artist (optional)</label>
           <input
-            id="song-artist"
+            id="round-artist"
             type="text"
             value={artist}
             onChange={(e) => setArtist(e.target.value)}
@@ -127,7 +129,7 @@ export default function Songs() {
             className="flex items-center justify-center gap-2 px-4 py-2 text-sm rounded-lg bg-port-accent text-white hover:bg-port-accent/90 disabled:opacity-50"
           >
             <Plus size={16} />
-            New Song
+            New Round
           </button>
           <button
             type="button"
@@ -144,47 +146,47 @@ export default function Songs() {
 
       {/* List */}
       {loading ? (
-        <p className="text-sm text-gray-500">Loading songs…</p>
-      ) : songs.length === 0 ? (
-        <p className="text-sm text-gray-500">No songs yet — write your first above.</p>
+        <p className="text-sm text-gray-500">Loading rounds…</p>
+      ) : rounds.length === 0 ? (
+        <p className="text-sm text-gray-500">No rounds yet — write your first above.</p>
       ) : (
         <ul className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-          {songs.map((song) => {
-            const shape = shapeLabel(song.rhythmShapeId);
-            const layerCount = song.layers?.length || 0;
+          {rounds.map((round) => {
+            const shape = shapeLabel(round.rhythmShapeId);
+            const layerCount = round.layers?.length || 0;
             return (
               <li
-                key={song.id}
+                key={round.id}
                 className="group bg-port-card border border-port-border rounded-lg flex items-center gap-3 px-4 py-3 hover:border-port-accent/50"
               >
-                <Link to={`/songs/${song.id}`} className="flex-1 min-w-0">
+                <Link to={`/rounds/${round.id}`} className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 min-w-0">
-                    {song.learned
+                    {round.learned
                       ? <CheckCircle2 size={16} className="text-port-success shrink-0" aria-label="Learned" />
                       : <Circle size={16} className="text-gray-600 shrink-0" aria-label="In progress" />}
-                    <span className="flex-1 min-w-0 text-white font-medium truncate" title={song.title}>{song.title}</span>
-                    {song.builtIn && (
+                    <span className="flex-1 min-w-0 text-white font-medium truncate" title={round.title}>{round.title}</span>
+                    {round.builtIn && (
                       <span className="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] uppercase tracking-wide bg-port-accent/10 text-port-accent border border-port-accent/20">
                         Built-in
                       </span>
                     )}
                   </div>
                   <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-gray-500 mt-1 pl-6">
-                    {song.artist && <span className="text-gray-400">{song.artist}</span>}
-                    {song.key && <span>Key: {song.key}</span>}
-                    {song.tempo && <span>{song.tempo} BPM</span>}
+                    {round.artist && <span className="text-gray-400">{round.artist}</span>}
+                    {round.key && <span>Key: {round.key}</span>}
+                    {round.tempo && <span>{round.tempo} BPM</span>}
                     {shape && <span>{shape}</span>}
                     {layerCount > 0 && <span>{layerCount} layer{layerCount === 1 ? '' : 's'}</span>}
-                    {song.updatedAt && <span>Edited {timeAgo(song.updatedAt)}</span>}
+                    {round.updatedAt && <span>Edited {timeAgo(round.updatedAt)}</span>}
                   </div>
                 </Link>
                 <button
                   type="button"
-                  onClick={() => onDelete(song)}
-                  onBlur={() => setArmed((cur) => (cur === song.id ? null : cur))}
-                  className={`p-2 shrink-0 ${armed === song.id ? 'text-port-error' : 'text-gray-500 hover:text-port-error'}`}
-                  aria-label={armed === song.id ? `Confirm delete ${song.title}` : `Delete ${song.title}`}
-                  title={armed === song.id ? 'Click again to confirm delete' : 'Delete song'}
+                  onClick={() => onDelete(round)}
+                  onBlur={() => setArmed((cur) => (cur === round.id ? null : cur))}
+                  className={`p-2 shrink-0 ${armed === round.id ? 'text-port-error' : 'text-gray-500 hover:text-port-error'}`}
+                  aria-label={armed === round.id ? `Confirm delete ${round.title}` : `Delete ${round.title}`}
+                  title={armed === round.id ? 'Click again to confirm delete' : 'Delete round'}
                 >
                   <Trash2 size={16} />
                 </button>

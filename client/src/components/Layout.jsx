@@ -204,9 +204,9 @@ const navItems = [
       { to: '/importer', label: 'Importer', icon: FileInput },
       { to: '/media', label: 'Media Gen', icon: Layers },
       { to: '/mood-boards', label: 'Mood Boards', icon: Palette },
+      { to: '/rounds', label: 'Rounds', icon: Music },
       { to: '/pipeline', label: 'Series Pipeline', icon: WorkflowIcon, dynamic: 'pipelineSeries' },
       { to: '/sharing', label: 'Sharing', icon: Share2 },
-      { to: '/songs', label: 'Songs', icon: Music },
       { to: '/story-builder', label: 'Story Builder', icon: Wand2 },
       { to: '/universes', label: 'Universes', icon: Globe, dynamic: 'universes' },
       { to: '/writers-room', label: 'Writers Room', icon: NotebookPen },
@@ -1128,10 +1128,10 @@ export default function Layout() {
             location.pathname === '/prompts' ||
             location.pathname === '/review' ||
             location.pathname.startsWith('/settings') ||
-            // Song EDITOR (/songs/:id) and the Learning Guide (/songs/guide)
-            // are full-width and own their own scroll; the bare /songs index
+            // Round EDITOR (/rounds/:id) and the Learning Guide (/rounds/guide)
+            // are full-width and own their own scroll; the bare /rounds index
             // (list + create form) takes the normal padded+scrolling main.
-            location.pathname.startsWith('/songs/') ||
+            location.pathname.startsWith('/rounds/') ||
             location.pathname.startsWith('/wiki') ||
             // Only the universe EDITOR (/universes/:id, /universes/new) is
             // full-width — it manages its own scroll. The /universes index

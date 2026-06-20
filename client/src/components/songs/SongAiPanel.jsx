@@ -3,10 +3,10 @@
  *
  * Two single-shot actions (the synchronous universe-builder pattern, not
  * streaming):
- *   - Generate / Expand → POST /api/songs/:id/generate, merges the returned
+ *   - Generate / Expand → POST /api/rounds/:id/generate, merges the returned
  *     fields into the editor draft via `onApplyGenerated` (the parent owns Save,
  *     so generation never silently overwrites a persisted song).
- *   - Evaluate → POST /api/songs/:id/evaluate, renders a score + strengths /
+ *   - Evaluate → POST /api/rounds/:id/evaluate, renders a score + strengths /
  *     weaknesses / suggestions verdict inline (read-only, no mutation).
  *
  * Provider/model default to the active provider server-side; no picker here
@@ -16,7 +16,7 @@
 import { useState } from 'react';
 import { Sparkles, Wand2, ClipboardCheck, Loader2 } from 'lucide-react';
 import toast from '../ui/Toast';
-import { generateSongFor, evaluateSong } from '../../services/api';
+import { generateRoundFor, evaluateRound } from '../../services/api';
 
 const scoreColor = (n) => {
   if (n == null) return 'text-gray-400';
@@ -33,7 +33,7 @@ export default function SongAiPanel({ songId, onApplyGenerated }) {
 
   const runGenerate = async (expandExisting) => {
     setBusy(expandExisting ? 'expand' : 'generate');
-    const data = await generateSongFor(
+    const data = await generateRoundFor(
       songId,
       { brief: brief.trim(), mood: mood.trim(), expandExisting },
       { silent: true },
@@ -48,7 +48,7 @@ export default function SongAiPanel({ songId, onApplyGenerated }) {
 
   const runEvaluate = async () => {
     setBusy('evaluate');
-    const data = await evaluateSong(songId, {}, { silent: true })
+    const data = await evaluateRound(songId, {}, { silent: true })
       .catch((err) => { toast.error(err?.message || 'Evaluation failed'); return null; });
     setBusy(null);
     if (data?.evaluation) setVerdict(data.evaluation);

@@ -1,14 +1,14 @@
 /**
- * Songs API
+ * Rounds API
  *
- *   GET    /api/songs        → { songs }
- *   GET    /api/songs/:id    → { song }
- *   POST   /api/songs        → { song }   (body: songInputSchema)
- *   PUT    /api/songs/:id    → { song }   (body: songInputSchema.partial())
- *   DELETE /api/songs/:id    → { id }
+ *   GET    /api/rounds        → { rounds }
+ *   GET    /api/rounds/:id    → { round }
+ *   POST   /api/rounds        → { round }   (body: roundInputSchema)
+ *   PUT    /api/rounds/:id    → { round }   (body: roundInputSchema.partial())
+ *   DELETE /api/rounds/:id    → { id }
  *
- * The a cappella song workbench: write/arrange songs and track which voice
- * layers you're learning. Bounds come from services/songs.js so the Zod schema
+ * The a cappella round workbench: write/arrange rounds and track which voice
+ * layers you're learning. Bounds come from services/rounds.js so the Zod schema
  * here and the service-layer sanitizer agree by construction (the dashboard-
  * layouts pattern).
  */
@@ -17,8 +17,8 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
-import * as svc from '../services/songs.js';
-import { generateSong, evaluateSong, deriveSongParts } from '../services/songsAI.js';
+import * as svc from '../services/rounds.js';
+import { generateRound, evaluateRound, deriveRoundParts } from '../services/roundsAI.js';
 
 const router = Router();
 
@@ -63,7 +63,7 @@ const accuracySchema = z.object({
 });
 
 // A saved vocal take. `filename` is the /api/uploads file the audio is served
-// from (the client uploads the WAV first, then PUTs the song with the returned
+// from (the client uploads the WAV first, then PUTs the round with the returned
 // filename). Numbers are accepted for the mixer; the service clamps them.
 // `pitchTrack`/`accuracy` are optional per-take pitch analysis (#1027) — absent
 // on legacy/unscored takes, persisted so the tuner history isn't recomputed.
@@ -118,10 +118,10 @@ const referenceSchema = z.object({
 
 // No `.default('')` on these fields: `.partial()` (used for PUT) materializes a
 // default for an *omitted* key, which would turn a single-field PUT into a
-// wipe of every other field via updateSong's `'key' in patch` merge. Leaving
+// wipe of every other field via updateRound's `'key' in patch` merge. Leaving
 // them plain-optional keeps omitted keys absent (preserve) vs present-empty
 // (clear); the service's `trimField` coerces a present `undefined`/'' anyway.
-const songInputSchema = z.object({
+const roundInputSchema = z.object({
   title: str(svc.TITLE_MAX_LENGTH).optional(),
   artist: str(svc.ARTIST_MAX_LENGTH).optional(),
   key: str(svc.KEY_MAX_LENGTH).optional(),
@@ -138,15 +138,15 @@ const songInputSchema = z.object({
   notes: str(svc.FIELD_MAX_LENGTH).optional(),
   learned: z.boolean().optional(),
   // Training progress (#1028) — per-scope rolling accuracy history. Optional and
-  // absent-tolerant: a legacy/untrained song omits it; the service bounds + clamps.
+  // absent-tolerant: a legacy/untrained round omits it; the service bounds + clamps.
   progress: progressSchema,
   sections: z.array(sectionSchema).max(svc.SECTIONS_MAX).optional(),
   layers: z.array(layerSchema).max(svc.LAYERS_MAX).optional(),
   recordings: z.array(recordingSchema).max(svc.RECORDINGS_MAX).optional(),
   references: z.array(referenceSchema).max(svc.REFERENCES_MAX).optional(),
-  // Ids of other songs sung together with this one (round-stack partners). The
+  // Ids of other rounds sung together with this one (round-stack partners). The
   // service dedupes and drops self-references; the schema only bounds the list.
-  partnerSongIds: z.array(str(svc.ID_MAX_LENGTH)).max(svc.PARTNERS_MAX).optional(),
+  partnerRoundIds: z.array(str(svc.ID_MAX_LENGTH)).max(svc.PARTNERS_MAX).optional(),
 });
 
 // AI generate/evaluate inputs. providerId/model are optional overrides; the
@@ -158,7 +158,7 @@ const generateSchema = z.object({
   artist: str(svc.ARTIST_MAX_LENGTH).optional(),
   brief: str(svc.FIELD_MAX_LENGTH).optional(),
   mood: str(svc.FIELD_MAX_LENGTH).optional(),
-  // When true, the target song (route :id) is folded into the prompt so
+  // When true, the target round (route :id) is folded into the prompt so
   // "generate" expands the existing draft instead of starting blank.
   expandExisting: z.boolean().optional(),
   providerId: optProvider,
@@ -168,7 +168,7 @@ const evaluateSchema = z.object({
   providerId: optProvider,
   model: optProvider,
 });
-// Derive harmony parts from the song's base score. `partIds` optionally restricts
+// Derive harmony parts from the round's base score. `partIds` optionally restricts
 // which harmony parts to generate (a HARMONY_PARTS id list); the service defaults
 // to the full derivable set and only ever derives harmony (never the melody).
 const derivePartsSchema = z.object({
@@ -179,98 +179,98 @@ const derivePartsSchema = z.object({
 
 // Map a service error (carries a `code`) to the right HTTP status. Without
 // this, asyncHandler defaults everything to 500.
-const mapSongError = (err) => {
+const mapRoundError = (err) => {
   if (err?.code === svc.ERR_NOT_FOUND) return new ServerError(err.message, { status: 404, code: err.code });
   if (err?.code === svc.ERR_NOT_BUILTIN) return new ServerError(err.message, { status: 400, code: err.code });
   return err;
 };
-const rethrowSongError = (err) => { throw mapSongError(err); };
+const rethrowRoundError = (err) => { throw mapRoundError(err); };
 
 router.get('/', asyncHandler(async (req, res) => {
-  const songs = await svc.listSongs();
-  res.json({ songs });
+  const rounds = await svc.listRounds();
+  res.json({ rounds });
 }));
 
 router.get('/:id', asyncHandler(async (req, res) => {
-  const song = await svc.getSong(req.params.id);
-  if (!song) throw new ServerError('Song not found', { status: 404, code: svc.ERR_NOT_FOUND });
-  res.json({ song });
+  const round = await svc.getRound(req.params.id);
+  if (!round) throw new ServerError('Round not found', { status: 404, code: svc.ERR_NOT_FOUND });
+  res.json({ round });
 }));
 
 router.post('/', asyncHandler(async (req, res) => {
-  const input = validateRequest(songInputSchema, req.body || {});
-  const song = await svc.createSong(input).catch(rethrowSongError);
-  res.json({ song });
+  const input = validateRequest(roundInputSchema, req.body || {});
+  const round = await svc.createRound(input).catch(rethrowRoundError);
+  res.json({ round });
 }));
 
 router.put('/:id', asyncHandler(async (req, res) => {
-  const patch = validateRequest(songInputSchema.partial(), req.body || {});
-  const song = await svc.updateSong(req.params.id, patch).catch(rethrowSongError);
-  res.json({ song });
+  const patch = validateRequest(roundInputSchema.partial(), req.body || {});
+  const round = await svc.updateRound(req.params.id, patch).catch(rethrowRoundError);
+  res.json({ round });
 }));
 
 router.delete('/:id', asyncHandler(async (req, res) => {
-  const result = await svc.deleteSong(req.params.id).catch(rethrowSongError);
+  const result = await svc.deleteRound(req.params.id).catch(rethrowRoundError);
   res.json(result);
 }));
 
-// POST /api/songs/:id/refresh-template → reset a built-in default song's shipped
+// POST /api/rounds/:id/refresh-template → reset a built-in default round's shipped
 // content (metadata/lyrics/layers/notation) to the current bundled template,
 // preserving the user's own recordings + learned progress. 400 if not built-in.
 router.post('/:id/refresh-template', asyncHandler(async (req, res) => {
-  const song = await svc.refreshSongFromTemplate(req.params.id).catch(rethrowSongError);
-  res.json({ song });
+  const round = await svc.refreshRoundFromTemplate(req.params.id).catch(rethrowRoundError);
+  res.json({ round });
 }));
 
 // --- AI generate / evaluate -------------------------------------------------
-// POST /api/songs/generate → draft a brand-new arrangement from a brief. Does
-// NOT persist — returns { song: <fields>, llm } the client merges/creates from.
+// POST /api/rounds/generate → draft a brand-new arrangement from a brief. Does
+// NOT persist — returns { round: <fields>, llm } the client merges/creates from.
 // (Routed before /:id/* so a literal `/generate` can't be read as an id.)
 router.post('/generate', asyncHandler(async (req, res) => {
   const body = validateRequest(generateSchema, req.body || {});
-  const result = await generateSong(body);
+  const result = await generateRound(body);
   res.json(result);
 }));
 
-// POST /api/songs/:id/generate → expand the stored song (when expandExisting)
-// or draft fresh using its title/artist as the brief. Returns { song, llm };
+// POST /api/rounds/:id/generate → expand the stored round (when expandExisting)
+// or draft fresh using its title/artist as the brief. Returns { round, llm };
 // the client merges into the editor draft (does not auto-save).
 router.post('/:id/generate', asyncHandler(async (req, res) => {
   const body = validateRequest(generateSchema, req.body || {});
-  const existing = await svc.getSong(req.params.id);
-  if (!existing) throw new ServerError('Song not found', { status: 404, code: svc.ERR_NOT_FOUND });
-  const result = await generateSong({
+  const existing = await svc.getRound(req.params.id);
+  if (!existing) throw new ServerError('Round not found', { status: 404, code: svc.ERR_NOT_FOUND });
+  const result = await generateRound({
     title: body.title ?? existing.title,
     artist: body.artist ?? existing.artist,
     brief: body.brief,
     mood: body.mood,
-    existingSong: body.expandExisting ? existing : undefined,
+    existingRound: body.expandExisting ? existing : undefined,
     providerId: body.providerId,
     model: body.model,
   });
   res.json(result);
 }));
 
-// POST /api/songs/:id/evaluate → critique the stored arrangement. Read-only:
-// returns { evaluation, llm } without mutating the song.
+// POST /api/rounds/:id/evaluate → critique the stored arrangement. Read-only:
+// returns { evaluation, llm } without mutating the round.
 router.post('/:id/evaluate', asyncHandler(async (req, res) => {
   const body = validateRequest(evaluateSchema, req.body || {});
-  const song = await svc.getSong(req.params.id);
-  if (!song) throw new ServerError('Song not found', { status: 404, code: svc.ERR_NOT_FOUND });
-  const result = await evaluateSong({ song, providerId: body.providerId, model: body.model });
+  const round = await svc.getRound(req.params.id);
+  if (!round) throw new ServerError('Round not found', { status: 404, code: svc.ERR_NOT_FOUND });
+  const result = await evaluateRound({ song: round, providerId: body.providerId, model: body.model });
   res.json(result);
 }));
 
-// POST /api/songs/:id/derive-parts → derive harmony parts (bass, mid/high
-// harmonies) from the song's base melody. Returns { scoreParts, llm }; the
+// POST /api/rounds/:id/derive-parts → derive harmony parts (bass, mid/high
+// harmonies) from the round's base melody. Returns { scoreParts, llm }; the
 // client merges the parts into the editor draft (does NOT auto-save), matching
-// the generate/expand flow. 400 if the song has no base score to derive from.
+// the generate/expand flow. 400 if the round has no base score to derive from.
 router.post('/:id/derive-parts', asyncHandler(async (req, res) => {
   const body = validateRequest(derivePartsSchema, req.body || {});
-  const song = await svc.getSong(req.params.id);
-  if (!song) throw new ServerError('Song not found', { status: 404, code: svc.ERR_NOT_FOUND });
-  const result = await deriveSongParts({
-    song, partIds: body.partIds, providerId: body.providerId, model: body.model,
+  const round = await svc.getRound(req.params.id);
+  if (!round) throw new ServerError('Round not found', { status: 404, code: svc.ERR_NOT_FOUND });
+  const result = await deriveRoundParts({
+    song: round, partIds: body.partIds, providerId: body.providerId, model: body.model,
   });
   res.json(result);
 }));
