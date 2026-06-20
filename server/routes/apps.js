@@ -16,6 +16,7 @@ import * as git from '../services/git.js';
 import { parseCronToNextRun } from '../services/eventScheduler.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { parseEcosystemFromPath, usesPm2, writeEcosystemPorts } from '../services/streamingDetect.js';
+import { checkViteHost, findViteConfig, rewriteAllowedHosts } from '../lib/viteAllowedHosts.js';
 import { detectAppIcon, getIconContentType, isUsableSvg } from '../services/appIconDetect.js';
 import { hasDeployScript } from '../services/appDeployer.js';
 import { checkScripts, installScripts, XCODE_SCRIPT_NAMES } from '../services/xcodeScripts.js';
@@ -300,6 +301,91 @@ router.post('/:id/upgrade-tls', loadApp, asyncHandler(async (req, res) => {
     snippet,
     certDirHint: certPaths(PATHS.data).dir,
     note: 'Point your app at the PortOS cert dir (or symlink it) so apps share the single Tailscale cert.'
+  });
+}));
+
+// GET /api/apps/:id/vite-host-check?host=<hostname> - Report whether the app's
+// Vite dev server would accept requests for `host` (the Tailscale MagicDNS / IP
+// name PortOS is served under). Vite ≥5 blocks unknown hosts, so launching an
+// app's Dev UI over Tailscale fails until that host is allow-listed. This drives
+// the Dev-UI launch guard and the remediation UI in the app detail view.
+router.get('/:id/vite-host-check', loadApp, asyncHandler(async (req, res) => {
+  const app = req.loadedApp;
+  const host = typeof req.query.host === 'string' ? req.query.host.trim() : '';
+  const extraDirs = (app.processes || []).map((p) => p.cwd).filter(Boolean);
+  const status = await checkViteHost(app.repoPath, host, { extraDirs });
+  res.json({ host, ...status });
+}));
+
+// POST /api/apps/:id/fix-vite-hosts - Remediate the Vite allowedHosts block.
+//   mode 'allow-all' (default): deterministically rewrite the app's vite.config
+//     to `server.allowedHosts: true`. Safe for a private Tailscale network and
+//     the most reliable fix; bails (422) when the config shape is too unusual to
+//     edit without risking corruption, steering the user to the AI path.
+//   mode 'ai': spawn a CoS agent that edits the app's vite.config in its OWN
+//     repo (honoring the Scope Boundary) — handles arbitrary config shapes and
+//     can create a vite.config when none exists.
+const fixViteHostsSchema = z.object({
+  mode: z.enum(['allow-all', 'ai']).default('allow-all'),
+  host: z.string().trim().optional()
+});
+router.post('/:id/fix-vite-hosts', loadApp, asyncHandler(async (req, res) => {
+  const { mode, host } = validateRequest(fixViteHostsSchema, req.body);
+  const app = req.loadedApp;
+  if (!app.repoPath || !await pathExists(app.repoPath)) {
+    throw new ServerError('App repository path not found', { status: 400, code: 'PATH_NOT_FOUND' });
+  }
+  const extraDirs = (app.processes || []).map((p) => p.cwd).filter(Boolean);
+  const config = await findViteConfig(app.repoPath, { extraDirs });
+
+  if (mode === 'ai') {
+    if (!cos.isRunning()) {
+      throw new ServerError(
+        'CoS is not running — start it to use AI remediation, or use the automatic fix.',
+        { status: 409, code: 'COS_NOT_RUNNING' }
+      );
+    }
+    const where = config ? config.path : `${app.repoPath} (no vite.config found — create one)`;
+    const task = await cos.addTask({
+      description: `Allow the Tailscale host in ${app.name}'s Vite config so its Dev UI loads`,
+      priority: 'MEDIUM',
+      app: app.id,
+      approvalRequired: true,
+      context: [
+        `The app "${app.name}" is launched through PortOS over a Tailscale MagicDNS hostname` +
+          (host ? ` ("${host}")` : '') + '.',
+        'Launching its Vite Dev UI fails with: "Blocked request. This host is not allowed."',
+        `Fix: edit ${where} so the dev server's \`server.allowedHosts\` accepts that host.`,
+        'Prefer `server.allowedHosts: true` (allow all — this app runs only on a private Tailscale network),',
+        'or add the specific host plus a leading-dot `.ts.net` suffix entry. Leave the rest of the config intact.',
+        'If no vite config exists, create a minimal vite.config.js that sets server.allowedHosts.'
+      ].join('\n')
+    }, 'internal');
+    return res.json({ ok: true, mode: 'ai', taskId: task.id, configPath: config?.path || null });
+  }
+
+  // mode === 'allow-all': deterministic rewrite.
+  if (!config) {
+    throw new ServerError(
+      'No vite.config found to edit automatically — use AI remediation, which can create one.',
+      { status: 422, code: 'NO_VITE_CONFIG' }
+    );
+  }
+  const rewrite = rewriteAllowedHosts(config.content);
+  if (!rewrite.ok) {
+    throw new ServerError(
+      `Could not safely auto-edit ${config.filename}: ${rewrite.reason}. Use AI remediation instead.`,
+      { status: 422, code: 'AUTO_FIX_UNSAFE' }
+    );
+  }
+  await atomicWrite(config.path, rewrite.content);
+  res.json({
+    ok: true,
+    mode: 'allow-all',
+    configPath: config.path,
+    filename: config.filename,
+    strategy: rewrite.strategy,
+    note: 'Restart the app (or its Vite dev server) for the change to take effect.'
   });
 }));
 

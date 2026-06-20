@@ -49,6 +49,16 @@ export function handleSelfRestart() {
   };
   poll();
 }
+// Vite Dev-UI host check / remediation. Read-only status check is silent (the
+// detail view owns its own inline warning UI); the fix call's caller shows
+// custom success/error toasts.
+export const getAppViteHostStatus = (id, host) =>
+  request(`/apps/${id}/vite-host-check?host=${encodeURIComponent(host || '')}`, { silent: true });
+export const fixAppViteHosts = (id, body) => request(`/apps/${id}/fix-vite-hosts`, {
+  method: 'POST',
+  body: JSON.stringify(body),
+  silent: true
+});
 export const archiveApp = (id) => request(`/apps/${id}/archive`, { method: 'POST' });
 export const unarchiveApp = (id) => request(`/apps/${id}/unarchive`, { method: 'POST' });
 export const openAppInEditor = (id) => request(`/apps/${id}/open-editor`, { method: 'POST' });

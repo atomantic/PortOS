@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Play, Square, RotateCcw, ExternalLink, Hammer, RefreshCw, Pencil } from 'lucide-react';
+import { ArrowLeft, Play, Square, RotateCcw, ExternalLink, Hammer, RefreshCw, Pencil, AlertTriangle, Sparkles } from 'lucide-react';
 import DeployPanel from './DeployPanel';
 import EditAppDrawer from './EditAppDrawer';
 import toast from '../ui/Toast';
@@ -32,6 +32,11 @@ export default function AppDetailView() {
   const [actionLoading, setActionLoading] = useState(null);
   const [buildLoading, setBuildLoading] = useState(false);
   const [editing, setEditing] = useState(false);
+  // Vite Dev-UI host guard: when an online app exposes a Vite dev server, check
+  // whether its config allows the Tailscale/IP host PortOS is served under
+  // (Vite ≥5 blocks unknown hosts). `null` = not yet checked.
+  const [viteHostStatus, setViteHostStatus] = useState(null);
+  const [viteFixing, setViteFixing] = useState(null); // 'allow-all' | 'ai' while a fix is in flight
 
   const fetchApp = useCallback(async () => {
     const data = await api.getApp(appId).catch(() => null);
@@ -100,6 +105,37 @@ export default function AppDetailView() {
     } else if (result?.selfBuildTriggered) {
       toast.success(`${app.name} build triggered — server may restart`);
     }
+  };
+
+  // Re-check the Vite host guard whenever the app, its dev port, or its online
+  // status changes. Skip the self-app (PortOS already allow-lists `.ts.net`).
+  const devUiPort = app?.devUiPort;
+  const isOnline = app?.overallStatus === 'online';
+  useEffect(() => {
+    if (!devUiPort || !isOnline || appId === api.PORTOS_APP_ID) {
+      setViteHostStatus(null);
+      return;
+    }
+    let cancelled = false;
+    api.getAppViteHostStatus(appId, window.location.hostname)
+      .then((status) => { if (!cancelled) setViteHostStatus(status); })
+      .catch(() => { if (!cancelled) setViteHostStatus(null); });
+    return () => { cancelled = true; };
+  }, [appId, devUiPort, isOnline]);
+
+  const handleFixViteHosts = async (mode) => {
+    setViteFixing(mode);
+    const result = await api.fixAppViteHosts(appId, { mode, host: window.location.hostname })
+      .catch((err) => { toast.error(`Host fix failed: ${err.message}`); return null; });
+    setViteFixing(null);
+    if (!result) return;
+    if (mode === 'ai') {
+      toast.success(`AI remediation task queued for ${app.name} — review it in the CoS plan`);
+      return;
+    }
+    toast.success(`${app.name}: ${result.filename} now allows this host — restart the dev server`);
+    // Optimistically clear the warning; a restart picks up the change.
+    setViteHostStatus((prev) => prev ? { ...prev, hostAllowed: true } : prev);
   };
 
   const visibleTabs = useMemo(() =>
@@ -313,6 +349,49 @@ export default function AppDetailView() {
               <span className="text-xs">Edit</span>
             </button>
           </div>
+          {/* Vite Dev-UI host guard — the app's dev server would block this host. */}
+          {viteHostStatus && !viteHostStatus.hostAllowed && (
+            <div className="mt-3 w-full rounded-lg border border-port-warning/40 bg-port-warning/10 p-3">
+              <div className="flex items-start gap-2">
+                <AlertTriangle size={16} className="text-port-warning mt-0.5 shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm text-port-warning font-medium">
+                    Dev UI will be blocked on <span className="font-mono">{window.location.hostname}</span>
+                  </p>
+                  <p className="text-xs text-gray-400 mt-1">
+                    {viteHostStatus.hasViteConfig
+                      ? <>This app's Vite dev server ({viteHostStatus.filename}) doesn't allow this host, so opening the Dev UI shows a "Blocked request… not allowed" error.</>
+                      : <>This app exposes a Vite dev server but no <span className="font-mono">vite.config</span> was found to allow this host, so the Dev UI will be blocked.</>}
+                    {' '}It runs on a private Tailscale network — allowing all hosts is safe.
+                  </p>
+                  <div className="flex flex-wrap gap-2 mt-2">
+                    {viteHostStatus.canAutoFix && (
+                      <button
+                        onClick={() => handleFixViteHosts('allow-all')}
+                        disabled={Boolean(viteFixing)}
+                        className="px-2 py-1 bg-port-accent/20 text-port-accent enabled:hover:bg-port-accent/30 transition-colors rounded flex items-center gap-1 disabled:opacity-50 text-xs"
+                      >
+                        {viteFixing === 'allow-all' ? 'Allowing…' : 'Allow all hosts (auto)'}
+                      </button>
+                    )}
+                    <button
+                      onClick={() => handleFixViteHosts('ai')}
+                      disabled={Boolean(viteFixing)}
+                      className="px-2 py-1 bg-port-border/40 text-gray-200 enabled:hover:bg-port-border/60 transition-colors rounded flex items-center gap-1 disabled:opacity-50 text-xs"
+                    >
+                      <Sparkles size={12} />
+                      {viteFixing === 'ai' ? 'Queuing…' : 'Fix with AI'}
+                    </button>
+                  </div>
+                  {!viteHostStatus.canAutoFix && viteHostStatus.hasViteConfig && (
+                    <p className="text-[11px] text-gray-500 mt-1.5">
+                      Auto-fix can't safely edit this config shape — use AI remediation.
+                    </p>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Tab Bar */}

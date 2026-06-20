@@ -210,6 +210,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `ports.js` | Canonical PORTS object (re-exported from `ecosystem.config.cjs`). |
 | `platform.js` | Platform/OS detection helpers. |
 | `timezone.js` | Timezone utilities for scheduling. |
+| `viteAllowedHosts.js` | Detect and remediate a managed app's Vite `server.allowedHosts`. `findViteConfig(repoPath)` locates the config; `parseAllowedHosts(src)` / `hostIsAllowed(parsed, host)` decide whether a Tailscale/IP host would be accepted (mirrors Vite's localhost+IP-always-allowed and leading-dot-suffix rules); `rewriteAllowedHosts(src)` deterministically injects `allowedHosts: true` (or bails `ok:false` on ambiguous shapes so the caller can fall back to an LLM fix); `checkViteHost(repoPath, host)` is the one-shot status used by `GET /api/apps/:id/vite-host-check`. |
 | `buildId.js` | Build-ID derived from the built client bundle. |
 
 ## General utilities

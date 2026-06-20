@@ -184,6 +184,7 @@ export * from './pgTools.js';
 export * from './platform.js';
 export * from './ports.js';
 export * from './timezone.js';
+export * from './viteAllowedHosts.js';
 
 // === General utilities ===
 export * from './apiRegistry.js';
