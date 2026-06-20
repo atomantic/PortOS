@@ -451,6 +451,29 @@ function findPortsBlock(content) {
 }
 
 /**
+ * Brace-matched `{ start, end }` regions whose numeric values are rewritten
+ * by VALUE regardless of key name: the `const PORTS = {...}` block AND every
+ * per-app `ports: { api: N, ui: N }` object. parseEcosystemConfig reads the
+ * per-app `ports:` object FIRST when deriving uiPort/apiPort/devUiPort, so a
+ * rewrite that skipped it would let the edit silently revert on the next
+ * config refresh — the exact bug the write-back exists to prevent.
+ */
+function findValuePortRegions(content) {
+  const regions = [];
+  const portsConst = findPortsBlock(content);
+  if (portsConst) regions.push(portsConst);
+  // Lowercase, case-sensitive `ports:` — won't match `const PORTS` or `reports:`.
+  const re = /\bports\s*:\s*\{/g;
+  let m;
+  while ((m = re.exec(content)) !== null) {
+    const open = m.index + m[0].length - 1;
+    const end = findMatchingBrace(content, open);
+    if (end >= 0) regions.push({ start: open, end });
+  }
+  return regions;
+}
+
+/**
  * Rewrite port literals in an ecosystem.config content string per a remap of
  * old → new port numbers. Pure (no I/O) so it's unit-testable.
  *
@@ -461,12 +484,14 @@ function findPortsBlock(content) {
  *
  * Replacements are deliberately narrow so unrelated numbers (watch_delay,
  * timeouts) are never touched:
- *   1. numeric values inside a `const PORTS = {...}` block (arbitrary keys),
+ *   1. numeric values inside a `const PORTS = {...}` block AND each per-app
+ *      `ports: {...}` object (arbitrary keys — matched by value),
  *   2. `--port <n>` tokens in args strings,
  *   3. port-ish env keys (`PORT`, `*_PORT`, `VITE_PORT`) and `port:`.
  *
  * Each old value is first swapped to a unique placeholder, then placeholders
  * resolve to new values — so a remap like 6000→6001, 6001→6002 can't chain.
+ * Placeholders are NUL-wrapped so index 1's token can't prefix-match index 10's.
  *
  * @param {string} content
  * @param {Map<number,number>|Array<[number,number]>} remap
@@ -478,24 +503,23 @@ export function rewriteEcosystemPorts(content, remap) {
     .filter(([o, n]) => Number.isInteger(o) && Number.isInteger(n) && o > 0 && n > 0 && o !== n);
   if (pairs.length === 0) return content;
 
-  const ph = (i) => `PORT_REMAP_${i}`;
+  const ph = (i) => `PORT_REMAP_${i}_`;
   // Port-ish env keys: PORT, FOO_PORT, VITE_PORT (and quoted variants), plus `port:`.
   const KEY = `(?:[A-Za-z][A-Za-z0-9_]*_PORT|PORT|port)`;
 
   let out = content;
 
-  // 1) Within `const PORTS = {...}`, swap any `: <old>` value (keys there are
-  //    arbitrary — API, UI, WEB, …). Operate on the isolated block so the same
-  //    pattern outside the block isn't over-matched.
-  const block = findPortsBlock(out);
-  if (block) {
-    const before = out.slice(0, block.start);
-    let inner = out.slice(block.start, block.end + 1);
-    const after = out.slice(block.end + 1);
+  // 1) Within `const PORTS = {...}` and each per-app `ports: {...}` object,
+  //    swap any `: <old>` value (keys there are arbitrary — API, UI, api, ui).
+  //    Process regions back-to-front so each splice's offsets stay valid for
+  //    the earlier (lower-index) regions still to be rewritten.
+  const regions = findValuePortRegions(out).sort((a, b) => b.start - a.start);
+  for (const region of regions) {
+    let inner = out.slice(region.start, region.end + 1);
     pairs.forEach(([oldP], i) => {
       inner = inner.replace(new RegExp(`(:\\s*)${oldP}\\b`, 'g'), `$1${ph(i)}`);
     });
-    out = before + inner + after;
+    out = out.slice(0, region.start) + inner + out.slice(region.end + 1);
   }
 
   // 2) `--port <old>` in args strings.

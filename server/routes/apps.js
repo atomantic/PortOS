@@ -376,8 +376,10 @@ router.put('/:id', asyncHandler(async (req, res, next) => {
 
   // Only port edits need the canonical-config write-back below; snapshot the
   // pre-update ports just for those so ordinary updates (rename, archive,
-  // jira/datadog) don't pay the extra read + fs stat.
-  const PORT_KEYS = ['apiPort', 'uiPort', 'devUiPort', 'tlsPort'];
+  // jira/datadog) don't pay the extra read + fs stat. tlsPort is omitted: it's
+  // synthetic (derived from cert presence / upgradeAppTls), never a literal in
+  // ecosystem.config.cjs, so there's nothing to rewrite for it.
+  const PORT_KEYS = ['apiPort', 'uiPort', 'devUiPort'];
   const hasPortUpdate = PORT_KEYS.some(key => key in data);
   const existing = hasPortUpdate ? await appsService.getAppById(req.params.id) : null;
   const app = await appsService.updateApp(req.params.id, data);

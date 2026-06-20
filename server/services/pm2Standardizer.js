@@ -7,7 +7,7 @@ import { getActiveProvider, getProviderById } from './providers.js';
 import { spawn } from 'child_process';
 import { safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
 import { runPromptThroughProvider } from '../lib/promptRunner.js';
-import { getReservedPorts } from './apps.js';
+import { getReservedPorts, getAllApps } from './apps.js';
 import { getListeningPorts } from '../lib/platform.js';
 
 const execAsync = promisify(exec);
@@ -100,17 +100,41 @@ export function reassignCollidingPorts(processes, takenPorts) {
 }
 
 /**
+ * Collect every port a registered app already holds — top-level fields plus
+ * each process's `ports` map — mirroring getReservedPorts' per-app walk. Used
+ * to exempt the app being re-standardized from its own "taken" set.
+ */
+function ownPortsOf(app) {
+  const ports = [];
+  if (!app) return ports;
+  for (const p of [app.uiPort, app.devUiPort, app.apiPort, app.tlsPort]) ports.push(p);
+  if (Array.isArray(app.processes)) {
+    for (const proc of app.processes) {
+      if (proc?.port) ports.push(proc.port);
+      if (proc?.ports && typeof proc.ports === 'object') {
+        for (const value of Object.values(proc.ports)) ports.push(value);
+      }
+    }
+  }
+  return ports.filter(Number.isInteger);
+}
+
+/**
  * Ports that must not be assigned to a freshly standardized app: everything
  * currently listening on the host, every port already reserved by another
- * PortOS-managed app, and the common Vite defaults.
+ * PortOS-managed app, and the common Vite defaults — minus `excludePorts`, the
+ * ports the app being standardized already owns (so re-standardizing keeps its
+ * own valid ports instead of treating them as collisions and bumping them).
  */
-async function gatherTakenPorts() {
+async function gatherTakenPorts(excludePorts = []) {
   const [reserved, listening] = await Promise.all([
     getReservedPorts().catch(() => []),
     getListeningPorts().catch(() => []),
   ]);
+  const own = new Set(excludePorts.filter(Number.isInteger));
   return Array.from(new Set([...reserved, ...listening, ...VITE_DEFAULT_PORTS]))
     .filter(Number.isInteger)
+    .filter((p) => !own.has(p))
     .sort((a, b) => a - b);
 }
 
@@ -404,9 +428,12 @@ export async function analyzeApp(repoPath, providerId = null) {
     return { success: false, error: 'AI provider is disabled' };
   }
 
-  // Gather context + the set of ports we must steer the LLM away from
+  // Gather context + the set of ports we must steer the LLM away from. Exempt
+  // the app's own current ports (matched by repoPath) so re-standardizing a
+  // registered app doesn't treat its valid ports as collisions and bump them.
   const context = await gatherConfigContext(repoPath);
-  const takenPorts = await gatherTakenPorts();
+  const ownApp = (await getAllApps().catch(() => [])).find((a) => a.repoPath === repoPath);
+  const takenPorts = await gatherTakenPorts(ownPortsOf(ownApp));
   const prompt = buildStandardizationPrompt(context, takenPorts);
 
   // Execute analysis

@@ -297,6 +297,21 @@ describe('rewriteEcosystemPorts', () => {
     expect(processes.find(p => p.name === 'app-server').ports.api).toBe(6000);
   });
 
+  it('rewrites a per-app ports: {...} object — the parser\'s PRIMARY derivation source', () => {
+    // parseEcosystemConfig reads the literal `ports:` object before env, so a
+    // rewrite that skipped it would let the edit revert on the next refresh.
+    const content = `module.exports = { apps: [
+  { name: 'app-server', script: 's.js', ports: { api: 5555, ui: 5173 }, env: { PORT: 5555 } }
+] };
+`;
+    const out = rewriteEcosystemPorts(content, [[5555, 6000], [5173, 6001]]);
+    const { processes } = parseEcosystemConfig(out);
+    expect(processes[0].ports.api).toBe(6000);
+    expect(processes[0].ports.ui).toBe(6001);
+    expect(out).not.toContain('5555');
+    expect(out).not.toContain('5173');
+  });
+
   it('rewrites values inside a const PORTS = {...} block regardless of key name', () => {
     const content = `const PORTS = { API: 5555, UI: 5173 };
 module.exports = { apps: [{ name: 'x', script: 's.js', env: { PORT: PORTS.API, VITE_PORT: PORTS.UI } }] };
@@ -326,6 +341,15 @@ module.exports = { apps: [{ name: 'x', script: 's.js', env: { PORT: PORTS.API, V
     const { processes } = parseEcosystemConfig(out);
     expect(processes.find(p => p.name === 'a').ports.api).toBe(6001);
     expect(processes.find(p => p.name === 'b').ports.api).toBe(6002);
+  });
+
+  it('resolves 11+ remap pairs without placeholder prefix collision (index 1 vs 10)', () => {
+    const pairs = Array.from({ length: 11 }, (_, k) => [7000 + k, 8000 + k]);
+    const content = pairs.map(([o]) => `PORT: ${o}`).join('\n');
+    const out = rewriteEcosystemPorts(content, pairs);
+    for (const [, newP] of pairs) expect(out).toContain(`PORT: ${newP}`);
+    expect(out).not.toMatch(/PORT_REMAP/);
+    for (const [oldP] of pairs) expect(out).not.toContain(`PORT: ${oldP}`);
   });
 
   it('is a no-op when remap is empty or only contains identity pairs', () => {
