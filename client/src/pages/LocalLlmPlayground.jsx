@@ -350,7 +350,9 @@ export default function LocalLlmPlayground() {
   const selectedKeys = useMemo(() => new Set(selectedTargets.map(localLlmTargetKey)), [selectedTargets]);
   // `/api/ps` reports what's resident but not which model is mid-generation, so
   // derive the "processing" flag from our own in-flight run: the streaming chat
-  // target, or every target in a busy comparison.
+  // target, or every target in a busy comparison. Intentionally backend-agnostic
+  // — an LM Studio model driven by a comparison shows "Processing" too (the
+  // memory-residency badges above it stay Ollama-only since `/api/ps` is).
   const runningKeys = useMemo(() => {
     if (!busy) return new Set();
     if (activeMode === 'chat') return streamingChat ? new Set([localLlmTargetKey(streamingChat)]) : new Set();
