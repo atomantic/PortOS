@@ -72,10 +72,24 @@ function makeFakeChild() {
   return child;
 }
 
+// A spawnImpl that drives `child` through `script(child)` *after* the caller's
+// synchronous spawn-and-listen block has run. describeImageViaCli awaits
+// mkdtemp+writeFile, then synchronously spawns and attaches its data/close/error
+// listeners; deferring the script to a microtask guarantees those listeners are
+// attached before any event fires. A fixed `setTimeout` instead raced those
+// async file ops and dropped events on the floor (no listener yet) under CI
+// load, hanging the promise until the 10s test timeout.
+function spawnEmitting(child, script) {
+  return vi.fn(() => { queueMicrotask(() => script(child)); return child; });
+}
+
 describe('describeImageViaCli', () => {
   it('returns the trimmed stdout text in the API-compatible shape on exit 0', async () => {
     const child = makeFakeChild();
-    const spawnImpl = vi.fn(() => child);
+    const spawnImpl = spawnEmitting(child, (c) => {
+      c.stdout.emit('data', Buffer.from('  a woman in a red cloak  '));
+      c.emit('close', 0);
+    });
     const promise = describeImageViaCli({
       provider: { id: 'codex', command: 'codex', args: [] },
       dataUrl: PNG_DATA_URL,
@@ -83,10 +97,6 @@ describe('describeImageViaCli', () => {
       model: 'gpt-5',
       spawnImpl,
     });
-    // Let the mkdtemp/writeFile awaits settle before emitting process events.
-    await new Promise((r) => setTimeout(r, 10));
-    child.stdout.emit('data', Buffer.from('  a woman in a red cloak  '));
-    child.emit('close', 0);
     const result = await promise;
     expect(result).toEqual({
       text: 'a woman in a red cloak', finishReason: null, usage: null, reasoning: '',
@@ -96,15 +106,6 @@ describe('describeImageViaCli', () => {
 
   it('strips the codex session transcript down to the assistant reply', async () => {
     const child = makeFakeChild();
-    const spawnImpl = vi.fn(() => child);
-    const promise = describeImageViaCli({
-      provider: { id: 'codex', command: 'codex', args: [] },
-      dataUrl: PNG_DATA_URL,
-      prompt: 'caption',
-      model: 'gpt-5',
-      spawnImpl,
-    });
-    await new Promise((r) => setTimeout(r, 10));
     // A realistic codex exec transcript: banner … \ncodex\n<reply>\ntokens used …
     const transcript = [
       'OpenAI Codex v0.141.0',
@@ -115,22 +116,23 @@ describe('describeImageViaCli', () => {
       'a woman in a red cloak, bust shot',
       'tokens used: 1234',
     ].join('\n');
-    child.stdout.emit('data', Buffer.from(transcript));
-    child.emit('close', 0);
+    const spawnImpl = spawnEmitting(child, (c) => {
+      c.stdout.emit('data', Buffer.from(transcript));
+      c.emit('close', 0);
+    });
+    const promise = describeImageViaCli({
+      provider: { id: 'codex', command: 'codex', args: [] },
+      dataUrl: PNG_DATA_URL,
+      prompt: 'caption',
+      model: 'gpt-5',
+      spawnImpl,
+    });
     const result = await promise;
     expect(result.text).toBe('a woman in a red cloak, bust shot');
   });
 
   it('extracts the assistant reply when codex emits it AFTER the tokens-used footer', async () => {
     const child = makeFakeChild();
-    const spawnImpl = vi.fn(() => child);
-    const promise = describeImageViaCli({
-      provider: { id: 'codex', command: 'codex', args: [] },
-      dataUrl: PNG_DATA_URL,
-      prompt: 'caption',
-      spawnImpl,
-    });
-    await new Promise((r) => setTimeout(r, 10));
     // Newer codex format: the final reply follows the `tokens used\n<count>` footer.
     const transcript = [
       'OpenAI Codex v0.141.0',
@@ -140,38 +142,46 @@ describe('describeImageViaCli', () => {
       '1234',
       '{"boxes":[{"x":0,"y":0,"w":0.5,"h":1}]}',
     ].join('\n');
-    child.stdout.emit('data', Buffer.from(transcript));
-    child.emit('close', 0);
+    const spawnImpl = spawnEmitting(child, (c) => {
+      c.stdout.emit('data', Buffer.from(transcript));
+      c.emit('close', 0);
+    });
+    const promise = describeImageViaCli({
+      provider: { id: 'codex', command: 'codex', args: [] },
+      dataUrl: PNG_DATA_URL,
+      prompt: 'caption',
+      spawnImpl,
+    });
     const result = await promise;
     expect(result.text).toBe('{"boxes":[{"x":0,"y":0,"w":0.5,"h":1}]}');
   });
 
   it('rejects with a tail of stderr on a non-zero exit', async () => {
     const child = makeFakeChild();
-    const spawnImpl = vi.fn(() => child);
+    const spawnImpl = spawnEmitting(child, (c) => {
+      c.stderr.emit('data', Buffer.from('vision unavailable'));
+      c.emit('close', 1);
+    });
     const promise = describeImageViaCli({
       provider: { id: 'claude-code', command: 'claude', args: [] },
       dataUrl: PNG_DATA_URL,
       prompt: 'caption',
       spawnImpl,
     });
-    await new Promise((r) => setTimeout(r, 10));
-    child.stderr.emit('data', Buffer.from('vision unavailable'));
-    child.emit('close', 1);
     await expect(promise).rejects.toThrow(/exited 1.*vision unavailable/s);
   });
 
   it('rejects when the process fails to spawn', async () => {
     const child = makeFakeChild();
-    const spawnImpl = vi.fn(() => child);
+    const spawnImpl = spawnEmitting(child, (c) => {
+      c.emit('error', new Error('ENOENT'));
+    });
     const promise = describeImageViaCli({
       provider: { id: 'codex', command: 'codex', args: [] },
       dataUrl: PNG_DATA_URL,
       prompt: 'p',
       spawnImpl,
     });
-    await new Promise((r) => setTimeout(r, 10));
-    child.emit('error', new Error('ENOENT'));
     await expect(promise).rejects.toThrow(/Failed to spawn codex.*ENOENT/s);
   });
 
