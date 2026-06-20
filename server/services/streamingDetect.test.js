@@ -1,5 +1,8 @@
-import { describe, it, expect } from 'vitest';
-import { parseEcosystemConfig, rewriteEcosystemPorts } from './streamingDetect.js';
+import { describe, it, expect, afterEach } from 'vitest';
+import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
+import { parseEcosystemConfig, rewriteEcosystemPorts, writeEcosystemPorts } from './streamingDetect.js';
 
 describe('parseEcosystemConfig', () => {
   it('captures arbitrary *_PORT env vars and labels them by camelCased stem', () => {
@@ -352,9 +355,47 @@ module.exports = { apps: [{ name: 'x', script: 's.js', env: { PORT: PORTS.API, V
     for (const [oldP] of pairs) expect(out).not.toContain(`PORT: ${oldP}`);
   });
 
+  it('rewrites top-level port constants the parser derives ports from', () => {
+    // parseEcosystemConfig reads `const API_PORT = 5555` and resolves env refs
+    // to it; a rewrite skipping the constant would let the edit revert.
+    const content = `const API_PORT = 5555;
+const CDP_PORT = 5549;
+module.exports = { apps: [{ name: 'x', script: 's.js', env: { PORT: API_PORT, CDP_PORT: CDP_PORT } }] };
+`;
+    const out = rewriteEcosystemPorts(content, [[5555, 6000]]);
+    expect(out).toContain('const API_PORT = 6000;');
+    expect(out).toContain('const CDP_PORT = 5549;'); // not in remap — untouched
+    expect(parseEcosystemConfig(out).processes[0].ports.api).toBe(6000);
+  });
+
   it('is a no-op when remap is empty or only contains identity pairs', () => {
     const content = `module.exports = { apps: [{ name: 'x', script: 's.js', env: { PORT: 5173 } }] };`;
     expect(rewriteEcosystemPorts(content, [])).toBe(content);
     expect(rewriteEcosystemPorts(content, [[5173, 5173]])).toBe(content);
+  });
+});
+
+describe('writeEcosystemPorts', () => {
+  let dir;
+  afterEach(() => { if (dir) rmSync(dir, { recursive: true, force: true }); dir = null; });
+
+  it('rewrites the .js file first (the same one parseEcosystemFromPath reads) when both exist', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'eco-write-'));
+    const body = (port) => `module.exports = { apps: [{ name: 'x', script: 's.js', env: { PORT: ${port} } }] };\n`;
+    writeFileSync(join(dir, 'ecosystem.config.js'), body(5173));
+    writeFileSync(join(dir, 'ecosystem.config.cjs'), body(5173));
+
+    const result = await writeEcosystemPorts(dir, [[5173, 6000]]);
+    expect(result).toEqual({ file: 'ecosystem.config.js', changed: true });
+    // The reader's file is updated; the .cjs is left as-is (reader never sees it).
+    expect(readFileSync(join(dir, 'ecosystem.config.js'), 'utf-8')).toContain('PORT: 6000');
+    expect(readFileSync(join(dir, 'ecosystem.config.cjs'), 'utf-8')).toContain('PORT: 5173');
+  });
+
+  it('reports changed:false when no port literal matches', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'eco-write-'));
+    writeFileSync(join(dir, 'ecosystem.config.cjs'), `module.exports = { apps: [{ name: 'x', script: 's.js', env: { PORT: 4321 } }] };\n`);
+    const result = await writeEcosystemPorts(dir, [[5173, 6000]]);
+    expect(result).toEqual({ file: 'ecosystem.config.cjs', changed: false });
   });
 });

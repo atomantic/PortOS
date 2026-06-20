@@ -9,6 +9,15 @@ import { detectAppIcon } from './appIconDetect.js';
 /** App types that do not use PM2 for process management */
 export const NON_PM2_TYPES = new Set(['ios-native', 'macos-native', 'xcode', 'swift']);
 
+/**
+ * Ecosystem config filenames in the order they're resolved. The READER
+ * (parseEcosystemFromPath) and the WRITER (writeEcosystemPorts) must agree on
+ * this order: if a repo has both, the writer has to rewrite the same file the
+ * reader derives ports from, or a port edit lands in a file detection ignores
+ * and silently reverts on the next refresh.
+ */
+const ECOSYSTEM_CONFIG_FILENAMES = ['ecosystem.config.js', 'ecosystem.config.cjs'];
+
 /** Check if an app type uses PM2 for process management */
 export const usesPm2 = (type) => !NON_PM2_TYPES.has(type);
 
@@ -401,7 +410,7 @@ function extractVitePort(content) {
  * @returns {{ processes: Array, pm2Home: string|null }}
  */
 export async function parseEcosystemFromPath(dirPath) {
-  for (const ecosystemFile of ['ecosystem.config.js', 'ecosystem.config.cjs']) {
+  for (const ecosystemFile of ECOSYSTEM_CONFIG_FILENAMES) {
     const ecosystemPath = join(dirPath, ecosystemFile);
     if (existsSync(ecosystemPath)) {
       const content = await readFile(ecosystemPath, 'utf-8');
@@ -487,7 +496,8 @@ function findValuePortRegions(content) {
  *   1. numeric values inside a `const PORTS = {...}` block AND each per-app
  *      `ports: {...}` object (arbitrary keys — matched by value),
  *   2. `--port <n>` tokens in args strings,
- *   3. port-ish env keys (`PORT`, `*_PORT`, `VITE_PORT`) and `port:`.
+ *   3. port-ish env keys (`PORT`, `*_PORT`, `VITE_PORT`) and `port:`,
+ *   4. top-level port constants (`const API_PORT = <n>`).
  *
  * Each old value is first swapped to a unique placeholder, then placeholders
  * resolve to new values — so a remap like 6000→6001, 6001→6002 can't chain.
@@ -535,6 +545,16 @@ export function rewriteEcosystemPorts(content, remap) {
     );
   });
 
+  // 4) Top-level port constants — `const API_PORT = 5555` / `let CDP_PORT = …`.
+  //    parseEcosystemConfig derives ports from these (a `\w*PORT\w*` name `=`
+  //    number), so an edit that skipped them would revert on the next refresh.
+  pairs.forEach(([oldP], i) => {
+    out = out.replace(
+      new RegExp(`((?:const|let|var)\\s+\\w*PORT\\w*\\s*=\\s*)${oldP}\\b`, 'g'),
+      `$1${ph(i)}`
+    );
+  });
+
   // Resolve placeholders → new values.
   pairs.forEach(([, newP], i) => {
     out = out.split(ph(i)).join(String(newP));
@@ -552,7 +572,9 @@ export function rewriteEcosystemPorts(content, remap) {
  * @param {Map<number,number>|Array<[number,number]>} remap
  */
 export async function writeEcosystemPorts(repoPath, remap) {
-  for (const name of ['ecosystem.config.cjs', 'ecosystem.config.js']) {
+  // Same resolution order as parseEcosystemFromPath — rewrite the file the
+  // reader actually derives ports from (see ECOSYSTEM_CONFIG_FILENAMES).
+  for (const name of ECOSYSTEM_CONFIG_FILENAMES) {
     const filePath = join(repoPath, name);
     if (!existsSync(filePath)) continue;
     const content = await readFile(filePath, 'utf-8');
