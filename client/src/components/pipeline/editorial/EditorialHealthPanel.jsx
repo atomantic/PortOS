@@ -82,6 +82,11 @@ export default function EditorialHealthPanel({ seriesId, refreshKey = 0 }) {
       .finally(() => { if (activeSeriesRef.current === id) setLoading(false); });
   }, []);
 
+  // Clear stale health when the SERIES changes (not on a same-series refresh) so
+  // the loader shows instead of the previous series' score lingering in-flight.
+  // A keyed effect on seriesId alone keeps a refreshKey-only bump from blanking
+  // the panel mid-view.
+  useEffect(() => { setHealth(null); }, [seriesId]);
   useEffect(() => { load(seriesId); }, [seriesId, refreshKey, load]);
 
   const onGateChange = (gate) => {
