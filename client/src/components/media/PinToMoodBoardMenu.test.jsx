@@ -84,4 +84,48 @@ describe('PinToMoodBoardMenu', () => {
       { silent: true },
     );
   });
+
+  it('pins imageUrl-only (no mediaKey) for a synthetic non-media key like canon-sheet:', async () => {
+    api.listMoodBoards.mockResolvedValue([{ id: 'b1', name: 'Refs', items: [] }]);
+    api.addMoodBoardItem.mockResolvedValue({ id: 'mbi-3', type: 'image', imageUrl: '/data/image-refs/sheet.png' });
+
+    render(<PinToMoodBoardMenu item={{
+      kind: 'image', key: 'canon-sheet:hero:sheet.png', previewUrl: '/data/image-refs/sheet.png',
+    }} />);
+    fireEvent.click(screen.getByTitle('Pin to mood board'));
+    const row = await screen.findByRole('menuitemcheckbox', { name: /Refs/ });
+    await act(async () => { fireEvent.click(row); });
+
+    // The server rejects `canon-sheet:` as a mediaKey, so we send imageUrl only.
+    expect(api.addMoodBoardItem).toHaveBeenCalledWith(
+      'b1',
+      { type: 'image', imageUrl: '/data/image-refs/sheet.png' },
+      { silent: true },
+    );
+  });
+
+  it('matches existing imageUrl-only pins for membership/toggle (synthetic key)', async () => {
+    api.listMoodBoards.mockResolvedValue([
+      { id: 'b1', name: 'Refs', items: [{ id: 'mbi-7', type: 'image', imageUrl: '/data/image-refs/sheet.png' }] },
+    ]);
+    api.removeMoodBoardItem.mockResolvedValue({ id: 'b1', name: 'Refs', items: [] });
+
+    render(<PinToMoodBoardMenu item={{
+      kind: 'image', key: 'canon-sheet:hero:sheet.png', previewUrl: '/data/image-refs/sheet.png',
+    }} />);
+    fireEvent.click(screen.getByTitle('Pin to mood board'));
+    const row = await screen.findByRole('menuitemcheckbox', { name: /Refs/ });
+    expect(row).toHaveAttribute('aria-checked', 'true');
+
+    await act(async () => { fireEvent.click(row); });
+    expect(api.removeMoodBoardItem).toHaveBeenCalledWith('b1', 'mbi-7', { silent: true });
+  });
+
+  it('renders nothing when there is no valid media-key and no renderable thumbnail', () => {
+    const { container } = render(
+      <PinToMoodBoardMenu item={{ kind: 'image', key: 'noun:x.png', previewUrl: 'blob:abc' }} />,
+    );
+    expect(container).toBeEmptyDOMElement();
+    expect(screen.queryByTitle('Pin to mood board')).toBeNull();
+  });
 });

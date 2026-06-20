@@ -14,44 +14,63 @@ import {
 // CollectionPickerShell with the mood-board API injected as the data source, so
 // the popover positioning / search / inline-create plumbing isn't duplicated.
 //
-// `item` is the normalized MediaCard shape: `item.key` is the `<kind>:<ref>`
-// media-key (e.g. `image:foo.png`, `video:job-123`) and `item.previewUrl` is a
-// renderable thumbnail URL (or null). We pin as an `image`-type board item
-// carrying that mediaKey for source linkage PLUS the previewUrl as `imageUrl`
-// so the board renders the thumbnail directly — this is how video pins show a
-// frame without the detail-page resolver needing to map a `video:` key back to
-// a thumbnail filename (which it can't derive from the id alone).
+// `item` is the normalized MediaCard shape: `item.previewUrl` is a renderable
+// thumbnail URL (or null), and `item.key` is usually a `<kind>:<ref>` media-key
+// (e.g. `image:foo.png`, `video:job-123`) — but NOT always: the lightbox is
+// also used for synthetic items keyed `canon-sheet:…`, `comic-page:…`, `noun:…`
+// that the server's media-key validator rejects. So we pin a real mediaKey only
+// when the key is a valid `image:`/`video:` media-key (for source linkage +
+// dedup), and fall back to an imageUrl-only pin otherwise — keying membership
+// on whichever identifier we sent. The button hides only when NEITHER a valid
+// media-key NOR a renderable thumbnail is available (nothing to pin).
 //
-// Membership is keyed on `mediaKey === item.key`: a board "contains" this asset
-// when any of its items pins the same media-key. Pinning again removes it
-// (toggle), matching the collection menu's behavior.
+// Pinning the same asset again removes it (toggle), matching the collection
+// menu's behavior.
 
 const SIZES = {
   sm: { button: 'px-1.5 py-1 text-[10px]', icon: 'w-3 h-3' },
   md: { button: 'px-2 py-1.5 text-xs', icon: 'w-3.5 h-3.5' },
 };
 
-// Find the board item that pins this media-key (or undefined).
-const findPinned = (board, mediaKey) =>
-  (Array.isArray(board?.items) ? board.items : []).find((it) => it?.mediaKey === mediaKey);
+// Minimal mirror of the server's media-key vocabulary (server/lib/mediaItemKey
+// — only `image:`/`video:` kinds, non-empty single-segment ref). Kept inline
+// (one predicate) rather than mirroring the whole module: the board item schema
+// rejects anything else, so we must not send a non-media key as `mediaKey`.
+const isValidMediaKey = (key) => /^(image|video):[^:]+$/.test(key || '');
+
+// Find the board item this asset is pinned as — by mediaKey when we have a real
+// one, else by the imageUrl we pinned it under.
+const findPinned = (board, { mediaKey, imageUrl }) =>
+  (Array.isArray(board?.items) ? board.items : []).find((it) => (
+    mediaKey ? it?.mediaKey === mediaKey : (!!imageUrl && it?.imageUrl === imageUrl)
+  ));
 
 export default function PinToMoodBoardMenu({ item, size = 'sm' }) {
   const [open, setOpen] = useState(false);
   const [busyId, setBusyId] = useState(null);
   const triggerRef = useRef(null);
 
-  const mediaKey = item.key;
+  // A real media-key only when it matches the server vocabulary; synthetic keys
+  // (canon-sheet:/comic-page:/noun:) fall through to an imageUrl-only pin.
+  const mediaKey = isValidMediaKey(item.key) ? item.key : null;
   // Only http(s) / absolute app paths are valid imageUrls (matches the board
-  // item schema); a missing/blob preview is dropped so we pin mediaKey-only.
+  // item schema); a missing/blob preview is dropped.
   const thumbUrl = typeof item.previewUrl === 'string' && /^(https?:\/\/|\/)/.test(item.previewUrl)
     ? item.previewUrl
     : null;
-  // The board item payload: the media-key for source linkage, plus the
-  // thumbnail as imageUrl so a video pin (no derivable thumbnail from its key)
-  // still renders. Built once so the toggle + create-and-pin paths can't drift.
-  const pinPayload = useMemo(() => (thumbUrl
-    ? { type: 'image', mediaKey, imageUrl: thumbUrl }
-    : { type: 'image', mediaKey }), [mediaKey, thumbUrl]);
+  // The board item payload: a real media-key for source linkage + dedup when we
+  // have one, plus the thumbnail as imageUrl so the board renders directly (and
+  // so a video pin shows a frame its key can't resolve). Built once so the
+  // toggle + create-and-pin paths can't drift. Null when there's nothing to pin.
+  const pinPayload = useMemo(() => {
+    if (!mediaKey && !thumbUrl) return null;
+    const payload = { type: 'image' };
+    if (mediaKey) payload.mediaKey = mediaKey;
+    if (thumbUrl) payload.imageUrl = thumbUrl;
+    return payload;
+  }, [mediaKey, thumbUrl]);
+  // The identifiers membership/dedup keys on (mirror the payload).
+  const pinKey = useMemo(() => ({ mediaKey, imageUrl: thumbUrl }), [mediaKey, thumbUrl]);
 
   const handleToggleOpen = (e) => {
     e.stopPropagation();
@@ -59,7 +78,7 @@ export default function PinToMoodBoardMenu({ item, size = 'sm' }) {
   };
 
   const handleTogglePin = useCallback(async (board, updateBoards) => {
-    const pinned = findPinned(board, mediaKey);
+    const pinned = findPinned(board, pinKey);
     setBusyId(board.id);
     if (pinned) {
       const updated = await removeMoodBoardItem(board.id, pinned.id, { silent: true }).catch((err) => {
@@ -84,10 +103,10 @@ export default function PinToMoodBoardMenu({ item, size = 'sm' }) {
       b.id === board.id ? { ...b, items: [...(Array.isArray(b.items) ? b.items : []), created] } : b
     )));
     toast.success(`Pinned to ${board.name}`);
-  }, [mediaKey, pinPayload]);
+  }, [pinKey, pinPayload]);
 
   const renderItem = (board, { updateCollections }) => {
-    const pinned = !!findPinned(board, mediaKey);
+    const pinned = !!findPinned(board, pinKey);
     return (
       <button
         key={board.id}
@@ -123,6 +142,10 @@ export default function PinToMoodBoardMenu({ item, size = 'sm' }) {
       toast.success(`Pinned to ${created.name}`);
     }
   }, [pinPayload]);
+
+  // Nothing pinnable (no valid media-key and no renderable thumbnail) — hide the
+  // button rather than render a control that would 400 on click.
+  if (!pinPayload) return null;
 
   const sizeCls = SIZES[size] || SIZES.sm;
 
