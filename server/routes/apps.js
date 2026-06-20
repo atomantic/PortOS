@@ -548,6 +548,17 @@ router.put('/:id', asyncHandler(async (req, res, next) => {
       );
     }
 
+    // Served-by-API apps have NO explicit uiPort — it's always derived from
+    // apiPort on read. The modal still echoes the displayed (derived) uiPort on
+    // every save, so never let it be written to apps.json as an explicit field:
+    // doing so would freeze uiPort at its old value and stop it tracking a later
+    // apiPort change (e.g. API 6000→7000 must re-derive uiPort 7000, not keep a
+    // stored 6000). Any genuine change was already rejected above, so a
+    // remaining uiPort here is the harmless echo — strip it.
+    if (currentPort.uiPort === undefined && Number.isInteger(derivedUiPort) && 'uiPort' in data) {
+      delete data.uiPort;
+    }
+
     // Persist the value-keyed remap (distinct ports) and the targeted edits
     // (shared-value ports) in ONE atomic write. Doing them as two separate
     // writes would let the value-keyed pass land on disk before a later

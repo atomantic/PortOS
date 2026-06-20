@@ -374,9 +374,11 @@ describe('Apps Routes', () => {
       expect(appsService.updateApp).not.toHaveBeenCalled();
     });
 
-    it('does not reject when a rename echoes the derived uiPort unchanged (served-by-API)', async () => {
-      // Same served-by-API shape, but the modal echoes the derived uiPort (6000)
-      // unchanged on a rename — a no-op that must NOT 422.
+    it('strips the echoed derived uiPort so it is never persisted as an explicit field', async () => {
+      // Same served-by-API shape; the modal echoes the derived uiPort (6000)
+      // unchanged on a rename. That must NOT 422, but it also must NOT be stored
+      // as an explicit uiPort (which would stop it tracking apiPort) — the route
+      // strips it before updateApp.
       const mockApp = { id: 'app-001', name: 'App', type: 'node', repoPath: process.cwd(), apiPort: 6000, uiPort: 6000, devUiPort: 5556 };
       appsService.getAppById.mockResolvedValue(mockApp);
       streamingDetect.parseEcosystemFromPath.mockResolvedValue({
@@ -390,7 +392,38 @@ describe('Apps Routes', () => {
 
       expect(response.status).toBe(200);
       expect(streamingDetect.writeEcosystemPortEdits).not.toHaveBeenCalled();
-      expect(appsService.updateApp).toHaveBeenCalled();
+      // uiPort stripped — updateApp must not receive it as an explicit field.
+      const updateArg = appsService.updateApp.mock.calls[0][1];
+      expect(updateArg).not.toHaveProperty('uiPort');
+      expect(updateArg.name).toBe('Renamed');
+    });
+
+    it('changing apiPort on a served-by-API app persists the API port and drops the echoed derived uiPort', async () => {
+      // The real bug: API 6000→7000 with the modal echoing the OLD derived
+      // uiPort 6000. The apiPort edit must persist via the value-keyed rewrite,
+      // and the echoed uiPort must be stripped so it re-derives to 7000 (not
+      // frozen at 6000).
+      const mockApp = { id: 'app-001', name: 'App', type: 'node', repoPath: process.cwd(), apiPort: 6000, uiPort: 6000, devUiPort: 5556 };
+      appsService.getAppById.mockResolvedValue(mockApp);
+      streamingDetect.parseEcosystemFromPath.mockResolvedValue({
+        processes: [{ name: 'srv', ports: { api: 6000, devUi: 5556 } }]
+      });
+      appsService.updateApp.mockResolvedValue({ ...mockApp, apiPort: 7000 });
+
+      const response = await request(app)
+        .put('/api/apps/app-001')
+        .send({ apiPort: 7000, uiPort: 6000 });
+
+      expect(response.status).toBe(200);
+      // apiPort (distinct, value-keyed) persisted; uiPort echo not in the remap.
+      expect(streamingDetect.writeEcosystemPortEdits).toHaveBeenCalledWith(
+        process.cwd(),
+        [[6000, 7000]],
+        []
+      );
+      const updateArg = appsService.updateApp.mock.calls[0][1];
+      expect(updateArg).not.toHaveProperty('uiPort'); // re-derives from new apiPort
+      expect(updateArg.apiPort).toBe(7000);
     });
 
     it('does not reject a non-port edit on an app whose top-level ports are not stored (derived)', async () => {
