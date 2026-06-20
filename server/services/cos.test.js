@@ -98,7 +98,7 @@ function makeCapacityTracker(state, agentsByProject = {}) {
  * `evaluateTasks` mirrors this at cos.js:862 with `tasksToSpawn.length === 0`.
  * The replica enforces the same `spawned === 0` precondition.
  */
-function priorityDequeue(buckets, capacity) {
+function priorityDequeue(buckets, capacity, { paused = false } = {}) {
   const order = ['onDemand', 'user', 'autoSystem', 'mission', 'idle'];
 
   // Mission / idle only run when no pending user tasks exist, mirroring the
@@ -106,6 +106,10 @@ function priorityDequeue(buckets, capacity) {
   const hasPendingUserTasks = (buckets.user || []).length > 0;
 
   for (const bucketName of order) {
+    // Global pause: on-demand (explicit user "Run") still drains, but every
+    // autonomous/scheduled/user tier below is skipped — mirrors the
+    // `if (paused) return;` gate in dequeueNextTask after Priority 0.
+    if (paused && bucketName !== 'onDemand') break;
     if ((bucketName === 'mission' || bucketName === 'idle') && hasPendingUserTasks) continue;
     // Idle is stricter: only fires when no other bucket has spawned yet.
     if (bucketName === 'idle' && capacity.spawned.length > 0) continue;
@@ -165,6 +169,28 @@ describe('evaluateTasks — priority ordering', () => {
       'sys-auto-1',
     ]);
     expect(spawned.map(t => t._bucket)).toEqual(['onDemand', 'user', 'autoSystem']);
+  });
+
+  it('when globally paused, only the on-demand bucket drains (manual Run bypasses pause)', () => {
+    // A global pause stops scheduled/autonomous/user spawning, but an explicit
+    // user "Run" pushes an on-demand request that must still fire. Mirrors the
+    // production gate: Priority 0 (on-demand) is processed, then `if (paused) return;`.
+    const state = makeState({ maxConcurrentAgents: 5 });
+    const capacity = makeCapacityTracker(state);
+
+    const buckets = {
+      onDemand: [task('task-onDemand-1')],
+      user: [task('task-user-1')],
+      autoSystem: [task('sys-auto-1')],
+      mission: [task('sys-mission-1')],
+      idle: [task('sys-idle-1')],
+    };
+
+    const spawned = priorityDequeue(buckets, capacity, { paused: true });
+
+    // Only the on-demand request spawns; everything else stays paused.
+    expect(spawned.map(t => t.id)).toEqual(['task-onDemand-1']);
+    expect(spawned.map(t => t._bucket)).toEqual(['onDemand']);
   });
 
   it('mission + idle fire only when there are NO pending user tasks', () => {

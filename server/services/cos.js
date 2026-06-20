@@ -649,8 +649,11 @@ async function tryImmediateSpawn(task) {
 async function dequeueNextTask() {
   if (!isDaemonRunning()) return;
 
+  // A global pause stops scheduled/autonomous spawning, but NOT explicit user
+  // triggers: on-demand requests (Priority 0) are processed even while paused so
+  // a manual "Run" from an app's automation page still fires. The autonomous
+  // tiers (Priority 1+) are skipped below when paused.
   const paused = await isPaused();
-  if (paused) return;
 
   const state = await loadState();
   const runningAgents = Object.values(state.agents).filter(a => a.status === 'running').length;
@@ -750,6 +753,10 @@ async function dequeueNextTask() {
       }
     }
   }
+
+  // Global pause stops every autonomous/scheduled/user tier below; only the
+  // on-demand queue above (explicit user "Run") bypasses it.
+  if (paused) return;
 
   // Priority 1: User tasks
   const userTaskData = await getUserTasks();

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { RefreshCw, Play } from 'lucide-react';
+import { RefreshCw, Play, PauseCircle } from 'lucide-react';
 import toast from '../../ui/Toast';
 import BrailleSpinner from '../../BrailleSpinner';
 import CronInput from '../../CronInput';
@@ -22,23 +22,40 @@ const INTERVAL_OPTIONS = [
 export default function AutomationTab({ appId, appName }) {
   const [overrides, setOverrides] = useState({});
   const [schedule, setSchedule] = useState(null);
+  const [paused, setPaused] = useState(false);
+  const [resuming, setResuming] = useState(false);
   const [loading, setLoading] = useState(true);
   const [triggering, setTriggering] = useState(null);
   const [cronEditing, setCronEditing] = useState({});
 
   const fetchData = useCallback(async () => {
-    const [taskTypesData, scheduleData] = await Promise.all([
+    const [taskTypesData, scheduleData, statusData] = await Promise.all([
       api.getAppTaskTypes(appId).catch(() => ({ taskTypeOverrides: {} })),
-      api.getCosSchedule().catch(() => null)
+      api.getCosSchedule().catch(() => null),
+      api.getCosStatus().catch(() => null)
     ]);
     setOverrides(taskTypesData.taskTypeOverrides || {});
     setSchedule(scheduleData);
+    setPaused(statusData?.paused === true);
     setLoading(false);
   }, [appId]);
 
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  const handleResume = async () => {
+    setResuming(true);
+    const result = await api.resumeCos().catch(err => {
+      toast.error(err.message);
+      return null;
+    });
+    setResuming(false);
+    if (result?.success) {
+      setPaused(false);
+      toast.success('Scheduled automation resumed');
+    }
+  };
 
   const handleToggle = async (taskType, isEnabled) => {
     const newEnabled = !isEnabled;
@@ -132,6 +149,25 @@ export default function AutomationTab({ appId, appName }) {
 
   return (
     <div className="max-w-5xl space-y-4">
+      {paused && (
+        <div className="bg-port-warning/10 border border-port-warning/40 rounded-lg p-3 flex items-start gap-3">
+          <PauseCircle size={18} className="text-port-warning shrink-0 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium text-port-warning">Scheduled automation is globally paused</p>
+            <p className="text-xs text-gray-400 mt-0.5">
+              Scheduled and autonomous tasks won&apos;t run until resumed. You can still trigger an enabled task manually with <span className="text-gray-300">Run</span>.
+            </p>
+          </div>
+          <button
+            onClick={handleResume}
+            disabled={resuming}
+            className="px-3 py-1.5 bg-port-warning/20 text-port-warning hover:bg-port-warning/30 rounded-lg text-xs font-medium flex items-center gap-1 disabled:opacity-50 shrink-0"
+          >
+            <Play size={14} />
+            {resuming ? 'Resuming…' : 'Resume'}
+          </button>
+        </div>
+      )}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-4">
           <div>
