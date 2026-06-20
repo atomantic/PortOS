@@ -542,6 +542,25 @@ module.exports = { apps: [
     expect(ports.devUi).toBe(6000); // sibling untouched
   });
 
+  it('does NOT match a same-valued lowercase metadata field in a ports-reference block (no false api success)', () => {
+    // api is derived from `ports: PORTS.server` (external const). The block also
+    // carries a lowercase metadata field that happens to share the value. An
+    // unscoped `api:`/`ui:` key pattern would rewrite that metadata and falsely
+    // report applied while the real const reverts — so label-key patterns are
+    // scoped to inline ports objects only → this edit is unapplied.
+    const content = `const PORTS = { server: { api: 6000 } };
+module.exports = { apps: [
+  { name: 'srv', script: 's.js', ports: PORTS.server, max_restarts: 6000 }
+] };
+`;
+    const r = rewriteEcosystemPortsByProcess(content, [
+      { processName: 'srv', label: 'api', oldPort: 6000, newPort: 7000 },
+    ]);
+    expect(r.applied).toHaveLength(0);
+    expect(r.unapplied).toHaveLength(1);
+    expect(r.content).toBe(content); // metadata field untouched
+  });
+
   it('does NOT report success from an env-only ui rewrite when the ui port comes from a ports reference', () => {
     // ui is derived from `ports: PORTS.client` (external const), but the block
     // ALSO carries a same-valued VITE_PORT. Rewriting only VITE_PORT would be

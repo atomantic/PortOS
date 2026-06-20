@@ -512,17 +512,19 @@ router.put('/:id', asyncHandler(async (req, res, next) => {
     // Derived-uiPort guard. When an app has an API process plus a Vite dev UI
     // but no literal `ports.ui`, the prod UI is served by the API and the
     // displayed `uiPort` is *derived* (= apiPort). There's no independent ui
-    // literal to rewrite, so a uiPort edit to anything OTHER than that derived
-    // value can't persist — the modal echoes the derived value unchanged on a
-    // rename (a no-op), but a genuine change must be rejected rather than
-    // silently stored in apps.json only to revert on the next config refresh.
-    // The user changes this port by editing the API port instead.
-    const derivedUiPort = deriveUiPort(currentPort.uiPort, currentPort.apiPort, currentPort.devUiPort);
+    // literal to rewrite, so a uiPort edit can't persist on its own. Compare the
+    // submitted uiPort against the NEW derived value — i.e. the API port AFTER
+    // this same request's apiPort change (if any), so a valid combined save like
+    // `apiPort: 6000→7000, uiPort: 7000` (UI still following the API) is accepted
+    // rather than rejected against the stale old value. Only a uiPort that
+    // diverges from the new API port is a genuine independent change → 422 (the
+    // user must change the API port instead). The modal echoes the derived value
+    // on every save; that echo is stripped below so it's never stored explicitly.
+    const effectiveApiPort = Number.isInteger(data.apiPort) ? data.apiPort : currentPort.apiPort;
+    const derivedUiPort = deriveUiPort(undefined, effectiveApiPort, currentPort.devUiPort);
+    const uiIsDerived = currentPort.uiPort === undefined && Number.isInteger(derivedUiPort);
     const derivedUiChangeRejected =
-      currentPort.uiPort === undefined &&
-      Number.isInteger(derivedUiPort) &&
-      Number.isInteger(data.uiPort) &&
-      data.uiPort !== derivedUiPort;
+      uiIsDerived && Number.isInteger(data.uiPort) && data.uiPort !== derivedUiPort;
     const remap = [];
     const targetedEdits = []; // shared-value keys: rewritten by process + label
     for (const key of changedKeys) {
@@ -555,7 +557,7 @@ router.put('/:id', asyncHandler(async (req, res, next) => {
     // apiPort change (e.g. API 6000→7000 must re-derive uiPort 7000, not keep a
     // stored 6000). Any genuine change was already rejected above, so a
     // remaining uiPort here is the harmless echo — strip it.
-    if (currentPort.uiPort === undefined && Number.isInteger(derivedUiPort) && 'uiPort' in data) {
+    if (uiIsDerived && 'uiPort' in data) {
       delete data.uiPort;
     }
 
