@@ -974,6 +974,25 @@ describe('roster.unmodeled-names — LLM check (#1412)', () => {
     await getCheck(UNMODELED_NAMES).run(ctx);
     expect(seenVars.knownCharacters).toBe('');
   });
+
+  it('marks a single-chunk run as the final part so the recurrence judgment is enabled', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      callStagedLLM: async (_stage, vars) => { seenVars = vars; return { content: { findings: [] } }; },
+    });
+    await getCheck(UNMODELED_NAMES).run(ctx);
+    expect(seenVars.finalPart).toBe('true');
+  });
+
+  it('flags only the LAST part as final across a chunked manuscript (recurrence is whole-corpus)', async () => {
+    const finals = [];
+    const ctx = wholeCtx({
+      planManuscriptChunks: async () => ['# Issue 1\n\np1', '# Issue 2\n\np2', '# Issue 3\n\np3'],
+      callStagedLLM: async (_stage, vars) => { finals.push(vars.finalPart); return { content: { findings: [] } }; },
+    });
+    await getCheck(UNMODELED_NAMES).run(ctx);
+    expect(finals).toEqual(['', '', 'true']);
+  });
 });
 
 describe('canonRosterNamesSummary (#1412)', () => {

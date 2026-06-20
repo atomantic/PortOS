@@ -26,9 +26,12 @@ template change). The digest body is capped (`EDITORIAL_PRIOR_DIGEST_CHARS`) and
 `usableChars` budget, and the digest is prepended only when it fits the chunk's
 spare room — so it never displaces manuscript text or overflows the provider
 window (a chunk packed to the budget just runs without a digest).
-`style.conformance` (tense/POV established earlier) and
-`objects.unmotivated-interaction` (setup/payoff across chapters) opt in;
-`prose.info-dumping` stays per-chunk (its problems are localized).
+`style.conformance` (tense/POV established earlier),
+`objects.unmotivated-interaction` (setup/payoff across chapters), and
+`roster.unmodeled-names` (an unmodeled name's recurrence is whole-corpus, so a
+later part doesn't re-flag a name an earlier part surfaced and the throwaway/
+recurring judgment is gated to the final part) opt in; `prose.info-dumping` stays
+per-chunk (its problems are localized).
 
 The findings digest carries prior *problems* forward but not clean prior *setup*
 — a payoff in a later chunk can be mis-flagged "missing setup" when the earlier

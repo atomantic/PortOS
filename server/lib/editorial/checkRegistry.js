@@ -1852,7 +1852,16 @@ export const EDITORIAL_CHECKS = [
         stage: UNMODELED_NAMES_STAGE,
         category: 'casting',
         overheadTokens: EDITORIAL_PROMPT_OVERHEAD_TOKENS + estimateTokens(knownCharacters),
-        buildVars: (manuscript) => ({ manuscript, knownCharacters }),
+        // The recurrence judgment (one-appearance throwaway vs recurring) is a
+        // WHOLE-corpus call, so on a chunked manuscript an earlier part must NOT
+        // declare a name a throwaway — it may recur in a later part it hasn't seen.
+        // `finalPart` gates that judgment to the last chunk (mirrors chekhov /
+        // endings), and `crossChunkDigest` carries each part's surfaced names
+        // forward so the final part can confirm recurrence and the same unmodeled
+        // name isn't re-flagged across parts. A single-chunk run is its own final
+        // part, so the common (provider-fits-the-book) case judges the whole text.
+        crossChunkDigest: true,
+        buildVars: (manuscript, meta) => ({ manuscript, knownCharacters, finalPart: meta?.isFinal ? 'true' : '' }),
       });
     },
   },

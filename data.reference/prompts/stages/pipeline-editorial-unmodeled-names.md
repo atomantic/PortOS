@@ -55,19 +55,38 @@ in each header to attribute every finding to its `issueNumber`.
 {{manuscript}}
 ```
 
+{{#finalPart}}
+You are seeing the FINAL part of the manuscript, so you may now judge RECURRENCE
+across the whole story: an unmodeled name that appears in only one place is a
+one-appearance throwaway, while one that recurs across parts is a recurring
+unmodeled character. The "already recorded" digest above lists unmodeled names
+earlier parts already surfaced — do NOT repeat those; instead use them to decide
+recurrence (a name flagged earlier that also appears here recurs, so report it as
+recurring rather than a throwaway).
+{{/finalPart}}
+{{^finalPart}}
+You are seeing an EARLIER part of a long manuscript reviewed in pieces, so you
+CANNOT yet judge whether a name is a one-appearance throwaway — it may recur in a
+later part you haven't seen. Surface each unmodeled name you find here WITHOUT the
+throwaway/recurrence classification (use `Unmodeled character — "Name"`); a later
+part reconciles recurrence. The "already recorded" digest above lists unmodeled
+names earlier parts already surfaced — do NOT repeat those.
+{{/finalPart}}
+
 ## Task
 
 Scan the prose for capitalized proper nouns used as apparent character names,
 drop every one that is already in the known-characters list (name or alias) or is
 clearly a non-person (place / organization / brand / bare honorific), and report
 what remains. For each finding set `location` to the classification + the name,
-e.g. `Unmodeled character — "Marguerite"` or `Throwaway name — "Old Henrik" (1
-appearance)`. Quote a short verbatim anchor (≤ 200 chars) at the name's first use.
-Severity: a recurring unmodeled character who carries scenes is medium; a one-
-appearance throwaway name is low. If every named character in the prose is already
-modeled (or the only unmodeled proper nouns are places/orgs/brands/honorifics),
-return an empty `findings` array. Do not invent names the prose doesn't use, and do
-not flag a name just because it is rare — only because it is UNMODELED.
+e.g. `Unmodeled character — "Marguerite"` or (only when you can see the whole
+manuscript) `Throwaway name — "Old Henrik" (1 appearance)`. Quote a short verbatim
+anchor (≤ 200 chars) at the name's first use. Severity: a recurring unmodeled
+character who carries scenes is medium; a one-appearance throwaway name is low. If
+every named character in the prose is already modeled (or the only unmodeled proper
+nouns are places/orgs/brands/honorifics), return an empty `findings` array. Do not
+invent names the prose doesn't use, and do not flag a name just because it is rare —
+only because it is UNMODELED.
 
 ## Output contract
 
