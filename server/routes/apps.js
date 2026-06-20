@@ -382,34 +382,47 @@ router.put('/:id', asyncHandler(async (req, res, next) => {
   const PORT_KEYS = ['apiPort', 'uiPort', 'devUiPort'];
   const hasPortUpdate = PORT_KEYS.some(key => key in data);
   const existing = hasPortUpdate ? await appsService.getAppById(req.params.id) : null;
+
+  // Port fields in apps.json are *derived* from ecosystem.config.cjs (the
+  // source of truth PM2 reads). Persist the change to the canonical config
+  // FIRST, before the derived registry: an unreadable/unwritable config then
+  // surfaces as a failed request instead of a 200 that leaves apps.json and
+  // PM2 disagreeing (the write throws and bubbles to the error middleware).
+  if (existing && usesPm2(existing.type) && await pathExists(existing.repoPath)) {
+    // Count current values so a value-keyed rewrite never fires on a number
+    // shared by another port field (e.g. uiPort derived from apiPort, both
+    // 6000) — that would rewrite every occurrence and clobber the field the
+    // user didn't touch.
+    const valueCounts = new Map();
+    for (const key of PORT_KEYS) {
+      const v = existing[key];
+      if (Number.isInteger(v)) valueCounts.set(v, (valueCounts.get(v) || 0) + 1);
+    }
+    const remap = [];
+    for (const key of PORT_KEYS) {
+      const oldPort = existing[key];
+      const newPort = data[key];
+      if (!Number.isInteger(oldPort) || !Number.isInteger(newPort) || oldPort === newPort) continue;
+      if (valueCounts.get(oldPort) > 1) {
+        console.warn(`⚠️ Skipped ecosystem rewrite of ${key} for ${existing.name}: ${oldPort} is shared by another port — can't disambiguate by value`);
+        continue;
+      }
+      remap.push([oldPort, newPort]);
+    }
+    if (remap.length > 0) {
+      const result = await writeEcosystemPorts(existing.repoPath, remap);
+      if (result?.changed) {
+        console.log(`🔧 Updated ${result.file} ports for ${existing.name}: ${remap.map(([o, n]) => `${o}→${n}`).join(', ')} (restart the app to apply)`);
+      } else {
+        console.warn(`⚠️ Port edit for ${existing.name} found no matching literal in ecosystem config — registry updated, but restart/refresh won't pick up the new port`);
+      }
+    }
+  }
+
   const app = await appsService.updateApp(req.params.id, data);
 
   if (!app) {
     throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });
-  }
-
-  // Port fields in apps.json are *derived* from ecosystem.config.cjs by
-  // parseEcosystemConfig. Persisting an edit only to apps.json leaves PM2 on
-  // the old ports and lets the next config refresh clobber the change — so
-  // write the new ports back to the canonical config file too.
-  if (existing && usesPm2(app.type) && await pathExists(app.repoPath)) {
-    const remap = [];
-    for (const key of PORT_KEYS) {
-      const oldPort = existing[key];
-      const newPort = app[key];
-      if (Number.isInteger(oldPort) && Number.isInteger(newPort) && oldPort !== newPort) {
-        remap.push([oldPort, newPort]);
-      }
-    }
-    if (remap.length > 0) {
-      const result = await writeEcosystemPorts(app.repoPath, remap).catch((err) => {
-        console.error(`❌ Failed to write ports to ecosystem config for ${app.name}: ${err.message}`);
-        return null;
-      });
-      if (result?.changed) {
-        console.log(`🔧 Updated ${result.file} ports for ${app.name}: ${remap.map(([o, n]) => `${o}→${n}`).join(', ')} (restart the app to apply)`);
-      }
-    }
   }
 
   res.json(app);
