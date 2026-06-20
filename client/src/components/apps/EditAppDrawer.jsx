@@ -5,7 +5,7 @@ import IconPicker from '../IconPicker';
 import * as api from '../../services/api';
 import { PORTOS_APP_ID } from '../../services/apiCore';
 import toast from '../ui/Toast';
-import Modal from '../ui/Modal';
+import Drawer from '../Drawer';
 import Banner from '../ui/Banner';
 import { copyToClipboard } from '../../lib/clipboard';
 
@@ -21,7 +21,7 @@ const WORK_TRACKER_LABELS = Object.fromEntries(
   WORK_TRACKER_OPTIONS.map(o => [o.value, o.label])
 );
 
-export default function EditAppModal({ app, onClose, onSave }) {
+export default function EditAppDrawer({ app, onClose, onSave }) {
   const [formData, setFormData] = useState({
     name: app.name,
     icon: app.icon || 'package',
@@ -183,21 +183,17 @@ export default function EditAppModal({ app, onClose, onSave }) {
   };
 
   return (
-    <Modal
+    <Drawer
       open
       onClose={onClose}
-      // App-edit historically had no backdrop dismiss / Esc — the form is
-      // long-lived and an accidental Esc while editing nested JIRA pickers
-      // would lose state. Preserve that.
-      closeOnBackdrop={false}
+      title="Edit App"
+      widthClass="sm:w-[640px]"
+      // The form is long-lived and an accidental Esc / backdrop click while
+      // editing nested JIRA pickers would lose state. Preserve the modal's
+      // no-accidental-dismiss behavior.
       closeOnEsc={false}
-      size="md"
-      backdropClassName="bg-black/50"
-      ariaLabelledBy="edit-app-title"
-      panelClassName="bg-port-card border border-port-border rounded-xl p-4 sm:p-6 max-h-[90vh] overflow-auto"
+      closeOnBackdrop={false}
     >
-      <h2 id="edit-app-title" className="text-xl font-bold text-white mb-4">Edit App</h2>
-
         {error && (
           <div className="mb-4 p-3 bg-port-error/20 border border-port-error rounded-lg text-port-error text-sm">
             {error}
@@ -726,6 +722,6 @@ export default function EditAppModal({ app, onClose, onSave }) {
             </button>
           </div>
         </form>
-    </Modal>
+    </Drawer>
   );
 }

@@ -1,22 +1,31 @@
 import { useEffect } from 'react';
 import { X } from 'lucide-react';
+import { useScrollLock } from '../hooks/useScrollLock';
 
 // Right-side slide-in panel for "settings over a feature page" pattern.
 // Mobile (<sm): full width. Desktop: ~520px. Backdrop click + Esc close it.
 // Caller controls open state — typically driven by a URL search param so the
 // view stays deep-linkable per the project convention.
-export default function Drawer({ open, onClose, title, children, widthClass = 'sm:w-[520px]' }) {
+// Long-lived forms (e.g. the app-edit drawer) can opt out of accidental
+// dismissal via closeOnEsc / closeOnBackdrop so an Esc keystroke mid-edit
+// doesn't discard the form.
+export default function Drawer({
+  open,
+  onClose,
+  title,
+  children,
+  widthClass = 'sm:w-[520px]',
+  closeOnEsc = true,
+  closeOnBackdrop = true
+}) {
+  useScrollLock(open);
+
   useEffect(() => {
-    if (!open) return;
+    if (!open || !closeOnEsc) return;
     const onKey = (e) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', onKey);
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => {
-      window.removeEventListener('keydown', onKey);
-      document.body.style.overflow = prevOverflow;
-    };
-  }, [open, onClose]);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, onClose, closeOnEsc]);
 
   if (!open) return null;
 
@@ -24,7 +33,7 @@ export default function Drawer({ open, onClose, title, children, widthClass = 's
     <>
       <div
         className="fixed inset-0 z-40 bg-black/60"
-        onClick={onClose}
+        onClick={closeOnBackdrop ? onClose : undefined}
         aria-hidden="true"
       />
       <aside

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
 
-// Mock the API surface EditAppModal touches on mount, plus the work-tracker
+// Mock the API surface EditAppDrawer touches on mount, plus the work-tracker
 // resolver and the update path used on save.
 vi.mock('../../services/api', () => ({
   getJiraInstances: vi.fn(),
@@ -18,7 +18,7 @@ vi.mock('react-router-dom', () => ({
 }));
 
 import * as api from '../../services/api';
-import EditAppModal from './EditAppModal';
+import EditAppDrawer from './EditAppDrawer';
 
 const APP = {
   id: 'app-1',
@@ -46,9 +46,9 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-describe('EditAppModal work tracker selector', () => {
+describe('EditAppDrawer work tracker selector', () => {
   it('renders a labeled select with the five tracker options', async () => {
-    render(<EditAppModal app={APP} onClose={() => {}} onSave={() => {}} />);
+    render(<EditAppDrawer app={APP} onClose={() => {}} onSave={() => {}} />);
 
     const select = await screen.findByLabelText('Work Tracker');
     expect(select).toBeInTheDocument();
@@ -59,7 +59,7 @@ describe('EditAppModal work tracker selector', () => {
   });
 
   it('shows the resolved auto target from the work-tracker endpoint', async () => {
-    render(<EditAppModal app={APP} onClose={() => {}} onSave={() => {}} />);
+    render(<EditAppDrawer app={APP} onClose={() => {}} onSave={() => {}} />);
 
     await screen.findByLabelText('Work Tracker');
     expect(api.getAppWorkTracker).toHaveBeenCalledWith('app-1');
@@ -69,7 +69,7 @@ describe('EditAppModal work tracker selector', () => {
   });
 
   it('updates the selection locally and includes workTracker in the save payload', async () => {
-    render(<EditAppModal app={APP} onClose={() => {}} onSave={() => {}} />);
+    render(<EditAppDrawer app={APP} onClose={() => {}} onSave={() => {}} />);
 
     const select = await screen.findByLabelText('Work Tracker');
     fireEvent.change(select, { target: { value: 'gitlab' } });

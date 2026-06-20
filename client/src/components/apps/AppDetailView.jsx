@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Play, Square, RotateCcw, ExternalLink, Hammer, RefreshCw } from 'lucide-react';
+import { ArrowLeft, Play, Square, RotateCcw, ExternalLink, Hammer, RefreshCw, Pencil } from 'lucide-react';
 import DeployPanel from './DeployPanel';
+import EditAppDrawer from './EditAppDrawer';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
 import StatusBadge from '../StatusBadge';
@@ -30,6 +31,7 @@ export default function AppDetailView() {
   const [notFound, setNotFound] = useState(false);
   const [actionLoading, setActionLoading] = useState(null);
   const [buildLoading, setBuildLoading] = useState(false);
+  const [editing, setEditing] = useState(false);
 
   const fetchApp = useCallback(async () => {
     const data = await api.getApp(appId).catch(() => null);
@@ -45,6 +47,14 @@ export default function AppDetailView() {
   useEffect(() => {
     fetchApp();
   }, [fetchApp]);
+
+  // Close the edit drawer when navigating to a different app so its stale
+  // form state (initialized from the previous app) can't be saved against the
+  // newly loaded app id. Keyed on appId only — a same-app socket refresh must
+  // not interrupt an in-progress edit.
+  useEffect(() => {
+    setEditing(false);
+  }, [appId]);
 
   // Real-time updates
   useEffect(() => {
@@ -295,6 +305,13 @@ export default function AppDetailView() {
             {app.hasDeployScript && (
               <DeployPanel appId={appId} appName={app.name} />
             )}
+            <button
+              onClick={() => setEditing(true)}
+              className="px-2 py-1 bg-port-accent/20 text-port-accent hover:bg-port-accent/30 transition-colors rounded-lg border border-port-border flex items-center gap-1"
+            >
+              <Pencil size={14} />
+              <span className="text-xs">Edit</span>
+            </button>
           </div>
         </div>
 
@@ -320,6 +337,14 @@ export default function AppDetailView() {
       <div className="flex-1 overflow-auto p-4 sm:p-6">
         {renderTab()}
       </div>
+
+      {editing && (
+        <EditAppDrawer
+          app={app}
+          onClose={() => setEditing(false)}
+          onSave={() => { setEditing(false); fetchApp(); }}
+        />
+      )}
     </div>
   );
 }

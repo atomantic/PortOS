@@ -4,7 +4,6 @@ import toast from '../../ui/Toast';
 import { NON_PM2_TYPES } from '../constants';
 import BrailleSpinner from '../../BrailleSpinner';
 import KanbanBoard from '../../KanbanBoard';
-import EditAppModal from '../EditAppModal';
 import ActivityLog from '../ActivityLog';
 import SlashDoPanel from '../SlashDoPanel';
 import Banner from '../../ui/Banner';
@@ -19,7 +18,6 @@ const SCRIPT_ICONS = {
 };
 
 export default function OverviewTab({ app, onRefresh }) {
-  const [editingApp, setEditingApp] = useState(null);
   const [refreshingConfig, setRefreshingConfig] = useState(false);
   const [archiving, setArchiving] = useState(false);
   const [jiraTickets, setJiraTickets] = useState(null);
@@ -313,12 +311,6 @@ export default function OverviewTab({ app, onRefresh }) {
             {standardizing ? 'Standardizing...' : 'Standardize PM2'}
           </button>
         )}
-        <button
-          onClick={() => setEditingApp(app)}
-          className="px-3 py-1.5 bg-port-accent/20 text-port-accent hover:bg-port-accent/30 rounded-lg text-xs flex items-center gap-1"
-        >
-          Edit
-        </button>
         {app.id !== api.PORTOS_APP_ID && (
           <button
             onClick={app.archived ? handleUnarchive : handleArchive}
@@ -337,15 +329,6 @@ export default function OverviewTab({ app, onRefresh }) {
 
       {/* Activity Log */}
       <ActivityLog steps={steps} error={error} completed={completed} />
-
-      {/* Edit Modal */}
-      {editingApp && (
-        <EditAppModal
-          app={editingApp}
-          onClose={() => setEditingApp(null)}
-          onSave={() => { setEditingApp(null); onRefresh(); }}
-        />
-      )}
     </div>
   );
 }
