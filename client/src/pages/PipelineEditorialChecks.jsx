@@ -19,8 +19,10 @@ import EditorialCheckCard from '../components/pipeline/editorial/EditorialCheckC
 import EditorialCustomCheckForm from '../components/pipeline/editorial/EditorialCustomCheckForm';
 import EditorialFindingsTriage from '../components/pipeline/editorial/EditorialFindingsTriage';
 import EditorialHealthPanel from '../components/pipeline/editorial/EditorialHealthPanel';
+import ProviderModelSelector from '../components/ProviderModelSelector';
 import { groupChecksByScope } from '../lib/editorialChecks';
 import { usePipelineProgress } from '../hooks/usePipelineProgress';
+import useProviderModels from '../hooks/useProviderModels';
 import {
   listPipelineSeries,
   getEditorialChecks,
@@ -53,6 +55,20 @@ export default function PipelineEditorialChecks() {
 
   const [runActive, setRunActive] = useState(false);
   const [runStarting, setRunStarting] = useState(false);
+
+  // Optional AI provider/model override for the editorial pass. `allowDefault`
+  // keeps both ids empty until the user explicitly picks one — an empty choice
+  // means "use the active/stage provider" (the route's providerId/model are
+  // optional). `silent` so a provider-list fetch failure doesn't toast over
+  // this secondary control.
+  const {
+    providers,
+    selectedProviderId,
+    selectedModel,
+    availableModels,
+    setSelectedProviderId,
+    setSelectedModel,
+  } = useProviderModels({ allowDefault: true, silent: true });
 
   const checksById = useMemo(
     () => Object.fromEntries(checks.map((c) => [c.id, c])),
@@ -243,7 +259,12 @@ export default function PipelineEditorialChecks() {
       ids = enabledIds;
     }
     setRunStarting(true);
-    startEditorialChecksRun(seriesId, ids ? { checkIds: ids } : {}, { silent: true })
+    const runOpts = {};
+    if (ids) runOpts.checkIds = ids;
+    // Empty selections fall through to the active/stage provider server-side.
+    if (selectedProviderId) runOpts.providerId = selectedProviderId;
+    if (selectedModel) runOpts.model = selectedModel;
+    startEditorialChecksRun(seriesId, runOpts, { silent: true })
       .then((res) => {
         if (res?.alreadyRunning) toast('A run is already in progress for this series');
         setRunActive(true);
@@ -322,6 +343,27 @@ export default function PipelineEditorialChecks() {
                 <Play size={14} /> Run selected ({selectedIds.size})
               </button>
             ) : null}
+          </div>
+        </div>
+        {/* AI provider/model override for the editorial pass. Empty = use the
+            active/stage provider; disabled while a run is in flight or starting. */}
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs text-gray-500">AI pass:</span>
+          <div className="w-full sm:w-auto sm:min-w-[280px]">
+            <ProviderModelSelector
+              providers={providers}
+              selectedProviderId={selectedProviderId}
+              selectedModel={selectedModel}
+              availableModels={availableModels}
+              onProviderChange={setSelectedProviderId}
+              onModelChange={setSelectedModel}
+              compact
+              label="AI Provider"
+              disabled={runActive || runStarting}
+              emptyProviderOption="Default provider"
+              emptyModelOption="Default model"
+              alwaysShowModel
+            />
           </div>
         </div>
         {runActive ? (
