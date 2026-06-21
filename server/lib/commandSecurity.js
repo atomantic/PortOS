@@ -46,6 +46,37 @@ export function parseCommandArgs(str) {
   return args;
 }
 
+// PM2 runs ONE shared daemon for every app on the machine. These subcommands
+// take the whole daemon (and therefore every other app, including PortOS itself)
+// down or rewrite system boot config — never legitimate for a single app's
+// scoped management. Blocked regardless of who issues them. This list is mirrored
+// in the agent PATH-shim (server/lib/agentGuard/bin/pm2) — keep them in sync.
+export const PM2_BLOCKED_SUBCOMMANDS = new Set(['kill', 'startup', 'unstartup']);
+
+// Daemon-wide verbs that are fine against a single named process but catastrophic
+// with the `all` target (`pm2 stop all`, `pm2 delete all`, `pm2 restart all` —
+// the unscoped form the user's CLAUDE.md explicitly forbids). Blocked only when
+// the target is `all`.
+export const PM2_ALL_TARGET_VERBS = new Set([
+  'stop', 'delete', 'del', 'restart', 'reload', 'gracefulreload', 'scale',
+]);
+
+/**
+ * Reject pm2 invocations that would disrupt the shared PM2 daemon or other apps.
+ * `args` is everything after the `pm2` base command.
+ * Returns { valid, error? }.
+ */
+export function validatePm2Command(args) {
+  const sub = (args[0] || '').toLowerCase();
+  if (PM2_BLOCKED_SUBCOMMANDS.has(sub)) {
+    return { valid: false, error: `'pm2 ${sub}' is blocked — it would take down the shared PM2 daemon or every app on this machine (including PortOS). Use a scoped command like 'pm2 restart <process-name>'.` };
+  }
+  if (PM2_ALL_TARGET_VERBS.has(sub) && args.slice(1).some(a => a.toLowerCase() === 'all')) {
+    return { valid: false, error: `'pm2 ${sub} all' is blocked — it affects every app on this shared server. Target a specific process by name instead.` };
+  }
+  return { valid: true };
+}
+
 /**
  * Validate a command against the allowlist.
  * Returns { valid, error?, baseCommand?, args? }
@@ -64,7 +95,12 @@ export function validateCommand(command) {
   if (!ALLOWED_COMMANDS.has(baseCommand)) {
     return { valid: false, error: `Command '${baseCommand}' is not in the allowlist. Allowed: ${ALLOWED_COMMANDS_SORTED.join(', ')}` };
   }
-  return { valid: true, baseCommand, args: parts.slice(1) };
+  const args = parts.slice(1);
+  if (baseCommand === 'pm2') {
+    const pm2Check = validatePm2Command(args);
+    if (!pm2Check.valid) return pm2Check;
+  }
+  return { valid: true, baseCommand, args };
 }
 
 // Patterns matching sensitive env var values in command output

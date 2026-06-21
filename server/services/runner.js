@@ -8,6 +8,7 @@ import { join } from 'path';
 import { ensureDir, tryReadFile } from '../lib/fileUtils.js';
 import { hasModelFlag, extractBakedModel } from '../lib/providerModels.js';
 import { buildCliArgs } from '../lib/cliProviderArgs.js';
+import { agentGuardEnv } from '../lib/agentGuard/index.js';
 import { createImmediateFallbackSignalDetector } from '../lib/aiToolkit/errorDetection.js';
 import {
   setAIToolkitInstance,
@@ -173,7 +174,9 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, on
 
   childProcess = spawn(provider.command, args, {
     cwd: workspacePath,
-    env: (() => { const e = { ...process.env, ...provider.envVars }; delete e.CLAUDECODE; return e; })(),
+    // Prepend the pm2 shim (agentGuardEnv) onto the final PATH so an unrestricted
+    // agent can't `pm2 kill` the shared daemon. See server/lib/agentGuard.
+    env: (() => { const e = { ...process.env, ...provider.envVars }; delete e.CLAUDECODE; Object.assign(e, agentGuardEnv(e)); return e; })(),
     windowsHide: true
   });
 

@@ -1,5 +1,9 @@
 # Unreleased
 
+## Fixed
+
+- **AI fixers can no longer take down the whole server with `pm2 kill`.** PortOS runs every managed app under one shared pm2 daemon, so `pm2 kill` / `pm2 delete all` stops *everything* — including PortOS itself. A "Fix with AI" / autofixer agent (which runs its CLI fully unrestricted) could be talked into running one while trying to "restart the app." Three layers now block this: (1) the shell-command allowlist (`validateCommand`) rejects `pm2 kill`/`startup`/`unstartup` and any `pm2 <verb> all` for the manual command runner and autonomous jobs; (2) spawned AI agents (CoS tasks, the autofixer app) get a guarded `pm2` shim prepended to their PATH that intercepts those same destructive subcommands before they reach the real pm2 — a hard guard that holds even under `--dangerously-skip-permissions`; (3) every agent prompt now states the shared-daemon rule and to only `pm2 restart <its-own-process>`. Scoped commands (`pm2 restart my-app`, `pm2 logs my-app`, `pm2 list`) still work.
+
 ## Changed
 
 - The **Social Agents** page now lives under the **Chief of Staff** sidebar section instead of **Brain**, in both the sidebar and the ⌘K / voice nav manifest.

@@ -40,6 +40,7 @@ import {
   inferTuiCommand,
   applyCommandDefaults,
 } from '../lib/tuiHandshake.js';
+import { agentGuardEnv } from '../lib/agentGuard/index.js';
 
 // Agent-specific timing/lifecycle constants (not shared with the one-shot
 // runner — agents stay alive much longer and write a sentinel file when done).
@@ -129,7 +130,10 @@ export function createAgentTuiSession({ agentId, provider, tuiConfig, cwd, onDat
     label: `${provider.name} ${agentId}`,
     command: tuiConfig.commandLine,
     initialCommand: tuiConfig.commandLine,
-    env: provider.envVars || {},
+    // agentGuardEnv() prepends the pm2 shim to the agent session's PATH (and
+    // points it at the real pm2). Spread LAST so it wins over any provider PATH.
+    // Only AI agent sessions get this — the user's own Shell page does not.
+    env: { ...(provider.envVars || {}), ...agentGuardEnv() },
     onData,
     onExit,
   });

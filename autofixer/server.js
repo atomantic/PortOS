@@ -8,9 +8,16 @@ import { createRequire } from 'module';
 // Lets the autofixer honor the user's configured CLI provider/model instead
 // of hardcoding `claude -p`.
 import { pickCliProvider, runCliProviderPrompt } from '../server/lib/cliProviderRun.js';
+import { agentGuardEnv } from '../server/lib/agentGuard/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+
+// Prepend the guarded pm2 shim to this process's PATH. The fix agent spawned by
+// runCliProviderPrompt inherits process.env, so a confused agent told to "restart
+// PM2" can't `pm2 kill` the shared daemon (which would down every app + PortOS).
+// Our own execPm2 calls use an absolute PM2_BIN, so they bypass the shim.
+Object.assign(process.env, agentGuardEnv());
 
 // Resolve PM2 binary to avoid pm2.cmd on Windows (creates visible CMD windows)
 const require = createRequire(import.meta.url);
@@ -196,9 +203,13 @@ async function fixProcess(processName, app, errorLogs, outputLogs) {
 1. Analyze the error logs below to understand what caused the crash
 2. Read relevant source files to understand the issue
 3. Fix the bug by editing the necessary files
-4. After fixing, run: pm2 restart ${processName}
+4. After fixing, restart ONLY this process: pm2 restart ${processName}
 5. Verify the process starts successfully by checking pm2 list
 6. If it still fails, analyze the new error and try again (max 2 attempts)
+
+**🛑 PM2 SAFETY — this is a SHARED server running many apps:**
+- ONLY ever run \`pm2 restart ${processName}\` (or \`pm2 logs ${processName}\`). NEVER target a different process.
+- NEVER run \`pm2 kill\`, \`pm2 stop\`, \`pm2 delete\`, \`pm2 startup\`/\`unstartup\`, or any \`... all\` form. They take down EVERY app on this machine, including PortOS itself, and are blocked — they will fail.
 
 **App Information:**
 - App Name: ${app.name}
@@ -217,7 +228,7 @@ ${outputLogs || '(no output logs available)'}
 \`\`\`
 
 **Your Task:**
-Fix the issue and restart the process. Be systematic and thorough. Use the Bash tool to restart PM2 after making your fixes.`;
+Fix the issue and restart the process. Be systematic and thorough. Use the Bash tool to run \`pm2 restart ${processName}\` after making your fixes — never a broader pm2 command.`;
 
   await ensureHistoryDir();
 
