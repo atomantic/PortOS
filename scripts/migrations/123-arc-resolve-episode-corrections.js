@@ -21,12 +21,12 @@ import { makePromptReplaceMigration } from './_lib.js';
 
 export const ACCEPTED_OLD_MD5 = {
   'pipeline-arc-resolve.md': [
-    '5b340885c6e8f8afc63424d6b5bc7eb7', // pre-120 (episodes forbidden)
+    '5b340885c6e8f8afc63424d6b5bc7eb7', // pre-123 (episodes forbidden)
   ],
 };
 
 export const NEW_SHIPPED_MD5 = {
-  'pipeline-arc-resolve.md': 'cc27b4da1d1a13c35e35d1c2d6183815', // post-120 (episodes[] channel)
+  'pipeline-arc-resolve.md': 'cc27b4da1d1a13c35e35d1c2d6183815', // post-123 (episodes[] channel)
 };
 
 const { applyMigration, up } = makePromptReplaceMigration({
