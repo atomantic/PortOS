@@ -145,6 +145,123 @@ const PLAN_SELF_CLAIM_TASK_TYPES = new Set(['plan-task']);
 // cleanly — burning an LLM round for nothing.
 const PLAN_GATE_TASK_TYPES = new Set(['plan-task']);
 
+// Concrete directives substituted into the {issueAuthorFilter} placeholder of
+// the GitHub/GitLab claim-issue prompt bodies. 'owner' (the default, matching
+// /do:next --issues) restricts to repo/project-owner-filed issues; 'any' claims
+// any open issue. The plan/jira prompts carry no {issueAuthorFilter} placeholder
+// so the value is a harmless no-op for them.
+const ISSUE_AUTHOR_FILTER_BLOCKS = {
+  gh: {
+    any: '**Author filter: any author.** Claim the next eligible open issue regardless of who filed it — omit `--author` from `gh issue list` entirely.',
+    owner: '**Author filter: repository owner only.** Only claim issues filed by the repository owner/creator. Resolve the owner with `OWNER="$(gh repo view --json owner -q .owner.login)"` and pass `--author "$OWNER"` (a quoted single token) to `gh issue list`; skip issues opened by anyone else.'
+  },
+  glab: {
+    any: '**Author filter: any author.** Claim the next eligible open issue regardless of who opened it — omit `--author` from `glab issue list`.',
+    owner: '**Author filter: project owner only.** Only claim issues opened by the project owner. Resolve the owner from the project namespace (e.g. `glab repo view`), then pass `--author <owner>` to `glab issue list`; skip issues opened by anyone else.'
+  }
+};
+
+/**
+ * Resolve the {issueAuthorFilter} directive for a resolved claim task type.
+ * The forge is inferred from the prompt body: `glab` for the GitLab claim flow,
+ * `gh` for GitHub, and the gh block as a default for plan/jira (whose prompts
+ * have no placeholder, so the value is never substituted anyway).
+ */
+export function resolveIssueAuthorFilterBlock(promptTaskType, mode = 'owner') {
+  const issueForge = promptTaskType === 'claim-issue-gitlab' ? 'glab'
+    : promptTaskType === 'claim-issue' ? 'gh'
+      : null;
+  const filterMode = mode === 'any' ? 'any' : 'owner';
+  return (ISSUE_AUTHOR_FILTER_BLOCKS[issueForge] || ISSUE_AUTHOR_FILTER_BLOCKS.gh)[filterMode];
+}
+
+/**
+ * Build a one-off "claim the next work item" task for `app`, routed by the app's
+ * configured workTracker — the manual (Slashdo `/do:next` button) counterpart to
+ * the scheduled `claim-work` router below. Resolves the tracker, delegates to the
+ * matching claim prompt body (plan-task / claim-issue / claim-issue-gitlab /
+ * jira-sprint-manager), substitutes the standard placeholders, and surfaces the
+ * delegated flow's worktree/PR posture (jira-sprint-manager needs CoS-managed
+ * isolation; the plan/github/gitlab prompts self-manage their worktree + PR).
+ *
+ * `issueAuthorFilter` and `reviewers` default to the app's *configured*
+ * `claim-work` behavior (global schedule metadata → per-app override → Code
+ * Review Defaults), exactly as the scheduled `claim-work` router resolves them —
+ * so clicking the button honors `issueAuthorFilter: 'any'` and non-Copilot
+ * reviewers instead of silently forcing owner-only + Copilot. A direct
+ * `claim-work` prompt customization likewise overrides the tracker-specific body
+ * (matching the scheduled router's `promptKeyForBody` selection). Explicit
+ * options still win when a caller passes them.
+ *
+ * @returns {Promise<{ tracker, source, promptTaskType, prompt, taskMetadata }>}
+ */
+export async function buildClaimWorkTask(app, { issueAuthorFilter, reviewers } = {}) {
+  const { resolveAppWorkTracker, trackerToClaimTaskType } = await import('../lib/workTracker.js');
+  const { getTaskPrompt } = await import('./taskPromptService.js');
+  const taskSchedule = await import('./taskSchedule.js');
+
+  const wt = await resolveAppWorkTracker(app);
+  const promptTaskType = trackerToClaimTaskType(wt.resolved) || 'plan-task';
+
+  // Resolve the app's configured claim-work metadata the same way the scheduled
+  // router does: global schedule metadata, then per-app overrides on top (managed
+  // agent fields stripped, both passes sanitized/value-constrained). This is what
+  // carries the user's `issueAuthorFilter` and reviewer choices into the prompt.
+  const interval = await taskSchedule.getTaskInterval('claim-work');
+  const metadata = {};
+  const sanitizedGlobalMeta = sanitizeTaskMetadata(interval.taskMetadata);
+  if (sanitizedGlobalMeta) Object.assign(metadata, sanitizedGlobalMeta);
+  const appOverrides = await getAppTaskTypeOverrides(app.id);
+  const strippedAppOverride = taskSchedule.stripManagedAgentOptionsFromOverride(
+    'claim-work', appOverrides['claim-work']?.taskMetadata
+  );
+  const sanitizedAppMeta = sanitizeTaskMetadata(strippedAppOverride);
+  if (sanitizedAppMeta) Object.assign(metadata, sanitizedAppMeta);
+
+  // Honor a direct claim-work prompt customization if the user set one;
+  // otherwise delegate to the resolved tracker's prompt body. Mirrors the
+  // scheduled router's `promptKeyForBody` selection — a custom claim-work prompt
+  // overrides the tracker-specific body for both paths.
+  const template = await getTaskPrompt(interval.prompt ? 'claim-work' : promptTaskType);
+
+  // Explicit option > configured metadata > 'owner' default.
+  const resolvedAuthorFilter = issueAuthorFilter ?? metadata.issueAuthorFilter ?? 'owner';
+
+  // Reviewers: explicit option wins; otherwise mirror the scheduler — merge
+  // configured metadata reviewers with the user's Code Review Defaults, dropping
+  // local-LLM reviewers the claim prompts can't drive, falling back to the
+  // hardcoded default when filtering empties the list. A settings read error
+  // degrades to the default inside normalizeReviewers, so it never blocks.
+  let reviewersList;
+  if (reviewers !== undefined) {
+    reviewersList = (Array.isArray(reviewers) ? reviewers : [reviewers]).filter(Boolean);
+  } else {
+    const codeReviewDefaults = await getCodeReviewDefaults().catch(() => null);
+    reviewersList = normalizeReviewers(metadata, codeReviewDefaults?.reviewers)
+      .filter((r) => !LOCAL_LLM_REVIEWERS.includes(r));
+  }
+  const reviewersCsv = (reviewersList.length ? reviewersList : [...DEFAULT_REVIEWERS]).join(',');
+  const issueAuthorFilterBlock = resolveIssueAuthorFilterBlock(promptTaskType, resolvedAuthorFilter);
+
+  const prompt = template
+    .replace(/\{appName\}/g, app.name)
+    .replace(/\{repoPath\}/g, app.repoPath)
+    .replace(/\{appId\}/g, app.id)
+    // Function-form replacers so literal `$`/`$1` in the substituted text isn't
+    // interpreted as a backreference (see the scheduler's same-pattern note).
+    .replace(/\{reviewers\}/g, () => reviewersCsv)
+    .replace(/\{issueAuthorFilter\}/g, () => issueAuthorFilterBlock);
+
+  // Mirror the scheduler: inherit the delegated flow's isolation posture so the
+  // JIRA route runs in a CoS-managed worktree rather than the live checkout.
+  const delegatedMeta = taskSchedule.DEFAULT_TASK_INTERVALS[promptTaskType]?.taskMetadata || {};
+  const taskMetadata = {};
+  if ('useWorktree' in delegatedMeta) taskMetadata.useWorktree = delegatedMeta.useWorktree;
+  if ('openPR' in delegatedMeta) taskMetadata.openPR = delegatedMeta.openPR;
+
+  return { tracker: wt.resolved, source: wt.source, promptTaskType, prompt, taskMetadata };
+}
+
 /**
  * For feature-ideas / plan-task, read the target repo's PLAN.md, find which
  * item IDs are already in flight via branch/PR scan, and pick the first
@@ -1446,32 +1563,10 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
   const promptReviewers = normalizeReviewers(metadata, codeReviewDefaults?.reviewers)
     .filter((r) => !LOCAL_LLM_REVIEWERS.includes(r));
   const reviewersCsv = (promptReviewers.length ? promptReviewers : [...DEFAULT_REVIEWERS]).join(',');
-  // claim-issue: expand {issueAuthorFilter} into a concrete directive telling
-  // the agent which open issues are claimable. The filter was already merged
-  // (global → per-app override) and value-constrained by sanitizeTaskMetadata,
-  // so read it from `metadata`. 'owner' (the default, matching /claim --issues)
-  // restricts to repo-owner-filed issues; 'any' claims any open issue.
-  // The forge whose CLI the resolved prompt body documents — `glab` for the
-  // GitLab claim flow, `gh` for the GitHub one, null for plan/jira (whose
-  // prompts carry no {issueAuthorFilter} placeholder, so the replace is a
-  // harmless no-op there).
-  const issueForge = promptTaskType === 'claim-issue-gitlab' ? 'glab'
-    : promptTaskType === 'claim-issue' ? 'gh'
-    : null;
-  const authorFilterMode = (metadata.issueAuthorFilter || 'owner') === 'any' ? 'any' : 'owner';
-  const ISSUE_AUTHOR_FILTER_BLOCKS = {
-    gh: {
-      any: '**Author filter: any author.** Claim the next eligible open issue regardless of who filed it — omit `--author` from `gh issue list` entirely.',
-      owner: '**Author filter: repository owner only.** Only claim issues filed by the repository owner/creator. Resolve the owner with `OWNER="$(gh repo view --json owner -q .owner.login)"` and pass `--author "$OWNER"` (a quoted single token) to `gh issue list`; skip issues opened by anyone else.'
-    },
-    glab: {
-      any: '**Author filter: any author.** Claim the next eligible open issue regardless of who opened it — omit `--author` from `glab issue list`.',
-      owner: '**Author filter: project owner only.** Only claim issues opened by the project owner. Resolve the owner from the project namespace (e.g. `glab repo view`), then pass `--author <owner>` to `glab issue list`; skip issues opened by anyone else.'
-    }
-  };
-  // Default to the gh block for plan/jira (null forge) — their prompts have no
-  // {issueAuthorFilter} placeholder so the value is never substituted anyway.
-  const issueAuthorFilterBlock = (ISSUE_AUTHOR_FILTER_BLOCKS[issueForge] || ISSUE_AUTHOR_FILTER_BLOCKS.gh)[authorFilterMode];
+  // {issueAuthorFilter} directive — the filter was already merged (global →
+  // per-app override) and value-constrained by sanitizeTaskMetadata, so read it
+  // from `metadata` (default 'owner', matching /do:next --issues).
+  const issueAuthorFilterBlock = resolveIssueAuthorFilterBlock(promptTaskType, metadata.issueAuthorFilter || 'owner');
 
   const description = promptTemplate
     .replace(/\{appName\}/g, app.name)

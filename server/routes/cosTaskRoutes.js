@@ -8,6 +8,9 @@ import * as cos from '../services/cos.js';
 import * as taskWatcher from '../services/taskWatcher.js';
 import { enhanceTaskPrompt } from '../services/taskEnhancer.js';
 import { loadSlashdoCommand } from '../services/subAgentSpawner.js';
+import { buildClaimWorkTask } from '../services/cosTaskGenerator.js';
+import { getAppById } from '../services/apps.js';
+import { workTrackerLabel } from '../lib/workTracker.js';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
 import { createCosTaskSchema, updateCosTaskSchema, validateRequest } from '../lib/validation.js';
 
@@ -20,7 +23,7 @@ const SLASHDO_COMMANDS = {
   push:           { label: 'Push', description: 'Commit and push all work with changelog' },
   review:         { label: 'Review', description: 'Deep code review of changed files' },
   replan:         { label: 'Replan', description: 'Audit PLAN.md, archive completed items, prune stale work' },
-  next:           { label: 'Next', description: 'Claim the next unclaimed PLAN.md item and ship a PR' },
+  next:           { label: 'Next', description: 'Claim the next unclaimed work item (per the app\'s Work Tracker) and ship a PR' },
   release:        { label: 'Release', description: 'Create a release PR' },
   better:         { label: 'Better', description: 'Unified DevSecOps audit and remediation' },
   'better-swift': { label: 'Better Swift', description: 'SwiftUI DevSecOps audit and remediation' }
@@ -82,14 +85,36 @@ router.post('/tasks/slashdo', asyncHandler(async (req, res) => {
     throw new ServerError('App ID is required', { status: 400, code: 'VALIDATION_ERROR' });
   }
 
-  const content = await loadSlashdoCommand(command);
-  if (!content) {
-    throw new ServerError(`Failed to load slashdo command: ${command}`, { status: 500, code: 'COMMAND_LOAD_FAILED' });
+  const meta = SLASHDO_COMMANDS[command];
+
+  // `/do:next` is the work-claim consumer: route it through the same
+  // workTracker-aware logic the scheduled `claim-work` flow uses, so the manual
+  // button honors the app's per-app Work Tracker (PLAN.md / GitHub / GitLab /
+  // JIRA) instead of always draining PLAN.md. Every other command inlines its
+  // raw slashdo body verbatim.
+  let context;
+  let taskMetadata = { useWorktree: false, openPR: false };
+  let description;
+  if (command === 'next') {
+    const appObj = await getAppById(app);
+    if (!appObj) {
+      throw new ServerError(`App not found: ${app}`, { status: 404, code: 'APP_NOT_FOUND' });
+    }
+    const claim = await buildClaimWorkTask(appObj);
+    context = claim.prompt;
+    // claim.taskMetadata overrides the false/false default only where it carries
+    // a key (jira-sprint-manager flips both to CoS-managed worktree+PR).
+    taskMetadata = { ...taskMetadata, ...claim.taskMetadata };
+    description = `Run /do:next for ${appObj.name} — claim next ${workTrackerLabel(claim.tracker)} item and ship a PR`;
+  } else {
+    context = await loadSlashdoCommand(command);
+    if (!context) {
+      throw new ServerError(`Failed to load slashdo command: ${command}`, { status: 500, code: 'COMMAND_LOAD_FAILED' });
+    }
+    description = `Run /do:${command} for ${app} — ${meta.description}`;
   }
 
-  const meta = SLASHDO_COMMANDS[command];
-  const description = `Run /do:${command} for ${app} — ${meta.description}`;
-  const taskData = { description, app, context: content, useWorktree: false, openPR: false, simplify: false, reviewLoop: false };
+  const taskData = { description, app, context, ...taskMetadata, simplify: false, reviewLoop: false };
   const result = await cos.addTask(taskData, 'user');
 
   if (result?.duplicate) {
