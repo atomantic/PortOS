@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { __testing } from './scriptVerify.js';
 
-const { findEmptyDialogueIssues, mergeVerifyIssues } = __testing;
+const {
+  findDeterministicIssues,
+  findEmptyDialogueIssues,
+  findMissingDescriptionIssues,
+  mergeVerifyIssues,
+} = __testing;
 
 describe('scriptVerify deterministic checks', () => {
   it('flags an empty quoted dialogue line with page and panel location', () => {
@@ -57,5 +62,60 @@ describe('scriptVerify deterministic checks', () => {
 
     expect(findEmptyDialogueIssues(script)).toEqual([]);
     expect(mergeVerifyIssues(existing, existing)).toEqual(existing);
+  });
+
+  it('flags panel prose that is missing the Description label', () => {
+    const script = [
+      '## Page 7',
+      '',
+      'Panel 4',
+      'Medium. Cassian taps the table twice, eyes fixed on the locked door.',
+      'Caption: (none)',
+      'Dialogue:',
+      '- CASSIAN: "Now."',
+      'SFX: TAP TAP',
+    ].join('\n');
+
+    expect(findMissingDescriptionIssues(script)).toEqual([
+      expect.objectContaining({
+        severity: 'high',
+        location: 'page 7 / panel 4',
+        problem: expect.stringContaining('missing the required "Description:" label before "Medium. Cassian taps the table twice'),
+        suggestion: expect.stringContaining('Add `Description:`'),
+      }),
+    ]);
+  });
+
+  it('flags a panel that has fields but no Description field', () => {
+    const script = [
+      '## Page 16',
+      'Panel 3',
+      'Caption: (none)',
+      'Dialogue:',
+      '- JUNO: "No."',
+      'SFX: (none)',
+    ].join('\n');
+
+    expect(findMissingDescriptionIssues(script)).toEqual([
+      expect.objectContaining({
+        location: 'page 16 / panel 3',
+        problem: expect.stringContaining('missing the required "Description:" field'),
+      }),
+    ]);
+  });
+
+  it('merges all deterministic script checks', () => {
+    const script = [
+      '## Page 1',
+      'Panel 1',
+      'Close. JUNO\'s eyes track the overlay.',
+      'Dialogue:',
+      '- JUNO: ""',
+    ].join('\n');
+
+    const issues = findDeterministicIssues(script);
+    expect(issues).toHaveLength(2);
+    expect(issues.map((i) => i.problem).join('\n')).toContain('missing the required "Description:" label');
+    expect(issues.map((i) => i.problem).join('\n')).toContain('empty quoted line');
   });
 });
