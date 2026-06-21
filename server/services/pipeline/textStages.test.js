@@ -510,6 +510,71 @@ describe('pipeline text stage generator', () => {
     expect(ctx.sourceMaterials).toEqual([]);
     expect(ctx.hasSourceMaterials).toBe(false);
   });
+
+  // -- per-issue character scoping (#1511) --
+
+  it('scopes series.characters to the cast named in the issue, dropping the rest of the bible', async () => {
+    const { series } = await seed();
+    const world = await universeSvc.createUniverse({ name: 'Salt Verse' });
+    await universeSvc.updateUniverse(world.id, {
+      characters: [
+        { name: 'Mira', role: 'surveyor', physicalDescription: 'broad-shouldered' },
+        { name: 'Jonas', role: 'foreman', personality: 'cunning' },
+        { name: 'Chandelier', role: 'one-off fixture', personality: 'sentient brass' },
+      ],
+    });
+    await seriesSvc.updateSeries(series.id, { universeId: world.id });
+    // Issue whose beats name only Mira — Jonas and the one-off Chandelier must
+    // drop out of the heavyweight full-record block.
+    const issue = await issuesSvc.createIssue({
+      seriesId: series.id, title: 'The Hush',
+      stages: { idea: { input: 'a quiet survey', output: 'Mira descends into the dry foundry.', status: 'ready' } },
+    });
+    await textStages.generateStage(issue.id, 'prose');
+    const ctx = ctxFromCall(llmCalls[0]);
+    const names = ctx.series.characters.map((c) => c.name);
+    expect(names).toEqual(['Mira']);
+    // The compact roster still carries the whole cast for continuity.
+    expect(ctx.worldEntitiesSummary).toContain('Jonas');
+    expect(ctx.worldEntitiesSummary).toContain('Chandelier');
+  });
+
+  it('scopeCharactersForIssue: matched names win over principals', () => {
+    const cast = [
+      { name: 'Mira', role: 'lead' },
+      { name: 'Jonas', role: 'foreman' },
+    ];
+    expect(textStages.__testing.scopeCharactersForIssue(cast, 'Jonas barks an order').map((c) => c.name))
+      .toEqual(['Jonas']);
+  });
+
+  it('scopeCharactersForIssue: falls back to principals when no name is matched', () => {
+    const cast = [
+      { name: 'Mira', role: 'main protagonist' },
+      { name: 'Jonas', role: 'recurring foreman' },
+      { name: 'Extra', role: 'background walk-on' },
+    ];
+    expect(textStages.__testing.scopeCharactersForIssue(cast, 'nobody named here').map((c) => c.name))
+      .toEqual(['Mira', 'Jonas']);
+  });
+
+  it('scopeCharactersForIssue: falls back to the whole cast when nothing matches and no role tags exist', () => {
+    const cast = [{ name: 'A', role: '' }, { name: 'B' }];
+    expect(textStages.__testing.scopeCharactersForIssue(cast, 'unrelated').map((c) => c.name))
+      .toEqual(['A', 'B']);
+    expect(textStages.__testing.scopeCharactersForIssue([], 'x')).toEqual([]);
+  });
+
+  it('buildIssueScopeText concatenates title, synopsis, beats, and source materials', () => {
+    const issue = { title: 'The Hush', stages: { idea: { input: 'SYN', output: 'BEATS' } } };
+    const sourceMaterials = [{ content: 'SRC-A' }, { content: 'SRC-B' }];
+    const text = textStages.__testing.buildIssueScopeText(issue, sourceMaterials);
+    expect(text).toContain('The Hush');
+    expect(text).toContain('SYN');
+    expect(text).toContain('BEATS');
+    expect(text).toContain('SRC-A');
+    expect(text).toContain('SRC-B');
+  });
 });
 
 // End-to-end render guard for the shipped idea template. The tests above assert

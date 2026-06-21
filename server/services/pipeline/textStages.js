@@ -25,6 +25,7 @@ import { computeIssueTargets } from '../../lib/issueLength.js';
 import { renderEntitiesSummary } from '../../lib/universePromptRenderers.js';
 import { composeStyleNotes } from '../../lib/styleGuide.js';
 import { renderTickingClock } from '../../lib/storyArc.js';
+import { matchCharactersInText } from '../../lib/scenePrompt.js';
 
 const STAGE_TO_TEMPLATE = Object.freeze({
   idea: 'pipeline-idea-expansion',
@@ -190,6 +191,50 @@ function resolveSourceStageIds({ issue, stageId, sourceStageIds }) {
     && stageContentOf(issue.stages?.[id]));
 }
 
+// A character's free-text `role` reads as a principal when it names a lead /
+// recurring archetype. Used only as the fallback when an issue's source text
+// names no canon character (a thinly-seeded early issue) — better to ship the
+// series principals than the whole 68-character cast.
+const PRINCIPAL_ROLE_RE = /\b(main|lead|protagonist|principal|recurring|primary|hero|central)\b/i;
+
+/**
+ * Scope the full-record character bible to the cast relevant to THIS issue (#1511).
+ *
+ * Injecting every canon character's full record into every issue's prose and
+ * comic-script prompt is the token-bloat this addresses: a 68-character bible is
+ * ~52K tokens re-sent on every issue × every stage, when most issues feature a
+ * handful of the cast. We keep full records only for characters the issue's own
+ * source text names (via the bible matcher), and let the always-present compact
+ * `worldEntitiesSummary` roster carry the rest of the cast for continuity refs.
+ *
+ * Fallback order — never returns an empty block:
+ *   1. characters named in the issue's source text;
+ *   2. else the series principals (lead/recurring `role`);
+ *   3. else the whole cast (no signal at all — preserve prior behavior).
+ */
+export function scopeCharactersForIssue(allCharacters, scopeText) {
+  if (!Array.isArray(allCharacters) || allCharacters.length === 0) return [];
+  const matched = matchCharactersInText(scopeText, allCharacters);
+  if (matched.length) return matched;
+  const principals = allCharacters.filter((c) => PRINCIPAL_ROLE_RE.test(c?.role || ''));
+  if (principals.length) return principals;
+  return allCharacters;
+}
+
+/**
+ * Concatenate the text that defines an issue's scope — its title, synopsis
+ * (`idea.input`), beat sheet (`idea.output`), and whatever source stages this
+ * generation adapts from — into one haystack for the character matcher.
+ */
+function buildIssueScopeText(issue, sourceMaterials) {
+  return [
+    issue.title,
+    issue.stages?.idea?.input,
+    issue.stages?.idea?.output,
+    ...sourceMaterials.map((s) => s.content),
+  ].filter(Boolean).join('\n\n');
+}
+
 /**
  * Build the variable bag fed into the stage template. Includes the series
  * bible (`series.*`) and every *prior* text stage's content (`stages.*`), plus
@@ -217,12 +262,20 @@ function buildStageContext({ series, canon, world, issue, stageId, seedInput, so
     .map((id) => ({ stageId: id, label: STAGE_LABELS[id] || id, content: stageContentOf(issue.stages?.[id]) }));
   // Compact one-line-per-kind synopsis of the linked universe's canon. Lets
   // per-issue text prompts reference named entities without paying the full
-  // canon-block token cost — `series.characters` already covers the bible-
-  // sized character context, this adds places/objects + other characters not
-  // pulled into the series-canon for continuity anchors.
+  // canon-block token cost — `series.characters` carries full records only for
+  // the issue-relevant cast (scoped below), and this compact roster covers the
+  // rest of the cast plus places/objects for continuity anchors.
   const worldEntitiesSummary = world
     ? (renderEntitiesSummary(world) || '(none)')
     : NO_LINKED_UNIVERSE_PLACEHOLDER;
+  // Scope the heavyweight full-record character block to the cast this issue
+  // actually involves (#1511) — full records only for characters named in the
+  // issue's source text, principals as fallback, never empty. The compact
+  // roster above keeps the whole cast known for naming/continuity.
+  const scopedCharacters = scopeCharactersForIssue(
+    canon?.characters || [],
+    buildIssueScopeText(issue, sourceMaterials),
+  );
   return {
     series: {
       name: series.name,
@@ -234,7 +287,7 @@ function buildStageContext({ series, canon, world, issue, stageId, seedInput, so
       // variable (and thus no stage-prompt migration). See composeStyleNotes.
       styleNotes: composeStyleNotes(series),
       universeId: series.universeId || '',
-      characters: canon?.characters || [],
+      characters: scopedCharacters,
     },
     issue: {
       number: issue.number,
@@ -381,4 +434,4 @@ export async function generateStage(issueId, stageId, options = {}) {
 }
 
 // Export internals for tests.
-export const __testing = { buildStageContext, buildIdeaContextAugment, shapeNeighborForIdeaPrompt, resolveSourceStageIds, STAGE_TO_TEMPLATE, STAGE_LABELS, DEFAULT_FORWARD_SOURCE };
+export const __testing = { buildStageContext, buildIdeaContextAugment, shapeNeighborForIdeaPrompt, resolveSourceStageIds, scopeCharactersForIssue, buildIssueScopeText, STAGE_TO_TEMPLATE, STAGE_LABELS, DEFAULT_FORWARD_SOURCE };
