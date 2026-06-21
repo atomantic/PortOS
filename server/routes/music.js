@@ -99,7 +99,9 @@ router.delete('/models/:engine/*id', asyncHandler(async (req, res) => {
 
 const generateSchema = z.object({
   prompt: z.string().trim().min(1, 'prompt is required').max(8000),
-  lyrics: z.string().trim().max(20000).optional().default(''),
+  // No default: distinguish ABSENT (don't touch the track's lyrics) from a
+  // present '' (the user cleared them and generated without — persist the clear).
+  lyrics: z.string().trim().max(20000).optional(),
   engine: z.string().trim().max(60).optional(),
   modelId: z.string().trim().max(120).optional(),
   durationSec: z.number().positive().max(600).optional(),
@@ -135,19 +137,23 @@ router.post('/generate', asyncHandler(async (req, res) => {
   }
 
   // generateMusic throws a typed ServerError (503 venv-missing / 500 sidecar
-  // failure) that asyncHandler maps verbatim — no need to re-wrap here.
+  // failure) that asyncHandler maps verbatim — no need to re-wrap here. A
+  // lyric-aware engine renders with the provided lyrics ('' = no lyrics); a
+  // non-lyric engine ignores the flag entirely.
   const result = await generateMusic({
     prompt: body.prompt,
-    lyrics: body.lyrics,
+    lyrics: engine.lyrics ? (body.lyrics ?? '') : '',
     engine: engine.id,
     modelId: body.modelId,
     repo,
     durationSec: body.durationSec,
   });
 
-  // Persist the audio + gen metadata. Lyrics: only write them when the engine is
-  // lyric-aware AND the caller sent some — otherwise a non-lyric render (or an
-  // engine that sends lyrics:'') would silently erase a track's existing lyrics.
+  // Persist the audio + gen metadata. Lyrics follow the audio that was actually
+  // rendered: for a lyric-aware engine we persist what the caller SENT —
+  // including an intentional '' clear (the audio was generated without lyrics) —
+  // but an ABSENT lyrics field leaves the track's lyrics untouched. A non-lyric
+  // engine never writes lyrics (it can't erase a song's words by adding a bed).
   const meta = {
     audioFilename: result.filename,
     engine: result.engine,
@@ -155,7 +161,7 @@ router.post('/generate', asyncHandler(async (req, res) => {
     durationSec: Math.round(result.durationSec),
     prompt: body.prompt,
   };
-  if (engine.lyrics && body.lyrics) meta.lyrics = body.lyrics;
+  if (engine.lyrics && body.lyrics !== undefined) meta.lyrics = body.lyrics;
 
   let track;
   if (existing) {
@@ -166,7 +172,7 @@ router.post('/generate', asyncHandler(async (req, res) => {
       artistId: body.artistId,
       artist: body.artist,
       albumId: body.albumId,
-      ...(engine.lyrics && body.lyrics ? { lyrics: body.lyrics } : {}),
+      ...(engine.lyrics && body.lyrics !== undefined ? { lyrics: body.lyrics } : {}),
       ...meta,
     });
     // Mirror the /api/tracks create path: a new track with an albumId must be

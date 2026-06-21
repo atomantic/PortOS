@@ -152,6 +152,24 @@ describe('music routes', () => {
     expect(patch).not.toHaveProperty('lyrics');
   });
 
+  it('POST /generate on a lyric engine with ABSENT lyrics leaves the track lyrics untouched', async () => {
+    tracks.getTrack.mockResolvedValueOnce({ id: 'track-1', title: 'Song', lyrics: 'old words' });
+    gen.generateMusic.mockResolvedValueOnce({ filename: 'm.wav', durationSec: 60, engine: 'acestep', modelId: 'a' });
+    await request(app).post('/api/music/generate').send({ prompt: 'folk', engine: 'acestep', trackId: 'track-1' }); // no lyrics field
+    const patch = tracks.updateTrack.mock.calls[0][1];
+    expect(patch).not.toHaveProperty('lyrics');
+    // The sidecar still renders (with empty lyrics) — engine.lyrics coalesces to ''.
+    expect(gen.generateMusic).toHaveBeenCalledWith(expect.objectContaining({ lyrics: '' }));
+  });
+
+  it('POST /generate on a lyric engine with an EXPLICIT empty lyrics persists the clear', async () => {
+    tracks.getTrack.mockResolvedValueOnce({ id: 'track-1', title: 'Song', lyrics: 'old words' });
+    gen.generateMusic.mockResolvedValueOnce({ filename: 'm.wav', durationSec: 60, engine: 'acestep', modelId: 'a' });
+    await request(app).post('/api/music/generate').send({ prompt: 'instrumental', lyrics: '', engine: 'acestep', trackId: 'track-1' });
+    const patch = tracks.updateTrack.mock.calls[0][1];
+    expect(patch.lyrics).toBe(''); // audio was rendered WITHOUT lyrics → persist the clear
+  });
+
   it('POST /generate validates trackId BEFORE rendering (no wasted render)', async () => {
     tracks.getTrack.mockResolvedValueOnce(null);
     const r = await request(app).post('/api/music/generate').send({ prompt: 'x', trackId: 'gone' });
