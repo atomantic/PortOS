@@ -213,10 +213,21 @@ export async function resolveStageContext(stageName, options = {}) {
   return { provider, model, contextWindow: effectiveContextWindow(provider, model) };
 }
 
-// Stage config can pin a specific provider via `stage.provider`. If set we
-// must use it (or fail) — falling back to the active provider would route
-// silently through whatever's currently selected, defeating the override.
-async function resolveProviderForStage(stage, { providerOverride } = {}) {
+// Provider resolution precedence, strongest first:
+//   1. `providerOverride` — an explicit per-call choice ("run THIS request with
+//      provider X right now", e.g. a route's regenerate-with-provider button).
+//      The most specific signal, so it beats even a stage pin. Throws if the
+//      requested provider is unavailable — the caller asked for it by name.
+//   2. `stage.provider` — a deliberate per-stage pin (Prompts page /
+//      stage-config.json). Beats a blanket run-level default so a pinned stage
+//      keeps running on its chosen provider even when something sets a different
+//      default for everything else (e.g. Series Autopilot's run provider).
+//   3. `providerDefault` — a blanket run-level default that applies ONLY to
+//      stages without their own pin. Unlike an override it is a soft preference:
+//      if it's unavailable we fall through to the active provider rather than
+//      throwing, because it was never a per-call demand.
+//   4. The active provider — the system-wide fallback.
+async function resolveProviderForStage(stage, { providerOverride, providerDefault } = {}) {
   if (providerOverride) {
     const pinned = await getProviderById(providerOverride).catch(() => null);
     if (pinned?.enabled) return pinned;
@@ -232,6 +243,12 @@ async function resolveProviderForStage(stage, { providerOverride } = {}) {
       `Stage provider "${stage.provider}" is not available — re-pick a provider in Prompts or the stage settings`,
       { status: 503, code: 'STAGE_PROVIDER_UNAVAILABLE' }
     );
+  }
+  if (providerDefault) {
+    const fallback = await getProviderById(providerDefault).catch(() => null);
+    if (fallback?.enabled) return fallback;
+    // Soft default: an unavailable run default is not a hard error — drop to the
+    // active provider below instead of throwing.
   }
   const active = await getActiveProvider().catch(() => null);
   if (active?.enabled) return active;
@@ -333,7 +350,10 @@ export function extractJson(text, { promptToStrip } = {}) {
  * (or the parsed JSON in the `content` field when `returnsJson` is true).
  *
  * Options:
- *   - providerOverride: explicit provider id, beats stage.provider
+ *   - providerOverride: explicit per-call provider id, beats stage.provider
+ *   - providerDefault: blanket run-level provider id used ONLY when the stage has
+ *     no pin of its own; loses to stage.provider and falls through to the active
+ *     provider if unavailable (see resolveProviderForStage)
  *   - modelOverride: explicit model id, beats stage.model
  *   - timeoutOverride: explicit ms timeout, beats stage.timeout and the provider default
  *   - returnsJson: parse `content` via `extractJson` before returning

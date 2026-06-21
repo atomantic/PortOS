@@ -256,6 +256,46 @@ describe('stageRunner — runStagedLLM provider resolution', () => {
     expect(out.providerId).toBe('stage-pinned');
   });
 
+  it('lets stage.provider beat a blanket providerDefault (pin wins over run default)', async () => {
+    prompts.getStage.mockReturnValue({ provider: 'stage-pinned' });
+    providers.getProviderById.mockImplementation(async (id) => (
+      id === 'stage-pinned' ? apiProvider({ id: 'stage-pinned' }) : apiProvider({ id })
+    ));
+    runner.executeApiRun.mockImplementation(async ({ onData, onComplete }) => {
+      onData('pinned');
+      onComplete({ success: true });
+    });
+    const out = await runStagedLLM('s', {}, { providerDefault: 'run-default' });
+    expect(out.providerId).toBe('stage-pinned');
+    expect(providers.getActiveProvider).not.toHaveBeenCalled();
+  });
+
+  it('uses providerDefault when the stage has no pin', async () => {
+    prompts.getStage.mockReturnValue(null);
+    providers.getProviderById.mockImplementation(async (id) => (
+      id === 'run-default' ? apiProvider({ id: 'run-default' }) : null
+    ));
+    runner.executeApiRun.mockImplementation(async ({ onData, onComplete }) => {
+      onData('defaulted');
+      onComplete({ success: true });
+    });
+    const out = await runStagedLLM('s', {}, { providerDefault: 'run-default' });
+    expect(out.providerId).toBe('run-default');
+    expect(providers.getActiveProvider).not.toHaveBeenCalled();
+  });
+
+  it('falls through to the active provider when providerDefault is unavailable (soft default)', async () => {
+    prompts.getStage.mockReturnValue(null);
+    providers.getProviderById.mockResolvedValue(null);
+    providers.getActiveProvider.mockResolvedValue(apiProvider());
+    runner.executeApiRun.mockImplementation(async ({ onData, onComplete }) => {
+      onData('active');
+      onComplete({ success: true });
+    });
+    const out = await runStagedLLM('s', {}, { providerDefault: 'gone' });
+    expect(out.providerId).toBe('mock-api');
+  });
+
   it('throws STAGE_PROVIDER_UNAVAILABLE when stage.provider is set but disabled', async () => {
     prompts.getStage.mockReturnValue({ provider: 'pinned-but-gone' });
     providers.getProviderById.mockResolvedValue(null);
