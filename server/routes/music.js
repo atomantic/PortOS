@@ -24,6 +24,7 @@ import { ENGINES, DEFAULT_ENGINE_ID, getEngine, isEngineReady, generateMusic } f
 import { listEngineModels, addAudioModel, removeAudioModel, isValidRepoId } from '../services/audioModels.js';
 import { startHfDownloadStream } from '../lib/sseDownload.js';
 import * as tracks from '../services/tracks/index.js';
+import * as albums from '../services/albums/index.js';
 
 const router = Router();
 
@@ -115,6 +116,24 @@ router.post('/generate', asyncHandler(async (req, res) => {
   const body = validateRequest(generateSchema, req.body ?? {});
   const engine = getEngine(body.engine);
 
+  // Validate the target track BEFORE the (minutes-long) render so a stale/
+  // deleted trackId fails fast instead of wasting a render + orphaning a WAV.
+  let existing = null;
+  if (body.trackId) {
+    existing = await tracks.getTrack(body.trackId);
+    if (!existing) throw new ServerError('Track not found', { status: 404, code: 'NOT_FOUND' });
+  }
+
+  // Resolve a USER-INSTALLED model id to its HF repo so the sidecar renders with
+  // the installed checkpoint instead of falling back to the engine default. A
+  // shipped model id leaves `repo` undefined (generateMusic uses the registry).
+  let repo;
+  if (body.modelId) {
+    const merged = await listEngineModels(engine.id);
+    const picked = merged.find((m) => m.id === body.modelId);
+    if (picked?.userAdded) repo = picked.repo || picked.id;
+  }
+
   // generateMusic throws a typed ServerError (503 venv-missing / 500 sidecar
   // failure) that asyncHandler maps verbatim — no need to re-wrap here.
   const result = await generateMusic({
@@ -122,22 +141,24 @@ router.post('/generate', asyncHandler(async (req, res) => {
     lyrics: body.lyrics,
     engine: engine.id,
     modelId: body.modelId,
+    repo,
     durationSec: body.durationSec,
   });
 
-  // Persist the audio onto a track: update the named one, or create a new one.
+  // Persist the audio + gen metadata. Lyrics: only write them when the engine is
+  // lyric-aware AND the caller sent some — otherwise a non-lyric render (or an
+  // engine that sends lyrics:'') would silently erase a track's existing lyrics.
   const meta = {
     audioFilename: result.filename,
     engine: result.engine,
     modelId: result.modelId,
     durationSec: Math.round(result.durationSec),
     prompt: body.prompt,
-    lyrics: body.lyrics,
   };
+  if (engine.lyrics && body.lyrics) meta.lyrics = body.lyrics;
+
   let track;
-  if (body.trackId) {
-    track = await tracks.getTrack(body.trackId);
-    if (!track) throw new ServerError('Track not found', { status: 404, code: 'NOT_FOUND' });
+  if (existing) {
     track = await tracks.updateTrack(body.trackId, meta);
   } else {
     track = await tracks.createTrack({
@@ -145,8 +166,17 @@ router.post('/generate', asyncHandler(async (req, res) => {
       artistId: body.artistId,
       artist: body.artist,
       albumId: body.albumId,
+      ...(engine.lyrics && body.lyrics ? { lyrics: body.lyrics } : {}),
       ...meta,
     });
+    // Mirror the /api/tracks create path: a new track with an albumId must be
+    // appended to that album's ordered trackIds so album views show it.
+    if (track.albumId) {
+      const album = await albums.getAlbum(track.albumId).catch(() => null);
+      if (album && !(album.trackIds || []).includes(track.id)) {
+        await albums.updateAlbum(track.albumId, { trackIds: [...(album.trackIds || []), track.id] }).catch(() => {});
+      }
+    }
   }
 
   res.status(body.trackId ? 200 : 201).json({

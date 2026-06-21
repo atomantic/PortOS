@@ -40,7 +40,13 @@ vi.mock('../services/audioModels.js', () => ({
 const sse = vi.hoisted(() => ({ run: vi.fn(async ({ res }) => { res.writeHead(200, { 'Content-Type': 'text/event-stream' }); res.end('data: {"type":"complete"}\n\n'); }) }));
 vi.mock('../lib/sseDownload.js', () => ({ startHfDownloadStream: (args) => sse.run(args) }));
 
+vi.mock('../services/albums/index.js', () => ({
+  getAlbum: vi.fn(async () => null),
+  updateAlbum: vi.fn(async (id, patch) => ({ id, ...patch })),
+}));
+
 import * as tracks from '../services/tracks/index.js';
+import * as albums from '../services/albums/index.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import musicRoutes from './music.js';
 
@@ -56,7 +62,19 @@ describe('music routes', () => {
   let app;
   beforeEach(() => {
     app = makeApp();
-    vi.clearAllMocks();
+    // mockReset clears queued *Once implementations too (clearAllMocks only
+    // clears call history) — otherwise an unconsumed mockResolvedValueOnce on
+    // generateMusic leaks into the next test.
+    gen.generateMusic.mockReset();
+    models.list.mockReset();
+    models.add.mockReset();
+    models.remove.mockReset();
+    tracks.getTrack.mockReset();
+    tracks.createTrack.mockReset().mockImplementation(async (input) => ({ id: 'track-new', ...input }));
+    tracks.updateTrack.mockReset().mockImplementation(async (id, patch) => ({ id, ...patch }));
+    albums.getAlbum.mockReset().mockResolvedValue(null);
+    albums.updateAlbum.mockReset().mockImplementation(async (id, patch) => ({ id, ...patch }));
+    sse.run.mockReset().mockImplementation(async ({ res }) => { res.writeHead(200, { 'Content-Type': 'text/event-stream' }); res.end('data: {"type":"complete"}\n\n'); });
     gen.ready = true;
     models.list.mockResolvedValue([{ id: 'm', name: 'M', userAdded: false }]);
   });
@@ -123,6 +141,40 @@ describe('music routes', () => {
     expect(r.status).toBe(200);
     expect(tracks.updateTrack).toHaveBeenCalledWith('track-1', expect.objectContaining({ audioFilename: 'music-gen-y.wav' }));
     expect(tracks.createTrack).not.toHaveBeenCalled();
+  });
+
+  it('POST /generate on a non-lyric engine does NOT write lyrics (no erasure)', async () => {
+    tracks.getTrack.mockResolvedValueOnce({ id: 'track-1', title: 'Has Lyrics', lyrics: 'keep me' });
+    gen.generateMusic.mockResolvedValueOnce({ filename: 'm.wav', durationSec: 12, engine: 'musicgen', modelId: 'm' });
+    // MusicGen is not lyric-aware; even if the client sends lyrics:'' the update must omit lyrics.
+    await request(app).post('/api/music/generate').send({ prompt: 'bed', lyrics: '', engine: 'musicgen', trackId: 'track-1' });
+    const patch = tracks.updateTrack.mock.calls[0][1];
+    expect(patch).not.toHaveProperty('lyrics');
+  });
+
+  it('POST /generate validates trackId BEFORE rendering (no wasted render)', async () => {
+    tracks.getTrack.mockResolvedValueOnce(null);
+    const r = await request(app).post('/api/music/generate').send({ prompt: 'x', trackId: 'gone' });
+    expect(r.status).toBe(404);
+    expect(gen.generateMusic).not.toHaveBeenCalled(); // render never started
+  });
+
+  it('POST /generate resolves a USER-INSTALLED model id to its repo for the sidecar', async () => {
+    models.list.mockResolvedValueOnce([
+      { id: 'm', name: 'M', userAdded: false },
+      { id: 'someorg/big-musicgen', name: 'Big', repo: 'someorg/big-musicgen', userAdded: true },
+    ]);
+    gen.generateMusic.mockResolvedValueOnce({ filename: 'm.wav', durationSec: 12, engine: 'musicgen', modelId: 'someorg/big-musicgen' });
+    await request(app).post('/api/music/generate').send({ prompt: 'x', engine: 'musicgen', modelId: 'someorg/big-musicgen' });
+    expect(gen.generateMusic).toHaveBeenCalledWith(expect.objectContaining({ repo: 'someorg/big-musicgen', modelId: 'someorg/big-musicgen' }));
+  });
+
+  it('POST /generate creating a track with albumId appends it to the album tracklist', async () => {
+    albums.getAlbum.mockResolvedValueOnce({ id: 'album-1', trackIds: ['track-0'] });
+    tracks.createTrack.mockResolvedValueOnce({ id: 'track-gen', title: 'x', albumId: 'album-1' });
+    gen.generateMusic.mockResolvedValueOnce({ filename: 'm.wav', durationSec: 12, engine: 'musicgen', modelId: 'm' });
+    await request(app).post('/api/music/generate').send({ prompt: 'x', engine: 'musicgen', albumId: 'album-1' });
+    expect(albums.updateAlbum).toHaveBeenCalledWith('album-1', { trackIds: ['track-0', 'track-gen'] });
   });
 
   it('POST /generate with an unknown trackId 404s and does not create', async () => {

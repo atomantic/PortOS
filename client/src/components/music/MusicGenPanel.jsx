@@ -87,15 +87,20 @@ export default function MusicGenPanel({ track, prompt, lyrics, onGenerated }) {
     if (!repo || !engine) return;
     setInstalling(true);
     setInstallProgress({ message: `Starting ${repo}…` });
+    // Track failure across the stream: an `error` frame OR a thrown request
+    // (e.g. a 400 invalid-repo) means the install did NOT succeed, so we must
+    // not then clear the field / select the repo / report "Installed".
+    let failed = false;
     await installAudioModel({ engine: engine.id, repo }, (ev) => {
       if (!mountedRef.current) return;
       if (ev.type === 'progress') setInstallProgress({ message: `${ev.file || 'downloading'} — ${Math.round((ev.progress || 0) * 100)}%`, progress: ev.progress });
       else if (ev.type === 'stage') setInstallProgress({ message: ev.stage });
-      else if (ev.type === 'error') { toast.error(ev.message || 'Download failed'); }
-    }).catch((err) => { if (mountedRef.current) toast.error(err.message || 'Install failed'); });
+      else if (ev.type === 'error') { failed = true; toast.error(ev.message || 'Download failed'); }
+    }).catch((err) => { failed = true; if (mountedRef.current) toast.error(err.message || 'Install failed'); });
     if (!mountedRef.current) return;
     setInstalling(false);
     setInstallProgress(null);
+    if (failed) return; // leave the repo field intact so the user can retry/fix
     setInstallRepo('');
     await loadEngines(); // refresh model list (the new repo is now registered)
     setModelId(repo);

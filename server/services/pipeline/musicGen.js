@@ -251,13 +251,21 @@ function parseResultLine(stdout) {
  * engines ignore it. `signal` (optional AbortSignal) SIGTERMs the child — wired
  * through so a cancel button can abort a long render.
  */
-export async function generateMusic({ prompt, lyrics, engine: engineId = DEFAULT_ENGINE_ID, durationSec, modelId, signal } = {}) {
+export async function generateMusic({ prompt, lyrics, engine: engineId = DEFAULT_ENGINE_ID, durationSec, modelId, repo, signal } = {}) {
   const text = (prompt || '').trim();
   if (!text) {
     throw new ServerError('prompt is required', { status: 400, code: 'PIPELINE_MUSIC_EMPTY_PROMPT' });
   }
   const engine = getEngine(engineId);
-  const model = getEngineModel(engine.id, modelId) || getEngineModel(engine.id, engine.defaultModelId);
+  // `repo` (when given) is an explicit HF checkpoint — used for USER-INSTALLED
+  // models that aren't in the shipped ENGINES registry (the caller resolved it
+  // from the audio-models registry). It overrides the registry lookup so an
+  // installed model actually renders instead of silently falling back to the
+  // engine default. `modelId` is still reported for metadata.
+  const shippedModel = getEngineModel(engine.id, modelId) || getEngineModel(engine.id, engine.defaultModelId);
+  const model = repo
+    ? { id: modelId || repo, repo, name: modelId || repo }
+    : shippedModel;
   const resolvedDuration = durationSec ?? engine.defaultDurationSec;
   const pythonPath = engine.resolvePython();
   if (!pythonPath) {
