@@ -164,8 +164,10 @@ export default function AlbumsManager() {
     const base64 = await readFileAsBase64(file).catch(() => null);
     if (!base64) { setUploadingCover(false); toast.error('Could not read that file'); return; }
     const uploaded = await uploadGalleryImage(base64, { silent: true }).catch((err) => { toast.error(err.message || 'Upload failed'); return null; });
-    if (genRequestRef.current !== requestId) return; // album switched mid-upload — drop
+    // Always clear the in-flight flag (even on a stale result) so a mid-upload
+    // album switch doesn't leave the new album's Upload/Generate stuck disabled.
     setUploadingCover(false);
+    if (genRequestRef.current !== requestId) return; // album switched mid-upload — don't write the form
     if (uploaded?.path) { setCover(uploaded.path); toast.success('Cover uploaded'); }
   };
 

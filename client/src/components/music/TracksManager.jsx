@@ -172,14 +172,21 @@ export default function TracksManager() {
 
   const openLibrary = async () => {
     if (!requireSaved()) return;
+    const targetId = persisted.id;
     const res = await listMusicLibrary({ silent: true }).catch(() => null);
+    // The user may have switched tracks (or to a new unsaved one) while the
+    // library list loaded — don't pop the picker open for a stale selection.
+    if (selectedIdRef.current !== targetId) return;
     setLibrary(Array.isArray(res?.tracks) ? res.tracks : []);
     setLibraryOpen(true);
   };
 
   const attachFromLibrary = async (filename) => {
     setLibraryOpen(false);
-    const targetId = persisted.id;
+    // Re-resolve the target from the live selection rather than a possibly-stale
+    // `persisted` — and bail if there's no saved track to attach to.
+    const targetId = selectedIdRef.current;
+    if (!targetId || targetId === 'new') { toast.error('Save the track first, then add audio'); return; }
     const res = await attachTrackAudio(targetId, filename, { silent: true }).catch((err) => { toast.error(err.message || 'Attach failed'); return null; });
     if (res?.track) {
       upsertLocal(res.track);
