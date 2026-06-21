@@ -74,12 +74,14 @@ router.get('/models/:engine', asyncHandler(async (req, res) => {
   res.json({ models: await listEngineModels(req.params.engine) });
 }));
 
-// POST /api/music/models — STREAM the HF download as SSE (text/event-stream),
-// then register the repo only if it actually landed in the cache. Registering
-// AFTER a successful download (rather than up front) means a typo / private /
-// gated / auth-failed repo never persists into data/audio-models.json as a
-// bogus "installed" model that a later /engines list would surface and that
-// generation would fail on.
+// POST /api/music/models — register the repo, STREAM its HF download as SSE
+// (text/event-stream), then ROLL BACK the registration if the download didn't
+// actually land. Registering up front (before the stream's `complete` frame)
+// means the model is durably persisted by the time the client's post-stream
+// `/engines` refresh runs — no race. The rollback (de-register when the cache
+// is still empty after a failed/cancelled download) means a typo / private /
+// gated / auth-failed repo doesn't linger as a bogus "installed" model. Net:
+// a completed install is always registered, a failed one never is.
 router.post('/models', asyncHandler(async (req, res) => {
   const body = validateRequest(installSchema, req.body ?? {});
   if (!ENGINES[body.engine]) throw new ServerError('Unknown audio engine', { status: 400, code: 'AUDIO_MODEL_UNKNOWN_ENGINE' });
@@ -90,16 +92,17 @@ router.post('/models', asyncHandler(async (req, res) => {
     throw new ServerError(`${ENGINES[body.engine].name} does not support custom HuggingFace models`, { status: 400, code: 'AUDIO_MODEL_ENGINE_FIXED' });
   }
   if (!isValidRepoId(body.repo)) throw new ServerError('Invalid HuggingFace repo id', { status: 400, code: 'AUDIO_MODEL_INVALID_REPO' });
+  // Register first so it's durable before the stream signals completion.
+  await addAudioModel({ engine: body.engine, repo: body.repo, name: body.name });
   // Hand the response to the shared SSE driver — it owns writeHead/end + the
-  // in-flight dedupe + client-disconnect kill. It resolves after the stream ends
-  // (the HTTP response is already closed by then, so the post-stream work below
-  // is a side effect only — it can't change what the client received).
+  // in-flight dedupe + client-disconnect kill. Resolves after the stream ends.
   await startHfDownloadStream({ req, res, repo: body.repo });
-  // Register only if the weights are actually present now — a failed/cancelled
-  // download leaves the cache empty and we must NOT persist the model.
+  // Roll back if the weights aren't actually present now (failed/cancelled
+  // download) so a bogus repo doesn't persist. Best-effort: a rollback failure
+  // is logged by the service, not surfaced (the response already closed).
   const cached = await inspectModelCache(body.repo).catch(() => ({ cached: false }));
-  if (cached.cached) {
-    await addAudioModel({ engine: body.engine, repo: body.repo, name: body.name }).catch(() => {});
+  if (!cached.cached) {
+    await removeAudioModel({ engine: body.engine, id: body.repo }).catch(() => {});
   }
 }));
 
@@ -152,14 +155,20 @@ router.post('/generate', asyncHandler(async (req, res) => {
     if (!existing) throw new ServerError('Track not found', { status: 404, code: 'NOT_FOUND' });
   }
 
-  // Resolve a USER-INSTALLED model id to its HF repo so the sidecar renders with
-  // the installed checkpoint instead of falling back to the engine default. A
-  // shipped model id leaves `repo` undefined (generateMusic uses the registry).
+  // Resolve the requested model against the engine's merged list. An unknown
+  // modelId (stale UI selection, removed model) must FAIL FAST — otherwise
+  // `repo` stays undefined and generateMusic silently renders the engine default,
+  // spending minutes producing audio from the wrong checkpoint. A user-installed
+  // id resolves to its HF repo (passed to the sidecar); a shipped id leaves
+  // `repo` undefined (generateMusic uses its own registry for shipped models).
   let repo;
   if (body.modelId) {
     const merged = await listEngineModels(engine.id);
     const picked = merged.find((m) => m.id === body.modelId);
-    if (picked?.userAdded) repo = picked.repo || picked.id;
+    if (!picked) {
+      throw new ServerError(`Unknown model for ${engine.name}: ${body.modelId}`, { status: 400, code: 'PIPELINE_MUSIC_UNKNOWN_MODEL' });
+    }
+    if (picked.userAdded) repo = picked.repo || picked.id;
   }
 
   // generateMusic throws a typed ServerError (503 venv-missing / 500 sidecar

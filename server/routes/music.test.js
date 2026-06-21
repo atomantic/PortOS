@@ -71,8 +71,10 @@ describe('music routes', () => {
     // generateMusic leaks into the next test.
     gen.generateMusic.mockReset();
     models.list.mockReset();
-    models.add.mockReset();
-    models.remove.mockReset();
+    // add/remove return promises by default so the route's `.catch()` chains
+    // don't throw on an undefined return (mockReset clears the impl).
+    models.add.mockReset().mockResolvedValue({});
+    models.remove.mockReset().mockResolvedValue(true);
     tracks.getTrack.mockReset();
     tracks.createTrack.mockReset().mockImplementation(async (input) => ({ id: 'track-new', ...input }));
     tracks.updateTrack.mockReset().mockImplementation(async (id, patch) => ({ id, ...patch }));
@@ -122,12 +124,15 @@ describe('music routes', () => {
     expect(models.add).toHaveBeenCalledWith({ engine: 'musicgen', repo: 'facebook/musicgen-large', name: undefined });
   });
 
-  it('POST /models does NOT register the model when the download did not land', async () => {
+  it('POST /models rolls back the registration when the download did not land', async () => {
     cache.cached = false; // download failed/cancelled → repo not in cache
     const r = await request(app).post('/api/music/models').send({ engine: 'musicgen', repo: 'someorg/typo-repo' });
     expect(r.status).toBe(200); // the SSE stream still completes (with its error frames)
     expect(sse.run).toHaveBeenCalled();
-    expect(models.add).not.toHaveBeenCalled();
+    // Registered up front (durable before the client's refresh), then rolled back
+    // because the weights never landed — net: not persisted.
+    expect(models.add).toHaveBeenCalled();
+    expect(models.remove).toHaveBeenCalledWith({ engine: 'musicgen', id: 'someorg/typo-repo' });
   });
 
   it('POST /models rejects an unknown engine / invalid repo before downloading', async () => {
@@ -210,6 +215,14 @@ describe('music routes', () => {
     gen.generateMusic.mockResolvedValueOnce({ filename: 'm.wav', durationSec: 12, engine: 'musicgen', modelId: 'someorg/big-musicgen' });
     await request(app).post('/api/music/generate').send({ prompt: 'x', engine: 'musicgen', modelId: 'someorg/big-musicgen' });
     expect(gen.generateMusic).toHaveBeenCalledWith(expect.objectContaining({ repo: 'someorg/big-musicgen', modelId: 'someorg/big-musicgen' }));
+  });
+
+  it('POST /generate rejects an unknown modelId BEFORE rendering', async () => {
+    models.list.mockResolvedValueOnce([{ id: 'm', name: 'M', userAdded: false }]);
+    const r = await request(app).post('/api/music/generate').send({ prompt: 'x', engine: 'musicgen', modelId: 'gone/removed' });
+    expect(r.status).toBe(400);
+    expect(r.body.code).toBe('PIPELINE_MUSIC_UNKNOWN_MODEL');
+    expect(gen.generateMusic).not.toHaveBeenCalled();
   });
 
   it('POST /generate creating a track with albumId appends it to the album tracklist', async () => {
