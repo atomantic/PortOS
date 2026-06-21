@@ -97,6 +97,21 @@ describe('nameSimilaritySignals', () => {
     expect(nameSimilaritySignals('Sam', 'Sid')).toContain('same first letter');
   });
 
+  it('treats a singular/plural variant of the same noun as inert (not a near-typo)', () => {
+    // "readers"/"a reader", "poets"/"a poet", "waiter"/"waiters" are deliberate
+    // count distinctions a reader parses effortlessly — they must NOT flag (and
+    // especially must not escalate to high via the edit-distance-1 rule).
+    expect(nameSimilaritySignals('readers', 'a reader')).toEqual([]);
+    expect(nameSimilaritySignals('THE POET', 'poets')).toEqual([]);
+    expect(nameSimilaritySignals('a waiter', 'THE WAITERS')).toEqual([]);
+    expect(nameSimilaritySignals('city', 'cities')).toEqual([]);
+    expect(analyzeNamePair('readers', 'reader')).toEqual({ signals: [], distance: Infinity, phoneticMatch: false });
+    // But two DIFFERENT words that merely both end in "s" are not a plural pair —
+    // genuine confusability signals still apply.
+    expect(nameSimilaritySignals('Marcus', 'Atlas')).not.toContain('near-identical spelling (edit distance 1)');
+    expect(nameSimilaritySignals('Alina', 'Alana')).toContain('near-identical spelling (edit distance 1)');
+  });
+
   it('strips a leading article before comparing (epithet casts)', () => {
     // "THE CABARET SINGER" vs "THE CHAPTER SEVENTEEN READER" must NOT collide on
     // the shared "THE" — compared on "cabaret…" / "chapter…" they share only a

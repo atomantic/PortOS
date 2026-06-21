@@ -104,12 +104,38 @@ export const DEFAULT_SIGNAL_OPTS = Object.freeze({
   usePhonetic: true,
 });
 
+// Reduce a normalized (letters-only) noun to a crude singular stem so a name and
+// its own plural ("reader"/"readers", "poet"/"poets", "drone"/"drones",
+// "city"/"cities") map to the same stem. Deliberately conservative — it only
+// undoes the three common English plural inflections and never shortens below 3
+// letters (so "is"/"" or "as"/"a" can't collapse). Not linguistically complete;
+// just enough to recognize a singular/plural variant of the SAME word.
+function singularStem(letters) {
+  if (typeof letters !== 'string' || letters.length < 4) return letters;
+  if (letters.endsWith('ies')) return `${letters.slice(0, -3)}y`; // cities → city
+  if (letters.endsWith('es') && letters.length > 4) return letters.slice(0, -2); // boxes → box
+  if (letters.endsWith('s') && !letters.endsWith('ss')) return letters.slice(0, -1); // poets → poet
+  return letters;
+}
+
+// Are two normalized names singular/plural variants of the SAME noun (e.g.
+// "reader"/"readers", "poet"/"poets")? Such a pair is a deliberate count
+// distinction a reader parses effortlessly (an individual vs a crowd), NOT a
+// confusable near-typo — so the check must not flag it. Requires the two to
+// actually DIFFER (equal forms are handled separately) and to share a singular
+// stem.
+function isSingularPluralPair(la, lb) {
+  if (!la || !lb || la === lb) return false;
+  return singularStem(la) === singularStem(lb);
+}
+
 // Analyze a name pair in a single pass: the confusability `signals` (each one a
 // reason a reader could blur the two on the page) plus the two metrics that also
 // drive the check's severity — the Levenshtein `distance` and whether the names
 // share a `phoneticMatch`. Computing them here once lets the caller score severity
 // without re-running soundex/levenshtein. Returns empty/Infinity/false when either
-// name has no letters or the two normalize equal.
+// name has no letters, the two normalize equal, or they're singular/plural
+// variants of the same noun.
 export function analyzeNamePair(a, b, opts = {}) {
   const { minEditDistance, flagSameLength, vowelSkeletonCollision, usePhonetic } = {
     ...DEFAULT_SIGNAL_OPTS,
@@ -120,6 +146,9 @@ export function analyzeNamePair(a, b, opts = {}) {
   const la = comparisonName(a);
   const lb = comparisonName(b);
   if (!la || !lb || la === lb) return { signals: [], distance: Infinity, phoneticMatch: false };
+  // A name and its own plural is a deliberate, readable count distinction, not a
+  // confusion — treat it as inert (same as equal forms).
+  if (isSingularPluralPair(la, lb)) return { signals: [], distance: Infinity, phoneticMatch: false };
   const signals = [];
   // "same opening" (first 3 chars) STRICTLY IMPLIES "same first letter", so
   // counting both double-counts one similarity: any shared 3-char prefix would
