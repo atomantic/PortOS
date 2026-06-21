@@ -34,6 +34,8 @@ const {
   knownModelContextWindow,
   knownProviderContextWindow,
   resolveStageContext,
+  withLocalConcurrencyGate,
+  LOCAL_LLM_MAX_CONCURRENCY,
 } = await import('./stageRunner.js');
 
 const apiProvider = (extra = {}) => ({
@@ -509,5 +511,47 @@ describe('stageRunner — runStagedLLM dispatch', () => {
       'run-abc12345',
       expect.objectContaining({ providerId: 'fallback-cli' })
     );
+  });
+});
+
+describe('withLocalConcurrencyGate', () => {
+  // Build a fn that records peak concurrency while it runs.
+  const makeTracker = () => {
+    const state = { active: 0, peak: 0 };
+    const fn = () => {
+      state.active += 1;
+      state.peak = Math.max(state.peak, state.active);
+      return new Promise((resolve) => setTimeout(() => { state.active -= 1; resolve('ok'); }, 5));
+    };
+    return { state, fn };
+  };
+
+  it('serializes concurrent calls to a LOCAL api endpoint (peak ≤ limit)', async () => {
+    const provider = { type: 'api', endpoint: 'http://localhost:11434' };
+    const { state, fn } = makeTracker();
+    await Promise.all(Array.from({ length: 6 }, () => withLocalConcurrencyGate(provider, fn)));
+    expect(state.peak).toBeLessThanOrEqual(LOCAL_LLM_MAX_CONCURRENCY);
+    expect(LOCAL_LLM_MAX_CONCURRENCY).toBe(1); // default — serialized
+  });
+
+  it('does NOT gate a remote api endpoint (runs concurrently)', async () => {
+    const provider = { type: 'api', endpoint: 'https://api.openai.com' };
+    const { state, fn } = makeTracker();
+    await Promise.all(Array.from({ length: 4 }, () => withLocalConcurrencyGate(provider, fn)));
+    expect(state.peak).toBeGreaterThan(1); // ungated
+  });
+
+  it('does NOT gate CLI/TUI providers (no endpoint)', async () => {
+    const provider = { type: 'cli', id: 'codex' };
+    const { state, fn } = makeTracker();
+    await Promise.all(Array.from({ length: 4 }, () => withLocalConcurrencyGate(provider, fn)));
+    expect(state.peak).toBeGreaterThan(1);
+  });
+
+  it('releases the slot even when the gated fn throws (no deadlock)', async () => {
+    const provider = { type: 'api', endpoint: 'http://127.0.0.1:1234' };
+    await expect(withLocalConcurrencyGate(provider, () => Promise.reject(new Error('boom')))).rejects.toThrow('boom');
+    // A subsequent call still acquires the freed slot and resolves.
+    await expect(withLocalConcurrencyGate(provider, () => Promise.resolve('after'))).resolves.toBe('after');
   });
 });
