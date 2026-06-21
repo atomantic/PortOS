@@ -21,7 +21,7 @@ import { getIssue, listIssues, updateStage, assertStageUnlocked, TEXT_STAGE_IDS 
 import { getSeriesCanon } from './seriesCanon.js';
 import { getUniverse } from '../universeBuilder.js';
 import { compareIssuesByPosition, NO_LINKED_UNIVERSE_PLACEHOLDER } from './arcPlanner.js';
-import { computeIssueTargets } from '../../lib/issueLength.js';
+import { computeIssueTargets, assessSynopsisScope } from '../../lib/issueLength.js';
 import { renderEntitiesSummary } from '../../lib/universePromptRenderers.js';
 import { composeStyleNotes } from '../../lib/styleGuide.js';
 import { renderTickingClock } from '../../lib/storyArc.js';
@@ -87,7 +87,7 @@ function shapeNeighborForIdeaPrompt(iss) {
 // + parent volume + immediate-neighbor issues. Other text stages (prose,
 // comicScript, teleplay) don't need it — they derive from beats which
 // already encode it.
-async function buildIdeaContextAugment(series, issue) {
+async function buildIdeaContextAugment(series, issue, seedOverride = '') {
   const seasons = Array.isArray(series.seasons) ? series.seasons : [];
   const season = issue.seasonId ? seasons.find((s) => s.id === issue.seasonId) : null;
 
@@ -112,10 +112,22 @@ async function buildIdeaContextAugment(series, issue) {
   // `tickingClock.enabled === true`.
   const tickingClock = renderTickingClock(arc?.tickingClock);
 
+  // Scope-discipline signal: a terse synopsis on a long length profile tempts
+  // the beat sheet to pad by absorbing the next issue's events (#1513). The
+  // template gates a "do not pad past scope" warning on this flag. Assess the
+  // seed actually being expanded — an explicit seedInput override is what the
+  // template renders into {{seed}}, so the signal must track it, not the
+  // (possibly stale) stored synopsis.
+  const { paddingRisk } = assessSynopsisScope(
+    seedOverride || issue.stages?.idea?.input || '',
+    computeIssueTargets(issue),
+  );
+
   if (!season) {
     return {
       arc: arcBlock,
       tickingClock,
+      paddingRisk,
       volume: null,
       arcRole: issue.arcRole || null,
       positionInVolume: null,
@@ -160,6 +172,7 @@ async function buildIdeaContextAugment(series, issue) {
   return {
     arc: arcBlock,
     tickingClock,
+    paddingRisk,
     volume: {
       number: season.number,
       title: season.title || '',
@@ -309,28 +322,31 @@ function buildStageContext({ series, canon, world, issue, stageId, seedInput, so
   // backfill the beat sheet from finished prose.
   const sourceMaterials = resolveSourceStageIds({ issue, stageId, sourceStageIds })
     .map((id) => ({ stageId: id, label: STAGE_LABELS[id] || id, content: stageContentOf(issue.stages?.[id]) }));
-  // Compact one-line-per-kind synopsis of the linked universe's canon. Lets
-  // per-issue text prompts reference named entities without paying the full
-  // canon-block token cost — `series.characters` carries full records only for
-  // the issue-relevant cast (scoped below), and this compact roster covers the
-  // rest of the cast plus places/objects for continuity anchors. Characters are
-  // rendered UNCAPPED here (`maxPerKind: { characters: Infinity }`): because the
-  // full-record block is now scoped, the roster is the only place a non-featured
-  // character is represented, so it must list the whole cast or a mid-bible
-  // character would vanish from the prompt entirely. Places/objects stay at the
-  // default cap — they were never full-record-injected, so their behavior is
-  // unchanged.
-  const worldEntitiesSummary = world
-    ? (renderEntitiesSummary(world, { maxPerKind: { characters: Infinity } }) || '(none)')
-    : NO_LINKED_UNIVERSE_PLACEHOLDER;
   // Scope the heavyweight full-record character block to the cast this issue
   // actually involves (#1511) — full records for the principals plus characters
-  // named in the issue's source text; the compact roster above keeps the rest of
-  // the cast known for naming/continuity. Only the roster-backed stages are scoped
+  // named in the issue's source text. Only the roster-backed stages are scoped
   // (see ROSTER_BACKED_STAGES); the idea stage keeps the full cast.
   const scopedCharacters = ROSTER_BACKED_STAGES.has(stageId)
     ? scopeCharactersForIssue(canon?.characters || [], buildIssueScopeText(issue, sourceMaterials, seedInput))
     : (canon?.characters || []);
+  // Compact one-line-per-kind synopsis of the linked universe's canon. Lets
+  // per-issue text prompts reference named entities without paying the full
+  // canon-block token cost. The roster carries the REST of the cast — everyone
+  // NOT rendered as a full record in `series.characters` — plus places/objects,
+  // so a scoped-out character is still represented for naming/continuity and is
+  // never duplicated (excludeCharacterNames drops the scoped set). Characters are
+  // uncapped here (`maxPerKind: { characters: Infinity }`) because the roster is
+  // the ONLY place the non-scoped cast appears: the default top-8 cap would make
+  // a large-cast series silently drop mid-bible characters from the prompt.
+  const scopedCharacterNames = new Set(
+    scopedCharacters.map((c) => (c?.name || '').trim().toLowerCase()).filter(Boolean),
+  );
+  const worldEntitiesSummary = world
+    ? (renderEntitiesSummary(world, {
+      maxPerKind: { characters: Infinity },
+      excludeCharacterNames: scopedCharacterNames,
+    }) || '(none)')
+    : NO_LINKED_UNIVERSE_PLACEHOLDER;
   return {
     series: {
       name: series.name,
@@ -402,7 +418,10 @@ export async function generateStage(issueId, stageId, options = {}) {
     sourceStageIds: options.sourceStageIds,
   });
   if (stageId === 'idea') {
-    Object.assign(ctx, await buildIdeaContextAugment(series, issue));
+    Object.assign(ctx, await buildIdeaContextAugment(series, issue, options.seedInput));
+    if (ctx.paddingRisk) {
+      console.log(`⚠️ Pipeline idea — issue=${issueId.slice(0, 8)} terse synopsis vs ${ctx.lengthTargets?.profile} profile: scope-discipline guard engaged`);
+    }
   }
 
   // Catch only at this boundary so the stage record persists the failure

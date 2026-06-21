@@ -168,15 +168,52 @@ const byNumber = (a, b) => (a?.number ?? 9999) - (b?.number ?? 9999);
 // from its targetFormat. prose is the intermediate source the scripts adapt
 // from — we gate on the final scripts so a script-first import (prose empty,
 // script authored) is already considered ready and never regenerated.
-export function requiredScriptStages(series) {
+export function requiredScriptStages(series, options = {}) {
   const fmt = series?.targetFormat || 'comic+tv';
-  if (fmt === 'comic') return ['comicScript'];
-  if (fmt === 'tv') return ['teleplay'];
-  return ['comicScript', 'teleplay'];
+  // Per-run format restriction: a multi-format (comic+tv) series can be driven
+  // to just one format's scripts in a single autopilot run — e.g. "produce the
+  // comic draft only, skip the 24 teleplays." `options.targetFormats` is a
+  // subset of ['comic','tv']; absent/empty means "all formats the series wants".
+  const restrict = Array.isArray(options?.targetFormats) && options.targetFormats.length
+    ? options.targetFormats
+    : null;
+  const wantComic = fmt.includes('comic') && (!restrict || restrict.includes('comic'));
+  const wantTv = fmt.includes('tv') && (!restrict || restrict.includes('tv'));
+  const stages = [];
+  if (wantComic) stages.push('comicScript');
+  if (wantTv) stages.push('teleplay');
+  // Never strand the run with zero required script stages (which would mark every
+  // issue text-ready with no script authored). If the restriction excludes
+  // everything this series supports, ignore it and fall back to the series' own
+  // formats.
+  if (stages.length === 0) return requiredScriptStages(series);
+  return stages;
 }
 
 export function isComicTarget(series) {
   return (series?.targetFormat || 'comic+tv').includes('comic');
+}
+
+// Does THIS run want the comic format? `isComicTarget` alone keys off the
+// series' declared format, but a per-run `options.targetFormats` restriction can
+// scope a comic+tv series to TV only — in which case the comic-only steps
+// (scriptVerify, visual draft) must NOT run, or a TV-only pass would enter
+// comic-script verification with no comicScript and pause on an unparseable
+// script. Mirrors the restriction logic in requiredScriptStages: an empty/absent
+// restriction (or one that excludes everything the series supports) means "all
+// formats the series wants", so this stays true for the default whole-series run.
+export function wantsComic(series, options = {}) {
+  if (!isComicTarget(series)) return false;
+  const restrict = Array.isArray(options?.targetFormats) && options.targetFormats.length
+    ? options.targetFormats
+    : null;
+  if (!restrict) return true;
+  // If the restriction excludes every format the series supports, requiredScriptStages
+  // ignores it (never strand the run) — match that here so the gates agree.
+  const wantComic = restrict.includes('comic');
+  const wantTv = restrict.includes('tv') && (series?.targetFormat || '').includes('tv');
+  if (!wantComic && !wantTv) return true; // restriction is a no-op → whole series
+  return wantComic;
 }
 
 // Effective "produce draft visuals?" decision. The `target` option overrides
@@ -194,8 +231,8 @@ function orderedIssues(issues) {
   return [...(Array.isArray(issues) ? issues : [])].sort(compareIssuesByPosition);
 }
 
-function textReady(issue, series) {
-  return requiredScriptStages(series).every((stageId) => isStageReady(issue.stages?.[stageId]));
+function textReady(issue, series, options = {}) {
+  return requiredScriptStages(series, options).every((stageId) => isStageReady(issue.stages?.[stageId]));
 }
 
 // Structural script gate (pure): does the comic script parse into >=1 page with
@@ -294,13 +331,16 @@ export function resolveNextStep(series, issues, runState = {}, options = {}) {
   // STEP 4b — per-issue text stages (prose + required scripts).
   for (const issue of ordered) {
     if (setHas(runState.textAttempted, issue.id)) continue;
-    if (!textReady(issue, series)) {
+    if (!textReady(issue, series, options)) {
       return { kind: 'textStages', issueId: issue.id, reason: 'prose / scripts not ready' };
     }
   }
 
-  // STEP 4c — structural script gate (comic targets only).
-  if (isComicTarget(series)) {
+  // STEP 4c — structural script gate (comic targets only). Gate on wantsComic,
+  // not bare isComicTarget, so a TV-only run of a comic+tv series doesn't enter
+  // comic-script verification with no comicScript (which would pause on an
+  // unparseable script).
+  if (wantsComic(series, options)) {
     for (const issue of ordered) {
       if (setHas(runState.scriptChecked, issue.id)) continue;
       return { kind: 'scriptVerify', issueId: issue.id, reason: 'comic script not yet structurally verified' };
@@ -333,12 +373,12 @@ export function resolveNextStep(series, issues, runState = {}, options = {}) {
   // canon noun that appears where it'd be drawn must be described (an artist
   // can't render a name). Runs once per run; the gate blocks (pauses) on
   // undescribed drawn nouns. Only relevant when visuals will be produced.
-  if (VISUAL_DRAFT_ENABLED && wantsVisual(options) && isComicTarget(series) && !runState.canonVerified) {
+  if (VISUAL_DRAFT_ENABLED && wantsVisual(options) && wantsComic(series, options) && !runState.canonVerified) {
     return { kind: 'canonVerify', reason: 'canon descriptive integrity not yet verified this run' };
   }
 
   // STEP 6 — draft visuals (cover + back + all interior pages).
-  if (VISUAL_DRAFT_ENABLED && wantsVisual(options) && isComicTarget(series)) {
+  if (VISUAL_DRAFT_ENABLED && wantsVisual(options) && wantsComic(series, options)) {
     for (const issue of ordered) {
       if (setHas(runState.visualDrafted, issue.id)) continue;
       if (visualReady(issue)) continue;
@@ -482,8 +522,12 @@ async function runArcVerify(seriesId, record) {
     // step can't overspend the daily cap mid-loop.
     const beforeResolve = await budgetPause();
     if (beforeResolve) return beforeResolve;
-    await resolveVerifyIssues(seriesId, { findings: blocking, ...providerOverrideOpts(record) });
+    const resolved = await resolveVerifyIssues(seriesId, { findings: blocking, ...providerOverrideOpts(record) });
     await recordDomainUsage('cos', { actions: 1 });
+    broadcast(seriesId, {
+      type: 'resolve:round', scope: 'arc', round,
+      episodesEdited: Array.isArray(resolved?.episodesResolved) ? resolved.episodesResolved.length : 0,
+    });
   }
   return {};
 }
@@ -516,7 +560,7 @@ async function runText(issueId, record) {
   // spend LLM calls populating the off-target script across every issue.
   const preIssue = await getIssue(issueId);
   const preSeries = await getSeries(preIssue.seriesId).catch(() => null);
-  const scripts = requiredScriptStages(preSeries);
+  const scripts = requiredScriptStages(preSeries, record.options);
   // Forward the run's provider/model override so prose + scripts honor it like
   // every other step (autoRunner threads these into generateStage).
   await autoRunner.startAutoRunTextStages(issueId, { force: false, scripts, ...providerIdOpts(record) });
@@ -530,8 +574,8 @@ async function runText(issueId, record) {
   // required stages landed and pause for review if they didn't.
   const issue = await getIssue(issueId);
   const series = await getSeries(issue.seriesId).catch(() => null);
-  if (!textReady(issue, series)) {
-    const missing = requiredScriptStages(series).filter((s) => !isStageReady(issue.stages?.[s]));
+  if (!textReady(issue, series, record.options)) {
+    const missing = requiredScriptStages(series, record.options).filter((s) => !isStageReady(issue.stages?.[s]));
     return {
       pause: true,
       reason: `text generation for issue ${issue.number ?? issueId} did not produce required stage(s): ${missing.join(', ')}`,
@@ -647,7 +691,13 @@ async function runEditorial(sId, record) {
       const beforeFix = await budgetPause();
       if (beforeFix) return beforeFix;
       try {
-        if (!comment.fix) await generateManuscriptFix(sId, { commentId: comment.id });
+        // Thread the run's provider/model override into fix GENERATION (an LLM
+        // call) so it honors the same provider as the review — without this the
+        // fix silently runs on the active/default provider (and its runtime
+        // fallback), which diverges from the run's chosen model and, when the
+        // default is rate-limited, degrades fixes onto a weak fallback. Accept
+        // is a deterministic edit application (no LLM), so it needs no override.
+        if (!comment.fix) await generateManuscriptFix(sId, { commentId: comment.id, ...providerOverrideOpts(record) });
         await acceptManuscriptFix(sId, { commentId: comment.id });
         await recordDomainUsage('cos', { actions: 1 });
       } catch (err) {
@@ -990,9 +1040,9 @@ function buildDryRunPlan(series, issues, options) {
   const beatsNeeded = seasons.filter((s) =>
     ordered.some((i) => i.seasonId === s.id && !isStageReady(i.stages?.idea))).length;
   if (beatsNeeded) plan.push({ kind: 'beatSheet', count: beatsNeeded });
-  const textNeeded = ordered.filter((i) => !textReady(i, series)).length;
+  const textNeeded = ordered.filter((i) => !textReady(i, series, options)).length;
   if (textNeeded) plan.push({ kind: 'textStages', count: textNeeded });
-  if (isComicTarget(series)) plan.push({ kind: 'scriptVerify', count: ordered.length });
+  if (wantsComic(series, options)) plan.push({ kind: 'scriptVerify', count: ordered.length });
   const edRounds = Number.isInteger(options?.maxEditorialRounds) ? options.maxEditorialRounds : MAX_EDITORIAL_ROUNDS;
   plan.push({ kind: 'editorialReview', count: 1, note: roundsNote(edRounds) });
   // maxEditorialRounds === 0 skips the whole editorial gate in execute mode
@@ -1003,7 +1053,7 @@ function buildDryRunPlan(series, issues, options) {
     plan.push({ kind: 'editorialChecks', count: 1, note: 'enabled editorial checks (#1284)' });
     plan.push({ kind: 'editorialHealthGate', count: 1, note: 'editorial health readiness gate (#1316)' });
   }
-  if (VISUAL_DRAFT_ENABLED && wantsVisual(options) && isComicTarget(series)) {
+  if (VISUAL_DRAFT_ENABLED && wantsVisual(options) && wantsComic(series, options)) {
     plan.push({ kind: 'canonVerify', count: 1, note: 'descriptive integrity of drawn nouns' });
     const visualNeeded = ordered.filter((i) => !visualReady(i)).length;
     if (visualNeeded) plan.push({ kind: 'visualDraft', count: visualNeeded, note: 'cover + back + all pages (draft)' });

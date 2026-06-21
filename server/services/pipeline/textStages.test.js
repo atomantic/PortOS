@@ -180,7 +180,7 @@ describe('pipeline text stage generator', () => {
     expect(ctx.worldEntitiesSummary).toBe('(none — series has no linked Universe Builder world)');
   });
 
-  it('prompt context carries a rendered worldEntitiesSummary when series links a universe', async () => {
+  it('renders worldEntitiesSummary roster but does NOT re-list characters already in the full bible', async () => {
     const { series, issue } = await seed();
     const world = await universeSvc.createUniverse({ name: 'Salt Verse' });
     await universeSvc.updateUniverse(world.id, {
@@ -193,9 +193,12 @@ describe('pipeline text stage generator', () => {
     await seriesSvc.updateSeries(series.id, { universeId: world.id });
     await textStages.generateStage(issue.id, 'idea');
     const ctx = ctxFromCall(llmCalls[0]);
-    expect(ctx.worldEntitiesSummary).toContain('Mira (surveyor — broad-shouldered)');
-    expect(ctx.worldEntitiesSummary).toContain('Jonas (foreman — cunning)');
+    // The characters appear in full in the bible (series.characters)…
+    expect((ctx.series.characters || []).map((c) => c.name)).toEqual(expect.arrayContaining(['Mira', 'Jonas']));
+    // …so the terse roster must NOT duplicate them — it carries places/objects.
     expect(ctx.worldEntitiesSummary).toContain('The Foundry (industrial district)');
+    expect(ctx.worldEntitiesSummary).not.toContain('Mira');
+    expect(ctx.worldEntitiesSummary).not.toContain('Jonas');
   });
 
   it('prompt context carries lengthTargets from a named non-default profile (extended)', async () => {
@@ -320,6 +323,46 @@ describe('pipeline text stage generator', () => {
     expect(ctx.positionInVolume).toEqual({ ordinal: 2, total: 3 });
     expect(ctx.priorIssue).toMatchObject({ title: 'Pilot', arcRole: 'pilot', arcPosition: 1 });
     expect(ctx.nextIssue).toMatchObject({ title: 'Midpoint', arcRole: 'midpoint', arcPosition: 3 });
+  });
+
+  it('idea context: paddingRisk flagged for a terse synopsis on a long (finale) profile', async () => {
+    const { series } = await seed();
+    const issue = await issuesSvc.createIssue({
+      seriesId: series.id,
+      title: 'The Invitation',
+      lengthProfile: 'finale',
+      stages: { idea: { input: 'the Helioheart invitation arrives', status: 'draft' } },
+    });
+    await textStages.generateStage(issue.id, 'idea');
+    expect(ctxFromCall(llmCalls[0]).paddingRisk).toBe(true);
+  });
+
+  it('idea context: paddingRisk NOT flagged for a terse synopsis on a standard profile', async () => {
+    const { series } = await seed();
+    const issue = await issuesSvc.createIssue({
+      seriesId: series.id,
+      title: 'The Gala',
+      lengthProfile: 'standard',
+      stages: { idea: { input: 'the gala', status: 'draft' } },
+    });
+    await textStages.generateStage(issue.id, 'idea');
+    expect(ctxFromCall(llmCalls[0]).paddingRisk).toBe(false);
+  });
+
+  it('idea context: paddingRisk tracks the seedInput override, not the stored synopsis', async () => {
+    const { series } = await seed();
+    // Stored synopsis is rich enough to clear the finale floor → not padding-prone.
+    const richStored = Array.from({ length: 60 }, (_, i) => `word${i}`).join(' ');
+    const issue = await issuesSvc.createIssue({
+      seriesId: series.id,
+      title: 'The Invitation',
+      lengthProfile: 'finale',
+      stages: { idea: { input: richStored, status: 'draft' } },
+    });
+    // Regenerating with a terse override seed must flag padding risk, because the
+    // override — not the stored synopsis — is what gets expanded.
+    await textStages.generateStage(issue.id, 'idea', { seedInput: 'the invitation arrives' });
+    expect(ctxFromCall(llmCalls[0]).paddingRisk).toBe(true);
   });
 
   it('idea context: neighbor exposes beats when expanded, synopsis when not', async () => {
@@ -707,6 +750,42 @@ describe('pipeline-idea-expansion template render', () => {
     expect(out).toContain('**all-is-lost**');      // next neighbor's arc role
     expect(out).toContain('PRIOR-BEAT-ONE');       // prior neighbor's beat sheet
     expect(out).toContain('NEXT-SYNOPSIS-LINE');   // next neighbor's synopsis
+  });
+
+  it('renders the {{#paddingRisk}} scope warning only when the flag is set (#1513)', () => {
+    const withRisk = applyTemplate(ideaTemplate, renderCtx({ paddingRisk: true }));
+    expect(withRisk).toContain('Scope warning');
+    expect(withRisk).toContain('Do NOT do that');
+    // Pin the dotted interpolation INSIDE the section — a regression to {{.}} or a
+    // broken lengthTargets ref would still render the static text above.
+    expect(withRisk).toContain('22-page target');   // {{lengthTargets.pageTarget}}
+    expect(withRisk).toContain('8–12 range');        // {{lengthTargets.beatsMin}}–{{lengthTargets.beatsMax}}
+
+    const withoutRisk = applyTemplate(ideaTemplate, renderCtx({ paddingRisk: false }));
+    expect(withoutRisk).not.toContain('Scope warning');
+  });
+
+  it('frames neighboring issues as hard scope boundaries (#1513)', () => {
+    const out = applyTemplate(ideaTemplate, renderCtx());
+    // Next-issue block: its events are out of scope, not material to continue into.
+    expect(out).toContain('OUT OF SCOPE');
+    // The seed scope note (non-backfill runs).
+    expect(out).toContain("This seed defines THIS issue's scope.");
+  });
+
+  it('suppresses the seed-scope note + padding warning on a backfill run (#1513)', () => {
+    // Backfill mode: beats are reverse-engineered from existing source material,
+    // so the seed is not the scope — the source is. The seed-scope language must
+    // NOT fire (it would tell the model to drop events present only in the source).
+    const out = applyTemplate(ideaTemplate, renderCtx({
+      paddingRisk: true,
+      hasSourceMaterials: true,
+      sourceMaterials: [{ label: 'Prose Draft', content: 'PROSE-SOURCE-BODY' }],
+    }));
+    expect(out).not.toContain("This seed defines THIS issue's scope.");
+    expect(out).not.toContain('Scope warning');       // paddingRisk gated under {{^hasSourceMaterials}}
+    expect(out).toContain('reverse-engineering this beat sheet');  // backfill block still renders
+    expect(out).toContain('PROSE-SOURCE-BODY');
   });
 
   it('renders the ticking-clock section when enabled and omits it otherwise', () => {

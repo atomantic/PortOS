@@ -38,6 +38,7 @@ export const ACCEPTED_OLD_MD5 = {
     '87bc5c01f1a8a97b681727a38b05edc6', // pre-005 (original)
     'a8677bbe1eb38f871fb152a5b0fec7c6', // post-005 / pre-019 — the hash this migration originally produced
     '8e348f3d1894382889f9f0ee7d5c6792', // post-019 / pre-023
+    '5b340885c6e8f8afc63424d6b5bc7eb7', // post-023 / pre-123 (episode-synopsis anchor)
   ],
 };
 
@@ -46,7 +47,7 @@ export const NEW_SHIPPED_MD5 = {
   'pipeline-arc-verify.md':      '36aa70cdfc25d7549573a4d556e7702c', // post-019
   'pipeline-volume-verify.md':   '49458d36700cb94e34806d536ffe2940', // post-019
   'pipeline-season-episodes.md': '50c68a29c3ebc275db3095d06bd87100', // post-005 (live sample)
-  'pipeline-arc-resolve.md':     '5b340885c6e8f8afc63424d6b5bc7eb7', // post-023
+  'pipeline-arc-resolve.md':     'cc27b4da1d1a13c35e35d1c2d6183815', // post-123 (episodes[] correction channel)
 };
 
 const { applyMigration, up } = makePromptReplaceMigration({

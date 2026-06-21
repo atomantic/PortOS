@@ -83,6 +83,15 @@ vi.mock('../services/subAgentSpawner.js', () => ({
   loadSlashdoCommand: vi.fn()
 }));
 
+// The `/do:next` slashdo route resolves the app's Work Tracker via
+// buildClaimWorkTask + getAppById instead of inlining the raw command body.
+vi.mock('../services/cosTaskGenerator.js', () => ({
+  buildClaimWorkTask: vi.fn()
+}));
+vi.mock('../services/apps.js', () => ({
+  getAppById: vi.fn()
+}));
+
 // Import mocked modules
 import * as cos from '../services/cos.js';
 import * as taskWatcher from '../services/taskWatcher.js';
@@ -90,6 +99,8 @@ import * as appActivity from '../services/appActivity.js';
 import * as claudeChangelog from '../services/claudeChangelog.js';
 import { enhanceTaskPrompt } from '../services/taskEnhancer.js';
 import { loadSlashdoCommand } from '../services/subAgentSpawner.js';
+import { buildClaimWorkTask } from '../services/cosTaskGenerator.js';
+import { getAppById } from '../services/apps.js';
 
 describe('CoS Routes', () => {
   let app;
@@ -796,7 +807,6 @@ describe('CoS Routes', () => {
       'push',
       'review',
       'replan',
-      'next',
       'release',
       'better',
       'better-swift'
@@ -811,6 +821,42 @@ describe('CoS Routes', () => {
       expect(response.status).toBe(200);
       expect(response.body.id).toBe(`task-sd-${command}`);
       expect(loadSlashdoCommand).toHaveBeenCalledWith(command);
+    });
+
+    it('routes /do:next through the app Work Tracker instead of the raw command', async () => {
+      getAppById.mockResolvedValue({ id: 'my-app', name: 'MyApp', repoPath: '/repo' });
+      buildClaimWorkTask.mockResolvedValue({
+        tracker: 'github',
+        source: 'config',
+        promptTaskType: 'claim-issue',
+        prompt: 'CLAIM ISSUE PROMPT',
+        taskMetadata: { useWorktree: false, openPR: false }
+      });
+      cos.addTask.mockResolvedValue({ id: 'task-sd-next', status: 'pending' });
+
+      const response = await request(app)
+        .post('/api/cos/tasks/slashdo')
+        .send({ command: 'next', app: 'my-app' });
+
+      expect(response.status).toBe(200);
+      expect(response.body.id).toBe('task-sd-next');
+      expect(buildClaimWorkTask).toHaveBeenCalledWith(expect.objectContaining({ id: 'my-app' }));
+      // The raw do:next body must NOT be inlined for the next command.
+      expect(loadSlashdoCommand).not.toHaveBeenCalledWith('next');
+      const [taskData] = cos.addTask.mock.calls.at(-1);
+      expect(taskData.context).toBe('CLAIM ISSUE PROMPT');
+      expect(taskData.description).toContain('GitHub Issues');
+    });
+
+    it('returns 404 when /do:next targets an unknown app', async () => {
+      getAppById.mockResolvedValue(null);
+
+      const response = await request(app)
+        .post('/api/cos/tasks/slashdo')
+        .send({ command: 'next', app: 'ghost-app' });
+
+      expect(response.status).toBe(404);
+      expect(buildClaimWorkTask).not.toHaveBeenCalled();
     });
 
     it('should return 400 for invalid command', async () => {

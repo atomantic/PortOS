@@ -16,7 +16,7 @@
 
 import { ServerError } from './errorHandler.js';
 import { findBalancedBlocks, tryParseWithRepair } from './jsonExtract.js';
-import { resolveEffectiveModel, runPromptThroughProvider, DEFAULT_TIMEOUT_MS } from './promptRunner.js';
+import { resolveEffectiveModel, runPromptThroughProvider, DEFAULT_TIMEOUT_MS, isLocalEndpoint } from './promptRunner.js';
 import { stripCodeFences } from './aiProvider.js';
 import { extractCodexAssistant } from './codexAssistantExtract.js';
 import { getActiveProvider, getProviderById } from '../services/providers.js';
@@ -122,9 +122,16 @@ export function knownProviderContextWindow(provider) {
   return null;
 }
 
-const LOCAL_ENDPOINT_RE = /^(https?:\/\/)?(localhost|127\.0\.0\.1|0\.0\.0\.0|\[?::1\]?)(:|\/|$)/i;
-const isLocalEndpoint = (endpoint) =>
-  typeof endpoint === 'string' && LOCAL_ENDPOINT_RE.test(endpoint.trim());
+// The local-backend concurrency gate (cap concurrent in-flight calls per local
+// endpoint so N parallel stage calls don't thrash one GPU's VRAM) lives in
+// promptRunner.js — the actual execution layer — so it covers the initially
+// selected provider, a proactive createRun swap, AND a runtime fallback that
+// lands on a local backend. Re-exported here for callers/tests that reference
+// the gate by its historical stageRunner path. `isLocalEndpoint` is shared from
+// the same module so the context-window heuristic below and the gate agree on
+// what "local" means.
+export { withLocalConcurrencyGate, LOCAL_LLM_MAX_CONCURRENCY } from './promptRunner.js';
+export { isLocalEndpoint };
 
 // CLI/TUI providers (Claude Code, Codex, Antigravity) are frontier models;
 // non-local API providers are cloud. Local backends (ollama/lmstudio on
@@ -168,10 +175,21 @@ export async function resolveStageContext(stageName, options = {}) {
   return { provider, model, contextWindow: effectiveContextWindow(provider, model) };
 }
 
-// Stage config can pin a specific provider via `stage.provider`. If set we
-// must use it (or fail) — falling back to the active provider would route
-// silently through whatever's currently selected, defeating the override.
-async function resolveProviderForStage(stage, { providerOverride } = {}) {
+// Provider resolution precedence, strongest first:
+//   1. `providerOverride` — an explicit per-call choice ("run THIS request with
+//      provider X right now", e.g. a route's regenerate-with-provider button).
+//      The most specific signal, so it beats even a stage pin. Throws if the
+//      requested provider is unavailable — the caller asked for it by name.
+//   2. `stage.provider` — a deliberate per-stage pin (Prompts page /
+//      stage-config.json). Beats a blanket run-level default so a pinned stage
+//      keeps running on its chosen provider even when something sets a different
+//      default for everything else (e.g. Series Autopilot's run provider).
+//   3. `providerDefault` — a blanket run-level default that applies ONLY to
+//      stages without their own pin. Unlike an override it is a soft preference:
+//      if it's unavailable we fall through to the active provider rather than
+//      throwing, because it was never a per-call demand.
+//   4. The active provider — the system-wide fallback.
+async function resolveProviderForStage(stage, { providerOverride, providerDefault } = {}) {
   if (providerOverride) {
     const pinned = await getProviderById(providerOverride).catch(() => null);
     if (pinned?.enabled) return pinned;
@@ -187,6 +205,12 @@ async function resolveProviderForStage(stage, { providerOverride } = {}) {
       `Stage provider "${stage.provider}" is not available — re-pick a provider in Prompts or the stage settings`,
       { status: 503, code: 'STAGE_PROVIDER_UNAVAILABLE' }
     );
+  }
+  if (providerDefault) {
+    const fallback = await getProviderById(providerDefault).catch(() => null);
+    if (fallback?.enabled) return fallback;
+    // Soft default: an unavailable run default is not a hard error — drop to the
+    // active provider below instead of throwing.
   }
   const active = await getActiveProvider().catch(() => null);
   if (active?.enabled) return active;
@@ -288,7 +312,10 @@ export function extractJson(text, { promptToStrip } = {}) {
  * (or the parsed JSON in the `content` field when `returnsJson` is true).
  *
  * Options:
- *   - providerOverride: explicit provider id, beats stage.provider
+ *   - providerOverride: explicit per-call provider id, beats stage.provider
+ *   - providerDefault: blanket run-level provider id used ONLY when the stage has
+ *     no pin of its own; loses to stage.provider and falls through to the active
+ *     provider if unavailable (see resolveProviderForStage)
  *   - modelOverride: explicit model id, beats stage.model
  *   - timeoutOverride: explicit ms timeout, beats stage.timeout and the provider default
  *   - returnsJson: parse `content` via `extractJson` before returning
@@ -427,6 +454,11 @@ async function executeStagePrompt({ stage, label, prompt, options }) {
   // (runId / model / providerId) here so the persisted stage result points
   // at the run that actually produced the text — otherwise pipeline history
   // / restore links land on a failed record.
+  // The local-backend concurrency gate is applied INSIDE runPromptThroughProvider
+  // (around each actual execution — primary, proactive swap, and runtime
+  // fallback), so we do NOT wrap here: a second gate on the same local endpoint
+  // would deadlock against the inner one (outer holds the only slot, inner waits
+  // forever).
   const runResult2 = await runPromptThroughProvider({
     provider: effectiveProvider, model: effectiveModel, prompt, source: options.source || 'staged-llm', runId,
     timeout: effectiveTimeout,

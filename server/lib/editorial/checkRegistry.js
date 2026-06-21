@@ -32,7 +32,7 @@ import {
   analyzeComicLettering,
   DEFAULT_LETTERING_THRESHOLDS,
 } from './letteringDensity.js';
-import { analyzeNamePair, findFirstLetterClusters, normalizeName } from './nameSimilarity.js';
+import { analyzeNamePair, comparisonName, findFirstLetterClusters, normalizeName } from './nameSimilarity.js';
 import { findCliches, findModifierStacking } from './cliches.js';
 import { findSaidBookisms, findUnattributedDialogueRuns, attributeDialogueByOwner } from './dialogue.js';
 import { findItalicThoughts } from './italicThoughts.js';
@@ -1728,7 +1728,7 @@ export const EDITORIAL_CHECKS = [
           // Derive the unlocked members from the tokens (not a name-keyed map) so
           // two distinct characters sharing an identical name both count.
           const unlocked = primaries
-            .filter((t) => !t.locked && normalizeName(t.token)[0] === cluster.letter)
+            .filter((t) => !t.locked && comparisonName(t.token)[0] === cluster.letter)
             .map((t) => t.token);
           const renameHint = unlocked.length
             ? `Consider renaming some of the unlocked ones (${unlocked.join(', ')}) so the cast doesn't blur together.`

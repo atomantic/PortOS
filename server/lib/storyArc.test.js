@@ -303,6 +303,19 @@ describe('storyArc — sanitizeSeason', () => {
     expect(s.episodeCountTarget).toBe(ARC_LIMITS.SEASON_EPISODE_COUNT_MAX);
   });
 
+  it('keeps a full multi-episode synopsis (cap is wide enough to not clip mid-sentence)', () => {
+    // A 4000-char cap clipped a real season synopsis mid-word, and the
+    // arc-verify→resolve loop then re-flagged the truncation forever (never
+    // converged). The cap matches the arc-level SUMMARY_MAX (8000) so a full
+    // season synopsis is stored intact. Guard the 5000-char case the old cap broke.
+    expect(ARC_LIMITS.SEASON_SYNOPSIS_MAX).toBeGreaterThanOrEqual(8000);
+    const long = `${'A complete sentence about the season. '.repeat(130)}`; // ~5000 chars
+    expect(long.length).toBeGreaterThan(4000);
+    expect(long.length).toBeLessThanOrEqual(ARC_LIMITS.SEASON_SYNOPSIS_MAX);
+    const s = sanitizeSeason({ title: 'x', synopsis: long });
+    expect(s.synopsis).toBe(long.trim()); // not clipped
+  });
+
   it('refreshes timestamps when preserveTimestamps=false', async () => {
     const original = sanitizeSeason({ title: 'x', createdAt: '2020-01-01T00:00:00.000Z', updatedAt: '2020-01-01T00:00:00.000Z' });
     // Tick the clock forward so the new updatedAt is strictly greater

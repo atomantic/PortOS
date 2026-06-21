@@ -37,7 +37,7 @@ export const ACCEPTED_OLD_MD5 = {
 
 // New shipped hash — what data.reference carries post-migration.
 export const NEW_SHIPPED_MD5 = {
-  'pipeline-idea-expansion.md': 'c50f016639d41cd8244f5ff13429f997', // post-098 (ticking clock + {{.}} fixes)
+  'pipeline-idea-expansion.md': '93e9552c6662811e597a97296f3776a4', // post-124 (scope-discipline + {{#paddingRisk}})
 };
 
 const { applyMigration, up } = makePromptReplaceMigration({

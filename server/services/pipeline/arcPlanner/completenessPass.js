@@ -4,7 +4,10 @@
  */
 
 import { resolveStageContext, runStagedLLM } from '../../../lib/stageRunner.js';
-import { estimateTokens, planManuscriptPass } from '../../../lib/contextBudget.js';
+import {
+  estimateTokens, planManuscriptPass, fitContextToManuscriptFloor,
+  trimContextToBudget, MANUSCRIPT_FLOOR_TOKENS, CHARS_PER_TOKEN,
+} from '../../../lib/contextBudget.js';
 import { getSeries } from '../series.js';
 import { STAGE_OUTPUT_MAX } from '../issues.js';
 import { getSeriesCanon } from '../seriesCanon.js';
@@ -103,6 +106,42 @@ export const COMPLETENESS_OUTPUT_RESERVE_TOKENS = 6_000;
 // advice, so it needs materially more output room or a long edit list truncates.
 export const COMPLETENESS_WITH_EDITS_OUTPUT_RESERVE_TOKENS = 12_000;
 
+// The canon/world reference blocks (existing{Characters,Places,Objects}Json,
+// worldCanonText, …) can be enormous — a large universe's object catalog alone
+// runs 300K+ chars. The completeness pass needs them only as a name+gist
+// reference for continuity, NOT as the full record set. Left unbounded they can
+// exceed the model's whole context window, which collapses `usableChars` to 0
+// and slices the MANUSCRIPT (the primary content) to '' — so the model
+// "reviews" an empty draft and reports the entire book missing. Hard-cap the
+// combined canon reference so it can never crowd the manuscript out of the
+// budget (the window-aware floor in `analyzeManuscriptCompleteness` squeezes it
+// further on a small window). ~20K tokens is plenty to anchor continuity.
+export const COMPLETENESS_CANON_REFERENCE_CHARS = 80_000;
+
+// baseCtx keys that carry the large, trimmable canon/world reference blocks.
+// Order is irrelevant — the cap trims the largest block first regardless.
+const CANON_CONTEXT_KEYS = [
+  'existingObjectsJson', 'existingCharactersJson', 'existingPlacesJson',
+  'worldCanonText', 'worldCategoriesText', 'worldCompositesText',
+];
+
+// Hard-cap the combined size of the canon/world reference blocks to `maxChars`,
+// trimming the largest block first so the giant object catalog absorbs the cut
+// while small blocks survive intact. Mutates `blocks` in place; returns true if
+// it trimmed anything. Window-independent (token efficiency + a floor the
+// window-aware pass can squeeze further).
+export function capCanonReference(blocks, maxChars = COMPLETENESS_CANON_REFERENCE_CHARS) {
+  const total = () => Object.values(blocks).reduce((n, v) => n + (v?.length || 0), 0);
+  if (total() <= maxChars) return false;
+  const largestFirst = Object.keys(blocks).sort((a, b) => (blocks[b]?.length || 0) - (blocks[a]?.length || 0));
+  for (const k of largestFirst) {
+    if (total() <= maxChars) break;
+    const overshoot = total() - maxChars;
+    blocks[k] = trimContextToBudget(blocks[k], Math.max(0, (blocks[k]?.length || 0) - overshoot));
+  }
+  return true;
+}
+
 // Earlier-chapter findings summarized into the rolling digest fed to later
 // chunks, and the char cap on that digest (kept small so it fits the margin).
 export const COMPLETENESS_PRIOR_DIGEST_MAX = 40;
@@ -174,23 +213,54 @@ export async function analyzeManuscriptCompleteness(seriesId, options = {}) {
   const onProgress = typeof options.onProgress === 'function' ? options.onProgress : () => {};
   const signal = options.signal || null;
 
-  // Base (non-manuscript) context is fixed overhead present in every call.
+  // Base (non-manuscript) context. The canon/world reference blocks dominate it
+  // and, left unbounded, starve the manuscript out of the window (see
+  // COMPLETENESS_CANON_REFERENCE_CHARS). Two-step protection, mirroring the
+  // editorial check runner (#1459):
+  //   1. hard-cap the canon reference (window-independent), then
+  //   2. window-aware-trim it so the manuscript always keeps a budget floor.
   const baseCtx = await buildCompletenessContext(series, '', options.preloadedWorld);
-  const overheadTokens = estimateTokens(JSON.stringify(baseCtx)) + 2_000; // + template/instructions
   const { contextWindow } = await resolveStageContext(COMPLETENESS_STAGE, {
     providerOverride: options.providerOverride,
     modelOverride: options.modelOverride,
   });
+  const outputReserveTokens = withEdits
+    ? COMPLETENESS_WITH_EDITS_OUTPUT_RESERVE_TOKENS
+    : COMPLETENESS_OUTPUT_RESERVE_TOKENS;
+
+  // Pull the large trimmable canon/world blocks out of the fixed overhead.
+  const canonBlocks = {};
+  for (const k of CANON_CONTEXT_KEYS) {
+    if (typeof baseCtx[k] === 'string' && baseCtx[k]) canonBlocks[k] = baseCtx[k];
+  }
+  const hardCapped = capCanonReference(canonBlocks, COMPLETENESS_CANON_REFERENCE_CHARS);
+  // Fixed (non-trimmable) overhead = everything EXCEPT the canon blocks and the
+  // manuscript, plus a template/instruction allowance.
+  const fixedCtx = { ...baseCtx, manuscript: '' };
+  for (const k of CANON_CONTEXT_KEYS) delete fixedCtx[k];
+  const fixedOverheadTokens = estimateTokens(JSON.stringify(fixedCtx)) + 2_000;
+  // Window-aware floor: on a small window, squeeze the canon further so the
+  // manuscript keeps at least a floor of input budget (never sliced to '').
+  const corpusChars = sections.reduce((n, s) => n + (s.content?.length || 0), 0);
+  const fit = fitContextToManuscriptFloor(canonBlocks, {
+    contextWindow,
+    fixedOverheadTokens,
+    outputReserveTokens,
+    floorTokens: Math.min(MANUSCRIPT_FLOOR_TOKENS, Math.ceil(corpusChars / CHARS_PER_TOKEN)),
+  });
+  if (hardCapped || fit.trimmed) {
+    console.log(`✂️ completeness: canon reference trimmed to keep manuscript budget — series=${String(seriesId).slice(0, 12)} window=${contextWindow ?? 'floor'}`);
+  }
+  const fittedBaseCtx = { ...baseCtx, ...fit.context };
+
   const plan = planManuscriptPass({
     contextWindow,
     sections: sections.map((s) => ({ ...s, text: `${manuscriptSectionHeader(s)}\n\n${s.content}` })),
-    overheadTokens,
-    outputReserveTokens: withEdits
-      ? COMPLETENESS_WITH_EDITS_OUTPUT_RESERVE_TOKENS
-      : COMPLETENESS_OUTPUT_RESERVE_TOKENS,
+    overheadTokens: fit.overheadTokens,
+    outputReserveTokens,
   });
 
-  const runOne = (manuscript) => runStagedLLM(COMPLETENESS_STAGE, { ...baseCtx, manuscript, withEdits }, {
+  const runOne = (manuscript) => runStagedLLM(COMPLETENESS_STAGE, { ...fittedBaseCtx, manuscript, withEdits }, {
     providerOverride: options.providerOverride,
     modelOverride: options.modelOverride,
     returnsJson: true,

@@ -31,6 +31,10 @@ const autopilotStartSchema = z.object({
   target: z.enum(['auto', 'text', 'visual']).optional().default('auto'),
   // Create CoS tasks for capability gaps (Phase 3).
   fileGaps: z.boolean().optional().default(false),
+  // Restrict a multi-format (comic+tv) series to one format's scripts for this
+  // run — e.g. ['comic'] produces the comic draft and skips teleplay generation.
+  // Absent/empty = author every format the series targets.
+  targetFormats: z.array(z.enum(['comic', 'tv'])).optional(),
   // Per-run convergence bounds for the verify/review loops (0 = skip that gate).
   // When omitted, the autopilot falls back to the persisted
   // pipelineEditorialChecks.{maxArcVerifyRounds,maxEditorialRounds} setting, then

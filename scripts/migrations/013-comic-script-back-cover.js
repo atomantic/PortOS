@@ -21,11 +21,13 @@ export const ACCEPTED_OLD_MD5 = {
     '133d200d069c2e8173b7c129eea58f53', // post-027 / pre-054
     'e530fc76b89cedaef848ad7ec99c934c', // post-054 / pre-054-fence
     'dea7d497d1cb38e7574f236f4ff8e644', // post-054-fence / pre-063
+    'e9ee70bf18888492edada6633cd9928a', // post-063 / pre-121
+    '7c05ecde539f04c9fa91e87543057204', // pre-121 reference body
   ],
 };
 
 export const NEW_SHIPPED_MD5 = {
-  'pipeline-comic-script.md': 'e9ee70bf18888492edada6633cd9928a', // post-063
+  'pipeline-comic-script.md': 'a4303016c34b65e4b0e641fe71252de3', // post-121 (visible text exactness)
 };
 
 const { applyMigration, up } = makePromptReplaceMigration({

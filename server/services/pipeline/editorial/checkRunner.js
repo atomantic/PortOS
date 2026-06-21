@@ -493,6 +493,11 @@ export async function runEditorialChecks(seriesId, options = {}) {
 
   const findings = [];
   const perCheck = [];
+  // Deterministic checks self-heal (see seeding below): track which ones actually
+  // RAN to completion this pass (not gated-out, not errored), so we can fresh-mode
+  // reconcile each of them — including those that produced zero findings, which
+  // must dismiss their now-stale prior open comments.
+  const deterministicRanIds = new Set();
   let canceled = false;
   for (const { check, config } of enabled) {
     if (signal?.aborted) { canceled = true; break; }
@@ -511,6 +516,11 @@ export async function runEditorialChecks(seriesId, options = {}) {
       const sourceContentHash = fingerprintForCheck(check, resolvedSources);
       const stamped = raw.map((f) => ({ ...f, checkId: check.id, sourceContentHash }));
       findings.push(...stamped);
+      // A deterministic check is a pure function of its sources, so a finding it
+      // no longer produces is genuinely resolved (not provider variance) — mark it
+      // for fresh-mode reconciliation. LLM checks stay merge-only (an absent
+      // finding could just be sampling noise).
+      if (check.kind === 'deterministic') deterministicRanIds.add(check.id);
       perCheck.push({ checkId: check.id, count: stamped.length });
       onProgress?.({ type: 'check:complete', checkId: check.id, count: stamped.length });
     } catch (err) {
@@ -525,25 +535,43 @@ export async function runEditorialChecks(seriesId, options = {}) {
     if (signal?.aborted) { canceled = true; break; }
   }
 
-  // Seed in 'merge' mode (never 'fresh'): a per-series seed of only the editorial
-  // checks' findings must not auto-dismiss completeness or other-check open
-  // comments. Merge dedups via findingKey (which now includes checkId) and keeps
-  // dismissed findings suppressed per-check. Skip entirely on cancellation — a
-  // canceled run emits a `canceled` terminal event and must not mutate the
-  // review with partial findings collected before the abort.
+  // Seeding strategy (skip entirely on cancellation — a canceled run emits a
+  // `canceled` terminal event and must not mutate the review with partial
+  // findings collected before the abort):
+  //
+  //  - DETERMINISTIC checks self-heal: each that ran is seeded in 'fresh' mode
+  //    SCOPED to its own checkId, so a finding the (possibly just-corrected) check
+  //    no longer surfaces is auto-dismissed (a sync-safe status flip, never a
+  //    deletion — see seedReviewFromFindings). This includes checks that found
+  //    nothing this pass: their prior open findings must clear. Scoping by checkId
+  //    means one deterministic check's reconciliation can't touch another check's
+  //    or the completeness pass's (null-checkId) open comments.
+  //  - LLM checks (and everything else) stay 'merge' mode: an absent LLM finding
+  //    could be sampling variance, so it must not auto-dismiss a prior open one.
+  //
+  // accepted/dismissed comments are untouched by either mode.
   if (!canceled) {
-    // Seed only when there are findings (merge dedups); but record a revision-trend
-    // snapshot for EVERY non-canceled run (#1316) — a run is a revision boundary,
-    // and a CLEAN run (0 new findings, or fixes that closed prior ones) is exactly
-    // the improving point the trend should capture. When findings were seeded we
-    // pass the just-merged comments (no re-read); otherwise recordTrendSnapshot
-    // reads the current review itself. Best-effort — a ledger write must never
-    // fail the check run (it's telemetry).
-    const review = findings.length
-      ? await seedReviewFromFindings(seriesId, findings, { runId, mode: 'merge' })
-      : null;
+    let lastReview = null;
+    // Fresh-reconcile each deterministic check that ran, scoped to its checkId —
+    // passing only that check's findings so the scoped 'fresh' pass dismisses the
+    // stale opens it no longer produces.
+    for (const checkId of deterministicRanIds) {
+      const own = findings.filter((f) => f.checkId === checkId);
+      lastReview = await seedReviewFromFindings(seriesId, own, { runId, mode: 'fresh', checkId });
+    }
+    // Seed the remaining (non-deterministic) findings in merge mode.
+    const merged = findings.filter((f) => !deterministicRanIds.has(f.checkId));
+    if (merged.length) {
+      lastReview = await seedReviewFromFindings(seriesId, merged, { runId, mode: 'merge' });
+    }
+    // Record a revision-trend snapshot for EVERY non-canceled run (#1316) — a run
+    // is a revision boundary, and a CLEAN run (0 new findings, or a reconciliation
+    // that closed prior ones) is exactly the improving point the trend should
+    // capture. Reuse the freshest seeded review when we have one; otherwise
+    // recordTrendSnapshot reads the current review itself. Best-effort — a ledger
+    // write must never fail the check run (it's telemetry).
     const gate = readReadinessGate(settings) || undefined;
-    await recordTrendSnapshot(seriesId, { runId, gate, comments: review?.comments }).catch((err) => {
+    await recordTrendSnapshot(seriesId, { runId, gate, comments: lastReview?.comments }).catch((err) => {
       console.error(`⚠️ editorial trend snapshot failed — series=${String(seriesId).slice(0, 12)} ${err.message}`);
     });
   }
