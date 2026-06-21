@@ -40,6 +40,10 @@ vi.mock('../services/audioModels.js', () => ({
 const sse = vi.hoisted(() => ({ run: vi.fn(async ({ res }) => { res.writeHead(200, { 'Content-Type': 'text/event-stream' }); res.end('data: {"type":"complete"}\n\n'); }) }));
 vi.mock('../lib/sseDownload.js', () => ({ startHfDownloadStream: (args) => sse.run(args) }));
 
+// Register-after-download gates on whether the repo landed in the cache.
+const cache = vi.hoisted(() => ({ cached: true }));
+vi.mock('../lib/hfCache.js', () => ({ inspectModelCache: vi.fn(async () => ({ cached: cache.cached })) }));
+
 vi.mock('../services/albums/index.js', () => ({
   getAlbum: vi.fn(async () => null),
   updateAlbum: vi.fn(async (id, patch) => ({ id, ...patch })),
@@ -76,6 +80,7 @@ describe('music routes', () => {
     albums.updateAlbum.mockReset().mockImplementation(async (id, patch) => ({ id, ...patch }));
     sse.run.mockReset().mockImplementation(async ({ res }) => { res.writeHead(200, { 'Content-Type': 'text/event-stream' }); res.end('data: {"type":"complete"}\n\n'); });
     gen.ready = true;
+    cache.cached = true;
     models.list.mockResolvedValue([{ id: 'm', name: 'M', userAdded: false }]);
   });
 
@@ -112,8 +117,17 @@ describe('music routes', () => {
     models.add.mockResolvedValueOnce({ id: 'facebook/musicgen-large', repo: 'facebook/musicgen-large', name: 'musicgen-large' });
     const r = await request(app).post('/api/music/models').send({ engine: 'musicgen', repo: 'facebook/musicgen-large' });
     expect(r.status).toBe(200);
-    expect(models.add).toHaveBeenCalledWith({ engine: 'musicgen', repo: 'facebook/musicgen-large', name: undefined });
     expect(sse.run).toHaveBeenCalledWith(expect.objectContaining({ repo: 'facebook/musicgen-large' }));
+    // Registered only AFTER the download landed in the cache.
+    expect(models.add).toHaveBeenCalledWith({ engine: 'musicgen', repo: 'facebook/musicgen-large', name: undefined });
+  });
+
+  it('POST /models does NOT register the model when the download did not land', async () => {
+    cache.cached = false; // download failed/cancelled → repo not in cache
+    const r = await request(app).post('/api/music/models').send({ engine: 'musicgen', repo: 'someorg/typo-repo' });
+    expect(r.status).toBe(200); // the SSE stream still completes (with its error frames)
+    expect(sse.run).toHaveBeenCalled();
+    expect(models.add).not.toHaveBeenCalled();
   });
 
   it('POST /models rejects an unknown engine / invalid repo before downloading', async () => {

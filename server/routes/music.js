@@ -23,6 +23,7 @@ import { validateRequest } from '../lib/validation.js';
 import { ENGINES, DEFAULT_ENGINE_ID, getEngine, isEngineReady, generateMusic } from '../services/pipeline/musicGen.js';
 import { listEngineModels, addAudioModel, removeAudioModel, isValidRepoId } from '../services/audioModels.js';
 import { startHfDownloadStream } from '../lib/sseDownload.js';
+import { inspectModelCache } from '../lib/hfCache.js';
 import * as tracks from '../services/tracks/index.js';
 import * as albums from '../services/albums/index.js';
 
@@ -73,11 +74,12 @@ router.get('/models/:engine', asyncHandler(async (req, res) => {
   res.json({ models: await listEngineModels(req.params.engine) });
 }));
 
-// POST /api/music/models — register an HF repo for an engine, then STREAM its
-// download as SSE (text/event-stream). Registering first (before the bytes land)
-// is intentional: the generation sidecars auto-download a missing checkpoint on
-// first use, so even a cancelled pre-download leaves a usable (lazily-fetched)
-// model — same posture as the shipped models.
+// POST /api/music/models — STREAM the HF download as SSE (text/event-stream),
+// then register the repo only if it actually landed in the cache. Registering
+// AFTER a successful download (rather than up front) means a typo / private /
+// gated / auth-failed repo never persists into data/audio-models.json as a
+// bogus "installed" model that a later /engines list would surface and that
+// generation would fail on.
 router.post('/models', asyncHandler(async (req, res) => {
   const body = validateRequest(installSchema, req.body ?? {});
   if (!ENGINES[body.engine]) throw new ServerError('Unknown audio engine', { status: 400, code: 'AUDIO_MODEL_UNKNOWN_ENGINE' });
@@ -88,10 +90,17 @@ router.post('/models', asyncHandler(async (req, res) => {
     throw new ServerError(`${ENGINES[body.engine].name} does not support custom HuggingFace models`, { status: 400, code: 'AUDIO_MODEL_ENGINE_FIXED' });
   }
   if (!isValidRepoId(body.repo)) throw new ServerError('Invalid HuggingFace repo id', { status: 400, code: 'AUDIO_MODEL_INVALID_REPO' });
-  await addAudioModel({ engine: body.engine, repo: body.repo, name: body.name });
   // Hand the response to the shared SSE driver — it owns writeHead/end + the
-  // in-flight dedupe + client-disconnect kill. The cache pre-warm is best-effort.
+  // in-flight dedupe + client-disconnect kill. It resolves after the stream ends
+  // (the HTTP response is already closed by then, so the post-stream work below
+  // is a side effect only — it can't change what the client received).
   await startHfDownloadStream({ req, res, repo: body.repo });
+  // Register only if the weights are actually present now — a failed/cancelled
+  // download leaves the cache empty and we must NOT persist the model.
+  const cached = await inspectModelCache(body.repo).catch(() => ({ cached: false }));
+  if (cached.cached) {
+    await addAudioModel({ engine: body.engine, repo: body.repo, name: body.name }).catch(() => {});
+  }
 }));
 
 // DELETE /api/music/models/:engine/*id — de-register a user-added model. The id

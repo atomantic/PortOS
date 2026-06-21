@@ -51,12 +51,19 @@ export default function MusicGenPanel({ track, prompt, lyrics, onGenerated }) {
 
   const engine = useMemo(() => engines.find((e) => e.id === engineId) || null, [engines, engineId]);
 
-  // Reset model + duration to the engine's defaults whenever the engine changes.
+  // Keep the model selection valid for the current engine: reset to the engine
+  // default ONLY when the selected model isn't in this engine's list. Keying on
+  // engine.id (not the object) + this guard means a list refresh after installing
+  // a model (which replaces the engines array but keeps the same engine id) does
+  // NOT clobber a freshly-selected model — it stays selected because it's now in
+  // the list. Switching to a different engine still resets (the old model isn't
+  // in the new engine's list). Duration seeds once.
   useEffect(() => {
     if (!engine) return;
-    setModelId(engine.defaultModelId || engine.models?.[0]?.id || '');
+    const ids = (engine.models || []).map((m) => m.id);
+    if (!ids.includes(modelId)) setModelId(engine.defaultModelId || ids[0] || '');
     setDurationSec((d) => (d == null ? engine.defaultDurationSec : d));
-  }, [engine]);
+  }, [engine?.id, engine?.models]);
 
   const canGenerate = !!engine?.ready && !!prompt?.trim() && !generating && !!track?.id;
 
