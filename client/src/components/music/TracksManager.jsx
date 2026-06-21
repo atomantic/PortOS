@@ -333,8 +333,14 @@ export default function TracksManager() {
                   prompt={form.prompt}
                   lyrics={form.lyrics}
                   onGenerated={(updated) => {
-                    upsertLocal(updated);
-                    if (selectedIdRef.current === updated.id) setForm(formFromTrack(updated));
+                    upsertLocal(updated); // list update is id-keyed → always safe
+                    // Merge ONLY the server-set generation fields into the open
+                    // form (audio + gen metadata mirror onto the form's read-only
+                    // badges/player) so any UNSAVED edits the user made to title/
+                    // artist/album/prompt/lyrics before clicking Generate survive.
+                    if (selectedIdRef.current === updated.id) {
+                      setForm((f) => ({ ...f, audioFilename: updated.audioFilename || '' }));
+                    }
                   }}
                 />
               ) : null}
