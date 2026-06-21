@@ -573,6 +573,17 @@ describe('pipeline text stage generator', () => {
       .toEqual(['Jonas']);
   });
 
+  it('scopeCharactersForIssue: matches a character referenced by first name only', () => {
+    const cast = [
+      { name: 'Mira Reyes', role: 'surveyor' },
+      { name: 'Jonas Vale', role: 'lead' }, // principal — proves the match isn't the fallback
+    ];
+    // Draft says "Mira", not the full "Mira Reyes" — the full-name matcher misses,
+    // the first-name supplement catches it.
+    expect(textStages.__testing.scopeCharactersForIssue(cast, 'Mira crossed the yard alone').map((c) => c.name))
+      .toEqual(['Mira Reyes']);
+  });
+
   it('scopeCharactersForIssue: falls back to principals when no name is matched', () => {
     const cast = [
       { name: 'Mira', role: 'main protagonist' },

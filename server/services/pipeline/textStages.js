@@ -197,6 +197,25 @@ function resolveSourceStageIds({ issue, stageId, sourceStageIds }) {
 // series principals than the whole 68-character cast.
 const PRINCIPAL_ROLE_RE = /\b(main|lead|protagonist|principal|recurring|primary|hero|central)\b/i;
 
+// Word-boundary, case-insensitive containment test (same escaping the bible
+// matcher in scenePrompt.js uses). Local copy so the first-name supplement below
+// doesn't have to widen the shared matcher (which `canonReadiness` also calls).
+const wordInText = (needle, haystack) => {
+  if (!needle) return false;
+  const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`\\b${escaped}\\b`, 'i').test(haystack);
+};
+
+// First-name token of a multi-word canon name ("Mira Reyes" → "Mira"). Drafts
+// routinely refer to a character by first name only after introduction, which
+// the full-name/alias matcher (whole-name word boundary) misses — so a clearly
+// in-issue character would lose their full record. Single-word names need no
+// supplement (the matcher already handles them).
+const firstNameToken = (c) => {
+  const parts = String(c?.name || '').trim().split(/\s+/);
+  return parts.length > 1 ? parts[0] : '';
+};
+
 /**
  * Scope the full-record character bible to the cast relevant to THIS issue (#1511).
  *
@@ -204,18 +223,32 @@ const PRINCIPAL_ROLE_RE = /\b(main|lead|protagonist|principal|recurring|primary|
  * comic-script prompt is the token-bloat this addresses: a 68-character bible is
  * ~52K tokens re-sent on every issue × every stage, when most issues feature a
  * handful of the cast. We keep full records only for characters the issue's own
- * source text names (via the bible matcher), and let the always-present compact
- * `worldEntitiesSummary` roster carry the rest of the cast for continuity refs.
+ * source text names (via the bible matcher PLUS a first-name supplement), and let
+ * the always-present compact `worldEntitiesSummary` roster carry the rest of the
+ * cast for continuity refs.
+ *
+ * Matching errs toward INCLUSION: the first-name supplement can over-match a
+ * shared/common-word first name, but the ceiling is the whole cast (the old
+ * behavior), so it never drops a featured character — only ever costs a little
+ * extra budget. Under-matching, by contrast, would silently strip an in-issue
+ * character's bible from a draft that features them.
  *
  * Fallback order — never returns an empty block:
- *   1. characters named in the issue's source text;
+ *   1. characters named in the issue's source text (full name/alias OR first name);
  *   2. else the series principals (lead/recurring `role`);
  *   3. else the whole cast (no signal at all — preserve prior behavior).
  */
 export function scopeCharactersForIssue(allCharacters, scopeText) {
   if (!Array.isArray(allCharacters) || allCharacters.length === 0) return [];
-  const matched = matchCharactersInText(scopeText, allCharacters);
-  if (matched.length) return matched;
+  const byKey = new Map();
+  for (const c of matchCharactersInText(scopeText, allCharacters)) byKey.set(c.id || c.name, c);
+  if (scopeText) {
+    for (const c of allCharacters) {
+      const key = c.id || c.name;
+      if (!byKey.has(key) && wordInText(firstNameToken(c), scopeText)) byKey.set(key, c);
+    }
+  }
+  if (byKey.size) return [...byKey.values()];
   const principals = allCharacters.filter((c) => PRINCIPAL_ROLE_RE.test(c?.role || ''));
   if (principals.length) return principals;
   return allCharacters;
