@@ -17,7 +17,7 @@
  */
 
 import { randomUUID } from 'crypto';
-import { isStr, trimTo } from './storyBible.js';
+import { isStr, trimTo, trimToClause } from './storyBible.js';
 import { sanitizeCoverLike } from './renderSlot.js';
 
 export const ARC_LIMITS = Object.freeze({
@@ -426,9 +426,11 @@ export function renderTickingClock(clock) {
 export function sanitizeArc(raw) {
   if (raw == null) return null;
   if (typeof raw !== 'object') return null;
-  const logline = trimTo(raw.logline, ARC_LIMITS.LOGLINE_MAX);
-  const summary = trimTo(raw.summary, ARC_LIMITS.SUMMARY_MAX);
-  const protagonistArc = trimTo(raw.protagonistArc, ARC_LIMITS.PROTAGONIST_ARC_MAX);
+  // Prose fields use the boundary-aware cap so an over-cap value never clips
+  // mid-word (which arc-verify flags as a truncation it can't converge on).
+  const logline = trimToClause(raw.logline, ARC_LIMITS.LOGLINE_MAX);
+  const summary = trimToClause(raw.summary, ARC_LIMITS.SUMMARY_MAX);
+  const protagonistArc = trimToClause(raw.protagonistArc, ARC_LIMITS.PROTAGONIST_ARC_MAX);
   const themes = cleanThemes(raw.themes);
   // An arc with zero identifying content is indistinguishable from "no arc"
   // — store null so the UI can render the empty state instead of a blank
@@ -473,11 +475,17 @@ export function sanitizeSeason(raw, { preserveTimestamps = true } = {}) {
     id: ensureSeasonId(raw.id),
     number,
     title,
-    logline: trimTo(raw.logline, ARC_LIMITS.SEASON_LOGLINE_MAX),
-    synopsis: trimTo(raw.synopsis, ARC_LIMITS.SEASON_SYNOPSIS_MAX),
+    // Prose fields use the boundary-aware cap (trimToClause) so an over-cap
+    // value clips on a sentence/word boundary instead of mid-word — otherwise a
+    // hard clip reads as "truncated mid-sentence" to arc-verify, which then
+    // can't converge (the resolver regenerates an over-cap value that's
+    // re-clipped the same way every round). See arc-verify truncation findings,
+    // 2026-06-21.
+    logline: trimToClause(raw.logline, ARC_LIMITS.SEASON_LOGLINE_MAX),
+    synopsis: trimToClause(raw.synopsis, ARC_LIMITS.SEASON_SYNOPSIS_MAX),
     episodeCountTarget,
     themes: cleanThemes(raw.themes),
-    endingHook: trimTo(raw.endingHook, ARC_LIMITS.SEASON_ENDING_HOOK_MAX),
+    endingHook: trimToClause(raw.endingHook, ARC_LIMITS.SEASON_ENDING_HOOK_MAX),
     // Volume (season) cover + back cover. Same script + proof + final
     // slot shape as an issue cover; rendered by enqueueVolumeCover and
     // assembled into the volume PDF as the trade-paperback bookends.

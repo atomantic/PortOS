@@ -253,6 +253,29 @@ const DEFAULT_ID_PREFIX = Object.freeze({
 export const isStr = (v) => typeof v === 'string';
 export const trimTo = (v, max) => (isStr(v) ? v.trim().slice(0, max) : '');
 
+// Boundary-aware cap for PROSE fields (loglines, synopses, ending hooks). A hard
+// `slice(0, max)` clips mid-word ("...tracing the brand and"), which downstream
+// verify passes flag as "truncated mid-sentence" — and because a resolver then
+// regenerates an over-cap value that gets re-clipped the same way, the
+// verify→resolve loop never converges. When the text fits, it's returned
+// untouched. When it must be clipped, back off to the last sentence terminator
+// (. ! ?) within the budget; if there's no sentence break in the last ~40% of
+// the budget (one run-on sentence), fall back to the last whitespace boundary so
+// the result still ends on a whole word. Never returns more than `max` chars.
+export function trimToClause(v, max) {
+  if (!isStr(v)) return '';
+  const s = v.trim();
+  if (s.length <= max) return s;
+  const window = s.slice(0, max);
+  // Prefer the last sentence terminator, but only if it's not so early that we'd
+  // drop most of the content (keep at least ~60% of the budget).
+  const sentence = Math.max(window.lastIndexOf('. '), window.lastIndexOf('! '), window.lastIndexOf('? '));
+  if (sentence >= Math.floor(max * 0.6)) return window.slice(0, sentence + 1).trim();
+  // No usable sentence break — clip on the last whole word instead of mid-word.
+  const space = window.lastIndexOf(' ');
+  return (space > 0 ? window.slice(0, space) : window).trim();
+}
+
 // Walk a raw array through a per-item sanitizer, dropping rejected entries
 // (falsy return from `sanitizer`) and capping the output at `cap`. Three
 // near-identical loops elsewhere in this file (cleanStringArray, the wardrobe

@@ -33,6 +33,8 @@ const {
   stripCanonControlFields,
   CANON_CONTROL_FIELDS,
   SERVER_OWNED_CHARACTER_FIELDS,
+  trimTo,
+  trimToClause,
 } = storyBible;
 
 const WORK_ID = 'wr-work-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
@@ -1400,5 +1402,42 @@ describe('BIBLE_LIMITS client mirror', () => {
     // sanitizer caps. If this fails, update the client file to match.
     const clientMirror = await import('../../client/src/lib/bibleLimits.js');
     expect(clientMirror.BIBLE_LIMITS).toEqual(BIBLE_LIMITS);
+  });
+});
+
+describe('storyBible — trimToClause (boundary-aware prose cap)', () => {
+  it('returns text untouched when it fits', () => {
+    expect(trimToClause('A short logline.', 500)).toBe('A short logline.');
+    expect(trimToClause('  trimmed  ', 500)).toBe('trimmed');
+  });
+
+  it('is empty for non-strings (matches trimTo)', () => {
+    expect(trimToClause(null, 50)).toBe('');
+    expect(trimToClause(undefined, 50)).toBe('');
+    expect(trimToClause(42, 50)).toBe('');
+  });
+
+  it('clips at a sentence boundary when one falls in the last ~40% of the budget', () => {
+    const text = 'First full sentence about the arc here. And then a second clause runs on well past the budget.';
+    const out = trimToClause(text, 50);
+    expect(out).toBe('First full sentence about the arc here.');
+    expect(out.length).toBeLessThanOrEqual(50);
+  });
+
+  it('never clips mid-word — falls back to a whole-word boundary on a run-on', () => {
+    // No sentence terminator within budget → must still end on a complete word,
+    // not "...tracing the brand an".
+    const runon = 'JUNO risks her anonymity to be recognized as author while Caroline Marsh starts tracing the brand and the buzz';
+    const out = trimToClause(runon, 60);
+    expect(out.length).toBeLessThanOrEqual(60);
+    expect(out.endsWith(' ')).toBe(false);
+    // The last token is a whole word from the source (no partial word).
+    const lastWord = out.split(' ').pop();
+    expect(runon.split(' ')).toContain(lastWord);
+  });
+
+  it('never returns more than max characters', () => {
+    const long = 'word '.repeat(400); // 2000 chars, no sentence breaks
+    expect(trimToClause(long, 100).length).toBeLessThanOrEqual(100);
   });
 });
