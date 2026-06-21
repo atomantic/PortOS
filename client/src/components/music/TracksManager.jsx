@@ -19,7 +19,7 @@ import { formatTimecode } from '../../utils/formatters';
 import ArtistPicker from './ArtistPicker';
 import {
   listTracks, createTrack, updateTrack, deleteTrack,
-  uploadTrackAudio, attachTrackAudio, clearTrackAudio, listMusicLibrary,
+  uploadTrackAudio, attachTrackAudio, clearTrackAudio, listMusicLibrary, listAlbums,
   TRACK_TITLE_MAX, TRACK_LYRICS_MAX, TRACK_PROMPT_MAX,
 } from '../../services/api';
 
@@ -28,11 +28,12 @@ const AUDIO_MAX_BYTES = 50 * 1024 * 1024;
 const AUDIO_SRC = (filename) => `/data/music/${encodeURIComponent(filename)}`;
 
 const emptyForm = () => ({
-  title: '', artistId: '', artist: '', lyrics: '', prompt: '', audioFilename: '',
+  title: '', albumId: '', artistId: '', artist: '', lyrics: '', prompt: '', audioFilename: '',
 });
 
 const formFromTrack = (t) => ({
   title: t.title || '',
+  albumId: t.albumId || '',
   artistId: t.artistId || '',
   artist: t.artist || '',
   lyrics: t.lyrics || '',
@@ -60,12 +61,18 @@ export default function TracksManager() {
   const [uploading, setUploading] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [library, setLibrary] = useState([]);
+  const [albums, setAlbums] = useState([]);
   const fileInputRef = useRef(null);
 
   useEffect(() => {
-    listTracks()
-      .then((list) => setTracks(Array.isArray(list) ? list : []))
-      .catch((err) => toast.error(err.message || 'Failed to load tracks'))
+    Promise.all([
+      listTracks().catch((err) => { toast.error(err.message || 'Failed to load tracks'); return []; }),
+      listAlbums({ silent: true }).catch(() => []),
+    ])
+      .then(([trackList, albumList]) => {
+        setTracks(Array.isArray(trackList) ? trackList : []);
+        setAlbums(Array.isArray(albumList) ? albumList : []);
+      })
       .finally(() => setLoading(false));
   }, []);
 
@@ -243,6 +250,22 @@ export default function TracksManager() {
                   name={form.artist}
                   onChange={(artistId, artist) => setForm((f) => ({ ...f, artistId, artist }))}
                 />
+              </Field>
+              <Field label="Album" hint="Optional — none means a standalone single. Saving syncs the album's tracklist.">
+                <select
+                  id="track-album"
+                  value={form.albumId}
+                  onChange={(e) => setForm((f) => ({ ...f, albumId: e.target.value }))}
+                  className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm"
+                >
+                  <option value="">— Single (no album) —</option>
+                  {albums.map((a) => (
+                    <option key={a.id} value={a.id}>{a.title}</option>
+                  ))}
+                  {form.albumId && !albums.some((a) => a.id === form.albumId) ? (
+                    <option value={form.albumId}>Linked album (unavailable)</option>
+                  ) : null}
+                </select>
               </Field>
               <Field label="Prompt" hint="Text/style prompt for generation (used by the upcoming on-device generators).">
                 <textarea
