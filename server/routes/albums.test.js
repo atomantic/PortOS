@@ -16,12 +16,18 @@ vi.mock('../services/albums/index.js', () => ({
   ALBUM_ID_RE: /^album-/,
   listAlbums: vi.fn(async () => [{ id: 'album-1', title: 'Debut' }]),
   getAlbum: vi.fn(),
-  createAlbum: vi.fn(async (input) => ({ id: 'album-new', ...input })),
-  updateAlbum: vi.fn(async (id, patch) => ({ id, ...patch })),
+  createAlbum: vi.fn(async (input) => ({ id: 'album-new', trackIds: [], ...input })),
+  updateAlbum: vi.fn(async (id, patch) => ({ id, trackIds: [], ...patch })),
   deleteAlbum: vi.fn(async (id) => ({ id })),
 }));
 
+vi.mock('../services/tracks/index.js', () => ({
+  listTracks: vi.fn(async () => []),
+  updateTrack: vi.fn(async (id, patch) => ({ id, ...patch })),
+}));
+
 import * as albums from '../services/albums/index.js';
+import * as tracks from '../services/tracks/index.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import albumsRoutes from './albums.js';
 
@@ -81,5 +87,31 @@ describe('albums routes', () => {
     const r = await request(app).delete('/api/albums/album-1');
     expect(r.status).toBe(200);
     expect(r.body).toEqual({ id: 'album-1' });
+  });
+
+  it('PATCH /:id with trackIds reconciles track.albumId (stamp added, clear removed)', async () => {
+    // The album will list track-1 + track-2; track-3 used to belong here and
+    // must be cleared, track-1 already points here (no-op), track-2 is added.
+    tracks.listTracks.mockResolvedValueOnce([
+      { id: 'track-1', albumId: 'album-1' },
+      { id: 'track-2', albumId: '' },
+      { id: 'track-3', albumId: 'album-1' },
+    ]);
+    const r = await request(app).patch('/api/albums/album-1').send({ trackIds: ['track-1', 'track-2'] });
+    expect(r.status).toBe(200);
+    expect(tracks.updateTrack).toHaveBeenCalledWith('track-3', { albumId: '' });
+    expect(tracks.updateTrack).toHaveBeenCalledWith('track-2', { albumId: 'album-1' });
+    expect(tracks.updateTrack).not.toHaveBeenCalledWith('track-1', expect.anything());
+  });
+
+  it('PATCH /:id WITHOUT trackIds does not reconcile membership', async () => {
+    await request(app).patch('/api/albums/album-1').send({ genre: 'jazz' });
+    expect(tracks.listTracks).not.toHaveBeenCalled();
+  });
+
+  it('DELETE /:id orphans the album\'s tracks (clears their albumId)', async () => {
+    tracks.listTracks.mockResolvedValueOnce([{ id: 'track-9', albumId: 'album-1' }]);
+    await request(app).delete('/api/albums/album-1');
+    expect(tracks.updateTrack).toHaveBeenCalledWith('track-9', { albumId: '' });
   });
 });

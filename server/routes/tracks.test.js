@@ -35,7 +35,13 @@ vi.mock('../services/pipeline/musicLibrary.js', () => ({
 }));
 
 import * as tracks from '../services/tracks/index.js';
+vi.mock('../services/albums/index.js', () => ({
+  getAlbum: vi.fn(async () => null),
+  updateAlbum: vi.fn(async (id, patch) => ({ id, ...patch })),
+}));
+
 import * as musicLibrary from '../services/pipeline/musicLibrary.js';
+import * as albums from '../services/albums/index.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import tracksRoutes from './tracks.js';
 
@@ -69,6 +75,37 @@ describe('tracks routes', () => {
     expect(r.status).toBe(201);
     expect(tracks.createTrack).toHaveBeenCalledWith(expect.objectContaining({ title: 'Intro', engine: 'acestep' }));
     expect(r.body.id).toBe('track-new');
+  });
+
+  it('POST / rejects a path-ish audioFilename (same guard as /audio/attach)', async () => {
+    const r = await request(app).post('/api/tracks').send({ title: 'Intro', audioFilename: '../escape.mp3' });
+    expect(r.status).toBe(400);
+    expect(tracks.createTrack).not.toHaveBeenCalled();
+  });
+
+  it('POST / accepts an empty audioFilename (clears the pointer)', async () => {
+    const r = await request(app).post('/api/tracks').send({ title: 'Intro', audioFilename: '' });
+    expect(r.status).toBe(201);
+  });
+
+  it('POST / with albumId appends the track to the album tracklist', async () => {
+    albums.getAlbum.mockResolvedValueOnce({ id: 'album-1', trackIds: ['track-0'] });
+    tracks.createTrack.mockResolvedValueOnce({ id: 'track-new', title: 'Intro', albumId: 'album-1' });
+    const r = await request(app).post('/api/tracks').send({ title: 'Intro', albumId: 'album-1' });
+    expect(r.status).toBe(201);
+    expect(albums.updateAlbum).toHaveBeenCalledWith('album-1', { trackIds: ['track-0', 'track-new'] });
+  });
+
+  it('PATCH /:id moving albums drops from the old tracklist and appends to the new', async () => {
+    tracks.getTrack.mockResolvedValueOnce({ id: 'track-1', title: 'Intro', albumId: 'album-old' });
+    tracks.updateTrack.mockResolvedValueOnce({ id: 'track-1', title: 'Intro', albumId: 'album-new' });
+    albums.getAlbum.mockImplementation(async (id) => (
+      id === 'album-old' ? { id, trackIds: ['track-1'] } : { id, trackIds: [] }
+    ));
+    const r = await request(app).patch('/api/tracks/track-1').send({ albumId: 'album-new' });
+    expect(r.status).toBe(200);
+    expect(albums.updateAlbum).toHaveBeenCalledWith('album-old', { trackIds: [] });
+    expect(albums.updateAlbum).toHaveBeenCalledWith('album-new', { trackIds: ['track-1'] });
   });
 
   it('POST / rejects a missing title', async () => {

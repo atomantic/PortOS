@@ -16,6 +16,7 @@ import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import * as albums from '../services/albums/index.js';
+import * as tracks from '../services/tracks/index.js';
 
 const router = Router();
 
@@ -51,13 +52,44 @@ const patchSchema = z.object({
   trackIds: trackIdsField.optional(),
 }).refine((p) => Object.keys(p).length > 0, { message: 'patch must include at least one field' });
 
+// Membership single-source-of-truth reconcile. The album's `trackIds` carry the
+// ORDER; each track's `albumId` is the membership pointer the Tracks API reports.
+// After an album write, stamp `albumId` on its member tracks and clear it on any
+// track that used to belong to this album but was dropped — so the two views
+// never disagree (a track removed from the album stops reporting that albumId,
+// and an added track starts). Best-effort per track: a missing/deleted track id
+// in `trackIds` is simply skipped (updateTrack 404s are swallowed). Runs after
+// the album persists so a rejected album write doesn't mutate track membership.
+async function reconcileAlbumMembership(album) {
+  const desired = new Set(album.trackIds || []);
+  const all = await tracks.listTracks().catch(() => []);
+  const ops = [];
+  // Clear albumId on tracks that point here but are no longer listed.
+  for (const t of all) {
+    if (t.albumId === album.id && !desired.has(t.id)) {
+      ops.push(tracks.updateTrack(t.id, { albumId: '' }).catch(() => {}));
+    }
+  }
+  // Stamp albumId on listed tracks that don't already point here.
+  const byId = new Map(all.map((t) => [t.id, t]));
+  for (const id of desired) {
+    const t = byId.get(id);
+    if (t && t.albumId !== album.id) {
+      ops.push(tracks.updateTrack(id, { albumId: album.id }).catch(() => {}));
+    }
+  }
+  await Promise.all(ops);
+}
+
 router.get('/', asyncHandler(async (_req, res) => {
   res.json(await albums.listAlbums());
 }));
 
 router.post('/', asyncHandler(async (req, res) => {
   const body = validateRequest(createSchema, req.body ?? {});
-  res.status(201).json(await albums.createAlbum(body));
+  const album = await albums.createAlbum(body);
+  await reconcileAlbumMembership(album);
+  res.status(201).json(album);
 }));
 
 router.get('/:id', asyncHandler(async (req, res) => {
@@ -68,11 +100,18 @@ router.get('/:id', asyncHandler(async (req, res) => {
 
 router.patch('/:id', asyncHandler(async (req, res) => {
   const body = validateRequest(patchSchema, req.body ?? {});
-  res.json(await albums.updateAlbum(req.params.id, body));
+  const album = await albums.updateAlbum(req.params.id, body);
+  // Only reconcile when the membership list was part of this write.
+  if ('trackIds' in body) await reconcileAlbumMembership(album);
+  res.json(album);
 }));
 
 router.delete('/:id', asyncHandler(async (req, res) => {
-  res.json(await albums.deleteAlbum(req.params.id));
+  const result = await albums.deleteAlbum(req.params.id);
+  // Orphan the album's tracks (clear their albumId) so they revert to singles
+  // rather than pointing at a tombstoned album.
+  await reconcileAlbumMembership({ id: req.params.id, trackIds: [] });
+  res.json(result);
 }));
 
 export default router;
