@@ -20,7 +20,7 @@ import ArtistPicker from './ArtistPicker';
 import {
   listAlbums, createAlbum, updateAlbum, deleteAlbum,
   listTracks, uploadGalleryImage, generateImage,
-  ALBUM_TITLE_MAX, ALBUM_DESCRIPTION_MAX, ALBUM_GENRE_MAX, ALBUM_COVER_IMAGE_URL_MAX,
+  ALBUM_TITLE_MAX, ALBUM_DESCRIPTION_MAX, ALBUM_GENRE_MAX,
   ALBUM_RELEASE_YEAR_MIN, ALBUM_RELEASE_YEAR_MAX,
 } from '../../services/api';
 
