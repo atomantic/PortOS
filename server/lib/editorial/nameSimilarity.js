@@ -3,9 +3,30 @@
 // tested in isolation and reused by any check that needs to reason about how
 // confusable two character names are. No imports — keeps the registry pure.
 
-// Lowercased letters only ("O'Brien" → "obrien"), the canonical form every
-// similarity signal compares against.
+// Lowercased letters only ("O'Brien" → "obrien"), the canonical IDENTITY form.
+// Used as a dedup/identity key across the editorial checks, so it must NOT strip
+// articles — "the reader" and "a reader" are distinct identities. The similarity
+// check compares on `comparisonName` (below) instead.
 export const normalizeName = (s) => String(s || '').toLowerCase().replace(/[^a-z]/g, '');
+
+// Leading-article stripper for the *confusability* comparison only. A cast that
+// uses epithet names ("THE CABARET SINGER", "THE CHAPTER SEVENTEEN READER") would
+// otherwise read as 60+ names all starting with "the" — every pair sharing the
+// first letter AND the 3-char opening, which on its own trips the 2-signal gate
+// and floods the check. Comparing on the article-stripped form ("cabaret singer"
+// / "chapter seventeen reader") judges the names readers actually disambiguate
+// on. Only strips when something remains after the article (so a character
+// literally named "The" still compares as "the").
+const LEADING_ARTICLE_RE = /^(?:the|a|an)\s+/i;
+export function stripLeadingArticle(s) {
+  const str = String(s || '').trim();
+  const stripped = str.replace(LEADING_ARTICLE_RE, '');
+  return stripped.trim() ? stripped : str;
+}
+
+// Normalized form the similarity signals compare against: article-stripped, then
+// reduced to lowercased letters. ("THE CABARET SINGER" → "cabaretsinger".)
+export const comparisonName = (s) => normalizeName(stripLeadingArticle(s));
 
 // The ordered vowel skeleton ("Rachel" → "ae"). Two names sharing this read as
 // rhythmically similar even when the consonants differ (Blake / Jane → "ae").
@@ -94,24 +115,31 @@ export function analyzeNamePair(a, b, opts = {}) {
     ...DEFAULT_SIGNAL_OPTS,
     ...opts,
   };
-  const la = normalizeName(a);
-  const lb = normalizeName(b);
+  // Compare on the article-stripped form so epithet casts ("THE …") don't all
+  // collide on their leading article (see comparisonName).
+  const la = comparisonName(a);
+  const lb = comparisonName(b);
   if (!la || !lb || la === lb) return { signals: [], distance: Infinity, phoneticMatch: false };
   const signals = [];
-  if (la[0] === lb[0]) signals.push('same first letter');
+  // "same opening" (first 3 chars) STRICTLY IMPLIES "same first letter", so
+  // counting both double-counts one similarity: any shared 3-char prefix would
+  // alone reach the default 2-signal gate. Emit the more specific signal when it
+  // applies, otherwise fall back to the first-letter signal — never both.
+  const sameOpening = la.length >= 3 && lb.length >= 3 && la.slice(0, 3) === lb.slice(0, 3);
+  if (sameOpening) signals.push('same opening');
+  else if (la[0] === lb[0]) signals.push('same first letter');
   if (flagSameLength && la.length === lb.length) signals.push('same length');
   if (vowelSkeletonCollision) {
-    const vsa = vowelSkeleton(a);
-    if (vsa && vsa === vowelSkeleton(b)) signals.push('same vowel pattern');
+    const vsa = vowelSkeleton(la);
+    if (vsa && vsa === vowelSkeleton(lb)) signals.push('same vowel pattern');
   }
-  if (la.length >= 3 && lb.length >= 3 && la.slice(0, 3) === lb.slice(0, 3)) signals.push('same opening');
   if (la.length >= 2 && la.slice(-2) === lb.slice(-2)) signals.push('same ending');
   const distance = levenshtein(la, lb);
   if (minEditDistance > 0 && distance <= minEditDistance) {
     signals.push(`near-identical spelling (edit distance ${distance})`);
   }
-  const ka = usePhonetic ? soundex(a) : '';
-  const phoneticMatch = ka !== '' && ka === soundex(b);
+  const ka = usePhonetic ? soundex(la) : '';
+  const phoneticMatch = ka !== '' && ka === soundex(lb);
   if (phoneticMatch) signals.push('same phonetic key');
   return { signals, distance, phoneticMatch };
 }
@@ -121,12 +149,15 @@ export function analyzeNamePair(a, b, opts = {}) {
 export const nameSimilaritySignals = (a, b, opts = {}) => analyzeNamePair(a, b, opts).signals;
 
 // A first-letter histogram over a list of names: Map<letter, name[]> keyed by the
-// lowercased first letter (entries with no letters are skipped). The check uses
-// this to spot first-letter crowding — a cast where many names start the same way.
+// lowercased first letter of the article-stripped name (entries with no letters
+// are skipped). The check uses this to spot first-letter crowding — a cast where
+// many names start the same way. Keying on the article-stripped form keeps an
+// epithet cast ("THE CABARET SINGER", "THE CHAPTER SEVENTEEN READER") from all
+// crowding under "T" on their shared leading article.
 export function firstLetterHistogram(names) {
   const hist = new Map();
   for (const name of names) {
-    const norm = normalizeName(name);
+    const norm = comparisonName(name);
     if (!norm) continue;
     const letter = norm[0];
     if (!hist.has(letter)) hist.set(letter, []);
@@ -139,7 +170,7 @@ export function firstLetterHistogram(names) {
 // names AND by at least `maxRatio` of the cast. Returns [{ letter, names, ratio }]
 // sorted densest-first so the worst crowding surfaces as the first finding.
 export function findFirstLetterClusters(names, { minCount = 3, maxRatio = 0.4 } = {}) {
-  const total = names.filter((n) => normalizeName(n)).length;
+  const total = names.filter((n) => comparisonName(n)).length;
   if (!total) return [];
   const clusters = [];
   for (const [letter, group] of firstLetterHistogram(names)) {

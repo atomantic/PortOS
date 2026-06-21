@@ -85,6 +85,28 @@ describe('nameSimilaritySignals', () => {
     expect(nameSimilaritySignals('Zog', 'Bree')).toEqual([]);
   });
 
+  it('never emits both "same first letter" and "same opening" (no double-count)', () => {
+    // A shared 3-char opening strictly implies a shared first letter — counting
+    // both would double-count one similarity and trip the 2-signal gate on a
+    // mere shared prefix. The more specific "same opening" wins; first-letter is
+    // suppressed.
+    const sig = nameSimilaritySignals('Marcus', 'Marvin');
+    expect(sig).toContain('same opening');
+    expect(sig).not.toContain('same first letter');
+    // A shared first letter WITHOUT a shared 3-opening still reports first-letter.
+    expect(nameSimilaritySignals('Sam', 'Sid')).toContain('same first letter');
+  });
+
+  it('strips a leading article before comparing (epithet casts)', () => {
+    // "THE CABARET SINGER" vs "THE CHAPTER SEVENTEEN READER" must NOT collide on
+    // the shared "THE" — compared on "cabaret…" / "chapter…" they share only a
+    // first letter, not the article-driven opening, so they no longer auto-flag.
+    const sig = nameSimilaritySignals('THE CABARET SINGER', 'THE CHAPTER SEVENTEEN READER');
+    expect(sig).not.toContain('same opening');
+    // Two epithet names that reduce to the same word are inert (equal forms).
+    expect(nameSimilaritySignals('the reader', 'a reader')).toEqual([]);
+  });
+
   it('returns no signals when a name has no letters or names are equal', () => {
     expect(nameSimilaritySignals('', 'Sam')).toEqual([]);
     expect(nameSimilaritySignals('Sam', 'sam')).toEqual([]);
@@ -136,6 +158,12 @@ describe('firstLetterHistogram', () => {
     const hist = firstLetterHistogram(['123', '', 'Bo']);
     expect([...hist.keys()]).toEqual(['b']);
   });
+  it('buckets epithet names by their post-article letter, not the article', () => {
+    // "THE CABARET SINGER" / "THE AUDIT-DRONES" must not both land under "t".
+    const hist = firstLetterHistogram(['THE CABARET SINGER', 'THE AUDIT-DRONES', 'Mike']);
+    expect([...hist.keys()].sort()).toEqual(['a', 'c', 'm']);
+    expect(hist.has('t')).toBe(false);
+  });
 });
 
 describe('findFirstLetterClusters', () => {
@@ -147,6 +175,17 @@ describe('findFirstLetterClusters', () => {
     expect(clusters[0].names).toEqual(['Mike', 'Mark', 'Matt']);
     expect(clusters[0].ratio).toBeCloseTo(0.5);
   });
+  it('does not crowd an epithet cast under the article letter', () => {
+    // A cast of "THE …" names must not register as "all start with T" — they are
+    // bucketed by their real post-article first letter, which is spread out.
+    const cast = [
+      'THE CABARET SINGER', 'THE AUDIT-DRONES', 'THE CHILD',
+      'THE READER', 'THE SMUGGLER', 'THE MINISTER',
+    ];
+    const clusters = findFirstLetterClusters(cast, { minCount: 3, maxRatio: 0.4 });
+    expect(clusters.find((c) => c.letter === 't')).toBeUndefined();
+  });
+
   it('does not flag a sparse first-letter share in a large cast (2 of 30)', () => {
     // 2 names start with M; the other 28 spread across 25 non-M letters (3 letters
     // doubled), so no letter is both shared by ≥3 names and ≥40% of the cast.
