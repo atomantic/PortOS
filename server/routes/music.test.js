@@ -9,8 +9,8 @@ import { ServerError } from '../lib/errorHandler.js';
 const gen = vi.hoisted(() => ({ generateMusic: vi.fn(), ready: true }));
 vi.mock('../services/pipeline/musicGen.js', () => {
   const ENGINES = {
-    musicgen: { id: 'musicgen', name: 'MusicGen', models: [{ id: 'm', name: 'M' }], defaultModelId: 'm', minDurationSec: 1, maxDurationSec: 30, defaultDurationSec: 12, installEnv: 'INSTALL_MUSICGEN', venvDefault: '/v/mg' },
-    acestep: { id: 'acestep', name: 'ACE-Step', models: [{ id: 'a', name: 'A' }], defaultModelId: 'a', minDurationSec: 1, maxDurationSec: 240, defaultDurationSec: 60, installEnv: 'INSTALL_ACESTEP', venvDefault: '/v/ace', lyrics: true },
+    musicgen: { id: 'musicgen', name: 'MusicGen', models: [{ id: 'm', name: 'M' }], defaultModelId: 'm', minDurationSec: 1, maxDurationSec: 30, defaultDurationSec: 12, installEnv: 'INSTALL_MUSICGEN', venvDefault: '/v/mg', customModels: true },
+    acestep: { id: 'acestep', name: 'ACE-Step', models: [{ id: 'a', name: 'A' }], defaultModelId: 'a', minDurationSec: 1, maxDurationSec: 240, defaultDurationSec: 60, installEnv: 'INSTALL_ACESTEP', venvDefault: '/v/ace', lyrics: true, customModels: false },
   };
   return {
     ENGINES,
@@ -86,8 +86,19 @@ describe('music routes', () => {
     const ace = r.body.engines.find((e) => e.id === 'acestep');
     expect(ace.lyrics).toBe(true);
     expect(ace.ready).toBe(true);
+    expect(ace.customModels).toBe(false); // fixed checkpoint — no custom install
     expect(ace.models).toEqual([{ id: 'm', name: 'M', userAdded: false }]);
-    expect(r.body.engines.find((e) => e.id === 'musicgen').lyrics).toBe(false);
+    const mg = r.body.engines.find((e) => e.id === 'musicgen');
+    expect(mg.lyrics).toBe(false);
+    expect(mg.customModels).toBe(true);
+  });
+
+  it('POST /models rejects an engine that does not support custom models (acestep)', async () => {
+    const r = await request(app).post('/api/music/models').send({ engine: 'acestep', repo: 'someorg/ace-variant' });
+    expect(r.status).toBe(400);
+    expect(r.body.code).toBe('AUDIO_MODEL_ENGINE_FIXED');
+    expect(models.add).not.toHaveBeenCalled();
+    expect(sse.run).not.toHaveBeenCalled();
   });
 
   it('GET /models/:engine returns the merged model list; 404s for an unknown engine', async () => {

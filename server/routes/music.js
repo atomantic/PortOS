@@ -42,6 +42,10 @@ router.get('/engines', asyncHandler(async (_req, res) => {
     maxDurationSec: engine.maxDurationSec,
     defaultDurationSec: engine.defaultDurationSec,
     lyrics: engine.lyrics === true,
+    // Whether this engine can render an arbitrary HuggingFace checkpoint (gates
+    // the "install/select model" UI). ACE-Step resolves a single foundation
+    // checkpoint via checkpoint_dir, so custom repos don't apply to it.
+    customModels: engine.customModels === true,
     ready: isEngineReady(engine.id),
     installEnv: engine.installEnv,
     venvDefault: engine.venvDefault,
@@ -77,6 +81,12 @@ router.get('/models/:engine', asyncHandler(async (req, res) => {
 router.post('/models', asyncHandler(async (req, res) => {
   const body = validateRequest(installSchema, req.body ?? {});
   if (!ENGINES[body.engine]) throw new ServerError('Unknown audio engine', { status: 400, code: 'AUDIO_MODEL_UNKNOWN_ENGINE' });
+  // Reject install for engines that can't render a custom HF checkpoint (e.g.
+  // ACE-Step, which uses a fixed checkpoint_dir) — otherwise a downloaded repo
+  // would register as selectable but the sidecar would ignore it.
+  if (!ENGINES[body.engine].customModels) {
+    throw new ServerError(`${ENGINES[body.engine].name} does not support custom HuggingFace models`, { status: 400, code: 'AUDIO_MODEL_ENGINE_FIXED' });
+  }
   if (!isValidRepoId(body.repo)) throw new ServerError('Invalid HuggingFace repo id', { status: 400, code: 'AUDIO_MODEL_INVALID_REPO' });
   await addAudioModel({ engine: body.engine, repo: body.repo, name: body.name });
   // Hand the response to the shared SSE driver — it owns writeHead/end + the

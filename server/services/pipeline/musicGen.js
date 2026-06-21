@@ -114,6 +114,9 @@ export const ENGINES = Object.freeze({
     resolvePython: resolveMusicgenPython,
     venvDefault: MUSICGEN_VENV_DEFAULT,
     installEnv: 'INSTALL_MUSICGEN',
+    // The sidecar passes `--model <repo>` straight to from_pretrained, so any
+    // HuggingFace MusicGen checkpoint works — user-installed models are usable.
+    customModels: true,
   },
   audioldm2: {
     id: 'audioldm2',
@@ -128,6 +131,9 @@ export const ENGINES = Object.freeze({
     resolvePython: resolveAudioldm2Python,
     venvDefault: AUDIOLDM2_VENV_DEFAULT,
     installEnv: 'INSTALL_AUDIOLDM2',
+    // `--model <repo>` → AudioLDM2Pipeline.from_pretrained: any HF AudioLDM2
+    // checkpoint works, so user-installed models are usable.
+    customModels: true,
   },
   acestep: {
     id: 'acestep',
@@ -145,6 +151,12 @@ export const ENGINES = Object.freeze({
     // ACE-Step is lyric-aware: the route/UI may send `lyrics`, threaded into the
     // sidecar as --lyrics. The other engines ignore lyrics (the flag gates UI).
     lyrics: true,
+    // ACE-Step resolves a single foundation checkpoint via its own checkpoint_dir
+    // (NOT a from_pretrained repo id), so an arbitrary HF repo can't be swapped
+    // in like the diffusers/MLX engines. Custom-model install/selection is
+    // therefore disabled for it (customModels falsy) — the sidecar ignores
+    // --model by design.
+    customModels: false,
   },
 });
 

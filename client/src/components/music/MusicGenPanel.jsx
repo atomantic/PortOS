@@ -198,7 +198,10 @@ export default function MusicGenPanel({ track, prompt, lyrics, onGenerated }) {
         ) : null}
       </div>
 
-      {/* Install an additional model from HuggingFace. */}
+      {/* Install an additional model from HuggingFace — only for engines that
+          can render an arbitrary checkpoint (musicgen/audioldm2). ACE-Step uses
+          a fixed foundation checkpoint, so the install affordance is hidden. */}
+      {engine?.customModels ? (
       <div className="pt-2 border-t border-port-border/60">
         <span className="block text-[11px] uppercase tracking-wider text-gray-500 mb-1">Install a model from HuggingFace</span>
         <div className="flex items-center gap-2">
@@ -221,6 +224,7 @@ export default function MusicGenPanel({ track, prompt, lyrics, onGenerated }) {
         </div>
         {installProgress ? <p className="text-[11px] text-gray-500 mt-1 truncate">{installProgress.message}</p> : null}
       </div>
+      ) : null}
     </div>
   );
 }

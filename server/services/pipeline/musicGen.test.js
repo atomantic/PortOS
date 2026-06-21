@@ -193,15 +193,18 @@ describe('buildSidecarArgs', () => {
 });
 
 describe('acestep engine entry', () => {
-  it('is lyric-aware and uses the acestep sidecar', () => {
+  it('is lyric-aware, fixed-checkpoint, and uses the acestep sidecar', () => {
     expect(ENGINES.acestep.lyrics).toBe(true);
+    expect(ENGINES.acestep.customModels).toBe(false); // single foundation checkpoint
     expect(ENGINES.acestep.scriptPath).toMatch(/generate_acestep\.py$/);
     expect(ENGINES.acestep.installEnv).toBe('INSTALL_ACESTEP');
   });
 
-  it('the other engines are NOT lyric-aware', () => {
+  it('the other engines are NOT lyric-aware but DO accept custom HF checkpoints', () => {
     expect(ENGINES.musicgen.lyrics).toBeUndefined();
     expect(ENGINES.audioldm2.lyrics).toBeUndefined();
+    expect(ENGINES.musicgen.customModels).toBe(true);
+    expect(ENGINES.audioldm2.customModels).toBe(true);
   });
 });
 

@@ -20,7 +20,10 @@
 
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
-import { resolveFlux2Python, isFlux2VenvHealthy } from './pythonSetup.js';
+import {
+  resolveFlux2Python, isFlux2VenvHealthy,
+  resolveAcestepPython, resolveAudioldm2Python, resolveMusicgenPython,
+} from './pythonSetup.js';
 import { PATHS } from './fileUtils.js';
 import { getHfTokenInfo } from './hfToken.js';
 import { safeChildProcessEnv } from './processEnv.js';
@@ -30,19 +33,23 @@ const HELPER_SCRIPT = join(PATHS.root, 'scripts', 'hf_download_repo.py');
 
 // Resolve a Python interpreter with huggingface_hub installed. Order: FLUX.2
 // venv (the modern path; always has hf_hub via diffusers), then the
-// settings.imageGen.local.pythonPath (mflux installs). Returns null if
-// neither is available — the caller surfaces a user-facing error rather
-// than silently failing the download.
+// settings.imageGen.local.pythonPath (mflux installs), then any provisioned
+// MUSIC venv (acestep/audioldm2/musicgen all install huggingface_hub) so the
+// Track editor's "Install model" button works in a MUSIC-ONLY setup with no
+// image-gen configured. Returns null if none is available — the caller
+// surfaces a user-facing error rather than silently failing the download.
 //
 // Health-gate the FLUX.2 venv: an interrupted install leaves the binary in
 // place but no packages, and resolveFlux2Python() alone would still return
 // that broken interpreter. Every download would then fail on the broken
-// venv before reaching the working mflux pythonPath.
+// venv before reaching the working fallback.
 export async function resolveHfDownloadPython() {
   const flux2 = resolveFlux2Python();
   if (flux2 && await isFlux2VenvHealthy()) return flux2;
   const settings = await getSettings();
-  return settings?.imageGen?.local?.pythonPath || null;
+  if (settings?.imageGen?.local?.pythonPath) return settings.imageGen.local.pythonPath;
+  // Music venvs are a valid hf_hub host — used when only music gen is set up.
+  return resolveAcestepPython() || resolveAudioldm2Python() || resolveMusicgenPython() || null;
 }
 
 // Returns `{ promise, kill }`. The promise resolves with `{ ok, sizeBytes,
