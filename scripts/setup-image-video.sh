@@ -52,15 +52,17 @@ mkdir -p "${PORTOS_DATA}/videos"
 mkdir -p "${PORTOS_DATA}/video-thumbnails"
 
 # When the user only wants a specific BYOV runtime (set via INSTALL_LTX2 /
-# INSTALL_WAN22 / INSTALL_HUNYUAN — typically from the in-app installer),
-# skip the mflux + legacy mlx_video preamble. Those bring-your-own-venv
-# runtimes are self-contained and don't depend on mflux; running the
-# preamble unprompted hits PEP 668 ("externally-managed-environment") on
-# Homebrew Python and aborts the whole script before the requested runtime
-# install ever starts. A bare `bash setup-image-video.sh` still installs
-# mflux as before.
-ANY_BYOV="${INSTALL_LTX2:-0}${INSTALL_WAN22:-0}${INSTALL_HUNYUAN:-0}"
-if [[ "$ANY_BYOV" == "000" ]]; then
+# INSTALL_WAN22 / INSTALL_HUNYUAN — or one of the self-contained MUSIC venvs
+# INSTALL_MUSICGEN / INSTALL_AUDIOLDM2 / INSTALL_ACESTEP — typically from the
+# in-app installer), skip the mflux + legacy mlx_video preamble. Those
+# bring-your-own-venv runtimes are self-contained and don't depend on mflux;
+# running the preamble unprompted hits PEP 668 ("externally-managed-environment")
+# on Homebrew Python and aborts the whole script before the requested runtime
+# install ever starts — which on Linux/CPU/CUDA blocks the advertised
+# `INSTALL_ACESTEP=1 bash …` path. A bare `bash setup-image-video.sh` still
+# installs mflux as before.
+ANY_BYOV="${INSTALL_LTX2:-0}${INSTALL_WAN22:-0}${INSTALL_HUNYUAN:-0}${INSTALL_MUSICGEN:-0}${INSTALL_AUDIOLDM2:-0}${INSTALL_ACESTEP:-0}"
+if [[ "$ANY_BYOV" == "000000" ]]; then
   DEFAULT_INSTALL_MFLUX=1
   DEFAULT_INSTALL_VIDEO=$(is_macos && echo 1 || echo 0)
   DEFAULT_INSTALL_FLUX2=$(is_macos && echo 1 || echo 0)

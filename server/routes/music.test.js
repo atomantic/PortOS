@@ -215,6 +215,13 @@ describe('music routes', () => {
     expect(tracks.createTrack).not.toHaveBeenCalled();
   });
 
+  it('POST /generate rejects an unknown engine before rendering (no wrong-backend output)', async () => {
+    const r = await request(app).post('/api/music/generate').send({ prompt: 'x', engine: 'acestep-v2' });
+    expect(r.status).toBe(400);
+    expect(r.body.code).toBe('PIPELINE_MUSIC_UNKNOWN_ENGINE');
+    expect(gen.generateMusic).not.toHaveBeenCalled();
+  });
+
   it('POST /generate rejects a missing prompt', async () => {
     const r = await request(app).post('/api/music/generate').send({ engine: 'acestep' });
     expect(r.status).toBe(400);

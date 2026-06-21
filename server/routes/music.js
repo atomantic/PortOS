@@ -126,6 +126,13 @@ const generateSchema = z.object({
 
 router.post('/generate', asyncHandler(async (req, res) => {
   const body = validateRequest(generateSchema, req.body ?? {});
+  // Reject an unknown engine explicitly rather than letting getEngine() fall
+  // back to the default — a typo/stale client (`acestep-v2`) would otherwise
+  // burn a render producing the WRONG backend's output + metadata. An ABSENT
+  // engine is allowed (uses the default).
+  if (body.engine !== undefined && !ENGINES[body.engine]) {
+    throw new ServerError(`Unknown audio engine: ${body.engine}`, { status: 400, code: 'PIPELINE_MUSIC_UNKNOWN_ENGINE' });
+  }
   const engine = getEngine(body.engine);
 
   // Validate the target track BEFORE the (minutes-long) render so a stale/
