@@ -1,4 +1,4 @@
-import { request } from './apiCore.js';
+import { request, maybeRedirectToLogin } from './apiCore.js';
 
 // ---- Music generation (on-device) ----
 // The Music studio's generator surface over server/services/pipeline/musicGen.js
@@ -41,8 +41,16 @@ export async function installAudioModel({ engine, repo, name }, onEvent) {
     body: JSON.stringify({ engine, repo, name }),
   });
   if (!res.ok || !res.body) {
-    const msg = await res.text().catch(() => '');
-    throw new Error(msg || `Install failed (${res.status})`);
+    // This streaming fetch bypasses request(), so it must honor session expiry
+    // itself (apiCore contract): on a 401 AUTH_REQUIRED, redirect to /login like
+    // request() does instead of surfacing raw error text in the panel.
+    const raw = await res.text().catch(() => '');
+    let parsed = null;
+    try { parsed = raw ? JSON.parse(raw) : null; } catch { /* not JSON */ }
+    // Match request()'s convention: the parsed body IS the error object (code at
+    // top level). maybeRedirectToLogin bounces to /login on 401 AUTH_REQUIRED.
+    maybeRedirectToLogin(res, parsed || {});
+    throw new Error((typeof parsed?.error === 'string' ? parsed.error : parsed?.error?.message) || raw || `Install failed (${res.status})`);
   }
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
