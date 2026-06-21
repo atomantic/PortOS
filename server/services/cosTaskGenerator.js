@@ -188,8 +188,10 @@ export function resolveIssueAuthorFilterBlock(promptTaskType, mode = 'owner') {
  * `claim-work` behavior (global schedule metadata → per-app override → Code
  * Review Defaults), exactly as the scheduled `claim-work` router resolves them —
  * so clicking the button honors `issueAuthorFilter: 'any'` and non-Copilot
- * reviewers instead of silently forcing owner-only + Copilot. Explicit options
- * still win when a caller passes them.
+ * reviewers instead of silently forcing owner-only + Copilot. A direct
+ * `claim-work` prompt customization likewise overrides the tracker-specific body
+ * (matching the scheduled router's `promptKeyForBody` selection). Explicit
+ * options still win when a caller passes them.
  *
  * @returns {Promise<{ tracker, source, promptTaskType, prompt, taskMetadata }>}
  */
@@ -200,7 +202,6 @@ export async function buildClaimWorkTask(app, { issueAuthorFilter, reviewers } =
 
   const wt = await resolveAppWorkTracker(app);
   const promptTaskType = trackerToClaimTaskType(wt.resolved) || 'plan-task';
-  const template = await getTaskPrompt(promptTaskType);
 
   // Resolve the app's configured claim-work metadata the same way the scheduled
   // router does: global schedule metadata, then per-app overrides on top (managed
@@ -216,6 +217,12 @@ export async function buildClaimWorkTask(app, { issueAuthorFilter, reviewers } =
   );
   const sanitizedAppMeta = sanitizeTaskMetadata(strippedAppOverride);
   if (sanitizedAppMeta) Object.assign(metadata, sanitizedAppMeta);
+
+  // Honor a direct claim-work prompt customization if the user set one;
+  // otherwise delegate to the resolved tracker's prompt body. Mirrors the
+  // scheduled router's `promptKeyForBody` selection — a custom claim-work prompt
+  // overrides the tracker-specific body for both paths.
+  const template = await getTaskPrompt(interval.prompt ? 'claim-work' : promptTaskType);
 
   // Explicit option > configured metadata > 'owner' default.
   const resolvedAuthorFilter = issueAuthorFilter ?? metadata.issueAuthorFilter ?? 'owner';

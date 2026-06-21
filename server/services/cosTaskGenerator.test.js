@@ -140,6 +140,9 @@ describe('claim-work single-source routing', () => {
     // reviewers fall back to Code Review Defaults via normalizeReviewers, dropping local-LLM reviewers.
     expect(fn).toMatch(/normalizeReviewers\(metadata, codeReviewDefaults\?\.reviewers\)/);
     expect(fn).toMatch(/LOCAL_LLM_REVIEWERS\.includes/);
+    // A direct claim-work prompt customization overrides the tracker body, same
+    // as the scheduled router's promptKeyForBody selection.
+    expect(fn).toMatch(/getTaskPrompt\(interval\.prompt \? 'claim-work' : promptTaskType\)/);
   });
 });
 
