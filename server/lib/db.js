@@ -973,6 +973,40 @@ async function ensureSchemaImpl() {
     )`,
     `CREATE INDEX IF NOT EXISTS idx_artists_live ON artists (deleted) WHERE deleted = FALSE`,
 
+    // Music albums (the Music studio). One row per album, the full sanitized
+    // record (title, artistId+denormalized artist, description, genre,
+    // releaseYear, coverImageUrl, ordered trackIds) in `data` JSONB. `title`
+    // mirrors a column for the live-list sort. db-primary + federation-ready
+    // (LWW merge mirrors artists), not yet registered in peerSync — local-only
+    // for now (see issue #1502). Mirrors the albums block in init-db.sql.
+    `CREATE TABLE IF NOT EXISTS albums (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      data JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      deleted BOOLEAN DEFAULT FALSE,
+      deleted_at TIMESTAMPTZ
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_albums_live ON albums (deleted) WHERE deleted = FALSE`,
+
+    // Music tracks (the Music studio). One row per track, the full sanitized
+    // record (title, albumId/artistId FKs + denormalized artist, lyrics, prompt,
+    // engine/modelId/durationSec gen metadata, audioFilename pointing into the
+    // shared music library at data/music/) in `data` JSONB. `title` mirrors a
+    // column for queries. db-primary + federation-ready, not yet registered in
+    // peerSync — local-only for now (see issue #1502). Mirrors init-db.sql.
+    `CREATE TABLE IF NOT EXISTS tracks (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      data JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      deleted BOOLEAN DEFAULT FALSE,
+      deleted_at TIMESTAMPTZ
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_tracks_live ON tracks (deleted) WHERE deleted = FALSE`,
+
     // Pipeline series (Phase 3 Create migration, issue #1015). One row per
     // series, the full sanitized record (arc/seasons/locks/covers/style) in
     // `data` JSONB, moved out of data/pipeline-series/{id}/index.json
@@ -1240,7 +1274,7 @@ async function ensureSchemaImpl() {
     'story_builder_sessions', 'writers_room_works', 'writers_room_folders',
     'writers_room_draft_versions', 'catalog_ingredients', 'catalog_scraps',
     'catalog_user_types', 'creative_director_projects', 'mood_boards',
-    'lora_training_runs', 'authors', 'artists', 'tribe_people', 'tribe_touchpoints',
+    'lora_training_runs', 'authors', 'artists', 'albums', 'tracks', 'tribe_people', 'tribe_touchpoints',
   ];
   for (const t of auditedTables) {
     catalogDDL.push(`DROP TRIGGER IF EXISTS trg_${t}_audit ON ${t}`);

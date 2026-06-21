@@ -796,6 +796,40 @@ CREATE TABLE IF NOT EXISTS artists (
 -- The common path is "live artists sorted by name".
 CREATE INDEX IF NOT EXISTS idx_artists_live ON artists (deleted) WHERE deleted = FALSE;
 
+-- Music albums (the Music studio). One row per album, the full sanitized record
+-- (title, artistId + denormalized artist, description, genre, releaseYear,
+-- coverImageUrl, ordered trackIds) in `data` JSONB. `title` mirrors a column for
+-- the live-list sort. db-primary + federation-ready (LWW merge mirrors artists),
+-- not yet registered in peerSync — local-only for now (see issue #1502). Mirrors
+-- the albums block in db.js.
+CREATE TABLE IF NOT EXISTS albums (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  data JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  deleted BOOLEAN DEFAULT FALSE,
+  deleted_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_albums_live ON albums (deleted) WHERE deleted = FALSE;
+
+-- Music tracks (the Music studio). One row per track, the full sanitized record
+-- (title, albumId/artistId FKs + denormalized artist, lyrics, prompt, engine/
+-- modelId/durationSec gen metadata, audioFilename pointing into the shared music
+-- library at data/music/) in `data` JSONB. `title` mirrors a column for queries.
+-- db-primary + federation-ready, not yet registered in peerSync — local-only for
+-- now (see issue #1502). Mirrors the tracks block in db.js.
+CREATE TABLE IF NOT EXISTS tracks (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  data JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  deleted BOOLEAN DEFAULT FALSE,
+  deleted_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_tracks_live ON tracks (deleted) WHERE deleted = FALSE;
+
 -- Pipeline series (Phase 3 Create migration, issue #1015). One row per series,
 -- the full sanitized record (arc/seasons/locks/covers/style) in `data` JSONB,
 -- moved out of data/pipeline-series/{id}/index.json (collectionStore). Only the
@@ -1058,6 +1092,10 @@ DROP TRIGGER IF EXISTS trg_authors_audit ON authors;
 CREATE TRIGGER trg_authors_audit AFTER UPDATE OR DELETE ON authors FOR EACH ROW EXECUTE FUNCTION record_audit_log();
 DROP TRIGGER IF EXISTS trg_artists_audit ON artists;
 CREATE TRIGGER trg_artists_audit AFTER UPDATE OR DELETE ON artists FOR EACH ROW EXECUTE FUNCTION record_audit_log();
+DROP TRIGGER IF EXISTS trg_albums_audit ON albums;
+CREATE TRIGGER trg_albums_audit AFTER UPDATE OR DELETE ON albums FOR EACH ROW EXECUTE FUNCTION record_audit_log();
+DROP TRIGGER IF EXISTS trg_tracks_audit ON tracks;
+CREATE TRIGGER trg_tracks_audit AFTER UPDATE OR DELETE ON tracks FOR EACH ROW EXECUTE FUNCTION record_audit_log();
 DROP TRIGGER IF EXISTS trg_tribe_people_audit ON tribe_people;
 CREATE TRIGGER trg_tribe_people_audit AFTER UPDATE OR DELETE ON tribe_people FOR EACH ROW EXECUTE FUNCTION record_audit_log();
 DROP TRIGGER IF EXISTS trg_tribe_touchpoints_audit ON tribe_touchpoints;

@@ -2,8 +2,9 @@
  * Music studio — generate and organize music with local OSS tools.
  *
  * A hub for the music feature: manage **Artists** (reusable musical personas,
- * like Authors), and — landing in later updates — **Albums** and **Tracks**
- * with album art and on-device generation (Ace-Step and friends).
+ * like Authors), **Albums** (ordered track collections with cover art), and
+ * **Tracks** (singles or album members, with uploaded/attached audio). On-device
+ * generation (Ace-Step and friends) wires into the Tracks editor next update.
  *
  * Tabbed via URL param (`/music/:tab`) per the linkable-routes convention, so a
  * tab is deep-linkable and survives reload. `tab` defaults to `artists`.
@@ -12,6 +13,8 @@
 import { useParams, Navigate, Link } from 'react-router-dom';
 import { Music as MusicIcon, Mic, Disc3, AudioLines } from 'lucide-react';
 import ArtistsManager from '../components/music/ArtistsManager';
+import AlbumsManager from '../components/music/AlbumsManager';
+import TracksManager from '../components/music/TracksManager';
 
 const TABS = [
   { id: 'artists', label: 'Artists', icon: Mic },
@@ -20,18 +23,6 @@ const TABS = [
 ];
 
 const VALID = new Set(TABS.map((t) => t.id));
-
-function ComingSoon({ what }) {
-  return (
-    <div className="bg-port-card border border-port-border rounded-lg p-8 text-center">
-      <p className="text-gray-300 font-medium">{what} are coming soon.</p>
-      <p className="text-sm text-gray-500 mt-2 max-w-md mx-auto">
-        Create an Artist first — {what.toLowerCase()} are organized under an artist, with album art and
-        on-device music generation landing in the next update.
-      </p>
-    </div>
-  );
-}
 
 export default function Music() {
   const { tab } = useParams();
@@ -68,8 +59,8 @@ export default function Music() {
       </div>
 
       {active === 'artists' && <ArtistsManager />}
-      {active === 'albums' && <ComingSoon what="Albums" />}
-      {active === 'tracks' && <ComingSoon what="Tracks" />}
+      {active === 'albums' && <AlbumsManager />}
+      {active === 'tracks' && <TracksManager />}
     </div>
   );
 }
