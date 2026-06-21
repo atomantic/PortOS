@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 
 // Web Audio doesn't exist in jsdom, so mock the two lib seams the tuner uses:
 // `createStreamAnalyser` (graph off a stream) and `createPitchTracker` (the rAF
@@ -51,7 +51,8 @@ describe('PitchTuner', () => {
 
   it('renders the detected note + cents from a tracker update', async () => {
     render(<PitchTuner stream={fakeStream()} />);
-    lastOnUpdate({ note: { letter: 'A', accidental: '', octave: 4 }, cents: 3 });
+    // The tracker's onUpdate callback drives setState; invoke it inside act().
+    act(() => lastOnUpdate({ note: { letter: 'A', accidental: '', octave: 4 }, cents: 3 }));
     await waitFor(() => expect(screen.getByText('A4')).toBeTruthy());
     expect(screen.getByText(/\+3¢ · In tune/)).toBeTruthy();
   });

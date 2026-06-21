@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 
 vi.mock('../../services/apiSystem', () => ({
   getSettings: vi.fn(),
@@ -84,7 +84,9 @@ describe('ApiAccessTab', () => {
       expect(toggles[1].disabled).toBe(true);
     });
 
-    resolveSave({}); // let the save settle so the test exits cleanly
+    // Let the save settle inside act() so the post-save setState (clearing the
+    // in-flight flag) is wrapped rather than firing after the test returns.
+    await act(async () => { resolveSave({}); });
   });
 
   it('reverts optimistic state when the save fails', async () => {

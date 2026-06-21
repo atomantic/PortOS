@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 
 // Drive the component off a mocked training hook so we don't need a real mic /
 // AudioContext (neither exists in jsdom). The hook + the pure progress math are
@@ -44,7 +44,7 @@ describe('SongTraining', () => {
     expect(options.some((o) => /Chorus/.test(o))).toBe(true);
   });
 
-  it('shows a Start button that triggers a run after the mic opens', () => {
+  it('shows a Start button that triggers a run after the mic opens', async () => {
     // getUserMedia isn't in jsdom — provide a stub the component awaits.
     const getUserMedia = vi.fn().mockResolvedValue({ getTracks: () => [] });
     Object.defineProperty(global.navigator, 'mediaDevices', {
@@ -53,6 +53,9 @@ describe('SongTraining', () => {
     render(<SongTraining score={SCORE} />);
     fireEvent.click(screen.getByRole('button', { name: /start/i }));
     expect(getUserMedia).toHaveBeenCalled();
+    // The Start handler awaits getUserMedia then arms the run via setState —
+    // flush that resolution inside act() so it doesn't fire after the test returns.
+    await act(async () => {});
   });
 
   it('renders progress for trained scopes', () => {

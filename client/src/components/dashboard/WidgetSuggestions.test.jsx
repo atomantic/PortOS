@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import WidgetSuggestions from './WidgetSuggestions';
 
 // `quick-stats` ships with gate: (s) => s.apps.length > 0 — a deterministic
@@ -36,13 +36,16 @@ describe('WidgetSuggestions', () => {
     expect(screen.getByText(/Quick Stats/)).toBeDefined();
   });
 
-  it('calls onAdd with only the widget id — no layout shape passed', () => {
+  it('calls onAdd with only the widget id — no layout shape passed', async () => {
     const onAdd = vi.fn().mockResolvedValue();
     render(<WidgetSuggestions presentWidgetIds={['cos']} dashboardState={populatedState} onAdd={onAdd} />);
     fireEvent.click(screen.getByLabelText('Add Quick Stats to layout'));
     expect(onAdd).toHaveBeenCalledTimes(1);
     expect(onAdd).toHaveBeenCalledWith('quick-stats');
     expect(onAdd.mock.calls[0]).toHaveLength(1);
+    // add() clears `submitting` in a .finally() microtask after onAdd resolves —
+    // flush it inside act() so that setState doesn't land after the test returns.
+    await act(async () => {});
   });
 
   it('dismissing a suggestion hides it for the lifetime of the mount', () => {
@@ -64,7 +67,8 @@ describe('WidgetSuggestions', () => {
     // first added widget.
     expect(onAdd).toHaveBeenCalledTimes(1);
     expect(onAdd).toHaveBeenCalledWith('quick-stats');
-    resolveFirst();
-    await Promise.resolve();
+    // Resolving the in-flight add clears `submitting` in a .finally() microtask;
+    // flush it inside act() so the setState is wrapped.
+    await act(async () => { resolveFirst(); });
   });
 });

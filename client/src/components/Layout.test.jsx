@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, within, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { PINNED_KEY } from '../utils/navWorkingSet.js';
 
@@ -60,12 +60,19 @@ vi.mock('../services/api', () => ({
 
 import Layout from './Layout';
 
-const renderLayout = (initialPath = '/brain/inbox') =>
-  render(
+const renderLayout = async (initialPath = '/brain/inbox') => {
+  const utils = render(
     <MemoryRouter initialEntries={[initialPath]}>
       <Layout />
     </MemoryRouter>,
   );
+  // The sidebar's dynamic sections fire async fetches (all mocked empty here).
+  // Flush their resolution inside act() so the resulting setState lands within
+  // the React lifecycle instead of after the test body returns (which warns
+  // "update … not wrapped in act").
+  await act(async () => {});
+  return utils;
+};
 
 // The Pinned region carries a stable `data-testid` so assertions scope to it
 // without depending on the heading's DOM nesting (a benign style refactor of the
@@ -83,9 +90,9 @@ afterEach(() => {
 });
 
 describe('Layout — pinned single nav rows', () => {
-  it('renders a pinned top-level single row (Dashboard) in the Pinned section', () => {
+  it('renders a pinned top-level single row (Dashboard) in the Pinned section', async () => {
     localStorage.setItem(PINNED_KEY, JSON.stringify(['/']));
-    renderLayout();
+    await renderLayout();
 
     const pinned = pinnedSection();
     expect(pinned).toBeTruthy();
@@ -96,9 +103,9 @@ describe('Layout — pinned single nav rows', () => {
     expect(within(pinned).getByRole('button', { name: /^Unpin Dashboard$/i })).toBeTruthy();
   });
 
-  it('resolves every top-level single row by path into the Pinned section', () => {
+  it('resolves every top-level single row by path into the Pinned section', async () => {
     localStorage.setItem(PINNED_KEY, JSON.stringify(['/', '/review', '/city', '/goals/list']));
-    renderLayout();
+    await renderLayout();
 
     const pinned = pinnedSection();
     expect(within(pinned).getByRole('link', { name: /Dashboard/i })).toHaveAttribute('href', '/');
@@ -107,18 +114,18 @@ describe('Layout — pinned single nav rows', () => {
     expect(within(pinned).getByRole('link', { name: /Goals/i })).toHaveAttribute('href', '/goals/list');
   });
 
-  it('omits the Pinned section entirely when nothing is pinned', () => {
-    renderLayout();
+  it('omits the Pinned section entirely when nothing is pinned', async () => {
+    await renderLayout();
     expect(pinnedSection()).toBeNull();
   });
 
-  it('filters out an unknown pinned path while keeping the known one', () => {
+  it('filters out an unknown pinned path while keeping the known one', async () => {
     // A stored path that maps to no nav leaf and no manifest entry resolves to
     // null and is dropped by resolveNavEntry; a known path beside it still renders.
     // Asserting the survivor (not just absence) proves the filter, not merely that
     // the section failed to render.
     localStorage.setItem(PINNED_KEY, JSON.stringify(['/this/path/does/not/exist', '/city']));
-    renderLayout();
+    await renderLayout();
 
     const pinned = pinnedSection();
     expect(pinned).toBeTruthy();

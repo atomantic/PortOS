@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { render, screen, waitFor, within, fireEvent, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 vi.mock('../../../services/api', () => ({
@@ -97,11 +97,14 @@ describe('AudioStage — whole-episode audio (#863)', () => {
     await waitFor(() => expect(onStageUpdate).toHaveBeenCalledWith('audio', updated.stages.audio, updated));
   });
 
-  it('shows the cue panel only in generated mode', () => {
+  it('shows the cue panel only in generated mode', async () => {
     const { rerender } = render(<AudioStage issue={makeIssue()} onStageUpdate={() => {}} />);
     expect(screen.queryByText('Music cues')).not.toBeInTheDocument();
     rerender(<AudioStage issue={makeIssue({ audioMode: 'generated' })} onStageUpdate={() => {}} />);
     expect(screen.getByText('Music cues')).toBeInTheDocument();
+    // The mount-time music-engine status fetch resolves asynchronously; flush it
+    // inside act() so its setState doesn't land after the test returns.
+    await act(async () => {});
   });
 
   it('derives cues via the generate route', async () => {
@@ -177,11 +180,11 @@ describe('AudioStage — whole-episode audio (#863)', () => {
     const ta0 = within(screen.getByText('Act I').closest('li')).getByRole('textbox');
     await userEvent.clear(ta0);
     await userEvent.type(ta0, 'a1');
-    ta0.blur();
+    fireEvent.blur(ta0); // fireEvent wraps in act; raw ta0.blur() would not
     const ta1 = within(screen.getByText('Act II').closest('li')).getByRole('textbox');
     await userEvent.clear(ta1);
     await userEvent.type(ta1, 'b1');
-    ta1.blur();
+    fireEvent.blur(ta1);
 
     // Drive the lifted issue back in so the second save's tail reads it.
     await waitFor(() => expect(updatePipelineIssue).toHaveBeenCalledTimes(2));
@@ -237,7 +240,7 @@ describe('AudioStage — whole-episode audio (#863)', () => {
     // trackFilename, proving the save merged against the post-render array.
     const ta = within(cueItem).getByRole('textbox');
     await userEvent.type(ta, ' more');
-    ta.blur();
+    fireEvent.blur(ta);
     await waitFor(() => expect(updatePipelineIssue).toHaveBeenCalled());
     const savedCues = updatePipelineIssue.mock.calls.at(-1)[1].stages.audio.cues;
     expect(savedCues[0].trackFilename).toBe('cue.wav');

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, within, act } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { MockEventSource, lastEventSource as lastEs } from '../test/mockEventSource';
 
@@ -381,7 +381,10 @@ describe('PipelineManuscriptEditor — generate-edits streamed review', () => {
     // Let the deferred SSE-open effect flush + close inside the test (while the
     // EventSource stub is live) so it can't throw during teardown.
     await waitFor(() => expect(MockEventSource.instances.length).toBeGreaterThan(0));
-    lastEs().emit({ type: 'canceled' });
+    // Driving the mock stream by hand fires the EventSource handlers synchronously,
+    // which call setState in useSseProgress — wrap in act() so those updates flush
+    // inside the React lifecycle (no "not wrapped in act" warning).
+    act(() => lastEs().emit({ type: 'canceled' }));
   });
 
   it('on the complete frame, re-fetches the review so comments arrive with fixes (diff + Accept, no Generate fix)', async () => {
@@ -404,7 +407,7 @@ describe('PipelineManuscriptEditor — generate-edits streamed review', () => {
     await waitFor(() => expect(MockEventSource.instances.length).toBeGreaterThan(0));
 
     // Drive the terminal frame; the editor re-fetches the review.
-    lastEs().emit({ type: 'complete', openCount: 1, chunked: false, chunkCount: 1 });
+    act(() => lastEs().emit({ type: 'complete', openCount: 1, chunked: false, chunkCount: 1 }));
     await waitFor(() => expect(api.getPipelineManuscriptReview).toHaveBeenCalledTimes(2));
 
     // The comment now carries a fix → the in-context card shows Accept, not "Generate fix".
@@ -424,7 +427,7 @@ describe('PipelineManuscriptEditor — generate-edits streamed review', () => {
     fireEvent.click(screen.getByLabelText(/Generate edits for every finding/i));
     fireEvent.click(screen.getByText('Run editorial review'));
     await waitFor(() => expect(MockEventSource.instances.length).toBe(1));
-    lastEs().emit({ type: 'complete', openCount: 1, chunked: false, chunkCount: 1 });
+    act(() => lastEs().emit({ type: 'complete', openCount: 1, chunked: false, chunkCount: 1 }));
     await waitFor(() => expect(api.getPipelineManuscriptReview).toHaveBeenCalledTimes(2));
     // Run 1's button is back to idle.
     await screen.findByText('Run editorial review');
@@ -441,7 +444,7 @@ describe('PipelineManuscriptEditor — generate-edits streamed review', () => {
     expect(api.getPipelineManuscriptReview).toHaveBeenCalledTimes(2);
 
     // Run 2's own complete frame drives the real re-fetch (3rd call).
-    lastEs().emit({ type: 'complete', openCount: 1, chunked: false, chunkCount: 1 });
+    act(() => lastEs().emit({ type: 'complete', openCount: 1, chunked: false, chunkCount: 1 }));
     await waitFor(() => expect(api.getPipelineManuscriptReview).toHaveBeenCalledTimes(3));
   });
 
@@ -458,7 +461,7 @@ describe('PipelineManuscriptEditor — generate-edits streamed review', () => {
     await screen.findByText(/Starting editorial review|Drafting edits/);
 
     // Connection drops with no complete/canceled/error frame.
-    lastEs().fail();
+    act(() => lastEs().fail());
 
     // Recovery: button re-enables (no longer stuck) and the review is re-fetched.
     expect(await screen.findByText('Run editorial review')).toBeInTheDocument();

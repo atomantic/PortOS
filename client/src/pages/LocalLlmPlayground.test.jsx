@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 vi.mock('../services/api', () => ({
@@ -117,7 +117,9 @@ describe('LocalLlmPlayground', () => {
     await waitFor(() => expect(screen.getByText('Processing')).toBeTruthy());
     expect(screen.queryByText(/In memory/)).toBeNull();
 
-    releaseRun();
+    // Releasing the run resolves the stream promise, which settles the result
+    // state — flush it inside act() so that update is wrapped.
+    await act(async () => { releaseRun(); });
   });
 
   it('renders a live "Thinking" block for streamed reasoning, separate from the answer', async () => {
@@ -147,6 +149,8 @@ describe('LocalLlmPlayground', () => {
     // The streaming answer renders the content channel only — reasoning isn't mixed in.
     await waitFor(() => expect(screen.getByText('Final answer.')).toBeTruthy());
 
-    releaseRun();
+    // Releasing the run resolves the stream promise, which settles the result
+    // state — flush it inside act() so that update is wrapped.
+    await act(async () => { releaseRun(); });
   });
 });
