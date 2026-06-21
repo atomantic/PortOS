@@ -1,16 +1,10 @@
 /**
- * BYOV video runtime installer modal. Streams progress from
- * GET /api/video-gen/setup/runtime-install?runtime=<id> (SSE) and shows the
- * raw bash output line-by-line so the user sees git-clone / uv venv / pip
- * progress as the script runs.
+ * Runtime installer modal for BYO local generation runtimes. Streams progress
+ * from a setup endpoint (SSE) and shows raw bash output line-by-line so the
+ * user sees git/uv/pip progress while scripts/setup-image-video.sh runs.
  *
- * Unlike Flux2InstallModal there's no animated stage pipeline — the underlying
- * scripts/setup-image-video.sh emits free-form log lines, not structured
- * stage events. Stage detection would require parsing bash echos, which
- * would rot every time the script's wording changes.
- *
- * Closing the modal mid-install (X button or Cancel) terminates the
- * EventSource, which the server interprets as a SIGTERM to the bash child.
+ * Closing the modal mid-install terminates the EventSource, which the server
+ * interprets as a cancel and SIGTERMs the underlying bash child.
  */
 
 import { useEffect, useState } from 'react';
@@ -20,25 +14,24 @@ import Modal from '../ui/Modal';
 
 const MAX_LOG_LINES = 1000;
 
-export default function RuntimeInstallModal({ open, runtime, label, onClose, onComplete }) {
+export default function RuntimeInstallModal({
+  open,
+  runtime,
+  label,
+  onClose,
+  onComplete,
+  installUrlBase = '/api/video-gen/setup/runtime-install',
+  description = 'Cloning repo and installing python packages (large download on first run)...',
+}) {
   const [confirmingCancel, setConfirmingCancel] = useState(false);
-  // The shared install-stream hook owns the EventSource lifecycle, log
-  // accumulation, connection-lost handling and auto-scroll. Pip/git emit
-  // hundreds of lines/sec, so flush on a 100ms debounce instead of per-line.
-  // The runtime install has no structured `stage` events (the bash script
-  // emits free-form log lines), so `currentStage` is unused here.
+  const url = open && runtime ? `${installUrlBase}?runtime=${encodeURIComponent(runtime)}` : null;
   const { logs, done, error, streamStarted, logsEndRef, close } = useInstallStream(
-    open && runtime ? `/api/video-gen/setup/runtime-install?runtime=${encodeURIComponent(runtime)}` : null,
+    url,
     { enabled: open && !!runtime, onComplete, maxLogLines: MAX_LOG_LINES, flushMs: 100 },
   );
 
-  // Reset the cancel-confirm prompt whenever the modal closes so a reopen never
-  // starts mid-confirmation. (Stream state resets inside the hook.)
   useEffect(() => { if (!open || !runtime) setConfirmingCancel(false); }, [open, runtime]);
 
-  // True from the moment the EventSource opens — closing the modal between
-  // the open and the first log line must still confirm before killing the
-  // server-side bash child.
   const installRunning = streamStarted && !done && !error;
 
   const performClose = () => {
@@ -86,7 +79,7 @@ export default function RuntimeInstallModal({ open, runtime, label, onClose, onC
           {logs.length === 0 ? (
             <div className="text-gray-500 italic flex items-center gap-2">
               <Loader2 size={12} className="animate-spin" />
-              Connecting to installer…
+              Connecting to installer...
             </div>
           ) : (
             logs.map((entry, i) => (
@@ -130,10 +123,10 @@ export default function RuntimeInstallModal({ open, runtime, label, onClose, onC
             <>
               <span className="text-xs text-gray-400">
                 {done
-                  ? `✅ ${label || runtime} is ready. You can close this window.`
+                  ? `${label || runtime} is ready. You can close this window.`
                   : error
-                    ? '⚠️ Installer hit an error — see logs above.'
-                    : 'Cloning repo and installing python packages (large download on first run)…'}
+                    ? 'Installer hit an error - see logs above.'
+                    : description}
               </span>
               <button
                 onClick={handleClose}

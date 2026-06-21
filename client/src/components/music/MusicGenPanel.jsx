@@ -7,7 +7,7 @@
  * updated track (the server attaches the audio + gen metadata).
  *
  * Engines that aren't provisioned (their opt-in venv is missing) are shown with
- * their install hint and the Generate button is gated — mirroring the FLUX.2
+ * an in-app install action and the Generate button is gated — mirroring the FLUX.2
  * venv gate in image gen. Additional HuggingFace checkpoints can be installed
  * inline (streamed download), then selected immediately.
  */
@@ -18,6 +18,7 @@ import toast from '../ui/Toast';
 import {
   listMusicEngines, generateMusic, installAudioModel, removeAudioModel,
 } from '../../services/api';
+import RuntimeInstallModal from '../install/RuntimeInstallModal';
 
 export default function MusicGenPanel({ track, prompt, lyrics, onGenerated }) {
   const [engines, setEngines] = useState([]);
@@ -30,6 +31,8 @@ export default function MusicGenPanel({ track, prompt, lyrics, onGenerated }) {
   const [installRepo, setInstallRepo] = useState('');
   const [installing, setInstalling] = useState(false);
   const [installProgress, setInstallProgress] = useState(null);
+  const [runtimeInstallEngine, setRuntimeInstallEngine] = useState(null);
+  const [userSelectedEngine, setUserSelectedEngine] = useState(false);
   const mountedRef = useRef(true);
   useEffect(() => () => { mountedRef.current = false; }, []);
 
@@ -125,6 +128,7 @@ export default function MusicGenPanel({ track, prompt, lyrics, onGenerated }) {
   if (engines.length === 0) return <div className="text-xs text-gray-500">No music generators available.</div>;
 
   const selectedUserModel = engine?.models?.find((m) => m.id === modelId && m.userAdded);
+  const showRuntimeInstallHint = !!engine && !engine.ready && (!!prompt?.trim() || userSelectedEngine);
 
   return (
     <div className="space-y-2 border border-port-border rounded-lg p-3 bg-port-bg/40">
@@ -137,7 +141,10 @@ export default function MusicGenPanel({ track, prompt, lyrics, onGenerated }) {
           <span className="block text-[11px] uppercase tracking-wider text-gray-500 mb-1">Engine</span>
           <select
             value={engineId}
-            onChange={(e) => setEngineId(e.target.value)}
+            onChange={(e) => {
+              setUserSelectedEngine(true);
+              setEngineId(e.target.value);
+            }}
             className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm"
           >
             {engines.map((e) => (
@@ -173,10 +180,20 @@ export default function MusicGenPanel({ track, prompt, lyrics, onGenerated }) {
         />
       </label>
 
-      {engine && !engine.ready ? (
-        <p className="text-[11px] text-port-warning">
-          {engine.name} isn’t installed. Run <code className="text-gray-300">{engine.installEnv}=1 bash scripts/setup-image-video.sh</code> to provision it.
-        </p>
+      {showRuntimeInstallHint ? (
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 rounded-lg border border-port-warning/30 bg-port-warning/10 px-3 py-2">
+          <p className="text-[11px] text-port-warning">
+            {engine.name} is not installed yet. Install the runtime to enable generation.
+          </p>
+          <button
+            type="button"
+            onClick={() => setRuntimeInstallEngine(engine)}
+            className="inline-flex items-center justify-center gap-2 px-3 py-1.5 rounded-lg bg-port-bg border border-port-warning/50 text-port-warning text-xs font-medium hover:border-port-warning disabled:opacity-50"
+          >
+            <Download size={13} />
+            Install runtime
+          </button>
+        </div>
       ) : null}
       {engine?.lyrics ? (
         <p className="text-[11px] text-gray-500">This engine uses the track’s lyrics as conditioning.</p>
@@ -232,6 +249,15 @@ export default function MusicGenPanel({ track, prompt, lyrics, onGenerated }) {
         {installProgress ? <p className="text-[11px] text-gray-500 mt-1 truncate">{installProgress.message}</p> : null}
       </div>
       ) : null}
+      <RuntimeInstallModal
+        open={!!runtimeInstallEngine}
+        runtime={runtimeInstallEngine?.id}
+        label={runtimeInstallEngine?.name}
+        installUrlBase="/api/music/setup/runtime-install"
+        description="Installing the music runtime and python packages. Large downloads may take several minutes."
+        onClose={() => setRuntimeInstallEngine(null)}
+        onComplete={() => loadEngines()}
+      />
     </div>
   );
 }

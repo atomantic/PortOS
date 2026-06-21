@@ -17,12 +17,17 @@
  */
 
 import { Router } from 'express';
+import { existsSync } from 'fs';
+import { spawn } from 'child_process';
+import { join } from 'path';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
+import { PATHS } from '../lib/fileUtils.js';
+import { safeChildProcessEnv } from '../lib/processEnv.js';
 import { ENGINES, DEFAULT_ENGINE_ID, getEngine, isEngineReady, generateMusic } from '../services/pipeline/musicGen.js';
 import { listEngineModels, addAudioModel, removeAudioModel, isValidRepoId } from '../services/audioModels.js';
-import { startHfDownloadStream } from '../lib/sseDownload.js';
+import { startHfDownloadStream, openSseStream } from '../lib/sseDownload.js';
 import { inspectModelCache } from '../lib/hfCache.js';
 import * as tracks from '../services/tracks/index.js';
 import * as albums from '../services/albums/index.js';
@@ -52,6 +57,108 @@ router.get('/engines', asyncHandler(async (_req, res) => {
     venvDefault: engine.venvDefault,
   })));
   res.json({ engines, defaultEngine: DEFAULT_ENGINE_ID });
+}));
+
+// --- Install music runtime venvs -------------------------------------------
+// Mirrors the image/video in-app setup flow: the client opens an EventSource
+// and we shell out to the canonical setup script with the selected engine's
+// INSTALL_* env var set. Keeping the bash path as the single installer source
+// avoids a second Node implementation drifting from scripts/setup-image-video.sh.
+
+router.get('/setup/runtime-status', asyncHandler(async (req, res) => {
+  const runtime = String(req.query?.runtime || '');
+  const engine = ENGINES[runtime];
+  if (!engine) {
+    throw new ServerError(
+      `Unknown music runtime: ${runtime}. Expected one of: ${Object.keys(ENGINES).join(', ')}`,
+      { status: 400, code: 'UNKNOWN_MUSIC_RUNTIME' },
+    );
+  }
+  res.json({
+    runtime: engine.id,
+    label: engine.name,
+    installed: isEngineReady(engine.id),
+    venvPath: engine.resolvePython() || null,
+    expectedVenvPath: engine.venvDefault,
+    installEnvVar: engine.installEnv,
+  });
+}));
+
+const runtimeInstallInFlight = new Map();
+
+router.get('/setup/runtime-install', asyncHandler(async (req, res) => {
+  const runtime = String(req.query?.runtime || '');
+  const engine = ENGINES[runtime];
+  const { send, safeEnd } = openSseStream(res);
+
+  if (!engine) {
+    send({ type: 'error', message: `Unknown music runtime: ${runtime}` });
+    return safeEnd();
+  }
+  if (runtimeInstallInFlight.has(engine.id)) {
+    send({ type: 'error', message: `Another ${engine.name} install is already running. Wait for it to finish or restart PortOS.` });
+    return safeEnd();
+  }
+  runtimeInstallInFlight.set(engine.id, null);
+
+  if (isEngineReady(engine.id)) {
+    runtimeInstallInFlight.delete(engine.id);
+    send({ type: 'log', message: `${engine.name} already installed at ${engine.resolvePython() || engine.venvDefault}` });
+    send({ type: 'complete', message: 'Already installed - nothing to do.' });
+    return safeEnd();
+  }
+
+  const scriptPath = join(PATHS.root, 'scripts', 'setup-image-video.sh');
+  if (!existsSync(scriptPath)) {
+    runtimeInstallInFlight.delete(engine.id);
+    send({ type: 'error', message: `Installer script not found at ${scriptPath}` });
+    return safeEnd();
+  }
+
+  send({ type: 'log', message: `Starting ${engine.name} install.` });
+  const child = spawn('bash', [scriptPath], {
+    env: safeChildProcessEnv({ [engine.installEnv]: '1' }),
+    stdio: ['ignore', 'pipe', 'pipe'],
+    detached: true,
+  });
+  runtimeInstallInFlight.set(engine.id, child);
+  let finished = false;
+
+  const onChunk = (chunk) => {
+    for (const line of chunk.toString().split(/[\r\n]+/)) {
+      const t = line.trimEnd();
+      if (t) send({ type: 'log', message: t });
+    }
+  };
+  child.stdout.on('data', onChunk);
+  child.stderr.on('data', onChunk);
+  child.on('error', (err) => {
+    finished = true;
+    runtimeInstallInFlight.delete(engine.id);
+    send({ type: 'error', message: `Installer failed to spawn: ${err.message}` });
+    safeEnd();
+  });
+  child.on('close', (code) => {
+    finished = true;
+    runtimeInstallInFlight.delete(engine.id);
+    if (code === 0 && isEngineReady(engine.id)) {
+      send({ type: 'complete', message: `${engine.name} ready: ${engine.resolvePython() || engine.venvDefault}` });
+    } else if (code === 0) {
+      send({ type: 'error', message: `Installer exited 0 but ${engine.name} is still not available. Check the log above for setup errors.` });
+    } else {
+      send({ type: 'error', message: `Installer exited with code ${code}.` });
+    }
+    safeEnd();
+  });
+
+  req.on('close', () => {
+    if (finished) return;
+    if (!child.killed && child.pid) {
+      try { process.kill(-child.pid, 'SIGTERM'); }
+      catch { child.kill('SIGTERM'); }
+    }
+    safeEnd();
+  });
 }));
 
 // --- Install additional audio models from HuggingFace -----------------------

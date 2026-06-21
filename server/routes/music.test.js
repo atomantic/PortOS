@@ -6,17 +6,21 @@ import { ServerError } from '../lib/errorHandler.js';
 // Mock the music-gen service: a small engine registry + a generateMusic that the
 // tests drive per-case. The route only consumes ENGINES/getEngine/isEngineReady/
 // generateMusic + DEFAULT_ENGINE_ID.
-const gen = vi.hoisted(() => ({ generateMusic: vi.fn(), ready: true }));
+const gen = vi.hoisted(() => ({
+  generateMusic: vi.fn(),
+  ready: true,
+  readyByEngine: null,
+}));
 vi.mock('../services/pipeline/musicGen.js', () => {
   const ENGINES = {
-    musicgen: { id: 'musicgen', name: 'MusicGen', models: [{ id: 'm', name: 'M' }], defaultModelId: 'm', minDurationSec: 1, maxDurationSec: 30, defaultDurationSec: 12, installEnv: 'INSTALL_MUSICGEN', venvDefault: '/v/mg', customModels: true },
-    acestep: { id: 'acestep', name: 'ACE-Step', models: [{ id: 'a', name: 'A' }], defaultModelId: 'a', minDurationSec: 1, maxDurationSec: 240, defaultDurationSec: 60, installEnv: 'INSTALL_ACESTEP', venvDefault: '/v/ace', lyrics: true, customModels: false },
+    musicgen: { id: 'musicgen', name: 'MusicGen', models: [{ id: 'm', name: 'M' }], defaultModelId: 'm', minDurationSec: 1, maxDurationSec: 30, defaultDurationSec: 12, installEnv: 'INSTALL_MUSICGEN', venvDefault: '/v/mg', resolvePython: () => (gen.ready ? '/v/mg/bin/python3' : null), customModels: true },
+    acestep: { id: 'acestep', name: 'ACE-Step', models: [{ id: 'a', name: 'A' }], defaultModelId: 'a', minDurationSec: 1, maxDurationSec: 240, defaultDurationSec: 60, installEnv: 'INSTALL_ACESTEP', venvDefault: '/v/ace', resolvePython: () => (gen.ready ? '/v/ace/bin/python3' : null), lyrics: true, customModels: false },
   };
   return {
     ENGINES,
     DEFAULT_ENGINE_ID: 'musicgen',
     getEngine: (id) => ENGINES[id] || ENGINES.musicgen,
-    isEngineReady: () => gen.ready,
+    isEngineReady: (engineId) => (gen.readyByEngine ? gen.readyByEngine[engineId] === true : gen.ready),
     generateMusic: gen.generateMusic,
   };
 });
@@ -37,8 +41,20 @@ vi.mock('../services/audioModels.js', () => ({
 
 // The SSE download driver writes to the response + ends it; stub it to a quick
 // 200 so the route test doesn't spawn Python.
-const sse = vi.hoisted(() => ({ run: vi.fn(async ({ res }) => { res.writeHead(200, { 'Content-Type': 'text/event-stream' }); res.end('data: {"type":"complete"}\n\n'); }) }));
-vi.mock('../lib/sseDownload.js', () => ({ startHfDownloadStream: (args) => sse.run(args) }));
+const sse = vi.hoisted(() => ({
+  run: vi.fn(async ({ res }) => { res.writeHead(200, { 'Content-Type': 'text/event-stream' }); res.end('data: {"type":"complete"}\n\n'); }),
+  open: vi.fn((res) => {
+    res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    return {
+      send: (event) => res.write(`data: ${JSON.stringify(event)}\n\n`),
+      safeEnd: () => { if (!res.writableEnded) res.end(); },
+    };
+  }),
+}));
+vi.mock('../lib/sseDownload.js', () => ({
+  startHfDownloadStream: (args) => sse.run(args),
+  openSseStream: (res) => sse.open(res),
+}));
 
 // Register-after-download gates on whether the repo landed in the cache.
 const cache = vi.hoisted(() => ({ cached: true }));
@@ -82,6 +98,7 @@ describe('music routes', () => {
     albums.updateAlbum.mockReset().mockImplementation(async (id, patch) => ({ id, ...patch }));
     sse.run.mockReset().mockImplementation(async ({ res }) => { res.writeHead(200, { 'Content-Type': 'text/event-stream' }); res.end('data: {"type":"complete"}\n\n'); });
     gen.ready = true;
+    gen.readyByEngine = null;
     cache.cached = true;
     models.list.mockResolvedValue([{ id: 'm', name: 'M', userAdded: false }]);
   });
@@ -100,12 +117,48 @@ describe('music routes', () => {
     expect(mg.customModels).toBe(true);
   });
 
+  it('GET /engines reports readiness per engine', async () => {
+    gen.readyByEngine = { musicgen: true, acestep: false };
+    const r = await request(app).get('/api/music/engines');
+    expect(r.status).toBe(200);
+    expect(r.body.engines.find((e) => e.id === 'musicgen').ready).toBe(true);
+    expect(r.body.engines.find((e) => e.id === 'acestep').ready).toBe(false);
+  });
+
   it('POST /models rejects an engine that does not support custom models (acestep)', async () => {
     const r = await request(app).post('/api/music/models').send({ engine: 'acestep', repo: 'someorg/ace-variant' });
     expect(r.status).toBe(400);
     expect(r.body.code).toBe('AUDIO_MODEL_ENGINE_FIXED');
     expect(models.add).not.toHaveBeenCalled();
     expect(sse.run).not.toHaveBeenCalled();
+  });
+
+  it('GET /setup/runtime-status reports music runtime readiness', async () => {
+    gen.ready = false;
+    const missing = await request(app).get('/api/music/setup/runtime-status?runtime=acestep');
+    expect(missing.status).toBe(200);
+    expect(missing.body).toMatchObject({
+      runtime: 'acestep',
+      label: 'ACE-Step',
+      installed: false,
+      venvPath: null,
+      expectedVenvPath: '/v/ace',
+      installEnvVar: 'INSTALL_ACESTEP',
+    });
+
+    gen.ready = true;
+    const ready = await request(app).get('/api/music/setup/runtime-status?runtime=acestep');
+    expect(ready.status).toBe(200);
+    expect(ready.body.installed).toBe(true);
+    expect(ready.body.venvPath).toBe('/v/ace/bin/python3');
+  });
+
+  it('GET /setup/runtime-install completes without spawning when already installed', async () => {
+    gen.ready = true;
+    const r = await request(app).get('/api/music/setup/runtime-install?runtime=acestep');
+    expect(r.status).toBe(200);
+    expect(r.text).toContain('"type":"complete"');
+    expect(r.text).toContain('Already installed');
   });
 
   it('GET /models/:engine returns the merged model list; 404s for an unknown engine', async () => {
