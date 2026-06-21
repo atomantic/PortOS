@@ -117,7 +117,7 @@ const seriesSvc = await import('./series.js');
 const seasonsSvc = await import('./seasons.js');
 const issuesSvc = await import('./issues.js');
 const autopilot = await import('./seriesAutopilot.js');
-const { resolveNextStep, requiredScriptStages, scriptStructurallyReady, visualReady } = autopilot;
+const { resolveNextStep, requiredScriptStages, scriptStructurallyReady, visualReady, wantsComic } = autopilot;
 
 // A comic script string that parseComicScript turns into >=1 page/panel.
 const VALID_SCRIPT = 'PAGE 1\nPANEL 1\nA scene.';
@@ -385,6 +385,29 @@ describe('requiredScriptStages / scriptStructurallyReady', () => {
     expect(scriptStructurallyReady({ stages: { comicScript: ready(VALID_SCRIPT) } })).toBe(true);
     expect(scriptStructurallyReady({ stages: { comicScript: ready('just some prose, no pages') } })).toBe(false);
     expect(scriptStructurallyReady({ stages: {} })).toBe(false);
+  });
+});
+
+describe('wantsComic (per-run comic gating)', () => {
+  it('honors the series format when no restriction is given', () => {
+    expect(wantsComic({ targetFormat: 'comic+tv' })).toBe(true);
+    expect(wantsComic({ targetFormat: 'comic' })).toBe(true);
+    expect(wantsComic({ targetFormat: 'tv' })).toBe(false);
+  });
+
+  it('is false for a comic+tv series restricted to tv-only (so comic gates do NOT run)', () => {
+    // This is the bug: a ['tv'] run must NOT enter scriptVerify/visual on a
+    // comic+tv series, or it would verify a comic script that was never authored.
+    expect(wantsComic({ targetFormat: 'comic+tv' }, { targetFormats: ['tv'] })).toBe(false);
+    expect(wantsComic({ targetFormat: 'comic+tv' }, { targetFormats: ['comic'] })).toBe(true);
+    expect(wantsComic({ targetFormat: 'comic+tv' }, { targetFormats: ['comic', 'tv'] })).toBe(true);
+  });
+
+  it('treats a restriction the series cannot satisfy as a no-op (matches requiredScriptStages)', () => {
+    // comic-only series asked for tv-only → requiredScriptStages falls back to
+    // comic; wantsComic must agree (still wants comic) so the run isn't stranded.
+    expect(wantsComic({ targetFormat: 'comic' }, { targetFormats: ['tv'] })).toBe(true);
+    expect(wantsComic({ targetFormat: 'comic+tv' }, { targetFormats: [] })).toBe(true);
   });
 });
 

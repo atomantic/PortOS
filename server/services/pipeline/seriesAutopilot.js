@@ -194,6 +194,28 @@ export function isComicTarget(series) {
   return (series?.targetFormat || 'comic+tv').includes('comic');
 }
 
+// Does THIS run want the comic format? `isComicTarget` alone keys off the
+// series' declared format, but a per-run `options.targetFormats` restriction can
+// scope a comic+tv series to TV only — in which case the comic-only steps
+// (scriptVerify, visual draft) must NOT run, or a TV-only pass would enter
+// comic-script verification with no comicScript and pause on an unparseable
+// script. Mirrors the restriction logic in requiredScriptStages: an empty/absent
+// restriction (or one that excludes everything the series supports) means "all
+// formats the series wants", so this stays true for the default whole-series run.
+export function wantsComic(series, options = {}) {
+  if (!isComicTarget(series)) return false;
+  const restrict = Array.isArray(options?.targetFormats) && options.targetFormats.length
+    ? options.targetFormats
+    : null;
+  if (!restrict) return true;
+  // If the restriction excludes every format the series supports, requiredScriptStages
+  // ignores it (never strand the run) — match that here so the gates agree.
+  const wantComic = restrict.includes('comic');
+  const wantTv = restrict.includes('tv') && (series?.targetFormat || '').includes('tv');
+  if (!wantComic && !wantTv) return true; // restriction is a no-op → whole series
+  return wantComic;
+}
+
 // Effective "produce draft visuals?" decision. The `target` option overrides
 // the `includeVisual` flag: 'text' forces text-only (no canon gate, no render),
 // 'visual' forces visuals, and 'auto' (the default) honors `includeVisual`
@@ -314,8 +336,11 @@ export function resolveNextStep(series, issues, runState = {}, options = {}) {
     }
   }
 
-  // STEP 4c — structural script gate (comic targets only).
-  if (isComicTarget(series)) {
+  // STEP 4c — structural script gate (comic targets only). Gate on wantsComic,
+  // not bare isComicTarget, so a TV-only run of a comic+tv series doesn't enter
+  // comic-script verification with no comicScript (which would pause on an
+  // unparseable script).
+  if (wantsComic(series, options)) {
     for (const issue of ordered) {
       if (setHas(runState.scriptChecked, issue.id)) continue;
       return { kind: 'scriptVerify', issueId: issue.id, reason: 'comic script not yet structurally verified' };
@@ -348,12 +373,12 @@ export function resolveNextStep(series, issues, runState = {}, options = {}) {
   // canon noun that appears where it'd be drawn must be described (an artist
   // can't render a name). Runs once per run; the gate blocks (pauses) on
   // undescribed drawn nouns. Only relevant when visuals will be produced.
-  if (VISUAL_DRAFT_ENABLED && wantsVisual(options) && isComicTarget(series) && !runState.canonVerified) {
+  if (VISUAL_DRAFT_ENABLED && wantsVisual(options) && wantsComic(series, options) && !runState.canonVerified) {
     return { kind: 'canonVerify', reason: 'canon descriptive integrity not yet verified this run' };
   }
 
   // STEP 6 — draft visuals (cover + back + all interior pages).
-  if (VISUAL_DRAFT_ENABLED && wantsVisual(options) && isComicTarget(series)) {
+  if (VISUAL_DRAFT_ENABLED && wantsVisual(options) && wantsComic(series, options)) {
     for (const issue of ordered) {
       if (setHas(runState.visualDrafted, issue.id)) continue;
       if (visualReady(issue)) continue;
@@ -1017,7 +1042,7 @@ function buildDryRunPlan(series, issues, options) {
   if (beatsNeeded) plan.push({ kind: 'beatSheet', count: beatsNeeded });
   const textNeeded = ordered.filter((i) => !textReady(i, series, options)).length;
   if (textNeeded) plan.push({ kind: 'textStages', count: textNeeded });
-  if (isComicTarget(series)) plan.push({ kind: 'scriptVerify', count: ordered.length });
+  if (wantsComic(series, options)) plan.push({ kind: 'scriptVerify', count: ordered.length });
   const edRounds = Number.isInteger(options?.maxEditorialRounds) ? options.maxEditorialRounds : MAX_EDITORIAL_ROUNDS;
   plan.push({ kind: 'editorialReview', count: 1, note: roundsNote(edRounds) });
   // maxEditorialRounds === 0 skips the whole editorial gate in execute mode
@@ -1028,7 +1053,7 @@ function buildDryRunPlan(series, issues, options) {
     plan.push({ kind: 'editorialChecks', count: 1, note: 'enabled editorial checks (#1284)' });
     plan.push({ kind: 'editorialHealthGate', count: 1, note: 'editorial health readiness gate (#1316)' });
   }
-  if (VISUAL_DRAFT_ENABLED && wantsVisual(options) && isComicTarget(series)) {
+  if (VISUAL_DRAFT_ENABLED && wantsVisual(options) && wantsComic(series, options)) {
     plan.push({ kind: 'canonVerify', count: 1, note: 'descriptive integrity of drawn nouns' });
     const visualNeeded = ordered.filter((i) => !visualReady(i)).length;
     if (visualNeeded) plan.push({ kind: 'visualDraft', count: visualNeeded, note: 'cover + back + all pages (draft)' });

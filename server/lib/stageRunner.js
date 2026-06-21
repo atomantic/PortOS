@@ -16,7 +16,7 @@
 
 import { ServerError } from './errorHandler.js';
 import { findBalancedBlocks, tryParseWithRepair } from './jsonExtract.js';
-import { resolveEffectiveModel, runPromptThroughProvider, DEFAULT_TIMEOUT_MS } from './promptRunner.js';
+import { resolveEffectiveModel, runPromptThroughProvider, DEFAULT_TIMEOUT_MS, isLocalEndpoint } from './promptRunner.js';
 import { stripCodeFences } from './aiProvider.js';
 import { extractCodexAssistant } from './codexAssistantExtract.js';
 import { getActiveProvider, getProviderById } from '../services/providers.js';
@@ -122,54 +122,16 @@ export function knownProviderContextWindow(provider) {
   return null;
 }
 
-const LOCAL_ENDPOINT_RE = /^(https?:\/\/)?(localhost|127\.0\.0\.1|0\.0\.0\.0|\[?::1\]?)(:|\/|$)/i;
-const isLocalEndpoint = (endpoint) =>
-  typeof endpoint === 'string' && LOCAL_ENDPOINT_RE.test(endpoint.trim());
-
-// ── Local-backend concurrency gate ─────────────────────────────────────────
-// A local LLM server (Ollama / LM Studio on localhost) runs inference on one
-// GPU. Firing N stage calls at it concurrently (e.g. the 3 parallel
-// canon-extraction kinds) gains nothing — the backend serializes on the GPU
-// regardless — and, if the backend is configured for parallelism
-// (OLLAMA_NUM_PARALLEL > 1), it loads N model contexts at once and can spike
-// VRAM into an OOM/thrash. Cloud HTTP and CLI/TUI providers have no such
-// constraint. So we cap concurrent IN-FLIGHT stage calls per LOCAL endpoint and
-// queue the rest (FIFO). Default 1 (serialize); a beefy box can lift it with
-// LOCAL_LLM_MAX_CONCURRENCY. Keyed by endpoint so two distinct local servers
-// still run in parallel with each other.
-export const LOCAL_LLM_MAX_CONCURRENCY = Math.max(1, Number(process.env.LOCAL_LLM_MAX_CONCURRENCY) || 1);
-const localEndpointGates = new Map(); // endpoint -> { active: number, queue: (()=>void)[] }
-
-function acquireLocalSlot(endpoint) {
-  let gate = localEndpointGates.get(endpoint);
-  if (!gate) { gate = { active: 0, queue: [] }; localEndpointGates.set(endpoint, gate); }
-  if (gate.active < LOCAL_LLM_MAX_CONCURRENCY) {
-    gate.active += 1;
-    return Promise.resolve();
-  }
-  return new Promise((resolve) => { gate.queue.push(resolve); });
-}
-
-function releaseLocalSlot(endpoint) {
-  const gate = localEndpointGates.get(endpoint);
-  if (!gate) return;
-  const next = gate.queue.shift();
-  if (next) next(); // hand the slot straight to the next waiter (active unchanged)
-  else gate.active = Math.max(0, gate.active - 1);
-}
-
-// Run `fn` under the local-endpoint gate when `provider` is a local API backend;
-// otherwise run it immediately (cloud / CLI / TUI are unconstrained).
-export async function withLocalConcurrencyGate(provider, fn) {
-  const endpoint = provider?.endpoint;
-  if (!(provider?.type === 'api' && isLocalEndpoint(endpoint))) return fn();
-  await acquireLocalSlot(endpoint);
-  try {
-    return await fn();
-  } finally {
-    releaseLocalSlot(endpoint);
-  }
-}
+// The local-backend concurrency gate (cap concurrent in-flight calls per local
+// endpoint so N parallel stage calls don't thrash one GPU's VRAM) lives in
+// promptRunner.js — the actual execution layer — so it covers the initially
+// selected provider, a proactive createRun swap, AND a runtime fallback that
+// lands on a local backend. Re-exported here for callers/tests that reference
+// the gate by its historical stageRunner path. `isLocalEndpoint` is shared from
+// the same module so the context-window heuristic below and the gate agree on
+// what "local" means.
+export { withLocalConcurrencyGate, LOCAL_LLM_MAX_CONCURRENCY } from './promptRunner.js';
+export { isLocalEndpoint };
 
 // CLI/TUI providers (Claude Code, Codex, Antigravity) are frontier models;
 // non-local API providers are cloud. Local backends (ollama/lmstudio on
@@ -492,10 +454,15 @@ async function executeStagePrompt({ stage, label, prompt, options }) {
   // (runId / model / providerId) here so the persisted stage result points
   // at the run that actually produced the text — otherwise pipeline history
   // / restore links land on a failed record.
-  const runResult2 = await withLocalConcurrencyGate(effectiveProvider, () => runPromptThroughProvider({
+  // The local-backend concurrency gate is applied INSIDE runPromptThroughProvider
+  // (around each actual execution — primary, proactive swap, and runtime
+  // fallback), so we do NOT wrap here: a second gate on the same local endpoint
+  // would deadlock against the inner one (outer holds the only slot, inner waits
+  // forever).
+  const runResult2 = await runPromptThroughProvider({
     provider: effectiveProvider, model: effectiveModel, prompt, source: options.source || 'staged-llm', runId,
     timeout: effectiveTimeout,
-  }));
+  });
   const { text } = runResult2;
   let finalRunId = runId;
   let finalProvider = effectiveProvider;

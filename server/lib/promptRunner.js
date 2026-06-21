@@ -48,6 +48,62 @@ function loadAutoFixer() {
 export const DEFAULT_TIMEOUT_MS = 300000;
 const APPEND_CHUNK = (acc, chunk) => acc + (typeof chunk === 'string' ? chunk : (chunk?.text || ''));
 
+// ── Local-backend concurrency gate ─────────────────────────────────────────
+// A local LLM server (Ollama / LM Studio on localhost) runs inference on one
+// GPU. Firing N stage calls at it concurrently (e.g. the 3 parallel
+// canon-extraction kinds) gains nothing — the backend serializes on the GPU
+// regardless — and, if the backend is configured for parallelism
+// (OLLAMA_NUM_PARALLEL > 1), it loads N model contexts at once and can spike
+// VRAM into an OOM/thrash. Cloud HTTP and CLI/TUI providers have no such
+// constraint. So we cap concurrent IN-FLIGHT calls per LOCAL endpoint and queue
+// the rest (FIFO). Default 1 (serialize); a beefy box can lift it with
+// LOCAL_LLM_MAX_CONCURRENCY. Keyed by endpoint so two distinct local servers
+// still run in parallel with each other.
+//
+// The gate lives HERE (the actual execution layer) rather than at the
+// stageRunner call site so it covers EVERY local execution: the initially
+// selected provider, a proactive createRun swap, AND a runtime fallback that
+// lands on a local backend after a remote/CLI primary fails. Gating only the
+// outer stageRunner call missed the fallback path — a failure storm could still
+// fire N concurrent calls at one local endpoint.
+const LOCAL_ENDPOINT_RE = /^(https?:\/\/)?(localhost|127\.0\.0\.1|0\.0\.0\.0|\[?::1\]?)(:|\/|$)/i;
+export const isLocalEndpoint = (endpoint) =>
+  typeof endpoint === 'string' && LOCAL_ENDPOINT_RE.test(endpoint.trim());
+
+export const LOCAL_LLM_MAX_CONCURRENCY = Math.max(1, Number(process.env.LOCAL_LLM_MAX_CONCURRENCY) || 1);
+const localEndpointGates = new Map(); // endpoint -> { active: number, queue: (()=>void)[] }
+
+function acquireLocalSlot(endpoint) {
+  let gate = localEndpointGates.get(endpoint);
+  if (!gate) { gate = { active: 0, queue: [] }; localEndpointGates.set(endpoint, gate); }
+  if (gate.active < LOCAL_LLM_MAX_CONCURRENCY) {
+    gate.active += 1;
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => { gate.queue.push(resolve); });
+}
+
+function releaseLocalSlot(endpoint) {
+  const gate = localEndpointGates.get(endpoint);
+  if (!gate) return;
+  const next = gate.queue.shift();
+  if (next) next(); // hand the slot straight to the next waiter (active unchanged)
+  else gate.active = Math.max(0, gate.active - 1);
+}
+
+// Run `fn` under the local-endpoint gate when `provider` is a local API backend;
+// otherwise run it immediately (cloud / CLI / TUI are unconstrained).
+export async function withLocalConcurrencyGate(provider, fn) {
+  const endpoint = provider?.endpoint;
+  if (!(provider?.type === PROVIDER_TYPES.API && isLocalEndpoint(endpoint))) return fn();
+  await acquireLocalSlot(endpoint);
+  try {
+    return await fn();
+  } finally {
+    releaseLocalSlot(endpoint);
+  }
+}
+
 // Cooldown per error category — how long the failed provider is marked
 // unavailable so subsequent calls skip it and proactively use the fallback.
 // USAGE_LIMIT is absent because `markUsageLimit` parses the wait time
@@ -308,7 +364,10 @@ export async function runPromptThroughProvider(args) {
   }
 
   try {
-    return await executeProviderRunOnce(args);
+    // Gate on the requested provider; a proactive createRun swap to a local
+    // backend is still covered because executeProviderRunOnce dispatches by the
+    // provider it actually runs and the gate is a no-op for non-local providers.
+    return await withLocalConcurrencyGate(args.provider, () => executeProviderRunOnce(args));
   } catch (firstError) {
     // Only retry when the failure came from the execution layer (annotated
     // by safeReject with effectiveProvider). Pre-execution throws —
@@ -370,12 +429,15 @@ export async function runPromptThroughProvider(args) {
     // doesn't exist on the fallback.
     let fallbackResult;
     try {
-      fallbackResult = await executeProviderRunOnce({
+      // Gate the fallback too: a remote/CLI primary that fails over to a local
+      // backend must still serialize against that endpoint (the failure-storm
+      // case the outer stageRunner wrap used to miss).
+      fallbackResult = await withLocalConcurrencyGate(fallback, () => executeProviderRunOnce({
         ...args,
         provider: fallback,
         model: picked.model ?? undefined,
         runId: undefined, // fresh runId so the failed primary's record stays intact
-      });
+      }));
     } catch (fallbackError) {
       // Both failed — release the primary's suppression (the fallback's own
       // failure already queued its investigation task) and rethrow.
