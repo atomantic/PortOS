@@ -596,6 +596,13 @@ function rewriteLabelInBlock(block, label, oldP, newP, processName = '') {
   const hasInlinePortsObj = /\bports\s*:\s*\{/.test(block);
   const hasPortsReference = /\bports\s*:\s*[A-Za-z_$]/.test(block);
   const hasExplicitPortsSource = hasInlinePortsObj || hasPortsReference;
+  // Note: a `ports: SOME_REF` whose constant parseEcosystemConfig can't resolve
+  // makes the parser fall back to env/args — but this block-level rewriter has
+  // no constant table, so it can't tell a resolved reference from an unresolved
+  // one and conservatively treats ALL references as explicit sources (suppresses
+  // the env fallback). The cost is a safe 422 on that uncommon malformed-config
+  // shape (no corruption), not a wrong write; resolving it would mean threading
+  // the parser's resolved-port map down into this pure function.
   // `PORT`/`'PORT'`/`` `PORT` `` followed by `:` and optional whitespace.
   const PORT_KEY = "['\"`]?\\bPORT\\b['\"`]?\\s*:\\s*";
   // Which label does a bare env `PORT` map to? Mirror parseEcosystemConfig:
