@@ -25,6 +25,35 @@ describe('renderEntitiesSummary', () => {
     expect(out.split('\n')).toHaveLength(3);
   });
 
+  it('excludes characters already in the bible (excludeCharacterNames), keeping places/objects', () => {
+    const world = {
+      characters: [
+        { name: 'Mira', role: 'surveyor' },
+        { name: 'ASTER-9 CHANDELIER', role: 'fixture' },
+        { name: 'Off-canon Extra', role: 'walk-on' },
+      ],
+      places: [{ name: 'The Foundry', description: 'industrial district' }],
+    };
+    const out = renderEntitiesSummary(world, {
+      excludeCharacterNames: new Set(['mira', 'aster-9 chandelier']),
+    });
+    // Bible characters dropped from the roster; the non-canon one survives.
+    expect(out).not.toContain('Mira');
+    expect(out).not.toContain('ASTER-9 CHANDELIER');
+    expect(out).toContain('Off-canon Extra');
+    // Places are never excluded.
+    expect(out).toContain('Places: The Foundry');
+  });
+
+  it('drops the whole characters line + corrects the +N more count when excluded', () => {
+    const chars = Array.from({ length: ENTITIES_SUMMARY_MAX_PER_KIND + 5 }, (_, i) => ({ name: `C${i + 1}`, role: 'r' }));
+    // Exclude the first 5 → remaining exactly ENTITIES_SUMMARY_MAX_PER_KIND, no "+N more".
+    const exclude = new Set(['c1', 'c2', 'c3', 'c4', 'c5']);
+    const out = renderEntitiesSummary({ characters: chars }, { excludeCharacterNames: exclude });
+    expect(out).not.toContain('C1 (');
+    expect(out).not.toContain('(+'); // exactly maxPerKind remain after exclusion
+  });
+
   it('omits kinds with zero entries', () => {
     const out = renderEntitiesSummary({
       characters: [{ name: 'Mira', role: 'surveyor' }],

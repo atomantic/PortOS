@@ -180,7 +180,7 @@ describe('pipeline text stage generator', () => {
     expect(ctx.worldEntitiesSummary).toBe('(none — series has no linked Universe Builder world)');
   });
 
-  it('prompt context carries a rendered worldEntitiesSummary when series links a universe', async () => {
+  it('renders worldEntitiesSummary roster but does NOT re-list characters already in the full bible', async () => {
     const { series, issue } = await seed();
     const world = await universeSvc.createUniverse({ name: 'Salt Verse' });
     await universeSvc.updateUniverse(world.id, {
@@ -193,9 +193,12 @@ describe('pipeline text stage generator', () => {
     await seriesSvc.updateSeries(series.id, { universeId: world.id });
     await textStages.generateStage(issue.id, 'idea');
     const ctx = ctxFromCall(llmCalls[0]);
-    expect(ctx.worldEntitiesSummary).toContain('Mira (surveyor — broad-shouldered)');
-    expect(ctx.worldEntitiesSummary).toContain('Jonas (foreman — cunning)');
+    // The characters appear in full in the bible (series.characters)…
+    expect((ctx.series.characters || []).map((c) => c.name)).toEqual(expect.arrayContaining(['Mira', 'Jonas']));
+    // …so the terse roster must NOT duplicate them — it carries places/objects.
     expect(ctx.worldEntitiesSummary).toContain('The Foundry (industrial district)');
+    expect(ctx.worldEntitiesSummary).not.toContain('Mira');
+    expect(ctx.worldEntitiesSummary).not.toContain('Jonas');
   });
 
   it('prompt context carries lengthTargets from a named non-default profile (extended)', async () => {

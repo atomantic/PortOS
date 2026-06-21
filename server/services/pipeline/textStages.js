@@ -220,8 +220,16 @@ function buildStageContext({ series, canon, world, issue, stageId, seedInput, so
   // canon-block token cost — `series.characters` already covers the bible-
   // sized character context, this adds places/objects + other characters not
   // pulled into the series-canon for continuity anchors.
+  // Exclude the series-canon characters from the terse roster — they're already
+  // rendered in full in the bible's "### Characters" block above, so re-listing
+  // them in "Universe at a glance" duplicates every character in the prompt. The
+  // roster then does what its comment intends: adds places/objects + any OTHER
+  // characters not pulled into the series canon.
+  const seriesCharacterNames = new Set(
+    (canon?.characters || []).map((c) => (c?.name || '').trim().toLowerCase()).filter(Boolean),
+  );
   const worldEntitiesSummary = world
-    ? (renderEntitiesSummary(world) || '(none)')
+    ? (renderEntitiesSummary(world, { excludeCharacterNames: seriesCharacterNames }) || '(none)')
     : NO_LINKED_UNIVERSE_PLACEHOLDER;
   return {
     series: {
