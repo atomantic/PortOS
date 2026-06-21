@@ -1864,6 +1864,50 @@ describe('arcPlanner — manuscript completeness + derive-from-manuscript', () =
     expect(out.issues[0]).not.toHaveProperty('replace');
   });
 
+  it('capCanonReference caps combined canon size, trimming the largest block first', () => {
+    const blocks = {
+      objects: 'O'.repeat(10_000),
+      characters: 'C'.repeat(4_000),
+      places: 'P'.repeat(500),
+    };
+    const trimmed = planner.capCanonReference(blocks, 6_000);
+    expect(trimmed).toBe(true);
+    const total = Object.values(blocks).reduce((n, v) => n + v.length, 0);
+    // Within budget (a small trim-marker allowance per cut block).
+    expect(total).toBeLessThanOrEqual(6_200);
+    // The smallest block survives untouched; the largest absorbed the cut.
+    expect(blocks.places).toBe('P'.repeat(500));
+    expect(blocks.objects.length).toBeLessThan(10_000);
+  });
+
+  it('capCanonReference is a no-op when already within budget', () => {
+    const blocks = { a: 'x'.repeat(100), b: 'y'.repeat(100) };
+    expect(planner.capCanonReference(blocks, 10_000)).toBe(false);
+    expect(blocks.a).toBe('x'.repeat(100));
+  });
+
+  it('never feeds the LLM an empty manuscript on a constrained window (canon cannot starve the draft)', async () => {
+    // Regression: an oversized canon/world context used to collapse usableChars
+    // to 0 and slice the manuscript to '', so the model "reviewed" an empty
+    // draft and reported the whole book missing. The canon cap + manuscript
+    // floor must keep real script text in every chunk.
+    const s = await setupSeries();
+    const script = 'PAGE 1\nPANEL 1\nThe foundry hums. '.repeat(400); // ~13K chars of real script
+    await issuesSvc.createIssue({ seriesId: s.id, title: 'Act 1', arcPosition: 1, stages: { comicScript: { output: script, status: 'ready' } } });
+    // Force a small planning window so the budgeter must chunk/trim.
+    stageContextSpy = vi.fn(async () => ({ provider: { id: 'p' }, model: 'm', contextWindow: 32_768 }));
+    const seen = [];
+    stageRunnerSpy = vi.fn(async (template, ctx) => {
+      seen.push(ctx.manuscript || '');
+      return { content: { issues: [] }, runId: 'rc', providerId: 'p', model: 'm' };
+    });
+    await planner.analyzeManuscriptCompleteness(s.id, { withEdits: true });
+    expect(seen.length).toBeGreaterThan(0);
+    // Every chunk the model saw must carry real manuscript text — never ''.
+    expect(seen.every((m) => m && m.trim().length > 0)).toBe(true);
+    expect(seen.some((m) => m.includes('The foundry hums'))).toBe(true);
+  });
+
   it('analyzeManuscriptCompleteness reads the manuscript and returns shaped findings', async () => {
     const s = await setupSeries();
     await issuesSvc.createIssue({
