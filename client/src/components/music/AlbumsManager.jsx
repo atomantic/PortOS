@@ -188,9 +188,13 @@ export default function AlbumsManager() {
     return { ...f, trackIds: next };
   });
 
-  const buildPayload = () => {
+  // `includeTrackIds` gates the membership field: on an UPDATE we send `trackIds`
+  // only when the user actually reordered/added/removed tracks vs the loaded
+  // record — otherwise a metadata-only save on a stale form would re-send an old
+  // list and the server's reconcile would clobber a track another tab/API added.
+  const buildPayload = ({ includeTrackIds }) => {
     const yearNum = form.releaseYear.trim() === '' ? null : Number(form.releaseYear);
-    return {
+    const payload = {
       title: form.title.trim(),
       artistId: form.artistId,
       artist: form.artist,
@@ -198,24 +202,28 @@ export default function AlbumsManager() {
       genre: form.genre,
       releaseYear: Number.isFinite(yearNum) ? yearNum : null,
       coverImageUrl: form.coverImageUrl,
-      trackIds: form.trackIds,
     };
+    if (includeTrackIds) payload.trackIds = form.trackIds;
+    return payload;
   };
 
   const handleSave = async () => {
     const title = form.title.trim();
     if (!title) { toast.error('Album title is required'); return; }
     setSaving(true);
-    const payload = buildPayload();
     if (isCreate) {
-      const created = await createAlbum(payload).catch((err) => { toast.error(err.message || 'Failed to create album'); return null; });
+      const created = await createAlbum(buildPayload({ includeTrackIds: true })).catch((err) => { toast.error(err.message || 'Failed to create album'); return null; });
       setSaving(false);
       if (!created) return;
       setAlbums((prev) => [...prev, created].sort((a, b) => (a.title || '').localeCompare(b.title || '')));
       setSelectedId(created.id);
       toast.success(`Created "${created.title}"`);
     } else {
-      const updated = await updateAlbum(selectedId, payload).catch((err) => { toast.error(err.message || 'Failed to save album'); return null; });
+      // Did the track list actually change vs the loaded record?
+      const original = selected?.trackIds || [];
+      const trackIdsChanged = original.length !== form.trackIds.length
+        || original.some((id, i) => id !== form.trackIds[i]);
+      const updated = await updateAlbum(selectedId, buildPayload({ includeTrackIds: trackIdsChanged })).catch((err) => { toast.error(err.message || 'Failed to save album'); return null; });
       setSaving(false);
       if (!updated) return;
       setAlbums((prev) => prev.map((a) => (a.id === updated.id ? updated : a)).sort((a, b) => (a.title || '').localeCompare(b.title || '')));

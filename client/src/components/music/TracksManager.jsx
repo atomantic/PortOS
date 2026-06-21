@@ -116,9 +116,8 @@ export default function TracksManager() {
     const title = form.title.trim();
     if (!title) { toast.error('Track title is required'); return; }
     setSaving(true);
-    const payload = { ...form, title };
     if (isCreate) {
-      const created = await createTrack(payload).catch((err) => { toast.error(err.message || 'Failed to create track'); return null; });
+      const created = await createTrack({ ...form, title }).catch((err) => { toast.error(err.message || 'Failed to create track'); return null; });
       setSaving(false);
       if (!created) return;
       upsertLocal(created);
@@ -126,6 +125,13 @@ export default function TracksManager() {
       selectedIdRef.current = created.id;
       toast.success(`Created "${created.title}"`);
     } else {
+      // Drop `albumId` from a metadata-only update unless the user actually
+      // changed the album here — otherwise a stale form would re-send the old
+      // albumId and the server's reconcile would move the track back (a track
+      // reassigned in another tab/API would get clobbered). The album editor
+      // remains the primary place to (re)order an album's tracks.
+      const payload = { ...form, title };
+      if ((selected?.albumId || '') === form.albumId) delete payload.albumId;
       const updated = await updateTrack(selectedId, payload).catch((err) => { toast.error(err.message || 'Failed to save track'); return null; });
       setSaving(false);
       if (!updated) return;
