@@ -935,6 +935,43 @@ describe('arcPlanner — resolveVerifyIssues', () => {
     const updated = await issuesSvc.getIssue(issue.id);
     expect(updated.stages.idea.input).toBe('frozen synopsis'); // unchanged
   });
+
+  it('fails safe (no-match) when a correction names a season the matched-number issue is NOT in', async () => {
+    // Guard against a numbering-scheme mismatch: the arc tree numbers episodes
+    // series-globally, but if the resolve LLM ever returns a per-season
+    // episodeNumber, a season-agnostic fallback would silently rewrite the wrong
+    // season's issue. With a resolvable seasonNumber we now REQUIRE the season to
+    // match — a mismatch is dropped, not mis-applied to another season's issue.
+    const s = await setupSeries();
+    await seriesSvc.updateSeries(s.id, { arc: { logline: 'L' } });
+    const s1 = await seasonsSvc.createSeason(s.id, { title: 'Vol 1', episodeCountTarget: 1 });
+    const s2 = await seasonsSvc.createSeason(s.id, { title: 'Vol 2', episodeCountTarget: 1 });
+    const issue = await issuesSvc.createIssue({ seriesId: s.id, seasonId: s1.id, title: 'Ep' });
+    await issuesSvc.updateStage(issue.id, 'idea', { input: 'season 1 synopsis', status: 'empty' });
+    const fresh = await issuesSvc.getIssue(issue.id);
+
+    // Correction names season 2 but the only issue with this number is in season 1.
+    stageRunnerSpy = vi.fn(async () => ({
+      content: {
+        arc: { logline: 'L2', summary: 'S', themes: [], protagonistArc: '' },
+        seasons: [
+          { id: s1.id, number: s1.number, title: 'Vol 1', logline: '', synopsis: '', endingHook: '', episodeCountTarget: 1 },
+          { id: s2.id, number: s2.number, title: 'Vol 2', logline: '', synopsis: '', endingHook: '', episodeCountTarget: 1 },
+        ],
+        episodes: [{ seasonNumber: s2.number, episodeNumber: fresh.number, synopsis: 'WRONG-SEASON overwrite' }],
+        notes: '',
+      },
+      runId: 'r', providerId: 'p', model: 'm',
+    }));
+
+    const out = await planner.resolveVerifyIssues(s.id, {
+      findings: [{ severity: 'high', problem: 'contradiction', suggestion: 'fix' }],
+    });
+
+    expect(out.episodesResolved[0].skipped).toBe('no-match');
+    const updated = await issuesSvc.getIssue(issue.id);
+    expect(updated.stages.idea.input).toBe('season 1 synopsis'); // NOT overwritten
+  });
 });
 
 describe('arcPlanner — shapeEpisodeResolutions', () => {

@@ -113,7 +113,12 @@ export const DEFAULT_SIGNAL_OPTS = Object.freeze({
 function singularStem(letters) {
   if (typeof letters !== 'string' || letters.length < 4) return letters;
   if (letters.endsWith('ies')) return `${letters.slice(0, -3)}y`; // cities → city
-  if (letters.endsWith('es') && letters.length > 4) return letters.slice(0, -2); // boxes → box
+  // `-es` only forms a plural after a sibilant (s/x/z, ch/sh): boxes→box,
+  // dishes→dish, churches→church. Gating on the sibilant (not just length)
+  // stops a singular name that merely ends in "es" from being over-stemmed —
+  // "James"→"jam", "Charles"→"charl" — which could then false-collapse onto an
+  // unrelated short name and wrongly suppress a real confusability pair.
+  if (letters.endsWith('es') && /(s|x|z|ch|sh)es$/.test(letters)) return letters.slice(0, -2);
   if (letters.endsWith('s') && !letters.endsWith('ss')) return letters.slice(0, -1); // poets → poet
   return letters;
 }

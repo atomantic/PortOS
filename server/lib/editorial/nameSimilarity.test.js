@@ -106,6 +106,12 @@ describe('nameSimilaritySignals', () => {
     expect(nameSimilaritySignals('a waiter', 'THE WAITERS')).toEqual([]);
     expect(nameSimilaritySignals('city', 'cities')).toEqual([]);
     expect(analyzeNamePair('readers', 'reader')).toEqual({ signals: [], distance: Infinity, phoneticMatch: false });
+    // `-es` plurals collapse only after a sibilant (box/boxes, church/churches).
+    expect(nameSimilaritySignals('box', 'boxes')).toEqual([]);
+    expect(nameSimilaritySignals('church', 'churches')).toEqual([]);
+    // A SINGULAR name ending in non-sibilant + "es" (James, Charles) must NOT be
+    // over-stemmed to "jam"/"charl" and false-collapsed onto a short name.
+    expect(nameSimilaritySignals('James', 'Jam')).not.toEqual([]);
     // But two DIFFERENT words that merely both end in "s" are not a plural pair —
     // genuine confusability signals still apply.
     expect(nameSimilaritySignals('Marcus', 'Atlas')).not.toContain('near-identical spelling (edit distance 1)');
