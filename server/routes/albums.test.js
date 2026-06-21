@@ -109,6 +109,17 @@ describe('albums routes', () => {
     expect(tracks.listTracks).not.toHaveBeenCalled();
   });
 
+  it('PATCH /:id stealing a track from another album drops it from that album\'s tracklist', async () => {
+    // track-7 currently belongs to album-2; adding it to album-1 must remove it
+    // from album-2's ordered trackIds (not just flip its albumId).
+    tracks.listTracks.mockResolvedValueOnce([{ id: 'track-7', albumId: 'album-2' }]);
+    albums.getAlbum.mockResolvedValueOnce({ id: 'album-2', trackIds: ['track-7', 'track-8'] });
+    const r = await request(app).patch('/api/albums/album-1').send({ trackIds: ['track-7'] });
+    expect(r.status).toBe(200);
+    expect(tracks.updateTrack).toHaveBeenCalledWith('track-7', { albumId: 'album-1' });
+    expect(albums.updateAlbum).toHaveBeenCalledWith('album-2', { trackIds: ['track-8'] });
+  });
+
   it('DELETE /:id orphans the album\'s tracks (clears their albumId)', async () => {
     tracks.listTracks.mockResolvedValueOnce([{ id: 'track-9', albumId: 'album-1' }]);
     await request(app).delete('/api/albums/album-1');

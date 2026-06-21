@@ -63,22 +63,45 @@ const patchSchema = z.object({
 async function reconcileAlbumMembership(album) {
   const desired = new Set(album.trackIds || []);
   const all = await tracks.listTracks().catch(() => []);
+  const byId = new Map(all.map((t) => [t.id, t]));
   const ops = [];
+  // A listed track that currently belongs to a DIFFERENT album is being moved
+  // here — drop it from that other album's ordered `trackIds` so the old album
+  // stops listing it (it now reports a different `albumId`). Call the album
+  // SERVICE (not this route) so the write can't re-enter reconcile and loop.
+  // Coalesce per-source-album removals into one update each.
+  const removalsByAlbum = new Map();
   // Clear albumId on tracks that point here but are no longer listed.
   for (const t of all) {
     if (t.albumId === album.id && !desired.has(t.id)) {
       ops.push(tracks.updateTrack(t.id, { albumId: '' }).catch(() => {}));
     }
   }
-  // Stamp albumId on listed tracks that don't already point here.
-  const byId = new Map(all.map((t) => [t.id, t]));
+  // Stamp albumId on listed tracks that don't already point here, and record any
+  // prior album they're being stolen from.
   for (const id of desired) {
     const t = byId.get(id);
     if (t && t.albumId !== album.id) {
       ops.push(tracks.updateTrack(id, { albumId: album.id }).catch(() => {}));
+      if (t.albumId) {
+        const set = removalsByAlbum.get(t.albumId) || new Set();
+        set.add(id);
+        removalsByAlbum.set(t.albumId, set);
+      }
     }
   }
   await Promise.all(ops);
+  // Now prune each stolen track from its former album's list (one write per
+  // source album; skips the album being saved and any missing/deleted album).
+  await Promise.all([...removalsByAlbum.entries()].map(async ([srcAlbumId, stolen]) => {
+    if (srcAlbumId === album.id) return;
+    const src = await albums.getAlbum(srcAlbumId).catch(() => null);
+    if (!src) return;
+    const nextIds = (src.trackIds || []).filter((id) => !stolen.has(id));
+    if (nextIds.length !== (src.trackIds || []).length) {
+      await albums.updateAlbum(srcAlbumId, { trackIds: nextIds }).catch(() => {});
+    }
+  }));
 }
 
 router.get('/', asyncHandler(async (_req, res) => {
