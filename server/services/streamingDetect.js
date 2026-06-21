@@ -627,7 +627,10 @@ function rewriteLabelInBlock(block, label, oldP, newP, processName = '') {
   // PM2 launches with it, so it must track the label's port. NOT for a ports
   // REFERENCE block: there the parser reads the external const and ignores env,
   // so rewriting the bare PORT would be a false-success runtime-only change.
-  const barePortIsThisLabel = barePortLabel === label;
+  // A UI process's bare PORT serves BOTH `ui` and `devUi`: when an API sibling
+  // exists parseEcosystemConfig relabels that parsed ui port to devUi, so a
+  // devUi edit on a UI-named process targets the same bare PORT.
+  const barePortIsThisLabel = barePortLabel === label || (barePortLabel === 'ui' && label === 'devUi');
   const rewriteBarePort = barePortIsThisLabel && !hasPortsReference;
 
   if (label === 'api') {

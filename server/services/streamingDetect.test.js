@@ -576,6 +576,23 @@ module.exports = { apps: [
     expect(r.content).toContain('PORT: 7000'); // runtime port moves too
   });
 
+  it('rewrites a Vite UI process bare PORT for a devUi edit (parser relabels ui→devUi with an API sibling)', () => {
+    // srv has env.PORT (api); srv-ui has env.PORT 6000 which parseEcosystemConfig
+    // relabels ui→devUi because an API sibling exists. A devUiPort edit on the
+    // UI process must rewrite that bare PORT (its runtime dev UI port).
+    const content = `module.exports = { apps: [
+  { name: 'srv', script: 's.js', env: { PORT: 5555 } },
+  { name: 'srv-ui', script: 'npx vite', env: { PORT: 6000 } }
+] };
+`;
+    const r = rewriteEcosystemPortsByProcess(content, [
+      { processName: 'srv-ui', label: 'devUi', oldPort: 6000, newPort: 7000 },
+    ]);
+    expect(r.applied).toHaveLength(1);
+    expect(parseEcosystemConfig(r.content).processes.find(p => p.name === 'srv-ui').ports.devUi).toBe(7000);
+    expect(r.content).toContain('PORT: 5555'); // api sibling untouched
+  });
+
   it('an api (non-UI) process bare PORT is the API port — a ui edit leaves it untouched', () => {
     // Bare PORT on a non-UI-named process routes → api. Editing the shared ui
     // label must touch ports.ui only, NOT the bare PORT (which is the api port).
