@@ -119,9 +119,24 @@ describe('runEditorialChecks', () => {
     expect(result.findings.some((f) => f.checkId === 'naming.dissimilar-names')).toBe(true);
     expect(result.findings.some((f) => f.checkId === 'prose.info-dumping')).toBe(true);
 
-    // Seeded once, in 'merge' mode (never auto-dismiss other checks' findings).
-    expect(seedReviewFromFindings).toHaveBeenCalledTimes(1);
-    expect(seedReviewFromFindings.mock.calls[0][2]).toMatchObject({ mode: 'merge' });
+    // Deterministic checks self-heal: each is seeded in 'fresh' mode scoped to
+    // its own checkId (so a finding it no longer produces auto-dismisses), while
+    // LLM checks seed in 'merge' mode (an absent LLM finding could be variance).
+    // Here: naming (deterministic) → fresh+scoped, info-dump (LLM) → merge.
+    const calls = seedReviewFromFindings.mock.calls;
+    const naming = calls.find((c) => c[2]?.checkId === 'naming.dissimilar-names');
+    expect(naming, 'naming seeded fresh, scoped to its checkId').toBeTruthy();
+    expect(naming[2]).toMatchObject({ mode: 'fresh', checkId: 'naming.dissimilar-names' });
+    const merge = calls.find((c) => c[2]?.mode === 'merge');
+    expect(merge, 'LLM findings seeded in merge mode').toBeTruthy();
+    expect(merge[2].checkId ?? null).toBeNull();
+    // No deterministic finding leaked into the merge batch — they're all routed to
+    // their own fresh+scoped seed instead. (The merge batch is LLM findings only.)
+    const deterministicIds = new Set(
+      listChecks().filter((c) => c.kind === 'deterministic').map((c) => c.id),
+    );
+    expect(merge[1].some((f) => deterministicIds.has(f.checkId))).toBe(false);
+    expect(merge[1].some((f) => f.checkId === 'prose.info-dumping')).toBe(true);
   });
 
   it('reports per-check counts', async () => {
@@ -192,6 +207,22 @@ describe('runEditorialChecks', () => {
     const result = await runEditorialChecks('s1', { settings });
     expect(result.findings).toEqual([]);
     expect(seedReviewFromFindings).not.toHaveBeenCalled();
+  });
+
+  it('self-heals a deterministic check that finds nothing (fresh+scoped seed dismisses stale opens)', async () => {
+    // A clean canon → the naming check produces zero findings. It must STILL seed
+    // in 'fresh' mode scoped to its checkId so any prior open naming findings are
+    // reconciled away — otherwise stale deterministic findings linger forever and
+    // can permanently block the health gate.
+    getSeriesCanon.mockResolvedValueOnce({
+      characters: [{ name: 'Zebediah' }, { name: 'Wolfgang' }], places: [], objects: [],
+    });
+    const result = await runEditorialChecks('s1', { checkIds: ['naming.dissimilar-names'] });
+    expect(result.findings).toEqual([]);
+    expect(seedReviewFromFindings).toHaveBeenCalledTimes(1);
+    const [, findings, opts] = seedReviewFromFindings.mock.calls[0];
+    expect(findings).toEqual([]); // nothing found this pass
+    expect(opts).toMatchObject({ mode: 'fresh', checkId: 'naming.dissimilar-names' });
   });
 
   it('skips seeding when canceled mid-run (no partial review mutation)', async () => {
