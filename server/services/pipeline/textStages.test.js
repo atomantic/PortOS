@@ -628,15 +628,30 @@ describe('pipeline text stage generator', () => {
     expect(got).toContain('Lena');
   });
 
-  it('scopeCharactersForIssue: matches a character referenced by first name only', () => {
+  it('scopeCharactersForIssue: a first-name reference is ADDED on top of a reliable scope', () => {
     const cast = [
-      { name: 'Mira Reyes', role: 'surveyor' }, // non-principal — only in via first-name match
-      { name: 'Jonas Vale', role: 'deckhand' }, // non-principal, not named — excluded
+      { name: 'Lena', role: 'lead' },           // principal — reliable signal (floor)
+      { name: 'Mira Reyes', role: 'surveyor' }, // referenced by first name only
+      { name: 'Bram Vale', role: 'cook' },      // not referenced — excluded
     ];
     // Draft says "Mira", not the full "Mira Reyes" — the full-name matcher misses,
-    // the first-name supplement catches it.
-    expect(textStages.__testing.scopeCharactersForIssue(cast, 'Mira crossed the yard alone').map((c) => c.name))
-      .toEqual(['Mira Reyes']);
+    // the first-name supplement catches it and adds it to the principals floor.
+    const got = textStages.__testing.scopeCharactersForIssue(cast, 'Mira crossed the yard alone').map((c) => c.name);
+    expect(got).toContain('Mira Reyes');
+    expect(got).toContain('Lena');
+    expect(got).not.toContain('Bram Vale');
+  });
+
+  it('scopeCharactersForIssue: an incidental first-name match on an UNTAGGED cast keeps the whole cast', () => {
+    // No principals and no full-name match → no reliable signal. The spurious
+    // "will" → "Will Stone" first-name hit must NOT scope the prompt down to one
+    // character; fall back to the whole cast instead.
+    const cast = [
+      { name: 'Will Stone', role: 'side' },
+      { name: 'Bram', role: 'clerk' },
+    ];
+    expect(textStages.__testing.scopeCharactersForIssue(cast, 'the team will regroup').map((c) => c.name))
+      .toEqual(['Will Stone', 'Bram']);
   });
 
   it('scopeCharactersForIssue: matches non-ASCII names (accented) the ASCII \\b matcher would miss', () => {

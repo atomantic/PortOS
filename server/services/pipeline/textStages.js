@@ -251,16 +251,19 @@ const firstNameToken = (c) => {
  * issue's own source text names. The always-present compact `worldEntitiesSummary`
  * roster carries the rest of the cast for continuity refs.
  *
- * Principals are an unconditional FLOOR, not a fallback. That matters because the
- * first-name supplement errs toward inclusion (a common-word token like "Will" in
- * "the team will regroup" can spuriously match "Will Stone"): if principals were a
- * fallback, one such false-positive would make the issue look "fully named" and
- * SUPPRESS the leads. As a floor, a spurious match only ever ADDS an extra record
- * (bounded by the whole cast — the old behavior) and can never drop the core cast.
+ * Two confidence tiers keep an incidental match from defeating the safety nets:
+ *   - RELIABLE signals — the series principals (an unconditional FLOOR, so an
+ *     incidental match can never SUPPRESS the leads) and full-name/alias matches.
+ *   - WEAK signal — the first-name supplement, which errs toward inclusion (a
+ *     common-word token like "will" in "the team will regroup" can spuriously
+ *     match "Will Stone"). It only ADDS to an already-reliable scope; it never
+ *     counts as the signal that suppresses the whole-cast fallback.
  *
- * Returns the whole cast only when there is no signal at all (no principals tagged
- * AND nothing matched — a thinly-seeded early issue with an untagged cast), so the
- * block is never empty.
+ * So when there is NO reliable signal (no principals tagged AND no full-name
+ * match — e.g. an untagged early-bible cast), the result is the whole cast, even
+ * if a first-name token happened to match: better to ship the full bible than to
+ * let "will" scope the prompt down to "Will Stone" and drop everyone else. The
+ * block is therefore never empty.
  */
 export function scopeCharactersForIssue(allCharacters, scopeText) {
   if (!Array.isArray(allCharacters) || allCharacters.length === 0) return [];
@@ -269,15 +272,21 @@ export function scopeCharactersForIssue(allCharacters, scopeText) {
   for (const c of allCharacters) {
     if (PRINCIPAL_ROLE_RE.test(c?.role || '')) byKey.set(c.id || c.name, c);
   }
-  // (b) Characters named in the issue's source text — full name/alias, then first name.
+  // (b) Full-name / alias matches — a reliable "this issue names them" signal.
   for (const c of matchCharactersInText(scopeText, allCharacters)) byKey.set(c.id || c.name, c);
+  // Principals + full-name matches are the trustworthy signal. A first-name-only
+  // match is NOT, on its own, enough to suppress the whole-cast fallback below.
+  const hasReliableSignal = byKey.size > 0;
+  // (c) First-name supplement — additive only ("Mira" → "Mira Reyes").
   if (scopeText) {
     for (const c of allCharacters) {
       const key = c.id || c.name;
       if (!byKey.has(key) && wordInText(firstNameToken(c), scopeText)) byKey.set(key, c);
     }
   }
-  return byKey.size ? [...byKey.values()] : allCharacters;
+  // Reliable signal → the scoped set (incl. any first-name additions). No reliable
+  // signal → the whole cast (which already contains any incidental first-name hit).
+  return hasReliableSignal ? [...byKey.values()] : allCharacters;
 }
 
 /**
