@@ -40,6 +40,8 @@ export const ACCEPTED_OLD_MD5 = {
     '133d200d069c2e8173b7c129eea58f53', // post-027 / pre-054
     'e530fc76b89cedaef848ad7ec99c934c', // post-054 / pre-054-fence
     'dea7d497d1cb38e7574f236f4ff8e644', // post-054-fence / pre-063
+    'e9ee70bf18888492edada6633cd9928a', // post-063 / pre-121
+    '7c05ecde539f04c9fa91e87543057204', // pre-121 reference body
   ],
   'pipeline-tv-script.md':       ['3f6fecc25573ed054b47db392250034a'],
   'pipeline-season-episodes.md': [
@@ -51,7 +53,7 @@ export const ACCEPTED_OLD_MD5 = {
 export const NEW_SHIPPED_MD5 = {
   'pipeline-idea-expansion.md':  'c50f016639d41cd8244f5ff13429f997', // post-098 (ticking clock + {{.}} fixes)
   'pipeline-prose.md':           '84523d531eeafa60959c65c553b2563f', // post-054-fence
-  'pipeline-comic-script.md':    'e9ee70bf18888492edada6633cd9928a', // post-063
+  'pipeline-comic-script.md':    'a4303016c34b65e4b0e641fe71252de3', // post-121 (visible text exactness)
   'pipeline-tv-script.md':       '376f779f4687b598f1c92ca4e770fd5a', // retired upstream (no data.reference)
   'pipeline-season-episodes.md': '50c68a29c3ebc275db3095d06bd87100', // post-005
 };
