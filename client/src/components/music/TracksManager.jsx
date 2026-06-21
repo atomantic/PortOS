@@ -17,6 +17,7 @@ import { Plus, Loader2, Trash2, Save, Upload, Music2, X, Library } from 'lucide-
 import toast from '../ui/Toast';
 import { formatTimecode } from '../../utils/formatters';
 import ArtistPicker from './ArtistPicker';
+import MusicGenPanel from './MusicGenPanel';
 import {
   listTracks, createTrack, updateTrack, deleteTrack,
   uploadTrackAudio, attachTrackAudio, clearTrackAudio, listMusicLibrary, listAlbums,
@@ -321,6 +322,21 @@ export default function TracksManager() {
                   {persisted.modelId ? <span className="px-2 py-0.5 rounded-full bg-port-bg border border-port-border text-gray-400">model: {persisted.modelId}</span> : null}
                   {persisted.durationSec ? <span className="px-2 py-0.5 rounded-full bg-port-bg border border-port-border text-gray-400">{formatTimecode(persisted.durationSec)}</span> : null}
                 </div>
+              ) : null}
+
+              {/* On-device generation — available once the track is saved (the
+                  server attaches the audio + metadata to the persisted track).
+                  Uses the CURRENT prompt/lyrics in the form. */}
+              {persisted ? (
+                <MusicGenPanel
+                  track={persisted}
+                  prompt={form.prompt}
+                  lyrics={form.lyrics}
+                  onGenerated={(updated) => {
+                    upsertLocal(updated);
+                    if (selectedIdRef.current === updated.id) setForm(formFromTrack(updated));
+                  }}
+                />
               ) : null}
 
               <Field label="Audio" hint="Upload an audio file or attach one from the shared music library. Save the track first.">
