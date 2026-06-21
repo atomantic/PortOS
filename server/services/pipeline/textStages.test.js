@@ -553,6 +553,186 @@ describe('pipeline text stage generator', () => {
     expect(ctx.sourceMaterials).toEqual([]);
     expect(ctx.hasSourceMaterials).toBe(false);
   });
+
+  // -- per-issue character scoping (#1511) --
+
+  it('scopes series.characters to the cast named in the issue, dropping the rest of the bible', async () => {
+    const { series } = await seed();
+    const world = await universeSvc.createUniverse({ name: 'Salt Verse' });
+    await universeSvc.updateUniverse(world.id, {
+      characters: [
+        { name: 'Mira', role: 'surveyor', physicalDescription: 'broad-shouldered' },
+        { name: 'Jonas', role: 'foreman', personality: 'cunning' },
+        { name: 'Chandelier', role: 'one-off fixture', personality: 'sentient brass' },
+      ],
+    });
+    await seriesSvc.updateSeries(series.id, { universeId: world.id });
+    // Issue whose beats name only Mira — Jonas and the one-off Chandelier must
+    // drop out of the heavyweight full-record block.
+    const issue = await issuesSvc.createIssue({
+      seriesId: series.id, title: 'The Hush',
+      stages: { idea: { input: 'a quiet survey', output: 'Mira descends into the dry foundry.', status: 'ready' } },
+    });
+    await textStages.generateStage(issue.id, 'prose');
+    const ctx = ctxFromCall(llmCalls[0]);
+    const names = ctx.series.characters.map((c) => c.name);
+    expect(names).toEqual(['Mira']);
+    // The compact roster still carries the whole cast for continuity.
+    expect(ctx.worldEntitiesSummary).toContain('Jonas');
+    expect(ctx.worldEntitiesSummary).toContain('Chandelier');
+  });
+
+  it('keeps the WHOLE cast in the roster even on a large bible, so a non-featured character never vanishes', async () => {
+    const { series } = await seed();
+    const world = await universeSvc.createUniverse({ name: 'Big Verse' });
+    // 12 characters (> the default roster cap of 8). Only "Mira" is named in the
+    // issue; "Tail" sits at bible-index 12 and is neither named nor a principal —
+    // it must still appear in the compact roster (its only representation now that
+    // the full-record block is scoped).
+    const cast = Array.from({ length: 11 }, (_, i) => ({ name: `Filler${i + 1}`, role: 'walk-on' }));
+    cast.unshift({ name: 'Mira', role: 'surveyor' });
+    cast.push({ name: 'Tail', role: 'background' });
+    await universeSvc.updateUniverse(world.id, { characters: cast });
+    await seriesSvc.updateSeries(series.id, { universeId: world.id });
+    const issue = await issuesSvc.createIssue({
+      seriesId: series.id, title: 'The Hush',
+      stages: { idea: { input: 'a quiet survey', output: 'Mira walks alone.', status: 'ready' } },
+    });
+    await textStages.generateStage(issue.id, 'prose');
+    const ctx = ctxFromCall(llmCalls[0]);
+    // Full records scoped to the named character only…
+    expect(ctx.series.characters.map((c) => c.name)).toEqual(['Mira']);
+    // …but the roster still lists the deep-bible character and shows no truncation.
+    expect(ctx.worldEntitiesSummary).toContain('Tail');
+    expect(ctx.worldEntitiesSummary).not.toMatch(/Characters:.*\(\+\d+ more\)/);
+  });
+
+  it('scopeCharactersForIssue: principals are a floor — always present, plus the named cast', () => {
+    const cast = [
+      { name: 'Mira', role: 'lead' },   // principal — always in the floor
+      { name: 'Jonas', role: 'extra' }, // non-principal — only in because named
+    ];
+    expect(textStages.__testing.scopeCharactersForIssue(cast, 'Jonas barks an order').map((c) => c.name))
+      .toEqual(['Mira', 'Jonas']);
+  });
+
+  it('scopeCharactersForIssue: an incidental name match never SUPPRESSES the principals', () => {
+    // "will" in ordinary text spuriously matches the "Will Stone" first-name token.
+    // The principal (Lena) must still survive — a false-positive can only ADD a
+    // record, never drop the leads.
+    const cast = [
+      { name: 'Will Stone', role: 'side' },
+      { name: 'Lena', role: 'lead protagonist' },
+    ];
+    const got = textStages.__testing.scopeCharactersForIssue(cast, 'the team will regroup').map((c) => c.name);
+    expect(got).toContain('Lena');
+  });
+
+  it('scopeCharactersForIssue: a first-name reference is ADDED on top of a reliable scope', () => {
+    const cast = [
+      { name: 'Lena', role: 'lead' },           // principal — reliable signal (floor)
+      { name: 'Mira Reyes', role: 'surveyor' }, // referenced by first name only
+      { name: 'Bram Vale', role: 'cook' },      // not referenced — excluded
+    ];
+    // Draft says "Mira", not the full "Mira Reyes" — the full-name matcher misses,
+    // the first-name supplement catches it and adds it to the principals floor.
+    const got = textStages.__testing.scopeCharactersForIssue(cast, 'Mira crossed the yard alone').map((c) => c.name);
+    expect(got).toContain('Mira Reyes');
+    expect(got).toContain('Lena');
+    expect(got).not.toContain('Bram Vale');
+  });
+
+  it('scopeCharactersForIssue: an incidental first-name match on an UNTAGGED cast keeps the whole cast', () => {
+    // No principals and no full-name match → no reliable signal. The spurious
+    // "will" → "Will Stone" first-name hit must NOT scope the prompt down to one
+    // character; fall back to the whole cast instead.
+    const cast = [
+      { name: 'Will Stone', role: 'side' },
+      { name: 'Bram', role: 'clerk' },
+    ];
+    expect(textStages.__testing.scopeCharactersForIssue(cast, 'the team will regroup').map((c) => c.name))
+      .toEqual(['Will Stone', 'Bram']);
+  });
+
+  it('scopeCharactersForIssue: matches non-ASCII names (accented) the ASCII \\b matcher would miss', () => {
+    const cast = [
+      { name: 'José Marín', role: 'pilot' }, // non-principal — only in via accented first-name match
+      { name: 'Élodie', role: 'navigator' },
+      { name: 'Mira', role: 'extra' },       // not named, not principal — excluded
+    ];
+    // Source names José (by first name) and Élodie (accented single name).
+    const got = textStages.__testing.scopeCharactersForIssue(cast, 'José and Élodie shared a look').map((c) => c.name);
+    expect(got).toContain('José Marín');
+    expect(got).toContain('Élodie');
+    expect(got).not.toContain('Mira');
+  });
+
+  it('scopeCharactersForIssue: with nothing named, the scope is exactly the principals', () => {
+    const cast = [
+      { name: 'Mira', role: 'main protagonist' },
+      { name: 'Jonas', role: 'recurring foreman' },
+      { name: 'Extra', role: 'background walk-on' },
+    ];
+    expect(textStages.__testing.scopeCharactersForIssue(cast, 'nobody named here').map((c) => c.name))
+      .toEqual(['Mira', 'Jonas']);
+  });
+
+  it('scopeCharactersForIssue: falls back to the whole cast when nothing matches and no role tags exist', () => {
+    const cast = [{ name: 'A', role: '' }, { name: 'B' }];
+    expect(textStages.__testing.scopeCharactersForIssue(cast, 'unrelated').map((c) => c.name))
+      .toEqual(['A', 'B']);
+    expect(textStages.__testing.scopeCharactersForIssue([], 'x')).toEqual([]);
+  });
+
+  it('buildIssueScopeText concatenates title, seed, synopsis, beats, and source materials', () => {
+    const issue = { title: 'The Hush', stages: { idea: { input: 'SYN', output: 'BEATS' } } };
+    const sourceMaterials = [{ content: 'SRC-A' }, { content: 'SRC-B' }];
+    const text = textStages.__testing.buildIssueScopeText(issue, sourceMaterials, 'SEED-TEXT');
+    expect(text).toContain('The Hush');
+    expect(text).toContain('SEED-TEXT');
+    expect(text).toContain('SYN');
+    expect(text).toContain('BEATS');
+    expect(text).toContain('SRC-A');
+    expect(text).toContain('SRC-B');
+  });
+
+  it('does NOT scope the idea stage — it gets the full cast (no roster in that template)', async () => {
+    const { series } = await seed();
+    const world = await universeSvc.createUniverse({ name: 'Seed Verse' });
+    await universeSvc.updateUniverse(world.id, {
+      characters: [
+        { name: 'Bram', role: 'clerk' },
+        { name: 'Mira', role: 'surveyor' },
+      ],
+    });
+    await seriesSvc.updateSeries(series.id, { universeId: world.id });
+    const issue = await issuesSvc.createIssue({ seriesId: series.id, title: 'Fresh' });
+    // Even though the seed names only Mira, the idea stage must keep the WHOLE cast
+    // available (it generates from the seed and its template renders no roster).
+    await textStages.generateStage(issue.id, 'idea', { seedInput: 'A quiet hour with Mira at the foundry.' });
+    const ctx = ctxFromCall(llmCalls[0]);
+    expect(ctx.series.characters.map((c) => c.name).sort()).toEqual(['Bram', 'Mira']);
+  });
+
+  it('scopes a roster-backed stage (prose) from the UNSAVED seed text', async () => {
+    const { series } = await seed();
+    const world = await universeSvc.createUniverse({ name: 'Seed Verse' });
+    // Both non-principal (no floor) so the only in-scope character must come from
+    // the seed text match.
+    await universeSvc.updateUniverse(world.id, {
+      characters: [
+        { name: 'Bram', role: 'clerk' },
+        { name: 'Mira', role: 'surveyor' },
+      ],
+    });
+    await seriesSvc.updateSeries(series.id, { universeId: world.id });
+    const issue = await issuesSvc.createIssue({ seriesId: series.id, title: 'Fresh' });
+    await textStages.generateStage(issue.id, 'prose', { seedInput: 'A quiet hour with Mira at the foundry.' });
+    const ctx = ctxFromCall(llmCalls[0]);
+    expect(ctx.series.characters.map((c) => c.name)).toEqual(['Mira']);
+    // The un-scoped Bram still appears in the prose template's roster.
+    expect(ctx.worldEntitiesSummary).toContain('Bram');
+  });
 });
 
 // End-to-end render guard for the shipped idea template. The tests above assert

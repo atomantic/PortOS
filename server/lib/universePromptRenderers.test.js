@@ -101,6 +101,18 @@ describe('renderEntitiesSummary', () => {
     expect(out).toContain('(+2 more)');
   });
 
+  it('honors a per-kind maxPerKind map, lifting one kind while defaulting the rest', () => {
+    const characters = Array.from({ length: ENTITIES_SUMMARY_MAX_PER_KIND + 5 }, (_, i) => ({ name: `C${i + 1}`, role: 'role' }));
+    const places = Array.from({ length: ENTITIES_SUMMARY_MAX_PER_KIND + 2 }, (_, i) => ({ name: `P${i + 1}` }));
+    const out = renderEntitiesSummary({ characters, places }, { maxPerKind: { characters: Infinity } });
+    // characters uncapped — every one listed, no "(+N more)" on the Characters line
+    expect(out).toContain(`C${ENTITIES_SUMMARY_MAX_PER_KIND + 5} (role)`);
+    expect(out).not.toMatch(/Characters:.*\(\+\d+ more\)/);
+    // places fall back to the default cap with a "(+2 more)" tag
+    expect(out).not.toContain(`P${ENTITIES_SUMMARY_MAX_PER_KIND + 1}`);
+    expect(out).toMatch(/Places:.*\(\+2 more\)/);
+  });
+
   it(`truncates over-long descriptors at ${ENTITIES_SUMMARY_DESCRIPTOR_MAX} chars with an ellipsis`, () => {
     const long = 'x'.repeat(ENTITIES_SUMMARY_DESCRIPTOR_MAX + 50);
     const out = renderEntitiesSummary({

@@ -1,5 +1,9 @@
 # Unreleased
 
+## Per-issue story generation
+
+- **[issue-1511] Per-issue prose and comic-script generation now sees only the characters that issue involves.** Generating an issue used to load the entire series character bible into every prose and comic-script prompt — on a large-cast series that's tens of thousands of tokens of character detail (including one-off bit players from unrelated issues) re-sent on every issue and every stage. Generation now sends full character records only for the cast named in that issue's beats, synopsis, and source material, with a compact one-line roster of everyone else kept for continuity. This sharply cuts token cost on big-cast series and, on context-bounded providers, leaves more room for the actual draft. The series' lead/recurring characters stay in context for every issue, so the core cast is never dropped — generation just stops carrying the full record of every bit player from unrelated issues.
+
 ## Fixed
 
 - **Codex TUI CoS agents no longer get stuck in the sandbox.** The shipped Codex TUI provider pinned `--ask-for-approval never`, which silences approval prompts but leaves Codex's *sandbox* at its default (`workspace-write`) — so headless agents couldn't reach the network (`gh`/`npm`/`git fetch` failed) and could still hit surprise escalation prompts mid-run. Because an explicit `--ask-for-approval` flag also suppressed the auto-injected full-bypass, the shipped default actively defeated the headless posture the CLI codex path already uses. The default now ships `--dangerously-bypass-approvals-and-sandbox` (approvals off + sandbox off + network on), and migration 121 rewrites existing installs whose args still match the old default — custom Codex flags are left untouched.
