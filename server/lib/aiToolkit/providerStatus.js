@@ -16,7 +16,14 @@ export function createProviderStatusService(config = {}) {
     dataDir = './data',
     statusFile = 'provider-status.json',
     defaultFallbackPriority = ['claude-code', 'codex', 'lmstudio', 'local-lm-studio', 'ollama', 'antigravity-cli', 'gemini-cli'],
-    defaultUsageLimitWait = 24 * 60 * 60 * 1000,
+    // Usage-limit bench is a SHORT retry interval, not the provider's stated
+    // reset. A usage limit resets on a rolling window (≈5h max), and a CLI's
+    // self-reported "resets in 21h" is unreliable + over-conservative — benching
+    // that long sidelines the primary for a day even though capacity usually
+    // frees much sooner. So default to a tight 10m probe and re-bench if still
+    // limited; never exceed the 5h reset window (`maxUsageLimitWait`).
+    defaultUsageLimitWait = 10 * 60 * 1000,
+    maxUsageLimitWait = 5 * 60 * 60 * 1000,
     defaultRateLimitWait = 5 * 60 * 1000,
     onStatusChange = null
   } = config;
@@ -205,10 +212,21 @@ export function createProviderStatusService(config = {}) {
     },
 
     async markUsageLimit(providerId, errorInfo = {}) {
+      // Bench for a SHORT retry interval rather than the provider's stated reset.
+      // Respect a parsed wait ONLY when it is shorter than the tight default (a
+      // genuinely brief reset); otherwise use the default and never let any value
+      // exceed the 5h reset-window ceiling. This keeps a "resets in 21h" estimate
+      // from sidelining the primary for a day — it retries in 10m and re-benches
+      // if still limited. The parsed value is still surfaced for DISPLAY.
+      const parsed = parseWaitTime(errorInfo.waitTime);
+      const benchMs = Math.min(
+        parsed && parsed < defaultUsageLimitWait ? parsed : defaultUsageLimitWait,
+        maxUsageLimitWait,
+      );
       return this.markUnavailable(providerId, {
         reason: 'usage-limit',
         message: errorInfo.message || 'Usage limit exceeded',
-        waitTimeMs: parseWaitTime(errorInfo.waitTime) || defaultUsageLimitWait,
+        waitTimeMs: benchMs,
         // `waitTime` is a usage-limit-only display string ("resets 5pm") —
         // pass via extras so it's part of the SAME persisted record and
         // status:changed event, not a follow-up second write.

@@ -666,7 +666,13 @@ async function runEditorial(sId, record) {
       const beforeFix = await budgetPause();
       if (beforeFix) return beforeFix;
       try {
-        if (!comment.fix) await generateManuscriptFix(sId, { commentId: comment.id });
+        // Thread the run's provider/model override into fix GENERATION (an LLM
+        // call) so it honors the same provider as the review — without this the
+        // fix silently runs on the active/default provider (and its runtime
+        // fallback), which diverges from the run's chosen model and, when the
+        // default is rate-limited, degrades fixes onto a weak fallback. Accept
+        // is a deterministic edit application (no LLM), so it needs no override.
+        if (!comment.fix) await generateManuscriptFix(sId, { commentId: comment.id, ...providerOverrideOpts(record) });
         await acceptManuscriptFix(sId, { commentId: comment.id });
         await recordDomainUsage('cos', { actions: 1 });
       } catch (err) {
