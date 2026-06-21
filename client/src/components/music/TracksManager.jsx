@@ -63,6 +63,11 @@ export default function TracksManager() {
   const [library, setLibrary] = useState([]);
   const [albums, setAlbums] = useState([]);
   const fileInputRef = useRef(null);
+  // Mirrors `selectedId` so async audio handlers can detect a selection change
+  // that happened while their server round-trip was in flight (the server write
+  // still targets the original track id; only the open form must not be clobbered
+  // with another track's result).
+  const selectedIdRef = useRef(null);
 
   useEffect(() => {
     Promise.all([
@@ -86,6 +91,7 @@ export default function TracksManager() {
 
   const selectTrack = (t) => {
     setSelectedId(t.id);
+    selectedIdRef.current = t.id;
     setForm(formFromTrack(t));
     setConfirmDelete(false);
     setLibraryOpen(false);
@@ -93,6 +99,7 @@ export default function TracksManager() {
 
   const startCreate = () => {
     setSelectedId('new');
+    selectedIdRef.current = 'new';
     setForm(emptyForm());
     setConfirmDelete(false);
     setLibraryOpen(false);
@@ -116,6 +123,7 @@ export default function TracksManager() {
       if (!created) return;
       upsertLocal(created);
       setSelectedId(created.id);
+      selectedIdRef.current = created.id;
       toast.success(`Created "${created.title}"`);
     } else {
       const updated = await updateTrack(selectedId, payload).catch((err) => { toast.error(err.message || 'Failed to save track'); return null; });
@@ -147,14 +155,17 @@ export default function TracksManager() {
     if (e.target) e.target.value = '';
     if (!file || !requireSaved()) return;
     if (file.size > AUDIO_MAX_BYTES) { toast.error(`Audio exceeds ${Math.round(AUDIO_MAX_BYTES / 1024 / 1024)}MB`); return; }
+    const targetId = persisted.id; // server write targets THIS track
     setUploading(true);
     const fd = new FormData();
     fd.append('track', file, file.name);
-    const res = await uploadTrackAudio(persisted.id, fd, { silent: true }).catch((err) => { toast.error(err.message || 'Upload failed'); return null; });
+    const res = await uploadTrackAudio(targetId, fd, { silent: true }).catch((err) => { toast.error(err.message || 'Upload failed'); return null; });
     setUploading(false);
     if (res?.track) {
-      upsertLocal(res.track);
-      setForm((f) => ({ ...f, audioFilename: res.track.audioFilename }));
+      upsertLocal(res.track); // list update is id-keyed → always safe
+      // Only touch the open form if THIS track is still selected (the user may
+      // have switched tracks during the upload round-trip).
+      if (selectedIdRef.current === targetId) setForm((f) => ({ ...f, audioFilename: res.track.audioFilename }));
       toast.success('Audio uploaded');
     }
   };
@@ -168,20 +179,22 @@ export default function TracksManager() {
 
   const attachFromLibrary = async (filename) => {
     setLibraryOpen(false);
-    const res = await attachTrackAudio(persisted.id, filename, { silent: true }).catch((err) => { toast.error(err.message || 'Attach failed'); return null; });
+    const targetId = persisted.id;
+    const res = await attachTrackAudio(targetId, filename, { silent: true }).catch((err) => { toast.error(err.message || 'Attach failed'); return null; });
     if (res?.track) {
       upsertLocal(res.track);
-      setForm((f) => ({ ...f, audioFilename: res.track.audioFilename }));
+      if (selectedIdRef.current === targetId) setForm((f) => ({ ...f, audioFilename: res.track.audioFilename }));
       toast.success('Audio attached');
     }
   };
 
   const removeAudio = async () => {
     if (!persisted) { setForm((f) => ({ ...f, audioFilename: '' })); return; }
-    const res = await clearTrackAudio(persisted.id, { silent: true }).catch((err) => { toast.error(err.message || 'Failed to clear audio'); return null; });
+    const targetId = persisted.id;
+    const res = await clearTrackAudio(targetId, { silent: true }).catch((err) => { toast.error(err.message || 'Failed to clear audio'); return null; });
     if (res?.track) {
       upsertLocal(res.track);
-      setForm((f) => ({ ...f, audioFilename: '' }));
+      if (selectedIdRef.current === targetId) setForm((f) => ({ ...f, audioFilename: '' }));
     }
   };
 

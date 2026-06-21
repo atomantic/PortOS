@@ -156,10 +156,15 @@ export default function AlbumsManager() {
     if (!file) return;
     if (!file.type.startsWith('image/')) { toast.error('Please choose an image file'); return; }
     if (file.size > COVER_MAX_BYTES) { toast.error(`Image exceeds ${Math.round(COVER_MAX_BYTES / 1024 / 1024)}MB`); return; }
+    // Capture the album-switch generation counter (bumped by selectAlbum/
+    // startCreate) so a slow read+upload that finishes after the user moved to a
+    // different album doesn't write this cover onto the wrong album's form.
+    const requestId = genRequestRef.current;
     setUploadingCover(true);
     const base64 = await readFileAsBase64(file).catch(() => null);
     if (!base64) { setUploadingCover(false); toast.error('Could not read that file'); return; }
     const uploaded = await uploadGalleryImage(base64, { silent: true }).catch((err) => { toast.error(err.message || 'Upload failed'); return null; });
+    if (genRequestRef.current !== requestId) return; // album switched mid-upload — drop
     setUploadingCover(false);
     if (uploaded?.path) { setCover(uploaded.path); toast.success('Cover uploaded'); }
   };
