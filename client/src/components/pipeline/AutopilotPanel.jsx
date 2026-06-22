@@ -24,6 +24,7 @@ const ROUND_MIN = 0;
 const ROUND_MAX = 20;
 const DEFAULT_ARC_ROUNDS = 3;
 const DEFAULT_EDITORIAL_ROUNDS = 2;
+const DEFAULT_BEAT_CONTINUITY_ROUNDS = 2;
 const clampRound = (n, fallback) => {
   // A blank/cleared field falls back to the default — NOT 0. (Number('') === 0,
   // and 0 means "skip the gate", so without this a cleared input would silently
@@ -142,6 +143,7 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
   const [fileGaps, setFileGaps] = useState(false);
   const [arcRounds, setArcRounds] = useState(DEFAULT_ARC_ROUNDS);
   const [editorialRounds, setEditorialRounds] = useState(DEFAULT_EDITORIAL_ROUNDS);
+  const [beatContinuityRounds, setBeatContinuityRounds] = useState(DEFAULT_BEAT_CONTINUITY_ROUNDS);
   // Per-field dirty flags. Until a field is edited its input shows a display
   // default we must NOT persist (that would clobber a higher saved setting on
   // the untouched gate). Tracked per-field so editing one gate never discards
@@ -149,6 +151,7 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
   // untouched ones keep their on-disk value via patchSettingsSlice's merge.
   const arcEditedRef = useRef(false);
   const editorialEditedRef = useRef(false);
+  const beatContinuityEditedRef = useRef(false);
   const [canon, setCanon] = useState(null);
   const [canonLoading, setCanonLoading] = useState(false);
 
@@ -165,6 +168,7 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
         const pec = s?.pipelineEditorialChecks || {};
         if (!arcEditedRef.current) setArcRounds(Number.isInteger(pec.maxArcVerifyRounds) ? pec.maxArcVerifyRounds : DEFAULT_ARC_ROUNDS);
         if (!editorialEditedRef.current) setEditorialRounds(Number.isInteger(pec.maxEditorialRounds) ? pec.maxEditorialRounds : DEFAULT_EDITORIAL_ROUNDS);
+        if (!beatContinuityEditedRef.current) setBeatContinuityRounds(Number.isInteger(pec.maxBeatContinuityRounds) ? pec.maxBeatContinuityRounds : DEFAULT_BEAT_CONTINUITY_ROUNDS);
       })
       .catch(() => null); // load failed → inputs keep defaults but start() only persists EDITED fields
     return () => { canceled = true; };
@@ -189,6 +193,7 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
   // overwrite it and so start() knows to persist it.
   const editArcRounds = useCallback((v) => { arcEditedRef.current = true; setArcRounds(v); }, []);
   const editEditorialRounds = useCallback((v) => { editorialEditedRef.current = true; setEditorialRounds(v); }, []);
+  const editBeatContinuityRounds = useCallback((v) => { beatContinuityEditedRef.current = true; setBeatContinuityRounds(v); }, []);
 
   const { latest, frames } = usePipelineProgress(pipelineAutopilotSseUrl, [seriesId], { enabled: active });
 
@@ -255,6 +260,7 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
     const roundOverrides = {};
     if (arcEditedRef.current) roundOverrides.maxArcVerifyRounds = clampRound(arcRounds, DEFAULT_ARC_ROUNDS);
     if (editorialEditedRef.current) roundOverrides.maxEditorialRounds = clampRound(editorialRounds, DEFAULT_EDITORIAL_ROUNDS);
+    if (beatContinuityEditedRef.current) roundOverrides.maxBeatContinuityRounds = clampRound(beatContinuityRounds, DEFAULT_BEAT_CONTINUITY_ROUNDS);
     if (Object.keys(roundOverrides).length) await persistRounds(roundOverrides);
     const res = await startPipelineAutopilot(seriesId, { includeVisual, fileGaps, ...roundOverrides }, { silent: true })
       .catch((err) => { toast.error(err.message || 'Could not start autopilot'); return null; });
@@ -266,7 +272,7 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
     // effect can reject a stale terminal frame from the previous run.
     activeRunIdRef.current = res.runId || null;
     setActive(true);
-  }, [seriesId, includeVisual, fileGaps, arcRounds, editorialRounds, persistRounds]);
+  }, [seriesId, includeVisual, fileGaps, arcRounds, editorialRounds, beatContinuityRounds, persistRounds]);
 
   const cancel = useCallback(async () => {
     await cancelPipelineAutopilot(seriesId).catch(() => null);
@@ -347,6 +353,15 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
               value={arcRounds}
               setValue={editArcRounds}
               defaultValue={DEFAULT_ARC_ROUNDS}
+              persist={persistRounds}
+            />
+            <RoundInput
+              id="autopilot-beat-continuity-rounds"
+              label="Beat continuity rounds"
+              settingKey="maxBeatContinuityRounds"
+              value={beatContinuityRounds}
+              setValue={editBeatContinuityRounds}
+              defaultValue={DEFAULT_BEAT_CONTINUITY_ROUNDS}
               persist={persistRounds}
             />
             <RoundInput

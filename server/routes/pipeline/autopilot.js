@@ -37,11 +37,12 @@ const autopilotStartSchema = z.object({
   targetFormats: z.array(z.enum(['comic', 'tv'])).optional(),
   // Per-run convergence bounds for the verify/review loops (0 = skip that gate).
   // When omitted, the autopilot falls back to the persisted
-  // pipelineEditorialChecks.{maxArcVerifyRounds,maxEditorialRounds} setting, then
-  // to the module default. Cap mirrors the settings schema so the UI knob and a
-  // direct API call agree on the ceiling.
+  // pipelineEditorialChecks.{maxArcVerifyRounds,maxEditorialRounds,maxBeatContinuityRounds}
+  // setting, then to the module default. Cap mirrors the settings schema so the
+  // UI knob and a direct API call agree on the ceiling.
   maxArcVerifyRounds: z.number().int().min(0).max(MAX_CONVERGENCE_ROUNDS).optional(),
   maxEditorialRounds: z.number().int().min(0).max(MAX_CONVERGENCE_ROUNDS).optional(),
+  maxBeatContinuityRounds: z.number().int().min(0).max(MAX_CONVERGENCE_ROUNDS).optional(),
 });
 
 router.post('/series/:id/autopilot/start', asyncHandler(async (req, res) => {

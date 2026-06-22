@@ -373,6 +373,20 @@
       "returnsJson": true,
       "variables": []
     },
+    "pipeline-beat-continuity": {
+      "name": "Pipeline — Whole-Manuscript Beat Continuity",
+      "description": "Whole-book beat-level continuity pass over every issue's beat sheet — the altitude between cross-volume synopsis verify and the full scripts. Catches dropped cliffhangers/unresolved setups, finale drift from the arc's intended ending, promised through-lines that never land, duplicated 'firsts', volume-to-volume hand-off breaks, and cross-issue character-state contradictions BEFORE the expensive full-script stage. Returns actionable { severity, location, problem, suggestion } issues — empty list means the beats cohere.",
+      "model": "heavy",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-beat-continuity-resolve": {
+      "name": "Pipeline — Beat Continuity Auto-Resolve",
+      "description": "Auto-resolve whole-manuscript beat-continuity findings by rewriting the BEATS of the specific issues that caused each finding (idea.output) — the beat altitude, not the arc. Returns a sparse episodes[] of full corrected beat sheets keyed by series-global episodeNumber (+ seasonNumber), plus optional notes for anything needing an arc-level restructure.",
+      "model": "heavy",
+      "returnsJson": true,
+      "variables": []
+    },
     "pipeline-script-verify": {
       "name": "Pipeline — Comic Script Verification",
       "description": "Craft pass over ONE issue's comic script before art: catches un-renderable panels, missing/malformed page-panel structure, panel-to-panel flow breaks, dialogue/art imbalance, within-issue continuity, and page-turn/beat placement. Used by Series Autopilot's per-issue script gate (advisory — surfaces findings, doesn't auto-rewrite). Returns actionable { severity, location, problem, suggestion } issues — empty list means sound.",
