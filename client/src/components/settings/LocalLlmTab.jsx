@@ -742,6 +742,9 @@ export function LocalLlmTab() {
                   const recommendedId = variants.find((v) => v.recommended)?.installId;
                   const chosenId = selectedVariants[m.key] || (idMatchesVariant ? m.id : recommendedId) || m.id;
                   const chosenVariant = variants.find((v) => v.installId === chosenId) || null;
+                  // Installed state is per-quant (Ollama tracks each separately),
+                  // so gate Install on the SELECTED variant, not the result default.
+                  const chosenInstalled = chosenVariant ? chosenVariant.installed : m.installed;
                   const size = chosenVariant?.size || m.size;
                   const sizeBytes = chosenVariant?.sizeBytes ?? m.sizeBytes;
                   const fit = chosenVariant?.fit;
@@ -770,7 +773,7 @@ export function LocalLlmTab() {
                           >
                             {variants.map((v) => (
                               <option key={v.installId} value={v.installId}>
-                                {v.quant}{v.size ? ` · ${v.size}` : ''}{v.recommended ? ' · recommended' : ''}{v.fit === 'too-large' ? ' · exceeds RAM' : ''}
+                                {v.quant}{v.size ? ` · ${v.size}` : ''}{v.installed ? ' · installed' : ''}{v.recommended ? ' · recommended' : ''}{v.fit === 'too-large' ? ' · exceeds RAM' : ''}
                               </option>
                             ))}
                           </select>
@@ -817,7 +820,7 @@ export function LocalLlmTab() {
                       </div>
                     </div>
                     <div className="flex flex-col items-end gap-1 shrink-0">
-                      {m.installed ? (
+                      {chosenInstalled ? (
                         <span className="text-xs px-2 py-1 text-port-success">Installed</span>
                       ) : m.installable === false ? (
                         // Audio models with no PortOS runtime (or a fixed-checkpoint

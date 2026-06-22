@@ -301,6 +301,29 @@ describe('huggingFaceCatalog', () => {
       expect(result.installed).toBe(true)
     })
 
+    it('marks per-quant installed state for Ollama variants and aligns the result flag with the default', async () => {
+      const repo = 'empero-ai/Qwythos-9B-Installed-GGUF'
+      fetch
+        .mockResolvedValueOnce(listing(repo, ['Qwythos-9B-Q4_K_M.gguf', 'Qwythos-9B-Q8_0.gguf', 'Qwythos-9B-BF16.gguf']))
+        .mockResolvedValueOnce(blobs(repo, {
+          'Qwythos-9B-Q4_K_M.gguf': 5_500_000_000,
+          'Qwythos-9B-Q8_0.gguf': 9_500_000_000,
+          'Qwythos-9B-BF16.gguf': 18_000_000_000,
+        }))
+
+      // Only the Q4_K_M quant is installed on Ollama.
+      const [result] = await searchHuggingFaceModels({
+        backend: 'ollama', query: 'qwythos', systemMemoryBytes: 128 * 1024 ** 3, installedIds: [`hf.co/${repo}:Q4_K_M`]
+      })
+
+      const byQuant = Object.fromEntries(result.variants.map((v) => [v.quant, v.installed]))
+      expect(byQuant).toEqual({ BF16: false, Q8_0: false, Q4_K_M: true })
+      // 128 GB box defaults to BF16, which is NOT installed — so the card must
+      // offer Install, not claim "Installed" off the repo's Q4 presence.
+      expect(result.id).toBe(`hf.co/${repo}:BF16`)
+      expect(result.installed).toBe(false)
+    })
+
     it('anchors the LM Studio default on a variant even when the repo omits file sizes', async () => {
       const repo = 'bartowski/NoSize-GGUF'
       fetch

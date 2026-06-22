@@ -353,13 +353,20 @@ function applyVariant(result, variant) {
   result.size = variant.size
 }
 
-function isInstalled(backend, result, installedIds) {
-  const installed = new Set(installedIds.map((id) => normalizeInstalledForBackend(backend, id)))
-  if (installed.has(normalizeInstalledForBackend(backend, result.id))) return true
-  if (backend === 'lmstudio') {
-    return installed.has(normalizeInstalledForBackend(backend, result.repository))
-  }
+// Is a specific backend install id present in the installed set? Ollama tracks
+// each `hf.co/<repo>:<quant>` as its own model, so this is quant-precise there;
+// LM Studio detection is repo-level (the normalizer drops `@quant`), so every
+// quant of an installed repo reads installed — the best granularity LM Studio's
+// list exposes.
+function installIdInstalled(backend, installId, repository, installedSet) {
+  if (installedSet.has(normalizeInstalledForBackend(backend, installId))) return true
+  if (backend === 'lmstudio') return installedSet.has(normalizeInstalledForBackend(backend, repository))
   return false
+}
+
+function isInstalled(backend, result, installedIds) {
+  const installedSet = new Set(installedIds.map((id) => normalizeInstalledForBackend(backend, id)))
+  return installIdInstalled(backend, result.id, result.repository, installedSet)
 }
 
 function toResult(model, backend, requestedCategory, installedIds, installedAudioRepos = new Set()) {
@@ -493,7 +500,8 @@ function contextLengthOf(model) {
 // `?blobs=true` record (the search listing carries neither). Both are fetched
 // from the same cached repo record, so a result missing either triggers one
 // (deduped) per-repo fetch.
-async function enrichWithSizes(results, { backend, usableBytes } = {}) {
+async function enrichWithSizes(results, { backend, usableBytes, installedIds = [] } = {}) {
+  const installedSet = new Set(installedIds.map((id) => normalizeInstalledForBackend(backend, id)))
   await Promise.allSettled(results.map(async (result) => {
     const isAudio = result.category === 'audio'
     const needsSize = !Number.isFinite(result.sizeBytes)
@@ -507,6 +515,9 @@ async function enrichWithSizes(results, { backend, usableBytes } = {}) {
     if (!isAudio) {
       const variants = buildVariants(model, backend, usableBytes)
       if (variants.length > 0) {
+        // Per-quant installed state — Ollama tracks each quant separately, so the
+        // card must gate Install on the *selected* variant, not one repo-wide flag.
+        for (const v of variants) v.installed = installIdInstalled(backend, v.installId, result.repository, installedSet)
         // Always anchor the result on one of its own variants so the install id
         // and the client's controlled <select> agree. Prefer the RAM-aware pick;
         // otherwise the QUANT_PRIORITY default toResult chose (matched by quant);
@@ -521,6 +532,9 @@ async function enrichWithSizes(results, { backend, usableBytes } = {}) {
         // Flag whichever variant the result now points at as recommended so the
         // UI can mark it (covers both the RAM-aware and QUANT_PRIORITY default).
         for (const v of variants) v.recommended = v.installId === result.id
+        // Realign the result-level installed flag with the (possibly RAM-switched)
+        // default variant — toResult computed it against the pre-switch id.
+        result.installed = chosen.installed
         result.variants = variants
       }
     }
@@ -608,5 +622,5 @@ export async function searchHuggingFaceModels({ backend, query = '', category = 
     .sort((a, b) => b.score - a.score || b.downloads - a.downloads)
     .slice(0, limit)
 
-  return enrichWithSizes(results, { backend, usableBytes })
+  return enrichWithSizes(results, { backend, usableBytes, installedIds })
 }
