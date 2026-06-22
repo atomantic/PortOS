@@ -2,6 +2,7 @@ import { fetchWithTimeout } from '../lib/fetchWithTimeout.js'
 import { readResponseJson } from '../lib/readResponseJson.js'
 import { LOCAL_LLM_CATEGORIES, isBackend } from '../lib/localLlmCatalog.js'
 import { ENGINES } from './pipeline/musicGen.js'
+import { fetchOllamaRegistryVariants } from './ollamaRegistryCatalog.js'
 
 const HF_API_BASE = 'https://huggingface.co/api/models'
 const HF_TIMEOUT_MS = 12_000
@@ -700,17 +701,15 @@ function contextLengthOf(model) {
 // (their id IS the install id); curated entries keep their stable catalog id (so
 // other consumers — the playground — still match installed models on it) and the
 // UI picks the chosen variant via its `recommended` flag.
-function applyGgufVariants(result, model, { backend, usableBytes, installedIds, rewriteInstallId = true }) {
-  const variants = buildVariants(model, backend, usableBytes)
-  if (variants.length === 0) return false
-  // Per-quant installed state — Ollama tracks each quant separately, so the card
-  // must gate Install on the *selected* variant, not one repo-wide flag.
-  for (const v of variants) v.installed = installIdInstalled(backend, v.installId, result.repository, installedIds)
-  // Prefer the RAM-aware pick; otherwise the QUANT_PRIORITY default (matched by the
-  // result's existing quant); fall back to the QUANT_PRIORITY-preferred variant.
-  // `usableBytes != null` (not truthiness): 0 is a real budget on a tiny machine —
-  // pick the smallest (all flagged too-large) rather than falling through as if
-  // memory were unknown.
+// Pick the default variant, flag it `recommended`, and promote it onto `result` —
+// the shared tail of every variant path (GGUF files + Ollama registry tags), which
+// differ only in how they build the size-desc `variants` list and set `installed`.
+// Prefer the RAM-aware pick; otherwise the QUANT_PRIORITY default (matched by the
+// result's existing quant); fall back to the QUANT_PRIORITY-preferred variant.
+// `usableBytes != null` (not truthiness): 0 is a real budget on a tiny machine —
+// pick the smallest (all flagged too-large) rather than falling through as if
+// memory were unknown.
+function applyChosenVariant(result, variants, { usableBytes, rewriteInstallId }) {
   const chosen = (usableBytes != null ? pickVariantForBudget(variants, usableBytes) : null)
     || variants.find((v) => v.quant && v.quant === result.quant)
     || preferredQuantVariant(variants)
@@ -719,6 +718,15 @@ function applyGgufVariants(result, model, { backend, usableBytes, installedIds, 
   for (const v of variants) v.recommended = v === chosen
   applyVariant(result, chosen, rewriteInstallId)
   result.variants = variants
+}
+
+function applyGgufVariants(result, model, { backend, usableBytes, installedIds, rewriteInstallId = true }) {
+  const variants = buildVariants(model, backend, usableBytes)
+  if (variants.length === 0) return false
+  // Per-quant installed state — Ollama tracks each quant separately, so the card
+  // must gate Install on the *selected* variant, not one repo-wide flag.
+  for (const v of variants) v.installed = installIdInstalled(backend, v.installId, result.repository, installedIds)
+  applyChosenVariant(result, variants, { usableBytes, rewriteInstallId })
   return true
 }
 
@@ -883,9 +891,8 @@ export async function searchHuggingFaceModels({ backend, query = '', category = 
 // The Hugging Face repo backing a curated install id, or null for a bare Ollama
 // registry name. LM Studio curated ids ARE HF repos (`publisher/Repo-GGUF`);
 // Ollama ids are HF-backed only when prefixed `hf.co/`. Bare Ollama names
-// (`llama3.2`, `qwen2.5`) pull from Ollama's own registry — per-quant variants
-// for those need the Ollama registry tag API (tracked as follow-up #1539), so
-// they get no picker here.
+// (`llama3.2`, `qwen2.5`) pull from Ollama's own registry — those are enriched
+// from the Ollama registry tags/manifests instead (see applyOllamaRegistryVariants).
 function catalogRepoForBackend(backend, id) {
   const raw = String(id || '')
   if (backend === 'lmstudio') return raw.includes('/') ? raw.split('@')[0] : null
@@ -907,18 +914,95 @@ function quantFromInstallId(backend, id) {
   return colon > slash ? raw.slice(colon + 1) : null
 }
 
+// Enrich a bare Ollama registry entry (no HF repo) in place with a per-quant
+// picker built from the Ollama registry's tags + manifests — the registry-backed
+// analog of applyGgufVariants. The curated id stays stable (rewriteInstallId is
+// implicitly false here); the RAM-aware default is conveyed via the recommended
+// variant, whose installId is the precise `<name>:<tag>` pull. Returns true when
+// variants were applied, false when the model isn't on the registry / has no
+// quant-tagged builds (the curated entry then keeps its single hard-coded build).
+async function applyOllamaRegistryVariants(entry, { usableBytes, installedIds }) {
+  const candidates = await fetchOllamaRegistryVariants(entry.id, { paramsHint: entry.params })
+  if (candidates.length === 0) return false
+  // Whether the user already pulled the curator's default build (`entry.id`, e.g.
+  // `llama3.2` stored as `:latest`). getCatalog set entry.installed latest-normalized.
+  const installedAsDefault = entry.installed === true
+  const variants = candidates
+    .map((c) => {
+      const sizeBytes = Number.isFinite(c.sizeBytes) ? c.sizeBytes : null
+      return {
+        quant: c.quant,
+        format: 'gguf',
+        installId: c.installId,
+        sizeBytes,
+        size: formatBytes(sizeBytes) || c.quant,
+        fit: classifyFit(sizeBytes, usableBytes)
+      }
+    })
+    .sort((a, b) => (b.sizeBytes || 0) - (a.sizeBytes || 0))
+  // Per-quant installed state — Ollama tracks each `<name>:<tag>` build separately,
+  // so the card gates Install on the selected variant (matches applyGgufVariants).
+  for (const v of variants) v.installed = installIdInstalled('ollama', v.installId, entry.repository, installedIds)
+  // The discovered quant variants use exact `<name>:<tag>` ids that never include the
+  // default `:latest` alias, so an already-installed default build matches none of them.
+  // The card gates Install on the SELECTED variant's `installed` (LocalLlmTab uses
+  // `chosenVariant.installed`), so without representing the default build the card would
+  // show Install for a model the user already has and pull a duplicate tag. Surface the
+  // installed default as its own variant (install id = the curator's id, the real tag the
+  // user pulled) when no discovered quant variant is itself installed.
+  const hasInstalledVariant = variants.some((v) => v.installed)
+  const defaultBuildPresent = variants.some((v) => v.installId === entry.id)
+  if (installedAsDefault && !hasInstalledVariant && !defaultBuildPresent) {
+    const sizeBytes = Number.isFinite(entry.sizeBytes) ? entry.sizeBytes : null
+    variants.unshift({
+      quant: entry.quant || quantFromInstallId('ollama', entry.id) || 'default',
+      format: 'gguf',
+      installId: entry.id,
+      sizeBytes,
+      size: formatBytes(sizeBytes) || entry.size || 'installed',
+      fit: classifyFit(sizeBytes, usableBytes),
+      installed: true
+    })
+  }
+  // Seed the quant from the curator's id (`gpt-oss:20b` has no quant tag, so this
+  // is usually null) so the no-RAM-budget fallback can anchor on it.
+  if (entry.quant == null) entry.quant = quantFromInstallId('ollama', entry.id)
+  // Initial selection: prefer the already-installed default build (so the card reads
+  // Installed, its pre-enrichment behavior) over a RAM-aware re-pull; otherwise the
+  // RAM-aware pick. The other quants stay listed with their true per-tag installed
+  // state + fit hints for explicit selection. Keep the stable curated id either way.
+  const installedDefault = variants.find((v) => v.installId === entry.id && v.installed)
+  if (installedDefault) {
+    for (const v of variants) v.recommended = v === installedDefault
+    applyVariant(entry, installedDefault, false)
+    entry.variants = variants
+  } else {
+    applyChosenVariant(entry, variants, { usableBytes, rewriteInstallId: false })
+  }
+  entry.format = 'gguf'
+  return true
+}
+
 // Enrich curated-catalog entries (from localLlmCatalog.getCatalog) in place with
-// the same per-quant variant picker + RAM-aware default the live HF search uses,
-// for every entry that is HF-repo-backed (see catalogRepoForBackend). Entries
-// with no HF repo (bare Ollama registry names) or an MLX-only repo (no GGUF
-// quants) are left untouched — the card then shows the curator's single id with
-// no picker. `usableBytes` makes the recommended quant fit this machine.
+// the same per-quant variant picker + RAM-aware default the live HF search uses.
+// HF-repo-backed entries (see catalogRepoForBackend) read their GGUF siblings;
+// bare Ollama registry names are enriched from the Ollama registry instead. An
+// MLX-only repo (no GGUF quants) or a model absent from the registry is left
+// untouched — the card then shows the curator's single id with no picker.
+// `usableBytes` makes the recommended quant fit this machine.
 export async function enrichCatalogWithVariants(catalog, { backend, systemMemoryBytes = null, installedIds = [], timeoutMs = CATALOG_ENRICH_TIMEOUT_MS } = {}) {
   if (!isBackend(backend) || !Array.isArray(catalog)) return catalog
   const usableBytes = usableMemoryBytes(systemMemoryBytes)
   const work = Promise.allSettled(catalog.map(async (entry) => {
     const repo = catalogRepoForBackend(backend, entry.id)
-    if (!repo) return
+    if (!repo) {
+      // Bare Ollama registry name (no HF repo) — discover quants from the Ollama
+      // registry. LM Studio bare ids never reach here (catalogRepoForBackend
+      // returns the repo for any `publisher/Repo`); a null repo there means a
+      // malformed id, which has nothing to enrich.
+      if (backend === 'ollama') await applyOllamaRegistryVariants(entry, { usableBytes, installedIds })
+      return
+    }
     const model = await fetchRepoModel(repo)
     if (!model) return
     entry.repository = repo
