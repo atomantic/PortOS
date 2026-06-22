@@ -19,6 +19,7 @@ import {
   generatePipelineComicBackCover,
   generatePipelineComicCoverConcepts,
   updatePipelineComicPage,
+  refinePipelineComicPageRender,
   updatePipelineIssue,
   PIPELINE_STAGE_LABELS,
   PIPELINE_STAGE_STATUS_LABEL as STATUS_LABEL,
@@ -803,6 +804,12 @@ function PageRow({
   const [renderingProof, setRenderingProof] = useState(false);
   const [renderingFinal, setRenderingFinal] = useState(false);
   const [useProofForFinal, setUseProofForFinal] = useState(true);
+  // Per-page "Refine" (#1534): a free-text small correction that adjusts the
+  // page's stored render prompt and re-renders image-to-image from the existing
+  // page image. `refineChanges` surfaces the AI's "what changed" bullets inline.
+  const [refineText, setRefineText] = useState('');
+  const [refining, setRefining] = useState(false);
+  const [refineChanges, setRefineChanges] = useState([]);
   // Consistency reference: re-render this page using an adjacent page's image as
   // a reference so a continuing scene keeps incidental/un-described characters +
   // environment consistent. '' = none, 'prior' = previous page, 'next' = next.
@@ -870,9 +877,34 @@ function PageRow({
     }
   };
 
+  const handleRefine = async () => {
+    const instruction = refineText.trim();
+    if (!instruction) return;
+    setRefining(true);
+    // Refine reads the stored render prompt + existing image server-side, so it
+    // is independent of unsaved script edits — but gate on in-flight renders so
+    // the i2i base isn't a half-written slot.
+    const res = await refinePipelineComicPageRender(issue.id, pageIndex, {
+      ...renderOpts,
+      instruction,
+    }).catch((err) => { toast.error(err.message || 'Refine failed'); return null; });
+    setRefining(false);
+    if (res) {
+      onStageUpdate?.('comicPages', res.stage);
+      setRefineChanges(res.changes || []);
+      setRefineText('');
+      toast.success(`Page ${pageIndex + 1} ${res.variant} refine queued (${res.mode || renderOpts.mode || IMAGE_GEN_MODE.LOCAL})`);
+    }
+  };
+
   // A selected reference render uses the adjacent page (not this page's proof)
   // as its base, so it doesn't need a proof to exist — only proof-as-base does.
   const finalNeedsProof = useProofForFinal && !refPage && !proofSlot?.filename;
+  // The Refine control only makes sense once the page has a rendered image to
+  // correct (final preferred, else proof). Block it while a render is in flight
+  // so we don't i2i off a slot that's mid-write.
+  const hasRender = !!(finalSlot?.filename || proofSlot?.filename);
+  const refineDisabled = refining || proofInFlight || finalInFlight || !refineText.trim();
 
   return (
     <li className="rounded-lg border border-port-border bg-port-card/40">
@@ -984,6 +1016,44 @@ function PageRow({
               </li>
             ))}
           </ul>
+        </div>
+      ) : null}
+      {hasRender ? (
+        <div className="px-3 pt-2">
+          <div className="flex items-center gap-2">
+            <Wand2 size={12} className="text-port-accent shrink-0" />
+            <input
+              type="text"
+              value={refineText}
+              onChange={(e) => setRefineText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !refineDisabled) { e.preventDefault(); handleRefine(); }
+              }}
+              placeholder="Small fix to the rendered page — e.g. 'warm the lighting', 'remove the extra signage text'"
+              aria-label={`Refine instruction for page ${pageIndex + 1}`}
+              className="flex-1 px-2 py-1 bg-port-bg border border-port-border rounded text-white text-xs"
+              maxLength={2000}
+            />
+            <button
+              type="button"
+              onClick={handleRefine}
+              disabled={refineDisabled}
+              className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs bg-port-card border border-port-border text-port-accent hover:text-white hover:border-port-accent/50 disabled:opacity-40 disabled:cursor-not-allowed"
+              title={(proofInFlight || finalInFlight)
+                ? 'Wait for the in-flight render to finish'
+                : 'Adjust the render prompt and re-render image-to-image from the existing page image — applies only the requested change, preserving the rest of the page'}
+            >
+              {refining ? <Loader2 size={12} className="animate-spin" /> : <Wand2 size={12} />}
+              Refine
+            </button>
+          </div>
+          {refineChanges.length ? (
+            <ul className="mt-1 pl-6 space-y-0.5 list-disc">
+              {refineChanges.map((c, i) => (
+                <li key={i} className="text-[11px] text-gray-400">{c}</li>
+              ))}
+            </ul>
+          ) : null}
         </div>
       ) : null}
       <div className="grid md:grid-cols-2 gap-3 p-3">

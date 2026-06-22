@@ -221,6 +221,20 @@ export const generatePipelineComicPage = (issueId, pageIndex, opts = {}) =>
     body: JSON.stringify(opts),
   });
 
+// AI prompt-refine + image-to-image re-render for a small correction to an
+// already-rendered comic page (issue #1534). `opts.instruction` is the user's
+// free-text change; the server adjusts the page's stored render prompt and
+// re-renders i2i from the page's existing image, persisting the new jobId +
+// adjusted prompt on the matching variant slot. Pass `target` ('proof'|'final')
+// to force a variant; absent → server refines the final render when present,
+// else the proof. Returns { jobId, mode, prompt, pageIndex, variant, changes,
+// runId, providerId, issue, stage }.
+export const refinePipelineComicPageRender = (issueId, pageIndex, opts = {}) =>
+  request(`/pipeline/issues/${encodeURIComponent(issueId)}/stages/comicPages/pages/${encodeURIComponent(pageIndex)}/refine-render`, {
+    method: 'POST',
+    body: JSON.stringify(opts),
+  });
+
 // Render the issue's front cover. Pass `coverScript` to render a not-yet-
 // saved concept (the route persists it back to stages.comicPages.cover so
 // the next reload reflects what was rendered). Server folds in series

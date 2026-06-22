@@ -91,6 +91,7 @@ const {
   enqueueStoryboardSceneVideo,
   enqueueStoryboardShotStartFrame,
   refineComicPanelPrompt,
+  refineComicPageRender,
   refineStoryboardScenePrompt,
   generateComicPanelImagePrompts,
   generateStoryboardSceneImagePrompts,
@@ -596,6 +597,123 @@ describe('refineComicPanelPrompt', () => {
           ]),
         }),
       ]),
+    }));
+  });
+});
+
+describe('refineComicPageRender', () => {
+  // A comicPages stage with page 0 already rendered (proof slot carries a
+  // filename + stored prompt — the two things a from-self refine needs).
+  const issueWithRenderedPage = (slots) => ({
+    ...structuredClone(mockIssue),
+    stages: {
+      ...mockIssue.stages,
+      comicPages: {
+        pages: [{
+          panels: [{ description: 'Panel 1 baseline.', dialogue: [], caption: '', sfx: '' }],
+          ...slots,
+        }],
+      },
+    },
+  });
+
+  it('rejects a non-integer pageIndex', async () => {
+    await expect(refineComicPageRender('iss-test', { pageIndex: 'nope', instruction: 'x' }))
+      .rejects.toThrow(/non-negative integer/);
+  });
+
+  it('rejects an empty instruction', async () => {
+    await expect(refineComicPageRender('iss-test', { pageIndex: 0, instruction: '   ' }))
+      .rejects.toThrow(/instruction is required/);
+  });
+
+  it('returns 404 when the page does not exist', async () => {
+    await expect(refineComicPageRender('iss-test', { pageIndex: 99, instruction: 'warm the light' }))
+      .rejects.toThrow(/out of range|PIPELINE_COMIC_PAGE_NOT_FOUND/);
+  });
+
+  it('rejects when the page has no rendered image to refine', async () => {
+    getIssueMock.mockResolvedValueOnce(issueWithRenderedPage({}));
+    await expect(refineComicPageRender('iss-test', { pageIndex: 0, instruction: 'warm the light' }))
+      .rejects.toThrow(/no rendered image yet|PIPELINE_COMIC_REFINE_NO_RENDER/);
+  });
+
+  it('rejects when the rendered slot has no stored prompt to adjust', async () => {
+    getIssueMock.mockResolvedValueOnce(issueWithRenderedPage({
+      proofImage: { jobId: 'j1', filename: 'page0-proof.png', prompt: '' },
+    }));
+    await expect(refineComicPageRender('iss-test', { pageIndex: 0, instruction: 'warm the light' }))
+      .rejects.toThrow(/stored render prompt is missing|PIPELINE_COMIC_REFINE_NO_PROMPT/);
+  });
+
+  it('happy path: adjusts the proof prompt and enqueues an i2i render from the existing image', async () => {
+    getIssueMock.mockResolvedValueOnce(issueWithRenderedPage({
+      proofImage: { jobId: 'j1', filename: 'page0-proof.png', prompt: 'original page prompt' },
+    }));
+
+    const result = await refineComicPageRender('iss-test', { pageIndex: 0, instruction: 'warm the lighting' });
+
+    // Variant defaults to proof (no final exists); LLM-adjusted prompt + meta.
+    expect(result.variant).toBe('proof');
+    expect(result.prompt).toBe('refined prompt body');
+    expect(result.runId).toBe('run-abc12345');
+    expect(result.changes).toEqual(['tightened the framing']);
+
+    // The refine template — NOT the from-script page compose — is run, and it
+    // is fed the current prompt + the user instruction.
+    expect(runStagedLLMMock).toHaveBeenCalledWith(
+      'pipeline-comic-page-refine-render',
+      expect.objectContaining({ currentPrompt: 'original page prompt', instruction: 'warm the lighting', pageNumber: 1 }),
+      expect.objectContaining({ returnsJson: true }),
+    );
+
+    // The render is image-to-image from the page's own image at the default
+    // refine denoise.
+    expect(enqueueJobMock).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'image',
+      params: expect.objectContaining({
+        prompt: 'refined prompt body',
+        initImagePath: expect.stringContaining('page0-proof.png'),
+        initImageStrength: 0.35,
+      }),
+    }));
+  });
+
+  it('honors target=final and an explicit initImageStrength', async () => {
+    getIssueMock.mockResolvedValueOnce(issueWithRenderedPage({
+      proofImage: { jobId: 'j1', filename: 'page0-proof.png', prompt: 'proof prompt' },
+      finalImage: { jobId: 'j2', filename: 'page0-final.png', prompt: 'final prompt' },
+    }));
+
+    const result = await refineComicPageRender('iss-test', {
+      pageIndex: 0, instruction: 'remove the extra signage text', target: 'final', initImageStrength: 0.2,
+    });
+
+    expect(result.variant).toBe('final');
+    expect(runStagedLLMMock).toHaveBeenCalledWith(
+      'pipeline-comic-page-refine-render',
+      expect.objectContaining({ currentPrompt: 'final prompt' }),
+      expect.anything(),
+    );
+    expect(enqueueJobMock).toHaveBeenCalledWith(expect.objectContaining({
+      params: expect.objectContaining({
+        initImagePath: expect.stringContaining('page0-final.png'),
+        initImageStrength: 0.2,
+      }),
+    }));
+  });
+
+  it('auto-prefers the final render as the refine base when both slots exist', async () => {
+    getIssueMock.mockResolvedValueOnce(issueWithRenderedPage({
+      proofImage: { jobId: 'j1', filename: 'page0-proof.png', prompt: 'proof prompt' },
+      finalImage: { jobId: 'j2', filename: 'page0-final.png', prompt: 'final prompt' },
+    }));
+
+    const result = await refineComicPageRender('iss-test', { pageIndex: 0, instruction: 'tweak' });
+
+    expect(result.variant).toBe('final');
+    expect(enqueueJobMock).toHaveBeenCalledWith(expect.objectContaining({
+      params: expect.objectContaining({ initImagePath: expect.stringContaining('page0-final.png') }),
     }));
   });
 });

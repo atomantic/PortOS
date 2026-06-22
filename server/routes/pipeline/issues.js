@@ -25,6 +25,7 @@ import {
   enqueueStoryboardSceneVideo,
   enqueueStoryboardShotStartFrame,
   refineComicPanelPrompt,
+  refineComicPageRender,
   refineStoryboardScenePrompt,
   generateComicPanelImagePrompts,
   generateStoryboardSceneImagePrompts,
@@ -237,6 +238,34 @@ const comicPageRenderSchema = z.object({
   referencePage: z.union([z.enum(['prior', 'next']), z.number().int().min(0)]).optional(),
   // Per-render opt-out for trained character-LoRA auto-apply (local mode).
   applyCharacterLoras: z.boolean().optional().default(true),
+}).refine(refineImagePixelCap, { message: PIXEL_CAP_MESSAGE, path: ['width'] });
+
+// Per-page "Refine" — a small image-to-image correction to an already-rendered
+// page (issue #1534). `instruction` is the user's free-text change; the LLM
+// adjusts the page's stored render prompt and the page re-renders i2i from its
+// own existing image. The render-tuning fields mirror comicPageRenderSchema,
+// minus the compose-from-source-only `useProofAsBase` / `referencePage` /
+// `applyCharacterLoras` (a from-self refine has no proof-vs-final base choice
+// and no fresh character matching). `target` selects which rendered variant to
+// refine; absent → server auto-picks (final when present, else proof).
+const comicPageRefineSchema = z.object({
+  instruction: z.string().trim().min(1).max(2000),
+  providerId: z.string().trim().max(80).optional(),
+  model: z.string().trim().max(200).optional(),
+  target: z.enum(COMIC_PAGE_VARIANTS).optional(),
+  // i2i denoise — low preserves the page, just enough to apply the change.
+  initImageStrength: z.number().min(0).max(1).optional(),
+  negativePrompt: z.string().trim().max(2000).optional(),
+  // No `extraStyle`: the refine renders the LLM-adjusted prompt verbatim and
+  // skips composeComicPagePrompt, so a style suffix would be silently dropped.
+  mode: z.enum([IMAGE_GEN_MODE.LOCAL, IMAGE_GEN_MODE.CODEX]).optional(),
+  modelId: z.string().trim().max(64).optional(),
+  width: imageEdgeSchema,
+  height: imageEdgeSchema,
+  steps: z.number().int().min(1).max(150).optional(),
+  cfgScale: z.number().min(0).max(30).optional(),
+  guidance: z.number().min(0).max(30).optional(),
+  seed: z.number().int().min(0).optional(),
 }).refine(refineImagePixelCap, { message: PIXEL_CAP_MESSAGE, path: ['width'] });
 
 const episodeVideoSchema = z.object({
@@ -805,6 +834,63 @@ router.post('/issues/:id/stages/comicPages/pages/:pageIndex/render', asyncHandle
   const slotRecord = buildRenderSlot({
     slotKey, jobId: result.jobId, prompt: result.prompt,
     width: body.width, height: body.height, fromProof: result.fromProof,
+  });
+  const { issue: updatedIssue, stage } = await issuesSvc.updateStageWithLatest(
+    req.params.id,
+    'comicPages',
+    (currentStage) => {
+      const currentPages = Array.isArray(currentStage?.pages) ? currentStage.pages : [];
+      if (!currentPages[pageIndex]) {
+        throw new ServerError(
+          `pageIndex ${pageIndex} out of range — comicPages has ${currentPages.length} page${currentPages.length === 1 ? '' : 's'}`,
+          { status: 404, code: 'PIPELINE_COMIC_PAGE_NOT_FOUND' },
+        );
+      }
+      const nextPages = [...currentPages];
+      nextPages[pageIndex] = {
+        ...currentPages[pageIndex],
+        [slotKey]: slotRecord,
+      };
+      return { status: 'edited', pages: nextPages };
+    },
+  ).catch((err) => { throw mapServiceError(err); });
+  res.json({ ...result, issue: updatedIssue, stage });
+}));
+
+// AI prompt-refine + image-to-image re-render for a small correction to an
+// already-rendered comic page (issue #1534). The service adjusts the page's
+// stored render prompt per the user's instruction and re-renders i2i from the
+// page's existing image; the new jobId + adjusted prompt land on the matching
+// variant slot — same persist path as /render, so a concurrent edit or sibling
+// render can't be reverted by a stale snapshot.
+router.post('/issues/:id/stages/comicPages/pages/:pageIndex/refine-render', asyncHandler(async (req, res) => {
+  const pageIndex = Number(req.params.pageIndex);
+  if (!Number.isInteger(pageIndex) || pageIndex < 0) {
+    throw new ServerError('pageIndex must be a non-negative integer', {
+      status: 400, code: 'PIPELINE_COMIC_PAGE_BAD_INDEX',
+    });
+  }
+  const body = validateRequest(comicPageRefineSchema, req.body ?? {});
+
+  // Validate the page exists up front so a bad index skips the bible load + LLM
+  // refine entirely (mirrors the /render route's pre-flight). The service also
+  // 404s before the LLM call — this just fails faster and more cheaply.
+  const issue = await issuesSvc.getIssue(req.params.id).catch((err) => { throw mapServiceError(err); });
+  const pages = Array.isArray(issue.stages?.comicPages?.pages) ? issue.stages.comicPages.pages : [];
+  if (!pages[pageIndex]) {
+    throw new ServerError(
+      `pageIndex ${pageIndex} out of range — comicPages has ${pages.length} page${pages.length === 1 ? '' : 's'}`,
+      { status: 404, code: 'PIPELINE_COMIC_PAGE_NOT_FOUND' },
+    );
+  }
+
+  const result = await refineComicPageRender(req.params.id, { pageIndex, ...body })
+    .catch((err) => { throw mapServiceError(err); });
+
+  const slotKey = slotKeyForVariant(result.variant);
+  const slotRecord = buildRenderSlot({
+    slotKey, jobId: result.jobId, prompt: result.prompt,
+    width: body.width, height: body.height,
   });
   const { issue: updatedIssue, stage } = await issuesSvc.updateStageWithLatest(
     req.params.id,

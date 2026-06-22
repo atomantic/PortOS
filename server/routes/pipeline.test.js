@@ -179,6 +179,19 @@ vi.mock('../services/pipeline/visualStages.js', () => ({
     changes: ['mock change'],
     providerId: 'mock-provider',
   })),
+  // Comic-page AI refine + i2i re-render (issue #1534). Returns the shape the
+  // route lands on the matching variant slot via slotKeyForVariant +
+  // buildRenderSlot — variant defaults to 'proof' unless the body forces one.
+  refineComicPageRender: vi.fn(async (_issueId, opts) => ({
+    jobId: `page-refine-job-${++uuidCounter}`,
+    mode: 'local',
+    prompt: `refined page prompt for page ${opts.pageIndex + 1}`,
+    pageIndex: opts.pageIndex,
+    variant: opts?.target === 'final' ? 'final' : 'proof',
+    changes: ['warmed the lighting'],
+    runId: 'run-mock-page-refine',
+    providerId: 'mock-provider',
+  })),
 }));
 
 // The episode-video handoff creates a CD project; stub it so the route test
@@ -823,6 +836,49 @@ describe('pipeline routes', () => {
     expect(r.body.runId).toBe('run-mock-comic');
     expect(r.body.panel.description).toBe('refined panel body');
     expect(r.body.changes).toEqual(['mock change']);
+  });
+
+  it('POST /issues/:id/stages/comicPages/pages/:p/refine-render persists the refined render on the proof slot', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
+      stages: { comicPages: { pages: [{ panels: [{ description: 'p1', caption: '', dialogue: [], sfx: '' }] }] } },
+    });
+    const r = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/comicPages/pages/0/refine-render`)
+      .send({ instruction: 'warm the lighting' });
+    expect(r.status).toBe(200);
+    expect(r.body.runId).toBe('run-mock-page-refine');
+    expect(r.body.changes).toEqual(['warmed the lighting']);
+    // Default variant proof → lands on the proofImage slot with the adjusted prompt.
+    expect(r.body.stage.pages[0].proofImage.jobId).toBe(r.body.jobId);
+    expect(r.body.stage.pages[0].proofImage.prompt).toBe(r.body.prompt);
+    expect(r.body.stage.pages[0].proofImage.filename).toBeNull();
+  });
+
+  it('POST /issues/:id/stages/comicPages/pages/:p/refine-render with target=final lands on the final slot', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
+      stages: { comicPages: { pages: [{ panels: [{ description: 'p1', caption: '', dialogue: [], sfx: '' }] }] } },
+    });
+    const r = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/comicPages/pages/0/refine-render`)
+      .send({ instruction: 'remove extra signage', target: 'final' });
+    expect(r.status).toBe(200);
+    expect(r.body.stage.pages[0].finalImage.jobId).toBe(r.body.jobId);
+  });
+
+  it('POST /issues/:id/stages/comicPages/pages/:p/refine-render 400s without an instruction', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    const r = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/comicPages/pages/0/refine-render`)
+      .send({});
+    expect(r.status).toBe(400);
   });
 
   it('POST /issues/:id/stages/storyboards/scenes/:index/refine-prompt returns the refined scene', async () => {

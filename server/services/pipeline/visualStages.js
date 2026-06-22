@@ -192,6 +192,15 @@ const resolveProofInitImage = (proofImage, label) => {
 // reference as an `-i` attachment (reference mode), where strength is moot.
 const REFERENCE_PAGE_DEFAULT_STRENGTH = 0.8;
 
+// Default denoise for the per-page "Refine" image-to-image correction (issue
+// #1534). The page is re-rendered FROM ITS OWN existing image, so this is a
+// low strength: preserve the panel layout / composition / lettering and move
+// only enough pixels to honor the small requested change. Higher than
+// proof-as-base's 0.25 (which merely upscales) because a refine must actually
+// apply an edit; far below the reference path's 0.8 (which mostly follows a
+// fresh prompt). Tweakable per-call via options.initImageStrength.
+const REFINE_RENDER_DEFAULT_STRENGTH = 0.35;
+
 // Resolve an adjacent page's rendered image to a gallery path for use as a
 // consistency reference. Prefers the final render, falls back to the proof.
 // Throws a clear 400 when that page hasn't been rendered yet.
@@ -916,6 +925,116 @@ export async function enqueueVisualComicPage(issueId, options = {}) {
     logLine: `📄 Pipeline comic page — issue=${issueId.slice(0, 8)} page=${pageIndex + 1} panels=${page.panels.length} variant=${variant}${fromProof ? ' (from proof)' : ''}${fromReference ? ` (ref page ${referencePageIndex + 1})` : ''}`,
   });
   return { jobId, mode, prompt, pageIndex, variant, fromProof, fromReference, referencePageIndex };
+}
+
+/**
+ * AI prompt-refine + image-to-image re-render for a SMALL correction to an
+ * already-rendered comic page (issue #1534). Unlike `enqueueVisualComicPage`
+ * (which composes a fresh prompt from the page's panels and re-renders from
+ * source), this:
+ *
+ *   1. Takes the page's CURRENT render prompt (stored on the proof/final slot)
+ *      plus the user's free-text instruction, and asks the LLM to ADJUST that
+ *      prompt to reflect the instruction — never regenerating from the comic
+ *      script. Everything not called out by the instruction is preserved.
+ *   2. Re-renders image-to-image using the page's EXISTING output image as the
+ *      init base at a low denoise, so the panel layout / composition / lettering
+ *      survive and only the requested change moves.
+ *
+ * The base image (and the slot the refined render lands back on) is the page's
+ * final render when present, else its proof; `options.target` forces a variant.
+ * This is the common "page is mostly right, needs a tweak" case where a full
+ * re-render from the script would throw away everything good about the current
+ * output.
+ *
+ * Returns { jobId, mode, prompt, pageIndex, variant, changes, runId, providerId }.
+ */
+export async function refineComicPageRender(issueId, options = {}) {
+  const pageIndex = Number(options.pageIndex);
+  if (!Number.isInteger(pageIndex) || pageIndex < 0) {
+    throw new ServerError('pageIndex must be a non-negative integer', {
+      status: 400, code: 'PIPELINE_COMIC_PAGE_BAD_INDEX',
+    });
+  }
+  const instruction = (options.instruction || '').trim();
+  if (!instruction) {
+    throw new ServerError('instruction is required — describe the small change to apply', {
+      status: 400, code: 'PIPELINE_COMIC_REFINE_NO_INSTRUCTION',
+    });
+  }
+
+  const { issue, settings, series, world } = await loadBibleContext(issueId);
+  assertStageUnlocked(issue, 'comicPages');
+  const pages = Array.isArray(issue.stages?.comicPages?.pages) ? issue.stages.comicPages.pages : [];
+  const page = pages[pageIndex];
+  if (!page) {
+    throw new ServerError(`page index ${pageIndex} out of range (have ${pages.length})`, {
+      status: 404, code: 'PIPELINE_COMIC_PAGE_NOT_FOUND',
+    });
+  }
+
+  // Resolve which rendered variant to refine: an explicit target wins; else
+  // prefer the final render, falling back to the proof. The refined render
+  // lands back on that SAME slot (the user is correcting that image).
+  const variant = options.target
+    ? resolveVariant(options.target)
+    : (page.finalImage?.filename ? 'final' : 'proof');
+  const baseSlot = variant === 'final' ? page.finalImage : page.proofImage;
+  const baseFilename = baseSlot?.filename;
+  if (!baseFilename) {
+    throw new ServerError(
+      `Cannot refine page ${pageIndex + 1}'s ${variant} render: it has no rendered image yet — render the page first.`,
+      { status: 400, code: 'PIPELINE_COMIC_REFINE_NO_RENDER' },
+    );
+  }
+  // The stored slot prompt is what we adjust — refusing to fall back to a
+  // recomposed-from-script prompt is the whole point (a surgical edit, not a
+  // redraw). A legacy slot without a persisted prompt must be re-rendered once
+  // through `/render` (which stamps the prompt) before it can be refined.
+  const currentPrompt = (baseSlot.prompt || '').trim();
+  if (!currentPrompt) {
+    throw new ServerError(
+      `Cannot refine page ${pageIndex + 1}'s ${variant} render: its stored render prompt is missing — re-render the page first.`,
+      { status: 400, code: 'PIPELINE_COMIC_REFINE_NO_PROMPT' },
+    );
+  }
+  const initImagePath = resolveGalleryImage(baseFilename, { mustExist: false });
+  if (!initImagePath) {
+    throw new ServerError(
+      `Existing page image path escaped the gallery for page ${pageIndex + 1}: ${baseFilename}`,
+      { status: 400, code: 'PIPELINE_COMIC_REFINE_NOT_FOUND' },
+    );
+  }
+
+  // Ask the LLM to apply the instruction to the existing prompt. resultField
+  // 'prompt' + runPromptRefine's validation guarantees a non-empty string back;
+  // `changes` is the short "what I changed" bullet list the UI surfaces.
+  const { refined, changes, runId, providerId } = await runPromptRefine({
+    templateName: 'pipeline-comic-page-refine-render',
+    variables: {
+      series: seriesBibleCtx(series),
+      issue: issueCtx(issue),
+      pageNumber: pageIndex + 1,
+      currentPrompt: currentPrompt.slice(0, 16_000),
+      instruction: instruction.slice(0, 2000),
+    },
+    options,
+    source: 'pipeline-comic-page-refine-render',
+    logTag: `Pipeline comic page refine — issue=${issueId.slice(0, 8)} page=${pageIndex + 1} variant=${variant}`,
+  });
+
+  const mode = resolveMode(options, settings);
+  const initImageStrength = Number.isFinite(options.initImageStrength)
+    ? Math.min(Math.max(options.initImageStrength, 0), 1)
+    : REFINE_RENDER_DEFAULT_STRENGTH;
+
+  const jobId = enqueueImageJob({
+    prompt: refined, world, settings, mode,
+    options: { ...options, initImagePath, initImageStrength },
+    owner: buildComicPagesOwner({ issueId, target: 'page', pageIndex, variant }),
+    logLine: `🪄 Pipeline comic page refine — issue=${issueId.slice(0, 8)} page=${pageIndex + 1} variant=${variant} strength=${initImageStrength}`,
+  });
+  return { jobId, mode, prompt: refined, pageIndex, variant, changes, runId, providerId };
 }
 
 /**

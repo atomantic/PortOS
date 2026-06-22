@@ -436,6 +436,13 @@
       "returnsJson": true,
       "variables": []
     },
+    "pipeline-comic-page-refine-render": {
+      "name": "Pipeline — Comic Page Refine Render",
+      "description": "Apply a small author correction to an already-rendered comic page's render prompt for an image-to-image re-render — changes only what the instruction asks and preserves the rest of the page (no redraw from the comic script).",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
     "universe-character-expand": {
       "name": "Universe — Expand Character Profile",
       "description": "Flesh out blank fields on one universe canon character — novelist depth (motivations / likes / mannerisms / relationships) plus graphic-novelist visual fields (silhouette / palette / expressions / props / hand gestures). Preserves populated fields and stays distinct from peer characters.",
