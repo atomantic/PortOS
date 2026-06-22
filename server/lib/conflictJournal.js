@@ -81,7 +81,15 @@ const MEDIA_COLLECTION_SCALAR_FIELDS = Object.freeze(['name', 'description', 'co
 // set the UI actually shows. (mediaCollection narrows via its own scalar
 // projection below; universe/series exclude nothing, so their already-seeded
 // base hashes stay valid across upgrade.)
-const HASH_EXCLUDED_FIELDS = Object.freeze({ issue: ['number'] });
+// Fields dropped from the CONTENT HASH (not the wire payload — they still
+// replicate). `issue.number` is renumber-managed. `track.renders` is an additive
+// field synthesized (backfilled) onto every existing track on first read: hashing
+// it would invalidate every pre-upgrade `sync_base_hash` and journal a one-time
+// FALSE 3-way conflict on the first cross-peer edit after both peers upgrade
+// (local and remote both differ from a base computed without renders). Excluding
+// it from the hash keeps base-hash compatibility; render-only divergences are
+// LWW-ordered by `updatedAt` regardless, and renders stays restorable (below).
+const HASH_EXCLUDED_FIELDS = Object.freeze({ issue: ['number'], track: ['renders'] });
 
 /**
  * sha256 of the canonical content projection. Reuses sanitizeRecordForWire +
@@ -306,6 +314,9 @@ export const RESTORABLE_FIELDS = Object.freeze({
   author: ['name', 'writingStyle', 'bio', 'physicalDescription', 'headshotStyle', 'headshotImageUrl'],
   artist: ['name', 'genre', 'bio', 'musicalStyle', 'physicalDescription', 'portraitStyle', 'portraitImageUrl'],
   album: ['title', 'artistId', 'artist', 'description', 'genre', 'releaseYear', 'coverImageUrl', 'trackIds'],
+  // `renders` IS restorable (a conflict restore must bring back the local render
+  // history) but is EXCLUDED FROM THE CONTENT HASH — see HASH_EXCLUDED_FIELDS for
+  // why (base-hash compatibility for this additive backfilled field).
   track: ['title', 'albumId', 'artistId', 'artist', 'lyrics', 'prompt', 'engine', 'modelId', 'durationSec', 'audioFilename', 'renders'],
   // Issue: the user-authored content the merge can restore. `stages` carries
   // the bulk of the work (prose, comic pages, render metadata). Server-owned /

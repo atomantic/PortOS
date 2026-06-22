@@ -30,12 +30,9 @@ function reset() {
 
 const journalEntries = () => cj.conflictJournalStore().loadAll();
 
-// `renders: []` matches the sanitized shape (no audio → empty history), so the
-// raw fixture hashes identically to the stored sanitized record in the
-// base-hash assertions below — `contentHashForRecord` now includes `renders`.
 const track = (id, extra = {}) => ({
   id, title: id, albumId: '', artistId: '', artist: '', lyrics: '', prompt: '',
-  engine: '', modelId: '', durationSec: null, audioFilename: '', renders: [],
+  engine: '', modelId: '', durationSec: null, audioFilename: '',
   createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
   deleted: false, deletedAt: null, ...extra,
 });
@@ -55,6 +52,20 @@ describe('tracks file backend — CRUD', () => {
     await file.deleteTrack(created.id);
     expect(await file.getTrack(created.id)).toBeNull();
     expect(await file.listTracks()).toHaveLength(0);
+  });
+});
+
+describe('tracks content hash', () => {
+  it('excludes the render history (additive backfilled field stays base-hash compatible)', () => {
+    // A pre-renders track and the same track carrying a render history must hash
+    // identically, so backfilling renders onto existing synced tracks can't
+    // invalidate stored base hashes and journal a false conflict on first edit.
+    const base = track('track-h', { audioFilename: 'a.wav', engine: 'musicgen', durationSec: 12 });
+    const withRenders = { ...base, renders: [
+      { id: 'r1', audioFilename: 'a.wav', engine: 'musicgen', durationSec: 12, prompt: 'x', lyrics: '', createdAt: '2026-01-01T00:00:00.000Z' },
+      { id: 'r2', audioFilename: 'b.wav', engine: 'audioldm2', durationSec: 20, prompt: 'y', lyrics: '', createdAt: '2026-01-02T00:00:00.000Z' },
+    ] };
+    expect(cj.contentHashForRecord('track', withRenders)).toBe(cj.contentHashForRecord('track', base));
   });
 });
 
