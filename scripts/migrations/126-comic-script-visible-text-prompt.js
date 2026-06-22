@@ -15,12 +15,12 @@ import { makePromptReplaceMigration } from './_lib.js';
 export const ACCEPTED_OLD_MD5 = {
   'pipeline-comic-script.md': [
     'e9ee70bf18888492edada6633cd9928a', // post-063 (panel decomposition)
-    '7c05ecde539f04c9fa91e87543057204', // pre-121 (current reference body)
+    '7c05ecde539f04c9fa91e87543057204', // pre-126 (current reference body)
   ],
 };
 
 export const NEW_SHIPPED_MD5 = {
-  'pipeline-comic-script.md': 'a4303016c34b65e4b0e641fe71252de3', // post-121 (visible text exactness)
+  'pipeline-comic-script.md': 'a4303016c34b65e4b0e641fe71252de3', // post-126 (visible text exactness)
 };
 
 const { applyMigration, up } = makePromptReplaceMigration({
