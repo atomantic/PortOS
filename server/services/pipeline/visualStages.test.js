@@ -703,6 +703,27 @@ describe('refineComicPageRender', () => {
     }));
   });
 
+  it('refines a legacy-shaped page (root filename/prompt) by reading the legacy slot as the base', async () => {
+    // Pre proof/final-split record: render lives at the page root, not in a
+    // proofImage slot. The client surfaces this as the proof slot and shows
+    // Refine, so the service must resolve it too (else NO_RENDER 400).
+    getIssueMock.mockResolvedValueOnce(issueWithRenderedPage({
+      imageJobId: 'legacy-job', filename: 'page0-legacy.png', prompt: 'legacy page prompt',
+    }));
+
+    const result = await refineComicPageRender('iss-test', { pageIndex: 0, instruction: 'tweak the sky' });
+
+    expect(result.variant).toBe('proof');
+    expect(runStagedLLMMock).toHaveBeenCalledWith(
+      'pipeline-comic-page-refine-render',
+      expect.objectContaining({ currentPrompt: 'legacy page prompt' }),
+      expect.anything(),
+    );
+    expect(enqueueJobMock).toHaveBeenCalledWith(expect.objectContaining({
+      params: expect.objectContaining({ initImagePath: expect.stringContaining('page0-legacy.png') }),
+    }));
+  });
+
   it('auto-prefers the final render as the refine base when both slots exist', async () => {
     getIssueMock.mockResolvedValueOnce(issueWithRenderedPage({
       proofImage: { jobId: 'j1', filename: 'page0-proof.png', prompt: 'proof prompt' },

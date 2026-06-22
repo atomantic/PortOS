@@ -973,13 +973,26 @@ export async function refineComicPageRender(issueId, options = {}) {
     });
   }
 
+  // Mirror the client's getProofSlot: a legacy page (pre proof/final split)
+  // stores its render at the record root (imageJobId/filename/prompt), and the
+  // UI surfaces that as the proof slot — so it shows the Refine control. Resolve
+  // the same legacy shape here, otherwise refining a page whose only render is
+  // legacy would 400 with NO_RENDER even though the UI shows it as rendered. The
+  // refined render lands on the proofImage slot, upgrading the record into the
+  // new shape (same as a /render of a legacy page).
+  const legacyProofSlot = (!page.proofImage?.filename && (page.imageJobId || page.filename))
+    ? { filename: page.filename || null, prompt: page.prompt || null }
+    : null;
+
   // Resolve which rendered variant to refine: an explicit target wins; else
   // prefer the final render, falling back to the proof. The refined render
   // lands back on that SAME slot (the user is correcting that image).
   const variant = options.target
     ? resolveVariant(options.target)
     : (page.finalImage?.filename ? 'final' : 'proof');
-  const baseSlot = variant === 'final' ? page.finalImage : page.proofImage;
+  const baseSlot = variant === 'final'
+    ? page.finalImage
+    : (page.proofImage?.filename ? page.proofImage : legacyProofSlot);
   const baseFilename = baseSlot?.filename;
   if (!baseFilename) {
     throw new ServerError(

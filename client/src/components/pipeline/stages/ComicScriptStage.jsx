@@ -900,10 +900,13 @@ function PageRow({
   // A selected reference render uses the adjacent page (not this page's proof)
   // as its base, so it doesn't need a proof to exist — only proof-as-base does.
   const finalNeedsProof = useProofForFinal && !refPage && !proofSlot?.filename;
-  // The Refine control only makes sense once the page has a rendered image to
-  // correct (final preferred, else proof). Block it while a render is in flight
-  // so we don't i2i off a slot that's mid-write.
-  const hasRender = !!(finalSlot?.filename || proofSlot?.filename);
+  // The Refine control only makes sense once the page has a render to correct
+  // (final preferred, else proof). Gate on jobId OR filename — not filename
+  // alone: refining a proof-only page replaces its slot with an in-flight
+  // record whose filename is briefly null, and gating on filename alone would
+  // make the Refine box vanish mid-refine and not return until reload. The
+  // button's own in-flight gate (below) still blocks i2i off a mid-write slot.
+  const hasRender = !!(finalSlot?.jobId || finalSlot?.filename || proofSlot?.jobId || proofSlot?.filename);
   const refineDisabled = refining || proofInFlight || finalInFlight || !refineText.trim();
 
   return (
