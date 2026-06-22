@@ -128,6 +128,21 @@ describe('fetchOllamaRegistryVariants', () => {
     expect(variants.map((v) => v.installId)).toEqual(['mistral:7b-instruct-q4_K_M'])
   })
 
+  it('keeps every quant at the target size, including high-fidelity builds, when a model publishes many', async () => {
+    // 14 distinct quants at 7b — more than the old cap of 12. Listed low-to-high so a
+    // tag-order slice would drop the high-fidelity ones; they must all survive.
+    const quants = ['q2_K', 'q3_K_S', 'q3_K_M', 'q3_K_L', 'q4_0', 'q4_K_S', 'q4_K_M', 'q5_K_S', 'q5_K_M', 'q6_K', 'q8_0', 'f16', 'bf16', 'fp16']
+    const tags = quants.map((q) => `7b-instruct-${q}`)
+    const sizes = Object.fromEntries(tags.map((t, i) => [t, (i + 2) * 1_000_000_000]))
+    fetch.mockImplementation(registry(tags, sizes))
+
+    const variants = await fetchOllamaRegistryVariants('bigquant', { paramsHint: '7B' })
+    const got = variants.map((v) => v.quant)
+    expect(got).toHaveLength(14)
+    // The high-fidelity builds a big-memory machine wants are present (not truncated away).
+    expect(got).toEqual(expect.arrayContaining(['Q8_0', 'Q6_K', 'FP16', 'BF16', 'F16', 'Q2_K']))
+  })
+
   it('returns [] for an hf.co id (owned by the HF path)', async () => {
     const variants = await fetchOllamaRegistryVariants('hf.co/unsloth/Foo-GGUF:Q4_K_M', { paramsHint: '7B' })
     expect(variants).toEqual([])
