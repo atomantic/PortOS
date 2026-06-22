@@ -23,11 +23,6 @@ import {
 const XML_WRITE_POLL_INTERVAL_MS = 50;
 const XML_WRITE_TIMEOUT_MS = 5000;
 
-// Per-member cap when buffering a clinical-record JSON into memory. Real records
-// are ~1-5KB each; the generous ceiling just guards against a pathological
-// member exhausting memory (mirrors chatgptZipImport's MAX_MEMBER_BYTES).
-const MAX_CLINICAL_RECORD_BYTES = 100 * 1024 * 1024;
-
 const isZip = (file) =>
   file.mimetype === 'application/zip' ||
   file.mimetype === 'application/x-zip-compressed' ||
@@ -143,10 +138,10 @@ router.post('/import/xml', uploadXml, asyncHandler(async (req, res) => {
           } else if (entry.path.includes('clinical_records/') && entry.path.endsWith('.json')) {
             // Buffer clinical record JSON files (~1-5KB each). parseZip() entries
             // aren't EventEmitters (no entry.on('data'/'end') — that throws), so
-            // pipe into a collecting Writable via the shared helper and track the
-            // read so 'close' can await it.
+            // pipe into a collecting Writable via the shared helper (which applies
+            // MAX_ZIP_MEMBER_BYTES) and track the read so 'close' can await it.
             clinicalReads.push(
-              collectZipEntry(entry, MAX_CLINICAL_RECORD_BYTES)
+              collectZipEntry(entry)
                 .then((buf) => { clinicalJsons.push(buf.toString('utf-8')); })
                 .catch(settle(reject))
             );
