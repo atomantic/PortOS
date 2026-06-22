@@ -388,13 +388,31 @@ function pickVariantForBudget(variants, usableBytes) {
   return sized.find((v) => estimatedResidentBytes(v.sizeBytes) <= usableBytes) || sized[sized.length - 1]
 }
 
+// The QUANT_PRIORITY-preferred variant — the sensible default when no RAM budget
+// applies and no curator-chosen quant matches (e.g. a curated LM Studio entry
+// whose blobs come back without sizes). Picks a balanced Q4-ish build rather than
+// the size-desc `variants[0]`, which (sizeless ⇒ stable sort ⇒ HF file order)
+// could wrongly default a small machine to a BF16/Q8 build.
+function preferredQuantVariant(variants) {
+  const rank = (q) => {
+    const i = QUANT_PRIORITY.findIndex((p) => p.toLowerCase() === String(q).toLowerCase())
+    return i === -1 ? QUANT_PRIORITY.length : i
+  }
+  return [...variants].sort((a, b) => rank(a.quant) - rank(b.quant))[0]
+}
+
 // Promote a chosen variant onto the result's primary install fields so the
-// default card reflects it (id/quant/size) without the client having to re-pick.
+// default card reflects it (id/quant) without the client having to re-pick. Only
+// overwrite the size when the variant actually has one — otherwise keep the
+// result's existing size (a curated entry's hard-coded estimate, or toResult's
+// label) instead of replacing it with a bare quant string.
 function applyVariant(result, variant) {
   result.id = variant.installId
   result.quant = variant.quant
-  result.sizeBytes = variant.sizeBytes
-  result.size = variant.size
+  if (Number.isFinite(variant.sizeBytes)) {
+    result.sizeBytes = variant.sizeBytes
+    result.size = variant.size
+  }
 }
 
 // Parse an LM Studio identifier into its repo base + quant for quant-aware
@@ -667,7 +685,7 @@ function applyGgufVariants(result, model, { backend, usableBytes, installedIds }
   // memory were unknown.
   const chosen = (usableBytes != null ? pickVariantForBudget(variants, usableBytes) : null)
     || variants.find((v) => v.quant && v.quant === result.quant)
-    || variants[0]
+    || preferredQuantVariant(variants)
   applyVariant(result, chosen)
   for (const v of variants) v.recommended = v.installId === result.id
   result.installed = chosen.installed

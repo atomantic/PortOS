@@ -592,6 +592,23 @@ describe('huggingFaceCatalog', () => {
       expect(catalog[0].id).toBe(`hf.co/${repo}:Q8_0`)
     })
 
+    it('falls back to the QUANT_PRIORITY quant (not HF file order) and keeps the curated size when HF omits sizes', async () => {
+      const repo = 'lmstudio-community/NoSize-Curated-GGUF'
+      // BF16 listed first; with no sizes the size-desc sort is stable (file order),
+      // so the fallback must NOT just take variants[0] or a small box defaults to BF16.
+      fetch.mockResolvedValueOnce(response({ id: repo, siblings: [
+        { rfilename: 'M-BF16.gguf' }, { rfilename: 'M-Q4_K_M.gguf' }, { rfilename: 'M-Q8_0.gguf' },
+      ] }))
+      const catalog = [{ id: repo, key: 'nosize', name: 'NoSize', category: 'chat', size: '2.0 GB' }]
+      // 8 GB box: budget pick can't fire (no sizes) — must land on the balanced
+      // QUANT_PRIORITY default, not the largest by file order.
+      await enrichCatalogWithVariants(catalog, { backend: 'lmstudio', systemMemoryBytes: 8 * 1024 ** 3, installedIds: [] })
+
+      expect(catalog[0].id).toBe(`${repo}@Q4_K_M`)
+      // The curated size estimate is preserved (not clobbered with a bare quant label).
+      expect(catalog[0].size).toBe('2.0 GB')
+    })
+
     it('leaves a bare Ollama registry name untouched (no HF repo → no picker)', async () => {
       fetch.mockResolvedValue(response([]))
       const catalog = [{ id: 'llama3.2', key: 'llama3.2', name: 'Llama 3.2 3B', category: 'chat', size: '2.0 GB' }]
