@@ -743,12 +743,16 @@ export function LocalLlmTab() {
                   // reflect that choice.
                   const variants = (!isAudio && Array.isArray(m.variants)) ? m.variants : [];
                   const hasVariantPicker = variants.length > 1;
-                  // Default to the server's RAM-aware pick (`m.id`). If it doesn't
-                  // line up with a listed variant, fall back to the recommended
-                  // one so the controlled <select> always has a matching option.
+                  // The server marks the RAM-aware default with `recommended`, so it
+                  // wins as the default selection. (For live HF results it equals
+                  // `m.id`; for curated entries `m.id` is the stable catalog id, which
+                  // may itself be a non-default variant — so `recommended` must take
+                  // precedence over `m.id`, or the RAM-aware pick never applies.) Fall
+                  // back to `m.id`-as-variant, then `m.id`, so the controlled <select>
+                  // always has a matching option.
                   const idMatchesVariant = variants.some((v) => v.installId === m.id);
                   const recommendedId = variants.find((v) => v.recommended)?.installId;
-                  const chosenId = selectedVariants[m.key] || (idMatchesVariant ? m.id : recommendedId) || m.id;
+                  const chosenId = selectedVariants[m.key] || recommendedId || (idMatchesVariant ? m.id : null) || m.id;
                   const chosenVariant = variants.find((v) => v.installId === chosenId) || null;
                   // Installed state is per-quant (Ollama tracks each separately),
                   // so gate Install on the SELECTED variant, not the result default.
