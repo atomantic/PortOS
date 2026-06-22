@@ -63,17 +63,21 @@ router.get('/vision-models', asyncHandler(async (_req, res) => {
 router.get('/catalog', asyncHandler(async (req, res) => {
   const { backend, q } = req.query
   if (!isBackend(backend)) throw new ServerError('backend must be "ollama" or "lmstudio"', { status: 400 })
-  // Per-quant installed detection needs LM Studio's quantization on the id
-  // (`<id>@<quant>`) — mirror the HF-search route so a single installed quant
-  // doesn't flag every quant of a repo as installed.
-  const installed = (await listModels(backend)).map((m) => (
+  const installedModels = await listModels(backend)
+  // getCatalog/searchCatalog normalize raw ids (no `@quant` suffix) — feed them the
+  // RAW ids so the offline installed overlay is correct even when HF enrichment
+  // fails/times out. Variant enrichment gets the quant-augmented ids (`<id>@<quant>`)
+  // for per-quant installed detection (a single installed quant must not flag every
+  // quant of a repo as installed) — it overwrites the overlay on success.
+  const installedRaw = installedModels.map((m) => m.id)
+  const installedForVariants = installedModels.map((m) => (
     backend === 'lmstudio' && m.quantization ? `${m.id}@${m.quantization}` : m.id
   ))
-  const models = q ? searchCatalog(backend, q, installed) : getCatalog(backend, installed)
+  const models = q ? searchCatalog(backend, q, installedRaw) : getCatalog(backend, installedRaw)
   // Total system memory drives the RAM-aware recommended quant (unified memory on
   // Apple Silicon also backs the GPU, so a big box can default to higher fidelity).
   const systemMemoryBytes = os.totalmem()
-  await enrichCatalogWithVariants(models, { backend, systemMemoryBytes, installedIds: installed })
+  await enrichCatalogWithVariants(models, { backend, systemMemoryBytes, installedIds: installedForVariants })
   res.json({ backend, models, systemMemoryGb: Math.round(systemMemoryBytes / 1024 ** 3) })
 }))
 

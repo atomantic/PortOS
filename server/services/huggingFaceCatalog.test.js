@@ -525,6 +525,22 @@ describe('huggingFaceCatalog', () => {
       expect(mlx.variants[0].installed).toBe(true)
     })
 
+    it('queries MLX with MLX-specific terms (not the gguf browse phrase) on a default browse', async () => {
+      fetch.mockImplementation(urlRouter([
+        ['filter=mlx', []],
+        ['filter=gguf', []],
+      ]))
+
+      await searchHuggingFaceModels({ backend: 'lmstudio', category: 'coding', appleSilicon: true }) // no query
+
+      const mlxCall = fetch.mock.calls.find(([u]) => String(u).includes('filter=mlx'))
+      expect(mlxCall).toBeTruthy()
+      // The category browse phrase ('…code gguf') must be rewritten for MLX, or
+      // `filter=mlx&search=…gguf` filters every MLX-only repo out of the browse.
+      expect(String(mlxCall[0])).not.toMatch(/search=[^&]*gguf/)
+      expect(String(mlxCall[0])).toMatch(/search=[^&]*mlx/)
+    })
+
     it('still returns GGUF results when the optional MLX query fails', async () => {
       const ggufRepo = 'org/Survivor-GGUF'
       fetch.mockImplementation(async (url) => {

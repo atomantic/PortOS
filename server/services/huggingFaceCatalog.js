@@ -764,6 +764,11 @@ export async function searchHuggingFaceModels({ backend, query = '', category = 
   // would all be filtered out.
   const ggufOnly = requestedCategory !== 'audio'
   const search = normalizeText(query) || CATEGORY_SEARCH[requestedCategory] || 'gguf'
+  // The default/category browse phrase contains "gguf" — sending that to the MLX
+  // query (`filter=mlx&search=…gguf`) filters out MLX-only repos. Use a parallel
+  // phrase with "gguf" swapped for "mlx" (or a bare "mlx") so the default browse
+  // surfaces MLX repos, not just hand-typed queries that happen to match one.
+  const mlxSearch = normalizeText(query) || CATEGORY_SEARCH[requestedCategory]?.replace(/\bgguf\b/gi, 'mlx') || 'mlx'
   const fetchLimit = Math.max(limit * 3, 30)
   // MLX is only installable via LM Studio on Apple Silicon (see toMlxResult), so
   // run the extra MLX query only there — never for Ollama, non-Apple hosts, or
@@ -775,7 +780,7 @@ export async function searchHuggingFaceModels({ backend, query = '', category = 
     // MLX is optional enrichment — a transient/API-specific MLX-query failure must
     // not blank the primary GGUF results, so swallow it to an empty list. (The
     // GGUF query still throws on failure, preserving the original error behaviour.)
-    wantMlx ? fetchModels(search, fetchLimit, 'mlx').catch(() => []) : Promise.resolve([])
+    wantMlx ? fetchModels(mlxSearch, fetchLimit, 'mlx').catch(() => []) : Promise.resolve([])
   ])
   let models = ggufModelsRaw
   if (models.length === 0 && ggufOnly) models = await fetchModels(search, fetchLimit, null)
