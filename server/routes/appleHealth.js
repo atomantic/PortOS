@@ -187,6 +187,15 @@ router.post('/import/xml', uploadXml, asyncHandler(async (req, res) => {
       // record member) would otherwise orphan the uploaded ZIP and any partial
       // extracted XML on disk. Clean both up before the error bubbles to the
       // centralized middleware (mirrors chatgptZipImport's reject cleanup).
+      //
+      // settle(reject) already destroy()'d xmlWriteStream, but createWriteStream
+      // opens its fd asynchronously and can finish creating xmlPath *after* an
+      // early destroy — so unlinking immediately can no-op and leave the temp
+      // file behind. Wait for the stream to emit 'close' (the fd is fully
+      // opened-and-closed by then) before unlinking.
+      if (xmlWriteStream && !xmlWriteStream.closed) {
+        await new Promise((res) => xmlWriteStream.once('close', res));
+      }
       await fs.unlink(filePath).catch(() => {});
       await fs.unlink(xmlPath).catch(() => {});
       throw err;
