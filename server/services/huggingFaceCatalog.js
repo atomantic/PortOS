@@ -701,17 +701,15 @@ function contextLengthOf(model) {
 // (their id IS the install id); curated entries keep their stable catalog id (so
 // other consumers — the playground — still match installed models on it) and the
 // UI picks the chosen variant via its `recommended` flag.
-function applyGgufVariants(result, model, { backend, usableBytes, installedIds, rewriteInstallId = true }) {
-  const variants = buildVariants(model, backend, usableBytes)
-  if (variants.length === 0) return false
-  // Per-quant installed state — Ollama tracks each quant separately, so the card
-  // must gate Install on the *selected* variant, not one repo-wide flag.
-  for (const v of variants) v.installed = installIdInstalled(backend, v.installId, result.repository, installedIds)
-  // Prefer the RAM-aware pick; otherwise the QUANT_PRIORITY default (matched by the
-  // result's existing quant); fall back to the QUANT_PRIORITY-preferred variant.
-  // `usableBytes != null` (not truthiness): 0 is a real budget on a tiny machine —
-  // pick the smallest (all flagged too-large) rather than falling through as if
-  // memory were unknown.
+// Pick the default variant, flag it `recommended`, and promote it onto `result` —
+// the shared tail of every variant path (GGUF files + Ollama registry tags), which
+// differ only in how they build the size-desc `variants` list and set `installed`.
+// Prefer the RAM-aware pick; otherwise the QUANT_PRIORITY default (matched by the
+// result's existing quant); fall back to the QUANT_PRIORITY-preferred variant.
+// `usableBytes != null` (not truthiness): 0 is a real budget on a tiny machine —
+// pick the smallest (all flagged too-large) rather than falling through as if
+// memory were unknown.
+function applyChosenVariant(result, variants, { usableBytes, rewriteInstallId }) {
   const chosen = (usableBytes != null ? pickVariantForBudget(variants, usableBytes) : null)
     || variants.find((v) => v.quant && v.quant === result.quant)
     || preferredQuantVariant(variants)
@@ -720,6 +718,15 @@ function applyGgufVariants(result, model, { backend, usableBytes, installedIds, 
   for (const v of variants) v.recommended = v === chosen
   applyVariant(result, chosen, rewriteInstallId)
   result.variants = variants
+}
+
+function applyGgufVariants(result, model, { backend, usableBytes, installedIds, rewriteInstallId = true }) {
+  const variants = buildVariants(model, backend, usableBytes)
+  if (variants.length === 0) return false
+  // Per-quant installed state — Ollama tracks each quant separately, so the card
+  // must gate Install on the *selected* variant, not one repo-wide flag.
+  for (const v of variants) v.installed = installIdInstalled(backend, v.installId, result.repository, installedIds)
+  applyChosenVariant(result, variants, { usableBytes, rewriteInstallId })
   return true
 }
 
@@ -926,24 +933,19 @@ async function applyOllamaRegistryVariants(entry, { usableBytes, installedIds })
         installId: c.installId,
         sizeBytes,
         size: formatBytes(sizeBytes) || c.quant,
-        fit: classifyFit(sizeBytes, usableBytes),
-        // Ollama tracks each `<name>:<tag>` build separately — per-quant installed
-        // state so the card gates Install on the selected variant.
-        installed: installIdInstalled('ollama', c.installId, entry.repository, installedIds)
+        fit: classifyFit(sizeBytes, usableBytes)
       }
     })
     .sort((a, b) => (b.sizeBytes || 0) - (a.sizeBytes || 0))
+  // Per-quant installed state — Ollama tracks each `<name>:<tag>` build separately,
+  // so the card gates Install on the selected variant (matches applyGgufVariants).
+  for (const v of variants) v.installed = installIdInstalled('ollama', v.installId, entry.repository, installedIds)
   // Seed the quant from the curator's id (`gpt-oss:20b` has no quant tag, so this
   // is usually null) so the no-RAM-budget fallback can anchor on it.
   if (entry.quant == null) entry.quant = quantFromInstallId('ollama', entry.id)
-  const chosen = (usableBytes != null ? pickVariantForBudget(variants, usableBytes) : null)
-    || variants.find((v) => v.quant && v.quant === entry.quant)
-    || preferredQuantVariant(variants)
-  for (const v of variants) v.recommended = v === chosen
   // Keep the curated entry's stable id (rewriteInstallId: false) — the playground
   // matches installed models on it; the UI installs the recommended variant.
-  applyVariant(entry, chosen, false)
-  entry.variants = variants
+  applyChosenVariant(entry, variants, { usableBytes, rewriteInstallId: false })
   entry.format = 'gguf'
   return true
 }
