@@ -200,21 +200,26 @@ export function parseZip() {
   return sink;
 }
 
+// Default per-member ceiling when buffering one ZIP entry into memory. Guards
+// against a pathological member exhausting RAM; consumers buffering arbitrary
+// archive members (chatgptZipImport, appleHealth clinical records) share it.
+export const MAX_ZIP_MEMBER_BYTES = 100 * 1024 * 1024;
+
 /**
  * Collect a single `parseZip()` entry's decompressed bytes into one Buffer.
  *
  * `parseZip()` entries are NOT readable streams — they expose only `.pipe(dest)`
  * / `.autodrain()`, so the EventEmitter idiom `entry.on('data'/'end')` throws
  * `entry.on is not a function`. Pipe the entry into a collecting Writable and
- * resolve with the concatenated buffer instead. When `maxBytes` is finite the
- * collect rejects once the member exceeds it, rather than buffering an unbounded
- * amount into memory.
+ * resolve with the concatenated buffer instead. The collect rejects once the
+ * member exceeds `maxBytes` (defaults to `MAX_ZIP_MEMBER_BYTES`), rather than
+ * buffering an unbounded amount into memory.
  *
  * Call this synchronously inside the `entry` handler (entries auto-drain on the
  * next tick if nothing attaches a pipe/drain), and gather the returned promises
  * so the parser's `close` handler can `Promise.all` them before settling.
  */
-export function collectZipEntry(entry, maxBytes = Infinity) {
+export function collectZipEntry(entry, maxBytes = MAX_ZIP_MEMBER_BYTES) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let size = 0;

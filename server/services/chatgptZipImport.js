@@ -33,7 +33,7 @@ import { createReadStream, createWriteStream } from 'fs';
 import { mkdir, rename, unlink } from 'fs/promises';
 import { Writable } from 'stream';
 import { PATHS, getMimeType } from '../lib/fileUtils.js';
-import { parseZip, collectZipEntry } from '../lib/zipStream.js';
+import { parseZip, collectZipEntry, MAX_ZIP_MEMBER_BYTES } from '../lib/zipStream.js';
 import { parseExport, importConversations, assetPointerId } from './chatgptImport.js';
 import { ServerError } from '../lib/errorHandler.js';
 
@@ -43,7 +43,7 @@ import { ServerError } from '../lib/errorHandler.js';
 // malicious zip claiming one member is enormous. Assets stream straight to disk
 // (peak RAM is one chunk), so there is no aggregate in-memory ceiling to keep —
 // a legitimately large multi-GB export imports without an arbitrary budget.
-const MAX_MEMBER_BYTES = 100 * 1024 * 1024;
+const MAX_MEMBER_BYTES = MAX_ZIP_MEMBER_BYTES;
 
 // Leading bytes captured from each streamed asset to sniff its magic-byte type
 // (the widest sniff — WAV/WebP — reads bytes 8–11). Everything past this streams
@@ -103,11 +103,6 @@ const IS_ASSET_NAME_MAP = (path) => /(?:^|\/)conversation_asset_file_names\.json
 // reference assets as `file-service://file-XXX` / `sediment://file_HASH`, both
 // of which `assetPointerId()` reduces to that same bare id.
 const datAssetId = (path) => path.replace(/^.*\//, '').replace(/\.dat$/i, '');
-
-// `parseZip` entries aren't readable streams — they expose `.pipe(dest)` /
-// `.autodrain()`, so buffering one into memory goes through the shared,
-// size-capped `collectZipEntry` helper (see lib/zipStream.js).
-const collect = collectZipEntry;
 
 // Stream a `.dat` entry straight to `filePath`, holding only the leading
 // `SNIFF_BYTES` so the asset's real extension can be sniffed without buffering
@@ -199,11 +194,11 @@ export async function extractChatgptZip(zipPath, { assetDir = PATHS.brainImportA
       .on('entry', (entry) => {
         const { path } = entry;
         if (IS_ASSET_NAME_MAP(path)) {
-          inFlight.push(collect(entry, MAX_MEMBER_BYTES)
+          inFlight.push(collectZipEntry(entry, MAX_MEMBER_BYTES)
             .then((buf) => { assetNameMap = JSON.parse(buf.toString('utf8')); })
             .catch(onErr));
         } else if (IS_CONVO_JSON(path)) {
-          inFlight.push(collect(entry, MAX_MEMBER_BYTES)
+          inFlight.push(collectZipEntry(entry, MAX_MEMBER_BYTES)
             .then((buf) => { convoBuffers.push({ path, buffer: buf }); })
             .catch(onErr));
         } else if (IS_DAT(path)) {
