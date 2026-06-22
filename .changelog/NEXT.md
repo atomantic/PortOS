@@ -15,6 +15,10 @@
 
 - **[issue-1527] A failed ChatGPT export import no longer leaves a stray temp file behind under heavy disk load.** When an import was aborted mid-stream (e.g. a corrupt asset-name map or an oversized member), the cleanup that removes the half-written `.part` temp file could run *before* the asset still streaming to that file finished closing — so under heavy concurrent disk I/O the write could re-create the `.part` file just after it was deleted and orphan it. Cleanup now waits for every in-flight asset write to close before removing temp files, so a rejected import reliably leaves nothing behind.
 
+## Apple Health import
+
+- **[issue-1532] Apple Health exports that include clinical records now import instead of crashing.** Importing a Health export ZIP that contained a `clinical_records/` folder (the FHIR records you get after linking a healthcare provider) failed outright — the import aborted while reading those JSON files. Such exports now import correctly, with their clinical records loaded alongside the rest of your health data; exports without clinical records are unaffected.
+
 ## Per-issue story generation
 
 - **[issue-1511] Per-issue prose and comic-script generation now sees only the characters that issue involves.** Generating an issue used to load the entire series character bible into every prose and comic-script prompt — on a large-cast series that's tens of thousands of tokens of character detail (including one-off bit players from unrelated issues) re-sent on every issue and every stage. Generation now sends full character records only for the cast named in that issue's beats, synopsis, and source material, with a compact one-line roster of everyone else kept for continuity. This sharply cuts token cost on big-cast series and, on context-bounded providers, leaves more room for the actual draft. The series' lead/recurring characters stay in context for every issue, so the core cast is never dropped — generation just stops carrying the full record of every bit player from unrelated issues.
