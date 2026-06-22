@@ -839,7 +839,11 @@ function PageRow({
   const handleRender = async (target) => {
     const setFlight = target === 'final' ? setRenderingFinal : setRenderingProof;
     setFlight(true);
-    const useProofAsBase = target === 'final' && useProofForFinal;
+    // A selected consistency reference takes precedence over proof-as-base
+    // (the server resolves referencePage first), so don't claim/require proof
+    // in that case — otherwise the Final button's proof gate blocks a
+    // reference-only render and the toast mislabels it "(from proof)".
+    const useProofAsBase = target === 'final' && useProofForFinal && !refPage;
     const res = await generatePipelineComicPage(issue.id, pageIndex, {
       ...renderOpts,
       target,
@@ -866,7 +870,9 @@ function PageRow({
     }
   };
 
-  const finalNeedsProof = useProofForFinal && !proofSlot?.filename;
+  // A selected reference render uses the adjacent page (not this page's proof)
+  // as its base, so it doesn't need a proof to exist — only proof-as-base does.
+  const finalNeedsProof = useProofForFinal && !refPage && !proofSlot?.filename;
 
   return (
     <li className="rounded-lg border border-port-border bg-port-card/40">

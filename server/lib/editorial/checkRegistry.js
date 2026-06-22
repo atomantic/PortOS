@@ -2100,7 +2100,12 @@ export const EDITORIAL_CHECKS = [
   },
   {
     id: 'comic.balloon-attribution',
-    sources: ['comicScript'],
+    // Reads each panel's DESCRIPTION (to decide if the speaker is shown) and the
+    // canon cast (for the visible-other severity), so it must fingerprint both:
+    // `comicScript.pacing` covers description + dialogue (the bare `comicScript`
+    // token is lettering-only and would leave a finding stale after a description
+    // edit), and `canon` covers name/alias changes.
+    sources: ['comicScript.pacing', 'canon'],
     label: 'Comic speech-balloon attribution',
     description:
       'Flags a comic dialogue line whose speaker is not shown in the panel and carries no off-panel/broadcast cue — the image model then letters a normal balloon and tails it to whoever IS drawn, mis-attributing the line (e.g. a station-AI PA line pointed at a visible bystander). Parses each issue\'s comic script and checks every panel\'s dialogue speakers against the panel description and the canon cast.',
