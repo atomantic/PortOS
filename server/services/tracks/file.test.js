@@ -30,9 +30,12 @@ function reset() {
 
 const journalEntries = () => cj.conflictJournalStore().loadAll();
 
+// `renders: []` matches the sanitized shape (no audio → empty history), so the
+// raw fixture hashes identically to the stored sanitized record in the
+// base-hash assertions below — `contentHashForRecord` now includes `renders`.
 const track = (id, extra = {}) => ({
   id, title: id, albumId: '', artistId: '', artist: '', lyrics: '', prompt: '',
-  engine: '', modelId: '', durationSec: null, audioFilename: '',
+  engine: '', modelId: '', durationSec: null, audioFilename: '', renders: [],
   createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
   deleted: false, deletedAt: null, ...extra,
 });

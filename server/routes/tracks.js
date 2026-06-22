@@ -107,6 +107,27 @@ async function requireTrack(id) {
   return track;
 }
 
+// Make `filename` the active audio AND record it in the render history so an
+// uploaded/attached take shows up as a card alongside generated ones. An
+// uploaded render has no engine/model/duration, so the active gen-metadata is
+// cleared (keeps the read-only badges honest). Re-attaching a file already in
+// the history just re-selects it (no duplicate card).
+async function attachAudioAsRender(track, filename) {
+  const existing = (track.renders || []).find((r) => r.audioFilename === filename);
+  if (existing) {
+    const patch = tracks.selectRenderPatch(track, existing.id) || { audioFilename: filename };
+    return tracks.updateTrack(track.id, patch);
+  }
+  const { renders } = tracks.buildRenderAppend(track, { audioFilename: filename });
+  return tracks.updateTrack(track.id, {
+    audioFilename: filename,
+    engine: '',
+    modelId: '',
+    durationSec: null,
+    renders,
+  });
+}
+
 // Membership reconcile, track→album direction (the inverse of the album route's
 // reconcileAlbumMembership). When a track's `albumId` changes, append it to the
 // new album's ordered `trackIds` (if absent) and drop it from the previous
@@ -171,27 +192,49 @@ router.delete('/:id', asyncHandler(async (req, res) => {
 
 // Upload an audio file into the shared library and attach it to this track.
 router.post('/:id/audio/upload', musicUpload, asyncHandler(async (req, res) => {
-  await requireTrack(req.params.id);
+  const track = await requireTrack(req.params.id);
   if (!req.file) throw new ServerError('No audio file uploaded', { status: 400, code: 'TRACK_AUDIO_MISSING_FILE' });
   const { filename, sizeBytes } = await importUploadedTrack(req.file.path, req.file.originalname);
-  const updated = await tracks.updateTrack(req.params.id, { audioFilename: filename });
+  const updated = await attachAudioAsRender(track, filename);
   res.json({ track: updated, filename, sizeBytes });
 }));
 
 // Attach an existing library track (by stored filename) to this track.
 router.post('/:id/audio/attach', asyncHandler(async (req, res) => {
-  await requireTrack(req.params.id);
+  const track = await requireTrack(req.params.id);
   const { filename } = validateRequest(attachSchema, req.body ?? {});
   assertSafeMusicFilename(filename);
   const found = await statMusicTrack(filename);
   if (!found) throw new ServerError('Track not found in the music library', { status: 404, code: 'TRACK_AUDIO_NOT_IN_LIBRARY' });
-  res.json({ track: await tracks.updateTrack(req.params.id, { audioFilename: filename }) });
+  res.json({ track: await attachAudioAsRender(track, filename) });
 }));
 
 // Clear the audio pointer (leaves the library file in place — it may be shared).
+// Does NOT touch the render history — to drop a specific take, use the
+// per-render delete below.
 router.delete('/:id/audio', asyncHandler(async (req, res) => {
   await requireTrack(req.params.id);
   res.json({ track: await tracks.updateTrack(req.params.id, { audioFilename: '' }) });
+}));
+
+// Make a past render the active one (re-point the player + gen-metadata badges
+// at it). The user-authored prompt/lyrics are left untouched — they drive the
+// NEXT generation, independent of which take is selected for playback.
+router.post('/:id/renders/:renderId/select', asyncHandler(async (req, res) => {
+  const track = await requireTrack(req.params.id);
+  const patch = tracks.selectRenderPatch(track, req.params.renderId);
+  if (!patch) throw new ServerError('Render not found', { status: 404, code: 'TRACK_RENDER_NOT_FOUND' });
+  res.json({ track: await tracks.updateTrack(req.params.id, patch) });
+}));
+
+// Remove a render from the history. When it was the active take, the active
+// pointer re-points at the newest remaining render (or clears). The audio bytes
+// stay in the shared library (they may be shared with another track).
+router.delete('/:id/renders/:renderId', asyncHandler(async (req, res) => {
+  const track = await requireTrack(req.params.id);
+  const patch = tracks.deleteRenderPatch(track, req.params.renderId);
+  if (!patch) throw new ServerError('Render not found', { status: 404, code: 'TRACK_RENDER_NOT_FOUND' });
+  res.json({ track: await tracks.updateTrack(req.params.id, patch) });
 }));
 
 export default router;

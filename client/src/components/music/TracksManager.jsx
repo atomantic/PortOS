@@ -13,20 +13,22 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Plus, Loader2, Trash2, Save, Upload, Music2, X, Library } from 'lucide-react';
+import { Plus, Loader2, Trash2, Save, Upload, Music2, Library } from 'lucide-react';
 import toast from '../ui/Toast';
 import { formatTimecode } from '../../utils/formatters';
 import ArtistPicker from './ArtistPicker';
 import MusicGenPanel from './MusicGenPanel';
+import TrackRenderCard from './TrackRenderCard';
+import TrackRenderModal from './TrackRenderModal';
 import {
   listTracks, createTrack, updateTrack, deleteTrack,
-  uploadTrackAudio, attachTrackAudio, clearTrackAudio, listMusicLibrary, listAlbums,
+  uploadTrackAudio, attachTrackAudio, listMusicLibrary, listAlbums,
+  selectTrackRender, deleteTrackRender,
   TRACK_TITLE_MAX, TRACK_LYRICS_MAX, TRACK_PROMPT_MAX,
 } from '../../services/api';
 
 // Cap audio uploads to match the server's MUSIC_UPLOAD_MAX_BYTES (50MB).
 const AUDIO_MAX_BYTES = 50 * 1024 * 1024;
-const AUDIO_SRC = (filename) => `/data/music/${encodeURIComponent(filename)}`;
 
 const emptyForm = () => ({
   title: '', albumId: '', artistId: '', artist: '', lyrics: '', prompt: '', audioFilename: '',
@@ -63,6 +65,12 @@ export default function TracksManager() {
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [library, setLibrary] = useState([]);
   const [albums, setAlbums] = useState([]);
+  // The render shown in the detail/remix modal, and the seed passed to the gen
+  // panel when remixing (nonce bumps per click so re-remixing the same take
+  // re-applies). See remixRender below.
+  const [modalRender, setModalRender] = useState(null);
+  const [remix, setRemix] = useState(null);
+  const remixNonceRef = useRef(0);
   const fileInputRef = useRef(null);
   // Mirrors `selectedId` so async audio handlers can detect a selection change
   // that happened while their server round-trip was in flight (the server write
@@ -202,14 +210,52 @@ export default function TracksManager() {
     }
   };
 
-  const removeAudio = async () => {
-    if (!persisted) { setForm((f) => ({ ...f, audioFilename: '' })); return; }
-    const targetId = persisted.id;
-    const res = await clearTrackAudio(targetId, { silent: true }).catch((err) => { toast.error(err.message || 'Failed to clear audio'); return null; });
-    if (res?.track) {
-      upsertLocal(res.track);
-      if (selectedIdRef.current === targetId) setForm((f) => ({ ...f, audioFilename: '' }));
-    }
+  // Render history — newest first. The active take (the top-level audioFilename
+  // pointer) is highlighted in the grid.
+  const renders = useMemo(() => {
+    const list = Array.isArray(persisted?.renders) ? [...persisted.renders] : [];
+    return list.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+  }, [persisted]);
+  const activeFilename = persisted?.audioFilename || '';
+
+  // After a server-confirmed render mutation, sync the list + mirror the active
+  // pointer into the open form (only when THIS track is still selected — the
+  // user may have switched tracks during the round-trip).
+  const applyRenderResult = (res, targetId) => {
+    if (!res?.track) return;
+    upsertLocal(res.track);
+    if (selectedIdRef.current === targetId) setForm((f) => ({ ...f, audioFilename: res.track.audioFilename || '' }));
+  };
+
+  const selectRender = async (render) => {
+    const targetId = persisted?.id;
+    if (!targetId) return;
+    const res = await selectTrackRender(targetId, render.id, { silent: true })
+      .catch((err) => { toast.error(err.message || 'Failed to select render'); return null; });
+    applyRenderResult(res, targetId);
+  };
+
+  const deleteRender = async (render) => {
+    const targetId = persisted?.id;
+    if (!targetId) return;
+    setModalRender((m) => (m?.id === render.id ? null : m));
+    const res = await deleteTrackRender(targetId, render.id, { silent: true })
+      .catch((err) => { toast.error(err.message || 'Failed to delete render'); return null; });
+    applyRenderResult(res, targetId);
+  };
+
+  // Remix: prefill the editable prompt/lyrics from the take (guard empties so an
+  // uploaded take can't wipe the user's text), seed the gen panel's engine/
+  // model/duration, and close the modal so the panel is in view.
+  const remixRender = (render) => {
+    setModalRender(null);
+    setForm((f) => ({
+      ...f,
+      ...(render.prompt ? { prompt: render.prompt } : {}),
+      ...(render.lyrics ? { lyrics: render.lyrics } : {}),
+    }));
+    remixNonceRef.current += 1;
+    setRemix({ engineId: render.engine, modelId: render.modelId, durationSec: render.durationSec, nonce: remixNonceRef.current });
   };
 
   return (
@@ -315,29 +361,22 @@ export default function TracksManager() {
                 />
               </Field>
 
-              {/* Generation metadata (read-only) — populated when a track is generated. */}
-              {persisted && (persisted.engine || persisted.modelId || persisted.durationSec) ? (
-                <div className="flex flex-wrap items-center gap-2 text-[11px]">
-                  {persisted.engine ? <span className="px-2 py-0.5 rounded-full bg-port-bg border border-port-border text-gray-400">engine: {persisted.engine}</span> : null}
-                  {persisted.modelId ? <span className="px-2 py-0.5 rounded-full bg-port-bg border border-port-border text-gray-400">model: {persisted.modelId}</span> : null}
-                  {persisted.durationSec ? <span className="px-2 py-0.5 rounded-full bg-port-bg border border-port-border text-gray-400">{formatTimecode(persisted.durationSec)}</span> : null}
-                </div>
-              ) : null}
-
               {/* On-device generation — available once the track is saved (the
                   server attaches the audio + metadata to the persisted track).
-                  Uses the CURRENT prompt/lyrics in the form. */}
+                  Uses the CURRENT prompt/lyrics in the form; `remix` seeds the
+                  engine/model/duration from a past take. */}
               {persisted ? (
                 <MusicGenPanel
                   track={persisted}
                   prompt={form.prompt}
                   lyrics={form.lyrics}
+                  remix={remix}
                   onGenerated={(updated) => {
                     upsertLocal(updated); // list update is id-keyed → always safe
                     // Merge ONLY the server-set generation fields into the open
-                    // form (audio + gen metadata mirror onto the form's read-only
-                    // badges/player) so any UNSAVED edits the user made to title/
-                    // artist/album/prompt/lyrics before clicking Generate survive.
+                    // form (the active audio pointer mirrors onto the form) so any
+                    // UNSAVED edits the user made to title/artist/album/prompt/
+                    // lyrics before clicking Generate survive.
                     if (selectedIdRef.current === updated.id) {
                       setForm((f) => ({ ...f, audioFilename: updated.audioFilename || '' }));
                     }
@@ -345,66 +384,81 @@ export default function TracksManager() {
                 />
               ) : null}
 
-              <Field label="Audio" hint="Upload an audio file or attach one from the shared music library. Save the track first.">
-                {form.audioFilename ? (
-                  <div className="space-y-2">
-                    <audio controls src={AUDIO_SRC(form.audioFilename)} className="w-full">
-                      <track kind="captions" />
-                    </audio>
-                    <div className="flex items-center gap-2">
-                      <span className="text-[11px] text-gray-500 truncate flex-1">{form.audioFilename}</span>
+              {/* Render history — every generated/uploaded take as a card. The
+                  active take is highlighted; each card opens a detail/remix modal,
+                  can be made active, remixed, downloaded, or deleted. */}
+              {persisted ? (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <span className="block text-xs uppercase tracking-wider text-gray-500">
+                      Renders{renders.length ? ` (${renders.length})` : ''}
+                    </span>
+                    <div className="flex items-center gap-2 flex-wrap">
                       <button
                         type="button"
-                        onClick={removeAudio}
-                        className="inline-flex items-center gap-1 px-2 py-1 rounded text-gray-400 hover:text-port-error text-xs"
+                        onClick={() => (requireSaved() ? fileInputRef.current?.click() : null)}
+                        disabled={uploading}
+                        className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-bg border border-port-border text-white text-sm hover:border-port-accent disabled:opacity-50"
                       >
-                        <X size={12} /> Remove
+                        {uploading ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />} Upload
                       </button>
+                      <button
+                        type="button"
+                        onClick={openLibrary}
+                        className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-bg border border-port-border text-white text-sm hover:border-port-accent"
+                      >
+                        <Library size={14} /> From library
+                      </button>
+                      <input ref={fileInputRef} type="file" accept="audio/*,.mp3,.wav,.m4a,.ogg,.flac" onChange={handleAudioFile} className="hidden" />
                     </div>
                   </div>
-                ) : (
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <button
-                      type="button"
-                      onClick={() => (requireSaved() ? fileInputRef.current?.click() : null)}
-                      disabled={uploading}
-                      className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-bg border border-port-border text-white text-sm hover:border-port-accent disabled:opacity-50"
-                    >
-                      {uploading ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />} Upload
-                    </button>
-                    <button
-                      type="button"
-                      onClick={openLibrary}
-                      className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-bg border border-port-border text-white text-sm hover:border-port-accent"
-                    >
-                      <Library size={14} /> From library
-                    </button>
-                    <input ref={fileInputRef} type="file" accept="audio/*,.mp3,.wav,.m4a,.ogg,.flac" onChange={handleAudioFile} className="hidden" />
-                  </div>
-                )}
-                {libraryOpen ? (
-                  <div className="mt-2 border border-port-border rounded-lg bg-port-bg max-h-48 overflow-y-auto">
-                    {library.length === 0 ? (
-                      <div className="text-xs text-gray-500 p-3">The music library is empty — upload a track first.</div>
-                    ) : (
-                      <ul className="divide-y divide-port-border">
-                        {library.map((item) => (
-                          <li key={item.filename}>
-                            <button
-                              type="button"
-                              onClick={() => attachFromLibrary(item.filename)}
-                              className="w-full text-left px-3 py-2 text-sm text-gray-300 hover:bg-port-card flex items-center gap-2"
-                            >
-                              <Music2 size={13} className="text-gray-500 shrink-0" />
-                              <span className="flex-1 min-w-0 truncate">{item.label || item.filename}</span>
-                            </button>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-                ) : null}
-              </Field>
+
+                  {renders.length === 0 ? (
+                    <div className="text-xs text-gray-500 border border-dashed border-port-border rounded-lg p-4 text-center">
+                      No renders yet. Generate above, upload a file, or attach one from your library.
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {renders.map((r) => (
+                        <TrackRenderCard
+                          key={r.id}
+                          render={r}
+                          active={r.audioFilename === activeFilename}
+                          onOpen={(rr) => setModalRender(rr)}
+                          onSelect={selectRender}
+                          onRemix={remixRender}
+                          onDelete={deleteRender}
+                        />
+                      ))}
+                    </div>
+                  )}
+
+                  {libraryOpen ? (
+                    <div className="mt-1 border border-port-border rounded-lg bg-port-bg max-h-48 overflow-y-auto">
+                      {library.length === 0 ? (
+                        <div className="text-xs text-gray-500 p-3">The music library is empty — upload a track first.</div>
+                      ) : (
+                        <ul className="divide-y divide-port-border">
+                          {library.map((item) => (
+                            <li key={item.filename}>
+                              <button
+                                type="button"
+                                onClick={() => attachFromLibrary(item.filename)}
+                                className="w-full text-left px-3 py-2 text-sm text-gray-300 hover:bg-port-card flex items-center gap-2"
+                              >
+                                <Music2 size={13} className="text-gray-500 shrink-0" />
+                                <span className="flex-1 min-w-0 truncate">{item.label || item.filename}</span>
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  ) : null}
+                </div>
+              ) : (
+                <p className="text-xs text-gray-500">Save the track first to generate, upload, or attach audio.</p>
+              )}
 
               <div className="flex items-center gap-2 pt-1 flex-wrap">
                 <button
@@ -434,6 +488,17 @@ export default function TracksManager() {
           )}
         </div>
       </div>
+
+      {modalRender ? (
+        <TrackRenderModal
+          render={modalRender}
+          active={modalRender.audioFilename === activeFilename}
+          onClose={() => setModalRender(null)}
+          onSelect={selectRender}
+          onRemix={remixRender}
+          onDelete={deleteRender}
+        />
+      ) : null}
     </div>
   );
 }

@@ -20,7 +20,7 @@ import {
 } from '../../services/api';
 import RuntimeInstallModal from '../install/RuntimeInstallModal';
 
-export default function MusicGenPanel({ track, prompt, lyrics, onGenerated }) {
+export default function MusicGenPanel({ track, prompt, lyrics, onGenerated, remix }) {
   const [engines, setEngines] = useState([]);
   const [loading, setLoading] = useState(true);
   const [engineId, setEngineId] = useState('');
@@ -53,6 +53,21 @@ export default function MusicGenPanel({ track, prompt, lyrics, onGenerated }) {
   useEffect(() => { loadEngines(); }, []);
 
   const engine = useMemo(() => engines.find((e) => e.id === engineId) || null, [engines, engineId]);
+
+  // Remix: seed the engine / model / duration from a past render. Keyed on
+  // `remix.nonce` (bumped per Remix click) so re-clicking the SAME render
+  // re-applies even when its values are unchanged. An uploaded render carries no
+  // engineId — skip the engine swap then and just keep the user's current
+  // selection (the parent still prefills the prompt/lyrics form fields). Setting
+  // engineId + modelId together lets the engine-validity effect below keep the
+  // seeded model (it's in the engine's list because the engine produced it).
+  useEffect(() => {
+    if (!remix) return;
+    if (remix.engineId) setEngineId(remix.engineId);
+    if (remix.modelId) setModelId(remix.modelId);
+    if (remix.durationSec != null) setDurationSec(remix.durationSec);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [remix?.nonce]);
 
   // Keep the model selection valid for the current engine: reset to the engine
   // default ONLY when the selected model isn't in this engine's list. Keying on

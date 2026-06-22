@@ -20,6 +20,19 @@ vi.mock('../services/tracks/index.js', () => ({
   createTrack: vi.fn(async (input) => ({ id: 'track-new', ...input })),
   updateTrack: vi.fn(async (id, patch) => ({ id, ...patch })),
   deleteTrack: vi.fn(async (id) => ({ id })),
+  buildRenderAppend: vi.fn((track, input) => {
+    const render = { id: 'render-x', ...input };
+    return { render, renders: [...(track?.renders || []), render] };
+  }),
+  selectRenderPatch: vi.fn((track, renderId) => {
+    const r = (track.renders || []).find((x) => x.id === renderId);
+    return r ? { audioFilename: r.audioFilename, engine: r.engine, modelId: r.modelId, durationSec: r.durationSec } : null;
+  }),
+  deleteRenderPatch: vi.fn((track, renderId) => {
+    const renders = track.renders || [];
+    if (!renders.some((x) => x.id === renderId)) return null;
+    return { renders: renders.filter((x) => x.id !== renderId) };
+  }),
 }));
 
 const lib = vi.hoisted(() => ({
@@ -141,12 +154,28 @@ describe('tracks routes', () => {
     expect(r.body.code).toBe('TRACK_AUDIO_NOT_IN_LIBRARY');
   });
 
-  it('POST /:id/audio/attach attaches an existing library track', async () => {
+  it('POST /:id/audio/attach attaches an existing library track and records it as a render', async () => {
     tracks.getTrack.mockResolvedValue({ id: 'track-1', title: 'Intro' });
     lib.store.set('music-1.mp3', true);
     const r = await request(app).post('/api/tracks/track-1/audio/attach').send({ filename: 'music-1.mp3' });
     expect(r.status).toBe(200);
-    expect(tracks.updateTrack).toHaveBeenCalledWith('track-1', { audioFilename: 'music-1.mp3' });
+    expect(tracks.updateTrack).toHaveBeenCalledWith('track-1', expect.objectContaining({
+      audioFilename: 'music-1.mp3',
+      engine: '',
+      renders: expect.arrayContaining([expect.objectContaining({ audioFilename: 'music-1.mp3' })]),
+    }));
+  });
+
+  it('POST /:id/audio/attach re-selects (no duplicate card) when the file is already in the history', async () => {
+    tracks.getTrack.mockResolvedValue({
+      id: 'track-1', title: 'Intro', audioFilename: 'other.mp3',
+      renders: [{ id: 'render-1', audioFilename: 'music-1.mp3', engine: 'musicgen', modelId: 'm', durationSec: 5 }],
+    });
+    lib.store.set('music-1.mp3', true);
+    const r = await request(app).post('/api/tracks/track-1/audio/attach').send({ filename: 'music-1.mp3' });
+    expect(r.status).toBe(200);
+    // Re-select path: no `renders` key in the patch (the take already exists).
+    expect(tracks.updateTrack).toHaveBeenCalledWith('track-1', { audioFilename: 'music-1.mp3', engine: 'musicgen', modelId: 'm', durationSec: 5 });
   });
 
   it('DELETE /:id/audio clears the pointer', async () => {
@@ -154,5 +183,39 @@ describe('tracks routes', () => {
     const r = await request(app).delete('/api/tracks/track-1/audio');
     expect(r.status).toBe(200);
     expect(tracks.updateTrack).toHaveBeenCalledWith('track-1', { audioFilename: '' });
+  });
+
+  it('POST /:id/renders/:renderId/select makes a past render active', async () => {
+    tracks.getTrack.mockResolvedValue({
+      id: 'track-1', title: 'Intro', audioFilename: 'b.wav',
+      renders: [{ id: 'render-a', audioFilename: 'a.wav', engine: 'musicgen', modelId: 'm1', durationSec: 10 }],
+    });
+    const r = await request(app).post('/api/tracks/track-1/renders/render-a/select');
+    expect(r.status).toBe(200);
+    expect(tracks.updateTrack).toHaveBeenCalledWith('track-1', { audioFilename: 'a.wav', engine: 'musicgen', modelId: 'm1', durationSec: 10 });
+  });
+
+  it('POST /:id/renders/:renderId/select 404s for an unknown render', async () => {
+    tracks.getTrack.mockResolvedValue({ id: 'track-1', title: 'Intro', renders: [] });
+    const r = await request(app).post('/api/tracks/track-1/renders/missing/select');
+    expect(r.status).toBe(404);
+    expect(r.body.code).toBe('TRACK_RENDER_NOT_FOUND');
+  });
+
+  it('DELETE /:id/renders/:renderId removes a render', async () => {
+    tracks.getTrack.mockResolvedValue({
+      id: 'track-1', title: 'Intro', audioFilename: 'a.wav',
+      renders: [{ id: 'render-a', audioFilename: 'a.wav' }, { id: 'render-b', audioFilename: 'b.wav' }],
+    });
+    const r = await request(app).delete('/api/tracks/track-1/renders/render-a');
+    expect(r.status).toBe(200);
+    expect(tracks.updateTrack).toHaveBeenCalledWith('track-1', { renders: [{ id: 'render-b', audioFilename: 'b.wav' }] });
+  });
+
+  it('DELETE /:id/renders/:renderId 404s for an unknown render', async () => {
+    tracks.getTrack.mockResolvedValue({ id: 'track-1', title: 'Intro', renders: [] });
+    const r = await request(app).delete('/api/tracks/track-1/renders/missing');
+    expect(r.status).toBe(404);
+    expect(r.body.code).toBe('TRACK_RENDER_NOT_FOUND');
   });
 });

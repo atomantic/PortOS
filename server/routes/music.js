@@ -296,12 +296,30 @@ router.post('/generate', asyncHandler(async (req, res) => {
   // including an intentional '' clear (the audio was generated without lyrics) —
   // but an ABSENT lyrics field leaves the track's lyrics untouched. A non-lyric
   // engine never writes lyrics (it can't erase a song's words by adding a bed).
+  const durationSec = Math.round(result.durationSec);
+  // The lyrics actually used for THIS render (snapshotted onto the render card):
+  // what the caller sent for a lyric-aware engine, else the track's saved lyrics.
+  const renderLyrics = engine.lyrics
+    ? (body.lyrics ?? existing?.lyrics ?? '')
+    : (existing?.lyrics ?? '');
+  // Append to the existing history (sanitizeTrack de-dups + caps); a new track
+  // seeds the array with this first render.
+  const { renders } = tracks.buildRenderAppend(existing, {
+    audioFilename: result.filename,
+    prompt: body.prompt,
+    lyrics: renderLyrics,
+    engine: result.engine,
+    modelId: result.modelId,
+    durationSec,
+  });
+
   const meta = {
     audioFilename: result.filename,
     engine: result.engine,
     modelId: result.modelId,
-    durationSec: Math.round(result.durationSec),
+    durationSec,
     prompt: body.prompt,
+    renders,
   };
   if (engine.lyrics && body.lyrics !== undefined) meta.lyrics = body.lyrics;
 

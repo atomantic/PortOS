@@ -11,13 +11,19 @@ import { randomUUID } from 'crypto';
 import { query, withTransaction } from '../../lib/db.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { mirrorTimestamp } from '../../lib/pgTimestamp.js';
-import { buildTrackRecord, applyTrackPatch, mergeTrackRecord } from './logic.js';
+import { sanitizeTrack, buildTrackRecord, applyTrackPatch, mergeTrackRecord } from './logic.js';
 import {
   maybeJournalBeforeOverwrite, setSyncBaseHash, contentHashForRecord, flushBaseHashes, deleteSyncBaseHash,
 } from '../../lib/conflictJournal.js';
 
+// Re-sanitize the stored JSONB on read (mirrors the file backend's loadAll →
+// sanitizeTrack). The record was already sanitized on write, so for an in-shape
+// row this is a no-op; the reason to do it is forward-compat BACKFILL — an
+// additive field like `renders[]` is synthesized for legacy rows the next time
+// they're read (and persisted whole on the next write), without a DB data
+// migration (the scripts/migrations runner executes before the pool is up).
 function rowToTrack(row) {
-  return row ? row.data : null;
+  return row ? sanitizeTrack(row.data) : null;
 }
 
 async function persist(exec, track) {

@@ -1515,10 +1515,21 @@ async function buildAlbumAssetManifest(album) {
 }
 
 async function buildTrackAssetManifest(track) {
-  const filename = trackAudioFilename(track?.audioFilename);
-  if (!filename) return [];
-  const entry = await hashSimpleAsset(filename, 'music', PATHS.music);
-  return entry ? [entry] : [];
+  // A track now carries a render history — every render's audio must ride the
+  // manifest, not just the active pointer, so a peer can play any received card.
+  // Union the active filename with each render's; de-dup (the active render's
+  // bytes are also in renders[]).
+  const filenames = new Set();
+  const active = trackAudioFilename(track?.audioFilename);
+  if (active) filenames.add(active);
+  for (const r of Array.isArray(track?.renders) ? track.renders : []) {
+    const f = trackAudioFilename(r?.audioFilename);
+    if (f) filenames.add(f);
+  }
+  const entries = await Promise.all(
+    [...filenames].map((filename) => hashSimpleAsset(filename, 'music', PATHS.music)),
+  );
+  return entries.filter(Boolean);
 }
 
 /**

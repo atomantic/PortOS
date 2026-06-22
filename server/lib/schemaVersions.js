@@ -159,7 +159,18 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // music record type it cannot parse while unrelated categories keep flowing.
   artists: 1,
   albums: 1,
-  tracks: 1,
+  // tracks v2 = `track.renders[]` render-history added (every generated/uploaded
+  // take, so the studio shows each render as a card + can re-select an earlier
+  // one). Additive + gracefully degrading, but version-gated for the same reason
+  // as the universes relationshipLinks/attachments fields: a ≤v1 peer that
+  // receives and re-sanitizes a track through its renders-unaware `sanitizeTrack`
+  // would silently strip the history (keeping only the active pointer) and
+  // last-writer-wins the loss back onto the newer peer. Bumping makes the older
+  // peer reject the ahead-version track transfer instead. Per-category gate →
+  // only track sync pauses with old peers; artists/albums keep flowing. The
+  // backfill itself needs no migration — `sanitizeTrack` synthesizes a render
+  // from the legacy active pointer on read (see services/tracks/logic.js).
+  tracks: 2,
   // v1 = creative ingredients catalog (Postgres tables: catalog_scraps,
   // catalog_ingredients, catalog_ingredient_sources, catalog_ingredient_refs).
   // v2 = `catalog_ingredients.search_tsv` expanded to also index the

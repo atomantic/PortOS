@@ -10,8 +10,10 @@
  * federate when peers enable the Tracks sync category.
  */
 
+import { randomUUID } from 'crypto';
 import { checkHealth, ensureSchema } from '../../lib/db.js';
 import { emitRecordUpdated, emitRecordDeleted, autoSubscribeRecordToAllPeers } from '../sharing/recordEvents.js';
+import { makeRender as makeRenderLogic } from './logic.js';
 
 export {
   TITLE_MAX,
@@ -25,8 +27,13 @@ export {
   AUDIO_FILENAME_MAX,
   DURATION_MIN_SEC,
   DURATION_MAX_SEC,
+  RENDER_ID_MAX,
+  RENDERS_MAX,
   TRACK_ID_RE,
   trackAudioFilename,
+  makeRender,
+  selectRenderPatch,
+  deleteRenderPatch,
 } from './logic.js';
 
 let backend = null;
@@ -47,6 +54,17 @@ async function selectBackend() {
   backend = await import('./db.js');
   backendName = 'postgres';
   return backend;
+}
+
+/**
+ * Mint a new render (unique id + timestamp) and return the appended history +
+ * the render itself. Centralizes the id/now generation + append so every
+ * render-creation path (generate, upload, attach) stays identical — callers
+ * layer their own active-pointer fields onto the returned `renders` patch.
+ */
+export function buildRenderAppend(track, renderInput) {
+  const render = makeRenderLogic(renderInput, { id: `render-${randomUUID()}`, now: new Date().toISOString() });
+  return { render, renders: [...(track?.renders || []), render] };
 }
 
 /** Name of the active backend, or null before first call (for diagnostics/tests). */

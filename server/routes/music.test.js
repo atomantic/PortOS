@@ -29,6 +29,10 @@ vi.mock('../services/tracks/index.js', () => ({
   getTrack: vi.fn(),
   createTrack: vi.fn(async (input) => ({ id: 'track-new', ...input })),
   updateTrack: vi.fn(async (id, patch) => ({ id, ...patch })),
+  buildRenderAppend: vi.fn((track, input) => {
+    const render = { id: 'render-x', ...input };
+    return { render, renders: [...(track?.renders || []), render] };
+  }),
 }));
 
 const models = vi.hoisted(() => ({ list: vi.fn(), add: vi.fn(), remove: vi.fn() }));

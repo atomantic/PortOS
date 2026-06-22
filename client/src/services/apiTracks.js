@@ -1,5 +1,9 @@
 import { request } from './apiCore.js';
 
+// Static-asset URL for a track's audio bytes in the shared music library
+// (data/music/). Not an API call — a plain href for <audio>/download links.
+export const trackAudioUrl = (filename) => `/data/music/${encodeURIComponent(filename)}`;
+
 // ---- Music tracks ----
 // A track is a single song/recording — standalone or part of an album. It stores
 // a pointer (`audioFilename`) into the shared music library; the bytes are
@@ -38,6 +42,23 @@ export const clearTrackAudio = (id, requestOptions = {}) => request(`/tracks/${e
   method: 'DELETE',
   ...requestOptions,
 });
+
+// --- Render history ----
+// A track keeps every generated/uploaded take in `track.renders[]`. The active
+// take is mirrored onto the top-level `audioFilename`/`engine`/`modelId`/
+// `durationSec`. Both endpoints return `{ track }` (the updated record).
+
+// Make a past render the active one (re-points the player + gen-metadata badges).
+export const selectTrackRender = (id, renderId, requestOptions = {}) => request(
+  `/tracks/${encodeURIComponent(id)}/renders/${encodeURIComponent(renderId)}/select`,
+  { method: 'POST', ...requestOptions },
+);
+
+// Remove a render from the history (the audio bytes stay in the shared library).
+export const deleteTrackRender = (id, renderId, requestOptions = {}) => request(
+  `/tracks/${encodeURIComponent(id)}/renders/${encodeURIComponent(renderId)}`,
+  { method: 'DELETE', ...requestOptions },
+);
 
 // Upload an audio file (FormData with a `track` file field) into the library and
 // attach it to this track. The caller builds the FormData; we pass it through as
