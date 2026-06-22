@@ -48,4 +48,31 @@ describe('MediaCard', () => {
       /^\/data\/images\/late\.png\?_t=/
     );
   });
+
+  it('arms an inline confirm row before deleting instead of deleting on first click', () => {
+    const onDelete = vi.fn();
+    render(<MediaCard item={imageItem} onDelete={onDelete} showCollectionMenu={false} showMoodBoardMenu={false} />);
+
+    // First click on the trash button arms confirmation — it must NOT delete yet.
+    fireEvent.click(screen.getByTitle('Delete'));
+    expect(onDelete).not.toHaveBeenCalled();
+    expect(screen.getByText('Delete this image?')).toBeInTheDocument();
+
+    // Confirming fires the delete with the item.
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    expect(onDelete).toHaveBeenCalledWith(imageItem);
+  });
+
+  it('lets the user cancel the delete confirmation without deleting', () => {
+    const onDelete = vi.fn();
+    render(<MediaCard item={imageItem} onDelete={onDelete} showCollectionMenu={false} showMoodBoardMenu={false} />);
+
+    fireEvent.click(screen.getByTitle('Delete'));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    expect(onDelete).not.toHaveBeenCalled();
+    expect(screen.queryByText('Delete this image?')).not.toBeInTheDocument();
+    // Action row is restored, so the trash button is available again.
+    expect(screen.getByTitle('Delete')).toBeInTheDocument();
+  });
 });
