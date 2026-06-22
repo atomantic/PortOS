@@ -70,7 +70,12 @@ router.get('/catalog', asyncHandler(async (req, res) => {
 // registry and surface in the Music studio.
 router.get('/huggingface-search', asyncHandler(async (req, res) => {
   const { backend, q, category, limit } = validateRequest(localLlmHuggingFaceSearchSchema, req.query)
-  const installed = (await listModels(backend)).map((m) => m.id)
+  // Carry LM Studio's per-model quantization into the installed id (`<id>@<quant>`)
+  // so the catalog can mark per-quant installed state — LM Studio's `id` alone is
+  // repo-level, which would otherwise flag every quant of a repo as installed.
+  const installed = (await listModels(backend)).map((m) => (
+    backend === 'lmstudio' && m.quantization ? `${m.id}@${m.quantization}` : m.id
+  ))
   // Cross-reference the shared audio-model registry so a model already installed
   // via the Music studio (or this tab) shows "Installed". Only the user-added
   // repos count — shipped engine defaults download lazily on first generation.

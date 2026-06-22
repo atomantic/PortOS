@@ -125,7 +125,10 @@ function estimatedResidentBytes(sizeBytes) {
 // 'unknown' when either the file size or the machine's memory is unavailable.
 function classifyFit(sizeBytes, usableBytes) {
   const resident = estimatedResidentBytes(sizeBytes)
-  if (resident == null || !Number.isFinite(usableBytes) || usableBytes <= 0) return 'unknown'
+  // null usableBytes = no system-memory data → 'unknown'. A real but tiny budget
+  // (0 on a machine at/below the reserved headroom) is NOT unknown — every model
+  // is 'too-large' there, which is exactly what the user should see.
+  if (resident == null || usableBytes == null || !Number.isFinite(usableBytes)) return 'unknown'
   if (resident > usableBytes) return 'too-large'
   if (resident > usableBytes * 0.6) return 'tight'
   return 'comfortable'
@@ -133,12 +136,11 @@ function classifyFit(sizeBytes, usableBytes) {
 
 const normalizeText = (value) => String(value || '').trim()
 
-function normalizeInstalledForBackend(backend, id) {
-  const raw = normalizeText(id).toLowerCase().replace(/:latest$/, '')
-  if (backend === 'ollama') return raw
-  // Drop a trailing `@quant` (added when a specific variant is selected) so the
-  // bare-repo installed list still matches a quant-tagged result id.
-  return raw.split('/').pop().replace(/@[^/]*$/, '').replace(/[-.]gguf$/i, '')
+// Ollama installed ids are full `hf.co/<repo>:<quant>` strings — lowercase and
+// drop a `:latest` tag for comparison. (LM Studio matching goes through
+// lmStudioParts instead, which is quant-aware.)
+function normalizeOllamaInstalled(id) {
+  return normalizeText(id).toLowerCase().replace(/:latest$/, '')
 }
 
 function repoIdOf(model) {
@@ -361,20 +363,39 @@ function applyVariant(result, variant) {
   result.size = variant.size
 }
 
-// Is a specific backend install id present in the installed set? Ollama tracks
-// each `hf.co/<repo>:<quant>` as its own model, so this is quant-precise there;
-// LM Studio detection is repo-level (the normalizer drops `@quant`), so every
-// quant of an installed repo reads installed — the best granularity LM Studio's
-// list exposes.
-function installIdInstalled(backend, installId, repository, installedSet) {
-  if (installedSet.has(normalizeInstalledForBackend(backend, installId))) return true
-  if (backend === 'lmstudio') return installedSet.has(normalizeInstalledForBackend(backend, repository))
-  return false
+// Parse an LM Studio identifier into its repo base + quant for quant-aware
+// install matching. Installed ids arrive as `<id>@<quant>` (the route appends
+// LM Studio's reported quantization) and variant ids as `<repo>@<quant>`; both
+// reduce to the last path segment minus the `-gguf` suffix.
+function lmStudioParts(id) {
+  const raw = normalizeText(id).toLowerCase().replace(/:latest$/, '')
+  const seg = raw.split('/').pop()
+  const at = seg.indexOf('@')
+  const base = (at >= 0 ? seg.slice(0, at) : seg).replace(/[-.]gguf$/i, '')
+  const quant = at >= 0 ? seg.slice(at + 1) : ''
+  return { base, quant }
+}
+
+// Is a specific backend install id present among the installed ids? Ollama tracks
+// each `hf.co/<repo>:<quant>` as its own model, so the match is quant-precise.
+// LM Studio is matched per-quant too — but only when the installed entry carries
+// a quant (it does when LM Studio reported a `quantization`); an entry without
+// one falls back to repo-level, the best granularity that entry exposes. This is
+// why selecting an un-downloaded quant correctly shows Install instead of hiding it.
+function installIdInstalled(backend, installId, repository, installedIds) {
+  if (backend === 'ollama') {
+    const target = normalizeOllamaInstalled(installId)
+    return installedIds.some((id) => normalizeOllamaInstalled(id) === target)
+  }
+  const v = lmStudioParts(installId)
+  return installedIds.some((id) => {
+    const e = lmStudioParts(id)
+    return e.base === v.base && (e.quant === '' || e.quant === v.quant)
+  })
 }
 
 function isInstalled(backend, result, installedIds) {
-  const installedSet = new Set(installedIds.map((id) => normalizeInstalledForBackend(backend, id)))
-  return installIdInstalled(backend, result.id, result.repository, installedSet)
+  return installIdInstalled(backend, result.id, result.repository, installedIds)
 }
 
 function toResult(model, backend, requestedCategory, installedIds, installedAudioRepos = new Set()) {
@@ -509,7 +530,6 @@ function contextLengthOf(model) {
 // from the same cached repo record, so a result missing either triggers one
 // (deduped) per-repo fetch.
 async function enrichWithSizes(results, { backend, usableBytes, installedIds = [] } = {}) {
-  const installedSet = new Set(installedIds.map((id) => normalizeInstalledForBackend(backend, id)))
   await Promise.allSettled(results.map(async (result) => {
     const isAudio = result.category === 'audio'
     const needsSize = !Number.isFinite(result.sizeBytes)
@@ -525,7 +545,7 @@ async function enrichWithSizes(results, { backend, usableBytes, installedIds = [
       if (variants.length > 0) {
         // Per-quant installed state — Ollama tracks each quant separately, so the
         // card must gate Install on the *selected* variant, not one repo-wide flag.
-        for (const v of variants) v.installed = installIdInstalled(backend, v.installId, result.repository, installedSet)
+        for (const v of variants) v.installed = installIdInstalled(backend, v.installId, result.repository, installedIds)
         // Always anchor the result on one of its own variants so the install id
         // and the client's controlled <select> agree. Prefer the RAM-aware pick;
         // otherwise the QUANT_PRIORITY default toResult chose (matched by quant);
@@ -533,7 +553,10 @@ async function enrichWithSizes(results, { backend, usableBytes, installedIds = [
         // default id — and any repo where the blobs endpoint omits sizes, so the
         // budget pick can't fire — would match no variant, flagging zero
         // recommended and making Install pull a different quant than the one shown.
-        const chosen = (usableBytes ? pickVariantForBudget(variants, usableBytes) : null)
+        // `usableBytes != null` (not truthiness): 0 is a real budget on a tiny
+        // machine — pick the smallest (all flagged too-large) rather than falling
+        // through to QUANT_PRIORITY as if memory were unknown.
+        const chosen = (usableBytes != null ? pickVariantForBudget(variants, usableBytes) : null)
           || variants.find((v) => v.quant && v.quant === result.quant)
           || variants[0]
         applyVariant(result, chosen)
