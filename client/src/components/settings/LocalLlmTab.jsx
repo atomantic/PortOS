@@ -805,6 +805,11 @@ export function LocalLlmTab() {
                       <div className="flex items-center gap-1.5 flex-wrap text-[11px] text-gray-600 mt-1">
                         <span className="text-gray-500">{categoryLabel(m.category)}</span>
                         <span>{size}</span>
+                        {/* Single-variant cards (e.g. MLX) have no quant picker, so
+                            surface the RAM-fit hint here instead of in the picker row. */}
+                        {fitMeta && !hasVariantPicker && (
+                          <span className={fitMeta.cls} title="Fit on this machine — model weights + ~20% overhead vs. usable memory">{fitMeta.label}</span>
+                        )}
                         {ctxLabel && (
                           <span title="Native context window (max tokens)">{ctxLabel}</span>
                         )}
