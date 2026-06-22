@@ -122,17 +122,39 @@ router.post('/import/xml', uploadXml, asyncHandler(async (req, res) => {
     // 'close' can fire and drop records whose buffers haven't finished.
     const clinicalReads = [];
 
+    const src = createReadStream(filePath);
+    const parser = parseZip();
+    let xmlWriteStream = null;
+
     await new Promise((resolve, reject) => {
       let settled = false;
-      const settle = (fn) => (...args) => { if (!settled) { settled = true; fn(...args); } };
+      const settle = (fn) => (...args) => {
+        if (settled) return;
+        settled = true;
+        // On failure, tear down extraction immediately: stop the read stream,
+        // the ZIP parser, and any in-flight XML write so nothing keeps consuming
+        // work — and, crucially, so a buffered XML write can't re-create xmlPath
+        // right after the cleanup below unlinks it (the write-after-unlink race
+        // chatgptZipImport guards against). Destroying the write stream discards
+        // its pending writes, so the post-reject unlink is final.
+        if (fn === reject) {
+          src.destroy();
+          parser.destroy?.();
+          xmlWriteStream?.destroy();
+        }
+        fn(...args);
+      };
 
-      createReadStream(filePath)
-        .pipe(parseZip())
+      // `.pipe()` doesn't forward source errors, so handle a read failure on the
+      // upload stream explicitly (otherwise it would throw unhandled).
+      src.on('error', settle(reject));
+      src
+        .pipe(parser)
         .on('entry', (entry) => {
           if (entry.path === 'apple_health_export/export.xml' || entry.path === 'export.xml') {
             foundXml = true;
-            const ws = createWriteStream(xmlPath);
-            entry.pipe(ws)
+            xmlWriteStream = createWriteStream(xmlPath);
+            entry.pipe(xmlWriteStream)
               .on('finish', () => { xmlWriteFinished = true; })
               .on('error', settle(reject));
           } else if (entry.path.includes('clinical_records/') && entry.path.endsWith('.json')) {
