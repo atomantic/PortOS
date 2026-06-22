@@ -461,6 +461,31 @@ describe('huggingFaceCatalog', () => {
     })
   })
 
+  describe('empty-query category browse', () => {
+    // Clicking a category tag with no search term seeds the Hub query from
+    // CATEGORY_SEARCH. The Hub `search` param is AND-across the space-separated
+    // tokens against the model id, so a multi-word phrase ('coding coder agentic
+    // code gguf') matches ZERO repos and the tab renders blank. Each browse
+    // phrase must stay a short keyword + 'gguf' so the default browse returns the
+    // top-downloaded matches. These tests lock that in for the GGUF categories.
+    const sentSearch = () => {
+      const call = fetch.mock.calls.find(([u]) => /[?&]search=/.test(String(u)) && /filter=gguf/.test(String(u)))
+      return decodeURIComponent(String(call[0]).match(/[?&]search=([^&]*)/)[1])
+    }
+
+    it.each(['chat', 'reasoning', 'coding', 'vision', 'embedding', 'lightweight', 'multilingual'])(
+      'seeds a short (<=2 token) gguf browse phrase for category %s',
+      async (category) => {
+        fetch.mockResolvedValue(response([]))
+        await searchHuggingFaceModels({ backend: 'ollama', category }) // no query
+        const search = sentSearch()
+        // A 5-word AND phrase is exactly the bug that blanked the coding tab.
+        expect(search.trim().split(/\s+/).length).toBeLessThanOrEqual(2)
+        expect(search).toMatch(/gguf/)
+      }
+    )
+  })
+
   describe('MLX models (Apple Silicon)', () => {
     // URL-aware mock: order matters (most-specific first). MLX adds a parallel
     // `filter=mlx` query + per-repo blobs fetch, so a sequential mock is fragile;
@@ -558,7 +583,7 @@ describe('huggingFaceCatalog', () => {
 
       const mlxCall = fetch.mock.calls.find(([u]) => String(u).includes('filter=mlx'))
       expect(mlxCall).toBeTruthy()
-      // The category browse phrase ('…code gguf') must be rewritten for MLX, or
+      // The category browse phrase ('coder gguf') must be rewritten for MLX, or
       // `filter=mlx&search=…gguf` filters every MLX-only repo out of the browse.
       expect(String(mlxCall[0])).not.toMatch(/search=[^&]*gguf/)
       expect(String(mlxCall[0])).toMatch(/search=[^&]*mlx/)

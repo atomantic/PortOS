@@ -13,17 +13,28 @@ const HF_TIMEOUT_MS = 12_000
 const CATALOG_ENRICH_TIMEOUT_MS = 5_000
 
 const CATEGORY_IDS = new Set(LOCAL_LLM_CATEGORIES.map((c) => c.id))
+// Default browse phrases used when the search box is empty (and as the seed when
+// a category tag is clicked with no query). The Hub `search` param is AND-across
+// the space-separated tokens against the model id, so a multi-word phrase like
+// 'coding coder agentic code gguf' matches ZERO repos (no id contains all five) —
+// the category tab then renders blank. Keep each phrase to a single category
+// keyword + 'gguf' so the default browse reliably returns the top-downloaded
+// matches for that category. The user's typed query overrides these entirely.
 const CATEGORY_SEARCH = {
-  chat: 'instruct chat gguf',
-  reasoning: 'reasoning thinking gguf',
-  coding: 'coding coder agentic code gguf',
-  vision: 'vision image text gguf',
+  chat: 'instruct gguf',
+  reasoning: 'reasoning gguf',
+  coding: 'coder gguf',
+  vision: 'vision gguf',
   // Audio is NOT a GGUF category — the search relaxes the GGUF filter for it
   // (see `searchHuggingFaceModels`) and these terms surface generation models.
+  // Curated audio suggestions lead this list, so the live phrase can stay broad.
   audio: 'music audio text-to-music text-to-audio song generation',
-  embedding: 'embedding sentence-transformers gguf',
-  lightweight: 'small 4b 3b 2b gguf',
-  multilingual: 'multilingual qwen llama gguf'
+  embedding: 'embedding gguf',
+  // 'lightweight' means small param count — '1b' matches the genuinely tiny
+  // models (gemma-1b, llama-3.2-1b, qwen-1.7b); a name token like 'small' would
+  // instead surface Mistral-Small-24B, which is the opposite of lightweight.
+  lightweight: '1b gguf',
+  multilingual: 'multilingual gguf'
 }
 
 // Map a Hugging Face audio repo onto the PortOS music engine that can actually
