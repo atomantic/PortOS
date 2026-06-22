@@ -29,10 +29,33 @@ const REGISTRY_TIMEOUT_MS = 12_000
 // this media type (template/params/license layers carry the other media types).
 const MANIFEST_ACCEPT = 'application/vnd.docker.distribution.manifest.v2+json'
 const MODEL_LAYER_MEDIA_TYPE = 'application/vnd.ollama.image.model'
-// Upper bound on distinct quant variants probed per card. After dedup-by-quant
-// at the target size this is rarely hit (a model ships ~4–8 quants), but it caps
-// the manifest fan-out for a pathologically tag-heavy model.
-const MAX_VARIANTS = 12
+// Defensive upper bound on distinct quant variants probed per card. The dedup-by-quant
+// at the target size already bounds the candidate set to the finite GGUF/Ollama quant
+// vocabulary (~25–30 incl. every IQ/K-quant), so a real model never approaches this — it
+// only guards a pathological/adversarial registry response. It is applied AFTER ranking
+// candidates by descending fidelity (see fidelityRank) so that, in the impossible event
+// it ever truncates, the high-fidelity builds a big-memory machine wants survive rather
+// than whichever quants happened to appear first in the registry's tag order.
+const MAX_VARIANTS = 32
+
+// Descending-fidelity order of canonical (uppercase) quant labels, used only to order
+// candidates before the defensive cap above. Higher index in this list = lower fidelity;
+// unknown labels rank last. This is a registry-local ordering (distinct from
+// huggingFaceCatalog's QUANT_PRIORITY, which is a curated *default-pick* preference, not a
+// full fidelity ranking) — the RAM-aware default itself is chosen downstream from real
+// manifest sizes, so this only decides which quants get probed if the cap ever bites.
+const QUANT_FIDELITY = [
+  'F32', 'FP32', 'BF16', 'F16', 'FP16',
+  'Q8_0', 'Q6_K',
+  'Q5_K_M', 'Q5_K_S', 'Q5_1', 'Q5_0',
+  'Q4_K_XL', 'Q4_K_M', 'Q4_K_S', 'Q4_1', 'Q4_0', 'IQ4_NL', 'IQ4_XS',
+  'Q3_K_L', 'Q3_K_M', 'Q3_K_S', 'IQ3_M', 'IQ3_S', 'IQ3_XXS',
+  'Q2_K', 'IQ2_M', 'IQ2_S', 'IQ2_XS', 'IQ2_XXS', 'IQ1_M', 'IQ1_S'
+]
+function fidelityRank(quant) {
+  const i = QUANT_FIDELITY.indexOf(String(quant).toUpperCase())
+  return i === -1 ? QUANT_FIDELITY.length : i // unknown → lowest fidelity (sorted/dropped last)
+}
 
 const tagsCache = new Map()
 const manifestCache = new Map()
@@ -185,7 +208,12 @@ export async function fetchOllamaRegistryVariants(id, { paramsHint = null, timeo
     const existing = byQuant.get(quant)
     if (!existing || preferTag(tag, existing)) byQuant.set(quant, tag)
   }
-  const chosen = [...byQuant.entries()].slice(0, MAX_VARIANTS)
+  // Rank the deduped quants by descending fidelity BEFORE the defensive cap, so a
+  // truncation (which a real model never triggers) can't drop the high-fidelity builds
+  // by registry tag order. Every matching quant is kept for normal models.
+  const chosen = [...byQuant.entries()]
+    .sort(([qa], [qb]) => fidelityRank(qa) - fidelityRank(qb))
+    .slice(0, MAX_VARIANTS)
   if (chosen.length === 0) return []
 
   // Manifest size fan-out is bounded by the dedup + cap above; fetch concurrently.
