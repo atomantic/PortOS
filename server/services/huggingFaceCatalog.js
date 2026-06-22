@@ -406,10 +406,13 @@ function lmStudioParts(id) {
 
 // Is a specific backend install id present among the installed ids? Ollama tracks
 // each `hf.co/<repo>:<quant>` as its own model, so the match is quant-precise.
-// LM Studio is matched per-quant too — but only when the installed entry carries
-// a quant (it does when LM Studio reported a `quantization`); an entry without
-// one falls back to repo-level, the best granularity that entry exposes. This is
-// why selecting an un-downloaded quant correctly shows Install instead of hiding it.
+// LM Studio matches on the repo base plus a quant match — but repo-level fallback
+// applies when EITHER side lacks a quant: an installed entry without one (LM Studio
+// reported no `quantization`) OR a target without one. The target-side fallback is
+// what an MLX repo needs — its install id is the bare repo (the quant is baked into
+// the repo name, e.g. `mlx-community/Foo-4bit`), so it must still match an installed
+// `mlx-community/Foo-4bit@4bit`. GGUF variants always carry a quant, so this never
+// loosens per-quant GGUF matching; it only adds the missing repo-level case.
 function installIdInstalled(backend, installId, repository, installedIds) {
   if (backend === 'ollama') {
     const target = normalizeOllamaInstalled(installId)
@@ -418,7 +421,7 @@ function installIdInstalled(backend, installId, repository, installedIds) {
   const v = lmStudioParts(installId)
   return installedIds.some((id) => {
     const e = lmStudioParts(id)
-    return e.base === v.base && (e.quant === '' || e.quant === v.quant)
+    return e.base === v.base && (e.quant === '' || v.quant === '' || e.quant === v.quant)
   })
 }
 

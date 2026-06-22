@@ -512,8 +512,11 @@ describe('huggingFaceCatalog', () => {
         [(u) => u.includes('blobs=true'), mlxBlobs(repo, { 'model.safetensors': 18_000_000_000 })],
       ]))
 
+      // The route appends LM Studio's reported quantization, so an installed MLX
+      // model arrives as `<repo>@<quant>` — the bare-repo MLX target must still
+      // match it (repo-level fallback when the target carries no quant).
       const results = await searchHuggingFaceModels({
-        backend: 'lmstudio', query: 'qwythos', systemMemoryBytes: 128 * 1024 ** 3, appleSilicon: true, installedIds: [repo]
+        backend: 'lmstudio', query: 'qwythos', systemMemoryBytes: 128 * 1024 ** 3, appleSilicon: true, installedIds: [`${repo}@bf16`]
       })
       const mlx = results.find((r) => r.repository === repo)
 
