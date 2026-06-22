@@ -157,10 +157,18 @@ function siblingsOf(model) {
   return Array.isArray(model?.siblings) ? model.siblings : []
 }
 
+// Multimodal projector / auxiliary GGUFs (llama.cpp's `mmproj-*`) are not
+// standalone model quants — they ship alongside a model and the runtime loads
+// them automatically. They must never be offered as an installable variant or
+// chosen as the RAM-aware default (a projector is small, so on a tight box the
+// "largest that fits" picker would otherwise land on it). Excluded here so both
+// the variant list and pickGgufFile's default skip them.
+const AUX_GGUF_RE = /mmproj/i
+
 function ggufFilesOf(model) {
   return siblingsOf(model)
     .map((s) => ({ name: normalizeText(s.rfilename || s.name), size: Number.isFinite(s.size) ? s.size : null }))
-    .filter((file) => /\.gguf$/i.test(file.name))
+    .filter((file) => /\.gguf$/i.test(file.name) && !AUX_GGUF_RE.test(file.name))
 }
 
 function hasGgufSignal(model) {

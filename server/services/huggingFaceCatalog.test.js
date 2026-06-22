@@ -301,6 +301,23 @@ describe('huggingFaceCatalog', () => {
       expect(result.installed).toBe(true)
     })
 
+    it('excludes multimodal projector (mmproj) GGUFs from variants and the default pick', async () => {
+      const repo = 'unsloth/Qwen2-VL-7B-GGUF'
+      fetch
+        .mockResolvedValueOnce(listing(repo, ['Qwen2-VL-7B-Q4_K_M.gguf', 'mmproj-Qwen2-VL-7B-f16.gguf']))
+        .mockResolvedValueOnce(blobs(repo, {
+          'Qwen2-VL-7B-Q4_K_M.gguf': 5_000_000_000,
+          'mmproj-Qwen2-VL-7B-f16.gguf': 1_400_000_000,
+        }))
+
+      // 8 GB box: with the projector counted, the tight-budget fallback (smallest)
+      // would wrongly land on the 1.4 GB projector. It must be excluded entirely.
+      const [result] = await searchHuggingFaceModels({ backend: 'ollama', query: 'qwen2-vl', systemMemoryBytes: 8 * 1024 ** 3 })
+
+      expect(result.variants.map((v) => v.quant)).toEqual(['Q4_K_M'])
+      expect(result.id).toBe(`hf.co/${repo}:Q4_K_M`)
+    })
+
     it('marks per-quant installed state for Ollama variants and aligns the result flag with the default', async () => {
       const repo = 'empero-ai/Qwythos-9B-Installed-GGUF'
       fetch
