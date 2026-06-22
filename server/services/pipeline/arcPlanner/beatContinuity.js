@@ -36,10 +36,23 @@ import {
   shapeBeatResolutions,
 } from './context.js';
 
-// Text stages generated FROM the beats — stale once the beats are rewritten, so
-// a beat correction must clear them for regeneration. `idea` (which holds the
-// beats) is excluded; the rest of the text chain (prose → scripts) is downstream.
-const DOWNSTREAM_TEXT_STAGES = TEXT_STAGE_IDS.filter((s) => s !== 'idea');
+// Stages the Series Autopilot generates FROM the beats — all stale once the
+// beats are rewritten, so a beat correction must clear them for regeneration.
+// `idea` (which holds the beats) is the root and is excluded; the rest of the
+// chain the conductor produces is beats → prose → scripts → comicPages art. Only
+// `comicPages` is included from the visual group: it's the one visual stage the
+// autopilot's visualDraft step produces, so it's the only one the autopilot
+// could finish with stale (storyboards/episodeVideo/audio are manual stages the
+// conductor never generates, so it can't leave them stale).
+const DOWNSTREAM_STAGES = [...TEXT_STAGE_IDS.filter((s) => s !== 'idea'), 'comicPages'];
+
+// A downstream stage carries derived content worth clearing when it has text
+// output (prose/scripts) OR rendered comic art (comicPages pages / cover slots).
+const stageHasDerivedContent = (st) => !!(
+  (st?.output && st.output.trim())
+  || (Array.isArray(st?.pages) && st.pages.length)
+  || st?.cover || st?.backCover
+);
 
 // Cross-issue BEAT continuity pass over the whole series. Read-only — returns
 // `{ issues }` shaped like verifyArc. Issues without beats are reviewed at
@@ -170,21 +183,26 @@ export async function applyBeatResolutions(seriesId, series, episodes) {
     })).catch((err) => {
       console.log(`⚠️ beat-continuity: episode ${edit.episodeNumber} beat edit failed: ${err.message}`);
     });
-    // The beats just changed, so any already-generated prose/scripts derived from
-    // them are stale. Clear the unlocked downstream text stages so the conductor's
-    // textStages step regenerates them from the corrected beats — otherwise
-    // `textReady` sees the old scripts as ready and the run finishes with scripts
-    // that contradict the fixed beats. In the normal forward flow these stages are
-    // still empty (beat continuity runs before textStages), so this only bites on a
-    // re-run / resume over already-drafted issues. Mirrors how applyEpisodeResolutions
-    // clears beats when it rewrites a synopsis. A locked downstream stage is the
-    // user's frozen work — leave it untouched.
+    // The beats just changed, so every already-generated stage derived from them
+    // is stale: prose + scripts (textReady) AND the comicPages art (visualReady).
+    // Clear the unlocked ones so the conductor's textStages / visualDraft steps
+    // regenerate from the corrected beats — otherwise those gates see the old
+    // outputs as ready and the run finishes with scripts/art that contradict the
+    // fixed beats. In the normal forward flow these stages are still empty (beat
+    // continuity runs before textStages), so this only bites on a re-run / resume
+    // over already-drafted issues. Mirrors how applyEpisodeResolutions clears beats
+    // when it rewrites a synopsis. A locked stage is the user's frozen work — leave
+    // it untouched. One uniform reset partial works for both shapes: text
+    // sanitizers ignore the pages/cover fields, the comicPages sanitizer ignores
+    // `output`.
     const clearedStages = [];
-    for (const stageId of DOWNSTREAM_TEXT_STAGES) {
+    for (const stageId of DOWNSTREAM_STAGES) {
       const st = issue.stages?.[stageId];
       if (!st || st.locked === true) continue;
-      if (!(st.output && st.output.trim())) continue; // nothing generated → nothing to clear
-      await updateStageWithLatest(issue.id, stageId, () => ({ status: 'empty', output: '', errorMessage: '' })).catch((err) => {
+      if (!stageHasDerivedContent(st)) continue; // nothing generated → nothing to clear
+      await updateStageWithLatest(issue.id, stageId, () => ({
+        status: 'empty', output: '', pages: [], cover: null, backCover: null, errorMessage: '',
+      })).catch((err) => {
         console.log(`⚠️ beat-continuity: clear ${stageId} for episode ${edit.episodeNumber} failed: ${err.message}`);
       });
       clearedStages.push(stageId);

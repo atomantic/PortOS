@@ -912,18 +912,28 @@ describe('beat-continuity resolve (#1510)', () => {
     expect(issue.stages.idea.status).toBe('ready');
   });
 
-  it('clears stale downstream prose/scripts so they regenerate from the corrected beats', async () => {
+  it('clears stale downstream prose/scripts AND comicPages art so they regenerate from the corrected beats', async () => {
     const { series, issueId } = await seedIssueWithBeats();
-    // Pre-existing downstream drafts (the re-run / resume case): prose + comicScript
-    // were generated from the OLD beats.
+    // Pre-existing downstream drafts (the re-run / resume case): prose, comicScript,
+    // and rendered comic art were all generated from the OLD beats.
     await issuesSvc.updateStage(issueId, 'prose', { status: 'ready', output: 'old prose' });
     await issuesSvc.updateStage(issueId, 'comicScript', { status: 'ready', output: 'old script' });
+    await issuesSvc.updateStage(issueId, 'comicPages', {
+      status: 'ready',
+      pages: [{ panels: [{ description: 'p' }], proofImage: { jobId: 'pg0' } }],
+      cover: { proofImage: { jobId: 'cov' } },
+      backCover: { proofImage: { jobId: 'bc' } },
+    });
+    // Sanity: art reads as fully drafted before the beat fix.
+    expect(autopilot.visualReady(await issuesSvc.getIssue(issueId))).toBe(true);
+
     const applied = await applyBeatResolutions(series.id, series, [{ seasonNumber: 1, episodeNumber: 1, beats: 'corrected beats' }]);
-    expect(applied[0].clearedStages).toEqual(expect.arrayContaining(['prose', 'comicScript']));
+    expect(applied[0].clearedStages).toEqual(expect.arrayContaining(['prose', 'comicScript', 'comicPages']));
     const issue = await issuesSvc.getIssue(issueId);
     expect(issue.stages.idea.output).toBe('corrected beats');     // new beats applied
-    expect(issuesSvc.isStageReady(issue.stages.prose)).toBe(false);       // stale → cleared
-    expect(issuesSvc.isStageReady(issue.stages.comicScript)).toBe(false); // stale → cleared
+    expect(issuesSvc.isStageReady(issue.stages.prose)).toBe(false);       // stale text → cleared
+    expect(issuesSvc.isStageReady(issue.stages.comicScript)).toBe(false); // stale script → cleared
+    expect(autopilot.visualReady(issue)).toBe(false);                     // stale art → re-draw forced
   });
 
   it('does NOT clear a locked downstream stage when rewriting beats', async () => {
