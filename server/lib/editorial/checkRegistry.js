@@ -32,6 +32,7 @@ import {
   analyzeComicLettering,
   DEFAULT_LETTERING_THRESHOLDS,
 } from './letteringDensity.js';
+import { analyzeBalloonAttribution } from './balloonAttribution.js';
 import { analyzeNamePair, comparisonName, findFirstLetterClusters, normalizeName } from './nameSimilarity.js';
 import { findCliches, findModifierStacking } from './cliches.js';
 import { findSaidBookisms, findUnattributedDialogueRuns, attributeDialogueByOwner } from './dialogue.js';
@@ -1579,6 +1580,26 @@ function comicLetteringFinding(v, number) {
   };
 }
 
+// Map a balloon-attribution violation to a manuscriptReview finding for issue
+// `number`. The wording is PortOS-facing copy (kept here, not in the pure
+// helper). Severity rides the violation's risk-scaled value.
+function balloonAttributionFinding(v, number) {
+  const where = `Page ${v.pageNumber} · Panel ${v.panelNumber}`;
+  const more = v.panelCount > 1 ? ` (and ${v.panelCount - 1} more panel${v.panelCount - 1 === 1 ? '' : 's'} on this page)` : '';
+  const target = Array.isArray(v.visibleOthers) && v.visibleOthers.length
+    ? ` Another character (${v.visibleOthers.slice(0, 3).join(', ')}) IS shown on the page, so the balloon will likely be tailed to the wrong character.`
+    : ' No one is clearly shown speaking it, so the balloon reads as orphaned.';
+  return {
+    severity: v.severity,
+    category: 'continuity',
+    location: number != null ? `Issue ${number} · ${where}` : where,
+    problem: `${v.speaker} speaks here${more} but is not shown anywhere on the page and the line carries no off-panel/broadcast cue.${target}`,
+    suggestion: `Either show ${v.speaker} in a panel on this page, or mark the line as spoken from elsewhere — e.g. ${v.speaker} (OFF-PANEL), (V.O.), (RADIO), or (SPEAKERS)/(PA) for a broadcast — so it renders as a disembodied balloon instead of being attributed to a visible character.`,
+    anchorQuote: typeof v.anchorQuote === 'string' ? v.anchorQuote : '',
+    issueNumber: number,
+  };
+}
+
 export const EDITORIAL_CHECKS = [
   {
     id: 'naming.dissimilar-names',
@@ -2072,6 +2093,36 @@ export const EDITORIAL_CHECKS = [
       for (const { number, pages } of comicLetteringIssues(ctx.issues)) {
         for (const v of analyzeComicLettering(pages, config)) {
           findings.push(comicLetteringFinding(v, number));
+        }
+      }
+      return findings;
+    },
+  },
+  {
+    id: 'comic.balloon-attribution',
+    sources: ['comicScript'],
+    label: 'Comic speech-balloon attribution',
+    description:
+      'Flags a comic dialogue line whose speaker is not shown in the panel and carries no off-panel/broadcast cue — the image model then letters a normal balloon and tails it to whoever IS drawn, mis-attributing the line (e.g. a station-AI PA line pointed at a visible bystander). Parses each issue\'s comic script and checks every panel\'s dialogue speakers against the panel description and the canon cast.',
+    scope: 'issue',
+    kind: 'deterministic',
+    category: 'continuity',
+    severityDefault: 'medium',
+    defaultEnabled: true,
+    configSchema: z.object({}),
+    configFields: [],
+    // Same cheap presence gate as the lettering check — needs at least one issue
+    // with comic content; canon is read from ctx for the visible-cast match.
+    gate: (ctx) => hasComicContent(ctx.issues),
+    run: (ctx) => {
+      const characterNames = (ctx.canon?.characters || [])
+        .filter((c) => c && typeof c === 'object')
+        .flatMap((c) => [c.name, ...(Array.isArray(c.aliases) ? c.aliases : [])])
+        .filter((n) => typeof n === 'string' && n.trim());
+      const findings = [];
+      for (const { number, pages } of comicLetteringIssues(ctx.issues)) {
+        for (const v of analyzeBalloonAttribution(pages, { characterNames })) {
+          findings.push(balloonAttributionFinding(v, number));
         }
       }
       return findings;
