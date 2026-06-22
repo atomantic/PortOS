@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { platform, getListeningPorts, isPortInUse, findAvailablePorts } from './platform.js'
+import { platform, getListeningPorts, isPortInUse, findAvailablePorts, isAppleSilicon } from './platform.js'
 
 describe('platform module', () => {
   describe('platform constant', () => {
@@ -60,6 +60,28 @@ describe('platform module', () => {
       // Range of 0 ports
       const ports = await findAvailablePorts(49400, 49399, 1)
       expect(ports).toEqual([])
+    })
+  })
+
+  describe('isAppleSilicon', () => {
+    it('is false on non-darwin platforms', () => {
+      expect(isAppleSilicon({ platform: 'linux', arch: 'x64' })).toBe(false)
+      expect(isAppleSilicon({ platform: 'win32', arch: 'arm64' })).toBe(false)
+    })
+
+    it('is true on native arm64 darwin without probing hardware', () => {
+      let probed = false
+      const result = isAppleSilicon({ platform: 'darwin', arch: 'arm64', probe: () => { probed = true; return false } })
+      expect(result).toBe(true)
+      expect(probed).toBe(false) // native arch short-circuits the sysctl probe
+    })
+
+    it('detects Apple Silicon under Rosetta (x64 darwin but arm64 hardware)', () => {
+      expect(isAppleSilicon({ platform: 'darwin', arch: 'x64', probe: () => true })).toBe(true)
+    })
+
+    it('is false on a genuine Intel Mac (x64 darwin, no arm64 hardware)', () => {
+      expect(isAppleSilicon({ platform: 'darwin', arch: 'x64', probe: () => false })).toBe(false)
     })
   })
 })
