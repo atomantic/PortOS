@@ -33,7 +33,7 @@ import { createReadStream, createWriteStream } from 'fs';
 import { mkdir, rename, unlink } from 'fs/promises';
 import { Writable } from 'stream';
 import { PATHS, getMimeType } from '../lib/fileUtils.js';
-import { parseZip } from '../lib/zipStream.js';
+import { parseZip, collectZipEntry } from '../lib/zipStream.js';
 import { parseExport, importConversations, assetPointerId } from './chatgptImport.js';
 import { ServerError } from '../lib/errorHandler.js';
 
@@ -105,23 +105,9 @@ const IS_ASSET_NAME_MAP = (path) => /(?:^|\/)conversation_asset_file_names\.json
 const datAssetId = (path) => path.replace(/^.*\//, '').replace(/\.dat$/i, '');
 
 // `parseZip` entries aren't readable streams — they expose `.pipe(dest)` /
-// `.autodrain()`. Pipe the entry into a size-capped collecting Writable and
-// resolve with the concatenated buffer.
-const collect = (entry, max) => new Promise((resolve, reject) => {
-  const chunks = [];
-  let size = 0;
-  const sink = new Writable({
-    write(chunk, _enc, cb) {
-      size += chunk.length;
-      if (size > max) { cb(new Error(`ZIP member exceeds ${max} byte limit`)); return; }
-      chunks.push(chunk);
-      cb();
-    }
-  });
-  sink.on('finish', () => resolve(Buffer.concat(chunks)));
-  sink.on('error', reject);
-  entry.pipe(sink);
-});
+// `.autodrain()`, so buffering one into memory goes through the shared,
+// size-capped `collectZipEntry` helper (see lib/zipStream.js).
+const collect = collectZipEntry;
 
 // Stream a `.dat` entry straight to `filePath`, holding only the leading
 // `SNIFF_BYTES` so the asset's real extension can be sniffed without buffering

@@ -201,6 +201,38 @@ export function parseZip() {
 }
 
 /**
+ * Collect a single `parseZip()` entry's decompressed bytes into one Buffer.
+ *
+ * `parseZip()` entries are NOT readable streams — they expose only `.pipe(dest)`
+ * / `.autodrain()`, so the EventEmitter idiom `entry.on('data'/'end')` throws
+ * `entry.on is not a function`. Pipe the entry into a collecting Writable and
+ * resolve with the concatenated buffer instead. When `maxBytes` is finite the
+ * collect rejects once the member exceeds it, rather than buffering an unbounded
+ * amount into memory.
+ *
+ * Call this synchronously inside the `entry` handler (entries auto-drain on the
+ * next tick if nothing attaches a pipe/drain), and gather the returned promises
+ * so the parser's `close` handler can `Promise.all` them before settling.
+ */
+export function collectZipEntry(entry, maxBytes = Infinity) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    const sink = new Writable({
+      write(chunk, _enc, cb) {
+        size += chunk.length;
+        if (size > maxBytes) { cb(new Error(`ZIP member exceeds ${maxBytes} byte limit`)); return; }
+        chunks.push(chunk);
+        cb();
+      }
+    });
+    sink.on('finish', () => resolve(Buffer.concat(chunks)));
+    sink.on('error', reject);
+    entry.pipe(sink);
+  });
+}
+
+/**
  * Extract the first entry whose path satisfies `match` (a predicate or a
  * substring) from a zip on disk, resolving to its decompressed Buffer (or null
  * if nothing matched). Convenience over parseZip() for the random-single-member

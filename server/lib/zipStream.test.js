@@ -4,7 +4,7 @@ import { deflateRawSync } from 'zlib';
 import { writeFile, rm, mkdtemp } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { parseZip, extractZipEntryToBuffer } from './zipStream.js';
+import { parseZip, extractZipEntryToBuffer, collectZipEntry } from './zipStream.js';
 
 const LOCAL_SIG = 0x04034b50;
 const CENTRAL_SIG = 0x02014b50;
@@ -173,6 +173,80 @@ describe('parseZip', () => {
     // Without the destroy→end teardown this never resolves and the test times out.
     const data = await sinkFinished;
     expect(data.length).toBe(100);
+  });
+});
+
+describe('collectZipEntry', () => {
+  it('collects a stored entry into one Buffer', async () => {
+    const data = Buffer.from('clinical record json payload');
+    const zip = Buffer.concat([buildEntry('clinical_records/a.json', data), buildEocd()]);
+    const out = await new Promise((resolve, reject) => {
+      const parser = parseZip();
+      let read;
+      parser.on('entry', (entry) => { read = collectZipEntry(entry); });
+      parser.on('close', () => read.then(resolve, reject));
+      parser.on('error', reject);
+      Readable.from([zip]).pipe(parser);
+    });
+    expect(out.toString()).toBe('clinical record json payload');
+  });
+
+  it('round-trips a deflated entry', async () => {
+    const original = Buffer.from('{"resourceType":"Observation","value":42}');
+    const zip = Buffer.concat([
+      buildEntry('clinical_records/obs.json', deflateRawSync(original), { method: 8 }),
+      buildEocd(),
+    ]);
+    const out = await new Promise((resolve, reject) => {
+      const parser = parseZip();
+      let read;
+      parser.on('entry', (entry) => { read = collectZipEntry(entry); });
+      parser.on('close', () => read.then(resolve, reject));
+      parser.on('error', reject);
+      Readable.from([zip]).pipe(parser);
+    });
+    expect(out.toString()).toBe(original.toString());
+  });
+
+  it('rejects when the member exceeds maxBytes', async () => {
+    const data = Buffer.alloc(64, 0x41);
+    const zip = Buffer.concat([buildEntry('big.json', data), buildEocd()]);
+    const collected = new Promise((resolve, reject) => {
+      const parser = parseZip();
+      let read;
+      parser.on('entry', (entry) => { read = collectZipEntry(entry, 16); });
+      parser.on('close', () => read.then(resolve, reject));
+      parser.on('error', reject);
+      Readable.from([zip]).pipe(parser);
+    });
+    await expect(collected).rejects.toThrow(/exceeds 16 byte limit/);
+  });
+
+  it('collects multiple JSON members alongside a drained member (appleHealth pattern)', async () => {
+    // Mirrors server/routes/appleHealth.js: drain export.xml, collect every
+    // clinical_records/*.json into buffers, await them all on 'close'.
+    const zip = Buffer.concat([
+      buildEntry('apple_health_export/export.xml', Buffer.from('<HealthData/>')),
+      buildEntry('clinical_records/r1.json', deflateRawSync(Buffer.from('{"id":1}')), { method: 8 }),
+      buildEntry('clinical_records/r2.json', Buffer.from('{"id":2}')),
+      buildEocd(),
+    ]);
+    const jsons = await new Promise((resolve, reject) => {
+      const reads = [];
+      const collected = [];
+      const parser = parseZip();
+      parser.on('entry', (entry) => {
+        if (entry.path.includes('clinical_records/') && entry.path.endsWith('.json')) {
+          reads.push(collectZipEntry(entry).then((buf) => collected.push(buf.toString('utf-8'))));
+        } else {
+          entry.autodrain();
+        }
+      });
+      parser.on('close', () => Promise.all(reads).then(() => resolve(collected), reject));
+      parser.on('error', reject);
+      Readable.from([zip]).pipe(parser);
+    });
+    expect(jsons.sort()).toEqual(['{"id":1}', '{"id":2}']);
   });
 });
 

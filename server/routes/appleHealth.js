@@ -3,7 +3,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { createReadStream, createWriteStream, promises as fs } from 'fs';
 import { uploadSingle } from '../lib/multipart.js';
-import { parseZip } from '../lib/zipStream.js';
+import { parseZip, collectZipEntry } from '../lib/zipStream.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import { healthIngestSchema } from '../lib/appleHealthValidation.js';
@@ -22,6 +22,11 @@ import {
 // Polling interval and timeout for XML write-stream completion (ms)
 const XML_WRITE_POLL_INTERVAL_MS = 50;
 const XML_WRITE_TIMEOUT_MS = 5000;
+
+// Per-member cap when buffering a clinical-record JSON into memory. Real records
+// are ~1-5KB each; the generous ceiling just guards against a pathological
+// member exhausting memory (mirrors chatgptZipImport's MAX_MEMBER_BYTES).
+const MAX_CLINICAL_RECORD_BYTES = 100 * 1024 * 1024;
 
 const isZip = (file) =>
   file.mimetype === 'application/zip' ||
@@ -117,6 +122,10 @@ router.post('/import/xml', uploadXml, asyncHandler(async (req, res) => {
     const xmlPath = join(tmpdir(), `apple-health-${Date.now()}.xml`);
     let foundXml = false;
     let xmlWriteFinished = false;
+    // Each clinical-record collect is async (entries stream through an inflate
+    // pipeline), so track them and await all before resolving — otherwise
+    // 'close' can fire and drop records whose buffers haven't finished.
+    const clinicalReads = [];
 
     await new Promise((resolve, reject) => {
       let settled = false;
@@ -132,20 +141,28 @@ router.post('/import/xml', uploadXml, asyncHandler(async (req, res) => {
               .on('finish', () => { xmlWriteFinished = true; })
               .on('error', settle(reject));
           } else if (entry.path.includes('clinical_records/') && entry.path.endsWith('.json')) {
-            // Buffer clinical record JSON files (~1-5KB each)
-            const chunks = [];
-            entry.on('data', (chunk) => chunks.push(chunk));
-            entry.on('end', () => clinicalJsons.push(Buffer.concat(chunks).toString('utf-8')));
+            // Buffer clinical record JSON files (~1-5KB each). parseZip() entries
+            // aren't EventEmitters (no entry.on('data'/'end') — that throws), so
+            // pipe into a collecting Writable via the shared helper and track the
+            // read so 'close' can await it.
+            clinicalReads.push(
+              collectZipEntry(entry, MAX_CLINICAL_RECORD_BYTES)
+                .then((buf) => { clinicalJsons.push(buf.toString('utf-8')); })
+                .catch(settle(reject))
+            );
           } else {
             entry.autodrain();
           }
         })
         .on('close', () => {
           if (!foundXml) return settle(reject)(new ServerError('ZIP does not contain export.xml', { status: 400, code: 'BAD_REQUEST' }));
-          // Wait briefly for XML write stream to finish if close fires first
-          if (xmlWriteFinished) return settle(resolve)();
-          const check = setInterval(() => { if (xmlWriteFinished) { clearInterval(check); settle(resolve)(); } }, XML_WRITE_POLL_INTERVAL_MS);
-          setTimeout(() => { clearInterval(check); settle(resolve)(); }, XML_WRITE_TIMEOUT_MS);
+          // Resolve once the XML write stream has flushed AND every clinical
+          // record collect has finished. XML completion is signaled via the
+          // polled flag; the clinical collects are awaited as promises.
+          const finalize = () => Promise.all(clinicalReads).then(settle(resolve));
+          if (xmlWriteFinished) return finalize();
+          const check = setInterval(() => { if (xmlWriteFinished) { clearInterval(check); finalize(); } }, XML_WRITE_POLL_INTERVAL_MS);
+          setTimeout(() => { clearInterval(check); finalize(); }, XML_WRITE_TIMEOUT_MS);
         })
         .on('error', settle(reject));
     });
