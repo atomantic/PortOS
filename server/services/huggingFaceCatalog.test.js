@@ -318,6 +318,43 @@ describe('huggingFaceCatalog', () => {
       expect(result.id).toBe(`hf.co/${repo}:Q4_K_M`)
     })
 
+    it('treats a tiny machine (zero usable RAM) as a real budget: smallest variant, all too-large', async () => {
+      const repo = 'empero-ai/Qwythos-9B-Tiny-GGUF'
+      fetch
+        .mockResolvedValueOnce(listing(repo, ['Qwythos-9B-Q4_K_M.gguf', 'Qwythos-9B-Q8_0.gguf']))
+        .mockResolvedValueOnce(blobs(repo, {
+          'Qwythos-9B-Q4_K_M.gguf': 5_500_000_000,
+          'Qwythos-9B-Q8_0.gguf': 9_500_000_000,
+        }))
+
+      // 8 GB total → usable 0 (at/below reserved headroom). Must NOT revert to the
+      // QUANT_PRIORITY default — pick the smallest and flag everything too-large.
+      const [result] = await searchHuggingFaceModels({ backend: 'ollama', query: 'qwythos', systemMemoryBytes: 8 * 1024 ** 3 })
+
+      expect(result.id).toBe(`hf.co/${repo}:Q4_K_M`)
+      expect(Object.fromEntries(result.variants.map((v) => [v.quant, v.fit]))).toEqual({ Q8_0: 'too-large', Q4_K_M: 'too-large' })
+    })
+
+    it('marks LM Studio installed state per-quant when the installed list carries the quantization', async () => {
+      const repo = 'bartowski/PerQuant-GGUF'
+      fetch
+        .mockResolvedValueOnce(listing(repo, ['PerQuant-Q4_K_M.gguf', 'PerQuant-Q8_0.gguf']))
+        .mockResolvedValueOnce(blobs(repo, {
+          'PerQuant-Q4_K_M.gguf': 4_000_000_000,
+          'PerQuant-Q8_0.gguf': 8_000_000_000,
+        }))
+
+      // The route encodes LM Studio installs as `<id>@<quant>`; only Q4_K_M is down.
+      const [result] = await searchHuggingFaceModels({
+        backend: 'lmstudio', query: 'perquant', systemMemoryBytes: 128 * 1024 ** 3, installedIds: [`${repo}@Q4_K_M`]
+      })
+
+      expect(Object.fromEntries(result.variants.map((v) => [v.quant, v.installed]))).toEqual({ Q8_0: false, Q4_K_M: true })
+      // Default is Q8_0 (largest fits) and it is NOT installed → the card offers Install.
+      expect(result.id).toBe(`${repo}@Q8_0`)
+      expect(result.installed).toBe(false)
+    })
+
     it('marks per-quant installed state for Ollama variants and aligns the result flag with the default', async () => {
       const repo = 'empero-ai/Qwythos-9B-Installed-GGUF'
       fetch
