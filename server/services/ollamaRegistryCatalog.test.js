@@ -154,4 +154,21 @@ describe('fetchOllamaRegistryVariants', () => {
     const variants = await fetchOllamaRegistryVariants('flaky', { paramsHint: '3B' })
     expect(variants.map((v) => v.installId)).toEqual(['flaky:3b-instruct-q4_K_M'])
   })
+
+  it('does not cache an OK-but-unparseable (HTTP 200) tags response', async () => {
+    // A proxy/captive-portal error page served as 200: ok=true but body is not JSON.
+    // readResponseJson returns its fallback instead of throwing — this must still be
+    // treated as transient (not cached) so a recovered registry re-enriches.
+    const htmlError = {
+      ok: true, status: 200,
+      json: vi.fn(async () => { throw new Error('Unexpected token <') }),
+      text: vi.fn(async () => '<html>502 Bad Gateway</html>')
+    }
+    fetch.mockResolvedValueOnce(htmlError)
+    expect(await fetchOllamaRegistryVariants('proxied', { paramsHint: '3B' })).toEqual([])
+    // Not cached → the recovered registry produces variants on the next call.
+    fetch.mockImplementation(registry(['3b-instruct-q4_K_M'], { '3b-instruct-q4_K_M': 2_000_000_000 }))
+    const variants = await fetchOllamaRegistryVariants('proxied', { paramsHint: '3B' })
+    expect(variants.map((v) => v.installId)).toEqual(['proxied:3b-instruct-q4_K_M'])
+  })
 })
