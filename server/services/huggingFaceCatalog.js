@@ -331,7 +331,8 @@ function displayName(repoId) {
 }
 
 // Backend-specific pull/download id for a chosen quant.
-//   ollama   → `hf.co/<repo>:<quant>` (Ollama resolves the GGUF, incl. shards)
+//   ollama   → `hf.co/<repo>:<quant>` (Ollama resolves a single-file GGUF; it
+//              CANNOT pull multi-part shards — see ollama/ollama#5245)
 //   lmstudio → `<repo>@<quant>` (the `lms get <repo>@<quant>` syntax)
 // A null quant falls back to the bare repo so the backend picks its own default.
 function variantInstallId(backend, repoId, quant) {
@@ -360,6 +361,20 @@ function shardSetKey(filename) {
   return m ? `${m[1]}-of-${m[2]}` : filename
 }
 
+// A shard-set key (from a `…-NNNNN-of-MMMMM.gguf` file) ends in `-of-MMMMM` with
+// no `.gguf` suffix; a standalone key is the full filename (`.gguf` and all). So
+// the trailing `-of-#####` (anchored, no extension) is unambiguous.
+function isShardedKey(key) {
+  return /-of-\d{5}$/i.test(key)
+}
+
+// Why Ollama can't install a sharded quant — surfaced on the variant so the UI
+// can disable Install with an actionable reason instead of letting the user hit
+// Ollama's raw 400. LM Studio loads sharded GGUFs natively, so it's unaffected.
+const OLLAMA_SHARDED_REASON =
+  'Ollama cannot install multi-part (sharded) GGUFs (ollama/ollama#5245). ' +
+  'Pick a smaller single-file quant, or install this build on LM Studio.'
+
 function buildVariants(model, backend, usableBytes) {
   const repoId = repoIdOf(model)
   // quant → (shard-set/standalone key → summed size). Backends install by quant
@@ -377,16 +392,33 @@ function buildVariants(model, backend, usableBytes) {
   }
   return [...groups.entries()]
     .map(([quant, units]) => {
-      const largestUnit = Math.max(0, ...units.values())
+      // The installable unit is the largest shard-set/standalone group; whether
+      // THAT unit is sharded decides Ollama-compatibility (a quant may have both
+      // a sharded build and a standalone one — the standalone wins on size ties
+      // only if larger, but the unit we'd actually pull is the one we measure).
+      let chosenKey = null
+      let largestUnit = 0
+      for (const [key, size] of units) {
+        if (size >= largestUnit) { largestUnit = size; chosenKey = key }
+      }
       const sizeBytes = largestUnit > 0 ? largestUnit : null
-      return {
+      const sharded = chosenKey ? isShardedKey(chosenKey) : false
+      const variant = {
         quant,
         format: 'gguf',
         installId: variantInstallId(backend, repoId, quant),
         sizeBytes,
         size: formatBytes(sizeBytes) || quant,
-        fit: classifyFit(sizeBytes, usableBytes)
+        fit: classifyFit(sizeBytes, usableBytes),
+        sharded
       }
+      // Ollama can't pull shards; mark the variant so the picker disables Install
+      // and the RAM-aware default skips it. LM Studio handles shards, so no flag.
+      if (sharded && backend === 'ollama') {
+        variant.unsupported = 'sharded'
+        variant.unsupportedReason = OLLAMA_SHARDED_REASON
+      }
+      return variant
     })
     .sort((a, b) => (b.sizeBytes || 0) - (a.sizeBytes || 0))
 }
@@ -710,9 +742,16 @@ function contextLengthOf(model) {
 // pick the smallest (all flagged too-large) rather than falling through as if
 // memory were unknown.
 function applyChosenVariant(result, variants, { usableBytes, rewriteInstallId }) {
-  const chosen = (usableBytes != null ? pickVariantForBudget(variants, usableBytes) : null)
-    || variants.find((v) => v.quant && v.quant === result.quant)
-    || preferredQuantVariant(variants)
+  // The default must be something the backend can actually install — never land
+  // the RAM-aware/QUANT_PRIORITY pick on an Ollama-unsupported (sharded) variant.
+  // Pick from the installable subset; only if EVERY variant is unsupported (a
+  // repo that ships nothing but shards) fall back to the full list so the card
+  // still has a coherent default (Install stays disabled per-variant downstream).
+  const installable = variants.filter((v) => !v.unsupported)
+  const pool = installable.length > 0 ? installable : variants
+  const chosen = (usableBytes != null ? pickVariantForBudget(pool, usableBytes) : null)
+    || pool.find((v) => v.quant && v.quant === result.quant)
+    || preferredQuantVariant(pool)
   // Flag by identity (robust whether or not the id is rewritten) so the controlled
   // <select> and the recommended marker always agree on the chosen variant.
   for (const v of variants) v.recommended = v === chosen

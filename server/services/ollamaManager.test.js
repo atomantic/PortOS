@@ -172,4 +172,17 @@ describe('ollamaManager.pullModel transient-error retry', () => {
     expect(result.code).toBe('OLLAMA_OUTDATED')
     expect(pullUrls).toHaveLength(1) // not retried — outdated binary won't fix itself
   })
+
+  it('tags a 400 "sharded GGUF" error with code SHARDED_GGUF', async () => {
+    const pullModel = await loadPullModel()
+    const { pullUrls } = stubFetch([
+      makeStreamResponse([{ error: 'pull model manifest: 400: {"error":"The specified tag is a sharded GGUF. Ollama does not support this yet. Please use another tag or \\"latest\\". Follow this issue for more info: https://github.com/ollama/ollama/issues/5245"}' }])
+    ])
+
+    const { result } = await runPull(pullModel, 'hf.co/unsloth/Qwen3-Coder-Next-GGUF:UD-Q8_K_XL')
+
+    expect(result.success).toBe(false)
+    expect(result.code).toBe('SHARDED_GGUF')
+    expect(pullUrls).toHaveLength(1) // not retried — sharding won't resolve on retry
+  })
 })

@@ -406,6 +406,11 @@ export function LocalLlmTab() {
           // this model"; needing a newer Ollama to do it is an implementation
           // detail, not a separate decision.
           upgradeOllamaAndRetry(modelId);
+        } else if (err?.code === 'SHARDED_GGUF') {
+          // Ollama can't pull a multi-part GGUF (#5245). The catalog disables
+          // Install for known-sharded quants, but a pull-by-name still lands here —
+          // explain the fix rather than echoing Ollama's raw 400.
+          toast.error('Ollama can’t install sharded (multi-part) GGUFs. Pick a smaller single-file quant, or install this build on LM Studio.');
         } else {
           // Any other failure: restore the default toast we suppressed.
           toast.error(err?.message || 'Install failed');
@@ -763,6 +768,11 @@ export function LocalLlmTab() {
                   // Installed state is per-quant (Ollama tracks each separately),
                   // so gate Install on the SELECTED variant, not the result default.
                   const chosenInstalled = chosenVariant ? chosenVariant.installed : m.installed;
+                  // A sharded quant can't be pulled by the active backend (Ollama
+                  // #5245) — disable Install with the server's reason rather than
+                  // letting the user hit the raw 400. (The server only sets
+                  // `unsupportedReason` when the variant is unsupported.)
+                  const chosenUnsupported = chosenVariant?.unsupportedReason ?? null;
                   const size = chosenVariant?.size || m.size;
                   const sizeBytes = chosenVariant?.sizeBytes ?? m.sizeBytes;
                   const fit = chosenVariant?.fit;
@@ -801,7 +811,7 @@ export function LocalLlmTab() {
                           >
                             {variants.map((v) => (
                               <option key={v.installId} value={v.installId}>
-                                {v.quant}{v.size ? ` · ${v.size}` : ''}{v.installed ? ' · installed' : ''}{v.recommended ? ' · recommended' : ''}{v.fit === 'too-large' ? ' · exceeds RAM' : ''}
+                                {v.quant}{v.size ? ` · ${v.size}` : ''}{v.installed ? ' · installed' : ''}{v.recommended ? ' · recommended' : ''}{v.fit === 'too-large' ? ' · exceeds RAM' : ''}{v.unsupported === 'sharded' ? ' · sharded (not on Ollama)' : ''}
                               </option>
                             ))}
                           </select>
@@ -862,12 +872,18 @@ export function LocalLlmTab() {
                       ) : (
                         <button
                           onClick={() => (isAudio ? installAudio(m) : install(chosenId))}
-                          disabled={busy}
-                          className="px-2.5 py-1 text-xs bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded disabled:opacity-50 flex items-center gap-1"
+                          disabled={busy || !!chosenUnsupported}
+                          title={chosenUnsupported || undefined}
+                          className="px-2.5 py-1 text-xs bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
                         >
                           {actionInProgress === `install-${chosenId}` ? <BrailleSpinner /> : <Download size={12} />}
                           Install
                         </button>
+                      )}
+                      {chosenUnsupported && !chosenInstalled && (
+                        <span className="text-[11px] text-port-warning text-right max-w-[12rem] leading-snug" title={chosenUnsupported}>
+                          Sharded — use LM Studio or a smaller quant
+                        </span>
                       )}
                       {isHf && m.repository && (
                         <a

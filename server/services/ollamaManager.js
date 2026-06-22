@@ -636,8 +636,26 @@ async function pullModel(modelId, onProgress) {
   }
 
   console.error(`⚠️ Ollama pull failed for ${modelId}: ${lastError}`)
-  const code = isOllamaOutdatedError(lastError) ? 'OLLAMA_OUTDATED' : undefined
+  const code = isShardedGgufError(lastError) ? 'SHARDED_GGUF'
+    : isOllamaOutdatedError(lastError) ? 'OLLAMA_OUTDATED'
+      : undefined
   return { success: false, error: lastError, modelId, ...(code ? { code } : {}) }
+}
+
+/**
+ * Detect Ollama's refusal to pull a multi-part (sharded) GGUF. The HF passthrough
+ * registry returns a 400 whose message names "sharded GGUF" and links the tracking
+ * issue (ollama/ollama#5245). The catalog already flags sharded quants so the UI
+ * disables Install — this classifier is defense-in-depth for the pull-by-name path
+ * (a raw `hf.co/<repo>:<quant>` typed into the search box) so the caller can show
+ * an actionable message instead of the raw 400. Match the phrase plus the 400 so
+ * an unrelated 400 can't slip through.
+ * @param {string|null|undefined} error
+ */
+function isShardedGgufError(error) {
+  if (!error) return false
+  const str = String(error)
+  return /\b400\b/.test(str) && /sharded gguf/i.test(str)
 }
 
 /**

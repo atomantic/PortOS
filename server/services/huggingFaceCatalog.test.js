@@ -282,6 +282,58 @@ describe('huggingFaceCatalog', () => {
       expect(result.variants[0]).toMatchObject({ quant: 'BF16', sizeBytes: 40_000_000_000 })
     })
 
+    it('flags a sharded quant as Ollama-unsupported (ollama/ollama#5245)', async () => {
+      const repo = 'org/Sharded-Only-GGUF'
+      fetch
+        .mockResolvedValueOnce(listing(repo, ['Big-Q8_0-00001-of-00002.gguf', 'Big-Q8_0-00002-of-00002.gguf']))
+        .mockResolvedValueOnce(blobs(repo, {
+          'Big-Q8_0-00001-of-00002.gguf': 40_000_000_000,
+          'Big-Q8_0-00002-of-00002.gguf': 40_000_000_000,
+        }))
+
+      const [result] = await searchHuggingFaceModels({ backend: 'ollama', query: 'sharded', systemMemoryBytes: 128 * 1024 ** 3 })
+
+      expect(result.variants[0]).toMatchObject({ quant: 'Q8_0', sharded: true, unsupported: 'sharded' })
+      expect(result.variants[0].unsupportedReason).toMatch(/sharded/i)
+    })
+
+    it('does not flag a sharded quant on LM Studio (it loads shards natively)', async () => {
+      const repo = 'org/Sharded-Lms-GGUF'
+      fetch
+        .mockResolvedValueOnce(listing(repo, ['Big-Q8_0-00001-of-00002.gguf', 'Big-Q8_0-00002-of-00002.gguf']))
+        .mockResolvedValueOnce(blobs(repo, {
+          'Big-Q8_0-00001-of-00002.gguf': 40_000_000_000,
+          'Big-Q8_0-00002-of-00002.gguf': 40_000_000_000,
+        }))
+
+      const [result] = await searchHuggingFaceModels({ backend: 'lmstudio', query: 'sharded', systemMemoryBytes: 128 * 1024 ** 3 })
+
+      expect(result.variants[0]).toMatchObject({ quant: 'Q8_0', sharded: true })
+      expect(result.variants[0].unsupported).toBeUndefined()
+    })
+
+    it('defaults Ollama to a single-file quant when the larger quant is sharded', async () => {
+      const repo = 'org/Mixed-Shard-GGUF'
+      fetch
+        // Q8_0 is sharded (80 GB, two parts); Q4_K_M is a single 40 GB file.
+        .mockResolvedValueOnce(listing(repo, [
+          'M-Q8_0-00001-of-00002.gguf', 'M-Q8_0-00002-of-00002.gguf', 'M-Q4_K_M.gguf',
+        ]))
+        .mockResolvedValueOnce(blobs(repo, {
+          'M-Q8_0-00001-of-00002.gguf': 40_000_000_000,
+          'M-Q8_0-00002-of-00002.gguf': 40_000_000_000,
+          'M-Q4_K_M.gguf': 40_000_000_000,
+        }))
+
+      const [result] = await searchHuggingFaceModels({ backend: 'ollama', query: 'mixed', systemMemoryBytes: 256 * 1024 ** 3 })
+
+      // Even on a huge machine where the 80 GB Q8_0 "fits", the RAM-aware default
+      // must skip the sharded build and recommend the installable single-file quant.
+      expect(result.quant).toBe('Q4_K_M')
+      expect(result.variants.find((v) => v.recommended).quant).toBe('Q4_K_M')
+      expect(result.variants.find((v) => v.quant === 'Q8_0')).toMatchObject({ unsupported: 'sharded' })
+    })
+
     it('builds LM Studio variant ids with the @quant syntax and still detects installed repos', async () => {
       const repo = 'bartowski/LmModel-GGUF'
       fetch
