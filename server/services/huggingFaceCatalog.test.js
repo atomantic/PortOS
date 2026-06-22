@@ -572,8 +572,10 @@ describe('huggingFaceCatalog', () => {
 
       expect(catalog[0].format).toBe('gguf')
       expect(catalog[0].variants.map((v) => v.installId)).toEqual([`${repo}@Q8_0`, `${repo}@Q4_K_M`])
+      // The curated id stays STABLE (playground matches installed models on it) —
+      // the RAM-aware default is conveyed via the recommended variant instead.
+      expect(catalog[0].id).toBe(repo)
       // 128 GB → highest-fidelity that fits becomes the recommended default.
-      expect(catalog[0].id).toBe(`${repo}@Q8_0`)
       expect(catalog[0].variants.find((v) => v.recommended).installId).toBe(`${repo}@Q8_0`)
       expect(catalog[0].sizeBytes).toBe(8_000_000_000)
     })
@@ -589,7 +591,9 @@ describe('huggingFaceCatalog', () => {
       await enrichCatalogWithVariants(catalog, { backend: 'ollama', systemMemoryBytes: 128 * 1024 ** 3, installedIds: [] })
 
       expect(catalog[0].variants.map((v) => v.installId)).toEqual([`hf.co/${repo}:Q8_0`, `hf.co/${repo}:UD-Q4_K_XL`])
-      expect(catalog[0].id).toBe(`hf.co/${repo}:Q8_0`)
+      // Stable curated id; recommended variant carries the RAM-aware install id.
+      expect(catalog[0].id).toBe(`hf.co/${repo}:UD-Q4_K_XL`)
+      expect(catalog[0].variants.find((v) => v.recommended).installId).toBe(`hf.co/${repo}:Q8_0`)
     })
 
     it('falls back to the QUANT_PRIORITY quant (not HF file order) and keeps the curated size when HF omits sizes', async () => {
@@ -604,7 +608,8 @@ describe('huggingFaceCatalog', () => {
       // QUANT_PRIORITY default, not the largest by file order.
       await enrichCatalogWithVariants(catalog, { backend: 'lmstudio', systemMemoryBytes: 8 * 1024 ** 3, installedIds: [] })
 
-      expect(catalog[0].id).toBe(`${repo}@Q4_K_M`)
+      expect(catalog[0].id).toBe(repo) // stable curated id
+      expect(catalog[0].variants.find((v) => v.recommended).installId).toBe(`${repo}@Q4_K_M`)
       // The curated size estimate is preserved (not clobbered with a bare quant label).
       expect(catalog[0].size).toBe('2.0 GB')
     })

@@ -401,14 +401,18 @@ function preferredQuantVariant(variants) {
   return [...variants].sort((a, b) => rank(a.quant) - rank(b.quant))[0]
 }
 
-// Promote a chosen variant onto the result's primary install fields so the
-// default card reflects it (id/quant) without the client having to re-pick. Only
-// overwrite the size when the variant actually has one — otherwise keep the
-// result's existing size (a curated entry's hard-coded estimate, or toResult's
-// label) instead of replacing it with a bare quant string.
-function applyVariant(result, variant) {
-  result.id = variant.installId
+// Promote a chosen variant onto the result's primary fields so the default card
+// reflects it (quant/size/installed). `rewriteInstallId` controls whether the
+// result's `id` becomes the variant's install id: true for live HF results (their
+// id IS the install id), false for curated entries — those keep their stable
+// catalog id (other consumers, e.g. the playground, match installed models on it),
+// and the UI selects the recommended variant via its `recommended` flag instead.
+// Only overwrite the size when the variant actually has one — otherwise keep the
+// result's existing size (a curated hard-coded estimate) rather than a bare label.
+function applyVariant(result, variant, rewriteInstallId) {
+  if (rewriteInstallId) result.id = variant.installId
   result.quant = variant.quant
+  result.installed = variant.installed
   if (Number.isFinite(variant.sizeBytes)) {
     result.sizeBytes = variant.sizeBytes
     result.size = variant.size
@@ -667,28 +671,33 @@ function contextLengthOf(model) {
 }
 
 // Build the per-quant GGUF variant list onto `result` from a fetched repo record
-// and anchor the result on the RAM-aware (or QUANT_PRIORITY) default. Shared by
-// the live HF search and the curated-catalog enrichment so both cards behave the
-// same. Returns true when variants were applied, false when the repo has no
-// parseable GGUF quant (e.g. an MLX-only repo) so the caller can leave it as-is.
-function applyGgufVariants(result, model, { backend, usableBytes, installedIds }) {
+// and mark the RAM-aware (or QUANT_PRIORITY) default. Shared by the live HF search
+// and the curated-catalog enrichment so both cards behave the same. Returns true
+// when variants were applied, false when the repo has no parseable GGUF quant
+// (e.g. an MLX-only repo) so the caller can leave it as-is.
+//
+// `rewriteInstallId`: live HF results adopt the chosen variant's id as their own
+// (their id IS the install id); curated entries keep their stable catalog id (so
+// other consumers — the playground — still match installed models on it) and the
+// UI picks the chosen variant via its `recommended` flag.
+function applyGgufVariants(result, model, { backend, usableBytes, installedIds, rewriteInstallId = true }) {
   const variants = buildVariants(model, backend, usableBytes)
   if (variants.length === 0) return false
   // Per-quant installed state — Ollama tracks each quant separately, so the card
   // must gate Install on the *selected* variant, not one repo-wide flag.
   for (const v of variants) v.installed = installIdInstalled(backend, v.installId, result.repository, installedIds)
-  // Always anchor the result on one of its own variants so the install id and the
-  // client's controlled <select> agree. Prefer the RAM-aware pick; otherwise the
-  // QUANT_PRIORITY default (matched by quant); fall back to the largest variant.
+  // Prefer the RAM-aware pick; otherwise the QUANT_PRIORITY default (matched by the
+  // result's existing quant); fall back to the QUANT_PRIORITY-preferred variant.
   // `usableBytes != null` (not truthiness): 0 is a real budget on a tiny machine —
   // pick the smallest (all flagged too-large) rather than falling through as if
   // memory were unknown.
   const chosen = (usableBytes != null ? pickVariantForBudget(variants, usableBytes) : null)
     || variants.find((v) => v.quant && v.quant === result.quant)
     || preferredQuantVariant(variants)
-  applyVariant(result, chosen)
-  for (const v of variants) v.recommended = v.installId === result.id
-  result.installed = chosen.installed
+  // Flag by identity (robust whether or not the id is rewritten) so the controlled
+  // <select> and the recommended marker always agree on the chosen variant.
+  for (const v of variants) v.recommended = v === chosen
+  applyVariant(result, chosen, rewriteInstallId)
   result.variants = variants
   return true
 }
@@ -895,7 +904,9 @@ export async function enrichCatalogWithVariants(catalog, { backend, systemMemory
     entry.repository = repo
     // Seed the quant from the curator's id so the no-budget fallback anchors on it.
     if (entry.quant == null) entry.quant = quantFromInstallId(backend, entry.id)
-    const applied = applyGgufVariants(entry, model, { backend, usableBytes, installedIds })
+    // Keep the curated entry's stable id (rewriteInstallId: false) — the playground
+    // matches installed models on it; the UI installs the recommended variant.
+    const applied = applyGgufVariants(entry, model, { backend, usableBytes, installedIds, rewriteInstallId: false })
     if (!applied) return // MLX-only / no parseable GGUF quant — leave the curated entry as-is
     entry.format = 'gguf'
     // Backfill the real size + native context window the curated list hard-codes.
