@@ -112,14 +112,24 @@ async function requireTrack(id) {
 // uploaded render has no engine/model/duration, so the active gen-metadata is
 // cleared (keeps the read-only badges honest). Re-attaching a file already in
 // the history just re-selects it (no duplicate card).
-async function attachAudioAsRender(track, filename) {
+//
+// Re-reads the track by id (the caller validated existence earlier) so the
+// append builds on the FRESHEST persisted history: a render added to this track
+// between the route's initial load and now — a long generation finishing, or a
+// parallel upload, both of which can span the file-import window — isn't dropped
+// by writing back a stale renders array. (The sub-millisecond getTrack→
+// updateTrack window is a single-user request race we don't lock against per the
+// trust model.)
+async function attachAudioAsRender(trackId, filename) {
+  const track = await tracks.getTrack(trackId);
+  if (!track) throw new ServerError('Track not found', { status: 404, code: 'NOT_FOUND' });
   const existing = (track.renders || []).find((r) => r.audioFilename === filename);
   if (existing) {
     const patch = tracks.selectRenderPatch(track, existing.id) || { audioFilename: filename };
-    return tracks.updateTrack(track.id, patch);
+    return tracks.updateTrack(trackId, patch);
   }
   const { renders } = tracks.buildRenderAppend(track, { audioFilename: filename });
-  return tracks.updateTrack(track.id, {
+  return tracks.updateTrack(trackId, {
     audioFilename: filename,
     engine: '',
     modelId: '',
@@ -195,7 +205,7 @@ router.post('/:id/audio/upload', musicUpload, asyncHandler(async (req, res) => {
   const track = await requireTrack(req.params.id);
   if (!req.file) throw new ServerError('No audio file uploaded', { status: 400, code: 'TRACK_AUDIO_MISSING_FILE' });
   const { filename, sizeBytes } = await importUploadedTrack(req.file.path, req.file.originalname);
-  const updated = await attachAudioAsRender(track, filename);
+  const updated = await attachAudioAsRender(track.id, filename);
   res.json({ track: updated, filename, sizeBytes });
 }));
 
@@ -206,7 +216,7 @@ router.post('/:id/audio/attach', asyncHandler(async (req, res) => {
   assertSafeMusicFilename(filename);
   const found = await statMusicTrack(filename);
   if (!found) throw new ServerError('Track not found in the music library', { status: 404, code: 'TRACK_AUDIO_NOT_IN_LIBRARY' });
-  res.json({ track: await attachAudioAsRender(track, filename) });
+  res.json({ track: await attachAudioAsRender(track.id, filename) });
 }));
 
 // Clear the audio pointer (leaves the library file in place — it may be shared).

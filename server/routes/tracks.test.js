@@ -178,6 +178,19 @@ describe('tracks routes', () => {
     expect(tracks.updateTrack).toHaveBeenCalledWith('track-1', { audioFilename: 'music-1.mp3', engine: 'musicgen', modelId: 'm', durationSec: 5 });
   });
 
+  it('POST /:id/audio/attach appends onto the FRESHEST track state (re-reads before write)', async () => {
+    // A render added to this track between the route's initial load and the write
+    // (e.g. a long generation finishing) must not be dropped — the append must
+    // build on the re-read track, not the snapshot from requireTrack.
+    const stale = { id: 'track-1', title: 'S', renders: [{ id: 'r-old', audioFilename: 'old.mp3' }] };
+    const fresh = { id: 'track-1', title: 'S', renders: [{ id: 'r-old', audioFilename: 'old.mp3' }, { id: 'r-concurrent', audioFilename: 'concurrent.mp3' }] };
+    tracks.getTrack.mockResolvedValueOnce(stale).mockResolvedValueOnce(fresh);
+    lib.store.set('music-1.mp3', true);
+    const r = await request(app).post('/api/tracks/track-1/audio/attach').send({ filename: 'music-1.mp3' });
+    expect(r.status).toBe(200);
+    expect(tracks.buildRenderAppend).toHaveBeenCalledWith(fresh, expect.objectContaining({ audioFilename: 'music-1.mp3' }));
+  });
+
   it('DELETE /:id/audio clears the pointer', async () => {
     tracks.getTrack.mockResolvedValue({ id: 'track-1', title: 'Intro' });
     const r = await request(app).delete('/api/tracks/track-1/audio');
