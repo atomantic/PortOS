@@ -135,8 +135,19 @@ describe('fetchOllamaRegistryVariants', () => {
   })
 
   it('returns [] when the model is absent from the registry (tags 404)', async () => {
-    fetch.mockResolvedValue(response({}, false))
+    fetch.mockResolvedValue(response({}, false)) // status 404 → permanent
     expect(await fetchOllamaRegistryVariants('ghost-model', { paramsHint: '3B' })).toEqual([])
+  })
+
+  it('does not cache a transient non-OK status (503/429) — only permanent 404/410/403', async () => {
+    // 503 Service Unavailable on tags/list — transient, must NOT be cached.
+    const unavailable = { ok: false, status: 503, json: vi.fn(async () => ({})), text: vi.fn(async () => '') }
+    fetch.mockResolvedValueOnce(unavailable)
+    expect(await fetchOllamaRegistryVariants('rate-limited', { paramsHint: '3B' })).toEqual([])
+    // The recovered registry re-enriches (the 503 wasn't cached as "no such model").
+    fetch.mockImplementation(registry(['3b-instruct-q4_K_M'], { '3b-instruct-q4_K_M': 2_000_000_000 }))
+    const variants = await fetchOllamaRegistryVariants('rate-limited', { paramsHint: '3B' })
+    expect(variants.map((v) => v.installId)).toEqual(['rate-limited:3b-instruct-q4_K_M'])
   })
 
   it('keeps a null size when the manifest is unavailable', async () => {

@@ -37,16 +37,28 @@ const MAX_VARIANTS = 12
 const tagsCache = new Map()
 const manifestCache = new Map()
 const CACHE_MAX = 500
-// A transient fetch failure (network down / timeout / malformed body) — distinct
-// from a genuine HTTP non-OK (404 / gated). The former must NOT be cached (it
-// would permanently disable enrichment until the registry recovers); the latter
-// is a real "no data" answer worth caching.
+// A transient fetch failure (network down / timeout / malformed body / 5xx / 429)
+// — distinct from a genuine permanent non-OK (404 / 410 / 403). The former must
+// NOT be cached (it would permanently disable enrichment until the registry
+// recovers); the latter is a real "no such model" answer worth caching.
 const TRANSIENT_FETCH = Symbol('ollama-registry-transient')
 
 function cacheSet(cache, key, value) {
   // Evict oldest entry when the cap is reached (insertion-order iteration).
   if (cache.size >= CACHE_MAX) cache.delete(cache.keys().next().value)
   cache.set(key, value)
+}
+
+// Resolve a fetch Response into either the parsed JSON body, `null` (a permanent
+// "no data" answer worth caching — model genuinely absent), or TRANSIENT_FETCH (a
+// retry-worthy failure that must NOT be cached). Permanent = 404 Not Found / 410
+// Gone / 403 Forbidden; everything else non-OK (500/502/503/408/429/…) is transient,
+// as is an OK response whose body won't parse (a proxy/captive-portal error page
+// served as HTTP 200 — `readResponseJson` returns its fallback rather than throwing).
+const PERMANENT_NOT_FOUND = new Set([403, 404, 410])
+function resolveRegistryBody(res) {
+  if (res.ok) return readResponseJson(res, { fallback: TRANSIENT_FETCH, emptyValue: TRANSIENT_FETCH })
+  return PERMANENT_NOT_FOUND.has(res.status) ? null : TRANSIENT_FETCH
 }
 
 // Split a curated Ollama install id into its registry path + optional tag.
@@ -119,15 +131,10 @@ async function fetchTags(repoPath, timeoutMs) {
   // repoPath is derived from a curated id, but encode each segment defensively so
   // a stray character can't reshape the request path.
   const safePath = repoPath.split('/').map(encodeURIComponent).join('/')
-  // Route an OK-but-unparseable body (a proxy/captive-portal error page served as
-  // HTTP 200) through the transient sentinel — `readResponseJson` returns its
-  // fallback rather than throwing, so without this a single malformed 200 would
-  // cache `null` and permanently disable this model's enrichment until restart.
-  // A genuine non-OK (404/gated) stays `null` and IS cached (a real "no data").
   const result = await fetchWithTimeout(`${REGISTRY_BASE}/${safePath}/tags/list`, { headers: { Accept: 'application/json' } }, timeoutMs)
-    .then((res) => (res.ok ? readResponseJson(res, { fallback: TRANSIENT_FETCH, emptyValue: TRANSIENT_FETCH }) : null))
+    .then(resolveRegistryBody)
     .catch(() => TRANSIENT_FETCH)
-  if (result === TRANSIENT_FETCH) return null // transient (throw or unparseable 200) — don't cache
+  if (result === TRANSIENT_FETCH) return null // transient (throw / 5xx / 429 / unparseable 200) — don't cache
   const tags = Array.isArray(result?.tags) ? result.tags : null
   cacheSet(tagsCache, repoPath, tags)
   return tags
@@ -138,13 +145,12 @@ async function fetchManifestModelBytes(repoPath, tag, timeoutMs) {
   if (manifestCache.has(key)) return manifestCache.get(key)
   const safePath = repoPath.split('/').map(encodeURIComponent).join('/')
   const safeTag = encodeURIComponent(tag)
-  // Same transient-vs-cacheable distinction as fetchTags: an unparseable 200 is
-  // transient (don't cache); a non-OK is a real "no size" answer (cache null).
+  // Same transient-vs-cacheable distinction as fetchTags (see resolveRegistryBody).
   const result = await fetchWithTimeout(`${REGISTRY_BASE}/${safePath}/manifests/${safeTag}`, { headers: { Accept: MANIFEST_ACCEPT } }, timeoutMs)
-    .then((res) => (res.ok ? readResponseJson(res, { fallback: TRANSIENT_FETCH, emptyValue: TRANSIENT_FETCH }) : null))
+    .then(resolveRegistryBody)
     .catch(() => TRANSIENT_FETCH)
-  if (result === TRANSIENT_FETCH) return null // transient (throw or unparseable 200) — don't cache
-  const bytes = sumModelLayerBytes(result) // result is null (non-OK) or the manifest object
+  if (result === TRANSIENT_FETCH) return null // transient (throw / 5xx / 429 / unparseable 200) — don't cache
+  const bytes = sumModelLayerBytes(result) // result is null (permanent non-OK) or the manifest object
   cacheSet(manifestCache, key, bytes)
   return bytes
 }

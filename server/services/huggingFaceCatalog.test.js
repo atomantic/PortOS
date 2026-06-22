@@ -720,23 +720,45 @@ describe('huggingFaceCatalog', () => {
       expect(catalog[0].variants.find((v) => v.installId === 'gpt-pick:20b-q8_0').installed).toBe(false)
     })
 
-    it('preserves the card-level installed state for a default/:latest bare Ollama install', async () => {
+    it('surfaces the installed default build as a selected variant for a default/:latest bare Ollama install', async () => {
       __resetOllamaRegistryCache()
       fetch.mockImplementation(ollamaRegistry(
         ['3b-instruct-q4_K_M', '3b-instruct-q8_0'],
         { '3b-instruct-q4_K_M': 2_000_000_000, '3b-instruct-q8_0': 3_500_000_000 }
       ))
       // getCatalog flagged this installed (the user pulled `defllama`, stored as :latest).
-      // None of the exact `<name>:<tag>` variants matches that alias.
+      // None of the exact `<name>:<tag>` quant variants matches that alias.
       const catalog = [{ id: 'defllama', key: 'defllama', name: 'Def Llama 3B', category: 'chat', params: '3B', size: '2.0 GB', installed: true }]
       await enrichCatalogWithVariants(catalog, {
         backend: 'ollama', systemMemoryBytes: 128 * 1024 ** 3, installedIds: ['defllama:latest']
       })
 
-      // The card still reads as installed (a build is present) even though no specific
-      // quant variant matches — so it won't show "Install" and pull a duplicate tag.
+      // The installed default build is surfaced as its own variant (install id = the
+      // curator's id) and selected, so the card reads Installed (LocalLlmTab gates on the
+      // chosen variant) instead of offering a duplicate pull.
       expect(catalog[0].installed).toBe(true)
-      expect(catalog[0].variants.every((v) => v.installed === false)).toBe(true)
+      const defaultVariant = catalog[0].variants.find((v) => v.installId === 'defllama')
+      expect(defaultVariant).toMatchObject({ installed: true, recommended: true })
+      // The discovered quant variants keep their true (not-installed) per-tag state.
+      expect(catalog[0].variants.filter((v) => v.installId !== 'defllama').every((v) => v.installed === false)).toBe(true)
+      expect(catalog[0].variants.filter((v) => v.recommended).length).toBe(1)
+    })
+
+    it('does NOT add a default variant when a specific quant tag is already installed', async () => {
+      __resetOllamaRegistryCache()
+      fetch.mockImplementation(ollamaRegistry(
+        ['3b-instruct-q4_K_M', '3b-instruct-q8_0'],
+        { '3b-instruct-q4_K_M': 2_000_000_000, '3b-instruct-q8_0': 3_500_000_000 }
+      ))
+      // The user has the exact q8 build — the per-quant flag already shows Installed,
+      // so no synthesized default build is needed.
+      const catalog = [{ id: 'qllama', key: 'qllama', name: 'Q Llama 3B', category: 'chat', params: '3B', size: '2.0 GB', installed: true }]
+      await enrichCatalogWithVariants(catalog, {
+        backend: 'ollama', systemMemoryBytes: 128 * 1024 ** 3, installedIds: ['qllama:3b-instruct-q8_0']
+      })
+
+      expect(catalog[0].variants.some((v) => v.installId === 'qllama')).toBe(false)
+      expect(catalog[0].variants.find((v) => v.installId === 'qllama:3b-instruct-q8_0').installed).toBe(true)
     })
 
     it('leaves a bare Ollama name untouched when the model is not on the registry', async () => {

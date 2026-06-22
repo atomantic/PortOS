@@ -924,12 +924,8 @@ function quantFromInstallId(backend, id) {
 async function applyOllamaRegistryVariants(entry, { usableBytes, installedIds }) {
   const candidates = await fetchOllamaRegistryVariants(entry.id, { paramsHint: entry.params })
   if (candidates.length === 0) return false
-  // The bare curated id (`llama3.2`, pulled as `:latest`) install is recorded on the
-  // entry's pre-enrichment `installed` flag — getCatalog matched it latest-normalized.
-  // The per-quant variants below use exact `<name>:<tag>` ids that never include that
-  // alias, so capture the default install now and OR it back after applyVariant
-  // overwrites `installed`; otherwise an already-installed model shows "Install" and a
-  // click pulls a duplicate specific-quant tag.
+  // Whether the user already pulled the curator's default build (`entry.id`, e.g.
+  // `llama3.2` stored as `:latest`). getCatalog set entry.installed latest-normalized.
   const installedAsDefault = entry.installed === true
   const variants = candidates
     .map((c) => {
@@ -947,15 +943,42 @@ async function applyOllamaRegistryVariants(entry, { usableBytes, installedIds })
   // Per-quant installed state — Ollama tracks each `<name>:<tag>` build separately,
   // so the card gates Install on the selected variant (matches applyGgufVariants).
   for (const v of variants) v.installed = installIdInstalled('ollama', v.installId, entry.repository, installedIds)
+  // The discovered quant variants use exact `<name>:<tag>` ids that never include the
+  // default `:latest` alias, so an already-installed default build matches none of them.
+  // The card gates Install on the SELECTED variant's `installed` (LocalLlmTab uses
+  // `chosenVariant.installed`), so without representing the default build the card would
+  // show Install for a model the user already has and pull a duplicate tag. Surface the
+  // installed default as its own variant (install id = the curator's id, the real tag the
+  // user pulled) when no discovered quant variant is itself installed.
+  const hasInstalledVariant = variants.some((v) => v.installed)
+  const defaultBuildPresent = variants.some((v) => v.installId === entry.id)
+  if (installedAsDefault && !hasInstalledVariant && !defaultBuildPresent) {
+    const sizeBytes = Number.isFinite(entry.sizeBytes) ? entry.sizeBytes : null
+    variants.unshift({
+      quant: entry.quant || quantFromInstallId('ollama', entry.id) || 'default',
+      format: 'gguf',
+      installId: entry.id,
+      sizeBytes,
+      size: formatBytes(sizeBytes) || entry.size || 'installed',
+      fit: classifyFit(sizeBytes, usableBytes),
+      installed: true
+    })
+  }
   // Seed the quant from the curator's id (`gpt-oss:20b` has no quant tag, so this
   // is usually null) so the no-RAM-budget fallback can anchor on it.
   if (entry.quant == null) entry.quant = quantFromInstallId('ollama', entry.id)
-  // Keep the curated entry's stable id (rewriteInstallId: false) — the playground
-  // matches installed models on it; the UI installs the recommended variant.
-  applyChosenVariant(entry, variants, { usableBytes, rewriteInstallId: false })
-  // Preserve the card-level "installed" state from the pre-existing default/:latest
-  // build — the user has a build of this model even if no specific quant variant matches.
-  if (installedAsDefault) entry.installed = true
+  // Initial selection: prefer the already-installed default build (so the card reads
+  // Installed, its pre-enrichment behavior) over a RAM-aware re-pull; otherwise the
+  // RAM-aware pick. The other quants stay listed with their true per-tag installed
+  // state + fit hints for explicit selection. Keep the stable curated id either way.
+  const installedDefault = variants.find((v) => v.installId === entry.id && v.installed)
+  if (installedDefault) {
+    for (const v of variants) v.recommended = v === installedDefault
+    applyVariant(entry, installedDefault, false)
+    entry.variants = variants
+  } else {
+    applyChosenVariant(entry, variants, { usableBytes, rewriteInstallId: false })
+  }
   entry.format = 'gguf'
   return true
 }
