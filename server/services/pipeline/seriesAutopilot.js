@@ -85,6 +85,8 @@ import {
   commitEpisodesToIssues,
   verifyArc,
   resolveVerifyIssues,
+  analyzeBeatContinuity,
+  resolveBeatContinuity,
   analyzeManuscriptCompleteness,
 } from './arcPlanner.js';
 import * as volumeBeatsRunner from './volumeBeatsRunner.js';
@@ -109,6 +111,11 @@ const runs = new Map();
 // run can override per-run through the autopilot start options).
 export const MAX_ARC_VERIFY_ROUNDS = 3;
 export const MAX_EDITORIAL_ROUNDS = 2;
+// Whole-manuscript beat-continuity convergence (#1510). The corpus is the
+// compact per-issue beat sheets, so this gate sits between beat generation and
+// the expensive text/script stage — bounded like the others, then pauses with
+// the residual findings for human review.
+export const MAX_BEAT_CONTINUITY_ROUNDS = 2;
 
 // Resolve the effective round bounds for a run: an explicit per-run option wins,
 // then the persisted pipelineEditorialChecks setting, then the module default.
@@ -124,6 +131,7 @@ export function resolveAutopilotRounds(options = {}, settings = null) {
   return {
     maxArcVerifyRounds: pick('maxArcVerifyRounds', 'maxArcVerifyRounds', MAX_ARC_VERIFY_ROUNDS),
     maxEditorialRounds: pick('maxEditorialRounds', 'maxEditorialRounds', MAX_EDITORIAL_ROUNDS),
+    maxBeatContinuityRounds: pick('maxBeatContinuityRounds', 'maxBeatContinuityRounds', MAX_BEAT_CONTINUITY_ROUNDS),
   };
 }
 
@@ -131,6 +139,7 @@ export function resolveAutopilotRounds(options = {}, settings = null) {
 // editorial loops so the two messages can't drift.
 const PAUSE_GATES = {
   arc: { label: 'Arc verification', fix: 'Edit the arc/volumes to address them', limit: 'verify-rounds' },
+  beatContinuity: { label: 'Beat continuity', fix: 'Edit the affected issue beats', limit: 'beat-continuity-rounds' },
   editorial: { label: 'Editorial review', fix: 'Address them in the manuscript editor', limit: 'editorial-rounds' },
 };
 function convergencePauseReason(gate, maxRounds, blockingCount) {
@@ -149,6 +158,10 @@ export const VISUAL_DRAFT_ENABLED = true;
 
 // Severities that block a verify/review gate (low is informational).
 const ARC_BLOCKING = new Set(['high', 'medium']);
+// Beat continuity is the same class of structural continuity gate as arc verify
+// (a cross-issue continuity break, not a craft note), so it blocks at the same
+// altitude — high + medium.
+const BEAT_CONTINUITY_BLOCKING = ARC_BLOCKING;
 const EDITORIAL_BLOCKING = new Set(['high']);
 
 // Poll cadence while awaiting a delegated child runner (volume beats / auto-run).
@@ -233,6 +246,14 @@ function orderedIssues(issues) {
 
 function textReady(issue, series, options = {}) {
   return requiredScriptStages(series, options).every((stageId) => isStageReady(issue.stages?.[stageId]));
+}
+
+// An issue "has beats" once its idea stage carries expanded beat text
+// (idea.output) — the unit the whole-manuscript beat-continuity pass (#1510)
+// reads. isStageReady(idea) is exactly that: status ready/edited AND non-empty
+// output.
+function issueHasBeats(issue) {
+  return isStageReady(issue?.stages?.idea);
 }
 
 // Structural script gate (pure): does the comic script parse into >=1 page with
@@ -326,6 +347,18 @@ export function resolveNextStep(series, issues, runState = {}, options = {}) {
     if (inSeason.some((i) => !isStageReady(i.stages?.idea))) {
       return { kind: 'beatSheet', seasonId: season.id, reason: `beats missing in volume ${season.number ?? '?'}` };
     }
+  }
+
+  // STEP 4a.5 — whole-manuscript beat continuity (#1510). Once every volume's
+  // beats exist (the 4a loop above is exhausted), run ONE cross-issue beat-level
+  // pass BEFORE the expensive text/script generation — catching dropped
+  // cliffhangers, finale drift, unlanded through-lines, and duplicated "firsts"
+  // at the cheap beat altitude instead of after 24 full scripts exist. Only
+  // meaningful when at least one issue actually carries beats; a synopsis-only
+  // run has nothing beat-level to check (and would just duplicate arc verify),
+  // so it's skipped without ever marking the gate.
+  if (!runState.beatContinuityChecked && ordered.some(issueHasBeats)) {
+    return { kind: 'beatContinuity', reason: 'whole-manuscript beat continuity not yet checked this run' };
   }
 
   // STEP 4b — per-issue text stages (prose + required scripts).
@@ -527,6 +560,56 @@ async function runArcVerify(seriesId, record) {
     broadcast(seriesId, {
       type: 'resolve:round', scope: 'arc', round,
       episodesEdited: Array.isArray(resolved?.episodesResolved) ? resolved.episodesResolved.length : 0,
+    });
+  }
+  return {};
+}
+
+// Whole-manuscript beat-continuity convergence loop (#1510). Mirrors
+// runArcVerify one altitude down: verify the whole-book beat corpus, and on
+// blocking findings resolve them by rewriting the offending issues' beats in
+// place (resolveBeatContinuity → applyBeatResolutions, no beat-sheet
+// regeneration), then re-verify. Bounded; pauses with the residual on
+// non-convergence. Each verify + each resolve is budget-gated and bills one cos
+// action, like the arc loop.
+async function runBeatContinuity(seriesId, record) {
+  const maxRounds = Number.isInteger(record.options.maxBeatContinuityRounds)
+    ? record.options.maxBeatContinuityRounds
+    : MAX_BEAT_CONTINUITY_ROUNDS;
+  // maxRounds === 0 means "skip the beat-continuity gate entirely".
+  if (maxRounds === 0) {
+    record.runState.beatContinuityChecked = true;
+    return {};
+  }
+  for (let round = 1; round <= maxRounds; round += 1) {
+    if (record.cancelRequested) return { canceled: true };
+    const beforeVerify = await budgetPause();
+    if (beforeVerify) return beforeVerify;
+    const { issues } = await analyzeBeatContinuity(seriesId, providerOverrideOpts(record));
+    await recordDomainUsage('cos', { actions: 1 });
+    const blocking = issues.filter((i) => BEAT_CONTINUITY_BLOCKING.has(i.severity));
+    broadcast(seriesId, {
+      type: 'verify:round', scope: 'beatContinuity', round, findings: issues.length, blocking: blocking.length,
+    });
+    if (blocking.length === 0) {
+      record.runState.beatContinuityChecked = true;
+      return {};
+    }
+    if (round === maxRounds) {
+      return { pause: true, reason: convergencePauseReason('beatContinuity', maxRounds, blocking.length), residual: blocking };
+    }
+    if (record.cancelRequested) return { canceled: true };
+    // resolveBeatContinuity bills another action — recheck the budget so a
+    // single step can't overspend the daily cap mid-loop.
+    const beforeResolve = await budgetPause();
+    if (beforeResolve) return beforeResolve;
+    const resolved = await resolveBeatContinuity(seriesId, { findings: blocking, ...providerOverrideOpts(record) });
+    await recordDomainUsage('cos', { actions: 1 });
+    broadcast(seriesId, {
+      type: 'resolve:round', scope: 'beatContinuity', round,
+      episodesEdited: Array.isArray(resolved?.episodesResolved)
+        ? resolved.episodesResolved.filter((e) => e?.corrected).length
+        : 0,
     });
   }
   return {};
@@ -998,6 +1081,8 @@ async function dispatchStep(sId, step, record) {
       return runArcVerify(sId, record);
     case 'beatSheet':
       return runBeats(sId, step.seasonId, record);
+    case 'beatContinuity':
+      return runBeatContinuity(sId, record);
     case 'textStages':
       return runText(step.issueId, record);
     case 'scriptVerify':
@@ -1040,6 +1125,16 @@ function buildDryRunPlan(series, issues, options) {
   const beatsNeeded = seasons.filter((s) =>
     ordered.some((i) => i.seasonId === s.id && !isStageReady(i.stages?.idea))).length;
   if (beatsNeeded) plan.push({ kind: 'beatSheet', count: beatsNeeded });
+  // beatContinuity (#1510) runs once when the run will have a beat corpus to
+  // check: beats already exist, OR beatSheet will generate them this run. Mirror
+  // the resolver's `ordered.some(issueHasBeats)` gate (post-generation), so a
+  // synopsis-only run that produces no beats doesn't advertise a pass it skips.
+  if (ordered.some(issueHasBeats) || beatsNeeded) {
+    const bcRounds = Number.isInteger(options?.maxBeatContinuityRounds)
+      ? options.maxBeatContinuityRounds
+      : MAX_BEAT_CONTINUITY_ROUNDS;
+    plan.push({ kind: 'beatContinuity', count: 1, note: roundsNote(bcRounds) });
+  }
   const textNeeded = ordered.filter((i) => !textReady(i, series, options)).length;
   if (textNeeded) plan.push({ kind: 'textStages', count: textNeeded });
   if (wantsComic(series, options)) plan.push({ kind: 'scriptVerify', count: ordered.length });
@@ -1111,6 +1206,7 @@ export async function startSeriesAutopilot(sId, options = {}) {
     runState: {
       arcAttempted: false,
       arcVerified: false,
+      beatContinuityChecked: false,
       editorialReviewed: false,
       editorialChecksReviewed: false,
       editorialHealthReady: false,
@@ -1180,6 +1276,7 @@ export async function startSeriesAutopilot(sId, options = {}) {
         // hold even when the budget is exhausted (otherwise the run pauses on
         // budget instead of skipping).
         const zeroRoundSkip = (step.kind === 'verifyArc' && runOptions.maxArcVerifyRounds === 0)
+          || (step.kind === 'beatContinuity' && runOptions.maxBeatContinuityRounds === 0)
           || (step.kind === 'editorialReview' && runOptions.maxEditorialRounds === 0);
         if (step.kind !== 'editorialChecks' && step.kind !== 'editorialHealthGate' && !zeroRoundSkip) {
           const budget = await getDomainBudgetStatus('cos');

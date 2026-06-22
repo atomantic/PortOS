@@ -37,6 +37,7 @@ vi.mock('../domainUsage.js', () => ({
 // arcPlanner: keep the REAL barrel (for compareIssuesByPosition) and override
 // only the LLM-calling passes with spies whose return values the tests drive.
 let verifyFindings = [];
+let beatContinuityFindings = [];
 let editorialFindings = [];
 const arcSpies = {
   generateArcOverview: vi.fn(async () => ({ arc: { logline: 'A', summary: 'S' }, seasons: [] })),
@@ -45,6 +46,8 @@ const arcSpies = {
   commitEpisodesToIssues: vi.fn(async () => []),
   verifyArc: vi.fn(async () => ({ issues: verifyFindings })),
   resolveVerifyIssues: vi.fn(async () => ({ applied: true })),
+  analyzeBeatContinuity: vi.fn(async () => ({ issues: beatContinuityFindings })),
+  resolveBeatContinuity: vi.fn(async () => ({ applied: true, episodesResolved: [] })),
   analyzeManuscriptCompleteness: vi.fn(async () => ({ issues: editorialFindings, runId: 'run-comp' })),
 };
 vi.mock('./arcPlanner.js', async (importOriginal) => {
@@ -117,6 +120,8 @@ const seriesSvc = await import('./series.js');
 const seasonsSvc = await import('./seasons.js');
 const issuesSvc = await import('./issues.js');
 const autopilot = await import('./seriesAutopilot.js');
+const arcPlanner = await import('./arcPlanner.js');
+const { stageContentOf } = await import('./textStages.js');
 const { resolveNextStep, requiredScriptStages, scriptStructurallyReady, visualReady, wantsComic } = autopilot;
 
 // A comic script string that parseComicScript turns into >=1 page/panel.
@@ -141,6 +146,7 @@ beforeEach(() => {
   cosMode = 'execute';
   budgetStatus = { withinBudget: true, exceeded: null };
   verifyFindings = [];
+  beatContinuityFindings = [];
   editorialFindings = [];
   scriptVerifyFindings = [];
   canonReady = true;
@@ -176,19 +182,20 @@ describe('resolveNextStep (pure)', () => {
   });
 
   it('resolveAutopilotRounds: per-run option wins, else setting, else default', () => {
-    const { resolveAutopilotRounds, MAX_ARC_VERIFY_ROUNDS, MAX_EDITORIAL_ROUNDS } = autopilot;
+    const { resolveAutopilotRounds, MAX_ARC_VERIFY_ROUNDS, MAX_EDITORIAL_ROUNDS, MAX_BEAT_CONTINUITY_ROUNDS } = autopilot;
     // per-run option wins (including an explicit 0 = skip)
     expect(resolveAutopilotRounds(
-      { maxArcVerifyRounds: 7, maxEditorialRounds: 0 },
-      { pipelineEditorialChecks: { maxArcVerifyRounds: 4, maxEditorialRounds: 4 } },
-    )).toEqual({ maxArcVerifyRounds: 7, maxEditorialRounds: 0 });
+      { maxArcVerifyRounds: 7, maxEditorialRounds: 0, maxBeatContinuityRounds: 5 },
+      { pipelineEditorialChecks: { maxArcVerifyRounds: 4, maxEditorialRounds: 4, maxBeatContinuityRounds: 1 } },
+    )).toEqual({ maxArcVerifyRounds: 7, maxEditorialRounds: 0, maxBeatContinuityRounds: 5 });
     // persisted setting fills in when no per-run override
-    const fromSetting = resolveAutopilotRounds({}, { pipelineEditorialChecks: { maxArcVerifyRounds: 6 } });
+    const fromSetting = resolveAutopilotRounds({}, { pipelineEditorialChecks: { maxArcVerifyRounds: 6, maxBeatContinuityRounds: 3 } });
     expect(fromSetting.maxArcVerifyRounds).toBe(6);
     expect(fromSetting.maxEditorialRounds).toBe(MAX_EDITORIAL_ROUNDS);
+    expect(fromSetting.maxBeatContinuityRounds).toBe(3);
     // module default when neither is set
     expect(resolveAutopilotRounds({}, null)).toEqual({
-      maxArcVerifyRounds: MAX_ARC_VERIFY_ROUNDS, maxEditorialRounds: MAX_EDITORIAL_ROUNDS,
+      maxArcVerifyRounds: MAX_ARC_VERIFY_ROUNDS, maxEditorialRounds: MAX_EDITORIAL_ROUNDS, maxBeatContinuityRounds: MAX_BEAT_CONTINUITY_ROUNDS,
     });
     // a non-integer at any layer falls through
     expect(resolveAutopilotRounds(
@@ -245,8 +252,24 @@ describe('resolveNextStep (pure)', () => {
     expect(step).toMatchObject({ kind: 'textStages', issueId: 'iss1' });
   });
 
-  it('asks for text stages once beats exist but scripts do not', () => {
+  it('runs whole-manuscript beat continuity once beats exist, before text (#1510)', () => {
     const step = resolveNextStep(comic, [issue({ stages: { idea: ready() } })], { arcVerified: true });
+    expect(step).toMatchObject({ kind: 'beatContinuity' });
+  });
+
+  it('skips beat continuity for a synopsis-only run (no beats anywhere)', () => {
+    // idea has input (synopsis) but no ready output → no beats → fall through to
+    // text without a beat-continuity pass (it would just duplicate arc verify).
+    const step = resolveNextStep(
+      comic,
+      [issue({ stages: { idea: { status: 'empty', input: 'syn', output: '' }, comicScript: ready(VALID_SCRIPT) } })],
+      { arcVerified: true },
+    );
+    expect(step.kind).not.toBe('beatContinuity');
+  });
+
+  it('asks for text stages once beats are continuity-checked but scripts do not exist', () => {
+    const step = resolveNextStep(comic, [issue({ stages: { idea: ready() } })], { arcVerified: true, beatContinuityChecked: true });
     expect(step).toMatchObject({ kind: 'textStages', issueId: 'iss1' });
   });
 
@@ -254,7 +277,7 @@ describe('resolveNextStep (pure)', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
-      { arcVerified: true },
+      { arcVerified: true, beatContinuityChecked: true },
     );
     expect(step).toMatchObject({ kind: 'scriptVerify', issueId: 'iss1' });
   });
@@ -263,7 +286,7 @@ describe('resolveNextStep (pure)', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
-      { arcVerified: true, scriptChecked: new Set(['iss1']) },
+      { arcVerified: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']) },
     );
     expect(step.kind).toBe('editorialReview');
   });
@@ -272,7 +295,7 @@ describe('resolveNextStep (pure)', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
-      { arcVerified: true, scriptChecked: new Set(['iss1']), editorialReviewed: true },
+      { arcVerified: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true },
       { includeVisual: false },
     );
     expect(step.kind).toBe('editorialChecks');
@@ -282,7 +305,7 @@ describe('resolveNextStep (pure)', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
-      { arcVerified: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, editorialChecksReviewed: true },
+      { arcVerified: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, editorialChecksReviewed: true },
       { includeVisual: false },
     );
     expect(step.kind).toBe('editorialHealthGate');
@@ -292,7 +315,7 @@ describe('resolveNextStep (pure)', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
-      { arcVerified: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, editorialChecksReviewed: true, editorialHealthReady: true },
+      { arcVerified: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, editorialChecksReviewed: true, editorialHealthReady: true },
       { includeVisual: false },
     );
     expect(step.kind).toBe('done');
@@ -302,7 +325,7 @@ describe('resolveNextStep (pure)', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
-      { arcVerified: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, editorialChecksReviewed: true, editorialHealthReady: true },
+      { arcVerified: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, editorialChecksReviewed: true, editorialHealthReady: true },
       { includeVisual: true, target: 'text' },
     );
     expect(step.kind).toBe('done');
@@ -312,7 +335,7 @@ describe('resolveNextStep (pure)', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
-      { arcVerified: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, editorialChecksReviewed: true, editorialHealthReady: true },
+      { arcVerified: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, editorialChecksReviewed: true, editorialHealthReady: true },
       { includeVisual: true },
     );
     expect(step.kind).toBe('canonVerify');
@@ -322,7 +345,7 @@ describe('resolveNextStep (pure)', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
-      { arcVerified: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, editorialChecksReviewed: true, editorialHealthReady: true, canonVerified: true },
+      { arcVerified: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, editorialChecksReviewed: true, editorialHealthReady: true, canonVerified: true },
       { includeVisual: true },
     );
     expect(step).toMatchObject({ kind: 'visualDraft', issueId: 'iss1' });
@@ -341,7 +364,7 @@ describe('resolveNextStep (pure)', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: renderedStages })],
-      { arcVerified: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, editorialChecksReviewed: true, editorialHealthReady: true, canonVerified: true },
+      { arcVerified: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, editorialChecksReviewed: true, editorialHealthReady: true, canonVerified: true },
       { includeVisual: true },
     );
     expect(step.kind).toBe('done');
@@ -352,7 +375,7 @@ describe('resolveNextStep (pure)', () => {
     const step = resolveNextStep(
       tv,
       [issue({ stages: { idea: ready(), teleplay: ready() } })],
-      { arcVerified: true },
+      { arcVerified: true, beatContinuityChecked: true },
     );
     expect(step.kind).toBe('editorialReview');
   });
@@ -532,6 +555,39 @@ describe('autopilot conductor', () => {
     expect(arcSpies.resolveVerifyIssues).not.toHaveBeenCalled();
   });
 
+  it('runs whole-manuscript beat continuity before text, then proceeds when clean (#1510)', async () => {
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, {});
+    await waitFor(runFinished(seriesId));
+    expect(arcSpies.analyzeBeatContinuity).toHaveBeenCalled();
+    expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('complete');
+  });
+
+  it('pauses for review when beat continuity never converges (#1510)', async () => {
+    beatContinuityFindings = [{ severity: 'high', problem: 'dropped cliffhanger', location: 'issue:1' }];
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { maxBeatContinuityRounds: 2 });
+    await waitFor(runFinished(seriesId));
+    const last = autopilot.__testing.runs.get(seriesId)?.lastPayload;
+    expect(last?.type).toBe('paused');
+    expect(last?.scope).toBe('beatContinuity');
+    // bounded: analyze called maxRounds times, resolve called rounds-1.
+    expect(arcSpies.analyzeBeatContinuity).toHaveBeenCalledTimes(2);
+    expect(arcSpies.resolveBeatContinuity).toHaveBeenCalledTimes(1);
+    expect(last?.residualFindings?.[0]?.problem).toBe('dropped cliffhanger');
+    // never reached the text stage — the gate is upstream of it.
+    expect(autoRunnerSpies.startAutoRunTextStages).not.toHaveBeenCalled();
+  });
+
+  it('maxBeatContinuityRounds:0 skips the beat-continuity gate (no LLM spend)', async () => {
+    beatContinuityFindings = [{ severity: 'high', problem: 'dropped cliffhanger', location: 'issue:1' }];
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { maxBeatContinuityRounds: 0 });
+    await waitFor(runFinished(seriesId));
+    expect(arcSpies.analyzeBeatContinuity).not.toHaveBeenCalled();
+    expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('complete');
+  });
+
   it('pauses (no infinite loop) when episode generation produces no issues', async () => {
     const series = await seriesSvc.createSeries({ name: 'S', logline: 'L', premise: 'P', targetFormat: 'comic' });
     await seriesSvc.updateSeries(series.id, { arc: { logline: 'A', summary: 'S' } });
@@ -591,15 +647,16 @@ describe('autopilot conductor', () => {
   it('a zero-round gate skips even when the budget is exhausted (no budget pause at that gate)', async () => {
     budgetStatus = { withinBudget: false, exceeded: 'actions' };
     const { seriesId } = await seedComplete();
-    // maxArcVerifyRounds:0 ⇒ runArcVerify short-circuits with no spend, so the
-    // budget gate must NOT pause at verifyArc — the run advances to the next
-    // non-exempt step (scriptVerify) and pauses there on budget instead.
-    await autopilot.startSeriesAutopilot(seriesId, { maxArcVerifyRounds: 0 });
+    // maxArcVerifyRounds:0 + maxBeatContinuityRounds:0 ⇒ both gates short-circuit
+    // with no spend, so the budget gate must NOT pause at either — the run
+    // advances to the next non-exempt step (scriptVerify) and pauses there.
+    await autopilot.startSeriesAutopilot(seriesId, { maxArcVerifyRounds: 0, maxBeatContinuityRounds: 0 });
     await waitFor(runFinished(seriesId));
     expect(arcSpies.verifyArc).not.toHaveBeenCalled();
+    expect(arcSpies.analyzeBeatContinuity).not.toHaveBeenCalled();
     const series = await seriesSvc.getSeries(seriesId);
     expect(series.autopilot?.status).toBe('paused');
-    expect(series.autopilot?.currentStep).toBe('scriptVerify'); // not 'verifyArc'
+    expect(series.autopilot?.currentStep).toBe('scriptVerify'); // not 'verifyArc'/'beatContinuity'
     expect(series.autopilot?.lastError).toMatch(/budget/);
   });
 
@@ -796,5 +853,124 @@ describe('autopilot conductor', () => {
     expect(n).toBe(1);
     const fresh = await seriesSvc.getSeries(series.id);
     expect(fresh.autopilot?.status).toBe('paused');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Beat-continuity resolve internals (#1510) — pure shaper + the beat-rewrite
+// apply pass (real issues service against the file store, like the conductor).
+// ---------------------------------------------------------------------------
+describe('beat-continuity resolve (#1510)', () => {
+  const { shapeBeatResolutions, applyBeatResolutions, buildBeatContinuityContext } = arcPlanner.__testing;
+
+  it('buildBeatContinuityContext renders beats into the tree and counts beat-bearing issues', async () => {
+    const series = await seriesSvc.createSeries({ name: 'S', logline: 'L', premise: 'P', targetFormat: 'comic' });
+    await seriesSvc.updateSeries(series.id, { arc: { logline: 'A', summary: 'Sum' } });
+    const season = await seasonsSvc.createSeason(series.id, { number: 1, title: 'V1' });
+    const withBeats = await issuesSvc.createIssue({ seriesId: series.id, seasonId: season.id, title: 'I1', number: 1 });
+    const synOnly = await issuesSvc.createIssue({ seriesId: series.id, seasonId: season.id, title: 'I2', number: 2 });
+    await issuesSvc.updateStage(withBeats.id, 'idea', { status: 'ready', input: 'syn1', output: 'BEATS-A' });
+    await issuesSvc.updateStage(synOnly.id, 'idea', { status: 'empty', input: 'syn2', output: '' });
+    const fresh = await seriesSvc.getSeries(series.id);
+    const ctx = await buildBeatContinuityContext(fresh);
+    expect(ctx.beatBearingCount).toBe(1);          // only the one expanded issue
+    expect(ctx.seasonsTreeJson).toContain('BEATS-A');
+    expect(ctx.seasonsTreeJson).toContain('syn2');  // synopsis fallback for the un-expanded issue
+  });
+
+  it('shapeBeatResolutions keeps valid entries, drops malformed, caps the count', () => {
+    const out = shapeBeatResolutions([
+      { episodeNumber: 1, beats: '  new beats  ', seasonNumber: 2 },
+      { episodeNumber: 3, beats: '' },            // empty beats → dropped
+      { episodeNumber: 'x', beats: 'b' },         // non-integer number → dropped
+      { beats: 'no number' },                     // missing number → dropped
+      { episodeNumber: 4, beats: 'b4' },          // seasonNumber absent → null
+    ]);
+    expect(out).toEqual([
+      { seasonNumber: 2, episodeNumber: 1, beats: 'new beats' },
+      { seasonNumber: null, episodeNumber: 4, beats: 'b4' },
+    ]);
+    expect(shapeBeatResolutions('nope')).toEqual([]);
+  });
+
+  // A single issue in a fresh series gets the recomputed series-global number 1.
+  async function seedIssueWithBeats(over = {}) {
+    const series = await seriesSvc.createSeries({ name: 'S', logline: 'L', premise: 'P', targetFormat: 'comic' });
+    const season = await seasonsSvc.createSeason(series.id, { number: 1, title: 'V1' });
+    const issue = await issuesSvc.createIssue({ seriesId: series.id, seasonId: season.id, title: 'I1', number: 1 });
+    await issuesSvc.updateStage(issue.id, 'idea', { status: 'ready', input: 'synopsis', output: 'old beats', ...over });
+    const fresh = await seriesSvc.getSeries(series.id);
+    return { series: fresh, issueId: issue.id };
+  }
+
+  it('writes the corrected beats to BOTH idea.input and idea.output so prose adapts from the fix', async () => {
+    const { series, issueId } = await seedIssueWithBeats();
+    const applied = await applyBeatResolutions(series.id, series, [{ seasonNumber: 1, episodeNumber: 1, beats: 'corrected beats' }]);
+    expect(applied).toEqual([expect.objectContaining({ issueId, number: 1, corrected: true })]);
+    const issue = await issuesSvc.getIssue(issueId);
+    expect(issue.stages.idea.output).toBe('corrected beats');
+    // idea.input must carry the fix too — downstream text generation reads
+    // stageContentOf(idea), which prefers idea.input, so a fix only in
+    // idea.output would never reach the regenerated prose/scripts.
+    expect(issue.stages.idea.input).toBe('corrected beats');
+    expect(issue.stages.idea.status).toBe('ready');
+    // The real prose source-of-truth resolver must now surface the correction.
+    expect(stageContentOf(issue.stages.idea)).toBe('corrected beats');
+  });
+
+  it('clears stale downstream prose/scripts AND comicPages art so they regenerate from the corrected beats', async () => {
+    const { series, issueId } = await seedIssueWithBeats();
+    // Pre-existing downstream drafts (the re-run / resume case): prose, comicScript,
+    // and rendered comic art were all generated from the OLD beats.
+    await issuesSvc.updateStage(issueId, 'prose', { status: 'ready', output: 'old prose' });
+    await issuesSvc.updateStage(issueId, 'comicScript', { status: 'ready', output: 'old script' });
+    await issuesSvc.updateStage(issueId, 'comicPages', {
+      status: 'ready',
+      pages: [{ panels: [{ description: 'p' }], proofImage: { jobId: 'pg0' } }],
+      cover: { proofImage: { jobId: 'cov' } },
+      backCover: { proofImage: { jobId: 'bc' } },
+    });
+    // Sanity: art reads as fully drafted before the beat fix.
+    expect(autopilot.visualReady(await issuesSvc.getIssue(issueId))).toBe(true);
+
+    const applied = await applyBeatResolutions(series.id, series, [{ seasonNumber: 1, episodeNumber: 1, beats: 'corrected beats' }]);
+    expect(applied[0].clearedStages).toEqual(expect.arrayContaining(['prose', 'comicScript', 'comicPages']));
+    const issue = await issuesSvc.getIssue(issueId);
+    expect(issue.stages.idea.output).toBe('corrected beats');     // new beats applied
+    expect(issuesSvc.isStageReady(issue.stages.prose)).toBe(false);       // stale text → cleared
+    expect(issuesSvc.isStageReady(issue.stages.comicScript)).toBe(false); // stale script → cleared
+    expect(autopilot.visualReady(issue)).toBe(false);                     // stale art → re-draw forced
+  });
+
+  it('does NOT clear a locked downstream stage when rewriting beats', async () => {
+    const { series, issueId } = await seedIssueWithBeats();
+    await issuesSvc.updateStage(issueId, 'comicScript', { status: 'ready', output: 'frozen script', locked: true });
+    const applied = await applyBeatResolutions(series.id, series, [{ seasonNumber: 1, episodeNumber: 1, beats: 'corrected beats' }]);
+    expect(applied[0].clearedStages).not.toContain('comicScript');
+    const issue = await issuesSvc.getIssue(issueId);
+    expect(issue.stages.comicScript.output).toBe('frozen script');  // untouched
+  });
+
+  it('skips a locked idea stage', async () => {
+    const { series, issueId } = await seedIssueWithBeats({ locked: true });
+    const applied = await applyBeatResolutions(series.id, series, [{ seasonNumber: 1, episodeNumber: 1, beats: 'corrected' }]);
+    expect(applied[0]).toMatchObject({ skipped: 'locked' });
+    const issue = await issuesSvc.getIssue(issueId);
+    expect(issue.stages.idea.output).toBe('old beats');  // untouched
+  });
+
+  it('skips an issue that has no beats yet (corpus is beat-level)', async () => {
+    const { series } = await seedIssueWithBeats({ status: 'empty', output: '' });
+    const applied = await applyBeatResolutions(series.id, series, [{ seasonNumber: 1, episodeNumber: 1, beats: 'corrected' }]);
+    expect(applied[0]).toMatchObject({ skipped: 'no-beats' });
+  });
+
+  it('drops an unmatched correction rather than rewriting the wrong issue', async () => {
+    const { series, issueId } = await seedIssueWithBeats();
+    // Only episode 1 exists; a correction for episode 99 matches nothing.
+    const applied = await applyBeatResolutions(series.id, series, [{ seasonNumber: 1, episodeNumber: 99, beats: 'corrected' }]);
+    expect(applied[0]).toMatchObject({ skipped: 'no-match' });
+    const issue = await issuesSvc.getIssue(issueId);
+    expect(issue.stages.idea.output).toBe('old beats');  // untouched
   });
 });

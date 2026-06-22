@@ -1093,6 +1093,9 @@ export const pipelineEditorialChecksSettingsSchema = z.object({
   readinessGate: z.enum(['noOpenHigh', 'noOpenHighOrMedium', 'none']).optional(),
   maxArcVerifyRounds: z.number().int().min(0).max(MAX_CONVERGENCE_ROUNDS).optional(),
   maxEditorialRounds: z.number().int().min(0).max(MAX_CONVERGENCE_ROUNDS).optional(),
+  // Whole-manuscript beat-continuity convergence (#1510) — same bound + 0-skip
+  // semantics. Optional + additive so older peers fall through to the default.
+  maxBeatContinuityRounds: z.number().int().min(0).max(MAX_CONVERGENCE_ROUNDS).optional(),
 }).strict();
 
 // Cursor-context payload for the CD-bridge suggest route — identical shape to
