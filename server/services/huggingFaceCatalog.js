@@ -629,12 +629,19 @@ async function fetchModels(search, limit, filter) {
 
 const repoModelCache = new Map()
 const REPO_MODEL_CACHE_MAX = 500
+// A transient fetch failure (network down / timeout / malformed body) — distinct
+// from a genuine HTTP non-OK (404 / gated / private). The former must NOT be
+// cached (it would permanently disable enrichment for the process until HF
+// recovers); the latter is a real "no data" answer worth caching.
+const TRANSIENT_FETCH = Symbol('transient-fetch')
 
 // Fetch (and cache) the per-model record WITH per-file sizes. The search
 // endpoint returns siblings without sizes; only `?blobs=true` carries them, and
 // the box is debounced per keystroke, so cache by repo to avoid re-fetching.
 // `null` = fetched-but-unavailable (gated / private / 404), cached (per the
 // absent-vs-empty sentinel rule) so a sizeless repo isn't re-probed every search.
+// A transient failure returns null too, but is NOT cached, so a recovered HF
+// re-enriches on the next request instead of staying blank until restart.
 async function fetchRepoModel(repoId) {
   if (repoModelCache.has(repoId)) return repoModelCache.get(repoId)
   // repoId comes from the HF search response (untrusted upstream) — encode each
@@ -642,7 +649,8 @@ async function fetchRepoModel(repoId) {
   const safeRepoPath = String(repoId).split('/').map(encodeURIComponent).join('/')
   const model = await fetchWithTimeout(`${HF_API_BASE}/${safeRepoPath}?blobs=true`, { headers: hfHeaders() }, HF_TIMEOUT_MS)
     .then((res) => (res.ok ? res.json() : null))
-    .catch(() => null)
+    .catch(() => TRANSIENT_FETCH)
+  if (model === TRANSIENT_FETCH) return null // transient — return null but don't cache
   // Evict oldest entry when the cap is reached (insertion-order iteration).
   if (repoModelCache.size >= REPO_MODEL_CACHE_MAX) {
     repoModelCache.delete(repoModelCache.keys().next().value)

@@ -411,6 +411,29 @@ describe('huggingFaceCatalog', () => {
       expect(result.id).toBe(`${repo}@Q4_K_M`)
       expect(result.variants.find((v) => v.recommended).installId).toBe(result.id)
     })
+
+    it('does not cache a transient blobs-fetch failure — re-enriches once HF recovers', async () => {
+      const repo = 'org/Flaky-GGUF'
+      let blobsCalls = 0
+      fetch.mockImplementation(async (url) => {
+        const u = String(url)
+        if (u.includes('blobs=true')) {
+          blobsCalls += 1
+          if (blobsCalls === 1) throw new Error('transient network error')
+          return response({ id: repo, siblings: [{ rfilename: 'M-Q4_K_M.gguf', size: 4_000_000_000 }] })
+        }
+        return response([{ modelId: repo, downloads: 10, tags: ['gguf'], siblings: [{ rfilename: 'M-Q4_K_M.gguf' }] }])
+      })
+
+      const [first] = await searchHuggingFaceModels({ backend: 'ollama', query: 'flaky', systemMemoryBytes: 128 * 1024 ** 3 })
+      // Transient failure → no variants, and crucially NOT cached as a null result.
+      expect(first.variants).toBeUndefined()
+
+      const [second] = await searchHuggingFaceModels({ backend: 'ollama', query: 'flaky', systemMemoryBytes: 128 * 1024 ** 3 })
+      // Retried (the null wasn't cached) → enrichment succeeds this time.
+      expect(second.variants).toBeTruthy()
+      expect(second.sizeBytes).toBe(4_000_000_000)
+    })
   })
 
   describe('sort order', () => {
