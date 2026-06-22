@@ -53,14 +53,17 @@ export const STATUS_GROUPS = {
   active: { label: 'Active', dot: 'bg-port-success', order: 0 },
   'on-demand': { label: 'On-Demand', dot: 'bg-gray-400', order: 1 },
   waiting: { label: 'Waiting', dot: 'bg-port-warning', order: 2 },
-  disabled: { label: 'Disabled', dot: 'bg-gray-600', order: 3 },
+  completed: { label: 'Completed', dot: 'bg-port-accent', order: 3 },
+  disabled: { label: 'Disabled', dot: 'bg-gray-600', order: 4 },
 };
 
 // Classify a task config into one status group (mutually exclusive).
-// Disabled wins over everything; then dependency-wait; then on-demand type.
+// Disabled wins over everything; then dependency-wait; then a one-shot that
+// already ran (won't run again until reset — not "active"); then on-demand type.
 export function getTaskStatusGroup(config) {
   if (!config?.enabled) return 'disabled';
   if (config.status?.reason === 'waiting-on-dependencies') return 'waiting';
+  if (config.type === 'once' && config.status?.reason === 'once-completed') return 'completed';
   if (config.type === 'on-demand') return 'on-demand';
   return 'active';
 }
@@ -87,6 +90,7 @@ export function coverageTone(enabled, total) {
 export function describeNextRun(config) {
   const group = getTaskStatusGroup(config);
   if (group === 'disabled') return { text: 'Paused', tone: 'text-gray-500' };
+  if (group === 'completed') return { text: 'Completed — reset to run again', tone: 'text-gray-400' };
   if (group === 'waiting') {
     const deps = config.status?.pendingDeps?.join(', ');
     return {
@@ -109,6 +113,7 @@ export const TASK_FILTERS = [
   { id: 'active', label: 'Active', emptyMessage: 'No active tasks.', match: ([, config]) => getTaskStatusGroup(config) === 'active' },
   { id: 'on-demand', label: 'On-Demand', emptyMessage: 'No on-demand tasks.', match: ([, config]) => getTaskStatusGroup(config) === 'on-demand' },
   { id: 'waiting', label: 'Waiting', emptyMessage: 'No tasks waiting on dependencies.', match: ([, config]) => getTaskStatusGroup(config) === 'waiting' },
+  { id: 'completed', label: 'Completed', emptyMessage: 'No completed tasks.', match: ([, config]) => getTaskStatusGroup(config) === 'completed' },
   { id: 'disabled', label: 'Disabled', emptyMessage: 'No disabled tasks.', match: ([, config]) => getTaskStatusGroup(config) === 'disabled' },
 ];
 export const DEFAULT_FILTER_ID = TASK_FILTERS[0].id;

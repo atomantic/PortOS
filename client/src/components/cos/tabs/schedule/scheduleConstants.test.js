@@ -19,6 +19,18 @@ describe('getTaskStatusGroup', () => {
     expect(getTaskStatusGroup({ enabled: true, type: 'daily' })).toBe('active');
   });
 
+  it('classifies a completed one-shot task as completed, not active', () => {
+    expect(getTaskStatusGroup({ enabled: true, type: 'once', status: { reason: 'once-completed' } })).toBe('completed');
+  });
+
+  it('keeps a not-yet-run one-shot task active', () => {
+    expect(getTaskStatusGroup({ enabled: true, type: 'once', status: { nextRunAt: '2999-01-01T00:00:00Z' } })).toBe('active');
+  });
+
+  it('disabled wins over a completed one-shot', () => {
+    expect(getTaskStatusGroup({ enabled: false, type: 'once', status: { reason: 'once-completed' } })).toBe('disabled');
+  });
+
   it('disabled wins over waiting', () => {
     expect(getTaskStatusGroup({ enabled: false, status: { reason: 'waiting-on-dependencies' } })).toBe('disabled');
   });
@@ -66,6 +78,11 @@ describe('describeNextRun', () => {
 
   it('reports manual-only for on-demand tasks', () => {
     expect(describeNextRun({ enabled: true, type: 'on-demand' }).text).toBe('Manual trigger only');
+  });
+
+  it('reports a completed one-shot as completed with a reset hint', () => {
+    const out = describeNextRun({ enabled: true, type: 'once', status: { reason: 'once-completed' } });
+    expect(out.text).toMatch(/completed/i);
   });
 
   it('reports the dependency list with a warn flag when waiting', () => {
