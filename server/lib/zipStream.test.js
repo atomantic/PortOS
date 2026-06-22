@@ -222,6 +222,22 @@ describe('collectZipEntry', () => {
     await expect(collected).rejects.toThrow(/exceeds 16 byte limit/);
   });
 
+  it('rejects (does not hang) when a deflated member is corrupt', async () => {
+    // method:8 declares deflate, but the payload is not a valid raw-deflate
+    // stream — the inflate pipeline must error and reject the collect, not hang.
+    const garbage = Buffer.from('not a valid deflate stream at all');
+    const zip = Buffer.concat([buildEntry('clinical_records/bad.json', garbage, { method: 8 }), buildEocd()]);
+    const collected = new Promise((resolve, reject) => {
+      const parser = parseZip();
+      let read;
+      parser.on('entry', (entry) => { read = collectZipEntry(entry); });
+      parser.on('close', () => read.then(resolve, reject));
+      parser.on('error', reject);
+      Readable.from([zip]).pipe(parser);
+    });
+    await expect(collected).rejects.toThrow();
+  });
+
   it('collects multiple JSON members alongside a drained member (appleHealth pattern)', async () => {
     // Mirrors server/routes/appleHealth.js: drain export.xml, collect every
     // clinical_records/*.json into buffers, await them all on 'close'.

@@ -156,10 +156,18 @@ router.post('/import/xml', uploadXml, asyncHandler(async (req, res) => {
           // polled flag; the clinical collects are awaited as promises.
           const finalize = () => Promise.all(clinicalReads).then(settle(resolve));
           if (xmlWriteFinished) return finalize();
-          const check = setInterval(() => { if (xmlWriteFinished) { clearInterval(check); finalize(); } }, XML_WRITE_POLL_INTERVAL_MS);
-          setTimeout(() => { clearInterval(check); finalize(); }, XML_WRITE_TIMEOUT_MS);
+          const check = setInterval(() => { if (xmlWriteFinished) { clearInterval(check); clearTimeout(timer); finalize(); } }, XML_WRITE_POLL_INTERVAL_MS);
+          const timer = setTimeout(() => { clearInterval(check); finalize(); }, XML_WRITE_TIMEOUT_MS);
         })
         .on('error', settle(reject));
+    }).catch(async (err) => {
+      // A rejected parse (missing export.xml, or an oversized/corrupt clinical
+      // record member) would otherwise orphan the uploaded ZIP and any partial
+      // extracted XML on disk. Clean both up before the error bubbles to the
+      // centralized middleware (mirrors chatgptZipImport's reject cleanup).
+      await fs.unlink(filePath).catch(() => {});
+      await fs.unlink(xmlPath).catch(() => {});
+      throw err;
     });
 
     await fs.unlink(filePath);
