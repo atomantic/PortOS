@@ -55,6 +55,14 @@ const FIT_META = {
   'too-large': { label: 'exceeds RAM', cls: 'text-port-error' },
 };
 
+// Model format badge — GGUF (llama.cpp, cross-backend) vs. MLX (Apple's native
+// format, LM Studio on Apple Silicon only). Shown so the user knows what they're
+// installing when both formats appear in the same result list.
+const FORMAT_META = {
+  gguf: { label: 'GGUF', title: 'GGUF — llama.cpp format, runs on Ollama and LM Studio', cls: 'border-port-border text-gray-400' },
+  mlx: { label: 'MLX', title: "MLX — Apple's native format, installs via LM Studio on Apple Silicon", cls: 'border-port-accent/40 text-port-accent' },
+};
+
 
 // Summarize a migrate result for the success toast (per-model statuses → counts).
 function summarizeMigrate(r) {
@@ -712,7 +720,7 @@ export function LocalLlmTab() {
         {catalogError && (
           <p className="text-xs text-port-warning">{catalogError}</p>
         )}
-        {catalogSource === 'huggingface' && Number.isFinite(systemMemoryGb) && (
+        {Number.isFinite(systemMemoryGb) && catalog.some((m) => Array.isArray(m.variants) && m.variants.length > 1) && (
           <p className="text-[11px] text-gray-500">
             This machine has {systemMemoryGb} GB of memory — the default quant is the highest-fidelity build that fits. Use the Quant menu on a result to choose a smaller or larger one.
           </p>
@@ -756,7 +764,17 @@ export function LocalLlmTab() {
                   return (
                   <div key={m.key || m.id} className="flex items-start gap-3 bg-port-bg border border-port-border rounded-lg p-3">
                     <div className="flex-1 min-w-0">
-                      <div className="text-sm text-white truncate">{m.name} <span className="text-xs text-gray-500">· {m.params}</span></div>
+                      <div className="text-sm text-white truncate">
+                        {m.name} <span className="text-xs text-gray-500">· {m.params}</span>
+                        {FORMAT_META[m.format] && (
+                          <span
+                            title={FORMAT_META[m.format].title}
+                            className={`ml-1.5 align-middle text-[10px] px-1 py-0.5 rounded border ${FORMAT_META[m.format].cls}`}
+                          >
+                            {FORMAT_META[m.format].label}
+                          </span>
+                        )}
+                      </div>
                       <div className="text-xs text-gray-500 truncate">{chosenId}</div>
                       <div className="text-xs text-gray-500 mt-0.5">{m.description}</div>
                       {m.note && <div className="text-[11px] text-port-warning/90 mt-0.5">{m.note}</div>}

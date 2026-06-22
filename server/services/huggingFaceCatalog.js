@@ -282,13 +282,26 @@ function scoreModel(model, category, file) {
   const categoryText = `${repoId} ${tags.join(' ')} ${model?.pipeline_tag || ''}`.toLowerCase()
 
   let score = 0
-  score += Math.log10(downloads + 1) * 12
+  // Downloads and recency are the two factors the user cares about most, so they
+  // dominate the blend. Downloads: a heavier log weight (a 1M-download model beats
+  // a trusted-publisher 1K-download one). Recency: graduated, not a single 180-day
+  // step — a model updated this week clearly outranks one from months/years ago,
+  // and a stale model is actively demoted. (The Hub query already sorts by
+  // downloads; this re-asserts both factors after the trust/format bonuses.)
+  score += Math.log10(downloads + 1) * 18
   score += Math.log10(likes + 1) * 8
+  if (daysOld != null) {
+    if (daysOld <= 14) score += 26
+    else if (daysOld <= 45) score += 20
+    else if (daysOld <= 120) score += 12
+    else if (daysOld <= 270) score += 5
+    else if (daysOld <= 540) score -= 4
+    else score -= 14
+  }
   if (TRUSTED_PUBLISHERS.has(publisher)) score += 22
   if (file) score += 18
   if (/gguf/i.test(repoId) || tags.includes('gguf')) score += 10
   if (category !== 'chat' && CATEGORY_SEARCH[category]?.split(/\s+/).some((term) => categoryText.includes(term))) score += 12
-  if (daysOld != null && daysOld <= 180) score += 8
   if (licenseOf(model)) score += 4
   if (/(uncensored|abliterated|nsfw)/i.test(repoId)) score -= 12
   return Math.round(score)
@@ -349,6 +362,7 @@ function buildVariants(model, backend, usableBytes) {
       const sizeBytes = largestUnit > 0 ? largestUnit : null
       return {
         quant,
+        format: 'gguf',
         installId: variantInstallId(backend, repoId, quant),
         sizeBytes,
         size: formatBytes(sizeBytes) || quant,
@@ -412,6 +426,85 @@ function isInstalled(backend, result, installedIds) {
   return installIdInstalled(backend, result.id, result.repository, installedIds)
 }
 
+// ---- MLX (Apple Silicon) ----------------------------------------------------
+// MLX is Apple's native ML format. It ships sharded `.safetensors` + a config
+// (no single GGUF), and is installable ONLY via LM Studio (`lms get <repo>`) on
+// Apple Silicon — Ollama's MLX path accelerates GGUF from its own registry and
+// can't pull arbitrary HF safetensors repos, so MLX is never surfaced for the
+// Ollama backend (the search gates the whole MLX query on lmstudio+Apple Silicon).
+const MLX_PUBLISHER = 'mlx-community'
+const SAFETENSORS_RE = /\.safetensors$/i
+
+function safetensorsFilesOf(model) {
+  return siblingsOf(model)
+    .map((s) => ({ name: normalizeText(s.rfilename || s.name), size: Number.isFinite(s.size) ? s.size : null }))
+    .filter((file) => SAFETENSORS_RE.test(file.name))
+}
+
+// Sum the safetensors shards — an MLX repo's resident footprint ≈ the weight
+// total (same overhead heuristic as GGUF; MEMORY_OVERHEAD covers the KV cache).
+function sumSafetensorsBytes(model) {
+  const total = safetensorsFilesOf(model).reduce((sum, f) => sum + (f.size || 0), 0)
+  return total > 0 ? total : null
+}
+
+// MLX quant from the repo-name suffix. mlx-community encodes the quant in the
+// REPO name (one quant per repo), not per-file: `Qwen2.5-7B-Instruct-4bit`,
+// `-8bit`, `-6bit`, `-3bit`, `-bf16`, `-fp16`, sometimes a trailing method tag
+// (`-4bit-DWQ`). Null when unparseable (the bare repo still installs — LM Studio
+// resolves it — but no quant label is shown).
+function mlxQuantFromRepo(repoId) {
+  const name = String(repoId).split('/').pop() || ''
+  const m = name.match(/(?:^|[-_])(\d{1,2}bit|bf16|fp16|fp32|f16|f32)(?:[-_](?:dwq|hi|lo|mixed[a-z0-9_]*))?$/i)
+  return m ? m[1].toLowerCase() : null
+}
+
+function hasMlxSignal(model) {
+  const repoId = repoIdOf(model)
+  const hasSafetensors = siblingsOf(model).some((s) => SAFETENSORS_RE.test(normalizeText(s.rfilename || s.name)))
+  return (tagsOf(model).includes('mlx') || repoId.toLowerCase().includes('mlx') || publisherOf(repoId) === MLX_PUBLISHER)
+    && hasSafetensors
+}
+
+// Build an MLX search result. Same shape as a GGUF result with `format: 'mlx'`,
+// a single variant (the repo's quant), and the LM Studio bare-repo install id.
+// Sizes/variant fit are backfilled in enrichWithSizes from `?blobs=true`.
+function toMlxResult(model, requestedCategory, installedIds) {
+  const repoId = repoIdOf(model)
+  if (!repoId || !repoId.includes('/')) return null
+  const category = classifyModel(model, requestedCategory)
+  const quant = mlxQuantFromRepo(repoId)
+  const result = {
+    id: repoId, // `lms get <repo>` — the repo IS the quant for mlx-community
+    key: repoId,
+    name: displayName(repoId),
+    category,
+    params: extractParams(repoId) || 'MLX',
+    size: quant ? quant.toUpperCase() : 'MLX',
+    family: repoId.split('/').pop().split(/[-_]/)[0]?.toLowerCase() || 'huggingface',
+    description: model?.cardData?.summary || model?.cardData?.description
+      || 'Apple MLX model — installs via LM Studio on Apple Silicon.',
+    capabilities: capabilitiesFor(model, category),
+    installed: false,
+    source: 'huggingface',
+    format: 'mlx',
+    repository: repoId,
+    publisher: publisherOf(repoId),
+    downloads: Number(model?.downloads || 0),
+    likes: Number(model?.likes || 0),
+    sizeBytes: null,
+    contextLength: null,
+    createdAt: model?.createdAt || model?.created_at || null,
+    updatedAt: model?.lastModified || model?.last_modified || model?.updatedAt || null,
+    license: licenseOf(model),
+    quant,
+    score: scoreModel(model, category, null),
+    installable: true
+  }
+  result.installed = installIdInstalled('lmstudio', repoId, repoId, installedIds)
+  return result
+}
+
 function toResult(model, backend, requestedCategory, installedIds, installedAudioRepos = new Set()) {
   const repoId = repoIdOf(model)
   if (!repoId || !repoId.includes('/')) return null
@@ -442,6 +535,9 @@ function toResult(model, backend, requestedCategory, installedIds, installedAudi
     capabilities: capabilitiesFor(model, category),
     installed: false,
     source: 'huggingface',
+    // Format discriminator for the UI badge: GGUF chat models vs. (separately
+    // queried) MLX. Audio repos are neither, so they stay null.
+    format: isAudio ? null : 'gguf',
     repository: repoId,
     publisher: publisherOf(repoId),
     downloads: Number(model?.downloads || 0),
@@ -477,7 +573,11 @@ function hfHeaders() {
   return headers
 }
 
-async function fetchModels(search, limit, useGgufFilter) {
+// `filter` is a Hugging Face library tag — 'gguf' for the GGUF query, 'mlx' for
+// the Apple-MLX query, or null/'' to relax the format filter (audio category and
+// the GGUF-signal fallback). Only one filter at a time; MLX runs as a separate
+// query so its results don't pollute the GGUF list.
+async function fetchModels(search, limit, filter) {
   const params = new URLSearchParams({
     search,
     sort: 'downloads',
@@ -485,7 +585,7 @@ async function fetchModels(search, limit, useGgufFilter) {
     limit: String(limit),
     full: 'true'
   })
-  if (useGgufFilter) params.set('filter', 'gguf')
+  if (filter) params.set('filter', filter)
 
   const response = await fetchWithTimeout(`${HF_API_BASE}?${params.toString()}`, { headers: hfHeaders() }, HF_TIMEOUT_MS)
   if (!response.ok) {
@@ -539,6 +639,33 @@ function contextLengthOf(model) {
   return Number.isFinite(n) && n > 0 ? n : null
 }
 
+// Build the per-quant GGUF variant list onto `result` from a fetched repo record
+// and anchor the result on the RAM-aware (or QUANT_PRIORITY) default. Shared by
+// the live HF search and the curated-catalog enrichment so both cards behave the
+// same. Returns true when variants were applied, false when the repo has no
+// parseable GGUF quant (e.g. an MLX-only repo) so the caller can leave it as-is.
+function applyGgufVariants(result, model, { backend, usableBytes, installedIds }) {
+  const variants = buildVariants(model, backend, usableBytes)
+  if (variants.length === 0) return false
+  // Per-quant installed state — Ollama tracks each quant separately, so the card
+  // must gate Install on the *selected* variant, not one repo-wide flag.
+  for (const v of variants) v.installed = installIdInstalled(backend, v.installId, result.repository, installedIds)
+  // Always anchor the result on one of its own variants so the install id and the
+  // client's controlled <select> agree. Prefer the RAM-aware pick; otherwise the
+  // QUANT_PRIORITY default (matched by quant); fall back to the largest variant.
+  // `usableBytes != null` (not truthiness): 0 is a real budget on a tiny machine —
+  // pick the smallest (all flagged too-large) rather than falling through as if
+  // memory were unknown.
+  const chosen = (usableBytes != null ? pickVariantForBudget(variants, usableBytes) : null)
+    || variants.find((v) => v.quant && v.quant === result.quant)
+    || variants[0]
+  applyVariant(result, chosen)
+  for (const v of variants) v.recommended = v.installId === result.id
+  result.installed = chosen.installed
+  result.variants = variants
+  return true
+}
+
 // Backfill real file sizes AND native context windows from the per-model
 // `?blobs=true` record (the search listing carries neither). Both are fetched
 // from the same cached repo record, so a result missing either triggers one
@@ -546,42 +673,40 @@ function contextLengthOf(model) {
 async function enrichWithSizes(results, { backend, usableBytes, installedIds = [] } = {}) {
   await Promise.allSettled(results.map(async (result) => {
     const isAudio = result.category === 'audio'
+    const isMlx = result.format === 'mlx'
     const needsSize = !Number.isFinite(result.sizeBytes)
-    const needsContext = !isAudio && result.contextLength == null
+    // MLX repos carry no GGUF metadata block, so they have no native-context field.
+    const needsContext = !isAudio && !isMlx && result.contextLength == null
     // Variants come only from the per-repo `?blobs=true` record (the listing
     // omits per-file sizes), so build them here for every non-audio result.
     const needsVariants = !isAudio && !result.variants
     if (!needsSize && !needsContext && !needsVariants) return
     const model = await fetchRepoModel(result.repository)
     if (!model) return
-    if (!isAudio) {
-      const variants = buildVariants(model, backend, usableBytes)
-      if (variants.length > 0) {
-        // Per-quant installed state — Ollama tracks each quant separately, so the
-        // card must gate Install on the *selected* variant, not one repo-wide flag.
-        for (const v of variants) v.installed = installIdInstalled(backend, v.installId, result.repository, installedIds)
-        // Always anchor the result on one of its own variants so the install id
-        // and the client's controlled <select> agree. Prefer the RAM-aware pick;
-        // otherwise the QUANT_PRIORITY default toResult chose (matched by quant);
-        // fall back to the largest variant. Without this, LM Studio's bare-repo
-        // default id — and any repo where the blobs endpoint omits sizes, so the
-        // budget pick can't fire — would match no variant, flagging zero
-        // recommended and making Install pull a different quant than the one shown.
-        // `usableBytes != null` (not truthiness): 0 is a real budget on a tiny
-        // machine — pick the smallest (all flagged too-large) rather than falling
-        // through to QUANT_PRIORITY as if memory were unknown.
-        const chosen = (usableBytes != null ? pickVariantForBudget(variants, usableBytes) : null)
-          || variants.find((v) => v.quant && v.quant === result.quant)
-          || variants[0]
-        applyVariant(result, chosen)
-        // Flag whichever variant the result now points at as recommended so the
-        // UI can mark it (covers both the RAM-aware and QUANT_PRIORITY default).
-        for (const v of variants) v.recommended = v.installId === result.id
-        // Realign the result-level installed flag with the (possibly RAM-switched)
-        // default variant — toResult computed it against the pre-switch id.
-        result.installed = chosen.installed
-        result.variants = variants
+    if (isMlx) {
+      // MLX size = summed safetensors shards. The picker shows a single variant
+      // (the repo's quant) so the card UI matches the multi-quant GGUF cards.
+      const bytes = sumSafetensorsBytes(model)
+      if (Number.isFinite(bytes)) {
+        result.sizeBytes = bytes
+        result.size = formatBytes(bytes) || result.size
       }
+      const variant = {
+        quant: result.quant || 'mlx',
+        format: 'mlx',
+        installId: result.id, // bare repo — mlx-community encodes the quant in the name
+        sizeBytes: Number.isFinite(result.sizeBytes) ? result.sizeBytes : null,
+        size: formatBytes(result.sizeBytes) || (result.quant ? result.quant.toUpperCase() : 'MLX'),
+        fit: classifyFit(result.sizeBytes, usableBytes),
+        installed: installIdInstalled(backend, result.id, result.repository, installedIds),
+        recommended: true
+      }
+      result.variants = [variant]
+      result.installed = variant.installed
+      return
+    }
+    if (!isAudio) {
+      applyGgufVariants(result, model, { backend, usableBytes, installedIds })
     }
     if (needsSize && !Number.isFinite(result.sizeBytes)) {
       const bytes = isAudio
@@ -618,7 +743,7 @@ function curatedAudioResult(entry, installedAudioRepos) {
   }
 }
 
-export async function searchHuggingFaceModels({ backend, query = '', category = 'all', limit = 12, installedIds = [], installedAudioRepos = [], systemMemoryBytes = null }) {
+export async function searchHuggingFaceModels({ backend, query = '', category = 'all', limit = 12, installedIds = [], installedAudioRepos = [], systemMemoryBytes = null, appleSilicon = false }) {
   if (!isBackend(backend)) return []
   const requestedCategory = CATEGORY_IDS.has(category) ? category : 'all'
   // Usable RAM drives the per-quant fit verdicts and the RAM-aware default pick;
@@ -631,8 +756,17 @@ export async function searchHuggingFaceModels({ backend, query = '', category = 
   const ggufOnly = requestedCategory !== 'audio'
   const search = normalizeText(query) || CATEGORY_SEARCH[requestedCategory] || 'gguf'
   const fetchLimit = Math.max(limit * 3, 30)
-  let models = await fetchModels(search, fetchLimit, ggufOnly)
-  if (models.length === 0 && ggufOnly) models = await fetchModels(search, fetchLimit, false)
+  // MLX is only installable via LM Studio on Apple Silicon (see toMlxResult), so
+  // run the extra MLX query only there — never for Ollama, non-Apple hosts, or
+  // the audio category. `appleSilicon` is injected by the route (default false),
+  // keeping the service deterministic for tests regardless of the test host.
+  const wantMlx = appleSilicon && backend === 'lmstudio' && requestedCategory !== 'audio'
+  const [ggufModelsRaw, mlxModelsRaw] = await Promise.all([
+    fetchModels(search, fetchLimit, ggufOnly ? 'gguf' : null),
+    wantMlx ? fetchModels(search, fetchLimit, 'mlx') : Promise.resolve([])
+  ])
+  let models = ggufModelsRaw
+  if (models.length === 0 && ggufOnly) models = await fetchModels(search, fetchLimit, null)
 
   const seen = new Set()
   // Curated audio suggestions lead the Audio & Music list (filtered by query
@@ -663,9 +797,84 @@ export async function searchHuggingFaceModels({ backend, query = '', category = 
       return true
     })
 
-  const results = [...curated, ...live]
+  // MLX results (LM Studio + Apple Silicon only) merge into the same list — each
+  // is its own card (`format: 'mlx'`), deduped against the GGUF repos already seen.
+  const mlxLive = mlxModelsRaw
+    .filter((model) => hasMlxSignal(model))
+    .map((model) => toMlxResult(model, requestedCategory, installedIds))
+    .filter(Boolean)
+    .filter((model) => {
+      if (seen.has(model.repository)) return false
+      seen.add(model.repository)
+      return true
+    })
+
+  const results = [...curated, ...live, ...mlxLive]
     .sort((a, b) => b.score - a.score || b.downloads - a.downloads)
     .slice(0, limit)
 
   return enrichWithSizes(results, { backend, usableBytes, installedIds })
+}
+
+// The Hugging Face repo backing a curated install id, or null for a bare Ollama
+// registry name. LM Studio curated ids ARE HF repos (`publisher/Repo-GGUF`);
+// Ollama ids are HF-backed only when prefixed `hf.co/`. Bare Ollama names
+// (`llama3.2`, `qwen2.5`) pull from Ollama's own registry — per-quant variants
+// for those need the Ollama registry tag API (tracked as follow-up #1539), so
+// they get no picker here.
+function catalogRepoForBackend(backend, id) {
+  const raw = String(id || '')
+  if (backend === 'lmstudio') return raw.includes('/') ? raw.split('@')[0] : null
+  const m = raw.match(/^hf\.co\/(.+)$/i)
+  return m ? m[1].split(':')[0] : null
+}
+
+// Quant tag baked into a curated install id (`<repo>@Q4_K_M` / `hf.co/<repo>:Q4`),
+// so the no-RAM-budget fallback can anchor on the curator's chosen quant. Null
+// for ids with no quant tag (bare LM Studio repos / bare Ollama names).
+function quantFromInstallId(backend, id) {
+  const raw = String(id || '')
+  if (backend === 'lmstudio') {
+    const at = raw.indexOf('@')
+    return at >= 0 ? raw.slice(at + 1) : null
+  }
+  const slash = raw.indexOf('/')
+  const colon = raw.lastIndexOf(':')
+  return colon > slash ? raw.slice(colon + 1) : null
+}
+
+// Enrich curated-catalog entries (from localLlmCatalog.getCatalog) in place with
+// the same per-quant variant picker + RAM-aware default the live HF search uses,
+// for every entry that is HF-repo-backed (see catalogRepoForBackend). Entries
+// with no HF repo (bare Ollama registry names) or an MLX-only repo (no GGUF
+// quants) are left untouched — the card then shows the curator's single id with
+// no picker. `usableBytes` makes the recommended quant fit this machine.
+export async function enrichCatalogWithVariants(catalog, { backend, systemMemoryBytes = null, installedIds = [] } = {}) {
+  if (!isBackend(backend) || !Array.isArray(catalog)) return catalog
+  const usableBytes = usableMemoryBytes(systemMemoryBytes)
+  await Promise.allSettled(catalog.map(async (entry) => {
+    const repo = catalogRepoForBackend(backend, entry.id)
+    if (!repo) return
+    const model = await fetchRepoModel(repo)
+    if (!model) return
+    entry.repository = repo
+    // Seed the quant from the curator's id so the no-budget fallback anchors on it.
+    if (entry.quant == null) entry.quant = quantFromInstallId(backend, entry.id)
+    const applied = applyGgufVariants(entry, model, { backend, usableBytes, installedIds })
+    if (!applied) return // MLX-only / no parseable GGUF quant — leave the curated entry as-is
+    entry.format = 'gguf'
+    // Backfill the real size + native context window the curated list hard-codes.
+    if (!Number.isFinite(entry.sizeBytes)) {
+      const picked = pickGgufFile(model)
+      if (Number.isFinite(picked?.size)) {
+        entry.sizeBytes = picked.size
+        entry.size = formatBytes(picked.size) || entry.size
+      }
+    }
+    if (entry.contextLength == null) {
+      const ctx = contextLengthOf(model)
+      if (ctx != null) entry.contextLength = ctx
+    }
+  }))
+  return catalog
 }

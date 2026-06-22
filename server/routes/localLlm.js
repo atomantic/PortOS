@@ -25,7 +25,8 @@ import {
   localLlmCompareSchema
 } from '../lib/validation.js'
 import { getCatalog, searchCatalog, isBackend } from '../lib/localLlmCatalog.js'
-import { searchHuggingFaceModels } from '../services/huggingFaceCatalog.js'
+import { isAppleSilicon } from '../lib/platform.js'
+import { searchHuggingFaceModels, enrichCatalogWithVariants } from '../services/huggingFaceCatalog.js'
 import {
   getStatus, listModels, listVisionModels, installModel, deleteModel, switchBackend, migrateBackend, installBackend, upgradeBackend, controlOllamaServer
 } from '../services/localLlm.js'
@@ -55,13 +56,25 @@ router.get('/vision-models', asyncHandler(async (_req, res) => {
   res.json({ models: await listVisionModels() })
 }))
 
-// GET /api/local-llm/catalog?backend=ollama&q=llama — curated install picker
+// GET /api/local-llm/catalog?backend=ollama&q=llama — curated install picker.
+// HF-repo-backed entries are enriched with the same per-quant variant picker +
+// RAM-aware default as the live Hugging Face search, so the recommended quant
+// fits this machine instead of being hard-coded per model.
 router.get('/catalog', asyncHandler(async (req, res) => {
   const { backend, q } = req.query
   if (!isBackend(backend)) throw new ServerError('backend must be "ollama" or "lmstudio"', { status: 400 })
-  const installed = (await listModels(backend)).map((m) => m.id)
+  // Per-quant installed detection needs LM Studio's quantization on the id
+  // (`<id>@<quant>`) — mirror the HF-search route so a single installed quant
+  // doesn't flag every quant of a repo as installed.
+  const installed = (await listModels(backend)).map((m) => (
+    backend === 'lmstudio' && m.quantization ? `${m.id}@${m.quantization}` : m.id
+  ))
   const models = q ? searchCatalog(backend, q, installed) : getCatalog(backend, installed)
-  res.json({ backend, models })
+  // Total system memory drives the RAM-aware recommended quant (unified memory on
+  // Apple Silicon also backs the GPU, so a big box can default to higher fidelity).
+  const systemMemoryBytes = os.totalmem()
+  await enrichCatalogWithVariants(models, { backend, systemMemoryBytes, installedIds: installed })
+  res.json({ backend, models, systemMemoryGb: Math.round(systemMemoryBytes / 1024 ** 3) })
 }))
 
 // GET /api/local-llm/huggingface-search?backend=ollama&q=qwen&category=coding
@@ -88,8 +101,12 @@ router.get('/huggingface-search', asyncHandler(async (req, res) => {
   // fit verdicts. On unified-memory Macs this pool also backs the GPU, so a big
   // box can default to a higher-fidelity build than the old Q4-always pick.
   const systemMemoryBytes = os.totalmem()
-  const models = await searchHuggingFaceModels({ backend, query: q, category, limit, installedIds: installed, installedAudioRepos, systemMemoryBytes })
-  res.json({ backend, source: 'huggingface', models, systemMemoryGb: Math.round(systemMemoryBytes / 1024 ** 3) })
+  // MLX models surface only on Apple Silicon (and only for LM Studio) — gate the
+  // extra MLX query on the host so non-Apple installs don't see un-installable
+  // results. Detected here at the route boundary; the service stays deterministic.
+  const appleSilicon = isAppleSilicon()
+  const models = await searchHuggingFaceModels({ backend, query: q, category, limit, installedIds: installed, installedAudioRepos, systemMemoryBytes, appleSilicon })
+  res.json({ backend, source: 'huggingface', models, systemMemoryGb: Math.round(systemMemoryBytes / 1024 ** 3), appleSilicon })
 }))
 
 // POST /api/local-llm/install-backend — install the backend app/binary itself

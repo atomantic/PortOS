@@ -6,6 +6,17 @@ const execAsync = promisify(exec);
 const platform = process.platform;
 
 /**
+ * Is this an Apple-Silicon Mac (arm64 darwin)? Gates MLX model features: MLX is
+ * Apple's native ML framework, so MLX formats only run on Apple Silicon. (Node
+ * under Rosetta reports `process.arch === 'x64'`, which correctly reads false.)
+ * Detect at the route boundary and pass into pure services, like `os.totalmem()`.
+ * @returns {boolean}
+ */
+export function isAppleSilicon() {
+  return process.platform === 'darwin' && process.arch === 'arm64';
+}
+
+/**
  * Get list of listening TCP ports
  * @returns {Promise<number[]>} Array of port numbers
  */

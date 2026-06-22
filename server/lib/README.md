@@ -209,7 +209,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `pgTimestamp.js` | `mirrorTimestamp(value, fallback)` — coerce a hand-editable timestamp into a value Postgres TIMESTAMPTZ always accepts (or fall back), guarding boot-time binds against `Date.parse` rollover + out-of-range years. |
 | `pgTools.js` | `pg_dump` binary resolution shared by the backup snapshot path and the native↔Docker export path: `resolvePgDumpBinary(serverMajor)` (PORTOS_PGDUMP override → version-aware auto-select → bare `pg_dump`), plus the lower-level `pickPgDump` / `discoverPgDumpCandidates` / `resolvePgDump`. Picks the closest installed `pg_dump` whose major is ≥ the running server's. |
 | `ports.js` | Canonical PORTS object (re-exported from `ecosystem.config.cjs`). |
-| `platform.js` | Platform/OS detection helpers. |
+| `platform.js` | Platform/OS detection helpers — listening-port probes plus `isAppleSilicon()` (arm64 darwin; gates MLX model features, detect at the route boundary). |
 | `timezone.js` | Timezone utilities for scheduling. |
 | `viteAllowedHosts.js` | Detect and remediate a managed app's Vite `server.allowedHosts`. `findViteConfig(repoPath)` locates the config; `parseAllowedHosts(src)` / `hostIsAllowed(parsed, host)` decide whether a Tailscale/IP host would be accepted (mirrors Vite's localhost+IP-always-allowed and leading-dot-suffix rules); `rewriteAllowedHosts(src)` deterministically injects `allowedHosts: true` (or bails `ok:false` on ambiguous shapes so the caller can fall back to an LLM fix); `checkViteHost(repoPath, host)` is the one-shot status used by `GET /api/apps/:id/vite-host-check`. |
 | `buildId.js` | Build-ID derived from the built client bundle. |

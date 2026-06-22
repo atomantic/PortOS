@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { searchHuggingFaceModels } from './huggingFaceCatalog.js'
+import { searchHuggingFaceModels, enrichCatalogWithVariants } from './huggingFaceCatalog.js'
 
 const response = (body, ok = true) => ({
   ok,
@@ -410,6 +410,163 @@ describe('huggingFaceCatalog', () => {
       // must equal a listed variant so the client's controlled <select> matches.
       expect(result.id).toBe(`${repo}@Q4_K_M`)
       expect(result.variants.find((v) => v.recommended).installId).toBe(result.id)
+    })
+  })
+
+  describe('sort order', () => {
+    it('ranks by downloads, with recency breaking near-ties between equally-popular models', async () => {
+      const now = Date.now()
+      const day = 86_400_000
+      const models = [
+        { modelId: 'org/Old-Popular-GGUF', downloads: 5000, lastModified: new Date(now - 800 * day).toISOString(), tags: ['gguf'], siblings: [{ rfilename: 'm-Q4_K_M.gguf', size: 4_000_000_000 }] },
+        { modelId: 'org/New-Popular-GGUF', downloads: 5000, lastModified: new Date(now - 3 * day).toISOString(), tags: ['gguf'], siblings: [{ rfilename: 'm-Q4_K_M.gguf', size: 4_000_000_000 }] },
+        { modelId: 'org/Huge-GGUF', downloads: 5_000_000, lastModified: new Date(now - 200 * day).toISOString(), tags: ['gguf'], siblings: [{ rfilename: 'm-Q4_K_M.gguf', size: 4_000_000_000 }] },
+      ]
+      fetch.mockImplementation(async (url) => (
+        String(url).includes('blobs=true')
+          ? response({ id: 'x', siblings: [{ rfilename: 'm-Q4_K_M.gguf', size: 4_000_000_000 }] })
+          : response(models)
+      ))
+
+      const results = await searchHuggingFaceModels({ backend: 'ollama', query: 'm' })
+      const order = results.map((r) => r.repository)
+
+      // Far-and-away most-downloaded model leads overall.
+      expect(order[0]).toBe('org/Huge-GGUF')
+      // Between two models with identical downloads, the fresher one ranks higher.
+      expect(order.indexOf('org/New-Popular-GGUF')).toBeLessThan(order.indexOf('org/Old-Popular-GGUF'))
+    })
+  })
+
+  describe('MLX models (Apple Silicon)', () => {
+    // URL-aware mock: order matters (most-specific first). MLX adds a parallel
+    // `filter=mlx` query + per-repo blobs fetch, so a sequential mock is fragile;
+    // route by URL instead.
+    const urlRouter = (routes) => vi.fn(async (url) => {
+      const u = String(url)
+      for (const [match, body] of routes) {
+        const hit = typeof match === 'function' ? match(u) : u.includes(match)
+        if (hit) return response(body)
+      }
+      return response([])
+    })
+    const mlxListing = (modelId, files) => (
+      { modelId, downloads: 5000, likes: 200, tags: ['mlx', 'safetensors'], siblings: files.map((rfilename) => ({ rfilename })) }
+    )
+    const mlxBlobs = (id, sized) => ({ id, siblings: Object.entries(sized).map(([rfilename, size]) => ({ rfilename, size })) })
+
+    it('surfaces an MLX result for LM Studio on Apple Silicon with a summed safetensors variant', async () => {
+      const repo = 'mlx-community/Qwythos-9B-MLX-4bit'
+      fetch.mockImplementation(urlRouter([
+        ['filter=mlx', [mlxListing(repo, ['model-00001-of-00002.safetensors', 'model-00002-of-00002.safetensors'])]],
+        ['filter=gguf', []],
+        [(u) => u.includes('blobs=true'), mlxBlobs(repo, {
+          'model-00001-of-00002.safetensors': 9_000_000_000,
+          'model-00002-of-00002.safetensors': 9_000_000_000,
+        })],
+      ]))
+
+      const results = await searchHuggingFaceModels({
+        backend: 'lmstudio', query: 'qwythos', systemMemoryBytes: 128 * 1024 ** 3, appleSilicon: true
+      })
+      const mlx = results.find((r) => r.repository === repo)
+
+      expect(mlx).toBeTruthy()
+      expect(mlx).toMatchObject({ format: 'mlx', id: repo, quant: '4bit', installable: true, sizeBytes: 18_000_000_000 })
+      expect(mlx.variants).toHaveLength(1)
+      expect(mlx.variants[0]).toMatchObject({ format: 'mlx', quant: '4bit', installId: repo, sizeBytes: 18_000_000_000, fit: 'comfortable', recommended: true })
+    })
+
+    it('never surfaces MLX for the Ollama backend (Ollama MLX uses its own registry, not HF safetensors)', async () => {
+      const ggufRepo = 'org/Plain-GGUF'
+      const mlxRepo = 'mlx-community/Should-Not-Appear-4bit'
+      fetch.mockImplementation(urlRouter([
+        ['filter=mlx', [mlxListing(mlxRepo, ['model.safetensors'])]],
+        ['filter=gguf', [{ modelId: ggufRepo, downloads: 10, tags: ['gguf'], siblings: [{ rfilename: 'Plain-Q4_K_M.gguf', size: 4_000_000_000 }] }]],
+        [(u) => u.includes('blobs=true'), { id: ggufRepo, siblings: [{ rfilename: 'Plain-Q4_K_M.gguf', size: 4_000_000_000 }] }],
+      ]))
+
+      const results = await searchHuggingFaceModels({ backend: 'ollama', query: 'plain', appleSilicon: true })
+
+      expect(results.some((r) => r.format === 'mlx')).toBe(false)
+      expect(results.some((r) => r.repository === mlxRepo)).toBe(false)
+    })
+
+    it('does not surface MLX on a non-Apple host even for LM Studio', async () => {
+      const mlxRepo = 'mlx-community/Hidden-On-Intel-4bit'
+      fetch.mockImplementation(urlRouter([
+        ['filter=mlx', [mlxListing(mlxRepo, ['model.safetensors'])]],
+        ['filter=gguf', []],
+      ]))
+
+      const results = await searchHuggingFaceModels({ backend: 'lmstudio', query: 'hidden', appleSilicon: false })
+
+      expect(results.some((r) => r.repository === mlxRepo)).toBe(false)
+    })
+
+    it('parses a bf16 repo-name quant and marks an installed MLX repo', async () => {
+      const repo = 'mlx-community/Qwythos-9B-MLX-bf16'
+      fetch.mockImplementation(urlRouter([
+        ['filter=mlx', [mlxListing(repo, ['model.safetensors'])]],
+        ['filter=gguf', []],
+        [(u) => u.includes('blobs=true'), mlxBlobs(repo, { 'model.safetensors': 18_000_000_000 })],
+      ]))
+
+      const results = await searchHuggingFaceModels({
+        backend: 'lmstudio', query: 'qwythos', systemMemoryBytes: 128 * 1024 ** 3, appleSilicon: true, installedIds: [repo]
+      })
+      const mlx = results.find((r) => r.repository === repo)
+
+      expect(mlx.quant).toBe('bf16')
+      expect(mlx.installed).toBe(true)
+      expect(mlx.variants[0].installed).toBe(true)
+    })
+  })
+
+  describe('curated catalog quant enrichment', () => {
+    const blobs = (id, sized) => response({ id, siblings: Object.entries(sized).map(([rfilename, size]) => ({ rfilename, size })) })
+
+    it('adds the RAM-aware variant picker to an LM Studio curated (HF-repo) entry', async () => {
+      const repo = 'lmstudio-community/Curated-Llama-GGUF'
+      fetch.mockResolvedValueOnce(blobs(repo, {
+        'Curated-Llama-Q4_K_M.gguf': 4_000_000_000,
+        'Curated-Llama-Q8_0.gguf': 8_000_000_000,
+      }))
+
+      const catalog = [{ id: repo, key: 'curated-llama', name: 'Curated Llama', category: 'chat', size: '2.0 GB' }]
+      await enrichCatalogWithVariants(catalog, { backend: 'lmstudio', systemMemoryBytes: 128 * 1024 ** 3, installedIds: [] })
+
+      expect(catalog[0].format).toBe('gguf')
+      expect(catalog[0].variants.map((v) => v.installId)).toEqual([`${repo}@Q8_0`, `${repo}@Q4_K_M`])
+      // 128 GB → highest-fidelity that fits becomes the recommended default.
+      expect(catalog[0].id).toBe(`${repo}@Q8_0`)
+      expect(catalog[0].variants.find((v) => v.recommended).installId).toBe(`${repo}@Q8_0`)
+      expect(catalog[0].sizeBytes).toBe(8_000_000_000)
+    })
+
+    it('enriches an Ollama hf.co curated id and keeps the hf.co install ids', async () => {
+      const repo = 'unsloth/Curated-Devstral-GGUF'
+      fetch.mockResolvedValueOnce(blobs(repo, {
+        'Devstral-UD-Q4_K_XL.gguf': 14_000_000_000,
+        'Devstral-Q8_0.gguf': 24_000_000_000,
+      }))
+
+      const catalog = [{ id: `hf.co/${repo}:UD-Q4_K_XL`, key: 'devstral', name: 'Devstral', category: 'coding', size: '14 GB' }]
+      await enrichCatalogWithVariants(catalog, { backend: 'ollama', systemMemoryBytes: 128 * 1024 ** 3, installedIds: [] })
+
+      expect(catalog[0].variants.map((v) => v.installId)).toEqual([`hf.co/${repo}:Q8_0`, `hf.co/${repo}:UD-Q4_K_XL`])
+      expect(catalog[0].id).toBe(`hf.co/${repo}:Q8_0`)
+    })
+
+    it('leaves a bare Ollama registry name untouched (no HF repo → no picker)', async () => {
+      fetch.mockResolvedValue(response([]))
+      const catalog = [{ id: 'llama3.2', key: 'llama3.2', name: 'Llama 3.2 3B', category: 'chat', size: '2.0 GB' }]
+      await enrichCatalogWithVariants(catalog, { backend: 'ollama', systemMemoryBytes: 128 * 1024 ** 3, installedIds: [] })
+
+      expect(catalog[0].variants).toBeUndefined()
+      expect(catalog[0].id).toBe('llama3.2')
+      // No HF repo means no network probe at all.
+      expect(fetch).not.toHaveBeenCalled()
     })
   })
 
