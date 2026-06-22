@@ -108,6 +108,28 @@ describe('fetchOllamaRegistryVariants', () => {
     expect(variants).toHaveLength(2)
   })
 
+  it('includes size-less bare-quant tags for a default-build card (no explicit size in the id)', async () => {
+    // `mistral` has no size tag in its id — the size comes only from the params hint,
+    // so the card IS the default build and bare `q4_K_M`/`q8_0` tags are its quants.
+    fetch.mockImplementation(registry(
+      ['latest', 'q4_K_M', 'q8_0'],
+      { q4_K_M: 4_000_000_000, q8_0: 7_000_000_000 }
+    ))
+    const variants = await fetchOllamaRegistryVariants('mistral', { paramsHint: '7B' })
+    expect(variants.map((v) => v.installId).sort()).toEqual(['mistral:q4_K_M', 'mistral:q8_0'])
+  })
+
+  it('skips size-less bare-quant tags when the id pins an explicit size', async () => {
+    // `gpt-oss:20b` pins 20b — bare `q4_K_M` is the model's DEFAULT-size quant, which
+    // may be a different size, so it must not join the 20b card.
+    fetch.mockImplementation(registry(
+      ['q4_K_M', '20b-q4_K_M', '20b-q8_0'],
+      { q4_K_M: 9_000_000_000, '20b-q4_K_M': 12_000_000_000, '20b-q8_0': 22_000_000_000 }
+    ))
+    const variants = await fetchOllamaRegistryVariants('gpt-oss:20b', { paramsHint: '20B' })
+    expect(variants.map((v) => v.installId).sort()).toEqual(['gpt-oss:20b-q4_K_M', 'gpt-oss:20b-q8_0'])
+  })
+
   it('derives the target size from an explicit tag over the params hint', async () => {
     fetch.mockImplementation(registry(
       ['20b-q4_K_M', '120b-q4_K_M'],

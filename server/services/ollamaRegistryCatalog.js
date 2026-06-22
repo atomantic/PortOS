@@ -190,8 +190,11 @@ export async function fetchOllamaRegistryVariants(id, { paramsHint = null, timeo
   if (!Array.isArray(tags) || tags.length === 0) return []
 
   // Constrain variants to the card's parameter size so one card never mixes a
-  // 1B and a 70B build in its picker.
-  const targetSize = sizeTokenOf(parsed.tag) || sizeTokenOf(paramsHint)
+  // 1B and a 70B build in its picker. `explicitSize` (from the id's own tag, e.g.
+  // `gpt-oss:20b`) pins a specific size; otherwise the size comes from the params
+  // hint and the card represents the model's DEFAULT build.
+  const explicitSize = sizeTokenOf(parsed.tag)
+  const targetSize = explicitSize || sizeTokenOf(paramsHint)
 
   // Classify tags → quant-bearing ones at the target size, deduped by quant.
   const byQuant = new Map()
@@ -199,11 +202,15 @@ export async function fetchOllamaRegistryVariants(id, { paramsHint = null, timeo
     const quant = quantFromOllamaTag(tag)
     if (!quant) continue
     const size = sizeTokenOf(tag)
-    if (targetSize) {
-      // With a known target size, require an explicit size match — a size-less
-      // bare-quant tag (`q4_K_M`) belongs to the model's default size, which may
-      // not be this card's build, so skip it.
-      if (size !== targetSize) continue
+    if (size) {
+      // A sized tag is kept only if it matches the card's target size.
+      if (targetSize && size !== targetSize) continue
+    } else if (explicitSize) {
+      // A size-less bare-quant tag (`q4_K_M`/`q8_0`) is the model's DEFAULT-size
+      // quant. Keep it when this card IS the default build (the id carries no size
+      // tag), but skip it when the id pins a specific size — the default size may
+      // differ from this card's build.
+      continue
     }
     const existing = byQuant.get(quant)
     if (!existing || preferTag(tag, existing)) byQuant.set(quant, tag)
