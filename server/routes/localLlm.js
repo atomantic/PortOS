@@ -61,7 +61,7 @@ router.get('/vision-models', asyncHandler(async (_req, res) => {
 // RAM-aware default as the live Hugging Face search, so the recommended quant
 // fits this machine instead of being hard-coded per model.
 router.get('/catalog', asyncHandler(async (req, res) => {
-  const { backend, q } = req.query
+  const { backend, q, variants } = req.query
   if (!isBackend(backend)) throw new ServerError('backend must be "ollama" or "lmstudio"', { status: 400 })
   const installedModels = await listModels(backend)
   // getCatalog/searchCatalog normalize raw ids (no `@quant` suffix) — feed them the
@@ -77,7 +77,13 @@ router.get('/catalog', asyncHandler(async (req, res) => {
   // Total system memory drives the RAM-aware recommended quant (unified memory on
   // Apple Silicon also backs the GPU, so a big box can default to higher fidelity).
   const systemMemoryBytes = os.totalmem()
-  await enrichCatalogWithVariants(models, { backend, systemMemoryBytes, installedIds: installedForVariants })
+  // Quant-variant enrichment probes Hugging Face per HF-backed entry, so it's
+  // opt-in (`?variants=1`): the recommended-models picker requests it, but callers
+  // that only need catalog metadata (e.g. the playground decorating installed
+  // models) get the fast, fully-local response the catalog has always been.
+  if (variants === '1' || variants === 'true') {
+    await enrichCatalogWithVariants(models, { backend, systemMemoryBytes, installedIds: installedForVariants })
+  }
   res.json({ backend, models, systemMemoryGb: Math.round(systemMemoryBytes / 1024 ** 3) })
 }))
 
