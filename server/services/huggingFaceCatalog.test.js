@@ -300,6 +300,23 @@ describe('huggingFaceCatalog', () => {
       // Bare-repo installed list still matches the quant-tagged result.
       expect(result.installed).toBe(true)
     })
+
+    it('anchors the LM Studio default on a variant even when the repo omits file sizes', async () => {
+      const repo = 'bartowski/NoSize-GGUF'
+      fetch
+        .mockResolvedValueOnce(listing(repo, ['NoSize-Q4_K_M.gguf', 'NoSize-Q8_0.gguf']))
+        // HF's blobs endpoint sometimes omits per-file sizes — the budget pick
+        // can't fire, but the default must still resolve to a real variant id.
+        .mockResolvedValueOnce(response({ id: repo, siblings: [{ rfilename: 'NoSize-Q4_K_M.gguf' }, { rfilename: 'NoSize-Q8_0.gguf' }] }))
+
+      const [result] = await searchHuggingFaceModels({ backend: 'lmstudio', query: 'nosize', systemMemoryBytes: 128 * 1024 ** 3 })
+
+      expect(result.variants.map((v) => v.installId)).toEqual([`${repo}@Q4_K_M`, `${repo}@Q8_0`])
+      // Falls back to the QUANT_PRIORITY pick (Q4_K_M) as the default — and it
+      // must equal a listed variant so the client's controlled <select> matches.
+      expect(result.id).toBe(`${repo}@Q4_K_M`)
+      expect(result.variants.find((v) => v.recommended).installId).toBe(result.id)
+    })
   })
 
   describe('audio installed registry', () => {
