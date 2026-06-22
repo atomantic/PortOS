@@ -30,8 +30,9 @@ const CATEGORY_SEARCH = {
   // Curated audio suggestions lead this list, so the live phrase can stay broad.
   audio: 'music audio text-to-music text-to-audio song generation',
   embedding: 'embedding gguf',
-  // 'lightweight' means small param count — '1b' matches the genuinely tiny
-  // models (gemma-1b, llama-3.2-1b, qwen-1.7b); a name token like 'small' would
+  // 'lightweight' means small param count. The Hub AND-matches the literal
+  // substring '1b' against the model id, so this surfaces the genuinely tiny
+  // '-1b-' models (gemma-3-1b, llama-3.2-1b); a name token like 'small' would
   // instead surface Mistral-Small-24B, which is the opposite of lightweight.
   lightweight: '1b gguf',
   multilingual: 'multilingual gguf'
