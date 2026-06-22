@@ -507,10 +507,17 @@ async function enrichWithSizes(results, { backend, usableBytes } = {}) {
     if (!isAudio) {
       const variants = buildVariants(model, backend, usableBytes)
       if (variants.length > 0) {
-        // RAM-aware default: only re-pick when we have a memory budget; without
-        // one, keep the QUANT_PRIORITY default chosen in toResult.
-        const chosen = usableBytes ? pickVariantForBudget(variants, usableBytes) : null
-        if (chosen) applyVariant(result, chosen)
+        // Always anchor the result on one of its own variants so the install id
+        // and the client's controlled <select> agree. Prefer the RAM-aware pick;
+        // otherwise the QUANT_PRIORITY default toResult chose (matched by quant);
+        // fall back to the largest variant. Without this, LM Studio's bare-repo
+        // default id — and any repo where the blobs endpoint omits sizes, so the
+        // budget pick can't fire — would match no variant, flagging zero
+        // recommended and making Install pull a different quant than the one shown.
+        const chosen = (usableBytes ? pickVariantForBudget(variants, usableBytes) : null)
+          || variants.find((v) => v.quant && v.quant === result.quant)
+          || variants[0]
+        applyVariant(result, chosen)
         // Flag whichever variant the result now points at as recommended so the
         // UI can mark it (covers both the RAM-aware and QUANT_PRIORITY default).
         for (const v of variants) v.recommended = v.installId === result.id
