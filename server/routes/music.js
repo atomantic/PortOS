@@ -278,13 +278,19 @@ router.post('/generate', asyncHandler(async (req, res) => {
     if (picked.userAdded) repo = picked.repo || picked.id;
   }
 
+  // The lyrics that actually CONDITION this render: what the caller sent for a
+  // lyric-aware engine ('' = render without lyrics), nothing for a non-lyric
+  // engine. The same value drives the generation call AND the render snapshot,
+  // so a render card can never claim conditioning text the audio wasn't built
+  // from (an absent-lyrics lyric render is genuinely un-conditioned, not "the
+  // track's old words").
+  const usedLyrics = engine.lyrics ? (body.lyrics ?? '') : '';
+
   // generateMusic throws a typed ServerError (503 venv-missing / 500 sidecar
-  // failure) that asyncHandler maps verbatim — no need to re-wrap here. A
-  // lyric-aware engine renders with the provided lyrics ('' = no lyrics); a
-  // non-lyric engine ignores the flag entirely.
+  // failure) that asyncHandler maps verbatim — no need to re-wrap here.
   const result = await generateMusic({
     prompt: body.prompt,
-    lyrics: engine.lyrics ? (body.lyrics ?? '') : '',
+    lyrics: usedLyrics,
     engine: engine.id,
     modelId: body.modelId,
     repo,
@@ -297,17 +303,16 @@ router.post('/generate', asyncHandler(async (req, res) => {
   // but an ABSENT lyrics field leaves the track's lyrics untouched. A non-lyric
   // engine never writes lyrics (it can't erase a song's words by adding a bed).
   const durationSec = Math.round(result.durationSec);
-  // The lyrics actually used for THIS render (snapshotted onto the render card):
-  // what the caller sent for a lyric-aware engine, else the track's saved lyrics.
-  const renderLyrics = engine.lyrics
-    ? (body.lyrics ?? existing?.lyrics ?? '')
-    : (existing?.lyrics ?? '');
-  // Append to the existing history (sanitizeTrack de-dups + caps); a new track
-  // seeds the array with this first render.
-  const { renders } = tracks.buildRenderAppend(existing, {
+  // Re-read the track AFTER the (minutes-long) render so the append lands on the
+  // FRESHEST persisted history — a render uploaded/generated to this same track
+  // while this generation was running isn't dropped by writing back a stale
+  // pre-render array. (The sub-millisecond getTrack→updateTrack window is a
+  // single-user request race we intentionally don't lock against — trust model.)
+  const current = existing ? ((await tracks.getTrack(body.trackId)) ?? existing) : null;
+  const { renders } = tracks.buildRenderAppend(current, {
     audioFilename: result.filename,
     prompt: body.prompt,
-    lyrics: renderLyrics,
+    lyrics: usedLyrics,
     engine: result.engine,
     modelId: result.modelId,
     durationSec,

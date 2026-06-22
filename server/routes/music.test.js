@@ -247,6 +247,23 @@ describe('music routes', () => {
     expect(patch).not.toHaveProperty('lyrics');
     // The sidecar still renders (with empty lyrics) — engine.lyrics coalesces to ''.
     expect(gen.generateMusic).toHaveBeenCalledWith(expect.objectContaining({ lyrics: '' }));
+    // The render SNAPSHOT records the lyrics that actually conditioned it ('' —
+    // generated without lyrics), NOT the track's stale saved lyrics. Otherwise
+    // the card would falsely advertise conditioning text the audio wasn't built from.
+    expect(tracks.buildRenderAppend).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ lyrics: '' }));
+  });
+
+  it('POST /generate appends the render onto the FRESHEST track state (re-reads after the render)', async () => {
+    // A render added to the same track WHILE this multi-minute generation ran
+    // must not be dropped: the append must use the post-render track, not the
+    // pre-render snapshot.
+    const stale = { id: 'track-1', title: 'S', renders: [{ id: 'r-old', audioFilename: 'old.wav' }] };
+    const fresh = { id: 'track-1', title: 'S', renders: [{ id: 'r-old', audioFilename: 'old.wav' }, { id: 'r-concurrent', audioFilename: 'concurrent.wav' }] };
+    tracks.getTrack.mockResolvedValueOnce(stale).mockResolvedValueOnce(fresh);
+    gen.generateMusic.mockResolvedValueOnce({ filename: 'm.wav', durationSec: 12, engine: 'musicgen', modelId: 'm' });
+    await request(app).post('/api/music/generate').send({ prompt: 'beat', engine: 'musicgen', trackId: 'track-1' });
+    expect(tracks.getTrack).toHaveBeenCalledTimes(2); // validate, then re-read after the render
+    expect(tracks.buildRenderAppend).toHaveBeenCalledWith(fresh, expect.objectContaining({ audioFilename: 'm.wav' }));
   });
 
   it('POST /generate on a lyric engine with an EXPLICIT empty lyrics persists the clear', async () => {
