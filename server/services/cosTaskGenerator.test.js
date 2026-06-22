@@ -81,7 +81,7 @@ describe('{reviewers} interpolation honors Code Review Defaults', () => {
 // claim-work is the single-source router: one toggle that resolves the app's
 // workTracker (default 'auto' → git origin host) and delegates to the matching
 // claim prompt body — plan→plan-task, github→claim-issue, gitlab→claim-issue-gitlab,
-// jira→jira-sprint-manager. These source-level guards pin that wiring so a
+// jira→claim-issue-jira. These source-level guards pin that wiring so a
 // future edit can't silently drop the resolution, the delegated prompt
 // selection, the PLAN gate routing, or the GitLab forge directive.
 describe('claim-work single-source routing', () => {
@@ -111,10 +111,11 @@ describe('claim-work single-source routing', () => {
     expect(GEN_SRC).toContain('glab issue list');
   });
 
-  it('inherits the delegated flow isolation posture so the JIRA route keeps CoS worktree+PR', () => {
-    // claim-work forces useWorktree/openPR=false (correct for the self-managing
-    // plan/github/gitlab claim prompts) but jira-sprint-manager needs CoS-managed
-    // isolation — pull the delegated type's DEFAULT_TASK_INTERVALS metadata.
+  it('pulls the delegated flow isolation posture from DEFAULT_TASK_INTERVALS metadata', () => {
+    // claim-work forces useWorktree/openPR=false, correct for all four
+    // self-managing claim prompts (plan/github/gitlab/jira). The hook stays so a
+    // future delegated type that DOES need CoS-managed isolation would have its
+    // DEFAULT_TASK_INTERVALS metadata applied here.
     expect(GEN_SRC).toContain('taskSchedule.DEFAULT_TASK_INTERVALS[promptTaskType]?.taskMetadata');
     expect(GEN_SRC).toContain("'useWorktree' in delegatedMeta");
     expect(GEN_SRC).toContain("'openPR' in delegatedMeta");

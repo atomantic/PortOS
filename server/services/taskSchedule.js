@@ -204,8 +204,10 @@ export const DEFAULT_TASK_INTERVALS = {
   // (app.workTracker, default 'auto' → resolved from the git origin host). At
   // dispatch the generator resolves the tracker and delegates to the matching
   // prompt body — plan→plan-task, github→claim-issue, gitlab→claim-issue-gitlab,
-  // jira→jira-sprint-manager — so the agent still creates its OWN worktree and
-  // opens its OWN PR. Both `useWorktree` and `openPR` are OFF on the CoS side
+  // jira→claim-issue-jira — so the agent still creates its OWN worktree and
+  // opens its OWN MR/PR. (jira routes to the per-ticket claim-issue-jira flow,
+  // NOT the broader jira-sprint-manager triage job, which stays standalone.)
+  // Both `useWorktree` and `openPR` are OFF on the CoS side
   // for the SAME reasons as plan-task/claim-issue (a CoS-managed worktree would
   // hide the claim slug and trigger cleanupAgentWorktree's auto-merge).
   // `issueAuthorFilter` applies only when the resolved tracker is a forge

@@ -103,7 +103,10 @@ router.post('/tasks/slashdo', asyncHandler(async (req, res) => {
     const claim = await buildClaimWorkTask(appObj);
     context = claim.prompt;
     // claim.taskMetadata overrides the false/false default only where it carries
-    // a key (jira-sprint-manager flips both to CoS-managed worktree+PR).
+    // a key. All current claim flows (plan-task / claim-issue / claim-issue-gitlab
+    // / claim-issue-jira) self-manage their worktree + MR/PR, so false/false
+    // stands; the spread stays for a future delegated type that needs CoS-managed
+    // isolation.
     taskMetadata = { ...taskMetadata, ...claim.taskMetadata };
     description = `Run /do:next for ${appObj.name} — claim next ${workTrackerLabel(claim.tracker)} item and ship a PR`;
   } else {
