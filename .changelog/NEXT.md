@@ -1,5 +1,9 @@
 # Unreleased
 
+## Comic pages
+
+- **[issue-1534] Refine a rendered comic page with a small fix instead of re-rendering it from scratch.** Each rendered page now has a **Refine** box: type a free-text adjustment ("warm the lighting", "remove the extra signage text", "make the two background figures match across panels") and the page re-renders image-to-image from its *existing* image, applying only that change while preserving everything that was already right. The AI tweaks the page's current render prompt to reflect your instruction (it does not regenerate the prompt from the comic script), then runs a low-denoise re-render off the page's own image — so the panel layout, composition, and lettering survive. It refines the page's final render when one exists, otherwise its proof, and shows a short "what changed" summary after each refine. Works with both the local and Codex image backends.
+
 ## ChatGPT import
 
 - **[issue-1527] A failed ChatGPT export import no longer leaves a stray temp file behind under heavy disk load.** When an import was aborted mid-stream (e.g. a corrupt asset-name map or an oversized member), the cleanup that removes the half-written `.part` temp file could run *before* the asset still streaming to that file finished closing — so under heavy concurrent disk I/O the write could re-create the `.part` file just after it was deleted and orphan it. Cleanup now waits for every in-flight asset write to close before removing temp files, so a rejected import reliably leaves nothing behind.
