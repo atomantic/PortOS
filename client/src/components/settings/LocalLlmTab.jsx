@@ -752,7 +752,13 @@ export function LocalLlmTab() {
                   // always has a matching option.
                   const idMatchesVariant = variants.some((v) => v.installId === m.id);
                   const recommendedId = variants.find((v) => v.recommended)?.installId;
-                  const chosenId = selectedVariants[m.key] || recommendedId || (idMatchesVariant ? m.id : null) || m.id;
+                  // Only honor a saved selection if it still matches a current variant —
+                  // variant install ids are backend-specific (`repo@Q…` vs `hf.co/repo:Q…`),
+                  // so a selection made before a backend switch must not leak through as a
+                  // stale id (which would null out chosenVariant and install the wrong id).
+                  const savedSelection = selectedVariants[m.key];
+                  const validSelection = variants.some((v) => v.installId === savedSelection) ? savedSelection : null;
+                  const chosenId = validSelection || recommendedId || (idMatchesVariant ? m.id : null) || m.id;
                   const chosenVariant = variants.find((v) => v.installId === chosenId) || null;
                   // Installed state is per-quant (Ollama tracks each separately),
                   // so gate Install on the SELECTED variant, not the result default.
