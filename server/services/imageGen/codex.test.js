@@ -164,6 +164,12 @@ describe('codex provider — generateImage', () => {
     const iIdx = args.indexOf('-i');
     expect(iIdx).toBeGreaterThan(-1);
     expect(args[iIdx + 1]).toBe(join(FAKE_IMAGES_DIR, 'proof.png'));
+    // `-i` is VARIADIC in codex exec — without a `--` terminator it swallows the
+    // prompt as a second image file ("No prompt provided"). Assert `--` follows
+    // the options and the prompt is the positional AFTER it.
+    const dashIdx = args.indexOf('--');
+    expect(dashIdx).toBeGreaterThan(iIdx);
+    expect(dashIdx).toBe(args.length - 2);
     const promptArg = args[args.length - 1];
     // The `$imagegen` prefix is preserved so the bundled skill still triggers.
     expect(promptArg.startsWith('$imagegen ')).toBe(true);
@@ -186,6 +192,8 @@ describe('codex provider — generateImage', () => {
     });
     const { args } = spawnCalls[0];
     expect(args).not.toContain('-i');
+    // No init image → no variadic to terminate, so no `--` is added.
+    expect(args).not.toContain('--');
     const promptArg = args[args.length - 1];
     // No edit prefix when the init image is dropped.
     expect(promptArg).not.toMatch(/edit the attached reference image/i);
@@ -253,6 +261,49 @@ describe('codex provider — image harvest', () => {
     // Sidecar metadata exists too.
     const sidecar = join(FAKE_IMAGES_DIR, `${job.generationId}.metadata.json`);
     expect(existsSync(sidecar)).toBe(true);
+  });
+
+  it('decodes image bytes from the Codex session JSONL when no generated_images file exists', async () => {
+    const sessionId = '22222222-2222-4222-8222-222222222222';
+    const sessionsDir = join(TEST_HOME, '.codex', 'sessions', '2026', '06', '22');
+    await mkdir(sessionsDir, { recursive: true });
+    const fakePngBytes = Buffer.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+      0x00, 0x00, 0x00, 0x0d,
+    ]);
+    await writeFile(
+      join(sessionsDir, `rollout-2026-06-22T00-19-45-${sessionId}.jsonl`),
+      `${JSON.stringify({
+        timestamp: '2026-06-22T00:22:57.040Z',
+        type: 'event_msg',
+        payload: {
+          type: 'image_generation_end',
+          call_id: 'ig_test',
+          status: 'generating',
+          result: fakePngBytes.toString('base64'),
+        },
+      })}\n`,
+    );
+
+    const completedListener = vi.fn();
+    imageGenEvents.on('completed', completedListener);
+
+    const job = await codex.generateImage({ prompt: 'a fox' });
+    const child = spawnCalls[0].child;
+    child.stderr.emit('data', Buffer.from(`session id: ${sessionId}\n`));
+    child.exitCode = 0;
+    child.emit('close', 0, null);
+
+    const deadline = Date.now() + 3000;
+    while (Date.now() < deadline && completedListener.mock.calls.length === 0) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+
+    expect(completedListener).toHaveBeenCalledTimes(1);
+    const finalPath = join(FAKE_IMAGES_DIR, job.filename);
+    expect(existsSync(finalPath)).toBe(true);
+    const written = await readFile(finalPath);
+    expect(Buffer.compare(written, fakePngBytes)).toBe(0);
   });
 
   it('emits a failed event when codex exits 0 but writes no image (likely auth/quota issue)', async () => {
@@ -481,3 +532,35 @@ something else`;
   });
 });
 
+describe('codex provider — noImageReason (no-image diagnostics)', () => {
+  it('flags a "generated" claim with no file as tool-unavailable / rate-limited', () => {
+    const msg = codex.noImageReason('codex\nGenerated with the built-in image tool using the imagegen skill.\ntokens used\n11484');
+    expect(msg).toMatch(/wrote no image file/i);
+    expect(msg).toMatch(/unavailable or rate-limited/i);
+    // the model's own words are surfaced…
+    expect(msg).toContain('Generated with the built-in image tool');
+    // …but codex's structural labels + token count are stripped out
+    expect(msg).not.toMatch(/\b11484\b/);
+    expect(msg).not.toMatch(/tokens used/i);
+  });
+
+  it('surfaces a content-decline message verbatim', () => {
+    const msg = codex.noImageReason('codex\nI can’t create that image because it depicts explicit content.\n');
+    expect(msg).toMatch(/did not produce an image/i);
+    expect(msg).toContain('depicts explicit content');
+    expect(msg).not.toMatch(/rate-limited/i);
+  });
+
+  it('falls back to the account/enablement hint when codex said nothing usable', () => {
+    expect(codex.noImageReason('')).toMatch(/may not allow image_gen/i);
+    expect(codex.noImageReason('codex\nuser\n----\ntokens used\n42')).toMatch(/may not allow image_gen/i);
+  });
+
+  it('strips ANSI escape codes from the surfaced narration', () => {
+    const ESC = String.fromCharCode(27);
+    const msg = codex.noImageReason(`${ESC}[1mI can’t make that.${ESC}[0m`);
+    expect(msg).toContain('I can’t make that.');
+    expect(msg).not.toContain(ESC);
+    expect(msg).not.toMatch(/\[\d+m/);
+  });
+});

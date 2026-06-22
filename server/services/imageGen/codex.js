@@ -8,9 +8,11 @@
  *
  * Wire format: `codex exec --skip-git-repo-check --sandbox workspace-write
  * '$imagegen <prompt>'`. Codex prints a `session id: <uuid>` banner on stderr
- * and writes the final PNG to `~/.codex/generated_images/<session-id>/ig_*.png`
- * — there's no machine-readable path on stdout, so we parse the banner and
- * harvest the dir after the child exits.
+ * and usually writes the final PNG to
+ * `~/.codex/generated_images/<session-id>/ig_*.png`. Newer Codex builds can
+ * keep the image bytes only in the session JSONL's `image_generation_end`
+ * event, so we parse the banner and harvest both locations after the child
+ * exits.
  *
  * The user must explicitly enable this provider in Settings → Image Gen
  * because not every Codex account has access to the `image_gen` tool. When
@@ -19,7 +21,7 @@
  */
 
 import { spawn } from 'child_process';
-import { copyFile, readdir, stat, writeFile } from 'fs/promises';
+import { copyFile, readFile, readdir, stat, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
@@ -48,6 +50,7 @@ const DEFAULT_BIN = 'codex';
 
 const codexImagesDir = (sessionId) =>
   join(homedir(), '.codex', 'generated_images', sessionId);
+const codexSessionsDir = () => join(homedir(), '.codex', 'sessions');
 
 // Per-job state — keyed by jobId so multiple codex renders can run in
 // parallel under the mediaJobQueue's configurable lane limit. Same client
@@ -181,12 +184,18 @@ export async function generateImage({
   const fullPrompt = `$imagegen ${editPrefix}${prompt.trim()}${sizeHint}${qualityHint}${avoidHint}`;
 
   const bin = codexPath || DEFAULT_BIN;
+  // `codex exec` treats `-i, --image <FILE>...` as VARIADIC, so it greedily
+  // swallows every following positional — including the prompt — when no other
+  // flag interrupts it. That left codex with no positional prompt; it then read
+  // stdin (ignored here) and died with "No prompt provided". A `--` terminator
+  // after the options bounds the variadic so the prompt lands as the positional.
   const args = [
     'exec',
     '--skip-git-repo-check',
     '--sandbox', 'workspace-write',
     ...(validInitImagePath ? ['-i', validInitImagePath] : []),
     ...(model ? ['-m', String(model)] : []),
+    ...(validInitImagePath ? ['--'] : []),
     fullPrompt,
   ];
 
@@ -220,6 +229,33 @@ export async function generateImage({
   };
 }
 
+// Codex exited 0 with a session id but wrote no PNG. Turn its stdout narration
+// into the most useful error we can — surfacing the model's own words (#imagegen
+// declines, content refusals, "generated" claims with no file) instead of a
+// fixed guess. The legacy account/enablement hint is kept as a fallback when
+// codex said nothing usable.
+// eslint-disable-next-line no-control-regex
+const ANSI_RE = /\u001b\[[0-9;]*m/g;
+const CODEX_NO_IMAGE_HINT =
+  'Codex returned no image — your Codex account may not allow image_gen, or the model declined. Check Settings → Image Gen → Enable Codex Imagegen.';
+export function noImageReason(stdoutTail = '') {
+  const clean = String(stdoutTail).replace(ANSI_RE, '').trim();
+  // Keep the model's last few non-empty narration lines, dropping codex's own
+  // structural labels (`codex`, `user`, `tokens used`, dashed rules).
+  const lines = clean.split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l && !/^(codex|user|-{2,})$/i.test(l) && !/^tokens used\b/i.test(l) && !/^[\d,]+$/.test(l));
+  const said = lines.slice(-4).join(' ').slice(-600);
+  if (!said) return CODEX_NO_IMAGE_HINT;
+  // Codex claims success but no file landed → the image tool wasn't actually
+  // run (image-gen unavailable / rate-limited on the account), even though the
+  // turn narrated a generation. Call that out specifically.
+  if (/\b(generated|created|here(?:'|’)s|i(?:'|’)ve (?:made|generated))\b/i.test(said)) {
+    return `Codex reported success but wrote no image file — the built-in image tool likely didn't run (image generation may be unavailable or rate-limited on your account, even though the feature is enabled). Codex said: "${said}"`;
+  }
+  return `Codex did not produce an image. Codex said: "${said}"`;
+}
+
 async function runCodex(job, jobId, bin, args, outputPath, filename, meta, { cleanC2PA = false, denoise = false } = {}) {
   const proc = spawn(bin, args, { shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
   activeProcs.set(jobId, proc);
@@ -227,6 +263,11 @@ async function runCodex(job, jobId, bin, args, outputPath, filename, meta, { cle
   let sessionId = null;
   let stderrTail = '';
   const STDERR_TAIL_BYTES = 32 * 1024;
+  // Codex narrates its turn (incl. "I can't create that…" content declines and
+  // any tool-failure notes) on STDOUT. Keep a rolling tail so a no-image finish
+  // can surface the model's actual words instead of a generic "no image" guess.
+  let stdoutTail = '';
+  const STDOUT_TAIL_BYTES = 8 * 1024;
   let timeoutTimer = setTimeout(() => {
     if (activeProcs.get(jobId) === proc) {
       console.log(`⏱️ codex timed out after ${CODEX_TIMEOUT_MS}ms [${jobId.slice(0, 8)}]`);
@@ -266,11 +307,16 @@ async function runCodex(job, jobId, bin, args, outputPath, filename, meta, { cle
     finalizeError(job, jobId, proc, `Failed to spawn ${bin}: ${err.message}`);
   });
 
-  proc.stdout.on('data', () => {
+  proc.stdout.on('data', (chunk) => {
     // Codex prints the `session id:` banner on stderr only — don't feed
     // stdout into bannerBuf. A stdout chunk arriving between two stderr
     // chunks of the banner can split the session-id line with unrelated
     // text and break the regex match.
+    // We DO retain stdout here (the model's turn narration) so a no-image
+    // finish can report why — a content decline, or a "generated" claim with
+    // no file (tool unavailable / image-gen rate-limited on the account).
+    stdoutTail += chunk.toString();
+    if (stdoutTail.length > STDOUT_TAIL_BYTES) stdoutTail = stdoutTail.slice(-STDOUT_TAIL_BYTES);
     broadcastSse(job, { type: 'status', message: 'Running…' });
   });
 
@@ -304,14 +350,15 @@ async function runCodex(job, jobId, bin, args, outputPath, filename, meta, { cle
       // Codex writes the PNG asynchronously while it's wrapping up the turn.
       // Empirically the file is on disk by the time `codex exec` exits, but
       // poll for a few seconds in case there's a flush lag on slow disks.
-      const harvested = await harvestLatestImage(sessionId, 5000);
+      const harvested = await harvestGeneratedImage(sessionId, 5000);
       if (!harvested) {
-        return finalizeError(
-          job, jobId, proc,
-          'Codex returned no image — your Codex account may not allow image_gen, or the model declined. Check Settings → Image Gen → Enable Codex Imagegen.',
-        );
+        return finalizeError(job, jobId, proc, noImageReason(stdoutTail));
       }
-      await copyFile(harvested, outputPath);
+      if (harvested.path) {
+        await copyFile(harvested.path, outputPath);
+      } else {
+        await writeFile(outputPath, harvested.buffer);
+      }
       // Sidecar metadata so the gallery can recover prompt/seed/etc. The
       // codex sessionId is the closest analogue to a seed for gpt-image-2
       // (which doesn't expose one) — uniquely identifies the run and is
@@ -358,22 +405,91 @@ const finalizeError = (job, jobId, proc, reason) => {
 // Returns the absolute path to the newest ig_*.png in the session dir, or
 // null if none appears within `timeoutMs`. Polls every 250ms — the file
 // usually lands in <1s but the rare slow case is fine.
-async function harvestLatestImage(sessionId, timeoutMs) {
+async function latestGeneratedImageFile(sessionId) {
   const dir = codexImagesDir(sessionId);
+  if (!existsSync(dir)) return null;
+  const names = await readdir(dir).catch(() => []);
+  const pngs = names.filter((f) => f.startsWith('ig_') && f.endsWith('.png'));
+  if (pngs.length) {
+    const stats = await Promise.all(pngs.map(async (n) => {
+      const s = await stat(join(dir, n)).catch(() => null);
+      return s ? { n, mtimeMs: s.mtimeMs } : null;
+    }));
+    const latest = stats.filter(Boolean).sort((a, b) => b.mtimeMs - a.mtimeMs)[0];
+    if (latest) return join(dir, latest.n);
+  }
+  return null;
+}
+
+async function harvestLatestImage(sessionId, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (existsSync(dir)) {
-      const names = await readdir(dir).catch(() => []);
-      const pngs = names.filter((f) => f.startsWith('ig_') && f.endsWith('.png'));
-      if (pngs.length) {
-        const stats = await Promise.all(pngs.map(async (n) => {
-          const s = await stat(join(dir, n)).catch(() => null);
-          return s ? { n, mtimeMs: s.mtimeMs } : null;
-        }));
-        const latest = stats.filter(Boolean).sort((a, b) => b.mtimeMs - a.mtimeMs)[0];
-        if (latest) return join(dir, latest.n);
+    const latest = await latestGeneratedImageFile(sessionId);
+    if (latest) return latest;
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  return null;
+}
+
+const isPngBuffer = (buf) => {
+  if (!Buffer.isBuffer(buf) || buf.length < 12) return false;
+  return buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47
+    && buf[4] === 0x0d && buf[5] === 0x0a && buf[6] === 0x1a && buf[7] === 0x0a;
+};
+
+async function findSessionLogFile(sessionId) {
+  const root = codexSessionsDir();
+  if (!existsSync(root)) return null;
+  const stack = [root];
+  while (stack.length) {
+    const dir = stack.pop();
+    const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
+    for (const entry of entries) {
+      const full = join(dir, entry.name);
+      if (entry.isFile() && entry.name.endsWith('.jsonl') && entry.name.includes(sessionId)) {
+        return full;
       }
+      if (entry.isDirectory()) stack.push(full);
     }
+  }
+  return null;
+}
+
+async function harvestSessionLogImage(sessionId) {
+  const logPath = await findSessionLogFile(sessionId);
+  if (!logPath) return null;
+  const text = await readFile(logPath, 'utf8').catch(() => '');
+  let latest = null;
+  for (const line of text.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      const record = JSON.parse(line);
+      const payload = record?.payload;
+      if (payload?.type !== 'image_generation_end' || typeof payload.result !== 'string') continue;
+      const raw = payload.result.replace(/^data:image\/[a-z0-9.+-]+;base64,/i, '');
+      const buffer = Buffer.from(raw, 'base64');
+      if (isPngBuffer(buffer)) latest = { buffer, path: logPath, callId: payload.call_id || null };
+    } catch {
+      // Session JSONL can contain arbitrarily large model payloads; ignore
+      // malformed/truncated lines and keep scanning for a valid image event.
+    }
+  }
+  return latest;
+}
+
+async function harvestGeneratedImage(sessionId, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const path = await latestGeneratedImageFile(sessionId);
+    if (path) return { path };
+
+    // Newer Codex builds may persist image bytes only in the session JSONL as
+    // image_generation_end.result (base64), without materializing
+    // ~/.codex/generated_images/<session-id>/ig_*.png. Decode that fallback so
+    // a real generation does not get reported as "success but no file".
+    const sessionImage = await harvestSessionLogImage(sessionId);
+    if (sessionImage) return { buffer: sessionImage.buffer, sessionLogPath: sessionImage.path };
+
     await new Promise((r) => setTimeout(r, 250));
   }
   return null;
@@ -385,6 +501,9 @@ async function harvestLatestImage(sessionId, timeoutMs) {
 // module because the test path is an explicit ergonomic carve-out.
 export const _internals = {
   codexImagesDir,
+  codexSessionsDir,
   SESSION_ID_RE,
   harvestLatestImage,
+  harvestSessionLogImage,
+  harvestGeneratedImage,
 };
