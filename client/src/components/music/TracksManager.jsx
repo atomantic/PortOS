@@ -98,20 +98,30 @@ export default function TracksManager() {
   // The persisted track (for gen metadata + the audio player, which need a saved id).
   const persisted = selected;
 
+  // Reset per-track view state on any selection change. The render modal + remix
+  // seed belong to the previously-selected track; without clearing them, a modal
+  // left open across a track switch would drive its Use/Delete/Remix against the
+  // NEWLY selected track (the action handlers read persisted?.id), sending the
+  // old render's id to the wrong track.
+  const resetTrackViewState = () => {
+    setConfirmDelete(false);
+    setLibraryOpen(false);
+    setModalRender(null);
+    setRemix(null);
+  };
+
   const selectTrack = (t) => {
     setSelectedId(t.id);
     selectedIdRef.current = t.id;
     setForm(formFromTrack(t));
-    setConfirmDelete(false);
-    setLibraryOpen(false);
+    resetTrackViewState();
   };
 
   const startCreate = () => {
     setSelectedId('new');
     selectedIdRef.current = 'new';
     setForm(emptyForm());
-    setConfirmDelete(false);
-    setLibraryOpen(false);
+    resetTrackViewState();
   };
 
   const upsertLocal = (track) => {
@@ -154,7 +164,7 @@ export default function TracksManager() {
     const prior = tracks;
     setTracks((prev) => prev.filter((t) => t.id !== selected.id));
     setSelectedId(null);
-    setConfirmDelete(false);
+    resetTrackViewState();
     await deleteTrack(selected.id).catch((err) => { toast.error(err.message || 'Delete failed'); setTracks(prior); });
   };
 
