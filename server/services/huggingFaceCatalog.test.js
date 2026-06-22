@@ -524,6 +524,21 @@ describe('huggingFaceCatalog', () => {
       expect(mlx.installed).toBe(true)
       expect(mlx.variants[0].installed).toBe(true)
     })
+
+    it('still returns GGUF results when the optional MLX query fails', async () => {
+      const ggufRepo = 'org/Survivor-GGUF'
+      fetch.mockImplementation(async (url) => {
+        const u = String(url)
+        if (u.includes('filter=mlx')) throw new Error('mlx query boom')
+        if (u.includes('filter=gguf')) return response([{ modelId: ggufRepo, downloads: 10, tags: ['gguf'], siblings: [{ rfilename: 'S-Q4_K_M.gguf', size: 4_000_000_000 }] }])
+        if (u.includes('blobs=true')) return response({ id: ggufRepo, siblings: [{ rfilename: 'S-Q4_K_M.gguf', size: 4_000_000_000 }] })
+        return response([])
+      })
+
+      const results = await searchHuggingFaceModels({ backend: 'lmstudio', query: 's', appleSilicon: true })
+
+      expect(results.some((r) => r.repository === ggufRepo)).toBe(true)
+    })
   })
 
   describe('curated catalog quant enrichment', () => {
@@ -570,6 +585,33 @@ describe('huggingFaceCatalog', () => {
       expect(catalog[0].id).toBe('llama3.2')
       // No HF repo means no network probe at all.
       expect(fetch).not.toHaveBeenCalled()
+    })
+
+    it('degrades gracefully (keeps the curated entry) when the HF probe fails', async () => {
+      const repo = 'lmstudio-community/Unreachable-GGUF'
+      fetch.mockRejectedValue(new Error('network down'))
+      const catalog = [{ id: repo, key: 'unreachable', name: 'Unreachable', category: 'chat', size: '2.0 GB' }]
+      await enrichCatalogWithVariants(catalog, { backend: 'lmstudio', systemMemoryBytes: 128 * 1024 ** 3 })
+
+      expect(catalog[0].variants).toBeUndefined()
+      expect(catalog[0].id).toBe(repo)
+      expect(catalog[0].size).toBe('2.0 GB')
+    })
+
+    it('returns within the timeout budget when HF is slow instead of blocking the catalog', async () => {
+      const repo = 'lmstudio-community/Slow-GGUF'
+      // Resolves long after the budget; unref'd so the pending timer can't hang the run.
+      fetch.mockImplementation(() => new Promise((resolve) => {
+        const t = setTimeout(() => resolve(response({ id: repo, siblings: [{ rfilename: 'Slow-Q4_K_M.gguf', size: 4_000_000_000 }] })), 5000)
+        t.unref?.()
+      }))
+      const catalog = [{ id: repo, key: 'slow', name: 'Slow', category: 'chat', size: '2.0 GB' }]
+
+      const started = Date.now()
+      await enrichCatalogWithVariants(catalog, { backend: 'lmstudio', systemMemoryBytes: 128 * 1024 ** 3, timeoutMs: 50 })
+
+      expect(Date.now() - started).toBeLessThan(2000)
+      expect(catalog[0].variants).toBeUndefined()
     })
   })
 

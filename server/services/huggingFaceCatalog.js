@@ -5,6 +5,12 @@ import { ENGINES } from './pipeline/musicGen.js'
 
 const HF_API_BASE = 'https://huggingface.co/api/models'
 const HF_TIMEOUT_MS = 12_000
+// Upper bound on how long the curated-catalog endpoint waits for HF variant
+// enrichment. The curated catalog must stay usable offline (it was a pure local
+// list before enrichment), so when HF is slow/down we return the catalog as-is
+// after this budget; in-flight probes keep running and warm the repo cache, so
+// the next load (or a recovered HF) enriches without delay.
+const CATALOG_ENRICH_TIMEOUT_MS = 5_000
 
 const CATEGORY_IDS = new Set(LOCAL_LLM_CATEGORIES.map((c) => c.id))
 const CATEGORY_SEARCH = {
@@ -766,7 +772,10 @@ export async function searchHuggingFaceModels({ backend, query = '', category = 
   const wantMlx = appleSilicon && backend === 'lmstudio' && requestedCategory !== 'audio'
   const [ggufModelsRaw, mlxModelsRaw] = await Promise.all([
     fetchModels(search, fetchLimit, ggufOnly ? 'gguf' : null),
-    wantMlx ? fetchModels(search, fetchLimit, 'mlx') : Promise.resolve([])
+    // MLX is optional enrichment — a transient/API-specific MLX-query failure must
+    // not blank the primary GGUF results, so swallow it to an empty list. (The
+    // GGUF query still throws on failure, preserving the original error behaviour.)
+    wantMlx ? fetchModels(search, fetchLimit, 'mlx').catch(() => []) : Promise.resolve([])
   ])
   let models = ggufModelsRaw
   if (models.length === 0 && ggufOnly) models = await fetchModels(search, fetchLimit, null)
@@ -852,10 +861,10 @@ function quantFromInstallId(backend, id) {
 // with no HF repo (bare Ollama registry names) or an MLX-only repo (no GGUF
 // quants) are left untouched — the card then shows the curator's single id with
 // no picker. `usableBytes` makes the recommended quant fit this machine.
-export async function enrichCatalogWithVariants(catalog, { backend, systemMemoryBytes = null, installedIds = [] } = {}) {
+export async function enrichCatalogWithVariants(catalog, { backend, systemMemoryBytes = null, installedIds = [], timeoutMs = CATALOG_ENRICH_TIMEOUT_MS } = {}) {
   if (!isBackend(backend) || !Array.isArray(catalog)) return catalog
   const usableBytes = usableMemoryBytes(systemMemoryBytes)
-  await Promise.allSettled(catalog.map(async (entry) => {
+  const work = Promise.allSettled(catalog.map(async (entry) => {
     const repo = catalogRepoForBackend(backend, entry.id)
     if (!repo) return
     const model = await fetchRepoModel(repo)
@@ -879,5 +888,16 @@ export async function enrichCatalogWithVariants(catalog, { backend, systemMemory
       if (ctx != null) entry.contextLength = ctx
     }
   }))
+  // Bound the wait so a slow/unreachable HF never stalls the (offline-capable)
+  // catalog endpoint. Entries enrich in place, so whatever resolved within the
+  // budget is already applied; the rest keep their hard-coded fields and their
+  // probes keep running in the background to warm the repo cache for next time.
+  if (timeoutMs > 0) {
+    let timer
+    const budget = new Promise((resolve) => { timer = setTimeout(resolve, timeoutMs); timer.unref?.() })
+    await Promise.race([work.finally(() => clearTimeout(timer)), budget])
+  } else {
+    await work
+  }
   return catalog
 }
