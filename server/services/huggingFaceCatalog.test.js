@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { searchHuggingFaceModels, enrichCatalogWithVariants } from './huggingFaceCatalog.js'
+import { __resetOllamaRegistryCache } from './ollamaRegistryCatalog.js'
 
 const response = (body, ok = true) => ({
   ok,
@@ -662,15 +663,73 @@ describe('huggingFaceCatalog', () => {
       expect(catalog[0].size).toBe('2.0 GB')
     })
 
-    it('leaves a bare Ollama registry name untouched (no HF repo → no picker)', async () => {
-      fetch.mockResolvedValue(response([]))
-      const catalog = [{ id: 'llama3.2', key: 'llama3.2', name: 'Llama 3.2 3B', category: 'chat', size: '2.0 GB' }]
+    // Route the Ollama registry's two endpoints (tags/list + per-tag manifests)
+    // to a mock. `tags` is the tag list; `sizes` maps a tag → model-layer bytes.
+    const ollamaRegistry = (tags, sizes = {}) => (url) => {
+      if (/\/tags\/list$/.test(url)) return Promise.resolve(response({ tags }))
+      const m = url.match(/\/manifests\/([^/]+)$/)
+      if (m) {
+        const tag = decodeURIComponent(m[1])
+        const size = sizes[tag]
+        return Promise.resolve(response({
+          layers: Number.isFinite(size)
+            ? [{ mediaType: 'application/vnd.ollama.image.model', size }]
+            : []
+        }))
+      }
+      return Promise.resolve(response({}))
+    }
+
+    it('adds a RAM-aware quant picker to a bare Ollama registry name', async () => {
+      __resetOllamaRegistryCache()
+      fetch.mockImplementation(ollamaRegistry(
+        ['latest', '3b', '3b-instruct-q4_K_M', '3b-instruct-q8_0', '3b-instruct-fp16', '1b-instruct-q4_K_M'],
+        { '3b-instruct-q4_K_M': 2_000_000_000, '3b-instruct-q8_0': 3_500_000_000, '3b-instruct-fp16': 6_500_000_000 }
+      ))
+      const catalog = [{ id: 'pickerllama', key: 'pickerllama', name: 'Picker Llama 3B', category: 'chat', params: '3B', size: '2.0 GB' }]
+      await enrichCatalogWithVariants(catalog, { backend: 'ollama', systemMemoryBytes: 128 * 1024 ** 3, installedIds: [] })
+
+      expect(catalog[0].format).toBe('gguf')
+      // Only the 3B (target-size) quant-tagged builds become variants — the 1B
+      // build is a different size and the bare `3b`/`latest` carry no quant.
+      expect(catalog[0].variants.map((v) => v.installId)).toEqual([
+        'pickerllama:3b-instruct-fp16', 'pickerllama:3b-instruct-q8_0', 'pickerllama:3b-instruct-q4_K_M'
+      ])
+      // Stable curated id; the RAM-aware default (128 GB → highest fidelity that fits) is recommended.
+      expect(catalog[0].id).toBe('pickerllama')
+      expect(catalog[0].variants.find((v) => v.recommended).installId).toBe('pickerllama:3b-instruct-fp16')
+      expect(catalog[0].sizeBytes).toBe(6_500_000_000)
+    })
+
+    it('honors an explicit size tag and marks the per-quant installed build', async () => {
+      __resetOllamaRegistryCache()
+      fetch.mockImplementation(ollamaRegistry(
+        ['20b', '20b-q4_K_M', '20b-q8_0', '120b-q4_K_M'],
+        { '20b-q4_K_M': 12_000_000_000, '20b-q8_0': 22_000_000_000 }
+      ))
+      const catalog = [{ id: 'gpt-pick:20b', key: 'gpt-pick', name: 'GPT Pick 20B', category: 'reasoning', params: '20B', size: '12 GB' }]
+      await enrichCatalogWithVariants(catalog, {
+        backend: 'ollama', systemMemoryBytes: 16 * 1024 ** 3, installedIds: ['gpt-pick:20b-q4_K_M']
+      })
+
+      // Only the 20B builds (the card's size) — the 120B quant is excluded.
+      expect(catalog[0].variants.map((v) => v.installId)).toEqual(['gpt-pick:20b-q8_0', 'gpt-pick:20b-q4_K_M'])
+      // 16 GB box: the Q8 (22 GB) is too large, so the Q4 (12 GB) is recommended.
+      expect(catalog[0].variants.find((v) => v.recommended).installId).toBe('gpt-pick:20b-q4_K_M')
+      expect(catalog[0].variants.find((v) => v.installId === 'gpt-pick:20b-q4_K_M').installed).toBe(true)
+      expect(catalog[0].variants.find((v) => v.installId === 'gpt-pick:20b-q8_0').installed).toBe(false)
+    })
+
+    it('leaves a bare Ollama name untouched when the model is not on the registry', async () => {
+      __resetOllamaRegistryCache()
+      // tags/list 404s (unknown model) → no tags → no variants.
+      fetch.mockResolvedValue(response({}, false))
+      const catalog = [{ id: 'nonexistent-model', key: 'nope', name: 'Nope', category: 'chat', params: '3B', size: '2.0 GB' }]
       await enrichCatalogWithVariants(catalog, { backend: 'ollama', systemMemoryBytes: 128 * 1024 ** 3, installedIds: [] })
 
       expect(catalog[0].variants).toBeUndefined()
-      expect(catalog[0].id).toBe('llama3.2')
-      // No HF repo means no network probe at all.
-      expect(fetch).not.toHaveBeenCalled()
+      expect(catalog[0].id).toBe('nonexistent-model')
+      expect(catalog[0].size).toBe('2.0 GB')
     })
 
     it('degrades gracefully (keeps the curated entry) when the HF probe fails', async () => {
