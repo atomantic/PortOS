@@ -720,6 +720,25 @@ describe('huggingFaceCatalog', () => {
       expect(catalog[0].variants.find((v) => v.installId === 'gpt-pick:20b-q8_0').installed).toBe(false)
     })
 
+    it('preserves the card-level installed state for a default/:latest bare Ollama install', async () => {
+      __resetOllamaRegistryCache()
+      fetch.mockImplementation(ollamaRegistry(
+        ['3b-instruct-q4_K_M', '3b-instruct-q8_0'],
+        { '3b-instruct-q4_K_M': 2_000_000_000, '3b-instruct-q8_0': 3_500_000_000 }
+      ))
+      // getCatalog flagged this installed (the user pulled `defllama`, stored as :latest).
+      // None of the exact `<name>:<tag>` variants matches that alias.
+      const catalog = [{ id: 'defllama', key: 'defllama', name: 'Def Llama 3B', category: 'chat', params: '3B', size: '2.0 GB', installed: true }]
+      await enrichCatalogWithVariants(catalog, {
+        backend: 'ollama', systemMemoryBytes: 128 * 1024 ** 3, installedIds: ['defllama:latest']
+      })
+
+      // The card still reads as installed (a build is present) even though no specific
+      // quant variant matches — so it won't show "Install" and pull a duplicate tag.
+      expect(catalog[0].installed).toBe(true)
+      expect(catalog[0].variants.every((v) => v.installed === false)).toBe(true)
+    })
+
     it('leaves a bare Ollama name untouched when the model is not on the registry', async () => {
       __resetOllamaRegistryCache()
       // tags/list 404s (unknown model) → no tags → no variants.

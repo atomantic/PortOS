@@ -924,6 +924,13 @@ function quantFromInstallId(backend, id) {
 async function applyOllamaRegistryVariants(entry, { usableBytes, installedIds }) {
   const candidates = await fetchOllamaRegistryVariants(entry.id, { paramsHint: entry.params })
   if (candidates.length === 0) return false
+  // The bare curated id (`llama3.2`, pulled as `:latest`) install is recorded on the
+  // entry's pre-enrichment `installed` flag — getCatalog matched it latest-normalized.
+  // The per-quant variants below use exact `<name>:<tag>` ids that never include that
+  // alias, so capture the default install now and OR it back after applyVariant
+  // overwrites `installed`; otherwise an already-installed model shows "Install" and a
+  // click pulls a duplicate specific-quant tag.
+  const installedAsDefault = entry.installed === true
   const variants = candidates
     .map((c) => {
       const sizeBytes = Number.isFinite(c.sizeBytes) ? c.sizeBytes : null
@@ -946,6 +953,9 @@ async function applyOllamaRegistryVariants(entry, { usableBytes, installedIds })
   // Keep the curated entry's stable id (rewriteInstallId: false) — the playground
   // matches installed models on it; the UI installs the recommended variant.
   applyChosenVariant(entry, variants, { usableBytes, rewriteInstallId: false })
+  // Preserve the card-level "installed" state from the pre-existing default/:latest
+  // build — the user has a build of this model even if no specific quant variant matches.
+  if (installedAsDefault) entry.installed = true
   entry.format = 'gguf'
   return true
 }
