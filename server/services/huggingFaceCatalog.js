@@ -320,24 +320,38 @@ function installIdForBackend(backend, repoId, file) {
 // highest-quality build first. Files whose quant can't be parsed are skipped —
 // they have no `:quant`/`@quant` tag a backend can pull. `usableBytes` annotates
 // each variant with a fit verdict for the UI (null → 'unknown').
+// Collapse a multi-part shard filename to a key shared by its set
+// (`…-00001-of-00002.gguf` → `…-of-00002`); standalone files key to themselves.
+// Only files with the same key are one installable unit whose sizes sum.
+function shardSetKey(filename) {
+  const m = normalizeText(filename).match(/^(.*)-\d{5}-of-(\d{5})\.gguf$/i)
+  return m ? `${m[1]}-of-${m[2]}` : filename
+}
+
 function buildVariants(model, backend, usableBytes) {
   const repoId = repoIdOf(model)
+  // quant → (shard-set/standalone key → summed size). Backends install by quant
+  // tag (`:Q4_K_M` / `@Q4_K_M`), so one variant per quant — but the size is the
+  // largest single installable unit, not the sum across unrelated same-quant
+  // files (two standalone Q4_K_M builds must not read as one double-size variant).
   const groups = new Map()
   for (const file of ggufFilesOf(model)) {
     const quant = quantFromFilename(file.name)
     if (!quant) continue
-    const group = groups.get(quant) || { quant, sizeBytes: 0 }
-    group.sizeBytes += Number.isFinite(file.size) ? file.size : 0
-    groups.set(quant, group)
+    const units = groups.get(quant) || new Map()
+    const key = shardSetKey(file.name)
+    units.set(key, (units.get(key) || 0) + (Number.isFinite(file.size) ? file.size : 0))
+    groups.set(quant, units)
   }
-  return [...groups.values()]
-    .map((group) => {
-      const sizeBytes = group.sizeBytes > 0 ? group.sizeBytes : null
+  return [...groups.entries()]
+    .map(([quant, units]) => {
+      const largestUnit = Math.max(0, ...units.values())
+      const sizeBytes = largestUnit > 0 ? largestUnit : null
       return {
-        quant: group.quant,
-        installId: variantInstallId(backend, repoId, group.quant),
+        quant,
+        installId: variantInstallId(backend, repoId, quant),
         sizeBytes,
-        size: formatBytes(sizeBytes) || group.quant,
+        size: formatBytes(sizeBytes) || quant,
         fit: classifyFit(sizeBytes, usableBytes)
       }
     })

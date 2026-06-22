@@ -318,6 +318,23 @@ describe('huggingFaceCatalog', () => {
       expect(result.id).toBe(`hf.co/${repo}:Q4_K_M`)
     })
 
+    it('does not sum two standalone same-quant files into one double-size variant', async () => {
+      const repo = 'org/Dup-Quant-GGUF'
+      fetch
+        .mockResolvedValueOnce(listing(repo, ['Model-Q4_K_M.gguf', 'Model-v2-Q4_K_M.gguf']))
+        .mockResolvedValueOnce(blobs(repo, {
+          'Model-Q4_K_M.gguf': 5_000_000_000,
+          'Model-v2-Q4_K_M.gguf': 4_000_000_000,
+        }))
+
+      const [result] = await searchHuggingFaceModels({ backend: 'ollama', query: 'dup', systemMemoryBytes: 128 * 1024 ** 3 })
+
+      // One Q4_K_M variant (the tag installs one file), sized as the largest single
+      // unit (5 GB) — NOT 9 GB summed across two unrelated files.
+      expect(result.variants).toHaveLength(1)
+      expect(result.variants[0]).toMatchObject({ quant: 'Q4_K_M', sizeBytes: 5_000_000_000 })
+    })
+
     it('treats a tiny machine (zero usable RAM) as a real budget: smallest variant, all too-large', async () => {
       const repo = 'empero-ai/Qwythos-9B-Tiny-GGUF'
       fetch
