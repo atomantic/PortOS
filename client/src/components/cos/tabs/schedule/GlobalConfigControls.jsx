@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef } from 'react';
-import { Play, RotateCcw, ChevronDown, AlertCircle, Package, Info } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { RotateCcw, AlertCircle, Info } from 'lucide-react';
 import CronInput from '../../../CronInput';
 import { AGENT_OPTIONS, DEFAULT_REVIEW_STOP_MODE, PR_AUTHOR_FILTER_OPTIONS, ISSUE_AUTHOR_FILTER_OPTIONS, ISSUE_AUTHOR_FILTER_TASK_TYPES } from '../../constants';
 import ReviewerPicker from '../../ReviewerPicker';
@@ -8,7 +8,8 @@ import { useCodeReviewDefaults } from '../../../../hooks/useCodeReviewDefaults';
 import ToggleSwitch from '../../../ToggleSwitch';
 import { filterSelectableModels } from '../../../../utils/providers';
 import PromptEditor from './PromptEditor';
-import { INTERVAL_DESCRIPTIONS, IMPROVEMENT_DISABLED_TITLE, triggerButtonClass, toggleMetadataField } from './scheduleConstants';
+import RunTaskButton from './RunTaskButton';
+import { INTERVAL_DESCRIPTIONS, toggleMetadataField } from './scheduleConstants';
 
 export default function GlobalConfigControls({ taskType, config, onUpdate, onTrigger, onReset, category: _category, providers, apps, updating, setUpdating, allTaskTypes, improvementDisabled }) {
   const reviewDefaults = useCodeReviewDefaults();
@@ -17,8 +18,6 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
   const [selectedModel, setSelectedModel] = useState(config.model || '');
   const [editingPrompt, setEditingPrompt] = useState(false);
   const [promptValue, setPromptValue] = useState(config.prompt || '');
-  const [showAppSelector, setShowAppSelector] = useState(false);
-  const appSelectorRef = useRef(null);
 
   useEffect(() => {
     setSelectedType(config.type);
@@ -28,23 +27,6 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
       setPromptValue(config.prompt || '');
     }
   }, [config.type, config.providerId, config.model, config.prompt, editingPrompt]);
-
-  useEffect(() => {
-    const handleClickOutside = (event) => {
-      if (appSelectorRef.current && !appSelectorRef.current.contains(event.target)) {
-        setShowAppSelector(false);
-      }
-    };
-    if (showAppSelector) {
-      document.addEventListener('mousedown', handleClickOutside);
-      return () => document.removeEventListener('mousedown', handleClickOutside);
-    }
-  }, [showAppSelector]);
-
-  // Without this, an open dropdown survives a flip to disabled and pops back open when the master flag re-enables.
-  useEffect(() => {
-    if (improvementDisabled) setShowAppSelector(false);
-  }, [improvementDisabled]);
 
   const activeApps = apps?.filter(app => !app.archived) || [];
 
@@ -370,57 +352,12 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
       )}
 
       <div className="flex gap-2">
-        {activeApps.length > 0 ? (
-          <div className="relative" ref={appSelectorRef}>
-            {/* Tooltip on the wrapper, not the button: most browsers skip hover events on disabled controls. */}
-            <span title={improvementDisabled ? IMPROVEMENT_DISABLED_TITLE : 'Run this task on a specific app'} className="inline-block">
-              <button
-                onClick={() => !improvementDisabled && setShowAppSelector(!showAppSelector)}
-                disabled={improvementDisabled}
-                aria-disabled={improvementDisabled || undefined}
-                className={triggerButtonClass(improvementDisabled)}
-              >
-                <Play size={14} />
-                Run on App
-                <ChevronDown size={12} className={`transition-transform ${showAppSelector ? 'rotate-180' : ''}`} />
-              </button>
-            </span>
-            {showAppSelector && !improvementDisabled && (
-              <div className="absolute bottom-full left-0 mb-1 z-50 w-64 max-w-[calc(100vw-2rem)] max-h-64 overflow-y-auto bg-port-card border border-port-border rounded-lg shadow-lg">
-                <div className="p-2 border-b border-port-border">
-                  <span className="text-xs text-gray-400">Select an app to run {taskType} on:</span>
-                </div>
-                <div className="py-1">
-                  {activeApps.map(app => (
-                    <button
-                      key={app.id}
-                      onClick={() => { onTrigger(taskType, app.id); setShowAppSelector(false); }}
-                      className="w-full px-3 py-2 text-left text-sm hover:bg-port-border/50 flex items-center gap-2 min-h-[40px]"
-                    >
-                      <Package size={14} className="text-gray-400 shrink-0" />
-                      <div className="min-w-0 flex-1">
-                        <div className="text-white truncate">{app.name}</div>
-                        {app.repoPath && <div className="text-xs text-gray-500 truncate">{app.repoPath}</div>}
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        ) : (
-          <span title={improvementDisabled ? IMPROVEMENT_DISABLED_TITLE : 'Run this task immediately (bypasses schedule)'} className="inline-block">
-            <button
-              onClick={() => onTrigger(taskType)}
-              disabled={improvementDisabled}
-              aria-disabled={improvementDisabled || undefined}
-              className={triggerButtonClass(improvementDisabled)}
-            >
-              <Play size={14} />
-              Run Now
-            </button>
-          </span>
-        )}
+        <RunTaskButton
+          taskType={taskType}
+          apps={apps}
+          onTrigger={onTrigger}
+          improvementDisabled={improvementDisabled}
+        />
         {config.type === 'once' && status.reason === 'once-completed' && (
           <button
             onClick={() => onReset(taskType)}

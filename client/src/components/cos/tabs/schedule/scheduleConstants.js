@@ -1,4 +1,5 @@
 // Shared constants and pure helpers for the CoS Schedule tab subcomponents.
+import { timeUntil } from '../../../../utils/formatters';
 
 export const INTERVAL_LABELS = {
   rotation: 'Rotation',
@@ -45,9 +46,70 @@ export const INTERVAL_BADGE_VARIANT = {
   cron: 'cyan',
 };
 
+// --- Status grouping -------------------------------------------------------
+// A task falls into exactly one status group, used for the status dot, grid
+// ordering, and the status filters. Order here is the grid sort order.
+export const STATUS_GROUPS = {
+  active: { label: 'Active', dot: 'bg-port-success', order: 0 },
+  'on-demand': { label: 'On-Demand', dot: 'bg-gray-400', order: 1 },
+  waiting: { label: 'Waiting', dot: 'bg-port-warning', order: 2 },
+  disabled: { label: 'Disabled', dot: 'bg-gray-600', order: 3 },
+};
+
+// Classify a task config into one status group (mutually exclusive).
+// Disabled wins over everything; then dependency-wait; then on-demand type.
+export function getTaskStatusGroup(config) {
+  if (!config?.enabled) return 'disabled';
+  if (config.status?.reason === 'waiting-on-dependencies') return 'waiting';
+  if (config.type === 'on-demand') return 'on-demand';
+  return 'active';
+}
+
+export const statusDot = (group) => STATUS_GROUPS[group]?.dot || STATUS_GROUPS.disabled.dot;
+
+// Sort key for the card grid: group order first, then soonest next run, then name.
+export function taskSortKey(taskType, config) {
+  const group = getTaskStatusGroup(config);
+  const next = config?.status?.nextRunAt ? new Date(config.status.nextRunAt).getTime() : Infinity;
+  return { order: STATUS_GROUPS[group]?.order ?? 9, next: Number.isFinite(next) ? next : Infinity, taskType };
+}
+
+// Tailwind tone for the per-task app-coverage bar/label (error none, success full, warning partial).
+export function coverageTone(enabled, total) {
+  if (enabled === 0) return { text: 'text-port-error', bar: 'bg-port-error' };
+  if (enabled === total) return { text: 'text-port-success', bar: 'bg-port-success' };
+  return { text: 'text-port-warning', bar: 'bg-port-warning' };
+}
+
+// Describe a task's "next run" line for the card: text + Tailwind tone, plus an
+// optional title and a `warn` flag for the dependency-wait icon. Pure so it can
+// be unit-tested without rendering.
+export function describeNextRun(config) {
+  const group = getTaskStatusGroup(config);
+  if (group === 'disabled') return { text: 'Paused', tone: 'text-gray-500' };
+  if (group === 'waiting') {
+    const deps = config.status?.pendingDeps?.join(', ');
+    return {
+      text: `waiting on ${deps || 'dependencies'}`,
+      tone: 'text-port-warning',
+      warn: true,
+      title: deps ? `Waiting for: ${deps}` : undefined,
+    };
+  }
+  if (group === 'on-demand') return { text: 'Manual trigger only', tone: 'text-gray-400' };
+  const next = config.status?.nextRunAt;
+  return {
+    text: next ? timeUntil(next, 'soon') : `${INTERVAL_LABELS[config.type] || config.type} — pending`,
+    tone: 'text-gray-300',
+  };
+}
+
 export const TASK_FILTERS = [
   { id: 'all', label: 'All', emptyMessage: 'No tasks configured.', match: () => true },
-  { id: 'enabled', label: 'Enabled', emptyMessage: 'No enabled tasks.', match: ([, config]) => config.enabled },
+  { id: 'active', label: 'Active', emptyMessage: 'No active tasks.', match: ([, config]) => getTaskStatusGroup(config) === 'active' },
+  { id: 'on-demand', label: 'On-Demand', emptyMessage: 'No on-demand tasks.', match: ([, config]) => getTaskStatusGroup(config) === 'on-demand' },
+  { id: 'waiting', label: 'Waiting', emptyMessage: 'No tasks waiting on dependencies.', match: ([, config]) => getTaskStatusGroup(config) === 'waiting' },
+  { id: 'disabled', label: 'Disabled', emptyMessage: 'No disabled tasks.', match: ([, config]) => getTaskStatusGroup(config) === 'disabled' },
 ];
 export const DEFAULT_FILTER_ID = TASK_FILTERS[0].id;
 

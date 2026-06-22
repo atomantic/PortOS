@@ -167,6 +167,16 @@ html[data-port-theme] .bg-port-card {
   background-color: rgb(var(--port-card) / var(--port-card-alpha)) !important;
 }
 
+/* Floating menus/popovers (e.g. the schedule "Run on App" picker) must stay
+   fully opaque even on translucent ("glass") card themes — otherwise the
+   content behind the free-floating menu bleeds through and the list becomes
+   unreadable. Unlike modals, these have no backdrop to sit on. Use the themed
+   card color with no alpha. */
+.port-menu-surface,
+html[data-port-theme] .port-menu-surface {
+  background-color: rgb(var(--port-card)) !important;
+}
+
 /*
  * Tailwind opacity modifiers (e.g. bg-port-bg/50, hover:bg-port-card/30) skip
  * the per-theme alpha tokens unless we restate them here — Tailwind v4 emits
