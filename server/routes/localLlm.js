@@ -8,6 +8,7 @@
  * contract the Database tab uses).
  */
 
+import os from 'os'
 import { Router } from 'express'
 import { asyncHandler, ServerError } from '../lib/errorHandler.js'
 import {
@@ -78,8 +79,12 @@ router.get('/huggingface-search', asyncHandler(async (req, res) => {
     const perEngine = await Promise.all(Object.keys(ENGINES).map((id) => listUserModels(id)))
     installedAudioRepos = perEngine.flat().map((m) => m.repo)
   }
-  const models = await searchHuggingFaceModels({ backend, query: q, category, limit, installedIds: installed, installedAudioRepos })
-  res.json({ backend, source: 'huggingface', models })
+  // Total system memory drives the RAM-aware default quant pick and the per-quant
+  // fit verdicts. On unified-memory Macs this pool also backs the GPU, so a big
+  // box can default to a higher-fidelity build than the old Q4-always pick.
+  const systemMemoryBytes = os.totalmem()
+  const models = await searchHuggingFaceModels({ backend, query: q, category, limit, installedIds: installed, installedAudioRepos, systemMemoryBytes })
+  res.json({ backend, source: 'huggingface', models, systemMemoryGb: Math.round(systemMemoryBytes / 1024 ** 3) })
 }))
 
 // POST /api/local-llm/install-backend — install the backend app/binary itself

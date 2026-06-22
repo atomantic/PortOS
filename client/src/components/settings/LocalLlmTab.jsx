@@ -47,6 +47,14 @@ const CAPABILITY_META = {
   audio: { Icon: Music, label: 'Audio generation', cls: 'text-pink-400 border-pink-400/50' },
 };
 
+// Server-computed per-quant fit verdict → badge styling + short label. Drives
+// the RAM-fit hint on the quant picker so a too-large build reads as a warning.
+const FIT_META = {
+  comfortable: { label: 'fits comfortably', cls: 'text-port-success' },
+  tight: { label: 'tight fit', cls: 'text-port-warning' },
+  'too-large': { label: 'exceeds RAM', cls: 'text-port-error' },
+};
+
 
 // Summarize a migrate result for the success toast (per-model statuses → counts).
 function summarizeMigrate(r) {
@@ -212,6 +220,12 @@ export function LocalLlmTab() {
   const [catalog, setCatalog] = useState([]);
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogError, setCatalogError] = useState('');
+  // Total unified/system memory (GB) reported by the HF search, used to caption
+  // the RAM-aware quant defaults. null until the first Hugging Face search.
+  const [systemMemoryGb, setSystemMemoryGb] = useState(null);
+  // Per-result quant override: { [repoKey]: installId }. Empty → use each
+  // result's RAM-aware default (`m.id`). Cleared whenever the catalog reloads.
+  const [selectedVariants, setSelectedVariants] = useState({});
   const [activeCategory, setActiveCategory] = useState('all');
   const [query, setQuery] = useState('');
   const [manualId, setManualId] = useState('');
@@ -259,6 +273,9 @@ export function LocalLlmTab() {
       .then((r) => {
         if (requestId !== catalogRequestId.current) return;
         setCatalog(r.models || []);
+        if (Number.isFinite(r.systemMemoryGb)) setSystemMemoryGb(r.systemMemoryGb);
+        // A fresh result set invalidates any per-card quant overrides.
+        setSelectedVariants({});
       })
       .catch((err) => {
         if (requestId !== catalogRequestId.current) return;
@@ -695,6 +712,11 @@ export function LocalLlmTab() {
         {catalogError && (
           <p className="text-xs text-port-warning">{catalogError}</p>
         )}
+        {catalogSource === 'huggingface' && Number.isFinite(systemMemoryGb) && (
+          <p className="text-[11px] text-gray-500">
+            This machine has {systemMemoryGb} GB of memory — the default quant is the highest-fidelity build that fits. Use the Quant menu on a result to choose a smaller or larger one.
+          </p>
+        )}
 
         {/* Catalog cards */}
         <div className="space-y-4">
@@ -705,22 +727,59 @@ export function LocalLlmTab() {
               )}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                 {group.models.map((m) => {
-                  const ram = recommendedRamGb(m?.sizeBytes, m?.size);
-                  const ctxLabel = formatContextLength(m.contextLength);
                   const isHf = m.source === 'huggingface';
                   const isAudio = m.category === 'audio';
+                  // Multi-quant repos let the user trade their RAM for fidelity.
+                  // `chosenId` is the selected variant's install id (defaulting to
+                  // the server's RAM-aware pick `m.id`); the card's size/RAM/fit
+                  // reflect that choice.
+                  const variants = (!isAudio && Array.isArray(m.variants)) ? m.variants : [];
+                  const hasVariantPicker = variants.length > 1;
+                  // Default to the server's RAM-aware pick (`m.id`). If it doesn't
+                  // line up with a listed variant, fall back to the recommended
+                  // one so the controlled <select> always has a matching option.
+                  const idMatchesVariant = variants.some((v) => v.installId === m.id);
+                  const recommendedId = variants.find((v) => v.recommended)?.installId;
+                  const chosenId = selectedVariants[m.key] || (idMatchesVariant ? m.id : recommendedId) || m.id;
+                  const chosenVariant = variants.find((v) => v.installId === chosenId) || null;
+                  const size = chosenVariant?.size || m.size;
+                  const sizeBytes = chosenVariant?.sizeBytes ?? m.sizeBytes;
+                  const fit = chosenVariant?.fit;
+                  const fitMeta = fit ? FIT_META[fit] : null;
+                  const ram = recommendedRamGb(sizeBytes, size);
+                  const ctxLabel = formatContextLength(m.contextLength);
                   const createdMs = new Date(m.createdAt).getTime();
                   const updatedMs = new Date(m.updatedAt).getTime();
                   return (
-                  <div key={m.id} className="flex items-start gap-3 bg-port-bg border border-port-border rounded-lg p-3">
+                  <div key={m.key || m.id} className="flex items-start gap-3 bg-port-bg border border-port-border rounded-lg p-3">
                     <div className="flex-1 min-w-0">
                       <div className="text-sm text-white truncate">{m.name} <span className="text-xs text-gray-500">· {m.params}</span></div>
-                      <div className="text-xs text-gray-500 truncate">{m.id}</div>
+                      <div className="text-xs text-gray-500 truncate">{chosenId}</div>
                       <div className="text-xs text-gray-500 mt-0.5">{m.description}</div>
                       {m.note && <div className="text-[11px] text-port-warning/90 mt-0.5">{m.note}</div>}
+                      {hasVariantPicker && (
+                        <div className="flex items-center gap-1.5 flex-wrap mt-1">
+                          <label htmlFor={`quant-${m.key}`} className="text-[11px] text-gray-500">Quant</label>
+                          <select
+                            id={`quant-${m.key}`}
+                            value={chosenId}
+                            onChange={(e) => setSelectedVariants((prev) => ({ ...prev, [m.key]: e.target.value }))}
+                            disabled={busy}
+                            className="text-[11px] bg-port-card border border-port-border rounded px-1.5 py-0.5 text-gray-300 max-w-[16rem]"
+                            title="Pick a quantization — higher quants are larger but higher fidelity"
+                          >
+                            {variants.map((v) => (
+                              <option key={v.installId} value={v.installId}>
+                                {v.quant}{v.size ? ` · ${v.size}` : ''}{v.recommended ? ' · recommended' : ''}{v.fit === 'too-large' ? ' · exceeds RAM' : ''}
+                              </option>
+                            ))}
+                          </select>
+                          {fitMeta && <span className={`text-[11px] ${fitMeta.cls}`} title="Fit on this machine — model weights + ~20% overhead vs. usable memory">{fitMeta.label}</span>}
+                        </div>
+                      )}
                       <div className="flex items-center gap-1.5 flex-wrap text-[11px] text-gray-600 mt-1">
                         <span className="text-gray-500">{categoryLabel(m.category)}</span>
-                        <span>{m.size}</span>
+                        <span>{size}</span>
                         {ctxLabel && (
                           <span title="Native context window (max tokens)">{ctxLabel}</span>
                         )}
@@ -766,11 +825,11 @@ export function LocalLlmTab() {
                         null
                       ) : (
                         <button
-                          onClick={() => (isAudio ? installAudio(m) : install(m.id))}
+                          onClick={() => (isAudio ? installAudio(m) : install(chosenId))}
                           disabled={busy}
                           className="px-2.5 py-1 text-xs bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded disabled:opacity-50 flex items-center gap-1"
                         >
-                          {actionInProgress === `install-${m.id}` ? <BrailleSpinner /> : <Download size={12} />}
+                          {actionInProgress === `install-${chosenId}` ? <BrailleSpinner /> : <Download size={12} />}
                           Install
                         </button>
                       )}

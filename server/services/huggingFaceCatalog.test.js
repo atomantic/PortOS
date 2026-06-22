@@ -198,6 +198,111 @@ describe('huggingFaceCatalog', () => {
       expect(results.find((r) => r.repository === 'meta-llama/Llama-3.1-8B-Instruct')).toBeUndefined()
     })
 
+  })
+
+  describe('quant variants + RAM-aware default', () => {
+    // Each test uses a UNIQUE repo id: `fetchRepoModel` caches per repo at module
+    // scope, so reusing an id would replay a prior test's blobs response.
+    const listing = (modelId, files) => response([
+      { modelId, downloads: 100, likes: 10, tags: ['gguf'], siblings: files.map((rfilename) => ({ rfilename })) }
+    ])
+    const blobs = (id, sized) => response({ id, siblings: Object.entries(sized).map(([rfilename, size]) => ({ rfilename, size })) })
+
+    it('exposes every quant as a size-desc variant and defaults to the largest that fits a big machine', async () => {
+      const repo = 'empero-ai/Qwythos-9B-Claude-GGUF'
+      fetch
+        .mockResolvedValueOnce(listing(repo, ['Qwythos-9B-Q4_K_M.gguf', 'Qwythos-9B-Q8_0.gguf', 'Qwythos-9B-BF16.gguf']))
+        .mockResolvedValueOnce(blobs(repo, {
+          'Qwythos-9B-Q4_K_M.gguf': 5_500_000_000,
+          'Qwythos-9B-Q8_0.gguf': 9_500_000_000,
+          'Qwythos-9B-BF16.gguf': 18_000_000_000,
+        }))
+
+      const [result] = await searchHuggingFaceModels({ backend: 'ollama', query: 'qwythos', systemMemoryBytes: 128 * 1024 ** 3 })
+
+      expect(result.variants.map((v) => v.quant)).toEqual(['BF16', 'Q8_0', 'Q4_K_M'])
+      expect(result.variants[0].installId).toBe(`hf.co/${repo}:BF16`)
+      // 128 GB unified memory → default to the highest-fidelity build that fits.
+      expect(result).toMatchObject({ id: `hf.co/${repo}:BF16`, quant: 'BF16', sizeBytes: 18_000_000_000 })
+      expect(result.variants.find((v) => v.quant === 'BF16')).toMatchObject({ recommended: true, fit: 'comfortable' })
+    })
+
+    it('defaults to a small quant on a low-memory machine', async () => {
+      const repo = 'empero-ai/Qwythos-9B-Small-GGUF'
+      fetch
+        .mockResolvedValueOnce(listing(repo, ['Qwythos-9B-Q4_K_M.gguf', 'Qwythos-9B-Q8_0.gguf', 'Qwythos-9B-BF16.gguf']))
+        .mockResolvedValueOnce(blobs(repo, {
+          'Qwythos-9B-Q4_K_M.gguf': 5_500_000_000,
+          'Qwythos-9B-Q8_0.gguf': 9_500_000_000,
+          'Qwythos-9B-BF16.gguf': 18_000_000_000,
+        }))
+
+      // 16 GB total → usable 8 GB → only Q4_K_M's ~6.6 GB resident estimate fits.
+      const [result] = await searchHuggingFaceModels({ backend: 'ollama', query: 'qwythos', systemMemoryBytes: 16 * 1024 ** 3 })
+
+      expect(result).toMatchObject({ id: `hf.co/${repo}:Q4_K_M`, quant: 'Q4_K_M' })
+      const byQuant = Object.fromEntries(result.variants.map((v) => [v.quant, v.fit]))
+      // Q4_K_M still fits (it's the chosen default) but its ~6.6 GB resident
+      // estimate is past the 60%-of-usable comfort line → 'tight'.
+      expect(byQuant).toEqual({ BF16: 'too-large', Q8_0: 'too-large', Q4_K_M: 'tight' })
+    })
+
+    it('keeps the QUANT_PRIORITY default and marks fit unknown when no memory budget is supplied', async () => {
+      const repo = 'empero-ai/Qwythos-9B-NoBudget-GGUF'
+      fetch
+        .mockResolvedValueOnce(listing(repo, ['Qwythos-9B-Q4_K_M.gguf', 'Qwythos-9B-Q8_0.gguf', 'Qwythos-9B-BF16.gguf']))
+        .mockResolvedValueOnce(blobs(repo, {
+          'Qwythos-9B-Q4_K_M.gguf': 5_500_000_000,
+          'Qwythos-9B-Q8_0.gguf': 9_500_000_000,
+          'Qwythos-9B-BF16.gguf': 18_000_000_000,
+        }))
+
+      const [result] = await searchHuggingFaceModels({ backend: 'ollama', query: 'qwythos' })
+
+      // No systemMemoryBytes → the QUANT_PRIORITY pick (Q4_K_M) is preserved.
+      expect(result).toMatchObject({ id: `hf.co/${repo}:Q4_K_M`, quant: 'Q4_K_M' })
+      expect(result.variants.map((v) => v.quant)).toEqual(['BF16', 'Q8_0', 'Q4_K_M'])
+      expect(result.variants.find((v) => v.recommended).quant).toBe('Q4_K_M')
+      expect(result.variants.every((v) => v.fit === 'unknown')).toBe(true)
+    })
+
+    it('sums multi-part GGUF shards into a single variant and resolves the quant', async () => {
+      const repo = 'org/Big-Shard-GGUF'
+      fetch
+        .mockResolvedValueOnce(listing(repo, ['Big-BF16-00001-of-00002.gguf', 'Big-BF16-00002-of-00002.gguf']))
+        .mockResolvedValueOnce(blobs(repo, {
+          'Big-BF16-00001-of-00002.gguf': 20_000_000_000,
+          'Big-BF16-00002-of-00002.gguf': 20_000_000_000,
+        }))
+
+      const [result] = await searchHuggingFaceModels({ backend: 'ollama', query: 'big', systemMemoryBytes: 128 * 1024 ** 3 })
+
+      expect(result.variants).toHaveLength(1)
+      expect(result.variants[0]).toMatchObject({ quant: 'BF16', sizeBytes: 40_000_000_000 })
+    })
+
+    it('builds LM Studio variant ids with the @quant syntax and still detects installed repos', async () => {
+      const repo = 'bartowski/LmModel-GGUF'
+      fetch
+        .mockResolvedValueOnce(listing(repo, ['LmModel-Q4_K_M.gguf', 'LmModel-Q8_0.gguf']))
+        .mockResolvedValueOnce(blobs(repo, {
+          'LmModel-Q4_K_M.gguf': 4_000_000_000,
+          'LmModel-Q8_0.gguf': 8_000_000_000,
+        }))
+
+      const [result] = await searchHuggingFaceModels({
+        backend: 'lmstudio', query: 'lmmodel', systemMemoryBytes: 128 * 1024 ** 3, installedIds: [repo]
+      })
+
+      expect(result.variants.map((v) => v.installId)).toEqual([`${repo}@Q8_0`, `${repo}@Q4_K_M`])
+      // RAM-aware default applies the quant to the LM Studio id too.
+      expect(result.id).toBe(`${repo}@Q8_0`)
+      // Bare-repo installed list still matches the quant-tagged result.
+      expect(result.installed).toBe(true)
+    })
+  })
+
+  describe('audio installed registry', () => {
     it('marks an audio model installed when it is in the shared registry', async () => {
       fetch.mockResolvedValue(response([
         {

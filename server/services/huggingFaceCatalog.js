@@ -101,12 +101,44 @@ const QUANT_PRIORITY = [
   'F16'
 ]
 
+// Weights → resident RAM multiplier (KV cache + runtime overhead). Mirrors the
+// client's `recommendedRamGb` (~20% overhead) so the server's "does it fit"
+// verdict and the UI's per-model RAM estimate agree.
+const MEMORY_OVERHEAD = 1.2
+
+// Usable RAM for a model after reserving headroom for the OS, the GGUF KV cache
+// growth, and other resident apps. On unified-memory Macs this same pool also
+// backs the GPU, so we reserve generously: max(8 GB, 20% of total). Returns null
+// when the caller didn't supply a system-memory figure — that disables the
+// RAM-aware default pick and leaves the QUANT_PRIORITY default untouched.
+function usableMemoryBytes(systemMemoryBytes) {
+  if (!Number.isFinite(systemMemoryBytes) || systemMemoryBytes <= 0) return null
+  const reserve = Math.max(8 * 1024 ** 3, systemMemoryBytes * 0.2)
+  return Math.max(0, systemMemoryBytes - reserve)
+}
+
+function estimatedResidentBytes(sizeBytes) {
+  return Number.isFinite(sizeBytes) && sizeBytes > 0 ? sizeBytes * MEMORY_OVERHEAD : null
+}
+
+// How comfortably a quant's estimated resident footprint fits the usable budget.
+// 'unknown' when either the file size or the machine's memory is unavailable.
+function classifyFit(sizeBytes, usableBytes) {
+  const resident = estimatedResidentBytes(sizeBytes)
+  if (resident == null || !Number.isFinite(usableBytes) || usableBytes <= 0) return 'unknown'
+  if (resident > usableBytes) return 'too-large'
+  if (resident > usableBytes * 0.6) return 'tight'
+  return 'comfortable'
+}
+
 const normalizeText = (value) => String(value || '').trim()
 
 function normalizeInstalledForBackend(backend, id) {
   const raw = normalizeText(id).toLowerCase().replace(/:latest$/, '')
   if (backend === 'ollama') return raw
-  return raw.split('/').pop().replace(/[-.]gguf$/i, '')
+  // Drop a trailing `@quant` (added when a specific variant is selected) so the
+  // bare-repo installed list still matches a quant-tagged result id.
+  return raw.split('/').pop().replace(/@[^/]*$/, '').replace(/[-.]gguf$/i, '')
 }
 
 function repoIdOf(model) {
@@ -138,7 +170,12 @@ function hasGgufSignal(model) {
 }
 
 function quantFromFilename(filename) {
-  const stem = normalizeText(filename).split('/').pop().replace(/\.gguf$/i, '')
+  const stem = normalizeText(filename).split('/').pop()
+    .replace(/\.gguf$/i, '')
+    // Multi-part GGUF shards (`…-00001-of-00002`) carry the quant before the
+    // shard suffix — strip it so BF16/F16 splits resolve to their real quant
+    // instead of failing the match and being dropped from the variant list.
+    .replace(/-\d{5}-of-\d{5}$/i, '')
   const match = stem.match(/(?:UD-)?(?:IQ\d(?:_[A-Z0-9]+)*|Q\d(?:_[A-Z0-9]+)*|BF16|F16)$/i)
   return match?.[0] || null
 }
@@ -251,10 +288,69 @@ function displayName(repoId) {
   return repoId.split('/').pop().replace(/[-_]?gguf$/i, '').replace(/[-_]+/g, ' ').trim() || repoId
 }
 
-function installIdForBackend(backend, repoId, file) {
-  if (backend === 'lmstudio') return repoId
-  const quant = file?.quant
+// Backend-specific pull/download id for a chosen quant.
+//   ollama   → `hf.co/<repo>:<quant>` (Ollama resolves the GGUF, incl. shards)
+//   lmstudio → `<repo>@<quant>` (the `lms get <repo>@<quant>` syntax)
+// A null quant falls back to the bare repo so the backend picks its own default.
+function variantInstallId(backend, repoId, quant) {
+  if (backend === 'lmstudio') return quant ? `${repoId}@${quant}` : repoId
   return `hf.co/${repoId}${quant ? `:${quant}` : ''}`
+}
+
+function installIdForBackend(backend, repoId, file) {
+  // The default result keeps LM Studio's bare-repo id (LM Studio resolves a
+  // recommended quant itself); the quant only enters the id when a specific
+  // variant is selected or the RAM-aware default re-pick applies one.
+  if (backend === 'lmstudio') return repoId
+  return variantInstallId('ollama', repoId, file?.quant)
+}
+
+// Every installable GGUF quant in a repo, deduped by quant (multi-part shards
+// summed), sorted by size DESC (≈ fidelity DESC) so the picker lists the
+// highest-quality build first. Files whose quant can't be parsed are skipped —
+// they have no `:quant`/`@quant` tag a backend can pull. `usableBytes` annotates
+// each variant with a fit verdict for the UI (null → 'unknown').
+function buildVariants(model, backend, usableBytes) {
+  const repoId = repoIdOf(model)
+  const groups = new Map()
+  for (const file of ggufFilesOf(model)) {
+    const quant = quantFromFilename(file.name)
+    if (!quant) continue
+    const group = groups.get(quant) || { quant, sizeBytes: 0 }
+    group.sizeBytes += Number.isFinite(file.size) ? file.size : 0
+    groups.set(quant, group)
+  }
+  return [...groups.values()]
+    .map((group) => {
+      const sizeBytes = group.sizeBytes > 0 ? group.sizeBytes : null
+      return {
+        quant: group.quant,
+        installId: variantInstallId(backend, repoId, group.quant),
+        sizeBytes,
+        size: formatBytes(sizeBytes) || group.quant,
+        fit: classifyFit(sizeBytes, usableBytes)
+      }
+    })
+    .sort((a, b) => (b.sizeBytes || 0) - (a.sizeBytes || 0))
+}
+
+// RAM-aware default: the highest-fidelity variant whose estimated resident
+// footprint fits the usable budget (variants are size-desc, so the first that
+// fits is the best). If none fit, fall back to the smallest. Returns null when
+// no variant carries a known size (caller keeps the QUANT_PRIORITY default).
+function pickVariantForBudget(variants, usableBytes) {
+  const sized = variants.filter((v) => Number.isFinite(v.sizeBytes) && v.sizeBytes > 0)
+  if (sized.length === 0) return null
+  return sized.find((v) => estimatedResidentBytes(v.sizeBytes) <= usableBytes) || sized[sized.length - 1]
+}
+
+// Promote a chosen variant onto the result's primary install fields so the
+// default card reflects it (id/quant/size) without the client having to re-pick.
+function applyVariant(result, variant) {
+  result.id = variant.installId
+  result.quant = variant.quant
+  result.sizeBytes = variant.sizeBytes
+  result.size = variant.size
 }
 
 function isInstalled(backend, result, installedIds) {
@@ -397,15 +493,32 @@ function contextLengthOf(model) {
 // `?blobs=true` record (the search listing carries neither). Both are fetched
 // from the same cached repo record, so a result missing either triggers one
 // (deduped) per-repo fetch.
-async function enrichWithSizes(results) {
+async function enrichWithSizes(results, { backend, usableBytes } = {}) {
   await Promise.allSettled(results.map(async (result) => {
+    const isAudio = result.category === 'audio'
     const needsSize = !Number.isFinite(result.sizeBytes)
-    const needsContext = result.category !== 'audio' && result.contextLength == null
-    if (!needsSize && !needsContext) return
+    const needsContext = !isAudio && result.contextLength == null
+    // Variants come only from the per-repo `?blobs=true` record (the listing
+    // omits per-file sizes), so build them here for every non-audio result.
+    const needsVariants = !isAudio && !result.variants
+    if (!needsSize && !needsContext && !needsVariants) return
     const model = await fetchRepoModel(result.repository)
     if (!model) return
-    if (needsSize) {
-      const bytes = result.category === 'audio'
+    if (!isAudio) {
+      const variants = buildVariants(model, backend, usableBytes)
+      if (variants.length > 0) {
+        // RAM-aware default: only re-pick when we have a memory budget; without
+        // one, keep the QUANT_PRIORITY default chosen in toResult.
+        const chosen = usableBytes ? pickVariantForBudget(variants, usableBytes) : null
+        if (chosen) applyVariant(result, chosen)
+        // Flag whichever variant the result now points at as recommended so the
+        // UI can mark it (covers both the RAM-aware and QUANT_PRIORITY default).
+        for (const v of variants) v.recommended = v.installId === result.id
+        result.variants = variants
+      }
+    }
+    if (needsSize && !Number.isFinite(result.sizeBytes)) {
+      const bytes = isAudio
         ? sumWeightBytes(model)
         : (() => { const picked = pickGgufFile(model); return Number.isFinite(picked?.size) ? picked.size : null })()
       if (Number.isFinite(bytes)) {
@@ -439,9 +552,12 @@ function curatedAudioResult(entry, installedAudioRepos) {
   }
 }
 
-export async function searchHuggingFaceModels({ backend, query = '', category = 'all', limit = 12, installedIds = [], installedAudioRepos = [] }) {
+export async function searchHuggingFaceModels({ backend, query = '', category = 'all', limit = 12, installedIds = [], installedAudioRepos = [], systemMemoryBytes = null }) {
   if (!isBackend(backend)) return []
   const requestedCategory = CATEGORY_IDS.has(category) ? category : 'all'
+  // Usable RAM drives the per-quant fit verdicts and the RAM-aware default pick;
+  // null (no system-memory figure) keeps the QUANT_PRIORITY default behaviour.
+  const usableBytes = usableMemoryBytes(systemMemoryBytes)
   const installedAudio = new Set(installedAudioRepos.map((r) => String(r).toLowerCase()))
   // Audio models aren't GGUF — don't constrain the Hub query (or post-filter)
   // to GGUF repos for the audio category, or ACE-Step / Stable Audio / MusicGen
@@ -485,5 +601,5 @@ export async function searchHuggingFaceModels({ backend, query = '', category = 
     .sort((a, b) => b.score - a.score || b.downloads - a.downloads)
     .slice(0, limit)
 
-  return enrichWithSizes(results)
+  return enrichWithSizes(results, { backend, usableBytes })
 }
