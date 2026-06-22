@@ -276,7 +276,7 @@ export function LocalLlmTab() {
     setCatalogError('');
     const request = source === 'huggingface'
       ? getLocalLlmHuggingFaceSearch(backend, q, category, 18)
-      : getLocalLlmCatalog(backend, q);
+      : getLocalLlmCatalog(backend, q, { variants: true });
     return request
       .then((r) => {
         if (requestId !== catalogRequestId.current) return;

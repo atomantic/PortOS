@@ -8,8 +8,12 @@ export const getLocalLlmStatus = (options) => request('/local-llm/status', optio
 // provider id that serves it. Powers the LoRA caption-model picker.
 export const getVisionModels = (options) => request('/local-llm/vision-models', options);
 
-export const getLocalLlmCatalog = (backend, q = '') =>
-  request(`/local-llm/catalog?backend=${encodeURIComponent(backend)}${q ? `&q=${encodeURIComponent(q)}` : ''}`);
+// `variants: true` opts into per-quant RAM-aware enrichment (probes Hugging Face
+// per HF-backed entry) — the recommended-models picker wants it. Callers that only
+// need catalog metadata (e.g. the playground decorating installed models) omit it
+// to keep the response fast and fully local.
+export const getLocalLlmCatalog = (backend, q = '', { variants = false } = {}) =>
+  request(`/local-llm/catalog?backend=${encodeURIComponent(backend)}${q ? `&q=${encodeURIComponent(q)}` : ''}${variants ? '&variants=1' : ''}`);
 
 export const getLocalLlmHuggingFaceSearch = (backend, q = '', category = 'all', limit = 12) =>
   request(`/local-llm/huggingface-search?backend=${encodeURIComponent(backend)}&category=${encodeURIComponent(category)}&limit=${encodeURIComponent(limit)}${q ? `&q=${encodeURIComponent(q)}` : ''}`);
