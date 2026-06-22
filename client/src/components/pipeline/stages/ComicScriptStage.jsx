@@ -738,6 +738,7 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
             issue={issue}
             pageIndex={pi}
             page={page}
+            pageCount={pages.length}
             renderOpts={renderOpts}
             onStageUpdate={onStageUpdate}
             onPreview={openPreview}
@@ -781,7 +782,7 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
 }
 
 function PageRow({
-  issue, pageIndex, page, renderOpts = {},
+  issue, pageIndex, page, pageCount = 0, renderOpts = {},
   onStageUpdate, onPreview, onFilenameKnown,
   confirmingDelete, onArmDelete, onCancelDelete, onConfirmDelete,
 }) {
@@ -802,6 +803,12 @@ function PageRow({
   const [renderingProof, setRenderingProof] = useState(false);
   const [renderingFinal, setRenderingFinal] = useState(false);
   const [useProofForFinal, setUseProofForFinal] = useState(true);
+  // Consistency reference: re-render this page using an adjacent page's image as
+  // a reference so a continuing scene keeps incidental/un-described characters +
+  // environment consistent. '' = none, 'prior' = previous page, 'next' = next.
+  const [refPage, setRefPage] = useState('');
+  const hasPrior = pageIndex > 0;
+  const hasNext = pageIndex < pageCount - 1;
   // Sync local edits with parent updates (re-extract / re-render persist).
   useEffect(() => { setDraft(rawText); }, [rawText]);
   const dirty = draft !== rawText;
@@ -837,11 +844,13 @@ function PageRow({
       ...renderOpts,
       target,
       useProofAsBase,
+      ...(refPage ? { referencePage: refPage } : {}),
     }).catch((err) => { toast.error(err.message || 'Render failed'); return null; });
     setFlight(false);
     if (res) {
       onStageUpdate?.('comicPages', res.stage);
-      const suffix = useProofAsBase ? ' (from proof)' : '';
+      const refSuffix = refPage ? ` (ref: ${refPage} page)` : '';
+      const suffix = useProofAsBase ? ' (from proof)' : refSuffix;
       toast.success(`Page ${pageIndex + 1} ${target}${suffix} render queued (${res.mode || renderOpts.mode || IMAGE_GEN_MODE.LOCAL})`);
     }
   };
@@ -877,6 +886,24 @@ function PageRow({
             {saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
             Save
           </button>
+          {(hasPrior || hasNext) ? (
+            <label
+              className="flex items-center gap-1 text-[11px] text-gray-400"
+              title="Render this page using an adjacent page's image as a consistency reference — keeps incidental, un-described characters and the environment consistent across a continuing scene."
+            >
+              <span className="text-gray-500">ref</span>
+              <select
+                value={refPage}
+                onChange={(e) => setRefPage(e.target.value)}
+                className="bg-port-bg border border-port-border rounded text-[11px] text-white px-1 py-0.5"
+                aria-label={`Consistency reference page for page ${pageIndex + 1}`}
+              >
+                <option value="">none</option>
+                {hasPrior ? <option value="prior">prev page</option> : null}
+                {hasNext ? <option value="next">next page</option> : null}
+              </select>
+            </label>
+          ) : null}
           <button
             type="button"
             onClick={() => handleRender('proof')}
@@ -886,7 +913,9 @@ function PageRow({
               ? 'Save changes before rendering'
               : proofInFlight
                 ? 'Proof render in progress…'
-                : 'Queue a fast proof render at the configured size'}
+                : refPage
+                  ? `Queue a proof render using the ${refPage} page as a consistency reference`
+                  : 'Queue a fast proof render at the configured size'}
           >
             {(renderingProof || proofInFlight) ? <Loader2 size={12} className="animate-spin" /> : <ImageIcon size={12} />}
             Proof

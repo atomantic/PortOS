@@ -96,6 +96,7 @@ const {
   generateStoryboardSceneImagePrompts,
   assertCharacterAppearancesResolve,
   enqueueVisualImage,
+  resolveReferencePageIndex,
 } = await import('./visualStages.js');
 
 // The universeBuilder mock's getUniverse is auto-captured here so individual
@@ -190,6 +191,57 @@ describe('composeComicPagePrompt', () => {
     const prompt = composeComicPagePrompt({ series: SERIES, page: PAGE, pageNumber: 1 });
     expect(prompt).toMatch(/balloon contains ONLY the quoted text/i);
     expect(prompt).toMatch(/NEVER letter the speaker's name/i);
+  });
+
+  it('renders a (SPEAKERS) PA line as a disembodied broadcast balloon not tailed to a visible character', () => {
+    // The JUNO bug: a station-AI PA line marked `(SPEAKERS)` was getting a plain
+    // balloon and the model tailed it to whoever was drawn (a newlywed).
+    const page = {
+      panels: [{
+        description: 'Two newlyweds duck under exploding pearl light-orbs above a honeymoon bed.',
+        dialogue: [{ character: 'JUNO (SPEAKERS)', line: 'Celebratory projectile beverages are permitted.' }],
+      }],
+    };
+    const prompt = composeComicPagePrompt({ series: SERIES, page, pageNumber: 1 });
+    expect(prompt).toMatch(/Speech balloon reads: "Celebratory projectile beverages are permitted\."/);
+    expect(prompt).toMatch(/spoken by JUNO, who is NOT visible in this panel/);
+    expect(prompt).toMatch(/do NOT attach the balloon tail to any visible character/);
+    expect(prompt).toMatch(/broadcast\/PA balloon/);
+    // The lettered text must not carry the `(SPEAKERS)` label.
+    const balloonTexts = [...prompt.matchAll(/Speech balloon reads: "([^"]+)"/g)].map((m) => m[1]);
+    expect(balloonTexts).toHaveLength(1);
+    expect(balloonTexts[0]).not.toMatch(/SPEAKERS/);
+  });
+
+  it('treats a transmission-device modifier (EARPIECE) as electronic but NOT as off-panel', () => {
+    // EARPIECE is ambiguous (a visible character may be speaking into it), so it
+    // gets the electronic style WITHOUT the "not visible" disembodied claim.
+    const page = { panels: [{ description: 'x', dialogue: [{ character: 'LINA (EARPIECE)', line: 'Copy that.' }] }] };
+    const prompt = composeComicPagePrompt({ series: SERIES, page, pageNumber: 1 });
+    expect(prompt).toMatch(/\(spoken by LINA; jagged electronic\/transmission balloon[^)]*\)/);
+    expect(prompt).not.toMatch(/LINA, who is NOT visible/);
+  });
+
+  describe('resolveReferencePageIndex', () => {
+    it("maps 'prior'/'next' relative to the current page", () => {
+      expect(resolveReferencePageIndex('prior', 1, 3)).toBe(0);
+      expect(resolveReferencePageIndex('next', 0, 3)).toBe(1);
+    });
+    it('accepts an explicit 0-based index', () => {
+      expect(resolveReferencePageIndex(2, 0, 3)).toBe(2);
+    });
+    it('returns null when unset', () => {
+      expect(resolveReferencePageIndex(undefined, 0, 3)).toBeNull();
+      expect(resolveReferencePageIndex(null, 0, 3)).toBeNull();
+    });
+    it('throws out of range (prior on first page, next on last)', () => {
+      expect(() => resolveReferencePageIndex('prior', 0, 3)).toThrow(/out of range/);
+      expect(() => resolveReferencePageIndex('next', 2, 3)).toThrow(/out of range/);
+      expect(() => resolveReferencePageIndex(5, 0, 3)).toThrow(/out of range/);
+    });
+    it('refuses a page referencing itself', () => {
+      expect(() => resolveReferencePageIndex(1, 1, 3)).toThrow(/its own consistency reference/);
+    });
   });
 
   it('uses singular "panel" wording for a one-panel splash page', () => {

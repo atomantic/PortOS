@@ -183,6 +183,59 @@ const resolveProofInitImage = (proofImage, label) => {
   return resolved;
 };
 
+// Consistency-reference denoise: when an ADJACENT page is passed as a reference
+// (continuing the same scene so incidental, un-described characters and the
+// environment stay consistent), we want the NEW page's composition to come from
+// its own prompt while only borrowing identity/style from the reference. So this
+// is a HIGH denoise (mostly follow the prompt) — the opposite of proof-as-base's
+// 0.25 (preserve layout for an upscale). Local i2i honors it; codex passes the
+// reference as an `-i` attachment (reference mode), where strength is moot.
+const REFERENCE_PAGE_DEFAULT_STRENGTH = 0.8;
+
+// Resolve an adjacent page's rendered image to a gallery path for use as a
+// consistency reference. Prefers the final render, falls back to the proof.
+// Throws a clear 400 when that page hasn't been rendered yet.
+const resolvePageReferenceImage = (refPage, label) => {
+  const name = refPage?.finalImage?.filename || refPage?.proofImage?.filename;
+  if (typeof name !== 'string' || !name) {
+    throw new ServerError(
+      `Cannot use ${label} as a consistency reference: it has no rendered image yet — render that page first.`,
+      { status: 400, code: 'PIPELINE_COMIC_REFERENCE_MISSING' },
+    );
+  }
+  const resolved = resolveGalleryImage(name, { mustExist: false });
+  if (!resolved) {
+    throw new ServerError(
+      `Reference image path escaped the gallery for ${label}: ${name}`,
+      { status: 400, code: 'PIPELINE_COMIC_REFERENCE_NOT_FOUND' },
+    );
+  }
+  return resolved;
+};
+
+// Resolve the `referencePage` option ('prior' | 'next' | <0-based index>) to a
+// concrete page index, or null when unset. Pure + bounds-checked against the
+// page count; throws a clear 400 for an out-of-range request (prior on page 1,
+// next on the last page, or an explicit index that doesn't exist).
+export function resolveReferencePageIndex(referencePage, pageIndex, pageCount) {
+  if (referencePage == null) return null;
+  let target;
+  if (referencePage === 'prior') target = pageIndex - 1;
+  else if (referencePage === 'next') target = pageIndex + 1;
+  else if (Number.isInteger(referencePage)) target = referencePage;
+  else throw new ServerError(`Invalid referencePage: ${referencePage}`, { status: 400, code: 'PIPELINE_COMIC_REFERENCE_BAD' });
+  if (target === pageIndex) {
+    throw new ServerError('A page cannot be its own consistency reference', { status: 400, code: 'PIPELINE_COMIC_REFERENCE_SELF' });
+  }
+  if (target < 0 || target >= pageCount) {
+    throw new ServerError(
+      `Consistency reference page ${target + 1} is out of range (have ${pageCount} page${pageCount === 1 ? '' : 's'})`,
+      { status: 400, code: 'PIPELINE_COMIC_REFERENCE_RANGE' },
+    );
+  }
+  return target;
+}
+
 const loadBibleContext = async (issueId) => {
   const issueChain = (async () => {
     const issue = await getIssue(issueId);
@@ -268,14 +321,26 @@ export function composeVisualPrompt({ series, description, slugline = '', extraS
 // cloud-outline for thoughts), but a diffusion model treats them as more text
 // to letter. Map them to visual balloon-style hints so the artist still gets
 // the cue without the label leaking into the lettering.
+// `disembodied: true` marks a modifier whose SPEAKER is NOT physically in the
+// panel — a station PA, a radio voice, an off-panel shout. Without an explicit
+// cue the image model gives the line a normal tailed balloon and points it at
+// whoever IS drawn (e.g. JUNO's `(SPEAKERS)` PA line got attributed to a
+// visible newlywed). formatBalloon turns the flag into a "do NOT tail to any
+// visible character" instruction. Order matters — first match wins, so the
+// broadcast/PA rule precedes the generic transmission rule.
 const BALLOON_STYLE_HINTS = [
-  { test: /\b(EARPIECE|RADIO|COMM|TRANSMISSION|PHONE|HOLO|HOLOGRAM|INTERCOM|SPEAKER|TV|MONITOR|VIDEO)\b/, hint: 'jagged electronic/transmission balloon with bolt-shaped tail' },
+  { test: /\b(SPEAKERS?|P\.?A\.?|BROADCAST|ANNOUNCE(?:D|S|MENT)?|ANNOUNCER|LOUDSPEAKER|OVERHEAD|INTERCOM|TANNOY|PAGING|STATIONWIDE|SHIPWIDE)\b/, hint: 'jagged electronic broadcast/PA balloon, no tail (disembodied announcement from an overhead source)', disembodied: true },
+  // Transmission devices are AMBIGUOUS — the speaker may be a visible character
+  // talking into the device, or a remote voice — so this gets the electronic
+  // style WITHOUT the "not in panel" claim (that's reserved for unambiguous
+  // broadcast/off-panel/V.O. above).
+  { test: /\b(EARPIECE|RADIO|COMMS?|TRANSMISSION|PHONE|HOLO|HOLOGRAM|TV|MONITOR|VIDEO|COMLINK|CHANNEL)\b/, hint: 'jagged electronic/transmission balloon with bolt-shaped tail' },
+  { test: /\b(OFF[\- ]?PANEL|OFF[\- ]?SCREEN|O\.?S\.?|O\.?P\.?)\b/, hint: 'off-panel balloon with the tail pointing past the panel border', disembodied: true },
+  { test: /\b(NARRATION|VOICE[\- ]?OVER|V\.?O\.?)\b/, hint: 'rectangular narration caption rather than a speech balloon', disembodied: true },
   { test: /\b(WHISPER(?:ED|S|ING)?|SOTTO|HUSHED|QUIET)\b/, hint: 'dashed-outline whisper balloon' },
   { test: /\b(SHOUT(?:ED|S|ING)?|YELL(?:ED|S|ING)?|SCREAM(?:ED|S|ING)?|ANGRY|BURST)\b/, hint: 'spiked/burst-shaped balloon' },
   { test: /\b(THOUGHT|THINKING|INTERNAL)\b/, hint: 'cloud-outline thought balloon with chain-of-bubbles tail' },
   { test: /\b(SING(?:S|ING)?|SONG|MUSICAL)\b/, hint: 'wavy musical balloon with musical-note flourish' },
-  { test: /\b(OFF[\- ]?PANEL|OFF[\- ]?SCREEN|O\.?S\.?|O\.?P\.?)\b/, hint: 'off-panel balloon with tail pointing past the panel border' },
-  { test: /\b(NARRATION|VOICE[\- ]?OVER|V\.?O\.?)\b/, hint: 'rectangular narration caption rather than a speech balloon' },
 ];
 
 /**
@@ -296,12 +361,17 @@ function formatBalloon(character, line) {
   const speaker = (m ? m[1] : raw).trim() || 'CHAR';
   const modifier = m ? m[2].trim() : '';
   const cleanText = text.replace(/^"+|"+$/g, '').trim();
-  const styleHint = modifier
-    ? BALLOON_STYLE_HINTS.find((h) => h.test.test(modifier.toUpperCase()))?.hint
+  const styleEntry = modifier
+    ? BALLOON_STYLE_HINTS.find((h) => h.test.test(modifier.toUpperCase())) || null
     : null;
-  const attribution = styleHint
-    ? `(spoken by ${speaker}; ${styleHint})`
-    : `(spoken by ${speaker})`;
+  // A disembodied speaker (PA, radio, off-panel, V.O.) is NOT in the panel, so
+  // spell that out — otherwise the model letters a normal balloon and tails it
+  // to whoever IS drawn, mis-attributing the line (the JUNO `(SPEAKERS)` bug).
+  const attribution = styleEntry?.disembodied
+    ? `(spoken by ${speaker}, who is NOT visible in this panel — render as a ${styleEntry.hint}; do NOT attach the balloon tail to any visible character)`
+    : styleEntry
+      ? `(spoken by ${speaker}; ${styleEntry.hint})`
+      : `(spoken by ${speaker})`;
   // Terminator handled here so endPunct() at the call site doesn't have to
   // navigate the closing paren — we always end with `).`.
   return `Speech balloon reads: "${cleanText}" ${attribution}.`;
@@ -773,13 +843,25 @@ export async function enqueueVisualComicPage(issueId, options = {}) {
 
   const mode = resolveMode(options, settings);
   const variant = resolveVariant(options.target);
-  const fromProof = variant === 'final' && options.useProofAsBase === true;
-  const initImagePath = fromProof
-    ? resolveProofInitImage(page.proofImage, `page ${pageIndex + 1}`)
-    : null;
-  const initImageStrength = fromProof
-    ? (Number.isFinite(options.initImageStrength) ? options.initImageStrength : PROOF_AS_BASE_DEFAULT_STRENGTH)
-    : undefined;
+
+  // Consistency reference: pass an ADJACENT (or explicit) already-rendered page
+  // as a reference so a continuing scene keeps its incidental, un-described
+  // characters and environment consistent (the "two newlyweds drift between
+  // pages" problem). Takes precedence over proof-as-base — both set the init
+  // image, and an explicit cross-page reference is the stronger intent.
+  const referencePageIndex = resolveReferencePageIndex(options.referencePage, pageIndex, pages.length);
+  const fromReference = referencePageIndex != null;
+  const fromProof = !fromReference && variant === 'final' && options.useProofAsBase === true;
+  const initImagePath = fromReference
+    ? resolvePageReferenceImage(pages[referencePageIndex], `page ${referencePageIndex + 1}`)
+    : fromProof
+      ? resolveProofInitImage(page.proofImage, `page ${pageIndex + 1}`)
+      : null;
+  const initImageStrength = fromReference
+    ? (Number.isFinite(options.initImageStrength) ? options.initImageStrength : REFERENCE_PAGE_DEFAULT_STRENGTH)
+    : fromProof
+      ? (Number.isFinite(options.initImageStrength) ? options.initImageStrength : PROOF_AS_BASE_DEFAULT_STRENGTH)
+      : undefined;
 
   // Build a free-text haystack from every panel's prose (description +
   // caption + sfx). Dialogue lines feed character matching via CAPS names
@@ -831,9 +913,9 @@ export async function enqueueVisualComicPage(issueId, options = {}) {
     prompt, world, settings, mode,
     options: { ...options, initImagePath, initImageStrength, ...loraRenderOptions(characterLoras) },
     owner: buildComicPagesOwner({ issueId, target: 'page', pageIndex, variant }),
-    logLine: `📄 Pipeline comic page — issue=${issueId.slice(0, 8)} page=${pageIndex + 1} panels=${page.panels.length} variant=${variant}${fromProof ? ' (from proof)' : ''}`,
+    logLine: `📄 Pipeline comic page — issue=${issueId.slice(0, 8)} page=${pageIndex + 1} panels=${page.panels.length} variant=${variant}${fromProof ? ' (from proof)' : ''}${fromReference ? ` (ref page ${referencePageIndex + 1})` : ''}`,
   });
-  return { jobId, mode, prompt, pageIndex, variant, fromProof };
+  return { jobId, mode, prompt, pageIndex, variant, fromProof, fromReference, referencePageIndex };
 }
 
 /**

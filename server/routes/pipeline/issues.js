@@ -230,6 +230,11 @@ const comicPageRenderSchema = z.object({
   // See covers.js's makeCoverRenderSchema for the proof/final semantics.
   target: z.enum(COMIC_PAGE_VARIANTS).optional().default('proof'),
   useProofAsBase: z.boolean().optional().default(false),
+  // Consistency reference: re-render this page using an adjacent ('prior'/'next')
+  // or explicit (0-based index) already-rendered page as a reference image, so a
+  // continuing scene keeps incidental/un-described characters + environment
+  // consistent. Resolved + bounds-checked in enqueueVisualComicPage.
+  referencePage: z.union([z.enum(['prior', 'next']), z.number().int().min(0)]).optional(),
   // Per-render opt-out for trained character-LoRA auto-apply (local mode).
   applyCharacterLoras: z.boolean().optional().default(true),
 }).refine(refineImagePixelCap, { message: PIXEL_CAP_MESSAGE, path: ['width'] });
