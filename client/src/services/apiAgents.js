@@ -61,6 +61,12 @@ export const createSlashdoTask = (command, app) => request('/cos/tasks/slashdo',
   method: 'POST',
   body: JSON.stringify({ command, app })
 });
+// Queue a CoS task to implement one specific JIRA ticket (sprint-board play button).
+export const createJiraTicketTask = (app, ticketKey, options = {}) => request('/cos/tasks/jira-ticket', {
+  method: 'POST',
+  body: JSON.stringify({ app, ticketKey }),
+  ...options
+});
 export const enhanceCosTaskPrompt = (data) => request('/cos/tasks/enhance', {
   method: 'POST',
   body: JSON.stringify(data)

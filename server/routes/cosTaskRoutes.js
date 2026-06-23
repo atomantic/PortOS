@@ -10,14 +10,54 @@ import { enhanceTaskPrompt } from '../services/taskEnhancer.js';
 import { loadSlashdoCommand } from '../services/subAgentSpawner.js';
 import { buildClaimWorkTask } from '../services/cosTaskGenerator.js';
 import { getAppById } from '../services/apps.js';
+import { getTaskPrompt } from '../services/taskPromptService.js';
+import { getCodeReviewDefaults } from '../services/codeReview.js';
 import { workTrackerLabel } from '../lib/workTracker.js';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
-import { createCosTaskSchema, updateCosTaskSchema, validateRequest } from '../lib/validation.js';
+import {
+  createCosTaskSchema,
+  updateCosTaskSchema,
+  validateRequest,
+  normalizeReviewers,
+  LOCAL_LLM_REVIEWERS,
+  DEFAULT_REVIEWERS,
+} from '../lib/validation.js';
 
 const enhanceTaskSchema = z.object({
   description: z.string().min(1),
   context: z.string().optional(),
 });
+
+// One-off "implement THIS JIRA ticket" task (the per-card play button on the
+// app overview's sprint board). `ticketKey` is a JIRA key like `PROJ-1234`.
+const jiraTicketTaskSchema = z.object({
+  app: z.string().min(1),
+  ticketKey: z.string().trim().regex(/^[A-Za-z][A-Za-z0-9]*-\d+$/, 'Invalid JIRA ticket key'),
+});
+
+// Resolve the reviewers CSV for the claim flow exactly as buildClaimWorkTask
+// does (Code Review Defaults, minus local-LLM reviewers the claim prompt can't
+// drive, falling back to the hardcoded default). Mirrors the scheduled
+// claim-work resolution so the play button honors the user's reviewer choice.
+async function resolveClaimReviewersCsv() {
+  const codeReviewDefaults = await getCodeReviewDefaults().catch(() => null);
+  const list = normalizeReviewers({}, codeReviewDefaults?.reviewers)
+    .filter((r) => !LOCAL_LLM_REVIEWERS.includes(r));
+  return (list.length ? list : [...DEFAULT_REVIEWERS]).join(',');
+}
+
+// Append a "claim exactly this ticket" constraint to the claim-issue-jira body
+// — the JIRA analogue of buildPlanConstraintBlock. The base prompt's Phase 1
+// tells the agent to PICK the next-ready ticket; this overrides that to pin the
+// user's selection while keeping every safety check (already-claimed, stale,
+// too-ambiguous → exit cleanly).
+function buildTargetTicketBlock(ticketKey) {
+  return `
+
+## Target Ticket Constraint
+
+The user explicitly selected JIRA ticket \`${ticketKey}\` from the board. Override Phase 1 ("Pick the target ticket"): do NOT pick a different ticket and do NOT scan for the next-ready one — claim exactly \`${ticketKey}\`. Still honor the safety checks: if \`${ticketKey}\` is already In Progress / In Review / Done / closed, is already on a \`claim/${ticketKey}\` (or \`cos/.../${ticketKey}/...\`) branch, or its requirements are too ambiguous or too large to implement in a single PR, exit cleanly (file a Review Hub todo for ambiguous requirements) rather than forcing it. Otherwise run Phases 2–7 against \`${ticketKey}\`.`;
+}
 
 const SLASHDO_COMMANDS = {
   push:           { label: 'Push', description: 'Commit and push all work with changelog' },
@@ -122,6 +162,60 @@ router.post('/tasks/slashdo', asyncHandler(async (req, res) => {
 
   if (result?.duplicate) {
     throw new ServerError(`A task with this description is already ${result.status}`, { status: 409, code: 'DUPLICATE_TASK' });
+  }
+
+  res.json(result);
+}));
+
+// POST /api/cos/tasks/jira-ticket - Queue a CoS task to implement one specific
+// JIRA ticket (the per-card "play" button on the app overview sprint board).
+// Reuses the claim-issue-jira prompt and appends a target-ticket constraint, so
+// it stays in lockstep with the scheduled JIRA claim flow without duplicating
+// the 7-phase body. Queue-only: the daemon picks it up on the next evaluation.
+router.post('/tasks/jira-ticket', asyncHandler(async (req, res) => {
+  const { app, ticketKey } = validateRequest(jiraTicketTaskSchema, req.body);
+  const key = ticketKey.toUpperCase();
+
+  const appObj = await getAppById(app);
+  if (!appObj) {
+    throw new ServerError(`App not found: ${app}`, { status: 404, code: 'APP_NOT_FOUND' });
+  }
+  if (!appObj.jira?.enabled) {
+    throw new ServerError(`JIRA is not enabled for ${appObj.name}`, { status: 400, code: 'JIRA_NOT_ENABLED' });
+  }
+
+  // Resolve the claim-issue-jira body directly (not via buildClaimWorkTask) —
+  // an app can show a JIRA board while its general Work Tracker resolves to
+  // GitHub/PLAN, so route the click to the JIRA flow regardless of that setting.
+  // Independent reads (prompt body + Code Review Defaults) — fetch concurrently.
+  const [template, reviewersCsv] = await Promise.all([
+    getTaskPrompt('claim-issue-jira'),
+    resolveClaimReviewersCsv(),
+  ]);
+  const context = template
+    .replace(/\{appName\}/g, appObj.name)
+    .replace(/\{repoPath\}/g, appObj.repoPath)
+    .replace(/\{appId\}/g, appObj.id)
+    // Function-form replacer so a literal `$` in the reviewers CSV isn't read as
+    // a backreference.
+    .replace(/\{reviewers\}/g, () => reviewersCsv)
+    + buildTargetTicketBlock(key);
+
+  // claim-issue-jira self-manages its worktree + MR/PR, so leave both false
+  // (matching the /do:next slashdo default for the JIRA tracker).
+  const taskData = {
+    description: `Claim JIRA ticket ${key} for ${appObj.name} — implement and ship a PR`,
+    app,
+    context,
+    useWorktree: false,
+    openPR: false,
+    simplify: false,
+    reviewLoop: false,
+  };
+  const result = await cos.addTask(taskData, 'user');
+
+  if (result?.duplicate) {
+    throw new ServerError(`A task for ${key} is already ${result.status}`, { status: 409, code: 'DUPLICATE_TASK' });
   }
 
   res.json(result);

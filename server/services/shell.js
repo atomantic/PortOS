@@ -155,7 +155,37 @@ export function createShellSession(socket, options = {}) {
   releaseExternalViews(socket, sessionId);
   broadcastSessionList();
   if (options.initialCommand) {
-    setTimeout(() => writeToSession(sessionId, `${options.initialCommand}\n`), options.initialCommandDelayMs ?? 200);
+    const sendInitial = () => writeToSession(sessionId, `${options.initialCommand}\n`);
+    if (options.waitForPromptReady) {
+      // Inject the command only once the shell has FINISHED loading. A fixed
+      // delay races a heavy interactive shell, and a prompt-marker watch is
+      // fooled by powerlevel10k's *instant prompt*, which renders (and enables
+      // bracketed-paste mode) BEFORE `.zshrc`/plugins/nvm finish — so the
+      // command runs in a half-loaded shell and the launched TUI falls straight
+      // back to the prompt. Instead, wait for the shell's startup output to go
+      // QUIET: (re)arm a settle timer on every chunk and send only once no
+      // output has arrived for `promptReadySettleMs`. Theme-agnostic; a bounded
+      // fallback guarantees we never hang if the shell never quiets.
+      let sent = false;
+      let sub = null;
+      let settleTimer = null;
+      const settleMs = options.promptReadySettleMs ?? 750;
+      const fire = () => {
+        if (sent) return;
+        sent = true;
+        clearTimeout(fallback);
+        clearTimeout(settleTimer);
+        sub?.dispose?.();
+        sendInitial();
+      };
+      sub = ptyProcess.onData(() => {
+        clearTimeout(settleTimer);
+        settleTimer = setTimeout(fire, settleMs);
+      });
+      const fallback = setTimeout(fire, options.initialCommandDelayMs ?? 8000);
+    } else {
+      setTimeout(sendInitial, options.initialCommandDelayMs ?? 200);
+    }
   }
   return sessionId;
 }

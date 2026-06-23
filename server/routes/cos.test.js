@@ -92,6 +92,15 @@ vi.mock('../services/apps.js', () => ({
   getAppById: vi.fn()
 }));
 
+// The per-ticket `/tasks/jira-ticket` route loads the claim-issue-jira prompt
+// body and resolves reviewers from the Code Review Defaults.
+vi.mock('../services/taskPromptService.js', () => ({
+  getTaskPrompt: vi.fn()
+}));
+vi.mock('../services/codeReview.js', () => ({
+  getCodeReviewDefaults: vi.fn()
+}));
+
 // Import mocked modules
 import * as cos from '../services/cos.js';
 import * as taskWatcher from '../services/taskWatcher.js';
@@ -101,6 +110,8 @@ import { enhanceTaskPrompt } from '../services/taskEnhancer.js';
 import { loadSlashdoCommand } from '../services/subAgentSpawner.js';
 import { buildClaimWorkTask } from '../services/cosTaskGenerator.js';
 import { getAppById } from '../services/apps.js';
+import { getTaskPrompt } from '../services/taskPromptService.js';
+import { getCodeReviewDefaults } from '../services/codeReview.js';
 
 describe('CoS Routes', () => {
   let app;
@@ -882,6 +893,99 @@ describe('CoS Routes', () => {
       const response = await request(app)
         .post('/api/cos/tasks/slashdo')
         .send({ command: 'push', app: 'my-app' });
+
+      expect(response.status).toBe(409);
+    });
+  });
+
+  describe('POST /api/cos/tasks/jira-ticket', () => {
+    const jiraApp = { id: 'my-app', name: 'MyApp', repoPath: '/repo', jira: { enabled: true } };
+    // Template carrying every placeholder the route substitutes.
+    const TEMPLATE = 'Work {appName} at {repoPath} (app {appId}); reviewers: {reviewers}.';
+
+    it('queues a claim task pinned to the selected ticket', async () => {
+      getAppById.mockResolvedValue(jiraApp);
+      getTaskPrompt.mockResolvedValue(TEMPLATE);
+      getCodeReviewDefaults.mockResolvedValue({ reviewers: ['claude'] });
+      cos.addTask.mockResolvedValue({ id: 'task-jira-1', status: 'pending' });
+
+      const response = await request(app)
+        .post('/api/cos/tasks/jira-ticket')
+        .send({ app: 'my-app', ticketKey: 'PROJ-123' });
+
+      expect(response.status).toBe(200);
+      expect(response.body.id).toBe('task-jira-1');
+      expect(getTaskPrompt).toHaveBeenCalledWith('claim-issue-jira');
+
+      const [taskData, taskType] = cos.addTask.mock.calls.at(-1);
+      expect(taskType).toBe('user');
+      // Placeholders substituted, ticket constraint appended.
+      expect(taskData.context).toContain('Work MyApp at /repo (app my-app); reviewers: claude.');
+      expect(taskData.context).not.toMatch(/\{appName\}|\{repoPath\}|\{appId\}|\{reviewers\}/);
+      expect(taskData.context).toContain('Target Ticket Constraint');
+      expect(taskData.context).toContain('PROJ-123');
+      expect(taskData.description).toContain('PROJ-123');
+      // claim-issue-jira self-manages its worktree + PR.
+      expect(taskData.useWorktree).toBe(false);
+      expect(taskData.openPR).toBe(false);
+    });
+
+    it('uppercases the ticket key', async () => {
+      getAppById.mockResolvedValue(jiraApp);
+      getTaskPrompt.mockResolvedValue(TEMPLATE);
+      getCodeReviewDefaults.mockResolvedValue(null);
+      cos.addTask.mockResolvedValue({ id: 'task-jira-2', status: 'pending' });
+
+      const response = await request(app)
+        .post('/api/cos/tasks/jira-ticket')
+        .send({ app: 'my-app', ticketKey: 'proj-7' });
+
+      expect(response.status).toBe(200);
+      const [taskData] = cos.addTask.mock.calls.at(-1);
+      expect(taskData.description).toContain('PROJ-7');
+      expect(taskData.context).toContain('PROJ-7');
+    });
+
+    it('returns 404 for an unknown app', async () => {
+      getAppById.mockResolvedValue(null);
+
+      const response = await request(app)
+        .post('/api/cos/tasks/jira-ticket')
+        .send({ app: 'ghost', ticketKey: 'PROJ-1' });
+
+      expect(response.status).toBe(404);
+      expect(cos.addTask).not.toHaveBeenCalled();
+    });
+
+    it('returns 400 when JIRA is not enabled for the app', async () => {
+      getAppById.mockResolvedValue({ id: 'my-app', name: 'MyApp', repoPath: '/repo', jira: { enabled: false } });
+
+      const response = await request(app)
+        .post('/api/cos/tasks/jira-ticket')
+        .send({ app: 'my-app', ticketKey: 'PROJ-1' });
+
+      expect(response.status).toBe(400);
+      expect(cos.addTask).not.toHaveBeenCalled();
+    });
+
+    it('returns 400 for a malformed ticket key', async () => {
+      const response = await request(app)
+        .post('/api/cos/tasks/jira-ticket')
+        .send({ app: 'my-app', ticketKey: 'not-a-key' });
+
+      expect(response.status).toBe(400);
+      expect(getAppById).not.toHaveBeenCalled();
+    });
+
+    it('returns 409 for a duplicate task', async () => {
+      getAppById.mockResolvedValue(jiraApp);
+      getTaskPrompt.mockResolvedValue(TEMPLATE);
+      getCodeReviewDefaults.mockResolvedValue(null);
+      cos.addTask.mockResolvedValue({ duplicate: true, status: 'pending' });
+
+      const response = await request(app)
+        .post('/api/cos/tasks/jira-ticket')
+        .send({ app: 'my-app', ticketKey: 'PROJ-9' });
 
       expect(response.status).toBe(409);
     });

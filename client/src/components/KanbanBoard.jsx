@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { DndContext, DragOverlay, useDraggable, useDroppable, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
-import { GripVertical } from 'lucide-react';
+import { GripVertical, Play } from 'lucide-react';
 import toast from './ui/Toast';
 import * as api from '../services/api';
 
@@ -37,16 +37,26 @@ function TicketCard({ ticket, isDragOverlay }) {
   );
 }
 
-function DraggableTicket({ ticket, disabled }) {
+function DraggableTicket({ ticket, disabled, appId, canQueue }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: ticket.key,
     data: { ticket },
     disabled
   });
+  const [queuing, setQueuing] = useState(false);
 
   const style = transform ? {
     transform: `translate3d(${transform.x}px, ${transform.y}px, 0)`,
   } : undefined;
+
+  const handleQueue = async () => {
+    setQueuing(true);
+    // silent: this caller owns its own success/error toasts (see CLAUDE.md).
+    await api.createJiraTicketTask(appId, ticket.key, { silent: true })
+      .then(() => toast.success(`Queued agent task for ${ticket.key}`))
+      .catch((err) => toast.error(`Failed to queue ${ticket.key}: ${err.message}`))
+      .finally(() => setQueuing(false));
+  };
 
   return (
     <div
@@ -75,15 +85,30 @@ function DraggableTicket({ ticket, disabled }) {
         >
           <TicketCard ticket={ticket} />
         </a>
+        {canQueue && (
+          <button
+            type="button"
+            onClick={handleQueue}
+            disabled={queuing}
+            className="flex items-center px-1.5 text-port-success/70 hover:text-port-success shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+            aria-label={`Start an agent on ${ticket.key}`}
+            title={`Queue a Chief of Staff agent to implement ${ticket.key}`}
+          >
+            <Play size={14} className={queuing ? 'animate-pulse' : ''} />
+          </button>
+        )}
       </div>
     </div>
   );
 }
 
-function DroppableColumn({ category, tickets, isOver, disabled }) {
+function DroppableColumn({ category, tickets, isOver, disabled, appId }) {
   const { setNodeRef } = useDroppable({ id: category, disabled });
   const config = COLUMN_CONFIG[category];
   const totalPoints = tickets.reduce((sum, t) => sum + (Number(t.storyPoints) || 0), 0);
+  // The play button (queue a CoS agent for a ticket) only makes sense for
+  // not-started work, and only when we know which app the board belongs to.
+  const canQueue = category === 'To Do' && !!appId;
 
   return (
     <div
@@ -100,7 +125,7 @@ function DroppableColumn({ category, tickets, isOver, disabled }) {
       </div>
       <div className="space-y-2">
         {tickets.map(ticket => (
-          <DraggableTicket key={ticket.key} ticket={ticket} disabled={disabled} />
+          <DraggableTicket key={ticket.key} ticket={ticket} disabled={disabled} appId={appId} canQueue={canQueue} />
         ))}
         {tickets.length === 0 && (
           <div className={`text-xs text-center py-4 ${isOver ? 'text-gray-300' : 'text-gray-500'}`}>
@@ -112,7 +137,7 @@ function DroppableColumn({ category, tickets, isOver, disabled }) {
   );
 }
 
-export default function KanbanBoard({ tickets: initialTickets = [], instanceId, onTicketsChange }) {
+export default function KanbanBoard({ tickets: initialTickets = [], instanceId, onTicketsChange, appId }) {
   const [tickets, setTickets] = useState(initialTickets);
   const [activeTicket, setActiveTicket] = useState(null);
   const [transitioning, setTransitioning] = useState(null);
@@ -218,6 +243,7 @@ export default function KanbanBoard({ tickets: initialTickets = [], instanceId, 
             tickets={columns[category]}
             isOver={overColumn === category}
             disabled={!!transitioning}
+            appId={appId}
           />
         ))}
       </div>

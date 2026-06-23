@@ -122,8 +122,18 @@ vi.mock('../lib/tuiHandshake.js', async (importOriginal) => {
   };
 });
 
+// child_process.execFile is used only by the TUI liveness probe
+// (shellHasLiveChild). Default to an error callback so the probe resolves
+// "assume alive" (guard bypassed) for every test that doesn't exercise it —
+// the early-exit test below overrides this to report no child process.
+vi.mock('child_process', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, execFile: vi.fn((_file, _args, _opts, cb) => cb(new Error('not mocked'))) };
+});
+
 import { existsSync } from 'fs';
 import { readFile } from 'fs/promises';
+import { execFile } from 'child_process';
 import { buildTuiSpawnConfig, spawnTuiAgent } from './agentTuiSpawning.js';
 import * as shellService from './shell.js';
 import * as agentLifecycle from './agentLifecycle.js';
@@ -423,6 +433,140 @@ describe('spawnTuiAgent runtime', () => {
         success: false,
         completionReason: 'idle-no-activity',
       })
+    );
+  });
+
+  // ── 1b. Command exited before the prompt → don't paste into the bare shell ───
+  // The TUI command (claude/codex/…) runs as a CHILD of the persistent PTY
+  // shell, so if it exits at startup the PTY stays open and onExit never fires.
+  // The ready-gate would then paste the bracketed-paste prompt into the returned
+  // shell prompt — the wedged `^[[200~ …` session. The liveness probe must catch
+  // "shell has no live child", skip the paste, and finalize failure with the
+  // command's captured output.
+  it('tui-exited-early: skips the paste and finalizes failure when the command exited before the prompt', async () => {
+    let resolveComplete;
+    const completeDone = new Promise((r) => { resolveComplete = r; });
+    vi.mocked(agentLifecycle.finalizeAgent).mockImplementation(async () => { resolveComplete(); });
+
+    // Truthy pid so the probe runs; ps reports NO process whose ppid is 4242.
+    vi.mocked(shellService.getSessionProcess).mockReturnValue({ pid: 4242 });
+    vi.mocked(execFile).mockImplementation((_file, _args, _opts, cb) => cb(null, '1\n1\n999\n'));
+    // raw.txt tail surfaced in the error.
+    vi.mocked(readFile).mockResolvedValue('Error: claude exited at startup\n');
+
+    runSpawn();
+    await flushMicrotasks();
+
+    await capturedOnData(Buffer.from('booting...\n'));
+    await flushMicrotasks();
+
+    // Open the ready-gate (promptDelay floor + idle threshold) so sendPrompt fires.
+    await vi.advanceTimersByTimeAsync(2000);
+    await flushMicrotasks();
+
+    vi.useRealTimers();
+    await completeDone;
+
+    // The bracketed-paste prompt must NOT have been written.
+    const pasteWrites = vi.mocked(shellService.writeToSession).mock.calls
+      .filter(([, data]) => typeof data === 'string' && data.includes('\x1b[200~'));
+    expect(pasteWrites).toHaveLength(0);
+
+    expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: 'agent-1',
+        success: false,
+        completionReason: 'tui-exited-early',
+      })
+    );
+  });
+
+  // ── 1c. claude waits for bracketed-paste mode (input ready) before pasting ───
+  const claudeTuiConfig = { command: 'claude', args: [], commandLine: 'claude', promptDelayMs: 100, idleTimeoutMs: 50 };
+  const pasteCount = () => vi.mocked(shellService.writeToSession).mock.calls
+    .filter(([, d]) => typeof d === 'string' && d.includes('\x1b[200~')).length;
+  // The launch shell turns bracketed-paste OFF to run the command, then claude
+  // turns it back ON when its input box is ready — that OFF→ON is "ready".
+  const PASTE_OFF = '\x1b[?2004l';
+  const PASTE_ON = '\x1b[?2004h';
+
+  it('claude input-ready: does NOT paste on the startup banner, only once paste mode is re-enabled', async () => {
+    runSpawn({ tuiConfig: claudeTuiConfig });
+    await flushMicrotasks();
+
+    // Startup banner (and the shell turning paste mode OFF to run the command).
+    await capturedOnData(Buffer.from(`${PASTE_OFF}Claude Code v2.1.186\nOpus 4.8 (1M context) with high effort\n`));
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(2000);
+    await flushMicrotasks();
+    expect(pasteCount()).toBe(0); // banner / paste-mode-off is not "input ready"
+
+    // claude re-enables bracketed-paste mode → input box live, safe to paste.
+    await capturedOnData(Buffer.from(PASTE_ON));
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(400);
+    await flushMicrotasks();
+    expect(pasteCount()).toBe(1);
+  });
+
+  it('claude input-ready: holds the paste while paste mode is OFF (so the paste ESC cannot cancel the input)', async () => {
+    runSpawn({ tuiConfig: claudeTuiConfig });
+    await flushMicrotasks();
+
+    // Command launched, paste mode OFF — pasting now would send a bare ESC that
+    // cancels claude's input. Gate must NOT paste.
+    await capturedOnData(Buffer.from(PASTE_OFF));
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(2000);
+    await flushMicrotasks();
+    expect(pasteCount()).toBe(0);
+
+    await capturedOnData(Buffer.from(PASTE_ON));
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(400);
+    await flushMicrotasks();
+    expect(pasteCount()).toBe(1);
+  });
+
+  it('claude trust gate: auto-confirms the folder-trust prompt with Enter, then pastes once ready', async () => {
+    runSpawn({ tuiConfig: claudeTuiConfig });
+    await flushMicrotasks();
+
+    await capturedOnData(Buffer.from(`${PASTE_OFF}Is this a project you trust?\n  1. Yes, I trust this folder\n  2. No, exit\n`));
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(700);
+    await flushMicrotasks();
+
+    // A bare Enter was sent to confirm the default ("Yes, I trust").
+    const enters = vi.mocked(shellService.writeToSession).mock.calls.filter(([, d]) => d === '\r');
+    expect(enters.length).toBeGreaterThanOrEqual(1);
+
+    // After trust is accepted claude's input box comes up (paste mode ON) → paste.
+    await capturedOnData(Buffer.from(PASTE_ON));
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(400);
+    await flushMicrotasks();
+    expect(pasteCount()).toBe(1);
+  });
+
+  it('tui-not-ready: claude that never shows an input prompt finalizes failure without pasting', async () => {
+    let resolveComplete;
+    const completeDone = new Promise((r) => { resolveComplete = r; });
+    vi.mocked(agentLifecycle.finalizeAgent).mockImplementation(async () => { resolveComplete(); });
+
+    runSpawn({ tuiConfig: claudeTuiConfig });
+    await flushMicrotasks();
+    await capturedOnData(Buffer.from('some startup noise but no input box ever appears\n'));
+    await flushMicrotasks();
+
+    // Advance past TUI_INPUT_READY_DEADLINE_MS (45s).
+    await vi.advanceTimersByTimeAsync(46000);
+    vi.useRealTimers();
+    await completeDone;
+
+    expect(pasteCount()).toBe(0);
+    expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: 'agent-1', success: false, completionReason: 'tui-not-ready' })
     );
   });
 

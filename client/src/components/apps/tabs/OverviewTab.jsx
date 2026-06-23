@@ -248,7 +248,7 @@ export default function OverviewTab({ app, onRefresh }) {
                   <span>Loading tickets...</span>
                 </div>
               ) : jiraTickets?.length > 0 ? (
-                <KanbanBoard tickets={jiraTickets} instanceId={app.jira?.instanceId} onTicketsChange={setJiraTickets} />
+                <KanbanBoard tickets={jiraTickets} instanceId={app.jira?.instanceId} onTicketsChange={setJiraTickets} appId={app.id} />
               ) : (
                 <div className="px-3 py-2 text-sm text-gray-500 bg-port-card border border-port-border rounded-lg">
                   No tickets assigned to you in the current sprint
