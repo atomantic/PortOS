@@ -98,6 +98,8 @@ const {
   assertCharacterAppearancesResolve,
   enqueueVisualImage,
   resolveReferencePageIndex,
+  resolveAutoReferenceIndex,
+  resolveComicPageReference,
 } = await import('./visualStages.js');
 
 // The universeBuilder mock's getUniverse is auto-captured here so individual
@@ -242,6 +244,66 @@ describe('composeComicPagePrompt', () => {
     });
     it('refuses a page referencing itself', () => {
       expect(() => resolveReferencePageIndex(1, 1, 3)).toThrow(/its own consistency reference/);
+    });
+  });
+
+  describe('resolveAutoReferenceIndex', () => {
+    const rendered = (scene) => ({ sceneNumber: scene, finalImage: { filename: 'x.png' } });
+    const unrendered = (scene) => ({ sceneNumber: scene });
+
+    it('chains off the prior page when it shares the scene AND is rendered', () => {
+      const pages = [rendered(1), unrendered(1)];
+      expect(resolveAutoReferenceIndex(pages, 1)).toBe(0);
+    });
+    it('breaks across a scene boundary (different scene number)', () => {
+      const pages = [rendered(1), unrendered(2)];
+      expect(resolveAutoReferenceIndex(pages, 1)).toBeNull();
+    });
+    it('skips when the prior page has no render yet (soft, no throw)', () => {
+      const pages = [unrendered(1), unrendered(1)];
+      expect(resolveAutoReferenceIndex(pages, 1)).toBeNull();
+    });
+    it('skips when scene markers are absent on either page (legacy scripts)', () => {
+      const pages = [{ finalImage: { filename: 'x.png' } }, {}];
+      expect(resolveAutoReferenceIndex(pages, 1)).toBeNull();
+    });
+    it('returns null on the first page (no prior)', () => {
+      expect(resolveAutoReferenceIndex([rendered(1)], 0)).toBeNull();
+    });
+    it('falls back to the proof image when no final render exists', () => {
+      const pages = [{ sceneNumber: 1, proofImage: { filename: 'p.png' } }, unrendered(1)];
+      expect(resolveAutoReferenceIndex(pages, 1)).toBe(0);
+    });
+  });
+
+  describe('resolveComicPageReference (precedence tiers)', () => {
+    const rendered = (scene) => ({ sceneNumber: scene, finalImage: { filename: 'x.png' } });
+    const unrendered = (scene) => ({ sceneNumber: scene });
+    const pages = [rendered(1), { ...unrendered(1), proofImage: { filename: 'p.png' } }];
+
+    it('explicit reference wins over proof-as-base and auto', () => {
+      const r = resolveComicPageReference({ referencePage: 'prior', useProofAsBase: true, variant: 'final', pages, pageIndex: 1 });
+      expect(r).toMatchObject({ referencePageIndex: 0, fromReference: true, autoReference: false, fromProof: false });
+    });
+    it('proof-as-base wins over auto on a final render', () => {
+      const r = resolveComicPageReference({ referencePage: undefined, useProofAsBase: true, variant: 'final', pages, pageIndex: 1 });
+      expect(r).toMatchObject({ fromProof: true, fromReference: false, autoReference: false });
+    });
+    it('auto chains within scene when no explicit ref and not proof-as-base', () => {
+      const r = resolveComicPageReference({ referencePage: undefined, useProofAsBase: false, variant: 'proof', pages, pageIndex: 1 });
+      expect(r).toMatchObject({ referencePageIndex: 0, fromReference: true, autoReference: true, fromProof: false });
+    });
+    it("'none' opts out of auto chaining but leaves proof-as-base (orthogonal)", () => {
+      const withProof = resolveComicPageReference({ referencePage: 'none', useProofAsBase: true, variant: 'final', pages, pageIndex: 1 });
+      expect(withProof).toMatchObject({ referencePageIndex: null, fromReference: false, autoReference: false, fromProof: true });
+      // A proof render with 'none' and no proof-as-base box → fully fresh, no reference.
+      const fresh = resolveComicPageReference({ referencePage: 'none', useProofAsBase: false, variant: 'proof', pages, pageIndex: 1 });
+      expect(fresh).toMatchObject({ referencePageIndex: null, fromReference: false, autoReference: false, fromProof: false });
+    });
+    it('across a scene boundary, auto yields nothing', () => {
+      const crossScene = [rendered(1), unrendered(2)];
+      const r = resolveComicPageReference({ referencePage: undefined, useProofAsBase: false, variant: 'proof', pages: crossScene, pageIndex: 1 });
+      expect(r.fromReference).toBe(false);
     });
   });
 

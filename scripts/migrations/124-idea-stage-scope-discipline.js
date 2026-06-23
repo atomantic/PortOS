@@ -30,14 +30,14 @@ import { makePromptReplaceMigration } from './_lib.js';
 
 // Pre-change shipped hash: the post-098 (ticking-clock) idea-expansion body.
 export const ACCEPTED_OLD_MD5 = {
-  'pipeline-idea-expansion.md': ['c50f016639d41cd8244f5ff13429f997'],
+  'pipeline-idea-expansion.md': [ '93e9552c6662811e597a97296f3776a4','c50f016639d41cd8244f5ff13429f997'],
 };
 
 // Post-change shipped hash (scope-boundary language + {{#paddingRisk}} section).
 // Mirror this into every earlier migration that tracks the same file
 // (003/004/025/054/098) so their drift-catch tests stay green.
 export const NEW_SHIPPED_MD5 = {
-  'pipeline-idea-expansion.md': '93e9552c6662811e597a97296f3776a4',
+  'pipeline-idea-expansion.md': 'd6fa86a435f978336661dcabca67258f', // post-127 (scene markers)
 };
 
 const { applyMigration, up } = makePromptReplaceMigration({

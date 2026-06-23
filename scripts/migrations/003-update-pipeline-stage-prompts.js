@@ -19,7 +19,7 @@
 import { makePromptReplaceMigration } from './_lib.js';
 
 export const ACCEPTED_OLD_MD5 = {
-  'pipeline-idea-expansion.md': [
+  'pipeline-idea-expansion.md': [ '93e9552c6662811e597a97296f3776a4',
     'aee25112b2c596f643b17c559b772c22', // pre-003 (original)
     '41facefbc0c0549d456bef9111f95ab9', // post-003 / pre-004 — the hash this migration originally produced
     '1ee44cf95851ff8debf18729ebcd40b4', // post-004 / pre-025
@@ -27,13 +27,13 @@ export const ACCEPTED_OLD_MD5 = {
     'b5c47c94ffc74637983c95761ab0c66c', // post-054 / pre-054-fence
     '49a208628290543ba2607a5ed48fdc8c', // post-054-fence / pre-098
   ],
-  'pipeline-prose.md': [
+  'pipeline-prose.md': [ '84523d531eeafa60959c65c553b2563f',
     'bfea5aeeb471aae9749baee765b473a7', // pre-003 (original)
     '30ac30ec2b9d3e2a9eb869c181732cc6', // post-003 / pre-027 — the hash this migration originally produced
     'd1f8e3f1d214725b5aa67f309a81cd7d', // post-027 / pre-054
     'bef1bc2767b78f585f2bd89f3d615130', // post-054 / pre-054-fence
   ],
-  'pipeline-comic-script.md': [
+  'pipeline-comic-script.md': [ 'a4303016c34b65e4b0e641fe71252de3',
     '40e5fdc1a1e68a7419b7dad936366c1a', // pre-003 (original)
     'beab031951859ca13579cdb9c4dbe769', // post-003 / pre-013 — the hash this migration originally produced
     '1e0af305c27d0c80c4b482d2ebcb4a0d', // post-013 / pre-027
@@ -51,9 +51,9 @@ export const ACCEPTED_OLD_MD5 = {
 };
 
 export const NEW_SHIPPED_MD5 = {
-  'pipeline-idea-expansion.md': '93e9552c6662811e597a97296f3776a4', // post-124 (scope-discipline + {{#paddingRisk}})
-  'pipeline-prose.md':           '84523d531eeafa60959c65c553b2563f', // post-054-fence
-  'pipeline-comic-script.md':    'a4303016c34b65e4b0e641fe71252de3', // post-121 (visible text exactness)
+  'pipeline-idea-expansion.md': 'd6fa86a435f978336661dcabca67258f', // post-127 (scene markers)
+  'pipeline-prose.md':           '25e3d58c2741bd98acd5d08ba70d8a5e', // post-127 (scene markers)
+  'pipeline-comic-script.md':    '49af30c05f008b20f6998a0f113f7d87', // post-127 (scene markers)
   'pipeline-tv-script.md':       '376f779f4687b598f1c92ca4e770fd5a', // retired upstream (no data.reference)
   'pipeline-season-episodes.md': '50c68a29c3ebc275db3095d06bd87100', // post-005
 };

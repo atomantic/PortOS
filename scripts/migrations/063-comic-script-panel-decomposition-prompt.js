@@ -19,7 +19,7 @@
 import { makePromptReplaceMigration } from './_lib.js';
 
 export const ACCEPTED_OLD_MD5 = {
-  'pipeline-comic-script.md': [
+  'pipeline-comic-script.md': [ 'a4303016c34b65e4b0e641fe71252de3',
     'dea7d497d1cb38e7574f236f4ff8e644',
     'e9ee70bf18888492edada6633cd9928a', // post-063 / pre-121
     '7c05ecde539f04c9fa91e87543057204', // pre-121 reference body
@@ -27,7 +27,7 @@ export const ACCEPTED_OLD_MD5 = {
 };
 
 export const NEW_SHIPPED_MD5 = {
-  'pipeline-comic-script.md': 'a4303016c34b65e4b0e641fe71252de3',
+  'pipeline-comic-script.md': '49af30c05f008b20f6998a0f113f7d87', // post-127 (scene markers)
 };
 
 const { applyMigration, up } = makePromptReplaceMigration({

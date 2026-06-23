@@ -25,7 +25,7 @@ import { makePromptReplaceMigration } from './_lib.js';
 // Exported so the test suite can import them and detect drift without
 // maintaining local copies.
 export const ACCEPTED_OLD_MD5 = {
-  'pipeline-idea-expansion.md': [
+  'pipeline-idea-expansion.md': [ '93e9552c6662811e597a97296f3776a4',
     '1ee44cf95851ff8debf18729ebcd40b4', // post-004 shipped — current pre-025
     '41facefbc0c0549d456bef9111f95ab9', // post-003, pre-004, still in setup-data.js OLD list
     'aee25112b2c596f643b17c559b772c22', // pre-003, still in setup-data.js OLD list
@@ -37,7 +37,7 @@ export const ACCEPTED_OLD_MD5 = {
 
 // New shipped hash — what data.reference carries post-migration.
 export const NEW_SHIPPED_MD5 = {
-  'pipeline-idea-expansion.md': '93e9552c6662811e597a97296f3776a4', // post-124 (scope-discipline + {{#paddingRisk}})
+  'pipeline-idea-expansion.md': 'd6fa86a435f978336661dcabca67258f', // post-127 (scene markers)
 };
 
 const { applyMigration, up } = makePromptReplaceMigration({

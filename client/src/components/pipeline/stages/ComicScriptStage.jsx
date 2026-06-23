@@ -846,11 +846,12 @@ function PageRow({
   const handleRender = async (target) => {
     const setFlight = target === 'final' ? setRenderingFinal : setRenderingProof;
     setFlight(true);
-    // A selected consistency reference takes precedence over proof-as-base
-    // (the server resolves referencePage first), so don't claim/require proof
-    // in that case — otherwise the Final button's proof gate blocks a
-    // reference-only render and the toast mislabels it "(from proof)".
-    const useProofAsBase = target === 'final' && useProofForFinal && !refPage;
+    // Only an EXPLICIT adjacent reference ('prior'/'next') takes precedence over
+    // proof-as-base (the server resolves it first). 'auto' and 'none' leave
+    // proof-as-base intact: 'none' just forbids an auto reference, and an auto
+    // reference is itself lower precedence than proof-as-base server-side.
+    const explicitRef = refPage === 'prior' || refPage === 'next';
+    const useProofAsBase = target === 'final' && useProofForFinal && !explicitRef;
     const res = await generatePipelineComicPage(issue.id, pageIndex, {
       ...renderOpts,
       target,
@@ -860,8 +861,13 @@ function PageRow({
     setFlight(false);
     if (res) {
       onStageUpdate?.('comicPages', res.stage);
-      const refSuffix = refPage ? ` (ref: ${refPage} page)` : '';
-      const suffix = useProofAsBase ? ' (from proof)' : refSuffix;
+      // Prefer the server's resolved outcome — auto may or may not have found a
+      // same-scene prior page with a render, so trust res over the local intent.
+      const suffix = res.fromProof
+        ? ' (from proof)'
+        : res.fromReference
+          ? ` (${res.autoReference ? 'auto-ref' : 'ref'} page ${res.referencePageIndex + 1})`
+          : '';
       toast.success(`Page ${pageIndex + 1} ${target}${suffix} render queued (${res.mode || renderOpts.mode || IMAGE_GEN_MODE.LOCAL})`);
     }
   };
@@ -897,9 +903,10 @@ function PageRow({
     }
   };
 
-  // A selected reference render uses the adjacent page (not this page's proof)
+  // An EXPLICIT adjacent reference render uses that page (not this page's proof)
   // as its base, so it doesn't need a proof to exist — only proof-as-base does.
-  const finalNeedsProof = useProofForFinal && !refPage && !proofSlot?.filename;
+  // 'auto'/'none' still go through proof-as-base, so they keep the proof gate.
+  const finalNeedsProof = useProofForFinal && !(refPage === 'prior' || refPage === 'next') && !proofSlot?.filename;
   // The Refine control only makes sense once the page has a render to correct
   // (final preferred, else proof). Gate on jobId OR filename — not filename
   // alone: refining a proof-only page replaces its slot with an in-flight
@@ -912,8 +919,16 @@ function PageRow({
   return (
     <li className="rounded-lg border border-port-border bg-port-card/40">
       <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-port-border flex-wrap">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <span className="text-xs uppercase tracking-wider text-gray-500">Page {pageIndex + 1}</span>
+          {(Number.isInteger(page.sceneNumber) || page.sceneHeading) ? (
+            <span
+              className="text-[10px] text-port-accent/80 border border-port-accent/30 rounded px-1"
+              title="The scene this page belongs to. Renders auto-chain off the prior page within the same scene and start fresh across a scene boundary."
+            >
+              {Number.isInteger(page.sceneNumber) ? `Scene ${page.sceneNumber}` : 'Scene'}{page.sceneHeading ? `: ${page.sceneHeading}` : ''}
+            </span>
+          ) : null}
           <span className="text-[10px] text-gray-600">{page.panels?.length || 0} panel{page.panels?.length === 1 ? '' : 's'}</span>
           {dirty ? <span className="text-[10px] text-port-warning">unsaved</span> : null}
         </div>
@@ -927,24 +942,23 @@ function PageRow({
             {saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
             Save
           </button>
-          {(hasPrior || hasNext) ? (
-            <label
-              className="flex items-center gap-1 text-[11px] text-gray-400"
-              title="Render this page using an adjacent page's image as a consistency reference — keeps incidental, un-described characters and the environment consistent across a continuing scene."
+          <label
+            className="flex items-center gap-1 text-[11px] text-gray-400"
+            title="Consistency reference for this page's render. 'auto' chains off the prior page when it's in the same scene (keeps incidental characters + environment consistent) and renders fresh across a scene boundary. 'none' forces a fresh render even mid-scene. 'prev/next page' force that specific page as the reference."
+          >
+            <span className="text-gray-500">ref</span>
+            <select
+              value={refPage}
+              onChange={(e) => setRefPage(e.target.value)}
+              className="bg-port-bg border border-port-border rounded text-[11px] text-white px-1 py-0.5"
+              aria-label={`Consistency reference page for page ${pageIndex + 1}`}
             >
-              <span className="text-gray-500">ref</span>
-              <select
-                value={refPage}
-                onChange={(e) => setRefPage(e.target.value)}
-                className="bg-port-bg border border-port-border rounded text-[11px] text-white px-1 py-0.5"
-                aria-label={`Consistency reference page for page ${pageIndex + 1}`}
-              >
-                <option value="">none</option>
-                {hasPrior ? <option value="prior">prev page</option> : null}
-                {hasNext ? <option value="next">next page</option> : null}
-              </select>
-            </label>
-          ) : null}
+              <option value="">auto (same scene)</option>
+              <option value="none">none (fresh)</option>
+              {hasPrior ? <option value="prior">prev page</option> : null}
+              {hasNext ? <option value="next">next page</option> : null}
+            </select>
+          </label>
           <button
             type="button"
             onClick={() => handleRender('proof')}

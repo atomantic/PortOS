@@ -37,7 +37,7 @@
 import { makePromptReplaceMigration } from './_lib.js';
 
 export const ACCEPTED_OLD_MD5 = {
-  'pipeline-prose.md': [
+  'pipeline-prose.md': [ '84523d531eeafa60959c65c553b2563f',
     '30ac30ec2b9d3e2a9eb869c181732cc6', // post-003 / pre-027 shipped
     'bfea5aeeb471aae9749baee765b473a7', // pre-003 (in setup-data OLD list)
     'd1f8e3f1d214725b5aa67f309a81cd7d', // post-027 / pre-054
@@ -49,7 +49,7 @@ export const ACCEPTED_OLD_MD5 = {
     '1280ef6b1ad68fa44070ca7478ec2a5f', // post-027 / pre-054
     '2568e14beaa574d43f8018a5def51d04', // post-054 / pre-054-fence
   ],
-  'pipeline-comic-script.md': [
+  'pipeline-comic-script.md': [ 'a4303016c34b65e4b0e641fe71252de3',
     '1e0af305c27d0c80c4b482d2ebcb4a0d', // post-011 / pre-027 shipped
     'beab031951859ca13579cdb9c4dbe769', // pre-011 (in setup-data OLD list)
     '40e5fdc1a1e68a7419b7dad936366c1a', // pre-003 (in setup-data OLD list)
@@ -65,9 +65,9 @@ export const ACCEPTED_OLD_MD5 = {
 };
 
 export const NEW_SHIPPED_MD5 = {
-  'pipeline-prose.md':            '84523d531eeafa60959c65c553b2563f', // post-054-fence
+  'pipeline-prose.md':            '25e3d58c2741bd98acd5d08ba70d8a5e', // post-127 (scene markers)
   'pipeline-teleplay.md':         'afa4215330bf856429d70d7e2f856605', // post-054-fence
-  'pipeline-comic-script.md':     'a4303016c34b65e4b0e641fe71252de3', // post-121 (visible text exactness)
+  'pipeline-comic-script.md':     '49af30c05f008b20f6998a0f113f7d87', // post-127 (scene markers)
   'universe-character-expand.md': '67b6e73ed47f318451a730088b4cff14',
 };
 

@@ -235,7 +235,11 @@ const comicPageRenderSchema = z.object({
   // or explicit (0-based index) already-rendered page as a reference image, so a
   // continuing scene keeps incidental/un-described characters + environment
   // consistent. Resolved + bounds-checked in enqueueVisualComicPage.
-  referencePage: z.union([z.enum(['prior', 'next']), z.number().int().min(0)]).optional(),
+  //   - omitted / 'auto' → auto-chain off the prior page within the same scene,
+  //     render fresh across a scene boundary (the default).
+  //   - 'none' → force a fresh render with no reference, even mid-scene.
+  //   - 'prior' / 'next' / <index> → explicit reference (errors if unrendered).
+  referencePage: z.union([z.enum(['prior', 'next', 'auto', 'none']), z.number().int().min(0)]).optional(),
   // Per-render opt-out for trained character-LoRA auto-apply (local mode).
   applyCharacterLoras: z.boolean().optional().default(true),
 }).refine(refineImagePixelCap, { message: PIXEL_CAP_MESSAGE, path: ['width'] });
@@ -782,6 +786,11 @@ router.patch('/issues/:id/stages/comicPages/pages/:pageIndex', asyncHandler(asyn
       nextPages[pageIndex] = {
         ...currentPages[pageIndex],
         rawText: fresh.rawText || body.rawText,
+        // Re-derive the scene marker from the edited header so editing
+        // `## Page N — Scene M: SLUGLINE` retags the page (and clears it when
+        // the marker is removed). `?? null` normalizes the absent case.
+        sceneNumber: fresh.sceneNumber ?? null,
+        sceneHeading: fresh.sceneHeading ?? null,
         panels: fresh.panels.map((p, i) => ({
           ...p,
           // Preserve in-flight per-panel jobIds against the freshest panels.

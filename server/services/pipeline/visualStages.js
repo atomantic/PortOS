@@ -46,6 +46,7 @@ import { runPromptRefine, runImagePromptCandidates } from './refineHelpers.js';
 import { pickCanon } from './seriesCanon.js';
 import { STYLE_PROMPT_OVERRIDE_MODE_DEFAULT } from './series.js';
 import { ASPECT_PRESETS } from '../../lib/creativeDirectorPresets.js';
+import { sameComicScene } from '../../lib/comicScriptParser.js';
 import { IMAGE_GEN_MODE } from '../imageGen/modes.js';
 import { resolveImageCleaners } from '../imageGen/index.js';
 
@@ -243,6 +244,58 @@ export function resolveReferencePageIndex(referencePage, pageIndex, pageCount) {
     );
   }
   return target;
+}
+
+// Auto-pick a consistency reference for a fresh page render: the immediately
+// prior page, but ONLY when it shares this page's scene AND has already been
+// rendered. This is the default when the caller doesn't name an explicit
+// `referencePage` — so a continuing scene keeps its incidental characters and
+// environment consistent page-to-page, while a scene boundary renders fresh
+// (the "don't reference the prior page across a scene cut" rule). Pure +
+// soft: returns null (rather than throwing) when there's no prior page, the
+// scenes differ, scene markers are absent (legacy scripts → no auto-chain), or
+// the prior page has no image yet — auto-chaining is a best-effort nicety, not
+// a hard requirement like an explicitly requested reference.
+export function resolveAutoReferenceIndex(pages, pageIndex) {
+  const cur = pages?.[pageIndex];
+  const prior = pages?.[pageIndex - 1];
+  if (!cur || !prior) return null;
+  if (!sameComicScene(prior, cur)) return null;
+  const hasImage = !!(prior.finalImage?.filename || prior.proofImage?.filename);
+  return hasImage ? pageIndex - 1 : null;
+}
+
+// Resolve which init image (if any) a comic-page render should use, applying
+// the three precedence tiers in order:
+//   1. EXPLICIT `referencePage` ('prior' | 'next' | <index>) — strongest
+//      intent; bounds-checked (throws on an out-of-range request). `'none'`
+//      opts out of the AUTO tier (no cross-page reference, even mid-scene).
+//   2. PROOF-AS-BASE — a final-variant upscale off this page's own proof. Beats
+//      auto so "Final from proof" still preserves panel layout. Orthogonal to
+//      `'none'` (it's a self-upscale, not a sibling reference), so it still
+//      applies when the user picked 'none' but left the proof-as-base box on.
+//   3. AUTO — chain off the prior page when it shares this page's scene and is
+//      already rendered; a scene boundary (or absent scene markers) skips it.
+// Pure; returns the chosen tier so the caller picks the init image + strength
+// and logs it. `autoReference` is true only when the AUTO tier supplied the
+// page (so callers can distinguish it from an explicit reference).
+export function resolveComicPageReference({ referencePage, useProofAsBase, variant, pages, pageIndex }) {
+  const explicitOff = referencePage === 'none';
+  const wantsExplicit = !explicitOff && referencePage != null && referencePage !== 'auto';
+  const explicitIndex = wantsExplicit
+    ? resolveReferencePageIndex(referencePage, pageIndex, pages.length)
+    : null;
+  const fromProof = explicitIndex == null && variant === 'final' && useProofAsBase === true;
+  const autoIndex = (explicitIndex == null && !fromProof && !explicitOff)
+    ? resolveAutoReferenceIndex(pages, pageIndex)
+    : null;
+  const referencePageIndex = explicitIndex != null ? explicitIndex : autoIndex;
+  return {
+    referencePageIndex,
+    fromReference: referencePageIndex != null,
+    autoReference: referencePageIndex != null && explicitIndex == null,
+    fromProof,
+  };
 }
 
 const loadBibleContext = async (issueId) => {
@@ -853,14 +906,16 @@ export async function enqueueVisualComicPage(issueId, options = {}) {
   const mode = resolveMode(options, settings);
   const variant = resolveVariant(options.target);
 
-  // Consistency reference: pass an ADJACENT (or explicit) already-rendered page
-  // as a reference so a continuing scene keeps its incidental, un-described
-  // characters and environment consistent (the "two newlyweds drift between
-  // pages" problem). Takes precedence over proof-as-base — both set the init
-  // image, and an explicit cross-page reference is the stronger intent.
-  const referencePageIndex = resolveReferencePageIndex(options.referencePage, pageIndex, pages.length);
-  const fromReference = referencePageIndex != null;
-  const fromProof = !fromReference && variant === 'final' && options.useProofAsBase === true;
+  // Consistency reference: pass an already-rendered page as the init image so a
+  // continuing scene keeps its incidental, un-described characters and
+  // environment consistent (the "two newlyweds drift between pages" problem).
+  // The three-tier precedence (explicit > proof-as-base > auto-within-scene)
+  // lives in resolveComicPageReference.
+  const { referencePageIndex, fromReference, autoReference, fromProof } = resolveComicPageReference({
+    referencePage: options.referencePage,
+    useProofAsBase: options.useProofAsBase,
+    variant, pages, pageIndex,
+  });
   const initImagePath = fromReference
     ? resolvePageReferenceImage(pages[referencePageIndex], `page ${referencePageIndex + 1}`)
     : fromProof
@@ -922,9 +977,9 @@ export async function enqueueVisualComicPage(issueId, options = {}) {
     prompt, world, settings, mode,
     options: { ...options, initImagePath, initImageStrength, ...loraRenderOptions(characterLoras) },
     owner: buildComicPagesOwner({ issueId, target: 'page', pageIndex, variant }),
-    logLine: `📄 Pipeline comic page — issue=${issueId.slice(0, 8)} page=${pageIndex + 1} panels=${page.panels.length} variant=${variant}${fromProof ? ' (from proof)' : ''}${fromReference ? ` (ref page ${referencePageIndex + 1})` : ''}`,
+    logLine: `📄 Pipeline comic page — issue=${issueId.slice(0, 8)} page=${pageIndex + 1} panels=${page.panels.length} variant=${variant}${fromProof ? ' (from proof)' : ''}${fromReference ? ` (${autoReference ? 'auto-ref' : 'ref'} page ${referencePageIndex + 1})` : ''}`,
   });
-  return { jobId, mode, prompt, pageIndex, variant, fromProof, fromReference, referencePageIndex };
+  return { jobId, mode, prompt, pageIndex, variant, fromProof, fromReference, autoReference, referencePageIndex };
 }
 
 /**

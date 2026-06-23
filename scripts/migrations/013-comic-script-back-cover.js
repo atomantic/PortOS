@@ -14,7 +14,7 @@
 import { makePromptReplaceMigration } from './_lib.js';
 
 export const ACCEPTED_OLD_MD5 = {
-  'pipeline-comic-script.md': [
+  'pipeline-comic-script.md': [ 'a4303016c34b65e4b0e641fe71252de3',
     '40e5fdc1a1e68a7419b7dad936366c1a', // pre-003 (original)
     'beab031951859ca13579cdb9c4dbe769', // post-003 (length-profile feature)
     '1e0af305c27d0c80c4b482d2ebcb4a0d', // post-013 / pre-027 — the hash this migration originally produced
@@ -27,7 +27,7 @@ export const ACCEPTED_OLD_MD5 = {
 };
 
 export const NEW_SHIPPED_MD5 = {
-  'pipeline-comic-script.md': 'a4303016c34b65e4b0e641fe71252de3', // post-121 (visible text exactness)
+  'pipeline-comic-script.md': '49af30c05f008b20f6998a0f113f7d87', // post-127 (scene markers)
 };
 
 const { applyMigration, up } = makePromptReplaceMigration({
