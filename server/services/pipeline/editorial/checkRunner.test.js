@@ -76,7 +76,7 @@ vi.mock('../reverseOutline.js', () => ({ getReverseOutline: vi.fn(async () => ou
 let editorialState = { characters: [] };
 vi.mock('../editorialAnalysis.js', () => ({ getSeriesEditorial: vi.fn(async () => editorialState) }));
 
-const { runEditorialChecks, buildEditorialCheckPlan, getReviewWithStaleness } = await import('./checkRunner.js');
+const { runEditorialChecks, buildEditorialCheckPlan, getReviewWithStaleness, enabledChecksConsumeReverseOutline } = await import('./checkRunner.js');
 const { runStagedLLM, resolveStageContext } = await import('../../../lib/stageRunner.js');
 const { collectManuscriptSections } = await import('../arcPlanner.js');
 const { getSeriesCanon } = await import('../seriesCanon.js');
@@ -737,5 +737,25 @@ describe('buildEditorialCheckPlan', () => {
     const plan = await buildEditorialCheckPlan('s1');
     expect(plan.enabledCount).toBe(plan.checks.length);
     expect(plan.checks.map((c) => c.id)).toContain('naming.dissimilar-names');
+  });
+
+  it('exposes whether any enabled check consumes the reverse outline (#1349)', async () => {
+    const plan = await buildEditorialCheckPlan('s1');
+    // Scene/POV checks ship enabled by default, so the default plan consumes it.
+    expect(plan.consumesReverseOutline).toBe(true);
+  });
+});
+
+describe('enabledChecksConsumeReverseOutline (#1349)', () => {
+  const consumesOutline = (c) => Array.isArray(c.sources)
+    && (c.sources.includes('reverseOutline') || c.sources.includes('reverseOutline.plotlines'));
+
+  it('is true when a scene/plotline check is enabled (default settings)', () => {
+    expect(enabledChecksConsumeReverseOutline({})).toBe(true);
+  });
+
+  it('is false when every reverse-outline-consuming check is disabled', () => {
+    const settings = disableWhere(consumesOutline);
+    expect(enabledChecksConsumeReverseOutline(settings)).toBe(false);
   });
 });
