@@ -505,6 +505,9 @@ export default function Apps() {
                                 tickets={jiraTickets[app.id]}
                                 instanceId={app.jira.instanceId}
                                 onTicketsChange={(updated) => setJiraTickets(prev => ({ ...prev, [app.id]: updated }))}
+                                appId={app.id}
+                                projectKey={app.jira.projectKey}
+                                boardId={app.jira.boardId}
                               />
                             ) : (
                               <div className="px-3 py-2 text-sm text-gray-500 bg-port-card border border-port-border rounded-lg">

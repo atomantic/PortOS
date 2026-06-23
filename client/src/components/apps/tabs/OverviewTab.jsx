@@ -99,7 +99,9 @@ export default function OverviewTab({ app, onRefresh }) {
   };
 
   return (
-    <div className="space-y-6 max-w-5xl">
+    <div className="space-y-6">
+      {/* Readable details/config zone — capped width so key/value pairs stay legible */}
+      <div className="space-y-6 max-w-5xl">
       {/* Details Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
         <div>
@@ -238,27 +240,31 @@ export default function OverviewTab({ app, onRefresh }) {
               <span className="text-xs text-cyan-400">{app.jira.labels.join(', ')}</span>
             )}
           </div>
+        </div>
+      )}
+      </div>{/* end readable details/config zone */}
 
-          {app.jira.instanceId && app.jira.projectKey && (
-            <div className="mt-3">
-              <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">My Sprint Tickets</div>
-              {loadingTickets ? (
-                <div className="flex items-center gap-2 px-3 py-2 text-sm text-gray-400">
-                  <BrailleSpinner text="" />
-                  <span>Loading tickets...</span>
-                </div>
-              ) : jiraTickets?.length > 0 ? (
-                <KanbanBoard tickets={jiraTickets} instanceId={app.jira?.instanceId} onTicketsChange={setJiraTickets} appId={app.id} />
-              ) : (
-                <div className="px-3 py-2 text-sm text-gray-500 bg-port-card border border-port-border rounded-lg">
-                  No tickets assigned to you in the current sprint
-                </div>
-              )}
+      {/* My Sprint Tickets — full width so the Kanban lifecycle isn't clipped */}
+      {app.jira?.enabled && app.jira.instanceId && app.jira.projectKey && (
+        <div>
+          <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">My Sprint Tickets</div>
+          {loadingTickets ? (
+            <div className="flex items-center gap-2 px-3 py-2 text-sm text-gray-400">
+              <BrailleSpinner text="" />
+              <span>Loading tickets...</span>
+            </div>
+          ) : jiraTickets?.length > 0 ? (
+            <KanbanBoard tickets={jiraTickets} instanceId={app.jira?.instanceId} onTicketsChange={setJiraTickets} appId={app.id} projectKey={app.jira?.projectKey} boardId={app.jira?.boardId} />
+          ) : (
+            <div className="px-3 py-2 text-sm text-gray-500 bg-port-card border border-port-border rounded-lg max-w-5xl">
+              No tickets assigned to you in the current sprint
             </div>
           )}
         </div>
       )}
 
+      {/* Actions zone — back to capped readable width */}
+      <div className="space-y-6 max-w-5xl">
       {/* Agent Operations */}
       <SlashDoPanel appId={app.id} appType={app.type} />
 
@@ -329,6 +335,7 @@ export default function OverviewTab({ app, onRefresh }) {
 
       {/* Activity Log */}
       <ActivityLog steps={steps} error={error} completed={completed} />
+      </div>{/* end actions zone */}
     </div>
   );
 }
