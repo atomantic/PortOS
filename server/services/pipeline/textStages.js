@@ -540,17 +540,22 @@ export async function generateStage(issueId, stageId, options = {}) {
     // roll back the user's accepted prose draft. The stamp is best-effort: if
     // even the stamp write fails we only warn (no throw out of the prose path).
     //
-    // Record only the override actually forwarded to the extractor (not a
-    // series.llm fallback) — the extract call below passes bare
-    // `options.providerId`/`options.model`, so when those are undefined the
-    // extractor resolves to the global active provider. Claiming
-    // `series.llm.provider` here would make the banner misreport which provider
-    // failed. Empty string = "used the default/active provider".
-    const provider = options.providerId || '';
+    // Canon extraction follows whichever provider drove this prose stage — the
+    // manual route's hard `providerId` OR Series Autopilot's run provider
+    // (#1514 moved the autopilot from `providerId` to `providerIdDefault`, so
+    // fall back to it here; without this the just-generated prose would extract
+    // on the global active provider instead of the run's provider). The
+    // extractor takes a hard `providerOverride` (it has no stage pins of its own
+    // to honor), and a throw on an unavailable provider is non-fatal — caught
+    // below into a failed-extraction marker. Record only the provider actually
+    // forwarded (not a series.llm fallback) so the banner can't misreport which
+    // provider failed. Empty string = "used the default/active provider".
+    const extractProvider = options.providerId ?? options.providerIdDefault;
+    const provider = extractProvider || '';
     const model = options.model || '';
     const marker = await extractCanonFromProse(series.universeId, {
       corpus: output,
-      providerOverride: options.providerId,
+      providerOverride: extractProvider,
       modelOverride: options.model,
       parallel: true,
       autoLock: true,
