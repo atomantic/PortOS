@@ -243,6 +243,8 @@ export const searchDatadogErrors = (instanceId, serviceName, environment, fromTi
 export const getJiraInstances = () => request('/jira/instances');
 export const getJiraProjects = (instanceId) => request(`/jira/instances/${instanceId}/projects`);
 export const getMySprintTickets = (instanceId, projectKey, options) => request(`/jira/instances/${instanceId}/my-sprint-tickets/${projectKey}`, options);
+export const getJiraBoardColumns = (instanceId, projectKey, boardId, options) =>
+  request(`/jira/instances/${instanceId}/board-columns/${projectKey}${boardId ? `?boardId=${encodeURIComponent(boardId)}` : ''}`, options);
 export const getJiraTicketTransitions = (instanceId, ticketId, options) => request(`/jira/instances/${instanceId}/tickets/${ticketId}/transitions`, options);
 export const transitionJiraTicket = (instanceId, ticketId, transitionId, options) => request(`/jira/instances/${instanceId}/tickets/${ticketId}/transition`, {
   method: 'POST',

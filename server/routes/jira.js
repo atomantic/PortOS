@@ -229,6 +229,19 @@ router.get('/instances/:instanceId/my-sprint-tickets/:projectKey', asyncHandler(
 }));
 
 /**
+ * GET /api/jira/instances/:instanceId/board-columns/:projectKey?boardId=
+ * Resolve the ordered workflow columns (full lifecycle) for the Kanban board.
+ */
+router.get('/instances/:instanceId/board-columns/:projectKey', asyncHandler(async (req, res) => {
+  const result = await jiraService.getBoardColumns(
+    req.params.instanceId,
+    req.params.projectKey,
+    req.query.boardId
+  );
+  res.json(result);
+}));
+
+/**
  * GET /api/jira/instances/:instanceId/boards/:boardId/sprints
  * Get active sprints for a board
  */

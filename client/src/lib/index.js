@@ -52,6 +52,7 @@ export * from './downloadBlob.js';
 export * from './genUtils.js';
 export * from './healthProvenance.js';
 export * from './joinInfluenceList.js';
+export * from './kanbanColumns.js';
 export * from './localLlmTargetKey.js';
 export * from './loopbackHost.js';
 export * from './manuscriptAnchors.js';
