@@ -176,6 +176,33 @@ describe('createShellSession', () => {
     expect(shell.getSession(id)).toBeTruthy();
     vi.useRealTimers();
   });
+
+  it('waitForPromptReady: holds initialCommand until the shell startup output goes quiet', () => {
+    vi.useFakeTimers();
+    shell.createShellSession(makeSocket(), { initialCommand: 'claude', waitForPromptReady: true, promptReadySettleMs: 750, initialCommandDelayMs: 8000 });
+    const pty = ptyInstances[0];
+    // Startup output is still streaming (e.g. p10k instant prompt, then .zshrc).
+    pty.emitData('instant prompt');
+    vi.advanceTimersByTime(500);
+    pty.emitData('...plugins loading...');   // resets the settle window
+    vi.advanceTimersByTime(500);
+    expect(pty.write).not.toHaveBeenCalledWith('claude\n'); // not quiet long enough yet
+    // Output stops → after the settle window the command is sent.
+    vi.advanceTimersByTime(750);
+    expect(pty.write).toHaveBeenCalledWith('claude\n');
+    vi.useRealTimers();
+  });
+
+  it('waitForPromptReady: falls back to sending after the timeout if the shell never quiets', () => {
+    vi.useFakeTimers();
+    shell.createShellSession(makeSocket(), { initialCommand: 'claude', waitForPromptReady: true, promptReadySettleMs: 750, initialCommandDelayMs: 8000 });
+    const pty = ptyInstances[0];
+    // Continuous output every 500ms keeps resetting the settle window…
+    for (let i = 0; i < 16; i++) { pty.emitData('tick'); vi.advanceTimersByTime(500); }
+    // …but the hard fallback (8000ms) fires regardless.
+    expect(pty.write).toHaveBeenCalledWith('claude\n');
+    vi.useRealTimers();
+  });
 });
 
 describe('attachSession', () => {
