@@ -258,6 +258,31 @@ describe('contextBudget', () => {
       });
       expect(cap).toBe(500 * CHARS_PER_TOKEN);
     });
+    it('caps the floor to the raw window when even the floor cannot fit (#1488 codex review)', () => {
+      // 2000-token window, 1500 overhead, 0 reserve/margin -> only 500 tokens of raw
+      // room after overhead, less than the 1500-token floor. The floor must NOT
+      // overflow the window: trim to the 500 the window can actually hold.
+      const cap = manuscriptContentBudgetChars({
+        contextWindow: 2_000,
+        overheadTokens: 1_500,
+        outputReserveTokens: 0,
+        safetyMargin: 0,
+        floorTokens: 1_500,
+      });
+      expect(cap).toBe(500 * CHARS_PER_TOKEN);
+      expect(cap).toBeLessThan(MANUSCRIPT_FLOOR_TOKENS * CHARS_PER_TOKEN);
+    });
+    it('yields zero when fixed overhead alone meets or exceeds the window', () => {
+      // Overhead (1500) ≥ usable window (1000 * 0.9 = 900) -> nothing fits; send no
+      // manuscript rather than overflow the context.
+      const cap = manuscriptContentBudgetChars({
+        contextWindow: 1_000,
+        overheadTokens: 1_500,
+        outputReserveTokens: 0,
+        safetyMargin: 0.1,
+      });
+      expect(cap).toBe(0);
+    });
   });
 
   describe('capContextOverhead', () => {
