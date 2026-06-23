@@ -15,13 +15,12 @@
  */
 
 import { runStagedLLM, resolveStageContext } from '../../lib/stageRunner.js';
-import { usableInputTokens, estimateTokens, CHARS_PER_TOKEN } from '../../lib/contextBudget.js';
+import { manuscriptContentBudgetChars, estimateTokens } from '../../lib/contextBudget.js';
 import { getIssue } from './issues.js';
 import { getSeries } from './series.js';
 import { shapeVerifyIssues } from './arcPlanner.js';
 
 const STAGE = 'pipeline-script-verify';
-const CONTENT_MAX = 48_000;
 const OUTPUT_RESERVE_TOKENS = 2_000;
 const VERIFY_PAGE_RE = /^##\s+Page\s+([\dIVX]+)\b/i;
 const VERIFY_PANEL_RE = /^(?:###\s+)?Panel\s+([\dIVX]+)\s*(?:\([^)]+\))?\s*:?\s*$/i;
@@ -206,17 +205,17 @@ export async function verifyComicScript(issueId, { providerId, model } = {}) {
 
   const series = await getSeries(issue.seriesId).catch(() => null);
 
-  // Scale the content cap to the target model's context window — never below
-  // CONTENT_MAX (so we never truncate more than the historical floor), but a
-  // big-context model gets the whole script. Mirrors editorialAnalysis.
+  // Scale the content cap to the target model's context window, reserving a
+  // manuscript floor so a small/local provider window trims the script to fit
+  // rather than overflowing on a fixed 48K floor (#1488); a big-context model gets
+  // the whole script.
   const { contextWindow } = await resolveStageContext(STAGE, { providerDefault: providerId, modelOverride: model });
   const overheadTokens = 1_200 + estimateTokens([series?.name, series?.logline, issue.title].filter(Boolean).join(' '));
-  const budgetChars = usableInputTokens({
+  const contentMax = manuscriptContentBudgetChars({
     contextWindow,
     overheadTokens,
     outputReserveTokens: OUTPUT_RESERVE_TOKENS,
-  }) * CHARS_PER_TOKEN;
-  const contentMax = Math.max(CONTENT_MAX, budgetChars);
+  });
   const content = script.length > contentMax
     ? `${script.slice(0, contentMax)}\n\n[script truncated for verification — ${script.length} chars total]`
     : script;

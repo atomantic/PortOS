@@ -26,7 +26,7 @@ import { atomicWrite, readJSONFile } from '../../lib/fileUtils.js';
 import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
 import { createSseRunner } from '../../lib/sseUtils.js';
 import { runStagedLLM, resolveStageContext } from '../../lib/stageRunner.js';
-import { usableInputTokens, estimateTokens, CHARS_PER_TOKEN } from '../../lib/contextBudget.js';
+import { manuscriptContentBudgetChars, estimateTokens } from '../../lib/contextBudget.js';
 import { seriesStore, getSeries } from './series.js';
 import { getSeriesCanon } from './seriesCanon.js';
 import { collectManuscriptSections, sectionsCorpus } from './arcPlanner.js';
@@ -58,10 +58,10 @@ const ISSUE_ID_MAX = 64;
 const HASH_MAX = 128;
 const PROVIDER_MAX = 120;
 
-// Floor on manuscript chars sent to the model — scaled UP to the target model's
-// context window in generateReverseOutline (mirrors editorialAnalysis), so a
-// big-context model segments the whole manuscript rather than a 60K slice.
-const CONTENT_MAX = 60_000;
+// Output space reserved when budgeting the manuscript chunk against the model's
+// context window (see manuscriptContentBudgetChars in generateReverseOutline) —
+// the corpus scales to fill the window above a manuscript floor, so a big-context
+// model segments the whole manuscript while a small one trims to fit.
 const OUTLINE_OUTPUT_RESERVE_TOKENS = 6_000;
 
 const PLOTLINE_KINDS = Object.freeze(['main', 'subplot', 'pov', 'thematic', 'other']);
@@ -245,15 +245,16 @@ export async function generateReverseOutline(seriesId, { providerId, model, forc
   const canon = series ? await getSeriesCanon(series).catch(() => ({ characters: [] })) : { characters: [] };
   const characterNames = (canon.characters || []).map((c) => c?.name).filter(Boolean).slice(0, 60);
 
-  // Scale the content cap to the model's context window — never below CONTENT_MAX.
+  // Scale the content cap to the model's context window, reserving a manuscript
+  // floor so a small/local provider window trims the corpus to fit rather than
+  // overflowing on a fixed 60K floor (#1488); a big window scales up.
   const { contextWindow } = await resolveStageContext(STAGE, { providerOverride: providerId, modelOverride: model });
   const overheadTokens = 1_500 + estimateTokens([series?.name || '', series?.styleNotes || '', characterNames.join(', ')].join(' '));
-  const budgetChars = usableInputTokens({
+  const contentMax = manuscriptContentBudgetChars({
     contextWindow,
     overheadTokens,
     outputReserveTokens: OUTLINE_OUTPUT_RESERVE_TOKENS,
-  }) * CHARS_PER_TOKEN;
-  const contentMax = Math.max(CONTENT_MAX, budgetChars);
+  });
   const truncated = corpus.length > contentMax;
 
   const vars = {

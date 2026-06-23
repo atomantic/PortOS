@@ -29,7 +29,7 @@ import { atomicWrite, readJSONFile } from '../../lib/fileUtils.js';
 import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
 import { createSseRunner } from '../../lib/sseUtils.js';
 import { runStagedLLM, resolveStageContext } from '../../lib/stageRunner.js';
-import { usableInputTokens, estimateTokens, CHARS_PER_TOKEN } from '../../lib/contextBudget.js';
+import { manuscriptContentBudgetChars, estimateTokens } from '../../lib/contextBudget.js';
 import { seriesStore, getSeries } from './series.js';
 import { getSeriesCanon } from './seriesCanon.js';
 import { collectManuscriptSections, sectionsCorpus } from './arcPlanner.js';
@@ -65,10 +65,10 @@ const SUBJECT_MAX = 120;
 const STATEMENT_MAX = 600;
 const ANCHOR_MAX = 240;
 
-// Floor on manuscript chars sent to the model — scaled UP to the target model's
-// context window in generateContinuityBible (mirrors reverseOutline), so a
-// big-context model reads the whole manuscript rather than a 60K slice.
-const CONTENT_MAX = 60_000;
+// Output space reserved when budgeting the manuscript chunk against the model's
+// context window (see manuscriptContentBudgetChars in generateContinuityBible,
+// mirrors reverseOutline) — the corpus scales to fill the window above a manuscript
+// floor, so a big-context model reads the whole manuscript while a small one trims.
 const LEDGER_OUTPUT_RESERVE_TOKENS = 6_000;
 
 const nowIso = () => new Date().toISOString();
@@ -258,12 +258,11 @@ export async function generateContinuityBible(seriesId, { providerId, model, for
     const characterNames = (canonFacts.filter((f) => f.canonKind === 'character').map((f) => f.subject)).slice(0, 60);
     const { contextWindow } = await resolveStageContext(STAGE, { providerOverride: providerId, modelOverride: model });
     const overheadTokens = 1_500 + estimateTokens([series?.name || '', characterNames.join(', ')].join(' '));
-    const budgetChars = usableInputTokens({
+    const contentMax = manuscriptContentBudgetChars({
       contextWindow,
       overheadTokens,
       outputReserveTokens: LEDGER_OUTPUT_RESERVE_TOKENS,
-    }) * CHARS_PER_TOKEN;
-    const contentMax = Math.max(CONTENT_MAX, budgetChars);
+    });
     truncated = corpus.length > contentMax;
 
     const vars = {
