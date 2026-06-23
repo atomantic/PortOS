@@ -12,7 +12,7 @@
  * No cycle risk: this module imports nothing from either consumer.
  */
 
-import { resolveCliModel, hasModelFlag } from './providerModels.js';
+import { resolveCliModel, hasModelFlag, resolveBedrockCliModel } from './providerModels.js';
 import { ensureAntigravityTuiArgs, isAntigravityCommand } from './antigravity.js';
 
 // ─── Paste handshake constants ────────────────────────────────────────────
@@ -405,7 +405,16 @@ export function buildTuiInvocation(provider, model) {
   const baseArgs = applyCommandDefaults(command, [...(provider?.args || [])]);
   const effectiveModel = resolveCliModel(model);
   const shouldInject = !isAntigravityCommand(command) && effectiveModel && !hasModelFlag(baseArgs);
-  const args = shouldInject ? [...baseArgs, '--model', effectiveModel] : baseArgs;
+  // Map a bare Claude id to its Bedrock form when the box is in Bedrock mode
+  // (no-op otherwise / for non-Claude ids) — mirrors buildCliArgs for the
+  // claude-code-tui runner.
+  const injectedModel = shouldInject
+    ? resolveBedrockCliModel(effectiveModel, {
+      env: { ...process.env, ...provider?.envVars },
+      providerId: provider?.id,
+    })
+    : effectiveModel;
+  const args = shouldInject ? [...baseArgs, '--model', injectedModel] : baseArgs;
   return { command, args };
 }
 

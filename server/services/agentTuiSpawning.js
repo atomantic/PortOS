@@ -17,7 +17,7 @@ import { analyzeAgentFailure } from './agentErrorAnalysis.js';
 import { finalizeAgent, releaseAgentLane } from './agentLifecycle.js';
 import { activeAgents, userTerminatedAgents, pausedAgents } from './agentState.js';
 import { PATHS } from '../lib/fileUtils.js';
-import { resolveCliModel } from '../lib/providerModels.js';
+import { resolveCliModel, resolveBedrockCliModel } from '../lib/providerModels.js';
 import { createStreamingAnsiStripper, stripAnsi } from '../lib/ansiStrip.js';
 import { createImmediateFallbackSignalDetector } from '../lib/aiToolkit/errorDetection.js';
 import { isAntigravityCommand } from '../lib/antigravity.js';
@@ -177,16 +177,23 @@ function shellHasLiveChild(shellPid) {
   });
 }
 
-function appendModelArgs(args, model, command) {
+function appendModelArgs(args, model, command, provider) {
   if (isAntigravityCommand(command)) return args;
   const effectiveModel = resolveCliModel(model);
-  return effectiveModel ? [...args, '--model', effectiveModel] : args;
+  if (!effectiveModel) return args;
+  // Bedrock box: map a bare Claude id to its region-prefixed form just-in-time
+  // (no-op off Bedrock / for non-Claude ids).
+  const injectedModel = resolveBedrockCliModel(effectiveModel, {
+    env: { ...process.env, ...provider?.envVars },
+    providerId: provider?.id,
+  });
+  return [...args, '--model', injectedModel];
 }
 
 export function buildTuiSpawnConfig(provider, model) {
   const command = provider?.command || inferTuiCommand(provider?.id);
   const baseArgs = applyCommandDefaults(command, [...(provider?.args || [])]);
-  const args = appendModelArgs(baseArgs, model, command);
+  const args = appendModelArgs(baseArgs, model, command, provider);
 
   return {
     command,

@@ -100,7 +100,10 @@ tryReadFile: vi.fn().mockResolvedValue(null),
 vi.mock('../lib/providerModels.js', () => ({
   // Mirror the real behaviour: pass through the model string, return null for
   // the codex-configured-default sentinel or null/undefined input.
-  resolveCliModel: vi.fn((m) => (m === 'codex-configured-default' || !m) ? null : m)
+  resolveCliModel: vi.fn((m) => (m === 'codex-configured-default' || !m) ? null : m),
+  // Bedrock map is a no-op off Bedrock — mirror that pass-through here (the
+  // mapper itself is unit-tested in providerModels.test.js).
+  resolveBedrockCliModel: vi.fn((m) => m)
 }));
 
 // Shrink buffer thresholds so the truncation tests can trip them with tiny

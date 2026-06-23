@@ -16,7 +16,7 @@
  *   - Claude Code: `-p -`                (+ `--model <id>`)
  */
 
-import { resolveCliModel, hasModelFlag } from './providerModels.js';
+import { resolveCliModel, hasModelFlag, resolveBedrockCliModel } from './providerModels.js';
 import { ensureAntigravityPrintArgs, isAntigravityCliProvider } from './antigravity.js';
 
 /**
@@ -80,7 +80,15 @@ export function buildCliArgs(provider) {
   // cli — respect user-baked model flags.
   const args = [...baseArgs, '-p', '-'];
   if (effectiveDefaultModel && !hasModelFlag(baseArgs)) {
-    args.push('--model', effectiveDefaultModel);
+    // On a Bedrock box a bare `claude-opus-4-8` is rejected — map it to the
+    // region-prefixed Bedrock id just-in-time (no-op off Bedrock / for
+    // already-prefixed ids). provider.envVars carries CLAUDE_CODE_USE_BEDROCK
+    // for the bedrock provider variants; process.env covers a Bedrock host.
+    const model = resolveBedrockCliModel(effectiveDefaultModel, {
+      env: { ...process.env, ...provider?.envVars },
+      providerId,
+    });
+    args.push('--model', model);
   }
   return args;
 }

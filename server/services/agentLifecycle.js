@@ -323,9 +323,16 @@ export async function spawnAgentForTask(task) {
       cosEvents.emit('job:spawned', { jobId: task.metadata.jobId });
     }
 
+    // Read ~/.claude/settings.json env BEFORE building the argv so the Bedrock
+    // model-id mapping in buildCliSpawnConfig sees the same CLAUDE_CODE_USE_BEDROCK
+    // the child is actually spawned with (the spawn helpers merge this env too).
+    // Without it, a host that supplies Bedrock mode only via settings.json would
+    // bake a bare, Bedrock-invalid --model into the argv. Cached (5-min TTL), so
+    // the spawn helper's own getClaudeSettingsEnv() call is effectively free.
+    const cliSettingsEnv = isClaudeCliProvider(provider) ? await getClaudeSettingsEnv() : {};
     const cliConfig = isTui
       ? buildTuiSpawnConfig(provider, selectedModel)
-      : buildCliSpawnConfig(provider, selectedModel);
+      : buildCliSpawnConfig(provider, selectedModel, cliSettingsEnv);
 
     emitLog('success', `Spawning agent for task ${task.id}`, {
       agentId,

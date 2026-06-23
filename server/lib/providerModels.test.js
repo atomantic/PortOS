@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   ANTIGRAVITY_CONFIGURED_DEFAULT,
   CODEX_CONFIGURED_DEFAULT,
@@ -6,7 +6,11 @@ import {
   resolveCliModel,
   filterSelectableModels,
   hasModelFlag,
-  extractBakedModel
+  extractBakedModel,
+  isBedrockEnabled,
+  hasBedrockRegionPrefix,
+  toBedrockModelId,
+  resolveBedrockCliModel
 } from './providerModels.js';
 
 describe('providerModels', () => {
@@ -163,5 +167,131 @@ describe('providerModels', () => {
         expect(has, `args=${JSON.stringify(args)}`).toBe(true);
       }
     }
+  });
+
+  describe('isBedrockEnabled', () => {
+    it('is true for the documented and common truthy spellings', () => {
+      for (const v of ['1', 'true', 'TRUE', 'yes', 'on', 'anything']) {
+        expect(isBedrockEnabled({ CLAUDE_CODE_USE_BEDROCK: v }), v).toBe(true);
+      }
+    });
+    it('is false for off / unset spellings', () => {
+      for (const v of ['0', 'false', 'FALSE', 'no', '', '  ']) {
+        expect(isBedrockEnabled({ CLAUDE_CODE_USE_BEDROCK: v }), v).toBe(false);
+      }
+      expect(isBedrockEnabled({})).toBe(false);
+      expect(isBedrockEnabled()).toBe(typeof process.env.CLAUDE_CODE_USE_BEDROCK !== 'undefined'
+        ? isBedrockEnabled(process.env) : false);
+    });
+  });
+
+  describe('hasBedrockRegionPrefix', () => {
+    it('recognizes region-prefixed and bare anthropic. forms', () => {
+      expect(hasBedrockRegionPrefix('global.anthropic.claude-opus-4-8')).toBe(true);
+      expect(hasBedrockRegionPrefix('us.anthropic.claude-opus-4-1-20250805-v1:0')).toBe(true);
+      expect(hasBedrockRegionPrefix('eu.anthropic.claude-sonnet-4-6')).toBe(true);
+      expect(hasBedrockRegionPrefix('apac.anthropic.claude-haiku-4-5')).toBe(true);
+      expect(hasBedrockRegionPrefix('anthropic.claude-opus-4-8-v1:0')).toBe(true);
+    });
+    it('rejects bare ids and non-strings', () => {
+      expect(hasBedrockRegionPrefix('claude-opus-4-8')).toBe(false);
+      expect(hasBedrockRegionPrefix('gpt-5')).toBe(false);
+      expect(hasBedrockRegionPrefix('')).toBe(false);
+      expect(hasBedrockRegionPrefix(null)).toBe(false);
+      expect(hasBedrockRegionPrefix(undefined)).toBe(false);
+    });
+  });
+
+  describe('toBedrockModelId', () => {
+    const ON = { CLAUDE_CODE_USE_BEDROCK: '1' };
+
+    it('is a no-op when Bedrock mode is off (every bare id passes through)', () => {
+      for (const id of ['claude-opus-4-8', 'claude-sonnet-4-6', 'claude-fable-5', 'gpt-5']) {
+        expect(toBedrockModelId(id, {}), id).toBe(id);
+        expect(toBedrockModelId(id, { CLAUDE_CODE_USE_BEDROCK: '0' }), id).toBe(id);
+      }
+    });
+
+    it('prefix-rewrites each bare Claude family when Bedrock is on (no env override)', () => {
+      const table = [
+        ['claude-opus-4-8', 'global.anthropic.claude-opus-4-8'],
+        ['claude-sonnet-4-6', 'global.anthropic.claude-sonnet-4-6'],
+        ['claude-fable-5', 'global.anthropic.claude-fable-5'],
+        ['claude-haiku-4-5-20251001', 'global.anthropic.claude-haiku-4-5-20251001'],
+      ];
+      for (const [bare, expected] of table) {
+        expect(toBedrockModelId(bare, ON), bare).toBe(expected);
+      }
+    });
+
+    it('prefers the matching ANTHROPIC_DEFAULT_<FAMILY>_MODEL when it is region-prefixed', () => {
+      const env = {
+        CLAUDE_CODE_USE_BEDROCK: '1',
+        ANTHROPIC_DEFAULT_OPUS_MODEL: 'us.anthropic.claude-opus-4-8-20260101-v1:0',
+        ANTHROPIC_DEFAULT_SONNET_MODEL: 'global.anthropic.claude-sonnet-4-6-v1:0',
+        ANTHROPIC_DEFAULT_HAIKU_MODEL: 'us.anthropic.claude-haiku-4-5-v1:0',
+        ANTHROPIC_DEFAULT_FABLE_MODEL: 'global.anthropic.claude-fable-5-v1:0',
+      };
+      expect(toBedrockModelId('claude-opus-4-8', env)).toBe('us.anthropic.claude-opus-4-8-20260101-v1:0');
+      expect(toBedrockModelId('claude-sonnet-4-6', env)).toBe('global.anthropic.claude-sonnet-4-6-v1:0');
+      expect(toBedrockModelId('claude-haiku-4-5-20251001', env)).toBe('us.anthropic.claude-haiku-4-5-v1:0');
+      expect(toBedrockModelId('claude-fable-5', env)).toBe('global.anthropic.claude-fable-5-v1:0');
+    });
+
+    it('ignores a non-region-prefixed env override and falls back to prefix-rewrite', () => {
+      const env = { CLAUDE_CODE_USE_BEDROCK: '1', ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-opus-4-8' };
+      expect(toBedrockModelId('claude-opus-4-8', env)).toBe('global.anthropic.claude-opus-4-8');
+    });
+
+    it('is a no-op for ids already carrying a region / anthropic. prefix', () => {
+      for (const id of [
+        'global.anthropic.claude-opus-4-5-20251101-v1:0',
+        'us.anthropic.claude-sonnet-4-5-20250929-v1:0',
+        'anthropic.claude-opus-4-8-v1:0',
+      ]) {
+        expect(toBedrockModelId(id, ON), id).toBe(id);
+      }
+    });
+
+    it('leaves non-Claude ids untouched even with Bedrock on (must contain "claude")', () => {
+      for (const id of [
+        'gpt-5', 'gemini-2.5-pro', 'o1-preview',
+        // A custom alias that merely contains a family word but isn't a Claude
+        // id must NOT be rewritten (would otherwise become global.anthropic.*).
+        'sonnet', 'my-sonnet-lora', 'opus-tune-v2',
+      ]) {
+        expect(toBedrockModelId(id, ON), id).toBe(id);
+      }
+    });
+
+    it('passes through empty / non-string ids', () => {
+      expect(toBedrockModelId('', ON)).toBe('');
+      expect(toBedrockModelId(null, ON)).toBeNull();
+      expect(toBedrockModelId(undefined, ON)).toBeUndefined();
+    });
+  });
+
+  describe('resolveBedrockCliModel', () => {
+    it('returns the mapped id and warns once per provider+model', () => {
+      const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const opts = { env: { CLAUDE_CODE_USE_BEDROCK: '1' }, providerId: 'claude-code-resolve-test' };
+      const first = resolveBedrockCliModel('claude-opus-4-8', opts);
+      const second = resolveBedrockCliModel('claude-opus-4-8', opts);
+      expect(first).toBe('global.anthropic.claude-opus-4-8');
+      expect(second).toBe('global.anthropic.claude-opus-4-8');
+      // Deduped: only the first rewrite of this provider+model logs.
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(spy.mock.calls[0][0]).toMatch(/CLAUDE_CODE_USE_BEDROCK/);
+      spy.mockRestore();
+    });
+
+    it('does not warn when the id is unchanged (off Bedrock, or already prefixed)', () => {
+      const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      expect(resolveBedrockCliModel('claude-opus-4-8', { env: {} })).toBe('claude-opus-4-8');
+      expect(resolveBedrockCliModel('us.anthropic.claude-opus-4-7-v1:0', { env: { CLAUDE_CODE_USE_BEDROCK: '1' } }))
+        .toBe('us.anthropic.claude-opus-4-7-v1:0');
+      expect(spy).not.toHaveBeenCalled();
+      spy.mockRestore();
+    });
   });
 });
