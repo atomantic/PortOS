@@ -705,6 +705,10 @@ export async function spawnTuiAgent({
   // (claude never showed its input prompt).
   const finishStartupFailure = async (reason, summary) => {
     if (finalized) return;
+    // Flush any debounced raw-PTY chunks first so the captured tail includes
+    // the CLI's most recent output (e.g. claude's final error before exiting),
+    // not just whatever happened to be on disk before the last 250ms window.
+    await flushPendingRawChunks().catch(() => {});
     const raw = await readFile(rawFile, 'utf8').catch(() => '');
     const tail = raw
       ? stripAnsi(raw).split('\n').map((s) => s.trimEnd()).filter(Boolean).slice(-12).join('\n')
@@ -788,6 +792,15 @@ export async function spawnTuiAgent({
   // trust gate, and NEVER blind-paste: if the prompt never appears we surface a
   // failure. Other TUI providers keep the original idle heuristic + deadline.
   const requireInputReady = commandName === 'claude';
+  // sendPrompt / finishStartupFailure are async and dispatched fire-and-forget
+  // from the interval below. A setInterval callback can't await, and an
+  // unhandled rejection there (e.g. a finalizeAgent throw inside finish())
+  // would crash the process — the callback-boundary hazard CLAUDE.md calls out.
+  // Wrap each floating call so a rejection is logged, not thrown.
+  const safeSendPrompt = (reason) => sendPrompt(reason).catch((err) =>
+    emitLog('error', `TUI agent ${agentId} sendPrompt(${reason}) failed: ${err?.message || err}`, { agentId }));
+  const safeFinishStartupFailure = (reason, summary) => finishStartupFailure(reason, summary).catch((err) =>
+    emitLog('error', `TUI agent ${agentId} finishStartupFailure(${reason}) failed: ${err?.message || err}`, { agentId }));
   const promptTimer = setInterval(() => {
     if (finalized || promptSentAt) {
       clearInterval(promptTimer);
@@ -806,7 +819,7 @@ export async function spawnTuiAgent({
         return;
       }
       if (inputReady.ready && elapsed >= tuiConfig.promptDelayMs) {
-        sendPrompt('input-ready');
+        safeSendPrompt('input-ready');
         clearInterval(promptTimer);
         return;
       }
@@ -814,7 +827,7 @@ export async function spawnTuiAgent({
       // the cap, finalize a startup failure with the captured output.
       if (elapsed >= TUI_INPUT_READY_DEADLINE_MS) {
         clearInterval(promptTimer);
-        finishStartupFailure(
+        safeFinishStartupFailure(
           'tui-not-ready',
           `${tuiConfig.command} did not present an input prompt within ${Math.round(TUI_INPUT_READY_DEADLINE_MS / 1000)}s, so no prompt was sent.`,
         );
@@ -823,14 +836,14 @@ export async function spawnTuiAgent({
     }
 
     if (elapsed >= PASTE_DEADLINE_MS) {
-      sendPrompt('fallback');
+      safeSendPrompt('fallback');
       clearInterval(promptTimer);
       return;
     }
     if (elapsed < tuiConfig.promptDelayMs) return;
     if (firstOutputAt === null) return;
     if (now - lastOutputAt < READY_IDLE_THRESHOLD_MS) return;
-    sendPrompt('ready');
+    safeSendPrompt('ready');
     clearInterval(promptTimer);
   }, READY_POLL_INTERVAL_MS);
 
