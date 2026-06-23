@@ -306,7 +306,7 @@ const EDITORIAL_OUTPUT_RESERVE_TOKENS = 2_000;
  * @returns {Promise<{ runId, findings, perCheck, canceled }>}
  */
 export async function runEditorialChecks(seriesId, options = {}) {
-  const { checkIds = null, providerOverride, modelOverride, signal, onProgress } = options;
+  const { checkIds = null, providerOverride, providerDefault, modelOverride, signal, onProgress } = options;
   const settings = options.settings || await getSettings();
   const enabled = getEnabledChecks(settings, checkIds);
 
@@ -398,6 +398,7 @@ export async function runEditorialChecks(seriesId, options = {}) {
     storyboardScenes,
     canon,
     providerOverride,
+    providerDefault,
     modelOverride,
     // The run's AbortSignal, so a multi-chunk LLM check can stop launching
     // further chunk calls mid-run (the runner only checks it before/after each
@@ -406,19 +407,19 @@ export async function runEditorialChecks(seriesId, options = {}) {
     // Injected LLM caller — keeps server/lib/editorial pure. Forwards the
     // provider/model overrides so an LLM check honors the autopilot's choice.
     callStagedLLM: (stage, vars, opts = {}) =>
-      runStagedLLM(stage, vars, { providerOverride, modelOverride, ...opts }),
+      runStagedLLM(stage, vars, { providerOverride, providerDefault, modelOverride, ...opts }),
     // Injected inline-prompt caller for user-defined checks (#1346) whose prompt
     // body is authored from the UI (no shipped stage template). Same provider/
     // model overrides as callStagedLLM so a custom check honors the run's choice.
     callInlineLLM: (prompt, opts = {}) =>
-      runInlineLLM(prompt, { providerOverride, modelOverride, ...opts }),
+      runInlineLLM(prompt, { providerOverride, providerDefault, modelOverride, ...opts }),
     // Inline-prompt caller that resolves the provider/model from a NAMED STAGE's
     // pin (#1403). The cross-chunk setup-summary call rides alongside a stage-
     // pinned manuscript check, so it must run on the SAME provider as that stage —
     // routing it through the active provider (plain callInlineLLM) could leak
     // manuscript text to a different (e.g. cloud) provider than the stage chose.
     callStageScopedInlineLLM: (stage, prompt, opts = {}) =>
-      runStageScopedInlineLLM(stage, prompt, { providerOverride, modelOverride, ...opts }),
+      runStageScopedInlineLLM(stage, prompt, { providerOverride, providerDefault, modelOverride, ...opts }),
     // Injected manuscript chunker — plans the stitched manuscript into chunks
     // sized to `stage`'s resolved provider context window (reusing the same
     // budgeter as the completeness pass), so a long series is fully reviewed
@@ -440,7 +441,7 @@ export async function runEditorialChecks(seriesId, options = {}) {
     // returned array as `.context` so the check feeds the trimmed values to the LLM.
     planManuscriptChunks: async (stage, { overheadTokens = 0, context = null, fixedOverheadTokens = 0 } = {}) => {
       if (!sections.length) return [];
-      const { contextWindow } = await resolveStageContext(stage, { providerOverride, modelOverride });
+      const { contextWindow } = await resolveStageContext(stage, { providerOverride, providerDefault, modelOverride });
       let effectiveOverhead = overheadTokens;
       let fittedContext = null;
       if (context && typeof context === 'object') {

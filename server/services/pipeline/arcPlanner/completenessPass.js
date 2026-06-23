@@ -222,6 +222,7 @@ export async function analyzeManuscriptCompleteness(seriesId, options = {}) {
   const baseCtx = await buildCompletenessContext(series, '', options.preloadedWorld);
   const { contextWindow } = await resolveStageContext(COMPLETENESS_STAGE, {
     providerOverride: options.providerOverride,
+    providerDefault: options.providerDefault,
     modelOverride: options.modelOverride,
   });
   const outputReserveTokens = withEdits
@@ -262,6 +263,7 @@ export async function analyzeManuscriptCompleteness(seriesId, options = {}) {
 
   const runOne = (manuscript) => runStagedLLM(COMPLETENESS_STAGE, { ...fittedBaseCtx, manuscript, withEdits }, {
     providerOverride: options.providerOverride,
+    providerDefault: options.providerDefault,
     modelOverride: options.modelOverride,
     returnsJson: true,
     source: 'pipeline-manuscript-completeness',

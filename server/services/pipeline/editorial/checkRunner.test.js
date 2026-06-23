@@ -159,6 +159,23 @@ describe('runEditorialChecks', () => {
     expect(result.findings.every((f) => f.checkId === 'naming.dissimilar-names')).toBe(true);
   });
 
+  // #1514: Series Autopilot's run provider arrives as a SOFT providerDefault so a
+  // per-stage pin still wins for an LLM check; a manual route override stays a HARD
+  // providerOverride. The LLM check (prose.info-dumping) routes through callStagedLLM.
+  it('threads providerDefault (autopilot run provider) into LLM checks as a soft default', async () => {
+    await runEditorialChecks('s1', { checkIds: ['prose.info-dumping'], providerDefault: 'codex' });
+    const opts = runStagedLLM.mock.calls[0][2];
+    expect(opts.providerDefault).toBe('codex');
+    expect(opts.providerOverride).toBeUndefined();
+  });
+
+  it('threads a manual providerOverride into LLM checks as a hard override', async () => {
+    await runEditorialChecks('s1', { checkIds: ['prose.info-dumping'], providerOverride: 'ollama' });
+    const opts = runStagedLLM.mock.calls[0][2];
+    expect(opts.providerOverride).toBe('ollama');
+    expect(opts.providerDefault).toBeUndefined();
+  });
+
   it('skips manuscript collection when no enabled check needs it', async () => {
     // Only the deterministic naming check (no needsManuscript) → no section I/O.
     await runEditorialChecks('s1', { checkIds: ['naming.dissimilar-names'] });

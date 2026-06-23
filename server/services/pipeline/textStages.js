@@ -495,6 +495,11 @@ export async function generateStage(issueId, stageId, options = {}) {
   try {
     result = await runStagedLLM(template, ctx, {
       providerOverride: options.providerId,
+      // Soft run-level default (Series Autopilot, #1514): unlike providerId it
+      // loses to a per-stage pin and soft-falls-through to active when
+      // unavailable. Route callers pass providerId (hard); autopilot passes
+      // providerIdDefault (soft).
+      providerDefault: options.providerIdDefault,
       modelOverride: options.model,
       source: 'pipeline-text-stage',
     });

@@ -109,6 +109,25 @@ describe('pipeline text stage generator', () => {
     expect(llmCalls[0].prompt).toContain('RENDERED:pipeline-idea-expansion');
   });
 
+  // #1514: the autopilot threads its run provider as a SOFT providerIdDefault, the
+  // manual route as a HARD providerId. These run against the REAL stageRunner, so
+  // they prove the end-to-end resolution: an unavailable soft default falls through
+  // to the active provider (no throw), while an unavailable hard override throws.
+  it('soft-falls-through to the active provider when an autopilot providerIdDefault is unavailable', async () => {
+    const { issue } = await seed();
+    // No stage pin (getStage → null) and 'gone-provider' resolves to null, so a
+    // SOFT default must drop to the active provider rather than throwing.
+    const result = await textStages.generateStage(issue.id, 'idea', { providerIdDefault: 'gone-provider' });
+    expect(result.stage.status).toBe('ready');
+    expect(llmCalls[0].provider).toBe('mock-provider'); // active provider used
+  });
+
+  it('throws when a manual hard providerId is unavailable (override is a per-call demand)', async () => {
+    const { issue } = await seed();
+    await expect(textStages.generateStage(issue.id, 'idea', { providerId: 'gone-provider' }))
+      .rejects.toMatchObject({ code: 'PROVIDER_OVERRIDE_UNAVAILABLE' });
+  });
+
   it('folds the structured style guide into series.styleNotes in the prompt context', async () => {
     const series = await seriesSvc.createSeries({
       name: 'Salt Run',

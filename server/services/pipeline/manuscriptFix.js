@@ -458,7 +458,7 @@ function mergeFixes(fixes) {
   return fixFromEdits(edits);
 }
 
-export async function generateManuscriptFix(seriesId, { commentId, providerOverride, modelOverride } = {}) {
+export async function generateManuscriptFix(seriesId, { commentId, providerOverride, providerDefault, modelOverride } = {}) {
   const series = await getSeries(seriesId);
   const comment = await getComment(seriesId, commentId);
   if (!comment) throw makeErr(`Comment not found: ${commentId}`, ERR_NOT_FOUND);
@@ -501,6 +501,7 @@ export async function generateManuscriptFix(seriesId, { commentId, providerOverr
   });
   const runChunk = (sections) => runStagedLLM(FIX_STAGE, buildCtx(sections), {
     providerOverride,
+    providerDefault,
     modelOverride,
     returnsJson: true,
     source: 'pipeline-manuscript-fix',
@@ -510,7 +511,7 @@ export async function generateManuscriptFix(seriesId, { commentId, providerOverr
   // across the whole book — so we keep it whole when it fits the model's
   // window, and only chunk by issue (degrading the holistic view) when it
   // can't. Single-issue comments are always one section → always whole.
-  const { contextWindow } = await resolveStageContext(FIX_STAGE, { providerOverride, modelOverride });
+  const { contextWindow } = await resolveStageContext(FIX_STAGE, { providerOverride, providerDefault, modelOverride });
   const overheadTokens = estimateTokens(JSON.stringify(baseCtx)) + 2_000;
   const plan = planManuscriptPass({
     contextWindow,

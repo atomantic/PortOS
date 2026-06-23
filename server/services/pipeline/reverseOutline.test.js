@@ -12,8 +12,8 @@ vi.mock('../../lib/fileUtils.js', () => ({
 const llmQueue = [];
 const llmCalls = [];
 vi.mock('../../lib/stageRunner.js', () => ({
-  runStagedLLM: vi.fn(async (stage, vars) => {
-    llmCalls.push({ stage, vars });
+  runStagedLLM: vi.fn(async (stage, vars, opts = {}) => {
+    llmCalls.push({ stage, vars, opts });
     const content = llmQueue.shift();
     return { content, model: 'mock-model', providerId: 'mock-provider', runId: 'run-1' };
   }),
@@ -128,6 +128,23 @@ describe('generateReverseOutline', () => {
     await svc.generateReverseOutline(SERIES_ID, {});
     await svc.generateReverseOutline(SERIES_ID, { force: true });
     expect(llmCalls).toHaveLength(2);
+  });
+
+  // #1514: Series Autopilot's run provider threads through as providerIdDefault →
+  // a SOFT providerDefault, so a per-stage pin still wins; a manual route override
+  // (providerId) stays a HARD providerOverride.
+  it('threads providerIdDefault as a soft providerDefault (autopilot run provider)', async () => {
+    llmQueue.push(cannedOutline());
+    await svc.generateReverseOutline(SERIES_ID, { providerIdDefault: 'codex' });
+    expect(llmCalls[0].opts.providerDefault).toBe('codex');
+    expect(llmCalls[0].opts.providerOverride).toBeUndefined();
+  });
+
+  it('threads a manual providerId as a hard providerOverride (route override)', async () => {
+    llmQueue.push(cannedOutline());
+    await svc.generateReverseOutline(SERIES_ID, { providerId: 'ollama' });
+    expect(llmCalls[0].opts.providerOverride).toBe('ollama');
+    expect(llmCalls[0].opts.providerDefault).toBeUndefined();
   });
 });
 

@@ -158,6 +158,7 @@ export async function generateSeasonEpisodes(seriesId, seasonId, options = {}) {
     ctx,
     {
       providerOverride: options.providerOverride,
+      providerDefault: options.providerDefault,
       modelOverride: options.modelOverride,
       returnsJson: true,
       source: 'pipeline-season-episodes',

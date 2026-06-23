@@ -481,9 +481,6 @@ async function persistMarker(seriesId, patch) {
   });
 }
 
-// Two override shapes because the delegated services disagree on field names:
-// the arc/episode/verify passes take { providerOverride, modelOverride }; the
-// child runners (volumeBeatsRunner, autoRunner) take { providerId, model }.
 // File a CoS task for a capability/quality gap the autopilot can't resolve on
 // its own (a script that won't parse, a render that keeps failing, a stalled
 // verify, a run-ending error). Opt-in via `options.fileGaps`; never fires in
@@ -502,12 +499,26 @@ async function fileGap(record, sId, { gapKind, issueId = null, summary, context 
   }
 }
 
+// Series Autopilot threads its run provider as a SOFT default, NOT a hard
+// override — so a deliberate per-stage pin (Prompts page / stage-config.json)
+// still wins for that stage, matching what verifyComicScript already does
+// (#1514). The run provider lands on stageRunner's `providerDefault` channel
+// (tier 3): it applies only to UNPINNED stages and soft-falls-through to the
+// active provider when unavailable, rather than throwing
+// PROVIDER_OVERRIDE_UNAVAILABLE the way a tier-1 override would.
+//
+// Two shapes because the delegated services disagree on field names: the
+// arc/episode/verify passes take `providerDefault`/`modelOverride`; the child
+// runners (volumeBeatsRunner, autoRunner) and the `providerId`-style services
+// take `providerIdDefault`/`model`. Each maps its incoming default to
+// stageRunner's `providerDefault` at the leaf call while keeping its existing
+// hard `providerOverride`/`providerId` param untouched for manual route callers.
 const providerOverrideOpts = (record) => ({
-  providerOverride: record.options.providerOverride,
+  providerDefault: record.options.providerOverride,
   modelOverride: record.options.modelOverride,
 });
 const providerIdOpts = (record) => ({
-  providerId: record.options.providerOverride,
+  providerIdDefault: record.options.providerOverride,
   model: record.options.modelOverride,
 });
 
@@ -1434,4 +1445,4 @@ export async function recoverStuckAutopilots() {
 }
 
 // Export internals for tests.
-export const __testing = { runs, buildDryRunPlan };
+export const __testing = { runs, buildDryRunPlan, providerOverrideOpts, providerIdOpts };
