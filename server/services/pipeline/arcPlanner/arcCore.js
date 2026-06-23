@@ -32,6 +32,7 @@ export async function generateArcOverview(seriesId, options = {}) {
     ctx,
     {
       providerOverride: options.providerOverride,
+      providerDefault: options.providerDefault,
       modelOverride: options.modelOverride,
       returnsJson: true,
       source: 'pipeline-arc-overview',
@@ -94,6 +95,7 @@ export async function generateReaderMap(seriesId, options = {}) {
     ctx,
     {
       providerOverride: options.providerOverride,
+      providerDefault: options.providerDefault,
       modelOverride: options.modelOverride,
       returnsJson: true,
       source: 'story-builder-reader-map',
@@ -248,6 +250,7 @@ export async function verifyArc(seriesId, options = {}) {
     ctx,
     {
       providerOverride: options.providerOverride,
+      providerDefault: options.providerDefault,
       modelOverride: options.modelOverride,
       returnsJson: true,
       source: 'pipeline-arc-verify',
@@ -310,6 +313,7 @@ export async function verifyVolume(seriesId, seasonId, options = {}) {
     ctx,
     {
       providerOverride: options.providerOverride,
+      providerDefault: options.providerDefault,
       modelOverride: options.modelOverride,
       returnsJson: true,
       source: 'pipeline-volume-verify',
@@ -362,6 +366,7 @@ export async function resolveVerifyIssues(seriesId, options = {}) {
     ctx,
     {
       providerOverride: options.providerOverride,
+      providerDefault: options.providerDefault,
       modelOverride: options.modelOverride,
       returnsJson: true,
       source: 'pipeline-arc-resolve',

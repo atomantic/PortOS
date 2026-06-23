@@ -192,12 +192,15 @@ function mergeVerifyIssues(first, second) {
  * `{ issues:[{severity,location,problem,suggestion}], raw, runId, providerId,
  * model }`, or `{ issues: [], skipped }` when there's no comic script to check.
  */
-// `providerId` here is Series Autopilot's blanket run provider, NOT a per-call
-// demand for this specific stage — so it's threaded as a `providerDefault`. That
-// lets a deliberate `pipeline-script-verify` provider pin (Prompts page) win,
-// e.g. running the craft pass on Codex while the rest of the run uses another
-// provider, while an unpinned stage still follows the run's chosen provider.
-export async function verifyComicScript(issueId, { providerId, model } = {}) {
+// `providerIdDefault` here is Series Autopilot's blanket run provider, NOT a
+// per-call demand for this specific stage — so it's threaded as a
+// `providerDefault`. That lets a deliberate `pipeline-script-verify` provider
+// pin (Prompts page) win, e.g. running the craft pass on Codex while the rest
+// of the run uses another provider, while an unpinned stage still follows the
+// run's chosen provider. (Autopilot is the only caller; #1514 renamed the field
+// from `providerId` to match the soft-default channel used by every other
+// autopilot-driven stage.)
+export async function verifyComicScript(issueId, { providerIdDefault, model } = {}) {
   const issue = await getIssue(issueId);
   const script = (issue.stages?.comicScript?.output || '').trim();
   if (!script) return { issues: [], skipped: 'no-comic-script' };
@@ -209,7 +212,7 @@ export async function verifyComicScript(issueId, { providerId, model } = {}) {
   // manuscript floor so a small/local provider window trims the script to fit
   // rather than overflowing on a fixed 48K floor (#1488); a big-context model gets
   // the whole script.
-  const { contextWindow } = await resolveStageContext(STAGE, { providerDefault: providerId, modelOverride: model });
+  const { contextWindow } = await resolveStageContext(STAGE, { providerDefault: providerIdDefault, modelOverride: model });
   const overheadTokens = 1_200 + estimateTokens([series?.name, series?.logline, issue.title].filter(Boolean).join(' '));
   const contentMax = manuscriptContentBudgetChars({
     contextWindow,
@@ -228,7 +231,7 @@ export async function verifyComicScript(issueId, { providerId, model } = {}) {
 
   const { content: parsed, runId, providerId: pid, model: m } = await runStagedLLM(STAGE, ctx, {
     returnsJson: true,
-    providerDefault: providerId,
+    providerDefault: providerIdDefault,
     modelOverride: model,
     source: 'pipeline-script-verify',
   });

@@ -181,6 +181,34 @@ beforeEach(() => {
 // ---------------------------------------------------------------------------
 // Pure resolver — the highest-value unit (no I/O, table-driven).
 // ---------------------------------------------------------------------------
+describe('provider threading helpers (#1514 — run provider is a SOFT default)', () => {
+  const record = { options: { providerOverride: 'codex', modelOverride: 'gpt-x' } };
+
+  it('providerOverrideOpts emits providerDefault (NOT a hard providerOverride) so a stage pin still wins', () => {
+    const opts = autopilot.__testing.providerOverrideOpts(record);
+    expect(opts.providerDefault).toBe('codex');
+    expect(opts.modelOverride).toBe('gpt-x');
+    // The whole point of the change: the run provider must NOT arrive as a hard
+    // tier-1 override, or it would beat a deliberate per-stage pin.
+    expect(opts).not.toHaveProperty('providerOverride');
+    expect(opts).not.toHaveProperty('providerId');
+  });
+
+  it('providerIdOpts emits providerIdDefault for the { providerId }-style services', () => {
+    const opts = autopilot.__testing.providerIdOpts(record);
+    expect(opts.providerIdDefault).toBe('codex');
+    expect(opts.model).toBe('gpt-x');
+    expect(opts).not.toHaveProperty('providerId');
+    expect(opts).not.toHaveProperty('providerOverride');
+  });
+
+  it('passes an undefined default through untouched when the run pins no provider', () => {
+    const none = { options: {} };
+    expect(autopilot.__testing.providerOverrideOpts(none).providerDefault).toBeUndefined();
+    expect(autopilot.__testing.providerIdOpts(none).providerIdDefault).toBeUndefined();
+  });
+});
+
 describe('resolveNextStep (pure)', () => {
   const comic = { targetFormat: 'comic', arc: { logline: 'L', summary: 'S' }, seasons: [{ id: 'se1', number: 1 }] };
   const issue = (over = {}) => ({ id: 'iss1', seasonId: 'se1', number: 1, arcPosition: 1, stages: {}, ...over });

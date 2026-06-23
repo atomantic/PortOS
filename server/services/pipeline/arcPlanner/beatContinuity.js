@@ -72,6 +72,7 @@ export async function analyzeBeatContinuity(seriesId, options = {}) {
     ctx,
     {
       providerOverride: options.providerOverride,
+      providerDefault: options.providerDefault,
       modelOverride: options.modelOverride,
       returnsJson: true,
       source: 'pipeline-beat-continuity',
@@ -115,6 +116,7 @@ export async function resolveBeatContinuity(seriesId, options = {}) {
     ctx,
     {
       providerOverride: options.providerOverride,
+      providerDefault: options.providerDefault,
       modelOverride: options.modelOverride,
       returnsJson: true,
       source: 'pipeline-beat-continuity-resolve',
