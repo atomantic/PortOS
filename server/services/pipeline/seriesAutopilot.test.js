@@ -73,11 +73,24 @@ vi.mock('./manuscriptReview.js', () => ({
   seedReviewFromFindings: vi.fn(async () => ({ comments: [] })),
   getReview: vi.fn(async () => ({ comments: [] })),
 }));
+// Drives whether the reverse-outline refresh step (#1349) thinks a scene-consuming
+// check is enabled. Default false so the existing conductor runs skip it cheaply.
+let reverseOutlineConsumed = false;
 const checkRunnerSpies = {
   runEditorialChecks: vi.fn(async () => ({ runId: 'ec', findings: [], perCheck: [], canceled: false })),
-  buildEditorialCheckPlan: vi.fn(async () => ({ seriesId: 's', checks: [], enabledCount: 0 })),
+  buildEditorialCheckPlan: vi.fn(async () => ({ seriesId: 's', checks: [], enabledCount: 0, consumesReverseOutline: reverseOutlineConsumed })),
+  enabledChecksConsumeReverseOutline: vi.fn(() => reverseOutlineConsumed),
 };
 vi.mock('./editorial/checkRunner.js', () => checkRunnerSpies);
+
+// Reverse outline (#1349) — controllable staleness + a generate spy so a test can
+// assert the refresh step regenerates only when stale and bills only then.
+let reverseOutlineState = { status: 'complete', stale: false };
+const generateReverseOutline = vi.fn(async () => ({ status: 'complete', stale: false, scenes: [{ id: 'sc1' }] }));
+vi.mock('./reverseOutline.js', () => ({
+  getReverseOutline: vi.fn(async (seriesId) => ({ seriesId, ...reverseOutlineState })),
+  generateReverseOutline,
+}));
 vi.mock('../settings.js', async (importOriginal) => ({
   ...(await importOriginal()),
   getSettings: vi.fn(async () => ({})),
@@ -151,9 +164,12 @@ beforeEach(() => {
   scriptVerifyFindings = [];
   canonReady = true;
   canonUndescribed = [];
+  reverseOutlineConsumed = false;
+  reverseOutlineState = { status: 'complete', stale: false };
   nextTaskId = 0;
   autopilot.__testing.runs.clear();
   vi.clearAllMocks();
+  generateReverseOutline.mockImplementation(async () => ({ status: 'complete', stale: false, scenes: [{ id: 'sc1' }] }));
   // Reset the budget mock to read the `budgetStatus` var (clearAllMocks keeps
   // implementations, but a prior test may have set a call-count-keyed one).
   getDomainBudgetStatus.mockImplementation(async () => budgetStatus);
@@ -222,11 +238,17 @@ describe('resolveNextStep (pure)', () => {
     const series = { targetFormat: 'comic', arc: { logline: 'L', summary: 'S' }, seasons: [{ id: 'se1', number: 1 }] };
     const issues = [{ id: 'i1', seasonId: 'se1', number: 1, arcPosition: 1, stages: {} }];
     const kinds = (opts) => autopilot.__testing.buildDryRunPlan(series, issues, opts).map((p) => p.kind);
-    // With editorial enabled (default), both registry checks + health gate appear.
-    expect(kinds({})).toEqual(expect.arrayContaining(['editorialReview', 'editorialChecks', 'editorialHealthGate']));
-    // With maxEditorialRounds:0, execute mode skips all three — the plan must too.
+    // With editorial enabled (default), the reverse-outline refresh (#1349), both
+    // registry checks + health gate appear.
+    expect(kinds({})).toEqual(expect.arrayContaining(['editorialReview', 'reverseOutline', 'editorialChecks', 'editorialHealthGate']));
+    // The reverse-outline refresh is enumerated BEFORE the editorial checks it feeds.
+    const defaultKinds = kinds({});
+    expect(defaultKinds.indexOf('reverseOutline')).toBeLessThan(defaultKinds.indexOf('editorialChecks'));
+    // With maxEditorialRounds:0, execute mode skips the whole editorial gate — the
+    // plan must omit the reverse-outline refresh and both checks too.
     const skipped = kinds({ maxEditorialRounds: 0 });
     expect(skipped).toContain('editorialReview'); // shown as "skipped (0 rounds)"
+    expect(skipped).not.toContain('reverseOutline');
     expect(skipped).not.toContain('editorialChecks');
     expect(skipped).not.toContain('editorialHealthGate');
   });
@@ -291,11 +313,21 @@ describe('resolveNextStep (pure)', () => {
     expect(step.kind).toBe('editorialReview');
   });
 
-  it('asks for editorial checks after editorial review, before done/visuals', () => {
+  it('refreshes the reverse outline after editorial review, before editorial checks (#1349)', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
       { arcVerified: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true },
+      { includeVisual: false },
+    );
+    expect(step.kind).toBe('reverseOutline');
+  });
+
+  it('asks for editorial checks once the reverse outline is refreshed (#1349)', () => {
+    const step = resolveNextStep(
+      comic,
+      [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
+      { arcVerified: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, reverseOutlineRefreshed: true },
       { includeVisual: false },
     );
     expect(step.kind).toBe('editorialChecks');
@@ -305,7 +337,7 @@ describe('resolveNextStep (pure)', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
-      { arcVerified: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, editorialChecksReviewed: true },
+      { arcVerified: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, reverseOutlineRefreshed: true, editorialChecksReviewed: true },
       { includeVisual: false },
     );
     expect(step.kind).toBe('editorialHealthGate');
@@ -315,7 +347,7 @@ describe('resolveNextStep (pure)', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
-      { arcVerified: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, editorialChecksReviewed: true, editorialHealthReady: true },
+      { arcVerified: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, reverseOutlineRefreshed: true, editorialChecksReviewed: true, editorialHealthReady: true },
       { includeVisual: false },
     );
     expect(step.kind).toBe('done');
@@ -325,7 +357,7 @@ describe('resolveNextStep (pure)', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
-      { arcVerified: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, editorialChecksReviewed: true, editorialHealthReady: true },
+      { arcVerified: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, reverseOutlineRefreshed: true, editorialChecksReviewed: true, editorialHealthReady: true },
       { includeVisual: true, target: 'text' },
     );
     expect(step.kind).toBe('done');
@@ -335,7 +367,7 @@ describe('resolveNextStep (pure)', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
-      { arcVerified: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, editorialChecksReviewed: true, editorialHealthReady: true },
+      { arcVerified: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, reverseOutlineRefreshed: true, editorialChecksReviewed: true, editorialHealthReady: true },
       { includeVisual: true },
     );
     expect(step.kind).toBe('canonVerify');
@@ -345,7 +377,7 @@ describe('resolveNextStep (pure)', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
-      { arcVerified: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, editorialChecksReviewed: true, editorialHealthReady: true, canonVerified: true },
+      { arcVerified: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, reverseOutlineRefreshed: true, editorialChecksReviewed: true, editorialHealthReady: true, canonVerified: true },
       { includeVisual: true },
     );
     expect(step).toMatchObject({ kind: 'visualDraft', issueId: 'iss1' });
@@ -364,7 +396,7 @@ describe('resolveNextStep (pure)', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: renderedStages })],
-      { arcVerified: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, editorialChecksReviewed: true, editorialHealthReady: true, canonVerified: true },
+      { arcVerified: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, reverseOutlineRefreshed: true, editorialChecksReviewed: true, editorialHealthReady: true, canonVerified: true },
       { includeVisual: true },
     );
     expect(step.kind).toBe('done');
@@ -668,6 +700,59 @@ describe('autopilot conductor', () => {
     expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('complete');
     // Skipping the editorial gate must also skip the registry checks pass.
     expect(checkRunnerSpies.runEditorialChecks).not.toHaveBeenCalled();
+  });
+
+  it('refreshes the reverse outline before the checks when stale and a check consumes it (#1349)', async () => {
+    reverseOutlineConsumed = true;
+    reverseOutlineState = { status: 'complete', stale: true };
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { includeVisual: false });
+    await waitFor(runFinished(seriesId));
+    expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('complete');
+    expect(generateReverseOutline).toHaveBeenCalledTimes(1);
+    // force:false lets the call no-op if the outline went fresh in the meantime.
+    expect(generateReverseOutline.mock.calls[0][1]).toMatchObject({ force: false });
+  });
+
+  it('skips the reverse-outline refresh when no enabled check consumes it (#1349)', async () => {
+    reverseOutlineConsumed = false; // gate 1: nothing reads the outline
+    reverseOutlineState = { status: 'complete', stale: true }; // stale, but unused
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { includeVisual: false });
+    await waitFor(runFinished(seriesId));
+    expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('complete');
+    expect(generateReverseOutline).not.toHaveBeenCalled();
+  });
+
+  it('skips the reverse-outline refresh when nothing is drafted yet (#1349)', async () => {
+    reverseOutlineConsumed = true;
+    reverseOutlineState = { status: 'no-content' }; // gate 2: no manuscript to segment
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { includeVisual: false });
+    await waitFor(runFinished(seriesId));
+    expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('complete');
+    expect(generateReverseOutline).not.toHaveBeenCalled();
+  });
+
+  it('bills a cos action only when the reverse outline actually regenerates (#1349)', async () => {
+    reverseOutlineConsumed = true;
+    // Fresh outline — the refresh step is a no-op and charges nothing.
+    reverseOutlineState = { status: 'complete', stale: false };
+    const a = await seedComplete();
+    await autopilot.startSeriesAutopilot(a.seriesId, { includeVisual: false });
+    await waitFor(runFinished(a.seriesId));
+    const freshCharges = recordDomainUsage.mock.calls.length;
+    expect(generateReverseOutline).not.toHaveBeenCalled();
+
+    recordDomainUsage.mockClear();
+    generateReverseOutline.mockClear();
+    // Same path, but a stale outline — exactly ONE extra cos action vs the fresh run.
+    reverseOutlineState = { status: 'complete', stale: true };
+    const b = await seedComplete();
+    await autopilot.startSeriesAutopilot(b.seriesId, { includeVisual: false });
+    await waitFor(runFinished(b.seriesId));
+    expect(generateReverseOutline).toHaveBeenCalledTimes(1);
+    expect(recordDomainUsage.mock.calls.length).toBe(freshCharges + 1);
   });
 
   it('pauses at the editorial health gate when a blocking finding remains open (#1316)', async () => {

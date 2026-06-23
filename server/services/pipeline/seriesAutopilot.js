@@ -92,7 +92,8 @@ import {
 import * as volumeBeatsRunner from './volumeBeatsRunner.js';
 import * as autoRunner from './autoRunner.js';
 import { seedReviewFromFindings, getReview } from './manuscriptReview.js';
-import { runEditorialChecks, buildEditorialCheckPlan } from './editorial/checkRunner.js';
+import { runEditorialChecks, buildEditorialCheckPlan, enabledChecksConsumeReverseOutline } from './editorial/checkRunner.js';
+import { generateReverseOutline, getReverseOutline } from './reverseOutline.js';
 import { computeHealth, openBlockers } from './editorialScore.js';
 import { getSettings } from '../settings.js';
 import { readReadinessGate } from '../../lib/editorial/index.js';
@@ -303,8 +304,8 @@ export function visualReady(issue) {
  * Return the first unmet step for a series given its canonical records and the
  * in-run accumulator (`runState`). Pure — caller supplies fresh state.
  *
- * runState fields consulted (all optional): arcVerified, editorialReviewed
- * (booleans); beatsAttempted, textAttempted, scriptChecked (Set|array of ids).
+ * runState fields consulted (all optional): arcVerified, editorialReviewed,
+ * reverseOutlineRefreshed (booleans); beatsAttempted, textAttempted, scriptChecked (Set|array of ids).
  * The *attempted* sets stop a perpetually-failing step (an issue whose LLM run
  * keeps erroring) from looping forever — the conductor records an attempt even
  * on failure, so the resolver moves past it within one run.
@@ -383,6 +384,15 @@ export function resolveNextStep(series, issues, runState = {}, options = {}) {
   // STEP 5 — series-level editorial review via the manuscript editor (once).
   if (!runState.editorialReviewed) {
     return { kind: 'editorialReview', reason: 'editorial review not yet run this run' };
+  }
+
+  // STEP 5.1 — refresh the reverse-outline scene segmentation (#1349). Runs AFTER
+  // the editorial completeness pass (STEP 5, which may edit the manuscript) and
+  // BEFORE the registry checks (5.2) so the scene-consuming checks read fresh
+  // scenes. The handler self-gates: a no-op (no budget) when no enabled check
+  // reads the outline or the stored outline is already fresh.
+  if (!runState.reverseOutlineRefreshed) {
+    return { kind: 'reverseOutline', reason: 'reverse-outline segmentation not yet refreshed this run' };
   }
 
   // STEP 5.2 — registry-driven editorial checks (#1284). Runs the enabled
@@ -731,6 +741,10 @@ async function runEditorial(sId, record) {
   // checks on demand via the route.
   if (maxRounds === 0) {
     record.runState.editorialReviewed = true;
+    // The reverse-outline refresh (#1349) only feeds the registry checks, so a run
+    // that skips the whole editorial gate must skip it too — mark it refreshed so
+    // the resolver advances past STEP 5.1 without spending budget.
+    record.runState.reverseOutlineRefreshed = true;
     record.runState.editorialChecksReviewed = true;
     // Skipping the editorial gate also skips its health convergence check (#1316)
     // — the resolver must advance past editorialHealthGate too.
@@ -788,6 +802,59 @@ async function runEditorial(sId, record) {
       }
     }
   }
+  return {};
+}
+
+// STEP 5.1 — refresh the reverse-outline scene segmentation (#1349) before the
+// registry-driven editorial checks (5.2), so the scene-consuming checks read the
+// current draft's scenes rather than a segmentation staled by this run's editorial
+// edits. Two cheap pre-gates keep this from spending budget needlessly:
+//   1. skip entirely when no enabled editorial check declares a reverse-outline
+//      source (mirrors the runner's own needsReverseOutline gate), and
+//   2. skip when the stored outline is already fresh — using getReverseOutline's
+//      canonical `stale` flag, NOT a stale-check reimplemented here.
+// Only when a regenerate will actually occur do we gate the daily budget and bill a
+// cos action (mirroring runEditorialChecksPass's hasLlmCheck pattern). `force:false`
+// is a belt-and-suspenders second guard against the stored outline going fresh
+// between the pre-check and the call. Failures are advisory (logged), never block.
+async function runReverseOutlineRefresh(sId, record) {
+  if (record.cancelRequested) return { canceled: true };
+  const settings = await getSettings();
+  // Gate 1 — does any enabled check even read the outline? If not, nothing to do.
+  if (!enabledChecksConsumeReverseOutline(settings)) {
+    record.runState.reverseOutlineRefreshed = true;
+    return {};
+  }
+  // Gate 2 — is the stored outline stale (or never generated against a draftable
+  // manuscript)? `no-content` (nothing drafted) needs no outline; `none` (draftable
+  // but never segmented) and a `complete`-but-`stale` outline both need a regen.
+  const current = await getReverseOutline(sId).catch(() => null);
+  const needsRegen = !!current
+    && current.status !== 'no-content'
+    && (current.status === 'none' || current.stale === true);
+  if (!needsRegen) {
+    record.runState.reverseOutlineRefreshed = true;
+    return {};
+  }
+  // A regenerate WILL spend one LLM call — gate the budget and bill, like the
+  // other LLM passes. Bridge autopilot cancellation into the stage's AbortSignal.
+  const beforeRefresh = await budgetPause();
+  if (beforeRefresh) return beforeRefresh;
+  const signal = { get aborted() { return record.cancelRequested; } };
+  const result = await generateReverseOutline(sId, { ...providerIdOpts(record), force: false, signal })
+    .catch((err) => {
+      console.log(`⚠️ autopilot: reverse-outline refresh failed for ${sId.slice(0, 12)}: ${err.message}`);
+      return null;
+    });
+  // Canceled mid-pass — don't bill, don't mark refreshed; let the loop unwind.
+  if (result?.status === 'canceled' || record.cancelRequested) return { canceled: true };
+  // Bill ONLY when the call actually regenerated (an LLM run). A `cached` result
+  // (outline went fresh in the race window) or a `no-content` series spent nothing.
+  if (result && result.cached !== true && result.status !== 'no-content') {
+    await recordDomainUsage('cos', { actions: 1 });
+    broadcast(sId, { type: 'verify:round', scope: 'reverseOutline', round: 1, findings: Array.isArray(result.scenes) ? result.scenes.length : 0, blocking: 0 });
+  }
+  record.runState.reverseOutlineRefreshed = true;
   return {};
 }
 
@@ -1089,6 +1156,8 @@ async function dispatchStep(sId, step, record) {
       return runScriptVerify(sId, step.issueId, record);
     case 'editorialReview':
       return runEditorial(sId, record);
+    case 'reverseOutline':
+      return runReverseOutlineRefresh(sId, record);
     case 'editorialChecks':
       return runEditorialChecksPass(sId, record);
     case 'editorialHealthGate':
@@ -1145,6 +1214,7 @@ function buildDryRunPlan(series, issues, options) {
   // editorialHealthReady), so the plan must not advertise the registry checks or
   // the health gate that won't run.
   if (edRounds !== 0) {
+    plan.push({ kind: 'reverseOutline', count: 1, note: 'refresh scene segmentation for editorial checks (#1349)' });
     plan.push({ kind: 'editorialChecks', count: 1, note: 'enabled editorial checks (#1284)' });
     plan.push({ kind: 'editorialHealthGate', count: 1, note: 'editorial health readiness gate (#1316)' });
   }
@@ -1208,6 +1278,7 @@ export async function startSeriesAutopilot(sId, options = {}) {
       arcVerified: false,
       beatContinuityChecked: false,
       editorialReviewed: false,
+      reverseOutlineRefreshed: false,
       editorialChecksReviewed: false,
       editorialHealthReady: false,
       canonVerified: false,

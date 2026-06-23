@@ -81,6 +81,7 @@ const STEP_LABELS = {
   textStages: 'Writing prose + scripts',
   scriptVerify: 'Verifying scripts',
   editorialReview: 'Editorial review',
+  reverseOutline: 'Refreshing scene segmentation',
   canonVerify: 'Checking canon descriptions',
   visualDraft: 'Drafting comic art',
 };

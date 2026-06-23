@@ -587,7 +587,28 @@ export async function buildEditorialCheckPlan(seriesId, { checkIds = null, setti
   const resolved = settings || await getSettings();
   const checks = getEnabledCheckRows(resolved, checkIds)
     .map((row) => ({ id: row.id, label: row.label, kind: row.kind, scope: row.scope }));
-  return { seriesId, checks, enabledCount: checks.length };
+  return {
+    seriesId,
+    checks,
+    enabledCount: checks.length,
+    consumesReverseOutline: enabledChecksConsumeReverseOutline(resolved, checkIds),
+  };
+}
+
+/**
+ * True when any enabled editorial check declares a reverse-outline source — the
+ * scenes (`reverseOutline`, #1296) or the plotline list (`reverseOutline.plotlines`,
+ * #1310). This is the single signal for "regenerating the reverse outline before
+ * the checks is worth the budget" (#1349): it mirrors the `needsReverseOutline`
+ * gate inside `runEditorialChecks` exactly, so the autopilot's reverse-outline
+ * refresh step and the runner agree on what consumes the outline. Takes resolved
+ * settings (sync) so a caller that already loaded them doesn't pay a second read.
+ */
+export function enabledChecksConsumeReverseOutline(settings, checkIds = null) {
+  return getEnabledChecks(settings, checkIds).some(({ check }) => {
+    const sources = checkSources(check);
+    return sources.includes('reverseOutline') || sources.includes('reverseOutline.plotlines');
+  });
 }
 
 /**
