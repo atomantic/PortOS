@@ -64,6 +64,35 @@ export function usableInputTokens({
 }
 
 /**
+ * Char cap for a SINGLE-block manuscript/script pass — a stage that sends one big
+ * content block (the drafted manuscript, comic script, or POV passage) plus fixed
+ * prompt overhead, with no separate trimmable context block (so the richer
+ * `fitContextToManuscriptFloor` doesn't apply). Returns the usable INPUT budget in
+ * chars (window − overhead − output reserve − safety margin), floored at a
+ * manuscript minimum so a small/local provider window never sizes the content to
+ * empty, and free to grow to fill a large window.
+ *
+ * This replaces the historical `Math.max(CONTENT_MAX, budgetChars)` floor at the
+ * standalone pipeline stages (#1488). That pinned a fixed 48–60K-char floor
+ * regardless of the resolved window, so a genuinely small (e.g. 8K) local provider
+ * overflowed: the floor (~12–15K manuscript tokens) plus overhead + output reserve
+ * exceeded the window. Flooring at the manuscript minimum instead keeps the #1459
+ * philosophy — never starve the content block to empty — while respecting the
+ * provider window: a small window trims the content to fit (the caller appends its
+ * own `[… truncated …]` marker), a large window scales up exactly as before.
+ */
+export function manuscriptContentBudgetChars({
+  contextWindow,
+  overheadTokens = 0,
+  outputReserveTokens = DEFAULT_OUTPUT_RESERVE_TOKENS,
+  safetyMargin = DEFAULT_SAFETY_MARGIN,
+  floorTokens = MANUSCRIPT_FLOOR_TOKENS,
+} = {}) {
+  const budgetTokens = usableInputTokens({ contextWindow, overheadTokens, outputReserveTokens, safetyMargin });
+  return Math.max(Math.max(0, floorTokens), budgetTokens) * CHARS_PER_TOKEN;
+}
+
+/**
  * Decide how much of a re-sent context block (the reverse-outline scene map,
  * character arcs, plotline coverage, …) a chunked manuscript pass can afford,
  * guaranteeing the manuscript itself at least `floorTokens` of input budget.
