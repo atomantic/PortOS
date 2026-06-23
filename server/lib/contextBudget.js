@@ -89,7 +89,9 @@ export function manuscriptContentBudgetChars({
   floorTokens = MANUSCRIPT_FLOOR_TOKENS,
 } = {}) {
   const budgetTokens = usableInputTokens({ contextWindow, overheadTokens, outputReserveTokens, safetyMargin });
-  return Math.max(Math.max(0, floorTokens), budgetTokens) * CHARS_PER_TOKEN;
+  // budgetTokens is already ≥ 0 (usableInputTokens floors it); the explicit 0
+  // guards against a caller passing a negative floorTokens.
+  return Math.max(0, floorTokens, budgetTokens) * CHARS_PER_TOKEN;
 }
 
 /**

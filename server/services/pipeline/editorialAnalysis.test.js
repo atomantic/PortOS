@@ -20,7 +20,7 @@ vi.mock('../../lib/stageRunner.js', () => ({
     const content = llmQueue.shift();
     return { content, model: 'mock-model', providerId: 'mock-provider', runId: 'run-1' };
   }),
-  // Large window so the content cap stays at its CONTENT_MAX floor in tests.
+  // Large window so the content cap never truncates the issue in tests.
   resolveStageContext: vi.fn(async () => ({ provider: { id: 'mock-provider' }, model: 'mock-model', contextWindow: 1_000_000 })),
 }));
 
