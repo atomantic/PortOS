@@ -814,7 +814,8 @@ async function runEditorial(sId, record) {
 //   2. skip when the stored outline is already fresh — using getReverseOutline's
 //      canonical `stale` flag, NOT a stale-check reimplemented here.
 // Only when a regenerate will actually occur do we gate the daily budget and bill a
-// cos action (mirroring runEditorialChecksPass's hasLlmCheck pattern). `force:false`
+// cos action — the same shape as runEditorialChecksPass, which gates+bills only when
+// an enabled LLM check will actually run. `force:false`
 // is a belt-and-suspenders second guard against the stored outline going fresh
 // between the pre-check and the call. Failures are advisory (logged), never block.
 async function runReverseOutlineRefresh(sId, record) {
@@ -850,9 +851,11 @@ async function runReverseOutlineRefresh(sId, record) {
   if (result?.status === 'canceled' || record.cancelRequested) return { canceled: true };
   // Bill ONLY when the call actually regenerated (an LLM run). A `cached` result
   // (outline went fresh in the race window) or a `no-content` series spent nothing.
+  // No verify:round broadcast here — a refresh isn't a review round (it produces
+  // scenes, not findings); the conductor's generic step:start/step:complete already
+  // surface "Refreshing scene segmentation…" / "done" to the UI.
   if (result && result.cached !== true && result.status !== 'no-content') {
     await recordDomainUsage('cos', { actions: 1 });
-    broadcast(sId, { type: 'verify:round', scope: 'reverseOutline', round: 1, findings: Array.isArray(result.scenes) ? result.scenes.length : 0, blocking: 0 });
   }
   record.runState.reverseOutlineRefreshed = true;
   return {};
