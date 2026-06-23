@@ -41,6 +41,7 @@ grep -i "what you want to do" client/src/hooks/README.md
 | `useImageGenProgress` | Live diffusion progress for an image-gen call. | Showing per-call image-gen progress. |
 | `useImporterProgress` | Live analyze-phase stage checklist via the `importer:progress` socket (runId-filtered); exports `stageStatusIcon` for the status→icon lookup. | Importer analyze progress UI only. |
 | `useMediaJobProgress` | Live progress for a single `mediaJobQueue` job. | Subscribing to a known media-job id. |
+| `useSlotInFlight` | Whether a render slot (`{ jobId, filename }`) has an in-flight render; returns `{ inFlight, setStatus }`. A present `filename` (or 5s grace on a stale/expired job) clears `inFlight` so the render button never sticks "loading". | A render button that should disable + spin only while its own slot is actually rendering (comic pages, covers). Wire `setStatus` to the slot's `MediaJobThumb` `onStatus`. |
 | `useMediaJobSse` | Imperative per-job `/{kind}-gen/:id/events` SSE; `attach()` returns a Promise that settles on the terminal frame. | POST-then-attach media render flows that await completion (ImageGen/VideoGen). |
 | `useOpenClawStream` | OpenClaw SSE chat stream. | OpenClaw file-browser chat surface only. |
 | `usePipelineProgress` | Id-derived runner SSE stream: builds the URL from `(urlBuilder, ids)`, connects only when every id is truthy. | Any runner SSE keyed by record ids (pipeline auto-run, editorial, manuscript completeness, volume beats, story steps). |
