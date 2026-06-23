@@ -29,6 +29,7 @@ import { getSettings, patchSettingsSlice } from '../../../services/apiSystem';
 import { listImageModels } from '../../../services/apiImageVideo';
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
+import useSlotInFlight from '../../../hooks/useSlotInFlight';
 import MediaJobThumb from '../MediaJobThumb';
 import MediaPreview from '../../media/MediaPreview';
 import usePreviewRoute from '../../../hooks/usePreviewRoute';
@@ -93,26 +94,6 @@ const getFinalSlot = (rec) => (rec?.finalImage?.jobId || rec?.finalImage?.filena
 // Whichever slot the user should see as "rendered" for PDF-readiness math
 // and the lightbox preview — final wins over proof when both exist.
 const getPreferredSlot = (rec) => getFinalSlot(rec) || getProofSlot(rec);
-
-// 5s grace window for stale-jobId staleness: if MediaJobThumb never reports
-// a real status (job archive expired before this session), stop treating the
-// unresolved 'unknown' as in-flight so the render button isn't permanently
-// disabled.
-function useSlotInFlight(slot) {
-  const [status, setStatus] = useState('unknown');
-  const [expired, setExpired] = useState(false);
-  useEffect(() => {
-    setStatus('unknown');
-    setExpired(false);
-    if (!slot?.jobId) return undefined;
-    const t = setTimeout(() => setExpired(true), 5000);
-    return () => clearTimeout(t);
-  }, [slot?.jobId]);
-  const inFlight = !!slot?.jobId
-    && status !== 'completed' && status !== 'failed' && status !== 'canceled'
-    && !(status === 'unknown' && expired);
-  return { inFlight, setStatus };
-}
 
 // Tooltip text for the "Render final" button — picks the first applicable
 // reason from a precedence chain so the user always sees the most specific
