@@ -1102,6 +1102,11 @@ describe('dataSync — per-category schema gate (cross-key isolation)', () => {
       // category). Gated at applyIncomingPush via compareSchemaVersions /
       // RECORD_KIND_SCHEMA_CATEGORIES.moodBoard.
       'moodBoards',
+      // Writers Room works (#1565) → per-record peer-push only (no 60s
+      // file-snapshot category; the .md prose bodies ride a dedicated body
+      // manifest). Gated at applyIncomingPush via compareSchemaVersions /
+      // RECORD_KIND_SCHEMA_CATEGORIES.writersRoomWork.
+      'writersRoomWorks',
     ]);
     const covered = new Set(Object.values(dataSync.getSnapshotCategorySchemaKeys()).flat());
     for (const key of Object.keys(PORTOS_SCHEMA_VERSIONS)) {

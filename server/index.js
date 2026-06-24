@@ -183,6 +183,7 @@ import { seriesStore } from './services/pipeline/series.js';
 import { issueStore } from './services/pipeline/issues.js';
 import { storyBuilderStore } from './services/storyBuilder.js';
 import { writersRoomStore } from './services/writersRoom/store.js';
+import { wrWorksDir } from './services/writersRoom/_shared.js';
 import { mediaCollectionStore } from './services/mediaCollections.js';
 import { createPortOSProviderRoutes } from './routes/providers.js';
 import { createPortOSRunsRoutes } from './routes/runs.js';
@@ -707,6 +708,11 @@ app.use('/data/music', express.static(PATHS.music));
 // Brain Memory conversation viewer renders these inline (`![](/data/brain-
 // imports/...)`) and as asset links. Read-only; range support for large PDFs.
 app.use('/data/brain-imports', express.static(PATHS.brainImportAssets, ASSET_STATIC_OPTS));
+// Writers Room file-primary draft prose bodies (works/<workId>/drafts/<draftId>.md).
+// Federation (#1565) pulls them peer→peer from this mount: a receiver that merged
+// a work record GETs each missing body's bytes by its nested path. Read-only;
+// range support for large drafts. (Tailnet-only per the project's threat model.)
+app.use('/data/writers-room/works', express.static(wrWorksDir(), ASSET_STATIC_OPTS));
 
 // Serve built client UI (production mode — no Vite dev server needed)
 const CLIENT_DIST = join(__dirname, '..', 'client', 'dist');

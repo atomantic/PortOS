@@ -109,6 +109,14 @@ import {
   mergeBoardsFromSync,
   imageUrlToAppAsset,
 } from '../moodBoard/index.js';
+import {
+  getWorkForSync,
+  mergeWorksFromSync,
+  buildWorkBodyManifest,
+  diffWorkBodyManifest,
+} from '../writersRoom/sync.js';
+import { WRITERS_ROOM_DRAFT_ASSET_KIND } from '../writersRoom/syncLogic.js';
+import { WORK_ID_RE, DRAFT_ID_RE, wrWorkDir, wrDraftPath } from '../writersRoom/_shared.js';
 import { parseKey } from '../../lib/mediaItemKey.js';
 import {
   initCursor,
@@ -116,7 +124,7 @@ import {
   removeCursor as removeTombstoneCursor,
 } from './peerTombstoneCursors.js';
 
-export const PEER_SUBSCRIBABLE_KINDS = Object.freeze(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard']);
+export const PEER_SUBSCRIBABLE_KINDS = Object.freeze(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard', 'writersRoomWork']);
 
 /**
  * Cross-cutting event bus for the peer-sync receiver. The asset-pull worker
@@ -395,6 +403,7 @@ const KIND_TO_CATEGORY = Object.freeze({
   track: 'tracks',
   creativeDirectorProject: 'creativeDirectorProjects',
   moodBoard: 'moodBoards',
+  writersRoomWork: 'writersRoomWorks',
 });
 
 function peerAllowsOutbound(peer) {
@@ -1090,6 +1099,7 @@ export async function pushRecordToPeer(sub, options = {}) {
     manuscriptReview: payload.manuscriptReview ?? null,
     reverseOutline: payload.reverseOutline ?? null,
     assetManifest: payload.assetManifest ?? [],
+    draftBodyManifest: payload.draftBodyManifest ?? [],
   });
   if (sub.lastPushedHash && sub.lastPushedHash === hash) {
     return { pushed: false, reason: 'unchanged', hash };
@@ -1593,6 +1603,17 @@ async function buildPushPayload(sub, sourceInstanceId) {
     const assetManifest = record.deleted === true ? [] : await buildBoardAssetManifest(record);
     return { kind: 'moodBoard', record: sanitized, assetManifest, sourceInstanceId, portosMeta };
   }
+  if (sub.recordKind === 'writersRoomWork') {
+    const record = await getWorkForSync(sub.recordId).catch(() => null);
+    if (!record) return null;
+    const sanitized = sanitizeRecordForWire('writersRoomWork', record);
+    if (!sanitized) return null;
+    // The work manifest carries draft-version METADATA; the file-primary `.md`
+    // prose bodies ride a separate `draftBodyManifest` (SHA256 per draft) the
+    // receiver diffs + pulls. A tombstone ships neither asset manifest.
+    const draftBodyManifest = record.deleted === true ? [] : await buildWorkBodyManifest(record);
+    return { kind: 'writersRoomWork', record: sanitized, assetManifest: [], draftBodyManifest, sourceInstanceId, portosMeta };
+  }
   return null;
 }
 
@@ -1872,7 +1893,7 @@ export async function applyIncomingPush(payload) {
   if (!isPlainObject(payload)) {
     throw makeErr('payload must be an object', ERR_VALIDATION);
   }
-  const { kind, record, issues, linkedCollection, catalogBundle, manuscriptReview, reverseOutline, assetManifest, sourceInstanceId, portosMeta } = payload;
+  const { kind, record, issues, linkedCollection, catalogBundle, manuscriptReview, reverseOutline, assetManifest, draftBodyManifest, sourceInstanceId, portosMeta } = payload;
   if (!PEER_SUBSCRIBABLE_KINDS.includes(kind)) {
     throw makeErr(`unknown kind: ${kind}`, ERR_VALIDATION);
   }
@@ -2059,6 +2080,8 @@ export async function applyIncomingPush(payload) {
     await mergeProjectsFromSync([record], { source });
   } else if (kind === 'moodBoard') {
     await mergeBoardsFromSync([record], { source });
+  } else if (kind === 'writersRoomWork') {
+    await mergeWorksFromSync([record], { source });
   }
 
   // Apply the bundled collection (if any) — same LWW + union-of-items
@@ -2150,6 +2173,21 @@ export async function applyIncomingPush(payload) {
     pullMissingAssetsFromPeer(sourceInstanceId, missingAssets).catch((err) => {
       console.log(`⚠️ peerSync: asset pull from ${sourceInstanceId} failed: ${err.message}`);
     });
+  }
+
+  // Writers Room: the file-primary draft `.md` bodies ride their own manifest
+  // (the generic asset pipeline keys on a flat basename + single dir per kind;
+  // bodies live at works/<workId>/drafts/<draftId>.md). Diff against local disk
+  // and background-pull the missing ones from the sender's /data/writers-room
+  // static mount. Same guards as the asset path: skip for local-ephemeral (works
+  // have no ephemeral flag, but keep the symmetry) and tombstone pushes.
+  if (kind === 'writersRoomWork' && !localEphemeral && record.deleted !== true) {
+    const missingBodies = await diffWorkBodyManifest(draftBodyManifest);
+    if (missingBodies.length > 0) {
+      pullMissingWorkBodies(sourceInstanceId, missingBodies).catch((err) => {
+        console.log(`⚠️ peerSync: draft-body pull from ${sourceInstanceId} failed: ${err.message}`);
+      });
+    }
   }
 
   return {
@@ -2308,6 +2346,14 @@ async function classifyLocalRecord(recordKind, recordId) {
     const b = await getBoard(recordId, { includeDeleted: true }).catch(() => null);
     return b ? 'syncable' : 'missing';
   }
+  if (recordKind === 'writersRoomWork') {
+    // Works have no `ephemeral` concept (like the persona/music/CD/board kinds) —
+    // a found work (live or tombstoned) is always 'syncable', so an inbound work
+    // push bootstraps bidirectional sync. No ping-pong risk: lastPushedHash + LWW
+    // same-`updatedAt` no-op merge prevent it.
+    const w = await getWorkForSync(recordId).catch(() => null);
+    return w ? 'syncable' : 'missing';
+  }
   return 'missing';
 }
 
@@ -2385,6 +2431,103 @@ async function pullMissingAssetsFromPeer(senderInstanceId, missingAssets) {
   }
 }
 
+/**
+ * Fetch a peer's static-mount asset URL into a size-capped Buffer, or null on
+ * any failure. Centralizes the content-length guards shared by the generic
+ * asset pull (`doPullOneAsset`) and the Writers Room draft-body pull
+ * (`pullOneWorkBody`): REQUIRE a trustworthy content-length header up front
+ * (Express serve-static always sets it) so a hostile peer can't OOM us by
+ * shipping a huge body under a small filename before the `.arrayBuffer()` cap
+ * runs. `label` is the filename used in log lines.
+ */
+async function fetchCappedAssetBuffer(peer, url, label, maxBytes) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), ASSET_PULL_TIMEOUT_MS);
+  // maxBytes propagates into the HTTPS shim's streaming cap (see
+  // server/lib/httpClient.js); the plain-HTTP path falls back to the
+  // post-resolve content-length checks below (serve-static always sets it).
+  const res = await peerFetch(url, { signal: controller.signal, maxBytes }, peer)
+    .finally(() => clearTimeout(timeoutId))
+    .catch((err) => {
+      if (err?.message?.includes('exceed')) {
+        console.log(`⚠️ peerSync: ${label} exceeded asset size cap — ${err.message}`);
+      }
+      return null;
+    });
+  if (!res || !res.ok) return null;
+  // Use has() to distinguish "header missing" from "header is '0'" — without it
+  // `Number(null)` is 0 and slips past the finite-non-negative guard.
+  if (!res.headers.has('content-length')) {
+    console.log(`⚠️ peerSync: asset ${label} has no content-length — refusing pull`);
+    return null;
+  }
+  const contentLength = Number(res.headers.get('content-length'));
+  if (!Number.isFinite(contentLength) || contentLength <= 0) {
+    console.log(`⚠️ peerSync: asset ${label} has invalid content-length (${res.headers.get('content-length')}) — refusing pull`);
+    return null;
+  }
+  if (contentLength > maxBytes) {
+    console.log(`⚠️ peerSync: asset ${label} too large (${contentLength}) — refusing pull`);
+    return null;
+  }
+  const buffer = Buffer.from(await res.arrayBuffer());
+  // Defense in depth: the server claimed length X but actually sent more.
+  if (buffer.length > maxBytes || buffer.length !== contentLength) {
+    console.log(`⚠️ peerSync: asset ${label} length mismatch (header=${contentLength}, body=${buffer.length}) — refusing pull`);
+    return null;
+  }
+  return buffer;
+}
+
+// --- Receiver-side Writers Room draft-body pull -------------------------
+// Bodies live at works/<workId>/drafts/<draftId>.md (nested), not a flat
+// basename under one dir, so they ride a dedicated manifest + pull instead of
+// the generic flat-asset pipeline. The sender serves them from its
+// /data/writers-room/works static mount (server/index.js).
+const WORK_BODY_PULL_MAX_BYTES = 16 * 1024 * 1024; // bodies are ≤5MB (validated); 16MB is generous
+
+async function pullMissingWorkBodies(senderInstanceId, missingBodies) {
+  if (!isStr(senderInstanceId) || !Array.isArray(missingBodies) || missingBodies.length === 0) return;
+  const peer = await findPeerById(senderInstanceId);
+  if (!peer) {
+    console.log(`⚠️ peerSync: can't pull draft bodies — peer ${senderInstanceId} not in registry`);
+    return;
+  }
+  const base = peerBaseUrl(peer);
+  for (const entry of missingBodies) {
+    await pullOneWorkBody(peer, base, entry).catch((err) => {
+      console.log(`⚠️ peerSync: draft-body pull ${entry?.draftId} from ${peer.name || senderInstanceId} failed: ${err.message}`);
+    });
+  }
+}
+
+async function pullOneWorkBody(peer, base, entry) {
+  const { workId, draftId } = entry || {};
+  // Re-validate the path segments here even though diffWorkBodyManifest already
+  // did — belt-and-suspenders against a future refactor that bypasses the diff.
+  if (typeof workId !== 'string' || !WORK_ID_RE.test(workId)) return;
+  if (typeof draftId !== 'string' || !DRAFT_ID_RE.test(draftId)) return;
+  const safeLabel = `${workId}/${draftId}.md`;
+  const key = inflightKey(peer.instanceId, WRITERS_ROOM_DRAFT_ASSET_KIND, safeLabel);
+  if (inflightPulls.has(key)) return;
+  inflightPulls.add(key);
+  try {
+    const url = `${base}/data/writers-room/works/${encodeURIComponent(workId)}/drafts/${encodeURIComponent(draftId)}.md`;
+    const buffer = await fetchCappedAssetBuffer(peer, url, safeLabel, WORK_BODY_PULL_MAX_BYTES);
+    if (!buffer) return;
+    await ensureDir(join(wrWorkDir(workId), 'drafts'));
+    await atomicWrite(wrDraftPath(workId, draftId), buffer);
+    peerSyncEvents.emit('asset-arrived', {
+      filename: `${draftId}.md`,
+      kind: WRITERS_ROOM_DRAFT_ASSET_KIND,
+      peerId: peer.instanceId,
+    });
+    console.log(`📥 peerSync: pulled draft body ${safeLabel} from ${peer.name || peer.instanceId} (${buffer.length} bytes)`);
+  } finally {
+    inflightPulls.delete(key);
+  }
+}
+
 async function pullOneAsset(peer, base, entry) {
   const urlPrefix = ASSET_KIND_TO_URL_PREFIX[entry.kind];
   const localDir = directoryForAssetKind(entry.kind);
@@ -2427,60 +2570,8 @@ async function doPullOneAsset(peer, base, entry, urlPrefix, localDir, safeName) 
   }
 
   const url = `${base}${urlPrefix}/${encodeURIComponent(safeName)}`;
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), ASSET_PULL_TIMEOUT_MS);
-  // maxBytes propagates into the HTTPS shim's streaming cap (see
-  // server/lib/httpClient.js) — without it, an oversized HTTPS asset
-  // buffers the whole body before the post-resolve content-length
-  // check fires. The plain-HTTP fetch path falls back to the
-  // post-resolve checks below (Node's fetch doesn't accept maxBytes,
-  // but Content-Length is universally set by serve-static).
-  const res = await peerFetch(url, { signal: controller.signal, maxBytes: ASSET_PULL_MAX_BYTES }, peer)
-    .finally(() => clearTimeout(timeoutId))
-    .catch((err) => {
-      // The HTTPS shim rejects with a thrown Error when maxBytes is
-      // exceeded — distinguish from network/abort errors so we don't
-      // spam the log on a normal abort.
-      if (err?.message?.includes('exceed')) {
-        console.log(`⚠️ peerSync: ${safeName} exceeded asset size cap — ${err.message}`);
-      }
-      return null;
-    });
-  if (!res || !res.ok) return;
-  // Size-cap enforcement: REQUIRE a trustworthy content-length header up
-  // front and refuse the pull if missing or over-cap. Without the header
-  // we'd have to buffer the whole response before checking buffer.length,
-  // which defeats the cap (a hostile peer could ship a 10GB file under a
-  // small filename and OOM the receiver before the check runs). Express's
-  // `serve-static` always sets content-length for static files (verified
-  // by the `acceptRanges: true` mount config in server/index.js), so this
-  // is enforceable in the real deployment path.
-  // Use has() to distinguish "header missing" from "header is '0'" — without
-  // the explicit check, `Number(null)` is 0 and slips past the finite-non-negative
-  // guard, letting a peer that omits the header buffer an unbounded body before
-  // the size cap runs (the cap on .arrayBuffer() length only kicks in AFTER the
-  // body lands in memory).
-  if (!res.headers.has('content-length')) {
-    console.log(`⚠️ peerSync: asset ${safeName} has no content-length — refusing pull`);
-    return;
-  }
-  const contentLength = Number(res.headers.get('content-length'));
-  if (!Number.isFinite(contentLength) || contentLength <= 0) {
-    console.log(`⚠️ peerSync: asset ${safeName} has invalid content-length (${res.headers.get('content-length')}) — refusing pull`);
-    return;
-  }
-  if (contentLength > ASSET_PULL_MAX_BYTES) {
-    console.log(`⚠️ peerSync: asset ${safeName} too large (${contentLength}) — refusing pull`);
-    return;
-  }
-  const buffer = Buffer.from(await res.arrayBuffer());
-  // Defense in depth: the server claimed length X but actually sent more
-  // (shouldn't happen with serve-static, but content-length is just a
-  // header). Refuse to write the partial / over-cap result.
-  if (buffer.length > ASSET_PULL_MAX_BYTES || buffer.length !== contentLength) {
-    console.log(`⚠️ peerSync: asset ${safeName} length mismatch (header=${contentLength}, body=${buffer.length}) — refusing pull`);
-    return;
-  }
+  const buffer = await fetchCappedAssetBuffer(peer, url, safeName, ASSET_PULL_MAX_BYTES);
+  if (!buffer) return;
   await ensureDir(localDir);
   const fullPath = join(localDir, safeName);
   // atomicWrite (temp + rename) so a crash mid-write doesn't leave a

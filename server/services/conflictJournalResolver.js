@@ -37,6 +37,7 @@ import { updateCollection, getCollection, ERR_NOT_FOUND as COLLECTION_NOT_FOUND 
 import { updateIssue, ERR_NOT_FOUND as ISSUE_NOT_FOUND } from './pipeline/issues.js';
 import { updateProject } from './creativeDirector/local.js';
 import { restoreBoard } from './moodBoard/index.js';
+import { updateWork } from './writersRoom/local.js';
 
 export const ERR_NOT_FOUND = 'CONFLICT_JOURNAL_NOT_FOUND';
 export const ERR_VALIDATION = 'CONFLICT_JOURNAL_VALIDATION';
@@ -133,6 +134,15 @@ async function applyToRecord(kind, recordId, patch, { replace = false } = {}) {
     // merge-fields both apply faithfully through the same call. It validates +
     // rejects a tombstoned row (404 → translateGone → ERR_TARGET_GONE).
     await restoreBoard(recordId, patch).catch(translateGone);
+  } else if (kind === 'writersRoomWork') {
+    // updateWork applies the snapshot's title/kind/status/folderId/imageStyle/
+    // liveMode (the RESTORABLE_FIELDS set) through its allow-list + the liveMode
+    // partial merge, so restore-all and merge-fields both apply faithfully. It
+    // throws the generic ServerError 'NOT_FOUND' for a missing/tombstoned work
+    // (caught by translateGone → ERR_TARGET_GONE). The draft-version structure
+    // and prose bodies are not restorable here (they're file-primary + lineage-
+    // managed) — RESTORABLE_FIELDS.writersRoomWork omits them.
+    await updateWork(recordId, patch).catch(translateGone);
   } else {
     throw makeErr(`Unsupported conflict kind: ${kind}`, ERR_VALIDATION);
   }

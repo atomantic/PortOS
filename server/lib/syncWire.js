@@ -163,16 +163,19 @@ export function sanitizeRecordForWire(kind, record) {
     case 'album':
     case 'track':
     case 'creativeDirectorProject':
-    case 'moodBoard': {
-      // Persona/music/creative-director/mood-board records: like mediaCollection,
-      // no `ephemeral` flag — always wire-syncable when present. Strip-then-tail-
-      // re-add the soft-delete pair for byte-stable checksums. The whole record
-      // is LWW-overwritten on merge (no item-union), so the wire form converges
-      // byte-for-byte and feeds the conflict-journal content hash directly (no
-      // scalar narrowing in contentHashForRecord). A creativeDirectorProject is
-      // larger than a persona (treatment/scenes/runs) but follows the same whole-
-      // record LWW contract — every field is app-authored data that mirrors; a
-      // moodBoard (name/description/items) is the same whole-record contract.
+    case 'moodBoard':
+    case 'writersRoomWork': {
+      // Persona/music/creative-director/mood-board/writers-room records: like
+      // mediaCollection, no `ephemeral` flag — always wire-syncable when present.
+      // Strip-then-tail-re-add the soft-delete pair for byte-stable checksums. The
+      // whole record is LWW-overwritten on merge (no item-union), so the wire form
+      // converges byte-for-byte and feeds the conflict-journal content hash
+      // directly (no scalar narrowing in contentHashForRecord). A
+      // creativeDirectorProject is larger than a persona (treatment/scenes/runs)
+      // but follows the same whole-record LWW contract; a moodBoard
+      // (name/description/items) and a writersRoomWork (the manifest +
+      // decomposed draft-version METADATA in drafts[]; the .md prose bodies ride
+      // a separate body manifest) are the same whole-record contract.
       const { deleted: _d, deletedAt: _da, ...rest } = record;
       return { ...rest, ...sanitizeSoftDeleteFields(record) };
     }

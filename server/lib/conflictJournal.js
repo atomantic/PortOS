@@ -343,6 +343,16 @@ export const RESTORABLE_FIELDS = Object.freeze({
   // routes restore through restoreBoard → applyBoardRestore (which accepts items,
   // unlike the route's applyBoardPatch).
   moodBoard: ['name', 'description', 'items'],
+  // Writers Room works (#1565): the user-authored manifest fields the merge can
+  // restore through `updateWork` (which accepts exactly this set + the liveMode
+  // partial-merge). Server-owned / structural fields are excluded — `id`/
+  // `createdAt`/the LWW-tombstone trio, the draft-version structure
+  // (`drafts`/`activeDraftVersionId`, file-primary + lineage-managed), and the
+  // bridge links (`pipelineSeriesId`/`cdProjectId`/`mediaCollectionId`, set by
+  // their own helpers). The whole manifest is hashed for DETECTION by
+  // contentHashForRecord (no scalar narrowing); this set is what the Conflicts UI
+  // offers for restore. `writersRoomWork` matches the record kind.
+  writersRoomWork: ['title', 'kind', 'status', 'folderId', 'imageStyle', 'liveMode'],
 });
 
 const present = (v) => v !== undefined;

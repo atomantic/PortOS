@@ -18,12 +18,26 @@
  * splits it on write, so its public API is unchanged.
  *
  * The `data` JSONB on every table holds the FULL lossless record; the typed
- * columns are a queryable mirror (never read back into the record). Writers Room
- * is NOT federated, so there is no ephemeral/sync column and no mutation epoch.
+ * columns are a queryable mirror (never read back into the record).
+ *
+ * Works FEDERATE across peers as of #1565 (record kind `writersRoomWork`, sync
+ * category `writersRoomWorks`): `deleteWork` soft-deletes (tombstone) instead of
+ * hard-deleting so the deletion propagates without an out-of-date peer
+ * resurrecting it, and `mergeWorksFromSync` LWW-merges an incoming work the same
+ * way creativeDirector/projectsDB.js does — per-record `withTransaction` +
+ * `SELECT … FOR UPDATE`, conflict-journal base hash seeding, and journaling the
+ * about-to-be-overwritten local version when remote wins. The `deleted`/`deletedAt`
+ * columns (added in #1017) carry the tombstone; the same pair is mirrored into the
+ * work row's `data` JSONB so the sync sanitizer round-trips it. Folders and
+ * exercises do NOT federate yet (they lack soft-delete columns).
  */
 
 import { query, withTransaction } from '../../lib/db.js';
 import { mirrorTimestamp } from '../../lib/pgTimestamp.js';
+import {
+  maybeJournalBeforeOverwrite, setSyncBaseHash, contentHashForRecord, flushBaseHashes,
+} from '../../lib/conflictJournal.js';
+import { WRITERS_ROOM_WORK_KIND, mergeWorkRecord } from './syncLogic.js';
 
 // ---------- folders ----------
 
@@ -112,10 +126,16 @@ function rowsToManifest(workRow, draftRows) {
   return manifest;
 }
 
-/** One work's manifest (rebuilt from its row + draft rows), or null. */
-export async function readWork(id) {
+/**
+ * One work's manifest (rebuilt from its row + draft rows), or null. Live works
+ * only by default; `includeDeleted` surfaces a tombstoned work too (federation
+ * reads it to compare `updatedAt` and to push the tombstone to peers).
+ */
+export async function readWork(id, { includeDeleted = false } = {}) {
   const work = await query(
-    `SELECT data FROM writers_room_works WHERE id = $1 AND deleted = FALSE`,
+    includeDeleted
+      ? `SELECT data FROM writers_room_works WHERE id = $1`
+      : `SELECT data FROM writers_room_works WHERE id = $1 AND deleted = FALSE`,
     [id],
   );
   if (!work.rows[0]) return null;
@@ -126,10 +146,12 @@ export async function readWork(id) {
   return rowsToManifest(work.rows[0], drafts.rows);
 }
 
-/** Every live work id (non-deleted). */
-export async function listWorkIds() {
+/** Every work id — live only by default, or all (incl. tombstones) when asked. */
+export async function listWorkIds({ includeDeleted = false } = {}) {
   const { rows } = await query(
-    `SELECT id FROM writers_room_works WHERE deleted = FALSE`,
+    includeDeleted
+      ? `SELECT id FROM writers_room_works`
+      : `SELECT id FROM writers_room_works WHERE deleted = FALSE`,
   );
   return rows.map((r) => r.id);
 }
@@ -178,94 +200,194 @@ function draftBinds(workId, draft) {
  * draft rows or a draft set out of sync with the manifest.
  */
 export async function writeWork(manifest) {
-  const now = new Date().toISOString();
-  const createdAt = mirrorTimestamp(manifest?.createdAt, now);
-  const drafts = Array.isArray(manifest?.drafts) ? manifest.drafts : [];
-  // The work row's `data` holds the manifest WITHOUT the drafts[] array — the
-  // draft rows are authoritative, so embedding them too would duplicate (and
-  // risk drifting from) the decomposed source of truth.
-  const { drafts: _omit, ...workData } = manifest;
-  await withTransaction(async (client) => {
-    await client.query(
-      `INSERT INTO writers_room_works
-         (id, folder_id, title, kind, status, active_draft_version_id,
-          pipeline_series_id, pipeline_issue_id, cd_project_id, media_collection_id,
-          data, created_at, updated_at, deleted, deleted_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13,FALSE,NULL)
-       ON CONFLICT (id) DO UPDATE SET
-         folder_id = EXCLUDED.folder_id,
-         title = EXCLUDED.title,
-         kind = EXCLUDED.kind,
-         status = EXCLUDED.status,
-         active_draft_version_id = EXCLUDED.active_draft_version_id,
-         pipeline_series_id = EXCLUDED.pipeline_series_id,
-         pipeline_issue_id = EXCLUDED.pipeline_issue_id,
-         cd_project_id = EXCLUDED.cd_project_id,
-         media_collection_id = EXCLUDED.media_collection_id,
-         data = EXCLUDED.data,
-         updated_at = EXCLUDED.updated_at,
-         deleted = FALSE,
-         deleted_at = NULL`,
-      [
-        manifest.id,
-        typeof manifest?.folderId === 'string' && manifest.folderId ? manifest.folderId : null,
-        String(manifest?.title ?? ''),
-        typeof manifest?.kind === 'string' ? manifest.kind.slice(0, 32) : null,
-        typeof manifest?.status === 'string' ? manifest.status.slice(0, 32) : null,
-        typeof manifest?.activeDraftVersionId === 'string' ? manifest.activeDraftVersionId : null,
-        typeof manifest?.pipelineSeriesId === 'string' ? manifest.pipelineSeriesId : null,
-        typeof manifest?.pipelineIssueId === 'string' ? manifest.pipelineIssueId : null,
-        typeof manifest?.cdProjectId === 'string' ? manifest.cdProjectId : null,
-        typeof manifest?.mediaCollectionId === 'string' ? manifest.mediaCollectionId : null,
-        JSON.stringify(workData),
-        createdAt,
-        mirrorTimestamp(manifest?.updatedAt, createdAt),
-      ],
-    );
-    for (const draft of drafts) {
-      if (!draft || typeof draft.id !== 'string') continue;
-      await client.query(
-        `INSERT INTO writers_room_draft_versions
-           (id, work_id, label, content_file, content_hash, word_count,
-            segment_index, created_from_version_id, data, created_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9::jsonb,$10)
-         ON CONFLICT (id) DO UPDATE SET
-           work_id = EXCLUDED.work_id,
-           label = EXCLUDED.label,
-           content_file = EXCLUDED.content_file,
-           content_hash = EXCLUDED.content_hash,
-           word_count = EXCLUDED.word_count,
-           segment_index = EXCLUDED.segment_index,
-           created_from_version_id = EXCLUDED.created_from_version_id,
-           data = EXCLUDED.data`,
-        draftBinds(manifest.id, draft),
-      );
-    }
-    // Prune draft rows that are no longer part of the manifest (version delete).
-    const keepIds = drafts.map((d) => d?.id).filter((id) => typeof id === 'string');
-    if (keepIds.length > 0) {
-      await client.query(
-        `DELETE FROM writers_room_draft_versions WHERE work_id = $1 AND id <> ALL($2::text[])`,
-        [manifest.id, keepIds],
-      );
-    } else {
-      await client.query(`DELETE FROM writers_room_draft_versions WHERE work_id = $1`, [manifest.id]);
-    }
-  });
+  await withTransaction((client) => persistWorkTx(client, manifest));
   return manifest;
 }
 
 /**
- * Hard-delete a work and its draft rows (the file backend rm -rf's the dir; the
- * DB backend mirrors that destructive delete rather than tombstoning, since
- * Writers Room is not federated so there are no peers to propagate a tombstone
- * to). local.js still rm's the on-disk .md bodies. Idempotent.
+ * Upsert a work manifest + its draft rows on an open transaction client. Shared
+ * by `writeWork` (its own transaction) and `mergeWorksFromSync` (the per-record
+ * merge transaction). The work row's `data` holds the manifest WITHOUT the
+ * drafts[] array — the draft rows are authoritative — but WITH the normalized
+ * soft-delete pair so the sync sanitizer round-trips a tombstone. Honors
+ * `manifest.deleted`/`manifest.deletedAt` (default live) so a tombstone merge
+ * persists the deletion instead of resurrecting the row.
+ */
+async function persistWorkTx(client, manifest) {
+  const now = new Date().toISOString();
+  const createdAt = mirrorTimestamp(manifest?.createdAt, now);
+  // `drafts` absent (not an array) means "don't touch the draft rows" — the
+  // soft-delete tombstone path persists only the work row and must KEEP the
+  // existing draft rows (+ .md bodies) until hard-prune. An empty array still
+  // means "authoritative empty set → delete all draft rows" (the original
+  // behavior writeWork relied on for a version delete).
+  const hasDrafts = Array.isArray(manifest?.drafts);
+  const drafts = hasDrafts ? manifest.drafts : [];
+  const deleted = manifest?.deleted === true;
+  const deletedAt = deleted ? mirrorTimestamp(manifest?.deletedAt, now) : null;
+  const { drafts: _omit, ...rest } = manifest;
+  // Mirror the tombstone trio INTO the JSONB so readWork(includeDeleted) surfaces
+  // it to the sync sanitizer (the columns alone are never read back into data).
+  const workData = { ...rest, deleted, deletedAt };
+  await client.query(
+    `INSERT INTO writers_room_works
+       (id, folder_id, title, kind, status, active_draft_version_id,
+        pipeline_series_id, pipeline_issue_id, cd_project_id, media_collection_id,
+        data, created_at, updated_at, deleted, deleted_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13,$14,$15)
+     ON CONFLICT (id) DO UPDATE SET
+       folder_id = EXCLUDED.folder_id,
+       title = EXCLUDED.title,
+       kind = EXCLUDED.kind,
+       status = EXCLUDED.status,
+       active_draft_version_id = EXCLUDED.active_draft_version_id,
+       pipeline_series_id = EXCLUDED.pipeline_series_id,
+       pipeline_issue_id = EXCLUDED.pipeline_issue_id,
+       cd_project_id = EXCLUDED.cd_project_id,
+       media_collection_id = EXCLUDED.media_collection_id,
+       data = EXCLUDED.data,
+       updated_at = EXCLUDED.updated_at,
+       deleted = EXCLUDED.deleted,
+       deleted_at = EXCLUDED.deleted_at`,
+    [
+      manifest.id,
+      typeof manifest?.folderId === 'string' && manifest.folderId ? manifest.folderId : null,
+      String(manifest?.title ?? ''),
+      typeof manifest?.kind === 'string' ? manifest.kind.slice(0, 32) : null,
+      typeof manifest?.status === 'string' ? manifest.status.slice(0, 32) : null,
+      typeof manifest?.activeDraftVersionId === 'string' ? manifest.activeDraftVersionId : null,
+      typeof manifest?.pipelineSeriesId === 'string' ? manifest.pipelineSeriesId : null,
+      typeof manifest?.pipelineIssueId === 'string' ? manifest.pipelineIssueId : null,
+      typeof manifest?.cdProjectId === 'string' ? manifest.cdProjectId : null,
+      typeof manifest?.mediaCollectionId === 'string' ? manifest.mediaCollectionId : null,
+      JSON.stringify(workData),
+      createdAt,
+      mirrorTimestamp(manifest?.updatedAt, createdAt),
+      deleted,
+      deletedAt,
+    ],
+  );
+  if (!hasDrafts) return; // tombstone-only persist — leave draft rows untouched
+  for (const draft of drafts) {
+    if (!draft || typeof draft.id !== 'string') continue;
+    await client.query(
+      `INSERT INTO writers_room_draft_versions
+         (id, work_id, label, content_file, content_hash, word_count,
+          segment_index, created_from_version_id, data, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9::jsonb,$10)
+       ON CONFLICT (id) DO UPDATE SET
+         work_id = EXCLUDED.work_id,
+         label = EXCLUDED.label,
+         content_file = EXCLUDED.content_file,
+         content_hash = EXCLUDED.content_hash,
+         word_count = EXCLUDED.word_count,
+         segment_index = EXCLUDED.segment_index,
+         created_from_version_id = EXCLUDED.created_from_version_id,
+         data = EXCLUDED.data`,
+      draftBinds(manifest.id, draft),
+    );
+  }
+  // Prune draft rows that are no longer part of the manifest (version delete).
+  const keepIds = drafts.map((d) => d?.id).filter((id) => typeof id === 'string');
+  if (keepIds.length > 0) {
+    await client.query(
+      `DELETE FROM writers_room_draft_versions WHERE work_id = $1 AND id <> ALL($2::text[])`,
+      [manifest.id, keepIds],
+    );
+  } else {
+    await client.query(`DELETE FROM writers_room_draft_versions WHERE work_id = $1`, [manifest.id]);
+  }
+}
+
+/**
+ * Soft-delete a work (tombstone) so the deletion federates and an out-of-date
+ * peer can't resurrect it via the LWW merge (#1565). The work row + its draft
+ * rows + the on-disk .md bodies all stay until tombstone GC hard-prunes them
+ * (`pruneTombstonedWorks`); `deleted`/`deletedAt`/`updatedAt` stamp now so the
+ * tombstone wins on merge. Idempotent: a missing/already-deleted work is a no-op
+ * (the caller already 404s a missing work before reaching here).
  */
 export async function deleteWork(id) {
   await withTransaction(async (client) => {
-    await client.query(`DELETE FROM writers_room_draft_versions WHERE work_id = $1`, [id]);
-    await client.query(`DELETE FROM writers_room_works WHERE id = $1`, [id]);
+    const sel = await client.query(`SELECT data FROM writers_room_works WHERE id = $1 FOR UPDATE`, [id]);
+    const current = sel.rows[0]?.data;
+    if (!current || current.deleted === true) return;
+    const now = new Date().toISOString();
+    await persistWorkTx(client, { ...current, drafts: undefined, deleted: true, deletedAt: now, updatedAt: now });
   });
+}
+
+/**
+ * Merge an incoming batch of work records from a peer (per-record push). Each
+ * record's read-modify-write runs inside `withTransaction` + `SELECT … FOR
+ * UPDATE` so a concurrent local edit can't lose to (or clobber) the merge. LWW
+ * on `updatedAt` (tombstone-aware) via the shared `mergeWorkRecord` decision —
+ * identical to the file backend so the two can't drift. Mirrors
+ * `mergeProjectsFromSync`: seeds/advances the conflict-journal base hash and
+ * journals the about-to-be-overwritten local version when remote wins
+ * (best-effort, never throws into the merge). Returns `{ applied, count }`.
+ */
+export async function mergeWorksFromSync(remoteWorks, { source = { via: 'sync', peerId: null } } = {}) {
+  if (!Array.isArray(remoteWorks)) return { applied: false, count: 0 };
+  let changed = 0;
+  for (const remote of remoteWorks) {
+    const applied = await withTransaction(async (client) => {
+      // Lock the work row, then rebuild the local manifest (row data + its draft
+      // rows) so the LWW comparison + journaled snapshot see the full record.
+      const sel = await client.query(`SELECT data FROM writers_room_works WHERE id = $1 FOR UPDATE`, [remote?.id]);
+      let local = null;
+      if (sel.rows[0]) {
+        const draftRows = await client.query(
+          `SELECT data FROM writers_room_draft_versions WHERE work_id = $1 ORDER BY created_at, id`,
+          [remote.id],
+        );
+        local = rowsToManifest(sel.rows[0], draftRows.rows);
+      }
+      const { next, inserted, remoteWins, changed: didChange } = mergeWorkRecord(local, remote);
+      if (!next) return false; // malformed remote → dropped
+      if (inserted) {
+        await persistWorkTx(client, next);
+        await setSyncBaseHash(WRITERS_ROOM_WORK_KIND, next.id, contentHashForRecord(WRITERS_ROOM_WORK_KIND, next));
+        return true;
+      }
+      if (!remoteWins || !didChange) return false; // local wins, or no-op
+      await maybeJournalBeforeOverwrite({ kind: WRITERS_ROOM_WORK_KIND, id: next.id, local, remote: next, source });
+      await persistWorkTx(client, next);
+      await setSyncBaseHash(WRITERS_ROOM_WORK_KIND, next.id, contentHashForRecord(WRITERS_ROOM_WORK_KIND, next));
+      return true;
+    });
+    if (applied) changed += 1;
+  }
+  await flushBaseHashes();
+  if (changed === 0) return { applied: false, count: 0 };
+  return { applied: true, count: changed };
+}
+
+/**
+ * Hard-remove tombstoned works (+ their draft rows) whose deletedAt is older than
+ * the cutoff. Called by tombstone GC once every subscribed peer has acked the
+ * deletion. Returns the pruned ids so the facade (sync.js) can rm the on-disk .md
+ * dirs + evict each work's conflict-journal base hash. Mirrors
+ * `pruneTombstonedProjects` (the base-hash eviction lives in the facade here
+ * because the .md cleanup is a facade concern too).
+ */
+export async function pruneTombstonedWorks(olderThanMs) {
+  if (!Number.isFinite(olderThanMs)) return { pruned: 0, ids: [] };
+  const cutoffIso = new Date(olderThanMs).toISOString();
+  const ids = await withTransaction(async (client) => {
+    const { rows } = await client.query(
+      `DELETE FROM writers_room_works
+       WHERE deleted = TRUE AND deleted_at IS NOT NULL AND deleted_at < $1
+       RETURNING id`,
+      [cutoffIso],
+    );
+    const pruned = rows.map((r) => r.id);
+    if (pruned.length > 0) {
+      await client.query(`DELETE FROM writers_room_draft_versions WHERE work_id = ANY($1::text[])`, [pruned]);
+    }
+    return pruned;
+  });
+  return { pruned: ids.length, ids };
 }
 
 /**
