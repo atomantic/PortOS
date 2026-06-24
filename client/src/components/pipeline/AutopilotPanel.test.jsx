@@ -210,6 +210,15 @@ describe('AutopilotPanel', () => {
     expect(screen.getByText(/Verifying arc/i)).toBeInTheDocument();
   });
 
+  // #1578 — per-check editorial telemetry forwarded up the autopilot SSE stream
+  // renders as a live label with the severity breakdown, not the raw frame type.
+  it('renders a forwarded per-check editorial frame with its severity breakdown', async () => {
+    getPipelineAutopilotStatus.mockResolvedValue({ autopilot: { status: 'running' }, active: true });
+    sseLatest = { type: 'check:complete', scope: 'editorialChecks', checkId: 'prose.info-dumping', label: 'Info dumping', count: 3, bySeverity: { high: 1, medium: 2, low: 0 } };
+    renderPanel({ id: 's1', targetFormat: 'comic' });
+    expect(await screen.findByText(/Editorial check: Info dumping — 3 finding\(s\) \(1H\/2M\/0L\)/i)).toBeInTheDocument();
+  });
+
   it('renders canon readiness gaps with a link to the issue Nouns page', async () => {
     getPipelineSeriesCanonReadiness.mockResolvedValue({
       ready: false,

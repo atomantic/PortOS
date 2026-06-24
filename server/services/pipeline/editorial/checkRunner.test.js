@@ -145,6 +145,29 @@ describe('runEditorialChecks', () => {
     expect(naming.count).toBeGreaterThan(0);
   });
 
+  // #1578 — per-check telemetry: a severity breakdown on each completed check.
+  it('reports a per-check severity breakdown that sums to the count', async () => {
+    const result = await runEditorialChecks('s1');
+    const naming = result.perCheck.find((p) => p.checkId === 'naming.dissimilar-names');
+    expect(naming.bySeverity).toEqual(expect.objectContaining({ high: expect.any(Number), medium: expect.any(Number), low: expect.any(Number) }));
+    const { high, medium, low } = naming.bySeverity;
+    expect(high + medium + low).toBe(naming.count);
+  });
+
+  // #1578 — the runner emits check:start / check:complete progress frames so the
+  // autopilot SSE stream can show per-check progress mid-pass, not just a total.
+  it('emits check:start and check:complete progress frames with a severity breakdown', async () => {
+    const frames = [];
+    await runEditorialChecks('s1', { onProgress: (e) => frames.push(e) });
+    const starts = frames.filter((f) => f.type === 'check:start');
+    const completes = frames.filter((f) => f.type === 'check:complete');
+    expect(starts.length).toBeGreaterThan(0);
+    expect(completes.length).toBe(starts.length);
+    const naming = completes.find((f) => f.checkId === 'naming.dissimilar-names');
+    expect(naming.label).toBeTruthy();
+    expect(naming.bySeverity).toEqual(expect.objectContaining({ high: expect.any(Number), medium: expect.any(Number), low: expect.any(Number) }));
+  });
+
   it('re-running dedups findings (checkId-aware key)', async () => {
     await runEditorialChecks('s1');
     const afterFirst = seedStore.length;

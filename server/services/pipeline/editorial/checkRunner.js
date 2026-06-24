@@ -32,6 +32,21 @@ import { recordTrendSnapshot } from '../editorialScore.js';
 import { readReadinessGate } from '../../../lib/editorial/index.js';
 import { canonicalStringify } from '../../../lib/objects.js';
 
+// Per-check severity breakdown for telemetry (#1578). Bucket a check's findings
+// by severity so the autopilot SSE stream can show a per-check high/medium/low
+// breakdown mid-run, not just a total count. Mirror manuscriptReview's
+// sanitizeComment normalization (unknown/absent → 'medium') so the live frame
+// agrees with how the findings ultimately score in the review.
+const SEVERITY_BUCKETS = Object.freeze(['high', 'medium', 'low']);
+function severityBreakdown(findings) {
+  const counts = { high: 0, medium: 0, low: 0 };
+  for (const f of Array.isArray(findings) ? findings : []) {
+    const sev = SEVERITY_BUCKETS.includes(f?.severity) ? f.severity : 'medium';
+    counts[sev] += 1;
+  }
+  return counts;
+}
+
 // Source-content fingerprinting for finding staleness (#1345, #1387). Each finding
 // is stamped with a hash of the exact content its check analyzed; the manuscript
 // editor / triage view flags a finding `stale` once that content drifts.
@@ -513,7 +528,7 @@ export async function runEditorialChecks(seriesId, options = {}) {
     try {
       if (typeof check.gate === 'function' && !check.gate(ctx)) {
         perCheck.push({ checkId: check.id, count: 0, skipped: true });
-        onProgress?.({ type: 'check:complete', checkId: check.id, count: 0, skipped: true });
+        onProgress?.({ type: 'check:complete', checkId: check.id, label: check.label, count: 0, skipped: true });
         continue;
       }
       const raw = (await check.run(ctx)) || [];
@@ -525,13 +540,14 @@ export async function runEditorialChecks(seriesId, options = {}) {
       // for fresh-mode reconciliation. LLM checks stay merge-only (an absent
       // finding could just be sampling noise).
       if (check.kind === 'deterministic') deterministicRanIds.add(check.id);
-      perCheck.push({ checkId: check.id, count: stamped.length });
-      onProgress?.({ type: 'check:complete', checkId: check.id, count: stamped.length });
+      const bySeverity = severityBreakdown(stamped);
+      perCheck.push({ checkId: check.id, count: stamped.length, bySeverity });
+      onProgress?.({ type: 'check:complete', checkId: check.id, label: check.label, count: stamped.length, bySeverity });
     } catch (err) {
       const message = (err?.message || String(err)).slice(0, 500);
       console.error(`❌ editorial check ${check.id} failed — series=${String(seriesId).slice(0, 12)} ${message}`);
       perCheck.push({ checkId: check.id, error: message });
-      onProgress?.({ type: 'check:complete', checkId: check.id, error: message });
+      onProgress?.({ type: 'check:complete', checkId: check.id, label: check.label, error: message });
     }
     // Re-check AFTER the (possibly long-running LLM) check so a cancellation
     // during the final check is caught before the seed below — otherwise a

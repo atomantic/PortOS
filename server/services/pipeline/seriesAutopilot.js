@@ -1051,7 +1051,13 @@ async function runEditorialChecksPass(sId, record) {
   // (the runner re-checks `signal.aborted` after each check). A live getter
   // reflects `record.cancelRequested` without a separate controller to manage.
   const signal = { get aborted() { return record.cancelRequested; } };
-  const result = await runEditorialChecks(sId, { ...providerOverrideOpts(record), checkIds, settings, signal }).catch((err) => {
+  // #1578 — forward the runner's per-check check:start/check:complete frames up
+  // the autopilot SSE stream (tagged scope:'editorialChecks' so the UI groups
+  // them with the editorialChecks verify:round). Without this the only signal
+  // during a long (issues × checks) pass is the single terminal verify:round
+  // total — no per-check progress or severity breakdown.
+  const onProgress = (event) => broadcast(sId, { ...event, scope: 'editorialChecks' });
+  const result = await runEditorialChecks(sId, { ...providerOverrideOpts(record), checkIds, settings, signal, onProgress }).catch((err) => {
     console.log(`⚠️ autopilot: editorial checks failed for ${sId.slice(0, 12)}: ${err.message}`);
     return null;
   });

@@ -1443,6 +1443,19 @@ describe('autopilot conductor', () => {
     );
   });
 
+  // #1578 — the checks pass forwards the runner's per-check progress frames up
+  // the autopilot SSE stream, so it must hand runEditorialChecks an onProgress
+  // callback (without it the only signal during a long pass is the terminal total).
+  it('passes an onProgress forwarder to the editorial checks runner (#1578)', async () => {
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { includeVisual: false });
+    await waitFor(runFinished(seriesId));
+    expect(checkRunnerSpies.runEditorialChecks).toHaveBeenCalledWith(
+      seriesId,
+      expect.objectContaining({ onProgress: expect.any(Function) }),
+    );
+  });
+
   it('files a CoS gap task when a verify gate stalls (fileGaps)', async () => {
     verifyFindings = [{ severity: 'high', problem: 'unresolved plot hole' }];
     const { seriesId } = await seedComplete();

@@ -98,6 +98,16 @@ function frameLabel(f) {
     case 'step:complete': return `${stepLabel(f.kind)} done`;
     case 'step:skip': return `Skipped ${stepLabel(f.kind)}${f.reason ? ` — ${f.reason}` : ''}`;
     case 'verify:round': return `${f.scope} check — ${f.blocking} blocking of ${f.findings} finding(s)${f.errored > 0 ? ` · ⚠️ ${f.errored} errored` : ''}`;
+    // #1578 — per-check telemetry forwarded from the editorial-checks runner.
+    case 'check:start': return `Editorial check: ${f.label || f.checkId}…`;
+    case 'check:complete': {
+      const name = f.label || f.checkId;
+      if (f.error) return `Editorial check: ${name} — ⚠️ errored`;
+      if (f.skipped) return `Editorial check: ${name} — skipped`;
+      const s = f.bySeverity;
+      const sev = s && (s.high || s.medium || s.low) ? ` (${s.high}H/${s.medium}M/${s.low}L)` : '';
+      return `Editorial check: ${name} — ${f.count} finding(s)${sev}`;
+    }
     case 'render:queued': return `Queued draft render: ${f.target}`;
     case 'gap:filed': return `Filed CoS task (${f.gapKind})`;
     case 'paused': return `Paused — ${f.reason}`;
