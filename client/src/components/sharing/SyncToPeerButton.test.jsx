@@ -53,6 +53,27 @@ describe('SyncToPeerButton', () => {
     expect(screen.queryByText(/No-id peer/i)).toBeNull();
   });
 
+  it('a full-sync peer is subscribable even with no per-category map', async () => {
+    // peerCanReceiveOutbound must honor fullSync — a mirror-everything peer can
+    // always receive, regardless of its syncCategories.
+    api.getInstances.mockResolvedValue({
+      peers: [
+        { instanceId: 'peer-full', name: 'Peer Full', enabled: true, status: 'online', host: 'host-f.tail.net', fullSync: true, syncCategories: {} },
+      ],
+    });
+    api.subscribeToPeer.mockResolvedValue({ subscription: { id: 'peer-universe-u1-peer-full' } });
+    const user = userEvent.setup();
+    render(<SyncToPeerButton recordKind="universe" recordId="u1" />);
+    await user.click(screen.getByRole('button', { name: /Sync/i }));
+    const row = await screen.findByRole('button', { name: /Peer Full/i });
+    expect(row).not.toBeDisabled();
+    await user.click(row);
+    await waitFor(() => expect(api.subscribeToPeer).toHaveBeenCalledWith(
+      { peerId: 'peer-full', recordKind: 'universe', recordId: 'u1' },
+      expect.anything(),
+    ));
+  });
+
   it('shows a filled check when already subscribed to that peer', async () => {
     api.listPeerSubscriptions.mockResolvedValue({
       subscriptions: [{

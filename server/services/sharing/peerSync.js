@@ -552,20 +552,27 @@ export async function autoSubscribePeerToAllRecords(peerId, recordKind) {
 export async function getFullSyncCoverageForPeer(peerId) {
   const empty = { total: 0, confirmed: 0, pending: 0, fullyMirrored: true, byKind: {} };
   if (!isNonEmptyStr(peerId)) return empty;
-  const byKind = {};
-  let total = 0;
-  let confirmed = 0;
-  for (const kind of PEER_SUBSCRIBABLE_KINDS) {
-    const records = await listRecordsForKind(kind).catch(() => []);
-    const subs = await listPeerSubscriptions({ peerId, recordKind: kind }).catch(() => []);
+  // Each kind's record list + subscription list are independent I/O — fetch all
+  // kinds (and the two lists within a kind) concurrently.
+  const perKind = await Promise.all(PEER_SUBSCRIBABLE_KINDS.map(async (kind) => {
+    const [records, subs] = await Promise.all([
+      listRecordsForKind(kind).catch(() => []),
+      listPeerSubscriptions({ peerId, recordKind: kind }).catch(() => []),
+    ]);
     // A record counts as confirmed only when its subscription carries a
     // confirmed-delivery water-mark — a created-but-never-pushed sub is pending.
     const confirmedIds = new Set(subs.filter(s => s.lastConfirmedPushedAt).map(s => s.recordId));
     const kindTotal = records.length;
     const kindConfirmed = records.filter(r => confirmedIds.has(r.id)).length;
-    byKind[kind] = { total: kindTotal, confirmed: kindConfirmed, pending: kindTotal - kindConfirmed };
-    total += kindTotal;
-    confirmed += kindConfirmed;
+    return { kind, total: kindTotal, confirmed: kindConfirmed, pending: kindTotal - kindConfirmed };
+  }));
+  const byKind = {};
+  let total = 0;
+  let confirmed = 0;
+  for (const k of perKind) {
+    byKind[k.kind] = { total: k.total, confirmed: k.confirmed, pending: k.pending };
+    total += k.total;
+    confirmed += k.confirmed;
   }
   const pending = total - confirmed;
   return { total, confirmed, pending, fullyMirrored: pending === 0, byKind };
@@ -2683,13 +2690,14 @@ export function installPeerSyncListener() {
   onPeerOnline = (peer) => {
     if (!peer?.instanceId) return;
     (async () => {
-      const cats = peer.syncCategories || {};
-      // KIND_TO_CATEGORY['universe']='universe', ['series']='pipeline'.
-      // Iterate the kind keys so the (kind, category) mapping stays single-
-      // sourced from KIND_TO_CATEGORY.
+      // peerHasCategory owns the (kind → category) mapping and the fullSync
+      // short-circuit, so iterate the kinds and let it decide.
       for (const kind of PEER_SUBSCRIBABLE_KINDS) {
-        const cat = KIND_TO_CATEGORY[kind];
-        if (cats[cat] === true) {
+        // peerHasCategory short-circuits true for a full-sync peer, so a peer
+        // that came online with its category bits off (or a freshly-added
+        // full-sync peer whose instanceId we only just learned) still back-
+        // subscribes every kind here.
+        if (peerHasCategory(peer, kind)) {
           await autoSubscribePeerToAllRecords(peer.instanceId, kind).catch(() => {});
         }
       }

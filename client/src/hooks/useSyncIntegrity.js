@@ -137,7 +137,9 @@ export function useSyncIntegrity(kind, { peers: peersProp } = {}) {
           p.syncEnabled !== false &&
           p.instanceId &&
           category &&
-          p.syncCategories?.[category] === true,
+          // A full-sync peer mirrors every category, so it's eligible regardless
+          // of its per-category map.
+          (p.fullSync === true || p.syncCategories?.[category] === true),
       );
 
       if (gen !== genRef.current) return; // stale

@@ -94,6 +94,8 @@ export default function SyncToPeerButton({
     // Inbound-only direction → outbound pushes silently dropped.
     if (Array.isArray(peer.directions) && peer.directions.length > 0
         && !peer.directions.includes('outbound')) return false;
+    // A full-sync peer mirrors every category, so it can always receive.
+    if (peer.fullSync === true) return true;
     const cats = peer.syncCategories;
     return !!cats && typeof cats === 'object' && cats[requiredCategory] === true;
   };
