@@ -94,7 +94,7 @@ import * as autoRunner from './autoRunner.js';
 import { seedReviewFromFindings, getReview } from './manuscriptReview.js';
 import { runEditorialChecks, buildEditorialCheckPlan, enabledChecksConsumeReverseOutline, summarizeCheckErrors } from './editorial/checkRunner.js';
 import { generateReverseOutline, getReverseOutline } from './reverseOutline.js';
-import { computeHealth, openBlockers } from './editorialScore.js';
+import { computeHealth, openBlockers, READINESS_GATES, resolveReadinessGate } from './editorialScore.js';
 import { getSettings } from '../settings.js';
 import { readReadinessGate } from '../../lib/editorial/index.js';
 import { generateManuscriptFix, acceptManuscriptFix } from './manuscriptFix.js';
@@ -146,6 +146,18 @@ export function resolveAutopilotRounds(options = {}, settings = null) {
     maxEditorialRounds: pick('maxEditorialRounds', 'maxEditorialRounds', MAX_EDITORIAL_ROUNDS),
     maxBeatContinuityRounds: pick('maxBeatContinuityRounds', 'maxBeatContinuityRounds', MAX_BEAT_CONTINUITY_ROUNDS),
   };
+}
+
+// Resolve the effective editorial-health readiness gate for a run (#1580): an
+// explicit per-run option wins, then the persisted
+// pipelineEditorialChecks.readinessGate, then null — the caller resolves null to
+// DEFAULT_READINESS_GATE via resolveReadinessGate. Mirrors resolveAutopilotRounds
+// so the gate is overridable per-run exactly like the round bounds; stamped onto
+// the run options once at start so the loop, the dry-run plan, and a later resume
+// all read the same effective gate.
+export function resolveAutopilotReadinessGate(options = {}, settings = null) {
+  if (READINESS_GATES.includes(options?.readinessGate)) return options.readinessGate;
+  return readReadinessGate(settings);
 }
 
 // Per-gate copy for the non-convergence pause — shared by the arc-verify and
@@ -1125,8 +1137,11 @@ async function runEditorialChecksPass(sId, record) {
 // fixes; remaining blockers need a human (or a re-run after edits).
 async function runEditorialHealthGate(sId, record) {
   if (record.cancelRequested) return { canceled: true };
-  const settings = await getSettings().catch(() => null);
-  const gate = readReadinessGate(settings) || undefined;
+  // The effective gate (per-run override → persisted setting → null) was resolved
+  // and stamped onto record.options at start (#1580), mirroring the round bounds —
+  // so the loop and the dry-run plan can't disagree on which gate applied. null
+  // falls through to DEFAULT_READINESS_GATE inside computeHealth/openBlockers.
+  const gate = record.options.readinessGate || undefined;
   // Do NOT swallow a getReview error into an empty review — that would fail OPEN
   // (the gate would pass on a corrupt/unreadable store and let the run proceed to
   // visuals without verifying health). Let it bubble to the coordinator's
@@ -1473,7 +1488,10 @@ function buildDryRunPlan(series, issues, options, costContext = {}) {
       estActions: llmCheckCount > 0 ? 1 : 0,
       estLlmCalls,
     });
-    plan.push({ kind: 'editorialHealthGate', count: 1, note: 'editorial health readiness gate (#1316)', estActions: 0 });
+    // Surface the effective readiness gate (#1580) so a per-run override is
+    // visible in the dry-run plan, mirroring how roundsNote exposes the bounds.
+    const gate = resolveReadinessGate(options?.readinessGate);
+    plan.push({ kind: 'editorialHealthGate', count: 1, note: `editorial health readiness gate (#1316) — gate: ${gate}`, estActions: 0 });
   }
   if (VISUAL_DRAFT_ENABLED && wantsVisual(options) && wantsComic(series, options)) {
     // canonVerify runs an LLM pass but bills no cos action (token-only) — 0 budget.
@@ -1514,7 +1532,11 @@ export async function startSeriesAutopilot(sId, options = {}) {
   // effective values. A resume reuses this same path, so a raised persisted
   // setting takes effect on the next Resume without re-specifying it.
   const settings = await getSettings().catch(() => null);
-  const runOptions = { ...options, ...resolveAutopilotRounds(options, settings) };
+  const runOptions = {
+    ...options,
+    ...resolveAutopilotRounds(options, settings),
+    readinessGate: resolveAutopilotReadinessGate(options, settings),
+  };
 
   if (existing) {
     // A finished run still in its replay window — evict it so this fresh run
