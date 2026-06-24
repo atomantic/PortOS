@@ -918,11 +918,16 @@ export async function applyReciprocalSync(instanceId, categories, { fullSync } =
  * peer that's offline or on an older version (404s the endpoint) just stays
  * one-directional until the next toggle. Returns `{ ok, reason }`.
  */
-export async function requestReciprocalSync(peer, categories, { fullSync = false } = {}) {
+export async function requestReciprocalSync(peer, categories, { fullSync } = {}) {
   const self = await getSelf();
   if (!self?.instanceId) return { ok: false, reason: 'no-self-identity' };
   const sanitized = sanitizeSyncCategories(categories);
-  if (!sanitized) return { ok: false, reason: 'no-categories' };
+  // Bail only when there's genuinely nothing to say: no actionable categories
+  // AND no full-sync state to communicate. A full-sync DISABLE (fullSync:false)
+  // on a peer whose stored category map is empty must still send — otherwise the
+  // remote never learns to drop its mirror. `fullSync === undefined` means the
+  // caller didn't communicate a full-sync state at all (legacy direct callers).
+  if (!sanitized && fullSync === undefined) return { ok: false, reason: 'no-categories' };
   const url = `${peerBaseUrl(peer)}/api/instances/peers/sync-categories`;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
@@ -933,12 +938,14 @@ export async function requestReciprocalSync(peer, categories, { fullSync = false
       // Always carry our current full-sync state (true OR false) so a peer new
       // enough to understand it adopts mirror mode on enable AND drops it on
       // disable. Older peers ignore the field; on enable they still mirror via
-      // the all-on syncCategories map we sent.
-      body: JSON.stringify({ instanceId: self.instanceId, syncCategories: sanitized, fullSync: fullSync === true }),
+      // the all-on syncCategories map we sent. syncCategories defaults to {} so
+      // the receiver's required-object schema still parses a fullSync-only send.
+      body: JSON.stringify({ instanceId: self.instanceId, syncCategories: sanitized || {}, fullSync: fullSync === true }),
       signal: controller.signal
     }, peer);
     if (res.ok) {
-      console.log(`🔁 Requested reciprocal sync from ${peer.name}: ${Object.keys(sanitized).filter(k => sanitized[k]).join(',') || 'none'}`);
+      const enabledList = sanitized ? Object.keys(sanitized).filter(k => sanitized[k]).join(',') : '';
+      console.log(`🔁 Requested reciprocal sync from ${peer.name}: ${fullSync === false ? 'full-mirror-off' : (enabledList || 'none')}`);
       return { ok: true };
     }
     // 404 = peer predates this endpoint; not an error worth surfacing loudly.

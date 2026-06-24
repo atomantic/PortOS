@@ -482,6 +482,24 @@ describe('peerSync', () => {
       expect(cov.fullyMirrored).toBe(true);
     });
 
+    it('counts a record edited AFTER its last confirmed push as pending (stale content)', async () => {
+      // Record confirmed once, then edited (updatedAt in the future relative to
+      // the confirm time) — the peer has stale content, so it's not mirrored.
+      vi.mocked(getPeers).mockResolvedValue([
+        { instanceId: 'peer-a', name: 'A', enabled: true, syncEnabled: true, fullSync: true, syncCategories: {} },
+      ]);
+      vi.mocked(listUniverses).mockResolvedValue([{ id: 'u1' }]);
+      await subscribePeer({ peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' });
+      await forcePushRecord('peer-a', 'universe', 'u1'); // stamps lastConfirmedPushedAt ≈ now
+      // Now the record reports an edit far in the future relative to the confirm.
+      vi.mocked(listUniverses).mockResolvedValue([{ id: 'u1', updatedAt: '2999-01-01T00:00:00Z' }]);
+      const cov = await getFullSyncCoverageForPeer('peer-a');
+      expect(cov.total).toBe(1);
+      expect(cov.confirmed).toBe(0);
+      expect(cov.pending).toBe(1);
+      expect(cov.fullyMirrored).toBe(false);
+    });
+
     it('a created-but-unconfirmed subscription still counts as pending', async () => {
       vi.mocked(listUniverses).mockResolvedValue([{ id: 'u1' }]);
       // Push FAILS — the sub is created but never confirmed-delivered.

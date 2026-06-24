@@ -824,16 +824,22 @@ describe('instances.js', () => {
       expect(peer.fullSync).toBe(true);
     });
 
-    it('disabling fullSync reciprocates fullSync:false to the peer', async () => {
+    it('disabling fullSync reciprocates fullSync:false even with an empty category map', async () => {
+      // The empty-map case is the one the no-categories send guard used to drop:
+      // a just-disabled mirror peer whose underlying syncCategories is empty must
+      // STILL POST fullSync:false so the remote learns to drop its mirror.
       readJSONFile.mockResolvedValue({
         self: { instanceId: 'me-id' },
-        peers: [{ id: 'p1', instanceId: 'inst-A', name: 'A', enabled: true, fullSync: false, syncCategories: { brain: true } }],
+        peers: [{ id: 'p1', instanceId: 'inst-A', name: 'A', enabled: true, fullSync: false, syncCategories: {} }],
       });
       const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
       vi.stubGlobal('fetch', fetchMock);
-      await enqueueReciprocalSync('p1');
+      const result = await enqueueReciprocalSync('p1');
+      expect(result.ok).toBe(true);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
       const body = JSON.parse(fetchMock.mock.calls.at(-1)[1].body);
       expect(body.fullSync).toBe(false);
+      expect(body.syncCategories).toEqual({}); // valid object so the receiver schema parses
     });
 
     it('updateSelf persists the new-peer full-sync default', async () => {

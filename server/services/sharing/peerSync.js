@@ -559,11 +559,21 @@ export async function getFullSyncCoverageForPeer(peerId) {
       listRecordsForKind(kind).catch(() => []),
       listPeerSubscriptions({ peerId, recordKind: kind }).catch(() => []),
     ]);
-    // A record counts as confirmed only when its subscription carries a
-    // confirmed-delivery water-mark — a created-but-never-pushed sub is pending.
-    const confirmedIds = new Set(subs.filter(s => s.lastConfirmedPushedAt).map(s => s.recordId));
+    // Map each subscribed record to its confirmed-delivery water-mark (ms epoch).
+    const confirmedAtById = new Map(subs.filter(s => s.lastConfirmedPushedAt).map(s => [s.recordId, s.lastConfirmedPushedAt]));
+    // A record counts as mirrored only when a confirmed push covers its CURRENT
+    // version — the confirm happened at/after the record's last edit. A record
+    // edited after its last confirmed push (peer offline / schema-blocked since)
+    // has stale content on the peer, so it's pending, not mirrored. A created-
+    // but-never-pushed sub (no water-mark) is pending too.
     const kindTotal = records.length;
-    const kindConfirmed = records.filter(r => confirmedIds.has(r.id)).length;
+    const kindConfirmed = records.filter((r) => {
+      const confirmedAt = confirmedAtById.get(r.id);
+      if (!confirmedAt) return false;
+      const updatedAt = Date.parse(r.updatedAt);
+      // No parseable updatedAt → can't prove staleness; trust the confirmation.
+      return !Number.isFinite(updatedAt) || confirmedAt >= updatedAt;
+    }).length;
     return { kind, total: kindTotal, confirmed: kindConfirmed, pending: kindTotal - kindConfirmed };
   }));
   const byKind = {};
