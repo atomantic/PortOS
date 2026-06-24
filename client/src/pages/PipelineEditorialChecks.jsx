@@ -147,7 +147,14 @@ export default function PipelineEditorialChecks() {
     const type = runLatest.type;
     if (type !== 'complete' && type !== 'canceled' && type !== 'error') return;
     setRunActive(false);
-    if (type === 'complete') { loadFindings(seriesId); toast.success('Editorial checks complete'); }
+    if (type === 'complete') {
+      loadFindings(seriesId);
+      // #1573 — a check whose run() threw produced no findings; warn instead of a
+      // silent "complete" so an always-erroring check isn't mistaken for clean.
+      if (runLatest.errored > 0) {
+        toast.warning(`Editorial checks complete — ${runLatest.errored} check${runLatest.errored === 1 ? '' : 's'} errored: ${(runLatest.erroredCheckIds || []).join(', ')}`);
+      } else toast.success('Editorial checks complete');
+    }
     else if (type === 'canceled') toast.success('Editorial checks canceled');
     else toast.error(runLatest.error || 'Editorial checks failed');
   }, [runActive, runClosed, runLatest, seriesId]);
