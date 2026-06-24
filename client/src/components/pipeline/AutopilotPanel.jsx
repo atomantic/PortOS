@@ -156,6 +156,7 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
   const [starting, setStarting] = useState(false);
   const [mode, setMode] = useState(null);
   const [plan, setPlan] = useState(null);
+  const [planTotals, setPlanTotals] = useState(null);
   const [showOpts, setShowOpts] = useState(false);
   const [includeVisual, setIncludeVisual] = useState(true);
   const [fileGaps, setFileGaps] = useState(false);
@@ -246,8 +247,10 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
     if (latest?.type === 'start') {
       setMode(latest.mode || null);
       if (Array.isArray(latest.plan)) setPlan(latest.plan);
+      if (latest.planTotals) setPlanTotals(latest.planTotals);
     } else if (latest?.type === 'complete' && latest.dryRun && Array.isArray(latest.plan)) {
       setPlan(latest.plan);
+      if (latest.planTotals) setPlanTotals(latest.planTotals);
     }
   }, [latest]);
 
@@ -273,6 +276,7 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
   const start = useCallback(async () => {
     setStarting(true);
     setPlan(null);
+    setPlanTotals(null);
     // Collect ONLY the gates the user edited (clamped, real values — never the
     // display defaults of untouched gates, which would mask a saved setting). Send
     // them as per-run overrides AND persist them: the override makes the edit
@@ -432,9 +436,24 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
             {plan.map((p, i) => (
               <li key={i} className="flex items-center gap-1.5">
                 <ChevronRight size={10} /> {stepLabel(p.kind)} ×{p.count}{p.note ? ` — ${p.note}` : ''}
+                {Number.isFinite(p.estActions) && p.estActions > 0 ? (
+                  <span className="text-gray-500 ml-auto whitespace-nowrap">≈{p.estActions} act</span>
+                ) : null}
               </li>
             ))}
           </ul>
+          {/* #1576 — estimated budget cost so a large series on a small daily cap
+              can see, before starting, whether it will exhaust the cos action
+              budget on text/verify and never reach editorial. */}
+          {planTotals && (Number.isFinite(planTotals.estActions) || Number.isFinite(planTotals.estLlmCalls)) ? (
+            <div className="mt-1.5 pt-1.5 border-t border-port-border/60 text-gray-400 flex items-center gap-1.5">
+              <span className="uppercase tracking-wider text-gray-500">Est. budget</span>
+              <span className="ml-auto whitespace-nowrap">
+                ≈{planTotals.estActions || 0} cos action(s)
+                {planTotals.estLlmCalls ? ` · ~${planTotals.estLlmCalls} editorial-check LLM call(s)` : ''}
+              </span>
+            </div>
+          ) : null}
         </div>
       ) : null}
 

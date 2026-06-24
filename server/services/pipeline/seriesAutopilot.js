@@ -207,6 +207,40 @@ function divergencePauseReason(gate, blockingCount, rounds) {
 // Dry-run plan note for a bounded gate: "skipped (0 rounds)" or "up to N rounds".
 const roundsNote = (rounds) => (rounds === 0 ? 'skipped (0 rounds)' : `up to ${rounds} rounds`);
 
+// Dry-run cost model (#1576) — each planned step carries an estimated
+// `estActions`: the number of cos actions it bills via recordDomainUsage('cos',
+// { actions }), i.e. the unit the daily budget cap gates on. Surfacing it lets a
+// user see, before starting, whether a large series will exhaust the cap on
+// text/verify and never reach editorial. Estimates are approximate and lean
+// toward the high end — convergence loops counted at their max rounds (they
+// usually converge sooner), per-item steps at one action per item (retries
+// excluded). A few steps cost nothing against the cap (editorialHealthGate,
+// canonVerify) and carry estActions: 0. One known UNDER-count: the editorial
+// review's per-comment auto-fixes each bill an extra action and scale with the
+// number of blocking findings, which isn't knowable at plan time — so a heavy
+// editorial pass can exceed its estimate.
+//
+// A bounded verify→resolve convergence loop (arc, beat-continuity, editorial)
+// bills one action per verify plus (roughly) one per resolve; the final round
+// never resolves (it converges or pauses). Estimate: rounds verifies +
+// (rounds-1) resolves.
+const convergenceLoopActions = (rounds) => (rounds <= 0 ? 0 : 2 * rounds - 1);
+
+// Sum a dry-run plan's per-step estimates into run totals. `estActions` is the
+// budget-relevant total (cos daily-cap units); `estLlmCalls` aggregates the
+// check-pass fan-out (editorialChecks bills a single cos action but issues many
+// LLM calls — see the rough proxy at its plan.push). Pure — safe to call at
+// broadcast time and in tests.
+function summarizePlanCost(plan) {
+  return (Array.isArray(plan) ? plan : []).reduce(
+    (acc, step) => ({
+      estActions: acc.estActions + (Number.isFinite(step?.estActions) ? step.estActions : 0),
+      estLlmCalls: acc.estLlmCalls + (Number.isFinite(step?.estLlmCalls) ? step.estLlmCalls : 0),
+    }),
+    { estActions: 0, estLlmCalls: 0 },
+  );
+}
+
 // When true, a comic-target run with `includeVisual` proceeds past the text +
 // editorial terminal into draft cover/page rendering (see runVisualDraft).
 export const VISUAL_DRAFT_ENABLED = true;
@@ -1369,21 +1403,27 @@ async function dispatchStep(sId, step, record) {
 // plan (counts of every unmet step) rather than returning only the next one —
 // so it can't reuse the single-step resolver. Kept deliberately in sync by
 // hand; they share the same predicates (textReady, isComicTarget, isStageReady).
-function buildDryRunPlan(series, issues, options) {
+// `costContext.editorialLlmCheckCount` (optional) is the resolved number of
+// enabled LLM-kind editorial checks for this run's subset — supplied by the
+// caller (which has loaded settings) so this stays a pure, synchronous function.
+// When provided it drives the editorialChecks step's estLlmCalls (issues × LLM
+// checks) and whether that pass bills a cos action at all; absent, the step
+// estimates a single LLM check.
+function buildDryRunPlan(series, issues, options, costContext = {}) {
   const plan = [];
   const ordered = orderedIssues(issues);
   const seasons = Array.isArray(series?.seasons) ? [...series.seasons].sort(byNumber) : [];
   // Mirror the resolver: generateArc runs when arc text is missing OR there are
   // no volumes at all (an arc-only series), so a dry-run plan must show it too.
   const noArc = !series?.arc?.logline && !series?.arc?.summary;
-  if (noArc || seasons.length === 0) plan.push({ kind: 'generateArc', count: 1 });
+  if (noArc || seasons.length === 0) plan.push({ kind: 'generateArc', count: 1, estActions: 1 });
   const emptySeasons = seasons.filter((s) => !ordered.some((i) => i.seasonId === s.id));
-  if (emptySeasons.length) plan.push({ kind: 'generateEpisodes', count: emptySeasons.length });
+  if (emptySeasons.length) plan.push({ kind: 'generateEpisodes', count: emptySeasons.length, estActions: emptySeasons.length });
   const arcRounds = Number.isInteger(options?.maxArcVerifyRounds) ? options.maxArcVerifyRounds : MAX_ARC_VERIFY_ROUNDS;
-  plan.push({ kind: 'verifyArc', count: 1, note: roundsNote(arcRounds) });
+  plan.push({ kind: 'verifyArc', count: 1, note: roundsNote(arcRounds), estActions: convergenceLoopActions(arcRounds) });
   const beatsNeeded = seasons.filter((s) =>
     ordered.some((i) => i.seasonId === s.id && !isStageReady(i.stages?.idea))).length;
-  if (beatsNeeded) plan.push({ kind: 'beatSheet', count: beatsNeeded });
+  if (beatsNeeded) plan.push({ kind: 'beatSheet', count: beatsNeeded, estActions: beatsNeeded });
   // beatContinuity (#1510) runs once when the run will have a beat corpus to
   // check: beats already exist, OR beatSheet will generate them this run. Mirror
   // the resolver's `ordered.some(issueHasBeats)` gate (post-generation), so a
@@ -1392,31 +1432,57 @@ function buildDryRunPlan(series, issues, options) {
     const bcRounds = Number.isInteger(options?.maxBeatContinuityRounds)
       ? options.maxBeatContinuityRounds
       : MAX_BEAT_CONTINUITY_ROUNDS;
-    plan.push({ kind: 'beatContinuity', count: 1, note: roundsNote(bcRounds) });
+    plan.push({ kind: 'beatContinuity', count: 1, note: roundsNote(bcRounds), estActions: convergenceLoopActions(bcRounds) });
   }
   const textNeeded = ordered.filter((i) => !textReady(i, series, options)).length;
-  if (textNeeded) plan.push({ kind: 'textStages', count: textNeeded });
-  if (wantsComic(series, options)) plan.push({ kind: 'scriptVerify', count: ordered.length });
+  if (textNeeded) plan.push({ kind: 'textStages', count: textNeeded, estActions: textNeeded });
+  if (wantsComic(series, options)) plan.push({ kind: 'scriptVerify', count: ordered.length, estActions: ordered.length });
   const edRounds = Number.isInteger(options?.maxEditorialRounds) ? options.maxEditorialRounds : MAX_EDITORIAL_ROUNDS;
-  plan.push({ kind: 'editorialReview', count: 1, note: roundsNote(edRounds) });
+  // Editorial review is a verify→auto-fix convergence loop like the arc gate, so
+  // the per-round estimate mirrors it (analyze + one resolve batch / round). The
+  // per-comment auto-fixes within a round bill additionally and scale with the
+  // number of blocking findings, which isn't knowable at plan time.
+  plan.push({ kind: 'editorialReview', count: 1, note: roundsNote(edRounds), estActions: convergenceLoopActions(edRounds) });
   // maxEditorialRounds === 0 skips the whole editorial gate in execute mode
   // (runEditorial marks editorialReviewed + editorialChecksReviewed +
   // editorialHealthReady), so the plan must not advertise the registry checks or
   // the health gate that won't run.
   if (edRounds !== 0) {
-    plan.push({ kind: 'reverseOutline', count: 1, note: 'refresh scene segmentation for editorial checks (#1349)' });
+    plan.push({ kind: 'reverseOutline', count: 1, note: 'refresh scene segmentation for editorial checks (#1349)', estActions: 1 });
     // #1575 — when a per-run subset is set, the plan must say so rather than imply
     // the full enabled set runs.
     const editorialSubset = editorialSubsetIds(options);
-    plan.push({ kind: 'editorialChecks', count: 1, note: editorialSubset
+    // The checks pass bills a single cos action (only when an LLM check runs) but
+    // fans out to many LLM calls. The real call count depends on how each check
+    // chunks the stitched manuscript by provider context window, so it isn't
+    // knowable at plan time — `issues × enabled LLM checks` is a rough proxy that
+    // scales with both series size and check count, surfaced so a large series's
+    // check cost is visible. When the caller didn't resolve the enabled-check
+    // count, assume one LLM check runs.
+    const llmCheckCount = Number.isInteger(costContext?.editorialLlmCheckCount)
+      ? costContext.editorialLlmCheckCount
+      : 1;
+    const estLlmCalls = ordered.length * llmCheckCount;
+    const checksNote = editorialSubset
       ? `per-run subset of ${editorialSubset.length} editorial check(s) (#1575)`
-      : 'enabled editorial checks (#1284)' });
-    plan.push({ kind: 'editorialHealthGate', count: 1, note: 'editorial health readiness gate (#1316)' });
+      : 'enabled editorial checks (#1284)';
+    plan.push({
+      kind: 'editorialChecks',
+      count: 1,
+      note: llmCheckCount > 0 ? `${checksNote} — ~${estLlmCalls} LLM call(s)` : checksNote,
+      estActions: llmCheckCount > 0 ? 1 : 0,
+      estLlmCalls,
+    });
+    plan.push({ kind: 'editorialHealthGate', count: 1, note: 'editorial health readiness gate (#1316)', estActions: 0 });
   }
   if (VISUAL_DRAFT_ENABLED && wantsVisual(options) && wantsComic(series, options)) {
-    plan.push({ kind: 'canonVerify', count: 1, note: 'descriptive integrity of drawn nouns' });
+    // canonVerify runs an LLM pass but bills no cos action (token-only) — 0 budget.
+    plan.push({ kind: 'canonVerify', count: 1, note: 'descriptive integrity of drawn nouns (no budget cost)', estActions: 0 });
     const visualNeeded = ordered.filter((i) => !visualReady(i)).length;
-    if (visualNeeded) plan.push({ kind: 'visualDraft', count: visualNeeded, note: 'cover + back + all pages (draft)' });
+    // Each draft render bills one cos action: cover + back per issue, plus one per
+    // interior page. The interior-page count isn't known until the script parses,
+    // so the estimate counts the two covers and notes the per-page additions.
+    if (visualNeeded) plan.push({ kind: 'visualDraft', count: visualNeeded, note: 'cover + back + all pages (draft) — +1 action per interior page', estActions: visualNeeded * 2 });
   }
   return plan;
 }
@@ -1505,14 +1571,21 @@ export async function startSeriesAutopilot(sId, options = {}) {
       if (mode === 'dry-run') {
         const series = await getSeries(sId);
         const issues = await listIssues({ seriesId: sId });
-        const plan = buildDryRunPlan(series, issues, runOptions);
-        broadcast(sId, { type: 'start', runId, mode, target: series.targetFormat, plan });
+        // Resolve the enabled LLM-check count (#1576) so the plan's editorialChecks
+        // step can estimate its issues × checks LLM fan-out. Mirrors the actual
+        // pass: same subset (editorialSubsetIds) and same settings the checks read.
+        const settings = await getSettings().catch(() => null);
+        const checkPlan = await buildEditorialCheckPlan(sId, { checkIds: editorialSubsetIds(runOptions), settings }).catch(() => null);
+        const editorialLlmCheckCount = checkPlan ? checkPlan.checks.filter((c) => c.kind === 'llm').length : undefined;
+        const plan = buildDryRunPlan(series, issues, runOptions, { editorialLlmCheckCount });
+        const planTotals = summarizePlanCost(plan);
+        broadcast(sId, { type: 'start', runId, mode, target: series.targetFormat, plan, planTotals });
         // Carry the plan on the terminal frame too: a dry-run emits start +
         // complete synchronously, often before the client attaches, and
         // attachSseClient replays only the LAST frame — so the plan would be
         // lost if it lived solely on the start frame.
-        broadcast(sId, { type: 'complete', runId, dryRun: true, steps: plan.length, plan, completedAt: new Date().toISOString() });
-        console.log(`🧭 autopilot dry-run — series=${sId.slice(0, 12)} steps=${plan.length}`);
+        broadcast(sId, { type: 'complete', runId, dryRun: true, steps: plan.length, plan, planTotals, completedAt: new Date().toISOString() });
+        console.log(`🧭 autopilot dry-run — series=${sId.slice(0, 12)} steps=${plan.length} est≈${planTotals.estActions} action(s) ${planTotals.estLlmCalls} LLM call(s)`);
         return;
       }
 
@@ -1657,4 +1730,4 @@ export async function recoverStuckAutopilots() {
 }
 
 // Export internals for tests.
-export const __testing = { runs, buildDryRunPlan, providerOverrideOpts, providerIdOpts };
+export const __testing = { runs, buildDryRunPlan, summarizePlanCost, providerOverrideOpts, providerIdOpts };

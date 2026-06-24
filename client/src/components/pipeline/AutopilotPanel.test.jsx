@@ -210,6 +210,19 @@ describe('AutopilotPanel', () => {
     expect(screen.getByText(/Verifying arc/i)).toBeInTheDocument();
   });
 
+  it('renders the estimated budget total from planTotals (#1576)', async () => {
+    sseLatest = {
+      type: 'complete', dryRun: true, runId: 'r1',
+      plan: [{ kind: 'verifyArc', count: 1, estActions: 5 }, { kind: 'editorialChecks', count: 1, estActions: 1, estLlmCalls: 6 }],
+      planTotals: { estActions: 6, estLlmCalls: 6 },
+    };
+    renderPanel({ id: 's1', targetFormat: 'comic' });
+    await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
+    expect(await screen.findByText(/Est\. budget/i)).toBeInTheDocument();
+    expect(screen.getByText(/≈6 cos action/i)).toBeInTheDocument();
+    expect(screen.getByText(/~6 editorial-check LLM call/i)).toBeInTheDocument();
+  });
+
   // #1578 — per-check editorial telemetry forwarded up the autopilot SSE stream
   // renders as a live label with the severity breakdown, not the raw frame type.
   it('renders a forwarded per-check editorial frame with its severity breakdown', async () => {
