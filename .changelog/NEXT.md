@@ -6,6 +6,8 @@
 
 ## Chief of Staff
 
+- **Feature Agents moved from Dev Tools to the Chief of Staff section.** The Feature Agents page (`/feature-agents`) now lives under the Chief of Staff sidebar group alongside the other agent-management pages, rather than buried in Dev Tools. The route is unchanged — only the sidebar grouping and the ⌘K / voice nav section label moved. (`client/src/components/Layout.jsx`, `server/lib/navManifest.js`)
+
 - **The CoS → Schedule page is now a scannable card grid instead of a flat expandable list.** Each task type renders as a status card you can read at a glance — a colored status dot (active / on-demand / waiting-on-deps / disabled), a **next-run countdown** ("in 3h", "Mon 9:00") that was previously computed server-side but never shown, an app-coverage bar with the enabled/total count kept front-and-center, and last-run/run-count. Cards sort by status then soonest next run (so what's about to run rises to the top), the All/Enabled toggle is replaced by per-status filters (Active / On-Demand / Waiting / Disabled), and a name filter box jumps to a task quickly. A **Run** button sits on each card — for app-targeting tasks it opens an app picker so the on-demand run carries app context (just like the old per-task controls), and falls back to a plain global run for tasks with no managed apps; **Configure** opens a slide-over drawer with the full per-task settings (interval, provider/model, prompt, agent options, dependencies, pipeline stages, and per-app overrides) — the same controls as before, now in a focused panel that's deep-linkable via `?task=` and closes on Esc/backdrop. Mobile collapses the grid to a single column.
 
 ## Local LLMs
