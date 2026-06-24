@@ -1023,7 +1023,14 @@ async function runReverseOutlineRefresh(sId, record) {
 async function runEditorialChecksPass(sId, record) {
   if (record.cancelRequested) return { canceled: true };
   const settings = await getSettings();
-  const plan = await buildEditorialCheckPlan(sId, { settings });
+  // #1575 — a per-run subset narrows the pass to specific check ids; absent/empty
+  // runs every enabled check. Normalize to null so the budget gate
+  // (buildEditorialCheckPlan) and the run (runEditorialChecks) resolve the SAME
+  // set — otherwise the gate could bill against checks the run skips, or vice-versa.
+  const checkIds = Array.isArray(record.options.editorialCheckIds) && record.options.editorialCheckIds.length
+    ? record.options.editorialCheckIds
+    : null;
+  const plan = await buildEditorialCheckPlan(sId, { checkIds, settings });
   const hasLlmCheck = plan.checks.some((c) => c.kind === 'llm');
   if (hasLlmCheck) {
     const beforeChecks = await budgetPause();
@@ -1034,7 +1041,7 @@ async function runEditorialChecksPass(sId, record) {
   // (the runner re-checks `signal.aborted` after each check). A live getter
   // reflects `record.cancelRequested` without a separate controller to manage.
   const signal = { get aborted() { return record.cancelRequested; } };
-  const result = await runEditorialChecks(sId, { ...providerOverrideOpts(record), settings, signal }).catch((err) => {
+  const result = await runEditorialChecks(sId, { ...providerOverrideOpts(record), checkIds, settings, signal }).catch((err) => {
     console.log(`⚠️ autopilot: editorial checks failed for ${sId.slice(0, 12)}: ${err.message}`);
     return null;
   });
@@ -1382,7 +1389,12 @@ function buildDryRunPlan(series, issues, options) {
   // the health gate that won't run.
   if (edRounds !== 0) {
     plan.push({ kind: 'reverseOutline', count: 1, note: 'refresh scene segmentation for editorial checks (#1349)' });
-    plan.push({ kind: 'editorialChecks', count: 1, note: 'enabled editorial checks (#1284)' });
+    // #1575 — when a per-run subset is set, the plan must say so rather than imply
+    // the full enabled set runs.
+    const editorialSubset = Array.isArray(options?.editorialCheckIds) && options.editorialCheckIds.length;
+    plan.push({ kind: 'editorialChecks', count: 1, note: editorialSubset
+      ? `per-run subset of ${options.editorialCheckIds.length} editorial check(s) (#1575)`
+      : 'enabled editorial checks (#1284)' });
     plan.push({ kind: 'editorialHealthGate', count: 1, note: 'editorial health readiness gate (#1316)' });
   }
   if (VISUAL_DRAFT_ENABLED && wantsVisual(options) && wantsComic(series, options)) {

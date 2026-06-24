@@ -295,6 +295,19 @@ describe('resolveNextStep (pure)', () => {
     expect(skipped).not.toContain('editorialHealthGate');
   });
 
+  it('dry-run plan annotates the editorial-checks step with a per-run subset (#1575)', () => {
+    const series = { targetFormat: 'comic', arc: { logline: 'L', summary: 'S' }, seasons: [{ id: 'se1', number: 1 }] };
+    const issues = [{ id: 'i1', seasonId: 'se1', number: 1, arcPosition: 1, stages: {} }];
+    const noteFor = (opts) => autopilot.__testing.buildDryRunPlan(series, issues, opts)
+      .find((p) => p.kind === 'editorialChecks')?.note;
+    // No subset → the plan advertises the full enabled set.
+    expect(noteFor({})).toMatch(/enabled editorial checks/);
+    // A subset → the plan says how many checks will run instead of implying all.
+    expect(noteFor({ editorialCheckIds: ['pacing', 'continuity'] })).toMatch(/subset of 2 editorial check/);
+    // An empty array is treated as "no override" — back to the full set.
+    expect(noteFor({ editorialCheckIds: [] })).toMatch(/enabled editorial checks/);
+  });
+
   it('asks to generate episodes for a season with no issues', () => {
     const step = resolveNextStep(comic, []);
     expect(step).toMatchObject({ kind: 'generateEpisodes', seasonId: 'se1' });
@@ -1197,6 +1210,32 @@ describe('autopilot conductor', () => {
     expect(done?.type).toBe('complete');
     expect(done?.editorialCheckErrors).toBe(0);
     expect(done?.editorialCheckErroredIds).toEqual([]);
+  });
+
+  it('forwards a per-run editorialCheckIds subset to the checks pass + budget gate (#1575)', async () => {
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { editorialCheckIds: ['pacing'], includeVisual: false });
+    await waitFor(runFinished(seriesId));
+    // Both the budget gate (buildEditorialCheckPlan) and the run (runEditorialChecks)
+    // must see the same subset so billing and execution agree on the set.
+    expect(checkRunnerSpies.runEditorialChecks).toHaveBeenCalledWith(
+      seriesId,
+      expect.objectContaining({ checkIds: ['pacing'] }),
+    );
+    expect(checkRunnerSpies.buildEditorialCheckPlan).toHaveBeenCalledWith(
+      seriesId,
+      expect.objectContaining({ checkIds: ['pacing'] }),
+    );
+  });
+
+  it('passes checkIds:null (run all enabled) when no subset is given (#1575)', async () => {
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { includeVisual: false });
+    await waitFor(runFinished(seriesId));
+    expect(checkRunnerSpies.runEditorialChecks).toHaveBeenCalledWith(
+      seriesId,
+      expect.objectContaining({ checkIds: null }),
+    );
   });
 
   it('files a CoS gap task when a verify gate stalls (fileGaps)', async () => {

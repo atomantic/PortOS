@@ -48,6 +48,12 @@ const autopilotStartSchema = z.object({
   // Per-run only (no persisted default); falls back to MAX_CHILD_RETRIES. Shares
   // the convergence ceiling so a direct API call can't request an absurd budget.
   maxChildRetries: z.number().int().min(0).max(MAX_CONVERGENCE_ROUNDS).optional(),
+  // Per-run editorial-check subset (#1575). When present, the editorial-checks
+  // pass runs ONLY these check ids instead of all enabled checks — pilot one new
+  // check, or skip an expensive one, without toggling the global enabled set.
+  // Absent/empty = run every enabled check (the default). Per-run only (no
+  // persisted default); unknown/disabled ids are silently ignored by the runner.
+  editorialCheckIds: z.array(z.string().min(1)).optional(),
 });
 
 router.post('/series/:id/autopilot/start', asyncHandler(async (req, res) => {
