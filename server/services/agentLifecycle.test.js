@@ -658,9 +658,9 @@ describe('spawnAgentForTask — cleanupOnError error recovery', () => {
 // serializes `.metadata`. These source-level assertions break loudly if a
 // future refactor drops the stamp.
 describe('agentLifecycle — instance provenance stamping (#1563)', () => {
-  it('source: imports getInstanceId from the instances service', () => {
+  it('source: imports the identity helpers from the instances service', () => {
     expect(AGENT_LIFECYCLE_SRC).toMatch(
-      /import\s*\{\s*getInstanceId\s*\}\s*from\s*'\.\/instances\.js';/
+      /import\s*\{\s*getInstanceId\s*,\s*ensureSelf\s*,\s*UNKNOWN_INSTANCE_ID\s*\}\s*from\s*'\.\/instances\.js';/
     );
   });
 
@@ -672,6 +672,20 @@ describe('agentLifecycle — instance provenance stamping (#1563)', () => {
     expect(resolveIdx, '`await getInstanceId()` must exist inside spawnAgentForTask').toBeGreaterThan(-1);
     expect(registerIdx, '`registerAgent(...)` must exist inside spawnAgentForTask').toBeGreaterThan(-1);
     expect(resolveIdx, 'instanceId must be resolved BEFORE registerAgent is called').toBeLessThan(registerIdx);
+  });
+
+  it('source: falls back to ensureSelf() when identity is the unknown sentinel (never archives "unknown")', () => {
+    // Boot-time always-on auto-start can spawn an agent before the startup
+    // chain's ensureSelf() runs, so getInstanceId() can return the sentinel.
+    // The cold path must create/load the real identity rather than persist it.
+    const fnStart = AGENT_LIFECYCLE_SRC.indexOf('export async function spawnAgentForTask');
+    const fnBody = AGENT_LIFECYCLE_SRC.slice(fnStart, fnStart + 60_000);
+    const guardIdx = fnBody.indexOf('=== UNKNOWN_INSTANCE_ID');
+    const ensureIdx = fnBody.indexOf('await ensureSelf()');
+    const registerIdx = fnBody.indexOf('registerAgent(agentId, task.id, {');
+    expect(guardIdx, 'must guard on the UNKNOWN_INSTANCE_ID sentinel').toBeGreaterThan(-1);
+    expect(ensureIdx, 'must call ensureSelf() on the cold path').toBeGreaterThan(guardIdx);
+    expect(ensureIdx, 'the sentinel fallback must run BEFORE registerAgent').toBeLessThan(registerIdx);
   });
 
   it('source: stamps instanceId into the registerAgent metadata', () => {

@@ -27,7 +27,7 @@ import { extractCodexAssistantTail } from '../lib/codexAssistantExtract.js';
 import { buildTuiSpawnConfig, spawnTuiAgent } from './agentTuiSpawning.js';
 import { processAgentCompletion } from './agentCompletion.js';
 import { releaseAppReviewMarker } from './appActivity.js';
-import { getInstanceId } from './instances.js';
+import { getInstanceId, ensureSelf, UNKNOWN_INSTANCE_ID } from './instances.js';
 import { runnerAgents, pausedAgents, spawningTasks, useRunner, isTruthyMeta } from './agentState.js';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 
@@ -265,9 +265,20 @@ export async function spawnAgentForTask(task) {
     // the completed-agent archive's `metadata.json` automatically (completeAgent
     // serializes `.metadata`), so once CoS agent history federates across peers a
     // node pair can attribute each agent + its worktree branch to the instance
-    // that produced it. `getInstanceId()` never throws — it returns the
-    // `UNKNOWN_INSTANCE_ID` sentinel before the local identity is initialized.
-    const instanceId = await getInstanceId();
+    // that produced it.
+    //
+    // `getInstanceId()` returns the `UNKNOWN_INSTANCE_ID` sentinel (and never
+    // throws) before the local identity has been created — which can happen on a
+    // boot-time always-on auto-start that spawns an agent before the startup
+    // chain's `ensureSelf()` runs. Persisting that sentinel would leave the
+    // archived agent permanently unattributable, so on the cold path we create
+    // (or load) the real identity here before stamping. The warm path stays a
+    // cheap cached read — `ensureSelf()` only runs the once, when identity is
+    // genuinely missing.
+    let instanceId = await getInstanceId();
+    if (instanceId === UNKNOWN_INSTANCE_ID) {
+      instanceId = (await ensureSelf())?.instanceId || instanceId;
+    }
     await registerAgent(agentId, task.id, {
       instanceId,
       workspacePath,
