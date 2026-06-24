@@ -111,6 +111,7 @@ import {
 } from '../moodBoard/index.js';
 import {
   getWorkForSync,
+  listWorkIdsForSync,
   mergeWorksFromSync,
   buildWorkBodyManifest,
   diffWorkBodyManifest,
@@ -506,6 +507,12 @@ async function listRecordsForKind(recordKind) {
     records = await listProjects({ includeDeleted: false }).catch(() => []);
   } else if (recordKind === 'moodBoard') {
     records = await listBoards({ includeDeleted: false }).catch(() => []);
+  } else if (recordKind === 'writersRoomWork') {
+    // Live work ids → {id} stubs (the backfill/mirror-status callers only read
+    // `id`); without this branch, enabling the writersRoomWorks category (or
+    // full-sync) for a peer would backfill nothing and report zero pending works.
+    const ids = await listWorkIdsForSync().catch(() => []);
+    records = ids.map((id) => ({ id }));
   }
   return records.filter(r => r?.ephemeral !== true && isNonEmptyStr(r?.id));
 }
@@ -1271,7 +1278,12 @@ export async function pushRecordToPeer(sub, options = {}) {
   // complete (manifest hash-equal pushes are no-ops on the receiver's
   // merge LWW path; only cost is one redundant POST per push cycle
   // until the receiver finishes pulling).
-  const missingCount = Array.isArray(body?.missingAssets) ? body.missingAssets.length : 0;
+  // Count BOTH generic assets and Writers Room draft bodies as "stranded" — a
+  // body the receiver still has to pull keeps the push un-confirmed for the same
+  // reason an asset does (a once-failed pull would otherwise be masked by the
+  // next `unchanged` short-circuit and the prose body stranded).
+  const missingCount = (Array.isArray(body?.missingAssets) ? body.missingAssets.length : 0)
+    + (Array.isArray(body?.missingDraftBodies) ? body.missingDraftBodies.length : 0);
   // REVIEW-STRANDED GUARD: the receiver merged the record/issues (returned 2xx)
   // but its bundled manuscript-review merge threw. Withhold lastPushedHash like
   // the missing-assets case so the next push cycle re-sends the review instead
@@ -2024,6 +2036,9 @@ export async function applyIncomingPush(payload) {
   let reviewSyncPending = false;
   // Same contract as reviewSyncPending, for the bundled reverse-outline doc.
   let outlineSyncPending = false;
+  // Set true when a writersRoomWork merge accepted the remote (insert/remote-won)
+  // — gates whether a present-but-different local draft body may be overwritten.
+  let workMergeApplied = false;
   if (kind === 'universe') {
     await mergeUniversesFromSync([record], { source });
   } else if (kind === 'series') {
@@ -2081,7 +2096,11 @@ export async function applyIncomingPush(payload) {
   } else if (kind === 'moodBoard') {
     await mergeBoardsFromSync([record], { source });
   } else if (kind === 'writersRoomWork') {
-    await mergeWorksFromSync([record], { source });
+    const mergeResult = await mergeWorksFromSync([record], { source });
+    // Did the receiver accept the remote work (insert / remote-won LWW)? This
+    // gates whether a PRESENT-but-different local draft body may be overwritten —
+    // a stale push that lost the LWW must NOT clobber newer local prose.
+    workMergeApplied = mergeResult?.applied === true;
   }
 
   // Apply the bundled collection (if any) — same LWW + union-of-items
@@ -2179,12 +2198,16 @@ export async function applyIncomingPush(payload) {
   // (the generic asset pipeline keys on a flat basename + single dir per kind;
   // bodies live at works/<workId>/drafts/<draftId>.md). Diff against local disk
   // and background-pull the missing ones from the sender's /data/writers-room
-  // static mount. Same guards as the asset path: skip for local-ephemeral (works
-  // have no ephemeral flag, but keep the symmetry) and tombstone pushes.
+  // static mount. `includeMismatched: workMergeApplied` is the data-safety gate —
+  // a present-but-different local body is only replaced when the receiver also
+  // accepted the remote record (so a stale push can't clobber newer local prose);
+  // an absent body is always pulled (fills inserts + retries a failed pull).
+  // Same guards as the asset path: skip for local-ephemeral and tombstone pushes.
+  let missingDraftBodies = [];
   if (kind === 'writersRoomWork' && !localEphemeral && record.deleted !== true) {
-    const missingBodies = await diffWorkBodyManifest(draftBodyManifest);
-    if (missingBodies.length > 0) {
-      pullMissingWorkBodies(sourceInstanceId, missingBodies).catch((err) => {
+    missingDraftBodies = await diffWorkBodyManifest(draftBodyManifest, { includeMismatched: workMergeApplied });
+    if (missingDraftBodies.length > 0) {
+      pullMissingWorkBodies(sourceInstanceId, missingDraftBodies).catch((err) => {
         console.log(`⚠️ peerSync: draft-body pull from ${sourceInstanceId} failed: ${err.message}`);
       });
     }
@@ -2192,6 +2215,9 @@ export async function applyIncomingPush(payload) {
 
   return {
     missingAssets,
+    // Surfaced like missingAssets so the sender withholds lastPushedHash while
+    // bodies are still pending and keeps re-pushing until the pulls land.
+    ...(missingDraftBodies.length > 0 ? { missingDraftBodies } : {}),
     reverseSubscriptionCreated,
     ackedDeletesUpTo,
     ...(reviewSyncPending ? { reviewSyncPending: true } : {}),
@@ -2440,7 +2466,7 @@ async function pullMissingAssetsFromPeer(senderInstanceId, missingAssets) {
  * shipping a huge body under a small filename before the `.arrayBuffer()` cap
  * runs. `label` is the filename used in log lines.
  */
-async function fetchCappedAssetBuffer(peer, url, label, maxBytes) {
+async function fetchCappedAssetBuffer(peer, url, label, maxBytes, { allowEmpty = false } = {}) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), ASSET_PULL_TIMEOUT_MS);
   // maxBytes propagates into the HTTPS shim's streaming cap (see
@@ -2462,7 +2488,11 @@ async function fetchCappedAssetBuffer(peer, url, label, maxBytes) {
     return null;
   }
   const contentLength = Number(res.headers.get('content-length'));
-  if (!Number.isFinite(contentLength) || contentLength <= 0) {
+  // Writers Room draft bodies can legitimately be EMPTY (a brand-new or cleared
+  // draft is a 0-byte .md), so they pass `allowEmpty` to permit Content-Length: 0;
+  // for every other asset kind a 0-byte body is meaningless and stays rejected.
+  const lengthOk = Number.isFinite(contentLength) && (allowEmpty ? contentLength >= 0 : contentLength > 0);
+  if (!lengthOk) {
     console.log(`⚠️ peerSync: asset ${label} has invalid content-length (${res.headers.get('content-length')}) — refusing pull`);
     return null;
   }
@@ -2513,7 +2543,7 @@ async function pullOneWorkBody(peer, base, entry) {
   inflightPulls.add(key);
   try {
     const url = `${base}/data/writers-room/works/${encodeURIComponent(workId)}/drafts/${encodeURIComponent(draftId)}.md`;
-    const buffer = await fetchCappedAssetBuffer(peer, url, safeLabel, WORK_BODY_PULL_MAX_BYTES);
+    const buffer = await fetchCappedAssetBuffer(peer, url, safeLabel, WORK_BODY_PULL_MAX_BYTES, { allowEmpty: true });
     if (!buffer) return;
     await ensureDir(join(wrWorkDir(workId), 'drafts'));
     await atomicWrite(wrDraftPath(workId, draftId), buffer);

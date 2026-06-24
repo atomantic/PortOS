@@ -74,13 +74,23 @@ export async function buildWorkBodyManifest(work) {
 }
 
 /**
- * Receiver-side: given an incoming draft-body manifest, return the subset whose
- * local `.md` is absent OR whose hash differs (peer has a newer body). Validates
- * every workId/draftId as a path segment before any FS op — a peer-supplied id
- * is untrusted (same traversal posture as sanitizeAssetFilename in the generic
- * asset pipeline). Echoes only the sanitized fields so junk can't round-trip.
+ * Receiver-side: given an incoming draft-body manifest, return the subset to
+ * pull. Validates every workId/draftId as a path segment before any FS op — a
+ * peer-supplied id is untrusted (same traversal posture as sanitizeAssetFilename
+ * in the generic asset pipeline). Echoes only the sanitized fields so junk can't
+ * round-trip.
+ *
+ * An ABSENT local body is always pulled — it can't overwrite anything, it fills
+ * a fresh insert, and it lets a previously-failed pull retry on the next push.
+ * A PRESENT-but-different local body is pulled ONLY when `includeMismatched`
+ * (the work-record merge actually accepted the remote, i.e. remote won/inserted).
+ * That gate is the data-safety boundary: when a STALE work push arrives after a
+ * local edit (local `updatedAt` wins the LWW merge so the metadata is kept), the
+ * sender's body hashes are the loser's — pulling them would clobber the newer
+ * local prose while leaving the newer local metadata in place. So a present
+ * body is only ever replaced when the receiver also took the remote's record.
  */
-export async function diffWorkBodyManifest(manifest) {
+export async function diffWorkBodyManifest(manifest, { includeMismatched = false } = {}) {
   if (!Array.isArray(manifest)) return [];
   const missing = [];
   for (const entry of manifest) {
@@ -95,6 +105,7 @@ export async function diffWorkBodyManifest(manifest) {
       missing.push(sanitized);
       continue;
     }
+    if (!includeMismatched) continue; // local body present + remote didn't win → keep local
     const localHash = await sha256File(fullPath).catch(() => null);
     if (localHash !== sha256) missing.push(sanitized);
   }
