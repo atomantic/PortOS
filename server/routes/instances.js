@@ -10,6 +10,7 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import * as instances from '../services/instances.js';
 import { getSyncStatus, syncWithPeer } from '../services/syncOrchestrator.js';
+import { getFullSyncCoverageForPeer } from '../services/sharing/peerSync.js';
 import { provisionTailscaleCert } from '../services/certProvisioner.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { DEFAULT_PEER_PORT } from '../lib/ports.js';
@@ -71,6 +72,9 @@ const updatePeerSchema = z.object({
   name: z.string().optional(),
   enabled: z.boolean().optional(),
   syncEnabled: z.boolean().optional(),
+  // Full-sync ("mirror everything") mode: implies every current + future sync
+  // category and back-subscribes all subscribable records to this peer.
+  fullSync: z.boolean().optional(),
   syncCategories: syncCategoriesSchema,
   // Accept empty string to clear; any other string is validated/normalized in the service
   host: z.string().optional().nullable(),
@@ -99,7 +103,10 @@ const reciprocalSyncSchema = z.object({
   // syncCategories KEY is required. An empty `{}` still parses (all fields are
   // optional) and simply no-ops downstream in applyReciprocalSync
   // (sanitizeSyncCategories returns null → changed:false).
-  syncCategories: syncCategoriesSchema.unwrap()
+  syncCategories: syncCategoriesSchema.unwrap(),
+  // Optional: a full-sync peer asks us to mirror everything back. Absent from
+  // older peers (they reciprocate via the all-on syncCategories map instead).
+  fullSync: z.boolean().optional()
 });
 
 // GET /api/instances — list self + all peers
@@ -176,13 +183,17 @@ router.get('/self', asyncHandler(async (req, res) => {
   res.json(self);
 }));
 
-// PUT /api/instances/self — update display name
+// PUT /api/instances/self — update display name and/or the new-peer full-sync default
+const updateSelfSchema = z.object({
+  name: z.string().min(1).optional(),
+  // Default full-sync ("mirror everything") mode for peers added from now on.
+  defaultPeerFullSync: z.boolean().optional()
+}).refine((d) => d.name !== undefined || d.defaultPeerFullSync !== undefined, {
+  message: 'Provide name and/or defaultPeerFullSync'
+});
 router.put('/self', asyncHandler(async (req, res) => {
-  const { name } = req.body;
-  if (!name || typeof name !== 'string') {
-    throw new ServerError('Name is required', { status: 400 });
-  }
-  const updated = await instances.updateSelf(name.trim());
+  const data = updateSelfSchema.parse(req.body);
+  const updated = await instances.updateSelf(data.name, { defaultPeerFullSync: data.defaultPeerFullSync });
   if (!updated) throw new ServerError('Self identity not initialized', { status: 500 });
   res.json(updated);
 }));
@@ -262,7 +273,7 @@ router.post('/peers/:id/connect', asyncHandler(async (req, res) => {
 // instanceId in the body (we may not know its local-peer-id mapping).
 router.post('/peers/sync-categories', asyncHandler(async (req, res) => {
   const data = reciprocalSyncSchema.parse(req.body);
-  const { changed } = await instances.applyReciprocalSync(data.instanceId, data.syncCategories);
+  const { changed } = await instances.applyReciprocalSync(data.instanceId, data.syncCategories, { fullSync: data.fullSync });
   // 200 even when the peer is unknown to us / nothing changed — this is a
   // best-effort convergence signal, not a command that must succeed. We return
   // only `applied` (not the peer record) — the remote caller doesn't consume it,
@@ -309,6 +320,24 @@ router.post('/peers/:id/sync', asyncHandler(async (req, res) => {
   }
   const result = await syncWithPeer(probed);
   res.json({ ok: true, result });
+}));
+
+// GET /api/instances/peers/:id/full-sync-coverage — real coverage diff backing
+// the "fully mirrored ✓ / N pending" indicator for a full-sync peer. Computed
+// on demand (it lists every subscribable record), so the client fetches it per
+// full-sync peer rather than bloating the polled /instances payload.
+router.get('/peers/:id/full-sync-coverage', asyncHandler(async (req, res) => {
+  const peers = await instances.getPeers();
+  const peer = peers.find(p => p.id === req.params.id);
+  if (!peer) throw new ServerError('Peer not found', { status: 404 });
+  // Coverage is keyed by the peer's federation identity; an un-probed peer
+  // (no instanceId yet) has no subscriptions, so coverage is trivially empty.
+  if (!peer.instanceId) {
+    res.json({ total: 0, confirmed: 0, pending: 0, fullyMirrored: true, byKind: {} });
+    return;
+  }
+  const coverage = await getFullSyncCoverageForPeer(peer.instanceId);
+  res.json(coverage);
 }));
 
 // GET /api/instances/peers/:id/query — proxy GET to peer

@@ -123,6 +123,22 @@ describe('sweepTombstones — no peers subscribed', () => {
   });
 });
 
+describe('sweepTombstones — full-sync peer resurrection guard', () => {
+  it('a full-sync peer with an empty category map still blocks snapshot-kind pruning', async () => {
+    // A full-sync peer mirrors every category regardless of its stored
+    // syncCategories map. If it weren't counted in the snapshot-resurrection
+    // set, pruning would drop a tombstone the peer hasn't seen and its next
+    // snapshot push would resurrect the record. So with no per-record sub, a
+    // full-sync peer must hold the line for every snapshot-backed kind.
+    getPeers.mockResolvedValue([
+      { instanceId: 'peer-a', enabled: true, syncEnabled: true, fullSync: true, syncCategories: {} },
+    ]);
+    mockSubs({}); // no per-record subscriptions → only the snapshot gate can block
+    const res = await sweepTombstones({ now: NOW });
+    expect(res.refused).toEqual(expect.arrayContaining(['universe', 'series', 'issue', 'mediaCollection']));
+  });
+});
+
 describe('sweepTombstones — orphaned base-hash sweep', () => {
   it('runs the orphan sweep and surfaces its count, regardless of refusals', async () => {
     // A snapshot-mode peer with no per-record sub refuses every tombstone kind
