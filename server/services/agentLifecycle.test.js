@@ -647,6 +647,43 @@ describe('spawnAgentForTask — cleanupOnError error recovery', () => {
   });
 });
 
+// ─── Instance provenance stamping (issue #1563, acceptance criterion 1) ──────
+//
+// Every spawned agent must record the producing machine's federation identity
+// so that, once CoS agent history federates across peers (the rest of #1563),
+// a node pair can attribute each agent + its worktree branch to the instance
+// that produced it — the prerequisite for never duplicating agent work. The
+// stamp rides in the `registerAgent` metadata and propagates into the
+// completed-agent archive's `metadata.json` automatically, since `completeAgent`
+// serializes `.metadata`. These source-level assertions break loudly if a
+// future refactor drops the stamp.
+describe('agentLifecycle — instance provenance stamping (#1563)', () => {
+  it('source: imports getInstanceId from the instances service', () => {
+    expect(AGENT_LIFECYCLE_SRC).toMatch(
+      /import\s*\{\s*getInstanceId\s*\}\s*from\s*'\.\/instances\.js';/
+    );
+  });
+
+  it('source: resolves instanceId via getInstanceId() before registering the agent', () => {
+    const fnStart = AGENT_LIFECYCLE_SRC.indexOf('export async function spawnAgentForTask');
+    const fnBody = AGENT_LIFECYCLE_SRC.slice(fnStart, fnStart + 60_000);
+    const resolveIdx = fnBody.indexOf('await getInstanceId()');
+    const registerIdx = fnBody.indexOf('registerAgent(agentId, task.id, {');
+    expect(resolveIdx, '`await getInstanceId()` must exist inside spawnAgentForTask').toBeGreaterThan(-1);
+    expect(registerIdx, '`registerAgent(...)` must exist inside spawnAgentForTask').toBeGreaterThan(-1);
+    expect(resolveIdx, 'instanceId must be resolved BEFORE registerAgent is called').toBeLessThan(registerIdx);
+  });
+
+  it('source: stamps instanceId into the registerAgent metadata', () => {
+    const registerIdx = AGENT_LIFECYCLE_SRC.indexOf('registerAgent(agentId, task.id, {');
+    // The metadata object literal opens at registerIdx; assert `instanceId,`
+    // appears within it (before the workspacePath field that follows).
+    const metaSlice = AGENT_LIFECYCLE_SRC.slice(registerIdx, registerIdx + 400);
+    expect(metaSlice).toMatch(/\binstanceId,/);
+    expect(metaSlice.indexOf('instanceId,')).toBeLessThan(metaSlice.indexOf('workspacePath'));
+  });
+});
+
 // ─── handleAgentCompletion error recovery ──────────────────────────────────
 //
 // `handleAgentCompletion` (agentLifecycle.js:841) does:

@@ -27,6 +27,7 @@ import { extractCodexAssistantTail } from '../lib/codexAssistantExtract.js';
 import { buildTuiSpawnConfig, spawnTuiAgent } from './agentTuiSpawning.js';
 import { processAgentCompletion } from './agentCompletion.js';
 import { releaseAppReviewMarker } from './appActivity.js';
+import { getInstanceId } from './instances.js';
 import { runnerAgents, pausedAgents, spawningTasks, useRunner, isTruthyMeta } from './agentState.js';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 
@@ -257,8 +258,18 @@ export async function spawnAgentForTask(task) {
     const { runId } = await createAgentRun(agentId, task, selectedModel, provider, workspacePath, resolvedAppName);
     const executionMode = isTui ? 'tui' : useRunner ? 'runner' : 'direct';
 
-    // Register the agent with model info
+    // Register the agent with model info.
+    //
+    // `instanceId` stamps the producing machine's federation identity onto every
+    // spawned agent (issue #1563, acceptance criterion 1). It flows through to
+    // the completed-agent archive's `metadata.json` automatically (completeAgent
+    // serializes `.metadata`), so once CoS agent history federates across peers a
+    // node pair can attribute each agent + its worktree branch to the instance
+    // that produced it. `getInstanceId()` never throws — it returns the
+    // `UNKNOWN_INSTANCE_ID` sentinel before the local identity is initialized.
+    const instanceId = await getInstanceId();
     await registerAgent(agentId, task.id, {
+      instanceId,
       workspacePath,
       sourceWorkspace: worktreeInfo ? (task.metadata?.app ? await getAppWorkspace(task.metadata.app) : ROOT_DIR) : null,
       worktreeBranch: worktreeInfo?.branchName || null,
