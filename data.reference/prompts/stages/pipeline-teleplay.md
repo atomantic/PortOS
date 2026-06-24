@@ -86,6 +86,7 @@ CUT TO:
 - **Strong opening (Saga-style cold open):** the TEASER lands the viewer inside a specific sensory moment in the first 30–60 seconds — a striking image, an arresting line, an unanswered question. No exposition voice-over walls, no "previously on" recaps. The opening beat is the hook that earns the rest of the episode.
 - **Cliffhanger / lead-in ending:** the TAG (or final scene if no TAG) must do one of: (a) reveal something that recontextualizes the episode, (b) deliver a cliffhanger — a character in peril, a decision unmade, an antagonist arriving — or (c) plant the seed for the next episode with a clear next-episode pull. Never close on tidy resolution alone — serialized TV needs forward propulsion.
 - Use **sluglines in bold** for every scene: `**INT. KITCHEN — NIGHT**`.
+- **Honor the canonical scene list.** If the source material includes a `## Scenes` list (the beat sheet's canonical numbered scene list), reuse those scene numbers and sluglines **verbatim** — number your `### Scene N` headers to match and copy each `INT./EXT. LOCATION — TIME` slugline exactly. That list is the single source of truth for scene boundaries across every adaptation (prose, comic script, storyboards), so don't renumber, merge, split, or re-slug its scenes. Only derive scene boundaries yourself when no `## Scenes` list is provided.
 - Action paragraphs stay **short** (1–4 lines) and in **present tense**.
 - CAPS character names above their dialogue lines.
 - Parentheticals only when the line reading would otherwise be ambiguous.

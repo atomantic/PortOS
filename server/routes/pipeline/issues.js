@@ -41,7 +41,7 @@ import { startEpisodeVideoForIssue } from '../../services/pipeline/episodeVideo.
 import { COMIC_PAGE_VARIANTS, slotKeyForVariant } from '../../services/pipeline/owners.js';
 import { ASPECT_RATIOS, QUALITIES } from '../../lib/creativeDirectorPresets.js';
 import { IMAGE_GEN_MODE } from '../../services/imageGen/modes.js';
-import { extractScenes, SOURCE_KIND } from '../../lib/sceneExtractor.js';
+import { extractScenes, scenesFromBeatSheet, SOURCE_KIND } from '../../lib/sceneExtractor.js';
 import { resolveSeriesLlmOverride } from '../../lib/seriesLlmOverride.js';
 import { parseComicScript } from '../../lib/comicScriptParser.js';
 import {
@@ -463,6 +463,45 @@ router.post('/issues/:id/stages/storyboards/extract-scenes', asyncHandler(async 
   const body = validateRequest(extractScenesSchema, req.body ?? {});
   const issue = await issuesSvc.getIssue(req.params.id).catch((err) => { throw mapServiceError(err); });
   issuesSvc.assertStageUnlocked(issue, 'storyboards');
+
+  const existing = Array.isArray(issue.stages?.storyboards?.scenes) ? issue.stages.storyboards.scenes : [];
+  if (existing.length > 0 && !body.force) {
+    throw new ServerError(
+      `Storyboards already has ${existing.length} scene${existing.length === 1 ? '' : 's'} — pass { force: true } to replace`,
+      { status: 409, code: 'PIPELINE_STORYBOARDS_NOT_EMPTY' },
+    );
+  }
+
+  // Adapt a canonical scene to the pipeline storyboards UI shape: alias
+  // `visualPrompt → description` (the textarea binding) and reset the per-scene
+  // image-gen job fields. Rich fields (heading/summary/dialogue/...) ride along.
+  const toStoryboardScene = (s) => ({ ...s, description: s.visualPrompt || '', imageJobId: null, prompt: null });
+
+  // Prefer the beat sheet's canonical `## Scenes` list when present (#1552):
+  // it's deterministic, free (no LLM), and guarantees `storyboards.scenes`
+  // numbers/sluglines match the comic pages' (both inherit the same canonical
+  // list). Fall back to the LLM slugline-parse path only when no list exists.
+  const canonicalScenes = scenesFromBeatSheet(issue.stages?.idea?.output || '');
+  if (canonicalScenes.length > 0) {
+    const storyboardScenes = canonicalScenes.map(toStoryboardScene);
+    const { issue: updatedIssue, stage } = await issuesSvc.updateStage(issue.id, 'storyboards', {
+      status: 'ready',
+      scenes: storyboardScenes,
+      lastRunId: null,
+      errorMessage: '',
+    });
+    return res.json({
+      issue: updatedIssue,
+      stage,
+      runId: null,
+      providerId: null,
+      model: null,
+      sceneCount: storyboardScenes.length,
+      sourceKind: 'beat-sheet',
+      usedCanonicalList: true,
+    });
+  }
+
   const series = await seriesSvc.getSeries(issue.seriesId).catch((err) => { throw mapServiceError(err); });
 
   const sourceKind = body.from;
@@ -471,14 +510,6 @@ router.post('/issues/:id/stages/storyboards/extract-scenes', asyncHandler(async 
     throw new ServerError(
       `Cannot extract scenes — issue's ${sourceKind} stage is empty`,
       { status: 400, code: 'PIPELINE_NO_SOURCE_FOR_SCENE_EXTRACT' },
-    );
-  }
-
-  const existing = Array.isArray(issue.stages?.storyboards?.scenes) ? issue.stages.storyboards.scenes : [];
-  if (existing.length > 0 && !body.force) {
-    throw new ServerError(
-      `Storyboards already has ${existing.length} scene${existing.length === 1 ? '' : 's'} — pass { force: true } to replace`,
-      { status: 409, code: 'PIPELINE_STORYBOARDS_NOT_EMPTY' },
     );
   }
 
@@ -512,15 +543,7 @@ router.post('/issues/:id/stages/storyboards/extract-scenes', asyncHandler(async 
     tag: `pipeline-storyboards-extract-${sourceKind}`,
   });
 
-  // Adapt canonical scene shape to the pipeline storyboards UI shape: alias
-  // `visualPrompt → description` (the textarea binding) and reset the per-scene
-  // image-gen job fields. Rich fields (heading/summary/dialogue/...) ride along.
-  const storyboardScenes = result.extracted.scenes.map((s) => ({
-    ...s,
-    description: s.visualPrompt || '',
-    imageJobId: null,
-    prompt: null,
-  }));
+  const storyboardScenes = result.extracted.scenes.map(toStoryboardScene);
   const { issue: updatedIssue, stage } = await issuesSvc.updateStage(issue.id, 'storyboards', {
     status: storyboardScenes.length ? 'ready' : 'empty',
     scenes: storyboardScenes,
@@ -536,6 +559,7 @@ router.post('/issues/:id/stages/storyboards/extract-scenes', asyncHandler(async 
     model: result.model,
     sceneCount: storyboardScenes.length,
     sourceKind,
+    usedCanonicalList: false,
   });
 }));
 

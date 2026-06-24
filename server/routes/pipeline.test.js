@@ -1072,6 +1072,79 @@ describe('pipeline routes', () => {
     spy.mockRestore();
   });
 
+  it('POST /issues/:id/stages/storyboards/extract-scenes prefers the beat sheet ## Scenes list (no LLM call)', async () => {
+    const extractor = await import('../lib/sceneExtractor.js');
+    const spy = vi.spyOn(extractor, 'extractScenes');
+
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
+      stages: {
+        idea: {
+          status: 'ready',
+          output: [
+            '# Beat sheet',
+            '',
+            '## Scenes',
+            '1. Scene 1 — EXT. ROOFTOP — DUSK: the hook',
+            '2. Scene 2 — INT. KITCHEN — NIGHT: the confrontation',
+          ].join('\n'),
+        },
+        // teleplay present too — the beat sheet still wins.
+        teleplay: { status: 'ready', output: '## TEASER\n\n**INT. ELSEWHERE — DAY**\n\nIgnored.' },
+      },
+    });
+
+    const r = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/storyboards/extract-scenes`)
+      .send({ from: 'teleplay' });
+
+    expect(r.status).toBe(200);
+    expect(r.body.usedCanonicalList).toBe(true);
+    expect(r.body.sourceKind).toBe('beat-sheet');
+    expect(r.body.runId).toBeNull();
+    expect(r.body.sceneCount).toBe(2);
+    // Numbers/sluglines map 1:1 from the canonical list.
+    expect(r.body.stage.scenes[0].heading).toBe('Scene 1 — EXT. ROOFTOP — DUSK');
+    expect(r.body.stage.scenes[0].slugline).toBe('EXT. ROOFTOP — DUSK');
+    expect(r.body.stage.scenes[1].slugline).toBe('INT. KITCHEN — NIGHT');
+    expect(r.body.stage.scenes[0].imageJobId).toBeNull();
+    expect(r.body.stage.status).toBe('ready');
+    // The deterministic path never reaches the LLM extractor.
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it('POST /issues/:id/stages/storyboards/extract-scenes falls back to the LLM when the beat sheet has no scene list', async () => {
+    const extractor = await import('../lib/sceneExtractor.js');
+    const spy = vi.spyOn(extractor, 'extractScenes').mockResolvedValue({
+      extracted: { title: null, logline: null, scenes: [{ visualPrompt: 'llm scene' }] },
+      runId: 'run-fallback', providerId: 'mock', model: 'mock-model',
+    });
+
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
+      stages: {
+        idea: { status: 'ready', output: '# Beat sheet\n\n## Beats\n1. A beat with no ## Scenes section.' },
+        teleplay: { status: 'ready', output: '## TEASER\n\n**INT. VAULT — NIGHT**\n\nThey break in.' },
+      },
+    });
+
+    const r = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/storyboards/extract-scenes`)
+      .send({ from: 'teleplay' });
+
+    expect(r.status).toBe(200);
+    expect(r.body.usedCanonicalList).toBe(false);
+    expect(r.body.sourceKind).toBe('teleplay');
+    expect(r.body.runId).toBe('run-fallback');
+    expect(spy).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
+  });
+
   // ---- comicPages/extract-pages ----
 
   it('POST /issues/:id/stages/comicPages/extract-pages 400s when comicScript is empty', async () => {

@@ -152,6 +152,86 @@ export function sanitizeSceneList(raw, { maxScenes = 200 } = {}) {
   };
 }
 
+// ---------- canonical scene list (beat sheet, no LLM) ----------
+
+// Match the beat sheet's `## Scenes` heading (any heading level, case-insensitive).
+const SCENES_HEADING_RE = /^#{1,6}\s+Scenes\b/i;
+// A heading line of any level — used to bound the `## Scenes` section.
+const ANY_HEADING_RE = /^#{1,6}\s+/;
+// A scene list entry must start with a markdown list marker (`-`/`*`/`+`,
+// `1.`/`1)`) or an explicit `Scene N` — so an intro sentence inside the
+// `## Scenes` section isn't mistaken for a scene.
+const SCENE_ENTRY_RE = /^\s*(?:[-*+]\s|\d{1,3}[.)]\s|Scene\s+\d)/i;
+// Strip a leading markdown list marker.
+const LIST_MARKER_RE = /^\s*(?:[-*+]|\d{1,3}[.)])\s*/;
+// Strip a leading `Scene N` token (with an optional —/–/:/-/. separator),
+// capturing the scene number.
+const SCENE_PREFIX_RE = /^Scene\s+(\d{1,3})\b\s*[—–:.\-]?\s*(.*)$/i;
+
+/**
+ * Parse the beat sheet's canonical `## Scenes` list (#1552) into a lightweight
+ * `[{ number, slugline, summary }]`. The beat-sheet prompt emits a numbered
+ * markdown list of `Scene N — INT./EXT. LOCATION — TIME: <beats clause>`; this
+ * is the single source of truth for scene boundaries every adaptation inherits.
+ *
+ * Returns `[]` when there's no `## Scenes` section or it holds no parseable
+ * entries — the caller falls back to the LLM slugline-parse path.
+ */
+export function parseBeatSheetScenes(markdown) {
+  if (!isStr(markdown)) return [];
+  const lines = markdown.split(/\r\n|\r|\n/);
+  const start = lines.findIndex((l) => SCENES_HEADING_RE.test(l.trim()));
+  if (start < 0) return [];
+
+  const out = [];
+  for (let j = start + 1; j < lines.length; j++) {
+    const line = lines[j];
+    if (ANY_HEADING_RE.test(line.trim())) break; // next section ends the list
+    if (!SCENE_ENTRY_RE.test(line)) continue; // skip blanks / intro prose
+    let entry = line.replace(LIST_MARKER_RE, '').trim();
+    if (!entry) continue;
+    let number = null;
+    const sm = entry.match(SCENE_PREFIX_RE);
+    if (sm) {
+      number = Number(sm[1]);
+      entry = sm[2].trim();
+    }
+    if (!entry) continue;
+    // The first colon separates the slugline from the beats clause. Sluglines
+    // (INT./EXT. LOCATION — TIME) don't normally carry a colon, so this is safe.
+    let slugline = entry;
+    let summary = '';
+    const colon = entry.indexOf(':');
+    if (colon >= 0) {
+      slugline = entry.slice(0, colon).trim();
+      summary = entry.slice(colon + 1).trim();
+    }
+    if (!slugline) continue;
+    out.push({ number: Number.isFinite(number) ? number : out.length + 1, slugline, summary });
+  }
+  return out;
+}
+
+/**
+ * Map the beat sheet's canonical `## Scenes` list directly to the sanitized
+ * scene shape — no LLM call. Used to seed storyboards so `storyboards.scenes`
+ * numbers/sluglines match the comic pages' (both inherit the same canonical
+ * list). Returns `[]` when the beat sheet has no parseable scene list.
+ */
+export function scenesFromBeatSheet(markdown, { maxScenes = 200 } = {}) {
+  const parsed = parseBeatSheetScenes(markdown);
+  if (!parsed.length) return [];
+  const raw = {
+    scenes: parsed.map((p) => ({
+      id: `scene-${String(p.number).padStart(2, '0')}`,
+      heading: p.slugline ? `Scene ${p.number} — ${p.slugline}` : `Scene ${p.number}`,
+      slugline: p.slugline,
+      summary: p.summary,
+    })),
+  };
+  return sanitizeSceneList(raw, { maxScenes }).scenes;
+}
+
 // ---------- LLM driver ----------
 
 /**

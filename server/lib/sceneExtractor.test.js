@@ -7,6 +7,8 @@ vi.mock('./stageRunner.js', () => ({
 import {
   extractScenes,
   sanitizeSceneList,
+  parseBeatSheetScenes,
+  scenesFromBeatSheet,
   SOURCE_KIND,
 } from './sceneExtractor.js';
 import { runStagedLLM } from './stageRunner.js';
@@ -371,5 +373,110 @@ describe('extractScenes', () => {
     expect(result.extracted.scenes).toEqual([]);
     expect(result.extracted.title).toBeNull();
     expect(result.extracted.logline).toBeNull();
+  });
+});
+
+describe('parseBeatSheetScenes', () => {
+  const beatSheet = [
+    '# Beat sheet',
+    '',
+    '## Beats',
+    '1. The hook.',
+    '2. The turn.',
+    '',
+    '## Scenes',
+    'These are the canonical scenes for this issue:',
+    '1. Scene 1 — EXT. ROOFTOP — DUSK: beats 1–2, the hook and Lina\'s discovery',
+    '2. Scene 2 — INT. KITCHEN — NIGHT: beat 3, the confrontation',
+    '',
+    '## Setting',
+    'A rooftop and a kitchen.',
+  ].join('\n');
+
+  it('extracts numbered scenes with sluglines + beats clause from the ## Scenes section', () => {
+    const scenes = parseBeatSheetScenes(beatSheet);
+    expect(scenes).toEqual([
+      { number: 1, slugline: 'EXT. ROOFTOP — DUSK', summary: 'beats 1–2, the hook and Lina\'s discovery' },
+      { number: 2, slugline: 'INT. KITCHEN — NIGHT', summary: 'beat 3, the confrontation' },
+    ]);
+  });
+
+  it('stops at the next heading and ignores an intro sentence inside the section', () => {
+    const scenes = parseBeatSheetScenes(beatSheet);
+    // "A rooftop and a kitchen." (under ## Setting) and the intro sentence are excluded.
+    expect(scenes).toHaveLength(2);
+  });
+
+  it('returns [] when there is no ## Scenes section', () => {
+    expect(parseBeatSheetScenes('# Beat sheet\n\n## Beats\n1. A beat.\n')).toEqual([]);
+  });
+
+  it('returns [] for non-string input', () => {
+    expect(parseBeatSheetScenes(null)).toEqual([]);
+    expect(parseBeatSheetScenes(undefined)).toEqual([]);
+    expect(parseBeatSheetScenes(42)).toEqual([]);
+  });
+
+  it('handles dash-bulleted entries and a missing "Scene N" prefix (falls back to list order)', () => {
+    const md = [
+      '## Scenes',
+      '- EXT. BEACH — DAWN: opening',
+      '- INT. CABIN — DAY: midpoint',
+    ].join('\n');
+    expect(parseBeatSheetScenes(md)).toEqual([
+      { number: 1, slugline: 'EXT. BEACH — DAWN', summary: 'opening' },
+      { number: 2, slugline: 'INT. CABIN — DAY', summary: 'midpoint' },
+    ]);
+  });
+
+  it('parses a scene with no beats clause (slugline only)', () => {
+    const md = '## Scenes\n1. Scene 1 — INT. VAULT — NIGHT';
+    expect(parseBeatSheetScenes(md)).toEqual([
+      { number: 1, slugline: 'INT. VAULT — NIGHT', summary: '' },
+    ]);
+  });
+
+  it('honors the explicit Scene number over list order', () => {
+    const md = '## Scenes\n1. Scene 3 — INT. LAB — NIGHT: the experiment';
+    expect(parseBeatSheetScenes(md)).toEqual([
+      { number: 3, slugline: 'INT. LAB — NIGHT', summary: 'the experiment' },
+    ]);
+  });
+});
+
+describe('scenesFromBeatSheet', () => {
+  it('maps the canonical ## Scenes list 1:1 to sanitized scenes (numbers/sluglines preserved, no LLM)', () => {
+    const md = [
+      '## Scenes',
+      '1. Scene 1 — EXT. ROOFTOP — DUSK: the hook',
+      '2. Scene 2 — INT. KITCHEN — NIGHT: the confrontation',
+    ].join('\n');
+    const scenes = scenesFromBeatSheet(md);
+    expect(scenes).toHaveLength(2);
+    expect(scenes[0]).toMatchObject({
+      id: 'scene-01',
+      heading: 'Scene 1 — EXT. ROOFTOP — DUSK',
+      slugline: 'EXT. ROOFTOP — DUSK',
+      summary: 'the hook',
+    });
+    expect(scenes[1]).toMatchObject({
+      id: 'scene-02',
+      heading: 'Scene 2 — INT. KITCHEN — NIGHT',
+      slugline: 'INT. KITCHEN — NIGHT',
+    });
+    // Scene-extractor never calls the LLM on this path.
+    expect(runStagedLLM).not.toHaveBeenCalled();
+  });
+
+  it('pads ids from the explicit Scene number, not list position', () => {
+    const md = '## Scenes\n1. Scene 7 — INT. LAB — NIGHT: the experiment';
+    const [scene] = scenesFromBeatSheet(md);
+    expect(scene.id).toBe('scene-07');
+    expect(scene.heading).toBe('Scene 7 — INT. LAB — NIGHT');
+  });
+
+  it('returns [] when the beat sheet has no ## Scenes list (caller falls back to the LLM path)', () => {
+    expect(scenesFromBeatSheet('# Beat sheet\n\n## Beats\n1. A beat.')).toEqual([]);
+    expect(scenesFromBeatSheet('')).toEqual([]);
   });
 });
