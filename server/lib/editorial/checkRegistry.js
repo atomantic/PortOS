@@ -613,6 +613,23 @@ export const CLIMAX_AGENCY_STAGE = 'pipeline-editorial-climax-agency';
 // payoff; degrades to a prose-only scan when no outline exists.
 export const REACTION_PROPORTIONALITY_STAGE = 'pipeline-editorial-reaction-proportionality';
 
+// Stage name for the secondary (non-POV) character-arc LLM check (#1585). Ships
+// in data.reference/prompts/stages/ + stage-config.json (fresh installs via
+// setup-data.js) and migrates to existing installs via migration 133 (boot runs
+// migrations but NOT setup-data, so the migration is required). The sibling of
+// pov.justified (#1295), which covers POV characters only: this check judges the
+// RECURRING NON-POV cast — characters who appear in multiple scenes but never
+// hold the viewpoint — and flags those who never change (a flat side character
+// who is the same at the end as the start) or who regress without purpose. Reads
+// the stitched manuscript plus the reverse-outline scene map (to tally which
+// non-POV characters recur and weigh their presence) and the canon roster (so a
+// genuinely-minor walk-on isn't held to an arc). Because a flat arc is a
+// whole-story claim, the run gates its verdict on the final part (`finalPart`)
+// and carries each recurring secondary character's established state forward
+// across chunks (`crossChunkSetup`); degrades to a prose-only scan when no
+// outline exists.
+export const SECONDARY_ARC_STAGE = 'pipeline-editorial-secondary-arc';
+
 // Stage name for the unmodeled-proper-nouns LLM check (#1412). Ships in
 // data.reference/prompts/stages/ + stage-config.json (fresh installs via
 // setup-data.js) and migrates to existing installs via migration 116 (boot runs
@@ -1638,6 +1655,70 @@ export function scenePovSummary(scenes) {
   }).filter(Boolean);
   if (!lines.length) return '';
   return `POV per scene (from the reverse outline):\n${lines.join('\n')}`;
+}
+
+// Render the RECURRING NON-POV cast (#1585) into a compact text block the
+// secondary-arc check passes alongside the manuscript, so the model focuses on
+// the side characters that actually carry weight (present across multiple scenes)
+// rather than every walk-on. A "secondary" character is one who appears in
+// `charactersPresent` but NEVER holds `povCharacter` in ANY scene — a character
+// who ever takes the viewpoint is a POV character (covered by pov.justified). For
+// each such character we count the scenes they appear in and the span of issues
+// those scenes touch, keeping only those at or above `minScenes` (the recurrence
+// threshold). Pure + deterministic so it's unit-testable and its token cost can
+// be counted into the per-chunk overhead. Returns '' when no non-POV character
+// recurs enough (the prompt's `{{#secondaryCast}}` section then renders nothing
+// and the check degrades to identifying recurring side characters from the prose
+// alone). Type-guarded throughout — the reverse outline rides peer sync (#1348),
+// so a hand-edited / older-peer scene could carry a non-string field a bare
+// `.trim()` would throw on.
+export function secondaryCharacterPresenceSummary(scenes, { minScenes = 2 } = {}) {
+  const list = Array.isArray(scenes) ? scenes : [];
+  const threshold = Number.isInteger(minScenes) && minScenes > 0 ? minScenes : 2;
+
+  // Every character who EVER holds the viewpoint, by normalized name — these are
+  // POV characters and are excluded from the secondary cast even in scenes where
+  // they happen to be present-but-not-narrating.
+  const povHolders = new Set();
+  for (const s of list) {
+    const pov = scenePov(s);
+    if (pov) povHolders.add(normalizeName(pov));
+  }
+
+  // Non-POV character → { name, sceneCount, issues } keyed by normalized name so
+  // casing / spacing variants collapse. Preserves first-appearance order (scenes
+  // arrive sequence-ordered) for stable output.
+  const cast = new Map();
+  for (const s of list) {
+    if (!s || typeof s !== 'object') continue;
+    const issueNumber = Number.isInteger(s.issueNumber) ? s.issueNumber : null;
+    const present = Array.isArray(s.charactersPresent)
+      ? s.charactersPresent.filter((n) => typeof n === 'string' && n.trim()).map((n) => n.trim())
+      : [];
+    // De-dup names within a single scene so a name listed twice counts once.
+    const seenThisScene = new Set();
+    for (const name of present) {
+      const key = normalizeName(name);
+      if (!key || povHolders.has(key) || seenThisScene.has(key)) continue;
+      seenThisScene.add(key);
+      let entry = cast.get(key);
+      if (!entry) { entry = { name, sceneCount: 0, issues: new Set() }; cast.set(key, entry); }
+      entry.sceneCount += 1;
+      if (issueNumber != null) entry.issues.add(issueNumber);
+    }
+  }
+
+  const rows = [];
+  for (const entry of cast.values()) {
+    if (entry.sceneCount < threshold) continue;
+    const issues = [...entry.issues].sort((a, b) => a - b);
+    const span = issues.length
+      ? (issues.length === 1 ? `issue ${issues[0]}` : `issues ${issues[0]}–${issues[issues.length - 1]}`)
+      : 'no tagged issues';
+    rows.push(`- ${entry.name}: present in ${entry.sceneCount} scene${entry.sceneCount === 1 ? '' : 's'} (${span})`);
+  }
+  if (!rows.length) return '';
+  return `Recurring non-POV characters (appear in ${threshold}+ scenes but never hold POV — judge whether each shows meaningful change):\n${rows.join('\n')}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -3215,6 +3296,93 @@ export const EDITORIAL_CHECKS = [
         crossChunkSetup: true,
         setupFocus:
           'For each named character, note their established temperament, voice, and fixed traits (how they speak, what they fear/avoid, what they know) plus any EARNED change the prose has already paid off. Carry these forward so a later chunk can tell an unearned shift (a reserved character suddenly joking, a stated fear ignored, knowledge appearing with no on-page learning) from a transition the story has legitimately set up.',
+      });
+    },
+  },
+  {
+    id: 'character.secondary-arc',
+    sources: ['manuscript', 'reverseOutline', 'canon'],
+    label: 'Secondary-character arcs (recurring non-POV cast)',
+    description:
+      'LLM scan — the non-POV sibling of pov.justified (#1295). Tallies recurring NON-POV characters from the reverse-outline scene map (present in multiple scenes but never holding the viewpoint) and judges whether each shows meaningful change across the story: a flat side character who is the same at the end as at the start, or one who regresses with no purpose. A world of flat side characters drains a story\'s texture. Does NOT flag a genuine walk-on (a one-scene minor) or a deliberately-static figure whose constancy is the point (an anchor/foil the protagonist changes against); judges only the recurring cast. Because a flat arc is a whole-story claim, the verdict lands on the final manuscript part once every scene is in view; degrades to a whole-manuscript scan when no outline exists.',
+    scope: 'series',
+    kind: 'llm',
+    category: 'arc',
+    // Fallback severity when the model omits one — 'low' to match pov.justified
+    // (a secondary-cast arc gap is a texture concern, not a structural break). The
+    // prompt directs the model to mark a prominent recurring character left wholly
+    // flat 'medium', so a genuinely-thin co-lead still surfaces above the floor.
+    severityDefault: 'low',
+    defaultEnabled: true,
+    // Reads the stitched manuscript corpus — so the runner only pays the
+    // section-collection I/O when a manuscript-consuming check is enabled.
+    needsManuscript: true,
+    configSchema: z.object({
+      // A non-POV character must appear in at least this many scenes to count as
+      // recurring (and therefore be held to an arc). 1 would judge every walk-on;
+      // 2 is the smallest "recurring" threshold.
+      minScenes: z.number().int().min(2).max(20).default(2),
+      // Cap findings per run so a large cast can't flood the review.
+      maxFindings: z.number().int().min(1).max(50).default(12),
+    }),
+    configFields: [
+      {
+        key: 'minScenes',
+        label: 'Recurring threshold (min scenes)',
+        type: 'number',
+        min: 2,
+        max: 20,
+        step: 1,
+        help: 'A non-POV character must appear in at least this many scenes to be judged for an arc. 2 is the smallest "recurring" threshold; raise it to focus on only the most prominent secondary characters.',
+      },
+      {
+        key: 'maxFindings',
+        label: 'Max findings per run',
+        type: 'number',
+        min: 1,
+        max: 50,
+        step: 1,
+        help: 'Cap findings so a large cast can not flood the review.',
+      },
+    ],
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    run: (ctx) => {
+      // Both blocks are fixed per-call overhead (re-sent on each chunk) and pure
+      // context: the secondary-cast roster names which recurring non-POV
+      // characters to hold to an arc (so the model focuses on the side characters
+      // that carry weight, not every walk-on), and the canon roster lets the model
+      // tell a modeled recurring character from an incidental name. The check
+      // degrades gracefully — no outline ⇒ {{#secondaryCast}} renders nothing and
+      // the model identifies the recurring side cast from the prose; no canon ⇒
+      // {{#canonRoster}} renders nothing.
+      const minScenes = ctx.config?.minScenes ?? 2;
+      const secondaryCast = secondaryCharacterPresenceSummary(ctx.reverseOutline, { minScenes });
+      const canonRoster = canonCharacterTraitsSummary(ctx.canon);
+      return runManuscriptLlmCheck(ctx, {
+        stage: SECONDARY_ARC_STAGE,
+        category: 'arc',
+        context: { secondaryCast, canonRoster },
+        buildVars: (manuscript, meta, c) => ({
+          manuscript,
+          secondaryCast: c.secondaryCast,
+          canonRoster: c.canonRoster,
+          finalPart: meta?.isFinal ? 'true' : '',
+        }),
+        // A flat arc is only visible across the WHOLE story — a character
+        // established in an early chunk who never changes by the last. The
+        // findings digest keeps prior findings in view so a later chunk doesn't
+        // re-flag, and the clean-setup digest rolls each recurring secondary
+        // character's established state forward so the final part can tell a flat
+        // arc from one that changes in a chunk it can no longer see.
+        crossChunkDigest: true,
+        crossChunkSetup: true,
+        setupFocus: 'For each recurring NON-POV character (a character present across multiple scenes who never '
+          + 'holds the viewpoint), note their established state on first appearance — their situation, attitude, '
+          + 'wants, and standing — and record any CHANGE the prose has shown them undergo since (a decision, a '
+          + 'shift in attitude or circumstance, a relationship that turns). Carry these forward so the final part '
+          + 'can tell a genuinely flat side character (same at the end as the start) from one whose change happened '
+          + 'in an earlier part no longer in view. Drop a character from the watch-list once the prose has shown '
+          + 'them a meaningful arc.',
       });
     },
   },
