@@ -3553,16 +3553,26 @@ export const EDITORIAL_CHECKS = [
         stage: REACTION_PROPORTIONALITY_STAGE,
         category: 'emotion',
         context: { sceneMap },
-        buildVars: (manuscript, _meta, c) => ({ manuscript, sceneMap: c.sceneMap }),
+        // `finalPart` gates ONLY the under-reaction verdict. "A high-magnitude
+        // event is never processed afterward" is a whole-story claim — a non-final
+        // chunk can't know whether a LATER chunk pays the event off, and
+        // runChunkedManuscriptCheck merges findings first-wins and never retracts,
+        // so an under-reaction reported early would persist even after a later
+        // payoff clears it (a false positive). Over-reactions stay local — a
+        // disproportionate reaction is fully visible in the chunk that contains it.
+        // A single-chunk run is its own final part and judges the whole text.
+        buildVars: (manuscript, meta, c) => ({
+          manuscript,
+          sceneMap: c.sceneMap,
+          finalPart: meta?.isFinal ? 'true' : '',
+        }),
         // A reaction is proportionate (or not) only relative to the event that
         // triggered it — and the event and its (missing) processing can be issues
         // apart. The findings digest keeps prior findings in view so a later chunk
         // doesn't re-flag the same gap, and the clean-setup digest rolls forward
         // every high-magnitude event that has NOT yet drawn a proportionate
-        // reaction so a later chunk can flag the unprocessed trauma even when it
-        // happened pages earlier. Unlike the climax check there is no final-part
-        // gate: an over-reaction is visible in its own chunk, and an under-reaction
-        // is flaggable as soon as enough subsequent text has passed with no payoff.
+        // reaction so the FINAL chunk can flag the unprocessed trauma even when it
+        // happened pages earlier.
         crossChunkDigest: true,
         crossChunkSetup: true,
         setupFocus: 'List the high-magnitude emotional events seen so far (a death, trauma, betrayal, '

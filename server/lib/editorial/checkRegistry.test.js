@@ -1346,15 +1346,23 @@ describe('emotion.reaction-proportionality — LLM check (#1584)', () => {
     expect(seenVars.sceneMap).toBe('');
   });
 
-  it('does not gate on a final part — every chunk can report a proportionality finding', async () => {
-    const seen = [];
+  it('marks a single-chunk run as the final part so the under-reaction verdict is enabled', async () => {
+    let seenVars = null;
     const ctx = wholeCtx({
-      planManuscriptChunks: async () => ['# Issue 1\n\np1', '# Issue 2\n\np2'],
-      callStagedLLM: async (_stage, vars) => { seen.push(vars); return { content: { findings: [] } }; },
+      callStagedLLM: async (_stage, vars) => { seenVars = vars; return { content: { findings: [] } }; },
     });
     await getCheck(REACTION_PROPORTIONALITY).run(ctx);
-    // Unlike the climax check, no chunk receives a finalPart gate var.
-    expect(seen.every((v) => !('finalPart' in v))).toBe(true);
+    expect(seenVars.finalPart).toBe('true');
+  });
+
+  it('flags only the LAST part as final across a chunked manuscript (under-reaction gate)', async () => {
+    const finals = [];
+    const ctx = wholeCtx({
+      planManuscriptChunks: async () => ['# Issue 1\n\np1', '# Issue 2\n\np2', '# Issue 3\n\np3'],
+      callStagedLLM: async (_stage, vars) => { finals.push(vars.finalPart); return { content: { findings: [] } }; },
+    });
+    await getCheck(REACTION_PROPORTIONALITY).run(ctx);
+    expect(finals).toEqual(['', '', 'true']);
   });
 });
 
