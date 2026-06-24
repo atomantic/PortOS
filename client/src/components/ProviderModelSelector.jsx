@@ -1,7 +1,12 @@
 /**
  * Two-step provider > model dropdown selector.
  * @param {Object} props
- * @param {Array} props.providers - Provider list from useProviderModels()
+ * @param {Array} props.providers - Provider list from useProviderModels(). Disabled
+ *   providers (`enabled === false`) are filtered out of the dropdown automatically,
+ *   except the currently-selected one (so a pinned-but-disabled provider still shows
+ *   its value). This is the single source of truth for "enabled only" pickers — a
+ *   caller that already filtered (e.g. via the hook's default `enabled` filter) is
+ *   unaffected since re-filtering enabled entries is idempotent.
  * @param {string} props.selectedProviderId - Currently selected provider ID
  * @param {string} props.selectedModel - Currently selected model
  * @param {Array} props.availableModels - Models for the selected provider. Entries
@@ -58,6 +63,14 @@ export default function ProviderModelSelector({
 }) {
   const providerSelectId = useId();
   const modelSelectId = useId();
+  // Only offer enabled providers (treat a missing `enabled` as enabled). The
+  // currently-selected provider stays visible even if disabled, so a record
+  // pinned to a now-disabled provider still renders its value instead of
+  // silently blanking the select. This is the single DRY gate for every
+  // provider→model picker; callers may also pre-filter, which is idempotent.
+  const visibleProviders = providers.filter(
+    (p) => p.enabled !== false || p.id === selectedProviderId
+  );
   const showModel = alwaysShowModel || availableModels.length > 0;
   const wrapperClass = layout === 'stacked' ? 'flex flex-col gap-1' : 'flex items-center gap-2';
   return (
@@ -74,7 +87,7 @@ export default function ProviderModelSelector({
           className={SELECT_CLASS}
         >
           {emptyProviderOption != null && <option value="">{emptyProviderOption}</option>}
-          {providers.map(p => (
+          {visibleProviders.map(p => (
             <option key={p.id} value={p.id}>{p.name}</option>
           ))}
         </select>

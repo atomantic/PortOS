@@ -86,6 +86,32 @@ describe('ProviderModelSelector', () => {
     expect(onModelChange).toHaveBeenCalledWith('m2');
   });
 
+  it('filters out disabled providers from the dropdown', () => {
+    renderSelector({
+      providers: [
+        { id: 'p1', name: 'Provider One' },
+        { id: 'p2', name: 'Provider Two', enabled: false },
+        { id: 'p3', name: 'Provider Three', enabled: true },
+      ],
+    });
+    const providerSelect = screen.getAllByRole('combobox')[0];
+    const labels = [...providerSelect.querySelectorAll('option')].map((o) => o.textContent);
+    expect(labels).toEqual(['Provider One', 'Provider Three']);
+  });
+
+  it('keeps a disabled provider visible when it is the current selection', () => {
+    renderSelector({
+      selectedProviderId: 'p2',
+      providers: [
+        { id: 'p1', name: 'Provider One' },
+        { id: 'p2', name: 'Provider Two', enabled: false },
+      ],
+    });
+    const providerSelect = screen.getAllByRole('combobox')[0];
+    const labels = [...providerSelect.querySelectorAll('option')].map((o) => o.textContent);
+    expect(labels).toEqual(['Provider One', 'Provider Two']);
+  });
+
   it('stacks the selects vertically when layout="stacked"', () => {
     const { container } = renderSelector({ layout: 'stacked' });
     expect(container.firstChild.className).toContain('flex-col');
