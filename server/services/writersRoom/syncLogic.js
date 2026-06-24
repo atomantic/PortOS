@@ -37,7 +37,11 @@ export const WRITERS_ROOM_DRAFT_ASSET_KIND = 'writers-room-draft';
  */
 export function sanitizeWorkForSync(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
-  if (!isStr(raw.id) || !raw.id) return null;
+  // The id is used as a filesystem path segment (works/<id>/...) and the path
+  // helpers enforce WORK_ID_RE — so drop a peer-supplied id that isn't a valid
+  // work id BEFORE merge/persist, rather than letting it throw in the file
+  // backend's saveManifest or plant an unaddressable PG row.
+  if (!isStr(raw.id) || !WORK_ID_RE.test(raw.id)) return null;
   const createdAt = isStr(raw.createdAt) ? raw.createdAt : new Date().toISOString();
   const updatedAt = isStr(raw.updatedAt) ? raw.updatedAt : createdAt;
   const { deleted, deletedAt } = sanitizeSoftDeleteFields(raw);

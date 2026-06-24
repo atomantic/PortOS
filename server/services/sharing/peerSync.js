@@ -2205,7 +2205,15 @@ export async function applyIncomingPush(payload) {
   // Same guards as the asset path: skip for local-ephemeral and tombstone pushes.
   let missingDraftBodies = [];
   if (kind === 'writersRoomWork' && !localEphemeral && record.deleted !== true) {
-    missingDraftBodies = await diffWorkBodyManifest(draftBodyManifest, { includeMismatched: workMergeApplied });
+    // Scope the manifest to THIS work: a body entry's path is works/<workId>/...,
+    // so an entry whose workId != the pushed record's id would write bytes into a
+    // DIFFERENT local work's draft (clobbering unrelated prose when the merge
+    // accepted the remote). A peer may only replicate the bodies of the work it
+    // actually pushed.
+    const ownBodies = Array.isArray(draftBodyManifest)
+      ? draftBodyManifest.filter((e) => e && e.workId === record.id)
+      : [];
+    missingDraftBodies = await diffWorkBodyManifest(ownBodies, { includeMismatched: workMergeApplied });
     if (missingDraftBodies.length > 0) {
       pullMissingWorkBodies(sourceInstanceId, missingDraftBodies).catch((err) => {
         console.log(`⚠️ peerSync: draft-body pull from ${sourceInstanceId} failed: ${err.message}`);

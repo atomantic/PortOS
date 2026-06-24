@@ -29,11 +29,17 @@ const work = (extra = {}) => ({
 });
 
 describe('sanitizeWorkForSync', () => {
-  it('drops non-objects and records without a usable id', () => {
+  it('drops non-objects, missing ids, and ids that are not valid work ids', () => {
     expect(sanitizeWorkForSync(null)).toBeNull();
     expect(sanitizeWorkForSync([])).toBeNull();
     expect(sanitizeWorkForSync({ title: 'no id' })).toBeNull();
     expect(sanitizeWorkForSync({ id: '' })).toBeNull();
+    // Unstorable id (not WORK_ID_RE) — would throw in the path layer / plant an
+    // unaddressable row, so it's dropped before merge.
+    expect(sanitizeWorkForSync({ id: 'not-a-work' })).toBeNull();
+    expect(sanitizeWorkForSync({ id: '../etc/passwd' })).toBeNull();
+    // A real work id passes.
+    expect(sanitizeWorkForSync(work())?.id).toBe(WORK);
   });
 
   it('normalizes the soft-delete trio and preserves the body verbatim', () => {
