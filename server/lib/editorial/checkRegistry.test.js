@@ -36,6 +36,7 @@ import {
   declaredThemesSummary,
   canonRosterNamesSummary,
   canonCharacterStatesSummary,
+  canonCharacterTraitsSummary,
   continuityLedgerSummary,
 } from './checkRegistry.js';
 
@@ -52,6 +53,7 @@ const HEAD_HOPPING = 'pov.head-hopping';
 const THEME_COHERENCE = 'theme.coherence';
 const UNMODELED_NAMES = 'roster.unmodeled-names';
 const TIMELINE_CONTRADICTION = 'continuity.timeline-contradiction';
+const CHARACTER_CONSISTENCY = 'character.consistency';
 
 // A minimal valid stored custom-check definition.
 const customDef = (over = {}) => ({
@@ -962,6 +964,115 @@ describe('canonCharacterStatesSummary (#1581)', () => {
     expect(() => canonCharacterStatesSummary({ characters: [null, 'nope', { name: 'C', role: 5, age: {} }] })).not.toThrow();
     // role is a non-string and age is a non-finite object → no facts → C drops out.
     expect(canonCharacterStatesSummary({ characters: [{ name: 'C', role: 5, age: {} }] })).toBe('');
+  });
+});
+
+describe('character.consistency — LLM check (#1582)', () => {
+  const wholeCtx = (overrides = {}) => ({
+    manuscript: '# Issue 1\n\nMara said nothing, as always.',
+    config: { maxFindings: 12 },
+    severityDefault: 'medium',
+    series: {},
+    canon: { characters: [{ name: 'Mara', personality: 'reserved and guarded', specialTraits: 'deathly afraid of fire' }] },
+    reverseOutline: [{ sequence: 0, issueNumber: 1, heading: 'The watch', setting: 'a wall', charactersPresent: ['Mara'] }],
+    planManuscriptChunks: async () => ['# Issue 1\n\nMara said nothing, as always.'],
+    callStagedLLM: async () => ({ content: { findings: [] } }),
+    ...overrides,
+  });
+
+  it('is registered as a series-scoped LLM check reading manuscript + canon + outline + arcs', () => {
+    const check = getCheck(CHARACTER_CONSISTENCY);
+    expect(check.kind).toBe('llm');
+    expect(check.scope).toBe('series');
+    expect(check.category).toBe('character');
+    expect(check.severityDefault).toBe('medium');
+    expect(check.sources).toEqual(['manuscript', 'canon', 'reverseOutline', 'series.characterArcs']);
+    expect(check.needsManuscript).toBe(true);
+  });
+
+  it('only runs when there is drafted prose to scan', () => {
+    const check = getCheck(CHARACTER_CONSISTENCY);
+    expect(check.gate({ manuscript: '' })).toBe(false);
+    expect(check.gate({ manuscript: '# Issue 1\n\nprose' })).toBeTruthy();
+  });
+
+  it('passes the manuscript, canon traits, and scene map to the model and forces the character category', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      planManuscriptChunks: async (_stage, opts) => {
+        // Canon traits + scene map + character arcs all ride as trimmable context.
+        expect(opts.context).toHaveProperty('canonTraits');
+        expect(opts.context).toHaveProperty('sceneMap');
+        expect(opts.context).toHaveProperty('characterArcs');
+        expect(opts.fixedOverheadTokens).toBeGreaterThan(0);
+        return ['# Issue 6\n\nMara cracked a joke, suddenly the life of the party.'];
+      },
+      callStagedLLM: async (_stage, vars) => {
+        seenVars = vars;
+        return { content: { findings: [{ severity: 'medium', issueNumber: 6, location: 'Mara — personality', problem: 'Mara is reserved in canon but jokes freely here with no earned beat' }] } };
+      },
+    });
+    const findings = await getCheck(CHARACTER_CONSISTENCY).run(ctx);
+    expect(seenVars.manuscript).toBe('# Issue 6\n\nMara cracked a joke, suddenly the life of the party.');
+    expect(seenVars.canonTraits).toContain('Mara');
+    expect(seenVars.canonTraits).toContain('personality: reserved and guarded');
+    expect(seenVars.sceneMap).toContain('Issue 1: The watch');
+    expect(findings).toHaveLength(1);
+    expect(findings[0].category).toBe('character');
+    expect(findings[0].location).toBe('Mara — personality');
+  });
+
+  it('passes empty context vars when the series has no canon or outline', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      canon: undefined,
+      reverseOutline: undefined,
+      callStagedLLM: async (_stage, vars) => { seenVars = vars; return { content: { findings: [] } }; },
+    });
+    await getCheck(CHARACTER_CONSISTENCY).run(ctx);
+    expect(seenVars.canonTraits).toBe('');
+    expect(seenVars.sceneMap).toBe('');
+    expect(seenVars.characterArcs).toBe('');
+  });
+});
+
+describe('canonCharacterTraitsSummary (#1582)', () => {
+  it('returns an empty string when there are no characters or no renderable traits', () => {
+    expect(canonCharacterTraitsSummary(null)).toBe('');
+    expect(canonCharacterTraitsSummary(undefined)).toBe('');
+    expect(canonCharacterTraitsSummary({ characters: [] })).toBe('');
+    // A named character with no trait-relevant field renders nothing (age/role/status
+    // are facts, not traits — they belong to canonCharacterStatesSummary).
+    expect(canonCharacterTraitsSummary({ characters: [{ name: 'Joss', age: 40, role: 'lead' }] })).toBe('');
+    // An alias-only row (no name) is skipped.
+    expect(canonCharacterTraitsSummary({ characters: [{ aliases: ['x'], personality: 'kind' }] })).toBe('');
+  });
+
+  it('renders each character with name + aliases and the present traits', () => {
+    const out = canonCharacterTraitsSummary({ characters: [
+      { name: 'Mara', aliases: ['The Captain'], personality: 'reserved and guarded', specialTraits: 'afraid of fire', speechPattern: 'clipped, formal' },
+      { name: 'Joss', mannerisms: ['taps the table', 'never sits still'], likes: ['chess'], dislikes: ['small talk'] },
+    ] });
+    expect(out).toContain('Canon character traits');
+    expect(out).toContain('- Mara (also: The Captain) — personality: reserved and guarded; fixed traits: afraid of fire; speech: clipped, formal');
+    expect(out).toContain('- Joss — mannerisms: taps the table, never sits still; likes: chess; dislikes: small talk');
+  });
+
+  it('renders array OR string list fields and caps the list length', () => {
+    const out = canonCharacterTraitsSummary({ characters: [
+      { name: 'A', mannerisms: 'hums constantly' },
+      { name: 'B', likes: ['a', 'b', 'c', 'd', 'e', 'f', 'g'] },
+    ] });
+    expect(out).toContain('- A — mannerisms: hums constantly');
+    // first five only
+    expect(out).toContain('- B — likes: a, b, c, d, e');
+    expect(out).not.toContain('a, b, c, d, e, f');
+  });
+
+  it('is type-guarded against hand-edited / older-peer rows', () => {
+    expect(() => canonCharacterTraitsSummary({ characters: [null, 'nope', { name: 'C', personality: 5, mannerisms: {} }] })).not.toThrow();
+    // personality is a non-string and mannerisms is a non-array object → no traits → C drops out.
+    expect(canonCharacterTraitsSummary({ characters: [{ name: 'C', personality: 5, mannerisms: {} }] })).toBe('');
   });
 });
 

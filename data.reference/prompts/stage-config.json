@@ -597,6 +597,13 @@
       "returnsJson": true,
       "variables": []
     },
+    "pipeline-editorial-character-consistency": {
+      "name": "Pipeline — Editorial Check: Character consistency (unearned personality shift)",
+      "description": "Editorial check (#1582): flags unearned characterization changes — a reserved character who suddenly cracks jokes with no arc beat, an established trait (fear, allergy, skill) silently contradicted, or POV-character knowledge that changes mid-scene without on-page learning. Reconciles the stitched manuscript against the established canon character traits, the reverse-outline scene ordering, and the authored per-character arcs so an intentional, earned transition is NOT flagged; degrades to a prose-only scan when no canon or outline exists. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
     "pipeline-editorial-object-motivation": {
       "name": "Pipeline — Editorial Check: Unmotivated object interaction",
       "description": "Editorial check (#1288): flags moments where a character treats an object as significant without earned motivation — no recorded attachment and no on-page setup. Reads the stitched manuscript plus the canon object↔character attachments. Returns issue-anchored findings.",

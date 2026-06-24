@@ -366,6 +366,64 @@ export function canonCharacterStatesSummary(canon) {
   return `Canon character facts (the established bible — reconcile the prose against these):\n${rows.join('\n')}`;
 }
 
+// Render each canon character's PERSONALITY-relevant traits into a compact text
+// block the character-consistency check (#1582) passes alongside the manuscript,
+// so the model can flag an UNEARNED shift: a reserved character suddenly cracking
+// jokes, an established fear/allergy silently contradicted, a voice that drifts
+// off the authored speech pattern. Distinct from `canonCharacterStatesSummary`
+// (age/role/status/described-as — the contradiction-of-FACTS grounding the
+// timeline check reads) and from `characterVoiceProfiles` (speech only): this is
+// the temperament/traits grounding. Pure + deterministic so it's unit-testable
+// and its token cost can be counted into the per-chunk overhead. Type-guarded
+// throughout (canon rides peer sync, so a hand-edited / older-peer character
+// could carry a non-string field a bare `.trim()` would throw on, and
+// mannerisms/likes/dislikes are commonly arrays). Reuses `characterNameTokens` so
+// name + aliases render with the same trim/de-dup the matcher uses. Returns ''
+// when no character carries both a usable name AND a renderable trait (the
+// prompt's `{{#canonTraits}}` section then renders nothing and the check reasons
+// from the prose alone).
+const CANON_TRAIT_FACT_CHARS = 240;
+export function canonCharacterTraitsSummary(canon) {
+  const chars = Array.isArray(canon?.characters) ? canon.characters : [];
+  const cleanStr = (v) => (typeof v === 'string' ? v.trim() : '');
+  // mannerisms / likes / dislikes are commonly arrays of short strings in the
+  // bible; render the first few as a comma list. Tolerates a plain string too.
+  const cleanList = (v) => {
+    if (typeof v === 'string') return v.trim();
+    if (!Array.isArray(v)) return '';
+    return v.map((x) => (typeof x === 'string' ? x.trim() : '')).filter(Boolean).slice(0, 5).join(', ');
+  };
+  const rows = [];
+  for (const c of chars) {
+    if (!c || typeof c !== 'object') continue;
+    // Require a real name — an alias-only row isn't a named character (mirrors
+    // canonCharacterStatesSummary). characterNameTokens returns the trimmed name
+    // first, followed by de-duped aliases.
+    if (typeof c.name !== 'string' || !c.name.trim()) continue;
+    const [name, ...aliases] = characterNameTokens(c);
+    const facts = [];
+    const personality = cleanStr(c.personality).slice(0, CANON_TRAIT_FACT_CHARS);
+    if (personality) facts.push(`personality: ${personality}`);
+    const specialTraits = cleanStr(c.specialTraits).slice(0, CANON_TRAIT_FACT_CHARS);
+    if (specialTraits) facts.push(`fixed traits: ${specialTraits}`);
+    const mannerisms = cleanList(c.mannerisms);
+    if (mannerisms) facts.push(`mannerisms: ${mannerisms}`);
+    const motivations = cleanStr(c.motivations).slice(0, CANON_TRAIT_FACT_CHARS);
+    if (motivations) facts.push(`motivations: ${motivations}`);
+    const likes = cleanList(c.likes);
+    if (likes) facts.push(`likes: ${likes}`);
+    const dislikes = cleanList(c.dislikes);
+    if (dislikes) facts.push(`dislikes: ${dislikes}`);
+    const speechPattern = cleanStr(c.speechPattern);
+    if (speechPattern) facts.push(`speech: ${speechPattern}`);
+    if (!facts.length) continue;
+    const who = aliases.length ? `${name} (also: ${aliases.join(', ')})` : name;
+    rows.push(`- ${who} — ${facts.join('; ')}`);
+  }
+  if (!rows.length) return '';
+  return `Canon character traits (the established bible — a shift away from these must be earned on the page):\n${rows.join('\n')}`;
+}
+
 // Human-readable labels for the continuity-bible fact categories (#1305). Inlined
 // (not imported from server/services/pipeline/continuityBible.js) to keep this
 // registry PURE — that module pulls in I/O + an SSE runner. Mirrors its
@@ -442,6 +500,18 @@ export const PLOT_STRUCTURE_STAGE = 'pipeline-editorial-plot-structure';
 // — a dead character who reappears alive, an age that contradicts the bible, or an
 // impossible chronology.
 export const TIMELINE_CONTRADICTION_STAGE = 'pipeline-editorial-timeline-contradiction';
+
+// Stage name for the character-consistency / unearned-personality-shift LLM check
+// (#1582). Ships in data.reference/prompts/stages/ + stage-config.json (fresh
+// installs via setup-data.js) and migrates to existing installs via migration 130
+// (boot runs migrations but NOT setup-data, so the migration is required). Reads
+// the stitched manuscript plus the established canon character TRAITS (personality,
+// fixed traits, mannerisms, speech), the reverse-outline scene ordering, and the
+// authored per-character arcs — and flags a shift the prose never earns: a reserved
+// character cracking jokes with no beat, a fear/allergy silently contradicted, or
+// POV knowledge that changes mid-scene with no on-page learning. Reconciles against
+// the authored arcs so an intentional, earned transition is NOT flagged.
+export const CHARACTER_CONSISTENCY_STAGE = 'pipeline-editorial-character-consistency';
 
 // Stage name for the head-hopping / POV-discipline LLM check (#1311). Ships in
 // data.reference/prompts/stages/ + stage-config.json (fresh installs via
@@ -3020,6 +3090,78 @@ export const EDITORIAL_CHECKS = [
         crossChunkSetup: true,
         setupFocus:
           'For each named character, note their last-established state a later part must stay consistent with: alive or dead (and how/when), stated or implied age, and current location — plus any dated events and the elapsed time between them. Carry these forward so a later chunk can catch a character who reappears alive after dying, an age that contradicts an earlier one, or an impossible chronology.',
+      });
+    },
+  },
+  {
+    id: 'character.consistency',
+    sources: ['manuscript', 'canon', 'reverseOutline', 'series.characterArcs'],
+    label: 'Character consistency (unearned personality shift)',
+    description:
+      'LLM scan for UNEARNED characterization changes: a reserved character who suddenly cracks jokes with no arc beat, an established trait silently contradicted (a stated fear, allergy, or skill the prose breaks), or POV-character knowledge that changes mid-scene without on-page learning. Reconciles the prose against the established canon character traits (personality, fixed traits, mannerisms, speech), the reverse-outline scene ordering, and the AUTHORED per-character arcs — so an intentional, earned transition is NOT flagged. Degrades to a prose-only scan when no canon or outline exists.',
+    scope: 'series',
+    kind: 'llm',
+    category: 'character',
+    // Fallback severity when the model omits one — 'medium' to match the sibling
+    // characterization/continuity LLM checks. The prompt directs the model to mark
+    // a flat trait-contradiction that breaks a plot beat 'high' per finding, so a
+    // genuinely-jarring shift still surfaces as high.
+    severityDefault: 'medium',
+    defaultEnabled: true,
+    // Reads the stitched manuscript corpus — so the runner only pays the
+    // section-collection I/O when a manuscript-consuming check is enabled.
+    needsManuscript: true,
+    configSchema: z.object({
+      // Cap findings per run so a long manuscript can't flood the review.
+      maxFindings: z.number().int().min(1).max(50).default(12),
+    }),
+    configFields: [
+      {
+        key: 'maxFindings',
+        label: 'Max findings per run',
+        type: 'number',
+        min: 1,
+        max: 50,
+        step: 1,
+        help: 'Cap findings so a long manuscript can not flood the review.',
+      },
+    ],
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    run: (ctx) => {
+      // All three blocks are fixed per-call overhead (re-sent on each chunk) and
+      // pure context: the canon traits give the established temperament/voice/
+      // fixed-trait baseline a shift must be measured against, the scene map gives
+      // the chronology to spot a knowledge-jump within a scene, and the authored
+      // arcs let the model SUPPRESS an earned transition (a character the author
+      // intends to change). The check degrades gracefully — no canon ⇒
+      // {{#canonTraits}} renders nothing; no outline ⇒ {{#sceneMap}} renders
+      // nothing; no authored arcs ⇒ {{#characterArcs}} renders nothing and the
+      // model reasons from the prose's own internal consistency.
+      const canonTraits = canonCharacterTraitsSummary(ctx.canon);
+      const sceneMap = sceneGroundingSummary(ctx.reverseOutline);
+      const characterArcs = renderCharacterArcsForPrompt(ctx.series?.characterArcs) || '';
+      return runManuscriptLlmCheck(ctx, {
+        stage: CHARACTER_CONSISTENCY_STAGE,
+        category: 'character',
+        // canonTraits + sceneMap grow with cast/scene count; characterArcs is
+        // bounded — so largest-first trimming absorbs the cut into those.
+        context: { canonTraits, sceneMap, characterArcs },
+        buildVars: (manuscript, _meta, c) => ({
+          manuscript,
+          canonTraits: c.canonTraits,
+          sceneMap: c.sceneMap,
+          characterArcs: c.characterArcs,
+        }),
+        // A personality shift is only visible against what came BEFORE — the
+        // reserved-character baseline lives in an early chunk and the unearned
+        // joke lands in a later one. The findings digest keeps prior findings in
+        // view so a later chunk doesn't re-flag, and the clean-setup digest rolls
+        // each character's established temperament forward so a later chunk can
+        // catch a trait that silently flips.
+        crossChunkDigest: true,
+        crossChunkSetup: true,
+        setupFocus:
+          'For each named character, note their established temperament, voice, and fixed traits (how they speak, what they fear/avoid, what they know) plus any EARNED change the prose has already paid off. Carry these forward so a later chunk can tell an unearned shift (a reserved character suddenly joking, a stated fear ignored, knowledge appearing with no on-page learning) from a transition the story has legitimately set up.',
       });
     },
   },
