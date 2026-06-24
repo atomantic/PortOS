@@ -197,11 +197,13 @@ export function parseBeatSheetScenes(markdown) {
       entry = sm[2].trim();
     }
     if (!entry) continue;
-    // The first colon separates the slugline from the beats clause. Sluglines
-    // (INT./EXT. LOCATION — TIME) don't normally carry a colon, so this is safe.
+    // A colon separates the slugline from the beats clause. Match the first
+    // colon NOT followed by a digit, so a clock TIME in the slugline
+    // (`INT. OFFICE — 3:00 PM: the meeting`) splits on the `PM:` separator
+    // rather than the `3:00` time — preserving the full slugline for matching.
     let slugline = entry;
     let summary = '';
-    const colon = entry.indexOf(':');
+    const colon = entry.search(/:(?!\d)/);
     if (colon >= 0) {
       slugline = entry.slice(0, colon).trim();
       summary = entry.slice(colon + 1).trim();

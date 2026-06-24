@@ -442,6 +442,21 @@ describe('parseBeatSheetScenes', () => {
       { number: 3, slugline: 'INT. LAB — NIGHT', summary: 'the experiment' },
     ]);
   });
+
+  it('does not split a clock TIME in the slugline (splits on the beats-clause colon)', () => {
+    const md = '## Scenes\n1. Scene 1 — INT. OFFICE — 3:00 PM: the meeting';
+    expect(parseBeatSheetScenes(md)).toEqual([
+      { number: 1, slugline: 'INT. OFFICE — 3:00 PM', summary: 'the meeting' },
+    ]);
+  });
+
+  it('handles CRLF line endings', () => {
+    const md = '## Scenes\r\n1. Scene 1 — EXT. PIER — DAWN: the arrival\r\n2. Scene 2 — INT. HOLD — DAY: the search\r\n';
+    expect(parseBeatSheetScenes(md)).toEqual([
+      { number: 1, slugline: 'EXT. PIER — DAWN', summary: 'the arrival' },
+      { number: 2, slugline: 'INT. HOLD — DAY', summary: 'the search' },
+    ]);
+  });
 });
 
 describe('scenesFromBeatSheet', () => {
