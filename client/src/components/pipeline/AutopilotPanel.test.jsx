@@ -103,6 +103,38 @@ describe('AutopilotPanel', () => {
     );
   });
 
+  it('sends a chosen readiness gate as a per-run override without persisting it (#1580)', async () => {
+    renderPanel({ id: 's1', targetFormat: 'comic' });
+    await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('button', { name: /options/i }));
+    fireEvent.change(screen.getByLabelText('Readiness gate'), { target: { value: 'none' } });
+    fireEvent.click(screen.getByRole('button', { name: /run autopilot/i }));
+    await waitFor(() => expect(startPipelineAutopilot).toHaveBeenCalledWith(
+      's1', { includeVisual: true, fileGaps: false, readinessGate: 'none' }, { silent: true },
+    ));
+    // Per-run only — the gate is never persisted to settings.
+    expect(patchSettingsSlice).not.toHaveBeenCalledWith(
+      'pipelineEditorialChecks',
+      expect.objectContaining({ readinessGate: expect.anything() }),
+      expect.anything(),
+    );
+  });
+
+  it('omits readinessGate when left on the saved default (#1580)', async () => {
+    getSettings.mockResolvedValue({ pipelineEditorialChecks: { readinessGate: 'noOpenHighOrMedium' } });
+    renderPanel({ id: 's1', targetFormat: 'comic' });
+    await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('button', { name: /options/i }));
+    // The saved default is surfaced in the "use saved default" option label.
+    await waitFor(() => expect(screen.getByLabelText('Readiness gate')).toHaveValue(''));
+    expect(screen.getByText(/Use saved default \(No open High or Medium/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /run autopilot/i }));
+    // Nothing chosen → no readinessGate sent; server resolves from the setting.
+    await waitFor(() => expect(startPipelineAutopilot).toHaveBeenCalledWith(
+      's1', { includeVisual: true, fileGaps: false }, { silent: true },
+    ));
+  });
+
   it('clears to the default (not 0) when a round input is emptied', async () => {
     renderPanel({ id: 's1', targetFormat: 'comic' });
     await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());

@@ -262,6 +262,25 @@ describe('resolveNextStep (pure)', () => {
     ).maxArcVerifyRounds).toBe(MAX_ARC_VERIFY_ROUNDS);
   });
 
+  it('resolveAutopilotReadinessGate: per-run option wins, else setting, else null (#1580)', () => {
+    const { resolveAutopilotReadinessGate } = autopilot;
+    // per-run override wins over a persisted setting
+    expect(resolveAutopilotReadinessGate(
+      { readinessGate: 'none' },
+      { pipelineEditorialChecks: { readinessGate: 'noOpenHighOrMedium' } },
+    )).toBe('none');
+    // persisted setting fills in when no per-run override
+    expect(resolveAutopilotReadinessGate({}, { pipelineEditorialChecks: { readinessGate: 'noOpenHighOrMedium' } }))
+      .toBe('noOpenHighOrMedium');
+    // null when neither is set — the caller resolves null to the default gate
+    expect(resolveAutopilotReadinessGate({}, null)).toBeNull();
+    // an invalid per-run gate falls through to the persisted setting
+    expect(resolveAutopilotReadinessGate(
+      { readinessGate: 'bogus' },
+      { pipelineEditorialChecks: { readinessGate: 'none' } },
+    )).toBe('none');
+  });
+
   it('regenerates the arc for an arc-only series with no volumes', () => {
     const arcOnly = { targetFormat: 'comic', arc: { logline: 'L', summary: 'S' }, seasons: [] };
     expect(resolveNextStep(arcOnly, []).kind).toBe('generateArc');
@@ -374,6 +393,20 @@ describe('resolveNextStep (pure)', () => {
     expect(totals.estLlmCalls).toBe(3);
     // A non-array (defensive) summarizes to zeroes.
     expect(autopilot.__testing.summarizePlanCost(null)).toEqual({ estActions: 0, estLlmCalls: 0 });
+  });
+
+  it('dry-run plan surfaces the effective readiness gate on the health-gate step (#1580)', () => {
+    const series = { targetFormat: 'comic', arc: { logline: 'L', summary: 'S' }, seasons: [{ id: 'se1', number: 1 }] };
+    const issues = [{ id: 'i1', seasonId: 'se1', number: 1, arcPosition: 1, stages: {} }];
+    const gateNote = (opts) => autopilot.__testing.buildDryRunPlan(series, issues, opts)
+      .find((p) => p.kind === 'editorialHealthGate')?.note;
+    // No override → the plan shows the default gate.
+    expect(gateNote({})).toMatch(/gate: noOpenHigh$/);
+    // A per-run override is reflected in the plan note.
+    expect(gateNote({ readinessGate: 'none' })).toMatch(/gate: none$/);
+    expect(gateNote({ readinessGate: 'noOpenHighOrMedium' })).toMatch(/gate: noOpenHighOrMedium$/);
+    // An invalid gate falls through to the default.
+    expect(gateNote({ readinessGate: 'bogus' })).toMatch(/gate: noOpenHigh$/);
   });
 
   it('asks to generate episodes for a season with no issues', () => {

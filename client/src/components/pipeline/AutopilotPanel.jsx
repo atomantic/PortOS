@@ -25,6 +25,17 @@ const ROUND_MAX = 20;
 const DEFAULT_ARC_ROUNDS = 3;
 const DEFAULT_EDITORIAL_ROUNDS = 2;
 const DEFAULT_BEAT_CONTINUITY_ROUNDS = 2;
+
+// Editorial-health readiness gate (#1316/#1580) — the "manuscript clean" bar the
+// autopilot must clear before visuals. Mirrors READINESS_GATES on the server. The
+// Options select sends a chosen gate as a PER-RUN override only (it does NOT
+// persist, unlike the round inputs) so a one-off looser/stricter run never edits
+// the install's saved default; '' means "use the saved default" and sends nothing.
+const READINESS_GATE_LABELS = {
+  noOpenHigh: 'No open High findings',
+  noOpenHighOrMedium: 'No open High or Medium (strict)',
+  none: 'None — skip the health gate',
+};
 const clampRound = (n, fallback) => {
   // A blank/cleared field falls back to the default — NOT 0. (Number('') === 0,
   // and 0 means "skip the gate", so without this a cleared input would silently
@@ -163,6 +174,11 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
   const [arcRounds, setArcRounds] = useState(DEFAULT_ARC_ROUNDS);
   const [editorialRounds, setEditorialRounds] = useState(DEFAULT_EDITORIAL_ROUNDS);
   const [beatContinuityRounds, setBeatContinuityRounds] = useState(DEFAULT_BEAT_CONTINUITY_ROUNDS);
+  // Per-run readiness-gate override (#1580). '' = use the saved default (send
+  // nothing). `savedGate` is the persisted gate, shown in the "saved default"
+  // option label so the user knows what the fallback is.
+  const [readinessGate, setReadinessGate] = useState('');
+  const [savedGate, setSavedGate] = useState('');
   // Per-field dirty flags. Until a field is edited its input shows a display
   // default we must NOT persist (that would clobber a higher saved setting on
   // the untouched gate). Tracked per-field so editing one gate never discards
@@ -188,6 +204,8 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
         if (!arcEditedRef.current) setArcRounds(Number.isInteger(pec.maxArcVerifyRounds) ? pec.maxArcVerifyRounds : DEFAULT_ARC_ROUNDS);
         if (!editorialEditedRef.current) setEditorialRounds(Number.isInteger(pec.maxEditorialRounds) ? pec.maxEditorialRounds : DEFAULT_EDITORIAL_ROUNDS);
         if (!beatContinuityEditedRef.current) setBeatContinuityRounds(Number.isInteger(pec.maxBeatContinuityRounds) ? pec.maxBeatContinuityRounds : DEFAULT_BEAT_CONTINUITY_ROUNDS);
+        // Persisted readiness gate — display-only, drives the "saved default" label.
+        setSavedGate(READINESS_GATE_LABELS[pec.readinessGate] ? pec.readinessGate : '');
       })
       .catch(() => null); // load failed → inputs keep defaults but start() only persists EDITED fields
     return () => { canceled = true; };
@@ -289,7 +307,11 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
     if (editorialEditedRef.current) roundOverrides.maxEditorialRounds = clampRound(editorialRounds, DEFAULT_EDITORIAL_ROUNDS);
     if (beatContinuityEditedRef.current) roundOverrides.maxBeatContinuityRounds = clampRound(beatContinuityRounds, DEFAULT_BEAT_CONTINUITY_ROUNDS);
     if (Object.keys(roundOverrides).length) await persistRounds(roundOverrides);
-    const res = await startPipelineAutopilot(seriesId, { includeVisual, fileGaps, ...roundOverrides }, { silent: true })
+    // Per-run readiness-gate override (#1580): send it ONLY when the user picked a
+    // specific gate. Unlike the round inputs we never persist it — '' leaves the
+    // server to resolve the gate from the saved setting (then the default).
+    const gateOverride = READINESS_GATE_LABELS[readinessGate] ? { readinessGate } : {};
+    const res = await startPipelineAutopilot(seriesId, { includeVisual, fileGaps, ...roundOverrides, ...gateOverride }, { silent: true })
       .catch((err) => { toast.error(err.message || 'Could not start autopilot'); return null; });
     setStarting(false);
     if (!res) return;
@@ -299,7 +321,7 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
     // effect can reject a stale terminal frame from the previous run.
     activeRunIdRef.current = res.runId || null;
     setActive(true);
-  }, [seriesId, includeVisual, fileGaps, arcRounds, editorialRounds, beatContinuityRounds, persistRounds]);
+  }, [seriesId, includeVisual, fileGaps, arcRounds, editorialRounds, beatContinuityRounds, readinessGate, persistRounds]);
 
   const cancel = useCallback(async () => {
     await cancelPipelineAutopilot(seriesId).catch(() => null);
@@ -403,6 +425,25 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
           </div>
           <p className="text-[11px] text-gray-500">
             How many auto-resolve rounds each gate attempts before pausing for human review (0 skips the gate, max {ROUND_MAX}). Saved as the default and reused on Resume.
+          </p>
+          <div className="flex items-center gap-2 pt-1">
+            <label htmlFor="autopilot-readiness-gate" className="text-xs text-gray-300">Readiness gate</label>
+            <select
+              id="autopilot-readiness-gate"
+              value={readinessGate}
+              onChange={(e) => setReadinessGate(e.target.value)}
+              className="px-2 py-1 rounded text-xs bg-port-bg border border-port-border text-gray-200"
+            >
+              <option value="">
+                Use saved default{savedGate ? ` (${READINESS_GATE_LABELS[savedGate]})` : ''}
+              </option>
+              {Object.entries(READINESS_GATE_LABELS).map(([value, label]) => (
+                <option key={value} value={value}>{label}</option>
+              ))}
+            </select>
+          </div>
+          <p className="text-[11px] text-gray-500">
+            The editorial-health bar this run must clear before drafting visuals. A per-run choice applies to this run only — it does not change the saved default.
           </p>
           <p className="text-[11px] text-gray-500">
             Runs under the CoS auto-run autonomy domain. With it set to <em>dry-run</em>, this only previews the plan.

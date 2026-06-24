@@ -17,6 +17,7 @@ import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
 import { validateRequest, MAX_CONVERGENCE_ROUNDS } from '../../lib/validation.js';
 import * as seriesSvc from '../../services/pipeline/series.js';
 import * as autopilot from '../../services/pipeline/seriesAutopilot.js';
+import { READINESS_GATES } from '../../services/pipeline/editorialScore.js';
 import { mapServiceError, providerOverrideShape } from './shared.js';
 
 const router = Router();
@@ -54,6 +55,12 @@ const autopilotStartSchema = z.object({
   // Absent/empty = run every enabled check (the default). Per-run only (no
   // persisted default); unknown/disabled ids are silently ignored by the runner.
   editorialCheckIds: z.array(z.string().min(1)).optional(),
+  // Per-run editorial-health readiness gate override (#1580). When omitted, the
+  // gate falls back to the persisted pipelineEditorialChecks.readinessGate, then
+  // the service default — so loosening (or tightening) the "manuscript clean" bar
+  // for one run no longer requires editing global settings. Enum shares the
+  // canonical READINESS_GATES set so the API and the scorer can't drift.
+  readinessGate: z.enum(READINESS_GATES).optional(),
 });
 
 router.post('/series/:id/autopilot/start', asyncHandler(async (req, res) => {
