@@ -8,14 +8,18 @@ import { describe, it, expect } from 'vitest';
 import {
   buildBoardRecord,
   applyBoardPatch,
+  applyBoardRestore,
   addItem,
   updateItem,
   removeItem,
+  sanitizeBoardForSync,
+  mergeBoardRecord,
+  imageUrlToImageFilename,
   MAX_ITEMS_PER_BOARD,
 } from './logic.js';
 
 describe('buildBoardRecord', () => {
-  it('builds a board with empty items and mirrored timestamps', () => {
+  it('builds a board with empty items, mirrored timestamps, and the soft-delete trio', () => {
     const board = buildBoardRecord({ name: 'Refs' }, { id: 'mb-1', now: 't0' });
     expect(board).toEqual({
       id: 'mb-1',
@@ -24,6 +28,8 @@ describe('buildBoardRecord', () => {
       items: [],
       createdAt: 't0',
       updatedAt: 't0',
+      deleted: false,
+      deletedAt: null,
     });
   });
   it('keeps a provided description', () => {
@@ -129,5 +135,92 @@ describe('removeItem', () => {
     const { board, removed } = removeItem(withItem, 'nope');
     expect(removed).toBe(false);
     expect(board).toBe(withItem);
+  });
+});
+
+describe('sanitizeBoardForSync', () => {
+  it('drops a non-object or id-less record', () => {
+    expect(sanitizeBoardForSync(null)).toBeNull();
+    expect(sanitizeBoardForSync([])).toBeNull();
+    expect(sanitizeBoardForSync({ name: 'no id' })).toBeNull();
+  });
+  it('normalizes the soft-delete trio and defaults updatedAt to createdAt', () => {
+    const out = sanitizeBoardForSync({ id: 'mb-1', name: 'A', createdAt: 't0' });
+    expect(out).toMatchObject({ id: 'mb-1', createdAt: 't0', updatedAt: 't0', deleted: false, deletedAt: null });
+  });
+  it('preserves a tombstone', () => {
+    const out = sanitizeBoardForSync({ id: 'mb-1', name: 'A', createdAt: 't0', updatedAt: 't1', deleted: true, deletedAt: 't1' });
+    expect(out).toMatchObject({ deleted: true, deletedAt: 't1' });
+  });
+});
+
+describe('mergeBoardRecord (LWW)', () => {
+  const board = (over = {}) => ({ id: 'mb-1', name: 'A', description: '', items: [], createdAt: 't0', updatedAt: '2026-06-23T00:00:00.000Z', deleted: false, deletedAt: null, ...over });
+
+  it('inserts when there is no local copy', () => {
+    const { next, inserted, remoteWins } = mergeBoardRecord(null, board());
+    expect(inserted).toBe(true);
+    expect(remoteWins).toBe(true);
+    expect(next.id).toBe('mb-1');
+  });
+  it('drops a malformed remote', () => {
+    expect(mergeBoardRecord(board(), { name: 'no id' }).next).toBeNull();
+  });
+  it('newer remote updatedAt wins', () => {
+    const local = board({ updatedAt: '2026-06-23T00:00:00.000Z' });
+    const remote = board({ name: 'B', updatedAt: '2026-06-24T00:00:00.000Z' });
+    const { remoteWins, changed, next } = mergeBoardRecord(local, remote);
+    expect(remoteWins).toBe(true);
+    expect(changed).toBe(true);
+    expect(next.name).toBe('B');
+  });
+  it('older remote loses (local kept)', () => {
+    const local = board({ name: 'local', updatedAt: '2026-06-24T00:00:00.000Z' });
+    const remote = board({ name: 'remote', updatedAt: '2026-06-23T00:00:00.000Z' });
+    const { remoteWins, next } = mergeBoardRecord(local, remote);
+    expect(remoteWins).toBe(false);
+    expect(next.name).toBe('local');
+  });
+  it('a tombstone with a newer updatedAt wins over a live local', () => {
+    const local = board({ updatedAt: '2026-06-23T00:00:00.000Z' });
+    const remote = board({ updatedAt: '2026-06-24T00:00:00.000Z', deleted: true, deletedAt: '2026-06-24T00:00:00.000Z' });
+    const { remoteWins, next } = mergeBoardRecord(local, remote);
+    expect(remoteWins).toBe(true);
+    expect(next.deleted).toBe(true);
+  });
+  it('reports changed:false when the winner is byte-identical to local', () => {
+    const local = board();
+    const { changed } = mergeBoardRecord(local, board());
+    expect(changed).toBe(false);
+  });
+});
+
+describe('imageUrlToImageFilename', () => {
+  it('strips the app-path prefix to a bare gallery filename', () => {
+    expect(imageUrlToImageFilename('/data/images/foo.png')).toBe('foo.png');
+    expect(imageUrlToImageFilename('/data/images/sub/foo.png?v=2')).toBe('foo.png');
+  });
+  it('returns null for external / non-images / empty values', () => {
+    expect(imageUrlToImageFilename('https://x/y.png')).toBeNull();
+    expect(imageUrlToImageFilename('data:image/png;base64,AAA')).toBeNull();
+    expect(imageUrlToImageFilename('/data/videos/clip.mp4')).toBeNull();
+    expect(imageUrlToImageFilename('')).toBeNull();
+    expect(imageUrlToImageFilename(null)).toBeNull();
+  });
+});
+
+describe('applyBoardRestore', () => {
+  it('wholesale-restores name/description/items (unlike applyBoardPatch) and bumps updatedAt', () => {
+    const base = buildBoardRecord({ name: 'A' }, { id: 'mb-1', now: 't0' });
+    const items = [{ id: 'mbi-1', type: 'text', text: 'restored', mediaKey: null, imageUrl: null, caption: null, source: null, createdAt: 't0' }];
+    const next = applyBoardRestore(base, { name: 'B', description: 'd', items });
+    expect(next.name).toBe('B');
+    expect(next.description).toBe('d');
+    expect(next.items).toEqual(items);
+    expect(next.updatedAt).not.toBe('t0');
+  });
+  it('ignores a non-array items field', () => {
+    const base = { ...buildBoardRecord({ name: 'A' }, { id: 'mb-1', now: 't0' }), items: [{ id: 'x' }] };
+    expect(applyBoardRestore(base, { items: 'nope' }).items).toEqual([{ id: 'x' }]);
   });
 });

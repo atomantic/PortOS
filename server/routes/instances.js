@@ -66,6 +66,7 @@ const syncCategoriesSchema = z.object({
   albums: z.boolean().optional(),
   tracks: z.boolean().optional(),
   creativeDirectorProjects: z.boolean().optional(),
+  moodBoards: z.boolean().optional(),
   catalog: z.boolean().optional()
 }).optional();
 

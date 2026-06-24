@@ -15,7 +15,7 @@ import { catalogSyncIngredientSchema, catalogSyncRefSchema } from './catalogVali
 // subscriptions target another PortOS instance over Tailnet.
 export const peerSubscribeSchema = z.object({
   peerId: z.string().trim().min(1).max(120),
-  recordKind: z.enum(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject']),
+  recordKind: z.enum(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard']),
   recordId: z.string().trim().min(1).max(120),
 }).strict();
 
@@ -190,6 +190,14 @@ const creativeDirectorProjectPushSchema = z.object({
   kind: z.literal('creativeDirectorProject'),
   ...peerSyncPushBase,
 }).strict();
+// Mood boards (#1564) push the bare record + any local image bytes its items[]
+// reference in the asset manifest — no bundled children/linked collection rows,
+// so the base shape alone suffices (`.strict()` rejects smuggled bundle keys,
+// same posture as author/creativeDirectorProject).
+const moodBoardPushSchema = z.object({
+  kind: z.literal('moodBoard'),
+  ...peerSyncPushBase,
+}).strict();
 export const peerSyncPushSchema = z.discriminatedUnion('kind', [
   universePushSchema,
   seriesPushSchema,
@@ -199,13 +207,14 @@ export const peerSyncPushSchema = z.discriminatedUnion('kind', [
   albumPushSchema,
   trackPushSchema,
   creativeDirectorProjectPushSchema,
+  moodBoardPushSchema,
 ]);
 
 // Manual sync action schemas — used by POST /sync-record, /sync-now, /pull-metadata.
 
 export const peerSyncRecordSchema = z.object({
   peerId: z.string().trim().min(1).max(120),
-  recordKind: z.enum(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject']),
+  recordKind: z.enum(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard']),
   recordId: z.string().trim().min(1).max(200),
 }).strict();
 

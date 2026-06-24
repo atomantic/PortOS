@@ -662,18 +662,30 @@ CREATE INDEX IF NOT EXISTS idx_creative_director_projects_live ON creative_direc
 -- text note, optional caption, and an optional source backref — kept inline in
 -- the board's JSONB rather than a child table because a board is read/written
 -- whole (a small bounded item list, no cross-board item queries). `name` mirrors
--- a column for the live-list sort. Mood boards are db-primary and LOCAL-ONLY
--- (no sync_sequence/tombstone) — like creative_director_projects, they don't
--- federate to peers in v1. Mirrors the mood_boards block in db.js ensureSchema().
+-- a column for the live-list sort. As of #1564 mood boards FEDERATE across peers
+-- via the per-record peer-sync push pipeline (record kind `moodBoard`, sync
+-- category `moodBoards`), so the soft-delete tombstone trio (deleted/deleted_at +
+-- LWW updated_at) mirrors creative_director_projects — a delete is a tombstone the
+-- merge keeps an out-of-date peer from resurrecting (NOT a hard DELETE). Mirrors
+-- the mood_boards block in db.js ensureSchema().
 CREATE TABLE IF NOT EXISTS mood_boards (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   data JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  deleted BOOLEAN DEFAULT FALSE,               -- soft-delete tombstone so deletes propagate to peers
+  deleted_at TIMESTAMPTZ
 );
+-- Backfill the tombstone columns on installs created before #1564 (the CREATE
+-- above is a no-op once the table exists), so re-applying this schema to an
+-- existing DB stays idempotent and the partial index below can reference `deleted`.
+ALTER TABLE mood_boards ADD COLUMN IF NOT EXISTS deleted BOOLEAN DEFAULT FALSE;
+ALTER TABLE mood_boards ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
 -- updated_at DESC is the board-list "recently touched" sort.
 CREATE INDEX IF NOT EXISTS idx_mood_boards_updated ON mood_boards (updated_at DESC);
+-- Partial index for the live-list filter (deleted = FALSE).
+CREATE INDEX IF NOT EXISTS idx_mood_boards_live ON mood_boards (deleted) WHERE deleted = FALSE;
 
 -- Media asset index (Phase 3.2, issue #1000). One row per generated image or
 -- video. The bytes stay on disk (data/images, data/videos) and the image

@@ -104,12 +104,19 @@ import {
   startingImageFilename,
 } from '../creativeDirector/local.js';
 import {
+  getBoard,
+  listBoards,
+  mergeBoardsFromSync,
+  imageUrlToImageFilename,
+} from '../moodBoard/index.js';
+import { parseKey } from '../../lib/mediaItemKey.js';
+import {
   initCursor,
   ackDeletesUpTo,
   removeCursor as removeTombstoneCursor,
 } from './peerTombstoneCursors.js';
 
-export const PEER_SUBSCRIBABLE_KINDS = Object.freeze(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject']);
+export const PEER_SUBSCRIBABLE_KINDS = Object.freeze(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard']);
 
 /**
  * Cross-cutting event bus for the peer-sync receiver. The asset-pull worker
@@ -387,6 +394,7 @@ const KIND_TO_CATEGORY = Object.freeze({
   album: 'albums',
   track: 'tracks',
   creativeDirectorProject: 'creativeDirectorProjects',
+  moodBoard: 'moodBoards',
 });
 
 function peerAllowsOutbound(peer) {
@@ -487,6 +495,8 @@ async function listRecordsForKind(recordKind) {
     records = await listTracks({ includeDeleted: false }).catch(() => []);
   } else if (recordKind === 'creativeDirectorProject') {
     records = await listProjects({ includeDeleted: false }).catch(() => []);
+  } else if (recordKind === 'moodBoard') {
+    records = await listBoards({ includeDeleted: false }).catch(() => []);
   }
   return records.filter(r => r?.ephemeral !== true && isNonEmptyStr(r?.id));
 }
@@ -790,6 +800,7 @@ async function buildIntegrityAssetManifest(kind, record) {
   if (kind === 'album') return buildAlbumAssetManifest(record);
   if (kind === 'track') return buildTrackAssetManifest(record);
   if (kind === 'creativeDirectorProject') return buildProjectAssetManifest(record);
+  if (kind === 'moodBoard') return buildBoardAssetManifest(record);
   if (kind === 'series') {
     const childIssues = await listIssues({ seriesId: record?.id, includeDeleted: true }).catch(() => []);
     const manifestIssues = childIssues.filter(
@@ -1010,6 +1021,10 @@ async function isSubscriptionRecordTombstone(sub) {
   }
   if (sub.recordKind === 'creativeDirectorProject') {
     const record = await getProject(sub.recordId, { includeDeleted: true }).catch(() => null);
+    return record?.deleted === true;
+  }
+  if (sub.recordKind === 'moodBoard') {
+    const record = await getBoard(sub.recordId, { includeDeleted: true }).catch(() => null);
     return record?.deleted === true;
   }
   return false;
@@ -1570,6 +1585,14 @@ async function buildPushPayload(sub, sourceInstanceId) {
     const assetManifest = record.deleted === true ? [] : await buildProjectAssetManifest(record);
     return { kind: 'creativeDirectorProject', record: sanitized, assetManifest, sourceInstanceId, portosMeta };
   }
+  if (sub.recordKind === 'moodBoard') {
+    const record = await getBoard(sub.recordId, { includeDeleted: true }).catch(() => null);
+    if (!record) return null;
+    const sanitized = sanitizeRecordForWire('moodBoard', record);
+    if (!sanitized) return null;
+    const assetManifest = record.deleted === true ? [] : await buildBoardAssetManifest(record);
+    return { kind: 'moodBoard', record: sanitized, assetManifest, sourceInstanceId, portosMeta };
+  }
   return null;
 }
 
@@ -1634,6 +1657,46 @@ async function buildProjectAssetManifest(project) {
   if (!filename) return [];
   const entry = await hashImageForManifest(filename);
   return entry ? [entry] : [];
+}
+
+/**
+ * Hash the local image bytes a mood board's items reference so the receiver can
+ * pull them from `/data/images/` (or `/data/videos/`). An image item points at
+ * local bytes two ways: a media-key (`image:<ref>` / `video:<ref>`) into the
+ * gallery, or an app-path `imageUrl` (`/data/images/...`). External URLs
+ * (http(s)/data/blob) resolve on the receiver itself → skipped. Mirrors
+ * `buildAssetManifestForCollection`: path-traversal-guarded, missing-local-file
+ * skipped silently (including a null-hash entry would make every receiver
+ * re-request bytes the sender can't fulfill), dedup-by-`<kind>:<filename>` so a
+ * media-key and imageUrl pointing at the same file ship once. Text items carry
+ * no bytes.
+ */
+async function buildBoardAssetManifest(board) {
+  const dedup = new Map();
+  for (const it of board?.items || []) {
+    if (!it || it.type !== 'image') continue;
+    const pending = [];
+    if (typeof it.mediaKey === 'string') {
+      const parsed = parseKey(it.mediaKey);
+      if (parsed) {
+        const safeName = sanitizeAssetFilename(parsed.ref);
+        if (safeName) {
+          pending.push(parsed.kind === 'video'
+            ? hashSimpleAsset(collectionVideoRefToFilename(safeName), 'video', PATHS.videos)
+            : hashImageForManifest(safeName));
+        }
+      }
+    }
+    if (typeof it.imageUrl === 'string') {
+      const filename = imageUrlToImageFilename(it.imageUrl);
+      const safeName = filename ? sanitizeAssetFilename(filename) : null;
+      if (safeName) pending.push(hashImageForManifest(safeName));
+    }
+    for (const entry of await Promise.all(pending)) {
+      if (entry) dedup.set(`${entry.kind}:${entry.filename}`, entry);
+    }
+  }
+  return [...dedup.values()];
 }
 
 /**
@@ -1985,6 +2048,8 @@ export async function applyIncomingPush(payload) {
     await mergeTracksFromSync([record], { source });
   } else if (kind === 'creativeDirectorProject') {
     await mergeProjectsFromSync([record], { source });
+  } else if (kind === 'moodBoard') {
+    await mergeBoardsFromSync([record], { source });
   }
 
   // Apply the bundled collection (if any) — same LWW + union-of-items
@@ -2226,6 +2291,13 @@ async function classifyLocalRecord(recordKind, recordId) {
     // lastPushedHash + LWW same-`updatedAt` no-op merge prevent it.
     const p = await getProject(recordId, { includeDeleted: true }).catch(() => null);
     return p ? 'syncable' : 'missing';
+  }
+  if (recordKind === 'moodBoard') {
+    // Mood boards have no `ephemeral` concept (like the persona/music/CD kinds) —
+    // a found record (live or tombstoned) is always 'syncable'. No ping-pong risk:
+    // lastPushedHash + LWW same-`updatedAt` no-op merge prevent it.
+    const b = await getBoard(recordId, { includeDeleted: true }).catch(() => null);
+    return b ? 'syncable' : 'missing';
   }
   return 'missing';
 }

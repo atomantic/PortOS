@@ -162,15 +162,17 @@ export function sanitizeRecordForWire(kind, record) {
     case 'artist':
     case 'album':
     case 'track':
-    case 'creativeDirectorProject': {
-      // Persona/music/creative-director records: like mediaCollection, no
-      // `ephemeral` flag — always wire-syncable when present. Strip-then-tail-
+    case 'creativeDirectorProject':
+    case 'moodBoard': {
+      // Persona/music/creative-director/mood-board records: like mediaCollection,
+      // no `ephemeral` flag — always wire-syncable when present. Strip-then-tail-
       // re-add the soft-delete pair for byte-stable checksums. The whole record
       // is LWW-overwritten on merge (no item-union), so the wire form converges
       // byte-for-byte and feeds the conflict-journal content hash directly (no
       // scalar narrowing in contentHashForRecord). A creativeDirectorProject is
       // larger than a persona (treatment/scenes/runs) but follows the same whole-
-      // record LWW contract — every field is app-authored data that mirrors.
+      // record LWW contract — every field is app-authored data that mirrors; a
+      // moodBoard (name/description/items) is the same whole-record contract.
       const { deleted: _d, deletedAt: _da, ...rest } = record;
       return { ...rest, ...sanitizeSoftDeleteFields(record) };
     }

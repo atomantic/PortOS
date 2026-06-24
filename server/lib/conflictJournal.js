@@ -334,6 +334,15 @@ export const RESTORABLE_FIELDS = Object.freeze({
   // is what the Conflicts UI offers for restore. `creativeDirectorProject`
   // matches the record kind and mergeProjectRecord accepts every field here.
   creativeDirectorProject: ['name', 'status', 'styleSpec', 'userStory', 'treatment', 'aspectRatio', 'quality', 'modelId', 'targetDurationSeconds', 'disableAudio', 'autoAcceptScenes', 'startingImageFile'],
+  // Mood boards (#1564): the user-authored fields the merge can restore. `items[]`
+  // (the pinned image/text references) carries the bulk of the work, alongside
+  // name/description. Server-owned / structural fields are excluded — `id`/
+  // `createdAt`/the LWW-tombstone trio. The whole record is hashed for DETECTION
+  // by contentHashForRecord (no scalar narrowing); this set is what the Conflicts
+  // UI offers for restore. `moodBoard` matches the record kind, and the resolver
+  // routes restore through restoreBoard → applyBoardRestore (which accepts items,
+  // unlike the route's applyBoardPatch).
+  moodBoard: ['name', 'description', 'items'],
 });
 
 const present = (v) => v !== undefined;
