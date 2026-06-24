@@ -14,6 +14,7 @@ const STEP_LABELS = {
   'pm2-stop': 'Stopping apps',
   'npm-install': 'Installing dependencies',
   setup: 'Running setup',
+  ffmpeg: 'Checking ffmpeg',
   migrations: 'Running migrations',
   build: 'Building client',
   restart: 'Restarting PortOS',
