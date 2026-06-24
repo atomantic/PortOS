@@ -103,11 +103,18 @@ describe('Writers Room federation facade — file backend', () => {
     expect(manifest[0]).toMatchObject({ kind: 'writers-room-draft', workId: WORK, draftId: DRAFT });
     expect(typeof manifest[0].sha256).toBe('string');
 
-    // Identical hash → nothing missing.
+    // Identical hash → nothing missing (present + match, regardless of the gate).
     expect(await sync.diffWorkBodyManifest(manifest)).toEqual([]);
-    // Different hash → the body is reported missing (peer has a newer body).
+    expect(await sync.diffWorkBodyManifest(manifest, { includeMismatched: true })).toEqual([]);
+
+    // Present-but-different local body:
     const stale = [{ ...manifest[0], sha256: 'f'.repeat(64) }];
-    expect(await sync.diffWorkBodyManifest(stale)).toEqual(stale.map((e) => ({ kind: e.kind, workId: e.workId, draftId: e.draftId, sha256: e.sha256 })));
+    const expected = stale.map((e) => ({ kind: e.kind, workId: e.workId, draftId: e.draftId, sha256: e.sha256 }));
+    // …default (the work merge did NOT accept the remote) → NOT pulled, so a
+    // stale push can't clobber the newer local prose.
+    expect(await sync.diffWorkBodyManifest(stale)).toEqual([]);
+    // …includeMismatched (remote won the record merge) → pulled to overwrite.
+    expect(await sync.diffWorkBodyManifest(stale, { includeMismatched: true })).toEqual(expected);
   });
 
   it('diffWorkBodyManifest reports an absent local body as missing and rejects bad ids', async () => {
