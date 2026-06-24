@@ -951,6 +951,28 @@ describe('autopilot conductor', () => {
     expect(generateReverseOutline).not.toHaveBeenCalled();
   });
 
+  it('a budget-exhausted run does not pause at the no-op reverse-outline refresh (#1575 self-gating exemption)', async () => {
+    // A subset run whose checks don't consume the outline makes the refresh a
+    // guaranteed no-op. Budget goes exhausted right after the editorial-review
+    // pass spends its last action, so the NEXT step (reverseOutline) sees no
+    // budget. The pre-dispatch gate must NOT pause there — the refresh self-gates
+    // and would bill nothing — so the run reaches completion (editorialChecks +
+    // healthGate are exempt too) instead of a spurious budget pause.
+    reverseOutlineConsumed = false; // subset skips every outline-consuming check
+    reverseOutlineState = { status: 'complete', stale: true }; // stale, but unused
+    getDomainBudgetStatus.mockImplementation(async () => (
+      arcSpies.analyzeManuscriptCompleteness.mock.calls.length >= 1
+        ? { withinBudget: false, exceeded: 'actions' }
+        : { withinBudget: true, exceeded: null }
+    ));
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { editorialCheckIds: ['naming'], includeVisual: false });
+    await waitFor(runFinished(seriesId));
+    const last = autopilot.__testing.runs.get(seriesId)?.lastPayload;
+    expect(last?.type).toBe('complete');
+    expect(generateReverseOutline).not.toHaveBeenCalled();
+  });
+
   it('skips the reverse-outline refresh when nothing is drafted yet (#1349)', async () => {
     reverseOutlineConsumed = true;
     reverseOutlineState = { status: 'no-content' }; // gate 2: no manuscript to segment
