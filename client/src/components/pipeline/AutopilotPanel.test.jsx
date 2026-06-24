@@ -130,6 +130,26 @@ describe('AutopilotPanel', () => {
     expect(screen.getByRole('button', { name: /resume autopilot/i })).toBeInTheDocument();
   });
 
+  it('flags a divergence pause with a "not converging" badge (#1571)', async () => {
+    renderPanel({
+      id: 's1',
+      targetFormat: 'comic',
+      autopilot: { status: 'paused', currentStep: 'verifyArc', pauseKind: 'divergence' },
+    });
+    await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
+    expect(screen.getByText(/not converging/i)).toBeInTheDocument();
+  });
+
+  it('does not show the "not converging" badge for an ordinary maxRounds pause', async () => {
+    renderPanel({
+      id: 's1',
+      targetFormat: 'comic',
+      autopilot: { status: 'paused', currentStep: 'verifyArc', pauseKind: 'maxRounds' },
+    });
+    await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
+    expect(screen.queryByText(/not converging/i)).not.toBeInTheDocument();
+  });
+
   it('ignores a stale terminal frame from a previous run when starting again', async () => {
     startPipelineAutopilot.mockResolvedValue({ runId: 'B', mode: 'execute' });
     sseLatest = { type: 'complete', runId: 'A' }; // leftover terminal frame from run A

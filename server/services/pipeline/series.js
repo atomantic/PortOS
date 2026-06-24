@@ -110,6 +110,12 @@ export const AUTOPILOT_STATUSES = Object.freeze(['idle', 'running', 'paused', 'd
 export const AUTOPILOT_STEP_MAX = 80;
 export const AUTOPILOT_ERROR_MAX = 1000;
 const AUTOPILOT_FINDING_SEVERITIES = ['high', 'medium', 'low'];
+// Why a convergence gate paused the run (#1571): `maxRounds` (the verify→resolve
+// loop ran out of rounds) vs `divergence` (it stopped converging early — the
+// blocking count failed to drop). Lets the UI tell "ran out of rounds" from
+// "needs a human" without string-matching the reason text. Any other pause
+// (budget, error, a capability gap) leaves this null.
+export const AUTOPILOT_PAUSE_KINDS = Object.freeze(['maxRounds', 'divergence']);
 
 export const sanitizeAutopilot = (raw) => {
   if (!raw || typeof raw !== 'object') return null;
@@ -135,6 +141,12 @@ export const sanitizeAutopilot = (raw) => {
     currentStep: trimTo(raw.currentStep, AUTOPILOT_STEP_MAX) || null,
     residualFindings,
     lastError: trimTo(raw.lastError, AUTOPILOT_ERROR_MAX) || null,
+    // No `pipelineSeries` schema-gate bump for this (or any) autopilot field: the
+    // marker is transient, regenerated-every-run status, NOT durable creative
+    // content. Unlike readerMap/styleGuide/characterArcs (gated because an LWW
+    // strip is real data loss), a stale peer that drops pauseKind just briefly
+    // shows a generic "paused" banner until the next run re-stamps it.
+    pauseKind: AUTOPILOT_PAUSE_KINDS.includes(raw.pauseKind) ? raw.pauseKind : null,
     updatedAt: isStr(raw.updatedAt) ? raw.updatedAt : null,
   };
 };

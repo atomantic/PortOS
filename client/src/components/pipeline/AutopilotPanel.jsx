@@ -426,6 +426,14 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
             <span className={ap.status === 'paused' ? 'text-port-warning' : ap.status === 'done' ? 'text-port-success' : 'text-port-error'}>
               {ap.status === 'paused' ? (ap.currentStep ? `Paused at ${stepLabel(ap.currentStep)}` : 'Paused') : ap.status === 'done' ? 'Last run completed — draft is production-ready' : 'Last run errored'}
             </span>
+            {ap.status === 'paused' && ap.pauseKind === 'divergence' ? (
+              <span
+                className="px-1.5 py-0.5 rounded text-[10px] bg-port-warning/15 text-port-warning border border-port-warning/30"
+                title="Auto-resolve stopped reducing blocking findings — needs a human edit, not more rounds"
+              >
+                not converging
+              </span>
+            ) : null}
           </div>
           {ap.lastError && ap.status !== 'done' ? <p className="text-[11px] text-gray-400 mt-1">{ap.lastError}</p> : null}
           <Findings items={ap.residualFindings} />

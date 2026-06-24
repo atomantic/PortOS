@@ -150,6 +150,48 @@ function convergencePauseReason(gate, maxRounds, blockingCount) {
     + `paused for review. ${fix}, or raise the ${limit} limit in Options and resume.`;
 }
 
+// Divergence/oscillation guard for the bounded convergence loops (#1571). A
+// verify→resolve round is "profitable" only when the next verify shows STRICTLY
+// FEWER blocking findings. When the count fails to drop (stays equal, or rises —
+// a resolve pass that introduced a new break while fixing another) for
+// DIVERGENCE_PATIENCE consecutive rounds, the loop is no longer converging:
+// stop early and pause with a `divergence` kind instead of burning the rest of
+// the daily cos budget down to maxRounds. The terminal maxRounds pause keeps its
+// own `maxRounds` kind — the two are distinguished in the pause SSE frame so the
+// UI can tell "needs a human" (diverging) from "just ran out of rounds".
+//
+// With the default caps (arc 3 / beat 2 / editorial 2) the loop hits maxRounds
+// before the streak can reach patience, so default runs are unaffected; the
+// guard only bites when a user RAISES a cap and the loop then stalls.
+export const DIVERGENCE_PATIENCE = 2;
+
+// Convergence tracker for one verify→resolve round. `state` is
+// { best, sinceBest }: `best` is the FEWEST blocking findings seen so far this
+// loop (null before the first measured round), `sinceBest` the count of
+// consecutive rounds since that minimum last STRICTLY improved. A round that
+// reaches a new low is progress (sinceBest → 0); a stall, a regression (a fix
+// that introduced a new break), OR an oscillation that merely revisits an old
+// count all accrue sinceBest. The loop diverges once sinceBest reaches
+// DIVERGENCE_PATIENCE. Tracking the running minimum (not just the previous
+// round) is what lets this catch a 2-cycle oscillation — e.g. 5→4→5→4 never
+// sets a new low after round 2, so it's caught — which a naive
+// "compare to the previous round" check would miss. Pure + unit-tested.
+export function trackConvergence(state, curr) {
+  if (state.best === null || curr < state.best) {
+    return { best: curr, sinceBest: 0 };
+  }
+  return { best: state.best, sinceBest: state.sinceBest + 1 };
+}
+
+// Pause reason for a gate that stopped converging early (#1571) — distinct
+// wording from convergencePauseReason's "ran out of rounds".
+function divergencePauseReason(gate, blockingCount, rounds) {
+  const { label, fix } = PAUSE_GATES[gate];
+  const plural = rounds === 1 ? 'round' : 'rounds';
+  return `${label} stopped converging — ${blockingCount} blocking finding(s) and no net progress over `
+    + `${rounds} consecutive ${plural} of auto-resolve. Paused for review. ${fix}, then resume.`;
+}
+
 // Dry-run plan note for a bounded gate: "skipped (0 rounds)" or "up to N rounds".
 const roundsNote = (rounds) => (rounds === 0 ? 'skipped (0 rounds)' : `up to ${rounds} rounds`);
 
@@ -561,6 +603,7 @@ async function runArcVerify(seriesId, record) {
     record.runState.arcVerified = true;
     return {};
   }
+  let convergence = { best: null, sinceBest: 0 };
   for (let round = 1; round <= maxRounds; round += 1) {
     if (record.cancelRequested) return { canceled: true };
     const beforeVerify = await budgetPause();
@@ -576,7 +619,13 @@ async function runArcVerify(seriesId, record) {
       return {};
     }
     if (round === maxRounds) {
-      return { pause: true, reason: convergencePauseReason('arc', maxRounds, blocking.length), residual: blocking };
+      return { pause: true, pauseKind: 'maxRounds', reason: convergencePauseReason('arc', maxRounds, blocking.length), residual: blocking };
+    }
+    // Divergence guard (#1571): if the resolve passes stop reducing blocking
+    // findings, bail now rather than burning the remaining rounds + budget.
+    convergence = trackConvergence(convergence, blocking.length);
+    if (convergence.sinceBest >= DIVERGENCE_PATIENCE) {
+      return { pause: true, pauseKind: 'divergence', reason: divergencePauseReason('arc', blocking.length, DIVERGENCE_PATIENCE), residual: blocking };
     }
     if (record.cancelRequested) return { canceled: true };
     // resolveVerifyIssues bills another action — recheck the budget so a single
@@ -609,6 +658,7 @@ async function runBeatContinuity(seriesId, record) {
     record.runState.beatContinuityChecked = true;
     return {};
   }
+  let convergence = { best: null, sinceBest: 0 };
   for (let round = 1; round <= maxRounds; round += 1) {
     if (record.cancelRequested) return { canceled: true };
     const beforeVerify = await budgetPause();
@@ -624,7 +674,12 @@ async function runBeatContinuity(seriesId, record) {
       return {};
     }
     if (round === maxRounds) {
-      return { pause: true, reason: convergencePauseReason('beatContinuity', maxRounds, blocking.length), residual: blocking };
+      return { pause: true, pauseKind: 'maxRounds', reason: convergencePauseReason('beatContinuity', maxRounds, blocking.length), residual: blocking };
+    }
+    // Divergence guard (#1571): bail when the resolve passes stop reducing blocking findings.
+    convergence = trackConvergence(convergence, blocking.length);
+    if (convergence.sinceBest >= DIVERGENCE_PATIENCE) {
+      return { pause: true, pauseKind: 'divergence', reason: divergencePauseReason('beatContinuity', blocking.length, DIVERGENCE_PATIENCE), residual: blocking };
     }
     if (record.cancelRequested) return { canceled: true };
     // resolveBeatContinuity bills another action — recheck the budget so a
@@ -769,6 +824,7 @@ async function runEditorial(sId, record) {
     record.runState.editorialHealthReady = true;
     return {};
   }
+  let convergence = { best: null, sinceBest: 0 };
   for (let round = 1; round <= maxRounds; round += 1) {
     if (record.cancelRequested) return { canceled: true };
     const beforeAnalyze = await budgetPause();
@@ -792,7 +848,12 @@ async function runEditorial(sId, record) {
       return {};
     }
     if (round === maxRounds) {
-      return { pause: true, reason: convergencePauseReason('editorial', maxRounds, blocking.length), residual: blocking };
+      return { pause: true, pauseKind: 'maxRounds', reason: convergencePauseReason('editorial', maxRounds, blocking.length), residual: blocking };
+    }
+    // Divergence guard (#1571): bail when the auto-fix passes stop reducing blocking findings.
+    convergence = trackConvergence(convergence, blocking.length);
+    if (convergence.sinceBest >= DIVERGENCE_PATIENCE) {
+      return { pause: true, pauseKind: 'divergence', reason: divergencePauseReason('editorial', blocking.length, DIVERGENCE_PATIENCE), residual: blocking };
     }
     // Bounded auto-fix: apply a fix for each open high-severity comment, then
     // the loop re-analyzes. Each fix is wrapped so one bad anchor doesn't abort
@@ -944,6 +1005,9 @@ async function runEditorialHealthGate(sId, record) {
   }
   // Not clean — surface the open blockers (via the shared helper, so the residual
   // can't disagree with computeHealth's `ready` verdict) for the human triage.
+  // No pauseKind (#1571): this is a single-pass gate, not a bounded verify→resolve
+  // loop, so it has no maxRounds/divergence distinction — leave it null. If this
+  // ever gains a retry loop, thread pauseKind through trackConvergence then.
   const blockers = openBlockers(comments, gate);
   return { pause: true, reason: `editorial health not clean (score ${health.score}, ${health.open} open finding(s))`, residual: blockers };
 }
@@ -1388,8 +1452,8 @@ export async function startSeriesAutopilot(sId, options = {}) {
 
         if (result?.canceled || record.cancelRequested) break;
         if (result?.pause) {
-          await persistMarker(sId, { status: 'paused', runId, currentStep: step.kind, residualFindings: result.residual || [], lastError: result.reason });
-          broadcast(sId, { type: 'paused', runId, scope: step.kind, reason: result.reason, residualFindings: result.residual || [], completedAt: new Date().toISOString() });
+          await persistMarker(sId, { status: 'paused', runId, currentStep: step.kind, residualFindings: result.residual || [], lastError: result.reason, pauseKind: result.pauseKind || null });
+          broadcast(sId, { type: 'paused', runId, scope: step.kind, reason: result.reason, residualFindings: result.residual || [], pauseKind: result.pauseKind || null, completedAt: new Date().toISOString() });
           // Only file the generic stalled task when the step didn't already file
           // a more specific gap (canon-undescribed, visual-no-pages, …) — else
           // fileGaps would create two CoS tasks for one underlying problem (the
