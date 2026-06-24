@@ -110,6 +110,10 @@ function frameLabel(f) {
 
 const RUN_ENDED = new Set(['complete', 'canceled', 'error', 'paused']);
 
+// #1572 — shared caution tail for a `done` run that filed blocking script-craft
+// gaps, so the completion toast and the persisted-status banner can't drift.
+const craftGapCaution = (n) => `${n} filed script-craft gap${n === 1 ? '' : 's'} — resolve before rendering`;
+
 function Findings({ items }) {
   if (!items?.length) return null;
   return (
@@ -242,7 +246,11 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
     setActive(false);
     getPipelineSeries(seriesId, { silent: true }).then((s) => { if (s) onSeriesUpdateRef.current?.(s); }).catch(() => null);
     listPipelineIssues(seriesId, { silent: true }).then((is) => onIssuesUpdateRef.current?.(Array.isArray(is) ? is : [])).catch(() => null);
-    if (latest.type === 'complete') toast.success(latest.dryRun ? 'Autopilot plan ready' : 'Autopilot complete — draft is production-ready');
+    if (latest.type === 'complete') {
+      if (latest.dryRun) toast.success('Autopilot plan ready');
+      else if (latest.craftGapIssues > 0) toast.warning(`Autopilot complete with ${craftGapCaution(latest.craftGapIssues)}`);
+      else toast.success('Autopilot complete — draft is production-ready');
+    }
     else if (latest.type === 'canceled') toast.success('Autopilot canceled');
     else if (latest.type === 'paused') toast.warning(`Autopilot paused — ${latest.reason || 'needs review'}`);
     else toast.error(latest.error || 'Autopilot failed');
@@ -416,15 +424,23 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
         </div>
       ) : null}
 
-      {/* Persisted status banner (paused / done / error) */}
-      {!active && ap && ap.status && ap.status !== 'idle' && ap.status !== 'running' ? (
-        <div className={`px-3 pb-3 border-t pt-2 ${ap.status === 'paused' ? 'border-port-warning/30' : ap.status === 'error' ? 'border-port-error/30' : 'border-port-success/30'}`}>
+      {/* Persisted status banner (paused / done / error). A `done` run that
+          filed blocking script-craft gaps (#1572) is shown as a caution, not
+          "production-ready" — those gaps still block downstream rendering. */}
+      {!active && ap && ap.status && ap.status !== 'idle' && ap.status !== 'running' ? (() => {
+        const doneWithGaps = ap.status === 'done' && ap.craftGapIssues > 0;
+        const tone = ap.status === 'paused' || doneWithGaps ? 'warning' : ap.status === 'error' ? 'error' : 'success';
+        return (
+        <div className={`px-3 pb-3 border-t pt-2 ${tone === 'warning' ? 'border-port-warning/30' : tone === 'error' ? 'border-port-error/30' : 'border-port-success/30'}`}>
           <div className="flex items-center gap-2 text-xs">
             {ap.status === 'paused' ? <PauseCircle size={13} className="text-port-warning" />
-              : ap.status === 'done' ? <CheckCircle2 size={13} className="text-port-success" />
-                : <AlertCircle size={13} className="text-port-error" />}
-            <span className={ap.status === 'paused' ? 'text-port-warning' : ap.status === 'done' ? 'text-port-success' : 'text-port-error'}>
-              {ap.status === 'paused' ? (ap.currentStep ? `Paused at ${stepLabel(ap.currentStep)}` : 'Paused') : ap.status === 'done' ? 'Last run completed — draft is production-ready' : 'Last run errored'}
+              : doneWithGaps ? <AlertCircle size={13} className="text-port-warning" />
+                : ap.status === 'done' ? <CheckCircle2 size={13} className="text-port-success" />
+                  : <AlertCircle size={13} className="text-port-error" />}
+            <span className={tone === 'warning' ? 'text-port-warning' : tone === 'success' ? 'text-port-success' : 'text-port-error'}>
+              {ap.status === 'paused' ? (ap.currentStep ? `Paused at ${stepLabel(ap.currentStep)}` : 'Paused')
+                : doneWithGaps ? `Completed with ${craftGapCaution(ap.craftGapIssues)}`
+                  : ap.status === 'done' ? 'Last run completed — draft is production-ready' : 'Last run errored'}
             </span>
             {ap.status === 'paused' && ap.pauseKind === 'divergence' ? (
               <span
@@ -438,7 +454,8 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
           {ap.lastError && ap.status !== 'done' ? <p className="text-[11px] text-gray-400 mt-1">{ap.lastError}</p> : null}
           <Findings items={ap.residualFindings} />
         </div>
-      ) : null}
+        );
+      })() : null}
 
       {/* Production readiness (canon descriptive integrity) */}
       <div className="px-3 pb-3 border-t border-port-border pt-2">

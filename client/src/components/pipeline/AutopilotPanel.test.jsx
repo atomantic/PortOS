@@ -150,6 +150,25 @@ describe('AutopilotPanel', () => {
     expect(screen.queryByText(/not converging/i)).not.toBeInTheDocument();
   });
 
+  it('shows the production-ready banner for a clean done marker', async () => {
+    renderPanel({ id: 's1', targetFormat: 'comic', autopilot: { status: 'done', craftGapIssues: 0 } });
+    await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
+    expect(screen.getByText(/draft is production-ready/i)).toBeInTheDocument();
+  });
+
+  it('qualifies a done marker that filed script-craft gaps as a caution (#1572)', async () => {
+    renderPanel({ id: 's1', targetFormat: 'comic', autopilot: { status: 'done', craftGapIssues: 2, craftGapFindings: 3 } });
+    await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
+    expect(screen.getByText(/Completed with 2 filed script-craft gaps — resolve before rendering/i)).toBeInTheDocument();
+    expect(screen.queryByText(/draft is production-ready/i)).not.toBeInTheDocument();
+  });
+
+  it('uses the singular gap label when exactly one craft gap was filed (#1572)', async () => {
+    renderPanel({ id: 's1', targetFormat: 'comic', autopilot: { status: 'done', craftGapIssues: 1, craftGapFindings: 1 } });
+    await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
+    expect(screen.getByText(/Completed with 1 filed script-craft gap —/i)).toBeInTheDocument();
+  });
+
   it('ignores a stale terminal frame from a previous run when starting again', async () => {
     startPipelineAutopilot.mockResolvedValue({ runId: 'B', mode: 'execute' });
     sseLatest = { type: 'complete', runId: 'A' }; // leftover terminal frame from run A

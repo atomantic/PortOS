@@ -1028,7 +1028,11 @@ describe('autopilot conductor', () => {
     await autopilot.startSeriesAutopilot(seriesId, { includeVisual: false });
     await waitFor(runFinished(seriesId));
     expect(verifyComicScript).toHaveBeenCalledTimes(1);
-    expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('complete');
+    const done = autopilot.__testing.runs.get(seriesId)?.lastPayload;
+    expect(done?.type).toBe('complete');
+    // #1572 — a genuinely clean run reports no filed craft gaps.
+    expect(done?.craftGapIssues).toBe(0);
+    expect(done?.craftGapFindings).toBe(0);
   });
 
   it('files a gap for blocking script-craft findings but does not block the run', async () => {
@@ -1040,6 +1044,37 @@ describe('autopilot conductor', () => {
     expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('complete');
     const gapKinds = addTask.mock.calls.map((c) => c[0].description);
     expect(gapKinds.some((d) => /script-craft/.test(d))).toBe(true);
+  });
+
+  it('qualifies the terminal complete frame + marker with filed script-craft gap counts (#1572)', async () => {
+    scriptVerifyFindings = [
+      { severity: 'high', problem: 'page 2 panel 1 has no description' },
+      { severity: 'high', problem: 'page 3 panel 2 dialogue is empty' },
+    ];
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { fileGaps: true, includeVisual: false });
+    await waitFor(runFinished(seriesId));
+    const done = autopilot.__testing.runs.get(seriesId)?.lastPayload;
+    expect(done?.type).toBe('complete');
+    // One issue verified, two blocking findings on it → 1 gap-issue / 2 findings.
+    expect(done?.craftGapIssues).toBe(1);
+    expect(done?.craftGapFindings).toBe(2);
+    const marker = (await seriesSvc.getSeries(seriesId)).autopilot;
+    expect(marker.status).toBe('done');
+    expect(marker.craftGapIssues).toBe(1);
+    expect(marker.craftGapFindings).toBe(2);
+  });
+
+  it('does not tally craft gaps into the complete frame when fileGaps is off (#1572)', async () => {
+    scriptVerifyFindings = [{ severity: 'high', problem: 'page 2 panel 1 has no description' }];
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { includeVisual: false });
+    await waitFor(runFinished(seriesId));
+    const done = autopilot.__testing.runs.get(seriesId)?.lastPayload;
+    expect(done?.type).toBe('complete');
+    // Nothing was filed (fileGaps off), so the run stays a clean complete.
+    expect(done?.craftGapIssues).toBe(0);
+    expect(done?.craftGapFindings).toBe(0);
   });
 
   it('files a CoS gap task when a verify gate stalls (fileGaps)', async () => {

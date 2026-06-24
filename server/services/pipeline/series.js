@@ -147,9 +147,19 @@ export const sanitizeAutopilot = (raw) => {
     // strip is real data loss), a stale peer that drops pauseKind just briefly
     // shows a generic "paused" banner until the next run re-stamps it.
     pauseKind: AUTOPILOT_PAUSE_KINDS.includes(raw.pauseKind) ? raw.pauseKind : null,
+    // #1572 — a `done` run that filed blocking script-craft gaps (the advisory
+    // craft gate) carries the count here so the marker can qualify "complete"
+    // instead of reporting clean while downstream rendering is still blocked.
+    // Same transient-marker rationale as pauseKind: no schema-gate bump.
+    craftGapIssues: toCount(raw.craftGapIssues),
+    craftGapFindings: toCount(raw.craftGapFindings),
     updatedAt: isStr(raw.updatedAt) ? raw.updatedAt : null,
   };
 };
+
+// Coerce a marker counter to a non-negative integer, defaulting to 0 (so an
+// older marker that predates the field reads as "no gaps", not undefined).
+const toCount = (v) => (Number.isInteger(v) && v >= 0 ? v : 0);
 
 const sanitizeSeriesLocked = (raw = {}) => {
   if (!raw || typeof raw !== 'object') return {};

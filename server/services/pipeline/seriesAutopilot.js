@@ -799,6 +799,13 @@ async function runScriptVerify(sId, issueId, record) {
       summary: `Comic script craft review found ${blocking.length} blocking issue(s): ${blocking.map((b) => b.problem).join(' | ').slice(0, 600)}`,
       context: JSON.stringify(blocking).slice(0, 1000),
     });
+    // #1572 — fileGap is advisory and only persists a gap task when fileGaps is
+    // on (mirror its predicate). Tally what was actually FILED so the terminal
+    // "complete" frame can qualify itself instead of silently reporting clean.
+    if (record.options.fileGaps && record.mode === 'execute') {
+      record.runState.scriptCraftGapIssues.add(issueId);
+      record.runState.scriptCraftBlocking += blocking.length;
+    }
   }
   return {};
 }
@@ -1372,6 +1379,12 @@ export async function startSeriesAutopilot(sId, options = {}) {
       textAttempted: new Set(),
       scriptChecked: new Set(),
       visualDrafted: new Set(),
+      // #1572 — issues whose ADVISORY craft gate filed a blocking gap task, and
+      // the total blocking-finding count. Carried into the terminal `complete`
+      // frame + persisted marker so a "clean complete" doesn't hide downstream
+      // render blockers the user still has to resolve.
+      scriptCraftGapIssues: new Set(),
+      scriptCraftBlocking: 0,
     },
     activeChild: null,
   };
@@ -1411,9 +1424,15 @@ export async function startSeriesAutopilot(sId, options = {}) {
         const step = resolveNextStep(series, issues, record.runState, runOptions);
 
         if (step.kind === 'done') {
-          await persistMarker(sId, { status: 'done', runId, currentStep: null });
-          broadcast(sId, { type: 'complete', runId, steps: ordinal, completedAt: new Date().toISOString() });
-          console.log(`✅ autopilot complete — series=${sId.slice(0, 12)} steps=${ordinal}`);
+          // #1572 — qualify "complete" when the advisory craft gate filed
+          // blocking script-craft gaps during this run: the run is done, but
+          // those gaps still block downstream visual rendering, so report them
+          // on both the persisted marker and the terminal frame.
+          const craftGapIssues = record.runState.scriptCraftGapIssues.size;
+          const craftGapFindings = record.runState.scriptCraftBlocking;
+          await persistMarker(sId, { status: 'done', runId, currentStep: null, craftGapIssues, craftGapFindings });
+          broadcast(sId, { type: 'complete', runId, steps: ordinal, craftGapIssues, craftGapFindings, completedAt: new Date().toISOString() });
+          console.log(`✅ autopilot complete — series=${sId.slice(0, 12)} steps=${ordinal}${craftGapIssues ? ` (${craftGapIssues} issue(s) with filed script-craft gaps)` : ''}`);
           return;
         }
 
