@@ -1043,6 +1043,10 @@ async function isSubscriptionRecordTombstone(sub) {
     const record = await getBoard(sub.recordId, { includeDeleted: true }).catch(() => null);
     return record?.deleted === true;
   }
+  if (sub.recordKind === 'writersRoomWork') {
+    const record = await getWorkForSync(sub.recordId).catch(() => null);
+    return record?.deleted === true;
+  }
   return false;
 }
 

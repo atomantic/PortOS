@@ -15,7 +15,7 @@
  */
 
 import { randomUUID, createHash } from 'crypto';
-import { readFile } from 'fs/promises';
+import { readFile, rm } from 'fs/promises';
 import { atomicWrite, ensureDir } from '../../lib/fileUtils.js';
 import { WORK_KINDS, WORK_STATUSES } from '../../lib/writersRoomPresets.js';
 import { emitRecordUpdated, emitRecordDeleted, autoSubscribeRecordToAllPeers } from '../sharing/recordEvents.js';
@@ -400,7 +400,12 @@ export async function recordLiveModeUsage(id) {
   const today = utcDayKey();
   const count = live.usage.date === today ? live.usage.count + 1 : 1;
   const nextLive = { ...live, usage: { date: today, count } };
-  await saveManifest(id, { ...manifest, liveMode: nextLive, updatedAt: nowIso() }, { announce: false });
+  // Do NOT bump updatedAt: this counter is a local-only daily budget (never
+  // announced, #1565). updatedAt is the federation LWW key, so advancing it here
+  // would let a local counter bump on one peer win LWW over a real manuscript
+  // edit pushed from another — silently dropping the edit. Preserving updatedAt
+  // keeps the counter local without disturbing the merge order.
+  await saveManifest(id, { ...manifest, liveMode: nextLive }, { announce: false });
   return nextLive;
 }
 
@@ -418,7 +423,9 @@ export async function recordLiveModeRenderUsage(id) {
   const today = utcDayKey();
   const count = live.renderUsage.date === today ? live.renderUsage.count + 1 : 1;
   const nextLive = { ...live, renderUsage: { date: today, count } };
-  await saveManifest(id, { ...manifest, liveMode: nextLive, updatedAt: nowIso() }, { announce: false });
+  // Same as recordLiveModeUsage above: a local-only render-budget bump must not
+  // advance the federation LWW key (updatedAt) and risk dropping a peer's edit.
+  await saveManifest(id, { ...manifest, liveMode: nextLive }, { announce: false });
   return nextLive;
 }
 
@@ -427,13 +434,24 @@ export async function deleteWork(id) {
   // silently succeed on a non-existent dir and the user gets no signal.
   // Tolerate CORRUPTED_MANIFEST so a user can recover from on-disk corruption
   // by deleting the work via the API/UI instead of resorting to `rm -rf`.
+  let corrupt = false;
   await getWork(id).catch((err) => {
     if (err?.code === 'CORRUPTED_MANIFEST') {
       console.warn(`⚠️  wr: deleting work ${id} despite corrupted manifest`);
+      corrupt = true;
       return;
     }
     throw err;
   });
+  if (corrupt) {
+    // A tombstone needs a parseable manifest to soft-delete + federate, but a
+    // corrupt manifest can't be sanitized for the wire anyway (sanitizeWorkForSync
+    // would drop it), so it was never syncable. Hard-remove the dir so the API's
+    // "delete a broken work to recover" path still works (the soft-delete store
+    // call would otherwise no-op on the unreadable manifest and strand it).
+    await rm(wrWorkDir(id), { recursive: true, force: true });
+    return { ok: true };
+  }
   // Soft-delete tombstone (#1565) so the deletion federates and an out-of-date
   // peer can't resurrect the work via the LWW merge. The work row/manifest + its
   // draft rows + the on-disk .md bodies all stay until tombstone GC hard-prunes
