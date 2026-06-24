@@ -660,6 +660,13 @@
       "returnsJson": true,
       "variables": []
     },
+    "pipeline-editorial-voice-consistency": {
+      "name": "Pipeline — Editorial Check: Narrative voice / tone consistency",
+      "description": "Editorial check (#1586): the NARRATOR-voice sibling of voice-distinctiveness (which covers per-character dialogue). Fingerprints each issue's narrative tone (diction, register, humor, emotional temperature) and flags an unexplained tonal shift across issues (witty issue 1 → grim issue 3 → witty issue 5 = whiplash) plus drift from the style guide's intended voice. Does not flag a purposeful tonal modulation the story earns. Reads the stitched manuscript + the style guide's intended tone; rolls a per-issue tone fingerprint across chunks. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
     "pipeline-editorial-plot-structure": {
       "name": "Pipeline — Editorial Check: Plot structure & momentum",
       "description": "Editorial check (#1310): the macro pathologies editors flag at the manuscript/arc level — a passive protagonist, deus ex machina / convenient coincidence, idiot plot, flat or unclear stakes that never escalate, a sagging middle with no try-fail rhythm, and dropped subplots. Reads the stitched manuscript plus the reverse-outline scene map + plotline coverage (reconciling fizzled threads against tagged plotlines) and the authored reader-map hooks/payoffs; degrades to a whole-manuscript scan when no outline exists. Returns issue-anchored findings.",

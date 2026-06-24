@@ -32,6 +32,7 @@ import {
   authoredCliffhangerSummary,
   sceneGroundingSummary,
   characterVoiceProfiles,
+  intendedVoiceSummary,
   plotlineCoverageSummary,
   scenePovSummary,
   secondaryCharacterPresenceSummary,
@@ -1546,6 +1547,88 @@ describe('character.secondary-arc — LLM check (#1585)', () => {
     });
     await getCheck(SECONDARY_ARC).run(ctx);
     expect(finals).toEqual(['', '', 'true']);
+  });
+});
+
+describe('style.voice-consistency — LLM check (#1586)', () => {
+  const VOICE_CONSISTENCY = 'style.voice-consistency';
+  const wholeCtx = (overrides = {}) => ({
+    manuscript: '# Issue 1\n\nThe rain came down, wry and unhurried, as it always did in this town.',
+    config: { maxFindings: 12 },
+    severityDefault: 'low',
+    series: { styleGuide: { tone: ['wry', 'deadpan'] } },
+    planManuscriptChunks: async () => ['# Issue 1\n\nnarration'],
+    callStagedLLM: async () => ({ content: { findings: [] } }),
+    ...overrides,
+  });
+
+  it('is registered as a series-scoped LLM check reading manuscript + style guide', () => {
+    const check = getCheck(VOICE_CONSISTENCY);
+    expect(check.kind).toBe('llm');
+    expect(check.scope).toBe('series');
+    expect(check.category).toBe('style');
+    expect(check.severityDefault).toBe('low');
+    expect(check.sources).toEqual(['manuscript', 'series.styleGuide']);
+    expect(check.needsManuscript).toBe(true);
+  });
+
+  it('only runs when there is drafted prose to scan', () => {
+    const check = getCheck(VOICE_CONSISTENCY);
+    expect(check.gate({ manuscript: '' })).toBe(false);
+    expect(check.gate({ manuscript: '# Issue 1\n\nprose' })).toBeTruthy();
+  });
+
+  it('feeds the style guide intended voice alongside the manuscript and forces the style category', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      planManuscriptChunks: async (_stage, opts) => {
+        expect(opts.context).toHaveProperty('intendedVoice');
+        expect(opts.fixedOverheadTokens).toBeGreaterThan(0);
+        return ['# Issue 1\n\nnarration'];
+      },
+      callStagedLLM: async (_stage, vars) => {
+        seenVars = vars;
+        return { content: { findings: [{ severity: 'medium', issueNumber: 3, location: 'Issue 3 — tonal shift', problem: 'narration turns earnest', anchorQuote: 'how he loved her' }] } };
+      },
+    });
+    const findings = await getCheck(VOICE_CONSISTENCY).run(ctx);
+    expect(seenVars.intendedVoice).toContain('wry');
+    expect(seenVars.intendedVoice).toContain('deadpan');
+    expect(findings).toHaveLength(1);
+    expect(findings[0].category).toBe('style');
+    expect(findings[0].location).toBe('Issue 3 — tonal shift');
+  });
+
+  it('still runs (cross-issue whiplash) when no style guide tone is declared', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      series: undefined,
+      callStagedLLM: async (_stage, vars) => { seenVars = vars; return { content: { findings: [] } }; },
+    });
+    await getCheck(VOICE_CONSISTENCY).run(ctx);
+    expect(seenVars.intendedVoice).toBe('');
+  });
+});
+
+describe('intendedVoiceSummary helper (#1586)', () => {
+  it('renders the style guide tone words', () => {
+    const out = intendedVoiceSummary({ tone: ['wry', 'deadpan', 'noir'] });
+    expect(out).toContain('intended narrative tone/voice');
+    expect(out).toContain('wry, deadpan, noir');
+  });
+
+  it('returns "" when the guide declares no tone', () => {
+    expect(intendedVoiceSummary({ tone: [] })).toBe('');
+    expect(intendedVoiceSummary({})).toBe('');
+    expect(intendedVoiceSummary(null)).toBe('');
+    expect(intendedVoiceSummary(undefined)).toBe('');
+  });
+
+  it('tolerates a malformed tone field without throwing', () => {
+    expect(() => intendedVoiceSummary({ tone: 'not-an-array' })).not.toThrow();
+    expect(intendedVoiceSummary({ tone: 'not-an-array' })).toBe('');
+    expect(() => intendedVoiceSummary({ tone: [null, 42, '  ', 'wry'] })).not.toThrow();
+    expect(intendedVoiceSummary({ tone: [null, 42, '  ', 'wry'] })).toBe('Style guide — intended narrative tone/voice: wry.');
   });
 });
 

@@ -315,6 +315,13 @@ export const TELLING_EMOTION_STAGE = 'pipeline-editorial-telling-emotion';
 export const ON_THE_NOSE_STAGE = 'pipeline-editorial-on-the-nose';
 export const VOICE_DISTINCTIVENESS_STAGE = 'pipeline-editorial-voice-distinctiveness';
 
+// Stage name for the narrator voice / tone-consistency LLM check (#1586) — the
+// narration-level sibling of voice-distinctiveness (which covers per-CHARACTER
+// dialogue). Ships in data.reference/prompts/stages/ + stage-config.json (fresh
+// installs via setup-data.js) and migrates to existing installs via migration 134
+// (boot runs migrations but NOT setup-data, so the migration is required).
+export const VOICE_CONSISTENCY_STAGE = 'pipeline-editorial-voice-consistency';
+
 // Render each canon character's authored voice fields into a compact text block
 // the voice-distinctiveness LLM check passes alongside the manuscript, so the
 // model can flag lines that contradict a character's recorded speechPattern /
@@ -341,6 +348,25 @@ export function characterVoiceProfiles(canon) {
   }
   if (!lines.length) return '';
   return `Authored character voices (canon speechPattern / speechAccent):\n${lines.join('\n')}`;
+}
+
+// Render the series style guide's INTENDED narrative voice — the authored `tone`
+// words (e.g. "witty", "grim", "lyrical") — into a compact block the narrator
+// voice-consistency check (#1586) passes alongside the manuscript, so the model
+// can measure each issue's narration against the declared intent, not just
+// against the other issues. Pure + deterministic so it's unit-testable and its
+// token cost counts into the per-chunk overhead. Type-guarded (styleGuide rides
+// peer sync, so a hand-edited / older-peer guide could carry a non-array `tone`
+// or non-string entries). Returns '' when the guide declares no tone (the
+// prompt's {{#intendedVoice}} section then renders nothing and the check degrades
+// to a pure cross-issue consistency scan).
+export function intendedVoiceSummary(styleGuide) {
+  const raw = Array.isArray(styleGuide?.tone) ? styleGuide.tone : [];
+  const tone = raw
+    .filter((t) => typeof t === 'string' && t.trim())
+    .map((t) => t.trim());
+  if (!tone.length) return '';
+  return `Style guide — intended narrative tone/voice: ${tone.join(', ')}.`;
 }
 
 // Render each canon character's contradiction-relevant FACTS into a compact text
@@ -5216,6 +5242,65 @@ export const EDITORIAL_CHECKS = [
         crossChunkSetup: true,
         setupFocus:
           'For each named character, capture a few representative dialogue lines and a one-phrase sketch of their voice (diction, rhythm, verbal tics, accent markers). Carry these samples forward so a later chunk can judge whether characters sound distinct from one another and consistent with their established voice.',
+      });
+    },
+  },
+  {
+    id: 'style.voice-consistency',
+    sources: ['manuscript', 'series.styleGuide'],
+    label: 'Narrative voice / tone consistency (LLM)',
+    description:
+      "LLM scan — the NARRATOR-voice sibling of dialogue.voice-distinctiveness (which covers per-character dialogue, not the narration). Fingerprints each issue's narrative tone (diction, register, humor, emotional temperature) and flags an unexplained tonal shift ACROSS issues — narration witty in issue 1, grim in issue 3, witty again in issue 5 is tonal whiplash — plus drift from the series style guide's intended voice. Does NOT flag a purposeful tonal modulation the story earns (a darker chapter a grim turn calls for). Voice consistency is part of the promise to the reader; drift reads as inconsistency. Because the comparison spans issues, the per-issue tone fingerprint is carried forward across manuscript chunks so a later issue is judged against the tone the series established.",
+    scope: 'series',
+    kind: 'llm',
+    category: 'style',
+    // Tonal drift is a polish/texture concern, so a moderate wobble floors at
+    // 'low'; the prompt directs the model to mark a sharp, unexplained whiplash
+    // 'medium'.
+    severityDefault: 'low',
+    defaultEnabled: true,
+    // Reads the stitched manuscript corpus — so the runner only pays the
+    // section-collection I/O when a manuscript-consuming check is enabled.
+    needsManuscript: true,
+    configSchema: z.object({
+      // Cap findings per run so a long manuscript can't flood the review.
+      maxFindings: z.number().int().min(1).max(50).default(12),
+    }),
+    configFields: [
+      {
+        key: 'maxFindings',
+        label: 'Max findings per run',
+        type: 'number',
+        min: 1,
+        max: 50,
+        step: 1,
+        help: 'Cap findings so a long manuscript can not flood the review.',
+      },
+    ],
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    run: (ctx) => {
+      // The intended-voice block is fixed per-call overhead (re-sent on each chunk)
+      // and pure context: it lets the model measure each issue's narration against
+      // the declared tone, not just against the other issues. The check degrades
+      // gracefully — no style-guide tone ⇒ {{#intendedVoice}} renders nothing and
+      // the model still flags internal cross-issue whiplash.
+      const intendedVoice = intendedVoiceSummary(ctx.series?.styleGuide);
+      return runManuscriptLlmCheck(ctx, {
+        stage: VOICE_CONSISTENCY_STAGE,
+        category: 'style',
+        context: { intendedVoice },
+        buildVars: (manuscript, _meta, c) => ({ manuscript, intendedVoice: c.intendedVoice }),
+        // Narrator-voice consistency is a whole-series judgment: each issue's tone
+        // is spread across chunks, so a per-chunk view can't tell "the series
+        // shifted" from "this chunk only sampled one issue". Roll a per-issue tone
+        // fingerprint forward so a later chunk judges against the tone the series
+        // established (and the style guide's intent).
+        crossChunkSetup: true,
+        setupFocus:
+          "For each issue (use the `# Issue N` section headers), capture a compact fingerprint of the NARRATOR's "
+          + 'voice and tone — diction (plain vs ornate), register (formal vs casual), humor level (witty / wry / earnest / grim), '
+          + 'sentence rhythm, and emotional temperature. Carry these per-issue fingerprints forward so a later issue\'s '
+          + "narration can be judged against the tone the series established earlier and against the style guide's intended voice.",
       });
     },
   },
