@@ -531,8 +531,10 @@ const NON_SNAPSHOT_KEYS = new Set(['brain', 'memory', 'catalog', 'authors', 'art
 const SNAPSHOT_CATEGORIES = SYNC_CATEGORY_META.filter(m => !NON_SNAPSHOT_KEYS.has(m.key));
 
 // Indicator backed by REAL coverage diffing (record IDs vs confirmed pushes),
-// not the BIGSERIAL cursors — so "fully mirrored" never lies. Polls on mount and
-// whenever the peer comes online / sub set changes via the `refreshKey` prop.
+// not the BIGSERIAL cursors — so "fully mirrored" never lies. Refetches on mount
+// and whenever `refreshKey` changes; the caller passes peer.lastSeen, so it
+// refreshes on each probe tick — cheap for a single-user box and lets the
+// "N pending" count tick down live as the initial back-subscribe converges.
 function FullSyncCoverageBadge({ peerId, peerInstanceId, refreshKey }) {
   const [coverage, setCoverage] = useState(null);
   const [loaded, setLoaded] = useState(false);

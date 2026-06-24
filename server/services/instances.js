@@ -852,9 +852,13 @@ function sanitizeSyncCategories(input) {
 export async function applyReciprocalSync(instanceId, categories, { fullSync } = {}) {
   const sanitized = sanitizeSyncCategories(categories);
   // A fullSync-only signal (peer asking us to mirror everything) is valid even
-  // if the category map didn't sanitize to anything actionable.
+  // if the category map didn't sanitize to anything actionable. An explicit
+  // `fullSync === false` is the peer telling us it STOPPED mirroring us, so we
+  // drop our mirror toward it too — keeping enable AND disable symmetric (a peer
+  // too old to send the field leaves it undefined, which touches nothing).
   const wantsFullSync = fullSync === true;
-  if (!sanitized && !wantsFullSync) return { changed: false, peer: null };
+  const wantsFullSyncOff = fullSync === false;
+  if (!sanitized && !wantsFullSync && !wantsFullSyncOff) return { changed: false, peer: null };
   const turnedOnKinds = [];
   let backfillInstanceId = null;
   let changed = false;
@@ -867,13 +871,17 @@ export async function applyReciprocalSync(instanceId, categories, { fullSync } =
     const prev = { ...DEFAULT_SYNC_CATEGORIES, ...(entry.syncCategories || {}) };
     const next = sanitized ? { ...prev, ...sanitized } : prev;
     const fullSyncFlips = wantsFullSync && entry.fullSync !== true;
+    const fullSyncOffFlips = wantsFullSyncOff && entry.fullSync === true;
     // No-op when nothing actually flips — the echo guard.
-    if (!fullSyncFlips && Object.keys(next).every(k => next[k] === prev[k])) return entry;
+    if (!fullSyncFlips && !fullSyncOffFlips && Object.keys(next).every(k => next[k] === prev[k])) return entry;
     // When the peer asks us to mirror everything, a full sweep covers all kinds.
     if (fullSyncFlips) {
       entry.fullSync = true;
       for (const [, kind] of PER_RECORD_CATEGORY_KINDS) turnedOnKinds.push(kind);
     } else {
+      // The peer stopped mirroring us → drop our mirror; the per-category map it
+      // sent (preserved underneath while mirroring) becomes authoritative again.
+      if (fullSyncOffFlips) entry.fullSync = false;
       for (const [cat, kind] of PER_RECORD_CATEGORY_KINDS) {
         if (prev[cat] !== true && next[cat] === true) turnedOnKinds.push(kind);
       }
@@ -922,10 +930,11 @@ export async function requestReciprocalSync(peer, categories, { fullSync = false
     const res = await peerFetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      // Include the full-sync flag so a peer new enough to understand it adopts
-      // mirror mode too. Older peers ignore the unknown field and still mirror
-      // via the all-on syncCategories map we sent.
-      body: JSON.stringify({ instanceId: self.instanceId, syncCategories: sanitized, ...(fullSync ? { fullSync: true } : {}) }),
+      // Always carry our current full-sync state (true OR false) so a peer new
+      // enough to understand it adopts mirror mode on enable AND drops it on
+      // disable. Older peers ignore the field; on enable they still mirror via
+      // the all-on syncCategories map we sent.
+      body: JSON.stringify({ instanceId: self.instanceId, syncCategories: sanitized, fullSync: fullSync === true }),
       signal: controller.signal
     }, peer);
     if (res.ok) {

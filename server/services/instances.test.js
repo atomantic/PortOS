@@ -805,6 +805,37 @@ describe('instances.js', () => {
       expect(peer.syncEnabled).toBe(true);
     });
 
+    it('applyReciprocalSync drops our mirror when the peer reports fullSync:false (disable reciprocation)', async () => {
+      // The peer stopped mirroring us — symmetric with the enable path. The
+      // preserved per-category map (brain on) becomes authoritative again.
+      const peers = [{ id: 'p1', instanceId: 'inst-A', name: 'A', fullSync: true, syncEnabled: true, syncCategories: { brain: true } }];
+      readJSONFile.mockResolvedValue({ self: { instanceId: 'me' }, peers });
+      const { changed, peer } = await applyReciprocalSync('inst-A', { brain: true }, { fullSync: false });
+      expect(changed).toBe(true);
+      expect(peer.fullSync).toBe(false);
+      expect(peer.syncEnabled).toBe(true); // brain still on underneath
+    });
+
+    it('applyReciprocalSync ignores an absent fullSync field (older peer) — mirror untouched', async () => {
+      const peers = [{ id: 'p1', instanceId: 'inst-A', name: 'A', fullSync: true, syncEnabled: true, syncCategories: { brain: true } }];
+      readJSONFile.mockResolvedValue({ self: { instanceId: 'me' }, peers });
+      // No fullSync key in opts → undefined → must not clear the mirror.
+      const { peer } = await applyReciprocalSync('inst-A', { brain: true });
+      expect(peer.fullSync).toBe(true);
+    });
+
+    it('disabling fullSync reciprocates fullSync:false to the peer', async () => {
+      readJSONFile.mockResolvedValue({
+        self: { instanceId: 'me-id' },
+        peers: [{ id: 'p1', instanceId: 'inst-A', name: 'A', enabled: true, fullSync: false, syncCategories: { brain: true } }],
+      });
+      const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+      vi.stubGlobal('fetch', fetchMock);
+      await enqueueReciprocalSync('p1');
+      const body = JSON.parse(fetchMock.mock.calls.at(-1)[1].body);
+      expect(body.fullSync).toBe(false);
+    });
+
     it('updateSelf persists the new-peer full-sync default', async () => {
       readJSONFile.mockResolvedValue({ self: { instanceId: 'me', name: 'box' }, peers: [] });
       const self = await updateSelf(undefined, { defaultPeerFullSync: true });
