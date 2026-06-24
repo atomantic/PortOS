@@ -727,6 +727,17 @@ describe('agentLifecycle — instance provenance stamping (#1563)', () => {
     expect(addIdx, 'the dedup guard must be acquired BEFORE the first await').toBeLessThan(firstAwaitIdx);
   });
 
+  it('source: releases the spawn guard if identity resolution rejects', () => {
+    // ensureInstanceId() runs after spawningTasks.add but before the main
+    // try/finally, so a rejection must not strand the task in spawningTasks.
+    const fnStart = AGENT_LIFECYCLE_SRC.indexOf('export async function spawnAgentForTask');
+    const fnBody = AGENT_LIFECYCLE_SRC.slice(fnStart, fnStart + 60_000);
+    const tryIdx = fnBody.indexOf('instanceId = await ensureInstanceId();');
+    const catchSlice = fnBody.slice(tryIdx, tryIdx + 260);
+    expect(tryIdx, 'ensureInstanceId must be awaited').toBeGreaterThan(-1);
+    expect(catchSlice, 'a catch around ensureInstanceId must release the guard').toMatch(/catch[\s\S]*spawningTasks\.delete\(task\.id\)/);
+  });
+
   it('source: releases the claim on a failed-setup early exit (cleanupOnError)', () => {
     const fnStart = AGENT_LIFECYCLE_SRC.indexOf('const cleanupOnError = async');
     const fnBody = AGENT_LIFECYCLE_SRC.slice(fnStart, fnStart + 1200);

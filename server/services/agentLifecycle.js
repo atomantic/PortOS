@@ -136,7 +136,19 @@ export async function spawnAgentForTask(task) {
   // task; the authoritative acquire-with-fresh-reread happens below, before any
   // spawn setup. No-op for a non-federated install (no claim metadata) and for
   // re-claiming our own task on retry/resume.
-  const instanceId = await ensureInstanceId();
+  // Resolve identity defensively: this runs after `spawningTasks.add` but before
+  // the main try/finally, so an uncaught rejection (e.g. cold-start identity
+  // creation failing to write data/instances.json) would exit with the task id
+  // stranded in `spawningTasks`, blocking every future spawn of it until restart
+  // (codex review). Release the guard on failure.
+  let instanceId;
+  try {
+    instanceId = await ensureInstanceId();
+  } catch (err) {
+    spawningTasks.delete(task.id);
+    emitLog('error', `Failed to resolve instance identity for task ${task.id}: ${err?.message || err}`, { taskId: task.id });
+    return null;
+  }
   if (!isClaimableBy(task.metadata, instanceId)) {
     spawningTasks.delete(task.id);
     console.log(`🔒 Task ${task.id} is claimed by instance ${getClaimOwner(task.metadata)} (live lease) — skipping spawn on ${instanceId}`);
