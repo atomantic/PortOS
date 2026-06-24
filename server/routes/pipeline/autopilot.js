@@ -43,6 +43,11 @@ const autopilotStartSchema = z.object({
   maxArcVerifyRounds: z.number().int().min(0).max(MAX_CONVERGENCE_ROUNDS).optional(),
   maxEditorialRounds: z.number().int().min(0).max(MAX_CONVERGENCE_ROUNDS).optional(),
   maxBeatContinuityRounds: z.number().int().min(0).max(MAX_CONVERGENCE_ROUNDS).optional(),
+  // Per-run retry budget for a failed delegated child runner (beats/text) before
+  // the autopilot escalates to a pause (#1574). 0 = single attempt, no retry.
+  // Per-run only (no persisted default); falls back to MAX_CHILD_RETRIES. Shares
+  // the convergence ceiling so a direct API call can't request an absurd budget.
+  maxChildRetries: z.number().int().min(0).max(MAX_CONVERGENCE_ROUNDS).optional(),
 });
 
 router.post('/series/:id/autopilot/start', asyncHandler(async (req, res) => {
