@@ -1,5 +1,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
+// startPersistentService / getServiceStatus shell out via promisify(execFile).
+// Route every exec call through a per-test impl so the homebrew service flow can
+// be scripted (brew --version, services start/stop/list). `spawn` is referenced
+// at module import (startServer) but never invoked by these tests.
+const execMock = { impl: () => {} }
+vi.mock('child_process', () => ({
+  execFile: (cmd, args, opts, cb) => execMock.impl(cmd, args, opts, cb),
+  spawn: vi.fn()
+}))
+
 // pullModel talks to Ollama over its native HTTP API via the global `fetch`
 // (through fetchWithTimeout). We stub `fetch` so each test scripts the
 // `/api/version` probe and a sequence of per-attempt `/api/pull` streams.
@@ -184,5 +194,140 @@ describe('ollamaManager.pullModel transient-error retry', () => {
     expect(result.success).toBe(false)
     expect(result.code).toBe('SHARDED_GGUF')
     expect(pullUrls).toHaveLength(1) // not retried — sharding won't resolve on retry
+  })
+})
+
+describe('ollamaManager.isBootstrapConflictError', () => {
+  it('matches the launchctl bootstrap-5 / EIO failures brew surfaces', async () => {
+    const { isBootstrapConflictError } = await import('./ollamaManager.js')
+    expect(isBootstrapConflictError('Bootstrap failed: 5: Input/output error')).toBe(true)
+    expect(isBootstrapConflictError('Error: Failure while executing; `/bin/launchctl bootstrap gui/501 …` exited with 5.')).toBe(true)
+    expect(isBootstrapConflictError('service already loaded')).toBe(true)
+  })
+
+  it('does NOT match unrelated failures (no false bootout/retry)', async () => {
+    const { isBootstrapConflictError } = await import('./ollamaManager.js')
+    expect(isBootstrapConflictError('Permission denied')).toBe(false)
+    expect(isBootstrapConflictError('ollama: command not found')).toBe(false)
+    expect(isBootstrapConflictError('')).toBe(false)
+    expect(isBootstrapConflictError(undefined)).toBe(false)
+  })
+
+  it('requires bootstrap context — a bare EIO / exit-5 unrelated to bootstrap is not a conflict', async () => {
+    const { isBootstrapConflictError } = await import('./ollamaManager.js')
+    // A generic disk EIO during an unrelated brew step must not trip the bootout.
+    expect(isBootstrapConflictError('Error: write failed: Input/output error')).toBe(false)
+    // Some other command exiting 5 with no bootstrap involved.
+    expect(isBootstrapConflictError('Error: `brew cleanup` exited with 5.')).toBe(false)
+  })
+})
+
+describe('ollamaManager.startPersistentService bootstrap recovery (homebrew)', () => {
+  let originalPlatform
+  beforeEach(() => {
+    // Force the homebrew controller branch regardless of CI host OS.
+    originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform')
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true })
+  })
+  afterEach(() => {
+    Object.defineProperty(process, 'platform', originalPlatform)
+    vi.unstubAllGlobals()
+    execMock.impl = () => {}
+  })
+
+  // Reachable /api/version so waitForAvailability resolves true on first probe.
+  function stubReachable() {
+    const body = { version: '0.24.0' }
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) })))
+  }
+
+  async function loadManager() {
+    vi.resetModules()
+    return import('./ollamaManager.js')
+  }
+
+  it('boots out a stale launchd registration and retries when start fails with bootstrap-5', async () => {
+    stubReachable()
+    const calls = []
+    let startAttempts = 0
+    execMock.impl = (cmd, args, opts, cb) => {
+      const a = (args || []).join(' ')
+      calls.push(`${cmd} ${a}`)
+      if (cmd === 'brew' && a === '--version') return cb(null, { stdout: 'Homebrew 4.0.0', stderr: '' })
+      if (cmd === 'brew' && a === 'services start ollama') {
+        startAttempts++
+        if (startAttempts === 1) {
+          const e = new Error('Bootstrap failed: 5: Input/output error')
+          e.stderr = 'Bootstrap failed: 5: Input/output error'
+          return cb(e)
+        }
+        return cb(null, { stdout: '', stderr: '' })
+      }
+      if (cmd === 'brew' && a === 'services stop ollama') return cb(null, { stdout: '', stderr: '' })
+      if (cmd === 'brew' && a === 'services list') return cb(null, { stdout: 'ollama started ilyaeivy ~/Library/LaunchAgents/homebrew.mxcl.ollama.plist\n', stderr: '' })
+      return cb(new Error(`unexpected exec: ${cmd} ${a}`))
+    }
+
+    const { startPersistentService } = await loadManager()
+    const result = await startPersistentService()
+
+    expect(result.success).toBe(true)
+    expect(result.persistent).toBe(true)
+    expect(startAttempts).toBe(2) // recovered: bootout then retried
+    expect(calls).toContain('brew services stop ollama')
+  })
+
+  it('does NOT bootout/retry when start fails for an unrelated reason', async () => {
+    stubReachable()
+    let startAttempts = 0
+    let stopCalled = false
+    execMock.impl = (cmd, args, opts, cb) => {
+      const a = (args || []).join(' ')
+      if (cmd === 'brew' && a === '--version') return cb(null, { stdout: 'Homebrew 4.0.0', stderr: '' })
+      if (cmd === 'brew' && a === 'services start ollama') {
+        startAttempts++
+        const e = new Error('Permission denied')
+        e.stderr = 'Permission denied'
+        return cb(e)
+      }
+      if (cmd === 'brew' && a === 'services stop ollama') { stopCalled = true; return cb(null, { stdout: '', stderr: '' }) }
+      if (cmd === 'brew' && a === 'services list') return cb(null, { stdout: 'ollama started ilyaeivy ~/Library/LaunchAgents/homebrew.mxcl.ollama.plist\n', stderr: '' })
+      return cb(new Error(`unexpected exec: ${cmd} ${a}`))
+    }
+
+    const { startPersistentService } = await loadManager()
+    // The API is still reachable here (stubReachable), but the failed start with a
+    // non-bootstrap error must not trigger the bootout-and-retry recovery path.
+    await startPersistentService()
+
+    expect(startAttempts).toBe(1)
+    expect(stopCalled).toBe(false)
+  })
+
+  it('surfaces the retry error (not the stale first error) when bootout+retry still fails', async () => {
+    // A non-successful start falls to the failure branch and reports result.error
+    // regardless of reachability; keep the API reachable so the probe returns fast.
+    stubReachable()
+    let startAttempts = 0
+    execMock.impl = (cmd, args, opts, cb) => {
+      const a = (args || []).join(' ')
+      if (cmd === 'brew' && a === '--version') return cb(null, { stdout: 'Homebrew 4.0.0', stderr: '' })
+      if (cmd === 'brew' && a === 'services start ollama') {
+        startAttempts++
+        const e = new Error(startAttempts === 1 ? 'Bootstrap failed: 5: Input/output error' : 'launchctl bootstrap gui/501 still wedged')
+        e.stderr = e.message
+        return cb(e)
+      }
+      if (cmd === 'brew' && a === 'services stop ollama') return cb(null, { stdout: '', stderr: '' })
+      if (cmd === 'brew' && a === 'services list') return cb(null, { stdout: 'ollama none\n', stderr: '' })
+      return cb(new Error(`unexpected exec: ${cmd} ${a}`))
+    }
+
+    const { startPersistentService } = await loadManager()
+    const result = await startPersistentService()
+
+    expect(startAttempts).toBe(2) // recovery was attempted
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('still wedged') // retry's error, not the first
   })
 })
