@@ -1464,12 +1464,13 @@ describe('character.secondary-arc — LLM check (#1585)', () => {
     expect(check.gate({ manuscript: '# Issue 1\n\nprose' })).toBeTruthy();
   });
 
-  it('passes the manuscript, recurring secondary roster, and canon roster and forces the arc category', async () => {
+  it('passes the manuscript, recurring secondary roster, canon names roster, and canon traits and forces the arc category', async () => {
     let seenVars = null;
     const ctx = wholeCtx({
       planManuscriptChunks: async (_stage, opts) => {
         expect(opts.context).toHaveProperty('secondaryCast');
         expect(opts.context).toHaveProperty('canonRoster');
+        expect(opts.context).toHaveProperty('canonTraits');
         expect(opts.fixedOverheadTokens).toBeGreaterThan(0);
         return ['# Issue 1\n\nReza poured the coffee, said nothing, and left — as always.'];
       },
@@ -1480,10 +1481,28 @@ describe('character.secondary-arc — LLM check (#1585)', () => {
     });
     const findings = await getCheck(SECONDARY_ARC).run(ctx);
     expect(seenVars.secondaryCast).toContain('Reza');
+    // Canon names roster surfaces every named bible character (so the modeled-vs-
+    // incidental distinction works even for a trait-less row), and the traits
+    // block carries the established baseline a change is measured against.
     expect(seenVars.canonRoster).toContain('Reza');
+    expect(seenVars.canonTraits).toContain('stoic and quiet');
     expect(findings).toHaveLength(1);
     expect(findings[0].category).toBe('arc');
     expect(findings[0].location).toBe('Issue 2 — Reza — flat arc');
+  });
+
+  it('still names a modeled character with no recorded traits in the canon roster (modeled-vs-incidental)', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      // A modeled character with a name but no trait fields — the traits summary
+      // drops it, but the names roster must still list it so the model can tell
+      // it apart from an incidental walk-on.
+      canon: { characters: [{ name: 'Reza' }] },
+      callStagedLLM: async (_stage, vars) => { seenVars = vars; return { content: { findings: [] } }; },
+    });
+    await getCheck(SECONDARY_ARC).run(ctx);
+    expect(seenVars.canonRoster).toContain('Reza');
+    expect(seenVars.canonTraits).toBe('');
   });
 
   it('honors the minScenes config when building the secondary roster', async () => {
@@ -1507,6 +1526,7 @@ describe('character.secondary-arc — LLM check (#1585)', () => {
     await getCheck(SECONDARY_ARC).run(ctx);
     expect(seenVars.secondaryCast).toBe('');
     expect(seenVars.canonRoster).toBe('');
+    expect(seenVars.canonTraits).toBe('');
   });
 
   it('marks a single-chunk run as the final part so the flat-arc verdict is enabled', async () => {

@@ -49,14 +49,24 @@ NOT on this list is either a POV character or too minor to hold to an arc.
 {{#canonRoster}}
 ## Canon character roster
 
-The established character bible — use it to tell a modeled, recurring character
-(who genuinely carries weight) from an incidental name, and to ground each
-character's established traits so you can judge change against a real baseline.
+The named characters already in the story bible — use this to tell a modeled,
+recurring character (who genuinely carries weight) from an incidental name.
 
 ```
 {{canonRoster}}
 ```
 {{/canonRoster}}
+
+{{#canonTraits}}
+## Canon character traits
+
+The established traits for the modeled characters — use this to ground each
+character's starting point so you can judge change against a real baseline.
+
+```
+{{canonTraits}}
+```
+{{/canonTraits}}
 
 ## Manuscript
 

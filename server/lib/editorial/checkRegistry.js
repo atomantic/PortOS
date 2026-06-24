@@ -3347,25 +3347,30 @@ export const EDITORIAL_CHECKS = [
     ],
     gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
     run: (ctx) => {
-      // Both blocks are fixed per-call overhead (re-sent on each chunk) and pure
-      // context: the secondary-cast roster names which recurring non-POV
+      // All three blocks are fixed per-call overhead (re-sent on each chunk) and
+      // pure context: the secondary-cast roster names which recurring non-POV
       // characters to hold to an arc (so the model focuses on the side characters
-      // that carry weight, not every walk-on), and the canon roster lets the model
-      // tell a modeled recurring character from an incidental name. The check
+      // that carry weight, not every walk-on); the canon names roster lets the
+      // model tell a MODELED recurring character from an incidental name (it lists
+      // every named bible character, including trait-less ones — so it stays
+      // useful where the richer traits block is empty); and the canon traits give
+      // the established baseline a change must be measured against. The check
       // degrades gracefully — no outline ⇒ {{#secondaryCast}} renders nothing and
       // the model identifies the recurring side cast from the prose; no canon ⇒
-      // {{#canonRoster}} renders nothing.
+      // {{#canonRoster}} / {{#canonTraits}} render nothing.
       const minScenes = ctx.config?.minScenes ?? 2;
       const secondaryCast = secondaryCharacterPresenceSummary(ctx.reverseOutline, { minScenes });
-      const canonRoster = canonCharacterTraitsSummary(ctx.canon);
+      const canonRoster = canonRosterNamesSummary(ctx.canon);
+      const canonTraits = canonCharacterTraitsSummary(ctx.canon);
       return runManuscriptLlmCheck(ctx, {
         stage: SECONDARY_ARC_STAGE,
         category: 'arc',
-        context: { secondaryCast, canonRoster },
+        context: { secondaryCast, canonRoster, canonTraits },
         buildVars: (manuscript, meta, c) => ({
           manuscript,
           secondaryCast: c.secondaryCast,
           canonRoster: c.canonRoster,
+          canonTraits: c.canonTraits,
           finalPart: meta?.isFinal ? 'true' : '',
         }),
         // A flat arc is only visible across the WHOLE story — a character
