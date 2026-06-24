@@ -1072,9 +1072,21 @@ describe('pipeline routes', () => {
     spy.mockRestore();
   });
 
-  it('POST /issues/:id/stages/storyboards/extract-scenes prefers the beat sheet ## Scenes list (no LLM call)', async () => {
+  it('POST /issues/:id/stages/storyboards/extract-scenes overlays the canonical numbering on LLM scenes (hybrid: alignment + dialogue preserved)', async () => {
     const extractor = await import('../lib/sceneExtractor.js');
-    const spy = vi.spyOn(extractor, 'extractScenes');
+    // The LLM extraction supplies rich fields (dialogue/visualPrompt); the
+    // canonical list overlays its numbering/sluglines. The LLM may number /
+    // slug the scenes differently — the overlay must win on identity.
+    const spy = vi.spyOn(extractor, 'extractScenes').mockResolvedValue({
+      extracted: {
+        title: null, logline: null,
+        scenes: [
+          { id: 'scene-99', heading: 'LLM heading A', slugline: 'INT. WRONG — DAY', visualPrompt: 'rooftop vista', dialogue: [{ character: 'LINA', line: 'Up here.' }] },
+          { id: 'scene-98', heading: 'LLM heading B', slugline: 'INT. ALSO WRONG', visualPrompt: 'kitchen argument', dialogue: [{ character: 'MARA', line: 'You lied.' }] },
+        ],
+      },
+      runId: 'run-hybrid', providerId: 'mock', model: 'mock-model',
+    });
 
     const app = makeApp();
     const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
@@ -1091,8 +1103,48 @@ describe('pipeline routes', () => {
             '2. Scene 2 — INT. KITCHEN — NIGHT: the confrontation',
           ].join('\n'),
         },
-        // teleplay present too — the beat sheet still wins.
-        teleplay: { status: 'ready', output: '## TEASER\n\n**INT. ELSEWHERE — DAY**\n\nIgnored.' },
+        teleplay: { status: 'ready', output: '## TEASER\n\n**INT. ROOFTOP — DUSK**\n\nThey meet.' },
+      },
+    });
+
+    const r = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/storyboards/extract-scenes`)
+      .send({ from: 'teleplay' });
+
+    expect(r.status).toBe(200);
+    expect(r.body.usedCanonicalList).toBe(true);
+    expect(r.body.sourceKind).toBe('teleplay');
+    expect(r.body.runId).toBe('run-hybrid');
+    expect(r.body.sceneCount).toBe(2);
+    // Canonical numbering/sluglines win (the LLM's scene-99/wrong sluglines lose).
+    expect(r.body.stage.scenes[0].id).toBe('scene-01');
+    expect(r.body.stage.scenes[0].heading).toBe('Scene 1 — EXT. ROOFTOP — DUSK');
+    expect(r.body.stage.scenes[0].slugline).toBe('EXT. ROOFTOP — DUSK');
+    expect(r.body.stage.scenes[1].slugline).toBe('INT. KITCHEN — NIGHT');
+    // The LLM's rich fields ride along — dialogue is preserved (audio VO needs it).
+    expect(r.body.stage.scenes[0].dialogue).toEqual([{ character: 'LINA', line: 'Up here.' }]);
+    expect(r.body.stage.scenes[1].dialogue).toEqual([{ character: 'MARA', line: 'You lied.' }]);
+    // description comes from the LLM visualPrompt, not the beats clause, since one exists.
+    expect(r.body.stage.scenes[0].description).toBe('rooftop vista');
+    expect(r.body.stage.status).toBe('ready');
+    expect(spy).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
+  });
+
+  it('POST /issues/:id/stages/storyboards/extract-scenes uses the canonical list alone when there is no source text (deterministic, no LLM)', async () => {
+    const extractor = await import('../lib/sceneExtractor.js');
+    const spy = vi.spyOn(extractor, 'extractScenes');
+
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    // Beat sheet has a canonical list but NO teleplay/prose to extract from.
+    await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
+      stages: {
+        idea: {
+          status: 'ready',
+          output: '# Beat sheet\n\n## Scenes\n1. Scene 1 — EXT. ROOFTOP — DUSK: the hook\n2. Scene 2 — INT. KITCHEN — NIGHT: the confrontation',
+        },
       },
     });
 
@@ -1105,16 +1157,12 @@ describe('pipeline routes', () => {
     expect(r.body.sourceKind).toBe('beat-sheet');
     expect(r.body.runId).toBeNull();
     expect(r.body.sceneCount).toBe(2);
-    // Numbers/sluglines map 1:1 from the canonical list.
     expect(r.body.stage.scenes[0].heading).toBe('Scene 1 — EXT. ROOFTOP — DUSK');
     expect(r.body.stage.scenes[0].slugline).toBe('EXT. ROOFTOP — DUSK');
-    expect(r.body.stage.scenes[1].slugline).toBe('INT. KITCHEN — NIGHT');
-    // description seeds from the beats clause (summary) so the scene is renderable.
+    // No source to extract dialogue from — description seeds from the beats clause.
     expect(r.body.stage.scenes[0].description).toBe('the hook');
-    expect(r.body.stage.scenes[1].description).toBe('the confrontation');
-    expect(r.body.stage.scenes[0].imageJobId).toBeNull();
-    expect(r.body.stage.status).toBe('ready');
-    // The deterministic path never reaches the LLM extractor.
+    expect(r.body.stage.scenes[0].dialogue).toEqual([]);
+    // No source → no LLM call.
     expect(spy).not.toHaveBeenCalled();
     spy.mockRestore();
   });

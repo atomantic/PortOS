@@ -475,95 +475,113 @@ router.post('/issues/:id/stages/storyboards/extract-scenes', asyncHandler(async 
   // Adapt a canonical scene to the pipeline storyboards UI shape: alias
   // `visualPrompt → description` (the textarea binding) and reset the per-scene
   // image-gen job fields. Rich fields (heading/summary/dialogue/...) ride along.
-  // Fall back to the scene `summary` when there's no visualPrompt so the
-  // beat-sheet path (which carries the beats clause as summary, not a visual
-  // prompt) still seeds a non-empty description — the refine/image/video paths
-  // require one, so an empty description would leave those scenes un-renderable.
+  // Fall back to the scene `summary` when there's no visualPrompt so a scene
+  // that only carries the beats clause (the canonical-only case below) still
+  // seeds a non-empty description — the refine/image/video paths require one.
   const toStoryboardScene = (s) => ({ ...s, description: s.visualPrompt || s.summary || '', imageJobId: null, prompt: null });
 
-  // Prefer the beat sheet's canonical `## Scenes` list when present (#1552):
-  // it's deterministic, free (no LLM), and guarantees `storyboards.scenes`
-  // numbers/sluglines match the comic pages' (both inherit the same canonical
-  // list). Fall back to the LLM slugline-parse path only when no list exists.
+  // The beat sheet's canonical `## Scenes` list (#1552) is the single source of
+  // truth for scene numbers + sluglines across every adaptation, so when it
+  // exists we use it to ALIGN the storyboards scenes — guaranteeing their
+  // numbers/sluglines match the comic pages'. But the list is sparse (no
+  // dialogue / visual prompts / shots), and downstream stages need that rich
+  // data — audio voice-over is built from `storyboards.scenes[].dialogue`. So
+  // we still run the LLM extraction over the source text to get the rich fields,
+  // then OVERLAY the canonical numbering/sluglines onto it (hybrid). Only when
+  // there's no source text to extract from do we fall back to the canonical list
+  // alone (deterministic, no dialogue — but there's nothing to extract it from).
   const canonicalScenes = scenesFromBeatSheet(issue.stages?.idea?.output || '');
-  if (canonicalScenes.length > 0) {
-    const storyboardScenes = canonicalScenes.map(toStoryboardScene);
-    const { issue: updatedIssue, stage } = await issuesSvc.updateStage(issue.id, 'storyboards', {
-      status: 'ready',
-      scenes: storyboardScenes,
-      lastRunId: null,
-      errorMessage: '',
-    });
-    return res.json({
-      issue: updatedIssue,
-      stage,
-      runId: null,
-      providerId: null,
-      model: null,
-      sceneCount: storyboardScenes.length,
-      sourceKind: 'beat-sheet',
-      usedCanonicalList: true,
-    });
-  }
-
   const series = await seriesSvc.getSeries(issue.seriesId).catch((err) => { throw mapServiceError(err); });
 
   const sourceKind = body.from;
   const source = (issue.stages?.[sourceKind]?.output || '').trim();
-  if (!source) {
+  if (!source && canonicalScenes.length === 0) {
     throw new ServerError(
       `Cannot extract scenes — issue's ${sourceKind} stage is empty`,
       { status: 400, code: 'PIPELINE_NO_SOURCE_FOR_SCENE_EXTRACT' },
     );
   }
 
-  // Fall back to the series' configured LLM when the client doesn't pass an
-  // explicit override — every Pipeline LLM action should honor the
-  // provider/model picked in the issue header (which mirrors series.llm).
-  // Canon lives on the linked universe (Phase B.4). Orphan series render
-  // with empty canon — extractScenes can still produce scenes from the
-  // source text alone, just without character/place/object grounding.
-  const canon = await getSeriesCanon(series);
-  // A model id is provider-specific, so only inherit the series model when the
-  // effective provider is still the series provider — otherwise an override
-  // provider would be paired with a foreign model id and fail (same guard as
-  // the extract-canon route). When the override switches providers without
-  // naming a model, leave it blank so the new provider's default resolves.
-  const { provider, model } = resolveSeriesLlmOverride(series, {
-    overrideProvider: body.providerOverride,
-    overrideModel: body.modelOverride,
-  });
-  const result = await extractScenes({
-    source,
-    sourceKind,
-    characters: canon.characters,
-    places: canon.places,
-    objects: canon.objects,
-    work: { title: issue.title, kind: 'tv-episode' },
-    series: { name: series.name, styleNotes: series.styleNotes },
-    issue: { number: issue.number, title: issue.title },
-    providerOverride: provider,
-    modelOverride: model,
-    tag: `pipeline-storyboards-extract-${sourceKind}`,
-  });
+  let extractedScenes = [];
+  let runId = null;
+  let providerId = null;
+  let model = null;
+  if (source) {
+    // Fall back to the series' configured LLM when the client doesn't pass an
+    // explicit override — every Pipeline LLM action should honor the
+    // provider/model picked in the issue header (which mirrors series.llm).
+    // Canon lives on the linked universe (Phase B.4). Orphan series render
+    // with empty canon — extractScenes can still produce scenes from the
+    // source text alone, just without character/place/object grounding.
+    const canon = await getSeriesCanon(series);
+    // A model id is provider-specific, so only inherit the series model when the
+    // effective provider is still the series provider — otherwise an override
+    // provider would be paired with a foreign model id and fail (same guard as
+    // the extract-canon route). When the override switches providers without
+    // naming a model, leave it blank so the new provider's default resolves.
+    const { provider, model: resolvedModel } = resolveSeriesLlmOverride(series, {
+      overrideProvider: body.providerOverride,
+      overrideModel: body.modelOverride,
+    });
+    const result = await extractScenes({
+      source,
+      sourceKind,
+      characters: canon.characters,
+      places: canon.places,
+      objects: canon.objects,
+      work: { title: issue.title, kind: 'tv-episode' },
+      series: { name: series.name, styleNotes: series.styleNotes },
+      issue: { number: issue.number, title: issue.title },
+      providerOverride: provider,
+      modelOverride: resolvedModel,
+      tag: `pipeline-storyboards-extract-${sourceKind}`,
+    });
+    extractedScenes = result.extracted.scenes;
+    runId = result.runId;
+    providerId = result.providerId;
+    model = result.model;
+  }
 
-  const storyboardScenes = result.extracted.scenes.map(toStoryboardScene);
+  // Overlay the canonical numbering/sluglines/headings onto the extracted scenes
+  // (matched by position) when a canonical list exists — the canonical list wins
+  // on identity/ordering while the LLM scene contributes dialogue/visualPrompt/
+  // shots/characters. Extracted scenes beyond the canonical count are dropped so
+  // the storyboards scene count matches the canonical (and comic-page) scene
+  // count; canonical scenes beyond the extracted count carry no dialogue (there
+  // was no matching extracted scene), seeding their description from the summary.
+  const usedCanonicalList = canonicalScenes.length > 0;
+  const finalScenes = usedCanonicalList
+    ? canonicalScenes.map((c, i) => {
+        // Base on the canonical scene `c` (full sanitized shape with empty
+        // dialogue/shots/characters), overlay the LLM scene's rich fields, then
+        // re-assert canonical identity (id/heading/slugline) so the canonical
+        // numbering always wins. When there's no matching extracted scene
+        // (`ext` is {}), the result is just `c` — empty dialogue, summary-seeded
+        // description.
+        const ext = extractedScenes[i] || {};
+        return { ...c, ...ext, id: c.id, heading: c.heading, slugline: c.slugline, summary: ext.summary || c.summary };
+      })
+    : extractedScenes;
+
+  const storyboardScenes = finalScenes.map(toStoryboardScene);
   const { issue: updatedIssue, stage } = await issuesSvc.updateStage(issue.id, 'storyboards', {
     status: storyboardScenes.length ? 'ready' : 'empty',
     scenes: storyboardScenes,
-    lastRunId: result.runId,
+    lastRunId: runId,
     errorMessage: '',
   });
 
   res.json({
     issue: updatedIssue,
     stage,
-    runId: result.runId,
-    providerId: result.providerId,
-    model: result.model,
+    runId,
+    providerId,
+    model,
     sceneCount: storyboardScenes.length,
-    sourceKind,
-    usedCanonicalList: false,
+    // 'beat-sheet' when the response is purely the canonical list (no source to
+    // extract from); otherwise the LLM source stage the rich fields came from.
+    sourceKind: source ? sourceKind : 'beat-sheet',
+    usedCanonicalList,
   });
 }));
 
