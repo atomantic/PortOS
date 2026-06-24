@@ -86,28 +86,50 @@ export function mergeBoardRecord(local, remoteRaw) {
   return { next, inserted: false, remoteWins, changed };
 }
 
+// Served-asset dir prefix → peer-sync asset-manifest `kind`. A board item's
+// `imageUrl` can point at any same-origin app-path image the media UI surfaces:
+// gallery renders (`/data/images/`) AND character/canon reference sheets
+// (`/data/image-refs/`) — synthetic sources like `canon-sheet:`/`noun:` aren't
+// valid media-keys, so PinToMoodBoardMenu pins them as an `imageUrl` only (their
+// `previewUrl` is the `/data/image-refs/...` served path). Both dirs are
+// federated asset kinds (see directoryForAssetKind in peerSync.js), so both must
+// be advertised in the manifest or the receiver stores a board item pointing at
+// a missing local file. Mirrors the prefix vocabulary of directoryForAssetKind.
+const APP_IMAGE_URL_PREFIXES = Object.freeze([
+  ['/data/images/', 'image'],
+  ['/data/image-refs/', 'image-ref'],
+]);
+
 /**
- * Resolve a board item's app-path `imageUrl` to the bare gallery-image filename
- * under `data/images/` so the peer-sync asset pipeline can hash + transfer it.
- * Mirrors `startingImageFilename` in creativeDirector/projectsLogic.js: returns
- * null for an empty/non-string value, an external URL (`http(s)://…`, `data:`,
- * `blob:`), or any non-images absolute path — the receiver resolves those
- * itself. A media-key reference (`image:<ref>`) is handled separately by the
- * manifest builder (it carries the bare ref directly); this covers only the
- * `imageUrl` pointer.
+ * Resolve a board item's app-path `imageUrl` to `{ kind, filename }` so the
+ * peer-sync asset pipeline can hash + transfer the bytes via the right dir.
+ * Returns null for an empty/non-string value, an external URL (`http(s)://…`,
+ * `data:`, `blob:`), or any absolute path outside the served-asset dirs above —
+ * the receiver resolves those itself. A bare/relative ref (no leading `/`) is
+ * treated as a gallery image filename (legacy shape). A media-key reference
+ * (`image:<ref>`) is handled separately by the manifest builder (it carries the
+ * bare ref directly); this covers only the `imageUrl` pointer.
  */
-export function imageUrlToImageFilename(imageUrl) {
+export function imageUrlToAppAsset(imageUrl) {
   if (!isStr(imageUrl)) return null;
   const url = imageUrl.trim();
   if (!url) return null;
   if (/^(https?:|data:|blob:)/i.test(url)) return null;
-  let name = url;
-  const imagesPrefix = '/data/images/';
-  if (url.startsWith(imagesPrefix)) name = url.slice(imagesPrefix.length);
-  else if (url.startsWith('/')) return null; // some other absolute path → not a gallery image
-  name = name.split(/[?#]/)[0];
-  const base = name.split('/').pop();
-  return base || null;
+  const baseOf = (s) => {
+    const cut = s.split(/[?#]/)[0].split('/').pop();
+    return cut || null;
+  };
+  if (!url.startsWith('/')) {
+    const filename = baseOf(url); // bare/relative → gallery image (legacy shape)
+    return filename ? { kind: 'image', filename } : null;
+  }
+  for (const [prefix, kind] of APP_IMAGE_URL_PREFIXES) {
+    if (url.startsWith(prefix)) {
+      const filename = baseOf(url.slice(prefix.length));
+      return filename ? { kind, filename } : null;
+    }
+  }
+  return null; // some other absolute path → not a served gallery asset
 }
 
 // Apply a PATCH to board-level fields (name/description). Absent keys preserve

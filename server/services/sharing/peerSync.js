@@ -107,7 +107,7 @@ import {
   getBoard,
   listBoards,
   mergeBoardsFromSync,
-  imageUrlToImageFilename,
+  imageUrlToAppAsset,
 } from '../moodBoard/index.js';
 import { parseKey } from '../../lib/mediaItemKey.js';
 import {
@@ -1661,15 +1661,17 @@ async function buildProjectAssetManifest(project) {
 
 /**
  * Hash the local image bytes a mood board's items reference so the receiver can
- * pull them from `/data/images/` (or `/data/videos/`). An image item points at
+ * pull them from `/data/{images,image-refs,videos}/`. An image item points at
  * local bytes two ways: a media-key (`image:<ref>` / `video:<ref>`) into the
- * gallery, or an app-path `imageUrl` (`/data/images/...`). External URLs
- * (http(s)/data/blob) resolve on the receiver itself → skipped. Mirrors
- * `buildAssetManifestForCollection`: path-traversal-guarded, missing-local-file
- * skipped silently (including a null-hash entry would make every receiver
- * re-request bytes the sender can't fulfill), dedup-by-`<kind>:<filename>` so a
- * media-key and imageUrl pointing at the same file ship once. Text items carry
- * no bytes.
+ * gallery, or an app-path `imageUrl` — a gallery render (`/data/images/...`) OR a
+ * character/canon reference sheet (`/data/image-refs/...`, the form
+ * PinToMoodBoardMenu pins synthetic `canon-sheet:`/`noun:` sources under).
+ * External URLs (http(s)/data/blob) resolve on the receiver itself → skipped.
+ * Mirrors `buildAssetManifestForCollection`: path-traversal-guarded,
+ * missing-local-file skipped silently (including a null-hash entry would make
+ * every receiver re-request bytes the sender can't fulfill),
+ * dedup-by-`<kind>:<filename>` so a media-key and imageUrl pointing at the same
+ * file ship once. Text items carry no bytes.
  */
 async function buildBoardAssetManifest(board) {
   const dedup = new Map();
@@ -1688,9 +1690,16 @@ async function buildBoardAssetManifest(board) {
       }
     }
     if (typeof it.imageUrl === 'string') {
-      const filename = imageUrlToImageFilename(it.imageUrl);
-      const safeName = filename ? sanitizeAssetFilename(filename) : null;
-      if (safeName) pending.push(hashImageForManifest(safeName));
+      const asset = imageUrlToAppAsset(it.imageUrl);
+      const safeName = asset ? sanitizeAssetFilename(asset.filename) : null;
+      if (safeName) {
+        // `image-ref` bytes stream-hash from PATHS.imageRefs (same kind/dir the
+        // universe-canon manifest uses); gallery `image` bytes go through the
+        // sidecar-aware hashImageForManifest.
+        pending.push(asset.kind === 'image-ref'
+          ? hashSimpleAsset(safeName, 'image-ref', PATHS.imageRefs)
+          : hashImageForManifest(safeName));
+      }
     }
     for (const entry of await Promise.all(pending)) {
       if (entry) dedup.set(`${entry.kind}:${entry.filename}`, entry);

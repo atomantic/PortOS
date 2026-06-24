@@ -14,7 +14,7 @@ import {
   removeItem,
   sanitizeBoardForSync,
   mergeBoardRecord,
-  imageUrlToImageFilename,
+  imageUrlToAppAsset,
   MAX_ITEMS_PER_BOARD,
 } from './logic.js';
 
@@ -195,17 +195,24 @@ describe('mergeBoardRecord (LWW)', () => {
   });
 });
 
-describe('imageUrlToImageFilename', () => {
-  it('strips the app-path prefix to a bare gallery filename', () => {
-    expect(imageUrlToImageFilename('/data/images/foo.png')).toBe('foo.png');
-    expect(imageUrlToImageFilename('/data/images/sub/foo.png?v=2')).toBe('foo.png');
+describe('imageUrlToAppAsset', () => {
+  it('resolves a gallery image path to { kind: image, filename }', () => {
+    expect(imageUrlToAppAsset('/data/images/foo.png')).toEqual({ kind: 'image', filename: 'foo.png' });
+    expect(imageUrlToAppAsset('/data/images/sub/foo.png?v=2')).toEqual({ kind: 'image', filename: 'foo.png' });
   });
-  it('returns null for external / non-images / empty values', () => {
-    expect(imageUrlToImageFilename('https://x/y.png')).toBeNull();
-    expect(imageUrlToImageFilename('data:image/png;base64,AAA')).toBeNull();
-    expect(imageUrlToImageFilename('/data/videos/clip.mp4')).toBeNull();
-    expect(imageUrlToImageFilename('')).toBeNull();
-    expect(imageUrlToImageFilename(null)).toBeNull();
+  it('resolves an image-ref path (canon-sheet / noun pins) to { kind: image-ref, filename }', () => {
+    expect(imageUrlToAppAsset('/data/image-refs/canon-abc.png')).toEqual({ kind: 'image-ref', filename: 'canon-abc.png' });
+  });
+  it('treats a bare/relative ref as a gallery image (legacy shape)', () => {
+    expect(imageUrlToAppAsset('foo.png')).toEqual({ kind: 'image', filename: 'foo.png' });
+  });
+  it('returns null for external / other-absolute / empty values', () => {
+    expect(imageUrlToAppAsset('https://x/y.png')).toBeNull();
+    expect(imageUrlToAppAsset('data:image/png;base64,AAA')).toBeNull();
+    expect(imageUrlToAppAsset('/data/videos/clip.mp4')).toBeNull(); // video bytes ride a media-key, not an imageUrl
+    expect(imageUrlToAppAsset('/etc/passwd')).toBeNull();
+    expect(imageUrlToAppAsset('')).toBeNull();
+    expect(imageUrlToAppAsset(null)).toBeNull();
   });
 });
 

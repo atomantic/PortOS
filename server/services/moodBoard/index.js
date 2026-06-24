@@ -29,7 +29,7 @@ export {
   mergeBoardsFromSync,
   pruneTombstonedBoards,
 } from './db.js';
-export { imageUrlToImageFilename } from './logic.js';
+export { imageUrlToAppAsset } from './logic.js';
 
 // Announce a newly-created board to the per-record peer-sync pipeline: emit the
 // 'updated' event so any existing subscription pushes it, AND auto-subscribe
