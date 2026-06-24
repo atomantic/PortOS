@@ -64,9 +64,25 @@ export function mergeWorkRecord(local, remoteRaw) {
   if (!remote) return { next: null, inserted: false, remoteWins: false, changed: false };
   if (!local) return { next: remote, inserted: true, remoteWins: true, changed: true };
   const remoteWins = compareNewerWins(remote.updatedAt, local.updatedAt);
-  const next = remoteWins ? remote : local;
+  // The remote arrives wire-stripped of `liveMode.usage`/`renderUsage` (local-only
+  // daily budgets — see sanitizeRecordForWire). When the remote wins the LWW,
+  // carry the RECEIVER's own counters forward onto it so a peer's manuscript edit
+  // doesn't reset this machine's budget state. When local wins, `next` is already
+  // local (counters intact).
+  const next = remoteWins ? preserveLocalLiveCounters(remote, local) : local;
   const changed = JSON.stringify(next) !== JSON.stringify(local);
   return { next, inserted: false, remoteWins, changed };
+}
+
+/** Re-attach the receiver's local-only live-mode counters onto a winning remote. */
+function preserveLocalLiveCounters(remote, local) {
+  const localLive = local?.liveMode;
+  if (!localLive || typeof localLive !== 'object' || Array.isArray(localLive)) return remote;
+  const carried = {};
+  if (localLive.usage !== undefined) carried.usage = localLive.usage;
+  if (localLive.renderUsage !== undefined) carried.renderUsage = localLive.renderUsage;
+  if (Object.keys(carried).length === 0) return remote;
+  return { ...remote, liveMode: { ...(remote.liveMode || {}), ...carried } };
 }
 
 /**

@@ -12,6 +12,7 @@ import {
   sanitizeWorkForSync, mergeWorkRecord, draftAssetEntries,
   WRITERS_ROOM_WORK_KIND, WRITERS_ROOM_DRAFT_ASSET_KIND,
 } from './syncLogic.js';
+import { sanitizeRecordForWire } from '../../lib/syncWire.js';
 
 const WORK = 'wr-work-11111111-1111-1111-1111-111111111111';
 const DRAFT = 'wr-draft-22222222-2222-2222-2222-222222222222';
@@ -99,6 +100,40 @@ describe('mergeWorkRecord', () => {
     // equal updatedAt → tie → local wins (remoteWins false), and no change
     expect(remoteWins).toBe(false);
     expect(changed).toBe(false);
+  });
+});
+
+describe('live-mode counters stay local', () => {
+  const live = (extra) => ({ enabled: true, debounceMs: 2500, dailyCallBudget: 100, dailyRenderBudget: 20, ...extra });
+
+  it('sanitizeRecordForWire strips liveMode usage/renderUsage but keeps the user knobs', () => {
+    const wire = sanitizeRecordForWire('writersRoomWork', work({
+      liveMode: live({ usage: { date: '2026-01-02', count: 9 }, renderUsage: { date: '2026-01-02', count: 2 } }),
+    }));
+    expect(wire.liveMode).toEqual(live());
+    expect(wire.liveMode.usage).toBeUndefined();
+    expect(wire.liveMode.renderUsage).toBeUndefined();
+  });
+
+  it('mergeWorkRecord carries the receiver local counters onto a winning (wire-stripped) remote', () => {
+    const local = sanitizeWorkForSync(work({
+      updatedAt: '2026-01-02T00:00:00.000Z',
+      liveMode: live({ usage: { date: '2026-01-02', count: 7 }, renderUsage: { date: '2026-01-02', count: 3 } }),
+    }));
+    // Remote arrives wire-stripped (no counters) and is newer → wins.
+    const remote = work({ updatedAt: '2026-01-05T00:00:00.000Z', title: 'Edited', liveMode: live() });
+    const { next, remoteWins } = mergeWorkRecord(local, remote);
+    expect(remoteWins).toBe(true);
+    expect(next.title).toBe('Edited');
+    expect(next.liveMode.usage).toEqual({ date: '2026-01-02', count: 7 });
+    expect(next.liveMode.renderUsage).toEqual({ date: '2026-01-02', count: 3 });
+  });
+
+  it('mergeWorkRecord does not crash when neither side has counters', () => {
+    const local = sanitizeWorkForSync(work({ updatedAt: '2026-01-02T00:00:00.000Z' }));
+    const { next, remoteWins } = mergeWorkRecord(local, work({ updatedAt: '2026-01-05T00:00:00.000Z', title: 'E' }));
+    expect(remoteWins).toBe(true);
+    expect(next.title).toBe('E');
   });
 });
 
