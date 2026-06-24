@@ -129,8 +129,22 @@ router.get('/', asyncHandler(async (req, res) => {
 // into its data (`cursorForYou`) — how far we've pulled from it. That cursor is
 // the peer's push-frontier toward us, so it can render an outbound "N to push"
 // count. Older peers omit the param and get the legacy (inbound-only) shape.
+//
+// `forPeer` is consumed by getSyncStatus() purely as a cursor-cache KEY
+// (`cursors[forPeer]`), never as a structurally-validated id — so we must NOT
+// demand canonical GUID format here. The endpoint is reachable by ANY tailnet
+// machine (not just peers in our list), and a prober running an older PortOS,
+// carrying the `unknown` instance-id sentinel, or emitting a bare `?forPeer=`
+// (empty string — which `.guid()` rejects) legitimately hits us; rejecting it
+// threw a 500 ServerError every probe cycle instead of degrading to the
+// unscoped (global) response. Mirror the lenient trim + length-cap the sibling
+// /api/sync/* routes already apply (forPeerOf in dataSync.js): any non-empty
+// string is a valid key; absent/blank/array → unscoped.
 const syncStatusQuerySchema = z.object({
-  forPeer: z.string().guid().optional()
+  forPeer: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim().length > 0 ? v.trim().slice(0, 128) : undefined),
+    z.string().optional()
+  )
 });
 router.get('/sync-status', asyncHandler(async (req, res) => {
   const { forPeer } = syncStatusQuerySchema.parse(req.query);
