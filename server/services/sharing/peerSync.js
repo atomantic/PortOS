@@ -399,6 +399,12 @@ function peerAllowsOutbound(peer) {
 function peerHasCategory(peer, recordKind) {
   const cat = KIND_TO_CATEGORY[recordKind];
   if (!cat) return false;
+  // A full-sync ("mirror everything") peer implies every current and future
+  // category on — so a newly added subscribable kind is covered with no
+  // per-peer change. This is what makes the back-subscribe sweep, the
+  // peer:online convergence, and auto-subscribe-on-create all fan a full-sync
+  // peer's mirror without enumerating categories by hand.
+  if (peer?.fullSync === true) return true;
   const cats = peer?.syncCategories;
   return !!(cats && cats[cat] === true);
 }
@@ -446,17 +452,15 @@ export async function autoSubscribeRecordToAllPeers(recordKind, recordId) {
  * Dynamic imports for the listers avoid a static cycle (peerSync already
  * imports merge entry points from universeBuilder / pipeline.series).
  */
-export async function autoSubscribePeerToAllRecords(peerId, recordKind) {
-  if (!isNonEmptyStr(peerId) || !PEER_SUBSCRIBABLE_KINDS.includes(recordKind)) return [];
-  // Re-check the peer is enabled + outbound-capable + still has the category
-  // turned on. The caller (instances.updatePeer) already saw the false→true
-  // flip inside withData, but this helper is also reachable from other
-  // backfill paths and we don't want to push to an inbound-only peer just
-  // because the category bit was set. Snapshot read is good enough — peer
-  // edits are infrequent compared to subscription pushes.
-  const peers = await getPeers().catch(() => []);
-  const peer = peers.find(p => p.instanceId === peerId);
-  if (!peer || !peerAllowsOutbound(peer) || !peerHasCategory(peer, recordKind)) return [];
+/**
+ * List the local, non-deleted, non-ephemeral records of a subscribable kind —
+ * the candidate set for both the back-subscribe sweep and full-sync coverage
+ * diffing. Ephemeral records are dropped because they can never push (the wire
+ * sanitizer short-circuits them) and a sub for one would leave an orphan row.
+ * Universe/series listers are dynamic-imported to avoid a static cycle
+ * (peerSync already imports their merge entry points).
+ */
+async function listRecordsForKind(recordKind) {
   let records = [];
   if (recordKind === 'universe') {
     const { listUniverses } = await import('../universeBuilder.js');
@@ -475,11 +479,21 @@ export async function autoSubscribePeerToAllRecords(peerId, recordKind) {
   } else if (recordKind === 'track') {
     records = await listTracks({ includeDeleted: false }).catch(() => []);
   }
-  // Drop ephemeral records before the set-difference / sub creation. The wire
-  // sanitizer would short-circuit any push anyway, but creating a sub that
-  // can never push leaves an orphan row in peer_subscriptions.json that
-  // confuses unsubscribe-all / tombstone-cursor lifecycle assumptions.
-  records = records.filter(r => r?.ephemeral !== true);
+  return records.filter(r => r?.ephemeral !== true && isNonEmptyStr(r?.id));
+}
+
+export async function autoSubscribePeerToAllRecords(peerId, recordKind) {
+  if (!isNonEmptyStr(peerId) || !PEER_SUBSCRIBABLE_KINDS.includes(recordKind)) return [];
+  // Re-check the peer is enabled + outbound-capable + still has the category
+  // turned on. The caller (instances.updatePeer) already saw the false→true
+  // flip inside withData, but this helper is also reachable from other
+  // backfill paths and we don't want to push to an inbound-only peer just
+  // because the category bit was set. Snapshot read is good enough — peer
+  // edits are infrequent compared to subscription pushes.
+  const peers = await getPeers().catch(() => []);
+  const peer = peers.find(p => p.instanceId === peerId);
+  if (!peer || !peerAllowsOutbound(peer) || !peerHasCategory(peer, recordKind)) return [];
+  const records = await listRecordsForKind(recordKind);
   if (records.length === 0) return [];
   // Compute the set difference up front: which local records aren't yet
   // subscribed to this peer? The peer:online convergence path fires this
@@ -521,6 +535,40 @@ export async function autoSubscribePeerToAllRecords(peerId, recordKind) {
     console.log(`🔗 peerSync: backfill-subscribed ${created.length} ${recordKind} record(s) → ${peerId}`);
   }
   return created;
+}
+
+/**
+ * Real coverage diff for a (full-sync) peer: of every local subscribable record,
+ * how many have a CONFIRMED-delivered subscription to this peer? Backs the
+ * Instances UI "fully mirrored ✓ / N pending" indicator.
+ *
+ * Coverage is computed by diffing actual record IDs against subscriptions whose
+ * `lastConfirmedPushedAt` is set — NOT off the BIGSERIAL push cursors (which are
+ * sequence numbers, not row counts, and would misreport coverage). A record is
+ * "pending" when it has no subscription to this peer OR its subscription hasn't
+ * been confirmed-delivered yet. Returns per-kind breakdown plus totals, and
+ * `fullyMirrored` (pending === 0).
+ */
+export async function getFullSyncCoverageForPeer(peerId) {
+  const empty = { total: 0, confirmed: 0, pending: 0, fullyMirrored: true, byKind: {} };
+  if (!isNonEmptyStr(peerId)) return empty;
+  const byKind = {};
+  let total = 0;
+  let confirmed = 0;
+  for (const kind of PEER_SUBSCRIBABLE_KINDS) {
+    const records = await listRecordsForKind(kind).catch(() => []);
+    const subs = await listPeerSubscriptions({ peerId, recordKind: kind }).catch(() => []);
+    // A record counts as confirmed only when its subscription carries a
+    // confirmed-delivery water-mark — a created-but-never-pushed sub is pending.
+    const confirmedIds = new Set(subs.filter(s => s.lastConfirmedPushedAt).map(s => s.recordId));
+    const kindTotal = records.length;
+    const kindConfirmed = records.filter(r => confirmedIds.has(r.id)).length;
+    byKind[kind] = { total: kindTotal, confirmed: kindConfirmed, pending: kindTotal - kindConfirmed };
+    total += kindTotal;
+    confirmed += kindConfirmed;
+  }
+  const pending = total - confirmed;
+  return { total, confirmed, pending, fullyMirrored: pending === 0, byKind };
 }
 
 /**

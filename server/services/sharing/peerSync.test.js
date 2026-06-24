@@ -134,6 +134,7 @@ import {
   listPeerSubscriptions,
   findPeerSubscription,
   getOutboundCoverageForPeer,
+  getFullSyncCoverageForPeer,
   subscribePeer,
   unsubscribePeer,
   unsubscribeAllForPeer,
@@ -436,6 +437,67 @@ describe('peerSync', () => {
     it('returns empty coverage for a missing/blank peerId', async () => {
       const cov = await getOutboundCoverageForPeer('');
       expect(cov.universe.size + cov.pipeline.size + cov.mediaCollections.size).toBe(0);
+    });
+  });
+
+  describe('getFullSyncCoverageForPeer', () => {
+    beforeEach(() => {
+      vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'U1' });
+      vi.mocked(listIssues).mockResolvedValue([]);
+      vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({ missingAssets: [] }) });
+    });
+
+    it('reports fully-mirrored with zero total when there are no local records', async () => {
+      // All listers default to [] in the suite-level beforeEach.
+      const cov = await getFullSyncCoverageForPeer('peer-a');
+      expect(cov).toMatchObject({ total: 0, confirmed: 0, pending: 0, fullyMirrored: true });
+    });
+
+    it('counts a record with no subscription as pending (real ID diff, not cursors)', async () => {
+      vi.mocked(listUniverses).mockResolvedValue([{ id: 'u1' }, { id: 'u2' }]);
+      const cov = await getFullSyncCoverageForPeer('peer-a');
+      expect(cov.total).toBe(2);
+      expect(cov.confirmed).toBe(0);
+      expect(cov.pending).toBe(2);
+      expect(cov.fullyMirrored).toBe(false);
+      expect(cov.byKind.universe).toEqual({ total: 2, confirmed: 0, pending: 2 });
+    });
+
+    it('counts a confirmed-pushed subscription as mirrored', async () => {
+      vi.mocked(listUniverses).mockResolvedValue([{ id: 'u1' }]);
+      // peerHasCategory gate is bypassed here — forcePushRecord drives the push
+      // directly. Register the peer so forcePushRecord finds it.
+      vi.mocked(getPeers).mockResolvedValue([
+        { instanceId: 'peer-a', name: 'A', enabled: true, syncEnabled: true, fullSync: true, syncCategories: {} },
+      ]);
+      await subscribePeer({ peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' });
+      // Deterministically push + confirm so lastConfirmedPushedAt is stamped
+      // (the subscribe's initial push is fire-and-forget; awaiting forcePushRecord
+      // avoids a drain-timing flake).
+      await forcePushRecord('peer-a', 'universe', 'u1');
+      const cov = await getFullSyncCoverageForPeer('peer-a');
+      expect(cov.total).toBe(1);
+      expect(cov.confirmed).toBe(1);
+      expect(cov.pending).toBe(0);
+      expect(cov.fullyMirrored).toBe(true);
+    });
+
+    it('a created-but-unconfirmed subscription still counts as pending', async () => {
+      vi.mocked(listUniverses).mockResolvedValue([{ id: 'u1' }]);
+      // Push FAILS — the sub is created but never confirmed-delivered.
+      vi.mocked(peerFetch).mockRejectedValue(new Error('offline'));
+      await subscribePeer({ peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' }).catch(() => {});
+      await __drainForTests();
+      const cov = await getFullSyncCoverageForPeer('peer-a');
+      expect(cov.total).toBe(1);
+      expect(cov.confirmed).toBe(0);
+      expect(cov.pending).toBe(1);
+      expect(cov.fullyMirrored).toBe(false);
+    });
+
+    it('returns empty coverage for a blank peerId', async () => {
+      const cov = await getFullSyncCoverageForPeer('');
+      expect(cov).toMatchObject({ total: 0, fullyMirrored: true });
     });
   });
 
@@ -799,6 +861,19 @@ describe('peerSync', () => {
       vi.mocked(listUniverses).mockResolvedValue([{ id: 'u1' }]);
       const created = await autoSubscribePeerToAllRecords('peer-ghost', 'universe');
       expect(created).toEqual([]);
+    });
+
+    it('a full-sync peer subscribes records even when the matching category bit is off', async () => {
+      // fullSync implies every category — so the back-subscribe sweep covers a
+      // kind whose individual syncCategories bit was never turned on (and any
+      // future kind, with no per-peer change).
+      vi.mocked(getPeers).mockResolvedValue([
+        { instanceId: 'peer-a', enabled: true, syncEnabled: true, fullSync: true, syncCategories: { universe: false } },
+      ]);
+      vi.mocked(listUniverses).mockResolvedValue([{ id: 'u1' }]);
+      const created = await autoSubscribePeerToAllRecords('peer-a', 'universe');
+      expect(created.map(c => c.recordId)).toEqual(['u1']);
+      expect(await findPeerSubscription('peer-a', 'universe', 'u1')).not.toBeNull();
     });
 
     it('returns [] on re-run — only newly-created subs are reported', async () => {

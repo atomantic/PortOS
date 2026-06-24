@@ -180,6 +180,10 @@ function snapshotPeerIdsForKind(peers, recordKind) {
     .filter((p) => {
       if (!p?.enabled) return false;
       if (p.syncEnabled === false) return false;
+      // A full-sync peer mirrors every category, so it can resurrect a pruned
+      // tombstone for ANY kind via its snapshot loop — it must count here even
+      // when its stored syncCategories map doesn't list this category.
+      if (p.fullSync === true) return true;
       const cats = p.syncCategories;
       return !!cats && typeof cats === 'object' && cats[category] === true;
     })
