@@ -119,6 +119,14 @@ export async function spawnAgentForTask(task) {
     return null;
   }
 
+  // Acquire the in-process dedup guard SYNCHRONOUSLY — before any `await` below.
+  // A `task:ready` re-emit for the same task id can land while this call is
+  // suspended at an await (e.g. `ensureInstanceId()` / `getTaskById()`), and
+  // EventEmitter does not serialize async listeners, so a guard taken after an
+  // await would let a second call slip past the `has()` check above and spawn a
+  // duplicate agent (codex review). Every early `return null` below releases it.
+  spawningTasks.add(task.id);
+
   // Cross-instance claim guard (issue #1563, acceptance criterion 2). When this
   // task list is shared with a federated peer (full-sync mode, #1561), the peer
   // may already be working this task. Refuse to spawn while another instance
@@ -130,6 +138,7 @@ export async function spawnAgentForTask(task) {
   // re-claiming our own task on retry/resume.
   const instanceId = await ensureInstanceId();
   if (!isClaimableBy(task.metadata, instanceId)) {
+    spawningTasks.delete(task.id);
     console.log(`🔒 Task ${task.id} is claimed by instance ${getClaimOwner(task.metadata)} (live lease) — skipping spawn on ${instanceId}`);
     return null;
   }
@@ -137,6 +146,7 @@ export async function spawnAgentForTask(task) {
   // Check total spawn count across all retry types to prevent runaway respawning
   const totalSpawns = Number(task.metadata?.totalSpawnCount) || 0;
   if (totalSpawns >= MAX_TOTAL_SPAWNS) {
+    spawningTasks.delete(task.id);
     console.log(`🚫 Task ${task.id} hit max total spawns (${totalSpawns}/${MAX_TOTAL_SPAWNS}), blocking`);
     await updateTask(task.id, {
       status: 'blocked',
@@ -153,8 +163,6 @@ export async function spawnAgentForTask(task) {
     await releaseAppReviewMarker(task.metadata?.app).catch(() => {});
     return null;
   }
-
-  spawningTasks.add(task.id);
 
   const agentId = `agent-${uuidv4().slice(0, 8)}`;
 
