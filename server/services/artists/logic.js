@@ -25,6 +25,7 @@
  */
 
 import { compareNewerWins } from '../../lib/lwwTimestamp.js';
+import { localImageFilename } from '../../lib/localImageFilename.js';
 
 export const ARTIST_ID_RE = /^artist-[A-Za-z0-9-]{1,64}$/;
 
@@ -72,21 +73,11 @@ export function sanitizeArtist(raw) {
 /**
  * Resolve an artist's `portraitImageUrl` to the bare gallery-image filename that
  * lives under `data/images/` — the unit the peer-sync asset pipeline hashes +
- * transfers. Returns null when there's nothing local to ship (empty,
- * external URL, or a non-image path). Mirrors authors' headshotImageFilename.
+ * transfers. Thin wrapper over the shared `localImageFilename` helper (the named
+ * export is what `peerSync.js` imports).
  */
 export function portraitImageFilename(portraitImageUrl) {
-  if (!isStr(portraitImageUrl)) return null;
-  const url = portraitImageUrl.trim();
-  if (!url) return null;
-  if (/^(https?:|data:|blob:)/i.test(url)) return null;
-  let name = url;
-  const imagesPrefix = '/data/images/';
-  if (url.startsWith(imagesPrefix)) name = url.slice(imagesPrefix.length);
-  else if (url.startsWith('/')) return null; // some other absolute path → not a gallery image
-  name = name.split(/[?#]/)[0];
-  const base = name.split('/').pop();
-  return base || null;
+  return localImageFilename(portraitImageUrl);
 }
 
 /** Build a fresh artist record from create input. */

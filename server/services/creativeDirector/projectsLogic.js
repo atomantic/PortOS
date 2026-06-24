@@ -16,6 +16,7 @@ import { creativeDirectorTreatmentSchema } from '../../lib/validation.js';
 import { PROJECT_STATUSES } from '../../lib/creativeDirectorPresets.js';
 import { compareNewerWins } from '../../lib/lwwTimestamp.js';
 import { sanitizeSoftDeleteFields } from '../../lib/syncWire.js';
+import { localImageFilename } from '../../lib/localImageFilename.js';
 
 const isStr = (v) => typeof v === 'string';
 
@@ -122,25 +123,13 @@ export function buildProjectRecord(input, { id, now, collectionId }) {
 /**
  * Resolve a project's `startingImageFile` to the bare gallery-image filename
  * under `data/images/` so the peer-sync asset pipeline can hash + transfer it.
- * Mirrors `headshotImageFilename` in services/authors/logic.js: returns null for
- * an empty/non-string value, an external URL (`http(s)://…`, `data:`, `blob:`),
- * or any non-images absolute path — the receiver resolves those itself. Scene
- * video renders are NOT covered here: they live in the project's linked media
- * collection, which federates as its own record (so its bytes ride that
- * collection's manifest). This covers only the project's direct image input.
+ * Thin wrapper over the shared `localImageFilename` helper. Scene video renders
+ * are NOT covered here: they live in the project's linked media collection,
+ * which federates as its own record (so its bytes ride that collection's
+ * manifest). This covers only the project's direct image input.
  */
 export function startingImageFilename(startingImageFile) {
-  if (!isStr(startingImageFile)) return null;
-  const url = startingImageFile.trim();
-  if (!url) return null;
-  if (/^(https?:|data:|blob:)/i.test(url)) return null;
-  let name = url;
-  const imagesPrefix = '/data/images/';
-  if (url.startsWith(imagesPrefix)) name = url.slice(imagesPrefix.length);
-  else if (url.startsWith('/')) return null; // some other absolute path → not a gallery image
-  name = name.split(/[?#]/)[0];
-  const base = name.split('/').pop();
-  return base || null;
+  return localImageFilename(startingImageFile);
 }
 
 /**

@@ -24,6 +24,7 @@
  */
 
 import { compareNewerWins } from '../../lib/lwwTimestamp.js';
+import { localImageFilename } from '../../lib/localImageFilename.js';
 
 export const ALBUM_ID_RE = /^album-[A-Za-z0-9-]{1,64}$/;
 
@@ -94,21 +95,11 @@ export function sanitizeAlbum(raw) {
 
 /**
  * Resolve an album's `coverImageUrl` to the bare gallery-image filename under
- * `data/images/` for peer-sync asset transfer. Returns null when
- * there's nothing local to ship. Mirrors artists' portraitImageFilename.
+ * `data/images/` for peer-sync asset transfer. Thin wrapper over the shared
+ * `localImageFilename` helper (the named export is what `peerSync.js` imports).
  */
 export function coverImageFilename(coverImageUrl) {
-  if (!isStr(coverImageUrl)) return null;
-  const url = coverImageUrl.trim();
-  if (!url) return null;
-  if (/^(https?:|data:|blob:)/i.test(url)) return null;
-  let name = url;
-  const imagesPrefix = '/data/images/';
-  if (url.startsWith(imagesPrefix)) name = url.slice(imagesPrefix.length);
-  else if (url.startsWith('/')) return null;
-  name = name.split(/[?#]/)[0];
-  const base = name.split('/').pop();
-  return base || null;
+  return localImageFilename(coverImageUrl);
 }
 
 /** Build a fresh album record from create input. */
