@@ -712,7 +712,14 @@ app.use('/data/brain-imports', express.static(PATHS.brainImportAssets, ASSET_STA
 // Federation (#1565) pulls them peer→peer from this mount: a receiver that merged
 // a work record GETs each missing body's bytes by its nested path. Read-only;
 // range support for large drafts. (Tailnet-only per the project's threat model.)
-app.use('/data/writers-room/works', express.static(wrWorksDir(), ASSET_STATIC_OPTS));
+// The gate restricts the mount to the draft-body path ONLY — without it, the
+// static root would also serve adjacent work-metadata JSON (manifest.json /
+// manifest.imported.json on file-backend/migrated installs) to any client that
+// knows a work id. Only `<workId>/drafts/<draftId>.md` is needed for body pulls.
+app.use('/data/writers-room/works', (req, res, next) => {
+  if (!/^\/[^/]+\/drafts\/[^/]+\.md$/.test(req.path)) return res.status(404).end();
+  next();
+}, express.static(wrWorksDir(), ASSET_STATIC_OPTS));
 
 // Serve built client UI (production mode — no Vite dev server needed)
 const CLIENT_DIST = join(__dirname, '..', 'client', 'dist');
