@@ -56,6 +56,7 @@ const UNMODELED_NAMES = 'roster.unmodeled-names';
 const TIMELINE_CONTRADICTION = 'continuity.timeline-contradiction';
 const CHARACTER_CONSISTENCY = 'character.consistency';
 const CLIMAX_AGENCY = 'arc.climax-agency';
+const REACTION_PROPORTIONALITY = 'emotion.reaction-proportionality';
 
 // A minimal valid stored custom-check definition.
 const customDef = (over = {}) => ({
@@ -1283,6 +1284,77 @@ describe('arc.climax-agency — LLM check (#1583)', () => {
     });
     await getCheck(CLIMAX_AGENCY).run(ctx);
     expect(finals).toEqual(['', '', 'true']);
+  });
+});
+
+describe('emotion.reaction-proportionality — LLM check (#1584)', () => {
+  const wholeCtx = (overrides = {}) => ({
+    manuscript: '# Issue 1\n\nThe bomb killed her brother. She made breakfast.',
+    config: { maxFindings: 12 },
+    severityDefault: 'medium',
+    reverseOutline: [{ sequence: 0, issueNumber: 1, heading: 'The blast', setting: 'the kitchen', charactersPresent: ['Mara'] }],
+    planManuscriptChunks: async () => ['# Issue 1\n\nThe bomb killed her brother. She made breakfast.'],
+    callStagedLLM: async () => ({ content: { findings: [] } }),
+    ...overrides,
+  });
+
+  it('is registered as a series-scoped LLM check reading manuscript + outline with category emotion', () => {
+    const check = getCheck(REACTION_PROPORTIONALITY);
+    expect(check.kind).toBe('llm');
+    expect(check.scope).toBe('series');
+    expect(check.category).toBe('emotion');
+    expect(check.severityDefault).toBe('medium');
+    expect(check.sources).toEqual(['manuscript', 'reverseOutline']);
+    expect(check.needsManuscript).toBe(true);
+  });
+
+  it('only runs when there is drafted prose to scan', () => {
+    const check = getCheck(REACTION_PROPORTIONALITY);
+    expect(check.gate({ manuscript: '' })).toBe(false);
+    expect(check.gate({ manuscript: '# Issue 1\n\nprose' })).toBeTruthy();
+  });
+
+  it('passes the manuscript + scene map to the model and forces the emotion category', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      planManuscriptChunks: async (_stage, opts) => {
+        // The scene map rides as trimmable context with a non-zero overhead.
+        expect(opts.context).toHaveProperty('sceneMap');
+        expect(opts.fixedOverheadTokens).toBeGreaterThan(0);
+        return ['# Issue 1\n\nThe bomb killed her brother. She made breakfast.'];
+      },
+      callStagedLLM: async (_stage, vars) => {
+        seenVars = vars;
+        return { content: { findings: [{ severity: 'high', issueNumber: 1, location: 'Issue 1 — Mara — under-reaction', problem: 'Her brother dies and she shows no reaction' }] } };
+      },
+    });
+    const findings = await getCheck(REACTION_PROPORTIONALITY).run(ctx);
+    expect(seenVars.manuscript).toBe('# Issue 1\n\nThe bomb killed her brother. She made breakfast.');
+    expect(seenVars.sceneMap).toContain('Issue 1: The blast');
+    expect(findings).toHaveLength(1);
+    expect(findings[0].category).toBe('emotion');
+    expect(findings[0].location).toBe('Issue 1 — Mara — under-reaction');
+  });
+
+  it('passes an empty scene map when the series has no reverse outline', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      reverseOutline: undefined,
+      callStagedLLM: async (_stage, vars) => { seenVars = vars; return { content: { findings: [] } }; },
+    });
+    await getCheck(REACTION_PROPORTIONALITY).run(ctx);
+    expect(seenVars.sceneMap).toBe('');
+  });
+
+  it('does not gate on a final part — every chunk can report a proportionality finding', async () => {
+    const seen = [];
+    const ctx = wholeCtx({
+      planManuscriptChunks: async () => ['# Issue 1\n\np1', '# Issue 2\n\np2'],
+      callStagedLLM: async (_stage, vars) => { seen.push(vars); return { content: { findings: [] } }; },
+    });
+    await getCheck(REACTION_PROPORTIONALITY).run(ctx);
+    // Unlike the climax check, no chunk receives a finalPart gate var.
+    expect(seen.every((v) => !('finalPart' in v))).toBe(true);
   });
 });
 

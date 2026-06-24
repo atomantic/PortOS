@@ -681,6 +681,13 @@
       "returnsJson": true,
       "variables": []
     },
+    "pipeline-editorial-reaction-proportionality": {
+      "name": "Pipeline — Editorial Check: Emotional beat proportionality (reactions vs event magnitude)",
+      "description": "Editorial check (#1584): whether each character's emotional reactions are PROPORTIONATE to the magnitude of the events that befall them. Flags an under-reaction (a high-magnitude event — trauma, death, betrayal, major loss/win — that draws no on-page reaction and is never processed in later issues) and an over-reaction (a minor setback triggering grief/rage/despair out of all proportion). Uses the reverse-outline scene map to weigh event magnitude and attribute findings to the right issue, and carries unprocessed high-magnitude events across manuscript parts so a later part can flag a trauma introduced early and left unaddressed; degrades to a whole-manuscript scan when no outline exists. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
     "pipeline-editorial-theme-coherence": {
       "name": "Pipeline — Editorial Check: Theme coherence / thematic throughline",
       "description": "Editorial check (#1317): whether the manuscript actually DELIVERS its declared themes (series.arc.themes), not just states them. Builds a per-theme setup/complication/payoff coverage map, flags a theme that is stated but never dramatized or dropped after the opening, detects a strong EMERGENT theme not in the arc, and checks that the climax lands the thematic argument. Reads the stitched manuscript plus the authored arc themes and the reverse-outline scene map; degrades to a whole-manuscript scan when no outline or no themes exist. Returns issue-anchored findings.",

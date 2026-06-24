@@ -598,6 +598,21 @@ export function declaredThemesSummary(themes) {
 // themes, or outline exist.
 export const CLIMAX_AGENCY_STAGE = 'pipeline-editorial-climax-agency';
 
+// Stage name for the emotional-beat / reaction-proportionality LLM check (#1584).
+// Ships in data.reference/prompts/stages/ + stage-config.json (fresh installs via
+// setup-data.js) and migrates to existing installs via migration 132 (boot runs
+// migrations but NOT setup-data, so the migration is required). Reads the stitched
+// manuscript plus the reverse-outline scene map and judges whether each character's
+// emotional reactions are PROPORTIONATE to the magnitude of the events that befall
+// them: a high-magnitude event (trauma, death, betrayal, a major loss or win) that
+// draws no on-page reaction and is never processed afterward (under-reaction), or a
+// minor setback that triggers grief/rage out of all proportion (over-reaction).
+// Because an unprocessed event in an early issue can stay unaddressed many issues
+// later, the run carries high-magnitude events still awaiting a proportionate
+// reaction across chunks (`crossChunkSetup`) so a later part can flag the missing
+// payoff; degrades to a prose-only scan when no outline exists.
+export const REACTION_PROPORTIONALITY_STAGE = 'pipeline-editorial-reaction-proportionality';
+
 // Stage name for the unmodeled-proper-nouns LLM check (#1412). Ships in
 // data.reference/prompts/stages/ + stage-config.json (fresh installs via
 // setup-data.js) and migrates to existing installs via migration 116 (boot runs
@@ -3490,6 +3505,73 @@ export const EDITORIAL_CHECKS = [
           + 'later, higher-stakes resolution scene supersedes it. This lets the final part judge the '
           + 'climax\'s agency + resolution power and quote it even if the climax is not physically in the '
           + 'last chunk.',
+      });
+    },
+  },
+  {
+    id: 'emotion.reaction-proportionality',
+    sources: ['manuscript', 'reverseOutline'],
+    label: 'Emotional beat proportionality (reactions vs event magnitude)',
+    description:
+      'LLM scan for emotional beats that do not track the magnitude of what happens: a high-magnitude event (trauma, a death, a betrayal, a major loss or win) that draws no on-page reaction and is never processed in later issues (under-reaction), or a minor setback that triggers grief, rage, or despair out of all proportion (over-reaction). Uses the reverse-outline scene map to weigh each event and attribute findings to the right issue; degrades to a whole-manuscript scan when no outline exists. Because an unprocessed event can stay unaddressed many issues later, an event flagged in an early part is carried forward so a later part can flag the missing reaction.',
+    scope: 'series',
+    kind: 'llm',
+    category: 'emotion',
+    // Fallback severity when the model omits one — 'medium' to match the sibling
+    // characterization/arc LLM checks. The prompt directs the model to mark a major
+    // trauma left wholly unprocessed 'high' per finding, so a genuinely jarring
+    // emotional gap still surfaces as high.
+    severityDefault: 'medium',
+    defaultEnabled: true,
+    // Reads the stitched manuscript corpus — so the runner only pays the
+    // section-collection I/O when a manuscript-consuming check is enabled.
+    needsManuscript: true,
+    configSchema: z.object({
+      // Cap findings per run so a long manuscript can't flood the review.
+      maxFindings: z.number().int().min(1).max(50).default(12),
+    }),
+    configFields: [
+      {
+        key: 'maxFindings',
+        label: 'Max findings per run',
+        type: 'number',
+        min: 1,
+        max: 50,
+        step: 1,
+        help: 'Cap findings so a long manuscript can not flood the review.',
+      },
+    ],
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    run: (ctx) => {
+      // The scene map is fixed per-call overhead (re-sent on each chunk) and pure
+      // context: it records each scene's events so the model can weigh an event's
+      // MAGNITUDE and attribute a finding to the right issue. The check degrades
+      // gracefully — no outline ⇒ {{#sceneMap}} renders nothing and the model
+      // weighs each event from the prose's own description.
+      const sceneMap = sceneGroundingSummary(ctx.reverseOutline);
+      return runManuscriptLlmCheck(ctx, {
+        stage: REACTION_PROPORTIONALITY_STAGE,
+        category: 'emotion',
+        context: { sceneMap },
+        buildVars: (manuscript, _meta, c) => ({ manuscript, sceneMap: c.sceneMap }),
+        // A reaction is proportionate (or not) only relative to the event that
+        // triggered it — and the event and its (missing) processing can be issues
+        // apart. The findings digest keeps prior findings in view so a later chunk
+        // doesn't re-flag the same gap, and the clean-setup digest rolls forward
+        // every high-magnitude event that has NOT yet drawn a proportionate
+        // reaction so a later chunk can flag the unprocessed trauma even when it
+        // happened pages earlier. Unlike the climax check there is no final-part
+        // gate: an over-reaction is visible in its own chunk, and an under-reaction
+        // is flaggable as soon as enough subsequent text has passed with no payoff.
+        crossChunkDigest: true,
+        crossChunkSetup: true,
+        setupFocus: 'List the high-magnitude emotional events seen so far (a death, trauma, betrayal, '
+          + 'a major loss or hard-won victory) and, for each, whether the affected character has yet shown '
+          + 'a proportionate on-page reaction or processed it. CRUCIALLY: carry forward every event that is '
+          + 'still AWAITING a proportionate reaction — record which character it befell, which issue it '
+          + 'occurred in, and a short note on its magnitude — and drop it only once the prose has paid it '
+          + 'off with a fitting reaction. This lets a later part flag a trauma that is introduced early and '
+          + 'then left unprocessed many issues later.',
       });
     },
   },
