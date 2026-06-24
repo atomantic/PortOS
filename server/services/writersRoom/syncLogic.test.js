@@ -62,6 +62,27 @@ describe('sanitizeWorkForSync', () => {
     const s = sanitizeWorkForSync({ id: WORK, createdAt: '2026-03-01T00:00:00.000Z' });
     expect(s.updatedAt).toBe('2026-03-01T00:00:00.000Z');
   });
+
+  it('drops drafts with a malformed id and clamps the active pointer', () => {
+    const DRAFT2 = 'wr-draft-33333333-3333-3333-3333-333333333333';
+    const s = sanitizeWorkForSync(work({
+      activeDraftVersionId: '../etc/passwd',
+      drafts: [
+        { id: '../evil', label: 'bad' },
+        { id: DRAFT, label: 'Draft 1', contentFile: `drafts/${DRAFT}.md` },
+        { id: DRAFT2, label: 'Draft 2', contentFile: `drafts/${DRAFT2}.md` },
+      ],
+    }));
+    expect(s.drafts.map((d) => d.id)).toEqual([DRAFT, DRAFT2]); // malformed dropped
+    expect(s.activeDraftVersionId).toBe(DRAFT); // bad pointer clamped to first survivor
+  });
+
+  it('preserves a valid active pointer and nulls it when no drafts survive', () => {
+    expect(sanitizeWorkForSync(work()).activeDraftVersionId).toBe(DRAFT);
+    const empty = sanitizeWorkForSync(work({ drafts: [{ id: 'bad' }], activeDraftVersionId: 'bad' }));
+    expect(empty.drafts).toEqual([]);
+    expect(empty.activeDraftVersionId).toBeNull();
+  });
 });
 
 describe('mergeWorkRecord', () => {

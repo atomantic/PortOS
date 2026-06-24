@@ -45,7 +45,19 @@ export function sanitizeWorkForSync(raw) {
   const createdAt = isStr(raw.createdAt) ? raw.createdAt : new Date().toISOString();
   const updatedAt = isStr(raw.updatedAt) ? raw.updatedAt : createdAt;
   const { deleted, deletedAt } = sanitizeSoftDeleteFields(raw);
-  return { ...raw, createdAt, updatedAt, deleted, deletedAt };
+  // Draft-version ids are ALSO filesystem path segments (drafts/<draftId>.md), so
+  // drop any draft whose id isn't DRAFT_ID_RE-valid — otherwise a malformed peer
+  // payload persists a work whose body read throws in wrDraftPath() and can't be
+  // opened locally. Clamp the active pointer to a surviving draft (or null).
+  const out = { ...raw, createdAt, updatedAt, deleted, deletedAt };
+  if (Array.isArray(raw.drafts)) {
+    out.drafts = raw.drafts.filter((d) => d && typeof d === 'object' && isStr(d.id) && DRAFT_ID_RE.test(d.id));
+    const ids = new Set(out.drafts.map((d) => d.id));
+    out.activeDraftVersionId = isStr(raw.activeDraftVersionId) && ids.has(raw.activeDraftVersionId)
+      ? raw.activeDraftVersionId
+      : (out.drafts[0]?.id ?? null);
+  }
+  return out;
 }
 
 /**
