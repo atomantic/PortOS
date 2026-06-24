@@ -83,6 +83,13 @@ describe('sanitizeWorkForSync', () => {
     expect(empty.drafts).toEqual([]);
     expect(empty.activeDraftVersionId).toBeNull();
   });
+
+  it('coerces a missing/non-array drafts field to [] (malformed payload)', () => {
+    const noDrafts = sanitizeWorkForSync({ id: WORK, createdAt: '2026-03-01T00:00:00.000Z', activeDraftVersionId: '../x' });
+    expect(noDrafts.drafts).toEqual([]);
+    expect(noDrafts.activeDraftVersionId).toBeNull();
+    expect(sanitizeWorkForSync(work({ drafts: 'not-an-array' })).drafts).toEqual([]);
+  });
 });
 
 describe('mergeWorkRecord', () => {
