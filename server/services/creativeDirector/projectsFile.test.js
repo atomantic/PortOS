@@ -108,6 +108,15 @@ describe('projectsFile federation merge', () => {
     expect(await file.getProject('cd-1', { includeDeleted: true })).toMatchObject({ deleted: true });
   });
 
+  it('rejects user-facing mutators on a tombstoned project (no resurrect-then-push)', async () => {
+    await file.mergeProjectsFromSync([project('cd-1')]);
+    await file.deleteProject('cd-1');
+    await expect(file.updateProject('cd-1', { styleSpec: 'zombie' })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    await expect(file.setTreatment('cd-1', { logline: 'x', synopsis: 'y', scenes: [] })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    // Still gone (the rejected writes left no trace).
+    expect(await file.getProject('cd-1', { includeDeleted: true })).toMatchObject({ deleted: true, styleSpec: '' });
+  });
+
   it('pruneTombstonedProjects hard-removes old tombstones and evicts the base hash', async () => {
     await file.mergeProjectsFromSync([project('cd-1', { updatedAt: '2026-06-23T00:00:00.000Z', deleted: true, deletedAt: '2026-06-23T00:00:00.000Z' })]);
     const res = await file.pruneTombstonedProjects(Date.parse('2030-01-01T00:00:00.000Z'));

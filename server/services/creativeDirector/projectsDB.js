@@ -126,7 +126,13 @@ async function withLockedProject(id, mutate, { allowMissing = false } = {}) {
       [id],
     );
     const project = rowToProject(sel.rows[0]);
-    if (!project) {
+    // A tombstoned project (#1564 soft-delete) is treated as gone for every
+    // user-facing mutator — without this, a PATCH / scene / treatment update
+    // after deletion would resurrect the row, bump updatedAt, and re-push a
+    // modified tombstone to peers while getProject/deleteProject 404 the same id.
+    // mergeProjectsFromSync (peer tombstone apply) bypasses this path via its own
+    // persist, so receiving a tombstone still works.
+    if (!project || project.deleted) {
       if (allowMissing) return { __missing: true };
       throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
     }

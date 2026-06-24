@@ -83,7 +83,9 @@ export async function createProject(input) {
 export async function updateProject(id, patch) {
   const all = await loadAll();
   const idx = all.findIndex((p) => p.id === id);
-  if (idx < 0) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  // Missing OR tombstoned (#1564 soft-delete) → gone for user-facing mutators, so a
+  // post-delete write can't resurrect + re-push a modified tombstone.
+  if (idx < 0 || all[idx].deleted) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
   all[idx] = applyProjectPatch(all[idx], patch);
   await saveAll(all);
   return all[idx];
@@ -157,7 +159,9 @@ export async function pruneTombstonedProjects(olderThanMs) {
 export async function setTreatment(id, treatmentInput) {
   const all = await loadAll();
   const idx = all.findIndex((p) => p.id === id);
-  if (idx < 0) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  // Missing OR tombstoned (#1564 soft-delete) → gone for user-facing mutators, so a
+  // post-delete write can't resurrect + re-push a modified tombstone.
+  if (idx < 0 || all[idx].deleted) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
   all[idx] = applyTreatment(all[idx], treatmentInput);
   await saveAll(all);
   return all[idx];
@@ -166,7 +170,9 @@ export async function setTreatment(id, treatmentInput) {
 export async function updateScene(id, sceneId, patch) {
   const all = await loadAll();
   const idx = all.findIndex((p) => p.id === id);
-  if (idx < 0) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  // Missing OR tombstoned (#1564 soft-delete) → gone for user-facing mutators, so a
+  // post-delete write can't resurrect + re-push a modified tombstone.
+  if (idx < 0 || all[idx].deleted) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
   const { project, updated } = applySceneUpdate(all[idx], sceneId, patch);
   all[idx] = project;
   await saveAll(all);
@@ -176,7 +182,9 @@ export async function updateScene(id, sceneId, patch) {
 export async function recordRun(id, runEntry) {
   const all = await loadAll();
   const idx = all.findIndex((p) => p.id === id);
-  if (idx < 0) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  // Missing OR tombstoned (#1564 soft-delete) → gone for user-facing mutators, so a
+  // post-delete write can't resurrect + re-push a modified tombstone.
+  if (idx < 0 || all[idx].deleted) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
   const { project, run } = appendRun(all[idx], runEntry);
   all[idx] = project;
   await saveAll(all);
@@ -186,7 +194,9 @@ export async function recordRun(id, runEntry) {
 export async function updateRun(id, runId, patch) {
   const all = await loadAll();
   const idx = all.findIndex((p) => p.id === id);
-  if (idx < 0) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  // Missing OR tombstoned (#1564 soft-delete) → gone for user-facing mutators, so a
+  // post-delete write can't resurrect + re-push a modified tombstone.
+  if (idx < 0 || all[idx].deleted) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
   const { project, updated } = applyRunUpdate(all[idx], runId, patch);
   if (updated === null) return null;
   all[idx] = project;
