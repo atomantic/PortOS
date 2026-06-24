@@ -40,6 +40,10 @@ vi.mock('../creativeDirector/local.js', () => ({
   pruneTombstonedProjects: vi.fn().mockResolvedValue({ pruned: 0 }),
   listProjectIds: vi.fn().mockResolvedValue([]),
 }));
+vi.mock('../moodBoard/index.js', () => ({
+  pruneTombstonedBoards: vi.fn().mockResolvedValue({ pruned: 0 }),
+  listBoardIds: vi.fn().mockResolvedValue([]),
+}));
 vi.mock('../../lib/conflictJournal.js', () => ({
   pruneOrphanedBaseHashes: vi.fn().mockResolvedValue({ pruned: 0 }),
 }));
@@ -68,6 +72,7 @@ import { pruneTombstonedArtists, listArtistIds } from '../artists/index.js';
 import { pruneTombstonedAlbums, listAlbumIds } from '../albums/index.js';
 import { pruneTombstonedTracks, listTrackIds } from '../tracks/index.js';
 import { pruneTombstonedProjects } from '../creativeDirector/local.js';
+import { pruneTombstonedBoards } from '../moodBoard/index.js';
 import { pruneOrphanedBaseHashes } from '../../lib/conflictJournal.js';
 import { listPeerSubscriptions, pruneOrphanedPeerSubscriptions } from './peerSync.js';
 import { getMinAckAcrossPeers } from './peerTombstoneCursors.js';
@@ -424,6 +429,7 @@ describe('sweepTombstones — return shape', () => {
     pruneTombstonedAlbums.mockResolvedValueOnce({ pruned: 6 });
     pruneTombstonedTracks.mockResolvedValueOnce({ pruned: 7 });
     pruneTombstonedProjects.mockResolvedValueOnce({ pruned: 8 });
+    pruneTombstonedBoards.mockResolvedValueOnce({ pruned: 9 });
     const result = await sweepTombstones({ now: NOW });
     expect(result).toEqual({
       universes: 2,
@@ -435,6 +441,7 @@ describe('sweepTombstones — return shape', () => {
       albums: 6,
       tracks: 7,
       creativeDirectorProjects: 8,
+      moodBoards: 9,
       orphanBaseHashes: 0,
       orphanSubscriptions: 0,
       refused: [],

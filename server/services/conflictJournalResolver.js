@@ -36,6 +36,7 @@ import { updateSeries, ERR_NOT_FOUND as SERIES_NOT_FOUND } from './pipeline/seri
 import { updateCollection, getCollection, ERR_NOT_FOUND as COLLECTION_NOT_FOUND } from './mediaCollections.js';
 import { updateIssue, ERR_NOT_FOUND as ISSUE_NOT_FOUND } from './pipeline/issues.js';
 import { updateProject } from './creativeDirector/local.js';
+import { restoreBoard } from './moodBoard/index.js';
 
 export const ERR_NOT_FOUND = 'CONFLICT_JOURNAL_NOT_FOUND';
 export const ERR_VALIDATION = 'CONFLICT_JOURNAL_VALIDATION';
@@ -125,6 +126,13 @@ async function applyToRecord(kind, recordId, patch, { replace = false } = {}) {
     // same path. updateProject validates `status` and rejects a tombstoned row
     // (404 → translateGone → ERR_TARGET_GONE).
     await updateProject(recordId, patch).catch(translateGone);
+  } else if (kind === 'moodBoard') {
+    // restoreBoard applies the snapshot's name/description/items wholesale (via
+    // applyBoardRestore — the route's applyBoardPatch only touches name/description,
+    // so this dedicated path is what brings items[] back), so restore-all and
+    // merge-fields both apply faithfully through the same call. It validates +
+    // rejects a tombstoned row (404 → translateGone → ERR_TARGET_GONE).
+    await restoreBoard(recordId, patch).catch(translateGone);
   } else {
     throw makeErr(`Unsupported conflict kind: ${kind}`, ERR_VALIDATION);
   }

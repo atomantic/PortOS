@@ -277,6 +277,16 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // sanitizer). The project body is LWW-overwritten whole; scene video renders
   // ride the project's linked media collection (federated separately).
   creativeDirectorProjects: 1,
+  // v1 = Mood boards (PostgreSQL `mood_boards`) federated via the per-record
+  // peer-sync push pipeline (record kind `moodBoard`, sync category `moodBoards`,
+  // #1564). Same posture as `creativeDirectorProjects` above: a brand-NEW synced
+  // record type with its own per-category gate — a v1 sender pushing to a ≤v0
+  // (pre-feature) receiver is sender-ahead on `moodBoards` and gets a 412 (only
+  // that category pauses); a v1 receiver still accepts a ≤v0 sender (pre-feature
+  // peers never push a `moodBoard`). The FIRST incompatible board-shape change
+  // MUST bump this to 2 then. The board body (name/description/items) is
+  // LWW-overwritten whole; referenced image bytes ride the asset manifest.
+  moodBoards: 1,
   // NOTE: `videoHistory` is intentionally NOT listed here. The version gate
   // rejects the ENTIRE snapshot/push payload on ANY ahead-mismatch (the
   // comparator walks the union of keys), so declaring a brand-new key would
@@ -321,6 +331,7 @@ export const RECORD_KIND_SCHEMA_CATEGORIES = Object.freeze({
   'cat-scrap': Object.freeze(['catalog']),
   storyBuilder: Object.freeze(['storyBuilder']),
   creativeDirectorProject: Object.freeze(['creativeDirectorProjects']),
+  moodBoard: Object.freeze(['moodBoards']),
 });
 
 /**

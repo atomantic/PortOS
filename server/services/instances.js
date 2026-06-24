@@ -239,6 +239,7 @@ const DEFAULT_SYNC_CATEGORIES = {
   albums: false,
   tracks: false,
   creativeDirectorProjects: false,
+  moodBoards: false,
   catalog: false
 };
 
@@ -271,6 +272,7 @@ const PER_RECORD_CATEGORY_KINDS = Object.freeze([
   ['albums', 'album'],
   ['tracks', 'track'],
   ['creativeDirectorProjects', 'creativeDirectorProject'],
+  ['moodBoards', 'moodBoard'],
 ]);
 
 export async function addPeer({ address, port = DEFAULT_PEER_PORT, name, host, auth }) {
