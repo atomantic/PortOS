@@ -111,7 +111,7 @@ import {
 } from '../moodBoard/index.js';
 import {
   getWorkForSync,
-  listWorkIdsForSync,
+  listWorksForSync,
   mergeWorksFromSync,
   buildWorkBodyManifest,
   diffWorkBodyManifest,
@@ -508,11 +508,11 @@ async function listRecordsForKind(recordKind) {
   } else if (recordKind === 'moodBoard') {
     records = await listBoards({ includeDeleted: false }).catch(() => []);
   } else if (recordKind === 'writersRoomWork') {
-    // Live work ids → {id} stubs (the backfill/mirror-status callers only read
-    // `id`); without this branch, enabling the writersRoomWorks category (or
-    // full-sync) for a peer would backfill nothing and report zero pending works.
-    const ids = await listWorkIdsForSync().catch(() => []);
-    records = ids.map((id) => ({ id }));
+    // Live works as { id, updatedAt } (full-sync coverage compares updatedAt to
+    // detect a stale confirmed push; bare {id} stubs would report a changed
+    // manuscript as fully mirrored). Without this branch, enabling the
+    // writersRoomWorks category (or full-sync) would backfill nothing.
+    records = await listWorksForSync().catch(() => []);
   }
   return records.filter(r => r?.ephemeral !== true && isNonEmptyStr(r?.id));
 }

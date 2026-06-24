@@ -134,6 +134,30 @@ describe('peer-sync routes', () => {
       }));
     });
 
+    it('accepts a writersRoomWork push that bundles a draftBodyManifest', async () => {
+      // Regression: writersRoomWorkPushSchema is `.strict()`, so without the
+      // draftBodyManifest field (and without the kind in the discriminated
+      // union) the production body-bearing work push 400s at the Zod boundary
+      // before applyIncomingPush ever runs — the feature can't work over the API.
+      svc.applyIncomingPush.mockResolvedValue({ missingAssets: [], reverseSubscriptionCreated: false, ackedDeletesUpTo: 0 });
+      const res = await request(buildApp())
+        .post('/api/peer-sync/push')
+        .send({
+          kind: 'writersRoomWork',
+          record: { id: 'wr-work-1' },
+          assetManifest: [],
+          draftBodyManifest: [
+            { kind: 'writers-room-draft', workId: 'wr-work-1', draftId: 'wr-draft-1', sha256: 'a'.repeat(64) },
+          ],
+          sourceInstanceId: 'peer-a',
+        });
+      expect(res.status).toBe(200);
+      expect(svc.applyIncomingPush).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'writersRoomWork',
+        draftBodyManifest: expect.any(Array),
+      }));
+    });
+
     it('400s when a universe push carries manuscriptReview (series-only field, no side-channel)', async () => {
       const res = await request(buildApp())
         .post('/api/peer-sync/push')
