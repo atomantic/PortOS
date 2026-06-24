@@ -688,6 +688,13 @@
       "returnsJson": true,
       "variables": []
     },
+    "pipeline-editorial-secondary-arc": {
+      "name": "Pipeline — Editorial Check: Secondary-character arcs (recurring non-POV cast)",
+      "description": "Editorial check (#1585): the non-POV sibling of pov.justified (#1295). Tallies recurring NON-POV characters from the reverse-outline scene map (present across multiple scenes but never holding the viewpoint) and judges whether each shows meaningful change — flagging a flat side character (same at the end as the start) or one who regresses with no purpose. Does not flag a genuine walk-on or a deliberately-static foil whose constancy is the point. Because a flat arc is a whole-story claim, the verdict lands on the final manuscript part and each recurring secondary's established state is carried across parts; degrades to a whole-manuscript scan when no outline exists. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
     "pipeline-editorial-theme-coherence": {
       "name": "Pipeline — Editorial Check: Theme coherence / thematic throughline",
       "description": "Editorial check (#1317): whether the manuscript actually DELIVERS its declared themes (series.arc.themes), not just states them. Builds a per-theme setup/complication/payoff coverage map, flags a theme that is stated but never dramatized or dropped after the opening, detects a strong EMERGENT theme not in the arc, and checks that the climax lands the thematic argument. Reads the stitched manuscript plus the authored arc themes and the reverse-outline scene map; degrades to a whole-manuscript scan when no outline or no themes exist. Returns issue-anchored findings.",

@@ -34,6 +34,7 @@ import {
   characterVoiceProfiles,
   plotlineCoverageSummary,
   scenePovSummary,
+  secondaryCharacterPresenceSummary,
   declaredThemesSummary,
   canonRosterNamesSummary,
   canonCharacterStatesSummary,
@@ -57,6 +58,7 @@ const TIMELINE_CONTRADICTION = 'continuity.timeline-contradiction';
 const CHARACTER_CONSISTENCY = 'character.consistency';
 const CLIMAX_AGENCY = 'arc.climax-agency';
 const REACTION_PROPORTIONALITY = 'emotion.reaction-proportionality';
+const SECONDARY_ARC = 'character.secondary-arc';
 
 // A minimal valid stored custom-check definition.
 const customDef = (over = {}) => ({
@@ -1362,6 +1364,167 @@ describe('emotion.reaction-proportionality — LLM check (#1584)', () => {
       callStagedLLM: async (_stage, vars) => { finals.push(vars.finalPart); return { content: { findings: [] } }; },
     });
     await getCheck(REACTION_PROPORTIONALITY).run(ctx);
+    expect(finals).toEqual(['', '', 'true']);
+  });
+});
+
+describe('secondaryCharacterPresenceSummary (#1585)', () => {
+  it('tallies recurring NON-POV characters, excluding anyone who ever holds POV', () => {
+    const summary = secondaryCharacterPresenceSummary([
+      { sequence: 0, issueNumber: 1, povCharacter: 'Mara', charactersPresent: ['Mara', 'Joss', 'Reza'] },
+      { sequence: 1, issueNumber: 2, povCharacter: 'Mara', charactersPresent: ['Mara', 'Joss'] },
+      { sequence: 2, issueNumber: 3, povCharacter: 'Joss', charactersPresent: ['Joss', 'Reza'] },
+    ]);
+    expect(summary).toContain('Recurring non-POV characters');
+    // Reza is present in 2 scenes and never holds POV → recurring secondary.
+    expect(summary).toContain('Reza: present in 2 scenes (issues 1–3)');
+    // Joss holds POV in scene 3, so although present in 3 scenes they are a POV
+    // character (judged by pov.justified) and excluded entirely.
+    expect(summary).not.toContain('Joss:');
+    // Mara is the POV holder throughout → never a secondary.
+    expect(summary).not.toContain('Mara:');
+  });
+
+  it('drops a one-scene walk-on below the recurrence threshold', () => {
+    const summary = secondaryCharacterPresenceSummary([
+      { sequence: 0, issueNumber: 1, povCharacter: 'Mara', charactersPresent: ['Mara', 'Cole'] },
+    ]);
+    // Cole appears once → below minScenes default of 2 → no roster.
+    expect(summary).toBe('');
+  });
+
+  it('respects a raised minScenes threshold', () => {
+    const scenes = [
+      { sequence: 0, issueNumber: 1, povCharacter: 'Mara', charactersPresent: ['Mara', 'Reza'] },
+      { sequence: 1, issueNumber: 2, povCharacter: 'Mara', charactersPresent: ['Mara', 'Reza'] },
+    ];
+    // Reza appears in 2 scenes: surfaces at the default but not at minScenes 3.
+    expect(secondaryCharacterPresenceSummary(scenes, { minScenes: 2 })).toContain('Reza');
+    expect(secondaryCharacterPresenceSummary(scenes, { minScenes: 3 })).toBe('');
+  });
+
+  it('counts a character once per scene even if listed twice', () => {
+    const summary = secondaryCharacterPresenceSummary([
+      { sequence: 0, issueNumber: 1, povCharacter: 'Mara', charactersPresent: ['Reza', 'reza'] },
+      { sequence: 1, issueNumber: 2, povCharacter: 'Mara', charactersPresent: ['Reza'] },
+    ]);
+    // Two scenes, not three — the in-scene duplicate collapses by normalized name.
+    expect(summary).toContain('Reza: present in 2 scenes');
+  });
+
+  it('returns "" when there are no scenes', () => {
+    expect(secondaryCharacterPresenceSummary([])).toBe('');
+    expect(secondaryCharacterPresenceSummary(null)).toBe('');
+    expect(secondaryCharacterPresenceSummary(undefined)).toBe('');
+  });
+
+  it('tolerates malformed scenes (peer-sync resilience) without throwing', () => {
+    expect(() => secondaryCharacterPresenceSummary([
+      null,
+      { sequence: 1, povCharacter: 99, charactersPresent: 'not-an-array' },
+      { sequence: 2, povCharacter: 'Mara', charactersPresent: [1, null, 'Reza'] },
+      { sequence: 3, povCharacter: 'Mara', charactersPresent: ['Reza'] },
+    ])).not.toThrow();
+    const summary = secondaryCharacterPresenceSummary([
+      { sequence: 2, povCharacter: 'Mara', charactersPresent: [1, null, 'Reza'] },
+      { sequence: 3, povCharacter: 'Mara', charactersPresent: ['Reza'] },
+    ]);
+    expect(summary).toContain('Reza: present in 2 scenes');
+  });
+});
+
+describe('character.secondary-arc — LLM check (#1585)', () => {
+  const wholeCtx = (overrides = {}) => ({
+    manuscript: '# Issue 1\n\nReza poured the coffee, said nothing, and left — as always.',
+    config: { minScenes: 2, maxFindings: 12 },
+    severityDefault: 'low',
+    canon: { characters: [{ name: 'Reza', personality: 'stoic and quiet' }] },
+    reverseOutline: [
+      { sequence: 0, issueNumber: 1, heading: 'The diner', povCharacter: 'Mara', charactersPresent: ['Mara', 'Reza'] },
+      { sequence: 1, issueNumber: 2, heading: 'The diner again', povCharacter: 'Mara', charactersPresent: ['Mara', 'Reza'] },
+    ],
+    planManuscriptChunks: async () => ['# Issue 1\n\nReza poured the coffee, said nothing, and left — as always.'],
+    callStagedLLM: async () => ({ content: { findings: [] } }),
+    ...overrides,
+  });
+
+  it('is registered as a series-scoped LLM check reading manuscript + outline + canon', () => {
+    const check = getCheck(SECONDARY_ARC);
+    expect(check.kind).toBe('llm');
+    expect(check.scope).toBe('series');
+    expect(check.category).toBe('arc');
+    expect(check.severityDefault).toBe('low');
+    expect(check.sources).toEqual(['manuscript', 'reverseOutline', 'canon']);
+    expect(check.needsManuscript).toBe(true);
+  });
+
+  it('only runs when there is drafted prose to scan', () => {
+    const check = getCheck(SECONDARY_ARC);
+    expect(check.gate({ manuscript: '' })).toBe(false);
+    expect(check.gate({ manuscript: '# Issue 1\n\nprose' })).toBeTruthy();
+  });
+
+  it('passes the manuscript, recurring secondary roster, and canon roster and forces the arc category', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      planManuscriptChunks: async (_stage, opts) => {
+        expect(opts.context).toHaveProperty('secondaryCast');
+        expect(opts.context).toHaveProperty('canonRoster');
+        expect(opts.fixedOverheadTokens).toBeGreaterThan(0);
+        return ['# Issue 1\n\nReza poured the coffee, said nothing, and left — as always.'];
+      },
+      callStagedLLM: async (_stage, vars) => {
+        seenVars = vars;
+        return { content: { findings: [{ severity: 'low', issueNumber: 2, location: 'Issue 2 — Reza — flat arc', problem: 'Reza never changes' }] } };
+      },
+    });
+    const findings = await getCheck(SECONDARY_ARC).run(ctx);
+    expect(seenVars.secondaryCast).toContain('Reza');
+    expect(seenVars.canonRoster).toContain('Reza');
+    expect(findings).toHaveLength(1);
+    expect(findings[0].category).toBe('arc');
+    expect(findings[0].location).toBe('Issue 2 — Reza — flat arc');
+  });
+
+  it('honors the minScenes config when building the secondary roster', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      config: { minScenes: 3, maxFindings: 12 },
+      callStagedLLM: async (_stage, vars) => { seenVars = vars; return { content: { findings: [] } }; },
+    });
+    await getCheck(SECONDARY_ARC).run(ctx);
+    // Reza appears in only 2 scenes → excluded at minScenes 3 → empty roster.
+    expect(seenVars.secondaryCast).toBe('');
+  });
+
+  it('passes empty context vars when there is no outline or canon', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      canon: undefined,
+      reverseOutline: undefined,
+      callStagedLLM: async (_stage, vars) => { seenVars = vars; return { content: { findings: [] } }; },
+    });
+    await getCheck(SECONDARY_ARC).run(ctx);
+    expect(seenVars.secondaryCast).toBe('');
+    expect(seenVars.canonRoster).toBe('');
+  });
+
+  it('marks a single-chunk run as the final part so the flat-arc verdict is enabled', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      callStagedLLM: async (_stage, vars) => { seenVars = vars; return { content: { findings: [] } }; },
+    });
+    await getCheck(SECONDARY_ARC).run(ctx);
+    expect(seenVars.finalPart).toBe('true');
+  });
+
+  it('flags only the LAST part as final across a chunked manuscript', async () => {
+    const finals = [];
+    const ctx = wholeCtx({
+      planManuscriptChunks: async () => ['# Issue 1\n\np1', '# Issue 2\n\np2', '# Issue 3\n\np3'],
+      callStagedLLM: async (_stage, vars) => { finals.push(vars.finalPart); return { content: { findings: [] } }; },
+    });
+    await getCheck(SECONDARY_ARC).run(ctx);
     expect(finals).toEqual(['', '', 'true']);
   });
 });
