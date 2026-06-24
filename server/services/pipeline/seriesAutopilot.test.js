@@ -1226,6 +1226,12 @@ describe('autopilot conductor', () => {
       seriesId,
       expect.objectContaining({ checkIds: ['pacing'] }),
     );
+    // The preceding reverse-outline refresh must gate on the SAME subset, so a
+    // subset that skips outline-consuming checks doesn't trigger/bill a refresh.
+    expect(checkRunnerSpies.enabledChecksConsumeReverseOutline).toHaveBeenCalledWith(
+      expect.anything(),
+      ['pacing'],
+    );
   });
 
   it('passes checkIds:null (run all enabled) when no subset is given (#1575)', async () => {
@@ -1235,6 +1241,10 @@ describe('autopilot conductor', () => {
     expect(checkRunnerSpies.runEditorialChecks).toHaveBeenCalledWith(
       seriesId,
       expect.objectContaining({ checkIds: null }),
+    );
+    expect(checkRunnerSpies.enabledChecksConsumeReverseOutline).toHaveBeenCalledWith(
+      expect.anything(),
+      null,
     );
   });
 

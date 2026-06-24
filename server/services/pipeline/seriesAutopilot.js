@@ -970,11 +970,24 @@ async function runEditorial(sId, record) {
 // an enabled LLM check will actually run. `force:false`
 // is a belt-and-suspenders second guard against the stored outline going fresh
 // between the pre-check and the call. Failures are advisory (logged), never block.
+
+// #1575 — the per-run editorial-check subset (null = all enabled). Absent/empty
+// is normalized to null so EVERY consumer (this reverse-outline gate, the budget
+// plan, the checks run) resolves the identical set — otherwise a subset of checks
+// that skip the outline could still trigger/bill the refresh keyed off the global
+// enabled set, or the gate could bill against checks the run skips.
+const editorialSubsetIds = (options) =>
+  Array.isArray(options?.editorialCheckIds) && options.editorialCheckIds.length
+    ? options.editorialCheckIds
+    : null;
+
 async function runReverseOutlineRefresh(sId, record) {
   if (record.cancelRequested) return { canceled: true };
   const settings = await getSettings();
-  // Gate 1 — does any enabled check even read the outline? If not, nothing to do.
-  if (!enabledChecksConsumeReverseOutline(settings)) {
+  // Gate 1 — does any enabled check (narrowed to this run's subset) even read the
+  // outline? If not, nothing to do — and a subset that skips outline-consuming
+  // checks must not pay for a refresh those checks would have triggered.
+  if (!enabledChecksConsumeReverseOutline(settings, editorialSubsetIds(record.options))) {
     record.runState.reverseOutlineRefreshed = true;
     return {};
   }
@@ -1023,13 +1036,10 @@ async function runReverseOutlineRefresh(sId, record) {
 async function runEditorialChecksPass(sId, record) {
   if (record.cancelRequested) return { canceled: true };
   const settings = await getSettings();
-  // #1575 — a per-run subset narrows the pass to specific check ids; absent/empty
-  // runs every enabled check. Normalize to null so the budget gate
-  // (buildEditorialCheckPlan) and the run (runEditorialChecks) resolve the SAME
-  // set — otherwise the gate could bill against checks the run skips, or vice-versa.
-  const checkIds = Array.isArray(record.options.editorialCheckIds) && record.options.editorialCheckIds.length
-    ? record.options.editorialCheckIds
-    : null;
+  // #1575 — narrow the pass + its budget gate to this run's subset (null = all
+  // enabled). The gate (buildEditorialCheckPlan) and the run (runEditorialChecks)
+  // must resolve the SAME set so billing and execution agree.
+  const checkIds = editorialSubsetIds(record.options);
   const plan = await buildEditorialCheckPlan(sId, { checkIds, settings });
   const hasLlmCheck = plan.checks.some((c) => c.kind === 'llm');
   if (hasLlmCheck) {
@@ -1391,9 +1401,9 @@ function buildDryRunPlan(series, issues, options) {
     plan.push({ kind: 'reverseOutline', count: 1, note: 'refresh scene segmentation for editorial checks (#1349)' });
     // #1575 — when a per-run subset is set, the plan must say so rather than imply
     // the full enabled set runs.
-    const editorialSubset = Array.isArray(options?.editorialCheckIds) && options.editorialCheckIds.length;
+    const editorialSubset = editorialSubsetIds(options);
     plan.push({ kind: 'editorialChecks', count: 1, note: editorialSubset
-      ? `per-run subset of ${options.editorialCheckIds.length} editorial check(s) (#1575)`
+      ? `per-run subset of ${editorialSubset.length} editorial check(s) (#1575)`
       : 'enabled editorial checks (#1284)' });
     plan.push({ kind: 'editorialHealthGate', count: 1, note: 'editorial health readiness gate (#1316)' });
   }
