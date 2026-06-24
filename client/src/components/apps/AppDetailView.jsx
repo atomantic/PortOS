@@ -349,50 +349,51 @@ export default function AppDetailView() {
               <span className="text-xs">Edit</span>
             </button>
           </div>
-          {/* Vite Dev-UI host guard — the app's dev server would block this host. */}
-          {viteHostStatus && !viteHostStatus.hostAllowed && (
-            <div className="mt-3 w-full rounded-lg border border-port-warning/40 bg-port-warning/10 p-3">
-              <div className="flex items-start gap-2">
-                <AlertTriangle size={16} className="text-port-warning mt-0.5 shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm text-port-warning font-medium">
-                    Dev UI will be blocked on <span className="font-mono">{window.location.hostname}</span>
-                  </p>
-                  <p className="text-xs text-gray-400 mt-1">
-                    {viteHostStatus.hasViteConfig
-                      ? <>This app's Vite dev server ({viteHostStatus.filename}) doesn't allow this host, so opening the Dev UI shows a "Blocked request… not allowed" error.</>
-                      : <>This app exposes a Vite dev server but no <span className="font-mono">vite.config</span> was found to allow this host, so the Dev UI will be blocked.</>}
-                    {' '}It runs on a private Tailscale network — allowing all hosts is safe.
-                  </p>
-                  <div className="flex flex-wrap gap-2 mt-2">
-                    {viteHostStatus.canAutoFix && (
-                      <button
-                        onClick={() => handleFixViteHosts('allow-all')}
-                        disabled={Boolean(viteFixing)}
-                        className="px-2 py-1 bg-port-accent/20 text-port-accent enabled:hover:bg-port-accent/30 transition-colors rounded flex items-center gap-1 disabled:opacity-50 text-xs"
-                      >
-                        {viteFixing === 'allow-all' ? 'Allowing…' : 'Allow all hosts (auto)'}
-                      </button>
-                    )}
+        </div>
+
+        {/* Vite Dev-UI host guard — the app's dev server would block this host. */}
+        {viteHostStatus && !viteHostStatus.hostAllowed && (
+          <div className="mt-3 rounded-lg border border-port-warning/40 bg-port-warning/10 p-3">
+            <div className="flex items-start gap-2">
+              <AlertTriangle size={16} className="text-port-warning mt-0.5 shrink-0" />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm text-port-warning font-medium">
+                  Dev UI will be blocked on <span className="font-mono">{window.location.hostname}</span>
+                </p>
+                <p className="text-xs text-gray-400 mt-1">
+                  {viteHostStatus.hasViteConfig
+                    ? <>This app's Vite dev server ({viteHostStatus.filename}) doesn't allow this host, so opening the Dev UI shows a "Blocked request… not allowed" error.</>
+                    : <>This app exposes a Vite dev server but no <span className="font-mono">vite.config</span> was found to allow this host, so the Dev UI will be blocked.</>}
+                  {' '}It runs on a private Tailscale network — allowing all hosts is safe.
+                </p>
+                <div className="flex flex-wrap gap-2 mt-2">
+                  {viteHostStatus.canAutoFix && (
                     <button
-                      onClick={() => handleFixViteHosts('ai')}
+                      onClick={() => handleFixViteHosts('allow-all')}
                       disabled={Boolean(viteFixing)}
-                      className="px-2 py-1 bg-port-border/40 text-gray-200 enabled:hover:bg-port-border/60 transition-colors rounded flex items-center gap-1 disabled:opacity-50 text-xs"
+                      className="px-2 py-1 bg-port-accent/20 text-port-accent enabled:hover:bg-port-accent/30 transition-colors rounded flex items-center gap-1 disabled:opacity-50 text-xs"
                     >
-                      <Sparkles size={12} />
-                      {viteFixing === 'ai' ? 'Queuing…' : 'Fix with AI'}
+                      {viteFixing === 'allow-all' ? 'Allowing…' : 'Allow all hosts (auto)'}
                     </button>
-                  </div>
-                  {!viteHostStatus.canAutoFix && viteHostStatus.hasViteConfig && (
-                    <p className="text-[11px] text-gray-500 mt-1.5">
-                      Auto-fix can't safely edit this config shape — use AI remediation.
-                    </p>
                   )}
+                  <button
+                    onClick={() => handleFixViteHosts('ai')}
+                    disabled={Boolean(viteFixing)}
+                    className="px-2 py-1 bg-port-border/40 text-gray-200 enabled:hover:bg-port-border/60 transition-colors rounded flex items-center gap-1 disabled:opacity-50 text-xs"
+                  >
+                    <Sparkles size={12} />
+                    {viteFixing === 'ai' ? 'Queuing…' : 'Fix with AI'}
+                  </button>
                 </div>
+                {!viteHostStatus.canAutoFix && viteHostStatus.hasViteConfig && (
+                  <p className="text-[11px] text-gray-500 mt-1.5">
+                    Auto-fix can't safely edit this config shape — use AI remediation.
+                  </p>
+                )}
               </div>
             </div>
-          )}
-        </div>
+          </div>
+        )}
 
         {/* Tab Bar */}
         <div className="flex gap-1 mt-4 -mb-4 overflow-x-auto">
