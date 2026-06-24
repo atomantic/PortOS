@@ -36,6 +36,19 @@ export async function listWorkIdsForSync(options = {}) {
   return store().listWorkIds(options);
 }
 
+/**
+ * Live works as `{ id, updatedAt }` for the peer-sync backfill + full-sync
+ * coverage status. `updatedAt` is required by `getFullSyncCoverageForPeer` to
+ * detect a confirmed push gone stale — bare `{ id }` stubs would make every
+ * old confirmation look fresh and report a changed manuscript as fully mirrored.
+ */
+export async function listWorksForSync() {
+  const works = await store().listWorks();
+  return works
+    .filter((w) => w && typeof w.id === 'string')
+    .map((w) => ({ id: w.id, updatedAt: w.updatedAt }));
+}
+
 /** Merge an incoming batch of work records from a peer (LWW, tombstone-aware). */
 export async function mergeWorksFromSync(remoteWorks, options = {}) {
   return store().mergeWorksFromSync(remoteWorks, options);

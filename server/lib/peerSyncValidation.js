@@ -15,7 +15,7 @@ import { catalogSyncIngredientSchema, catalogSyncRefSchema } from './catalogVali
 // subscriptions target another PortOS instance over Tailnet.
 export const peerSubscribeSchema = z.object({
   peerId: z.string().trim().min(1).max(120),
-  recordKind: z.enum(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard']),
+  recordKind: z.enum(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard', 'writersRoomWork']),
   recordId: z.string().trim().min(1).max(120),
 }).strict();
 
@@ -198,6 +198,28 @@ const moodBoardPushSchema = z.object({
   kind: z.literal('moodBoard'),
   ...peerSyncPushBase,
 }).strict();
+// Writers Room works (#1565) push the bare work manifest (the decomposed
+// draft-version metadata rides inside the record's `drafts[]`). The file-primary
+// `.md` prose bodies do NOT ride `assetManifest` (which keys on a flat basename +
+// single dir per kind) — they ride a dedicated `draftBodyManifest` of per-draft
+// SHA-256 hashes the receiver diffs + pulls by nested `works/<workId>/drafts/<draftId>.md`
+// path. workId/draftId get a second-pass `WORK_ID_RE`/`DRAFT_ID_RE` scrub in the
+// service before any FS op; this schema just caps shape. `.strict()` rejects
+// smuggled bundle keys (same posture as author/creativeDirectorProject/moodBoard).
+const peerDraftBodyManifestEntrySchema = z.object({
+  kind: z.literal('writers-room-draft'),
+  workId: z.string().trim().min(1).max(120),
+  draftId: z.string().trim().min(1).max(120),
+  sha256: hex64,
+}).strict();
+const draftBodyManifestField = {
+  draftBodyManifest: z.array(peerDraftBodyManifestEntrySchema).max(2000).optional(),
+};
+const writersRoomWorkPushSchema = z.object({
+  kind: z.literal('writersRoomWork'),
+  ...peerSyncPushBase,
+  ...draftBodyManifestField,
+}).strict();
 export const peerSyncPushSchema = z.discriminatedUnion('kind', [
   universePushSchema,
   seriesPushSchema,
@@ -208,13 +230,14 @@ export const peerSyncPushSchema = z.discriminatedUnion('kind', [
   trackPushSchema,
   creativeDirectorProjectPushSchema,
   moodBoardPushSchema,
+  writersRoomWorkPushSchema,
 ]);
 
 // Manual sync action schemas — used by POST /sync-record, /sync-now, /pull-metadata.
 
 export const peerSyncRecordSchema = z.object({
   peerId: z.string().trim().min(1).max(120),
-  recordKind: z.enum(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard']),
+  recordKind: z.enum(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard', 'writersRoomWork']),
   recordId: z.string().trim().min(1).max(200),
 }).strict();
 
