@@ -58,10 +58,12 @@ This is the FINAL part of the manuscript — the whole story is now in view, so 
 be judged: a payoff would have appeared by now if it were coming. **The event may
 have appeared in an EARLIER part, not in the text below.** The "setup so far"
 digest above carries forward every high-magnitude event still AWAITING a
-proportionate reaction (the affected character, its issue, and its magnitude) —
-flag each such event that the whole story never pays off, attributing the finding
-to the issue where the reaction SHOULD have landed. Also report any over-reaction
-in the text below.
+proportionate reaction (the affected character, its issue, its magnitude, and a
+short verbatim snippet of the event) — flag each such event that the whole story
+never pays off, attributing the finding to the issue where the reaction SHOULD
+have landed and using the carried-forward snippet as your `anchorQuote` (the event
+text itself is no longer in the part below). Also report any over-reaction in the
+text below, quoting that text directly.
 {{/finalPart}}
 {{^finalPart}}
 This is NOT the final part of the manuscript. Do NOT report any **under-reaction**

@@ -3579,9 +3579,12 @@ export const EDITORIAL_CHECKS = [
           + 'a major loss or hard-won victory) and, for each, whether the affected character has yet shown '
           + 'a proportionate on-page reaction or processed it. CRUCIALLY: carry forward every event that is '
           + 'still AWAITING a proportionate reaction — record which character it befell, which issue it '
-          + 'occurred in, and a short note on its magnitude — and drop it only once the prose has paid it '
-          + 'off with a fitting reaction. This lets a later part flag a trauma that is introduced early and '
-          + 'then left unprocessed many issues later.',
+          + 'occurred in, a short note on its magnitude, AND a SHORT verbatim snippet (≤ 200 chars) of the '
+          + 'event itself — and drop it only once the prose has paid it off with a fitting reaction. The '
+          + 'verbatim snippet is required: the final part can only report the under-reaction if it can quote '
+          + 'the event as its anchor, and the event text is no longer in view by then. This lets a later '
+          + 'part flag (and quote) a trauma that is introduced early and then left unprocessed many issues '
+          + 'later.',
       });
     },
   },
