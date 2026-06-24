@@ -324,6 +324,16 @@ export const RESTORABLE_FIELDS = Object.freeze({
   // `seriesId` is the immutable parent link, `origin` is share provenance —
   // and `mergeIssuePatch` accepts every field listed here.
   issue: ['title', 'status', 'seasonId', 'arcPosition', 'arcRole', 'lengthProfile', 'pageTarget', 'minutesTarget', 'stages'],
+  // Creative Director projects (#1564): the user-authored config + creative
+  // content the merge can restore. `treatment` (logline/synopsis/scenes) carries
+  // the bulk of the work. Server-owned / machine-managed fields are excluded —
+  // `id`/`createdAt`/the LWW-tombstone trip are structural, `collectionId`/
+  // `timelineProjectId`/`finalVideoId` are derived output pointers, and `runs[]`
+  // is render history (regenerated, not hand-authored). The whole record is
+  // hashed for DETECTION by contentHashForRecord (no scalar narrowing); this set
+  // is what the Conflicts UI offers for restore. `creativeDirectorProject`
+  // matches the record kind and mergeProjectRecord accepts every field here.
+  creativeDirectorProject: ['name', 'status', 'styleSpec', 'userStory', 'treatment', 'aspectRatio', 'quality', 'modelId', 'targetDurationSeconds', 'disableAudio', 'autoAcceptScenes', 'startingImageFile'],
 });
 
 const present = (v) => v !== undefined;

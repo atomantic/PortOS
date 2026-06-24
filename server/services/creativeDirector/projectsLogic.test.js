@@ -16,6 +16,9 @@ import {
   applySceneUpdate,
   appendRun,
   applyRunUpdate,
+  sanitizeProjectForSync,
+  mergeProjectRecord,
+  startingImageFilename,
 } from './projectsLogic.js';
 
 const VALID_TREATMENT = {
@@ -165,5 +168,82 @@ describe('trimRuns', () => {
   it('returns [] for non-array input', () => {
     expect(trimRuns(undefined)).toEqual([]);
     expect(trimRuns(null)).toEqual([]);
+  });
+});
+
+// --- Federation (#1564) — soft-delete + LWW merge decision ------------------
+
+describe('buildProjectRecord soft-delete trio', () => {
+  it('stamps deleted=false / deletedAt=null on a fresh project', () => {
+    const p = buildProjectRecord(
+      { name: 'X', aspectRatio: '1:1', quality: 'draft', modelId: 'm', targetDurationSeconds: 9 },
+      { id: 'cd-1', now: '2026-06-23T00:00:00.000Z', collectionId: 'col-1' },
+    );
+    expect(p.deleted).toBe(false);
+    expect(p.deletedAt).toBeNull();
+  });
+});
+
+describe('startingImageFilename', () => {
+  it('reduces a /data/images/ path or bare filename to the basename', () => {
+    expect(startingImageFilename('/data/images/start.png')).toBe('start.png');
+    expect(startingImageFilename('start.png')).toBe('start.png');
+    expect(startingImageFilename('/data/images/start.png?v=2')).toBe('start.png');
+  });
+  it('returns null for empty, external, or non-images absolute paths', () => {
+    expect(startingImageFilename('')).toBeNull();
+    expect(startingImageFilename(null)).toBeNull();
+    expect(startingImageFilename('https://example.com/x.png')).toBeNull();
+    expect(startingImageFilename('data:image/png;base64,AAAA')).toBeNull();
+    expect(startingImageFilename('/data/videos/x.mp4')).toBeNull();
+  });
+});
+
+describe('sanitizeProjectForSync', () => {
+  it('drops a non-object or id-less record (drop-on-floor contract)', () => {
+    expect(sanitizeProjectForSync(null)).toBeNull();
+    expect(sanitizeProjectForSync([])).toBeNull();
+    expect(sanitizeProjectForSync({ name: 'no id' })).toBeNull();
+  });
+  it('normalizes the soft-delete trio and preserves the body verbatim', () => {
+    const out = sanitizeProjectForSync({ id: 'cd-1', name: 'X', styleSpec: 'noir', updatedAt: '2026-06-23T00:00:00.000Z', deleted: true, deletedAt: '2026-06-23T01:00:00.000Z' });
+    expect(out).toMatchObject({ id: 'cd-1', name: 'X', styleSpec: 'noir', deleted: true, deletedAt: '2026-06-23T01:00:00.000Z' });
+  });
+  it('forces deletedAt=null when not deleted', () => {
+    const out = sanitizeProjectForSync({ id: 'cd-1', name: 'X', deleted: false, deletedAt: 'stray' });
+    expect(out.deleted).toBe(false);
+    expect(out.deletedAt).toBeNull();
+  });
+});
+
+describe('mergeProjectRecord (LWW, tombstone-aware)', () => {
+  const at = (iso, extra = {}) => ({ id: 'cd-1', name: 'P', updatedAt: iso, ...extra });
+  it('inserts when there is no local counterpart', () => {
+    const { next, inserted, remoteWins } = mergeProjectRecord(null, at('2026-06-23T00:00:00.000Z'));
+    expect(inserted).toBe(true);
+    expect(remoteWins).toBe(true);
+    expect(next.id).toBe('cd-1');
+  });
+  it('remote with a newer updatedAt wins', () => {
+    const local = at('2026-06-23T00:00:00.000Z', { styleSpec: 'old' });
+    const { next, remoteWins, changed } = mergeProjectRecord(local, at('2026-06-23T01:00:00.000Z', { styleSpec: 'new' }));
+    expect(remoteWins).toBe(true);
+    expect(changed).toBe(true);
+    expect(next.styleSpec).toBe('new');
+  });
+  it('local wins when its updatedAt is newer (no change)', () => {
+    const local = at('2026-06-23T02:00:00.000Z', { styleSpec: 'keep' });
+    const { next, remoteWins } = mergeProjectRecord(local, at('2026-06-23T01:00:00.000Z', { styleSpec: 'lose' }));
+    expect(remoteWins).toBe(false);
+    expect(next.styleSpec).toBe('keep');
+  });
+  it('a newer remote tombstone overwrites a live local record', () => {
+    const local = at('2026-06-23T00:00:00.000Z');
+    const { next, remoteWins } = mergeProjectRecord(local, at('2026-06-23T03:00:00.000Z', { deleted: true, deletedAt: '2026-06-23T03:00:00.000Z' }));
+    expect(remoteWins).toBe(true);
+    expect(next.deleted).toBe(true);
+  });
+  it('drops a malformed remote (next null)', () => {
+    expect(mergeProjectRecord(at('2026-06-23T00:00:00.000Z'), { name: 'no id' }).next).toBeNull();
   });
 });

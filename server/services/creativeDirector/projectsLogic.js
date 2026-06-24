@@ -14,6 +14,10 @@ import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { creativeDirectorTreatmentSchema } from '../../lib/validation.js';
 import { PROJECT_STATUSES } from '../../lib/creativeDirectorPresets.js';
+import { compareNewerWins } from '../../lib/lwwTimestamp.js';
+import { sanitizeSoftDeleteFields } from '../../lib/syncWire.js';
+
+const isStr = (v) => typeof v === 'string';
 
 // TIMESTAMPTZ bind-safety helper, shared with the media asset index (#1000) and
 // any other store that mirrors a hand-editable timestamp into a typed column.
@@ -106,7 +110,77 @@ export function buildProjectRecord(input, { id, now, collectionId }) {
     finalVideoId: null,
     treatment: null,
     runs: [],
+    // Soft-delete / LWW tombstone trio (#1564) — projects federate across peers
+    // via the per-record push pipeline (record kind `creativeDirectorProject`,
+    // sync category `creativeDirectorProjects`), so a delete is a tombstone the
+    // merge can keep an out-of-date peer from resurrecting.
+    deleted: false,
+    deletedAt: null,
   };
+}
+
+/**
+ * Resolve a project's `startingImageFile` to the bare gallery-image filename
+ * under `data/images/` so the peer-sync asset pipeline can hash + transfer it.
+ * Mirrors `headshotImageFilename` in services/authors/logic.js: returns null for
+ * an empty/non-string value, an external URL (`http(s)://…`, `data:`, `blob:`),
+ * or any non-images absolute path — the receiver resolves those itself. Scene
+ * video renders are NOT covered here: they live in the project's linked media
+ * collection, which federates as its own record (so its bytes ride that
+ * collection's manifest). This covers only the project's direct image input.
+ */
+export function startingImageFilename(startingImageFile) {
+  if (!isStr(startingImageFile)) return null;
+  const url = startingImageFile.trim();
+  if (!url) return null;
+  if (/^(https?:|data:|blob:)/i.test(url)) return null;
+  let name = url;
+  const imagesPrefix = '/data/images/';
+  if (url.startsWith(imagesPrefix)) name = url.slice(imagesPrefix.length);
+  else if (url.startsWith('/')) return null; // some other absolute path → not a gallery image
+  name = name.split(/[?#]/)[0];
+  const base = name.split('/').pop();
+  return base || null;
+}
+
+/**
+ * Normalize a raw project record into the canonical stored shape for a sync
+ * round-trip. Returns null for a non-object or a record without a usable id
+ * (mirrors the other sanitizers' "drop on the floor" contract so a malformed
+ * peer payload can't land). The project body (treatment/scenes/runs/scalars) is
+ * passed through verbatim — it is all app-authored data — while the LWW key
+ * (`updatedAt`) and the soft-delete trio are normalized so the wire/hash shape
+ * is stable regardless of on-disk key position.
+ */
+export function sanitizeProjectForSync(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  if (!isStr(raw.id) || !raw.id) return null;
+  const createdAt = isStr(raw.createdAt) ? raw.createdAt : new Date().toISOString();
+  const updatedAt = isStr(raw.updatedAt) ? raw.updatedAt : createdAt;
+  const { deleted, deletedAt } = sanitizeSoftDeleteFields(raw);
+  return { ...raw, createdAt, updatedAt, deleted, deletedAt };
+}
+
+/**
+ * LWW merge decision for one incoming project record against the local copy —
+ * mirrors `mergeAuthorRecord` (services/authors/logic.js):
+ *   - remote sanitized here (drop-on-floor on a malformed payload → `next: null`).
+ *   - No local counterpart → insert the remote verbatim (`inserted: true`).
+ *   - Both present → newer `updatedAt` wins (`compareNewerWins`: epoch-ms,
+ *     unparseable-loses, tie → local). Tombstones ride the same path.
+ * Returns `{ next, inserted, remoteWins, changed }`; `changed` is false when the
+ * winner is byte-identical to local. The whole record is LWW-overwritten (no
+ * field-union like mediaCollection items), so it is hashed in full by
+ * `contentHashForRecord` — no scalar-narrowing branch.
+ */
+export function mergeProjectRecord(local, remoteRaw) {
+  const remote = sanitizeProjectForSync(remoteRaw);
+  if (!remote) return { next: null, inserted: false, remoteWins: false, changed: false };
+  if (!local) return { next: remote, inserted: true, remoteWins: true, changed: true };
+  const remoteWins = compareNewerWins(remote.updatedAt, local.updatedAt);
+  const next = remoteWins ? remote : local;
+  const changed = JSON.stringify(next) !== JSON.stringify(local);
+  return { next, inserted: false, remoteWins, changed };
 }
 
 /** Merge a project metadata patch, validating status. Returns the next record. */

@@ -635,9 +635,12 @@ CREATE TRIGGER trg_catalog_tag_updated_at
 -- creative-director-projects.json caused. Normalizing scenes/runs is deferred
 -- to a later phase if a cross-project scene/run query ever materializes.
 --
--- CD is local-only (NOT federated — see plan §"Peer sync"), so there is no
--- sync_sequence / soft-delete-tombstone column: a delete is a hard DELETE.
--- `status` has no DB CHECK; valid values are gated at the app layer via
+-- As of #1564 CD projects FEDERATE across peers via the per-record peer-sync
+-- push pipeline (record kind `creativeDirectorProject`, sync category
+-- `creativeDirectorProjects`), so the soft-delete tombstone trio
+-- (deleted/deleted_at + LWW updated_at) mirrors the authors table — a delete is a
+-- tombstone the merge keeps an out-of-date peer from resurrecting (NOT a hard
+-- DELETE). `status` has no DB CHECK; valid values are gated at the app layer via
 -- PROJECT_STATUSES (creativeDirectorPresets.js), matching the catalog
 -- ingredients convention so a new status needs no constraint migration.
 CREATE TABLE IF NOT EXISTS creative_director_projects (
@@ -645,8 +648,12 @@ CREATE TABLE IF NOT EXISTS creative_director_projects (
   status VARCHAR(32) NOT NULL DEFAULT 'draft',
   data JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  deleted BOOLEAN DEFAULT FALSE,               -- soft-delete tombstone so deletes propagate to peers
+  deleted_at TIMESTAMPTZ
 );
+-- Partial index for the live-list filter (deleted = FALSE).
+CREATE INDEX IF NOT EXISTS idx_creative_director_projects_live ON creative_director_projects (deleted) WHERE deleted = FALSE;
 
 -- Mood boards (issue #911). A dedicated inspiration/mood-board canvas, distinct
 -- from raw Media History, for collecting visual + textual references that feed

@@ -1094,6 +1094,10 @@ describe('dataSync — per-category schema gate (cross-key isolation)', () => {
       'artists',
       'albums',
       'tracks',
+      // Creative Director projects (#1564) → per-record peer-push only (no 60s
+      // file-snapshot category). Gated at applyIncomingPush via
+      // compareSchemaVersions / RECORD_KIND_SCHEMA_CATEGORIES.creativeDirectorProject.
+      'creativeDirectorProjects',
     ]);
     const covered = new Set(Object.values(dataSync.getSnapshotCategorySchemaKeys()).flat());
     for (const key of Object.keys(PORTOS_SCHEMA_VERSIONS)) {

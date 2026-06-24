@@ -98,12 +98,18 @@ import {
   trackAudioFilename,
 } from '../tracks/index.js';
 import {
+  getProject,
+  listProjects,
+  mergeProjectsFromSync,
+  startingImageFilename,
+} from '../creativeDirector/local.js';
+import {
   initCursor,
   ackDeletesUpTo,
   removeCursor as removeTombstoneCursor,
 } from './peerTombstoneCursors.js';
 
-export const PEER_SUBSCRIBABLE_KINDS = Object.freeze(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track']);
+export const PEER_SUBSCRIBABLE_KINDS = Object.freeze(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject']);
 
 /**
  * Cross-cutting event bus for the peer-sync receiver. The asset-pull worker
@@ -380,6 +386,7 @@ const KIND_TO_CATEGORY = Object.freeze({
   artist: 'artists',
   album: 'albums',
   track: 'tracks',
+  creativeDirectorProject: 'creativeDirectorProjects',
 });
 
 function peerAllowsOutbound(peer) {
@@ -478,6 +485,8 @@ async function listRecordsForKind(recordKind) {
     records = await listAlbums({ includeDeleted: false }).catch(() => []);
   } else if (recordKind === 'track') {
     records = await listTracks({ includeDeleted: false }).catch(() => []);
+  } else if (recordKind === 'creativeDirectorProject') {
+    records = await listProjects({ includeDeleted: false }).catch(() => []);
   }
   return records.filter(r => r?.ephemeral !== true && isNonEmptyStr(r?.id));
 }
@@ -780,6 +789,7 @@ async function buildIntegrityAssetManifest(kind, record) {
   if (kind === 'artist') return buildArtistAssetManifest(record);
   if (kind === 'album') return buildAlbumAssetManifest(record);
   if (kind === 'track') return buildTrackAssetManifest(record);
+  if (kind === 'creativeDirectorProject') return buildProjectAssetManifest(record);
   if (kind === 'series') {
     const childIssues = await listIssues({ seriesId: record?.id, includeDeleted: true }).catch(() => []);
     const manifestIssues = childIssues.filter(
@@ -996,6 +1006,10 @@ async function isSubscriptionRecordTombstone(sub) {
   }
   if (sub.recordKind === 'track') {
     const record = await getTrack(sub.recordId, { includeDeleted: true }).catch(() => null);
+    return record?.deleted === true;
+  }
+  if (sub.recordKind === 'creativeDirectorProject') {
+    const record = await getProject(sub.recordId, { includeDeleted: true }).catch(() => null);
     return record?.deleted === true;
   }
   return false;
@@ -1548,6 +1562,14 @@ async function buildPushPayload(sub, sourceInstanceId) {
     const assetManifest = record.deleted === true ? [] : await buildTrackAssetManifest(record);
     return { kind: 'track', record: sanitized, assetManifest, sourceInstanceId, portosMeta };
   }
+  if (sub.recordKind === 'creativeDirectorProject') {
+    const record = await getProject(sub.recordId, { includeDeleted: true }).catch(() => null);
+    if (!record) return null;
+    const sanitized = sanitizeRecordForWire('creativeDirectorProject', record);
+    if (!sanitized) return null;
+    const assetManifest = record.deleted === true ? [] : await buildProjectAssetManifest(record);
+    return { kind: 'creativeDirectorProject', record: sanitized, assetManifest, sourceInstanceId, portosMeta };
+  }
   return null;
 }
 
@@ -1595,6 +1617,23 @@ async function buildTrackAssetManifest(track) {
     [...filenames].map((filename) => hashSimpleAsset(filename, 'music', PATHS.music)),
   );
   return entries.filter(Boolean);
+}
+
+/**
+ * Hash a Creative Director project's direct image input (`startingImageFile`) so
+ * the receiver can pull the bytes from `/data/images/`. `startingImageFilename`
+ * returns null for an external URL / non-local path, so those never ship (the
+ * receiver resolves the same URL itself). Scene VIDEO renders are NOT hashed
+ * here: they live in the project's linked media collection, which federates as
+ * its own record and ships its bytes via that collection's manifest — duplicating
+ * them here would double the transfer. This mirrors buildAuthorAssetManifest:
+ * one direct asset, missing-local-file skipped silently.
+ */
+async function buildProjectAssetManifest(project) {
+  const filename = startingImageFilename(project?.startingImageFile);
+  if (!filename) return [];
+  const entry = await hashImageForManifest(filename);
+  return entry ? [entry] : [];
 }
 
 /**
@@ -1944,6 +1983,8 @@ export async function applyIncomingPush(payload) {
     await mergeAlbumsFromSync([record], { source });
   } else if (kind === 'track') {
     await mergeTracksFromSync([record], { source });
+  } else if (kind === 'creativeDirectorProject') {
+    await mergeProjectsFromSync([record], { source });
   }
 
   // Apply the bundled collection (if any) — same LWW + union-of-items
@@ -2178,6 +2219,13 @@ async function classifyLocalRecord(recordKind, recordId) {
   if (recordKind === 'track') {
     const t = await getTrack(recordId, { includeDeleted: true }).catch(() => null);
     return t ? 'syncable' : 'missing';
+  }
+  if (recordKind === 'creativeDirectorProject') {
+    // CD projects have no `ephemeral` concept (like the persona/music kinds) — a
+    // found record (live or tombstoned) is always 'syncable'. No ping-pong risk:
+    // lastPushedHash + LWW same-`updatedAt` no-op merge prevent it.
+    const p = await getProject(recordId, { includeDeleted: true }).catch(() => null);
+    return p ? 'syncable' : 'missing';
   }
   return 'missing';
 }

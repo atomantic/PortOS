@@ -31,7 +31,11 @@ import {
   applySceneUpdate,
   appendRun,
   applyRunUpdate,
+  mergeProjectRecord,
 } from './projectsLogic.js';
+import {
+  maybeJournalBeforeOverwrite, setSyncBaseHash, contentHashForRecord, flushBaseHashes, deleteSyncBaseHash,
+} from '../../lib/conflictJournal.js';
 
 // The `data` JSONB is the whole record. status/created_at/updated_at are
 // mirrored into columns (kept in lockstep with the JSONB on every write) for
@@ -55,35 +59,49 @@ async function persist(exec, project) {
   const now = new Date().toISOString();
   const createdAt = mirrorTimestamp(project.createdAt, now);
   await exec(
-    `INSERT INTO creative_director_projects (id, status, data, created_at, updated_at)
-     VALUES ($1, $2, $3::jsonb, $4, $5)
+    `INSERT INTO creative_director_projects (id, status, data, created_at, updated_at, deleted, deleted_at)
+     VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7)
      ON CONFLICT (id) DO UPDATE SET
        status = EXCLUDED.status,
        data = EXCLUDED.data,
-       updated_at = EXCLUDED.updated_at`,
+       updated_at = EXCLUDED.updated_at,
+       deleted = EXCLUDED.deleted,
+       deleted_at = EXCLUDED.deleted_at`,
     [
       project.id,
       mirrorStatus(project.status),
       JSON.stringify(project),
       createdAt,
       mirrorTimestamp(project.updatedAt, createdAt),
+      project.deleted === true,
+      mirrorTimestamp(project.deletedAt, null),
     ],
   );
   return project;
 }
 
-export async function listProjects() {
+export async function listProjects({ includeDeleted = false } = {}) {
   // created_at ASC preserves the file backend's append order (the UI sorts
   // client-side; recovery + tests don't depend on order, but stable beats random).
-  const result = await query(
-    `SELECT data FROM creative_director_projects ORDER BY created_at ASC`,
-  );
+  const result = includeDeleted
+    ? await query(`SELECT data FROM creative_director_projects ORDER BY created_at ASC`)
+    : await query(`SELECT data FROM creative_director_projects WHERE deleted = FALSE ORDER BY created_at ASC`);
   return result.rows.map(rowToProject);
 }
 
-export async function getProject(id) {
+export async function getProject(id, { includeDeleted = false } = {}) {
   const result = await query(`SELECT data FROM creative_director_projects WHERE id = $1`, [id]);
-  return rowToProject(result.rows[0]);
+  const project = rowToProject(result.rows[0]);
+  if (!project) return null;
+  return includeDeleted || !project.deleted ? project : null;
+}
+
+/** Live project ids (or all when includeDeleted) — used by tombstone GC sweeps. */
+export async function listProjectIds({ includeDeleted = false } = {}) {
+  const result = includeDeleted
+    ? await query(`SELECT id FROM creative_director_projects`)
+    : await query(`SELECT id FROM creative_director_projects WHERE deleted = FALSE`);
+  return result.rows.map((r) => r.id);
 }
 
 export async function createProject(input) {
@@ -124,9 +142,78 @@ export async function updateProject(id, patch) {
 }
 
 export async function deleteProject(id) {
-  const result = await query(`DELETE FROM creative_director_projects WHERE id = $1`, [id]);
-  if (result.rowCount === 0) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
-  return { ok: true };
+  // Soft-delete tombstone (#1564) so the deletion federates and an out-of-date
+  // peer can't resurrect the project via the LWW merge. The row stays; `deleted`
+  // flips and `updatedAt`/`deletedAt` stamp now so the tombstone wins on merge.
+  return withTransaction(async (client) => {
+    const sel = await client.query(
+      `SELECT data FROM creative_director_projects WHERE id = $1 FOR UPDATE`,
+      [id],
+    );
+    const current = rowToProject(sel.rows[0]);
+    if (!current || current.deleted) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+    const now = new Date().toISOString();
+    const next = { ...current, deleted: true, deletedAt: now, updatedAt: now };
+    await persist(client.query.bind(client), next);
+    return { ok: true };
+  });
+}
+
+/**
+ * Merge an incoming batch of project records from a peer (per-record push). Each
+ * record's read-modify-write runs inside `withTransaction` + `SELECT … FOR
+ * UPDATE` so a concurrent local edit can't lose to (or clobber) the merge. LWW
+ * on `updatedAt` (tombstone-aware) via the shared `mergeProjectRecord` decision
+ * — identical to the file backend so the two can't drift. Mirrors
+ * `mergeAuthorsFromSync`: seeds/advances the conflict-journal base hash and
+ * journals the about-to-be-overwritten local version when remote wins
+ * (best-effort, never throws into the merge). Returns `{ applied, count }`.
+ */
+export async function mergeProjectsFromSync(remoteProjects, { source = { via: 'sync', peerId: null } } = {}) {
+  if (!Array.isArray(remoteProjects)) return { applied: false, count: 0 };
+  let changed = 0;
+  for (const remote of remoteProjects) {
+    const applied = await withTransaction(async (client) => {
+      const sel = await client.query(`SELECT data FROM creative_director_projects WHERE id = $1 FOR UPDATE`, [remote?.id]);
+      const local = rowToProject(sel.rows[0]);
+      const { next, inserted, remoteWins, changed: didChange } = mergeProjectRecord(local, remote);
+      if (!next) return false; // malformed remote → dropped
+      if (inserted) {
+        await persist(client.query.bind(client), next);
+        await setSyncBaseHash('creativeDirectorProject', next.id, contentHashForRecord('creativeDirectorProject', next));
+        return true;
+      }
+      // local wins, OR remote won but is byte-identical to local (already agree).
+      if (!remoteWins || !didChange) return false;
+      await maybeJournalBeforeOverwrite({ kind: 'creativeDirectorProject', id: next.id, local, remote: next, source });
+      await persist(client.query.bind(client), next);
+      await setSyncBaseHash('creativeDirectorProject', next.id, contentHashForRecord('creativeDirectorProject', next));
+      return true;
+    });
+    if (applied) changed += 1;
+  }
+  await flushBaseHashes();
+  if (changed === 0) return { applied: false, count: 0 };
+  return { applied: true, count: changed };
+}
+
+/**
+ * Hard-remove tombstoned projects whose deletedAt is older than the cutoff.
+ * Called by tombstoneGc once every subscribed peer has acked the deletion.
+ * Evicts each pruned project's conflict-journal base hash (mirrors
+ * pruneTombstonedAuthors).
+ */
+export async function pruneTombstonedProjects(olderThanMs) {
+  if (!Number.isFinite(olderThanMs)) return { pruned: 0 };
+  const cutoffIso = new Date(olderThanMs).toISOString();
+  const { rows } = await query(
+    `DELETE FROM creative_director_projects
+     WHERE deleted = TRUE AND deleted_at IS NOT NULL AND deleted_at < $1
+     RETURNING id`,
+    [cutoffIso],
+  );
+  for (const r of rows) await deleteSyncBaseHash('creativeDirectorProject', r.id);
+  return { pruned: rows.length };
 }
 
 export async function setTreatment(id, treatmentInput) {

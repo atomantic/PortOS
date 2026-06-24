@@ -809,19 +809,29 @@ async function ensureSchemaImpl() {
     // Creative Director projects (Phase 3, issue #997). One row per project;
     // the full record lives in `data` JSONB, with status/created_at/updated_at
     // mirrored into columns (kept in lockstep on every write) for future
-    // queries. `listProjects` sorts by created_at; nothing filters status yet
-    // (the recovery scan filters in JS), so no status/updated_at index — an
-    // unused index is just write amplification. CD is local-only (not
-    // federated) so no sync_sequence/tombstone. `status` is app-layer gated
-    // (PROJECT_STATUSES), no DB CHECK. Mirrors the creative_director_projects
-    // block in init-db.sql.
+    // queries. `listProjects` sorts by created_at. `status` is app-layer gated
+    // (PROJECT_STATUSES), no DB CHECK. As of #1564 projects FEDERATE across peers
+    // via the per-record peer-sync push pipeline (record kind
+    // `creativeDirectorProject`, sync category `creativeDirectorProjects`), so
+    // the soft-delete tombstone trio (deleted/deleted_at + LWW updated_at) mirrors
+    // the authors table — a delete is a tombstone the merge keeps an out-of-date
+    // peer from resurrecting. Mirrors the creative_director_projects block in
+    // init-db.sql; the ADD COLUMN upgrades below backfill existing installs.
     `CREATE TABLE IF NOT EXISTS creative_director_projects (
       id TEXT PRIMARY KEY,
       status VARCHAR(32) NOT NULL DEFAULT 'draft',
       data JSONB NOT NULL DEFAULT '{}'::jsonb,
       created_at TIMESTAMPTZ DEFAULT NOW(),
-      updated_at TIMESTAMPTZ DEFAULT NOW()
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      deleted BOOLEAN DEFAULT FALSE,
+      deleted_at TIMESTAMPTZ
     )`,
+    // Backfill the tombstone columns on installs created before #1564 (the
+    // CREATE above is a no-op once the table exists). The partial index serves
+    // the live-list filter (deleted = FALSE).
+    `ALTER TABLE creative_director_projects ADD COLUMN IF NOT EXISTS deleted BOOLEAN DEFAULT FALSE`,
+    `ALTER TABLE creative_director_projects ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ`,
+    `CREATE INDEX IF NOT EXISTS idx_creative_director_projects_live ON creative_director_projects (deleted) WHERE deleted = FALSE`,
 
     // Mood boards (issue #911). A dedicated inspiration/mood-board canvas,
     // distinct from raw Media History, for collecting visual + textual

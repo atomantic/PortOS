@@ -263,6 +263,20 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // to 2 then (where a v1 peer would round-trip the new shape through an
   // unaware sanitizer).
   storyBuilder: 1,
+  // v1 = Creative Director projects (PostgreSQL `creative_director_projects`)
+  // federated via the per-record peer-sync push pipeline (record kind
+  // `creativeDirectorProject`, sync category `creativeDirectorProjects`, #1564).
+  // A brand-NEW synced record type like `authors`/`storyBuilder`, so it gets its
+  // own per-category gate: a v1 sender pushing to a ≤v0 (pre-feature) receiver is
+  // sender-ahead on `creativeDirectorProjects` and gets a 412 — only that
+  // category pauses; every other keeps flowing (per-category gate via
+  // scopeVersionDiff). A v1 receiver still accepts a ≤v0 sender (sender-behind):
+  // pre-feature peers never push a `creativeDirectorProject` at all, so there's
+  // nothing to gate. The FIRST incompatible project-shape change MUST bump this
+  // to 2 then (where a v1 peer would round-trip the new shape through an unaware
+  // sanitizer). The project body is LWW-overwritten whole; scene video renders
+  // ride the project's linked media collection (federated separately).
+  creativeDirectorProjects: 1,
   // NOTE: `videoHistory` is intentionally NOT listed here. The version gate
   // rejects the ENTIRE snapshot/push payload on ANY ahead-mismatch (the
   // comparator walks the union of keys), so declaring a brand-new key would
@@ -306,6 +320,7 @@ export const RECORD_KIND_SCHEMA_CATEGORIES = Object.freeze({
   'cat-ingredient': Object.freeze(['catalog']),
   'cat-scrap': Object.freeze(['catalog']),
   storyBuilder: Object.freeze(['storyBuilder']),
+  creativeDirectorProject: Object.freeze(['creativeDirectorProjects']),
 });
 
 /**
