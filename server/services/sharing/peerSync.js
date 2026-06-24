@@ -38,6 +38,7 @@
 import { join } from 'path';
 import { existsSync } from 'fs';
 import { EventEmitter } from 'events';
+import { createHash } from 'crypto';
 import { PATHS, atomicWrite, readJSONFile, ensureDir, sha256File } from '../../lib/fileUtils.js';
 import { isStr } from '../../lib/storyBible.js';
 import { isPlainObject } from '../../lib/objects.js';
@@ -2557,6 +2558,26 @@ async function pullOneWorkBody(peer, base, entry) {
     const url = `${base}/data/writers-room/works/${encodeURIComponent(workId)}/drafts/${encodeURIComponent(draftId)}.md`;
     const buffer = await fetchCappedAssetBuffer(peer, url, safeLabel, WORK_BODY_PULL_MAX_BYTES, { allowEmpty: true });
     if (!buffer) return;
+    // Integrity: the bytes must hash to the advertised sha256 (discard a corrupt
+    // or wrong download instead of writing it over the draft).
+    const bufHash = createHash('sha256').update(buffer).digest('hex');
+    if (bufHash !== entry.sha256) {
+      console.log(`⚠️ peerSync: draft body ${safeLabel} hash mismatch — discarding (got ${bufHash.slice(0, 8)}, want ${String(entry.sha256).slice(0, 8)})`);
+      return;
+    }
+    // Compare-and-swap against a local save that landed DURING this slow pull:
+    // the draft's merged metadata `contentHash` equals entry.sha256 right after
+    // the merge, but a local saveDraftBody bumps it (+ updatedAt) to the newer
+    // prose. If it no longer matches, the local copy is newer/authoritative (and
+    // will re-push) — don't clobber it with the older peer bytes. A vanished
+    // draft/work (deleted mid-pull) also skips. (sha256File of the .md equals
+    // contentHash(text) since the body is the file verbatim.)
+    const current = await getWorkForSync(workId).catch(() => null);
+    const draft = Array.isArray(current?.drafts) ? current.drafts.find((d) => d?.id === draftId) : null;
+    if (!draft || draft.contentHash !== entry.sha256) {
+      console.log(`⚠️ peerSync: draft body ${safeLabel} target moved since diff — skipping write`);
+      return;
+    }
     await ensureDir(join(wrWorkDir(workId), 'drafts'));
     await atomicWrite(wrDraftPath(workId, draftId), buffer);
     peerSyncEvents.emit('asset-arrived', {
