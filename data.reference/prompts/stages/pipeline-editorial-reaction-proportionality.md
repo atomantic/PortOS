@@ -50,13 +50,28 @@ right `issueNumber`.
 
 The manuscript is stitched from the drafted issues. Section headers attribute
 each chunk to an issue (e.g. `# Issue 3 — Title (prose)`). Use the issue number
-in each header to attribute every finding to its `issueNumber`. A high-magnitude
-event may appear in an EARLIER part than the one where you flag its missing
-reaction — the "setup so far" digest above carries forward every event still
-awaiting a proportionate reaction (the affected character, its issue, and its
-magnitude), so you can flag a trauma introduced early and then left unprocessed.
-Attribute an under-reaction finding to the issue where the reaction SHOULD have
-landed (the event's issue, or a later issue that pointedly ignores it).
+in each header to attribute every finding to its `issueNumber`.
+
+{{#finalPart}}
+This is the FINAL part of the manuscript — the whole story is now in view, so an
+**under-reaction** ("a high-magnitude event is never processed afterward") can now
+be judged: a payoff would have appeared by now if it were coming. **The event may
+have appeared in an EARLIER part, not in the text below.** The "setup so far"
+digest above carries forward every high-magnitude event still AWAITING a
+proportionate reaction (the affected character, its issue, and its magnitude) —
+flag each such event that the whole story never pays off, attributing the finding
+to the issue where the reaction SHOULD have landed. Also report any over-reaction
+in the text below.
+{{/finalPart}}
+{{^finalPart}}
+This is NOT the final part of the manuscript. Do NOT report any **under-reaction**
+finding here — a later part may still process the event, and a premature
+"never processed" claim cannot be retracted. High-magnitude events that have not
+yet drawn a proportionate reaction are carried forward in the "setup so far"
+digest and judged once the final part is in view. In this part report ONLY
+**over-reactions** (a reaction wildly out of proportion to its trigger is fully
+visible in the text that contains it).
+{{/finalPart}}
 
 ```
 {{manuscript}}
@@ -65,7 +80,8 @@ landed (the event's issue, or a later issue that pointedly ignores it).
 ## Task
 
 Identify events whose emotional weight and the on-page reaction are out of
-balance. For each genuine finding:
+balance — subject to the part gate above (under-reactions only in the final part;
+over-reactions in any part). For each genuine finding:
 
 1. Name the event (issue + a short description) and its magnitude (why it is high-
    or low-stakes for the affected character).
