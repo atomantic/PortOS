@@ -64,6 +64,7 @@ import {
   applyReciprocalSync,
   requestReciprocalSync,
   enqueueReciprocalSync,
+  DEFAULT_SYNC_CATEGORIES,
   startPolling,
   stopPolling
 } from './instances.js';
@@ -803,6 +804,21 @@ describe('instances.js', () => {
       expect(changed).toBe(true);
       expect(peer.fullSync).toBe(true);
       expect(peer.syncEnabled).toBe(true);
+    });
+
+    it('adopting full mirror via reciprocation preserves the underlying per-category selection', async () => {
+      // The sender includes an all-on compat map alongside fullSync:true. A
+      // fullSync-aware receiver must NOT overwrite its own selection with it —
+      // otherwise a later disable would leave every category on instead of
+      // restoring the user's choice (only brain here).
+      const peers = [{ id: 'p1', instanceId: 'inst-A', name: 'A', fullSync: false, syncCategories: { brain: true } }];
+      readJSONFile.mockResolvedValue({ self: { instanceId: 'me' }, peers });
+      const allOn = Object.fromEntries(Object.keys(DEFAULT_SYNC_CATEGORIES).map(k => [k, true]));
+      const { changed, peer } = await applyReciprocalSync('inst-A', allOn, { fullSync: true });
+      expect(changed).toBe(true);
+      expect(peer.fullSync).toBe(true);
+      expect(peer.syncCategories.brain).toBe(true);
+      expect(peer.syncCategories.universe).toBeFalsy(); // not clobbered to true
     });
 
     it('applyReciprocalSync drops our mirror when the peer reports fullSync:false (disable reciprocation)', async () => {

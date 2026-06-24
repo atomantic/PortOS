@@ -874,20 +874,26 @@ export async function applyReciprocalSync(instanceId, categories, { fullSync } =
     const fullSyncOffFlips = wantsFullSyncOff && entry.fullSync === true;
     // No-op when nothing actually flips — the echo guard.
     if (!fullSyncFlips && !fullSyncOffFlips && Object.keys(next).every(k => next[k] === prev[k])) return entry;
-    // When the peer asks us to mirror everything, a full sweep covers all kinds.
-    if (fullSyncFlips) {
-      entry.fullSync = true;
-      for (const [, kind] of PER_RECORD_CATEGORY_KINDS) turnedOnKinds.push(kind);
+    if (fullSyncFlips || fullSyncOffFlips) {
+      // A full-sync state change. fullSync alone drives gating, so the stored
+      // per-category map is PRESERVED untouched — we do NOT apply the sender's
+      // all-on compat overlay. That keeps the user's own selection intact so a
+      // later disable restores it, exactly like the local toggle path. (Legacy
+      // receivers that don't understand fullSync fall into the category branch
+      // below and mirror via the all-on overlay instead — that's its purpose.)
+      entry.fullSync = fullSyncFlips; // true on adopt, false on drop
+      if (fullSyncFlips) {
+        for (const [, kind] of PER_RECORD_CATEGORY_KINDS) turnedOnKinds.push(kind);
+      }
     } else {
-      // The peer stopped mirroring us → drop our mirror; the per-category map it
-      // sent (preserved underneath while mirroring) becomes authoritative again.
-      if (fullSyncOffFlips) entry.fullSync = false;
       for (const [cat, kind] of PER_RECORD_CATEGORY_KINDS) {
         if (prev[cat] !== true && next[cat] === true) turnedOnKinds.push(kind);
       }
+      entry.syncCategories = next;
     }
-    entry.syncCategories = next;
-    entry.syncEnabled = entry.fullSync === true || Object.values(next).some(Boolean);
+    // Recompute from the (possibly preserved) stored map — a full-sync peer is
+    // always sync-enabled; otherwise it follows the per-category selection.
+    entry.syncEnabled = entry.fullSync === true || Object.values(entry.syncCategories || {}).some(Boolean);
     if (turnedOnKinds.length > 0) backfillInstanceId = entry.instanceId || null;
     changed = true;
     instanceEvents.emit('peers:updated', data.peers);
