@@ -308,6 +308,74 @@ describe('resolveNextStep (pure)', () => {
     expect(noteFor({ editorialCheckIds: [] })).toMatch(/enabled editorial checks/);
   });
 
+  it('annotates every dry-run step with an estActions estimate (#1576)', () => {
+    const series = { targetFormat: 'comic', arc: { logline: 'L', summary: 'S' }, seasons: [{ id: 'se1', number: 1 }] };
+    const issues = [
+      { id: 'i1', seasonId: 'se1', number: 1, arcPosition: 1, stages: {} },
+      { id: 'i2', seasonId: 'se1', number: 2, arcPosition: 2, stages: {} },
+    ];
+    const plan = autopilot.__testing.buildDryRunPlan(series, issues, {});
+    // Every step carries a numeric estimate.
+    expect(plan.every((p) => Number.isFinite(p.estActions))).toBe(true);
+    const byKind = Object.fromEntries(plan.map((p) => [p.kind, p]));
+    // verifyArc: convergence loop at the default 3 rounds → 2*3-1 = 5 actions.
+    expect(byKind.verifyArc.estActions).toBe(5);
+    // textStages: one child action per not-yet-text-ready issue (2 here).
+    expect(byKind.textStages.estActions).toBe(2);
+    // Pure-gate steps that bill nothing against the cap are zero-cost.
+    expect(byKind.editorialHealthGate.estActions).toBe(0);
+  });
+
+  it('scales verify/editorial estActions with the per-run round caps (#1576)', () => {
+    const series = { targetFormat: 'comic', arc: { logline: 'L', summary: 'S' }, seasons: [{ id: 'se1', number: 1 }] };
+    const issues = [{ id: 'i1', seasonId: 'se1', number: 1, arcPosition: 1, stages: {} }];
+    const actionsFor = (opts, kind) => autopilot.__testing.buildDryRunPlan(series, issues, opts)
+      .find((p) => p.kind === kind)?.estActions;
+    // 0 rounds → the loop is skipped → 0 actions.
+    expect(actionsFor({ maxArcVerifyRounds: 0 }, 'verifyArc')).toBe(0);
+    // 1 round → a single verify, no resolve → 1 action.
+    expect(actionsFor({ maxArcVerifyRounds: 1 }, 'verifyArc')).toBe(1);
+    // 4 rounds → 4 verifies + 3 resolves → 7 actions.
+    expect(actionsFor({ maxArcVerifyRounds: 4 }, 'verifyArc')).toBe(7);
+    // Editorial review follows the same convergence shape.
+    expect(actionsFor({ maxEditorialRounds: 2 }, 'editorialReview')).toBe(3);
+  });
+
+  it('estimates editorialChecks LLM fan-out as issues × enabled LLM checks (#1576)', () => {
+    const series = { targetFormat: 'comic', arc: { logline: 'L', summary: 'S' }, seasons: [{ id: 'se1', number: 1 }] };
+    const issues = [
+      { id: 'i1', seasonId: 'se1', number: 1, arcPosition: 1, stages: {} },
+      { id: 'i2', seasonId: 'se1', number: 2, arcPosition: 2, stages: {} },
+      { id: 'i3', seasonId: 'se1', number: 3, arcPosition: 3, stages: {} },
+    ];
+    const stepFor = (ctx) => autopilot.__testing.buildDryRunPlan(series, issues, {}, ctx)
+      .find((p) => p.kind === 'editorialChecks');
+    // 2 enabled LLM checks × 3 issues = 6 LLM calls; the pass bills 1 cos action.
+    const two = stepFor({ editorialLlmCheckCount: 2 });
+    expect(two.estLlmCalls).toBe(6);
+    expect(two.estActions).toBe(1);
+    expect(two.note).toMatch(/~6 LLM call/);
+    // No enabled LLM check → no cos action billed and no LLM calls.
+    const none = stepFor({ editorialLlmCheckCount: 0 });
+    expect(none.estActions).toBe(0);
+    expect(none.estLlmCalls).toBe(0);
+  });
+
+  it('summarizePlanCost totals estActions and estLlmCalls across the plan (#1576)', () => {
+    const series = { targetFormat: 'comic', arc: { logline: 'L', summary: 'S' }, seasons: [{ id: 'se1', number: 1 }] };
+    const issues = [{ id: 'i1', seasonId: 'se1', number: 1, arcPosition: 1, stages: {} }];
+    const plan = autopilot.__testing.buildDryRunPlan(series, issues, {}, { editorialLlmCheckCount: 3 });
+    const totals = autopilot.__testing.summarizePlanCost(plan);
+    const manualActions = plan.reduce((s, p) => s + (p.estActions || 0), 0);
+    const manualLlm = plan.reduce((s, p) => s + (p.estLlmCalls || 0), 0);
+    expect(totals.estActions).toBe(manualActions);
+    expect(totals.estLlmCalls).toBe(manualLlm);
+    // Single issue × 3 LLM checks → 3 editorial-check LLM calls in the total.
+    expect(totals.estLlmCalls).toBe(3);
+    // A non-array (defensive) summarizes to zeroes.
+    expect(autopilot.__testing.summarizePlanCost(null)).toEqual({ estActions: 0, estLlmCalls: 0 });
+  });
+
   it('asks to generate episodes for a season with no issues', () => {
     const step = resolveNextStep(comic, []);
     expect(step).toMatchObject({ kind: 'generateEpisodes', seasonId: 'se1' });
