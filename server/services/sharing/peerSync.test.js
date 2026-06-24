@@ -23,6 +23,7 @@ vi.mock('../instances.js', () => ({
   DEFAULT_SYNC_CATEGORIES: {},
   getInstanceId: vi.fn().mockResolvedValue('test-instance'),
   getPeers: vi.fn().mockResolvedValue([]),
+  enqueueReciprocalSync: vi.fn().mockResolvedValue({ ok: true }),
 }));
 
 vi.mock('../universeBuilder.js', async () => ({
@@ -1013,6 +1014,50 @@ describe('peerSync', () => {
       // Allow the listener's fire-and-forget IIFE to settle.
       await new Promise((r) => setTimeout(r, 30));
       expect(await findPeerSubscription('peer-a', 'universe', 'u1')).not.toBeNull();
+    });
+
+    it('reciprocates a full-sync peer on peer:online (mirror requested once identity is known)', async () => {
+      // A peer added via defaultPeerFullSync (or toggled before its first probe)
+      // has fullSync:true but no instanceId, so updatePeer couldn't reciprocate.
+      // peer:online must request the mutual mirror now.
+      const { instanceEvents } = await import('../instanceEvents.js');
+      const { installPeerSyncListener } = await import('./peerSync.js');
+      const { enqueueReciprocalSync } = await import('../instances.js');
+      vi.mocked(enqueueReciprocalSync).mockClear();
+      installPeerSyncListener();
+      vi.mocked(listUniverses).mockResolvedValue([]);
+      instanceEvents.emit('peer:online', {
+        id: 'local-1',
+        instanceId: 'peer-a',
+        name: 'A',
+        enabled: true,
+        syncEnabled: true,
+        directions: ['outbound'],
+        fullSync: true,
+        syncCategories: {},
+      });
+      await new Promise((r) => setTimeout(r, 30));
+      expect(vi.mocked(enqueueReciprocalSync)).toHaveBeenCalledWith('local-1');
+    });
+
+    it('does NOT reciprocate a non-full-sync peer on peer:online (preserves prior behavior)', async () => {
+      const { instanceEvents } = await import('../instanceEvents.js');
+      const { installPeerSyncListener } = await import('./peerSync.js');
+      const { enqueueReciprocalSync } = await import('../instances.js');
+      vi.mocked(enqueueReciprocalSync).mockClear();
+      installPeerSyncListener();
+      vi.mocked(listUniverses).mockResolvedValue([]);
+      instanceEvents.emit('peer:online', {
+        id: 'local-2',
+        instanceId: 'peer-b',
+        name: 'B',
+        enabled: true,
+        syncEnabled: true,
+        directions: ['outbound'],
+        syncCategories: { universe: true },
+      });
+      await new Promise((r) => setTimeout(r, 30));
+      expect(vi.mocked(enqueueReciprocalSync)).not.toHaveBeenCalled();
     });
   });
 

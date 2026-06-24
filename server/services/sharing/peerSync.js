@@ -60,7 +60,7 @@ import {
   formatVersionGap,
   getPortosVersion,
 } from '../../lib/schemaVersions.js';
-import { getInstanceId, getPeers, UNKNOWN_INSTANCE_ID } from '../instances.js';
+import { getInstanceId, getPeers, enqueueReciprocalSync, UNKNOWN_INSTANCE_ID } from '../instances.js';
 import { peerSyncPushSchema } from '../../lib/validation.js';
 import { instanceEvents } from '../instanceEvents.js';
 import { getUniverse, mergeUniversesFromSync } from '../universeBuilder.js';
@@ -2712,6 +2712,15 @@ export function installPeerSyncListener() {
         }
       }
       await retryPendingPushesForPeer(peer.instanceId).catch(() => {});
+      // A full-sync peer added (via defaultPeerFullSync) or toggled before its
+      // instanceId was known couldn't be reciprocated by updatePeer — no identity
+      // yet. peer:online is the first point we know it, so request the mutual
+      // mirror now; otherwise the remote never adopts full-sync until the user
+      // clicks "Make mutual". Echo-guarded on the receiver, so a redundant send
+      // on a later reconnect is a no-op.
+      if (peer.fullSync === true && peer.id) {
+        await enqueueReciprocalSync(peer.id).catch(() => {});
+      }
     })().catch(() => {});
   };
   instanceEvents.on('peer:online', onPeerOnline);
