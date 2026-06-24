@@ -21,6 +21,23 @@
 const isStr = (v) => typeof v === 'string';
 
 /**
+ * Strip any querystring/hash a stored reference might carry, then reduce it to
+ * the basename — the bare unit the peer-sync asset pipeline hashes + transfers.
+ * This is the "what's the filename" primitive shared by every app-asset
+ * resolver: `localImageFilename` below (gallery `/data/images/`) and
+ * `imageUrlToAppAsset` in `moodBoard/logic.js` (which also resolves
+ * `/data/image-refs/`), so the basename logic lives in exactly one place.
+ *
+ * @param {unknown} pathOrName - a path segment or bare filename (no mount prefix)
+ * @returns {string|null} the basename, or null when it collapses to empty
+ */
+export function assetBasename(pathOrName) {
+  if (!isStr(pathOrName)) return null;
+  const base = pathOrName.split(/[?#]/)[0].split('/').pop();
+  return base || null;
+}
+
+/**
  * Resolve a stored image URL/path to the bare gallery-image filename under
  * `data/images/`, or null when there's nothing local to ship.
  *
@@ -34,12 +51,8 @@ export function localImageFilename(urlOrPath) {
   if (/^(https?:|data:|blob:)/i.test(url)) return null;
   // Only gallery images sync as assets. Accept the canonical mount path or a
   // bare filename; reject any other absolute path (videos, image-refs, etc.).
-  let name = url;
   const imagesPrefix = '/data/images/';
-  if (url.startsWith(imagesPrefix)) name = url.slice(imagesPrefix.length);
-  else if (url.startsWith('/')) return null; // some other absolute path → not a gallery image
-  // Strip any querystring/hash a stored URL might carry, then take the basename.
-  name = name.split(/[?#]/)[0];
-  const base = name.split('/').pop();
-  return base || null;
+  if (url.startsWith(imagesPrefix)) return assetBasename(url.slice(imagesPrefix.length));
+  if (url.startsWith('/')) return null; // some other absolute path → not a gallery image
+  return assetBasename(url);
 }

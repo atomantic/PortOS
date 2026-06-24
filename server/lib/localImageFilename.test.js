@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { localImageFilename } from './localImageFilename.js';
+import { localImageFilename, assetBasename } from './localImageFilename.js';
 
 describe('localImageFilename', () => {
   it('returns null for non-string / empty input', () => {
@@ -45,5 +45,31 @@ describe('localImageFilename', () => {
 
   it('returns null when the basename collapses to empty', () => {
     expect(localImageFilename('/data/images/')).toBe(null);
+  });
+});
+
+describe('assetBasename', () => {
+  it('returns null for non-string input', () => {
+    expect(assetBasename(undefined)).toBe(null);
+    expect(assetBasename(null)).toBe(null);
+    expect(assetBasename(42)).toBe(null);
+  });
+
+  it('takes the basename of a path segment', () => {
+    expect(assetBasename('photo.png')).toBe('photo.png');
+    expect(assetBasename('nested/photo.png')).toBe('photo.png');
+    expect(assetBasename('a/b/c/photo.png')).toBe('photo.png');
+  });
+
+  it('strips querystring / hash before taking the basename', () => {
+    expect(assetBasename('photo.png?v=2')).toBe('photo.png');
+    expect(assetBasename('photo.png#frag')).toBe('photo.png');
+    expect(assetBasename('nested/photo.png?a=1#b')).toBe('photo.png');
+  });
+
+  it('returns null when the basename collapses to empty', () => {
+    expect(assetBasename('')).toBe(null);
+    expect(assetBasename('nested/')).toBe(null);
+    expect(assetBasename('?v=2')).toBe(null);
   });
 });
