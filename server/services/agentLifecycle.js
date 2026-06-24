@@ -28,7 +28,7 @@ import { buildTuiSpawnConfig, spawnTuiAgent } from './agentTuiSpawning.js';
 import { processAgentCompletion } from './agentCompletion.js';
 import { releaseAppReviewMarker } from './appActivity.js';
 import { ensureInstanceId } from './instances.js';
-import { isClaimableBy, buildClaim, getClaimOwner } from './cosTaskClaim.js';
+import { isClaimableBy, buildClaim, buildRelease, getClaimOwner } from './cosTaskClaim.js';
 import { runnerAgents, pausedAgents, spawningTasks, useRunner, isTruthyMeta } from './agentState.js';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 
@@ -124,8 +124,10 @@ export async function spawnAgentForTask(task) {
   // may already be working this task. Refuse to spawn while another instance
   // holds a live lease — otherwise both peers spawn an agent for the same task,
   // create conflicting `cos/<taskId>/<agentId>` worktrees on the same repo, and
-  // race the orphan-reset. This is a no-op for a non-federated install (no claim
-  // metadata) and for re-claiming our own task on retry/resume.
+  // race the orphan-reset. This is a cheap, no-I/O fast-reject on the dequeued
+  // task; the authoritative acquire-with-fresh-reread happens below, before any
+  // spawn setup. No-op for a non-federated install (no claim metadata) and for
+  // re-claiming our own task on retry/resume.
   const instanceId = await ensureInstanceId();
   if (!isClaimableBy(task.metadata, instanceId)) {
     console.log(`🔒 Task ${task.id} is claimed by instance ${getClaimOwner(task.metadata)} (live lease) — skipping spawn on ${instanceId}`);
@@ -175,6 +177,10 @@ export async function spawnAgentForTask(task) {
   });
   startExecution(toolExecution.id);
 
+  // Set once the federation claim has been persisted (just below). cleanupOnError
+  // reads it to release the claim on any failed-setup early exit.
+  let claimAcquired = false;
+
   // Helper to cleanup on early exit. Releases the dedup guard, the execution
   // lane, and the tool-execution state — and the synthetic app-review marker
   // bound by `bindAppReviewAgent` before this spawn. Without the marker
@@ -188,10 +194,51 @@ export async function spawnAgentForTask(task) {
     release(agentId);
     errorExecution(toolExecution.id, { message: error });
     completeExecution(toolExecution.id, { success: false });
+    // Release the federation claim acquired before setup (issue #1563) so a
+    // failed spawn never strands the task as claimed-but-not-running, which
+    // would block both this instance's retry and a peer for a full lease window.
+    if (claimAcquired) {
+      await updateTask(task.id, { metadata: buildRelease() }, task.taskType || 'user').catch(() => {});
+    }
     await releaseAppReviewMarker(task.metadata?.app).catch(err => {
       emitLog('warn', `Failed to release app review marker for ${task.metadata?.app}: ${err.message}`, { taskId: task.id });
     });
   };
+
+  // Acquire the federation lease BEFORE any spawn setup (issue #1563, addressing
+  // the codex review: the claim must be taken up front, not at the in_progress
+  // flip after worktree/agent registration). Re-read the freshest persisted task
+  // so a peer's claim that synced in since this `task` was dequeued is honored,
+  // then write our claim immediately. Acquiring up front — rather than after
+  // setup — narrows the cross-peer window in which both instances pass the check
+  // and spawn, and the fresh re-read means we never clobber a claim that landed
+  // during the gap. cleanupOnError releases it on any failed-setup exit. (Full
+  // cross-machine atomicity completes with the task-record sync wiring in #1650;
+  // within one install the `spawningTasks` guard already prevents duplicates.)
+  const freshTask = await getTaskById(task.id).catch(() => null);
+  if (freshTask) {
+    // The task is persisted — honor a peer's claim that synced in since dispatch,
+    // then take the lease up front.
+    if (!isClaimableBy(freshTask.metadata, instanceId)) {
+      console.log(`🔒 Task ${task.id} was claimed by instance ${getClaimOwner(freshTask.metadata)} during dispatch — yielding on ${instanceId}`);
+      await cleanupOnError('claimed by another instance');
+      return null;
+    }
+    const claimUpdate = await updateTask(task.id, {
+      metadata: buildClaim(instanceId)
+    }, task.taskType || 'user').catch(() => null);
+    if (claimUpdate && !claimUpdate.error) {
+      claimAcquired = true;
+      // Keep the in-memory task's metadata in sync with the persisted claim so
+      // the downstream in_progress update merges against the freshest shape.
+      task.metadata = claimUpdate.metadata;
+    }
+    // If the claim write failed, fall through: the in_progress update below still
+    // stamps the claim, preserving the prior single-write behavior for any task
+    // shape that isn't separately updatable here.
+  }
+  // A not-yet-persisted task (getTaskById miss) falls through unchanged — its
+  // claim is stamped at the in_progress update below, exactly as before.
 
   // Single try wraps setup + the spawn handoff so all locals stay in
   // scope. The `handedOff` flag tells the catch arm which kind of
@@ -325,12 +372,13 @@ export async function spawnAgentForTask(task) {
 
     emitLog('info', `Agent ${agentId} initializing...${worktreeInfo ? ' (worktree)' : ''}${jiraBranchName ? ` (JIRA: ${jiraTicket?.ticketId})` : ''}`, { agentId, taskId: task.id });
 
-    // Mark the task as in_progress, increment the total spawn count, and stamp
-    // the federation claim (issue #1563). `buildClaim` records this instance as
-    // `claimedBy` with a fresh lease, so a federated peer sharing this task list
-    // sees the task as live-claimed and backs off (the orphan-reset honors the
-    // same lease). The lease is renewed on the health-check heartbeat while the
-    // agent runs and released when the task leaves `in_progress`.
+    // Mark the task as in_progress, increment the total spawn count, and refresh
+    // the federation claim (issue #1563). The claim was already acquired up front
+    // (above); re-stamping it here renews the lease at the moment the agent
+    // actually spawns. A federated peer sharing this task list sees the task as
+    // live-claimed and backs off (the orphan-reset honors the same lease). The
+    // lease is then renewed on the health-check heartbeat while the agent runs,
+    // and released when the task leaves `in_progress`.
     const newSpawnCount = (Number(task.metadata?.totalSpawnCount) || 0) + 1;
     const updateResult = await updateTask(task.id, {
       status: 'in_progress',

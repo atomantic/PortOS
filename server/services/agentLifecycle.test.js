@@ -691,6 +691,34 @@ describe('agentLifecycle — instance provenance stamping (#1563)', () => {
     expect(AGENT_LIFECYCLE_SRC).toMatch(/\.\.\.buildClaim\(instanceId\)/);
   });
 
+  it('source: acquires the claim (updateTask with buildClaim) BEFORE registering the agent', () => {
+    // Codex review fix: the lease must be taken up front, not only at the
+    // in_progress flip after worktree/agent setup, so a peer's claim that
+    // synced in is honored before this instance commits to spawning.
+    const fnStart = AGENT_LIFECYCLE_SRC.indexOf('export async function spawnAgentForTask');
+    const fnBody = AGENT_LIFECYCLE_SRC.slice(fnStart, fnStart + 60_000);
+    const acquireIdx = fnBody.indexOf('metadata: buildClaim(instanceId)');
+    const registerIdx = fnBody.indexOf('registerAgent(agentId, task.id, {');
+    expect(acquireIdx, 'must acquire the claim via updateTask(buildClaim) up front').toBeGreaterThan(-1);
+    expect(acquireIdx, 'claim must be acquired BEFORE registerAgent').toBeLessThan(registerIdx);
+  });
+
+  it('source: re-reads the freshest task and yields if claimed during dispatch', () => {
+    const fnStart = AGENT_LIFECYCLE_SRC.indexOf('export async function spawnAgentForTask');
+    const fnBody = AGENT_LIFECYCLE_SRC.slice(fnStart, fnStart + 60_000);
+    const rereadIdx = fnBody.indexOf('await getTaskById(task.id)');
+    const recheckIdx = fnBody.indexOf('!isClaimableBy(freshTask.metadata, instanceId)');
+    expect(rereadIdx, 'must re-read the freshest persisted task before claiming').toBeGreaterThan(-1);
+    expect(recheckIdx, 'must re-check claimability against the fresh metadata').toBeGreaterThan(rereadIdx);
+  });
+
+  it('source: releases the claim on a failed-setup early exit (cleanupOnError)', () => {
+    const fnStart = AGENT_LIFECYCLE_SRC.indexOf('const cleanupOnError = async');
+    const fnBody = AGENT_LIFECYCLE_SRC.slice(fnStart, fnStart + 1200);
+    expect(fnBody.indexOf('claimAcquired'), 'cleanupOnError must gate on claimAcquired').toBeGreaterThan(-1);
+    expect(fnBody.indexOf('buildRelease()'), 'cleanupOnError must release the claim via buildRelease').toBeGreaterThan(-1);
+  });
+
   it('source: stamps instanceId into the registerAgent metadata', () => {
     const registerIdx = AGENT_LIFECYCLE_SRC.indexOf('registerAgent(agentId, task.id, {');
     // The metadata object literal opens at registerIdx; assert `instanceId,`
