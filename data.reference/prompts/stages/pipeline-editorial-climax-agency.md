@@ -81,11 +81,13 @@ This is the FINAL part of the manuscript — the whole story is now in view, so 
 climax can be identified and judged. Make your climax verdict here.
 {{/finalPart}}
 {{^finalPart}}
-This is NOT the final part of the manuscript — the climax has likely not arrived
-yet. Do NOT flag a climax verdict in this part; an earlier scene that looks like
-a turning point may be set up to be eclipsed by the real climax later. Return an
-empty `findings` array unless you can already see a clearly-completed climax in
-this chunk.
+This is NOT the final part of the manuscript. The climax is a SINGLE whole-story
+event that can only be identified once the entire story is in view — and an
+earlier high-stakes scene (a mid-story battle, a per-issue turning point, a false
+victory) is NOT the climax, no matter how complete it looks in isolation. Do NOT
+report any climax finding in this part — return an empty `findings` array. The
+central problem and the protagonist's pattern of agency are carried forward and
+judged once the final part is in view.
 {{/finalPart}}
 
 ```

@@ -217,26 +217,47 @@ export const ENDINGS_CLIFFHANGER_STAGE = 'pipeline-editorial-endings-cliffhanger
 // logged. Pure + deterministic so it's unit-testable and so its token cost can be
 // counted into the per-chunk overhead. Returns '' when nothing is authored (the
 // prompt's `{{#authoredSetups}}` section then renders nothing).
+// Render one reader-map entry (hook or payoff) to a `- text (arc position N)` line.
+// Shared by authoredSetupPayoffSummary + authoredPayoffsSummary. Returns '' for an
+// entry with no usable label/note so callers can `.filter(Boolean)`.
+function renderReaderMapEntryLine(e) {
+  const label = typeof e?.label === 'string' ? e.label.trim() : '';
+  const note = typeof e?.note === 'string' ? e.note.trim() : '';
+  const text = label && note ? `${label} — ${note}` : (label || note);
+  if (!text) return '';
+  // A coarse expected-location hint so the model can reason about WHERE an
+  // authored hook should have paid off (reconciliation signal, #1299).
+  const pos = Number.isFinite(e?.atArcPosition) ? ` (arc position ${e.atArcPosition})` : '';
+  return `- ${text}${pos}`;
+}
+
 export function authoredSetupPayoffSummary(readerMap) {
   const hooks = Array.isArray(readerMap?.hooks) ? readerMap.hooks : [];
   const payoffs = Array.isArray(readerMap?.payoffs) ? readerMap.payoffs : [];
-  const line = (e) => {
-    const label = typeof e?.label === 'string' ? e.label.trim() : '';
-    const note = typeof e?.note === 'string' ? e.note.trim() : '';
-    const text = label && note ? `${label} — ${note}` : (label || note);
-    if (!text) return '';
-    // A coarse expected-location hint so the model can reason about WHERE an
-    // authored hook should have paid off (reconciliation signal, #1299).
-    const pos = Number.isFinite(e?.atArcPosition) ? ` (arc position ${e.atArcPosition})` : '';
-    return `- ${text}${pos}`;
-  };
-  const hookLines = hooks.map(line).filter(Boolean);
-  const payoffLines = payoffs.map(line).filter(Boolean);
+  const hookLines = hooks.map(renderReaderMapEntryLine).filter(Boolean);
+  const payoffLines = payoffs.map(renderReaderMapEntryLine).filter(Boolean);
   if (!hookLines.length && !payoffLines.length) return '';
   const parts = [];
   if (hookLines.length) parts.push(`Authored hooks (questions the writer planted):\n${hookLines.join('\n')}`);
   if (payoffLines.length) parts.push(`Authored payoffs (resolutions the writer logged):\n${payoffLines.join('\n')}`);
   return parts.join('\n\n');
+}
+
+// Render ONLY the authored reader-map payoffs (#1583) — the resolutions the writer
+// LOGGED that the reader was promised. The climax / resolution-power check passes
+// this (NOT authoredSetupPayoffSummary, which also bundles hooks) so the prompt's
+// "payoffs the climax should deliver" framing stays accurate: a hook is a question
+// the writer planted, not a climax obligation, so feeding hooks here would risk the
+// model flagging an ordinary unanswered hook as a missing climax resolution. Pure +
+// deterministic so it's unit-testable and its token cost can be counted into the
+// per-chunk overhead. Returns '' when no payoff is authored (the prompt's
+// `{{#authoredPayoffs}}` section then renders nothing and the check reasons from the
+// prose + themes alone).
+export function authoredPayoffsSummary(readerMap) {
+  const payoffs = Array.isArray(readerMap?.payoffs) ? readerMap.payoffs : [];
+  const payoffLines = payoffs.map(renderReaderMapEntryLine).filter(Boolean);
+  if (!payoffLines.length) return '';
+  return `Authored payoffs (resolutions the writer logged — what the reader was promised):\n${payoffLines.join('\n')}`;
 }
 
 // Stage name for the cliché / dead-metaphor / overwriting LLM check (#1308).
@@ -3419,7 +3440,7 @@ export const EDITORIAL_CHECKS = [
       // gracefully — no reader map ⇒ {{#authoredPayoffs}} renders nothing; no
       // themes ⇒ {{#declaredThemes}} renders nothing; no outline ⇒ {{#sceneMap}}
       // renders nothing and the model reasons from the prose's own shape.
-      const authoredPayoffs = authoredSetupPayoffSummary(ctx.series?.arc?.readerMap);
+      const authoredPayoffs = authoredPayoffsSummary(ctx.series?.arc?.readerMap);
       const declaredThemes = declaredThemesSummary(ctx.series?.arc?.themes);
       const sceneMap = sceneGroundingSummary(ctx.reverseOutline);
       return runManuscriptLlmCheck(ctx, {
