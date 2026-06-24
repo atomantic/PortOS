@@ -153,6 +153,11 @@ export const sanitizeAutopilot = (raw) => {
     // Same transient-marker rationale as pauseKind: no schema-gate bump.
     craftGapIssues: toCount(raw.craftGapIssues),
     craftGapFindings: toCount(raw.craftGapFindings),
+    // #1573 — count of editorial checks that errored during the run's checks
+    // pass. A `done` run with errored>0 didn't actually evaluate those checks, so
+    // the UI flags it instead of reporting clean. Same transient-marker rationale
+    // as craftGap* / pauseKind: no schema-gate bump.
+    editorialCheckErrors: toCount(raw.editorialCheckErrors),
     updatedAt: isStr(raw.updatedAt) ? raw.updatedAt : null,
   };
 };

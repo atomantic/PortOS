@@ -712,6 +712,21 @@ export function cancelEditorialChecks(seriesId) {
  * progress lands via SSE. Re-calling while a run is in flight resolves to the
  * existing runId.
  */
+/**
+ * Summarize a `perCheck` array (the `{ checkId, count|error|skipped }` entries
+ * `runEditorialChecks` returns) into the errored aggregate surfaced on the
+ * completion frame and the autopilot run summary — so a check that throws every
+ * pass is visible instead of hiding behind a silent "clean" run (#1573). Shared
+ * by the standalone run route and `seriesAutopilot.runEditorialChecksPass` so
+ * both frames name the fields identically.
+ */
+export function summarizeCheckErrors(perCheck) {
+  const erroredCheckIds = (Array.isArray(perCheck) ? perCheck : [])
+    .filter((c) => c?.error)
+    .map((c) => c.checkId);
+  return { errored: erroredCheckIds.length, erroredCheckIds };
+}
+
 export function startEditorialChecksRun(seriesId, options = {}) {
   return runner.start(seriesId, async ({ runId, signal, record, broadcast }) => {
     broadcast({ type: 'start', runId });
@@ -727,14 +742,19 @@ export function startEditorialChecksRun(seriesId, options = {}) {
       console.log(`📝 editorial checks canceled — series=${String(seriesId).slice(0, 12)}`);
       return;
     }
+    const { errored, erroredCheckIds } = summarizeCheckErrors(result.perCheck);
     broadcast({
       type: 'complete',
       runId,
       findingCount: result.findings.length,
       perCheck: result.perCheck,
+      // #1573 — surface errored checks on the terminal frame so a check that
+      // throws every run is visible instead of reporting a silent "clean".
+      errored,
+      erroredCheckIds,
       completedAt: new Date().toISOString(),
     });
-    console.log(`📝 editorial checks complete — series=${String(seriesId).slice(0, 12)} findings=${result.findings.length}`);
+    console.log(`📝 editorial checks complete — series=${String(seriesId).slice(0, 12)} findings=${result.findings.length}${errored ? ` — ⚠️ ${errored} check(s) errored: ${erroredCheckIds.join(', ')}` : ''}`);
   });
 }
 

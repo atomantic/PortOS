@@ -76,10 +76,19 @@ vi.mock('./manuscriptReview.js', () => ({
 // Drives whether the reverse-outline refresh step (#1349) thinks a scene-consuming
 // check is enabled. Default false so the existing conductor runs skip it cheaply.
 let reverseOutlineConsumed = false;
+// Drives the perCheck array the editorial-checks pass sees, so a test can inject
+// an errored check and assert it surfaces in the run summary (#1573).
+let editorialChecksPerCheck = [];
 const checkRunnerSpies = {
-  runEditorialChecks: vi.fn(async () => ({ runId: 'ec', findings: [], perCheck: [], canceled: false })),
+  runEditorialChecks: vi.fn(async () => ({ runId: 'ec', findings: [], perCheck: editorialChecksPerCheck, canceled: false })),
   buildEditorialCheckPlan: vi.fn(async () => ({ seriesId: 's', checks: [], enabledCount: 0, consumesReverseOutline: reverseOutlineConsumed })),
   enabledChecksConsumeReverseOutline: vi.fn(() => reverseOutlineConsumed),
+  // Real pure impl (the module is fully mocked) so the SUT's error-summarizing
+  // matches production behavior without pulling checkRunner's heavy imports.
+  summarizeCheckErrors: (perCheck) => {
+    const erroredCheckIds = (Array.isArray(perCheck) ? perCheck : []).filter((c) => c?.error).map((c) => c.checkId);
+    return { errored: erroredCheckIds.length, erroredCheckIds };
+  },
 };
 vi.mock('./editorial/checkRunner.js', () => checkRunnerSpies);
 
@@ -166,6 +175,7 @@ beforeEach(() => {
   canonUndescribed = [];
   reverseOutlineConsumed = false;
   reverseOutlineState = { status: 'complete', stale: false };
+  editorialChecksPerCheck = [];
   nextTaskId = 0;
   autopilot.__testing.runs.clear();
   vi.clearAllMocks();
@@ -1075,6 +1085,34 @@ describe('autopilot conductor', () => {
     // Nothing was filed (fileGaps off), so the run stays a clean complete.
     expect(done?.craftGapIssues).toBe(0);
     expect(done?.craftGapFindings).toBe(0);
+  });
+
+  it('flags errored editorial checks on the terminal complete frame + marker (#1573)', async () => {
+    editorialChecksPerCheck = [
+      { checkId: 'pacing', count: 0, error: 'provider timeout' },
+      { checkId: 'continuity', count: 2 },
+    ];
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { includeVisual: false });
+    await waitFor(runFinished(seriesId));
+    const done = autopilot.__testing.runs.get(seriesId)?.lastPayload;
+    expect(done?.type).toBe('complete');
+    expect(done?.editorialCheckErrors).toBe(1);
+    expect(done?.editorialCheckErroredIds).toEqual(['pacing']);
+    const marker = (await seriesSvc.getSeries(seriesId)).autopilot;
+    expect(marker.status).toBe('done');
+    expect(marker.editorialCheckErrors).toBe(1);
+  });
+
+  it('reports a clean complete (no errored checks) when every editorial check ran (#1573)', async () => {
+    editorialChecksPerCheck = [{ checkId: 'pacing', count: 0 }, { checkId: 'continuity', count: 1 }];
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { includeVisual: false });
+    await waitFor(runFinished(seriesId));
+    const done = autopilot.__testing.runs.get(seriesId)?.lastPayload;
+    expect(done?.type).toBe('complete');
+    expect(done?.editorialCheckErrors).toBe(0);
+    expect(done?.editorialCheckErroredIds).toEqual([]);
   });
 
   it('files a CoS gap task when a verify gate stalls (fileGaps)', async () => {

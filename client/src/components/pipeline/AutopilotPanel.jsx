@@ -97,7 +97,7 @@ function frameLabel(f) {
     case 'step:start': return `${stepLabel(f.kind)}…`;
     case 'step:complete': return `${stepLabel(f.kind)} done`;
     case 'step:skip': return `Skipped ${stepLabel(f.kind)}${f.reason ? ` — ${f.reason}` : ''}`;
-    case 'verify:round': return `${f.scope} check — ${f.blocking} blocking of ${f.findings} finding(s)`;
+    case 'verify:round': return `${f.scope} check — ${f.blocking} blocking of ${f.findings} finding(s)${f.errored > 0 ? ` · ⚠️ ${f.errored} errored` : ''}`;
     case 'render:queued': return `Queued draft render: ${f.target}`;
     case 'gap:filed': return `Filed CoS task (${f.gapKind})`;
     case 'paused': return `Paused — ${f.reason}`;
@@ -113,6 +113,9 @@ const RUN_ENDED = new Set(['complete', 'canceled', 'error', 'paused']);
 // #1572 — shared caution tail for a `done` run that filed blocking script-craft
 // gaps, so the completion toast and the persisted-status banner can't drift.
 const craftGapCaution = (n) => `${n} filed script-craft gap${n === 1 ? '' : 's'} — resolve before rendering`;
+// #1573 — a `done` run where an editorial check threw never evaluated that
+// dimension, so "complete" is qualified rather than "production-ready".
+const editorialCheckCaution = (n) => `${n} editorial check${n === 1 ? '' : 's'} errored — review before trusting "clean"`;
 
 function Findings({ items }) {
   if (!items?.length) return null;
@@ -249,6 +252,7 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
     if (latest.type === 'complete') {
       if (latest.dryRun) toast.success('Autopilot plan ready');
       else if (latest.craftGapIssues > 0) toast.warning(`Autopilot complete with ${craftGapCaution(latest.craftGapIssues)}`);
+      else if (latest.editorialCheckErrors > 0) toast.warning(`Autopilot complete — ${editorialCheckCaution(latest.editorialCheckErrors)}`);
       else toast.success('Autopilot complete — draft is production-ready');
     }
     else if (latest.type === 'canceled') toast.success('Autopilot canceled');
@@ -429,18 +433,22 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
           "production-ready" — those gaps still block downstream rendering. */}
       {!active && ap && ap.status && ap.status !== 'idle' && ap.status !== 'running' ? (() => {
         const doneWithGaps = ap.status === 'done' && ap.craftGapIssues > 0;
-        const tone = ap.status === 'paused' || doneWithGaps ? 'warning' : ap.status === 'error' ? 'error' : 'success';
+        // #1573 — a done run with errored editorial checks is a caution too (the
+        // craft-gap message takes precedence when both are present).
+        const doneWithCheckErrors = ap.status === 'done' && !doneWithGaps && ap.editorialCheckErrors > 0;
+        const tone = ap.status === 'paused' || doneWithGaps || doneWithCheckErrors ? 'warning' : ap.status === 'error' ? 'error' : 'success';
         return (
         <div className={`px-3 pb-3 border-t pt-2 ${tone === 'warning' ? 'border-port-warning/30' : tone === 'error' ? 'border-port-error/30' : 'border-port-success/30'}`}>
           <div className="flex items-center gap-2 text-xs">
             {ap.status === 'paused' ? <PauseCircle size={13} className="text-port-warning" />
-              : doneWithGaps ? <AlertCircle size={13} className="text-port-warning" />
+              : doneWithGaps || doneWithCheckErrors ? <AlertCircle size={13} className="text-port-warning" />
                 : ap.status === 'done' ? <CheckCircle2 size={13} className="text-port-success" />
                   : <AlertCircle size={13} className="text-port-error" />}
             <span className={tone === 'warning' ? 'text-port-warning' : tone === 'success' ? 'text-port-success' : 'text-port-error'}>
               {ap.status === 'paused' ? (ap.currentStep ? `Paused at ${stepLabel(ap.currentStep)}` : 'Paused')
                 : doneWithGaps ? `Completed with ${craftGapCaution(ap.craftGapIssues)}`
-                  : ap.status === 'done' ? 'Last run completed — draft is production-ready' : 'Last run errored'}
+                  : doneWithCheckErrors ? `Completed — ${editorialCheckCaution(ap.editorialCheckErrors)}`
+                    : ap.status === 'done' ? 'Last run completed — draft is production-ready' : 'Last run errored'}
             </span>
             {ap.status === 'paused' && ap.pauseKind === 'divergence' ? (
               <span

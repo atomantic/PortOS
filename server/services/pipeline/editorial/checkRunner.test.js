@@ -76,7 +76,7 @@ vi.mock('../reverseOutline.js', () => ({ getReverseOutline: vi.fn(async () => ou
 let editorialState = { characters: [] };
 vi.mock('../editorialAnalysis.js', () => ({ getSeriesEditorial: vi.fn(async () => editorialState) }));
 
-const { runEditorialChecks, buildEditorialCheckPlan, getReviewWithStaleness, enabledChecksConsumeReverseOutline } = await import('./checkRunner.js');
+const { runEditorialChecks, buildEditorialCheckPlan, getReviewWithStaleness, enabledChecksConsumeReverseOutline, summarizeCheckErrors } = await import('./checkRunner.js');
 const { runStagedLLM, resolveStageContext } = await import('../../../lib/stageRunner.js');
 const { collectManuscriptSections } = await import('../arcPlanner.js');
 const { getSeriesCanon } = await import('../seriesCanon.js');
@@ -372,6 +372,23 @@ describe('runEditorialChecks', () => {
     expect(result.findings.some((f) => f.checkId === 'naming.dissimilar-names')).toBe(true);
     const infodump = result.perCheck.find((p) => p.checkId === 'prose.info-dumping');
     expect(infodump.error).toMatch(/provider down/);
+  });
+});
+
+describe('summarizeCheckErrors (#1573)', () => {
+  it('extracts the count + checkIds of errored perCheck entries', () => {
+    const perCheck = [
+      { checkId: 'pacing', count: 0, error: 'provider timeout' },
+      { checkId: 'continuity', count: 2 },
+      { checkId: 'naming', count: 0, skipped: true },
+      { checkId: 'info-dump', error: 'boom' },
+    ];
+    expect(summarizeCheckErrors(perCheck)).toEqual({ errored: 2, erroredCheckIds: ['pacing', 'info-dump'] });
+  });
+
+  it('reports zero for a clean pass and tolerates a non-array', () => {
+    expect(summarizeCheckErrors([{ checkId: 'pacing', count: 1 }])).toEqual({ errored: 0, erroredCheckIds: [] });
+    expect(summarizeCheckErrors(undefined)).toEqual({ errored: 0, erroredCheckIds: [] });
   });
 });
 

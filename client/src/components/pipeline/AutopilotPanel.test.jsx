@@ -169,6 +169,20 @@ describe('AutopilotPanel', () => {
     expect(screen.getByText(/Completed with 1 filed script-craft gap —/i)).toBeInTheDocument();
   });
 
+  it('qualifies a done marker with errored editorial checks as a caution (#1573)', async () => {
+    renderPanel({ id: 's1', targetFormat: 'comic', autopilot: { status: 'done', craftGapIssues: 0, editorialCheckErrors: 2 } });
+    await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
+    expect(screen.getByText(/2 editorial checks errored — review before trusting/i)).toBeInTheDocument();
+    expect(screen.queryByText(/draft is production-ready/i)).not.toBeInTheDocument();
+  });
+
+  it('prefers the craft-gap caution over the editorial-check caution when both are present (#1573)', async () => {
+    renderPanel({ id: 's1', targetFormat: 'comic', autopilot: { status: 'done', craftGapIssues: 1, craftGapFindings: 1, editorialCheckErrors: 1 } });
+    await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
+    expect(screen.getByText(/Completed with 1 filed script-craft gap —/i)).toBeInTheDocument();
+    expect(screen.queryByText(/editorial check/i)).not.toBeInTheDocument();
+  });
+
   it('ignores a stale terminal frame from a previous run when starting again', async () => {
     startPipelineAutopilot.mockResolvedValue({ runId: 'B', mode: 'execute' });
     sseLatest = { type: 'complete', runId: 'A' }; // leftover terminal frame from run A

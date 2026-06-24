@@ -92,7 +92,7 @@ import {
 import * as volumeBeatsRunner from './volumeBeatsRunner.js';
 import * as autoRunner from './autoRunner.js';
 import { seedReviewFromFindings, getReview } from './manuscriptReview.js';
-import { runEditorialChecks, buildEditorialCheckPlan, enabledChecksConsumeReverseOutline } from './editorial/checkRunner.js';
+import { runEditorialChecks, buildEditorialCheckPlan, enabledChecksConsumeReverseOutline, summarizeCheckErrors } from './editorial/checkRunner.js';
 import { generateReverseOutline, getReverseOutline } from './reverseOutline.js';
 import { computeHealth, openBlockers } from './editorialScore.js';
 import { getSettings } from '../settings.js';
@@ -977,7 +977,16 @@ async function runEditorialChecksPass(sId, record) {
   if (result?.canceled || record.cancelRequested) return { canceled: true };
   if (result) {
     if (hasLlmCheck) await recordDomainUsage('cos', { actions: 1 });
-    broadcast(sId, { type: 'verify:round', scope: 'editorialChecks', round: 1, findings: result.findings.length, blocking: 0 });
+    // #1573 — a check whose run() threw is recorded in perCheck.error but the
+    // pass otherwise looks clean. Surface the errored count + failing checkIds on
+    // the round frame and accumulate them onto the run so the terminal summary
+    // can flag a partial failure (no silent "complete").
+    const { errored, erroredCheckIds } = summarizeCheckErrors(result.perCheck);
+    erroredCheckIds.forEach((id) => record.runState.editorialCheckErroredIds.add(id));
+    broadcast(sId, { type: 'verify:round', scope: 'editorialChecks', round: 1, findings: result.findings.length, blocking: 0, errored, erroredCheckIds });
+    if (errored) {
+      console.error(`❌ autopilot: ${errored} editorial check(s) errored — series=${sId.slice(0, 12)} ${erroredCheckIds.join(', ')}`);
+    }
   }
   record.runState.editorialChecksReviewed = true;
   return {};
@@ -1385,6 +1394,10 @@ export async function startSeriesAutopilot(sId, options = {}) {
       // render blockers the user still has to resolve.
       scriptCraftGapIssues: new Set(),
       scriptCraftBlocking: 0,
+      // #1573 — checkIds of editorial checks that threw during this run's checks
+      // pass. Surfaced on the terminal `complete` frame + persisted marker so a
+      // check that errors every run is visible instead of a silent "clean".
+      editorialCheckErroredIds: new Set(),
     },
     activeChild: null,
   };
@@ -1430,9 +1443,15 @@ export async function startSeriesAutopilot(sId, options = {}) {
           // on both the persisted marker and the terminal frame.
           const craftGapIssues = record.runState.scriptCraftGapIssues.size;
           const craftGapFindings = record.runState.scriptCraftBlocking;
-          await persistMarker(sId, { status: 'done', runId, currentStep: null, craftGapIssues, craftGapFindings });
-          broadcast(sId, { type: 'complete', runId, steps: ordinal, craftGapIssues, craftGapFindings, completedAt: new Date().toISOString() });
-          console.log(`✅ autopilot complete — series=${sId.slice(0, 12)} steps=${ordinal}${craftGapIssues ? ` (${craftGapIssues} issue(s) with filed script-craft gaps)` : ''}`);
+          // #1573 — qualify "complete" when an editorial check threw this run: the
+          // run finished, but a check that errored produced no findings, so its
+          // dimension was never actually evaluated. Persist the count + carry the
+          // failing checkIds on the frame so the UI flags it instead of "clean".
+          const editorialCheckErroredIds = [...record.runState.editorialCheckErroredIds];
+          const editorialCheckErrors = editorialCheckErroredIds.length;
+          await persistMarker(sId, { status: 'done', runId, currentStep: null, craftGapIssues, craftGapFindings, editorialCheckErrors });
+          broadcast(sId, { type: 'complete', runId, steps: ordinal, craftGapIssues, craftGapFindings, editorialCheckErrors, editorialCheckErroredIds, completedAt: new Date().toISOString() });
+          console.log(`✅ autopilot complete — series=${sId.slice(0, 12)} steps=${ordinal}${craftGapIssues ? ` (${craftGapIssues} issue(s) with filed script-craft gaps)` : ''}${editorialCheckErrors ? ` (${editorialCheckErrors} editorial check(s) errored: ${editorialCheckErroredIds.join(', ')})` : ''}`);
           return;
         }
 
