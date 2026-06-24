@@ -560,6 +560,23 @@ export function declaredThemesSummary(themes) {
   return `Declared themes (authored on the story arc):\n${lines.join('\n')}`;
 }
 
+// Stage name for the climax / resolution-power LLM check (#1583). Ships in
+// data.reference/prompts/stages/ + stage-config.json (fresh installs via
+// setup-data.js) and migrates to existing installs via migration 131 (boot runs
+// migrations but NOT setup-data, so the migration is required). Reads the stitched
+// manuscript plus the authored reader-map payoffs (series.arc.readerMap) and the
+// declared themes (series.arc.themes) and the reverse-outline scene ordering, and
+// judges whether the CLIMAX is the protagonist's hardest, most active choice (vs.
+// a passive climax where an ally rescues them or events simply resolve around
+// them) AND whether it resolves the story's core problem/theme (vs. a plot climax
+// that lands the action but leaves the emotional/thematic core unanswered).
+// Complements plot.structure-momentum (which flags a passive protagonist arc-wide;
+// this one focuses the lens on the single payoff scene). The climax can only be
+// judged once the whole manuscript is in view, so the run gates its verdict on the
+// final part (`finalPart`); degrades to a prose-only scan when no reader-map,
+// themes, or outline exist.
+export const CLIMAX_AGENCY_STAGE = 'pipeline-editorial-climax-agency';
+
 // Stage name for the unmodeled-proper-nouns LLM check (#1412). Ships in
 // data.reference/prompts/stages/ + stage-config.json (fresh installs via
 // setup-data.js) and migrates to existing installs via migration 116 (boot runs
@@ -3360,6 +3377,84 @@ export const EDITORIAL_CHECKS = [
           + 'and whether it has been paid off yet; and note any strong EMERGENT theme the story '
           + 'is dramatizing that is not in the declared list, so a later chunk can tell a genuinely '
           + 'dropped/undramatized theme from one whose payoff simply has not arrived yet.',
+      });
+    },
+  },
+  {
+    id: 'arc.climax-agency',
+    sources: ['manuscript', 'reverseOutline', 'series.arc.readerMap', 'series.arc.themes'],
+    label: 'Climax / resolution power (passive protagonist at the climax)',
+    description:
+      'LLM scan for a weak climax: the story\'s payoff scene should be the protagonist\'s HARDEST, most ACTIVE choice — the moment they drive the resolution. Flags a passive climax (an ally rescues them, the antagonist self-destructs, a coincidence resolves it, or events simply happen TO the protagonist) and a climax that resolves the PLOT but not the emotional/thematic core the story set up. Reconciles the prose against the authored reader-map payoffs (what the reader was promised) and the declared themes, using the reverse-outline scene map to locate the climax; degrades to a whole-manuscript scan when no reader-map, themes, or outline exists. Complements plot.structure-momentum (passive protagonist arc-wide) by focusing the lens on the single climax scene.',
+    scope: 'series',
+    kind: 'llm',
+    category: 'arc',
+    severityDefault: 'medium',
+    defaultEnabled: true,
+    // Reads the stitched manuscript corpus — so the runner only pays the
+    // section-collection I/O when a manuscript-consuming check is enabled.
+    needsManuscript: true,
+    configSchema: z.object({
+      // Cap findings per run so a long manuscript can't flood the review.
+      maxFindings: z.number().int().min(1).max(50).default(12),
+    }),
+    configFields: [
+      {
+        key: 'maxFindings',
+        label: 'Max findings per run',
+        type: 'number',
+        min: 1,
+        max: 50,
+        step: 1,
+        help: 'Cap findings so a long manuscript can not flood the review.',
+      },
+    ],
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    run: (ctx) => {
+      // All three blocks are fixed per-call overhead (re-sent on each chunk) and
+      // pure context: the authored payoffs name what the reader was PROMISED the
+      // climax would resolve, the declared themes name the thematic core the
+      // resolution must land, and the scene map lets the model LOCATE the climax
+      // scene and attribute the finding to its issue. The check degrades
+      // gracefully — no reader map ⇒ {{#authoredPayoffs}} renders nothing; no
+      // themes ⇒ {{#declaredThemes}} renders nothing; no outline ⇒ {{#sceneMap}}
+      // renders nothing and the model reasons from the prose's own shape.
+      const authoredPayoffs = authoredSetupPayoffSummary(ctx.series?.arc?.readerMap);
+      const declaredThemes = declaredThemesSummary(ctx.series?.arc?.themes);
+      const sceneMap = sceneGroundingSummary(ctx.reverseOutline);
+      return runManuscriptLlmCheck(ctx, {
+        stage: CLIMAX_AGENCY_STAGE,
+        category: 'arc',
+        // sceneMap grows unbounded with scene count; authoredPayoffs and
+        // declaredThemes are bounded — so largest-first trimming absorbs the cut
+        // into sceneMap.
+        context: { authoredPayoffs, declaredThemes, sceneMap },
+        // `isFinal` gates the verdict — the climax is the END of the arc, so it
+        // can only be identified and judged once the whole manuscript is in view.
+        // An earlier chunk can't know which scene is the climax (or whether a
+        // later beat is the real payoff), so it would false-flag. A single-chunk
+        // run is its own final part and judges the whole text.
+        buildVars: (manuscript, meta, c) => ({
+          manuscript,
+          authoredPayoffs: c.authoredPayoffs,
+          declaredThemes: c.declaredThemes,
+          sceneMap: c.sceneMap,
+          finalPart: meta?.isFinal ? 'true' : '',
+        }),
+        // The climax's agency is judged against the whole arc's setup — the
+        // protagonist's tries/failures and the problem they must personally
+        // resolve accrue across the manuscript. The findings digest keeps prior
+        // findings in view so a non-final chunk doesn't pre-flag, and the
+        // clean-setup digest rolls forward the central problem + the protagonist's
+        // pattern of agency so the final chunk can judge whether the climax is
+        // their hardest active choice.
+        crossChunkDigest: true,
+        crossChunkSetup: true,
+        setupFocus: 'Note the central problem/conflict the protagonist must personally resolve, '
+          + 'the thematic question the story is asking, and the protagonist\'s pattern of agency so far '
+          + '(do they drive events or do events happen to them) — so the final chunk can judge whether '
+          + 'the climax is the protagonist\'s hardest, most active choice and whether it lands the '
+          + 'emotional/thematic core, not just the plot.',
       });
     },
   },

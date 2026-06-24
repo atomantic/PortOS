@@ -674,6 +674,13 @@
       "returnsJson": true,
       "variables": []
     },
+    "pipeline-editorial-climax-agency": {
+      "name": "Pipeline — Editorial Check: Climax / resolution power (passive protagonist at the climax)",
+      "description": "Editorial check (#1583): judges whether the CLIMAX is the protagonist's hardest, most active choice (not a passive climax where an ally rescues them, the antagonist self-destructs, or a coincidence resolves the conflict) AND whether it resolves the story's core problem and lands the emotional/thematic argument (not just the surface plot). Reconciles the prose against the authored reader-map payoffs (series.arc.readerMap) and the declared themes (series.arc.themes), using the reverse-outline scene map to locate the climax; gates its verdict on the final manuscript part and degrades to a whole-manuscript scan when no reader-map, themes, or outline exists. Complements plot.structure-momentum. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
     "pipeline-editorial-theme-coherence": {
       "name": "Pipeline — Editorial Check: Theme coherence / thematic throughline",
       "description": "Editorial check (#1317): whether the manuscript actually DELIVERS its declared themes (series.arc.themes), not just states them. Builds a per-theme setup/complication/payoff coverage map, flags a theme that is stated but never dramatized or dropped after the opening, detects a strong EMERGENT theme not in the arc, and checks that the climax lands the thematic argument. Reads the stitched manuscript plus the authored arc themes and the reverse-outline scene map; degrades to a whole-manuscript scan when no outline or no themes exist. Returns issue-anchored findings.",

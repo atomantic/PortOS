@@ -54,6 +54,7 @@ const THEME_COHERENCE = 'theme.coherence';
 const UNMODELED_NAMES = 'roster.unmodeled-names';
 const TIMELINE_CONTRADICTION = 'continuity.timeline-contradiction';
 const CHARACTER_CONSISTENCY = 'character.consistency';
+const CLIMAX_AGENCY = 'arc.climax-agency';
 
 // A minimal valid stored custom-check definition.
 const customDef = (over = {}) => ({
@@ -1156,6 +1157,96 @@ describe('theme.coherence — LLM check (#1317)', () => {
       callStagedLLM: async (_stage, vars) => { finals.push(vars.finalPart); return { content: { findings: [] } }; },
     });
     await getCheck(THEME_COHERENCE).run(ctx);
+    expect(finals).toEqual(['', '', 'true']);
+  });
+});
+
+describe('arc.climax-agency — LLM check (#1583)', () => {
+  const wholeCtx = (overrides = {}) => ({
+    manuscript: '# Issue 1\n\nThe hero waited as the cavalry arrived.',
+    config: { maxFindings: 12 },
+    severityDefault: 'medium',
+    series: { arc: {
+      themes: ['earning forgiveness'],
+      readerMap: { payoffs: [{ label: 'the debt is repaid', note: 'by the protagonist' }] },
+    } },
+    reverseOutline: [{ sequence: 0, issueNumber: 1, heading: 'The siege', setting: 'the gate', charactersPresent: ['Hero'] }],
+    planManuscriptChunks: async () => ['# Issue 1\n\nThe hero waited as the cavalry arrived.'],
+    callStagedLLM: async () => ({ content: { findings: [] } }),
+    ...overrides,
+  });
+
+  it('is registered as a series-scoped LLM check reading manuscript + outline + reader-map + themes', () => {
+    const check = getCheck(CLIMAX_AGENCY);
+    expect(check.kind).toBe('llm');
+    expect(check.scope).toBe('series');
+    expect(check.category).toBe('arc');
+    expect(check.severityDefault).toBe('medium');
+    expect(check.sources).toEqual(['manuscript', 'reverseOutline', 'series.arc.readerMap', 'series.arc.themes']);
+    expect(check.needsManuscript).toBe(true);
+  });
+
+  it('only runs when there is drafted prose to scan', () => {
+    const check = getCheck(CLIMAX_AGENCY);
+    expect(check.gate({ manuscript: '' })).toBe(false);
+    expect(check.gate({ manuscript: '# Issue 1\n\nprose' })).toBeTruthy();
+  });
+
+  it('passes the manuscript, authored payoffs, declared themes, and scene map and forces the arc category', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      planManuscriptChunks: async (_stage, opts) => {
+        // Authored payoffs + declared themes + scene map all ride as trimmable context.
+        expect(opts.context).toHaveProperty('authoredPayoffs');
+        expect(opts.context).toHaveProperty('declaredThemes');
+        expect(opts.context).toHaveProperty('sceneMap');
+        expect(opts.fixedOverheadTokens).toBeGreaterThan(0);
+        return ['# Issue 1\n\nThe hero waited as the cavalry arrived and won the day.'];
+      },
+      callStagedLLM: async (_stage, vars) => {
+        seenVars = vars;
+        return { content: { findings: [{ severity: 'high', issueNumber: 1, location: 'Issue 1 climax — agency', problem: 'The cavalry, not the hero, resolves the conflict' }] } };
+      },
+    });
+    const findings = await getCheck(CLIMAX_AGENCY).run(ctx);
+    expect(seenVars.manuscript).toBe('# Issue 1\n\nThe hero waited as the cavalry arrived and won the day.');
+    expect(seenVars.authoredPayoffs).toContain('the debt is repaid');
+    expect(seenVars.declaredThemes).toContain('earning forgiveness');
+    expect(seenVars.sceneMap).toContain('Issue 1: The siege');
+    expect(findings).toHaveLength(1);
+    expect(findings[0].category).toBe('arc');
+    expect(findings[0].location).toBe('Issue 1 climax — agency');
+  });
+
+  it('passes empty context vars when the series has no reader-map, themes, or outline', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      series: {},
+      reverseOutline: undefined,
+      callStagedLLM: async (_stage, vars) => { seenVars = vars; return { content: { findings: [] } }; },
+    });
+    await getCheck(CLIMAX_AGENCY).run(ctx);
+    expect(seenVars.authoredPayoffs).toBe('');
+    expect(seenVars.declaredThemes).toBe('');
+    expect(seenVars.sceneMap).toBe('');
+  });
+
+  it('marks a single-chunk run as the final part so the climax verdict is enabled', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      callStagedLLM: async (_stage, vars) => { seenVars = vars; return { content: { findings: [] } }; },
+    });
+    await getCheck(CLIMAX_AGENCY).run(ctx);
+    expect(seenVars.finalPart).toBe('true');
+  });
+
+  it('flags only the LAST part as final across a chunked manuscript', async () => {
+    const finals = [];
+    const ctx = wholeCtx({
+      planManuscriptChunks: async () => ['# Issue 1\n\np1', '# Issue 2\n\np2', '# Issue 3\n\np3'],
+      callStagedLLM: async (_stage, vars) => { finals.push(vars.finalPart); return { content: { findings: [] } }; },
+    });
+    await getCheck(CLIMAX_AGENCY).run(ctx);
     expect(finals).toEqual(['', '', 'true']);
   });
 });
