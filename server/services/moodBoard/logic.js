@@ -15,6 +15,7 @@ import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { compareNewerWins } from '../../lib/lwwTimestamp.js';
 import { sanitizeSoftDeleteFields } from '../../lib/syncWire.js';
+import { localImageFilename, assetBasename } from '../../lib/localImageFilename.js';
 
 const isStr = (v) => typeof v === 'string';
 
@@ -111,21 +112,21 @@ const APP_IMAGE_URL_PREFIXES = Object.freeze([
  * bare ref directly); this covers only the `imageUrl` pointer.
  */
 export function imageUrlToAppAsset(imageUrl) {
+  // Gallery images (the `/data/images/` mount or a bare/relative legacy ref) and
+  // every rejection — empty/non-string, external URL (`http(s)://…`/`data:`/
+  // `blob:`), and any other absolute path — are exactly the shared resolver's
+  // contract, so delegate to it instead of re-deriving them here.
+  const galleryFilename = localImageFilename(imageUrl);
+  if (galleryFilename) return { kind: 'image', filename: galleryFilename };
+  // localImageFilename returned null: external/empty (nothing to ship) or a
+  // non-gallery absolute path. The only served-asset dir it doesn't cover is
+  // image-refs — resolve that here, sharing the basename primitive.
   if (!isStr(imageUrl)) return null;
   const url = imageUrl.trim();
-  if (!url) return null;
-  if (/^(https?:|data:|blob:)/i.test(url)) return null;
-  const baseOf = (s) => {
-    const cut = s.split(/[?#]/)[0].split('/').pop();
-    return cut || null;
-  };
-  if (!url.startsWith('/')) {
-    const filename = baseOf(url); // bare/relative → gallery image (legacy shape)
-    return filename ? { kind: 'image', filename } : null;
-  }
   for (const [prefix, kind] of APP_IMAGE_URL_PREFIXES) {
+    if (kind === 'image') continue; // gallery is handled by localImageFilename above
     if (url.startsWith(prefix)) {
-      const filename = baseOf(url.slice(prefix.length));
+      const filename = assetBasename(url.slice(prefix.length));
       return filename ? { kind, filename } : null;
     }
   }
