@@ -3471,11 +3471,25 @@ export const EDITORIAL_CHECKS = [
         // their hardest active choice.
         crossChunkDigest: true,
         crossChunkSetup: true,
+        // The setup digest is a separate rolling-summary call (buildSetupDigestPrompt)
+        // whose output is fed into the FINAL chunk's prompt. The climax can land in a
+        // non-final chunk (followed by a denouement chunk), so the digest must carry
+        // the climax CANDIDATE forward — including a short verbatim snippet and who
+        // resolves it — or the final chunk would have only tail text + a summary and
+        // could neither judge nor quote the climax. This is what lets the final-part
+        // verdict stay accurate even when the climax is not physically in the last
+        // chunk (closing the false-negative the strict non-final gate would otherwise
+        // introduce).
         setupFocus: 'Note the central problem/conflict the protagonist must personally resolve, '
           + 'the thematic question the story is asking, and the protagonist\'s pattern of agency so far '
-          + '(do they drive events or do events happen to them) — so the final chunk can judge whether '
-          + 'the climax is the protagonist\'s hardest, most active choice and whether it lands the '
-          + 'emotional/thematic core, not just the plot.',
+          + '(do they drive events or do events happen to them). CRUCIALLY: track the single most '
+          + 'decisive turning/resolution scene seen so far as the CLIMAX CANDIDATE — record a SHORT '
+          + 'verbatim snippet (≤ 200 chars) of its decisive moment, which issue it is in, WHO drives the '
+          + 'resolution (the protagonist through a hard choice, or an ally/coincidence/the antagonist '
+          + 'self-destructing), and which core problem/theme it resolves — and REPLACE it only when a '
+          + 'later, higher-stakes resolution scene supersedes it. This lets the final part judge the '
+          + 'climax\'s agency + resolution power and quote it even if the climax is not physically in the '
+          + 'last chunk.',
       });
     },
   },

@@ -78,16 +78,24 @@ in each header to attribute every finding to its `issueNumber`.
 
 {{#finalPart}}
 This is the FINAL part of the manuscript — the whole story is now in view, so the
-climax can be identified and judged. Make your climax verdict here.
+climax can be identified and judged. Make your climax verdict here. **The climax
+may have appeared in an EARLIER part, not in the text below.** When it did, the
+"setup so far" digest above carries it forward as the CLIMAX CANDIDATE — its
+verbatim snippet, its issue, who drives the resolution, and the core problem it
+resolves. Judge that carried-forward climax (and use its snippet as your
+`anchorQuote`) rather than forcing the verdict onto a quieter denouement scene
+that merely happens to be last. If the climax is in the text below, judge and
+quote it directly.
 {{/finalPart}}
 {{^finalPart}}
 This is NOT the final part of the manuscript. The climax is a SINGLE whole-story
 event that can only be identified once the entire story is in view — and an
 earlier high-stakes scene (a mid-story battle, a per-issue turning point, a false
-victory) is NOT the climax, no matter how complete it looks in isolation. Do NOT
-report any climax finding in this part — return an empty `findings` array. The
-central problem and the protagonist's pattern of agency are carried forward and
-judged once the final part is in view.
+victory) is NOT necessarily the climax, no matter how complete it looks in
+isolation. Do NOT report any climax finding in this part — return an empty
+`findings` array. The most decisive resolution scene seen so far is carried
+forward as the climax candidate (with its verbatim snippet and who resolves it)
+and judged once the final part is in view.
 {{/finalPart}}
 
 ```
