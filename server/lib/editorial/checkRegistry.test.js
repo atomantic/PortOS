@@ -28,6 +28,7 @@ import {
   EDITORIAL_SETUP_DIGEST_CHARS,
   EDITORIAL_SETUP_DIGEST_SOURCE,
   authoredSetupPayoffSummary,
+  authoredPayoffsSummary,
   authoredCliffhangerSummary,
   sceneGroundingSummary,
   characterVoiceProfiles,
@@ -699,6 +700,34 @@ describe('authoredSetupPayoffSummary (#1299)', () => {
   });
 });
 
+describe('authoredPayoffsSummary (#1583)', () => {
+  it('returns an empty string when there are no authored payoffs', () => {
+    expect(authoredPayoffsSummary(null)).toBe('');
+    expect(authoredPayoffsSummary({})).toBe('');
+    expect(authoredPayoffsSummary({ payoffs: [] })).toBe('');
+    // Hooks alone do NOT produce a payoffs block — a hook is not a climax obligation.
+    expect(authoredPayoffsSummary({ hooks: [{ label: 'Who killed the duke?' }] })).toBe('');
+  });
+
+  it('renders ONLY the payoffs (never the hooks), with an arc-position hint when present', () => {
+    const out = authoredPayoffsSummary({
+      hooks: [{ label: 'Who killed the duke?' }],
+      payoffs: [{ label: 'The butler confesses', note: 'Issue 8', atArcPosition: 9 }, { label: 'The heir returns' }],
+    });
+    expect(out).toContain('Authored payoffs');
+    expect(out).toContain('- The butler confesses — Issue 8 (arc position 9)');
+    expect(out).toContain('- The heir returns');
+    // The hook must never leak into the payoffs block.
+    expect(out).not.toContain('Who killed the duke?');
+    expect(out).not.toContain('Authored hooks');
+  });
+
+  it('drops entries with neither label nor note and falls back to note-only', () => {
+    const out = authoredPayoffsSummary({ payoffs: [{ atArcPosition: 3 }, { note: 'a quiet reckoning' }] });
+    expect(out).toContain('- a quiet reckoning');
+  });
+});
+
 describe('plot.structure-momentum — LLM check (#1310)', () => {
   const wholeCtx = (overrides = {}) => ({
     manuscript: '# Issue 1\n\nThings happened to her, and then more things happened.',
@@ -1168,7 +1197,10 @@ describe('arc.climax-agency — LLM check (#1583)', () => {
     severityDefault: 'medium',
     series: { arc: {
       themes: ['earning forgiveness'],
-      readerMap: { payoffs: [{ label: 'the debt is repaid', note: 'by the protagonist' }] },
+      readerMap: {
+        hooks: [{ label: 'who burned the village?' }],
+        payoffs: [{ label: 'the debt is repaid', note: 'by the protagonist' }],
+      },
     } },
     reverseOutline: [{ sequence: 0, issueNumber: 1, heading: 'The siege', setting: 'the gate', charactersPresent: ['Hero'] }],
     planManuscriptChunks: async () => ['# Issue 1\n\nThe hero waited as the cavalry arrived.'],
@@ -1211,6 +1243,9 @@ describe('arc.climax-agency — LLM check (#1583)', () => {
     const findings = await getCheck(CLIMAX_AGENCY).run(ctx);
     expect(seenVars.manuscript).toBe('# Issue 1\n\nThe hero waited as the cavalry arrived and won the day.');
     expect(seenVars.authoredPayoffs).toContain('the debt is repaid');
+    // Only PAYOFFS feed the climax check — a planted hook is not a climax
+    // obligation, so it must NOT appear in the authoredPayoffs block (#1583).
+    expect(seenVars.authoredPayoffs).not.toContain('who burned the village?');
     expect(seenVars.declaredThemes).toContain('earning forgiveness');
     expect(seenVars.sceneMap).toContain('Issue 1: The siege');
     expect(findings).toHaveLength(1);
