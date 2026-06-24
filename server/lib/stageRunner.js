@@ -84,6 +84,33 @@ export function resolveModel(provider, modelHint) {
   return modelHint;
 }
 
+// Compose the model hint for a stage with soft-default awareness (#1558).
+//
+// The model dimension is NOT symmetric with the provider dimension. A
+// `stage.provider` is opt-in — almost no stage sets one — so a run-level
+// `providerDefault` applies to the common (unpinned) case and only loses to the
+// rare deliberate `stage.provider` pin. But nearly every stage in the shipped
+// `stage-config.json` carries a `stage.model` *tier* value (`default`/`quick`/
+// `coding`/`heavy`) — that tier is the model-dimension equivalent of "no
+// provider pinned", a default mapping, NOT a deliberate per-stage model choice.
+// So a run-level `modelDefault` must OVERRIDE a stage's tier (otherwise
+// launching Series Autopilot with a model would be a no-op on ~every stage),
+// while still LOSING to a deliberate explicit-model pin (an actual model id like
+// `lmstudio:gptoss-20b`, the case #1558 set out to protect).
+//
+// Precedence, strongest first:
+//   1. modelOverride        — hard per-call model id (manual "regenerate with model X")
+//   2. explicit stage.model — a deliberate pin (non-tier model id) beats the run default
+//   3. modelDefault         — the run-level soft default (Series Autopilot's run model)
+//   4. stage.model tier     — the stage's default tier mapping (default/quick/coding/heavy)
+//   5. provider default     — resolveModel's own fallback
+function resolveModelHint(stage, options = {}) {
+  const stageModel = stage?.model;
+  const stagePin = stageModel && !isTierName(stageModel) ? stageModel : null;
+  const stageTier = isTierName(stageModel) ? stageModel : null;
+  return options.modelOverride || stagePin || options.modelDefault || stageTier || null;
+}
+
 // A conservative-large window assumed for frontier CLI / cloud-API providers
 // that haven't declared one. 128K is below every current frontier model's real
 // ceiling (Claude/GPT/Gemini are ≥128K, often ~1M), so it means "a typical
@@ -170,7 +197,7 @@ export function effectiveContextWindow(provider, model) {
 export async function resolveStageContext(stageName, options = {}) {
   const stage = getStage(stageName);
   const provider = await resolveProviderForStage(stage, options);
-  const requestedModel = resolveModel(provider, options.modelOverride || stage?.model || options.modelDefault);
+  const requestedModel = resolveModel(provider, resolveModelHint(stage, options));
   const model = resolveEffectiveModel(provider, requestedModel);
   return { provider, model, contextWindow: effectiveContextWindow(provider, model) };
 }
@@ -316,11 +343,13 @@ export function extractJson(text, { promptToStrip } = {}) {
  *   - providerDefault: blanket run-level provider id used ONLY when the stage has
  *     no pin of its own; loses to stage.provider and falls through to the active
  *     provider if unavailable (see resolveProviderForStage)
- *   - modelOverride: explicit model id (hard), beats stage.model
- *   - modelDefault: blanket run-level model id used ONLY when the stage has no
- *     `model` pin of its own and no `modelOverride` was given; the model-dimension
- *     analog of `providerDefault` (Series Autopilot, #1558). Precedence in
- *     resolveModel: modelOverride > stage.model > modelDefault > provider default.
+ *   - modelOverride: explicit model id (hard), beats everything
+ *   - modelDefault: blanket run-level model id (Series Autopilot's run model,
+ *     #1558). Soft: it OVERRIDES a stage's tier value (default/quick/coding/heavy)
+ *     but LOSES to a deliberate explicit-model pin (a non-tier model id) and to a
+ *     hard modelOverride. See resolveModelHint for the full precedence — the model
+ *     dimension is deliberately NOT symmetric with providerDefault because nearly
+ *     every stage carries a tier value while stage.provider is opt-in.
  *   - timeoutOverride: explicit ms timeout, beats stage.timeout and the provider default
  *   - returnsJson: parse `content` via `extractJson` before returning
  *   - source: free-form tag persisted on the run record (e.g. 'pipeline-text-stage',
@@ -381,7 +410,7 @@ export async function runStageScopedInlineLLM(stageName, prompt, options = {}) {
  */
 async function executeStagePrompt({ stage, label, prompt, options }) {
   const provider = await resolveProviderForStage(stage, options);
-  const resolvedModel = resolveModel(provider, options.modelOverride || stage?.model || options.modelDefault);
+  const resolvedModel = resolveModel(provider, resolveModelHint(stage, options));
   // resolveEffectiveModel gates the override per provider type and, for
   // CLI providers with a baked --model/-m flag in args, extracts the
   // args-pinned model id so the run record + log line reflect what

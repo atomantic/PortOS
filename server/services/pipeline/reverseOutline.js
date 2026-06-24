@@ -231,8 +231,8 @@ async function buildManuscriptCorpus(seriesId) {
  *     (#1349/#1514): loses to a per-stage pin and soft-falls-through to active
  *     when unavailable, unlike the hard providerId
  *   - modelIdDefault — Series Autopilot's run model as a SOFT default (#1558):
- *     loses to a per-stage `model` pin, the model-dimension analog of
- *     providerIdDefault, unlike the hard model
+ *     overrides the stage's tier value but loses to a deliberate explicit-model
+ *     pin (and to the hard model). See stageRunner.resolveModelHint.
  *   - force — re-segment even when the manuscript hash is unchanged
  *   - signal — AbortSignal checked before the persist
  */

@@ -506,9 +506,12 @@ async function fileGap(record, sId, { gapKind, issueId = null, summary, context 
 // on stageRunner's soft channel (`providerDefault` tier 3 / `modelDefault`): it
 // applies only to UNPINNED stages and soft-falls-through (to the active provider
 // / the provider's default model) when unavailable, rather than throwing
-// PROVIDER_OVERRIDE_UNAVAILABLE or beating a stage's deliberate `model` pin the
-// way a hard override would. Before #1558 the model was still threaded as a hard
-// `modelOverride`, which let the run model beat a pinned stage's own model.
+// PROVIDER_OVERRIDE_UNAVAILABLE or beating a stage's deliberate pin the way a
+// hard override would. For the model dimension "unpinned" means a stage carrying
+// only a *tier* value (default/quick/coding/heavy) — the run model overrides the
+// tier but still loses to a deliberate explicit-model pin (see
+// stageRunner.resolveModelHint). Before #1558 the model was threaded as a hard
+// `modelOverride`, which let the run model beat even an explicit stage pin.
 //
 // Two shapes because the delegated services disagree on field names: the
 // arc/episode/verify passes take `providerDefault`/`modelDefault`; the child
