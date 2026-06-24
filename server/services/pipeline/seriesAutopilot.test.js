@@ -544,6 +544,45 @@ async function seedComplete({ script = VALID_SCRIPT } = {}) {
   return { seriesId: series.id, seasonId, issueId: issue.id };
 }
 
+describe('trackConvergence (pure divergence/oscillation guard — #1571)', () => {
+  const { trackConvergence, DIVERGENCE_PATIENCE } = autopilot;
+
+  // Fold a sequence of per-round blocking counts into the final tracker state.
+  const fold = (counts) => counts.reduce(trackConvergence, { best: null, sinceBest: 0 });
+
+  it('seeds best on the first measured round (nothing to compare yet)', () => {
+    expect(trackConvergence({ best: null, sinceBest: 0 }, 5)).toEqual({ best: 5, sinceBest: 0 });
+  });
+
+  it('resets sinceBest on a new low (a profitable resolve pass)', () => {
+    expect(trackConvergence({ best: 5, sinceBest: 1 }, 3)).toEqual({ best: 3, sinceBest: 0 });
+  });
+
+  it('accrues sinceBest on a stall (equal to the best)', () => {
+    expect(trackConvergence({ best: 4, sinceBest: 0 }, 4)).toEqual({ best: 4, sinceBest: 1 });
+  });
+
+  it('accrues sinceBest on a regression (a fix introduced a new blocker)', () => {
+    expect(trackConvergence({ best: 2, sinceBest: 0 }, 5)).toEqual({ best: 2, sinceBest: 1 });
+  });
+
+  it('a strictly-decreasing run never diverges', () => {
+    expect(fold([4, 3, 2, 1]).sinceBest).toBeLessThan(DIVERGENCE_PATIENCE);
+  });
+
+  it('a flat stall reaches the patience threshold after two non-improving rounds', () => {
+    // round 1 seeds best=3; rounds 2 + 3 don't improve → sinceBest hits patience.
+    expect(fold([3, 3]).sinceBest).toBeLessThan(DIVERGENCE_PATIENCE);
+    expect(fold([3, 3, 3]).sinceBest).toBeGreaterThanOrEqual(DIVERGENCE_PATIENCE);
+  });
+
+  it('catches a 2-cycle oscillation a naive prev-round check would miss (#1571)', () => {
+    // 5→4→5→4: after round 2 sets best=4, no later round beats it, so sinceBest
+    // climbs past patience even though every other round "decreases" vs the prior.
+    expect(fold([5, 4, 5, 4]).sinceBest).toBeGreaterThanOrEqual(DIVERGENCE_PATIENCE);
+  });
+});
+
 describe('autopilot conductor', () => {
   it('rejects start when the cos domain is off (no run created)', async () => {
     cosMode = 'off';
@@ -598,15 +637,64 @@ describe('autopilot conductor', () => {
   });
 
   it('uses the persisted maxArcVerifyRounds setting when no per-run override is given', async () => {
-    verifyFindings = [{ severity: 'high', problem: 'plot hole', location: 'V1' }];
+    // Strictly-decreasing blocking counts (4→3→2→1) so the loop runs to the cap
+    // WITHOUT tripping the divergence guard (#1571) — this asserts the persisted
+    // *setting* drives the round cap. mockImplementationOnce is self-consuming, so
+    // it can't leak its impl into the next test the way mockImplementation would
+    // (beforeEach's clearAllMocks keeps implementations).
+    const holes = (n) => Array.from({ length: n }, (_, i) => ({ severity: 'high', problem: `hole ${i}`, location: 'V1' }));
+    arcSpies.verifyArc
+      .mockImplementationOnce(async () => ({ issues: holes(4) }))
+      .mockImplementationOnce(async () => ({ issues: holes(3) }))
+      .mockImplementationOnce(async () => ({ issues: holes(2) }))
+      .mockImplementationOnce(async () => ({ issues: holes(1) }));
     getSettings.mockImplementation(async () => ({ pipelineEditorialChecks: { maxArcVerifyRounds: 4 } }));
     const { seriesId } = await seedComplete();
     await autopilot.startSeriesAutopilot(seriesId, {}); // no per-run rounds — settings drives it
     await waitFor(runFinished(seriesId));
-    // 4 verify rounds (the persisted setting), 3 resolves, then a pause.
+    // 4 verify rounds (the persisted setting), 3 resolves, then a maxRounds pause.
     expect(arcSpies.verifyArc).toHaveBeenCalledTimes(4);
     expect(arcSpies.resolveVerifyIssues).toHaveBeenCalledTimes(3);
-    expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('paused');
+    const last = autopilot.__testing.runs.get(seriesId)?.lastPayload;
+    expect(last?.type).toBe('paused');
+    expect(last?.pauseKind).toBe('maxRounds');
+  });
+
+  it('stops early with a divergence pause when a verify gate stops converging (#1571)', async () => {
+    // Raised cap, but the resolve passes never reduce the blocking count, so the
+    // divergence guard bails at round 3 (patience 2) instead of burning all 6
+    // rounds + budget. Distinct pauseKind so the UI can say "needs a human", not
+    // "ran out of rounds".
+    verifyFindings = [{ severity: 'high', problem: 'plot hole', location: 'V1' }];
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { maxArcVerifyRounds: 6 });
+    await waitFor(runFinished(seriesId));
+    const last = autopilot.__testing.runs.get(seriesId)?.lastPayload;
+    expect(last?.type).toBe('paused');
+    expect(last?.scope).toBe('verifyArc');
+    expect(last?.pauseKind).toBe('divergence');
+    expect(last?.reason).toMatch(/stopped converging/);
+    // Bailed at round 3 — NOT all 6 rounds (the whole point: budget saved).
+    expect(arcSpies.verifyArc).toHaveBeenCalledTimes(3);
+    expect(arcSpies.resolveVerifyIssues).toHaveBeenCalledTimes(2);
+    const series = await seriesSvc.getSeries(seriesId);
+    expect(series.autopilot?.status).toBe('paused');
+    // Persisted through sanitizeAutopilot so the resume banner survives a reload.
+    expect(series.autopilot?.pauseKind).toBe('divergence');
+  });
+
+  it('a default-cap arc run is unaffected by the divergence guard (maxRounds still wins)', async () => {
+    // Default arc cap is 3; the divergence streak can't reach patience (2) before
+    // the loop hits maxRounds at round 3, so a stalled default run still reports
+    // `maxRounds`, not `divergence` — no behavior change for default runs.
+    verifyFindings = [{ severity: 'high', problem: 'plot hole', location: 'V1' }];
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, {}); // default MAX_ARC_VERIFY_ROUNDS = 3
+    await waitFor(runFinished(seriesId));
+    const last = autopilot.__testing.runs.get(seriesId)?.lastPayload;
+    expect(last?.type).toBe('paused');
+    expect(last?.pauseKind).toBe('maxRounds');
+    expect(arcSpies.verifyArc).toHaveBeenCalledTimes(3);
   });
 
   it('a per-run override beats the persisted maxArcVerifyRounds setting', async () => {
