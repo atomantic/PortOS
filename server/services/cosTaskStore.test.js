@@ -215,6 +215,35 @@ describe('cosTaskStore.updateTask', () => {
     expect(reopened.metadata.blockedCategory).toBeUndefined();
   });
 
+  it('releases the federation claim/lease when a task leaves in_progress (#1563)', async () => {
+    await addTask({ description: 'claimed', id: 'task-claimed' }, 'user');
+    // Spawn-time claim: status in_progress carries the claim metadata.
+    const claimed = await updateTask('task-claimed', {
+      status: 'in_progress',
+      metadata: { claimedBy: 'instance-a', claimedAt: '2026-01-01T00:00:00.000Z', leaseExpiresAt: '2026-01-01T00:30:00.000Z' }
+    }, 'user');
+    expect(claimed.metadata.claimedBy).toBe('instance-a');
+    // Completing the task strips the claim so it is freely re-claimable.
+    const done = await updateTask('task-claimed', { status: 'completed' }, 'user');
+    expect(done.metadata.claimedBy).toBeUndefined();
+    expect(done.metadata.claimedAt).toBeUndefined();
+    expect(done.metadata.leaseExpiresAt).toBeUndefined();
+  });
+
+  it('keeps the claim while the task stays in_progress (lease renewal, no status change) (#1563)', async () => {
+    await addTask({ description: 'renew', id: 'task-renew' }, 'user');
+    await updateTask('task-renew', {
+      status: 'in_progress',
+      metadata: { claimedBy: 'instance-a', claimedAt: '2026-01-01T00:00:00.000Z', leaseExpiresAt: '2026-01-01T00:30:00.000Z' }
+    }, 'user');
+    // A heartbeat renewal passes no status — the claim must survive and update.
+    const renewed = await updateTask('task-renew', {
+      metadata: { claimedBy: 'instance-a', claimedAt: '2026-01-01T00:00:00.000Z', leaseExpiresAt: '2026-01-01T01:00:00.000Z' }
+    }, 'user');
+    expect(renewed.metadata.claimedBy).toBe('instance-a');
+    expect(renewed.metadata.leaseExpiresAt).toBe('2026-01-01T01:00:00.000Z');
+  });
+
   it('returns an error object when the file is missing', async () => {
     const result = await updateTask('task-x', { status: 'completed' }, 'user');
     expect(result.error).toBe('Task file not found');

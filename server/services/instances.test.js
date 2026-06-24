@@ -148,6 +148,32 @@ describe('instances.js', () => {
     });
   });
 
+  describe('ensureInstanceId (#1563)', () => {
+    // getInstanceId caches the resolved id at module scope, so isolate each
+    // case with a fresh module instance to exercise the cold path deterministically.
+    it('returns the existing id without creating a new identity (warm path)', async () => {
+      readJSONFile.mockResolvedValue({ self: { instanceId: 'warm-id', name: 'host' }, peers: [] });
+      vi.resetModules();
+      const fresh = await import('./instances.js');
+      const id = await fresh.ensureInstanceId();
+      expect(id).toBe('warm-id');
+      // No write — the identity already existed.
+      expect(atomicWrite).not.toHaveBeenCalled();
+    });
+
+    it('creates a real identity on the cold path instead of returning the unknown sentinel', async () => {
+      readJSONFile.mockResolvedValue({ self: null, peers: [] });
+      vi.resetModules();
+      const fresh = await import('./instances.js');
+      const id = await fresh.ensureInstanceId();
+      expect(id).not.toBe('unknown');
+      expect(typeof id).toBe('string');
+      expect(id.length).toBeGreaterThan(0);
+      // ensureSelf persisted the freshly-created identity.
+      expect(atomicWrite).toHaveBeenCalled();
+    });
+  });
+
   describe('updateSelf', () => {
     it('should update name when self exists', async () => {
       readJSONFile.mockResolvedValue({

@@ -27,7 +27,8 @@ import { extractCodexAssistantTail } from '../lib/codexAssistantExtract.js';
 import { buildTuiSpawnConfig, spawnTuiAgent } from './agentTuiSpawning.js';
 import { processAgentCompletion } from './agentCompletion.js';
 import { releaseAppReviewMarker } from './appActivity.js';
-import { getInstanceId, ensureSelf, UNKNOWN_INSTANCE_ID } from './instances.js';
+import { ensureInstanceId } from './instances.js';
+import { isClaimableBy, buildClaim, getClaimOwner } from './cosTaskClaim.js';
 import { runnerAgents, pausedAgents, spawningTasks, useRunner, isTruthyMeta } from './agentState.js';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 
@@ -115,6 +116,19 @@ export async function syncRunnerAgents() {
 export async function spawnAgentForTask(task) {
   if (spawningTasks.has(task.id)) {
     console.log(`⚠️ Task ${task.id} already being spawned, skipping duplicate`);
+    return null;
+  }
+
+  // Cross-instance claim guard (issue #1563, acceptance criterion 2). When this
+  // task list is shared with a federated peer (full-sync mode, #1561), the peer
+  // may already be working this task. Refuse to spawn while another instance
+  // holds a live lease — otherwise both peers spawn an agent for the same task,
+  // create conflicting `cos/<taskId>/<agentId>` worktrees on the same repo, and
+  // race the orphan-reset. This is a no-op for a non-federated install (no claim
+  // metadata) and for re-claiming our own task on retry/resume.
+  const instanceId = await ensureInstanceId();
+  if (!isClaimableBy(task.metadata, instanceId)) {
+    console.log(`🔒 Task ${task.id} is claimed by instance ${getClaimOwner(task.metadata)} (live lease) — skipping spawn on ${instanceId}`);
     return null;
   }
 
@@ -267,18 +281,8 @@ export async function spawnAgentForTask(task) {
     // node pair can attribute each agent + its worktree branch to the instance
     // that produced it.
     //
-    // `getInstanceId()` returns the `UNKNOWN_INSTANCE_ID` sentinel (and never
-    // throws) before the local identity has been created — which can happen on a
-    // boot-time always-on auto-start that spawns an agent before the startup
-    // chain's `ensureSelf()` runs. Persisting that sentinel would leave the
-    // archived agent permanently unattributable, so on the cold path we create
-    // (or load) the real identity here before stamping. The warm path stays a
-    // cheap cached read — `ensureSelf()` only runs the once, when identity is
-    // genuinely missing.
-    let instanceId = await getInstanceId();
-    if (instanceId === UNKNOWN_INSTANCE_ID) {
-      instanceId = (await ensureSelf())?.instanceId || instanceId;
-    }
+    // `instanceId` was resolved up front via `ensureInstanceId()` for the claim
+    // guard, and is reused here so the warm-path cached read happens once.
     await registerAgent(agentId, task.id, {
       instanceId,
       workspacePath,
@@ -321,14 +325,20 @@ export async function spawnAgentForTask(task) {
 
     emitLog('info', `Agent ${agentId} initializing...${worktreeInfo ? ' (worktree)' : ''}${jiraBranchName ? ` (JIRA: ${jiraTicket?.ticketId})` : ''}`, { agentId, taskId: task.id });
 
-    // Mark the task as in_progress and increment total spawn count
+    // Mark the task as in_progress, increment the total spawn count, and stamp
+    // the federation claim (issue #1563). `buildClaim` records this instance as
+    // `claimedBy` with a fresh lease, so a federated peer sharing this task list
+    // sees the task as live-claimed and backs off (the orphan-reset honors the
+    // same lease). The lease is renewed on the health-check heartbeat while the
+    // agent runs and released when the task leaves `in_progress`.
     const newSpawnCount = (Number(task.metadata?.totalSpawnCount) || 0) + 1;
     const updateResult = await updateTask(task.id, {
       status: 'in_progress',
       metadata: {
         ...task.metadata,
         totalSpawnCount: newSpawnCount,
-        lastSpawnedAt: new Date().toISOString()
+        lastSpawnedAt: new Date().toISOString(),
+        ...buildClaim(instanceId)
       }
     }, task.taskType || 'user')
       .catch(err => {

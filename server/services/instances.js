@@ -169,6 +169,25 @@ export async function getInstanceId() {
   return cachedInstanceId;
 }
 
+/**
+ * Resolve this machine's real federation instance id, creating the local
+ * identity on the cold path. `getInstanceId()` returns the
+ * `UNKNOWN_INSTANCE_ID` sentinel (and never throws) before the identity exists
+ * — which can happen on a boot-time always-on auto-start that runs before the
+ * startup chain's `ensureSelf()` does. Callers that stamp the id onto durable
+ * records (agent provenance, worktree metadata) or compare it for cross-machine
+ * task claims (#1563) must never persist/compare the sentinel, so this creates
+ * (or loads) the real identity before returning. The warm path is the cheap
+ * cached `getInstanceId()` read; `ensureSelf()` only runs the once.
+ */
+export async function ensureInstanceId() {
+  let instanceId = await getInstanceId();
+  if (instanceId === UNKNOWN_INSTANCE_ID) {
+    instanceId = (await ensureSelf())?.instanceId || instanceId;
+  }
+  return instanceId;
+}
+
 export async function updateSelf(name, { defaultPeerFullSync } = {}) {
   return withData(async (data) => {
     if (!data.self) return null;

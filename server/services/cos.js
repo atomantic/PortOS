@@ -56,6 +56,8 @@ export { runHealthCheck, getHealthStatus };
 // dequeueNextTask so the spawn-side logic stays here, not in the store.
 import { firstLine, PRIORITY_VALUES, getUserTasks, getCosTasks, getAllTasks, getTasks, getTaskById, addTask, updateTask, deleteTask, reorderTasks, approveTask } from './cosTaskStore.js';
 export { firstLine, getUserTasks, getCosTasks, getAllTasks, getTasks, getTaskById, addTask, updateTask, deleteTask, reorderTasks, approveTask };
+import { ensureInstanceId } from './instances.js';
+import { isHeldByOther, buildRenewal, buildClaim, getClaimOwner } from './cosTaskClaim.js';
 
 const AGENT_ARCHIVE_RETENTION_DAYS = 90;
 const RESUME_DEQUEUE_DELAY_MS = 500;
@@ -482,6 +484,12 @@ async function resetOrphanedTasks() {
   const state = await loadState();
   const { user: userTaskData, cos: cosTaskData } = await getAllTasks();
 
+  // This machine's federation identity, for the cross-instance lease checks
+  // below (issue #1563). `ensureInstanceId()` resolves the real id on the cold
+  // path so a boot-time orphan-reset never compares against the `unknown`
+  // sentinel.
+  const instanceId = await ensureInstanceId();
+
   const runningAgentTaskIds = Object.values(state.agents)
     .filter(a => a.status === 'running')
     .map(a => a.taskId);
@@ -515,7 +523,23 @@ async function resetOrphanedTasks() {
 
   const processOrphanedTasks = async (tasks) => {
     for (const task of tasks) {
-      if (runningAgentTaskIds.includes(task.id)) continue;
+      if (runningAgentTaskIds.includes(task.id)) {
+        // A local agent is actively working this task — renew its federation
+        // lease (the heartbeat, issue #1563) so a peer sharing this task list
+        // keeps seeing it as live-claimed across a long run instead of treating
+        // it as orphaned once the original lease window elapses. We can only
+        // hold a lease we own (or freshly claim an unclaimed legacy task); never
+        // steal a lease another instance owns.
+        const owner = getClaimOwner(task.metadata);
+        const renewal = owner === instanceId
+          ? buildRenewal(task.metadata, instanceId)
+          : (owner === null ? buildClaim(instanceId) : null);
+        if (renewal) {
+          const taskType = task.taskType || (isInternalTaskId(task.id) ? 'internal' : 'user');
+          await updateTask(task.id, { metadata: { ...task.metadata, ...renewal } }, taskType).catch(() => {});
+        }
+        continue;
+      }
       // Skip tasks whose agent just completed — updateTask will set them to
       // completed shortly; treating them as orphaned causes spurious retries
       if (recentlyCompletedTaskIds.has(task.id)) {
@@ -528,6 +552,15 @@ async function resetOrphanedTasks() {
       if (successAgentId) {
         emitLog('warn', `🔧 Task ${task.id} still in_progress but agent ${successAgentId} completed successfully — completing task now (missed update)`, { taskId: task.id, agentId: successAgentId });
         await updateTask(task.id, { status: 'completed' }, task.taskType || (isInternalTaskId(task.id) ? 'internal' : 'user'));
+        continue;
+      }
+      // Cross-instance lease guard (issue #1563, acceptance criterion 3): a
+      // federated peer holds a live claim on this task, so it is being worked on
+      // the other machine — not orphaned here. Resetting it to pending would
+      // race a second agent onto work the peer is already doing. Leave it; the
+      // lease expires on its own if the peer actually died.
+      if (isHeldByOther(task.metadata, instanceId)) {
+        emitLog('debug', `Skipping task ${task.id} — live lease held by instance ${getClaimOwner(task.metadata)}`, { taskId: task.id });
         continue;
       }
       emitLog('info', `Found orphaned in_progress task ${task.id}, routing through retry handler`, { taskId: task.id });
