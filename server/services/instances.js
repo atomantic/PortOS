@@ -894,7 +894,22 @@ export async function applyReciprocalSync(instanceId, categories, { fullSync } =
     // Recompute from the (possibly preserved) stored map — a full-sync peer is
     // always sync-enabled; otherwise it follows the per-category selection.
     entry.syncEnabled = entry.fullSync === true || Object.values(entry.syncCategories || {}).some(Boolean);
-    if (turnedOnKinds.length > 0) backfillInstanceId = entry.instanceId || null;
+    if (turnedOnKinds.length > 0) {
+      backfillInstanceId = entry.instanceId || null;
+      // Adopt `outbound` toward this peer (#1636). An explicit reciprocal-sync
+      // request is the peer asking us to mirror our data back to it — i.e. its
+      // consent to receive our pushes. But our record for an `/announce`-created
+      // peer is often inbound-only (it announced to us; the user here never added
+      // it), and `peerAllowsOutbound` refuses to push to an inbound-only peer — so
+      // the backfill below, every future per-record push, and reverse-subscription
+      // creation on incoming pushes would all silently no-op, leaving the mirror
+      // one-directional. Honor the peer's reciprocation request by marking outbound
+      // here, atomically with the category/fullSync adoption (a second withData via
+      // markDirection would deadlock on the same lock). Set inline rather than
+      // calling markDirection; idempotent — a peer that already pushes is untouched.
+      entry.directions = Array.isArray(entry.directions) ? entry.directions : [];
+      if (!entry.directions.includes('outbound')) entry.directions.push('outbound');
+    }
     changed = true;
     instanceEvents.emit('peers:updated', data.peers);
     return entry;

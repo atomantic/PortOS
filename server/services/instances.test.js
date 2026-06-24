@@ -840,6 +840,60 @@ describe('instances.js', () => {
       expect(peer.fullSync).toBe(true);
     });
 
+    // --- Outbound consent on reciprocation (#1636) ---
+    // An `/announce`-created peer record is inbound-only until the user here adds
+    // it back. peerAllowsOutbound refuses to push to an inbound-only peer, so a
+    // reciprocally-enabled per-record category / fullSync would silently never
+    // back-subscribe — leaving the "mirror" one-directional. An explicit
+    // reciprocal-sync request IS the peer's consent to receive our pushes, so we
+    // adopt `outbound` when (and only when) we turn a per-record kind on.
+
+    it('adopts `outbound` on an inbound-only peer when a per-record category is reciprocally enabled (#1636)', async () => {
+      const peers = [{ id: 'p1', instanceId: 'inst-A', name: 'A', directions: ['inbound'], syncCategories: { universe: false } }];
+      readJSONFile.mockResolvedValue({ self: { instanceId: 'me' }, peers });
+      const { changed, peer } = await applyReciprocalSync('inst-A', { universe: true });
+      expect(changed).toBe(true);
+      expect(peer.syncCategories.universe).toBe(true);
+      expect(peer.directions).toContain('outbound'); // backfill/push now unblocked
+      expect(peer.directions).toContain('inbound');  // existing direction preserved
+    });
+
+    it('adopts `outbound` on an inbound-only peer when fullSync is reciprocally adopted (#1636)', async () => {
+      const peers = [{ id: 'p1', instanceId: 'inst-A', name: 'A', directions: ['inbound'], fullSync: false, syncCategories: {} }];
+      readJSONFile.mockResolvedValue({ self: { instanceId: 'me' }, peers });
+      const { changed, peer } = await applyReciprocalSync('inst-A', {}, { fullSync: true });
+      expect(changed).toBe(true);
+      expect(peer.fullSync).toBe(true);
+      expect(peer.directions).toContain('outbound');
+    });
+
+    it('does NOT add `outbound` when the peer reports fullSync:false — a disable is not consent to push (#1636)', async () => {
+      const peers = [{ id: 'p1', instanceId: 'inst-A', name: 'A', directions: ['inbound'], fullSync: true, syncEnabled: true, syncCategories: {} }];
+      readJSONFile.mockResolvedValue({ self: { instanceId: 'me' }, peers });
+      const { changed, peer } = await applyReciprocalSync('inst-A', {}, { fullSync: false });
+      expect(changed).toBe(true);
+      expect(peer.fullSync).toBe(false);
+      expect(peer.directions).not.toContain('outbound'); // mirror dropped, not widened
+    });
+
+    it('leaves directions untouched when only a snapshot category (no per-record kind) is reciprocated (#1636)', async () => {
+      // brain/goals sync via the snapshot path, which does not gate on directions —
+      // so there is no backfill to unblock and no reason to widen consent.
+      const peers = [{ id: 'p1', instanceId: 'inst-A', name: 'A', directions: ['inbound'], syncCategories: { brain: false } }];
+      readJSONFile.mockResolvedValue({ self: { instanceId: 'me' }, peers });
+      const { changed, peer } = await applyReciprocalSync('inst-A', { brain: true });
+      expect(changed).toBe(true);
+      expect(peer.syncCategories.brain).toBe(true);
+      expect(peer.directions).toEqual(['inbound']); // not widened to outbound
+    });
+
+    it('does not duplicate `outbound` when the peer record already pushes — idempotent (#1636)', async () => {
+      const peers = [{ id: 'p1', instanceId: 'inst-A', name: 'A', directions: ['inbound', 'outbound'], syncCategories: { universe: false } }];
+      readJSONFile.mockResolvedValue({ self: { instanceId: 'me' }, peers });
+      const { peer } = await applyReciprocalSync('inst-A', { universe: true });
+      expect(peer.directions.filter(d => d === 'outbound')).toHaveLength(1);
+    });
+
     it('disabling fullSync reciprocates fullSync:false even with an empty category map', async () => {
       // The empty-map case is the one the no-categories send guard used to drop:
       // a just-disabled mirror peer whose underlying syncCategories is empty must
