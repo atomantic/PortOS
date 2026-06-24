@@ -1109,6 +1109,9 @@ describe('pipeline routes', () => {
     expect(r.body.stage.scenes[0].heading).toBe('Scene 1 — EXT. ROOFTOP — DUSK');
     expect(r.body.stage.scenes[0].slugline).toBe('EXT. ROOFTOP — DUSK');
     expect(r.body.stage.scenes[1].slugline).toBe('INT. KITCHEN — NIGHT');
+    // description seeds from the beats clause (summary) so the scene is renderable.
+    expect(r.body.stage.scenes[0].description).toBe('the hook');
+    expect(r.body.stage.scenes[1].description).toBe('the confrontation');
     expect(r.body.stage.scenes[0].imageJobId).toBeNull();
     expect(r.body.stage.status).toBe('ready');
     // The deterministic path never reaches the LLM extractor.

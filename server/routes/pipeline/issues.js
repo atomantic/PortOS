@@ -475,7 +475,11 @@ router.post('/issues/:id/stages/storyboards/extract-scenes', asyncHandler(async 
   // Adapt a canonical scene to the pipeline storyboards UI shape: alias
   // `visualPrompt → description` (the textarea binding) and reset the per-scene
   // image-gen job fields. Rich fields (heading/summary/dialogue/...) ride along.
-  const toStoryboardScene = (s) => ({ ...s, description: s.visualPrompt || '', imageJobId: null, prompt: null });
+  // Fall back to the scene `summary` when there's no visualPrompt so the
+  // beat-sheet path (which carries the beats clause as summary, not a visual
+  // prompt) still seeds a non-empty description — the refine/image/video paths
+  // require one, so an empty description would leave those scenes un-renderable.
+  const toStoryboardScene = (s) => ({ ...s, description: s.visualPrompt || s.summary || '', imageJobId: null, prompt: null });
 
   // Prefer the beat sheet's canonical `## Scenes` list when present (#1552):
   // it's deterministic, free (no LLM), and guarantees `storyboards.scenes`
