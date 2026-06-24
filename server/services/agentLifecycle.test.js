@@ -712,6 +712,21 @@ describe('agentLifecycle — instance provenance stamping (#1563)', () => {
     expect(recheckIdx, 'must re-check claimability against the fresh metadata').toBeGreaterThan(rereadIdx);
   });
 
+  it('source: acquires the spawningTasks dedup guard before the first await', () => {
+    // The guard must be taken synchronously (before `await ensureInstanceId()`
+    // or `await getTaskById()`), or a concurrent task:ready re-emit could slip
+    // past the has() check while this call is suspended and spawn a duplicate.
+    const fnStart = AGENT_LIFECYCLE_SRC.indexOf('export async function spawnAgentForTask');
+    const fnBody = AGENT_LIFECYCLE_SRC.slice(fnStart, fnStart + 60_000);
+    const addIdx = fnBody.indexOf('spawningTasks.add(task.id)');
+    // The first awaited CALL in the function (anchor on the real statement, not
+    // the word "await" in a comment) is the identity resolution.
+    const firstAwaitIdx = fnBody.indexOf('await ensureInstanceId()');
+    expect(addIdx, 'spawningTasks.add must exist').toBeGreaterThan(-1);
+    expect(firstAwaitIdx, 'await ensureInstanceId() must exist').toBeGreaterThan(-1);
+    expect(addIdx, 'the dedup guard must be acquired BEFORE the first await').toBeLessThan(firstAwaitIdx);
+  });
+
   it('source: releases the claim on a failed-setup early exit (cleanupOnError)', () => {
     const fnStart = AGENT_LIFECYCLE_SRC.indexOf('const cleanupOnError = async');
     const fnBody = AGENT_LIFECYCLE_SRC.slice(fnStart, fnStart + 1200);
