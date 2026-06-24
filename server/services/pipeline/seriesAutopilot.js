@@ -118,6 +118,18 @@ export const MAX_EDITORIAL_ROUNDS = 2;
 // the residual findings for human review.
 export const MAX_BEAT_CONTINUITY_ROUNDS = 2;
 
+// Bounded retry budget for a delegated child runner (#1574). A child (volume
+// beats / text auto-run) can finish with its target stage(s) still empty when
+// the underlying LLM call failed. Before #1574 the autopilot marked the work
+// attempted and advanced regardless — so a transient failure was caught only
+// later (text) or not at all until a downstream emptiness check (beats). Now a
+// child whose readiness check fails is retried up to MAX_CHILD_RETRIES more
+// times (skip-existing, so a retry only fills the gap) before the work is
+// marked attempted, an escalation frame is emitted, and the run pauses with the
+// residual. 0 = single attempt, no retry (the legacy behavior). A per-run
+// `maxChildRetries` option overrides it (plumbed through runOptions).
+export const MAX_CHILD_RETRIES = 1;
+
 // Resolve the effective round bounds for a run: an explicit per-run option wins,
 // then the persisted pipelineEditorialChecks setting, then the module default.
 // Returns integers only — a non-integer at any layer falls through to the next.
@@ -698,58 +710,112 @@ async function runBeatContinuity(seriesId, record) {
   return {};
 }
 
-// Delegate to a child SSE runner and block until it finishes: mark the work as
-// attempted (so a perpetually-failing child can't loop the resolver), start it,
-// expose it as activeChild for responsive cancel, poll to completion, then bill
-// one action. Shared by the beats and text steps.
-async function runChildToCompletion(record, { attemptedSet, kind, id, start, isActive }) {
-  attemptedSet.add(id);
-  await start();
-  record.activeChild = { kind, id };
-  await waitForChild(() => isActive(id), record);
-  record.activeChild = null;
-  await recordDomainUsage('cos', { actions: 1 });
-  return {};
+// Resolve the effective retry budget for a delegated child runner this run: a
+// per-run `maxChildRetries` option wins, else the module default. Negative
+// values clamp to 0 (single attempt).
+function childRetryBudget(record) {
+  const v = record.options.maxChildRetries;
+  return Number.isInteger(v) ? Math.max(0, v) : MAX_CHILD_RETRIES;
 }
 
-const runBeats = (seriesId, seasonId, record) => runChildToCompletion(record, {
+// Delegate to a child SSE runner, block until it finishes, then VERIFY the child
+// actually produced its target output before advancing (#1574). Shared by the
+// beats and text steps. `checkReady` returns null when the output landed, or a
+// `{ reason, residual }` describing what's still missing. On a miss the child is
+// retried (skip-existing, so a retry only fills the gap) up to the run's retry
+// budget; each attempt is budget-gated and bills one cos action. When the budget
+// is exhausted the retries stop. If the output is still missing after the last
+// attempt the work is marked attempted (so the resolver can't loop back here), an
+// escalation frame is emitted, and a pause result is returned for human review —
+// instead of the pre-#1574 silent skip that let a failed child reach 'done'.
+async function runChildToCompletion(seriesId, record, {
+  attemptedSet, kind, id, start, isActive, checkReady,
+}) {
+  const maxAttempts = childRetryBudget(record) + 1;
+  let miss = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    if (record.cancelRequested) return { canceled: true };
+    // Each child run bills one cos action — budget-gate every attempt so a
+    // retry can't overspend the daily cap (mirrors the verify loops).
+    const beforeStart = await budgetPause();
+    if (beforeStart) return beforeStart;
+    await start();
+    record.activeChild = { kind, id };
+    await waitForChild(() => isActive(id), record);
+    record.activeChild = null;
+    await recordDomainUsage('cos', { actions: 1 });
+    if (record.cancelRequested) return { canceled: true };
+    miss = checkReady ? await checkReady() : null;
+    if (!miss) {
+      attemptedSet.add(id);
+      return {};
+    }
+    if (attempt < maxAttempts) {
+      broadcast(seriesId, {
+        type: 'child:retry', kind, id, attempt, maxAttempts, reason: miss.reason,
+      });
+    }
+  }
+  // Output still missing after every attempt — escalate and pause. `pauseKind`
+  // keeps this pause classifiable alongside the verify/editorial loops'
+  // 'maxRounds'/'divergence' kinds (a child runner that couldn't produce output,
+  // distinct from a convergence gate that ran out of rounds).
+  attemptedSet.add(id);
+  broadcast(seriesId, {
+    type: 'child:escalate', kind, id, attempts: maxAttempts, reason: miss.reason,
+  });
+  return { pause: true, pauseKind: 'childFailed', reason: miss.reason, residual: miss.residual };
+}
+
+const runBeats = (seriesId, seasonId, record) => runChildToCompletion(seriesId, record, {
   attemptedSet: record.runState.beatsAttempted,
   kind: 'beats',
   id: seasonId,
   start: () => volumeBeatsRunner.startVolumeBeatsRun(seriesId, seasonId, { mode: 'skip-existing', ...providerIdOpts(record) }),
   isActive: volumeBeatsRunner.isVolumeBeatsRunActive,
+  // Beats succeeded when every issue in the volume has a ready `idea` stage —
+  // the same predicate the resolver uses to decide a volume still needs beats.
+  // Before #1574 a failed beats run was silently marked attempted and only
+  // surfaced (if at all) when a downstream stage found `idea` empty.
+  checkReady: async () => {
+    const inSeason = (await listIssues({ seriesId })).filter((i) => i.seasonId === seasonId);
+    const missing = inSeason.filter((i) => !isStageReady(i.stages?.idea));
+    if (missing.length === 0) return null;
+    return {
+      reason: `beat generation for volume ${seasonId} did not produce beats for ${missing.length} issue(s)`,
+      residual: missing.map((i) => ({ severity: 'high', location: `issue ${i.number ?? '?'} / idea`, problem: 'beat sheet (idea stage) is still empty after the beats run (likely an LLM failure)' })),
+    };
+  },
 });
 
-async function runText(issueId, record) {
-  record.runState.textAttempted.add(issueId);
-  // Only adapt the target format's script(s) — a single-format series shouldn't
-  // spend LLM calls populating the off-target script across every issue.
-  const preIssue = await getIssue(issueId);
-  const preSeries = await getSeries(preIssue.seriesId).catch(() => null);
-  const scripts = requiredScriptStages(preSeries, record.options);
-  // Forward the run's provider/model override so prose + scripts honor it like
-  // every other step (autoRunner threads these into generateStage).
-  await autoRunner.startAutoRunTextStages(issueId, { force: false, scripts, ...providerIdOpts(record) });
-  record.activeChild = { kind: 'text', id: issueId };
-  await waitForChild(() => autoRunner.isAutoRunActive(issueId), record);
-  record.activeChild = null;
-  await recordDomainUsage('cos', { actions: 1 });
+const runText = (seriesId, issueId, record) => runChildToCompletion(seriesId, record, {
+  attemptedSet: record.runState.textAttempted,
+  kind: 'text',
+  id: issueId,
+  start: async () => {
+    // Only adapt the target format's script(s) — a single-format series shouldn't
+    // spend LLM calls populating the off-target script across every issue.
+    const preIssue = await getIssue(issueId);
+    const preSeries = await getSeries(preIssue.seriesId).catch(() => null);
+    const scripts = requiredScriptStages(preSeries, record.options);
+    // Forward the run's provider/model override so prose + scripts honor it like
+    // every other step (autoRunner threads these into generateStage).
+    await autoRunner.startAutoRunTextStages(issueId, { force: false, scripts, ...providerIdOpts(record) });
+  },
+  isActive: autoRunner.isAutoRunActive,
   // A delegated text run can end with required stages still empty (the child's
-  // LLM call failed). The issue is already marked attempted, so the resolver
-  // would skip it and the run could reach 'done' with no script — verify the
-  // required stages landed and pause for review if they didn't.
-  const issue = await getIssue(issueId);
-  const series = await getSeries(issue.seriesId).catch(() => null);
-  if (!textReady(issue, series, record.options)) {
+  // LLM call failed) — verify the required stages landed before advancing.
+  checkReady: async () => {
+    const issue = await getIssue(issueId);
+    const series = await getSeries(issue.seriesId).catch(() => null);
+    if (textReady(issue, series, record.options)) return null;
     const missing = requiredScriptStages(series, record.options).filter((s) => !isStageReady(issue.stages?.[s]));
     return {
-      pause: true,
       reason: `text generation for issue ${issue.number ?? issueId} did not produce required stage(s): ${missing.join(', ')}`,
       residual: missing.map((s) => ({ severity: 'high', location: `issue ${issue.number ?? '?'} / ${s}`, problem: 'stage is still empty after the text run (likely an LLM failure)' })),
     };
-  }
-  return {};
-}
+  },
+});
 
 async function runScriptVerify(sId, issueId, record) {
   record.runState.scriptChecked.add(issueId);
@@ -1252,7 +1318,7 @@ async function dispatchStep(sId, step, record) {
     case 'beatContinuity':
       return runBeatContinuity(sId, record);
     case 'textStages':
-      return runText(step.issueId, record);
+      return runText(sId, step.issueId, record);
     case 'scriptVerify':
       return runScriptVerify(sId, step.issueId, record);
     case 'editorialReview':

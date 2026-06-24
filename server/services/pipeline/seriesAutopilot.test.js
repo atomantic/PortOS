@@ -750,6 +750,90 @@ describe('autopilot conductor', () => {
     expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('complete');
   });
 
+  // -------------------------------------------------------------------------
+  // #1574 — delegated child runners (beats/text) retry on a failed run and
+  // escalate to a pause instead of marking the work attempted and silently
+  // skipping it. The runner spies are no-ops by default, so the target stage
+  // never lands unless a test's mock writes it — exactly the "child LLM call
+  // failed" shape the feature guards against.
+  // -------------------------------------------------------------------------
+  // idea ready but no comicScript → the resolver routes to textStages.
+  async function seedNeedsText() {
+    const series = await seriesSvc.createSeries({ name: 'S', logline: 'L', premise: 'P', targetFormat: 'comic' });
+    await seriesSvc.updateSeries(series.id, { arc: { logline: 'A', summary: 'S' } });
+    const season = await seasonsSvc.createSeason(series.id, { number: 1, title: 'V1' });
+    const issue = await issuesSvc.createIssue({ seriesId: series.id, seasonId: season.id, title: 'I1', number: 1 });
+    await issuesSvc.updateStage(issue.id, 'idea', ready('beats'));
+    return { seriesId: series.id, seasonId: season.id, issueId: issue.id };
+  }
+  // no idea stage → the resolver routes to beatSheet first.
+  async function seedNeedsBeats() {
+    const series = await seriesSvc.createSeries({ name: 'S', logline: 'L', premise: 'P', targetFormat: 'comic' });
+    await seriesSvc.updateSeries(series.id, { arc: { logline: 'A', summary: 'S' } });
+    const season = await seasonsSvc.createSeason(series.id, { number: 1, title: 'V1' });
+    const issue = await issuesSvc.createIssue({ seriesId: series.id, seasonId: season.id, title: 'I1', number: 1 });
+    return { seriesId: series.id, seasonId: season.id, issueId: issue.id };
+  }
+
+  it('retries a failed text run once, then escalates with a pause + residual (#1574)', async () => {
+    const { seriesId } = await seedNeedsText(); // default text spy never writes comicScript
+    await autopilot.startSeriesAutopilot(seriesId, {}); // default MAX_CHILD_RETRIES = 1 → 2 attempts
+    await waitFor(runFinished(seriesId));
+    const last = autopilot.__testing.runs.get(seriesId)?.lastPayload;
+    expect(last?.type).toBe('paused');
+    expect(last?.scope).toBe('textStages');
+    expect(last?.pauseKind).toBe('childFailed');
+    expect(last?.reason).toMatch(/did not produce required stage/);
+    // one initial attempt + one retry before the escalation pause.
+    expect(autoRunnerSpies.startAutoRunTextStages).toHaveBeenCalledTimes(2);
+    const series = await seriesSvc.getSeries(seriesId);
+    expect(series.autopilot?.status).toBe('paused');
+    // pauseKind survives sanitizeAutopilot so the resume banner can classify it.
+    expect(series.autopilot?.pauseKind).toBe('childFailed');
+    expect(series.autopilot?.residualFindings?.length).toBeGreaterThan(0);
+  });
+
+  it('a text run that succeeds on the retry proceeds without pausing (#1574)', async () => {
+    const { seriesId } = await seedNeedsText();
+    autoRunnerSpies.startAutoRunTextStages
+      .mockImplementationOnce(async () => ({ runId: 'ar', alreadyRunning: false })) // attempt 1: fails
+      .mockImplementationOnce(async (id) => { // attempt 2: the stage lands
+        await issuesSvc.updateStage(id, 'comicScript', ready(VALID_SCRIPT));
+        return { runId: 'ar2', alreadyRunning: false };
+      });
+    await autopilot.startSeriesAutopilot(seriesId, {});
+    await waitFor(runFinished(seriesId));
+    expect(autoRunnerSpies.startAutoRunTextStages).toHaveBeenCalledTimes(2);
+    expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('complete');
+  });
+
+  it('maxChildRetries:0 makes a single attempt then pauses (legacy no-retry behavior)', async () => {
+    const { seriesId } = await seedNeedsText();
+    await autopilot.startSeriesAutopilot(seriesId, { maxChildRetries: 0 });
+    await waitFor(runFinished(seriesId));
+    expect(autoRunnerSpies.startAutoRunTextStages).toHaveBeenCalledTimes(1);
+    expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('paused');
+  });
+
+  it('a per-run maxChildRetries override widens the budget (2 retries → 3 attempts)', async () => {
+    const { seriesId } = await seedNeedsText();
+    await autopilot.startSeriesAutopilot(seriesId, { maxChildRetries: 2 });
+    await waitFor(runFinished(seriesId));
+    expect(autoRunnerSpies.startAutoRunTextStages).toHaveBeenCalledTimes(3);
+    expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('paused');
+  });
+
+  it('retries a failed beats run once, then escalates with a pause (#1574)', async () => {
+    const { seriesId } = await seedNeedsBeats(); // default beats spy never writes idea
+    await autopilot.startSeriesAutopilot(seriesId, {});
+    await waitFor(runFinished(seriesId));
+    const last = autopilot.__testing.runs.get(seriesId)?.lastPayload;
+    expect(last?.type).toBe('paused');
+    expect(last?.scope).toBe('beatSheet');
+    expect(last?.reason).toMatch(/did not produce beats/);
+    expect(volumeBeatsSpies.startVolumeBeatsRun).toHaveBeenCalledTimes(2);
+  });
+
   it('pauses (no infinite loop) when episode generation produces no issues', async () => {
     const series = await seriesSvc.createSeries({ name: 'S', logline: 'L', premise: 'P', targetFormat: 'comic' });
     await seriesSvc.updateSeries(series.id, { arc: { logline: 'A', summary: 'S' } });

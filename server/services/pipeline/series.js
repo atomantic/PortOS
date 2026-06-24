@@ -110,12 +110,13 @@ export const AUTOPILOT_STATUSES = Object.freeze(['idle', 'running', 'paused', 'd
 export const AUTOPILOT_STEP_MAX = 80;
 export const AUTOPILOT_ERROR_MAX = 1000;
 const AUTOPILOT_FINDING_SEVERITIES = ['high', 'medium', 'low'];
-// Why a convergence gate paused the run (#1571): `maxRounds` (the verify→resolve
-// loop ran out of rounds) vs `divergence` (it stopped converging early — the
-// blocking count failed to drop). Lets the UI tell "ran out of rounds" from
-// "needs a human" without string-matching the reason text. Any other pause
-// (budget, error, a capability gap) leaves this null.
-export const AUTOPILOT_PAUSE_KINDS = Object.freeze(['maxRounds', 'divergence']);
+// Why a bounded-retry gate paused the run. Convergence gates (#1571):
+// `maxRounds` (the verify→resolve loop ran out of rounds) vs `divergence` (it
+// stopped converging early — the blocking count failed to drop). Child runners
+// (#1574): `childFailed` (a delegated beats/text run produced no output after
+// its retry budget). Lets the UI classify the pause without string-matching the
+// reason text. Any other pause (budget, error, a capability gap) leaves this null.
+export const AUTOPILOT_PAUSE_KINDS = Object.freeze(['maxRounds', 'divergence', 'childFailed']);
 
 export const sanitizeAutopilot = (raw) => {
   if (!raw || typeof raw !== 'object') return null;
