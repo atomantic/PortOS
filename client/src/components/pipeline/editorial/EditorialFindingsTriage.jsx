@@ -548,6 +548,21 @@ export default function EditorialFindingsTriage({ seriesId, comments = [], check
       if (ok === false) { unhideCheck(checkId); toast.dismiss(toastId); }
     });
   };
+  // Keep the muted set honest against the live enabled-state: if a muted check is
+  // re-enabled elsewhere (the catalog toggle on this same page, or a findings
+  // reload carrying fresh catalog rows), un-hide its group so visibility always
+  // follows the check's actual enabled state — never stranding a group the empty
+  // state tells the user to restore from the catalog. Re-enabling through the
+  // undo path goes here too (its onToggleCheckEnabled flips enabled back to true).
+  useEffect(() => {
+    setHiddenCheckIds((s) => {
+      if (!s.size) return s;
+      let changed = false;
+      const next = new Set();
+      s.forEach((id) => { if (checksById[id]?.enabled === false) next.add(id); else changed = true; });
+      return changed ? next : s;
+    });
+  }, [checksById]);
 
   // ---- Filter / search / sort, persisted in the URL so a view is deep-linkable
   // (#1600). Facets are derived from the full (unfiltered) groups so options never

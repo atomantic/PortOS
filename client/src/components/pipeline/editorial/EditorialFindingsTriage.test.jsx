@@ -323,6 +323,32 @@ describe('EditorialFindingsTriage', () => {
     expect(screen.getByText('Noisy finding')).toBeTruthy();
   });
 
+  it('un-hides a muted group once its check is re-enabled elsewhere, e.g. the catalog toggle (#1602)', () => {
+    const onToggleCheckEnabled = vi.fn().mockResolvedValue(true);
+    const comments = [{ id: 'c1', checkId: 'naming.dissimilar-names', status: 'open', severity: 'high', problem: 'Noisy finding' }];
+    const enabledRow = { label: 'Character name dissimilarity', scope: 'series', enabled: true };
+    const disabledRow = { ...enabledRow, enabled: false };
+    const tree = (checksById) => (
+      <MemoryRouter>
+        <EditorialFindingsTriage seriesId="ser-1" checksById={checksById} comments={comments} onToggleCheckEnabled={onToggleCheckEnabled} />
+        <Toaster />
+      </MemoryRouter>
+    );
+    const { rerender } = render(tree({ 'naming.dissimilar-names': enabledRow }));
+
+    fireEvent.click(screen.getByRole('button', { name: /Disable check: Character name dissimilarity/i }));
+    expect(screen.queryByText('Noisy finding')).toBeNull();
+
+    // The page's optimistic disable flips the catalog row off — group stays hidden.
+    rerender(tree({ 'naming.dissimilar-names': disabledRow }));
+    expect(screen.queryByText('Noisy finding')).toBeNull();
+
+    // Re-enabling from the catalog (a fresh enabled row) restores the group even
+    // though the undo toast was never clicked.
+    rerender(tree({ 'naming.dissimilar-names': enabledRow }));
+    expect(screen.getByText('Noisy finding')).toBeTruthy();
+  });
+
   it('un-hides the group when the disable PATCH fails (#1602)', async () => {
     // onToggleCheckEnabled resolves false on failure (the page reverts + toasts).
     const onToggleCheckEnabled = vi.fn().mockResolvedValue(false);
