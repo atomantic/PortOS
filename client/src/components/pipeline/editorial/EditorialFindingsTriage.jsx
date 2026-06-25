@@ -682,8 +682,8 @@ export default function EditorialFindingsTriage({ seriesId, comments = [], check
           seriesId={seriesId}
           group={g}
           onCommentChange={onCommentChange}
-          canDisable={onToggleCheckEnabled ? checksById[g.checkId]?.enabled === true : false}
-          onDisableCheck={onToggleCheckEnabled ? disableCheck : undefined}
+          canDisable={!!onToggleCheckEnabled && checksById[g.checkId]?.enabled === true}
+          onDisableCheck={disableCheck}
           selectedIds={selectedIds}
           onToggleSelect={toggleSelect}
           onSelectMany={selectMany}
