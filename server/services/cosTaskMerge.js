@@ -117,13 +117,37 @@ function pickContentBase(local, remote) {
   const lp = PRIORITY_VALUES[local.priority] || 0;
   const rp = PRIORITY_VALUES[remote.priority] || 0;
   if (lp !== rp) return rp > lp ? remote : local;
-  if ((local.description || '') !== (remote.description || '')) {
-    return (remote.description || '') > (local.description || '') ? remote : local;
+  // Same status + priority: break the tie over ALL remaining editable content
+  // (description, approval flags, AND non-claim metadata — `app`, `context`,
+  // `reviewers`, `useWorktree`, … which all affect how a task is spawned) via a
+  // canonical, side-independent signature so a content-only edit converges.
+  // Claim metadata is excluded — it's resolved separately by lease in resolveClaim.
+  const ls = contentSignature(local);
+  const rs = contentSignature(remote);
+  if (ls === rs) return local; // identical content — keep local (no-op)
+  return rs > ls ? remote : local;
+}
+
+/**
+ * Canonical, side-independent signature of a task's editable content used to
+ * break a same-status/same-priority merge tie. Sorts metadata keys (so two
+ * representations of the same logical metadata compare equal) and excludes the
+ * claim keys (resolved separately by lease). Two machines computing this over the
+ * same pair therefore pick the same winner, so a content-only edit converges.
+ */
+function contentSignature(task) {
+  const md = (task.metadata && typeof task.metadata === 'object') ? task.metadata : {};
+  const nonClaim = {};
+  for (const key of Object.keys(md).sort()) {
+    if (CLAIM_METADATA_KEYS.includes(key)) continue;
+    nonClaim[key] = md[key];
   }
-  // Last resort: compare the remaining federated fields as a stable string so any
-  // residual difference (e.g. approval flags on an internal task) still converges.
-  const sig = (t) => JSON.stringify([t.approvalRequired ?? null, t.autoApproved ?? null]);
-  return sig(remote) > sig(local) ? remote : local;
+  return JSON.stringify([
+    task.description || '',
+    task.approvalRequired ?? null,
+    task.autoApproved ?? null,
+    nonClaim,
+  ]);
 }
 
 /**

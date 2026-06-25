@@ -3380,13 +3380,16 @@ export async function buildCosTasksPayload() {
     console.log(`⚠️ peerSync: cos-tasks payload hit the ${COS_TASKS_ENTRY_CAP}-entry cap — truncating (some tasks won't federate this tick)`);
     entries = entries.slice(0, COS_TASKS_ENTRY_CAP);
   }
-  // Deterministic order so the listHash converges across machines regardless of
-  // file/section order. Hash the lifecycle-relevant fields (incl. claim metadata)
-  // so a claim/renewal/status change flips the hash and re-triggers a merge,
-  // while pure reordering does not.
+  // Deterministic order so the listHash is stable across ticks regardless of
+  // file/section order. Hash EVERY field the receiver's merge can act on —
+  // status, priority, description, approval flags, and metadata (incl. claim
+  // metadata) — so any edit the merge would propagate flips the hash and
+  // re-triggers a sweep. Omitting description/approval here would let a receiver
+  // short-circuit `unchanged` and never pull a same-status content edit until the
+  // forced-revalidation window. Pure reordering does not change the hash.
   entries.sort((a, b) => (a.taskType < b.taskType ? -1 : a.taskType > b.taskType ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   const listHash = createHash('sha256')
-    .update(entries.map((e) => `${e.taskType}:${e.id}:${e.status}:${e.priority}:${JSON.stringify(e.metadata || {})}`).join('\n'))
+    .update(entries.map((e) => `${e.taskType}:${e.id}:${e.status}:${e.priority}:${e.description || ''}:${e.approvalRequired ?? ''}:${e.autoApproved ?? ''}:${JSON.stringify(e.metadata || {})}`).join('\n'))
     .digest('hex');
   return { schemaVersion: PORTOS_SCHEMA_VERSIONS.cosTasks, listHash, tasks: entries };
 }

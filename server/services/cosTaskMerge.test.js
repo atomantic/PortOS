@@ -151,6 +151,23 @@ describe('mergeTaskLists', () => {
     expect(fromA.description).toBe(fromB.description);
   });
 
+  it('converges on a same-status metadata-only edit (e.g. app/context changed)', () => {
+    const a = [task('task-1', 'pending', { metadata: { app: 'BookLoom', context: 'ctx-A' } })];
+    const b = [task('task-1', 'pending', { metadata: { app: 'PortOS', context: 'ctx-B' } })];
+    const [fromA] = mergeTaskLists(a, b, { now: NOW });
+    const [fromB] = mergeTaskLists(b, a, { now: NOW });
+    expect(fromA.metadata.app).toBe(fromB.metadata.app);
+    expect(fromA.metadata.context).toBe(fromB.metadata.context);
+  });
+
+  it('treats metadata with different key order as identical (no spurious winner flip)', () => {
+    const a = [task('task-1', 'pending', { metadata: { app: 'X', context: 'Y' } })];
+    const b = [task('task-1', 'pending', { metadata: { context: 'Y', app: 'X' } })];
+    const [merged] = mergeTaskLists(a, b, { now: NOW });
+    // Same logical content → keeps local, no churn.
+    expect(merged.metadata).toEqual({ app: 'X', context: 'Y' });
+  });
+
   it('adopts a remote-only task whose metadata is absent without crashing (cross-version peer)', () => {
     // The wire schema marks metadata optional, so a forked/older peer may omit it.
     const remote = [{ id: 'task-x', taskType: 'user', status: 'pending', priority: 'LOW', description: 'd' }];

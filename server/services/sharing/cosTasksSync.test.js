@@ -90,6 +90,17 @@ describe('buildCosTasksPayload', () => {
     expect(after).not.toBe(before);
   });
 
+  it('listHash flips on a same-status description or approval-flag edit (so the receiver re-pulls)', async () => {
+    vi.mocked(getUserTasks).mockResolvedValue({ tasks: [task('task-a', 'pending', { description: 'original' })] });
+    const before = (await buildCosTasksPayload()).listHash;
+    vi.mocked(getUserTasks).mockResolvedValue({ tasks: [task('task-a', 'pending', { description: 'EDITED' })] });
+    const afterDesc = (await buildCosTasksPayload()).listHash;
+    expect(afterDesc).not.toBe(before);
+    vi.mocked(getUserTasks).mockResolvedValue({ tasks: [task('task-a', 'pending', { description: 'original', autoApproved: true })] });
+    const afterApproval = (await buildCosTasksPayload()).listHash;
+    expect(afterApproval).not.toBe(before);
+  });
+
   it('returns an empty payload when there are no tasks', async () => {
     const p = await buildCosTasksPayload();
     expect(p.tasks).toEqual([]);
