@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import EditorialFindingsTriage from './EditorialFindingsTriage';
+import { Toaster, toast } from '../../ui/Toast';
 import { findingManuscriptLink } from '../../../lib/editorialChecks';
 import { acceptPipelineManuscriptFix, patchPipelineManuscriptComment } from '../../../services/api';
 
@@ -27,6 +28,7 @@ describe('EditorialFindingsTriage', () => {
   beforeEach(() => {
     acceptPipelineManuscriptFix.mockReset();
     patchPipelineManuscriptComment.mockReset();
+    toast.dismiss(); // clear any toast left over from a prior test
   });
 
   it('shows the empty state when there are no check-sourced findings', () => {
@@ -262,5 +264,73 @@ describe('EditorialFindingsTriage', () => {
     // Filter so only one selected finding stays visible — the bar must follow.
     fireEvent.change(screen.getByLabelText('Search findings'), { target: { value: 'confusable' } });
     expect(screen.getByText('1 selected')).toBeTruthy();
+  });
+
+  // ---- Disable a noisy check in-situ (#1602) ----
+  const enabledChecksById = {
+    'naming.dissimilar-names': { label: 'Character name dissimilarity', scope: 'series', kind: 'deterministic', enabled: true },
+  };
+  const renderDisable = (props) => render(
+    <MemoryRouter>
+      <EditorialFindingsTriage seriesId="ser-1" checksById={enabledChecksById} {...props} />
+      <Toaster />
+    </MemoryRouter>,
+  );
+
+  it('offers a Disable action only when onToggleCheckEnabled is wired and the check is enabled (#1602)', () => {
+    const comments = [{ id: 'c1', checkId: 'naming.dissimilar-names', status: 'open', severity: 'high', problem: 'Noisy' }];
+    // No handler → no disable affordance (read-only triage).
+    renderTriage({ comments });
+    expect(screen.queryByRole('button', { name: /Disable check:/i })).toBeNull();
+  });
+
+  it('does NOT offer Disable for an already-disabled check (#1602)', () => {
+    const comments = [{ id: 'c1', checkId: 'naming.dissimilar-names', status: 'open', severity: 'high', problem: 'Noisy' }];
+    renderDisable({
+      comments,
+      checksById: { 'naming.dissimilar-names': { label: 'Character name dissimilarity', scope: 'series', enabled: false } },
+      onToggleCheckEnabled: vi.fn(),
+    });
+    expect(screen.queryByRole('button', { name: /Disable check:/i })).toBeNull();
+  });
+
+  it('disables a check in-situ, hides its findings group, and disables it server-side (#1602)', () => {
+    const onToggleCheckEnabled = vi.fn().mockResolvedValue(true);
+    const comments = [{ id: 'c1', checkId: 'naming.dissimilar-names', status: 'open', severity: 'high', problem: 'Noisy finding' }];
+    renderDisable({ comments, onToggleCheckEnabled });
+
+    expect(screen.getByText('Noisy finding')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Disable check: Character name dissimilarity/i }));
+
+    // PATCHes the check off + the group's findings vanish from the view.
+    expect(onToggleCheckEnabled).toHaveBeenCalledWith('naming.dissimilar-names', false);
+    expect(screen.queryByText('Noisy finding')).toBeNull();
+    // Empty-state copy points the user back to the catalog to re-enable.
+    expect(screen.getByText(/Every check with findings is disabled/i)).toBeTruthy();
+  });
+
+  it('restores the hidden group and re-enables the check via the undo toast (#1602)', async () => {
+    const onToggleCheckEnabled = vi.fn().mockResolvedValue(true);
+    const comments = [{ id: 'c1', checkId: 'naming.dissimilar-names', status: 'open', severity: 'high', problem: 'Noisy finding' }];
+    renderDisable({ comments, onToggleCheckEnabled });
+
+    fireEvent.click(screen.getByRole('button', { name: /Disable check: Character name dissimilarity/i }));
+    expect(screen.queryByText('Noisy finding')).toBeNull();
+
+    // The undo toast re-enables the check and brings the group back.
+    fireEvent.click(await screen.findByRole('button', { name: /undo/i }));
+    expect(onToggleCheckEnabled).toHaveBeenCalledWith('naming.dissimilar-names', true);
+    expect(screen.getByText('Noisy finding')).toBeTruthy();
+  });
+
+  it('un-hides the group when the disable PATCH fails (#1602)', async () => {
+    // onToggleCheckEnabled resolves false on failure (the page reverts + toasts).
+    const onToggleCheckEnabled = vi.fn().mockResolvedValue(false);
+    const comments = [{ id: 'c1', checkId: 'naming.dissimilar-names', status: 'open', severity: 'high', problem: 'Noisy finding' }];
+    renderDisable({ comments, onToggleCheckEnabled });
+
+    fireEvent.click(screen.getByRole('button', { name: /Disable check: Character name dissimilarity/i }));
+    // Optimistically hidden, then reconciled back once the PATCH rejects.
+    await waitFor(() => expect(screen.getByText('Noisy finding')).toBeTruthy());
   });
 });

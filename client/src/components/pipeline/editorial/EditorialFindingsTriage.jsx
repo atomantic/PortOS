@@ -15,7 +15,7 @@
  * bulk-dismisses the selection — each result reactively updates local state.
  */
 import { Link, useSearchParams } from 'react-router-dom';
-import { ChevronDown, ChevronRight, ExternalLink, History, Check, X, Loader2, GitCompareArrows, Search } from 'lucide-react';
+import { ChevronDown, ChevronRight, ExternalLink, History, Check, X, Loader2, GitCompareArrows, Search, Ban, Undo2 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   groupFindingsByCheck,
@@ -239,7 +239,7 @@ function FindingRow({ seriesId, comment, onCommentChange, selected, onToggleSele
 // default collapse derives from `group.open > 0`, so a status/search filter that
 // matches only resolved findings (open === 0) would otherwise hide its matches
 // behind a collapsed header and make the filtered view look empty.
-function CheckGroup({ seriesId, group, onCommentChange, selectedIds, onToggleSelect, onSelectMany, forceOpen = false }) {
+function CheckGroup({ seriesId, group, onCommentChange, selectedIds, onToggleSelect, onSelectMany, forceOpen = false, canDisable = false, onDisableCheck }) {
   const [open, setOpen] = useState(group.open > 0);
   const expanded = forceOpen || open;
   const openIds = useMemo(
@@ -276,6 +276,21 @@ function CheckGroup({ seriesId, group, onCommentChange, selectedIds, onToggleSel
             <CountPills counts={group.counts} />
           </span>
         </button>
+        {canDisable && onDisableCheck ? (
+          // Mute a noisy/false-positive check without leaving the triage view
+          // (#1602): disables it (skipped on future runs) and hides its findings
+          // group here, with an undo toast. Only offered for currently-enabled
+          // checks — an already-disabled check has nothing to mute.
+          <button
+            type="button"
+            onClick={() => onDisableCheck(group.checkId, group.label)}
+            title="Disable this check — hides its findings here and skips it on future runs"
+            aria-label={`Disable check: ${group.label}`}
+            className="inline-flex shrink-0 items-center gap-1 rounded border border-port-border px-1.5 py-0.5 text-[10px] text-gray-500 hover:border-rose-400/40 hover:text-rose-300"
+          >
+            <Ban size={11} /> Disable
+          </button>
+        ) : null}
       </div>
       {expanded ? (
         <ul className="divide-y divide-port-border/60 border-t border-port-border/60">
@@ -498,9 +513,41 @@ function FindingsToolbar({ facets, filters, sort, setParam, toggleInParam, onCle
   );
 }
 
-export default function EditorialFindingsTriage({ seriesId, comments = [], checksById = {}, onCommentChange }) {
+export default function EditorialFindingsTriage({ seriesId, comments = [], checksById = {}, onCommentChange, onToggleCheckEnabled }) {
   const groups = useMemo(() => groupFindingsByCheck(comments, checksById), [comments, checksById]);
   const [selectedIds, setSelectedIds] = useState(() => new Set());
+
+  // Checks the user muted from this view this session (#1602). Disabling a check
+  // doesn't delete its persisted findings, so the group is hidden locally until an
+  // undo (or a fresh findings load) brings it back. Keyed by checkId.
+  const [hiddenCheckIds, setHiddenCheckIds] = useState(() => new Set());
+  const unhideCheck = (checkId) => setHiddenCheckIds((s) => {
+    if (!s.has(checkId)) return s;
+    const next = new Set(s);
+    next.delete(checkId);
+    return next;
+  });
+  const disableCheck = (checkId, label) => {
+    setHiddenCheckIds((s) => new Set(s).add(checkId));
+    const toastId = toast((t) => (
+      <span className="flex items-center gap-3 text-xs">
+        <span className="text-gray-200">Disabled <span className="font-medium text-white">{label}</span> — findings hidden</span>
+        <button
+          type="button"
+          onClick={() => { unhideCheck(checkId); onToggleCheckEnabled?.(checkId, true); toast.dismiss(t.id); }}
+          className="inline-flex shrink-0 items-center gap-1 rounded border border-port-border px-2 py-0.5 text-[11px] text-port-accent hover:border-port-accent/40 hover:text-white"
+        >
+          <Undo2 size={12} /> Undo
+        </button>
+      </span>
+    ), { duration: 8000 });
+    // Optimistic hide above; reconcile if the persist fails (onToggleCheckEnabled
+    // resolves false on error and has already reverted + toasted) so a failed
+    // disable doesn't leave the group stuck hidden behind a dead undo toast.
+    Promise.resolve(onToggleCheckEnabled?.(checkId, false)).then((ok) => {
+      if (ok === false) { unhideCheck(checkId); toast.dismiss(toastId); }
+    });
+  };
 
   // ---- Filter / search / sort, persisted in the URL so a view is deep-linkable
   // (#1600). Facets are derived from the full (unfiltered) groups so options never
@@ -542,6 +589,13 @@ export default function EditorialFindingsTriage({ seriesId, comments = [], check
   }, { replace: true });
 
   const view = useMemo(() => applyFindingsView(groups, filters, sort), [groups, filters, sort]);
+  // Drop groups the user muted this session (#1602) so the disabled check's noise
+  // disappears immediately; everything downstream (selection, counts, render) keys
+  // off this so a hidden group can't be bulk-acted on either.
+  const visibleView = useMemo(
+    () => (hiddenCheckIds.size ? view.filter((g) => !hiddenCheckIds.has(g.checkId)) : view),
+    [view, hiddenCheckIds],
+  );
 
   // Selection only ever holds open findings — once a finding is accepted/dismissed
   // (here or in the editor) drop it so the bar's counts never count resolved ones.
@@ -575,8 +629,8 @@ export default function EditorialFindingsTriage({ seriesId, comments = [], check
   // be silently accepted/dismissed by the sticky bar. Selection state itself is
   // preserved (clearing the filter brings hidden selections back).
   const selectedComments = useMemo(
-    () => view.flatMap((g) => g.comments).filter((c) => isOpenFinding(c) && selectedIds.has(c.id)),
-    [view, selectedIds],
+    () => visibleView.flatMap((g) => g.comments).filter((c) => isOpenFinding(c) && selectedIds.has(c.id)),
+    [visibleView, selectedIds],
   );
 
   if (!groups.length) {
@@ -587,7 +641,7 @@ export default function EditorialFindingsTriage({ seriesId, comments = [], check
     );
   }
   const totalOpen = openFindingsTotal(groups);
-  const shownOpen = openFindingsTotal(view);
+  const shownOpen = openFindingsTotal(visibleView);
   return (
     <div className="space-y-2">
       <FindingsToolbar
@@ -608,22 +662,28 @@ export default function EditorialFindingsTriage({ seriesId, comments = [], check
         />
       ) : (
         <p className="text-[11px] text-gray-500">
-          {activeFilterCount > 0
-            ? `${shownOpen} of ${totalOpen} open finding${totalOpen === 1 ? '' : 's'} shown · ${view.length} of ${groups.length} check${groups.length === 1 ? '' : 's'}`
+          {activeFilterCount > 0 || hiddenCheckIds.size > 0
+            ? `${shownOpen} of ${totalOpen} open finding${totalOpen === 1 ? '' : 's'} shown · ${visibleView.length} of ${groups.length} check${groups.length === 1 ? '' : 's'}`
             : `${totalOpen} open finding${totalOpen === 1 ? '' : 's'} across ${groups.length} check${groups.length === 1 ? '' : 's'}`}
         </p>
       )}
-      {view.length === 0 ? (
+      {visibleView.length === 0 ? (
         <p className="rounded-lg border border-dashed border-port-border p-4 text-center text-xs text-gray-500">
-          No findings match the current filters. <button type="button" onClick={clearFilters} className="text-port-accent hover:underline">Clear filters</button>.
+          {activeFilterCount > 0 ? (
+            <>No findings match the current filters. <button type="button" onClick={clearFilters} className="text-port-accent hover:underline">Clear filters</button>.</>
+          ) : (
+            'Every check with findings is disabled. Re-enable a check from the catalog to triage its findings.'
+          )}
         </p>
       ) : null}
-      {view.map((g) => (
+      {visibleView.map((g) => (
         <CheckGroup
           key={g.checkId}
           seriesId={seriesId}
           group={g}
           onCommentChange={onCommentChange}
+          canDisable={onToggleCheckEnabled ? checksById[g.checkId]?.enabled === true : false}
+          onDisableCheck={onToggleCheckEnabled ? disableCheck : undefined}
           selectedIds={selectedIds}
           onToggleSelect={toggleSelect}
           onSelectMany={selectMany}

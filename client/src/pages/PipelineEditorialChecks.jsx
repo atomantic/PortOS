@@ -201,9 +201,12 @@ export default function PipelineEditorialChecks() {
     // settings, so the run buttons must gate on this PATCH landing (and the card
     // shows its saving spinner for the toggle too).
     setSavingIds((s) => new Set(s).add(checkId));
-    patchEditorialCheck(checkId, { enabled: nextEnabled }, { silent: true })
-      .then((row) => { if (row) setChecks((rows) => rows.map((r) => (r.id === checkId ? row : r))); })
-      .catch((err) => { apply(!nextEnabled); toast.error(err.message || 'Failed to update check'); })
+    // Returns a success boolean so callers that mirror a UI side effect on this
+    // toggle (e.g. the triage view hiding a just-disabled check's group, #1602)
+    // can reconcile when the PATCH fails — the catch has already reverted here.
+    return patchEditorialCheck(checkId, { enabled: nextEnabled }, { silent: true })
+      .then((row) => { if (row) setChecks((rows) => rows.map((r) => (r.id === checkId ? row : r))); return true; })
+      .catch((err) => { apply(!nextEnabled); toast.error(err.message || 'Failed to update check'); return false; })
       .finally(() => setSavingIds((s) => { const n = new Set(s); n.delete(checkId); return n; }));
   }, []);
 
@@ -537,7 +540,7 @@ export default function PipelineEditorialChecks() {
                 {loadingFindings ? (
                   <p className="flex items-center gap-2 text-sm text-gray-400"><Loader2 size={16} className="animate-spin" /> Loading findings…</p>
                 ) : (
-                  <EditorialFindingsTriage seriesId={seriesId} comments={comments} checksById={checksById} onCommentChange={handleCommentChange} />
+                  <EditorialFindingsTriage seriesId={seriesId} comments={comments} checksById={checksById} onCommentChange={handleCommentChange} onToggleCheckEnabled={handleToggle} />
                 )}
               </>
             )}
