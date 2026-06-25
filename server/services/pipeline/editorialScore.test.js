@@ -226,6 +226,25 @@ describe('computeTrend', () => {
     ]);
     expect(trend.checkRegressions).toEqual([{ checkId: 'comic.prose-sync', from: 0, to: 2 }]);
   });
+
+  it('does NOT flag per-check regressions when the prior snapshot predates per-check telemetry (no false 0→N spike)', () => {
+    // A pre-#1597 snapshot has no openByCheck map (sanitizes to null); comparing
+    // against it must not read as all-zeros and flag every open check.
+    const preUpgrade = {
+      runId: 'run-old', at: '2026-06-01T00:00:00Z', score: 88, ready: false, open: 2,
+      openBySeverity: { high: 0, medium: 2, low: 0 }, openByCategory: { naming: 2 },
+      // openByCheck intentionally absent
+    };
+    const trend = computeTrend([
+      preUpgrade,
+      snapWithChecks('2026-06-02T00:00:00Z', { 'naming.dissimilar-names': 2 }),
+    ]);
+    expect(trend.checkRegressions).toEqual([]);
+    // The new point still carries its per-check map for the sparkline.
+    expect(trend.points[1].openByCheck).toEqual({ 'naming.dissimilar-names': 2 });
+    // The old point's per-check telemetry is the explicit "unknown" sentinel.
+    expect(trend.points[0].openByCheck).toBeNull();
+  });
 });
 
 describe('ledger sanitization', () => {
@@ -244,10 +263,17 @@ describe('ledger sanitization', () => {
     expect(ledger.seriesId).toBe('ser-abc');
   });
 
-  it('defaults openByCheck to {} for a pre-#1597 snapshot that predates per-check tracking', () => {
+  it('preserves an absent openByCheck as null (not {}) so pre-#1597 snapshots read as "no telemetry", not "zero findings"', () => {
     const ledger = __testing.sanitizeLedger({
       snapshots: [{ at: '2026-05-01T00:00:00Z', score: 88, openBySeverity: { high: 0, medium: 1, low: 0 }, openByCategory: { naming: 1 } }],
     }, 'ser-old');
+    expect(ledger.snapshots[0].openByCheck).toBeNull();
+  });
+
+  it('keeps a present-but-empty openByCheck as {} (a run that found zero per-check findings is real telemetry)', () => {
+    const ledger = __testing.sanitizeLedger({
+      snapshots: [{ at: '2026-06-01T00:00:00Z', score: 100, openBySeverity: { high: 0, medium: 0, low: 0 }, openByCategory: {}, openByCheck: {} }],
+    }, 'ser-clean');
     expect(ledger.snapshots[0].openByCheck).toEqual({});
   });
 });

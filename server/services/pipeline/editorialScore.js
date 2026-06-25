@@ -227,14 +227,21 @@ function sanitizeSnapshot(raw) {
   const byCat = raw.openByCategory && typeof raw.openByCategory === 'object' ? raw.openByCategory : {};
   const openByCategory = {};
   for (const [k, v] of Object.entries(byCat)) if (Number.isFinite(v)) openByCategory[k] = v;
-  // Per-check open counts (#1597). Additive + local-only telemetry: snapshots
-  // recorded before this shipped simply lack the map (defaults to {}), so the
-  // per-check trend starts accumulating from the first run after upgrade — no
-  // schema bump needed (older readers ignore the field; this reader tolerates
-  // its absence).
-  const byCheck = raw.openByCheck && typeof raw.openByCheck === 'object' ? raw.openByCheck : {};
-  const openByCheck = {};
-  for (const [k, v] of Object.entries(byCheck)) if (Number.isFinite(v)) openByCheck[k] = v;
+  // Per-check open counts (#1597). Additive + local-only telemetry — no schema
+  // bump needed (older readers ignore the field; this reader tolerates its
+  // absence). CRITICAL: a snapshot recorded BEFORE this shipped has NO per-check
+  // map, which is NOT the same as "ran and found zero" ({}). Coercing absence to
+  // {} would make pre-upgrade points read as real zero counts — the first
+  // post-upgrade run would then draw a false 0→N spike and flag every currently
+  // open check as a 0→N regression. So we preserve absence as `null` ("no
+  // telemetry"); `computeTrend` skips per-check regressions across a null point
+  // and the client omits null points from the per-check sparkline.
+  const byCheck = raw.openByCheck && typeof raw.openByCheck === 'object' ? raw.openByCheck : null;
+  let openByCheck = null;
+  if (byCheck) {
+    openByCheck = {};
+    for (const [k, v] of Object.entries(byCheck)) if (Number.isFinite(v)) openByCheck[k] = v;
+  }
   return {
     runId: typeof raw.runId === 'string' ? raw.runId : null,
     at,
@@ -370,7 +377,13 @@ export function computeTrend(snapshots) {
   // Score delta between the two most recent revisions (positive = improving).
   const delta = latest && previous ? latest.score - previous.score : 0;
   const regressions = regressionsBetween(latest, previous, 'openByCategory', 'category');
-  const checkRegressions = regressionsBetween(latest, previous, 'openByCheck', 'checkId');
+  // Per-check regressions only when BOTH compared revisions carry per-check
+  // telemetry (openByCheck is a map, not the `null` no-telemetry sentinel) —
+  // otherwise an absent prior point would falsely read as all-zeros and flag
+  // every currently-open check as a 0→N regression after upgrade (#1597).
+  const checkRegressions = latest?.openByCheck && previous?.openByCheck
+    ? regressionsBetween(latest, previous, 'openByCheck', 'checkId')
+    : [];
   return { points, regressions, checkRegressions, latest, previous, delta };
 }
 
