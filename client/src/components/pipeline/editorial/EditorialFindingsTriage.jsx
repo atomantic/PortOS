@@ -15,7 +15,7 @@
  * bulk-dismisses the selection — each result reactively updates local state.
  */
 import { Link, useSearchParams } from 'react-router-dom';
-import { ChevronDown, ChevronRight, ExternalLink, History, Check, X, Loader2, GitCompareArrows, Search, Ban, Undo2, Info } from 'lucide-react';
+import { ChevronDown, ChevronRight, ExternalLink, History, Check, X, Loader2, GitCompareArrows, Search, Ban, Undo2, Info, Play, ArrowRight, CheckCircle2, RefreshCw } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import CheckKindBadge from './CheckKindBadge';
 import {
@@ -622,7 +622,63 @@ function FindingsToolbar({ facets, filters, sort, setParam, toggleInParam, onCle
   );
 }
 
-export default function EditorialFindingsTriage({ seriesId, comments = [], checksById = {}, onCommentChange, onToggleCheckEnabled }) {
+// Contextual next-steps shown when there are no open findings left to triage
+// (#1612): either no check has surfaced anything yet, or every finding has been
+// accepted/dismissed. Without this the user is left on a screen of collapsed
+// "0 open" groups (or a bare "run the checks" line) with no hint at the natural
+// continuations — re-run the checks, refresh the reverse outline, or head back to
+// the series pipeline to push on to visuals/autopilot. `onRunChecks` is optional
+// so the component still renders standalone (tests, embeds without a runner).
+function NextStepsCTA({ seriesId, allCleared, onRunChecks, runDisabled = false }) {
+  return (
+    <div className="space-y-3 rounded-lg border border-port-border bg-port-card p-4 text-center">
+      <div className="space-y-1">
+        {allCleared ? (
+          <p className="flex items-center justify-center gap-1.5 text-sm font-medium text-port-success">
+            <CheckCircle2 size={16} /> All findings cleared
+          </p>
+        ) : (
+          <p className="text-sm font-medium text-gray-200">No editorial-check findings yet.</p>
+        )}
+        <p className="text-xs text-gray-500">
+          {allCleared
+            ? 'Every check finding has been accepted or dismissed. Pick a next step:'
+            : 'Run the enabled checks to populate this list, or continue in the pipeline:'}
+        </p>
+      </div>
+      <div className="flex flex-wrap items-center justify-center gap-2">
+        {onRunChecks ? (
+          <button
+            type="button"
+            onClick={onRunChecks}
+            disabled={runDisabled}
+            className="inline-flex items-center gap-1.5 rounded bg-port-accent px-3 py-1.5 text-xs text-white hover:bg-port-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <Play size={13} /> {allCleared ? 'Re-run checks' : 'Run checks'}
+          </button>
+        ) : null}
+        {seriesId ? (
+          <>
+            <Link
+              to={`/pipeline/series/${seriesId}/reverse-outline`}
+              className="inline-flex items-center gap-1.5 rounded border border-port-border px-3 py-1.5 text-xs text-gray-300 hover:border-port-accent/40 hover:text-white"
+            >
+              <RefreshCw size={13} /> Refresh reverse outline
+            </Link>
+            <Link
+              to={`/pipeline/series/${seriesId}`}
+              className="inline-flex items-center gap-1.5 rounded border border-port-border px-3 py-1.5 text-xs text-gray-300 hover:border-port-accent/40 hover:text-white"
+            >
+              Continue in the pipeline <ArrowRight size={13} />
+            </Link>
+          </>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+export default function EditorialFindingsTriage({ seriesId, comments = [], checksById = {}, onCommentChange, onToggleCheckEnabled, onRunChecks, runDisabled = false }) {
   const groups = useMemo(() => groupFindingsByCheck(comments, checksById), [comments, checksById]);
   const [selectedIds, setSelectedIds] = useState(() => new Set());
 
@@ -759,14 +815,16 @@ export default function EditorialFindingsTriage({ seriesId, comments = [], check
   );
 
   if (!groups.length) {
-    return (
-      <p className="rounded-lg border border-dashed border-port-border p-4 text-center text-xs text-gray-500">
-        No editorial-check findings yet. Run the enabled checks to populate this list.
-      </p>
-    );
+    return <NextStepsCTA seriesId={seriesId} allCleared={false} onRunChecks={onRunChecks} runDisabled={runDisabled} />;
   }
   const totalOpen = openFindingsTotal(groups);
   const shownOpen = openFindingsTotal(visibleView);
+  // Findings exist but none are open — everything's been triaged. Surface the
+  // next-steps CTA (#1612) above the resolved groups (still listed below so the
+  // user can review or undo) instead of leaving a screen of collapsed "0 open"
+  // groups with no guidance. Suppressed while a filter/mute is narrowing the view,
+  // since that has its own "no matches" messaging.
+  const allCleared = totalOpen === 0 && activeFilterCount === 0 && hiddenCheckIds.size === 0;
   return (
     <div id={FINDINGS_TRIAGE_ANCHOR_ID} className="scroll-mt-4 space-y-2">
       <FindingsToolbar
@@ -792,6 +850,9 @@ export default function EditorialFindingsTriage({ seriesId, comments = [], check
             : `${totalOpen} open finding${totalOpen === 1 ? '' : 's'} across ${groups.length} check${groups.length === 1 ? '' : 's'}`}
         </p>
       )}
+      {allCleared ? (
+        <NextStepsCTA seriesId={seriesId} allCleared onRunChecks={onRunChecks} runDisabled={runDisabled} />
+      ) : null}
       {visibleView.length === 0 ? (
         <p className="rounded-lg border border-dashed border-port-border p-4 text-center text-xs text-gray-500">
           {activeFilterCount > 0 ? (
