@@ -3281,10 +3281,15 @@ export const EDITORIAL_CHECKS = [
     // fiction is a credibility killer, but the prompt directs the model to mark a
     // plot-relevant error 'high' per finding, so the worst cases still surface high.
     severityDefault: 'medium',
-    // Opt-in: off by default so the check never runs on a series that hasn't
-    // declared itself fact-critical and supplied a reference (the gate also
-    // enforces both at run time).
-    defaultEnabled: false,
+    // Registry-enabled like every other built-in check, but the GATE is the real
+    // opt-in: it produces findings ONLY when the series is flagged fact-critical
+    // AND a reference is supplied — mirroring how the comic/visual checks are
+    // defaultEnabled:true yet skip a prose-only series via their content gate. A
+    // `defaultEnabled: false` here would mean the series fact-critical flag alone
+    // never triggers it, because getEnabledChecks() filters disabled checks out
+    // BEFORE the per-series gate runs — so the advertised "flag the series" path
+    // would silently do nothing until the user ALSO enabled it in check settings.
+    defaultEnabled: true,
     // Reads the stitched manuscript corpus — so the runner only pays the
     // section-collection I/O when a manuscript-consuming check is enabled.
     needsManuscript: true,
