@@ -107,7 +107,7 @@ function claimTriple(task) {
  * NOTE: with no per-task edit timestamp this converges but cannot guarantee
  * *newest-edit* wins (it can prefer a stale higher-priority value over a fresh
  * lower one). That's the conventional LWW trade-off; a real `updatedAt` edit
- * key is the proper upgrade (tracked as a follow-up). Convergence is the
+ * key is the proper upgrade (tracked in #1714). Convergence is the
  * load-bearing property here — a sync that never reconciles is worse.
  */
 function pickContentBase(local, remote) {
