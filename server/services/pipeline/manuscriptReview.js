@@ -31,6 +31,16 @@ const SCHEMA_VERSION = 1;
 export const COMMENT_STATUSES = Object.freeze(['open', 'accepted', 'dismissed']);
 const STATUS_SET = new Set(COMMENT_STATUSES);
 
+// Why a dismissal was made (#1605). A plain dismiss (`dismissReason: null`)
+// means "won't fix" — the finding is real but the user is leaving it. A
+// `false-positive` reason means "this check is wrong here" — it feeds the
+// per-check quality view so broken checks are tracked instead of silently
+// re-surfacing the same bad finding every run. Only meaningful when
+// `status === 'dismissed'`. Optional + additive, so the synced review doc stays
+// backward-compatible with older peers (who simply ignore the field).
+export const DISMISS_REASONS = Object.freeze(['false-positive']);
+const DISMISS_REASON_SET = new Set(DISMISS_REASONS);
+
 // Re-run modes for seedReviewFromFindings — see its doc comment. Exported so the
 // route's Zod enum validates against the same source (mirrors COMMENT_STATUSES).
 export const REVIEW_RUN_MODES = Object.freeze(['merge', 'fresh']);
@@ -129,6 +139,13 @@ function sanitizeComment(raw) {
     // Optional + additive, so the synced review doc stays backward-compatible.
     sourceContentHash: typeof raw.sourceContentHash === 'string' && raw.sourceContentHash ? raw.sourceContentHash : null,
     status: STATUS_SET.has(raw.status) ? raw.status : 'open',
+    // Dismissal reason (#1605) — only carried while dismissed. A status flip
+    // back to open/accepted drops it here so a re-opened finding can't keep a
+    // stale `false-positive` mark. Legacy/older-peer records lack the field and
+    // sanitize to `null` (a plain "won't fix" dismiss).
+    dismissReason: raw.status === 'dismissed' && DISMISS_REASON_SET.has(raw.dismissReason)
+      ? raw.dismissReason
+      : null,
     fix: sanitizeFix(raw.fix),
     sourceRunId: typeof raw.sourceRunId === 'string' ? raw.sourceRunId : null,
     createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : new Date().toISOString(),
@@ -372,6 +389,12 @@ export async function updateComment(seriesId, commentId, patch) {
     const cur = review.comments[idx];
     const merged = { ...cur };
     if (patch.status !== undefined && STATUS_SET.has(patch.status)) merged.status = patch.status;
+    // Dismissal reason (#1605). `null` is an explicit clear; a valid reason sets
+    // it. sanitizeComment below drops it anyway when the resulting status isn't
+    // `dismissed`, so re-opening a false-positive can't leave the mark behind.
+    if (patch.dismissReason !== undefined) {
+      merged.dismissReason = DISMISS_REASON_SET.has(patch.dismissReason) ? patch.dismissReason : null;
+    }
     // `fix: null` is an explicit clear; absent leaves it untouched.
     if (patch.fix !== undefined) merged.fix = sanitizeFix(patch.fix);
     merged.updatedAt = new Date().toISOString();

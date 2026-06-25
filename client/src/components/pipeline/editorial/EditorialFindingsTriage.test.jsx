@@ -137,9 +137,21 @@ describe('EditorialFindingsTriage', () => {
     expect(screen.queryByRole('button', { name: /preview fix/i })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: /dismiss/i }));
     await waitFor(() => expect(patchPipelineManuscriptComment).toHaveBeenCalledWith(
-      'ser-1', 'c1', { status: 'dismissed' }, { silent: true },
+      'ser-1', 'c1', { status: 'dismissed', dismissReason: null }, { silent: true },
     ));
     await waitFor(() => expect(onCommentChange).toHaveBeenCalledWith(expect.objectContaining({ id: 'c1', status: 'dismissed' })));
+  });
+
+  it('flags a finding as a false positive inline (#1605)', async () => {
+    const onCommentChange = vi.fn();
+    patchPipelineManuscriptComment.mockResolvedValue({ comment: { id: 'c1', checkId: 'naming.dissimilar-names', status: 'dismissed', dismissReason: 'false-positive', severity: 'high', problem: 'Bad finding' } });
+    const comments = [{ id: 'c1', checkId: 'naming.dissimilar-names', status: 'open', severity: 'high', problem: 'Bad finding' }];
+    renderTriage({ comments, onCommentChange });
+
+    fireEvent.click(screen.getByRole('button', { name: /false positive/i }));
+    await waitFor(() => expect(patchPipelineManuscriptComment).toHaveBeenCalledWith(
+      'ser-1', 'c1', { status: 'dismissed', dismissReason: 'false-positive' }, { silent: true },
+    ));
   });
 
   it('does not offer inline actions on a resolved finding (#1598)', () => {
@@ -179,8 +191,8 @@ describe('EditorialFindingsTriage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /dismiss 2/i }));
     await waitFor(() => expect(patchPipelineManuscriptComment).toHaveBeenCalledTimes(2));
-    expect(patchPipelineManuscriptComment).toHaveBeenCalledWith('ser-1', 'c1', { status: 'dismissed' }, { silent: true });
-    expect(patchPipelineManuscriptComment).toHaveBeenCalledWith('ser-1', 'c2', { status: 'dismissed' }, { silent: true });
+    expect(patchPipelineManuscriptComment).toHaveBeenCalledWith('ser-1', 'c1', { status: 'dismissed', dismissReason: null }, { silent: true });
+    expect(patchPipelineManuscriptComment).toHaveBeenCalledWith('ser-1', 'c2', { status: 'dismissed', dismissReason: null }, { silent: true });
     await waitFor(() => expect(onCommentChange).toHaveBeenCalledTimes(2));
   });
 

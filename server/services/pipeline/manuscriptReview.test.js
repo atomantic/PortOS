@@ -25,7 +25,7 @@ vi.mock('./arcPlanner.js', () => ({
 
 import { recordEvents } from '../sharing/recordEvents.js';
 import { collectManuscriptSections } from './arcPlanner.js';
-import { seedReviewFromFindings, updateComment, mergeReviewFromSync, getReview } from './manuscriptReview.js';
+import { seedReviewFromFindings, updateComment, mergeReviewFromSync, getReview, DISMISS_REASONS } from './manuscriptReview.js';
 
 describe('manuscriptReview — record-event emission on write', () => {
   let updates;
@@ -431,5 +431,66 @@ describe('manuscriptReview — authoritative severity override re-grade (#1596)'
       ...ran, severityOverrides: { [CHECK]: 'high' },
     });
     expect(second.comments[0].updatedAt).toBe(stamp); // unchanged — no rewrite
+  });
+});
+
+describe('manuscriptReview — false-positive dismissal reason (#1605)', () => {
+  beforeEach(() => fileStore.clear());
+
+  it('exposes false-positive as the canonical dismissal reason', () => {
+    expect(DISMISS_REASONS).toContain('false-positive');
+  });
+
+  it('seeded findings carry a null dismissReason by default', async () => {
+    const seeded = await seedReviewFromFindings('fp-seed', [{ problem: 'P', anchorQuote: 'q' }]);
+    expect(seeded.comments[0].dismissReason).toBeNull();
+  });
+
+  it('updateComment records a false-positive dismissal', async () => {
+    const seeded = await seedReviewFromFindings('fp-set', [{ problem: 'P', anchorQuote: 'q' }]);
+    const id = seeded.comments[0].id;
+    const updated = await updateComment('fp-set', id, { status: 'dismissed', dismissReason: 'false-positive' });
+    expect(updated.status).toBe('dismissed');
+    expect(updated.dismissReason).toBe('false-positive');
+    // Survives a read-back through sanitize (the same shaper sync uses).
+    const persisted = (await getReview('fp-set')).comments[0];
+    expect(persisted.dismissReason).toBe('false-positive');
+  });
+
+  it('clears the reason when the finding is re-opened', async () => {
+    const seeded = await seedReviewFromFindings('fp-reopen', [{ problem: 'P', anchorQuote: 'q' }]);
+    const id = seeded.comments[0].id;
+    await updateComment('fp-reopen', id, { status: 'dismissed', dismissReason: 'false-positive' });
+    const reopened = await updateComment('fp-reopen', id, { status: 'open' });
+    // sanitize drops a reason that no longer applies to the (non-dismissed) status.
+    expect(reopened.dismissReason).toBeNull();
+  });
+
+  it('clears the reason on an explicit plain dismiss (dismissReason: null)', async () => {
+    const seeded = await seedReviewFromFindings('fp-plain', [{ problem: 'P', anchorQuote: 'q' }]);
+    const id = seeded.comments[0].id;
+    await updateComment('fp-plain', id, { status: 'dismissed', dismissReason: 'false-positive' });
+    const plain = await updateComment('fp-plain', id, { status: 'dismissed', dismissReason: null });
+    expect(plain.status).toBe('dismissed');
+    expect(plain.dismissReason).toBeNull();
+  });
+
+  it('rejects an unknown reason (sanitizes to null)', async () => {
+    const seeded = await seedReviewFromFindings('fp-bad', [{ problem: 'P', anchorQuote: 'q' }]);
+    const id = seeded.comments[0].id;
+    const updated = await updateComment('fp-bad', id, { status: 'dismissed', dismissReason: 'bogus' });
+    expect(updated.dismissReason).toBeNull();
+  });
+
+  it('survives a sync round-trip and never resurrects a stale reason on a non-dismissed peer record', async () => {
+    const merged = await mergeReviewFromSync('fp-sync', {
+      comments: [
+        { id: 'fp1', problem: 'real fp', status: 'dismissed', dismissReason: 'false-positive', updatedAt: '2026-06-25T00:00:00Z' },
+        { id: 'fp2', problem: 'open with stray reason', status: 'open', dismissReason: 'false-positive', updatedAt: '2026-06-25T00:00:00Z' },
+      ],
+    });
+    const byId = Object.fromEntries(merged.comments.map((c) => [c.id, c]));
+    expect(byId.fp1.dismissReason).toBe('false-positive');
+    expect(byId.fp2.dismissReason).toBeNull(); // not dismissed → reason dropped
   });
 });

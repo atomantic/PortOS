@@ -57,6 +57,10 @@ const manuscriptFixAcceptSchema = z.object({
 // stray keys; `fix` nullable so an explicit clear is distinguishable from absent.
 const manuscriptCommentPatchSchema = z.object({
   status: z.enum(['open', 'accepted', 'dismissed']).optional(),
+  // Why a dismissal was made (#1605) — `false-positive` flags a broken check;
+  // `null` clears the reason back to a plain "won't fix" dismiss. Validated
+  // against the same source the service sanitizes from.
+  dismissReason: z.enum(manuscriptReview.DISMISS_REASONS).nullable().optional(),
   fix: z.object({
     find: z.string().max(issuesSvc.STAGE_OUTPUT_MAX).optional(),
     replace: z.string().max(issuesSvc.STAGE_OUTPUT_MAX).optional(),

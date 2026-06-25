@@ -71,8 +71,29 @@ describe('ManuscriptCommentCard keyboard shortcuts (#1603)', () => {
     renderCard();
     pressKey('d');
     await waitFor(() => expect(patchPipelineManuscriptComment).toHaveBeenCalledWith(
-      'ser-1', 'c1', { status: 'dismissed' }, { silent: true },
+      'ser-1', 'c1', { status: 'dismissed', dismissReason: null }, { silent: true },
     ));
+  });
+
+  it('f flags a check-sourced finding as a false positive (#1605)', async () => {
+    const checkComment = { ...baseComment, checkId: 'prose.info-dumping' };
+    patchPipelineManuscriptComment.mockResolvedValue({ comment: { ...checkComment, status: 'dismissed', dismissReason: 'false-positive' } });
+    render(
+      <>
+        <ManuscriptCommentCard comment={checkComment} seriesId="ser-1" onCommentChange={vi.fn()} onAccepted={vi.fn()} draft={null} onDraftChange={vi.fn()} />
+        <Toaster />
+      </>,
+    );
+    expect(screen.getByText('False positive')).toBeTruthy();
+    pressKey('f');
+    await waitFor(() => expect(patchPipelineManuscriptComment).toHaveBeenCalledWith(
+      'ser-1', 'c1', { status: 'dismissed', dismissReason: 'false-positive' }, { silent: true },
+    ));
+  });
+
+  it('does NOT offer the false-positive action for a completeness finding (no checkId)', () => {
+    renderCard();
+    expect(screen.queryByText('False positive')).toBeNull();
   });
 
   it('a accepts the suggested fix when one exists, and shows accept/regenerate hints', () => {

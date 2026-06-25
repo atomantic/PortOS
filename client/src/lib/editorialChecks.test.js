@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   groupChecksByScope,
   groupFindingsByCheck,
+  checkFalsePositiveRate,
   openFindingsTotal,
   findingManuscriptLink,
   scopeLabel,
@@ -89,6 +90,41 @@ describe('groupFindingsByCheck', () => {
     const groups = groupFindingsByCheck(staleComments, rows);
     expect(groups.find((g) => g.checkId === 'a.series').stale).toBe(1);
     expect(groups.find((g) => g.checkId === 'b.issue').stale).toBe(0);
+  });
+
+  it('tallies dismissed + false-positive counts and stamps a stable rate (#1605)', () => {
+    const fpComments = [
+      { id: '1', checkId: 'a.series', status: 'open', severity: 'high' },
+      { id: '2', checkId: 'a.series', status: 'dismissed', severity: 'low' }, // plain dismiss
+      { id: '3', checkId: 'a.series', status: 'dismissed', severity: 'high', dismissReason: 'false-positive' },
+      { id: '4', checkId: 'a.series', status: 'dismissed', severity: 'high', dismissReason: 'false-positive' },
+      { id: '5', checkId: 'b.issue', status: 'open', severity: 'medium' },
+    ];
+    const groups = groupFindingsByCheck(fpComments, rows);
+    const series = groups.find((g) => g.checkId === 'a.series');
+    expect(series.dismissed).toBe(3);
+    expect(series.falsePositive).toBe(2);
+    expect(series.falsePositiveRate).toBeCloseTo(2 / 4); // 2 of 4 findings
+    const issue = groups.find((g) => g.checkId === 'b.issue');
+    expect(issue.falsePositive).toBe(0);
+    expect(issue.falsePositiveRate).toBe(0);
+  });
+});
+
+describe('checkFalsePositiveRate', () => {
+  it('prefers the stamped rate over a recompute (survives status-filter recounts)', () => {
+    // A group whose `total` was recounted to the open-only subset, but whose
+    // stamped rate reflects the full finding set.
+    expect(checkFalsePositiveRate({ total: 1, falsePositive: 0, falsePositiveRate: 0.5 })).toBe(0.5);
+  });
+
+  it('falls back to falsePositive/total for a hand-built group', () => {
+    expect(checkFalsePositiveRate({ total: 4, falsePositive: 1 })).toBe(0.25);
+  });
+
+  it('returns null when the check has no findings yet', () => {
+    expect(checkFalsePositiveRate({ total: 0, falsePositive: 0 })).toBeNull();
+    expect(checkFalsePositiveRate(null)).toBeNull();
   });
 });
 
