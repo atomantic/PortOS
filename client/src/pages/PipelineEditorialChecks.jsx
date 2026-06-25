@@ -127,6 +127,15 @@ export default function PipelineEditorialChecks() {
       });
   }, []);
 
+  // Inline accept/dismiss from the triage list (#1598) — replace the changed
+  // comment in place (reactive update) and re-pull the health score/trend so the
+  // panel reflects the resolved finding without a full refetch.
+  const handleCommentChange = useCallback((updated) => {
+    if (!updated?.id) return;
+    setComments((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
+    setHealthRefresh((n) => n + 1);
+  }, []);
+
   useEffect(() => {
     setRunActive(false);
     if (!seriesId) { setComments([]); return; }
@@ -528,7 +537,7 @@ export default function PipelineEditorialChecks() {
                 {loadingFindings ? (
                   <p className="flex items-center gap-2 text-sm text-gray-400"><Loader2 size={16} className="animate-spin" /> Loading findings…</p>
                 ) : (
-                  <EditorialFindingsTriage seriesId={seriesId} comments={comments} checksById={checksById} />
+                  <EditorialFindingsTriage seriesId={seriesId} comments={comments} checksById={checksById} onCommentChange={handleCommentChange} />
                 )}
               </>
             )}
