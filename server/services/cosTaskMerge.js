@@ -43,6 +43,10 @@
  */
 
 import { isLeaseLive, getClaimOwner, CLAIM_METADATA_KEYS } from './cosTaskClaim.js';
+// Import from taskParser (the lowest task module) rather than cosTaskStore: the
+// store imports THIS module for mergeTaskLists, so pulling its PRIORITY_VALUES
+// here would form a circular import. taskParser has no cos-module deps.
+import { PRIORITY_VALUES } from '../lib/taskParser.js';
 
 // Lifecycle rank — higher wins the content tiebreak (rule 2). Each status has a
 // distinct rank so two DIFFERENT statuses never tie (full convergence); the only
@@ -50,8 +54,6 @@ import { isLeaseLive, getClaimOwner, CLAIM_METADATA_KEYS } from './cosTaskClaim.
 const STATUS_RANK = Object.freeze({ completed: 4, blocked: 3, in_progress: 2, pending: 1 });
 const statusRank = (status) => STATUS_RANK[status] || 0;
 const isTerminalStatus = (status) => status === 'completed' || status === 'blocked';
-
-const PRIORITY_VALUES = Object.freeze({ CRITICAL: 4, HIGH: 3, MEDIUM: 2, LOW: 1 });
 
 const leaseMs = (metadata) => {
   const raw = metadata?.leaseExpiresAt;
@@ -115,11 +117,13 @@ function mergeOne(local, remote, now) {
 }
 
 /**
- * Normalize a record adopted wholesale from the peer (a remote-only task, or a
- * merged record sourced from the remote side) so downstream consumers that key
- * on `priorityValue` / `section` stay correct. Re-derives `priorityValue` from
- * the (authoritative) `priority` string and drops the transient `section` so the
- * generator re-buckets it by status.
+ * Normalize a record adopted from the peer (a remote-only task, or a merged
+ * record sourced from the remote side). Wire entries carry no `priorityValue`
+ * (it's derivable), but `generateTasksMarkdown` orders each section via
+ * `sortByPriority`, which reads `priorityValue` — so an undefined value would
+ * sort as NaN and churn the output order. Re-derive it from the (authoritative)
+ * `priority` string. `section` is left as-is: the generator buckets purely by
+ * `status`, so it never reads `section`.
  */
 function normalizeAdopted(task) {
   return {
