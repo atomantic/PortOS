@@ -3995,6 +3995,10 @@ describe('copy-edit prose-tic bundle (#1306)', () => {
     const tag = findings.find((f) => /dialogue tag/i.test(f.problem));
     expect(tag).toBeTruthy();
     expect(tag.anchorQuote.toLowerCase()).toBe('quietly');
+    // With reporting tags included the wording must stay neutral — it can not
+    // claim a "said quietly" match "names the feeling".
+    expect(/emotion-telling/i.test(tag.problem)).toBe(false);
+    expect(/adverb-laden/i.test(tag.problem)).toBe(true);
   });
 
   it('prose.passive-voice flags above the rate threshold', () => {

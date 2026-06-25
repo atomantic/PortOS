@@ -4917,13 +4917,19 @@ export const EDITORIAL_CHECKS = [
         const { number, location } = sectionIssue(s);
         // Emotion-telling dialogue-tag adverbs are flagged regardless of overall
         // density (one "said angrily" is already a tell); the bulk -ly density is
-        // gated on rate.
+        // gated on rate. When `flagReportingTags` is on, the bucket also includes
+        // reporting tags ("said quietly"), so the wording stays neutral rather than
+        // claiming every match "names the feeling".
         if (tagHits.length) {
+          const plural = tagHits.length === 1 ? '' : 's';
+          const problem = flagReportingTags
+            ? `${tagHits.length} adverb-laden dialogue tag${plural} (e.g. "${tagHits[0].anchor}") — a dialogue tag propped up by an adverb usually means the line itself should carry the tone.`
+            : `${tagHits.length} emotion-telling dialogue tag${plural} (e.g. "${tagHits[0].anchor}") — a dialogue tag that names the feeling usually means the line itself should carry the tone.`;
           findings.push({
             severity: escalateSeverity(ctx.severityDefault, 1),
             category: 'style',
             location,
-            problem: `${tagHits.length} emotion-telling dialogue tag${tagHits.length === 1 ? '' : 's'} (e.g. "${tagHits[0].anchor}") — a dialogue tag that names the feeling usually means the line itself should carry the tone.`,
+            problem,
             suggestion: 'Cut the adverb and let the dialogue + action beat convey the tone ("she said angrily" → "she slammed the cup down. “Fine.”").',
             anchorQuote: tagHits[0].anchor,
             issueNumber: number,
