@@ -141,7 +141,16 @@ function mergeBodylessRecord(local, remoteRaw, sanitize) {
   const remote = sanitize(remoteRaw);
   if (!remote) return { next: null, inserted: false, remoteWins: false, changed: false };
   if (!local) return { next: remote, inserted: true, remoteWins: true, changed: true };
-  const remoteWins = compareNewerWins(remote.updatedAt, local.updatedAt);
+  // Derive the LOCAL lww key through the SAME sanitizer as the remote so the
+  // compare is symmetric. Exercises predate federation and may carry no stored
+  // `updatedAt` (the sanitizer derives it from `finishedAt ?? startedAt`); the
+  // stored local record is raw (unsanitized), so an `undefined` local.updatedAt
+  // would lose to ANY parseable remote — `compareNewerWins` treats an
+  // unparseable incumbent as always-loses — letting a STALE push clobber a
+  // newer local. `sanitize(local)` can't be null here (local came from our own
+  // store with a valid id); fall back to the raw key defensively.
+  const localKey = sanitize(local)?.updatedAt ?? local.updatedAt;
+  const remoteWins = compareNewerWins(remote.updatedAt, localKey);
   const next = remoteWins ? remote : local;
   const changed = JSON.stringify(next) !== JSON.stringify(local);
   return { next, inserted: false, remoteWins, changed };

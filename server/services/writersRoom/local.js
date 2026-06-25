@@ -601,6 +601,7 @@ export async function createExercise({ workId = null, prompt = '', durationSecon
     status: 'running',
     startedAt: nowIso(),
     finishedAt: null,
+    updatedAt: nowIso(),
   };
   await store().writeExercise(exercise);
   // Auto-subscribe every writersRoomExercises-enabled peer so brand-new sprints
@@ -620,17 +621,22 @@ export async function finishExercise(id, { endingWords, appendedText = null } = 
   const startingWords = existing.startingWords || 0;
   const resolvedEnding = endingWords ?? startingWords;
   const wordsAdded = Math.max(0, resolvedEnding - startingWords);
+  const now = nowIso();
   const finished = {
     ...existing,
     endingWords: resolvedEnding,
     wordsAdded,
     appendedText: appendedText ?? null,
     status: 'finished',
-    finishedAt: nowIso(),
+    finishedAt: now,
+    updatedAt: now,
   };
   await store().writeExercise(finished);
-  // The settle transition bumps finishedAt (the derived LWW key) — push it so
-  // subscribed peers converge on the finished state (#1645).
+  // The settle transition stamps a fresh updatedAt (the LWW key) — push it so
+  // subscribed peers converge on the finished state. updatedAt must be bumped
+  // explicitly (not left to the finishedAt-derived fallback): a sync-seeded
+  // exercise already carries a stored updatedAt the sanitizer would otherwise
+  // prefer over the new finishedAt, so the finish wouldn't advance the key (#1645).
   emitRecordUpdated(WRITERS_ROOM_EXERCISE_KIND, id);
   return finished;
 }
@@ -640,7 +646,8 @@ export async function discardExercise(id) {
   const existing = all.find((e) => e.id === id);
   if (!existing) throw notFound('Exercise');
   if (settled(existing)) throw badRequest('Exercise is already settled');
-  const discarded = { ...existing, status: 'discarded', finishedAt: nowIso() };
+  const now = nowIso();
+  const discarded = { ...existing, status: 'discarded', finishedAt: now, updatedAt: now };
   await store().writeExercise(discarded);
   emitRecordUpdated(WRITERS_ROOM_EXERCISE_KIND, id);
   return discarded;

@@ -299,6 +299,20 @@ describe('mergeExerciseRecord', () => {
     expect(mergeExerciseRecord(null, exercise()).inserted).toBe(true);
     expect(mergeExerciseRecord(exercise(), { id: 'bogus' }).next).toBeNull();
   });
+
+  it('a legacy local with NO stored updatedAt is not clobbered by a stale remote (symmetric LWW key)', () => {
+    // Regression: the local key must be derived through the same sanitizer as the
+    // remote. A finished local (no updatedAt, finishedAt=00:10) must beat a stale
+    // running remote (no updatedAt, derived key = startedAt=00:00) — without the
+    // symmetric derivation the raw `local.updatedAt` is undefined and the stale
+    // remote would win unconditionally.
+    const localFinished = { ...exercise(), status: 'finished', finishedAt: '2026-01-01T00:10:00.000Z' };
+    delete localFinished.updatedAt;
+    const staleRunning = { ...exercise(), status: 'running', finishedAt: null };
+    const { remoteWins, next } = mergeExerciseRecord(localFinished, staleRunning);
+    expect(remoteWins).toBe(false);
+    expect(next.status).toBe('finished');
+  });
 });
 
 describe('body-less wire form', () => {
