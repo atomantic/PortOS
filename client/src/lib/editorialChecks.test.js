@@ -6,6 +6,8 @@ import {
   openFindingsTotal,
   findingManuscriptLink,
   scopeLabel,
+  categoryLabel,
+  normCategory,
   deriveFindingFacets,
   applyFindingsView,
   normalizeFindingSort,
@@ -154,9 +156,9 @@ describe('scopeLabel', () => {
 });
 
 const findingsFixture = () => [
-  { id: 'a1', checkId: 'pacing', status: 'open', severity: 'high', issueNumber: 2, problem: 'Slow open', location: 'p1' },
-  { id: 'a2', checkId: 'pacing', status: 'dismissed', severity: 'low', issueNumber: 2, problem: 'Old note' },
-  { id: 'b1', checkId: 'naming', status: 'open', severity: 'medium', issueNumber: 1, problem: 'Confusable names' },
+  { id: 'a1', checkId: 'pacing', category: 'pacing', status: 'open', severity: 'high', issueNumber: 2, problem: 'Slow open', location: 'p1' },
+  { id: 'a2', checkId: 'pacing', category: 'pacing', status: 'dismissed', severity: 'low', issueNumber: 2, problem: 'Old note' },
+  { id: 'b1', checkId: 'naming', category: 'naming', status: 'open', severity: 'medium', issueNumber: 1, problem: 'Confusable names' },
   { id: 'b2', checkId: 'naming', status: 'open', severity: 'low', issueNumber: null, problem: 'Series-wide naming' },
 ];
 const fixtureRows = {
@@ -192,6 +194,24 @@ describe('deriveFindingFacets', () => {
     expect(f.scopes.map((s) => s.scope)).toEqual(['scene', 'series']);
     expect(f.issues.map((i) => i.key)).toEqual(['1', '2', 'none']);
     expect(f.issues.find((i) => i.key === 'none').label).toBe('Series-wide');
+    // Categories come from the finding's `category` field; a finding without one
+    // buckets under 'other'. Sorted by display label.
+    expect(f.categories.map((c) => c.category)).toEqual(['naming', 'other', 'pacing']);
+    expect(f.categories.map((c) => c.label)).toEqual(['Naming', 'Other', 'Pacing']);
+  });
+});
+
+describe('normCategory / categoryLabel', () => {
+  it('normalizes a finding category, bucketing missing/blank under "other"', () => {
+    expect(normCategory({ category: 'continuity' })).toBe('continuity');
+    expect(normCategory({ category: '' })).toBe('other');
+    expect(normCategory({})).toBe('other');
+    expect(normCategory(null)).toBe('other');
+  });
+
+  it('title-cases a category token for display', () => {
+    expect(categoryLabel('continuity')).toBe('Continuity');
+    expect(categoryLabel('')).toBe('Other');
   });
 });
 
@@ -218,11 +238,22 @@ describe('applyFindingsView', () => {
     expect(ids).toEqual(['a1', 'b1', 'b2']);
   });
 
-  it('filters by scope (category) and by check id', () => {
+  it('filters by scope and by check id', () => {
     const byScope = applyFindingsView(groupsFixture(), { scopes: new Set(['series']) }, 'scope');
     expect(byScope.map((g) => g.checkId)).toEqual(['naming']);
     const byCheck = applyFindingsView(groupsFixture(), { checkIds: new Set(['pacing']) }, 'scope');
     expect(byCheck.map((g) => g.checkId)).toEqual(['pacing']);
+  });
+
+  it('filters by finding category (comment-level), bucketing un-categorized under "other"', () => {
+    const byPacing = applyFindingsView(groupsFixture(), { categories: new Set(['pacing']) }, 'scope');
+    expect(byPacing.flatMap((g) => g.comments.map((c) => c.id))).toEqual(['a1', 'a2']);
+    // 'naming' category only matches b1 (b2 has no category → 'other'), so the
+    // naming group keeps just b1.
+    const byNaming = applyFindingsView(groupsFixture(), { categories: new Set(['naming']) }, 'scope');
+    expect(byNaming.flatMap((g) => g.comments.map((c) => c.id))).toEqual(['b1']);
+    const byOther = applyFindingsView(groupsFixture(), { categories: new Set(['other']) }, 'scope');
+    expect(byOther.flatMap((g) => g.comments.map((c) => c.id))).toEqual(['b2']);
   });
 
   it('filters by issue, including the series-wide "none" bucket', () => {

@@ -15,6 +15,37 @@ export const CHECK_SCOPE_LABELS = Object.freeze({
 export const scopeLabel = (scope) =>
   CHECK_SCOPE_LABELS[scope] || (scope ? scope[0].toUpperCase() + scope.slice(1) : 'Other');
 
+// A finding's editorial category (continuity / pacing / style / …) — distinct
+// from its check scope. Mirrors the server's normalization in editorialScore.js
+// so the triage facet and the health panel's "open by category" agree.
+export const normCategory = (comment) =>
+  (typeof comment?.category === 'string' && comment.category) ? comment.category : 'other';
+
+// Title-case a raw category token for display in the toolbar select.
+export const categoryLabel = (category) =>
+  category ? category[0].toUpperCase() + category.slice(1) : 'Other';
+
+// URL params that persist the triage filters/sort (#1600). `f`-prefixed so they
+// never collide with the page's own `series` / `custom` params. Exported (rather
+// than living in the triage component) so the health panel can deep-link the
+// triage to a category/check from its clickable breakdown rows (#1606).
+export const FINDING_FILTER_PARAMS = Object.freeze({
+  severity: 'fsev',
+  status: 'fstatus',
+  scope: 'fscope',
+  check: 'fcheck',
+  issue: 'fissue',
+  category: 'fcat',
+  query: 'fq',
+  sort: 'fsort',
+});
+export const ALL_FINDING_FILTER_PARAMS = Object.freeze(Object.values(FINDING_FILTER_PARAMS));
+
+// DOM id on the triage container so the health panel can scroll the findings
+// list into view after deep-linking a filter (#1606) — single source of truth
+// shared by the panel (scroll target) and the triage (anchor).
+export const FINDINGS_TRIAGE_ANCHOR_ID = 'editorial-findings-triage';
+
 const SEVERITY_ORDER = Object.freeze(['high', 'medium', 'low']);
 
 /**
@@ -174,12 +205,15 @@ export function deriveFindingFacets(groups = []) {
   const scopes = new Map();
   const checks = [];
   const issues = new Map();
+  const categories = new Map();
   for (const g of groups) {
     if (!scopes.has(g.scope)) scopes.set(g.scope, scopeLabel(g.scope));
     checks.push({ id: g.checkId, label: g.label });
     for (const c of g.comments) {
       severities.add(normSeverity(c));
       statuses.add(normStatus(c));
+      const cat = normCategory(c);
+      if (!categories.has(cat)) categories.set(cat, categoryLabel(cat));
       const key = findingIssueKey(c);
       if (!issues.has(key)) issues.set(key, key === 'none' ? 'Series-wide' : `Issue ${c.issueNumber}`);
     }
@@ -197,15 +231,19 @@ export function deriveFindingFacets(groups = []) {
     scopes: [...scopes.entries()].map(([scope, label]) => ({ scope, label })),
     checks,
     issues: issueList,
+    categories: [...categories.entries()]
+      .map(([category, label]) => ({ category, label }))
+      .sort((a, b) => a.label.localeCompare(b.label)),
   };
 }
 
 // A single comment passes the comment-level filters (severity/status/issue/query).
 // Scope + check are group-level and filtered separately.
 function commentPassesFilters(c, filters) {
-  const { severities, statuses, issues, query } = filters;
+  const { severities, statuses, issues, categories, query } = filters;
   if (severities?.size && !severities.has(normSeverity(c))) return false;
   if (statuses?.size && !statuses.has(normStatus(c))) return false;
+  if (categories?.size && !categories.has(normCategory(c))) return false;
   if (issues?.size && !issues.has(findingIssueKey(c))) return false;
   if (query) {
     const hay = `${c.problem || ''} ${c.location || ''}`.toLowerCase();
@@ -290,7 +328,8 @@ function sortGroups(groups, sort) {
  * scope/check is filtered out or that have no comment matching the comment-level
  * filters, recomputes each surviving group's counts, sorts findings within each
  * group, then orders the groups. `filters` carries Sets for severities, statuses,
- * scopes, checkIds, issues plus a `query` string; any empty/absent facet is "all".
+ * scopes, checkIds, issues, categories plus a `query` string; any empty/absent
+ * facet is "all".
  */
 export function applyFindingsView(groups = [], filters = {}, sort = 'scope') {
   const view = normalizeFindingSort(sort);

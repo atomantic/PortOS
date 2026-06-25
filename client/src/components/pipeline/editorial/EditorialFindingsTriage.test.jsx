@@ -273,6 +273,30 @@ describe('EditorialFindingsTriage', () => {
     expect(screen.queryByText('Sagging middle')).toBeNull();
   });
 
+  // ---- Category filter (#1606) — a comment-level facet distinct from scope. ----
+  const categoryComments = () => [
+    { id: 'n1', checkId: 'naming.dissimilar-names', category: 'naming', status: 'open', severity: 'high', issueNumber: 1, problem: 'Confusable names' },
+    { id: 'p1', checkId: 'pacing.scene-drag', category: 'pacing', status: 'open', severity: 'low', issueNumber: 2, problem: 'Sagging middle' },
+  ];
+  const renderCategory = (initialEntries = ['/']) => render(
+    <MemoryRouter initialEntries={initialEntries}>
+      <EditorialFindingsTriage seriesId="ser-1" checksById={twoCheckChecks} comments={categoryComments()} />
+    </MemoryRouter>,
+  );
+
+  it('filters by finding category via the Category select (#1606)', () => {
+    renderCategory();
+    fireEvent.change(screen.getByLabelText('Category'), { target: { value: 'pacing' } });
+    expect(screen.getByText('Sagging middle')).toBeTruthy();
+    expect(screen.queryByText('Confusable names')).toBeNull();
+  });
+
+  it('honors a category filter supplied via the URL query (#1606)', () => {
+    renderCategory(['/?fcat=naming']);
+    expect(screen.getByText('Confusable names')).toBeTruthy();
+    expect(screen.queryByText('Sagging middle')).toBeNull();
+  });
+
   it('honors filters supplied via the URL query so a view is deep-linkable (#1600)', () => {
     renderTwoCheck(['/?fsev=low']);
     expect(screen.getByText('Sagging middle')).toBeTruthy();
