@@ -1,5 +1,9 @@
 # Unreleased
 
+## Chief of Staff
+
+- **[issue-1683] CoS daily action-budget can no longer overshoot by one at the boundary.** `completeAgent()` emitted `agent:completed` — whose handler schedules `dequeueNextTask()` and its daily action-budget gate — *before* recording the just-finished action via `recordDomainUsage('cos', …)`. At the exact `maxActionsPerDay` boundary the dequeue read stale usage that didn't yet include the completing action (which was already `status: 'completed'`, so it wasn't counted as in-flight either), admitting one autonomous spawn past the cap. The usage ledger is now written before the `agent:completed` emit so the gate always counts the completing action. (`server/services/cosAgents.js`)
+
 ## Editorial checks
 
 - **[issue-1697] Health-panel deep-links now honor the triage's session-local check mute.** Muting a check from the Editorial Findings triage (#1602) hid its findings group but the health panel kept advertising that check/category row as clickable — clicking it scrolled to an empty filtered view. The session mute state (`hiddenCheckIds`) was lifted from `EditorialFindingsTriage` up to `PipelineEditorialChecks`, which now subtracts muted checks from the filterable sets the health panel receives; a category stays clickable only while a non-muted check still contributes an open finding to it. (`client/src/pages/PipelineEditorialChecks.jsx`, `client/src/components/pipeline/editorial/EditorialFindingsTriage.jsx`)

@@ -292,7 +292,10 @@ export async function completeAgent(agentId, result = {}) {
     }
 
     await saveState(state);
-    cosEvents.emit('agent:completed', state.agents[agentId]);
+    // `agent:completed` is intentionally emitted later, after the domain-usage
+    // ledger is updated (see the recordDomainUsage block below, #1683). Do NOT
+    // move it back here. `agent:updated` carries no scheduling side effect, so it
+    // stays inside the lock.
     cosEvents.emit('agent:updated', state.agents[agentId]);
 
     // Determine date bucket from completedAt
@@ -335,9 +338,21 @@ export async function completeAgent(agentId, result = {}) {
   // tasks) — the same set the CoS auto-run gate withholds when over budget —
   // toward the domain's actions/minutes ledger. Recorded outside the state lock
   // (separate ledger file + write tail) so it never serializes against state.json.
+  //
+  // This MUST land before the `agent:completed` emit below: that event's handler
+  // schedules `dequeueNextTask()`, whose daily action-budget gate reads this
+  // ledger. Recording first ensures the gate counts the just-finished action, so
+  // a perpetual drain can't admit one spawn past `maxActionsPerDay` at the
+  // boundary (#1683).
   if (completed?.metadata?.taskType && completed.metadata.taskType !== 'user') {
     await recordDomainUsage('cos', { actions: 1, ms: Number(result.duration) || 0 })
       .catch(err => console.error(`❌ Failed to record CoS budget usage for ${agentId}: ${err.message}`));
+  }
+
+  // Emit now that the ledger reflects this action (#1683). Fires for every
+  // completed agent, matching prior behavior — only the timing moved.
+  if (completed) {
+    cosEvents.emit('agent:completed', completed);
   }
 
   return completed;
