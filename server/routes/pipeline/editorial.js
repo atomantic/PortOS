@@ -152,6 +152,12 @@ router.patch('/editorial/checks/:id', asyncHandler(async (req, res) => {
     const nextEntry = { ...prev };
     if (body.enabled !== undefined) nextEntry.enabled = body.enabled;
     if (body.config !== undefined) nextEntry.config = body.config;
+    // Per-check severity override (#1596): a level pins it, `null` clears the
+    // stored override so the check falls back to its registry severityDefault.
+    if (body.severity !== undefined) {
+      if (body.severity === null) delete nextEntry.severity;
+      else nextEntry.severity = body.severity;
+    }
     return { ...current, pipelineEditorialChecks: { ...slice, checks: { ...checks, [check.id]: nextEntry } } };
   });
   res.json(resolveCheckState(updated).find((r) => r.id === check.id));

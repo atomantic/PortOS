@@ -6,6 +6,10 @@
  * Presentational — all persistence is lifted to PipelineEditorialChecks:
  *   onToggle(checkId, nextEnabled)            → optimistic enable/disable PATCH
  *   onConfigSave(checkId, nextConfig)         → PATCH the global config blob (Promise)
+ *   onSeveritySave(checkId, severity|null)    → PATCH the per-check severity override
+ *                                               (#1596); `null` clears it back to the
+ *                                               registry default. Optional — the
+ *                                               selector only renders when wired.
  *   onSeriesConfigSave(checkId, patch)        → merge a PARTIAL per-series override
  *                                               ({ [key]: value }) for this check (#1591);
  *                                               pass `null` to clear the whole override.
@@ -29,6 +33,7 @@ const SEVERITY_BADGE = {
   medium: 'bg-amber-500/15 text-amber-300',
   low: 'bg-gray-500/15 text-gray-300',
 };
+const SEVERITY_LEVELS = ['high', 'medium', 'low'];
 
 function ConfigField({ checkId, field, value, disabled, onCommit, resetNonce = 0 }) {
   const inputId = `cfg-${checkId}-${field.key}`;
@@ -88,7 +93,7 @@ function ConfigField({ checkId, field, value, disabled, onCommit, resetNonce = 0
 }
 
 function EditorialCheckCard({
-  check, saving = false, onToggle, onConfigSave, onEdit, onDelete,
+  check, saving = false, onToggle, onConfigSave, onSeveritySave, onEdit, onDelete,
   seriesId = '', seriesConfig = null, seriesSaving = false, seriesResetNonce = 0, onSeriesConfigSave,
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -96,6 +101,11 @@ function EditorialCheckCard({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const hasConfig = Array.isArray(check.configFields) && check.configFields.length > 0;
   const isCustom = !!check.isCustom;
+  // Effective severity (#1596): the stored override or the registry default.
+  // `severityOverride` is the raw stored level (null when defaulting), so the
+  // selector can show "Default" distinctly from a level pinned to that value.
+  const effectiveSeverity = check.severity || check.severityDefault;
+  const canSetSeverity = typeof onSeveritySave === 'function';
   // A per-series override panel is only meaningful when a series is selected, the
   // check is tunable, and the parent wired a save handler (#1591).
   const canOverride = hasConfig && !!seriesId && typeof onSeriesConfigSave === 'function';
@@ -110,8 +120,11 @@ function EditorialCheckCard({
             <span className={`text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border ${KIND_BADGE[check.kind] || KIND_BADGE.deterministic}`}>
               {check.kind === 'llm' ? 'LLM' : 'rule'}
             </span>
-            <span className={`text-[10px] px-1.5 py-0.5 rounded ${SEVERITY_BADGE[check.severityDefault] || SEVERITY_BADGE.low}`}>
-              {check.severityDefault}
+            <span
+              className={`text-[10px] px-1.5 py-0.5 rounded ${SEVERITY_BADGE[effectiveSeverity] || SEVERITY_BADGE.low}`}
+              title={check.severityOverride ? `Overridden — default is ${check.severityDefault}` : 'Default severity'}
+            >
+              {effectiveSeverity}{check.severityOverride ? '*' : ''}
             </span>
             {isCustom ? (
               <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border border-emerald-500/30 bg-emerald-500/15 text-emerald-300">
@@ -131,6 +144,25 @@ function EditorialCheckCard({
           />
         </div>
       </div>
+
+      {canSetSeverity ? (
+        <div className="flex items-center gap-2">
+          <label htmlFor={`sev-${check.id}`} className="text-[11px] text-gray-400">Severity</label>
+          <select
+            id={`sev-${check.id}`}
+            value={check.severityOverride || ''}
+            disabled={saving}
+            aria-label={`Severity for ${check.label}`}
+            onChange={(e) => onSeveritySave(check.id, e.target.value || null)}
+            className="rounded border border-port-border bg-port-bg px-1.5 py-0.5 text-[11px] text-gray-100 focus:border-port-accent focus:outline-none disabled:opacity-50"
+          >
+            <option value="">Default ({check.severityDefault})</option>
+            {SEVERITY_LEVELS.map((level) => (
+              <option key={level} value={level}>{level}</option>
+            ))}
+          </select>
+        </div>
+      ) : null}
 
       {hasConfig ? (
         <div className="border-t border-port-border/60 pt-2">

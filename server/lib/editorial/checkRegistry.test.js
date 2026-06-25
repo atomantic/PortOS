@@ -10,6 +10,7 @@ import {
   assertValidChecks,
   resolveCheckConfig,
   resolveCheckState,
+  resolveCheckSeverity,
   getEnabledChecks,
   applySeriesCheckConfig,
   buildCustomCheck,
@@ -293,6 +294,55 @@ describe('applySeriesCheckConfig — per-series config overrides (#1591)', () =>
     expect(applySeriesCheckConfig(enabled, { [NAMING]: { minSharedSignals: 5 } })[0].config.maxWordsPerBalloon).toBe(base);
     expect(applySeriesCheckConfig(enabled, { [LETTERING]: 'nope' })[0].config.maxWordsPerBalloon).toBe(base);
     expect(applySeriesCheckConfig(enabled, { [LETTERING]: [1, 2] })[0].config.maxWordsPerBalloon).toBe(base);
+  });
+});
+
+describe('per-check severity override (#1596)', () => {
+  const LETTERING = 'comic.lettering-density';
+  const checksSettings = (id, severity) => ({ pipelineEditorialChecks: { checks: { [id]: { severity } } } });
+  // The opposite of a check's default so an override is observably different.
+  const flip = (id) => (getCheck(id).severityDefault === 'high' ? 'low' : 'high');
+
+  it('falls through to the registry default when no override is stored', () => {
+    const row = resolveCheckState({}).find((r) => r.id === NAMING);
+    expect(row.severity).toBe(getCheck(NAMING).severityDefault);
+    expect(row.severityOverride).toBeNull();
+  });
+
+  it('applies a valid stored override as the effective severity (baseline preserved)', () => {
+    const target = flip(NAMING);
+    const row = resolveCheckState(checksSettings(NAMING, target)).find((r) => r.id === NAMING);
+    expect(row.severity).toBe(target);
+    expect(row.severityOverride).toBe(target);
+    expect(row.severityDefault).toBe(getCheck(NAMING).severityDefault);
+  });
+
+  it('ignores an invalid stored override (falls back to the default, no phantom override)', () => {
+    const row = resolveCheckState(checksSettings(NAMING, 'critical')).find((r) => r.id === NAMING);
+    expect(row.severity).toBe(getCheck(NAMING).severityDefault);
+    expect(row.severityOverride).toBeNull();
+  });
+
+  it('resolveCheckSeverity is the shared fallback helper', () => {
+    const check = getCheck(NAMING);
+    expect(resolveCheckSeverity(check, { severity: 'medium' })).toBe('medium');
+    expect(resolveCheckSeverity(check, { severity: 'nope' })).toBe(check.severityDefault);
+    expect(resolveCheckSeverity(check, {})).toBe(check.severityDefault);
+    expect(resolveCheckSeverity(check, undefined)).toBe(check.severityDefault);
+  });
+
+  it('getEnabledChecks threads the effective severity for the runner', () => {
+    const target = flip(NAMING);
+    expect(getEnabledChecks(checksSettings(NAMING, target), [NAMING])[0].severity).toBe(target);
+    expect(getEnabledChecks({}, [NAMING])[0].severity).toBe(getCheck(NAMING).severityDefault);
+  });
+
+  it('applySeriesCheckConfig preserves the effective severity through a config overlay', () => {
+    const target = flip(LETTERING);
+    const enabled = getEnabledChecks(checksSettings(LETTERING, target), [LETTERING]);
+    const out = applySeriesCheckConfig(enabled, { [LETTERING]: { maxWordsPerBalloon: 12 } });
+    expect(out[0].severity).toBe(target); // severity rides through untouched
+    expect(out[0].config.maxWordsPerBalloon).toBe(12); // config still overlaid
   });
 });
 

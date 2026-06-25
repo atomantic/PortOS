@@ -552,10 +552,13 @@ export async function runEditorialChecks(seriesId, options = {}) {
   // must dismiss their now-stale prior open comments.
   const deterministicRanIds = new Set();
   let canceled = false;
-  for (const { check, config } of enabledResolved) {
+  for (const { check, config, severity } of enabledResolved) {
     if (signal?.aborted) { canceled = true; break; }
     onProgress?.({ type: 'check:start', checkId: check.id, label: check.label });
-    const ctx = { ...baseCtx, config, severityDefault: check.severityDefault };
+    // `severity` is the effective per-check level (#1596): the user's stored
+    // override or the registry default. Fall back to the registry default if a
+    // pair somehow arrives without one (defensive for older getEnabledChecks).
+    const ctx = { ...baseCtx, config, severityDefault: severity || check.severityDefault };
     // Boundary try/catch: a check's run() calls into arbitrary logic / LLM
     // providers — one bad check must not abort the whole pass (mirrors the
     // per-comment fix guard in seriesAutopilot.runEditorial).
