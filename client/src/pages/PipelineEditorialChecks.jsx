@@ -194,6 +194,9 @@ export default function PipelineEditorialChecks() {
   // Per-check tail promise so rapid toggles of the SAME check apply in click
   // order (last-click-wins) — see the serialization note in handleToggle (#1602).
   const toggleTailsRef = useRef(new Map());
+  // Per-check count of in-flight toggle PATCHes so the saving flag (which gates
+  // the run buttons) only clears once the LAST queued PATCH settles, not the first.
+  const toggleInflightRef = useRef(new Map());
   const handleToggle = useCallback((checkId, nextEnabled) => {
     const apply = (val) => setChecks((rows) => rows.map((r) => (r.id === checkId ? { ...r, enabled: val } : r)));
     apply(nextEnabled);
@@ -204,6 +207,7 @@ export default function PipelineEditorialChecks() {
     // settings, so the run buttons must gate on this PATCH landing (and the card
     // shows its saving spinner for the toggle too).
     setSavingIds((s) => new Set(s).add(checkId));
+    toggleInflightRef.current.set(checkId, (toggleInflightRef.current.get(checkId) || 0) + 1);
     // Serialize the PATCHes for a SINGLE check onto a per-check tail so the LAST
     // click wins regardless of response timing (#1602): a quick disable-then-undo
     // (or rapid double-toggle) could otherwise have the stale disable response
@@ -216,7 +220,14 @@ export default function PipelineEditorialChecks() {
     const result = prev.then(() => patchEditorialCheck(checkId, { enabled: nextEnabled }, { silent: true })
       .then((row) => { if (row) setChecks((rows) => rows.map((r) => (r.id === checkId ? row : r))); return true; })
       .catch((err) => { apply(!nextEnabled); toast.error(err.message || 'Failed to update check'); return false; }))
-      .finally(() => setSavingIds((s) => { const n = new Set(s); n.delete(checkId); return n; }));
+      // Clear the saving flag only when the LAST queued PATCH for this check
+      // settles, so the run buttons stay gated until the final write lands.
+      .finally(() => {
+        const remaining = (toggleInflightRef.current.get(checkId) || 1) - 1;
+        if (remaining > 0) { toggleInflightRef.current.set(checkId, remaining); return; }
+        toggleInflightRef.current.delete(checkId);
+        setSavingIds((s) => { const n = new Set(s); n.delete(checkId); return n; });
+      });
     toggleTailsRef.current.set(checkId, result.catch(() => {}));
     return result;
   }, []);
