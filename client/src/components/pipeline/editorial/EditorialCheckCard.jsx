@@ -26,11 +26,14 @@ const SEVERITY_BADGE = {
   low: 'bg-gray-500/15 text-gray-300',
 };
 
-function ConfigField({ checkId, field, value, disabled, onCommit }) {
+function ConfigField({ checkId, field, value, disabled, onCommit, resetNonce = 0 }) {
   const inputId = `cfg-${checkId}-${field.key}`;
   const [draft, setDraft] = useState(value);
-  // Re-seed when the committed value changes underneath us (e.g. save resolved).
-  useEffect(() => { setDraft(value); }, [value]);
+  // Re-seed when the committed value changes underneath us (e.g. save resolved),
+  // OR when `resetNonce` bumps — used to revert the draft to the persisted value
+  // after a failed save, so the input never lingers on an unsaved threshold the
+  // runner won't use.
+  useEffect(() => { setDraft(value); }, [value, resetNonce]);
 
   if (field.type === 'boolean') {
     return (
@@ -82,7 +85,7 @@ function ConfigField({ checkId, field, value, disabled, onCommit }) {
 
 function EditorialCheckCard({
   check, saving = false, onToggle, onConfigSave, onEdit, onDelete,
-  seriesId = '', seriesConfig = null, seriesSaving = false, onSeriesConfigSave,
+  seriesId = '', seriesConfig = null, seriesSaving = false, seriesResetNonce = 0, onSeriesConfigSave,
 }) {
   const [expanded, setExpanded] = useState(false);
   const [seriesExpanded, setSeriesExpanded] = useState(false);
@@ -183,6 +186,7 @@ function EditorialCheckCard({
                   field={field}
                   value={seriesConfig?.[field.key] ?? check.config?.[field.key]}
                   disabled={seriesSaving}
+                  resetNonce={seriesResetNonce}
                   onCommit={(key, val) => onSeriesConfigSave(check.id, { ...(seriesConfig || {}), [key]: val })}
                 />
               ))}

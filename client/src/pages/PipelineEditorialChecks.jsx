@@ -50,6 +50,9 @@ export default function PipelineEditorialChecks() {
   // series PATCH; track in-flight saves per checkId so the run buttons gate on the
   // override landing (the runner reads the persisted series record).
   const [savingSeriesIds, setSavingSeriesIds] = useState(() => new Set());
+  // Per-check nonce bumped on a FAILED series-override save so the check card can
+  // revert its draft inputs to the persisted value (#1591).
+  const [seriesResetNonces, setSeriesResetNonces] = useState(() => ({}));
   const seriesId = searchParams.get('series') || '';
   const [comments, setComments] = useState([]);
   const [loadingFindings, setLoadingFindings] = useState(false);
@@ -236,7 +239,13 @@ export default function PipelineEditorialChecks() {
         if (!nextOverride || Object.keys(nextOverride).length === 0) delete map[checkId];
         else map[checkId] = nextOverride;
         const saved = await updatePipelineSeries(sid, { editorialCheckConfig: map }, { silent: true })
-          .catch((err) => { toast.error(err.message || 'Failed to save series override'); return null; });
+          .catch((err) => {
+            toast.error(err.message || 'Failed to save series override');
+            // Revert the card's draft inputs to the persisted value (the override
+            // wasn't saved, so the field must not keep showing the typed threshold).
+            setSeriesResetNonces((m) => ({ ...m, [checkId]: (m[checkId] || 0) + 1 }));
+            return null;
+          });
         // On failure `overrideMapRef` is untouched, so the UI keeps showing the
         // last persisted overrides (no phantom). On success, sync the ref + state
         // from the sanitized record — but only if the user hasn't switched series
@@ -491,6 +500,7 @@ export default function PipelineEditorialChecks() {
                         seriesId={seriesId}
                         seriesConfig={seriesOverrides?.[check.id] || null}
                         seriesSaving={savingSeriesIds.has(check.id)}
+                        seriesResetNonce={seriesResetNonces[check.id] || 0}
                         onSeriesConfigSave={handleSeriesConfigSave}
                         onEdit={check.isCustom ? openCustomForm : undefined}
                         onDelete={check.isCustom ? handleDeleteCustom : undefined}

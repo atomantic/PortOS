@@ -179,10 +179,12 @@ const toCount = (v) => (Number.isInteger(v) && v >= 0 ? v : 0);
 // re-validates the merged blob through the check's own Zod `configSchema`, so a
 // malformed/out-of-range value is dropped at run time and can't corrupt a pass.
 // This sanitizer therefore only bounds the WIRE shape: a plain object-of-objects
-// with primitive leaves, size-capped against a hand-edited/older-peer file. Empty
-// → `undefined` (omitted) so a series that sets no override keeps its byte-stable
-// on-disk + wire shape against pre-feature peers (the v8 `pipelineSeries` gate
-// protects only series that DO carry the field from strip-then-LWW loss).
+// with primitive leaves, size-capped against a hand-edited/older-peer file. Always
+// present (empty `{}` when a series tunes nothing) — mirroring factReference/
+// styleGuide — so an explicit clear (`{}`) propagates between v8 peers via LWW
+// while a behind-sender that OMITS the key is preserved by
+// `preserveAbsentAdditiveFields` (see ADDITIVE_SERIES_FIELDS). The v8
+// `pipelineSeries` gate stops a ≤v7 peer from strip-then-LWW-ing the field.
 const ECC_MAX_CHECKS = 200;
 const ECC_MAX_KEYS_PER_CHECK = 40;
 const ECC_CHECK_ID_MAX = 120;
@@ -203,7 +205,7 @@ const sanitizeCheckConfigOverride = (raw) => {
 };
 
 const sanitizeEditorialCheckConfig = (raw) => {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
   const out = {};
   for (const [checkId, override] of Object.entries(raw)) {
     if (Object.keys(out).length >= ECC_MAX_CHECKS) break;
@@ -211,7 +213,7 @@ const sanitizeEditorialCheckConfig = (raw) => {
     const clean = sanitizeCheckConfigOverride(override);
     if (clean) out[checkId] = clean;
   }
-  return Object.keys(out).length ? out : undefined;
+  return out;
 };
 
 const sanitizeSeriesLocked = (raw = {}) => {
@@ -335,13 +337,12 @@ const sanitizeSeries = (raw) => {
     // Older peers' sanitizeSeries simply drops the unknown field (forward/
     // back-compatible).
     ...(autopilot ? { autopilot } : {}),
-    // Per-series editorial-check config overrides (#1591). Persisted only when a
-    // series actually carries an override so series that never tune a check keep
-    // their byte-stable on-disk + wire shape (the v8 `pipelineSeries` gate guards
-    // the loss for series that DO carry it). A ≤v7 peer that re-sanitizes a series
-    // through its editorialCheckConfig-unaware sanitizeSeries would otherwise drop
-    // the overrides and last-writer-wins the loss back onto the newer peer.
-    ...(editorialCheckConfig ? { editorialCheckConfig } : {}),
+    // Per-series editorial-check config overrides (#1591). Always present (empty
+    // `{}` when nothing is tuned), like factReference/styleGuide, so a clear
+    // propagates between v8 peers and a behind-sender's omission is preserved (see
+    // ADDITIVE_SERIES_FIELDS). Wire-gated at pipelineSeries v8 so a ≤v7 peer can't
+    // strip-then-LWW the overrides back onto a newer peer.
+    editorialCheckConfig,
   };
 };
 
@@ -392,7 +393,7 @@ export async function createSeries(input = {}) {
     importDraft: input.importDraft === true,
     // Per-series editorial-check config overrides (#1591) — forwarded so an
     // importer / promote flow that seeds a series with tuned thresholds keeps
-    // them; sanitizeSeries normalizes an empty/malformed map back to absent.
+    // them; sanitizeSeries normalizes an empty/malformed map to `{}`.
     editorialCheckConfig: input.editorialCheckConfig,
   });
   await store().saveOne(created.id, created);
@@ -571,7 +572,7 @@ export async function updateSeries(id, patch = {}) {
       ...('autopilot' in patch ? { autopilot: patch.autopilot } : {}),
       // Per-series editorial-check config overrides (#1591). Wholesale replace —
       // `{}`/`null` clears every override; omission preserves. The sanitizer drops
-      // empty/malformed entries and normalizes an empty map back to absent.
+      // empty/malformed entries and normalizes to `{}` (always present).
       ...('editorialCheckConfig' in patch ? { editorialCheckConfig: patch.editorialCheckConfig } : {}),
       llm: mergedLlm,
       updatedAt: new Date().toISOString(),
@@ -781,7 +782,7 @@ async function cascadeDeleteSideEffects(id) {
 // consult the RAW remote payload to tell the two apart: key absent → preserve
 // local; key present (even null/empty) → honor the intentional clear. Mirrors
 // the `universeId` hierarchy guard. See issue #1361.
-const ADDITIVE_SERIES_FIELDS = ['arc', 'seasons', 'styleGuide', 'styleNotes', 'characterArcs', 'factReference', 'factCritical'];
+const ADDITIVE_SERIES_FIELDS = ['arc', 'seasons', 'styleGuide', 'styleNotes', 'characterArcs', 'factReference', 'factCritical', 'editorialCheckConfig'];
 // Additive sub-fields nested inside `arc`. A peer that predates these (readerMap
 // shipped at schema v2, tickingClock at #1289/v3) still sends an `arc` object —
 // just without these keys — so the erasure for them happens one level down.

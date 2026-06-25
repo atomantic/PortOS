@@ -125,10 +125,11 @@ describe('pipeline series service', () => {
     expect(cleared.factReference).toBe('');
   });
 
-  it('defaults editorialCheckConfig absent and round-trips per-series overrides (#1591)', async () => {
+  it('defaults editorialCheckConfig to {} and round-trips per-series overrides (#1591)', async () => {
     const plain = await svc.createSeries({ name: 'Plain' });
-    // Absent until a series actually tunes a check (byte-stable shape for old peers).
-    expect(plain.editorialCheckConfig).toBeUndefined();
+    // Always present (empty) — like factReference/styleGuide — so a clear can
+    // propagate between v8 peers and is protected as an additive field on sync.
+    expect(plain.editorialCheckConfig).toEqual({});
 
     const tuned = await svc.createSeries({
       name: 'YA Graphic Novel',
@@ -160,9 +161,9 @@ describe('pipeline series service', () => {
     // Wholesale replace.
     const replaced = await svc.updateSeries(s.id, { editorialCheckConfig: { 'comic.panel-rhythm': { maxConsecutiveSplash: 1 } } });
     expect(replaced.editorialCheckConfig).toEqual({ 'comic.panel-rhythm': { maxConsecutiveSplash: 1 } });
-    // {} clears (sanitizer normalizes the empty map back to absent).
+    // {} clears all overrides (sanitizer keeps the always-present empty map).
     const cleared = await svc.updateSeries(s.id, { editorialCheckConfig: {} });
-    expect(cleared.editorialCheckConfig).toBeUndefined();
+    expect(cleared.editorialCheckConfig).toEqual({});
   });
 
   it('updateSeries throws ERR_NOT_FOUND for unknown id', async () => {
@@ -646,6 +647,25 @@ describe('pipeline series service', () => {
       expect(after.styleGuide.tense).toBe('past');
       expect(after.seasons).toHaveLength(1);
       expect(after.seasons[0].title).toBe('Season One');
+    });
+
+    it('preserves editorialCheckConfig when a behind-sender omits the key, applies an explicit clear (#1591)', async () => {
+      const s = await svc.createSeries({
+        name: 'TunedSeries',
+        editorialCheckConfig: { 'comic.lettering-density': { maxWordsPerBalloon: 18 } },
+      });
+      expect(s.editorialCheckConfig).toEqual({ 'comic.lettering-density': { maxWordsPerBalloon: 18 } });
+      // Behind-sender (older peer) omits the key → local overrides preserved.
+      const behind = { id: s.id, name: 'TunedSeries (peer edit)', updatedAt: NEWER };
+      await svc.mergeSeriesFromSync([behind]);
+      const kept = await svc.getSeries(s.id);
+      expect(kept.name).toBe('TunedSeries (peer edit)');
+      expect(kept.editorialCheckConfig).toEqual({ 'comic.lettering-density': { maxWordsPerBalloon: 18 } });
+      // Up-to-date peer present-but-empty map → the clear applies (present key wins).
+      const clear = { id: s.id, name: 'TunedSeries', editorialCheckConfig: {}, updatedAt: '2999-06-01T00:00:00.000Z' };
+      await svc.mergeSeriesFromSync([clear]);
+      const cleared = await svc.getSeries(s.id);
+      expect(cleared.editorialCheckConfig).toEqual({});
     });
 
     it('preserves arc (incl. readerMap + tickingClock) when the remote omits arc', async () => {

@@ -69,6 +69,37 @@ describe('EditorialCheckCard', () => {
       expect(onSeriesConfigSave).toHaveBeenCalledWith('naming.dissimilar-names', { minSharedSignals: 4 });
     });
 
+    it('reverts the draft to the persisted value when seriesResetNonce bumps (failed save)', () => {
+      const { rerender } = render(
+        <EditorialCheckCard
+          check={check}
+          seriesId="ser-1"
+          seriesConfig={null}
+          seriesResetNonce={0}
+          onToggle={vi.fn()}
+          onConfigSave={vi.fn()}
+          onSeriesConfigSave={vi.fn()}
+        />,
+      );
+      fireEvent.click(screen.getByRole('button', { name: /override for this series/i }));
+      const input = screen.getByLabelText('Minimum shared signals to flag');
+      fireEvent.change(input, { target: { value: '4' } }); // typed, not yet persisted
+      expect(input.value).toBe('4');
+      // A failed save bumps the nonce; the draft must revert to the persisted (global) value.
+      rerender(
+        <EditorialCheckCard
+          check={check}
+          seriesId="ser-1"
+          seriesConfig={null}
+          seriesResetNonce={1}
+          onToggle={vi.fn()}
+          onConfigSave={vi.fn()}
+          onSeriesConfigSave={vi.fn()}
+        />,
+      );
+      expect(screen.getByLabelText('Minimum shared signals to flag').value).toBe('2');
+    });
+
     it('shows an active badge and clears the override via Reset to global', () => {
       const onSeriesConfigSave = vi.fn();
       render(
