@@ -112,9 +112,11 @@ describe('editorial check registry — shape invariants', () => {
     expect(check).toBeTruthy();
     expect(check.kind).toBe('llm');
     expect(check.scope).toBe('series');
-    // Off by default so it never runs on a series that hasn't declared itself
-    // fact-critical with a reference.
-    expect(check.defaultEnabled).toBe(false);
+    // Registry-enabled like the other content-gated checks (comic/visual) — the
+    // GATE is the opt-in, not the enabled flag. A disabled check would be filtered
+    // out before the per-series gate ran, so the series fact-critical flag alone
+    // would never trigger it.
+    expect(check.defaultEnabled).toBe(true);
     expect(check.sources).toContain('series.factReference');
 
     const manuscript = 'Some prose.';
