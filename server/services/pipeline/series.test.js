@@ -741,4 +741,38 @@ describe('pipeline series service', () => {
       expect(after.styleNotes).toBe(''); // tombstone stays clean, no resurrection
     });
   });
+
+  describe('sanitizeAutopilot healthBreakdown (#1579)', () => {
+    it('persists a well-formed pause breakdown, bounding rows and coercing counts', () => {
+      const a = svc.sanitizeAutopilot({
+        status: 'paused',
+        healthBreakdown: {
+          score: 72,
+          open: 6,
+          topChecks: [
+            { checkId: 'continuity', count: 3 },
+            { checkId: 'naming', count: 1.0 },
+            { checkId: 42, count: 1 }, // non-string checkId → dropped
+          ],
+          topIssues: [
+            { issueNumber: 3, open: 5 },
+            { issueNumber: null, open: 2 }, // series-scoped bucket kept
+            { open: 'x' }, // non-finite open → dropped
+          ],
+        },
+      });
+      expect(a.healthBreakdown).toEqual({
+        score: 72,
+        open: 6,
+        topChecks: [{ checkId: 'continuity', count: 3 }, { checkId: 'naming', count: 1 }],
+        topIssues: [{ issueNumber: 3, open: 5 }, { issueNumber: null, open: 2 }],
+      });
+    });
+
+    it('drops a malformed/absent breakdown to null (non-health pauses carry none)', () => {
+      expect(svc.sanitizeAutopilot({ status: 'paused' }).healthBreakdown).toBeNull();
+      expect(svc.sanitizeAutopilot({ status: 'paused', healthBreakdown: 'nope' }).healthBreakdown).toBeNull();
+      expect(svc.sanitizeAutopilot({ status: 'paused', healthBreakdown: [] }).healthBreakdown).toBeNull();
+    });
+  });
 });

@@ -164,8 +164,35 @@ export const sanitizeAutopilot = (raw) => {
     // the UI flags it instead of reporting clean. Same transient-marker rationale
     // as craftGap* / pauseKind: no schema-gate bump.
     editorialCheckErrors: toCount(raw.editorialCheckErrors),
+    // #1579 — the per-check / per-issue breakdown that drove an editorial-health
+    // pause, so the UI / resume banner can render *why* without re-hitting the
+    // health API. Null on any non-health pause. Same transient-marker rationale
+    // as pauseKind / craftGap*: no schema-gate bump.
+    healthBreakdown: sanitizeHealthBreakdown(raw.healthBreakdown),
     updatedAt: isStr(raw.updatedAt) ? raw.updatedAt : null,
   };
+};
+
+// Bound the wire shape of a `summarizeEditorialBlockers` breakdown stamped onto
+// a paused marker (#1579). Null unless it carries at least a numeric score —
+// drops a hand-edited/older-peer blob that lacks the expected shape.
+const HEALTH_BREAKDOWN_MAX_ROWS = 10;
+const HEALTH_CHECK_ID_MAX = 120;
+const sanitizeHealthBreakdown = (raw) => {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const topChecks = (Array.isArray(raw.topChecks) ? raw.topChecks : [])
+    .map((c) => (c && typeof c === 'object' && isStr(c.checkId) && Number.isFinite(c.count)
+      ? { checkId: trimTo(c.checkId, HEALTH_CHECK_ID_MAX), count: toCount(c.count) }
+      : null))
+    .filter(Boolean)
+    .slice(0, HEALTH_BREAKDOWN_MAX_ROWS);
+  const topIssues = (Array.isArray(raw.topIssues) ? raw.topIssues : [])
+    .map((i) => (i && typeof i === 'object' && Number.isFinite(i.open)
+      ? { issueNumber: Number.isInteger(i.issueNumber) ? i.issueNumber : null, open: toCount(i.open) }
+      : null))
+    .filter(Boolean)
+    .slice(0, HEALTH_BREAKDOWN_MAX_ROWS);
+  return { score: toCount(raw.score), open: toCount(raw.open), topChecks, topIssues };
 };
 
 // Coerce a marker counter to a non-negative integer, defaulting to 0 (so an

@@ -120,6 +120,60 @@ export function openBlockers(comments, gate = DEFAULT_READINESS_GATE) {
   );
 }
 
+/**
+ * Summarize the blocking breakdown of a `computeHealth` result (#1579) — the
+ * top checks and issues (by open-finding count, descending) that drove a pause.
+ * Pure; feeds both the single-line autopilot pause log and the persisted pause
+ * marker so "why did health reject my series?" no longer needs a manual API
+ * hit. `null`/series-scoped issue findings bucket under `issueNumber: null`.
+ *
+ * @param {object} health — a `computeHealth` result
+ * @param {object} [opts]
+ * @param {number} [opts.topN=5] — how many checks/issues to keep
+ * @returns {{ score, open, topChecks: [{checkId, count}], topIssues: [{issueNumber, open}] }}
+ */
+export function summarizeEditorialBlockers(health, { topN = 5 } = {}) {
+  const h = health && typeof health === 'object' ? health : {};
+  const byCheck = h.openByCheck && typeof h.openByCheck === 'object' ? h.openByCheck : {};
+  const topChecks = Object.entries(byCheck)
+    .filter(([, n]) => Number.isFinite(n) && n > 0)
+    // Count desc, then checkId asc for a stable tie-break.
+    .sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))
+    .slice(0, topN)
+    .map(([checkId, count]) => ({ checkId, count }));
+  const perIssue = Array.isArray(h.perIssue) ? h.perIssue : [];
+  const topIssues = perIssue
+    .filter((p) => p && typeof p === 'object' && Number.isFinite(p.open) && p.open > 0)
+    // Open desc, then issueNumber asc (series-scoped null bucket sorts last).
+    .sort((a, b) => b.open - a.open || ((a.issueNumber ?? Infinity) - (b.issueNumber ?? Infinity)))
+    .slice(0, topN)
+    .map((p) => ({ issueNumber: Number.isInteger(p.issueNumber) ? p.issueNumber : null, open: p.open }));
+  return {
+    score: Number.isFinite(h.score) ? h.score : 0,
+    open: Number.isFinite(h.open) ? h.open : 0,
+    topChecks,
+    topIssues,
+  };
+}
+
+/**
+ * Render a `summarizeEditorialBlockers` breakdown into a compact, single-line
+ * string for the emoji-prefixed autopilot log (#1579). Series-scoped findings
+ * (no issue number) render as `series`.
+ */
+export function formatBlockerSummary(breakdown) {
+  const b = breakdown && typeof breakdown === 'object' ? breakdown : {};
+  const checks = Array.isArray(b.topChecks) ? b.topChecks : [];
+  const issues = Array.isArray(b.topIssues) ? b.topIssues : [];
+  const checkStr = checks.length
+    ? `top checks [${checks.map((c) => `${c.checkId}×${c.count}`).join(', ')}]`
+    : 'no check breakdown';
+  const issueStr = issues.length
+    ? `top issues [${issues.map((i) => `${i.issueNumber == null ? 'series' : `#${i.issueNumber}`}×${i.open}`).join(', ')}]`
+    : 'no issue breakdown';
+  return `${checkStr}; ${issueStr}`;
+}
+
 // Tally one finding into an accumulator. OPEN findings drive the score +
 // breakdowns; accepted/dismissed are counted only for context (resolved totals).
 function tally(acc, comment) {

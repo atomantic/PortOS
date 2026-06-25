@@ -94,7 +94,7 @@ import * as autoRunner from './autoRunner.js';
 import { seedReviewFromFindings, getReview } from './manuscriptReview.js';
 import { runEditorialChecks, buildEditorialCheckPlan, enabledChecksConsumeReverseOutline, summarizeCheckErrors } from './editorial/checkRunner.js';
 import { generateReverseOutline, getReverseOutline } from './reverseOutline.js';
-import { computeHealth, openBlockers, READINESS_GATES, resolveReadinessGate } from './editorialScore.js';
+import { computeHealth, openBlockers, READINESS_GATES, resolveReadinessGate, summarizeEditorialBlockers, formatBlockerSummary } from './editorialScore.js';
 import { getSettings } from '../settings.js';
 import { readReadinessGate } from '../../lib/editorial/index.js';
 import { generateManuscriptFix, acceptManuscriptFix } from './manuscriptFix.js';
@@ -1163,7 +1163,13 @@ async function runEditorialHealthGate(sId, record) {
   // loop, so it has no maxRounds/divergence distinction — leave it null. If this
   // ever gains a retry loop, thread pauseKind through trackConvergence then.
   const blockers = openBlockers(comments, gate);
-  return { pause: true, reason: `editorial health not clean (score ${health.score}, ${health.open} open finding(s))`, residual: blockers };
+  // Surface the per-check / per-issue breakdown that drove the pause (#1579) —
+  // a single emoji-prefixed line so "why did health reject my 50-issue series?"
+  // is answerable from the logs, and the same breakdown on the marker so the UI
+  // / resume banner can render it without re-hitting the health API.
+  const healthBreakdown = summarizeEditorialBlockers(health);
+  console.log(`🩺 editorial health gate not clean — series=${sId.slice(0, 12)} score=${health.score}, ${health.open} open: ${formatBlockerSummary(healthBreakdown)}`);
+  return { pause: true, reason: `editorial health not clean (score ${health.score}, ${health.open} open finding(s))`, residual: blockers, healthBreakdown };
 }
 
 // Turn a render-enqueue result into the { slotKey, slot } pair the render
@@ -1688,8 +1694,8 @@ export async function startSeriesAutopilot(sId, options = {}) {
 
         if (result?.canceled || record.cancelRequested) break;
         if (result?.pause) {
-          await persistMarker(sId, { status: 'paused', runId, currentStep: step.kind, residualFindings: result.residual || [], lastError: result.reason, pauseKind: result.pauseKind || null });
-          broadcast(sId, { type: 'paused', runId, scope: step.kind, reason: result.reason, residualFindings: result.residual || [], pauseKind: result.pauseKind || null, completedAt: new Date().toISOString() });
+          await persistMarker(sId, { status: 'paused', runId, currentStep: step.kind, residualFindings: result.residual || [], lastError: result.reason, pauseKind: result.pauseKind || null, healthBreakdown: result.healthBreakdown || null });
+          broadcast(sId, { type: 'paused', runId, scope: step.kind, reason: result.reason, residualFindings: result.residual || [], pauseKind: result.pauseKind || null, healthBreakdown: result.healthBreakdown || null, completedAt: new Date().toISOString() });
           // Only file the generic stalled task when the step didn't already file
           // a more specific gap (canon-undescribed, visual-no-pages, …) — else
           // fileGaps would create two CoS tasks for one underlying problem (the
