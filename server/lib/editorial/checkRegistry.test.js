@@ -4615,11 +4615,15 @@ describe('cast.representation-balance — deterministic check (#1312)', () => {
       config,
       severityDefault: 'low',
     });
-  const dialogue = (findings) => findings.find((f) => f.location === 'Series dialogue');
+  const dialogue = (findings) => findings.find((f) => /speaking characters\)/.test(f.problem));
+  const minorDom = (findings) => findings.find((f) => /reads as a minor character/.test(f.problem));
+  const silentMajor = (findings) => findings.find((f) => /reads as a major character/.test(f.problem));
   const bechdel = (findings) => findings.find((f) => /Bechdel/.test(f.problem));
   const screenTime = (findings) => findings.find((f) => /strongly skewed cast/.test(f.problem));
-  // Config that silences the two OTHER signals so a test can isolate one.
-  const only = (over) => ({ maxDialogueShare: 1, maxGenderShare: 1, bechdelSignal: false, ...over });
+  // Config that silences every OTHER signal so a test can isolate one.
+  const only = (over) => ({
+    maxDialogueShare: 1, maxMinorShare: 1, minMajorShare: 0, maxGenderShare: 1, bechdelSignal: false, ...over,
+  });
 
   it('declares the expected scope / kind / sources', () => {
     const c = getCheck(REP);
@@ -4659,6 +4663,112 @@ describe('cast.representation-balance — deterministic check (#1312)', () => {
       config: only({ maxDialogueShare: 0.4, minDialogueLines: 12 }),
     });
     expect(dialogue(findings)).toBeUndefined();
+  });
+
+  it('flags a minor-role character who dominates the dialogue (#1594)', () => {
+    const canon = {
+      characters: [
+        { name: 'Aria', role: 'protagonist' },
+        { name: 'Bram', role: 'minor background character' },
+      ],
+    };
+    // Bram (a minor) speaks 4 of 5 lines → 80% → minor dominating.
+    const content = [
+      '"One," said Bram.',
+      '"Two," said Bram.',
+      '"Three," said Bram.',
+      '"Four," said Bram.',
+      '"Five," said Aria.',
+    ].join('\n');
+    const findings = runRep(canon, {
+      sections: [sec(1, content)],
+      config: only({ maxMinorShare: 0.35, minDialogueLines: 5 }),
+    });
+    const f = minorDom(findings);
+    expect(f).toBeTruthy();
+    expect(f.category).toBe('casting');
+    expect(f.severity).toBe('medium'); // 80% ≥ 50% → escalated above the low floor
+    expect(f.problem).toMatch(/"Bram" reads as a minor character/);
+    expect(f.problem).toMatch(/80%/);
+    // Aria (protagonist) speaks 20% > the silent-major floor → not silent.
+    expect(silentMajor(findings)).toBeUndefined();
+  });
+
+  it('flags a major-role character who appears yet is oddly silent (#1594)', () => {
+    const canon = {
+      characters: [
+        { name: 'Aria', role: 'lead' },
+        { name: 'Bram' },
+        { name: 'Cara' },
+      ],
+    };
+    // Aria appears in the prose but never speaks; Bram + Cara carry all dialogue.
+    const content = [
+      'Aria watched from the doorway, saying nothing.',
+      '"One," said Bram.',
+      '"Two," said Bram.',
+      '"Three," said Bram.',
+      '"Four," said Bram.',
+      '"Five," said Cara.',
+    ].join('\n');
+    const findings = runRep(canon, {
+      sections: [sec(1, content)],
+      config: only({ minMajorShare: 0.05, minDialogueLines: 5 }),
+    });
+    const f = silentMajor(findings);
+    expect(f).toBeTruthy();
+    expect(f.category).toBe('casting');
+    expect(f.severity).toBe('medium'); // 0 lines → escalated above the low floor
+    expect(f.problem).toMatch(/"Aria" reads as a major character/);
+  });
+
+  it('stays silent on the silent-major signal when the major never appears in the prose (#1594)', () => {
+    const canon = {
+      characters: [
+        { name: 'Aria', role: 'lead' }, // never named in the prose below
+        { name: 'Bram' },
+        { name: 'Cara' },
+      ],
+    };
+    const content = [
+      '"One," said Bram.',
+      '"Two," said Bram.',
+      '"Three," said Bram.',
+      '"Four," said Bram.',
+      '"Five," said Cara.',
+    ].join('\n');
+    const findings = runRep(canon, {
+      sections: [sec(1, content)],
+      config: only({ minMajorShare: 0.05, minDialogueLines: 5 }),
+    });
+    expect(silentMajor(findings)).toBeUndefined();
+  });
+
+  it('leaves unknown / ambiguous-role characters out of the distribution signals (#1594)', () => {
+    const canon = {
+      characters: [
+        // "minor antagonist" mixes a major AND a minor word → unknown tier → opt out.
+        { name: 'Bram', role: 'minor antagonist' },
+        { name: 'Aria', role: 'protagonist' },
+        { name: 'Cara' }, // no role → unknown
+      ],
+    };
+    // Bram dominates, but his contradictory role means the minor signal opts out.
+    const content = [
+      '"One," said Bram.',
+      '"Two," said Bram.',
+      '"Three," said Bram.',
+      '"Four," said Bram.',
+      '"Five," said Cara.',
+    ].join('\n');
+    const findings = runRep(canon, {
+      sections: [sec(1, content)],
+      config: only({ maxMinorShare: 0.35, minMajorShare: 0.05, minDialogueLines: 5 }),
+    });
+    expect(minorDom(findings)).toBeUndefined();
+    // Aria (protagonist) doesn't appear in the prose, so the silent-major signal
+    // also stays quiet rather than firing on canon-only presence.
+    expect(silentMajor(findings)).toBeUndefined();
   });
 
   it('flags a missing Bechdel co-presence signal when no scene pairs non-male characters', () => {
