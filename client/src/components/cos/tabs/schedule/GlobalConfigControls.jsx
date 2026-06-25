@@ -218,14 +218,37 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
             The check is programmatic (no LLM) — e.g. claim-issue counts open, claimable issues; an issue
             the agent tags <code>needs-input</code> is excluded so the drain converges.
           </p>
-          {status.reason === 'perpetual-parked' && (
-            <p className="text-xs text-port-warning mt-1">
-              Parked{status.parkReason ? ` (${status.parkReason})` : ''}{status.nextRunAt ? ` — rechecks ${new Date(status.nextRunAt).toLocaleString()}` : ''}
-            </p>
-          )}
-          {(status.reason === 'perpetual-drain' || status.reason === 'perpetual-recheck') && (
-            <p className="text-xs text-port-success mt-1">Draining — actionable work available</p>
-          )}
+          {(() => {
+            // claim-issue/claim-work park PER-APP, so prefer the per-app aggregate
+            // (config.perpetual) over the global status.reason — which always reads
+            // 'perpetual-drain' for app-scoped tasks even when every app is parked.
+            const p = config.perpetual;
+            if (p && (p.trackedAppCount > 0 || p.globalParked)) {
+              const allParked = p.globalParked || (p.trackedAppCount > 0 && p.parkedAppCount === p.trackedAppCount);
+              if (allParked) {
+                const scope = p.trackedAppCount > 0 ? `${p.trackedAppCount} app(s) parked` : 'Parked';
+                return (
+                  <p className="text-xs text-port-warning mt-1">
+                    {scope}{p.parkReason ? ` (${p.parkReason})` : ''}{p.nextRecheckAt ? ` — next recheck ${new Date(p.nextRecheckAt).toLocaleString()}` : ''}
+                  </p>
+                );
+              }
+              const partial = p.parkedAppCount > 0 ? ` — ${p.parkedAppCount}/${p.trackedAppCount} app(s) parked` : '';
+              return <p className="text-xs text-port-success mt-1">Draining — actionable work available{partial}</p>;
+            }
+            // Global (non-app) perpetual task: the global status.reason is accurate.
+            if (status.reason === 'perpetual-parked') {
+              return (
+                <p className="text-xs text-port-warning mt-1">
+                  Parked{status.parkReason ? ` (${status.parkReason})` : ''}{status.nextRunAt ? ` — rechecks ${new Date(status.nextRunAt).toLocaleString()}` : ''}
+                </p>
+              );
+            }
+            if (status.reason === 'perpetual-drain' || status.reason === 'perpetual-recheck') {
+              return <p className="text-xs text-port-success mt-1">Draining — actionable work available</p>;
+            }
+            return null;
+          })()}
         </div>
       )}
 

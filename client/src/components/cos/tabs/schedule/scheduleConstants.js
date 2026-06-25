@@ -105,8 +105,25 @@ export function describeNextRun(config) {
   }
   if (group === 'on-demand') return { text: 'Manual trigger only', tone: 'text-gray-400' };
   if (config.type === 'perpetual') {
-    const reason = config.status?.reason;
-    if (reason === 'perpetual-parked') {
+    // Prefer the per-app park aggregate — claim-issue/claim-work park per-app, so
+    // the global status.reason reads 'perpetual-drain' even when all apps are parked.
+    const p = config.perpetual;
+    if (p && (p.trackedAppCount > 0 || p.globalParked)) {
+      // "Parked" only when there's nothing left draining: a global park, or every
+      // tracked app parked. A partial park (some apps still have work) is draining.
+      const allParked = p.globalParked || (p.trackedAppCount > 0 && p.parkedAppCount === p.trackedAppCount);
+      if (allParked) {
+        const scope = p.trackedAppCount > 0 ? `${p.trackedAppCount} app(s) parked` : 'parked';
+        return {
+          text: p.nextRecheckAt ? `${scope} · rechecks ${timeUntil(p.nextRecheckAt, 'soon')}` : `${scope} — no work`,
+          tone: 'text-gray-400',
+          title: p.parkReason ? `Parked: ${p.parkReason}` : undefined,
+        };
+      }
+      return { text: 'draining — runs back-to-back until done', tone: 'text-port-success' };
+    }
+    // Global (non-app) perpetual task: the global status.reason is accurate.
+    if (config.status?.reason === 'perpetual-parked') {
       const next = config.status?.nextRunAt;
       return {
         text: next ? `parked · rechecks ${timeUntil(next, 'soon')}` : 'parked — no work',

@@ -114,6 +114,7 @@ import { DEFAULT_TASK_PROMPTS, PREVIOUS_DEFAULT_PROMPTS } from './taskPromptDefa
 import { loadState } from './cosState.js'
 
 import { readJSONFile } from '../lib/fileUtils.js'
+import { writeFile } from 'fs/promises'
 import { isTaskTypeEnabledForApp, getAppTaskTypeInterval, clearAllPrWatcherState } from './apps.js'
 import { getLocalParts } from '../lib/timezone.js'
 import { getAdaptiveCooldownMultiplier } from './taskLearning.js'
@@ -1237,6 +1238,48 @@ describe('taskSchedule', () => {
           executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: {} } }
         })
         expect(await clearPerpetualPark('claim-issue', 'app-1')).toBe(false)
+      })
+    })
+
+    describe('updateTaskInterval recompute-on-cadence-change', () => {
+      it('re-derives an existing park when the recheck cadence changes', async () => {
+        const farFuture = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
+        mockSchedule({
+          tasks: { 'claim-issue': { type: 'perpetual', enabled: true, recheckIntervalMs: 30 * 24 * 60 * 60 * 1000 } },
+          executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: { 'app-1': { lastRun: null, count: 0, parkedUntil: farFuture } } } }
+        })
+        await updateTaskInterval('claim-issue', { recheckIntervalMs: 1000 })
+        const saved = JSON.parse(writeFile.mock.calls.at(-1)[1])
+        const newParked = saved.executions['task:claim-issue'].perApp['app-1'].parkedUntil
+        // Recomputed from the shortened cadence (now + 1s), far earlier than the old 30-day park.
+        expect(new Date(newParked).getTime()).toBeLessThan(new Date(farFuture).getTime())
+        expect(new Date(newParked).getTime()).toBeLessThan(Date.now() + 60_000)
+      })
+
+      it('does not create a park when none exists', async () => {
+        mockSchedule({
+          tasks: { 'claim-issue': { type: 'perpetual', enabled: true } },
+          executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: { 'app-1': { lastRun: null, count: 0 } } } }
+        })
+        await updateTaskInterval('claim-issue', { recheckIntervalMs: 1000 })
+        const saved = JSON.parse(writeFile.mock.calls.at(-1)[1])
+        expect(saved.executions['task:claim-issue'].perApp['app-1'].parkedUntil).toBeUndefined()
+      })
+    })
+
+    describe('getScheduleStatus per-app park aggregate', () => {
+      it('aggregates per-app parks into taskStatus.perpetual', async () => {
+        const future = new Date(Date.now() + 60 * 60 * 1000).toISOString()
+        mockSchedule({
+          tasks: { 'claim-issue': { type: 'perpetual', enabled: true } },
+          executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: {
+            'app-1': { lastRun: null, count: 0, parkedUntil: future, parkReason: 'no-actionable-issues' },
+            'app-2': { lastRun: null, count: 0 }
+          } } }
+        })
+        const status = await getScheduleStatus()
+        const p = status.tasks['claim-issue'].perpetual
+        expect(p).toMatchObject({ parkedAppCount: 1, trackedAppCount: 2, globalParked: false, nextRecheckAt: future, parkReason: 'no-actionable-issues' })
       })
     })
   })
