@@ -5,9 +5,14 @@ import EditorialFindingsTriage from './EditorialFindingsTriage';
 import { findingManuscriptLink } from '../../../lib/editorialChecks';
 import { acceptPipelineManuscriptFix, patchPipelineManuscriptComment } from '../../../services/api';
 
+// Mock the whole api barrel — include every export the component tree touches.
+// EditorialFindingsTriage transitively imports ManuscriptCommentCard, which also
+// pulls in generatePipelineManuscriptFix; stub it too so the mock stays a
+// complete stand-in for the barrel rather than dropping that named export.
 vi.mock('../../../services/api', () => ({
   acceptPipelineManuscriptFix: vi.fn(),
   patchPipelineManuscriptComment: vi.fn(),
+  generatePipelineManuscriptFix: vi.fn(),
 }));
 
 const checksById = {
