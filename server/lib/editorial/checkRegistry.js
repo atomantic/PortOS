@@ -1531,6 +1531,27 @@ function inferGender(pronouns) {
   return 'unknown';
 }
 
+// Coarse role-tier inference from a canon character's free-text `role` field, for
+// the per-character dialogue-distribution signal (#1594). Only unambiguous keyword
+// sets map to a tier; anything else (blank, a description, a role that mixes a
+// major AND a minor word like "minor antagonist") is 'unknown' so the distribution
+// signal opts out rather than guess — the same absent-vs-empty discipline
+// inferGender() uses. Deliberately omits genuinely-ambiguous words ("supporting",
+// "secondary", "recurring") that sit between lead and walk-on. Returns
+// 'major' | 'minor' | 'unknown'.
+const MAJOR_ROLE_RE = /\b(protagonist|deuteragonist|antagonist|villain|hero|heroine|lead|main|primary|central|principal)\b/;
+const MINOR_ROLE_RE = /\b(minor|background|cameo|walk-?on|bit[- ]?part|extra|incidental|tertiary)\b/;
+function inferRoleTier(role) {
+  const r = typeof role === 'string' ? role.toLowerCase() : '';
+  if (!r) return 'unknown';
+  const major = MAJOR_ROLE_RE.test(r);
+  const minor = MINOR_ROLE_RE.test(r);
+  if (major && minor) return 'unknown'; // contradictory ("minor antagonist") → opt out
+  if (major) return 'major';
+  if (minor) return 'minor';
+  return 'unknown';
+}
+
 // Normalized name → { char, gender, key } for every named canon character, plus
 // the per-owner whole-token matcher reused for dialogue attribution. Built once
 // per run so the dialogue scan and the co-presence scan share one identity map.
@@ -1544,7 +1565,13 @@ function buildCastIdentities(ctx) {
     const key = normalizeName(name);
     if (!key) continue;
     const matcher = characterMatcher(characterNameTokens(c));
-    identities.push({ key, name, gender: inferGender(c.pronouns), matcher });
+    identities.push({
+      key,
+      name,
+      gender: inferGender(c.pronouns),
+      roleTier: inferRoleTier(c.role),
+      matcher,
+    });
   }
   return identities;
 }
@@ -2702,7 +2729,7 @@ export const EDITORIAL_CHECKS = [
     sources: ['manuscript', 'canon', 'reverseOutline'],
     label: 'Cast representation & balance (Bechdel signal, dialogue share, screen time)',
     description:
-      'Three coarse, computable casting signals: a Bechdel co-presence signal (does any scene put two or more non-male characters on the page together?), dialogue share (does one character dominate the spoken lines?), and screen-time balance (is the appearing named cast strongly skewed by inferred gender?). Gender is inferred only from the canon pronouns field — characters with absent or ambiguous pronouns are left out of the gender-dependent signals rather than guessed. Advisory: representation is an authorial choice, so these are nudges, not errors.',
+      'Coarse, computable casting signals: a Bechdel co-presence signal (does any scene put two or more non-male characters on the page together?), dialogue share (does one character dominate the spoken lines?), per-character dialogue distribution relative to stated role (a major character who appears but is oddly silent, or a minor character who dominates the conversation), and screen-time balance (is the appearing named cast strongly skewed by inferred gender?). Gender is inferred only from the canon pronouns field and role tier only from the canon role field — characters with absent or ambiguous pronouns/roles are left out of those signals rather than guessed. Advisory: representation is an authorial choice, so these are nudges, not errors.',
     scope: 'series',
     kind: 'deterministic',
     category: 'casting',
@@ -2715,9 +2742,17 @@ export const EDITORIAL_CHECKS = [
       // Flag dialogue share when the top speaker holds more than this fraction of
       // all attributed dialogue lines (and there are 2+ speakers). 1 disables it.
       maxDialogueShare: z.number().min(0.1).max(1).default(0.6),
-      // Minimum attributed dialogue lines before the share check runs — a handful
-      // of lines isn't a meaningful distribution. 0 keeps the floor at 1.
+      // Minimum attributed dialogue lines before the share/distribution checks run
+      // — a handful of lines isn't a meaningful distribution. 0 keeps the floor at 1.
       minDialogueLines: z.number().int().min(0).max(500).default(12),
+      // Flag a MINOR-tier character (per the canon `role` field) who holds more
+      // than this fraction of all attributed dialogue — a walk-on dominating the
+      // conversation. 1 disables the minor-dominating signal.
+      maxMinorShare: z.number().min(0.1).max(1).default(0.35),
+      // Flag a MAJOR-tier character (per the canon `role` field) who APPEARS in the
+      // prose yet holds less than this fraction of the attributed dialogue — a lead
+      // who is oddly silent. 0 disables the silent-major signal.
+      minMajorShare: z.number().min(0).max(0.5).default(0.05),
       // Flag screen-time skew when one gender holds more than this fraction of the
       // gender-known appearing cast (and 2+ are gender-known). 1 disables it.
       maxGenderShare: z.number().min(0.1).max(1).default(0.8),
@@ -2741,7 +2776,25 @@ export const EDITORIAL_CHECKS = [
         min: 0,
         max: 500,
         step: 1,
-        help: 'Skip the dialogue-share check until at least this many dialogue lines can be attributed — a few lines is not a meaningful distribution.',
+        help: 'Skip the dialogue-share/distribution checks until at least this many dialogue lines can be attributed — a few lines is not a meaningful distribution.',
+      },
+      {
+        key: 'maxMinorShare',
+        label: 'Max dialogue share for a minor character',
+        type: 'number',
+        min: 0.1,
+        max: 1,
+        step: 0.05,
+        help: 'Flag when a character whose canon role reads as minor (background, cameo, walk-on, etc.) holds more than this fraction of all attributed dialogue. 1 disables the minor-dominating signal.',
+      },
+      {
+        key: 'minMajorShare',
+        label: 'Min dialogue share for a major character',
+        type: 'number',
+        min: 0,
+        max: 0.5,
+        step: 0.01,
+        help: 'Flag when a character whose canon role reads as major (protagonist, lead, antagonist, etc.) appears in the prose yet holds less than this fraction of the attributed dialogue — a lead who is oddly silent. 0 disables the silent-major signal.',
       },
       {
         key: 'maxGenderShare',
@@ -2767,6 +2820,8 @@ export const EDITORIAL_CHECKS = [
       const cfg = ctx.config || {};
       const maxDialogueShare = cfg.maxDialogueShare ?? 0.6;
       const minDialogueLines = Math.max(1, cfg.minDialogueLines ?? 12);
+      const maxMinorShare = cfg.maxMinorShare ?? 0.35;
+      const minMajorShare = cfg.minMajorShare ?? 0.05;
       const maxGenderShare = cfg.maxGenderShare ?? 0.8;
       const bechdelSignal = cfg.bechdelSignal !== false;
 
@@ -2779,31 +2834,79 @@ export const EDITORIAL_CHECKS = [
       const flag = ({ severity, location, problem, suggestion, anchorQuote = '', issueNumber = null }) =>
         findings.push({ severity, category: 'casting', location, problem, suggestion, anchorQuote, issueNumber });
 
-      // --- 1) Dialogue share ------------------------------------------------
+      // --- 1) Dialogue distribution (share + role-relative outliers) --------
       // The runner injects the canonical stitched corpus as ctx.manuscript
       // (needsManuscript) — reuse it rather than re-stitching ctx.sections.
+      // One attribution pass feeds three sub-signals: the overall top-speaker
+      // share, a MINOR-tier character dominating the conversation, and a MAJOR-tier
+      // character who appears yet is oddly silent. Role tier comes only from the
+      // canon `role` field (absent/ambiguous → 'unknown', signal opts out).
       const manuscript = typeof ctx.manuscript === 'string' ? ctx.manuscript : '';
-      if (maxDialogueShare < 1 && manuscript.trim()) {
+      const wantShare = maxDialogueShare < 1;
+      const wantMinorDom = maxMinorShare < 1;
+      const wantSilentMajor = minMajorShare > 0;
+      if ((wantShare || wantMinorDom || wantSilentMajor) && manuscript.trim()) {
         const owners = identities
           .filter((id) => id.matcher)
           .map((id) => ({ key: id.key, matcher: id.matcher }));
         const { byOwner, attributed } = attributeDialogueByOwner(manuscript, owners);
         if (attributed >= minDialogueLines && byOwner.size >= 2) {
-          let topKey = null;
-          let topCount = 0;
-          for (const [key, count] of byOwner) {
-            if (count > topCount) { topCount = count; topKey = key; }
+          if (wantShare) {
+            let topKey = null;
+            let topCount = 0;
+            for (const [key, count] of byOwner) {
+              if (count > topCount) { topCount = count; topKey = key; }
+            }
+            const share = topCount / attributed;
+            if (topKey && share > maxDialogueShare) {
+              const pct = Math.round(share * 100);
+              // Escalate above the low floor when one voice utterly dominates (≥80%).
+              flag({
+                severity: escalateSeverity(ctx.severityDefault, share >= 0.8 ? 1 : 0),
+                location: 'Series dialogue',
+                problem: `"${nameByKey.get(topKey)}" speaks about ${pct}% of the attributed dialogue (${topCount} of ${attributed} lines across ${byOwner.size} speaking characters) — one voice dominating the page can flatten the rest of the cast.`,
+                suggestion: `Give other characters more of the conversation, or let scenes play out from a viewpoint where ${nameByKey.get(topKey)} isn't the one talking.`,
+              });
+            }
           }
-          const share = topCount / attributed;
-          if (topKey && share > maxDialogueShare) {
-            const pct = Math.round(share * 100);
-            // Escalate above the low floor when one voice utterly dominates (≥80%).
-            flag({
-              severity: escalateSeverity(ctx.severityDefault, share >= 0.8 ? 1 : 0),
-              location: 'Series dialogue',
-              problem: `"${nameByKey.get(topKey)}" speaks about ${pct}% of the attributed dialogue (${topCount} of ${attributed} lines across ${byOwner.size} speaking characters) — one voice dominating the page can flatten the rest of the cast.`,
-              suggestion: `Give other characters more of the conversation, or let scenes play out from a viewpoint where ${nameByKey.get(topKey)} isn't the one talking.`,
-            });
+
+          // Role-relative distribution. Silent-major is gated on prose appearance
+          // (a major who never appears is just absent — a different signal — not
+          // "oddly silent"); the appearing set is computed lazily only when needed.
+          if (wantMinorDom || wantSilentMajor) {
+            const appearingKeys = wantSilentMajor
+              ? new Set(
+                buildRosterAppearances(ctx)
+                  .filter((r) => r.appearedInIssues.length > 0)
+                  .map((r) => normalizeName(r.name))
+              )
+              : null;
+            for (const id of identities) {
+              const count = byOwner.get(id.key) || 0;
+              const share = count / attributed;
+              if (wantMinorDom && id.roleTier === 'minor' && share > maxMinorShare) {
+                const pct = Math.round(share * 100);
+                flag({
+                  // A walk-on taking over the conversation is a stronger signal the
+                  // higher the share climbs — escalate past the low floor at ≥50%.
+                  severity: escalateSeverity(ctx.severityDefault, share >= 0.5 ? 1 : 0),
+                  location: 'Series dialogue',
+                  problem: `"${id.name}" reads as a minor character (canon role) yet speaks about ${pct}% of the attributed dialogue (${count} of ${attributed} lines) — a walk-on dominating the conversation usually means the cast hierarchy on the page doesn't match the bible.`,
+                  suggestion: `Either give ${id.name} a larger stated role to match the page time, or shift dialogue to the characters the story is actually about.`,
+                });
+              }
+              if (wantSilentMajor && id.roleTier === 'major' && appearingKeys.has(id.key) && share < minMajorShare) {
+                const pct = Math.round(share * 100);
+                flag({
+                  // A major who appears but never says a word (0%) is the strongest
+                  // form — escalate past the low floor for the silent case.
+                  severity: escalateSeverity(ctx.severityDefault, count === 0 ? 1 : 0),
+                  location: 'Series dialogue',
+                  problem: `"${id.name}" reads as a major character (canon role) and appears in the prose, yet speaks only about ${pct}% of the attributed dialogue (${count} of ${attributed} lines) — a lead who is on the page but barely talks can feel like a passenger in their own story.`,
+                  suggestion: `Give ${id.name} more of the conversation in the scenes they appear in, or reconsider whether the stated major role matches their actual presence.`,
+                });
+              }
+            }
           }
         }
       }
