@@ -330,7 +330,7 @@ describe('peerSync', () => {
       // caught — this list is canonical and its order can affect iteration
       // elsewhere (e.g. syncNow's per-kind backfill). Issues piggyback on series
       // subscriptions; direct issue subs are intentionally rejected (Stage 2).
-      expect(PEER_SUBSCRIBABLE_KINDS).toEqual(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard', 'writersRoomWork']);
+      expect(PEER_SUBSCRIBABLE_KINDS).toEqual(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard', 'writersRoomWork', 'writersRoomFolder', 'writersRoomExercise']);
     });
   });
 

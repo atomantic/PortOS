@@ -21,8 +21,11 @@ import { deleteSyncBaseHash } from '../../lib/conflictJournal.js';
 import { writersRoomStore } from './store.js';
 import {
   WRITERS_ROOM_WORK_KIND, WRITERS_ROOM_DRAFT_ASSET_KIND, draftAssetEntries,
+  WRITERS_ROOM_FOLDER_KIND, WRITERS_ROOM_EXERCISE_KIND,
 } from './syncLogic.js';
-import { WORK_ID_RE, DRAFT_ID_RE, wrWorkDir, wrDraftPath } from './_shared.js';
+import {
+  WORK_ID_RE, DRAFT_ID_RE, FOLDER_ID_RE, EXERCISE_ID_RE, wrWorkDir, wrDraftPath,
+} from './_shared.js';
 
 const store = () => writersRoomStore();
 
@@ -68,6 +71,96 @@ export async function pruneTombstonedWorks(olderThanMs) {
     await deleteSyncBaseHash(WRITERS_ROOM_WORK_KIND, id);
   }
   return { pruned };
+}
+
+// ---------- folders + exercises (body-less records) ----------
+//
+// Folders + exercises federate as of #1645 (follow-up to #1565). Unlike works
+// they have NO file-primary `.md` body — the whole record is the DB row's `data`
+// JSONB (or the folders.json/exercises.json array on the file backend), so these
+// facades are the works facades minus the draft-body manifest machinery. The
+// only on-disk cleanup at prune time is the conflict-journal base hash (no work
+// dir to rm).
+
+// Shared prune facade for a body-less kind: the backend drops the rows/entries,
+// then this evicts each pruned id's conflict-journal base hash (the only on-disk
+// cleanup — no work dir to rm). `idRe` rejects a junk id before the eviction.
+async function pruneTombstonedBodyless(storePruneFn, kind, idRe, olderThanMs) {
+  const { pruned, ids } = await storePruneFn(olderThanMs);
+  for (const id of ids) {
+    if (typeof id !== 'string' || !idRe.test(id)) continue;
+    await deleteSyncBaseHash(kind, id);
+  }
+  return { pruned };
+}
+
+/** One folder including a tombstone (for the LWW compare + the push). */
+export async function getFolderForSync(id) {
+  return store().readFolder(id, { includeDeleted: true });
+}
+
+/** Folder ids — live only by default, or all (incl. tombstones) when asked. */
+export async function listFolderIdsForSync(options = {}) {
+  return store().listFolderIds(options);
+}
+
+/**
+ * Live folders as `{ id, updatedAt }` for the peer-sync backfill + full-sync
+ * coverage status (same `updatedAt`-bearing shape as works — a bare `{ id }`
+ * stub would report a renamed/moved folder as fully mirrored).
+ */
+export async function listFoldersForSync() {
+  const folders = await store().listFolders();
+  return folders
+    .filter((f) => f && typeof f.id === 'string')
+    .map((f) => ({ id: f.id, updatedAt: f.updatedAt }));
+}
+
+/** Merge an incoming batch of folder records from a peer (LWW, tombstone-aware). */
+export async function mergeFoldersFromSync(remoteFolders, options = {}) {
+  return store().mergeFoldersFromSync(remoteFolders, options);
+}
+
+/**
+ * Hard-remove tombstoned folders older than the cutoff (called by tombstone GC).
+ * The backend drops the row/array entry; this facade evicts each folder's
+ * conflict-journal base hash. Returns `{ pruned }`.
+ */
+export async function pruneTombstonedFolders(olderThanMs) {
+  return pruneTombstonedBodyless((ms) => store().pruneTombstonedFolders(ms), WRITERS_ROOM_FOLDER_KIND, FOLDER_ID_RE, olderThanMs);
+}
+
+/** One exercise including a tombstone (for the LWW compare + the push). */
+export async function getExerciseForSync(id) {
+  return store().readExercise(id, { includeDeleted: true });
+}
+
+/** Exercise ids — live only by default, or all (incl. tombstones) when asked. */
+export async function listExerciseIdsForSync(options = {}) {
+  return store().listExerciseIds(options);
+}
+
+/**
+ * Live exercises as `{ id, updatedAt }` for the peer-sync backfill + coverage.
+ * Exercises carry no stored `updatedAt`; derive the LWW key the same way
+ * sanitizeExerciseForSync does (`finishedAt ?? startedAt`) so coverage compares
+ * the same value the wire merge keys on.
+ */
+export async function listExercisesForSync() {
+  const exercises = await store().listExercises();
+  return exercises
+    .filter((e) => e && typeof e.id === 'string')
+    .map((e) => ({ id: e.id, updatedAt: e.updatedAt ?? e.finishedAt ?? e.startedAt }));
+}
+
+/** Merge an incoming batch of exercise records from a peer (LWW, tombstone-aware). */
+export async function mergeExercisesFromSync(remoteExercises, options = {}) {
+  return store().mergeExercisesFromSync(remoteExercises, options);
+}
+
+/** Hard-remove tombstoned exercises older than the cutoff (called by tombstone GC). */
+export async function pruneTombstonedExercises(olderThanMs) {
+  return pruneTombstonedBodyless((ms) => store().pruneTombstonedExercises(ms), WRITERS_ROOM_EXERCISE_KIND, EXERCISE_ID_RE, olderThanMs);
 }
 
 /**

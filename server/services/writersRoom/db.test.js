@@ -183,6 +183,51 @@ describe.skipIf(!dbReady)('Writers Room DB adapter round-trip', () => {
     expect((await query(`SELECT 1 FROM writers_room_draft_versions WHERE work_id = 'wr-work-1'`)).rows).toHaveLength(0);
   });
 
+  it('deleteFolder soft-deletes (tombstone) — hidden from live reads, row retained for federation (#1645)', async () => {
+    await db.writeFolder({ id: 'wr-folder-1', parentId: null, name: 'Keep', sortOrder: 0, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' });
+    await db.writeFolder({ id: 'wr-folder-2', parentId: null, name: 'Gone', sortOrder: 1, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' });
+    await db.deleteFolder('wr-folder-2');
+    expect((await db.listFolders()).map((f) => f.id)).toEqual(['wr-folder-1']);
+    expect(await db.readFolder('wr-folder-2')).toBeNull();
+    expect(await db.listFolderIds()).toEqual(['wr-folder-1']);
+    expect((await query(`SELECT deleted FROM writers_room_folders WHERE id = 'wr-folder-2'`)).rows[0].deleted).toBe(true);
+    const tomb = await db.readFolder('wr-folder-2', { includeDeleted: true });
+    expect(tomb.deleted).toBe(true);
+    expect(await db.listFolderIds({ includeDeleted: true })).toEqual(expect.arrayContaining(['wr-folder-1', 'wr-folder-2']));
+  });
+
+  it('mergeFoldersFromSync inserts + LWW-resolves, pruneTombstonedFolders hard-removes old tombstones (#1645)', async () => {
+    const folder = (extra = {}) => ({ id: 'wr-folder-1', parentId: null, name: 'Remote', sortOrder: 0, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-02-01T00:00:00.000Z', ...extra });
+    expect(await db.mergeFoldersFromSync([folder()])).toEqual({ applied: true, count: 1 });
+    expect((await db.readFolder('wr-folder-1')).name).toBe('Remote');
+    expect(await db.mergeFoldersFromSync([folder({ name: 'Stale', updatedAt: '2026-01-01T00:00:00.000Z' })])).toEqual({ applied: false, count: 0 });
+    expect(await db.mergeFoldersFromSync([folder({ name: 'Newer', updatedAt: '2026-03-01T00:00:00.000Z' })])).toEqual({ applied: true, count: 1 });
+    expect((await db.readFolder('wr-folder-1')).name).toBe('Newer');
+    // Tombstone + prune.
+    await db.mergeFoldersFromSync([folder({ deleted: true, deletedAt: '2026-04-05T00:00:00.000Z', updatedAt: '2026-04-05T00:00:00.000Z' })]);
+    expect(await db.pruneTombstonedFolders(Date.parse('2026-04-04T00:00:00.000Z'))).toEqual({ pruned: 0, ids: [] });
+    expect((await query(`SELECT 1 FROM writers_room_folders WHERE id = 'wr-folder-1'`)).rows).toHaveLength(1);
+    expect(await db.pruneTombstonedFolders(Date.parse('2026-05-01T00:00:00.000Z'))).toEqual({ pruned: 1, ids: ['wr-folder-1'] });
+    expect((await query(`SELECT 1 FROM writers_room_folders WHERE id = 'wr-folder-1'`)).rows).toHaveLength(0);
+  });
+
+  it('mergeExercisesFromSync inserts + LWW-resolves, pruneTombstonedExercises hard-removes old tombstones (#1645)', async () => {
+    const ex = (extra = {}) => ({ id: 'wr-ex-1', workId: null, prompt: 'go', status: 'running', startingWords: 0, startedAt: '2026-01-03T00:00:00.000Z', finishedAt: null, ...extra });
+    expect(await db.mergeExercisesFromSync([ex()])).toEqual({ applied: true, count: 1 });
+    expect((await db.readExercise('wr-ex-1')).status).toBe('running');
+    // The finish transition (finishedAt advances the derived LWW key) wins.
+    expect(await db.mergeExercisesFromSync([ex({ status: 'finished', finishedAt: '2026-01-03T01:00:00.000Z', wordsAdded: 50 })])).toEqual({ applied: true, count: 1 });
+    expect((await db.readExercise('wr-ex-1')).status).toBe('finished');
+    // A stale running push (older key) loses.
+    expect(await db.mergeExercisesFromSync([ex()])).toEqual({ applied: false, count: 0 });
+    // Tombstone + prune.
+    await db.mergeExercisesFromSync([ex({ status: 'finished', deleted: true, deletedAt: '2026-02-05T00:00:00.000Z', updatedAt: '2026-02-05T00:00:00.000Z', finishedAt: '2026-01-03T01:00:00.000Z' })]);
+    expect(await db.readExercise('wr-ex-1')).toBeNull();
+    expect(await db.pruneTombstonedExercises(Date.parse('2026-02-04T00:00:00.000Z'))).toEqual({ pruned: 0, ids: [] });
+    expect(await db.pruneTombstonedExercises(Date.parse('2026-03-01T00:00:00.000Z'))).toEqual({ pruned: 1, ids: ['wr-ex-1'] });
+    expect((await query(`SELECT 1 FROM writers_room_exercises WHERE id = 'wr-ex-1'`)).rows).toHaveLength(0);
+  });
+
   it('exercise upsert round-trips and mirror columns reflect work_id/status', async () => {
     await db.writeExercise({ id: 'wr-ex-1', workId: 'wr-work-1', status: 'running', prompt: 'go', startedAt: '2026-01-03T00:00:00.000Z', finishedAt: null });
     await db.writeExercise({ id: 'wr-ex-1', workId: 'wr-work-1', status: 'finished', prompt: 'go', wordsAdded: 50, startedAt: '2026-01-03T00:00:00.000Z', finishedAt: '2026-01-03T01:00:00.000Z' });

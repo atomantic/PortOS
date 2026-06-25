@@ -315,9 +315,28 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // work-shape change MUST bump this to 2 then. The work manifest (metadata +
   // decomposed draft-version metadata in drafts[]) is LWW-overwritten whole; the
   // file-primary `.md` draft prose bodies ride a separate body manifest (SHA256
-  // diff + receiver-pull), never round-tripped through the record. Folders +
-  // exercises are NOT federated yet (they lack soft-delete columns).
+  // diff + receiver-pull), never round-tripped through the record.
   writersRoomWorks: 1,
+  // v1 = Writers Room folders (PostgreSQL `writers_room_folders`) federated via
+  // the per-record peer-sync push pipeline (record kind `writersRoomFolder`,
+  // #1645 — follow-up to #1565). Same posture as `writersRoomWorks`: a brand-NEW
+  // synced record type with its own per-category gate, so a v1 sender pushing to
+  // a ≤v0 (pre-feature) receiver is sender-ahead on `writersRoomFolders` and gets
+  // a 412 (only that category pauses); a v1 receiver still accepts a ≤v0 sender.
+  // Folders are body-less (no file-primary `.md`, no asset manifest) and
+  // LWW-overwritten whole. The FIRST incompatible folder-shape change MUST bump
+  // this to 2. Federating folders requires the soft-delete tombstone columns
+  // (deleted/deleted_at) added in the same change — the LWW merge never
+  // propagates a hard delete.
+  writersRoomFolders: 1,
+  // v1 = Writers Room exercises (PostgreSQL `writers_room_exercises`) federated
+  // via the per-record peer-sync push pipeline (record kind `writersRoomExercise`,
+  // #1645). Body-less + LWW-overwritten whole, same per-category gate semantics as
+  // `writersRoomFolders`. Exercises predate federation and carry no
+  // `updatedAt`/`createdAt` — the wire sanitizer derives a stable LWW key from
+  // their existing `startedAt`/`finishedAt` (see sanitizeExerciseForSync). The
+  // FIRST incompatible exercise-shape change MUST bump this to 2.
+  writersRoomExercises: 1,
   // v1 = standalone media-library federation (#1566). NOT a record kind — it's
   // the wire contract for the library-level asset manifest a full-sync peer
   // advertises at GET /api/peer-sync/library-manifest. The receiver-pull sweep
@@ -378,6 +397,8 @@ export const RECORD_KIND_SCHEMA_CATEGORIES = Object.freeze({
   creativeDirectorProject: Object.freeze(['creativeDirectorProjects']),
   moodBoard: Object.freeze(['moodBoards']),
   writersRoomWork: Object.freeze(['writersRoomWorks']),
+  writersRoomFolder: Object.freeze(['writersRoomFolders']),
+  writersRoomExercise: Object.freeze(['writersRoomExercises']),
 });
 
 /**

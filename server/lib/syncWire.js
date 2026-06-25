@@ -163,7 +163,9 @@ export function sanitizeRecordForWire(kind, record) {
     case 'album':
     case 'track':
     case 'creativeDirectorProject':
-    case 'moodBoard': {
+    case 'moodBoard':
+    case 'writersRoomFolder':
+    case 'writersRoomExercise': {
       // Persona/music/creative-director/mood-board records: like mediaCollection,
       // no `ephemeral` flag — always wire-syncable when present. Strip-then-tail-
       // re-add the soft-delete pair for byte-stable checksums. The whole record
@@ -172,6 +174,9 @@ export function sanitizeRecordForWire(kind, record) {
       // scalar narrowing in contentHashForRecord). A creativeDirectorProject is
       // larger than a persona (treatment/scenes/runs) but follows the same whole-
       // record LWW contract; a moodBoard (name/description/items) is the same.
+      // Writers Room folders + exercises (#1645) are also body-less whole-record
+      // LWW kinds with no ephemeral counters — they wire identically (no liveMode
+      // strip like writersRoomWork below).
       const { deleted: _d, deletedAt: _da, ...rest } = record;
       return { ...rest, ...sanitizeSoftDeleteFields(record) };
     }

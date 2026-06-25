@@ -946,7 +946,9 @@ CREATE TABLE IF NOT EXISTS writers_room_folders (
   sort_order INTEGER DEFAULT 0,
   data JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  deleted BOOLEAN DEFAULT FALSE,
+  deleted_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS idx_wr_folders_parent ON writers_room_folders (parent_id, sort_order);
 
@@ -990,7 +992,9 @@ CREATE TABLE IF NOT EXISTS writers_room_exercises (
   status VARCHAR(16),
   data JSONB NOT NULL DEFAULT '{}'::jsonb,
   started_at TIMESTAMPTZ,
-  finished_at TIMESTAMPTZ
+  finished_at TIMESTAMPTZ,
+  deleted BOOLEAN DEFAULT FALSE,
+  deleted_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS idx_wr_exercises_work ON writers_room_exercises (work_id, started_at DESC);
 

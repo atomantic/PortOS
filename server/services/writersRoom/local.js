@@ -21,7 +21,7 @@ import { WORK_KINDS, WORK_STATUSES } from '../../lib/writersRoomPresets.js';
 import { emitRecordUpdated, emitRecordDeleted, autoSubscribeRecordToAllPeers } from '../sharing/recordEvents.js';
 import { nowIso, badRequest, notFound, wrWorkDir, wrDraftPath } from './_shared.js';
 import { writersRoomStore } from './store.js';
-import { WRITERS_ROOM_WORK_KIND } from './syncLogic.js';
+import { WRITERS_ROOM_WORK_KIND, WRITERS_ROOM_FOLDER_KIND, WRITERS_ROOM_EXERCISE_KIND } from './syncLogic.js';
 
 const store = () => writersRoomStore();
 
@@ -108,6 +108,9 @@ export async function createFolder({ name, parentId = null, sortOrder = 0 }) {
     updatedAt: nowIso(),
   };
   await store().writeFolder(folder);
+  // Auto-subscribe every writersRoomFolders-enabled peer so brand-new folders
+  // (and their later tombstones) propagate without waiting for a reconnect (#1645).
+  autoSubscribeRecordToAllPeers(WRITERS_ROOM_FOLDER_KIND, folder.id).catch(() => {});
   return folder;
 }
 
@@ -122,7 +125,40 @@ export async function deleteFolder(id) {
     throw badRequest('Folder has subfolders — delete or reparent them first');
   }
   await store().deleteFolder(id);
+  // Push the tombstone so subscribed peers learn of the deletion (the LWW merge
+  // never propagates a hard delete — an omitted record gets resurrected) (#1645).
+  emitRecordDeleted(WRITERS_ROOM_FOLDER_KIND, id);
   return { ok: true };
+}
+
+// Conflict-restore entry point (#1645) for a body-less Writers Room record
+// (folder / exercise): re-apply a journaled local snapshot after a sync LWW
+// overwrite. Merges only the RESTORABLE_FIELDS the resolver passes, bumps
+// updatedAt so the restore wins the next LWW + re-pushes (the exercise wire
+// sanitizer prefers a stored updatedAt over its finishedAt/startedAt-derived
+// key), and emits so subscribed peers converge. A missing/tombstoned record
+// throws notFound (→ translateGone → ERR_TARGET_GONE in the resolver). Mirrors
+// moodBoard's restoreBoard.
+async function restoreBodylessRecord(id, patch, { read, write, kind, fields, label }) {
+  const current = await read(id, { includeDeleted: false });
+  if (!current) throw notFound(label);
+  const next = { ...current };
+  for (const key of fields) {
+    if (patch[key] !== undefined) next[key] = patch[key];
+  }
+  next.updatedAt = nowIso();
+  await write(next);
+  emitRecordUpdated(kind, id);
+  return next;
+}
+
+const FOLDER_RESTORABLE = ['name', 'parentId', 'sortOrder'];
+export async function restoreFolder(id, patch) {
+  return restoreBodylessRecord(id, patch, {
+    read: (rid, opts) => store().readFolder(rid, opts),
+    write: (f) => store().writeFolder(f),
+    kind: WRITERS_ROOM_FOLDER_KIND, fields: FOLDER_RESTORABLE, label: 'Folder',
+  });
 }
 
 // ---------- work CRUD ----------
@@ -567,6 +603,9 @@ export async function createExercise({ workId = null, prompt = '', durationSecon
     finishedAt: null,
   };
   await store().writeExercise(exercise);
+  // Auto-subscribe every writersRoomExercises-enabled peer so brand-new sprints
+  // propagate; later finish/discard transitions ride emitRecordUpdated (#1645).
+  autoSubscribeRecordToAllPeers(WRITERS_ROOM_EXERCISE_KIND, exercise.id).catch(() => {});
   return exercise;
 }
 
@@ -590,6 +629,9 @@ export async function finishExercise(id, { endingWords, appendedText = null } = 
     finishedAt: nowIso(),
   };
   await store().writeExercise(finished);
+  // The settle transition bumps finishedAt (the derived LWW key) — push it so
+  // subscribed peers converge on the finished state (#1645).
+  emitRecordUpdated(WRITERS_ROOM_EXERCISE_KIND, id);
   return finished;
 }
 
@@ -600,5 +642,16 @@ export async function discardExercise(id) {
   if (settled(existing)) throw badRequest('Exercise is already settled');
   const discarded = { ...existing, status: 'discarded', finishedAt: nowIso() };
   await store().writeExercise(discarded);
+  emitRecordUpdated(WRITERS_ROOM_EXERCISE_KIND, id);
   return discarded;
+}
+
+// Conflict-restore for an exercise sprint — see restoreBodylessRecord above.
+const EXERCISE_RESTORABLE = ['workId', 'prompt', 'durationSeconds', 'startingWords', 'endingWords', 'wordsAdded', 'appendedText', 'status', 'finishedAt'];
+export async function restoreExercise(id, patch) {
+  return restoreBodylessRecord(id, patch, {
+    read: (rid, opts) => store().readExercise(rid, opts),
+    write: (e) => store().writeExercise(e),
+    kind: WRITERS_ROOM_EXERCISE_KIND, fields: EXERCISE_RESTORABLE, label: 'Exercise',
+  });
 }

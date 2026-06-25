@@ -47,6 +47,10 @@ vi.mock('../moodBoard/index.js', () => ({
 vi.mock('../writersRoom/sync.js', () => ({
   pruneTombstonedWorks: vi.fn().mockResolvedValue({ pruned: 0 }),
   listWorkIdsForSync: vi.fn().mockResolvedValue([]),
+  pruneTombstonedFolders: vi.fn().mockResolvedValue({ pruned: 0 }),
+  listFolderIdsForSync: vi.fn().mockResolvedValue([]),
+  pruneTombstonedExercises: vi.fn().mockResolvedValue({ pruned: 0 }),
+  listExerciseIdsForSync: vi.fn().mockResolvedValue([]),
 }));
 vi.mock('../../lib/conflictJournal.js', () => ({
   pruneOrphanedBaseHashes: vi.fn().mockResolvedValue({ pruned: 0 }),
@@ -77,7 +81,7 @@ import { pruneTombstonedAlbums, listAlbumIds } from '../albums/index.js';
 import { pruneTombstonedTracks, listTrackIds } from '../tracks/index.js';
 import { pruneTombstonedProjects } from '../creativeDirector/local.js';
 import { pruneTombstonedBoards } from '../moodBoard/index.js';
-import { pruneTombstonedWorks } from '../writersRoom/sync.js';
+import { pruneTombstonedWorks, pruneTombstonedFolders, pruneTombstonedExercises } from '../writersRoom/sync.js';
 import { pruneOrphanedBaseHashes } from '../../lib/conflictJournal.js';
 import { listPeerSubscriptions, pruneOrphanedPeerSubscriptions } from './peerSync.js';
 import { getMinAckAcrossPeers } from './peerTombstoneCursors.js';
@@ -436,6 +440,8 @@ describe('sweepTombstones — return shape', () => {
     pruneTombstonedProjects.mockResolvedValueOnce({ pruned: 8 });
     pruneTombstonedBoards.mockResolvedValueOnce({ pruned: 9 });
     pruneTombstonedWorks.mockResolvedValueOnce({ pruned: 10 });
+    pruneTombstonedFolders.mockResolvedValueOnce({ pruned: 11 });
+    pruneTombstonedExercises.mockResolvedValueOnce({ pruned: 12 });
     const result = await sweepTombstones({ now: NOW });
     expect(result).toEqual({
       universes: 2,
@@ -449,6 +455,8 @@ describe('sweepTombstones — return shape', () => {
       creativeDirectorProjects: 8,
       moodBoards: 9,
       writersRoomWorks: 10,
+      writersRoomFolders: 11,
+      writersRoomExercises: 12,
       orphanBaseHashes: 0,
       orphanSubscriptions: 0,
       refused: [],

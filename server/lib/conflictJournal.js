@@ -353,6 +353,18 @@ export const RESTORABLE_FIELDS = Object.freeze({
   // contentHashForRecord (no scalar narrowing); this set is what the Conflicts UI
   // offers for restore. `writersRoomWork` matches the record kind.
   writersRoomWork: ['title', 'kind', 'status', 'folderId', 'imageStyle', 'liveMode'],
+  // Writers Room folders (#1645): the user-authored structural fields the merge
+  // can restore through `restoreFolder`. Server-owned / structural fields are
+  // excluded — `id`/`createdAt`/the LWW-tombstone trio. The whole folder is
+  // hashed for DETECTION by contentHashForRecord (no scalar narrowing); this set
+  // is what the Conflicts UI offers for restore. `writersRoomFolder` matches the
+  // record kind.
+  writersRoomFolder: ['name', 'parentId', 'sortOrder'],
+  // Writers Room exercises (#1645): the user-authored sprint fields the merge can
+  // restore through `restoreExercise` — the appended prose + the sprint config.
+  // Server-owned / structural fields are excluded (`id`/`createdAt`/`startedAt`/
+  // the LWW-tombstone trio). `writersRoomExercise` matches the record kind.
+  writersRoomExercise: ['workId', 'prompt', 'durationSeconds', 'startingWords', 'endingWords', 'wordsAdded', 'appendedText', 'status', 'finishedAt'],
 });
 
 const present = (v) => v !== undefined;

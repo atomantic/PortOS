@@ -11,11 +11,16 @@ import { describe, it, expect } from 'vitest';
 import {
   sanitizeWorkForSync, mergeWorkRecord, draftAssetEntries,
   WRITERS_ROOM_WORK_KIND, WRITERS_ROOM_DRAFT_ASSET_KIND,
+  WRITERS_ROOM_FOLDER_KIND, WRITERS_ROOM_EXERCISE_KIND,
+  sanitizeFolderForSync, mergeFolderRecord,
+  sanitizeExerciseForSync, mergeExerciseRecord,
 } from './syncLogic.js';
 import { sanitizeRecordForWire } from '../../lib/syncWire.js';
 
 const WORK = 'wr-work-11111111-1111-1111-1111-111111111111';
 const DRAFT = 'wr-draft-22222222-2222-2222-2222-222222222222';
+const FOLDER = 'wr-folder-44444444-4444-4444-4444-444444444444';
+const EXERCISE = 'wr-ex-55555555-5555-5555-5555-555555555555';
 
 const work = (extra = {}) => ({
   id: WORK,
@@ -182,9 +187,137 @@ describe('draftAssetEntries', () => {
   });
 });
 
+// ---------- folders + exercises (body-less records, #1645) ----------
+
+const folder = (extra = {}) => ({
+  id: FOLDER,
+  name: 'Drafts',
+  parentId: null,
+  sortOrder: 0,
+  createdAt: '2026-01-01T00:00:00.000Z',
+  updatedAt: '2026-01-02T00:00:00.000Z',
+  ...extra,
+});
+
+describe('sanitizeFolderForSync', () => {
+  it('drops non-objects, missing ids, and ids that are not valid folder ids', () => {
+    expect(sanitizeFolderForSync(null)).toBeNull();
+    expect(sanitizeFolderForSync([])).toBeNull();
+    expect(sanitizeFolderForSync({ name: 'no id' })).toBeNull();
+    expect(sanitizeFolderForSync({ id: 'wr-work-11111111-1111-1111-1111-111111111111' })).toBeNull();
+    expect(sanitizeFolderForSync({ id: '../etc/passwd' })).toBeNull();
+    expect(sanitizeFolderForSync(folder())?.id).toBe(FOLDER);
+  });
+
+  it('normalizes the soft-delete trio and preserves the body verbatim', () => {
+    const s = sanitizeFolderForSync(folder());
+    expect(s.deleted).toBe(false);
+    expect(s.deletedAt).toBeNull();
+    expect(s.name).toBe('Drafts');
+    expect(s.sortOrder).toBe(0);
+  });
+
+  it('keeps a tombstone deletedAt and defaults missing updatedAt to createdAt', () => {
+    const tomb = sanitizeFolderForSync(folder({ deleted: true, deletedAt: '2026-02-01T00:00:00.000Z' }));
+    expect(tomb.deleted).toBe(true);
+    expect(tomb.deletedAt).toBe('2026-02-01T00:00:00.000Z');
+    expect(sanitizeFolderForSync({ id: FOLDER, createdAt: '2026-03-01T00:00:00.000Z' }).updatedAt).toBe('2026-03-01T00:00:00.000Z');
+  });
+});
+
+describe('mergeFolderRecord', () => {
+  it('inserts a remote with no local counterpart and drops a malformed remote', () => {
+    const ins = mergeFolderRecord(null, folder());
+    expect(ins.inserted).toBe(true);
+    expect(ins.next.id).toBe(FOLDER);
+    expect(mergeFolderRecord(folder(), { name: 'no id' }).next).toBeNull();
+  });
+
+  it('newer remote updatedAt wins; older loses; tie keeps local', () => {
+    const local = sanitizeFolderForSync(folder({ updatedAt: '2026-01-02T00:00:00.000Z', name: 'Local' }));
+    expect(mergeFolderRecord(local, folder({ updatedAt: '2026-01-03T00:00:00.000Z', name: 'Remote' })).next.name).toBe('Remote');
+    expect(mergeFolderRecord(local, folder({ updatedAt: '2026-01-01T00:00:00.000Z', name: 'Remote' })).next.name).toBe('Local');
+    expect(mergeFolderRecord(local, folder({ name: 'Local' })).changed).toBe(false);
+  });
+
+  it('a newer tombstone overwrites a live local folder', () => {
+    const local = sanitizeFolderForSync(folder({ updatedAt: '2026-01-02T00:00:00.000Z' }));
+    const { next, remoteWins } = mergeFolderRecord(local, folder({ updatedAt: '2026-01-05T00:00:00.000Z', deleted: true, deletedAt: '2026-01-05T00:00:00.000Z' }));
+    expect(remoteWins).toBe(true);
+    expect(next.deleted).toBe(true);
+  });
+});
+
+const exercise = (extra = {}) => ({
+  id: EXERCISE,
+  workId: null,
+  prompt: 'Write fast',
+  durationSeconds: 600,
+  startingWords: 0,
+  endingWords: null,
+  wordsAdded: null,
+  appendedText: null,
+  status: 'running',
+  startedAt: '2026-01-01T00:00:00.000Z',
+  finishedAt: null,
+  ...extra,
+});
+
+describe('sanitizeExerciseForSync', () => {
+  it('drops non-objects and ids that are not valid exercise ids', () => {
+    expect(sanitizeExerciseForSync(null)).toBeNull();
+    expect(sanitizeExerciseForSync({ id: 'wr-folder-44444444-4444-4444-4444-444444444444' })).toBeNull();
+    expect(sanitizeExerciseForSync(exercise())?.id).toBe(EXERCISE);
+  });
+
+  it('derives the LWW key from startedAt / finishedAt when updatedAt/createdAt are absent', () => {
+    // Pre-federation exercise: no createdAt/updatedAt — both derive from the
+    // sprint timestamps so an OLD record still gets a stable LWW key.
+    const running = sanitizeExerciseForSync(exercise());
+    expect(running.createdAt).toBe('2026-01-01T00:00:00.000Z'); // startedAt
+    expect(running.updatedAt).toBe('2026-01-01T00:00:00.000Z'); // finishedAt ?? startedAt
+    const finished = sanitizeExerciseForSync(exercise({ finishedAt: '2026-01-01T00:10:00.000Z', status: 'finished' }));
+    expect(finished.updatedAt).toBe('2026-01-01T00:10:00.000Z'); // finishedAt advances the key
+  });
+
+  it('prefers an explicit stored updatedAt over the derived key', () => {
+    const restored = sanitizeExerciseForSync(exercise({ updatedAt: '2026-02-02T00:00:00.000Z' }));
+    expect(restored.updatedAt).toBe('2026-02-02T00:00:00.000Z');
+  });
+});
+
+describe('mergeExerciseRecord', () => {
+  it('the finish transition (finishedAt advances) wins LWW over the running local', () => {
+    const local = sanitizeExerciseForSync(exercise());
+    const { next, remoteWins } = mergeExerciseRecord(local, exercise({ status: 'finished', finishedAt: '2026-01-01T00:10:00.000Z', wordsAdded: 42, endingWords: 42 }));
+    expect(remoteWins).toBe(true);
+    expect(next.status).toBe('finished');
+    expect(next.wordsAdded).toBe(42);
+  });
+
+  it('inserts a remote with no local counterpart and drops a malformed remote', () => {
+    expect(mergeExerciseRecord(null, exercise()).inserted).toBe(true);
+    expect(mergeExerciseRecord(exercise(), { id: 'bogus' }).next).toBeNull();
+  });
+});
+
+describe('body-less wire form', () => {
+  it('sanitizeRecordForWire round-trips folder + exercise with a tail-canonical soft-delete pair', () => {
+    const wf = sanitizeRecordForWire('writersRoomFolder', sanitizeFolderForSync(folder()));
+    expect(wf.deleted).toBe(false);
+    expect(wf.deletedAt).toBeNull();
+    expect(wf.name).toBe('Drafts');
+    const we = sanitizeRecordForWire('writersRoomExercise', sanitizeExerciseForSync(exercise()));
+    expect(we.deleted).toBe(false);
+    expect(we.prompt).toBe('Write fast');
+  });
+});
+
 describe('exported kind constants', () => {
   it('match the federation record + asset kinds', () => {
     expect(WRITERS_ROOM_WORK_KIND).toBe('writersRoomWork');
     expect(WRITERS_ROOM_DRAFT_ASSET_KIND).toBe('writers-room-draft');
+    expect(WRITERS_ROOM_FOLDER_KIND).toBe('writersRoomFolder');
+    expect(WRITERS_ROOM_EXERCISE_KIND).toBe('writersRoomExercise');
   });
 });

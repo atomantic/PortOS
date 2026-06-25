@@ -15,7 +15,7 @@ import { catalogSyncIngredientSchema, catalogSyncRefSchema } from './catalogVali
 // subscriptions target another PortOS instance over Tailnet.
 export const peerSubscribeSchema = z.object({
   peerId: z.string().trim().min(1).max(120),
-  recordKind: z.enum(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard', 'writersRoomWork']),
+  recordKind: z.enum(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard', 'writersRoomWork', 'writersRoomFolder', 'writersRoomExercise']),
   recordId: z.string().trim().min(1).max(120),
 }).strict();
 
@@ -225,6 +225,19 @@ const writersRoomWorkPushSchema = z.object({
   ...peerSyncPushBase,
   ...draftBodyManifestField,
 }).strict();
+// Writers Room folders + exercises (#1645) push the bare record — body-less, no
+// asset manifest entries, no draft bodies, no bundled children. The base shape
+// alone suffices (`.strict()` rejects smuggled bundle/draftBody keys, same
+// posture as author/moodBoard). assetManifest is still required by the base but
+// the sender always ships `[]`.
+const writersRoomFolderPushSchema = z.object({
+  kind: z.literal('writersRoomFolder'),
+  ...peerSyncPushBase,
+}).strict();
+const writersRoomExercisePushSchema = z.object({
+  kind: z.literal('writersRoomExercise'),
+  ...peerSyncPushBase,
+}).strict();
 export const peerSyncPushSchema = z.discriminatedUnion('kind', [
   universePushSchema,
   seriesPushSchema,
@@ -236,13 +249,15 @@ export const peerSyncPushSchema = z.discriminatedUnion('kind', [
   creativeDirectorProjectPushSchema,
   moodBoardPushSchema,
   writersRoomWorkPushSchema,
+  writersRoomFolderPushSchema,
+  writersRoomExercisePushSchema,
 ]);
 
 // Manual sync action schemas — used by POST /sync-record, /sync-now, /pull-metadata.
 
 export const peerSyncRecordSchema = z.object({
   peerId: z.string().trim().min(1).max(120),
-  recordKind: z.enum(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard', 'writersRoomWork']),
+  recordKind: z.enum(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard', 'writersRoomWork', 'writersRoomFolder', 'writersRoomExercise']),
   recordId: z.string().trim().min(1).max(200),
 }).strict();
 

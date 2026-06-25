@@ -37,78 +37,232 @@ import { mirrorTimestamp } from '../../lib/pgTimestamp.js';
 import {
   maybeJournalBeforeOverwrite, setSyncBaseHash, contentHashForRecord, flushBaseHashes,
 } from '../../lib/conflictJournal.js';
-import { WRITERS_ROOM_WORK_KIND, mergeWorkRecord } from './syncLogic.js';
+import {
+  WRITERS_ROOM_WORK_KIND, mergeWorkRecord,
+  WRITERS_ROOM_FOLDER_KIND, mergeFolderRecord,
+  WRITERS_ROOM_EXERCISE_KIND, mergeExerciseRecord,
+} from './syncLogic.js';
+
+/**
+ * Shared per-record LWW merge for a body-less Writers Room record (folder /
+ * exercise) — both federate as of #1645 (follow-up to #1565). Same posture as
+ * `mergeWorksFromSync` minus the draft-row decomposition: lock the row, rebuild
+ * the local record from its `data` JSONB, run the shared pure decision, journal
+ * the about-to-be-overwritten local version when remote wins, and persist + seed
+ * the conflict-journal base hash. `table` is a hardcoded constant (never user
+ * input). Returns `{ applied, count }`.
+ */
+async function mergeBodylessFromSync(table, kind, mergeFn, persistFn, remoteRecords, source) {
+  if (!Array.isArray(remoteRecords)) return { applied: false, count: 0 };
+  let changed = 0;
+  for (const remote of remoteRecords) {
+    const applied = await withTransaction(async (client) => {
+      const sel = await client.query(`SELECT data FROM ${table} WHERE id = $1 FOR UPDATE`, [remote?.id]);
+      const local = sel.rows[0]?.data ?? null;
+      const { next, inserted, remoteWins, changed: didChange } = mergeFn(local, remote);
+      if (!next) return false; // malformed remote → dropped
+      if (!inserted && (!remoteWins || !didChange)) return false; // local wins, or no-op
+      if (!inserted) {
+        await maybeJournalBeforeOverwrite({ kind, id: next.id, local, remote: next, source });
+      }
+      await persistFn(client, next);
+      await setSyncBaseHash(kind, next.id, contentHashForRecord(kind, next));
+      return true;
+    });
+    if (applied) changed += 1;
+  }
+  await flushBaseHashes();
+  return changed === 0 ? { applied: false, count: 0 } : { applied: true, count: changed };
+}
+
+/** Hard-remove tombstoned rows older than the cutoff; returns their ids. */
+async function pruneTombstonedRows(table, olderThanMs) {
+  if (!Number.isFinite(olderThanMs)) return { pruned: 0, ids: [] };
+  const cutoffIso = new Date(olderThanMs).toISOString();
+  const { rows } = await query(
+    `DELETE FROM ${table}
+     WHERE deleted = TRUE AND deleted_at IS NOT NULL AND deleted_at < $1
+     RETURNING id`,
+    [cutoffIso],
+  );
+  const ids = rows.map((r) => r.id);
+  return { pruned: ids.length, ids };
+}
 
 // ---------- folders ----------
 
-/** Every folder row's `data` JSONB, ordered for the library tree. */
+/** Every LIVE folder row's `data` JSONB, ordered for the library tree. */
 export async function listFolders() {
   const { rows } = await query(
-    `SELECT data FROM writers_room_folders ORDER BY sort_order, created_at`,
+    `SELECT data FROM writers_room_folders WHERE deleted = FALSE ORDER BY sort_order, created_at`,
   );
   return rows.map((r) => r.data);
 }
 
-/** Upsert one folder. `created_at` is preserved on conflict. */
-export async function writeFolder(folder) {
+/**
+ * One folder's `data` JSONB, or null. Live only by default; `includeDeleted`
+ * surfaces a tombstoned folder (federation reads it to compare `updatedAt` + push
+ * the tombstone).
+ */
+export async function readFolder(id, { includeDeleted = false } = {}) {
+  const { rows } = await query(
+    includeDeleted
+      ? `SELECT data FROM writers_room_folders WHERE id = $1`
+      : `SELECT data FROM writers_room_folders WHERE id = $1 AND deleted = FALSE`,
+    [id],
+  );
+  return rows[0]?.data ?? null;
+}
+
+/** Every folder id — live only by default, or all (incl. tombstones) when asked. */
+export async function listFolderIds({ includeDeleted = false } = {}) {
+  const { rows } = await query(
+    includeDeleted
+      ? `SELECT id FROM writers_room_folders`
+      : `SELECT id FROM writers_room_folders WHERE deleted = FALSE`,
+  );
+  return rows.map((r) => r.id);
+}
+
+/**
+ * Upsert one folder on an open transaction client. The `data` JSONB mirrors the
+ * normalized soft-delete pair so `readFolder(includeDeleted)` surfaces a tombstone
+ * to the sync sanitizer (the columns alone are never read back into `data`).
+ */
+function persistFolderTx(client, folder) {
   const now = new Date().toISOString();
   const createdAt = mirrorTimestamp(folder?.createdAt, now);
-  await query(
-    `INSERT INTO writers_room_folders (id, parent_id, name, sort_order, data, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)
+  const deleted = folder?.deleted === true;
+  const deletedAt = deleted ? mirrorTimestamp(folder?.deletedAt, now) : null;
+  const folderData = { ...folder, deleted, deletedAt };
+  return client.query(
+    `INSERT INTO writers_room_folders (id, parent_id, name, sort_order, data, created_at, updated_at, deleted, deleted_at)
+     VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9)
      ON CONFLICT (id) DO UPDATE SET
        parent_id = EXCLUDED.parent_id,
        name = EXCLUDED.name,
        sort_order = EXCLUDED.sort_order,
        data = EXCLUDED.data,
-       updated_at = EXCLUDED.updated_at`,
+       updated_at = EXCLUDED.updated_at,
+       deleted = EXCLUDED.deleted,
+       deleted_at = EXCLUDED.deleted_at`,
     [
       folder.id,
       typeof folder?.parentId === 'string' && folder.parentId ? folder.parentId : null,
       String(folder?.name ?? ''),
       Number.isInteger(folder?.sortOrder) ? folder.sortOrder : 0,
-      JSON.stringify(folder),
+      JSON.stringify(folderData),
       createdAt,
       mirrorTimestamp(folder?.updatedAt, createdAt),
+      deleted,
+      deletedAt,
     ],
   );
 }
 
-/** Hard-delete a folder. Idempotent — missing row is a no-op. */
+/** Upsert one folder. `created_at` is preserved on conflict. */
+export async function writeFolder(folder) {
+  await withTransaction((client) => persistFolderTx(client, folder));
+}
+
+/**
+ * Soft-delete a folder (tombstone) so the deletion federates and an out-of-date
+ * peer can't resurrect it via the LWW merge (#1645). Idempotent — a missing or
+ * already-deleted folder is a no-op (the caller 404s a missing folder first).
+ */
 export async function deleteFolder(id) {
-  await query(`DELETE FROM writers_room_folders WHERE id = $1`, [id]);
+  await withTransaction(async (client) => {
+    const sel = await client.query(`SELECT data FROM writers_room_folders WHERE id = $1 FOR UPDATE`, [id]);
+    const current = sel.rows[0]?.data;
+    if (!current || current.deleted === true) return;
+    const now = new Date().toISOString();
+    await persistFolderTx(client, { ...current, deleted: true, deletedAt: now, updatedAt: now });
+  });
+}
+
+/** Merge an incoming batch of folder records from a peer (LWW, tombstone-aware). */
+export async function mergeFoldersFromSync(remoteFolders, { source = { via: 'sync', peerId: null } } = {}) {
+  return mergeBodylessFromSync('writers_room_folders', WRITERS_ROOM_FOLDER_KIND, mergeFolderRecord, persistFolderTx, remoteFolders, source);
+}
+
+/** Hard-remove tombstoned folders whose `deleted_at` is older than the cutoff. */
+export async function pruneTombstonedFolders(olderThanMs) {
+  return pruneTombstonedRows('writers_room_folders', olderThanMs);
 }
 
 // ---------- exercises ----------
 
-/** Every exercise row's `data` JSONB, newest sprint first. */
+/** Every LIVE exercise row's `data` JSONB, newest sprint first. */
 export async function listExercises() {
   const { rows } = await query(
-    `SELECT data FROM writers_room_exercises ORDER BY started_at DESC NULLS LAST`,
+    `SELECT data FROM writers_room_exercises WHERE deleted = FALSE ORDER BY started_at DESC NULLS LAST`,
   );
   return rows.map((r) => r.data);
 }
 
-/** Upsert one exercise session. */
-export async function writeExercise(exercise) {
-  await query(
-    `INSERT INTO writers_room_exercises (id, work_id, status, data, started_at, finished_at)
-     VALUES ($1, $2, $3, $4::jsonb, $5, $6)
+/** One exercise's `data` JSONB, or null (tombstone surfaced when includeDeleted). */
+export async function readExercise(id, { includeDeleted = false } = {}) {
+  const { rows } = await query(
+    includeDeleted
+      ? `SELECT data FROM writers_room_exercises WHERE id = $1`
+      : `SELECT data FROM writers_room_exercises WHERE id = $1 AND deleted = FALSE`,
+    [id],
+  );
+  return rows[0]?.data ?? null;
+}
+
+/** Every exercise id — live only by default, or all (incl. tombstones) when asked. */
+export async function listExerciseIds({ includeDeleted = false } = {}) {
+  const { rows } = await query(
+    includeDeleted
+      ? `SELECT id FROM writers_room_exercises`
+      : `SELECT id FROM writers_room_exercises WHERE deleted = FALSE`,
+  );
+  return rows.map((r) => r.id);
+}
+
+/** Upsert one exercise on an open transaction client (mirrors the soft-delete pair into `data`). */
+function persistExerciseTx(client, exercise) {
+  const deleted = exercise?.deleted === true;
+  const deletedAt = deleted ? mirrorTimestamp(exercise?.deletedAt, new Date().toISOString()) : null;
+  const exerciseData = { ...exercise, deleted, deletedAt };
+  return client.query(
+    `INSERT INTO writers_room_exercises (id, work_id, status, data, started_at, finished_at, deleted, deleted_at)
+     VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8)
      ON CONFLICT (id) DO UPDATE SET
        work_id = EXCLUDED.work_id,
        status = EXCLUDED.status,
        data = EXCLUDED.data,
        started_at = EXCLUDED.started_at,
-       finished_at = EXCLUDED.finished_at`,
+       finished_at = EXCLUDED.finished_at,
+       deleted = EXCLUDED.deleted,
+       deleted_at = EXCLUDED.deleted_at`,
     [
       exercise.id,
       typeof exercise?.workId === 'string' && exercise.workId ? exercise.workId : null,
       typeof exercise?.status === 'string' ? exercise.status.slice(0, 16) : null,
-      JSON.stringify(exercise),
+      JSON.stringify(exerciseData),
       mirrorTimestamp(exercise?.startedAt, null),
       mirrorTimestamp(exercise?.finishedAt, null),
+      deleted,
+      deletedAt,
     ],
   );
+}
+
+/** Upsert one exercise session. */
+export async function writeExercise(exercise) {
+  await withTransaction((client) => persistExerciseTx(client, exercise));
+}
+
+/** Merge an incoming batch of exercise records from a peer (LWW, tombstone-aware). */
+export async function mergeExercisesFromSync(remoteExercises, { source = { via: 'sync', peerId: null } } = {}) {
+  return mergeBodylessFromSync('writers_room_exercises', WRITERS_ROOM_EXERCISE_KIND, mergeExerciseRecord, persistExerciseTx, remoteExercises, source);
+}
+
+/** Hard-remove tombstoned exercises whose `deleted_at` is older than the cutoff. */
+export async function pruneTombstonedExercises(olderThanMs) {
+  return pruneTombstonedRows('writers_room_exercises', olderThanMs);
 }
 
 // ---------- works + draft versions ----------

@@ -117,6 +117,12 @@ import {
   mergeWorksFromSync,
   buildWorkBodyManifest,
   diffWorkBodyManifest,
+  getFolderForSync,
+  listFoldersForSync,
+  mergeFoldersFromSync,
+  getExerciseForSync,
+  listExercisesForSync,
+  mergeExercisesFromSync,
 } from '../writersRoom/sync.js';
 import { WRITERS_ROOM_DRAFT_ASSET_KIND } from '../writersRoom/syncLogic.js';
 import { WORK_ID_RE, DRAFT_ID_RE, wrWorkDir, wrDraftPath } from '../writersRoom/_shared.js';
@@ -127,7 +133,7 @@ import {
   removeCursor as removeTombstoneCursor,
 } from './peerTombstoneCursors.js';
 
-export const PEER_SUBSCRIBABLE_KINDS = Object.freeze(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard', 'writersRoomWork']);
+export const PEER_SUBSCRIBABLE_KINDS = Object.freeze(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard', 'writersRoomWork', 'writersRoomFolder', 'writersRoomExercise']);
 
 /**
  * Cross-cutting event bus for the peer-sync receiver. The asset-pull worker
@@ -407,6 +413,8 @@ const KIND_TO_CATEGORY = Object.freeze({
   creativeDirectorProject: 'creativeDirectorProjects',
   moodBoard: 'moodBoards',
   writersRoomWork: 'writersRoomWorks',
+  writersRoomFolder: 'writersRoomFolders',
+  writersRoomExercise: 'writersRoomExercises',
 });
 
 function peerAllowsOutbound(peer) {
@@ -515,6 +523,14 @@ async function listRecordsForKind(recordKind) {
     // manuscript as fully mirrored). Without this branch, enabling the
     // writersRoomWorks category (or full-sync) would backfill nothing.
     records = await listWorksForSync().catch(() => []);
+  } else if (recordKind === 'writersRoomFolder') {
+    // Live folders as { id, updatedAt } (#1645) — same coverage-compare reason
+    // as works. Body-less, so no asset/body manifest backfill.
+    records = await listFoldersForSync().catch(() => []);
+  } else if (recordKind === 'writersRoomExercise') {
+    // Live exercises as { id, updatedAt } (#1645). updatedAt is derived from
+    // finishedAt ?? startedAt in the facade so coverage keys on the wire value.
+    records = await listExercisesForSync().catch(() => []);
   }
   return records.filter(r => r?.ephemeral !== true && isNonEmptyStr(r?.id));
 }
@@ -1048,6 +1064,14 @@ async function isSubscriptionRecordTombstone(sub) {
   }
   if (sub.recordKind === 'writersRoomWork') {
     const record = await getWorkForSync(sub.recordId).catch(() => null);
+    return record?.deleted === true;
+  }
+  if (sub.recordKind === 'writersRoomFolder') {
+    const record = await getFolderForSync(sub.recordId).catch(() => null);
+    return record?.deleted === true;
+  }
+  if (sub.recordKind === 'writersRoomExercise') {
+    const record = await getExerciseForSync(sub.recordId).catch(() => null);
     return record?.deleted === true;
   }
   return false;
@@ -1633,6 +1657,21 @@ async function buildPushPayload(sub, sourceInstanceId) {
     const draftBodyManifest = record.deleted === true ? [] : await buildWorkBodyManifest(record);
     return { kind: 'writersRoomWork', record: sanitized, assetManifest: [], draftBodyManifest, sourceInstanceId, portosMeta };
   }
+  if (sub.recordKind === 'writersRoomFolder') {
+    // Body-less (#1645) — no asset/body manifest, just the LWW record envelope.
+    const record = await getFolderForSync(sub.recordId).catch(() => null);
+    if (!record) return null;
+    const sanitized = sanitizeRecordForWire('writersRoomFolder', record);
+    if (!sanitized) return null;
+    return { kind: 'writersRoomFolder', record: sanitized, assetManifest: [], sourceInstanceId, portosMeta };
+  }
+  if (sub.recordKind === 'writersRoomExercise') {
+    const record = await getExerciseForSync(sub.recordId).catch(() => null);
+    if (!record) return null;
+    const sanitized = sanitizeRecordForWire('writersRoomExercise', record);
+    if (!sanitized) return null;
+    return { kind: 'writersRoomExercise', record: sanitized, assetManifest: [], sourceInstanceId, portosMeta };
+  }
   return null;
 }
 
@@ -2108,6 +2147,10 @@ export async function applyIncomingPush(payload) {
     // gates whether a PRESENT-but-different local draft body may be overwritten —
     // a stale push that lost the LWW must NOT clobber newer local prose.
     workMergeApplied = mergeResult?.applied === true;
+  } else if (kind === 'writersRoomFolder') {
+    await mergeFoldersFromSync([record], { source });
+  } else if (kind === 'writersRoomExercise') {
+    await mergeExercisesFromSync([record], { source });
   }
 
   // Apply the bundled collection (if any) — same LWW + union-of-items
@@ -2394,6 +2437,16 @@ async function classifyLocalRecord(recordKind, recordId) {
     // same-`updatedAt` no-op merge prevent it.
     const w = await getWorkForSync(recordId).catch(() => null);
     return w ? 'syncable' : 'missing';
+  }
+  if (recordKind === 'writersRoomFolder') {
+    // Body-less, no `ephemeral` concept (#1645) — a found folder (live or
+    // tombstoned) is always 'syncable'. Same no-ping-pong guards as works.
+    const f = await getFolderForSync(recordId).catch(() => null);
+    return f ? 'syncable' : 'missing';
+  }
+  if (recordKind === 'writersRoomExercise') {
+    const e = await getExerciseForSync(recordId).catch(() => null);
+    return e ? 'syncable' : 'missing';
   }
   return 'missing';
 }

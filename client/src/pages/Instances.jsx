@@ -7,7 +7,7 @@ import {
   Database, Brain, CheckCircle2, AlertCircle, Clock,
   RefreshCcw, Timer,
   Target, Sword, Fingerprint, HeartPulse, ChevronDown, ChevronRight,
-  Lock, Globe, Info, Sparkles, Film, Images, Library, BookOpen, FilePen, Music, Music2, Disc3, Clapperboard, Palette, BookText
+  Lock, Globe, Info, Sparkles, Film, Images, Library, BookOpen, FilePen, Music, Music2, Disc3, Clapperboard, Palette, BookText, FolderTree
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import Pill from '../components/ui/Pill';
@@ -524,13 +524,15 @@ const SYNC_CATEGORY_META = [
   { key: 'creativeDirectorProjects', label: 'Creative Director', icon: Clapperboard, description: 'Creative Director projects: treatment, scenes, runs (PostgreSQL)' },
   { key: 'moodBoards', label: 'Mood Boards', icon: Palette, description: 'Mood boards: pinned image + text references (PostgreSQL)' },
   { key: 'writersRoomWorks', label: 'Writers Room', icon: BookText, description: 'Writers Room works: manuscripts + draft versions + prose bodies (PostgreSQL)' },
+  { key: 'writersRoomFolders', label: 'Writers Room Folders', icon: FolderTree, description: 'Writers Room library folders: names + nesting (PostgreSQL)' },
+  { key: 'writersRoomExercises', label: 'Writers Room Sprints', icon: Timer, description: 'Writers Room writing-sprint sessions + appended prose (PostgreSQL)' },
   { key: 'catalog', label: 'Catalog', icon: Library, description: 'Creative ingredients catalog: orphan ingredients + ref links (PostgreSQL)' }
 ];
 
 // Snapshot categories — exclude the per-record / delta-based categories that
 // have no 60s snapshot checksum: brain + memory (delta), catalog + authors/music
 // (PostgreSQL, per-record peer-push only — no snapshot loop).
-const NON_SNAPSHOT_KEYS = new Set(['brain', 'memory', 'catalog', 'authors', 'artists', 'albums', 'tracks', 'creativeDirectorProjects', 'moodBoards', 'writersRoomWorks']);
+const NON_SNAPSHOT_KEYS = new Set(['brain', 'memory', 'catalog', 'authors', 'artists', 'albums', 'tracks', 'creativeDirectorProjects', 'moodBoards', 'writersRoomWorks', 'writersRoomFolders', 'writersRoomExercises']);
 const SNAPSHOT_CATEGORIES = SYNC_CATEGORY_META.filter(m => !NON_SNAPSHOT_KEYS.has(m.key));
 
 // Indicator backed by REAL coverage diffing (record IDs vs confirmed pushes),

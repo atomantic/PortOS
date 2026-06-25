@@ -37,7 +37,7 @@ import { updateCollection, getCollection, ERR_NOT_FOUND as COLLECTION_NOT_FOUND 
 import { updateIssue, ERR_NOT_FOUND as ISSUE_NOT_FOUND } from './pipeline/issues.js';
 import { updateProject } from './creativeDirector/local.js';
 import { restoreBoard } from './moodBoard/index.js';
-import { updateWork } from './writersRoom/local.js';
+import { updateWork, restoreFolder, restoreExercise } from './writersRoom/local.js';
 
 export const ERR_NOT_FOUND = 'CONFLICT_JOURNAL_NOT_FOUND';
 export const ERR_VALIDATION = 'CONFLICT_JOURNAL_VALIDATION';
@@ -143,6 +143,17 @@ async function applyToRecord(kind, recordId, patch, { replace = false } = {}) {
     // and prose bodies are not restorable here (they're file-primary + lineage-
     // managed) — RESTORABLE_FIELDS.writersRoomWork omits them.
     await updateWork(recordId, patch).catch(translateGone);
+  } else if (kind === 'writersRoomFolder') {
+    // restoreFolder merges the snapshot's name/parentId/sortOrder (the
+    // RESTORABLE_FIELDS set) and bumps updatedAt so the restore wins the next LWW
+    // and re-pushes. A missing/tombstoned folder 404s (→ translateGone →
+    // ERR_TARGET_GONE). Body-less, so there are no file-primary structures to restore.
+    await restoreFolder(recordId, patch).catch(translateGone);
+  } else if (kind === 'writersRoomExercise') {
+    // restoreExercise merges the snapshot's sprint fields (appendedText + config)
+    // and stamps updatedAt so the restored sprint wins the next LWW. A
+    // missing/tombstoned exercise 404s (→ ERR_TARGET_GONE).
+    await restoreExercise(recordId, patch).catch(translateGone);
   } else {
     throw makeErr(`Unsupported conflict kind: ${kind}`, ERR_VALIDATION);
   }
