@@ -1118,6 +1118,11 @@ describe('dataSync — per-category schema gate (cross-key isolation)', () => {
       // Versioned for the manifest envelope and gated by syncMediaLibraryFromPeer's
       // gentle skip-if-ahead; declared non-record in NON_RECORD_SCHEMA_CATEGORIES.
       'mediaLibrary',
+      // Completed-agent CoS history (#1650) → its own receiver-pull endpoint
+      // (GET /api/peer-sync/cos-history-manifest), NOT the file-snapshot transfer.
+      // Versioned for the manifest envelope and gated by syncCosHistoryFromPeer's
+      // gentle skip-if-ahead; declared non-record in NON_RECORD_SCHEMA_CATEGORIES.
+      'cosHistory',
     ]);
     const covered = new Set(Object.values(dataSync.getSnapshotCategorySchemaKeys()).flat());
     for (const key of Object.keys(PORTOS_SCHEMA_VERSIONS)) {

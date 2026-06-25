@@ -12,7 +12,7 @@ import { join } from 'path';
 import { attachAllWatchers, attachWatcher, detachWatcher, shutdownAllWatchers, listAttachedWatchers } from './watcher.js';
 import { sharingEvents } from './importer.js';
 import { installSubscriptionListener } from './subscriptions.js';
-import { installPeerSyncListener, uninstallPeerSyncListener, peerSyncEvents, syncMediaLibraryWithAllPeers } from './peerSync.js';
+import { installPeerSyncListener, uninstallPeerSyncListener, peerSyncEvents, syncMediaLibraryWithAllPeers, syncCosHistoryWithAllPeers } from './peerSync.js';
 import { hasSubscriptionAdapter } from './recordEvents.js';
 import { initAnnotationsSync } from './annotationsSync.js';
 
@@ -23,11 +23,12 @@ export { pullSidecarForImage, backfillMissingSidecars } from './sidecarSync.js';
 let initialized = false;
 let io = null;
 
-// Standalone media-library federation sweep (#1566). A low-frequency timer pulls
-// each full-sync peer's library bytes; an unchanged library short-circuits on the
-// manifestHash, so the steady-state tick is one cheap manifest fetch per peer.
-// Period is deliberately slower than the 30s peer health probe — media changes
-// less often and a sweep can move large bytes.
+// Standalone full-sync library sweeps (#1566 media, #1650 CoS history). A
+// low-frequency timer pulls each full-sync peer's standalone bytes; an unchanged
+// manifest short-circuits on the manifestHash, so the steady-state tick is one
+// cheap manifest fetch per peer per category. Period is deliberately slower than
+// the 30s peer health probe — these change less often and a sweep can move large
+// bytes.
 const MEDIA_LIBRARY_SWEEP_INTERVAL_MS = 60_000;
 const MEDIA_LIBRARY_SWEEP_INITIAL_DELAY_MS = 20_000; // let boot settle before the first sweep
 let mediaLibraryTimer = null;
@@ -35,15 +36,20 @@ let mediaLibraryKickoff = null;
 
 function startMediaLibrarySweep() {
   // Timer callbacks run OUTSIDE the request lifecycle — an uncaught throw here
-  // crashes the process (CLAUDE.md). syncMediaLibraryWithAllPeers already catches
-  // per-peer; this guards a synchronous throw before the awaits begin.
+  // crashes the process (CLAUDE.md). Each sweep already catches per-peer; this
+  // guards a synchronous throw before the awaits begin.
   const tick = () => {
     try {
       syncMediaLibraryWithAllPeers().catch((err) => {
         console.error(`❌ sharing: media-library sweep failed: ${err.message}`);
       });
+      // Completed-agent CoS history (#1650) rides the same cadence — independent
+      // best-effort sweep, separate per-peer catch so one can't sink the other.
+      syncCosHistoryWithAllPeers().catch((err) => {
+        console.error(`❌ sharing: cos-history sweep failed: ${err.message}`);
+      });
     } catch (err) {
-      console.error(`❌ sharing: media-library sweep threw synchronously: ${err.message}`);
+      console.error(`❌ sharing: full-sync sweep threw synchronously: ${err.message}`);
     }
   };
   mediaLibraryKickoff = setTimeout(() => {

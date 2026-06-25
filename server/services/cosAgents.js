@@ -63,6 +63,31 @@ async function saveAgentIndex() {
   });
 }
 
+/**
+ * Merge a batch of {agentId, date} pairs into the agent index. Used by the
+ * peer-sync CoS-history receiver (#1650): after pulling a peer's completed-agent
+ * archives onto local disk, the date-bucket index must learn the new agentIds so
+ * the history UI lists them. Idempotent union — re-registering an existing entry
+ * is a no-op, and only valid YYYY-MM-DD-bucketed pairs are accepted. Returns the
+ * number of NEW entries added.
+ */
+export async function addAgentArchivesToIndex(pairs) {
+  if (!Array.isArray(pairs) || pairs.length === 0) return 0;
+  const idx = await loadAgentIndex();
+  let added = 0;
+  for (const pair of pairs) {
+    const agentId = pair?.agentId;
+    const date = pair?.date;
+    if (typeof agentId !== 'string' || !agentId) continue;
+    if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+    if (idx.get(agentId) === date) continue; // already indexed at this bucket
+    idx.set(agentId, date);
+    added += 1;
+  }
+  if (added > 0) await saveAgentIndex();
+  return added;
+}
+
 // Resolve the correct directory for an agent (running = flat, completed = date bucket)
 function getAgentDir(agentId, dateString) {
   if (dateString) return join(AGENTS_DIR, dateString, agentId);

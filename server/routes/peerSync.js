@@ -23,7 +23,10 @@
  */
 
 import { Router } from 'express';
+import { join } from 'path';
+import { existsSync } from 'fs';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { PATHS } from '../lib/fileUtils.js';
 import {
   validateRequest,
   peerSubscribeSchema,
@@ -31,6 +34,9 @@ import {
   peerSyncRecordSchema,
   peerSyncNowSchema,
   peerPullMetadataSchema,
+  COS_ARCHIVE_DATE_RE,
+  COS_AGENT_ID_RE,
+  COS_ARCHIVE_FILES,
 } from '../lib/validation.js';
 import {
   listPeerSubscriptions,
@@ -42,6 +48,7 @@ import {
   pullRecordFromPeer,
   syncNowForPeer,
   buildMediaLibraryManifest,
+  buildCosHistoryManifest,
   ERR_NOT_FOUND,
   ERR_VALIDATION,
   ERR_SCHEMA_VERSION_AHEAD,
@@ -158,6 +165,39 @@ router.get('/manifest', asyncHandler(async (req, res) => {
 // the bytes are already served by the /data/* static mounts).
 router.get('/library-manifest', asyncHandler(async (_req, res) => {
   res.json(await buildMediaLibraryManifest());
+}));
+
+// --- GET /cos-history-manifest --- advertise this instance's completed-agent
+// CoS history archives (#1650) so a full-sync peer can diff + receiver-pull
+// missing archive files.
+//
+// Returns `{ schemaVersion, manifestHash, entries: [{ date, agentId, file,
+// sha256 }] }` over data/cos/agents/<date>/<agentId>/{metadata,output,prompt}.
+// Unauthenticated like every peer-sync route (Tailnet-only per the threat
+// model); the receiver gates the PULL on its own `fullSync` flag.
+router.get('/cos-history-manifest', asyncHandler(async (_req, res) => {
+  res.json(await buildCosHistoryManifest());
+}));
+
+// --- GET /cos-agent-archive --- stream ONE completed-agent archive file so a
+// full-sync peer can receiver-pull it (#1650). Archives are nested
+// (<date>/<agentId>/<file>), so unlike media bytes they are NOT served by a
+// broad static mount — each segment is validated against the same allowlists the
+// manifest uses (the "parse-not-existsSync" guard) before resolving under
+// PATHS.cos/agents and streaming with res.sendFile (which sets Content-Length,
+// required by the receiver's fetchCappedAssetBuffer). 404 on any invalid/missing.
+router.get('/cos-agent-archive', asyncHandler(async (req, res) => {
+  const date = typeof req.query.date === 'string' ? req.query.date : '';
+  const agentId = typeof req.query.agentId === 'string' ? req.query.agentId : '';
+  const file = typeof req.query.file === 'string' ? req.query.file : '';
+  if (!COS_ARCHIVE_DATE_RE.test(date) || !COS_AGENT_ID_RE.test(agentId) || !COS_ARCHIVE_FILES.includes(file)) {
+    throw new ServerError('invalid archive path', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  const abs = join(PATHS.cos, 'agents', date, agentId, file);
+  if (!existsSync(abs)) {
+    throw new ServerError('archive not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  res.sendFile(abs);
 }));
 
 // --- GET /record --- return ONE record's push payload so a peer can PULL it.

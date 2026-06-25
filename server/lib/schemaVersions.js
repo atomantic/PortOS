@@ -351,6 +351,18 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // can't route (directoryForAssetKind returns null) — and does NOT require a
   // bump on its own.
   mediaLibrary: 1,
+  // v1 = completed-agent CoS history federation (#1650, part of epic #1561). NOT
+  // a record kind — it's the wire contract for the archive manifest a full-sync
+  // peer advertises at GET /api/peer-sync/cos-history-manifest. The receiver-pull
+  // sweep (syncCosHistoryFromPeer) reads the sender's advertised `schemaVersion`
+  // and GENTLY SKIPS (logs, no reject) a sender ahead of its local `cosHistory` —
+  // same posture as `mediaLibrary` above, because a history sweep is best-effort
+  // background convergence, not an authoritative record transfer. The archive
+  // BYTES (metadata.json / output.txt / prompt.txt) are version-agnostic; only
+  // the MANIFEST envelope shape is gated, so the FIRST incompatible
+  // manifest-shape change (new required entry field, segment semantics) MUST bump
+  // this to 2.
+  cosHistory: 1,
   // NOTE: `videoHistory` is intentionally NOT listed here. The version gate
   // rejects the ENTIRE snapshot/push payload on ANY ahead-mismatch (the
   // comparator walks the union of keys), so declaring a brand-new key would
@@ -413,12 +425,16 @@ export const RECORD_KIND_SCHEMA_CATEGORIES = Object.freeze({
  *   it and GENTLY SKIPS a sender ahead of its local version (see
  *   syncMediaLibraryFromPeer) — there is no push to gate, so it has no entry in
  *   RECORD_KIND_SCHEMA_CATEGORIES by design.
+ * - `cosHistory` (#1650): the completed-agent CoS history archive manifest a
+ *   full-sync peer advertises at GET /api/peer-sync/cos-history-manifest. Same
+ *   receiver-pull shape as `mediaLibrary` (see syncCosHistoryFromPeer) — no push
+ *   to gate, so no RECORD_KIND_SCHEMA_CATEGORIES entry.
  *
  * Do NOT add a real record-push category here to silence the guard — that would
  * leave its push transfers ungated (silent cross-install corruption). Only
  * genuinely non-push categories belong.
  */
-export const NON_RECORD_SCHEMA_CATEGORIES = Object.freeze(new Set(['mediaLibrary']));
+export const NON_RECORD_SCHEMA_CATEGORIES = Object.freeze(new Set(['mediaLibrary', 'cosHistory']));
 
 /**
  * Lazy-read the current PortOS version from the ROOT package.json so a

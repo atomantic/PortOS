@@ -282,6 +282,34 @@ export const peerLibraryManifestSchema = z.object({
   assets: z.array(peerAssetManifestEntrySchema).max(100_000),
 }).strict();
 
+// --- Completed-agent CoS history federation (#1650) ----------------------
+// A full-sync peer advertises its date-bucketed completed-agent archives at
+// GET /api/peer-sync/cos-history-manifest; a receiver (only for peers it flags
+// fullSync) diffs the entries vs local disk and receiver-pulls the missing
+// archive files. Archives live at data/cos/agents/<date>/<agentId>/<file> —
+// nested paths, NOT flat basenames — so each entry carries the path segments,
+// validated here AND re-scrubbed in the service before any FS op (the
+// "parse-not-existsSync" guard). Exported so the service + byte route share one
+// source of truth for the allowlists.
+export const COS_ARCHIVE_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+// agentIds are `agent-<id>` — alphanumerics, `_` and `-` only. NO dots, so a
+// `..` traversal can't form, and NO slash. Capped well above any real id.
+export const COS_AGENT_ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
+// The exact set of files an archive holds (cosAgents.js). A fixed enum is the
+// tightest possible filename allowlist.
+export const COS_ARCHIVE_FILES = Object.freeze(['metadata.json', 'output.txt', 'prompt.txt']);
+const peerCosHistoryManifestEntrySchema = z.object({
+  date: z.string().regex(COS_ARCHIVE_DATE_RE),
+  agentId: z.string().regex(COS_AGENT_ID_RE),
+  file: z.enum(['metadata.json', 'output.txt', 'prompt.txt']),
+  sha256: hex64,
+}).strict();
+export const peerCosHistoryManifestSchema = z.object({
+  schemaVersion: z.number().int().min(0).max(1_000_000),
+  manifestHash: hex64,
+  entries: z.array(peerCosHistoryManifestEntrySchema).max(300_000),
+}).strict();
+
 export const peerPullMetadataSchema = z.object({
   // Backfill tries every online peer; no per-peer scoping field today.
   // .trim() so a stray-whitespace filename ('  a.png  ') normalizes to the real
