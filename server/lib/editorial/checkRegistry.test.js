@@ -3971,13 +3971,30 @@ describe('copy-edit prose-tic bundle (#1306)', () => {
     expect(on[0].anchorQuote.toLowerCase()).toBe('just');
   });
 
-  it('prose.adverbs flags dialogue-tag adverbs at higher severity regardless of density', () => {
+  it('prose.adverbs flags emotion-telling dialogue-tag adverbs at higher severity regardless of density', () => {
     const sections = [{ number: 3, content: '"Fine," she said angrily as the room slept.' }];
     const findings = getCheck(ADVERBS).run({ sections, config: { densityPer1000: 999 }, severityDefault: 'low' });
     const tag = findings.find((f) => /dialogue tag/i.test(f.problem));
     expect(tag).toBeTruthy();
     expect(tag.severity).toBe('medium'); // escalated one step above low
     expect(tag.anchorQuote.toLowerCase()).toBe('angrily');
+    expect(/emotion-telling/i.test(tag.problem)).toBe(true);
+  });
+
+  it('prose.adverbs leaves a reporting dialogue tag ("said quietly") unflagged by default', () => {
+    const sections = [{ number: 7, content: '"Fine," she said quietly as the room slept.' }];
+    const findings = getCheck(ADVERBS).run({ sections, config: { densityPer1000: 999 }, severityDefault: 'low' });
+    // Reporting tag is an invisible stage direction → no tag finding, and density
+    // is gated out by the 999/1000 threshold, so nothing fires.
+    expect(findings.find((f) => /dialogue tag/i.test(f.problem))).toBeUndefined();
+  });
+
+  it('prose.adverbs flags reporting tags too when flagReportingTags is set', () => {
+    const sections = [{ number: 8, content: '"Fine," she said quietly as the room slept.' }];
+    const findings = getCheck(ADVERBS).run({ sections, config: { densityPer1000: 999, flagReportingTags: true }, severityDefault: 'low' });
+    const tag = findings.find((f) => /dialogue tag/i.test(f.problem));
+    expect(tag).toBeTruthy();
+    expect(tag.anchorQuote.toLowerCase()).toBe('quietly');
   });
 
   it('prose.passive-voice flags above the rate threshold', () => {

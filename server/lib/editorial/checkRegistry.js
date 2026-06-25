@@ -4873,7 +4873,7 @@ export const EDITORIAL_CHECKS = [
     sources: ['manuscript'],
     label: 'Adverb overuse (-ly + dialogue tags)',
     description:
-      'Flags overuse of -ly adverbs, especially those propping up weak verbs ("ran quickly" → "sprinted") and adverb-laden dialogue tags ("she said angrily"). Density-scaled; dialogue-tag adverbs ("said X-ly") are reported as the higher-severity sub-signal because the tag should carry its weight through the dialogue itself.',
+      'Flags overuse of -ly adverbs, especially those propping up weak verbs ("ran quickly" → "sprinted") and emotion-telling dialogue tags ("she said angrily"). Density-scaled; dialogue-tag adverbs split into reporting (manner/volume — "said quietly", an invisible stage direction) and emotion-telling ("said angrily", which the line should carry) buckets, and only the emotion-telling tags are flagged by default — a higher-severity sub-signal because the tag should carry its weight through the dialogue itself.',
     scope: 'issue',
     kind: 'deterministic',
     category: 'style',
@@ -4884,11 +4884,13 @@ export const EDITORIAL_CHECKS = [
       densityPer1000: z.number().min(0).max(80).default(15),
       maxFindings: z.number().int().min(1).max(50).default(20),
       allowWords: z.string().default(''),
+      flagReportingTags: z.boolean().default(false),
     }),
     configFields: [
       { key: 'densityPer1000', label: 'Adverb rate to flag (per 1000 words)', type: 'number', min: 0, max: 80, step: 1, help: 'Flag a section whose -ly adverb frequency per 1000 words is at or above this.' },
       { key: 'maxFindings', label: 'Max findings per run', type: 'number', min: 1, max: 50, step: 1, help: 'Cap findings so a heavy draft can not flood the review.' },
       { key: 'allowWords', label: 'House-style allowlist', type: 'text', help: 'Adverbs to leave alone (comma-separated or one per line).' },
+      { key: 'flagReportingTags', label: 'Also flag reporting tags', type: 'boolean', help: 'By default only emotion-telling dialogue tags ("said angrily") are flagged; reporting tags ("said quietly") are treated as invisible stage directions. Enable to flag every adverb-laden tag.' },
     ],
     gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
     run: (ctx) => {
@@ -4896,6 +4898,11 @@ export const EDITORIAL_CHECKS = [
       const max = cfg.maxFindings ?? 20;
       const density = cfg.densityPer1000 ?? 15;
       const allowWords = splitPhraseList(cfg.allowWords);
+      // Reporting tags ("said quietly") read as invisible stage directions, so by
+      // default only the emotion-telling bucket ("said angrily") trips the
+      // higher-severity tag signal (#1592). Opt back into the old flag-every-tag
+      // behavior with `flagReportingTags`.
+      const flagReportingTags = cfg.flagReportingTags === true;
       const sections = Array.isArray(ctx.sections) ? ctx.sections : [];
       const findings = [];
       for (const s of sections) {
@@ -4906,16 +4913,17 @@ export const EDITORIAL_CHECKS = [
         const hits = findAdverbs(text, { allowWords });
         if (!hits.length) continue;
         const rate = Math.round((hits.length / words) * 1000 * 10) / 10;
-        const tagHits = hits.filter((h) => h.dialogueTag);
+        const tagHits = hits.filter((h) => h.dialogueTag && (flagReportingTags || h.tagAdverbKind === 'emotion'));
         const { number, location } = sectionIssue(s);
-        // Dialogue-tag adverbs are flagged regardless of overall density (one
-        // "said angrily" is already a tell); the bulk -ly density is gated on rate.
+        // Emotion-telling dialogue-tag adverbs are flagged regardless of overall
+        // density (one "said angrily" is already a tell); the bulk -ly density is
+        // gated on rate.
         if (tagHits.length) {
           findings.push({
             severity: escalateSeverity(ctx.severityDefault, 1),
             category: 'style',
             location,
-            problem: `${tagHits.length} adverb-laden dialogue tag${tagHits.length === 1 ? '' : 's'} (e.g. "${tagHits[0].anchor}") — a dialogue tag propped up by an adverb usually means the line itself should carry the tone.`,
+            problem: `${tagHits.length} emotion-telling dialogue tag${tagHits.length === 1 ? '' : 's'} (e.g. "${tagHits[0].anchor}") — a dialogue tag that names the feeling usually means the line itself should carry the tone.`,
             suggestion: 'Cut the adverb and let the dialogue + action beat convey the tone ("she said angrily" → "she slammed the cup down. “Fine.”").',
             anchorQuote: tagHits[0].anchor,
             issueNumber: number,

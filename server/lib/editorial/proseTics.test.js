@@ -101,16 +101,25 @@ describe('findAdverbs', () => {
     expect(words).not.toContain('only');    // excluded
   });
 
-  it('marks dialogue-tag adverbs', () => {
+  it('marks dialogue-tag adverbs and classifies an emotion tell', () => {
     const hits = findAdverbs('"Fine," she said angrily.');
     const tag = hits.find((h) => h.word.toLowerCase() === 'angrily');
     expect(tag).toBeTruthy();
     expect(tag.dialogueTag).toBe(true);
+    expect(tag.tagAdverbKind).toBe('emotion');
+  });
+
+  it('classifies a reporting tag adverb (manner/volume) as reporting', () => {
+    const hits = findAdverbs('"Fine," she said quietly.');
+    const tag = hits.find((h) => h.word.toLowerCase() === 'quietly');
+    expect(tag.dialogueTag).toBe(true);
+    expect(tag.tagAdverbKind).toBe('reporting');
   });
 
   it('does not mark a non-tag-preceded adverb as a dialogue tag', () => {
     const hits = findAdverbs('She walked slowly.');
     expect(hits[0].dialogueTag).toBe(false);
+    expect(hits[0].tagAdverbKind).toBe(null);
   });
 
   it('respects allowWords', () => {

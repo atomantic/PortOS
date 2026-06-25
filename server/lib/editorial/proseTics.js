@@ -60,6 +60,23 @@ const DIALOGUE_TAGS = Object.freeze([
   'added', 'continued', 'stated', 'remarked', 'demanded', 'growled',
 ]);
 
+// Reporting tag adverbs (#1592) — those that describe the *manner / volume /
+// pace* of delivery ("said quietly / softly / sharply"). These read as
+// near-invisible stage directions: they tell the reader HOW the line was
+// voiced, not what the character felt, so they are NOT the "telling" that
+// "said angrily" is. A tag adverb in this set is classified `reporting`; every
+// other tag adverb (the emotion-telling bucket — "angrily", "happily",
+// "sorrowfully") names a feeling the dialogue itself should carry. Using a
+// reporting allow-list (rather than enumerating every emotion adverb) keeps
+// recall high: a novel emotion adverb still classifies as emotion-telling.
+const REPORTING_TAG_ADVERBS = new Set([
+  'quietly', 'softly', 'gently', 'sharply', 'slowly', 'quickly', 'calmly',
+  'evenly', 'flatly', 'dryly', 'drily', 'curtly', 'firmly', 'loudly', 'faintly',
+  'coolly', 'smoothly', 'hoarsely', 'breathlessly', 'lightly', 'plainly',
+  'simply', 'crisply', 'thickly', 'tightly', 'levelly', 'briskly',
+  'mildly', 'tonelessly', 'huskily', 'breathily',
+]);
+
 // Be-verbs for the passive-voice heuristic.
 const BE_VERBS = Object.freeze([
   'is', 'are', 'was', 'were', 'be', 'been', 'being', 'am',
@@ -213,9 +230,17 @@ function isLyAdverb(lower) {
  * when it immediately follows a dialogue tag ("said angrily") — those are the
  * higher-severity ones (the tag should carry its weight through the dialogue).
  *
+ * Each dialogue-tag adverb is further classified (#1592) via `tagAdverbKind`:
+ *   - `'reporting'` — manner/volume of delivery ("said quietly"), an invisible
+ *     stage direction that is NOT a tell;
+ *   - `'emotion'`   — names a feeling ("said angrily"), which the dialogue + a
+ *     beat should carry instead.
+ * Non-tag adverbs carry `tagAdverbKind: null`. Callers flag only the emotion
+ * bucket on tags by default.
+ *
  * @param {string} text
  * @param {{ allowWords?: string[] }} [opts] allowWords mutes specific adverbs.
- * @returns {Array<{ word: string, index: number, anchor: string, dialogueTag: boolean }>}
+ * @returns {Array<{ word: string, index: number, anchor: string, dialogueTag: boolean, tagAdverbKind: ('reporting'|'emotion'|null) }>}
  */
 export function findAdverbs(text, opts = {}) {
   const tokens = tokenizeWords(text);
@@ -227,7 +252,11 @@ export function findAdverbs(text, opts = {}) {
     const t = tokens[i];
     if (!isLyAdverb(t.lower) || allow.has(t.lower)) continue;
     const prev = i > 0 ? tokens[i - 1].lower : '';
-    out.push({ word: t.word, index: t.index, anchor: t.word, dialogueTag: tagSet.has(prev) });
+    const dialogueTag = tagSet.has(prev);
+    const tagAdverbKind = dialogueTag
+      ? (REPORTING_TAG_ADVERBS.has(t.lower) ? 'reporting' : 'emotion')
+      : null;
+    out.push({ word: t.word, index: t.index, anchor: t.word, dialogueTag, tagAdverbKind });
   }
   return out;
 }
