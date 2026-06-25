@@ -524,7 +524,7 @@ export default function PipelineEditorialChecks() {
               <p className="rounded-lg border border-dashed border-port-border p-4 text-center text-xs text-gray-500">Select a series to view its findings.</p>
             ) : (
               <>
-                <EditorialHealthPanel seriesId={seriesId} refreshKey={healthRefresh} />
+                <EditorialHealthPanel seriesId={seriesId} refreshKey={healthRefresh} checksById={checksById} />
                 {loadingFindings ? (
                   <p className="flex items-center gap-2 text-sm text-gray-400"><Loader2 size={16} className="animate-spin" /> Loading findings…</p>
                 ) : (

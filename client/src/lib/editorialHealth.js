@@ -63,3 +63,62 @@ export function orderedCategories(openByCategory = {}) {
     .map(([category, count]) => ({ category, count }))
     .sort((a, b) => b.count - a.count || a.category.localeCompare(b.category));
 }
+
+/**
+ * Order an openByCheck map into `[{ checkId, label, count }]` sorted by count
+ * desc then label (#1597). Drops zero/empty buckets. `labelFor` resolves a
+ * checkId to its human label (the catalog row's `label`); it falls back to the
+ * raw checkId so a finding from a since-deleted custom check still renders.
+ */
+export function orderedChecks(openByCheck = {}, labelFor = (id) => id) {
+  const label = typeof labelFor === 'function' ? labelFor : (id) => id;
+  return Object.entries(openByCheck || {})
+    .filter(([, count]) => Number.isFinite(count) && count > 0)
+    .map(([checkId, count]) => ({ checkId, count, label: label(checkId) || checkId }))
+    .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+}
+
+/**
+ * Extract a single check's open-finding count across the trend points (#1597),
+ * oldest→newest, as a plain number array. A point with no entry for the check
+ * contributes 0 (the check found nothing that revision), so the series length
+ * always matches the point count — the sparkline shows the check climbing from /
+ * settling to zero rather than dropping points.
+ */
+export function checkCountSeries(points = [], checkId) {
+  const list = Array.isArray(points) ? points : [];
+  return list.map((p) => {
+    const c = p?.openByCheck?.[checkId];
+    return Number.isFinite(c) ? c : 0;
+  });
+}
+
+/**
+ * Project a non-negative count series into SVG polyline coordinates within a
+ * `width × height` box, normalized to the series' own max (unlike
+ * `sparklineGeometry`'s fixed 0–100 axis): the largest count sits at the top,
+ * 0 at the bottom, so a per-check finding count reads as "spiked then dropped".
+ * A flat or all-zero series renders as a baseline. Returns
+ * `{ points: "x,y …", coords: [{x,y,count}], last, max }`; an empty series
+ * yields empty geometry (the caller renders a placeholder).
+ */
+export function countSparklineGeometry(values = [], { width = 80, height = 20, pad = 2 } = {}) {
+  const list = Array.isArray(values) ? values.filter((v) => Number.isFinite(v)) : [];
+  if (!list.length) return { points: '', coords: [], last: null, max: 0 };
+  const innerW = Math.max(1, width - pad * 2);
+  const innerH = Math.max(1, height - pad * 2);
+  const span = Math.max(1, list.length - 1);
+  const max = Math.max(0, ...list);
+  const coords = list.map((count, i) => {
+    const x = pad + (list.length === 1 ? innerW : (i / span) * innerW);
+    // count=max → top (pad); count=0 (or all-zero series) → bottom (height-pad).
+    const y = pad + (max > 0 ? 1 - count / max : 1) * innerH;
+    return { x: Math.round(x * 10) / 10, y: Math.round(y * 10) / 10, count };
+  });
+  return {
+    points: coords.map((c) => `${c.x},${c.y}`).join(' '),
+    coords,
+    last: coords[coords.length - 1],
+    max,
+  };
+}

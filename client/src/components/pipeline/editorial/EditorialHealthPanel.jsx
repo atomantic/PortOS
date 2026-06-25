@@ -23,6 +23,9 @@ import {
   deltaDisplay,
   sparklineGeometry,
   orderedCategories,
+  orderedChecks,
+  checkCountSeries,
+  countSparklineGeometry,
   SEVERITY_ORDER,
   SEVERITY_LABELS,
   READINESS_GATE_LABELS,
@@ -58,7 +61,27 @@ function Sparkline({ points }) {
   );
 }
 
-export default function EditorialHealthPanel({ seriesId, refreshKey = 0 }) {
+// Per-check finding-count sparkline (#1597) — a small magnitude curve of one
+// check's open-finding count across the recorded revisions, normalized to its
+// own peak. A single recorded revision renders just the endpoint dot.
+function CheckSparkline({ counts }) {
+  const { points: poly, coords, last } = countSparklineGeometry(counts, { width: 64, height: 18, pad: 2 });
+  if (!poly || !last) return <span className="inline-block w-16" aria-hidden="true" />;
+  return (
+    <svg viewBox="0 0 64 18" width={64} height={18} className="h-[18px] w-16 shrink-0 overflow-visible" role="img" aria-label="Finding count trend for this check">
+      {coords.length > 1 ? (
+        <polyline points={poly} fill="none" stroke="currentColor" strokeWidth="1.25" className="text-gray-500" />
+      ) : null}
+      <circle cx={last.x} cy={last.y} r="2" className="fill-port-accent" />
+    </svg>
+  );
+}
+
+// Cap the rendered per-check rows so a noisy run can't blow out the panel; the
+// remainder is surfaced as a "+N more" note rather than silently dropped.
+const MAX_CHECK_ROWS = 8;
+
+export default function EditorialHealthPanel({ seriesId, refreshKey = 0, checksById = {} }) {
   const [health, setHealth] = useState(null);
   const [loading, setLoading] = useState(false);
   const [savingGate, setSavingGate] = useState(false);
@@ -114,6 +137,18 @@ export default function EditorialHealthPanel({ seriesId, refreshKey = 0 }) {
   const regressions = Array.isArray(health.trend?.regressions) ? health.trend.regressions : [];
   const categories = orderedCategories(health.openByCategory);
   const points = health.trend?.points || [];
+  // Per-check breakdown + finding-count sparklines (#1597). Resolve each check's
+  // human label from the page's catalog (falls back to the raw id), and pair it
+  // with its count series across the recorded revisions + any regression flag.
+  const checkRegressions = Array.isArray(health.trend?.checkRegressions) ? health.trend.checkRegressions : [];
+  const labelForCheck = (id) => checksById?.[id]?.label || id;
+  const allChecks = orderedChecks(health.openByCheck, labelForCheck);
+  const checkRows = allChecks.slice(0, MAX_CHECK_ROWS).map((c) => ({
+    ...c,
+    counts: checkCountSeries(points, c.checkId),
+    regressed: checkRegressions.find((r) => r.checkId === c.checkId) || null,
+  }));
+  const hiddenCheckCount = Math.max(0, allChecks.length - checkRows.length);
   // The delta compares the two most recent revisions — only meaningful with ≥2
   // points (a single revision has nothing to compare against).
   const hasDelta = points.length >= 2;
@@ -197,6 +232,32 @@ export default function EditorialHealthPanel({ seriesId, refreshKey = 0 }) {
               );
             })}
           </ul>
+        </div>
+      ) : null}
+
+      {/* Per-check breakdown + finding-count sparklines (#1597) — is each check
+          improving (count dropping) or regressing run-over-run? */}
+      {checkRows.length ? (
+        <div className="border-t border-port-border/60 pt-2.5">
+          <span className="block text-[10px] uppercase tracking-wide text-gray-600">Open by check</span>
+          <ul className="mt-1 space-y-1">
+            {checkRows.map(({ checkId, label, count, counts, regressed }) => (
+              <li key={checkId} className="flex items-center gap-2 text-[11px] text-gray-400">
+                <span className="min-w-0 flex-1 truncate text-gray-300" title={label}>{label}</span>
+                {regressed ? (
+                  <span className="flex shrink-0 items-center gap-0.5 text-port-error" title={`Regressed: ${regressed.from} → ${regressed.to} since the previous revision`}>
+                    <TrendingUp size={11} />
+                    {regressed.from}→{regressed.to}
+                  </span>
+                ) : null}
+                <span className="w-5 shrink-0 text-right text-gray-500">{count}</span>
+                <CheckSparkline counts={counts} />
+              </li>
+            ))}
+          </ul>
+          {hiddenCheckCount ? (
+            <p className="mt-1 text-[10px] text-gray-600">+{hiddenCheckCount} more check{hiddenCheckCount === 1 ? '' : 's'} with open findings</p>
+          ) : null}
         </div>
       ) : null}
 

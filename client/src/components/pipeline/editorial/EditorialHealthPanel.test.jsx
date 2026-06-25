@@ -93,6 +93,43 @@ describe('EditorialHealthPanel', () => {
     expect(screen.queryByTitle('Change since the previous revision')).toBeNull();
   });
 
+  it('renders the per-check breakdown with resolved labels, counts and a regression flag (#1597)', async () => {
+    getEditorialHealth.mockResolvedValue(health({
+      openByCheck: { 'naming.dissimilar-names': 2, 'roster.economy': 1 },
+      trend: {
+        points: [
+          { score: 70, openByCheck: { 'naming.dissimilar-names': 1 } },
+          { score: 83, openByCheck: { 'naming.dissimilar-names': 2, 'roster.economy': 1 } },
+        ],
+        regressions: [],
+        checkRegressions: [{ checkId: 'naming.dissimilar-names', from: 1, to: 2 }],
+        delta: 13,
+      },
+    }));
+    const checksById = {
+      'naming.dissimilar-names': { label: 'Name dissimilarity' },
+      'roster.economy': { label: 'Cast economy' },
+    };
+    render(<EditorialHealthPanel seriesId="ser-1" checksById={checksById} />);
+    await screen.findByText('83');
+    expect(screen.getByText('Open by check')).toBeTruthy();
+    // Labels resolved from the catalog, sorted by count desc.
+    expect(screen.getByText('Name dissimilarity')).toBeTruthy();
+    expect(screen.getByText('Cast economy')).toBeTruthy();
+    // The regressed check shows its from→to flag.
+    expect(screen.getByText('1→2')).toBeTruthy();
+  });
+
+  it('falls back to the raw checkId when the catalog has no label for it', async () => {
+    getEditorialHealth.mockResolvedValue(health({
+      openByCheck: { 'custom.orphan': 1 },
+      trend: { points: [{ score: 83, openByCheck: { 'custom.orphan': 1 } }], regressions: [], checkRegressions: [], delta: 0 },
+    }));
+    render(<EditorialHealthPanel seriesId="ser-1" />);
+    await screen.findByText('83');
+    expect(screen.getByText('custom.orphan')).toBeTruthy();
+  });
+
   it('renders the per-issue drill-down (issues with open findings, worst first)', async () => {
     getEditorialHealth.mockResolvedValue(health({
       perIssue: [

@@ -187,8 +187,44 @@ describe('computeTrend', () => {
     const trend = computeTrend([]);
     expect(trend.points).toEqual([]);
     expect(trend.regressions).toEqual([]);
+    expect(trend.checkRegressions).toEqual([]);
     expect(trend.delta).toBe(0);
     expect(trend.latest).toBeNull();
+  });
+
+  // Per-check trend tracking (#1597).
+  const snapWithChecks = (at, openByCheck) => ({
+    runId: `run-${at}`, at, score: 100 - Object.values(openByCheck).reduce((a, b) => a + b, 0),
+    ready: false, open: Object.values(openByCheck).reduce((a, b) => a + b, 0),
+    openBySeverity: { high: 0, medium: 0, low: 0 }, openByCategory: {}, openByCheck,
+  });
+
+  it('carries the per-check open counts on each point so the UI can build per-check sparklines', () => {
+    const trend = computeTrend([
+      snapWithChecks('2026-06-01T00:00:00Z', { 'naming.dissimilar-names': 3 }),
+      snapWithChecks('2026-06-02T00:00:00Z', { 'naming.dissimilar-names': 1, 'roster.economy': 2 }),
+    ]);
+    expect(trend.points.map((p) => p.openByCheck)).toEqual([
+      { 'naming.dissimilar-names': 3 },
+      { 'naming.dissimilar-names': 1, 'roster.economy': 2 },
+    ]);
+  });
+
+  it('flags a check that regressed (more findings) between the two latest snapshots', () => {
+    const trend = computeTrend([
+      snapWithChecks('2026-06-01T00:00:00Z', { 'naming.dissimilar-names': 1, 'roster.economy': 2 }),
+      snapWithChecks('2026-06-02T00:00:00Z', { 'naming.dissimilar-names': 4, 'roster.economy': 1 }),
+    ]);
+    // naming worsened 1→4 (regressed); roster improved 2→1 (not a regression).
+    expect(trend.checkRegressions).toEqual([{ checkId: 'naming.dissimilar-names', from: 1, to: 4 }]);
+  });
+
+  it('treats a check absent in the prior snapshot as 0 prior (newly-failing check counts as a regression)', () => {
+    const trend = computeTrend([
+      snapWithChecks('2026-06-01T00:00:00Z', { 'naming.dissimilar-names': 1 }),
+      snapWithChecks('2026-06-02T00:00:00Z', { 'naming.dissimilar-names': 1, 'comic.prose-sync': 2 }),
+    ]);
+    expect(trend.checkRegressions).toEqual([{ checkId: 'comic.prose-sync', from: 0, to: 2 }]);
   });
 });
 
@@ -197,13 +233,21 @@ describe('ledger sanitization', () => {
     const ledger = __testing.sanitizeLedger({
       snapshots: [
         null,
-        { at: '2026-06-01T00:00:00Z', score: 90, openBySeverity: { high: 'x', medium: 2 }, openByCategory: { a: 1, b: 'nope' } },
+        { at: '2026-06-01T00:00:00Z', score: 90, openBySeverity: { high: 'x', medium: 2 }, openByCategory: { a: 1, b: 'nope' }, openByCheck: { 'check.a': 2, 'check.b': 'nope' } },
         { score: 50 }, // no `at` → dropped
       ],
     }, 'ser-abc');
     expect(ledger.snapshots).toHaveLength(1);
     expect(ledger.snapshots[0].openBySeverity).toEqual({ high: 0, medium: 2, low: 0 });
     expect(ledger.snapshots[0].openByCategory).toEqual({ a: 1 });
+    expect(ledger.snapshots[0].openByCheck).toEqual({ 'check.a': 2 });
     expect(ledger.seriesId).toBe('ser-abc');
+  });
+
+  it('defaults openByCheck to {} for a pre-#1597 snapshot that predates per-check tracking', () => {
+    const ledger = __testing.sanitizeLedger({
+      snapshots: [{ at: '2026-05-01T00:00:00Z', score: 88, openBySeverity: { high: 0, medium: 1, low: 0 }, openByCategory: { naming: 1 } }],
+    }, 'ser-old');
+    expect(ledger.snapshots[0].openByCheck).toEqual({});
   });
 });
