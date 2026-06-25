@@ -4694,6 +4694,32 @@ describe('cast.representation-balance — deterministic check (#1312)', () => {
     expect(silentMajor(findings)).toBeUndefined();
   });
 
+  it('fires the role-relative signal even when one speaker holds all the dialogue (#1594)', () => {
+    // The top-speaker share signal needs 2+ speakers, but a lone minor speaking
+    // every line is the STRONGEST minor-dominating case — it must not be gated out.
+    const canon = {
+      characters: [
+        { name: 'Bram', role: 'cameo' },
+        { name: 'Aria', role: 'protagonist' },
+      ],
+    };
+    const content = [
+      '"One," said Bram.',
+      '"Two," said Bram.',
+      '"Three," said Bram.',
+      '"Four," said Bram.',
+      '"Five," said Bram.',
+    ].join('\n');
+    const findings = runRep(canon, {
+      sections: [sec(1, content)],
+      config: only({ maxMinorShare: 0.35, minDialogueLines: 5 }),
+    });
+    const f = minorDom(findings);
+    expect(f).toBeTruthy();
+    expect(f.problem).toMatch(/100%/);
+    expect(f.severity).toBe('medium'); // 100% ≥ 50% → escalated
+  });
+
   it('flags a major-role character who appears yet is oddly silent (#1594)', () => {
     const canon = {
       characters: [
