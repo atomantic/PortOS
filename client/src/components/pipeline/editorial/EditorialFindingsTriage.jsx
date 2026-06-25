@@ -27,6 +27,9 @@ import {
   applyFindingsView,
   normalizeFindingSort,
   FINDING_SORT_OPTIONS,
+  FINDING_FILTER_PARAMS as FILTER_PARAMS,
+  ALL_FINDING_FILTER_PARAMS as ALL_FILTER_PARAMS,
+  FINDINGS_TRIAGE_ANCHOR_ID,
 } from '../../../lib/editorialChecks';
 import { fixEditsOf, selectedEditsFor } from '../manuscript/ManuscriptCommentCard';
 import InlineDiff from '../../ui/InlineDiff';
@@ -49,10 +52,8 @@ const STATUS_LABELS = { open: 'Open', accepted: 'Accepted', dismissed: 'Dismisse
 const SEVERITY_FILTER_ORDER = ['high', 'medium', 'low'];
 const STATUS_FILTER_ORDER = ['open', 'accepted', 'dismissed'];
 
-// URL params that persist the triage filters/sort (#1600). `f`-prefixed so they
-// never collide with the page's own `series` / `custom` params.
-const FILTER_PARAMS = { severity: 'fsev', status: 'fstatus', scope: 'fscope', check: 'fcheck', issue: 'fissue', query: 'fq', sort: 'fsort' };
-const ALL_FILTER_PARAMS = Object.values(FILTER_PARAMS);
+// FILTER_PARAMS / ALL_FILTER_PARAMS are imported from the lib so the health
+// panel can deep-link the triage to a category/check using the same keys (#1606).
 const parseSet = (raw) => new Set((raw || '').split(',').map((s) => s.trim()).filter(Boolean));
 const serializeSet = (set) => [...set].join(',');
 
@@ -534,7 +535,7 @@ function FindingsToolbar({ facets, filters, sort, setParam, toggleInParam, onCle
         ) : null}
         {facets.scopes.length > 1 ? (
           <span className="flex items-center gap-1">
-            <label htmlFor="ec-find-scope" className="text-[10px] uppercase tracking-wide text-gray-600">Category</label>
+            <label htmlFor="ec-find-scope" className="text-[10px] uppercase tracking-wide text-gray-600">Scope</label>
             <select
               id="ec-find-scope"
               value={[...filters.scopes][0] || ''}
@@ -543,6 +544,20 @@ function FindingsToolbar({ facets, filters, sort, setParam, toggleInParam, onCle
             >
               <option value="">All</option>
               {facets.scopes.map((s) => <option key={s.scope} value={s.scope}>{s.label}</option>)}
+            </select>
+          </span>
+        ) : null}
+        {facets.categories.length > 1 ? (
+          <span className="flex items-center gap-1">
+            <label htmlFor="ec-find-category" className="text-[10px] uppercase tracking-wide text-gray-600">Category</label>
+            <select
+              id="ec-find-category"
+              value={[...filters.categories][0] || ''}
+              onChange={(e) => setParam('category', e.target.value)}
+              className="max-w-[9rem] rounded border border-port-border bg-port-bg px-1.5 py-1 text-xs text-gray-200 focus:border-port-accent focus:outline-none"
+            >
+              <option value="">All</option>
+              {facets.categories.map((c) => <option key={c.category} value={c.category}>{c.label}</option>)}
             </select>
           </span>
         ) : null}
@@ -642,11 +657,12 @@ export default function EditorialFindingsTriage({ seriesId, comments = [], check
     scopes: parseSet(searchParams.get(FILTER_PARAMS.scope)),
     checkIds: parseSet(searchParams.get(FILTER_PARAMS.check)),
     issues: parseSet(searchParams.get(FILTER_PARAMS.issue)),
+    categories: parseSet(searchParams.get(FILTER_PARAMS.category)),
     query: searchParams.get(FILTER_PARAMS.query) || '',
   }), [searchParams]);
   const activeFilterCount = filters.severities.size + filters.statuses.size
     + filters.scopes.size + filters.checkIds.size + filters.issues.size
-    + (filters.query ? 1 : 0);
+    + filters.categories.size + (filters.query ? 1 : 0);
 
   // Write a single facet param (empty value clears it), preserving every other
   // param the page owns. `replace` so filtering doesn't pile up history entries.
@@ -724,7 +740,7 @@ export default function EditorialFindingsTriage({ seriesId, comments = [], check
   const totalOpen = openFindingsTotal(groups);
   const shownOpen = openFindingsTotal(visibleView);
   return (
-    <div className="space-y-2">
+    <div id={FINDINGS_TRIAGE_ANCHOR_ID} className="scroll-mt-4 space-y-2">
       <FindingsToolbar
         facets={facets}
         filters={filters}

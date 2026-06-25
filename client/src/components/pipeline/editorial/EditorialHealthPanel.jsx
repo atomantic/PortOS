@@ -15,9 +15,11 @@
  * completes), so the score reflects the freshest review.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Activity, Loader2, TrendingUp, TrendingDown } from 'lucide-react';
 import toast from '../../ui/Toast';
 import { getEditorialHealth, setEditorialReadinessGate } from '../../../services/api';
+import { FINDING_FILTER_PARAMS, FINDINGS_TRIAGE_ANCHOR_ID } from '../../../lib/editorialChecks';
 import {
   scoreBand,
   deltaDisplay,
@@ -81,11 +83,54 @@ function CheckSparkline({ counts }) {
 // remainder is surfaced as a "+N more" note rather than silently dropped.
 const MAX_CHECK_ROWS = 8;
 
+// A clickable breakdown row (#1606) — toggles a triage filter, with the active
+// highlight kept in one place so the category and check lists can't drift. The
+// row's inner content differs per breakdown, so it's passed as children; layout
+// tweaks (width/gap) come through `className`.
+function FilterRowButton({ active, title, onClick, className = '', children }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      title={title}
+      className={`flex items-center rounded px-1 py-0.5 text-[11px] transition-colors hover:bg-port-border/50 ${active ? 'bg-port-accent/15 ring-1 ring-port-accent/40' : ''} ${className}`}
+    >
+      {children}
+    </button>
+  );
+}
+
 export default function EditorialHealthPanel({ seriesId, refreshKey = 0, checksById = {} }) {
   const [health, setHealth] = useState(null);
   const [loading, setLoading] = useState(false);
   const [savingGate, setSavingGate] = useState(false);
   const [showIssues, setShowIssues] = useState(false);
+
+  // Make the breakdown rows navigable (#1606): clicking a category/check deep-links
+  // the triage filter (shared `f`-prefixed URL params) and scrolls the findings
+  // list into view. Reading the active filter lets a row toggle itself off and show
+  // an active state. Other filters the user set in the toolbar are preserved.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const activeCategory = searchParams.get(FINDING_FILTER_PARAMS.category) || '';
+  const activeCheck = searchParams.get(FINDING_FILTER_PARAMS.check) || '';
+  const toggleFilter = (paramKey, value, isActive) => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (isActive) next.delete(paramKey); else next.set(paramKey, value);
+      return next;
+    }, { replace: true });
+    // The triage container is always mounted, so its anchor exists before the
+    // filtered re-render — scroll right away (no deferral needed).
+    if (!isActive && typeof document !== 'undefined') {
+      document.getElementById(FINDINGS_TRIAGE_ANCHOR_ID)
+        ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  };
+  const filterByCategory = (category) =>
+    toggleFilter(FINDING_FILTER_PARAMS.category, category, activeCategory === category);
+  const filterByCheck = (checkId) =>
+    toggleFilter(FINDING_FILTER_PARAMS.check, checkId, activeCheck === checkId);
 
   // Guard against a stale response: switching series (or a fast refresh) can let
   // an older fetch resolve last and render the wrong series' health. Only the
@@ -215,19 +260,27 @@ export default function EditorialHealthPanel({ seriesId, refreshKey = 0, checksB
       {categories.length ? (
         <div className="border-t border-port-border/60 pt-2.5">
           <span className="block text-[10px] uppercase tracking-wide text-gray-600">Open by category</span>
-          <ul className="mt-1 flex flex-wrap gap-x-3 gap-y-1">
+          <ul className="mt-1 flex flex-wrap gap-x-2 gap-y-1">
             {categories.map(({ category, count }) => {
               const regressed = regressions.find((r) => r.category === category);
+              const active = activeCategory === category;
               return (
-                <li key={category} className="flex items-center gap-1 text-[11px] text-gray-400">
-                  <span className="text-gray-300">{category}</span>
-                  <span className="text-gray-500">{count}</span>
-                  {regressed ? (
-                    <span className="flex items-center gap-0.5 text-port-error" title={`Regressed: ${regressed.from} → ${regressed.to} since the previous revision`}>
-                      <TrendingUp size={11} />
-                      {regressed.from}→{regressed.to}
-                    </span>
-                  ) : null}
+                <li key={category}>
+                  <FilterRowButton
+                    active={active}
+                    onClick={() => filterByCategory(category)}
+                    title={active ? `Clear the ${category} filter` : `Filter findings to ${category}`}
+                    className="gap-1"
+                  >
+                    <span className={active ? 'text-gray-100' : 'text-gray-300'}>{category}</span>
+                    <span className="text-gray-500">{count}</span>
+                    {regressed ? (
+                      <span className="flex items-center gap-0.5 text-port-error" title={`Regressed: ${regressed.from} → ${regressed.to} since the previous revision`}>
+                        <TrendingUp size={11} />
+                        {regressed.from}→{regressed.to}
+                      </span>
+                    ) : null}
+                  </FilterRowButton>
                 </li>
               );
             })}
@@ -240,20 +293,30 @@ export default function EditorialHealthPanel({ seriesId, refreshKey = 0, checksB
       {checkRows.length ? (
         <div className="border-t border-port-border/60 pt-2.5">
           <span className="block text-[10px] uppercase tracking-wide text-gray-600">Open by check</span>
-          <ul className="mt-1 space-y-1">
-            {checkRows.map(({ checkId, label, count, counts, regressed }) => (
-              <li key={checkId} className="flex items-center gap-2 text-[11px] text-gray-400">
-                <span className="min-w-0 flex-1 truncate text-gray-300" title={label}>{label}</span>
-                {regressed ? (
-                  <span className="flex shrink-0 items-center gap-0.5 text-port-error" title={`Regressed: ${regressed.from} → ${regressed.to} since the previous revision`}>
-                    <TrendingUp size={11} />
-                    {regressed.from}→{regressed.to}
-                  </span>
-                ) : null}
-                <span className="w-5 shrink-0 text-right text-gray-500">{count}</span>
-                <CheckSparkline counts={counts} />
-              </li>
-            ))}
+          <ul className="mt-1 space-y-0.5">
+            {checkRows.map(({ checkId, label, count, counts, regressed }) => {
+              const active = activeCheck === checkId;
+              return (
+                <li key={checkId}>
+                  <FilterRowButton
+                    active={active}
+                    onClick={() => filterByCheck(checkId)}
+                    title={active ? `Clear the ${label} filter` : `Filter findings to ${label}`}
+                    className="w-full gap-2 text-gray-400"
+                  >
+                    <span className={`min-w-0 flex-1 truncate text-left ${active ? 'text-gray-100' : 'text-gray-300'}`} title={label}>{label}</span>
+                    {regressed ? (
+                      <span className="flex shrink-0 items-center gap-0.5 text-port-error" title={`Regressed: ${regressed.from} → ${regressed.to} since the previous revision`}>
+                        <TrendingUp size={11} />
+                        {regressed.from}→{regressed.to}
+                      </span>
+                    ) : null}
+                    <span className="w-5 shrink-0 text-right text-gray-500">{count}</span>
+                    <CheckSparkline counts={counts} />
+                  </FilterRowButton>
+                </li>
+              );
+            })}
           </ul>
           {hiddenCheckCount ? (
             <p className="mt-1 text-[10px] text-gray-600">+{hiddenCheckCount} more check{hiddenCheckCount === 1 ? '' : 's'} with open findings</p>
