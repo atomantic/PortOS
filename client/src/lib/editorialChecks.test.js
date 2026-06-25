@@ -203,6 +203,17 @@ describe('applyFindingsView', () => {
     expect(view.map((g) => g.checkId)).toEqual(['pacing', 'naming']);
   });
 
+  it('ranks a single high-severity group above a noisy many-low group when sort=severity', () => {
+    const comments = [
+      { id: 'h1', checkId: 'one-high', status: 'open', severity: 'high', problem: 'Critical' },
+      ...Array.from({ length: 50 }, (_, i) => (
+        { id: `l${i}`, checkId: 'many-low', status: 'open', severity: 'low', problem: `Nit ${i}` })),
+    ];
+    const rows = { 'one-high': { label: 'One high', scope: 'series' }, 'many-low': { label: 'Many low', scope: 'series' } };
+    const view = applyFindingsView(groupFindingsByCheck(comments, rows), {}, 'severity');
+    expect(view.map((g) => g.checkId)).toEqual(['one-high', 'many-low']);
+  });
+
   it('sorts findings by issue number with series-wide last when sort=issue', () => {
     const view = applyFindingsView(groupsFixture(), { checkIds: new Set(['naming']) }, 'issue');
     expect(view[0].comments.map((c) => c.id)).toEqual(['b1', 'b2']); // issue 1 before series-wide
