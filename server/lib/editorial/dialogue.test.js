@@ -3,6 +3,9 @@ import {
   findSaidBookisms,
   findUnattributedDialogueRuns,
   attributeDialogueByOwner,
+  inventoryDialogueTags,
+  splitScenes,
+  findDialogueTagVariety,
   SAID_BOOKISMS,
   NON_SPEECH_TAGS,
 } from './dialogue.js';
@@ -266,5 +269,130 @@ describe('attributeDialogueByOwner', () => {
     expect(() => attributeDialogueByOwner(text, [null, { key: 'x' }, 'nope'])).not.toThrow();
     const { unattributed } = attributeDialogueByOwner(text, [null, { key: 'x' }]);
     expect(unattributed).toBe(1);
+  });
+});
+
+describe('inventoryDialogueTags', () => {
+  it('collapses inflections onto a base lemma (said/says → say)', () => {
+    const tags = inventoryDialogueTags('"A," she said.\n"B," he says.');
+    expect(tags.map((t) => t.verb)).toEqual(['say', 'say']);
+  });
+
+  it('inventories an ornate tag as its base alongside plain tags', () => {
+    const tags = inventoryDialogueTags('"A," she said.\n"B," he opined.');
+    expect(tags.map((t) => t.verb)).toEqual(['say', 'opine']);
+  });
+
+  it('excludes non-speech action "tags" (those are the said-bookisms scan\'s job)', () => {
+    const tags = inventoryDialogueTags('"Of course," she smiled.');
+    expect(tags).toHaveLength(0);
+  });
+
+  it('does not count a narrated verb with no adjacent quote', () => {
+    expect(inventoryDialogueTags('The engine said nothing as it idled.')).toHaveLength(0);
+  });
+
+  it('does not count an action beat after a complete (period-terminated) line', () => {
+    // "She added a log to the fire." is narration, not a tag — the quote ended on a period.
+    expect(inventoryDialogueTags('"Done." She added a log to the fire.')).toHaveLength(0);
+  });
+
+  it('honors allowWords to mute a tag verb', () => {
+    const tags = inventoryDialogueTags('"A," she said.\n"B," he asked.', { allowWords: ['say'] });
+    expect(tags.map((t) => t.verb)).toEqual(['ask']);
+  });
+});
+
+describe('splitScenes', () => {
+  it('returns a single scene when there are no dividers', () => {
+    const scenes = splitScenes('Line one.\nLine two.');
+    expect(scenes).toHaveLength(1);
+    expect(scenes[0].ordinal).toBe(1);
+  });
+
+  it('splits on a centered rule (***) and excludes the divider line', () => {
+    const scenes = splitScenes('"A," she said.\n***\n"B," he said.');
+    expect(scenes).toHaveLength(2);
+    expect(scenes[0].text).toContain('A');
+    expect(scenes[1].text).toContain('B');
+    expect(scenes[1].ordinal).toBe(2);
+  });
+
+  it('splits on a markdown scene heading', () => {
+    const scenes = splitScenes('First.\n## Scene 2\nSecond.');
+    expect(scenes).toHaveLength(2);
+  });
+
+  it('keeps absolute offsets so a scene index maps back into the text', () => {
+    const text = 'First.\n***\nSecond.';
+    const scenes = splitScenes(text);
+    expect(text.slice(scenes[1].index)).toContain('Second');
+  });
+
+  it('returns nothing for empty / non-string input', () => {
+    expect(splitScenes('')).toEqual([]);
+    expect(splitScenes(null)).toEqual([]);
+  });
+});
+
+describe('findDialogueTagVariety', () => {
+  const monotoneScene = Array.from({ length: 6 }, (_, i) => `"Line ${i}," she said.`).join('\n');
+
+  it('flags within-scene monotony when one tag verb dominates', () => {
+    const hits = findDialogueTagVariety(monotoneScene);
+    expect(hits).toHaveLength(1);
+    expect(hits[0]).toMatchObject({ type: 'monotony', verb: 'say', count: 6, total: 6, sceneOrdinal: 1 });
+  });
+
+  it('flags over-variation when nearly every tagged line uses a different verb', () => {
+    const churn = [
+      '"A," she said.',
+      '"B," he asked.',
+      '"C," she replied.',
+      '"D," he whispered.',
+      '"E," she murmured.',
+      '"F," he shouted.',
+    ].join('\n');
+    const hits = findDialogueTagVariety(churn);
+    expect(hits).toHaveLength(1);
+    expect(hits[0]).toMatchObject({ type: 'over-variation', distinct: 6, total: 6 });
+  });
+
+  it('does not flag a scene with too few tags to judge', () => {
+    expect(findDialogueTagVariety('"A," she said.\n"B," he said.')).toHaveLength(0);
+  });
+
+  it('does not flag a healthily varied, said-dominant scene', () => {
+    // Mostly invisible "said" with a little variation — the craft target.
+    const healthy = [
+      '"A," she said.',
+      '"B," he said.',
+      '"C," she asked.',
+      '"D," he said.',
+      '"E," she replied.',
+      '"F," he said.',
+    ].join('\n');
+    expect(findDialogueTagVariety(healthy)).toHaveLength(0);
+  });
+
+  it('judges each scene independently across a divider', () => {
+    const text = `${monotoneScene}\n***\n"X," she said.\n"Y," he said.`;
+    const hits = findDialogueTagVariety(text);
+    // Only the first scene is monotone; the trailing 2-tag scene is too small.
+    expect(hits).toHaveLength(1);
+    expect(hits[0].sceneOrdinal).toBe(1);
+  });
+
+  it('respects monotonyCount/minTags overrides', () => {
+    const text = Array.from({ length: 4 }, (_, i) => `"L${i}," she said.`).join('\n');
+    expect(findDialogueTagVariety(text)).toHaveLength(0); // 4 tags < default minTags 6
+    const hits = findDialogueTagVariety(text, { minTags: 4, monotonyCount: 4 });
+    expect(hits).toHaveLength(1);
+    expect(hits[0].type).toBe('monotony');
+  });
+
+  it('returns nothing for empty / non-string input', () => {
+    expect(findDialogueTagVariety('')).toEqual([]);
+    expect(findDialogueTagVariety(null)).toEqual([]);
   });
 });

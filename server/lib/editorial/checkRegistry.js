@@ -35,7 +35,7 @@ import {
 import { analyzeBalloonAttribution } from './balloonAttribution.js';
 import { analyzeNamePair, comparisonName, findFirstLetterClusters, normalizeName } from './nameSimilarity.js';
 import { findCliches, findModifierStacking } from './cliches.js';
-import { findSaidBookisms, findUnattributedDialogueRuns, attributeDialogueByOwner } from './dialogue.js';
+import { findSaidBookisms, findUnattributedDialogueRuns, attributeDialogueByOwner, findDialogueTagVariety } from './dialogue.js';
 import { findItalicThoughts } from './italicThoughts.js';
 import {
   findFilterWords,
@@ -5164,6 +5164,89 @@ export const EDITORIAL_CHECKS = [
             problem: `${run.count} dialogue lines in a row with no speech tag or action beat (starting "${run.anchor}") — past a few exchanges the reader can't track who is speaking.`,
             suggestion: 'Drop in an occasional "said"/"asked" or a short action beat to re-anchor the speaker — every few lines is enough to keep a long exchange clear.',
             anchorQuote: run.anchor,
+            issueNumber,
+          });
+        }
+      }
+      return findings;
+    },
+  },
+  {
+    id: 'dialogue.tag-variety',
+    sources: ['manuscript'],
+    label: 'Dialogue tag variety / within-scene tag monotony',
+    description:
+      'Flags the opposite tics from said-bookisms at the scene grain: one tag verb hammered over and over ("she said" eight times in a scene — monotony) or a different fancy verb on nearly every line ("said/asked/replied/murmured/whispered" churn — over-variation). Deterministic scan that inventories speech tags (plain + ornate) adjacent to quoted lines, scene by scene. The craft target is mostly the invisible "said"/"asked" with enough variation to stay unnoticed.',
+    scope: 'issue',
+    kind: 'deterministic',
+    category: 'dialogue',
+    severityDefault: 'low',
+    defaultEnabled: true,
+    // Reads the stitched manuscript (per-issue sections), split into scenes.
+    needsManuscript: true,
+    configSchema: z.object({
+      // A scene needs at least this many speech tags before variety is judged —
+      // a handful of tags can't be "monotonous" or "over-varied" meaningfully.
+      minTags: z.number().int().min(3).max(40).default(6),
+      // Monotony: dominant verb must hit BOTH a raw count and a share-of-tags ratio.
+      monotonyCount: z.number().int().min(2).max(40).default(6),
+      monotonyRatio: z.number().min(0.4).max(1).default(0.7),
+      // Over-variation: distinct verbs ÷ tags must exceed this with ≥ minDistinct verbs.
+      overVariationRatio: z.number().min(0.5).max(1).default(0.85),
+      minDistinct: z.number().int().min(2).max(20).default(5),
+      // Cap findings per run so a dialogue-heavy draft can't flood the review.
+      maxFindings: z.number().int().min(1).max(50).default(20),
+      // House-style allowlist (mute a tag verb) / extra ornate tags to count.
+      allowWords: z.string().default(''),
+      extraWords: z.string().default(''),
+    }),
+    configFields: [
+      { key: 'minTags', label: 'Min tags per scene to judge', type: 'number', min: 3, max: 40, step: 1, help: 'A scene needs at least this many speech tags before its variety is assessed.' },
+      { key: 'monotonyCount', label: 'Monotony: dominant-verb count', type: 'number', min: 2, max: 40, step: 1, help: 'How many times one tag verb must recur in a scene to count toward monotony.' },
+      { key: 'monotonyRatio', label: 'Monotony: dominant-verb share', type: 'number', min: 0.4, max: 1, step: 0.05, help: 'Fraction of the scene\'s tags the dominant verb must own (0–1) to flag monotony.' },
+      { key: 'overVariationRatio', label: 'Over-variation: distinct share', type: 'number', min: 0.5, max: 1, step: 0.05, help: 'Distinct-verbs ÷ total-tags above this (0–1) reads as thesaurus churn.' },
+      { key: 'minDistinct', label: 'Over-variation: min distinct verbs', type: 'number', min: 2, max: 20, step: 1, help: 'At least this many distinct tag verbs before over-variation can fire.' },
+      { key: 'maxFindings', label: 'Max findings per run', type: 'number', min: 1, max: 50, step: 1, help: 'Cap findings so a dialogue-heavy draft can not flood the review.' },
+      { key: 'allowWords', label: 'House-style allowlist', type: 'text', help: 'Tag verbs to leave out of the inventory (comma-separated or one per line).' },
+      { key: 'extraWords', label: 'Extra ornate tags to count', type: 'text', help: 'Series-specific ornate tags to include in the inventory (comma-separated or one per line).' },
+    ],
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    run: (ctx) => {
+      const cfg = ctx.config || {};
+      const max = cfg.maxFindings ?? 20;
+      const allowWords = splitPhraseList(cfg.allowWords);
+      const extraWords = splitPhraseList(cfg.extraWords);
+      const opts = {
+        allowWords,
+        extraWords,
+        minTags: cfg.minTags ?? 6,
+        monotonyCount: cfg.monotonyCount ?? 6,
+        monotonyRatio: cfg.monotonyRatio ?? 0.7,
+        overVariationRatio: cfg.overVariationRatio ?? 0.85,
+        minDistinct: cfg.minDistinct ?? 5,
+      };
+      const sections = Array.isArray(ctx.sections) ? ctx.sections : [];
+      const findings = [];
+      for (const s of sections) {
+        if (findings.length >= max) break;
+        const hits = findDialogueTagVariety(s?.content || '', opts);
+        for (const hit of hits) {
+          if (findings.length >= max) break;
+          const issueNumber = Number.isInteger(s?.number) ? s.number : null;
+          const location = issueNumber != null ? `Issue ${issueNumber}` : 'Manuscript';
+          const sceneLabel = `scene ${hit.sceneOrdinal}`;
+          const problem = hit.type === 'monotony'
+            ? `The tag "${hit.verb}" carries ${hit.count} of ${hit.total} dialogue tags in ${sceneLabel} — one repeated tag verb turns monotonous and starts to call attention to itself.`
+            : `${sceneLabel} uses ${hit.distinct} different tag verbs across ${hit.total} tagged lines — a fresh verb on nearly every line reads as thesaurus churn and pulls the reader out.`;
+          findings.push({
+            severity: ctx.severityDefault,
+            category: 'dialogue',
+            location,
+            problem,
+            suggestion: hit.type === 'monotony'
+              ? 'Vary the rhythm: drop some tags entirely (let an action beat carry the speaker) and swap a few for "asked"/a beat so no single tag dominates.'
+              : 'Lean on the invisible "said"/"asked" for most lines and reserve a distinctive tag for the moments that earn it — constant variation is as distracting as monotony.',
+            anchorQuote: hit.anchor,
             issueNumber,
           });
         }
