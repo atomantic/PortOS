@@ -17,7 +17,12 @@ vi.mock('../../../services/api', () => ({
 }));
 
 const checksById = {
-  'naming.dissimilar-names': { label: 'Character name dissimilarity', scope: 'series', kind: 'deterministic' },
+  'naming.dissimilar-names': {
+    label: 'Character name dissimilarity',
+    scope: 'series',
+    kind: 'deterministic',
+    description: 'Flags character names that are too visually similar to tell apart.',
+  },
 };
 
 const renderTriage = (props) => render(
@@ -46,6 +51,30 @@ describe('EditorialFindingsTriage', () => {
     expect(screen.getByText(/1 open · 2 total/)).toBeTruthy();
     const link = screen.getByText('Confusable names: Alice / Adam').closest('a');
     expect(link.getAttribute('href')).toBe(findingManuscriptLink('ser-1', comments[0]));
+  });
+
+  it('shows the check kind badge and toggles its description in the group header (#1604)', () => {
+    const comments = [
+      { id: 'c1', checkId: 'naming.dissimilar-names', status: 'open', severity: 'high', problem: 'Confusable names' },
+    ];
+    renderTriage({ comments });
+    // Kind badge is always visible so the user can tell rule from LLM at a glance.
+    expect(screen.getByText('rule')).toBeTruthy();
+    // Description is collapsed until the info toggle is clicked.
+    expect(screen.queryByText(/too visually similar/i)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /show description for/i }));
+    expect(screen.getByText(/too visually similar/i)).toBeTruthy();
+    // Toggling again hides it.
+    fireEvent.click(screen.getByRole('button', { name: /hide description for/i }));
+    expect(screen.queryByText(/too visually similar/i)).toBeNull();
+  });
+
+  it('omits the description toggle when the check has no documented description (#1604)', () => {
+    const comments = [
+      { id: 'c1', checkId: 'unknown.check', status: 'open', severity: 'low', problem: 'Orphan finding' },
+    ];
+    renderTriage({ comments });
+    expect(screen.queryByRole('button', { name: /show description for/i })).toBeNull();
   });
 
   it('renders a stale badge (group + per-finding) when an open finding is stale (#1345)', () => {

@@ -33,7 +33,7 @@ describe('groupChecksByScope', () => {
 
 describe('groupFindingsByCheck', () => {
   const rows = {
-    'a.series': { label: 'Series check', scope: 'series', kind: 'deterministic' },
+    'a.series': { label: 'Series check', scope: 'series', kind: 'deterministic', description: 'Checks the whole series.' },
     'b.issue': { label: 'Issue check', scope: 'issue', kind: 'llm' },
   };
   const comments = [
@@ -54,9 +54,20 @@ describe('groupFindingsByCheck', () => {
     expect(series.counts).toEqual({ high: 1, medium: 0, low: 1 });
   });
 
-  it('falls back to the checkId as label when the check is unknown', () => {
+  it('carries the catalog kind + description onto each group (#1604)', () => {
+    const groups = groupFindingsByCheck(comments, rows);
+    const series = groups.find((g) => g.checkId === 'a.series');
+    const issue = groups.find((g) => g.checkId === 'b.issue');
+    expect(series.kind).toBe('deterministic');
+    expect(series.description).toBe('Checks the whole series.');
+    // A row without a description falls back to null, not undefined/''.
+    expect(issue.description).toBeNull();
+  });
+
+  it('falls back to the checkId as label and null description when the check is unknown', () => {
     const groups = groupFindingsByCheck([{ id: '9', checkId: 'gone.check', status: 'open', severity: 'low' }], {});
     expect(groups[0].label).toBe('gone.check');
+    expect(groups[0].description).toBeNull();
   });
 
   it('accepts a Map of rows as well as a plain object', () => {

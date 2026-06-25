@@ -19,11 +19,8 @@
 import { memo, useEffect, useState } from 'react';
 import { ChevronDown, ChevronRight, Loader2, Pencil, Sliders, Trash2 } from 'lucide-react';
 import ToggleSwitch from '../../ToggleSwitch';
+import CheckKindBadge from './CheckKindBadge';
 
-const KIND_BADGE = {
-  deterministic: 'bg-sky-500/15 text-sky-300 border-sky-500/30',
-  llm: 'bg-purple-500/15 text-purple-300 border-purple-500/30',
-};
 const SEVERITY_BADGE = {
   high: 'bg-rose-500/15 text-rose-300',
   medium: 'bg-amber-500/15 text-amber-300',
@@ -107,9 +104,7 @@ function EditorialCheckCard({
         <div className="min-w-0 space-y-1">
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="text-sm font-medium text-gray-100">{check.label}</span>
-            <span className={`text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border ${KIND_BADGE[check.kind] || KIND_BADGE.deterministic}`}>
-              {check.kind === 'llm' ? 'LLM' : 'rule'}
-            </span>
+            <CheckKindBadge kind={check.kind} />
             <span className={`text-[10px] px-1.5 py-0.5 rounded ${SEVERITY_BADGE[check.severityDefault] || SEVERITY_BADGE.low}`}>
               {check.severityDefault}
             </span>

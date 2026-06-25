@@ -15,8 +15,9 @@
  * bulk-dismisses the selection — each result reactively updates local state.
  */
 import { Link, useSearchParams } from 'react-router-dom';
-import { ChevronDown, ChevronRight, ExternalLink, History, Check, X, Loader2, GitCompareArrows, Search, Ban, Undo2 } from 'lucide-react';
+import { ChevronDown, ChevronRight, ExternalLink, History, Check, X, Loader2, GitCompareArrows, Search, Ban, Undo2, Info } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import CheckKindBadge from './CheckKindBadge';
 import {
   groupFindingsByCheck,
   findingManuscriptLink,
@@ -241,6 +242,11 @@ function FindingRow({ seriesId, comment, onCommentChange, selected, onToggleSele
 // behind a collapsed header and make the filtered view look empty.
 function CheckGroup({ seriesId, group, onCommentChange, selectedIds, onToggleSelect, onSelectMany, forceOpen = false, canDisable = false, onDisableCheck }) {
   const [open, setOpen] = useState(group.open > 0);
+  // The check's documented purpose/kind, surfaced inline so the user can tell a
+  // hard rule from a heuristic while triaging (#1604). Collapsed by default to
+  // keep the group header scannable; the registry only ships a description for
+  // some checks, so the toggle is offered only when one exists.
+  const [showInfo, setShowInfo] = useState(false);
   const expanded = forceOpen || open;
   const openIds = useMemo(
     () => group.comments.filter(isOpenFinding).map((c) => c.id),
@@ -269,6 +275,7 @@ function CheckGroup({ seriesId, group, onCommentChange, selectedIds, onToggleSel
           <span className="flex items-center gap-1.5 min-w-0">
             {expanded ? <ChevronDown size={14} className="shrink-0" /> : <ChevronRight size={14} className="shrink-0" />}
             <span className="text-sm font-medium text-gray-100 truncate">{group.label}</span>
+            {group.kind ? <CheckKindBadge kind={group.kind} className="shrink-0" /> : null}
             <span className="text-[10px] text-gray-500 shrink-0">{group.open} open · {group.total} total</span>
           </span>
           <span className="flex items-center gap-1.5 shrink-0">
@@ -276,6 +283,23 @@ function CheckGroup({ seriesId, group, onCommentChange, selectedIds, onToggleSel
             <CountPills counts={group.counts} />
           </span>
         </button>
+        {group.description ? (
+          // Reveal the check's documented purpose without leaving triage (#1604).
+          <button
+            type="button"
+            onClick={() => setShowInfo((v) => !v)}
+            aria-expanded={showInfo}
+            aria-label={`${showInfo ? 'Hide' : 'Show'} description for ${group.label}`}
+            title="Show what this check looks for"
+            className={`inline-flex shrink-0 items-center rounded border px-1.5 py-0.5 text-[10px] ${
+              showInfo
+                ? 'border-port-accent/50 text-port-accent'
+                : 'border-port-border text-gray-500 hover:border-port-accent/40 hover:text-gray-200'
+            }`}
+          >
+            <Info size={11} />
+          </button>
+        ) : null}
         {canDisable && onDisableCheck ? (
           // Mute a noisy/false-positive check without leaving the triage view
           // (#1602): disables it (skipped on future runs) and hides its findings
@@ -292,6 +316,11 @@ function CheckGroup({ seriesId, group, onCommentChange, selectedIds, onToggleSel
           </button>
         ) : null}
       </div>
+      {showInfo && group.description ? (
+        <p className="border-t border-port-border/60 px-2.5 py-2 text-[11px] leading-relaxed text-gray-400">
+          {group.description}
+        </p>
+      ) : null}
       {expanded ? (
         <ul className="divide-y divide-port-border/60 border-t border-port-border/60">
           {group.comments.map((c) => (
