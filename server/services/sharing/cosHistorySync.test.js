@@ -189,6 +189,21 @@ describe('syncCosHistoryFromPeer', () => {
     expect(pairs).toContainEqual({ date: '2026-06-20', agentId: 'agent-abc' });
   });
 
+  it('reconciles the index from the manifest even when every file is already present (crash-recovery)', async () => {
+    // Simulate a prior sweep that landed the bytes but never persisted the index.
+    const meta = '{"id":"agent-abc"}';
+    await seedArchive('2026-06-20', 'agent-abc', { 'metadata.json': meta });
+    const entries = [{ date: '2026-06-20', agentId: 'agent-abc', file: 'metadata.json', sha256: sha(meta) }];
+    vi.mocked(peerFetch).mockResolvedValue(manifestRes({ schemaVersion: 1, manifestHash: sha('present'), entries }));
+
+    const r = await syncCosHistoryFromPeer(PEER);
+    expect(r).toEqual({ pulled: 0 }); // nothing to pull — but the index must still be repaired
+    expect(addAgentArchivesToIndex).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(addAgentArchivesToIndex).mock.calls[0][0]).toContainEqual({ date: '2026-06-20', agentId: 'agent-abc' });
+    // No byte route should have been hit — everything was already on disk.
+    expect(vi.mocked(peerFetch).mock.calls.every(([u]) => u.includes('cos-history-manifest'))).toBe(true);
+  });
+
   it('withholds the manifest hash on a partial pull (corrupt byte) so it retries', async () => {
     const meta = 'META';
     const out = 'OUT';

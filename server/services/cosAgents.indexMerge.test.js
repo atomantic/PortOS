@@ -42,6 +42,11 @@ describe('addAgentArchivesToIndex (#1650)', () => {
     // Re-adding the same pair is a no-op.
     expect(await addAgentArchivesToIndex([{ agentId: 'agent-x', date: '2026-06-20' }])).toBe(0);
 
+    // A pre-existing agentId is NEVER overwritten, even with a different date —
+    // a peer id-collision must not repoint a locally-owned agent's bucket.
+    expect(await addAgentArchivesToIndex([{ agentId: 'agent-x', date: '2026-07-01' }])).toBe(0);
+    expect((await loadAgentIndex()).get('agent-x')).toBe('2026-06-20');
+
     // Invalid entries are skipped: empty id, malformed date, empty object.
     expect(await addAgentArchivesToIndex([
       { agentId: '', date: '2026-06-20' },

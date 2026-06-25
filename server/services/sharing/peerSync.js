@@ -3183,6 +3183,33 @@ async function pullOneCosArchiveFile(peer, base, entry) {
 }
 
 /**
+ * Merge the manifest's completed-agent archives into the local agentId→date
+ * index so the CoS history UI lists them. Called ONLY when the manifest's files
+ * are confirmed present on disk (the diff returned empty), so every referenced
+ * agent — including its metadata.json — exists; a half-pulled agent is never
+ * indexed. Dynamic import keeps cosAgents out of peerSync's static graph (mirrors
+ * reconcileMediaLibraryIndex). addAgentArchivesToIndex unions and never
+ * overwrites a locally-owned id.
+ */
+async function reconcileCosHistoryIndex(entries) {
+  if (!Array.isArray(entries) || entries.length === 0) return;
+  // One {date, agentId} pair per agent (entries carry up to 3 files per agent).
+  const seen = new Set();
+  const pairs = [];
+  for (const e of entries) {
+    const key = `${e.date}/${e.agentId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    pairs.push({ date: e.date, agentId: e.agentId });
+  }
+  const mod = await import('../cosAgents.js').catch(() => null);
+  if (!mod?.addAgentArchivesToIndex) return;
+  await mod.addAgentArchivesToIndex(pairs).catch((err) => {
+    console.log(`⚠️ peerSync: cos-history index merge failed: ${err.message}`);
+  });
+}
+
+/**
  * Receiver-pull the standalone completed-agent history from ONE full-sync peer.
  * Best-effort + idempotent (every guard returns rather than throws), mirroring
  * syncMediaLibraryFromPeer. No-op for a non-full-sync peer.
@@ -3234,32 +3261,32 @@ export async function syncCosHistoryFromPeer(peer) {
     }
     const missing = await diffCosHistoryManifestAgainstLocal(manifest.entries);
     if (missing.length === 0) {
+      // Everything the manifest references is already on disk — reconcile the
+      // index BEFORE caching the hash so a present-but-unindexed archive (e.g. a
+      // prior sweep landed the bytes but crashed before the index persisted)
+      // becomes visible, instead of being skipped forever by the unchanged
+      // short-circuit above.
+      await reconcileCosHistoryIndex(manifest.entries);
       lastCosHistoryManifestHash.set(peer.instanceId, manifest.manifestHash);
       return { pulled: 0 };
     }
     const requested = missing.length;
-    const landed = await pullMissingCosArchives(peer.instanceId, missing);
-    // Merge the agentId→date index so the CoS history UI lists the arrivals.
-    // Dynamic import keeps cosAgents out of peerSync's static graph (mirrors
-    // reconcileMediaLibraryIndex). Idempotent union, never overwrites.
-    if (landed.length > 0) {
-      const mod = await import('../cosAgents.js').catch(() => null);
-      if (mod?.addAgentArchivesToIndex) {
-        await mod.addAgentArchivesToIndex(landed).catch((err) => {
-          console.log(`⚠️ peerSync: cos-history index merge failed: ${err.message}`);
-        });
-      }
-    }
+    await pullMissingCosArchives(peer.instanceId, missing);
     // Re-diff: a resolved pull does NOT mean every byte landed (peer dropped,
     // 404, size-cap reject) — this is the authoritative signal.
     const stillMissing = await diffCosHistoryManifestAgainstLocal(manifest.entries);
     const pulled = requested - stillMissing.length;
     if (stillMissing.length === 0) {
+      // Full manifest now present — reconcile the index from the manifest (every
+      // referenced agent, incl. its metadata.json, is confirmed on disk) before
+      // caching the hash so the arrivals show in the history UI.
+      await reconcileCosHistoryIndex(manifest.entries);
       lastCosHistoryManifestHash.set(peer.instanceId, manifest.manifestHash);
       console.log(`📥 peerSync: cos-history sweep from ${peer.name || peer.instanceId} — pulled ${pulled} archive file(s)`);
     } else {
       // Partial pull — do NOT record the hash, so the next tick re-diffs and
-      // retries the still-missing files instead of being marked done.
+      // retries the still-missing files; the index is reconciled once the
+      // manifest is fully present (above), never from a half-pulled agent.
       console.log(`⚠️ peerSync: cos-history sweep from ${peer.name || peer.instanceId} — pulled ${pulled}/${requested}, ${stillMissing.length} still missing; retrying next tick`);
     }
     return { pulled, missing: stillMissing.length };
