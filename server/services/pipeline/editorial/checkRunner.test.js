@@ -76,7 +76,7 @@ vi.mock('../reverseOutline.js', () => ({ getReverseOutline: vi.fn(async () => ou
 let editorialState = { characters: [] };
 vi.mock('../editorialAnalysis.js', () => ({ getSeriesEditorial: vi.fn(async () => editorialState) }));
 
-const { runEditorialChecks, buildEditorialCheckPlan, getReviewWithStaleness, enabledChecksConsumeReverseOutline, summarizeCheckErrors } = await import('./checkRunner.js');
+const { runEditorialChecks, buildEditorialCheckPlan, getReviewWithStaleness, enabledChecksConsumeReverseOutline, summarizeCheckErrors, previewCustomCheck } = await import('./checkRunner.js');
 const { runStagedLLM, resolveStageContext } = await import('../../../lib/stageRunner.js');
 const { collectManuscriptSections } = await import('../arcPlanner.js');
 const { getSeriesCanon } = await import('../seriesCanon.js');
@@ -471,6 +471,70 @@ describe('runEditorialChecks', () => {
     expect(result.findings.some((f) => f.checkId === 'naming.dissimilar-names')).toBe(true);
     const infodump = result.perCheck.find((p) => p.checkId === 'prose.info-dumping');
     expect(infodump.error).toMatch(/provider down/);
+  });
+});
+
+describe('previewCustomCheck (#1607)', () => {
+  const draft = {
+    label: 'Anachronisms',
+    description: '',
+    prompt: 'Flag any modern technology that does not fit the setting.',
+    scope: 'issue',
+    category: 'custom',
+    severityDefault: 'medium',
+  };
+
+  it('runs the draft and returns sample findings WITHOUT seeding the review', async () => {
+    const result = await previewCustomCheck('s1', draft);
+    expect(result.invalid).toBe(false);
+    expect(result.skipped).toBe(false);
+    expect(result.findings.length).toBe(1);
+    // The mocked inline LLM returns a 'medium' finding; preview surfaces it as-is.
+    expect(result.findings[0].problem).toMatch(/anachronism/i);
+    expect(result.findings[0].severity).toBe('medium');
+    // Preview is transient: the review store is never seeded, and findings carry
+    // no checkId / sourceContentHash (those mark a finding for the seed machinery).
+    expect(seedReviewFromFindings).not.toHaveBeenCalled();
+    expect(result.findings[0].checkId).toBeUndefined();
+    expect(result.findings[0].sourceContentHash).toBeUndefined();
+  });
+
+  it('normalizes an out-of-enum LLM severity to the draft default', async () => {
+    const { runInlineLLM } = await import('../../../lib/stageRunner.js');
+    runInlineLLM.mockResolvedValueOnce({
+      runId: 'inline-run',
+      content: { findings: [{ severity: 'catastrophic', issueNumber: 1, location: 'p1', problem: 'x', suggestion: 'y', anchorQuote: 'z' }] },
+    });
+    const result = await previewCustomCheck('s1', { ...draft, severityDefault: 'high' });
+    expect(result.findings[0].severity).toBe('high');
+  });
+
+  it('reports invalid for a draft missing the required prompt', async () => {
+    const result = await previewCustomCheck('s1', { ...draft, prompt: '' });
+    expect(result.invalid).toBe(true);
+    expect(result.findings).toEqual([]);
+    expect(seedReviewFromFindings).not.toHaveBeenCalled();
+  });
+
+  it('reports skipped when the series has no manuscript (gate declines)', async () => {
+    collectManuscriptSections.mockResolvedValueOnce([]);
+    const result = await previewCustomCheck('s1', draft);
+    expect(result.skipped).toBe(true);
+    expect(result.findings).toEqual([]);
+  });
+
+  it('honors a maxFindings cap', async () => {
+    const { runInlineLLM } = await import('../../../lib/stageRunner.js');
+    runInlineLLM.mockResolvedValueOnce({
+      runId: 'inline-run',
+      content: { findings: [
+        { severity: 'low', issueNumber: 1, location: 'a', problem: 'p1', suggestion: 's', anchorQuote: 'q1' },
+        { severity: 'low', issueNumber: 1, location: 'b', problem: 'p2', suggestion: 's', anchorQuote: 'q2' },
+        { severity: 'low', issueNumber: 1, location: 'c', problem: 'p3', suggestion: 's', anchorQuote: 'q3' },
+      ] },
+    });
+    const result = await previewCustomCheck('s1', draft, { maxFindings: 2 });
+    expect(result.findings.length).toBe(2);
   });
 });
 

@@ -31,6 +31,7 @@ import {
   createEditorialCustomCheck,
   updateEditorialCustomCheck,
   deleteEditorialCustomCheck,
+  previewEditorialCustomCheck,
   startEditorialChecksRun,
   cancelEditorialChecksRun,
   getEditorialChecksRunStatus,
@@ -366,6 +367,21 @@ export default function PipelineEditorialChecks() {
       .finally(() => setFormSaving(false));
   };
 
+  // Dry-run a draft against the selected series WITHOUT saving (#1607). Returns
+  // the preview result (or throws, so the form's own error UI fires). Gated on a
+  // selected series by the form via `canPreview`. `{ silent: true }` — the form
+  // renders the error inline rather than toasting. Forwards the same AI-pass
+  // provider/model override a real run uses (empty = default), so the preview's
+  // context sizing + model behavior match the run the user would commit to.
+  const handlePreviewCustom = useCallback(
+    (values) => previewEditorialCustomCheck(seriesId, {
+      ...values,
+      ...(selectedProviderId ? { providerId: selectedProviderId } : {}),
+      ...(selectedModel ? { model: selectedModel } : {}),
+    }, { silent: true }),
+    [seriesId, selectedProviderId, selectedModel],
+  );
+
   const handleDeleteCustom = useCallback((checkId) => {
     setSavingIds((s) => new Set(s).add(checkId));
     // Drop from the targeted-run selection so a deleted id can't ride a run.
@@ -541,6 +557,9 @@ export default function PipelineEditorialChecks() {
                 saving={formSaving}
                 onSave={handleSaveCustom}
                 onCancel={closeCustomForm}
+                onPreview={handlePreviewCustom}
+                canPreview={!!seriesId}
+                previewTarget={seriesId}
               />
             ) : null}
             {checks.length === 0 ? (

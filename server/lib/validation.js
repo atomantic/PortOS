@@ -1072,6 +1072,21 @@ export const editorialCustomCheckCreateSchema = z.object({
 // field is left unchanged rather than reset.
 export const editorialCustomCheckUpdateSchema = z.object(editorialCustomCheckShape).partial().strict();
 
+// Dry-run preview (#1607): run an UNSAVED draft check against a series and return
+// sample findings without persisting. Same authored fields as create (so the
+// draft synthesizes into a runnable check), plus an optional per-run cap and the
+// provider/model overrides the run route accepts.
+export const editorialCustomCheckPreviewSchema = z.object({
+  ...editorialCustomCheckShape,
+  description: editorialCustomCheckShape.description.optional().default(''),
+  scope: editorialCustomCheckShape.scope.optional().default('issue'),
+  category: editorialCustomCheckShape.category.optional().default('custom'),
+  severityDefault: editorialCustomCheckShape.severityDefault.optional().default('medium'),
+  maxFindings: z.number().int().min(1).max(50).optional(),
+  providerId: z.string().trim().max(80).optional(),
+  model: z.string().trim().max(200).optional(),
+}).strict();
+
 // settings.pipelineEditorialChecks slice (validated on PUT /api/settings when
 // present). `checks` maps a checkId → its persisted enable/config; `customChecks`
 // holds the user-defined check definitions (#1346).

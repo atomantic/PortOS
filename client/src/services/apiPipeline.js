@@ -689,6 +689,18 @@ export const deleteEditorialCustomCheck = (checkId, options = {}) =>
     ...options,
   });
 
+// Dry-run a DRAFT custom check (#1607) against a series WITHOUT saving it: runs
+// the unsaved definition transiently and returns { findings, skipped, invalid }
+// (sample findings only — never seeded into the review). `def` carries the same
+// authored fields as create, plus an optional maxFindings cap. Pass
+// { silent: true } when the caller owns its own error UI.
+export const previewEditorialCustomCheck = (seriesId, def, options = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/editorial/custom-checks/preview`, {
+    method: 'POST',
+    body: JSON.stringify(def),
+    ...options,
+  });
+
 // Start a series-wide checks run (or a named subset). { runId, alreadyRunning,
 // sseUrl } — subscribe via editorialChecksRunSseUrl, then re-fetch the manuscript
 // review on `complete` (the runner seeds findings into the review store).

@@ -19,7 +19,7 @@ import { randomUUID, createHash } from 'crypto';
 import { createSseRunner } from '../../../lib/sseUtils.js';
 import { runStagedLLM, runInlineLLM, runStageScopedInlineLLM, resolveStageContext } from '../../../lib/stageRunner.js';
 import { planManuscriptPass, fitContextToManuscriptFloor, estimateTokens, MANUSCRIPT_FLOOR_TOKENS } from '../../../lib/contextBudget.js';
-import { getEnabledChecks, getEnabledCheckRows, getAllChecks, applySeriesCheckConfig, EDITORIAL_SOURCES, comicLetteringIssues, proseStageIssues } from '../../../lib/editorial/index.js';
+import { getEnabledChecks, getEnabledCheckRows, getAllChecks, applySeriesCheckConfig, buildCustomCheck, CUSTOM_CHECK_ID_PREFIX, EDITORIAL_SOURCES, comicLetteringIssues, proseStageIssues } from '../../../lib/editorial/index.js';
 import { getSettings } from '../../settings.js';
 import { getSeries } from '../series.js';
 import { listIssuesForSeries } from '../issues.js';
@@ -325,39 +325,24 @@ function fingerprintForCheck(check, resolved) {
 const EDITORIAL_OUTPUT_RESERVE_TOKENS = 2_000;
 
 /**
- * Run the enabled editorial checks for a series and seed their findings into the
- * manuscript review.
+ * Build the shared `ctx` every editorial check reads (series, stitched
+ * manuscript, canon, reverse outline, arcs, comic/storyboard projections, the
+ * injected LLM callers + provider-sized manuscript chunker). Extracted from
+ * runEditorialChecks so the dry-run preview path (#1607) reuses the IDENTICAL
+ * context construction — same per-source I/O gating and provider-sized chunking
+ * a real run would use — without persisting anything.
+ *
+ * Only pays the I/O an enabled check actually consumes: the `needs*` gates read
+ * each check's declared `sources`, so a run of a canon-only check skips the
+ * manuscript-collection / reverse-outline / issue fetches entirely.
  *
  * @param {string} seriesId
- * @param {object} [options]
- *   - checkIds: string[] — run only this subset (default: all enabled)
- *   - settings: object — pre-loaded settings (default: read fresh)
- *   - providerOverride / modelOverride — hard provider/model, forwarded to LLM checks
- *   - providerDefault / modelDefault — soft run-level default provider/model
- *     (Series Autopilot), forwarded to LLM checks (lose to a per-stage pin)
- *   - signal: AbortSignal — checked between checks for cancellation
- *   - onProgress: (event) => void — { type: 'check:start'|'check:complete', ... }
- * @returns {Promise<{ runId, findings, perCheck, canceled }>}
+ * @param {Array<{check: object}>} enabled — the enabled (or previewed) checks
+ * @param {object} [opts] — providerOverride/Default, modelOverride/Default, signal
+ * @returns {Promise<{ series, baseCtx, resolvedSources }>}
  */
-export async function runEditorialChecks(seriesId, options = {}) {
-  const { checkIds = null, providerOverride, providerDefault, modelOverride, modelDefault, signal, onProgress } = options;
-  const settings = options.settings || await getSettings();
-  const enabled = getEnabledChecks(settings, checkIds);
-
-  const runId = randomUUID();
-  if (enabled.length === 0) {
-    return { runId, findings: [], perCheck: [], canceled: false };
-  }
-
-  // Build the shared context once — every check reads from this. Only pay the
-  // manuscript section-collection I/O when an enabled check actually consumes
-  // the stitched corpus (deterministic checks like naming use only the canon).
+export async function buildEditorialContext(seriesId, enabled, { providerOverride, providerDefault, modelOverride, modelDefault, signal } = {}) {
   const series = await getSeries(seriesId);
-  // Overlay this series' per-check config overrides (#1591) onto the global
-  // resolved config. The `needs*` gates below read only `check` (config-
-  // independent), so they keep using `enabled`; only the run loop consumes the
-  // merged config via `enabledResolved`.
-  const enabledResolved = applySeriesCheckConfig(enabled, series?.editorialCheckConfig);
   const needsManuscript = enabled.some(({ check }) => check.needsManuscript);
   // Reverse-outline fetch is gated on the declared source (#1296) so a run with no
   // scene-segmentation check pays no extra I/O — mirrors the needsManuscript gate.
@@ -543,6 +528,42 @@ export async function runEditorialChecks(seriesId, options = {}) {
       return chunks;
     },
   };
+  return { series, baseCtx, resolvedSources };
+}
+
+/**
+ * Run the enabled editorial checks for a series and seed their findings into the
+ * manuscript review.
+ *
+ * @param {string} seriesId
+ * @param {object} [options]
+ *   - checkIds: string[] — run only this subset (default: all enabled)
+ *   - settings: object — pre-loaded settings (default: read fresh)
+ *   - providerOverride / modelOverride — hard provider/model, forwarded to LLM checks
+ *   - providerDefault / modelDefault — soft run-level default provider/model
+ *     (Series Autopilot), forwarded to LLM checks (lose to a per-stage pin)
+ *   - signal: AbortSignal — checked between checks for cancellation
+ *   - onProgress: (event) => void — { type: 'check:start'|'check:complete', ... }
+ * @returns {Promise<{ runId, findings, perCheck, canceled }>}
+ */
+export async function runEditorialChecks(seriesId, options = {}) {
+  const { checkIds = null, providerOverride, providerDefault, modelOverride, modelDefault, signal, onProgress } = options;
+  const settings = options.settings || await getSettings();
+  const enabled = getEnabledChecks(settings, checkIds);
+
+  const runId = randomUUID();
+  if (enabled.length === 0) {
+    return { runId, findings: [], perCheck: [], canceled: false };
+  }
+
+  // Build the shared context once — every check reads from this (extracted to
+  // buildEditorialContext so the dry-run preview path reuses the exact same
+  // provider-sized chunking + source resolution as a real run, #1607).
+  const { series, baseCtx, resolvedSources } = await buildEditorialContext(seriesId, enabled, { providerOverride, providerDefault, modelOverride, modelDefault, signal });
+  // Overlay this series' per-check config overrides (#1591) onto the global
+  // resolved config. The `needs*` gates inside the builder read only `check`
+  // (config-independent); only the run loop consumes the merged config here.
+  const enabledResolved = applySeriesCheckConfig(enabled, series?.editorialCheckConfig);
 
   const findings = [];
   const perCheck = [];
@@ -674,6 +695,49 @@ export async function runEditorialChecks(seriesId, options = {}) {
     });
   }
   return { runId, findings, perCheck, canceled };
+}
+
+/**
+ * Transient preview of a DRAFT custom check (#1607). Synthesizes the unsaved
+ * definition into a runnable check, runs it against the live manuscript via the
+ * SAME context builder a real run uses, and returns its sample findings —
+ * WITHOUT persisting the definition, seeding the manuscript review, or recording
+ * a trend snapshot. Lets the author judge a check's noise/scope before committing
+ * it to the catalog.
+ *
+ * The findings are deliberately NOT stamped with `checkId` / `sourceContentHash`
+ * (those mark a finding for the review store's seed + staleness machinery, which
+ * a preview must never touch). Severity is normalized to the check's native
+ * default the same way the run loop does, so the preview's levels match a run.
+ *
+ * @param {string} seriesId
+ * @param {object} def — the draft definition (label, prompt, scope, category, severityDefault)
+ * @param {object} [opts] — providerOverride / modelOverride / maxFindings
+ * @returns {Promise<{ findings: object[], skipped: boolean, invalid: boolean }>}
+ *   - invalid: the draft failed the minimum-viable shape (missing label/prompt/scope/severity)
+ *   - skipped: the check's gate declined (e.g. the series has no manuscript yet)
+ */
+export async function previewCustomCheck(seriesId, def, { providerOverride, modelOverride, maxFindings } = {}) {
+  // Stamp a transient custom id so buildCustomCheck accepts the draft — its
+  // validator requires the `custom.` prefix; the id is never persisted or seeded.
+  const check = buildCustomCheck({ ...def, id: `${CUSTOM_CHECK_ID_PREFIX}preview` });
+  if (!check) return { findings: [], skipped: false, invalid: true };
+
+  const { baseCtx } = await buildEditorialContext(seriesId, [{ check }], { providerOverride, modelOverride });
+  // Validate the (optional) per-run cap through the check's own config schema so
+  // an out-of-range value falls back to the default rather than flooding.
+  const config = check.configSchema.parse(Number.isInteger(maxFindings) ? { maxFindings } : {});
+  const ctx = { ...baseCtx, config, severityDefault: check.severityDefault };
+
+  if (typeof check.gate === 'function' && !check.gate(ctx)) {
+    return { findings: [], skipped: true, invalid: false };
+  }
+  const raw = (await check.run(ctx)) || [];
+  const findings = raw.map((f) => ({
+    ...f,
+    severity: ['high', 'medium', 'low'].includes(f.severity) ? f.severity : check.severityDefault,
+  }));
+  return { findings, skipped: false, invalid: false };
 }
 
 /**

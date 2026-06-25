@@ -24,12 +24,8 @@ import { memo, useEffect, useState } from 'react';
 import { ChevronDown, ChevronRight, Loader2, Pencil, Sliders, Trash2 } from 'lucide-react';
 import ToggleSwitch from '../../ToggleSwitch';
 import CheckKindBadge from './CheckKindBadge';
+import { SEVERITY_BADGE_CLASSES } from '../../../lib/editorialChecks';
 
-const SEVERITY_BADGE = {
-  high: 'bg-rose-500/15 text-rose-300',
-  medium: 'bg-amber-500/15 text-amber-300',
-  low: 'bg-gray-500/15 text-gray-300',
-};
 const SEVERITY_LEVELS = ['high', 'medium', 'low'];
 
 function ConfigField({ checkId, field, value, disabled, onCommit, resetNonce = 0 }) {
@@ -116,7 +112,7 @@ function EditorialCheckCard({
             <span className="text-sm font-medium text-gray-100">{check.label}</span>
             <CheckKindBadge kind={check.kind} />
             <span
-              className={`text-[10px] px-1.5 py-0.5 rounded ${SEVERITY_BADGE[effectiveSeverity] || SEVERITY_BADGE.low}`}
+              className={`text-[10px] px-1.5 py-0.5 rounded ${SEVERITY_BADGE_CLASSES[effectiveSeverity] || SEVERITY_BADGE_CLASSES.low}`}
               title={check.severityOverride ? `Overridden — default is ${check.severityDefault}` : 'Default severity'}
             >
               {effectiveSeverity}{check.severityOverride ? '*' : ''}

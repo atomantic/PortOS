@@ -48,6 +48,16 @@ export const FINDINGS_TRIAGE_ANCHOR_ID = 'editorial-findings-triage';
 
 const SEVERITY_ORDER = Object.freeze(['high', 'medium', 'low']);
 
+// Tailwind badge classes for a finding/check severity (rose/amber/gray) — the
+// shared editorial severity palette, used by the catalog card's severity badge
+// and the custom-check preview's sample findings so the styling stays consistent
+// across the editorial UI. Callers supply their own fallback level.
+export const SEVERITY_BADGE_CLASSES = Object.freeze({
+  high: 'bg-rose-500/15 text-rose-300',
+  medium: 'bg-amber-500/15 text-amber-300',
+  low: 'bg-gray-500/15 text-gray-300',
+});
+
 /**
  * Group catalog rows into ordered scope sections for the catalog view.
  * Returns `[{ scope, label, checks }]` in CHECK_SCOPE_ORDER, with any unknown

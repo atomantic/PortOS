@@ -13,6 +13,7 @@ import {
   editorialChecksRunSchema,
   editorialCustomCheckCreateSchema,
   editorialCustomCheckUpdateSchema,
+  editorialCustomCheckPreviewSchema,
 } from '../../lib/validation.js';
 import {
   resolveCheckState,
@@ -234,6 +235,22 @@ router.delete('/editorial/custom-checks/:id', asyncHandler(async (req, res) => {
     };
   });
   res.json({ deleted: true, id });
+}));
+
+// Preview a DRAFT custom check transiently against a series (#1607). Synthesizes
+// the UNSAVED definition, runs it against the live manuscript, and returns sample
+// findings WITHOUT persisting the check or seeding the review — so the author can
+// see whether a check is noisy/mis-scoped before committing it to the catalog.
+router.post('/series/:id/editorial/custom-checks/preview', asyncHandler(async (req, res) => {
+  const body = validateRequest(editorialCustomCheckPreviewSchema, req.body ?? {});
+  await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
+  const { providerId, model, maxFindings, ...def } = body;
+  const result = await checkRunner.previewCustomCheck(req.params.id, def, {
+    providerOverride: providerId,
+    modelOverride: model,
+    maxFindings,
+  });
+  res.json(result);
 }));
 
 // Run all enabled checks (or a named subset) for a series — progress via SSE.

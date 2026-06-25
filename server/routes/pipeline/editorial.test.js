@@ -29,8 +29,10 @@ vi.mock('../../services/pipeline/issues.js', async (importOriginal) => ({
 }));
 
 const startEditorialChecksRun = vi.fn(() => ({ runId: 'run-1', alreadyRunning: false }));
+const previewCustomCheck = vi.fn(async () => ({ findings: [{ severity: 'medium', problem: 'x' }], skipped: false, invalid: false }));
 vi.mock('../../services/pipeline/editorial/checkRunner.js', () => ({
   startEditorialChecksRun: (...a) => startEditorialChecksRun(...a),
+  previewCustomCheck: (...a) => previewCustomCheck(...a),
   attachClient: vi.fn(() => false),
   isEditorialChecksActive: vi.fn(() => false),
   cancelEditorialChecks: vi.fn(() => true),
@@ -54,6 +56,7 @@ app.use(errorMiddleware);
 beforeEach(() => {
   settingsStore = {};
   startEditorialChecksRun.mockClear();
+  previewCustomCheck.mockClear();
   getSeriesHealth.mockClear();
 });
 
@@ -241,6 +244,40 @@ describe('custom checks CRUD (#1346)', () => {
 
   it('404s deleting an unknown custom id', async () => {
     expect((await request(app).delete('/api/pipeline/editorial/custom-checks/custom.nope')).status).toBe(404);
+  });
+});
+
+describe('POST /api/pipeline/series/:id/editorial/custom-checks/preview (#1607)', () => {
+  const draft = { label: 'Anachronisms', prompt: 'Flag modern tech.' };
+
+  it('returns sample findings for a valid draft and forwards overrides to the runner', async () => {
+    const res = await request(app)
+      .post('/api/pipeline/series/s1/editorial/custom-checks/preview')
+      .send({ ...draft, providerId: 'ollama', model: 'm', maxFindings: 5 });
+    expect(res.status).toBe(200);
+    expect(res.body.findings).toHaveLength(1);
+    // The provider/model/maxFindings split off the def and forward as runner opts.
+    const [seriesId, def, opts] = previewCustomCheck.mock.calls[0];
+    expect(seriesId).toBe('s1');
+    expect(def).toMatchObject({ label: 'Anachronisms', prompt: 'Flag modern tech.' });
+    expect(def.providerId).toBeUndefined();
+    expect(opts).toMatchObject({ providerOverride: 'ollama', modelOverride: 'm', maxFindings: 5 });
+  });
+
+  it('404s an unknown series before running the check', async () => {
+    const res = await request(app)
+      .post('/api/pipeline/series/missing/editorial/custom-checks/preview')
+      .send(draft);
+    expect(res.status).toBe(404);
+    expect(previewCustomCheck).not.toHaveBeenCalled();
+  });
+
+  it('400s a draft missing the required prompt', async () => {
+    const res = await request(app)
+      .post('/api/pipeline/series/s1/editorial/custom-checks/preview')
+      .send({ label: 'No prompt' });
+    expect(res.status).toBe(400);
+    expect(previewCustomCheck).not.toHaveBeenCalled();
   });
 });
 
