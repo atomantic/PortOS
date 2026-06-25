@@ -17,6 +17,7 @@ import SideBySideDiff from '../../ui/SideBySideDiff';
 import toast from '../../ui/Toast';
 import { copyToClipboard } from '../../../lib/clipboard';
 import { useAsyncAction } from '../../../hooks/useAsyncAction';
+import useKeyboardShortcuts from '../../../hooks/useKeyboardShortcuts';
 import {
   patchPipelineManuscriptComment, generatePipelineManuscriptFix, acceptPipelineManuscriptFix,
 } from '../../../services/api';
@@ -35,6 +36,37 @@ export function CopyId({ id }) {
     >
       <Copy size={10} /> {short}
     </button>
+  );
+}
+
+// A single keycap for the on-screen shortcut hints.
+function Kbd({ children }) {
+  return (
+    <kbd className="rounded border border-port-border bg-port-bg px-1 font-mono text-[9px] leading-tight text-gray-400">
+      {children}
+    </kbd>
+  );
+}
+
+// On-screen cheatsheet for the card's keyboard shortcuts (#1603) — only the
+// actions actually available for this note are shown (prev/next when the card is
+// part of a triage order, Accept/regenerate when a fix exists, Generate when not).
+function ShortcutHints({ hasNav, hasFix }) {
+  return (
+    <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 pt-1.5 text-[10px] text-gray-600">
+      {hasNav ? (
+        <span className="inline-flex items-center gap-1"><Kbd>←</Kbd><Kbd>→</Kbd> step</span>
+      ) : null}
+      {hasFix ? (
+        <>
+          <span className="inline-flex items-center gap-1"><Kbd>a</Kbd> accept</span>
+          <span className="inline-flex items-center gap-1"><Kbd>g</Kbd> regenerate</span>
+        </>
+      ) : (
+        <span className="inline-flex items-center gap-1"><Kbd>g</Kbd> generate</span>
+      )}
+      <span className="inline-flex items-center gap-1"><Kbd>d</Kbd> dismiss</span>
+    </div>
   );
 }
 
@@ -177,6 +209,24 @@ export default function ManuscriptCommentCard({
 
   const fuzzy = comment.fix?.fuzzy || fixEdits.some((e) => e.fuzzy);
   const Diff = diffStyle === 'side' ? SideBySideDiff : InlineDiff;
+  // At least one selected edit carries usable replacement text — gates both the
+  // Accept button and its `a` shortcut so neither fires an empty apply.
+  const canAccept = hasFix && fixEdits.some((_, i) => selectedEdits[i] && (editDrafts[i] || '').trim());
+
+  // Keyboard-driven triage over the open note (#1603): ←/→ (or k/j, vim-style)
+  // step prev/next through the triage order, a=accept, d=dismiss, g=generate/
+  // regenerate. Only one comment card mounts at a time (the open note), so the
+  // single global binding here can't collide. The hook ignores keys typed into
+  // the replacement textarea / manuscript editor, so letters never misfire.
+  useKeyboardShortcuts(true, {
+    ArrowLeft: nav?.onPrev,
+    ArrowRight: nav?.onNext,
+    k: nav?.onPrev,
+    j: nav?.onNext,
+    a: hasFix && canAccept && !accepting ? accept : undefined,
+    d: !accepting ? dismiss : undefined,
+    g: !generating && !accepting ? generate : undefined,
+  });
 
   return (
     <div className="border border-port-border rounded-lg bg-port-bg/40 p-2.5 space-y-2">
@@ -295,7 +345,7 @@ export default function ManuscriptCommentCard({
             <button
               type="button"
               onClick={accept}
-              disabled={accepting || !fixEdits.some((_, i) => selectedEdits[i] && (editDrafts[i] || '').trim())}
+              disabled={accepting || !canAccept}
               className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-[12px] font-medium bg-port-success/20 text-port-success border border-port-success/40 hover:bg-port-success/30 disabled:opacity-40"
             >
               {accepting ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
@@ -321,6 +371,8 @@ export default function ManuscriptCommentCard({
           <X size={12} /> Dismiss
         </button>
       </div>
+
+      <ShortcutHints hasNav={!!nav} hasFix={hasFix} />
     </div>
   );
 }
