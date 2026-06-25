@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { filterSelectableModels } from '../utils/providers';
 import { composeCanonStyledPrompt } from '../lib/composeStyledPrompt';
 import { descriptorForCanonEntry } from '../lib/canonPrompt';
@@ -95,6 +95,11 @@ function ProviderModelPicker({ value, onChange }) {
 
 function StoryBuilderIndex() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  // The "Start a Story" onramp can deep-link here with a pre-chosen universe
+  // (?universeId=…); pass it through so the new session attaches to it instead
+  // of auto-creating a fresh universe. The create schema already accepts it.
+  const onrampUniverseId = searchParams.get('universeId') || undefined;
   const [sessions, setSessions] = useState([]);
   const [mode, setMode] = useState('seed');
   const [title, setTitle] = useState('');
@@ -108,7 +113,10 @@ function StoryBuilderIndex() {
   const create = async () => {
     if (!title.trim()) { toast.error('Give your story a working title'); return; }
     setCreating(true);
-    const created = await createStorySession({ title: title.trim(), seedIdea: seedIdea.trim() }, { silent: true })
+    const created = await createStorySession(
+      { title: title.trim(), seedIdea: seedIdea.trim(), universeId: onrampUniverseId },
+      { silent: true },
+    )
       .catch((err) => { toast.error(err?.message || 'Failed to create'); return null; });
     setCreating(false);
     if (created) navigate(`/story-builder/${created.id}/idea`);
