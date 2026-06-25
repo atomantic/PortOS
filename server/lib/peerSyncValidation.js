@@ -307,7 +307,7 @@ const peerCosHistoryManifestEntrySchema = z.object({
 export const peerCosHistoryManifestSchema = z.object({
   schemaVersion: z.number().int().min(0).max(1_000_000),
   manifestHash: hex64,
-  entries: z.array(peerCosHistoryManifestEntrySchema).max(300_000),
+  entries: z.array(peerCosHistoryManifestEntrySchema).max(150_000),
 }).strict();
 
 export const peerPullMetadataSchema = z.object({
