@@ -32,7 +32,8 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { firstLine } from './cos.js';
+import { firstLine, isPerpetualRefillCandidate } from './cos.js';
+import { canQueueImprovementTasks } from './cosState.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const COS_SRC = readFileSync(join(__dirname, 'cos.js'), 'utf-8');
@@ -773,9 +774,11 @@ describe('cos.js source — priority + capacity invariants', () => {
     const reregIdx = skipBranch.indexOf('registerSingleJobSchedule');
     expect(recordIdx, 'autonomy-skip must call recordJobGateSkip').toBeGreaterThan(-1);
     expect(recordIdx, 'recordJobGateSkip must precede re-registration (no 1s refire loop)').toBeLessThan(reregIdx);
-    // The improvement-check timer must gate its queueEligibleImprovementTasks call.
-    expect(SCHED_SRC, 'improvement-check timer must gate queueing on cos === execute')
-      .toMatch(/idleReviewEnabled\s*&&\s*getDomainMode\(\s*state\.config\s*,\s*['"]cos['"]\s*\)\s*===\s*['"]execute['"]/);
+    // The improvement-check timer must gate its queueEligibleImprovementTasks
+    // call on the shared canQueueImprovementTasks predicate (idle-review +
+    // cos===execute), which encapsulates the auto-run domain gate.
+    expect(SCHED_SRC, 'improvement-check timer must gate queueing via canQueueImprovementTasks')
+      .toMatch(/if\s*\(\s*canQueueImprovementTasks\(\s*state\s*\)\s*\)/);
   });
 
   it('both on-demand loops dedupe the cooldown stamp per app via reviewStartedApps set', () => {
@@ -1051,4 +1054,101 @@ describe('addTask — first-line dedup', () => {
   // dedup scope) moved to cosTaskStore.test.js when addTask was extracted into
   // cosTaskStore.js. The firstLine behavioral tests above stay here because
   // cos.js still re-exports firstLine for backward compat.
+});
+
+// ─── Perpetual re-queue on completion (drain back-to-back) ─────────────────
+//
+// Perpetual schedules (e.g. claim-issue) are documented as "drain actionable
+// work back-to-back (re-queue on completion)" (taskSchedule.js), but the only
+// thing that queues them is the ~hourly cos-improvement-check timer — the
+// agent:completed handler (dequeueNextTask) merely drains already-queued tasks
+// and never regenerates perpetual work. A "ready" perpetual task doesn't even
+// shorten that timer (cosJobScheduler only gates the delay on status:'scheduled'
+// tasks), so when claim-issue is the only enabled schedule the next run waits up
+// to MAX_CHECK_INTERVAL (1h) instead of spawning immediately after the prior one.
+//
+// `isPerpetualRefillCandidate` is the pure gate that lets the completion handler
+// decide whether the just-finished agent belongs to a perpetual schedule that
+// should be refilled right now.
+describe('isPerpetualRefillCandidate — perpetual drain on completion', () => {
+  const schedule = {
+    tasks: {
+      'claim-issue': { type: 'perpetual', enabled: true },
+      'claim-issue-disabled': { type: 'perpetual', enabled: false },
+      'plan-task': { type: 'daily', enabled: true },
+    },
+  };
+  const agentFor = (analysisType, key = 'taskAnalysisType') => ({
+    metadata: analysisType == null ? {} : { [key]: analysisType },
+  });
+
+  it('is true for an enabled perpetual type matching the agent task', () => {
+    expect(isPerpetualRefillCandidate(agentFor('claim-issue'), schedule)).toBe(true);
+  });
+
+  it('is false for a disabled perpetual type (toggled off after spawn)', () => {
+    expect(isPerpetualRefillCandidate(agentFor('claim-issue-disabled'), schedule)).toBe(false);
+  });
+
+  it('is false for a non-perpetual schedule type', () => {
+    expect(isPerpetualRefillCandidate(agentFor('plan-task'), schedule)).toBe(false);
+  });
+
+  it('is false for an unknown / unscheduled type', () => {
+    expect(isPerpetualRefillCandidate(agentFor('ghost-type'), schedule)).toBe(false);
+  });
+
+  it('reads the analysis type from metadata.analysisType and selfImprovementType fallbacks', () => {
+    expect(isPerpetualRefillCandidate(agentFor('claim-issue', 'analysisType'), schedule)).toBe(true);
+    expect(isPerpetualRefillCandidate(agentFor('claim-issue', 'selfImprovementType'), schedule)).toBe(true);
+  });
+
+  it('is false for missing agent / metadata / schedule (no throw)', () => {
+    expect(isPerpetualRefillCandidate(null, schedule)).toBe(false);
+    expect(isPerpetualRefillCandidate(agentFor(null), schedule)).toBe(false);
+    expect(isPerpetualRefillCandidate(agentFor('claim-issue'), null)).toBe(false);
+    expect(isPerpetualRefillCandidate(agentFor('claim-issue'), { tasks: null })).toBe(false);
+  });
+});
+
+// Source-level guard: the agent:completed handler must wire the perpetual
+// refill so completion drains back-to-back instead of waiting for the hourly
+// improvement-check timer.
+describe('cos.js source — agent:completed triggers perpetual refill', () => {
+  it("the agent:completed listener invokes the perpetual refill path", () => {
+    const onIdx = COS_SRC.indexOf("cosEvents.on('agent:completed'");
+    expect(onIdx, 'agent:completed listener must exist').toBeGreaterThan(-1);
+    const handlerSlice = COS_SRC.slice(onIdx, onIdx + 1200);
+    expect(
+      handlerSlice.includes('refillPerpetualForCompletedAgent'),
+      'agent:completed handler must call refillPerpetualForCompletedAgent'
+    ).toBe(true);
+  });
+});
+
+// Shared autonomous-queuing gate (cosState.canQueueImprovementTasks). Extracted
+// from three drift-prone copies (post-startup queue, improvement-check timer,
+// perpetual drain refill). Queuing requires BOTH idle-review on AND the CoS
+// auto-run domain in `execute`.
+describe('canQueueImprovementTasks — autonomous queuing gate', () => {
+  const cfg = (idleReviewEnabled, cos) => ({
+    config: { idleReviewEnabled, domainAutonomy: { cos } },
+  });
+
+  it('is true only when idle-review is on AND cos auto-run is execute', () => {
+    expect(canQueueImprovementTasks(cfg(true, 'execute'))).toBe(true);
+  });
+
+  it('is false when cos auto-run is off or dry-run', () => {
+    expect(canQueueImprovementTasks(cfg(true, 'off'))).toBe(false);
+    expect(canQueueImprovementTasks(cfg(true, 'dry-run'))).toBe(false);
+  });
+
+  it('is false when idle-review is disabled, regardless of cos mode', () => {
+    expect(canQueueImprovementTasks(cfg(false, 'execute'))).toBe(false);
+  });
+
+  it('coerces a falsy/undefined idleReviewEnabled to a boolean false', () => {
+    expect(canQueueImprovementTasks(cfg(undefined, 'execute'))).toBe(false);
+  });
 });

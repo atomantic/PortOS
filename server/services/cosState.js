@@ -128,6 +128,16 @@ export function isImprovementEnabled(state) {
     (state.config.selfImprovementEnabled || state.config.appImprovementEnabled);
 }
 
+// Autonomous improvement-task QUEUING gate. Queuing mutates COS-TASKS.md with
+// autonomous internal work, so it requires BOTH the idle-review flag AND the CoS
+// auto-run domain in `execute` (off/dry-run are planning postures that withhold
+// the queue mutation). Shared by the post-startup queue, the
+// cos-improvement-check timer, and the perpetual drain-on-completion refill so
+// the three gates can't drift apart.
+export function canQueueImprovementTasks(state) {
+  return Boolean(state.config.idleReviewEnabled) && getDomainMode(state.config, 'cos') === 'execute';
+}
+
 export async function loadState() {
   if (stateCache) return stateCache;
 
