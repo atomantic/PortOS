@@ -42,16 +42,23 @@ export default function ManuscriptHighlightedProse({ content, spans, openComment
     return nl === -1 ? text.length : nl + 1;
   }, [inlineCard, openCommentId, spans, text]);
 
+  // The open comment can tile into several active segments (overlapping spans
+  // split one highlight in two; the inline-card injection can split a segment).
+  // Pin `activeRef` to the FIRST active fragment rendered so the reveal scrolls
+  // to the start of the match, not a trailing piece. Reset per render.
+  let activeRefTaken = false;
   const renderSegment = (seg, key, textOverride) => {
     const segText = textOverride ?? seg.text;
     if (!segText) return null;
     if (!seg.commentIds.length) return <span key={key}>{segText}</span>;
     const active = seg.commentIds.includes(openCommentId);
+    const takeRef = active && !activeRefTaken;
+    if (takeRef) activeRefTaken = true;
     const tone = SEVERITY_TONE[seg.topSeverity] || SEVERITY_TONE.low;
     return (
       <button
         key={key}
-        ref={active ? activeRef : undefined}
+        ref={takeRef ? activeRef : undefined}
         type="button"
         onClick={() => onOpenComment(seg.commentIds[0])}
         aria-expanded={active}

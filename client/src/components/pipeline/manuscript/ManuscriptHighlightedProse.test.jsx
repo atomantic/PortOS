@@ -67,6 +67,23 @@ describe('ManuscriptHighlightedProse', () => {
     expect(scrollSpy).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center' });
   });
 
+  it('flashes the FIRST active fragment when an overlapping span splits the open highlight (#1601)', () => {
+    window.HTMLElement.prototype.scrollIntoView = vi.fn();
+    // c1 spans 'ABCDE'; c2 overlaps 'CDE', so buildHighlightSegments tiles c1
+    // into two active-for-c1 fragments ('AB' then 'CDE'). The reveal must pin to
+    // the first ('AB'), not the trailing piece.
+    const content = 'ABCDE rest';
+    const spans = [
+      { commentId: 'c1', severity: 'high', start: 0, end: 5 },
+      { commentId: 'c2', severity: 'low', start: 2, end: 5 },
+    ];
+    render(
+      <ManuscriptHighlightedProse content={content} spans={spans} openCommentId="c1" onOpenComment={() => {}} />,
+    );
+    expect(screen.getByText('AB').classList.contains('manuscript-anchor-flash')).toBe(true);
+    expect(screen.getByText('CDE').classList.contains('manuscript-anchor-flash')).toBe(false);
+  });
+
   it('does not flash any highlight when the open note is not located', () => {
     const scrollSpy = vi.fn();
     window.HTMLElement.prototype.scrollIntoView = scrollSpy;
