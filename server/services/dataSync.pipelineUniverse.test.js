@@ -1107,6 +1107,11 @@ describe('dataSync — per-category schema gate (cross-key isolation)', () => {
       // manifest). Gated at applyIncomingPush via compareSchemaVersions /
       // RECORD_KIND_SCHEMA_CATEGORIES.writersRoomWork.
       'writersRoomWorks',
+      // Standalone media library (#1566) → its own receiver-pull endpoint
+      // (GET /api/peer-sync/library-manifest), NOT the file-snapshot transfer.
+      // Versioned for the manifest envelope and gated by syncMediaLibraryFromPeer's
+      // gentle skip-if-ahead; declared non-record in NON_RECORD_SCHEMA_CATEGORIES.
+      'mediaLibrary',
     ]);
     const covered = new Set(Object.values(dataSync.getSnapshotCategorySchemaKeys()).flat());
     for (const key of Object.keys(PORTOS_SCHEMA_VERSIONS)) {

@@ -2832,6 +2832,11 @@ export async function buildMediaLibraryManifest() {
 // post-boot sweep just re-confirms disk, cheap because the diff finds everything
 // present and pulls nothing).
 const lastLibraryManifestHash = new Map(); // peerInstanceId → manifestHash
+// Consecutive unchanged-manifest ticks per peer; after FORCE_REVALIDATE_EVERY we
+// force a full re-diff even though the remote manifest is unchanged, so a local
+// file loss self-heals without waiting for a restart or a remote library change.
+const libraryUnchangedSkips = new Map(); // peerInstanceId → count
+const FORCE_REVALIDATE_EVERY = 10; // ~10 min at the 60s sweep cadence
 // Per-peer re-entrancy guard so a slow sweep (large pull) can't overlap itself
 // when the periodic tick fires again before it finishes.
 const librarySweepInFlight = new Set(); // peerInstanceId
@@ -2874,6 +2879,18 @@ export async function syncMediaLibraryFromPeer(peer) {
       .finally(() => clearTimeout(timeoutId))
       .catch(() => null);
     if (!res || !res.ok) return { pulled: 0, skipped: 'unreachable' };
+    // Enforce the manifest cap before buffering the body. peerFetch's `maxBytes`
+    // only streams-caps the HTTPS (host) shim; for a plain-HTTP (address) peer it
+    // delegates to native fetch, which ignores `maxBytes`, so `res.json()` would
+    // otherwise buffer an unbounded body. Express on the sender sets Content-Length
+    // for the JSON response, so a content-length check here is the real cap (mirrors
+    // the record-pull path's RECORD_PAYLOAD_MAX_BYTES guard). A peer that omits it
+    // is a trusted tailnet peer per the threat model.
+    const declaredLen = Number(res.headers?.get?.('content-length'));
+    if (Number.isFinite(declaredLen) && declaredLen > MEDIA_LIBRARY_MANIFEST_MAX_BYTES) {
+      console.log(`⚠️ peerSync: media-library manifest from ${peer.name || peer.instanceId} too large (${declaredLen} > ${MEDIA_LIBRARY_MANIFEST_MAX_BYTES}) — skipping`);
+      return { pulled: 0, skipped: 'too-large' };
+    }
     const body = await res.json().catch(() => null);
     const parsed = peerLibraryManifestSchema.safeParse(body);
     if (!parsed.success) {
@@ -2889,9 +2906,18 @@ export async function syncMediaLibraryFromPeer(peer) {
       console.log(`⏸️ peerSync: ${peer.name || peer.instanceId} media-library manifest is schema v${manifest.schemaVersion} > local v${PORTOS_SCHEMA_VERSIONS.mediaLibrary} — skipping until this instance updates`);
       return { pulled: 0, skipped: 'schema-ahead' };
     }
-    // Unchanged-library short-circuit.
+    // Unchanged-library short-circuit — but force a full re-diff every
+    // FORCE_REVALIDATE_EVERY consecutive unchanged ticks so a LOCAL file loss /
+    // corruption self-heals even while the REMOTE manifest stays put. (The
+    // recorded hash is in-memory, so a process restart also re-diffs; this covers
+    // the mid-session window between restarts.)
     if (lastLibraryManifestHash.get(peer.instanceId) === manifest.manifestHash) {
-      return { pulled: 0, skipped: 'unchanged' };
+      const skips = (libraryUnchangedSkips.get(peer.instanceId) || 0) + 1;
+      if (skips < FORCE_REVALIDATE_EVERY) {
+        libraryUnchangedSkips.set(peer.instanceId, skips);
+        return { pulled: 0, skipped: 'unchanged' };
+      }
+      libraryUnchangedSkips.set(peer.instanceId, 0); // periodic forced re-diff — fall through
     }
     const missing = await diffAssetManifestAgainstLocal(manifest.assets);
     if (missing.length === 0) {

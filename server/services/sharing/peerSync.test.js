@@ -3863,6 +3863,47 @@ describe('media-library federation (#1566)', () => {
       expect(res2.skipped).not.toBe('unchanged');
     });
 
+    it('skips a manifest whose Content-Length exceeds the cap (unbounded-body guard for HTTP peers)', async () => {
+      vi.mocked(peerFetch).mockResolvedValue({
+        ok: true,
+        headers: new Headers({ 'content-length': String(64 * 1024 * 1024) }), // > 32MB cap
+        json: async () => ({ schemaVersion: PORTOS_SCHEMA_VERSIONS.mediaLibrary, manifestHash: 'a'.repeat(64), assets: [] }),
+      });
+      const res = await syncMediaLibraryFromPeer(mkPeer('fs-huge'));
+      expect(res.skipped).toBe('too-large');
+    });
+
+    it('forces a re-diff after repeated unchanged ticks so a local file loss self-heals', async () => {
+      const peer = mkPeer('fs-selfheal');
+      vi.mocked(getPeers).mockResolvedValue([peer]);
+      const bytes = Buffer.from('heal-bytes');
+      const manifest = {
+        schemaVersion: PORTOS_SCHEMA_VERSIONS.mediaLibrary,
+        manifestHash: 'f0'.repeat(32),
+        assets: [{ filename: 'heal.wav', kind: 'audio' }], // existence-only diff
+      };
+      vi.mocked(peerFetch).mockImplementation(async (url) => {
+        if (String(url).endsWith('/library-manifest')) return { ok: true, json: async () => manifest };
+        return {
+          ok: true,
+          headers: new Headers({ 'content-length': String(bytes.length) }),
+          arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+        };
+      });
+      // First sweep lands the file and records the manifestHash.
+      expect((await syncMediaLibraryFromPeer(peer)).pulled).toBe(1);
+      // Simulate local loss after the hash was recorded.
+      await rm(join(PATHS.audio, 'heal.wav'), { force: true });
+      // Unchanged ticks short-circuit until the periodic forced re-diff fires and
+      // re-pulls the lost file (proves self-heal without a restart).
+      let healed = false;
+      for (let i = 0; i < 12; i++) {
+        const r = await syncMediaLibraryFromPeer(peer);
+        if (r.skipped !== 'unchanged') { healed = true; break; }
+      }
+      expect(healed).toBe(true);
+    });
+
     it('records the manifestHash + reconciles once missing bytes actually land', async () => {
       const peer = mkPeer('fs-success');
       vi.mocked(getPeers).mockResolvedValue([peer]);
