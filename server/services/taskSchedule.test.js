@@ -92,6 +92,9 @@ import {
   resetExecutionHistory,
   triggerOnDemandTask,
   getScheduleStatus,
+  computePerpetualRecheckAt,
+  parkPerpetual,
+  clearPerpetualPark,
   PROMPT_VERSIONS,
   DEFAULT_TASK_INTERVALS,
   MANAGED_AGENT_OPTIONS,
@@ -149,6 +152,7 @@ describe('taskSchedule', () => {
       expect(INTERVAL_TYPES.ON_DEMAND).toBe('on-demand')
       expect(INTERVAL_TYPES.CUSTOM).toBe('custom')
       expect(INTERVAL_TYPES.CRON).toBe('cron')
+      expect(INTERVAL_TYPES.PERPETUAL).toBe('perpetual')
     })
   })
 
@@ -1108,6 +1112,132 @@ describe('taskSchedule', () => {
       const status = await getScheduleStatus()
 
       expect(status.improvementEnabled).toBe(false)
+    })
+  })
+
+  describe('perpetual (drain-until-done)', () => {
+    describe('computePerpetualRecheckAt', () => {
+      it('uses recheckIntervalMs when no cron is set', async () => {
+        const at = await computePerpetualRecheckAt({ recheckIntervalMs: 3600000 }, 0)
+        expect(at).toBe(new Date(3600000).toISOString())
+      })
+
+      it('defaults to a daily (24h) recheck when nothing is configured', async () => {
+        const at = await computePerpetualRecheckAt({}, 0)
+        expect(at).toBe(new Date(24 * 60 * 60 * 1000).toISOString())
+      })
+
+      it('prefers a 5-field recheckCron over the interval', async () => {
+        const cronNext = new Date('2999-01-02T09:00:00.000Z')
+        parseCronToNextRun.mockReturnValue(cronNext)
+        const at = await computePerpetualRecheckAt({ recheckCron: '0 9 * * *', recheckIntervalMs: 1000 }, 0)
+        expect(at).toBe(cronNext.toISOString())
+        expect(parseCronToNextRun).toHaveBeenCalled()
+      })
+
+      it('falls back to the interval when recheckCron is not a 5-field expression', async () => {
+        const at = await computePerpetualRecheckAt({ recheckCron: 'not-a-cron', recheckIntervalMs: 5000 }, 0)
+        expect(at).toBe(new Date(5000).toISOString())
+      })
+    })
+
+    describe('shouldRunTask', () => {
+      it('is due (drain) when enabled and not parked', async () => {
+        mockSchedule({ tasks: { 'claim-issue': { type: 'perpetual', enabled: true } } })
+        const result = await shouldRunTask('claim-issue')
+        expect(result.shouldRun).toBe(true)
+        expect(result.reason).toBe('perpetual-drain')
+      })
+
+      it('is NOT due while parked in the future', async () => {
+        const future = new Date(Date.now() + 60 * 60 * 1000).toISOString()
+        mockSchedule({
+          tasks: { 'claim-issue': { type: 'perpetual', enabled: true } },
+          executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: {}, parkedUntil: future, parkReason: 'no-actionable-issues', parkActionableCount: 0 } }
+        })
+        const result = await shouldRunTask('claim-issue')
+        expect(result.shouldRun).toBe(false)
+        expect(result.reason).toBe('perpetual-parked')
+        expect(result.nextRunAt).toBe(future)
+        expect(result.parkReason).toBe('no-actionable-issues')
+      })
+
+      it('becomes due again (recheck) once the park elapses', async () => {
+        const past = new Date(Date.now() - 60 * 1000).toISOString()
+        mockSchedule({
+          tasks: { 'claim-issue': { type: 'perpetual', enabled: true } },
+          executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: {}, parkedUntil: past } }
+        })
+        const result = await shouldRunTask('claim-issue')
+        expect(result.shouldRun).toBe(true)
+        expect(result.reason).toBe('perpetual-recheck')
+      })
+
+      it('reads per-app park state', async () => {
+        isTaskTypeEnabledForApp.mockResolvedValue(true)
+        const future = new Date(Date.now() + 60 * 60 * 1000).toISOString()
+        mockSchedule({
+          tasks: { 'claim-issue': { type: 'perpetual', enabled: true } },
+          executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: { 'app-1': { lastRun: null, count: 0, parkedUntil: future } } } }
+        })
+        const result = await shouldRunTask('claim-issue', 'app-1')
+        expect(result.shouldRun).toBe(false)
+        expect(result.reason).toBe('perpetual-parked')
+      })
+    })
+
+    describe('getNextTaskType', () => {
+      it('prioritizes a draining perpetual task over a due daily task', async () => {
+        mockSchedule({
+          tasks: {
+            'claim-issue': { type: 'perpetual', enabled: true },
+            'security': { type: 'daily', enabled: true }
+          }
+        })
+        const next = await getNextTaskType()
+        expect(next.taskType).toBe('claim-issue')
+        expect(next.reason).toBe('perpetual-drain')
+      })
+
+      it('does not pick a parked perpetual task — yields to the daily', async () => {
+        const future = new Date(Date.now() + 60 * 60 * 1000).toISOString()
+        mockSchedule({
+          tasks: {
+            'claim-issue': { type: 'perpetual', enabled: true },
+            'security': { type: 'daily', enabled: true }
+          },
+          executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: {}, parkedUntil: future } }
+        })
+        const next = await getNextTaskType()
+        expect(next.taskType).toBe('security')
+      })
+    })
+
+    describe('parkPerpetual / clearPerpetualPark', () => {
+      it('parkPerpetual stamps parkedUntil + reason on the per-app record', async () => {
+        mockSchedule({ tasks: { 'claim-issue': { type: 'perpetual', enabled: true, recheckIntervalMs: 3600000 } } })
+        const record = await parkPerpetual('claim-issue', 'app-1', { reason: 'no-actionable-issues', actionableCount: 0 })
+        expect(record.parkedUntil).toBeTruthy()
+        expect(record.parkReason).toBe('no-actionable-issues')
+        expect(record.parkActionableCount).toBe(0)
+      })
+
+      it('clearPerpetualPark returns true when a park existed', async () => {
+        const future = new Date(Date.now() + 60 * 60 * 1000).toISOString()
+        mockSchedule({
+          tasks: { 'claim-issue': { type: 'perpetual', enabled: true } },
+          executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: { 'app-1': { lastRun: null, count: 0, parkedUntil: future } } } }
+        })
+        expect(await clearPerpetualPark('claim-issue', 'app-1')).toBe(true)
+      })
+
+      it('clearPerpetualPark is a no-op (false) when nothing is parked', async () => {
+        mockSchedule({
+          tasks: { 'claim-issue': { type: 'perpetual', enabled: true } },
+          executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: {} } }
+        })
+        expect(await clearPerpetualPark('claim-issue', 'app-1')).toBe(false)
+      })
     })
   })
 })

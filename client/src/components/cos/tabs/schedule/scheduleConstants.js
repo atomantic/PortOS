@@ -8,7 +8,8 @@ export const INTERVAL_LABELS = {
   once: 'Once',
   'on-demand': 'On Demand',
   custom: 'Custom',
-  cron: 'Cron'
+  cron: 'Cron',
+  perpetual: 'Perpetual'
 };
 
 export const INTERVAL_DESCRIPTIONS = {
@@ -18,7 +19,8 @@ export const INTERVAL_DESCRIPTIONS = {
   once: 'Runs once then stops',
   'on-demand': 'Only runs when manually triggered',
   custom: 'Custom interval',
-  cron: 'Cron expression schedule'
+  cron: 'Cron expression schedule',
+  perpetual: 'Drains actionable work back-to-back until none remains, then rechecks on a cadence'
 };
 
 const BADGE_COLORS = {
@@ -44,6 +46,7 @@ export const INTERVAL_BADGE_VARIANT = {
   once: 'warning',
   'on-demand': 'gray',
   cron: 'cyan',
+  perpetual: 'success',
 };
 
 // --- Status grouping -------------------------------------------------------
@@ -101,6 +104,18 @@ export function describeNextRun(config) {
     };
   }
   if (group === 'on-demand') return { text: 'Manual trigger only', tone: 'text-gray-400' };
+  if (config.type === 'perpetual') {
+    const reason = config.status?.reason;
+    if (reason === 'perpetual-parked') {
+      const next = config.status?.nextRunAt;
+      return {
+        text: next ? `parked · rechecks ${timeUntil(next, 'soon')}` : 'parked — no work',
+        tone: 'text-gray-400',
+        title: config.status?.parkReason ? `Parked: ${config.status.parkReason}` : undefined,
+      };
+    }
+    return { text: 'draining — runs back-to-back until done', tone: 'text-port-success' };
+  }
   const next = config.status?.nextRunAt;
   return {
     text: next ? timeUntil(next, 'soon') : `${INTERVAL_LABELS[config.type] || config.type} — pending`,

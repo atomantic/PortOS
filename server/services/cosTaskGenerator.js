@@ -1424,6 +1424,35 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
       if ('openPR' in delegatedMeta) metadata.openPR = delegatedMeta.openPR;
     }
   }
+  // Perpetual (drain-until-done) gate. When this task type runs on the
+  // 'perpetual' interval, a programmatic work-detector decides whether there's
+  // anything to claim BEFORE we build the (expensive) prompt or burn an agent:
+  //   - actionable  → clear any park so the back-to-back drain continues, and
+  //     stamp metadata.perpetual so the post-completion cooldown is skipped
+  //     (agentCompletion.js) and the next tick re-dispatches promptly.
+  //   - idle (definitive) → PARK on the recheck cadence and skip this dispatch.
+  //   - transient probe failure (gh down) → skip WITHOUT parking so the next
+  //     tick retries instead of waiting out a full recheck cadence.
+  // The detector keys on the RESOLVED promptTaskType so a claim-work router run
+  // probes the concrete tracker (claim-issue → GitHub issues, plan-task → PLAN.md).
+  if (interval.type === taskSchedule.INTERVAL_TYPES.PERPETUAL) {
+    const { detectActionableWork } = await import('./perpetualWork.js');
+    const detection = await detectActionableWork(promptTaskType, app, {
+      issueAuthorFilter: metadata.issueAuthorFilter || 'owner'
+    });
+    if (detection.actionable) {
+      await taskSchedule.clearPerpetualPark(taskType, app.id);
+      metadata.perpetual = true;
+    } else if (detection.transient) {
+      emitLog('debug', `Perpetual ${taskType} skip for ${app.name} (transient: ${detection.reason})`, { appId: app.id });
+      return null;
+    } else {
+      await taskSchedule.parkPerpetual(taskType, app.id, { reason: detection.reason, actionableCount: detection.count });
+      emitLog('info', `Perpetual ${taskType} parked for ${app.name}: ${detection.reason}`, { appId: app.id });
+      return null;
+    }
+  }
+
   // Honor a direct claim-work prompt customization if the user set one;
   // otherwise delegate to the resolved tracker's prompt body via
   // getTaskPrompt(promptTaskType), which reads THAT type's interval.prompt

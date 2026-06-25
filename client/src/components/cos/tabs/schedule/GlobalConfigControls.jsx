@@ -31,11 +31,23 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
   const activeApps = apps?.filter(app => !app.archived) || [];
 
   const [cronEditing, setCronEditing] = useState(false);
+  const [recheckEditing, setRecheckEditing] = useState(false);
 
   const handleTypeChange = async (newType) => {
     if (newType === 'cron') {
       setCronEditing(true);
       setSelectedType('cron');
+      return;
+    }
+    if (newType === 'perpetual') {
+      // Don't null recheckCron — switching to perpetual keeps any prior cadence.
+      setCronEditing(false);
+      setUpdating(true);
+      setSelectedType('perpetual');
+      await onUpdate(taskType, { type: 'perpetual' }).catch(() => {
+        setSelectedType(config.type);
+      });
+      setUpdating(false);
       return;
     }
     setCronEditing(false);
@@ -53,6 +65,17 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
       setSelectedType(config.type);
     });
     setCronEditing(false);
+    setUpdating(false);
+  };
+
+  const handleRecheckCronSave = async (expr) => {
+    setUpdating(true);
+    // Switching to perpetual together with its recheck cadence in one PUT so a
+    // freshly-picked perpetual type lands with the cadence already set.
+    await onUpdate(taskType, { type: 'perpetual', recheckCron: expr }).catch(() => {
+      setSelectedType(config.type);
+    });
+    setRecheckEditing(false);
     setUpdating(false);
   };
 
@@ -157,6 +180,7 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
           <option value="once">Once (run once then stop)</option>
           <option value="on-demand">On Demand (manual trigger only)</option>
           <option value="cron">Cron (custom schedule)</option>
+          <option value="perpetual">Perpetual (drain until done, then recheck)</option>
         </select>
         {(selectedType === 'cron' && (cronEditing || config.type === 'cron')) ? (
           <CronInput
@@ -169,6 +193,41 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
           <p className="text-xs text-gray-500 mt-1">{INTERVAL_DESCRIPTIONS[selectedType]}</p>
         )}
       </div>
+
+      {selectedType === 'perpetual' && (
+        <div>
+          <label className="text-sm text-gray-400 block mb-2">Recheck Cadence</label>
+          {(recheckEditing || config.recheckCron) ? (
+            <CronInput
+              value={config.recheckCron || '0 9 * * *'}
+              onSave={handleRecheckCronSave}
+              onCancel={() => setRecheckEditing(false)}
+            />
+          ) : (
+            <button
+              type="button"
+              onClick={() => setRecheckEditing(true)}
+              disabled={updating}
+              className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-left text-sm text-gray-300 hover:border-gray-500"
+            >
+              Daily (default) — click to set a custom recheck schedule
+            </button>
+          )}
+          <p className="text-xs text-gray-500 mt-1">
+            Runs back-to-back while actionable work remains, then parks and re-probes on this schedule.
+            The check is programmatic (no LLM) — e.g. claim-issue counts open, claimable issues; an issue
+            the agent tags <code>needs-input</code> is excluded so the drain converges.
+          </p>
+          {status.reason === 'perpetual-parked' && (
+            <p className="text-xs text-port-warning mt-1">
+              Parked{status.parkReason ? ` (${status.parkReason})` : ''}{status.nextRunAt ? ` — rechecks ${new Date(status.nextRunAt).toLocaleString()}` : ''}
+            </p>
+          )}
+          {(status.reason === 'perpetual-drain' || status.reason === 'perpetual-recheck') && (
+            <p className="text-xs text-port-success mt-1">Draining — actionable work available</p>
+          )}
+        </div>
+      )}
 
       {!config.taskMetadata?.pipeline?.stages?.length && (
         <>

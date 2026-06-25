@@ -11,6 +11,12 @@
  * - 'once': Run once per app/globally then stop
  * - 'on-demand': Only run when manually triggered
  * - 'custom': Custom interval in milliseconds
+ * - 'cron': Cron expression schedule
+ * - 'perpetual': Drain actionable work back-to-back (re-queue on completion)
+ *   until a programmatic work-detector reports nothing actionable, then PARK
+ *   on a recheck cadence (`recheckCron` / `recheckIntervalMs`, default daily).
+ *   See server/services/perpetualWork.js for the detector registry and the
+ *   perpetual gate in cosTaskGenerator.generateManagedAppImprovementTaskForType.
  */
 
 import { writeFile } from 'fs/promises';
@@ -61,10 +67,15 @@ export const INTERVAL_TYPES = {
   ONCE: 'once',              // Runs once per app or globally
   ON_DEMAND: 'on-demand',    // Only runs when manually triggered
   CUSTOM: 'custom',          // Custom interval in milliseconds
-  CRON: 'cron'               // Cron expression schedule
+  CRON: 'cron',              // Cron expression schedule
+  PERPETUAL: 'perpetual'     // Drain back-to-back until a work-detector idles, then park on a recheck cadence
 };
 
 const WEEK = 7 * DAY;
+
+// Default cadence a parked perpetual task waits before re-probing its
+// work-detector, when neither `recheckCron` nor `recheckIntervalMs` is set.
+const DEFAULT_PERPETUAL_RECHECK_MS = DAY;
 
 /**
  * Get learning-adjusted interval for a task type
@@ -645,6 +656,88 @@ export async function getExecutionHistory(taskType) {
   return schedule.executions[key] || { lastRun: null, count: 0, perApp: {} };
 }
 
+// ============================================================
+// Perpetual (drain-until-done) park state
+// ============================================================
+
+/**
+ * Compute when a parked perpetual task should next re-probe its work-detector.
+ * Prefers `recheckCron` (a 5-field cron string, evaluated in the user's
+ * timezone) over `recheckIntervalMs`; falls back to DEFAULT_PERPETUAL_RECHECK_MS.
+ * Returns an ISO timestamp string.
+ */
+export async function computePerpetualRecheckAt(interval, fromMs = Date.now()) {
+  const cron = interval?.recheckCron;
+  if (typeof cron === 'string' && cron.trim().split(/\s+/).length === 5) {
+    const timezone = await getUserTimezone();
+    const next = parseCronToNextRun(cron, new Date(fromMs), timezone);
+    if (next) return next.toISOString();
+  }
+  const ms = Number(interval?.recheckIntervalMs) > 0
+    ? Number(interval.recheckIntervalMs)
+    : DEFAULT_PERPETUAL_RECHECK_MS;
+  return new Date(fromMs + ms).toISOString();
+}
+
+/**
+ * The park record lives ALONGSIDE the execution record (global or per-app), so a
+ * perpetual task's "parked until" survives restarts the same way `lastRun` does.
+ * Returns the execution sub-record that holds the park fields, creating the
+ * skeleton if absent.
+ */
+function ensureExecutionRecord(schedule, taskType, appId) {
+  const key = taskType.startsWith('task:') ? taskType : `task:${taskType}`;
+  if (!schedule.executions[key]) {
+    schedule.executions[key] = { lastRun: null, count: 0, perApp: {} };
+  }
+  const top = schedule.executions[key];
+  if (appId) {
+    if (!top.perApp) top.perApp = {};
+    if (!top.perApp[appId]) top.perApp[appId] = { lastRun: null, count: 0 };
+    return top.perApp[appId];
+  }
+  return top;
+}
+
+/**
+ * Park a perpetual task: its work-detector reported nothing actionable, so stop
+ * draining and wait until `parkedUntil` before re-probing. Stamps the park
+ * fields on the (per-app or global) execution record.
+ */
+export async function parkPerpetual(taskType, appId = null, { reason = null, actionableCount = 0 } = {}) {
+  const schedule = await loadSchedule();
+  const interval = schedule.tasks[taskType] || {};
+  const parkedUntil = await computePerpetualRecheckAt(interval);
+  const record = ensureExecutionRecord(schedule, taskType, appId);
+  record.parkedUntil = parkedUntil;
+  record.parkReason = reason;
+  record.parkActionableCount = actionableCount;
+  record.parkedAt = new Date().toISOString();
+  await saveSchedule(schedule);
+  emitLog('info', `Perpetual ${taskType} parked until ${parkedUntil} (${reason || 'idle'})`, { taskType, appId, parkedUntil }, '📅 TaskSchedule');
+  cosEvents.emit('schedule:perpetual-parked', { taskType, appId, parkedUntil, reason });
+  return record;
+}
+
+/**
+ * Clear a perpetual task's park so the drain resumes (its work-detector found
+ * actionable work). No-op (and no write) when there's nothing parked.
+ */
+export async function clearPerpetualPark(taskType, appId = null) {
+  const schedule = await loadSchedule();
+  const key = taskType.startsWith('task:') ? taskType : `task:${taskType}`;
+  const top = schedule.executions[key];
+  if (!top) return false;
+  const record = appId ? top.perApp?.[appId] : top;
+  if (!record || record.parkedUntil == null) return false;
+  delete record.parkedUntil;
+  delete record.parkReason;
+  delete record.parkActionableCount;
+  delete record.parkedAt;
+  await saveSchedule(schedule);
+  return true;
+}
+
 /**
  * Check if all runAfter dependencies have completed since this task's last run.
  * Returns { satisfied, pending } where pending lists unfinished dependency task types.
@@ -858,6 +951,32 @@ export async function shouldRunTask(taskType, appId = null) {
       break;
     }
 
+    case INTERVAL_TYPES.PERPETUAL: {
+      // Drain-until-done: a perpetual task is "due" whenever it isn't parked.
+      // The actual programmatic work-detector runs at DISPATCH time (the gate in
+      // generateManagedAppImprovementTaskForType) and PARKS the task — writing
+      // `parkedUntil` onto the execution record — when nothing is actionable.
+      // shouldRunTask only reads that persisted park, so it never does network
+      // I/O even though it's called several times per evaluation cycle. While
+      // parked, the recheck cadence (parkedUntil) gates re-probing; once it
+      // elapses the task becomes due again and the gate re-runs the detector.
+      const parkedUntilMs = appExecution.parkedUntil
+        ? new Date(appExecution.parkedUntil).getTime()
+        : 0;
+      if (parkedUntilMs && now < parkedUntilMs) {
+        result = {
+          shouldRun: false,
+          reason: 'perpetual-parked',
+          nextRunAt: new Date(parkedUntilMs).toISOString(),
+          parkReason: appExecution.parkReason || null,
+          parkActionableCount: appExecution.parkActionableCount ?? null
+        };
+      } else {
+        result = { shouldRun: true, reason: parkedUntilMs ? 'perpetual-recheck' : 'perpetual-drain' };
+      }
+      break;
+    }
+
     default:
       result = { shouldRun: true, reason: 'unknown-default-rotation' };
   }
@@ -908,6 +1027,17 @@ export async function getNextTaskType(appId = null, lastType = '') {
   const cronDue = dueTasks.filter(t => t.interval.type === INTERVAL_TYPES.CRON || t.interval.type === INTERVAL_TYPES.CUSTOM);
   if (cronDue.length > 0) {
     return { taskType: cronDue[0].taskType, reason: `${cronDue[0].interval.type}-due` };
+  }
+
+  // Perpetual tasks actively draining a backlog outrank the loose interval
+  // tasks (daily/weekly/once/rotation) so the drain keeps the app's single
+  // improvement slot until its work-detector idles and it parks — at which
+  // point the loose tasks below get their turn. (Explicit time-pinned cron/
+  // custom schedules above still win, so a perpetual drain can't starve a
+  // user-pinned 9 AM job.)
+  const perpetualDue = dueTasks.filter(t => t.interval.type === INTERVAL_TYPES.PERPETUAL);
+  if (perpetualDue.length > 0) {
+    return { taskType: perpetualDue[0].taskType, reason: 'perpetual-drain' };
   }
 
   const dailyDue = dueTasks.filter(t => t.interval.type === INTERVAL_TYPES.DAILY);

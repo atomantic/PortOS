@@ -55,6 +55,18 @@ export async function processAgentCompletion(agentId, task, success, outputBuffe
       emitLog('warn', `Failed to mark app review completed: ${err.message}`, { appId });
     });
 
+    // Perpetual (drain-until-done) tasks intentionally re-queue back-to-back
+    // until their work-detector idles and the task PARKS itself
+    // (taskSchedule.parkPerpetual). Bumping the per-app review cooldown here
+    // would throttle that drain to one item per cooldown window (default 30
+    // min), defeating the "keep going until done" contract — the drain's own
+    // park IS the throttle. Skip the cooldown bump for them (stats above still
+    // recorded). Same spirit as the recovery-task skip above.
+    if (task.metadata?.perpetual) {
+      emitLog('info', `Skipping cooldown bump for perpetual task on app ${appId}`, { appId, taskId: task.id });
+      return;
+    }
+
     await startAppCooldown(appId, cooldownMs).catch(err => {
       emitLog('warn', `Failed to start app cooldown: ${err.message}`, { appId });
     });

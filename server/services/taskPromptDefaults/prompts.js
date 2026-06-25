@@ -555,7 +555,7 @@ Read the full issue (\`gh issue view "\${NUM}" --comments\`) before writing any 
 - The work would require touching files far outside the issue's scope (>5 unrelated files), suggesting it's bigger than a single claim.
 - The requirements are too ambiguous to implement without user clarification.
 
-If the issue is too ambiguous or large, post a brief comment on the issue explaining what's blocking (\`gh issue comment "\${NUM}" --body "..."\`), release the markers (\`gh issue edit "\${NUM}" --remove-assignee @me --remove-label in-progress\`), remove the worktree, and exit cleanly so a human can refine it. Do NOT leave a half-claimed issue.
+If the issue is too ambiguous or large, post a brief comment on the issue explaining exactly what decision or clarification a human must provide (\`gh issue comment "\${NUM}" --body "..."\`), then **tag it \`needs-input\` so it's excluded from future autonomous claims** (\`gh issue edit "\${NUM}" --add-label needs-input\`), release the claim markers (\`gh issue edit "\${NUM}" --remove-assignee @me --remove-label in-progress\`), remove the worktree, and exit cleanly so a human can refine it. **The \`needs-input\` label is what lets an autonomous drain converge** — Phase 1 step 4 skips \`needs-input\` issues, so without the tag this same un-actionable issue would be re-picked on the next pass forever. Do NOT leave a half-claimed issue.
 
 ## Phase 4 — Implement
 
@@ -679,7 +679,7 @@ Read the full issue (\`glab issue view "\${NUM}"\`) before writing any code. **I
 - The work would require touching files far outside the issue's scope (>5 unrelated files).
 - The requirements are too ambiguous to implement without user clarification.
 
-If too ambiguous or large, post a brief note (\`glab issue note "\${NUM}" -m "..."\`), release the markers (\`glab issue update "\${NUM}" --unassign --unlabel in-progress\`), remove the worktree, and exit cleanly so a human can refine it. Do NOT leave a half-claimed issue.
+If too ambiguous or large, post a brief note explaining exactly what decision or clarification a human must provide (\`glab issue note "\${NUM}" -m "..."\`), then **tag it \`needs-input\` so it's excluded from future autonomous claims** (\`glab issue update "\${NUM}" --label needs-input\`), release the claim markers (\`glab issue update "\${NUM}" --unassign --unlabel in-progress\`), remove the worktree, and exit cleanly so a human can refine it. **The \`needs-input\` label is what lets an autonomous drain converge** — Phase 1 step 4 skips \`needs-input\` issues, so without the tag this same un-actionable issue would be re-picked on the next pass forever. Do NOT leave a half-claimed issue.
 
 ## Phase 4 — Implement
 

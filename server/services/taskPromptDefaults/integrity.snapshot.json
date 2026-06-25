@@ -12,8 +12,8 @@
     "mobile-responsive": "16d8e7f63a673a2de48994c0ac08ef3d",
     "feature-ideas": "0741418bd275b8953131155f8bc89460",
     "plan-task": "5425306bf082b15b6a17f972557d4dd9",
-    "claim-issue": "28f09436566c281a6915d6ad4c1b80f8",
-    "claim-issue-gitlab": "880dd7820ac90c689065e28cdca032fb",
+    "claim-issue": "89308f712f99ad8134224639cd99f135",
+    "claim-issue-gitlab": "271ad9c6efa9dce424103711292fd055",
     "claim-issue-jira": "157cfc80c3d00bcbf3e97aae3998c372",
     "code-reviewer-review": "1cd13ee5142d130f95cc390098d0f278",
     "code-reviewer-implement": "ab2c3e16d54e195bdf856574b7702042",
@@ -34,8 +34,8 @@
   "PROMPT_VERSIONS": {
     "feature-ideas": 9,
     "plan-task": 8,
-    "claim-issue": 2,
-    "claim-issue-gitlab": 1,
+    "claim-issue": 3,
+    "claim-issue-gitlab": 2,
     "claim-issue-jira": 1,
     "pr-reviewer": 3,
     "code-reviewer-a": 1,
@@ -80,8 +80,12 @@
       "f9322140bff7d3f603799c09ce468da9"
     ],
     "pr-watcher": [],
+    "claim-issue-gitlab": [
+      "880dd7820ac90c689065e28cdca032fb"
+    ],
     "claim-issue": [
-      "06190b8089adf1cb2c84bddeb6596af7"
+      "06190b8089adf1cb2c84bddeb6596af7",
+      "28f09436566c281a6915d6ad4c1b80f8"
     ],
     "security": [
       "d0f54c1fbe62d067b1a23ee0a9f3528c"

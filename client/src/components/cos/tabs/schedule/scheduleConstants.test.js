@@ -99,6 +99,22 @@ describe('describeNextRun', () => {
   it('falls back to an interval-label pending string when no next run is known', () => {
     expect(describeNextRun({ enabled: true, type: 'daily' }).text).toBe('Daily — pending');
   });
+
+  it('reports a draining perpetual task', () => {
+    const out = describeNextRun({ enabled: true, type: 'perpetual', status: { reason: 'perpetual-drain' } });
+    expect(out.text).toMatch(/draining/i);
+    expect(out.tone).toBe('text-port-success');
+  });
+
+  it('reports a parked perpetual task with its recheck countdown and reason', () => {
+    const out = describeNextRun({
+      enabled: true,
+      type: 'perpetual',
+      status: { reason: 'perpetual-parked', nextRunAt: '2999-01-01T00:00:00Z', parkReason: 'no-actionable-issues' }
+    });
+    expect(out.text).toMatch(/parked · rechecks/);
+    expect(out.title).toContain('no-actionable-issues');
+  });
 });
 
 describe('coverageTone', () => {
