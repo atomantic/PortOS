@@ -112,6 +112,15 @@ describe('checkCountSeries', () => {
     expect(checkCountSeries(points, 'b')).toEqual([0, 2, 2]);
   });
 
+  it('omits points with no per-check telemetry (null openByCheck) — no false zero-spike for pre-#1597 snapshots', () => {
+    const points = [
+      { openByCheck: null },        // pre-upgrade: unknown, omitted (not 0)
+      { openByCheck: { 'a': 2 } },  // telemetry-bearing
+      { openByCheck: { 'b': 1 } },  // 'a' absent here → legit 0
+    ];
+    expect(checkCountSeries(points, 'a')).toEqual([2, 0]);
+  });
+
   it('returns empty for empty/absent points', () => {
     expect(checkCountSeries([], 'a')).toEqual([]);
     expect(checkCountSeries(undefined, 'a')).toEqual([]);

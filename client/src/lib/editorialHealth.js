@@ -90,17 +90,21 @@ export function orderedChecks(openByCheck = {}, labelFor = (id) => id) {
 
 /**
  * Extract a single check's open-finding count across the trend points (#1597),
- * oldest→newest, as a plain number array. A point with no entry for the check
- * contributes 0 (the check found nothing that revision), so the series length
- * always matches the point count — the sparkline shows the check climbing from /
- * settling to zero rather than dropping points.
+ * oldest→newest, as a plain number array. Points with NO per-check telemetry
+ * (`openByCheck` is null/absent — a snapshot recorded before per-check tracking
+ * shipped) are OMITTED, not counted as 0: coercing them to zero would draw a
+ * false spike out of nowhere on the first post-upgrade run. Within a
+ * telemetry-bearing point, a check absent from the map legitimately contributes
+ * 0 (it found nothing that revision).
  */
 export function checkCountSeries(points = [], checkId) {
   const list = Array.isArray(points) ? points : [];
-  return list.map((p) => {
-    const c = p?.openByCheck?.[checkId];
-    return Number.isFinite(c) ? c : 0;
-  });
+  return list
+    .filter((p) => p?.openByCheck && typeof p.openByCheck === 'object')
+    .map((p) => {
+      const c = p.openByCheck[checkId];
+      return Number.isFinite(c) ? c : 0;
+    });
 }
 
 /**
