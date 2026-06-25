@@ -1134,7 +1134,18 @@ export function buildSetupDigestPrompt({ focus, priorSummary, manuscript }) {
 // chunks — also yielding to spare room. It is a no-op for a single-chunk run (no
 // later chunk consumes a summary), so the common fits-in-one-call provider pays
 // nothing.
-async function runChunkedManuscriptCheck(ctx, { chunks, category, max, callChunk, crossChunkDigest = false, summarizeChunk = null }) {
+//
+// `reserveSetupDigest` (#1667) GUARANTEES the carried setup digest reaches the
+// FINAL chunk for checks that gate a whole-story verdict to it and anchor that
+// verdict on the carried snippet (arc.climax-agency #1583, emotion.reaction-
+// proportionality #1584). The setup digest normally yields to manuscript coverage,
+// so a final chunk packed to within a few hundred chars of the window silently
+// drops the digest and the final-only finding is missed. When this opt-in is set
+// and the digest doesn't fit the final chunk's spare room, the manuscript TAIL is
+// trimmed by the digest's size (the inverse of the usual yield) so the verdict
+// keeps its carried context. Scoped to the final chunk and to opt-in checks only —
+// every other chunk, and every non-reserving check, keeps full manuscript coverage.
+async function runChunkedManuscriptCheck(ctx, { chunks, category, max, callChunk, crossChunkDigest = false, summarizeChunk = null, reserveSetupDigest = false }) {
   const usableChars = Number.isFinite(chunks?.usableChars) ? chunks.usableChars : Infinity;
   const merged = new Map();
   // The presence of `summarizeChunk` (set only when the check opts into the
@@ -1147,6 +1158,13 @@ async function runChunkedManuscriptCheck(ctx, { chunks, category, max, callChunk
     // only checks the signal around the whole check, so without this a multi-
     // chunk check keeps paying for LLM calls whose results will be discarded.
     if (ctx.signal?.aborted) break;
+    // `isFinal` lets a check distinguish the last part of a chunked manuscript
+    // from earlier ones (#1299): a whole-corpus judgment like "this setup is
+    // never paid off" can only be made once the final part is in view, so the
+    // Chekhov check defers its "planted, never fired" findings to it. A
+    // single-chunk run is its own final part, so the common (provider-fits-the-
+    // book) case judges against the whole text. Existing checks ignore the arg.
+    const isFinal = i === chunks.length - 1;
     let text = manuscript;
     if (crossChunkDigest && merged.size) {
       const digest = editorialPriorFindingsDigest([...merged.values()]);
@@ -1156,17 +1174,21 @@ async function runChunkedManuscriptCheck(ctx, { chunks, category, max, callChunk
     }
     if (summarizeChunk && setupSummary) {
       const setup = editorialSetupDigest(setupSummary);
-      // Fits into whatever spare room remains AFTER the findings digest — manuscript
-      // coverage and the findings digest both win over the setup digest if budget is tight.
-      if (setup && setup.length <= usableChars - text.length) text = `${setup}${text}`;
+      if (setup && setup.length <= usableChars - text.length) {
+        // Fits into whatever spare room remains AFTER the findings digest — manuscript
+        // coverage and the findings digest both win over the setup digest if budget is tight.
+        text = `${setup}${text}`;
+      } else if (setup && reserveSetupDigest && isFinal && Number.isFinite(usableChars)) {
+        // #1667: the digest didn't fit, but this check gates its verdict to the final
+        // part and anchors it on the carried snippet — so trim the manuscript tail to
+        // make room rather than drop the carried context. Slicing `text` (findings
+        // digest + manuscript) from the end keeps the higher-value front (the findings
+        // digest and the manuscript head) and total stays at exactly `usableChars`.
+        const room = Math.max(0, usableChars - setup.length);
+        text = `${setup}${text.slice(0, room)}`;
+      }
     }
-    // `isFinal` lets a check distinguish the last part of a chunked manuscript
-    // from earlier ones (#1299): a whole-corpus judgment like "this setup is
-    // never paid off" can only be made once the final part is in view, so the
-    // Chekhov check defers its "planted, never fired" findings to it. A
-    // single-chunk run is its own final part, so the common (provider-fits-the-
-    // book) case judges against the whole text. Existing checks ignore the arg.
-    const content = await callChunk(text, { isFinal: i === chunks.length - 1 });
+    const content = await callChunk(text, { isFinal });
     for (const f of mapLlmFindings(content?.findings, {
       severityDefault: ctx.severityDefault,
       category,
@@ -1227,7 +1249,7 @@ async function runChunkedManuscriptCheck(ctx, { chunks, category, max, callChunk
 // check). Existing checks ignore the extra args. These checks are all
 // manuscript-scoped, so findings keep a model-supplied issue number
 // (`withIssueNumber: true`).
-async function runManuscriptLlmCheck(ctx, { stage, category, overheadTokens = 0, context = null, buildVars, crossChunkDigest = false, crossChunkSetup = false, setupFocus = '' }) {
+async function runManuscriptLlmCheck(ctx, { stage, category, overheadTokens = 0, context = null, buildVars, crossChunkDigest = false, crossChunkSetup = false, setupFocus = '', reserveSetupDigest = false }) {
   const max = ctx.config?.maxFindings ?? 12;
   // Chunks are planned at the full usable budget; the digest is fitted into each
   // later chunk's spare room inside runChunkedManuscriptCheck (it yields to the
@@ -1261,6 +1283,7 @@ async function runManuscriptLlmCheck(ctx, { stage, category, overheadTokens = 0,
     max,
     crossChunkDigest,
     summarizeChunk,
+    reserveSetupDigest,
     callChunk: async (manuscript, meta) => {
       const { content } = await ctx.callStagedLLM(stage, buildVars(manuscript, meta, fittedContext), { returnsJson: true, source: stage });
       return content;
@@ -4079,6 +4102,11 @@ export const EDITORIAL_CHECKS = [
         // their hardest active choice.
         crossChunkDigest: true,
         crossChunkSetup: true,
+        // #1667: this check's verdict is gated to the final part AND anchored on the
+        // carried CLIMAX CANDIDATE snippet, so the setup digest must reach the final
+        // chunk even when it's packed to the window — reserve room for it by trimming
+        // the final chunk's manuscript tail rather than silently dropping the snippet.
+        reserveSetupDigest: true,
         // The setup digest is a separate rolling-summary call (buildSetupDigestPrompt)
         // whose output is fed into the FINAL chunk's prompt. The climax can land in a
         // non-final chunk (followed by a denouement chunk), so the digest must carry
@@ -4168,6 +4196,11 @@ export const EDITORIAL_CHECKS = [
         // happened pages earlier.
         crossChunkDigest: true,
         crossChunkSetup: true,
+        // #1667: the under-reaction verdict is gated to the final part AND anchored on
+        // the carried unprocessed-event snippet, so guarantee the setup digest reaches
+        // the final chunk (trim its manuscript tail to fit) rather than letting a packed
+        // final chunk drop the snippet and miss the unprocessed-trauma finding.
+        reserveSetupDigest: true,
         setupFocus: 'List the high-magnitude emotional events seen so far (a death, trauma, betrayal, '
           + 'a major loss or hard-won victory) and, for each, whether the affected character has yet shown '
           + 'a proportionate on-page reaction or processed it. CRUCIALLY: carry forward every event that is '

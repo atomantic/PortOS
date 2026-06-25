@@ -3365,6 +3365,72 @@ describe('cross-chunk clean-setup digest (#1403)', () => {
     expect(seen[1]).not.toContain('Setup already established in EARLIER parts');
   });
 
+  // #1667: a check that gates a whole-story verdict to the final part AND anchors it on
+  // the carried setup snippet opts into `reserveSetupDigest` — so when the digest can't
+  // ride alongside a packed final chunk, the manuscript TAIL is trimmed to guarantee the
+  // carried context, rather than silently dropping it and missing the final-only finding.
+  it('reserves room for the setup digest on the FINAL chunk of an opt-in check (#1667), trimming the manuscript tail', async () => {
+    const digest = editorialSetupDigest('- SETUP: past tense, first person');
+    // Window leaves only 4 chars of spare room beyond the digest, so the digest cannot
+    // ride alongside the full final chunk — but arc.climax-agency opts in, so the
+    // manuscript tail is trimmed instead of the digest dropped.
+    const usableChars = digest.length + 4;
+    const { seen } = await runTwoChunksWithSetup('arc.climax-agency', {}, { usableChars });
+    // First chunk untouched (no prior setup yet).
+    expect(seen[0]).toBe('CHUNK_ONE');
+    // Final chunk: the guaranteed setup digest + only the head of the manuscript chunk
+    // (tail trimmed), and the total never exceeds the window.
+    expect(seen[1].startsWith(digest)).toBe(true);
+    expect(seen[1]).toContain('past tense, first person');
+    expect(seen[1]).toBe(`${digest}CHUN`);
+    expect(seen[1].length).toBe(usableChars);
+  });
+
+  it('reserves the setup digest even when it fully displaces the final manuscript chunk (#1667)', async () => {
+    const digest = editorialSetupDigest('- SETUP: past tense, first person');
+    const usableChars = digest.length; // zero spare room: digest exactly fills the window
+    const { seen } = await runTwoChunksWithSetup('emotion.reaction-proportionality', {}, { usableChars });
+    expect(seen[1]).toBe(digest); // manuscript tail trimmed to nothing, digest guaranteed
+    expect(seen[1].length).toBe(usableChars);
+  });
+
+  it('does NOT reserve the setup digest for a check that did not opt in (manuscript coverage still wins)', async () => {
+    const digest = editorialSetupDigest('- SETUP: past tense, first person');
+    // Same window where the opt-in check would trim to fit — but style.conformance does
+    // not set reserveSetupDigest, so the digest yields and the full manuscript chunk runs.
+    const usableChars = digest.length + 4;
+    const { seen } = await runTwoChunksWithSetup(
+      'style.conformance',
+      { series: { styleGuide: { tense: 'past', povPerson: 'first' } } },
+      { usableChars },
+    );
+    expect(seen[1]).toBe('CHUNK_TWO');
+    expect(seen[1]).not.toContain('Setup already established in EARLIER parts');
+  });
+
+  it('only reserves on the FINAL chunk — a non-final chunk still yields the digest to manuscript coverage (#1667)', async () => {
+    const digest = editorialSetupDigest('- SETUP: past tense, first person');
+    const seen = [];
+    // Three chunks: the MIDDLE chunk (i=1) consumes a setup summary but is not final, so
+    // even for an opt-in check it must yield (no tail trimming) when the digest won't fit.
+    await getCheck('arc.climax-agency').run({
+      config: { maxFindings: 12 },
+      severityDefault: 'medium',
+      planManuscriptChunks: async () => {
+        const chunks = ['CHUNK_ONE', 'CHUNK_TWO', 'CHUNK_THREE'];
+        chunks.usableChars = digest.length + 4; // would force a trim IF this were the final chunk
+        return chunks;
+      },
+      callStagedLLM: async (_stage, vars) => { seen.push(vars.manuscript); return { content: { findings: [] } }; },
+      callStageScopedInlineLLM: async () => ({ content: '- SETUP: past tense, first person' }),
+    });
+    // Middle chunk yields the digest (not final) → runs the full manuscript untouched.
+    expect(seen[1]).toBe('CHUNK_TWO');
+    // Final chunk reserves → digest guaranteed, manuscript tail trimmed.
+    expect(seen[2].startsWith(digest)).toBe(true);
+    expect(seen[2]).toBe(`${digest}CHUN`);
+  });
+
   it('degrades to findings-only when no inline LLM caller is injected (no setup digest, no crash)', async () => {
     // No callStageScopedInlineLLM in ctx → the setup-summary path stays off entirely.
     const seen = [];
