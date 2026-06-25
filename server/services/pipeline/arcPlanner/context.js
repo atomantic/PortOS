@@ -414,6 +414,37 @@ export async function buildReaderMapContext(series, preloadedWorld) {
  * looked up via `listIssues` so the verify pass sees the *current* set, not
  * a stale snapshot.
  */
+// Group issues into the season→episode tree both verify passes feed the LLM.
+// Mechanically shared shape: issues bucket by `seasonId` (an `null` bucket for
+// ungrouped issues so the LLM still sees them), each bucket sorted by
+// arcPosition, then mapped onto the season list with an appended
+// `(ungrouped issues)` node. Callers supply the two things that diverge:
+//   - `renderLeaf(iss)` — how each issue renders (synopsis-object vs. beats)
+//   - `seasonFields(s)` — the per-season metadata (verify carries `status`,
+//     the beat pass does not); `episodes` is always appended last so the JSON
+//     key order matches the previous hand-rolled builders byte-for-byte.
+export function groupIssuesBySeasonTree(seasons, issues, { renderLeaf, seasonFields }) {
+  const issuesBySeason = new Map();
+  for (const iss of issues) {
+    const key = iss.seasonId || null;
+    if (!issuesBySeason.has(key)) issuesBySeason.set(key, []);
+    issuesBySeason.get(key).push(iss);
+  }
+  for (const list of issuesBySeason.values()) {
+    list.sort(compareIssuesByPosition);
+  }
+  const renderBucket = (list) => list.map(renderLeaf);
+  const tree = seasons.map((s) => ({
+    ...seasonFields(s),
+    episodes: renderBucket(issuesBySeason.get(s.id) || []),
+  }));
+  const ungrouped = issuesBySeason.get(null) || [];
+  if (ungrouped.length) {
+    tree.push({ number: null, title: '(ungrouped issues)', episodes: renderBucket(ungrouped) });
+  }
+  return tree;
+}
+
 export async function buildVerifyContext(series, preloadedWorld) {
   const seasons = sanitizeSeasonList(series.seasons || []);
   const [issues, base, canon] = await Promise.all([
@@ -421,46 +452,27 @@ export async function buildVerifyContext(series, preloadedWorld) {
     buildArcBaseContext(series, preloadedWorld),
     getSeriesCanon(series),
   ]);
-  // Group issues by seasonId so the tree's leaf order matches the seasons'
-  // arcPosition order. Ungrouped issues land in a `null` bucket so the LLM
-  // sees them too.
-  const issuesBySeason = new Map();
-  for (const iss of issues) {
-    const key = iss.seasonId || null;
-    if (!issuesBySeason.has(key)) issuesBySeason.set(key, []);
+  const tree = groupIssuesBySeasonTree(seasons, issues, {
     // `synopsis` key (not `beats`) so it matches the prompt's existing
     // language; sourced from idea.input which carries the LLM's logline+synopsis.
-    const synopsis = (iss.stages?.idea?.input || '').trim();
-    issuesBySeason.get(key).push({
+    renderLeaf: (iss) => ({
       number: iss.number,
       title: iss.title,
       status: iss.status,
       arcPosition: iss.arcPosition,
-      synopsis: synopsis || null,
-    });
-  }
-  for (const list of issuesBySeason.values()) {
-    list.sort(compareIssuesByPosition);
-  }
-  const tree = seasons.map((s) => ({
-    number: s.number,
-    title: s.title,
-    logline: s.logline,
-    synopsis: s.synopsis,
-    endingHook: s.endingHook,
-    episodeCountTarget: s.episodeCountTarget,
-    themes: s.themes,
-    status: s.status,
-    episodes: issuesBySeason.get(s.id) || [],
-  }));
-  const ungrouped = issuesBySeason.get(null) || [];
-  if (ungrouped.length) {
-    tree.push({
-      number: null,
-      title: '(ungrouped issues)',
-      episodes: ungrouped,
-    });
-  }
+      synopsis: (iss.stages?.idea?.input || '').trim() || null,
+    }),
+    seasonFields: (s) => ({
+      number: s.number,
+      title: s.title,
+      logline: s.logline,
+      synopsis: s.synopsis,
+      endingHook: s.endingHook,
+      episodeCountTarget: s.episodeCountTarget,
+      themes: s.themes,
+      status: s.status,
+    }),
+  });
   return {
     ...base,
     seasonsTreeJson: JSON.stringify(tree, null, 2),
@@ -565,6 +577,31 @@ export function sliceSeasonForNeighbor(s) {
   };
 }
 
+// Build the season-number → seasonId lookup the episode-correction passes use
+// to disambiguate a correction that names a season. Only integer-numbered
+// seasons are indexed (a malformed season can't be a resolution target).
+export const seasonIdByNumberOf = (series) => new Map(
+  (series?.seasons || []).filter((s) => Number.isInteger(s?.number)).map((s) => [s.number, s.id]),
+);
+
+// Match the issue an episode-level correction targets. The arc tree numbers
+// episodes series-globally, but when a correction names a season that resolved
+// to a real season id we REQUIRE the issue to be in it — we do NOT fall back to
+// a season-agnostic number match, because if an LLM ever emits a per-season
+// `episodeNumber` a bare-number fallback would silently rewrite the wrong
+// season's issue (e.g. global issue 5 when the model meant season 2 episode 5).
+// Failing safe to no-match (the caller logs it) is the correct outcome for a
+// numbering-scheme mismatch. Only when no season is given (or it didn't resolve)
+// do we match on the globally-unique number alone. Returns the issue or
+// undefined. Shared by applyEpisodeResolutions (arc-resolve) and
+// applyBeatResolutions (beat-continuity).
+export function matchIssueForEpisodeEdit(issues, seasonIdByNumber, edit) {
+  const wantSeasonId = edit.seasonNumber != null ? seasonIdByNumber.get(edit.seasonNumber) : null;
+  return wantSeasonId
+    ? issues.find((i) => i.number === edit.episodeNumber && i.seasonId === wantSeasonId)
+    : issues.find((i) => i.number === edit.episodeNumber);
+}
+
 export async function buildResolveContext(series, findings, preloadedWorld) {
   const ctx = await buildVerifyContext(series, preloadedWorld);
   const structure = recommendStructure(series.issueCountTarget);
@@ -604,35 +641,22 @@ async function buildBeatTree(series, preloadedWorld) {
     buildArcBaseContext(series, preloadedWorld),
     getSeriesCanon(series),
   ]);
-  const issuesBySeason = new Map();
-  for (const iss of issues) {
-    const key = iss.seasonId || null;
-    if (!issuesBySeason.has(key)) issuesBySeason.set(key, []);
-    issuesBySeason.get(key).push(iss);
-  }
-  let beatBearing = 0;
-  const renderList = (list) => list
-    .slice()
-    .sort(compareIssuesByPosition)
-    .map((iss) => {
-      const leaf = renderVolumeIssue(iss);
-      if (leaf.beats) beatBearing += 1;
-      return leaf;
-    });
-  const tree = seasons.map((s) => ({
-    number: s.number,
-    title: s.title,
-    logline: s.logline,
-    synopsis: s.synopsis,
-    endingHook: s.endingHook,
-    episodeCountTarget: s.episodeCountTarget,
-    themes: s.themes,
-    episodes: renderList(issuesBySeason.get(s.id) || []),
-  }));
-  const ungrouped = issuesBySeason.get(null) || [];
-  if (ungrouped.length) {
-    tree.push({ number: null, title: '(ungrouped issues)', episodes: renderList(ungrouped) });
-  }
+  const tree = groupIssuesBySeasonTree(seasons, issues, {
+    renderLeaf: renderVolumeIssue,
+    seasonFields: (s) => ({
+      number: s.number,
+      title: s.title,
+      logline: s.logline,
+      synopsis: s.synopsis,
+      endingHook: s.endingHook,
+      episodeCountTarget: s.episodeCountTarget,
+      themes: s.themes,
+    }),
+  });
+  // Report how many issues actually carry beats, so the conductor/prompt can
+  // tell a real beat corpus from a synopsis-only one. Counted from the built
+  // tree — every leaf with `.beats` came through renderVolumeIssue's beats branch.
+  const beatBearing = tree.reduce((n, s) => n + s.episodes.filter((e) => e.beats).length, 0);
   return { base, canon, tree, beatBearing };
 }
 

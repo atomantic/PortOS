@@ -16,7 +16,7 @@ import { emitRecordUpdated, withReexportSuppressed } from '../../sharing/recordE
 import { getSeason } from '../seasons.js';
 import { READER_MAP_BEAT_KINDS, buildSeason, cleanThemes, renderArcShapeGuidance, renderArcShapePositionSummary, sanitizeArc, sanitizeReaderMap, sanitizeSeason, sanitizeSeasonList } from '../../../lib/storyArc.js';
 import { runPromptRefineRaw, trimChanges } from '../refineHelpers.js';
-import { ERR_VALIDATION, SHAPE_GUIDANCE_NONE, appendTickingClock, buildArcBaseContext, buildArcOverviewContext, buildNeighborVolumes, buildReaderMapContext, buildResolveContext, buildVerifyContext, compareIssuesByPosition, makeErr, renderVolumeIssue, resolveWorldContext, shapeEpisodeResolutions, shapeFindings, shapeSeasonOutlines, shapeVerifyIssues } from './context.js';
+import { ERR_VALIDATION, SHAPE_GUIDANCE_NONE, appendTickingClock, buildArcBaseContext, buildArcOverviewContext, buildNeighborVolumes, buildReaderMapContext, buildResolveContext, buildVerifyContext, compareIssuesByPosition, makeErr, matchIssueForEpisodeEdit, renderVolumeIssue, resolveWorldContext, seasonIdByNumberOf, shapeEpisodeResolutions, shapeFindings, shapeSeasonOutlines, shapeVerifyIssues } from './context.js';
 
 export async function generateArcOverview(seriesId, options = {}) {
   const series = await getSeries(seriesId);
@@ -479,24 +479,13 @@ export async function resolveVerifyIssues(seriesId, options = {}) {
 export async function applyEpisodeResolutions(seriesId, series, episodes) {
   if (!Array.isArray(episodes) || episodes.length === 0) return [];
   const issues = await listIssues({ seriesId });
-  const seasonIdByNumber = new Map(
-    (series?.seasons || []).filter((s) => Number.isInteger(s?.number)).map((s) => [s.number, s.id]),
-  );
+  const seasonIdByNumber = seasonIdByNumberOf(series);
   const applied = [];
   for (const edit of episodes) {
-    const wantSeasonId = edit.seasonNumber != null ? seasonIdByNumber.get(edit.seasonNumber) : null;
-    // Match an issue by series-global number. When the correction names a season
-    // that resolved to a real season id, REQUIRE the issue to be in it — do NOT
-    // fall back to a season-agnostic number match. The arc tree numbers episodes
-    // series-globally, but if an LLM ever emits a per-season `episodeNumber`, a
-    // bare-number fallback would silently rewrite the wrong season's issue (e.g.
-    // global issue 5 when the model meant season 2 episode 5) and could clear its
-    // beats. Failing safe to `no-match` (logged below) is the correct outcome for
-    // a numbering-scheme mismatch. Only when no season is given (or it didn't
-    // resolve) do we match on the globally-unique number alone.
-    const issue = wantSeasonId
-      ? issues.find((i) => i.number === edit.episodeNumber && i.seasonId === wantSeasonId)
-      : issues.find((i) => i.number === edit.episodeNumber);
+    // Season match required when the named season resolves, else series-global
+    // number; fail-safe to no-match on a numbering-scheme mismatch (see
+    // matchIssueForEpisodeEdit). A bad match is logged below, never fatal.
+    const issue = matchIssueForEpisodeEdit(issues, seasonIdByNumber, edit);
     if (!issue) {
       // A correction we can't land is a silent path to non-convergence — log it
       // so a number-scheme mismatch (per-season vs series-global) is diagnosable.

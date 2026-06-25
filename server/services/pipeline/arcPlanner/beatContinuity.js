@@ -31,6 +31,8 @@ import { listIssues, updateStageWithLatest, TEXT_STAGE_IDS } from '../issues.js'
 import {
   buildBeatContinuityContext,
   buildBeatContinuityResolveContext,
+  matchIssueForEpisodeEdit,
+  seasonIdByNumberOf,
   shapeVerifyIssues,
   shapeFindings,
   shapeBeatResolutions,
@@ -157,18 +159,12 @@ export async function resolveBeatContinuity(seriesId, options = {}) {
 export async function applyBeatResolutions(seriesId, series, episodes) {
   if (!Array.isArray(episodes) || episodes.length === 0) return [];
   const issues = await listIssues({ seriesId });
-  const seasonIdByNumber = new Map(
-    (series?.seasons || []).filter((s) => Number.isInteger(s?.number)).map((s) => [s.number, s.id]),
-  );
+  const seasonIdByNumber = seasonIdByNumberOf(series);
   const applied = [];
   for (const edit of episodes) {
-    const wantSeasonId = edit.seasonNumber != null ? seasonIdByNumber.get(edit.seasonNumber) : null;
-    // Require the season match when a resolvable season was named — a bare
-    // number fallback could rewrite the wrong season's issue (see the same
-    // reasoning in applyEpisodeResolutions). Fail safe to `no-match`.
-    const issue = wantSeasonId
-      ? issues.find((i) => i.number === edit.episodeNumber && i.seasonId === wantSeasonId)
-      : issues.find((i) => i.number === edit.episodeNumber);
+    // Season match required when a resolvable season was named, else
+    // series-global number; fail-safe to `no-match` (see matchIssueForEpisodeEdit).
+    const issue = matchIssueForEpisodeEdit(issues, seasonIdByNumber, edit);
     if (!issue) {
       console.log(`⚠️ beat-continuity: no issue matched beat correction (season ${edit.seasonNumber}, episode ${edit.episodeNumber})`);
       applied.push({ seasonNumber: edit.seasonNumber, episodeNumber: edit.episodeNumber, skipped: 'no-match' });
