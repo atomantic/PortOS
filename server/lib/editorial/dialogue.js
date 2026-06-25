@@ -143,10 +143,14 @@ function buildTagMatchers(forms) {
   // ends a quote with a comma when a tag follows ("…," she said) and a period
   // when the dialogue is a complete sentence and the next clause is a separate
   // action beat ("…." She smiled.) — a period-terminated quote is NOT a tag.
-  const after = new RegExp(`([,.!?])?${DQUOTE_CLASS}\\s+(?:${SPEAKER}\\s+)?${VERB}\\b`, 'gi');
+  // The `d` (hasIndices) flag exposes each capture group's offset via match
+  // `.indices`, so scanTagMatchers can dedupe on the VERB's absolute position —
+  // a split-quote tag ("Yes," she said, "but…") is seen by BOTH passes at
+  // different match starts but the same verb offset, so it counts once.
+  const after = new RegExp(`([,.!?])?${DQUOTE_CLASS}\\s+(?:${SPEAKER}\\s+)?${VERB}\\b`, 'gid');
   // Before an opening quote: speaker → verb → optional comma/colon → quote. This
   // ordering is unambiguously a tag, so no punctuation gate is needed. Group 1 = verb.
-  const before = new RegExp(`\\b${SPEAKER}\\s+${VERB}\\s*[,:]?\\s*${DQUOTE_CLASS}`, 'gi');
+  const before = new RegExp(`\\b${SPEAKER}\\s+${VERB}\\s*[,:]?\\s*${DQUOTE_CLASS}`, 'gid');
   return { after, before };
 }
 
@@ -186,12 +190,16 @@ function scanTagMatchers(text, matchers, onMatch) {
     while ((m = re.exec(text)) !== null) {
       const matched = m[verbGroup];
       const punct = punctGroup !== null ? (m[punctGroup] || '') : null;
-      const res = onMatch(matched, m.index, punct, m[0]);
+      // De-dup and anchor on the VERB's absolute offset (via the `d`-flag capture
+      // indices), not the match start — a split-quote tag matches in BOTH passes
+      // at different starts but the same verb offset, so it counts once.
+      const verbIndex = m.indices?.[verbGroup]?.[0] ?? m.index;
+      const res = onMatch(matched, verbIndex, punct, m[0]);
       if (!res) continue;
-      const key = `${res.verb}@${m.index}`;
+      const key = `${res.verb}@${verbIndex}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      out.push({ ...res, index: m.index });
+      out.push({ ...res, index: verbIndex });
     }
   }
   return out.sort((a, b) => a.index - b.index);

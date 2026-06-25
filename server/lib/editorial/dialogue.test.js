@@ -292,6 +292,14 @@ describe('inventoryDialogueTags', () => {
     expect(inventoryDialogueTags('The engine said nothing as it idled.')).toHaveLength(0);
   });
 
+  it('counts a split-quote tag once, not twice (both passes match it)', () => {
+    // The after-quote pass sees ',” she said' and the before-quote pass sees
+    // 'she said, “' — same verb token, so it must dedupe to one tag.
+    const tags = inventoryDialogueTags('"Yes," she said, "but only once."');
+    expect(tags).toHaveLength(1);
+    expect(tags[0].verb).toBe('say');
+  });
+
   it('does not count an action beat after a complete (period-terminated) line', () => {
     // "She added a log to the fire." is narration, not a tag — the quote ended on a period.
     expect(inventoryDialogueTags('"Done." She added a log to the fire.')).toHaveLength(0);
@@ -360,6 +368,17 @@ describe('findDialogueTagVariety', () => {
 
   it('does not flag a scene with too few tags to judge', () => {
     expect(findDialogueTagVariety('"A," she said.\n"B," he said.')).toHaveLength(0);
+  });
+
+  it('does not double-count split-quote tags into a false monotony finding', () => {
+    // Three split-quote "said" lines = 3 tags. If each were counted twice (6),
+    // the default minTags/monotonyCount of 6 would falsely fire. They must not.
+    const split = [
+      '"One," she said, "and done."',
+      '"Two," he said, "and done."',
+      '"Three," she said, "and done."',
+    ].join('\n');
+    expect(findDialogueTagVariety(split)).toHaveLength(0);
   });
 
   it('does not flag a healthily varied, said-dominant scene', () => {
