@@ -2902,14 +2902,25 @@ export async function syncMediaLibraryFromPeer(peer) {
     // Reuse the per-record pull worker (in-flight dedup, image-sidecar fetch,
     // video-thumbnail regen).
     await pullMissingAssetsFromPeer(peer.instanceId, missing);
-    // Rebuild the derived media_assets index so the gallery/Media tab reflects
-    // the new image+video bytes. Idempotent; best-effort.
-    await reconcileMediaLibraryIndex();
-    // Record the hash only AFTER a full sweep so a partial pull (peer dropped
-    // mid-transfer) re-attempts next tick instead of being marked done.
-    lastLibraryManifestHash.set(peer.instanceId, manifest.manifestHash);
-    console.log(`📥 peerSync: media-library sweep from ${peer.name || peer.instanceId} — requested ${requested} missing asset(s)`);
-    return { pulled: requested };
+    // `pullMissingAssetsFromPeer` swallows per-asset failures (peer drops
+    // mid-sweep, 404, size-cap reject) and always resolves — so a resolved pull
+    // does NOT mean every byte landed. Re-diff against disk to see what actually
+    // arrived; this is the authoritative signal, not the pull's resolution.
+    const stillMissing = await diffAssetManifestAgainstLocal(manifest.assets);
+    const pulled = requested - stillMissing.length;
+    // Rebuild the derived media_assets index when any image/video bytes landed so
+    // the gallery/Media tab reflects them. Idempotent; best-effort.
+    if (pulled > 0) await reconcileMediaLibraryIndex();
+    if (stillMissing.length === 0) {
+      // Full sweep — safe to short-circuit future ticks on this manifestHash.
+      lastLibraryManifestHash.set(peer.instanceId, manifest.manifestHash);
+      console.log(`📥 peerSync: media-library sweep from ${peer.name || peer.instanceId} — pulled ${pulled} asset(s)`);
+    } else {
+      // Partial pull — do NOT record the hash, so the next tick re-diffs and
+      // retries the still-missing assets instead of being marked done.
+      console.log(`⚠️ peerSync: media-library sweep from ${peer.name || peer.instanceId} — pulled ${pulled}/${requested}, ${stillMissing.length} still missing; retrying next tick`);
+    }
+    return { pulled, missing: stillMissing.length };
   } finally {
     librarySweepInFlight.delete(peer.instanceId);
   }
