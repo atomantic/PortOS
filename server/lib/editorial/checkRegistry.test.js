@@ -3408,6 +3408,51 @@ describe('cross-chunk clean-setup digest (#1403)', () => {
     expect(seen[1]).not.toContain('Setup already established in EARLIER parts');
   });
 
+  it('yields (no overflow) when the setup digest alone is larger than the whole window, even for an opt-in check (#1667)', async () => {
+    const digest = editorialSetupDigest('- SETUP: past tense, first person');
+    const usableChars = digest.length - 5; // even the digest alone overflows the window
+    const { seen } = await runTwoChunksWithSetup('arc.climax-agency', {}, { usableChars });
+    // A digest that can't fit the window at all must not be prepended — fall back to
+    // the manuscript chunk untouched rather than send an over-budget prompt.
+    expect(seen[1]).toBe('CHUNK_TWO');
+    expect(seen[1]).not.toContain('Setup already established in EARLIER parts');
+  });
+
+  it('reserves from the RAW manuscript so a prepended findings digest is never truncated mid-block (#1667)', async () => {
+    const setupDigest = editorialSetupDigest('- SETUP: past tense, first person');
+    // A finding from the first chunk produces a findings digest carried into the final
+    // chunk; size the window so the findings digest fits there but the setup digest
+    // doesn't, forcing the reserve branch.
+    const findingsDigest = editorialPriorFindingsDigest([{ category: 'arc', problem: 'passive climax', issueNumber: 1, location: '' }]);
+    const usableChars = setupDigest.length + findingsDigest.length + 2;
+    const seen = [];
+    let call = 0;
+    await getCheck('arc.climax-agency').run({
+      config: { maxFindings: 12 },
+      severityDefault: 'medium',
+      planManuscriptChunks: async () => {
+        const chunks = ['CHUNK_ONE', 'CHUNK_TWO'];
+        chunks.usableChars = usableChars;
+        return chunks;
+      },
+      callStagedLLM: async (_stage, vars) => {
+        seen.push(vars.manuscript);
+        call += 1;
+        // First chunk emits a finding so the final chunk carries a findings digest.
+        return call === 1
+          ? { content: { findings: [{ problem: 'passive climax', severity: 'medium', issueNumber: 1 }] } }
+          : { content: { findings: [] } };
+      },
+      callStageScopedInlineLLM: async () => ({ content: '- SETUP: past tense, first person' }),
+    });
+    // Final chunk: setup digest guaranteed + the manuscript head, rebuilt from the raw
+    // manuscript — so the findings digest is dropped whole, never sliced into a
+    // malformed fragment (the old `text.slice` would have emitted a partial header).
+    expect(seen[1]).toBe(`${setupDigest}CHUNK_TWO`);
+    expect(seen[1]).not.toContain('Editorial findings already recorded');
+    expect(seen[1].length).toBeLessThanOrEqual(usableChars);
+  });
+
   it('only reserves on the FINAL chunk — a non-final chunk still yields the digest to manuscript coverage (#1667)', async () => {
     const digest = editorialSetupDigest('- SETUP: past tense, first person');
     const seen = [];

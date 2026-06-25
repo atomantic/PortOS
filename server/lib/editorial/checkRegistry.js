@@ -1142,9 +1142,11 @@ export function buildSetupDigestPrompt({ focus, priorSummary, manuscript }) {
 // so a final chunk packed to within a few hundred chars of the window silently
 // drops the digest and the final-only finding is missed. When this opt-in is set
 // and the digest doesn't fit the final chunk's spare room, the manuscript TAIL is
-// trimmed by the digest's size (the inverse of the usual yield) so the verdict
-// keeps its carried context. Scoped to the final chunk and to opt-in checks only —
-// every other chunk, and every non-reserving check, keeps full manuscript coverage.
+// trimmed to reserve the digest's room (the inverse of the usual yield) so the
+// verdict keeps its carried context. Scoped to the final chunk and to opt-in checks
+// only — every other chunk, and every non-reserving check, keeps full manuscript
+// coverage. If the digest alone is larger than the whole window it still yields
+// (never prepended past the budget), preserving the no-overflow contract.
 async function runChunkedManuscriptCheck(ctx, { chunks, category, max, callChunk, crossChunkDigest = false, summarizeChunk = null, reserveSetupDigest = false }) {
   const usableChars = Number.isFinite(chunks?.usableChars) ? chunks.usableChars : Infinity;
   const merged = new Map();
@@ -1178,14 +1180,18 @@ async function runChunkedManuscriptCheck(ctx, { chunks, category, max, callChunk
         // Fits into whatever spare room remains AFTER the findings digest — manuscript
         // coverage and the findings digest both win over the setup digest if budget is tight.
         text = `${setup}${text}`;
-      } else if (setup && reserveSetupDigest && isFinal && Number.isFinite(usableChars)) {
+      } else if (setup && reserveSetupDigest && isFinal && setup.length <= usableChars) {
         // #1667: the digest didn't fit, but this check gates its verdict to the final
-        // part and anchors it on the carried snippet — so trim the manuscript tail to
-        // make room rather than drop the carried context. Slicing `text` (findings
-        // digest + manuscript) from the end keeps the higher-value front (the findings
-        // digest and the manuscript head) and total stays at exactly `usableChars`.
-        const room = Math.max(0, usableChars - setup.length);
-        text = `${setup}${text.slice(0, room)}`;
+        // part and anchors it on the carried snippet — so reserve the digest's room and
+        // fill the rest with the manuscript HEAD (trimming its tail) rather than drop
+        // the carried context. Rebuild from the RAW `manuscript`, NOT the
+        // findings-digest-prefixed `text`: slicing `text` could truncate the findings
+        // digest mid-block into a malformed prefix, and the findings digest's job
+        // (suppressing duplicate re-flags) is already covered by the first-wins merge,
+        // so it safely yields here. Gated on `setup.length <= usableChars` so a digest
+        // larger than the whole window yields instead of overflowing it — preserving
+        // the pre-reserve no-overflow contract on a tiny/high-overhead window.
+        text = `${setup}${manuscript.slice(0, usableChars - setup.length)}`;
       }
     }
     const content = await callChunk(text, { isFinal });
