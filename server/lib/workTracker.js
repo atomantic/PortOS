@@ -70,15 +70,20 @@ export function forgeCliForTracker(tracker) {
  *   plan   → plan-task            (PLAN.md flow)
  *   github → claim-issue          (gh issue flow)
  *   gitlab → claim-issue-gitlab   (glab issue flow)
- *   jira   → jira-sprint-manager  (JIRA flow)
+ *   jira   → claim-issue-jira     (JIRA sprint-ticket flow)
  * Returns null for an unknown tracker.
+ *
+ * Note: 'jira' routes to the per-ticket `claim-issue-jira` flow (claim ONE ready
+ * sprint ticket, ship it, move it To Do → In Progress → In Review), NOT the
+ * broader `jira-sprint-manager` triage job — that remains a separate standalone
+ * scheduled task.
  */
 export function trackerToClaimTaskType(tracker) {
   switch (tracker) {
     case 'plan': return 'plan-task';
     case 'github': return 'claim-issue';
     case 'gitlab': return 'claim-issue-gitlab';
-    case 'jira': return 'jira-sprint-manager';
+    case 'jira': return 'claim-issue-jira';
     default: return null;
   }
 }

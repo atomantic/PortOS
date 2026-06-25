@@ -19,6 +19,7 @@ import {
   generatePipelineComicBackCover,
   generatePipelineComicCoverConcepts,
   updatePipelineComicPage,
+  refinePipelineComicPageRender,
   updatePipelineIssue,
   PIPELINE_STAGE_LABELS,
   PIPELINE_STAGE_STATUS_LABEL as STATUS_LABEL,
@@ -28,6 +29,7 @@ import { getSettings, patchSettingsSlice } from '../../../services/apiSystem';
 import { listImageModels } from '../../../services/apiImageVideo';
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
+import useSlotInFlight from '../../../hooks/useSlotInFlight';
 import MediaJobThumb from '../MediaJobThumb';
 import MediaPreview from '../../media/MediaPreview';
 import usePreviewRoute from '../../../hooks/usePreviewRoute';
@@ -92,26 +94,6 @@ const getFinalSlot = (rec) => (rec?.finalImage?.jobId || rec?.finalImage?.filena
 // Whichever slot the user should see as "rendered" for PDF-readiness math
 // and the lightbox preview — final wins over proof when both exist.
 const getPreferredSlot = (rec) => getFinalSlot(rec) || getProofSlot(rec);
-
-// 5s grace window for stale-jobId staleness: if MediaJobThumb never reports
-// a real status (job archive expired before this session), stop treating the
-// unresolved 'unknown' as in-flight so the render button isn't permanently
-// disabled.
-function useSlotInFlight(slot) {
-  const [status, setStatus] = useState('unknown');
-  const [expired, setExpired] = useState(false);
-  useEffect(() => {
-    setStatus('unknown');
-    setExpired(false);
-    if (!slot?.jobId) return undefined;
-    const t = setTimeout(() => setExpired(true), 5000);
-    return () => clearTimeout(t);
-  }, [slot?.jobId]);
-  const inFlight = !!slot?.jobId
-    && status !== 'completed' && status !== 'failed' && status !== 'canceled'
-    && !(status === 'unknown' && expired);
-  return { inFlight, setStatus };
-}
 
 // Tooltip text for the "Render final" button — picks the first applicable
 // reason from a precedence chain so the user always sees the most specific
@@ -738,6 +720,7 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
             issue={issue}
             pageIndex={pi}
             page={page}
+            pageCount={pages.length}
             renderOpts={renderOpts}
             onStageUpdate={onStageUpdate}
             onPreview={openPreview}
@@ -781,7 +764,7 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
 }
 
 function PageRow({
-  issue, pageIndex, page, renderOpts = {},
+  issue, pageIndex, page, pageCount = 0, renderOpts = {},
   onStageUpdate, onPreview, onFilenameKnown,
   confirmingDelete, onArmDelete, onCancelDelete, onConfirmDelete,
 }) {
@@ -802,6 +785,18 @@ function PageRow({
   const [renderingProof, setRenderingProof] = useState(false);
   const [renderingFinal, setRenderingFinal] = useState(false);
   const [useProofForFinal, setUseProofForFinal] = useState(true);
+  // Per-page "Refine" (#1534): a free-text small correction that adjusts the
+  // page's stored render prompt and re-renders image-to-image from the existing
+  // page image. `refineChanges` surfaces the AI's "what changed" bullets inline.
+  const [refineText, setRefineText] = useState('');
+  const [refining, setRefining] = useState(false);
+  const [refineChanges, setRefineChanges] = useState([]);
+  // Consistency reference: re-render this page using an adjacent page's image as
+  // a reference so a continuing scene keeps incidental/un-described characters +
+  // environment consistent. '' = none, 'prior' = previous page, 'next' = next.
+  const [refPage, setRefPage] = useState('');
+  const hasPrior = pageIndex > 0;
+  const hasNext = pageIndex < pageCount - 1;
   // Sync local edits with parent updates (re-extract / re-render persist).
   useEffect(() => { setDraft(rawText); }, [rawText]);
   const dirty = draft !== rawText;
@@ -832,16 +827,28 @@ function PageRow({
   const handleRender = async (target) => {
     const setFlight = target === 'final' ? setRenderingFinal : setRenderingProof;
     setFlight(true);
-    const useProofAsBase = target === 'final' && useProofForFinal;
+    // Only an EXPLICIT adjacent reference ('prior'/'next') takes precedence over
+    // proof-as-base (the server resolves it first). 'auto' and 'none' leave
+    // proof-as-base intact: 'none' just forbids an auto reference, and an auto
+    // reference is itself lower precedence than proof-as-base server-side.
+    const explicitRef = refPage === 'prior' || refPage === 'next';
+    const useProofAsBase = target === 'final' && useProofForFinal && !explicitRef;
     const res = await generatePipelineComicPage(issue.id, pageIndex, {
       ...renderOpts,
       target,
       useProofAsBase,
+      ...(refPage ? { referencePage: refPage } : {}),
     }).catch((err) => { toast.error(err.message || 'Render failed'); return null; });
     setFlight(false);
     if (res) {
       onStageUpdate?.('comicPages', res.stage);
-      const suffix = useProofAsBase ? ' (from proof)' : '';
+      // Prefer the server's resolved outcome — auto may or may not have found a
+      // same-scene prior page with a render, so trust res over the local intent.
+      const suffix = res.fromProof
+        ? ' (from proof)'
+        : res.fromReference
+          ? ` (${res.autoReference ? 'auto-ref' : 'ref'} page ${res.referencePageIndex + 1})`
+          : '';
       toast.success(`Page ${pageIndex + 1} ${target}${suffix} render queued (${res.mode || renderOpts.mode || IMAGE_GEN_MODE.LOCAL})`);
     }
   };
@@ -857,13 +864,52 @@ function PageRow({
     }
   };
 
-  const finalNeedsProof = useProofForFinal && !proofSlot?.filename;
+  const handleRefine = async () => {
+    const instruction = refineText.trim();
+    if (!instruction) return;
+    setRefining(true);
+    // Refine reads the stored render prompt + existing image server-side, so it
+    // is independent of unsaved script edits — but gate on in-flight renders so
+    // the i2i base isn't a half-written slot.
+    const res = await refinePipelineComicPageRender(issue.id, pageIndex, {
+      ...renderOpts,
+      instruction,
+    }).catch((err) => { toast.error(err.message || 'Refine failed'); return null; });
+    setRefining(false);
+    if (res) {
+      onStageUpdate?.('comicPages', res.stage);
+      setRefineChanges(res.changes || []);
+      setRefineText('');
+      toast.success(`Page ${pageIndex + 1} ${res.variant} refine queued (${res.mode || renderOpts.mode || IMAGE_GEN_MODE.LOCAL})`);
+    }
+  };
+
+  // An EXPLICIT adjacent reference render uses that page (not this page's proof)
+  // as its base, so it doesn't need a proof to exist — only proof-as-base does.
+  // 'auto'/'none' still go through proof-as-base, so they keep the proof gate.
+  const finalNeedsProof = useProofForFinal && !(refPage === 'prior' || refPage === 'next') && !proofSlot?.filename;
+  // The Refine control only makes sense once the page has a render to correct
+  // (final preferred, else proof). Gate on jobId OR filename — not filename
+  // alone: refining a proof-only page replaces its slot with an in-flight
+  // record whose filename is briefly null, and gating on filename alone would
+  // make the Refine box vanish mid-refine and not return until reload. The
+  // button's own in-flight gate (below) still blocks i2i off a mid-write slot.
+  const hasRender = !!(finalSlot?.jobId || finalSlot?.filename || proofSlot?.jobId || proofSlot?.filename);
+  const refineDisabled = refining || proofInFlight || finalInFlight || !refineText.trim();
 
   return (
     <li className="rounded-lg border border-port-border bg-port-card/40">
       <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-port-border flex-wrap">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <span className="text-xs uppercase tracking-wider text-gray-500">Page {pageIndex + 1}</span>
+          {(Number.isInteger(page.sceneNumber) || page.sceneHeading) ? (
+            <span
+              className="text-[10px] text-port-accent/80 border border-port-accent/30 rounded px-1"
+              title="The scene this page belongs to. Renders auto-chain off the prior page within the same scene and start fresh across a scene boundary."
+            >
+              {Number.isInteger(page.sceneNumber) ? `Scene ${page.sceneNumber}` : 'Scene'}{page.sceneHeading ? `: ${page.sceneHeading}` : ''}
+            </span>
+          ) : null}
           <span className="text-[10px] text-gray-600">{page.panels?.length || 0} panel{page.panels?.length === 1 ? '' : 's'}</span>
           {dirty ? <span className="text-[10px] text-port-warning">unsaved</span> : null}
         </div>
@@ -877,6 +923,23 @@ function PageRow({
             {saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
             Save
           </button>
+          <label
+            className="flex items-center gap-1 text-[11px] text-gray-400"
+            title="Consistency reference for this page's render. 'auto' chains off the prior page when it's in the same scene (keeps incidental characters + environment consistent) and renders fresh across a scene boundary. 'none' forces a fresh render even mid-scene. 'prev/next page' force that specific page as the reference."
+          >
+            <span className="text-gray-500">ref</span>
+            <select
+              value={refPage}
+              onChange={(e) => setRefPage(e.target.value)}
+              className="bg-port-bg border border-port-border rounded text-[11px] text-white px-1 py-0.5"
+              aria-label={`Consistency reference page for page ${pageIndex + 1}`}
+            >
+              <option value="">auto (same scene)</option>
+              <option value="none">none (fresh)</option>
+              {hasPrior ? <option value="prior">prev page</option> : null}
+              {hasNext ? <option value="next">next page</option> : null}
+            </select>
+          </label>
           <button
             type="button"
             onClick={() => handleRender('proof')}
@@ -886,7 +949,9 @@ function PageRow({
               ? 'Save changes before rendering'
               : proofInFlight
                 ? 'Proof render in progress…'
-                : 'Queue a fast proof render at the configured size'}
+                : refPage
+                  ? `Queue a proof render using the ${refPage} page as a consistency reference`
+                  : 'Queue a fast proof render at the configured size'}
           >
             {(renderingProof || proofInFlight) ? <Loader2 size={12} className="animate-spin" /> : <ImageIcon size={12} />}
             Proof
@@ -949,6 +1014,44 @@ function PageRow({
               </li>
             ))}
           </ul>
+        </div>
+      ) : null}
+      {hasRender ? (
+        <div className="px-3 pt-2">
+          <div className="flex items-center gap-2">
+            <Wand2 size={12} className="text-port-accent shrink-0" />
+            <input
+              type="text"
+              value={refineText}
+              onChange={(e) => setRefineText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !refineDisabled) { e.preventDefault(); handleRefine(); }
+              }}
+              placeholder="Small fix to the rendered page — e.g. 'warm the lighting', 'remove the extra signage text'"
+              aria-label={`Refine instruction for page ${pageIndex + 1}`}
+              className="flex-1 px-2 py-1 bg-port-bg border border-port-border rounded text-white text-xs"
+              maxLength={2000}
+            />
+            <button
+              type="button"
+              onClick={handleRefine}
+              disabled={refineDisabled}
+              className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs bg-port-card border border-port-border text-port-accent hover:text-white hover:border-port-accent/50 disabled:opacity-40 disabled:cursor-not-allowed"
+              title={(proofInFlight || finalInFlight)
+                ? 'Wait for the in-flight render to finish'
+                : 'Adjust the render prompt and re-render image-to-image from the existing page image — applies only the requested change, preserving the rest of the page'}
+            >
+              {refining ? <Loader2 size={12} className="animate-spin" /> : <Wand2 size={12} />}
+              Refine
+            </button>
+          </div>
+          {refineChanges.length ? (
+            <ul className="mt-1 pl-6 space-y-0.5 list-disc">
+              {refineChanges.map((c, i) => (
+                <li key={i} className="text-[11px] text-gray-400">{c}</li>
+              ))}
+            </ul>
+          ) : null}
         </div>
       ) : null}
       <div className="grid md:grid-cols-2 gap-3 p-3">

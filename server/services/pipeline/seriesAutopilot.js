@@ -85,13 +85,16 @@ import {
   commitEpisodesToIssues,
   verifyArc,
   resolveVerifyIssues,
+  analyzeBeatContinuity,
+  resolveBeatContinuity,
   analyzeManuscriptCompleteness,
 } from './arcPlanner.js';
 import * as volumeBeatsRunner from './volumeBeatsRunner.js';
 import * as autoRunner from './autoRunner.js';
 import { seedReviewFromFindings, getReview } from './manuscriptReview.js';
-import { runEditorialChecks, buildEditorialCheckPlan } from './editorial/checkRunner.js';
-import { computeHealth, openBlockers } from './editorialScore.js';
+import { runEditorialChecks, buildEditorialCheckPlan, enabledChecksConsumeReverseOutline, summarizeCheckErrors } from './editorial/checkRunner.js';
+import { generateReverseOutline, getReverseOutline } from './reverseOutline.js';
+import { computeHealth, openBlockers, READINESS_GATES, resolveReadinessGate, summarizeEditorialBlockers, formatBlockerSummary } from './editorialScore.js';
 import { getSettings } from '../settings.js';
 import { readReadinessGate } from '../../lib/editorial/index.js';
 import { generateManuscriptFix, acceptManuscriptFix } from './manuscriptFix.js';
@@ -103,9 +106,152 @@ import { checkSeriesCanonReadiness } from './canonReadiness.js';
 const runs = new Map();
 
 // Bounded convergence loops — re-verify/re-review at most this many rounds, then
-// pause for human review with the residual findings (see module header).
+// pause for human review with the residual findings (see module header). These
+// are the floor defaults; an install can raise them persistently via
+// pipelineEditorialChecks.{maxArcVerifyRounds,maxEditorialRounds} (or a single
+// run can override per-run through the autopilot start options).
 export const MAX_ARC_VERIFY_ROUNDS = 3;
 export const MAX_EDITORIAL_ROUNDS = 2;
+// Whole-manuscript beat-continuity convergence (#1510). The corpus is the
+// compact per-issue beat sheets, so this gate sits between beat generation and
+// the expensive text/script stage — bounded like the others, then pauses with
+// the residual findings for human review.
+export const MAX_BEAT_CONTINUITY_ROUNDS = 2;
+
+// Bounded retry budget for a delegated child runner (#1574). A child (volume
+// beats / text auto-run) can finish with its target stage(s) still empty when
+// the underlying LLM call failed. Before #1574 the autopilot marked the work
+// attempted and advanced regardless — so a transient failure was caught only
+// later (text) or not at all until a downstream emptiness check (beats). Now a
+// child whose readiness check fails is retried up to MAX_CHILD_RETRIES more
+// times (skip-existing, so a retry only fills the gap) before the work is
+// marked attempted, an escalation frame is emitted, and the run pauses with the
+// residual. 0 = single attempt, no retry (the legacy behavior). A per-run
+// `maxChildRetries` option overrides it (plumbed through runOptions).
+export const MAX_CHILD_RETRIES = 1;
+
+// Resolve the effective round bounds for a run: an explicit per-run option wins,
+// then the persisted pipelineEditorialChecks setting, then the module default.
+// Returns integers only — a non-integer at any layer falls through to the next.
+// Centralized so the loops, the dry-run plan, and the resume path all agree.
+export function resolveAutopilotRounds(options = {}, settings = null) {
+  const pec = settings?.pipelineEditorialChecks || {};
+  const pick = (optKey, setKey, fallback) => {
+    if (Number.isInteger(options?.[optKey])) return options[optKey];
+    if (Number.isInteger(pec?.[setKey])) return pec[setKey];
+    return fallback;
+  };
+  return {
+    maxArcVerifyRounds: pick('maxArcVerifyRounds', 'maxArcVerifyRounds', MAX_ARC_VERIFY_ROUNDS),
+    maxEditorialRounds: pick('maxEditorialRounds', 'maxEditorialRounds', MAX_EDITORIAL_ROUNDS),
+    maxBeatContinuityRounds: pick('maxBeatContinuityRounds', 'maxBeatContinuityRounds', MAX_BEAT_CONTINUITY_ROUNDS),
+  };
+}
+
+// Resolve the effective editorial-health readiness gate for a run (#1580): an
+// explicit per-run option wins, then the persisted
+// pipelineEditorialChecks.readinessGate, then null — the caller resolves null to
+// DEFAULT_READINESS_GATE via resolveReadinessGate. Mirrors resolveAutopilotRounds
+// so the gate is overridable per-run exactly like the round bounds; stamped onto
+// the run options once at start so the loop, the dry-run plan, and a later resume
+// all read the same effective gate.
+export function resolveAutopilotReadinessGate(options = {}, settings = null) {
+  if (READINESS_GATES.includes(options?.readinessGate)) return options.readinessGate;
+  return readReadinessGate(settings);
+}
+
+// Per-gate copy for the non-convergence pause — shared by the arc-verify and
+// editorial loops so the two messages can't drift.
+const PAUSE_GATES = {
+  arc: { label: 'Arc verification', fix: 'Edit the arc/volumes to address them', limit: 'verify-rounds' },
+  beatContinuity: { label: 'Beat continuity', fix: 'Edit the affected issue beats', limit: 'beat-continuity-rounds' },
+  editorial: { label: 'Editorial review', fix: 'Address them in the manuscript editor', limit: 'editorial-rounds' },
+};
+function convergencePauseReason(gate, maxRounds, blockingCount) {
+  const { label, fix, limit } = PAUSE_GATES[gate];
+  const plural = maxRounds === 1 ? 'round' : 'rounds';
+  return `${label} couldn't auto-resolve ${blockingCount} blocking finding(s) in ${maxRounds} ${plural} — `
+    + `paused for review. ${fix}, or raise the ${limit} limit in Options and resume.`;
+}
+
+// Divergence/oscillation guard for the bounded convergence loops (#1571). A
+// verify→resolve round is "profitable" only when the next verify shows STRICTLY
+// FEWER blocking findings. When the count fails to drop (stays equal, or rises —
+// a resolve pass that introduced a new break while fixing another) for
+// DIVERGENCE_PATIENCE consecutive rounds, the loop is no longer converging:
+// stop early and pause with a `divergence` kind instead of burning the rest of
+// the daily cos budget down to maxRounds. The terminal maxRounds pause keeps its
+// own `maxRounds` kind — the two are distinguished in the pause SSE frame so the
+// UI can tell "needs a human" (diverging) from "just ran out of rounds".
+//
+// With the default caps (arc 3 / beat 2 / editorial 2) the loop hits maxRounds
+// before the streak can reach patience, so default runs are unaffected; the
+// guard only bites when a user RAISES a cap and the loop then stalls.
+export const DIVERGENCE_PATIENCE = 2;
+
+// Convergence tracker for one verify→resolve round. `state` is
+// { best, sinceBest }: `best` is the FEWEST blocking findings seen so far this
+// loop (null before the first measured round), `sinceBest` the count of
+// consecutive rounds since that minimum last STRICTLY improved. A round that
+// reaches a new low is progress (sinceBest → 0); a stall, a regression (a fix
+// that introduced a new break), OR an oscillation that merely revisits an old
+// count all accrue sinceBest. The loop diverges once sinceBest reaches
+// DIVERGENCE_PATIENCE. Tracking the running minimum (not just the previous
+// round) is what lets this catch a 2-cycle oscillation — e.g. 5→4→5→4 never
+// sets a new low after round 2, so it's caught — which a naive
+// "compare to the previous round" check would miss. Pure + unit-tested.
+export function trackConvergence(state, curr) {
+  if (state.best === null || curr < state.best) {
+    return { best: curr, sinceBest: 0 };
+  }
+  return { best: state.best, sinceBest: state.sinceBest + 1 };
+}
+
+// Pause reason for a gate that stopped converging early (#1571) — distinct
+// wording from convergencePauseReason's "ran out of rounds".
+function divergencePauseReason(gate, blockingCount, rounds) {
+  const { label, fix } = PAUSE_GATES[gate];
+  const plural = rounds === 1 ? 'round' : 'rounds';
+  return `${label} stopped converging — ${blockingCount} blocking finding(s) and no net progress over `
+    + `${rounds} consecutive ${plural} of auto-resolve. Paused for review. ${fix}, then resume.`;
+}
+
+// Dry-run plan note for a bounded gate: "skipped (0 rounds)" or "up to N rounds".
+const roundsNote = (rounds) => (rounds === 0 ? 'skipped (0 rounds)' : `up to ${rounds} rounds`);
+
+// Dry-run cost model (#1576) — each planned step carries an estimated
+// `estActions`: the number of cos actions it bills via recordDomainUsage('cos',
+// { actions }), i.e. the unit the daily budget cap gates on. Surfacing it lets a
+// user see, before starting, whether a large series will exhaust the cap on
+// text/verify and never reach editorial. Estimates are approximate and lean
+// toward the high end — convergence loops counted at their max rounds (they
+// usually converge sooner), per-item steps at one action per item (retries
+// excluded). A few steps cost nothing against the cap (editorialHealthGate,
+// canonVerify) and carry estActions: 0. One known UNDER-count: the editorial
+// review's per-comment auto-fixes each bill an extra action and scale with the
+// number of blocking findings, which isn't knowable at plan time — so a heavy
+// editorial pass can exceed its estimate.
+//
+// A bounded verify→resolve convergence loop (arc, beat-continuity, editorial)
+// bills one action per verify plus (roughly) one per resolve; the final round
+// never resolves (it converges or pauses). Estimate: rounds verifies +
+// (rounds-1) resolves.
+const convergenceLoopActions = (rounds) => (rounds <= 0 ? 0 : 2 * rounds - 1);
+
+// Sum a dry-run plan's per-step estimates into run totals. `estActions` is the
+// budget-relevant total (cos daily-cap units); `estLlmCalls` aggregates the
+// check-pass fan-out (editorialChecks bills a single cos action but issues many
+// LLM calls — see the rough proxy at its plan.push). Pure — safe to call at
+// broadcast time and in tests.
+function summarizePlanCost(plan) {
+  return (Array.isArray(plan) ? plan : []).reduce(
+    (acc, step) => ({
+      estActions: acc.estActions + (Number.isFinite(step?.estActions) ? step.estActions : 0),
+      estLlmCalls: acc.estLlmCalls + (Number.isFinite(step?.estLlmCalls) ? step.estLlmCalls : 0),
+    }),
+    { estActions: 0, estLlmCalls: 0 },
+  );
+}
 
 // When true, a comic-target run with `includeVisual` proceeds past the text +
 // editorial terminal into draft cover/page rendering (see runVisualDraft).
@@ -113,6 +259,10 @@ export const VISUAL_DRAFT_ENABLED = true;
 
 // Severities that block a verify/review gate (low is informational).
 const ARC_BLOCKING = new Set(['high', 'medium']);
+// Beat continuity is the same class of structural continuity gate as arc verify
+// (a cross-issue continuity break, not a craft note), so it blocks at the same
+// altitude — high + medium.
+const BEAT_CONTINUITY_BLOCKING = ARC_BLOCKING;
 const EDITORIAL_BLOCKING = new Set(['high']);
 
 // Poll cadence while awaiting a delegated child runner (volume beats / auto-run).
@@ -132,15 +282,52 @@ const byNumber = (a, b) => (a?.number ?? 9999) - (b?.number ?? 9999);
 // from its targetFormat. prose is the intermediate source the scripts adapt
 // from — we gate on the final scripts so a script-first import (prose empty,
 // script authored) is already considered ready and never regenerated.
-export function requiredScriptStages(series) {
+export function requiredScriptStages(series, options = {}) {
   const fmt = series?.targetFormat || 'comic+tv';
-  if (fmt === 'comic') return ['comicScript'];
-  if (fmt === 'tv') return ['teleplay'];
-  return ['comicScript', 'teleplay'];
+  // Per-run format restriction: a multi-format (comic+tv) series can be driven
+  // to just one format's scripts in a single autopilot run — e.g. "produce the
+  // comic draft only, skip the 24 teleplays." `options.targetFormats` is a
+  // subset of ['comic','tv']; absent/empty means "all formats the series wants".
+  const restrict = Array.isArray(options?.targetFormats) && options.targetFormats.length
+    ? options.targetFormats
+    : null;
+  const wantComic = fmt.includes('comic') && (!restrict || restrict.includes('comic'));
+  const wantTv = fmt.includes('tv') && (!restrict || restrict.includes('tv'));
+  const stages = [];
+  if (wantComic) stages.push('comicScript');
+  if (wantTv) stages.push('teleplay');
+  // Never strand the run with zero required script stages (which would mark every
+  // issue text-ready with no script authored). If the restriction excludes
+  // everything this series supports, ignore it and fall back to the series' own
+  // formats.
+  if (stages.length === 0) return requiredScriptStages(series);
+  return stages;
 }
 
 export function isComicTarget(series) {
   return (series?.targetFormat || 'comic+tv').includes('comic');
+}
+
+// Does THIS run want the comic format? `isComicTarget` alone keys off the
+// series' declared format, but a per-run `options.targetFormats` restriction can
+// scope a comic+tv series to TV only — in which case the comic-only steps
+// (scriptVerify, visual draft) must NOT run, or a TV-only pass would enter
+// comic-script verification with no comicScript and pause on an unparseable
+// script. Mirrors the restriction logic in requiredScriptStages: an empty/absent
+// restriction (or one that excludes everything the series supports) means "all
+// formats the series wants", so this stays true for the default whole-series run.
+export function wantsComic(series, options = {}) {
+  if (!isComicTarget(series)) return false;
+  const restrict = Array.isArray(options?.targetFormats) && options.targetFormats.length
+    ? options.targetFormats
+    : null;
+  if (!restrict) return true;
+  // If the restriction excludes every format the series supports, requiredScriptStages
+  // ignores it (never strand the run) — match that here so the gates agree.
+  const wantComic = restrict.includes('comic');
+  const wantTv = restrict.includes('tv') && (series?.targetFormat || '').includes('tv');
+  if (!wantComic && !wantTv) return true; // restriction is a no-op → whole series
+  return wantComic;
 }
 
 // Effective "produce draft visuals?" decision. The `target` option overrides
@@ -158,8 +345,16 @@ function orderedIssues(issues) {
   return [...(Array.isArray(issues) ? issues : [])].sort(compareIssuesByPosition);
 }
 
-function textReady(issue, series) {
-  return requiredScriptStages(series).every((stageId) => isStageReady(issue.stages?.[stageId]));
+function textReady(issue, series, options = {}) {
+  return requiredScriptStages(series, options).every((stageId) => isStageReady(issue.stages?.[stageId]));
+}
+
+// An issue "has beats" once its idea stage carries expanded beat text
+// (idea.output) — the unit the whole-manuscript beat-continuity pass (#1510)
+// reads. isStageReady(idea) is exactly that: status ready/edited AND non-empty
+// output.
+function issueHasBeats(issue) {
+  return isStageReady(issue?.stages?.idea);
 }
 
 // Structural script gate (pure): does the comic script parse into >=1 page with
@@ -209,8 +404,8 @@ export function visualReady(issue) {
  * Return the first unmet step for a series given its canonical records and the
  * in-run accumulator (`runState`). Pure — caller supplies fresh state.
  *
- * runState fields consulted (all optional): arcVerified, editorialReviewed
- * (booleans); beatsAttempted, textAttempted, scriptChecked (Set|array of ids).
+ * runState fields consulted (all optional): arcVerified, editorialReviewed,
+ * reverseOutlineRefreshed (booleans); beatsAttempted, textAttempted, scriptChecked (Set|array of ids).
  * The *attempted* sets stop a perpetually-failing step (an issue whose LLM run
  * keeps erroring) from looping forever — the conductor records an attempt even
  * on failure, so the resolver moves past it within one run.
@@ -255,16 +450,31 @@ export function resolveNextStep(series, issues, runState = {}, options = {}) {
     }
   }
 
+  // STEP 4a.5 — whole-manuscript beat continuity (#1510). Once every volume's
+  // beats exist (the 4a loop above is exhausted), run ONE cross-issue beat-level
+  // pass BEFORE the expensive text/script generation — catching dropped
+  // cliffhangers, finale drift, unlanded through-lines, and duplicated "firsts"
+  // at the cheap beat altitude instead of after 24 full scripts exist. Only
+  // meaningful when at least one issue actually carries beats; a synopsis-only
+  // run has nothing beat-level to check (and would just duplicate arc verify),
+  // so it's skipped without ever marking the gate.
+  if (!runState.beatContinuityChecked && ordered.some(issueHasBeats)) {
+    return { kind: 'beatContinuity', reason: 'whole-manuscript beat continuity not yet checked this run' };
+  }
+
   // STEP 4b — per-issue text stages (prose + required scripts).
   for (const issue of ordered) {
     if (setHas(runState.textAttempted, issue.id)) continue;
-    if (!textReady(issue, series)) {
+    if (!textReady(issue, series, options)) {
       return { kind: 'textStages', issueId: issue.id, reason: 'prose / scripts not ready' };
     }
   }
 
-  // STEP 4c — structural script gate (comic targets only).
-  if (isComicTarget(series)) {
+  // STEP 4c — structural script gate (comic targets only). Gate on wantsComic,
+  // not bare isComicTarget, so a TV-only run of a comic+tv series doesn't enter
+  // comic-script verification with no comicScript (which would pause on an
+  // unparseable script).
+  if (wantsComic(series, options)) {
     for (const issue of ordered) {
       if (setHas(runState.scriptChecked, issue.id)) continue;
       return { kind: 'scriptVerify', issueId: issue.id, reason: 'comic script not yet structurally verified' };
@@ -274,6 +484,15 @@ export function resolveNextStep(series, issues, runState = {}, options = {}) {
   // STEP 5 — series-level editorial review via the manuscript editor (once).
   if (!runState.editorialReviewed) {
     return { kind: 'editorialReview', reason: 'editorial review not yet run this run' };
+  }
+
+  // STEP 5.1 — refresh the reverse-outline scene segmentation (#1349). Runs AFTER
+  // the editorial completeness pass (STEP 5, which may edit the manuscript) and
+  // BEFORE the registry checks (5.2) so the scene-consuming checks read fresh
+  // scenes. The handler self-gates: a no-op (no budget) when no enabled check
+  // reads the outline or the stored outline is already fresh.
+  if (!runState.reverseOutlineRefreshed) {
+    return { kind: 'reverseOutline', reason: 'reverse-outline segmentation not yet refreshed this run' };
   }
 
   // STEP 5.2 — registry-driven editorial checks (#1284). Runs the enabled
@@ -297,12 +516,12 @@ export function resolveNextStep(series, issues, runState = {}, options = {}) {
   // canon noun that appears where it'd be drawn must be described (an artist
   // can't render a name). Runs once per run; the gate blocks (pauses) on
   // undescribed drawn nouns. Only relevant when visuals will be produced.
-  if (VISUAL_DRAFT_ENABLED && wantsVisual(options) && isComicTarget(series) && !runState.canonVerified) {
+  if (VISUAL_DRAFT_ENABLED && wantsVisual(options) && wantsComic(series, options) && !runState.canonVerified) {
     return { kind: 'canonVerify', reason: 'canon descriptive integrity not yet verified this run' };
   }
 
   // STEP 6 — draft visuals (cover + back + all interior pages).
-  if (VISUAL_DRAFT_ENABLED && wantsVisual(options) && isComicTarget(series)) {
+  if (VISUAL_DRAFT_ENABLED && wantsVisual(options) && wantsComic(series, options)) {
     for (const issue of ordered) {
       if (setHas(runState.visualDrafted, issue.id)) continue;
       if (visualReady(issue)) continue;
@@ -362,9 +581,6 @@ async function persistMarker(seriesId, patch) {
   });
 }
 
-// Two override shapes because the delegated services disagree on field names:
-// the arc/episode/verify passes take { providerOverride, modelOverride }; the
-// child runners (volumeBeatsRunner, autoRunner) take { providerId, model }.
 // File a CoS task for a capability/quality gap the autopilot can't resolve on
 // its own (a script that won't parse, a render that keeps failing, a stalled
 // verify, a run-ending error). Opt-in via `options.fileGaps`; never fires in
@@ -383,13 +599,34 @@ async function fileGap(record, sId, { gapKind, issueId = null, summary, context 
   }
 }
 
+// Series Autopilot threads BOTH its run provider AND its run model as SOFT
+// defaults, NOT hard overrides — so a deliberate per-stage pin (Prompts page /
+// stage-config.json) still wins for that stage, matching what verifyComicScript
+// already does (#1514 for provider; #1558 for model). Each run-level value lands
+// on stageRunner's soft channel (`providerDefault` tier 3 / `modelDefault`): it
+// applies only to UNPINNED stages and soft-falls-through (to the active provider
+// / the provider's default model) when unavailable, rather than throwing
+// PROVIDER_OVERRIDE_UNAVAILABLE or beating a stage's deliberate pin the way a
+// hard override would. For the model dimension "unpinned" means a stage carrying
+// only a *tier* value (default/quick/coding/heavy) — the run model overrides the
+// tier but still loses to a deliberate explicit-model pin (see
+// stageRunner.resolveModelHint). Before #1558 the model was threaded as a hard
+// `modelOverride`, which let the run model beat even an explicit stage pin.
+//
+// Two shapes because the delegated services disagree on field names: the
+// arc/episode/verify passes take `providerDefault`/`modelDefault`; the child
+// runners (volumeBeatsRunner, autoRunner) and the `providerId`-style services
+// take `providerIdDefault`/`modelIdDefault`. Each maps its incoming defaults to
+// stageRunner's `providerDefault`/`modelDefault` at the leaf call while keeping
+// its existing hard `providerOverride`/`providerId` + `modelOverride`/`model`
+// params untouched for manual route callers.
 const providerOverrideOpts = (record) => ({
-  providerOverride: record.options.providerOverride,
-  modelOverride: record.options.modelOverride,
+  providerDefault: record.options.providerOverride,
+  modelDefault: record.options.modelOverride,
 });
 const providerIdOpts = (record) => ({
-  providerId: record.options.providerOverride,
-  model: record.options.modelOverride,
+  providerIdDefault: record.options.providerOverride,
+  modelIdDefault: record.options.modelOverride,
 });
 
 // Pause result when the cos action budget is exhausted, else null. Used to gate
@@ -424,6 +661,7 @@ async function runArcVerify(seriesId, record) {
     record.runState.arcVerified = true;
     return {};
   }
+  let convergence = { best: null, sinceBest: 0 };
   for (let round = 1; round <= maxRounds; round += 1) {
     if (record.cancelRequested) return { canceled: true };
     const beforeVerify = await budgetPause();
@@ -439,71 +677,191 @@ async function runArcVerify(seriesId, record) {
       return {};
     }
     if (round === maxRounds) {
-      return { pause: true, reason: `arc verification did not converge after ${maxRounds} rounds`, residual: blocking };
+      return { pause: true, pauseKind: 'maxRounds', reason: convergencePauseReason('arc', maxRounds, blocking.length), residual: blocking };
+    }
+    // Divergence guard (#1571): if the resolve passes stop reducing blocking
+    // findings, bail now rather than burning the remaining rounds + budget.
+    convergence = trackConvergence(convergence, blocking.length);
+    if (convergence.sinceBest >= DIVERGENCE_PATIENCE) {
+      return { pause: true, pauseKind: 'divergence', reason: divergencePauseReason('arc', blocking.length, DIVERGENCE_PATIENCE), residual: blocking };
     }
     if (record.cancelRequested) return { canceled: true };
     // resolveVerifyIssues bills another action — recheck the budget so a single
     // step can't overspend the daily cap mid-loop.
     const beforeResolve = await budgetPause();
     if (beforeResolve) return beforeResolve;
-    await resolveVerifyIssues(seriesId, { findings: blocking, ...providerOverrideOpts(record) });
+    const resolved = await resolveVerifyIssues(seriesId, { findings: blocking, ...providerOverrideOpts(record) });
     await recordDomainUsage('cos', { actions: 1 });
+    broadcast(seriesId, {
+      type: 'resolve:round', scope: 'arc', round,
+      episodesEdited: Array.isArray(resolved?.episodesResolved) ? resolved.episodesResolved.length : 0,
+    });
   }
   return {};
 }
 
-// Delegate to a child SSE runner and block until it finishes: mark the work as
-// attempted (so a perpetually-failing child can't loop the resolver), start it,
-// expose it as activeChild for responsive cancel, poll to completion, then bill
-// one action. Shared by the beats and text steps.
-async function runChildToCompletion(record, { attemptedSet, kind, id, start, isActive }) {
-  attemptedSet.add(id);
-  await start();
-  record.activeChild = { kind, id };
-  await waitForChild(() => isActive(id), record);
-  record.activeChild = null;
-  await recordDomainUsage('cos', { actions: 1 });
+// Whole-manuscript beat-continuity convergence loop (#1510). Mirrors
+// runArcVerify one altitude down: verify the whole-book beat corpus, and on
+// blocking findings resolve them by rewriting the offending issues' beats in
+// place (resolveBeatContinuity → applyBeatResolutions, no beat-sheet
+// regeneration), then re-verify. Bounded; pauses with the residual on
+// non-convergence. Each verify + each resolve is budget-gated and bills one cos
+// action, like the arc loop.
+async function runBeatContinuity(seriesId, record) {
+  const maxRounds = Number.isInteger(record.options.maxBeatContinuityRounds)
+    ? record.options.maxBeatContinuityRounds
+    : MAX_BEAT_CONTINUITY_ROUNDS;
+  // maxRounds === 0 means "skip the beat-continuity gate entirely".
+  if (maxRounds === 0) {
+    record.runState.beatContinuityChecked = true;
+    return {};
+  }
+  let convergence = { best: null, sinceBest: 0 };
+  for (let round = 1; round <= maxRounds; round += 1) {
+    if (record.cancelRequested) return { canceled: true };
+    const beforeVerify = await budgetPause();
+    if (beforeVerify) return beforeVerify;
+    const { issues } = await analyzeBeatContinuity(seriesId, providerOverrideOpts(record));
+    await recordDomainUsage('cos', { actions: 1 });
+    const blocking = issues.filter((i) => BEAT_CONTINUITY_BLOCKING.has(i.severity));
+    broadcast(seriesId, {
+      type: 'verify:round', scope: 'beatContinuity', round, findings: issues.length, blocking: blocking.length,
+    });
+    if (blocking.length === 0) {
+      record.runState.beatContinuityChecked = true;
+      return {};
+    }
+    if (round === maxRounds) {
+      return { pause: true, pauseKind: 'maxRounds', reason: convergencePauseReason('beatContinuity', maxRounds, blocking.length), residual: blocking };
+    }
+    // Divergence guard (#1571): bail when the resolve passes stop reducing blocking findings.
+    convergence = trackConvergence(convergence, blocking.length);
+    if (convergence.sinceBest >= DIVERGENCE_PATIENCE) {
+      return { pause: true, pauseKind: 'divergence', reason: divergencePauseReason('beatContinuity', blocking.length, DIVERGENCE_PATIENCE), residual: blocking };
+    }
+    if (record.cancelRequested) return { canceled: true };
+    // resolveBeatContinuity bills another action — recheck the budget so a
+    // single step can't overspend the daily cap mid-loop.
+    const beforeResolve = await budgetPause();
+    if (beforeResolve) return beforeResolve;
+    const resolved = await resolveBeatContinuity(seriesId, { findings: blocking, ...providerOverrideOpts(record) });
+    await recordDomainUsage('cos', { actions: 1 });
+    broadcast(seriesId, {
+      type: 'resolve:round', scope: 'beatContinuity', round,
+      episodesEdited: Array.isArray(resolved?.episodesResolved)
+        ? resolved.episodesResolved.filter((e) => e?.corrected).length
+        : 0,
+    });
+  }
   return {};
 }
 
-const runBeats = (seriesId, seasonId, record) => runChildToCompletion(record, {
+// Resolve the effective retry budget for a delegated child runner this run: a
+// per-run `maxChildRetries` option wins, else the module default. Negative
+// values clamp to 0 (single attempt).
+function childRetryBudget(record) {
+  const v = record.options.maxChildRetries;
+  return Number.isInteger(v) ? Math.max(0, v) : MAX_CHILD_RETRIES;
+}
+
+// Delegate to a child SSE runner, block until it finishes, then VERIFY the child
+// actually produced its target output before advancing (#1574). Shared by the
+// beats and text steps. `checkReady` returns null when the output landed, or a
+// `{ reason, residual }` describing what's still missing. On a miss the child is
+// retried (skip-existing, so a retry only fills the gap) up to the run's retry
+// budget; each attempt is budget-gated and bills one cos action. When the budget
+// is exhausted the retries stop. If the output is still missing after the last
+// attempt the work is marked attempted (so the resolver can't loop back here), an
+// escalation frame is emitted, and a pause result is returned for human review —
+// instead of the pre-#1574 silent skip that let a failed child reach 'done'.
+async function runChildToCompletion(seriesId, record, {
+  attemptedSet, kind, id, start, isActive, checkReady,
+}) {
+  const maxAttempts = childRetryBudget(record) + 1;
+  let miss = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    if (record.cancelRequested) return { canceled: true };
+    // Each child run bills one cos action — budget-gate every attempt so a
+    // retry can't overspend the daily cap (mirrors the verify loops).
+    const beforeStart = await budgetPause();
+    if (beforeStart) return beforeStart;
+    await start();
+    record.activeChild = { kind, id };
+    await waitForChild(() => isActive(id), record);
+    record.activeChild = null;
+    await recordDomainUsage('cos', { actions: 1 });
+    if (record.cancelRequested) return { canceled: true };
+    miss = checkReady ? await checkReady() : null;
+    if (!miss) {
+      attemptedSet.add(id);
+      return {};
+    }
+    if (attempt < maxAttempts) {
+      broadcast(seriesId, {
+        type: 'child:retry', kind, id, attempt, maxAttempts, reason: miss.reason,
+      });
+    }
+  }
+  // Output still missing after every attempt — escalate and pause. `pauseKind`
+  // keeps this pause classifiable alongside the verify/editorial loops'
+  // 'maxRounds'/'divergence' kinds (a child runner that couldn't produce output,
+  // distinct from a convergence gate that ran out of rounds).
+  attemptedSet.add(id);
+  broadcast(seriesId, {
+    type: 'child:escalate', kind, id, attempts: maxAttempts, reason: miss.reason,
+  });
+  return { pause: true, pauseKind: 'childFailed', reason: miss.reason, residual: miss.residual };
+}
+
+const runBeats = (seriesId, seasonId, record) => runChildToCompletion(seriesId, record, {
   attemptedSet: record.runState.beatsAttempted,
   kind: 'beats',
   id: seasonId,
   start: () => volumeBeatsRunner.startVolumeBeatsRun(seriesId, seasonId, { mode: 'skip-existing', ...providerIdOpts(record) }),
   isActive: volumeBeatsRunner.isVolumeBeatsRunActive,
+  // Beats succeeded when every issue in the volume has a ready `idea` stage —
+  // the same predicate the resolver uses to decide a volume still needs beats.
+  // Before #1574 a failed beats run was silently marked attempted and only
+  // surfaced (if at all) when a downstream stage found `idea` empty.
+  checkReady: async () => {
+    const inSeason = (await listIssues({ seriesId })).filter((i) => i.seasonId === seasonId);
+    const missing = inSeason.filter((i) => !isStageReady(i.stages?.idea));
+    if (missing.length === 0) return null;
+    return {
+      reason: `beat generation for volume ${seasonId} did not produce beats for ${missing.length} issue(s)`,
+      residual: missing.map((i) => ({ severity: 'high', location: `issue ${i.number ?? '?'} / idea`, problem: 'beat sheet (idea stage) is still empty after the beats run (likely an LLM failure)' })),
+    };
+  },
 });
 
-async function runText(issueId, record) {
-  record.runState.textAttempted.add(issueId);
-  // Only adapt the target format's script(s) — a single-format series shouldn't
-  // spend LLM calls populating the off-target script across every issue.
-  const preIssue = await getIssue(issueId);
-  const preSeries = await getSeries(preIssue.seriesId).catch(() => null);
-  const scripts = requiredScriptStages(preSeries);
-  // Forward the run's provider/model override so prose + scripts honor it like
-  // every other step (autoRunner threads these into generateStage).
-  await autoRunner.startAutoRunTextStages(issueId, { force: false, scripts, ...providerIdOpts(record) });
-  record.activeChild = { kind: 'text', id: issueId };
-  await waitForChild(() => autoRunner.isAutoRunActive(issueId), record);
-  record.activeChild = null;
-  await recordDomainUsage('cos', { actions: 1 });
+const runText = (seriesId, issueId, record) => runChildToCompletion(seriesId, record, {
+  attemptedSet: record.runState.textAttempted,
+  kind: 'text',
+  id: issueId,
+  start: async () => {
+    // Only adapt the target format's script(s) — a single-format series shouldn't
+    // spend LLM calls populating the off-target script across every issue.
+    const preIssue = await getIssue(issueId);
+    const preSeries = await getSeries(preIssue.seriesId).catch(() => null);
+    const scripts = requiredScriptStages(preSeries, record.options);
+    // Forward the run's provider/model override so prose + scripts honor it like
+    // every other step (autoRunner threads these into generateStage).
+    await autoRunner.startAutoRunTextStages(issueId, { force: false, scripts, ...providerIdOpts(record) });
+  },
+  isActive: autoRunner.isAutoRunActive,
   // A delegated text run can end with required stages still empty (the child's
-  // LLM call failed). The issue is already marked attempted, so the resolver
-  // would skip it and the run could reach 'done' with no script — verify the
-  // required stages landed and pause for review if they didn't.
-  const issue = await getIssue(issueId);
-  const series = await getSeries(issue.seriesId).catch(() => null);
-  if (!textReady(issue, series)) {
-    const missing = requiredScriptStages(series).filter((s) => !isStageReady(issue.stages?.[s]));
+  // LLM call failed) — verify the required stages landed before advancing.
+  checkReady: async () => {
+    const issue = await getIssue(issueId);
+    const series = await getSeries(issue.seriesId).catch(() => null);
+    if (textReady(issue, series, record.options)) return null;
+    const missing = requiredScriptStages(series, record.options).filter((s) => !isStageReady(issue.stages?.[s]));
     return {
-      pause: true,
       reason: `text generation for issue ${issue.number ?? issueId} did not produce required stage(s): ${missing.join(', ')}`,
       residual: missing.map((s) => ({ severity: 'high', location: `issue ${issue.number ?? '?'} / ${s}`, problem: 'stage is still empty after the text run (likely an LLM failure)' })),
     };
-  }
-  return {};
-}
+  },
+});
 
 async function runScriptVerify(sId, issueId, record) {
   record.runState.scriptChecked.add(issueId);
@@ -553,6 +911,13 @@ async function runScriptVerify(sId, issueId, record) {
       summary: `Comic script craft review found ${blocking.length} blocking issue(s): ${blocking.map((b) => b.problem).join(' | ').slice(0, 600)}`,
       context: JSON.stringify(blocking).slice(0, 1000),
     });
+    // #1572 — fileGap is advisory and only persists a gap task when fileGaps is
+    // on (mirror its predicate). Tally what was actually FILED so the terminal
+    // "complete" frame can qualify itself instead of silently reporting clean.
+    if (record.options.fileGaps && record.mode === 'execute') {
+      record.runState.scriptCraftGapIssues.add(issueId);
+      record.runState.scriptCraftBlocking += blocking.length;
+    }
   }
   return {};
 }
@@ -568,12 +933,17 @@ async function runEditorial(sId, record) {
   // checks on demand via the route.
   if (maxRounds === 0) {
     record.runState.editorialReviewed = true;
+    // The reverse-outline refresh (#1349) only feeds the registry checks, so a run
+    // that skips the whole editorial gate must skip it too — mark it refreshed so
+    // the resolver advances past STEP 5.1 without spending budget.
+    record.runState.reverseOutlineRefreshed = true;
     record.runState.editorialChecksReviewed = true;
     // Skipping the editorial gate also skips its health convergence check (#1316)
     // — the resolver must advance past editorialHealthGate too.
     record.runState.editorialHealthReady = true;
     return {};
   }
+  let convergence = { best: null, sinceBest: 0 };
   for (let round = 1; round <= maxRounds; round += 1) {
     if (record.cancelRequested) return { canceled: true };
     const beforeAnalyze = await budgetPause();
@@ -597,7 +967,12 @@ async function runEditorial(sId, record) {
       return {};
     }
     if (round === maxRounds) {
-      return { pause: true, reason: `editorial review did not converge after ${maxRounds} round(s)`, residual: blocking };
+      return { pause: true, pauseKind: 'maxRounds', reason: convergencePauseReason('editorial', maxRounds, blocking.length), residual: blocking };
+    }
+    // Divergence guard (#1571): bail when the auto-fix passes stop reducing blocking findings.
+    convergence = trackConvergence(convergence, blocking.length);
+    if (convergence.sinceBest >= DIVERGENCE_PATIENCE) {
+      return { pause: true, pauseKind: 'divergence', reason: divergencePauseReason('editorial', blocking.length, DIVERGENCE_PATIENCE), residual: blocking };
     }
     // Bounded auto-fix: apply a fix for each open high-severity comment, then
     // the loop re-analyzes. Each fix is wrapped so one bad anchor doesn't abort
@@ -611,7 +986,13 @@ async function runEditorial(sId, record) {
       const beforeFix = await budgetPause();
       if (beforeFix) return beforeFix;
       try {
-        if (!comment.fix) await generateManuscriptFix(sId, { commentId: comment.id });
+        // Thread the run's provider/model override into fix GENERATION (an LLM
+        // call) so it honors the same provider as the review — without this the
+        // fix silently runs on the active/default provider (and its runtime
+        // fallback), which diverges from the run's chosen model and, when the
+        // default is rate-limited, degrades fixes onto a weak fallback. Accept
+        // is a deterministic edit application (no LLM), so it needs no override.
+        if (!comment.fix) await generateManuscriptFix(sId, { commentId: comment.id, ...providerOverrideOpts(record) });
         await acceptManuscriptFix(sId, { commentId: comment.id });
         await recordDomainUsage('cos', { actions: 1 });
       } catch (err) {
@@ -619,6 +1000,75 @@ async function runEditorial(sId, record) {
       }
     }
   }
+  return {};
+}
+
+// STEP 5.1 — refresh the reverse-outline scene segmentation (#1349) before the
+// registry-driven editorial checks (5.2), so the scene-consuming checks read the
+// current draft's scenes rather than a segmentation staled by this run's editorial
+// edits. Two cheap pre-gates keep this from spending budget needlessly:
+//   1. skip entirely when no enabled editorial check declares a reverse-outline
+//      source (mirrors the runner's own needsReverseOutline gate), and
+//   2. skip when the stored outline is already fresh — using getReverseOutline's
+//      canonical `stale` flag, NOT a stale-check reimplemented here.
+// Only when a regenerate will actually occur do we gate the daily budget and bill a
+// cos action — the same shape as runEditorialChecksPass, which gates+bills only when
+// an enabled LLM check will actually run. `force:false`
+// is a belt-and-suspenders second guard against the stored outline going fresh
+// between the pre-check and the call. Failures are advisory (logged), never block.
+
+// #1575 — the per-run editorial-check subset (null = all enabled). Absent/empty
+// is normalized to null so EVERY consumer (this reverse-outline gate, the budget
+// plan, the checks run) resolves the identical set — otherwise a subset of checks
+// that skip the outline could still trigger/bill the refresh keyed off the global
+// enabled set, or the gate could bill against checks the run skips.
+const editorialSubsetIds = (options) =>
+  Array.isArray(options?.editorialCheckIds) && options.editorialCheckIds.length
+    ? options.editorialCheckIds
+    : null;
+
+async function runReverseOutlineRefresh(sId, record) {
+  if (record.cancelRequested) return { canceled: true };
+  const settings = await getSettings();
+  // Gate 1 — does any enabled check (narrowed to this run's subset) even read the
+  // outline? If not, nothing to do — and a subset that skips outline-consuming
+  // checks must not pay for a refresh those checks would have triggered.
+  if (!enabledChecksConsumeReverseOutline(settings, editorialSubsetIds(record.options))) {
+    record.runState.reverseOutlineRefreshed = true;
+    return {};
+  }
+  // Gate 2 — is the stored outline stale (or never generated against a draftable
+  // manuscript)? `no-content` (nothing drafted) needs no outline; `none` (draftable
+  // but never segmented) and a `complete`-but-`stale` outline both need a regen.
+  const current = await getReverseOutline(sId).catch(() => null);
+  const needsRegen = !!current
+    && current.status !== 'no-content'
+    && (current.status === 'none' || current.stale === true);
+  if (!needsRegen) {
+    record.runState.reverseOutlineRefreshed = true;
+    return {};
+  }
+  // A regenerate WILL spend one LLM call — gate the budget and bill, like the
+  // other LLM passes. Bridge autopilot cancellation into the stage's AbortSignal.
+  const beforeRefresh = await budgetPause();
+  if (beforeRefresh) return beforeRefresh;
+  const signal = { get aborted() { return record.cancelRequested; } };
+  const result = await generateReverseOutline(sId, { ...providerIdOpts(record), force: false, signal })
+    .catch((err) => {
+      console.log(`⚠️ autopilot: reverse-outline refresh failed for ${sId.slice(0, 12)}: ${err.message}`);
+      return null;
+    });
+  // Canceled mid-pass — don't bill, don't mark refreshed; let the loop unwind.
+  if (result?.status === 'canceled' || record.cancelRequested) return { canceled: true };
+  // Bill ONLY when the call actually regenerated (an LLM run). A `cached` result
+  // (outline went fresh in the race window) or a `no-content` series spent nothing.
+  // No verify:round broadcast here — a refresh isn't a review round (it produces
+  // scenes, not findings); the conductor's generic step:start/step:complete already
+  // surface "Refreshing scene segmentation…" / "done" to the UI.
+  if (result && result.cached !== true && result.status !== 'no-content') {
+    await recordDomainUsage('cos', { actions: 1 });
+  }
+  record.runState.reverseOutlineRefreshed = true;
   return {};
 }
 
@@ -632,7 +1082,11 @@ async function runEditorial(sId, record) {
 async function runEditorialChecksPass(sId, record) {
   if (record.cancelRequested) return { canceled: true };
   const settings = await getSettings();
-  const plan = await buildEditorialCheckPlan(sId, { settings });
+  // #1575 — narrow the pass + its budget gate to this run's subset (null = all
+  // enabled). The gate (buildEditorialCheckPlan) and the run (runEditorialChecks)
+  // must resolve the SAME set so billing and execution agree.
+  const checkIds = editorialSubsetIds(record.options);
+  const plan = await buildEditorialCheckPlan(sId, { checkIds, settings });
   const hasLlmCheck = plan.checks.some((c) => c.kind === 'llm');
   if (hasLlmCheck) {
     const beforeChecks = await budgetPause();
@@ -643,7 +1097,13 @@ async function runEditorialChecksPass(sId, record) {
   // (the runner re-checks `signal.aborted` after each check). A live getter
   // reflects `record.cancelRequested` without a separate controller to manage.
   const signal = { get aborted() { return record.cancelRequested; } };
-  const result = await runEditorialChecks(sId, { ...providerOverrideOpts(record), settings, signal }).catch((err) => {
+  // #1578 — forward the runner's per-check check:start/check:complete frames up
+  // the autopilot SSE stream (tagged scope:'editorialChecks' so the UI groups
+  // them with the editorialChecks verify:round). Without this the only signal
+  // during a long (issues × checks) pass is the single terminal verify:round
+  // total — no per-check progress or severity breakdown.
+  const onProgress = (event) => broadcast(sId, { ...event, scope: 'editorialChecks' });
+  const result = await runEditorialChecks(sId, { ...providerOverrideOpts(record), checkIds, settings, signal, onProgress }).catch((err) => {
     console.log(`⚠️ autopilot: editorial checks failed for ${sId.slice(0, 12)}: ${err.message}`);
     return null;
   });
@@ -652,7 +1112,16 @@ async function runEditorialChecksPass(sId, record) {
   if (result?.canceled || record.cancelRequested) return { canceled: true };
   if (result) {
     if (hasLlmCheck) await recordDomainUsage('cos', { actions: 1 });
-    broadcast(sId, { type: 'verify:round', scope: 'editorialChecks', round: 1, findings: result.findings.length, blocking: 0 });
+    // #1573 — a check whose run() threw is recorded in perCheck.error but the
+    // pass otherwise looks clean. Surface the errored count + failing checkIds on
+    // the round frame and accumulate them onto the run so the terminal summary
+    // can flag a partial failure (no silent "complete").
+    const { errored, erroredCheckIds } = summarizeCheckErrors(result.perCheck);
+    erroredCheckIds.forEach((id) => record.runState.editorialCheckErroredIds.add(id));
+    broadcast(sId, { type: 'verify:round', scope: 'editorialChecks', round: 1, findings: result.findings.length, blocking: 0, errored, erroredCheckIds });
+    if (errored) {
+      console.error(`❌ autopilot: ${errored} editorial check(s) errored — series=${sId.slice(0, 12)} ${erroredCheckIds.join(', ')}`);
+    }
   }
   record.runState.editorialChecksReviewed = true;
   return {};
@@ -668,8 +1137,11 @@ async function runEditorialChecksPass(sId, record) {
 // fixes; remaining blockers need a human (or a re-run after edits).
 async function runEditorialHealthGate(sId, record) {
   if (record.cancelRequested) return { canceled: true };
-  const settings = await getSettings().catch(() => null);
-  const gate = readReadinessGate(settings) || undefined;
+  // The effective gate (per-run override → persisted setting → null) was resolved
+  // and stamped onto record.options at start (#1580), mirroring the round bounds —
+  // so the loop and the dry-run plan can't disagree on which gate applied. null
+  // falls through to DEFAULT_READINESS_GATE inside computeHealth/openBlockers.
+  const gate = record.options.readinessGate || undefined;
   // Do NOT swallow a getReview error into an empty review — that would fail OPEN
   // (the gate would pass on a corrupt/unreadable store and let the run proceed to
   // visuals without verifying health). Let it bubble to the coordinator's
@@ -687,8 +1159,17 @@ async function runEditorialHealthGate(sId, record) {
   }
   // Not clean — surface the open blockers (via the shared helper, so the residual
   // can't disagree with computeHealth's `ready` verdict) for the human triage.
+  // No pauseKind (#1571): this is a single-pass gate, not a bounded verify→resolve
+  // loop, so it has no maxRounds/divergence distinction — leave it null. If this
+  // ever gains a retry loop, thread pauseKind through trackConvergence then.
   const blockers = openBlockers(comments, gate);
-  return { pause: true, reason: `editorial health not clean (score ${health.score}, ${health.open} open finding(s))`, residual: blockers };
+  // Surface the per-check / per-issue breakdown that drove the pause (#1579) —
+  // a single emoji-prefixed line so "why did health reject my 50-issue series?"
+  // is answerable from the logs, and the same breakdown on the marker so the UI
+  // / resume banner can render it without re-hitting the health API.
+  const healthBreakdown = summarizeEditorialBlockers(health);
+  console.log(`🩺 editorial health gate not clean — series=${sId.slice(0, 12)} score=${health.score}, ${health.open} open: ${formatBlockerSummary(healthBreakdown)}`);
+  return { pause: true, reason: `editorial health not clean (score ${health.score}, ${health.open} open finding(s))`, residual: blockers, healthBreakdown };
 }
 
 // Turn a render-enqueue result into the { slotKey, slot } pair the render
@@ -912,12 +1393,16 @@ async function dispatchStep(sId, step, record) {
       return runArcVerify(sId, record);
     case 'beatSheet':
       return runBeats(sId, step.seasonId, record);
+    case 'beatContinuity':
+      return runBeatContinuity(sId, record);
     case 'textStages':
-      return runText(step.issueId, record);
+      return runText(sId, step.issueId, record);
     case 'scriptVerify':
       return runScriptVerify(sId, step.issueId, record);
     case 'editorialReview':
       return runEditorial(sId, record);
+    case 'reverseOutline':
+      return runReverseOutlineRefresh(sId, record);
     case 'editorialChecks':
       return runEditorialChecksPass(sId, record);
     case 'editorialHealthGate':
@@ -939,30 +1424,89 @@ async function dispatchStep(sId, step, record) {
 // plan (counts of every unmet step) rather than returning only the next one —
 // so it can't reuse the single-step resolver. Kept deliberately in sync by
 // hand; they share the same predicates (textReady, isComicTarget, isStageReady).
-function buildDryRunPlan(series, issues, options) {
+// `costContext.editorialLlmCheckCount` (optional) is the resolved number of
+// enabled LLM-kind editorial checks for this run's subset — supplied by the
+// caller (which has loaded settings) so this stays a pure, synchronous function.
+// When provided it drives the editorialChecks step's estLlmCalls (issues × LLM
+// checks) and whether that pass bills a cos action at all; absent, the step
+// estimates a single LLM check.
+function buildDryRunPlan(series, issues, options, costContext = {}) {
   const plan = [];
   const ordered = orderedIssues(issues);
   const seasons = Array.isArray(series?.seasons) ? [...series.seasons].sort(byNumber) : [];
   // Mirror the resolver: generateArc runs when arc text is missing OR there are
   // no volumes at all (an arc-only series), so a dry-run plan must show it too.
   const noArc = !series?.arc?.logline && !series?.arc?.summary;
-  if (noArc || seasons.length === 0) plan.push({ kind: 'generateArc', count: 1 });
+  if (noArc || seasons.length === 0) plan.push({ kind: 'generateArc', count: 1, estActions: 1 });
   const emptySeasons = seasons.filter((s) => !ordered.some((i) => i.seasonId === s.id));
-  if (emptySeasons.length) plan.push({ kind: 'generateEpisodes', count: emptySeasons.length });
-  plan.push({ kind: 'verifyArc', count: 1, note: `up to ${MAX_ARC_VERIFY_ROUNDS} rounds` });
+  if (emptySeasons.length) plan.push({ kind: 'generateEpisodes', count: emptySeasons.length, estActions: emptySeasons.length });
+  const arcRounds = Number.isInteger(options?.maxArcVerifyRounds) ? options.maxArcVerifyRounds : MAX_ARC_VERIFY_ROUNDS;
+  plan.push({ kind: 'verifyArc', count: 1, note: roundsNote(arcRounds), estActions: convergenceLoopActions(arcRounds) });
   const beatsNeeded = seasons.filter((s) =>
     ordered.some((i) => i.seasonId === s.id && !isStageReady(i.stages?.idea))).length;
-  if (beatsNeeded) plan.push({ kind: 'beatSheet', count: beatsNeeded });
-  const textNeeded = ordered.filter((i) => !textReady(i, series)).length;
-  if (textNeeded) plan.push({ kind: 'textStages', count: textNeeded });
-  if (isComicTarget(series)) plan.push({ kind: 'scriptVerify', count: ordered.length });
-  plan.push({ kind: 'editorialReview', count: 1, note: `up to ${MAX_EDITORIAL_ROUNDS} rounds` });
-  plan.push({ kind: 'editorialChecks', count: 1, note: 'enabled editorial checks (#1284)' });
-  plan.push({ kind: 'editorialHealthGate', count: 1, note: 'editorial health readiness gate (#1316)' });
-  if (VISUAL_DRAFT_ENABLED && wantsVisual(options) && isComicTarget(series)) {
-    plan.push({ kind: 'canonVerify', count: 1, note: 'descriptive integrity of drawn nouns' });
+  if (beatsNeeded) plan.push({ kind: 'beatSheet', count: beatsNeeded, estActions: beatsNeeded });
+  // beatContinuity (#1510) runs once when the run will have a beat corpus to
+  // check: beats already exist, OR beatSheet will generate them this run. Mirror
+  // the resolver's `ordered.some(issueHasBeats)` gate (post-generation), so a
+  // synopsis-only run that produces no beats doesn't advertise a pass it skips.
+  if (ordered.some(issueHasBeats) || beatsNeeded) {
+    const bcRounds = Number.isInteger(options?.maxBeatContinuityRounds)
+      ? options.maxBeatContinuityRounds
+      : MAX_BEAT_CONTINUITY_ROUNDS;
+    plan.push({ kind: 'beatContinuity', count: 1, note: roundsNote(bcRounds), estActions: convergenceLoopActions(bcRounds) });
+  }
+  const textNeeded = ordered.filter((i) => !textReady(i, series, options)).length;
+  if (textNeeded) plan.push({ kind: 'textStages', count: textNeeded, estActions: textNeeded });
+  if (wantsComic(series, options)) plan.push({ kind: 'scriptVerify', count: ordered.length, estActions: ordered.length });
+  const edRounds = Number.isInteger(options?.maxEditorialRounds) ? options.maxEditorialRounds : MAX_EDITORIAL_ROUNDS;
+  // Editorial review is a verify→auto-fix convergence loop like the arc gate, so
+  // the per-round estimate mirrors it (analyze + one resolve batch / round). The
+  // per-comment auto-fixes within a round bill additionally and scale with the
+  // number of blocking findings, which isn't knowable at plan time.
+  plan.push({ kind: 'editorialReview', count: 1, note: roundsNote(edRounds), estActions: convergenceLoopActions(edRounds) });
+  // maxEditorialRounds === 0 skips the whole editorial gate in execute mode
+  // (runEditorial marks editorialReviewed + editorialChecksReviewed +
+  // editorialHealthReady), so the plan must not advertise the registry checks or
+  // the health gate that won't run.
+  if (edRounds !== 0) {
+    plan.push({ kind: 'reverseOutline', count: 1, note: 'refresh scene segmentation for editorial checks (#1349)', estActions: 1 });
+    // #1575 — when a per-run subset is set, the plan must say so rather than imply
+    // the full enabled set runs.
+    const editorialSubset = editorialSubsetIds(options);
+    // The checks pass bills a single cos action (only when an LLM check runs) but
+    // fans out to many LLM calls. The real call count depends on how each check
+    // chunks the stitched manuscript by provider context window, so it isn't
+    // knowable at plan time — `issues × enabled LLM checks` is a rough proxy that
+    // scales with both series size and check count, surfaced so a large series's
+    // check cost is visible. When the caller didn't resolve the enabled-check
+    // count, assume one LLM check runs.
+    const llmCheckCount = Number.isInteger(costContext?.editorialLlmCheckCount)
+      ? costContext.editorialLlmCheckCount
+      : 1;
+    const estLlmCalls = ordered.length * llmCheckCount;
+    const checksNote = editorialSubset
+      ? `per-run subset of ${editorialSubset.length} editorial check(s) (#1575)`
+      : 'enabled editorial checks (#1284)';
+    plan.push({
+      kind: 'editorialChecks',
+      count: 1,
+      note: llmCheckCount > 0 ? `${checksNote} — ~${estLlmCalls} LLM call(s)` : checksNote,
+      estActions: llmCheckCount > 0 ? 1 : 0,
+      estLlmCalls,
+    });
+    // Surface the effective readiness gate (#1580) so a per-run override is
+    // visible in the dry-run plan, mirroring how roundsNote exposes the bounds.
+    const gate = resolveReadinessGate(options?.readinessGate);
+    plan.push({ kind: 'editorialHealthGate', count: 1, note: `editorial health readiness gate (#1316) — gate: ${gate}`, estActions: 0 });
+  }
+  if (VISUAL_DRAFT_ENABLED && wantsVisual(options) && wantsComic(series, options)) {
+    // canonVerify runs an LLM pass but bills no cos action (token-only) — 0 budget.
+    plan.push({ kind: 'canonVerify', count: 1, note: 'descriptive integrity of drawn nouns (no budget cost)', estActions: 0 });
     const visualNeeded = ordered.filter((i) => !visualReady(i)).length;
-    if (visualNeeded) plan.push({ kind: 'visualDraft', count: visualNeeded, note: 'cover + back + all pages (draft)' });
+    // Each draft render bills one cos action: cover + back per issue, plus one per
+    // interior page. The interior-page count isn't known until the script parses,
+    // so the estimate counts the two covers and notes the per-page additions.
+    if (visualNeeded) plan.push({ kind: 'visualDraft', count: visualNeeded, note: 'cover + back + all pages (draft) — +1 action per interior page', estActions: visualNeeded * 2 });
   }
   return plan;
 }
@@ -988,6 +1532,18 @@ export async function startSeriesAutopilot(sId, options = {}) {
     return { rejected: true, mode: 'off' };
   }
 
+  // Resolve the convergence-round bounds ONCE at start (per-run option →
+  // persisted setting → default) and stamp them onto the run's options so the
+  // synchronous loops, the dry-run plan, and a later resume all read the same
+  // effective values. A resume reuses this same path, so a raised persisted
+  // setting takes effect on the next Resume without re-specifying it.
+  const settings = await getSettings().catch(() => null);
+  const runOptions = {
+    ...options,
+    ...resolveAutopilotRounds(options, settings),
+    readinessGate: resolveAutopilotReadinessGate(options, settings),
+  };
+
   if (existing) {
     // A finished run still in its replay window — evict it so this fresh run
     // fully replaces it (mirrors editorialAnalysisRunner).
@@ -1005,11 +1561,13 @@ export async function startSeriesAutopilot(sId, options = {}) {
     cleanupTimer: null,
     startedAt: new Date().toISOString(),
     mode,
-    options,
+    options: runOptions,
     runState: {
       arcAttempted: false,
       arcVerified: false,
+      beatContinuityChecked: false,
       editorialReviewed: false,
+      reverseOutlineRefreshed: false,
       editorialChecksReviewed: false,
       editorialHealthReady: false,
       canonVerified: false,
@@ -1018,6 +1576,16 @@ export async function startSeriesAutopilot(sId, options = {}) {
       textAttempted: new Set(),
       scriptChecked: new Set(),
       visualDrafted: new Set(),
+      // #1572 — issues whose ADVISORY craft gate filed a blocking gap task, and
+      // the total blocking-finding count. Carried into the terminal `complete`
+      // frame + persisted marker so a "clean complete" doesn't hide downstream
+      // render blockers the user still has to resolve.
+      scriptCraftGapIssues: new Set(),
+      scriptCraftBlocking: 0,
+      // #1573 — checkIds of editorial checks that threw during this run's checks
+      // pass. Surfaced on the terminal `complete` frame + persisted marker so a
+      // check that errors every run is visible instead of a silent "clean".
+      editorialCheckErroredIds: new Set(),
     },
     activeChild: null,
   };
@@ -1031,14 +1599,21 @@ export async function startSeriesAutopilot(sId, options = {}) {
       if (mode === 'dry-run') {
         const series = await getSeries(sId);
         const issues = await listIssues({ seriesId: sId });
-        const plan = buildDryRunPlan(series, issues, options);
-        broadcast(sId, { type: 'start', runId, mode, target: series.targetFormat, plan });
+        // Resolve the enabled LLM-check count (#1576) so the plan's editorialChecks
+        // step can estimate its issues × checks LLM fan-out. Mirrors the actual
+        // pass: same subset (editorialSubsetIds) and same settings the checks read.
+        const settings = await getSettings().catch(() => null);
+        const checkPlan = await buildEditorialCheckPlan(sId, { checkIds: editorialSubsetIds(runOptions), settings }).catch(() => null);
+        const editorialLlmCheckCount = checkPlan ? checkPlan.checks.filter((c) => c.kind === 'llm').length : undefined;
+        const plan = buildDryRunPlan(series, issues, runOptions, { editorialLlmCheckCount });
+        const planTotals = summarizePlanCost(plan);
+        broadcast(sId, { type: 'start', runId, mode, target: series.targetFormat, plan, planTotals });
         // Carry the plan on the terminal frame too: a dry-run emits start +
         // complete synchronously, often before the client attaches, and
         // attachSseClient replays only the LAST frame — so the plan would be
         // lost if it lived solely on the start frame.
-        broadcast(sId, { type: 'complete', runId, dryRun: true, steps: plan.length, plan, completedAt: new Date().toISOString() });
-        console.log(`🧭 autopilot dry-run — series=${sId.slice(0, 12)} steps=${plan.length}`);
+        broadcast(sId, { type: 'complete', runId, dryRun: true, steps: plan.length, plan, planTotals, completedAt: new Date().toISOString() });
+        console.log(`🧭 autopilot dry-run — series=${sId.slice(0, 12)} steps=${plan.length} est≈${planTotals.estActions} action(s) ${planTotals.estLlmCalls} LLM call(s)`);
         return;
       }
 
@@ -1046,7 +1621,7 @@ export async function startSeriesAutopilot(sId, options = {}) {
       const series0 = await getSeries(sId);
       broadcast(sId, { type: 'start', runId, mode, target: series0.targetFormat });
       await persistMarker(sId, { status: 'running', runId, currentStep: null, residualFindings: [], lastError: null });
-      if (options.includeVisual && !VISUAL_DRAFT_ENABLED) {
+      if (runOptions.includeVisual && !VISUAL_DRAFT_ENABLED) {
         broadcast(sId, { type: 'note', message: 'Draft visual rendering is not enabled in this build — running to text-ready + editorial review.' });
       }
 
@@ -1054,12 +1629,24 @@ export async function startSeriesAutopilot(sId, options = {}) {
       while (!record.cancelRequested) {
         const series = await getSeries(sId);
         const issues = await listIssues({ seriesId: sId });
-        const step = resolveNextStep(series, issues, record.runState, options);
+        const step = resolveNextStep(series, issues, record.runState, runOptions);
 
         if (step.kind === 'done') {
-          await persistMarker(sId, { status: 'done', runId, currentStep: null });
-          broadcast(sId, { type: 'complete', runId, steps: ordinal, completedAt: new Date().toISOString() });
-          console.log(`✅ autopilot complete — series=${sId.slice(0, 12)} steps=${ordinal}`);
+          // #1572 — qualify "complete" when the advisory craft gate filed
+          // blocking script-craft gaps during this run: the run is done, but
+          // those gaps still block downstream visual rendering, so report them
+          // on both the persisted marker and the terminal frame.
+          const craftGapIssues = record.runState.scriptCraftGapIssues.size;
+          const craftGapFindings = record.runState.scriptCraftBlocking;
+          // #1573 — qualify "complete" when an editorial check threw this run: the
+          // run finished, but a check that errored produced no findings, so its
+          // dimension was never actually evaluated. Persist the count + carry the
+          // failing checkIds on the frame so the UI flags it instead of "clean".
+          const editorialCheckErroredIds = [...record.runState.editorialCheckErroredIds];
+          const editorialCheckErrors = editorialCheckErroredIds.length;
+          await persistMarker(sId, { status: 'done', runId, currentStep: null, craftGapIssues, craftGapFindings, editorialCheckErrors });
+          broadcast(sId, { type: 'complete', runId, steps: ordinal, craftGapIssues, craftGapFindings, editorialCheckErrors, editorialCheckErroredIds, completedAt: new Date().toISOString() });
+          console.log(`✅ autopilot complete — series=${sId.slice(0, 12)} steps=${ordinal}${craftGapIssues ? ` (${craftGapIssues} issue(s) with filed script-craft gaps)` : ''}${editorialCheckErrors ? ` (${editorialCheckErrors} editorial check(s) errored: ${editorialCheckErroredIds.join(', ')})` : ''}`);
           return;
         }
 
@@ -1072,8 +1659,24 @@ export async function startSeriesAutopilot(sId, options = {}) {
         // complete a text-ready series even with the budget exhausted. The
         // editorialHealthGate (#1316) is likewise exempt — it's a pure read +
         // score with no LLM cost, so a budget-exhausted run can still produce its
-        // readiness verdict (and pause on the findings, not the budget).
-        if (step.kind !== 'editorialChecks' && step.kind !== 'editorialHealthGate') {
+        // readiness verdict (and pause on the findings, not the budget). The
+        // reverseOutline refresh is exempt for the SAME reason as editorialChecks:
+        // runReverseOutlineRefresh self-gates (it only calls budgetPause + bills
+        // when it will actually regenerate), and it no-ops when no enabled check —
+        // narrowed to this run's #1575 subset — consumes the outline. A blanket
+        // pre-dispatch pause here would wrongly stall a deterministic-only subset
+        // (whose refresh is a guaranteed no-op) on an exhausted budget. A gate
+        // whose resolved rounds is 0 ("skip") is also exempt: runArcVerify /
+        // runEditorial short-circuit with no LLM spend, so "0 skips the gate" must
+        // hold even when the budget is exhausted (otherwise the run pauses on
+        // budget instead of skipping).
+        const zeroRoundSkip = (step.kind === 'verifyArc' && runOptions.maxArcVerifyRounds === 0)
+          || (step.kind === 'beatContinuity' && runOptions.maxBeatContinuityRounds === 0)
+          || (step.kind === 'editorialReview' && runOptions.maxEditorialRounds === 0);
+        const selfGatingStep = step.kind === 'editorialChecks'
+          || step.kind === 'editorialHealthGate'
+          || step.kind === 'reverseOutline';
+        if (!selfGatingStep && !zeroRoundSkip) {
           const budget = await getDomainBudgetStatus('cos');
           if (!budget.withinBudget) {
             await persistMarker(sId, { status: 'paused', runId, currentStep: step.kind, lastError: `daily cos ${budget.exceeded} budget reached` });
@@ -1091,8 +1694,8 @@ export async function startSeriesAutopilot(sId, options = {}) {
 
         if (result?.canceled || record.cancelRequested) break;
         if (result?.pause) {
-          await persistMarker(sId, { status: 'paused', runId, currentStep: step.kind, residualFindings: result.residual || [], lastError: result.reason });
-          broadcast(sId, { type: 'paused', runId, scope: step.kind, reason: result.reason, residualFindings: result.residual || [], completedAt: new Date().toISOString() });
+          await persistMarker(sId, { status: 'paused', runId, currentStep: step.kind, residualFindings: result.residual || [], lastError: result.reason, pauseKind: result.pauseKind || null, healthBreakdown: result.healthBreakdown || null });
+          broadcast(sId, { type: 'paused', runId, scope: step.kind, reason: result.reason, residualFindings: result.residual || [], pauseKind: result.pauseKind || null, healthBreakdown: result.healthBreakdown || null, completedAt: new Date().toISOString() });
           // Only file the generic stalled task when the step didn't already file
           // a more specific gap (canon-undescribed, visual-no-pages, …) — else
           // fileGaps would create two CoS tasks for one underlying problem (the
@@ -1155,4 +1758,4 @@ export async function recoverStuckAutopilots() {
 }
 
 // Export internals for tests.
-export const __testing = { runs, buildDryRunPlan };
+export const __testing = { runs, buildDryRunPlan, summarizePlanCost, providerOverrideOpts, providerIdOpts };

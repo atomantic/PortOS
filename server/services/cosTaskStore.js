@@ -19,6 +19,7 @@ import { parseTasksMarkdown, groupTasksByStatus, getAutoApprovedTasks, getAwaiti
 import { REVIEW_STOP_MODES, normalizeReviewers } from '../lib/validation.js';
 import { loadState, withStateLock, ROOT_DIR } from './cosState.js';
 import { cosEvents } from './cosEvents.js';
+import { CLAIM_METADATA_KEYS } from './cosTaskClaim.js';
 
 // First non-empty line of a string. Used by addTask dedup: stored descriptions
 // are flattened to a single line by generateTasksMarkdown, so the comparison
@@ -112,7 +113,7 @@ export async function getTaskById(taskId) {
  * submitted task starts instantly instead of waiting for the next evaluation
  * interval.
  */
-export async function addTask(taskData, taskType = 'user', { raw = false } = {}) {
+export async function addTask(taskData, taskType = 'user', { raw = false, ignoreTaskId = null } = {}) {
   return withStateLock(async () => {
   const state = await loadState();
   const filePath = taskType === 'user'
@@ -131,9 +132,20 @@ export async function addTask(taskData, taskType = 'user', { raw = false } = {})
   // description against two different apps is two different pieces of work
   // (e.g. "fix the failing test" in PortOS vs in BookLoom), and collapsing
   // them silently drops the second dispatch.
+  //
+  // `ignoreTaskId` excludes one specific task from the dedup scan. The perpetual
+  // drain-on-completion refill needs this: `agent:completed` fires from
+  // completeAgent BEFORE the completion flow's updateTask marks the just-finished
+  // task done, so that task is still `in_progress` on disk here. A perpetual
+  // schedule (claim-issue/claim-work) regenerates an identical first-line for the
+  // same app, so without excluding the completing task the refill is rejected as a
+  // duplicate of it and the back-to-back drain stalls until the next scheduler
+  // tick. The completing task is about to become `completed`, so ignoring it is
+  // correct, not a dedup hole.
   const normalizedDesc = firstLine(taskData.description).toLowerCase();
   const targetApp = taskData.app || null;
   const duplicate = tasks.find(t =>
+    t.id !== ignoreTaskId &&
     (t.status === 'pending' || t.status === 'in_progress') &&
     firstLine(t.description).toLowerCase() === normalizedDesc &&
     (t.metadata?.app || null) === targetApp
@@ -258,6 +270,19 @@ export async function updateTask(taskId, updates, taskType = 'user') {
   // Clear blocked/failure metadata when transitioning out of blocked status
   if (updates.status && updates.status !== 'blocked' && tasks[taskIndex].status === 'blocked') {
     for (const key of ['blocker', 'blockedReason', 'blockedCategory', 'blockedAt', 'failureCount', 'lastErrorCategory', 'lastFailureAt']) {
+      delete updatedMetadata[key];
+    }
+  }
+
+  // Release the federation claim/lease when a task leaves `in_progress` (issue
+  // #1563). A claim only protects in-flight work; once the task completes, fails
+  // back to pending, or is blocked, it must become freely claimable by either
+  // peer — leaving a stale lease behind would block a legitimate retry (by this
+  // instance or its peer) for a full lease window. The spawn's own
+  // in_progress update carries `status: 'in_progress'` and is exempt, and a
+  // lease-renewal heartbeat passes no `status` at all, so neither is stripped.
+  if (updates.status && updates.status !== 'in_progress') {
+    for (const key of CLAIM_METADATA_KEYS) {
       delete updatedMetadata[key];
     }
   }

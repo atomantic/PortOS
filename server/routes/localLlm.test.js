@@ -3,6 +3,8 @@ import express from 'express';
 import { request } from '../lib/testHelper.js';
 import localLlmRoutes from './localLlm.js';
 import { runLocalLlmTest, compareLocalLlmModels } from '../services/localLlmPlayground.js';
+import { listModels } from '../services/localLlm.js';
+import { enrichCatalogWithVariants } from '../services/huggingFaceCatalog.js';
 import { getLoadedModels, unloadModel } from '../services/ollamaManager.js';
 import { localLlmCompareSchema, localLlmTestSchema } from '../lib/validation.js';
 import { errorEvents } from '../lib/errorHandler.js';
@@ -34,6 +36,15 @@ vi.mock('../services/ollamaManager.js', () => ({
   unloadModel: vi.fn(),
 }));
 
+// Mock the HF catalog service so /catalog tests don't hit the network. The no-op
+// enrichCatalogWithVariants simulates the offline/failed-enrichment case (it leaves
+// the catalog's getCatalog overlay untouched), which is exactly when the route's
+// raw-id installed overlay must be correct.
+vi.mock('../services/huggingFaceCatalog.js', () => ({
+  searchHuggingFaceModels: vi.fn(async () => []),
+  enrichCatalogWithVariants: vi.fn(async (catalog) => catalog),
+}));
+
 function makeApp() {
   const app = express();
   app.use(express.json());
@@ -45,6 +56,31 @@ function makeApp() {
 describe('local LLM playground routes', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('GET /catalog?variants=1 keeps an installed LM Studio recommendation installed (raw-id overlay)', async () => {
+    // The route appends LM Studio's quantization to the enrichment installed list,
+    // but getCatalog's normalizer can't parse `@quant` — so the overlay must get the
+    // RAW ids, or an already-installed model wrongly shows Install. (Enrichment is
+    // mocked to a no-op, simulating HF being unreachable.)
+    listModels.mockResolvedValue([{ id: 'lmstudio-community/Llama-3.2-3B-Instruct-GGUF', quantization: 'Q4_K_M' }]);
+
+    const res = await request(makeApp()).get('/api/local-llm/catalog?backend=lmstudio&variants=1');
+
+    expect(res.status).toBe(200);
+    expect(enrichCatalogWithVariants).toHaveBeenCalled();
+    const entry = res.body.models.find((m) => m.id === 'lmstudio-community/Llama-3.2-3B-Instruct-GGUF');
+    expect(entry).toBeTruthy();
+    expect(entry.installed).toBe(true);
+  });
+
+  it('GET /catalog skips HF enrichment unless variants=1 (fast local path for the playground)', async () => {
+    const res = await request(makeApp()).get('/api/local-llm/catalog?backend=ollama');
+
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body.models)).toBe(true);
+    // The playground only needs catalog metadata — it must not pay for HF probes.
+    expect(enrichCatalogWithVariants).not.toHaveBeenCalled();
   });
 
   it('runs a single local model test with validated defaults', async () => {

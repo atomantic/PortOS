@@ -105,6 +105,7 @@ export * from './fileWriteQueue.js';
 export * from './schemaVersions.js';
 export * from './imageClean.js';
 export * from './imageWatermark.js';
+export * from './localImageFilename.js';
 export * from './multipart.js';
 export * from './safetensors.js';
 export * from './assetHash.js';
@@ -113,6 +114,7 @@ export * from './zipStream.js';
 export * from './zipWriter.js';
 
 // === Process execution ===
+export * from './agentGuard/index.js';
 export * from './bashResolver.js';
 export * from './bufferedSpawn.js';
 export * from './commandSecurity.js';
@@ -184,6 +186,7 @@ export * from './pgTools.js';
 export * from './platform.js';
 export * from './ports.js';
 export * from './timezone.js';
+export * from './viteAllowedHosts.js';
 
 // === General utilities ===
 export * from './apiRegistry.js';

@@ -110,6 +110,10 @@ import moodBoardRoutes from './routes/moodBoard.js';
 import writersRoomRoutes from './routes/writersRoom.js';
 import universeBuilderRoutes from './routes/universeBuilder.js';
 import authorsRoutes from './routes/authors.js';
+import artistsRoutes from './routes/artists.js';
+import albumsRoutes from './routes/albums.js';
+import tracksRoutes from './routes/tracks.js';
+import musicRoutes from './routes/music.js';
 import conflictJournalRoutes from './routes/conflictJournal.js';
 import { initUniverseBuilderCollectionHook } from './services/universeBuilderCollectionHook.js';
 import { initCatalogImageAttachHook } from './services/catalogImageAttachHook.js';
@@ -131,7 +135,7 @@ import { initLoraTraining } from './services/loraTraining/index.js';
 import sdapiRoutes from './routes/sdapi.js';
 import openclawRoutes from './routes/openclaw.js';
 import sharingRoutes from './routes/sharing.js';
-import songsRoutes from './routes/songs.js';
+import roundsRoutes from './routes/rounds.js';
 import peerSyncRoutes from './routes/peerSync.js';
 import { initSharing } from './services/sharing/index.js';
 import askRoutes from './routes/ask.js';
@@ -179,6 +183,7 @@ import { seriesStore } from './services/pipeline/series.js';
 import { issueStore } from './services/pipeline/issues.js';
 import { storyBuilderStore } from './services/storyBuilder.js';
 import { writersRoomStore } from './services/writersRoom/store.js';
+import { wrWorksDir } from './services/writersRoom/_shared.js';
 import { mediaCollectionStore } from './services/mediaCollections.js';
 import { createPortOSProviderRoutes } from './routes/providers.js';
 import { createPortOSRunsRoutes } from './routes/runs.js';
@@ -531,6 +536,10 @@ app.use('/api/mood-boards', moodBoardRoutes);
 app.use('/api/writers-room', writersRoomRoutes);
 app.use('/api/universe-builder', universeBuilderRoutes);
 app.use('/api/authors', authorsRoutes);
+app.use('/api/artists', artistsRoutes);
+app.use('/api/albums', albumsRoutes);
+app.use('/api/tracks', tracksRoutes);
+app.use('/api/music', musicRoutes);
 app.use('/api/pipeline', pipelineRoutes);
 app.use('/api/conflict-journal', conflictJournalRoutes);
 app.use('/api/importer', importerRoutes);
@@ -544,7 +553,7 @@ app.use('/api/lora-training', loraTrainingRoutes);
 app.use('/sdapi/v1', sdapiRoutes);
 app.use('/api/openclaw', openclawRoutes);
 app.use('/api/sharing', sharingRoutes);
-app.use('/api/songs', songsRoutes);
+app.use('/api/rounds', roundsRoutes);
 app.use('/api/peer-sync', peerSyncRoutes);
 app.use('/api/ask', askRoutes);
 
@@ -699,6 +708,18 @@ app.use('/data/music', express.static(PATHS.music));
 // Brain Memory conversation viewer renders these inline (`![](/data/brain-
 // imports/...)`) and as asset links. Read-only; range support for large PDFs.
 app.use('/data/brain-imports', express.static(PATHS.brainImportAssets, ASSET_STATIC_OPTS));
+// Writers Room file-primary draft prose bodies (works/<workId>/drafts/<draftId>.md).
+// Federation (#1565) pulls them peer→peer from this mount: a receiver that merged
+// a work record GETs each missing body's bytes by its nested path. Read-only;
+// range support for large drafts. (Tailnet-only per the project's threat model.)
+// The gate restricts the mount to the draft-body path ONLY — without it, the
+// static root would also serve adjacent work-metadata JSON (manifest.json /
+// manifest.imported.json on file-backend/migrated installs) to any client that
+// knows a work id. Only `<workId>/drafts/<draftId>.md` is needed for body pulls.
+app.use('/data/writers-room/works', (req, res, next) => {
+  if (!/^\/[^/]+\/drafts\/[^/]+\.md$/.test(req.path)) return res.status(404).end();
+  next();
+}, express.static(wrWorksDir(), ASSET_STATIC_OPTS));
 
 // Serve built client UI (production mode — no Vite dev server needed)
 const CLIENT_DIST = join(__dirname, '..', 'client', 'dist');

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   estimateTokens,
   usableInputTokens,
+  manuscriptContentBudgetChars,
   planManuscriptPass,
   capContextOverhead,
   trimContextToBudget,
@@ -211,6 +212,78 @@ describe('contextBudget', () => {
   // Manuscript budget floor (#1459): a large re-sent context block must not
   // starve the manuscript chunk to empty on a small/fallback context window.
   // ---------------------------------------------------------------------------
+
+  describe('manuscriptContentBudgetChars', () => {
+    it('scales up to the usable input budget on a large window', () => {
+      // 200k window, 0 margin/reserve, 0 overhead -> 200k tokens usable -> 800k chars.
+      const cap = manuscriptContentBudgetChars({
+        contextWindow: 200_000,
+        overheadTokens: 0,
+        outputReserveTokens: 0,
+        safetyMargin: 0,
+      });
+      expect(cap).toBe(200_000 * CHARS_PER_TOKEN);
+    });
+    it('respects a medium window instead of forcing the historical 48–60K floor (#1488)', () => {
+      // 16k window, 10% margin -> 14745; minus 6000 reserve minus 1500 overhead = 7245
+      // tokens -> 28980 chars. The old Math.max(60_000, budgetChars) would have pinned
+      // 60_000 chars (~15k tokens) and overflowed this window.
+      const cap = manuscriptContentBudgetChars({
+        contextWindow: 16_384,
+        overheadTokens: 1_500,
+        outputReserveTokens: 6_000,
+      });
+      const budgetTokens = usableInputTokens({ contextWindow: 16_384, overheadTokens: 1_500, outputReserveTokens: 6_000 });
+      expect(cap).toBe(budgetTokens * CHARS_PER_TOKEN);
+      expect(cap).toBeLessThan(60_000); // would have overflowed under the old fixed floor
+    });
+    it('floors at the manuscript minimum on a tiny window + large overhead so the content is never empty', () => {
+      // 8k window with a heavy output reserve drives the usable input budget to ~0;
+      // the floor (MANUSCRIPT_FLOOR_TOKENS) guarantees a non-empty, bounded chunk
+      // (a few paragraphs) instead of the 48–60K overflow the old floor produced.
+      const cap = manuscriptContentBudgetChars({
+        contextWindow: 8_192,
+        overheadTokens: 1_500,
+        outputReserveTokens: 6_000,
+      });
+      expect(cap).toBe(MANUSCRIPT_FLOOR_TOKENS * CHARS_PER_TOKEN);
+      expect(cap).toBeGreaterThan(0);
+    });
+    it('honors a custom floor', () => {
+      const cap = manuscriptContentBudgetChars({
+        contextWindow: 1_000,
+        overheadTokens: 0,
+        outputReserveTokens: 5_000, // exhausts the window
+        floorTokens: 500,
+      });
+      expect(cap).toBe(500 * CHARS_PER_TOKEN);
+    });
+    it('caps the floor to the raw window when even the floor cannot fit (#1488 codex review)', () => {
+      // 2000-token window, 1500 overhead, 0 reserve/margin -> only 500 tokens of raw
+      // room after overhead, less than the 1500-token floor. The floor must NOT
+      // overflow the window: trim to the 500 the window can actually hold.
+      const cap = manuscriptContentBudgetChars({
+        contextWindow: 2_000,
+        overheadTokens: 1_500,
+        outputReserveTokens: 0,
+        safetyMargin: 0,
+        floorTokens: 1_500,
+      });
+      expect(cap).toBe(500 * CHARS_PER_TOKEN);
+      expect(cap).toBeLessThan(MANUSCRIPT_FLOOR_TOKENS * CHARS_PER_TOKEN);
+    });
+    it('yields zero when fixed overhead alone meets or exceeds the window', () => {
+      // Overhead (1500) ≥ usable window (1000 * 0.9 = 900) -> nothing fits; send no
+      // manuscript rather than overflow the context.
+      const cap = manuscriptContentBudgetChars({
+        contextWindow: 1_000,
+        overheadTokens: 1_500,
+        outputReserveTokens: 0,
+        safetyMargin: 0.1,
+      });
+      expect(cap).toBe(0);
+    });
+  });
 
   describe('capContextOverhead', () => {
     it('passes context through unchanged when the window comfortably fits everything', () => {

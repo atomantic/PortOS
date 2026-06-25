@@ -18,6 +18,114 @@ export const isCodexConfiguredDefault = (model) => model === CODEX_CONFIGURED_DE
 export const resolveCliModel = (model) => isCodexConfiguredDefault(model) ? null : (model || null);
 
 /**
+ * Claude Code on AWS Bedrock wants region-prefixed model ids
+ * (`global.anthropic.claude-opus-4-8`, `us.anthropic.claude-opus-4-1-...-v1:0`).
+ * When `CLAUDE_CODE_USE_BEDROCK` is set on the box, passing a bare
+ * `claude --model claude-opus-4-8` is rejected ("provided model identifier is
+ * invalid") — which is exactly how a bare-id `claude-code` provider config
+ * breaks autopilot/pipeline runs on a Bedrock host. The helpers below map a
+ * bare id to its Bedrock form just-in-time at CLI-argv build time; the stored
+ * provider config stays bare (so a box can move in/out of Bedrock mode freely).
+ */
+
+// Family → the env var Claude Code reads for that tier's resolved model. A
+// Bedrock wrapper sets these to the exact region-prefixed id it wants, so when
+// present they are preferred over a blind prefix-rewrite.
+const BEDROCK_FAMILY_ENV = {
+  opus: 'ANTHROPIC_DEFAULT_OPUS_MODEL',
+  sonnet: 'ANTHROPIC_DEFAULT_SONNET_MODEL',
+  haiku: 'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+  fable: 'ANTHROPIC_DEFAULT_FABLE_MODEL',
+};
+
+/**
+ * True when the box is in Claude-Code-on-Bedrock mode. Treats the documented
+ * `CLAUDE_CODE_USE_BEDROCK=1` plus the usual truthy spellings as enabled;
+ * `0`/`false`/`no`/empty/unset are off.
+ */
+export const isBedrockEnabled = (env = process.env) => {
+  const v = env?.CLAUDE_CODE_USE_BEDROCK;
+  if (v == null) return false;
+  const s = String(v).trim().toLowerCase();
+  return s !== '' && s !== '0' && s !== 'false' && s !== 'no';
+};
+
+/**
+ * True when an id already carries a Bedrock region prefix
+ * (`global.anthropic.…`, `us.anthropic.…`, `eu.anthropic.…`, `apac.anthropic.…`)
+ * or the bare `anthropic.…` form. Such ids are left untouched.
+ */
+export const hasBedrockRegionPrefix = (id) =>
+  typeof id === 'string' && (/^[a-z]+\.anthropic\./i.test(id) || /^anthropic\./i.test(id));
+
+const detectClaudeFamily = (id) => {
+  if (typeof id !== 'string') return null;
+  const lower = id.toLowerCase();
+  return Object.keys(BEDROCK_FAMILY_ENV).find((fam) => lower.includes(fam)) || null;
+};
+
+/**
+ * Map a bare Claude model id to its Bedrock form when (and only when) Bedrock
+ * mode is on. Pure — no logging, no env mutation.
+ *
+ *  - No-op when Bedrock mode is off, the id is empty/non-string, or it already
+ *    carries a region/`anthropic.` prefix.
+ *  - No-op for any id that doesn't contain `claude` (codex `gpt-5`, gemini, a
+ *    custom local alias like `my-sonnet-lora`, etc.) — only Claude ids are
+ *    Bedrock-mappable, so applying this at a shared argv chokepoint can't
+ *    corrupt another vendor's model.
+ *  - Prefers the matching `ANTHROPIC_DEFAULT_<FAMILY>_MODEL` env value when it
+ *    is itself a region-prefixed Bedrock id (the wrapper's exact choice); else
+ *    falls back to a `global.anthropic.<id>` prefix-rewrite.
+ *
+ * @param {string|null|undefined} id
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {string|null|undefined} the mapped id (or the input unchanged)
+ */
+export function toBedrockModelId(id, env = process.env) {
+  if (!isBedrockEnabled(env)) return id;
+  if (typeof id !== 'string' || !id) return id;
+  if (hasBedrockRegionPrefix(id)) return id;
+  if (!/claude/i.test(id)) return id; // not a Claude id — leave alone
+  const family = detectClaudeFamily(id);
+  if (family) {
+    const override = env?.[BEDROCK_FAMILY_ENV[family]];
+    if (hasBedrockRegionPrefix(override)) return override;
+  }
+  return `global.anthropic.${id}`;
+}
+
+// Dedup so the auto-correction notice prints once per (provider, model) per
+// process rather than on every run.
+const _warnedBareBedrockModels = new Set();
+
+/**
+ * One-time (per process, per provider+model) notice that a stored Claude-Code
+ * model id reads non-Bedrock while the box is in Bedrock mode and is being
+ * auto-corrected for this run. Surfaces via the emoji-prefixed console.error
+ * path so the config stays self-explanatory.
+ */
+export function warnBareBedrockModel(providerId, originalId, mappedId) {
+  const key = `${providerId || 'claude-code'}::${originalId}`;
+  if (_warnedBareBedrockModels.has(key)) return;
+  _warnedBareBedrockModels.add(key);
+  console.error(
+    `⚠️ Provider '${providerId || 'claude-code'}' model '${originalId}' is bare but CLAUDE_CODE_USE_BEDROCK is set — auto-correcting to Bedrock id '${mappedId}' for this run (stored config unchanged; set a global.anthropic.* / us.anthropic.* model to silence).`,
+  );
+}
+
+/**
+ * Side-effecting convenience used at CLI-argv build time: map a bare Claude id
+ * to its Bedrock form and emit the one-time auto-correction notice when the map
+ * actually changed the id. Returns the id to pass to `--model`.
+ */
+export function resolveBedrockCliModel(id, { env = process.env, providerId } = {}) {
+  const mapped = toBedrockModelId(id, env);
+  if (mapped !== id) warnBareBedrockModel(providerId, id, mapped);
+  return mapped;
+}
+
+/**
  * Strip the sentinel from a model list — the user-selectable view.
  * @param {string[]} models
  * @returns {string[]}

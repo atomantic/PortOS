@@ -39,6 +39,7 @@ import { hfTokenEnv } from '../../lib/hfToken.js';
 import {
   resolveMusicgenPython, MUSICGEN_RUNTIME_DIR, MUSICGEN_VENV_DEFAULT,
   resolveAudioldm2Python, AUDIOLDM2_RUNTIME_DIR, AUDIOLDM2_VENV_DEFAULT,
+  resolveAcestepPython, ACESTEP_RUNTIME_DIR, ACESTEP_VENV_DEFAULT,
 } from '../../lib/pythonSetup.js';
 import { ServerError } from '../../lib/errorHandler.js';
 
@@ -47,6 +48,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // paths are correct regardless of the server process's cwd.
 const MUSICGEN_SCRIPT = join(__dirname, '../../../scripts/generate_musicgen.py');
 const AUDIOLDM2_SCRIPT = join(__dirname, '../../../scripts/generate_audioldm2.py');
+const ACESTEP_SCRIPT = join(__dirname, '../../../scripts/generate_acestep.py');
 // Back-compat alias for the pre-multi-engine `buildMusicGenArgs` default.
 const SIDECAR_SCRIPT = MUSICGEN_SCRIPT;
 
@@ -79,6 +81,14 @@ export const AUDIOLDM2_MODELS = Object.freeze([
 ]);
 export const DEFAULT_AUDIOLDM2_MODEL_ID = 'audioldm2';
 
+// ACE-Step weights. The 3.5B foundation model is the only public checkpoint;
+// `repo` is informational (the sidecar lets ACE-Step resolve + auto-download its
+// own checkpoints, unlike the from_pretrained backends above).
+export const ACESTEP_MODELS = Object.freeze([
+  { id: 'ace-step-v1-3.5b', repo: 'ACE-Step/ACE-Step-v1-3.5B', name: 'ACE-Step v1 3.5B (full song + vocals)' },
+]);
+export const DEFAULT_ACESTEP_MODEL_ID = 'ace-step-v1-3.5b';
+
 /**
  * Backend registry. Each engine is fully described here so the route, UI and
  * `generateMusic` stay generator-agnostic. Fields:
@@ -104,6 +114,9 @@ export const ENGINES = Object.freeze({
     resolvePython: resolveMusicgenPython,
     venvDefault: MUSICGEN_VENV_DEFAULT,
     installEnv: 'INSTALL_MUSICGEN',
+    // The sidecar passes `--model <repo>` straight to from_pretrained, so any
+    // HuggingFace MusicGen checkpoint works — user-installed models are usable.
+    customModels: true,
   },
   audioldm2: {
     id: 'audioldm2',
@@ -118,6 +131,32 @@ export const ENGINES = Object.freeze({
     resolvePython: resolveAudioldm2Python,
     venvDefault: AUDIOLDM2_VENV_DEFAULT,
     installEnv: 'INSTALL_AUDIOLDM2',
+    // `--model <repo>` → AudioLDM2Pipeline.from_pretrained: any HF AudioLDM2
+    // checkpoint works, so user-installed models are usable.
+    customModels: true,
+  },
+  acestep: {
+    id: 'acestep',
+    name: 'ACE-Step (full song + vocals)',
+    models: ACESTEP_MODELS,
+    defaultModelId: DEFAULT_ACESTEP_MODEL_ID,
+    minDurationSec: 1,
+    maxDurationSec: 240,
+    defaultDurationSec: 60,
+    scriptPath: ACESTEP_SCRIPT,
+    runtimeDir: ACESTEP_RUNTIME_DIR,
+    resolvePython: resolveAcestepPython,
+    venvDefault: ACESTEP_VENV_DEFAULT,
+    installEnv: 'INSTALL_ACESTEP',
+    // ACE-Step is lyric-aware: the route/UI may send `lyrics`, threaded into the
+    // sidecar as --lyrics. The other engines ignore lyrics (the flag gates UI).
+    lyrics: true,
+    // ACE-Step resolves a single foundation checkpoint via its own checkpoint_dir
+    // (NOT a from_pretrained repo id), so an arbitrary HF repo can't be swapped
+    // in like the diffusers/MLX engines. Custom-model install/selection is
+    // therefore disabled for it (customModels falsy) — the sidecar ignores
+    // --model by design.
+    customModels: false,
   },
 });
 
@@ -169,23 +208,25 @@ export function clampDuration(durationSec, engineId = DEFAULT_ENGINE_ID) {
 
 /**
  * Build the `{ bin, args }` for a backend's sidecar. Pure — unit-tested without
- * spawning Python. Both sidecars share the same flag contract
+ * spawning Python. All sidecars share the same base flag contract
  * (`--model/--text/--duration/--output/--runtime-dir`), so one builder serves
  * every engine; `engineId` selects the duration window + script + runtime dir.
+ * Lyric-aware engines (`engine.lyrics`, e.g. ACE-Step) additionally get
+ * `--lyrics`; non-lyric engines never receive the flag (their sidecars don't
+ * define it), so a stray lyrics arg can't break a MusicGen/AudioLDM2 spawn.
  */
-export function buildSidecarArgs({ engineId = DEFAULT_ENGINE_ID, pythonPath, scriptPath, runtimeDir, repo, prompt, durationSec, outputPath }) {
+export function buildSidecarArgs({ engineId = DEFAULT_ENGINE_ID, pythonPath, scriptPath, runtimeDir, repo, prompt, lyrics, durationSec, outputPath }) {
   const engine = getEngine(engineId);
-  return {
-    bin: pythonPath,
-    args: [
-      scriptPath ?? engine.scriptPath,
-      '--model', repo,
-      '--text', prompt,
-      '--duration', String(clampDuration(durationSec, engine.id)),
-      '--output', outputPath,
-      '--runtime-dir', runtimeDir ?? engine.runtimeDir,
-    ],
-  };
+  const args = [
+    scriptPath ?? engine.scriptPath,
+    '--model', repo,
+    '--text', prompt,
+    '--duration', String(clampDuration(durationSec, engine.id)),
+    '--output', outputPath,
+    '--runtime-dir', runtimeDir ?? engine.runtimeDir,
+  ];
+  if (engine.lyrics) args.push('--lyrics', typeof lyrics === 'string' ? lyrics : '');
+  return { bin: pythonPath, args };
 }
 
 /**
@@ -216,18 +257,27 @@ function parseResultLine(stdout) {
  * ServerError (503) when the selected backend's venv isn't provisioned, or
  * (500) when the sidecar exits non-zero / produces no result.
  *
- * `engine` selects the backend (`musicgen` | `audioldm2`); unknown ids fall
- * back to the default. `modelId` is resolved within that engine's registry.
- * `signal` (optional AbortSignal) SIGTERMs the child — wired through so a
- * future cancel button can abort a long render.
+ * `engine` selects the backend (`musicgen` | `audioldm2` | `acestep`); unknown
+ * ids fall back to the default. `modelId` is resolved within that engine's
+ * registry. `lyrics` is forwarded only to lyric-aware engines (ACE-Step); other
+ * engines ignore it. `signal` (optional AbortSignal) SIGTERMs the child — wired
+ * through so a cancel button can abort a long render.
  */
-export async function generateMusic({ prompt, engine: engineId = DEFAULT_ENGINE_ID, durationSec, modelId, signal } = {}) {
+export async function generateMusic({ prompt, lyrics, engine: engineId = DEFAULT_ENGINE_ID, durationSec, modelId, repo, signal } = {}) {
   const text = (prompt || '').trim();
   if (!text) {
     throw new ServerError('prompt is required', { status: 400, code: 'PIPELINE_MUSIC_EMPTY_PROMPT' });
   }
   const engine = getEngine(engineId);
-  const model = getEngineModel(engine.id, modelId) || getEngineModel(engine.id, engine.defaultModelId);
+  // `repo` (when given) is an explicit HF checkpoint — used for USER-INSTALLED
+  // models that aren't in the shipped ENGINES registry (the caller resolved it
+  // from the audio-models registry). It overrides the registry lookup so an
+  // installed model actually renders instead of silently falling back to the
+  // engine default. `modelId` is still reported for metadata.
+  const shippedModel = getEngineModel(engine.id, modelId) || getEngineModel(engine.id, engine.defaultModelId);
+  const model = repo
+    ? { id: modelId || repo, repo, name: modelId || repo }
+    : shippedModel;
   const resolvedDuration = durationSec ?? engine.defaultDurationSec;
   const pythonPath = engine.resolvePython();
   if (!pythonPath) {
@@ -240,7 +290,7 @@ export async function generateMusic({ prompt, engine: engineId = DEFAULT_ENGINE_
   await ensureDir(PATHS.music);
   const filename = `music-gen-${randomUUID()}.wav`;
   const outputPath = join(PATHS.music, filename);
-  const { bin, args } = buildSidecarArgs({ engineId: engine.id, pythonPath, repo: model.repo, prompt: text, durationSec: resolvedDuration, outputPath });
+  const { bin, args } = buildSidecarArgs({ engineId: engine.id, pythonPath, repo: model.repo, prompt: text, lyrics, durationSec: resolvedDuration, outputPath });
 
   console.log(`🎼 Generating music [${engine.id}/${model.id}] ${clampDuration(resolvedDuration, engine.id)}s: "${text.slice(0, 60)}"`);
   // The default backends use ungated HF weights (facebook/* and cvssp/*), so a

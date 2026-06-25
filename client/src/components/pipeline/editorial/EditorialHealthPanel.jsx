@@ -15,14 +15,19 @@
  * completes), so the score reflects the freshest review.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Activity, Loader2, TrendingUp, TrendingDown } from 'lucide-react';
 import toast from '../../ui/Toast';
 import { getEditorialHealth, setEditorialReadinessGate } from '../../../services/api';
+import { FINDING_FILTER_PARAMS, FINDINGS_TRIAGE_ANCHOR_ID } from '../../../lib/editorialChecks';
 import {
   scoreBand,
   deltaDisplay,
   sparklineGeometry,
   orderedCategories,
+  orderedChecks,
+  checkCountSeries,
+  countSparklineGeometry,
   SEVERITY_ORDER,
   SEVERITY_LABELS,
   READINESS_GATE_LABELS,
@@ -58,11 +63,92 @@ function Sparkline({ points }) {
   );
 }
 
-export default function EditorialHealthPanel({ seriesId, refreshKey = 0 }) {
+// Per-check finding-count sparkline (#1597) — a small magnitude curve of one
+// check's open-finding count across the recorded revisions, normalized to its
+// own peak. A single recorded revision renders just the endpoint dot.
+function CheckSparkline({ counts }) {
+  const { points: poly, coords, last } = countSparklineGeometry(counts, { width: 64, height: 18, pad: 2 });
+  if (!poly || !last) return <span className="inline-block w-16" aria-hidden="true" />;
+  return (
+    <svg viewBox="0 0 64 18" width={64} height={18} className="h-[18px] w-16 shrink-0 overflow-visible" role="img" aria-label="Finding count trend for this check">
+      {coords.length > 1 ? (
+        <polyline points={poly} fill="none" stroke="currentColor" strokeWidth="1.25" className="text-gray-500" />
+      ) : null}
+      <circle cx={last.x} cy={last.y} r="2" className="fill-port-accent" />
+    </svg>
+  );
+}
+
+// Cap the rendered per-check rows so a noisy run can't blow out the panel; the
+// remainder is surfaced as a "+N more" note rather than silently dropped.
+const MAX_CHECK_ROWS = 8;
+
+// A breakdown row (#1606) — when `interactive`, a button that toggles a triage
+// filter, with the active highlight kept in one place so the category and check
+// lists can't drift. When NOT interactive (the triage can't filter to this row's
+// key — e.g. the synthetic `completeness` bucket of null-checkId findings, which
+// the triage drops), it renders as static text so the deep-link can't strand the
+// user on an empty list. Inner content differs per breakdown, so it's passed as
+// children; layout tweaks (width/gap) come through `className`.
+function FilterRowButton({ active, title, onClick, interactive = true, className = '', children }) {
+  const base = `flex items-center rounded px-1 py-0.5 text-[11px] ${className}`;
+  if (!interactive) {
+    return <span className={base} title={title}>{children}</span>;
+  }
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      title={title}
+      className={`${base} transition-colors hover:bg-port-border/50 ${active ? 'bg-port-accent/15 ring-1 ring-port-accent/40' : ''}`}
+    >
+      {children}
+    </button>
+  );
+}
+
+export default function EditorialHealthPanel({
+  seriesId,
+  refreshKey = 0,
+  checksById = {},
+  filterableCheckIds = null,
+  filterableCategories = null,
+}) {
   const [health, setHealth] = useState(null);
   const [loading, setLoading] = useState(false);
   const [savingGate, setSavingGate] = useState(false);
   const [showIssues, setShowIssues] = useState(false);
+
+  // Make the breakdown rows navigable (#1606): clicking a category/check deep-links
+  // the triage filter (shared `f`-prefixed URL params) and scrolls the findings
+  // list into view. Reading the active filter lets a row toggle itself off and show
+  // an active state. Other filters the user set in the toolbar are preserved.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const activeCategory = searchParams.get(FINDING_FILTER_PARAMS.category) || '';
+  const activeCheck = searchParams.get(FINDING_FILTER_PARAMS.check) || '';
+  const toggleFilter = (paramKey, value, isActive) => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (isActive) next.delete(paramKey); else next.set(paramKey, value);
+      return next;
+    }, { replace: true });
+    // The triage container is always mounted, so its anchor exists before the
+    // filtered re-render — scroll right away (no deferral needed).
+    if (!isActive && typeof document !== 'undefined') {
+      document.getElementById(FINDINGS_TRIAGE_ANCHOR_ID)
+        ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  };
+  const filterByCategory = (category) =>
+    toggleFilter(FINDING_FILTER_PARAMS.category, category, activeCategory === category);
+  const filterByCheck = (checkId) =>
+    toggleFilter(FINDING_FILTER_PARAMS.check, checkId, activeCheck === checkId);
+  // A breakdown row only deep-links when the triage can actually filter to it.
+  // When the caller doesn't supply the filterable sets (older callers / tests),
+  // default to clickable rather than disabling every row.
+  const canFilterCategory = (category) => !filterableCategories || filterableCategories.has(category);
+  const canFilterCheck = (checkId) => !filterableCheckIds || filterableCheckIds.has(checkId);
 
   // Guard against a stale response: switching series (or a fast refresh) can let
   // an older fetch resolve last and render the wrong series' health. Only the
@@ -92,10 +178,17 @@ export default function EditorialHealthPanel({ seriesId, refreshKey = 0 }) {
   const onGateChange = (gate) => {
     setSavingGate(true);
     // Optimistic — reflect the picked gate, re-derive readiness on the refetch.
+    // Capture the prior gate so a failed PATCH reverts instead of leaving the
+    // dropdown showing a value the server never accepted (it also feeds the
+    // autopilot convergence gate, so a stale display misrepresents the live setting).
+    const prevGate = health?.gate;
     setHealth((h) => (h ? { ...h, gate } : h));
     setEditorialReadinessGate(gate, { silent: true })
       .then(() => load(seriesId))
-      .catch((err) => toast.error(err.message || 'Failed to update readiness gate'))
+      .catch((err) => {
+        setHealth((h) => (h ? { ...h, gate: prevGate } : h));
+        toast.error(err.message || 'Failed to update readiness gate');
+      })
       .finally(() => setSavingGate(false));
   };
 
@@ -114,6 +207,18 @@ export default function EditorialHealthPanel({ seriesId, refreshKey = 0 }) {
   const regressions = Array.isArray(health.trend?.regressions) ? health.trend.regressions : [];
   const categories = orderedCategories(health.openByCategory);
   const points = health.trend?.points || [];
+  // Per-check breakdown + finding-count sparklines (#1597). Resolve each check's
+  // human label from the page's catalog (falls back to the raw id), and pair it
+  // with its count series across the recorded revisions + any regression flag.
+  const checkRegressions = Array.isArray(health.trend?.checkRegressions) ? health.trend.checkRegressions : [];
+  const labelForCheck = (id) => checksById?.[id]?.label || id;
+  const allChecks = orderedChecks(health.openByCheck, labelForCheck);
+  const checkRows = allChecks.slice(0, MAX_CHECK_ROWS).map((c) => ({
+    ...c,
+    counts: checkCountSeries(points, c.checkId),
+    regressed: checkRegressions.find((r) => r.checkId === c.checkId) || null,
+  }));
+  const hiddenCheckCount = Math.max(0, allChecks.length - checkRows.length);
   // The delta compares the two most recent revisions — only meaningful with ≥2
   // points (a single revision has nothing to compare against).
   const hasDelta = points.length >= 2;
@@ -180,23 +285,75 @@ export default function EditorialHealthPanel({ seriesId, refreshKey = 0 }) {
       {categories.length ? (
         <div className="border-t border-port-border/60 pt-2.5">
           <span className="block text-[10px] uppercase tracking-wide text-gray-600">Open by category</span>
-          <ul className="mt-1 flex flex-wrap gap-x-3 gap-y-1">
+          <ul className="mt-1 flex flex-wrap gap-x-2 gap-y-1">
             {categories.map(({ category, count }) => {
               const regressed = regressions.find((r) => r.category === category);
+              const active = activeCategory === category;
+              const canFilter = canFilterCategory(category);
               return (
-                <li key={category} className="flex items-center gap-1 text-[11px] text-gray-400">
-                  <span className="text-gray-300">{category}</span>
-                  <span className="text-gray-500">{count}</span>
-                  {regressed ? (
-                    <span className="flex items-center gap-0.5 text-port-error" title={`Regressed: ${regressed.from} → ${regressed.to} since the previous revision`}>
-                      <TrendingUp size={11} />
-                      {regressed.from}→{regressed.to}
-                    </span>
-                  ) : null}
+                <li key={category}>
+                  <FilterRowButton
+                    active={active}
+                    interactive={canFilter}
+                    onClick={() => filterByCategory(category)}
+                    title={canFilter
+                      ? (active ? `Clear the ${category} filter` : `Filter findings to ${category}`)
+                      : `${category} findings aren't in the triage filter`}
+                    className="gap-1"
+                  >
+                    <span className={active ? 'text-gray-100' : 'text-gray-300'}>{category}</span>
+                    <span className="text-gray-500">{count}</span>
+                    {regressed ? (
+                      <span className="flex items-center gap-0.5 text-port-error" title={`Regressed: ${regressed.from} → ${regressed.to} since the previous revision`}>
+                        <TrendingUp size={11} />
+                        {regressed.from}→{regressed.to}
+                      </span>
+                    ) : null}
+                  </FilterRowButton>
                 </li>
               );
             })}
           </ul>
+        </div>
+      ) : null}
+
+      {/* Per-check breakdown + finding-count sparklines (#1597) — is each check
+          improving (count dropping) or regressing run-over-run? */}
+      {checkRows.length ? (
+        <div className="border-t border-port-border/60 pt-2.5">
+          <span className="block text-[10px] uppercase tracking-wide text-gray-600">Open by check</span>
+          <ul className="mt-1 space-y-0.5">
+            {checkRows.map(({ checkId, label, count, counts, regressed }) => {
+              const active = activeCheck === checkId;
+              const canFilter = canFilterCheck(checkId);
+              return (
+                <li key={checkId}>
+                  <FilterRowButton
+                    active={active}
+                    interactive={canFilter}
+                    onClick={() => filterByCheck(checkId)}
+                    title={canFilter
+                      ? (active ? `Clear the ${label} filter` : `Filter findings to ${label}`)
+                      : `${label} findings aren't in the triage filter`}
+                    className="w-full gap-2 text-gray-400"
+                  >
+                    <span className={`min-w-0 flex-1 truncate text-left ${active ? 'text-gray-100' : 'text-gray-300'}`} title={label}>{label}</span>
+                    {regressed ? (
+                      <span className="flex shrink-0 items-center gap-0.5 text-port-error" title={`Regressed: ${regressed.from} → ${regressed.to} since the previous revision`}>
+                        <TrendingUp size={11} />
+                        {regressed.from}→{regressed.to}
+                      </span>
+                    ) : null}
+                    <span className="w-5 shrink-0 text-right text-gray-500">{count}</span>
+                    <CheckSparkline counts={counts} />
+                  </FilterRowButton>
+                </li>
+              );
+            })}
+          </ul>
+          {hiddenCheckCount ? (
+            <p className="mt-1 text-[10px] text-gray-600">+{hiddenCheckCount} more check{hiddenCheckCount === 1 ? '' : 's'} with open findings</p>
+          ) : null}
         </div>
       ) : null}
 

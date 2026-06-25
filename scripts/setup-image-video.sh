@@ -14,6 +14,7 @@
 #   INSTALL_MUSICGEN '1' to bootstrap a venv at ~/.portos/venv-musicgen + clone ml-explore/mlx-examples to ~/.portos/mlx-examples for local MusicGen (MLX) background-music generation (pipeline audio stage). Default: 0; opt in with INSTALL_MUSICGEN=1 (macOS / Apple Silicon only).
 #   MLX_EXAMPLES_PIN  commit SHA of ml-explore/mlx-examples to check out for MusicGen (default: main).
 #   INSTALL_AUDIOLDM2 '1' to bootstrap a venv at ~/.portos/venv-audioldm2 (torch + diffusers) for local AudioLDM2 long-form background-music generation (pipeline audio stage, second backend alongside MusicGen). Default: 0; opt in with INSTALL_AUDIOLDM2=1 (runs on MPS / CUDA / CPU).
+#   INSTALL_ACESTEP '1' to bootstrap a venv at ~/.portos/venv-acestep (torch + the acestep package) for local ACE-Step full-song generation with vocals (Music studio, third backend). Default: 0; opt in with INSTALL_ACESTEP=1 (runs on MPS / CUDA / CPU; checkpoints auto-download to ~/.cache/ace-step on first run).
 
 set -euo pipefail
 
@@ -51,15 +52,17 @@ mkdir -p "${PORTOS_DATA}/videos"
 mkdir -p "${PORTOS_DATA}/video-thumbnails"
 
 # When the user only wants a specific BYOV runtime (set via INSTALL_LTX2 /
-# INSTALL_WAN22 / INSTALL_HUNYUAN — typically from the in-app installer),
-# skip the mflux + legacy mlx_video preamble. Those bring-your-own-venv
-# runtimes are self-contained and don't depend on mflux; running the
-# preamble unprompted hits PEP 668 ("externally-managed-environment") on
-# Homebrew Python and aborts the whole script before the requested runtime
-# install ever starts. A bare `bash setup-image-video.sh` still installs
-# mflux as before.
-ANY_BYOV="${INSTALL_LTX2:-0}${INSTALL_WAN22:-0}${INSTALL_HUNYUAN:-0}"
-if [[ "$ANY_BYOV" == "000" ]]; then
+# INSTALL_WAN22 / INSTALL_HUNYUAN — or one of the self-contained MUSIC venvs
+# INSTALL_MUSICGEN / INSTALL_AUDIOLDM2 / INSTALL_ACESTEP — typically from the
+# in-app installer), skip the mflux + legacy mlx_video preamble. Those
+# bring-your-own-venv runtimes are self-contained and don't depend on mflux;
+# running the preamble unprompted hits PEP 668 ("externally-managed-environment")
+# on Homebrew Python and aborts the whole script before the requested runtime
+# install ever starts — which on Linux/CPU/CUDA blocks the advertised
+# `INSTALL_ACESTEP=1 bash …` path. A bare `bash setup-image-video.sh` still
+# installs mflux as before.
+ANY_BYOV="${INSTALL_LTX2:-0}${INSTALL_WAN22:-0}${INSTALL_HUNYUAN:-0}${INSTALL_MUSICGEN:-0}${INSTALL_AUDIOLDM2:-0}${INSTALL_ACESTEP:-0}"
+if [[ "$ANY_BYOV" == "000000" ]]; then
   DEFAULT_INSTALL_MFLUX=1
   DEFAULT_INSTALL_VIDEO=$(is_macos && echo 1 || echo 0)
   DEFAULT_INSTALL_FLUX2=$(is_macos && echo 1 || echo 0)
@@ -419,6 +422,46 @@ if [[ "$INSTALL_AUDIOLDM2" == "1" ]]; then
   echo "✅ AudioLDM2 venv ready: $AUDIOLDM2_PY"
 fi
 
+INSTALL_ACESTEP="${INSTALL_ACESTEP:-0}"
+if [[ "$INSTALL_ACESTEP" == "1" ]]; then
+  # Local full-song generation for the Music studio (Phase 4 — third backend
+  # alongside MusicGen + AudioLDM2). ACE-Step is a music FOUNDATION model that
+  # takes a style/tags prompt AND lyrics and renders a structured song with
+  # vocals. It installs as the `acestep` pip package (from git — no clone to
+  # import from), so this is a sibling torch venv. The sidecar
+  # `scripts/generate_acestep.py` imports `ACEStepPipeline` from acestep;
+  # server/lib/pythonSetup.js (resolveAcestepPython) looks for python3 here.
+  # Runs on Apple-Silicon MPS, CUDA, or CPU. The Windows Scripts/python.exe path
+  # is resolved on the JS side by pythonSetup's ACESTEP_VENV_CANDIDATES.
+  # ACE-Step auto-downloads its 3.5B checkpoints to ~/.cache/ace-step on first
+  # run, so this only builds the venv — no weights are fetched here.
+  ACESTEP_VENV="${HOME}/.portos/venv-acestep"
+  ACESTEP_PY="$ACESTEP_VENV/bin/python3"
+  mkdir -p "${HOME}/.portos"
+
+  if [[ ! -x "$ACESTEP_PY" ]]; then
+    echo "📦 Creating ACE-Step venv at ${ACESTEP_VENV}..."
+    "$PYTHON_BIN" -m venv "$ACESTEP_VENV"
+  fi
+  echo "📦 Installing ACE-Step into ${ACESTEP_VENV} (this pulls torch + the acestep package)..."
+  "$ACESTEP_PY" -m pip install --upgrade pip wheel setuptools >/dev/null
+  # The acestep package declares its own deps (torch, diffusers, transformers,
+  # audio I/O, etc.), so installing it from git pulls the matching stack. Pinning
+  # nothing here keeps us on the upstream-tested set; the import probe below
+  # catches a broken resolve before generation depends on it.
+  "$ACESTEP_PY" -m pip install --upgrade \
+    "git+https://github.com/ace-step/ACE-Step.git" \
+    "huggingface_hub[hf_xet]"
+  # Verify the pipeline class imports — a clean import means generation only
+  # needs the one-time checkpoint download, not a broken venv.
+  if ! "$ACESTEP_PY" -c "import torch; from acestep.pipeline_ace_step import ACEStepPipeline" 2>/dev/null; then
+    echo "❌ ACE-Step venv built but 'import torch; from acestep.pipeline_ace_step import ACEStepPipeline' failed." >&2
+    echo "   Check that torch + the acestep package installed cleanly in ${ACESTEP_VENV}." >&2
+    exit 1
+  fi
+  echo "✅ ACE-Step venv ready: $ACESTEP_PY"
+fi
+
 INSTALL_FLUX2="${INSTALL_FLUX2:-$DEFAULT_INSTALL_FLUX2}"
 
 if [[ "$INSTALL_FLUX2" == "1" ]]; then
@@ -494,6 +537,9 @@ if [[ "$INSTALL_MUSICGEN" == "1" ]] && is_macos; then
 fi
 if [[ "$INSTALL_AUDIOLDM2" == "1" ]]; then
   echo "   AudioLDM2: ${HOME}/.portos/venv-audioldm2/bin/python3 (separate venv, diffusers — long-form audio)"
+fi
+if [[ "$INSTALL_ACESTEP" == "1" ]]; then
+  echo "   ACE-Step:  ${HOME}/.portos/venv-acestep/bin/python3 (separate venv, acestep — full song + vocals)"
 fi
 if [[ "$INSTALL_FLUX2" == "1" ]]; then
   echo "   FLUX.2:    ${HOME}/.portos/venv-flux2/bin/python3 (separate venv)"

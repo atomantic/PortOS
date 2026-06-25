@@ -8,13 +8,25 @@
  * preserving whitespace.
  */
 
-import { useMemo } from 'react';
+import { useMemo, useRef } from 'react';
 import { buildHighlightSegments } from '../../../lib/manuscriptAnchors';
+import useAnchorReveal from '../../../hooks/useAnchorReveal';
 import { SEVERITY_TONE } from './constants';
 
 export default function ManuscriptHighlightedProse({ content, spans, openCommentId, onOpenComment, inlineCard }) {
   const text = content || '';
   const segments = useMemo(() => buildHighlightSegments(text, spans), [text, spans]);
+
+  // Scroll the open finding's highlighted text into view and flash it on open /
+  // prev-next step (#1601). `activeRef` points at the first highlight segment
+  // carrying the open comment; it stays null when the anchor isn't located in
+  // the draft, so the reveal is a no-op and the parent's card fallback scrolls.
+  const activeRef = useRef(null);
+  const located = useMemo(
+    () => !!openCommentId && (spans || []).some((s) => s.commentId === openCommentId),
+    [openCommentId, spans],
+  );
+  useAnchorReveal(() => activeRef.current, located ? openCommentId : null);
 
   // Character offset where the inline card splices into the prose: just past
   // the newline ending the line that contains the open note's highlight (or the
@@ -30,15 +42,23 @@ export default function ManuscriptHighlightedProse({ content, spans, openComment
     return nl === -1 ? text.length : nl + 1;
   }, [inlineCard, openCommentId, spans, text]);
 
+  // The open comment can tile into several active segments (overlapping spans
+  // split one highlight in two; the inline-card injection can split a segment).
+  // Pin `activeRef` to the FIRST active fragment rendered so the reveal scrolls
+  // to the start of the match, not a trailing piece. Reset per render.
+  let activeRefTaken = false;
   const renderSegment = (seg, key, textOverride) => {
     const segText = textOverride ?? seg.text;
     if (!segText) return null;
     if (!seg.commentIds.length) return <span key={key}>{segText}</span>;
     const active = seg.commentIds.includes(openCommentId);
+    const takeRef = active && !activeRefTaken;
+    if (takeRef) activeRefTaken = true;
     const tone = SEVERITY_TONE[seg.topSeverity] || SEVERITY_TONE.low;
     return (
       <button
         key={key}
+        ref={takeRef ? activeRef : undefined}
         type="button"
         onClick={() => onOpenComment(seg.commentIds[0])}
         aria-expanded={active}

@@ -19,7 +19,7 @@ import { join } from 'path';
 import { createHash } from 'crypto';
 import { PATHS, atomicWrite, ensureDir, tryReadFile, safeJSONParse } from '../../lib/fileUtils.js';
 import { runStagedLLM, resolveStageContext } from '../../lib/stageRunner.js';
-import { usableInputTokens, estimateTokens, CHARS_PER_TOKEN } from '../../lib/contextBudget.js';
+import { manuscriptContentBudgetChars, estimateTokens } from '../../lib/contextBudget.js';
 import { getIssue, listIssues } from './issues.js';
 import { getSeries } from './series.js';
 import { getSeriesCanon } from './seriesCanon.js';
@@ -35,17 +35,14 @@ const LABEL_MAX = 120;
 const EXCERPT_MAX = 200;
 const EMOTION_MAX = 40;
 const NOTE_MAX = 500;
-// Cap the content we send to the model. Prose/script stage output is bounded
-// at STAGE_OUTPUT_MAX (~400KB) which would blow the context window (and the
-// JSON instruction block with it) on a long issue, yielding a truncated /
-// malformed response that extractJson rejects (it throws "Invalid JSON in AI
-// response", surfacing as an analysis error rather than a silent empty
-// snapshot). ~48K chars (~12K tokens) leaves ample room for the prompt + a
-// heavy-tier reply. This is a FLOOR — the real cap scales up to the target
-// model's context window (see analyzeIssue), so a big-context model isn't
-// needlessly truncated to 48K.
-const CONTENT_MAX = 48_000;
-// Output reserve for the analysis JSON (sections + character arcs).
+// Output reserve for the analysis JSON (sections + character arcs). The content
+// we send is capped by manuscriptContentBudgetChars in analyzeIssue, which scales
+// to the model's context window above a manuscript floor — so a big-context model
+// gets the whole issue while a small/local one trims to fit (with a truncation
+// marker) rather than overflowing on a fixed 48K floor (#1488). Prose/script stage
+// output is otherwise bounded at STAGE_OUTPUT_MAX (~400KB), which would blow the
+// window (and the JSON instruction block with it) on a long issue and yield a
+// malformed response extractJson rejects.
 const ANALYSIS_OUTPUT_RESERVE_TOKENS = 4_000;
 
 const nowIso = () => new Date().toISOString();
@@ -193,19 +190,19 @@ export async function analyzeIssue(issueId, { providerId, model, force = false }
   const characterNames = (canon.characters || []).map((c) => c?.name).filter(Boolean).slice(0, 40);
   const arc = series?.arc || null;
 
-  // Scale the content cap to the target model's context window — never below
-  // CONTENT_MAX (so we never truncate more than before), but a big-context
-  // model gets the whole issue instead of a 48K slice.
+  // Scale the content cap to the target model's context window, reserving a
+  // manuscript floor so a small/local provider window trims the issue to fit
+  // rather than overflowing on a fixed 48K floor (#1488); a big-context model gets
+  // the whole issue.
   const { contextWindow } = await resolveStageContext(STAGE, { providerOverride: providerId, modelOverride: model });
   const overheadTokens = 1_500 + estimateTokens(
     [characterNames.join(', '), arc?.protagonistArc || '', (arc?.themes || []).join(', ')].join(' '),
   );
-  const budgetChars = usableInputTokens({
+  const contentMax = manuscriptContentBudgetChars({
     contextWindow,
     overheadTokens,
     outputReserveTokens: ANALYSIS_OUTPUT_RESERVE_TOKENS,
-  }) * CHARS_PER_TOKEN;
-  const contentMax = Math.max(CONTENT_MAX, budgetChars);
+  });
 
   const ctx = {
     series: { name: series?.name || 'Untitled series', logline: series?.logline || '' },

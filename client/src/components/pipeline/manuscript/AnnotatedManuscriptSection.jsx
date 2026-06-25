@@ -28,12 +28,14 @@ export default function AnnotatedManuscriptSection({
   const located = openComment ? spans.some((s) => s.commentId === openComment.id) : false;
   const cardRef = useRef(null);
 
-  // Bring the open card (and with it the anchor text it sits under) into view —
-  // on open, and again when stepping prev/next between notes. Only the section
-  // that actually owns the open comment scrolls.
+  // Bring the open card into view when the note's anchor ISN'T located in the
+  // current draft (the card falls back to expanding beneath the prose). When the
+  // anchor IS located, ManuscriptHighlightedProse scrolls + flashes the
+  // highlighted text itself (#1601), so scrolling the card here too would fight
+  // that smooth scroll.
   useEffect(() => {
-    if (openComment) cardRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
-  }, [openComment?.id]);
+    if (openComment && !located) cardRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
+  }, [openComment?.id, located]);
 
   // Esc closes the open note — parity with the Live popover.
   useEscapeKey(openComment, onCloseComment);

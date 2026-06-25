@@ -8,7 +8,7 @@
  */
 
 import { MANUSCRIPT_TYPES } from '../series.js';
-import { listIssues } from '../issues.js';
+import { listIssues, STAGE_INPUT_MAX } from '../issues.js';
 import { ARC_ROLES as ARC_ROLE_LIST, ARC_SHAPE_IDS, READER_MAP_BEAT_KINDS, buildSeason, renderArcShapeGuidance, renderTickingClock, sanitizeSeasonList } from '../../../lib/storyArc.js';
 import { composeStyleNotes } from '../../../lib/styleGuide.js';
 import { describeStructure, recommendStructure } from '../../../lib/seasonStructure.js';
@@ -491,6 +491,37 @@ export function shapeVerifyIssues(rawIssues) {
   return out;
 }
 
+// Max episode-synopsis corrections an auto-resolve pass may apply in one round.
+// A bound (mirrors RESOLVE_FINDING_MAX) so a runaway LLM response can't rewrite
+// the entire episode lineup in a single convergence step.
+export const RESOLVE_EPISODE_MAX = 50;
+
+/**
+ * Shape the auto-resolve pass's optional `episodes[]` output — a SPARSE list of
+ * episode-synopsis corrections the resolver applies when a finding originates at
+ * the episode level (see pipeline-arc-resolve.md rule 8). Each entry must carry
+ * an integer `episodeNumber` and a non-empty `synopsis`; `seasonNumber` is
+ * optional disambiguation. Malformed entries are dropped so a partial response
+ * never throws.
+ */
+export function shapeEpisodeResolutions(rawEpisodes) {
+  if (!Array.isArray(rawEpisodes)) return [];
+  const out = [];
+  for (const raw of rawEpisodes) {
+    const synopsis = typeof raw?.synopsis === 'string' ? raw.synopsis.trim() : '';
+    const episodeNumber = Number(raw?.episodeNumber);
+    if (!synopsis || !Number.isInteger(episodeNumber)) continue;
+    const seasonNumberRaw = Number(raw?.seasonNumber);
+    out.push({
+      seasonNumber: Number.isInteger(seasonNumberRaw) ? seasonNumberRaw : null,
+      episodeNumber,
+      synopsis: synopsis.slice(0, STAGE_INPUT_MAX),
+    });
+    if (out.length >= RESOLVE_EPISODE_MAX) break;
+  }
+  return out;
+}
+
 // Set exactly one of `beats` / `synopsis` so the prompt's beat-level checks
 // don't run against synopsis-only issues (and vice-versa). Beats land in
 // idea.output once the LLM-expand pass runs; before that, idea.input still
@@ -546,6 +577,109 @@ export async function buildResolveContext(series, findings, preloadedWorld) {
     recommendedSeasonCount: structure ? structure.seasons : '',
     recommendedPerSeasonJson: structure ? JSON.stringify(structure.perSeason) : '[]',
   };
+}
+
+// ---------------------------------------------------------------------------
+// Whole-manuscript BEAT-level continuity pass (#1510).
+//
+// verifyArc checks SYNOPSIS depth across the whole arc; verifyVolume checks
+// BEAT depth within ONE volume. The missing altitude was a whole-BOOK beat
+// pass — cross-issue beat defects (an unresolved cliffhanger, a finale that
+// drifts from the arc's intended ending, a promised through-line that never
+// lands, an event staged as "first" in two issues) only surfaced AFTER full
+// scripts existed (the most expensive stage). These builders feed the per-issue
+// beat sheets (idea.output) for the whole series as the corpus — compact enough
+// that the whole book fits a normal window, so no chunking. Leaves carry `beats`
+// where present (via renderVolumeIssue) and fall back to `synopsis`, so a
+// partially-expanded series is still checkable mid-workflow.
+// ---------------------------------------------------------------------------
+
+// Render the season→issue tree with beat-bearing leaves and report how many
+// issues actually carry beats, so the conductor/prompt can tell a real beat
+// corpus from a synopsis-only one. Shared by the verify and resolve contexts.
+async function buildBeatTree(series, preloadedWorld) {
+  const seasons = sanitizeSeasonList(series.seasons || []);
+  const [issues, base, canon] = await Promise.all([
+    listIssues({ seriesId: series.id }),
+    buildArcBaseContext(series, preloadedWorld),
+    getSeriesCanon(series),
+  ]);
+  const issuesBySeason = new Map();
+  for (const iss of issues) {
+    const key = iss.seasonId || null;
+    if (!issuesBySeason.has(key)) issuesBySeason.set(key, []);
+    issuesBySeason.get(key).push(iss);
+  }
+  let beatBearing = 0;
+  const renderList = (list) => list
+    .slice()
+    .sort(compareIssuesByPosition)
+    .map((iss) => {
+      const leaf = renderVolumeIssue(iss);
+      if (leaf.beats) beatBearing += 1;
+      return leaf;
+    });
+  const tree = seasons.map((s) => ({
+    number: s.number,
+    title: s.title,
+    logline: s.logline,
+    synopsis: s.synopsis,
+    endingHook: s.endingHook,
+    episodeCountTarget: s.episodeCountTarget,
+    themes: s.themes,
+    episodes: renderList(issuesBySeason.get(s.id) || []),
+  }));
+  const ungrouped = issuesBySeason.get(null) || [];
+  if (ungrouped.length) {
+    tree.push({ number: null, title: '(ungrouped issues)', episodes: renderList(ungrouped) });
+  }
+  return { base, canon, tree, beatBearing };
+}
+
+export async function buildBeatContinuityContext(series, preloadedWorld) {
+  const { base, canon, tree, beatBearing } = await buildBeatTree(series, preloadedWorld);
+  return {
+    ...base,
+    seasonsTreeJson: JSON.stringify(tree, null, 2),
+    beatBearingCount: beatBearing,
+    existingCharactersJson: JSON.stringify(canon.characters, null, 2),
+    existingPlacesJson: JSON.stringify(canon.places, null, 2),
+    existingObjectsJson: JSON.stringify(canon.objects, null, 2),
+  };
+}
+
+export async function buildBeatContinuityResolveContext(series, findings, preloadedWorld) {
+  const ctx = await buildBeatContinuityContext(series, preloadedWorld);
+  return { ...ctx, findingsJson: JSON.stringify(findings, null, 2) };
+}
+
+// Max beat corrections an auto-resolve pass may apply in one round (mirrors
+// RESOLVE_EPISODE_MAX) so a runaway LLM response can't rewrite every issue's
+// beats in a single convergence step.
+export const RESOLVE_BEAT_MAX = 50;
+
+/**
+ * Shape the beat-continuity resolver's `episodes[]` output — a SPARSE list of
+ * per-issue BEAT rewrites (vs `shapeEpisodeResolutions`'s synopsis rewrites).
+ * Each entry needs an integer `episodeNumber` and non-empty `beats`;
+ * `seasonNumber` is optional disambiguation. Malformed entries are dropped.
+ */
+export function shapeBeatResolutions(rawEpisodes) {
+  if (!Array.isArray(rawEpisodes)) return [];
+  const out = [];
+  for (const raw of rawEpisodes) {
+    const beats = typeof raw?.beats === 'string' ? raw.beats.trim() : '';
+    const episodeNumber = Number(raw?.episodeNumber);
+    if (!beats || !Number.isInteger(episodeNumber)) continue;
+    const seasonNumberRaw = Number(raw?.seasonNumber);
+    out.push({
+      seasonNumber: Number.isInteger(seasonNumberRaw) ? seasonNumberRaw : null,
+      episodeNumber,
+      beats: beats.slice(0, STAGE_INPUT_MAX),
+    });
+    if (out.length >= RESOLVE_BEAT_MAX) break;
+  }
+  return out;
 }
 
 export const RESOLVE_FINDING_MAX = 50;

@@ -6,6 +6,8 @@ import {
   CUSTOM_PAGE_MIN, CUSTOM_PAGE_MAX,
   CUSTOM_MINUTE_MIN, CUSTOM_MINUTE_MAX,
   computeIssueTargets,
+  assessSynopsisScope,
+  THIN_SYNOPSIS_BASE_WORDS,
 } from './issueLength.js';
 
 describe('computeIssueTargets — preset profiles', () => {
@@ -109,6 +111,56 @@ describe('computeIssueTargets — custom profile', () => {
     });
     expect(Number.isInteger(targets.pageTarget)).toBe(true);
     expect(targets.pageTarget).toBe(23);
+  });
+});
+
+describe('assessSynopsisScope — padding-risk signal (#1513)', () => {
+  const finale = computeIssueTargets({ lengthProfile: 'finale' });   // 44pp
+  const standard = computeIssueTargets({ lengthProfile: 'standard' }); // 22pp
+  const extended = computeIssueTargets({ lengthProfile: 'extended' }); // 32pp
+
+  it('flags a terse synopsis on a long (finale) profile', () => {
+    const result = assessSynopsisScope('the Helioheart invitation arrives', finale);
+    expect(result.paddingRisk).toBe(true);
+    expect(result.longProfile).toBe(true);
+    expect(result.synopsisWords).toBe(4);
+    // expectedWords scales with pages: 25 * 44/22 = 50
+    expect(result.expectedWords).toBe(THIN_SYNOPSIS_BASE_WORDS * 2);
+  });
+
+  it('does NOT flag a terse synopsis on a standard profile (terse is normal there)', () => {
+    const result = assessSynopsisScope('the gala', standard);
+    expect(result.longProfile).toBe(false);
+    expect(result.paddingRisk).toBe(false);
+  });
+
+  it('does NOT flag a rich synopsis even on a long profile', () => {
+    // A solid paragraph that clears the scaled expected-words floor.
+    const rich = Array.from({ length: 60 }, (_, i) => `word${i}`).join(' ');
+    const result = assessSynopsisScope(rich, finale);
+    expect(result.synopsisWords).toBe(60);
+    expect(result.paddingRisk).toBe(false);
+  });
+
+  it('flags a moderately-thin synopsis on an extended profile', () => {
+    // extended = 32pp → expected 25 * 32/22 ≈ 36 words; 10 words is thin.
+    const result = assessSynopsisScope('a short ten word synopsis that does not say very much', extended);
+    expect(result.longProfile).toBe(true);
+    expect(result.paddingRisk).toBe(true);
+  });
+
+  it('never flags an empty synopsis (a different problem)', () => {
+    expect(assessSynopsisScope('', finale).paddingRisk).toBe(false);
+    expect(assessSynopsisScope('   ', finale).paddingRisk).toBe(false);
+    expect(assessSynopsisScope(null, finale).paddingRisk).toBe(false);
+    expect(assessSynopsisScope(undefined, finale).synopsisWords).toBe(0);
+  });
+
+  it('tolerates a missing/partial targets object via the standard fallback', () => {
+    const result = assessSynopsisScope('the invitation arrives', {});
+    // No pageTarget → defaults to standard pages → not a long profile.
+    expect(result.longProfile).toBe(false);
+    expect(result.paddingRisk).toBe(false);
   });
 });
 

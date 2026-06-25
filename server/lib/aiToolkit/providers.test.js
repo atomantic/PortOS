@@ -138,6 +138,9 @@ describe('Provider Service', () => {
       mediumModel: 'model-a',
       heavyModel: 'model-c',
       fallbackProvider: 'fallback-provider-id',
+      fallbackModel: 'fallback-model-id',
+      numCtx: 32768,
+      contextWindow: 1000000,
       timeout: 600000,
       enabled: false,
       envVars: { OPENAI_BASE_URL: 'https://example.com', LOG_LEVEL: 'debug' },
@@ -178,6 +181,8 @@ describe('Provider Service', () => {
       const bedrock = samples.find(p => p.id === 'claude-code-bedrock');
       expect(bedrock).toBeDefined();
       expect(bedrock.name).toBe('Claude Code CLI: Bedrock');
+      expect(samples.find(p => p.id === 'codex-tui')?.contextWindow).toBe(1000000);
+      expect(samples.find(p => p.id === 'antigravity-cli')?.contextWindow).toBe(1048576);
     });
 
     it('should exclude providers already in user config', async () => {
@@ -300,7 +305,8 @@ describe('Provider Service', () => {
             defaultModel: CODEX_SENTINEL,
             lightModel: CODEX_SENTINEL,
             mediumModel: CODEX_SENTINEL,
-            heavyModel: CODEX_SENTINEL
+            heavyModel: CODEX_SENTINEL,
+            contextWindow: 1000000
           }
         }
       });
@@ -415,6 +421,77 @@ describe('Provider Service', () => {
       expect(codex.defaultModel).toBe(CODEX_SENTINEL);
     });
 
+    it('upgrades default Codex and Antigravity context windows on first read', async () => {
+      await writeProvidersFile({
+        activeProvider: 'codex-tui',
+        providers: {
+          codex: {
+            id: 'codex',
+            name: 'Codex CLI',
+            type: 'cli',
+            command: 'codex',
+            contextWindow: 128000,
+            models: [CODEX_SENTINEL],
+            defaultModel: CODEX_SENTINEL
+          },
+          'codex-tui': {
+            id: 'codex-tui',
+            name: 'Codex TUI',
+            type: 'tui',
+            command: 'codex',
+            models: [CODEX_SENTINEL],
+            defaultModel: CODEX_SENTINEL
+          },
+          'antigravity-cli': {
+            id: 'antigravity-cli',
+            name: 'Antigravity CLI',
+            type: 'cli',
+            command: 'agy',
+            contextWindow: 128000,
+            models: ['antigravity-configured-default'],
+            defaultModel: 'antigravity-configured-default'
+          },
+          custom: {
+            id: 'custom',
+            name: 'Custom CLI',
+            type: 'cli',
+            command: 'custom',
+            contextWindow: 128000
+          }
+        }
+      });
+
+      const codex = await providerService.getProviderById('codex');
+      const codexTui = await providerService.getProviderById('codex-tui');
+      const antigravity = await providerService.getProviderById('antigravity-cli');
+      const custom = await providerService.getProviderById('custom');
+
+      expect(codex.contextWindow).toBe(1000000);
+      expect(codexTui.contextWindow).toBe(1000000);
+      expect(antigravity.contextWindow).toBe(1048576);
+      expect(custom.contextWindow).toBe(128000);
+    });
+
+    it('preserves user-tuned context windows above the stale generic value', async () => {
+      await writeProvidersFile({
+        activeProvider: 'codex',
+        providers: {
+          codex: {
+            id: 'codex',
+            name: 'Codex CLI',
+            type: 'cli',
+            command: 'codex',
+            contextWindow: 512000,
+            models: [CODEX_SENTINEL],
+            defaultModel: CODEX_SENTINEL
+          }
+        }
+      });
+
+      const codex = await providerService.getProviderById('codex');
+      expect(codex.contextWindow).toBe(512000);
+    });
+
     it('migrates legacy Gemini providers to Antigravity agy providers', async () => {
       await writeProvidersFile({
         activeProvider: 'gemini-cli',
@@ -450,9 +527,11 @@ describe('Provider Service', () => {
       expect(antigravity.command).toBe('agy');
       expect(antigravity.args).toEqual(['--print', '--dangerously-skip-permissions']);
       expect(antigravity.defaultModel).toBe('antigravity-configured-default');
+      expect(antigravity.contextWindow).toBe(1048576);
       expect(antigravity.envVars).toEqual({ KEEP_ME: '1' });
       expect(antigravityTui.command).toBe('agy');
       expect(antigravityTui.args).toEqual(['--dangerously-skip-permissions']);
+      expect(antigravityTui.contextWindow).toBe(1048576);
     });
   });
 

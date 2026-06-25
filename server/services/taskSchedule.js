@@ -11,6 +11,12 @@
  * - 'once': Run once per app/globally then stop
  * - 'on-demand': Only run when manually triggered
  * - 'custom': Custom interval in milliseconds
+ * - 'cron': Cron expression schedule
+ * - 'perpetual': Drain actionable work back-to-back (re-queue on completion)
+ *   until a programmatic work-detector reports nothing actionable, then PARK
+ *   on a recheck cadence (`recheckCron` / `recheckIntervalMs`, default daily).
+ *   See server/services/perpetualWork.js for the detector registry and the
+ *   perpetual gate in cosTaskGenerator.generateManagedAppImprovementTaskForType.
  */
 
 import { writeFile } from 'fs/promises';
@@ -61,10 +67,15 @@ export const INTERVAL_TYPES = {
   ONCE: 'once',              // Runs once per app or globally
   ON_DEMAND: 'on-demand',    // Only runs when manually triggered
   CUSTOM: 'custom',          // Custom interval in milliseconds
-  CRON: 'cron'               // Cron expression schedule
+  CRON: 'cron',              // Cron expression schedule
+  PERPETUAL: 'perpetual'     // Drain back-to-back until a work-detector idles, then park on a recheck cadence
 };
 
 const WEEK = 7 * DAY;
+
+// Default cadence a parked perpetual task waits before re-probing its
+// work-detector, when neither `recheckCron` nor `recheckIntervalMs` is set.
+const DEFAULT_PERPETUAL_RECHECK_MS = DAY;
 
 /**
  * Get learning-adjusted interval for a task type
@@ -204,8 +215,10 @@ export const DEFAULT_TASK_INTERVALS = {
   // (app.workTracker, default 'auto' → resolved from the git origin host). At
   // dispatch the generator resolves the tracker and delegates to the matching
   // prompt body — plan→plan-task, github→claim-issue, gitlab→claim-issue-gitlab,
-  // jira→jira-sprint-manager — so the agent still creates its OWN worktree and
-  // opens its OWN PR. Both `useWorktree` and `openPR` are OFF on the CoS side
+  // jira→claim-issue-jira — so the agent still creates its OWN worktree and
+  // opens its OWN MR/PR. (jira routes to the per-ticket claim-issue-jira flow,
+  // NOT the broader jira-sprint-manager triage job, which stays standalone.)
+  // Both `useWorktree` and `openPR` are OFF on the CoS side
   // for the SAME reasons as plan-task/claim-issue (a CoS-managed worktree would
   // hide the claim slug and trigger cleanupAgentWorktree's auto-merge).
   // `issueAuthorFilter` applies only when the resolved tracker is a forge
@@ -411,6 +424,19 @@ function migrateScheduleV1toV2(schedule) {
   return migrated;
 }
 
+// True when a stored prompt byte-matches a shipped default for this task — the
+// current default or any prior one in PREVIOUS_DEFAULT_PROMPTS. Used by
+// loadSchedule both to recognize legacy (unversioned) prompts and to self-heal a
+// prompt mis-flagged as customized. A genuine user edit never byte-matches a
+// shipped default, so callers can treat a match as "not really customized".
+function promptMatchesShippedDefault(prompt, taskType) {
+  if (!prompt || !DEFAULT_TASK_PROMPTS[taskType]) return false;
+  return (
+    prompt === DEFAULT_TASK_PROMPTS[taskType] ||
+    (PREVIOUS_DEFAULT_PROMPTS[taskType] || []).includes(prompt)
+  );
+}
+
 /**
  * Load schedule data (auto-migrates from v1 if needed)
  */
@@ -491,6 +517,17 @@ export async function loadSchedule() {
         }
       }
 
+      // Self-heal a mis-flagged customization: a prompt marked promptCustomized
+      // that nonetheless byte-matches a shipped default was never user-edited —
+      // it was flagged by an earlier legacy migration that ran before this task
+      // carried a PREVIOUS_DEFAULT_PROMPTS entry (e.g. the basic self-improvement
+      // prompts that hardcoded the app name as "PortOS"). Clear the flag so the
+      // auto-upgrade below can replace the stale default.
+      if (config.promptCustomized && promptMatchesShippedDefault(config.prompt, taskType)) {
+        config.promptCustomized = false;
+        needsSave = true;
+      }
+
       if (PROMPT_VERSIONS[taskType] && !config.promptCustomized) {
         // Auto-upgrade non-customized prompts when code version is newer
         const storedVersion = config.promptVersion || 1;
@@ -562,6 +599,25 @@ export async function updateTaskInterval(taskType, settings) {
     delete schedule.executions['task:pr-watcher'];
   }
 
+  // When the recheck cadence of a perpetual task changes, re-derive the
+  // `parkedUntil` of any CURRENTLY-parked execution records (global + per-app)
+  // from the new cadence — otherwise an already-parked task keeps waiting out
+  // its old timestamp and the cadence control appears to do nothing until then.
+  // Only recompute existing parks (never create one), and compute from now so a
+  // shortened cadence takes effect on the next slot.
+  const merged = schedule.tasks[taskType];
+  if (merged.type === INTERVAL_TYPES.PERPETUAL && ('recheckCron' in settings || 'recheckIntervalMs' in settings)) {
+    const exec = schedule.executions[`task:${taskType}`];
+    if (exec) {
+      const records = [exec, ...Object.values(exec.perApp || {})];
+      for (const rec of records) {
+        if (rec?.parkedUntil) {
+          rec.parkedUntil = await computePerpetualRecheckAt(merged);
+        }
+      }
+    }
+  }
+
   await saveSchedule(schedule);
 
   // Globally disabling pr-watcher clears every app's high-water mark, mirroring
@@ -617,6 +673,88 @@ export async function getExecutionHistory(taskType) {
   const schedule = await loadSchedule();
   const key = taskType.startsWith('task:') ? taskType : `task:${taskType}`;
   return schedule.executions[key] || { lastRun: null, count: 0, perApp: {} };
+}
+
+// ============================================================
+// Perpetual (drain-until-done) park state
+// ============================================================
+
+/**
+ * Compute when a parked perpetual task should next re-probe its work-detector.
+ * Prefers `recheckCron` (a 5-field cron string, evaluated in the user's
+ * timezone) over `recheckIntervalMs`; falls back to DEFAULT_PERPETUAL_RECHECK_MS.
+ * Returns an ISO timestamp string.
+ */
+export async function computePerpetualRecheckAt(interval, fromMs = Date.now()) {
+  const cron = interval?.recheckCron;
+  if (typeof cron === 'string' && cron.trim().split(/\s+/).length === 5) {
+    const timezone = await getUserTimezone();
+    const next = parseCronToNextRun(cron, new Date(fromMs), timezone);
+    if (next) return next.toISOString();
+  }
+  const ms = Number(interval?.recheckIntervalMs) > 0
+    ? Number(interval.recheckIntervalMs)
+    : DEFAULT_PERPETUAL_RECHECK_MS;
+  return new Date(fromMs + ms).toISOString();
+}
+
+/**
+ * The park record lives ALONGSIDE the execution record (global or per-app), so a
+ * perpetual task's "parked until" survives restarts the same way `lastRun` does.
+ * Returns the execution sub-record that holds the park fields, creating the
+ * skeleton if absent.
+ */
+function ensureExecutionRecord(schedule, taskType, appId) {
+  const key = taskType.startsWith('task:') ? taskType : `task:${taskType}`;
+  if (!schedule.executions[key]) {
+    schedule.executions[key] = { lastRun: null, count: 0, perApp: {} };
+  }
+  const top = schedule.executions[key];
+  if (appId) {
+    if (!top.perApp) top.perApp = {};
+    if (!top.perApp[appId]) top.perApp[appId] = { lastRun: null, count: 0 };
+    return top.perApp[appId];
+  }
+  return top;
+}
+
+/**
+ * Park a perpetual task: its work-detector reported nothing actionable, so stop
+ * draining and wait until `parkedUntil` before re-probing. Stamps the park
+ * fields on the (per-app or global) execution record.
+ */
+export async function parkPerpetual(taskType, appId = null, { reason = null, actionableCount = 0 } = {}) {
+  const schedule = await loadSchedule();
+  const interval = schedule.tasks[taskType] || {};
+  const parkedUntil = await computePerpetualRecheckAt(interval);
+  const record = ensureExecutionRecord(schedule, taskType, appId);
+  record.parkedUntil = parkedUntil;
+  record.parkReason = reason;
+  record.parkActionableCount = actionableCount;
+  record.parkedAt = new Date().toISOString();
+  await saveSchedule(schedule);
+  emitLog('info', `Perpetual ${taskType} parked until ${parkedUntil} (${reason || 'idle'})`, { taskType, appId, parkedUntil }, '📅 TaskSchedule');
+  cosEvents.emit('schedule:perpetual-parked', { taskType, appId, parkedUntil, reason });
+  return record;
+}
+
+/**
+ * Clear a perpetual task's park so the drain resumes (its work-detector found
+ * actionable work). No-op (and no write) when there's nothing parked.
+ */
+export async function clearPerpetualPark(taskType, appId = null) {
+  const schedule = await loadSchedule();
+  const key = taskType.startsWith('task:') ? taskType : `task:${taskType}`;
+  const top = schedule.executions[key];
+  if (!top) return false;
+  const record = appId ? top.perApp?.[appId] : top;
+  if (!record || record.parkedUntil == null) return false;
+  delete record.parkedUntil;
+  delete record.parkReason;
+  delete record.parkActionableCount;
+  delete record.parkedAt;
+  await saveSchedule(schedule);
+  return true;
 }
 
 /**
@@ -832,6 +970,32 @@ export async function shouldRunTask(taskType, appId = null) {
       break;
     }
 
+    case INTERVAL_TYPES.PERPETUAL: {
+      // Drain-until-done: a perpetual task is "due" whenever it isn't parked.
+      // The actual programmatic work-detector runs at DISPATCH time (the gate in
+      // generateManagedAppImprovementTaskForType) and PARKS the task — writing
+      // `parkedUntil` onto the execution record — when nothing is actionable.
+      // shouldRunTask only reads that persisted park, so it never does network
+      // I/O even though it's called several times per evaluation cycle. While
+      // parked, the recheck cadence (parkedUntil) gates re-probing; once it
+      // elapses the task becomes due again and the gate re-runs the detector.
+      const parkedUntilMs = appExecution.parkedUntil
+        ? new Date(appExecution.parkedUntil).getTime()
+        : 0;
+      if (parkedUntilMs && now < parkedUntilMs) {
+        result = {
+          shouldRun: false,
+          reason: 'perpetual-parked',
+          nextRunAt: new Date(parkedUntilMs).toISOString(),
+          parkReason: appExecution.parkReason || null,
+          parkActionableCount: appExecution.parkActionableCount ?? null
+        };
+      } else {
+        result = { shouldRun: true, reason: parkedUntilMs ? 'perpetual-recheck' : 'perpetual-drain' };
+      }
+      break;
+    }
+
     default:
       result = { shouldRun: true, reason: 'unknown-default-rotation' };
   }
@@ -870,11 +1034,26 @@ export async function getDueTasks(appId = null) {
 /**
  * Get the next task type to run (optionally for a specific app)
  */
-export async function getNextTaskType(appId = null, lastType = '') {
+export async function getNextTaskType(appId = null, lastType = '', { perpetualOnly = false } = {}) {
   const schedule = await loadSchedule();
   const taskTypes = Object.keys(schedule.tasks);
 
   const dueTasks = await getDueTasks(appId);
+
+  // `perpetualOnly` constrains the pick to a due perpetual (drain-until-done)
+  // task, skipping every other schedule type. Callers set this when the app is
+  // on its review cooldown: only perpetual drains bypass that cooldown (their
+  // work-detector park is the throttle), so a higher-priority cron/custom/daily
+  // type that's also due must NOT be returned — it would mask the perpetual
+  // drain and the caller, seeing a non-exempt pick, would skip the whole app for
+  // the cooldown window (the mixed-schedule stall). Returns null when nothing
+  // perpetual is due, so the caller leaves the cooled-down app alone.
+  if (perpetualOnly) {
+    const perpetualDue = dueTasks.filter(t => t.interval.type === INTERVAL_TYPES.PERPETUAL);
+    return perpetualDue.length > 0
+      ? { taskType: perpetualDue[0].taskType, reason: 'perpetual-drain' }
+      : null;
+  }
 
   // Explicit time-based schedules (cron, custom interval) outrank loose interval-based
   // ones (daily/weekly/once). A user-pinned 9 AM cron should fire at 9 AM even if a
@@ -882,6 +1061,17 @@ export async function getNextTaskType(appId = null, lastType = '') {
   const cronDue = dueTasks.filter(t => t.interval.type === INTERVAL_TYPES.CRON || t.interval.type === INTERVAL_TYPES.CUSTOM);
   if (cronDue.length > 0) {
     return { taskType: cronDue[0].taskType, reason: `${cronDue[0].interval.type}-due` };
+  }
+
+  // Perpetual tasks actively draining a backlog outrank the loose interval
+  // tasks (daily/weekly/once/rotation) so the drain keeps the app's single
+  // improvement slot until its work-detector idles and it parks — at which
+  // point the loose tasks below get their turn. (Explicit time-pinned cron/
+  // custom schedules above still win, so a perpetual drain can't starve a
+  // user-pinned 9 AM job.)
+  const perpetualDue = dueTasks.filter(t => t.interval.type === INTERVAL_TYPES.PERPETUAL);
+  if (perpetualDue.length > 0) {
+    return { taskType: perpetualDue[0].taskType, reason: 'perpetual-drain' };
   }
 
   const dailyDue = dueTasks.filter(t => t.interval.type === INTERVAL_TYPES.DAILY);
@@ -1101,6 +1291,30 @@ export async function getScheduleStatus() {
       taskStatus.managedAgentOptions = MANAGED_AGENT_OPTIONS[taskType];
     }
 
+    // Perpetual tasks park PER-APP (parkPerpetual is called with the appId), so
+    // the global `status` above (shouldRunTask with no appId) always reads
+    // 'perpetual-drain' for app-scoped tasks like claim-issue/claim-work even
+    // when every app is parked. Aggregate the per-app (and global) park records
+    // so the UI can show the true parked/draining state and the soonest recheck.
+    if (interval.type === INTERVAL_TYPES.PERPETUAL) {
+      const nowMs = Date.now();
+      const isParked = (r) => !!(r?.parkedUntil && new Date(r.parkedUntil).getTime() > nowMs);
+      const perAppEntries = Object.values(execution.perApp || {});
+      const parkedApps = perAppEntries.filter(isParked);
+      const globalParked = isParked(execution);
+      const nextRecheckAt = [
+        ...parkedApps.map((r) => r.parkedUntil),
+        ...(globalParked ? [execution.parkedUntil] : [])
+      ].filter(Boolean).sort()[0] || null;
+      taskStatus.perpetual = {
+        globalParked,
+        parkedAppCount: parkedApps.length,
+        trackedAppCount: perAppEntries.length,
+        nextRecheckAt,
+        parkReason: parkedApps[0]?.parkReason || (globalParked ? execution.parkReason : null) || null
+      };
+    }
+
     status.tasks[taskType] = taskStatus;
 
     if (learningInfo.adjusted) {
@@ -1217,31 +1431,41 @@ function formatRelativeTime(timestamp) {
   return 'just now';
 }
 
+// Short human-readable blurb per task type, shown in the schedule UI's
+// upcoming-tasks list. Every entry in SELF_IMPROVEMENT_TASK_TYPES must have a
+// key here — a missing one falls back to a dasherized label ("claim work"),
+// which reads as an orphaned/legacy task. A parity guard in taskSchedule.test.js
+// fails the suite if the two ever drift apart.
+export const TASK_TYPE_DESCRIPTIONS = {
+  'ui-bugs': 'Find and fix UI bugs',
+  'mobile-responsive': 'Check mobile responsiveness',
+  'security': 'Security vulnerability audit',
+  'code-quality': 'Code quality improvements',
+  'console-errors': 'Fix console errors',
+  'performance': 'Performance optimization',
+  'test-coverage': 'Improve test coverage',
+  'documentation': 'Update documentation',
+  'feature-ideas': 'Implement next planned feature or brainstorm new one',
+  'plan-task': 'Execute next PLAN.md item, remove it from PLAN.md, log to changelog (worktree+PR)',
+  'claim-issue': 'Claim and ship the next open GitHub issue (owner-filed or any author), PR closes it',
+  'claim-work': "Ship the next work item from the app's configured tracker (PLAN.md, GitHub/GitLab issues, or JIRA), routed automatically",
+  'accessibility': 'Accessibility audit',
+  'branch-cleanup': 'Clean up merged branches',
+  'dependency-updates': 'Update dependencies',
+  'release-check': 'Check for release readiness',
+  'error-handling': 'Improve error handling',
+  'typing': 'Improve TypeScript types',
+  'pr-reviewer': 'Review open PRs from contributors',
+  'pr-watcher': 'Run a custom prompt on PRs newly opened against the default branch',
+  'code-reviewer-a': 'Review the codebase and triage/implement findings (independent provider/model instance A)',
+  'code-reviewer-b': 'Review the codebase and triage/implement findings (independent provider/model instance B)',
+  'do-replan': 'Audit and prune PLAN.md after merges and branch cleanup so it reflects what actually shipped',
+  'jira-sprint-manager': 'Triage and implement JIRA sprint tickets',
+  'jira-status-report': 'Generate JIRA weekly status report',
+  'reference-watch': 'Watch reference repos and append PLAN.md items for new upstream work',
+  'refresh-local-llm-catalog': "Refresh PortOS's bundled suggested local-model catalog + editorial ranking (PortOS repo only)"
+};
+
 function getTaskTypeDescription(taskType) {
-  const descriptions = {
-    'ui-bugs': 'Find and fix UI bugs',
-    'mobile-responsive': 'Check mobile responsiveness',
-    'security': 'Security vulnerability audit',
-    'code-quality': 'Code quality improvements',
-    'console-errors': 'Fix console errors',
-    'performance': 'Performance optimization',
-    'test-coverage': 'Improve test coverage',
-    'documentation': 'Update documentation',
-    'feature-ideas': 'Implement next planned feature or brainstorm new one',
-    'plan-task': 'Execute next PLAN.md item, remove it from PLAN.md, log to changelog (worktree+PR)',
-    'claim-issue': 'Claim and ship the next open GitHub issue (owner-filed or any author), PR closes it',
-    'accessibility': 'Accessibility audit',
-    'branch-cleanup': 'Clean up merged branches',
-    'dependency-updates': 'Update dependencies',
-    'release-check': 'Check for release readiness',
-    'error-handling': 'Improve error handling',
-    'typing': 'Improve TypeScript types',
-    'pr-reviewer': 'Review open PRs from contributors',
-    'pr-watcher': 'Run a custom prompt on PRs newly opened against the default branch',
-    'jira-sprint-manager': 'Triage and implement JIRA sprint tickets',
-    'jira-status-report': 'Generate JIRA weekly status report',
-    'reference-watch': 'Watch reference repos and append PLAN.md items for new upstream work',
-    'refresh-local-llm-catalog': "Refresh PortOS's bundled suggested local-model catalog + editorial ranking (PortOS repo only)"
-  };
-  return descriptions[taskType] || taskType.replace(/-/g, ' ');
+  return TASK_TYPE_DESCRIPTIONS[taskType] || taskType.replace(/-/g, ' ');
 }

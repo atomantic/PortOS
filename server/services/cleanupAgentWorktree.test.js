@@ -108,6 +108,11 @@ vi.mock('../lib/fileUtils.js', () => ({
 tryReadFile: vi.fn().mockResolvedValue(null),
   ensureDir: vi.fn().mockResolvedValue(undefined),
   readJSONFile: vi.fn().mockResolvedValue({}),
+  // instances.js (now pulled in via agentLifecycle's identity stamping, #1563)
+  // resolves `dataPath('instances.json')` at module load and writes via
+  // atomicWrite — both must be present on the mock or the import graph throws.
+  dataPath: vi.fn((p) => `/mock/root/data/${p}`),
+  atomicWrite: vi.fn().mockResolvedValue(undefined),
   PATHS: {
     root: '/mock/root',
     cosAgents: '/mock/root/data/cos/agents',

@@ -32,7 +32,8 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { firstLine } from './cos.js';
+import { firstLine, isPerpetualRefillCandidate } from './cos.js';
+import { canQueueImprovementTasks } from './cosState.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const COS_SRC = readFileSync(join(__dirname, 'cos.js'), 'utf-8');
@@ -98,7 +99,7 @@ function makeCapacityTracker(state, agentsByProject = {}) {
  * `evaluateTasks` mirrors this at cos.js:862 with `tasksToSpawn.length === 0`.
  * The replica enforces the same `spawned === 0` precondition.
  */
-function priorityDequeue(buckets, capacity) {
+function priorityDequeue(buckets, capacity, { paused = false } = {}) {
   const order = ['onDemand', 'user', 'autoSystem', 'mission', 'idle'];
 
   // Mission / idle only run when no pending user tasks exist, mirroring the
@@ -106,6 +107,10 @@ function priorityDequeue(buckets, capacity) {
   const hasPendingUserTasks = (buckets.user || []).length > 0;
 
   for (const bucketName of order) {
+    // Global pause: on-demand (explicit user "Run") still drains, but every
+    // autonomous/scheduled/user tier below is skipped — mirrors the
+    // `if (paused) return;` gate in dequeueNextTask after Priority 0.
+    if (paused && bucketName !== 'onDemand') break;
     if ((bucketName === 'mission' || bucketName === 'idle') && hasPendingUserTasks) continue;
     // Idle is stricter: only fires when no other bucket has spawned yet.
     if (bucketName === 'idle' && capacity.spawned.length > 0) continue;
@@ -165,6 +170,28 @@ describe('evaluateTasks — priority ordering', () => {
       'sys-auto-1',
     ]);
     expect(spawned.map(t => t._bucket)).toEqual(['onDemand', 'user', 'autoSystem']);
+  });
+
+  it('when globally paused, only the on-demand bucket drains (manual Run bypasses pause)', () => {
+    // A global pause stops scheduled/autonomous/user spawning, but an explicit
+    // user "Run" pushes an on-demand request that must still fire. Mirrors the
+    // production gate: Priority 0 (on-demand) is processed, then `if (paused) return;`.
+    const state = makeState({ maxConcurrentAgents: 5 });
+    const capacity = makeCapacityTracker(state);
+
+    const buckets = {
+      onDemand: [task('task-onDemand-1')],
+      user: [task('task-user-1')],
+      autoSystem: [task('sys-auto-1')],
+      mission: [task('sys-mission-1')],
+      idle: [task('sys-idle-1')],
+    };
+
+    const spawned = priorityDequeue(buckets, capacity, { paused: true });
+
+    // Only the on-demand request spawns; everything else stays paused.
+    expect(spawned.map(t => t.id)).toEqual(['task-onDemand-1']);
+    expect(spawned.map(t => t._bucket)).toEqual(['onDemand']);
   });
 
   it('mission + idle fire only when there are NO pending user tasks', () => {
@@ -459,7 +486,20 @@ describe('dequeueNextTask — capacity guards', () => {
  * will fail loudly rather than silently miss matches.
  */
 function extractFnBody(src, fnStart) {
-  const openIdx = src.indexOf('{', fnStart);
+  // Skip the parameter list before locating the body brace: a destructured /
+  // defaulted param (e.g. `(state, data, { x = null } = {})`) contains `{`
+  // braces, so the body `{` is the first one AFTER the signature's closing `)`,
+  // not the first `{` after fnStart. Paren-match the signature first.
+  const parenIdx = src.indexOf('(', fnStart);
+  let searchFrom = fnStart;
+  if (parenIdx !== -1) {
+    let pdepth = 0;
+    for (let j = parenIdx; j < src.length; j++) {
+      if (src[j] === '(') pdepth++;
+      else if (src[j] === ')') { pdepth--; if (pdepth === 0) { searchFrom = j + 1; break; } }
+    }
+  }
+  const openIdx = src.indexOf('{', searchFrom);
   if (openIdx === -1) return '';
   let depth = 0;
   let i = openIdx;
@@ -658,6 +698,32 @@ describe('cos.js source — priority + capacity invariants', () => {
     expect(idleIdx, 'spawnPriority4IdleReview must run after feature agents').toBeGreaterThan(featureIdx);
   });
 
+  it('on-demand (Priority 0) bypasses the global pause in BOTH engines', () => {
+    // A global pause stops scheduled/autonomous/user spawning, but an explicit
+    // user "Run" queues an on-demand request that must still fire. So in each
+    // engine the pause gate must sit AFTER Priority 0, not at the top — moving it
+    // back to the top is the regression this pins.
+    const dequeueFn = extractFnBody(COS_SRC, COS_SRC.indexOf('async function dequeueNextTask'));
+    const evalFn    = extractFnBody(GEN_SRC, GEN_SRC.indexOf('export async function evaluateTasks'));
+
+    // dequeueNextTask: the `if (paused) return` gate appears AFTER the on-demand
+    // loop (`onDemandRequests`), and `paused` is NOT returned-on before it.
+    const dqOnDemandIdx = dequeueFn.indexOf('onDemandRequests');
+    const dqPauseGateIdx = dequeueFn.search(/if\s*\(\s*paused\s*\)\s*return/);
+    expect(dqOnDemandIdx, 'dequeueNextTask must process onDemandRequests').toBeGreaterThan(-1);
+    expect(dqPauseGateIdx, 'dequeueNextTask must keep an `if (paused) return` gate').toBeGreaterThan(-1);
+    expect(dqPauseGateIdx, 'pause gate must come AFTER the on-demand loop').toBeGreaterThan(dqOnDemandIdx);
+
+    // evaluateTasks: Priority 0 runs unconditionally; Priorities 1+ are wrapped in
+    // an `if (!paused)` block that begins after spawnPriority0OnDemand.
+    const evOnDemandIdx = evalFn.indexOf('spawnPriority0OnDemand(ctx)');
+    const evPauseGateIdx = evalFn.search(/if\s*\(\s*!\s*paused\s*\)/);
+    const evUserIdx = evalFn.indexOf('spawnPriority1UserTasks(ctx)');
+    expect(evOnDemandIdx, 'evaluateTasks must invoke spawnPriority0OnDemand').toBeGreaterThan(-1);
+    expect(evPauseGateIdx, 'evaluateTasks must gate the lower tiers on !paused').toBeGreaterThan(evOnDemandIdx);
+    expect(evUserIdx, 'user/autonomous tiers must sit inside the !paused gate').toBeGreaterThan(evPauseGateIdx);
+  });
+
   it('per-project cap defaults to global cap when unset', () => {
     // The fallback `state.config.maxConcurrentAgentsPerProject || state.config.maxConcurrentAgents`
     // is the safety net for older state.json files that pre-date the
@@ -721,9 +787,11 @@ describe('cos.js source — priority + capacity invariants', () => {
     const reregIdx = skipBranch.indexOf('registerSingleJobSchedule');
     expect(recordIdx, 'autonomy-skip must call recordJobGateSkip').toBeGreaterThan(-1);
     expect(recordIdx, 'recordJobGateSkip must precede re-registration (no 1s refire loop)').toBeLessThan(reregIdx);
-    // The improvement-check timer must gate its queueEligibleImprovementTasks call.
-    expect(SCHED_SRC, 'improvement-check timer must gate queueing on cos === execute')
-      .toMatch(/idleReviewEnabled\s*&&\s*getDomainMode\(\s*state\.config\s*,\s*['"]cos['"]\s*\)\s*===\s*['"]execute['"]/);
+    // The improvement-check timer must gate its queueEligibleImprovementTasks
+    // call on the shared canQueueImprovementTasks predicate (idle-review +
+    // cos===execute), which encapsulates the auto-run domain gate.
+    expect(SCHED_SRC, 'improvement-check timer must gate queueing via canQueueImprovementTasks')
+      .toMatch(/if\s*\(\s*canQueueImprovementTasks\(\s*state\s*\)\s*\)/);
   });
 
   it('both on-demand loops dedupe the cooldown stamp per app via reviewStartedApps set', () => {
@@ -799,11 +867,13 @@ describe('cos.js source — priority + capacity invariants', () => {
     // Match the call shape, not the specific variable name — `task` could
     // legitimately be renamed (e.g. `queuedTask`) in a behavior-preserving
     // refactor. The contract being pinned is "raw:true addTask call to the
-    // internal lane," not the identifier.
+    // internal lane," not the identifier. The options object may carry siblings
+    // beyond `raw:true` (e.g. `ignoreTaskId` for the perpetual refill), so don't
+    // require `}` immediately after `raw: true`.
     expect(
       fnBody,
       'queue path must persist via addTask with raw:true so the enriched task object survives serialization'
-    ).toMatch(/addTask\s*\(\s*\w+\s*,\s*['"]internal['"]\s*,\s*\{\s*raw:\s*true\s*\}/);
+    ).toMatch(/addTask\s*\(\s*\w+\s*,\s*['"]internal['"]\s*,\s*\{\s*raw:\s*true\b/);
 
     // The old buggy path called `getTaskDescription` to build a one-line
     // description and then passed app/context/approvalRequired fields to
@@ -838,7 +908,7 @@ describe('cos.js source — priority + capacity invariants', () => {
     expect(
       fnBody,
       'queue path must pass the loaded lastType through to getNextTaskType so rotation advances'
-    ).toMatch(/getNextTaskType\(app\.id,\s*\w+\s*\)/);
+    ).toMatch(/getNextTaskType\(app\.id,\s*\w+\s*(?:,|\))/);
 
     // appActivity helpers must come from the file-level static import (line ~23),
     // NOT a dynamic `await import('./appActivity.js')` *inside* the per-app
@@ -871,6 +941,34 @@ describe('cos.js source — priority + capacity invariants', () => {
       fnBody,
       'queue path must not call the disk-reading isAppOnCooldown per app'
     ).not.toMatch(/await\s+isAppOnCooldown\(/);
+
+    // Perpetual (drain-until-done) picks must BYPASS the per-app review cooldown
+    // — their work-detector park is the throttle, not the cooldown window. The
+    // spawn-time `markAppReviewCooldown` stamp (on-demand manual trigger +
+    // idle-review loop) writes `lastReviewedAt`, so without the bypass the
+    // back-to-back refill after a perpetual completion reads its own app as
+    // on-cooldown and stalls — a manually-triggered perpetual task then runs
+    // once instead of continuing the drain. The bypass is implemented by
+    // CONSTRAINING the pick to perpetual when the app is on cooldown: the
+    // cooldown state is computed first and passed to getNextTaskType as
+    // `perpetualOnly`, so in a MIXED schedule a due higher-priority cron/custom
+    // type can't mask the perpetual drain (which would strand the whole app for
+    // the window). Pin: (a) the cooldown is resolved BEFORE getNextTaskType, and
+    // (b) getNextTaskType is asked for a perpetual-only pick gated on cooldown.
+    const cooldownIdx = fnBody.indexOf('isAppActivityOnCooldown(');
+    const nextTypeIdx = fnBody.indexOf('getNextTaskType(');
+    expect(
+      cooldownIdx,
+      'queue path must compute cooldown via isAppActivityOnCooldown'
+    ).toBeGreaterThan(-1);
+    expect(
+      cooldownIdx < nextTypeIdx,
+      'cooldown must be resolved BEFORE getNextTaskType so it can constrain the pick to perpetual'
+    ).toBe(true);
+    expect(
+      fnBody,
+      'queue path must constrain the pick to perpetual when on cooldown (perpetualOnly gated on cooldown)'
+    ).toMatch(/getNextTaskType\([^)]*\{\s*perpetualOnly:\s*onCooldown\s*\}/);
   });
 
   it('generateManagedAppImprovementTaskForType defers updateAppActivity until after gates', () => {
@@ -999,4 +1097,148 @@ describe('addTask — first-line dedup', () => {
   // dedup scope) moved to cosTaskStore.test.js when addTask was extracted into
   // cosTaskStore.js. The firstLine behavioral tests above stay here because
   // cos.js still re-exports firstLine for backward compat.
+});
+
+// ─── Perpetual re-queue on completion (drain back-to-back) ─────────────────
+//
+// Perpetual schedules (e.g. claim-issue) are documented as "drain actionable
+// work back-to-back (re-queue on completion)" (taskSchedule.js), but the only
+// thing that queues them is the ~hourly cos-improvement-check timer — the
+// agent:completed handler (dequeueNextTask) merely drains already-queued tasks
+// and never regenerates perpetual work. A "ready" perpetual task doesn't even
+// shorten that timer (cosJobScheduler only gates the delay on status:'scheduled'
+// tasks), so when claim-issue is the only enabled schedule the next run waits up
+// to MAX_CHECK_INTERVAL (1h) instead of spawning immediately after the prior one.
+//
+// `isPerpetualRefillCandidate` is the pure gate that lets the completion handler
+// decide whether the just-finished agent belongs to a perpetual schedule that
+// should be refilled right now.
+describe('isPerpetualRefillCandidate — perpetual drain on completion', () => {
+  const schedule = {
+    tasks: {
+      'claim-issue': { type: 'perpetual', enabled: true },
+      'claim-issue-disabled': { type: 'perpetual', enabled: false },
+      'plan-task': { type: 'daily', enabled: true },
+    },
+  };
+  const agentFor = (analysisType, key = 'taskAnalysisType') => ({
+    metadata: analysisType == null ? {} : { [key]: analysisType },
+  });
+
+  it('is true for an enabled perpetual type matching the agent task', () => {
+    expect(isPerpetualRefillCandidate(agentFor('claim-issue'), schedule)).toBe(true);
+  });
+
+  it('is false for a disabled perpetual type (toggled off after spawn)', () => {
+    expect(isPerpetualRefillCandidate(agentFor('claim-issue-disabled'), schedule)).toBe(false);
+  });
+
+  it('is false for a non-perpetual schedule type', () => {
+    expect(isPerpetualRefillCandidate(agentFor('plan-task'), schedule)).toBe(false);
+  });
+
+  it('is false for an unknown / unscheduled type', () => {
+    expect(isPerpetualRefillCandidate(agentFor('ghost-type'), schedule)).toBe(false);
+  });
+
+  it('reads the analysis type from metadata.analysisType and selfImprovementType fallbacks', () => {
+    expect(isPerpetualRefillCandidate(agentFor('claim-issue', 'analysisType'), schedule)).toBe(true);
+    expect(isPerpetualRefillCandidate(agentFor('claim-issue', 'selfImprovementType'), schedule)).toBe(true);
+  });
+
+  it('is false for missing agent / metadata / schedule (no throw)', () => {
+    expect(isPerpetualRefillCandidate(null, schedule)).toBe(false);
+    expect(isPerpetualRefillCandidate(agentFor(null), schedule)).toBe(false);
+    expect(isPerpetualRefillCandidate(agentFor('claim-issue'), null)).toBe(false);
+    expect(isPerpetualRefillCandidate(agentFor('claim-issue'), { tasks: null })).toBe(false);
+  });
+});
+
+// Source-level guard: the agent:completed handler must wire the perpetual
+// refill so completion drains back-to-back instead of waiting for the hourly
+// improvement-check timer.
+describe('cos.js source — agent:completed triggers perpetual refill', () => {
+  it("the agent:completed listener invokes the perpetual refill path", () => {
+    const onIdx = COS_SRC.indexOf("cosEvents.on('agent:completed'");
+    expect(onIdx, 'agent:completed listener must exist').toBeGreaterThan(-1);
+    const handlerSlice = COS_SRC.slice(onIdx, onIdx + 1200);
+    expect(
+      handlerSlice.includes('refillPerpetualForCompletedAgent'),
+      'agent:completed handler must call refillPerpetualForCompletedAgent'
+    ).toBe(true);
+  });
+
+  it('the refill passes the completed task id as ignoreTaskId (avoids the completeAgent-before-updateTask dedup race)', () => {
+    // agent:completed fires before the completion flow's updateTask marks the task
+    // done, so the just-finished task can still read as in_progress — both in the
+    // snapshot AND on disk when queueEligible's addTask re-reads COS-TASKS.md. A
+    // perpetual schedule regenerates an identical first-line per app, so without
+    // excluding the completing task the refill is rejected as a duplicate and the
+    // drain stalls. Pin the ignoreTaskId thread so a refactor can't reintroduce it.
+    const fnIdx = COS_SRC.indexOf('async function refillPerpetualForCompletedAgent');
+    expect(fnIdx, 'refillPerpetualForCompletedAgent must exist').toBeGreaterThan(-1);
+    const fnSlice = COS_SRC.slice(fnIdx, fnIdx + 2500);
+    expect(
+      /queueEligibleImprovementTasks\(\s*state\s*,\s*cosTaskData\s*,\s*\{\s*ignoreTaskId:\s*agent\?\.taskId\s*\}\s*\)/.test(fnSlice),
+      'refill must forward { ignoreTaskId: agent?.taskId } to queueEligibleImprovementTasks'
+    ).toBe(true);
+  });
+
+  it('the refill only fires on a SUCCESSFUL completion (no back-to-back spin on failures)', () => {
+    // Perpetual completions skip the per-app cooldown, so refilling after a failed
+    // run would spin the daemon through repeated failures (the work-detector still
+    // sees the same issue as actionable). The refill must bail on a non-success
+    // result and let task-retry/backoff + the recheck cadence handle failures.
+    const fnIdx = COS_SRC.indexOf('async function refillPerpetualForCompletedAgent');
+    const fnSlice = COS_SRC.slice(fnIdx, fnIdx + 2500);
+    expect(
+      /if\s*\(\s*!agent\?\.result\?\.success\s*\)\s*return/.test(fnSlice),
+      'refill must early-return when the completed agent did not succeed'
+    ).toBe(true);
+  });
+
+  it('refill is sequenced BEFORE dequeue in the handler (perpetual task queued before slots fill)', () => {
+    // If generic dequeue ran first (or concurrently), it could claim the just-
+    // freed slot with idle/mission work before the perpetual task is queued,
+    // breaking the back-to-back drain. The handler must chain refill → dequeue.
+    const onIdx = COS_SRC.indexOf("cosEvents.on('agent:completed'");
+    const handlerSlice = COS_SRC.slice(onIdx, onIdx + 1400);
+    expect(
+      /refillPerpetualForCompletedAgent\(agent\)[\s\S]*\.then\(\s*\(\)\s*=>\s*dequeueNextTask\(\)\s*\)/.test(handlerSlice),
+      'handler must run dequeueNextTask in a .then() AFTER the refill resolves'
+    ).toBe(true);
+    // The old standalone `setImmediate(() => dequeueNextTask())` must be gone —
+    // its presence would race the refill.
+    expect(
+      handlerSlice.includes('setImmediate(() => dequeueNextTask())'),
+      'the unconditional pre-refill dequeue must be removed'
+    ).toBe(false);
+  });
+});
+
+// Shared autonomous-queuing gate (cosState.canQueueImprovementTasks). Extracted
+// from three drift-prone copies (post-startup queue, improvement-check timer,
+// perpetual drain refill). Queuing requires BOTH idle-review on AND the CoS
+// auto-run domain in `execute`.
+describe('canQueueImprovementTasks — autonomous queuing gate', () => {
+  const cfg = (idleReviewEnabled, cos) => ({
+    config: { idleReviewEnabled, domainAutonomy: { cos } },
+  });
+
+  it('is true only when idle-review is on AND cos auto-run is execute', () => {
+    expect(canQueueImprovementTasks(cfg(true, 'execute'))).toBe(true);
+  });
+
+  it('is false when cos auto-run is off or dry-run', () => {
+    expect(canQueueImprovementTasks(cfg(true, 'off'))).toBe(false);
+    expect(canQueueImprovementTasks(cfg(true, 'dry-run'))).toBe(false);
+  });
+
+  it('is false when idle-review is disabled, regardless of cos mode', () => {
+    expect(canQueueImprovementTasks(cfg(false, 'execute'))).toBe(false);
+  });
+
+  it('coerces a falsy/undefined idleReviewEnabled to a boolean false', () => {
+    expect(canQueueImprovementTasks(cfg(undefined, 'execute'))).toBe(false);
+  });
 });

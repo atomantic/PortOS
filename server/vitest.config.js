@@ -3,6 +3,15 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     testTimeout: 10000,
+    // Print worker console output directly instead of forwarding it to the main
+    // thread over RPC. This codebase logs heavily from fire-and-forget callbacks
+    // (the documented `.catch(() => console.log(...))` pattern, PTY/timer hooks,
+    // periodic sync/sweep loops) — a log can resolve AFTER its test returns, and
+    // when that late log raced vitest's worker teardown the run failed with
+    // "EnvironmentTeardownError: Closing rpc while onUserConsoleLog was pending"
+    // (all assertions passing). Bypassing the RPC console-intercept removes that
+    // path entirely. Tests that assert on console use vi.spyOn (unaffected).
+    disableConsoleIntercept: true,
     // The client owns its own test runner (`client/vitest.config.js`, jsdom,
     // `cd client && npm test`) which already covers every `client/src/**` test
     // — including the pure helper tests (e.g. normalize.js sidecar resolution).

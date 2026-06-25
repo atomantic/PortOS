@@ -7,7 +7,7 @@
  * and voice-layer ids/labels/roles — so it can inject them into the AI
  * generate/evaluate prompts and the model returns ids the editor pickers already
  * understand. Kept as a deliberate, small mirror (not a shared import: client
- * and server are separate packages) — `server/services/songs.js` already
+ * and server are separate packages) — `server/services/rounds.js` already
  * documents this mirror relationship for the sanitizer's id vocabulary.
  *
  * Pure data, no imports. If you add/rename a shape or layer id here, mirror it

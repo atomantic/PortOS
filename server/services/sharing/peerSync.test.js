@@ -11,7 +11,7 @@ import { tmpdir } from 'os';
 // runs against the real on-disk paths via the tmpdir-redirect pattern below.
 
 import { PATHS } from '../../lib/fileUtils.js';
-import { RECORD_KIND_SCHEMA_CATEGORIES, PORTOS_SCHEMA_VERSIONS } from '../../lib/schemaVersions.js';
+import { RECORD_KIND_SCHEMA_CATEGORIES, PORTOS_SCHEMA_VERSIONS, NON_RECORD_SCHEMA_CATEGORIES } from '../../lib/schemaVersions.js';
 
 // instances.js mock: aligns with mockNoPeers() contract (getPeers → [], getInstanceId
 // → 'test-instance' by default) while keeping vi.fn() wrappers so per-test
@@ -23,6 +23,7 @@ vi.mock('../instances.js', () => ({
   DEFAULT_SYNC_CATEGORIES: {},
   getInstanceId: vi.fn().mockResolvedValue('test-instance'),
   getPeers: vi.fn().mockResolvedValue([]),
+  enqueueReciprocalSync: vi.fn().mockResolvedValue({ ok: true }),
 }));
 
 vi.mock('../universeBuilder.js', async () => ({
@@ -65,6 +66,58 @@ vi.mock('../mediaCollections.js', async () => ({
   mergeMediaCollectionsFromSync: vi.fn(),
 }));
 
+// #1566 — the media-library sweep dynamic-imports this to rebuild the derived
+// media_assets index after bytes land. Mock it to a no-op spy so the sweep tests
+// don't touch Postgres and can assert the reconcile fired.
+vi.mock('../mediaAssetIndex/index.js', () => ({
+  reconcileMediaAssets: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('../artists/index.js', async () => {
+  const imageBasename = (url) => {
+    if (typeof url !== 'string' || !url.trim()) return null;
+    if (/^(https?:|data:|blob:)/i.test(url)) return null;
+    const prefix = '/data/images/';
+    const value = url.startsWith(prefix) ? url.slice(prefix.length) : url;
+    if (value.startsWith('/')) return null;
+    return value.split(/[?#]/)[0].split('/').pop() || null;
+  };
+  return {
+    getArtist: vi.fn(),
+    listArtists: vi.fn(),
+    mergeArtistsFromSync: vi.fn(),
+    portraitImageFilename: vi.fn(imageBasename),
+  };
+});
+
+vi.mock('../albums/index.js', async () => {
+  const imageBasename = (url) => {
+    if (typeof url !== 'string' || !url.trim()) return null;
+    if (/^(https?:|data:|blob:)/i.test(url)) return null;
+    const prefix = '/data/images/';
+    const value = url.startsWith(prefix) ? url.slice(prefix.length) : url;
+    if (value.startsWith('/')) return null;
+    return value.split(/[?#]/)[0].split('/').pop() || null;
+  };
+  return {
+    getAlbum: vi.fn(),
+    listAlbums: vi.fn(),
+    mergeAlbumsFromSync: vi.fn(),
+    coverImageFilename: vi.fn(imageBasename),
+  };
+});
+
+vi.mock('../tracks/index.js', async () => ({
+  getTrack: vi.fn(),
+  listTracks: vi.fn(),
+  mergeTracksFromSync: vi.fn(),
+  trackAudioFilename: vi.fn((name) => {
+    if (typeof name !== 'string' || !name.trim()) return null;
+    const value = name.trim();
+    return value.includes('/') || value.includes('\\') || value.includes('..') ? null : value;
+  }),
+}));
+
 vi.mock('../../lib/peerHttpClient.js', async () => ({
   peerFetch: vi.fn(),
   peerSocketOptions: {},
@@ -89,6 +142,7 @@ import {
   listPeerSubscriptions,
   findPeerSubscription,
   getOutboundCoverageForPeer,
+  getFullSyncCoverageForPeer,
   subscribePeer,
   unsubscribePeer,
   unsubscribeAllForPeer,
@@ -108,6 +162,10 @@ import {
   pullRecordFromPeer,
   syncNowForPeer,
   collectSubscriptionsForUpdate,
+  buildMediaLibraryManifest,
+  libraryKindsExcludedByPatterns,
+  syncMediaLibraryFromPeer,
+  syncMediaLibraryWithAllPeers,
   peerSyncEvents,
   __resetForTests,
   __drainForTests,
@@ -126,7 +184,11 @@ import {
   findCollectionBySeriesId,
   mergeMediaCollectionsFromSync,
 } from '../mediaCollections.js';
+import { getArtist, listArtists, mergeArtistsFromSync } from '../artists/index.js';
+import { getAlbum, listAlbums, mergeAlbumsFromSync } from '../albums/index.js';
+import { getTrack, listTracks, mergeTracksFromSync } from '../tracks/index.js';
 import { peerFetch } from '../../lib/peerHttpClient.js';
+import { reconcileMediaAssets } from '../mediaAssetIndex/index.js';
 import { getBackendName } from '../memoryBackend.js';
 import { getCatalogBundleForRef } from '../catalogDB.js';
 import { applyRemoteChanges as applyCatalogRemoteChanges } from '../catalogSync.js';
@@ -137,6 +199,7 @@ let originalDataPath;
 let originalImagesPath;
 let originalImageRefsPath;
 let originalVideosPath;
+let originalMusicPath;
 let tmp;
 
 beforeEach(async () => {
@@ -149,11 +212,14 @@ beforeEach(async () => {
   originalImagesPath = PATHS.images;
   originalImageRefsPath = PATHS.imageRefs;
   originalVideosPath = PATHS.videos;
+  originalMusicPath = PATHS.music;
   tmp = join(tmpdir(), `portos-peer-sync-${Date.now()}-${Math.random()}`);
   await mkdir(join(tmp, 'sharing'), { recursive: true });
   await mkdir(join(tmp, 'images'), { recursive: true });
+  await mkdir(join(tmp, 'music'), { recursive: true });
   PATHS.data = tmp;
   PATHS.images = join(tmp, 'images');
+  PATHS.music = join(tmp, 'music');
 
   // Reset mocks. The default peer fixture INTENTIONALLY INVERTS production
   // defaults: `addPeer` in instances.js creates peers with `syncEnabled:
@@ -209,6 +275,15 @@ beforeEach(async () => {
   vi.mocked(findCollectionByUniverseId).mockReset().mockResolvedValue(null);
   vi.mocked(findCollectionBySeriesId).mockReset().mockResolvedValue(null);
   vi.mocked(mergeMediaCollectionsFromSync).mockReset().mockResolvedValue({ applied: false, count: 0 });
+  vi.mocked(getArtist).mockReset().mockResolvedValue(null);
+  vi.mocked(listArtists).mockReset().mockResolvedValue([]);
+  vi.mocked(mergeArtistsFromSync).mockReset().mockResolvedValue({ applied: true, count: 1 });
+  vi.mocked(getAlbum).mockReset().mockResolvedValue(null);
+  vi.mocked(listAlbums).mockReset().mockResolvedValue([]);
+  vi.mocked(mergeAlbumsFromSync).mockReset().mockResolvedValue({ applied: true, count: 1 });
+  vi.mocked(getTrack).mockReset().mockResolvedValue(null);
+  vi.mocked(listTracks).mockReset().mockResolvedValue([]);
+  vi.mocked(mergeTracksFromSync).mockReset().mockResolvedValue({ applied: true, count: 1 });
   // Catalog bundle defaults: non-postgres backend (no bundle), empty DB read,
   // no-op apply. The catalog-bundle suite overrides these per-test.
   vi.mocked(getBackendName).mockReset().mockReturnValue('file');
@@ -245,16 +320,17 @@ afterEach(async () => {
   PATHS.images = originalImagesPath;
   PATHS.imageRefs = originalImageRefsPath;
   PATHS.videos = originalVideosPath;
+  PATHS.music = originalMusicPath;
 });
 
 describe('peerSync', () => {
   describe('PEER_SUBSCRIBABLE_KINDS', () => {
-    it('is exactly [universe, series, mediaCollection, author]', () => {
+    it('is exactly [universe, series, mediaCollection, author, artist, album, track, creativeDirectorProject, moodBoard, writersRoomWork]', () => {
       // Exact equality (not toContain) so an accidental add/remove/reorder is
       // caught — this list is canonical and its order can affect iteration
       // elsewhere (e.g. syncNow's per-kind backfill). Issues piggyback on series
       // subscriptions; direct issue subs are intentionally rejected (Stage 2).
-      expect(PEER_SUBSCRIBABLE_KINDS).toEqual(['universe', 'series', 'mediaCollection', 'author']);
+      expect(PEER_SUBSCRIBABLE_KINDS).toEqual(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard', 'writersRoomWork']);
     });
   });
 
@@ -374,6 +450,85 @@ describe('peerSync', () => {
     it('returns empty coverage for a missing/blank peerId', async () => {
       const cov = await getOutboundCoverageForPeer('');
       expect(cov.universe.size + cov.pipeline.size + cov.mediaCollections.size).toBe(0);
+    });
+  });
+
+  describe('getFullSyncCoverageForPeer', () => {
+    beforeEach(() => {
+      vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'U1' });
+      vi.mocked(listIssues).mockResolvedValue([]);
+      vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({ missingAssets: [] }) });
+    });
+
+    it('reports fully-mirrored with zero total when there are no local records', async () => {
+      // All listers default to [] in the suite-level beforeEach.
+      const cov = await getFullSyncCoverageForPeer('peer-a');
+      expect(cov).toMatchObject({ total: 0, confirmed: 0, pending: 0, fullyMirrored: true });
+    });
+
+    it('counts a record with no subscription as pending (real ID diff, not cursors)', async () => {
+      vi.mocked(listUniverses).mockResolvedValue([{ id: 'u1' }, { id: 'u2' }]);
+      const cov = await getFullSyncCoverageForPeer('peer-a');
+      expect(cov.total).toBe(2);
+      expect(cov.confirmed).toBe(0);
+      expect(cov.pending).toBe(2);
+      expect(cov.fullyMirrored).toBe(false);
+      expect(cov.byKind.universe).toEqual({ total: 2, confirmed: 0, pending: 2 });
+    });
+
+    it('counts a confirmed-pushed subscription as mirrored', async () => {
+      vi.mocked(listUniverses).mockResolvedValue([{ id: 'u1' }]);
+      // peerHasCategory gate is bypassed here — forcePushRecord drives the push
+      // directly. Register the peer so forcePushRecord finds it.
+      vi.mocked(getPeers).mockResolvedValue([
+        { instanceId: 'peer-a', name: 'A', enabled: true, syncEnabled: true, fullSync: true, syncCategories: {} },
+      ]);
+      await subscribePeer({ peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' });
+      // Deterministically push + confirm so lastConfirmedPushedAt is stamped
+      // (the subscribe's initial push is fire-and-forget; awaiting forcePushRecord
+      // avoids a drain-timing flake).
+      await forcePushRecord('peer-a', 'universe', 'u1');
+      const cov = await getFullSyncCoverageForPeer('peer-a');
+      expect(cov.total).toBe(1);
+      expect(cov.confirmed).toBe(1);
+      expect(cov.pending).toBe(0);
+      expect(cov.fullyMirrored).toBe(true);
+    });
+
+    it('counts a record edited AFTER its last confirmed push as pending (stale content)', async () => {
+      // Record confirmed once, then edited (updatedAt in the future relative to
+      // the confirm time) — the peer has stale content, so it's not mirrored.
+      vi.mocked(getPeers).mockResolvedValue([
+        { instanceId: 'peer-a', name: 'A', enabled: true, syncEnabled: true, fullSync: true, syncCategories: {} },
+      ]);
+      vi.mocked(listUniverses).mockResolvedValue([{ id: 'u1' }]);
+      await subscribePeer({ peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' });
+      await forcePushRecord('peer-a', 'universe', 'u1'); // stamps lastConfirmedPushedAt ≈ now
+      // Now the record reports an edit far in the future relative to the confirm.
+      vi.mocked(listUniverses).mockResolvedValue([{ id: 'u1', updatedAt: '2999-01-01T00:00:00Z' }]);
+      const cov = await getFullSyncCoverageForPeer('peer-a');
+      expect(cov.total).toBe(1);
+      expect(cov.confirmed).toBe(0);
+      expect(cov.pending).toBe(1);
+      expect(cov.fullyMirrored).toBe(false);
+    });
+
+    it('a created-but-unconfirmed subscription still counts as pending', async () => {
+      vi.mocked(listUniverses).mockResolvedValue([{ id: 'u1' }]);
+      // Push FAILS — the sub is created but never confirmed-delivered.
+      vi.mocked(peerFetch).mockRejectedValue(new Error('offline'));
+      await subscribePeer({ peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' }).catch(() => {});
+      await __drainForTests();
+      const cov = await getFullSyncCoverageForPeer('peer-a');
+      expect(cov.total).toBe(1);
+      expect(cov.confirmed).toBe(0);
+      expect(cov.pending).toBe(1);
+      expect(cov.fullyMirrored).toBe(false);
+    });
+
+    it('returns empty coverage for a blank peerId', async () => {
+      const cov = await getFullSyncCoverageForPeer('');
+      expect(cov).toMatchObject({ total: 0, fullyMirrored: true });
     });
   });
 
@@ -739,6 +894,19 @@ describe('peerSync', () => {
       expect(created).toEqual([]);
     });
 
+    it('a full-sync peer subscribes records even when the matching category bit is off', async () => {
+      // fullSync implies every category — so the back-subscribe sweep covers a
+      // kind whose individual syncCategories bit was never turned on (and any
+      // future kind, with no per-peer change).
+      vi.mocked(getPeers).mockResolvedValue([
+        { instanceId: 'peer-a', enabled: true, syncEnabled: true, fullSync: true, syncCategories: { universe: false } },
+      ]);
+      vi.mocked(listUniverses).mockResolvedValue([{ id: 'u1' }]);
+      const created = await autoSubscribePeerToAllRecords('peer-a', 'universe');
+      expect(created.map(c => c.recordId)).toEqual(['u1']);
+      expect(await findPeerSubscription('peer-a', 'universe', 'u1')).not.toBeNull();
+    });
+
     it('returns [] on re-run — only newly-created subs are reported', async () => {
       // `subscribePeer` is idempotent; the helper must not double-count
       // existing subs as freshly created on the second invocation.
@@ -747,6 +915,33 @@ describe('peerSync', () => {
       expect(first.map(c => c.recordId)).toEqual(['u1']);
       const second = await autoSubscribePeerToAllRecords('peer-a', 'universe');
       expect(second).toEqual([]);
+    });
+
+    it('backfills existing music records for their category toggles', async () => {
+      vi.mocked(getPeers).mockResolvedValue([
+        {
+          instanceId: 'peer-a', name: 'A', enabled: true, syncEnabled: true, directions: ['outbound'],
+          syncCategories: { artists: true, albums: true, tracks: true },
+        },
+      ]);
+      vi.mocked(listArtists).mockResolvedValue([{ id: 'artist-1', name: 'Nova' }]);
+      vi.mocked(listAlbums).mockResolvedValue([{ id: 'album-1', title: 'Debut' }]);
+      vi.mocked(listTracks).mockResolvedValue([{ id: 'track-1', title: 'Intro' }]);
+      vi.mocked(getArtist).mockImplementation(async (id) => ({ id, name: 'Nova' }));
+      vi.mocked(getAlbum).mockImplementation(async (id) => ({ id, title: 'Debut' }));
+      vi.mocked(getTrack).mockImplementation(async (id) => ({ id, title: 'Intro' }));
+      vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({ missingAssets: [] }) });
+
+      const artists = await autoSubscribePeerToAllRecords('peer-a', 'artist');
+      const albums = await autoSubscribePeerToAllRecords('peer-a', 'album');
+      const tracks = await autoSubscribePeerToAllRecords('peer-a', 'track');
+
+      expect(artists.map(c => c.recordId)).toEqual(['artist-1']);
+      expect(albums.map(c => c.recordId)).toEqual(['album-1']);
+      expect(tracks.map(c => c.recordId)).toEqual(['track-1']);
+      expect(await findPeerSubscription('peer-a', 'artist', 'artist-1')).not.toBeNull();
+      expect(await findPeerSubscription('peer-a', 'album', 'album-1')).not.toBeNull();
+      expect(await findPeerSubscription('peer-a', 'track', 'track-1')).not.toBeNull();
     });
 
     it('returns [] for invalid arguments', async () => {
@@ -831,6 +1026,50 @@ describe('peerSync', () => {
       // Allow the listener's fire-and-forget IIFE to settle.
       await new Promise((r) => setTimeout(r, 30));
       expect(await findPeerSubscription('peer-a', 'universe', 'u1')).not.toBeNull();
+    });
+
+    it('reciprocates a full-sync peer on peer:online (mirror requested once identity is known)', async () => {
+      // A peer added via defaultPeerFullSync (or toggled before its first probe)
+      // has fullSync:true but no instanceId, so updatePeer couldn't reciprocate.
+      // peer:online must request the mutual mirror now.
+      const { instanceEvents } = await import('../instanceEvents.js');
+      const { installPeerSyncListener } = await import('./peerSync.js');
+      const { enqueueReciprocalSync } = await import('../instances.js');
+      vi.mocked(enqueueReciprocalSync).mockClear();
+      installPeerSyncListener();
+      vi.mocked(listUniverses).mockResolvedValue([]);
+      instanceEvents.emit('peer:online', {
+        id: 'local-1',
+        instanceId: 'peer-a',
+        name: 'A',
+        enabled: true,
+        syncEnabled: true,
+        directions: ['outbound'],
+        fullSync: true,
+        syncCategories: {},
+      });
+      await new Promise((r) => setTimeout(r, 30));
+      expect(vi.mocked(enqueueReciprocalSync)).toHaveBeenCalledWith('local-1');
+    });
+
+    it('does NOT reciprocate a non-full-sync peer on peer:online (preserves prior behavior)', async () => {
+      const { instanceEvents } = await import('../instanceEvents.js');
+      const { installPeerSyncListener } = await import('./peerSync.js');
+      const { enqueueReciprocalSync } = await import('../instances.js');
+      vi.mocked(enqueueReciprocalSync).mockClear();
+      installPeerSyncListener();
+      vi.mocked(listUniverses).mockResolvedValue([]);
+      instanceEvents.emit('peer:online', {
+        id: 'local-2',
+        instanceId: 'peer-b',
+        name: 'B',
+        enabled: true,
+        syncEnabled: true,
+        directions: ['outbound'],
+        syncCategories: { universe: true },
+      });
+      await new Promise((r) => setTimeout(r, 30));
+      expect(vi.mocked(enqueueReciprocalSync)).not.toHaveBeenCalled();
     });
   });
 
@@ -1997,6 +2236,45 @@ describe('peerSync', () => {
       expect(captured.record.deleted).toBe(true);
       expect(captured.assetManifest).toEqual([]);
     });
+
+    it('emits image and music asset manifests for music record pushes', async () => {
+      vi.mocked(getPeers).mockResolvedValue([
+        {
+          instanceId: 'peer-a', name: 'Peer A', host: null, address: '10.0.0.2', port: 5555,
+          enabled: true, syncEnabled: true, directions: ['outbound', 'inbound'],
+          syncCategories: { artists: true, albums: true, tracks: true },
+        },
+      ]);
+      await writeFile(join(PATHS.images, 'artist.png'), Buffer.from('artist portrait'));
+      await writeFile(join(PATHS.images, 'album.png'), Buffer.from('album cover'));
+      await writeFile(join(PATHS.music, 'song.mp3'), Buffer.from('track audio'));
+      vi.mocked(getArtist).mockResolvedValue({
+        id: 'artist-1', name: 'Nova', portraitImageUrl: '/data/images/artist.png',
+        updatedAt: '2026-06-01T00:00:00Z', deleted: false, deletedAt: null,
+      });
+      vi.mocked(getAlbum).mockResolvedValue({
+        id: 'album-1', title: 'Debut', coverImageUrl: '/data/images/album.png',
+        updatedAt: '2026-06-01T00:00:00Z', deleted: false, deletedAt: null,
+      });
+      vi.mocked(getTrack).mockResolvedValue({
+        id: 'track-1', title: 'Intro', audioFilename: 'song.mp3',
+        updatedAt: '2026-06-01T00:00:00Z', deleted: false, deletedAt: null,
+      });
+      const captured = [];
+      vi.mocked(peerFetch).mockImplementation(async (_url, opts) => {
+        captured.push(JSON.parse(opts.body));
+        return { ok: true, json: async () => ({ missingAssets: [] }) };
+      });
+
+      await pushRecordToPeer({ id: 'sub-artist', peerId: 'peer-a', recordKind: 'artist', recordId: 'artist-1' });
+      await pushRecordToPeer({ id: 'sub-album', peerId: 'peer-a', recordKind: 'album', recordId: 'album-1' });
+      await pushRecordToPeer({ id: 'sub-track', peerId: 'peer-a', recordKind: 'track', recordId: 'track-1' });
+
+      expect(captured.map(p => p.kind)).toEqual(['artist', 'album', 'track']);
+      expect(captured[0].assetManifest).toEqual([expect.objectContaining({ kind: 'image', filename: 'artist.png' })]);
+      expect(captured[1].assetManifest).toEqual([expect.objectContaining({ kind: 'image', filename: 'album.png' })]);
+      expect(captured[2].assetManifest).toEqual([expect.objectContaining({ kind: 'music', filename: 'song.mp3' })]);
+    });
   });
 
   describe('collectSubscriptionsForUpdate', () => {
@@ -2064,6 +2342,40 @@ describe('peerSync', () => {
       });
       expect(mergeUniversesFromSync).toHaveBeenCalledWith(
         [expect.objectContaining({ id: 'u1' })],
+        { source: { via: 'peer-push', peerId: 'peer-a' } },
+      );
+    });
+
+    it('dispatches music pushes through their merge entry points', async () => {
+      await applyIncomingPush({
+        kind: 'artist',
+        record: { id: 'artist-1', name: 'Nova', deleted: false, deletedAt: null },
+        assetManifest: [],
+        sourceInstanceId: 'peer-a',
+      });
+      await applyIncomingPush({
+        kind: 'album',
+        record: { id: 'album-1', title: 'Debut', deleted: false, deletedAt: null },
+        assetManifest: [],
+        sourceInstanceId: 'peer-a',
+      });
+      await applyIncomingPush({
+        kind: 'track',
+        record: { id: 'track-1', title: 'Intro', deleted: false, deletedAt: null },
+        assetManifest: [],
+        sourceInstanceId: 'peer-a',
+      });
+
+      expect(mergeArtistsFromSync).toHaveBeenCalledWith(
+        [expect.objectContaining({ id: 'artist-1' })],
+        { source: { via: 'peer-push', peerId: 'peer-a' } },
+      );
+      expect(mergeAlbumsFromSync).toHaveBeenCalledWith(
+        [expect.objectContaining({ id: 'album-1' })],
+        { source: { via: 'peer-push', peerId: 'peer-a' } },
+      );
+      expect(mergeTracksFromSync).toHaveBeenCalledWith(
+        [expect.objectContaining({ id: 'track-1' })],
         { source: { via: 'peer-push', peerId: 'peer-a' } },
       );
     });
@@ -2817,9 +3129,12 @@ describe('peerSync', () => {
 
       it('every versioned PORTOS_SCHEMA_VERSIONS key is reachable from a record kind', () => {
         // So a newly-versioned category can't ship without being wired into the
-        // per-category gate (which would leave its transfers ungated).
+        // per-category gate (which would leave its transfers ungated). The only
+        // exemptions are categories explicitly declared as non-record (pull-gated
+        // elsewhere) via NON_RECORD_SCHEMA_CATEGORIES — e.g. mediaLibrary (#1566).
         const covered = new Set(Object.values(RECORD_KIND_SCHEMA_CATEGORIES).flat());
         for (const key of Object.keys(PORTOS_SCHEMA_VERSIONS)) {
+          if (NON_RECORD_SCHEMA_CATEGORIES.has(key)) continue;
           expect(covered.has(key)).toBe(true);
         }
       });
@@ -3375,6 +3690,266 @@ describe('peerSync', () => {
         record: { id: 'col-x' },
         assetManifest: [],
       })).toThrow();
+    });
+
+    it('accepts music push payloads and music asset manifests', async () => {
+      const { peerSyncPushSchema } = await import('../../lib/validation.js');
+      for (const kind of ['artist', 'album', 'track']) {
+        expect(() => peerSyncPushSchema.parse({
+          kind,
+          record: { id: `${kind}-1` },
+          assetManifest: [{ filename: 'song.mp3', kind: 'music', sha256: 'a'.repeat(64) }],
+          sourceInstanceId: 'peer-abc',
+        })).not.toThrow();
+      }
+    });
+  });
+});
+
+describe('media-library federation (#1566)', () => {
+  let origAudio;
+  let origVideos;
+
+  beforeEach(async () => {
+    // The suite beforeEach redirects PATHS.data/images/music to `tmp` and
+    // restores videos in its afterEach; redirect videos + audio (not created
+    // there) into the same per-test tmpdir so manifest builds see ONLY fixtures.
+    origAudio = PATHS.audio;
+    origVideos = PATHS.videos;
+    PATHS.videos = join(tmp, 'videos');
+    PATHS.audio = join(tmp, 'audio');
+    await mkdir(PATHS.videos, { recursive: true });
+    await mkdir(PATHS.audio, { recursive: true });
+    vi.mocked(reconcileMediaAssets).mockClear();
+  });
+
+  afterEach(() => {
+    PATHS.audio = origAudio;
+    PATHS.videos = origVideos;
+  });
+
+  describe('libraryKindsExcludedByPatterns (honors backup excludes)', () => {
+    it('flags a kind whose whole dir is excluded — anchored, trailing-slash, and glob forms', () => {
+      expect([...libraryKindsExcludedByPatterns(['/music/'])]).toEqual(['music']);
+      expect([...libraryKindsExcludedByPatterns(['/videos/**'])]).toEqual(['video']);
+      expect([...libraryKindsExcludedByPatterns(['images'])]).toEqual(['image']);
+      expect([...libraryKindsExcludedByPatterns(['/audio'])]).toEqual(['audio']);
+    });
+
+    it('ignores excludes that do not name a whole media dir', () => {
+      expect(libraryKindsExcludedByPatterns(['/loras/*.safetensors', '/repos/']).size).toBe(0);
+      expect(libraryKindsExcludedByPatterns([]).size).toBe(0);
+      expect(libraryKindsExcludedByPatterns(undefined).size).toBe(0);
+    });
+  });
+
+  describe('buildMediaLibraryManifest', () => {
+    it('walks all media dirs, hashes files, skips image sidecars, and is deterministic', async () => {
+      await writeFile(join(PATHS.images, 'a.png'), 'img-a');
+      await writeFile(join(PATHS.images, 'a.png.metadata.json'), JSON.stringify({ prompt: 'x' }));
+      await writeFile(join(PATHS.videos, 'v.mp4'), 'vid');
+      await writeFile(join(PATHS.audio, 's.wav'), 'aud');
+      await writeFile(join(PATHS.music, 'm.mp3'), 'mus');
+
+      const m1 = await buildMediaLibraryManifest();
+      const kinds = m1.assets.map((e) => `${e.kind}:${e.filename}`).sort();
+      expect(kinds).toEqual(['audio:s.wav', 'image:a.png', 'music:m.mp3', 'video:v.mp4']);
+      // sidecar json is metadata, not advertised as its own asset
+      expect(m1.assets.find((e) => e.filename.endsWith('.json'))).toBeUndefined();
+      // every entry carries a 64-hex sha256
+      expect(m1.assets.every((e) => /^[a-f0-9]{64}$/.test(e.sha256))).toBe(true);
+      expect(m1.schemaVersion).toBe(PORTOS_SCHEMA_VERSIONS.mediaLibrary);
+      expect(/^[a-f0-9]{64}$/.test(m1.manifestHash)).toBe(true);
+      // deterministic hash across rebuilds of the same library
+      const m2 = await buildMediaLibraryManifest();
+      expect(m2.manifestHash).toBe(m1.manifestHash);
+    });
+
+    it('changes manifestHash when the library changes', async () => {
+      await writeFile(join(PATHS.audio, 's.wav'), 'aud');
+      const before = (await buildMediaLibraryManifest()).manifestHash;
+      await writeFile(join(PATHS.audio, 't.wav'), 'aud2');
+      const after = (await buildMediaLibraryManifest()).manifestHash;
+      expect(after).not.toBe(before);
+    });
+
+    it('returns an empty manifest when the library is empty', async () => {
+      const m = await buildMediaLibraryManifest();
+      expect(m.assets).toEqual([]);
+    });
+
+    it('re-hash cache invalidates when a flat asset changes in place (size differs)', async () => {
+      const p = join(PATHS.audio, 's.wav');
+      await writeFile(p, 'short');
+      const first = (await buildMediaLibraryManifest()).assets.find((e) => e.filename === 's.wav').sha256;
+      // Overwrite with different-length content → (mtime,size) cache key changes.
+      await writeFile(p, 'a much longer payload than before');
+      const second = (await buildMediaLibraryManifest()).assets.find((e) => e.filename === 's.wav').sha256;
+      expect(second).not.toBe(first);
+    });
+  });
+
+  describe('syncMediaLibraryFromPeer', () => {
+    const mkPeer = (id, extra = {}) => ({
+      instanceId: id, name: id, host: null, address: '10.0.0.9', port: 5555,
+      enabled: true, fullSync: true, ...extra,
+    });
+
+    it('no-ops for a non-full-sync peer and never hits the network', async () => {
+      const res = await syncMediaLibraryFromPeer(mkPeer('fs-nofs', { fullSync: false }));
+      expect(res.skipped).toBe('not-fullsync');
+      expect(peerFetch).not.toHaveBeenCalled();
+    });
+
+    it('gently skips a peer whose manifest schema is ahead of local (no pull, no reconcile)', async () => {
+      vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({
+        schemaVersion: PORTOS_SCHEMA_VERSIONS.mediaLibrary + 1,
+        manifestHash: 'a'.repeat(64), assets: [],
+      }) });
+      const res = await syncMediaLibraryFromPeer(mkPeer('fs-ahead'));
+      expect(res.skipped).toBe('schema-ahead');
+      expect(reconcileMediaAssets).not.toHaveBeenCalled();
+    });
+
+    it('skips an unreachable peer and an invalid manifest', async () => {
+      vi.mocked(peerFetch).mockResolvedValue({ ok: false });
+      expect((await syncMediaLibraryFromPeer(mkPeer('fs-down'))).skipped).toBe('unreachable');
+      vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({ bogus: true }) });
+      expect((await syncMediaLibraryFromPeer(mkPeer('fs-bad'))).skipped).toBe('invalid');
+    });
+
+    it('pulls nothing when assets already exist locally, then short-circuits on unchanged hash', async () => {
+      // The peer's manifest == our OWN library (write files, build manifest, feed
+      // it back) so diffAssetManifestAgainstLocal finds everything present.
+      await writeFile(join(PATHS.audio, 's.wav'), 'aud');
+      await writeFile(join(PATHS.images, 'a.png'), 'img');
+      const localManifest = await buildMediaLibraryManifest();
+      vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => localManifest });
+
+      const peer = mkPeer('fs-present');
+      const res1 = await syncMediaLibraryFromPeer(peer);
+      expect(res1.pulled).toBe(0);
+      expect(res1.skipped).toBeUndefined();
+      expect(reconcileMediaAssets).not.toHaveBeenCalled(); // nothing pulled → no reconcile
+
+      const res2 = await syncMediaLibraryFromPeer(peer);
+      expect(res2.skipped).toBe('unchanged');
+    });
+
+    it('does NOT record the manifestHash when a byte pull fails — the next tick retries', async () => {
+      const peer = mkPeer('fs-diverge');
+      // pullMissingAssetsFromPeer re-resolves the peer via getPeers — include it.
+      vi.mocked(getPeers).mockResolvedValue([peer]);
+      const manifest = {
+        schemaVersion: PORTOS_SCHEMA_VERSIONS.mediaLibrary,
+        manifestHash: 'b'.repeat(64),
+        assets: [{ filename: 'remote.wav', kind: 'audio', sha256: 'c'.repeat(64) }],
+      };
+      vi.mocked(peerFetch).mockImplementation(async (url) => {
+        if (String(url).endsWith('/library-manifest')) return { ok: true, json: async () => manifest };
+        return { ok: false }; // byte pull fails → nothing lands on disk
+      });
+      const res = await syncMediaLibraryFromPeer(peer);
+      // The asset URL was requested...
+      const urls = vi.mocked(peerFetch).mock.calls.map((c) => String(c[0]));
+      expect(urls.some((u) => u.includes('/data/audio/remote.wav'))).toBe(true);
+      // ...but nothing landed (re-diff still sees it missing), so pulled=0,
+      // no reconcile, and the hash is NOT recorded.
+      expect(res.pulled).toBe(0);
+      expect(res.missing).toBe(1);
+      expect(reconcileMediaAssets).not.toHaveBeenCalled();
+      // Second call must re-diff (NOT short-circuit on an 'unchanged' hash).
+      const res2 = await syncMediaLibraryFromPeer(peer);
+      expect(res2.skipped).not.toBe('unchanged');
+    });
+
+    it('skips a manifest whose Content-Length exceeds the cap (unbounded-body guard for HTTP peers)', async () => {
+      vi.mocked(peerFetch).mockResolvedValue({
+        ok: true,
+        headers: new Headers({ 'content-length': String(64 * 1024 * 1024) }), // > 32MB cap
+        json: async () => ({ schemaVersion: PORTOS_SCHEMA_VERSIONS.mediaLibrary, manifestHash: 'a'.repeat(64), assets: [] }),
+      });
+      const res = await syncMediaLibraryFromPeer(mkPeer('fs-huge'));
+      expect(res.skipped).toBe('too-large');
+    });
+
+    it('forces a re-diff after repeated unchanged ticks so a local file loss self-heals', async () => {
+      const peer = mkPeer('fs-selfheal');
+      vi.mocked(getPeers).mockResolvedValue([peer]);
+      const bytes = Buffer.from('heal-bytes');
+      const manifest = {
+        schemaVersion: PORTOS_SCHEMA_VERSIONS.mediaLibrary,
+        manifestHash: 'f0'.repeat(32),
+        assets: [{ filename: 'heal.wav', kind: 'audio' }], // existence-only diff
+      };
+      vi.mocked(peerFetch).mockImplementation(async (url) => {
+        if (String(url).endsWith('/library-manifest')) return { ok: true, json: async () => manifest };
+        return {
+          ok: true,
+          headers: new Headers({ 'content-length': String(bytes.length) }),
+          arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+        };
+      });
+      // First sweep lands the file and records the manifestHash.
+      expect((await syncMediaLibraryFromPeer(peer)).pulled).toBe(1);
+      // Simulate local loss after the hash was recorded.
+      await rm(join(PATHS.audio, 'heal.wav'), { force: true });
+      // Unchanged ticks short-circuit until the periodic forced re-diff fires and
+      // re-pulls the lost file (proves self-heal without a restart).
+      let healed = false;
+      for (let i = 0; i < 12; i++) {
+        const r = await syncMediaLibraryFromPeer(peer);
+        if (r.skipped !== 'unchanged') { healed = true; break; }
+      }
+      expect(healed).toBe(true);
+    });
+
+    it('records the manifestHash + reconciles once missing bytes actually land', async () => {
+      const peer = mkPeer('fs-success');
+      vi.mocked(getPeers).mockResolvedValue([peer]);
+      // No sha256 on the entry → diff is existence-only, so once the byte pull
+      // writes the file the re-diff sees it present (no hash to mismatch).
+      const manifest = {
+        schemaVersion: PORTOS_SCHEMA_VERSIONS.mediaLibrary,
+        manifestHash: 'e'.repeat(64),
+        assets: [{ filename: 'land.wav', kind: 'audio' }],
+      };
+      const bytes = Buffer.from('audio-bytes-that-landed');
+      vi.mocked(peerFetch).mockImplementation(async (url) => {
+        if (String(url).endsWith('/library-manifest')) return { ok: true, json: async () => manifest };
+        // Asset byte fetch — a Response-like the cap-checker accepts.
+        return {
+          ok: true,
+          headers: new Headers({ 'content-length': String(bytes.length) }),
+          arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+        };
+      });
+      const res1 = await syncMediaLibraryFromPeer(peer);
+      expect(res1.pulled).toBe(1);
+      expect(res1.missing).toBe(0);
+      expect(reconcileMediaAssets).toHaveBeenCalled();
+      // Hash recorded → second call short-circuits as unchanged.
+      const res2 = await syncMediaLibraryFromPeer(peer);
+      expect(res2.skipped).toBe('unchanged');
+    });
+  });
+
+  describe('syncMediaLibraryWithAllPeers', () => {
+    it('sweeps only full-sync, enabled peers that have an instanceId', async () => {
+      vi.mocked(getPeers).mockResolvedValue([
+        { instanceId: 'fs1', address: '10.0.0.4', port: 5555, enabled: true, fullSync: true },
+        { instanceId: 'partial', address: '10.0.0.5', port: 5555, enabled: true, fullSync: false },
+        { instanceId: 'disabled', address: '10.0.0.6', port: 5555, enabled: false, fullSync: true },
+        { instanceId: null, address: '10.0.0.7', port: 5555, enabled: true, fullSync: true },
+      ]);
+      vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({
+        schemaVersion: PORTOS_SCHEMA_VERSIONS.mediaLibrary, manifestHash: 'd'.repeat(64), assets: [],
+      }) });
+      await syncMediaLibraryWithAllPeers();
+      const manifestUrls = vi.mocked(peerFetch).mock.calls
+        .map((c) => String(c[0])).filter((u) => u.endsWith('/library-manifest'));
+      expect(manifestUrls).toHaveLength(1);
+      expect(manifestUrls[0]).toContain('10.0.0.4');
     });
   });
 });

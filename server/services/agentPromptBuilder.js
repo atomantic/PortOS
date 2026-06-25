@@ -25,6 +25,14 @@ const ROOT_DIR = PATHS.root;
 const AGENTS_DIR = PATHS.cosAgents;
 const SKILLS_DIR = join(ROOT_DIR, 'data/prompts/skills');
 
+// Appended to every agent briefing. PortOS shares ONE pm2 daemon across many
+// apps; an agent restarting "the server" once ran `pm2 kill` and took the whole
+// machine (incl. PortOS) down. A PATH shim (server/lib/agentGuard) hard-blocks
+// the destructive subcommands, but the prompt rule keeps a well-behaved agent
+// from even attempting them.
+export const PM2_SAFETY_RULE = `## ⚠️ PM2 Safety (shared server)
+PortOS runs MANY apps under one shared pm2 daemon. To restart an app, use a SCOPED command — \`pm2 restart <that-app's-process-name>\`. NEVER run \`pm2 kill\`, \`pm2 stop\`, \`pm2 delete\`, \`pm2 startup\`/\`unstartup\`, or any \`pm2 <verb> all\` form: they take down EVERY app on this machine, including PortOS itself, and are blocked (they will fail).`;
+
 /**
  * Skill template keyword matchers.
  * Each entry maps a skill template filename to its trigger keywords.
@@ -613,7 +621,7 @@ ${task.metadata.jiraBranch ? 'Commit your changes to this branch. Do NOT switch 
   }).catch(() => null);
 
   if (promptData?.prompt) {
-    return promptData.prompt;
+    return `${promptData.prompt}\n\n${PM2_SAFETY_RULE}`;
   }
 
   const taskBlock = buildTaskBlock(task, { screenshotsAsList: false });
@@ -675,6 +683,8 @@ ${worktreeInfo ? `- **Your PR should contain only your task's commits.** If you 
 
 ## Working Directory
 ${task.metadata?.app ? `You are working in the target app directory: \`${workspaceDir}\`. All code changes, research, plans, and docs for this task belong in this directory — NOT in the PortOS repo.` : 'You are working in the project directory.'} Use the available tools to explore, modify, and test code.
+
+${PM2_SAFETY_RULE}
 
 Begin working on the task now.`;
 }

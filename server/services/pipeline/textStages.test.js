@@ -109,6 +109,25 @@ describe('pipeline text stage generator', () => {
     expect(llmCalls[0].prompt).toContain('RENDERED:pipeline-idea-expansion');
   });
 
+  // #1514: the autopilot threads its run provider as a SOFT providerIdDefault, the
+  // manual route as a HARD providerId. These run against the REAL stageRunner, so
+  // they prove the end-to-end resolution: an unavailable soft default falls through
+  // to the active provider (no throw), while an unavailable hard override throws.
+  it('soft-falls-through to the active provider when an autopilot providerIdDefault is unavailable', async () => {
+    const { issue } = await seed();
+    // No stage pin (getStage → null) and 'gone-provider' resolves to null, so a
+    // SOFT default must drop to the active provider rather than throwing.
+    const result = await textStages.generateStage(issue.id, 'idea', { providerIdDefault: 'gone-provider' });
+    expect(result.stage.status).toBe('ready');
+    expect(llmCalls[0].provider).toBe('mock-provider'); // active provider used
+  });
+
+  it('throws when a manual hard providerId is unavailable (override is a per-call demand)', async () => {
+    const { issue } = await seed();
+    await expect(textStages.generateStage(issue.id, 'idea', { providerId: 'gone-provider' }))
+      .rejects.toMatchObject({ code: 'PROVIDER_OVERRIDE_UNAVAILABLE' });
+  });
+
   it('folds the structured style guide into series.styleNotes in the prompt context', async () => {
     const series = await seriesSvc.createSeries({
       name: 'Salt Run',
@@ -180,7 +199,7 @@ describe('pipeline text stage generator', () => {
     expect(ctx.worldEntitiesSummary).toBe('(none — series has no linked Universe Builder world)');
   });
 
-  it('prompt context carries a rendered worldEntitiesSummary when series links a universe', async () => {
+  it('renders worldEntitiesSummary roster but does NOT re-list characters already in the full bible', async () => {
     const { series, issue } = await seed();
     const world = await universeSvc.createUniverse({ name: 'Salt Verse' });
     await universeSvc.updateUniverse(world.id, {
@@ -193,9 +212,12 @@ describe('pipeline text stage generator', () => {
     await seriesSvc.updateSeries(series.id, { universeId: world.id });
     await textStages.generateStage(issue.id, 'idea');
     const ctx = ctxFromCall(llmCalls[0]);
-    expect(ctx.worldEntitiesSummary).toContain('Mira (surveyor — broad-shouldered)');
-    expect(ctx.worldEntitiesSummary).toContain('Jonas (foreman — cunning)');
+    // The characters appear in full in the bible (series.characters)…
+    expect((ctx.series.characters || []).map((c) => c.name)).toEqual(expect.arrayContaining(['Mira', 'Jonas']));
+    // …so the terse roster must NOT duplicate them — it carries places/objects.
     expect(ctx.worldEntitiesSummary).toContain('The Foundry (industrial district)');
+    expect(ctx.worldEntitiesSummary).not.toContain('Mira');
+    expect(ctx.worldEntitiesSummary).not.toContain('Jonas');
   });
 
   it('prompt context carries lengthTargets from a named non-default profile (extended)', async () => {
@@ -320,6 +342,46 @@ describe('pipeline text stage generator', () => {
     expect(ctx.positionInVolume).toEqual({ ordinal: 2, total: 3 });
     expect(ctx.priorIssue).toMatchObject({ title: 'Pilot', arcRole: 'pilot', arcPosition: 1 });
     expect(ctx.nextIssue).toMatchObject({ title: 'Midpoint', arcRole: 'midpoint', arcPosition: 3 });
+  });
+
+  it('idea context: paddingRisk flagged for a terse synopsis on a long (finale) profile', async () => {
+    const { series } = await seed();
+    const issue = await issuesSvc.createIssue({
+      seriesId: series.id,
+      title: 'The Invitation',
+      lengthProfile: 'finale',
+      stages: { idea: { input: 'the Helioheart invitation arrives', status: 'draft' } },
+    });
+    await textStages.generateStage(issue.id, 'idea');
+    expect(ctxFromCall(llmCalls[0]).paddingRisk).toBe(true);
+  });
+
+  it('idea context: paddingRisk NOT flagged for a terse synopsis on a standard profile', async () => {
+    const { series } = await seed();
+    const issue = await issuesSvc.createIssue({
+      seriesId: series.id,
+      title: 'The Gala',
+      lengthProfile: 'standard',
+      stages: { idea: { input: 'the gala', status: 'draft' } },
+    });
+    await textStages.generateStage(issue.id, 'idea');
+    expect(ctxFromCall(llmCalls[0]).paddingRisk).toBe(false);
+  });
+
+  it('idea context: paddingRisk tracks the seedInput override, not the stored synopsis', async () => {
+    const { series } = await seed();
+    // Stored synopsis is rich enough to clear the finale floor → not padding-prone.
+    const richStored = Array.from({ length: 60 }, (_, i) => `word${i}`).join(' ');
+    const issue = await issuesSvc.createIssue({
+      seriesId: series.id,
+      title: 'The Invitation',
+      lengthProfile: 'finale',
+      stages: { idea: { input: richStored, status: 'draft' } },
+    });
+    // Regenerating with a terse override seed must flag padding risk, because the
+    // override — not the stored synopsis — is what gets expanded.
+    await textStages.generateStage(issue.id, 'idea', { seedInput: 'the invitation arrives' });
+    expect(ctxFromCall(llmCalls[0]).paddingRisk).toBe(true);
   });
 
   it('idea context: neighbor exposes beats when expanded, synopsis when not', async () => {
@@ -510,6 +572,233 @@ describe('pipeline text stage generator', () => {
     expect(ctx.sourceMaterials).toEqual([]);
     expect(ctx.hasSourceMaterials).toBe(false);
   });
+
+  // -- per-issue character scoping (#1511) --
+
+  it('scopes series.characters to the cast named in the issue, dropping the rest of the bible', async () => {
+    const { series } = await seed();
+    const world = await universeSvc.createUniverse({ name: 'Salt Verse' });
+    await universeSvc.updateUniverse(world.id, {
+      characters: [
+        { name: 'Mira', role: 'surveyor', physicalDescription: 'broad-shouldered' },
+        { name: 'Jonas', role: 'foreman', personality: 'cunning' },
+        { name: 'Chandelier', role: 'one-off fixture', personality: 'sentient brass' },
+      ],
+    });
+    await seriesSvc.updateSeries(series.id, { universeId: world.id });
+    // Issue whose beats name only Mira — Jonas and the one-off Chandelier must
+    // drop out of the heavyweight full-record block.
+    const issue = await issuesSvc.createIssue({
+      seriesId: series.id, title: 'The Hush',
+      stages: { idea: { input: 'a quiet survey', output: 'Mira descends into the dry foundry.', status: 'ready' } },
+    });
+    await textStages.generateStage(issue.id, 'prose');
+    const ctx = ctxFromCall(llmCalls[0]);
+    const names = ctx.series.characters.map((c) => c.name);
+    expect(names).toEqual(['Mira']);
+    // The compact roster still carries the whole cast for continuity.
+    expect(ctx.worldEntitiesSummary).toContain('Jonas');
+    expect(ctx.worldEntitiesSummary).toContain('Chandelier');
+  });
+
+  it('keeps the WHOLE cast in the roster even on a large bible, so a non-featured character never vanishes', async () => {
+    const { series } = await seed();
+    const world = await universeSvc.createUniverse({ name: 'Big Verse' });
+    // 12 characters (> the default roster cap of 8). Only "Mira" is named in the
+    // issue; "Tail" sits at bible-index 12 and is neither named nor a principal —
+    // it must still appear in the compact roster (its only representation now that
+    // the full-record block is scoped).
+    const cast = Array.from({ length: 11 }, (_, i) => ({ name: `Filler${i + 1}`, role: 'walk-on' }));
+    cast.unshift({ name: 'Mira', role: 'surveyor' });
+    cast.push({ name: 'Tail', role: 'background' });
+    await universeSvc.updateUniverse(world.id, { characters: cast });
+    await seriesSvc.updateSeries(series.id, { universeId: world.id });
+    const issue = await issuesSvc.createIssue({
+      seriesId: series.id, title: 'The Hush',
+      stages: { idea: { input: 'a quiet survey', output: 'Mira walks alone.', status: 'ready' } },
+    });
+    await textStages.generateStage(issue.id, 'prose');
+    const ctx = ctxFromCall(llmCalls[0]);
+    // Full records scoped to the named character only…
+    expect(ctx.series.characters.map((c) => c.name)).toEqual(['Mira']);
+    // …but the roster still lists the deep-bible character and shows no truncation.
+    expect(ctx.worldEntitiesSummary).toContain('Tail');
+    expect(ctx.worldEntitiesSummary).not.toMatch(/Characters:.*\(\+\d+ more\)/);
+  });
+
+  it('scopeCharactersForIssue: principals are a floor — always present, plus the named cast', () => {
+    const cast = [
+      { name: 'Mira', role: 'lead' },   // principal — always in the floor
+      { name: 'Jonas', role: 'extra' }, // non-principal — only in because named
+    ];
+    expect(textStages.__testing.scopeCharactersForIssue(cast, 'Jonas barks an order').map((c) => c.name))
+      .toEqual(['Mira', 'Jonas']);
+  });
+
+  it('scopeCharactersForIssue: an incidental name match never SUPPRESSES the principals', () => {
+    // "will" in ordinary text spuriously matches the "Will Stone" first-name token.
+    // The principal (Lena) must still survive — a false-positive can only ADD a
+    // record, never drop the leads.
+    const cast = [
+      { name: 'Will Stone', role: 'side' },
+      { name: 'Lena', role: 'lead protagonist' },
+    ];
+    const got = textStages.__testing.scopeCharactersForIssue(cast, 'the team will regroup').map((c) => c.name);
+    expect(got).toContain('Lena');
+  });
+
+  it('scopeCharactersForIssue: a first-name reference is ADDED on top of a reliable scope', () => {
+    const cast = [
+      { name: 'Lena', role: 'lead' },           // principal — reliable signal (floor)
+      { name: 'Mira Reyes', role: 'surveyor' }, // referenced by first name only
+      { name: 'Bram Vale', role: 'cook' },      // not referenced — excluded
+    ];
+    // Draft says "Mira", not the full "Mira Reyes" — the full-name matcher misses,
+    // the first-name supplement catches it and adds it to the principals floor.
+    const got = textStages.__testing.scopeCharactersForIssue(cast, 'Mira crossed the yard alone').map((c) => c.name);
+    expect(got).toContain('Mira Reyes');
+    expect(got).toContain('Lena');
+    expect(got).not.toContain('Bram Vale');
+  });
+
+  it('scopeCharactersForIssue: an incidental first-name match on an UNTAGGED cast keeps the whole cast', () => {
+    // No principals and no full-name match → no reliable signal. The spurious
+    // "will" → "Will Stone" first-name hit must NOT scope the prompt down to one
+    // character; fall back to the whole cast instead.
+    const cast = [
+      { name: 'Will Stone', role: 'side' },
+      { name: 'Bram', role: 'clerk' },
+    ];
+    expect(textStages.__testing.scopeCharactersForIssue(cast, 'the team will regroup').map((c) => c.name))
+      .toEqual(['Will Stone', 'Bram']);
+  });
+
+  it('scopeCharactersForIssue: a single-word common-word name does NOT scope on an incidental lowercase hit (#1529)', () => {
+    // A cast member literally named "Will" + an untagged cast. The old case-insensitive
+    // full-name matcher treated lowercase "will" in "the team will regroup" as a reliable
+    // match and scoped the prompt down to just "Will". The proper-noun guard rejects the
+    // lowercase hit → no reliable signal → whole cast survives.
+    const cast = [
+      { name: 'Will', role: 'side' },
+      { name: 'Bram', role: 'clerk' },
+    ];
+    expect(textStages.__testing.scopeCharactersForIssue(cast, 'the team will regroup').map((c) => c.name))
+      .toEqual(['Will', 'Bram']);
+  });
+
+  it('scopeCharactersForIssue: an incidental lowercase common word never pulls in the literally-named character (#1529)', () => {
+    // Principal floor gives a reliable signal; the incidental "will" must NOT add the
+    // non-principal character named "Will" (lowercase ≠ proper-noun).
+    const cast = [
+      { name: 'Lena', role: 'lead protagonist' },
+      { name: 'Will', role: 'extra' },
+    ];
+    expect(textStages.__testing.scopeCharactersForIssue(cast, 'the team will regroup').map((c) => c.name))
+      .toEqual(['Lena']);
+  });
+
+  it('scopeCharactersForIssue: a capitalized single-word name IS a reliable proper-noun match (#1529)', () => {
+    const cast = [
+      { name: 'Will', role: 'side' },
+      { name: 'Bram', role: 'clerk' },
+    ];
+    // "Will entered" — proper-noun usage scopes to Will; ALL-CAPS beat-sheet form too.
+    expect(textStages.__testing.scopeCharactersForIssue(cast, 'Will entered the room').map((c) => c.name))
+      .toEqual(['Will']);
+    expect(textStages.__testing.scopeCharactersForIssue(cast, 'WILL slams the door').map((c) => c.name))
+      .toEqual(['Will']);
+  });
+
+  it('scopeCharactersForIssue: aliases stay case-insensitive — only single-word NAMES get the proper-noun guard (#1529)', () => {
+    const cast = [
+      { name: 'Lena', role: 'lead' },
+      { name: 'Grace', role: 'side', aliases: ['Gigi'] },
+    ];
+    // Lowercase alias "gigi" still matches (aliases keep the old behavior); Grace is in.
+    const got = textStages.__testing.scopeCharactersForIssue(cast, 'gigi waved from the dock').map((c) => c.name);
+    expect(got).toContain('Grace');
+    expect(got).toContain('Lena');
+  });
+
+  it('scopeCharactersForIssue: matches non-ASCII names (accented) the ASCII \\b matcher would miss', () => {
+    const cast = [
+      { name: 'José Marín', role: 'pilot' }, // non-principal — only in via accented first-name match
+      { name: 'Élodie', role: 'navigator' },
+      { name: 'Mira', role: 'extra' },       // not named, not principal — excluded
+    ];
+    // Source names José (by first name) and Élodie (accented single name).
+    const got = textStages.__testing.scopeCharactersForIssue(cast, 'José and Élodie shared a look').map((c) => c.name);
+    expect(got).toContain('José Marín');
+    expect(got).toContain('Élodie');
+    expect(got).not.toContain('Mira');
+  });
+
+  it('scopeCharactersForIssue: with nothing named, the scope is exactly the principals', () => {
+    const cast = [
+      { name: 'Mira', role: 'main protagonist' },
+      { name: 'Jonas', role: 'recurring foreman' },
+      { name: 'Extra', role: 'background walk-on' },
+    ];
+    expect(textStages.__testing.scopeCharactersForIssue(cast, 'nobody named here').map((c) => c.name))
+      .toEqual(['Mira', 'Jonas']);
+  });
+
+  it('scopeCharactersForIssue: falls back to the whole cast when nothing matches and no role tags exist', () => {
+    const cast = [{ name: 'A', role: '' }, { name: 'B' }];
+    expect(textStages.__testing.scopeCharactersForIssue(cast, 'unrelated').map((c) => c.name))
+      .toEqual(['A', 'B']);
+    expect(textStages.__testing.scopeCharactersForIssue([], 'x')).toEqual([]);
+  });
+
+  it('buildIssueScopeText concatenates title, seed, synopsis, beats, and source materials', () => {
+    const issue = { title: 'The Hush', stages: { idea: { input: 'SYN', output: 'BEATS' } } };
+    const sourceMaterials = [{ content: 'SRC-A' }, { content: 'SRC-B' }];
+    const text = textStages.__testing.buildIssueScopeText(issue, sourceMaterials, 'SEED-TEXT');
+    expect(text).toContain('The Hush');
+    expect(text).toContain('SEED-TEXT');
+    expect(text).toContain('SYN');
+    expect(text).toContain('BEATS');
+    expect(text).toContain('SRC-A');
+    expect(text).toContain('SRC-B');
+  });
+
+  it('does NOT scope the idea stage — it gets the full cast (no roster in that template)', async () => {
+    const { series } = await seed();
+    const world = await universeSvc.createUniverse({ name: 'Seed Verse' });
+    await universeSvc.updateUniverse(world.id, {
+      characters: [
+        { name: 'Bram', role: 'clerk' },
+        { name: 'Mira', role: 'surveyor' },
+      ],
+    });
+    await seriesSvc.updateSeries(series.id, { universeId: world.id });
+    const issue = await issuesSvc.createIssue({ seriesId: series.id, title: 'Fresh' });
+    // Even though the seed names only Mira, the idea stage must keep the WHOLE cast
+    // available (it generates from the seed and its template renders no roster).
+    await textStages.generateStage(issue.id, 'idea', { seedInput: 'A quiet hour with Mira at the foundry.' });
+    const ctx = ctxFromCall(llmCalls[0]);
+    expect(ctx.series.characters.map((c) => c.name).sort()).toEqual(['Bram', 'Mira']);
+  });
+
+  it('scopes a roster-backed stage (prose) from the UNSAVED seed text', async () => {
+    const { series } = await seed();
+    const world = await universeSvc.createUniverse({ name: 'Seed Verse' });
+    // Both non-principal (no floor) so the only in-scope character must come from
+    // the seed text match.
+    await universeSvc.updateUniverse(world.id, {
+      characters: [
+        { name: 'Bram', role: 'clerk' },
+        { name: 'Mira', role: 'surveyor' },
+      ],
+    });
+    await seriesSvc.updateSeries(series.id, { universeId: world.id });
+    const issue = await issuesSvc.createIssue({ seriesId: series.id, title: 'Fresh' });
+    await textStages.generateStage(issue.id, 'prose', { seedInput: 'A quiet hour with Mira at the foundry.' });
+    const ctx = ctxFromCall(llmCalls[0]);
+    expect(ctx.series.characters.map((c) => c.name)).toEqual(['Mira']);
+    // The un-scoped Bram still appears in the prose template's roster.
+    expect(ctx.worldEntitiesSummary).toContain('Bram');
+  });
 });
 
 // End-to-end render guard for the shipped idea template. The tests above assert
@@ -542,6 +831,42 @@ describe('pipeline-idea-expansion template render', () => {
     expect(out).toContain('**all-is-lost**');      // next neighbor's arc role
     expect(out).toContain('PRIOR-BEAT-ONE');       // prior neighbor's beat sheet
     expect(out).toContain('NEXT-SYNOPSIS-LINE');   // next neighbor's synopsis
+  });
+
+  it('renders the {{#paddingRisk}} scope warning only when the flag is set (#1513)', () => {
+    const withRisk = applyTemplate(ideaTemplate, renderCtx({ paddingRisk: true }));
+    expect(withRisk).toContain('Scope warning');
+    expect(withRisk).toContain('Do NOT do that');
+    // Pin the dotted interpolation INSIDE the section — a regression to {{.}} or a
+    // broken lengthTargets ref would still render the static text above.
+    expect(withRisk).toContain('22-page target');   // {{lengthTargets.pageTarget}}
+    expect(withRisk).toContain('8–12 range');        // {{lengthTargets.beatsMin}}–{{lengthTargets.beatsMax}}
+
+    const withoutRisk = applyTemplate(ideaTemplate, renderCtx({ paddingRisk: false }));
+    expect(withoutRisk).not.toContain('Scope warning');
+  });
+
+  it('frames neighboring issues as hard scope boundaries (#1513)', () => {
+    const out = applyTemplate(ideaTemplate, renderCtx());
+    // Next-issue block: its events are out of scope, not material to continue into.
+    expect(out).toContain('OUT OF SCOPE');
+    // The seed scope note (non-backfill runs).
+    expect(out).toContain("This seed defines THIS issue's scope.");
+  });
+
+  it('suppresses the seed-scope note + padding warning on a backfill run (#1513)', () => {
+    // Backfill mode: beats are reverse-engineered from existing source material,
+    // so the seed is not the scope — the source is. The seed-scope language must
+    // NOT fire (it would tell the model to drop events present only in the source).
+    const out = applyTemplate(ideaTemplate, renderCtx({
+      paddingRisk: true,
+      hasSourceMaterials: true,
+      sourceMaterials: [{ label: 'Prose Draft', content: 'PROSE-SOURCE-BODY' }],
+    }));
+    expect(out).not.toContain("This seed defines THIS issue's scope.");
+    expect(out).not.toContain('Scope warning');       // paddingRisk gated under {{^hasSourceMaterials}}
+    expect(out).toContain('reverse-engineering this beat sheet');  // backfill block still renders
+    expect(out).toContain('PROSE-SOURCE-BODY');
   });
 
   it('renders the ticking-clock section when enabled and omits it otherwise', () => {

@@ -45,7 +45,8 @@ export const ACCEPTED_OLD_MD5 = {
     '52e31abc93e3105176236fcaa5d1575a', // pre-005 (shape-aware), still in setup-data.js OLD list
   ],
   'pipeline-arc-resolve.md': [
-    '8e348f3d1894382889f9f0ee7d5c6792', // post-019 / pre-023 — the hash this migration originally produced; included so a re-run after a `data/migrations.applied.json` reset can cleanly advance an install at the intermediate state to the post-023 live sample
+    '5b340885c6e8f8afc63424d6b5bc7eb7', // post-023 / pre-123 — episode-synopsis anchor, before the episodes[] channel
+    '8e348f3d1894382889f9f0ee7d5c6792', // post-019 / pre-023 — the hash this migration originally produced; included so a re-run after a `data/migrations.applied.json` reset can cleanly advance an install at the intermediate state to the post-123 live sample
     'a8677bbe1eb38f871fb152a5b0fec7c6', // pre-019 (pre-Phase B) shipped
     '87bc5c01f1a8a97b681727a38b05edc6', // pre-005 (shape-aware), still in setup-data.js OLD list
   ],
@@ -58,7 +59,7 @@ export const ACCEPTED_OLD_MD5 = {
 export const NEW_SHIPPED_MD5 = {
   'pipeline-arc-overview.md':   '0a1f6ffa6908522e3690c5e9e53a6ee0', // post-019
   'pipeline-arc-verify.md':     '36aa70cdfc25d7549573a4d556e7702c', // post-019
-  'pipeline-arc-resolve.md':    '5b340885c6e8f8afc63424d6b5bc7eb7', // post-023 (episode-synopsis anchor)
+  'pipeline-arc-resolve.md':    'cc27b4da1d1a13c35e35d1c2d6183815', // post-123 (episodes[] correction channel)
   'pipeline-volume-verify.md':  '49458d36700cb94e34806d536ffe2940', // post-019
 };
 

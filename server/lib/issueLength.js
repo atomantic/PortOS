@@ -138,3 +138,37 @@ export function computeIssueTargets(issue = {}) {
   const preset = LENGTH_PROFILES[profile];
   return { profile, ...preset };
 }
+
+// Words a 'standard' (22-page) issue's synopsis should carry before its beat
+// sheet stops being padding-prone. Scaled by pageTarget/standard so a longer
+// profile expects proportionally more seed material. Calibrated against real
+// runs where a one-line synopsis ("the invitation arrives", ~4 words) on a
+// 44-page finale produced scope overrun into the next issue's climax.
+export const THIN_SYNOPSIS_BASE_WORDS = 25;
+
+const countWords = (text) => {
+  const trimmed = typeof text === 'string' ? text.trim() : '';
+  return trimmed ? trimmed.split(/\s+/).length : 0;
+};
+
+/**
+ * Assess whether an issue's synopsis (the idea-stage seed) is too thin for its
+ * length profile to expand without padding — the pressure that makes the beat
+ * stage absorb adjacent issues' events to hit the page target (issue #1513).
+ *
+ * Only LONG profiles (more pages than 'standard') trip the flag: terse
+ * one-line synopses are normal and fine at standard length, but on a finale
+ * they leave the model nothing to fill the page count with except the next
+ * issue's climax. `synopsisWords === 0` (no seed yet) never flags — an empty
+ * synopsis is a different problem, handled upstream.
+ *
+ * Returns a fully-populated object so callers can log/branch unconditionally.
+ */
+export function assessSynopsisScope(synopsis, targets = {}) {
+  const synopsisWords = countWords(synopsis);
+  const pageTarget = Number(targets.pageTarget) || STANDARD_PAGES;
+  const longProfile = pageTarget > STANDARD_PAGES;
+  const expectedWords = Math.round(THIN_SYNOPSIS_BASE_WORDS * (pageTarget / STANDARD_PAGES));
+  const paddingRisk = longProfile && synopsisWords > 0 && synopsisWords < expectedWords;
+  return { synopsisWords, expectedWords, longProfile, paddingRisk };
+}

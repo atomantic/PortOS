@@ -25,6 +25,7 @@ import {
   enqueueStoryboardSceneVideo,
   enqueueStoryboardShotStartFrame,
   refineComicPanelPrompt,
+  refineComicPageRender,
   refineStoryboardScenePrompt,
   generateComicPanelImagePrompts,
   generateStoryboardSceneImagePrompts,
@@ -40,7 +41,7 @@ import { startEpisodeVideoForIssue } from '../../services/pipeline/episodeVideo.
 import { COMIC_PAGE_VARIANTS, slotKeyForVariant } from '../../services/pipeline/owners.js';
 import { ASPECT_RATIOS, QUALITIES } from '../../lib/creativeDirectorPresets.js';
 import { IMAGE_GEN_MODE } from '../../services/imageGen/modes.js';
-import { extractScenes, SOURCE_KIND } from '../../lib/sceneExtractor.js';
+import { extractScenes, scenesFromBeatSheet, SOURCE_KIND } from '../../lib/sceneExtractor.js';
 import { resolveSeriesLlmOverride } from '../../lib/seriesLlmOverride.js';
 import { parseComicScript } from '../../lib/comicScriptParser.js';
 import {
@@ -230,8 +231,45 @@ const comicPageRenderSchema = z.object({
   // See covers.js's makeCoverRenderSchema for the proof/final semantics.
   target: z.enum(COMIC_PAGE_VARIANTS).optional().default('proof'),
   useProofAsBase: z.boolean().optional().default(false),
+  // Consistency reference: re-render this page using an adjacent ('prior'/'next')
+  // or explicit (0-based index) already-rendered page as a reference image, so a
+  // continuing scene keeps incidental/un-described characters + environment
+  // consistent. Resolved + bounds-checked in enqueueVisualComicPage.
+  //   - omitted / 'auto' → auto-chain off the prior page within the same scene,
+  //     render fresh across a scene boundary (the default).
+  //   - 'none' → force a fresh render with no reference, even mid-scene.
+  //   - 'prior' / 'next' / <index> → explicit reference (errors if unrendered).
+  referencePage: z.union([z.enum(['prior', 'next', 'auto', 'none']), z.number().int().min(0)]).optional(),
   // Per-render opt-out for trained character-LoRA auto-apply (local mode).
   applyCharacterLoras: z.boolean().optional().default(true),
+}).refine(refineImagePixelCap, { message: PIXEL_CAP_MESSAGE, path: ['width'] });
+
+// Per-page "Refine" — a small image-to-image correction to an already-rendered
+// page (issue #1534). `instruction` is the user's free-text change; the LLM
+// adjusts the page's stored render prompt and the page re-renders i2i from its
+// own existing image. The render-tuning fields mirror comicPageRenderSchema,
+// minus the compose-from-source-only `useProofAsBase` / `referencePage` /
+// `applyCharacterLoras` (a from-self refine has no proof-vs-final base choice
+// and no fresh character matching). `target` selects which rendered variant to
+// refine; absent → server auto-picks (final when present, else proof).
+const comicPageRefineSchema = z.object({
+  instruction: z.string().trim().min(1).max(2000),
+  providerId: z.string().trim().max(80).optional(),
+  model: z.string().trim().max(200).optional(),
+  target: z.enum(COMIC_PAGE_VARIANTS).optional(),
+  // i2i denoise — low preserves the page, just enough to apply the change.
+  initImageStrength: z.number().min(0).max(1).optional(),
+  negativePrompt: z.string().trim().max(2000).optional(),
+  // No `extraStyle`: the refine renders the LLM-adjusted prompt verbatim and
+  // skips composeComicPagePrompt, so a style suffix would be silently dropped.
+  mode: z.enum([IMAGE_GEN_MODE.LOCAL, IMAGE_GEN_MODE.CODEX]).optional(),
+  modelId: z.string().trim().max(64).optional(),
+  width: imageEdgeSchema,
+  height: imageEdgeSchema,
+  steps: z.number().int().min(1).max(150).optional(),
+  cfgScale: z.number().min(0).max(30).optional(),
+  guidance: z.number().min(0).max(30).optional(),
+  seed: z.number().int().min(0).optional(),
 }).refine(refineImagePixelCap, { message: PIXEL_CAP_MESSAGE, path: ['width'] });
 
 const episodeVideoSchema = z.object({
@@ -425,16 +463,6 @@ router.post('/issues/:id/stages/storyboards/extract-scenes', asyncHandler(async 
   const body = validateRequest(extractScenesSchema, req.body ?? {});
   const issue = await issuesSvc.getIssue(req.params.id).catch((err) => { throw mapServiceError(err); });
   issuesSvc.assertStageUnlocked(issue, 'storyboards');
-  const series = await seriesSvc.getSeries(issue.seriesId).catch((err) => { throw mapServiceError(err); });
-
-  const sourceKind = body.from;
-  const source = (issue.stages?.[sourceKind]?.output || '').trim();
-  if (!source) {
-    throw new ServerError(
-      `Cannot extract scenes — issue's ${sourceKind} stage is empty`,
-      { status: 400, code: 'PIPELINE_NO_SOURCE_FOR_SCENE_EXTRACT' },
-    );
-  }
 
   const existing = Array.isArray(issue.stages?.storyboards?.scenes) ? issue.stages.storyboards.scenes : [];
   if (existing.length > 0 && !body.force) {
@@ -444,60 +472,116 @@ router.post('/issues/:id/stages/storyboards/extract-scenes', asyncHandler(async 
     );
   }
 
-  // Fall back to the series' configured LLM when the client doesn't pass an
-  // explicit override — every Pipeline LLM action should honor the
-  // provider/model picked in the issue header (which mirrors series.llm).
-  // Canon lives on the linked universe (Phase B.4). Orphan series render
-  // with empty canon — extractScenes can still produce scenes from the
-  // source text alone, just without character/place/object grounding.
-  const canon = await getSeriesCanon(series);
-  // A model id is provider-specific, so only inherit the series model when the
-  // effective provider is still the series provider — otherwise an override
-  // provider would be paired with a foreign model id and fail (same guard as
-  // the extract-canon route). When the override switches providers without
-  // naming a model, leave it blank so the new provider's default resolves.
-  const { provider, model } = resolveSeriesLlmOverride(series, {
-    overrideProvider: body.providerOverride,
-    overrideModel: body.modelOverride,
-  });
-  const result = await extractScenes({
-    source,
-    sourceKind,
-    characters: canon.characters,
-    places: canon.places,
-    objects: canon.objects,
-    work: { title: issue.title, kind: 'tv-episode' },
-    series: { name: series.name, styleNotes: series.styleNotes },
-    issue: { number: issue.number, title: issue.title },
-    providerOverride: provider,
-    modelOverride: model,
-    tag: `pipeline-storyboards-extract-${sourceKind}`,
-  });
-
-  // Adapt canonical scene shape to the pipeline storyboards UI shape: alias
+  // Adapt a canonical scene to the pipeline storyboards UI shape: alias
   // `visualPrompt → description` (the textarea binding) and reset the per-scene
   // image-gen job fields. Rich fields (heading/summary/dialogue/...) ride along.
-  const storyboardScenes = result.extracted.scenes.map((s) => ({
-    ...s,
-    description: s.visualPrompt || '',
-    imageJobId: null,
-    prompt: null,
-  }));
+  // Fall back to the scene `summary` when there's no visualPrompt so a scene
+  // that only carries the beats clause (the canonical-only case below) still
+  // seeds a non-empty description — the refine/image/video paths require one.
+  const toStoryboardScene = (s) => ({ ...s, description: s.visualPrompt || s.summary || '', imageJobId: null, prompt: null });
+
+  // The beat sheet's canonical `## Scenes` list (#1552) is the single source of
+  // truth for scene numbers + sluglines across every adaptation, so when it
+  // exists we use it to ALIGN the storyboards scenes — guaranteeing their
+  // numbers/sluglines match the comic pages'. But the list is sparse (no
+  // dialogue / visual prompts / shots), and downstream stages need that rich
+  // data — audio voice-over is built from `storyboards.scenes[].dialogue`. So
+  // we still run the LLM extraction over the source text to get the rich fields,
+  // then OVERLAY the canonical numbering/sluglines onto it (hybrid). Only when
+  // there's no source text to extract from do we fall back to the canonical list
+  // alone (deterministic, no dialogue — but there's nothing to extract it from).
+  const canonicalScenes = scenesFromBeatSheet(issue.stages?.idea?.output || '');
+  const series = await seriesSvc.getSeries(issue.seriesId).catch((err) => { throw mapServiceError(err); });
+
+  const sourceKind = body.from;
+  const source = (issue.stages?.[sourceKind]?.output || '').trim();
+  if (!source && canonicalScenes.length === 0) {
+    throw new ServerError(
+      `Cannot extract scenes — issue's ${sourceKind} stage is empty`,
+      { status: 400, code: 'PIPELINE_NO_SOURCE_FOR_SCENE_EXTRACT' },
+    );
+  }
+
+  let extractedScenes = [];
+  let runId = null;
+  let providerId = null;
+  let model = null;
+  if (source) {
+    // Fall back to the series' configured LLM when the client doesn't pass an
+    // explicit override — every Pipeline LLM action should honor the
+    // provider/model picked in the issue header (which mirrors series.llm).
+    // Canon lives on the linked universe (Phase B.4). Orphan series render
+    // with empty canon — extractScenes can still produce scenes from the
+    // source text alone, just without character/place/object grounding.
+    const canon = await getSeriesCanon(series);
+    // A model id is provider-specific, so only inherit the series model when the
+    // effective provider is still the series provider — otherwise an override
+    // provider would be paired with a foreign model id and fail (same guard as
+    // the extract-canon route). When the override switches providers without
+    // naming a model, leave it blank so the new provider's default resolves.
+    const { provider, model: resolvedModel } = resolveSeriesLlmOverride(series, {
+      overrideProvider: body.providerOverride,
+      overrideModel: body.modelOverride,
+    });
+    const result = await extractScenes({
+      source,
+      sourceKind,
+      characters: canon.characters,
+      places: canon.places,
+      objects: canon.objects,
+      work: { title: issue.title, kind: 'tv-episode' },
+      series: { name: series.name, styleNotes: series.styleNotes },
+      issue: { number: issue.number, title: issue.title },
+      providerOverride: provider,
+      modelOverride: resolvedModel,
+      tag: `pipeline-storyboards-extract-${sourceKind}`,
+    });
+    extractedScenes = result.extracted.scenes;
+    runId = result.runId;
+    providerId = result.providerId;
+    model = result.model;
+  }
+
+  // Overlay the canonical numbering/sluglines/headings onto the extracted scenes
+  // (matched by position) when a canonical list exists — the canonical list wins
+  // on identity/ordering while the LLM scene contributes dialogue/visualPrompt/
+  // shots/characters. Extracted scenes beyond the canonical count are dropped so
+  // the storyboards scene count matches the canonical (and comic-page) scene
+  // count; canonical scenes beyond the extracted count carry no dialogue (there
+  // was no matching extracted scene), seeding their description from the summary.
+  const usedCanonicalList = canonicalScenes.length > 0;
+  const finalScenes = usedCanonicalList
+    ? canonicalScenes.map((c, i) => {
+        // Base on the canonical scene `c` (full sanitized shape with empty
+        // dialogue/shots/characters), overlay the LLM scene's rich fields, then
+        // re-assert canonical identity (id/heading/slugline) so the canonical
+        // numbering always wins. When there's no matching extracted scene
+        // (`ext` is {}), the result is just `c` — empty dialogue, summary-seeded
+        // description.
+        const ext = extractedScenes[i] || {};
+        return { ...c, ...ext, id: c.id, heading: c.heading, slugline: c.slugline, summary: ext.summary || c.summary };
+      })
+    : extractedScenes;
+
+  const storyboardScenes = finalScenes.map(toStoryboardScene);
   const { issue: updatedIssue, stage } = await issuesSvc.updateStage(issue.id, 'storyboards', {
     status: storyboardScenes.length ? 'ready' : 'empty',
     scenes: storyboardScenes,
-    lastRunId: result.runId,
+    lastRunId: runId,
     errorMessage: '',
   });
 
   res.json({
     issue: updatedIssue,
     stage,
-    runId: result.runId,
-    providerId: result.providerId,
-    model: result.model,
+    runId,
+    providerId,
+    model,
     sceneCount: storyboardScenes.length,
-    sourceKind,
+    // 'beat-sheet' when the response is purely the canonical list (no source to
+    // extract from); otherwise the LLM source stage the rich fields came from.
+    sourceKind: source ? sourceKind : 'beat-sheet',
+    usedCanonicalList,
   });
 }));
 
@@ -748,6 +832,11 @@ router.patch('/issues/:id/stages/comicPages/pages/:pageIndex', asyncHandler(asyn
       nextPages[pageIndex] = {
         ...currentPages[pageIndex],
         rawText: fresh.rawText || body.rawText,
+        // Re-derive the scene marker from the edited header so editing
+        // `## Page N — Scene M: SLUGLINE` retags the page (and clears it when
+        // the marker is removed). `?? null` normalizes the absent case.
+        sceneNumber: fresh.sceneNumber ?? null,
+        sceneHeading: fresh.sceneHeading ?? null,
         panels: fresh.panels.map((p, i) => ({
           ...p,
           // Preserve in-flight per-panel jobIds against the freshest panels.
@@ -800,6 +889,63 @@ router.post('/issues/:id/stages/comicPages/pages/:pageIndex/render', asyncHandle
   const slotRecord = buildRenderSlot({
     slotKey, jobId: result.jobId, prompt: result.prompt,
     width: body.width, height: body.height, fromProof: result.fromProof,
+  });
+  const { issue: updatedIssue, stage } = await issuesSvc.updateStageWithLatest(
+    req.params.id,
+    'comicPages',
+    (currentStage) => {
+      const currentPages = Array.isArray(currentStage?.pages) ? currentStage.pages : [];
+      if (!currentPages[pageIndex]) {
+        throw new ServerError(
+          `pageIndex ${pageIndex} out of range — comicPages has ${currentPages.length} page${currentPages.length === 1 ? '' : 's'}`,
+          { status: 404, code: 'PIPELINE_COMIC_PAGE_NOT_FOUND' },
+        );
+      }
+      const nextPages = [...currentPages];
+      nextPages[pageIndex] = {
+        ...currentPages[pageIndex],
+        [slotKey]: slotRecord,
+      };
+      return { status: 'edited', pages: nextPages };
+    },
+  ).catch((err) => { throw mapServiceError(err); });
+  res.json({ ...result, issue: updatedIssue, stage });
+}));
+
+// AI prompt-refine + image-to-image re-render for a small correction to an
+// already-rendered comic page (issue #1534). The service adjusts the page's
+// stored render prompt per the user's instruction and re-renders i2i from the
+// page's existing image; the new jobId + adjusted prompt land on the matching
+// variant slot — same persist path as /render, so a concurrent edit or sibling
+// render can't be reverted by a stale snapshot.
+router.post('/issues/:id/stages/comicPages/pages/:pageIndex/refine-render', asyncHandler(async (req, res) => {
+  const pageIndex = Number(req.params.pageIndex);
+  if (!Number.isInteger(pageIndex) || pageIndex < 0) {
+    throw new ServerError('pageIndex must be a non-negative integer', {
+      status: 400, code: 'PIPELINE_COMIC_PAGE_BAD_INDEX',
+    });
+  }
+  const body = validateRequest(comicPageRefineSchema, req.body ?? {});
+
+  // Validate the page exists up front so a bad index skips the bible load + LLM
+  // refine entirely (mirrors the /render route's pre-flight). The service also
+  // 404s before the LLM call — this just fails faster and more cheaply.
+  const issue = await issuesSvc.getIssue(req.params.id).catch((err) => { throw mapServiceError(err); });
+  const pages = Array.isArray(issue.stages?.comicPages?.pages) ? issue.stages.comicPages.pages : [];
+  if (!pages[pageIndex]) {
+    throw new ServerError(
+      `pageIndex ${pageIndex} out of range — comicPages has ${pages.length} page${pages.length === 1 ? '' : 's'}`,
+      { status: 404, code: 'PIPELINE_COMIC_PAGE_NOT_FOUND' },
+    );
+  }
+
+  const result = await refineComicPageRender(req.params.id, { pageIndex, ...body })
+    .catch((err) => { throw mapServiceError(err); });
+
+  const slotKey = slotKeyForVariant(result.variant);
+  const slotRecord = buildRenderSlot({
+    slotKey, jobId: result.jobId, prompt: result.prompt,
+    width: body.width, height: body.height,
   });
   const { issue: updatedIssue, stage } = await issuesSvc.updateStageWithLatest(
     req.params.id,

@@ -4,10 +4,16 @@
  * PipelineEditorialChecks (onSave returns a Promise; the form shows a spinner and
  * stays open until it resolves). The user only describes WHAT to look for; the
  * JSON output contract is enforced server-side, so there's no contract field.
+ *
+ * Dry-run preview (#1607): when the parent supplies `onPreview` (an async fn that
+ * runs the DRAFT against the selected series WITHOUT saving) and `canPreview`
+ * (a series is selected), a "Preview on this series" button runs the draft and
+ * renders sample findings inline — so the author can judge noise/scope before
+ * committing the check to the catalog.
  */
-import { useState } from 'react';
-import { Loader2, Save, X } from 'lucide-react';
-import { CHECK_SCOPE_ORDER, scopeLabel } from '../../../lib/editorialChecks';
+import { useEffect, useRef, useState } from 'react';
+import { FlaskConical, Loader2, Save, X } from 'lucide-react';
+import { CHECK_SCOPE_ORDER, scopeLabel, SEVERITY_BADGE_CLASSES } from '../../../lib/editorialChecks';
 
 // Scopes mirror the server registry's CHECK_SCOPES (via the client scope-order
 // catalog); severities have no client mirror so they live here.
@@ -34,24 +40,73 @@ const draftFromCheck = (check) => ({
   severityDefault: SEVERITIES.includes(check?.severityDefault) ? check.severityDefault : 'medium',
 });
 
-export default function EditorialCustomCheckForm({ check = null, saving = false, onSave, onCancel }) {
+export default function EditorialCustomCheckForm({ check = null, saving = false, onSave, onCancel, onPreview = null, canPreview = false, previewTarget = null }) {
   const isEdit = !!check;
   const [draft, setDraft] = useState(() => (isEdit ? draftFromCheck(check) : { ...blankDraft }));
-  const set = (key, value) => setDraft((d) => ({ ...d, [key]: value }));
 
-  const canSave = draft.label.trim().length > 0 && draft.prompt.trim().length > 0 && !saving;
+  // Preview (#1607) — transient dry-run state, local to the form (it never
+  // persists). A preview describes ONE exact draft+series; it goes stale the
+  // moment either changes, so we clear it on any edit and invalidate any
+  // in-flight request via a generation ref (a slow response for the old draft/
+  // series must not overwrite the UI after the user moved on).
+  const [preview, setPreview] = useState(null);
+  const [previewing, setPreviewing] = useState(false);
+  const [previewError, setPreviewError] = useState('');
+  const previewReqRef = useRef(0);
+  const mountedRef = useRef(true);
+  useEffect(() => () => { mountedRef.current = false; }, []);
+
+  // Invalidate + clear any preview when the draft or the target series changes.
+  const invalidatePreview = () => {
+    previewReqRef.current += 1;
+    setPreview(null);
+    setPreviewError('');
+    setPreviewing(false);
+  };
+  // A draft edit invalidates a prior/in-flight preview (it described a different draft).
+  const set = (key, value) => {
+    setDraft((d) => ({ ...d, [key]: value }));
+    invalidatePreview();
+  };
+  // The form stays mounted across a series switch (only new↔edit remounts via the
+  // key), so reset the preview when the target series changes too.
+  useEffect(() => { invalidatePreview(); }, [previewTarget]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const hasRequiredFields = draft.label.trim().length > 0 && draft.prompt.trim().length > 0;
+  const canSave = hasRequiredFields && !saving;
+
+  // Shared payload so submit and preview send the IDENTICAL draft shape — a
+  // preview that diverged from what gets saved would mislead the author.
+  const buildPayload = () => ({
+    label: draft.label.trim(),
+    description: draft.description.trim(),
+    prompt: draft.prompt.trim(),
+    scope: draft.scope,
+    category: draft.category.trim() || 'custom',
+    severityDefault: draft.severityDefault,
+  });
+
+  const canPreviewNow = !!onPreview && canPreview && hasRequiredFields && !previewing && !saving;
+
+  const runPreview = () => {
+    if (!canPreviewNow) return;
+    const reqId = (previewReqRef.current += 1);
+    // Gate every state write on staleness (this request still current) AND mount
+    // — a draft edit / series switch / unmount during the request drops its result.
+    const isCurrent = () => mountedRef.current && reqId === previewReqRef.current;
+    setPreviewing(true);
+    setPreviewError('');
+    setPreview(null);
+    Promise.resolve(onPreview(buildPayload()))
+      .then((res) => { if (isCurrent()) setPreview(res || { findings: [] }); })
+      .catch((err) => { if (isCurrent()) setPreviewError(err?.message || 'Preview failed'); })
+      .finally(() => { if (isCurrent()) setPreviewing(false); });
+  };
 
   const submit = (e) => {
     e.preventDefault();
     if (!canSave) return;
-    onSave({
-      label: draft.label.trim(),
-      description: draft.description.trim(),
-      prompt: draft.prompt.trim(),
-      scope: draft.scope,
-      category: draft.category.trim() || 'custom',
-      severityDefault: draft.severityDefault,
-    });
+    onSave(buildPayload());
   };
 
   const fieldClass = 'w-full rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm text-gray-100 focus:border-port-accent focus:outline-none';
@@ -130,7 +185,19 @@ export default function EditorialCustomCheckForm({ check = null, saving = false,
         </div>
       </div>
 
-      <div className="flex items-center justify-end gap-2">
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        {onPreview ? (
+          <button
+            type="button"
+            onClick={runPreview}
+            disabled={!canPreviewNow}
+            title={canPreview ? 'Run this draft against the selected series without saving' : 'Select a series above to preview'}
+            className="mr-auto inline-flex items-center gap-1.5 rounded border border-port-border px-3 py-1.5 text-sm text-gray-300 hover:bg-port-border/40 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {previewing ? <Loader2 size={14} className="animate-spin" /> : <FlaskConical size={14} />}
+            Preview on this series
+          </button>
+        ) : null}
         <button
           type="button"
           onClick={onCancel}
@@ -147,6 +214,55 @@ export default function EditorialCustomCheckForm({ check = null, saving = false,
           {isEdit ? 'Save changes' : 'Create check'}
         </button>
       </div>
+
+      {/* Preview hint: only when previewing is offered but no series is selected. */}
+      {onPreview && !canPreview ? (
+        <p className="text-[11px] text-gray-500">Select a series above to preview this check before saving.</p>
+      ) : null}
+
+      {/* Dry-run results (#1607) — sample findings only; nothing is persisted. */}
+      {previewError ? (
+        <p className="rounded border border-port-error/40 bg-port-error/10 p-2 text-xs text-port-error" role="alert">{previewError}</p>
+      ) : null}
+      {preview ? <PreviewResults preview={preview} /> : null}
     </form>
+  );
+}
+
+// Renders the transient dry-run outcome: the gate-skip / empty / invalid notices,
+// or the sample findings list. Pure presentational — the findings are never
+// seeded into the review (#1607).
+function PreviewResults({ preview }) {
+  if (preview.invalid) {
+    return <p className="rounded border border-port-border bg-port-bg p-2 text-xs text-gray-400">Fill in a name and prompt to preview this check.</p>;
+  }
+  if (preview.skipped) {
+    return <p className="rounded border border-port-border bg-port-bg p-2 text-xs text-gray-400">Nothing to preview yet — this series has no manuscript content.</p>;
+  }
+  const findings = Array.isArray(preview.findings) ? preview.findings : [];
+  if (findings.length === 0) {
+    return <p className="rounded border border-port-success/40 bg-port-success/10 p-2 text-xs text-port-success">No sample findings — this check flagged nothing on the current manuscript.</p>;
+  }
+  return (
+    <div className="space-y-2 rounded-lg border border-port-border bg-port-bg p-2">
+      <p className="text-[11px] font-medium uppercase tracking-wider text-gray-500">
+        Sample findings ({findings.length}) — preview only, not saved
+      </p>
+      <ul className="space-y-2">
+        {findings.map((f, i) => (
+          <li key={i} className="rounded border border-port-border/70 bg-port-card p-2 text-xs">
+            <div className="flex items-center gap-2">
+              <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase ${SEVERITY_BADGE_CLASSES[f.severity] || SEVERITY_BADGE_CLASSES.medium}`}>
+                {f.severity || 'medium'}
+              </span>
+              {f.location ? <span className="truncate text-gray-400">{f.location}</span> : null}
+            </div>
+            {f.problem ? <p className="mt-1 text-gray-200">{f.problem}</p> : null}
+            {f.suggestion ? <p className="mt-1 text-gray-400"><span className="text-gray-500">Fix:</span> {f.suggestion}</p> : null}
+            {f.anchorQuote ? <p className="mt-1 border-l-2 border-port-border pl-2 italic text-gray-500">“{f.anchorQuote}”</p> : null}
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }

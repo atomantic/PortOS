@@ -14,7 +14,7 @@ jobs:
     if: "!contains(github.event.head_commit.message, '[skip ci]')"
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -47,6 +47,8 @@ jobs:
       - name: Generate changelog
         id: changelog
         if: steps.release-check.outputs.exists == 'false'
+        env:
+          REPO: ${{ github.repository }}
         run: |
           VERSION="${{ steps.package-version.outputs.version }}"
           MAJOR_MINOR=$(echo $VERSION | cut -d. -f1-2)
@@ -54,15 +56,19 @@ jobs:
           # Try exact version first (e.g., v0.10.5.md), then minor.x pattern (e.g., v0.10.x.md)
           CHANGELOG_FILE_EXACT=".changelog/v${VERSION}.md"
           CHANGELOG_FILE_PATTERN=".changelog/v${MAJOR_MINOR}.x.md"
+          SRC_FILE=""   # repo-relative path of the changelog file at this tag (for the "full changelog" link)
 
           if [ -f "$CHANGELOG_FILE_EXACT" ]; then
             # Use exact version changelog
             CHANGELOG=$(cat "$CHANGELOG_FILE_EXACT")
+            SRC_FILE="$CHANGELOG_FILE_EXACT"
           elif [ -f "$CHANGELOG_FILE_PATTERN" ]; then
             # Use minor version pattern changelog (e.g., v0.10.x.md)
             CHANGELOG=$(cat "$CHANGELOG_FILE_PATTERN")
             # Replace version placeholder with actual version
             CHANGELOG=$(echo "$CHANGELOG" | sed "s/v${MAJOR_MINOR}.x/v${VERSION}/g" | sed "s/${MAJOR_MINOR}.x/${VERSION}/g" | sed "s/YYYY-MM-DD/$(date +%Y-%m-%d)/g")
+            # The pattern file is still present at this tag (the archive step renames it afterwards)
+            SRC_FILE="$CHANGELOG_FILE_PATTERN"
           else
             # Fallback: Generate changelog from commits (exclude [skip ci] commits)
             PREV_TAG=$(git describe --tags --abbrev=0 2>/dev/null || git rev-list --max-parents=0 HEAD)
@@ -85,10 +91,26 @@ jobs:
           \`\`\`"
           fi
 
-          # Handle multiline output
-          echo "changelog<<EOF" >> $GITHUB_OUTPUT
-          echo "$CHANGELOG" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          # Write the body to a FILE consumed via body_path (NOT an action input
+          # env var). A large changelog (this repo's run hard, ~175KB) blows two
+          # separate ceilings when passed as `body:`: GitHub caps a release body
+          # at 125,000 chars (HTTP 422), and the action input becomes an env var
+          # whose size counts toward ARG_MAX when the action's node process is
+          # exec'd ("Argument list too long", which broke the v2.22.0 release).
+          # So: cap to a safe ceiling on a whole-line boundary and, when
+          # truncated, append a pointer to the full changelog file at this tag.
+          BODY_FILE="$RUNNER_TEMP/release-body.md"
+          LIMIT=120000
+          printf '%s\n' "$CHANGELOG" | awk -v lim=$LIMIT '
+            { if (total + length($0) + 1 > lim) { exit } print; total += length($0) + 1 }
+          ' > "$BODY_FILE"
+          FULL_LEN=$(printf '%s\n' "$CHANGELOG" | wc -c)
+          if [ "$(wc -c < "$BODY_FILE")" -lt "$FULL_LEN" ] && [ -n "$SRC_FILE" ]; then
+            FULL_URL="https://github.com/${REPO}/blob/v${VERSION}/${SRC_FILE#./}"
+            printf '\n---\n\n> **This changelog was truncated to fit GitHub'"'"'s release-note size limit.** Read the complete v%s changelog here: [%s](%s)\n' \
+              "$VERSION" "$SRC_FILE" "$FULL_URL" >> "$BODY_FILE"
+          fi
+          echo "body_path=$BODY_FILE" >> $GITHUB_OUTPUT
 
       - name: Create Release
         if: steps.release-check.outputs.exists == 'false'
@@ -96,7 +118,7 @@ jobs:
         with:
           tag_name: v${{ steps.package-version.outputs.version }}
           name: v${{ steps.package-version.outputs.version }}
-          body: ${{ steps.changelog.outputs.changelog }}
+          body_path: ${{ steps.changelog.outputs.body_path }}
           draft: false
           prerelease: false
         env:

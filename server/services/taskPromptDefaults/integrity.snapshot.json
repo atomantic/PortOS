@@ -12,8 +12,9 @@
     "mobile-responsive": "16d8e7f63a673a2de48994c0ac08ef3d",
     "feature-ideas": "0741418bd275b8953131155f8bc89460",
     "plan-task": "5425306bf082b15b6a17f972557d4dd9",
-    "claim-issue": "28f09436566c281a6915d6ad4c1b80f8",
-    "claim-issue-gitlab": "880dd7820ac90c689065e28cdca032fb",
+    "claim-issue": "89308f712f99ad8134224639cd99f135",
+    "claim-issue-gitlab": "271ad9c6efa9dce424103711292fd055",
+    "claim-issue-jira": "157cfc80c3d00bcbf3e97aae3998c372",
     "code-reviewer-review": "1cd13ee5142d130f95cc390098d0f278",
     "code-reviewer-implement": "ab2c3e16d54e195bdf856574b7702042",
     "error-handling": "9afba2e99b90a8d5771c75e7f0615d96",
@@ -33,14 +34,25 @@
   "PROMPT_VERSIONS": {
     "feature-ideas": 9,
     "plan-task": 8,
-    "claim-issue": 2,
-    "claim-issue-gitlab": 1,
+    "claim-issue": 3,
+    "claim-issue-gitlab": 2,
+    "claim-issue-jira": 1,
     "pr-reviewer": 3,
     "code-reviewer-a": 1,
     "code-reviewer-b": 1,
     "reference-watch": 2,
     "pr-watcher": 1,
-    "refresh-local-llm-catalog": 1
+    "refresh-local-llm-catalog": 1,
+    "security": 2,
+    "code-quality": 2,
+    "test-coverage": 2,
+    "performance": 2,
+    "accessibility": 2,
+    "dependency-updates": 2,
+    "documentation": 4,
+    "ui-bugs": 2,
+    "mobile-responsive": 2,
+    "release-check": 6
   },
   "REFERENCE_WATCH_AUDITED_VERSION": 2,
   "PREVIOUS_DEFAULT_PROMPTS": {
@@ -68,8 +80,48 @@
       "f9322140bff7d3f603799c09ce468da9"
     ],
     "pr-watcher": [],
+    "claim-issue-gitlab": [
+      "880dd7820ac90c689065e28cdca032fb"
+    ],
     "claim-issue": [
-      "06190b8089adf1cb2c84bddeb6596af7"
+      "06190b8089adf1cb2c84bddeb6596af7",
+      "28f09436566c281a6915d6ad4c1b80f8"
+    ],
+    "security": [
+      "d0f54c1fbe62d067b1a23ee0a9f3528c"
+    ],
+    "code-quality": [
+      "b1cce8f89218844746746ceb576553c1"
+    ],
+    "test-coverage": [
+      "c2b0f0dee5bc881239684e706ea88324"
+    ],
+    "performance": [
+      "4fea5eb3585bdc150980934b289016bc"
+    ],
+    "accessibility": [
+      "b07cfe1e367411036ef1d4cc4b6e9d2e"
+    ],
+    "dependency-updates": [
+      "640a7c4214e6bdba2bbd5b9061d9d425"
+    ],
+    "documentation": [
+      "074ea22140f8f6a02c7e40a6bc7b0614",
+      "658395fa391df5a0fefaaebdf8dbedb7",
+      "751186658f5d9a9dbccdd6830946f3d8"
+    ],
+    "ui-bugs": [
+      "01d2a7e034713195f33071f2c71a3c99"
+    ],
+    "mobile-responsive": [
+      "636bdc17fa39ed2f2e27623284c8e04c"
+    ],
+    "release-check": [
+      "655180dfbab22e11fab79072ac49c9d6",
+      "d567ce8c4033687d5a9177439e00d0a6",
+      "133c221608545a26f328dead099a4d0a",
+      "609167c41331e6bbfc6d5f5edc452d4c",
+      "9c7508598ee772d1cee8f609f9ed7372"
     ]
   }
 }

@@ -24,7 +24,7 @@
 import { schedule as scheduleEvent, cancel as cancelEvent, parseCronToNextRun } from './eventScheduler.js';
 import { getUserTimezone, getLocalParts, nextLocalTime } from '../lib/timezone.js';
 import { formatDuration } from '../lib/fileUtils.js';
-import { loadState, isDaemonRunning } from './cosState.js';
+import { loadState, isDaemonRunning, canQueueImprovementTasks } from './cosState.js';
 import { getDomainMode } from '../lib/domainAutonomy.js';
 import { remainingActionBudget } from '../lib/domainBudgets.js';
 import { getDomainBudgetStatus, recordDomainUsage } from './domainUsage.js';
@@ -459,11 +459,9 @@ export async function scheduleNextImprovementCheck() {
         if (paused) return;
 
         const state = await loadState();
-        // Gate on the CoS auto-run domain: queueing improvement tasks mutates
-        // COS-TASKS.md with autonomous internal work, so off/dry-run must not
-        // queue (dry-run is purely a planning posture; the spawn-side gate
-        // already withholds execution, but we also avoid the queue mutation).
-        if (state.config.idleReviewEnabled && getDomainMode(state.config, 'cos') === 'execute') {
+        // Gate on the CoS auto-run domain (see canQueueImprovementTasks): off/
+        // dry-run are planning postures that withhold the COS-TASKS.md mutation.
+        if (canQueueImprovementTasks(state)) {
           const cosTaskData = await getCosTasks();
           await queueEligibleImprovementTasks(state, cosTaskData);
           cosEvents.emit('cos:dequeue-requested');

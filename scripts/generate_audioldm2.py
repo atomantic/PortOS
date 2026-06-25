@@ -83,6 +83,37 @@ def _pick_device():
     return "cpu"
 
 
+def _patch_language_model_generation(pipe):
+    """Re-bind GenerationMixin generation helpers onto AudioLDM2's language model.
+
+    AudioLDM2's `language_model` is a bare `GPT2Model` (no LM head — the pipeline
+    reads its hidden states). diffusers' `AudioLDM2Pipeline.generate_language_model`
+    drives it by hand and calls `_update_model_kwargs_for_generation` (and, on
+    transformers >=4.52.1, `_get_initial_cache_position`). Those used to live on
+    every `PreTrainedModel`, but transformers >=4.50 decoupled `GenerationMixin`
+    so non-generative base models like `GPT2Model` no longer carry them — leaving
+    diffusers calling a method that no longer exists:
+        AttributeError: 'GPT2Model' object has no attribute
+        '_update_model_kwargs_for_generation'
+
+    We restore the missing helpers from `GenerationMixin` onto the model's class
+    (their signatures already match diffusers' call sites). This keeps the venv on
+    a current transformers instead of pinning an EOL release. No-op on older
+    transformers where the methods are already present.
+    """
+    lm = getattr(pipe, "language_model", None)
+    if lm is None:
+        return
+    try:
+        from transformers.generation.utils import GenerationMixin
+    except Exception:
+        return
+    cls = type(lm)
+    for name in ("_update_model_kwargs_for_generation", "_get_initial_cache_position"):
+        if not hasattr(lm, name) and hasattr(GenerationMixin, name):
+            setattr(cls, name, getattr(GenerationMixin, name))
+
+
 def _to_int16_pcm(audio):
     """Flatten a numpy audio array to a 1-D int16 numpy buffer.
 
@@ -151,6 +182,9 @@ def main():
     log_stage("load-model", args.model)
     pipe = AudioLDM2Pipeline.from_pretrained(args.model, torch_dtype=dtype)
     pipe = pipe.to(device)
+    # transformers >=4.50 compatibility: restore the generation helpers the
+    # pipeline's language-model loop relies on (see helper docstring).
+    _patch_language_model_generation(pipe)
 
     # PyTorch's MPS backend does not support torch.Generator(device='mps') — it
     # raises before inference on Apple Silicon (our primary target). Seed on CPU

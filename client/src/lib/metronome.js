@@ -16,8 +16,8 @@
 
 import { parseScore } from './scoreNotation.js';
 
-// BPM band — mirrors the server `tempo` validation (services/songs.js
-// TEMPO_MIN / TEMPO_MAX, also enforced by the Zod schema in routes/songs.js).
+// BPM band — mirrors the server `tempo` validation (services/rounds.js
+// TEMPO_MIN / TEMPO_MAX, also enforced by the Zod schema in routes/rounds.js).
 export const METRONOME_BPM_MIN = 20;
 export const METRONOME_BPM_MAX = 320;
 export const DEFAULT_BPM = 120;

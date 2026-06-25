@@ -15,6 +15,7 @@
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import useEscapeKey from '../../../hooks/useEscapeKey';
+import useAnchorReveal from '../../../hooks/useAnchorReveal';
 import { buildHighlightSegments } from '../../../lib/manuscriptAnchors';
 import { CommentCardFromProps } from './ManuscriptCommentCard';
 import ManuscriptSectionFrame from './ManuscriptSectionFrame';
@@ -68,6 +69,33 @@ export default function ManuscriptLiveSection({
   };
   useLayoutEffect(positionPopover, [openComment, content, segments]);
 
+  // The backdrop <mark> carrying the open comment's underline — the element to
+  // reveal/flash when a finding opens (#1601).
+  const openMark = () => {
+    const backdrop = backdropRef.current;
+    if (!backdrop || !openComment) return null;
+    return [...backdrop.querySelectorAll('mark[data-cids]')]
+      .find((m) => (m.dataset.cids || '').split(',').includes(openComment.id)) || null;
+  };
+
+  // Scroll the open finding's underlined text into view + flash it. A long
+  // section (rowsFor caps the textarea at 400 rows) scrolls INSIDE the textarea,
+  // whose internal scroll `scrollIntoView` on the decorative backdrop mark can't
+  // reach — so center it by setting `scrollTop` directly and re-pin the popover.
+  // Shorter sections grow to fit, so the page scroll moves the mark into view.
+  const revealMark = (mark) => {
+    const ta = taRef.current;
+    const backdrop = backdropRef.current;
+    if (ta && backdrop && ta.scrollHeight > ta.clientHeight + 1) {
+      ta.scrollTop = Math.max(0, mark.offsetTop - ta.clientHeight / 2 + mark.offsetHeight / 2);
+      backdrop.scrollTop = ta.scrollTop;
+      positionPopover();
+    } else if (typeof mark.scrollIntoView === 'function') {
+      mark.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  };
+  useAnchorReveal(openMark, openComment?.id, { reveal: revealMark });
+
   // Esc closes the popover.
   useEscapeKey(openComment, onCloseComment);
 
@@ -112,7 +140,10 @@ export default function ManuscriptLiveSection({
               <mark
                 key={i}
                 data-cids={seg.commentIds.join(',')}
-                className={`bg-transparent border-b-2 ${SEVERITY_UNDERLINE[seg.topSeverity] || SEVERITY_UNDERLINE.low}`}
+                // While its card is open, the offending words stay tinted (behind
+                // the textarea's transparent background) so the match stays
+                // visible after the open flash fades (#1601).
+                className={`border-b-2 ${seg.commentIds.includes(openCommentId) ? 'bg-port-accent/15' : 'bg-transparent'} ${SEVERITY_UNDERLINE[seg.topSeverity] || SEVERITY_UNDERLINE.low}`}
               >
                 {seg.text}
               </mark>

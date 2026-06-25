@@ -169,11 +169,38 @@ export async function getInstanceId() {
   return cachedInstanceId;
 }
 
-export async function updateSelf(name) {
+/**
+ * Resolve this machine's real federation instance id, creating the local
+ * identity on the cold path. `getInstanceId()` returns the
+ * `UNKNOWN_INSTANCE_ID` sentinel (and never throws) before the identity exists
+ * — which can happen on a boot-time always-on auto-start that runs before the
+ * startup chain's `ensureSelf()` does. Callers that stamp the id onto durable
+ * records (agent provenance, worktree metadata) or compare it for cross-machine
+ * task claims (#1563) must never persist/compare the sentinel, so this creates
+ * (or loads) the real identity before returning. The warm path is the cheap
+ * cached `getInstanceId()` read; `ensureSelf()` only runs the once.
+ */
+export async function ensureInstanceId() {
+  let instanceId = await getInstanceId();
+  if (instanceId === UNKNOWN_INSTANCE_ID) {
+    instanceId = (await ensureSelf())?.instanceId || instanceId;
+  }
+  return instanceId;
+}
+
+export async function updateSelf(name, { defaultPeerFullSync } = {}) {
   return withData(async (data) => {
     if (!data.self) return null;
-    data.self.name = name;
-    console.log(`🌐 Instance name updated: ${name}`);
+    if (typeof name === 'string' && name.trim()) {
+      data.self.name = name.trim();
+      console.log(`🌐 Instance name updated: ${data.self.name}`);
+    }
+    // The default full-sync ("mirror everything") mode applied to NEW peers as
+    // they're added. Existing peers are untouched — this only seeds addPeer.
+    if (typeof defaultPeerFullSync === 'boolean') {
+      data.self.defaultPeerFullSync = defaultPeerFullSync;
+      console.log(`🌐 New-peer full-sync default: ${defaultPeerFullSync ? 'on' : 'off'}`);
+    }
     return data.self;
   });
 }
@@ -227,26 +254,46 @@ const DEFAULT_SYNC_CATEGORIES = {
   videoHistory: false,
   storyBuilder: false,
   authors: false,
+  artists: false,
+  albums: false,
+  tracks: false,
+  creativeDirectorProjects: false,
+  moodBoards: false,
+  writersRoomWorks: false,
   catalog: false
 };
 
 export { DEFAULT_SYNC_CATEGORIES };
+
+// A category map with every key forced on — the effective view a full-sync
+// ("mirror everything") peer presents. Derived from DEFAULT_SYNC_CATEGORIES so a
+// newly added category is covered by full-sync peers with no per-peer change.
+// Used by the snapshot orchestrator (what a full-sync peer pulls) and the
+// reciprocation send (the all-on map a full-sync peer asks its mirror to adopt).
+export function allSyncCategoriesOn() {
+  return Object.fromEntries(Object.keys(DEFAULT_SYNC_CATEGORIES).map((k) => [k, true]));
+}
 
 // Sync categories whose records ride the PER-RECORD push pipeline (not the 60s
 // snapshot loop), paired with the record kind autoSubscribePeerToAllRecords
 // backfills. A false→true toggle on any of these triggers an inline backfill of
 // existing local records so the user doesn't have to wait for the next
 // `peer:online` / manual sync-now. Mirror of peerSync's KIND_TO_CATEGORY
-// (inverted). `pipeline → series` bundles child issues at push time; authors +
-// mediaCollections are standalone per-record kinds with NO snapshot category, so
-// the toggle-time backfill is the ONLY place existing records get subscribed
-// short of a reconnect — omitting them here strands a user's existing authors /
-// collections until the peer next comes online.
+// (inverted). `pipeline → series` bundles child issues at push time; authors,
+// music records, and mediaCollections are standalone per-record kinds with no
+// snapshot category, so toggle-time backfill is the main path that subscribes
+// existing records short of a reconnect.
 const PER_RECORD_CATEGORY_KINDS = Object.freeze([
   ['universe', 'universe'],
   ['pipeline', 'series'],
   ['mediaCollections', 'mediaCollection'],
   ['authors', 'author'],
+  ['artists', 'artist'],
+  ['albums', 'album'],
+  ['tracks', 'track'],
+  ['creativeDirectorProjects', 'creativeDirectorProject'],
+  ['moodBoards', 'moodBoard'],
+  ['writersRoomWorks', 'writersRoomWork'],
 ]);
 
 export async function addPeer({ address, port = DEFAULT_PEER_PORT, name, host, auth }) {
@@ -274,7 +321,13 @@ export async function addPeer({ address, port = DEFAULT_PEER_PORT, name, host, a
       lastHealth: null,
       status: 'unknown',
       enabled: true,
-      syncEnabled: false,
+      // Full-sync ("mirror everything") mode. When true, every current and
+      // future sync category is implied on for this peer and a back-subscribe
+      // sweep keeps all subscribable records mirrored. New peers inherit the
+      // self-side default so a user who runs full-mirror node pairs doesn't have
+      // to flip it on every peer by hand.
+      fullSync: data.self?.defaultPeerFullSync === true,
+      syncEnabled: data.self?.defaultPeerFullSync === true,
       syncCategories: { ...DEFAULT_SYNC_CATEGORIES },
       consecutiveFailures: 0,
       nextProbeAt: null,
@@ -324,6 +377,28 @@ export async function updatePeer(id, updates) {
     if (updates.name !== undefined) peer.name = validName(updates.name, peer.name);
     if (updates.enabled !== undefined) peer.enabled = updates.enabled;
     if (updates.syncEnabled !== undefined) peer.syncEnabled = updates.syncEnabled;
+    // Full-sync ("mirror everything") toggle. A false→true flip implies every
+    // subscribable category, so back-subscribe ALL record kinds (not just the
+    // ones whose individual syncCategories bit flipped) and reciprocate so the
+    // peer mirrors us back. Enabling full-sync also implies the peer is sync-
+    // enabled — otherwise peerAllowsOutbound would gate every push off.
+    if (updates.fullSync !== undefined && updates.fullSync !== peer.fullSync) {
+      peer.fullSync = updates.fullSync === true;
+      if (peer.fullSync) {
+        peer.syncEnabled = true;
+        for (const [, kind] of PER_RECORD_CATEGORY_KINDS) turnedOnKinds.push(kind);
+        backfillPeerInstanceId = peer.instanceId || null;
+      } else {
+        // Turning full mirror off restores the per-category selection preserved
+        // underneath — recompute syncEnabled from it so a peer with no remaining
+        // enabled categories doesn't read as "sync on, nothing to sync".
+        peer.syncEnabled = Object.values(peer.syncCategories || {}).some(Boolean);
+      }
+      // Reciprocate the full-sync intent (and its all-on category view) to the
+      // peer whenever we know its identity, so a node pair converges to a mutual
+      // mirror in one round-trip.
+      if (peer.instanceId) reciprocate = true;
+    }
     if (updates.syncCategories !== undefined) {
       const prev = peer.syncCategories || DEFAULT_SYNC_CATEGORIES;
       const incoming = updates.syncCategories;
@@ -450,7 +525,15 @@ export function enqueueReciprocalSync(peerId) {
       const data = await loadData();
       const peer = data.peers.find(p => p.id === peerId);
       if (!peer?.instanceId) return { ok: false, reason: 'no-peer-identity' };
-      return requestReciprocalSync(peer, peer.syncCategories || {}).catch((err) => {
+      // For a full-sync peer send the all-on category view (its stored
+      // syncCategories can be all-false underneath — sending that raw would tell
+      // the peer to DISABLE everything, since reciprocal-sync apply is an
+      // authoritative overlay; the all-on map also makes a peer too old to
+      // understand the fullSync flag still mirror every category) plus the
+      // fullSync flag. A regular peer keeps sending its raw partial map so a
+      // category it never set stays untouched on the peer (absent ≠ false).
+      const reciprocalCategories = peer.fullSync === true ? allSyncCategoriesOn() : (peer.syncCategories || {});
+      return requestReciprocalSync(peer, reciprocalCategories, { fullSync: peer.fullSync === true }).catch((err) => {
         console.log(`⚠️ peer: reciprocal sync request failed: ${err.message}`);
         return { ok: false, reason: err.message };
       });
@@ -791,9 +874,16 @@ function sanitizeSyncCategories(input) {
  * record already matched (the echo guard — the caller never re-reciprocates,
  * but this keeps a misbehaving peer from churning our state).
  */
-export async function applyReciprocalSync(instanceId, categories) {
+export async function applyReciprocalSync(instanceId, categories, { fullSync } = {}) {
   const sanitized = sanitizeSyncCategories(categories);
-  if (!sanitized) return { changed: false, peer: null };
+  // A fullSync-only signal (peer asking us to mirror everything) is valid even
+  // if the category map didn't sanitize to anything actionable. An explicit
+  // `fullSync === false` is the peer telling us it STOPPED mirroring us, so we
+  // drop our mirror toward it too — keeping enable AND disable symmetric (a peer
+  // too old to send the field leaves it undefined, which touches nothing).
+  const wantsFullSync = fullSync === true;
+  const wantsFullSyncOff = fullSync === false;
+  if (!sanitized && !wantsFullSync && !wantsFullSyncOff) return { changed: false, peer: null };
   const turnedOnKinds = [];
   let backfillInstanceId = null;
   let changed = false;
@@ -804,14 +894,78 @@ export async function applyReciprocalSync(instanceId, categories) {
     // diverge — otherwise sanitized adding `goals:false` to a `prev` missing
     // `goals` reads as a change (`false !== undefined`) and defeats the guard.
     const prev = { ...DEFAULT_SYNC_CATEGORIES, ...(entry.syncCategories || {}) };
-    const next = { ...prev, ...sanitized };
-    // No-op when nothing actually flips — the echo guard.
-    if (Object.keys(next).every(k => next[k] === prev[k])) return entry;
-    for (const [cat, kind] of PER_RECORD_CATEGORY_KINDS) {
-      if (prev[cat] !== true && next[cat] === true) turnedOnKinds.push(kind);
+    const next = sanitized ? { ...prev, ...sanitized } : prev;
+    const fullSyncFlips = wantsFullSync && entry.fullSync !== true;
+    const fullSyncOffFlips = wantsFullSyncOff && entry.fullSync === true;
+    const categoriesFlip = !Object.keys(next).every(k => next[k] === prev[k]);
+    // Does THIS reciprocal request itself ask us to push per-record data back —
+    // full mirror, or at least one per-record category carried IN the request?
+    // Scope the consent decision to what the peer asked for this time (wantsFullSync
+    // / sanitized), NOT the preserved `next` map: a request that only reciprocates a
+    // snapshot category (or a per-record kind we merely happen to already have on
+    // locally) must not silently widen us to push every locally-enabled kind back.
+    // The request is the consent signal, so it also scopes what that consent covers.
+    const requestEnablesPushable = wantsFullSync
+      || (sanitized ? PER_RECORD_CATEGORY_KINDS.some(([cat]) => sanitized[cat] === true) : false);
+    const directions = Array.isArray(entry.directions) ? entry.directions : [];
+    // An `/announce`-created peer record is inbound-only (it announced to us; the
+    // user here never added it back), and `peerAllowsOutbound` then refuses our
+    // pushes — so the backfill below, every future per-record push, and reverse-
+    // subscription creation on incoming pushes would all silently no-op, leaving
+    // the mirror one-directional. An explicit reciprocal-sync request IS the peer
+    // asking us to mirror our data back — its consent to receive our pushes — so
+    // adopt `outbound`. Crucially this must hold even when nothing flips: a record
+    // that adopted fullSync/categories BEFORE this fix (#1636) but stayed inbound-
+    // only never back-fills, and the echo guard below would return first — so the
+    // missing direction has to participate in change detection to heal it.
+    const needsOutboundAdopt = requestEnablesPushable && directions.length > 0 && !directions.includes('outbound');
+    // No-op only when nothing flips AND there's no outbound to adopt — the echo guard.
+    if (!fullSyncFlips && !fullSyncOffFlips && !categoriesFlip && !needsOutboundAdopt) return entry;
+    if (fullSyncFlips) {
+      // Adopting full mirror. fullSync alone drives gating, so the stored
+      // per-category map is PRESERVED untouched — we do NOT apply the sender's
+      // all-on compat overlay. That keeps the user's own selection intact so a
+      // later disable restores it, exactly like the local toggle path. (Legacy
+      // receivers that don't understand fullSync fall into the category branch
+      // below and mirror via the all-on overlay instead — that's its purpose.)
+      entry.fullSync = true;
+    } else if (fullSyncOffFlips) {
+      // Dropping full mirror: clear the flag. If this SAME reciprocal request
+      // also carries a changed per-category selection, adopt it too — otherwise
+      // (the old combined branch fell through without touching categories) the
+      // peer's intended post-full-sync set would be ignored and the stale
+      // preserved map would keep mirroring the wrong categories. With no
+      // category change in the request, the preserved map stands (restore path).
+      entry.fullSync = false;
+      if (categoriesFlip) entry.syncCategories = next;
+    } else if (categoriesFlip) {
+      entry.syncCategories = next;
     }
-    entry.syncCategories = next;
-    entry.syncEnabled = Object.values(next).some(Boolean);
+    // Adopt outbound consent from the reciprocal request (see needsOutboundAdopt).
+    // Inline rather than via markDirection — that helper opens its own withData and
+    // would deadlock on this same lock; idempotent (a peer already pushing has
+    // outbound and never reaches here, so directions.push is never a duplicate).
+    if (needsOutboundAdopt) entry.directions = [...directions, 'outbound'];
+    // Recompute from the (possibly preserved) stored map — a full-sync peer is
+    // always sync-enabled; otherwise it follows the per-category selection.
+    entry.syncEnabled = entry.fullSync === true || Object.values(entry.syncCategories || {}).some(Boolean);
+    // Backfill every per-record kind whose push toward this peer just became
+    // viable: a kind that flipped false→true, all kinds when full mirror was just
+    // adopted, and — when we just adopted outbound on a previously inbound-only
+    // record — every kind already enabled (it was on but never pushed while we
+    // couldn't push outbound). autoSubscribePeerToAllRecords is idempotent, so a
+    // kind already subscribed is a harmless no-op.
+    for (const [cat, kind] of PER_RECORD_CATEGORY_KINDS) {
+      const enabledNow = entry.fullSync === true || !!(entry.syncCategories && entry.syncCategories[cat] === true);
+      const flippedOn = prev[cat] !== true && next[cat] === true;
+      // On a heal (outbound just adopted, no flip) only back-fill kinds THIS request
+      // enabled — full mirror, or the specific per-record category it carried — so a
+      // heal never pushes a kind the current request didn't authorize.
+      const requestEnablesKind = wantsFullSync || !!(sanitized && sanitized[cat] === true);
+      if ((fullSyncFlips && enabledNow) || flippedOn || (needsOutboundAdopt && enabledNow && requestEnablesKind)) {
+        turnedOnKinds.push(kind);
+      }
+    }
     if (turnedOnKinds.length > 0) backfillInstanceId = entry.instanceId || null;
     changed = true;
     instanceEvents.emit('peers:updated', data.peers);
@@ -829,7 +983,10 @@ export async function applyReciprocalSync(instanceId, categories) {
       }
     })();
   }
-  if (changed) console.log(`🔁 Reciprocal sync applied for peer ${peer.name}: ${Object.keys(sanitized).filter(k => sanitized[k]).join(',') || 'none'}`);
+  if (changed) {
+    const enabledList = sanitized ? Object.keys(sanitized).filter(k => sanitized[k]).join(',') : '';
+    console.log(`🔁 Reciprocal sync applied for peer ${peer.name}: ${peer.fullSync ? 'full-mirror' : (enabledList || 'none')}`);
+  }
   return { changed, peer };
 }
 
@@ -839,11 +996,16 @@ export async function applyReciprocalSync(instanceId, categories) {
  * peer that's offline or on an older version (404s the endpoint) just stays
  * one-directional until the next toggle. Returns `{ ok, reason }`.
  */
-export async function requestReciprocalSync(peer, categories) {
+export async function requestReciprocalSync(peer, categories, { fullSync } = {}) {
   const self = await getSelf();
   if (!self?.instanceId) return { ok: false, reason: 'no-self-identity' };
   const sanitized = sanitizeSyncCategories(categories);
-  if (!sanitized) return { ok: false, reason: 'no-categories' };
+  // Bail only when there's genuinely nothing to say: no actionable categories
+  // AND no full-sync state to communicate. A full-sync DISABLE (fullSync:false)
+  // on a peer whose stored category map is empty must still send — otherwise the
+  // remote never learns to drop its mirror. `fullSync === undefined` means the
+  // caller didn't communicate a full-sync state at all (legacy direct callers).
+  if (!sanitized && fullSync === undefined) return { ok: false, reason: 'no-categories' };
   const url = `${peerBaseUrl(peer)}/api/instances/peers/sync-categories`;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
@@ -851,11 +1013,17 @@ export async function requestReciprocalSync(peer, categories) {
     const res = await peerFetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ instanceId: self.instanceId, syncCategories: sanitized }),
+      // Always carry our current full-sync state (true OR false) so a peer new
+      // enough to understand it adopts mirror mode on enable AND drops it on
+      // disable. Older peers ignore the field; on enable they still mirror via
+      // the all-on syncCategories map we sent. syncCategories defaults to {} so
+      // the receiver's required-object schema still parses a fullSync-only send.
+      body: JSON.stringify({ instanceId: self.instanceId, syncCategories: sanitized || {}, fullSync: fullSync === true }),
       signal: controller.signal
     }, peer);
     if (res.ok) {
-      console.log(`🔁 Requested reciprocal sync from ${peer.name}: ${Object.keys(sanitized).filter(k => sanitized[k]).join(',') || 'none'}`);
+      const enabledList = sanitized ? Object.keys(sanitized).filter(k => sanitized[k]).join(',') : '';
+      console.log(`🔁 Requested reciprocal sync from ${peer.name}: ${fullSync === false ? 'full-mirror-off' : (enabledList || 'none')}`);
       return { ok: true };
     }
     // 404 = peer predates this endpoint; not an error worth surfacing loudly.

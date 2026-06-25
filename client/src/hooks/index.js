@@ -8,6 +8,7 @@
 // hook uses.
 
 // === Default-exporting hooks (re-exported as named) ===
+export { default as useAnchorReveal } from './useAnchorReveal.js';
 export { default as useCityAudio } from './useCityAudio.js';
 export { default as useAutoSizeTextarea } from './useAutoSizeTextarea.js';
 export { default as useClickOutside } from './useClickOutside.js';
@@ -19,16 +20,18 @@ export { default as useFieldDraft } from './useFieldDraft.js';
 export { default as useImageGenQueue } from './useImageGenQueue.js';
 export { default as useImageRenderSettings } from './useImageRenderSettings.js';
 export { default as useSingleImageRender } from './useSingleImageRender.js';
+export { default as useSlotInFlight } from './useSlotInFlight.js';
 export { default as useSingToScore } from './useSingToScore.js';
 export * from './useSingToScore.js';
 export { default as useSongTraining } from './useSongTraining.js';
 export { default as useMediaPreviewActions } from './useMediaPreviewActions.js';
 export { default as useKeyboardControls } from './useKeyboardControls.js';
+export { default as useKeyboardShortcuts } from './useKeyboardShortcuts.js';
+export * from './useKeyboardShortcuts.js';
 export { default as useMediaJobProgress } from './useMediaJobProgress.js';
 export * from './useMediaJobSse.js';
 export { default as useMoltworldWs } from './useMoltworldWs.js';
 export { default as useMounted } from './useMounted.js';
-export { default as useNextEvalCountdown } from './useNextEvalCountdown.js';
 export { default as usePendingListRows } from './usePendingListRows.js';
 export { default as usePopoverPosition } from './usePopoverPosition.js';
 export { default as useLocalModels } from './useLocalModels.js';

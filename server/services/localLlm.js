@@ -195,6 +195,18 @@ async function commandExists(cmd, args) {
   return execFileAsync(cmd, args, { timeout: 5_000 }).then(() => true).catch(() => false)
 }
 
+// Whether Homebrew already has the backend's formula/cask installed. Used to
+// recover from a non-zero `brew install` exit that nonetheless left the package
+// on disk (post-install cleanup/hint failures exit 1 after a successful pour).
+// `brew list` exits 0 only when the package is present, so its success IS the
+// presence check — no output parsing needed.
+async function brewPackageInstalled(backend) {
+  const args = backend === 'ollama'
+    ? ['list', '--versions', 'ollama']
+    : ['list', '--cask', '--versions', 'lm-studio']
+  return commandExists('brew', args)
+}
+
 const manager = (backend) => (backend === 'ollama' ? ollamaManager : lmStudioManager)
 
 /**
@@ -294,8 +306,21 @@ export async function installBackend(backend, onProgress = () => {}) {
   const args = backend === 'ollama' ? ['install', 'ollama'] : ['install', '--cask', 'lm-studio']
   emit(`Installing ${label} via Homebrew (this can take a few minutes)…`)
   const r = await runStreaming('brew', args, emit, BACKEND_INSTALL_TIMEOUT_MS)
-  if (!r.success) return { success: false, error: `Homebrew install failed: ${r.error}` }
-  console.log(`🍺 Installed ${label} via Homebrew`)
+  if (!r.success) {
+    // `brew install` routinely exits non-zero AFTER a successful pour — a
+    // failed `brew cleanup`, a dependency's post-install hint, or env-hint
+    // noise (e.g. Ollama's new mlx/mlx-c deps) all bubble up as exit 1 even
+    // though the formula/cask is fully installed. Treat presence-on-disk as
+    // the source of truth: if `brew list` now sees it, the install worked.
+    if (await brewPackageInstalled(backend)) {
+      console.log(`🍺 ${label} already present after non-zero brew exit — treating as installed (${r.error})`)
+      emit(`${label} is installed (Homebrew reported a non-fatal warning).`)
+    } else {
+      return { success: false, error: `Homebrew install failed: ${r.error}` }
+    }
+  } else {
+    console.log(`🍺 Installed ${label} via Homebrew`)
+  }
   if (backend === 'ollama') {
     emit('Starting Ollama as a Homebrew service…')
     const service = await ollamaManager.startPersistentService().catch((err) => ({ success: false, error: err.message }))

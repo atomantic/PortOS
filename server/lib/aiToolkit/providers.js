@@ -23,6 +23,22 @@ const execFileAsync = promisify(execFile);
 const CODEX_CONFIGURED_DEFAULT = 'codex-configured-default';
 const CODEX_MODEL_KEYS = ['defaultModel', 'lightModel', 'mediumModel', 'heavyModel'];
 const ANTIGRAVITY_MODEL_KEYS = ['defaultModel', 'lightModel', 'mediumModel', 'heavyModel'];
+const CODEX_CONTEXT_WINDOW = 1_000_000;
+const GEMINI_CONTEXT_WINDOW = 1_048_576;
+const STALE_GENERIC_CONTEXT_WINDOW = 128_000;
+
+function shouldUpgradeContextWindow(value) {
+  return value == null || Number(value) === STALE_GENERIC_CONTEXT_WINDOW;
+}
+
+function canonicalProviderContextWindow(provider) {
+  if (provider?.type !== 'cli' && provider?.type !== 'tui') return null;
+  const id = String(provider?.id || '').toLowerCase();
+  const command = String(provider?.command || '').toLowerCase();
+  if (id === 'codex' || id === 'codex-tui' || command === 'codex') return CODEX_CONTEXT_WINDOW;
+  if (id === ANTIGRAVITY_CLI_ID || id === ANTIGRAVITY_TUI_ID || command === 'agy') return GEMINI_CONTEXT_WINDOW;
+  return null;
+}
 
 // Auto-migrate legacy codex provider configs that pin a real model id
 // (e.g. "gpt-5.2") to the sentinel "codex-configured-default" so the Codex
@@ -99,6 +115,20 @@ function migrateAntigravityProviders(data) {
     }
 
     delete data.providers[mapping.legacyId];
+    changed = true;
+  }
+
+  return changed;
+}
+
+function migrateProviderContextWindows(data) {
+  if (!data?.providers) return false;
+  let changed = false;
+
+  for (const provider of Object.values(data.providers)) {
+    const contextWindow = canonicalProviderContextWindow(provider);
+    if (!contextWindow || !shouldUpgradeContextWindow(provider.contextWindow)) continue;
+    provider.contextWindow = contextWindow;
     changed = true;
   }
 
@@ -192,10 +222,12 @@ export function createProviderService(config = {}) {
 
     const migratedCodex = migrateCodexProvider(data);
     const migratedAntigravity = migrateAntigravityProviders(data);
-    if (migratedCodex || migratedAntigravity) {
+    const migratedContextWindows = migrateProviderContextWindows(data);
+    if (migratedCodex || migratedAntigravity || migratedContextWindows) {
       await atomicWrite(PROVIDERS_PATH, data);
       if (migratedCodex) console.log('🔧 Migrated codex provider config to codex-configured-default sentinel');
       if (migratedAntigravity) console.log('🔧 Migrated Gemini provider config to Antigravity CLI (agy)');
+      if (migratedContextWindows) console.log('🔧 Migrated provider context windows to current canonical values');
     }
 
     return data;

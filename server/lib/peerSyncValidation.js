@@ -15,7 +15,7 @@ import { catalogSyncIngredientSchema, catalogSyncRefSchema } from './catalogVali
 // subscriptions target another PortOS instance over Tailnet.
 export const peerSubscribeSchema = z.object({
   peerId: z.string().trim().min(1).max(120),
-  recordKind: z.enum(['universe', 'series', 'mediaCollection', 'author']),
+  recordKind: z.enum(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard', 'writersRoomWork']),
   recordId: z.string().trim().min(1).max(120),
 }).strict();
 
@@ -38,7 +38,12 @@ const peerAssetManifestEntrySchema = z.discriminatedUnion('kind', [
   }).strict(),
   z.object({
     filename: z.string().trim().min(1).max(255),
-    kind: z.enum(['image-ref', 'video']),
+    // `audio` (#1566) joins the per-record kinds (image-ref/video/music) for the
+    // standalone media-library manifest. Like video/music it carries no gen-params
+    // sidecar, so it rides the non-image branch (`.strict()` rejects a stray
+    // sidecarSha256). The per-record push pipeline never emits `audio`; accepting
+    // it here is harmless and keeps one shared entry schema across both manifests.
+    kind: z.enum(['image-ref', 'video', 'music', 'audio']),
     sha256: hex64.optional(),
   }).strict(),
 ]);
@@ -169,23 +174,97 @@ const authorPushSchema = z.object({
   kind: z.literal('author'),
   ...peerSyncPushBase,
 }).strict();
+const artistPushSchema = z.object({
+  kind: z.literal('artist'),
+  ...peerSyncPushBase,
+}).strict();
+const albumPushSchema = z.object({
+  kind: z.literal('album'),
+  ...peerSyncPushBase,
+}).strict();
+const trackPushSchema = z.object({
+  kind: z.literal('track'),
+  ...peerSyncPushBase,
+}).strict();
+// Creative Director projects (#1564) push the bare record + the project's
+// `startingImageFile` in the asset manifest — no bundled children/linked
+// collection/catalog rows (scene renders ride the project's linked media
+// collection, federated separately), so the base shape alone (`.strict()`
+// rejects smuggled bundle keys, same posture as author/mediaCollection).
+const creativeDirectorProjectPushSchema = z.object({
+  kind: z.literal('creativeDirectorProject'),
+  ...peerSyncPushBase,
+}).strict();
+// Mood boards (#1564) push the bare record + any local image bytes its items[]
+// reference in the asset manifest — no bundled children/linked collection rows,
+// so the base shape alone suffices (`.strict()` rejects smuggled bundle keys,
+// same posture as author/creativeDirectorProject).
+const moodBoardPushSchema = z.object({
+  kind: z.literal('moodBoard'),
+  ...peerSyncPushBase,
+}).strict();
+// Writers Room works (#1565) push the bare work manifest (the decomposed
+// draft-version metadata rides inside the record's `drafts[]`). The file-primary
+// `.md` prose bodies do NOT ride `assetManifest` (which keys on a flat basename +
+// single dir per kind) — they ride a dedicated `draftBodyManifest` of per-draft
+// SHA-256 hashes the receiver diffs + pulls by nested `works/<workId>/drafts/<draftId>.md`
+// path. workId/draftId get a second-pass `WORK_ID_RE`/`DRAFT_ID_RE` scrub in the
+// service before any FS op; this schema just caps shape. `.strict()` rejects
+// smuggled bundle keys (same posture as author/creativeDirectorProject/moodBoard).
+const peerDraftBodyManifestEntrySchema = z.object({
+  kind: z.literal('writers-room-draft'),
+  workId: z.string().trim().min(1).max(120),
+  draftId: z.string().trim().min(1).max(120),
+  sha256: hex64,
+}).strict();
+const draftBodyManifestField = {
+  draftBodyManifest: z.array(peerDraftBodyManifestEntrySchema).max(2000).optional(),
+};
+const writersRoomWorkPushSchema = z.object({
+  kind: z.literal('writersRoomWork'),
+  ...peerSyncPushBase,
+  ...draftBodyManifestField,
+}).strict();
 export const peerSyncPushSchema = z.discriminatedUnion('kind', [
   universePushSchema,
   seriesPushSchema,
   mediaCollectionPushSchema,
   authorPushSchema,
+  artistPushSchema,
+  albumPushSchema,
+  trackPushSchema,
+  creativeDirectorProjectPushSchema,
+  moodBoardPushSchema,
+  writersRoomWorkPushSchema,
 ]);
 
 // Manual sync action schemas — used by POST /sync-record, /sync-now, /pull-metadata.
 
 export const peerSyncRecordSchema = z.object({
   peerId: z.string().trim().min(1).max(120),
-  recordKind: z.enum(['universe', 'series', 'mediaCollection', 'author']),
+  recordKind: z.enum(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard', 'writersRoomWork']),
   recordId: z.string().trim().min(1).max(200),
 }).strict();
 
 export const peerSyncNowSchema = z.object({
   peerId: z.string().trim().min(1).max(120),
+}).strict();
+
+// Standalone media-library manifest the SENDER advertises at
+// GET /api/peer-sync/library-manifest (#1566). A full-sync receiver fetches it,
+// validates it through this schema, then diffs `assets` vs local disk and
+// receiver-pulls the missing bytes. Reuses `peerAssetManifestEntrySchema` (now
+// incl. `audio`) so the wire shape stays identical to the per-record manifest.
+//
+// `assets` is capped well above the per-record manifest (a whole library is far
+// larger than one record's refs); the sender logs + truncates beyond the cap
+// rather than shipping an unbounded list. `manifestHash` lets the receiver
+// short-circuit an unchanged library without diffing every entry. `.strict()`
+// so a malformed envelope is rejected at the boundary.
+export const peerLibraryManifestSchema = z.object({
+  schemaVersion: z.number().int().min(0).max(1_000_000),
+  manifestHash: hex64,
+  assets: z.array(peerAssetManifestEntrySchema).max(100_000),
 }).strict();
 
 export const peerPullMetadataSchema = z.object({
@@ -196,4 +275,3 @@ export const peerPullMetadataSchema = z.object({
   // manifest-entry filename handling.
   filenames: z.array(z.string().trim().min(1).max(300)).max(5000),
 }).strict();
-

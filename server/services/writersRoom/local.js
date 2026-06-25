@@ -18,8 +18,10 @@ import { randomUUID, createHash } from 'crypto';
 import { readFile, rm } from 'fs/promises';
 import { atomicWrite, ensureDir } from '../../lib/fileUtils.js';
 import { WORK_KINDS, WORK_STATUSES } from '../../lib/writersRoomPresets.js';
+import { emitRecordUpdated, emitRecordDeleted, autoSubscribeRecordToAllPeers } from '../sharing/recordEvents.js';
 import { nowIso, badRequest, notFound, wrWorkDir, wrDraftPath } from './_shared.js';
 import { writersRoomStore } from './store.js';
+import { WRITERS_ROOM_WORK_KIND } from './syncLogic.js';
 
 const store = () => writersRoomStore();
 
@@ -136,9 +138,20 @@ async function loadManifest(workId) {
   return store().readWork(workId);
 }
 
-async function saveManifest(workId, manifest) {
+// Announce a persisted work change to the per-record peer-sync pipeline (#1565)
+// so any existing subscription pushes the new state (+ its draft-body manifest).
+// Routed through the recordEvents subscription adapter (a no-op until peerSync
+// registers it at boot) so this store doesn't import peerSync — peerSync
+// statically imports mergeWorksFromSync from writersRoom/sync.js, so importing
+// it back would close a load-order cycle. Mirrors creativeDirector/local.js.
+//
+// `announce: false` opts the hot-path live-mode usage-counter writes out of a
+// push (they fire once per suggest call) — the bumped counter rides the next
+// structural push, exactly as Creative Director's recordRun does NOT emit.
+async function saveManifest(workId, manifest, { announce = true } = {}) {
   await ensureDir(`${wrWorkDir(workId)}/drafts`);
   await store().writeWork(manifest);
+  if (announce) emitRecordUpdated(WRITERS_ROOM_WORK_KIND, workId);
 }
 
 // Lazy-import to break a circular dep (mediaCollections doesn't import us, but
@@ -245,6 +258,9 @@ export async function createWork({ folderId = null, title, kind = 'short-story' 
     updatedAt: now,
   };
   await saveManifest(id, manifest);
+  // Auto-subscribe every writersRoomWorks-enabled peer so brand-new works (and
+  // their later tombstones) propagate without waiting for a reconnect (#1565).
+  autoSubscribeRecordToAllPeers(WRITERS_ROOM_WORK_KIND, id).catch(() => {});
   return manifest;
 }
 
@@ -384,7 +400,12 @@ export async function recordLiveModeUsage(id) {
   const today = utcDayKey();
   const count = live.usage.date === today ? live.usage.count + 1 : 1;
   const nextLive = { ...live, usage: { date: today, count } };
-  await saveManifest(id, { ...manifest, liveMode: nextLive, updatedAt: nowIso() });
+  // Do NOT bump updatedAt: this counter is a local-only daily budget (never
+  // announced, #1565). updatedAt is the federation LWW key, so advancing it here
+  // would let a local counter bump on one peer win LWW over a real manuscript
+  // edit pushed from another — silently dropping the edit. Preserving updatedAt
+  // keeps the counter local without disturbing the merge order.
+  await saveManifest(id, { ...manifest, liveMode: nextLive }, { announce: false });
   return nextLive;
 }
 
@@ -402,7 +423,9 @@ export async function recordLiveModeRenderUsage(id) {
   const today = utcDayKey();
   const count = live.renderUsage.date === today ? live.renderUsage.count + 1 : 1;
   const nextLive = { ...live, renderUsage: { date: today, count } };
-  await saveManifest(id, { ...manifest, liveMode: nextLive, updatedAt: nowIso() });
+  // Same as recordLiveModeUsage above: a local-only render-budget bump must not
+  // advance the federation LWW key (updatedAt) and risk dropping a peer's edit.
+  await saveManifest(id, { ...manifest, liveMode: nextLive }, { announce: false });
   return nextLive;
 }
 
@@ -411,18 +434,32 @@ export async function deleteWork(id) {
   // silently succeed on a non-existent dir and the user gets no signal.
   // Tolerate CORRUPTED_MANIFEST so a user can recover from on-disk corruption
   // by deleting the work via the API/UI instead of resorting to `rm -rf`.
+  let corrupt = false;
   await getWork(id).catch((err) => {
     if (err?.code === 'CORRUPTED_MANIFEST') {
       console.warn(`⚠️  wr: deleting work ${id} despite corrupted manifest`);
+      corrupt = true;
       return;
     }
     throw err;
   });
-  // Drop the metadata rows (no-op on the file backend, where the manifest lives
-  // in the work dir the rm below removes) AND rm the on-disk dir holding the
-  // file-primary draft .md bodies.
+  if (corrupt) {
+    // A tombstone needs a parseable manifest to soft-delete + federate, but a
+    // corrupt manifest can't be sanitized for the wire anyway (sanitizeWorkForSync
+    // would drop it), so it was never syncable. Hard-remove the dir so the API's
+    // "delete a broken work to recover" path still works (the soft-delete store
+    // call would otherwise no-op on the unreadable manifest and strand it).
+    await rm(wrWorkDir(id), { recursive: true, force: true });
+    return { ok: true };
+  }
+  // Soft-delete tombstone (#1565) so the deletion federates and an out-of-date
+  // peer can't resurrect the work via the LWW merge. The work row/manifest + its
+  // draft rows + the on-disk .md bodies all stay until tombstone GC hard-prunes
+  // them (sync.js pruneTombstonedWorks). The record drops out of every user-facing
+  // read immediately (readWork/listWorks filter `deleted`).
   await store().deleteWork(id);
-  await rm(wrWorkDir(id), { recursive: true, force: true });
+  // Push the tombstone to subscribed peers immediately.
+  emitRecordDeleted(WRITERS_ROOM_WORK_KIND, id);
   return { ok: true };
 }
 

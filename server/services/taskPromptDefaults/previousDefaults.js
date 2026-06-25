@@ -1250,6 +1250,127 @@ For each reference above:
   // empty list so the auto-upgrade machinery has an entry to consult and the
   // next prompt revision just appends the v1 body here.
   'pr-watcher': [],
+  // claim-issue-gitlab v1 default — GitLab sibling of claim-issue v2; did NOT
+  // tag un-actionable issues `needs-input`, so a perpetual drain would re-pick
+  // an ambiguous issue forever. Superseded by v2 (adds needs-input tagging in
+  // Phase 3). Kept so a stored v1 prompt auto-upgrades.
+  'claim-issue-gitlab': [
+    `[Claim Issue: {appName}] Claim and ship the next open GitLab issue
+
+Pick the next available unclaimed open GitLab issue, **create your own worktree at \`claim/issue-<num>\`**, implement the fix, ship a merge request (MR) that closes the issue, and clean up. This is the \`/claim --issues\` flow for GitLab — same in-flight scan, same branch naming, same no-local-merge cleanup, but the work source is the repo's **GitLab** issue tracker and the forge CLI is \`glab\` (not \`gh\`). **YOU pick the issue in Phase 1 — the scheduler does not reserve one for you.** Picking at execution time and immediately claiming (worktree + assignee + label) **narrows** the window for two concurrent runs to collide on the same issue — it does NOT eliminate it. Do NOT modify files in the source repo directly; ALL editing happens inside the worktree you create.
+
+{issueAuthorFilter}
+
+**How claiming works.** An issue is "in flight" when its number appears as the issue-position segment in either a \`claim/issue-<num>\` ref (the human/TUI pattern) or a \`cos/<task>/issue-<num>/<agent>\` ref (the CoS sub-agent pattern) across local branches, remote branches, or open MR source-branch refs — OR the issue is already assigned to someone OR carries an \`in-progress\` label. The \`claim/issue-<num>\` branch + the assignee/\`in-progress\` markers you set ARE the claim, visible to every other agent (including parallel machines).
+
+## Phase 1 — Pick the target issue
+
+Run steps 1–5 in order.
+
+1. cd into the repo root ({repoPath}) and confirm GitLab is the forge and \`glab\` is authenticated: \`glab auth status\` and \`glab repo view\`. If \`glab\` is not authenticated or the remote is not GitLab, exit cleanly — this task only works against GitLab issue trackers.
+2. List candidate open issues, honoring the author filter described above. Fetch a JSON page and order **oldest-first** (GitLab returns newest-first by default; sort client-side by \`created_at\` since the page is bounded):
+   \`\`\`bash
+   git fetch --prune 2>/dev/null
+   # Owner-only mode (default): add  --author <owner>  (resolve <owner> from the project namespace).
+   glab issue list --per-page 100 -F json
+   # Any-author mode: run the SAME command WITHOUT --author.
+   \`\`\`
+3. Build the in-flight set. Collect every branch/MR source ref:
+   \`\`\`bash
+   git branch -a --no-color --format='%(refname:short)'
+   glab mr list --per-page 100 -F json   # read each MR's source_branch
+   \`\`\`
+   For each ref (after stripping any leading \`origin/\` prefix), extract the issue number **only when the ref matches** \`claim/issue-<num>\` (number after \`claim/issue-\`) or \`cos/<task>/issue-<num>/<agent>\` (the \`issue-<num>\` third segment). Do NOT flag an issue just because its bare number appears elsewhere in a ref.
+4. **Pick the target issue:** walk the candidate list oldest-first and pick the FIRST issue where ALL of the following are true:
+   - Its number (\`iid\`) is NOT in the in-flight set.
+   - It has NO assignees (an assignee means another machine/human already claimed it).
+   - It does NOT carry any of these blocking labels: \`in-progress\`, \`blocked\`, \`needs-input\`, \`future\`, \`wontfix\`, \`question\`, \`discussion\`.
+   - It is NOT a tracking/umbrella **epic** — recognized by an \`epic\` label OR a title ending in "(epic)". Leave epics for a human to split. **The bare \`plan\` label is NOT a skip signal** — it marks the claimable queue, not a blocker.
+5. **If no eligible issue exists**, exit cleanly — an empty actionable queue is a healthy state, not a failure.
+
+Capture the issue number (GitLab \`iid\`) as \`NUM\`, its title, and its full description — you'll reuse them in the MR and the \`Closes #<num>\` line.
+
+## Phase 2 — Claim (worktree + markers)
+
+Detect the default branch first (forge-agnostic), then create the worktree on \`claim/issue-<num>\` and set the cross-machine claim markers. Do all editing inside the worktree, NEVER in the source repo's working tree.
+
+\`\`\`bash
+NUM=<picked-number>
+DEFAULT_BRANCH="$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's@^origin/@@')"
+DEFAULT_BRANCH="\${DEFAULT_BRANCH:-main}"
+WORKTREE="data/cos/worktrees/claim-issue-\${NUM}"
+mkdir -p data/cos/worktrees
+git fetch origin "\${DEFAULT_BRANCH}"
+git worktree add -b "claim/issue-\${NUM}" "\${WORKTREE}" "origin/\${DEFAULT_BRANCH}"
+# Cross-machine claim markers (best-effort — do not abort the run if these fail).
+# Resolve your own username first — glab's --assignee wants a username (the
+# \`@me\` gh-ism isn't universally supported), falling back to @me if the lookup fails:
+ME="$(glab api user 2>/dev/null | sed -n 's/.*"username":"\\([^"]*\\)".*/\\1/p')"
+glab issue update "\${NUM}" --assignee "\${ME:-@me}" 2>/dev/null
+glab issue update "\${NUM}" --label in-progress 2>/dev/null
+cd "\${WORKTREE}"
+\`\`\`
+
+**If \`git worktree add\` fails because the \`claim/issue-<num>\` branch already exists** (a concurrent run won the race), do NOT force or reuse it — that branch IS another run's claim. Treat the issue as in-flight, return to Phase 1, and pick the next eligible issue; if nothing else is eligible, exit cleanly. Stash \`WORKTREE\` — you'll need it for Phase 7 cleanup.
+
+## Phase 3 — Verify still valid
+
+Read the full issue (\`glab issue view "\${NUM}"\`) before writing any code. **If ANY of these are true, release the claim and re-pick** (remove the assignee with \`glab issue update "\${NUM}" --unassign\` + the \`in-progress\` label with \`--unlabel in-progress\`, remove the worktree, return to Phase 1):
+
+- A note indicates the issue was already fixed, superseded, or closed-then-reopened-for-tracking.
+- The request references a function, file, or component that no longer exists (\`grep -rn\` the named identifiers — if they're gone, the issue is stale).
+- The work would require touching files far outside the issue's scope (>5 unrelated files).
+- The requirements are too ambiguous to implement without user clarification.
+
+If too ambiguous or large, post a brief note (\`glab issue note "\${NUM}" -m "..."\`), release the markers (\`glab issue update "\${NUM}" --unassign --unlabel in-progress\`), remove the worktree, and exit cleanly so a human can refine it. Do NOT leave a half-claimed issue.
+
+## Phase 4 — Implement
+
+Write the code, tests, and any docs the issue requires. Follow the repo conventions in CLAUDE.md. Run the relevant test suite as you go.
+
+**Roll discovered backbone work INTO this MR** — small supporting helpers, refactors, and tests that the fix depends on belong here, not a follow-up. Only defer genuinely-large adjacent work; when you do, file a NEW issue (\`glab issue create\`) tagged \`plan\` that references this one (\`Related to #<num>\`).
+
+Commit with a conventional message referencing the issue:
+
+\`\`\`
+<type>: <one-line description> (#<num>)
+\`\`\`
+
+## Phase 5 — Open the merge request
+
+This flow ships GitLab issues — it does NOT touch PLAN.md. The audit trail is the merged MR + \`git log\`.
+
+1. If the repo maintains a changelog (\`.changelog/NEXT.md\`, or a \`## Unreleased\` section in \`CHANGELOG.md\`), append a one-line entry mirroring the repo's existing prose style. If no changelog convention exists, skip this.
+2. Push the branch: \`git push -u origin "claim/issue-\${NUM}"\`
+3. Open the MR with \`glab mr create --fill --source-branch "claim/issue-\${NUM}" --target-branch "\${DEFAULT_BRANCH}" --yes\`. The MR description MUST contain \`Closes #\${NUM}\` so the merge auto-closes the issue. Summarize what shipped + a short test plan (pass \`--description\` if \`--fill\` didn't capture it).
+
+## Phase 6 — Review and ship
+
+The configured reviewers for this task, in order, are \`{reviewers}\`. \`claude\` / \`codex\` / \`antigravity\` invoke a local-CLI critique. (\`copilot\` is GitHub-only — skip it on GitLab.) When more than one is configured, run each in the listed order before merging.
+
+1. **Self-review your diff for reuse, quality, and efficiency** (DRY, dead code, naming, simpler equivalents, missed edge cases) and fix findings in the same diff BEFORE the reviewers run. Claude Code runs this as the three-agent \`/simplify\` pass; on other CLIs, do the equivalent review by hand.
+2. **Wait for each configured CLI reviewer's findings BEFORE merging.** For \`claude\` / \`codex\` / \`antigravity\`, invoke that CLI headless against the MR diff, apply fixes, run tests, re-push — capped at 3 rounds — then advance to the next reviewer.
+
+   **Review-stuck cleanup** (after 3 unresolved rounds): post one summarizing MR note (\`glab mr note\`), then run the worktree-only cleanup (\`cd {repoPath} && git worktree remove "\${WORKTREE}"\`). Leave the local branch, the open MR, the assignee, and the \`in-progress\` label in place so the human picks up cold. Do NOT run Phase 7.
+3. **Merge via \`glab mr merge\`** — NEVER a local \`git merge\`. \`glab mr merge\` takes the **MR IID**, which is NOT the issue number — resolve it from the source branch first, then merge by that IID:
+   \`\`\`bash
+   MR_IID="$(glab mr list --source-branch "claim/issue-\${NUM}" -F json | sed -n 's/.*"iid":\\([0-9]\\{1,\\}\\).*/\\1/p' | head -1)"
+   glab mr merge "\${MR_IID}" --yes --remove-source-branch \\
+     || glab mr merge "\${MR_IID}" --yes --squash --remove-source-branch
+   \`\`\`
+
+## Phase 7 — Clean up (post-merge ONLY)
+
+This phase runs only after the MR merged via Phase 6. From the **source repo** (cd back to {repoPath} first):
+
+\`\`\`bash
+cd {repoPath}
+git worktree remove "\${WORKTREE}"
+git branch -d "claim/issue-\${NUM}"
+\`\`\`
+
+If \`git branch -d\` refuses, use \`-D\` — the MR is confirmed merged, so the local branch is redundant. Verify the issue closed (the \`Closes #\${NUM}\` line auto-closes it on merge to the default branch); if it's still open, close it manually (\`glab issue close "\${NUM}"\`) and remove the \`in-progress\` label (\`glab issue update "\${NUM}" --unlabel in-progress\`). **Do NOT \`git pull\`** from inside this phase — the work is already integrated on GitLab via \`glab mr merge\`; leave the user's working tree alone.`
+  ],
   // claim-issue v1 default — excluded every `plan`-labelled issue (the entire
   // migrated backlog), so auto-pick always reported an empty queue. Superseded
   // by v2, which skips only true epics. Kept so a stored v1 prompt auto-upgrades.
@@ -1371,5 +1492,906 @@ git branch -d "claim/issue-\${NUM}"
 \`\`\`
 
 If \`git branch -d\` refuses (the PR squash-merged on GitHub but local doesn't know yet), use \`-D\` — the PR is confirmed merged, so the local branch is redundant. Verify the issue closed (the \`Closes #\${NUM}\` trailer auto-closes it on merge); if it's still open, close it manually (\`gh issue close "\${NUM}"\`) and remove the \`in-progress\` label (\`gh issue edit "\${NUM}" --remove-label in-progress\`). **Do NOT \`git pull\`** from inside this phase — the work is already integrated on GitHub via \`gh pr merge\`; leave the user's working tree alone.`,
+    // claim-issue v2 default — skipped only true epics but did NOT tag
+    // un-actionable issues, so an autonomous drain would re-pick an ambiguous
+    // issue forever. Superseded by v3, which adds `needs-input` tagging in
+    // Phase 3. Kept so a stored v2 prompt auto-upgrades.
+    `[Claim Issue: {appName}] Claim and ship the next open GitHub issue
+
+Pick the next available unclaimed open GitHub issue, **create your own worktree at \`claim/issue-<num>\`**, implement the fix, ship a PR that closes the issue, and clean up. This is the \`/claim --issues\` flow — same in-flight scan, same branch naming, same no-local-merge cleanup, but the work source is the repo's GitHub issue tracker instead of PLAN.md. **YOU pick the issue in Phase 1 — the scheduler does not reserve one for you.** Picking at execution time and immediately claiming (worktree + assignee + label) **narrows** the window for two concurrent runs to collide on the same issue — it does NOT eliminate it. Do NOT modify files in the source repo directly; ALL editing happens inside the worktree you create.
+
+{issueAuthorFilter}
+
+**How claiming works.** An issue is "in flight" when its number appears as the issue-position segment in either a \`claim/issue-<num>\` ref (the human/TUI pattern) or a \`cos/<task>/issue-<num>/<agent>\` ref (the CoS sub-agent pattern) across local branches, remote branches, or open PR head refs — OR the issue is already assigned to someone OR carries an \`in-progress\` label. The \`claim/issue-<num>\` branch + the assignee/\`in-progress\` markers you set ARE the claim, visible to every other agent (including parallel machines) and to the human running \`/claim --issues\` in a TUI.
+
+## Phase 1 — Pick the target issue
+
+Run steps 1–5 in order.
+
+1. cd into the repo root ({repoPath}) and confirm GitHub is the forge: \`gh repo view --json nameWithOwner -q .nameWithOwner\`. If \`gh\` is not authenticated or the remote is not GitHub, exit cleanly — this task only works against GitHub issue trackers.
+2. List candidate open issues **oldest-first**, honoring the author filter described above. \`gh issue list\` defaults to newest-first, so order on the SERVER with \`--search "sort:created-asc"\` — a client-side \`jq\` sort would only reorder the already-truncated newest page, dropping the true oldest issues on repos with more than \`--limit\` open issues:
+   \`\`\`bash
+   git fetch --prune 2>/dev/null
+   # Author filter (see the block above). Pass --author as a QUOTED single token —
+   # do NOT pack flag+value into one variable: a bare \`$VAR\` holding "--author x"
+   # is a single argv token in zsh (no word-splitting) and gh rejects it.
+   #   Owner-only mode (default): resolve the owner, then add  --author "$OWNER"
+   OWNER="$(gh repo view --json owner -q .owner.login)"
+   gh issue list --state open --author "$OWNER" --search "sort:created-asc" --json number,title,author,assignees,labels,createdAt --limit 100
+   #   Any-author mode: run the SAME command WITHOUT the --author "$OWNER" flag.
+   \`\`\`
+3. Build the in-flight set. Collect every branch/PR ref:
+   \`\`\`bash
+   git branch -a --no-color --format='%(refname:short)'
+   gh pr list --state open --json headRefName -q '.[].headRefName' 2>/dev/null
+   \`\`\`
+   For each ref (after stripping any leading \`origin/\` / \`upstream/\` prefix), extract the issue number **only when the ref matches** \`claim/issue-<num>\` (number after \`claim/issue-\`) or \`cos/<task>/issue-<num>/<agent>\` (the \`issue-<num>\` third segment). Do NOT flag an issue just because its bare number appears elsewhere in a ref.
+4. **Pick the target issue:** walk the candidate list oldest-first and pick the FIRST issue where ALL of the following are true:
+   - Its number is NOT in the in-flight set.
+   - It has NO assignees (an assignee means another machine/human already claimed it).
+   - It does NOT carry any of these blocking labels: \`in-progress\`, \`blocked\`, \`needs-input\`, \`future\`, \`wontfix\`, \`question\`, \`discussion\`.
+   - It is NOT a tracking/umbrella **epic** — recognized by an \`epic\` label OR a title ending in "(epic)". An epic needs per-slice partial-ship (each slice its own PR, \`Refs\` not \`Closes\`), so leave it for a human or \`/claim --issues\` to split — don't claim it wholesale here. **The bare \`plan\` label is NOT a skip signal.** \`do-replan --issues\` (and \`/do:replan --issues\`) labels EVERY migrated backlog item \`plan\` — atomic bug-fixes included — so \`plan\` marks the *claimable* queue exactly as \`/do:next --issues\` treats it (it is that flow's required candidate label). Skipping all \`plan\` issues would discard the entire actionable backlog and falsely report an empty queue.
+5. **If no eligible issue exists**, exit cleanly — an empty actionable queue is a healthy state, not a failure.
+
+Capture the issue number as \`NUM\`, its title, and its full body — you'll reuse them in the PR and the \`Closes #<num>\` trailer.
+
+## Phase 2 — Claim (worktree + markers)
+
+Create the worktree on a branch named \`claim/issue-<num>\`, then set the cross-machine claim markers. Do all editing inside the worktree, NEVER in the source repo's working tree.
+
+\`\`\`bash
+NUM=<picked-number>
+WORKTREE="data/cos/worktrees/claim-issue-\${NUM}"
+mkdir -p data/cos/worktrees
+git fetch origin main
+git worktree add -b "claim/issue-\${NUM}" "\${WORKTREE}" origin/main
+# Cross-machine claim markers (best-effort — do not abort the run if these fail):
+gh issue edit "\${NUM}" --add-assignee @me 2>/dev/null
+gh issue edit "\${NUM}" --add-label in-progress 2>/dev/null
+cd "\${WORKTREE}"
+\`\`\`
+
+(If the repo's default branch is not \`main\`, detect it with \`gh repo view --json defaultBranchRef -q .defaultBranchRef.name\` and substitute it for \`main\` above.)
+
+**If \`git worktree add\` fails because the \`claim/issue-<num>\` branch already exists** (a concurrent run won the race, or a remote claim branch is now visible), do NOT force or reuse it — that branch IS another run's claim. Treat the issue as in-flight, return to Phase 1, and pick the next eligible issue; if nothing else is eligible, exit cleanly. Stash \`WORKTREE\` — you'll need it for Phase 7 cleanup.
+
+## Phase 3 — Verify still valid
+
+Read the full issue (\`gh issue view "\${NUM}" --comments\`) before writing any code. **If ANY of these are true, release the claim and re-pick** (remove the assignee + \`in-progress\` label you set, remove the worktree, return to Phase 1):
+
+- A comment indicates the issue was already fixed, superseded, or closed-then-reopened-for-tracking.
+- The request references a function, file, or component that no longer exists (\`grep -rn\` the named identifiers — if they're gone, the issue is stale).
+- The work would require touching files far outside the issue's scope (>5 unrelated files), suggesting it's bigger than a single claim.
+- The requirements are too ambiguous to implement without user clarification.
+
+If the issue is too ambiguous or large, post a brief comment on the issue explaining what's blocking (\`gh issue comment "\${NUM}" --body "..."\`), release the markers (\`gh issue edit "\${NUM}" --remove-assignee @me --remove-label in-progress\`), remove the worktree, and exit cleanly so a human can refine it. Do NOT leave a half-claimed issue.
+
+## Phase 4 — Implement
+
+Write the code, tests, and any docs the issue requires. Follow the repo conventions in CLAUDE.md (no try/catch in route handlers, functional programming, Zod validation, Tailwind tokens, reactive UI updates). Run the relevant test suite as you go.
+
+**Roll discovered backbone work INTO this PR** — small supporting helpers, refactors, and tests that the fix depends on belong here, not a follow-up. Only defer genuinely-large adjacent work; when you do, file a NEW issue (\`gh issue create\`) tagged \`plan\` that references this one (\`Related to #<num>\`) rather than appending to PLAN.md.
+
+Commit with a conventional message referencing the issue so the trail is grep-able:
+
+\`\`\`
+<type>: <one-line description> (#<num>)
+\`\`\`
+
+## Phase 5 — Open the PR
+
+This flow ships GitHub issues — it does NOT touch PLAN.md. The audit trail is the merged PR + \`git log\`.
+
+1. If the repo maintains a changelog (\`.changelog/NEXT.md\`, or a \`## Unreleased\` section in \`CHANGELOG.md\`), append a one-line entry mirroring the repo's existing prose style. If no changelog convention exists, skip this — the PR + commit history is the record.
+2. Push the branch: \`git push -u origin "claim/issue-\${NUM}"\`
+3. Open the PR with \`gh pr create\`. The body MUST contain \`Closes #\${NUM}\` so the merge auto-closes the issue. Summarize what shipped + a short test plan.
+
+## Phase 6 — Review and ship
+
+The configured reviewers for this task, in order, are \`{reviewers}\`. \`copilot\` waits for GitHub's auto-review; \`claude\` / \`codex\` / \`antigravity\` invoke a local-CLI critique. When more than one is configured, run each in the listed order before merging — this mirrors slashdo's \`/do:pr --review-with <list>\`.
+
+1. **Self-review your diff for reuse, quality, and efficiency** (DRY, dead code, naming, simpler equivalents, missed edge cases) and fix findings in the same diff BEFORE the reviewers run. Claude Code runs this as the three-agent \`/simplify\` pass; on other CLIs, do the equivalent review by hand.
+2. **Wait for each configured reviewer's findings BEFORE merging.** \`gh pr merge --auto\` only waits for required status checks; it does NOT wait for code-review feedback. Run the reviewers in the listed order (\`{reviewers}\`); for \`copilot\`, poll up to 10 minutes for its review and address \`COMMENTED\` / \`CHANGES_REQUESTED\` findings (commit + push inside the worktree, re-poll), capped at 3 rounds. For \`claude\` / \`codex\` / \`antigravity\`, invoke that CLI headless against the PR diff, apply fixes, run tests, re-push — capped at 3 rounds — then advance to the next reviewer.
+
+   **Review-stuck cleanup** (after 3 unresolved rounds): post one summarizing PR comment (\`gh pr comment\`), then run the worktree-only cleanup (\`cd {repoPath} && git worktree remove "\${WORKTREE}"\`). Leave the local branch, the open PR, the assignee, and the \`in-progress\` label in place so the human picks up cold. Do NOT run Phase 7.
+3. **Merge via \`gh pr merge\`** — NEVER a local \`git merge\`. The repo may allow only one method, so try in order and use the first that succeeds:
+   \`\`\`bash
+   gh pr merge <pr-num> --auto --delete-branch \\
+     || gh pr merge <pr-num> --merge --delete-branch \\
+     || gh pr merge <pr-num> --squash --delete-branch \\
+     || gh pr merge <pr-num> --rebase --delete-branch
+   \`\`\`
+
+## Phase 7 — Clean up (post-merge ONLY)
+
+This phase runs only after the PR merged via Phase 6. From the **source repo** (cd back to {repoPath} first):
+
+\`\`\`bash
+cd {repoPath}
+git worktree remove "\${WORKTREE}"
+git branch -d "claim/issue-\${NUM}"
+\`\`\`
+
+If \`git branch -d\` refuses (the PR squash-merged on GitHub but local doesn't know yet), use \`-D\` — the PR is confirmed merged, so the local branch is redundant. Verify the issue closed (the \`Closes #\${NUM}\` trailer auto-closes it on merge); if it's still open, close it manually (\`gh issue close "\${NUM}"\`) and remove the \`in-progress\` label (\`gh issue edit "\${NUM}" --remove-label in-progress\`). **Do NOT \`git pull\`** from inside this phase — the work is already integrated on GitHub via \`gh pr merge\`; leave the user's working tree alone.`
+  ],
+  // Basic self-improvement tasks: prior defaults that hardcoded the target app as
+  // "PortOS" (and, for some, http://localhost:5555) plus a couple of intermediate
+  // generic revisions. Listing them here lets loadSchedule recognize a stored
+  // pre-genericization prompt as a known default — so it auto-upgrades to the
+  // current {appName} body instead of being treated as a user customization. The
+  // brief Feb-2026 `${PORTOS_UI_URL}`-interpolated variants are intentionally
+  // omitted: they were never released (≈51 min on main) and resolve per-install.
+  'security': [
+    // prior default — app name hardcoded as "PortOS"
+    `[Self-Improvement] Security Audit
+
+Analyze PortOS codebase for security vulnerabilities:
+
+1. Review server/routes/*.js for:
+   - Command injection in exec/spawn calls
+   - Path traversal in file operations
+   - Missing input validation
+   - XSS in rendered content
+
+2. Review server/services/*.js for:
+   - Unsafe eval() or Function()
+   - Hardcoded credentials
+   - SQL/NoSQL injection
+
+3. Review client/src/ for:
+   - XSS vulnerabilities in React
+   - Sensitive data in localStorage
+   - CSRF protection
+
+4. Check server/lib/commandAllowlist.js is comprehensive
+
+Fix any vulnerabilities and commit with security advisory notes.`,
+  ],
+  'code-quality': [
+    // prior default (pre-genericization / intermediate)
+    `[Self-Improvement] Code Quality Review
+
+Analyze PortOS codebase for maintainability:
+
+1. Find DRY violations - similar code in multiple places
+2. Identify functions >50 lines that should be split
+3. Look for missing error handling
+4. Find dead code and unused imports
+5. Check for console.log that should be removed
+6. Look for TODO/FIXME that need addressing
+
+Focus on:
+- server/services/*.js
+- client/src/pages/*.jsx
+- client/src/components/*.jsx
+
+Refactor issues found and commit improvements.`,
+  ],
+  'test-coverage': [
+    // prior default (pre-genericization / intermediate)
+    `[Self-Improvement] Improve Test Coverage
+
+Analyze and improve test coverage for PortOS:
+
+1. Check existing tests in server/tests/ and client/tests/
+2. Identify untested critical paths:
+   - API routes without tests
+   - Services with complex logic
+   - Error handling paths
+
+3. Add tests for:
+   - CoS task evaluation logic
+   - Agent spawning and lifecycle
+   - Socket.IO event handlers
+   - API endpoints
+
+4. Ensure tests:
+   - Follow existing patterns
+   - Use appropriate mocks
+   - Test edge cases
+
+5. Run npm test to verify all tests pass
+6. Commit test additions with clear message describing what's covered`,
+  ],
+  'performance': [
+    // prior default (pre-genericization / intermediate)
+    `[Self-Improvement] Performance Analysis
+
+Analyze PortOS for performance issues:
+
+1. Review React components for:
+   - Unnecessary re-renders
+   - Missing useMemo/useCallback
+   - Large component files that should be split
+
+2. Review server code for:
+   - N+1 query patterns
+   - Missing caching opportunities
+   - Inefficient file operations
+
+3. Review client bundle for:
+   - Missing code splitting
+   - Large dependencies that could be tree-shaken
+
+4. Check Socket.IO for:
+   - Event handler memory leaks
+   - Unnecessary broadcasts
+
+Optimize and commit improvements.`,
+  ],
+  'accessibility': [
+    // prior default (pre-genericization / intermediate)
+    `[Self-Improvement] Accessibility Audit
+
+Use Playwright MCP to audit PortOS accessibility:
+
+1. Navigate to http://localhost:5555/
+2. Use browser_snapshot to get accessibility tree
+3. Check each main route for:
+   - Missing ARIA labels
+   - Missing alt text on images
+   - Insufficient color contrast
+   - Keyboard navigation issues
+   - Focus indicators
+
+4. Fix accessibility issues in React components
+5. Add appropriate aria-* attributes
+6. Test and commit changes`,
+  ],
+  'dependency-updates': [
+    // prior default (pre-genericization / intermediate)
+    `[Self-Improvement] Dependency Updates and Security Audit
+
+Check PortOS dependencies for updates and security vulnerabilities:
+
+1. Run npm audit in both server/ and client/ directories
+2. Check for outdated packages with npm outdated
+3. Review CRITICAL and HIGH severity vulnerabilities
+4. For each vulnerability:
+   - Assess the actual risk (is the vulnerable code path used?)
+   - Check if an update is available
+   - Test that updates don't break functionality
+
+5. Update dependencies carefully:
+   - Update patch versions first (safest)
+   - Then minor versions
+   - Major versions need more careful review
+
+6. After updating:
+   - Run npm test in server/
+   - Run npm run build in client/
+   - Verify the app starts correctly
+
+7. Commit with clear changelog of what was updated and why`,
+  ],
+  'documentation': [
+    // prior default (pre-genericization / intermediate)
+    `[Improvement: {appName}] Update Documentation
+
+Review and improve {appName} documentation:
+
+Repository: {repoPath}
+
+1. Check README.md:
+   - Installation instructions current?
+   - Quick start guide clear?
+   - Feature overview complete?
+
+2. Review inline documentation:
+   - Add JSDoc to exported functions
+   - Document complex algorithms
+   - Explain non-obvious code
+
+3. Check for docs/ folder:
+   - Are all features documented?
+   - Is information current?
+   - Add missing guides if needed
+
+4. Update PLAN.md and DONE.md if present:
+   - Move completed milestones from PLAN.md to DONE.md
+   - Keep PLAN.md focused on next actions and future work
+
+Commit documentation improvements.`,
+    // prior default (pre-genericization / intermediate)
+    `[Improvement: {appName}] Update Documentation
+
+Review and improve {appName} documentation:
+
+Repository: {repoPath}
+
+1. Check README.md:
+   - Installation instructions current?
+   - Quick start guide clear?
+   - Feature overview complete?
+
+2. Review inline documentation:
+   - Add JSDoc to exported functions
+   - Document complex algorithms
+   - Explain non-obvious code
+
+3. Check for docs/ folder:
+   - Are all features documented?
+   - Is information current?
+   - Add missing guides if needed
+
+4. Update PLAN.md or similar if present:
+   - Mark completed milestones
+   - Document architectural decisions
+
+Commit documentation improvements.`,
+    // prior default (pre-genericization / intermediate)
+    `[Self-Improvement] Update Documentation
+
+Review and improve PortOS documentation:
+
+1. Update PLAN.md:
+   - Mark completed milestones
+   - Add any new features implemented
+   - Document architectural decisions
+
+2. Check docs/ folder:
+   - Are all features documented?
+   - Is the information current?
+   - Add any missing guides
+
+3. Review code comments:
+   - Add JSDoc to exported functions
+   - Document complex algorithms
+   - Explain non-obvious code
+
+4. Update README.md if needed:
+   - Installation instructions
+   - Quick start guide
+   - Feature overview
+
+5. Consider adding:
+   - Architecture diagrams
+   - API documentation
+   - Troubleshooting guide
+
+Commit documentation improvements.`,
+  ],
+  'ui-bugs': [
+    // prior default (pre-genericization / intermediate)
+    `[Self-Improvement] UI Bug Analysis
+
+Use Playwright MCP (browser_navigate, browser_snapshot, browser_console_messages) to analyze PortOS UI:
+
+1. Navigate to http://localhost:5555/
+2. Check each main route: /, /apps, /cos, /cos/tasks, /cos/agents, /devtools, /devtools/history, /providers, /usage
+3. For each route:
+   - Take a browser_snapshot to see the page structure
+   - Check browser_console_messages for JavaScript errors
+   - Look for broken UI elements, missing data, failed requests
+4. Fix any bugs found in the React components or API routes
+5. Run tests and commit changes`,
+  ],
+  'mobile-responsive': [
+    // prior default (pre-genericization / intermediate)
+    `[Self-Improvement] Mobile Responsiveness Analysis
+
+Use Playwright MCP to test PortOS at different viewport sizes:
+
+1. browser_resize to mobile (375x812), then navigate to http://localhost:5555/
+2. Take browser_snapshot and analyze for:
+   - Text overflow or truncation
+   - Buttons too small to tap (< 44px)
+   - Horizontal scrolling issues
+   - Elements overlapping
+   - Navigation usability
+3. Repeat at tablet (768x1024) and desktop (1440x900)
+4. Fix Tailwind CSS responsive classes (sm:, md:, lg:) as needed
+5. Test fixes and commit changes
+
+Focus on these routes: /cos, /cos/tasks, /devtools, /providers`,
+  ],
+  'release-check': [
+    // prior default (pre-genericization / intermediate)
+    `[Improvement: {appName}] Release Check
+
+Repository: {repoPath}
+
+Check if {appName} has accumulated enough work for a release, following the project's own documented release process.
+
+## Step 0: Discover the Release Process
+
+You need to determine these values (use angle-bracket names as placeholders in subsequent steps):
+- \`<SOURCE_BRANCH>\` — where development happens
+- \`<TARGET_BRANCH>\` — where releases go
+- Changelog format and location
+- Pre-release checks (tests, builds)
+- Push/rebase conventions
+
+First, extract \`<OWNER>\` and \`<REPO>\`:
+\`\`\`bash
+cd {repoPath} && gh repo view --json owner,name --jq '"OWNER=" + .owner.login + " REPO=" + .name'
+\`\`\`
+
+Then search for release documentation. Check your CLAUDE.md context (already provided above) for "Git Workflow", "Release", or "Changelog" sections. If the release process is not clear from CLAUDE.md, check these files in order (use whichever exist):
+1. \`cat {repoPath}/README.md\` — look for release/deployment/workflow sections
+2. \`cat {repoPath}/.changelog/README.md\` — changelog format and release conventions
+3. \`cat {repoPath}/CONTRIBUTING.md\` — contributing/release guidelines
+4. \`ls {repoPath}/docs/\` — look for release process docs (e.g., RELEASE.md, DEPLOY.md)
+5. \`ls {repoPath}/.github/workflows/\` — infer branch flow from CI workflow triggers
+6. \`gh api repos/<OWNER>/<REPO>/branches --jq '.[].name'\` — list branches to identify the flow
+
+If no documentation specifies a release flow, fall back to: source=dev, target=main.
+
+## Step 1: Evaluate Readiness
+
+Using the changelog location discovered in Step 0:
+- Read the current changelog (e.g., \`.changelog/NEXT.md\` or \`.changelog/v*.x.md\`)
+- Read the current version: \`node -p "require('{repoPath}/package.json').version"\` or equivalent
+
+Count substantive entries (lines starting with "###" or "- **" under Features, Fixes, Improvements sections). If fewer than 2 substantive entries exist, stop and report: "Not enough work accumulated for a release." Do NOT create a PR.
+
+## Step 2: Verify Clean State
+
+Run these checks on \`<SOURCE_BRANCH>\` (stop if any fail):
+1. \`git -C {repoPath} fetch origin\` and ensure \`<SOURCE_BRANCH>\` is up to date
+2. Run the project's test suite (use the command from release docs)
+3. Run the project's build (use the command from release docs)
+
+## Step 3: Create or Find PR
+
+Check for existing PR: \`gh pr list --repo <OWNER>/<REPO> --base <TARGET_BRANCH> --head <SOURCE_BRANCH> --state open --json number,url\`
+
+If a PR exists, use it. If not, create one following the project's documented release PR conventions.
+
+Capture the PR number as \`<PR_NUM>\` and URL.
+
+## Step 4: Wait for Copilot Review
+
+Copilot review is triggered automatically on push. Poll every 15 seconds until the review appears:
+\`\`\`bash
+gh api repos/<OWNER>/<REPO>/pulls/<PR_NUM>/reviews --jq '.[] | select(.user.login == "copilot-pull-request-reviewer") | .state'
+\`\`\`
+
+Wait until you see APPROVED or CHANGES_REQUESTED. Timeout after 5 minutes of polling.
+
+## Step 5: Address Feedback Loop (max 5 iterations)
+
+### 5a. Fetch unresolved review threads
+
+Use gh api graphql (JSON input to avoid shell escaping issues with GraphQL variables):
+
+\`\`\`bash
+echo '{"query":"query{repository(owner:\\"<OWNER>\\",name:\\"<REPO>\\"){pullRequest(number:<PR_NUM>){reviewThreads(first:100){nodes{id,isResolved,comments(first:10){nodes{body,path,line,author{login}}}}}}}}"}' | gh api graphql --input -
+\`\`\`
+
+### 5b. If no unresolved threads: skip to Step 6 (Merge).
+
+### 5c. If unresolved threads exist, evaluate each one:
+
+For each comment, read the referenced file and critically evaluate the suggestion:
+- **If the suggestion is valid and improves the code**: apply the fix
+- **If the suggestion is a false positive, overly pedantic, or would make the code worse**: do NOT change the code
+
+Either way, resolve every thread — the goal is zero unresolved threads before merge.
+
+After evaluating all threads:
+- If any code changes were made: run the project's test suite to verify, then commit and push following the project's push conventions (e.g., \`git pull --rebase --autostash && git push\`)
+
+### 5d. Resolve ALL threads via GraphQL mutation (both fixed and dismissed):
+
+For each thread, use the thread node id from 5a:
+\`\`\`bash
+echo '{"query":"mutation{resolveReviewThread(input:{threadId:\\"THREAD_NODE_ID\\"}){thread{isResolved}}}"}' | gh api graphql --input -
+\`\`\`
+
+### 5e. Wait for new Copilot review if code was pushed (repeat Step 4)
+
+If you pushed changes in 5c, the push automatically triggers a new Copilot review. Poll for it, then loop back to 5a. If no code changes were made (all threads were false positives), skip straight to Step 6.
+
+If after 5 iterations there are still unresolved threads, stop and report what remains.
+
+## Step 6: Merge
+
+Only merge when Copilot's most recent review has NO unresolved threads:
+\`\`\`bash
+gh pr merge <PR_NUM> --merge
+\`\`\`
+
+If merge fails (e.g., branch protections), try: \`gh pr merge <PR_NUM> --merge --admin\`
+
+## Step 7: Report
+
+Summarize:
+- Version released
+- Key changes (from changelog)
+- Number of review iterations needed
+- Any unresolved issues`,
+    // prior default (pre-genericization / intermediate)
+    `[Improvement: {appName}] Release Check — dev → main
+
+Check if the dev branch has accumulated enough work for a release, and if so, create a PR to main, wait for Copilot code review, iterate on feedback until clean, and merge.
+
+NOTE: The repo has a GitHub ruleset that automatically requests a Copilot code review on every push to a PR targeting main. You do NOT need to manually request reviews — just create/push the PR and wait.
+
+## Step 1: Evaluate Readiness
+
+Read the current changelog and version:
+- \`cat .changelog/v*.x.md\` (the one with literal "x", not a resolved version)
+- \`node -p "require('./package.json').version"\`
+
+Count substantive entries (lines starting with "###" or "- **" under Features, Fixes, Improvements sections). If fewer than 2 substantive entries exist, stop and report: "Not enough work accumulated for a release." Do NOT create a PR.
+
+## Step 2: Verify Clean State
+
+Run these checks (stop if any fail):
+1. \`git fetch origin\` and ensure dev is up to date: \`git status -uno\` should show "Your branch is up to date"
+2. \`cd server && npm test\` — all tests must pass
+3. \`cd client && npm run build\` — build must succeed
+
+## Step 3: Create or Find PR
+
+Check for existing PR: \`gh pr list --base main --head dev --state open --json number,url\`
+
+If a PR exists, use it. If not, create one:
+\`\`\`bash
+gh pr create --base main --head dev --title "Release $(node -p \\"require('./package.json').version\\")" --body "$(cat .changelog/v*.x.md | head -60)"
+\`\`\`
+
+Capture the PR number and URL.
+
+## Step 4: Wait for Copilot Review
+
+Copilot review is triggered automatically on push. Poll every 15 seconds until the review appears:
+\`\`\`bash
+gh api repos/atomantic/PortOS/pulls/PR_NUM/reviews --jq '.[] | select(.user.login == "copilot-pull-request-reviewer") | .state'
+\`\`\`
+
+Wait until you see APPROVED or CHANGES_REQUESTED. Timeout after 5 minutes of polling.
+
+## Step 5: Address Feedback Loop (max 5 iterations)
+
+### 5a. Fetch unresolved review threads
+
+Use gh api graphql (JSON input to avoid shell escaping issues with GraphQL variables):
+
+\`\`\`bash
+echo '{"query":"query{repository(owner:\\"atomantic\\",name:\\"PortOS\\"){pullRequest(number:PR_NUM){reviewThreads(first:100){nodes{id,isResolved,comments(first:10){nodes{body,path,line,author{login}}}}}}}}"}' | gh api graphql --input -
+\`\`\`
+
+### 5b. If no unresolved threads: skip to Step 6 (Merge).
+
+### 5c. If unresolved threads exist, evaluate each one:
+
+For each comment, read the referenced file and critically evaluate the suggestion:
+- **If the suggestion is valid and improves the code**: apply the fix
+- **If the suggestion is a false positive, overly pedantic, or would make the code worse**: do NOT change the code
+
+Either way, resolve every thread — the goal is zero unresolved threads before merge.
+
+After evaluating all threads:
+- If any code changes were made: run \`cd server && npm test\` to verify, then commit and push:
+  \`git add <files> && git commit -m "fix: address Copilot review feedback"\`
+  \`git pull --rebase --autostash && git push\`
+
+### 5d. Resolve ALL threads via GraphQL mutation (both fixed and dismissed):
+
+For each thread, use the thread node id from 5a:
+\`\`\`bash
+echo '{"query":"mutation{resolveReviewThread(input:{threadId:\\"THREAD_NODE_ID\\"}){thread{isResolved}}}"}' | gh api graphql --input -
+\`\`\`
+
+### 5e. Wait for new Copilot review if code was pushed (repeat Step 4)
+
+If you pushed changes in 5c, the push automatically triggers a new Copilot review. Poll for it, then loop back to 5a. If no code changes were made (all threads were false positives), skip straight to Step 6.
+
+If after 5 iterations there are still unresolved threads, stop and report what remains.
+
+## Step 6: Merge
+
+Only merge when Copilot's most recent review has NO unresolved threads:
+\`\`\`bash
+gh pr merge PR_NUM --merge
+\`\`\`
+
+If merge fails (e.g., branch protections), try: \`gh pr merge PR_NUM --merge --admin\`
+
+## Step 7: Report
+
+Summarize:
+- Version released
+- Key changes (from changelog)
+- Number of review iterations needed
+- Any unresolved issues
+
+IMPORTANT: Always use \`git pull --rebase --autostash\` before pushing (dev branch gets auto-bumped by CI). Never use \`git push\` alone.`,
+    // prior default (pre-genericization / intermediate)
+    `[Self-Improvement] Release Check — dev → main
+
+Check if the dev branch has accumulated enough work for a release, and if so, create a PR to main, wait for Copilot code review, iterate on feedback until clean, and merge.
+
+NOTE: The repo has a GitHub ruleset that automatically requests a Copilot code review on every push to a PR targeting main. You do NOT need to manually request reviews — just create/push the PR and wait.
+
+## Step 1: Evaluate Readiness
+
+Read the current changelog and version:
+- \`cat .changelog/v*.x.md\` (the one with literal "x", not a resolved version)
+- \`node -p "require('./package.json').version"\`
+
+Count substantive entries (lines starting with "###" or "- **" under Features, Fixes, Improvements sections). If fewer than 2 substantive entries exist, stop and report: "Not enough work accumulated for a release." Do NOT create a PR.
+
+## Step 2: Verify Clean State
+
+Run these checks (stop if any fail):
+1. \`git fetch origin\` and ensure dev is up to date: \`git status -uno\` should show "Your branch is up to date"
+2. \`cd server && npm test\` — all tests must pass
+3. \`cd client && npm run build\` — build must succeed
+
+## Step 3: Create or Find PR
+
+Check for existing PR: \`gh pr list --base main --head dev --state open --json number,url\`
+
+If a PR exists, use it. If not, create one:
+\`\`\`bash
+gh pr create --base main --head dev --title "Release $(node -p \\"require('./package.json').version\\")" --body "$(cat .changelog/v*.x.md | head -60)"
+\`\`\`
+
+Capture the PR number and URL.
+
+## Step 4: Wait for Copilot Review
+
+Copilot review is triggered automatically on push. Poll every 15 seconds until the review appears:
+\`\`\`bash
+gh api repos/atomantic/PortOS/pulls/PR_NUM/reviews --jq '.[] | select(.user.login == "copilot-pull-request-reviewer") | .state'
+\`\`\`
+
+Wait until you see APPROVED or CHANGES_REQUESTED. Timeout after 5 minutes of polling.
+
+## Step 5: Address Feedback Loop (max 5 iterations)
+
+### 5a. Fetch unresolved review threads
+
+Use gh api graphql (JSON input to avoid shell escaping issues with GraphQL variables):
+
+\`\`\`bash
+echo '{"query":"query{repository(owner:\\"atomantic\\",name:\\"PortOS\\"){pullRequest(number:PR_NUM){reviewThreads(first:100){nodes{id,isResolved,comments(first:10){nodes{body,path,line,author{login}}}}}}}}"}' | gh api graphql --input -
+\`\`\`
+
+### 5b. If no unresolved threads: skip to Step 6 (Merge).
+
+### 5c. If unresolved threads exist, evaluate each one:
+
+For each comment, read the referenced file and critically evaluate the suggestion:
+- **If the suggestion is valid and improves the code**: apply the fix
+- **If the suggestion is a false positive, overly pedantic, or would make the code worse**: do NOT change the code
+
+Either way, resolve every thread — the goal is zero unresolved threads before merge.
+
+After evaluating all threads:
+- If any code changes were made: run \`cd server && npm test\` to verify, then commit and push:
+  \`git add <files> && git commit -m "fix: address Copilot review feedback"\`
+  \`git pull --rebase --autostash && git push\`
+
+### 5d. Resolve ALL threads via GraphQL mutation (both fixed and dismissed):
+
+For each thread, use the thread node id from 5a:
+\`\`\`bash
+echo '{"query":"mutation{resolveReviewThread(input:{threadId:\\"THREAD_NODE_ID\\"}){thread{isResolved}}}"}' | gh api graphql --input -
+\`\`\`
+
+### 5e. Wait for new Copilot review if code was pushed (repeat Step 4)
+
+If you pushed changes in 5c, the push automatically triggers a new Copilot review. Poll for it, then loop back to 5a. If no code changes were made (all threads were false positives), skip straight to Step 6.
+
+If after 5 iterations there are still unresolved threads, stop and report what remains.
+
+## Step 6: Merge
+
+Only merge when Copilot's most recent review has NO unresolved threads:
+\`\`\`bash
+gh pr merge PR_NUM --merge
+\`\`\`
+
+If merge fails (e.g., branch protections), try: \`gh pr merge PR_NUM --merge --admin\`
+
+## Step 7: Report
+
+Summarize:
+- Version released
+- Key changes (from changelog)
+- Number of review iterations needed
+- Any unresolved issues
+
+IMPORTANT: Always use \`git pull --rebase --autostash\` before pushing (dev branch gets auto-bumped by CI). Never use \`git push\` alone.`,
+    // prior default (pre-genericization / intermediate)
+    `[Self-Improvement] Release Check — dev → main
+
+Check if the dev branch has accumulated enough work for a release, and if so, create a PR to main, wait for Copilot code review, iterate on feedback until clean, and merge.
+
+NOTE: The repo has a GitHub ruleset that automatically requests a Copilot code review on every push to a PR targeting main. You do NOT need to manually request reviews — just create/push the PR and wait.
+
+## Step 1: Evaluate Readiness
+
+Read the current changelog and version:
+- \`cat .changelog/v*.x.md\` (the one with literal "x", not a resolved version)
+- \`node -p "require('./package.json').version"\`
+
+Count substantive entries (lines starting with "###" or "- **" under Features, Fixes, Improvements sections). If fewer than 2 substantive entries exist, stop and report: "Not enough work accumulated for a release." Do NOT create a PR.
+
+## Step 2: Verify Clean State
+
+Run these checks (stop if any fail):
+1. \`git fetch origin\` and ensure dev is up to date: \`git status -uno\` should show "Your branch is up to date"
+2. \`cd server && npm test\` — all tests must pass
+3. \`cd client && npm run build\` — build must succeed
+
+## Step 3: Create or Find PR
+
+Check for existing PR: \`gh pr list --base main --head dev --state open --json number,url\`
+
+If a PR exists, use it. If not, create one:
+\`\`\`bash
+gh pr create --base main --head dev --title "Release $(node -p \\"require('./package.json').version\\")" --body "$(cat .changelog/v*.x.md | head -60)"
+\`\`\`
+
+Capture the PR number and URL.
+
+## Step 4: Wait for Copilot Review
+
+Copilot review is triggered automatically on push. Poll every 15 seconds until the review appears:
+\`\`\`bash
+gh api repos/atomantic/PortOS/pulls/PR_NUM/reviews --jq '.[] | select(.user.login == "copilot-pull-request-reviewer") | .state'
+\`\`\`
+
+Wait until you see APPROVED or CHANGES_REQUESTED. Timeout after 5 minutes of polling.
+
+## Step 5: Address Feedback Loop (max 5 iterations)
+
+### 5a. Fetch unresolved review threads
+
+Use gh api graphql (JSON input to avoid shell escaping issues with GraphQL variables):
+
+\`\`\`bash
+echo '{"query":"query{repository(owner:\\"atomantic\\",name:\\"PortOS\\"){pullRequest(number:PR_NUM){reviewThreads(first:100){nodes{id,isResolved,comments(first:10){nodes{body,path,line,author{login}}}}}}}}"}' | gh api graphql --input -
+\`\`\`
+
+### 5b. If no unresolved threads: skip to Step 6 (Merge).
+
+### 5c. If unresolved threads exist:
+- Read each referenced file path
+- Apply the suggested fixes
+- Run \`cd server && npm test\` to verify
+- Commit changes: \`git add <files> && git commit -m "fix: address Copilot review feedback"\`
+- Push: \`git pull --rebase --autostash && git push\`
+
+### 5d. Resolve threads via GraphQL mutation:
+
+For each thread, use the thread node id from 5a:
+\`\`\`bash
+echo '{"query":"mutation{resolveReviewThread(input:{threadId:\\"THREAD_NODE_ID\\"}){thread{isResolved}}}"}' | gh api graphql --input -
+\`\`\`
+
+### 5e. Wait for new Copilot review (repeat Step 4)
+
+The push in 5c automatically triggers a new Copilot review. Poll for it, then loop back to 5a.
+
+If after 5 iterations there are still unresolved threads, stop and report what remains.
+
+## Step 6: Merge
+
+Only merge when Copilot's most recent review has NO unresolved threads:
+\`\`\`bash
+gh pr merge PR_NUM --merge
+\`\`\`
+
+If merge fails (e.g., branch protections), try: \`gh pr merge PR_NUM --merge --admin\`
+
+## Step 7: Report
+
+Summarize:
+- Version released
+- Key changes (from changelog)
+- Number of review iterations needed
+- Any unresolved issues
+
+IMPORTANT: Always use \`git pull --rebase --autostash\` before pushing (dev branch gets auto-bumped by CI). Never use \`git push\` alone.`,
+    // prior default (pre-genericization / intermediate)
+    `[Self-Improvement] Release Check — dev → main
+
+Check if the dev branch has accumulated enough work for a release, and if so, create a PR to main, get Copilot review, iterate on feedback, and merge.
+
+## Step 1: Evaluate Readiness
+
+Read the current changelog and version:
+- \`cat .changelog/v*.x.md\` (the one with literal "x", not a resolved version)
+- \`node -p "require('./package.json').version"\`
+
+Count substantive entries (lines starting with "###" or "- **" under Features, Fixes, Improvements sections). If fewer than 2 substantive entries exist, stop and report: "Not enough work accumulated for a release." Do NOT create a PR.
+
+## Step 2: Verify Clean State
+
+Run these checks (stop if any fail):
+1. \`git fetch origin\` and ensure dev is up to date: \`git status -uno\` should show "Your branch is up to date"
+2. \`cd server && npm test\` — all tests must pass
+3. \`cd client && npm run build\` — build must succeed
+
+## Step 3: Create or Find PR
+
+Check for existing PR: \`gh pr list --base main --head dev --state open --json number,url\`
+
+If a PR exists, use it. If not, create one:
+\`\`\`bash
+gh pr create --base main --head dev --title "Release $(node -p \\"require('./package.json').version\\")" --body "$(cat .changelog/v*.x.md | head -60)"
+\`\`\`
+
+Capture the PR number and URL.
+
+## Step 4: Request Copilot Review
+
+Try the API method first:
+\`\`\`bash
+gh api repos/atomantic/PortOS/pulls/PR_NUM/requested_reviewers \\
+  --method POST \\
+  --input - <<< '{"reviewers":["copilot-pull-request-reviewer"]}'
+\`\`\`
+
+If you get a 422 error, fall back to Playwright browser automation:
+1. Navigate to the PR URL
+2. Take a browser_snapshot
+3. Click the Reviewers gear icon
+4. Look for and click the Copilot review request button/option
+
+## Step 5: Poll for Review Completion
+
+Poll every 15 seconds until a Copilot review appears:
+\`\`\`bash
+gh api repos/atomantic/PortOS/pulls/PR_NUM/reviews --jq '.[].state'
+\`\`\`
+
+Wait until you see a review from "copilot-pull-request-reviewer" or "github-actions[bot]" with state APPROVED or CHANGES_REQUESTED. Timeout after 5 minutes of polling.
+
+## Step 6: Address Feedback Loop (max 5 iterations)
+
+For each iteration:
+
+### 6a. Fetch unresolved review threads
+
+Use gh api graphql with a POST body file (to avoid shell escaping issues with GraphQL variables):
+
+\`\`\`bash
+echo '{"query":"query{repository(owner:\\"atomantic\\",name:\\"PortOS\\"){pullRequest(number:PR_NUM){reviewThreads(first:100){nodes{isResolved,comments(first:10){nodes{body,path,line,author{login}}}}}}}}"}' | gh api graphql --input -
+\`\`\`
+
+### 6b. If unresolved threads exist:
+- Read each referenced file path
+- Apply the suggested fixes
+- Run \`cd server && npm test\` to verify
+- Commit changes: \`git add <files> && git commit -m "fix: address Copilot review feedback"\`
+- Push: \`git pull --rebase --autostash && git push\`
+
+### 6c. Resolve threads via GraphQL mutation:
+
+For each thread, get the threadId from the GraphQL response above and resolve it:
+\`\`\`bash
+echo '{"query":"mutation{resolveReviewThread(input:{threadId:\\"THREAD_ID\\"}){thread{isResolved}}}"}' | gh api graphql --input -
+\`\`\`
+
+### 6d. Request another Copilot review (repeat Step 4)
+### 6e. Poll again (repeat Step 5)
+
+If after 5 iterations there are still unresolved threads, stop and report what remains.
+
+## Step 7: Merge
+
+Once review is clean (APPROVED or no unresolved threads):
+\`\`\`bash
+gh pr merge PR_NUM --merge
+\`\`\`
+
+If merge fails (e.g., branch protections), try: \`gh pr merge PR_NUM --merge --admin\`
+
+## Step 8: Report
+
+Summarize:
+- Version released
+- Key changes (from changelog)
+- Number of review iterations needed
+- Any unresolved issues
+
+IMPORTANT: Always use \`git pull --rebase --autostash\` before pushing (dev branch gets auto-bumped by CI). Never use \`git push\` alone.`,
   ],
 };

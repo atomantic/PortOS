@@ -33,7 +33,7 @@ import { createReadStream, createWriteStream } from 'fs';
 import { mkdir, rename, unlink } from 'fs/promises';
 import { Writable } from 'stream';
 import { PATHS, getMimeType } from '../lib/fileUtils.js';
-import { parseZip } from '../lib/zipStream.js';
+import { parseZip, collectZipEntry, MAX_ZIP_MEMBER_BYTES } from '../lib/zipStream.js';
 import { parseExport, importConversations, assetPointerId } from './chatgptImport.js';
 import { ServerError } from '../lib/errorHandler.js';
 
@@ -43,7 +43,7 @@ import { ServerError } from '../lib/errorHandler.js';
 // malicious zip claiming one member is enormous. Assets stream straight to disk
 // (peak RAM is one chunk), so there is no aggregate in-memory ceiling to keep —
 // a legitimately large multi-GB export imports without an arbitrary budget.
-const MAX_MEMBER_BYTES = 100 * 1024 * 1024;
+const MAX_MEMBER_BYTES = MAX_ZIP_MEMBER_BYTES;
 
 // Leading bytes captured from each streamed asset to sniff its magic-byte type
 // (the widest sniff — WAV/WebP — reads bytes 8–11). Everything past this streams
@@ -103,25 +103,6 @@ const IS_ASSET_NAME_MAP = (path) => /(?:^|\/)conversation_asset_file_names\.json
 // reference assets as `file-service://file-XXX` / `sediment://file_HASH`, both
 // of which `assetPointerId()` reduces to that same bare id.
 const datAssetId = (path) => path.replace(/^.*\//, '').replace(/\.dat$/i, '');
-
-// `parseZip` entries aren't readable streams — they expose `.pipe(dest)` /
-// `.autodrain()`. Pipe the entry into a size-capped collecting Writable and
-// resolve with the concatenated buffer.
-const collect = (entry, max) => new Promise((resolve, reject) => {
-  const chunks = [];
-  let size = 0;
-  const sink = new Writable({
-    write(chunk, _enc, cb) {
-      size += chunk.length;
-      if (size > max) { cb(new Error(`ZIP member exceeds ${max} byte limit`)); return; }
-      chunks.push(chunk);
-      cb();
-    }
-  });
-  sink.on('finish', () => resolve(Buffer.concat(chunks)));
-  sink.on('error', reject);
-  entry.pipe(sink);
-});
 
 // Stream a `.dat` entry straight to `filePath`, holding only the leading
 // `SNIFF_BYTES` so the asset's real extension can be sniffed without buffering
@@ -183,6 +164,12 @@ export async function extractChatgptZip(zipPath, { assetDir = PATHS.brainImportA
   // file written so a mid-stream failure can clean partial writes off disk.
   const pendingAssets = new Map();
   const tempPaths = new Set();
+  // Every per-member task (asset writes, JSON collects). Hoisted out of the
+  // Promise executor so the rejection handler below can wait for in-flight asset
+  // writes to fully settle (their write streams close) before unlinking temp
+  // files — otherwise a write that finishes AFTER the unlink re-creates the
+  // `.part` file and orphans it (a filesystem-timing race under heavy I/O).
+  const inFlight = [];
 
   await new Promise((resolve, reject) => {
     let settled = false;
@@ -200,7 +187,6 @@ export async function extractChatgptZip(zipPath, { assetDir = PATHS.brainImportA
       fn(arg);
     };
     const onErr = settle(reject);
-    const inFlight = [];
 
     src
       .on('error', onErr)
@@ -208,11 +194,11 @@ export async function extractChatgptZip(zipPath, { assetDir = PATHS.brainImportA
       .on('entry', (entry) => {
         const { path } = entry;
         if (IS_ASSET_NAME_MAP(path)) {
-          inFlight.push(collect(entry, MAX_MEMBER_BYTES)
+          inFlight.push(collectZipEntry(entry, MAX_MEMBER_BYTES)
             .then((buf) => { assetNameMap = JSON.parse(buf.toString('utf8')); })
             .catch(onErr));
         } else if (IS_CONVO_JSON(path)) {
-          inFlight.push(collect(entry, MAX_MEMBER_BYTES)
+          inFlight.push(collectZipEntry(entry, MAX_MEMBER_BYTES)
             .then((buf) => { convoBuffers.push({ path, buffer: buf }); })
             .catch(onErr));
         } else if (IS_DAT(path)) {
@@ -238,6 +224,18 @@ export async function extractChatgptZip(zipPath, { assetDir = PATHS.brainImportA
     // Streaming failed (size cap, parser error, …) — assets already streamed to
     // temp files would otherwise be orphaned on disk. Remove them before
     // re-throwing so a bad upload can't accumulate `.part` files.
+    //
+    // Wait for every in-flight member task to settle FIRST. `settle(reject)`
+    // rejects this Promise immediately and destroys the source/parser, but a
+    // `streamAssetToFile` whose write stream hasn't finished is still mid-flight:
+    // `createWriteStream` opens its `.part` file asynchronously, so unlinking now
+    // can race the open — the unlink no-ops (file not created yet), then the open
+    // lands and orphans the `.part` (the intermittent full-suite failure). The
+    // parser's teardown ends the in-flight entry stream (see zipStream.js
+    // `destroy`), so each task settles deterministically — once `allSettled`
+    // resolves, every write handle is closed and the file's on-disk existence is
+    // settled, making the unlink below final rather than racing a pending open.
+    await Promise.allSettled(inFlight);
     await cleanupTempFiles(tempPaths);
     throw err;
   });

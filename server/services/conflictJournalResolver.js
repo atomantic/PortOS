@@ -35,6 +35,9 @@ import { updateUniverse, ERR_NOT_FOUND as UNIVERSE_NOT_FOUND } from './universeB
 import { updateSeries, ERR_NOT_FOUND as SERIES_NOT_FOUND } from './pipeline/series.js';
 import { updateCollection, getCollection, ERR_NOT_FOUND as COLLECTION_NOT_FOUND } from './mediaCollections.js';
 import { updateIssue, ERR_NOT_FOUND as ISSUE_NOT_FOUND } from './pipeline/issues.js';
+import { updateProject } from './creativeDirector/local.js';
+import { restoreBoard } from './moodBoard/index.js';
+import { updateWork } from './writersRoom/local.js';
 
 export const ERR_NOT_FOUND = 'CONFLICT_JOURNAL_NOT_FOUND';
 export const ERR_VALIDATION = 'CONFLICT_JOURNAL_VALIDATION';
@@ -77,7 +80,11 @@ async function applyToRecord(kind, recordId, patch, { replace = false } = {}) {
   // the route maps it to a clean 409 ("discard the entry") instead of a 500.
   const translateGone = (err) => {
     if (err?.code === UNIVERSE_NOT_FOUND || err?.code === SERIES_NOT_FOUND
-        || err?.code === COLLECTION_NOT_FOUND || err?.code === ISSUE_NOT_FOUND) {
+        || err?.code === COLLECTION_NOT_FOUND || err?.code === ISSUE_NOT_FOUND
+        // Creative Director's updateProject throws a generic ServerError
+        // 'NOT_FOUND' (no module-specific export) when the row is missing OR
+        // tombstoned — both mean the conflict target is gone.
+        || err?.code === 'NOT_FOUND') {
       throw makeErr(`The ${kind} this conflict targets no longer exists — discard the entry.`, ERR_TARGET_GONE);
     }
     throw err;
@@ -113,6 +120,29 @@ async function applyToRecord(kind, recordId, patch, { replace = false } = {}) {
     // overwritten. (`runHistory` is intentionally recomputed, not rolled back —
     // it tracks the live undo-history, which a faithful restore should preserve.)
     await updateIssue(recordId, patch).catch(translateGone);
+  } else if (kind === 'creativeDirectorProject') {
+    // updateProject does a wholesale spread (`{ ...project, ...patch }`), so the
+    // restorable scalars + treatment in the snapshot patch overwrite the live
+    // values faithfully — restore-all and merge-fields both apply through the
+    // same path. updateProject validates `status` and rejects a tombstoned row
+    // (404 → translateGone → ERR_TARGET_GONE).
+    await updateProject(recordId, patch).catch(translateGone);
+  } else if (kind === 'moodBoard') {
+    // restoreBoard applies the snapshot's name/description/items wholesale (via
+    // applyBoardRestore — the route's applyBoardPatch only touches name/description,
+    // so this dedicated path is what brings items[] back), so restore-all and
+    // merge-fields both apply faithfully through the same call. It validates +
+    // rejects a tombstoned row (404 → translateGone → ERR_TARGET_GONE).
+    await restoreBoard(recordId, patch).catch(translateGone);
+  } else if (kind === 'writersRoomWork') {
+    // updateWork applies the snapshot's title/kind/status/folderId/imageStyle/
+    // liveMode (the RESTORABLE_FIELDS set) through its allow-list + the liveMode
+    // partial merge, so restore-all and merge-fields both apply faithfully. It
+    // throws the generic ServerError 'NOT_FOUND' for a missing/tombstoned work
+    // (caught by translateGone → ERR_TARGET_GONE). The draft-version structure
+    // and prose bodies are not restorable here (they're file-primary + lineage-
+    // managed) — RESTORABLE_FIELDS.writersRoomWork omits them.
+    await updateWork(recordId, patch).catch(translateGone);
   } else {
     throw makeErr(`Unsupported conflict kind: ${kind}`, ERR_VALIDATION);
   }

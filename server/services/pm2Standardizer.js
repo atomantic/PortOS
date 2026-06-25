@@ -7,9 +7,161 @@ import { getActiveProvider, getProviderById } from './providers.js';
 import { spawn } from 'child_process';
 import { safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
 import { runPromptThroughProvider } from '../lib/promptRunner.js';
+import { getReservedPorts, getAllApps } from './apps.js';
+import { getListeningPorts } from '../lib/platform.js';
 
 const execAsync = promisify(exec);
 const DEFAULT_PM2_AI_TIMEOUT_MS = 180000;
+
+// Common Vite dev defaults — always avoided, since a developer machine almost
+// always already has something on 5173 (and 5174 is Vite's auto-fallback).
+const VITE_DEFAULT_PORTS = [5173, 5174];
+// New ports are reassigned from here up (PortOS's managed-app convention, see
+// DEFAULT_PORT_RANGE_START in services/ports.js) — clear of PortOS's own
+// 5553–5561 block and the Vite defaults.
+const REASSIGN_FROM = 6000;
+
+const isPortKey = (key) => /(^|_)PORT$/i.test(key);
+
+/**
+ * Collect every numeric port a process references — port-ish env keys plus a
+ * `--port N` token in its args string.
+ */
+function collectPortRefs(proc) {
+  const refs = [];
+  if (proc.env && typeof proc.env === 'object') {
+    for (const [key, value] of Object.entries(proc.env)) {
+      if (!isPortKey(key)) continue;
+      const n = Number(value);
+      if (Number.isInteger(n)) refs.push(n);
+    }
+  }
+  if (typeof proc.args === 'string') {
+    const m = proc.args.match(/--port\s+(\d+)/);
+    if (m) refs.push(Number(m[1]));
+  }
+  return refs;
+}
+
+/**
+ * Deterministically reassign any process port that collides with a taken port
+ * (already-running, reserved by another PortOS app, or a Vite default) or that
+ * duplicates another process in this same config. Mutates `processes` in place
+ * (env port values + `--port` args) and returns the list of `[old, new]`
+ * reassignments. This is the guarantee the LLM prompt can't provide on its own.
+ */
+/** Apply a per-process old→new port map to a process's env values and args. */
+function applyProcPortRemap(proc, procRemap) {
+  if (proc.env && typeof proc.env === 'object') {
+    for (const [key, value] of Object.entries(proc.env)) {
+      if (!isPortKey(key)) continue;
+      const n = Number(value);
+      if (procRemap.has(n)) proc.env[key] = procRemap.get(n);
+    }
+  }
+  if (typeof proc.args === 'string') {
+    proc.args = proc.args.replace(/(--port\s+)(\d+)/g, (full, pre, num) => {
+      const n = Number(num);
+      return procRemap.has(n) ? `${pre}${procRemap.get(n)}` : full;
+    });
+  }
+}
+
+export function reassignCollidingPorts(processes, takenPorts) {
+  const taken = new Set((takenPorts || []).filter(Number.isInteger));
+
+  // Every non-taken port referenced anywhere will be KEPT by some process, so a
+  // replacement must avoid all of them up front — otherwise a colliding process
+  // listed BEFORE the process that owns a valid 6000-range port could be handed
+  // that port (LLM output order isn't guaranteed), needlessly moving the owner.
+  const keptValues = new Set();
+  for (const proc of processes || []) {
+    for (const value of collectPortRefs(proc)) {
+      if (!taken.has(value)) keptValues.add(value);
+    }
+  }
+
+  // `used` is everything off-limits to pickFree: taken + all kept values +
+  // freshly assigned. `assigned` also blocks reuse within this run.
+  const used = new Set([...taken, ...keptValues]);
+  const assigned = new Set();
+  const pickFree = () => {
+    let p = REASSIGN_FROM;
+    while (used.has(p) || assigned.has(p)) p++;
+    assigned.add(p);
+    used.add(p);
+    return p;
+  };
+
+  // Reassign PER PROCESS, not globally by value. Within one process a shared
+  // value (env PORT + VITE_PORT + --port arg) moves together via the per-proc
+  // map; but two DIFFERENT processes that both reference the same port — e.g.
+  // both server PORT and client VITE_PORT at 5173 — must get DISTINCT ports, or
+  // the "collision-free" guarantee fails. A process keeps its port only if it's
+  // not taken and not already claimed by an earlier process; otherwise it's bumped.
+  const claimed = new Set(); // non-taken values an earlier process already kept
+  const reassignments = [];
+  for (const proc of processes || []) {
+    const procRemap = new Map(); // old -> new, scoped to this process
+    for (const value of new Set(collectPortRefs(proc))) {
+      if (taken.has(value) || claimed.has(value)) {
+        const np = pickFree();
+        procRemap.set(value, np);
+        reassignments.push([value, np]);
+      } else {
+        claimed.add(value); // this process keeps it; a later dup will be bumped
+      }
+    }
+    if (procRemap.size > 0) applyProcPortRemap(proc, procRemap);
+  }
+
+  return reassignments;
+}
+
+/**
+ * Collect every port a registered app already holds — top-level fields plus
+ * each process's `ports` map — mirroring getReservedPorts' per-app walk. Used
+ * to exempt the app being re-standardized from its own "taken" set.
+ */
+function ownPortsOf(app) {
+  const ports = [];
+  if (!app) return ports;
+  for (const p of [app.uiPort, app.devUiPort, app.apiPort, app.tlsPort]) ports.push(p);
+  if (Array.isArray(app.processes)) {
+    for (const proc of app.processes) {
+      if (proc?.port) ports.push(proc.port);
+      if (proc?.ports && typeof proc.ports === 'object') {
+        for (const value of Object.values(proc.ports)) ports.push(value);
+      }
+    }
+  }
+  return ports.filter(Number.isInteger);
+}
+
+/**
+ * Ports that must not be assigned to a freshly standardized app: everything
+ * currently listening on the host, every port already reserved by another
+ * PortOS-managed app, and the common Vite defaults — minus `excludePorts`, the
+ * ports the app being standardized already owns (so re-standardizing keeps its
+ * own valid ports instead of treating them as collisions and bumping them).
+ */
+async function gatherTakenPorts(excludePorts = []) {
+  const [reserved, listening] = await Promise.all([
+    getReservedPorts().catch(() => []),
+    getListeningPorts().catch(() => []),
+  ]);
+  // Exempt the app's own ports ONLY from the reserved-app registry — so
+  // re-standardizing keeps them. Do NOT exempt them from `listening`: if the
+  // app is stopped and another process now holds one of its old ports, that
+  // port is genuinely occupied and must stay off-limits regardless of which app
+  // recorded it. (Vite defaults are likewise never exempted — moving off them
+  // is the point.)
+  const own = new Set(excludePorts.filter(Number.isInteger));
+  const reservedMinusOwn = reserved.filter((p) => !own.has(p));
+  return Array.from(new Set([...reservedMinusOwn, ...listening, ...VITE_DEFAULT_PORTS]))
+    .filter(Number.isInteger)
+    .sort((a, b) => a - b);
+}
 
 /**
  * Gather all config files for standardization analysis
@@ -84,7 +236,7 @@ async function gatherConfigContext(dirPath) {
 /**
  * Build LLM prompt for PM2 standardization analysis
  */
-function buildStandardizationPrompt(context) {
+function buildStandardizationPrompt(context, takenPorts = []) {
   return `# PM2 Standardization Analysis
 
 You are analyzing a Node.js application to generate a standardized PM2 ecosystem configuration.
@@ -113,6 +265,12 @@ ${context.envFiles.map(f => `#### ${f.name}\n\`\`\`\n${f.content}\n\`\`\``).join
 
 ${context.viteConfigs.length > 0 ? `### Vite Configs
 ${context.viteConfigs.map(f => `#### ${f.name}\n\`\`\`javascript\n${f.content}\n\`\`\``).join('\n\n')}` : ''}
+
+## Ports Already In Use — DO NOT ASSIGN ANY OF THESE
+
+${takenPorts.length > 0 ? takenPorts.join(', ') : '(none detected)'}
+
+These ports are already listening on this host, reserved by another managed app, or are common Vite defaults (5173/5174). Assigning any of them causes a collision. **Pick new ports in the 6000–6099 range** instead of the framework defaults found in vite.config/.env, even when a config file suggests otherwise.
 
 ## PM2 Standard Requirements
 
@@ -295,9 +453,13 @@ export async function analyzeApp(repoPath, providerId = null) {
     return { success: false, error: 'AI provider is disabled' };
   }
 
-  // Gather context
+  // Gather context + the set of ports we must steer the LLM away from. Exempt
+  // the app's own current ports (matched by repoPath) so re-standardizing a
+  // registered app doesn't treat its valid ports as collisions and bump them.
   const context = await gatherConfigContext(repoPath);
-  const prompt = buildStandardizationPrompt(context);
+  const ownApp = (await getAllApps().catch(() => [])).find((a) => a.repoPath === repoPath);
+  const takenPorts = await gatherTakenPorts(ownPortsOf(ownApp));
+  const prompt = buildStandardizationPrompt(context, takenPorts);
 
   // Execute analysis
   const startTime = Date.now();
@@ -309,6 +471,13 @@ export async function analyzeApp(repoPath, providerId = null) {
 
   // Parse response
   const analysis = parseAnalysisResponse(response);
+
+  // Deterministic safety net: even if the LLM ignored the avoid-list, remap any
+  // port that still collides with a taken/duplicate port before generating the file.
+  const portReassignments = reassignCollidingPorts(analysis.processes, takenPorts);
+  if (portReassignments.length > 0) {
+    console.log(`🔧 PM2 standardizer reassigned colliding ports: ${portReassignments.map(([o, n]) => `${o}→${n}`).join(', ')}`);
+  }
 
   // Generate ecosystem content
   const ecosystemContent = generateEcosystemContent(analysis.processes, context.dirName);
@@ -328,7 +497,8 @@ export async function analyzeApp(repoPath, providerId = null) {
       createEcosystem: !context.ecosystemConfig,
       ecosystemContent,
       processes: analysis.processes,
-      strayPorts: analysis.strayPorts || []
+      strayPorts: analysis.strayPorts || [],
+      portReassignments: portReassignments.map(([from, to]) => ({ from, to }))
     },
     llmAnalysis: {
       providerId: provider.id,

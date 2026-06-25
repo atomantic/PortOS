@@ -79,7 +79,12 @@ function matchEntriesByCandidates(text, entries, candidatesFn) {
   const wordBoundary = (needle) => {
     if (!needle) return false;
     const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    return new RegExp(`\\b${escaped}\\b`, 'i').test(haystack);
+    // Unicode-aware boundary instead of ASCII `\b`: a name starting/ending with a
+    // non-ASCII letter (José, Élodie, Zoë) has no `\b` adjacent to the accented
+    // char, so `\b…\b` would silently miss it. Lookarounds over `[\p{L}\p{N}_]`
+    // with the `u` flag reproduce word-boundary semantics for all scripts
+    // (still won't match "Mira" inside "Miranda").
+    return new RegExp(`(?<![\\p{L}\\p{N}_])${escaped}(?![\\p{L}\\p{N}_])`, 'iu').test(haystack);
   };
   for (const entry of entries) {
     const key = entry.id || entry.name;

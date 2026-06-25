@@ -1053,12 +1053,12 @@ describe('dataSync — per-category schema gate (cross-key isolation)', () => {
     const result = await dataSync.applyRemote('pipeline', {
       series: [{ id: 'ser-1', name: 'Foundry', updatedAt: '2026-05-17T11:00:00Z' }],
       issues: [],
-    }, { portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 5, pipelineSeries: 7, pipelineIssues: 1, mediaCollections: 1 } } });
+    }, { portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 5, pipelineSeries: 9, pipelineIssues: 1, mediaCollections: 1 } } });
     expect(result.applied).toBe(false);
     expect(result.blockedBySchema).toBeDefined();
     // The reported gap is scoped to the relevant category — NOT mis-attributed.
     expect(result.blockedBySchema.ahead).toEqual([
-      { category: 'pipelineSeries', senderV: 7, receiverV: 6 },
+      { category: 'pipelineSeries', senderV: 9, receiverV: 8 },
     ]);
     expect(readSeriesState()).toEqual([]); // nothing written
   });
@@ -1089,6 +1089,29 @@ describe('dataSync — per-category schema gate (cross-key isolation)', () => {
       // authors → per-record peer-push only (no 60s file-snapshot category).
       // Gated at applyIncomingPush via compareSchemaVersions / RECORD_KIND_SCHEMA_CATEGORIES.author.
       'authors',
+      // music records → per-record peer-push only (no 60s file-snapshot category).
+      // Gated at applyIncomingPush via compareSchemaVersions / RECORD_KIND_SCHEMA_CATEGORIES.
+      'artists',
+      'albums',
+      'tracks',
+      // Creative Director projects (#1564) → per-record peer-push only (no 60s
+      // file-snapshot category). Gated at applyIncomingPush via
+      // compareSchemaVersions / RECORD_KIND_SCHEMA_CATEGORIES.creativeDirectorProject.
+      'creativeDirectorProjects',
+      // Mood boards (#1564) → per-record peer-push only (no 60s file-snapshot
+      // category). Gated at applyIncomingPush via compareSchemaVersions /
+      // RECORD_KIND_SCHEMA_CATEGORIES.moodBoard.
+      'moodBoards',
+      // Writers Room works (#1565) → per-record peer-push only (no 60s
+      // file-snapshot category; the .md prose bodies ride a dedicated body
+      // manifest). Gated at applyIncomingPush via compareSchemaVersions /
+      // RECORD_KIND_SCHEMA_CATEGORIES.writersRoomWork.
+      'writersRoomWorks',
+      // Standalone media library (#1566) → its own receiver-pull endpoint
+      // (GET /api/peer-sync/library-manifest), NOT the file-snapshot transfer.
+      // Versioned for the manifest envelope and gated by syncMediaLibraryFromPeer's
+      // gentle skip-if-ahead; declared non-record in NON_RECORD_SCHEMA_CATEGORIES.
+      'mediaLibrary',
     ]);
     const covered = new Set(Object.values(dataSync.getSnapshotCategorySchemaKeys()).flat());
     for (const key of Object.keys(PORTOS_SCHEMA_VERSIONS)) {

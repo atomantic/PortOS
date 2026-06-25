@@ -12,7 +12,7 @@
  * No cycle risk: this module imports nothing from either consumer.
  */
 
-import { resolveCliModel, hasModelFlag } from './providerModels.js';
+import { resolveCliModel, hasModelFlag, resolveBedrockCliModel } from './providerModels.js';
 import { ensureAntigravityTuiArgs, isAntigravityCommand } from './antigravity.js';
 
 // ─── Paste handshake constants ────────────────────────────────────────────
@@ -23,6 +23,12 @@ import { ensureAntigravityTuiArgs, isAntigravityCommand } from './antigravity.js
 export const READY_POLL_INTERVAL_MS = 300;
 export const READY_IDLE_THRESHOLD_MS = 1200;
 export const PASTE_DEADLINE_MS = 10000;
+// How long to wait for claude's POSITIVE input-ready footer (createInputReadyTracker)
+// before giving up and surfacing a startup failure. Generous because a cold
+// claude start can spend many seconds on banner + MCP-server + model init
+// (still well under the 180s idle timeout). Used only on the input-ready-gated
+// path; the non-claude providers use PASTE_DEADLINE_MS.
+export const TUI_INPUT_READY_DEADLINE_MS = 45000;
 
 // Claude Code emits `[Pasted text #N +M lines]` after committing a paste.
 // Watch for the marker (or fall back after PASTE_TO_ENTER_FALLBACK_MS)
@@ -83,6 +89,69 @@ export function countPasteMarkers(strippedText) {
  */
 export function detectPasteMarker(strippedText) {
   return countPasteMarkers(strippedText) > 0;
+}
+
+// Positive "the launched program's input is ready to receive a bracketed paste"
+// signal, derived from the terminal's bracketed-paste-mode toggles in the RAW
+// (un-stripped) PTY stream. A program enables bracketed-paste mode (`ESC[?2004h`)
+// exactly when its input prompt is live and ready to accept a paste — which is
+// precisely the precondition for the `ESC[200~…ESC[201~` paste the spawner is
+// about to send. The launch shell already had paste mode ON at its own prompt,
+// so we must NOT treat that initial ON as the signal: only an ON that arrives
+// AFTER the shell turned it OFF (`ESC[?2004l`) to run the command is the
+// launched program (e.g. Claude Code) declaring its input ready. The spawner
+// pairs this with a liveness probe to disambiguate "claude's prompt is ready"
+// from "claude exited and the shell's prompt came back" (both re-enable paste
+// mode). This replaces the old "saw some output, then went idle" heuristic that
+// fired during a startup lull — before claude's input existed — and dumped the
+// prompt into the bare shell.
+// Bracketed-paste mode toggles in the RAW stream — the RELIABLE input-ready
+// signal. `ESC[?2004h` = ON (the program will read `ESC[200~…ESC[201~` as a
+// paste); `ESC[?2004l` = OFF (then the leading `ESC` of our paste is read as
+// Escape, which CANCELS claude's input — the intermittent "something other than
+// Enter canceled it"). claude enables paste mode exactly when its input box is
+// live, so "paste mode re-enabled after the shell turned it off to run the
+// command" means claude is ready AND the paste won't be misread.
+//
+// (We deliberately do NOT key on claude's visible footer text — `bypass
+// permissions on (shift+tab to cycle)` etc. — because claude renders it with
+// inter-glyph cursor moves, so its spaces vanish after ANSI stripping and the
+// text is not reliably matchable. Terminal-mode toggles survive intact.)
+export const BRACKETED_PASTE_MODE_PATTERN = /\x1b\[\?2004([hl])/g;
+
+// Claude Code's first-run folder-trust gate ("Is this a project you trust? →
+// 1. Yes, I trust this folder / 2. No, exit"). `--dangerously-skip-permissions`
+// does NOT bypass it, and CoS agents can start in folders claude hasn't seen.
+// Matched against the WHITESPACE-STRIPPED text (same inter-glyph-spacing caveat
+// as the footer). The spawner auto-confirms the default ("Yes, I trust").
+export const TUI_TRUST_PROMPT_PATTERN =
+  /trustthisfolder|isthisaprojectyou(?:created|trust)/i;
+
+export function createInputReadyTracker() {
+  let pasteModeOn = false;   // LIVE bracketed-paste mode state from the stream
+  let sawCommandRun = false; // shell turned paste mode OFF to run the command
+  let needsTrust = false;
+  return {
+    // Ready once claude has RE-ENABLED bracketed-paste mode after the launch
+    // shell turned it off to run the command — its input box is live and a
+    // paste will be read as a paste. (The launch shell's own initial ON does
+    // not count: sawCommandRun gates on the intervening OFF.)
+    get ready() { return sawCommandRun && pasteModeOn; },
+    get needsTrust() { return needsTrust; },
+    // rawText: un-stripped chunk (paste-mode toggles live here);
+    // strippedText: ANSI-stripped chunk (the trust-gate text).
+    observe(rawText, strippedText) {
+      if (rawText) {
+        for (const m of rawText.matchAll(BRACKETED_PASTE_MODE_PATTERN)) {
+          if (m[1] === 'l') { pasteModeOn = false; sawCommandRun = true; }
+          else pasteModeOn = true;
+        }
+      }
+      if (strippedText && !needsTrust && TUI_TRUST_PROMPT_PATTERN.test(strippedText.replace(/\s+/g, ''))) {
+        needsTrust = true;
+      }
+    },
+  };
 }
 
 // "The model is actively processing a submitted prompt" signal. A TUI repaints
@@ -336,7 +405,16 @@ export function buildTuiInvocation(provider, model) {
   const baseArgs = applyCommandDefaults(command, [...(provider?.args || [])]);
   const effectiveModel = resolveCliModel(model);
   const shouldInject = !isAntigravityCommand(command) && effectiveModel && !hasModelFlag(baseArgs);
-  const args = shouldInject ? [...baseArgs, '--model', effectiveModel] : baseArgs;
+  // Map a bare Claude id to its Bedrock form when the box is in Bedrock mode
+  // (no-op otherwise / for non-Claude ids) — mirrors buildCliArgs for the
+  // claude-code-tui runner.
+  const injectedModel = shouldInject
+    ? resolveBedrockCliModel(effectiveModel, {
+      env: { ...process.env, ...provider?.envVars },
+      providerId: provider?.id,
+    })
+    : effectiveModel;
+  const args = shouldInject ? [...baseArgs, '--model', injectedModel] : baseArgs;
   return { command, args };
 }
 

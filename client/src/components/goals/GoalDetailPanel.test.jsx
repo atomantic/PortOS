@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { act, render, screen, fireEvent } from '@testing-library/react';
 
 // The panel fires getActivities()/getCalendarAccounts() on mount; stub them so the
 // read view renders without network. The badge assertions below only care about
@@ -29,18 +29,22 @@ const baseGoal = {
   ],
 };
 
-const renderPanel = (goal = baseGoal) =>
-  render(
+const renderPanel = async (goal = baseGoal) => {
+  const view = render(
     <GoalDetailPanel goal={goal} allGoals={[goal]} onClose={() => {}} onRefresh={() => {}} />
   );
+
+  await act(async () => { await Promise.resolve(); });
+  return view;
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
 });
 
 describe('GoalDetailPanel badge migration to <Pill>', () => {
-  it('renders the category/horizon/status badges with the shared Pill structural shape', () => {
-    renderPanel();
+  it('renders the category/horizon/status badges with the shared Pill structural shape', async () => {
+    await renderPanel();
     // Pill emits `inline-flex items-center gap-1 rounded` + the sm size's `text-xs px-2 py-0.5`.
     const category = screen.getByText('Mastery');
     expect(category.className).toContain('inline-flex');
@@ -61,8 +65,8 @@ describe('GoalDetailPanel badge migration to <Pill>', () => {
     expect(status.className).toContain('text-gray-400');
   });
 
-  it('renders the urgency badge as a Pill with its computed color and warning icon', () => {
-    renderPanel();
+  it('renders the urgency badge as a Pill with its computed color and warning icon', async () => {
+    await renderPanel();
     const urgency = screen.getByText('80% urgency');
     expect(urgency.className).toContain('inline-flex');
     expect(urgency.className).toContain('bg-gray-700');
@@ -71,35 +75,35 @@ describe('GoalDetailPanel badge migration to <Pill>', () => {
     expect(urgency.querySelector('svg')).not.toBeNull();
   });
 
-  it('renders read-only tag chips as Pills with a leading Tag icon', () => {
-    renderPanel();
+  it('renders read-only tag chips as Pills with a leading Tag icon', async () => {
+    await renderPanel();
     const tag = screen.getByText('focus');
     expect(tag.className).toContain('inline-flex');
     expect(tag.className).toContain('text-port-accent');
     expect(tag.querySelector('svg')).not.toBeNull();
   });
 
-  it('does not emit a stray border-color utility for bordered={false} bare Pills', () => {
-    renderPanel();
+  it('does not emit a stray border-color utility for bordered={false} bare Pills', async () => {
+    await renderPanel();
     const category = screen.getByText('Mastery');
     // bordered={false} strips both the `border` width and any tone border-color.
     expect(category.className).not.toMatch(/\bborder\b/);
   });
 
-  it('keeps the goal-type badge as its own non-standard-size span (not a Pill)', () => {
+  it('keeps the goal-type badge as its own non-standard-size span (not a Pill)', async () => {
     // sub-apex exercises the goalType !== 'standard' branch; its text-xs+px-1.5 size
     // is intentionally left un-migrated so Pill's padding can't shift it.
-    renderPanel({ ...baseGoal, goalType: 'sub-apex' });
+    await renderPanel({ ...baseGoal, goalType: 'sub-apex' });
     const typeBadge = screen.getByText('Sub-Apex');
     expect(typeBadge.tagName).toBe('SPAN');
     expect(typeBadge.className).toContain('px-1.5');
     expect(typeBadge.className).not.toContain('inline-flex');
   });
 
-  it('keeps the todo-priority badge as its own px-1 span (not a Pill)', () => {
+  it('keeps the todo-priority badge as its own px-1 span (not a Pill)', async () => {
     // px-1 is tighter than Pill's xs (px-1.5); migrating would widen it, so it
     // stays a native span. Pin that so the exception can't silently regress.
-    renderPanel({
+    await renderPanel({
       ...baseGoal,
       todos: [{ id: 't-1', title: 'do thing', status: 'todo', priority: 'high' }],
     });
@@ -111,23 +115,23 @@ describe('GoalDetailPanel badge migration to <Pill>', () => {
 });
 
 describe('GoalDetailPanel provenance chip', () => {
-  it('renders an Inferred provenance chip when an AI-derived reading is present', () => {
+  it('renders an Inferred provenance chip when an AI-derived reading is present', async () => {
     // baseGoal carries urgency: 0.8 → the urgency/feasibility readings are modeled,
     // so the header must declare provenance the same way the insight surfaces do.
-    renderPanel();
+    await renderPanel();
     expect(screen.getByText('Inferred')).toBeTruthy();
   });
 
-  it('omits the provenance chip when there is no AI-derived reading', () => {
+  it('omits the provenance chip when there is no AI-derived reading', async () => {
     // A goal with neither urgency nor feasibility has nothing modeled to attribute.
-    renderPanel({ ...baseGoal, urgency: undefined, feasibility: undefined });
+    await renderPanel({ ...baseGoal, urgency: undefined, feasibility: undefined });
     expect(screen.queryByText('Inferred')).toBeNull();
   });
 
   it('suppresses the provenance chip in edit mode (readings are off-screen)', async () => {
     // Edit mode swaps the urgency/activity-budget read view for the edit form, so
     // a chip attributing those readings would point at content no longer shown.
-    renderPanel();
+    await renderPanel();
     expect(screen.getByText('Inferred')).toBeTruthy(); // read mode: present
     fireEvent.click(screen.getByText('Edit'));
     expect(screen.queryByText('Inferred')).toBeNull();

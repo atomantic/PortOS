@@ -6,6 +6,7 @@ import * as api from '../../../services/api';
 import Banner from '../../ui/Banner';
 import { CodeReviewDefaultsProvider } from '../../../hooks/useCodeReviewDefaults';
 import AppTaskTypeSection from './schedule/AppTaskTypeSection';
+import TaskConfigDrawer from './schedule/TaskConfigDrawer';
 import { TASK_FILTERS, DEFAULT_FILTER_ID } from './schedule/scheduleConstants';
 
 export default function ScheduleTab({ apps }) {
@@ -20,6 +21,15 @@ export default function ScheduleTab({ apps }) {
     const params = new URLSearchParams(searchParams);
     if (next === DEFAULT_FILTER_ID) params.delete('filter');
     else params.set('filter', next);
+    setSearchParams(params, { replace: true });
+  }, [searchParams, setSearchParams]);
+
+  // The open config drawer is deep-linkable via ?task= per the URL-param convention.
+  const selectedTask = searchParams.get('task');
+  const setSelectedTask = useCallback((next) => {
+    const params = new URLSearchParams(searchParams);
+    if (next) params.set('task', next);
+    else params.delete('task');
     setSearchParams(params, { replace: true });
   }, [searchParams, setSearchParams]);
 
@@ -115,6 +125,9 @@ export default function ScheduleTab({ apps }) {
   }
 
   const improvementDisabled = schedule.improvementEnabled === false;
+  const tasks = schedule.tasks || schedule.appImprovement || schedule.selfImprovement || {};
+  const allTaskTypes = Object.keys(tasks);
+  const selectedConfig = selectedTask ? tasks[selectedTask] : null;
 
   return (
     <CodeReviewDefaultsProvider>
@@ -158,14 +171,10 @@ export default function ScheduleTab({ apps }) {
       )}
 
       <AppTaskTypeSection
-        tasks={schedule.tasks || schedule.appImprovement || schedule.selfImprovement}
-        onUpdate={handleUpdateTask}
-        onTrigger={handleTriggerAppImprovement}
-        onReset={handleResetTask}
-        providers={providers}
+        tasks={tasks}
         apps={apps}
-        onUpdateOverride={handleUpdateAppOverride}
-        onBulkToggleOverride={handleBulkToggleOverride}
+        onTrigger={handleTriggerAppImprovement}
+        onSelectTask={setSelectedTask}
         improvementDisabled={improvementDisabled}
         filter={filter}
         onFilterChange={setFilter}
@@ -176,6 +185,22 @@ export default function ScheduleTab({ apps }) {
           Schedule last updated: {new Date(schedule.lastUpdated).toLocaleString()}
         </div>
       )}
+
+      <TaskConfigDrawer
+        open={!!selectedConfig}
+        taskType={selectedTask}
+        config={selectedConfig}
+        onClose={() => setSelectedTask(null)}
+        onUpdate={handleUpdateTask}
+        onTrigger={handleTriggerAppImprovement}
+        onReset={handleResetTask}
+        providers={providers}
+        apps={apps}
+        onUpdateOverride={handleUpdateAppOverride}
+        onBulkToggleOverride={handleBulkToggleOverride}
+        allTaskTypes={allTaskTypes}
+        improvementDisabled={improvementDisabled}
+      />
     </div>
     </CodeReviewDefaultsProvider>
   );

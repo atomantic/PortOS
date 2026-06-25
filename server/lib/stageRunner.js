@@ -16,7 +16,7 @@
 
 import { ServerError } from './errorHandler.js';
 import { findBalancedBlocks, tryParseWithRepair } from './jsonExtract.js';
-import { resolveEffectiveModel, runPromptThroughProvider, DEFAULT_TIMEOUT_MS } from './promptRunner.js';
+import { resolveEffectiveModel, runPromptThroughProvider, DEFAULT_TIMEOUT_MS, isLocalEndpoint } from './promptRunner.js';
 import { stripCodeFences } from './aiProvider.js';
 import { extractCodexAssistant } from './codexAssistantExtract.js';
 import { getActiveProvider, getProviderById } from '../services/providers.js';
@@ -84,16 +84,81 @@ export function resolveModel(provider, modelHint) {
   return modelHint;
 }
 
+// Compose the model hint for a stage with soft-default awareness (#1558).
+//
+// The model dimension is NOT symmetric with the provider dimension. A
+// `stage.provider` is opt-in — almost no stage sets one — so a run-level
+// `providerDefault` applies to the common (unpinned) case and only loses to the
+// rare deliberate `stage.provider` pin. But nearly every stage in the shipped
+// `stage-config.json` carries a `stage.model` *tier* value (`default`/`quick`/
+// `coding`/`heavy`) — that tier is the model-dimension equivalent of "no
+// provider pinned", a default mapping, NOT a deliberate per-stage model choice.
+// So a run-level `modelDefault` must OVERRIDE a stage's tier (otherwise
+// launching Series Autopilot with a model would be a no-op on ~every stage),
+// while still LOSING to a deliberate explicit-model pin (an actual model id like
+// `lmstudio:gptoss-20b`, the case #1558 set out to protect).
+//
+// Precedence, strongest first:
+//   1. modelOverride        — hard per-call model id (manual "regenerate with model X")
+//   2. explicit stage.model — a deliberate pin (non-tier model id) beats the run default
+//   3. modelDefault         — the run-level soft default (Series Autopilot's run model)
+//   4. stage.model tier     — the stage's default tier mapping (default/quick/coding/heavy)
+//   5. provider default     — resolveModel's own fallback
+function resolveModelHint(stage, options = {}) {
+  const stageModel = stage?.model;
+  const stagePin = stageModel && !isTierName(stageModel) ? stageModel : null;
+  const stageTier = isTierName(stageModel) ? stageModel : null;
+  return options.modelOverride || stagePin || options.modelDefault || stageTier || null;
+}
+
 // A conservative-large window assumed for frontier CLI / cloud-API providers
 // that haven't declared one. 128K is below every current frontier model's real
 // ceiling (Claude/GPT/Gemini are ≥128K, often ~1M), so it means "a typical
 // whole manuscript fits in one call" without over-promising. Users with very
 // large manuscripts can set an explicit `contextWindow` to lift it further.
 export const DEFAULT_LARGE_CONTEXT_WINDOW = 128_000;
+export const CODEX_CONTEXT_WINDOW = 1_000_000;
+export const GEMINI_CONTEXT_WINDOW = 1_048_576;
 
-const LOCAL_ENDPOINT_RE = /^(https?:\/\/)?(localhost|127\.0\.0\.1|0\.0\.0\.0|\[?::1\]?)(:|\/|$)/i;
-const isLocalEndpoint = (endpoint) =>
-  typeof endpoint === 'string' && LOCAL_ENDPOINT_RE.test(endpoint.trim());
+// Keep in sync with client/src/utils/providers.js.
+const KNOWN_MODEL_CONTEXT_WINDOWS = Object.freeze([
+  [/gpt[-_.:/]?5\.5(?:[-_.:/]|\b)/i, CODEX_CONTEXT_WINDOW],
+  [/gpt[-_.:/]?5\.4[-_.:/]?mini(?:[-_.:/]|\b)/i, 400_000],
+  [/gpt[-_.:/]?5\.4(?![-_.:/]?(?:mini|nano))(?:[-_.:/]|\b)/i, CODEX_CONTEXT_WINDOW],
+  [/claude[-_.:/]?fable[-_.:/]?5(?:[-_.:/]|\b)/i, 1_000_000],
+  [/claude[-_.:/]?mythos[-_.:/]?5(?:[-_.:/]|\b)/i, 1_000_000],
+  [/claude[-_.:/]?opus[-_.:/]?4[-_.:/]?8/i, 1_000_000],
+  [/claude[-_.:/]?sonnet[-_.:/]?4[-_.:/]?6(?:[-_.:/]|\b)/i, 1_000_000],
+  [/claude[-_.:/]?sonnet[-_.:/]?4(?:[-_.:/]|\b)/i, 200_000],
+  [/claude[-_.:/]?haiku[-_.:/]?4(?:[-_.:/]|\b)/i, 200_000],
+  [/gemini[-_.:/]?2\.5[-_.:/]?pro(?:[-_.:/]|\b)/i, GEMINI_CONTEXT_WINDOW],
+]);
+
+export function knownModelContextWindow(model) {
+  if (typeof model !== 'string' || !model.trim()) return null;
+  const found = KNOWN_MODEL_CONTEXT_WINDOWS.find(([pattern]) => pattern.test(model));
+  return found ? found[1] : null;
+}
+
+export function knownProviderContextWindow(provider) {
+  if (provider?.type !== 'cli' && provider?.type !== 'tui') return null;
+  const id = String(provider?.id || '').toLowerCase();
+  const command = String(provider?.command || '').toLowerCase();
+  if (id === 'codex' || id === 'codex-tui' || command === 'codex') return CODEX_CONTEXT_WINDOW;
+  if (id === 'antigravity-cli' || id === 'antigravity-tui' || command === 'agy') return GEMINI_CONTEXT_WINDOW;
+  return null;
+}
+
+// The local-backend concurrency gate (cap concurrent in-flight calls per local
+// endpoint so N parallel stage calls don't thrash one GPU's VRAM) lives in
+// promptRunner.js — the actual execution layer — so it covers the initially
+// selected provider, a proactive createRun swap, AND a runtime fallback that
+// lands on a local backend. Re-exported here for callers/tests that reference
+// the gate by its historical stageRunner path. `isLocalEndpoint` is shared from
+// the same module so the context-window heuristic below and the gate agree on
+// what "local" means.
+export { withLocalConcurrencyGate, LOCAL_LLM_MAX_CONCURRENCY } from './promptRunner.js';
+export { isLocalEndpoint };
 
 // CLI/TUI providers (Claude Code, Codex, Antigravity) are frontier models;
 // non-local API providers are cloud. Local backends (ollama/lmstudio on
@@ -104,12 +169,18 @@ const isLikelyLargeContextProvider = (provider) => {
   return false;
 };
 
-// Planning-time context window for a provider: an explicit `contextWindow`
-// wins, else the Ollama per-request `numCtx`, else a large default for frontier
-// providers, else null (the budgeter applies a conservative floor for unknown
-// local backends). Model-level windows can be layered in later.
-export function effectiveContextWindow(provider) {
+// Planning-time context window for a provider/model: an explicit
+// `contextWindow` wins, else a known model window for the resolved model, else
+// a known provider-level window for configured-default process providers, else
+// the Ollama per-request `numCtx`, else a large default for frontier providers,
+// else null (the budgeter applies a conservative floor for unknown local
+// backends).
+export function effectiveContextWindow(provider, model) {
   if (Number(provider?.contextWindow) > 0) return Number(provider.contextWindow);
+  const modelWindow = knownModelContextWindow(model);
+  if (modelWindow) return modelWindow;
+  const providerWindow = knownProviderContextWindow(provider);
+  if (providerWindow) return providerWindow;
   if (Number(provider?.numCtx) > 0) return Number(provider.numCtx);
   if (isLikelyLargeContextProvider(provider)) return DEFAULT_LARGE_CONTEXT_WINDOW;
   return null;
@@ -126,14 +197,26 @@ export function effectiveContextWindow(provider) {
 export async function resolveStageContext(stageName, options = {}) {
   const stage = getStage(stageName);
   const provider = await resolveProviderForStage(stage, options);
-  const model = resolveModel(provider, options.modelOverride || stage?.model);
-  return { provider, model, contextWindow: effectiveContextWindow(provider) };
+  const requestedModel = resolveModel(provider, resolveModelHint(stage, options));
+  const model = resolveEffectiveModel(provider, requestedModel);
+  return { provider, model, contextWindow: effectiveContextWindow(provider, model) };
 }
 
-// Stage config can pin a specific provider via `stage.provider`. If set we
-// must use it (or fail) — falling back to the active provider would route
-// silently through whatever's currently selected, defeating the override.
-async function resolveProviderForStage(stage, { providerOverride } = {}) {
+// Provider resolution precedence, strongest first:
+//   1. `providerOverride` — an explicit per-call choice ("run THIS request with
+//      provider X right now", e.g. a route's regenerate-with-provider button).
+//      The most specific signal, so it beats even a stage pin. Throws if the
+//      requested provider is unavailable — the caller asked for it by name.
+//   2. `stage.provider` — a deliberate per-stage pin (Prompts page /
+//      stage-config.json). Beats a blanket run-level default so a pinned stage
+//      keeps running on its chosen provider even when something sets a different
+//      default for everything else (e.g. Series Autopilot's run provider).
+//   3. `providerDefault` — a blanket run-level default that applies ONLY to
+//      stages without their own pin. Unlike an override it is a soft preference:
+//      if it's unavailable we fall through to the active provider rather than
+//      throwing, because it was never a per-call demand.
+//   4. The active provider — the system-wide fallback.
+async function resolveProviderForStage(stage, { providerOverride, providerDefault } = {}) {
   if (providerOverride) {
     const pinned = await getProviderById(providerOverride).catch(() => null);
     if (pinned?.enabled) return pinned;
@@ -149,6 +232,12 @@ async function resolveProviderForStage(stage, { providerOverride } = {}) {
       `Stage provider "${stage.provider}" is not available — re-pick a provider in Prompts or the stage settings`,
       { status: 503, code: 'STAGE_PROVIDER_UNAVAILABLE' }
     );
+  }
+  if (providerDefault) {
+    const fallback = await getProviderById(providerDefault).catch(() => null);
+    if (fallback?.enabled) return fallback;
+    // Soft default: an unavailable run default is not a hard error — drop to the
+    // active provider below instead of throwing.
   }
   const active = await getActiveProvider().catch(() => null);
   if (active?.enabled) return active;
@@ -250,8 +339,17 @@ export function extractJson(text, { promptToStrip } = {}) {
  * (or the parsed JSON in the `content` field when `returnsJson` is true).
  *
  * Options:
- *   - providerOverride: explicit provider id, beats stage.provider
- *   - modelOverride: explicit model id, beats stage.model
+ *   - providerOverride: explicit per-call provider id, beats stage.provider
+ *   - providerDefault: blanket run-level provider id used ONLY when the stage has
+ *     no pin of its own; loses to stage.provider and falls through to the active
+ *     provider if unavailable (see resolveProviderForStage)
+ *   - modelOverride: explicit model id (hard), beats everything
+ *   - modelDefault: blanket run-level model id (Series Autopilot's run model,
+ *     #1558). Soft: it OVERRIDES a stage's tier value (default/quick/coding/heavy)
+ *     but LOSES to a deliberate explicit-model pin (a non-tier model id) and to a
+ *     hard modelOverride. See resolveModelHint for the full precedence — the model
+ *     dimension is deliberately NOT symmetric with providerDefault because nearly
+ *     every stage carries a tier value while stage.provider is opt-in.
  *   - timeoutOverride: explicit ms timeout, beats stage.timeout and the provider default
  *   - returnsJson: parse `content` via `extractJson` before returning
  *   - source: free-form tag persisted on the run record (e.g. 'pipeline-text-stage',
@@ -312,7 +410,7 @@ export async function runStageScopedInlineLLM(stageName, prompt, options = {}) {
  */
 async function executeStagePrompt({ stage, label, prompt, options }) {
   const provider = await resolveProviderForStage(stage, options);
-  const resolvedModel = resolveModel(provider, options.modelOverride || stage?.model);
+  const resolvedModel = resolveModel(provider, resolveModelHint(stage, options));
   // resolveEffectiveModel gates the override per provider type and, for
   // CLI providers with a baked --model/-m flag in args, extracts the
   // args-pinned model id so the run record + log line reflect what
@@ -389,6 +487,11 @@ async function executeStagePrompt({ stage, label, prompt, options }) {
   // (runId / model / providerId) here so the persisted stage result points
   // at the run that actually produced the text — otherwise pipeline history
   // / restore links land on a failed record.
+  // The local-backend concurrency gate is applied INSIDE runPromptThroughProvider
+  // (around each actual execution — primary, proactive swap, and runtime
+  // fallback), so we do NOT wrap here: a second gate on the same local endpoint
+  // would deadlock against the inner one (outer holds the only slot, inner waits
+  // forever).
   const runResult2 = await runPromptThroughProvider({
     provider: effectiveProvider, model: effectiveModel, prompt, source: options.source || 'staged-llm', runId,
     timeout: effectiveTimeout,

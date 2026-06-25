@@ -98,7 +98,7 @@ Synopsis (no beats yet):
 ```
 
 {{/synopsis}}
-Your opening beat must follow naturally from how this issue closed. Don't repeat its closing image; advance from it.
+This prior issue's events are already told — treat them as a boundary, not material to re-dramatize. Your opening beat must follow naturally from how it closed, but do NOT replay its beats or re-stage its climax. Don't repeat its closing image; advance from it.
 {{/priorIssue}}
 
 {{#nextIssue}}
@@ -121,7 +121,7 @@ Synopsis (no beats yet):
 ```
 
 {{/synopsis}}
-Your closing beat / cliffhanger must hand cleanly into this next issue. The protagonist's state, location, and outstanding stakes at the end of your beat sheet should set up its opening without contradicting it.
+This next issue's events are OUT OF SCOPE for your beat sheet — it is a boundary, not material to continue into. Do NOT dramatize, climax on, or pull forward any event the next issue owns; its climax belongs to it, not to you. Your closing beat / cliffhanger must hand cleanly into this next issue — the protagonist's state, location, and outstanding stakes at the end of your beat sheet should set up its opening without contradicting it — but stop AT this issue's cliffhanger, not past it.
 {{/nextIssue}}
 
 ## Rough seed from the user
@@ -129,6 +129,14 @@ Your closing beat / cliffhanger must hand cleanly into this next issue. The prot
 ```
 {{seed}}
 ```
+
+{{^hasSourceMaterials}}
+**This seed defines THIS issue's scope.** Dramatize only the events it assigns to this issue. Any neighboring issues shown above are hard boundaries — do NOT cross into them. It is better to land at the LOW end of the beat range than to absorb a neighbor's events to fill space; end on this issue's own cliffhanger.
+
+{{#paddingRisk}}
+**Scope warning — terse seed, long issue.** This issue's seed is short relative to its {{lengthTargets.pageTarget}}-page target, which tempts the beat sheet to pad by annexing the next issue's events. Do NOT do that. A focused beat sheet at the low end of the {{lengthTargets.beatsMin}}–{{lengthTargets.beatsMax}} range that stays in scope is correct; overrunning into the next issue is not. Expand by deepening the events the seed already implies — texture, complication, character beats — never by pulling forward what a later issue owns.
+{{/paddingRisk}}
+{{/hasSourceMaterials}}
 
 {{#hasSourceMaterials}}
 ## Existing source material to back-fill from
@@ -156,10 +164,11 @@ A markdown document with the following sections, in this exact order:
 1. **`# Issue Title`** — one line, your refined title for this issue/episode (override the working title if the seed implies a better one).
 2. **`## Logline`** — one sentence pitching the issue.
 3. **`## Theme`** — one sentence on the emotional/thematic core. What is this issue *about* underneath the plot?
-4. **`## Beat sheet`** — **{{lengthTargets.beatsMin}}–{{lengthTargets.beatsMax}} beats** numbered as a markdown list. Each beat is one sentence describing a concrete dramatic event. Cover **hook (Saga-style opening — a single arresting image or moment, not exposition) → setup → rising action → midpoint reversal → second-half escalation → climax → cliffhanger / lead-in to the next issue.** This beat sheet feeds a {{lengthTargets.proseWordsMin}}–{{lengthTargets.proseWordsMax}} word prose draft, which feeds a {{lengthTargets.pageTarget}}-page comic script — too few beats and the downstream stages have nothing to pace against. The final beat MUST be a cliffhanger, reveal, or strong lead-in to the next issue, not a tidy resolution.
-5. **`## Setting`** — 2–3 sentences naming the locations this issue uses and how they look. Reference the world's visual style.
-6. **`## New characters (if any)`** — for any character the seed introduces that isn't in the series bible, give a one-line `**Name** — physical + role description`. Skip the section if there are none.
-7. **`## Open questions` (OPTIONAL — usually omit)** — ONLY include this section when something fundamentally cannot be decided without user input (e.g. the seed asks the writer to choose between two specific named entities, or references off-canvas information only the user knows). Do NOT use this section for choices you could make yourself by leaning on the series bible. If every beat is committed, omit the section entirely.
+4. **`## Beat sheet`** — **{{lengthTargets.beatsMin}}–{{lengthTargets.beatsMax}} beats** numbered as a markdown list. Each beat is one sentence describing a concrete dramatic event. Cover **hook (Saga-style opening — a single arresting image or moment, not exposition) → setup → rising action → midpoint reversal → second-half escalation → climax → cliffhanger / lead-in to the next issue.** This beat sheet feeds a {{lengthTargets.proseWordsMin}}–{{lengthTargets.proseWordsMax}} word prose draft, which feeds a {{lengthTargets.pageTarget}}-page comic script — too few beats and the downstream stages have nothing to pace against. Every beat must stay within THIS issue's scope (the seed — or, when back-filling, the source material — above); do not dramatize events the neighboring issues own. The final beat MUST be a cliffhanger, reveal, or strong lead-in to the next issue, not a tidy resolution — and it must be THIS issue's cliffhanger, not the next issue's climax.
+5. **`## Scenes`** — the canonical scene list for this issue, a numbered markdown list. Each entry is `Scene N — INT./EXT. LOCATION — TIME` followed by a short clause naming which beats it covers (e.g. `Scene 1 — EXT. ROOFTOP — DUSK: beats 1–2, the hook and Lina's discovery`). A **scene** is one continuous unit of place + time — start a new scene only when the location, time, or POV shifts. These sluglines are the single source of truth for scene boundaries downstream: the prose draft, comic script, and teleplay all inherit them, so be deliberate and use the exact slugline form `INT.`/`EXT.` + LOCATION + `—` + TIME. Aim for a handful of scenes (typically fewer than the beat count — several beats often share one scene).
+6. **`## Setting`** — 2–3 sentences naming the locations this issue uses and how they look. Reference the world's visual style.
+7. **`## New characters (if any)`** — for any character the seed introduces that isn't in the series bible, give a one-line `**Name** — physical + role description`. Skip the section if there are none.
+8. **`## Open questions` (OPTIONAL — usually omit)** — ONLY include this section when something fundamentally cannot be decided without user input (e.g. the seed asks the writer to choose between two specific named entities, or references off-canvas information only the user knows). Do NOT use this section for choices you could make yourself by leaning on the series bible. If every beat is committed, omit the section entirely.
 
 Be concrete. Beats like "the character has an internal moment" are useless; beats like "Lina finds the burnt photograph hidden under the floorboard and recognizes the figure as her uncle" are useful.
 

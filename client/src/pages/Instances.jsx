@@ -7,7 +7,7 @@ import {
   Database, Brain, CheckCircle2, AlertCircle, Clock,
   RefreshCcw, Timer,
   Target, Sword, Fingerprint, HeartPulse, ChevronDown, ChevronRight,
-  Lock, Globe, Info, Sparkles, Film, Images, Library, BookOpen, FilePen
+  Lock, Globe, Info, Sparkles, Film, Images, Library, BookOpen, FilePen, Music, Music2, Disc3, Clapperboard, Palette, BookText
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import Pill from '../components/ui/Pill';
@@ -17,6 +17,7 @@ import {
   removePeer, connectPeer, reciprocatePeer, probePeer, syncPeer, getTailnetInfo, provisionTailnetCert,
   getNetworkExposure,
   listPeerSubscriptions,
+  getPeerFullSyncCoverage,
 } from '../services/api';
 import PeerAppsList from '../components/instances/PeerAppsList';
 import PeerAgentsSection from '../components/instances/PeerAgentsSection';
@@ -228,6 +229,14 @@ function SelfCard({ self, onUpdate, syncStatus, tailnetInfo }) {
     toast.success('Instance name updated');
   };
 
+  const defaultFullSync = self?.defaultPeerFullSync === true;
+  const toggleDefaultFullSync = async () => {
+    const result = await updateSelfInstance({ defaultPeerFullSync: !defaultFullSync }).catch(() => null);
+    if (!result) return;
+    onUpdate();
+    toast.success(`New peers will ${!defaultFullSync ? 'default to full mirror' : 'start with no categories'}`);
+  };
+
   if (!self) return null;
 
   return (
@@ -277,6 +286,22 @@ function SelfCard({ self, onUpdate, syncStatus, tailnetInfo }) {
             <span>No tailnet DNS — peers will reach you by IP</span>
           </div>
         )}
+        <button
+          onClick={toggleDefaultFullSync}
+          className="mt-2 pt-2 border-t border-port-border/50 flex items-start gap-2 w-full text-left group"
+          title="When on, peers you add will start in full-mirror mode automatically"
+        >
+          <div className={`w-3 h-3 mt-0.5 rounded-sm border flex-shrink-0 flex items-center justify-center transition-colors ${
+            defaultFullSync ? 'bg-port-accent border-port-accent' : 'border-gray-600 bg-transparent'
+          }`}>
+            {defaultFullSync && <Check size={8} className="text-white" />}
+          </div>
+          <Globe size={12} className={`mt-0.5 ${defaultFullSync ? 'text-port-accent' : 'text-gray-500'}`} />
+          <div className="flex-1 min-w-0">
+            <span className={`text-xs ${defaultFullSync ? 'text-white' : 'text-gray-400'} group-hover:text-gray-300`}>Default new peers to full mirror</span>
+            <p className="text-[10px] text-gray-600 leading-snug">Applies to peers added from now on; existing peers are unchanged.</p>
+          </div>
+        </button>
         {syncStatus?.local && (
           <div className="mt-2 pt-2 border-t border-port-border/50 grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-gray-400">
             <span className="flex items-center gap-1.5">
@@ -493,21 +518,74 @@ const SYNC_CATEGORY_META = [
   { key: 'videoHistory', label: 'Video History', icon: Film, description: 'Generated-video metadata rows (so synced collection videos render)' },
   { key: 'storyBuilder', label: 'Story Builder', icon: BookOpen, description: 'Resumable Story Builder sessions you marked for cross-machine sync' },
   { key: 'authors', label: 'Authors', icon: FilePen, description: 'Author personas + headshots used as series bylines (PostgreSQL)' },
+  { key: 'artists', label: 'Artists', icon: Music, description: 'Music artist personas + portraits (PostgreSQL)' },
+  { key: 'albums', label: 'Albums', icon: Disc3, description: 'Music albums + cover art and ordered track lists (PostgreSQL)' },
+  { key: 'tracks', label: 'Tracks', icon: Music2, description: 'Music tracks + attached audio files (PostgreSQL)' },
+  { key: 'creativeDirectorProjects', label: 'Creative Director', icon: Clapperboard, description: 'Creative Director projects: treatment, scenes, runs (PostgreSQL)' },
+  { key: 'moodBoards', label: 'Mood Boards', icon: Palette, description: 'Mood boards: pinned image + text references (PostgreSQL)' },
+  { key: 'writersRoomWorks', label: 'Writers Room', icon: BookText, description: 'Writers Room works: manuscripts + draft versions + prose bodies (PostgreSQL)' },
   { key: 'catalog', label: 'Catalog', icon: Library, description: 'Creative ingredients catalog: orphan ingredients + ref links (PostgreSQL)' }
 ];
 
 // Snapshot categories — exclude the per-record / delta-based categories that
-// have no 60s snapshot checksum: brain + memory (delta), catalog + authors
+// have no 60s snapshot checksum: brain + memory (delta), catalog + authors/music
 // (PostgreSQL, per-record peer-push only — no snapshot loop).
-const NON_SNAPSHOT_KEYS = new Set(['brain', 'memory', 'catalog', 'authors']);
+const NON_SNAPSHOT_KEYS = new Set(['brain', 'memory', 'catalog', 'authors', 'artists', 'albums', 'tracks', 'creativeDirectorProjects', 'moodBoards', 'writersRoomWorks']);
 const SNAPSHOT_CATEGORIES = SYNC_CATEGORY_META.filter(m => !NON_SNAPSHOT_KEYS.has(m.key));
+
+// Indicator backed by REAL coverage diffing (record IDs vs confirmed pushes),
+// not the BIGSERIAL cursors — so "fully mirrored" never lies. Refetches on mount
+// and whenever `refreshKey` changes; the caller passes peer.lastSeen, so it
+// refreshes on each probe tick — cheap for a single-user box and lets the
+// "N pending" count tick down live as the initial back-subscribe converges.
+function FullSyncCoverageBadge({ peerId, peerInstanceId, refreshKey }) {
+  const [coverage, setCoverage] = useState(null);
+  const [loaded, setLoaded] = useState(false);
+  useEffect(() => {
+    if (!peerInstanceId) { setCoverage(null); setLoaded(true); return; }
+    let cancelled = false;
+    setLoaded(false);
+    getPeerFullSyncCoverage(peerId, { silent: true })
+      .then((r) => { if (!cancelled) setCoverage(r); })
+      .catch(() => { if (!cancelled) setCoverage(null); })
+      .finally(() => { if (!cancelled) setLoaded(true); });
+    return () => { cancelled = true; };
+  }, [peerId, peerInstanceId, refreshKey]);
+
+  if (!peerInstanceId) {
+    return <span className="text-[10px] text-gray-600">awaiting first connection…</span>;
+  }
+  if (!loaded || !coverage) {
+    return <span className="text-[10px] text-gray-600">checking coverage…</span>;
+  }
+  if (coverage.fullyMirrored) {
+    return (
+      <span className="flex items-center gap-1 text-[10px] text-port-success" title={`All ${coverage.total} record(s) confirmed-delivered to this peer`}>
+        <CheckCircle2 size={11} /> Fully mirrored · {coverage.total} record{coverage.total !== 1 ? 's' : ''}
+      </span>
+    );
+  }
+  return (
+    <span className="flex items-center gap-1 text-[10px] text-port-warning" title={`${coverage.pending} of ${coverage.total} record(s) not yet confirmed-delivered`}>
+      <Clock size={11} /> {coverage.pending} pending · {coverage.confirmed}/{coverage.total} mirrored
+    </span>
+  );
+}
 
 function SyncCategoriesPanel({ peer, onRefresh }) {
   const [expanded, setExpanded] = useState(false);
   const categories = peer.syncCategories || {};
-  const enabledCount = Object.values(categories).filter(Boolean).length;
+  const fullSync = peer.fullSync === true;
+  // A full-sync peer mirrors every category — present them as locked-on.
+  const enabledCount = fullSync ? SYNC_CATEGORY_META.length : Object.values(categories).filter(Boolean).length;
+
+  const toggleFullSync = async () => {
+    await updatePeer(peer.id, { fullSync: !fullSync }).catch(() => null);
+    onRefresh();
+  };
 
   const toggleCategory = async (key) => {
+    if (fullSync) return; // categories are locked-on under full mirror
     const newValue = !categories[key];
     const anyCatEnabled = Object.values({ ...categories, [key]: newValue }).some(Boolean);
     await updatePeer(peer.id, {
@@ -558,9 +636,37 @@ function SyncCategoriesPanel({ peer, onRefresh }) {
 
       {expanded && (
         <div className="mt-2 space-y-1">
+          {/* Full mirror toggle — when on, every current + future category is
+              implied and all subscribable records back-subscribe to this peer. */}
+          <button
+            onClick={toggleFullSync}
+            className={`flex items-start gap-2 w-full px-2 py-1.5 rounded border transition-colors text-left mb-1.5 ${
+              fullSync ? 'border-port-accent/60 bg-port-accent/10' : 'border-port-border hover:bg-port-bg/50'
+            }`}
+          >
+            <div className={`w-3 h-3 mt-0.5 rounded-sm border flex-shrink-0 flex items-center justify-center transition-colors ${
+              fullSync ? 'bg-port-accent border-port-accent' : 'border-gray-600 bg-transparent'
+            }`}>
+              {fullSync && <Check size={8} className="text-white" />}
+            </div>
+            <Globe size={12} className={`mt-0.5 ${fullSync ? 'text-port-accent' : 'text-gray-500'}`} />
+            <div className="flex-1 min-w-0">
+              <span className={`text-xs font-medium ${fullSync ? 'text-white' : 'text-gray-300'}`}>Full mirror</span>
+              <p className="text-[10px] text-gray-600 leading-snug">
+                Mirror everything to {peer.name || 'this peer'} — every category, all existing
+                records, and any new category added in a future version. Reciprocated automatically.
+              </p>
+              {fullSync && (
+                <div className="mt-1">
+                  <FullSyncCoverageBadge peerId={peer.id} peerInstanceId={peer.instanceId} refreshKey={peer.lastSeen} />
+                </div>
+              )}
+            </div>
+          </button>
           <p className="text-[10px] text-gray-600 mb-1.5 leading-snug">
-            Enabling a category syncs it both ways — we ask {peer.name || 'the peer'} to
-            sync the same back automatically.
+            {fullSync
+              ? 'Categories are locked on while full mirror is enabled. Turn it off to choose categories individually.'
+              : <>Enabling a category syncs it both ways — we ask {peer.name || 'the peer'} to sync the same back automatically.</>}
           </p>
           <div className="flex items-center justify-end gap-2 mb-1.5">
             {/* Available whenever we know the peer's identity — NOT gated on
@@ -579,39 +685,50 @@ function SyncCategoriesPanel({ peer, onRefresh }) {
                 Make mutual
               </button>
             )}
-            <button
-              onClick={() => toggleAll(true)}
-              className="text-[10px] text-port-accent hover:text-port-accent/80 transition-colors"
-            >
-              Enable all
-            </button>
-            <button
-              onClick={() => toggleAll(false)}
-              className="text-[10px] text-gray-500 hover:text-gray-400 transition-colors"
-            >
-              Disable all
-            </button>
+            {/* Enable/Disable-all are moot under full mirror (categories locked on). */}
+            {!fullSync && (
+              <>
+                <button
+                  onClick={() => toggleAll(true)}
+                  className="text-[10px] text-port-accent hover:text-port-accent/80 transition-colors"
+                >
+                  Enable all
+                </button>
+                <button
+                  onClick={() => toggleAll(false)}
+                  className="text-[10px] text-gray-500 hover:text-gray-400 transition-colors"
+                >
+                  Disable all
+                </button>
+              </>
+            )}
           </div>
-          {SYNC_CATEGORY_META.map(({ key, label, icon: Icon, description }) => (
+          {SYNC_CATEGORY_META.map(({ key, label, icon: Icon, description }) => {
+            // Under full mirror every category reads as on and is non-interactive.
+            const on = fullSync || categories[key];
+            return (
             <button
               key={key}
               onClick={() => toggleCategory(key)}
-              className="flex items-center gap-2 w-full px-2 py-1.5 rounded hover:bg-port-bg/50 transition-colors text-left"
+              disabled={fullSync}
+              title={fullSync ? 'Locked on by full mirror' : undefined}
+              className={`flex items-center gap-2 w-full px-2 py-1.5 rounded text-left transition-colors ${fullSync ? 'opacity-70 cursor-default' : 'hover:bg-port-bg/50'}`}
             >
               <div className={`w-3 h-3 rounded-sm border flex-shrink-0 flex items-center justify-center transition-colors ${
-                categories[key]
+                on
                   ? 'bg-port-accent border-port-accent'
                   : 'border-gray-600 bg-transparent'
               }`}>
-                {categories[key] && <Check size={8} className="text-white" />}
+                {on && (fullSync ? <Lock size={7} className="text-white" /> : <Check size={8} className="text-white" />)}
               </div>
-              <Icon size={12} className={categories[key] ? 'text-port-accent' : 'text-gray-500'} />
+              <Icon size={12} className={on ? 'text-port-accent' : 'text-gray-500'} />
               <div className="flex-1 min-w-0">
-                <span className={`text-xs ${categories[key] ? 'text-white' : 'text-gray-400'}`}>{label}</span>
+                <span className={`text-xs ${on ? 'text-white' : 'text-gray-400'}`}>{label}</span>
                 <p className="text-[10px] text-gray-600 truncate">{description}</p>
               </div>
             </button>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>
@@ -674,7 +791,12 @@ function SyncStatusSection({ peer, syncStatus, peerSubs = [], peerSubsLoaded = t
 
   const cursor = syncStatus.cursors?.[peer.instanceId];
   const remoteSyncSeqs = peer.remoteSyncSeqs;
-  const categories = peer.syncCategories || {};
+  // A full-sync peer mirrors every category, so the snapshot sync status should
+  // surface them all on (its stored syncCategories map can be all-false
+  // underneath). Mirror the server's allSyncCategoriesOn semantics here.
+  const categories = peer.fullSync === true
+    ? Object.fromEntries(SYNC_CATEGORY_META.map(m => [m.key, true]))
+    : (peer.syncCategories || {});
   // The peer's cursor into OUR data (how far it has pulled from us) — the
   // push-frontier toward this peer. Present only when our probe passed `forPeer`
   // and the peer is new enough to report it; absent → push count is "unknown".

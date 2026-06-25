@@ -19,7 +19,7 @@ import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { atomicWrite, readJSONFile } from '../../lib/fileUtils.js';
 import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
-import { seriesStore } from './series.js';
+import { seriesStore, listSeries } from './series.js';
 import { collectManuscriptSections, REPLACEMENT_STRATEGIES, replacementStrategyForCategory } from './arcPlanner.js';
 import { shapeAnchoredEdit, fixFromEdits } from './manuscriptFix.js';
 import { emitRecordUpdated } from '../sharing/recordEvents.js';
@@ -30,6 +30,16 @@ const SCHEMA_VERSION = 1;
 
 export const COMMENT_STATUSES = Object.freeze(['open', 'accepted', 'dismissed']);
 const STATUS_SET = new Set(COMMENT_STATUSES);
+
+// Why a dismissal was made (#1605). A plain dismiss (`dismissReason: null`)
+// means "won't fix" — the finding is real but the user is leaving it. A
+// `false-positive` reason means "this check is wrong here" — it feeds the
+// per-check quality view so broken checks are tracked instead of silently
+// re-surfacing the same bad finding every run. Only meaningful when
+// `status === 'dismissed'`. Optional + additive, so the synced review doc stays
+// backward-compatible with older peers (who simply ignore the field).
+export const DISMISS_REASONS = Object.freeze(['false-positive']);
+const DISMISS_REASON_SET = new Set(DISMISS_REASONS);
 
 // Re-run modes for seedReviewFromFindings — see its doc comment. Exported so the
 // route's Zod enum validates against the same source (mirrors COMMENT_STATUSES).
@@ -84,6 +94,36 @@ function sanitizeFix(raw) {
   return out;
 }
 
+// Snapshot of the manuscript text a fix overwrote, captured at accept-time so
+// the finding can be undone back to its pre-edit state (#1609). `priorText` is
+// the section's FULL stage text before the fix applied (full restore handles
+// every edit shape — multi-edit, deletion, full-page rewrite — exactly, unlike
+// a span-level reverse-splice); `appliedHash` is a fingerprint of the text the
+// accept WROTE, so undo can detect later edits and refuse to clobber them. Only
+// carried while `status === 'accepted'` (a status flip drops it, mirroring
+// `dismissReason`). Optional + additive → older peers ignore it and the synced
+// review doc stays backward-compatible (no schema bump needed).
+function sanitizeAcceptedSnapshot(raw) {
+  if (!raw || typeof raw !== 'object' || !Array.isArray(raw.sections)) return null;
+  const sections = raw.sections
+    .map((s) => {
+      if (!s || typeof s !== 'object') return null;
+      const issueId = typeof s.issueId === 'string' && s.issueId ? s.issueId : null;
+      const stageId = typeof s.stageId === 'string' && s.stageId ? s.stageId : null;
+      const priorText = typeof s.priorText === 'string' ? s.priorText : null;
+      if (!issueId || !stageId || priorText == null) return null;
+      const out = { issueId, stageId, priorText };
+      if (typeof s.appliedHash === 'string' && s.appliedHash) out.appliedHash = s.appliedHash;
+      return out;
+    })
+    .filter(Boolean);
+  if (!sections.length) return null;
+  return {
+    acceptedAt: typeof raw.acceptedAt === 'string' ? raw.acceptedAt : new Date().toISOString(),
+    sections,
+  };
+}
+
 // Shape one stored comment. Tolerant of partial/legacy records so a hand-edited
 // or older-peer file round-trips without dropping fields.
 function sanitizeComment(raw) {
@@ -91,12 +131,21 @@ function sanitizeComment(raw) {
   const problem = clampStr(raw.problem, 2000);
   if (!problem) return null;
   const category = clampStr(raw.category, 40) || 'other';
+  const severity = ['high', 'medium', 'low'].includes(raw.severity) ? raw.severity : 'medium';
+  const status = STATUS_SET.has(raw.status) ? raw.status : 'open';
   return {
     id: typeof raw.id === 'string' && raw.id ? raw.id : `mrc-${randomUUID()}`,
     issueNumber: Number.isInteger(raw.issueNumber) ? raw.issueNumber : null,
     issueId: typeof raw.issueId === 'string' ? raw.issueId : null,
     stageId: typeof raw.stageId === 'string' ? raw.stageId : null,
-    severity: ['high', 'medium', 'low'].includes(raw.severity) ? raw.severity : 'medium',
+    severity,
+    // The check's NATIVE per-finding level (#1596), independent of any per-check
+    // severity override. Carried so that clearing an override re-grades the
+    // finding back to its true native level (not a guessed default). Defaults to
+    // `severity` for legacy/older-peer comments written before this field (all of
+    // which predate overrides, so native == severity is correct). Optional +
+    // additive → the synced review doc stays backward-compatible.
+    nativeSeverity: ['high', 'medium', 'low'].includes(raw.nativeSeverity) ? raw.nativeSeverity : severity,
     category,
     location: clampStr(raw.location, 200),
     problem,
@@ -120,8 +169,20 @@ function sanitizeComment(raw) {
     // findings, older peers, and legacy records (treated as never-stale).
     // Optional + additive, so the synced review doc stays backward-compatible.
     sourceContentHash: typeof raw.sourceContentHash === 'string' && raw.sourceContentHash ? raw.sourceContentHash : null,
-    status: STATUS_SET.has(raw.status) ? raw.status : 'open',
+    status,
+    // Dismissal reason (#1605) — only carried while dismissed. A status flip
+    // back to open/accepted drops it here so a re-opened finding can't keep a
+    // stale `false-positive` mark. Legacy/older-peer records lack the field and
+    // sanitize to `null` (a plain "won't fix" dismiss).
+    dismissReason: raw.status === 'dismissed' && DISMISS_REASON_SET.has(raw.dismissReason)
+      ? raw.dismissReason
+      : null,
     fix: sanitizeFix(raw.fix),
+    // Pre-edit snapshot for undo (#1609) — only meaningful once accepted, so a
+    // re-open/dismiss flip drops it (the undo path also clears it explicitly).
+    acceptedSnapshot: status === 'accepted'
+      ? sanitizeAcceptedSnapshot(raw.acceptedSnapshot)
+      : null,
     sourceRunId: typeof raw.sourceRunId === 'string' ? raw.sourceRunId : null,
     createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : new Date().toISOString(),
     updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : new Date().toISOString(),
@@ -194,8 +255,21 @@ const findingKey = (c) => `${c.checkId ?? ''}|${c.issueNumber ?? ''}|${c.anchorQ
  * New findings resolve their issueId/stageId from the current manuscript
  * sections by issueNumber.
  */
-export async function seedReviewFromFindings(seriesId, findings, { runId = null, mode = 'merge', checkId = null } = {}) {
+export async function seedReviewFromFindings(seriesId, findings, { runId = null, mode = 'merge', checkId = null, severityOverrides = null, regradeCheckIds = null } = {}) {
   const scopeCheckId = checkId ?? null;
+  // Per-check severity overrides (#1596): a pinned check's level is authoritative
+  // for EVERY open comment of that check, so we re-grade carried open comments
+  // (re-surfaced or not) to the pinned level below. Tolerant of a junk/hand-edited
+  // value — only a valid level forces a re-grade.
+  const pins = severityOverrides && typeof severityOverrides === 'object' && !Array.isArray(severityOverrides)
+    ? severityOverrides : null;
+  // The pin/native severity re-grade of a NON-resurfaced carried comment is
+  // scoped to the checks that actually RAN this pass (#1596). Without this scope
+  // a targeted subset run — or the completeness seed, which carries every
+  // comment — would re-grade comments for checks it didn't run and silently
+  // clear their active pins. `null` (no scope passed) disables the non-match
+  // re-grade entirely, so legacy/external seed callers never mutate severities.
+  const regradeScope = Array.isArray(regradeCheckIds) ? new Set(regradeCheckIds) : null;
   const sections = await collectManuscriptSections(seriesId);
   const byNumber = new Map(sections.map((s) => [s.number, s]));
   return queueReviewWrite(seriesId, async () => {
@@ -258,17 +332,44 @@ export async function seedReviewFromFindings(seriesId, findings, { runId = null,
         return sanitizeComment({ ...c, status: 'dismissed', updatedAt: now });
       }
       if (c.status !== 'open') return c;
-      const match = candidateByKey.get(findingKey(c));
-      if (!match) return c;
       const patch = {};
-      if (!c.fix) {
-        const section = c.issueNumber != null ? byNumber.get(c.issueNumber) : null;
-        const fix = match.replace ? buildSeedFix({ ...c, replace: match.replace }, section) : null;
-        if (fix) { patch.fix = fix; backfilledCount += 1; }
-      }
-      if (match.sourceContentHash && match.sourceContentHash !== (c.sourceContentHash ?? null)) {
-        patch.sourceContentHash = match.sourceContentHash;
+      const match = candidateByKey.get(findingKey(c));
+      // Effective-severity re-grade (#1596), in priority order:
+      //  1. A RE-SURFACED finding carries the run's EFFECTIVE severity in
+      //     `match.severity` (the pin when set, else the native level). Adopt it.
+      //  2. NOT re-surfaced but the check is still PINNED → force the pinned level
+      //     so a pin reaches lingering opens too (LLM 'merge' mode preserves a
+      //     non-resurfaced open; a pinned check can also produce zero findings).
+      //  3. NOT re-surfaced and NOT pinned → fall back to the comment's stored
+      //     `nativeSeverity`, so CLEARING a pin re-grades even a non-resurfaced
+      //     open back to its true native level (not a guessed default). For a
+      //     never-pinned comment native == severity, so this is a no-op (no churn).
+      // Cases 2 & 3 (non-match re-grade) only apply to checks that ran this pass
+      // (`regradeScope`), so an unrelated check's pin is never silently cleared.
+      const inRegradeScope = !!(regradeScope && c.checkId && regradeScope.has(c.checkId));
+      const pin = inRegradeScope && pins && ['high', 'medium', 'low'].includes(pins[c.checkId]) ? pins[c.checkId] : null;
+      const carriedNative = inRegradeScope && ['high', 'medium', 'low'].includes(c.nativeSeverity) ? c.nativeSeverity : null;
+      const nextSeverity = (match && match.severity) ? match.severity : (pin || carriedNative);
+      if (nextSeverity && nextSeverity !== c.severity) {
+        patch.severity = nextSeverity;
         refreshedCount += 1;
+      }
+      if (match) {
+        // Keep the stored native level current so a future pin-clear restores the
+        // latest run's native severity, not a stale one.
+        if (match.nativeSeverity && match.nativeSeverity !== (c.nativeSeverity ?? null)) {
+          patch.nativeSeverity = match.nativeSeverity;
+          refreshedCount += 1;
+        }
+        if (!c.fix) {
+          const section = c.issueNumber != null ? byNumber.get(c.issueNumber) : null;
+          const fix = match.replace ? buildSeedFix({ ...c, replace: match.replace }, section) : null;
+          if (fix) { patch.fix = fix; backfilledCount += 1; }
+        }
+        if (match.sourceContentHash && match.sourceContentHash !== (c.sourceContentHash ?? null)) {
+          patch.sourceContentHash = match.sourceContentHash;
+          refreshedCount += 1;
+        }
       }
       if (Object.keys(patch).length === 0) return c;
       return sanitizeComment({ ...c, ...patch, updatedAt: now });
@@ -324,8 +425,19 @@ export async function updateComment(seriesId, commentId, patch) {
     const cur = review.comments[idx];
     const merged = { ...cur };
     if (patch.status !== undefined && STATUS_SET.has(patch.status)) merged.status = patch.status;
+    // Dismissal reason (#1605). `null` is an explicit clear; a valid reason sets
+    // it. sanitizeComment below drops it anyway when the resulting status isn't
+    // `dismissed`, so re-opening a false-positive can't leave the mark behind.
+    if (patch.dismissReason !== undefined) {
+      merged.dismissReason = DISMISS_REASON_SET.has(patch.dismissReason) ? patch.dismissReason : null;
+    }
     // `fix: null` is an explicit clear; absent leaves it untouched.
     if (patch.fix !== undefined) merged.fix = sanitizeFix(patch.fix);
+    // Pre-edit undo snapshot (#1609). `null` is an explicit clear (the undo
+    // path); absent leaves it untouched. sanitizeComment below drops it anyway
+    // whenever the resulting status isn't `accepted`, so re-opening a finding
+    // can't leave a stale snapshot behind.
+    if (patch.acceptedSnapshot !== undefined) merged.acceptedSnapshot = patch.acceptedSnapshot;
     merged.updatedAt = new Date().toISOString();
     const next = { ...review, comments: review.comments.map((c, i) => (i === idx ? sanitizeComment(merged) : c)) };
     await writeReview(seriesId, next);
@@ -367,4 +479,23 @@ export async function mergeReviewFromSync(seriesId, remoteReview) {
 export async function getComment(seriesId, commentId) {
   const review = await readReview(seriesId);
   return review.comments.find((c) => c.id === commentId) || null;
+}
+
+/**
+ * Locate a finding/comment across ALL series by its (globally-unique) comment
+ * id. Findings live per-series in each series' manuscript-review.json, so a
+ * deep-link that carries only a commentId (e.g. one shared from elsewhere) has
+ * to resolve the owning series before the editor can open it (#1608). Returns
+ * `{ seriesId, comment }` for the first series whose review contains the id, or
+ * `null` when no series owns it. Comment ids are UUID-based (`randomUUID`) so a
+ * match is unambiguous; deleted series are skipped (listSeries default).
+ */
+export async function locateComment(commentId) {
+  if (typeof commentId !== 'string' || !commentId) return null;
+  const series = await listSeries();
+  for (const s of series) {
+    const comment = await getComment(s.id, commentId);
+    if (comment) return { seriesId: s.id, comment };
+  }
+  return null;
 }

@@ -23,16 +23,27 @@ export const LOCAL_LLM_CATEGORIES = [
   { id: 'reasoning', label: 'Reasoning' },
   { id: 'coding', label: 'Coding' },
   { id: 'vision', label: 'Image Analysis' },
+  // Audio/music GENERATION models (ACE-Step, MusicGen, AudioLDM2, Stable Audio,
+  // Magenta…). These are NOT GGUF chat models and don't run on Ollama/LM Studio
+  // — the Hugging Face search relaxes its GGUF filter for this category and the
+  // installer routes audio installs into the shared audio-model registry
+  // (server/services/audioModels.js) so the Music studio picks them up. The
+  // curated `LOCAL_LLM_CATALOG` below never tags entries 'audio'; this category
+  // is populated live from the Hub.
+  { id: 'audio', label: 'Audio & Music' },
   { id: 'embedding', label: 'Text Embeddings' },
   { id: 'lightweight', label: 'Small & Fast' },
   { id: 'multilingual', label: 'Multilingual' }
 ];
 
 // Each entry: { key, name, category, params, size, family, description, capabilities,
-//               ollama?, lmstudio? }
+//               context?, ollama?, lmstudio? }
 // `ollama` / `lmstudio` are the exact pull/download ids for that backend.
 // A missing id means there is no well-known build of that model for that
 // backend (the user can still free-text install one).
+// `context` is the model's native context window in tokens — set it only when
+// it's a documented spec for that build (the install-card badge shows it; live
+// Hugging Face results read the true value from GGUF metadata instead).
 export const LOCAL_LLM_CATALOG = [
   {
     key: 'llama3.2',
@@ -107,6 +118,7 @@ export const LOCAL_LLM_CATALOG = [
     family: 'mistral',
     description: 'Top-tier open-weight prose model with a 128K context window — best local pick for long-form narrative and editorial review. Needs ~96GB+ unified memory.',
     capabilities: ['chat', 'tools'],
+    context: 131072,
     ollama: 'mistral-large:123b'
   },
   {
@@ -118,6 +130,7 @@ export const LOCAL_LLM_CATALOG = [
     family: 'command-r',
     description: 'Cohere long-context model (128K) tuned for RAG and clean character-voice dialogue — strong for whole-manuscript continuity passes. Needs ~80GB+ unified memory.',
     capabilities: ['chat', 'tools', 'multilingual'],
+    context: 131072,
     ollama: 'command-r-plus:104b'
   },
   {
@@ -129,6 +142,7 @@ export const LOCAL_LLM_CATALOG = [
     family: 'llama',
     description: "Meta's 70B instruct model with a 128K context — excellent narrative quality with memory headroom to spare for a large context window. Runs on 64GB+.",
     capabilities: ['chat', 'tools'],
+    context: 131072,
     ollama: 'llama3.3:70b',
     lmstudio: 'lmstudio-community/Llama-3.3-70B-Instruct-GGUF'
   },
@@ -141,6 +155,7 @@ export const LOCAL_LLM_CATALOG = [
     family: 'qwen',
     description: 'Fast MoE with a native 256K context — the long-context workhorse for one-shot whole-manuscript review when you want maximum context with memory to spare.',
     capabilities: ['chat', 'tools', 'multilingual'],
+    context: 262144,
     ollama: 'qwen3:30b',
     lmstudio: 'lmstudio-community/Qwen3-30B-A3B-GGUF'
   },
@@ -153,6 +168,7 @@ export const LOCAL_LLM_CATALOG = [
     family: 'gemma',
     description: "Google's dense 31B with a 256K context window and vision — a strong long-context narrative editor that fits comfortably on 64GB+. MLX build on Apple Silicon: gemma4:31b-mlx.",
     capabilities: ['chat', 'vision'],
+    context: 262144,
     ollama: 'gemma4:31b',
     lmstudio: 'lmstudio-community/gemma-4-31B-it-GGUF'
   },
@@ -165,6 +181,7 @@ export const LOCAL_LLM_CATALOG = [
     family: 'gemma',
     description: "Google's MoE (4B active) with a 256K context window and vision — a fast long-context option for one-shot whole-manuscript review. MLX build on Apple Silicon: gemma4:26b-mlx.",
     capabilities: ['chat', 'vision'],
+    context: 262144,
     ollama: 'gemma4:26b',
     lmstudio: 'lmstudio-community/gemma-4-26B-A4B-it-GGUF'
   },
@@ -443,7 +460,7 @@ const normalizeFor = (backend, id) =>
  *
  * @param {string} backend - 'ollama' | 'lmstudio'
  * @param {string[]} [installedIds] - ids currently installed on that backend
- * @returns {Array<{ id, key, name, params, size, family, description, capabilities, installed }>}
+ * @returns {Array<{ id, key, name, params, size, family, description, capabilities, contextLength, installed }>}
  */
 export function getCatalog(backend, installedIds = []) {
   if (!isBackend(backend)) return [];
@@ -460,6 +477,8 @@ export function getCatalog(backend, installedIds = []) {
       family: entry.family,
       description: entry.description,
       capabilities: entry.capabilities,
+      // Native context window (tokens), when it's a documented spec; null otherwise.
+      contextLength: Number.isFinite(entry.context) ? entry.context : null,
       installed: installedNorm.has(normalizeFor(backend, entry[backend]))
     }));
 }

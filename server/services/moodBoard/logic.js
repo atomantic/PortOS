@@ -13,6 +13,11 @@
 
 import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
+import { compareNewerWins } from '../../lib/lwwTimestamp.js';
+import { sanitizeSoftDeleteFields } from '../../lib/syncWire.js';
+import { localImageFilename, assetBasename } from '../../lib/localImageFilename.js';
+
+const isStr = (v) => typeof v === 'string';
 
 // Bound the inline items[] so a single board row's JSONB can't grow without
 // limit (a board is loaded/serialized whole on every read/write). Far above any
@@ -34,7 +39,98 @@ export function buildBoardRecord(input, { id, now = nowIso() } = {}) {
     items: [],
     createdAt: now,
     updatedAt: now,
+    // Soft-delete / LWW tombstone trio (#1564) — boards federate across peers
+    // via the per-record push pipeline (record kind `moodBoard`, sync category
+    // `moodBoards`), so a delete is a tombstone the merge keeps an out-of-date
+    // peer from resurrecting. Mirrors the creativeDirector project record.
+    deleted: false,
+    deletedAt: null,
   };
+}
+
+/**
+ * Normalize a raw board record into the canonical stored shape for a sync
+ * round-trip. Returns null for a non-object or a record without a usable id
+ * (mirrors `sanitizeProjectForSync`'s "drop on the floor" contract so a
+ * malformed peer payload can't land). The board body (name/description/items)
+ * passes through verbatim — it is all app-authored data — while the LWW key
+ * (`updatedAt`) and the soft-delete trio are normalized so the wire/hash shape
+ * is stable regardless of on-disk key position.
+ */
+export function sanitizeBoardForSync(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  if (!isStr(raw.id) || !raw.id) return null;
+  const createdAt = isStr(raw.createdAt) ? raw.createdAt : new Date().toISOString();
+  const updatedAt = isStr(raw.updatedAt) ? raw.updatedAt : createdAt;
+  const { deleted, deletedAt } = sanitizeSoftDeleteFields(raw);
+  return { ...raw, createdAt, updatedAt, deleted, deletedAt };
+}
+
+/**
+ * LWW merge decision for one incoming board record against the local copy —
+ * mirrors `mergeProjectRecord` (creativeDirector/projectsLogic.js):
+ *   - remote sanitized here (drop-on-floor on a malformed payload → `next: null`).
+ *   - No local counterpart → insert the remote verbatim (`inserted: true`).
+ *   - Both present → newer `updatedAt` wins (`compareNewerWins`: epoch-ms,
+ *     unparseable-loses, tie → local). Tombstones ride the same path.
+ * Returns `{ next, inserted, remoteWins, changed }`; `changed` is false when the
+ * winner is byte-identical to local. The whole record is LWW-overwritten (no
+ * field-union), so it is hashed in full by `contentHashForRecord`.
+ */
+export function mergeBoardRecord(local, remoteRaw) {
+  const remote = sanitizeBoardForSync(remoteRaw);
+  if (!remote) return { next: null, inserted: false, remoteWins: false, changed: false };
+  if (!local) return { next: remote, inserted: true, remoteWins: true, changed: true };
+  const remoteWins = compareNewerWins(remote.updatedAt, local.updatedAt);
+  const next = remoteWins ? remote : local;
+  const changed = JSON.stringify(next) !== JSON.stringify(local);
+  return { next, inserted: false, remoteWins, changed };
+}
+
+// Served-asset dir prefix → peer-sync asset-manifest `kind`. A board item's
+// `imageUrl` can point at any same-origin app-path image the media UI surfaces:
+// gallery renders (`/data/images/`) AND character/canon reference sheets
+// (`/data/image-refs/`) — synthetic sources like `canon-sheet:`/`noun:` aren't
+// valid media-keys, so PinToMoodBoardMenu pins them as an `imageUrl` only (their
+// `previewUrl` is the `/data/image-refs/...` served path). Both dirs are
+// federated asset kinds (see directoryForAssetKind in peerSync.js), so both must
+// be advertised in the manifest or the receiver stores a board item pointing at
+// a missing local file. Mirrors the prefix vocabulary of directoryForAssetKind.
+const APP_IMAGE_URL_PREFIXES = Object.freeze([
+  ['/data/images/', 'image'],
+  ['/data/image-refs/', 'image-ref'],
+]);
+
+/**
+ * Resolve a board item's app-path `imageUrl` to `{ kind, filename }` so the
+ * peer-sync asset pipeline can hash + transfer the bytes via the right dir.
+ * Returns null for an empty/non-string value, an external URL (`http(s)://…`,
+ * `data:`, `blob:`), or any absolute path outside the served-asset dirs above —
+ * the receiver resolves those itself. A bare/relative ref (no leading `/`) is
+ * treated as a gallery image filename (legacy shape). A media-key reference
+ * (`image:<ref>`) is handled separately by the manifest builder (it carries the
+ * bare ref directly); this covers only the `imageUrl` pointer.
+ */
+export function imageUrlToAppAsset(imageUrl) {
+  // Gallery images (the `/data/images/` mount or a bare/relative legacy ref) and
+  // every rejection — empty/non-string, external URL (`http(s)://…`/`data:`/
+  // `blob:`), and any other absolute path — are exactly the shared resolver's
+  // contract, so delegate to it instead of re-deriving them here.
+  const galleryFilename = localImageFilename(imageUrl);
+  if (galleryFilename) return { kind: 'image', filename: galleryFilename };
+  // localImageFilename returned null: external/empty (nothing to ship) or a
+  // non-gallery absolute path. The only served-asset dir it doesn't cover is
+  // image-refs — resolve that here, sharing the basename primitive.
+  if (!isStr(imageUrl)) return null;
+  const url = imageUrl.trim();
+  for (const [prefix, kind] of APP_IMAGE_URL_PREFIXES) {
+    if (kind === 'image') continue; // gallery is handled by localImageFilename above
+    if (url.startsWith(prefix)) {
+      const filename = assetBasename(url.slice(prefix.length));
+      return filename ? { kind, filename } : null;
+    }
+  }
+  return null; // some other absolute path → not a served gallery asset
 }
 
 // Apply a PATCH to board-level fields (name/description). Absent keys preserve
@@ -125,4 +221,21 @@ export function removeItem(board, itemId) {
   }
   const next = { ...board, items: nextItems, updatedAt: nowIso() };
   return { board: next, removed: true };
+}
+
+// Faithful conflict-restore of the restorable board fields (RESTORABLE_FIELDS.
+// moodBoard = name/description/items). Unlike applyBoardPatch — the route PATCH
+// path, which only touches name/description because items are managed through
+// the dedicated item ops — a "restore my whole version" must bring back the
+// board's items[]. The conflict resolver narrows `patch` to the allowed fields
+// (via `pick`), so this just spreads the present ones and bumps updatedAt so the
+// restore wins LWW and re-propagates. Mirrors creativeDirector's
+// applyProjectPatch wholesale-spread restore path.
+export function applyBoardRestore(board, patch) {
+  const next = { ...board };
+  if (patch.name !== undefined) next.name = patch.name;
+  if (patch.description !== undefined) next.description = patch.description;
+  if (Array.isArray(patch.items)) next.items = patch.items;
+  next.updatedAt = nowIso();
+  return next;
 }

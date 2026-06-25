@@ -37,6 +37,7 @@ vi.mock('../domainUsage.js', () => ({
 // arcPlanner: keep the REAL barrel (for compareIssuesByPosition) and override
 // only the LLM-calling passes with spies whose return values the tests drive.
 let verifyFindings = [];
+let beatContinuityFindings = [];
 let editorialFindings = [];
 const arcSpies = {
   generateArcOverview: vi.fn(async () => ({ arc: { logline: 'A', summary: 'S' }, seasons: [] })),
@@ -45,6 +46,8 @@ const arcSpies = {
   commitEpisodesToIssues: vi.fn(async () => []),
   verifyArc: vi.fn(async () => ({ issues: verifyFindings })),
   resolveVerifyIssues: vi.fn(async () => ({ applied: true })),
+  analyzeBeatContinuity: vi.fn(async () => ({ issues: beatContinuityFindings })),
+  resolveBeatContinuity: vi.fn(async () => ({ applied: true, episodesResolved: [] })),
   analyzeManuscriptCompleteness: vi.fn(async () => ({ issues: editorialFindings, runId: 'run-comp' })),
 };
 vi.mock('./arcPlanner.js', async (importOriginal) => {
@@ -70,11 +73,33 @@ vi.mock('./manuscriptReview.js', () => ({
   seedReviewFromFindings: vi.fn(async () => ({ comments: [] })),
   getReview: vi.fn(async () => ({ comments: [] })),
 }));
+// Drives whether the reverse-outline refresh step (#1349) thinks a scene-consuming
+// check is enabled. Default false so the existing conductor runs skip it cheaply.
+let reverseOutlineConsumed = false;
+// Drives the perCheck array the editorial-checks pass sees, so a test can inject
+// an errored check and assert it surfaces in the run summary (#1573).
+let editorialChecksPerCheck = [];
 const checkRunnerSpies = {
-  runEditorialChecks: vi.fn(async () => ({ runId: 'ec', findings: [], perCheck: [], canceled: false })),
-  buildEditorialCheckPlan: vi.fn(async () => ({ seriesId: 's', checks: [], enabledCount: 0 })),
+  runEditorialChecks: vi.fn(async () => ({ runId: 'ec', findings: [], perCheck: editorialChecksPerCheck, canceled: false })),
+  buildEditorialCheckPlan: vi.fn(async () => ({ seriesId: 's', checks: [], enabledCount: 0, consumesReverseOutline: reverseOutlineConsumed })),
+  enabledChecksConsumeReverseOutline: vi.fn(() => reverseOutlineConsumed),
+  // Real pure impl (the module is fully mocked) so the SUT's error-summarizing
+  // matches production behavior without pulling checkRunner's heavy imports.
+  summarizeCheckErrors: (perCheck) => {
+    const erroredCheckIds = (Array.isArray(perCheck) ? perCheck : []).filter((c) => c?.error).map((c) => c.checkId);
+    return { errored: erroredCheckIds.length, erroredCheckIds };
+  },
 };
 vi.mock('./editorial/checkRunner.js', () => checkRunnerSpies);
+
+// Reverse outline (#1349) — controllable staleness + a generate spy so a test can
+// assert the refresh step regenerates only when stale and bills only then.
+let reverseOutlineState = { status: 'complete', stale: false };
+const generateReverseOutline = vi.fn(async () => ({ status: 'complete', stale: false, scenes: [{ id: 'sc1' }] }));
+vi.mock('./reverseOutline.js', () => ({
+  getReverseOutline: vi.fn(async (seriesId) => ({ seriesId, ...reverseOutlineState })),
+  generateReverseOutline,
+}));
 vi.mock('../settings.js', async (importOriginal) => ({
   ...(await importOriginal()),
   getSettings: vi.fn(async () => ({})),
@@ -108,13 +133,18 @@ vi.mock('./canonReadiness.js', () => ({ checkSeriesCanonReadiness }));
 
 // Mocked domainUsage binding, so a test can drive the budget per call.
 const { getDomainBudgetStatus } = await import('../domainUsage.js');
+// Mocked settings binding, so a test can drive the persisted convergence-round
+// defaults the autopilot reads at start.
+const { getSettings } = await import('../settings.js');
 
 // Real services + the unit under test (imported AFTER the mocks above).
 const seriesSvc = await import('./series.js');
 const seasonsSvc = await import('./seasons.js');
 const issuesSvc = await import('./issues.js');
 const autopilot = await import('./seriesAutopilot.js');
-const { resolveNextStep, requiredScriptStages, scriptStructurallyReady, visualReady } = autopilot;
+const arcPlanner = await import('./arcPlanner.js');
+const { stageContentOf } = await import('./textStages.js');
+const { resolveNextStep, requiredScriptStages, scriptStructurallyReady, visualReady, wantsComic } = autopilot;
 
 // A comic script string that parseComicScript turns into >=1 page/panel.
 const VALID_SCRIPT = 'PAGE 1\nPANEL 1\nA scene.';
@@ -138,21 +168,61 @@ beforeEach(() => {
   cosMode = 'execute';
   budgetStatus = { withinBudget: true, exceeded: null };
   verifyFindings = [];
+  beatContinuityFindings = [];
   editorialFindings = [];
   scriptVerifyFindings = [];
   canonReady = true;
   canonUndescribed = [];
+  reverseOutlineConsumed = false;
+  reverseOutlineState = { status: 'complete', stale: false };
+  editorialChecksPerCheck = [];
   nextTaskId = 0;
   autopilot.__testing.runs.clear();
   vi.clearAllMocks();
+  generateReverseOutline.mockImplementation(async () => ({ status: 'complete', stale: false, scenes: [{ id: 'sc1' }] }));
   // Reset the budget mock to read the `budgetStatus` var (clearAllMocks keeps
   // implementations, but a prior test may have set a call-count-keyed one).
   getDomainBudgetStatus.mockImplementation(async () => budgetStatus);
+  // Reset settings to empty so a test that set persisted convergence rounds
+  // doesn't leak its default into the next test.
+  getSettings.mockImplementation(async () => ({}));
 });
 
 // ---------------------------------------------------------------------------
 // Pure resolver — the highest-value unit (no I/O, table-driven).
 // ---------------------------------------------------------------------------
+describe('provider/model threading helpers (#1514 provider + #1558 model — both SOFT defaults)', () => {
+  const record = { options: { providerOverride: 'codex', modelOverride: 'gpt-x' } };
+
+  it('providerOverrideOpts emits providerDefault + modelDefault (NOT hard overrides) so a stage pin still wins', () => {
+    const opts = autopilot.__testing.providerOverrideOpts(record);
+    expect(opts.providerDefault).toBe('codex');
+    expect(opts.modelDefault).toBe('gpt-x');
+    // The whole point of the change: neither the run provider NOR the run model
+    // may arrive as a hard override, or it would beat a deliberate per-stage pin.
+    expect(opts).not.toHaveProperty('providerOverride');
+    expect(opts).not.toHaveProperty('providerId');
+    expect(opts).not.toHaveProperty('modelOverride');
+  });
+
+  it('providerIdOpts emits providerIdDefault + modelIdDefault for the { providerId }-style services', () => {
+    const opts = autopilot.__testing.providerIdOpts(record);
+    expect(opts.providerIdDefault).toBe('codex');
+    expect(opts.modelIdDefault).toBe('gpt-x');
+    expect(opts).not.toHaveProperty('providerId');
+    expect(opts).not.toHaveProperty('providerOverride');
+    expect(opts).not.toHaveProperty('model');
+  });
+
+  it('passes an undefined default through untouched when the run pins no provider/model', () => {
+    const none = { options: {} };
+    expect(autopilot.__testing.providerOverrideOpts(none).providerDefault).toBeUndefined();
+    expect(autopilot.__testing.providerOverrideOpts(none).modelDefault).toBeUndefined();
+    expect(autopilot.__testing.providerIdOpts(none).providerIdDefault).toBeUndefined();
+    expect(autopilot.__testing.providerIdOpts(none).modelIdDefault).toBeUndefined();
+  });
+});
+
 describe('resolveNextStep (pure)', () => {
   const comic = { targetFormat: 'comic', arc: { logline: 'L', summary: 'S' }, seasons: [{ id: 'se1', number: 1 }] };
   const issue = (over = {}) => ({ id: 'iss1', seasonId: 'se1', number: 1, arcPosition: 1, stages: {}, ...over });
@@ -169,6 +239,48 @@ describe('resolveNextStep (pure)', () => {
     expect(step.kind).not.toBe('generateArc');
   });
 
+  it('resolveAutopilotRounds: per-run option wins, else setting, else default', () => {
+    const { resolveAutopilotRounds, MAX_ARC_VERIFY_ROUNDS, MAX_EDITORIAL_ROUNDS, MAX_BEAT_CONTINUITY_ROUNDS } = autopilot;
+    // per-run option wins (including an explicit 0 = skip)
+    expect(resolveAutopilotRounds(
+      { maxArcVerifyRounds: 7, maxEditorialRounds: 0, maxBeatContinuityRounds: 5 },
+      { pipelineEditorialChecks: { maxArcVerifyRounds: 4, maxEditorialRounds: 4, maxBeatContinuityRounds: 1 } },
+    )).toEqual({ maxArcVerifyRounds: 7, maxEditorialRounds: 0, maxBeatContinuityRounds: 5 });
+    // persisted setting fills in when no per-run override
+    const fromSetting = resolveAutopilotRounds({}, { pipelineEditorialChecks: { maxArcVerifyRounds: 6, maxBeatContinuityRounds: 3 } });
+    expect(fromSetting.maxArcVerifyRounds).toBe(6);
+    expect(fromSetting.maxEditorialRounds).toBe(MAX_EDITORIAL_ROUNDS);
+    expect(fromSetting.maxBeatContinuityRounds).toBe(3);
+    // module default when neither is set
+    expect(resolveAutopilotRounds({}, null)).toEqual({
+      maxArcVerifyRounds: MAX_ARC_VERIFY_ROUNDS, maxEditorialRounds: MAX_EDITORIAL_ROUNDS, maxBeatContinuityRounds: MAX_BEAT_CONTINUITY_ROUNDS,
+    });
+    // a non-integer at any layer falls through
+    expect(resolveAutopilotRounds(
+      { maxArcVerifyRounds: 2.5 },
+      { pipelineEditorialChecks: { maxArcVerifyRounds: 'x' } },
+    ).maxArcVerifyRounds).toBe(MAX_ARC_VERIFY_ROUNDS);
+  });
+
+  it('resolveAutopilotReadinessGate: per-run option wins, else setting, else null (#1580)', () => {
+    const { resolveAutopilotReadinessGate } = autopilot;
+    // per-run override wins over a persisted setting
+    expect(resolveAutopilotReadinessGate(
+      { readinessGate: 'none' },
+      { pipelineEditorialChecks: { readinessGate: 'noOpenHighOrMedium' } },
+    )).toBe('none');
+    // persisted setting fills in when no per-run override
+    expect(resolveAutopilotReadinessGate({}, { pipelineEditorialChecks: { readinessGate: 'noOpenHighOrMedium' } }))
+      .toBe('noOpenHighOrMedium');
+    // null when neither is set — the caller resolves null to the default gate
+    expect(resolveAutopilotReadinessGate({}, null)).toBeNull();
+    // an invalid per-run gate falls through to the persisted setting
+    expect(resolveAutopilotReadinessGate(
+      { readinessGate: 'bogus' },
+      { pipelineEditorialChecks: { readinessGate: 'none' } },
+    )).toBe('none');
+  });
+
   it('regenerates the arc for an arc-only series with no volumes', () => {
     const arcOnly = { targetFormat: 'comic', arc: { logline: 'L', summary: 'S' }, seasons: [] };
     expect(resolveNextStep(arcOnly, []).kind).toBe('generateArc');
@@ -181,6 +293,120 @@ describe('resolveNextStep (pure)', () => {
       { targetFormat: 'comic', arc: { logline: 'L', summary: 'S' }, seasons: [] }, [], {},
     );
     expect(plan[0].kind).toBe('generateArc');
+  });
+
+  it('dry-run plan omits editorialChecks + editorialHealthGate when editorial rounds are 0', () => {
+    const series = { targetFormat: 'comic', arc: { logline: 'L', summary: 'S' }, seasons: [{ id: 'se1', number: 1 }] };
+    const issues = [{ id: 'i1', seasonId: 'se1', number: 1, arcPosition: 1, stages: {} }];
+    const kinds = (opts) => autopilot.__testing.buildDryRunPlan(series, issues, opts).map((p) => p.kind);
+    // With editorial enabled (default), the reverse-outline refresh (#1349), both
+    // registry checks + health gate appear.
+    expect(kinds({})).toEqual(expect.arrayContaining(['editorialReview', 'reverseOutline', 'editorialChecks', 'editorialHealthGate']));
+    // The reverse-outline refresh is enumerated BEFORE the editorial checks it feeds.
+    const defaultKinds = kinds({});
+    expect(defaultKinds.indexOf('reverseOutline')).toBeLessThan(defaultKinds.indexOf('editorialChecks'));
+    // With maxEditorialRounds:0, execute mode skips the whole editorial gate — the
+    // plan must omit the reverse-outline refresh and both checks too.
+    const skipped = kinds({ maxEditorialRounds: 0 });
+    expect(skipped).toContain('editorialReview'); // shown as "skipped (0 rounds)"
+    expect(skipped).not.toContain('reverseOutline');
+    expect(skipped).not.toContain('editorialChecks');
+    expect(skipped).not.toContain('editorialHealthGate');
+  });
+
+  it('dry-run plan annotates the editorial-checks step with a per-run subset (#1575)', () => {
+    const series = { targetFormat: 'comic', arc: { logline: 'L', summary: 'S' }, seasons: [{ id: 'se1', number: 1 }] };
+    const issues = [{ id: 'i1', seasonId: 'se1', number: 1, arcPosition: 1, stages: {} }];
+    const noteFor = (opts) => autopilot.__testing.buildDryRunPlan(series, issues, opts)
+      .find((p) => p.kind === 'editorialChecks')?.note;
+    // No subset → the plan advertises the full enabled set.
+    expect(noteFor({})).toMatch(/enabled editorial checks/);
+    // A subset → the plan says how many checks will run instead of implying all.
+    expect(noteFor({ editorialCheckIds: ['pacing', 'continuity'] })).toMatch(/subset of 2 editorial check/);
+    // An empty array is treated as "no override" — back to the full set.
+    expect(noteFor({ editorialCheckIds: [] })).toMatch(/enabled editorial checks/);
+  });
+
+  it('annotates every dry-run step with an estActions estimate (#1576)', () => {
+    const series = { targetFormat: 'comic', arc: { logline: 'L', summary: 'S' }, seasons: [{ id: 'se1', number: 1 }] };
+    const issues = [
+      { id: 'i1', seasonId: 'se1', number: 1, arcPosition: 1, stages: {} },
+      { id: 'i2', seasonId: 'se1', number: 2, arcPosition: 2, stages: {} },
+    ];
+    const plan = autopilot.__testing.buildDryRunPlan(series, issues, {});
+    // Every step carries a numeric estimate.
+    expect(plan.every((p) => Number.isFinite(p.estActions))).toBe(true);
+    const byKind = Object.fromEntries(plan.map((p) => [p.kind, p]));
+    // verifyArc: convergence loop at the default 3 rounds → 2*3-1 = 5 actions.
+    expect(byKind.verifyArc.estActions).toBe(5);
+    // textStages: one child action per not-yet-text-ready issue (2 here).
+    expect(byKind.textStages.estActions).toBe(2);
+    // Pure-gate steps that bill nothing against the cap are zero-cost.
+    expect(byKind.editorialHealthGate.estActions).toBe(0);
+  });
+
+  it('scales verify/editorial estActions with the per-run round caps (#1576)', () => {
+    const series = { targetFormat: 'comic', arc: { logline: 'L', summary: 'S' }, seasons: [{ id: 'se1', number: 1 }] };
+    const issues = [{ id: 'i1', seasonId: 'se1', number: 1, arcPosition: 1, stages: {} }];
+    const actionsFor = (opts, kind) => autopilot.__testing.buildDryRunPlan(series, issues, opts)
+      .find((p) => p.kind === kind)?.estActions;
+    // 0 rounds → the loop is skipped → 0 actions.
+    expect(actionsFor({ maxArcVerifyRounds: 0 }, 'verifyArc')).toBe(0);
+    // 1 round → a single verify, no resolve → 1 action.
+    expect(actionsFor({ maxArcVerifyRounds: 1 }, 'verifyArc')).toBe(1);
+    // 4 rounds → 4 verifies + 3 resolves → 7 actions.
+    expect(actionsFor({ maxArcVerifyRounds: 4 }, 'verifyArc')).toBe(7);
+    // Editorial review follows the same convergence shape.
+    expect(actionsFor({ maxEditorialRounds: 2 }, 'editorialReview')).toBe(3);
+  });
+
+  it('estimates editorialChecks LLM fan-out as issues × enabled LLM checks (#1576)', () => {
+    const series = { targetFormat: 'comic', arc: { logline: 'L', summary: 'S' }, seasons: [{ id: 'se1', number: 1 }] };
+    const issues = [
+      { id: 'i1', seasonId: 'se1', number: 1, arcPosition: 1, stages: {} },
+      { id: 'i2', seasonId: 'se1', number: 2, arcPosition: 2, stages: {} },
+      { id: 'i3', seasonId: 'se1', number: 3, arcPosition: 3, stages: {} },
+    ];
+    const stepFor = (ctx) => autopilot.__testing.buildDryRunPlan(series, issues, {}, ctx)
+      .find((p) => p.kind === 'editorialChecks');
+    // 2 enabled LLM checks × 3 issues = 6 LLM calls; the pass bills 1 cos action.
+    const two = stepFor({ editorialLlmCheckCount: 2 });
+    expect(two.estLlmCalls).toBe(6);
+    expect(two.estActions).toBe(1);
+    expect(two.note).toMatch(/~6 LLM call/);
+    // No enabled LLM check → no cos action billed and no LLM calls.
+    const none = stepFor({ editorialLlmCheckCount: 0 });
+    expect(none.estActions).toBe(0);
+    expect(none.estLlmCalls).toBe(0);
+  });
+
+  it('summarizePlanCost totals estActions and estLlmCalls across the plan (#1576)', () => {
+    const series = { targetFormat: 'comic', arc: { logline: 'L', summary: 'S' }, seasons: [{ id: 'se1', number: 1 }] };
+    const issues = [{ id: 'i1', seasonId: 'se1', number: 1, arcPosition: 1, stages: {} }];
+    const plan = autopilot.__testing.buildDryRunPlan(series, issues, {}, { editorialLlmCheckCount: 3 });
+    const totals = autopilot.__testing.summarizePlanCost(plan);
+    const manualActions = plan.reduce((s, p) => s + (p.estActions || 0), 0);
+    const manualLlm = plan.reduce((s, p) => s + (p.estLlmCalls || 0), 0);
+    expect(totals.estActions).toBe(manualActions);
+    expect(totals.estLlmCalls).toBe(manualLlm);
+    // Single issue × 3 LLM checks → 3 editorial-check LLM calls in the total.
+    expect(totals.estLlmCalls).toBe(3);
+    // A non-array (defensive) summarizes to zeroes.
+    expect(autopilot.__testing.summarizePlanCost(null)).toEqual({ estActions: 0, estLlmCalls: 0 });
+  });
+
+  it('dry-run plan surfaces the effective readiness gate on the health-gate step (#1580)', () => {
+    const series = { targetFormat: 'comic', arc: { logline: 'L', summary: 'S' }, seasons: [{ id: 'se1', number: 1 }] };
+    const issues = [{ id: 'i1', seasonId: 'se1', number: 1, arcPosition: 1, stages: {} }];
+    const gateNote = (opts) => autopilot.__testing.buildDryRunPlan(series, issues, opts)
+      .find((p) => p.kind === 'editorialHealthGate')?.note;
+    // No override → the plan shows the default gate.
+    expect(gateNote({})).toMatch(/gate: noOpenHigh$/);
+    // A per-run override is reflected in the plan note.
+    expect(gateNote({ readinessGate: 'none' })).toMatch(/gate: none$/);
+    expect(gateNote({ readinessGate: 'noOpenHighOrMedium' })).toMatch(/gate: noOpenHighOrMedium$/);
+    // An invalid gate falls through to the default.
+    expect(gateNote({ readinessGate: 'bogus' })).toMatch(/gate: noOpenHigh$/);
   });
 
   it('asks to generate episodes for a season with no issues', () => {
@@ -204,8 +430,24 @@ describe('resolveNextStep (pure)', () => {
     expect(step).toMatchObject({ kind: 'textStages', issueId: 'iss1' });
   });
 
-  it('asks for text stages once beats exist but scripts do not', () => {
+  it('runs whole-manuscript beat continuity once beats exist, before text (#1510)', () => {
     const step = resolveNextStep(comic, [issue({ stages: { idea: ready() } })], { arcVerified: true });
+    expect(step).toMatchObject({ kind: 'beatContinuity' });
+  });
+
+  it('skips beat continuity for a synopsis-only run (no beats anywhere)', () => {
+    // idea has input (synopsis) but no ready output → no beats → fall through to
+    // text without a beat-continuity pass (it would just duplicate arc verify).
+    const step = resolveNextStep(
+      comic,
+      [issue({ stages: { idea: { status: 'empty', input: 'syn', output: '' }, comicScript: ready(VALID_SCRIPT) } })],
+      { arcVerified: true },
+    );
+    expect(step.kind).not.toBe('beatContinuity');
+  });
+
+  it('asks for text stages once beats are continuity-checked but scripts do not exist', () => {
+    const step = resolveNextStep(comic, [issue({ stages: { idea: ready() } })], { arcVerified: true, beatContinuityChecked: true });
     expect(step).toMatchObject({ kind: 'textStages', issueId: 'iss1' });
   });
 
@@ -213,7 +455,7 @@ describe('resolveNextStep (pure)', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
-      { arcVerified: true },
+      { arcVerified: true, beatContinuityChecked: true },
     );
     expect(step).toMatchObject({ kind: 'scriptVerify', issueId: 'iss1' });
   });
@@ -222,16 +464,26 @@ describe('resolveNextStep (pure)', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
-      { arcVerified: true, scriptChecked: new Set(['iss1']) },
+      { arcVerified: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']) },
     );
     expect(step.kind).toBe('editorialReview');
   });
 
-  it('asks for editorial checks after editorial review, before done/visuals', () => {
+  it('refreshes the reverse outline after editorial review, before editorial checks (#1349)', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
-      { arcVerified: true, scriptChecked: new Set(['iss1']), editorialReviewed: true },
+      { arcVerified: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true },
+      { includeVisual: false },
+    );
+    expect(step.kind).toBe('reverseOutline');
+  });
+
+  it('asks for editorial checks once the reverse outline is refreshed (#1349)', () => {
+    const step = resolveNextStep(
+      comic,
+      [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
+      { arcVerified: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, reverseOutlineRefreshed: true },
       { includeVisual: false },
     );
     expect(step.kind).toBe('editorialChecks');
@@ -241,7 +493,7 @@ describe('resolveNextStep (pure)', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
-      { arcVerified: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, editorialChecksReviewed: true },
+      { arcVerified: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, reverseOutlineRefreshed: true, editorialChecksReviewed: true },
       { includeVisual: false },
     );
     expect(step.kind).toBe('editorialHealthGate');
@@ -251,7 +503,7 @@ describe('resolveNextStep (pure)', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
-      { arcVerified: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, editorialChecksReviewed: true, editorialHealthReady: true },
+      { arcVerified: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, reverseOutlineRefreshed: true, editorialChecksReviewed: true, editorialHealthReady: true },
       { includeVisual: false },
     );
     expect(step.kind).toBe('done');
@@ -261,7 +513,7 @@ describe('resolveNextStep (pure)', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
-      { arcVerified: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, editorialChecksReviewed: true, editorialHealthReady: true },
+      { arcVerified: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, reverseOutlineRefreshed: true, editorialChecksReviewed: true, editorialHealthReady: true },
       { includeVisual: true, target: 'text' },
     );
     expect(step.kind).toBe('done');
@@ -271,7 +523,7 @@ describe('resolveNextStep (pure)', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
-      { arcVerified: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, editorialChecksReviewed: true, editorialHealthReady: true },
+      { arcVerified: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, reverseOutlineRefreshed: true, editorialChecksReviewed: true, editorialHealthReady: true },
       { includeVisual: true },
     );
     expect(step.kind).toBe('canonVerify');
@@ -281,7 +533,7 @@ describe('resolveNextStep (pure)', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
-      { arcVerified: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, editorialChecksReviewed: true, editorialHealthReady: true, canonVerified: true },
+      { arcVerified: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, reverseOutlineRefreshed: true, editorialChecksReviewed: true, editorialHealthReady: true, canonVerified: true },
       { includeVisual: true },
     );
     expect(step).toMatchObject({ kind: 'visualDraft', issueId: 'iss1' });
@@ -300,7 +552,7 @@ describe('resolveNextStep (pure)', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: renderedStages })],
-      { arcVerified: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, editorialChecksReviewed: true, editorialHealthReady: true, canonVerified: true },
+      { arcVerified: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, reverseOutlineRefreshed: true, editorialChecksReviewed: true, editorialHealthReady: true, canonVerified: true },
       { includeVisual: true },
     );
     expect(step.kind).toBe('done');
@@ -311,10 +563,183 @@ describe('resolveNextStep (pure)', () => {
     const step = resolveNextStep(
       tv,
       [issue({ stages: { idea: ready(), teleplay: ready() } })],
-      { arcVerified: true },
+      { arcVerified: true, beatContinuityChecked: true },
     );
     expect(step.kind).toBe('editorialReview');
   });
+});
+
+describe('dry-run plan ↔ resolveNextStep drift guard (#1577)', () => {
+  // buildDryRunPlan is kept in sync with resolveNextStep BY HAND (see the comment
+  // above buildDryRunPlan). This guard runs BOTH against the same fixtures and
+  // asserts they enumerate the SAME step kinds in the SAME order AND the SAME
+  // per-step counts — so a future edit that adds/removes/reorders a step, or that
+  // diverges a plan `count` formula (textNeeded / visualNeeded / beatsNeeded /
+  // ordered.length) from the resolver's actual per-issue/per-season looping, fails
+  // here instead of silently advertising a plan execute won't follow.
+  //
+  // Scope: this verifies plan ↔ RESOLVER parity. `completeStep` re-implements the
+  // dispatch's runState effects (it does not drive the real dispatchStep), so a
+  // change to dispatch that preserves step kinds/order/counts is out of scope.
+  //
+  // Fidelity note: the fixtures all have their issues already present (no empty
+  // seasons), so no generation step CREATES new downstream work mid-walk. That's
+  // the regime where the two are contractually identical — the dry-run plan is a
+  // snapshot prediction of the CURRENT records, not a recursive expansion of
+  // issues a generateEpisodes step would later add. generateArc / generateEpisodes
+  // parity is covered separately by the dedicated cases above.
+
+  const freshRunState = () => ({
+    arcAttempted: false, arcVerified: false, beatContinuityChecked: false,
+    editorialReviewed: false, reverseOutlineRefreshed: false,
+    editorialChecksReviewed: false, editorialHealthReady: false, canonVerified: false,
+    episodesAttempted: new Set(), beatsAttempted: new Set(), textAttempted: new Set(),
+    scriptChecked: new Set(), visualDrafted: new Set(),
+  });
+
+  // Advance runState + fixture exactly as the execute dispatch would once the
+  // given step "completes" — flipping the precise predicate each downstream gate
+  // reads: runState marks for the boolean/set gates, and issue/season CONTENT for
+  // the content gates (beats → idea.output, text → required scripts, visuals →
+  // rendered pages) so the resolver actually advances past them.
+  const completeStep = (step, issues, runState, edRounds) => {
+    switch (step.kind) {
+      case 'generateArc':
+      case 'generateEpisodes':
+        // These steps CREATE downstream work (seasons / issues) that buildDryRunPlan
+        // intentionally does NOT predict from a snapshot — so a fixture that reaches
+        // them is outside this guard's plan↔resolver-parity scope and would produce a
+        // misleading false failure. Generation parity is covered by the dedicated
+        // generateArc / generateEpisodes cases above; keep these fixtures populated.
+        throw new Error(`drift guard: fixture reached "${step.kind}" — parity guard requires fully-populated fixtures (arc present + every season seeded with issues)`);
+      case 'verifyArc':
+        runState.arcVerified = true;
+        break;
+      case 'beatSheet':
+        issues.filter((i) => i.seasonId === step.seasonId)
+          .forEach((i) => { i.stages = { ...i.stages, idea: ready() }; });
+        runState.beatsAttempted.add(step.seasonId);
+        break;
+      case 'beatContinuity':
+        runState.beatContinuityChecked = true;
+        break;
+      case 'textStages': {
+        // Satisfy textReady for every script format (comic + tv) so the mutator
+        // stays target-agnostic.
+        const issue = issues.find((i) => i.id === step.issueId);
+        issue.stages = { ...issue.stages, comicScript: ready(VALID_SCRIPT), teleplay: ready() };
+        runState.textAttempted.add(step.issueId);
+        break;
+      }
+      case 'scriptVerify':
+        runState.scriptChecked.add(step.issueId);
+        break;
+      case 'editorialReview':
+        runState.editorialReviewed = true;
+        // Mirror runEditorial: maxEditorialRounds === 0 marks the whole editorial
+        // gate (reverse-outline + checks + health) done in one shot, so the
+        // resolver advances straight past them — matching the plan's omission.
+        if (edRounds === 0) {
+          runState.reverseOutlineRefreshed = true;
+          runState.editorialChecksReviewed = true;
+          runState.editorialHealthReady = true;
+        }
+        break;
+      case 'reverseOutline':
+        runState.reverseOutlineRefreshed = true;
+        break;
+      case 'editorialChecks':
+        runState.editorialChecksReviewed = true;
+        break;
+      case 'editorialHealthGate':
+        runState.editorialHealthReady = true;
+        break;
+      case 'canonVerify':
+        runState.canonVerified = true;
+        break;
+      case 'visualDraft': {
+        const issue = issues.find((i) => i.id === step.issueId);
+        issue.stages = {
+          ...issue.stages,
+          comicPages: {
+            cover: { proofImage: { jobId: 'c' } },
+            backCover: { proofImage: { jobId: 'b' } },
+            pages: [{ panels: [{ description: 'x' }], proofImage: { jobId: 'p' } }],
+          },
+        };
+        runState.visualDrafted.add(step.issueId);
+        break;
+      }
+      default:
+        throw new Error(`drift guard: unhandled step kind "${step.kind}" — add a completeStep branch`);
+    }
+  };
+
+  // Collapse a flat list of emitted step kinds into the plan's shape: one
+  // `{ kind, count }` entry per consecutive run. The resolver emits per-issue /
+  // per-season steps one at a time (a run of N identical consecutive kinds); the
+  // plan represents that same work as a single entry with `count: N`.
+  const compress = (kinds) => kinds.reduce((out, kind) => {
+    const last = out[out.length - 1];
+    if (last && last.kind === kind) last.count += 1;
+    else out.push({ kind, count: 1 });
+    return out;
+  }, []);
+
+  // Walk resolveNextStep the way execute does — apply each step's effect, re-resolve
+  // — collecting the ordered sequence of emitted step kinds (with repeats), then
+  // compress to the plan's `{ kind, count }` shape.
+  const simulateExecuteEntries = (series, issues, options) => {
+    const working = issues.map((i) => ({ ...i, stages: { ...i.stages } }));
+    const runState = freshRunState();
+    const edRounds = Number.isInteger(options?.maxEditorialRounds) ? options.maxEditorialRounds : undefined;
+    const emitted = [];
+    for (let guard = 0; guard < 200; guard += 1) {
+      const step = resolveNextStep(series, working, runState, options);
+      if (step.kind === 'done') return compress(emitted);
+      emitted.push(step.kind);
+      completeStep(step, working, runState, edRounds);
+    }
+    throw new Error('drift guard: simulation did not converge to done within 200 steps');
+  };
+
+  // The plan carries extra annotation fields (note, etc.); compare only kind + count.
+  const planEntries = (series, issues, options) =>
+    autopilot.__testing.buildDryRunPlan(series, issues, options).map((p) => ({ kind: p.kind, count: p.count }));
+
+  const baseComic = () => ({ targetFormat: 'comic', arc: { logline: 'L', summary: 'S' }, seasons: [{ id: 'se1', number: 1 }] });
+  const baseTv = () => ({ targetFormat: 'tv', arc: { logline: 'L', summary: 'S' }, seasons: [{ id: 'se1', number: 1 }] });
+  const bareIssue = () => [{ id: 'iss1', seasonId: 'se1', number: 1, arcPosition: 1, stages: {} }];
+  // Two seasons, one bare issue each — exercises per-SEASON multiplicity (beatSheet
+  // count 2) AND per-ISSUE multiplicity (textStages / scriptVerify / visualDraft
+  // count 2), so the count formulas and the consecutive-run compression are tested.
+  const twoSeasonComic = () => ({
+    targetFormat: 'comic', arc: { logline: 'L', summary: 'S' },
+    seasons: [{ id: 'se1', number: 1 }, { id: 'se2', number: 2 }],
+  });
+  const twoIssues = () => [
+    { id: 'iss1', seasonId: 'se1', number: 1, arcPosition: 1, stages: {} },
+    { id: 'iss2', seasonId: 'se2', number: 1, arcPosition: 2, stages: {} },
+  ];
+
+  const cases = [
+    { name: 'comic + visual (full pipeline)', series: baseComic(), issues: bareIssue(), options: {} },
+    { name: 'comic, text-only target (no canon/visual)', series: baseComic(), issues: bareIssue(), options: { target: 'text' } },
+    { name: 'comic, editorial rounds 0 (skips editorial gate)', series: baseComic(), issues: bareIssue(), options: { maxEditorialRounds: 0 } },
+    { name: 'tv (no comic script / canon / visual)', series: baseTv(), issues: bareIssue(), options: {} },
+    { name: 'comic + visual, 2 seasons × 1 issue (per-step multiplicity)', series: twoSeasonComic(), issues: twoIssues(), options: {} },
+  ];
+
+  for (const c of cases) {
+    it(`enumerates identical step kinds + counts in identical order — ${c.name}`, () => {
+      // buildDryRunPlan reads the records as-is; the simulation walks fresh copies,
+      // so the two never share mutable state.
+      const plan = planEntries(c.series, c.issues, c.options);
+      const executed = simulateExecuteEntries(c.series, c.issues, c.options);
+      expect(executed.length).toBeGreaterThan(0);
+      expect(executed).toEqual(plan);
+    });
+  }
 });
 
 describe('requiredScriptStages / scriptStructurallyReady', () => {
@@ -325,10 +750,48 @@ describe('requiredScriptStages / scriptStructurallyReady', () => {
     expect(requiredScriptStages({})).toEqual(['comicScript', 'teleplay']);
   });
 
+  it('restricts a comic+tv series to one format via options.targetFormats', () => {
+    const series = { targetFormat: 'comic+tv' };
+    expect(requiredScriptStages(series, { targetFormats: ['comic'] })).toEqual(['comicScript']);
+    expect(requiredScriptStages(series, { targetFormats: ['tv'] })).toEqual(['teleplay']);
+    expect(requiredScriptStages(series, { targetFormats: ['comic', 'tv'] })).toEqual(['comicScript', 'teleplay']);
+  });
+
+  it('ignores a restriction the series cannot satisfy (never strands the run with zero scripts)', () => {
+    // A comic-only series asked to produce tv-only falls back to its own format.
+    expect(requiredScriptStages({ targetFormat: 'comic' }, { targetFormats: ['tv'] })).toEqual(['comicScript']);
+    // Empty / non-array restrictions are no-ops.
+    expect(requiredScriptStages({ targetFormat: 'comic+tv' }, { targetFormats: [] })).toEqual(['comicScript', 'teleplay']);
+    expect(requiredScriptStages({ targetFormat: 'comic+tv' }, {})).toEqual(['comicScript', 'teleplay']);
+  });
+
   it('passes a parseable comic script and fails an unparseable one', () => {
     expect(scriptStructurallyReady({ stages: { comicScript: ready(VALID_SCRIPT) } })).toBe(true);
     expect(scriptStructurallyReady({ stages: { comicScript: ready('just some prose, no pages') } })).toBe(false);
     expect(scriptStructurallyReady({ stages: {} })).toBe(false);
+  });
+});
+
+describe('wantsComic (per-run comic gating)', () => {
+  it('honors the series format when no restriction is given', () => {
+    expect(wantsComic({ targetFormat: 'comic+tv' })).toBe(true);
+    expect(wantsComic({ targetFormat: 'comic' })).toBe(true);
+    expect(wantsComic({ targetFormat: 'tv' })).toBe(false);
+  });
+
+  it('is false for a comic+tv series restricted to tv-only (so comic gates do NOT run)', () => {
+    // This is the bug: a ['tv'] run must NOT enter scriptVerify/visual on a
+    // comic+tv series, or it would verify a comic script that was never authored.
+    expect(wantsComic({ targetFormat: 'comic+tv' }, { targetFormats: ['tv'] })).toBe(false);
+    expect(wantsComic({ targetFormat: 'comic+tv' }, { targetFormats: ['comic'] })).toBe(true);
+    expect(wantsComic({ targetFormat: 'comic+tv' }, { targetFormats: ['comic', 'tv'] })).toBe(true);
+  });
+
+  it('treats a restriction the series cannot satisfy as a no-op (matches requiredScriptStages)', () => {
+    // comic-only series asked for tv-only → requiredScriptStages falls back to
+    // comic; wantsComic must agree (still wants comic) so the run isn't stranded.
+    expect(wantsComic({ targetFormat: 'comic' }, { targetFormats: ['tv'] })).toBe(true);
+    expect(wantsComic({ targetFormat: 'comic+tv' }, { targetFormats: [] })).toBe(true);
   });
 });
 
@@ -377,6 +840,45 @@ async function seedComplete({ script = VALID_SCRIPT } = {}) {
   await issuesSvc.updateStage(issue.id, 'comicScript', ready(script));
   return { seriesId: series.id, seasonId, issueId: issue.id };
 }
+
+describe('trackConvergence (pure divergence/oscillation guard — #1571)', () => {
+  const { trackConvergence, DIVERGENCE_PATIENCE } = autopilot;
+
+  // Fold a sequence of per-round blocking counts into the final tracker state.
+  const fold = (counts) => counts.reduce(trackConvergence, { best: null, sinceBest: 0 });
+
+  it('seeds best on the first measured round (nothing to compare yet)', () => {
+    expect(trackConvergence({ best: null, sinceBest: 0 }, 5)).toEqual({ best: 5, sinceBest: 0 });
+  });
+
+  it('resets sinceBest on a new low (a profitable resolve pass)', () => {
+    expect(trackConvergence({ best: 5, sinceBest: 1 }, 3)).toEqual({ best: 3, sinceBest: 0 });
+  });
+
+  it('accrues sinceBest on a stall (equal to the best)', () => {
+    expect(trackConvergence({ best: 4, sinceBest: 0 }, 4)).toEqual({ best: 4, sinceBest: 1 });
+  });
+
+  it('accrues sinceBest on a regression (a fix introduced a new blocker)', () => {
+    expect(trackConvergence({ best: 2, sinceBest: 0 }, 5)).toEqual({ best: 2, sinceBest: 1 });
+  });
+
+  it('a strictly-decreasing run never diverges', () => {
+    expect(fold([4, 3, 2, 1]).sinceBest).toBeLessThan(DIVERGENCE_PATIENCE);
+  });
+
+  it('a flat stall reaches the patience threshold after two non-improving rounds', () => {
+    // round 1 seeds best=3; rounds 2 + 3 don't improve → sinceBest hits patience.
+    expect(fold([3, 3]).sinceBest).toBeLessThan(DIVERGENCE_PATIENCE);
+    expect(fold([3, 3, 3]).sinceBest).toBeGreaterThanOrEqual(DIVERGENCE_PATIENCE);
+  });
+
+  it('catches a 2-cycle oscillation a naive prev-round check would miss (#1571)', () => {
+    // 5→4→5→4: after round 2 sets best=4, no later round beats it, so sinceBest
+    // climbs past patience even though every other round "decreases" vs the prior.
+    expect(fold([5, 4, 5, 4]).sinceBest).toBeGreaterThanOrEqual(DIVERGENCE_PATIENCE);
+  });
+});
 
 describe('autopilot conductor', () => {
   it('rejects start when the cos domain is off (no run created)', async () => {
@@ -429,6 +931,194 @@ describe('autopilot conductor', () => {
     const series = await seriesSvc.getSeries(seriesId);
     expect(series.autopilot?.status).toBe('paused');
     expect(series.autopilot?.residualFindings?.[0]?.problem).toBe('plot hole');
+  });
+
+  it('uses the persisted maxArcVerifyRounds setting when no per-run override is given', async () => {
+    // Strictly-decreasing blocking counts (4→3→2→1) so the loop runs to the cap
+    // WITHOUT tripping the divergence guard (#1571) — this asserts the persisted
+    // *setting* drives the round cap. mockImplementationOnce is self-consuming, so
+    // it can't leak its impl into the next test the way mockImplementation would
+    // (beforeEach's clearAllMocks keeps implementations).
+    const holes = (n) => Array.from({ length: n }, (_, i) => ({ severity: 'high', problem: `hole ${i}`, location: 'V1' }));
+    arcSpies.verifyArc
+      .mockImplementationOnce(async () => ({ issues: holes(4) }))
+      .mockImplementationOnce(async () => ({ issues: holes(3) }))
+      .mockImplementationOnce(async () => ({ issues: holes(2) }))
+      .mockImplementationOnce(async () => ({ issues: holes(1) }));
+    getSettings.mockImplementation(async () => ({ pipelineEditorialChecks: { maxArcVerifyRounds: 4 } }));
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, {}); // no per-run rounds — settings drives it
+    await waitFor(runFinished(seriesId));
+    // 4 verify rounds (the persisted setting), 3 resolves, then a maxRounds pause.
+    expect(arcSpies.verifyArc).toHaveBeenCalledTimes(4);
+    expect(arcSpies.resolveVerifyIssues).toHaveBeenCalledTimes(3);
+    const last = autopilot.__testing.runs.get(seriesId)?.lastPayload;
+    expect(last?.type).toBe('paused');
+    expect(last?.pauseKind).toBe('maxRounds');
+  });
+
+  it('stops early with a divergence pause when a verify gate stops converging (#1571)', async () => {
+    // Raised cap, but the resolve passes never reduce the blocking count, so the
+    // divergence guard bails at round 3 (patience 2) instead of burning all 6
+    // rounds + budget. Distinct pauseKind so the UI can say "needs a human", not
+    // "ran out of rounds".
+    verifyFindings = [{ severity: 'high', problem: 'plot hole', location: 'V1' }];
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { maxArcVerifyRounds: 6 });
+    await waitFor(runFinished(seriesId));
+    const last = autopilot.__testing.runs.get(seriesId)?.lastPayload;
+    expect(last?.type).toBe('paused');
+    expect(last?.scope).toBe('verifyArc');
+    expect(last?.pauseKind).toBe('divergence');
+    expect(last?.reason).toMatch(/stopped converging/);
+    // Bailed at round 3 — NOT all 6 rounds (the whole point: budget saved).
+    expect(arcSpies.verifyArc).toHaveBeenCalledTimes(3);
+    expect(arcSpies.resolveVerifyIssues).toHaveBeenCalledTimes(2);
+    const series = await seriesSvc.getSeries(seriesId);
+    expect(series.autopilot?.status).toBe('paused');
+    // Persisted through sanitizeAutopilot so the resume banner survives a reload.
+    expect(series.autopilot?.pauseKind).toBe('divergence');
+  });
+
+  it('a default-cap arc run is unaffected by the divergence guard (maxRounds still wins)', async () => {
+    // Default arc cap is 3; the divergence streak can't reach patience (2) before
+    // the loop hits maxRounds at round 3, so a stalled default run still reports
+    // `maxRounds`, not `divergence` — no behavior change for default runs.
+    verifyFindings = [{ severity: 'high', problem: 'plot hole', location: 'V1' }];
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, {}); // default MAX_ARC_VERIFY_ROUNDS = 3
+    await waitFor(runFinished(seriesId));
+    const last = autopilot.__testing.runs.get(seriesId)?.lastPayload;
+    expect(last?.type).toBe('paused');
+    expect(last?.pauseKind).toBe('maxRounds');
+    expect(arcSpies.verifyArc).toHaveBeenCalledTimes(3);
+  });
+
+  it('a per-run override beats the persisted maxArcVerifyRounds setting', async () => {
+    verifyFindings = [{ severity: 'high', problem: 'plot hole', location: 'V1' }];
+    getSettings.mockImplementation(async () => ({ pipelineEditorialChecks: { maxArcVerifyRounds: 4 } }));
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { maxArcVerifyRounds: 1 });
+    await waitFor(runFinished(seriesId));
+    expect(arcSpies.verifyArc).toHaveBeenCalledTimes(1);
+    expect(arcSpies.resolveVerifyIssues).not.toHaveBeenCalled();
+  });
+
+  it('runs whole-manuscript beat continuity before text, then proceeds when clean (#1510)', async () => {
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, {});
+    await waitFor(runFinished(seriesId));
+    expect(arcSpies.analyzeBeatContinuity).toHaveBeenCalled();
+    expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('complete');
+  });
+
+  it('pauses for review when beat continuity never converges (#1510)', async () => {
+    beatContinuityFindings = [{ severity: 'high', problem: 'dropped cliffhanger', location: 'issue:1' }];
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { maxBeatContinuityRounds: 2 });
+    await waitFor(runFinished(seriesId));
+    const last = autopilot.__testing.runs.get(seriesId)?.lastPayload;
+    expect(last?.type).toBe('paused');
+    expect(last?.scope).toBe('beatContinuity');
+    // bounded: analyze called maxRounds times, resolve called rounds-1.
+    expect(arcSpies.analyzeBeatContinuity).toHaveBeenCalledTimes(2);
+    expect(arcSpies.resolveBeatContinuity).toHaveBeenCalledTimes(1);
+    expect(last?.residualFindings?.[0]?.problem).toBe('dropped cliffhanger');
+    // never reached the text stage — the gate is upstream of it.
+    expect(autoRunnerSpies.startAutoRunTextStages).not.toHaveBeenCalled();
+  });
+
+  it('maxBeatContinuityRounds:0 skips the beat-continuity gate (no LLM spend)', async () => {
+    beatContinuityFindings = [{ severity: 'high', problem: 'dropped cliffhanger', location: 'issue:1' }];
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { maxBeatContinuityRounds: 0 });
+    await waitFor(runFinished(seriesId));
+    expect(arcSpies.analyzeBeatContinuity).not.toHaveBeenCalled();
+    expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('complete');
+  });
+
+  // -------------------------------------------------------------------------
+  // #1574 — delegated child runners (beats/text) retry on a failed run and
+  // escalate to a pause instead of marking the work attempted and silently
+  // skipping it. The runner spies are no-ops by default, so the target stage
+  // never lands unless a test's mock writes it — exactly the "child LLM call
+  // failed" shape the feature guards against.
+  // -------------------------------------------------------------------------
+  // idea ready but no comicScript → the resolver routes to textStages.
+  async function seedNeedsText() {
+    const series = await seriesSvc.createSeries({ name: 'S', logline: 'L', premise: 'P', targetFormat: 'comic' });
+    await seriesSvc.updateSeries(series.id, { arc: { logline: 'A', summary: 'S' } });
+    const season = await seasonsSvc.createSeason(series.id, { number: 1, title: 'V1' });
+    const issue = await issuesSvc.createIssue({ seriesId: series.id, seasonId: season.id, title: 'I1', number: 1 });
+    await issuesSvc.updateStage(issue.id, 'idea', ready('beats'));
+    return { seriesId: series.id, seasonId: season.id, issueId: issue.id };
+  }
+  // no idea stage → the resolver routes to beatSheet first.
+  async function seedNeedsBeats() {
+    const series = await seriesSvc.createSeries({ name: 'S', logline: 'L', premise: 'P', targetFormat: 'comic' });
+    await seriesSvc.updateSeries(series.id, { arc: { logline: 'A', summary: 'S' } });
+    const season = await seasonsSvc.createSeason(series.id, { number: 1, title: 'V1' });
+    const issue = await issuesSvc.createIssue({ seriesId: series.id, seasonId: season.id, title: 'I1', number: 1 });
+    return { seriesId: series.id, seasonId: season.id, issueId: issue.id };
+  }
+
+  it('retries a failed text run once, then escalates with a pause + residual (#1574)', async () => {
+    const { seriesId } = await seedNeedsText(); // default text spy never writes comicScript
+    await autopilot.startSeriesAutopilot(seriesId, {}); // default MAX_CHILD_RETRIES = 1 → 2 attempts
+    await waitFor(runFinished(seriesId));
+    const last = autopilot.__testing.runs.get(seriesId)?.lastPayload;
+    expect(last?.type).toBe('paused');
+    expect(last?.scope).toBe('textStages');
+    expect(last?.pauseKind).toBe('childFailed');
+    expect(last?.reason).toMatch(/did not produce required stage/);
+    // one initial attempt + one retry before the escalation pause.
+    expect(autoRunnerSpies.startAutoRunTextStages).toHaveBeenCalledTimes(2);
+    const series = await seriesSvc.getSeries(seriesId);
+    expect(series.autopilot?.status).toBe('paused');
+    // pauseKind survives sanitizeAutopilot so the resume banner can classify it.
+    expect(series.autopilot?.pauseKind).toBe('childFailed');
+    expect(series.autopilot?.residualFindings?.length).toBeGreaterThan(0);
+  });
+
+  it('a text run that succeeds on the retry proceeds without pausing (#1574)', async () => {
+    const { seriesId } = await seedNeedsText();
+    autoRunnerSpies.startAutoRunTextStages
+      .mockImplementationOnce(async () => ({ runId: 'ar', alreadyRunning: false })) // attempt 1: fails
+      .mockImplementationOnce(async (id) => { // attempt 2: the stage lands
+        await issuesSvc.updateStage(id, 'comicScript', ready(VALID_SCRIPT));
+        return { runId: 'ar2', alreadyRunning: false };
+      });
+    await autopilot.startSeriesAutopilot(seriesId, {});
+    await waitFor(runFinished(seriesId));
+    expect(autoRunnerSpies.startAutoRunTextStages).toHaveBeenCalledTimes(2);
+    expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('complete');
+  });
+
+  it('maxChildRetries:0 makes a single attempt then pauses (legacy no-retry behavior)', async () => {
+    const { seriesId } = await seedNeedsText();
+    await autopilot.startSeriesAutopilot(seriesId, { maxChildRetries: 0 });
+    await waitFor(runFinished(seriesId));
+    expect(autoRunnerSpies.startAutoRunTextStages).toHaveBeenCalledTimes(1);
+    expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('paused');
+  });
+
+  it('a per-run maxChildRetries override widens the budget (2 retries → 3 attempts)', async () => {
+    const { seriesId } = await seedNeedsText();
+    await autopilot.startSeriesAutopilot(seriesId, { maxChildRetries: 2 });
+    await waitFor(runFinished(seriesId));
+    expect(autoRunnerSpies.startAutoRunTextStages).toHaveBeenCalledTimes(3);
+    expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('paused');
+  });
+
+  it('retries a failed beats run once, then escalates with a pause (#1574)', async () => {
+    const { seriesId } = await seedNeedsBeats(); // default beats spy never writes idea
+    await autopilot.startSeriesAutopilot(seriesId, {});
+    await waitFor(runFinished(seriesId));
+    const last = autopilot.__testing.runs.get(seriesId)?.lastPayload;
+    expect(last?.type).toBe('paused');
+    expect(last?.scope).toBe('beatSheet');
+    expect(last?.reason).toMatch(/did not produce beats/);
+    expect(volumeBeatsSpies.startVolumeBeatsRun).toHaveBeenCalledTimes(2);
   });
 
   it('pauses (no infinite loop) when episode generation produces no issues', async () => {
@@ -487,6 +1177,22 @@ describe('autopilot conductor', () => {
     expect(arcSpies.verifyArc).not.toHaveBeenCalled();
   });
 
+  it('a zero-round gate skips even when the budget is exhausted (no budget pause at that gate)', async () => {
+    budgetStatus = { withinBudget: false, exceeded: 'actions' };
+    const { seriesId } = await seedComplete();
+    // maxArcVerifyRounds:0 + maxBeatContinuityRounds:0 ⇒ both gates short-circuit
+    // with no spend, so the budget gate must NOT pause at either — the run
+    // advances to the next non-exempt step (scriptVerify) and pauses there.
+    await autopilot.startSeriesAutopilot(seriesId, { maxArcVerifyRounds: 0, maxBeatContinuityRounds: 0 });
+    await waitFor(runFinished(seriesId));
+    expect(arcSpies.verifyArc).not.toHaveBeenCalled();
+    expect(arcSpies.analyzeBeatContinuity).not.toHaveBeenCalled();
+    const series = await seriesSvc.getSeries(seriesId);
+    expect(series.autopilot?.status).toBe('paused');
+    expect(series.autopilot?.currentStep).toBe('scriptVerify'); // not 'verifyArc'/'beatContinuity'
+    expect(series.autopilot?.lastError).toMatch(/budget/);
+  });
+
   it('maxEditorialRounds:0 skips the editorial-checks step too (no budget spend)', async () => {
     checkRunnerSpies.runEditorialChecks.mockClear();
     const { seriesId } = await seedComplete();
@@ -495,6 +1201,81 @@ describe('autopilot conductor', () => {
     expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('complete');
     // Skipping the editorial gate must also skip the registry checks pass.
     expect(checkRunnerSpies.runEditorialChecks).not.toHaveBeenCalled();
+  });
+
+  it('refreshes the reverse outline before the checks when stale and a check consumes it (#1349)', async () => {
+    reverseOutlineConsumed = true;
+    reverseOutlineState = { status: 'complete', stale: true };
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { includeVisual: false });
+    await waitFor(runFinished(seriesId));
+    expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('complete');
+    expect(generateReverseOutline).toHaveBeenCalledTimes(1);
+    // force:false lets the call no-op if the outline went fresh in the meantime.
+    expect(generateReverseOutline.mock.calls[0][1]).toMatchObject({ force: false });
+  });
+
+  it('skips the reverse-outline refresh when no enabled check consumes it (#1349)', async () => {
+    reverseOutlineConsumed = false; // gate 1: nothing reads the outline
+    reverseOutlineState = { status: 'complete', stale: true }; // stale, but unused
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { includeVisual: false });
+    await waitFor(runFinished(seriesId));
+    expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('complete');
+    expect(generateReverseOutline).not.toHaveBeenCalled();
+  });
+
+  it('a budget-exhausted run does not pause at the no-op reverse-outline refresh (#1575 self-gating exemption)', async () => {
+    // A subset run whose checks don't consume the outline makes the refresh a
+    // guaranteed no-op. Budget goes exhausted right after the editorial-review
+    // pass spends its last action, so the NEXT step (reverseOutline) sees no
+    // budget. The pre-dispatch gate must NOT pause there — the refresh self-gates
+    // and would bill nothing — so the run reaches completion (editorialChecks +
+    // healthGate are exempt too) instead of a spurious budget pause.
+    reverseOutlineConsumed = false; // subset skips every outline-consuming check
+    reverseOutlineState = { status: 'complete', stale: true }; // stale, but unused
+    getDomainBudgetStatus.mockImplementation(async () => (
+      arcSpies.analyzeManuscriptCompleteness.mock.calls.length >= 1
+        ? { withinBudget: false, exceeded: 'actions' }
+        : { withinBudget: true, exceeded: null }
+    ));
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { editorialCheckIds: ['naming'], includeVisual: false });
+    await waitFor(runFinished(seriesId));
+    const last = autopilot.__testing.runs.get(seriesId)?.lastPayload;
+    expect(last?.type).toBe('complete');
+    expect(generateReverseOutline).not.toHaveBeenCalled();
+  });
+
+  it('skips the reverse-outline refresh when nothing is drafted yet (#1349)', async () => {
+    reverseOutlineConsumed = true;
+    reverseOutlineState = { status: 'no-content' }; // gate 2: no manuscript to segment
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { includeVisual: false });
+    await waitFor(runFinished(seriesId));
+    expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('complete');
+    expect(generateReverseOutline).not.toHaveBeenCalled();
+  });
+
+  it('bills a cos action only when the reverse outline actually regenerates (#1349)', async () => {
+    reverseOutlineConsumed = true;
+    // Fresh outline — the refresh step is a no-op and charges nothing.
+    reverseOutlineState = { status: 'complete', stale: false };
+    const a = await seedComplete();
+    await autopilot.startSeriesAutopilot(a.seriesId, { includeVisual: false });
+    await waitFor(runFinished(a.seriesId));
+    const freshCharges = recordDomainUsage.mock.calls.length;
+    expect(generateReverseOutline).not.toHaveBeenCalled();
+
+    recordDomainUsage.mockClear();
+    generateReverseOutline.mockClear();
+    // Same path, but a stale outline — exactly ONE extra cos action vs the fresh run.
+    reverseOutlineState = { status: 'complete', stale: true };
+    const b = await seedComplete();
+    await autopilot.startSeriesAutopilot(b.seriesId, { includeVisual: false });
+    await waitFor(runFinished(b.seriesId));
+    expect(generateReverseOutline).toHaveBeenCalledTimes(1);
+    expect(recordDomainUsage.mock.calls.length).toBe(freshCharges + 1);
   });
 
   it('pauses at the editorial health gate when a blocking finding remains open (#1316)', async () => {
@@ -650,7 +1431,11 @@ describe('autopilot conductor', () => {
     await autopilot.startSeriesAutopilot(seriesId, { includeVisual: false });
     await waitFor(runFinished(seriesId));
     expect(verifyComicScript).toHaveBeenCalledTimes(1);
-    expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('complete');
+    const done = autopilot.__testing.runs.get(seriesId)?.lastPayload;
+    expect(done?.type).toBe('complete');
+    // #1572 — a genuinely clean run reports no filed craft gaps.
+    expect(done?.craftGapIssues).toBe(0);
+    expect(done?.craftGapFindings).toBe(0);
   });
 
   it('files a gap for blocking script-craft findings but does not block the run', async () => {
@@ -662,6 +1447,114 @@ describe('autopilot conductor', () => {
     expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('complete');
     const gapKinds = addTask.mock.calls.map((c) => c[0].description);
     expect(gapKinds.some((d) => /script-craft/.test(d))).toBe(true);
+  });
+
+  it('qualifies the terminal complete frame + marker with filed script-craft gap counts (#1572)', async () => {
+    scriptVerifyFindings = [
+      { severity: 'high', problem: 'page 2 panel 1 has no description' },
+      { severity: 'high', problem: 'page 3 panel 2 dialogue is empty' },
+    ];
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { fileGaps: true, includeVisual: false });
+    await waitFor(runFinished(seriesId));
+    const done = autopilot.__testing.runs.get(seriesId)?.lastPayload;
+    expect(done?.type).toBe('complete');
+    // One issue verified, two blocking findings on it → 1 gap-issue / 2 findings.
+    expect(done?.craftGapIssues).toBe(1);
+    expect(done?.craftGapFindings).toBe(2);
+    const marker = (await seriesSvc.getSeries(seriesId)).autopilot;
+    expect(marker.status).toBe('done');
+    expect(marker.craftGapIssues).toBe(1);
+    expect(marker.craftGapFindings).toBe(2);
+  });
+
+  it('does not tally craft gaps into the complete frame when fileGaps is off (#1572)', async () => {
+    scriptVerifyFindings = [{ severity: 'high', problem: 'page 2 panel 1 has no description' }];
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { includeVisual: false });
+    await waitFor(runFinished(seriesId));
+    const done = autopilot.__testing.runs.get(seriesId)?.lastPayload;
+    expect(done?.type).toBe('complete');
+    // Nothing was filed (fileGaps off), so the run stays a clean complete.
+    expect(done?.craftGapIssues).toBe(0);
+    expect(done?.craftGapFindings).toBe(0);
+  });
+
+  it('flags errored editorial checks on the terminal complete frame + marker (#1573)', async () => {
+    editorialChecksPerCheck = [
+      { checkId: 'pacing', count: 0, error: 'provider timeout' },
+      { checkId: 'continuity', count: 2 },
+    ];
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { includeVisual: false });
+    await waitFor(runFinished(seriesId));
+    const done = autopilot.__testing.runs.get(seriesId)?.lastPayload;
+    expect(done?.type).toBe('complete');
+    expect(done?.editorialCheckErrors).toBe(1);
+    expect(done?.editorialCheckErroredIds).toEqual(['pacing']);
+    const marker = (await seriesSvc.getSeries(seriesId)).autopilot;
+    expect(marker.status).toBe('done');
+    expect(marker.editorialCheckErrors).toBe(1);
+  });
+
+  it('reports a clean complete (no errored checks) when every editorial check ran (#1573)', async () => {
+    editorialChecksPerCheck = [{ checkId: 'pacing', count: 0 }, { checkId: 'continuity', count: 1 }];
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { includeVisual: false });
+    await waitFor(runFinished(seriesId));
+    const done = autopilot.__testing.runs.get(seriesId)?.lastPayload;
+    expect(done?.type).toBe('complete');
+    expect(done?.editorialCheckErrors).toBe(0);
+    expect(done?.editorialCheckErroredIds).toEqual([]);
+  });
+
+  it('forwards a per-run editorialCheckIds subset to the checks pass + budget gate (#1575)', async () => {
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { editorialCheckIds: ['pacing'], includeVisual: false });
+    await waitFor(runFinished(seriesId));
+    // Both the budget gate (buildEditorialCheckPlan) and the run (runEditorialChecks)
+    // must see the same subset so billing and execution agree on the set.
+    expect(checkRunnerSpies.runEditorialChecks).toHaveBeenCalledWith(
+      seriesId,
+      expect.objectContaining({ checkIds: ['pacing'] }),
+    );
+    expect(checkRunnerSpies.buildEditorialCheckPlan).toHaveBeenCalledWith(
+      seriesId,
+      expect.objectContaining({ checkIds: ['pacing'] }),
+    );
+    // The preceding reverse-outline refresh must gate on the SAME subset, so a
+    // subset that skips outline-consuming checks doesn't trigger/bill a refresh.
+    expect(checkRunnerSpies.enabledChecksConsumeReverseOutline).toHaveBeenCalledWith(
+      expect.anything(),
+      ['pacing'],
+    );
+  });
+
+  it('passes checkIds:null (run all enabled) when no subset is given (#1575)', async () => {
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { includeVisual: false });
+    await waitFor(runFinished(seriesId));
+    expect(checkRunnerSpies.runEditorialChecks).toHaveBeenCalledWith(
+      seriesId,
+      expect.objectContaining({ checkIds: null }),
+    );
+    expect(checkRunnerSpies.enabledChecksConsumeReverseOutline).toHaveBeenCalledWith(
+      expect.anything(),
+      null,
+    );
+  });
+
+  // #1578 — the checks pass forwards the runner's per-check progress frames up
+  // the autopilot SSE stream, so it must hand runEditorialChecks an onProgress
+  // callback (without it the only signal during a long pass is the terminal total).
+  it('passes an onProgress forwarder to the editorial checks runner (#1578)', async () => {
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { includeVisual: false });
+    await waitFor(runFinished(seriesId));
+    expect(checkRunnerSpies.runEditorialChecks).toHaveBeenCalledWith(
+      seriesId,
+      expect.objectContaining({ onProgress: expect.any(Function) }),
+    );
   });
 
   it('files a CoS gap task when a verify gate stalls (fileGaps)', async () => {
@@ -680,5 +1573,124 @@ describe('autopilot conductor', () => {
     expect(n).toBe(1);
     const fresh = await seriesSvc.getSeries(series.id);
     expect(fresh.autopilot?.status).toBe('paused');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Beat-continuity resolve internals (#1510) — pure shaper + the beat-rewrite
+// apply pass (real issues service against the file store, like the conductor).
+// ---------------------------------------------------------------------------
+describe('beat-continuity resolve (#1510)', () => {
+  const { shapeBeatResolutions, applyBeatResolutions, buildBeatContinuityContext } = arcPlanner.__testing;
+
+  it('buildBeatContinuityContext renders beats into the tree and counts beat-bearing issues', async () => {
+    const series = await seriesSvc.createSeries({ name: 'S', logline: 'L', premise: 'P', targetFormat: 'comic' });
+    await seriesSvc.updateSeries(series.id, { arc: { logline: 'A', summary: 'Sum' } });
+    const season = await seasonsSvc.createSeason(series.id, { number: 1, title: 'V1' });
+    const withBeats = await issuesSvc.createIssue({ seriesId: series.id, seasonId: season.id, title: 'I1', number: 1 });
+    const synOnly = await issuesSvc.createIssue({ seriesId: series.id, seasonId: season.id, title: 'I2', number: 2 });
+    await issuesSvc.updateStage(withBeats.id, 'idea', { status: 'ready', input: 'syn1', output: 'BEATS-A' });
+    await issuesSvc.updateStage(synOnly.id, 'idea', { status: 'empty', input: 'syn2', output: '' });
+    const fresh = await seriesSvc.getSeries(series.id);
+    const ctx = await buildBeatContinuityContext(fresh);
+    expect(ctx.beatBearingCount).toBe(1);          // only the one expanded issue
+    expect(ctx.seasonsTreeJson).toContain('BEATS-A');
+    expect(ctx.seasonsTreeJson).toContain('syn2');  // synopsis fallback for the un-expanded issue
+  });
+
+  it('shapeBeatResolutions keeps valid entries, drops malformed, caps the count', () => {
+    const out = shapeBeatResolutions([
+      { episodeNumber: 1, beats: '  new beats  ', seasonNumber: 2 },
+      { episodeNumber: 3, beats: '' },            // empty beats → dropped
+      { episodeNumber: 'x', beats: 'b' },         // non-integer number → dropped
+      { beats: 'no number' },                     // missing number → dropped
+      { episodeNumber: 4, beats: 'b4' },          // seasonNumber absent → null
+    ]);
+    expect(out).toEqual([
+      { seasonNumber: 2, episodeNumber: 1, beats: 'new beats' },
+      { seasonNumber: null, episodeNumber: 4, beats: 'b4' },
+    ]);
+    expect(shapeBeatResolutions('nope')).toEqual([]);
+  });
+
+  // A single issue in a fresh series gets the recomputed series-global number 1.
+  async function seedIssueWithBeats(over = {}) {
+    const series = await seriesSvc.createSeries({ name: 'S', logline: 'L', premise: 'P', targetFormat: 'comic' });
+    const season = await seasonsSvc.createSeason(series.id, { number: 1, title: 'V1' });
+    const issue = await issuesSvc.createIssue({ seriesId: series.id, seasonId: season.id, title: 'I1', number: 1 });
+    await issuesSvc.updateStage(issue.id, 'idea', { status: 'ready', input: 'synopsis', output: 'old beats', ...over });
+    const fresh = await seriesSvc.getSeries(series.id);
+    return { series: fresh, issueId: issue.id };
+  }
+
+  it('writes the corrected beats to BOTH idea.input and idea.output so prose adapts from the fix', async () => {
+    const { series, issueId } = await seedIssueWithBeats();
+    const applied = await applyBeatResolutions(series.id, series, [{ seasonNumber: 1, episodeNumber: 1, beats: 'corrected beats' }]);
+    expect(applied).toEqual([expect.objectContaining({ issueId, number: 1, corrected: true })]);
+    const issue = await issuesSvc.getIssue(issueId);
+    expect(issue.stages.idea.output).toBe('corrected beats');
+    // idea.input must carry the fix too — downstream text generation reads
+    // stageContentOf(idea), which prefers idea.input, so a fix only in
+    // idea.output would never reach the regenerated prose/scripts.
+    expect(issue.stages.idea.input).toBe('corrected beats');
+    expect(issue.stages.idea.status).toBe('ready');
+    // The real prose source-of-truth resolver must now surface the correction.
+    expect(stageContentOf(issue.stages.idea)).toBe('corrected beats');
+  });
+
+  it('clears stale downstream prose/scripts AND comicPages art so they regenerate from the corrected beats', async () => {
+    const { series, issueId } = await seedIssueWithBeats();
+    // Pre-existing downstream drafts (the re-run / resume case): prose, comicScript,
+    // and rendered comic art were all generated from the OLD beats.
+    await issuesSvc.updateStage(issueId, 'prose', { status: 'ready', output: 'old prose' });
+    await issuesSvc.updateStage(issueId, 'comicScript', { status: 'ready', output: 'old script' });
+    await issuesSvc.updateStage(issueId, 'comicPages', {
+      status: 'ready',
+      pages: [{ panels: [{ description: 'p' }], proofImage: { jobId: 'pg0' } }],
+      cover: { proofImage: { jobId: 'cov' } },
+      backCover: { proofImage: { jobId: 'bc' } },
+    });
+    // Sanity: art reads as fully drafted before the beat fix.
+    expect(autopilot.visualReady(await issuesSvc.getIssue(issueId))).toBe(true);
+
+    const applied = await applyBeatResolutions(series.id, series, [{ seasonNumber: 1, episodeNumber: 1, beats: 'corrected beats' }]);
+    expect(applied[0].clearedStages).toEqual(expect.arrayContaining(['prose', 'comicScript', 'comicPages']));
+    const issue = await issuesSvc.getIssue(issueId);
+    expect(issue.stages.idea.output).toBe('corrected beats');     // new beats applied
+    expect(issuesSvc.isStageReady(issue.stages.prose)).toBe(false);       // stale text → cleared
+    expect(issuesSvc.isStageReady(issue.stages.comicScript)).toBe(false); // stale script → cleared
+    expect(autopilot.visualReady(issue)).toBe(false);                     // stale art → re-draw forced
+  });
+
+  it('does NOT clear a locked downstream stage when rewriting beats', async () => {
+    const { series, issueId } = await seedIssueWithBeats();
+    await issuesSvc.updateStage(issueId, 'comicScript', { status: 'ready', output: 'frozen script', locked: true });
+    const applied = await applyBeatResolutions(series.id, series, [{ seasonNumber: 1, episodeNumber: 1, beats: 'corrected beats' }]);
+    expect(applied[0].clearedStages).not.toContain('comicScript');
+    const issue = await issuesSvc.getIssue(issueId);
+    expect(issue.stages.comicScript.output).toBe('frozen script');  // untouched
+  });
+
+  it('skips a locked idea stage', async () => {
+    const { series, issueId } = await seedIssueWithBeats({ locked: true });
+    const applied = await applyBeatResolutions(series.id, series, [{ seasonNumber: 1, episodeNumber: 1, beats: 'corrected' }]);
+    expect(applied[0]).toMatchObject({ skipped: 'locked' });
+    const issue = await issuesSvc.getIssue(issueId);
+    expect(issue.stages.idea.output).toBe('old beats');  // untouched
+  });
+
+  it('skips an issue that has no beats yet (corpus is beat-level)', async () => {
+    const { series } = await seedIssueWithBeats({ status: 'empty', output: '' });
+    const applied = await applyBeatResolutions(series.id, series, [{ seasonNumber: 1, episodeNumber: 1, beats: 'corrected' }]);
+    expect(applied[0]).toMatchObject({ skipped: 'no-beats' });
+  });
+
+  it('drops an unmatched correction rather than rewriting the wrong issue', async () => {
+    const { series, issueId } = await seedIssueWithBeats();
+    // Only episode 1 exists; a correction for episode 99 matches nothing.
+    const applied = await applyBeatResolutions(series.id, series, [{ seasonNumber: 1, episodeNumber: 99, beats: 'corrected' }]);
+    expect(applied[0]).toMatchObject({ skipped: 'no-match' });
+    const issue = await issuesSvc.getIssue(issueId);
+    expect(issue.stages.idea.output).toBe('old beats');  // untouched
   });
 });

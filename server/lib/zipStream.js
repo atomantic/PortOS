@@ -41,6 +41,19 @@ export function parseZip() {
     final(cb) {
       if (!closed) { closed = true; emitter.emit('close'); }
       cb();
+    },
+    destroy(err, cb) {
+      // On abort (a consumer calls `parser.destroy()` to stop ingestion mid-ZIP),
+      // the entry currently streaming would otherwise be stranded: its
+      // `passThrough` is never fed again and never `.end()`-ed, so anything
+      // piping it (e.g. a write-to-disk or collect consumer awaiting the entry's
+      // completion) hangs forever. End it so EOF flows downstream and those
+      // consumers settle. `end()` (not `destroy(err)`) avoids an unhandled error
+      // on the passThrough, since `.pipe()` doesn't forward errors.
+      if (currentEntry?.passThrough && !currentEntry.passThrough.writableEnded) {
+        currentEntry.passThrough.end();
+      }
+      cb(err);
     }
   });
 
@@ -185,6 +198,43 @@ export function parseZip() {
   }
 
   return sink;
+}
+
+// Default per-member ceiling when buffering one ZIP entry into memory. Guards
+// against a pathological member exhausting RAM; consumers buffering arbitrary
+// archive members (chatgptZipImport, appleHealth clinical records) share it.
+export const MAX_ZIP_MEMBER_BYTES = 100 * 1024 * 1024;
+
+/**
+ * Collect a single `parseZip()` entry's decompressed bytes into one Buffer.
+ *
+ * `parseZip()` entries are NOT readable streams — they expose only `.pipe(dest)`
+ * / `.autodrain()`, so the EventEmitter idiom `entry.on('data'/'end')` throws
+ * `entry.on is not a function`. Pipe the entry into a collecting Writable and
+ * resolve with the concatenated buffer instead. The collect rejects once the
+ * member exceeds `maxBytes` (defaults to `MAX_ZIP_MEMBER_BYTES`), rather than
+ * buffering an unbounded amount into memory.
+ *
+ * Call this synchronously inside the `entry` handler (entries auto-drain on the
+ * next tick if nothing attaches a pipe/drain), and gather the returned promises
+ * so the parser's `close` handler can `Promise.all` them before settling.
+ */
+export function collectZipEntry(entry, maxBytes = MAX_ZIP_MEMBER_BYTES) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    const sink = new Writable({
+      write(chunk, _enc, cb) {
+        size += chunk.length;
+        if (size > maxBytes) { cb(new Error(`ZIP member exceeds ${maxBytes} byte limit`)); return; }
+        chunks.push(chunk);
+        cb();
+      }
+    });
+    sink.on('finish', () => resolve(Buffer.concat(chunks)));
+    sink.on('error', reject);
+    entry.pipe(sink);
+  });
 }
 
 /**

@@ -48,6 +48,16 @@ describe('localLlmCatalog', () => {
     it('returns [] for an unknown backend', () => {
       expect(getCatalog('nope')).toEqual([]);
     });
+
+    it('surfaces a documented context window as contextLength, null otherwise', () => {
+      const ollama = getCatalog('ollama');
+      // mistral-large's description documents a 128K window.
+      expect(ollama.find((m) => m.key === 'mistral-large').contextLength).toBe(131072);
+      // qwen3-30b-a3b documents a native 256K window.
+      expect(ollama.find((m) => m.key === 'qwen3-30b-a3b').contextLength).toBe(262144);
+      // Entries with no documented window expose null (never undefined).
+      expect(ollama.find((m) => m.key === 'llama3.2').contextLength).toBeNull();
+    });
   });
 
   describe('searchCatalog', () => {

@@ -70,7 +70,7 @@
       "name": "Codex TUI",
       "type": "tui",
       "command": "codex",
-      "args": ["--ask-for-approval", "never"],
+      "args": ["--dangerously-bypass-approvals-and-sandbox"],
       "models": ["codex-configured-default"],
       "defaultModel": "codex-configured-default",
       "lightModel": "codex-configured-default",

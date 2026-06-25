@@ -248,7 +248,6 @@ export const AUTONOMY_LEVELS = [
     color: 'green',
     description: 'Only processes user-defined tasks from TASKS.md',
     params: {
-      evaluationIntervalMs: 300000,      // 5 min
       maxConcurrentAgents: 1,
       maxConcurrentAgentsPerProject: 1,
       improvementEnabled: false,
@@ -263,7 +262,6 @@ export const AUTONOMY_LEVELS = [
     color: 'blue',
     description: 'Processes user tasks plus improvement tasks on schedule',
     params: {
-      evaluationIntervalMs: 120000,      // 2 min
       maxConcurrentAgents: 2,
       maxConcurrentAgentsPerProject: 1,
       improvementEnabled: true,
@@ -278,7 +276,6 @@ export const AUTONOMY_LEVELS = [
     color: 'yellow',
     description: 'Full task processing with app improvements, no proactive mode',
     params: {
-      evaluationIntervalMs: 60000,       // 1 min
       maxConcurrentAgents: 3,
       maxConcurrentAgentsPerProject: 2,
       improvementEnabled: true,
@@ -291,9 +288,8 @@ export const AUTONOMY_LEVELS = [
     id: 'yolo',
     label: 'YOLO',
     color: 'red',
-    description: 'Maximum autonomy with proactive task creation and frequent checks',
+    description: 'Maximum autonomy with proactive task creation',
     params: {
-      evaluationIntervalMs: 30000,       // 30 sec
       maxConcurrentAgents: 5,
       maxConcurrentAgentsPerProject: 3,
       improvementEnabled: true,

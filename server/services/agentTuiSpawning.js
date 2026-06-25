@@ -17,7 +17,7 @@ import { analyzeAgentFailure } from './agentErrorAnalysis.js';
 import { finalizeAgent, releaseAgentLane } from './agentLifecycle.js';
 import { activeAgents, userTerminatedAgents, pausedAgents } from './agentState.js';
 import { PATHS } from '../lib/fileUtils.js';
-import { resolveCliModel } from '../lib/providerModels.js';
+import { resolveCliModel, resolveBedrockCliModel } from '../lib/providerModels.js';
 import { createStreamingAnsiStripper, stripAnsi } from '../lib/ansiStrip.js';
 import { createImmediateFallbackSignalDetector } from '../lib/aiToolkit/errorDetection.js';
 import { isAntigravityCommand } from '../lib/antigravity.js';
@@ -29,17 +29,21 @@ import {
   PASTE_MARKER_POLL_MS,
   countPasteMarkers,
   createWorkActivityTracker,
+  createInputReadyTracker,
   rendersWorkCounter,
   PASTE_TO_ENTER_MIN_DELAY_MS,
   PASTE_TO_ENTER_FALLBACK_MS,
   scheduleSubmitEnters,
   PASTE_DEADLINE_MS,
+  TUI_INPUT_READY_DEADLINE_MS,
   OUTPUT_BUFFER_CAP,
   OUTPUT_BUFFER_HEADROOM,
   RAW_SPOOL_MAX_BYTES,
   inferTuiCommand,
   applyCommandDefaults,
 } from '../lib/tuiHandshake.js';
+import { agentGuardEnv } from '../lib/agentGuard/index.js';
+import { execFile } from 'child_process';
 
 // Agent-specific timing/lifecycle constants (not shared with the one-shot
 // runner — agents stay alive much longer and write a sentinel file when done).
@@ -121,7 +125,7 @@ function shellQuote(value) {
  * to create the session, `sessionId` is null and the caller is expected
  * to bail out via its `finish` path.
  */
-export function createAgentTuiSession({ agentId, provider, tuiConfig, cwd, onData, onExit }) {
+export function createAgentTuiSession({ agentId, provider, tuiConfig, cwd, onData, onExit, onInitialCommandSent }) {
   const sessionId = shellService.createShellSession(null, {
     cwd,
     kind: 'agent-tui',
@@ -129,7 +133,19 @@ export function createAgentTuiSession({ agentId, provider, tuiConfig, cwd, onDat
     label: `${provider.name} ${agentId}`,
     command: tuiConfig.commandLine,
     initialCommand: tuiConfig.commandLine,
-    env: provider.envVars || {},
+    // Wait until the shell can actually RUN commands before injecting the CLI
+    // command — a fixed delay races a heavy interactive shell and the launched
+    // TUI can fall straight back to a half-loaded prompt (see shell.js
+    // waitForPromptReady, which proves readiness with a round-trip probe).
+    waitForPromptReady: true,
+    // Fires when the CLI command is actually injected. We start observing
+    // claude's input-readiness only after this so the readiness probe's own
+    // shell activity can't prematurely open the paste gate.
+    onInitialCommandSent,
+    // agentGuardEnv() prepends the pm2 shim to the agent session's PATH (and
+    // points it at the real pm2). Spread LAST so it wins over any provider PATH.
+    // Only AI agent sessions get this — the user's own Shell page does not.
+    env: { ...(provider.envVars || {}), ...agentGuardEnv() },
     onData,
     onExit,
   });
@@ -142,16 +158,42 @@ export function createAgentTuiSession({ agentId, provider, tuiConfig, cwd, onDat
   return { sessionId, ptyProcess, pid: ptyProcess?.pid || null };
 }
 
-function appendModelArgs(args, model, command) {
+// Best-effort liveness probe for the launched TUI command. The TUI runs e.g.
+// `claude` as a CHILD of a persistent PTY shell (see createShellSession writing
+// initialCommand), so when that command exits at startup the PTY itself stays
+// open — the shell just returns to its prompt — and the spawner's onExit never
+// fires. "The shell PID has no live child process" therefore means the launched
+// command has already exited. Resolves true (assume alive) when the probe can't
+// run, so a flaky/absent `ps` never blocks an otherwise-healthy paste.
+function shellHasLiveChild(shellPid) {
+  if (!shellPid) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    // `-Ao ppid=` is POSIX (all processes, ppid column only, no header) and
+    // works on both macOS (BSD ps) and Linux (procps).
+    execFile('ps', ['-Ao', 'ppid='], { timeout: 2000 }, (err, stdout) => {
+      if (err) { resolve(true); return; }
+      resolve(stdout.split('\n').some((line) => parseInt(line, 10) === shellPid));
+    });
+  });
+}
+
+function appendModelArgs(args, model, command, provider) {
   if (isAntigravityCommand(command)) return args;
   const effectiveModel = resolveCliModel(model);
-  return effectiveModel ? [...args, '--model', effectiveModel] : args;
+  if (!effectiveModel) return args;
+  // Bedrock box: map a bare Claude id to its region-prefixed form just-in-time
+  // (no-op off Bedrock / for non-Claude ids).
+  const injectedModel = resolveBedrockCliModel(effectiveModel, {
+    env: { ...process.env, ...provider?.envVars },
+    providerId: provider?.id,
+  });
+  return [...args, '--model', injectedModel];
 }
 
 export function buildTuiSpawnConfig(provider, model) {
   const command = provider?.command || inferTuiCommand(provider?.id);
   const baseArgs = applyCommandDefaults(command, [...(provider?.args || [])]);
-  const args = appendModelArgs(baseArgs, model, command);
+  const args = appendModelArgs(baseArgs, model, command, provider);
 
   return {
     command,
@@ -231,6 +273,18 @@ export async function spawnTuiAgent({
   // fallback idle-complete path from finalizing a never-submitted prompt as
   // success (issue #1229).
   const workActivity = createWorkActivityTracker();
+  // Tracks claude's interactive input-readiness (footer chrome) and its first-run
+  // folder-trust gate. Gates the prompt paste for the claude TUI so we never
+  // paste into a startup banner, a trust menu, or a returned shell prompt.
+  const inputReady = createInputReadyTracker();
+  let trustAccepted = false;
+  // True once shell.js actually injects the `claude` command (after its
+  // round-trip readiness probe). The probe runs its OWN shell command first,
+  // which toggles bracketed-paste mode and would otherwise advance the
+  // input-ready tracker (sawCommandRun + pasteModeOn) while still at the bare
+  // shell prompt — pasting the prompt into claude's startup banner. Gating
+  // observation on this discards every pre-command toggle.
+  let commandInjected = false;
   let firstOutputAt = null;
   let lastOutputAt = Date.now();
   let lastLine = '';
@@ -553,6 +607,12 @@ export async function spawnTuiAgent({
       // — as this did before #1229 — left the marker unmatchable and the fast
       // path dead.
       if (postPasteBuffer !== null && stripped) postPasteBuffer += stripped;
+      // Observe claude's input-readiness / folder-trust chrome (before the
+      // paste). Raw `text` carries the bracketed-paste-mode toggles; `stripped`
+      // carries the visible footer/trust text. Only AFTER the CLI command is
+      // injected — earlier toggles belong to shell startup and the readiness
+      // probe, not to claude.
+      if (!promptSentAt && commandInjected) inputReady.observe(text, stripped);
       const now = Date.now();
       // Once the prompt is SUBMITTED (Enter sent — not merely pasted), watch for
       // proof the model is actually working. Keying on promptSubmittedAt (not
@@ -628,6 +688,7 @@ export async function spawnTuiAgent({
     cwd,
     onData: handleData,
     onExit: handleExit,
+    onInitialCommandSent: () => { commandInjected = true; },
   });
   sessionId = session.sessionId;
 
@@ -659,9 +720,47 @@ export async function spawnTuiAgent({
   // prompts won't trigger the marker). All timers are tracked so finish()
   // can cancel pending writes if the agent ends mid-handshake.
   const startedAt = Date.now();
-  const sendPrompt = (reason) => {
+
+  // Finalize a startup failure WITHOUT pasting — surfacing whatever the CLI
+  // printed (raw.txt tail) so the real cause is visible instead of a wedged
+  // shell. Shared by the liveness guard (command exited) and the readiness cap
+  // (claude never showed its input prompt).
+  const finishStartupFailure = async (reason, summary) => {
+    if (finalized) return;
+    // Flush any debounced raw-PTY chunks first so the captured tail includes
+    // the CLI's most recent output (e.g. claude's final error before exiting),
+    // not just whatever happened to be on disk before the last 250ms window.
+    await flushPendingRawChunks().catch(() => {});
+    const raw = await readFile(rawFile, 'utf8').catch(() => '');
+    const tail = raw
+      ? stripAnsi(raw).split('\n').map((s) => s.trimEnd()).filter(Boolean).slice(-12).join('\n')
+      : '';
+    appendLine(`❌ ${summary}`);
+    await finish({
+      success: false,
+      exitCode: 1,
+      error: `${summary}${tail ? `\nCaptured output:\n${tail}` : ' No output was captured.'}`,
+      reason,
+    });
+  };
+
+  const sendPrompt = async (reason) => {
     if (finalized || promptSentAt) return;
     promptSentAt = Date.now();
+    // Liveness guard: the TUI command runs as a child of the persistent PTY
+    // shell, so if it exited at startup (e.g. claude failing to enter
+    // interactive mode) the PTY stays open and onExit never fires. Pasting now
+    // would dump the bracketed-paste prompt into the bare shell — the wedged
+    // `^[[200~ …` session. If the shell has no live child, the command is gone:
+    // fail loudly with whatever it printed instead of pasting into the shell.
+    if (!(await shellHasLiveChild(pid))) {
+      if (finalized) return; // a real onExit may have finalized during the probe await
+      await finishStartupFailure(
+        'tui-exited-early',
+        `${tuiConfig.command} exited at startup before the TUI was ready, so no prompt was sent.`,
+      );
+      return;
+    }
     // Start capturing post-paste output. Set BEFORE writing the paste so
     // every chunk that arrives in response gets appended. Cleared the moment
     // detection resolves (marker seen or fallback elapsed) so the accumulator
@@ -707,6 +806,23 @@ export async function spawnTuiAgent({
     }, PASTE_MARKER_POLL_MS);
   };
 
+  // Claude Code renders a startup banner and (in unfamiliar folders) a
+  // folder-trust gate before its input box exists, and the old "saw output then
+  // went idle" heuristic fired during those lulls — pasting the prompt into the
+  // banner / trust menu / a returned shell. For claude we instead gate on its
+  // POSITIVE input-ready footer (see createInputReadyTracker), auto-confirm the
+  // trust gate, and NEVER blind-paste: if the prompt never appears we surface a
+  // failure. Other TUI providers keep the original idle heuristic + deadline.
+  const requireInputReady = commandName === 'claude';
+  // sendPrompt / finishStartupFailure are async and dispatched fire-and-forget
+  // from the interval below. A setInterval callback can't await, and an
+  // unhandled rejection there (e.g. a finalizeAgent throw inside finish())
+  // would crash the process — the callback-boundary hazard CLAUDE.md calls out.
+  // Wrap each floating call so a rejection is logged, not thrown.
+  const safeSendPrompt = (reason) => sendPrompt(reason).catch((err) =>
+    emitLog('error', `TUI agent ${agentId} sendPrompt(${reason}) failed: ${err?.message || err}`, { agentId }));
+  const safeFinishStartupFailure = (reason, summary) => finishStartupFailure(reason, summary).catch((err) =>
+    emitLog('error', `TUI agent ${agentId} finishStartupFailure(${reason}) failed: ${err?.message || err}`, { agentId }));
   const promptTimer = setInterval(() => {
     if (finalized || promptSentAt) {
       clearInterval(promptTimer);
@@ -714,15 +830,42 @@ export async function spawnTuiAgent({
     }
     const now = Date.now();
     const elapsed = now - startedAt;
+
+    if (requireInputReady) {
+      // Auto-confirm claude's first-run "trust this folder?" gate (default is
+      // "Yes, I trust") so claims can run in fresh worktrees. Send Enter once.
+      if (inputReady.needsTrust && !trustAccepted) {
+        trustAccepted = true;
+        shellService.writeToSession(sessionId, '\r');
+        appendLine(`📟 Auto-confirmed claude folder-trust prompt for session ${sessionId.slice(0, 8)}`);
+        return;
+      }
+      if (inputReady.ready && elapsed >= tuiConfig.promptDelayMs) {
+        safeSendPrompt('input-ready');
+        clearInterval(promptTimer);
+        return;
+      }
+      // Never blind-paste for claude: if the input prompt never showed within
+      // the cap, finalize a startup failure with the captured output.
+      if (elapsed >= TUI_INPUT_READY_DEADLINE_MS) {
+        clearInterval(promptTimer);
+        safeFinishStartupFailure(
+          'tui-not-ready',
+          `${tuiConfig.command} did not present an input prompt within ${Math.round(TUI_INPUT_READY_DEADLINE_MS / 1000)}s, so no prompt was sent.`,
+        );
+      }
+      return;
+    }
+
     if (elapsed >= PASTE_DEADLINE_MS) {
-      sendPrompt('fallback');
+      safeSendPrompt('fallback');
       clearInterval(promptTimer);
       return;
     }
     if (elapsed < tuiConfig.promptDelayMs) return;
     if (firstOutputAt === null) return;
     if (now - lastOutputAt < READY_IDLE_THRESHOLD_MS) return;
-    sendPrompt('ready');
+    safeSendPrompt('ready');
     clearInterval(promptTimer);
   }, READY_POLL_INTERVAL_MS);
 

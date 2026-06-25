@@ -178,13 +178,35 @@ const SUMMARY_SECTIONS = [
  *     (prose/teleplay/comic-script) where the budget can't afford the full
  *     dump but the LLM still needs continuity anchors.
  */
-export function renderEntitiesSummary(world, { maxPerKind = ENTITIES_SUMMARY_MAX_PER_KIND } = {}) {
+// `maxPerKind` accepts either a single number (applied to every kind) or a
+// per-kind map (`{ characters, places, objects }`) so a caller can lift the cap
+// on one kind while leaving the others at the default — e.g. the per-issue text
+// stages render the roster with the WHOLE non-scoped character cast (continuity
+// safety net) while keeping places/objects terse. A missing per-kind key falls
+// back to the default cap.
+const capForKind = (maxPerKind, field) => (
+  typeof maxPerKind === 'object' && maxPerKind !== null
+    ? (maxPerKind[field] ?? ENTITIES_SUMMARY_MAX_PER_KIND)
+    : maxPerKind
+);
+
+// `excludeCharacterNames` (a Set of lower-cased names) drops characters already
+// rendered in full elsewhere in the same prompt — e.g. the per-issue text stages
+// list the SCOPED characters as full bible records, so re-listing them in this
+// terse roster is pure duplication. Places/objects are never excluded (they have
+// no full-record block to overlap with). The exclusion happens BEFORE the top-N
+// slice so the "+N more" count reflects what's actually withheld.
+export function renderEntitiesSummary(world, { maxPerKind = ENTITIES_SUMMARY_MAX_PER_KIND, excludeCharacterNames = null } = {}) {
   if (!world || typeof world !== 'object') return '';
+  const exclude = excludeCharacterNames instanceof Set ? excludeCharacterNames : null;
   const lines = [];
   for (const { field, header, formatEntry } of SUMMARY_SECTIONS) {
-    const entries = Array.isArray(world[field]) ? world[field] : [];
+    let entries = Array.isArray(world[field]) ? world[field] : [];
+    if (field === 'characters' && exclude && exclude.size) {
+      entries = entries.filter((e) => !exclude.has((e?.name || '').trim().toLowerCase()));
+    }
     if (!entries.length) continue;
-    const shown = entries.slice(0, maxPerKind);
+    const shown = entries.slice(0, capForKind(maxPerKind, field));
     const hidden = entries.length - shown.length;
     const tags = shown.map(formatEntry).filter(Boolean);
     if (!tags.length) continue;

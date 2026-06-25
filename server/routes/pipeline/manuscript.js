@@ -57,6 +57,10 @@ const manuscriptFixAcceptSchema = z.object({
 // stray keys; `fix` nullable so an explicit clear is distinguishable from absent.
 const manuscriptCommentPatchSchema = z.object({
   status: z.enum(['open', 'accepted', 'dismissed']).optional(),
+  // Why a dismissal was made (#1605) — `false-positive` flags a broken check;
+  // `null` clears the reason back to a plain "won't fix" dismiss. Validated
+  // against the same source the service sanitizes from.
+  dismissReason: z.enum(manuscriptReview.DISMISS_REASONS).nullable().optional(),
   fix: z.object({
     find: z.string().max(issuesSvc.STAGE_OUTPUT_MAX).optional(),
     replace: z.string().max(issuesSvc.STAGE_OUTPUT_MAX).optional(),
@@ -168,6 +172,17 @@ router.get('/series/:id/manuscript/review', asyncHandler(async (req, res) => {
   res.json(await getReviewWithStaleness(req.params.id));
 }));
 
+// Resolve a finding by its (series-agnostic) comment id alone → the owning
+// series + comment, so a deep-link carrying only a commentId can open the
+// editor without the user first picking a series (#1608). 404 when no series
+// review contains the id (e.g. the finding was dismissed-then-GC'd or the link
+// is stale).
+router.get('/findings/:commentId/locate', asyncHandler(async (req, res) => {
+  const located = await manuscriptReview.locateComment(req.params.commentId);
+  if (!located) throw new ServerError('Finding not found', { status: 404, code: 'PIPELINE_FINDING_NOT_FOUND' });
+  res.json(located);
+}));
+
 router.patch('/series/:id/manuscript/review/comments/:commentId', asyncHandler(async (req, res) => {
   await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
   const body = validateRequest(manuscriptCommentPatchSchema, req.body ?? {});
@@ -190,6 +205,15 @@ router.post('/series/:id/manuscript/review/comments/:commentId/accept', asyncHan
   await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
   const body = validateRequest(manuscriptFixAcceptSchema, req.body ?? {});
   const result = await manuscriptFix.acceptManuscriptFix(req.params.id, { commentId: req.params.commentId, ...body })
+    .catch((err) => { throw mapServiceError(err); });
+  res.json(result);
+}));
+
+// Undo a previously-accepted fix: restore the captured pre-edit text and re-open
+// the finding (#1609). No body — the authoritative snapshot lives on the comment.
+router.post('/series/:id/manuscript/review/comments/:commentId/undo', asyncHandler(async (req, res) => {
+  await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
+  const result = await manuscriptFix.undoManuscriptFix(req.params.id, { commentId: req.params.commentId })
     .catch((err) => { throw mapServiceError(err); });
   res.json(result);
 }));

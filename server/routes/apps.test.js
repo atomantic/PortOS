@@ -35,6 +35,7 @@ vi.mock('../services/history.js', () => ({
 
 vi.mock('../services/streamingDetect.js', () => ({
   parseEcosystemFromPath: vi.fn(),
+  writeEcosystemPortEdits: vi.fn().mockResolvedValue({ file: 'ecosystem.config.cjs', changed: true, remapApplied: true, applied: [], unapplied: [] }),
   usesPm2: vi.fn((type) => !new Set(['ios-native', 'macos-native', 'xcode', 'swift']).has(type)),
   NON_PM2_TYPES: new Set(['ios-native', 'macos-native', 'xcode', 'swift'])
 }));
@@ -52,7 +53,9 @@ vi.mock('../services/appIconDetect.js', () => ({
 vi.mock('../services/cos.js', () => ({
   getAgents: vi.fn().mockResolvedValue([]),
   getAgentDates: vi.fn().mockResolvedValue([]),
-  getAgentsByDate: vi.fn().mockResolvedValue([])
+  getAgentsByDate: vi.fn().mockResolvedValue([]),
+  isRunning: vi.fn().mockReturnValue(true),
+  addTask: vi.fn().mockResolvedValue({ id: 'task-vite-1' })
 }));
 
 vi.mock('../services/git.js', () => ({
@@ -79,9 +82,10 @@ import * as appsService from '../services/apps.js';
 import * as pm2Service from '../services/pm2.js';
 import * as history from '../services/history.js';
 import * as streamingDetect from '../services/streamingDetect.js';
+import * as cos from '../services/cos.js';
 import { detectAppIcon, getIconContentType, isUsableSvg } from '../services/appIconDetect.js';
 import { installScripts } from '../services/xcodeScripts.js';
-import { writeFileSync, mkdirSync, rmSync } from 'fs';
+import { writeFileSync, readFileSync, mkdirSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -255,6 +259,254 @@ describe('Apps Routes', () => {
         .send({ name: 'Test' });
 
       expect(response.status).toBe(404);
+    });
+
+    it('writes changed ports back to the ecosystem config (source of truth)', async () => {
+      // repoPath must exist on disk so the pathExists guard passes.
+      const mockApp = { id: 'app-001', name: 'App', type: 'node', repoPath: process.cwd(), apiPort: 5173, uiPort: 5174 };
+      appsService.getAppById.mockResolvedValue(mockApp);
+      streamingDetect.parseEcosystemFromPath.mockResolvedValue({ processes: [{ name: 'a', ports: { api: 5173, ui: 5174 } }] });
+      appsService.updateApp.mockResolvedValue({ ...mockApp, apiPort: 6000, uiPort: 6001 });
+
+      const response = await request(app)
+        .put('/api/apps/app-001')
+        .send({ apiPort: 6000, uiPort: 6001 });
+
+      expect(response.status).toBe(200);
+      expect(streamingDetect.writeEcosystemPortEdits).toHaveBeenCalledWith(
+        process.cwd(),
+        expect.arrayContaining([[5173, 6000], [5174, 6001]]),
+        []
+      );
+    });
+
+    it('does not write to the ecosystem config when no port changed', async () => {
+      const mockApp = { id: 'app-001', name: 'App', type: 'node', repoPath: process.cwd(), apiPort: 5173 };
+      appsService.getAppById.mockResolvedValue(mockApp);
+      appsService.updateApp.mockResolvedValue({ ...mockApp, name: 'Renamed' });
+
+      await request(app).put('/api/apps/app-001').send({ name: 'Renamed' });
+
+      expect(streamingDetect.writeEcosystemPortEdits).not.toHaveBeenCalled();
+    });
+
+    it('persists a shared-value port change via the per-process-targeted rewrite', async () => {
+      // uiPort and apiPort both 6000 in the same process block. A value-keyed
+      // rewrite can't split them, so the route routes it to the targeted edits
+      // (process + label) instead — the edit now persists rather than 422.
+      const mockApp = { id: 'app-001', name: 'App', type: 'node', repoPath: process.cwd(), apiPort: 6000, uiPort: 6000 };
+      appsService.getAppById.mockResolvedValue(mockApp);
+      streamingDetect.parseEcosystemFromPath.mockResolvedValue({ processes: [{ name: 'srv', ports: { api: 6000, ui: 6000 } }] });
+      appsService.updateApp.mockResolvedValue({ ...mockApp, uiPort: 7000 });
+
+      const response = await request(app).put('/api/apps/app-001').send({ uiPort: 7000 });
+
+      expect(response.status).toBe(200);
+      // Empty value-keyed remap (shared value), one targeted edit.
+      expect(streamingDetect.writeEcosystemPortEdits).toHaveBeenCalledWith(
+        process.cwd(),
+        [],
+        [{ processName: 'srv', label: 'ui', oldPort: 6000, newPort: 7000 }]
+      );
+      expect(appsService.updateApp).toHaveBeenCalled();
+    });
+
+    it('persists a request mixing a distinct port (value-keyed) and a shared port (targeted) in one PUT', async () => {
+      // devUiPort is distinct (5556) so it goes through the value-keyed remap;
+      // apiPort/uiPort share 6000 so the uiPort edit goes through the targeted
+      // edits. Both are handed to the single atomic writer in one call.
+      const mockApp = { id: 'app-001', name: 'App', type: 'node', repoPath: process.cwd(), apiPort: 6000, uiPort: 6000, devUiPort: 5556 };
+      appsService.getAppById.mockResolvedValue(mockApp);
+      streamingDetect.parseEcosystemFromPath.mockResolvedValue({
+        processes: [
+          { name: 'srv', ports: { api: 6000, ui: 6000 } },
+          { name: 'srv-ui', ports: { devUi: 5556 } }
+        ]
+      });
+      appsService.updateApp.mockResolvedValue({ ...mockApp, uiPort: 7000, devUiPort: 7001 });
+
+      const response = await request(app)
+        .put('/api/apps/app-001')
+        .send({ uiPort: 7000, devUiPort: 7001 });
+
+      expect(response.status).toBe(200);
+      // One atomic write: devUiPort (distinct) in remap; uiPort (shared) targeted.
+      expect(streamingDetect.writeEcosystemPortEdits).toHaveBeenCalledWith(
+        process.cwd(),
+        [[5556, 7001]],
+        [{ processName: 'srv', label: 'ui', oldPort: 6000, newPort: 7000 }]
+      );
+      expect(appsService.updateApp).toHaveBeenCalled();
+    });
+
+    it('rejects (422) a shared-value port change the targeted rewrite cannot apply', async () => {
+      // Shared value, but the targeted rewrite finds no matching literal to
+      // change (e.g. derived from a const outside the block) → unapplied → 422.
+      const mockApp = { id: 'app-001', name: 'App', type: 'node', repoPath: process.cwd(), apiPort: 6000, uiPort: 6000 };
+      appsService.getAppById.mockResolvedValue(mockApp);
+      streamingDetect.parseEcosystemFromPath.mockResolvedValue({ processes: [{ name: 'srv', ports: { api: 6000, ui: 6000 } }] });
+      streamingDetect.writeEcosystemPortEdits.mockResolvedValueOnce({
+        file: 'ecosystem.config.cjs', changed: false, remapApplied: false, applied: [],
+        unapplied: [{ processName: 'srv', label: 'ui', oldPort: 6000, newPort: 7000 }]
+      });
+
+      const response = await request(app).put('/api/apps/app-001').send({ uiPort: 7000 });
+
+      expect(response.status).toBe(422);
+      expect(appsService.updateApp).not.toHaveBeenCalled();
+    });
+
+    it('ignores a submitted uiPort on a derived (served-by-API) app and pins it to the derived value', async () => {
+      // App has an API process + Vite dev UI but no literal ports.ui, so the
+      // displayed uiPort is derived (= apiPort). The drawer submits all fields
+      // and never syncs the UI field to a changed API field, so a stale/echoed
+      // or even hand-typed uiPort can't be distinguished from a deliberate
+      // (impossible) independent UI change. The route ignores the submitted
+      // value: no config write for the UI port, no 422, and the stored uiPort is
+      // pinned to the derived value so it keeps tracking the API port.
+      const mockApp = { id: 'app-001', name: 'App', type: 'node', repoPath: process.cwd(), apiPort: 6000, uiPort: 6000, devUiPort: 5556 };
+      appsService.getAppById.mockResolvedValue(mockApp);
+      // Parser yields api + devUi only; ui is derived from api (served-by-API).
+      streamingDetect.parseEcosystemFromPath.mockResolvedValue({
+        processes: [{ name: 'srv', ports: { api: 6000, devUi: 5556 } }]
+      });
+      appsService.updateApp.mockResolvedValue({ ...mockApp });
+
+      const response = await request(app).put('/api/apps/app-001').send({ uiPort: 7000 });
+
+      expect(response.status).toBe(200);
+      // No API port change → no config rewrite for the (ignored) UI port.
+      expect(streamingDetect.writeEcosystemPortEdits).not.toHaveBeenCalled();
+      // Stored uiPort pinned to the derived value (= unchanged apiPort 6000),
+      // NOT the submitted 7000.
+      const updateArg = appsService.updateApp.mock.calls[0][1];
+      expect(updateArg.uiPort).toBe(6000);
+    });
+
+    it('strips the echoed derived uiPort so it is never persisted as an explicit field', async () => {
+      // Same served-by-API shape; the modal echoes the derived uiPort (6000)
+      // unchanged on a rename. That must NOT 422, but it also must NOT be stored
+      // as a STALE explicit uiPort — the route pins it to the current derived
+      // value so it keeps tracking apiPort instead of freezing.
+      const mockApp = { id: 'app-001', name: 'App', type: 'node', repoPath: process.cwd(), apiPort: 6000, uiPort: 6000, devUiPort: 5556 };
+      appsService.getAppById.mockResolvedValue(mockApp);
+      streamingDetect.parseEcosystemFromPath.mockResolvedValue({
+        processes: [{ name: 'srv', ports: { api: 6000, devUi: 5556 } }]
+      });
+      appsService.updateApp.mockResolvedValue({ ...mockApp, name: 'Renamed' });
+
+      const response = await request(app)
+        .put('/api/apps/app-001')
+        .send({ name: 'Renamed', uiPort: 6000 });
+
+      expect(response.status).toBe(200);
+      expect(streamingDetect.writeEcosystemPortEdits).not.toHaveBeenCalled();
+      // uiPort pinned to the derived value (= unchanged apiPort 6000) so a stale
+      // stored value can't survive the merge.
+      const updateArg = appsService.updateApp.mock.calls[0][1];
+      expect(updateArg.uiPort).toBe(6000);
+      expect(updateArg.name).toBe('Renamed');
+    });
+
+    it('changing apiPort on a served-by-API app (UI following the new API port) persists the API port and pins uiPort to the new derived value', async () => {
+      // Valid combined save: API 6000→7000 with the UI following to 7000 (the
+      // derived port tracks the new API port). The apiPort edit persists via the
+      // value-keyed rewrite; the stored uiPort is overwritten with the NEW
+      // derived value (7000) so a stale 6000 can't survive the updateApp merge
+      // and block re-derivation.
+      const mockApp = { id: 'app-001', name: 'App', type: 'node', repoPath: process.cwd(), apiPort: 6000, uiPort: 6000, devUiPort: 5556 };
+      appsService.getAppById.mockResolvedValue(mockApp);
+      streamingDetect.parseEcosystemFromPath.mockResolvedValue({
+        processes: [{ name: 'srv', ports: { api: 6000, devUi: 5556 } }]
+      });
+      appsService.updateApp.mockResolvedValue({ ...mockApp, apiPort: 7000, uiPort: 7000 });
+
+      const response = await request(app)
+        .put('/api/apps/app-001')
+        .send({ apiPort: 7000, uiPort: 7000 });
+
+      expect(response.status).toBe(200);
+      // apiPort (distinct, value-keyed) persisted; uiPort follows → not in remap.
+      expect(streamingDetect.writeEcosystemPortEdits).toHaveBeenCalledWith(
+        process.cwd(),
+        [[6000, 7000]],
+        []
+      );
+      const updateArg = appsService.updateApp.mock.calls[0][1];
+      expect(updateArg.uiPort).toBe(7000); // pinned to new derived value
+      expect(updateArg.apiPort).toBe(7000);
+    });
+
+    it('accepts the common API-only edit (drawer echoes the stale derived uiPort) and pins uiPort to the new API port', async () => {
+      // The drawer submits all fields and does NOT sync the UI field when the
+      // API field changes, so a normal API-only edit arrives as
+      // { apiPort: 7000, uiPort: 6000 (old derived) }. That stale echo must NOT
+      // 422 — the API port persists via the value-keyed rewrite and the stored
+      // uiPort is pinned to the NEW derived value (7000), not the echoed 6000.
+      const mockApp = { id: 'app-001', name: 'App', type: 'node', repoPath: process.cwd(), apiPort: 6000, uiPort: 6000, devUiPort: 5556 };
+      appsService.getAppById.mockResolvedValue(mockApp);
+      streamingDetect.parseEcosystemFromPath.mockResolvedValue({
+        processes: [{ name: 'srv', ports: { api: 6000, devUi: 5556 } }]
+      });
+      appsService.updateApp.mockResolvedValue({ ...mockApp, apiPort: 7000, uiPort: 7000 });
+
+      const response = await request(app)
+        .put('/api/apps/app-001')
+        .send({ apiPort: 7000, uiPort: 6000 });
+
+      expect(response.status).toBe(200);
+      // API port persisted; the stale echoed UI port is ignored, not remapped.
+      expect(streamingDetect.writeEcosystemPortEdits).toHaveBeenCalledWith(
+        process.cwd(),
+        [[6000, 7000]],
+        []
+      );
+      const updateArg = appsService.updateApp.mock.calls[0][1];
+      expect(updateArg.uiPort).toBe(7000); // pinned to NEW derived value, not echoed 6000
+      expect(updateArg.apiPort).toBe(7000);
+    });
+
+    it('does not reject a non-port edit on an app whose top-level ports are not stored (derived)', async () => {
+      // apps.json has no apiPort/uiPort (derived from processes); a rename
+      // submits the echoed display values. Those must not read as port changes.
+      const mockApp = { id: 'app-001', name: 'App', type: 'node', repoPath: process.cwd() };
+      appsService.getAppById.mockResolvedValue(mockApp);
+      // Config currently serves these derived ports; the modal echoes them back.
+      streamingDetect.parseEcosystemFromPath.mockResolvedValue({ processes: [{ name: 'a', ports: { api: 5555, ui: 5556 } }] });
+      appsService.updateApp.mockResolvedValue({ ...mockApp, name: 'Renamed' });
+
+      const response = await request(app)
+        .put('/api/apps/app-001')
+        .send({ name: 'Renamed', apiPort: 5555, uiPort: 5556 });
+
+      expect(response.status).toBe(200);
+      expect(streamingDetect.writeEcosystemPortEdits).not.toHaveBeenCalled();
+      expect(appsService.updateApp).toHaveBeenCalled();
+    });
+
+    it('rejects (422) when the port literal is not found in the config (changed:false)', async () => {
+      const mockApp = { id: 'app-001', name: 'App', type: 'node', repoPath: process.cwd(), apiPort: 5173 };
+      appsService.getAppById.mockResolvedValue(mockApp);
+      streamingDetect.parseEcosystemFromPath.mockResolvedValue({ processes: [{ name: 'a', ports: { api: 5173 } }] });
+      streamingDetect.writeEcosystemPortEdits.mockResolvedValueOnce({ file: 'ecosystem.config.cjs', changed: false, remapApplied: false, applied: [], unapplied: [] });
+
+      const response = await request(app).put('/api/apps/app-001').send({ apiPort: 6000 });
+
+      expect(response.status).toBe(422);
+      expect(appsService.updateApp).not.toHaveBeenCalled();
+    });
+
+    it('fails the request (and does not update the registry) when the config write throws', async () => {
+      const mockApp = { id: 'app-001', name: 'App', type: 'node', repoPath: process.cwd(), apiPort: 5173 };
+      appsService.getAppById.mockResolvedValue(mockApp);
+      streamingDetect.parseEcosystemFromPath.mockResolvedValue({ processes: [{ name: 'a', ports: { api: 5173 } }] });
+      streamingDetect.writeEcosystemPortEdits.mockRejectedValueOnce(new Error('EACCES'));
+
+      const response = await request(app).put('/api/apps/app-001').send({ apiPort: 6000 });
+
+      expect(response.status).toBeGreaterThanOrEqual(500);
+      // Registry write must not happen after a failed canonical-config write.
+      expect(appsService.updateApp).not.toHaveBeenCalled();
     });
   });
 
@@ -835,6 +1087,120 @@ describe('Apps Routes', () => {
 
       expect(response.status).toBe(400);
       expect(response.body.code).toBe('PATH_NOT_FOUND');
+    });
+  });
+
+  describe('Vite Dev-UI host guard', () => {
+    let repoDir;
+
+    beforeEach(() => {
+      repoDir = join(tmpdir(), `vite-host-${Math.random().toString(36).slice(2)}`);
+      mkdirSync(repoDir, { recursive: true });
+    });
+
+    afterAll(() => {
+      // best-effort cleanup of any straggler temp dirs is handled per-test below
+    });
+
+    const writeViteConfig = (content) =>
+      writeFileSync(join(repoDir, 'vite.config.js'), content);
+
+    describe('GET /:id/vite-host-check', () => {
+      it('reports hostAllowed=false + canAutoFix for a Vite app missing the host', async () => {
+        writeViteConfig("export default { server: { port: 5173 } };");
+        appsService.getAppById.mockResolvedValue({ id: 'app-001', name: 'A', repoPath: repoDir });
+
+        const response = await request(app)
+          .get('/api/apps/app-001/vite-host-check?host=null.taile8179.ts.net');
+
+        expect(response.status).toBe(200);
+        expect(response.body.hasViteConfig).toBe(true);
+        expect(response.body.hostAllowed).toBe(false);
+        expect(response.body.canAutoFix).toBe(true);
+        rmSync(repoDir, { recursive: true, force: true });
+      });
+
+      it('reports hostAllowed=true when the config already allows the tailnet', async () => {
+        writeViteConfig("export default { server: { allowedHosts: ['.ts.net'] } };");
+        appsService.getAppById.mockResolvedValue({ id: 'app-001', name: 'A', repoPath: repoDir });
+
+        const response = await request(app)
+          .get('/api/apps/app-001/vite-host-check?host=box.taile8179.ts.net');
+
+        expect(response.status).toBe(200);
+        expect(response.body.hostAllowed).toBe(true);
+        rmSync(repoDir, { recursive: true, force: true });
+      });
+
+      it('reports hasViteConfig=false when the app has no vite config', async () => {
+        appsService.getAppById.mockResolvedValue({ id: 'app-001', name: 'A', repoPath: repoDir });
+
+        const response = await request(app)
+          .get('/api/apps/app-001/vite-host-check?host=box.taile8179.ts.net');
+
+        expect(response.status).toBe(200);
+        expect(response.body.hasViteConfig).toBe(false);
+        rmSync(repoDir, { recursive: true, force: true });
+      });
+    });
+
+    describe('POST /:id/fix-vite-hosts', () => {
+      it('allow-all rewrites the config to allowedHosts: true', async () => {
+        writeViteConfig("export default { server: { port: 5173 } };");
+        appsService.getAppById.mockResolvedValue({ id: 'app-001', name: 'A', repoPath: repoDir });
+
+        const response = await request(app)
+          .post('/api/apps/app-001/fix-vite-hosts')
+          .send({ mode: 'allow-all', host: 'null.taile8179.ts.net' });
+
+        expect(response.status).toBe(200);
+        expect(response.body.strategy).toBe('inject-into-server');
+        const written = readFileSync(join(repoDir, 'vite.config.js'), 'utf-8');
+        expect(written).toContain('allowedHosts: true');
+        rmSync(repoDir, { recursive: true, force: true });
+      });
+
+      it('allow-all returns 422 when no vite config exists', async () => {
+        appsService.getAppById.mockResolvedValue({ id: 'app-001', name: 'A', repoPath: repoDir });
+
+        const response = await request(app)
+          .post('/api/apps/app-001/fix-vite-hosts')
+          .send({ mode: 'allow-all' });
+
+        expect(response.status).toBe(422);
+        expect(response.body.code).toBe('NO_VITE_CONFIG');
+        rmSync(repoDir, { recursive: true, force: true });
+      });
+
+      it('ai mode queues a CoS task targeting the app', async () => {
+        appsService.getAppById.mockResolvedValue({ id: 'app-001', name: 'A', repoPath: repoDir });
+        cos.isRunning.mockReturnValue(true);
+
+        const response = await request(app)
+          .post('/api/apps/app-001/fix-vite-hosts')
+          .send({ mode: 'ai', host: 'null.taile8179.ts.net' });
+
+        expect(response.status).toBe(200);
+        expect(response.body.taskId).toBe('task-vite-1');
+        expect(cos.addTask).toHaveBeenCalledWith(
+          expect.objectContaining({ app: 'app-001', approvalRequired: true }),
+          'internal'
+        );
+        rmSync(repoDir, { recursive: true, force: true });
+      });
+
+      it('ai mode returns 409 when CoS is not running', async () => {
+        appsService.getAppById.mockResolvedValue({ id: 'app-001', name: 'A', repoPath: repoDir });
+        cos.isRunning.mockReturnValue(false);
+
+        const response = await request(app)
+          .post('/api/apps/app-001/fix-vite-hosts')
+          .send({ mode: 'ai' });
+
+        expect(response.status).toBe(409);
+        expect(response.body.code).toBe('COS_NOT_RUNNING');
+        rmSync(repoDir, { recursive: true, force: true });
+      });
     });
   });
 });

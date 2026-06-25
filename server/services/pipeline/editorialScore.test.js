@@ -9,6 +9,8 @@ import {
   openBlockers,
   computeHealth,
   computeTrend,
+  summarizeEditorialBlockers,
+  formatBlockerSummary,
   __testing,
 } from './editorialScore.js';
 
@@ -187,8 +189,123 @@ describe('computeTrend', () => {
     const trend = computeTrend([]);
     expect(trend.points).toEqual([]);
     expect(trend.regressions).toEqual([]);
+    expect(trend.checkRegressions).toEqual([]);
     expect(trend.delta).toBe(0);
     expect(trend.latest).toBeNull();
+  });
+
+  // Per-check trend tracking (#1597).
+  const snapWithChecks = (at, openByCheck) => ({
+    runId: `run-${at}`, at, score: 100 - Object.values(openByCheck).reduce((a, b) => a + b, 0),
+    ready: false, open: Object.values(openByCheck).reduce((a, b) => a + b, 0),
+    openBySeverity: { high: 0, medium: 0, low: 0 }, openByCategory: {}, openByCheck,
+  });
+
+  it('carries the per-check open counts on each point so the UI can build per-check sparklines', () => {
+    const trend = computeTrend([
+      snapWithChecks('2026-06-01T00:00:00Z', { 'naming.dissimilar-names': 3 }),
+      snapWithChecks('2026-06-02T00:00:00Z', { 'naming.dissimilar-names': 1, 'roster.economy': 2 }),
+    ]);
+    expect(trend.points.map((p) => p.openByCheck)).toEqual([
+      { 'naming.dissimilar-names': 3 },
+      { 'naming.dissimilar-names': 1, 'roster.economy': 2 },
+    ]);
+  });
+
+  it('flags a check that regressed (more findings) between the two latest snapshots', () => {
+    const trend = computeTrend([
+      snapWithChecks('2026-06-01T00:00:00Z', { 'naming.dissimilar-names': 1, 'roster.economy': 2 }),
+      snapWithChecks('2026-06-02T00:00:00Z', { 'naming.dissimilar-names': 4, 'roster.economy': 1 }),
+    ]);
+    // naming worsened 1→4 (regressed); roster improved 2→1 (not a regression).
+    expect(trend.checkRegressions).toEqual([{ checkId: 'naming.dissimilar-names', from: 1, to: 4 }]);
+  });
+
+  it('treats a check absent in the prior snapshot as 0 prior (newly-failing check counts as a regression)', () => {
+    const trend = computeTrend([
+      snapWithChecks('2026-06-01T00:00:00Z', { 'naming.dissimilar-names': 1 }),
+      snapWithChecks('2026-06-02T00:00:00Z', { 'naming.dissimilar-names': 1, 'comic.prose-sync': 2 }),
+    ]);
+    expect(trend.checkRegressions).toEqual([{ checkId: 'comic.prose-sync', from: 0, to: 2 }]);
+  });
+
+  it('does NOT flag per-check regressions when the prior snapshot predates per-check telemetry (no false 0→N spike)', () => {
+    // A pre-#1597 snapshot has no openByCheck map (sanitizes to null); comparing
+    // against it must not read as all-zeros and flag every open check.
+    const preUpgrade = {
+      runId: 'run-old', at: '2026-06-01T00:00:00Z', score: 88, ready: false, open: 2,
+      openBySeverity: { high: 0, medium: 2, low: 0 }, openByCategory: { naming: 2 },
+      // openByCheck intentionally absent
+    };
+    const trend = computeTrend([
+      preUpgrade,
+      snapWithChecks('2026-06-02T00:00:00Z', { 'naming.dissimilar-names': 2 }),
+    ]);
+    expect(trend.checkRegressions).toEqual([]);
+    // The new point still carries its per-check map for the sparkline.
+    expect(trend.points[1].openByCheck).toEqual({ 'naming.dissimilar-names': 2 });
+    // The old point's per-check telemetry is the explicit "unknown" sentinel.
+    expect(trend.points[0].openByCheck).toBeNull();
+  });
+});
+
+describe('summarizeEditorialBlockers', () => {
+  it('ranks checks by open-finding count (desc) and keeps topN, ties broken by checkId', () => {
+    const health = {
+      score: 72,
+      open: 6,
+      openByCheck: { continuity: 3, naming: 3, pacing: 1, clean: 0 },
+      perIssue: [],
+    };
+    const b = summarizeEditorialBlockers(health, { topN: 2 });
+    expect(b.score).toBe(72);
+    expect(b.open).toBe(6);
+    // Equal counts → checkId ascending; `clean` (0) is filtered out.
+    expect(b.topChecks).toEqual([
+      { checkId: 'continuity', count: 3 },
+      { checkId: 'naming', count: 3 },
+    ]);
+  });
+
+  it('ranks issues by open count (desc) and buckets the series-scoped (null) issue last', () => {
+    const health = {
+      score: 50,
+      open: 10,
+      openByCheck: {},
+      perIssue: [
+        { issueNumber: 5, open: 2 },
+        { issueNumber: 3, open: 5 },
+        { issueNumber: null, open: 5 },
+        { issueNumber: 9, open: 0 },
+      ],
+    };
+    const b = summarizeEditorialBlockers(health);
+    // open desc, then issueNumber asc with null sorting last; the 0-open issue is dropped.
+    expect(b.topIssues).toEqual([
+      { issueNumber: 3, open: 5 },
+      { issueNumber: null, open: 5 },
+      { issueNumber: 5, open: 2 },
+    ]);
+  });
+
+  it('tolerates a malformed/absent health object', () => {
+    const b = summarizeEditorialBlockers(null);
+    expect(b).toEqual({ score: 0, open: 0, topChecks: [], topIssues: [] });
+  });
+});
+
+describe('formatBlockerSummary', () => {
+  it('renders checks and issues on one line, series-scoped findings as `series`', () => {
+    const line = formatBlockerSummary({
+      topChecks: [{ checkId: 'continuity', count: 3 }, { checkId: 'naming', count: 1 }],
+      topIssues: [{ issueNumber: 3, open: 5 }, { issueNumber: null, open: 2 }],
+    });
+    expect(line).toBe('top checks [continuity×3, naming×1]; top issues [#3×5, series×2]');
+  });
+
+  it('falls back to explicit "no breakdown" labels when empty', () => {
+    expect(formatBlockerSummary({ topChecks: [], topIssues: [] })).toBe('no check breakdown; no issue breakdown');
+    expect(formatBlockerSummary(null)).toBe('no check breakdown; no issue breakdown');
   });
 });
 
@@ -197,13 +314,28 @@ describe('ledger sanitization', () => {
     const ledger = __testing.sanitizeLedger({
       snapshots: [
         null,
-        { at: '2026-06-01T00:00:00Z', score: 90, openBySeverity: { high: 'x', medium: 2 }, openByCategory: { a: 1, b: 'nope' } },
+        { at: '2026-06-01T00:00:00Z', score: 90, openBySeverity: { high: 'x', medium: 2 }, openByCategory: { a: 1, b: 'nope' }, openByCheck: { 'check.a': 2, 'check.b': 'nope' } },
         { score: 50 }, // no `at` → dropped
       ],
     }, 'ser-abc');
     expect(ledger.snapshots).toHaveLength(1);
     expect(ledger.snapshots[0].openBySeverity).toEqual({ high: 0, medium: 2, low: 0 });
     expect(ledger.snapshots[0].openByCategory).toEqual({ a: 1 });
+    expect(ledger.snapshots[0].openByCheck).toEqual({ 'check.a': 2 });
     expect(ledger.seriesId).toBe('ser-abc');
+  });
+
+  it('preserves an absent openByCheck as null (not {}) so pre-#1597 snapshots read as "no telemetry", not "zero findings"', () => {
+    const ledger = __testing.sanitizeLedger({
+      snapshots: [{ at: '2026-05-01T00:00:00Z', score: 88, openBySeverity: { high: 0, medium: 1, low: 0 }, openByCategory: { naming: 1 } }],
+    }, 'ser-old');
+    expect(ledger.snapshots[0].openByCheck).toBeNull();
+  });
+
+  it('keeps a present-but-empty openByCheck as {} (a run that found zero per-check findings is real telemetry)', () => {
+    const ledger = __testing.sanitizeLedger({
+      snapshots: [{ at: '2026-06-01T00:00:00Z', score: 100, openBySeverity: { high: 0, medium: 0, low: 0 }, openByCategory: {}, openByCheck: {} }],
+    }, 'ser-clean');
+    expect(ledger.snapshots[0].openByCheck).toEqual({});
   });
 });

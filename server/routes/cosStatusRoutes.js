@@ -23,7 +23,6 @@ export const cosConfigSchema = z.object({
   userTasksFile: z.string().optional(),
   cosTasksFile: z.string().optional(),
   goalsFile: z.string().optional(),
-  evaluationIntervalMs: z.number().int().min(1000).optional(),
   healthCheckIntervalMs: z.number().int().min(1000).optional(),
   maxConcurrentAgents: z.number().int().min(1).optional(),
   maxConcurrentAgentsPerProject: z.number().int().min(1).optional(),

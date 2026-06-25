@@ -181,6 +181,13 @@ const seriesCreateSchema = z.object({
   characterArcs: characterArcsSchema.optional(),
   locked: seriesLockedSchema.optional(),
   styleNotes: z.string().trim().max(seriesSvc.STYLE_NOTES_MAX).optional().default(''),
+  // Per-series editorial-check config overrides (#1591). Free-form blob (re-validated
+  // per check at run time, bounded by sanitizeEditorialCheckConfig); forwarded so an
+  // importer / share-bucket create that seeds tuned thresholds keeps them.
+  editorialCheckConfig: z.record(z.record(z.unknown())).nullable().optional(),
+  // Fact-checking opt-in + author fact reference (#1588).
+  factCritical: z.boolean().optional().default(false),
+  factReference: z.string().trim().max(seriesSvc.FACT_REFERENCE_MAX).optional().default(''),
   styleGuide: styleGuideSchema.nullable().optional(),
   titleLogo: z.string().trim().max(seriesSvc.TITLE_LOGO_MAX).optional().default(''),
   author: z.string().trim().max(seriesSvc.AUTHOR_MAX).optional().default(''),
@@ -206,6 +213,9 @@ const seriesPatchSchema = z.object({
   characterArcs: characterArcsSchema.optional(),
   locked: seriesLockedSchema.optional(),
   styleNotes: z.string().trim().max(seriesSvc.STYLE_NOTES_MAX).optional(),
+  // Fact-checking opt-in + author fact reference (#1588).
+  factCritical: z.boolean().optional(),
+  factReference: z.string().trim().max(seriesSvc.FACT_REFERENCE_MAX).optional(),
   styleGuide: styleGuideSchema.nullable().optional(),
   titleLogo: z.string().trim().max(seriesSvc.TITLE_LOGO_MAX).optional(),
   author: z.string().trim().max(seriesSvc.AUTHOR_MAX).optional(),
@@ -217,6 +227,12 @@ const seriesPatchSchema = z.object({
   issueCountTarget: z.number().int().min(0).max(seriesSvc.ISSUE_COUNT_TARGET_MAX).optional(),
   llm: llmSchema,
   ephemeral: z.boolean().optional(),
+  // Per-series editorial-check config overrides (#1591): { [checkId]: { [key]: value } }.
+  // A free-form blob (like the global per-check `config`) — re-validated against each
+  // check's own Zod configSchema at run time (applySeriesCheckConfig) and bounded by
+  // sanitizeEditorialCheckConfig on persist; this gate just keeps the wire shape sane.
+  // `null`/`{}` clears all overrides.
+  editorialCheckConfig: z.record(z.record(z.unknown())).nullable().optional(),
 }).refine((p) => Object.keys(p).length > 0, { message: 'patch must include at least one field' });
 const arcFieldLockSchema = z.object({ locked: z.boolean() });
 

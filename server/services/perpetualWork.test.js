@@ -1,0 +1,199 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { EventEmitter } from 'events';
+
+vi.mock('./cosEvents.js', () => ({
+  cosEvents: { emit: vi.fn() },
+  emitLog: vi.fn()
+}));
+
+vi.mock('child_process', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, spawn: vi.fn() };
+});
+
+import { spawn } from 'child_process';
+import {
+  isActionableIssue,
+  issueNumberFromRef,
+  detectActionableWork,
+  detectGithubIssues,
+  detectGitlabIssues,
+  registerWorkDetector,
+  getWorkDetector,
+  hasWorkDetector,
+  NON_ACTIONABLE_ISSUE_LABELS
+} from './perpetualWork.js';
+
+// A fake child process that emits canned stdout then closes — enough for the
+// best-effort runCli() in perpetualWork.js (stdout/close/error + kill).
+function fakeChild(stdout, code = 0) {
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.kill = () => {};
+  setImmediate(() => {
+    if (stdout) child.stdout.emit('data', Buffer.from(stdout));
+    child.emit('close', code);
+  });
+  return child;
+}
+
+// Route spawn calls to canned output by command + first arg.
+function routeSpawn(routes) {
+  spawn.mockImplementation((cmd, args = []) => {
+    const key = `${cmd} ${args[0] || ''}`;
+    const r = routes[key];
+    return fakeChild(r?.stdout ?? '', r?.code ?? 0);
+  });
+}
+
+describe('perpetualWork', () => {
+  describe('isActionableIssue', () => {
+    const base = { number: 7, title: 'Fix the thing', assignees: [], labels: [] };
+
+    it('accepts a plain open unassigned issue', () => {
+      expect(isActionableIssue(base)).toBe(true);
+    });
+
+    it('rejects an assigned issue', () => {
+      expect(isActionableIssue({ ...base, assignees: [{ login: 'someone' }] })).toBe(false);
+    });
+
+    it('rejects an in-flight issue number', () => {
+      expect(isActionableIssue(base, new Set([7]))).toBe(false);
+    });
+
+    it.each([...NON_ACTIONABLE_ISSUE_LABELS])('rejects a %s-labelled issue', (label) => {
+      expect(isActionableIssue({ ...base, labels: [{ name: label }] })).toBe(false);
+    });
+
+    it('treats the needs-input park label as non-actionable (drain convergence)', () => {
+      expect(isActionableIssue({ ...base, labels: [{ name: 'needs-input' }] })).toBe(false);
+    });
+
+    it('rejects an epic by label or by "(epic)" title', () => {
+      expect(isActionableIssue({ ...base, labels: [{ name: 'epic' }] })).toBe(false);
+      expect(isActionableIssue({ ...base, title: 'Big rollup (epic)' })).toBe(false);
+    });
+
+    it('accepts a plan-labelled issue (plan is the claimable queue, not a skip)', () => {
+      expect(isActionableIssue({ ...base, labels: [{ name: 'plan' }] })).toBe(true);
+    });
+
+    it('handles string labels as well as objects', () => {
+      expect(isActionableIssue({ ...base, labels: ['blocked'] })).toBe(false);
+    });
+
+    it('rejects malformed issues', () => {
+      expect(isActionableIssue(null)).toBe(false);
+      expect(isActionableIssue({ title: 'no number' })).toBe(false);
+    });
+  });
+
+  describe('issueNumberFromRef', () => {
+    it('extracts from a claim/issue-<num> ref', () => {
+      expect(issueNumberFromRef('claim/issue-123')).toBe(123);
+      expect(issueNumberFromRef('origin/claim/issue-99')).toBe(99);
+    });
+
+    it('extracts from a cos/<task>/issue-<num>/<agent> ref', () => {
+      expect(issueNumberFromRef('cos/claim-issue/issue-45/agent-x')).toBe(45);
+    });
+
+    it('returns null for non-claim refs', () => {
+      expect(issueNumberFromRef('feature/foo')).toBe(null);
+      expect(issueNumberFromRef('main')).toBe(null);
+      expect(issueNumberFromRef('claim/some-slug')).toBe(null); // slug, not issue-<num>
+    });
+  });
+
+  describe('registry', () => {
+    it('claim-issue, claim-issue-gitlab and plan-task are registered by default', () => {
+      expect(hasWorkDetector('claim-issue')).toBe(true);
+      expect(hasWorkDetector('claim-issue-gitlab')).toBe(true);
+      expect(hasWorkDetector('plan-task')).toBe(true);
+      expect(typeof getWorkDetector('claim-issue')).toBe('function');
+    });
+
+    it('detectActionableWork reports no-detector for an unregistered type (e.g. JIRA)', async () => {
+      const out = await detectActionableWork('claim-issue-jira', { id: 'a' });
+      expect(out).toEqual({ actionable: false, count: 0, reason: 'no-detector', hasDetector: false });
+    });
+
+    it('detectActionableWork normalizes a registered detector result', async () => {
+      registerWorkDetector('__test-type__', async () => ({ actionable: true, count: 3, reason: 'actionable-issues' }));
+      const out = await detectActionableWork('__test-type__', { id: 'a' });
+      expect(out).toMatchObject({ actionable: true, count: 3, reason: 'actionable-issues', hasDetector: true });
+    });
+
+    it('detectActionableWork catches a detector throw as a transient failure', async () => {
+      registerWorkDetector('__throwing__', async () => { throw new Error('boom'); });
+      const out = await detectActionableWork('__throwing__', { id: 'a' });
+      expect(out.actionable).toBe(false);
+      expect(out.transient).toBe(true);
+      expect(out.reason).toContain('boom');
+    });
+  });
+
+  describe('detectGithubIssues (spawn-mocked)', () => {
+    beforeEach(() => { spawn.mockReset(); });
+    const app = { id: 'a', repoPath: '/repo' };
+
+    it('counts actionable issues, excluding labelled/assigned/in-flight', async () => {
+      routeSpawn({
+        'gh issue': { stdout: JSON.stringify([
+          { number: 1, title: 'plain', assignees: [], labels: [] },
+          { number: 2, title: 'needs a decision', assignees: [], labels: [{ name: 'needs-input' }] },
+          { number: 3, title: 'taken', assignees: [{ login: 'x' }], labels: [] },
+          { number: 4, title: 'in flight', assignees: [], labels: [] },
+          { number: 5, title: 'also plain', assignees: [], labels: [{ name: 'plan' }] }
+        ]) },
+        'git branch': { stdout: 'main\norigin/claim/issue-4\n' },
+        'gh pr': { stdout: '' }
+      });
+      const out = await detectGithubIssues(app, { issueAuthorFilter: 'any' });
+      expect(out.actionable).toBe(true);
+      expect(out.count).toBe(2); // #1 and #5 (plan is claimable); #2 #3 #4 excluded
+      expect(out.sample).toEqual([1, 5]);
+    });
+
+    it('parks (no-open-issues) on an empty list', async () => {
+      routeSpawn({ 'gh issue': { stdout: '[]' } });
+      const out = await detectGithubIssues(app, { issueAuthorFilter: 'any' });
+      expect(out).toMatchObject({ actionable: false, reason: 'no-open-issues' });
+    });
+
+    it('reports a transient failure when gh exits non-zero', async () => {
+      routeSpawn({ 'gh issue': { stdout: '', code: 1 } });
+      const out = await detectGithubIssues(app, { issueAuthorFilter: 'any' });
+      expect(out).toMatchObject({ actionable: false, reason: 'gh-list-failed', transient: true });
+    });
+  });
+
+  describe('detectGitlabIssues (spawn-mocked)', () => {
+    beforeEach(() => { spawn.mockReset(); });
+    const app = { id: 'a', repoPath: '/repo' };
+
+    it('normalizes iid + string labels and excludes MR-in-flight issues', async () => {
+      routeSpawn({
+        'glab issue': { stdout: JSON.stringify([
+          { iid: 10, title: 'plain', assignees: [], labels: [] },
+          { iid: 11, title: 'blocked', assignees: [], labels: ['blocked'] },
+          { iid: 12, title: 'in flight via MR', assignees: [], labels: [] }
+        ]) },
+        'git branch': { stdout: 'main\n' },
+        'glab mr': { stdout: JSON.stringify([{ source_branch: 'claim/issue-12' }]) }
+      });
+      const out = await detectGitlabIssues(app, { issueAuthorFilter: 'any' });
+      expect(out.actionable).toBe(true);
+      expect(out.count).toBe(1); // only #10 (#11 blocked label, #12 in-flight MR)
+      expect(out.sample).toEqual([10]);
+    });
+
+    it('reports a transient failure when glab exits non-zero', async () => {
+      routeSpawn({ 'glab issue': { stdout: '', code: 1 } });
+      const out = await detectGitlabIssues(app, { issueAuthorFilter: 'any' });
+      expect(out).toMatchObject({ actionable: false, reason: 'glab-list-failed', transient: true });
+    });
+  });
+});

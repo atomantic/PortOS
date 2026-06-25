@@ -91,11 +91,15 @@ const {
   enqueueStoryboardSceneVideo,
   enqueueStoryboardShotStartFrame,
   refineComicPanelPrompt,
+  refineComicPageRender,
   refineStoryboardScenePrompt,
   generateComicPanelImagePrompts,
   generateStoryboardSceneImagePrompts,
   assertCharacterAppearancesResolve,
   enqueueVisualImage,
+  resolveReferencePageIndex,
+  resolveAutoReferenceIndex,
+  resolveComicPageReference,
 } = await import('./visualStages.js');
 
 // The universeBuilder mock's getUniverse is auto-captured here so individual
@@ -190,6 +194,117 @@ describe('composeComicPagePrompt', () => {
     const prompt = composeComicPagePrompt({ series: SERIES, page: PAGE, pageNumber: 1 });
     expect(prompt).toMatch(/balloon contains ONLY the quoted text/i);
     expect(prompt).toMatch(/NEVER letter the speaker's name/i);
+  });
+
+  it('renders a (SPEAKERS) PA line as a disembodied broadcast balloon not tailed to a visible character', () => {
+    // The JUNO bug: a station-AI PA line marked `(SPEAKERS)` was getting a plain
+    // balloon and the model tailed it to whoever was drawn (a newlywed).
+    const page = {
+      panels: [{
+        description: 'Two newlyweds duck under exploding pearl light-orbs above a honeymoon bed.',
+        dialogue: [{ character: 'JUNO (SPEAKERS)', line: 'Celebratory projectile beverages are permitted.' }],
+      }],
+    };
+    const prompt = composeComicPagePrompt({ series: SERIES, page, pageNumber: 1 });
+    expect(prompt).toMatch(/Speech balloon reads: "Celebratory projectile beverages are permitted\."/);
+    expect(prompt).toMatch(/spoken by JUNO, who is NOT visible in this panel/);
+    expect(prompt).toMatch(/do NOT attach the balloon tail to any visible character/);
+    expect(prompt).toMatch(/broadcast\/PA balloon/);
+    // The lettered text must not carry the `(SPEAKERS)` label.
+    const balloonTexts = [...prompt.matchAll(/Speech balloon reads: "([^"]+)"/g)].map((m) => m[1]);
+    expect(balloonTexts).toHaveLength(1);
+    expect(balloonTexts[0]).not.toMatch(/SPEAKERS/);
+  });
+
+  it('treats a transmission-device modifier (EARPIECE) as electronic but NOT as off-panel', () => {
+    // EARPIECE is ambiguous (a visible character may be speaking into it), so it
+    // gets the electronic style WITHOUT the "not visible" disembodied claim.
+    const page = { panels: [{ description: 'x', dialogue: [{ character: 'LINA (EARPIECE)', line: 'Copy that.' }] }] };
+    const prompt = composeComicPagePrompt({ series: SERIES, page, pageNumber: 1 });
+    expect(prompt).toMatch(/\(spoken by LINA; jagged electronic\/transmission balloon[^)]*\)/);
+    expect(prompt).not.toMatch(/LINA, who is NOT visible/);
+  });
+
+  describe('resolveReferencePageIndex', () => {
+    it("maps 'prior'/'next' relative to the current page", () => {
+      expect(resolveReferencePageIndex('prior', 1, 3)).toBe(0);
+      expect(resolveReferencePageIndex('next', 0, 3)).toBe(1);
+    });
+    it('accepts an explicit 0-based index', () => {
+      expect(resolveReferencePageIndex(2, 0, 3)).toBe(2);
+    });
+    it('returns null when unset', () => {
+      expect(resolveReferencePageIndex(undefined, 0, 3)).toBeNull();
+      expect(resolveReferencePageIndex(null, 0, 3)).toBeNull();
+    });
+    it('throws out of range (prior on first page, next on last)', () => {
+      expect(() => resolveReferencePageIndex('prior', 0, 3)).toThrow(/out of range/);
+      expect(() => resolveReferencePageIndex('next', 2, 3)).toThrow(/out of range/);
+      expect(() => resolveReferencePageIndex(5, 0, 3)).toThrow(/out of range/);
+    });
+    it('refuses a page referencing itself', () => {
+      expect(() => resolveReferencePageIndex(1, 1, 3)).toThrow(/its own consistency reference/);
+    });
+  });
+
+  describe('resolveAutoReferenceIndex', () => {
+    const rendered = (scene) => ({ sceneNumber: scene, finalImage: { filename: 'x.png' } });
+    const unrendered = (scene) => ({ sceneNumber: scene });
+
+    it('chains off the prior page when it shares the scene AND is rendered', () => {
+      const pages = [rendered(1), unrendered(1)];
+      expect(resolveAutoReferenceIndex(pages, 1)).toBe(0);
+    });
+    it('breaks across a scene boundary (different scene number)', () => {
+      const pages = [rendered(1), unrendered(2)];
+      expect(resolveAutoReferenceIndex(pages, 1)).toBeNull();
+    });
+    it('skips when the prior page has no render yet (soft, no throw)', () => {
+      const pages = [unrendered(1), unrendered(1)];
+      expect(resolveAutoReferenceIndex(pages, 1)).toBeNull();
+    });
+    it('skips when scene markers are absent on either page (legacy scripts)', () => {
+      const pages = [{ finalImage: { filename: 'x.png' } }, {}];
+      expect(resolveAutoReferenceIndex(pages, 1)).toBeNull();
+    });
+    it('returns null on the first page (no prior)', () => {
+      expect(resolveAutoReferenceIndex([rendered(1)], 0)).toBeNull();
+    });
+    it('falls back to the proof image when no final render exists', () => {
+      const pages = [{ sceneNumber: 1, proofImage: { filename: 'p.png' } }, unrendered(1)];
+      expect(resolveAutoReferenceIndex(pages, 1)).toBe(0);
+    });
+  });
+
+  describe('resolveComicPageReference (precedence tiers)', () => {
+    const rendered = (scene) => ({ sceneNumber: scene, finalImage: { filename: 'x.png' } });
+    const unrendered = (scene) => ({ sceneNumber: scene });
+    const pages = [rendered(1), { ...unrendered(1), proofImage: { filename: 'p.png' } }];
+
+    it('explicit reference wins over proof-as-base and auto', () => {
+      const r = resolveComicPageReference({ referencePage: 'prior', useProofAsBase: true, variant: 'final', pages, pageIndex: 1 });
+      expect(r).toMatchObject({ referencePageIndex: 0, fromReference: true, autoReference: false, fromProof: false });
+    });
+    it('proof-as-base wins over auto on a final render', () => {
+      const r = resolveComicPageReference({ referencePage: undefined, useProofAsBase: true, variant: 'final', pages, pageIndex: 1 });
+      expect(r).toMatchObject({ fromProof: true, fromReference: false, autoReference: false });
+    });
+    it('auto chains within scene when no explicit ref and not proof-as-base', () => {
+      const r = resolveComicPageReference({ referencePage: undefined, useProofAsBase: false, variant: 'proof', pages, pageIndex: 1 });
+      expect(r).toMatchObject({ referencePageIndex: 0, fromReference: true, autoReference: true, fromProof: false });
+    });
+    it("'none' opts out of auto chaining but leaves proof-as-base (orthogonal)", () => {
+      const withProof = resolveComicPageReference({ referencePage: 'none', useProofAsBase: true, variant: 'final', pages, pageIndex: 1 });
+      expect(withProof).toMatchObject({ referencePageIndex: null, fromReference: false, autoReference: false, fromProof: true });
+      // A proof render with 'none' and no proof-as-base box → fully fresh, no reference.
+      const fresh = resolveComicPageReference({ referencePage: 'none', useProofAsBase: false, variant: 'proof', pages, pageIndex: 1 });
+      expect(fresh).toMatchObject({ referencePageIndex: null, fromReference: false, autoReference: false, fromProof: false });
+    });
+    it('across a scene boundary, auto yields nothing', () => {
+      const crossScene = [rendered(1), unrendered(2)];
+      const r = resolveComicPageReference({ referencePage: undefined, useProofAsBase: false, variant: 'proof', pages: crossScene, pageIndex: 1 });
+      expect(r.fromReference).toBe(false);
+    });
   });
 
   it('uses singular "panel" wording for a one-panel splash page', () => {
@@ -544,6 +659,144 @@ describe('refineComicPanelPrompt', () => {
           ]),
         }),
       ]),
+    }));
+  });
+});
+
+describe('refineComicPageRender', () => {
+  // A comicPages stage with page 0 already rendered (proof slot carries a
+  // filename + stored prompt — the two things a from-self refine needs).
+  const issueWithRenderedPage = (slots) => ({
+    ...structuredClone(mockIssue),
+    stages: {
+      ...mockIssue.stages,
+      comicPages: {
+        pages: [{
+          panels: [{ description: 'Panel 1 baseline.', dialogue: [], caption: '', sfx: '' }],
+          ...slots,
+        }],
+      },
+    },
+  });
+
+  it('rejects a non-integer pageIndex', async () => {
+    await expect(refineComicPageRender('iss-test', { pageIndex: 'nope', instruction: 'x' }))
+      .rejects.toThrow(/non-negative integer/);
+  });
+
+  it('rejects an empty instruction', async () => {
+    await expect(refineComicPageRender('iss-test', { pageIndex: 0, instruction: '   ' }))
+      .rejects.toThrow(/instruction is required/);
+  });
+
+  it('returns 404 when the page does not exist', async () => {
+    await expect(refineComicPageRender('iss-test', { pageIndex: 99, instruction: 'warm the light' }))
+      .rejects.toThrow(/out of range|PIPELINE_COMIC_PAGE_NOT_FOUND/);
+  });
+
+  it('rejects when the page has no rendered image to refine', async () => {
+    getIssueMock.mockResolvedValueOnce(issueWithRenderedPage({}));
+    await expect(refineComicPageRender('iss-test', { pageIndex: 0, instruction: 'warm the light' }))
+      .rejects.toThrow(/no rendered image yet|PIPELINE_COMIC_REFINE_NO_RENDER/);
+  });
+
+  it('rejects when the rendered slot has no stored prompt to adjust', async () => {
+    getIssueMock.mockResolvedValueOnce(issueWithRenderedPage({
+      proofImage: { jobId: 'j1', filename: 'page0-proof.png', prompt: '' },
+    }));
+    await expect(refineComicPageRender('iss-test', { pageIndex: 0, instruction: 'warm the light' }))
+      .rejects.toThrow(/stored render prompt is missing|PIPELINE_COMIC_REFINE_NO_PROMPT/);
+  });
+
+  it('happy path: adjusts the proof prompt and enqueues an i2i render from the existing image', async () => {
+    getIssueMock.mockResolvedValueOnce(issueWithRenderedPage({
+      proofImage: { jobId: 'j1', filename: 'page0-proof.png', prompt: 'original page prompt' },
+    }));
+
+    const result = await refineComicPageRender('iss-test', { pageIndex: 0, instruction: 'warm the lighting' });
+
+    // Variant defaults to proof (no final exists); LLM-adjusted prompt + meta.
+    expect(result.variant).toBe('proof');
+    expect(result.prompt).toBe('refined prompt body');
+    expect(result.runId).toBe('run-abc12345');
+    expect(result.changes).toEqual(['tightened the framing']);
+
+    // The refine template — NOT the from-script page compose — is run, and it
+    // is fed the current prompt + the user instruction.
+    expect(runStagedLLMMock).toHaveBeenCalledWith(
+      'pipeline-comic-page-refine-render',
+      expect.objectContaining({ currentPrompt: 'original page prompt', instruction: 'warm the lighting', pageNumber: 1 }),
+      expect.objectContaining({ returnsJson: true }),
+    );
+
+    // The render is image-to-image from the page's own image at the default
+    // refine denoise.
+    expect(enqueueJobMock).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'image',
+      params: expect.objectContaining({
+        prompt: 'refined prompt body',
+        initImagePath: expect.stringContaining('page0-proof.png'),
+        initImageStrength: 0.35,
+      }),
+    }));
+  });
+
+  it('honors target=final and an explicit initImageStrength', async () => {
+    getIssueMock.mockResolvedValueOnce(issueWithRenderedPage({
+      proofImage: { jobId: 'j1', filename: 'page0-proof.png', prompt: 'proof prompt' },
+      finalImage: { jobId: 'j2', filename: 'page0-final.png', prompt: 'final prompt' },
+    }));
+
+    const result = await refineComicPageRender('iss-test', {
+      pageIndex: 0, instruction: 'remove the extra signage text', target: 'final', initImageStrength: 0.2,
+    });
+
+    expect(result.variant).toBe('final');
+    expect(runStagedLLMMock).toHaveBeenCalledWith(
+      'pipeline-comic-page-refine-render',
+      expect.objectContaining({ currentPrompt: 'final prompt' }),
+      expect.anything(),
+    );
+    expect(enqueueJobMock).toHaveBeenCalledWith(expect.objectContaining({
+      params: expect.objectContaining({
+        initImagePath: expect.stringContaining('page0-final.png'),
+        initImageStrength: 0.2,
+      }),
+    }));
+  });
+
+  it('refines a legacy-shaped page (root filename/prompt) by reading the legacy slot as the base', async () => {
+    // Pre proof/final-split record: render lives at the page root, not in a
+    // proofImage slot. The client surfaces this as the proof slot and shows
+    // Refine, so the service must resolve it too (else NO_RENDER 400).
+    getIssueMock.mockResolvedValueOnce(issueWithRenderedPage({
+      imageJobId: 'legacy-job', filename: 'page0-legacy.png', prompt: 'legacy page prompt',
+    }));
+
+    const result = await refineComicPageRender('iss-test', { pageIndex: 0, instruction: 'tweak the sky' });
+
+    expect(result.variant).toBe('proof');
+    expect(runStagedLLMMock).toHaveBeenCalledWith(
+      'pipeline-comic-page-refine-render',
+      expect.objectContaining({ currentPrompt: 'legacy page prompt' }),
+      expect.anything(),
+    );
+    expect(enqueueJobMock).toHaveBeenCalledWith(expect.objectContaining({
+      params: expect.objectContaining({ initImagePath: expect.stringContaining('page0-legacy.png') }),
+    }));
+  });
+
+  it('auto-prefers the final render as the refine base when both slots exist', async () => {
+    getIssueMock.mockResolvedValueOnce(issueWithRenderedPage({
+      proofImage: { jobId: 'j1', filename: 'page0-proof.png', prompt: 'proof prompt' },
+      finalImage: { jobId: 'j2', filename: 'page0-final.png', prompt: 'final prompt' },
+    }));
+
+    const result = await refineComicPageRender('iss-test', { pageIndex: 0, instruction: 'tweak' });
+
+    expect(result.variant).toBe('final');
+    expect(enqueueJobMock).toHaveBeenCalledWith(expect.objectContaining({
+      params: expect.objectContaining({ initImagePath: expect.stringContaining('page0-final.png') }),
     }));
   });
 });

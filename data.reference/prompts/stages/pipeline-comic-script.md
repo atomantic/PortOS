@@ -70,7 +70,7 @@ aftermath beat. NO text, NO masthead, NO logos, NO panel borders — the
 renderer will explicitly forbid typography. Focus on subject, framing,
 mood, and a striking visual detail.>
 
-## Page 1
+## Page 1 — Scene 1: INT./EXT. LOCATION — TIME
 
 Panel 1
 Description: <visually concrete description of the frame: subjects, action, framing (wide / medium / close), lighting, mood>
@@ -84,16 +84,21 @@ Panel 2
 ...
 ```
 
+The `— Scene N: SLUGLINE` suffix on each `## Page N` header is the **scene marker** (see the scene-continuity rule below). The `## Page N` part and its number are unchanged — the suffix is additive.
+
 ## Rules
 
 - **Target a {{lengthTargets.pageTarget}}-page single issue.** Pace the source material across exactly {{lengthTargets.pageTarget}} pages — inflate quiet beats with reaction shots, environmental panels, and silent panels if the source is thin; compress dense action across multiple pages with panel-to-panel motion if it is rich. Do not pad for padding's sake, but do not skip pages either.
 - Plan **4–6 panels per page on average**, with occasional 1-panel splashes for big reveals, double-page spreads (`Panel 1 (DPS)`) for major action, and the rare 7–8 panel grid for fast cuts.
+- **Tag every page header with its scene: `## Page N — Scene M: SLUGLINE`.** The source material is divided into scenes (the prose draft marks them with `## Scene N — Slugline` headers; the beat sheet lists them). Carry that scene structure onto the pages. A scene is a continuous unit of place + time — increment the scene number (and write a new `INT./EXT. LOCATION — TIME` slugline) **only** when the location, time, or POV genuinely shifts. Consecutive pages inside one scene MUST repeat the same `Scene M: SLUGLINE` so the renderer knows they're continuous and keeps characters/environment consistent across them; the FIRST page of a new scene starts the new number, which signals the renderer to start that page fresh. If the source has no scene divisions, infer them from where place/time/POV change. Use the exact slugline form `INT.`/`EXT.` + LOCATION + `—` + TIME (e.g. `EXT. ROOFTOP — DUSK`). The suffix is the ONLY thing that may follow the page number — never put panel content there.
 - **NEVER put action, dialogue, or scene content in the page-level description.** Any text you place between a `## Page N` header and its first `Panel` is layout intent ONLY — **1–3 lines max** (e.g. "Six-panel grid, tight cuts" or "Full-page splash"), or omit it entirely. Every beat of action, every line of dialogue, every caption, and all scene content MUST live inside a `Panel N` block, never in the page header. A page whose content lands in the page-level description instead of panels is malformed and will not render.
 - **Every page MUST decompose into discrete `Panel N` blocks** (how many follows the panel-count rule above — 4–6 on average, a single `Panel 1` for a splash, the rare 7–8 grid for fast cuts), each carrying its own `Description:`, `Caption:`, `Dialogue:`, and `SFX:` fields (use `(none)` for an empty caption/SFX rather than dropping the field). A page rendered as loose prose under the header instead of numbered panel blocks is malformed and will not render — even a splash is written as `Panel 1`, never as page-level prose.
+- **Visible in-world text must be exact.** If a panel shows readable text inside the art — a draft line, screen, sign, note, terminal, label, projected warning, highlighted sentence, erased line, etc. — quote the exact words in `Description:`. If a later panel highlights, changes, reacts to, or removes that same text, repeat the same wording or state precisely that those quoted words are no longer visible. Never refer to an unnamed "second line," "new line," "draft text," or similar text beat without specifying what the reader sees.
 - **Strong opening (Saga-style):** page 1 lands the reader inside a specific, sensory moment — a striking image plus one line of voice-over or arresting dialogue. No expository "previously on" walls. The first panel should be a hook the reader cannot put down. Page 1 is often a splash or near-splash.
 - **Cliffhanger / lead-in ending:** the final page (and ideally the final panel) must do one of: (a) reveal something that flips what we thought we knew, (b) deliver a cliffhanger — character in peril, decision unmade, antagonist arriving — or (c) plant the seed for the next issue with a clear "to be continued" pull. Never end on resolution alone.
 - Panel descriptions stay in **present tense** and describe only what's on the page.
 - Dialogue is short — comic balloons hold about 25 words max. Break long speeches across panels.
+- **Never emit empty quoted dialogue** (`NAME: ""`, `NAME: " "`, etc.). If a character reacts silently, put the reaction in `Description:`; if the beat is a nonverbal sound, use a specific `SFX:` value instead.
 - Use **CAPS for character names** in dialogue attributions (`LINA:`), and call out **emphasis** with bold.
 - **Balloon contents = quoted text only.** The CAPS speaker name and any parenthetical modifier (`(EARPIECE)`, `(WHISPERED)`, `(THOUGHT)`, `(OFF-PANEL)`, etc.) are *attribution* — they tell the artist whose mouth/earpiece the balloon points to and what shape to draw (jagged for radio, dashed for whisper, cloud for thought). **Never repeat the speaker name or modifier inside the quoted line** (write `ETTA (EARPIECE): "Stall forty-one is the buy."`, NOT `ETTA (EARPIECE): "ETTA (EARPIECE): Stall forty-one is the buy."` — and never inline speaker tags like `"— Etta"` inside the quoted text either). Downstream image-gen leaks any text it sees into the lettered balloon.
 - Captions for time/place jumps (`CAPTION: THREE HOURS LATER`) or interiority that can't be drawn.
@@ -101,4 +106,4 @@ Panel 2
 - Never re-describe a character's permanent appearance once introduced; just name them.
 - Vary page rhythm: don't let every page be the same panel count. Use page turns deliberately — what the reader sees when they turn from an odd page to the next even page is one of the strongest tools you have. Land big reveals on page-turn moments.
 
-Return ONLY the script. No preamble, no commentary. The output MUST start with the `# Issue {{issue.number}} — <Title>` heading, followed immediately by the `## Cover concept` section, then the `## Back cover concept` section, then exactly {{lengthTargets.pageTarget}} `## Page N` headers numbered Page 1 through Page {{lengthTargets.pageTarget}}.
+Return ONLY the script. No preamble, no commentary. The output MUST start with the `# Issue {{issue.number}} — <Title>` heading, followed immediately by the `## Cover concept` section, then the `## Back cover concept` section, then exactly {{lengthTargets.pageTarget}} `## Page N — Scene M: SLUGLINE` headers numbered Page 1 through Page {{lengthTargets.pageTarget}}, each carrying its scene marker.

@@ -15,7 +15,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { selectDryRunAutoApproved, exceedsMaxSpawns } from './cosTaskGenerator.js';
+import { selectDryRunAutoApproved, exceedsMaxSpawns, resolveIssueAuthorFilterBlock, isCooldownExemptTask } from './cosTaskGenerator.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/validation.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -27,8 +27,11 @@ const noCooldown = () => Promise.resolve(false);
 
 // The unit tests above exercise selectDryRunAutoApproved with synthetic hooks;
 // these source-level guards pin that each ENGINE wires the hook set matching
-// its own execute path — so a future edit can't silently swap or drop a hook
-// (e.g. give dequeue the pipeline cooldown bypass it doesn't have in execute).
+// its own execute path — so a future edit can't silently swap or drop a hook.
+// Both engines now share the `isCooldownExemptTask` predicate (pipeline
+// continuations AND perpetual drains bypass the cooldown), so a dry-run plan
+// matches its execute path; the only remaining asymmetry is `extraSkip`
+// (dequeue's disabled-analysis-type gate), which evaluateTasks does not have.
 describe('dry-run hook wiring matches each engine execute path', () => {
   // Isolate each engine's selectDryRunAutoApproved call site.
   const callSite = (src) => {
@@ -39,17 +42,56 @@ describe('dry-run hook wiring matches each engine execute path', () => {
     return src.slice(start, src.indexOf('});', start) + 3);
   };
 
-  it('dequeueNextTask (cos.js) passes extraSkip (disabled-analysis-type) but NOT cooldownExempt', () => {
+  it('dequeueNextTask (cos.js) passes the shared cooldownExempt AND extraSkip (disabled-analysis-type)', () => {
     const site = callSite(COS_SRC);
     expect(site).toContain('extraSkip: isDisabledAnalysisType');
-    expect(site).not.toContain('cooldownExempt');
+    // dequeue must exempt perpetual/pipeline tasks from cooldown in its dry-run
+    // plan too, mirroring its execute gate — otherwise the plan over-reports a
+    // perpetual drain as "would skip (cooldown)" that execute actually spawns.
+    expect(site).toContain('cooldownExempt: isCooldownExemptTask');
   });
 
-  it('evaluateTasks (cosTaskGenerator.js) passes cooldownExempt (pipeline continuation) but NOT extraSkip', () => {
+  it('evaluateTasks (cosTaskGenerator.js) passes the shared cooldownExempt but NOT extraSkip', () => {
     const site = callSite(GEN_SRC);
-    expect(site).toContain('cooldownExempt:');
-    expect(site).toContain('pipeline?.currentStage > 0');
+    expect(site).toContain('cooldownExempt: isCooldownExemptTask');
     expect(site).not.toContain('extraSkip');
+  });
+
+  it('both engines gate their EXECUTE cooldown check on isCooldownExemptTask', () => {
+    // The spawn gate (not just the dry-run planner) must consult the shared
+    // predicate, or a perpetual task the refill queued is skipped at spawn time
+    // until the 30-min window expires — the manually-triggered-drain stall.
+    expect(COS_SRC).toMatch(/if\s*\(appId\s*&&\s*!isCooldownExemptTask\(task\)\)/);
+    expect(GEN_SRC).toMatch(/if\s*\(appId\s*&&\s*!isCooldownExemptTask\(task\)\)/);
+  });
+});
+
+// isCooldownExemptTask is the single source of truth for "this task bypasses the
+// per-app review cooldown." The perpetual-string case is the subtle one: a
+// perpetual task is queued with `metadata.perpetual === true`, but that bare
+// boolean round-trips through COS-TASKS.md as the STRING "true" (taskParser
+// serializes non-object metadata via String()), and the spawn gate reads the
+// re-parsed task — so a `=== true`-only check would miss exactly the task the
+// gate sees.
+describe('isCooldownExemptTask', () => {
+  it('exempts pipeline continuations (currentStage > 0)', () => {
+    expect(isCooldownExemptTask({ metadata: { pipeline: { currentStage: 2 } } })).toBe(true);
+  });
+  it('does NOT exempt a pipeline task still at stage 0', () => {
+    expect(isCooldownExemptTask({ metadata: { pipeline: { currentStage: 0 } } })).toBe(false);
+  });
+  it('exempts a perpetual task as an in-memory boolean true', () => {
+    expect(isCooldownExemptTask({ metadata: { perpetual: true } })).toBe(true);
+  });
+  it('exempts a perpetual task as the re-parsed string "true" (COS-TASKS.md round-trip)', () => {
+    expect(isCooldownExemptTask({ metadata: { perpetual: 'true' } })).toBe(true);
+  });
+  it('does NOT exempt an ordinary app task', () => {
+    expect(isCooldownExemptTask({ metadata: { app: 'app-1', analysisType: 'security-audit' } })).toBe(false);
+  });
+  it('is null-safe for a task with no metadata', () => {
+    expect(isCooldownExemptTask(null)).toBe(false);
+    expect(isCooldownExemptTask({})).toBe(false);
   });
 });
 
@@ -81,7 +123,7 @@ describe('{reviewers} interpolation honors Code Review Defaults', () => {
 // claim-work is the single-source router: one toggle that resolves the app's
 // workTracker (default 'auto' → git origin host) and delegates to the matching
 // claim prompt body — plan→plan-task, github→claim-issue, gitlab→claim-issue-gitlab,
-// jira→jira-sprint-manager. These source-level guards pin that wiring so a
+// jira→claim-issue-jira. These source-level guards pin that wiring so a
 // future edit can't silently drop the resolution, the delegated prompt
 // selection, the PLAN gate routing, or the GitLab forge directive.
 describe('claim-work single-source routing', () => {
@@ -111,13 +153,60 @@ describe('claim-work single-source routing', () => {
     expect(GEN_SRC).toContain('glab issue list');
   });
 
-  it('inherits the delegated flow isolation posture so the JIRA route keeps CoS worktree+PR', () => {
-    // claim-work forces useWorktree/openPR=false (correct for the self-managing
-    // plan/github/gitlab claim prompts) but jira-sprint-manager needs CoS-managed
-    // isolation — pull the delegated type's DEFAULT_TASK_INTERVALS metadata.
+  it('pulls the delegated flow isolation posture from DEFAULT_TASK_INTERVALS metadata', () => {
+    // claim-work forces useWorktree/openPR=false, correct for all four
+    // self-managing claim prompts (plan/github/gitlab/jira). The hook stays so a
+    // future delegated type that DOES need CoS-managed isolation would have its
+    // DEFAULT_TASK_INTERVALS metadata applied here.
     expect(GEN_SRC).toContain('taskSchedule.DEFAULT_TASK_INTERVALS[promptTaskType]?.taskMetadata');
     expect(GEN_SRC).toContain("'useWorktree' in delegatedMeta");
     expect(GEN_SRC).toContain("'openPR' in delegatedMeta");
+  });
+
+  it('exposes buildClaimWorkTask so the manual /do:next button reuses the same router', () => {
+    expect(GEN_SRC).toContain('export async function buildClaimWorkTask(');
+    // Same tracker resolution + delegated isolation posture as the scheduler.
+    expect(GEN_SRC).toMatch(/buildClaimWorkTask[\s\S]*resolveAppWorkTracker, trackerToClaimTaskType/);
+    expect(GEN_SRC).toMatch(/buildClaimWorkTask[\s\S]*resolveIssueAuthorFilterBlock\(promptTaskType/);
+  });
+
+  it('buildClaimWorkTask resolves issueAuthorFilter + reviewers from configured claim-work metadata (parity with scheduler)', () => {
+    // The manual button must honor the app's configured Work Tracker behavior
+    // (issueAuthorFilter:'any', non-Copilot reviewers), not force owner+copilot.
+    const fn = GEN_SRC.slice(GEN_SRC.indexOf('export async function buildClaimWorkTask('));
+    // Merges global schedule metadata then per-app overrides, same as the scheduler.
+    expect(fn).toMatch(/getTaskInterval\('claim-work'\)/);
+    expect(fn).toMatch(/getAppTaskTypeOverrides\(app\.id\)/);
+    expect(fn).toMatch(/stripManagedAgentOptionsFromOverride\(\s*'claim-work'/);
+    // issueAuthorFilter: explicit option > configured metadata > 'owner'.
+    expect(fn).toMatch(/issueAuthorFilter \?\? metadata\.issueAuthorFilter \?\? 'owner'/);
+    // reviewers fall back to Code Review Defaults via normalizeReviewers, dropping local-LLM reviewers.
+    expect(fn).toMatch(/normalizeReviewers\(metadata, codeReviewDefaults\?\.reviewers\)/);
+    expect(fn).toMatch(/LOCAL_LLM_REVIEWERS\.includes/);
+    // A direct claim-work prompt customization overrides the tracker body, same
+    // as the scheduled router's promptKeyForBody selection.
+    expect(fn).toMatch(/getTaskPrompt\(interval\.prompt \? 'claim-work' : promptTaskType\)/);
+  });
+});
+
+// The {issueAuthorFilter} directive is shared by the scheduled claim-work router
+// AND the manual /do:next button (buildClaimWorkTask), so it is a standalone
+// pure helper. These exercise it directly rather than via source string.
+describe('resolveIssueAuthorFilterBlock', () => {
+  it('returns the gh forge directive for the github claim body', () => {
+    expect(resolveIssueAuthorFilterBlock('claim-issue', 'owner')).toContain('gh issue list');
+    expect(resolveIssueAuthorFilterBlock('claim-issue', 'any')).toContain('regardless of who filed it');
+  });
+
+  it('returns the glab forge directive for the gitlab claim body', () => {
+    expect(resolveIssueAuthorFilterBlock('claim-issue-gitlab', 'owner')).toContain('glab issue list');
+    expect(resolveIssueAuthorFilterBlock('claim-issue-gitlab', 'any')).toContain('regardless of who opened it');
+  });
+
+  it('defaults to the gh block (harmless no-op) for plan/jira bodies and to owner mode', () => {
+    expect(resolveIssueAuthorFilterBlock('plan-task')).toContain('gh issue list');
+    // Unknown mode collapses to owner, not any.
+    expect(resolveIssueAuthorFilterBlock('claim-issue', 'bogus')).toContain('repository owner only');
   });
 });
 

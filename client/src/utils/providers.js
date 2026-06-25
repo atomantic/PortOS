@@ -8,6 +8,39 @@ import { formatContextLength } from './formatters.js';
 export const CODEX_CONFIGURED_DEFAULT = 'codex-configured-default';
 export const ANTIGRAVITY_CONFIGURED_DEFAULT = 'antigravity-configured-default';
 
+export const DEFAULT_LARGE_CONTEXT_WINDOW = 128_000;
+export const CODEX_CONTEXT_WINDOW = 1_000_000;
+export const GEMINI_CONTEXT_WINDOW = 1_048_576;
+
+// Keep in sync with server/lib/stageRunner.js.
+const KNOWN_MODEL_CONTEXT_WINDOWS = Object.freeze([
+  [/gpt[-_.:/]?5\.5(?:[-_.:/]|\b)/i, CODEX_CONTEXT_WINDOW],
+  [/gpt[-_.:/]?5\.4[-_.:/]?mini(?:[-_.:/]|\b)/i, 400_000],
+  [/gpt[-_.:/]?5\.4(?![-_.:/]?(?:mini|nano))(?:[-_.:/]|\b)/i, CODEX_CONTEXT_WINDOW],
+  [/claude[-_.:/]?fable[-_.:/]?5(?:[-_.:/]|\b)/i, 1_000_000],
+  [/claude[-_.:/]?mythos[-_.:/]?5(?:[-_.:/]|\b)/i, 1_000_000],
+  [/claude[-_.:/]?opus[-_.:/]?4[-_.:/]?8/i, 1_000_000],
+  [/claude[-_.:/]?sonnet[-_.:/]?4[-_.:/]?6(?:[-_.:/]|\b)/i, 1_000_000],
+  [/claude[-_.:/]?sonnet[-_.:/]?4(?:[-_.:/]|\b)/i, 200_000],
+  [/claude[-_.:/]?haiku[-_.:/]?4(?:[-_.:/]|\b)/i, 200_000],
+  [/gemini[-_.:/]?2\.5[-_.:/]?pro(?:[-_.:/]|\b)/i, GEMINI_CONTEXT_WINDOW],
+]);
+
+export const knownModelContextWindow = (model) => {
+  if (typeof model !== 'string' || !model.trim()) return null;
+  const found = KNOWN_MODEL_CONTEXT_WINDOWS.find(([pattern]) => pattern.test(model));
+  return found ? found[1] : null;
+};
+
+export const knownProviderContextWindow = (provider) => {
+  if (!isProcessProvider(provider)) return null;
+  const id = String(provider?.id || '').toLowerCase();
+  const command = String(provider?.command || '').toLowerCase();
+  if (id === 'codex' || id === 'codex-tui' || command === 'codex') return CODEX_CONTEXT_WINDOW;
+  if (id === 'antigravity-cli' || id === 'antigravity-tui' || command === 'agy') return GEMINI_CONTEXT_WINDOW;
+  return null;
+};
+
 /**
  * Provider-type enum mirrored from server/lib/aiToolkit/constants.js#PROVIDER_TYPES.
  * The aiToolkit directory is kept self-contained (no imports out to other PortOS
@@ -97,6 +130,27 @@ export const localBackendForProvider = (provider) => {
   return null;
 };
 
+const LOCAL_ENDPOINT_RE = /^(https?:\/\/)?(localhost|127\.0\.0\.1|0\.0\.0\.0|\[?::1\]?)(:|\/|$)/i;
+const isLocalEndpoint = (endpoint) =>
+  typeof endpoint === 'string' && LOCAL_ENDPOINT_RE.test(endpoint.trim());
+
+export const isLikelyLargeContextProvider = (provider) => {
+  if (isProcessProvider(provider)) return true;
+  return isApiProvider(provider) && !isLocalEndpoint(provider.endpoint);
+};
+
+export const effectiveModelContextWindow = (provider, model) => {
+  const explicit = Number(provider?.contextWindow);
+  if (Number.isFinite(explicit) && explicit > 0) return explicit;
+  const known = knownModelContextWindow(model);
+  if (known) return known;
+  const providerKnown = knownProviderContextWindow(provider);
+  if (providerKnown) return providerKnown;
+  const numCtx = Number(provider?.numCtx);
+  if (Number.isFinite(numCtx) && numCtx > 0) return numCtx;
+  return isLikelyLargeContextProvider(provider) ? DEFAULT_LARGE_CONTEXT_WINDOW : null;
+};
+
 /**
  * Union of one or more model-id lists, de-duplicated, order-preserving, falsy
  * values dropped. Used to merge a provider's stored `models` with the live
@@ -125,7 +179,7 @@ export const mergeModelLists = (...lists) => {
  * @returns {string}
  */
 export const modelOptionLabel = (id, ctxById) => {
-  const ctx = ctxById?.[id];
+  const ctx = ctxById?.[id] || knownModelContextWindow(id);
   const label = formatContextLength(ctx);
   return label ? `${id} (${label})` : id;
 };

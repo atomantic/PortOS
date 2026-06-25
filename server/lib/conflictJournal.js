@@ -81,7 +81,15 @@ const MEDIA_COLLECTION_SCALAR_FIELDS = Object.freeze(['name', 'description', 'co
 // set the UI actually shows. (mediaCollection narrows via its own scalar
 // projection below; universe/series exclude nothing, so their already-seeded
 // base hashes stay valid across upgrade.)
-const HASH_EXCLUDED_FIELDS = Object.freeze({ issue: ['number'] });
+// Fields dropped from the CONTENT HASH (not the wire payload — they still
+// replicate). `issue.number` is renumber-managed. `track.renders` is an additive
+// field synthesized (backfilled) onto every existing track on first read: hashing
+// it would invalidate every pre-upgrade `sync_base_hash` and journal a one-time
+// FALSE 3-way conflict on the first cross-peer edit after both peers upgrade
+// (local and remote both differ from a base computed without renders). Excluding
+// it from the hash keeps base-hash compatibility; render-only divergences are
+// LWW-ordered by `updatedAt` regardless, and renders stays restorable (below).
+const HASH_EXCLUDED_FIELDS = Object.freeze({ issue: ['number'], track: ['renders'] });
 
 /**
  * sha256 of the canonical content projection. Reuses sanitizeRecordForWire +
@@ -304,12 +312,47 @@ export const RESTORABLE_FIELDS = Object.freeze({
   // LWW-overwritten whole (no field-union like mediaCollection's items), so it
   // is hashed in full by contentHashForRecord — no scalar-narrowing branch.
   author: ['name', 'writingStyle', 'bio', 'physicalDescription', 'headshotStyle', 'headshotImageUrl'],
+  artist: ['name', 'genre', 'bio', 'musicalStyle', 'physicalDescription', 'portraitStyle', 'portraitImageUrl'],
+  album: ['title', 'artistId', 'artist', 'description', 'genre', 'releaseYear', 'coverImageUrl', 'trackIds'],
+  // `renders` IS restorable (a conflict restore must bring back the local render
+  // history) but is EXCLUDED FROM THE CONTENT HASH — see HASH_EXCLUDED_FIELDS for
+  // why (base-hash compatibility for this additive backfilled field).
+  track: ['title', 'albumId', 'artistId', 'artist', 'lyrics', 'prompt', 'engine', 'modelId', 'durationSec', 'audioFilename', 'renders'],
   // Issue: the user-authored content the merge can restore. `stages` carries
   // the bulk of the work (prose, comic pages, render metadata). Server-owned /
   // structural fields are excluded deliberately — `number` is renumber-managed,
   // `seriesId` is the immutable parent link, `origin` is share provenance —
   // and `mergeIssuePatch` accepts every field listed here.
   issue: ['title', 'status', 'seasonId', 'arcPosition', 'arcRole', 'lengthProfile', 'pageTarget', 'minutesTarget', 'stages'],
+  // Creative Director projects (#1564): the user-authored config + creative
+  // content the merge can restore. `treatment` (logline/synopsis/scenes) carries
+  // the bulk of the work. Server-owned / machine-managed fields are excluded —
+  // `id`/`createdAt`/the LWW-tombstone trip are structural, `collectionId`/
+  // `timelineProjectId`/`finalVideoId` are derived output pointers, and `runs[]`
+  // is render history (regenerated, not hand-authored). The whole record is
+  // hashed for DETECTION by contentHashForRecord (no scalar narrowing); this set
+  // is what the Conflicts UI offers for restore. `creativeDirectorProject`
+  // matches the record kind and mergeProjectRecord accepts every field here.
+  creativeDirectorProject: ['name', 'status', 'styleSpec', 'userStory', 'treatment', 'aspectRatio', 'quality', 'modelId', 'targetDurationSeconds', 'disableAudio', 'autoAcceptScenes', 'startingImageFile'],
+  // Mood boards (#1564): the user-authored fields the merge can restore. `items[]`
+  // (the pinned image/text references) carries the bulk of the work, alongside
+  // name/description. Server-owned / structural fields are excluded — `id`/
+  // `createdAt`/the LWW-tombstone trio. The whole record is hashed for DETECTION
+  // by contentHashForRecord (no scalar narrowing); this set is what the Conflicts
+  // UI offers for restore. `moodBoard` matches the record kind, and the resolver
+  // routes restore through restoreBoard → applyBoardRestore (which accepts items,
+  // unlike the route's applyBoardPatch).
+  moodBoard: ['name', 'description', 'items'],
+  // Writers Room works (#1565): the user-authored manifest fields the merge can
+  // restore through `updateWork` (which accepts exactly this set + the liveMode
+  // partial-merge). Server-owned / structural fields are excluded — `id`/
+  // `createdAt`/the LWW-tombstone trio, the draft-version structure
+  // (`drafts`/`activeDraftVersionId`, file-primary + lineage-managed), and the
+  // bridge links (`pipelineSeriesId`/`cdProjectId`/`mediaCollectionId`, set by
+  // their own helpers). The whole manifest is hashed for DETECTION by
+  // contentHashForRecord (no scalar narrowing); this set is what the Conflicts UI
+  // offers for restore. `writersRoomWork` matches the record kind.
+  writersRoomWork: ['title', 'kind', 'status', 'folderId', 'imageStyle', 'liveMode'],
 });
 
 const present = (v) => v !== undefined;

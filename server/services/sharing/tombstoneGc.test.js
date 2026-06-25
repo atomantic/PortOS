@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// All four downstream surfaces are mocked so we can drive the math without
+// All downstream surfaces are mocked so we can drive the math without
 // touching real state files. The point of these tests is the cutoff policy
 // (grace + min-ack), not the pure-mechanical prune helpers — those are
 // covered by their own service tests.
@@ -23,6 +23,30 @@ vi.mock('../mediaCollections.js', () => ({
 vi.mock('../authors/index.js', () => ({
   pruneTombstonedAuthors: vi.fn().mockResolvedValue({ pruned: 0 }),
   listAuthorIds: vi.fn().mockResolvedValue([]),
+}));
+vi.mock('../artists/index.js', () => ({
+  pruneTombstonedArtists: vi.fn().mockResolvedValue({ pruned: 0 }),
+  listArtistIds: vi.fn().mockResolvedValue([]),
+}));
+vi.mock('../albums/index.js', () => ({
+  pruneTombstonedAlbums: vi.fn().mockResolvedValue({ pruned: 0 }),
+  listAlbumIds: vi.fn().mockResolvedValue([]),
+}));
+vi.mock('../tracks/index.js', () => ({
+  pruneTombstonedTracks: vi.fn().mockResolvedValue({ pruned: 0 }),
+  listTrackIds: vi.fn().mockResolvedValue([]),
+}));
+vi.mock('../creativeDirector/local.js', () => ({
+  pruneTombstonedProjects: vi.fn().mockResolvedValue({ pruned: 0 }),
+  listProjectIds: vi.fn().mockResolvedValue([]),
+}));
+vi.mock('../moodBoard/index.js', () => ({
+  pruneTombstonedBoards: vi.fn().mockResolvedValue({ pruned: 0 }),
+  listBoardIds: vi.fn().mockResolvedValue([]),
+}));
+vi.mock('../writersRoom/sync.js', () => ({
+  pruneTombstonedWorks: vi.fn().mockResolvedValue({ pruned: 0 }),
+  listWorkIdsForSync: vi.fn().mockResolvedValue([]),
 }));
 vi.mock('../../lib/conflictJournal.js', () => ({
   pruneOrphanedBaseHashes: vi.fn().mockResolvedValue({ pruned: 0 }),
@@ -48,6 +72,12 @@ import { pruneTombstonedSeries, listSeries } from '../pipeline/series.js';
 import { pruneTombstonedIssues, listIssueIds } from '../pipeline/issues.js';
 import { pruneTombstonedCollections, listCollections } from '../mediaCollections.js';
 import { pruneTombstonedAuthors, listAuthorIds } from '../authors/index.js';
+import { pruneTombstonedArtists, listArtistIds } from '../artists/index.js';
+import { pruneTombstonedAlbums, listAlbumIds } from '../albums/index.js';
+import { pruneTombstonedTracks, listTrackIds } from '../tracks/index.js';
+import { pruneTombstonedProjects } from '../creativeDirector/local.js';
+import { pruneTombstonedBoards } from '../moodBoard/index.js';
+import { pruneTombstonedWorks } from '../writersRoom/sync.js';
 import { pruneOrphanedBaseHashes } from '../../lib/conflictJournal.js';
 import { listPeerSubscriptions, pruneOrphanedPeerSubscriptions } from './peerSync.js';
 import { getMinAckAcrossPeers } from './peerTombstoneCursors.js';
@@ -94,13 +124,33 @@ describe('TOMBSTONE_GRACE_MS', () => {
 });
 
 describe('sweepTombstones — no peers subscribed', () => {
-  it('uses now-GRACE as the cutoff for all four kinds when nobody is subscribed', async () => {
+  it('uses now-GRACE as the cutoff for all kinds when nobody is subscribed', async () => {
     await sweepTombstones({ now: NOW });
     const expectedCutoff = NOW - TOMBSTONE_GRACE_MS + 1;
     expect(pruneTombstonedUniverses).toHaveBeenCalledWith(expectedCutoff);
     expect(pruneTombstonedSeries).toHaveBeenCalledWith(expectedCutoff);
     expect(pruneTombstonedIssues).toHaveBeenCalledWith(expectedCutoff);
     expect(pruneTombstonedCollections).toHaveBeenCalledWith(expectedCutoff);
+    expect(pruneTombstonedAuthors).toHaveBeenCalledWith(expectedCutoff);
+    expect(pruneTombstonedArtists).toHaveBeenCalledWith(expectedCutoff);
+    expect(pruneTombstonedAlbums).toHaveBeenCalledWith(expectedCutoff);
+    expect(pruneTombstonedTracks).toHaveBeenCalledWith(expectedCutoff);
+  });
+});
+
+describe('sweepTombstones — full-sync peer resurrection guard', () => {
+  it('a full-sync peer with an empty category map still blocks snapshot-kind pruning', async () => {
+    // A full-sync peer mirrors every category regardless of its stored
+    // syncCategories map. If it weren't counted in the snapshot-resurrection
+    // set, pruning would drop a tombstone the peer hasn't seen and its next
+    // snapshot push would resurrect the record. So with no per-record sub, a
+    // full-sync peer must hold the line for every snapshot-backed kind.
+    getPeers.mockResolvedValue([
+      { instanceId: 'peer-a', enabled: true, syncEnabled: true, fullSync: true, syncCategories: {} },
+    ]);
+    mockSubs({}); // no per-record subscriptions → only the snapshot gate can block
+    const res = await sweepTombstones({ now: NOW });
+    expect(res.refused).toEqual(expect.arrayContaining(['universe', 'series', 'issue', 'mediaCollection']));
   });
 });
 
@@ -134,6 +184,10 @@ describe('sweepTombstones — orphaned base-hash sweep', () => {
     listSeries.mockResolvedValue([{ id: 's-live' }]);
     listIssueIds.mockResolvedValue(['i-live']); // already ids, uncapped
     listCollections.mockResolvedValue([{ id: 'c-live' }]);
+    listAuthorIds.mockResolvedValue(['auth-live']);
+    listArtistIds.mockResolvedValue(['artist-live']);
+    listAlbumIds.mockResolvedValue(['album-live']);
+    listTrackIds.mockResolvedValue(['track-live']);
     // Capture the resolver the sweep hands to pruneOrphanedBaseHashes and drive
     // it directly — this is the real makeBaseHashKeyResolver closure.
     let resolver;
@@ -142,13 +196,32 @@ describe('sweepTombstones — orphaned base-hash sweep', () => {
 
     expect(await resolver('universe', 'u-live')).toBe(true);
     expect(await resolver('universe', 'u-gone')).toBe(false);
+    expect(await resolver('series', 's-live')).toBe(true);
+    expect(await resolver('series', 's-gone')).toBe(false);
     expect(await resolver('issue', 'i-live')).toBe(true);
+    expect(await resolver('issue', 'i-gone')).toBe(false);
+    expect(await resolver('mediaCollection', 'c-live')).toBe(true);
     expect(await resolver('mediaCollection', 'c-gone')).toBe(false);
+    expect(await resolver('author', 'auth-live')).toBe(true);
+    expect(await resolver('author', 'auth-gone')).toBe(false);
+    expect(await resolver('artist', 'artist-live')).toBe(true);
+    expect(await resolver('artist', 'artist-gone')).toBe(false);
+    expect(await resolver('album', 'album-live')).toBe(true);
+    expect(await resolver('album', 'album-gone')).toBe(false);
+    expect(await resolver('track', 'track-live')).toBe(true);
+    expect(await resolver('track', 'track-gone')).toBe(false);
     // Unknown kind is always kept and never triggers a listing.
     expect(await resolver('brain', 'whatever')).toBe(true);
     // A second probe of an already-listed kind reuses the cached id-set —
     // listUniverses is called exactly once across both universe probes.
     expect(listUniverses).toHaveBeenCalledTimes(1);
+    expect(listSeries).toHaveBeenCalledTimes(1);
+    expect(listIssueIds).toHaveBeenCalledTimes(1);
+    expect(listCollections).toHaveBeenCalledTimes(1);
+    expect(listAuthorIds).toHaveBeenCalledTimes(1);
+    expect(listArtistIds).toHaveBeenCalledTimes(1);
+    expect(listAlbumIds).toHaveBeenCalledTimes(1);
+    expect(listTrackIds).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -192,6 +265,10 @@ describe('sweepTombstones — orphaned peer-subscription sweep', () => {
     listUniverses.mockResolvedValue([{ id: 'u-live' }, { id: 'u-tomb', deleted: true }]);
     listSeries.mockResolvedValue([{ id: 's-live' }]);
     listCollections.mockResolvedValue([{ id: 'c-live' }]);
+    listAuthorIds.mockResolvedValue(['auth-live']);
+    listArtistIds.mockResolvedValue(['artist-live']);
+    listAlbumIds.mockResolvedValue(['album-live']);
+    listTrackIds.mockResolvedValue(['track-live']);
     let resolver;
     pruneOrphanedPeerSubscriptions.mockImplementationOnce(async (fn) => { resolver = fn; return { pruned: 0, removed: [] }; });
     await sweepTombstones({ now: NOW });
@@ -200,7 +277,17 @@ describe('sweepTombstones — orphaned peer-subscription sweep', () => {
     expect(await resolver('universe', 'u-tomb')).toBe(true); // tombstoned → kept
     expect(await resolver('universe', 'u-gone')).toBe(false); // dir gone → orphan
     expect(await resolver('series', 's-live')).toBe(true);
+    expect(await resolver('series', 's-gone')).toBe(false);
+    expect(await resolver('mediaCollection', 'c-live')).toBe(true);
     expect(await resolver('mediaCollection', 'c-gone')).toBe(false);
+    expect(await resolver('author', 'auth-live')).toBe(true);
+    expect(await resolver('author', 'auth-gone')).toBe(false);
+    expect(await resolver('artist', 'artist-live')).toBe(true);
+    expect(await resolver('artist', 'artist-gone')).toBe(false);
+    expect(await resolver('album', 'album-live')).toBe(true);
+    expect(await resolver('album', 'album-gone')).toBe(false);
+    expect(await resolver('track', 'track-live')).toBe(true);
+    expect(await resolver('track', 'track-gone')).toBe(false);
     // Unknown kind (issues are never directly subscribed) is always kept and
     // never triggers a listing.
     expect(await resolver('issue', 'i-whatever')).toBe(true);
@@ -343,8 +430,29 @@ describe('sweepTombstones — return shape', () => {
     pruneTombstonedIssues.mockResolvedValueOnce({ pruned: 5 });
     pruneTombstonedCollections.mockResolvedValueOnce({ pruned: 3 });
     pruneTombstonedAuthors.mockResolvedValueOnce({ pruned: 1 });
+    pruneTombstonedArtists.mockResolvedValueOnce({ pruned: 4 });
+    pruneTombstonedAlbums.mockResolvedValueOnce({ pruned: 6 });
+    pruneTombstonedTracks.mockResolvedValueOnce({ pruned: 7 });
+    pruneTombstonedProjects.mockResolvedValueOnce({ pruned: 8 });
+    pruneTombstonedBoards.mockResolvedValueOnce({ pruned: 9 });
+    pruneTombstonedWorks.mockResolvedValueOnce({ pruned: 10 });
     const result = await sweepTombstones({ now: NOW });
-    expect(result).toEqual({ universes: 2, series: 0, issues: 5, collections: 3, authors: 1, orphanBaseHashes: 0, orphanSubscriptions: 0, refused: [] });
+    expect(result).toEqual({
+      universes: 2,
+      series: 0,
+      issues: 5,
+      collections: 3,
+      authors: 1,
+      artists: 4,
+      albums: 6,
+      tracks: 7,
+      creativeDirectorProjects: 8,
+      moodBoards: 9,
+      writersRoomWorks: 10,
+      orphanBaseHashes: 0,
+      orphanSubscriptions: 0,
+      refused: [],
+    });
   });
 
   it('lists kinds whose cutoff was null in `refused` so the manual-trigger UI can explain why nothing pruned', async () => {
@@ -528,6 +636,10 @@ describe('getSweepStatus — dry-run for UI button gating', () => {
     expect(pruneTombstonedSeries).not.toHaveBeenCalled();
     expect(pruneTombstonedIssues).not.toHaveBeenCalled();
     expect(pruneTombstonedCollections).not.toHaveBeenCalled();
+    expect(pruneTombstonedAuthors).not.toHaveBeenCalled();
+    expect(pruneTombstonedArtists).not.toHaveBeenCalled();
+    expect(pruneTombstonedAlbums).not.toHaveBeenCalled();
+    expect(pruneTombstonedTracks).not.toHaveBeenCalled();
   });
 
   it('returns an empty refused list when every kind has an ack horizon', async () => {

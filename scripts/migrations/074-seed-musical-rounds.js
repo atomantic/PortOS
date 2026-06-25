@@ -4,25 +4,25 @@
  * data/songs.json before these rounds shipped.
  *
  * Background:
- *   server/services/songs.js#SEED_SONGS now ships four rounds in addition to
+ *   server/services/rounds.js#SEED_ROUNDS now ships four rounds in addition to
  *   "500 Miles". New seeds only reach an install on its FIRST read of songs (when
  *   the file is seeded). An install that already persisted data/songs.json keeps
  *   its old records and never sees the new seeds — this migration prepends any of
  *   the four that are absent (matched by id), once.
  *
- *   Fresh installs need nothing here: SEED_SONGS already includes the rounds, so
+ *   Fresh installs need nothing here: SEED_ROUNDS already includes the rounds, so
  *   a missing file is a clean no-op. Re-runs detect the rounds present and skip.
  *   A record the user already owns under one of these ids is never clobbered — we
  *   only add a round when its id is missing.
  *
- *   The records come straight from SEED_SONGS (filtered by id and run through the
+ *   The records come straight from SEED_ROUNDS (filtered by id and run through the
  *   service's own sanitizer) rather than a hand-copied duplicate, so this
  *   migration can never drift from the shipped seed.
  */
 
 import { readFile, writeFile, stat } from 'fs/promises';
 import { join } from 'path';
-import { SEED_SONGS, sanitizeSong } from '../../server/services/songs.js';
+import { SEED_ROUNDS, sanitizeRound } from '../../server/services/rounds.js';
 
 export const ROUND_IDS = [
   'seed-hey-ho-nobody-home',
@@ -32,10 +32,10 @@ export const ROUND_IDS = [
 ];
 
 // The shipped round records in canonical on-disk shape — exactly what a fresh
-// seed write produces (listSongs persists SEED_SONGS.map(sanitizeSong)).
+// seed write produces (listRounds persists SEED_ROUNDS.map(sanitizeRound)).
 export const ROUND_SEEDS = ROUND_IDS
-  .map((id) => SEED_SONGS.find((s) => s.id === id))
-  .map(sanitizeSong);
+  .map((id) => SEED_ROUNDS.find((s) => s.id === id))
+  .map(sanitizeRound);
 
 const fileExists = (path) => stat(path).then(() => true, (err) => {
   if (err.code === 'ENOENT') return false;

@@ -1,7 +1,7 @@
 import { Play, Square } from 'lucide-react';
 import { AGENT_STATES } from './constants';
 
-export default function TerminalCoSPanel({ state, speaking, statusMessage, eventLogs, running, onStart, onStop, stats, evalCountdown }) {
+export default function TerminalCoSPanel({ state, speaking, statusMessage, eventLogs, running, onStart, onStop, stats }) {
   const stateConfig = AGENT_STATES[state] || AGENT_STATES.sleeping;
 
   // Terminal-style ASCII art for the character - alien design
@@ -168,11 +168,6 @@ export default function TerminalCoSPanel({ state, speaking, statusMessage, event
           <span className="text-cyan-400">$</span>
           <span className="text-gray-300 truncate">{statusMessage}</span>
         </div>
-        {evalCountdown && (
-          <div className="text-cyan-500/60 font-mono mt-0.5">
-            # next: ({evalCountdown.formatted})
-          </div>
-        )}
       </div>
 
       {/* Stats as terminal output - desktop only */}

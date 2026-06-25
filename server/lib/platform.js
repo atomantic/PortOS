@@ -1,9 +1,42 @@
-import { exec } from 'child_process';
+import { exec, execSync } from 'child_process';
 import { promisify } from 'util';
 
 const execAsync = promisify(exec);
 
 const platform = process.platform;
+
+// Probe the real CPU for arm64, cached. Needed because a Node launched under
+// Rosetta on an M-series Mac reports `process.arch === 'x64'` even though the
+// hardware (and a native LM Studio) is Apple Silicon — `hw.optional.arm64` is the
+// hardware truth regardless of the process's translation. try/catch is the
+// sanctioned child-process boundary (the sysctl key is absent on Intel → throws).
+let arm64HardwareCache;
+function probeArm64Hardware() {
+  if (arm64HardwareCache === undefined) {
+    try {
+      arm64HardwareCache = execSync('sysctl -n hw.optional.arm64', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() === '1';
+    } catch {
+      arm64HardwareCache = false;
+    }
+  }
+  return arm64HardwareCache;
+}
+
+/**
+ * Is this an Apple-Silicon Mac? Gates MLX model features (MLX is Apple's native
+ * framework, so MLX formats only run on Apple Silicon). Detect at the route
+ * boundary and pass into pure services, like `os.totalmem()`.
+ *
+ * `process.arch === 'arm64'` is the fast native answer; an x64 darwin process may
+ * still be arm64 hardware under Rosetta, so that case probes `hw.optional.arm64`.
+ * The `platform`/`arch`/`probe` overrides exist for deterministic tests.
+ * @returns {boolean}
+ */
+export function isAppleSilicon({ platform: plat = process.platform, arch = process.arch, probe = probeArm64Hardware } = {}) {
+  if (plat !== 'darwin') return false;
+  if (arch === 'arm64') return true;
+  return probe();
+}
 
 /**
  * Get list of listening TCP ports

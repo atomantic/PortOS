@@ -10,6 +10,8 @@ vi.mock('../../services/api', () => ({
   getPipelineSeriesCanonReadiness: vi.fn(),
   getPipelineSeries: vi.fn(),
   listPipelineIssues: vi.fn(),
+  getSettings: vi.fn(),
+  patchSettingsSlice: vi.fn(),
 }));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
 // Controllable SSE hook so tests don't touch EventSource. `sseLatest` lets a
@@ -24,6 +26,8 @@ import {
   startPipelineAutopilot,
   getPipelineAutopilotStatus,
   getPipelineSeriesCanonReadiness,
+  getSettings,
+  patchSettingsSlice,
 } from '../../services/api';
 import toast from '../ui/Toast';
 import AutopilotPanel from './AutopilotPanel';
@@ -41,6 +45,8 @@ beforeEach(() => {
   sseFrames = [];
   getPipelineAutopilotStatus.mockResolvedValue({ autopilot: null, active: false });
   startPipelineAutopilot.mockResolvedValue({ runId: 'r1', mode: 'execute', alreadyRunning: false });
+  getSettings.mockResolvedValue({ pipelineEditorialChecks: {} });
+  patchSettingsSlice.mockResolvedValue({});
 });
 
 describe('AutopilotPanel', () => {
@@ -48,6 +54,8 @@ describe('AutopilotPanel', () => {
     renderPanel({ id: 's1', targetFormat: 'comic' });
     await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
     fireEvent.click(screen.getByRole('button', { name: /run autopilot/i }));
+    // Rounds are NOT sent as per-run overrides — the server resolves them from
+    // the persisted setting (which start() saves first when loaded).
     await waitFor(() => expect(startPipelineAutopilot).toHaveBeenCalledWith(
       's1', { includeVisual: true, fileGaps: false }, { silent: true },
     ));
@@ -67,6 +75,77 @@ describe('AutopilotPanel', () => {
     ));
   });
 
+  it('sends only edited rounds as overrides AND persists them; untouched gates omitted', async () => {
+    getSettings.mockResolvedValue({ pipelineEditorialChecks: { maxArcVerifyRounds: 6, maxEditorialRounds: 4 } });
+    renderPanel({ id: 's1', targetFormat: 'comic' });
+    await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('button', { name: /options/i }));
+    // Wait for the persisted setting to populate the input, then edit only arc.
+    await waitFor(() => expect(screen.getByLabelText('Arc verify rounds')).toHaveValue(6));
+    fireEvent.change(screen.getByLabelText('Arc verify rounds'), { target: { value: '9' } });
+    fireEvent.blur(screen.getByLabelText('Arc verify rounds'));
+    fireEvent.click(screen.getByRole('button', { name: /run autopilot/i }));
+    // The edited value is BOTH persisted and sent as a per-run override (so it's
+    // effective even if the save fails), while the untouched editorial gate is
+    // sent in neither (server resolves it from the persisted setting).
+    await waitFor(() => expect(startPipelineAutopilot).toHaveBeenCalledWith(
+      's1', { includeVisual: true, fileGaps: false, maxArcVerifyRounds: 9 }, { silent: true },
+    ));
+    expect(patchSettingsSlice).toHaveBeenCalledWith(
+      'pipelineEditorialChecks',
+      expect.objectContaining({ maxArcVerifyRounds: 9 }),
+      { silent: true },
+    );
+    expect(patchSettingsSlice).not.toHaveBeenCalledWith(
+      'pipelineEditorialChecks',
+      expect.objectContaining({ maxEditorialRounds: expect.anything() }),
+      expect.anything(),
+    );
+  });
+
+  it('sends a chosen readiness gate as a per-run override without persisting it (#1580)', async () => {
+    renderPanel({ id: 's1', targetFormat: 'comic' });
+    await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('button', { name: /options/i }));
+    fireEvent.change(screen.getByLabelText('Readiness gate'), { target: { value: 'none' } });
+    fireEvent.click(screen.getByRole('button', { name: /run autopilot/i }));
+    await waitFor(() => expect(startPipelineAutopilot).toHaveBeenCalledWith(
+      's1', { includeVisual: true, fileGaps: false, readinessGate: 'none' }, { silent: true },
+    ));
+    // Per-run only — the gate is never persisted to settings.
+    expect(patchSettingsSlice).not.toHaveBeenCalledWith(
+      'pipelineEditorialChecks',
+      expect.objectContaining({ readinessGate: expect.anything() }),
+      expect.anything(),
+    );
+  });
+
+  it('omits readinessGate when left on the saved default (#1580)', async () => {
+    getSettings.mockResolvedValue({ pipelineEditorialChecks: { readinessGate: 'noOpenHighOrMedium' } });
+    renderPanel({ id: 's1', targetFormat: 'comic' });
+    await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('button', { name: /options/i }));
+    // The saved default is surfaced in the "use saved default" option label.
+    await waitFor(() => expect(screen.getByLabelText('Readiness gate')).toHaveValue(''));
+    expect(screen.getByText(/Use saved default \(No open High or Medium/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /run autopilot/i }));
+    // Nothing chosen → no readinessGate sent; server resolves from the setting.
+    await waitFor(() => expect(startPipelineAutopilot).toHaveBeenCalledWith(
+      's1', { includeVisual: true, fileGaps: false }, { silent: true },
+    ));
+  });
+
+  it('clears to the default (not 0) when a round input is emptied', async () => {
+    renderPanel({ id: 's1', targetFormat: 'comic' });
+    await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('button', { name: /options/i }));
+    const input = screen.getByLabelText('Arc verify rounds');
+    fireEvent.change(input, { target: { value: '' } });
+    fireEvent.blur(input);
+    // Number('') === 0 would skip the gate — clearing must fall back to the default.
+    await waitFor(() => expect(input).toHaveValue(3));
+  });
+
   it('shows a paused banner with residual findings and a Resume action', async () => {
     renderPanel({
       id: 's1',
@@ -81,6 +160,59 @@ describe('AutopilotPanel', () => {
     expect(screen.getByText(/Paused at Verifying arc/i)).toBeInTheDocument();
     expect(screen.getByText(/plot hole/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /resume autopilot/i })).toBeInTheDocument();
+  });
+
+  it('flags a divergence pause with a "not converging" badge (#1571)', async () => {
+    renderPanel({
+      id: 's1',
+      targetFormat: 'comic',
+      autopilot: { status: 'paused', currentStep: 'verifyArc', pauseKind: 'divergence' },
+    });
+    await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
+    expect(screen.getByText(/not converging/i)).toBeInTheDocument();
+  });
+
+  it('does not show the "not converging" badge for an ordinary maxRounds pause', async () => {
+    renderPanel({
+      id: 's1',
+      targetFormat: 'comic',
+      autopilot: { status: 'paused', currentStep: 'verifyArc', pauseKind: 'maxRounds' },
+    });
+    await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
+    expect(screen.queryByText(/not converging/i)).not.toBeInTheDocument();
+  });
+
+  it('shows the production-ready banner for a clean done marker', async () => {
+    renderPanel({ id: 's1', targetFormat: 'comic', autopilot: { status: 'done', craftGapIssues: 0 } });
+    await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
+    expect(screen.getByText(/draft is production-ready/i)).toBeInTheDocument();
+  });
+
+  it('qualifies a done marker that filed script-craft gaps as a caution (#1572)', async () => {
+    renderPanel({ id: 's1', targetFormat: 'comic', autopilot: { status: 'done', craftGapIssues: 2, craftGapFindings: 3 } });
+    await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
+    expect(screen.getByText(/Completed with 2 filed script-craft gaps — resolve before rendering/i)).toBeInTheDocument();
+    expect(screen.queryByText(/draft is production-ready/i)).not.toBeInTheDocument();
+  });
+
+  it('uses the singular gap label when exactly one craft gap was filed (#1572)', async () => {
+    renderPanel({ id: 's1', targetFormat: 'comic', autopilot: { status: 'done', craftGapIssues: 1, craftGapFindings: 1 } });
+    await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
+    expect(screen.getByText(/Completed with 1 filed script-craft gap —/i)).toBeInTheDocument();
+  });
+
+  it('qualifies a done marker with errored editorial checks as a caution (#1573)', async () => {
+    renderPanel({ id: 's1', targetFormat: 'comic', autopilot: { status: 'done', craftGapIssues: 0, editorialCheckErrors: 2 } });
+    await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
+    expect(screen.getByText(/2 editorial checks errored — review before trusting/i)).toBeInTheDocument();
+    expect(screen.queryByText(/draft is production-ready/i)).not.toBeInTheDocument();
+  });
+
+  it('prefers the craft-gap caution over the editorial-check caution when both are present (#1573)', async () => {
+    renderPanel({ id: 's1', targetFormat: 'comic', autopilot: { status: 'done', craftGapIssues: 1, craftGapFindings: 1, editorialCheckErrors: 1 } });
+    await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
+    expect(screen.getByText(/Completed with 1 filed script-craft gap —/i)).toBeInTheDocument();
+    expect(screen.queryByText(/editorial check/i)).not.toBeInTheDocument();
   });
 
   it('ignores a stale terminal frame from a previous run when starting again', async () => {
@@ -108,6 +240,28 @@ describe('AutopilotPanel', () => {
     await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
     expect(await screen.findByText(/Dry-run plan/i)).toBeInTheDocument();
     expect(screen.getByText(/Verifying arc/i)).toBeInTheDocument();
+  });
+
+  it('renders the estimated budget total from planTotals (#1576)', async () => {
+    sseLatest = {
+      type: 'complete', dryRun: true, runId: 'r1',
+      plan: [{ kind: 'verifyArc', count: 1, estActions: 5 }, { kind: 'editorialChecks', count: 1, estActions: 1, estLlmCalls: 6 }],
+      planTotals: { estActions: 6, estLlmCalls: 6 },
+    };
+    renderPanel({ id: 's1', targetFormat: 'comic' });
+    await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
+    expect(await screen.findByText(/Est\. budget/i)).toBeInTheDocument();
+    expect(screen.getByText(/≈6 cos action/i)).toBeInTheDocument();
+    expect(screen.getByText(/~6 editorial-check LLM call/i)).toBeInTheDocument();
+  });
+
+  // #1578 — per-check editorial telemetry forwarded up the autopilot SSE stream
+  // renders as a live label with the severity breakdown, not the raw frame type.
+  it('renders a forwarded per-check editorial frame with its severity breakdown', async () => {
+    getPipelineAutopilotStatus.mockResolvedValue({ autopilot: { status: 'running' }, active: true });
+    sseLatest = { type: 'check:complete', scope: 'editorialChecks', checkId: 'prose.info-dumping', label: 'Info dumping', count: 3, bySeverity: { high: 1, medium: 2, low: 0 } };
+    renderPanel({ id: 's1', targetFormat: 'comic' });
+    expect(await screen.findByText(/Editorial check: Info dumping — 3 finding\(s\) \(1H\/2M\/0L\)/i)).toBeInTheDocument();
   });
 
   it('renders canon readiness gaps with a link to the issue Nouns page', async () => {

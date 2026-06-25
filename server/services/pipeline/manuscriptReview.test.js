@@ -7,9 +7,19 @@ vi.mock('../../lib/fileUtils.js', () => ({
   readJSONFile: vi.fn(async (path, fallback) => (fileStore.has(path) ? fileStore.get(path) : fallback)),
 }));
 
-// seriesStore().recordDir(id) → a stable per-series path key.
+// seriesStore().recordDir(id) → a stable per-series path key. `listSeries`
+// derives the seeded series ids straight from the in-memory file store so
+// locateComment's cross-series scan stays consistent with whatever was seeded.
 vi.mock('./series.js', () => ({
   seriesStore: () => ({ recordDir: (id) => `/mock/series/${id}` }),
+  listSeries: async () => {
+    const ids = [];
+    for (const key of fileStore.keys()) {
+      const id = /^\/mock\/series\/([^/]+)\//.exec(key)?.[1];
+      if (id && !ids.includes(id)) ids.push(id);
+    }
+    return ids.map((id) => ({ id }));
+  },
 }));
 
 // No manuscript sections needed for most tests (seed resolves issueId/stageId
@@ -25,7 +35,7 @@ vi.mock('./arcPlanner.js', () => ({
 
 import { recordEvents } from '../sharing/recordEvents.js';
 import { collectManuscriptSections } from './arcPlanner.js';
-import { seedReviewFromFindings, updateComment, mergeReviewFromSync, getReview } from './manuscriptReview.js';
+import { seedReviewFromFindings, updateComment, mergeReviewFromSync, getReview, locateComment, DISMISS_REASONS } from './manuscriptReview.js';
 
 describe('manuscriptReview — record-event emission on write', () => {
   let updates;
@@ -346,5 +356,219 @@ describe('manuscriptReview — sourceContentHash staleness fingerprint (#1345)',
       { problem: 'naming clash', anchorQuote: 'Alina', checkId: 'naming.x', sourceContentHash: 'hash-v1' },
     ]);
     expect(second.comments[0].updatedAt).toBe(stamp); // unchanged — no rewrite
+  });
+});
+
+describe('manuscriptReview — authoritative severity override re-grade (#1596)', () => {
+  beforeEach(() => { fileStore.clear(); });
+  const CHECK = 'prose.adverb-density';
+  const finding = (severity) => ({ problem: 'adverb density', anchorQuote: 'quickly', checkId: CHECK, severity });
+  const ran = { regradeCheckIds: [CHECK] }; // this check ran this pass
+
+  it('re-grades a re-surfaced open comment to the pinned level via severityOverrides', async () => {
+    await seedReviewFromFindings('ser-sev', [finding('low')], ran);
+    // Same finding key (severity is NOT part of the key) re-surfaces while the
+    // check is now pinned to `high` — the candidate carries the effective level.
+    const second = await seedReviewFromFindings('ser-sev', [finding('high')], {
+      ...ran, severityOverrides: { [CHECK]: 'high' },
+    });
+    expect(second.comments).toHaveLength(1); // deduped, not appended
+    expect(second.comments[0].severity).toBe('high'); // re-graded to the pinned level
+  });
+
+  it('re-grades a NON-resurfaced open comment of a pinned check (merge mode)', async () => {
+    await seedReviewFromFindings('ser-sev-merge', [finding('low')], ran);
+    // A later merge-mode run finds nothing for this check (LLM variance), but the
+    // check ran and is pinned to `high` — the lingering open must still re-grade.
+    const second = await seedReviewFromFindings('ser-sev-merge', [], {
+      ...ran, mode: 'merge', severityOverrides: { [CHECK]: 'high' },
+    });
+    expect(second.comments).toHaveLength(1); // not dismissed in merge mode
+    expect(second.comments[0].severity).toBe('high');
+  });
+
+  it('re-grades a re-surfaced open comment back to native when a pin is CLEARED', async () => {
+    await seedReviewFromFindings('ser-sev-clear', [finding('high')], {
+      ...ran, severityOverrides: { [CHECK]: 'high' },
+    });
+    // Pin cleared (no override map) and the finding re-surfaces at its native
+    // 'low' level — the comment must drop back to 'low', not stay stuck at 'high'.
+    const second = await seedReviewFromFindings('ser-sev-clear', [finding('low')], ran);
+    expect(second.comments).toHaveLength(1);
+    expect(second.comments[0].severity).toBe('low');
+  });
+
+  it('re-grades a NON-resurfaced open comment back to native when a pin is cleared', async () => {
+    // Mirror the runner's stamp for a pinned finding: effective high, native low.
+    await seedReviewFromFindings('ser-sev-clearmerge', [
+      { problem: 'adverb density', anchorQuote: 'quickly', checkId: CHECK, severity: 'high', nativeSeverity: 'low' },
+    ], { ...ran, severityOverrides: { [CHECK]: 'high' } });
+    // Pin cleared, and a later merge run (this check ran, found nothing) — the
+    // lingering open must still drop from the old pin back to its stored native.
+    const second = await seedReviewFromFindings('ser-sev-clearmerge', [], { ...ran, mode: 'merge' });
+    expect(second.comments).toHaveLength(1); // preserved in merge mode
+    expect(second.comments[0].severity).toBe('low'); // restored from stored nativeSeverity
+  });
+
+  it('does NOT re-grade a pinned comment for a check excluded from a targeted subset run', async () => {
+    // A comment pinned high (native low) for adverb-density.
+    await seedReviewFromFindings('ser-sev-subset', [
+      { problem: 'adverb density', anchorQuote: 'quickly', checkId: CHECK, severity: 'high', nativeSeverity: 'low' },
+    ], { ...ran, severityOverrides: { [CHECK]: 'high' } });
+    // A later SUBSET run targets a DIFFERENT check only: adverb-density neither
+    // re-surfaces nor appears in severityOverrides/regradeCheckIds. Its pinned
+    // comment must be left alone (NOT silently cleared back to native).
+    const second = await seedReviewFromFindings('ser-sev-subset', [
+      { problem: 'other', anchorQuote: 'x', checkId: 'prose.other-check', severity: 'medium', nativeSeverity: 'medium' },
+    ], { mode: 'merge', severityOverrides: {}, regradeCheckIds: ['prose.other-check'] });
+    const pinned = second.comments.find((c) => c.checkId === CHECK);
+    expect(pinned.severity).toBe('high'); // pin preserved — not cleared to native
+  });
+
+  it('does NOT churn a never-pinned non-resurfaced comment (native == severity)', async () => {
+    const first = await seedReviewFromFindings('ser-sev-stable', [finding('high')], ran);
+    const stamp = first.comments[0].updatedAt;
+    expect(first.comments[0].nativeSeverity).toBe('high'); // defaults to severity
+    const second = await seedReviewFromFindings('ser-sev-stable', [], { ...ran, mode: 'merge' });
+    expect(second.comments[0].severity).toBe('high'); // unchanged
+    expect(second.comments[0].updatedAt).toBe(stamp); // no rewrite
+  });
+
+  it('does NOT churn updatedAt when the pinned level already matches', async () => {
+    const first = await seedReviewFromFindings('ser-sev-nochurn', [finding('high')], ran);
+    const stamp = first.comments[0].updatedAt;
+    const second = await seedReviewFromFindings('ser-sev-nochurn', [finding('high')], {
+      ...ran, severityOverrides: { [CHECK]: 'high' },
+    });
+    expect(second.comments[0].updatedAt).toBe(stamp); // unchanged — no rewrite
+  });
+});
+
+describe('manuscriptReview — false-positive dismissal reason (#1605)', () => {
+  beforeEach(() => fileStore.clear());
+
+  it('exposes false-positive as the canonical dismissal reason', () => {
+    expect(DISMISS_REASONS).toContain('false-positive');
+  });
+
+  it('seeded findings carry a null dismissReason by default', async () => {
+    const seeded = await seedReviewFromFindings('fp-seed', [{ problem: 'P', anchorQuote: 'q' }]);
+    expect(seeded.comments[0].dismissReason).toBeNull();
+  });
+
+  it('updateComment records a false-positive dismissal', async () => {
+    const seeded = await seedReviewFromFindings('fp-set', [{ problem: 'P', anchorQuote: 'q' }]);
+    const id = seeded.comments[0].id;
+    const updated = await updateComment('fp-set', id, { status: 'dismissed', dismissReason: 'false-positive' });
+    expect(updated.status).toBe('dismissed');
+    expect(updated.dismissReason).toBe('false-positive');
+    // Survives a read-back through sanitize (the same shaper sync uses).
+    const persisted = (await getReview('fp-set')).comments[0];
+    expect(persisted.dismissReason).toBe('false-positive');
+  });
+
+  it('clears the reason when the finding is re-opened', async () => {
+    const seeded = await seedReviewFromFindings('fp-reopen', [{ problem: 'P', anchorQuote: 'q' }]);
+    const id = seeded.comments[0].id;
+    await updateComment('fp-reopen', id, { status: 'dismissed', dismissReason: 'false-positive' });
+    const reopened = await updateComment('fp-reopen', id, { status: 'open' });
+    // sanitize drops a reason that no longer applies to the (non-dismissed) status.
+    expect(reopened.dismissReason).toBeNull();
+  });
+
+  it('clears the reason on an explicit plain dismiss (dismissReason: null)', async () => {
+    const seeded = await seedReviewFromFindings('fp-plain', [{ problem: 'P', anchorQuote: 'q' }]);
+    const id = seeded.comments[0].id;
+    await updateComment('fp-plain', id, { status: 'dismissed', dismissReason: 'false-positive' });
+    const plain = await updateComment('fp-plain', id, { status: 'dismissed', dismissReason: null });
+    expect(plain.status).toBe('dismissed');
+    expect(plain.dismissReason).toBeNull();
+  });
+
+  it('rejects an unknown reason (sanitizes to null)', async () => {
+    const seeded = await seedReviewFromFindings('fp-bad', [{ problem: 'P', anchorQuote: 'q' }]);
+    const id = seeded.comments[0].id;
+    const updated = await updateComment('fp-bad', id, { status: 'dismissed', dismissReason: 'bogus' });
+    expect(updated.dismissReason).toBeNull();
+  });
+
+  it('survives a sync round-trip and never resurrects a stale reason on a non-dismissed peer record', async () => {
+    const merged = await mergeReviewFromSync('fp-sync', {
+      comments: [
+        { id: 'fp1', problem: 'real fp', status: 'dismissed', dismissReason: 'false-positive', updatedAt: '2026-06-25T00:00:00Z' },
+        { id: 'fp2', problem: 'open with stray reason', status: 'open', dismissReason: 'false-positive', updatedAt: '2026-06-25T00:00:00Z' },
+      ],
+    });
+    const byId = Object.fromEntries(merged.comments.map((c) => [c.id, c]));
+    expect(byId.fp1.dismissReason).toBe('false-positive');
+    expect(byId.fp2.dismissReason).toBeNull(); // not dismissed → reason dropped
+  });
+});
+
+describe('manuscriptReview — locateComment (cross-series deep-link resolver, #1608)', () => {
+  beforeEach(() => { fileStore.clear(); });
+
+  it('resolves the owning series + comment for a known id', async () => {
+    await seedReviewFromFindings('loc-a', [{ problem: 'Act I drags', anchorQuote: 'q1' }]);
+    const seededB = await seedReviewFromFindings('loc-b', [{ problem: 'POV slips', anchorQuote: 'q2' }]);
+    const targetId = seededB.comments[0].id;
+
+    const located = await locateComment(targetId);
+    expect(located).toMatchObject({ seriesId: 'loc-b' });
+    expect(located.comment.id).toBe(targetId);
+    expect(located.comment.problem).toBe('POV slips');
+  });
+
+  it('returns null when no series review owns the id', async () => {
+    await seedReviewFromFindings('loc-a', [{ problem: 'P', anchorQuote: 'q' }]);
+    expect(await locateComment('comment-does-not-exist')).toBeNull();
+  });
+
+  it('returns null for a blank/non-string id without scanning', async () => {
+    expect(await locateComment('')).toBeNull();
+    expect(await locateComment(null)).toBeNull();
+    expect(await locateComment(undefined)).toBeNull();
+  });
+});
+
+describe('manuscriptReview — accepted-fix undo snapshot (#1609)', () => {
+  beforeEach(() => { fileStore.clear(); });
+
+  const snapshot = () => ({
+    acceptedAt: '2026-06-25T00:00:00.000Z',
+    sections: [{ issueId: 'i1', stageId: 'prose', priorText: 'Before.', appliedHash: 'a'.repeat(64) }],
+  });
+
+  it('persists the snapshot while accepted and round-trips it through getReview', async () => {
+    const seeded = await seedReviewFromFindings('ser-1', [{ problem: 'P', anchorQuote: 'q' }]);
+    const id = seeded.comments[0].id;
+    const updated = await updateComment('ser-1', id, { status: 'accepted', acceptedSnapshot: snapshot() });
+    expect(updated.status).toBe('accepted');
+    expect(updated.acceptedSnapshot.sections[0]).toMatchObject({ issueId: 'i1', stageId: 'prose', priorText: 'Before.' });
+    const review = await getReview('ser-1');
+    expect(review.comments[0].acceptedSnapshot.sections[0].priorText).toBe('Before.');
+  });
+
+  it('drops the snapshot when the comment is re-opened (status gate)', async () => {
+    const seeded = await seedReviewFromFindings('ser-1', [{ problem: 'P', anchorQuote: 'q' }]);
+    const id = seeded.comments[0].id;
+    await updateComment('ser-1', id, { status: 'accepted', acceptedSnapshot: snapshot() });
+    const reopened = await updateComment('ser-1', id, { status: 'open' });
+    expect(reopened.status).toBe('open');
+    expect(reopened.acceptedSnapshot).toBeNull();
+  });
+
+  it('drops a malformed snapshot (missing priorText) and an open-comment snapshot', async () => {
+    const seeded = await seedReviewFromFindings('ser-1', [{ problem: 'P', anchorQuote: 'q' }]);
+    const id = seeded.comments[0].id;
+    // Snapshot on an open comment never persists.
+    const stillOpen = await updateComment('ser-1', id, { acceptedSnapshot: snapshot() });
+    expect(stillOpen.acceptedSnapshot).toBeNull();
+    // Accepted but malformed (no priorText) sanitizes to null.
+    const bad = await updateComment('ser-1', id, {
+      status: 'accepted',
+      acceptedSnapshot: { sections: [{ issueId: 'i1', stageId: 'prose' }] },
+    });
+    expect(bad.acceptedSnapshot).toBeNull();
   });
 });

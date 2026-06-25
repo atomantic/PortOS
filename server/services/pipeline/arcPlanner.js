@@ -25,6 +25,7 @@
 
 export * from './arcPlanner/context.js';
 export * from './arcPlanner/arcCore.js';
+export * from './arcPlanner/beatContinuity.js';
 export * from './arcPlanner/episodeSeedPass.js';
 export * from './arcPlanner/completenessPass.js';
 export * from './arcPlanner/manuscriptDerive.js';
@@ -33,8 +34,9 @@ export * from './arcPlanner/coverConcepts.js';
 // Internals surfaced for tests (was an inline `export const __testing` before
 // the split). Pulled back together here from their new home modules so the
 // existing `__testing` import contract is preserved.
-import { buildArcOverviewContext, shapeSeasonOutlines, buildVerifyContext, buildResolveContext, shapeVerifyIssues, shapeFindings, renderVolumeIssue, buildNeighborVolumes } from './arcPlanner/context.js';
+import { buildArcOverviewContext, shapeSeasonOutlines, buildVerifyContext, buildResolveContext, shapeVerifyIssues, shapeFindings, renderVolumeIssue, buildNeighborVolumes, buildBeatContinuityContext, shapeBeatResolutions } from './arcPlanner/context.js';
 import { buildVolumeVerifyContext, mergeArcWithLocks, mergeSeasonsWithLocks } from './arcPlanner/arcCore.js';
+import { applyBeatResolutions } from './arcPlanner/beatContinuity.js';
 import { buildSeasonEpisodesContext, shapeEpisodes } from './arcPlanner/episodeSeedPass.js';
 import { shapeCompletenessFindings, buildCompletenessContext } from './arcPlanner/completenessPass.js';
 import { issueSynopsisFromSeason } from './arcPlanner/manuscriptDerive.js';
@@ -56,4 +58,7 @@ export const __testing = {
   buildNeighborVolumes,
   mergeArcWithLocks,
   mergeSeasonsWithLocks,
+  buildBeatContinuityContext,
+  shapeBeatResolutions,
+  applyBeatResolutions,
 };

@@ -46,6 +46,7 @@ import { runPromptRefine, runImagePromptCandidates } from './refineHelpers.js';
 import { pickCanon } from './seriesCanon.js';
 import { STYLE_PROMPT_OVERRIDE_MODE_DEFAULT } from './series.js';
 import { ASPECT_PRESETS } from '../../lib/creativeDirectorPresets.js';
+import { sameComicScene } from '../../lib/comicScriptParser.js';
 import { IMAGE_GEN_MODE } from '../imageGen/modes.js';
 import { resolveImageCleaners } from '../imageGen/index.js';
 
@@ -183,6 +184,120 @@ const resolveProofInitImage = (proofImage, label) => {
   return resolved;
 };
 
+// Consistency-reference denoise: when an ADJACENT page is passed as a reference
+// (continuing the same scene so incidental, un-described characters and the
+// environment stay consistent), we want the NEW page's composition to come from
+// its own prompt while only borrowing identity/style from the reference. So this
+// is a HIGH denoise (mostly follow the prompt) — the opposite of proof-as-base's
+// 0.25 (preserve layout for an upscale). Local i2i honors it; codex passes the
+// reference as an `-i` attachment (reference mode), where strength is moot.
+const REFERENCE_PAGE_DEFAULT_STRENGTH = 0.8;
+
+// Default denoise for the per-page "Refine" image-to-image correction (issue
+// #1534). The page is re-rendered FROM ITS OWN existing image, so this is a
+// low strength: preserve the panel layout / composition / lettering and move
+// only enough pixels to honor the small requested change. Higher than
+// proof-as-base's 0.25 (which merely upscales) because a refine must actually
+// apply an edit; far below the reference path's 0.8 (which mostly follows a
+// fresh prompt). Tweakable per-call via options.initImageStrength.
+const REFINE_RENDER_DEFAULT_STRENGTH = 0.35;
+
+// Resolve an adjacent page's rendered image to a gallery path for use as a
+// consistency reference. Prefers the final render, falls back to the proof.
+// Throws a clear 400 when that page hasn't been rendered yet.
+const resolvePageReferenceImage = (refPage, label) => {
+  const name = refPage?.finalImage?.filename || refPage?.proofImage?.filename;
+  if (typeof name !== 'string' || !name) {
+    throw new ServerError(
+      `Cannot use ${label} as a consistency reference: it has no rendered image yet — render that page first.`,
+      { status: 400, code: 'PIPELINE_COMIC_REFERENCE_MISSING' },
+    );
+  }
+  const resolved = resolveGalleryImage(name, { mustExist: false });
+  if (!resolved) {
+    throw new ServerError(
+      `Reference image path escaped the gallery for ${label}: ${name}`,
+      { status: 400, code: 'PIPELINE_COMIC_REFERENCE_NOT_FOUND' },
+    );
+  }
+  return resolved;
+};
+
+// Resolve the `referencePage` option ('prior' | 'next' | <0-based index>) to a
+// concrete page index, or null when unset. Pure + bounds-checked against the
+// page count; throws a clear 400 for an out-of-range request (prior on page 1,
+// next on the last page, or an explicit index that doesn't exist).
+export function resolveReferencePageIndex(referencePage, pageIndex, pageCount) {
+  if (referencePage == null) return null;
+  let target;
+  if (referencePage === 'prior') target = pageIndex - 1;
+  else if (referencePage === 'next') target = pageIndex + 1;
+  else if (Number.isInteger(referencePage)) target = referencePage;
+  else throw new ServerError(`Invalid referencePage: ${referencePage}`, { status: 400, code: 'PIPELINE_COMIC_REFERENCE_BAD' });
+  if (target === pageIndex) {
+    throw new ServerError('A page cannot be its own consistency reference', { status: 400, code: 'PIPELINE_COMIC_REFERENCE_SELF' });
+  }
+  if (target < 0 || target >= pageCount) {
+    throw new ServerError(
+      `Consistency reference page ${target + 1} is out of range (have ${pageCount} page${pageCount === 1 ? '' : 's'})`,
+      { status: 400, code: 'PIPELINE_COMIC_REFERENCE_RANGE' },
+    );
+  }
+  return target;
+}
+
+// Auto-pick a consistency reference for a fresh page render: the immediately
+// prior page, but ONLY when it shares this page's scene AND has already been
+// rendered. This is the default when the caller doesn't name an explicit
+// `referencePage` — so a continuing scene keeps its incidental characters and
+// environment consistent page-to-page, while a scene boundary renders fresh
+// (the "don't reference the prior page across a scene cut" rule). Pure +
+// soft: returns null (rather than throwing) when there's no prior page, the
+// scenes differ, scene markers are absent (legacy scripts → no auto-chain), or
+// the prior page has no image yet — auto-chaining is a best-effort nicety, not
+// a hard requirement like an explicitly requested reference.
+export function resolveAutoReferenceIndex(pages, pageIndex) {
+  const cur = pages?.[pageIndex];
+  const prior = pages?.[pageIndex - 1];
+  if (!cur || !prior) return null;
+  if (!sameComicScene(prior, cur)) return null;
+  const hasImage = !!(prior.finalImage?.filename || prior.proofImage?.filename);
+  return hasImage ? pageIndex - 1 : null;
+}
+
+// Resolve which init image (if any) a comic-page render should use, applying
+// the three precedence tiers in order:
+//   1. EXPLICIT `referencePage` ('prior' | 'next' | <index>) — strongest
+//      intent; bounds-checked (throws on an out-of-range request). `'none'`
+//      opts out of the AUTO tier (no cross-page reference, even mid-scene).
+//   2. PROOF-AS-BASE — a final-variant upscale off this page's own proof. Beats
+//      auto so "Final from proof" still preserves panel layout. Orthogonal to
+//      `'none'` (it's a self-upscale, not a sibling reference), so it still
+//      applies when the user picked 'none' but left the proof-as-base box on.
+//   3. AUTO — chain off the prior page when it shares this page's scene and is
+//      already rendered; a scene boundary (or absent scene markers) skips it.
+// Pure; returns the chosen tier so the caller picks the init image + strength
+// and logs it. `autoReference` is true only when the AUTO tier supplied the
+// page (so callers can distinguish it from an explicit reference).
+export function resolveComicPageReference({ referencePage, useProofAsBase, variant, pages, pageIndex }) {
+  const explicitOff = referencePage === 'none';
+  const wantsExplicit = !explicitOff && referencePage != null && referencePage !== 'auto';
+  const explicitIndex = wantsExplicit
+    ? resolveReferencePageIndex(referencePage, pageIndex, pages.length)
+    : null;
+  const fromProof = explicitIndex == null && variant === 'final' && useProofAsBase === true;
+  const autoIndex = (explicitIndex == null && !fromProof && !explicitOff)
+    ? resolveAutoReferenceIndex(pages, pageIndex)
+    : null;
+  const referencePageIndex = explicitIndex != null ? explicitIndex : autoIndex;
+  return {
+    referencePageIndex,
+    fromReference: referencePageIndex != null,
+    autoReference: referencePageIndex != null && explicitIndex == null,
+    fromProof,
+  };
+}
+
 const loadBibleContext = async (issueId) => {
   const issueChain = (async () => {
     const issue = await getIssue(issueId);
@@ -268,14 +383,26 @@ export function composeVisualPrompt({ series, description, slugline = '', extraS
 // cloud-outline for thoughts), but a diffusion model treats them as more text
 // to letter. Map them to visual balloon-style hints so the artist still gets
 // the cue without the label leaking into the lettering.
+// `disembodied: true` marks a modifier whose SPEAKER is NOT physically in the
+// panel — a station PA, a radio voice, an off-panel shout. Without an explicit
+// cue the image model gives the line a normal tailed balloon and points it at
+// whoever IS drawn (e.g. JUNO's `(SPEAKERS)` PA line got attributed to a
+// visible newlywed). formatBalloon turns the flag into a "do NOT tail to any
+// visible character" instruction. Order matters — first match wins, so the
+// broadcast/PA rule precedes the generic transmission rule.
 const BALLOON_STYLE_HINTS = [
-  { test: /\b(EARPIECE|RADIO|COMM|TRANSMISSION|PHONE|HOLO|HOLOGRAM|INTERCOM|SPEAKER|TV|MONITOR|VIDEO)\b/, hint: 'jagged electronic/transmission balloon with bolt-shaped tail' },
+  { test: /\b(SPEAKERS?|P\.?A\.?|BROADCAST|ANNOUNCE(?:D|S|MENT)?|ANNOUNCER|LOUDSPEAKER|OVERHEAD|INTERCOM|TANNOY|PAGING|STATIONWIDE|SHIPWIDE)\b/, hint: 'jagged electronic broadcast/PA balloon, no tail (disembodied announcement from an overhead source)', disembodied: true },
+  // Transmission devices are AMBIGUOUS — the speaker may be a visible character
+  // talking into the device, or a remote voice — so this gets the electronic
+  // style WITHOUT the "not in panel" claim (that's reserved for unambiguous
+  // broadcast/off-panel/V.O. above).
+  { test: /\b(EARPIECE|RADIO|COMMS?|TRANSMISSION|PHONE|HOLO|HOLOGRAM|TV|MONITOR|VIDEO|COMLINK|CHANNEL)\b/, hint: 'jagged electronic/transmission balloon with bolt-shaped tail' },
+  { test: /\b(OFF[\- ]?PANEL|OFF[\- ]?SCREEN|O\.?S\.?|O\.?P\.?)\b/, hint: 'off-panel balloon with the tail pointing past the panel border', disembodied: true },
+  { test: /\b(NARRATION|VOICE[\- ]?OVER|V\.?O\.?)\b/, hint: 'rectangular narration caption rather than a speech balloon', disembodied: true },
   { test: /\b(WHISPER(?:ED|S|ING)?|SOTTO|HUSHED|QUIET)\b/, hint: 'dashed-outline whisper balloon' },
   { test: /\b(SHOUT(?:ED|S|ING)?|YELL(?:ED|S|ING)?|SCREAM(?:ED|S|ING)?|ANGRY|BURST)\b/, hint: 'spiked/burst-shaped balloon' },
   { test: /\b(THOUGHT|THINKING|INTERNAL)\b/, hint: 'cloud-outline thought balloon with chain-of-bubbles tail' },
   { test: /\b(SING(?:S|ING)?|SONG|MUSICAL)\b/, hint: 'wavy musical balloon with musical-note flourish' },
-  { test: /\b(OFF[\- ]?PANEL|OFF[\- ]?SCREEN|O\.?S\.?|O\.?P\.?)\b/, hint: 'off-panel balloon with tail pointing past the panel border' },
-  { test: /\b(NARRATION|VOICE[\- ]?OVER|V\.?O\.?)\b/, hint: 'rectangular narration caption rather than a speech balloon' },
 ];
 
 /**
@@ -296,12 +423,17 @@ function formatBalloon(character, line) {
   const speaker = (m ? m[1] : raw).trim() || 'CHAR';
   const modifier = m ? m[2].trim() : '';
   const cleanText = text.replace(/^"+|"+$/g, '').trim();
-  const styleHint = modifier
-    ? BALLOON_STYLE_HINTS.find((h) => h.test.test(modifier.toUpperCase()))?.hint
+  const styleEntry = modifier
+    ? BALLOON_STYLE_HINTS.find((h) => h.test.test(modifier.toUpperCase())) || null
     : null;
-  const attribution = styleHint
-    ? `(spoken by ${speaker}; ${styleHint})`
-    : `(spoken by ${speaker})`;
+  // A disembodied speaker (PA, radio, off-panel, V.O.) is NOT in the panel, so
+  // spell that out — otherwise the model letters a normal balloon and tails it
+  // to whoever IS drawn, mis-attributing the line (the JUNO `(SPEAKERS)` bug).
+  const attribution = styleEntry?.disembodied
+    ? `(spoken by ${speaker}, who is NOT visible in this panel — render as a ${styleEntry.hint}; do NOT attach the balloon tail to any visible character)`
+    : styleEntry
+      ? `(spoken by ${speaker}; ${styleEntry.hint})`
+      : `(spoken by ${speaker})`;
   // Terminator handled here so endPunct() at the call site doesn't have to
   // navigate the closing paren — we always end with `).`.
   return `Speech balloon reads: "${cleanText}" ${attribution}.`;
@@ -773,13 +905,27 @@ export async function enqueueVisualComicPage(issueId, options = {}) {
 
   const mode = resolveMode(options, settings);
   const variant = resolveVariant(options.target);
-  const fromProof = variant === 'final' && options.useProofAsBase === true;
-  const initImagePath = fromProof
-    ? resolveProofInitImage(page.proofImage, `page ${pageIndex + 1}`)
-    : null;
-  const initImageStrength = fromProof
-    ? (Number.isFinite(options.initImageStrength) ? options.initImageStrength : PROOF_AS_BASE_DEFAULT_STRENGTH)
-    : undefined;
+
+  // Consistency reference: pass an already-rendered page as the init image so a
+  // continuing scene keeps its incidental, un-described characters and
+  // environment consistent (the "two newlyweds drift between pages" problem).
+  // The three-tier precedence (explicit > proof-as-base > auto-within-scene)
+  // lives in resolveComicPageReference.
+  const { referencePageIndex, fromReference, autoReference, fromProof } = resolveComicPageReference({
+    referencePage: options.referencePage,
+    useProofAsBase: options.useProofAsBase,
+    variant, pages, pageIndex,
+  });
+  const initImagePath = fromReference
+    ? resolvePageReferenceImage(pages[referencePageIndex], `page ${referencePageIndex + 1}`)
+    : fromProof
+      ? resolveProofInitImage(page.proofImage, `page ${pageIndex + 1}`)
+      : null;
+  const initImageStrength = fromReference
+    ? (Number.isFinite(options.initImageStrength) ? options.initImageStrength : REFERENCE_PAGE_DEFAULT_STRENGTH)
+    : fromProof
+      ? (Number.isFinite(options.initImageStrength) ? options.initImageStrength : PROOF_AS_BASE_DEFAULT_STRENGTH)
+      : undefined;
 
   // Build a free-text haystack from every panel's prose (description +
   // caption + sfx). Dialogue lines feed character matching via CAPS names
@@ -831,9 +977,132 @@ export async function enqueueVisualComicPage(issueId, options = {}) {
     prompt, world, settings, mode,
     options: { ...options, initImagePath, initImageStrength, ...loraRenderOptions(characterLoras) },
     owner: buildComicPagesOwner({ issueId, target: 'page', pageIndex, variant }),
-    logLine: `📄 Pipeline comic page — issue=${issueId.slice(0, 8)} page=${pageIndex + 1} panels=${page.panels.length} variant=${variant}${fromProof ? ' (from proof)' : ''}`,
+    logLine: `📄 Pipeline comic page — issue=${issueId.slice(0, 8)} page=${pageIndex + 1} panels=${page.panels.length} variant=${variant}${fromProof ? ' (from proof)' : ''}${fromReference ? ` (${autoReference ? 'auto-ref' : 'ref'} page ${referencePageIndex + 1})` : ''}`,
   });
-  return { jobId, mode, prompt, pageIndex, variant, fromProof };
+  return { jobId, mode, prompt, pageIndex, variant, fromProof, fromReference, autoReference, referencePageIndex };
+}
+
+/**
+ * AI prompt-refine + image-to-image re-render for a SMALL correction to an
+ * already-rendered comic page (issue #1534). Unlike `enqueueVisualComicPage`
+ * (which composes a fresh prompt from the page's panels and re-renders from
+ * source), this:
+ *
+ *   1. Takes the page's CURRENT render prompt (stored on the proof/final slot)
+ *      plus the user's free-text instruction, and asks the LLM to ADJUST that
+ *      prompt to reflect the instruction — never regenerating from the comic
+ *      script. Everything not called out by the instruction is preserved.
+ *   2. Re-renders image-to-image using the page's EXISTING output image as the
+ *      init base at a low denoise, so the panel layout / composition / lettering
+ *      survive and only the requested change moves.
+ *
+ * The base image (and the slot the refined render lands back on) is the page's
+ * final render when present, else its proof; `options.target` forces a variant.
+ * This is the common "page is mostly right, needs a tweak" case where a full
+ * re-render from the script would throw away everything good about the current
+ * output.
+ *
+ * Returns { jobId, mode, prompt, pageIndex, variant, changes, runId, providerId }.
+ */
+export async function refineComicPageRender(issueId, options = {}) {
+  const pageIndex = Number(options.pageIndex);
+  if (!Number.isInteger(pageIndex) || pageIndex < 0) {
+    throw new ServerError('pageIndex must be a non-negative integer', {
+      status: 400, code: 'PIPELINE_COMIC_PAGE_BAD_INDEX',
+    });
+  }
+  const instruction = (options.instruction || '').trim();
+  if (!instruction) {
+    throw new ServerError('instruction is required — describe the small change to apply', {
+      status: 400, code: 'PIPELINE_COMIC_REFINE_NO_INSTRUCTION',
+    });
+  }
+
+  const { issue, settings, series, world } = await loadBibleContext(issueId);
+  assertStageUnlocked(issue, 'comicPages');
+  const pages = Array.isArray(issue.stages?.comicPages?.pages) ? issue.stages.comicPages.pages : [];
+  const page = pages[pageIndex];
+  if (!page) {
+    throw new ServerError(`page index ${pageIndex} out of range (have ${pages.length})`, {
+      status: 404, code: 'PIPELINE_COMIC_PAGE_NOT_FOUND',
+    });
+  }
+
+  // Mirror the client's getProofSlot: a legacy page (pre proof/final split)
+  // stores its render at the record root (imageJobId/filename/prompt), and the
+  // UI surfaces that as the proof slot — so it shows the Refine control. Resolve
+  // the same legacy shape here, otherwise refining a page whose only render is
+  // legacy would 400 with NO_RENDER even though the UI shows it as rendered. The
+  // refined render lands on the proofImage slot, upgrading the record into the
+  // new shape (same as a /render of a legacy page).
+  const legacyProofSlot = (!page.proofImage?.filename && (page.imageJobId || page.filename))
+    ? { filename: page.filename || null, prompt: page.prompt || null }
+    : null;
+
+  // Resolve which rendered variant to refine: an explicit target wins; else
+  // prefer the final render, falling back to the proof. The refined render
+  // lands back on that SAME slot (the user is correcting that image).
+  const variant = options.target
+    ? resolveVariant(options.target)
+    : (page.finalImage?.filename ? 'final' : 'proof');
+  const baseSlot = variant === 'final'
+    ? page.finalImage
+    : (page.proofImage?.filename ? page.proofImage : legacyProofSlot);
+  const baseFilename = baseSlot?.filename;
+  if (!baseFilename) {
+    throw new ServerError(
+      `Cannot refine page ${pageIndex + 1}'s ${variant} render: it has no rendered image yet — render the page first.`,
+      { status: 400, code: 'PIPELINE_COMIC_REFINE_NO_RENDER' },
+    );
+  }
+  // The stored slot prompt is what we adjust — refusing to fall back to a
+  // recomposed-from-script prompt is the whole point (a surgical edit, not a
+  // redraw). A legacy slot without a persisted prompt must be re-rendered once
+  // through `/render` (which stamps the prompt) before it can be refined.
+  const currentPrompt = (baseSlot.prompt || '').trim();
+  if (!currentPrompt) {
+    throw new ServerError(
+      `Cannot refine page ${pageIndex + 1}'s ${variant} render: its stored render prompt is missing — re-render the page first.`,
+      { status: 400, code: 'PIPELINE_COMIC_REFINE_NO_PROMPT' },
+    );
+  }
+  const initImagePath = resolveGalleryImage(baseFilename, { mustExist: false });
+  if (!initImagePath) {
+    throw new ServerError(
+      `Existing page image path escaped the gallery for page ${pageIndex + 1}: ${baseFilename}`,
+      { status: 400, code: 'PIPELINE_COMIC_REFINE_NOT_FOUND' },
+    );
+  }
+
+  // Ask the LLM to apply the instruction to the existing prompt. resultField
+  // 'prompt' + runPromptRefine's validation guarantees a non-empty string back;
+  // `changes` is the short "what I changed" bullet list the UI surfaces.
+  const { refined, changes, runId, providerId } = await runPromptRefine({
+    templateName: 'pipeline-comic-page-refine-render',
+    variables: {
+      series: seriesBibleCtx(series),
+      issue: issueCtx(issue),
+      pageNumber: pageIndex + 1,
+      currentPrompt: currentPrompt.slice(0, 16_000),
+      instruction: instruction.slice(0, 2000),
+    },
+    options,
+    source: 'pipeline-comic-page-refine-render',
+    logTag: `Pipeline comic page refine — issue=${issueId.slice(0, 8)} page=${pageIndex + 1} variant=${variant}`,
+  });
+
+  const mode = resolveMode(options, settings);
+  const initImageStrength = Number.isFinite(options.initImageStrength)
+    ? Math.min(Math.max(options.initImageStrength, 0), 1)
+    : REFINE_RENDER_DEFAULT_STRENGTH;
+
+  const jobId = enqueueImageJob({
+    prompt: refined, world, settings, mode,
+    options: { ...options, initImagePath, initImageStrength },
+    owner: buildComicPagesOwner({ issueId, target: 'page', pageIndex, variant }),
+    logLine: `🪄 Pipeline comic page refine — issue=${issueId.slice(0, 8)} page=${pageIndex + 1} variant=${variant} strength=${initImageStrength}`,
+  });
+  return { jobId, mode, prompt: refined, pageIndex, variant, changes, runId, providerId };
 }
 
 /**

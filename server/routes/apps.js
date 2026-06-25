@@ -15,7 +15,8 @@ import { validateRequest, appSchema, appUpdateSchema, sanitizeTaskMetadata, docu
 import * as git from '../services/git.js';
 import { parseCronToNextRun } from '../services/eventScheduler.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { parseEcosystemFromPath, usesPm2 } from '../services/streamingDetect.js';
+import { parseEcosystemFromPath, usesPm2, writeEcosystemPortEdits } from '../services/streamingDetect.js';
+import { checkViteHost, findViteConfig, rewriteAllowedHosts } from '../lib/viteAllowedHosts.js';
 import { detectAppIcon, getIconContentType, isUsableSvg } from '../services/appIconDetect.js';
 import { hasDeployScript } from '../services/appDeployer.js';
 import { checkScripts, installScripts, XCODE_SCRIPT_NAMES } from '../services/xcodeScripts.js';
@@ -303,6 +304,91 @@ router.post('/:id/upgrade-tls', loadApp, asyncHandler(async (req, res) => {
   });
 }));
 
+// GET /api/apps/:id/vite-host-check?host=<hostname> - Report whether the app's
+// Vite dev server would accept requests for `host` (the Tailscale MagicDNS / IP
+// name PortOS is served under). Vite ≥5 blocks unknown hosts, so launching an
+// app's Dev UI over Tailscale fails until that host is allow-listed. This drives
+// the Dev-UI launch guard and the remediation UI in the app detail view.
+router.get('/:id/vite-host-check', loadApp, asyncHandler(async (req, res) => {
+  const app = req.loadedApp;
+  const host = typeof req.query.host === 'string' ? req.query.host.trim() : '';
+  const extraDirs = (app.processes || []).map((p) => p.cwd).filter(Boolean);
+  const status = await checkViteHost(app.repoPath, host, { extraDirs });
+  res.json({ host, ...status });
+}));
+
+// POST /api/apps/:id/fix-vite-hosts - Remediate the Vite allowedHosts block.
+//   mode 'allow-all' (default): deterministically rewrite the app's vite.config
+//     to `server.allowedHosts: true`. Safe for a private Tailscale network and
+//     the most reliable fix; bails (422) when the config shape is too unusual to
+//     edit without risking corruption, steering the user to the AI path.
+//   mode 'ai': spawn a CoS agent that edits the app's vite.config in its OWN
+//     repo (honoring the Scope Boundary) — handles arbitrary config shapes and
+//     can create a vite.config when none exists.
+const fixViteHostsSchema = z.object({
+  mode: z.enum(['allow-all', 'ai']).default('allow-all'),
+  host: z.string().trim().optional()
+});
+router.post('/:id/fix-vite-hosts', loadApp, asyncHandler(async (req, res) => {
+  const { mode, host } = validateRequest(fixViteHostsSchema, req.body);
+  const app = req.loadedApp;
+  if (!app.repoPath || !await pathExists(app.repoPath)) {
+    throw new ServerError('App repository path not found', { status: 400, code: 'PATH_NOT_FOUND' });
+  }
+  const extraDirs = (app.processes || []).map((p) => p.cwd).filter(Boolean);
+  const config = await findViteConfig(app.repoPath, { extraDirs });
+
+  if (mode === 'ai') {
+    if (!cos.isRunning()) {
+      throw new ServerError(
+        'CoS is not running — start it to use AI remediation, or use the automatic fix.',
+        { status: 409, code: 'COS_NOT_RUNNING' }
+      );
+    }
+    const where = config ? config.path : `${app.repoPath} (no vite.config found — create one)`;
+    const task = await cos.addTask({
+      description: `Allow the Tailscale host in ${app.name}'s Vite config so its Dev UI loads`,
+      priority: 'MEDIUM',
+      app: app.id,
+      approvalRequired: true,
+      context: [
+        `The app "${app.name}" is launched through PortOS over a Tailscale MagicDNS hostname` +
+          (host ? ` ("${host}")` : '') + '.',
+        'Launching its Vite Dev UI fails with: "Blocked request. This host is not allowed."',
+        `Fix: edit ${where} so the dev server's \`server.allowedHosts\` accepts that host.`,
+        'Prefer `server.allowedHosts: true` (allow all — this app runs only on a private Tailscale network),',
+        'or add the specific host plus a leading-dot `.ts.net` suffix entry. Leave the rest of the config intact.',
+        'If no vite config exists, create a minimal vite.config.js that sets server.allowedHosts.'
+      ].join('\n')
+    }, 'internal');
+    return res.json({ ok: true, mode: 'ai', taskId: task.id, configPath: config?.path || null });
+  }
+
+  // mode === 'allow-all': deterministic rewrite.
+  if (!config) {
+    throw new ServerError(
+      'No vite.config found to edit automatically — use AI remediation, which can create one.',
+      { status: 422, code: 'NO_VITE_CONFIG' }
+    );
+  }
+  const rewrite = rewriteAllowedHosts(config.content);
+  if (!rewrite.ok) {
+    throw new ServerError(
+      `Could not safely auto-edit ${config.filename}: ${rewrite.reason}. Use AI remediation instead.`,
+      { status: 422, code: 'AUTO_FIX_UNSAFE' }
+    );
+  }
+  await atomicWrite(config.path, rewrite.content);
+  res.json({
+    ok: true,
+    mode: 'allow-all',
+    configPath: config.path,
+    filename: config.filename,
+    strategy: rewrite.strategy,
+    note: 'Restart the app (or its Vite dev server) for the change to take effect.'
+  });
+}));
+
 // GET /api/apps/:id/icon - Serve the app's detected icon image
 router.get('/:id/icon', loadApp, asyncHandler(async (req, res) => {
   const app = req.loadedApp;
@@ -373,6 +459,131 @@ router.post('/', asyncHandler(async (req, res, next) => {
 // PUT /api/apps/:id - Update app
 router.put('/:id', asyncHandler(async (req, res, next) => {
   const data = validateRequest(appUpdateSchema, req.body);
+
+  // Only port edits need the canonical-config write-back below; snapshot the
+  // pre-update ports just for those so ordinary updates (rename, archive,
+  // jira/datadog) don't pay the extra read + fs stat. tlsPort is omitted: it's
+  // synthetic (derived from cert presence / upgradeAppTls), never a literal in
+  // ecosystem.config.cjs, so there's nothing to rewrite for it.
+  const PORT_KEYS = ['apiPort', 'uiPort', 'devUiPort'];
+  const hasPortUpdate = PORT_KEYS.some(key => key in data);
+  const existing = hasPortUpdate ? await appsService.getAppById(req.params.id) : null;
+
+  // Port fields in apps.json are *derived* from ecosystem.config.cjs (the
+  // source of truth PM2 reads). Persist the change to the canonical config
+  // FIRST, before the derived registry: an unreadable/unwritable config then
+  // surfaces as a failed request instead of a 200 that leaves apps.json and
+  // PM2 disagreeing (the write throws and bubbles to the error middleware).
+  if (existing && usesPm2(existing.type) && await pathExists(existing.repoPath)) {
+    // Diff the submitted ports against the ACTUAL config values (not apps.json,
+    // whose top-level fields may be stale or absent for derived ports). This
+    // is the single source of truth for both "did it change" and "what's the
+    // old literal to rewrite": EditAppModal submits every field even on a
+    // rename, so a value equal to the config's current port is a no-op echo,
+    // and a value that differs is a genuine edit to persist.
+    const { processes: cfgProcs } = await parseEcosystemFromPath(existing.repoPath);
+    const LABEL_BY_KEY = { apiPort: 'api', uiPort: 'ui', devUiPort: 'devUi' };
+    const currentPort = {};
+    const procNameByKey = {}; // which process block owns each label (for targeted rewrites)
+    for (const proc of cfgProcs || []) {
+      for (const [key, label] of Object.entries(LABEL_BY_KEY)) {
+        if (currentPort[key] === undefined && Number.isInteger(proc.ports?.[label])) {
+          currentPort[key] = proc.ports[label];
+          procNameByKey[key] = proc.name;
+        }
+      }
+    }
+    // Count current values so a value-keyed rewrite never fires on a number
+    // shared by another port field (e.g. uiPort derived from apiPort, both
+    // 6000) — that would rewrite every occurrence and clobber the field the
+    // user didn't touch. Such a value can't be split by value alone; it falls
+    // through to the per-process-label-targeted rewrite below.
+    const valueCounts = new Map();
+    for (const key of PORT_KEYS) {
+      const v = currentPort[key];
+      if (Number.isInteger(v)) valueCounts.set(v, (valueCounts.get(v) || 0) + 1);
+    }
+    // A port is "changed" when the submitted value differs from the config's
+    // current value for that label. A field the config doesn't define has no
+    // literal to rewrite, so it isn't treated as a config edit here.
+    const changedKeys = PORT_KEYS.filter(key =>
+      Number.isInteger(currentPort[key]) && Number.isInteger(data[key]) && data[key] !== currentPort[key]);
+
+    // Served-by-API detection. When an app has an API process plus a Vite dev
+    // UI but no literal `ports.ui`, the prod UI is served by the API server, so
+    // the `uiPort` is *derived* (= apiPort) and CANNOT be set independently —
+    // there's no separate UI port literal in the config to rewrite. The edit
+    // drawer always submits every port field and never syncs the UI field to a
+    // changed API field, so an API-only edit arrives as `{ apiPort: <new>,
+    // uiPort: <old derived> }`. We can't distinguish that stale echo from a
+    // deliberate (impossible) independent UI change, so the only coherent
+    // behavior is to IGNORE the submitted uiPort entirely and pin the stored
+    // value to the derived port (= the post-edit API port). That tracks the API
+    // port on every save, never reverts, and never spuriously 422s the common
+    // API-edit path. The user changes this UI port by changing the API port.
+    const effectiveApiPort = Number.isInteger(data.apiPort) ? data.apiPort : currentPort.apiPort;
+    const derivedUiPort = deriveUiPort(undefined, effectiveApiPort, currentPort.devUiPort);
+    const uiIsDerived = currentPort.uiPort === undefined && Number.isInteger(derivedUiPort);
+    const remap = [];
+    const targetedEdits = []; // shared-value keys: rewritten by process + label
+    for (const key of changedKeys) {
+      const oldPort = currentPort[key]; // guaranteed integer by the filter above
+      // Value shared with another field (can't disambiguate by value): target
+      // the specific process block + label so the edit lands on exactly the
+      // port the user touched, not every occurrence of the shared literal.
+      if (valueCounts.get(oldPort) > 1 && procNameByKey[key]) {
+        targetedEdits.push({ processName: procNameByKey[key], label: LABEL_BY_KEY[key], oldPort, newPort: data[key] });
+        continue;
+      }
+      remap.push([oldPort, data[key]]);
+    }
+
+    // Pin the stored uiPort to the derived value for served-by-API apps (see
+    // above). This both overwrites the drawer's echoed/stale UI field and keeps
+    // the stored value tracking apiPort — deleting `data.uiPort` would NOT be
+    // enough, since updateApp merges omitted fields over the existing record, so
+    // a stale explicit `uiPort` from an earlier refresh would survive (truthy)
+    // and block re-derivation (after API 6000→7000 the GET path would keep
+    // returning 6000). Writing the derived value self-corrects on every save.
+    // (uiIsDerived is computed from the parsed CONFIG, not apps.json, so it's
+    // true even when apps.json already holds a stale explicit value.)
+    if (uiIsDerived) {
+      data.uiPort = derivedUiPort;
+    }
+
+    // Persist the value-keyed remap (distinct ports) and the targeted edits
+    // (shared-value ports) in ONE atomic write. Doing them as two separate
+    // writes would let the value-keyed pass land on disk before a later
+    // unpersistable targeted edit forces the 422 below — leaving config
+    // partially changed for a rejected request. writeEcosystemPortEdits
+    // computes both rewrites in memory and writes only when nothing is
+    // unpersistable.
+    const result = changedKeys.length > 0
+      ? await writeEcosystemPortEdits(existing.repoPath, remap, targetedEdits)
+      : { changed: false, remapApplied: false, applied: [], unapplied: [] };
+    if (result.changed) {
+      const remapMsg = result.remapApplied ? remap.map(([o, n]) => `${o}→${n}`).join(', ') : '';
+      const tgtMsg = targetedEdits.map(e => `${e.label} ${e.oldPort}→${e.newPort}`).join(', ');
+      console.log(`🔧 Updated ${result.file} ports for ${existing.name}: ${[remapMsg, tgtMsg].filter(Boolean).join(', ')} (restart the app to apply)`);
+    }
+
+    // Honesty gate: if the user changed a port we could NOT write to the
+    // source-of-truth config, reject the whole update rather than persist a
+    // registry value PM2 will contradict (and the next refresh will revert).
+    // `remap.length && !remapApplied` catches value-keyed pairs whose literal
+    // wasn't found; `unapplied` catches process/label edits that didn't match.
+    // On any unpersistable targeted edit the writer persists nothing, so this
+    // reject leaves the config untouched.
+    const valueKeyedFailed = remap.length > 0 && !result.remapApplied;
+    const targetedFailed = (result.unapplied || []).length > 0;
+    if (changedKeys.length > 0 && (valueKeyedFailed || targetedFailed)) {
+      throw new ServerError(
+        `Could not persist port change to ${existing.name}'s ecosystem config — the port is derived from process config or is not a literal value. Edit the ecosystem.config.cjs directly to change this port.`,
+        { status: 422, code: 'PORT_NOT_PERSISTABLE' }
+      );
+    }
+  }
+
   const app = await appsService.updateApp(req.params.id, data);
 
   if (!app) {

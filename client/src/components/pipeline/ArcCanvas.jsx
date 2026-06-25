@@ -2138,7 +2138,7 @@ function VolumeCoverThumb({ slot, label, emptyHint }) {
 }
 
 function VolumeCoversPanel({ series, season, seasons, onSeriesUpdate }) {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(true);
   const cover = season.cover || { script: '', proofImage: null, finalImage: null };
   const backCover = season.backCover || { script: '', proofImage: null, finalImage: null };
 

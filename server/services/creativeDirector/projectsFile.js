@@ -24,7 +24,11 @@ import {
   applySceneUpdate,
   appendRun,
   applyRunUpdate,
+  mergeProjectRecord,
 } from './projectsLogic.js';
+import {
+  maybeJournalBeforeOverwrite, setSyncBaseHash, contentHashForRecord, flushBaseHashes, deleteSyncBaseHash,
+} from '../../lib/conflictJournal.js';
 
 const PROJECTS_FILE = join(PATHS.data, 'creative-director-projects.json');
 
@@ -44,13 +48,22 @@ async function saveAll(projects) {
   await atomicWrite(PROJECTS_FILE, projects);
 }
 
-export async function listProjects() {
-  return loadAll();
+export async function listProjects({ includeDeleted = false } = {}) {
+  const all = await loadAll();
+  return includeDeleted ? all : all.filter((p) => !p.deleted);
 }
 
-export async function getProject(id) {
+export async function getProject(id, { includeDeleted = false } = {}) {
   const all = await loadAll();
-  return all.find((p) => p.id === id) || null;
+  const found = all.find((p) => p.id === id);
+  if (!found) return null;
+  return includeDeleted || !found.deleted ? found : null;
+}
+
+/** Live project ids (or all when includeDeleted) — used by tombstone GC sweeps. */
+export async function listProjectIds({ includeDeleted = false } = {}) {
+  const all = await loadAll();
+  return (includeDeleted ? all : all.filter((p) => !p.deleted)).map((p) => p.id);
 }
 
 export async function createProject(input) {
@@ -70,24 +83,85 @@ export async function createProject(input) {
 export async function updateProject(id, patch) {
   const all = await loadAll();
   const idx = all.findIndex((p) => p.id === id);
-  if (idx < 0) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  // Missing OR tombstoned (#1564 soft-delete) → gone for user-facing mutators, so a
+  // post-delete write can't resurrect + re-push a modified tombstone.
+  if (idx < 0 || all[idx].deleted) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
   all[idx] = applyProjectPatch(all[idx], patch);
   await saveAll(all);
   return all[idx];
 }
 
 export async function deleteProject(id) {
+  // Soft-delete tombstone (#1564) — mirrors projectsDB.deleteProject so the two
+  // backends can't drift. The record stays so the deletion can federate.
   const all = await loadAll();
-  const next = all.filter((p) => p.id !== id);
-  if (next.length === all.length) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
-  await saveAll(next);
+  const idx = all.findIndex((p) => p.id === id);
+  if (idx < 0 || all[idx].deleted) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const now = new Date().toISOString();
+  all[idx] = { ...all[idx], deleted: true, deletedAt: now, updatedAt: now };
+  await saveAll(all);
   return { ok: true };
+}
+
+/**
+ * File-backend mirror of projectsDB.js `mergeProjectsFromSync` — LWW-per-id
+ * (tombstone-aware) via the shared `mergeProjectRecord` decision so the two
+ * backends can't drift. Single load → per-record merge → single save.
+ */
+export async function mergeProjectsFromSync(remoteProjects, { source = { via: 'sync', peerId: null } } = {}) {
+  if (!Array.isArray(remoteProjects)) return { applied: false, count: 0 };
+  const all = await loadAll();
+  const byId = new Map(all.map((p) => [p.id, p]));
+  let changed = 0;
+  for (const remote of remoteProjects) {
+    const local = byId.get(remote?.id) || null;
+    const { next, inserted, remoteWins, changed: didChange } = mergeProjectRecord(local, remote);
+    if (!next) continue;
+    if (inserted) {
+      byId.set(next.id, next);
+      await setSyncBaseHash('creativeDirectorProject', next.id, contentHashForRecord('creativeDirectorProject', next));
+      changed += 1;
+      continue;
+    }
+    if (!remoteWins || !didChange) continue;
+    await maybeJournalBeforeOverwrite({ kind: 'creativeDirectorProject', id: next.id, local, remote: next, source });
+    byId.set(next.id, next);
+    await setSyncBaseHash('creativeDirectorProject', next.id, contentHashForRecord('creativeDirectorProject', next));
+    changed += 1;
+  }
+  if (changed > 0) await saveAll([...byId.values()]);
+  await flushBaseHashes();
+  if (changed === 0) return { applied: false, count: 0 };
+  return { applied: true, count: changed };
+}
+
+/**
+ * Hard-remove tombstoned projects whose deletedAt is older than the cutoff.
+ * Mirrors projectsDB.js `pruneTombstonedProjects`; evicts each pruned project's
+ * base hash.
+ */
+export async function pruneTombstonedProjects(olderThanMs) {
+  if (!Number.isFinite(olderThanMs)) return { pruned: 0 };
+  const all = await loadAll();
+  const survivors = [];
+  const pruned = [];
+  for (const p of all) {
+    const ms = p.deleted ? Date.parse(p.deletedAt || '') : NaN;
+    if (p.deleted && Number.isFinite(ms) && ms < olderThanMs) pruned.push(p.id);
+    else survivors.push(p);
+  }
+  if (pruned.length === 0) return { pruned: 0 };
+  await saveAll(survivors);
+  for (const id of pruned) await deleteSyncBaseHash('creativeDirectorProject', id);
+  return { pruned: pruned.length };
 }
 
 export async function setTreatment(id, treatmentInput) {
   const all = await loadAll();
   const idx = all.findIndex((p) => p.id === id);
-  if (idx < 0) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  // Missing OR tombstoned (#1564 soft-delete) → gone for user-facing mutators, so a
+  // post-delete write can't resurrect + re-push a modified tombstone.
+  if (idx < 0 || all[idx].deleted) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
   all[idx] = applyTreatment(all[idx], treatmentInput);
   await saveAll(all);
   return all[idx];
@@ -96,7 +170,9 @@ export async function setTreatment(id, treatmentInput) {
 export async function updateScene(id, sceneId, patch) {
   const all = await loadAll();
   const idx = all.findIndex((p) => p.id === id);
-  if (idx < 0) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  // Missing OR tombstoned (#1564 soft-delete) → gone for user-facing mutators, so a
+  // post-delete write can't resurrect + re-push a modified tombstone.
+  if (idx < 0 || all[idx].deleted) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
   const { project, updated } = applySceneUpdate(all[idx], sceneId, patch);
   all[idx] = project;
   await saveAll(all);
@@ -106,7 +182,9 @@ export async function updateScene(id, sceneId, patch) {
 export async function recordRun(id, runEntry) {
   const all = await loadAll();
   const idx = all.findIndex((p) => p.id === id);
-  if (idx < 0) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  // Missing OR tombstoned (#1564 soft-delete) → gone for user-facing mutators, so a
+  // post-delete write can't resurrect + re-push a modified tombstone.
+  if (idx < 0 || all[idx].deleted) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
   const { project, run } = appendRun(all[idx], runEntry);
   all[idx] = project;
   await saveAll(all);
@@ -116,7 +194,9 @@ export async function recordRun(id, runEntry) {
 export async function updateRun(id, runId, patch) {
   const all = await loadAll();
   const idx = all.findIndex((p) => p.id === id);
-  if (idx < 0) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  // Missing OR tombstoned (#1564 soft-delete) → gone for user-facing mutators, so a
+  // post-delete write can't resurrect + re-push a modified tombstone.
+  if (idx < 0 || all[idx].deleted) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
   const { project, updated } = applyRunUpdate(all[idx], runId, patch);
   if (updated === null) return null;
   all[idx] = project;

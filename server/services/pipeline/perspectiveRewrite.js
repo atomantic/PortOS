@@ -23,7 +23,7 @@ import { createHash, randomUUID } from 'crypto';
 import { PATHS, atomicWrite, ensureDir, tryReadFile, safeJSONParse } from '../../lib/fileUtils.js';
 import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
 import { runStagedLLM, resolveStageContext } from '../../lib/stageRunner.js';
-import { usableInputTokens, estimateTokens, CHARS_PER_TOKEN } from '../../lib/contextBudget.js';
+import { manuscriptContentBudgetChars, estimateTokens } from '../../lib/contextBudget.js';
 import { richCanonDescriptorFragments, flattenCanonDescriptorFragments } from '../../lib/canonPrompt.js';
 import { getIssue } from './issues.js';
 import { getSeries } from './series.js';
@@ -48,10 +48,10 @@ const RATIONALE_MAX = 600;
 const ONE_LINE_MAX = 400;
 const REWRITE_MAX_CHARS = 200_000;
 
-// Floor on source chars sent to the model — scaled UP to the target model's
-// context window (mirrors editorialAnalysis), so a big-context model rewrites
-// the whole passage rather than a 48K slice.
-const CONTENT_MAX = 48_000;
+// Output space reserved when budgeting the source passage against the model's
+// context window (see resolveStageContentMax) — the passage scales to fill the
+// window above a manuscript floor, so a big-context model rewrites the whole
+// passage while a small one trims to fit rather than overflowing a 48K floor.
 const REWRITE_OUTPUT_RESERVE_TOKENS = 6_000;
 const ANALYSIS_OUTPUT_RESERVE_TOKENS = 3_000;
 
@@ -184,19 +184,20 @@ const formatLabel = (stage) =>
   stage === 'comicScript' ? 'comic script' : stage === 'teleplay' ? 'teleplay' : 'prose';
 
 // Resolve a stage's usable content budget in chars, scaled to the (possibly
-// per-stage-pinned) model's context window and never below CONTENT_MAX. The
-// rewrite and analysis stages can be pinned to different providers/models, so
-// each must be budgeted against its OWN window — and `overheadText` must cover
-// every non-content token the stage's prompt renders (e.g. the full cast roster
-// the rewrite prompt prints), or a large cast silently overfills the window.
+// per-stage-pinned) model's context window, reserving a manuscript floor so a
+// small/local provider window trims the passage to fit rather than overflowing on
+// a fixed 48K floor (#1488); a big-context model scales up. The rewrite and
+// analysis stages can be pinned to different providers/models, so each must be
+// budgeted against its OWN window — and `overheadText` must cover every non-content
+// token the stage's prompt renders (e.g. the full cast roster the rewrite prompt
+// prints), or a large cast silently overfills the window.
 async function resolveStageContentMax(stage, { providerId, model, overheadText, outputReserveTokens }) {
   const { contextWindow } = await resolveStageContext(stage, { providerOverride: providerId, modelOverride: model });
-  const budgetChars = usableInputTokens({
+  return manuscriptContentBudgetChars({
     contextWindow,
     overheadTokens: 1_500 + estimateTokens(overheadText),
     outputReserveTokens,
-  }) * CHARS_PER_TOKEN;
-  return Math.max(CONTENT_MAX, budgetChars);
+  });
 }
 
 // ---------- generation ----------

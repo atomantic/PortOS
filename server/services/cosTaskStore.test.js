@@ -176,6 +176,21 @@ describe('cosTaskStore.addTask', () => {
     expect(tasks).toHaveLength(2);
   });
 
+  it('ignoreTaskId excludes one in-flight task from the dedup scan (perpetual drain-on-completion)', async () => {
+    // The just-completed perpetual task is still in_progress on disk when the
+    // refill re-queues an identical first-line for the same app. Passing its id
+    // as ignoreTaskId must let the new task through instead of colliding with it.
+    const first = await addTask({ description: 'claim issue', app: 'portos', id: 'sys-old' }, 'internal');
+    // Without ignoreTaskId the identical task collides...
+    const blocked = await addTask({ description: 'claim issue', app: 'portos' }, 'internal');
+    expect(blocked.duplicate).toBe(true);
+    // ...but excluding the still-in-flight task lets the refill queue the next one.
+    const allowed = await addTask({ description: 'claim issue', app: 'portos' }, 'internal', { raw: false, ignoreTaskId: first.id });
+    expect(allowed.duplicate).toBeUndefined();
+    const { tasks } = await getCosTasks();
+    expect(tasks.filter(t => firstLine(t.description) === 'claim issue')).toHaveLength(2);
+  });
+
   it('persists boolean override flags (true and false) into metadata', async () => {
     const task = await addTask({ description: 'flagged', useWorktree: false, openPR: true }, 'user');
     expect(task.metadata.useWorktree).toBe(false);
@@ -213,6 +228,35 @@ describe('cosTaskStore.updateTask', () => {
     const reopened = await updateTask('task-blk', { status: 'pending' }, 'user');
     expect(reopened.metadata.blockedReason).toBeUndefined();
     expect(reopened.metadata.blockedCategory).toBeUndefined();
+  });
+
+  it('releases the federation claim/lease when a task leaves in_progress (#1563)', async () => {
+    await addTask({ description: 'claimed', id: 'task-claimed' }, 'user');
+    // Spawn-time claim: status in_progress carries the claim metadata.
+    const claimed = await updateTask('task-claimed', {
+      status: 'in_progress',
+      metadata: { claimedBy: 'instance-a', claimedAt: '2026-01-01T00:00:00.000Z', leaseExpiresAt: '2026-01-01T00:30:00.000Z' }
+    }, 'user');
+    expect(claimed.metadata.claimedBy).toBe('instance-a');
+    // Completing the task strips the claim so it is freely re-claimable.
+    const done = await updateTask('task-claimed', { status: 'completed' }, 'user');
+    expect(done.metadata.claimedBy).toBeUndefined();
+    expect(done.metadata.claimedAt).toBeUndefined();
+    expect(done.metadata.leaseExpiresAt).toBeUndefined();
+  });
+
+  it('keeps the claim while the task stays in_progress (lease renewal, no status change) (#1563)', async () => {
+    await addTask({ description: 'renew', id: 'task-renew' }, 'user');
+    await updateTask('task-renew', {
+      status: 'in_progress',
+      metadata: { claimedBy: 'instance-a', claimedAt: '2026-01-01T00:00:00.000Z', leaseExpiresAt: '2026-01-01T00:30:00.000Z' }
+    }, 'user');
+    // A heartbeat renewal passes no status — the claim must survive and update.
+    const renewed = await updateTask('task-renew', {
+      metadata: { claimedBy: 'instance-a', claimedAt: '2026-01-01T00:00:00.000Z', leaseExpiresAt: '2026-01-01T01:00:00.000Z' }
+    }, 'user');
+    expect(renewed.metadata.claimedBy).toBe('instance-a');
+    expect(renewed.metadata.leaseExpiresAt).toBe('2026-01-01T01:00:00.000Z');
   });
 
   it('returns an error object when the file is missing', async () => {

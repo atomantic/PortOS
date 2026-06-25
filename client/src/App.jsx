@@ -48,10 +48,11 @@ const LoraDatasetDetail = lazyWithReload(() => import('./pages/LoraDatasetDetail
 const UniverseBuilder = lazyWithReload(() => import('./pages/UniverseBuilder'));
 const Universes = lazyWithReload(() => import('./pages/Universes'));
 const Authors = lazyWithReload(() => import('./pages/Authors'));
+const Music = lazyWithReload(() => import('./pages/Music'));
 const Catalog = lazyWithReload(() => import('./pages/Catalog'));
-const Songs = lazyWithReload(() => import('./pages/Songs'));
-const SongEditor = lazyWithReload(() => import('./pages/SongEditor'));
-const SongsGuide = lazyWithReload(() => import('./pages/SongsGuide'));
+const Rounds = lazyWithReload(() => import('./pages/Rounds'));
+const RoundEditor = lazyWithReload(() => import('./pages/RoundEditor'));
+const RoundsGuide = lazyWithReload(() => import('./pages/RoundsGuide'));
 const CatalogIngest = lazyWithReload(() => import('./pages/CatalogIngest'));
 const CatalogIngredient = lazyWithReload(() => import('./pages/CatalogIngredient'));
 const VideoTimeline = lazyWithReload(() => import('./pages/VideoTimeline'));
@@ -96,6 +97,7 @@ const StoryBuilder = lazyWithReload(() => import('./pages/StoryBuilder'));
 const PipelineSeries = lazyWithReload(() => import('./pages/PipelineSeries'));
 const PipelineSeriesRoadmap = lazyWithReload(() => import('./pages/PipelineSeriesRoadmap'));
 const PipelineEditorialChecks = lazyWithReload(() => import('./pages/PipelineEditorialChecks'));
+const PipelineFindingRedirect = lazyWithReload(() => import('./pages/PipelineFindingRedirect'));
 const PipelineReverseOutline = lazyWithReload(() => import('./pages/PipelineReverseOutline'));
 const PipelineContinuityBible = lazyWithReload(() => import('./pages/PipelineContinuityBible'));
 const PipelineManuscriptEditor = lazyWithReload(() => import('./pages/PipelineManuscriptEditor'));
@@ -292,9 +294,9 @@ export default function App() {
               at `/universes/:universeId`; `new` is the create-mode sentinel
               (UniverseBuilder treats it as no-id → blank draft). Universe ids are
               UUIDs, so `new` can never collide with a real record. */}
-          <Route path="songs" element={<Songs />} />
-          <Route path="songs/guide" element={<SongsGuide />} />
-          <Route path="songs/:id" element={<SongEditor />} />
+          <Route path="rounds" element={<Rounds />} />
+          <Route path="rounds/guide" element={<RoundsGuide />} />
+          <Route path="rounds/:id" element={<RoundEditor />} />
           <Route path="catalog" element={<Catalog />} />
           <Route path="catalog/ingest" element={<CatalogIngest />} />
           <Route path="catalog/:type/:id" element={<CatalogIngredient />} />
@@ -320,8 +322,11 @@ export default function App() {
           <Route path="story-builder/:storyId" element={<Navigate to="idea" replace />} />
           <Route path="story-builder/:storyId/:step" element={<StoryBuilder />} />
           <Route path="authors" element={<Authors />} />
+          <Route path="music" element={<Music />} />
+          <Route path="music/:tab" element={<Music />} />
           <Route path="pipeline" element={<Pipeline />} />
           <Route path="pipeline/editorial-checks" element={<PipelineEditorialChecks />} />
+          <Route path="pipeline/findings/:commentId" element={<PipelineFindingRedirect />} />
           <Route path="pipeline/series/:seriesId" element={<PipelineSeries />} />
           <Route path="pipeline/series/:seriesId/roadmap" element={<PipelineSeriesRoadmap />} />
           <Route path="pipeline/series/:seriesId/reverse-outline" element={<PipelineReverseOutline />} />

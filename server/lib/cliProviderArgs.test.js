@@ -1,0 +1,76 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { buildCliArgs, stripBrokenModelFlags } from './cliProviderArgs.js';
+
+describe('cliProviderArgs', () => {
+  // buildCliArgs reads process.env for the Bedrock signal; isolate the tests
+  // from whatever the host/CI environment happens to set.
+  let savedBedrock;
+  beforeEach(() => {
+    savedBedrock = process.env.CLAUDE_CODE_USE_BEDROCK;
+    delete process.env.CLAUDE_CODE_USE_BEDROCK;
+  });
+  afterEach(() => {
+    if (savedBedrock === undefined) delete process.env.CLAUDE_CODE_USE_BEDROCK;
+    else process.env.CLAUDE_CODE_USE_BEDROCK = savedBedrock;
+  });
+
+  describe('buildCliArgs — Claude Code (default)', () => {
+    it('passes a bare Claude model through unchanged when Bedrock mode is off', () => {
+      const args = buildCliArgs({ id: 'claude-code', command: 'claude', defaultModel: 'claude-opus-4-8' });
+      expect(args).toEqual(['-p', '-', '--model', 'claude-opus-4-8']);
+    });
+
+    it('maps a bare Claude model to its Bedrock form when CLAUDE_CODE_USE_BEDROCK is set (via provider.envVars)', () => {
+      const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const args = buildCliArgs({
+        id: 'claude-code',
+        command: 'claude',
+        defaultModel: 'claude-opus-4-8',
+        envVars: { CLAUDE_CODE_USE_BEDROCK: '1' },
+      });
+      expect(args).toEqual(['-p', '-', '--model', 'global.anthropic.claude-opus-4-8']);
+      spy.mockRestore();
+    });
+
+    it('leaves an already-region-prefixed Bedrock model untouched', () => {
+      const args = buildCliArgs({
+        id: 'claude-code-bedrock',
+        command: 'claude',
+        defaultModel: 'us.anthropic.claude-opus-4-7-v1:0',
+        envVars: { CLAUDE_CODE_USE_BEDROCK: '1' },
+      });
+      expect(args).toEqual(['-p', '-', '--model', 'us.anthropic.claude-opus-4-7-v1:0']);
+    });
+
+    it('respects a user-baked --model pin and skips injection (no Bedrock map)', () => {
+      const args = buildCliArgs({
+        id: 'claude-code',
+        command: 'claude',
+        defaultModel: 'claude-opus-4-8',
+        args: ['--model', 'claude-sonnet-4-6'],
+        envVars: { CLAUDE_CODE_USE_BEDROCK: '1' },
+      });
+      expect(args).toEqual(['--model', 'claude-sonnet-4-6', '-p', '-']);
+    });
+  });
+
+  describe('buildCliArgs — other vendors are never Bedrock-mapped', () => {
+    it('codex model passes through even with Bedrock on', () => {
+      const args = buildCliArgs({
+        id: 'codex',
+        command: 'codex',
+        defaultModel: 'gpt-5',
+        envVars: { CLAUDE_CODE_USE_BEDROCK: '1' },
+      });
+      expect(args).toEqual(['exec', '--model', 'gpt-5', '-']);
+    });
+  });
+
+  describe('stripBrokenModelFlags', () => {
+    it('drops dangling / empty model flags but keeps pinned ones', () => {
+      expect(stripBrokenModelFlags(['--model'])).toEqual([]);
+      expect(stripBrokenModelFlags(['--model='])).toEqual([]);
+      expect(stripBrokenModelFlags(['--model', 'x'])).toEqual(['--model', 'x']);
+    });
+  });
+});

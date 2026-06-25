@@ -64,6 +64,34 @@ export function exceedsMaxSpawns(task) {
 }
 
 /**
+ * A task that must BYPASS the per-app review cooldown at spawn time. Two classes
+ * qualify, for the same reason — the cooldown is not their throttle:
+ *   - **Pipeline continuations** (`metadata.pipeline.currentStage > 0`) — a
+ *     multi-stage pipeline's own stage gating sequences the work.
+ *   - **Perpetual drains** (`metadata.perpetual`) — the work-detector park is the
+ *     throttle (see `queueEligibleImprovementTasks` / agentCompletion.js). Without
+ *     this, a perpetual task the refill just *queued* (after correctly bypassing
+ *     the queue-path cooldown) would still be skipped here at the spawn gate,
+ *     because the on-demand "Run" path stamped `lastReviewedAt` and these gates
+ *     read it — so a manually-triggered perpetual drain stalls one item in.
+ *
+ * `metadata.perpetual` is a bare boolean set upstream, but it round-trips through
+ * COS-TASKS.md as the STRING `"true"` (taskParser serializes non-string/-object
+ * metadata via `String(value)`; only arrays/objects like `pipeline` get the JSON
+ * sentinel that preserves their type). So accept BOTH the in-memory boolean and
+ * the re-parsed string — a `=== true` check alone would silently miss the
+ * persisted-then-reloaded task, which is exactly the one the spawn gate sees.
+ *
+ * Shared by both spawn engines (`dequeueNextTask` in cos.js and `evaluateTasks`
+ * here) and their dry-run planners so the cooldown-exempt set can't drift.
+ */
+export function isCooldownExemptTask(task) {
+  const meta = task?.metadata;
+  if (!meta) return false;
+  return meta.pipeline?.currentStage > 0 || meta.perpetual === true || meta.perpetual === 'true';
+}
+
+/**
  * Dry-run eligibility pass over auto-approved system tasks. Walks the tasks in
  * file order applying the SAME gates execute mode uses — global slot cap,
  * max-total-spawns, app cooldown, per-project cap — while tracking virtual
@@ -144,6 +172,123 @@ const PLAN_SELF_CLAIM_TASK_TYPES = new Set(['plan-task']);
 // must run regardless. `plan-task` is a strict executor and would just exit
 // cleanly — burning an LLM round for nothing.
 const PLAN_GATE_TASK_TYPES = new Set(['plan-task']);
+
+// Concrete directives substituted into the {issueAuthorFilter} placeholder of
+// the GitHub/GitLab claim-issue prompt bodies. 'owner' (the default, matching
+// /do:next --issues) restricts to repo/project-owner-filed issues; 'any' claims
+// any open issue. The plan/jira prompts carry no {issueAuthorFilter} placeholder
+// so the value is a harmless no-op for them.
+const ISSUE_AUTHOR_FILTER_BLOCKS = {
+  gh: {
+    any: '**Author filter: any author.** Claim the next eligible open issue regardless of who filed it — omit `--author` from `gh issue list` entirely.',
+    owner: '**Author filter: repository owner only.** Only claim issues filed by the repository owner/creator. Resolve the owner with `OWNER="$(gh repo view --json owner -q .owner.login)"` and pass `--author "$OWNER"` (a quoted single token) to `gh issue list`; skip issues opened by anyone else.'
+  },
+  glab: {
+    any: '**Author filter: any author.** Claim the next eligible open issue regardless of who opened it — omit `--author` from `glab issue list`.',
+    owner: '**Author filter: project owner only.** Only claim issues opened by the project owner. Resolve the owner from the project namespace (e.g. `glab repo view`), then pass `--author <owner>` to `glab issue list`; skip issues opened by anyone else.'
+  }
+};
+
+/**
+ * Resolve the {issueAuthorFilter} directive for a resolved claim task type.
+ * The forge is inferred from the prompt body: `glab` for the GitLab claim flow,
+ * `gh` for GitHub, and the gh block as a default for plan/jira (whose prompts
+ * have no placeholder, so the value is never substituted anyway).
+ */
+export function resolveIssueAuthorFilterBlock(promptTaskType, mode = 'owner') {
+  const issueForge = promptTaskType === 'claim-issue-gitlab' ? 'glab'
+    : promptTaskType === 'claim-issue' ? 'gh'
+      : null;
+  const filterMode = mode === 'any' ? 'any' : 'owner';
+  return (ISSUE_AUTHOR_FILTER_BLOCKS[issueForge] || ISSUE_AUTHOR_FILTER_BLOCKS.gh)[filterMode];
+}
+
+/**
+ * Build a one-off "claim the next work item" task for `app`, routed by the app's
+ * configured workTracker — the manual (Slashdo `/do:next` button) counterpart to
+ * the scheduled `claim-work` router below. Resolves the tracker, delegates to the
+ * matching claim prompt body (plan-task / claim-issue / claim-issue-gitlab /
+ * claim-issue-jira), substitutes the standard placeholders, and surfaces the
+ * delegated flow's worktree/PR posture (all four claim prompts self-manage their
+ * own worktree + MR/PR, so the self-managed false/false posture is correct).
+ *
+ * `issueAuthorFilter` and `reviewers` default to the app's *configured*
+ * `claim-work` behavior (global schedule metadata → per-app override → Code
+ * Review Defaults), exactly as the scheduled `claim-work` router resolves them —
+ * so clicking the button honors `issueAuthorFilter: 'any'` and non-Copilot
+ * reviewers instead of silently forcing owner-only + Copilot. A direct
+ * `claim-work` prompt customization likewise overrides the tracker-specific body
+ * (matching the scheduled router's `promptKeyForBody` selection). Explicit
+ * options still win when a caller passes them.
+ *
+ * @returns {Promise<{ tracker, source, promptTaskType, prompt, taskMetadata }>}
+ */
+export async function buildClaimWorkTask(app, { issueAuthorFilter, reviewers } = {}) {
+  const { resolveAppWorkTracker, trackerToClaimTaskType } = await import('../lib/workTracker.js');
+  const { getTaskPrompt } = await import('./taskPromptService.js');
+  const taskSchedule = await import('./taskSchedule.js');
+
+  const wt = await resolveAppWorkTracker(app);
+  const promptTaskType = trackerToClaimTaskType(wt.resolved) || 'plan-task';
+
+  // Resolve the app's configured claim-work metadata the same way the scheduled
+  // router does: global schedule metadata, then per-app overrides on top (managed
+  // agent fields stripped, both passes sanitized/value-constrained). This is what
+  // carries the user's `issueAuthorFilter` and reviewer choices into the prompt.
+  const interval = await taskSchedule.getTaskInterval('claim-work');
+  const metadata = {};
+  const sanitizedGlobalMeta = sanitizeTaskMetadata(interval.taskMetadata);
+  if (sanitizedGlobalMeta) Object.assign(metadata, sanitizedGlobalMeta);
+  const appOverrides = await getAppTaskTypeOverrides(app.id);
+  const strippedAppOverride = taskSchedule.stripManagedAgentOptionsFromOverride(
+    'claim-work', appOverrides['claim-work']?.taskMetadata
+  );
+  const sanitizedAppMeta = sanitizeTaskMetadata(strippedAppOverride);
+  if (sanitizedAppMeta) Object.assign(metadata, sanitizedAppMeta);
+
+  // Honor a direct claim-work prompt customization if the user set one;
+  // otherwise delegate to the resolved tracker's prompt body. Mirrors the
+  // scheduled router's `promptKeyForBody` selection — a custom claim-work prompt
+  // overrides the tracker-specific body for both paths.
+  const template = await getTaskPrompt(interval.prompt ? 'claim-work' : promptTaskType);
+
+  // Explicit option > configured metadata > 'owner' default.
+  const resolvedAuthorFilter = issueAuthorFilter ?? metadata.issueAuthorFilter ?? 'owner';
+
+  // Reviewers: explicit option wins; otherwise mirror the scheduler — merge
+  // configured metadata reviewers with the user's Code Review Defaults, dropping
+  // local-LLM reviewers the claim prompts can't drive, falling back to the
+  // hardcoded default when filtering empties the list. A settings read error
+  // degrades to the default inside normalizeReviewers, so it never blocks.
+  let reviewersList;
+  if (reviewers !== undefined) {
+    reviewersList = (Array.isArray(reviewers) ? reviewers : [reviewers]).filter(Boolean);
+  } else {
+    const codeReviewDefaults = await getCodeReviewDefaults().catch(() => null);
+    reviewersList = normalizeReviewers(metadata, codeReviewDefaults?.reviewers)
+      .filter((r) => !LOCAL_LLM_REVIEWERS.includes(r));
+  }
+  const reviewersCsv = (reviewersList.length ? reviewersList : [...DEFAULT_REVIEWERS]).join(',');
+  const issueAuthorFilterBlock = resolveIssueAuthorFilterBlock(promptTaskType, resolvedAuthorFilter);
+
+  const prompt = template
+    .replace(/\{appName\}/g, app.name)
+    .replace(/\{repoPath\}/g, app.repoPath)
+    .replace(/\{appId\}/g, app.id)
+    // Function-form replacers so literal `$`/`$1` in the substituted text isn't
+    // interpreted as a backreference (see the scheduler's same-pattern note).
+    .replace(/\{reviewers\}/g, () => reviewersCsv)
+    .replace(/\{issueAuthorFilter\}/g, () => issueAuthorFilterBlock);
+
+  // Mirror the scheduler: inherit the delegated flow's isolation posture so the
+  // JIRA route runs in a CoS-managed worktree rather than the live checkout.
+  const delegatedMeta = taskSchedule.DEFAULT_TASK_INTERVALS[promptTaskType]?.taskMetadata || {};
+  const taskMetadata = {};
+  if ('useWorktree' in delegatedMeta) taskMetadata.useWorktree = delegatedMeta.useWorktree;
+  if ('openPR' in delegatedMeta) taskMetadata.openPR = delegatedMeta.openPR;
+
+  return { tracker: wt.resolved, source: wt.source, promptTaskType, prompt, taskMetadata };
+}
 
 /**
  * For feature-ideas / plan-task, read the target repo's PLAN.md, find which
@@ -441,7 +586,7 @@ async function spawnPriority2AutoApproved(ctx) {
         perProjectLimit,
         spawnProjectCounts,
         isOnCooldown: (appId) => isAppOnCooldown(appId, state.config.appReviewCooldownMs),
-        cooldownExempt: (task) => task.metadata?.pipeline?.currentStage > 0
+        cooldownExempt: isCooldownExemptTask
       });
       for (const task of wouldSpawn) {
         emitLog('info', `[dry-run] CoS auto-run would spawn system task: ${task.id}`, { taskId: task.id, domainAutonomy: 'cos' });
@@ -454,10 +599,10 @@ async function spawnPriority2AutoApproved(ctx) {
 
       if (await blockIfExceedsMaxSpawns(task, 'internal')) continue;
 
-      // Check if task's app is on cooldown (pipeline continuations bypass cooldown)
+      // Check if task's app is on cooldown (pipeline continuations AND perpetual
+      // drains bypass cooldown — see isCooldownExemptTask).
       const appId = task.metadata?.app;
-      const isPipelineContinuation = task.metadata?.pipeline?.currentStage > 0;
-      if (appId && !isPipelineContinuation) {
+      if (appId && !isCooldownExemptTask(task)) {
         const onCooldown = await isAppOnCooldown(appId, state.config.appReviewCooldownMs);
         if (onCooldown) {
           emitLog('debug', `Skipping system task ${task.id} - app ${appId} on cooldown`);
@@ -621,12 +766,11 @@ export async function evaluateTasks(options) {
   const { initialStartup = false } = options || {};
   if (!isDaemonRunning()) return;
 
-  // Check if paused - skip evaluation if so
+  // A global pause stops scheduled/autonomous/user spawning, but NOT explicit
+  // user triggers: on-demand requests (Priority 0) are still drained while
+  // paused so a manual "Run" (or a force-evaluate) fires. The user/autonomous
+  // tiers below are gated on `!paused` — parity with dequeueNextTask in cos.js.
   const paused = (await loadState()).paused || false;
-  if (paused) {
-    emitLog('debug', 'CoS is paused - skipping evaluation');
-    return;
-  }
 
   // Update evaluation timestamp with lock to prevent race conditions
   const state = await withStateLock(async () => {
@@ -708,23 +852,31 @@ export async function evaluateTasks(options) {
     autonomousSlotCeiling: availableSlots
   };
 
-  // Priorities 0–1 spend against the global slot cap.
+  // Priority 0 (on-demand) spends against the global slot cap and runs even when
+  // paused — an explicit user "Run" bypasses the global pause.
   await spawnPriority0OnDemand(ctx);
-  await spawnPriority1UserTasks(ctx);
 
-  // Ceiling for AUTONOMOUS admissions this cycle (#711). On-demand + user tasks
-  // are already in `tasksToSpawn` and never count against the CoS action budget,
-  // so the autonomous sections below may add at most `autonomousActionsRemaining`
-  // more. With no action cap this equals `availableSlots`, so the default path is
-  // unchanged. The autonomous tiers use this in place of `availableSlots`.
-  ctx.autonomousSlotCeiling = Math.min(availableSlots, tasksToSpawn.length + autonomousActionsRemaining);
+  // Every tier below is scheduled/autonomous/user work that the global pause
+  // stops. When paused we skip them and let the shared spawn loop below emit just
+  // the on-demand tasks Priority 0 collected.
+  if (!paused) {
+    // Priority 1 spends against the global slot cap.
+    await spawnPriority1UserTasks(ctx);
 
-  // Priorities 2, 3, 3.6, 4 spend against the lower autonomous ceiling.
-  await spawnPriority2AutoApproved(ctx);
-  await maybeQueueImprovementTasks(ctx);
-  await spawnPriority3Missions(ctx);
-  await spawnPriority36FeatureAgents(ctx);
-  await spawnPriority4IdleReview(ctx);
+    // Ceiling for AUTONOMOUS admissions this cycle (#711). On-demand + user tasks
+    // are already in `tasksToSpawn` and never count against the CoS action budget,
+    // so the autonomous sections below may add at most `autonomousActionsRemaining`
+    // more. With no action cap this equals `availableSlots`, so the default path is
+    // unchanged. The autonomous tiers use this in place of `availableSlots`.
+    ctx.autonomousSlotCeiling = Math.min(availableSlots, tasksToSpawn.length + autonomousActionsRemaining);
+
+    // Priorities 2, 3, 3.6, 4 spend against the lower autonomous ceiling.
+    await spawnPriority2AutoApproved(ctx);
+    await maybeQueueImprovementTasks(ctx);
+    await spawnPriority3Missions(ctx);
+    await spawnPriority36FeatureAgents(ctx);
+    await spawnPriority4IdleReview(ctx);
+  }
 
   // Emit evaluation status
   const pendingUserCount = userTaskData.grouped?.pending?.length || 0;
@@ -838,13 +990,19 @@ export async function generateIdleReviewTask(state) {
  * Called during every evaluation to ensure system tasks are queued even when user tasks exist
  * Tasks are queued to COS-TASKS.md and will be picked up in Priority 2
  */
-export async function queueEligibleImprovementTasks(state, cosTaskData) {
+export async function queueEligibleImprovementTasks(state, cosTaskData, { ignoreTaskId = null } = {}) {
   const { getNextTaskType, recordExecution } = await import('./taskSchedule.js');
 
   if (!isImprovementEnabled(state)) return;
 
   // Get existing pending/in_progress system tasks to avoid duplicates
   // Also skip task types where a user-terminated blocked task exists (user intentionally killed it)
+  // `ignoreTaskId` excludes one task from both the per-app "already busy" cap and
+  // the per-type dedup set — used by the perpetual drain-on-completion refill,
+  // where the just-completed task is still `in_progress` on disk (agent:completed
+  // fires before updateTask finalizes it). Without it the completing task would
+  // make its own app look busy and block the next perpetual run. The same id is
+  // forwarded to addTask below so its disk-level duplicate scan ignores it too.
   const existingTasks = cosTaskData.tasks || [];
   const existingTaskTypes = new Set();
   // Apps that already have *any* pending/in_progress improvement task. We cap each
@@ -853,6 +1011,7 @@ export async function queueEligibleImprovementTasks(state, cosTaskData) {
   const appsWithPendingImprovement = new Set();
 
   for (const task of existingTasks) {
+    if (task.id === ignoreTaskId) continue;
     const isActive = task.status === 'pending' || task.status === 'in_progress';
     const isUserTerminated = task.status === 'blocked' && task.metadata?.blockedCategory === 'user-terminated';
     if (isActive || isUserTerminated) {
@@ -903,17 +1062,33 @@ export async function queueEligibleImprovementTasks(state, cosTaskData) {
     // would still surface here; both gates treat `undefined` as
     // "no activity yet."
     const appActivity = activitySnapshot.apps?.[app.id];
-    if (isAppActivityOnCooldown(appActivity, state.config.appReviewCooldownMs)) continue;
 
-    // Get next eligible improvement type for this app. `getNextTaskType`
-    // falls back to ROTATION when nothing is time-due, and the rotation
-    // pointer is derived from the `lastType` argument — without it, the
-    // rotation always restarts from index 0 and starves every other
-    // rotation type for the app. Mirror `generateManagedAppTask` (the
-    // legacy direct-spawn caller above) which threads the per-app
-    // `lastImprovementType` in.
+    // Perpetual (drain-until-done) tasks BYPASS the per-app review cooldown:
+    // their work-detector park IS the throttle (taskSchedule.parkPerpetual), and
+    // agentCompletion.js already skips the post-completion cooldown bump for
+    // them. But the spawn-time `markAppReviewCooldown` stamp (written by BOTH the
+    // on-demand manual-trigger path and the idle-review loop) sets
+    // `lastReviewedAt`, which `isAppActivityOnCooldown` reads — so without a
+    // bypass the back-to-back refill fired right after a perpetual run reads its
+    // OWN app as "on cooldown" and skips the re-queue, and the drain stalls.
+    //
+    // When the app IS on cooldown, constrain the pick to a due perpetual task
+    // (`perpetualOnly`). This is what makes a MIXED schedule converge: if the app
+    // also has a due cron/custom type (e.g. pr-watcher), the unconstrained
+    // `getNextTaskType` would return that higher-priority NON-exempt type first,
+    // we'd see a non-perpetual pick, and we'd skip the whole app for the cooldown
+    // window — stranding the perpetual drain behind it. Asking perpetual-only
+    // returns the due perpetual drain (or null → leave the cooled-down app
+    // alone). When NOT on cooldown, the normal full-priority pick runs.
+    const onCooldown = isAppActivityOnCooldown(appActivity, state.config.appReviewCooldownMs);
+
+    // `getNextTaskType` falls back to ROTATION when nothing is time-due, and the
+    // rotation pointer is derived from `lastType` — without it the rotation
+    // always restarts from index 0 and starves every other rotation type for the
+    // app. Mirror `generateManagedAppTask` (the legacy direct-spawn caller) which
+    // threads the per-app `lastImprovementType` in.
     const lastType = appActivity?.lastImprovementType || '';
-    const nextTypeResult = await getNextTaskType(app.id, lastType).catch(() => null);
+    const nextTypeResult = await getNextTaskType(app.id, lastType, { perpetualOnly: onCooldown }).catch(() => null);
     if (!nextTypeResult) continue;
     const nextType = nextTypeResult.taskType;
 
@@ -961,7 +1136,7 @@ export async function queueEligibleImprovementTasks(state, cosTaskData) {
       task.description = firstLine(task.description);
     }
 
-    const newTask = await addTask(task, 'internal', { raw: true });
+    const newTask = await addTask(task, 'internal', { raw: true, ignoreTaskId });
     if (newTask?.duplicate) continue;
 
     await recordExecution(`task:${nextType}`, app.id);
@@ -1287,25 +1462,55 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
     promptTaskType = trackerToClaimTaskType(wt.resolved) || 'plan-task';
     emitLog('info', `claim-work for ${app.name}: tracker=${wt.resolved} (${wt.source}) → ${promptTaskType}`, { appId: app.id, analysisType: taskType });
     // Inherit the resolved flow's isolation posture, overriding claim-work's
-    // own useWorktree/openPR=false defaults. The plan/github/gitlab claim
-    // prompts self-manage their worktree + PR (false/false is correct), but
-    // jira-sprint-manager relies on CoS-MANAGED isolation (useWorktree/openPR
-    // true) and implements directly in {repoPath} — so without this the JIRA
-    // route would run against the live checkout. Pull the delegated type's
-    // managed-agent defaults; a prompt-only type with no DEFAULT_TASK_INTERVALS
-    // entry (e.g. claim-issue-gitlab) keeps claim-work's self-managed false.
+    // own useWorktree/openPR=false defaults. All four concrete claim prompts
+    // (plan-task / claim-issue / claim-issue-gitlab / claim-issue-jira)
+    // self-manage their own worktree + MR/PR, so the self-managed false/false
+    // posture is correct for every tracker. This hook stays in place so a
+    // future delegated type that DOES carry a CoS-managed DEFAULT_TASK_INTERVALS
+    // entry (useWorktree/openPR true) would have it applied; a prompt-only type
+    // with no entry (claim-issue-gitlab, claim-issue-jira) keeps false/false.
     const delegatedMeta = taskSchedule.DEFAULT_TASK_INTERVALS[promptTaskType]?.taskMetadata;
     if (delegatedMeta) {
       if ('useWorktree' in delegatedMeta) metadata.useWorktree = delegatedMeta.useWorktree;
       if ('openPR' in delegatedMeta) metadata.openPR = delegatedMeta.openPR;
     }
   }
+  // Perpetual (drain-until-done) gate. When this task type runs on the
+  // 'perpetual' interval, a programmatic work-detector decides whether there's
+  // anything to claim BEFORE we build the (expensive) prompt or burn an agent:
+  //   - actionable  → clear any park so the back-to-back drain continues, and
+  //     stamp metadata.perpetual so the post-completion cooldown is skipped
+  //     (agentCompletion.js) and the next tick re-dispatches promptly.
+  //   - idle (definitive) → PARK on the recheck cadence and skip this dispatch.
+  //   - transient probe failure (gh down) → skip WITHOUT parking so the next
+  //     tick retries instead of waiting out a full recheck cadence.
+  // The detector keys on the RESOLVED promptTaskType so a claim-work router run
+  // probes the concrete tracker (claim-issue → GitHub issues, plan-task → PLAN.md).
+  if (interval.type === taskSchedule.INTERVAL_TYPES.PERPETUAL) {
+    const { detectActionableWork } = await import('./perpetualWork.js');
+    const detection = await detectActionableWork(promptTaskType, app, {
+      issueAuthorFilter: metadata.issueAuthorFilter || 'owner'
+    });
+    if (detection.actionable) {
+      await taskSchedule.clearPerpetualPark(taskType, app.id);
+      metadata.perpetual = true;
+    } else if (detection.transient) {
+      emitLog('debug', `Perpetual ${taskType} skip for ${app.name} (transient: ${detection.reason})`, { appId: app.id });
+      return null;
+    } else {
+      await taskSchedule.parkPerpetual(taskType, app.id, { reason: detection.reason, actionableCount: detection.count });
+      emitLog('info', `Perpetual ${taskType} parked for ${app.name}: ${detection.reason}`, { appId: app.id });
+      return null;
+    }
+  }
+
   // Honor a direct claim-work prompt customization if the user set one;
   // otherwise delegate to the resolved tracker's prompt body via
   // getTaskPrompt(promptTaskType), which reads THAT type's interval.prompt
-  // override — so a user's claim-issue / plan-task / jira-sprint-manager
-  // customization flows through. (The GitLab body, claim-issue-gitlab, has no
-  // schedule/UI customization slot, so it always renders the shipped default.)
+  // override — so a user's claim-issue / plan-task customization flows
+  // through. (The prompt-only bodies claim-issue-gitlab and claim-issue-jira
+  // have no schedule/UI customization slot, so they always render the shipped
+  // default.)
   const promptKeyForBody = (taskType === 'claim-work' && !interval.prompt) ? promptTaskType : taskType;
 
   const promptTemplate = metadata.pipeline?.stages
@@ -1439,32 +1644,10 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
   const promptReviewers = normalizeReviewers(metadata, codeReviewDefaults?.reviewers)
     .filter((r) => !LOCAL_LLM_REVIEWERS.includes(r));
   const reviewersCsv = (promptReviewers.length ? promptReviewers : [...DEFAULT_REVIEWERS]).join(',');
-  // claim-issue: expand {issueAuthorFilter} into a concrete directive telling
-  // the agent which open issues are claimable. The filter was already merged
-  // (global → per-app override) and value-constrained by sanitizeTaskMetadata,
-  // so read it from `metadata`. 'owner' (the default, matching /claim --issues)
-  // restricts to repo-owner-filed issues; 'any' claims any open issue.
-  // The forge whose CLI the resolved prompt body documents — `glab` for the
-  // GitLab claim flow, `gh` for the GitHub one, null for plan/jira (whose
-  // prompts carry no {issueAuthorFilter} placeholder, so the replace is a
-  // harmless no-op there).
-  const issueForge = promptTaskType === 'claim-issue-gitlab' ? 'glab'
-    : promptTaskType === 'claim-issue' ? 'gh'
-    : null;
-  const authorFilterMode = (metadata.issueAuthorFilter || 'owner') === 'any' ? 'any' : 'owner';
-  const ISSUE_AUTHOR_FILTER_BLOCKS = {
-    gh: {
-      any: '**Author filter: any author.** Claim the next eligible open issue regardless of who filed it — omit `--author` from `gh issue list` entirely.',
-      owner: '**Author filter: repository owner only.** Only claim issues filed by the repository owner/creator. Resolve the owner with `OWNER="$(gh repo view --json owner -q .owner.login)"` and pass `--author "$OWNER"` (a quoted single token) to `gh issue list`; skip issues opened by anyone else.'
-    },
-    glab: {
-      any: '**Author filter: any author.** Claim the next eligible open issue regardless of who opened it — omit `--author` from `glab issue list`.',
-      owner: '**Author filter: project owner only.** Only claim issues opened by the project owner. Resolve the owner from the project namespace (e.g. `glab repo view`), then pass `--author <owner>` to `glab issue list`; skip issues opened by anyone else.'
-    }
-  };
-  // Default to the gh block for plan/jira (null forge) — their prompts have no
-  // {issueAuthorFilter} placeholder so the value is never substituted anyway.
-  const issueAuthorFilterBlock = (ISSUE_AUTHOR_FILTER_BLOCKS[issueForge] || ISSUE_AUTHOR_FILTER_BLOCKS.gh)[authorFilterMode];
+  // {issueAuthorFilter} directive — the filter was already merged (global →
+  // per-app override) and value-constrained by sanitizeTaskMetadata, so read it
+  // from `metadata` (default 'owner', matching /do:next --issues).
+  const issueAuthorFilterBlock = resolveIssueAuthorFilterBlock(promptTaskType, metadata.issueAuthorFilter || 'owner');
 
   const description = promptTemplate
     .replace(/\{appName\}/g, app.name)

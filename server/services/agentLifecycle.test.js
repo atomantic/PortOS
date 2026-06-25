@@ -647,6 +647,114 @@ describe('spawnAgentForTask — cleanupOnError error recovery', () => {
   });
 });
 
+// ─── Instance provenance stamping (issue #1563, acceptance criterion 1) ──────
+//
+// Every spawned agent must record the producing machine's federation identity
+// so that, once CoS agent history federates across peers (the rest of #1563),
+// a node pair can attribute each agent + its worktree branch to the instance
+// that produced it — the prerequisite for never duplicating agent work. The
+// stamp rides in the `registerAgent` metadata and propagates into the
+// completed-agent archive's `metadata.json` automatically, since `completeAgent`
+// serializes `.metadata`. These source-level assertions break loudly if a
+// future refactor drops the stamp.
+describe('agentLifecycle — instance provenance stamping (#1563)', () => {
+  it('source: imports the identity resolver from the instances service', () => {
+    expect(AGENT_LIFECYCLE_SRC).toMatch(
+      /import\s*\{\s*ensureInstanceId\s*\}\s*from\s*'\.\/instances\.js';/
+    );
+  });
+
+  it('source: resolves instanceId via ensureInstanceId() before registering the agent', () => {
+    // Resolution is delegated to the shared `ensureInstanceId()` helper in
+    // instances.js (which handles the boot-time `unknown` sentinel cold path)
+    // and is reused by the #1563 claim guard at the top of the spawn. The
+    // contract is unchanged: the id is resolved before registerAgent stamps it.
+    const fnStart = AGENT_LIFECYCLE_SRC.indexOf('export async function spawnAgentForTask');
+    const fnBody = AGENT_LIFECYCLE_SRC.slice(fnStart, fnStart + 60_000);
+    const resolveIdx = fnBody.indexOf('await ensureInstanceId()');
+    const registerIdx = fnBody.indexOf('registerAgent(agentId, task.id, {');
+    expect(resolveIdx, '`await ensureInstanceId()` must exist inside spawnAgentForTask').toBeGreaterThan(-1);
+    expect(registerIdx, '`registerAgent(...)` must exist inside spawnAgentForTask').toBeGreaterThan(-1);
+    expect(resolveIdx, 'instanceId must be resolved BEFORE registerAgent is called').toBeLessThan(registerIdx);
+  });
+
+  it('source: refuses to spawn a task under another instance\'s live lease (claim guard)', () => {
+    const fnStart = AGENT_LIFECYCLE_SRC.indexOf('export async function spawnAgentForTask');
+    const fnBody = AGENT_LIFECYCLE_SRC.slice(fnStart, fnStart + 60_000);
+    const guardIdx = fnBody.indexOf('isClaimableBy(task.metadata, instanceId)');
+    const registerIdx = fnBody.indexOf('registerAgent(agentId, task.id, {');
+    expect(guardIdx, 'must gate the spawn on isClaimableBy').toBeGreaterThan(-1);
+    expect(guardIdx, 'the claim guard must run BEFORE registering the agent').toBeLessThan(registerIdx);
+  });
+
+  it('source: stamps the federation claim into the in_progress task update', () => {
+    expect(AGENT_LIFECYCLE_SRC).toMatch(/\.\.\.buildClaim\(instanceId\)/);
+  });
+
+  it('source: acquires the claim (updateTask with buildClaim) BEFORE registering the agent', () => {
+    // Codex review fix: the lease must be taken up front, not only at the
+    // in_progress flip after worktree/agent setup, so a peer's claim that
+    // synced in is honored before this instance commits to spawning.
+    const fnStart = AGENT_LIFECYCLE_SRC.indexOf('export async function spawnAgentForTask');
+    const fnBody = AGENT_LIFECYCLE_SRC.slice(fnStart, fnStart + 60_000);
+    const acquireIdx = fnBody.indexOf('metadata: buildClaim(instanceId)');
+    const registerIdx = fnBody.indexOf('registerAgent(agentId, task.id, {');
+    expect(acquireIdx, 'must acquire the claim via updateTask(buildClaim) up front').toBeGreaterThan(-1);
+    expect(acquireIdx, 'claim must be acquired BEFORE registerAgent').toBeLessThan(registerIdx);
+  });
+
+  it('source: re-reads the freshest task and yields if claimed during dispatch', () => {
+    const fnStart = AGENT_LIFECYCLE_SRC.indexOf('export async function spawnAgentForTask');
+    const fnBody = AGENT_LIFECYCLE_SRC.slice(fnStart, fnStart + 60_000);
+    const rereadIdx = fnBody.indexOf('await getTaskById(task.id)');
+    const recheckIdx = fnBody.indexOf('!isClaimableBy(freshTask.metadata, instanceId)');
+    expect(rereadIdx, 'must re-read the freshest persisted task before claiming').toBeGreaterThan(-1);
+    expect(recheckIdx, 'must re-check claimability against the fresh metadata').toBeGreaterThan(rereadIdx);
+  });
+
+  it('source: acquires the spawningTasks dedup guard before the first await', () => {
+    // The guard must be taken synchronously (before `await ensureInstanceId()`
+    // or `await getTaskById()`), or a concurrent task:ready re-emit could slip
+    // past the has() check while this call is suspended and spawn a duplicate.
+    const fnStart = AGENT_LIFECYCLE_SRC.indexOf('export async function spawnAgentForTask');
+    const fnBody = AGENT_LIFECYCLE_SRC.slice(fnStart, fnStart + 60_000);
+    const addIdx = fnBody.indexOf('spawningTasks.add(task.id)');
+    // The first awaited CALL in the function (anchor on the real statement, not
+    // the word "await" in a comment) is the identity resolution.
+    const firstAwaitIdx = fnBody.indexOf('await ensureInstanceId()');
+    expect(addIdx, 'spawningTasks.add must exist').toBeGreaterThan(-1);
+    expect(firstAwaitIdx, 'await ensureInstanceId() must exist').toBeGreaterThan(-1);
+    expect(addIdx, 'the dedup guard must be acquired BEFORE the first await').toBeLessThan(firstAwaitIdx);
+  });
+
+  it('source: releases the spawn guard if identity resolution rejects', () => {
+    // ensureInstanceId() runs after spawningTasks.add but before the main
+    // try/finally, so a rejection must not strand the task in spawningTasks.
+    const fnStart = AGENT_LIFECYCLE_SRC.indexOf('export async function spawnAgentForTask');
+    const fnBody = AGENT_LIFECYCLE_SRC.slice(fnStart, fnStart + 60_000);
+    const tryIdx = fnBody.indexOf('instanceId = await ensureInstanceId();');
+    const catchSlice = fnBody.slice(tryIdx, tryIdx + 260);
+    expect(tryIdx, 'ensureInstanceId must be awaited').toBeGreaterThan(-1);
+    expect(catchSlice, 'a catch around ensureInstanceId must release the guard').toMatch(/catch[\s\S]*spawningTasks\.delete\(task\.id\)/);
+  });
+
+  it('source: releases the claim on a failed-setup early exit (cleanupOnError)', () => {
+    const fnStart = AGENT_LIFECYCLE_SRC.indexOf('const cleanupOnError = async');
+    const fnBody = AGENT_LIFECYCLE_SRC.slice(fnStart, fnStart + 1200);
+    expect(fnBody.indexOf('claimAcquired'), 'cleanupOnError must gate on claimAcquired').toBeGreaterThan(-1);
+    expect(fnBody.indexOf('buildRelease()'), 'cleanupOnError must release the claim via buildRelease').toBeGreaterThan(-1);
+  });
+
+  it('source: stamps instanceId into the registerAgent metadata', () => {
+    const registerIdx = AGENT_LIFECYCLE_SRC.indexOf('registerAgent(agentId, task.id, {');
+    // The metadata object literal opens at registerIdx; assert `instanceId,`
+    // appears within it (before the workspacePath field that follows).
+    const metaSlice = AGENT_LIFECYCLE_SRC.slice(registerIdx, registerIdx + 400);
+    expect(metaSlice).toMatch(/\binstanceId,/);
+    expect(metaSlice.indexOf('instanceId,')).toBeLessThan(metaSlice.indexOf('workspacePath'));
+  });
+});
+
 // ─── handleAgentCompletion error recovery ──────────────────────────────────
 //
 // `handleAgentCompletion` (agentLifecycle.js:841) does:

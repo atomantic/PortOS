@@ -41,6 +41,7 @@ grep -i "what you want to do" client/src/hooks/README.md
 | `useImageGenProgress` | Live diffusion progress for an image-gen call. | Showing per-call image-gen progress. |
 | `useImporterProgress` | Live analyze-phase stage checklist via the `importer:progress` socket (runId-filtered); exports `stageStatusIcon` for the status→icon lookup. | Importer analyze progress UI only. |
 | `useMediaJobProgress` | Live progress for a single `mediaJobQueue` job. | Subscribing to a known media-job id. |
+| `useSlotInFlight` | Whether a render slot (`{ jobId, filename }`) has an in-flight render; returns `{ inFlight, setStatus }`. A present `filename` (or 5s grace on a stale/expired job) clears `inFlight` so the render button never sticks "loading". | A render button that should disable + spin only while its own slot is actually rendering (comic pages, covers). Wire `setStatus` to the slot's `MediaJobThumb` `onStatus`. |
 | `useMediaJobSse` | Imperative per-job `/{kind}-gen/:id/events` SSE; `attach()` returns a Promise that settles on the terminal frame. | POST-then-attach media render flows that await completion (ImageGen/VideoGen). |
 | `useOpenClawStream` | OpenClaw SSE chat stream. | OpenClaw file-browser chat surface only. |
 | `usePipelineProgress` | Id-derived runner SSE stream: builds the URL from `(urlBuilder, ids)`, connects only when every id is truthy. | Any runner SSE keyed by record ids (pipeline auto-run, editorial, manuscript completeness, volume beats, story steps). |
@@ -75,6 +76,7 @@ grep -i "what you want to do" client/src/hooks/README.md
 
 | Hook | Purpose | Use when |
 |---|---|---|
+| `useAnchorReveal` | `useAnchorReveal(getTarget, key, { reveal? })` — scroll a freshly-opened element into view + flash a tint over it; re-fires when `key` changes; no-op when `key` is falsy or `getTarget()` is null. | Reveal an editorial finding's anchored manuscript text on open / prev-next step (#1601). |
 | `useArmedAction` | Two-click-arm `[armed, fire]` confirmation. | Destructive button needing a confirm tap. (Project memory: user finds this less discoverable — prefer inline confirm rows for new UI.) |
 | `useAutoRefetch` | Poll-based refetch on an interval. `{ pollOnly: true }` skips internal data/loading state for side-effect-only callers (returns `{ refetch }` only). | Data needs periodic refresh (no socket / SSE available). |
 | `useAutoSizeTextarea` | `[ref, resize]` — grows a `<textarea>` to fit its content (no scroll / hand-resize); recomputes before paint on value change. | A textarea that should auto-fit content. Prefer the `AutoSizeTextarea` UI component, which wraps this. |
@@ -88,6 +90,7 @@ grep -i "what you want to do" client/src/hooks/README.md
 | `useRowDraft` | Multi-column row draft (analogue of `useFieldDraft`). | Multi-column row that commits as a unit. |
 | `usePendingListRows` | List-of-rows where a new row is held client-side until a required column fills, then promoted to `onChange`. | Editable list whose nameless rows would otherwise be dropped by the server sanitizer (WardrobeSection, CharacterDetailEditor list sections). |
 | `useKeyboardControls` | Keyboard binding for CyberCity mode toggle. | CyberCity-specific. |
+| `useKeyboardShortcuts` | `useKeyboardShortcuts(active, bindings, opts?)` — fire a `{ key: handler }` map while `active`; ignores events from editable fields (`isEditableTarget` also exported), ⌘/Ctrl/Alt chords, OS key auto-repeat (`{ ignoreRepeat: false }` to opt back in), and any keystroke while an `aria-modal` dialog is open (`{ enabledInDialog: true }` for a modal-owned shortcut); a falsy handler disables that key. | Single-surface action shortcuts (editorial comment card prev/next + accept/dismiss/generate, #1603). Not for held-key/game input (that's `useKeyboardControls`). |
 | `useKeyboardHelp` | Esc closes, even from inputs/textareas. | Help/cheatsheet modals. |
 | `useLockToggle` | Optimistic-PATCH lock toggle. | New "lock this field/stage/arc" button — use this, do not re-implement. |
 | `usePopoverPosition` | Viewport-clamped `{ left, top, width }` for a fixed-position portal popover anchored to a trigger; re-measures on open and rAF-coalesced on capture-phase scroll/resize. Returns `{ triggerRef, popoverRef, style, reposition }`; pass `anchorRef` to follow a parent-owned trigger. | Any portal-into-`<body>` menu/popover placed relative to a button (ThemeSwitcher, CollectionPickerShell) — use this instead of re-rolling the measure/flip/clamp/reflow plumbing. |
@@ -128,7 +131,6 @@ grep -i "what you want to do" client/src/hooks/README.md
 | `useCatalogTypes` | Catalog ingredient type registry (system + user-defined) merged with the static fallback via a Provider/hook pair; synchronous fallback to the built-in six so first render never blanks. | Catalog list/picker/editor; anywhere the catalog type list/lookup is needed. |
 | `useDeathClock` | 1-second countdown for death-clock display. | Mortality / death-clock surfaces. |
 | `useGoalDetail` | All state + handlers backing the GoalDetailPanel (edit form, todos, milestones, plan/phases, check-ins, progress log, activity/calendar links). Loads activities + subcalendars on mount. | GoalDetailPanel composition shell; not intended for reuse outside the goals panel. |
-| `useNextEvalCountdown` | 1-second countdown to the next CoS evaluation tick. | Chief of Staff "next eval in Xs" displays. |
 | `usePostSession` | Post-render callback scheduling. | Generic post-action chaining. |
 | `useRecordMerge` | Duplicate Universe/Series merge flow: open → dry-run preview → resolve field conflicts → execute, with an `onMerged` refresh callback. Drives `<MergeModal>`. | Surfacing the merge-duplicates UI anywhere (Sharing → Duplicates, Universes page). Don't re-implement the preview/execute dance. |
 | `useProviderModels` | AI providers + two-step provider→model selection. | Any UI that picks a provider + model. |

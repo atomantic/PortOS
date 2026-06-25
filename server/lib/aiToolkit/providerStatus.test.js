@@ -87,6 +87,45 @@ describe('Provider Status Service', () => {
     });
   });
 
+  describe('markUsageLimit — bench cap (tight retry, never > reset window)', () => {
+    const benchMs = (status) => new Date(status.estimatedRecovery).getTime() - new Date(status.unavailableSince).getTime();
+
+    it('benches the tight default (not the stated 21h) for an over-long reset, and never past the 5h cap', async () => {
+      const svc = createProviderStatusService({
+        dataDir: TEST_DATA_DIR, statusFile: 'ps-cap.json',
+        defaultUsageLimitWait: 10 * 60 * 1000, maxUsageLimitWait: 5 * 60 * 60 * 1000,
+      });
+      await svc.init();
+      const status = await svc.markUsageLimit('p', { message: 'limit', waitTime: '21 hours 52 minutes' });
+      // A 21h stated reset must NOT bench 21h — it falls back to the tight 10m default.
+      expect(benchMs(status)).toBe(10 * 60 * 1000);
+      expect(benchMs(status)).toBeLessThanOrEqual(5 * 60 * 60 * 1000);
+      // The stated reset is still surfaced for display.
+      expect(status.waitTime).toBe('21 hours 52 minutes');
+    });
+
+    it('respects a genuinely short stated reset', async () => {
+      const svc = createProviderStatusService({
+        dataDir: TEST_DATA_DIR, statusFile: 'ps-cap2.json',
+        defaultUsageLimitWait: 10 * 60 * 1000, maxUsageLimitWait: 5 * 60 * 60 * 1000,
+      });
+      await svc.init();
+      const status = await svc.markUsageLimit('p', { message: 'limit', waitTime: '2 minutes' });
+      expect(benchMs(status)).toBe(2 * 60 * 1000);
+    });
+
+    it('hard-caps even an over-long configured default at maxUsageLimitWait', async () => {
+      const svc = createProviderStatusService({
+        dataDir: TEST_DATA_DIR, statusFile: 'ps-cap3.json',
+        defaultUsageLimitWait: 10 * 60 * 60 * 1000, // 10h default (misconfigured)
+        maxUsageLimitWait: 5 * 60 * 60 * 1000,
+      });
+      await svc.init();
+      const status = await svc.markUsageLimit('p', { message: 'limit' });
+      expect(benchMs(status)).toBe(5 * 60 * 60 * 1000); // capped to 5h
+    });
+  });
+
   describe('markUnavailable (generic)', () => {
     it('marks a provider unavailable with an arbitrary reason and explicit waitTimeMs', async () => {
       const status = await statusService.markUnavailable('test-provider', {

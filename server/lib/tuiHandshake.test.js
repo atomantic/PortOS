@@ -314,6 +314,17 @@ describe('tuiHandshake.applyCommandDefaults', () => {
 });
 
 describe('tuiHandshake.buildTuiInvocation', () => {
+  // buildTuiInvocation reads process.env for the Bedrock signal; isolate from host/CI.
+  let savedBedrock;
+  beforeEach(() => {
+    savedBedrock = process.env.CLAUDE_CODE_USE_BEDROCK;
+    delete process.env.CLAUDE_CODE_USE_BEDROCK;
+  });
+  afterEach(() => {
+    if (savedBedrock === undefined) delete process.env.CLAUDE_CODE_USE_BEDROCK;
+    else process.env.CLAUDE_CODE_USE_BEDROCK = savedBedrock;
+  });
+
   it('uses provider.command when present and skips codex defaults for non-literal-codex command names', () => {
     const provider = { id: 'codex', command: 'my-codex-wrapper', args: ['exec', '-'] };
     const out = buildTuiInvocation(provider, null);
@@ -379,6 +390,14 @@ describe('tuiHandshake.buildTuiInvocation', () => {
     const out = buildTuiInvocation(undefined, 'opus-x');
     expect(out.command).toBe('claude');
     expect(out.args).toEqual(['--model', 'opus-x']);
+  });
+
+  it('maps a bare Claude model to its Bedrock form when CLAUDE_CODE_USE_BEDROCK is set (claude-code-tui runner)', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const provider = { id: 'claude-code-tui', args: ['-p', '-'], envVars: { CLAUDE_CODE_USE_BEDROCK: '1' } };
+    const out = buildTuiInvocation(provider, 'claude-opus-4-8');
+    expect(out.args).toEqual(['-p', '-', '--model', 'global.anthropic.claude-opus-4-8']);
+    spy.mockRestore();
   });
 });
 

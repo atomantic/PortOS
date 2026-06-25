@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Cpu, Box, ArrowRightLeft, Download, Trash2, RefreshCw, Search, Plus, ExternalLink, Star, Link2, Copy, Play, Square, Power, PowerOff, Eye, Wrench, Brain, Code2, MessageSquare, Boxes, AlertTriangle, FlaskConical } from 'lucide-react';
+import { Cpu, Box, ArrowRightLeft, Download, Trash2, RefreshCw, Search, Plus, ExternalLink, Star, Link2, Copy, Play, Square, Power, PowerOff, Eye, Wrench, Brain, Code2, MessageSquare, Boxes, AlertTriangle, FlaskConical, Music } from 'lucide-react';
 import toast from '../ui/Toast';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import BrailleSpinner from '../BrailleSpinner';
@@ -8,7 +8,8 @@ import { formatBytes, formatContextLength, timeAgo, recommendedRamGb } from '../
 import { localLlmTargetKey } from '../../lib/localLlmTargetKey';
 import {
   getLocalLlmStatus, getLocalLlmCatalog, getLocalLlmHuggingFaceSearch, installLocalLlmModel,
-  deleteLocalLlmModel, switchLocalLlmBackend, migrateLocalLlmBackend, installLocalLlmBackend, upgradeLocalLlmBackend, controlOllamaService
+  deleteLocalLlmModel, switchLocalLlmBackend, migrateLocalLlmBackend, installLocalLlmBackend, upgradeLocalLlmBackend, controlOllamaService,
+  installAudioModel
 } from '../../services/api';
 import socket from '../../services/socket';
 import MemoryManagement from './MemoryManagement.jsx';
@@ -26,11 +27,12 @@ const CATEGORY_LABELS = {
   reasoning: 'Reasoning',
   coding: 'Coding',
   vision: 'Image Analysis',
+  audio: 'Audio & Music',
   embedding: 'Text Embeddings',
   lightweight: 'Small & Fast',
   multilingual: 'Multilingual'
 };
-const CATEGORY_ORDER = ['reasoning', 'coding', 'vision', 'embedding', 'chat', 'lightweight', 'multilingual'];
+const CATEGORY_ORDER = ['reasoning', 'coding', 'vision', 'audio', 'embedding', 'chat', 'lightweight', 'multilingual'];
 const categoryLabel = (id) => CATEGORY_LABELS[id] || id;
 
 // Render model capabilities as colored icons (LM Studio style) instead of text.
@@ -42,6 +44,23 @@ const CAPABILITY_META = {
   vision: { Icon: Eye, label: 'Vision', cls: 'text-amber-400 border-amber-400/50' },
   embeddings: { Icon: Boxes, label: 'Embeddings', cls: 'text-violet-400 border-violet-400/50' },
   tools: { Icon: Wrench, label: 'Tool use', cls: 'text-blue-400 border-blue-400/50' },
+  audio: { Icon: Music, label: 'Audio generation', cls: 'text-pink-400 border-pink-400/50' },
+};
+
+// Server-computed per-quant fit verdict → badge styling + short label. Drives
+// the RAM-fit hint on the quant picker so a too-large build reads as a warning.
+const FIT_META = {
+  comfortable: { label: 'fits comfortably', cls: 'text-port-success' },
+  tight: { label: 'tight fit', cls: 'text-port-warning' },
+  'too-large': { label: 'exceeds RAM', cls: 'text-port-error' },
+};
+
+// Model format badge — GGUF (llama.cpp, cross-backend) vs. MLX (Apple's native
+// format, LM Studio on Apple Silicon only). Shown so the user knows what they're
+// installing when both formats appear in the same result list.
+const FORMAT_META = {
+  gguf: { label: 'GGUF', title: 'GGUF — llama.cpp format, runs on Ollama and LM Studio', cls: 'border-port-border text-gray-400' },
+  mlx: { label: 'MLX', title: "MLX — Apple's native format, installs via LM Studio on Apple Silicon", cls: 'border-port-accent/40 text-port-accent' },
 };
 
 
@@ -209,6 +228,12 @@ export function LocalLlmTab() {
   const [catalog, setCatalog] = useState([]);
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogError, setCatalogError] = useState('');
+  // Total unified/system memory (GB) reported by the HF search, used to caption
+  // the RAM-aware quant defaults. null until the first Hugging Face search.
+  const [systemMemoryGb, setSystemMemoryGb] = useState(null);
+  // Per-result quant override: { [repoKey]: installId }. Empty → use each
+  // result's RAM-aware default (`m.id`). Cleared whenever the catalog reloads.
+  const [selectedVariants, setSelectedVariants] = useState({});
   const [activeCategory, setActiveCategory] = useState('all');
   const [query, setQuery] = useState('');
   const [manualId, setManualId] = useState('');
@@ -251,11 +276,14 @@ export function LocalLlmTab() {
     setCatalogError('');
     const request = source === 'huggingface'
       ? getLocalLlmHuggingFaceSearch(backend, q, category, 18)
-      : getLocalLlmCatalog(backend, q);
+      : getLocalLlmCatalog(backend, q, { variants: true });
     return request
       .then((r) => {
         if (requestId !== catalogRequestId.current) return;
         setCatalog(r.models || []);
+        if (Number.isFinite(r.systemMemoryGb)) setSystemMemoryGb(r.systemMemoryGb);
+        // A fresh result set invalidates any per-card quant overrides.
+        setSelectedVariants({});
       })
       .catch((err) => {
         if (requestId !== catalogRequestId.current) return;
@@ -334,10 +362,16 @@ export function LocalLlmTab() {
   const catalogCategories = useMemo(() => {
     const counts = new Map();
     for (const model of catalog) counts.set(model.category || 'chat', (counts.get(model.category || 'chat') || 0) + 1);
-    return CATEGORY_ORDER
-      .filter((id) => counts.has(id))
-      .map((id) => ({ id, label: categoryLabel(id), count: counts.get(id) }));
-  }, [catalog]);
+    // Hugging Face is searched per-category server-side, so a default GGUF query
+    // never surfaces audio results — expose the full category set as filter
+    // buttons (count shown only when known) so the user can navigate to
+    // categories like Audio & Music. The curated local catalog stays
+    // counts-driven (its categories are fixed and fully present).
+    const ids = catalogSource === 'huggingface'
+      ? CATEGORY_ORDER
+      : CATEGORY_ORDER.filter((id) => counts.has(id));
+    return ids.map((id) => ({ id, label: categoryLabel(id), count: counts.has(id) ? counts.get(id) : null }));
+  }, [catalog, catalogSource]);
   const visibleCatalogGroups = useMemo(() => {
     const filterCategory = catalogSource === 'huggingface' ? 'all' : activeCategory;
     const categoryIds = filterCategory === 'all'
@@ -372,6 +406,11 @@ export function LocalLlmTab() {
           // this model"; needing a newer Ollama to do it is an implementation
           // detail, not a separate decision.
           upgradeOllamaAndRetry(modelId);
+        } else if (err?.code === 'SHARDED_GGUF') {
+          // Ollama can't pull a multi-part GGUF (#5245). The catalog disables
+          // Install for known-sharded quants, but a pull-by-name still lands here —
+          // explain the fix rather than echoing Ollama's raw 400.
+          toast.error('Ollama can’t install sharded (multi-part) GGUFs. Pick a smaller single-file quant, or install this build on LM Studio.');
         } else {
           // Any other failure: restore the default toast we suppressed.
           toast.error(err?.message || 'Install failed');
@@ -380,6 +419,32 @@ export function LocalLlmTab() {
       clearConfirm: false
     }
   );
+  // Audio/music models don't run on Ollama/LM Studio — they install into the
+  // shared audio-model registry (server/services/audioModels.js) via the Music
+  // studio's streaming HF-download endpoint, so the Music studio picks them up.
+  // The download streams SSE frames; surface progress in the same banner as the
+  // socket-driven install progress, and treat an `error` frame as failure.
+  const installAudio = (model) => {
+    let failed = false;
+    return runAction(
+      `install-${model.id}`,
+      async () => {
+        await installAudioModel(
+          { engine: model.engine, repo: model.repository, name: model.name },
+          (ev) => {
+            if (ev?.type === 'stage') setProgressMsg(ev.stage || '');
+            else if (ev?.type === 'progress') setProgressMsg(`${ev.file || 'downloading'} — ${Math.round((ev.progress || 0) * 100)}%`);
+            else if (ev?.type === 'error') { failed = true; toast.error(ev.message || 'Download failed'); }
+          },
+        );
+        // installAudioModel resolves even after an error frame (it only throws on
+        // a non-OK response) — re-throw so runAction skips the success toast.
+        if (failed) throw Object.assign(new Error('audio install failed'), { handled: true });
+      },
+      `${model.name} installed — available in the Music studio`,
+      { onError: (err) => { if (!err?.handled) toast.error(err?.message || 'Install failed'); }, clearConfirm: false },
+    ).finally(() => setProgressMsg(''));
+  };
   const remove = (modelId) => runAction(`delete-${modelId}`, () => deleteLocalLlmModel(selected, modelId), `${modelId} deleted`)
     .then((result) => {
       // Drop the just-deleted model from any pending comparison (runAction
@@ -608,7 +673,7 @@ export function LocalLlmTab() {
               id="llm-catalog-search"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder={catalogSource === 'huggingface' ? 'Search Hugging Face GGUF models…' : `Search the ${labelFor(selected)} catalog…`}
+              placeholder={catalogSource === 'huggingface' ? (activeCategory === 'audio' ? 'Search Hugging Face audio models…' : 'Search Hugging Face GGUF models…') : `Search the ${labelFor(selected)} catalog…`}
               className="flex-1 bg-transparent py-2 text-sm text-white placeholder-gray-600 focus:outline-none"
             />
           </div>
@@ -645,7 +710,7 @@ export function LocalLlmTab() {
                 onClick={() => setActiveCategory(category.id)}
                 className={`px-2.5 py-1 text-xs rounded transition-colors ${activeCategory === category.id ? 'bg-port-accent/20 text-port-accent' : 'bg-port-bg text-gray-400 hover:text-white'}`}
               >
-                {category.label} ({category.count})
+                {category.label}{category.count != null ? ` (${category.count})` : ''}
               </button>
             ))}
           </div>
@@ -660,6 +725,11 @@ export function LocalLlmTab() {
         {catalogError && (
           <p className="text-xs text-port-warning">{catalogError}</p>
         )}
+        {Number.isFinite(systemMemoryGb) && catalog.some((m) => Array.isArray(m.variants) && m.variants.length > 1) && (
+          <p className="text-[11px] text-gray-500">
+            This machine has {systemMemoryGb} GB of memory — the default quant is the highest-fidelity build that fits. Use the Quant menu on a result to choose a smaller or larger one.
+          </p>
+        )}
 
         {/* Catalog cards */}
         <div className="space-y-4">
@@ -670,19 +740,95 @@ export function LocalLlmTab() {
               )}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                 {group.models.map((m) => {
-                  const ram = recommendedRamGb(m?.sizeBytes, m?.size);
                   const isHf = m.source === 'huggingface';
+                  const isAudio = m.category === 'audio';
+                  // Multi-quant repos let the user trade their RAM for fidelity.
+                  // `chosenId` is the selected variant's install id (defaulting to
+                  // the server's RAM-aware pick `m.id`); the card's size/RAM/fit
+                  // reflect that choice.
+                  const variants = (!isAudio && Array.isArray(m.variants)) ? m.variants : [];
+                  const hasVariantPicker = variants.length > 1;
+                  // The server marks the RAM-aware default with `recommended`, so it
+                  // wins as the default selection. (For live HF results it equals
+                  // `m.id`; for curated entries `m.id` is the stable catalog id, which
+                  // may itself be a non-default variant — so `recommended` must take
+                  // precedence over `m.id`, or the RAM-aware pick never applies.) Fall
+                  // back to `m.id`-as-variant, then `m.id`, so the controlled <select>
+                  // always has a matching option.
+                  const idMatchesVariant = variants.some((v) => v.installId === m.id);
+                  const recommendedId = variants.find((v) => v.recommended)?.installId;
+                  // Only honor a saved selection if it still matches a current variant —
+                  // variant install ids are backend-specific (`repo@Q…` vs `hf.co/repo:Q…`),
+                  // so a selection made before a backend switch must not leak through as a
+                  // stale id (which would null out chosenVariant and install the wrong id).
+                  const savedSelection = selectedVariants[m.key];
+                  const validSelection = variants.some((v) => v.installId === savedSelection) ? savedSelection : null;
+                  const chosenId = validSelection || recommendedId || (idMatchesVariant ? m.id : null) || m.id;
+                  const chosenVariant = variants.find((v) => v.installId === chosenId) || null;
+                  // Installed state is per-quant (Ollama tracks each separately),
+                  // so gate Install on the SELECTED variant, not the result default.
+                  const chosenInstalled = chosenVariant ? chosenVariant.installed : m.installed;
+                  // A sharded quant can't be pulled by the active backend (Ollama
+                  // #5245) — disable Install with the server's reason rather than
+                  // letting the user hit the raw 400. (The server only sets
+                  // `unsupportedReason` when the variant is unsupported.)
+                  const chosenUnsupported = chosenVariant?.unsupportedReason ?? null;
+                  const size = chosenVariant?.size || m.size;
+                  const sizeBytes = chosenVariant?.sizeBytes ?? m.sizeBytes;
+                  const fit = chosenVariant?.fit;
+                  const fitMeta = fit ? FIT_META[fit] : null;
+                  const ram = recommendedRamGb(sizeBytes, size);
+                  const ctxLabel = formatContextLength(m.contextLength);
                   const createdMs = new Date(m.createdAt).getTime();
                   const updatedMs = new Date(m.updatedAt).getTime();
                   return (
-                  <div key={m.id} className="flex items-start gap-3 bg-port-bg border border-port-border rounded-lg p-3">
+                  <div key={m.key || m.id} className="flex items-start gap-3 bg-port-bg border border-port-border rounded-lg p-3">
                     <div className="flex-1 min-w-0">
-                      <div className="text-sm text-white truncate">{m.name} <span className="text-xs text-gray-500">· {m.params}</span></div>
-                      <div className="text-xs text-gray-500 truncate">{m.id}</div>
+                      <div className="text-sm text-white truncate">
+                        {m.name} <span className="text-xs text-gray-500">· {m.params}</span>
+                        {FORMAT_META[m.format] && (
+                          <span
+                            title={FORMAT_META[m.format].title}
+                            className={`ml-1.5 align-middle text-[10px] px-1 py-0.5 rounded border ${FORMAT_META[m.format].cls}`}
+                          >
+                            {FORMAT_META[m.format].label}
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-xs text-gray-500 truncate">{chosenId}</div>
                       <div className="text-xs text-gray-500 mt-0.5">{m.description}</div>
+                      {m.note && <div className="text-[11px] text-port-warning/90 mt-0.5">{m.note}</div>}
+                      {hasVariantPicker && (
+                        <div className="flex items-center gap-1.5 flex-wrap mt-1">
+                          <label htmlFor={`quant-${m.key}`} className="text-[11px] text-gray-500">Quant</label>
+                          <select
+                            id={`quant-${m.key}`}
+                            value={chosenId}
+                            onChange={(e) => setSelectedVariants((prev) => ({ ...prev, [m.key]: e.target.value }))}
+                            disabled={busy}
+                            className="text-[11px] bg-port-card border border-port-border rounded px-1.5 py-0.5 text-gray-300 max-w-[16rem]"
+                            title="Pick a quantization — higher quants are larger but higher fidelity"
+                          >
+                            {variants.map((v) => (
+                              <option key={v.installId} value={v.installId}>
+                                {v.quant}{v.size ? ` · ${v.size}` : ''}{v.installed ? ' · installed' : ''}{v.recommended ? ' · recommended' : ''}{v.fit === 'too-large' ? ' · exceeds RAM' : ''}{v.unsupported === 'sharded' ? ' · sharded (not on Ollama)' : ''}
+                              </option>
+                            ))}
+                          </select>
+                          {fitMeta && <span className={`text-[11px] ${fitMeta.cls}`} title="Fit on this machine — model weights + ~20% overhead vs. usable memory">{fitMeta.label}</span>}
+                        </div>
+                      )}
                       <div className="flex items-center gap-1.5 flex-wrap text-[11px] text-gray-600 mt-1">
                         <span className="text-gray-500">{categoryLabel(m.category)}</span>
-                        <span>{m.size}</span>
+                        <span>{size}</span>
+                        {/* Single-variant cards (e.g. MLX) have no quant picker, so
+                            surface the RAM-fit hint here instead of in the picker row. */}
+                        {fitMeta && !hasVariantPicker && (
+                          <span className={fitMeta.cls} title="Fit on this machine — model weights + ~20% overhead vs. usable memory">{fitMeta.label}</span>
+                        )}
+                        {ctxLabel && (
+                          <span title="Native context window (max tokens)">{ctxLabel}</span>
+                        )}
                         {ram && (
                           <span title="Approx RAM/VRAM to run this model — weights + ~20% overhead">
                             ~{ram} GB RAM
@@ -716,18 +862,42 @@ export function LocalLlmTab() {
                         })}
                       </div>
                     </div>
-                    {m.installed ? (
-                      <span className="text-xs px-2 py-1 text-port-success shrink-0">Installed</span>
-                    ) : (
-                      <button
-                        onClick={() => install(m.id)}
-                        disabled={busy}
-                        className="px-2.5 py-1 text-xs bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded disabled:opacity-50 flex items-center gap-1 shrink-0"
-                      >
-                        {actionInProgress === `install-${m.id}` ? <BrailleSpinner /> : <Download size={12} />}
-                        Install
-                      </button>
-                    )}
+                    <div className="flex flex-col items-end gap-1 shrink-0">
+                      {chosenInstalled ? (
+                        <span className="text-xs px-2 py-1 text-port-success">Installed</span>
+                      ) : m.installable === false ? (
+                        // Audio models with no PortOS runtime (or a fixed-checkpoint
+                        // engine like ACE-Step) are discovery-only — "Visit" below.
+                        null
+                      ) : (
+                        <button
+                          onClick={() => (isAudio ? installAudio(m) : install(chosenId))}
+                          disabled={busy || !!chosenUnsupported}
+                          title={chosenUnsupported || undefined}
+                          className="px-2.5 py-1 text-xs bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                        >
+                          {actionInProgress === `install-${chosenId}` ? <BrailleSpinner /> : <Download size={12} />}
+                          Install
+                        </button>
+                      )}
+                      {chosenUnsupported && !chosenInstalled && (
+                        <span className="text-[11px] text-port-warning text-right max-w-[12rem] leading-snug" title={chosenUnsupported}>
+                          Sharded — use LM Studio or a smaller quant
+                        </span>
+                      )}
+                      {isHf && m.repository && (
+                        <a
+                          href={`https://huggingface.co/${m.repository}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title="Open the model page on Hugging Face"
+                          className="px-2.5 py-1 text-xs bg-port-border/60 hover:bg-port-border text-gray-300 rounded flex items-center gap-1"
+                        >
+                          <ExternalLink size={12} />
+                          Visit
+                        </a>
+                      )}
+                    </div>
                   </div>
                   );
                 })}

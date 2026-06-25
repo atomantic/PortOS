@@ -179,6 +179,19 @@ vi.mock('../services/pipeline/visualStages.js', () => ({
     changes: ['mock change'],
     providerId: 'mock-provider',
   })),
+  // Comic-page AI refine + i2i re-render (issue #1534). Returns the shape the
+  // route lands on the matching variant slot via slotKeyForVariant +
+  // buildRenderSlot — variant defaults to 'proof' unless the body forces one.
+  refineComicPageRender: vi.fn(async (_issueId, opts) => ({
+    jobId: `page-refine-job-${++uuidCounter}`,
+    mode: 'local',
+    prompt: `refined page prompt for page ${opts.pageIndex + 1}`,
+    pageIndex: opts.pageIndex,
+    variant: opts?.target === 'final' ? 'final' : 'proof',
+    changes: ['warmed the lighting'],
+    runId: 'run-mock-page-refine',
+    providerId: 'mock-provider',
+  })),
 }));
 
 // The episode-video handoff creates a CD project; stub it so the route test
@@ -825,6 +838,49 @@ describe('pipeline routes', () => {
     expect(r.body.changes).toEqual(['mock change']);
   });
 
+  it('POST /issues/:id/stages/comicPages/pages/:p/refine-render persists the refined render on the proof slot', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
+      stages: { comicPages: { pages: [{ panels: [{ description: 'p1', caption: '', dialogue: [], sfx: '' }] }] } },
+    });
+    const r = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/comicPages/pages/0/refine-render`)
+      .send({ instruction: 'warm the lighting' });
+    expect(r.status).toBe(200);
+    expect(r.body.runId).toBe('run-mock-page-refine');
+    expect(r.body.changes).toEqual(['warmed the lighting']);
+    // Default variant proof → lands on the proofImage slot with the adjusted prompt.
+    expect(r.body.stage.pages[0].proofImage.jobId).toBe(r.body.jobId);
+    expect(r.body.stage.pages[0].proofImage.prompt).toBe(r.body.prompt);
+    expect(r.body.stage.pages[0].proofImage.filename).toBeNull();
+  });
+
+  it('POST /issues/:id/stages/comicPages/pages/:p/refine-render with target=final lands on the final slot', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
+      stages: { comicPages: { pages: [{ panels: [{ description: 'p1', caption: '', dialogue: [], sfx: '' }] }] } },
+    });
+    const r = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/comicPages/pages/0/refine-render`)
+      .send({ instruction: 'remove extra signage', target: 'final' });
+    expect(r.status).toBe(200);
+    expect(r.body.stage.pages[0].finalImage.jobId).toBe(r.body.jobId);
+  });
+
+  it('POST /issues/:id/stages/comicPages/pages/:p/refine-render 400s without an instruction', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    const r = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/comicPages/pages/0/refine-render`)
+      .send({});
+    expect(r.status).toBe(400);
+  });
+
   it('POST /issues/:id/stages/storyboards/scenes/:index/refine-prompt returns the refined scene', async () => {
     const app = makeApp();
     const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
@@ -1013,6 +1069,130 @@ describe('pipeline routes', () => {
     expect(r.status).toBe(200);
     expect(r.body.sceneCount).toBe(1);
     expect(r.body.stage.scenes[0].description).toBe('fresh scene');
+    spy.mockRestore();
+  });
+
+  it('POST /issues/:id/stages/storyboards/extract-scenes overlays the canonical numbering on LLM scenes (hybrid: alignment + dialogue preserved)', async () => {
+    const extractor = await import('../lib/sceneExtractor.js');
+    // The LLM extraction supplies rich fields (dialogue/visualPrompt); the
+    // canonical list overlays its numbering/sluglines. The LLM may number /
+    // slug the scenes differently — the overlay must win on identity.
+    const spy = vi.spyOn(extractor, 'extractScenes').mockResolvedValue({
+      extracted: {
+        title: null, logline: null,
+        scenes: [
+          { id: 'scene-99', heading: 'LLM heading A', slugline: 'INT. WRONG — DAY', visualPrompt: 'rooftop vista', dialogue: [{ character: 'LINA', line: 'Up here.' }] },
+          { id: 'scene-98', heading: 'LLM heading B', slugline: 'INT. ALSO WRONG', visualPrompt: 'kitchen argument', dialogue: [{ character: 'MARA', line: 'You lied.' }] },
+        ],
+      },
+      runId: 'run-hybrid', providerId: 'mock', model: 'mock-model',
+    });
+
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
+      stages: {
+        idea: {
+          status: 'ready',
+          output: [
+            '# Beat sheet',
+            '',
+            '## Scenes',
+            '1. Scene 1 — EXT. ROOFTOP — DUSK: the hook',
+            '2. Scene 2 — INT. KITCHEN — NIGHT: the confrontation',
+          ].join('\n'),
+        },
+        teleplay: { status: 'ready', output: '## TEASER\n\n**INT. ROOFTOP — DUSK**\n\nThey meet.' },
+      },
+    });
+
+    const r = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/storyboards/extract-scenes`)
+      .send({ from: 'teleplay' });
+
+    expect(r.status).toBe(200);
+    expect(r.body.usedCanonicalList).toBe(true);
+    expect(r.body.sourceKind).toBe('teleplay');
+    expect(r.body.runId).toBe('run-hybrid');
+    expect(r.body.sceneCount).toBe(2);
+    // Canonical numbering/sluglines win (the LLM's scene-99/wrong sluglines lose).
+    expect(r.body.stage.scenes[0].id).toBe('scene-01');
+    expect(r.body.stage.scenes[0].heading).toBe('Scene 1 — EXT. ROOFTOP — DUSK');
+    expect(r.body.stage.scenes[0].slugline).toBe('EXT. ROOFTOP — DUSK');
+    expect(r.body.stage.scenes[1].slugline).toBe('INT. KITCHEN — NIGHT');
+    // The LLM's rich fields ride along — dialogue is preserved (audio VO needs it).
+    expect(r.body.stage.scenes[0].dialogue).toEqual([{ character: 'LINA', line: 'Up here.' }]);
+    expect(r.body.stage.scenes[1].dialogue).toEqual([{ character: 'MARA', line: 'You lied.' }]);
+    // description comes from the LLM visualPrompt, not the beats clause, since one exists.
+    expect(r.body.stage.scenes[0].description).toBe('rooftop vista');
+    expect(r.body.stage.status).toBe('ready');
+    expect(spy).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
+  });
+
+  it('POST /issues/:id/stages/storyboards/extract-scenes uses the canonical list alone when there is no source text (deterministic, no LLM)', async () => {
+    const extractor = await import('../lib/sceneExtractor.js');
+    const spy = vi.spyOn(extractor, 'extractScenes');
+
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    // Beat sheet has a canonical list but NO teleplay/prose to extract from.
+    await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
+      stages: {
+        idea: {
+          status: 'ready',
+          output: '# Beat sheet\n\n## Scenes\n1. Scene 1 — EXT. ROOFTOP — DUSK: the hook\n2. Scene 2 — INT. KITCHEN — NIGHT: the confrontation',
+        },
+      },
+    });
+
+    const r = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/storyboards/extract-scenes`)
+      .send({ from: 'teleplay' });
+
+    expect(r.status).toBe(200);
+    expect(r.body.usedCanonicalList).toBe(true);
+    expect(r.body.sourceKind).toBe('beat-sheet');
+    expect(r.body.runId).toBeNull();
+    expect(r.body.sceneCount).toBe(2);
+    expect(r.body.stage.scenes[0].heading).toBe('Scene 1 — EXT. ROOFTOP — DUSK');
+    expect(r.body.stage.scenes[0].slugline).toBe('EXT. ROOFTOP — DUSK');
+    // No source to extract dialogue from — description seeds from the beats clause.
+    expect(r.body.stage.scenes[0].description).toBe('the hook');
+    expect(r.body.stage.scenes[0].dialogue).toEqual([]);
+    // No source → no LLM call.
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it('POST /issues/:id/stages/storyboards/extract-scenes falls back to the LLM when the beat sheet has no scene list', async () => {
+    const extractor = await import('../lib/sceneExtractor.js');
+    const spy = vi.spyOn(extractor, 'extractScenes').mockResolvedValue({
+      extracted: { title: null, logline: null, scenes: [{ visualPrompt: 'llm scene' }] },
+      runId: 'run-fallback', providerId: 'mock', model: 'mock-model',
+    });
+
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
+      stages: {
+        idea: { status: 'ready', output: '# Beat sheet\n\n## Beats\n1. A beat with no ## Scenes section.' },
+        teleplay: { status: 'ready', output: '## TEASER\n\n**INT. VAULT — NIGHT**\n\nThey break in.' },
+      },
+    });
+
+    const r = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/storyboards/extract-scenes`)
+      .send({ from: 'teleplay' });
+
+    expect(r.status).toBe(200);
+    expect(r.body.usedCanonicalList).toBe(false);
+    expect(r.body.sourceKind).toBe('teleplay');
+    expect(r.body.runId).toBe('run-fallback');
+    expect(spy).toHaveBeenCalledTimes(1);
     spy.mockRestore();
   });
 
@@ -2302,6 +2482,47 @@ describe('pipeline routes', () => {
         .post(`/api/pipeline/series/${ser.body.id}/manuscript/review/comments/mrc-nope/accept`)
         .send({ find: 'x' }); // legacy accept must still include `replace`
       expect(acceptMissingReplace.status).toBe(400);
+    });
+
+    it('accept captures an undo snapshot; undo restores the pre-edit text and re-opens (#1609)', async () => {
+      const app = makeApp();
+      const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
+      const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'One' });
+      await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
+        stages: { prose: { output: 'Hello old world.', status: 'ready' } },
+      });
+      // Seed a review comment anchored to this issue by id (not number — the
+      // shared test DB reuses series ids across tests, so a number lookup is
+      // ambiguous; the explicit id resolves to this issue regardless).
+      const { seedReviewFromFindings } = await import('../services/pipeline/manuscriptReview.js');
+      const seeded = await seedReviewFromFindings(ser.body.id, [{
+        problem: 'wording', anchorQuote: 'old', issueId: iss.body.id, stageId: 'prose',
+      }]);
+      const commentId = seeded.comments[0].id;
+
+      // Accept applies the edit + records the pre-edit snapshot.
+      const accepted = await request(app)
+        .post(`/api/pipeline/series/${ser.body.id}/manuscript/review/comments/${commentId}/accept`)
+        .send({ edits: [{ issueId: iss.body.id, stageId: 'prose', issueNumber: 1, find: 'old', replace: 'new' }] });
+      expect(accepted.status).toBe(200);
+      expect(accepted.body.comment.status).toBe('accepted');
+      expect(accepted.body.comment.acceptedSnapshot.sections[0].priorText).toBe('Hello old world.');
+      expect(accepted.body.section.content).toBe('Hello new world.');
+
+      // Undo restores the pre-edit text and re-opens the finding.
+      const undone = await request(app)
+        .post(`/api/pipeline/series/${ser.body.id}/manuscript/review/comments/${commentId}/undo`)
+        .send({});
+      expect(undone.status).toBe(200);
+      expect(undone.body.comment.status).toBe('open');
+      expect(undone.body.comment.acceptedSnapshot).toBeNull();
+      expect(undone.body.section.content).toBe('Hello old world.');
+
+      // Undo again is a 400 — nothing left to undo.
+      const again = await request(app)
+        .post(`/api/pipeline/series/${ser.body.id}/manuscript/review/comments/${commentId}/undo`)
+        .send({});
+      expect(again.status).toBe(400);
     });
   });
 

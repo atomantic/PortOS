@@ -33,7 +33,6 @@ export const DEFAULT_CONFIG = {
   userTasksFile: 'data/TASKS.md',
   cosTasksFile: 'data/COS-TASKS.md',
   goalsFile: 'GOALS.md',
-  evaluationIntervalMs: 60000,
   healthCheckIntervalMs: 900000,
   maxConcurrentAgents: 3,
   maxConcurrentAgentsPerProject: 2,
@@ -128,6 +127,16 @@ export function isImprovementEnabled(state) {
     (state.config.selfImprovementEnabled || state.config.appImprovementEnabled);
 }
 
+// Autonomous improvement-task QUEUING gate. Queuing mutates COS-TASKS.md with
+// autonomous internal work, so it requires BOTH the idle-review flag AND the CoS
+// auto-run domain in `execute` (off/dry-run are planning postures that withhold
+// the queue mutation). Shared by the post-startup queue, the
+// cos-improvement-check timer, and the perpetual drain-on-completion refill so
+// the three gates can't drift apart.
+export function canQueueImprovementTasks(state) {
+  return Boolean(state.config.idleReviewEnabled) && getDomainMode(state.config, 'cos') === 'execute';
+}
+
 export async function loadState() {
   if (stateCache) return stateCache;
 
@@ -176,6 +185,14 @@ export async function loadState() {
     persistedConfig.improvementEnabled =
       persistedConfig.selfImprovementEnabled || persistedConfig.appImprovementEnabled;
   }
+
+  // Drop the retired `evaluationIntervalMs` key on read. CoS evaluation became
+  // event-driven (the periodic evaluateTasks() timer was removed), so the field
+  // no longer exists in DEFAULT_CONFIG or the (strict) update schema. Upgraded
+  // installs still carry it in state.json; stripping it here keeps GET /config
+  // from re-emitting a key the strict PUT schema would now reject on a full
+  // round-trip, and purges it from disk on the next saveState.
+  delete persistedConfig.evaluationIntervalMs;
 
   stateCache = {
     ...DEFAULT_STATE,

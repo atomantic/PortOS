@@ -125,7 +125,13 @@ export async function startVolumeBeatsRun(seriesId, seasonId, options = {}) {
         try {
           const { stage, runId: stageRunId } = await generateStage(issue.id, 'idea', {
             providerId: options.providerId,
+            // Soft run-level default (Series Autopilot, #1514) — forwarded
+            // alongside the hard providerId so a per-stage pin still wins.
+            providerIdDefault: options.providerIdDefault,
             model: options.model,
+            // Soft run-level model default (Series Autopilot, #1558) — forwarded
+            // alongside the hard model so a per-stage `model` pin still wins.
+            modelIdDefault: options.modelIdDefault,
           });
           generated += 1;
           broadcast({

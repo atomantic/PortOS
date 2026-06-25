@@ -221,6 +221,20 @@ export const generatePipelineComicPage = (issueId, pageIndex, opts = {}) =>
     body: JSON.stringify(opts),
   });
 
+// AI prompt-refine + image-to-image re-render for a small correction to an
+// already-rendered comic page (issue #1534). `opts.instruction` is the user's
+// free-text change; the server adjusts the page's stored render prompt and
+// re-renders i2i from the page's existing image, persisting the new jobId +
+// adjusted prompt on the matching variant slot. Pass `target` ('proof'|'final')
+// to force a variant; absent → server refines the final render when present,
+// else the proof. Returns { jobId, mode, prompt, pageIndex, variant, changes,
+// runId, providerId, issue, stage }.
+export const refinePipelineComicPageRender = (issueId, pageIndex, opts = {}) =>
+  request(`/pipeline/issues/${encodeURIComponent(issueId)}/stages/comicPages/pages/${encodeURIComponent(pageIndex)}/refine-render`, {
+    method: 'POST',
+    body: JSON.stringify(opts),
+  });
+
 // Render the issue's front cover. Pass `coverScript` to render a not-yet-
 // saved concept (the route persists it back to stages.comicPages.cover so
 // the next reload reflects what was rendered). Server folds in series
@@ -495,6 +509,15 @@ export const getPipelineManuscript = (seriesId, type) =>
 export const getPipelineManuscriptReview = (seriesId) =>
   request(`/pipeline/series/${encodeURIComponent(seriesId)}/manuscript/review`);
 
+// Resolve a finding by its comment id alone (series-agnostic deep-link, #1608).
+// Finder semantics: resolves `{ seriesId, comment }` when a series owns the id,
+// or `null` when it doesn't (the route 404s) or the lookup fails — the deep-link
+// page renders the same "not found" fallback either way, so it owns the error UI
+// and we stay silent.
+export const locatePipelineFinding = (commentId) =>
+  request(`/pipeline/findings/${encodeURIComponent(commentId)}/locate`, { silent: true })
+    .catch(() => null);
+
 // Patch one comment: { status } flip and/or { fix } attach/clear. Returns { comment }.
 export const patchPipelineManuscriptComment = (seriesId, commentId, patch, options = {}) =>
   request(`/pipeline/series/${encodeURIComponent(seriesId)}/manuscript/review/comments/${encodeURIComponent(commentId)}`, {
@@ -516,6 +539,16 @@ export const acceptPipelineManuscriptFix = (seriesId, commentId, { find, replace
   request(`/pipeline/series/${encodeURIComponent(seriesId)}/manuscript/review/comments/${encodeURIComponent(commentId)}/accept`, {
     method: 'POST',
     body: JSON.stringify({ find, replace, edits }),
+    ...options,
+  });
+
+// Undo a previously-accepted fix — restores the captured pre-edit manuscript
+// text and re-opens the finding. No body (the snapshot lives on the comment).
+// Returns { comment, section, sections } like accept, so callers reapply through
+// the same path.
+export const undoPipelineManuscriptFix = (seriesId, commentId, options = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/manuscript/review/comments/${encodeURIComponent(commentId)}/undo`, {
+    method: 'POST',
     ...options,
   });
 
@@ -672,6 +705,18 @@ export const updateEditorialCustomCheck = (checkId, patch, options = {}) =>
 export const deleteEditorialCustomCheck = (checkId, options = {}) =>
   request(`/pipeline/editorial/custom-checks/${encodeURIComponent(checkId)}`, {
     method: 'DELETE',
+    ...options,
+  });
+
+// Dry-run a DRAFT custom check (#1607) against a series WITHOUT saving it: runs
+// the unsaved definition transiently and returns { findings, skipped, invalid }
+// (sample findings only — never seeded into the review). `def` carries the same
+// authored fields as create, plus an optional maxFindings cap. Pass
+// { silent: true } when the caller owns its own error UI.
+export const previewEditorialCustomCheck = (seriesId, def, options = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/editorial/custom-checks/preview`, {
+    method: 'POST',
+    body: JSON.stringify(def),
     ...options,
   });
 

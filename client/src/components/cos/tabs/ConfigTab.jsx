@@ -3,7 +3,7 @@ import { Settings, Activity, CheckCircle, FileText } from 'lucide-react';
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
 import ConfigRow from './ConfigRow';
-import { AUTONOMY_LEVELS, detectAutonomyLevel, formatInterval, AVATAR_STYLE_LABELS, AUTONOMY_DOMAINS, DOMAIN_AUTONOMY_MODES, getDomainMode, DOMAIN_BUDGET_FIELDS, getDomainBudget, normalizeBudgetLimit } from '../constants';
+import { AUTONOMY_LEVELS, detectAutonomyLevel, AVATAR_STYLE_LABELS, AUTONOMY_DOMAINS, DOMAIN_AUTONOMY_MODES, getDomainMode, DOMAIN_BUDGET_FIELDS, getDomainBudget, normalizeBudgetLimit } from '../constants';
 import ProviderModelSelector from '../../ProviderModelSelector';
 import useProviderModels from '../../../hooks/useProviderModels';
 
@@ -29,7 +29,6 @@ const LEVEL_COLORS = {
 
 // Parameter labels for display
 const PARAM_LABELS = {
-  evaluationIntervalMs: 'Eval',
   maxConcurrentAgents: 'Agents',
   maxConcurrentAgentsPerProject: 'Per Project',
   improvementEnabled: 'Improve',
@@ -40,7 +39,6 @@ const PARAM_LABELS = {
 
 // Format param value for display
 const formatParamValue = (key, value) => {
-  if (key === 'evaluationIntervalMs') return formatInterval(value);
   if (typeof value === 'boolean') return value ? 'Yes' : 'No';
   return String(value);
 };
@@ -250,7 +248,7 @@ function DomainBudgetControl({ config, usage, onBudgetChange }) {
   );
 }
 
-export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, setAvatarStyle, evalCountdown }) {
+export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, setAvatarStyle }) {
   const { providers, availableModels, setSelectedProviderId: setProviderHook, setSelectedModel: setModelHook, selectedProviderId: hookProviderId, selectedModel: hookModel } = useProviderModels();
   const [embeddingProviderId, setEmbeddingProviderId] = useState(config?.embeddingProviderId || 'lmstudio');
   const [embeddingModel, setEmbeddingModel] = useState(config?.embeddingModel || '');
@@ -269,7 +267,6 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, s
 
   const [editing, setEditing] = useState(false);
   const [formData, setFormData] = useState({
-    evaluationIntervalMs: config?.evaluationIntervalMs || 60000,
     healthCheckIntervalMs: config?.healthCheckIntervalMs || 900000,
     maxConcurrentAgents: config?.maxConcurrentAgents || 3,
     maxConcurrentAgentsPerProject: config?.maxConcurrentAgentsPerProject || 2,
@@ -373,22 +370,6 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, s
       <DomainBudgetControl config={config} usage={budgetUsage} onBudgetChange={handleBudgetChange} />
 
       <div className="bg-port-card border border-port-border rounded-lg divide-y divide-port-border">
-        <ConfigRow
-          label="Evaluation Interval"
-          value={`${formData.evaluationIntervalMs / 1000}s`}
-          editing={editing}
-          type="number"
-          inputValue={formData.evaluationIntervalMs / 1000}
-          onChange={v => setFormData(f => ({ ...f, evaluationIntervalMs: v * 1000 }))}
-          suffix="seconds"
-          tooltip="How often CoS checks for pending tasks and spawns agents to work on them"
-        />
-        {evalCountdown && (
-          <div className="flex items-center justify-between p-4 bg-port-accent/5">
-            <span className="text-gray-500 text-sm">Next evaluation in</span>
-            <span className="font-mono text-port-accent">{evalCountdown.formatted}</span>
-          </div>
-        )}
         <ConfigRow
           label="Health Check Interval"
           value={`${formData.healthCheckIntervalMs / 60000}m`}

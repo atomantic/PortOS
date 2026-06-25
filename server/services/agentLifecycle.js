@@ -27,6 +27,8 @@ import { extractCodexAssistantTail } from '../lib/codexAssistantExtract.js';
 import { buildTuiSpawnConfig, spawnTuiAgent } from './agentTuiSpawning.js';
 import { processAgentCompletion } from './agentCompletion.js';
 import { releaseAppReviewMarker } from './appActivity.js';
+import { ensureInstanceId } from './instances.js';
+import { isClaimableBy, buildClaim, buildRelease, getClaimOwner } from './cosTaskClaim.js';
 import { runnerAgents, pausedAgents, spawningTasks, useRunner, isTruthyMeta } from './agentState.js';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 
@@ -117,9 +119,46 @@ export async function spawnAgentForTask(task) {
     return null;
   }
 
+  // Acquire the in-process dedup guard SYNCHRONOUSLY — before any `await` below.
+  // A `task:ready` re-emit for the same task id can land while this call is
+  // suspended at an await (e.g. `ensureInstanceId()` / `getTaskById()`), and
+  // EventEmitter does not serialize async listeners, so a guard taken after an
+  // await would let a second call slip past the `has()` check above and spawn a
+  // duplicate agent (codex review). Every early `return null` below releases it.
+  spawningTasks.add(task.id);
+
+  // Cross-instance claim guard (issue #1563, acceptance criterion 2). When this
+  // task list is shared with a federated peer (full-sync mode, #1561), the peer
+  // may already be working this task. Refuse to spawn while another instance
+  // holds a live lease — otherwise both peers spawn an agent for the same task,
+  // create conflicting `cos/<taskId>/<agentId>` worktrees on the same repo, and
+  // race the orphan-reset. This is a cheap, no-I/O fast-reject on the dequeued
+  // task; the authoritative acquire-with-fresh-reread happens below, before any
+  // spawn setup. No-op for a non-federated install (no claim metadata) and for
+  // re-claiming our own task on retry/resume.
+  // Resolve identity defensively: this runs after `spawningTasks.add` but before
+  // the main try/finally, so an uncaught rejection (e.g. cold-start identity
+  // creation failing to write data/instances.json) would exit with the task id
+  // stranded in `spawningTasks`, blocking every future spawn of it until restart
+  // (codex review). Release the guard on failure.
+  let instanceId;
+  try {
+    instanceId = await ensureInstanceId();
+  } catch (err) {
+    spawningTasks.delete(task.id);
+    emitLog('error', `Failed to resolve instance identity for task ${task.id}: ${err?.message || err}`, { taskId: task.id });
+    return null;
+  }
+  if (!isClaimableBy(task.metadata, instanceId)) {
+    spawningTasks.delete(task.id);
+    console.log(`🔒 Task ${task.id} is claimed by instance ${getClaimOwner(task.metadata)} (live lease) — skipping spawn on ${instanceId}`);
+    return null;
+  }
+
   // Check total spawn count across all retry types to prevent runaway respawning
   const totalSpawns = Number(task.metadata?.totalSpawnCount) || 0;
   if (totalSpawns >= MAX_TOTAL_SPAWNS) {
+    spawningTasks.delete(task.id);
     console.log(`🚫 Task ${task.id} hit max total spawns (${totalSpawns}/${MAX_TOTAL_SPAWNS}), blocking`);
     await updateTask(task.id, {
       status: 'blocked',
@@ -136,8 +175,6 @@ export async function spawnAgentForTask(task) {
     await releaseAppReviewMarker(task.metadata?.app).catch(() => {});
     return null;
   }
-
-  spawningTasks.add(task.id);
 
   const agentId = `agent-${uuidv4().slice(0, 8)}`;
 
@@ -160,6 +197,10 @@ export async function spawnAgentForTask(task) {
   });
   startExecution(toolExecution.id);
 
+  // Set once the federation claim has been persisted (just below). cleanupOnError
+  // reads it to release the claim on any failed-setup early exit.
+  let claimAcquired = false;
+
   // Helper to cleanup on early exit. Releases the dedup guard, the execution
   // lane, and the tool-execution state — and the synthetic app-review marker
   // bound by `bindAppReviewAgent` before this spawn. Without the marker
@@ -173,10 +214,51 @@ export async function spawnAgentForTask(task) {
     release(agentId);
     errorExecution(toolExecution.id, { message: error });
     completeExecution(toolExecution.id, { success: false });
+    // Release the federation claim acquired before setup (issue #1563) so a
+    // failed spawn never strands the task as claimed-but-not-running, which
+    // would block both this instance's retry and a peer for a full lease window.
+    if (claimAcquired) {
+      await updateTask(task.id, { metadata: buildRelease() }, task.taskType || 'user').catch(() => {});
+    }
     await releaseAppReviewMarker(task.metadata?.app).catch(err => {
       emitLog('warn', `Failed to release app review marker for ${task.metadata?.app}: ${err.message}`, { taskId: task.id });
     });
   };
+
+  // Acquire the federation lease BEFORE any spawn setup (issue #1563, addressing
+  // the codex review: the claim must be taken up front, not at the in_progress
+  // flip after worktree/agent registration). Re-read the freshest persisted task
+  // so a peer's claim that synced in since this `task` was dequeued is honored,
+  // then write our claim immediately. Acquiring up front — rather than after
+  // setup — narrows the cross-peer window in which both instances pass the check
+  // and spawn, and the fresh re-read means we never clobber a claim that landed
+  // during the gap. cleanupOnError releases it on any failed-setup exit. (Full
+  // cross-machine atomicity completes with the task-record sync wiring in #1650;
+  // within one install the `spawningTasks` guard already prevents duplicates.)
+  const freshTask = await getTaskById(task.id).catch(() => null);
+  if (freshTask) {
+    // The task is persisted — honor a peer's claim that synced in since dispatch,
+    // then take the lease up front.
+    if (!isClaimableBy(freshTask.metadata, instanceId)) {
+      console.log(`🔒 Task ${task.id} was claimed by instance ${getClaimOwner(freshTask.metadata)} during dispatch — yielding on ${instanceId}`);
+      await cleanupOnError('claimed by another instance');
+      return null;
+    }
+    const claimUpdate = await updateTask(task.id, {
+      metadata: buildClaim(instanceId)
+    }, task.taskType || 'user').catch(() => null);
+    if (claimUpdate && !claimUpdate.error) {
+      claimAcquired = true;
+      // Keep the in-memory task's metadata in sync with the persisted claim so
+      // the downstream in_progress update merges against the freshest shape.
+      task.metadata = claimUpdate.metadata;
+    }
+    // If the claim write failed, fall through: the in_progress update below still
+    // stamps the claim, preserving the prior single-write behavior for any task
+    // shape that isn't separately updatable here.
+  }
+  // A not-yet-persisted task (getTaskById miss) falls through unchanged — its
+  // claim is stamped at the in_progress update below, exactly as before.
 
   // Single try wraps setup + the spawn handoff so all locals stay in
   // scope. The `handedOff` flag tells the catch arm which kind of
@@ -257,8 +339,19 @@ export async function spawnAgentForTask(task) {
     const { runId } = await createAgentRun(agentId, task, selectedModel, provider, workspacePath, resolvedAppName);
     const executionMode = isTui ? 'tui' : useRunner ? 'runner' : 'direct';
 
-    // Register the agent with model info
+    // Register the agent with model info.
+    //
+    // `instanceId` stamps the producing machine's federation identity onto every
+    // spawned agent (issue #1563, acceptance criterion 1). It flows through to
+    // the completed-agent archive's `metadata.json` automatically (completeAgent
+    // serializes `.metadata`), so once CoS agent history federates across peers a
+    // node pair can attribute each agent + its worktree branch to the instance
+    // that produced it.
+    //
+    // `instanceId` was resolved up front via `ensureInstanceId()` for the claim
+    // guard, and is reused here so the warm-path cached read happens once.
     await registerAgent(agentId, task.id, {
+      instanceId,
       workspacePath,
       sourceWorkspace: worktreeInfo ? (task.metadata?.app ? await getAppWorkspace(task.metadata.app) : ROOT_DIR) : null,
       worktreeBranch: worktreeInfo?.branchName || null,
@@ -299,14 +392,21 @@ export async function spawnAgentForTask(task) {
 
     emitLog('info', `Agent ${agentId} initializing...${worktreeInfo ? ' (worktree)' : ''}${jiraBranchName ? ` (JIRA: ${jiraTicket?.ticketId})` : ''}`, { agentId, taskId: task.id });
 
-    // Mark the task as in_progress and increment total spawn count
+    // Mark the task as in_progress, increment the total spawn count, and refresh
+    // the federation claim (issue #1563). The claim was already acquired up front
+    // (above); re-stamping it here renews the lease at the moment the agent
+    // actually spawns. A federated peer sharing this task list sees the task as
+    // live-claimed and backs off (the orphan-reset honors the same lease). The
+    // lease is then renewed on the health-check heartbeat while the agent runs,
+    // and released when the task leaves `in_progress`.
     const newSpawnCount = (Number(task.metadata?.totalSpawnCount) || 0) + 1;
     const updateResult = await updateTask(task.id, {
       status: 'in_progress',
       metadata: {
         ...task.metadata,
         totalSpawnCount: newSpawnCount,
-        lastSpawnedAt: new Date().toISOString()
+        lastSpawnedAt: new Date().toISOString(),
+        ...buildClaim(instanceId)
       }
     }, task.taskType || 'user')
       .catch(err => {
@@ -323,9 +423,16 @@ export async function spawnAgentForTask(task) {
       cosEvents.emit('job:spawned', { jobId: task.metadata.jobId });
     }
 
+    // Read ~/.claude/settings.json env BEFORE building the argv so the Bedrock
+    // model-id mapping in buildCliSpawnConfig sees the same CLAUDE_CODE_USE_BEDROCK
+    // the child is actually spawned with (the spawn helpers merge this env too).
+    // Without it, a host that supplies Bedrock mode only via settings.json would
+    // bake a bare, Bedrock-invalid --model into the argv. Cached (5-min TTL), so
+    // the spawn helper's own getClaudeSettingsEnv() call is effectively free.
+    const cliSettingsEnv = isClaudeCliProvider(provider) ? await getClaudeSettingsEnv() : {};
     const cliConfig = isTui
       ? buildTuiSpawnConfig(provider, selectedModel)
-      : buildCliSpawnConfig(provider, selectedModel);
+      : buildCliSpawnConfig(provider, selectedModel, cliSettingsEnv);
 
     emitLog('success', `Spawning agent for task ${task.id}`, {
       agentId,

@@ -4,6 +4,7 @@ import {
   ALLOWED_COMMANDS_SORTED,
   DANGEROUS_SHELL_CHARS,
   validateCommand,
+  validatePm2Command,
   redactOutput,
   parseCommandArgs
 } from './commandSecurity.js'
@@ -226,6 +227,47 @@ describe('commandSecurity', () => {
 
     it('preserves an empty quoted argument', () => {
       expect(parseCommandArgs('echo ""')).toEqual(['echo', ''])
+    })
+  })
+
+  describe('pm2 daemon-protection (validatePm2Command via validateCommand)', () => {
+    // The shared pm2 daemon runs every app on the machine. These must never reach
+    // the shell — `pm2 kill` once took the whole server (incl. PortOS) down.
+    it.each([
+      'pm2 kill',
+      'pm2 startup',
+      'pm2 unstartup',
+      'pm2 stop all',
+      'pm2 delete all',
+      'pm2 del all',
+      'pm2 restart all',
+      'pm2 reload all',
+      'pm2 scale all 2',
+      'pm2 KILL',          // case-insensitive subcommand
+      'pm2 stop ALL',      // case-insensitive target
+    ])('rejects %s', (cmd) => {
+      const result = validateCommand(cmd)
+      expect(result.valid).toBe(false)
+      expect(result.error).toMatch(/blocked/)
+    })
+
+    it.each([
+      'pm2 list',
+      'pm2 jlist',
+      'pm2 logs my-app',
+      'pm2 restart my-app',
+      'pm2 stop my-app',
+      'pm2 delete my-app',
+      'pm2 reload my-app',
+      'pm2 describe my-app',
+    ])('allows scoped command %s', (cmd) => {
+      expect(validateCommand(cmd).valid).toBe(true)
+    })
+
+    it('validatePm2Command is callable directly with arg arrays', () => {
+      expect(validatePm2Command(['kill']).valid).toBe(false)
+      expect(validatePm2Command(['restart', 'my-app']).valid).toBe(true)
+      expect(validatePm2Command(['delete', 'all']).valid).toBe(false)
     })
   })
 })

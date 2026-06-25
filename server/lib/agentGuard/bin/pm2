@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+#
+# PortOS agent guard — pm2 shim
+# ------------------------------
+# Spawned AI agents (CoS "Fix with AI" tasks, the autofixer app, etc.) run their
+# CLI with `--dangerously-skip-permissions`, i.e. fully unrestricted Bash. PortOS
+# prepends THIS directory to those agents' PATH (see server/lib/agentGuard), so a
+# bare `pm2 ...` resolves here first. We block the handful of subcommands that
+# would take down the SHARED PM2 daemon — and therefore every other app on the
+# machine, including PortOS itself — then exec the real pm2 for everything else.
+#
+# This list is mirrored in server/lib/commandSecurity.js (validatePm2Command).
+# Keep the two in sync.
+#
+# Note: this is defense-in-depth against a *confused* agent, not a sandbox. An
+# agent that calls pm2 by absolute path bypasses the shim — acceptable for
+# PortOS's single-user, private-network trust model.
+
+sub="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+
+block() {
+  printf '🛑 PortOS agent guard: `pm2 %s` is blocked — it would disrupt the shared PM2 daemon or other apps on this server (including PortOS itself). Restart only your own app with `pm2 restart <your-process-name>`.\n' "$*" >&2
+  exit 1
+}
+
+case "$sub" in
+  kill|startup|unstartup) block "$@" ;;
+esac
+
+case "$sub" in
+  stop|delete|del|restart|reload|gracefulreload|scale)
+    for arg in "${@:2}"; do
+      lower="$(printf '%s' "$arg" | tr '[:upper:]' '[:lower:]')"
+      [ "$lower" = "all" ] && block "$@"
+    done
+    ;;
+esac
+
+# Resolve the real pm2. PortOS sets PORTOS_REAL_PM2 to the Node-resolved binary;
+# fall back to the first pm2 on PATH that is NOT this shim's own directory.
+self_dir="$(cd "$(dirname "$0")" && pwd)"
+real="$PORTOS_REAL_PM2"
+if [ -z "$real" ] || [ ! -x "$real" ]; then
+  real=""
+  OLD_IFS="$IFS"; IFS=':'
+  for d in $PATH; do
+    [ -z "$d" ] && continue
+    resolved="$(cd "$d" 2>/dev/null && pwd)" || continue
+    [ "$resolved" = "$self_dir" ] && continue
+    if [ -x "$d/pm2" ]; then real="$d/pm2"; break; fi
+  done
+  IFS="$OLD_IFS"
+fi
+
+if [ -z "$real" ]; then
+  printf '🛑 PortOS agent guard: real pm2 binary not found on PATH.\n' >&2
+  exit 127
+fi
+
+exec "$real" "$@"

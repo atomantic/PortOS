@@ -32,15 +32,17 @@ import {
   analyzeComicLettering,
   DEFAULT_LETTERING_THRESHOLDS,
 } from './letteringDensity.js';
-import { analyzeNamePair, findFirstLetterClusters, normalizeName } from './nameSimilarity.js';
+import { analyzeBalloonAttribution } from './balloonAttribution.js';
+import { analyzeNamePair, comparisonName, findFirstLetterClusters, normalizeName } from './nameSimilarity.js';
 import { findCliches, findModifierStacking } from './cliches.js';
-import { findSaidBookisms, findUnattributedDialogueRuns, attributeDialogueByOwner } from './dialogue.js';
+import { findSaidBookisms, findUnattributedDialogueRuns, attributeDialogueByOwner, findDialogueTagVariety } from './dialogue.js';
 import { findItalicThoughts } from './italicThoughts.js';
 import {
   findFilterWords,
   findCrutchWords,
   findAdverbs,
   findPassiveVoice,
+  filterPassiveVoice,
   findGestures,
 } from './proseTics.js';
 import {
@@ -69,6 +71,14 @@ const SEVERITIES = CHECK_SEVERITIES;
 // runner's `SOURCE_RESOLVERS` (a load-time guard there fails fast if they drift).
 //   - 'manuscript'              — the stitched manuscript corpus (implies needsManuscript)
 //   - 'canon'                   — the universe/series canon (characters, relationships, objects)
+//   - 'continuityBible'         — the series CONTINUITY-BIBLE facts ledger (#1305): the
+//                                 extracted ground-truth facts the timeline/canon-contradiction
+//                                 check (#1581) reconciles the prose against — `[{ category,
+//                                 subject, statement, issueNumber }]` across the bible's
+//                                 categories (physical, age, dates/elapsed time, location,
+//                                 possession, world rules, who-knows-what). The runner fetches
+//                                 it via `getFactsLedger` (gated on this source) and injects
+//                                 `ctx.continuityBible` (the facts array).
 //   - 'series.styleGuide'       — the series style guide (tense/POV/rating/reading level)
 //   - 'series.arc.tickingClock' — the series arc's ticking clock
 //   - 'reverseOutline'          — the cached reverse-outline scene segmentation (#1286);
@@ -132,10 +142,16 @@ const SEVERITIES = CHECK_SEVERITIES;
 export const EDITORIAL_SOURCES = Object.freeze([
   'manuscript',
   'canon',
+  'continuityBible',
   'series.styleGuide',
   'series.arc.tickingClock',
   'series.arc.readerMap',
   'series.arc.themes',
+  // The author-supplied real-world fact reference the opt-in research.fact-accuracy
+  // check reconciles the prose against (#1588). Lives on the already-loaded series
+  // record (no extra I/O); fingerprinting it stales fact findings when the author
+  // edits the reference.
+  'series.factReference',
   'reverseOutline',
   'reverseOutline.plotlines',
   'editorialArcs',
@@ -144,6 +160,12 @@ export const EDITORIAL_SOURCES = Object.freeze([
   'comicScript',
   'comicScript.pacing',
   'comicScript.layout',
+  // Each issue's PROSE-stage text SPECIFICALLY (#1589) — NOT the default manuscript
+  // precedence (comicScript ▸ teleplay ▸ prose), which for a hybrid issue returns
+  // the comic script. The comic↔prose-sync check reads this to compare prose against
+  // the comic; fingerprinting it separately means a prose edit stales a sync finding
+  // without a comic-only edit doing so (and vice-versa, via comicScript.pacing).
+  'prose',
 ]);
 
 // Default per-run finding cap for user-defined checks (#1346) — mirrors the
@@ -207,26 +229,47 @@ export const ENDINGS_CLIFFHANGER_STAGE = 'pipeline-editorial-endings-cliffhanger
 // logged. Pure + deterministic so it's unit-testable and so its token cost can be
 // counted into the per-chunk overhead. Returns '' when nothing is authored (the
 // prompt's `{{#authoredSetups}}` section then renders nothing).
+// Render one reader-map entry (hook or payoff) to a `- text (arc position N)` line.
+// Shared by authoredSetupPayoffSummary + authoredPayoffsSummary. Returns '' for an
+// entry with no usable label/note so callers can `.filter(Boolean)`.
+function renderReaderMapEntryLine(e) {
+  const label = typeof e?.label === 'string' ? e.label.trim() : '';
+  const note = typeof e?.note === 'string' ? e.note.trim() : '';
+  const text = label && note ? `${label} — ${note}` : (label || note);
+  if (!text) return '';
+  // A coarse expected-location hint so the model can reason about WHERE an
+  // authored hook should have paid off (reconciliation signal, #1299).
+  const pos = Number.isFinite(e?.atArcPosition) ? ` (arc position ${e.atArcPosition})` : '';
+  return `- ${text}${pos}`;
+}
+
 export function authoredSetupPayoffSummary(readerMap) {
   const hooks = Array.isArray(readerMap?.hooks) ? readerMap.hooks : [];
   const payoffs = Array.isArray(readerMap?.payoffs) ? readerMap.payoffs : [];
-  const line = (e) => {
-    const label = typeof e?.label === 'string' ? e.label.trim() : '';
-    const note = typeof e?.note === 'string' ? e.note.trim() : '';
-    const text = label && note ? `${label} — ${note}` : (label || note);
-    if (!text) return '';
-    // A coarse expected-location hint so the model can reason about WHERE an
-    // authored hook should have paid off (reconciliation signal, #1299).
-    const pos = Number.isFinite(e?.atArcPosition) ? ` (arc position ${e.atArcPosition})` : '';
-    return `- ${text}${pos}`;
-  };
-  const hookLines = hooks.map(line).filter(Boolean);
-  const payoffLines = payoffs.map(line).filter(Boolean);
+  const hookLines = hooks.map(renderReaderMapEntryLine).filter(Boolean);
+  const payoffLines = payoffs.map(renderReaderMapEntryLine).filter(Boolean);
   if (!hookLines.length && !payoffLines.length) return '';
   const parts = [];
   if (hookLines.length) parts.push(`Authored hooks (questions the writer planted):\n${hookLines.join('\n')}`);
   if (payoffLines.length) parts.push(`Authored payoffs (resolutions the writer logged):\n${payoffLines.join('\n')}`);
   return parts.join('\n\n');
+}
+
+// Render ONLY the authored reader-map payoffs (#1583) — the resolutions the writer
+// LOGGED that the reader was promised. The climax / resolution-power check passes
+// this (NOT authoredSetupPayoffSummary, which also bundles hooks) so the prompt's
+// "payoffs the climax should deliver" framing stays accurate: a hook is a question
+// the writer planted, not a climax obligation, so feeding hooks here would risk the
+// model flagging an ordinary unanswered hook as a missing climax resolution. Pure +
+// deterministic so it's unit-testable and its token cost can be counted into the
+// per-chunk overhead. Returns '' when no payoff is authored (the prompt's
+// `{{#authoredPayoffs}}` section then renders nothing and the check reasons from the
+// prose + themes alone).
+export function authoredPayoffsSummary(readerMap) {
+  const payoffs = Array.isArray(readerMap?.payoffs) ? readerMap.payoffs : [];
+  const payoffLines = payoffs.map(renderReaderMapEntryLine).filter(Boolean);
+  if (!payoffLines.length) return '';
+  return `Authored payoffs (resolutions the writer logged — what the reader was promised):\n${payoffLines.join('\n')}`;
 }
 
 // Stage name for the cliché / dead-metaphor / overwriting LLM check (#1308).
@@ -284,6 +327,13 @@ export const TELLING_EMOTION_STAGE = 'pipeline-editorial-telling-emotion';
 export const ON_THE_NOSE_STAGE = 'pipeline-editorial-on-the-nose';
 export const VOICE_DISTINCTIVENESS_STAGE = 'pipeline-editorial-voice-distinctiveness';
 
+// Stage name for the narrator voice / tone-consistency LLM check (#1586) — the
+// narration-level sibling of voice-distinctiveness (which covers per-CHARACTER
+// dialogue). Ships in data.reference/prompts/stages/ + stage-config.json (fresh
+// installs via setup-data.js) and migrates to existing installs via migration 134
+// (boot runs migrations but NOT setup-data, so the migration is required).
+export const VOICE_CONSISTENCY_STAGE = 'pipeline-editorial-voice-consistency';
+
 // Render each canon character's authored voice fields into a compact text block
 // the voice-distinctiveness LLM check passes alongside the manuscript, so the
 // model can flag lines that contradict a character's recorded speechPattern /
@@ -312,6 +362,184 @@ export function characterVoiceProfiles(canon) {
   return `Authored character voices (canon speechPattern / speechAccent):\n${lines.join('\n')}`;
 }
 
+// Render the series style guide's INTENDED narrative voice — the authored `tone`
+// words (e.g. "witty", "grim", "lyrical") — into a compact block the narrator
+// voice-consistency check (#1586) passes alongside the manuscript, so the model
+// can measure each issue's narration against the declared intent, not just
+// against the other issues. Pure + deterministic so it's unit-testable and its
+// token cost counts into the per-chunk overhead. Type-guarded (styleGuide rides
+// peer sync, so a hand-edited / older-peer guide could carry a non-array `tone`
+// or non-string entries). Returns '' when the guide declares no tone (the
+// prompt's {{#intendedVoice}} section then renders nothing and the check degrades
+// to a pure cross-issue consistency scan).
+export function intendedVoiceSummary(styleGuide) {
+  const raw = Array.isArray(styleGuide?.tone) ? styleGuide.tone : [];
+  const tone = raw
+    .filter((t) => typeof t === 'string' && t.trim())
+    .map((t) => t.trim());
+  if (!tone.length) return '';
+  return `Style guide — intended narrative tone/voice: ${tone.join(', ')}.`;
+}
+
+// Render each canon character's contradiction-relevant FACTS into a compact text
+// block the timeline / canon-contradiction check (#1581) passes alongside the
+// manuscript, so the model can reconcile the prose against the established bible:
+// a character the bible records at age 16 who reads "in her 30s" on the page, a
+// role/status the prose contradicts, or a description the prose breaks. Pure +
+// deterministic so it's unit-testable and its token cost can be counted into the
+// per-chunk overhead. Type-guarded throughout (canon rides peer sync, so a
+// hand-edited / older-peer character could carry a non-string field a bare
+// `.trim()` would throw on — and `age` is commonly stored as a number). Reuses
+// `characterNameTokens` so name + aliases render with the same trim/de-dup the
+// matcher uses. Returns '' when no character carries both a usable name AND a
+// renderable fact (the prompt's `{{#canonStates}}` section then renders nothing
+// and the check reasons from the prose + scene map alone).
+const CANON_STATE_FACT_CHARS = 240;
+export function canonCharacterStatesSummary(canon) {
+  const chars = Array.isArray(canon?.characters) ? canon.characters : [];
+  const cleanStr = (v) => (typeof v === 'string' ? v.trim() : '');
+  const rows = [];
+  for (const c of chars) {
+    if (!c || typeof c !== 'object') continue;
+    // Require a real name — an alias-only row isn't a named character (mirrors
+    // canonRosterNamesSummary, which skips nameless rows). characterNameTokens then
+    // returns the trimmed name first, followed by de-duped aliases.
+    if (typeof c.name !== 'string' || !c.name.trim()) continue;
+    const [name, ...aliases] = characterNameTokens(c);
+    const facts = [];
+    // `age` is often a number in the bible — accept a finite number or a non-empty string.
+    const age = typeof c.age === 'number' && Number.isFinite(c.age) ? String(c.age) : cleanStr(c.age);
+    if (age) facts.push(`age ${age}`);
+    const role = cleanStr(c.role);
+    if (role) facts.push(`role: ${role}`);
+    const status = cleanStr(c.status);
+    if (status) facts.push(`status: ${status}`);
+    // physicalDescription is the richer bible field; fall back to a generic description.
+    const description = (cleanStr(c.physicalDescription) || cleanStr(c.description)).slice(0, CANON_STATE_FACT_CHARS);
+    if (description) facts.push(`described as: ${description}`);
+    if (!facts.length) continue;
+    const who = aliases.length ? `${name} (also: ${aliases.join(', ')})` : name;
+    rows.push(`- ${who} — ${facts.join('; ')}`);
+  }
+  if (!rows.length) return '';
+  return `Canon character facts (the established bible — reconcile the prose against these):\n${rows.join('\n')}`;
+}
+
+// Render each canon character's PERSONALITY-relevant traits into a compact text
+// block the character-consistency check (#1582) passes alongside the manuscript,
+// so the model can flag an UNEARNED shift: a reserved character suddenly cracking
+// jokes, an established fear/allergy silently contradicted, a voice that drifts
+// off the authored speech pattern. Distinct from `canonCharacterStatesSummary`
+// (age/role/status/described-as — the contradiction-of-FACTS grounding the
+// timeline check reads) and from `characterVoiceProfiles` (speech only): this is
+// the temperament/traits grounding. Pure + deterministic so it's unit-testable
+// and its token cost can be counted into the per-chunk overhead. Type-guarded
+// throughout (canon rides peer sync, so a hand-edited / older-peer character
+// could carry a non-string field a bare `.trim()` would throw on, and
+// mannerisms/likes/dislikes are commonly arrays). Reuses `characterNameTokens` so
+// name + aliases render with the same trim/de-dup the matcher uses. Returns ''
+// when no character carries both a usable name AND a renderable trait (the
+// prompt's `{{#canonTraits}}` section then renders nothing and the check reasons
+// from the prose alone).
+const CANON_TRAIT_FACT_CHARS = 240;
+export function canonCharacterTraitsSummary(canon) {
+  const chars = Array.isArray(canon?.characters) ? canon.characters : [];
+  const cleanStr = (v) => (typeof v === 'string' ? v.trim() : '');
+  // mannerisms / likes / dislikes are commonly arrays of short strings in the
+  // bible; render the first few as a comma list. Tolerates a plain string too.
+  const cleanList = (v) => {
+    if (typeof v === 'string') return v.trim();
+    if (!Array.isArray(v)) return '';
+    return v.map((x) => (typeof x === 'string' ? x.trim() : '')).filter(Boolean).slice(0, 5).join(', ');
+  };
+  const rows = [];
+  for (const c of chars) {
+    if (!c || typeof c !== 'object') continue;
+    // Require a real name — an alias-only row isn't a named character (mirrors
+    // canonCharacterStatesSummary). characterNameTokens returns the trimmed name
+    // first, followed by de-duped aliases.
+    if (typeof c.name !== 'string' || !c.name.trim()) continue;
+    const [name, ...aliases] = characterNameTokens(c);
+    const facts = [];
+    const personality = cleanStr(c.personality).slice(0, CANON_TRAIT_FACT_CHARS);
+    if (personality) facts.push(`personality: ${personality}`);
+    const specialTraits = cleanStr(c.specialTraits).slice(0, CANON_TRAIT_FACT_CHARS);
+    if (specialTraits) facts.push(`fixed traits: ${specialTraits}`);
+    const mannerisms = cleanList(c.mannerisms);
+    if (mannerisms) facts.push(`mannerisms: ${mannerisms}`);
+    const motivations = cleanStr(c.motivations).slice(0, CANON_TRAIT_FACT_CHARS);
+    if (motivations) facts.push(`motivations: ${motivations}`);
+    const likes = cleanList(c.likes);
+    if (likes) facts.push(`likes: ${likes}`);
+    const dislikes = cleanList(c.dislikes);
+    if (dislikes) facts.push(`dislikes: ${dislikes}`);
+    const speechPattern = cleanStr(c.speechPattern);
+    if (speechPattern) facts.push(`speech: ${speechPattern}`);
+    if (!facts.length) continue;
+    const who = aliases.length ? `${name} (also: ${aliases.join(', ')})` : name;
+    rows.push(`- ${who} — ${facts.join('; ')}`);
+  }
+  if (!rows.length) return '';
+  return `Canon character traits (the established bible — a shift away from these must be earned on the page):\n${rows.join('\n')}`;
+}
+
+// Human-readable labels for the continuity-bible fact categories (#1305). Inlined
+// (not imported from server/services/pipeline/continuityBible.js) to keep this
+// registry PURE — that module pulls in I/O + an SSE runner. Mirrors its
+// `FACT_CATEGORIES`; a category absent from this map falls back to its raw id, so
+// a new bible category still renders (just without a prettied label) until it's
+// added here.
+const CONTINUITY_CATEGORY_LABELS = Object.freeze({
+  physical: 'Physical traits',
+  age: 'Ages & birthdays',
+  timeline: 'Dates & elapsed time',
+  location: 'Locations & geography',
+  possession: 'Possessions & wardrobe',
+  'world-rule': 'World rules',
+  knowledge: 'Who knows what, when',
+});
+
+// Render the continuity-bible facts ledger (#1305) into a compact text block the
+// timeline / canon-contradiction check (#1581) passes alongside the manuscript, so
+// the model reconciles the prose against the established ground-truth facts the
+// bible already extracted — ages/birthdays, dates & elapsed time, locations, world
+// rules, who-knows-what — which the shallow per-character canon fields don't carry.
+// Facts are grouped by category (in the stable category order) and tagged with the
+// issue they were established in, when known, so the model can reason about WHEN a
+// fact held. Pure + deterministic so it's unit-testable and its token cost can be
+// counted into the per-chunk overhead. Type-guarded throughout (the ledger rides
+// peer sync, so a hand-edited / older-peer fact could carry a non-string field).
+// Returns '' when there are no usable facts (the prompt's `{{#continuityLedger}}`
+// section then renders nothing and the check falls back to the canon fields + prose).
+export function continuityLedgerSummary(facts) {
+  const list = Array.isArray(facts) ? facts : [];
+  const byCategory = new Map();
+  for (const f of list) {
+    if (!f || typeof f !== 'object') continue;
+    const category = typeof f.category === 'string' ? f.category.trim() : '';
+    const subject = typeof f.subject === 'string' ? f.subject.trim() : '';
+    const statement = typeof f.statement === 'string' ? f.statement.trim() : '';
+    if (!category || !statement) continue;
+    const where = Number.isInteger(f.issueNumber) ? ` (Issue ${f.issueNumber})` : '';
+    const line = subject ? `- ${subject}: ${statement}${where}` : `- ${statement}${where}`;
+    if (!byCategory.has(category)) byCategory.set(category, []);
+    byCategory.get(category).push(line);
+  }
+  if (!byCategory.size) return '';
+  // Render known categories in their canonical order first, then any unknown
+  // category (a newer-peer addition) after, so the block is stable + complete.
+  const order = [...Object.keys(CONTINUITY_CATEGORY_LABELS), ...byCategory.keys()];
+  const seen = new Set();
+  const blocks = [];
+  for (const category of order) {
+    if (seen.has(category) || !byCategory.has(category)) continue;
+    seen.add(category);
+    const label = CONTINUITY_CATEGORY_LABELS[category] || category;
+    blocks.push(`${label}:\n${byCategory.get(category).join('\n')}`);
+  }
+  return `Continuity bible facts (established ground truth — reconcile the prose against these):\n\n${blocks.join('\n\n')}`;
+}
+
 // Stage name for the plot-structure & momentum LLM check (#1310). Ships in
 // data.reference/prompts/stages/ + stage-config.json (fresh installs via
 // setup-data.js) and migrates to existing installs via migration 111 (boot runs
@@ -321,6 +549,38 @@ export function characterVoiceProfiles(canon) {
 // deus ex machina, idiot plot, flat/unclear stakes, sagging middle, and dropped
 // subplots reconciled against the tagged plotlines.
 export const PLOT_STRUCTURE_STAGE = 'pipeline-editorial-plot-structure';
+
+// Stage name for the timeline / canon-contradiction LLM check (#1581). Ships in
+// data.reference/prompts/stages/ + stage-config.json (fresh installs via
+// setup-data.js) and migrates to existing installs via migration 129 (boot runs
+// migrations but NOT setup-data, so the migration is required). Reads the stitched
+// manuscript plus the established canon character facts, the reverse-outline scene
+// ordering, and the authored per-character arcs to surface internal contradictions
+// — a dead character who reappears alive, an age that contradicts the bible, or an
+// impossible chronology.
+export const TIMELINE_CONTRADICTION_STAGE = 'pipeline-editorial-timeline-contradiction';
+
+// Stage name for the research / fact-accuracy LLM check (#1588). Ships in
+// data.reference/prompts/stages/ + stage-config.json (fresh installs via
+// setup-data.js) and migrates to existing installs via migration 135 (boot runs
+// migrations but NOT setup-data, so the migration is required). Reconciles the
+// stitched manuscript against the author-supplied real-world fact reference
+// (`series.factReference`) — a prose claim that contradicts a documented external
+// fact (geography, history, physics/physiology). Opt-in and gated on the
+// `series.factCritical` flag so it never fires on pure fantasy.
+export const FACT_ACCURACY_STAGE = 'pipeline-editorial-fact-accuracy';
+
+// Stage name for the character-consistency / unearned-personality-shift LLM check
+// (#1582). Ships in data.reference/prompts/stages/ + stage-config.json (fresh
+// installs via setup-data.js) and migrates to existing installs via migration 130
+// (boot runs migrations but NOT setup-data, so the migration is required). Reads
+// the stitched manuscript plus the established canon character TRAITS (personality,
+// fixed traits, mannerisms, speech), the reverse-outline scene ordering, and the
+// authored per-character arcs — and flags a shift the prose never earns: a reserved
+// character cracking jokes with no beat, a fear/allergy silently contradicted, or
+// POV knowledge that changes mid-scene with no on-page learning. Reconciles against
+// the authored arcs so an intentional, earned transition is NOT flagged.
+export const CHARACTER_CONSISTENCY_STAGE = 'pipeline-editorial-character-consistency';
 
 // Stage name for the head-hopping / POV-discipline LLM check (#1311). Ships in
 // data.reference/prompts/stages/ + stage-config.json (fresh installs via
@@ -369,6 +629,55 @@ export function declaredThemesSummary(themes) {
   return `Declared themes (authored on the story arc):\n${lines.join('\n')}`;
 }
 
+// Stage name for the climax / resolution-power LLM check (#1583). Ships in
+// data.reference/prompts/stages/ + stage-config.json (fresh installs via
+// setup-data.js) and migrates to existing installs via migration 131 (boot runs
+// migrations but NOT setup-data, so the migration is required). Reads the stitched
+// manuscript plus the authored reader-map payoffs (series.arc.readerMap) and the
+// declared themes (series.arc.themes) and the reverse-outline scene ordering, and
+// judges whether the CLIMAX is the protagonist's hardest, most active choice (vs.
+// a passive climax where an ally rescues them or events simply resolve around
+// them) AND whether it resolves the story's core problem/theme (vs. a plot climax
+// that lands the action but leaves the emotional/thematic core unanswered).
+// Complements plot.structure-momentum (which flags a passive protagonist arc-wide;
+// this one focuses the lens on the single payoff scene). The climax can only be
+// judged once the whole manuscript is in view, so the run gates its verdict on the
+// final part (`finalPart`); degrades to a prose-only scan when no reader-map,
+// themes, or outline exist.
+export const CLIMAX_AGENCY_STAGE = 'pipeline-editorial-climax-agency';
+
+// Stage name for the emotional-beat / reaction-proportionality LLM check (#1584).
+// Ships in data.reference/prompts/stages/ + stage-config.json (fresh installs via
+// setup-data.js) and migrates to existing installs via migration 132 (boot runs
+// migrations but NOT setup-data, so the migration is required). Reads the stitched
+// manuscript plus the reverse-outline scene map and judges whether each character's
+// emotional reactions are PROPORTIONATE to the magnitude of the events that befall
+// them: a high-magnitude event (trauma, death, betrayal, a major loss or win) that
+// draws no on-page reaction and is never processed afterward (under-reaction), or a
+// minor setback that triggers grief/rage out of all proportion (over-reaction).
+// Because an unprocessed event in an early issue can stay unaddressed many issues
+// later, the run carries high-magnitude events still awaiting a proportionate
+// reaction across chunks (`crossChunkSetup`) so a later part can flag the missing
+// payoff; degrades to a prose-only scan when no outline exists.
+export const REACTION_PROPORTIONALITY_STAGE = 'pipeline-editorial-reaction-proportionality';
+
+// Stage name for the secondary (non-POV) character-arc LLM check (#1585). Ships
+// in data.reference/prompts/stages/ + stage-config.json (fresh installs via
+// setup-data.js) and migrates to existing installs via migration 133 (boot runs
+// migrations but NOT setup-data, so the migration is required). The sibling of
+// pov.justified (#1295), which covers POV characters only: this check judges the
+// RECURRING NON-POV cast — characters who appear in multiple scenes but never
+// hold the viewpoint — and flags those who never change (a flat side character
+// who is the same at the end as the start) or who regress without purpose. Reads
+// the stitched manuscript plus the reverse-outline scene map (to tally which
+// non-POV characters recur and weigh their presence) and the canon roster (so a
+// genuinely-minor walk-on isn't held to an arc). Because a flat arc is a
+// whole-story claim, the run gates its verdict on the final part (`finalPart`)
+// and carries each recurring secondary character's established state forward
+// across chunks (`crossChunkSetup`); degrades to a prose-only scan when no
+// outline exists.
+export const SECONDARY_ARC_STAGE = 'pipeline-editorial-secondary-arc';
+
 // Stage name for the unmodeled-proper-nouns LLM check (#1412). Ships in
 // data.reference/prompts/stages/ + stage-config.json (fresh installs via
 // setup-data.js) and migrates to existing installs via migration 116 (boot runs
@@ -404,6 +713,19 @@ export const EYELINE_MATCH_STAGE = 'pipeline-editorial-eyeline-match';
 // sibling the deterministic 180°/shot-type scan can't catch (the shot parser
 // matches characters by name but never diffs their free-text descriptions).
 export const APPEARANCE_CONTINUITY_STAGE = 'pipeline-editorial-appearance-continuity';
+
+// Stage name for the comic ↔ prose synchronization LLM check (#1589). Ships in
+// data.reference/prompts/stages/ + stage-config.json (fresh installs via
+// setup-data.js) and migrates to existing installs via migration 136 (boot runs
+// migrations but NOT setup-data, so the migration is required). For a hybrid
+// comic+prose issue it pairs the issue's PROSE (its prose stage) with its
+// authoritative COMIC content (description + dialogue + caption + SFX — the same
+// fields the `comicScript.pacing` source carries) and asks the model to flag
+// SUBSTANTIVE cross-media divergences: a plot beat the prose narrates that no
+// panel shows, panel dialogue that contradicts the prose, or a chronology
+// disagreement across the two media. Comics legitimately compress and cut, so the
+// prompt is tuned to ignore ordinary medium-translation trims.
+export const COMIC_PROSE_SYNC_STAGE = 'pipeline-editorial-comic-prose-sync';
 
 // Render the canon roster's names + aliases (#1412) into a compact text block the
 // unmodeled-names check passes alongside the manuscript, so the model knows which
@@ -812,7 +1134,20 @@ export function buildSetupDigestPrompt({ focus, priorSummary, manuscript }) {
 // chunks — also yielding to spare room. It is a no-op for a single-chunk run (no
 // later chunk consumes a summary), so the common fits-in-one-call provider pays
 // nothing.
-async function runChunkedManuscriptCheck(ctx, { chunks, category, max, callChunk, crossChunkDigest = false, summarizeChunk = null }) {
+//
+// `reserveSetupDigest` (#1667) GUARANTEES the carried setup digest reaches the
+// FINAL chunk for checks that gate a whole-story verdict to it and anchor that
+// verdict on the carried snippet (arc.climax-agency #1583, emotion.reaction-
+// proportionality #1584). The setup digest normally yields to manuscript coverage,
+// so a final chunk packed to within a few hundred chars of the window silently
+// drops the digest and the final-only finding is missed. When this opt-in is set
+// and the digest doesn't fit the final chunk's spare room, the manuscript TAIL is
+// trimmed to reserve the digest's room (the inverse of the usual yield) so the
+// verdict keeps its carried context. Scoped to the final chunk and to opt-in checks
+// only — every other chunk, and every non-reserving check, keeps full manuscript
+// coverage. If the digest alone is larger than the whole window it still yields
+// (never prepended past the budget), preserving the no-overflow contract.
+async function runChunkedManuscriptCheck(ctx, { chunks, category, max, callChunk, crossChunkDigest = false, summarizeChunk = null, reserveSetupDigest = false }) {
   const usableChars = Number.isFinite(chunks?.usableChars) ? chunks.usableChars : Infinity;
   const merged = new Map();
   // The presence of `summarizeChunk` (set only when the check opts into the
@@ -825,6 +1160,13 @@ async function runChunkedManuscriptCheck(ctx, { chunks, category, max, callChunk
     // only checks the signal around the whole check, so without this a multi-
     // chunk check keeps paying for LLM calls whose results will be discarded.
     if (ctx.signal?.aborted) break;
+    // `isFinal` lets a check distinguish the last part of a chunked manuscript
+    // from earlier ones (#1299): a whole-corpus judgment like "this setup is
+    // never paid off" can only be made once the final part is in view, so the
+    // Chekhov check defers its "planted, never fired" findings to it. A
+    // single-chunk run is its own final part, so the common (provider-fits-the-
+    // book) case judges against the whole text. Existing checks ignore the arg.
+    const isFinal = i === chunks.length - 1;
     let text = manuscript;
     if (crossChunkDigest && merged.size) {
       const digest = editorialPriorFindingsDigest([...merged.values()]);
@@ -834,17 +1176,25 @@ async function runChunkedManuscriptCheck(ctx, { chunks, category, max, callChunk
     }
     if (summarizeChunk && setupSummary) {
       const setup = editorialSetupDigest(setupSummary);
-      // Fits into whatever spare room remains AFTER the findings digest — manuscript
-      // coverage and the findings digest both win over the setup digest if budget is tight.
-      if (setup && setup.length <= usableChars - text.length) text = `${setup}${text}`;
+      if (setup && setup.length <= usableChars - text.length) {
+        // Fits into whatever spare room remains AFTER the findings digest — manuscript
+        // coverage and the findings digest both win over the setup digest if budget is tight.
+        text = `${setup}${text}`;
+      } else if (setup && reserveSetupDigest && isFinal && setup.length <= usableChars) {
+        // #1667: the digest didn't fit, but this check gates its verdict to the final
+        // part and anchors it on the carried snippet — so reserve the digest's room and
+        // fill the rest with the manuscript HEAD (trimming its tail) rather than drop
+        // the carried context. Rebuild from the RAW `manuscript`, NOT the
+        // findings-digest-prefixed `text`: slicing `text` could truncate the findings
+        // digest mid-block into a malformed prefix, and the findings digest's job
+        // (suppressing duplicate re-flags) is already covered by the first-wins merge,
+        // so it safely yields here. Gated on `setup.length <= usableChars` so a digest
+        // larger than the whole window yields instead of overflowing it — preserving
+        // the pre-reserve no-overflow contract on a tiny/high-overhead window.
+        text = `${setup}${manuscript.slice(0, usableChars - setup.length)}`;
+      }
     }
-    // `isFinal` lets a check distinguish the last part of a chunked manuscript
-    // from earlier ones (#1299): a whole-corpus judgment like "this setup is
-    // never paid off" can only be made once the final part is in view, so the
-    // Chekhov check defers its "planted, never fired" findings to it. A
-    // single-chunk run is its own final part, so the common (provider-fits-the-
-    // book) case judges against the whole text. Existing checks ignore the arg.
-    const content = await callChunk(text, { isFinal: i === chunks.length - 1 });
+    const content = await callChunk(text, { isFinal });
     for (const f of mapLlmFindings(content?.findings, {
       severityDefault: ctx.severityDefault,
       category,
@@ -905,7 +1255,7 @@ async function runChunkedManuscriptCheck(ctx, { chunks, category, max, callChunk
 // check). Existing checks ignore the extra args. These checks are all
 // manuscript-scoped, so findings keep a model-supplied issue number
 // (`withIssueNumber: true`).
-async function runManuscriptLlmCheck(ctx, { stage, category, overheadTokens = 0, context = null, buildVars, crossChunkDigest = false, crossChunkSetup = false, setupFocus = '' }) {
+async function runManuscriptLlmCheck(ctx, { stage, category, overheadTokens = 0, context = null, buildVars, crossChunkDigest = false, crossChunkSetup = false, setupFocus = '', reserveSetupDigest = false }) {
   const max = ctx.config?.maxFindings ?? 12;
   // Chunks are planned at the full usable budget; the digest is fitted into each
   // later chunk's spare room inside runChunkedManuscriptCheck (it yields to the
@@ -939,6 +1289,7 @@ async function runManuscriptLlmCheck(ctx, { stage, category, overheadTokens = 0,
     max,
     crossChunkDigest,
     summarizeChunk,
+    reserveSetupDigest,
     callChunk: async (manuscript, meta) => {
       const { content } = await ctx.callStagedLLM(stage, buildVars(manuscript, meta, fittedContext), { returnsJson: true, source: stage });
       return content;
@@ -1168,6 +1519,18 @@ function buildRosterAppearances(ctx) {
   return rows;
 }
 
+// Normalized keys of every canon character that actually APPEARS in the prose
+// (named at least once across the manuscript sections) — the "appearing cast"
+// both the screen-time skew and the silent-major distribution signals score
+// against. Pure; reuses buildRosterAppearances' per-section matcher scan.
+function buildAppearingKeys(ctx) {
+  return new Set(
+    buildRosterAppearances(ctx)
+      .filter((r) => r.appearedInIssues.length > 0)
+      .map((r) => normalizeName(r.name))
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Cast representation & balance (#1312) — three coarse, computable casting
 // signals over the canon + reverse-outline + stitched manuscript:
@@ -1209,6 +1572,29 @@ function inferGender(pronouns) {
   return 'unknown';
 }
 
+// Coarse role-tier inference from a canon character's free-text `role` field, for
+// the per-character dialogue-distribution signal (#1594). Only unambiguous keyword
+// sets map to a tier; anything else (blank, a description, a role that mixes a
+// major AND a minor word like "minor antagonist") is 'unknown' so the distribution
+// signal opts out rather than guess — the same absent-vs-empty discipline
+// inferGender() uses. Deliberately omits genuinely-ambiguous words ("supporting",
+// "secondary", "recurring") that sit between lead and walk-on. Returns
+// 'major' | 'minor' | 'unknown'. The two keyword sets live at module scope (vs
+// inferGender's inline pronoun checks) so the regexes are compiled once, not on
+// every per-character call.
+const MAJOR_ROLE_RE = /\b(protagonist|deuteragonist|antagonist|villain|hero|heroine|lead|main|primary|central|principal)\b/;
+const MINOR_ROLE_RE = /\b(minor|background|cameo|walk-?on|bit[- ]?part|extra|incidental|tertiary)\b/;
+function inferRoleTier(role) {
+  const r = typeof role === 'string' ? role.toLowerCase() : '';
+  if (!r) return 'unknown';
+  const major = MAJOR_ROLE_RE.test(r);
+  const minor = MINOR_ROLE_RE.test(r);
+  if (major && minor) return 'unknown'; // contradictory ("minor antagonist") → opt out
+  if (major) return 'major';
+  if (minor) return 'minor';
+  return 'unknown';
+}
+
 // Normalized name → { char, gender, key } for every named canon character, plus
 // the per-owner whole-token matcher reused for dialogue attribution. Built once
 // per run so the dialogue scan and the co-presence scan share one identity map.
@@ -1222,7 +1608,13 @@ function buildCastIdentities(ctx) {
     const key = normalizeName(name);
     if (!key) continue;
     const matcher = characterMatcher(characterNameTokens(c));
-    identities.push({ key, name, gender: inferGender(c.pronouns), matcher });
+    identities.push({
+      key,
+      name,
+      gender: inferGender(c.pronouns),
+      roleTier: inferRoleTier(c.role),
+      matcher,
+    });
   }
   return identities;
 }
@@ -1394,6 +1786,70 @@ export function scenePovSummary(scenes) {
   }).filter(Boolean);
   if (!lines.length) return '';
   return `POV per scene (from the reverse outline):\n${lines.join('\n')}`;
+}
+
+// Render the RECURRING NON-POV cast (#1585) into a compact text block the
+// secondary-arc check passes alongside the manuscript, so the model focuses on
+// the side characters that actually carry weight (present across multiple scenes)
+// rather than every walk-on. A "secondary" character is one who appears in
+// `charactersPresent` but NEVER holds `povCharacter` in ANY scene — a character
+// who ever takes the viewpoint is a POV character (covered by pov.justified). For
+// each such character we count the scenes they appear in and the span of issues
+// those scenes touch, keeping only those at or above `minScenes` (the recurrence
+// threshold). Pure + deterministic so it's unit-testable and its token cost can
+// be counted into the per-chunk overhead. Returns '' when no non-POV character
+// recurs enough (the prompt's `{{#secondaryCast}}` section then renders nothing
+// and the check degrades to identifying recurring side characters from the prose
+// alone). Type-guarded throughout — the reverse outline rides peer sync (#1348),
+// so a hand-edited / older-peer scene could carry a non-string field a bare
+// `.trim()` would throw on.
+export function secondaryCharacterPresenceSummary(scenes, { minScenes = 2 } = {}) {
+  const list = Array.isArray(scenes) ? scenes : [];
+  const threshold = Number.isInteger(minScenes) && minScenes > 0 ? minScenes : 2;
+
+  // Every character who EVER holds the viewpoint, by normalized name — these are
+  // POV characters and are excluded from the secondary cast even in scenes where
+  // they happen to be present-but-not-narrating.
+  const povHolders = new Set();
+  for (const s of list) {
+    const pov = scenePov(s);
+    if (pov) povHolders.add(normalizeName(pov));
+  }
+
+  // Non-POV character → { name, sceneCount, issues } keyed by normalized name so
+  // casing / spacing variants collapse. Preserves first-appearance order (scenes
+  // arrive sequence-ordered) for stable output.
+  const cast = new Map();
+  for (const s of list) {
+    if (!s || typeof s !== 'object') continue;
+    const issueNumber = Number.isInteger(s.issueNumber) ? s.issueNumber : null;
+    const present = Array.isArray(s.charactersPresent)
+      ? s.charactersPresent.filter((n) => typeof n === 'string' && n.trim()).map((n) => n.trim())
+      : [];
+    // De-dup names within a single scene so a name listed twice counts once.
+    const seenThisScene = new Set();
+    for (const name of present) {
+      const key = normalizeName(name);
+      if (!key || povHolders.has(key) || seenThisScene.has(key)) continue;
+      seenThisScene.add(key);
+      let entry = cast.get(key);
+      if (!entry) { entry = { name, sceneCount: 0, issues: new Set() }; cast.set(key, entry); }
+      entry.sceneCount += 1;
+      if (issueNumber != null) entry.issues.add(issueNumber);
+    }
+  }
+
+  const rows = [];
+  for (const entry of cast.values()) {
+    if (entry.sceneCount < threshold) continue;
+    const issues = [...entry.issues].sort((a, b) => a - b);
+    const span = issues.length
+      ? (issues.length === 1 ? `issue ${issues[0]}` : `issues ${issues[0]}–${issues[issues.length - 1]}`)
+      : 'no tagged issues';
+    rows.push(`- ${entry.name}: present in ${entry.sceneCount} scene${entry.sceneCount === 1 ? '' : 's'} (${span})`);
+  }
+  if (!rows.length) return '';
+  return `Recurring non-POV characters (appear in ${threshold}+ scenes but never hold POV — judge whether each shows meaningful change):\n${rows.join('\n')}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -1579,6 +2035,128 @@ function comicLetteringFinding(v, number) {
   };
 }
 
+// Map a balloon-attribution violation to a manuscriptReview finding for issue
+// `number`. The wording is PortOS-facing copy (kept here, not in the pure
+// helper). Severity rides the violation's risk-scaled value.
+function balloonAttributionFinding(v, number) {
+  const where = `Page ${v.pageNumber} · Panel ${v.panelNumber}`;
+  const more = v.panelCount > 1 ? ` (and ${v.panelCount - 1} more panel${v.panelCount - 1 === 1 ? '' : 's'} on this page)` : '';
+  const target = Array.isArray(v.visibleOthers) && v.visibleOthers.length
+    ? ` Another character (${v.visibleOthers.slice(0, 3).join(', ')}) IS shown on the page, so the balloon will likely be tailed to the wrong character.`
+    : ' No one is clearly shown speaking it, so the balloon reads as orphaned.';
+  return {
+    severity: v.severity,
+    category: 'continuity',
+    location: number != null ? `Issue ${number} · ${where}` : where,
+    problem: `${v.speaker} speaks here${more} but is not shown anywhere on the page and the line carries no off-panel/broadcast cue.${target}`,
+    suggestion: `Either show ${v.speaker} in a panel on this page, or mark the line as spoken from elsewhere — e.g. ${v.speaker} (OFF-PANEL), (V.O.), (RADIO), or (SPEAKERS)/(PA) for a broadcast — so it renders as a disembodied balloon instead of being attributed to a visible character.`,
+    anchorQuote: typeof v.anchorQuote === 'string' ? v.anchorQuote : '',
+    issueNumber: number,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Comic ↔ prose synchronization helpers (#1589). The cross-media check pairs each
+// hybrid issue's PROSE (a manuscript section) with its authoritative COMIC content
+// and feeds the pair to the model. Pure + deterministic so they're unit-testable
+// in isolation (the LLM caller is injected via ctx.callStagedLLM).
+// ---------------------------------------------------------------------------
+
+// Per-issue prose ceiling fed to the comic↔prose check (#1589) — so a long
+// chapter can't blow a small/local provider's window. Unlike the manuscript-
+// corpus checks (which chunk the whole series), this check makes ONE call per
+// hybrid issue with that issue's prose + comic, so the bound is per-issue. The
+// comic content is the smaller, authoritative anchor; the prose is sliced to this
+// ceiling and the prompt warns the model the prose may be truncated. ~24k chars
+// ≈ 6k tokens, which fits alongside the comic block on every supported provider.
+export const PROSE_SYNC_PROSE_CHAR_CAP = 24_000;
+
+// Extract an issue's PROSE-stage text. Inlines arcPlanner's `stageTextOf` (output
+// then input) to keep the registry import-pure (no service import). Reads the
+// `prose` stage SPECIFICALLY — NOT the default manuscript precedence (comicScript ▸
+// teleplay ▸ prose), which for a hybrid comic+prose issue would return the comic
+// script, not the prose (the bug this check exists to avoid). Returns '' when the
+// issue has no prose-stage text.
+function proseStageText(issue) {
+  const stage = issue?.stages?.prose;
+  const output = typeof stage?.output === 'string' ? stage.output.trim() : '';
+  if (output) return output;
+  return typeof stage?.input === 'string' ? stage.input.trim() : '';
+}
+
+// Per-issue PROSE-stage content, as `{ number, prose }`, sorted by issue number.
+// The single source of truth for "the prose half" of the comic↔prose-sync check —
+// read by BOTH the check's `run` AND the runner's `prose` staleness resolver
+// (mirrors `comicLetteringIssues` for the comic half), so the fingerprinted text is
+// exactly what the check compares. Only issues with prose-stage text contribute.
+export function proseStageIssues(issues) {
+  return (Array.isArray(issues) ? issues : [])
+    .map((i) => ({ number: Number.isInteger(i?.number) ? i.number : null, prose: proseStageText(i) }))
+    .filter((i) => i.prose)
+    .sort((a, b) => (a.number ?? 0) - (b.number ?? 0));
+}
+
+// Render an issue's parsed comic pages into a compact, model-readable block —
+// page/panel headers plus each panel's visual DESCRIPTION (what the panel SHOWS),
+// DIALOGUE (`speaker: line`), CAPTION, and SFX — so the model can compare what the
+// comic shows and says against the prose. Mirrors the field set in
+// `projectComicPacingContent` (the `comicScript.pacing` source this check
+// fingerprints), so the rendered content matches what staleness tracks. Returns ''
+// when no panel carries any content.
+export function renderComicForProseSync(pages) {
+  const lines = [];
+  (Array.isArray(pages) ? pages : []).forEach((p, pageIdx) => {
+    const panels = Array.isArray(p?.panels) ? p.panels : [];
+    panels.forEach((panel, panelIdx) => {
+      const block = [];
+      const desc = typeof panel?.description === 'string' ? panel.description.trim() : '';
+      if (desc) block.push(`  Shows: ${desc}`);
+      for (const d of (Array.isArray(panel?.dialogue) ? panel.dialogue : [])) {
+        // The comic-script parser keys the speaker as `character` ({ character, line }),
+        // the same field balloonAttribution/letteringDensity read — NOT `speaker`.
+        // Tolerate a `speaker` alias for robustness, but `character` is the real shape.
+        const rawSpeaker = typeof d?.character === 'string' ? d.character : (typeof d?.speaker === 'string' ? d.speaker : '');
+        const speaker = rawSpeaker.trim();
+        const line = typeof d?.line === 'string' ? d.line.trim() : '';
+        if (line) block.push(`  ${speaker ? `${speaker}: ` : ''}${line}`);
+      }
+      const caption = typeof panel?.caption === 'string' ? panel.caption.trim() : '';
+      if (caption) block.push(`  Caption: ${caption}`);
+      const sfx = typeof panel?.sfx === 'string' ? panel.sfx.trim() : '';
+      if (sfx) block.push(`  SFX: ${sfx}`);
+      // Skip an entirely empty panel — no content to cross-check against prose.
+      if (block.length) {
+        lines.push(`Page ${pageIdx + 1} · Panel ${panelIdx + 1}`, ...block);
+      }
+    });
+  });
+  return lines.join('\n');
+}
+
+// The issues that have BOTH drafted PROSE-stage text AND comic content — the
+// comparable set for the comic↔prose sync check. Returns `[{ number, prose, comic }]`
+// sorted by issue number (`comicLetteringIssues` already sorts), prose sliced to
+// PROSE_SYNC_PROSE_CHAR_CAP. An issue with comic but no prose (or prose but no
+// comic) has nothing to cross-check and is skipped. Pure: reads ctx.issues only —
+// both halves come off the already-loaded issue records (the prose STAGE, not the
+// comicScript-precedence manuscript section).
+export function proseSyncPairs(ctx) {
+  const proseByIssue = new Map();
+  for (const { number, prose } of proseStageIssues(ctx?.issues)) {
+    if (Number.isInteger(number)) proseByIssue.set(number, prose);
+  }
+  const pairs = [];
+  for (const { number, pages } of comicLetteringIssues(ctx?.issues)) {
+    if (!Number.isInteger(number)) continue;
+    const prose = proseByIssue.get(number);
+    if (!prose) continue;
+    const comic = renderComicForProseSync(pages);
+    if (!comic.trim()) continue;
+    pairs.push({ number, prose: prose.slice(0, PROSE_SYNC_PROSE_CHAR_CAP), comic });
+  }
+  return pairs;
+}
+
 export const EDITORIAL_CHECKS = [
   {
     id: 'naming.dissimilar-names',
@@ -1728,7 +2306,7 @@ export const EDITORIAL_CHECKS = [
           // Derive the unlocked members from the tokens (not a name-keyed map) so
           // two distinct characters sharing an identical name both count.
           const unlocked = primaries
-            .filter((t) => !t.locked && normalizeName(t.token)[0] === cluster.letter)
+            .filter((t) => !t.locked && comparisonName(t.token)[0] === cluster.letter)
             .map((t) => t.token);
           const renameHint = unlocked.length
             ? `Consider renaming some of the unlocked ones (${unlocked.join(', ')}) so the cast doesn't blur together.`
@@ -2078,11 +2656,123 @@ export const EDITORIAL_CHECKS = [
     },
   },
   {
+    id: 'comic.balloon-attribution',
+    // Reads each panel's DESCRIPTION (to decide if the speaker is shown) and the
+    // canon cast (for the visible-other severity), so it must fingerprint both:
+    // `comicScript.pacing` covers description + dialogue (the bare `comicScript`
+    // token is lettering-only and would leave a finding stale after a description
+    // edit), and `canon` covers name/alias changes.
+    sources: ['comicScript.pacing', 'canon'],
+    label: 'Comic speech-balloon attribution',
+    description:
+      'Flags a comic dialogue line whose speaker is not shown in the panel and carries no off-panel/broadcast cue — the image model then letters a normal balloon and tails it to whoever IS drawn, mis-attributing the line (e.g. a station-AI PA line pointed at a visible bystander). Parses each issue\'s comic script and checks every panel\'s dialogue speakers against the panel description and the canon cast.',
+    scope: 'issue',
+    kind: 'deterministic',
+    category: 'continuity',
+    severityDefault: 'medium',
+    defaultEnabled: true,
+    configSchema: z.object({}),
+    configFields: [],
+    // Same cheap presence gate as the lettering check — needs at least one issue
+    // with comic content; canon is read from ctx for the visible-cast match.
+    gate: (ctx) => hasComicContent(ctx.issues),
+    run: (ctx) => {
+      const characterNames = (ctx.canon?.characters || [])
+        .filter((c) => c && typeof c === 'object')
+        .flatMap((c) => [c.name, ...(Array.isArray(c.aliases) ? c.aliases : [])])
+        .filter((n) => typeof n === 'string' && n.trim());
+      const findings = [];
+      for (const { number, pages } of comicLetteringIssues(ctx.issues)) {
+        for (const v of analyzeBalloonAttribution(pages, { characterNames })) {
+          findings.push(balloonAttributionFinding(v, number));
+        }
+      }
+      return findings;
+    },
+  },
+  {
+    id: 'comic.prose-sync',
+    // Reads each issue's PROSE-stage text (`prose`) and its authoritative COMIC
+    // content (`comicScript.pacing` — description + dialogue + caption + SFX), BOTH
+    // off the already-loaded issue records. Declaring `prose` (not `manuscript`) is
+    // load-bearing: the stitched manuscript picks comicScript over prose for a hybrid
+    // issue, so a `manuscript` source would compare the comic against itself. Both
+    // tokens are fingerprinted so a finding stales when either the prose or the comic
+    // for that issue drifts; both also make the runner fetch the per-issue `issues`.
+    sources: ['prose', 'comicScript.pacing'],
+    label: 'Comic ↔ prose synchronization (hybrid issues)',
+    description:
+      'LLM cross-media check for hybrid comic+prose issues: pairs each issue\'s prose narration with its authoritative comic pages and flags SUBSTANTIVE divergences — a plot beat the prose narrates that no panel shows, panel dialogue that contradicts the prose (different words or a different speaker), or a chronology disagreement (events ordered differently across the two media). Comics legitimately compress and cut, so it flags only material mismatches, not ordinary medium-translation trims. Runs one model call per issue that has both prose and comic content, anchoring every finding to its issue.',
+    scope: 'issue',
+    kind: 'llm',
+    category: 'continuity',
+    severityDefault: 'medium',
+    defaultEnabled: true,
+    configSchema: z.object({
+      // Cap findings per issue so a long issue can't flood the review.
+      maxFindings: z.number().int().min(1).max(50).default(12),
+      // Cap how many hybrid issues are cross-checked per run (one LLM call each),
+      // so a long series can't fan out into an unbounded number of calls. 0 = no cap.
+      maxIssues: z.number().int().min(0).max(500).default(40),
+    }),
+    configFields: [
+      {
+        key: 'maxFindings',
+        label: 'Max findings per issue',
+        type: 'number',
+        min: 1,
+        max: 50,
+        step: 1,
+        help: 'Cap findings per issue so a long issue can not flood the review.',
+      },
+      {
+        key: 'maxIssues',
+        label: 'Max issues cross-checked per run',
+        type: 'number',
+        min: 0,
+        max: 500,
+        step: 1,
+        help: 'Cap how many hybrid issues are compared per run (one model call each). 0 disables the cap.',
+      },
+    ],
+    // Skip the LLM entirely unless at least one issue has BOTH prose and comic
+    // content to cross-check.
+    gate: (ctx) => proseSyncPairs(ctx).length > 0,
+    run: async (ctx) => {
+      const pairs = proseSyncPairs(ctx);
+      if (!pairs.length) return [];
+      const maxIssues = ctx.config?.maxIssues ?? 40;
+      const scanned = maxIssues > 0 ? pairs.slice(0, maxIssues) : pairs;
+      const maxFindings = ctx.config?.maxFindings ?? 12;
+      const findings = [];
+      for (const { number, prose, comic } of scanned) {
+        // The runner only checks the abort signal before/after each check.run, so a
+        // multi-issue loop honors it between issues to stop launching further calls.
+        if (ctx.signal?.aborted) break;
+        const { content } = await ctx.callStagedLLM(
+          COMIC_PROSE_SYNC_STAGE,
+          { issueNumber: number, prose, comic },
+          { returnsJson: true, source: COMIC_PROSE_SYNC_STAGE },
+        );
+        // We KNOW which issue is under comparison, so force the issue anchor — a
+        // model that omits or garbles issueNumber still attributes correctly.
+        const mapped = mapLlmFindings(content?.findings, {
+          severityDefault: ctx.severityDefault,
+          category: 'continuity',
+          max: maxFindings,
+          withIssueNumber: true,
+        }).map((f) => ({ ...f, issueNumber: number }));
+        findings.push(...mapped);
+      }
+      return findings;
+    },
+  },
+  {
     id: 'cast.representation-balance',
     sources: ['manuscript', 'canon', 'reverseOutline'],
     label: 'Cast representation & balance (Bechdel signal, dialogue share, screen time)',
     description:
-      'Three coarse, computable casting signals: a Bechdel co-presence signal (does any scene put two or more non-male characters on the page together?), dialogue share (does one character dominate the spoken lines?), and screen-time balance (is the appearing named cast strongly skewed by inferred gender?). Gender is inferred only from the canon pronouns field — characters with absent or ambiguous pronouns are left out of the gender-dependent signals rather than guessed. Advisory: representation is an authorial choice, so these are nudges, not errors.',
+      'Coarse, computable casting signals: a Bechdel co-presence signal (does any scene put two or more non-male characters on the page together?), dialogue share (does one character dominate the spoken lines?), per-character dialogue distribution relative to stated role (a major character who appears but is oddly silent, or a minor character who dominates the conversation), and screen-time balance (is the appearing named cast strongly skewed by inferred gender?). Gender is inferred only from the canon pronouns field and role tier only from the canon role field — characters with absent or ambiguous pronouns/roles are left out of those signals rather than guessed. Advisory: representation is an authorial choice, so these are nudges, not errors.',
     scope: 'series',
     kind: 'deterministic',
     category: 'casting',
@@ -2095,9 +2785,17 @@ export const EDITORIAL_CHECKS = [
       // Flag dialogue share when the top speaker holds more than this fraction of
       // all attributed dialogue lines (and there are 2+ speakers). 1 disables it.
       maxDialogueShare: z.number().min(0.1).max(1).default(0.6),
-      // Minimum attributed dialogue lines before the share check runs — a handful
-      // of lines isn't a meaningful distribution. 0 keeps the floor at 1.
+      // Minimum attributed dialogue lines before the share/distribution checks run
+      // — a handful of lines isn't a meaningful distribution. 0 keeps the floor at 1.
       minDialogueLines: z.number().int().min(0).max(500).default(12),
+      // Flag a MINOR-tier character (per the canon `role` field) who holds more
+      // than this fraction of all attributed dialogue — a walk-on dominating the
+      // conversation. 1 disables the minor-dominating signal.
+      maxMinorShare: z.number().min(0.1).max(1).default(0.35),
+      // Flag a MAJOR-tier character (per the canon `role` field) who APPEARS in the
+      // prose yet holds less than this fraction of the attributed dialogue — a lead
+      // who is oddly silent. 0 disables the silent-major signal.
+      minMajorShare: z.number().min(0).max(0.5).default(0.05),
       // Flag screen-time skew when one gender holds more than this fraction of the
       // gender-known appearing cast (and 2+ are gender-known). 1 disables it.
       maxGenderShare: z.number().min(0.1).max(1).default(0.8),
@@ -2121,7 +2819,25 @@ export const EDITORIAL_CHECKS = [
         min: 0,
         max: 500,
         step: 1,
-        help: 'Skip the dialogue-share check until at least this many dialogue lines can be attributed — a few lines is not a meaningful distribution.',
+        help: 'Skip the dialogue-share/distribution checks until at least this many dialogue lines can be attributed — a few lines is not a meaningful distribution.',
+      },
+      {
+        key: 'maxMinorShare',
+        label: 'Max dialogue share for a minor character',
+        type: 'number',
+        min: 0.1,
+        max: 1,
+        step: 0.05,
+        help: 'Flag when a character whose canon role reads as minor (background, cameo, walk-on, etc.) holds more than this fraction of all attributed dialogue. 1 disables the minor-dominating signal.',
+      },
+      {
+        key: 'minMajorShare',
+        label: 'Min dialogue share for a major character',
+        type: 'number',
+        min: 0,
+        max: 0.5,
+        step: 0.01,
+        help: 'Flag when a character whose canon role reads as major (protagonist, lead, antagonist, etc.) appears in the prose yet holds less than this fraction of the attributed dialogue — a lead who is oddly silent. 0 disables the silent-major signal.',
       },
       {
         key: 'maxGenderShare',
@@ -2147,6 +2863,8 @@ export const EDITORIAL_CHECKS = [
       const cfg = ctx.config || {};
       const maxDialogueShare = cfg.maxDialogueShare ?? 0.6;
       const minDialogueLines = Math.max(1, cfg.minDialogueLines ?? 12);
+      const maxMinorShare = cfg.maxMinorShare ?? 0.35;
+      const minMajorShare = cfg.minMajorShare ?? 0.05;
       const maxGenderShare = cfg.maxGenderShare ?? 0.8;
       const bechdelSignal = cfg.bechdelSignal !== false;
 
@@ -2159,31 +2877,81 @@ export const EDITORIAL_CHECKS = [
       const flag = ({ severity, location, problem, suggestion, anchorQuote = '', issueNumber = null }) =>
         findings.push({ severity, category: 'casting', location, problem, suggestion, anchorQuote, issueNumber });
 
-      // --- 1) Dialogue share ------------------------------------------------
+      // --- 1) Dialogue distribution (share + role-relative outliers) --------
       // The runner injects the canonical stitched corpus as ctx.manuscript
       // (needsManuscript) — reuse it rather than re-stitching ctx.sections.
+      // One attribution pass feeds three sub-signals: the overall top-speaker
+      // share, a MINOR-tier character dominating the conversation, and a MAJOR-tier
+      // character who appears yet is oddly silent. Role tier comes only from the
+      // canon `role` field (absent/ambiguous → 'unknown', signal opts out).
       const manuscript = typeof ctx.manuscript === 'string' ? ctx.manuscript : '';
-      if (maxDialogueShare < 1 && manuscript.trim()) {
+      const wantShare = maxDialogueShare < 1;
+      const wantMinorDom = maxMinorShare < 1;
+      const wantSilentMajor = minMajorShare > 0;
+      if ((wantShare || wantMinorDom || wantSilentMajor) && manuscript.trim()) {
         const owners = identities
           .filter((id) => id.matcher)
           .map((id) => ({ key: id.key, matcher: id.matcher }));
         const { byOwner, attributed } = attributeDialogueByOwner(manuscript, owners);
-        if (attributed >= minDialogueLines && byOwner.size >= 2) {
-          let topKey = null;
-          let topCount = 0;
-          for (const [key, count] of byOwner) {
-            if (count > topCount) { topCount = count; topKey = key; }
+        if (attributed >= minDialogueLines) {
+          // The top-speaker share signal compares one voice against the others, so
+          // it needs 2+ speakers to mean anything. The role-relative signals do NOT:
+          // a lone minor speaking every line (size 1, 100% share) or a major who
+          // appears yet never speaks while a single other voice carries the scene is
+          // their STRONGEST case — gating those on size >= 2 would skip exactly the
+          // imbalance they exist to catch.
+          if (wantShare && byOwner.size >= 2) {
+            let topKey = null;
+            let topCount = 0;
+            for (const [key, count] of byOwner) {
+              if (count > topCount) { topCount = count; topKey = key; }
+            }
+            const share = topCount / attributed;
+            if (topKey && share > maxDialogueShare) {
+              const pct = Math.round(share * 100);
+              // Escalate above the low floor when one voice utterly dominates (≥80%).
+              flag({
+                severity: escalateSeverity(ctx.severityDefault, share >= 0.8 ? 1 : 0),
+                location: 'Series dialogue',
+                problem: `"${nameByKey.get(topKey)}" speaks about ${pct}% of the attributed dialogue (${topCount} of ${attributed} lines across ${byOwner.size} speaking characters) — one voice dominating the page can flatten the rest of the cast.`,
+                suggestion: `Give other characters more of the conversation, or let scenes play out from a viewpoint where ${nameByKey.get(topKey)} isn't the one talking.`,
+              });
+            }
           }
-          const share = topCount / attributed;
-          if (topKey && share > maxDialogueShare) {
-            const pct = Math.round(share * 100);
-            // Escalate above the low floor when one voice utterly dominates (≥80%).
-            flag({
-              severity: escalateSeverity(ctx.severityDefault, share >= 0.8 ? 1 : 0),
-              location: 'Series dialogue',
-              problem: `"${nameByKey.get(topKey)}" speaks about ${pct}% of the attributed dialogue (${topCount} of ${attributed} lines across ${byOwner.size} speaking characters) — one voice dominating the page can flatten the rest of the cast.`,
-              suggestion: `Give other characters more of the conversation, or let scenes play out from a viewpoint where ${nameByKey.get(topKey)} isn't the one talking.`,
-            });
+
+          // Role-relative distribution. Silent-major is gated on prose appearance
+          // (a major who never appears is just absent — a different signal — not
+          // "oddly silent"); the appearing-cast scan is skipped entirely unless the
+          // signal is enabled AND there's a major-tier character to score.
+          if (wantMinorDom || wantSilentMajor) {
+            const hasMajor = identities.some((id) => id.roleTier === 'major');
+            const appearingKeys = wantSilentMajor && hasMajor ? buildAppearingKeys(ctx) : null;
+            for (const id of identities) {
+              const count = byOwner.get(id.key) || 0;
+              const share = count / attributed;
+              if (wantMinorDom && id.roleTier === 'minor' && share > maxMinorShare) {
+                const pct = Math.round(share * 100);
+                flag({
+                  // A walk-on taking over the conversation is a stronger signal the
+                  // higher the share climbs — escalate past the low floor at ≥50%.
+                  severity: escalateSeverity(ctx.severityDefault, share >= 0.5 ? 1 : 0),
+                  location: 'Series dialogue',
+                  problem: `"${id.name}" reads as a minor character (canon role) yet speaks about ${pct}% of the attributed dialogue (${count} of ${attributed} lines) — a walk-on dominating the conversation usually means the cast hierarchy on the page doesn't match the bible.`,
+                  suggestion: `Either give ${id.name} a larger stated role to match the page time, or shift dialogue to the characters the story is actually about.`,
+                });
+              }
+              if (wantSilentMajor && id.roleTier === 'major' && appearingKeys.has(id.key) && share < minMajorShare) {
+                const pct = Math.round(share * 100);
+                flag({
+                  // A major who appears but never says a word (0%) is the strongest
+                  // form — escalate past the low floor for the silent case.
+                  severity: escalateSeverity(ctx.severityDefault, count === 0 ? 1 : 0),
+                  location: 'Series dialogue',
+                  problem: `"${id.name}" reads as a major character (canon role) and appears in the prose, yet speaks only about ${pct}% of the attributed dialogue (${count} of ${attributed} lines) — a lead who is on the page but barely talks can feel like a passenger in their own story.`,
+                  suggestion: `Give ${id.name} more of the conversation in the scenes they appear in, or reconsider whether the stated major role matches their actual presence.`,
+                });
+              }
+            }
           }
         }
       }
@@ -2229,10 +2997,7 @@ export const EDITORIAL_CHECKS = [
       // Over the APPEARING named cast (tied to prose appearances so canon-only
       // bloat doesn't trip it), is one inferable gender strongly over-represented?
       if (maxGenderShare < 1) {
-        const rows = buildRosterAppearances(ctx);
-        const appearingKeys = new Set(
-          rows.filter((r) => r.appearedInIssues.length > 0).map((r) => normalizeName(r.name))
-        );
+        const appearingKeys = buildAppearingKeys(ctx);
         const counts = { female: 0, male: 0, nonbinary: 0 };
         for (const key of appearingKeys) {
           const g = genderByKey.get(key);
@@ -2774,6 +3539,308 @@ export const EDITORIAL_CHECKS = [
     },
   },
   {
+    id: 'continuity.timeline-contradiction',
+    sources: ['manuscript', 'canon', 'continuityBible', 'reverseOutline', 'series.characterArcs'],
+    label: 'Timeline / canon contradiction',
+    description:
+      'LLM scan for internal contradictions against canon and chronology: a character who dies and later reappears alive without explanation, an age contradiction (the bible says 16, the prose says "in her 30s"), or an impossible timeline (an event dated day 2 that characters needed 8 days to reach). Reconciles the prose against the continuity-bible facts ledger (ages, dates & elapsed time, locations, world rules), the canon character facts, the reverse-outline scene ordering, and the authored per-character arc start/end states; degrades to a prose-only scan when none of those exist.',
+    scope: 'series',
+    kind: 'llm',
+    category: 'continuity',
+    // Fallback severity when the model omits one — kept 'medium' to match the
+    // sibling continuity/narrative LLM checks. The prompt directs the model to
+    // mark a plot-breaking resurrection or impossible timeline 'high' per finding,
+    // so genuinely-fatal contradictions still surface as high.
+    severityDefault: 'medium',
+    defaultEnabled: true,
+    // Reads the stitched manuscript corpus — so the runner only pays the
+    // section-collection I/O when a manuscript-consuming check is enabled.
+    needsManuscript: true,
+    configSchema: z.object({
+      // Cap findings per run so a long manuscript can't flood the review.
+      maxFindings: z.number().int().min(1).max(50).default(12),
+    }),
+    configFields: [
+      {
+        key: 'maxFindings',
+        label: 'Max findings per run',
+        type: 'number',
+        min: 1,
+        max: 50,
+        step: 1,
+        help: 'Cap findings so a long manuscript can not flood the review.',
+      },
+    ],
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    run: (ctx) => {
+      // All four blocks are fixed per-call overhead (re-sent on each chunk) and
+      // pure context: the continuity-bible ledger is the authoritative fact set
+      // (ages, dates/elapsed time, locations, world rules) the contradiction is
+      // judged against, the canon facts add per-character age/status/identity, the
+      // scene map gives the chronology to catch impossible timelines and
+      // resurrection-without-explanation, and the authored arcs give each
+      // character's intended start → end state. The check degrades gracefully — an
+      // absent input renders nothing (`{{#continuityLedger}}`/`{{#canonStates}}`/
+      // `{{#sceneMap}}`/`{{#characterArcs}}`) and the model reasons from the prose.
+      const continuityLedger = continuityLedgerSummary(ctx.continuityBible);
+      const canonStates = canonCharacterStatesSummary(ctx.canon);
+      const sceneMap = sceneGroundingSummary(ctx.reverseOutline);
+      const characterArcs = renderCharacterArcsForPrompt(ctx.series?.characterArcs) || '';
+      return runManuscriptLlmCheck(ctx, {
+        stage: TIMELINE_CONTRADICTION_STAGE,
+        category: 'continuity',
+        // continuityLedger + canonStates + sceneMap grow with fact/cast/scene
+        // count; characterArcs is bounded — so largest-first trimming absorbs the
+        // cut into those.
+        context: { continuityLedger, canonStates, sceneMap, characterArcs },
+        buildVars: (manuscript, _meta, c) => ({
+          manuscript,
+          continuityLedger: c.continuityLedger,
+          canonStates: c.canonStates,
+          sceneMap: c.sceneMap,
+          characterArcs: c.characterArcs,
+        }),
+        // A contradiction spans the manuscript — a death in an early chunk and a
+        // resurrection in a later one are only visible together. The findings
+        // digest keeps prior findings in view so a later chunk doesn't re-flag,
+        // and the clean-setup digest rolls each character's last-known state
+        // forward so a later chunk can catch a state that silently flips.
+        crossChunkDigest: true,
+        crossChunkSetup: true,
+        setupFocus:
+          'For each named character, note their last-established state a later part must stay consistent with: alive or dead (and how/when), stated or implied age, and current location — plus any dated events and the elapsed time between them. Carry these forward so a later chunk can catch a character who reappears alive after dying, an age that contradicts an earlier one, or an impossible chronology.',
+      });
+    },
+  },
+  {
+    id: 'research.fact-accuracy',
+    sources: ['manuscript', 'series.factReference'],
+    label: 'Research / fact accuracy',
+    description:
+      'LLM scan for contradictions to real-world facts the author has documented — a grounded historical, scientific, or geographic claim the prose gets wrong (a city placed in the wrong country, a date that predates the technology it describes, a physiologically impossible feat). Distinct from the internal timeline/canon-contradiction check: this reconciles the prose against EXTERNAL truth, not the story bible. Opt-in and gated — it runs only when the series is flagged fact-critical AND the author has supplied a fact reference, so it never second-guesses deliberate invention in pure fantasy.',
+    scope: 'series',
+    kind: 'llm',
+    category: 'accuracy',
+    // Fallback severity when the model omits one. A factual howler in grounded
+    // fiction is a credibility killer, but the prompt directs the model to mark a
+    // plot-relevant error 'high' per finding, so the worst cases still surface high.
+    severityDefault: 'medium',
+    // Registry-enabled like every other built-in check, but the GATE is the real
+    // opt-in: it produces findings ONLY when the series is flagged fact-critical
+    // AND a reference is supplied — mirroring how the comic/visual checks are
+    // defaultEnabled:true yet skip a prose-only series via their content gate. A
+    // `defaultEnabled: false` here would mean the series fact-critical flag alone
+    // never triggers it, because getEnabledChecks() filters disabled checks out
+    // BEFORE the per-series gate runs — so the advertised "flag the series" path
+    // would silently do nothing until the user ALSO enabled it in check settings.
+    defaultEnabled: true,
+    // Reads the stitched manuscript corpus — so the runner only pays the
+    // section-collection I/O when a manuscript-consuming check is enabled.
+    needsManuscript: true,
+    configSchema: z.object({
+      // Cap findings per run so a long manuscript can't flood the review.
+      maxFindings: z.number().int().min(1).max(50).default(12),
+    }),
+    configFields: [
+      {
+        key: 'maxFindings',
+        label: 'Max findings per run',
+        type: 'number',
+        min: 1,
+        max: 50,
+        step: 1,
+        help: 'Cap findings so a long manuscript can not flood the review.',
+      },
+    ],
+    // Gate on BOTH the per-series fact-critical opt-in AND a non-empty author
+    // fact reference (plus a non-empty manuscript). Without a reference there's
+    // nothing authoritative to reconcile against, and the flag keeps the check
+    // off for fantasy where "wrong" real-world facts may be intentional.
+    gate: (ctx) =>
+      ctx.series?.factCritical === true
+      && (ctx.series?.factReference || '').trim().length > 0
+      && (ctx.manuscript || '').trim().length > 0,
+    run: (ctx) => {
+      // The author's documented real-world facts are the authoritative reference
+      // the prose is judged against — fixed per-call overhead re-sent on each
+      // chunk. Trimmed largest-first if the manuscript needs the room.
+      const factReference = (ctx.series?.factReference || '').trim();
+      return runManuscriptLlmCheck(ctx, {
+        stage: FACT_ACCURACY_STAGE,
+        category: 'accuracy',
+        context: { factReference },
+        buildVars: (manuscript, _meta, c) => ({
+          manuscript,
+          factReference: c.factReference,
+        }),
+      });
+    },
+  },
+  {
+    id: 'character.consistency',
+    sources: ['manuscript', 'canon', 'reverseOutline', 'series.characterArcs'],
+    label: 'Character consistency (unearned personality shift)',
+    description:
+      'LLM scan for UNEARNED characterization changes: a reserved character who suddenly cracks jokes with no arc beat, an established trait silently contradicted (a stated fear, allergy, or skill the prose breaks), or POV-character knowledge that changes mid-scene without on-page learning. Reconciles the prose against the established canon character traits (personality, fixed traits, mannerisms, speech), the reverse-outline scene ordering, and the AUTHORED per-character arcs — so an intentional, earned transition is NOT flagged. Degrades to a prose-only scan when no canon or outline exists.',
+    scope: 'series',
+    kind: 'llm',
+    category: 'character',
+    // Fallback severity when the model omits one — 'medium' to match the sibling
+    // characterization/continuity LLM checks. The prompt directs the model to mark
+    // a flat trait-contradiction that breaks a plot beat 'high' per finding, so a
+    // genuinely-jarring shift still surfaces as high.
+    severityDefault: 'medium',
+    defaultEnabled: true,
+    // Reads the stitched manuscript corpus — so the runner only pays the
+    // section-collection I/O when a manuscript-consuming check is enabled.
+    needsManuscript: true,
+    configSchema: z.object({
+      // Cap findings per run so a long manuscript can't flood the review.
+      maxFindings: z.number().int().min(1).max(50).default(12),
+    }),
+    configFields: [
+      {
+        key: 'maxFindings',
+        label: 'Max findings per run',
+        type: 'number',
+        min: 1,
+        max: 50,
+        step: 1,
+        help: 'Cap findings so a long manuscript can not flood the review.',
+      },
+    ],
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    run: (ctx) => {
+      // All three blocks are fixed per-call overhead (re-sent on each chunk) and
+      // pure context: the canon traits give the established temperament/voice/
+      // fixed-trait baseline a shift must be measured against, the scene map gives
+      // the chronology to spot a knowledge-jump within a scene, and the authored
+      // arcs let the model SUPPRESS an earned transition (a character the author
+      // intends to change). The check degrades gracefully — no canon ⇒
+      // {{#canonTraits}} renders nothing; no outline ⇒ {{#sceneMap}} renders
+      // nothing; no authored arcs ⇒ {{#characterArcs}} renders nothing and the
+      // model reasons from the prose's own internal consistency.
+      const canonTraits = canonCharacterTraitsSummary(ctx.canon);
+      const sceneMap = sceneGroundingSummary(ctx.reverseOutline);
+      const characterArcs = renderCharacterArcsForPrompt(ctx.series?.characterArcs) || '';
+      return runManuscriptLlmCheck(ctx, {
+        stage: CHARACTER_CONSISTENCY_STAGE,
+        category: 'character',
+        // canonTraits + sceneMap grow with cast/scene count; characterArcs is
+        // bounded — so largest-first trimming absorbs the cut into those.
+        context: { canonTraits, sceneMap, characterArcs },
+        buildVars: (manuscript, _meta, c) => ({
+          manuscript,
+          canonTraits: c.canonTraits,
+          sceneMap: c.sceneMap,
+          characterArcs: c.characterArcs,
+        }),
+        // A personality shift is only visible against what came BEFORE — the
+        // reserved-character baseline lives in an early chunk and the unearned
+        // joke lands in a later one. The findings digest keeps prior findings in
+        // view so a later chunk doesn't re-flag, and the clean-setup digest rolls
+        // each character's established temperament forward so a later chunk can
+        // catch a trait that silently flips.
+        crossChunkDigest: true,
+        crossChunkSetup: true,
+        setupFocus:
+          'For each named character, note their established temperament, voice, and fixed traits (how they speak, what they fear/avoid, what they know) plus any EARNED change the prose has already paid off. Carry these forward so a later chunk can tell an unearned shift (a reserved character suddenly joking, a stated fear ignored, knowledge appearing with no on-page learning) from a transition the story has legitimately set up.',
+      });
+    },
+  },
+  {
+    id: 'character.secondary-arc',
+    sources: ['manuscript', 'reverseOutline', 'canon'],
+    label: 'Secondary-character arcs (recurring non-POV cast)',
+    description:
+      'LLM scan — the non-POV sibling of pov.justified (#1295). Tallies recurring NON-POV characters from the reverse-outline scene map (present in multiple scenes but never holding the viewpoint) and judges whether each shows meaningful change across the story: a flat side character who is the same at the end as at the start, or one who regresses with no purpose. A world of flat side characters drains a story\'s texture. Does NOT flag a genuine walk-on (a one-scene minor) or a deliberately-static figure whose constancy is the point (an anchor/foil the protagonist changes against); judges only the recurring cast. Because a flat arc is a whole-story claim, the verdict lands on the final manuscript part once every scene is in view; degrades to a whole-manuscript scan when no outline exists.',
+    scope: 'series',
+    kind: 'llm',
+    category: 'arc',
+    // Fallback severity when the model omits one — 'low' to match pov.justified
+    // (a secondary-cast arc gap is a texture concern, not a structural break). The
+    // prompt directs the model to mark a prominent recurring character left wholly
+    // flat 'medium', so a genuinely-thin co-lead still surfaces above the floor.
+    severityDefault: 'low',
+    defaultEnabled: true,
+    // Reads the stitched manuscript corpus — so the runner only pays the
+    // section-collection I/O when a manuscript-consuming check is enabled.
+    needsManuscript: true,
+    configSchema: z.object({
+      // A non-POV character must appear in at least this many scenes to count as
+      // recurring (and therefore be held to an arc). 1 would judge every walk-on;
+      // 2 is the smallest "recurring" threshold.
+      minScenes: z.number().int().min(2).max(20).default(2),
+      // Cap findings per run so a large cast can't flood the review.
+      maxFindings: z.number().int().min(1).max(50).default(12),
+    }),
+    configFields: [
+      {
+        key: 'minScenes',
+        label: 'Recurring threshold (min scenes)',
+        type: 'number',
+        min: 2,
+        max: 20,
+        step: 1,
+        help: 'A non-POV character must appear in at least this many scenes to be judged for an arc. 2 is the smallest "recurring" threshold; raise it to focus on only the most prominent secondary characters.',
+      },
+      {
+        key: 'maxFindings',
+        label: 'Max findings per run',
+        type: 'number',
+        min: 1,
+        max: 50,
+        step: 1,
+        help: 'Cap findings so a large cast can not flood the review.',
+      },
+    ],
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    run: (ctx) => {
+      // All three blocks are fixed per-call overhead (re-sent on each chunk) and
+      // pure context: the secondary-cast roster names which recurring non-POV
+      // characters to hold to an arc (so the model focuses on the side characters
+      // that carry weight, not every walk-on); the canon names roster lets the
+      // model tell a MODELED recurring character from an incidental name (it lists
+      // every named bible character, including trait-less ones — so it stays
+      // useful where the richer traits block is empty); and the canon traits give
+      // the established baseline a change must be measured against. The check
+      // degrades gracefully — no outline ⇒ {{#secondaryCast}} renders nothing and
+      // the model identifies the recurring side cast from the prose; no canon ⇒
+      // {{#canonRoster}} / {{#canonTraits}} render nothing.
+      const minScenes = ctx.config?.minScenes ?? 2;
+      const secondaryCast = secondaryCharacterPresenceSummary(ctx.reverseOutline, { minScenes });
+      const canonRoster = canonRosterNamesSummary(ctx.canon);
+      const canonTraits = canonCharacterTraitsSummary(ctx.canon);
+      return runManuscriptLlmCheck(ctx, {
+        stage: SECONDARY_ARC_STAGE,
+        category: 'arc',
+        context: { secondaryCast, canonRoster, canonTraits },
+        buildVars: (manuscript, meta, c) => ({
+          manuscript,
+          secondaryCast: c.secondaryCast,
+          canonRoster: c.canonRoster,
+          canonTraits: c.canonTraits,
+          finalPart: meta?.isFinal ? 'true' : '',
+        }),
+        // A flat arc is only visible across the WHOLE story — a character
+        // established in an early chunk who never changes by the last. The
+        // findings digest keeps prior findings in view so a later chunk doesn't
+        // re-flag, and the clean-setup digest rolls each recurring secondary
+        // character's established state forward so the final part can tell a flat
+        // arc from one that changes in a chunk it can no longer see.
+        crossChunkDigest: true,
+        crossChunkSetup: true,
+        setupFocus: 'For each recurring NON-POV character (a character present across multiple scenes who never '
+          + 'holds the viewpoint), note their established state on first appearance — their situation, attitude, '
+          + 'wants, and standing — and record any CHANGE the prose has shown them undergo since (a decision, a '
+          + 'shift in attitude or circumstance, a relationship that turns). Carry these forward so the final part '
+          + 'can tell a genuinely flat side character (same at the end as the start) from one whose change happened '
+          + 'in an earlier part no longer in view. Drop a character from the watch-list once the prose has shown '
+          + 'them a meaningful arc.',
+      });
+    },
+  },
+  {
     id: 'arc.transitions',
     sources: ['manuscript', 'reverseOutline', 'series.characterArcs'],
     label: 'Character-arc transitions (change moments + flat arcs)',
@@ -2968,6 +4035,188 @@ export const EDITORIAL_CHECKS = [
           + 'and whether it has been paid off yet; and note any strong EMERGENT theme the story '
           + 'is dramatizing that is not in the declared list, so a later chunk can tell a genuinely '
           + 'dropped/undramatized theme from one whose payoff simply has not arrived yet.',
+      });
+    },
+  },
+  {
+    id: 'arc.climax-agency',
+    sources: ['manuscript', 'reverseOutline', 'series.arc.readerMap', 'series.arc.themes'],
+    label: 'Climax / resolution power (passive protagonist at the climax)',
+    description:
+      'LLM scan for a weak climax: the story\'s payoff scene should be the protagonist\'s HARDEST, most ACTIVE choice — the moment they drive the resolution. Flags a passive climax (an ally rescues them, the antagonist self-destructs, a coincidence resolves it, or events simply happen TO the protagonist) and a climax that resolves the PLOT but not the emotional/thematic core the story set up. Reconciles the prose against the authored reader-map payoffs (what the reader was promised) and the declared themes, using the reverse-outline scene map to locate the climax; degrades to a whole-manuscript scan when no reader-map, themes, or outline exists. Complements plot.structure-momentum (passive protagonist arc-wide) by focusing the lens on the single climax scene.',
+    scope: 'series',
+    kind: 'llm',
+    category: 'arc',
+    severityDefault: 'medium',
+    defaultEnabled: true,
+    // Reads the stitched manuscript corpus — so the runner only pays the
+    // section-collection I/O when a manuscript-consuming check is enabled.
+    needsManuscript: true,
+    configSchema: z.object({
+      // Cap findings per run so a long manuscript can't flood the review.
+      maxFindings: z.number().int().min(1).max(50).default(12),
+    }),
+    configFields: [
+      {
+        key: 'maxFindings',
+        label: 'Max findings per run',
+        type: 'number',
+        min: 1,
+        max: 50,
+        step: 1,
+        help: 'Cap findings so a long manuscript can not flood the review.',
+      },
+    ],
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    run: (ctx) => {
+      // All three blocks are fixed per-call overhead (re-sent on each chunk) and
+      // pure context: the authored payoffs name what the reader was PROMISED the
+      // climax would resolve, the declared themes name the thematic core the
+      // resolution must land, and the scene map lets the model LOCATE the climax
+      // scene and attribute the finding to its issue. The check degrades
+      // gracefully — no reader map ⇒ {{#authoredPayoffs}} renders nothing; no
+      // themes ⇒ {{#declaredThemes}} renders nothing; no outline ⇒ {{#sceneMap}}
+      // renders nothing and the model reasons from the prose's own shape.
+      const authoredPayoffs = authoredPayoffsSummary(ctx.series?.arc?.readerMap);
+      const declaredThemes = declaredThemesSummary(ctx.series?.arc?.themes);
+      const sceneMap = sceneGroundingSummary(ctx.reverseOutline);
+      return runManuscriptLlmCheck(ctx, {
+        stage: CLIMAX_AGENCY_STAGE,
+        category: 'arc',
+        // sceneMap grows unbounded with scene count; authoredPayoffs and
+        // declaredThemes are bounded — so largest-first trimming absorbs the cut
+        // into sceneMap.
+        context: { authoredPayoffs, declaredThemes, sceneMap },
+        // `isFinal` gates the verdict — the climax is the END of the arc, so it
+        // can only be identified and judged once the whole manuscript is in view.
+        // An earlier chunk can't know which scene is the climax (or whether a
+        // later beat is the real payoff), so it would false-flag. A single-chunk
+        // run is its own final part and judges the whole text.
+        buildVars: (manuscript, meta, c) => ({
+          manuscript,
+          authoredPayoffs: c.authoredPayoffs,
+          declaredThemes: c.declaredThemes,
+          sceneMap: c.sceneMap,
+          finalPart: meta?.isFinal ? 'true' : '',
+        }),
+        // The climax's agency is judged against the whole arc's setup — the
+        // protagonist's tries/failures and the problem they must personally
+        // resolve accrue across the manuscript. The findings digest keeps prior
+        // findings in view so a non-final chunk doesn't pre-flag, and the
+        // clean-setup digest rolls forward the central problem + the protagonist's
+        // pattern of agency so the final chunk can judge whether the climax is
+        // their hardest active choice.
+        crossChunkDigest: true,
+        crossChunkSetup: true,
+        // #1667: this check's verdict is gated to the final part AND anchored on the
+        // carried CLIMAX CANDIDATE snippet, so the setup digest must reach the final
+        // chunk even when it's packed to the window — reserve room for it by trimming
+        // the final chunk's manuscript tail rather than silently dropping the snippet.
+        reserveSetupDigest: true,
+        // The setup digest is a separate rolling-summary call (buildSetupDigestPrompt)
+        // whose output is fed into the FINAL chunk's prompt. The climax can land in a
+        // non-final chunk (followed by a denouement chunk), so the digest must carry
+        // the climax CANDIDATE forward — including a short verbatim snippet and who
+        // resolves it — or the final chunk would have only tail text + a summary and
+        // could neither judge nor quote the climax. This is what lets the final-part
+        // verdict stay accurate even when the climax is not physically in the last
+        // chunk (closing the false-negative the strict non-final gate would otherwise
+        // introduce).
+        setupFocus: 'Note the central problem/conflict the protagonist must personally resolve, '
+          + 'the thematic question the story is asking, and the protagonist\'s pattern of agency so far '
+          + '(do they drive events or do events happen to them). CRUCIALLY: track the single most '
+          + 'decisive turning/resolution scene seen so far as the CLIMAX CANDIDATE — record a SHORT '
+          + 'verbatim snippet (≤ 200 chars) of its decisive moment, which issue it is in, WHO drives the '
+          + 'resolution (the protagonist through a hard choice, or an ally/coincidence/the antagonist '
+          + 'self-destructing), and which core problem/theme it resolves — and REPLACE it only when a '
+          + 'later, higher-stakes resolution scene supersedes it. This lets the final part judge the '
+          + 'climax\'s agency + resolution power and quote it even if the climax is not physically in the '
+          + 'last chunk.',
+      });
+    },
+  },
+  {
+    id: 'emotion.reaction-proportionality',
+    sources: ['manuscript', 'reverseOutline'],
+    label: 'Emotional beat proportionality (reactions vs event magnitude)',
+    description:
+      'LLM scan for emotional beats that do not track the magnitude of what happens: a high-magnitude event (trauma, a death, a betrayal, a major loss or win) that draws no on-page reaction and is never processed in later issues (under-reaction), or a minor setback that triggers grief, rage, or despair out of all proportion (over-reaction). Uses the reverse-outline scene map to weigh each event and attribute findings to the right issue; degrades to a whole-manuscript scan when no outline exists. Because an unprocessed event can stay unaddressed many issues later, an event flagged in an early part is carried forward so a later part can flag the missing reaction.',
+    scope: 'series',
+    kind: 'llm',
+    category: 'emotion',
+    // Fallback severity when the model omits one — 'medium' to match the sibling
+    // characterization/arc LLM checks. The prompt directs the model to mark a major
+    // trauma left wholly unprocessed 'high' per finding, so a genuinely jarring
+    // emotional gap still surfaces as high.
+    severityDefault: 'medium',
+    defaultEnabled: true,
+    // Reads the stitched manuscript corpus — so the runner only pays the
+    // section-collection I/O when a manuscript-consuming check is enabled.
+    needsManuscript: true,
+    configSchema: z.object({
+      // Cap findings per run so a long manuscript can't flood the review.
+      maxFindings: z.number().int().min(1).max(50).default(12),
+    }),
+    configFields: [
+      {
+        key: 'maxFindings',
+        label: 'Max findings per run',
+        type: 'number',
+        min: 1,
+        max: 50,
+        step: 1,
+        help: 'Cap findings so a long manuscript can not flood the review.',
+      },
+    ],
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    run: (ctx) => {
+      // The scene map is fixed per-call overhead (re-sent on each chunk) and pure
+      // context: it records each scene's events so the model can weigh an event's
+      // MAGNITUDE and attribute a finding to the right issue. The check degrades
+      // gracefully — no outline ⇒ {{#sceneMap}} renders nothing and the model
+      // weighs each event from the prose's own description.
+      const sceneMap = sceneGroundingSummary(ctx.reverseOutline);
+      return runManuscriptLlmCheck(ctx, {
+        stage: REACTION_PROPORTIONALITY_STAGE,
+        category: 'emotion',
+        context: { sceneMap },
+        // `finalPart` gates ONLY the under-reaction verdict. "A high-magnitude
+        // event is never processed afterward" is a whole-story claim — a non-final
+        // chunk can't know whether a LATER chunk pays the event off, and
+        // runChunkedManuscriptCheck merges findings first-wins and never retracts,
+        // so an under-reaction reported early would persist even after a later
+        // payoff clears it (a false positive). Over-reactions stay local — a
+        // disproportionate reaction is fully visible in the chunk that contains it.
+        // A single-chunk run is its own final part and judges the whole text.
+        buildVars: (manuscript, meta, c) => ({
+          manuscript,
+          sceneMap: c.sceneMap,
+          finalPart: meta?.isFinal ? 'true' : '',
+        }),
+        // A reaction is proportionate (or not) only relative to the event that
+        // triggered it — and the event and its (missing) processing can be issues
+        // apart. The findings digest keeps prior findings in view so a later chunk
+        // doesn't re-flag the same gap, and the clean-setup digest rolls forward
+        // every high-magnitude event that has NOT yet drawn a proportionate
+        // reaction so the FINAL chunk can flag the unprocessed trauma even when it
+        // happened pages earlier.
+        crossChunkDigest: true,
+        crossChunkSetup: true,
+        // #1667: the under-reaction verdict is gated to the final part AND anchored on
+        // the carried unprocessed-event snippet, so guarantee the setup digest reaches
+        // the final chunk (trim its manuscript tail to fit) rather than letting a packed
+        // final chunk drop the snippet and miss the unprocessed-trauma finding.
+        reserveSetupDigest: true,
+        setupFocus: 'List the high-magnitude emotional events seen so far (a death, trauma, betrayal, '
+          + 'a major loss or hard-won victory) and, for each, whether the affected character has yet shown '
+          + 'a proportionate on-page reaction or processed it. CRUCIALLY: carry forward every event that is '
+          + 'still AWAITING a proportionate reaction — record which character it befell, which issue it '
+          + 'occurred in, a short note on its magnitude, AND a SHORT verbatim snippet (≤ 200 chars) of the '
+          + 'event itself — and drop it only once the prose has paid it off with a fitting reaction. The '
+          + 'verbatim snippet is required: the final part can only report the under-reaction if it can quote '
+          + 'the event as its anchor, and the event text is no longer in view by then. This lets a later '
+          + 'part flag (and quote) a trauma that is introduced early and then left unprocessed many issues '
+          + 'later.',
       });
     },
   },
@@ -3507,7 +4756,7 @@ export const EDITORIAL_CHECKS = [
     sources: ['manuscript', 'series.arc.readerMap'],
     label: "Chekhov's guns (setups & payoffs)",
     description:
-      'Flags planted elements that never pay off (a weapon, clue, secret, stated fear, promise, or threat introduced and then dropped) and payoffs that arrive with no setup (a skill, antidote, or revelation that appears unearned). Reconciles its detected setups/payoffs against the authored reader-map hooks/payoffs.',
+      'Classifies each setup/payoff thread as paired, false-setup (planted, never fired — cut it), orphaned-payoff (fired, never planted — unearned), or distant (paid off so many issues after the setup the reader may have forgotten). Reconciles its detected setups/payoffs against the authored reader-map hooks/payoffs.',
     scope: 'series',
     kind: 'llm',
     category: 'continuity',
@@ -3519,6 +4768,11 @@ export const EDITORIAL_CHECKS = [
     configSchema: z.object({
       // Cap findings per run so a long manuscript can't flood the review.
       maxFindings: z.number().int().min(1).max(50).default(12),
+      // Issue gap at/above which a paid-off setup is flagged as a DISTANT payoff
+      // (#1595) — setup in issue 1, payoff in issue 1+distantGap or later, far
+      // enough that the reader may not still recall the plant. 0 disables the
+      // distant sub-check (only false-setup / orphaned-payoff are reported).
+      distantGap: z.number().int().min(0).max(20).default(4),
     }),
     configFields: [
       {
@@ -3530,11 +4784,24 @@ export const EDITORIAL_CHECKS = [
         step: 1,
         help: 'Cap findings so a long manuscript can not flood the review.',
       },
+      {
+        key: 'distantGap',
+        label: 'Distant-payoff issue gap',
+        type: 'number',
+        min: 0,
+        max: 20,
+        step: 1,
+        help: 'Flag a payoff this many issues (or more) after its setup as "distant" — the reader may have forgotten the plant. Set to 0 to disable the distant check.',
+      },
     ],
     gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
     run: (ctx) => {
       // Authored hooks/payoffs are fixed per-call overhead (re-sent on each chunk).
       const authoredSetups = authoredSetupPayoffSummary(ctx.series?.arc?.readerMap);
+      // 0 disables the distant sub-check; >0 is the issue-gap threshold. Pass a
+      // string so the prompt's `{{#distantGap}}` section renders only when enabled.
+      const distantGap = ctx.config?.distantGap ?? 4;
+      const distantEnabled = distantGap > 0;
       return runManuscriptLlmCheck(ctx, {
         stage: CHEKHOV_STAGE,
         category: 'continuity',
@@ -3542,9 +4809,15 @@ export const EDITORIAL_CHECKS = [
         // `finalPart` gates the whole-corpus "planted, never fired" judgment to the
         // last part of a chunked manuscript (#1299) — an earlier part can't know a
         // setup pays off later, so it would false-flag. A single-chunk run is its own
-        // final part. "fired, never planted" stays enabled on every part (the carried
-        // setup digest tells a later part what was already planted).
-        buildVars: (manuscript, meta, c) => ({ manuscript, authoredSetups: c.authoredSetups, finalPart: meta?.isFinal ? 'true' : '' }),
+        // final part. "fired, never planted" and "distant payoff" stay enabled on
+        // every part (the carried setup digest tells a later part what was already
+        // planted, and in which issue, so the issue gap can be measured at payoff).
+        buildVars: (manuscript, meta, c) => ({
+          manuscript,
+          authoredSetups: c.authoredSetups,
+          finalPart: meta?.isFinal ? 'true' : '',
+          distantGap: distantEnabled ? String(distantGap) : '',
+        }),
         // A setup planted in chapter 2 and paid off (or NOT) in chapter 9 spans
         // chunks — the cross-chunk digest keeps prior findings in view so a later
         // chunk doesn't re-flag, and the clean-setup digest rolls forward which
@@ -3552,8 +4825,13 @@ export const EDITORIAL_CHECKS = [
         // "no setup" and a never-fired plant is caught at the end.
         crossChunkDigest: true,
         crossChunkSetup: true,
+        // Only ask the cross-chunk setup digest to track each element's plant issue
+        // when distant detection is on — that issue number is used solely to measure
+        // the setup→payoff gap (#1595), so tracking it with the distant check
+        // disabled is wasted digest work.
         setupFocus: 'Planted elements that a later scene should pay off — weapons/objects/clues, '
           + 'secrets, stated fears, promises/vows, threats, and notable skills — and, for each, '
+          + (distantEnabled ? 'the issue number it was first planted in, and ' : '')
           + 'whether it has already been paid off (fired, spilled, confronted, kept) or is still open.',
       });
     },
@@ -3780,7 +5058,7 @@ export const EDITORIAL_CHECKS = [
     sources: ['manuscript'],
     label: 'Adverb overuse (-ly + dialogue tags)',
     description:
-      'Flags overuse of -ly adverbs, especially those propping up weak verbs ("ran quickly" → "sprinted") and adverb-laden dialogue tags ("she said angrily"). Density-scaled; dialogue-tag adverbs ("said X-ly") are reported as the higher-severity sub-signal because the tag should carry its weight through the dialogue itself.',
+      'Flags overuse of -ly adverbs, especially those propping up weak verbs ("ran quickly" → "sprinted") and emotion-telling dialogue tags ("she said angrily"). Density-scaled; dialogue-tag adverbs split into reporting (manner/volume — "said quietly", an invisible stage direction) and emotion-telling ("said angrily", which the line should carry) buckets, and only the emotion-telling tags are flagged by default — a higher-severity sub-signal because the tag should carry its weight through the dialogue itself.',
     scope: 'issue',
     kind: 'deterministic',
     category: 'style',
@@ -3791,11 +5069,13 @@ export const EDITORIAL_CHECKS = [
       densityPer1000: z.number().min(0).max(80).default(15),
       maxFindings: z.number().int().min(1).max(50).default(20),
       allowWords: z.string().default(''),
+      flagReportingTags: z.boolean().default(false),
     }),
     configFields: [
       { key: 'densityPer1000', label: 'Adverb rate to flag (per 1000 words)', type: 'number', min: 0, max: 80, step: 1, help: 'Flag a section whose -ly adverb frequency per 1000 words is at or above this.' },
       { key: 'maxFindings', label: 'Max findings per run', type: 'number', min: 1, max: 50, step: 1, help: 'Cap findings so a heavy draft can not flood the review.' },
       { key: 'allowWords', label: 'House-style allowlist', type: 'text', help: 'Adverbs to leave alone (comma-separated or one per line).' },
+      { key: 'flagReportingTags', label: 'Also flag reporting tags', type: 'boolean', help: 'By default only emotion-telling dialogue tags ("said angrily") are flagged; reporting tags ("said quietly") are treated as invisible stage directions. Enable to flag every adverb-laden tag.' },
     ],
     gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
     run: (ctx) => {
@@ -3803,6 +5083,11 @@ export const EDITORIAL_CHECKS = [
       const max = cfg.maxFindings ?? 20;
       const density = cfg.densityPer1000 ?? 15;
       const allowWords = splitPhraseList(cfg.allowWords);
+      // Reporting tags ("said quietly") read as invisible stage directions, so by
+      // default only the emotion-telling bucket ("said angrily") trips the
+      // higher-severity tag signal (#1592). Opt back into the old flag-every-tag
+      // behavior with `flagReportingTags`.
+      const flagReportingTags = cfg.flagReportingTags === true;
       const sections = Array.isArray(ctx.sections) ? ctx.sections : [];
       const findings = [];
       for (const s of sections) {
@@ -3813,16 +5098,23 @@ export const EDITORIAL_CHECKS = [
         const hits = findAdverbs(text, { allowWords });
         if (!hits.length) continue;
         const rate = Math.round((hits.length / words) * 1000 * 10) / 10;
-        const tagHits = hits.filter((h) => h.dialogueTag);
+        const tagHits = hits.filter((h) => h.dialogueTag && (flagReportingTags || h.tagAdverbKind === 'emotion'));
         const { number, location } = sectionIssue(s);
-        // Dialogue-tag adverbs are flagged regardless of overall density (one
-        // "said angrily" is already a tell); the bulk -ly density is gated on rate.
+        // Emotion-telling dialogue-tag adverbs are flagged regardless of overall
+        // density (one "said angrily" is already a tell); the bulk -ly density is
+        // gated on rate. When `flagReportingTags` is on, the bucket also includes
+        // reporting tags ("said quietly"), so the wording stays neutral rather than
+        // claiming every match "names the feeling".
         if (tagHits.length) {
+          const plural = tagHits.length === 1 ? '' : 's';
+          const problem = flagReportingTags
+            ? `${tagHits.length} adverb-laden dialogue tag${plural} (e.g. "${tagHits[0].anchor}") — a dialogue tag propped up by an adverb usually means the line itself should carry the tone.`
+            : `${tagHits.length} emotion-telling dialogue tag${plural} (e.g. "${tagHits[0].anchor}") — a dialogue tag that names the feeling usually means the line itself should carry the tone.`;
           findings.push({
             severity: escalateSeverity(ctx.severityDefault, 1),
             category: 'style',
             location,
-            problem: `${tagHits.length} adverb-laden dialogue tag${tagHits.length === 1 ? '' : 's'} (e.g. "${tagHits[0].anchor}") — a dialogue tag propped up by an adverb usually means the line itself should carry the tone.`,
+            problem,
             suggestion: 'Cut the adverb and let the dialogue + action beat convey the tone ("she said angrily" → "she slammed the cup down. “Fine.”").',
             anchorQuote: tagHits[0].anchor,
             issueNumber: number,
@@ -3849,7 +5141,7 @@ export const EDITORIAL_CHECKS = [
     sources: ['manuscript'],
     label: 'Passive voice (overuse)',
     description:
-      'Advisory flag for passive-voice overuse — a be-verb + past participle heuristic ("the door was opened", "mistakes were made"). Density-scaled per-1000-word frequency; passive voice is a legitimate choice, so this only flags when the rate is high.',
+      'Advisory flag for passive-voice overuse — a be-verb + past participle heuristic ("the door was opened", "mistakes were made"). Density-scaled per-1000-word frequency; passive voice is a legitimate choice, so this only flags when the rate is high. A context-tuning pass (#1593) reduces false positives by default: predicate-adjective states ("she was exhausted") and setting/weather mood images ("the sky was streaked") are not counted as weak passive, while an explicit "by <agent>" always counts.',
     scope: 'issue',
     kind: 'deterministic',
     category: 'style',
@@ -3859,14 +5151,16 @@ export const EDITORIAL_CHECKS = [
     configSchema: z.object({
       densityPer1000: z.number().min(0).max(50).default(10),
       maxFindings: z.number().int().min(1).max(50).default(20),
+      suppressIntentional: z.boolean().default(true),
     }),
     configFields: [
       { key: 'densityPer1000', label: 'Passive-voice rate to flag (per 1000 words)', type: 'number', min: 0, max: 50, step: 1, help: 'Flag a section whose passive-construction frequency per 1000 words is at or above this. Advisory — passive voice is sometimes the right choice.' },
       { key: 'maxFindings', label: 'Max findings per run', type: 'number', min: 1, max: 50, step: 1, help: 'Cap findings so a heavy draft can not flood the review.' },
+      { key: 'suppressIntentional', label: 'Suppress intentional passive', type: 'boolean', help: 'On by default — skip predicate-adjective states ("she was exhausted") and setting/weather mood images ("the sky was streaked"), which are rarely weak passive. Turn off to count every be-verb + participle (the raw heuristic).' },
     ],
     gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
     run: (ctx) => runDensityCheck(ctx, {
-      scan: (text) => findPassiveVoice(text),
+      scan: (text, cfg) => filterPassiveVoice(findPassiveVoice(text), { suppressIntentional: cfg?.suppressIntentional !== false }),
       noun: 'passive constructions',
       problem: (count, rate, anchor) => `${count} passive construction${count === 1 ? '' : 's'} (e.g. "${anchor}") — about ${rate}/1000 words. Heavy passive voice distances the reader from who is acting.`,
       suggestion: 'Rephrase to active voice where it sharpens the prose ("the door was opened by Sam" → "Sam opened the door"). Keep passive where the actor is unknown or beside the point.',
@@ -4356,6 +5650,89 @@ export const EDITORIAL_CHECKS = [
     },
   },
   {
+    id: 'dialogue.tag-variety',
+    sources: ['manuscript'],
+    label: 'Dialogue tag variety / within-scene tag monotony',
+    description:
+      'Flags the opposite tics from said-bookisms at the scene grain: one tag verb hammered over and over ("she said" eight times in a scene — monotony) or a different fancy verb on nearly every line ("said/asked/replied/murmured/whispered" churn — over-variation). Deterministic scan that inventories speech tags (plain + ornate) adjacent to quoted lines, scene by scene. The craft target is mostly the invisible "said"/"asked" with enough variation to stay unnoticed.',
+    scope: 'issue',
+    kind: 'deterministic',
+    category: 'dialogue',
+    severityDefault: 'low',
+    defaultEnabled: true,
+    // Reads the stitched manuscript (per-issue sections), split into scenes.
+    needsManuscript: true,
+    configSchema: z.object({
+      // A scene needs at least this many speech tags before variety is judged —
+      // a handful of tags can't be "monotonous" or "over-varied" meaningfully.
+      minTags: z.number().int().min(3).max(40).default(6),
+      // Monotony: dominant verb must hit BOTH a raw count and a share-of-tags ratio.
+      monotonyCount: z.number().int().min(2).max(40).default(6),
+      monotonyRatio: z.number().min(0.4).max(1).default(0.7),
+      // Over-variation: distinct verbs ÷ tags must exceed this with ≥ minDistinct verbs.
+      overVariationRatio: z.number().min(0.5).max(1).default(0.85),
+      minDistinct: z.number().int().min(2).max(20).default(5),
+      // Cap findings per run so a dialogue-heavy draft can't flood the review.
+      maxFindings: z.number().int().min(1).max(50).default(20),
+      // House-style allowlist (mute a tag verb) / extra ornate tags to count.
+      allowWords: z.string().default(''),
+      extraWords: z.string().default(''),
+    }),
+    configFields: [
+      { key: 'minTags', label: 'Min tags per scene to judge', type: 'number', min: 3, max: 40, step: 1, help: 'A scene needs at least this many speech tags before its variety is assessed.' },
+      { key: 'monotonyCount', label: 'Monotony: dominant-verb count', type: 'number', min: 2, max: 40, step: 1, help: 'How many times one tag verb must recur in a scene to count toward monotony.' },
+      { key: 'monotonyRatio', label: 'Monotony: dominant-verb share', type: 'number', min: 0.4, max: 1, step: 0.05, help: 'Fraction of the scene\'s tags the dominant verb must own (0–1) to flag monotony.' },
+      { key: 'overVariationRatio', label: 'Over-variation: distinct share', type: 'number', min: 0.5, max: 1, step: 0.05, help: 'Distinct-verbs ÷ total-tags above this (0–1) reads as thesaurus churn.' },
+      { key: 'minDistinct', label: 'Over-variation: min distinct verbs', type: 'number', min: 2, max: 20, step: 1, help: 'At least this many distinct tag verbs before over-variation can fire.' },
+      { key: 'maxFindings', label: 'Max findings per run', type: 'number', min: 1, max: 50, step: 1, help: 'Cap findings so a dialogue-heavy draft can not flood the review.' },
+      { key: 'allowWords', label: 'House-style allowlist', type: 'text', help: 'Tag verbs to leave out of the inventory (comma-separated or one per line).' },
+      { key: 'extraWords', label: 'Extra ornate tags to count', type: 'text', help: 'Series-specific ornate tags to include in the inventory (comma-separated or one per line).' },
+    ],
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    run: (ctx) => {
+      const cfg = ctx.config || {};
+      const max = cfg.maxFindings ?? 20;
+      const allowWords = splitPhraseList(cfg.allowWords);
+      const extraWords = splitPhraseList(cfg.extraWords);
+      const opts = {
+        allowWords,
+        extraWords,
+        minTags: cfg.minTags ?? 6,
+        monotonyCount: cfg.monotonyCount ?? 6,
+        monotonyRatio: cfg.monotonyRatio ?? 0.7,
+        overVariationRatio: cfg.overVariationRatio ?? 0.85,
+        minDistinct: cfg.minDistinct ?? 5,
+      };
+      const sections = Array.isArray(ctx.sections) ? ctx.sections : [];
+      const findings = [];
+      for (const s of sections) {
+        if (findings.length >= max) break;
+        const hits = findDialogueTagVariety(s?.content || '', opts);
+        for (const hit of hits) {
+          if (findings.length >= max) break;
+          const issueNumber = Number.isInteger(s?.number) ? s.number : null;
+          const location = issueNumber != null ? `Issue ${issueNumber}` : 'Manuscript';
+          const sceneLabel = `scene ${hit.sceneOrdinal}`;
+          const problem = hit.type === 'monotony'
+            ? `The tag "${hit.verb}" carries ${hit.count} of ${hit.total} dialogue tags in ${sceneLabel} — one repeated tag verb turns monotonous and starts to call attention to itself.`
+            : `${sceneLabel} uses ${hit.distinct} different tag verbs across ${hit.total} tagged lines — a fresh verb on nearly every line reads as thesaurus churn and pulls the reader out.`;
+          findings.push({
+            severity: ctx.severityDefault,
+            category: 'dialogue',
+            location,
+            problem,
+            suggestion: hit.type === 'monotony'
+              ? 'Vary the rhythm: drop some tags entirely (let an action beat carry the speaker) and swap a few for "asked"/a beat so no single tag dominates.'
+              : 'Lean on the invisible "said"/"asked" for most lines and reserve a distinctive tag for the moments that earn it — constant variation is as distracting as monotony.',
+            anchorQuote: hit.anchor,
+            issueNumber,
+          });
+        }
+      }
+      return findings;
+    },
+  },
+  {
     id: 'dialogue.on-the-nose',
     sources: ['manuscript'],
     label: 'On-the-nose / subtext-free dialogue (LLM)',
@@ -4426,6 +5803,65 @@ export const EDITORIAL_CHECKS = [
         crossChunkSetup: true,
         setupFocus:
           'For each named character, capture a few representative dialogue lines and a one-phrase sketch of their voice (diction, rhythm, verbal tics, accent markers). Carry these samples forward so a later chunk can judge whether characters sound distinct from one another and consistent with their established voice.',
+      });
+    },
+  },
+  {
+    id: 'style.voice-consistency',
+    sources: ['manuscript', 'series.styleGuide'],
+    label: 'Narrative voice / tone consistency (LLM)',
+    description:
+      "LLM scan — the NARRATOR-voice sibling of dialogue.voice-distinctiveness (which covers per-character dialogue, not the narration). Fingerprints each issue's narrative tone (diction, register, humor, emotional temperature) and flags an unexplained tonal shift ACROSS issues — narration witty in issue 1, grim in issue 3, witty again in issue 5 is tonal whiplash — plus drift from the series style guide's intended voice. Does NOT flag a purposeful tonal modulation the story earns (a darker chapter a grim turn calls for). Voice consistency is part of the promise to the reader; drift reads as inconsistency. Because the comparison spans issues, the per-issue tone fingerprint is carried forward across manuscript chunks so a later issue is judged against the tone the series established.",
+    scope: 'series',
+    kind: 'llm',
+    category: 'style',
+    // Tonal drift is a polish/texture concern, so a moderate wobble floors at
+    // 'low'; the prompt directs the model to mark a sharp, unexplained whiplash
+    // 'medium'.
+    severityDefault: 'low',
+    defaultEnabled: true,
+    // Reads the stitched manuscript corpus — so the runner only pays the
+    // section-collection I/O when a manuscript-consuming check is enabled.
+    needsManuscript: true,
+    configSchema: z.object({
+      // Cap findings per run so a long manuscript can't flood the review.
+      maxFindings: z.number().int().min(1).max(50).default(12),
+    }),
+    configFields: [
+      {
+        key: 'maxFindings',
+        label: 'Max findings per run',
+        type: 'number',
+        min: 1,
+        max: 50,
+        step: 1,
+        help: 'Cap findings so a long manuscript can not flood the review.',
+      },
+    ],
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    run: (ctx) => {
+      // The intended-voice block is fixed per-call overhead (re-sent on each chunk)
+      // and pure context: it lets the model measure each issue's narration against
+      // the declared tone, not just against the other issues. The check degrades
+      // gracefully — no style-guide tone ⇒ {{#intendedVoice}} renders nothing and
+      // the model still flags internal cross-issue whiplash.
+      const intendedVoice = intendedVoiceSummary(ctx.series?.styleGuide);
+      return runManuscriptLlmCheck(ctx, {
+        stage: VOICE_CONSISTENCY_STAGE,
+        category: 'style',
+        context: { intendedVoice },
+        buildVars: (manuscript, _meta, c) => ({ manuscript, intendedVoice: c.intendedVoice }),
+        // Narrator-voice consistency is a whole-series judgment: each issue's tone
+        // is spread across chunks, so a per-chunk view can't tell "the series
+        // shifted" from "this chunk only sampled one issue". Roll a per-issue tone
+        // fingerprint forward so a later chunk judges against the tone the series
+        // established (and the style guide's intent).
+        crossChunkSetup: true,
+        setupFocus:
+          "For each issue (use the `# Issue N` section headers), capture a compact fingerprint of the NARRATOR's "
+          + 'voice and tone — diction (plain vs ornate), register (formal vs casual), humor level (witty / wry / earnest / grim), '
+          + 'sentence rhythm, and emotional temperature. Carry these per-issue fingerprints forward so a later issue\'s '
+          + "narration can be judged against the tone the series established earlier and against the style guide's intended voice.",
       });
     },
   },
@@ -4897,13 +6333,20 @@ export const readReadinessGate = (settings) => {
   return typeof gate === 'string' && gate ? gate : null;
 };
 
+// Resolve a check's EFFECTIVE severity from its persisted per-check row: a valid
+// stored `severity` override (#1596) wins, otherwise the registry default. Kept
+// pure + tiny so resolveCheckState and the runner agree on the same fallback.
+export const resolveCheckSeverity = (check, row) =>
+  (SEVERITIES.includes(row?.severity) ? row.severity : check.severityDefault);
+
 /**
  * Merge the static registry with persisted per-check state from settings.
  * Returns one row per registered check:
  *   { id, label, description, scope, kind, category, severityDefault,
- *     enabled, config, configFields }
+ *     severity, enabled, config, configFields }
  * `enabled` falls back to the check's `defaultEnabled`; `config` is validated
- * through the check's schema (with defaults); `configFields` is the wire-safe
+ * through the check's schema (with defaults); `severity` is the EFFECTIVE level
+ * (a valid stored override or `severityDefault`); `configFields` is the wire-safe
  * render descriptor the UI builds its config form from (empty array when the
  * check declares none).
  */
@@ -4922,7 +6365,14 @@ export function resolveCheckState(settings) {
       scope: check.scope,
       kind: check.kind,
       category: check.category,
+      // `severityDefault` is the registry baseline (what the override resets to);
+      // `severity` (#1596) is the effective level the runner stamps onto findings;
+      // `severityOverride` is the raw stored override (or null when falling
+      // through to the default), so the catalog can show "Default" distinctly
+      // from a level pinned to the same value as the default.
       severityDefault: check.severityDefault,
+      severity: resolveCheckSeverity(check, row),
+      severityOverride: SEVERITIES.includes(row.severity) ? row.severity : null,
       enabled,
       config: resolveCheckConfig(check, row.config),
       configFields: Array.isArray(check.configFields) ? check.configFields : [],
@@ -4944,15 +6394,57 @@ export function getEnabledCheckRows(settings, subsetIds = null) {
 
 /**
  * The checks that should actually run for a given settings + optional subset.
- * Returns `{ check, config }` pairs (the live registry entry + its resolved
- * config) for every enabled check, narrowed to `subsetIds` when provided.
+ * Returns `{ check, config, severity, severityOverride }` pairs (the live
+ * registry entry, its resolved config, its EFFECTIVE severity, and the RAW
+ * per-check override — null when defaulting, #1596) for every enabled check,
+ * narrowed to `subsetIds` when provided. The runner uses `severity` as the
+ * base (`ctx.severityDefault`) and, when `severityOverride` is set, force-stamps
+ * it onto every finding so a pin is authoritative even for LLM / explicit-
+ * severity checks (not just escalation-from-default ones).
  */
 export function getEnabledChecks(settings, subsetIds = null) {
   // Resolve against built-ins + custom checks (getCheck only knows built-ins).
   const byId = new Map(getAllChecks(settings).map((c) => [c.id, c]));
   return getEnabledCheckRows(settings, subsetIds)
-    .map((row) => ({ check: byId.get(row.id), config: row.config }))
+    .map((row) => ({
+      check: byId.get(row.id), config: row.config, severity: row.severity, severityOverride: row.severityOverride,
+    }))
     .filter((x) => x.check);
+}
+
+/**
+ * Overlay a series' per-check config overrides (#1591) onto the GLOBAL
+ * `{ check, config }` pairs from `getEnabledChecks`, returning new pairs with
+ * the merged config. For each enabled check that carries an override, the
+ * override keys win over the (already resolved + valid) global config; the
+ * merged blob is re-validated through the check's own `configSchema` so a
+ * malformed / out-of-range per-series value can't corrupt the run — on a failed
+ * parse the global config is kept unchanged (NOT reset to schema defaults).
+ *
+ * Pure + side-effect-free. Returns the input array unchanged when `seriesOverrides`
+ * is absent/non-object, so a series that tunes nothing pays no allocation. The
+ * severity fields carried by each pair (`severity` / `severityOverride`, #1596)
+ * are preserved verbatim — the per-series override layer only tunes `config`.
+ *
+ * @param {Array<{check: object, config: object, severity?: string, severityOverride?: string|null}>} enabled  pairs from getEnabledChecks
+ * @param {Record<string, object>|null|undefined} seriesOverrides  series.editorialCheckConfig
+ * @returns {Array<{check: object, config: object, severity?: string, severityOverride?: string|null}>}
+ */
+export function applySeriesCheckConfig(enabled, seriesOverrides) {
+  if (!Array.isArray(enabled)) return [];
+  if (!seriesOverrides || typeof seriesOverrides !== 'object' || Array.isArray(seriesOverrides)
+    || Object.keys(seriesOverrides).length === 0) {
+    return enabled;
+  }
+  return enabled.map((pair) => {
+    const { check, config } = pair;
+    const override = seriesOverrides[check.id];
+    if (!override || typeof override !== 'object' || Array.isArray(override)) return pair;
+    const parsed = check.configSchema.safeParse({ ...config, ...override });
+    // Spread `pair` so the effective `severity` (and any future per-pair field)
+    // rides through unchanged; only `config` is overlaid.
+    return { ...pair, config: parsed.success ? parsed.data : config };
+  });
 }
 
 // ---------------------------------------------------------------------------

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseComicScript } from './comicScriptParser.js';
+import { parseComicScript, sameComicScene } from './comicScriptParser.js';
 
 const SAMPLE = `# Issue 1 — Bone Walker
 
@@ -537,5 +537,83 @@ Thud!`;
         { character: 'GIANT', line: 'STOP' },
       ]);
     });
+  });
+});
+
+describe('parseComicScript — scene markers', () => {
+  const pageHeader = (h) => `${h}\nPanel 1\nDescription: A frame.\n`;
+
+  it('parses `## Page N — Scene M: SLUGLINE` into sceneNumber + sceneHeading', () => {
+    const { pages } = parseComicScript(pageHeader('## Page 1 — Scene 2: INT. KITCHEN — NIGHT'));
+    expect(pages[0].sceneNumber).toBe(2);
+    expect(pages[0].sceneHeading).toBe('INT. KITCHEN — NIGHT');
+  });
+
+  it('tolerates en-dash / hyphen / colon separators', () => {
+    expect(parseComicScript(pageHeader('## Page 1 – Scene 3 – EXT. ROOFTOP — DUSK')).pages[0])
+      .toMatchObject({ sceneNumber: 3, sceneHeading: 'EXT. ROOFTOP — DUSK' });
+    expect(parseComicScript(pageHeader('## Page 1 - Scene 4: INT. VAULT')).pages[0])
+      .toMatchObject({ sceneNumber: 4, sceneHeading: 'INT. VAULT' });
+  });
+
+  it('accepts a Scene number with no slugline (heading null)', () => {
+    expect(parseComicScript(pageHeader('## Page 1 — Scene 5')).pages[0])
+      .toMatchObject({ sceneNumber: 5, sceneHeading: null });
+  });
+
+  it('accepts a slugline-shaped tail with no Scene number', () => {
+    expect(parseComicScript(pageHeader('## Page 1 — INT. KITCHEN — NIGHT')).pages[0])
+      .toMatchObject({ sceneNumber: null, sceneHeading: 'INT. KITCHEN — NIGHT' });
+  });
+
+  it('ignores page-layout parentheticals and non-slugline tails (no false scene)', () => {
+    expect(parseComicScript(pageHeader('## Page 1 (splash)')).pages[0])
+      .toMatchObject({ sceneNumber: null, sceneHeading: null });
+    expect(parseComicScript(pageHeader('## Page 1 - six-panel grid')).pages[0])
+      .toMatchObject({ sceneNumber: null, sceneHeading: null });
+  });
+
+  it('leaves a plain `## Page N` header with no scene marker', () => {
+    expect(parseComicScript(pageHeader('## Page 1')).pages[0])
+      .toMatchObject({ sceneNumber: null, sceneHeading: null });
+  });
+
+  it('still matches the page number when a scene suffix is present', () => {
+    const script = `${pageHeader('## Page 1 — Scene 1: INT. A — DAY')}${pageHeader('## Page 2 — Scene 1: INT. A — DAY')}`;
+    const { pages } = parseComicScript(script);
+    expect(pages).toHaveLength(2);
+    expect(pages.map((p) => p.sceneNumber)).toEqual([1, 1]);
+  });
+});
+
+describe('sameComicScene', () => {
+  it('matches on equal scene numbers', () => {
+    expect(sameComicScene({ sceneNumber: 2 }, { sceneNumber: 2 })).toBe(true);
+    expect(sameComicScene({ sceneNumber: 2 }, { sceneNumber: 3 })).toBe(false);
+  });
+
+  it('falls back to normalized slugline when a number is missing', () => {
+    expect(sameComicScene(
+      { sceneNumber: null, sceneHeading: 'INT. KITCHEN — NIGHT' },
+      { sceneNumber: null, sceneHeading: 'int. kitchen - night.' },
+    )).toBe(true);
+    expect(sameComicScene(
+      { sceneHeading: 'INT. KITCHEN — NIGHT' },
+      { sceneHeading: 'EXT. ROOFTOP — DUSK' },
+    )).toBe(false);
+  });
+
+  it('returns false when neither page carries a scene signal (legacy pages)', () => {
+    expect(sameComicScene({ sceneNumber: null, sceneHeading: null }, { sceneNumber: null, sceneHeading: null })).toBe(false);
+    expect(sameComicScene({}, {})).toBe(false);
+    expect(sameComicScene(null, { sceneNumber: 1 })).toBe(false);
+  });
+
+  it('prefers the number over the heading when both are present', () => {
+    // Same number but drifting sluglines still counts as the same scene.
+    expect(sameComicScene(
+      { sceneNumber: 1, sceneHeading: 'INT. A — DAY' },
+      { sceneNumber: 1, sceneHeading: 'INT. A — LATER' },
+    )).toBe(true);
   });
 });

@@ -74,6 +74,55 @@ if node --input-type=module -e "import('./server/lib/tailscale.js').then(m => pr
     echo ""
 fi
 
+# ffmpeg is a runtime dependency for the media/video features (camera-device
+# enumeration at GET /api/media/devices, video generation, thumbnailing, audio
+# mux) — server/lib/ffmpeg.js shells out to the `ffmpeg` binary. It's not an npm
+# package, so without this the features fail at runtime with `spawn ffmpeg
+# ENOENT`. Install it via the platform package manager when it's missing.
+# Fail-soft: PortOS still boots without it; only the media/video paths degrade.
+ensure_ffmpeg() {
+    if command -v ffmpeg &> /dev/null; then
+        return 0
+    fi
+    echo "ffmpeg not found — required for camera devices, video generation, and thumbnails."
+    case "$(uname -s)" in
+        Darwin)
+            if command -v brew &> /dev/null; then
+                echo "Installing ffmpeg via Homebrew..."
+                brew install ffmpeg || echo "⚠️  brew install ffmpeg failed — install manually: brew install ffmpeg"
+            else
+                echo "⚠️  Homebrew not found. Install brew (https://brew.sh) then run: brew install ffmpeg"
+            fi
+            ;;
+        Linux)
+            # Prefix installs with sudo only when not already root — a root
+            # container (e.g. the Docker image) has no sudo binary, so prefixing
+            # unconditionally would fail to install despite apt-get being present.
+            maybe_sudo=""
+            [ "$(id -u)" -ne 0 ] && maybe_sudo="sudo"
+            if [ -n "$maybe_sudo" ] && ! command -v sudo &> /dev/null; then
+                echo "⚠️  Not root and sudo unavailable — install ffmpeg manually (e.g. apt-get install ffmpeg)."
+            elif command -v apt-get &> /dev/null; then
+                echo "Installing ffmpeg via apt-get${maybe_sudo:+ (may prompt for sudo)}..."
+                $maybe_sudo apt-get update && $maybe_sudo apt-get install -y ffmpeg || echo "⚠️  apt-get install ffmpeg failed — install manually: ${maybe_sudo:+sudo }apt-get install ffmpeg"
+            elif command -v dnf &> /dev/null; then
+                echo "Installing ffmpeg via dnf${maybe_sudo:+ (may prompt for sudo)}..."
+                $maybe_sudo dnf install -y ffmpeg || echo "⚠️  dnf install ffmpeg failed — install manually: ${maybe_sudo:+sudo }dnf install ffmpeg"
+            elif command -v pacman &> /dev/null; then
+                echo "Installing ffmpeg via pacman${maybe_sudo:+ (may prompt for sudo)}..."
+                $maybe_sudo pacman -S --noconfirm ffmpeg || echo "⚠️  pacman -S ffmpeg failed — install manually: ${maybe_sudo:+sudo }pacman -S ffmpeg"
+            else
+                echo "⚠️  No known package manager (apt-get/dnf/pacman). Install ffmpeg manually so media/video features work."
+            fi
+            ;;
+        *)
+            echo "⚠️  Unrecognized platform — install ffmpeg manually so media/video features work."
+            ;;
+    esac
+    echo ""
+}
+ensure_ffmpeg
+
 # Install/update slash-do (project-level slash commands for Claude Code et al.)
 # via npx. Auto-detects the installed AI environments and lays down the latest
 # command set under ~/.claude/commands (or per-environment equivalent). The

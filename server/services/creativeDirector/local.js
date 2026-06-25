@@ -23,8 +23,9 @@
  */
 
 import { checkHealth, ensureSchema } from '../../lib/db.js';
+import { emitRecordUpdated, emitRecordDeleted, autoSubscribeRecordToAllPeers } from '../sharing/recordEvents.js';
 
-export { trimRuns } from './projectsLogic.js';
+export { trimRuns, startingImageFilename } from './projectsLogic.js';
 
 let backend = null;
 let backendName = null;
@@ -65,32 +66,76 @@ export function getProjectsBackendName() {
   return backendName;
 }
 
-export async function listProjects() {
-  return (await selectBackend()).listProjects();
+// Announce a newly-created project to the per-record peer-sync pipeline (#1564):
+// emit the 'updated' event so any existing subscription pushes it, AND
+// auto-subscribe every creativeDirectorProjects-enabled peer so brand-new
+// projects (and their later tombstones) propagate. Routed through the
+// recordEvents subscription adapter (a no-op until peerSync registers it at
+// boot) so this store doesn't import peerSync — peerSync statically imports
+// mergeProjectsFromSync from here, so importing it back would close a load-order
+// cycle. Mirrors authors/index.js announceNewAuthor.
+function announceNewProject(id) {
+  emitRecordUpdated('creativeDirectorProject', id);
+  autoSubscribeRecordToAllPeers('creativeDirectorProject', id).catch(() => {});
 }
 
-export async function getProject(id) {
-  return (await selectBackend()).getProject(id);
+export async function listProjects(options = {}) {
+  return (await selectBackend()).listProjects(options);
+}
+
+export async function getProject(id, options = {}) {
+  return (await selectBackend()).getProject(id, options);
+}
+
+/** Live project ids (or all when includeDeleted) — used by tombstone GC sweeps. */
+export async function listProjectIds(options = {}) {
+  return (await selectBackend()).listProjectIds(options);
 }
 
 export async function createProject(input) {
-  return (await selectBackend()).createProject(input);
+  const project = await (await selectBackend()).createProject(input);
+  announceNewProject(project.id);
+  return project;
 }
 
 export async function updateProject(id, patch) {
-  return (await selectBackend()).updateProject(id, patch);
+  const next = await (await selectBackend()).updateProject(id, patch);
+  // A standalone project reaches peers only via its per-record subscription —
+  // without this emit a structural edit never propagates after the initial
+  // subscribe. The hot-path render mutators (recordRun/updateRun) deliberately
+  // do NOT emit (they fire many times per scene render); run-history converges
+  // on the next structural push, which carries the whole record (runs included).
+  emitRecordUpdated('creativeDirectorProject', next.id);
+  return next;
 }
 
 export async function deleteProject(id) {
-  return (await selectBackend()).deleteProject(id);
+  const result = await (await selectBackend()).deleteProject(id);
+  // Soft-delete tombstone — push the deletion to subscribed peers immediately.
+  emitRecordDeleted('creativeDirectorProject', id);
+  return result;
 }
 
 export async function setTreatment(id, treatmentInput) {
-  return (await selectBackend()).setTreatment(id, treatmentInput);
+  const next = await (await selectBackend()).setTreatment(id, treatmentInput);
+  emitRecordUpdated('creativeDirectorProject', id);
+  return next;
 }
 
 export async function updateScene(id, sceneId, patch) {
-  return (await selectBackend()).updateScene(id, sceneId, patch);
+  const result = await (await selectBackend()).updateScene(id, sceneId, patch);
+  emitRecordUpdated('creativeDirectorProject', id);
+  return result;
+}
+
+/** Merge an incoming batch of project records from a peer (LWW, tombstone-aware). */
+export async function mergeProjectsFromSync(remoteProjects, options = {}) {
+  return (await selectBackend()).mergeProjectsFromSync(remoteProjects, options);
+}
+
+/** Hard-remove project tombstones older than the cutoff (called by tombstone GC). */
+export async function pruneTombstonedProjects(olderThanMs) {
+  return (await selectBackend()).pruneTombstonedProjects(olderThanMs);
 }
 
 export async function recordRun(id, runEntry) {

@@ -26,6 +26,8 @@ import { createCodexStderrFormatter } from '../lib/codexCliOutput.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { createImmediateFallbackSignalDetector } from '../lib/aiToolkit/errorDetection.js';
 import { ensureAntigravityPrintArgs, isAntigravityCliProvider } from '../lib/antigravity.js';
+import { resolveBedrockCliModel } from '../lib/providerModels.js';
+import { agentGuardEnv } from '../lib/agentGuard/index.js';
 
 const AGENTS_DIR = PATHS.cosAgents;
 
@@ -231,8 +233,15 @@ export function createStreamJsonParser() {
 /**
  * Build spawn command and arguments for a CLI provider.
  * Returns { command, args, stdinMode } based on provider type.
+ *
+ * `settingsEnv` is the `~/.claude/settings.json` env block (from
+ * `getClaudeSettingsEnv()`). It MUST be folded into the Bedrock-mapping env
+ * because that is how a Bedrock host commonly supplies `CLAUDE_CODE_USE_BEDROCK`
+ * to the spawned child (see the spawn env below at the `claudeSettingsEnv`
+ * merge) — without it, a settings-only Bedrock box would map against an env
+ * missing the flag and still emit a bare, Bedrock-invalid `--model`.
  */
-export function buildCliSpawnConfig(provider, model) {
+export function buildCliSpawnConfig(provider, model, settingsEnv = {}) {
   const providerId = provider?.id || 'claude-code';
   const effectiveModel = providerId === 'codex' && model === 'codex-configured-default' ? null : model;
 
@@ -280,7 +289,15 @@ export function buildCliSpawnConfig(provider, model) {
     ...(provider?.args || []),          // User-configured provider args
   ];
   if (effectiveModel) {
-    args.push('--model', effectiveModel);
+    // Bedrock box: map a bare Claude id to its region-prefixed Bedrock form
+    // just-in-time (no-op off Bedrock / for already-prefixed or non-Claude ids).
+    // Env precedence mirrors the actual spawn env below: process.env <
+    // settingsEnv (~/.claude/settings.json) < provider.envVars.
+    const injectedModel = resolveBedrockCliModel(effectiveModel, {
+      env: { ...process.env, ...settingsEnv, ...provider?.envVars },
+      providerId,
+    });
+    args.push('--model', injectedModel);
   }
 
   return {
@@ -376,7 +393,10 @@ export async function spawnDirectly({
     shell: false,
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true,
-    env: (() => { const e = { ...process.env, ...claudeSettingsEnv, ...provider.envVars }; delete e.CLAUDECODE; return e; })()
+    // The pm2 shim must be prepended onto the FINAL PATH (after any
+    // provider.envVars override) so a `--dangerously-skip-permissions` agent
+    // can't `pm2 kill` the shared daemon.
+    env: (() => { const e = { ...process.env, ...claudeSettingsEnv, ...provider.envVars }; delete e.CLAUDECODE; Object.assign(e, agentGuardEnv(e)); return e; })()
   });
 
   registerSpawnedAgent(claudeProcess.pid, {

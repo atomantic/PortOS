@@ -76,7 +76,7 @@ vi.mock('../reverseOutline.js', () => ({ getReverseOutline: vi.fn(async () => ou
 let editorialState = { characters: [] };
 vi.mock('../editorialAnalysis.js', () => ({ getSeriesEditorial: vi.fn(async () => editorialState) }));
 
-const { runEditorialChecks, buildEditorialCheckPlan, getReviewWithStaleness } = await import('./checkRunner.js');
+const { runEditorialChecks, buildEditorialCheckPlan, getReviewWithStaleness, enabledChecksConsumeReverseOutline, summarizeCheckErrors, previewCustomCheck } = await import('./checkRunner.js');
 const { runStagedLLM, resolveStageContext } = await import('../../../lib/stageRunner.js');
 const { collectManuscriptSections } = await import('../arcPlanner.js');
 const { getSeriesCanon } = await import('../seriesCanon.js');
@@ -119,15 +119,95 @@ describe('runEditorialChecks', () => {
     expect(result.findings.some((f) => f.checkId === 'naming.dissimilar-names')).toBe(true);
     expect(result.findings.some((f) => f.checkId === 'prose.info-dumping')).toBe(true);
 
-    // Seeded once, in 'merge' mode (never auto-dismiss other checks' findings).
-    expect(seedReviewFromFindings).toHaveBeenCalledTimes(1);
-    expect(seedReviewFromFindings.mock.calls[0][2]).toMatchObject({ mode: 'merge' });
+    // Deterministic checks self-heal: each is seeded in 'fresh' mode scoped to
+    // its own checkId (so a finding it no longer produces auto-dismisses), while
+    // LLM checks seed in 'merge' mode (an absent LLM finding could be variance).
+    // Here: naming (deterministic) → fresh+scoped, info-dump (LLM) → merge.
+    const calls = seedReviewFromFindings.mock.calls;
+    const naming = calls.find((c) => c[2]?.checkId === 'naming.dissimilar-names');
+    expect(naming, 'naming seeded fresh, scoped to its checkId').toBeTruthy();
+    expect(naming[2]).toMatchObject({ mode: 'fresh', checkId: 'naming.dissimilar-names' });
+    const merge = calls.find((c) => c[2]?.mode === 'merge');
+    expect(merge, 'LLM findings seeded in merge mode').toBeTruthy();
+    expect(merge[2].checkId ?? null).toBeNull();
+    // No deterministic finding leaked into the merge batch — they're all routed to
+    // their own fresh+scoped seed instead. (The merge batch is LLM findings only.)
+    const deterministicIds = new Set(
+      listChecks().filter((c) => c.kind === 'deterministic').map((c) => c.id),
+    );
+    expect(merge[1].some((f) => deterministicIds.has(f.checkId))).toBe(false);
+    expect(merge[1].some((f) => f.checkId === 'prose.info-dumping')).toBe(true);
   });
 
   it('reports per-check counts', async () => {
     const result = await runEditorialChecks('s1');
     const naming = result.perCheck.find((p) => p.checkId === 'naming.dissimilar-names');
     expect(naming.count).toBeGreaterThan(0);
+  });
+
+  // #1578 — per-check telemetry: a severity breakdown on each completed check.
+  it('reports a per-check severity breakdown that sums to the count', async () => {
+    const result = await runEditorialChecks('s1');
+    const naming = result.perCheck.find((p) => p.checkId === 'naming.dissimilar-names');
+    expect(naming.bySeverity).toEqual(expect.objectContaining({ high: expect.any(Number), medium: expect.any(Number), low: expect.any(Number) }));
+    const { high, medium, low } = naming.bySeverity;
+    expect(high + medium + low).toBe(naming.count);
+  });
+
+  // #1596 — a pinned per-check severity is AUTHORITATIVE: it force-stamps every
+  // finding from that check, overriding even an LLM-emitted per-finding level
+  // (the mocked info-dump LLM returns 'medium'; the pin forces 'high').
+  it('force-stamps a per-check severity override onto findings, overriding the LLM level', async () => {
+    const result = await runEditorialChecks('s1', {
+      checkIds: ['prose.info-dumping'],
+      settings: { pipelineEditorialChecks: { checks: { 'prose.info-dumping': { severity: 'high' } } } },
+    });
+    const infoDump = result.findings.filter((f) => f.checkId === 'prose.info-dumping');
+    expect(infoDump.length).toBeGreaterThan(0);
+    expect(infoDump.every((f) => f.severity === 'high')).toBe(true);
+    // The native (LLM-emitted) level is preserved so clearing the pin can restore it.
+    expect(infoDump.every((f) => f.nativeSeverity === 'medium')).toBe(true);
+  });
+
+  it('keeps the native per-finding severity when a check has no severity override', async () => {
+    const result = await runEditorialChecks('s1', { checkIds: ['prose.info-dumping'] });
+    const infoDump = result.findings.filter((f) => f.checkId === 'prose.info-dumping');
+    expect(infoDump.length).toBeGreaterThan(0);
+    expect(infoDump.every((f) => f.severity === 'medium')).toBe(true); // the LLM's own level
+    expect(infoDump.every((f) => f.nativeSeverity === 'medium')).toBe(true); // native == effective
+  });
+
+  it('passes active severity overrides to the seed so existing open findings re-grade', async () => {
+    await runEditorialChecks('s1', {
+      checkIds: ['prose.info-dumping'],
+      settings: { pipelineEditorialChecks: { checks: { 'prose.info-dumping': { severity: 'high' } } } },
+    });
+    // The merge seed (info-dump is an LLM check) carries the override map so the
+    // seeding layer can re-grade lingering open comments authoritatively (#1596).
+    const mergeCall = seedReviewFromFindings.mock.calls.find((c) => c[2]?.mode === 'merge');
+    expect(mergeCall).toBeTruthy();
+    expect(mergeCall[2].severityOverrides).toMatchObject({ 'prose.info-dumping': 'high' });
+  });
+
+  it('omits the override map from the seed when no check is pinned', async () => {
+    await runEditorialChecks('s1', { checkIds: ['prose.info-dumping'] });
+    const mergeCall = seedReviewFromFindings.mock.calls.find((c) => c[2]?.mode === 'merge');
+    expect(mergeCall).toBeTruthy();
+    expect(mergeCall[2].severityOverrides).toEqual({}); // empty → nothing to re-grade
+  });
+
+  // #1578 — the runner emits check:start / check:complete progress frames so the
+  // autopilot SSE stream can show per-check progress mid-pass, not just a total.
+  it('emits check:start and check:complete progress frames with a severity breakdown', async () => {
+    const frames = [];
+    await runEditorialChecks('s1', { onProgress: (e) => frames.push(e) });
+    const starts = frames.filter((f) => f.type === 'check:start');
+    const completes = frames.filter((f) => f.type === 'check:complete');
+    expect(starts.length).toBeGreaterThan(0);
+    expect(completes.length).toBe(starts.length);
+    const naming = completes.find((f) => f.checkId === 'naming.dissimilar-names');
+    expect(naming.label).toBeTruthy();
+    expect(naming.bySeverity).toEqual(expect.objectContaining({ high: expect.any(Number), medium: expect.any(Number), low: expect.any(Number) }));
   });
 
   it('re-running dedups findings (checkId-aware key)', async () => {
@@ -142,6 +222,23 @@ describe('runEditorialChecks', () => {
     const result = await runEditorialChecks('s1', { checkIds: ['naming.dissimilar-names'] });
     expect(runStagedLLM).not.toHaveBeenCalled(); // info-dump (the only LLM check) skipped
     expect(result.findings.every((f) => f.checkId === 'naming.dissimilar-names')).toBe(true);
+  });
+
+  // #1514: Series Autopilot's run provider arrives as a SOFT providerDefault so a
+  // per-stage pin still wins for an LLM check; a manual route override stays a HARD
+  // providerOverride. The LLM check (prose.info-dumping) routes through callStagedLLM.
+  it('threads providerDefault (autopilot run provider) into LLM checks as a soft default', async () => {
+    await runEditorialChecks('s1', { checkIds: ['prose.info-dumping'], providerDefault: 'codex' });
+    const opts = runStagedLLM.mock.calls[0][2];
+    expect(opts.providerDefault).toBe('codex');
+    expect(opts.providerOverride).toBeUndefined();
+  });
+
+  it('threads a manual providerOverride into LLM checks as a hard override', async () => {
+    await runEditorialChecks('s1', { checkIds: ['prose.info-dumping'], providerOverride: 'ollama' });
+    const opts = runStagedLLM.mock.calls[0][2];
+    expect(opts.providerOverride).toBe('ollama');
+    expect(opts.providerDefault).toBeUndefined();
   });
 
   it('skips manuscript collection when no enabled check needs it', async () => {
@@ -178,6 +275,40 @@ describe('runEditorialChecks', () => {
     expect(result.findings.some((f) => f.checkId === 'comic.panel-rhythm')).toBe(false);
   });
 
+  // Per-series editorial-check config overrides (#1591). A clean 3-word balloon
+  // is below the default 25-word ceiling, so it only trips when a per-series
+  // override drops the ceiling — proving the runner overlays series config.
+  const cleanComicScript = '## Page 1\n\nPanel 1\n**Description:** A quiet field.\n**Dialogue:**\n- ANYA: "We should go."\n';
+
+  it('overlays a series editorialCheckConfig override onto a check\'s thresholds (#1591)', async () => {
+    issuesState = [{ id: 'i1', seriesId: 's1', number: 1, stages: { comicScript: { output: cleanComicScript } } }];
+
+    // Default thresholds → the 3-word balloon is clean.
+    const before = await runEditorialChecks('s1', { checkIds: ['comic.lettering-density'] });
+    expect(before.findings.some((f) => f.checkId === 'comic.lettering-density')).toBe(false);
+
+    // Same series, but a per-series override drops the per-balloon ceiling to 2.
+    getSeries.mockResolvedValueOnce({
+      id: 's1', universeId: 'u1',
+      editorialCheckConfig: { 'comic.lettering-density': { maxWordsPerBalloon: 2 } },
+    });
+    const after = await runEditorialChecks('s1', { checkIds: ['comic.lettering-density'] });
+    expect(after.findings.some((f) => f.checkId === 'comic.lettering-density')).toBe(true);
+  });
+
+  it('ignores a malformed/out-of-range per-series override and keeps global thresholds (#1591)', async () => {
+    issuesState = [{ id: 'i1', seriesId: 's1', number: 1, stages: { comicScript: { output: cleanComicScript } } }];
+    // 999999 is far above the schema max (200): the merged config fails validation,
+    // so the global default (25) holds and the clean balloon stays unflagged —
+    // a bad override must NOT corrupt the run (nor reset to schema defaults).
+    getSeries.mockResolvedValueOnce({
+      id: 's1', universeId: 'u1',
+      editorialCheckConfig: { 'comic.lettering-density': { maxWordsPerBalloon: 999999 } },
+    });
+    const result = await runEditorialChecks('s1', { checkIds: ['comic.lettering-density'] });
+    expect(result.findings.some((f) => f.checkId === 'comic.lettering-density')).toBe(false);
+  });
+
   it('skips disabled checks', async () => {
     // Disable every LLM check → no provider call, only deterministic findings.
     // The mock canon has no objects/links, so naming is the only producer.
@@ -192,6 +323,22 @@ describe('runEditorialChecks', () => {
     const result = await runEditorialChecks('s1', { settings });
     expect(result.findings).toEqual([]);
     expect(seedReviewFromFindings).not.toHaveBeenCalled();
+  });
+
+  it('self-heals a deterministic check that finds nothing (fresh+scoped seed dismisses stale opens)', async () => {
+    // A clean canon → the naming check produces zero findings. It must STILL seed
+    // in 'fresh' mode scoped to its checkId so any prior open naming findings are
+    // reconciled away — otherwise stale deterministic findings linger forever and
+    // can permanently block the health gate.
+    getSeriesCanon.mockResolvedValueOnce({
+      characters: [{ name: 'Zebediah' }, { name: 'Wolfgang' }], places: [], objects: [],
+    });
+    const result = await runEditorialChecks('s1', { checkIds: ['naming.dissimilar-names'] });
+    expect(result.findings).toEqual([]);
+    expect(seedReviewFromFindings).toHaveBeenCalledTimes(1);
+    const [, findings, opts] = seedReviewFromFindings.mock.calls[0];
+    expect(findings).toEqual([]); // nothing found this pass
+    expect(opts).toMatchObject({ mode: 'fresh', checkId: 'naming.dissimilar-names' });
   });
 
   it('skips seeding when canceled mid-run (no partial review mutation)', async () => {
@@ -324,6 +471,87 @@ describe('runEditorialChecks', () => {
     expect(result.findings.some((f) => f.checkId === 'naming.dissimilar-names')).toBe(true);
     const infodump = result.perCheck.find((p) => p.checkId === 'prose.info-dumping');
     expect(infodump.error).toMatch(/provider down/);
+  });
+});
+
+describe('previewCustomCheck (#1607)', () => {
+  const draft = {
+    label: 'Anachronisms',
+    description: '',
+    prompt: 'Flag any modern technology that does not fit the setting.',
+    scope: 'issue',
+    category: 'custom',
+    severityDefault: 'medium',
+  };
+
+  it('runs the draft and returns sample findings WITHOUT seeding the review', async () => {
+    const result = await previewCustomCheck('s1', draft);
+    expect(result.invalid).toBe(false);
+    expect(result.skipped).toBe(false);
+    expect(result.findings.length).toBe(1);
+    // The mocked inline LLM returns a 'medium' finding; preview surfaces it as-is.
+    expect(result.findings[0].problem).toMatch(/anachronism/i);
+    expect(result.findings[0].severity).toBe('medium');
+    // Preview is transient: the review store is never seeded, and findings carry
+    // no checkId / sourceContentHash (those mark a finding for the seed machinery).
+    expect(seedReviewFromFindings).not.toHaveBeenCalled();
+    expect(result.findings[0].checkId).toBeUndefined();
+    expect(result.findings[0].sourceContentHash).toBeUndefined();
+  });
+
+  it('normalizes an out-of-enum LLM severity to the draft default', async () => {
+    const { runInlineLLM } = await import('../../../lib/stageRunner.js');
+    runInlineLLM.mockResolvedValueOnce({
+      runId: 'inline-run',
+      content: { findings: [{ severity: 'catastrophic', issueNumber: 1, location: 'p1', problem: 'x', suggestion: 'y', anchorQuote: 'z' }] },
+    });
+    const result = await previewCustomCheck('s1', { ...draft, severityDefault: 'high' });
+    expect(result.findings[0].severity).toBe('high');
+  });
+
+  it('reports invalid for a draft missing the required prompt', async () => {
+    const result = await previewCustomCheck('s1', { ...draft, prompt: '' });
+    expect(result.invalid).toBe(true);
+    expect(result.findings).toEqual([]);
+    expect(seedReviewFromFindings).not.toHaveBeenCalled();
+  });
+
+  it('reports skipped when the series has no manuscript (gate declines)', async () => {
+    collectManuscriptSections.mockResolvedValueOnce([]);
+    const result = await previewCustomCheck('s1', draft);
+    expect(result.skipped).toBe(true);
+    expect(result.findings).toEqual([]);
+  });
+
+  it('honors a maxFindings cap', async () => {
+    const { runInlineLLM } = await import('../../../lib/stageRunner.js');
+    runInlineLLM.mockResolvedValueOnce({
+      runId: 'inline-run',
+      content: { findings: [
+        { severity: 'low', issueNumber: 1, location: 'a', problem: 'p1', suggestion: 's', anchorQuote: 'q1' },
+        { severity: 'low', issueNumber: 1, location: 'b', problem: 'p2', suggestion: 's', anchorQuote: 'q2' },
+        { severity: 'low', issueNumber: 1, location: 'c', problem: 'p3', suggestion: 's', anchorQuote: 'q3' },
+      ] },
+    });
+    const result = await previewCustomCheck('s1', draft, { maxFindings: 2 });
+    expect(result.findings.length).toBe(2);
+  });
+});
+
+describe('summarizeCheckErrors (#1573)', () => {
+  it('extracts the count + checkIds of errored perCheck entries', () => {
+    const perCheck = [
+      { checkId: 'pacing', count: 0, error: 'provider timeout' },
+      { checkId: 'continuity', count: 2 },
+      { checkId: 'naming', count: 0, skipped: true },
+      { checkId: 'info-dump', error: 'boom' },
+    ];
+    expect(summarizeCheckErrors(perCheck)).toEqual({ errored: 2, erroredCheckIds: ['pacing', 'info-dump'] });
+  });
+
+  it('reports zero for a clean pass and tolerates a non-array', () => {
+    expect(summarizeCheckErrors([{ checkId: 'pacing', count: 1 }])).toEqual({ errored: 0, erroredCheckIds: [] });
+    expect(summarizeCheckErrors(undefined)).toEqual({ errored: 0, erroredCheckIds: [] });
   });
 });
 
@@ -623,6 +851,50 @@ describe('getReviewWithStaleness (#1345)', () => {
     expect(review.comments.find((c) => c.checkId === 'comic.panel-rhythm').stale).toBe(true);
   });
 
+  it('runs comic.prose-sync through the runner, fetching issues and feeding the model the PROSE STAGE text (#1589)', async () => {
+    // A hybrid issue: prose stage + comic content, PLUS a comicScript stage whose
+    // text differs — the stitched manuscript would pick comicScript over prose, so
+    // this pins that the check reads the prose STAGE, not the manuscript precedence.
+    issuesState = [{
+      id: 'i1', seriesId: 's1', number: 1,
+      stages: {
+        prose: { output: 'Anna is stabbed and falls.' },
+        comicScript: { output: 'PAGE 1\nPANEL 1\nAnna stands, unharmed.' },
+        comicPages: { pages: [{ panels: [{ description: 'Anna stands, unharmed', caption: '', dialogue: [{ character: 'ANNA', line: 'Fine.' }], sfx: '' }] }] },
+      },
+    }];
+    const { findings } = await runEditorialChecks('s1', { checkIds: ['comic.prose-sync'] });
+    // needsIssues/needsProse made the runner load issues for this check.
+    expect(listIssuesForSeries).toHaveBeenCalledWith('s1');
+    expect(findings.some((f) => f.checkId === 'comic.prose-sync')).toBe(true);
+    // The model got the PROSE stage text (NOT the comicScript-precedence manuscript),
+    // and the comic block carries the panel description + the { character, line } speaker.
+    const call = runStagedLLM.mock.calls.find((c) => c[0] === 'pipeline-editorial-comic-prose-sync');
+    expect(call).toBeTruthy();
+    expect(call[1].prose).toBe('Anna is stabbed and falls.');
+    expect(call[1].comic).toContain('Shows: Anna stands, unharmed');
+    expect(call[1].comic).toContain('ANNA: Fine.');
+  });
+
+  it('stales a comic.prose-sync finding when the PROSE STAGE text drifts, even though the comic is unchanged (#1589)', async () => {
+    const hybrid = (prose) => [{
+      id: 'i1', seriesId: 's1', number: 1,
+      stages: {
+        prose: { output: prose },
+        comicPages: { pages: [{ panels: [{ description: 'a panel', caption: '', dialogue: [], sfx: '' }] }] },
+      },
+    }];
+    issuesState = hybrid('Anna is stabbed and falls.');
+    const { findings } = await runEditorialChecks('s1', { checkIds: ['comic.prose-sync'] });
+    reviewState = { comments: findings.map((f) => ({ ...f, status: 'open' })) };
+    expect(reviewState.comments.find((c) => c.checkId === 'comic.prose-sync')).toBeTruthy();
+    // Edit ONLY the prose stage — the comic content is byte-identical. The `prose`
+    // source must fingerprint the prose so the finding goes stale.
+    issuesState = hybrid('Anna walks away, unharmed.');
+    const review = await getReviewWithStaleness('s1');
+    expect(review.comments.find((c) => c.checkId === 'comic.prose-sync').stale).toBe(true);
+  });
+
   it('keeps a scene finding fresh when the manuscript changes (reverseOutline-only source)', async () => {
     outlineState = { scenes: [{ id: 'scene-001', issueNumber: 1, heading: 'Talking heads', anchorQuote: 'q', components: { narrative: false, action: false, dialogue: true } }] };
     await seedReviewFromRun();
@@ -706,5 +978,25 @@ describe('buildEditorialCheckPlan', () => {
     const plan = await buildEditorialCheckPlan('s1');
     expect(plan.enabledCount).toBe(plan.checks.length);
     expect(plan.checks.map((c) => c.id)).toContain('naming.dissimilar-names');
+  });
+
+  it('exposes whether any enabled check consumes the reverse outline (#1349)', async () => {
+    const plan = await buildEditorialCheckPlan('s1');
+    // Scene/POV checks ship enabled by default, so the default plan consumes it.
+    expect(plan.consumesReverseOutline).toBe(true);
+  });
+});
+
+describe('enabledChecksConsumeReverseOutline (#1349)', () => {
+  const consumesOutline = (c) => Array.isArray(c.sources)
+    && (c.sources.includes('reverseOutline') || c.sources.includes('reverseOutline.plotlines'));
+
+  it('is true when a scene/plotline check is enabled (default settings)', () => {
+    expect(enabledChecksConsumeReverseOutline({})).toBe(true);
+  });
+
+  it('is false when every reverse-outline-consuming check is disabled', () => {
+    const settings = disableWhere(consumesOutline);
+    expect(enabledChecksConsumeReverseOutline(settings)).toBe(false);
   });
 });

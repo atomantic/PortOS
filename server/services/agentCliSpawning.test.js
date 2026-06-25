@@ -186,6 +186,50 @@ describe('buildCliSpawnConfig', () => {
     expect(config.command).toBe('agy');
     expect(config.args).toEqual(['--print', '--dangerously-skip-permissions']);
   });
+
+  describe('Bedrock model-id mapping', () => {
+    // buildCliSpawnConfig reads process.env for the Bedrock signal; isolate the
+    // tests from whatever the host/CI environment happens to set.
+    let savedBedrock;
+    beforeEach(() => {
+      savedBedrock = process.env.CLAUDE_CODE_USE_BEDROCK;
+      delete process.env.CLAUDE_CODE_USE_BEDROCK;
+    });
+    afterEach(() => {
+      if (savedBedrock === undefined) delete process.env.CLAUDE_CODE_USE_BEDROCK;
+      else process.env.CLAUDE_CODE_USE_BEDROCK = savedBedrock;
+    });
+
+    const modelOf = (args) => args[args.indexOf('--model') + 1];
+
+    it('passes a bare Claude model through unchanged when Bedrock mode is off', () => {
+      const config = buildCliSpawnConfig({ id: 'claude-code', command: 'claude' }, 'claude-opus-4-8');
+      expect(modelOf(config.args)).toBe('claude-opus-4-8');
+    });
+
+    it('maps a bare Claude model when Bedrock comes ONLY from settings.json env (regression: #1521 blocking)', () => {
+      const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      // provider.envVars empty (plain claude-code), Bedrock supplied via the
+      // ~/.claude/settings.json env block — the case the original fix missed.
+      const config = buildCliSpawnConfig(
+        { id: 'claude-code', command: 'claude', envVars: {} },
+        'claude-opus-4-8',
+        { CLAUDE_CODE_USE_BEDROCK: '1' },
+      );
+      expect(modelOf(config.args)).toBe('global.anthropic.claude-opus-4-8');
+      spy.mockRestore();
+    });
+
+    it('maps a bare Claude model when Bedrock comes from provider.envVars', () => {
+      const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const config = buildCliSpawnConfig(
+        { id: 'claude-code', command: 'claude', envVars: { CLAUDE_CODE_USE_BEDROCK: '1' } },
+        'claude-opus-4-8',
+      );
+      expect(modelOf(config.args)).toBe('global.anthropic.claude-opus-4-8');
+      spy.mockRestore();
+    });
+  });
 });
 
 describe('stream error containment', () => {

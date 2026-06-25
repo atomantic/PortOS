@@ -17,7 +17,7 @@
  *   none   no width clamp (caller owns sizing via panelClassName)
  *
  * Divergent call-site behavior is opt-in via flags:
- *   closeOnBackdrop=false   EditAppModal / MemoryEditModal / ResumeAgentModal
+ *   closeOnBackdrop=false   MemoryEditModal / ResumeAgentModal
  *                           — long forms where an accidental click on the
  *                           overlay would lose typed state.
  *   closeOnEsc=false        Flux2InstallModal — never wired Esc pre-refactor.

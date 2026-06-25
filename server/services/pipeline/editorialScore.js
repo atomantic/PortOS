@@ -120,6 +120,60 @@ export function openBlockers(comments, gate = DEFAULT_READINESS_GATE) {
   );
 }
 
+/**
+ * Summarize the blocking breakdown of a `computeHealth` result (#1579) — the
+ * top checks and issues (by open-finding count, descending) that drove a pause.
+ * Pure; feeds both the single-line autopilot pause log and the persisted pause
+ * marker so "why did health reject my series?" no longer needs a manual API
+ * hit. `null`/series-scoped issue findings bucket under `issueNumber: null`.
+ *
+ * @param {object} health — a `computeHealth` result
+ * @param {object} [opts]
+ * @param {number} [opts.topN=5] — how many checks/issues to keep
+ * @returns {{ score, open, topChecks: [{checkId, count}], topIssues: [{issueNumber, open}] }}
+ */
+export function summarizeEditorialBlockers(health, { topN = 5 } = {}) {
+  const h = health && typeof health === 'object' ? health : {};
+  const byCheck = h.openByCheck && typeof h.openByCheck === 'object' ? h.openByCheck : {};
+  const topChecks = Object.entries(byCheck)
+    .filter(([, n]) => Number.isFinite(n) && n > 0)
+    // Count desc, then checkId asc for a stable tie-break.
+    .sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))
+    .slice(0, topN)
+    .map(([checkId, count]) => ({ checkId, count }));
+  const perIssue = Array.isArray(h.perIssue) ? h.perIssue : [];
+  const topIssues = perIssue
+    .filter((p) => p && typeof p === 'object' && Number.isFinite(p.open) && p.open > 0)
+    // Open desc, then issueNumber asc (series-scoped null bucket sorts last).
+    .sort((a, b) => b.open - a.open || ((a.issueNumber ?? Infinity) - (b.issueNumber ?? Infinity)))
+    .slice(0, topN)
+    .map((p) => ({ issueNumber: Number.isInteger(p.issueNumber) ? p.issueNumber : null, open: p.open }));
+  return {
+    score: Number.isFinite(h.score) ? h.score : 0,
+    open: Number.isFinite(h.open) ? h.open : 0,
+    topChecks,
+    topIssues,
+  };
+}
+
+/**
+ * Render a `summarizeEditorialBlockers` breakdown into a compact, single-line
+ * string for the emoji-prefixed autopilot log (#1579). Series-scoped findings
+ * (no issue number) render as `series`.
+ */
+export function formatBlockerSummary(breakdown) {
+  const b = breakdown && typeof breakdown === 'object' ? breakdown : {};
+  const checks = Array.isArray(b.topChecks) ? b.topChecks : [];
+  const issues = Array.isArray(b.topIssues) ? b.topIssues : [];
+  const checkStr = checks.length
+    ? `top checks [${checks.map((c) => `${c.checkId}×${c.count}`).join(', ')}]`
+    : 'no check breakdown';
+  const issueStr = issues.length
+    ? `top issues [${issues.map((i) => `${i.issueNumber == null ? 'series' : `#${i.issueNumber}`}×${i.open}`).join(', ')}]`
+    : 'no issue breakdown';
+  return `${checkStr}; ${issueStr}`;
+}
+
 // Tally one finding into an accumulator. OPEN findings drive the score +
 // breakdowns; accepted/dismissed are counted only for context (resolved totals).
 function tally(acc, comment) {
@@ -227,6 +281,21 @@ function sanitizeSnapshot(raw) {
   const byCat = raw.openByCategory && typeof raw.openByCategory === 'object' ? raw.openByCategory : {};
   const openByCategory = {};
   for (const [k, v] of Object.entries(byCat)) if (Number.isFinite(v)) openByCategory[k] = v;
+  // Per-check open counts (#1597). Additive + local-only telemetry — no schema
+  // bump needed (older readers ignore the field; this reader tolerates its
+  // absence). CRITICAL: a snapshot recorded BEFORE this shipped has NO per-check
+  // map, which is NOT the same as "ran and found zero" ({}). Coercing absence to
+  // {} would make pre-upgrade points read as real zero counts — the first
+  // post-upgrade run would then draw a false 0→N spike and flag every currently
+  // open check as a 0→N regression. So we preserve absence as `null` ("no
+  // telemetry"); `computeTrend` skips per-check regressions across a null point
+  // and the client omits null points from the per-check sparkline.
+  const byCheck = raw.openByCheck && typeof raw.openByCheck === 'object' ? raw.openByCheck : null;
+  let openByCheck = null;
+  if (byCheck) {
+    openByCheck = {};
+    for (const [k, v] of Object.entries(byCheck)) if (Number.isFinite(v)) openByCheck[k] = v;
+  }
   return {
     runId: typeof raw.runId === 'string' ? raw.runId : null,
     at,
@@ -235,6 +304,7 @@ function sanitizeSnapshot(raw) {
     open: Number.isFinite(raw.open) ? raw.open : (openBySeverity.high + openBySeverity.medium + openBySeverity.low),
     openBySeverity,
     openByCategory,
+    openByCheck,
   };
 }
 
@@ -294,6 +364,7 @@ export async function recordTrendSnapshot(seriesId, { runId = null, gate = DEFAU
     open: health.open,
     openBySeverity: health.openBySeverity,
     openByCategory: health.openByCategory,
+    openByCheck: health.openByCheck,
   };
   return queueLedgerWrite(seriesId, async () => {
     const ledger = await readLedger(seriesId);
@@ -319,14 +390,31 @@ export async function recordTrendSnapshot(seriesId, { runId = null, gate = DEFAU
 // Trend / regression projection (pure).
 // ---------------------------------------------------------------------------
 
+// Per-bucket regressions: every key whose open count is higher in `latest` than
+// in `previous` (a bucket absent from `previous` counts as 0 prior). Shared by
+// the per-category and per-check (#1597) regression projections so the two can
+// never disagree on what "regressed" means. Returns `[{ [keyName], from, to }]`
+// sorted by the size of the increase, descending.
+function regressionsBetween(latest, previous, mapField, keyName) {
+  const out = [];
+  if (!latest || !previous) return out;
+  for (const [key, to] of Object.entries(latest[mapField] || {})) {
+    const from = previous[mapField]?.[key] || 0;
+    if (to > from) out.push({ [keyName]: key, from, to });
+  }
+  return out.sort((a, b) => (b.to - b.from) - (a.to - a.from));
+}
+
 /**
  * Project a ledger's snapshots into a trend view: the score/open time-series
- * plus per-category REGRESSIONS (a category whose open-finding count rose
- * between the two most recent snapshots — i.e. it got WORSE after an edit pass).
- * Pure so the route + UI + tests share one definition.
+ * (each point also carrying its per-severity, per-category, and per-check open
+ * counts so the UI can build per-bucket sparklines) plus per-category and
+ * per-check REGRESSIONS (a bucket whose open-finding count rose between the two
+ * most recent snapshots — i.e. it got WORSE after an edit pass). Pure so the
+ * route + UI + tests share one definition.
  *
  * @param {Array} snapshots — the ledger's snapshots (chronological, oldest first)
- * @returns {{ points: [], regressions: [], latest, previous, delta }}
+ * @returns {{ points: [], regressions: [], checkRegressions: [], latest, previous, delta }}
  */
 export function computeTrend(snapshots) {
   const list = Array.isArray(snapshots) ? snapshots.map(sanitizeSnapshot).filter(Boolean) : [];
@@ -336,22 +424,21 @@ export function computeTrend(snapshots) {
     score: s.score,
     open: s.open,
     openBySeverity: s.openBySeverity,
+    openByCheck: s.openByCheck,
   }));
   const latest = list[list.length - 1] || null;
   const previous = list.length >= 2 ? list[list.length - 2] : null;
   // Score delta between the two most recent revisions (positive = improving).
   const delta = latest && previous ? latest.score - previous.score : 0;
-  // Per-category regressions: a category whose open count is higher in `latest`
-  // than in `previous`. Categories absent from `previous` count as 0 prior.
-  const regressions = [];
-  if (latest && previous) {
-    for (const [category, to] of Object.entries(latest.openByCategory || {})) {
-      const from = previous.openByCategory?.[category] || 0;
-      if (to > from) regressions.push({ category, from, to });
-    }
-    regressions.sort((a, b) => (b.to - b.from) - (a.to - a.from));
-  }
-  return { points, regressions, latest, previous, delta };
+  const regressions = regressionsBetween(latest, previous, 'openByCategory', 'category');
+  // Per-check regressions only when BOTH compared revisions carry per-check
+  // telemetry (openByCheck is a map, not the `null` no-telemetry sentinel) —
+  // otherwise an absent prior point would falsely read as all-zeros and flag
+  // every currently-open check as a 0→N regression after upgrade (#1597).
+  const checkRegressions = latest?.openByCheck && previous?.openByCheck
+    ? regressionsBetween(latest, previous, 'openByCheck', 'checkId')
+    : [];
+  return { points, regressions, checkRegressions, latest, previous, delta };
 }
 
 /**

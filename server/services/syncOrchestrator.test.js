@@ -121,8 +121,16 @@ describe('syncOrchestrator', () => {
     vi.stubGlobal('fetch', mockFetch);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     stopSyncOrchestrator();
+    // A fake-timer advance can fire the orchestrator's fire-and-forget interval
+    // cycle (syncAllPeers + the tombstone sweeps), whose console.log/console.error
+    // land on promise resolution — AFTER a synchronous advanceTimersByTime returns.
+    // Drain that in-flight async here (stopSyncOrchestrator already cleared the
+    // recurring timer, so this terminates) before restoring real timers and ending
+    // the file, so a late log can't race vitest's worker teardown
+    // ("Closing rpc while onUserConsoleLog was pending").
+    await vi.runOnlyPendingTimersAsync();
     vi.useRealTimers();
     vi.unstubAllGlobals();
   });
@@ -812,13 +820,15 @@ describe('syncOrchestrator', () => {
       expect(instanceEvents.on).toHaveBeenCalledWith('peer:online', expect.any(Function));
     });
 
-    it('sets up periodic sync interval', () => {
+    it('sets up periodic sync interval', async () => {
       initSyncOrchestrator();
 
       getPeers.mockResolvedValue([]);
 
-      // Advance past the interval (60s)
-      vi.advanceTimersByTime(60000);
+      // Advance past the interval (60s) and AWAIT the triggered cycle so its
+      // fire-and-forget logs settle inside the test rather than after it returns
+      // (the async variant flushes the promise chain the timer kicked off).
+      await vi.advanceTimersByTimeAsync(60000);
 
       // syncAllPeers should have been triggered
       expect(getPeers).toHaveBeenCalled();

@@ -25,6 +25,35 @@ describe('renderEntitiesSummary', () => {
     expect(out.split('\n')).toHaveLength(3);
   });
 
+  it('excludes characters already in the bible (excludeCharacterNames), keeping places/objects', () => {
+    const world = {
+      characters: [
+        { name: 'Mira', role: 'surveyor' },
+        { name: 'ASTER-9 CHANDELIER', role: 'fixture' },
+        { name: 'Off-canon Extra', role: 'walk-on' },
+      ],
+      places: [{ name: 'The Foundry', description: 'industrial district' }],
+    };
+    const out = renderEntitiesSummary(world, {
+      excludeCharacterNames: new Set(['mira', 'aster-9 chandelier']),
+    });
+    // Bible characters dropped from the roster; the non-canon one survives.
+    expect(out).not.toContain('Mira');
+    expect(out).not.toContain('ASTER-9 CHANDELIER');
+    expect(out).toContain('Off-canon Extra');
+    // Places are never excluded.
+    expect(out).toContain('Places: The Foundry');
+  });
+
+  it('drops the whole characters line + corrects the +N more count when excluded', () => {
+    const chars = Array.from({ length: ENTITIES_SUMMARY_MAX_PER_KIND + 5 }, (_, i) => ({ name: `C${i + 1}`, role: 'r' }));
+    // Exclude the first 5 → remaining exactly ENTITIES_SUMMARY_MAX_PER_KIND, no "+N more".
+    const exclude = new Set(['c1', 'c2', 'c3', 'c4', 'c5']);
+    const out = renderEntitiesSummary({ characters: chars }, { excludeCharacterNames: exclude });
+    expect(out).not.toContain('C1 (');
+    expect(out).not.toContain('(+'); // exactly maxPerKind remain after exclusion
+  });
+
   it('omits kinds with zero entries', () => {
     const out = renderEntitiesSummary({
       characters: [{ name: 'Mira', role: 'surveyor' }],
@@ -70,6 +99,18 @@ describe('renderEntitiesSummary', () => {
     expect(out).toContain('A');
     expect(out).not.toContain('B');
     expect(out).toContain('(+2 more)');
+  });
+
+  it('honors a per-kind maxPerKind map, lifting one kind while defaulting the rest', () => {
+    const characters = Array.from({ length: ENTITIES_SUMMARY_MAX_PER_KIND + 5 }, (_, i) => ({ name: `C${i + 1}`, role: 'role' }));
+    const places = Array.from({ length: ENTITIES_SUMMARY_MAX_PER_KIND + 2 }, (_, i) => ({ name: `P${i + 1}` }));
+    const out = renderEntitiesSummary({ characters, places }, { maxPerKind: { characters: Infinity } });
+    // characters uncapped — every one listed, no "(+N more)" on the Characters line
+    expect(out).toContain(`C${ENTITIES_SUMMARY_MAX_PER_KIND + 5} (role)`);
+    expect(out).not.toMatch(/Characters:.*\(\+\d+ more\)/);
+    // places fall back to the default cap with a "(+2 more)" tag
+    expect(out).not.toContain(`P${ENTITIES_SUMMARY_MAX_PER_KIND + 1}`);
+    expect(out).toMatch(/Places:.*\(\+2 more\)/);
   });
 
   it(`truncates over-long descriptors at ${ENTITIES_SUMMARY_DESCRIPTOR_MAX} chars with an ellipsis`, () => {

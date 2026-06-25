@@ -1026,6 +1026,12 @@ export const writersRoomLiveRenderPreviewSchema = z.object({}).strict();
 export const editorialCheckConfigSchema = z.object({
   enabled: z.boolean().optional(),
   config: z.record(z.unknown()).optional(),
+  // Optional per-check severity override (#1596). Absent falls through to the
+  // check's registry `severityDefault`; an explicit `null` CLEARS a previously
+  // stored override (so the catalog "Default" option resets to the registry
+  // value rather than pinning a level). Bounded to the registry's own severity
+  // enum so the wire gate can't drift from resolveCheckState.
+  severity: z.enum([...CHECK_SEVERITIES]).nullable().optional(),
 }).strict();
 
 // POST .../editorial/checks/run — run all enabled checks, or a named subset.
@@ -1066,6 +1072,21 @@ export const editorialCustomCheckCreateSchema = z.object({
 // field is left unchanged rather than reset.
 export const editorialCustomCheckUpdateSchema = z.object(editorialCustomCheckShape).partial().strict();
 
+// Dry-run preview (#1607): run an UNSAVED draft check against a series and return
+// sample findings without persisting. Same authored fields as create (so the
+// draft synthesizes into a runnable check), plus an optional per-run cap and the
+// provider/model overrides the run route accepts.
+export const editorialCustomCheckPreviewSchema = z.object({
+  ...editorialCustomCheckShape,
+  description: editorialCustomCheckShape.description.optional().default(''),
+  scope: editorialCustomCheckShape.scope.optional().default('issue'),
+  category: editorialCustomCheckShape.category.optional().default('custom'),
+  severityDefault: editorialCustomCheckShape.severityDefault.optional().default('medium'),
+  maxFindings: z.number().int().min(1).max(50).optional(),
+  providerId: z.string().trim().max(80).optional(),
+  model: z.string().trim().max(200).optional(),
+}).strict();
+
 // settings.pipelineEditorialChecks slice (validated on PUT /api/settings when
 // present). `checks` maps a checkId → its persisted enable/config; `customChecks`
 // holds the user-defined check definitions (#1346).
@@ -1080,10 +1101,22 @@ export const editorialCustomCheckUpdateSchema = z.object(editorialCustomCheckSha
 // loop + UI read as "manuscript clean": 'noOpenHigh' (default), the stricter
 // 'noOpenHighOrMedium', or 'none' (disable). Optional + additive, so older peers
 // and a never-configured install fall through to the service default.
+// `maxArcVerifyRounds` / `maxEditorialRounds` bound the autopilot's verify→resolve
+// convergence loops before it pauses for human review (0 = skip that gate
+// entirely). Persisted defaults the autopilot reads when a run doesn't pass a
+// per-run override; raised cap so a stubborn arc can be given more rounds. The
+// cap is exported so the autopilot route schema (and any UI) share one ceiling
+// instead of re-hardcoding it and drifting.
+export const MAX_CONVERGENCE_ROUNDS = 20;
 export const pipelineEditorialChecksSettingsSchema = z.object({
   checks: z.record(editorialCheckConfigSchema).optional(),
   customChecks: z.array(z.object({}).passthrough()).optional(),
   readinessGate: z.enum(['noOpenHigh', 'noOpenHighOrMedium', 'none']).optional(),
+  maxArcVerifyRounds: z.number().int().min(0).max(MAX_CONVERGENCE_ROUNDS).optional(),
+  maxEditorialRounds: z.number().int().min(0).max(MAX_CONVERGENCE_ROUNDS).optional(),
+  // Whole-manuscript beat-continuity convergence (#1510) — same bound + 0-skip
+  // semantics. Optional + additive so older peers fall through to the default.
+  maxBeatContinuityRounds: z.number().int().min(0).max(MAX_CONVERGENCE_ROUNDS).optional(),
 }).strict();
 
 // Cursor-context payload for the CD-bridge suggest route — identical shape to

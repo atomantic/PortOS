@@ -99,6 +99,73 @@ describe('pipeline series service', () => {
     expect(updated.updatedAt >= s.updatedAt).toBe(true);
   });
 
+  it('defaults fact-checking fields off (#1588) and round-trips an opt-in + reference', async () => {
+    const off = await svc.createSeries({ name: 'Fantasy' });
+    expect(off.factCritical).toBe(false);
+    expect(off.factReference).toBe('');
+
+    const on = await svc.createSeries({
+      name: 'Grounded',
+      factCritical: true,
+      factReference: 'Paris is the capital of France.',
+    });
+    expect(on.factCritical).toBe(true);
+    expect(on.factReference).toBe('Paris is the capital of France.');
+  });
+
+  it('updateSeries clears the fact reference with "" but preserves it on omission (#1588)', async () => {
+    const s = await svc.createSeries({ name: 'Grounded', factCritical: true, factReference: 'Real facts.' });
+    // Omitting the field preserves both.
+    const kept = await svc.updateSeries(s.id, { logline: 'L2' });
+    expect(kept.factCritical).toBe(true);
+    expect(kept.factReference).toBe('Real facts.');
+    // Explicit "" clears the reference; toggling factCritical off sticks.
+    const cleared = await svc.updateSeries(s.id, { factCritical: false, factReference: '' });
+    expect(cleared.factCritical).toBe(false);
+    expect(cleared.factReference).toBe('');
+  });
+
+  it('defaults editorialCheckConfig to {} and round-trips per-series overrides (#1591)', async () => {
+    const plain = await svc.createSeries({ name: 'Plain' });
+    // Always present (empty) — like factReference/styleGuide — so a clear can
+    // propagate between v8 peers and is protected as an additive field on sync.
+    expect(plain.editorialCheckConfig).toEqual({});
+
+    const tuned = await svc.createSeries({
+      name: 'YA Graphic Novel',
+      editorialCheckConfig: { 'comic.lettering-density': { maxWordsPerBalloon: 18, x: true } },
+    });
+    expect(tuned.editorialCheckConfig).toEqual({ 'comic.lettering-density': { maxWordsPerBalloon: 18, x: true } });
+  });
+
+  it('sanitizes editorialCheckConfig: drops empty/non-object overrides and non-primitive leaves (#1591)', async () => {
+    const s = await svc.createSeries({
+      name: 'Messy',
+      editorialCheckConfig: {
+        'comic.lettering-density': { maxWordsPerBalloon: 30, bad: null, nested: { a: 1 }, arr: [1] },
+        'empty.check': {},          // empty override → dropped
+        'bogus.check': 'not-an-object', // non-object override → dropped
+      },
+    });
+    expect(s.editorialCheckConfig).toEqual({ 'comic.lettering-density': { maxWordsPerBalloon: 30 } });
+  });
+
+  it('updateSeries replaces overrides wholesale and clears them with {}/null (#1591)', async () => {
+    const s = await svc.createSeries({
+      name: 'Tunable',
+      editorialCheckConfig: { 'comic.lettering-density': { maxWordsPerBalloon: 10 } },
+    });
+    // Omission preserves.
+    const kept = await svc.updateSeries(s.id, { logline: 'L2' });
+    expect(kept.editorialCheckConfig).toEqual({ 'comic.lettering-density': { maxWordsPerBalloon: 10 } });
+    // Wholesale replace.
+    const replaced = await svc.updateSeries(s.id, { editorialCheckConfig: { 'comic.panel-rhythm': { maxConsecutiveSplash: 1 } } });
+    expect(replaced.editorialCheckConfig).toEqual({ 'comic.panel-rhythm': { maxConsecutiveSplash: 1 } });
+    // {} clears all overrides (sanitizer keeps the always-present empty map).
+    const cleared = await svc.updateSeries(s.id, { editorialCheckConfig: {} });
+    expect(cleared.editorialCheckConfig).toEqual({});
+  });
+
   it('updateSeries throws ERR_NOT_FOUND for unknown id', async () => {
     await expect(svc.updateSeries('ser-nope', { name: 'x' })).rejects.toMatchObject({ code: svc.ERR_NOT_FOUND });
   });
@@ -582,6 +649,25 @@ describe('pipeline series service', () => {
       expect(after.seasons[0].title).toBe('Season One');
     });
 
+    it('preserves editorialCheckConfig when a behind-sender omits the key, applies an explicit clear (#1591)', async () => {
+      const s = await svc.createSeries({
+        name: 'TunedSeries',
+        editorialCheckConfig: { 'comic.lettering-density': { maxWordsPerBalloon: 18 } },
+      });
+      expect(s.editorialCheckConfig).toEqual({ 'comic.lettering-density': { maxWordsPerBalloon: 18 } });
+      // Behind-sender (older peer) omits the key → local overrides preserved.
+      const behind = { id: s.id, name: 'TunedSeries (peer edit)', updatedAt: NEWER };
+      await svc.mergeSeriesFromSync([behind]);
+      const kept = await svc.getSeries(s.id);
+      expect(kept.name).toBe('TunedSeries (peer edit)');
+      expect(kept.editorialCheckConfig).toEqual({ 'comic.lettering-density': { maxWordsPerBalloon: 18 } });
+      // Up-to-date peer present-but-empty map → the clear applies (present key wins).
+      const clear = { id: s.id, name: 'TunedSeries', editorialCheckConfig: {}, updatedAt: '2999-06-01T00:00:00.000Z' };
+      await svc.mergeSeriesFromSync([clear]);
+      const cleared = await svc.getSeries(s.id);
+      expect(cleared.editorialCheckConfig).toEqual({});
+    });
+
     it('preserves arc (incl. readerMap + tickingClock) when the remote omits arc', async () => {
       const s = await svc.createSeries({
         name: 'ArcKeep',
@@ -653,6 +739,40 @@ describe('pipeline series service', () => {
       const after = await svc.getSeries(s.id, { includeDeleted: true });
       expect(after.deleted).toBe(true);
       expect(after.styleNotes).toBe(''); // tombstone stays clean, no resurrection
+    });
+  });
+
+  describe('sanitizeAutopilot healthBreakdown (#1579)', () => {
+    it('persists a well-formed pause breakdown, bounding rows and coercing counts', () => {
+      const a = svc.sanitizeAutopilot({
+        status: 'paused',
+        healthBreakdown: {
+          score: 72,
+          open: 6,
+          topChecks: [
+            { checkId: 'continuity', count: 3 },
+            { checkId: 'naming', count: 1.0 },
+            { checkId: 42, count: 1 }, // non-string checkId → dropped
+          ],
+          topIssues: [
+            { issueNumber: 3, open: 5 },
+            { issueNumber: null, open: 2 }, // series-scoped bucket kept
+            { open: 'x' }, // non-finite open → dropped
+          ],
+        },
+      });
+      expect(a.healthBreakdown).toEqual({
+        score: 72,
+        open: 6,
+        topChecks: [{ checkId: 'continuity', count: 3 }, { checkId: 'naming', count: 1 }],
+        topIssues: [{ issueNumber: 3, open: 5 }, { issueNumber: null, open: 2 }],
+      });
+    });
+
+    it('drops a malformed/absent breakdown to null (non-health pauses carry none)', () => {
+      expect(svc.sanitizeAutopilot({ status: 'paused' }).healthBreakdown).toBeNull();
+      expect(svc.sanitizeAutopilot({ status: 'paused', healthBreakdown: 'nope' }).healthBreakdown).toBeNull();
+      expect(svc.sanitizeAutopilot({ status: 'paused', healthBreakdown: [] }).healthBreakdown).toBeNull();
     });
   });
 });

@@ -14,6 +14,7 @@ import { readdir, rm, stat } from 'fs/promises';
 import { join } from 'path';
 import { ensureDir, PATHS, tryReadFile } from '../lib/fileUtils.js';
 import { execGit } from '../lib/execGit.js';
+import { ensureInstanceId } from './instances.js';
 
 const WORKTREES_DIR = PATHS.worktrees;
 // Lockfiles that npm/yarn/pnpm modify as a side-effect — safe to discard during worktree cleanup
@@ -167,6 +168,14 @@ export async function createWorktree(agentId, sourceWorkspace, taskId, options =
 
   const worktreePath = join(WORKTREES_DIR, agentId);
 
+  // Stamp the producing machine's federation identity onto the worktree
+  // metadata (issue #1563, acceptance criterion 1). The branch is named
+  // `cos/<taskId>/<agentId>`, so recording which instance created it lets a
+  // federated node pair attribute every worktree/branch to its origin instance
+  // once CoS history federates. `ensureInstanceId()` creates the identity on the
+  // cold path so the worktree is never tagged `unknown`.
+  const instanceId = await ensureInstanceId();
+
   // Fetch latest from origin so we base off up-to-date refs
   const fetchSucceeded = await execGit(['fetch', 'origin'], sourceWorkspace)
     .then(() => true)
@@ -196,7 +205,7 @@ export async function createWorktree(agentId, sourceWorkspace, taskId, options =
       await execGit(['worktree', 'add', '-B', branchName, worktreePath, `origin/${branchName}`], sourceWorkspace);
     }
     console.log(`🌳 Created worktree for ${agentId} at ${worktreePath} on existing branch ${branchName}`);
-    return { worktreePath, branchName, baseBranch: null, existingBranch: true };
+    return { worktreePath, branchName, baseBranch: null, existingBranch: true, instanceId };
   }
 
   const branchName = options.planId
@@ -226,7 +235,7 @@ export async function createWorktree(agentId, sourceWorkspace, taskId, options =
 
   console.log(`🌳 Created worktree for ${agentId} at ${worktreePath} (branch: ${branchName}, base: ${baseRef})`);
 
-  return { worktreePath, branchName, baseBranch };
+  return { worktreePath, branchName, baseBranch, instanceId };
 }
 
 /**

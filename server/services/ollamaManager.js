@@ -253,17 +253,57 @@ async function startServer() {
   }
 }
 
+/**
+ * `brew services start` shells out to `launchctl bootstrap gui/<uid> …plist`,
+ * which fails with `Bootstrap failed: 5: Input/output error` when a service is
+ * already bootstrapped in that domain — a stale launchd registration left over
+ * from a prior `ollama serve`, an interrupted start, or a Homebrew upgrade. The
+ * job is loaded but `start` refuses to re-bootstrap it. Booting it out
+ * (`brew services stop`, i.e. `launchctl bootout`) clears the registration so
+ * the retry can bootstrap cleanly.
+ */
+function isBootstrapConflictError(message) {
+  const m = String(message || '').toLowerCase()
+  // "already loaded/bootstrapped" unambiguously means a stale registration.
+  if (/already (?:loaded|bootstrapped)/.test(m)) return true
+  // Otherwise require the failure to actually be about a launchctl *bootstrap*
+  // before trusting the EIO / exit-5 signal — so an unrelated brew failure that
+  // merely mentions "input/output error" (a disk EIO, a permissions error)
+  // can't trip the bootout-and-retry recovery. The two real-world shapes both
+  // name bootstrap: launchctl's own "Bootstrap failed: 5: Input/output error"
+  // and brew's wrapper "…launchctl bootstrap … exited with 5".
+  if (!/bootstrap/.test(m)) return false
+  return /bootstrap failed: 5\b/.test(m) ||
+    /\binput\/output error\b/.test(m) ||
+    /exited with 5\b/.test(m) ||
+    /\bbootstrap failed\b/.test(m)
+}
+
+async function runServiceStart(controller) {
+  const [cmd, args] = controller.start
+  return execFileAsync(cmd, args, { timeout: SERVICE_COMMAND_TIMEOUT_MS })
+    .then(() => ({ success: true }))
+    .catch((err) => ({ success: false, error: err.stderr?.trim() || err.stdout?.trim() || err.message }))
+}
+
 async function startPersistentService() {
   const controller = await getServiceController()
   if (!controller.supported) {
     return { success: false, running: await checkOllamaAvailable(true), error: 'No supported Ollama background service manager found.' }
   }
 
-  const [cmd, args] = controller.start
   resetAvailabilityCache()
-  const result = await execFileAsync(cmd, args, { timeout: SERVICE_COMMAND_TIMEOUT_MS })
-    .then(() => ({ success: true }))
-    .catch((err) => ({ success: false, error: err.stderr?.trim() || err.stdout?.trim() || err.message }))
+  let result = await runServiceStart(controller)
+
+  // Recover from a stale launchd registration: bootstrap reported the job is
+  // already loaded, so boot it out and retry once. systemd's `enable --now` is
+  // idempotent and never hits this, so the recovery is homebrew-only.
+  if (!result.success && controller.manager === 'homebrew' && isBootstrapConflictError(result.error)) {
+    console.warn(`♻️ Ollama service start hit a stale launchd registration (${result.error}); booting out and retrying`)
+    const [stopCmd, stopArgs] = controller.stop
+    await execFileAsync(stopCmd, stopArgs, { timeout: SERVICE_COMMAND_TIMEOUT_MS }).catch(() => {})
+    result = await runServiceStart(controller)
+  }
 
   const running = await waitForAvailability(true, START_TIMEOUT_MS)
   const service = await getServiceStatus().catch(() => ({
@@ -636,8 +676,26 @@ async function pullModel(modelId, onProgress) {
   }
 
   console.error(`⚠️ Ollama pull failed for ${modelId}: ${lastError}`)
-  const code = isOllamaOutdatedError(lastError) ? 'OLLAMA_OUTDATED' : undefined
+  const code = isShardedGgufError(lastError) ? 'SHARDED_GGUF'
+    : isOllamaOutdatedError(lastError) ? 'OLLAMA_OUTDATED'
+      : undefined
   return { success: false, error: lastError, modelId, ...(code ? { code } : {}) }
+}
+
+/**
+ * Detect Ollama's refusal to pull a multi-part (sharded) GGUF. The HF passthrough
+ * registry returns a 400 whose message names "sharded GGUF" and links the tracking
+ * issue (ollama/ollama#5245). The catalog already flags sharded quants so the UI
+ * disables Install — this classifier is defense-in-depth for the pull-by-name path
+ * (a raw `hf.co/<repo>:<quant>` typed into the search box) so the caller can show
+ * an actionable message instead of the raw 400. Match the phrase plus the 400 so
+ * an unrelated 400 can't slip through.
+ * @param {string|null|undefined} error
+ */
+function isShardedGgufError(error) {
+  if (!error) return false
+  const str = String(error)
+  return /\b400\b/.test(str) && /sharded gguf/i.test(str)
 }
 
 /**
@@ -948,5 +1006,6 @@ export {
   ensureProviderReady,
   isOllamaProvider,
   getServiceStatus,
-  getEmbeddings
+  getEmbeddings,
+  isBootstrapConflictError
 }

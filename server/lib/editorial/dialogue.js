@@ -52,15 +52,35 @@ export const NON_SPEECH_TAGS = Object.freeze([
 
 // Plain, invisible speech tags — the ones a writer SHOULD use. Presence of any
 // of these (or an action beat) is what makes a dialogue line "attributed" for
-// the attribution-clarity scan. Stored as surface forms (matched case-insens.).
-const PLAIN_SPEECH_TAGS = Object.freeze([
-  'said', 'says', 'say', 'asked', 'asks', 'ask', 'replied', 'replies',
-  'whispered', 'whispers', 'shouted', 'shouts', 'muttered', 'mutters',
-  'murmured', 'murmurs', 'answered', 'answers', 'called', 'calls', 'cried',
-  'cries', 'yelled', 'yells', 'snapped', 'snaps', 'breathed', 'breathes',
-  'added', 'adds', 'continued', 'continues', 'stated', 'states', 'demanded',
-  'demands', 'told', 'tells', 'spoke', 'speaks',
+// the attribution-clarity scan. Grouped by base lemma so the tag-variety check
+// (#1587) can collapse inflections ("said"/"says") onto one verb when measuring
+// per-scene monotony; the surface forms include irregulars (said, told, spoke)
+// that inflectVerb() can't generate, so the groups are the source of truth.
+export const PLAIN_SPEECH_TAG_GROUPS = Object.freeze([
+  { base: 'say', forms: ['said', 'says', 'say'] },
+  { base: 'ask', forms: ['asked', 'asks', 'ask'] },
+  { base: 'reply', forms: ['replied', 'replies'] },
+  { base: 'whisper', forms: ['whispered', 'whispers'] },
+  { base: 'shout', forms: ['shouted', 'shouts'] },
+  { base: 'mutter', forms: ['muttered', 'mutters'] },
+  { base: 'murmur', forms: ['murmured', 'murmurs'] },
+  { base: 'answer', forms: ['answered', 'answers'] },
+  { base: 'call', forms: ['called', 'calls'] },
+  { base: 'cry', forms: ['cried', 'cries'] },
+  { base: 'yell', forms: ['yelled', 'yells'] },
+  { base: 'snap', forms: ['snapped', 'snaps'] },
+  { base: 'breathe', forms: ['breathed', 'breathes'] },
+  { base: 'add', forms: ['added', 'adds'] },
+  { base: 'continue', forms: ['continued', 'continues'] },
+  { base: 'state', forms: ['stated', 'states'] },
+  { base: 'demand', forms: ['demanded', 'demands'] },
+  { base: 'tell', forms: ['told', 'tells'] },
+  { base: 'speak', forms: ['spoke', 'speaks'] },
 ]);
+
+// Flattened surface forms — kept for the attribution scan's PLAIN_TAG_RE, which
+// only needs "is this token a plain speech tag", not which lemma it maps to.
+const PLAIN_SPEECH_TAGS = Object.freeze(PLAIN_SPEECH_TAG_GROUPS.flatMap((g) => g.forms));
 
 function escapeRegExp(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -123,10 +143,14 @@ function buildTagMatchers(forms) {
   // ends a quote with a comma when a tag follows ("…," she said) and a period
   // when the dialogue is a complete sentence and the next clause is a separate
   // action beat ("…." She smiled.) — a period-terminated quote is NOT a tag.
-  const after = new RegExp(`([,.!?])?${DQUOTE_CLASS}\\s+(?:${SPEAKER}\\s+)?${VERB}\\b`, 'gi');
+  // The `d` (hasIndices) flag exposes each capture group's offset via match
+  // `.indices`, so scanTagMatchers can dedupe on the VERB's absolute position —
+  // a split-quote tag ("Yes," she said, "but…") is seen by BOTH passes at
+  // different match starts but the same verb offset, so it counts once.
+  const after = new RegExp(`([,.!?])?${DQUOTE_CLASS}\\s+(?:${SPEAKER}\\s+)?${VERB}\\b`, 'gid');
   // Before an opening quote: speaker → verb → optional comma/colon → quote. This
   // ordering is unambiguously a tag, so no punctuation gate is needed. Group 1 = verb.
-  const before = new RegExp(`\\b${SPEAKER}\\s+${VERB}\\s*[,:]?\\s*${DQUOTE_CLASS}`, 'gi');
+  const before = new RegExp(`\\b${SPEAKER}\\s+${VERB}\\s*[,:]?\\s*${DQUOTE_CLASS}`, 'gid');
   return { after, before };
 }
 
@@ -142,6 +166,43 @@ function buildTagMatchers(forms) {
 function punctAllowsTag(kind, punct) {
   if (kind === 'non-speech') return punct === ',';
   return punct !== '.';
+}
+
+// Walk both quote-adjacent matchers over `text` and let `onMatch` decide what a
+// match means. `onMatch(matched, index, punct, full)` receives the matched verb
+// surface, its offset, the in-quote terminal punctuation (null for the
+// before-quote pass, which needs no punctuation gate), and the full match text;
+// it returns a result object (must include `verb` for de-dup) or null to skip.
+// Results are deduped by (verb @ index) so the two regexes don't double-report a
+// tag, and returned in position order. Shared by findSaidBookisms (kind-aware
+// gating) and the tag-variety inventory (kind-agnostic gating).
+function scanTagMatchers(text, matchers, onMatch) {
+  if (!matchers) return [];
+  const out = [];
+  const seen = new Set();
+  const passes = [
+    { re: matchers.after, verbGroup: 2, punctGroup: 1 },
+    { re: matchers.before, verbGroup: 1, punctGroup: null },
+  ];
+  for (const { re, verbGroup, punctGroup } of passes) {
+    re.lastIndex = 0;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      const matched = m[verbGroup];
+      const punct = punctGroup !== null ? (m[punctGroup] || '') : null;
+      // De-dup and anchor on the VERB's absolute offset (via the `d`-flag capture
+      // indices), not the match start — a split-quote tag matches in BOTH passes
+      // at different starts but the same verb offset, so it counts once.
+      const verbIndex = m.indices?.[verbGroup]?.[0] ?? m.index;
+      const res = onMatch(matched, verbIndex, punct, m[0]);
+      if (!res) continue;
+      const key = `${res.verb}@${verbIndex}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ ...res, index: verbIndex });
+    }
+  }
+  return out.sort((a, b) => a.index - b.index);
 }
 
 /**
@@ -168,46 +229,22 @@ export function findSaidBookisms(text, opts = {}) {
   // Non-speech wins only where a form isn't already a bookism (no overlap today).
   for (const [form, base] of nonSpeech.formToBase) if (!kindByForm.has(form)) kindByForm.set(form, { base, kind: 'non-speech' });
 
-  const allForms = [...kindByForm.keys()];
-  const matchers = buildTagMatchers(allForms);
-  if (!matchers) return [];
-
-  const out = [];
-  const seen = new Set();
-  // The `after` matcher captures the quote's terminal punctuation in group 1 and
-  // the verb in group 2 (so a tag can be told from an action beat); the `before`
-  // matcher captures only the verb in group 1 (its word order is unambiguously a
-  // tag). Iterate them with their per-matcher group layout.
-  const passes = [
-    { re: matchers.after, verbGroup: 2, punctGroup: 1 },
-    { re: matchers.before, verbGroup: 1, punctGroup: null },
-  ];
-  for (const { re, verbGroup, punctGroup } of passes) {
-    re.lastIndex = 0;
-    let m;
-    while ((m = re.exec(text)) !== null) {
-      const matched = m[verbGroup];
-      const form = matched.toLowerCase();
-      const info = kindByForm.get(form);
-      if (!info) continue;
-      // For the after-quote pass, gate on the in-quote terminal punctuation so an
-      // action beat following a complete sentence ("…." She smiled.) isn't flagged
-      // as a misused tag. The before-quote pass has no punctuation to weigh.
-      if (punctGroup !== null) {
-        if (!punctAllowsTag(info.kind, m[punctGroup] || '')) continue;
-        // A real after-quote tag verb is lowercase — a clause continuation
-        // ("…," she opined / "…," opined Marlon). A CAPITALIZED word after the
-        // quote is the subject of a NEW sentence (narration), e.g.
-        // `"Run!" Thunder rolled overhead.` — not a tag. Skip it.
-        if (matched[0] !== matched[0].toLowerCase()) continue;
-      }
-      const key = `${info.base}@${m.index}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push({ verb: info.base, kind: info.kind, index: m.index, anchor: m[0].trim() });
+  const matchers = buildTagMatchers([...kindByForm.keys()]);
+  return scanTagMatchers(text, matchers, (matched, index, punct, full) => {
+    const info = kindByForm.get(matched.toLowerCase());
+    if (!info) return null;
+    // For the after-quote pass (punct !== null), gate on the in-quote terminal
+    // punctuation so an action beat following a complete sentence ("…." She
+    // smiled.) isn't flagged as a misused tag, and reject a CAPITALIZED word
+    // after the quote — that's the subject of a NEW sentence (narration), e.g.
+    // `"Run!" Thunder rolled overhead.`, not a tag. The before-quote pass has no
+    // punctuation to weigh.
+    if (punct !== null) {
+      if (!punctAllowsTag(info.kind, punct)) return null;
+      if (matched[0] !== matched[0].toLowerCase()) return null;
     }
-  }
-  return out.sort((a, b) => a.index - b.index);
+    return { verb: info.base, kind: info.kind, anchor: full.trim() };
+  });
 }
 
 // A single regex matching any plain-speech-tag word (whole-word, case-insens.),
@@ -368,4 +405,211 @@ export function attributeDialogueByOwner(text, owners) {
     }
   }
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// Dialogue tag variety / within-scene tag monotony (#1587)
+// ---------------------------------------------------------------------------
+//
+// The said-bookisms scan flags ornate tags; this scan flags the opposite tics
+// at the *scene* grain: one tag verb hammered over and over ("she said" eight
+// times in a scene) reads as monotony, while a different fancy verb on nearly
+// every line ("said / asked / replied / murmured / whispered" churn) reads as a
+// thesaurus rummage. Both pull the reader out — the craft target is mostly the
+// invisible "said"/"asked" with enough variation to stay unnoticed.
+//
+// "Scene" is approximated by splitting on common manuscript scene dividers; a
+// section with no dividers is treated as a single scene (the right fallback).
+
+// Map every plain-tag inflected surface form → its base lemma, honoring an
+// allow-list of muted bases. Mirrors buildVerbForms() but reads the explicit
+// PLAIN groups (irregulars like said/told/spoke can't be generated by
+// inflectVerb()). Returns a Map<form, base>.
+function buildPlainTagForms(opts = {}) {
+  const allow = new Set((Array.isArray(opts.allowWords) ? opts.allowWords : []).map(normalizeWord).filter(Boolean));
+  const formToBase = new Map();
+  for (const { base, forms } of PLAIN_SPEECH_TAG_GROUPS) {
+    if (allow.has(base)) continue;
+    for (const f of forms) {
+      const norm = normalizeWord(f);
+      if (norm && !allow.has(norm) && !formToBase.has(norm)) formToBase.set(norm, base);
+    }
+  }
+  return formToBase;
+}
+
+// Build the form→base map and quote matchers for the speech-tag inventory once,
+// so a multi-scene scan can reuse them instead of recompiling regexes per scene.
+function buildTagInventory(opts = {}) {
+  const formToBase = buildPlainTagForms(opts);
+  const ornate = buildVerbForms(SAID_BOOKISMS, opts);
+  // Plain wins on overlap (none today), so only add ornate forms not already mapped.
+  for (const [f, b] of ornate.formToBase) if (!formToBase.has(f)) formToBase.set(f, b);
+  return { formToBase, matchers: buildTagMatchers([...formToBase.keys()]) };
+}
+
+// Scan `text` for speech tags using a prebuilt inventory. Both plain and ornate
+// tags are speech verbs, so gate them like a bookism: a period-terminated quote
+// starts a NEW sentence (not a tag), and a capitalized word after the quote is
+// that sentence's subject (narration).
+function scanTagInventory(text, { formToBase, matchers }) {
+  return scanTagMatchers(text, matchers, (matched, index, punct, full) => {
+    const base = formToBase.get(matched.toLowerCase());
+    if (!base) return null;
+    if (punct !== null) {
+      if (punct === '.') return null;
+      if (matched[0] !== matched[0].toLowerCase()) return null;
+    }
+    return { verb: base, anchor: full.trim() };
+  });
+}
+
+/**
+ * Inventory the *speech* dialogue tags in `text` — every plain ("said", "asked")
+ * or ornate ("opined") tag verb sitting beside a double-quote span, mapped back
+ * to its base lemma so inflections collapse. Non-speech action "tags" ("she
+ * smiled") are deliberately excluded: they aren't speech-tag vocabulary and are
+ * the said-bookisms scan's concern. Reuses the same after/before quote matchers
+ * and the same punctuation/case gating as findSaidBookisms(), so a narrated verb
+ * ("the engine growled") or an action beat after a complete sentence is not
+ * counted as a tag.
+ *
+ * @param {string} text
+ * @param {{ allowWords?: string[], extraWords?: string[] }} [opts]
+ *   allowWords — bases to mute; extraWords — extra ornate bases to count as tags.
+ * @returns {Array<{ verb: string, index: number, anchor: string }>} position-ordered.
+ */
+export function inventoryDialogueTags(text, opts = {}) {
+  if (typeof text !== 'string' || !text) return [];
+  return scanTagInventory(text, buildTagInventory(opts));
+}
+
+// A line is a scene divider when it is ONLY a centered break: a markdown heading
+// ("## Scene 2"), or a rule of repeated * - — – • · ~ marks ("***", "* * *",
+// "———"). Such a line ends the current scene and starts the next.
+function isSceneBreakLine(line) {
+  const t = line.trim();
+  if (!t) return false;
+  if (/^#{1,6}\s+\S/.test(t)) return true;
+  return /^(?:[*\-—–•·~][ \t]*){3,}$/.test(t);
+}
+
+/**
+ * Split `text` into scenes on common manuscript scene dividers (centered rules
+ * and markdown scene headings). The divider line itself belongs to neither
+ * adjacent scene. A text with no dividers yields a single scene spanning all of
+ * it — the correct fallback for a manuscript that doesn't mark scene breaks.
+ *
+ * @param {string} text
+ * @returns {Array<{ text: string, index: number, ordinal: number }>}
+ *   ordinal is 1-based; index is the absolute offset of the scene's first line.
+ */
+export function splitScenes(text) {
+  if (typeof text !== 'string' || !text) return [];
+  const scenes = [];
+  let buf = [];
+  let start = -1;
+  const flush = () => {
+    if (start >= 0 && buf.join('').trim()) {
+      scenes.push({ text: buf.join(''), index: start, ordinal: scenes.length + 1 });
+    }
+    buf = [];
+    start = -1;
+  };
+  // Keep line terminators so absolute offsets stay exact across the split.
+  const re = /[^\n]*\n|[^\n]+$/g;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    const line = m[0];
+    if (isSceneBreakLine(line)) {
+      flush();
+      continue;
+    }
+    if (start < 0) start = m.index;
+    buf.push(line);
+  }
+  flush();
+  return scenes;
+}
+
+/**
+ * Flag dialogue-tag variety problems per scene: within-scene MONOTONY (one tag
+ * verb dominates a tag-dense scene) and OVER-VARIATION (almost every tagged line
+ * uses a different verb — thesaurus churn). Scenes with too few tags to judge
+ * are skipped. Pure: splits scenes deterministically, inventories tags, and
+ * applies count/ratio thresholds.
+ *
+ * @param {string} text
+ * @param {{ allowWords?: string[], extraWords?: string[], minTags?: number,
+ *           monotonyCount?: number, monotonyRatio?: number,
+ *           overVariationRatio?: number, minDistinct?: number }} [opts]
+ *   minTags — speech tags a scene needs before variety is judged (default 6).
+ *   monotonyCount / monotonyRatio — dominant verb must hit BOTH a raw count and
+ *     a share-of-tags ratio to flag monotony (defaults 6 / 0.7).
+ *   overVariationRatio / minDistinct — distinct-verbs ÷ tags must exceed the
+ *     ratio with at least minDistinct verbs to flag churn (defaults 0.85 / 5).
+ * @returns {Array<{ type: 'monotony'|'over-variation', sceneOrdinal: number,
+ *   verb: string|null, count: number, total: number, distinct: number,
+ *   index: number, anchor: string }>}
+ */
+export function findDialogueTagVariety(text, opts = {}) {
+  if (typeof text !== 'string' || !text) return [];
+  const minTags = Math.max(3, Number.isInteger(opts.minTags) ? opts.minTags : 6);
+  const monotonyCount = Math.max(2, Number.isInteger(opts.monotonyCount) ? opts.monotonyCount : 6);
+  const monotonyRatio = Number.isFinite(opts.monotonyRatio) ? opts.monotonyRatio : 0.7;
+  const overVariationRatio = Number.isFinite(opts.overVariationRatio) ? opts.overVariationRatio : 0.85;
+  const minDistinct = Math.max(2, Number.isInteger(opts.minDistinct) ? opts.minDistinct : 5);
+
+  // Build the tag vocabulary + matchers once and reuse across every scene.
+  const inventory = buildTagInventory(opts);
+  const out = [];
+  for (const scene of splitScenes(text)) {
+    const tags = scanTagInventory(scene.text, inventory);
+    const total = tags.length;
+    if (total < minTags) continue;
+
+    const freq = new Map();
+    const firstAt = new Map();
+    for (const t of tags) {
+      freq.set(t.verb, (freq.get(t.verb) || 0) + 1);
+      if (!firstAt.has(t.verb)) firstAt.set(t.verb, t);
+    }
+    const distinct = freq.size;
+
+    // Dominant verb — monotony when it BOTH repeats enough AND owns most tags.
+    let domVerb = null;
+    let domCount = 0;
+    for (const [verb, count] of freq) {
+      if (count > domCount) { domCount = count; domVerb = verb; }
+    }
+    if (domVerb && domCount >= monotonyCount && domCount / total >= monotonyRatio) {
+      const anchorHit = firstAt.get(domVerb);
+      out.push({
+        type: 'monotony',
+        sceneOrdinal: scene.ordinal,
+        verb: domVerb,
+        count: domCount,
+        total,
+        distinct,
+        index: scene.index + (anchorHit ? anchorHit.index : 0),
+        anchor: anchorHit ? anchorHit.anchor : '',
+      });
+      continue; // a monotone scene can't also be over-varied; don't double-report.
+    }
+
+    // Over-variation — a fresh verb on (nearly) every tagged line.
+    if (distinct >= minDistinct && distinct / total >= overVariationRatio) {
+      out.push({
+        type: 'over-variation',
+        sceneOrdinal: scene.ordinal,
+        verb: null,
+        count: distinct,
+        total,
+        distinct,
+        index: scene.index,
+        anchor: tags[0].anchor,
+      });
+    }
+  }
+  return out;
 }

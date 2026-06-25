@@ -155,7 +155,76 @@ export function createShellSession(socket, options = {}) {
   releaseExternalViews(socket, sessionId);
   broadcastSessionList();
   if (options.initialCommand) {
-    setTimeout(() => writeToSession(sessionId, `${options.initialCommand}\n`), options.initialCommandDelayMs ?? 200);
+    // onInitialCommandSent fires at the exact moment the command is injected,
+    // regardless of which branch sent it. The agent-TUI spawner uses this to
+    // start observing claude's input-readiness ONLY after the real command is
+    // in flight — so the readiness probe's own shell activity (below) can't
+    // prematurely satisfy its bracketed-paste gate.
+    const sendInitial = () => {
+      options.onInitialCommandSent?.();
+      writeToSession(sessionId, `${options.initialCommand}\n`);
+    };
+    if (options.waitForPromptReady) {
+      // Inject the command only once the shell can ACTUALLY run commands. A fixed
+      // delay races a heavy interactive shell; a prompt-marker / settle-on-quiet
+      // watch is fooled by powerlevel10k's *instant prompt*, which renders (and
+      // enables bracketed-paste mode) BEFORE `.zshrc`/plugins/nvm finish — and a
+      // slow mid-load quiet gap (nvm/plugins) trips a settle timer just as
+      // easily, sending the command into a half-loaded shell where it's swallowed
+      // when the real prompt redraws (the command sits echoed but unexecuted —
+      // exactly the wedged `claude …` at a bare prompt users hit). Instead, PROVE
+      // the shell is executing commands with a round-trip probe: print a unique
+      // nonce and wait until we SEE it in the OUTPUT. The nonce is split in the
+      // probe source (`'PORTOSRDY' '<nonce>'`) so the command ECHO never contains
+      // the assembled string — only the executed output matches, so a single
+      // sighting is unambiguous. Instant-prompt keystroke buffering replays the
+      // probe into the real shell, so this is theme- and shell-agnostic. A
+      // bounded fallback still injects the command if the probe never round-trips.
+      // NOTE: the probe is POSIX (`printf`). The only caller of waitForPromptReady
+      // is the agent-TUI path, which is developer-machine (mac/linux) only; on a
+      // Windows cmd.exe shell `printf` no-ops and the command simply injects on the
+      // bounded fallback below (slower, never broken). A Windows port would need a
+      // platform-aware probe.
+      let sent = false;
+      let sub = null;
+      let exitSub = null;
+      const nonce = uuidv4().replace(/-/g, '').slice(0, 12);
+      const marker = `PORTOSRDY${nonce}`;
+      const probe = `printf '%s\\n' 'PORTOSRDY''${nonce}'\n`;
+      let seen = '';
+      // Tear down every pending timer + listener. Called both on success
+      // (fire) and when the PTY exits before the probe round-trips, so no
+      // timer survives to fire into a dead session.
+      const stop = () => {
+        clearTimeout(probeTimer);
+        clearTimeout(fallback);
+        sub?.dispose?.();
+        exitSub?.dispose?.();
+      };
+      const fire = () => {
+        if (sent) return;
+        sent = true;
+        stop();
+        sendInitial();
+      };
+      sub = ptyProcess.onData((chunk) => {
+        seen += chunk;
+        if (seen.length > 8192) seen = seen.slice(-8192);
+        if (seen.includes(marker)) fire();
+      });
+      // If the shell dies before the probe round-trips, cancel the pending
+      // writes/timers — sent stays true so the fallback can't resurrect a
+      // send into the gone session.
+      exitSub = ptyProcess.onExit(() => { sent = true; stop(); });
+      // Give the freshly-spawned PTY a tick to come up, then send the probe.
+      // Writing earlier is harmless (zsh's line editor / p10k instant-prompt
+      // buffer holds it until the prompt is live and replays it), but a small
+      // delay avoids racing node-pty's own spawn handshake.
+      const probeTimer = setTimeout(() => { if (!sent) writeToSession(sessionId, probe); }, 50);
+      const fallback = setTimeout(fire, options.initialCommandDelayMs ?? 8000);
+    } else {
+      setTimeout(sendInitial, options.initialCommandDelayMs ?? 200);
+    }
   }
   return sessionId;
 }

@@ -29,7 +29,7 @@ import { useSearchParams, useNavigate, Link } from 'react-router-dom';
 import Drawer from '../components/Drawer';
 import { ImageGenTab } from '../components/settings/ImageGenTab';
 import LocalSetupPanel from '../components/settings/LocalSetupPanel';
-import RuntimeInstallModal from '../components/videoGen/RuntimeInstallModal';
+import RuntimeInstallModal from '../components/install/RuntimeInstallModal';
 import FramePanel from '../components/videoGen/FramePanel';
 import KeyframePanel from '../components/videoGen/KeyframePanel';
 import AudioPanel from '../components/videoGen/AudioPanel';

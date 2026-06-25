@@ -210,6 +210,68 @@ run node scripts/setup-ghostty.js || true
 step "setup" "done" "Setup complete"
 log ""
 
+# Ensure ffmpeg is present — it's a runtime dependency for the media/video
+# features (camera-device enumeration, video generation, thumbnailing, audio
+# mux) that server/lib/ffmpeg.js shells out to, not an npm package. Without it
+# those paths fail at runtime with `spawn ffmpeg ENOENT`. update.sh has no TTY,
+# so the Linux package-manager branches are gated on passwordless sudo
+# (`sudo -n`) — never block the unattended update waiting on a password prompt.
+# All branches are fail-soft: the update completes regardless.
+step "ffmpeg" "running" "Checking ffmpeg..."
+if command -v ffmpeg &> /dev/null; then
+  step "ffmpeg" "done" "ffmpeg present"
+else
+  log "🎞️  ffmpeg not found — required for camera devices, video generation, and thumbnails."
+  case "$(uname -s)" in
+    Darwin)
+      if command -v brew &> /dev/null; then
+        log "📦 Installing ffmpeg via Homebrew..."
+        run brew install ffmpeg || log "⚠️  brew install ffmpeg failed — install manually: brew install ffmpeg"
+      else
+        log "⚠️  Homebrew not found. Install brew (https://brew.sh) then run: brew install ffmpeg"
+      fi
+      ;;
+    Linux)
+      # Prefix with sudo only when not root; update.sh has no TTY so sudo must
+      # be passwordless (sudo -n). A root container needs no sudo at all (and
+      # the Docker image has no sudo binary). If we're non-root and can't get
+      # passwordless sudo, we can't escalate — print the manual hint.
+      SUDO=""
+      can_install=1
+      if [ "$(id -u)" -ne 0 ]; then
+        if sudo -n true 2>/dev/null; then
+          SUDO="sudo -n"
+        else
+          can_install=0
+        fi
+      fi
+      if [ "$can_install" -eq 0 ]; then
+        log "⚠️  ffmpeg missing and passwordless sudo unavailable — install manually: sudo apt-get install ffmpeg (or your distro's equivalent)."
+      elif command -v apt-get &> /dev/null; then
+        log "📦 Installing ffmpeg via apt-get..."
+        (run $SUDO apt-get update && run $SUDO apt-get install -y ffmpeg) || log "⚠️  apt-get install ffmpeg failed — install manually: sudo apt-get install ffmpeg"
+      elif command -v dnf &> /dev/null; then
+        log "📦 Installing ffmpeg via dnf..."
+        run $SUDO dnf install -y ffmpeg || log "⚠️  dnf install ffmpeg failed — install manually: sudo dnf install ffmpeg"
+      elif command -v pacman &> /dev/null; then
+        log "📦 Installing ffmpeg via pacman..."
+        run $SUDO pacman -S --noconfirm ffmpeg || log "⚠️  pacman -S ffmpeg failed — install manually: sudo pacman -S ffmpeg"
+      else
+        log "⚠️  No known package manager (apt-get/dnf/pacman). Install ffmpeg manually so media/video features work."
+      fi
+      ;;
+    *)
+      log "⚠️  Unrecognized platform — install ffmpeg manually so media/video features work."
+      ;;
+  esac
+  if command -v ffmpeg &> /dev/null; then
+    step "ffmpeg" "done" "ffmpeg installed"
+  else
+    step "ffmpeg" "done" "ffmpeg unavailable (media/video features degraded)"
+  fi
+fi
+log ""
+
 # Run data migrations
 step "migrations" "running" "Running data migrations..."
 if [ -f "$ROOT_DIR/scripts/run-migrations.js" ]; then

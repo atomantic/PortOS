@@ -12,7 +12,7 @@
  * arcPlanner.js (which owns the completeness pass that creates the comments).
  */
 
-import { randomUUID } from 'crypto';
+import { randomUUID, createHash } from 'crypto';
 import { runStagedLLM, resolveStageContext } from '../../lib/stageRunner.js';
 import { planManuscriptPass, estimateTokens } from '../../lib/contextBudget.js';
 import { getSeries, MANUSCRIPT_TYPES } from './series.js';
@@ -27,6 +27,11 @@ const makeErr = (message, code) => Object.assign(new Error(message), { code });
 // Output before input: the drafted artifact wins over the upstream seed.
 // Mirrors arcPlanner's stageTextOf (inlined there to avoid an import cycle).
 const stageTextOf = (stage) => (stage?.output?.trim() || stage?.input?.trim() || '');
+
+// Fingerprint of stage text — stamped at accept so undo can tell whether the
+// section still holds exactly what the fix wrote (and so refuse to clobber any
+// later edit). Cheap; the text is already in memory.
+const textHash = (s) => createHash('sha256').update(typeof s === 'string' ? s : '', 'utf8').digest('hex');
 
 async function loadStageText(issueId, stageId) {
   const issue = await getIssue(issueId).catch(() => null);
@@ -458,7 +463,7 @@ function mergeFixes(fixes) {
   return fixFromEdits(edits);
 }
 
-export async function generateManuscriptFix(seriesId, { commentId, providerOverride, modelOverride } = {}) {
+export async function generateManuscriptFix(seriesId, { commentId, providerOverride, providerDefault, modelOverride, modelDefault } = {}) {
   const series = await getSeries(seriesId);
   const comment = await getComment(seriesId, commentId);
   if (!comment) throw makeErr(`Comment not found: ${commentId}`, ERR_NOT_FOUND);
@@ -501,7 +506,9 @@ export async function generateManuscriptFix(seriesId, { commentId, providerOverr
   });
   const runChunk = (sections) => runStagedLLM(FIX_STAGE, buildCtx(sections), {
     providerOverride,
+    providerDefault,
     modelOverride,
+    modelDefault,
     returnsJson: true,
     source: 'pipeline-manuscript-fix',
   });
@@ -510,7 +517,7 @@ export async function generateManuscriptFix(seriesId, { commentId, providerOverr
   // across the whole book — so we keep it whole when it fits the model's
   // window, and only chunk by issue (degrading the holistic view) when it
   // can't. Single-issue comments are always one section → always whole.
-  const { contextWindow } = await resolveStageContext(FIX_STAGE, { providerOverride, modelOverride });
+  const { contextWindow } = await resolveStageContext(FIX_STAGE, { providerOverride, providerDefault, modelOverride, modelDefault });
   const overheadTokens = estimateTokens(JSON.stringify(baseCtx)) + 2_000;
   const plan = planManuscriptPass({
     contextWindow,
@@ -573,6 +580,59 @@ export async function acceptManuscriptFix(seriesId, { commentId, find, replace, 
 
   const planned = await planEditsBySection(acceptedEdits, comment);
   const sections = await applyPlannedEdits(seriesId, planned);
-  const updated = await updateComment(seriesId, commentId, { status: 'accepted' });
+  // Capture the pre-edit text per section so the accept is undoable (#1609).
+  // `priorText` is the full pre-fix stage text (exact restore for any edit
+  // shape); `appliedHash` fingerprints what we just wrote so undo can detect a
+  // later edit and bail instead of clobbering it. Hash the PERSISTED section
+  // text (`sections[i].content`, aligned to `planned` order) — the same
+  // `stageTextOf` normalization undo reads — so a freshly-accepted, untouched
+  // section always matches (hashing raw `g.output` could differ by boundary
+  // whitespace and falsely trip the guard).
+  const acceptedSnapshot = {
+    acceptedAt: new Date().toISOString(),
+    sections: planned.map((g, i) => ({
+      issueId: g.issueId,
+      stageId: g.stageId,
+      priorText: g.originalText,
+      appliedHash: textHash(sections[i]?.content ?? g.output),
+    })),
+  };
+  const updated = await updateComment(seriesId, commentId, { status: 'accepted', acceptedSnapshot });
   return { comment: updated, section: sections[0] || null, sections };
+}
+
+/**
+ * Undo a previously-accepted fix: restore each touched section's pre-edit text
+ * (captured in `comment.acceptedSnapshot`) and re-open the finding. The restore
+ * is itself a versioned stage write (`snapshotPrior`), so it lands in runHistory
+ * and is reversible like any edit. Bails (ERR_VALIDATION) when the section has
+ * drifted since accept — a blind restore would clobber that later work, so we
+ * point the user at the version history instead. Returns refreshed manuscript
+ * sections + the re-opened comment, mirroring acceptManuscriptFix's shape so the
+ * client applies the result through the same path.
+ */
+export async function undoManuscriptFix(seriesId, { commentId } = {}) {
+  const comment = await getComment(seriesId, commentId);
+  if (!comment) throw makeErr(`Comment not found: ${commentId}`, ERR_NOT_FOUND);
+  const snapshot = comment.acceptedSnapshot;
+  if (!snapshot || !Array.isArray(snapshot.sections) || snapshot.sections.length === 0) {
+    throw makeErr('There is no accepted edit to undo for this finding', ERR_VALIDATION);
+  }
+  const updates = snapshot.sections.map((s) => ({
+    issueId: s.issueId,
+    stageId: s.stageId,
+    computeFn: (cur) => {
+      if (s.appliedHash && textHash(stageTextOf(cur)) !== s.appliedHash) {
+        throw makeErr(
+          'The manuscript changed since this fix was accepted, so undo is unavailable — revert via the section version history instead',
+          ERR_VALIDATION,
+        );
+      }
+      return { output: s.priorText, status: 'edited', lastRunId: `undo-${randomUUID()}` };
+    },
+  }));
+  const updated = await updateStagesWithLatest(seriesId, updates, { snapshotPrior: true });
+  const sections = updated.map(({ issue, stage }, i) => sectionFrom(issue, snapshot.sections[i].stageId, stage));
+  const updatedComment = await updateComment(seriesId, commentId, { status: 'open', acceptedSnapshot: null });
+  return { comment: updatedComment, section: sections[0] || null, sections };
 }

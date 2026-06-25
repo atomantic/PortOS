@@ -19,15 +19,20 @@ import EditorialCheckCard from '../components/pipeline/editorial/EditorialCheckC
 import EditorialCustomCheckForm from '../components/pipeline/editorial/EditorialCustomCheckForm';
 import EditorialFindingsTriage from '../components/pipeline/editorial/EditorialFindingsTriage';
 import EditorialHealthPanel from '../components/pipeline/editorial/EditorialHealthPanel';
-import { groupChecksByScope } from '../lib/editorialChecks';
+import ProviderModelSelector from '../components/ProviderModelSelector';
+import TabPills from '../components/ui/TabPills';
+import { groupChecksByScope, normCategory } from '../lib/editorialChecks';
 import { usePipelineProgress } from '../hooks/usePipelineProgress';
+import useProviderModels from '../hooks/useProviderModels';
 import {
   listPipelineSeries,
+  updatePipelineSeries,
   getEditorialChecks,
   patchEditorialCheck,
   createEditorialCustomCheck,
   updateEditorialCustomCheck,
   deleteEditorialCustomCheck,
+  previewEditorialCustomCheck,
   startEditorialChecksRun,
   cancelEditorialChecksRun,
   getEditorialChecksRunStatus,
@@ -41,8 +46,20 @@ export default function PipelineEditorialChecks() {
   const [loadingCatalog, setLoadingCatalog] = useState(true);
   const [savingIds, setSavingIds] = useState(() => new Set());
   const [selectedIds, setSelectedIds] = useState(() => new Set());
+  // Below `lg` the catalog + findings columns stack into one; this segmented
+  // switch picks which one is visible. Default to triage since that's the
+  // page's primary mobile task (#1611). No URL param — it's a breakpoint-only
+  // presentation toggle that doesn't exist on desktop.
+  const [mobileTab, setMobileTab] = useState('findings');
 
   const [series, setSeries] = useState([]);
+  // Per-series editorial-check config overrides (#1591) are saved through the
+  // series PATCH; track in-flight saves per checkId so the run buttons gate on the
+  // override landing (the runner reads the persisted series record).
+  const [savingSeriesIds, setSavingSeriesIds] = useState(() => new Set());
+  // Per-check nonce bumped on a FAILED series-override save so the check card can
+  // revert its draft inputs to the persisted value (#1591).
+  const [seriesResetNonces, setSeriesResetNonces] = useState(() => ({}));
   const seriesId = searchParams.get('series') || '';
   const [comments, setComments] = useState([]);
   const [loadingFindings, setLoadingFindings] = useState(false);
@@ -54,12 +71,45 @@ export default function PipelineEditorialChecks() {
   const [runActive, setRunActive] = useState(false);
   const [runStarting, setRunStarting] = useState(false);
 
+  // Optional AI provider/model override for the editorial pass. `allowDefault`
+  // keeps both ids empty until the user explicitly picks one — an empty choice
+  // means "use the active/stage provider" (the route's providerId/model are
+  // optional). `silent` so a provider-list fetch failure doesn't toast over
+  // this secondary control.
+  const {
+    providers,
+    selectedProviderId,
+    selectedModel,
+    availableModels,
+    setSelectedProviderId,
+    setSelectedModel,
+  } = useProviderModels({ allowDefault: true, silent: true });
+
   const checksById = useMemo(
     () => Object.fromEntries(checks.map((c) => [c.id, c])),
     [checks],
   );
   const enabledCount = useMemo(() => checks.filter((c) => c.enabled).length, [checks]);
   const scopeGroups = useMemo(() => groupChecksByScope(checks), [checks]);
+  // The check/category values the health panel can deep-link to (#1606). The
+  // panel's "Open by check/category" rows count OPEN findings, and the triage only
+  // lists check-sourced findings (it drops null-checkId completeness/legacy ones).
+  // So a row is navigable iff there's an OPEN check-sourced finding for it — match
+  // that exactly (open + checkId), or a row whose open count is all completeness
+  // findings (or only resolved check-sourced ones) would deep-link to a list with
+  // none of the open findings it summarizes.
+  const openCheckSourced = useMemo(
+    () => comments.filter((c) => c?.checkId && c.status === 'open'),
+    [comments],
+  );
+  const triageFilterableCheckIds = useMemo(
+    () => new Set(openCheckSourced.map((c) => c.checkId)),
+    [openCheckSourced],
+  );
+  const triageFilterableCategories = useMemo(
+    () => new Set(openCheckSourced.map((c) => normCategory(c))),
+    [openCheckSourced],
+  );
   // Config saves read server settings, so a run that fires before a save lands
   // would use stale config — gate the run buttons while any save is in flight.
   const anySaving = savingIds.size > 0;
@@ -103,6 +153,15 @@ export default function PipelineEditorialChecks() {
       });
   }, []);
 
+  // Inline accept/dismiss from the triage list (#1598) — replace the changed
+  // comment in place (reactive update) and re-pull the health score/trend so the
+  // panel reflects the resolved finding without a full refetch.
+  const handleCommentChange = useCallback((updated) => {
+    if (!updated?.id) return;
+    setComments((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
+    setHealthRefresh((n) => n + 1);
+  }, []);
+
   useEffect(() => {
     setRunActive(false);
     if (!seriesId) { setComments([]); return; }
@@ -131,7 +190,14 @@ export default function PipelineEditorialChecks() {
     const type = runLatest.type;
     if (type !== 'complete' && type !== 'canceled' && type !== 'error') return;
     setRunActive(false);
-    if (type === 'complete') { loadFindings(seriesId); toast.success('Editorial checks complete'); }
+    if (type === 'complete') {
+      loadFindings(seriesId);
+      // #1573 — a check whose run() threw produced no findings; warn instead of a
+      // silent "complete" so an always-erroring check isn't mistaken for clean.
+      if (runLatest.errored > 0) {
+        toast.warning(`Editorial checks complete — ${runLatest.errored} check${runLatest.errored === 1 ? '' : 's'} errored: ${(runLatest.erroredCheckIds || []).join(', ')}`);
+      } else toast.success('Editorial checks complete');
+    }
     else if (type === 'canceled') toast.success('Editorial checks canceled');
     else toast.error(runLatest.error || 'Editorial checks failed');
   }, [runActive, runClosed, runLatest, seriesId]);
@@ -151,6 +217,12 @@ export default function PipelineEditorialChecks() {
   // their own row changes — not on every unrelated run/selection state tick.
   // Rollback flips only the one check (functional update) so a concurrent
   // toggle of a different check can't be clobbered. ----
+  // Per-check tail promise so rapid toggles of the SAME check apply in click
+  // order (last-click-wins) — see the serialization note in handleToggle (#1602).
+  const toggleTailsRef = useRef(new Map());
+  // Per-check count of in-flight toggle PATCHes so the saving flag (which gates
+  // the run buttons) only clears once the LAST queued PATCH settles, not the first.
+  const toggleInflightRef = useRef(new Map());
   const handleToggle = useCallback((checkId, nextEnabled) => {
     const apply = (val) => setChecks((rows) => rows.map((r) => (r.id === checkId ? { ...r, enabled: val } : r)));
     apply(nextEnabled);
@@ -161,10 +233,29 @@ export default function PipelineEditorialChecks() {
     // settings, so the run buttons must gate on this PATCH landing (and the card
     // shows its saving spinner for the toggle too).
     setSavingIds((s) => new Set(s).add(checkId));
-    patchEditorialCheck(checkId, { enabled: nextEnabled }, { silent: true })
-      .then((row) => { if (row) setChecks((rows) => rows.map((r) => (r.id === checkId ? row : r))); })
-      .catch((err) => { apply(!nextEnabled); toast.error(err.message || 'Failed to update check'); })
-      .finally(() => setSavingIds((s) => { const n = new Set(s); n.delete(checkId); return n; }));
+    toggleInflightRef.current.set(checkId, (toggleInflightRef.current.get(checkId) || 0) + 1);
+    // Serialize the PATCHes for a SINGLE check onto a per-check tail so the LAST
+    // click wins regardless of response timing (#1602): a quick disable-then-undo
+    // (or rapid double-toggle) could otherwise have the stale disable response
+    // land after the re-enable response and leave the check persisted disabled,
+    // since each response applies its own row. The tail makes the second PATCH run
+    // (and apply) only after the first settles. Returns a success boolean so the
+    // triage view can reconcile its optimistic group-hide when the PATCH fails —
+    // the catch has already reverted the optimistic enabled flip here.
+    const prev = toggleTailsRef.current.get(checkId) || Promise.resolve();
+    const result = prev.then(() => patchEditorialCheck(checkId, { enabled: nextEnabled }, { silent: true })
+      .then((row) => { if (row) setChecks((rows) => rows.map((r) => (r.id === checkId ? row : r))); return true; })
+      .catch((err) => { apply(!nextEnabled); toast.error(err.message || 'Failed to update check'); return false; }))
+      // Clear the saving flag only when the LAST queued PATCH for this check
+      // settles, so the run buttons stay gated until the final write lands.
+      .finally(() => {
+        const remaining = (toggleInflightRef.current.get(checkId) || 1) - 1;
+        if (remaining > 0) { toggleInflightRef.current.set(checkId, remaining); return; }
+        toggleInflightRef.current.delete(checkId);
+        setSavingIds((s) => { const n = new Set(s); n.delete(checkId); return n; });
+      });
+    toggleTailsRef.current.set(checkId, result.catch(() => {}));
+    return result;
   }, []);
 
   const handleConfigSave = useCallback((checkId, nextConfig) => {
@@ -173,6 +264,75 @@ export default function PipelineEditorialChecks() {
       .then((row) => { if (row) setChecks((rows) => rows.map((r) => (r.id === checkId ? row : r))); })
       .catch((err) => toast.error(err.message || 'Failed to save config'))
       .finally(() => setSavingIds((s) => { const n = new Set(s); n.delete(checkId); return n; }));
+  }, []);
+
+  // Per-check severity override (#1596). Like config saves it reads server
+  // settings, so it joins savingIds to gate the run buttons; `severity === null`
+  // clears the override back to the registry default.
+  const handleSeveritySave = useCallback((checkId, severity) => {
+    setSavingIds((s) => new Set(s).add(checkId));
+    patchEditorialCheck(checkId, { severity }, { silent: true })
+      .then((row) => { if (row) setChecks((rows) => rows.map((r) => (r.id === checkId ? row : r))); })
+      .catch((err) => toast.error(err.message || 'Failed to save severity'))
+      .finally(() => setSavingIds((s) => { const n = new Set(s); n.delete(checkId); return n; }));
+  }, []);
+
+  // ---- Per-series config override (#1591). The override map lives on the SERIES
+  // record (`editorialCheckConfig`); a save PATCHes the series and the runner
+  // overlays it on the global config. Saves are NON-optimistic (mirrors
+  // handleConfigSave) and SERIALIZED on a tail promise so two quick edits can't
+  // reorder responses and clobber each other — each PATCH applies its edit onto
+  // the freshest server-confirmed map at execution time. `overrideMapsRef` holds
+  // that authoritative map KEYED BY seriesId, so a save queued for series A reads
+  // and writes A's map even after the user has switched to series B (the keying is
+  // what stops a B-reseed from poisoning A's queued PATCH). `patch === null`
+  // clears the whole check. ----
+  const selectedSeries = useMemo(() => series.find((s) => s.id === seriesId) || null, [series, seriesId]);
+  const seriesOverrides = selectedSeries?.editorialCheckConfig && typeof selectedSeries.editorialCheckConfig === 'object'
+    ? selectedSeries.editorialCheckConfig
+    : null;
+
+  const overrideMapsRef = useRef({});
+  const seriesSaveTailRef = useRef(Promise.resolve());
+  // Seed/refresh ONLY the selected series' entry from its loaded record (covers
+  // the async series-list load AND a server-confirmed save echo). Keying by id
+  // means it never overwrites another series' in-flight map.
+  useEffect(() => {
+    if (seriesId) overrideMapsRef.current[seriesId] = seriesOverrides ? { ...seriesOverrides } : {};
+  }, [seriesId, seriesOverrides]);
+
+  // `patch` is a PARTIAL per-check override ({ [key]: value }) to merge, or `null`
+  // to clear the whole check. Merging (rather than replacing the per-check entry)
+  // means a second field edit for the same check — built in the card before the
+  // first save lands — composes onto the first instead of dropping it.
+  const handleSeriesConfigSave = useCallback((checkId, patch) => {
+    const sid = activeSeriesRef.current;
+    if (!sid) return;
+    setSavingSeriesIds((s) => new Set(s).add(checkId));
+    seriesSaveTailRef.current = seriesSaveTailRef.current
+      .then(async () => {
+        // Build at execution time from THIS series' freshest server-confirmed map.
+        const map = { ...(overrideMapsRef.current[sid] || {}) };
+        if (patch === null) delete map[checkId];
+        else map[checkId] = { ...(map[checkId] || {}), ...patch };
+        const saved = await updatePipelineSeries(sid, { editorialCheckConfig: map }, { silent: true })
+          .catch((err) => {
+            toast.error(err.message || 'Failed to save series override');
+            // Revert the card's draft inputs to the persisted value (the override
+            // wasn't saved, so the field must not keep showing the typed threshold).
+            setSeriesResetNonces((m) => ({ ...m, [checkId]: (m[checkId] || 0) + 1 }));
+            return null;
+          });
+        // On failure the keyed map is untouched, so the UI keeps showing the last
+        // persisted overrides (no phantom). On success, sync THIS series' map
+        // synchronously by id — keyed, so it never clobbers another series.
+        if (saved) {
+          overrideMapsRef.current[saved.id] = (saved.editorialCheckConfig && typeof saved.editorialCheckConfig === 'object')
+            ? { ...saved.editorialCheckConfig } : {};
+          setSeries((rows) => rows.map((r) => (r.id === saved.id ? saved : r)));
+        }
+      })
+      .finally(() => setSavingSeriesIds((s) => { const n = new Set(s); n.delete(checkId); return n; }));
   }, []);
 
   // ---- Custom-check authoring (#1346). The form is URL-driven (?custom=new |
@@ -213,6 +373,21 @@ export default function PipelineEditorialChecks() {
       .finally(() => setFormSaving(false));
   };
 
+  // Dry-run a draft against the selected series WITHOUT saving (#1607). Returns
+  // the preview result (or throws, so the form's own error UI fires). Gated on a
+  // selected series by the form via `canPreview`. `{ silent: true }` — the form
+  // renders the error inline rather than toasting. Forwards the same AI-pass
+  // provider/model override a real run uses (empty = default), so the preview's
+  // context sizing + model behavior match the run the user would commit to.
+  const handlePreviewCustom = useCallback(
+    (values) => previewEditorialCustomCheck(seriesId, {
+      ...values,
+      ...(selectedProviderId ? { providerId: selectedProviderId } : {}),
+      ...(selectedModel ? { model: selectedModel } : {}),
+    }, { silent: true }),
+    [seriesId, selectedProviderId, selectedModel],
+  );
+
   const handleDeleteCustom = useCallback((checkId) => {
     setSavingIds((s) => new Set(s).add(checkId));
     // Drop from the targeted-run selection so a deleted id can't ride a run.
@@ -243,7 +418,12 @@ export default function PipelineEditorialChecks() {
       ids = enabledIds;
     }
     setRunStarting(true);
-    startEditorialChecksRun(seriesId, ids ? { checkIds: ids } : {}, { silent: true })
+    const runOpts = {};
+    if (ids) runOpts.checkIds = ids;
+    // Empty selections fall through to the active/stage provider server-side.
+    if (selectedProviderId) runOpts.providerId = selectedProviderId;
+    if (selectedModel) runOpts.model = selectedModel;
+    startEditorialChecksRun(seriesId, runOpts, { silent: true })
       .then((res) => {
         if (res?.alreadyRunning) toast('A run is already in progress for this series');
         setRunActive(true);
@@ -266,7 +446,7 @@ export default function PipelineEditorialChecks() {
   // Gate runs on formSaving too: a run reads server-side settings, so starting
   // one while a custom-check create/edit PATCH is in flight would run the stale
   // (pre-save) definition. Mirrors the savingIds gate for per-check config saves.
-  const runDisabled = !seriesId || runActive || runStarting || anySaving || formSaving;
+  const runDisabled = !seriesId || runActive || runStarting || anySaving || formSaving || savingSeriesIds.size > 0;
 
   return (
     <div className="mx-auto max-w-6xl space-y-4">
@@ -324,6 +504,27 @@ export default function PipelineEditorialChecks() {
             ) : null}
           </div>
         </div>
+        {/* AI provider/model override for the editorial pass. Empty = use the
+            active/stage provider; disabled while a run is in flight or starting. */}
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs text-gray-500">AI pass:</span>
+          <div className="w-full sm:w-auto sm:min-w-[280px]">
+            <ProviderModelSelector
+              providers={providers}
+              selectedProviderId={selectedProviderId}
+              selectedModel={selectedModel}
+              availableModels={availableModels}
+              onProviderChange={setSelectedProviderId}
+              onModelChange={setSelectedModel}
+              compact
+              label="AI Provider"
+              disabled={runActive || runStarting}
+              emptyProviderOption="Default provider"
+              emptyModelOption="Default model"
+              alwaysShowModel
+            />
+          </div>
+        </div>
         {runActive ? (
           <p className="flex items-center gap-2 text-xs text-port-accent">
             <Loader2 size={13} className="animate-spin" /> {runStageLabel || 'Running editorial checks…'}
@@ -337,9 +538,22 @@ export default function PipelineEditorialChecks() {
       {loadingCatalog ? (
         <p className="flex items-center gap-2 text-sm text-gray-400"><Loader2 size={16} className="animate-spin" /> Loading checks…</p>
       ) : (
-        <div className="grid gap-6 lg:grid-cols-2">
+        <div className="space-y-4">
+          {/* Below `lg` the two columns stack — this switch picks which one
+              shows. Hidden on `lg+`, where both render side-by-side. */}
+          <div className="lg:hidden">
+            <TabPills
+              variant="pills"
+              size="sm"
+              ariaLabel="Editorial sections"
+              tabs={[{ id: 'catalog', label: 'Catalog' }, { id: 'findings', label: 'Findings' }]}
+              activeTab={mobileTab}
+              onChange={setMobileTab}
+            />
+          </div>
+          <div className="grid gap-6 lg:grid-cols-2">
           {/* Catalog */}
-          <section className="space-y-3">
+          <section className={`space-y-3 ${mobileTab !== 'catalog' ? 'hidden' : ''} lg:block`}>
             <div className="flex items-center justify-between gap-2">
               <h2 className="text-sm font-semibold uppercase tracking-wide text-gray-400">Catalog</h2>
               {!formOpen ? (
@@ -362,6 +576,9 @@ export default function PipelineEditorialChecks() {
                 saving={formSaving}
                 onSave={handleSaveCustom}
                 onCancel={closeCustomForm}
+                onPreview={handlePreviewCustom}
+                canPreview={!!seriesId}
+                previewTarget={seriesId}
               />
             ) : null}
             {checks.length === 0 ? (
@@ -387,6 +604,12 @@ export default function PipelineEditorialChecks() {
                         saving={savingIds.has(check.id)}
                         onToggle={handleToggle}
                         onConfigSave={handleConfigSave}
+                        onSeveritySave={handleSeveritySave}
+                        seriesId={seriesId}
+                        seriesConfig={seriesOverrides?.[check.id] || null}
+                        seriesSaving={savingSeriesIds.has(check.id)}
+                        seriesResetNonce={seriesResetNonces[check.id] || 0}
+                        onSeriesConfigSave={handleSeriesConfigSave}
                         onEdit={check.isCustom ? openCustomForm : undefined}
                         onDelete={check.isCustom ? handleDeleteCustom : undefined}
                       />
@@ -398,21 +621,22 @@ export default function PipelineEditorialChecks() {
           </section>
 
           {/* Findings */}
-          <section className="space-y-3">
+          <section className={`space-y-3 ${mobileTab !== 'findings' ? 'hidden' : ''} lg:block`}>
             <h2 className="text-sm font-semibold uppercase tracking-wide text-gray-400">Findings</h2>
             {!seriesId ? (
               <p className="rounded-lg border border-dashed border-port-border p-4 text-center text-xs text-gray-500">Select a series to view its findings.</p>
             ) : (
               <>
-                <EditorialHealthPanel seriesId={seriesId} refreshKey={healthRefresh} />
+                <EditorialHealthPanel seriesId={seriesId} refreshKey={healthRefresh} checksById={checksById} filterableCheckIds={triageFilterableCheckIds} filterableCategories={triageFilterableCategories} />
                 {loadingFindings ? (
                   <p className="flex items-center gap-2 text-sm text-gray-400"><Loader2 size={16} className="animate-spin" /> Loading findings…</p>
                 ) : (
-                  <EditorialFindingsTriage seriesId={seriesId} comments={comments} checksById={checksById} />
+                  <EditorialFindingsTriage seriesId={seriesId} comments={comments} checksById={checksById} onCommentChange={handleCommentChange} onToggleCheckEnabled={handleToggle} onRunChecks={() => runChecks(null)} runDisabled={runDisabled || enabledCount === 0} />
                 )}
               </>
             )}
           </section>
+          </div>
         </div>
       )}
     </div>

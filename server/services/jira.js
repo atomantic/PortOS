@@ -376,6 +376,110 @@ export async function getMyCurrentSprintTickets(instanceId, projectKey) {
   }
 }
 
+// Canonical lifecycle ordering for the three Jira status categories. Used to
+// order the fallback (no-board) column list — board-config columns keep their
+// own configured order instead.
+const CATEGORY_ORDER = { 'To Do': 0, 'In Progress': 1, 'Done': 2 };
+
+/**
+ * Pure: turn an agile board's column config into Kanban columns.
+ * @param {Array} boardColumns - `columnConfig.columns` from the board config API
+ *   (`[{ name, statuses: [{ id }] }]`).
+ * @param {Map<string,{name,category}>} statusById - status id → name/category.
+ * Returns ordered `[{ name, category, statuses: [statusName] }]`, dropping any
+ * column that maps to no known status (e.g. an empty/backlog column).
+ */
+export function buildColumnsFromBoardConfig(boardColumns, statusById) {
+  return (boardColumns || [])
+    .map(col => {
+      const statuses = (col.statuses || [])
+        .map(s => statusById.get(String(s.id)))
+        .filter(Boolean);
+      return {
+        name: col.name,
+        category: statuses[0]?.category || 'In Progress',
+        statuses: statuses.map(s => s.name)
+      };
+    })
+    .filter(col => col.statuses.length > 0);
+}
+
+/**
+ * Pure: turn a project's distinct workflow statuses into one column per status,
+ * ordered by status category (To Do → In Progress → Done). Used when no board
+ * id is available. `statusOrder` preserves discovery order so statuses within a
+ * category keep a stable layout (Array.prototype.sort is stable).
+ */
+export function buildColumnsFromStatuses(statusOrder) {
+  return (statusOrder || [])
+    .map(s => ({ name: s.name, category: s.category, statuses: [s.name] }))
+    .sort((a, b) => (CATEGORY_ORDER[a.category] ?? 1) - (CATEGORY_ORDER[b.category] ?? 1));
+}
+
+/**
+ * Resolve the ordered workflow columns for a project's board so the Kanban UI
+ * can show the full lifecycle (Blocked, In Review, any custom stage) instead of
+ * collapsing every status into the three statusCategory buckets.
+ *
+ * With a boardId we use the agile board's actual column layout — the truest
+ * representation of the user's workflow, in board order — mapping each column's
+ * status ids to names via the project statuses endpoint. Without a boardId, or
+ * if the board config can't be read, we fall back to the project's distinct
+ * statuses ordered by category. If even the project statuses can't be read the
+ * caller (client) falls back to its built-in three-category board.
+ *
+ * Returns `{ columns: [{ name, category, statuses: [statusName] }], source }`.
+ */
+export async function getBoardColumns(instanceId, projectKey, boardId) {
+  const config = await getInstances();
+  const instance = config.instances[instanceId];
+
+  if (!instance) {
+    throw new Error(`JIRA instance ${instanceId} not found`);
+  }
+
+  const client = createJiraClient(instance);
+
+  // Project statuses (always) and the board config (only when we have a board)
+  // are independent calls — fetch them in parallel to save a round-trip. A
+  // board-config failure falls through to project-status columns (null).
+  const [statusesRes, boardColumns] = await Promise.all([
+    client.get(`/rest/api/2/project/${encodeURIComponent(projectKey)}/statuses`),
+    boardId
+      ? client
+          .get(`/rest/agile/1.0/board/${encodeURIComponent(boardId)}/configuration`)
+          .then(res => res.data?.columnConfig?.columns || [])
+          .catch(err => {
+            console.warn(`⚠️ JIRA board ${boardId} config fetch failed: ${err.message}`);
+            return null;
+          })
+      : Promise.resolve(null)
+  ]);
+
+  // status id → { name, category }, plus discovery order for the fallback.
+  const statusById = new Map();
+  const statusOrder = [];
+  for (const issueType of statusesRes.data || []) {
+    for (const s of issueType.statuses || []) {
+      const id = String(s.id);
+      if (!statusById.has(id)) {
+        const entry = { name: s.name, category: s.statusCategory?.name || 'To Do' };
+        statusById.set(id, entry);
+        statusOrder.push(entry);
+      }
+    }
+  }
+
+  if (boardColumns) {
+    const columns = buildColumnsFromBoardConfig(boardColumns, statusById);
+    if (columns.length > 0) {
+      return { columns, source: 'board' };
+    }
+  }
+
+  return { columns: buildColumnsFromStatuses(statusOrder), source: 'project' };
+}
+
 /**
  * Get active sprints for a JIRA board
  */
@@ -446,6 +550,9 @@ export default {
   deleteTicket,
   transitionTicket,
   getMyCurrentSprintTickets,
+  getBoardColumns,
+  buildColumnsFromBoardConfig,
+  buildColumnsFromStatuses,
   getActiveSprints,
   searchEpics
 };

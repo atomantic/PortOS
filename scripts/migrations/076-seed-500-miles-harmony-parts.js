@@ -4,7 +4,7 @@
  * no sheet-music parts.
  *
  * Background:
- *   `server/services/songs.js#SEED_SONGS` now ships "500 Miles" with a full
+ *   `server/services/rounds.js#SEED_ROUNDS` now ships "500 Miles" with a full
  *   chord-tone harmony stack (SEED_500_MILES_SCORE_PARTS) as the worked example
  *   for the AI-derive feature. Fresh installs seed it directly. An install that
  *   already persisted `data/songs.json` keeps its existing `seed-500-miles`
@@ -21,7 +21,7 @@
 
 import { readFile, writeFile, stat } from 'fs/promises';
 import { join } from 'path';
-import { SEED_500_MILES_SCORE_PARTS } from '../../server/services/songs.js';
+import { SEED_500_MILES_SCORE_PARTS } from '../../server/services/rounds.js';
 
 const SONG_ID = 'seed-500-miles';
 

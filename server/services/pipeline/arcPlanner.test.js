@@ -851,6 +851,154 @@ describe('arcPlanner — resolveVerifyIssues', () => {
     expect(out.series.arc.tickingClock?.enabled).toBe(true);
     expect(out.series.arc.tickingClock?.label).toBe('The dam breaks');
   });
+
+  it('applies episode-synopsis corrections the resolve LLM returns (heals episode-level findings)', async () => {
+    const s = await setupSeries();
+    await seriesSvc.updateSeries(s.id, { arc: { logline: 'L' } });
+    const season = await seasonsSvc.createSeason(s.id, { title: 'Vol 1', episodeCountTarget: 1 });
+    const issue = await issuesSvc.createIssue({ seriesId: s.id, seasonId: season.id, title: 'Ep' });
+    await issuesSvc.updateStage(issue.id, 'idea', { input: 'old synopsis that stages the Atrium', status: 'empty' });
+    const fresh = await issuesSvc.getIssue(issue.id);
+
+    stageRunnerSpy = vi.fn(async () => ({
+      content: {
+        arc: { logline: 'L2', summary: 'S', themes: [], protagonistArc: '' },
+        seasons: [{ id: season.id, number: season.number, title: 'Vol 1', logline: '', synopsis: '', endingHook: '', episodeCountTarget: 1 }],
+        episodes: [{ seasonNumber: season.number, episodeNumber: fresh.number, synopsis: 'corrected — the Atrium is NOT convened here' }],
+        notes: '',
+      },
+      runId: 'r', providerId: 'p', model: 'm',
+    }));
+
+    const out = await planner.resolveVerifyIssues(s.id, {
+      findings: [{ severity: 'high', problem: 'episode 1 stages the Atrium', suggestion: 'move it' }],
+    });
+
+    expect(out.episodesResolved).toHaveLength(1);
+    expect(out.episodesResolved[0]).toMatchObject({ issueId: issue.id, number: fresh.number, clearedBeats: false });
+    const updated = await issuesSvc.getIssue(issue.id);
+    expect(updated.stages.idea.input).toBe('corrected — the Atrium is NOT convened here');
+  });
+
+  it('clears stale beats when correcting an episode that was already expanded', async () => {
+    const s = await setupSeries();
+    await seriesSvc.updateSeries(s.id, { arc: { logline: 'L' } });
+    const season = await seasonsSvc.createSeason(s.id, { title: 'Vol 1', episodeCountTarget: 1 });
+    const issue = await issuesSvc.createIssue({ seriesId: s.id, seasonId: season.id, title: 'Ep' });
+    await issuesSvc.updateStage(issue.id, 'idea', { input: 'old synopsis', output: 'BEAT 1\nBEAT 2', status: 'ready' });
+    const fresh = await issuesSvc.getIssue(issue.id);
+
+    stageRunnerSpy = vi.fn(async () => ({
+      content: {
+        arc: { logline: 'L2', summary: 'S', themes: [], protagonistArc: '' },
+        seasons: [{ id: season.id, number: season.number, title: 'Vol 1', logline: '', synopsis: '', endingHook: '', episodeCountTarget: 1 }],
+        episodes: [{ seasonNumber: season.number, episodeNumber: fresh.number, synopsis: 'corrected synopsis' }],
+        notes: '',
+      },
+      runId: 'r', providerId: 'p', model: 'm',
+    }));
+
+    const out = await planner.resolveVerifyIssues(s.id, {
+      findings: [{ severity: 'high', problem: 'contradiction', suggestion: 'fix' }],
+    });
+
+    expect(out.episodesResolved[0].clearedBeats).toBe(true);
+    const updated = await issuesSvc.getIssue(issue.id);
+    expect(updated.stages.idea.input).toBe('corrected synopsis');
+    expect(updated.stages.idea.output).toBe(''); // stale beats cleared so beatSheet regenerates
+    expect(updated.stages.idea.status).toBe('empty');
+  });
+
+  it('leaves a locked idea stage untouched and reports it skipped', async () => {
+    const s = await setupSeries();
+    await seriesSvc.updateSeries(s.id, { arc: { logline: 'L' } });
+    const season = await seasonsSvc.createSeason(s.id, { title: 'Vol 1', episodeCountTarget: 1 });
+    const issue = await issuesSvc.createIssue({ seriesId: s.id, seasonId: season.id, title: 'Ep' });
+    await issuesSvc.updateStage(issue.id, 'idea', { input: 'frozen synopsis', status: 'edited', locked: true });
+    const fresh = await issuesSvc.getIssue(issue.id);
+
+    stageRunnerSpy = vi.fn(async () => ({
+      content: {
+        arc: { logline: 'L2', summary: 'S', themes: [], protagonistArc: '' },
+        seasons: [{ id: season.id, number: season.number, title: 'Vol 1', logline: '', synopsis: '', endingHook: '', episodeCountTarget: 1 }],
+        episodes: [{ seasonNumber: season.number, episodeNumber: fresh.number, synopsis: 'attempted overwrite' }],
+        notes: '',
+      },
+      runId: 'r', providerId: 'p', model: 'm',
+    }));
+
+    const out = await planner.resolveVerifyIssues(s.id, {
+      findings: [{ severity: 'high', problem: 'contradiction', suggestion: 'fix' }],
+    });
+
+    expect(out.episodesResolved[0].skipped).toBe('locked');
+    const updated = await issuesSvc.getIssue(issue.id);
+    expect(updated.stages.idea.input).toBe('frozen synopsis'); // unchanged
+  });
+
+  it('fails safe (no-match) when a correction names a season the matched-number issue is NOT in', async () => {
+    // Guard against a numbering-scheme mismatch: the arc tree numbers episodes
+    // series-globally, but if the resolve LLM ever returns a per-season
+    // episodeNumber, a season-agnostic fallback would silently rewrite the wrong
+    // season's issue. With a resolvable seasonNumber we now REQUIRE the season to
+    // match — a mismatch is dropped, not mis-applied to another season's issue.
+    const s = await setupSeries();
+    await seriesSvc.updateSeries(s.id, { arc: { logline: 'L' } });
+    const s1 = await seasonsSvc.createSeason(s.id, { title: 'Vol 1', episodeCountTarget: 1 });
+    const s2 = await seasonsSvc.createSeason(s.id, { title: 'Vol 2', episodeCountTarget: 1 });
+    const issue = await issuesSvc.createIssue({ seriesId: s.id, seasonId: s1.id, title: 'Ep' });
+    await issuesSvc.updateStage(issue.id, 'idea', { input: 'season 1 synopsis', status: 'empty' });
+    const fresh = await issuesSvc.getIssue(issue.id);
+
+    // Correction names season 2 but the only issue with this number is in season 1.
+    stageRunnerSpy = vi.fn(async () => ({
+      content: {
+        arc: { logline: 'L2', summary: 'S', themes: [], protagonistArc: '' },
+        seasons: [
+          { id: s1.id, number: s1.number, title: 'Vol 1', logline: '', synopsis: '', endingHook: '', episodeCountTarget: 1 },
+          { id: s2.id, number: s2.number, title: 'Vol 2', logline: '', synopsis: '', endingHook: '', episodeCountTarget: 1 },
+        ],
+        episodes: [{ seasonNumber: s2.number, episodeNumber: fresh.number, synopsis: 'WRONG-SEASON overwrite' }],
+        notes: '',
+      },
+      runId: 'r', providerId: 'p', model: 'm',
+    }));
+
+    const out = await planner.resolveVerifyIssues(s.id, {
+      findings: [{ severity: 'high', problem: 'contradiction', suggestion: 'fix' }],
+    });
+
+    expect(out.episodesResolved[0].skipped).toBe('no-match');
+    const updated = await issuesSvc.getIssue(issue.id);
+    expect(updated.stages.idea.input).toBe('season 1 synopsis'); // NOT overwritten
+  });
+});
+
+describe('arcPlanner — shapeEpisodeResolutions', () => {
+  it('keeps well-formed entries and drops malformed ones', () => {
+    const out = planner.shapeEpisodeResolutions([
+      { seasonNumber: 2, episodeNumber: 13, synopsis: '  fixed  ' },
+      { episodeNumber: 5, synopsis: 'no season is fine' },
+      { seasonNumber: 1, episodeNumber: 2 },             // no synopsis → dropped
+      { seasonNumber: 1, episodeNumber: 'x', synopsis: 'bad number' }, // non-int → dropped
+      { seasonNumber: 1, synopsis: 'no episode number' }, // → dropped
+    ]);
+    expect(out).toEqual([
+      { seasonNumber: 2, episodeNumber: 13, synopsis: 'fixed' },
+      { seasonNumber: null, episodeNumber: 5, synopsis: 'no season is fine' },
+    ]);
+  });
+
+  it('returns [] for non-array input', () => {
+    expect(planner.shapeEpisodeResolutions(undefined)).toEqual([]);
+    expect(planner.shapeEpisodeResolutions(null)).toEqual([]);
+    expect(planner.shapeEpisodeResolutions('nope')).toEqual([]);
+  });
+
+  it('caps at RESOLVE_EPISODE_MAX entries', () => {
+    const many = Array.from({ length: 60 }, (_, i) => ({ episodeNumber: i + 1, synopsis: `s${i}` }));
+    expect(planner.shapeEpisodeResolutions(many)).toHaveLength(50);
+  });
 });
 
 describe('arcPlanner — commitSeasonsWithRemap', () => {
@@ -1751,6 +1899,50 @@ describe('arcPlanner — manuscript completeness + derive-from-manuscript', () =
     });
     const out = await planner.analyzeManuscriptCompleteness(s.id);
     expect(out.issues[0]).not.toHaveProperty('replace');
+  });
+
+  it('capCanonReference caps combined canon size, trimming the largest block first', () => {
+    const blocks = {
+      objects: 'O'.repeat(10_000),
+      characters: 'C'.repeat(4_000),
+      places: 'P'.repeat(500),
+    };
+    const trimmed = planner.capCanonReference(blocks, 6_000);
+    expect(trimmed).toBe(true);
+    const total = Object.values(blocks).reduce((n, v) => n + v.length, 0);
+    // Within budget (a small trim-marker allowance per cut block).
+    expect(total).toBeLessThanOrEqual(6_200);
+    // The smallest block survives untouched; the largest absorbed the cut.
+    expect(blocks.places).toBe('P'.repeat(500));
+    expect(blocks.objects.length).toBeLessThan(10_000);
+  });
+
+  it('capCanonReference is a no-op when already within budget', () => {
+    const blocks = { a: 'x'.repeat(100), b: 'y'.repeat(100) };
+    expect(planner.capCanonReference(blocks, 10_000)).toBe(false);
+    expect(blocks.a).toBe('x'.repeat(100));
+  });
+
+  it('never feeds the LLM an empty manuscript on a constrained window (canon cannot starve the draft)', async () => {
+    // Regression: an oversized canon/world context used to collapse usableChars
+    // to 0 and slice the manuscript to '', so the model "reviewed" an empty
+    // draft and reported the whole book missing. The canon cap + manuscript
+    // floor must keep real script text in every chunk.
+    const s = await setupSeries();
+    const script = 'PAGE 1\nPANEL 1\nThe foundry hums. '.repeat(400); // ~13K chars of real script
+    await issuesSvc.createIssue({ seriesId: s.id, title: 'Act 1', arcPosition: 1, stages: { comicScript: { output: script, status: 'ready' } } });
+    // Force a small planning window so the budgeter must chunk/trim.
+    stageContextSpy = vi.fn(async () => ({ provider: { id: 'p' }, model: 'm', contextWindow: 32_768 }));
+    const seen = [];
+    stageRunnerSpy = vi.fn(async (template, ctx) => {
+      seen.push(ctx.manuscript || '');
+      return { content: { issues: [] }, runId: 'rc', providerId: 'p', model: 'm' };
+    });
+    await planner.analyzeManuscriptCompleteness(s.id, { withEdits: true });
+    expect(seen.length).toBeGreaterThan(0);
+    // Every chunk the model saw must carry real manuscript text — never ''.
+    expect(seen.every((m) => m && m.trim().length > 0)).toBe(true);
+    expect(seen.some((m) => m.includes('The foundry hums'))).toBe(true);
   });
 
   it('analyzeManuscriptCompleteness reads the manuscript and returns shaped findings', async () => {

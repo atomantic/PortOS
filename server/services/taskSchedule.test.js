@@ -92,9 +92,13 @@ import {
   resetExecutionHistory,
   triggerOnDemandTask,
   getScheduleStatus,
+  computePerpetualRecheckAt,
+  parkPerpetual,
+  clearPerpetualPark,
   PROMPT_VERSIONS,
   DEFAULT_TASK_INTERVALS,
   MANAGED_AGENT_OPTIONS,
+  TASK_TYPE_DESCRIPTIONS,
   REFERENCE_WATCH_AUDITED_VERSION
 } from './taskSchedule.js'
 
@@ -105,9 +109,12 @@ import {
   getTaskPrompt
 } from './taskPromptService.js'
 
+import { DEFAULT_TASK_PROMPTS, PREVIOUS_DEFAULT_PROMPTS } from './taskPromptDefaults.js'
+
 import { loadState } from './cosState.js'
 
 import { readJSONFile } from '../lib/fileUtils.js'
+import { writeFile } from 'fs/promises'
 import { isTaskTypeEnabledForApp, getAppTaskTypeInterval, clearAllPrWatcherState } from './apps.js'
 import { getLocalParts } from '../lib/timezone.js'
 import { getAdaptiveCooldownMultiplier } from './taskLearning.js'
@@ -146,6 +153,7 @@ describe('taskSchedule', () => {
       expect(INTERVAL_TYPES.ON_DEMAND).toBe('on-demand')
       expect(INTERVAL_TYPES.CUSTOM).toBe('custom')
       expect(INTERVAL_TYPES.CRON).toBe('cron')
+      expect(INTERVAL_TYPES.PERPETUAL).toBe('perpetual')
     })
   })
 
@@ -165,6 +173,33 @@ describe('taskSchedule', () => {
       expect(SELF_IMPROVEMENT_TASK_TYPES).toContain('performance')
       expect(SELF_IMPROVEMENT_TASK_TYPES).toContain('dependency-updates')
       expect(SELF_IMPROVEMENT_TASK_TYPES).toContain('do-replan')
+    })
+  })
+
+  describe('TASK_TYPE_DESCRIPTIONS', () => {
+    // Guards against the "orphaned task" bug: a task type with no description
+    // entry falls back to a dasherized label ("claim work") in the schedule UI,
+    // which reads as a legacy leftover. Every scheduled task type must carry an
+    // explicit, human-readable blurb.
+    it('has an explicit description for every SELF_IMPROVEMENT_TASK_TYPES entry', () => {
+      const missing = SELF_IMPROVEMENT_TASK_TYPES.filter(
+        (t) => !Object.prototype.hasOwnProperty.call(TASK_TYPE_DESCRIPTIONS, t)
+      )
+      expect(missing).toEqual([])
+    })
+
+    it('has no description keys that are not real task types', () => {
+      const orphaned = Object.keys(TASK_TYPE_DESCRIPTIONS).filter(
+        (t) => !SELF_IMPROVEMENT_TASK_TYPES.includes(t)
+      )
+      expect(orphaned).toEqual([])
+    })
+
+    it('every description is a non-empty string', () => {
+      for (const [taskType, desc] of Object.entries(TASK_TYPE_DESCRIPTIONS)) {
+        expect(typeof desc, taskType).toBe('string')
+        expect(desc.trim().length, taskType).toBeGreaterThan(0)
+      }
     })
   })
 
@@ -216,6 +251,70 @@ describe('taskSchedule', () => {
       // Should have all default task types even though only security was saved
       expect(schedule.tasks['code-quality']).toBeDefined()
       expect(schedule.tasks['test-coverage']).toBeDefined()
+    })
+  })
+
+  describe('basic-task prompt genericization (PortOS → {appName})', () => {
+    // Installs created before the Jan→Feb 2026 genericization stored a default that
+    // hardcoded "PortOS" as the target app. These tasks were never versioned, so
+    // they never auto-upgraded — and worse, an install that upgraded past the
+    // promptVersion introduction got the old PortOS default mis-flagged
+    // promptCustomized:true. The fix: version the basic tasks, list the old
+    // defaults in PREVIOUS_DEFAULT_PROMPTS, and self-heal the mis-flag in
+    // loadSchedule so every install converges on the generic {appName} body.
+    const portosDocPrompt = PREVIOUS_DEFAULT_PROMPTS['documentation'].find((p) => p.includes('PortOS'))
+
+    it('versions the basic self-improvement tasks so deployed installs can auto-upgrade', () => {
+      for (const t of ['security', 'code-quality', 'test-coverage', 'performance', 'accessibility',
+        'dependency-updates', 'documentation', 'ui-bugs', 'mobile-responsive', 'release-check']) {
+        expect(PROMPT_VERSIONS[t], `PROMPT_VERSIONS['${t}']`).toBeGreaterThanOrEqual(2)
+      }
+    })
+
+    it('the current documentation default no longer hardcodes PortOS', () => {
+      expect(DEFAULT_TASK_PROMPTS['documentation']).not.toContain('PortOS')
+      expect(DEFAULT_TASK_PROMPTS['documentation']).toContain('{appName}')
+    })
+
+    it('upgrades a stale, non-customized PortOS default (promptVersion: 1) to the generic body', async () => {
+      mockSchedule({
+        tasks: { 'documentation': { type: 'once', enabled: false, providerId: null, model: null, prompt: portosDocPrompt, promptVersion: 1 } }
+      })
+      const schedule = await loadSchedule()
+      const doc = schedule.tasks['documentation']
+      expect(doc.prompt).toBe(DEFAULT_TASK_PROMPTS['documentation'])
+      expect(doc.prompt).not.toContain('PortOS')
+      expect(doc.promptVersion).toBe(PROMPT_VERSIONS['documentation'])
+    })
+
+    it('upgrades a pre-versioning PortOS default (promptVersion undefined) via the legacy-migration path', async () => {
+      mockSchedule({
+        tasks: { 'documentation': { type: 'once', enabled: false, providerId: null, model: null, prompt: portosDocPrompt } }
+      })
+      const schedule = await loadSchedule()
+      expect(schedule.tasks['documentation'].prompt).toBe(DEFAULT_TASK_PROMPTS['documentation'])
+      expect(schedule.tasks['documentation'].prompt).not.toContain('PortOS')
+    })
+
+    it('self-heals a mis-flagged promptCustomized that actually matches a known previous default, then upgrades', async () => {
+      mockSchedule({
+        tasks: { 'documentation': { type: 'once', enabled: false, providerId: null, model: null, prompt: portosDocPrompt, promptVersion: 1, promptCustomized: true } }
+      })
+      const schedule = await loadSchedule()
+      const doc = schedule.tasks['documentation']
+      expect(doc.promptCustomized).toBe(false)
+      expect(doc.prompt).toBe(DEFAULT_TASK_PROMPTS['documentation'])
+      expect(doc.promptVersion).toBe(PROMPT_VERSIONS['documentation'])
+    })
+
+    it('preserves a genuine user customization even when it mentions PortOS', async () => {
+      const custom = 'My own documentation prompt that happens to mention PortOS but matches no shipped default.'
+      mockSchedule({
+        tasks: { 'documentation': { type: 'once', enabled: false, providerId: null, model: null, prompt: custom, promptCustomized: true } }
+      })
+      const schedule = await loadSchedule()
+      expect(schedule.tasks['documentation'].prompt).toBe(custom)
+      expect(schedule.tasks['documentation'].promptCustomized).toBe(true)
     })
   })
 
@@ -767,6 +866,49 @@ describe('taskSchedule', () => {
       expect(result.taskType).toBe('plan-task')
       expect(result.reason).toBe('cron-due')
     })
+
+    it('perpetualOnly returns the due perpetual task even when a higher-priority cron task is also due', async () => {
+      // The mixed-schedule stall: an app on review cooldown has BOTH a due cron
+      // task and a due perpetual drain. Unconstrained, getNextTaskType returns
+      // the cron task (cron outranks perpetual) — but on cooldown only the
+      // perpetual drain is eligible, so the caller passes perpetualOnly to get
+      // the drain instead of being stranded behind the cooled-down cron pick.
+      const todayNineAm = recentNineAm()
+      const tomorrowNineAm = new Date(todayNineAm.getTime() + 24 * 60 * 60 * 1000)
+      const yesterdayNineAm = new Date(todayNineAm.getTime() - 24 * 60 * 60 * 1000)
+      parseCronToPrevRun
+        .mockReturnValueOnce(todayNineAm)
+        .mockReturnValueOnce(yesterdayNineAm)
+      parseCronToNextRun.mockReturnValue(tomorrowNineAm)
+
+      mockSchedule({
+        tasks: {
+          'pr-watcher':  { type: 'cron', enabled: true, cronExpression: '0 9 * * *', providerId: null, model: null, prompt: null },
+          'claim-issue': { type: 'perpetual', enabled: true, providerId: null, model: null, prompt: null }
+        }
+      })
+
+      // Unconstrained: cron wins.
+      const unconstrained = await getNextTaskType()
+      expect(unconstrained.taskType).toBe('pr-watcher')
+
+      // perpetualOnly: the perpetual drain is returned instead.
+      const constrained = await getNextTaskType(null, '', { perpetualOnly: true })
+      expect(constrained).not.toBeNull()
+      expect(constrained.taskType).toBe('claim-issue')
+      expect(constrained.reason).toBe('perpetual-drain')
+    })
+
+    it('perpetualOnly returns null when no perpetual task is due (app stays throttled)', async () => {
+      mockSchedule({
+        tasks: {
+          'code-quality':  { type: 'rotation', enabled: true, providerId: null, model: null, prompt: null },
+          'error-handling': { type: 'rotation', enabled: true, providerId: null, model: null, prompt: null }
+        }
+      })
+      const result = await getNextTaskType(null, '', { perpetualOnly: true })
+      expect(result).toBeNull()
+    })
   })
 
   describe('templates', () => {
@@ -1014,6 +1156,174 @@ describe('taskSchedule', () => {
       const status = await getScheduleStatus()
 
       expect(status.improvementEnabled).toBe(false)
+    })
+  })
+
+  describe('perpetual (drain-until-done)', () => {
+    describe('computePerpetualRecheckAt', () => {
+      it('uses recheckIntervalMs when no cron is set', async () => {
+        const at = await computePerpetualRecheckAt({ recheckIntervalMs: 3600000 }, 0)
+        expect(at).toBe(new Date(3600000).toISOString())
+      })
+
+      it('defaults to a daily (24h) recheck when nothing is configured', async () => {
+        const at = await computePerpetualRecheckAt({}, 0)
+        expect(at).toBe(new Date(24 * 60 * 60 * 1000).toISOString())
+      })
+
+      it('prefers a 5-field recheckCron over the interval', async () => {
+        const cronNext = new Date('2999-01-02T09:00:00.000Z')
+        parseCronToNextRun.mockReturnValue(cronNext)
+        const at = await computePerpetualRecheckAt({ recheckCron: '0 9 * * *', recheckIntervalMs: 1000 }, 0)
+        expect(at).toBe(cronNext.toISOString())
+        expect(parseCronToNextRun).toHaveBeenCalled()
+      })
+
+      it('falls back to the interval when recheckCron is not a 5-field expression', async () => {
+        const at = await computePerpetualRecheckAt({ recheckCron: 'not-a-cron', recheckIntervalMs: 5000 }, 0)
+        expect(at).toBe(new Date(5000).toISOString())
+      })
+    })
+
+    describe('shouldRunTask', () => {
+      it('is due (drain) when enabled and not parked', async () => {
+        mockSchedule({ tasks: { 'claim-issue': { type: 'perpetual', enabled: true } } })
+        const result = await shouldRunTask('claim-issue')
+        expect(result.shouldRun).toBe(true)
+        expect(result.reason).toBe('perpetual-drain')
+      })
+
+      it('is NOT due while parked in the future', async () => {
+        const future = new Date(Date.now() + 60 * 60 * 1000).toISOString()
+        mockSchedule({
+          tasks: { 'claim-issue': { type: 'perpetual', enabled: true } },
+          executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: {}, parkedUntil: future, parkReason: 'no-actionable-issues', parkActionableCount: 0 } }
+        })
+        const result = await shouldRunTask('claim-issue')
+        expect(result.shouldRun).toBe(false)
+        expect(result.reason).toBe('perpetual-parked')
+        expect(result.nextRunAt).toBe(future)
+        expect(result.parkReason).toBe('no-actionable-issues')
+      })
+
+      it('becomes due again (recheck) once the park elapses', async () => {
+        const past = new Date(Date.now() - 60 * 1000).toISOString()
+        mockSchedule({
+          tasks: { 'claim-issue': { type: 'perpetual', enabled: true } },
+          executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: {}, parkedUntil: past } }
+        })
+        const result = await shouldRunTask('claim-issue')
+        expect(result.shouldRun).toBe(true)
+        expect(result.reason).toBe('perpetual-recheck')
+      })
+
+      it('reads per-app park state', async () => {
+        isTaskTypeEnabledForApp.mockResolvedValue(true)
+        const future = new Date(Date.now() + 60 * 60 * 1000).toISOString()
+        mockSchedule({
+          tasks: { 'claim-issue': { type: 'perpetual', enabled: true } },
+          executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: { 'app-1': { lastRun: null, count: 0, parkedUntil: future } } } }
+        })
+        const result = await shouldRunTask('claim-issue', 'app-1')
+        expect(result.shouldRun).toBe(false)
+        expect(result.reason).toBe('perpetual-parked')
+      })
+    })
+
+    describe('getNextTaskType', () => {
+      it('prioritizes a draining perpetual task over a due daily task', async () => {
+        mockSchedule({
+          tasks: {
+            'claim-issue': { type: 'perpetual', enabled: true },
+            'security': { type: 'daily', enabled: true }
+          }
+        })
+        const next = await getNextTaskType()
+        expect(next.taskType).toBe('claim-issue')
+        expect(next.reason).toBe('perpetual-drain')
+      })
+
+      it('does not pick a parked perpetual task — yields to the daily', async () => {
+        const future = new Date(Date.now() + 60 * 60 * 1000).toISOString()
+        mockSchedule({
+          tasks: {
+            'claim-issue': { type: 'perpetual', enabled: true },
+            'security': { type: 'daily', enabled: true }
+          },
+          executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: {}, parkedUntil: future } }
+        })
+        const next = await getNextTaskType()
+        expect(next.taskType).toBe('security')
+      })
+    })
+
+    describe('parkPerpetual / clearPerpetualPark', () => {
+      it('parkPerpetual stamps parkedUntil + reason on the per-app record', async () => {
+        mockSchedule({ tasks: { 'claim-issue': { type: 'perpetual', enabled: true, recheckIntervalMs: 3600000 } } })
+        const record = await parkPerpetual('claim-issue', 'app-1', { reason: 'no-actionable-issues', actionableCount: 0 })
+        expect(record.parkedUntil).toBeTruthy()
+        expect(record.parkReason).toBe('no-actionable-issues')
+        expect(record.parkActionableCount).toBe(0)
+      })
+
+      it('clearPerpetualPark returns true when a park existed', async () => {
+        const future = new Date(Date.now() + 60 * 60 * 1000).toISOString()
+        mockSchedule({
+          tasks: { 'claim-issue': { type: 'perpetual', enabled: true } },
+          executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: { 'app-1': { lastRun: null, count: 0, parkedUntil: future } } } }
+        })
+        expect(await clearPerpetualPark('claim-issue', 'app-1')).toBe(true)
+      })
+
+      it('clearPerpetualPark is a no-op (false) when nothing is parked', async () => {
+        mockSchedule({
+          tasks: { 'claim-issue': { type: 'perpetual', enabled: true } },
+          executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: {} } }
+        })
+        expect(await clearPerpetualPark('claim-issue', 'app-1')).toBe(false)
+      })
+    })
+
+    describe('updateTaskInterval recompute-on-cadence-change', () => {
+      it('re-derives an existing park when the recheck cadence changes', async () => {
+        const farFuture = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
+        mockSchedule({
+          tasks: { 'claim-issue': { type: 'perpetual', enabled: true, recheckIntervalMs: 30 * 24 * 60 * 60 * 1000 } },
+          executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: { 'app-1': { lastRun: null, count: 0, parkedUntil: farFuture } } } }
+        })
+        await updateTaskInterval('claim-issue', { recheckIntervalMs: 1000 })
+        const saved = JSON.parse(writeFile.mock.calls.at(-1)[1])
+        const newParked = saved.executions['task:claim-issue'].perApp['app-1'].parkedUntil
+        // Recomputed from the shortened cadence (now + 1s), far earlier than the old 30-day park.
+        expect(new Date(newParked).getTime()).toBeLessThan(new Date(farFuture).getTime())
+        expect(new Date(newParked).getTime()).toBeLessThan(Date.now() + 60_000)
+      })
+
+      it('does not create a park when none exists', async () => {
+        mockSchedule({
+          tasks: { 'claim-issue': { type: 'perpetual', enabled: true } },
+          executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: { 'app-1': { lastRun: null, count: 0 } } } }
+        })
+        await updateTaskInterval('claim-issue', { recheckIntervalMs: 1000 })
+        const saved = JSON.parse(writeFile.mock.calls.at(-1)[1])
+        expect(saved.executions['task:claim-issue'].perApp['app-1'].parkedUntil).toBeUndefined()
+      })
+    })
+
+    describe('getScheduleStatus per-app park aggregate', () => {
+      it('aggregates per-app parks into taskStatus.perpetual', async () => {
+        const future = new Date(Date.now() + 60 * 60 * 1000).toISOString()
+        mockSchedule({
+          tasks: { 'claim-issue': { type: 'perpetual', enabled: true } },
+          executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: {
+            'app-1': { lastRun: null, count: 0, parkedUntil: future, parkReason: 'no-actionable-issues' },
+            'app-2': { lastRun: null, count: 0 }
+          } } }
+        })
+        const status = await getScheduleStatus()
+        const p = status.tasks['claim-issue'].perpetual
+        expect(p).toMatchObject({ parkedAppCount: 1, trackedAppCount: 2, globalParked: false, nextRecheckAt: future, parkReason: 'no-actionable-issues' })
+      })
     })
   })
 })

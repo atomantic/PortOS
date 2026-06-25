@@ -4,6 +4,9 @@ import {
   deltaDisplay,
   sparklineGeometry,
   orderedCategories,
+  orderedChecks,
+  checkCountSeries,
+  countSparklineGeometry,
 } from './editorialHealth.js';
 
 describe('scoreBand', () => {
@@ -69,5 +72,79 @@ describe('orderedCategories', () => {
   it('returns empty for an empty/absent map', () => {
     expect(orderedCategories()).toEqual([]);
     expect(orderedCategories({})).toEqual([]);
+  });
+});
+
+describe('orderedChecks', () => {
+  it('sorts by count desc then label, resolving ids to labels and dropping zero buckets', () => {
+    const labels = { 'naming.dissimilar-names': 'Name dissimilarity', 'roster.economy': 'Cast economy' };
+    expect(orderedChecks(
+      { 'naming.dissimilar-names': 1, 'roster.economy': 3, 'comic.prose-sync': 0 },
+      (id) => labels[id],
+    )).toEqual([
+      { checkId: 'roster.economy', count: 3, label: 'Cast economy' },
+      { checkId: 'naming.dissimilar-names', count: 1, label: 'Name dissimilarity' },
+    ]);
+  });
+
+  it('falls back to the raw checkId when no label resolves (deleted custom check)', () => {
+    expect(orderedChecks({ 'custom.gone': 2 })).toEqual([
+      { checkId: 'custom.gone', count: 2, label: 'custom.gone' },
+    ]);
+    // A non-function labelFor is tolerated (falls back to the id).
+    expect(orderedChecks({ 'custom.gone': 2 }, null)[0].label).toBe('custom.gone');
+  });
+
+  it('returns empty for an empty/absent map', () => {
+    expect(orderedChecks()).toEqual([]);
+    expect(orderedChecks({})).toEqual([]);
+  });
+});
+
+describe('checkCountSeries', () => {
+  it('extracts one check count across points, defaulting absent points to 0', () => {
+    const points = [
+      { openByCheck: { 'a': 3 } },
+      { openByCheck: { 'a': 1, 'b': 2 } },
+      { openByCheck: { 'b': 2 } },
+    ];
+    expect(checkCountSeries(points, 'a')).toEqual([3, 1, 0]);
+    expect(checkCountSeries(points, 'b')).toEqual([0, 2, 2]);
+  });
+
+  it('omits points with no per-check telemetry (null openByCheck) — no false zero-spike for pre-#1597 snapshots', () => {
+    const points = [
+      { openByCheck: null },        // pre-upgrade: unknown, omitted (not 0)
+      { openByCheck: { 'a': 2 } },  // telemetry-bearing
+      { openByCheck: { 'b': 1 } },  // 'a' absent here → legit 0
+    ];
+    expect(checkCountSeries(points, 'a')).toEqual([2, 0]);
+  });
+
+  it('returns empty for empty/absent points', () => {
+    expect(checkCountSeries([], 'a')).toEqual([]);
+    expect(checkCountSeries(undefined, 'a')).toEqual([]);
+  });
+});
+
+describe('countSparklineGeometry', () => {
+  it('normalizes to its own max — peak at top, zero at bottom', () => {
+    const { coords, max, last } = countSparklineGeometry([0, 4, 2], { width: 100, height: 20, pad: 0 });
+    expect(max).toBe(4);
+    expect(coords[0].y).toBe(20); // 0 → bottom
+    expect(coords[1].y).toBe(0);  // 4 (max) → top
+    expect(last.count).toBe(2);
+  });
+
+  it('renders an all-zero series as a flat baseline (no divide-by-zero)', () => {
+    const { coords, max } = countSparklineGeometry([0, 0], { width: 100, height: 20, pad: 0 });
+    expect(max).toBe(0);
+    expect(coords.every((c) => c.y === 20)).toBe(true);
+  });
+
+  it('yields empty geometry for an empty series', () => {
+    expect(countSparklineGeometry([]).points).toBe('');
+    expect(countSparklineGeometry(undefined).coords).toEqual([]);
+    expect(countSparklineGeometry([]).last).toBeNull();
   });
 });

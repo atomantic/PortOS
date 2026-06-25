@@ -8,6 +8,7 @@
  * contract the Database tab uses).
  */
 
+import os from 'os'
 import { Router } from 'express'
 import { asyncHandler, ServerError } from '../lib/errorHandler.js'
 import {
@@ -24,11 +25,14 @@ import {
   localLlmCompareSchema
 } from '../lib/validation.js'
 import { getCatalog, searchCatalog, isBackend } from '../lib/localLlmCatalog.js'
-import { searchHuggingFaceModels } from '../services/huggingFaceCatalog.js'
+import { isAppleSilicon } from '../lib/platform.js'
+import { searchHuggingFaceModels, enrichCatalogWithVariants } from '../services/huggingFaceCatalog.js'
 import {
   getStatus, listModels, listVisionModels, installModel, deleteModel, switchBackend, migrateBackend, installBackend, upgradeBackend, controlOllamaServer
 } from '../services/localLlm.js'
 import { runLocalLlmTest, compareLocalLlmModels } from '../services/localLlmPlayground.js'
+import { listUserModels } from '../services/audioModels.js'
+import { ENGINES } from '../services/pipeline/musicGen.js'
 import { abortSignalFromResponse } from '../lib/requestAbort.js'
 import { awaitWritableDrain } from '../lib/streamBackpressure.js'
 import { getLoadedModels as getLoadedOllamaModels, unloadModel as unloadOllamaModel } from '../services/ollamaManager.js'
@@ -52,22 +56,67 @@ router.get('/vision-models', asyncHandler(async (_req, res) => {
   res.json({ models: await listVisionModels() })
 }))
 
-// GET /api/local-llm/catalog?backend=ollama&q=llama — curated install picker
+// GET /api/local-llm/catalog?backend=ollama&q=llama — curated install picker.
+// HF-repo-backed entries are enriched with the same per-quant variant picker +
+// RAM-aware default as the live Hugging Face search, so the recommended quant
+// fits this machine instead of being hard-coded per model.
 router.get('/catalog', asyncHandler(async (req, res) => {
-  const { backend, q } = req.query
+  const { backend, q, variants } = req.query
   if (!isBackend(backend)) throw new ServerError('backend must be "ollama" or "lmstudio"', { status: 400 })
-  const installed = (await listModels(backend)).map((m) => m.id)
-  const models = q ? searchCatalog(backend, q, installed) : getCatalog(backend, installed)
-  res.json({ backend, models })
+  const installedModels = await listModels(backend)
+  // getCatalog/searchCatalog normalize raw ids (no `@quant` suffix) — feed them the
+  // RAW ids so the offline installed overlay is correct even when HF enrichment
+  // fails/times out. Variant enrichment gets the quant-augmented ids (`<id>@<quant>`)
+  // for per-quant installed detection (a single installed quant must not flag every
+  // quant of a repo as installed) — it overwrites the overlay on success.
+  const installedRaw = installedModels.map((m) => m.id)
+  const installedForVariants = installedModels.map((m) => (
+    backend === 'lmstudio' && m.quantization ? `${m.id}@${m.quantization}` : m.id
+  ))
+  const models = q ? searchCatalog(backend, q, installedRaw) : getCatalog(backend, installedRaw)
+  // Total system memory drives the RAM-aware recommended quant (unified memory on
+  // Apple Silicon also backs the GPU, so a big box can default to higher fidelity).
+  const systemMemoryBytes = os.totalmem()
+  // Quant-variant enrichment probes Hugging Face per HF-backed entry, so it's
+  // opt-in (`?variants=1`): the recommended-models picker requests it, but callers
+  // that only need catalog metadata (e.g. the playground decorating installed
+  // models) get the fast, fully-local response the catalog has always been.
+  if (variants === '1' || variants === 'true') {
+    await enrichCatalogWithVariants(models, { backend, systemMemoryBytes, installedIds: installedForVariants })
+  }
+  res.json({ backend, models, systemMemoryGb: Math.round(systemMemoryBytes / 1024 ** 3) })
 }))
 
 // GET /api/local-llm/huggingface-search?backend=ollama&q=qwen&category=coding
-// Live Hub discovery for GGUF-compatible community models.
+// Live Hub discovery — GGUF-compatible community models, plus (for the `audio`
+// category) audio/music generators that install into the shared audio-model
+// registry and surface in the Music studio.
 router.get('/huggingface-search', asyncHandler(async (req, res) => {
   const { backend, q, category, limit } = validateRequest(localLlmHuggingFaceSearchSchema, req.query)
-  const installed = (await listModels(backend)).map((m) => m.id)
-  const models = await searchHuggingFaceModels({ backend, query: q, category, limit, installedIds: installed })
-  res.json({ backend, source: 'huggingface', models })
+  // Carry LM Studio's per-model quantization into the installed id (`<id>@<quant>`)
+  // so the catalog can mark per-quant installed state — LM Studio's `id` alone is
+  // repo-level, which would otherwise flag every quant of a repo as installed.
+  const installed = (await listModels(backend)).map((m) => (
+    backend === 'lmstudio' && m.quantization ? `${m.id}@${m.quantization}` : m.id
+  ))
+  // Cross-reference the shared audio-model registry so a model already installed
+  // via the Music studio (or this tab) shows "Installed". Only the user-added
+  // repos count — shipped engine defaults download lazily on first generation.
+  let installedAudioRepos = []
+  if (category === 'audio') {
+    const perEngine = await Promise.all(Object.keys(ENGINES).map((id) => listUserModels(id)))
+    installedAudioRepos = perEngine.flat().map((m) => m.repo)
+  }
+  // Total system memory drives the RAM-aware default quant pick and the per-quant
+  // fit verdicts. On unified-memory Macs this pool also backs the GPU, so a big
+  // box can default to a higher-fidelity build than the old Q4-always pick.
+  const systemMemoryBytes = os.totalmem()
+  // MLX models surface only on Apple Silicon (and only for LM Studio) — gate the
+  // extra MLX query on the host so non-Apple installs don't see un-installable
+  // results. Detected here at the route boundary; the service stays deterministic.
+  const appleSilicon = isAppleSilicon()
+  const models = await searchHuggingFaceModels({ backend, query: q, category, limit, installedIds: installed, installedAudioRepos, systemMemoryBytes, appleSilicon })
+  res.json({ backend, source: 'huggingface', models, systemMemoryGb: Math.round(systemMemoryBytes / 1024 ** 3), appleSilicon })
 }))
 
 // POST /api/local-llm/install-backend — install the backend app/binary itself

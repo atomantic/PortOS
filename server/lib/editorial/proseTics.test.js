@@ -6,6 +6,7 @@ import {
   findCrutchWords,
   findAdverbs,
   findPassiveVoice,
+  filterPassiveVoice,
   findGestures,
   FILTER_WORDS,
   CRUTCH_WORDS,
@@ -101,16 +102,25 @@ describe('findAdverbs', () => {
     expect(words).not.toContain('only');    // excluded
   });
 
-  it('marks dialogue-tag adverbs', () => {
+  it('marks dialogue-tag adverbs and classifies an emotion tell', () => {
     const hits = findAdverbs('"Fine," she said angrily.');
     const tag = hits.find((h) => h.word.toLowerCase() === 'angrily');
     expect(tag).toBeTruthy();
     expect(tag.dialogueTag).toBe(true);
+    expect(tag.tagAdverbKind).toBe('emotion');
+  });
+
+  it('classifies a reporting tag adverb (manner/volume) as reporting', () => {
+    const hits = findAdverbs('"Fine," she said quietly.');
+    const tag = hits.find((h) => h.word.toLowerCase() === 'quietly');
+    expect(tag.dialogueTag).toBe(true);
+    expect(tag.tagAdverbKind).toBe('reporting');
   });
 
   it('does not mark a non-tag-preceded adverb as a dialogue tag', () => {
     const hits = findAdverbs('She walked slowly.');
     expect(hits[0].dialogueTag).toBe(false);
+    expect(hits[0].tagAdverbKind).toBe(null);
   });
 
   it('respects allowWords', () => {
@@ -140,6 +150,86 @@ describe('findPassiveVoice', () => {
 
   it('does not flag a be-verb with no participle', () => {
     expect(findPassiveVoice('She was happy.')).toEqual([]);
+  });
+
+  it('classifies an agentive passive as weak', () => {
+    const [hit] = findPassiveVoice('The door was opened by Sam.');
+    expect(hit.classification).toBe('weak');
+    expect(hit.byAgent).toBe(true);
+  });
+
+  it('classifies a predicate-adjective state as stative', () => {
+    const [hit] = findPassiveVoice('She was exhausted.');
+    expect(hit.classification).toBe('stative');
+    expect(hit.byAgent).toBe(false);
+  });
+
+  it('classifies a setting/weather subject as mood', () => {
+    const [hit] = findPassiveVoice('The sky was streaked with red.');
+    expect(hit.classification).toBe('mood');
+  });
+
+  it('an explicit "by <agent>" overrides a stative participle to weak', () => {
+    const [hit] = findPassiveVoice('She was exhausted by the climb.');
+    expect(hit.byAgent).toBe(true);
+    expect(hit.classification).toBe('weak');
+  });
+
+  it('detects a "by <agent>" with an intervening adverb', () => {
+    const [hit] = findPassiveVoice('The room was decorated elaborately by Mira.');
+    expect(hit.byAgent).toBe(true);
+    expect(hit.classification).toBe('weak');
+  });
+
+  it('keeps an action passive with a setting subject as weak (no atmospheric participle)', () => {
+    expect(findPassiveVoice('The room was searched.')[0].classification).toBe('weak');
+    // A "with"/"in" complement on a non-atmospheric verb must not read as mood.
+    expect(findPassiveVoice('The room was searched with dogs.')[0].classification).toBe('weak');
+    expect(findPassiveVoice('The city was attacked in winter.')[0].classification).toBe('weak');
+  });
+
+  it('does not treat a "by <time>" phrase as an agent', () => {
+    const [hit] = findPassiveVoice('She was exhausted by morning.');
+    expect(hit.byAgent).toBe(false);
+    expect(hit.classification).toBe('stative');
+  });
+
+  it('skips a determiner to spot a "by the <time>" phrase', () => {
+    const [hit] = findPassiveVoice('She was exhausted by the morning.');
+    expect(hit.byAgent).toBe(false);
+    expect(hit.classification).toBe('stative');
+  });
+
+  it('still treats "by the <agent>" as a real agent', () => {
+    const [hit] = findPassiveVoice('She was exhausted by the climb.');
+    expect(hit.byAgent).toBe(true);
+    expect(hit.classification).toBe('weak');
+  });
+
+  it('does not read a "by" from the next sentence as the agent', () => {
+    // "By morning" starts a new sentence — it must not flip the stative
+    // "was exhausted" into a weak by-agent passive.
+    const [hit] = findPassiveVoice('She was exhausted. By morning the fog had lifted.');
+    expect(hit.byAgent).toBe(false);
+    expect(hit.classification).toBe('stative');
+  });
+});
+
+describe('filterPassiveVoice', () => {
+  const text = 'The door was opened by Sam. She was exhausted. The sky was streaked with red.';
+
+  it('keeps only weak passive by default (drops stative + mood)', () => {
+    const kept = filterPassiveVoice(findPassiveVoice(text));
+    expect(kept.map((h) => h.classification)).toEqual(['weak']);
+  });
+
+  it('keeps every candidate when suppressIntentional is off (raw heuristic)', () => {
+    const kept = filterPassiveVoice(findPassiveVoice(text), { suppressIntentional: false });
+    expect(kept.length).toBe(3);
+  });
+
+  it('tolerates a non-array input', () => {
+    expect(filterPassiveVoice(null)).toEqual([]);
   });
 });
 

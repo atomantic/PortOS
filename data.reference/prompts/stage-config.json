@@ -373,6 +373,20 @@
       "returnsJson": true,
       "variables": []
     },
+    "pipeline-beat-continuity": {
+      "name": "Pipeline — Whole-Manuscript Beat Continuity",
+      "description": "Whole-book beat-level continuity pass over every issue's beat sheet — the altitude between cross-volume synopsis verify and the full scripts. Catches dropped cliffhangers/unresolved setups, finale drift from the arc's intended ending, promised through-lines that never land, duplicated 'firsts', volume-to-volume hand-off breaks, and cross-issue character-state contradictions BEFORE the expensive full-script stage. Returns actionable { severity, location, problem, suggestion } issues — empty list means the beats cohere.",
+      "model": "heavy",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-beat-continuity-resolve": {
+      "name": "Pipeline — Beat Continuity Auto-Resolve",
+      "description": "Auto-resolve whole-manuscript beat-continuity findings by rewriting the BEATS of the specific issues that caused each finding (idea.output) — the beat altitude, not the arc. Returns a sparse episodes[] of full corrected beat sheets keyed by series-global episodeNumber (+ seasonNumber), plus optional notes for anything needing an arc-level restructure.",
+      "model": "heavy",
+      "returnsJson": true,
+      "variables": []
+    },
     "pipeline-script-verify": {
       "name": "Pipeline — Comic Script Verification",
       "description": "Craft pass over ONE issue's comic script before art: catches un-renderable panels, missing/malformed page-panel structure, panel-to-panel flow breaks, dialogue/art imbalance, within-issue continuity, and page-turn/beat placement. Used by Series Autopilot's per-issue script gate (advisory — surfaces findings, doesn't auto-rewrite). Returns actionable { severity, location, problem, suggestion } issues — empty list means sound.",
@@ -432,6 +446,13 @@
     "pipeline-storyboard-image-prompt": {
       "name": "Pipeline — Storyboard Scene Image Prompt",
       "description": "Refine a single storyboard scene's description into a richer image-gen-ready prompt. Uses slugline + neighboring-scene continuity to elaborate without contradicting location or time of day.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-comic-page-refine-render": {
+      "name": "Pipeline — Comic Page Refine Render",
+      "description": "Apply a small author correction to an already-rendered comic page's render prompt for an image-to-image re-render — changes only what the instruction asks and preserves the rest of the page (no redraw from the comic script).",
       "model": "default",
       "returnsJson": true,
       "variables": []
@@ -569,6 +590,27 @@
       "returnsJson": true,
       "variables": []
     },
+    "pipeline-editorial-timeline-contradiction": {
+      "name": "Pipeline — Editorial Check: Timeline / canon contradiction",
+      "description": "Editorial check (#1581): scans for internal contradictions against canon and chronology — a character who dies and reappears alive without explanation, an age contradiction (the bible says 16, the prose says 'in her 30s'), or an impossible timeline. Reconciles the stitched manuscript against the established canon character facts, the reverse-outline scene ordering, and the authored per-character arcs; degrades to a prose-only scan when no canon or outline exists. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-editorial-fact-accuracy": {
+      "name": "Pipeline — Editorial Check: Research / fact accuracy",
+      "description": "Editorial check (#1588): scans grounded fiction for contradictions to real-world facts the author has documented — a city placed in the wrong country, an anachronistic event or technology, a physiologically impossible feat. Reconciles the stitched manuscript against the author-supplied fact reference (series.factReference); distinct from the internal timeline/canon-contradiction check. Opt-in and gated on the per-series fact-critical flag so it never fires on pure fantasy. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-editorial-character-consistency": {
+      "name": "Pipeline — Editorial Check: Character consistency (unearned personality shift)",
+      "description": "Editorial check (#1582): flags unearned characterization changes — a reserved character who suddenly cracks jokes with no arc beat, an established trait (fear, allergy, skill) silently contradicted, or POV-character knowledge that changes mid-scene without on-page learning. Reconciles the stitched manuscript against the established canon character traits, the reverse-outline scene ordering, and the authored per-character arcs so an intentional, earned transition is NOT flagged; degrades to a prose-only scan when no canon or outline exists. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
     "pipeline-editorial-object-motivation": {
       "name": "Pipeline — Editorial Check: Unmotivated object interaction",
       "description": "Editorial check (#1288): flags moments where a character treats an object as significant without earned motivation — no recorded attachment and no on-page setup. Reads the stitched manuscript plus the canon object↔character attachments. Returns issue-anchored findings.",
@@ -625,6 +667,13 @@
       "returnsJson": true,
       "variables": []
     },
+    "pipeline-editorial-voice-consistency": {
+      "name": "Pipeline — Editorial Check: Narrative voice / tone consistency",
+      "description": "Editorial check (#1586): the NARRATOR-voice sibling of voice-distinctiveness (which covers per-character dialogue). Fingerprints each issue's narrative tone (diction, register, humor, emotional temperature) and flags an unexplained tonal shift across issues (witty issue 1 → grim issue 3 → witty issue 5 = whiplash) plus drift from the style guide's intended voice. Does not flag a purposeful tonal modulation the story earns. Reads the stitched manuscript + the style guide's intended tone; rolls a per-issue tone fingerprint across chunks. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
     "pipeline-editorial-plot-structure": {
       "name": "Pipeline — Editorial Check: Plot structure & momentum",
       "description": "Editorial check (#1310): the macro pathologies editors flag at the manuscript/arc level — a passive protagonist, deus ex machina / convenient coincidence, idiot plot, flat or unclear stakes that never escalate, a sagging middle with no try-fail rhythm, and dropped subplots. Reads the stitched manuscript plus the reverse-outline scene map + plotline coverage (reconciling fizzled threads against tagged plotlines) and the authored reader-map hooks/payoffs; degrades to a whole-manuscript scan when no outline exists. Returns issue-anchored findings.",
@@ -635,6 +684,27 @@
     "pipeline-editorial-head-hopping": {
       "name": "Pipeline — Editorial Check: Head-hopping / POV discipline",
       "description": "Editorial check (#1311): in a limited-POV scene, flags narration that enters another character's head, reports knowledge/perception the POV character couldn't have, or switches POV mid-scene without a break. Reads the stitched manuscript plus the reverse-outline POV-per-scene map (degrading to a whole-issue scan when absent) and the series style guide's POV person; no-ops for third-person omniscient. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-editorial-climax-agency": {
+      "name": "Pipeline — Editorial Check: Climax / resolution power (passive protagonist at the climax)",
+      "description": "Editorial check (#1583): judges whether the CLIMAX is the protagonist's hardest, most active choice (not a passive climax where an ally rescues them, the antagonist self-destructs, or a coincidence resolves the conflict) AND whether it resolves the story's core problem and lands the emotional/thematic argument (not just the surface plot). Reconciles the prose against the authored reader-map payoffs (series.arc.readerMap) and the declared themes (series.arc.themes), using the reverse-outline scene map to locate the climax; gates its verdict on the final manuscript part and degrades to a whole-manuscript scan when no reader-map, themes, or outline exists. Complements plot.structure-momentum. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-editorial-reaction-proportionality": {
+      "name": "Pipeline — Editorial Check: Emotional beat proportionality (reactions vs event magnitude)",
+      "description": "Editorial check (#1584): whether each character's emotional reactions are PROPORTIONATE to the magnitude of the events that befall them. Flags an under-reaction (a high-magnitude event — trauma, death, betrayal, major loss/win — that draws no on-page reaction and is never processed in later issues) and an over-reaction (a minor setback triggering grief/rage/despair out of all proportion). Uses the reverse-outline scene map to weigh event magnitude and attribute findings to the right issue, and carries unprocessed high-magnitude events across manuscript parts so a later part can flag a trauma introduced early and left unaddressed; degrades to a whole-manuscript scan when no outline exists. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-editorial-secondary-arc": {
+      "name": "Pipeline — Editorial Check: Secondary-character arcs (recurring non-POV cast)",
+      "description": "Editorial check (#1585): the non-POV sibling of pov.justified (#1295). Tallies recurring NON-POV characters from the reverse-outline scene map (present across multiple scenes but never holding the viewpoint) and judges whether each shows meaningful change — flagging a flat side character (same at the end as the start) or one who regresses with no purpose. Does not flag a genuine walk-on or a deliberately-static foil whose constancy is the point. Because a flat arc is a whole-story claim, the verdict lands on the final manuscript part and each recurring secondary's established state is carried across parts; degrades to a whole-manuscript scan when no outline exists. Returns issue-anchored findings.",
       "model": "default",
       "returnsJson": true,
       "variables": []
@@ -663,6 +733,13 @@
     "pipeline-editorial-appearance-continuity": {
       "name": "Pipeline — Editorial Check: Storyboard appearance / prop continuity",
       "description": "Editorial check (#1467): LLM diff of a scene's storyboard shot descriptions for appearance/prop continuity breaks — the same character described with conflicting wardrobe/hair/state, a prop that appears/vanishes/transforms, or a setting whose weather/time/layout contradicts across shots, with no action justifying the change. The semantic sibling of the deterministic visual.shot-continuity check (the shot parser matches characters by name but never diffs their descriptions); reads the per-issue storyboard shots (storyboard.shots). Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-editorial-comic-prose-sync": {
+      "name": "Pipeline — Editorial Check: Comic ↔ prose synchronization (hybrid issues)",
+      "description": "Editorial check (#1589): cross-media consistency for hybrid comic+prose issues. Pairs each issue's prose narration with its authoritative comic pages (description + dialogue + caption + SFX) and flags SUBSTANTIVE divergences — a plot beat the prose narrates that no panel shows, panel dialogue that contradicts the prose (different words or a different speaker), or a chronology disagreement across the two media. Tuned to ignore ordinary medium-translation compression/reordering; reads the per-issue manuscript prose + comicScript.pacing. Runs one model call per hybrid issue. Returns issue-anchored findings.",
       "model": "default",
       "returnsJson": true,
       "variables": []

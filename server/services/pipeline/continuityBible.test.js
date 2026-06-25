@@ -21,9 +21,9 @@ vi.mock('../../lib/stageRunner.js', () => ({
 }));
 
 vi.mock('../../lib/contextBudget.js', () => ({
-  usableInputTokens: vi.fn(() => 100_000),
+  // Large content budget so the manuscript is never truncated in these tests.
+  manuscriptContentBudgetChars: vi.fn(() => 1_000_000),
   estimateTokens: vi.fn(() => 100),
-  CHARS_PER_TOKEN: 4,
 }));
 
 const seriesFixture = new Map();

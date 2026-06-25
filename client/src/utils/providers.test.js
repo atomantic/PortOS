@@ -9,6 +9,7 @@ import {
   isVisionModel,
   visionLocalModelFilter,
   localBackendForProvider,
+  effectiveModelContextWindow,
   mergeModelLists,
   modelOptionLabel,
   isTuiProvider,
@@ -233,6 +234,36 @@ describe('localBackendForProvider', () => {
     expect(localBackendForProvider({ endpoint: 'https://api.openai.com/v1', name: 'OpenAI' })).toBeNull();
     expect(localBackendForProvider({})).toBeNull();
     expect(localBackendForProvider(null)).toBeNull();
+  });
+});
+
+describe('effectiveModelContextWindow', () => {
+  it('matches known model windows before provider defaults', () => {
+    expect(effectiveModelContextWindow({ type: 'tui' }, 'gpt-5.5')).toBe(1_000_000);
+    expect(effectiveModelContextWindow({ type: 'tui' }, 'gpt-5.4')).toBe(1_000_000);
+    expect(effectiveModelContextWindow({ type: 'tui' }, 'gpt-5.4-mini')).toBe(400_000);
+    expect(effectiveModelContextWindow({ type: 'tui' }, 'gpt-5.4-nano')).toBe(128_000);
+    expect(effectiveModelContextWindow({ type: 'tui' }, 'claude-opus-4-8')).toBe(1_000_000);
+    expect(effectiveModelContextWindow({ type: 'api', endpoint: 'https://api.example.test/v1' }, 'claude-sonnet-4-6')).toBe(1_000_000);
+    expect(effectiveModelContextWindow({ type: 'api', endpoint: 'https://api.example.test/v1' }, 'us.anthropic.claude-sonnet-4-5-20250929-v1:0')).toBe(200_000);
+    expect(effectiveModelContextWindow({ type: 'api', endpoint: 'https://api.example.test/v1' }, 'claude-haiku-4-5')).toBe(200_000);
+    expect(effectiveModelContextWindow({ type: 'api', endpoint: 'https://generativelanguage.googleapis.com/v1beta' }, 'gemini-2.5-pro')).toBe(1_048_576);
+  });
+
+  it('uses canonical provider windows for configured-default process providers', () => {
+    expect(effectiveModelContextWindow({ id: 'codex-tui', type: 'tui', command: 'codex' }, CODEX_CONFIGURED_DEFAULT)).toBe(1_000_000);
+    expect(effectiveModelContextWindow({ id: 'antigravity-cli', type: 'cli', command: 'agy' }, ANTIGRAVITY_CONFIGURED_DEFAULT)).toBe(1_048_576);
+  });
+
+  it('matches the server planner for local and cloud api defaults', () => {
+    expect(effectiveModelContextWindow({ type: 'api', endpoint: 'http://localhost:8000/v1' }, 'unknown')).toBeNull();
+    expect(effectiveModelContextWindow({ type: 'api', endpoint: 'http://127.0.0.1:8000/v1' }, 'unknown')).toBeNull();
+    expect(effectiveModelContextWindow({ type: 'api', endpoint: 'https://api.example.test/v1' }, 'unknown')).toBe(128_000);
+  });
+
+  it('uses explicit contextWindow and numCtx with server precedence', () => {
+    expect(effectiveModelContextWindow({ type: 'api', endpoint: 'http://localhost:11434/v1', contextWindow: 64_000, numCtx: 32_768 }, 'unknown')).toBe(64_000);
+    expect(effectiveModelContextWindow({ type: 'api', endpoint: 'http://localhost:11434/v1', numCtx: 32_768 }, 'unknown')).toBe(32_768);
   });
 });
 

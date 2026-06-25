@@ -16,8 +16,16 @@
  * Unexpected text between panels is ignored.
  */
 import { trimTo } from './storyBible.js';
+import { normalizeSlugline } from './scenePrompt.js';
 
 const PAGE_RE = /^##\s+Page\s+([\dIVX]+)\b/i;
+// Capture everything after the page number on a `## Page N …` header so the
+// optional scene marker can be parsed off the tail (see parsePageSceneTail).
+const PAGE_WITH_TAIL_RE = /^##\s+Page\s+[\dIVX]+\s*(.*)$/i;
+// A slugline lead — `INT.`, `EXT.`, `EST.`, `INT./EXT.`, `I/E`. Used to decide
+// whether a header tail with no explicit `Scene N` is a scene heading (accept)
+// or just page-layout noise like `(splash)` / `- six-panel grid` (ignore).
+const SLUGLINE_LEAD_RE = /^(?:INT|EXT|EST|INT\.\/EXT|I\/E)\b/i;
 // `## Cover concept` — the optional cover-art section the comic-script
 // template emits before the first `## Page 1` header. Also accepts the
 // short `## Cover` form so a hand-edited script doesn't have to be exact.
@@ -46,6 +54,64 @@ const FIELD_RE = /^(?:\*\*)?(Description|Caption(?:\s+\d+)?|Dialogue|SFX)\s*:(?:
 
 const NONE_RE = /^\(\s*none\s*\)$/i;
 const isNoneValue = (s) => !s || NONE_RE.test(s.trim());
+
+// --- Scene markers ---------------------------------------------------------
+//
+// The comic-script stage tags each page header with the scene it belongs to —
+// `## Page 3 — Scene 2: INT. KITCHEN — NIGHT`. That scene structure is the
+// beat sheet's canonical scene list, carried down through the prose's
+// `## Scene N — Slugline` sections. Parsing it onto each page lets the render
+// path tell "continuing the same scene" (chain off the prior page's image for
+// character / environment continuity) from "new scene" (render fresh) — see
+// resolveAutoReferenceIndex in server/services/pipeline/visualStages.js.
+//
+// Both the scene number and the slugline are optional and the separator is
+// tolerant (em-dash, en-dash, hyphen, or colon). A header with no scene marker
+// (legacy scripts, bare imports) parses to `{ sceneNumber: null, sceneHeading:
+// null }`, which the render path reads as "no scene signal → don't auto-chain"
+// — preserving the pre-feature behavior for those pages.
+function parsePageSceneTail(tail) {
+  const t = (tail || '').trim();
+  if (!t) return { sceneNumber: null, sceneHeading: null };
+  // The tail must open with a separator to count as a scene marker — this
+  // guards page-layout parentheticals (`(DPS)`, `(splash)`) that legitimately
+  // follow the page number from being misread as a scene.
+  const sep = t.match(/^[—–:-]\s*(.*)$/);
+  if (!sep) return { sceneNumber: null, sceneHeading: null };
+  const rest = sep[1].trim();
+  // Explicit `Scene N` prefix: whatever follows its separator is the heading
+  // verbatim (the LLM was told to put a slugline there).
+  const sm = rest.match(/^Scene\s+(\d{1,3})\b\s*[—–:-]?\s*(.*)$/i);
+  if (sm) {
+    const heading = sm[2].trim();
+    return { sceneNumber: Number(sm[1]), sceneHeading: heading ? trimTo(heading, 200) : null };
+  }
+  // No explicit number — only treat a slugline-shaped tail as a heading so a
+  // layout note (`- six-panel grid`) doesn't masquerade as a scene.
+  if (SLUGLINE_LEAD_RE.test(rest)) {
+    return { sceneNumber: null, sceneHeading: trimTo(rest, 200) };
+  }
+  return { sceneNumber: null, sceneHeading: null };
+}
+
+/**
+ * Do two parsed comic pages belong to the SAME scene? Prefers the scene number
+ * (the stable signal); falls back to comparing sluglines (canonicalized via the
+ * shared `normalizeSlugline` — the same equality form used for scene/place
+ * matching, so `INT. KITCHEN — NIGHT` and `int. kitchen - night.` are equal)
+ * when one or both pages lack a number. Returns false when neither shares a
+ * known scene signal — so pages with no scene markers never read as "same
+ * scene" and the render path leaves them un-chained (pre-feature behavior).
+ */
+export function sameComicScene(a, b) {
+  if (!a || !b) return false;
+  if (Number.isInteger(a.sceneNumber) && Number.isInteger(b.sceneNumber)) {
+    return a.sceneNumber === b.sceneNumber;
+  }
+  const ah = normalizeSlugline(a.sceneHeading);
+  const bh = normalizeSlugline(b.sceneHeading);
+  return ah !== '' && ah === bh;
+}
 
 // --- Bare-format normalization ---------------------------------------------
 //
@@ -339,6 +405,10 @@ function parsePanelBody(lines) {
  *     for per-page editing while panels remain the source for the image
  *     prompt.
  *   - `panels`: structured panel breakdown for image-gen prompts.
+ *   - `sceneNumber` / `sceneHeading`: the scene this page belongs to, parsed
+ *     off a `## Page N — Scene M: SLUGLINE` header (both `null` when the header
+ *     carries no scene marker). The render path uses them to chain renders
+ *     within a scene and break across one — see `sameComicScene`.
  */
 export function parseComicScript(script) {
   if (typeof script !== 'string' || !script.trim()) {
@@ -409,7 +479,9 @@ export function parseComicScript(script) {
       flushPanel();
       flushPageRawText();
       if (pages.length >= PANEL_LIMITS.PAGES_MAX) break;
-      currentPage = { panels: [], rawText: '' };
+      const tail = line.match(PAGE_WITH_TAIL_RE);
+      const { sceneNumber, sceneHeading } = parsePageSceneTail(tail ? tail[1] : '');
+      currentPage = { panels: [], rawText: '', sceneNumber, sceneHeading };
       currentRawLines = [line];
       pages.push(currentPage);
       continue;
@@ -432,7 +504,7 @@ export function parseComicScript(script) {
     if (PANEL_RE.test(line)) {
       flushPanel();
       if (!currentPage) {
-        currentPage = { panels: [], rawText: '' };
+        currentPage = { panels: [], rawText: '', sceneNumber: null, sceneHeading: null };
         currentRawLines = [line];
         pages.push(currentPage);
       }

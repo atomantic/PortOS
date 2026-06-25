@@ -14,6 +14,7 @@ vi.mock('../services/runner.js', () => ({
   createRun: vi.fn(async () => ({ runId: 'run-abc12345' })),
   executeApiRun: vi.fn(),
   executeCliRun: vi.fn(),
+  extractBakedModel: vi.fn(() => null),
   hasModelFlag: vi.fn(() => false),
   patchRunMetadata: vi.fn(async () => undefined),
 }));
@@ -21,7 +22,21 @@ vi.mock('../services/runner.js', () => ({
 const providers = await import('../services/providers.js');
 const prompts = await import('../services/promptService.js');
 const runner = await import('../services/runner.js');
-const { runStagedLLM, runInlineLLM, resolveModel, extractJson } = await import('./stageRunner.js');
+const {
+  runStagedLLM,
+  runInlineLLM,
+  resolveModel,
+  extractJson,
+  DEFAULT_LARGE_CONTEXT_WINDOW,
+  CODEX_CONTEXT_WINDOW,
+  GEMINI_CONTEXT_WINDOW,
+  effectiveContextWindow,
+  knownModelContextWindow,
+  knownProviderContextWindow,
+  resolveStageContext,
+  withLocalConcurrencyGate,
+  LOCAL_LLM_MAX_CONCURRENCY,
+} = await import('./stageRunner.js');
 
 const apiProvider = (extra = {}) => ({
   id: 'mock-api', name: 'Mock', type: 'api', enabled: true, defaultModel: 'm-default', ...extra,
@@ -32,6 +47,8 @@ const cliProvider = (extra = {}) => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  runner.extractBakedModel.mockReturnValue(null);
+  runner.hasModelFlag.mockReturnValue(false);
 });
 
 describe('stageRunner — resolveModel', () => {
@@ -66,6 +83,72 @@ describe('stageRunner — resolveModel', () => {
     expect(resolveModel({}, null)).toBeNull();
     expect(resolveModel({ models: [] }, null)).toBeNull();
     expect(resolveModel({}, 'heavy')).toBeNull();
+  });
+});
+
+describe('stageRunner — context windows', () => {
+  it('resolves known model windows from the selected model id', () => {
+    expect(knownModelContextWindow('gpt-5.5')).toBe(CODEX_CONTEXT_WINDOW);
+    expect(knownModelContextWindow('gpt-5.4')).toBe(CODEX_CONTEXT_WINDOW);
+    expect(knownModelContextWindow('gpt-5.4-mini')).toBe(400_000);
+    expect(knownModelContextWindow('gpt-5.4-nano')).toBeNull();
+    expect(knownModelContextWindow('claude-opus-4-8')).toBe(1_000_000);
+    expect(knownModelContextWindow('claude-sonnet-4-6')).toBe(1_000_000);
+    expect(knownModelContextWindow('us.anthropic.claude-sonnet-4-5-20250929-v1:0')).toBe(200_000);
+    expect(knownModelContextWindow('gemini-2.5-pro')).toBe(GEMINI_CONTEXT_WINDOW);
+    expect(knownModelContextWindow('unknown-model')).toBeNull();
+  });
+
+  it('resolves configured-default provider windows by provider identity', () => {
+    expect(knownProviderContextWindow({ id: 'codex-tui', type: 'tui', command: 'codex' })).toBe(CODEX_CONTEXT_WINDOW);
+    expect(knownProviderContextWindow({ id: 'antigravity-cli', type: 'cli', command: 'agy' })).toBe(GEMINI_CONTEXT_WINDOW);
+  });
+
+  it('keeps an explicit provider contextWindow above model defaults', () => {
+    expect(effectiveContextWindow(
+      { type: 'tui', contextWindow: 64_000 },
+      'claude-opus-4-8'
+    )).toBe(64_000);
+  });
+
+  it('uses model and provider windows before provider numCtx', () => {
+    expect(effectiveContextWindow(
+      { type: 'api', endpoint: 'http://localhost:11434/v1', numCtx: 32_768 },
+      'claude-sonnet-4-6'
+    )).toBe(1_000_000);
+    expect(effectiveContextWindow(
+      { id: 'codex', type: 'cli', command: 'codex', numCtx: 32_768 },
+      'codex-configured-default'
+    )).toBe(CODEX_CONTEXT_WINDOW);
+  });
+
+  it('falls back to numCtx, large-provider default, or null', () => {
+    expect(effectiveContextWindow(
+      { type: 'api', endpoint: 'http://localhost:11434/v1', numCtx: 32_768 },
+      'unknown-local-model'
+    )).toBe(32_768);
+    expect(effectiveContextWindow(
+      { type: 'cli' },
+      'unknown-cli-model'
+    )).toBe(DEFAULT_LARGE_CONTEXT_WINDOW);
+    expect(effectiveContextWindow(
+      { type: 'api', endpoint: 'http://localhost:1234/v1' },
+      'unknown-local-model'
+    )).toBeNull();
+  });
+
+  it('budgets with the effective model when a CLI provider has a baked model flag', async () => {
+    prompts.getStage.mockReturnValue(null);
+    providers.getActiveProvider.mockResolvedValue(cliProvider({
+      args: ['--model', 'claude-opus-4-8'],
+      defaultModel: 'claude-sonnet-4-6',
+    }));
+    runner.hasModelFlag.mockReturnValue(true);
+    runner.extractBakedModel.mockReturnValue('claude-opus-4-8');
+
+    const context = await resolveStageContext('any-stage');
+    expect(context.model).toBe('claude-opus-4-8');
+    expect(context.contextWindow).toBe(1_000_000);
   });
 });
 
@@ -173,6 +256,46 @@ describe('stageRunner — runStagedLLM provider resolution', () => {
     expect(out.providerId).toBe('stage-pinned');
   });
 
+  it('lets stage.provider beat a blanket providerDefault (pin wins over run default)', async () => {
+    prompts.getStage.mockReturnValue({ provider: 'stage-pinned' });
+    providers.getProviderById.mockImplementation(async (id) => (
+      id === 'stage-pinned' ? apiProvider({ id: 'stage-pinned' }) : apiProvider({ id })
+    ));
+    runner.executeApiRun.mockImplementation(async ({ onData, onComplete }) => {
+      onData('pinned');
+      onComplete({ success: true });
+    });
+    const out = await runStagedLLM('s', {}, { providerDefault: 'run-default' });
+    expect(out.providerId).toBe('stage-pinned');
+    expect(providers.getActiveProvider).not.toHaveBeenCalled();
+  });
+
+  it('uses providerDefault when the stage has no pin', async () => {
+    prompts.getStage.mockReturnValue(null);
+    providers.getProviderById.mockImplementation(async (id) => (
+      id === 'run-default' ? apiProvider({ id: 'run-default' }) : null
+    ));
+    runner.executeApiRun.mockImplementation(async ({ onData, onComplete }) => {
+      onData('defaulted');
+      onComplete({ success: true });
+    });
+    const out = await runStagedLLM('s', {}, { providerDefault: 'run-default' });
+    expect(out.providerId).toBe('run-default');
+    expect(providers.getActiveProvider).not.toHaveBeenCalled();
+  });
+
+  it('falls through to the active provider when providerDefault is unavailable (soft default)', async () => {
+    prompts.getStage.mockReturnValue(null);
+    providers.getProviderById.mockResolvedValue(null);
+    providers.getActiveProvider.mockResolvedValue(apiProvider());
+    runner.executeApiRun.mockImplementation(async ({ onData, onComplete }) => {
+      onData('active');
+      onComplete({ success: true });
+    });
+    const out = await runStagedLLM('s', {}, { providerDefault: 'gone' });
+    expect(out.providerId).toBe('mock-api');
+  });
+
   it('throws STAGE_PROVIDER_UNAVAILABLE when stage.provider is set but disabled', async () => {
     prompts.getStage.mockReturnValue({ provider: 'pinned-but-gone' });
     providers.getProviderById.mockResolvedValue(null);
@@ -189,6 +312,68 @@ describe('stageRunner — runStagedLLM provider resolution', () => {
     prompts.getStage.mockReturnValue(null);
     providers.getActiveProvider.mockResolvedValue(null);
     await expect(runStagedLLM('s', {})).rejects.toMatchObject({ code: 'NO_PROVIDER' });
+  });
+});
+
+// Soft model-default tier (#1558): mirrors the providerDefault provider tests
+// above, one dimension over — but deliberately NOT symmetric. Precedence is
+// modelOverride (hard) > explicit stage.model pin > modelDefault (soft, Series
+// Autopilot's run model) > stage.model tier > provider default. The key
+// asymmetry (and the bug codex caught in review): nearly every stage carries a
+// *tier* value, which the run model MUST override — only an explicit model id is
+// a deliberate pin that beats the run model. Each case asserts the model carried
+// into the run record (out.model) = resolveEffectiveModel(provider, resolveModel(...)).
+describe('stageRunner — runStagedLLM model resolution (#1558)', () => {
+  const onComplete = (text) => async ({ onData, onComplete: done }) => { onData(text); done({ success: true }); };
+
+  it('lets an explicit stage.model pin beat a blanket modelDefault (deliberate pin wins)', async () => {
+    prompts.getStage.mockReturnValue({ model: 'pinned-model-id' });
+    providers.getActiveProvider.mockResolvedValue(apiProvider());
+    runner.executeApiRun.mockImplementation(onComplete('ok'));
+    const out = await runStagedLLM('s', {}, { modelDefault: 'run-model' });
+    expect(out.model).toBe('pinned-model-id');
+  });
+
+  it('lets modelDefault OVERRIDE a stage TIER value (the run model applies to unpinned/tier stages)', async () => {
+    // A tier (default/quick/coding/heavy) is NOT a deliberate pin — the run model
+    // must win, else launching autopilot with a model is a no-op on ~every stage.
+    prompts.getStage.mockReturnValue({ model: 'heavy' });
+    providers.getActiveProvider.mockResolvedValue(apiProvider({ heavyModel: 'h' }));
+    runner.executeApiRun.mockImplementation(onComplete('ok'));
+    const out = await runStagedLLM('s', {}, { modelDefault: 'run-model' });
+    expect(out.model).toBe('run-model');
+  });
+
+  it('resolves a stage TIER normally when no modelDefault is set (unchanged behavior)', async () => {
+    prompts.getStage.mockReturnValue({ model: 'heavy' });
+    providers.getActiveProvider.mockResolvedValue(apiProvider({ heavyModel: 'h' }));
+    runner.executeApiRun.mockImplementation(onComplete('ok'));
+    const out = await runStagedLLM('s', {});
+    expect(out.model).toBe('h');
+  });
+
+  it('uses modelDefault when the stage has no model field at all', async () => {
+    prompts.getStage.mockReturnValue(null);
+    providers.getActiveProvider.mockResolvedValue(apiProvider());
+    runner.executeApiRun.mockImplementation(onComplete('ok'));
+    const out = await runStagedLLM('s', {}, { modelDefault: 'run-model' });
+    expect(out.model).toBe('run-model');
+  });
+
+  it('lets modelOverride (hard) beat an explicit pin, a tier, and modelDefault', async () => {
+    prompts.getStage.mockReturnValue({ model: 'pinned-model-id' });
+    providers.getActiveProvider.mockResolvedValue(apiProvider());
+    runner.executeApiRun.mockImplementation(onComplete('ok'));
+    const out = await runStagedLLM('s', {}, { modelOverride: 'hard-model', modelDefault: 'run-model' });
+    expect(out.model).toBe('hard-model');
+  });
+
+  it('falls through to the provider default when no override, pin, tier, or modelDefault is set', async () => {
+    prompts.getStage.mockReturnValue(null);
+    providers.getActiveProvider.mockResolvedValue(apiProvider());
+    runner.executeApiRun.mockImplementation(onComplete('ok'));
+    const out = await runStagedLLM('s', {});
+    expect(out.model).toBe('m-default');
   });
 });
 
@@ -428,5 +613,47 @@ describe('stageRunner — runStagedLLM dispatch', () => {
       'run-abc12345',
       expect.objectContaining({ providerId: 'fallback-cli' })
     );
+  });
+});
+
+describe('withLocalConcurrencyGate', () => {
+  // Build a fn that records peak concurrency while it runs.
+  const makeTracker = () => {
+    const state = { active: 0, peak: 0 };
+    const fn = () => {
+      state.active += 1;
+      state.peak = Math.max(state.peak, state.active);
+      return new Promise((resolve) => setTimeout(() => { state.active -= 1; resolve('ok'); }, 5));
+    };
+    return { state, fn };
+  };
+
+  it('serializes concurrent calls to a LOCAL api endpoint (peak ≤ limit)', async () => {
+    const provider = { type: 'api', endpoint: 'http://localhost:11434' };
+    const { state, fn } = makeTracker();
+    await Promise.all(Array.from({ length: 6 }, () => withLocalConcurrencyGate(provider, fn)));
+    expect(state.peak).toBeLessThanOrEqual(LOCAL_LLM_MAX_CONCURRENCY);
+    expect(LOCAL_LLM_MAX_CONCURRENCY).toBe(1); // default — serialized
+  });
+
+  it('does NOT gate a remote api endpoint (runs concurrently)', async () => {
+    const provider = { type: 'api', endpoint: 'https://api.openai.com' };
+    const { state, fn } = makeTracker();
+    await Promise.all(Array.from({ length: 4 }, () => withLocalConcurrencyGate(provider, fn)));
+    expect(state.peak).toBeGreaterThan(1); // ungated
+  });
+
+  it('does NOT gate CLI/TUI providers (no endpoint)', async () => {
+    const provider = { type: 'cli', id: 'codex' };
+    const { state, fn } = makeTracker();
+    await Promise.all(Array.from({ length: 4 }, () => withLocalConcurrencyGate(provider, fn)));
+    expect(state.peak).toBeGreaterThan(1);
+  });
+
+  it('releases the slot even when the gated fn throws (no deadlock)', async () => {
+    const provider = { type: 'api', endpoint: 'http://127.0.0.1:1234' };
+    await expect(withLocalConcurrencyGate(provider, () => Promise.reject(new Error('boom')))).rejects.toThrow('boom');
+    // A subsequent call still acquires the freed slot and resolves.
+    await expect(withLocalConcurrencyGate(provider, () => Promise.resolve('after'))).resolves.toBe('after');
   });
 });

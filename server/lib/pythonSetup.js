@@ -265,6 +265,45 @@ export function invalidateAudioldm2Python() {
   cachedAudioldm2Python = null;
 }
 
+// ACE-Step (third music backend — full-song generation with vocals) runs in its
+// own venv at ~/.portos/venv-acestep — the `acestep` pip package + torch, kept
+// apart from the MusicGen MLX pile and the AudioLDM2 diffusers pile. ACE-Step
+// installs as a pip package (no clone to import from), so the sidecar normally
+// imports it straight from the venv; the optional --runtime-dir points at a
+// vendored checkout if ever needed. `INSTALL_ACESTEP=1 bash
+// scripts/setup-image-video.sh` provisions the venv. ACE-Step resolves its own
+// model checkpoints (auto-download to ~/.cache/ace-step/checkpoints).
+const ACESTEP_VENV_CANDIDATES = IS_WIN
+  ? [
+      join(HOME, '.portos', 'venv-acestep', 'Scripts', 'python.exe'),
+      join(PATHS.data, 'python', 'venv-acestep', 'Scripts', 'python.exe'),
+    ]
+  : [
+      join(HOME, '.portos', 'venv-acestep', 'bin', 'python3'),
+      join(PATHS.data, 'python', 'venv-acestep', 'bin', 'python3'),
+    ];
+
+export const ACESTEP_VENV_DEFAULT = ACESTEP_VENV_CANDIDATES[0];
+
+// Optional dir prepended to the sidecar's sys.path before importing acestep.
+// Empty sentinel (the sidecar's --runtime-dir is a no-op when blank) — ACE-Step
+// imports from the venv's installed package; kept for argv parity with the other
+// music sidecars and so a vendored checkout can be pointed at later.
+export const ACESTEP_RUNTIME_DIR = '';
+
+let cachedAcestepPython = null;
+export function resolveAcestepPython() {
+  if (cachedAcestepPython && existsSync(cachedAcestepPython)) return cachedAcestepPython;
+  for (const p of ACESTEP_VENV_CANDIDATES) {
+    if (existsSync(p)) { cachedAcestepPython = p; return p; }
+  }
+  return null;
+}
+
+export function invalidateAcestepPython() {
+  cachedAcestepPython = null;
+}
+
 // Used by /api/image-gen/setup/* routes to validate user-supplied pythonPath
 // before exec. Single-user / Tailnet model means we trust the operator, but
 // "you can shell out to anything" is still too sharp — restrict to actual

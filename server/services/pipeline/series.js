@@ -50,6 +50,11 @@ export const NAME_MAX = 200;
 export const LOGLINE_MAX = 500;
 export const PREMISE_MAX = 8000;
 export const STYLE_NOTES_MAX = 4000;
+// Author-supplied real-world fact reference (#1588) — the ground-truth facts the
+// opt-in `research.fact-accuracy` editorial check reconciles the prose against
+// (e.g. "Paris is the capital of France"; physiological limits). Generous cap so
+// a grounded historical/SFF series can paste a sizable fact sheet.
+export const FACT_REFERENCE_MAX = 8000;
 export const STYLE_PROMPT_OVERRIDE_MAX = 1000;
 // How `stylePromptOverride` composes with the universe's style influences:
 //   'prepend'  — override leads, universe trails (the historical default
@@ -110,6 +115,13 @@ export const AUTOPILOT_STATUSES = Object.freeze(['idle', 'running', 'paused', 'd
 export const AUTOPILOT_STEP_MAX = 80;
 export const AUTOPILOT_ERROR_MAX = 1000;
 const AUTOPILOT_FINDING_SEVERITIES = ['high', 'medium', 'low'];
+// Why a bounded-retry gate paused the run. Convergence gates (#1571):
+// `maxRounds` (the verify→resolve loop ran out of rounds) vs `divergence` (it
+// stopped converging early — the blocking count failed to drop). Child runners
+// (#1574): `childFailed` (a delegated beats/text run produced no output after
+// its retry budget). Lets the UI classify the pause without string-matching the
+// reason text. Any other pause (budget, error, a capability gap) leaves this null.
+export const AUTOPILOT_PAUSE_KINDS = Object.freeze(['maxRounds', 'divergence', 'childFailed']);
 
 export const sanitizeAutopilot = (raw) => {
   if (!raw || typeof raw !== 'object') return null;
@@ -135,8 +147,100 @@ export const sanitizeAutopilot = (raw) => {
     currentStep: trimTo(raw.currentStep, AUTOPILOT_STEP_MAX) || null,
     residualFindings,
     lastError: trimTo(raw.lastError, AUTOPILOT_ERROR_MAX) || null,
+    // No `pipelineSeries` schema-gate bump for this (or any) autopilot field: the
+    // marker is transient, regenerated-every-run status, NOT durable creative
+    // content. Unlike readerMap/styleGuide/characterArcs (gated because an LWW
+    // strip is real data loss), a stale peer that drops pauseKind just briefly
+    // shows a generic "paused" banner until the next run re-stamps it.
+    pauseKind: AUTOPILOT_PAUSE_KINDS.includes(raw.pauseKind) ? raw.pauseKind : null,
+    // #1572 — a `done` run that filed blocking script-craft gaps (the advisory
+    // craft gate) carries the count here so the marker can qualify "complete"
+    // instead of reporting clean while downstream rendering is still blocked.
+    // Same transient-marker rationale as pauseKind: no schema-gate bump.
+    craftGapIssues: toCount(raw.craftGapIssues),
+    craftGapFindings: toCount(raw.craftGapFindings),
+    // #1573 — count of editorial checks that errored during the run's checks
+    // pass. A `done` run with errored>0 didn't actually evaluate those checks, so
+    // the UI flags it instead of reporting clean. Same transient-marker rationale
+    // as craftGap* / pauseKind: no schema-gate bump.
+    editorialCheckErrors: toCount(raw.editorialCheckErrors),
+    // #1579 — the per-check / per-issue breakdown that drove an editorial-health
+    // pause, so the UI / resume banner can render *why* without re-hitting the
+    // health API. Null on any non-health pause. Same transient-marker rationale
+    // as pauseKind / craftGap*: no schema-gate bump.
+    healthBreakdown: sanitizeHealthBreakdown(raw.healthBreakdown),
     updatedAt: isStr(raw.updatedAt) ? raw.updatedAt : null,
   };
+};
+
+// Bound the wire shape of a `summarizeEditorialBlockers` breakdown stamped onto
+// a paused marker (#1579). Null unless it carries at least a numeric score —
+// drops a hand-edited/older-peer blob that lacks the expected shape.
+const HEALTH_BREAKDOWN_MAX_ROWS = 10;
+const HEALTH_CHECK_ID_MAX = 120;
+const sanitizeHealthBreakdown = (raw) => {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const topChecks = (Array.isArray(raw.topChecks) ? raw.topChecks : [])
+    .map((c) => (c && typeof c === 'object' && isStr(c.checkId) && Number.isFinite(c.count)
+      ? { checkId: trimTo(c.checkId, HEALTH_CHECK_ID_MAX), count: toCount(c.count) }
+      : null))
+    .filter(Boolean)
+    .slice(0, HEALTH_BREAKDOWN_MAX_ROWS);
+  const topIssues = (Array.isArray(raw.topIssues) ? raw.topIssues : [])
+    .map((i) => (i && typeof i === 'object' && Number.isFinite(i.open)
+      ? { issueNumber: Number.isInteger(i.issueNumber) ? i.issueNumber : null, open: toCount(i.open) }
+      : null))
+    .filter(Boolean)
+    .slice(0, HEALTH_BREAKDOWN_MAX_ROWS);
+  return { score: toCount(raw.score), open: toCount(raw.open), topChecks, topIssues };
+};
+
+// Coerce a marker counter to a non-negative integer, defaulting to 0 (so an
+// older marker that predates the field reads as "no gaps", not undefined).
+const toCount = (v) => (Number.isInteger(v) && v >= 0 ? v : 0);
+
+// Per-series editorial-check config overrides (#1591). Shape:
+//   { [checkId]: { [configKey]: number|string|boolean } }
+// Each entry overrides the GLOBAL per-check config (settings.pipelineEditorialChecks)
+// for THIS series only — the runner overlays it via `applySeriesCheckConfig`, then
+// re-validates the merged blob through the check's own Zod `configSchema`, so a
+// malformed/out-of-range value is dropped at run time and can't corrupt a pass.
+// This sanitizer therefore only bounds the WIRE shape: a plain object-of-objects
+// with primitive leaves, size-capped against a hand-edited/older-peer file. Always
+// present (empty `{}` when a series tunes nothing) — mirroring factReference/
+// styleGuide — so an explicit clear (`{}`) propagates between v8 peers via LWW
+// while a behind-sender that OMITS the key is preserved by
+// `preserveAbsentAdditiveFields` (see ADDITIVE_SERIES_FIELDS). The v8
+// `pipelineSeries` gate stops a ≤v7 peer from strip-then-LWW-ing the field.
+const ECC_MAX_CHECKS = 200;
+const ECC_MAX_KEYS_PER_CHECK = 40;
+const ECC_CHECK_ID_MAX = 120;
+const ECC_STRING_MAX = 1000;
+
+const sanitizeCheckConfigOverride = (raw) => {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const out = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (Object.keys(out).length >= ECC_MAX_KEYS_PER_CHECK) break;
+    if (typeof key !== 'string' || !key) continue;
+    if (typeof value === 'number' && Number.isFinite(value)) out[key] = value;
+    else if (typeof value === 'boolean') out[key] = value;
+    else if (typeof value === 'string') out[key] = value.slice(0, ECC_STRING_MAX);
+    // null/object/array leaves are dropped — config fields are primitives.
+  }
+  return Object.keys(out).length ? out : null;
+};
+
+const sanitizeEditorialCheckConfig = (raw) => {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const out = {};
+  for (const [checkId, override] of Object.entries(raw)) {
+    if (Object.keys(out).length >= ECC_MAX_CHECKS) break;
+    if (typeof checkId !== 'string' || !checkId || checkId.length > ECC_CHECK_ID_MAX) continue;
+    const clean = sanitizeCheckConfigOverride(override);
+    if (clean) out[checkId] = clean;
+  }
+  return out;
 };
 
 const sanitizeSeriesLocked = (raw = {}) => {
@@ -173,6 +277,7 @@ const sanitizeSeries = (raw) => {
   const createdAt = isStr(raw.createdAt) ? raw.createdAt : new Date().toISOString();
   const updatedAt = isStr(raw.updatedAt) ? raw.updatedAt : createdAt;
   const autopilot = sanitizeAutopilot(raw.autopilot);
+  const editorialCheckConfig = sanitizeEditorialCheckConfig(raw.editorialCheckConfig);
   return {
     id: raw.id,
     name,
@@ -195,6 +300,14 @@ const sanitizeSeries = (raw) => {
     characterArcs: sanitizeCharacterArcList(raw.characterArcs),
     locked: sanitizeSeriesLocked(raw.locked),
     styleNotes: trimTo(raw.styleNotes, STYLE_NOTES_MAX),
+    // Fact-checking opt-in (#1588). When true (and a non-empty `factReference`
+    // is supplied), the gated `research.fact-accuracy` editorial check runs so
+    // it never fires on pure fantasy. Defaults to false — existing series.json
+    // files (which predate these fields) migrate forward without a writer pass;
+    // first save backfills both. Wire-gated (pipelineSeries schema v7) so a
+    // factReference-unaware peer can't strip-then-LWW the loss back.
+    factCritical: raw.factCritical === true,
+    factReference: trimTo(raw.factReference, FACT_REFERENCE_MAX),
     // Per-series house style (tense/POV/audience/rating/reading-level/tone/
     // conventions). Structured companion to the free-text styleNotes above;
     // sanitizeStyleGuide returns null when empty so existing series.json files
@@ -251,6 +364,12 @@ const sanitizeSeries = (raw) => {
     // Older peers' sanitizeSeries simply drops the unknown field (forward/
     // back-compatible).
     ...(autopilot ? { autopilot } : {}),
+    // Per-series editorial-check config overrides (#1591). Always present (empty
+    // `{}` when nothing is tuned), like factReference/styleGuide, so a clear
+    // propagates between v8 peers and a behind-sender's omission is preserved (see
+    // ADDITIVE_SERIES_FIELDS). Wire-gated at pipelineSeries v8 so a ≤v7 peer can't
+    // strip-then-LWW the overrides back onto a newer peer.
+    editorialCheckConfig,
   };
 };
 
@@ -283,6 +402,8 @@ export async function createSeries(input = {}) {
     characterArcs: input.characterArcs || [],
     locked: input.locked || {},
     styleNotes: input.styleNotes || '',
+    factCritical: input.factCritical === true,
+    factReference: input.factReference || '',
     styleGuide: input.styleGuide || null,
     titleLogo: input.titleLogo || '',
     author: input.author || '',
@@ -297,6 +418,10 @@ export async function createSeries(input = {}) {
     ephemeral: input.ephemeral === true,
     // Importer-orphan marker (issue #727) — see sanitizeSeries.
     importDraft: input.importDraft === true,
+    // Per-series editorial-check config overrides (#1591) — forwarded so an
+    // importer / promote flow that seeds a series with tuned thresholds keeps
+    // them; sanitizeSeries normalizes an empty/malformed map to `{}`.
+    editorialCheckConfig: input.editorialCheckConfig,
   });
   await store().saveOne(created.id, created);
   // Skip auto-subscribe for ephemeral series — wire-side push would short-
@@ -445,6 +570,11 @@ export async function updateSeries(id, patch = {}) {
       // Wholesale replace — `locked: {}` clears every lock; omission preserves.
       ...('locked' in patch ? { locked: patch.locked } : {}),
       ...('styleNotes' in patch ? { styleNotes: patch.styleNotes } : {}),
+      // Fact-checking opt-in + author fact reference (#1588). `factReference: ''`
+      // clears the reference; omission preserves. Sanitizer normalizes a
+      // non-true `factCritical` back to false.
+      ...('factCritical' in patch ? { factCritical: patch.factCritical } : {}),
+      ...('factReference' in patch ? { factReference: patch.factReference } : {}),
       // Wholesale replace — sanitizeStyleGuide normalizes an empty object back
       // to null (clear); omission preserves. Mirrors the arc/readerMap pattern.
       ...('styleGuide' in patch ? { styleGuide: patch.styleGuide } : {}),
@@ -467,6 +597,10 @@ export async function updateSeries(id, patch = {}) {
       // boot-recovery demotion). Wholesale replace; sanitizer normalizes a
       // non-object back to absent.
       ...('autopilot' in patch ? { autopilot: patch.autopilot } : {}),
+      // Per-series editorial-check config overrides (#1591). Wholesale replace —
+      // `{}`/`null` clears every override; omission preserves. The sanitizer drops
+      // empty/malformed entries and normalizes to `{}` (always present).
+      ...('editorialCheckConfig' in patch ? { editorialCheckConfig: patch.editorialCheckConfig } : {}),
       llm: mergedLlm,
       updatedAt: new Date().toISOString(),
     });
@@ -675,7 +809,7 @@ async function cascadeDeleteSideEffects(id) {
 // consult the RAW remote payload to tell the two apart: key absent → preserve
 // local; key present (even null/empty) → honor the intentional clear. Mirrors
 // the `universeId` hierarchy guard. See issue #1361.
-const ADDITIVE_SERIES_FIELDS = ['arc', 'seasons', 'styleGuide', 'styleNotes', 'characterArcs'];
+const ADDITIVE_SERIES_FIELDS = ['arc', 'seasons', 'styleGuide', 'styleNotes', 'characterArcs', 'factReference', 'factCritical', 'editorialCheckConfig'];
 // Additive sub-fields nested inside `arc`. A peer that predates these (readerMap
 // shipped at schema v2, tickingClock at #1289/v3) still sends an `arc` object —
 // just without these keys — so the erasure for them happens one level down.

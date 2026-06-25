@@ -19,7 +19,11 @@ const templateTaskSchema = z.object({
 
 const router = Router();
 
-const SCHEDULE_FIELDS = ['type', 'enabled', 'intervalMs', 'cronExpression', 'providerId', 'model', 'prompt', 'taskMetadata', 'runAfter'];
+const SCHEDULE_FIELDS = ['type', 'enabled', 'intervalMs', 'cronExpression', 'providerId', 'model', 'prompt', 'taskMetadata', 'runAfter',
+  // Perpetual (drain-until-done) recheck cadence: after a perpetual task drains
+  // its backlog and parks, it re-probes its work-detector on this cadence.
+  // `recheckCron` (5-field) takes precedence over `recheckIntervalMs`.
+  'recheckCron', 'recheckIntervalMs'];
 
 /**
  * Pick only defined values from body for schedule settings updates
@@ -34,6 +38,23 @@ function pickScheduleSettings(body) {
   }
   if (settings.intervalMs !== undefined && settings.intervalMs !== null && (typeof settings.intervalMs !== 'number' || settings.intervalMs < 0)) {
     throw new ServerError('intervalMs must be a non-negative number or null', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  if (settings.recheckIntervalMs !== undefined && settings.recheckIntervalMs !== null && (typeof settings.recheckIntervalMs !== 'number' || settings.recheckIntervalMs < 0)) {
+    throw new ServerError('recheckIntervalMs must be a non-negative number or null', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  if (settings.recheckCron !== undefined && settings.recheckCron !== null) {
+    if (typeof settings.recheckCron !== 'string') {
+      throw new ServerError('recheckCron must be a cron string or null', { status: 400, code: 'VALIDATION_ERROR' });
+    }
+    const trimmed = settings.recheckCron.trim();
+    // Empty string clears it; otherwise require a 5-field cron expression.
+    if (trimmed === '') {
+      settings.recheckCron = null;
+    } else if (trimmed.split(/\s+/).length !== 5) {
+      throw new ServerError('recheckCron must be a 5-field cron expression (minute hour dayOfMonth month dayOfWeek)', { status: 400, code: 'VALIDATION_ERROR' });
+    } else {
+      settings.recheckCron = trimmed;
+    }
   }
   if (settings.taskMetadata !== undefined && settings.taskMetadata !== null) {
     if (typeof settings.taskMetadata !== 'object' || Array.isArray(settings.taskMetadata)) {
@@ -194,7 +215,8 @@ router.get('/schedule/interval-types', (req, res) => {
       once: 'Runs once per app or globally, then stops',
       'on-demand': 'Only runs when manually triggered',
       custom: 'Custom interval in milliseconds',
-      cron: 'Cron expression schedule (minute hour dayOfMonth month dayOfWeek)'
+      cron: 'Cron expression schedule (minute hour dayOfMonth month dayOfWeek)',
+      perpetual: 'Drains actionable work back-to-back until none remains, then rechecks on a cadence (recheckCron / recheckIntervalMs, default daily)'
     }
   });
 });

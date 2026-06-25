@@ -16,6 +16,7 @@ const CATEGORY_LABELS = {
   reasoning: 'Reasoning',
   coding: 'Coding',
   vision: 'Image Analysis',
+  audio: 'Audio & Music',
   embedding: 'Text Embeddings',
   lightweight: 'Small & Fast',
   multilingual: 'Multilingual',

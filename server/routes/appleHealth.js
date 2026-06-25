@@ -3,7 +3,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { createReadStream, createWriteStream, promises as fs } from 'fs';
 import { uploadSingle } from '../lib/multipart.js';
-import { parseZip } from '../lib/zipStream.js';
+import { parseZip, collectZipEntry } from '../lib/zipStream.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import { healthIngestSchema } from '../lib/appleHealthValidation.js';
@@ -117,37 +117,88 @@ router.post('/import/xml', uploadXml, asyncHandler(async (req, res) => {
     const xmlPath = join(tmpdir(), `apple-health-${Date.now()}.xml`);
     let foundXml = false;
     let xmlWriteFinished = false;
+    // Each clinical-record collect is async (entries stream through an inflate
+    // pipeline), so track them and await all before resolving — otherwise
+    // 'close' can fire and drop records whose buffers haven't finished.
+    const clinicalReads = [];
+
+    const src = createReadStream(filePath);
+    const parser = parseZip();
+    let xmlWriteStream = null;
 
     await new Promise((resolve, reject) => {
       let settled = false;
-      const settle = (fn) => (...args) => { if (!settled) { settled = true; fn(...args); } };
+      const settle = (fn) => (...args) => {
+        if (settled) return;
+        settled = true;
+        // On failure, tear down extraction immediately: stop the read stream,
+        // the ZIP parser, and any in-flight XML write so nothing keeps consuming
+        // work — and, crucially, so a buffered XML write can't re-create xmlPath
+        // right after the cleanup below unlinks it (the write-after-unlink race
+        // chatgptZipImport guards against). Destroying the write stream discards
+        // its pending writes, so the post-reject unlink is final.
+        if (fn === reject) {
+          src.destroy();
+          parser.destroy?.();
+          xmlWriteStream?.destroy();
+        }
+        fn(...args);
+      };
 
-      createReadStream(filePath)
-        .pipe(parseZip())
+      // `.pipe()` doesn't forward source errors, so handle a read failure on the
+      // upload stream explicitly (otherwise it would throw unhandled).
+      src.on('error', settle(reject));
+      src
+        .pipe(parser)
         .on('entry', (entry) => {
           if (entry.path === 'apple_health_export/export.xml' || entry.path === 'export.xml') {
             foundXml = true;
-            const ws = createWriteStream(xmlPath);
-            entry.pipe(ws)
+            xmlWriteStream = createWriteStream(xmlPath);
+            entry.pipe(xmlWriteStream)
               .on('finish', () => { xmlWriteFinished = true; })
               .on('error', settle(reject));
           } else if (entry.path.includes('clinical_records/') && entry.path.endsWith('.json')) {
-            // Buffer clinical record JSON files (~1-5KB each)
-            const chunks = [];
-            entry.on('data', (chunk) => chunks.push(chunk));
-            entry.on('end', () => clinicalJsons.push(Buffer.concat(chunks).toString('utf-8')));
+            // Buffer clinical record JSON files (~1-5KB each). parseZip() entries
+            // aren't EventEmitters (no entry.on('data'/'end') — that throws), so
+            // pipe into a collecting Writable via the shared helper (which applies
+            // MAX_ZIP_MEMBER_BYTES) and track the read so 'close' can await it.
+            clinicalReads.push(
+              collectZipEntry(entry)
+                .then((buf) => { clinicalJsons.push(buf.toString('utf-8')); })
+                .catch(settle(reject))
+            );
           } else {
             entry.autodrain();
           }
         })
         .on('close', () => {
           if (!foundXml) return settle(reject)(new ServerError('ZIP does not contain export.xml', { status: 400, code: 'BAD_REQUEST' }));
-          // Wait briefly for XML write stream to finish if close fires first
-          if (xmlWriteFinished) return settle(resolve)();
-          const check = setInterval(() => { if (xmlWriteFinished) { clearInterval(check); settle(resolve)(); } }, XML_WRITE_POLL_INTERVAL_MS);
-          setTimeout(() => { clearInterval(check); settle(resolve)(); }, XML_WRITE_TIMEOUT_MS);
+          // Resolve once the XML write stream has flushed AND every clinical
+          // record collect has finished. XML completion is signaled via the
+          // polled flag; the clinical collects are awaited as promises.
+          const finalize = () => Promise.all(clinicalReads).then(settle(resolve));
+          if (xmlWriteFinished) return finalize();
+          const check = setInterval(() => { if (xmlWriteFinished) { clearInterval(check); clearTimeout(timer); finalize(); } }, XML_WRITE_POLL_INTERVAL_MS);
+          const timer = setTimeout(() => { clearInterval(check); finalize(); }, XML_WRITE_TIMEOUT_MS);
         })
         .on('error', settle(reject));
+    }).catch(async (err) => {
+      // A rejected parse (missing export.xml, or an oversized/corrupt clinical
+      // record member) would otherwise orphan the uploaded ZIP and any partial
+      // extracted XML on disk. Clean both up before the error bubbles to the
+      // centralized middleware (mirrors chatgptZipImport's reject cleanup).
+      //
+      // settle(reject) already destroy()'d xmlWriteStream, but createWriteStream
+      // opens its fd asynchronously and can finish creating xmlPath *after* an
+      // early destroy — so unlinking immediately can no-op and leave the temp
+      // file behind. Wait for the stream to emit 'close' (the fd is fully
+      // opened-and-closed by then) before unlinking.
+      if (xmlWriteStream && !xmlWriteStream.closed) {
+        await new Promise((res) => xmlWriteStream.once('close', res));
+      }
+      await fs.unlink(filePath).catch(() => {});
+      await fs.unlink(xmlPath).catch(() => {});
+      throw err;
     });
 
     await fs.unlink(filePath);

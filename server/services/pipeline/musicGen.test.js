@@ -62,8 +62,8 @@ describe('AUDIOLDM2_MODELS registry', () => {
 });
 
 describe('ENGINES backend registry', () => {
-  it('exposes both backends with the fields the route + UI consume', () => {
-    expect(Object.keys(ENGINES).sort()).toEqual(['audioldm2', 'musicgen']);
+  it('exposes all backends with the fields the route + UI consume', () => {
+    expect(Object.keys(ENGINES).sort()).toEqual(['acestep', 'audioldm2', 'musicgen']);
     for (const engine of Object.values(ENGINES)) {
       expect(typeof engine.id).toBe('string');
       expect(typeof engine.name).toBe('string');
@@ -171,6 +171,40 @@ describe('buildSidecarArgs', () => {
   it('passes the runtime-dir flag (default per engine)', () => {
     const { args } = buildSidecarArgs({ ...base, engineId: 'audioldm2' });
     expect(args).toContain('--runtime-dir');
+  });
+
+  it('threads --lyrics ONLY for lyric-aware engines (acestep)', () => {
+    const ace = buildSidecarArgs({ ...base, engineId: 'acestep', repo: 'ACE-Step/ACE-Step-v1-3.5B', lyrics: '[verse]\nhello' });
+    expect(ace.args[0]).toMatch(/generate_acestep\.py$/);
+    expect(ace.args).toContain('--lyrics');
+    expect(ace.args[ace.args.indexOf('--lyrics') + 1]).toBe('[verse]\nhello');
+    // Non-lyric engines never get the flag, even when lyrics are passed.
+    const mg = buildSidecarArgs({ ...base, engineId: 'musicgen', lyrics: 'ignored' });
+    expect(mg.args).not.toContain('--lyrics');
+    const ald = buildSidecarArgs({ ...base, engineId: 'audioldm2', lyrics: 'ignored' });
+    expect(ald.args).not.toContain('--lyrics');
+  });
+
+  it('sends an empty --lyrics for acestep when none provided (never undefined)', () => {
+    const { args } = buildSidecarArgs({ ...base, engineId: 'acestep' });
+    expect(args).toContain('--lyrics');
+    expect(args[args.indexOf('--lyrics') + 1]).toBe('');
+  });
+});
+
+describe('acestep engine entry', () => {
+  it('is lyric-aware, fixed-checkpoint, and uses the acestep sidecar', () => {
+    expect(ENGINES.acestep.lyrics).toBe(true);
+    expect(ENGINES.acestep.customModels).toBe(false); // single foundation checkpoint
+    expect(ENGINES.acestep.scriptPath).toMatch(/generate_acestep\.py$/);
+    expect(ENGINES.acestep.installEnv).toBe('INSTALL_ACESTEP');
+  });
+
+  it('the other engines are NOT lyric-aware but DO accept custom HF checkpoints', () => {
+    expect(ENGINES.musicgen.lyrics).toBeUndefined();
+    expect(ENGINES.audioldm2.lyrics).toBeUndefined();
+    expect(ENGINES.musicgen.customModels).toBe(true);
+    expect(ENGINES.audioldm2.customModels).toBe(true);
   });
 });
 

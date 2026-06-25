@@ -14,9 +14,10 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
-import { validateRequest } from '../../lib/validation.js';
+import { validateRequest, MAX_CONVERGENCE_ROUNDS } from '../../lib/validation.js';
 import * as seriesSvc from '../../services/pipeline/series.js';
 import * as autopilot from '../../services/pipeline/seriesAutopilot.js';
+import { READINESS_GATES } from '../../services/pipeline/editorialScore.js';
 import { mapServiceError, providerOverrideShape } from './shared.js';
 
 const router = Router();
@@ -31,9 +32,35 @@ const autopilotStartSchema = z.object({
   target: z.enum(['auto', 'text', 'visual']).optional().default('auto'),
   // Create CoS tasks for capability gaps (Phase 3).
   fileGaps: z.boolean().optional().default(false),
-  // Convergence bounds for the verify/review loops (0 = skip that gate).
-  maxArcVerifyRounds: z.number().int().min(0).max(5).optional(),
-  maxEditorialRounds: z.number().int().min(0).max(5).optional(),
+  // Restrict a multi-format (comic+tv) series to one format's scripts for this
+  // run — e.g. ['comic'] produces the comic draft and skips teleplay generation.
+  // Absent/empty = author every format the series targets.
+  targetFormats: z.array(z.enum(['comic', 'tv'])).optional(),
+  // Per-run convergence bounds for the verify/review loops (0 = skip that gate).
+  // When omitted, the autopilot falls back to the persisted
+  // pipelineEditorialChecks.{maxArcVerifyRounds,maxEditorialRounds,maxBeatContinuityRounds}
+  // setting, then to the module default. Cap mirrors the settings schema so the
+  // UI knob and a direct API call agree on the ceiling.
+  maxArcVerifyRounds: z.number().int().min(0).max(MAX_CONVERGENCE_ROUNDS).optional(),
+  maxEditorialRounds: z.number().int().min(0).max(MAX_CONVERGENCE_ROUNDS).optional(),
+  maxBeatContinuityRounds: z.number().int().min(0).max(MAX_CONVERGENCE_ROUNDS).optional(),
+  // Per-run retry budget for a failed delegated child runner (beats/text) before
+  // the autopilot escalates to a pause (#1574). 0 = single attempt, no retry.
+  // Per-run only (no persisted default); falls back to MAX_CHILD_RETRIES. Shares
+  // the convergence ceiling so a direct API call can't request an absurd budget.
+  maxChildRetries: z.number().int().min(0).max(MAX_CONVERGENCE_ROUNDS).optional(),
+  // Per-run editorial-check subset (#1575). When present, the editorial-checks
+  // pass runs ONLY these check ids instead of all enabled checks — pilot one new
+  // check, or skip an expensive one, without toggling the global enabled set.
+  // Absent/empty = run every enabled check (the default). Per-run only (no
+  // persisted default); unknown/disabled ids are silently ignored by the runner.
+  editorialCheckIds: z.array(z.string().min(1)).optional(),
+  // Per-run editorial-health readiness gate override (#1580). When omitted, the
+  // gate falls back to the persisted pipelineEditorialChecks.readinessGate, then
+  // the service default — so loosening (or tightening) the "manuscript clean" bar
+  // for one run no longer requires editing global settings. Enum shares the
+  // canonical READINESS_GATES set so the API and the scorer can't drift.
+  readinessGate: z.enum(READINESS_GATES).optional(),
 });
 
 router.post('/series/:id/autopilot/start', asyncHandler(async (req, res) => {

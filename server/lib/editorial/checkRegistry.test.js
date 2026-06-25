@@ -10,7 +10,9 @@ import {
   assertValidChecks,
   resolveCheckConfig,
   resolveCheckState,
+  resolveCheckSeverity,
   getEnabledChecks,
+  applySeriesCheckConfig,
   buildCustomCheck,
   buildCustomCheckPrompt,
   isValidCustomCheckDef,
@@ -28,13 +30,23 @@ import {
   EDITORIAL_SETUP_DIGEST_CHARS,
   EDITORIAL_SETUP_DIGEST_SOURCE,
   authoredSetupPayoffSummary,
+  authoredPayoffsSummary,
   authoredCliffhangerSummary,
   sceneGroundingSummary,
   characterVoiceProfiles,
+  intendedVoiceSummary,
   plotlineCoverageSummary,
   scenePovSummary,
+  secondaryCharacterPresenceSummary,
   declaredThemesSummary,
   canonRosterNamesSummary,
+  canonCharacterStatesSummary,
+  canonCharacterTraitsSummary,
+  continuityLedgerSummary,
+  proseStageIssues,
+  renderComicForProseSync,
+  proseSyncPairs,
+  PROSE_SYNC_PROSE_CHAR_CAP,
 } from './checkRegistry.js';
 
 const NAMING = 'naming.dissimilar-names';
@@ -49,6 +61,11 @@ const PLOT_STRUCTURE = 'plot.structure-momentum';
 const HEAD_HOPPING = 'pov.head-hopping';
 const THEME_COHERENCE = 'theme.coherence';
 const UNMODELED_NAMES = 'roster.unmodeled-names';
+const TIMELINE_CONTRADICTION = 'continuity.timeline-contradiction';
+const CHARACTER_CONSISTENCY = 'character.consistency';
+const CLIMAX_AGENCY = 'arc.climax-agency';
+const REACTION_PROPORTIONALITY = 'emotion.reaction-proportionality';
+const SECONDARY_ARC = 'character.secondary-arc';
 
 // A minimal valid stored custom-check definition.
 const customDef = (over = {}) => ({
@@ -94,6 +111,28 @@ describe('editorial check registry — shape invariants', () => {
 
   it('getCheck returns null for an unknown id', () => {
     expect(getCheck('does.not-exist')).toBeNull();
+  });
+
+  it('fact-accuracy check is opt-in and gated on factCritical + a reference + manuscript (#1588)', () => {
+    const check = getCheck('research.fact-accuracy');
+    expect(check).toBeTruthy();
+    expect(check.kind).toBe('llm');
+    expect(check.scope).toBe('series');
+    // Registry-enabled like the other content-gated checks (comic/visual) — the
+    // GATE is the opt-in, not the enabled flag. A disabled check would be filtered
+    // out before the per-series gate ran, so the series fact-critical flag alone
+    // would never trigger it.
+    expect(check.defaultEnabled).toBe(true);
+    expect(check.sources).toContain('series.factReference');
+
+    const manuscript = 'Some prose.';
+    // All three preconditions present → gate opens.
+    expect(check.gate({ manuscript, series: { factCritical: true, factReference: 'Paris is in France.' } })).toBe(true);
+    // Missing any one → gate stays closed.
+    expect(check.gate({ manuscript, series: { factCritical: false, factReference: 'Paris is in France.' } })).toBe(false);
+    expect(check.gate({ manuscript, series: { factCritical: true, factReference: '   ' } })).toBe(false);
+    expect(check.gate({ manuscript: '', series: { factCritical: true, factReference: 'Paris is in France.' } })).toBe(false);
+    expect(check.gate({ manuscript, series: null })).toBe(false);
   });
 });
 
@@ -212,6 +251,103 @@ describe('editorial check registry — config + state resolution', () => {
 
     const subset = getEnabledChecks({}, [NAMING]).map((x) => x.check.id);
     expect(subset).toEqual([NAMING]);
+  });
+});
+
+describe('applySeriesCheckConfig — per-series config overrides (#1591)', () => {
+  const LETTERING = 'comic.lettering-density';
+  const enabledFor = (id) => getEnabledChecks({}, [id]);
+
+  it('returns the input unchanged when there are no overrides', () => {
+    const enabled = enabledFor(NAMING);
+    expect(applySeriesCheckConfig(enabled, null)).toBe(enabled);
+    expect(applySeriesCheckConfig(enabled, undefined)).toBe(enabled);
+    expect(applySeriesCheckConfig(enabled, [])).toBe(enabled); // non-plain-object → ignored
+    expect(applySeriesCheckConfig(enabled, {})).toBe(enabled); // empty map, no matching id
+  });
+
+  it('overlays a per-series threshold over the global config (override key wins)', () => {
+    const enabled = enabledFor(LETTERING);
+    const globalBalloon = enabled[0].config.maxWordsPerBalloon;
+    const out = applySeriesCheckConfig(enabled, { [LETTERING]: { maxWordsPerBalloon: 12 } });
+    expect(out[0].config.maxWordsPerBalloon).toBe(12);
+    // Untouched keys still resolve from the global config (merge, not replace).
+    expect(out[0].config.maxWordsPerPanel).toBe(enabled[0].config.maxWordsPerPanel);
+    // The input pair is not mutated.
+    expect(enabled[0].config.maxWordsPerBalloon).toBe(globalBalloon);
+  });
+
+  it('keeps the global config when a per-series override is out of range (no reset to defaults)', () => {
+    const enabled = enabledFor(LETTERING).map((p) => ({
+      ...p,
+      // Pretend the global config itself was tuned, to prove an invalid override
+      // falls back to THAT (not the schema defaults).
+      config: { ...p.config, maxWordsPerBalloon: 40 },
+    }));
+    const out = applySeriesCheckConfig(enabled, { [LETTERING]: { maxWordsPerBalloon: 99999 } });
+    expect(out[0].config.maxWordsPerBalloon).toBe(40);
+  });
+
+  it('ignores an override keyed to a different check / non-object override', () => {
+    const enabled = enabledFor(LETTERING);
+    const base = enabled[0].config.maxWordsPerBalloon;
+    expect(applySeriesCheckConfig(enabled, { [NAMING]: { minSharedSignals: 5 } })[0].config.maxWordsPerBalloon).toBe(base);
+    expect(applySeriesCheckConfig(enabled, { [LETTERING]: 'nope' })[0].config.maxWordsPerBalloon).toBe(base);
+    expect(applySeriesCheckConfig(enabled, { [LETTERING]: [1, 2] })[0].config.maxWordsPerBalloon).toBe(base);
+  });
+});
+
+describe('per-check severity override (#1596)', () => {
+  const LETTERING = 'comic.lettering-density';
+  const checksSettings = (id, severity) => ({ pipelineEditorialChecks: { checks: { [id]: { severity } } } });
+  // The opposite of a check's default so an override is observably different.
+  const flip = (id) => (getCheck(id).severityDefault === 'high' ? 'low' : 'high');
+
+  it('falls through to the registry default when no override is stored', () => {
+    const row = resolveCheckState({}).find((r) => r.id === NAMING);
+    expect(row.severity).toBe(getCheck(NAMING).severityDefault);
+    expect(row.severityOverride).toBeNull();
+  });
+
+  it('applies a valid stored override as the effective severity (baseline preserved)', () => {
+    const target = flip(NAMING);
+    const row = resolveCheckState(checksSettings(NAMING, target)).find((r) => r.id === NAMING);
+    expect(row.severity).toBe(target);
+    expect(row.severityOverride).toBe(target);
+    expect(row.severityDefault).toBe(getCheck(NAMING).severityDefault);
+  });
+
+  it('ignores an invalid stored override (falls back to the default, no phantom override)', () => {
+    const row = resolveCheckState(checksSettings(NAMING, 'critical')).find((r) => r.id === NAMING);
+    expect(row.severity).toBe(getCheck(NAMING).severityDefault);
+    expect(row.severityOverride).toBeNull();
+  });
+
+  it('resolveCheckSeverity is the shared fallback helper', () => {
+    const check = getCheck(NAMING);
+    expect(resolveCheckSeverity(check, { severity: 'medium' })).toBe('medium');
+    expect(resolveCheckSeverity(check, { severity: 'nope' })).toBe(check.severityDefault);
+    expect(resolveCheckSeverity(check, {})).toBe(check.severityDefault);
+    expect(resolveCheckSeverity(check, undefined)).toBe(check.severityDefault);
+  });
+
+  it('getEnabledChecks threads the effective severity AND the raw override for the runner', () => {
+    const target = flip(NAMING);
+    const pinned = getEnabledChecks(checksSettings(NAMING, target), [NAMING])[0];
+    expect(pinned.severity).toBe(target); // effective level (used by the catalog UI)
+    expect(pinned.severityOverride).toBe(target); // raw → authoritative force-stamp in the runner
+    const unpinned = getEnabledChecks({}, [NAMING])[0];
+    expect(unpinned.severity).toBe(getCheck(NAMING).severityDefault);
+    expect(unpinned.severityOverride).toBeNull(); // no override → no force-stamp
+  });
+
+  it('applySeriesCheckConfig preserves the severity fields through a config overlay', () => {
+    const target = flip(LETTERING);
+    const enabled = getEnabledChecks(checksSettings(LETTERING, target), [LETTERING]);
+    const out = applySeriesCheckConfig(enabled, { [LETTERING]: { maxWordsPerBalloon: 12 } });
+    expect(out[0].severity).toBe(target); // effective severity rides through untouched
+    expect(out[0].severityOverride).toBe(target); // raw override preserved for force-stamp
+    expect(out[0].config.maxWordsPerBalloon).toBe(12); // config still overlaid
   });
 });
 
@@ -641,6 +777,44 @@ describe('chekhov.setups-payoffs — LLM check (#1299)', () => {
     expect(seenVars.authoredSetups).toBe('');
   });
 
+  it('passes the configured distant-payoff issue gap as a string var (#1595)', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      config: { maxFindings: 12, distantGap: 6 },
+      callStagedLLM: async (_stage, vars) => { seenVars = vars; return { content: { findings: [] } }; },
+    });
+    await getCheck(CHEKHOV).run(ctx);
+    expect(seenVars.distantGap).toBe('6');
+  });
+
+  it('defaults the distant-payoff gap to 4 when the series omits it (#1595)', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      callStagedLLM: async (_stage, vars) => { seenVars = vars; return { content: { findings: [] } }; },
+    });
+    await getCheck(CHEKHOV).run(ctx);
+    expect(seenVars.distantGap).toBe('4');
+  });
+
+  it('disables the distant-payoff section by passing an empty var when distantGap is 0 (#1595)', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      config: { maxFindings: 12, distantGap: 0 },
+      callStagedLLM: async (_stage, vars) => { seenVars = vars; return { content: { findings: [] } }; },
+    });
+    await getCheck(CHEKHOV).run(ctx);
+    expect(seenVars.distantGap).toBe('');
+  });
+
+  it('accepts distantGap through the config schema and rejects out-of-range values (#1595)', () => {
+    const { configSchema } = getCheck(CHEKHOV);
+    expect(configSchema.parse({}).distantGap).toBe(4);
+    expect(configSchema.parse({ distantGap: 0 }).distantGap).toBe(0);
+    expect(configSchema.parse({ distantGap: 20 }).distantGap).toBe(20);
+    expect(() => configSchema.parse({ distantGap: 21 })).toThrow();
+    expect(() => configSchema.parse({ distantGap: -1 })).toThrow();
+  });
+
   it('marks a single-chunk run as the final part so whole-corpus "never fired" judgments are enabled', async () => {
     let seenVars = null;
     const ctx = wholeCtx({
@@ -690,6 +864,34 @@ describe('authoredSetupPayoffSummary (#1299)', () => {
     });
     expect(out).toContain('- a wordless dread');
     expect(out).not.toContain('Authored payoffs');
+  });
+});
+
+describe('authoredPayoffsSummary (#1583)', () => {
+  it('returns an empty string when there are no authored payoffs', () => {
+    expect(authoredPayoffsSummary(null)).toBe('');
+    expect(authoredPayoffsSummary({})).toBe('');
+    expect(authoredPayoffsSummary({ payoffs: [] })).toBe('');
+    // Hooks alone do NOT produce a payoffs block — a hook is not a climax obligation.
+    expect(authoredPayoffsSummary({ hooks: [{ label: 'Who killed the duke?' }] })).toBe('');
+  });
+
+  it('renders ONLY the payoffs (never the hooks), with an arc-position hint when present', () => {
+    const out = authoredPayoffsSummary({
+      hooks: [{ label: 'Who killed the duke?' }],
+      payoffs: [{ label: 'The butler confesses', note: 'Issue 8', atArcPosition: 9 }, { label: 'The heir returns' }],
+    });
+    expect(out).toContain('Authored payoffs');
+    expect(out).toContain('- The butler confesses — Issue 8 (arc position 9)');
+    expect(out).toContain('- The heir returns');
+    // The hook must never leak into the payoffs block.
+    expect(out).not.toContain('Who killed the duke?');
+    expect(out).not.toContain('Authored hooks');
+  });
+
+  it('drops entries with neither label nor note and falls back to note-only', () => {
+    const out = authoredPayoffsSummary({ payoffs: [{ atArcPosition: 3 }, { note: 'a quiet reckoning' }] });
+    expect(out).toContain('- a quiet reckoning');
   });
 });
 
@@ -822,6 +1024,255 @@ describe('plotlineCoverageSummary (#1310)', () => {
   });
 });
 
+describe('continuity.timeline-contradiction — LLM check (#1581)', () => {
+  const wholeCtx = (overrides = {}) => ({
+    manuscript: '# Issue 1\n\nMara died on the bridge.',
+    config: { maxFindings: 12 },
+    severityDefault: 'medium',
+    series: {},
+    canon: { characters: [{ name: 'Mara', age: 16, status: 'deceased after Issue 3' }] },
+    continuityBible: [{ category: 'age', subject: 'Mara', statement: 'is 16', issueNumber: 1 }],
+    reverseOutline: [{ sequence: 0, issueNumber: 1, heading: 'The bridge', setting: 'a bridge', charactersPresent: ['Mara'] }],
+    planManuscriptChunks: async () => ['# Issue 1\n\nMara died on the bridge.'],
+    callStagedLLM: async () => ({ content: { findings: [] } }),
+    ...overrides,
+  });
+
+  it('is registered as a series-scoped LLM check reading manuscript + canon + outline + arcs', () => {
+    const check = getCheck(TIMELINE_CONTRADICTION);
+    expect(check.kind).toBe('llm');
+    expect(check.scope).toBe('series');
+    expect(check.category).toBe('continuity');
+    expect(check.severityDefault).toBe('medium');
+    expect(check.sources).toEqual(['manuscript', 'canon', 'continuityBible', 'reverseOutline', 'series.characterArcs']);
+    expect(check.needsManuscript).toBe(true);
+  });
+
+  it('only runs when there is drafted prose to scan', () => {
+    const check = getCheck(TIMELINE_CONTRADICTION);
+    expect(check.gate({ manuscript: '' })).toBe(false);
+    expect(check.gate({ manuscript: '# Issue 1\n\nprose' })).toBeTruthy();
+  });
+
+  it('passes the manuscript, continuity ledger, canon facts, and scene map to the model and forces the continuity category', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      planManuscriptChunks: async (_stage, opts) => {
+        // Continuity ledger + canon states + scene map + character arcs all ride as trimmable context.
+        expect(opts.context).toHaveProperty('continuityLedger');
+        expect(opts.context).toHaveProperty('canonStates');
+        expect(opts.context).toHaveProperty('sceneMap');
+        expect(opts.context).toHaveProperty('characterArcs');
+        expect(opts.fixedOverheadTokens).toBeGreaterThan(0);
+        return ['# Issue 6\n\nMara walked back into the room, very much alive.'];
+      },
+      callStagedLLM: async (_stage, vars) => {
+        seenVars = vars;
+        return { content: { findings: [{ severity: 'high', issueNumber: 6, location: 'Mara — resurrection', problem: 'Mara died in Issue 3 but is alive here' }] } };
+      },
+    });
+    const findings = await getCheck(TIMELINE_CONTRADICTION).run(ctx);
+    expect(seenVars.manuscript).toBe('# Issue 6\n\nMara walked back into the room, very much alive.');
+    expect(seenVars.continuityLedger).toContain('Mara: is 16');
+    expect(seenVars.canonStates).toContain('Mara');
+    expect(seenVars.canonStates).toContain('age 16');
+    expect(seenVars.sceneMap).toContain('Issue 1: The bridge');
+    expect(findings).toHaveLength(1);
+    expect(findings[0].category).toBe('continuity');
+    expect(findings[0].location).toBe('Mara — resurrection');
+  });
+
+  it('passes empty context vars when the series has no ledger, canon, or outline', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      canon: undefined,
+      continuityBible: undefined,
+      reverseOutline: undefined,
+      callStagedLLM: async (_stage, vars) => { seenVars = vars; return { content: { findings: [] } }; },
+    });
+    await getCheck(TIMELINE_CONTRADICTION).run(ctx);
+    expect(seenVars.continuityLedger).toBe('');
+    expect(seenVars.canonStates).toBe('');
+    expect(seenVars.sceneMap).toBe('');
+    expect(seenVars.characterArcs).toBe('');
+  });
+});
+
+describe('continuityLedgerSummary (#1581)', () => {
+  it('returns an empty string when there are no usable facts', () => {
+    expect(continuityLedgerSummary(null)).toBe('');
+    expect(continuityLedgerSummary(undefined)).toBe('');
+    expect(continuityLedgerSummary([])).toBe('');
+    // A fact missing a category or statement is dropped.
+    expect(continuityLedgerSummary([{ subject: 'Mara' }, { category: 'age' }])).toBe('');
+  });
+
+  it('groups facts by category in canonical order, with prettied labels and issue tags', () => {
+    const out = continuityLedgerSummary([
+      { category: 'timeline', subject: 'The crossing', statement: 'takes eight days', issueNumber: 2 },
+      { category: 'age', subject: 'Mara', statement: 'is 16' },
+    ]);
+    expect(out).toContain('Continuity bible facts');
+    // Age (canonical order) renders before Dates & elapsed time.
+    expect(out.indexOf('Ages & birthdays')).toBeLessThan(out.indexOf('Dates & elapsed time'));
+    expect(out).toContain('- Mara: is 16');
+    expect(out).toContain('- The crossing: takes eight days (Issue 2)');
+  });
+
+  it('falls back to the raw category id for an unknown (newer-peer) category and is type-guarded', () => {
+    expect(() => continuityLedgerSummary([null, 'nope', { category: 5, statement: 'x' }])).not.toThrow();
+    const out = continuityLedgerSummary([{ category: 'mood', statement: 'the tone is grim' }]);
+    expect(out).toContain('mood:\n- the tone is grim');
+  });
+});
+
+describe('canonCharacterStatesSummary (#1581)', () => {
+  it('returns an empty string when there are no characters or no renderable facts', () => {
+    expect(canonCharacterStatesSummary(null)).toBe('');
+    expect(canonCharacterStatesSummary(undefined)).toBe('');
+    expect(canonCharacterStatesSummary({ characters: [] })).toBe('');
+    // A named character with no contradiction-relevant fact renders nothing.
+    expect(canonCharacterStatesSummary({ characters: [{ name: 'Joss' }] })).toBe('');
+    // An alias-only row (no name) is skipped.
+    expect(canonCharacterStatesSummary({ characters: [{ aliases: ['x'], age: 40 }] })).toBe('');
+  });
+
+  it('renders each character with name + aliases and the present facts', () => {
+    const out = canonCharacterStatesSummary({ characters: [
+      { name: 'Mara', aliases: ['The Captain'], age: 16, status: 'deceased after Issue 3', role: 'protagonist' },
+      { name: 'Joss', description: 'a tall man with a scar' },
+    ] });
+    expect(out).toContain('Canon character facts');
+    expect(out).toContain('- Mara (also: The Captain) — age 16; role: protagonist; status: deceased after Issue 3');
+    expect(out).toContain('- Joss — described as: a tall man with a scar');
+  });
+
+  it('accepts a numeric or string age and prefers physicalDescription over description', () => {
+    const out = canonCharacterStatesSummary({ characters: [
+      { name: 'A', age: '30s' },
+      { name: 'B', physicalDescription: 'rich', description: 'poor' },
+    ] });
+    expect(out).toContain('- A — age 30s');
+    expect(out).toContain('- B — described as: rich');
+    expect(out).not.toContain('poor');
+  });
+
+  it('is type-guarded against hand-edited / older-peer rows', () => {
+    expect(() => canonCharacterStatesSummary({ characters: [null, 'nope', { name: 'C', role: 5, age: {} }] })).not.toThrow();
+    // role is a non-string and age is a non-finite object → no facts → C drops out.
+    expect(canonCharacterStatesSummary({ characters: [{ name: 'C', role: 5, age: {} }] })).toBe('');
+  });
+});
+
+describe('character.consistency — LLM check (#1582)', () => {
+  const wholeCtx = (overrides = {}) => ({
+    manuscript: '# Issue 1\n\nMara said nothing, as always.',
+    config: { maxFindings: 12 },
+    severityDefault: 'medium',
+    series: {},
+    canon: { characters: [{ name: 'Mara', personality: 'reserved and guarded', specialTraits: 'deathly afraid of fire' }] },
+    reverseOutline: [{ sequence: 0, issueNumber: 1, heading: 'The watch', setting: 'a wall', charactersPresent: ['Mara'] }],
+    planManuscriptChunks: async () => ['# Issue 1\n\nMara said nothing, as always.'],
+    callStagedLLM: async () => ({ content: { findings: [] } }),
+    ...overrides,
+  });
+
+  it('is registered as a series-scoped LLM check reading manuscript + canon + outline + arcs', () => {
+    const check = getCheck(CHARACTER_CONSISTENCY);
+    expect(check.kind).toBe('llm');
+    expect(check.scope).toBe('series');
+    expect(check.category).toBe('character');
+    expect(check.severityDefault).toBe('medium');
+    expect(check.sources).toEqual(['manuscript', 'canon', 'reverseOutline', 'series.characterArcs']);
+    expect(check.needsManuscript).toBe(true);
+  });
+
+  it('only runs when there is drafted prose to scan', () => {
+    const check = getCheck(CHARACTER_CONSISTENCY);
+    expect(check.gate({ manuscript: '' })).toBe(false);
+    expect(check.gate({ manuscript: '# Issue 1\n\nprose' })).toBeTruthy();
+  });
+
+  it('passes the manuscript, canon traits, and scene map to the model and forces the character category', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      planManuscriptChunks: async (_stage, opts) => {
+        // Canon traits + scene map + character arcs all ride as trimmable context.
+        expect(opts.context).toHaveProperty('canonTraits');
+        expect(opts.context).toHaveProperty('sceneMap');
+        expect(opts.context).toHaveProperty('characterArcs');
+        expect(opts.fixedOverheadTokens).toBeGreaterThan(0);
+        return ['# Issue 6\n\nMara cracked a joke, suddenly the life of the party.'];
+      },
+      callStagedLLM: async (_stage, vars) => {
+        seenVars = vars;
+        return { content: { findings: [{ severity: 'medium', issueNumber: 6, location: 'Mara — personality', problem: 'Mara is reserved in canon but jokes freely here with no earned beat' }] } };
+      },
+    });
+    const findings = await getCheck(CHARACTER_CONSISTENCY).run(ctx);
+    expect(seenVars.manuscript).toBe('# Issue 6\n\nMara cracked a joke, suddenly the life of the party.');
+    expect(seenVars.canonTraits).toContain('Mara');
+    expect(seenVars.canonTraits).toContain('personality: reserved and guarded');
+    expect(seenVars.sceneMap).toContain('Issue 1: The watch');
+    expect(findings).toHaveLength(1);
+    expect(findings[0].category).toBe('character');
+    expect(findings[0].location).toBe('Mara — personality');
+  });
+
+  it('passes empty context vars when the series has no canon or outline', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      canon: undefined,
+      reverseOutline: undefined,
+      callStagedLLM: async (_stage, vars) => { seenVars = vars; return { content: { findings: [] } }; },
+    });
+    await getCheck(CHARACTER_CONSISTENCY).run(ctx);
+    expect(seenVars.canonTraits).toBe('');
+    expect(seenVars.sceneMap).toBe('');
+    expect(seenVars.characterArcs).toBe('');
+  });
+});
+
+describe('canonCharacterTraitsSummary (#1582)', () => {
+  it('returns an empty string when there are no characters or no renderable traits', () => {
+    expect(canonCharacterTraitsSummary(null)).toBe('');
+    expect(canonCharacterTraitsSummary(undefined)).toBe('');
+    expect(canonCharacterTraitsSummary({ characters: [] })).toBe('');
+    // A named character with no trait-relevant field renders nothing (age/role/status
+    // are facts, not traits — they belong to canonCharacterStatesSummary).
+    expect(canonCharacterTraitsSummary({ characters: [{ name: 'Joss', age: 40, role: 'lead' }] })).toBe('');
+    // An alias-only row (no name) is skipped.
+    expect(canonCharacterTraitsSummary({ characters: [{ aliases: ['x'], personality: 'kind' }] })).toBe('');
+  });
+
+  it('renders each character with name + aliases and the present traits', () => {
+    const out = canonCharacterTraitsSummary({ characters: [
+      { name: 'Mara', aliases: ['The Captain'], personality: 'reserved and guarded', specialTraits: 'afraid of fire', speechPattern: 'clipped, formal' },
+      { name: 'Joss', mannerisms: ['taps the table', 'never sits still'], likes: ['chess'], dislikes: ['small talk'] },
+    ] });
+    expect(out).toContain('Canon character traits');
+    expect(out).toContain('- Mara (also: The Captain) — personality: reserved and guarded; fixed traits: afraid of fire; speech: clipped, formal');
+    expect(out).toContain('- Joss — mannerisms: taps the table, never sits still; likes: chess; dislikes: small talk');
+  });
+
+  it('renders array OR string list fields and caps the list length', () => {
+    const out = canonCharacterTraitsSummary({ characters: [
+      { name: 'A', mannerisms: 'hums constantly' },
+      { name: 'B', likes: ['a', 'b', 'c', 'd', 'e', 'f', 'g'] },
+    ] });
+    expect(out).toContain('- A — mannerisms: hums constantly');
+    // first five only
+    expect(out).toContain('- B — likes: a, b, c, d, e');
+    expect(out).not.toContain('a, b, c, d, e, f');
+  });
+
+  it('is type-guarded against hand-edited / older-peer rows', () => {
+    expect(() => canonCharacterTraitsSummary({ characters: [null, 'nope', { name: 'C', personality: 5, mannerisms: {} }] })).not.toThrow();
+    // personality is a non-string and mannerisms is a non-array object → no traits → C drops out.
+    expect(canonCharacterTraitsSummary({ characters: [{ name: 'C', personality: 5, mannerisms: {} }] })).toBe('');
+  });
+});
+
 describe('theme.coherence — LLM check (#1317)', () => {
   const wholeCtx = (overrides = {}) => ({
     manuscript: '# Issue 1\n\nShe chose loyalty, and it cost her everything.',
@@ -903,6 +1354,444 @@ describe('theme.coherence — LLM check (#1317)', () => {
     });
     await getCheck(THEME_COHERENCE).run(ctx);
     expect(finals).toEqual(['', '', 'true']);
+  });
+});
+
+describe('arc.climax-agency — LLM check (#1583)', () => {
+  const wholeCtx = (overrides = {}) => ({
+    manuscript: '# Issue 1\n\nThe hero waited as the cavalry arrived.',
+    config: { maxFindings: 12 },
+    severityDefault: 'medium',
+    series: { arc: {
+      themes: ['earning forgiveness'],
+      readerMap: {
+        hooks: [{ label: 'who burned the village?' }],
+        payoffs: [{ label: 'the debt is repaid', note: 'by the protagonist' }],
+      },
+    } },
+    reverseOutline: [{ sequence: 0, issueNumber: 1, heading: 'The siege', setting: 'the gate', charactersPresent: ['Hero'] }],
+    planManuscriptChunks: async () => ['# Issue 1\n\nThe hero waited as the cavalry arrived.'],
+    callStagedLLM: async () => ({ content: { findings: [] } }),
+    ...overrides,
+  });
+
+  it('is registered as a series-scoped LLM check reading manuscript + outline + reader-map + themes', () => {
+    const check = getCheck(CLIMAX_AGENCY);
+    expect(check.kind).toBe('llm');
+    expect(check.scope).toBe('series');
+    expect(check.category).toBe('arc');
+    expect(check.severityDefault).toBe('medium');
+    expect(check.sources).toEqual(['manuscript', 'reverseOutline', 'series.arc.readerMap', 'series.arc.themes']);
+    expect(check.needsManuscript).toBe(true);
+  });
+
+  it('only runs when there is drafted prose to scan', () => {
+    const check = getCheck(CLIMAX_AGENCY);
+    expect(check.gate({ manuscript: '' })).toBe(false);
+    expect(check.gate({ manuscript: '# Issue 1\n\nprose' })).toBeTruthy();
+  });
+
+  it('passes the manuscript, authored payoffs, declared themes, and scene map and forces the arc category', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      planManuscriptChunks: async (_stage, opts) => {
+        // Authored payoffs + declared themes + scene map all ride as trimmable context.
+        expect(opts.context).toHaveProperty('authoredPayoffs');
+        expect(opts.context).toHaveProperty('declaredThemes');
+        expect(opts.context).toHaveProperty('sceneMap');
+        expect(opts.fixedOverheadTokens).toBeGreaterThan(0);
+        return ['# Issue 1\n\nThe hero waited as the cavalry arrived and won the day.'];
+      },
+      callStagedLLM: async (_stage, vars) => {
+        seenVars = vars;
+        return { content: { findings: [{ severity: 'high', issueNumber: 1, location: 'Issue 1 climax — agency', problem: 'The cavalry, not the hero, resolves the conflict' }] } };
+      },
+    });
+    const findings = await getCheck(CLIMAX_AGENCY).run(ctx);
+    expect(seenVars.manuscript).toBe('# Issue 1\n\nThe hero waited as the cavalry arrived and won the day.');
+    expect(seenVars.authoredPayoffs).toContain('the debt is repaid');
+    // Only PAYOFFS feed the climax check — a planted hook is not a climax
+    // obligation, so it must NOT appear in the authoredPayoffs block (#1583).
+    expect(seenVars.authoredPayoffs).not.toContain('who burned the village?');
+    expect(seenVars.declaredThemes).toContain('earning forgiveness');
+    expect(seenVars.sceneMap).toContain('Issue 1: The siege');
+    expect(findings).toHaveLength(1);
+    expect(findings[0].category).toBe('arc');
+    expect(findings[0].location).toBe('Issue 1 climax — agency');
+  });
+
+  it('passes empty context vars when the series has no reader-map, themes, or outline', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      series: {},
+      reverseOutline: undefined,
+      callStagedLLM: async (_stage, vars) => { seenVars = vars; return { content: { findings: [] } }; },
+    });
+    await getCheck(CLIMAX_AGENCY).run(ctx);
+    expect(seenVars.authoredPayoffs).toBe('');
+    expect(seenVars.declaredThemes).toBe('');
+    expect(seenVars.sceneMap).toBe('');
+  });
+
+  it('marks a single-chunk run as the final part so the climax verdict is enabled', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      callStagedLLM: async (_stage, vars) => { seenVars = vars; return { content: { findings: [] } }; },
+    });
+    await getCheck(CLIMAX_AGENCY).run(ctx);
+    expect(seenVars.finalPart).toBe('true');
+  });
+
+  it('flags only the LAST part as final across a chunked manuscript', async () => {
+    const finals = [];
+    const ctx = wholeCtx({
+      planManuscriptChunks: async () => ['# Issue 1\n\np1', '# Issue 2\n\np2', '# Issue 3\n\np3'],
+      callStagedLLM: async (_stage, vars) => { finals.push(vars.finalPart); return { content: { findings: [] } }; },
+    });
+    await getCheck(CLIMAX_AGENCY).run(ctx);
+    expect(finals).toEqual(['', '', 'true']);
+  });
+});
+
+describe('emotion.reaction-proportionality — LLM check (#1584)', () => {
+  const wholeCtx = (overrides = {}) => ({
+    manuscript: '# Issue 1\n\nThe bomb killed her brother. She made breakfast.',
+    config: { maxFindings: 12 },
+    severityDefault: 'medium',
+    reverseOutline: [{ sequence: 0, issueNumber: 1, heading: 'The blast', setting: 'the kitchen', charactersPresent: ['Mara'] }],
+    planManuscriptChunks: async () => ['# Issue 1\n\nThe bomb killed her brother. She made breakfast.'],
+    callStagedLLM: async () => ({ content: { findings: [] } }),
+    ...overrides,
+  });
+
+  it('is registered as a series-scoped LLM check reading manuscript + outline with category emotion', () => {
+    const check = getCheck(REACTION_PROPORTIONALITY);
+    expect(check.kind).toBe('llm');
+    expect(check.scope).toBe('series');
+    expect(check.category).toBe('emotion');
+    expect(check.severityDefault).toBe('medium');
+    expect(check.sources).toEqual(['manuscript', 'reverseOutline']);
+    expect(check.needsManuscript).toBe(true);
+  });
+
+  it('only runs when there is drafted prose to scan', () => {
+    const check = getCheck(REACTION_PROPORTIONALITY);
+    expect(check.gate({ manuscript: '' })).toBe(false);
+    expect(check.gate({ manuscript: '# Issue 1\n\nprose' })).toBeTruthy();
+  });
+
+  it('passes the manuscript + scene map to the model and forces the emotion category', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      planManuscriptChunks: async (_stage, opts) => {
+        // The scene map rides as trimmable context with a non-zero overhead.
+        expect(opts.context).toHaveProperty('sceneMap');
+        expect(opts.fixedOverheadTokens).toBeGreaterThan(0);
+        return ['# Issue 1\n\nThe bomb killed her brother. She made breakfast.'];
+      },
+      callStagedLLM: async (_stage, vars) => {
+        seenVars = vars;
+        return { content: { findings: [{ severity: 'high', issueNumber: 1, location: 'Issue 1 — Mara — under-reaction', problem: 'Her brother dies and she shows no reaction' }] } };
+      },
+    });
+    const findings = await getCheck(REACTION_PROPORTIONALITY).run(ctx);
+    expect(seenVars.manuscript).toBe('# Issue 1\n\nThe bomb killed her brother. She made breakfast.');
+    expect(seenVars.sceneMap).toContain('Issue 1: The blast');
+    expect(findings).toHaveLength(1);
+    expect(findings[0].category).toBe('emotion');
+    expect(findings[0].location).toBe('Issue 1 — Mara — under-reaction');
+  });
+
+  it('passes an empty scene map when the series has no reverse outline', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      reverseOutline: undefined,
+      callStagedLLM: async (_stage, vars) => { seenVars = vars; return { content: { findings: [] } }; },
+    });
+    await getCheck(REACTION_PROPORTIONALITY).run(ctx);
+    expect(seenVars.sceneMap).toBe('');
+  });
+
+  it('marks a single-chunk run as the final part so the under-reaction verdict is enabled', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      callStagedLLM: async (_stage, vars) => { seenVars = vars; return { content: { findings: [] } }; },
+    });
+    await getCheck(REACTION_PROPORTIONALITY).run(ctx);
+    expect(seenVars.finalPart).toBe('true');
+  });
+
+  it('flags only the LAST part as final across a chunked manuscript (under-reaction gate)', async () => {
+    const finals = [];
+    const ctx = wholeCtx({
+      planManuscriptChunks: async () => ['# Issue 1\n\np1', '# Issue 2\n\np2', '# Issue 3\n\np3'],
+      callStagedLLM: async (_stage, vars) => { finals.push(vars.finalPart); return { content: { findings: [] } }; },
+    });
+    await getCheck(REACTION_PROPORTIONALITY).run(ctx);
+    expect(finals).toEqual(['', '', 'true']);
+  });
+});
+
+describe('secondaryCharacterPresenceSummary (#1585)', () => {
+  it('tallies recurring NON-POV characters, excluding anyone who ever holds POV', () => {
+    const summary = secondaryCharacterPresenceSummary([
+      { sequence: 0, issueNumber: 1, povCharacter: 'Mara', charactersPresent: ['Mara', 'Joss', 'Reza'] },
+      { sequence: 1, issueNumber: 2, povCharacter: 'Mara', charactersPresent: ['Mara', 'Joss'] },
+      { sequence: 2, issueNumber: 3, povCharacter: 'Joss', charactersPresent: ['Joss', 'Reza'] },
+    ]);
+    expect(summary).toContain('Recurring non-POV characters');
+    // Reza is present in 2 scenes and never holds POV → recurring secondary.
+    expect(summary).toContain('Reza: present in 2 scenes (issues 1–3)');
+    // Joss holds POV in scene 3, so although present in 3 scenes they are a POV
+    // character (judged by pov.justified) and excluded entirely.
+    expect(summary).not.toContain('Joss:');
+    // Mara is the POV holder throughout → never a secondary.
+    expect(summary).not.toContain('Mara:');
+  });
+
+  it('drops a one-scene walk-on below the recurrence threshold', () => {
+    const summary = secondaryCharacterPresenceSummary([
+      { sequence: 0, issueNumber: 1, povCharacter: 'Mara', charactersPresent: ['Mara', 'Cole'] },
+    ]);
+    // Cole appears once → below minScenes default of 2 → no roster.
+    expect(summary).toBe('');
+  });
+
+  it('respects a raised minScenes threshold', () => {
+    const scenes = [
+      { sequence: 0, issueNumber: 1, povCharacter: 'Mara', charactersPresent: ['Mara', 'Reza'] },
+      { sequence: 1, issueNumber: 2, povCharacter: 'Mara', charactersPresent: ['Mara', 'Reza'] },
+    ];
+    // Reza appears in 2 scenes: surfaces at the default but not at minScenes 3.
+    expect(secondaryCharacterPresenceSummary(scenes, { minScenes: 2 })).toContain('Reza');
+    expect(secondaryCharacterPresenceSummary(scenes, { minScenes: 3 })).toBe('');
+  });
+
+  it('counts a character once per scene even if listed twice', () => {
+    const summary = secondaryCharacterPresenceSummary([
+      { sequence: 0, issueNumber: 1, povCharacter: 'Mara', charactersPresent: ['Reza', 'reza'] },
+      { sequence: 1, issueNumber: 2, povCharacter: 'Mara', charactersPresent: ['Reza'] },
+    ]);
+    // Two scenes, not three — the in-scene duplicate collapses by normalized name.
+    expect(summary).toContain('Reza: present in 2 scenes');
+  });
+
+  it('returns "" when there are no scenes', () => {
+    expect(secondaryCharacterPresenceSummary([])).toBe('');
+    expect(secondaryCharacterPresenceSummary(null)).toBe('');
+    expect(secondaryCharacterPresenceSummary(undefined)).toBe('');
+  });
+
+  it('tolerates malformed scenes (peer-sync resilience) without throwing', () => {
+    expect(() => secondaryCharacterPresenceSummary([
+      null,
+      { sequence: 1, povCharacter: 99, charactersPresent: 'not-an-array' },
+      { sequence: 2, povCharacter: 'Mara', charactersPresent: [1, null, 'Reza'] },
+      { sequence: 3, povCharacter: 'Mara', charactersPresent: ['Reza'] },
+    ])).not.toThrow();
+    const summary = secondaryCharacterPresenceSummary([
+      { sequence: 2, povCharacter: 'Mara', charactersPresent: [1, null, 'Reza'] },
+      { sequence: 3, povCharacter: 'Mara', charactersPresent: ['Reza'] },
+    ]);
+    expect(summary).toContain('Reza: present in 2 scenes');
+  });
+});
+
+describe('character.secondary-arc — LLM check (#1585)', () => {
+  const wholeCtx = (overrides = {}) => ({
+    manuscript: '# Issue 1\n\nReza poured the coffee, said nothing, and left — as always.',
+    config: { minScenes: 2, maxFindings: 12 },
+    severityDefault: 'low',
+    canon: { characters: [{ name: 'Reza', personality: 'stoic and quiet' }] },
+    reverseOutline: [
+      { sequence: 0, issueNumber: 1, heading: 'The diner', povCharacter: 'Mara', charactersPresent: ['Mara', 'Reza'] },
+      { sequence: 1, issueNumber: 2, heading: 'The diner again', povCharacter: 'Mara', charactersPresent: ['Mara', 'Reza'] },
+    ],
+    planManuscriptChunks: async () => ['# Issue 1\n\nReza poured the coffee, said nothing, and left — as always.'],
+    callStagedLLM: async () => ({ content: { findings: [] } }),
+    ...overrides,
+  });
+
+  it('is registered as a series-scoped LLM check reading manuscript + outline + canon', () => {
+    const check = getCheck(SECONDARY_ARC);
+    expect(check.kind).toBe('llm');
+    expect(check.scope).toBe('series');
+    expect(check.category).toBe('arc');
+    expect(check.severityDefault).toBe('low');
+    expect(check.sources).toEqual(['manuscript', 'reverseOutline', 'canon']);
+    expect(check.needsManuscript).toBe(true);
+  });
+
+  it('only runs when there is drafted prose to scan', () => {
+    const check = getCheck(SECONDARY_ARC);
+    expect(check.gate({ manuscript: '' })).toBe(false);
+    expect(check.gate({ manuscript: '# Issue 1\n\nprose' })).toBeTruthy();
+  });
+
+  it('passes the manuscript, recurring secondary roster, canon names roster, and canon traits and forces the arc category', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      planManuscriptChunks: async (_stage, opts) => {
+        expect(opts.context).toHaveProperty('secondaryCast');
+        expect(opts.context).toHaveProperty('canonRoster');
+        expect(opts.context).toHaveProperty('canonTraits');
+        expect(opts.fixedOverheadTokens).toBeGreaterThan(0);
+        return ['# Issue 1\n\nReza poured the coffee, said nothing, and left — as always.'];
+      },
+      callStagedLLM: async (_stage, vars) => {
+        seenVars = vars;
+        return { content: { findings: [{ severity: 'low', issueNumber: 2, location: 'Issue 2 — Reza — flat arc', problem: 'Reza never changes' }] } };
+      },
+    });
+    const findings = await getCheck(SECONDARY_ARC).run(ctx);
+    expect(seenVars.secondaryCast).toContain('Reza');
+    // Canon names roster surfaces every named bible character (so the modeled-vs-
+    // incidental distinction works even for a trait-less row), and the traits
+    // block carries the established baseline a change is measured against.
+    expect(seenVars.canonRoster).toContain('Reza');
+    expect(seenVars.canonTraits).toContain('stoic and quiet');
+    expect(findings).toHaveLength(1);
+    expect(findings[0].category).toBe('arc');
+    expect(findings[0].location).toBe('Issue 2 — Reza — flat arc');
+  });
+
+  it('still names a modeled character with no recorded traits in the canon roster (modeled-vs-incidental)', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      // A modeled character with a name but no trait fields — the traits summary
+      // drops it, but the names roster must still list it so the model can tell
+      // it apart from an incidental walk-on.
+      canon: { characters: [{ name: 'Reza' }] },
+      callStagedLLM: async (_stage, vars) => { seenVars = vars; return { content: { findings: [] } }; },
+    });
+    await getCheck(SECONDARY_ARC).run(ctx);
+    expect(seenVars.canonRoster).toContain('Reza');
+    expect(seenVars.canonTraits).toBe('');
+  });
+
+  it('honors the minScenes config when building the secondary roster', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      config: { minScenes: 3, maxFindings: 12 },
+      callStagedLLM: async (_stage, vars) => { seenVars = vars; return { content: { findings: [] } }; },
+    });
+    await getCheck(SECONDARY_ARC).run(ctx);
+    // Reza appears in only 2 scenes → excluded at minScenes 3 → empty roster.
+    expect(seenVars.secondaryCast).toBe('');
+  });
+
+  it('passes empty context vars when there is no outline or canon', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      canon: undefined,
+      reverseOutline: undefined,
+      callStagedLLM: async (_stage, vars) => { seenVars = vars; return { content: { findings: [] } }; },
+    });
+    await getCheck(SECONDARY_ARC).run(ctx);
+    expect(seenVars.secondaryCast).toBe('');
+    expect(seenVars.canonRoster).toBe('');
+    expect(seenVars.canonTraits).toBe('');
+  });
+
+  it('marks a single-chunk run as the final part so the flat-arc verdict is enabled', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      callStagedLLM: async (_stage, vars) => { seenVars = vars; return { content: { findings: [] } }; },
+    });
+    await getCheck(SECONDARY_ARC).run(ctx);
+    expect(seenVars.finalPart).toBe('true');
+  });
+
+  it('flags only the LAST part as final across a chunked manuscript', async () => {
+    const finals = [];
+    const ctx = wholeCtx({
+      planManuscriptChunks: async () => ['# Issue 1\n\np1', '# Issue 2\n\np2', '# Issue 3\n\np3'],
+      callStagedLLM: async (_stage, vars) => { finals.push(vars.finalPart); return { content: { findings: [] } }; },
+    });
+    await getCheck(SECONDARY_ARC).run(ctx);
+    expect(finals).toEqual(['', '', 'true']);
+  });
+});
+
+describe('style.voice-consistency — LLM check (#1586)', () => {
+  const VOICE_CONSISTENCY = 'style.voice-consistency';
+  const wholeCtx = (overrides = {}) => ({
+    manuscript: '# Issue 1\n\nThe rain came down, wry and unhurried, as it always did in this town.',
+    config: { maxFindings: 12 },
+    severityDefault: 'low',
+    series: { styleGuide: { tone: ['wry', 'deadpan'] } },
+    planManuscriptChunks: async () => ['# Issue 1\n\nnarration'],
+    callStagedLLM: async () => ({ content: { findings: [] } }),
+    ...overrides,
+  });
+
+  it('is registered as a series-scoped LLM check reading manuscript + style guide', () => {
+    const check = getCheck(VOICE_CONSISTENCY);
+    expect(check.kind).toBe('llm');
+    expect(check.scope).toBe('series');
+    expect(check.category).toBe('style');
+    expect(check.severityDefault).toBe('low');
+    expect(check.sources).toEqual(['manuscript', 'series.styleGuide']);
+    expect(check.needsManuscript).toBe(true);
+  });
+
+  it('only runs when there is drafted prose to scan', () => {
+    const check = getCheck(VOICE_CONSISTENCY);
+    expect(check.gate({ manuscript: '' })).toBe(false);
+    expect(check.gate({ manuscript: '# Issue 1\n\nprose' })).toBeTruthy();
+  });
+
+  it('feeds the style guide intended voice alongside the manuscript and forces the style category', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      planManuscriptChunks: async (_stage, opts) => {
+        expect(opts.context).toHaveProperty('intendedVoice');
+        expect(opts.fixedOverheadTokens).toBeGreaterThan(0);
+        return ['# Issue 1\n\nnarration'];
+      },
+      callStagedLLM: async (_stage, vars) => {
+        seenVars = vars;
+        return { content: { findings: [{ severity: 'medium', issueNumber: 3, location: 'Issue 3 — tonal shift', problem: 'narration turns earnest', anchorQuote: 'how he loved her' }] } };
+      },
+    });
+    const findings = await getCheck(VOICE_CONSISTENCY).run(ctx);
+    expect(seenVars.intendedVoice).toContain('wry');
+    expect(seenVars.intendedVoice).toContain('deadpan');
+    expect(findings).toHaveLength(1);
+    expect(findings[0].category).toBe('style');
+    expect(findings[0].location).toBe('Issue 3 — tonal shift');
+  });
+
+  it('still runs (cross-issue whiplash) when no style guide tone is declared', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      series: undefined,
+      callStagedLLM: async (_stage, vars) => { seenVars = vars; return { content: { findings: [] } }; },
+    });
+    await getCheck(VOICE_CONSISTENCY).run(ctx);
+    expect(seenVars.intendedVoice).toBe('');
+  });
+});
+
+describe('intendedVoiceSummary helper (#1586)', () => {
+  it('renders the style guide tone words', () => {
+    const out = intendedVoiceSummary({ tone: ['wry', 'deadpan', 'noir'] });
+    expect(out).toContain('intended narrative tone/voice');
+    expect(out).toContain('wry, deadpan, noir');
+  });
+
+  it('returns "" when the guide declares no tone', () => {
+    expect(intendedVoiceSummary({ tone: [] })).toBe('');
+    expect(intendedVoiceSummary({})).toBe('');
+    expect(intendedVoiceSummary(null)).toBe('');
+    expect(intendedVoiceSummary(undefined)).toBe('');
+  });
+
+  it('tolerates a malformed tone field without throwing', () => {
+    expect(() => intendedVoiceSummary({ tone: 'not-an-array' })).not.toThrow();
+    expect(intendedVoiceSummary({ tone: 'not-an-array' })).toBe('');
+    expect(() => intendedVoiceSummary({ tone: [null, 42, '  ', 'wry'] })).not.toThrow();
+    expect(intendedVoiceSummary({ tone: [null, 42, '  ', 'wry'] })).toBe('Style guide — intended narrative tone/voice: wry.');
   });
 });
 
@@ -2476,6 +3365,117 @@ describe('cross-chunk clean-setup digest (#1403)', () => {
     expect(seen[1]).not.toContain('Setup already established in EARLIER parts');
   });
 
+  // #1667: a check that gates a whole-story verdict to the final part AND anchors it on
+  // the carried setup snippet opts into `reserveSetupDigest` — so when the digest can't
+  // ride alongside a packed final chunk, the manuscript TAIL is trimmed to guarantee the
+  // carried context, rather than silently dropping it and missing the final-only finding.
+  it('reserves room for the setup digest on the FINAL chunk of an opt-in check (#1667), trimming the manuscript tail', async () => {
+    const digest = editorialSetupDigest('- SETUP: past tense, first person');
+    // Window leaves only 4 chars of spare room beyond the digest, so the digest cannot
+    // ride alongside the full final chunk — but arc.climax-agency opts in, so the
+    // manuscript tail is trimmed instead of the digest dropped.
+    const usableChars = digest.length + 4;
+    const { seen } = await runTwoChunksWithSetup('arc.climax-agency', {}, { usableChars });
+    // First chunk untouched (no prior setup yet).
+    expect(seen[0]).toBe('CHUNK_ONE');
+    // Final chunk: the guaranteed setup digest + only the head of the manuscript chunk
+    // (tail trimmed), and the total never exceeds the window.
+    expect(seen[1].startsWith(digest)).toBe(true);
+    expect(seen[1]).toContain('past tense, first person');
+    expect(seen[1]).toBe(`${digest}CHUN`);
+    expect(seen[1].length).toBe(usableChars);
+  });
+
+  it('reserves the setup digest even when it fully displaces the final manuscript chunk (#1667)', async () => {
+    const digest = editorialSetupDigest('- SETUP: past tense, first person');
+    const usableChars = digest.length; // zero spare room: digest exactly fills the window
+    const { seen } = await runTwoChunksWithSetup('emotion.reaction-proportionality', {}, { usableChars });
+    expect(seen[1]).toBe(digest); // manuscript tail trimmed to nothing, digest guaranteed
+    expect(seen[1].length).toBe(usableChars);
+  });
+
+  it('does NOT reserve the setup digest for a check that did not opt in (manuscript coverage still wins)', async () => {
+    const digest = editorialSetupDigest('- SETUP: past tense, first person');
+    // Same window where the opt-in check would trim to fit — but style.conformance does
+    // not set reserveSetupDigest, so the digest yields and the full manuscript chunk runs.
+    const usableChars = digest.length + 4;
+    const { seen } = await runTwoChunksWithSetup(
+      'style.conformance',
+      { series: { styleGuide: { tense: 'past', povPerson: 'first' } } },
+      { usableChars },
+    );
+    expect(seen[1]).toBe('CHUNK_TWO');
+    expect(seen[1]).not.toContain('Setup already established in EARLIER parts');
+  });
+
+  it('yields (no overflow) when the setup digest alone is larger than the whole window, even for an opt-in check (#1667)', async () => {
+    const digest = editorialSetupDigest('- SETUP: past tense, first person');
+    const usableChars = digest.length - 5; // even the digest alone overflows the window
+    const { seen } = await runTwoChunksWithSetup('arc.climax-agency', {}, { usableChars });
+    // A digest that can't fit the window at all must not be prepended — fall back to
+    // the manuscript chunk untouched rather than send an over-budget prompt.
+    expect(seen[1]).toBe('CHUNK_TWO');
+    expect(seen[1]).not.toContain('Setup already established in EARLIER parts');
+  });
+
+  it('reserves from the RAW manuscript so a prepended findings digest is never truncated mid-block (#1667)', async () => {
+    const setupDigest = editorialSetupDigest('- SETUP: past tense, first person');
+    // A finding from the first chunk produces a findings digest carried into the final
+    // chunk; size the window so the findings digest fits there but the setup digest
+    // doesn't, forcing the reserve branch.
+    const findingsDigest = editorialPriorFindingsDigest([{ category: 'arc', problem: 'passive climax', issueNumber: 1, location: '' }]);
+    const usableChars = setupDigest.length + findingsDigest.length + 2;
+    const seen = [];
+    let call = 0;
+    await getCheck('arc.climax-agency').run({
+      config: { maxFindings: 12 },
+      severityDefault: 'medium',
+      planManuscriptChunks: async () => {
+        const chunks = ['CHUNK_ONE', 'CHUNK_TWO'];
+        chunks.usableChars = usableChars;
+        return chunks;
+      },
+      callStagedLLM: async (_stage, vars) => {
+        seen.push(vars.manuscript);
+        call += 1;
+        // First chunk emits a finding so the final chunk carries a findings digest.
+        return call === 1
+          ? { content: { findings: [{ problem: 'passive climax', severity: 'medium', issueNumber: 1 }] } }
+          : { content: { findings: [] } };
+      },
+      callStageScopedInlineLLM: async () => ({ content: '- SETUP: past tense, first person' }),
+    });
+    // Final chunk: setup digest guaranteed + the manuscript head, rebuilt from the raw
+    // manuscript — so the findings digest is dropped whole, never sliced into a
+    // malformed fragment (the old `text.slice` would have emitted a partial header).
+    expect(seen[1]).toBe(`${setupDigest}CHUNK_TWO`);
+    expect(seen[1]).not.toContain('Editorial findings already recorded');
+    expect(seen[1].length).toBeLessThanOrEqual(usableChars);
+  });
+
+  it('only reserves on the FINAL chunk — a non-final chunk still yields the digest to manuscript coverage (#1667)', async () => {
+    const digest = editorialSetupDigest('- SETUP: past tense, first person');
+    const seen = [];
+    // Three chunks: the MIDDLE chunk (i=1) consumes a setup summary but is not final, so
+    // even for an opt-in check it must yield (no tail trimming) when the digest won't fit.
+    await getCheck('arc.climax-agency').run({
+      config: { maxFindings: 12 },
+      severityDefault: 'medium',
+      planManuscriptChunks: async () => {
+        const chunks = ['CHUNK_ONE', 'CHUNK_TWO', 'CHUNK_THREE'];
+        chunks.usableChars = digest.length + 4; // would force a trim IF this were the final chunk
+        return chunks;
+      },
+      callStagedLLM: async (_stage, vars) => { seen.push(vars.manuscript); return { content: { findings: [] } }; },
+      callStageScopedInlineLLM: async () => ({ content: '- SETUP: past tense, first person' }),
+    });
+    // Middle chunk yields the digest (not final) → runs the full manuscript untouched.
+    expect(seen[1]).toBe('CHUNK_TWO');
+    // Final chunk reserves → digest guaranteed, manuscript tail trimmed.
+    expect(seen[2].startsWith(digest)).toBe(true);
+    expect(seen[2]).toBe(`${digest}CHUN`);
+  });
+
   it('degrades to findings-only when no inline LLM caller is injected (no setup digest, no crash)', async () => {
     // No callStageScopedInlineLLM in ctx → the setup-summary path stays off entirely.
     const seen = [];
@@ -2704,6 +3704,169 @@ describe('visual.appearance-continuity — LLM check (#1467)', () => {
     let called = false;
     const findings = await getCheck('visual.appearance-continuity').run({
       storyboardScenes: [sceneEntry(1, { heading: 'A', shots: [{ id: 's1', description: 'alone' }] })],
+      config: {},
+      severityDefault: 'medium',
+      callStagedLLM: async () => { called = true; return { content: { findings: [] } }; },
+    });
+    expect(findings).toEqual([]);
+    expect(called).toBe(false);
+  });
+});
+
+describe('comic.prose-sync — LLM cross-media check (#1589)', () => {
+  // A hybrid issue record: a populated comicPages split AND a prose stage. Built the
+  // way production issues are (full `stages`), NOT via synthetic manuscript sections
+  // — so the prose half is read from the `prose` stage, exercising the real path.
+  const hybridIssue = (number, prose, panels, extraStages = {}) => ({
+    number,
+    stages: { prose: { output: prose }, comicPages: { pages: [{ panels }] }, ...extraStages },
+  });
+  // A comic-only issue (comic content, no prose stage).
+  const comicOnlyIssue = (number, panels) => ({ number, stages: { comicPages: { pages: [{ panels }] } } });
+  // A prose-only issue (prose stage, no comic content).
+  const proseOnlyIssue = (number, prose) => ({ number, stages: { prose: { output: prose } } });
+  const onePanel = (description) => [{ description, dialogue: [], caption: '', sfx: '' }];
+
+  describe('pure helpers', () => {
+    it('proseStageIssues reads the prose STAGE specifically, not comicScript — keyed/sorted by number', () => {
+      const rows = proseStageIssues([
+        // A hybrid issue with BOTH a comicScript stage AND a prose stage: the
+        // helper must pick the PROSE, never the comic script (the core bug guard).
+        { number: 5, stages: { comicScript: { output: 'COMIC SCRIPT — not prose' }, prose: { output: 'Issue five prose.' } } },
+        { number: 3, stages: { prose: { input: 'Issue three prose (input fallback).' } } },
+        { number: 9, stages: { prose: { output: '   ' } } },        // blank → skipped
+        { number: 7, stages: { comicScript: { output: 'comic only' } } }, // no prose → skipped
+      ]);
+      expect(rows.map((r) => r.number)).toEqual([3, 5]); // sorted, prose-bearing only
+      expect(rows.find((r) => r.number === 5).prose).toBe('Issue five prose.');
+      expect(rows.find((r) => r.number === 3).prose).toBe('Issue three prose (input fallback).');
+    });
+
+    it('renderComicForProseSync emits page/panel headers + shows/dialogue/caption/sfx, skipping empty panels', () => {
+      const out = renderComicForProseSync([
+        { panels: [
+          // Production parsed dialogue shape is { character, line } (NOT { speaker }).
+          { description: 'Anna draws the knife', dialogue: [{ character: 'ANNA', line: 'Stay back.' }], caption: 'Later', sfx: 'SHNK' },
+          { description: '', dialogue: [], caption: '', sfx: '' }, // empty → skipped
+        ] },
+      ]);
+      expect(out).toContain('Page 1 · Panel 1');
+      expect(out).toContain('Shows: Anna draws the knife');
+      expect(out).toContain('ANNA: Stay back.');
+      expect(out).toContain('Caption: Later');
+      expect(out).toContain('SFX: SHNK');
+      // The empty second panel produced no header.
+      expect(out).not.toContain('Panel 2');
+    });
+
+    it('proseSyncPairs joins only issues with BOTH prose and comic, caps prose, and uses the prose stage', () => {
+      const longProse = 'x'.repeat(PROSE_SYNC_PROSE_CHAR_CAP + 500);
+      const ctx = {
+        issues: [
+          // Hybrid: prose stage + comic. Also carries a comicScript stage to prove
+          // the prose half comes from `prose`, not the comicScript precedence.
+          hybridIssue(3, longProse, onePanel('a panel'), { comicScript: { output: 'WRONG — comic script' } }),
+          comicOnlyIssue(7, onePanel('comic but no prose')),
+          proseOnlyIssue(9, 'prose but no comic'),
+        ],
+      };
+      const pairs = proseSyncPairs(ctx);
+      expect(pairs.map((p) => p.number)).toEqual([3]); // only issue 3 has both
+      expect(pairs[0].prose).toHaveLength(PROSE_SYNC_PROSE_CHAR_CAP);
+      expect(pairs[0].prose.startsWith('x')).toBe(true); // the prose stage, not the comic script
+      expect(pairs[0].comic).toContain('Shows: a panel');
+    });
+  });
+
+  it('gates true only when an issue has both prose and comic content', () => {
+    const check = getCheck('comic.prose-sync');
+    expect(check.gate({ issues: [hybridIssue(3, 'prose', onePanel('panel'))] })).toBe(true);
+    // Comic but no prose → nothing to cross-check.
+    expect(check.gate({ issues: [comicOnlyIssue(3, onePanel('panel'))] })).toBe(false);
+    // Prose but no comic → nothing to cross-check.
+    expect(check.gate({ issues: [proseOnlyIssue(3, 'prose')] })).toBe(false);
+    expect(check.gate({ issues: [] })).toBe(false);
+  });
+
+  it('compares the PROSE stage (not the comic script) for a hybrid issue', async () => {
+    let seen = null;
+    await getCheck('comic.prose-sync').run({
+      issues: [
+        // A hybrid issue whose comicScript stage text differs from its prose stage —
+        // the check must hand the model the PROSE, never the comic script.
+        hybridIssue(3, 'Anna is stabbed and falls.', onePanel('Anna stands, unharmed'), { comicScript: { output: 'COMIC SCRIPT SOURCE — must not be sent' } }),
+      ],
+      config: {},
+      severityDefault: 'medium',
+      callStagedLLM: async (_stage, vars) => { seen = vars; return { content: { findings: [] } }; },
+    });
+    expect(seen.prose).toBe('Anna is stabbed and falls.');
+    expect(seen.prose).not.toContain('COMIC SCRIPT SOURCE');
+    expect(seen.comic).toContain('Shows: Anna stands, unharmed');
+  });
+
+  it('makes one model call per hybrid issue and forces the issue anchor on findings', async () => {
+    const seen = [];
+    const findings = await getCheck('comic.prose-sync').run({
+      issues: [
+        hybridIssue(3, 'Anna is stabbed and falls.', onePanel('Anna stands, unharmed')),
+        hybridIssue(4, 'A quiet morning.', onePanel('morning kitchen')),
+      ],
+      config: { maxFindings: 12, maxIssues: 40 },
+      severityDefault: 'medium',
+      callStagedLLM: async (_stage, vars) => {
+        seen.push(vars);
+        // Model reports a mismatch only for issue 3, and deliberately omits
+        // issueNumber to prove the check forces it.
+        return vars.issueNumber === 3
+          ? { content: { findings: [{ severity: 'medium', location: 'Issue 3 — unshown beat', problem: 'Prose stabs Anna; no panel shows it.', suggestion: 'Add a panel.', anchorQuote: 'Anna is stabbed' }] } }
+          : { content: { findings: [] } };
+      },
+    });
+    // One call per hybrid issue.
+    expect(seen.map((v) => v.issueNumber).sort()).toEqual([3, 4]);
+    expect(seen[0]).toHaveProperty('prose');
+    expect(seen[0]).toHaveProperty('comic');
+    expect(findings).toHaveLength(1);
+    expect(findings[0].category).toBe('continuity');
+    expect(findings[0].issueNumber).toBe(3); // forced from the pair, not the model
+  });
+
+  it('respects maxIssues (caps the number of model calls)', async () => {
+    let calls = 0;
+    await getCheck('comic.prose-sync').run({
+      issues: [
+        hybridIssue(3, 'p3', onePanel('d3')),
+        hybridIssue(4, 'p4', onePanel('d4')),
+        hybridIssue(5, 'p5', onePanel('d5')),
+      ],
+      config: { maxIssues: 2 },
+      severityDefault: 'medium',
+      callStagedLLM: async () => { calls += 1; return { content: { findings: [] } }; },
+    });
+    expect(calls).toBe(2);
+  });
+
+  it('stops launching further calls once the abort signal trips', async () => {
+    let calls = 0;
+    const signal = { aborted: false };
+    await getCheck('comic.prose-sync').run({
+      issues: [
+        hybridIssue(3, 'p3', onePanel('d3')),
+        hybridIssue(4, 'p4', onePanel('d4')),
+      ],
+      config: {},
+      severityDefault: 'medium',
+      signal,
+      callStagedLLM: async () => { calls += 1; signal.aborted = true; return { content: { findings: [] } }; },
+    });
+    expect(calls).toBe(1); // second issue skipped after the signal tripped
+  });
+
+  it('returns no findings (and never calls the model) when no issue is hybrid', async () => {
+    let called = false;
+    const findings = await getCheck('comic.prose-sync').run({
+      issues: [proseOnlyIssue(3, 'prose only')], // no comic content anywhere
       config: {},
       severityDefault: 'medium',
       callStagedLLM: async () => { called = true; return { content: { findings: [] } }; },
@@ -3056,13 +4219,34 @@ describe('copy-edit prose-tic bundle (#1306)', () => {
     expect(on[0].anchorQuote.toLowerCase()).toBe('just');
   });
 
-  it('prose.adverbs flags dialogue-tag adverbs at higher severity regardless of density', () => {
+  it('prose.adverbs flags emotion-telling dialogue-tag adverbs at higher severity regardless of density', () => {
     const sections = [{ number: 3, content: '"Fine," she said angrily as the room slept.' }];
     const findings = getCheck(ADVERBS).run({ sections, config: { densityPer1000: 999 }, severityDefault: 'low' });
     const tag = findings.find((f) => /dialogue tag/i.test(f.problem));
     expect(tag).toBeTruthy();
     expect(tag.severity).toBe('medium'); // escalated one step above low
     expect(tag.anchorQuote.toLowerCase()).toBe('angrily');
+    expect(/emotion-telling/i.test(tag.problem)).toBe(true);
+  });
+
+  it('prose.adverbs leaves a reporting dialogue tag ("said quietly") unflagged by default', () => {
+    const sections = [{ number: 7, content: '"Fine," she said quietly as the room slept.' }];
+    const findings = getCheck(ADVERBS).run({ sections, config: { densityPer1000: 999 }, severityDefault: 'low' });
+    // Reporting tag is an invisible stage direction → no tag finding, and density
+    // is gated out by the 999/1000 threshold, so nothing fires.
+    expect(findings.find((f) => /dialogue tag/i.test(f.problem))).toBeUndefined();
+  });
+
+  it('prose.adverbs flags reporting tags too when flagReportingTags is set', () => {
+    const sections = [{ number: 8, content: '"Fine," she said quietly as the room slept.' }];
+    const findings = getCheck(ADVERBS).run({ sections, config: { densityPer1000: 999, flagReportingTags: true }, severityDefault: 'low' });
+    const tag = findings.find((f) => /dialogue tag/i.test(f.problem));
+    expect(tag).toBeTruthy();
+    expect(tag.anchorQuote.toLowerCase()).toBe('quietly');
+    // With reporting tags included the wording must stay neutral — it can not
+    // claim a "said quietly" match "names the feeling".
+    expect(/emotion-telling/i.test(tag.problem)).toBe(false);
+    expect(/adverb-laden/i.test(tag.problem)).toBe(true);
   });
 
   it('prose.passive-voice flags above the rate threshold', () => {
@@ -3070,6 +4254,17 @@ describe('copy-edit prose-tic bundle (#1306)', () => {
     const findings = getCheck(PASSIVE).run({ sections, config: { densityPer1000: 0 }, severityDefault: 'low' });
     expect(findings).toHaveLength(1);
     expect(/passive/i.test(findings[0].problem)).toBe(true);
+  });
+
+  it('prose.passive-voice suppresses intentional passive by default but counts it when toggled off', () => {
+    // 1 weak ("was opened") + 1 stative ("was exhausted") + 1 mood ("sky was streaked").
+    const sections = [{ number: 1, content: 'The door was opened. She was exhausted. The sky was streaked with red.' }];
+    const suppressed = getCheck(PASSIVE).run({ sections, config: { densityPer1000: 0 }, severityDefault: 'low' });
+    expect(suppressed).toHaveLength(1);
+    expect(/1 passive construction\b/.test(suppressed[0].problem)).toBe(true);
+    // With the context tuning off, the raw heuristic counts all three.
+    const raw = getCheck(PASSIVE).run({ sections, config: { densityPer1000: 0, suppressIntentional: false }, severityDefault: 'low' });
+    expect(/3 passive constructions/.test(raw[0].problem)).toBe(true);
   });
 
   it('prose.repeated-gestures tallies a gesture across the manuscript and flags body-part autonomy', () => {
@@ -3624,11 +4819,15 @@ describe('cast.representation-balance — deterministic check (#1312)', () => {
       config,
       severityDefault: 'low',
     });
-  const dialogue = (findings) => findings.find((f) => f.location === 'Series dialogue');
+  const dialogue = (findings) => findings.find((f) => /speaking characters\)/.test(f.problem));
+  const minorDom = (findings) => findings.find((f) => /reads as a minor character/.test(f.problem));
+  const silentMajor = (findings) => findings.find((f) => /reads as a major character/.test(f.problem));
   const bechdel = (findings) => findings.find((f) => /Bechdel/.test(f.problem));
   const screenTime = (findings) => findings.find((f) => /strongly skewed cast/.test(f.problem));
-  // Config that silences the two OTHER signals so a test can isolate one.
-  const only = (over) => ({ maxDialogueShare: 1, maxGenderShare: 1, bechdelSignal: false, ...over });
+  // Config that silences every OTHER signal so a test can isolate one.
+  const only = (over) => ({
+    maxDialogueShare: 1, maxMinorShare: 1, minMajorShare: 0, maxGenderShare: 1, bechdelSignal: false, ...over,
+  });
 
   it('declares the expected scope / kind / sources', () => {
     const c = getCheck(REP);
@@ -3668,6 +4867,138 @@ describe('cast.representation-balance — deterministic check (#1312)', () => {
       config: only({ maxDialogueShare: 0.4, minDialogueLines: 12 }),
     });
     expect(dialogue(findings)).toBeUndefined();
+  });
+
+  it('flags a minor-role character who dominates the dialogue (#1594)', () => {
+    const canon = {
+      characters: [
+        { name: 'Aria', role: 'protagonist' },
+        { name: 'Bram', role: 'minor background character' },
+      ],
+    };
+    // Bram (a minor) speaks 4 of 5 lines → 80% → minor dominating.
+    const content = [
+      '"One," said Bram.',
+      '"Two," said Bram.',
+      '"Three," said Bram.',
+      '"Four," said Bram.',
+      '"Five," said Aria.',
+    ].join('\n');
+    const findings = runRep(canon, {
+      sections: [sec(1, content)],
+      config: only({ maxMinorShare: 0.35, minDialogueLines: 5 }),
+    });
+    const f = minorDom(findings);
+    expect(f).toBeTruthy();
+    expect(f.category).toBe('casting');
+    expect(f.severity).toBe('medium'); // 80% ≥ 50% → escalated above the low floor
+    expect(f.problem).toMatch(/"Bram" reads as a minor character/);
+    expect(f.problem).toMatch(/80%/);
+    // Aria (protagonist) speaks 20% > the silent-major floor → not silent.
+    expect(silentMajor(findings)).toBeUndefined();
+  });
+
+  it('fires the role-relative signal even when one speaker holds all the dialogue (#1594)', () => {
+    // The top-speaker share signal needs 2+ speakers, but a lone minor speaking
+    // every line is the STRONGEST minor-dominating case — it must not be gated out.
+    const canon = {
+      characters: [
+        { name: 'Bram', role: 'cameo' },
+        { name: 'Aria', role: 'protagonist' },
+      ],
+    };
+    const content = [
+      '"One," said Bram.',
+      '"Two," said Bram.',
+      '"Three," said Bram.',
+      '"Four," said Bram.',
+      '"Five," said Bram.',
+    ].join('\n');
+    const findings = runRep(canon, {
+      sections: [sec(1, content)],
+      config: only({ maxMinorShare: 0.35, minDialogueLines: 5 }),
+    });
+    const f = minorDom(findings);
+    expect(f).toBeTruthy();
+    expect(f.problem).toMatch(/100%/);
+    expect(f.severity).toBe('medium'); // 100% ≥ 50% → escalated
+  });
+
+  it('flags a major-role character who appears yet is oddly silent (#1594)', () => {
+    const canon = {
+      characters: [
+        { name: 'Aria', role: 'lead' },
+        { name: 'Bram' },
+        { name: 'Cara' },
+      ],
+    };
+    // Aria appears in the prose but never speaks; Bram + Cara carry all dialogue.
+    const content = [
+      'Aria watched from the doorway, saying nothing.',
+      '"One," said Bram.',
+      '"Two," said Bram.',
+      '"Three," said Bram.',
+      '"Four," said Bram.',
+      '"Five," said Cara.',
+    ].join('\n');
+    const findings = runRep(canon, {
+      sections: [sec(1, content)],
+      config: only({ minMajorShare: 0.05, minDialogueLines: 5 }),
+    });
+    const f = silentMajor(findings);
+    expect(f).toBeTruthy();
+    expect(f.category).toBe('casting');
+    expect(f.severity).toBe('medium'); // 0 lines → escalated above the low floor
+    expect(f.problem).toMatch(/"Aria" reads as a major character/);
+  });
+
+  it('stays silent on the silent-major signal when the major never appears in the prose (#1594)', () => {
+    const canon = {
+      characters: [
+        { name: 'Aria', role: 'lead' }, // never named in the prose below
+        { name: 'Bram' },
+        { name: 'Cara' },
+      ],
+    };
+    const content = [
+      '"One," said Bram.',
+      '"Two," said Bram.',
+      '"Three," said Bram.',
+      '"Four," said Bram.',
+      '"Five," said Cara.',
+    ].join('\n');
+    const findings = runRep(canon, {
+      sections: [sec(1, content)],
+      config: only({ minMajorShare: 0.05, minDialogueLines: 5 }),
+    });
+    expect(silentMajor(findings)).toBeUndefined();
+  });
+
+  it('leaves unknown / ambiguous-role characters out of the distribution signals (#1594)', () => {
+    const canon = {
+      characters: [
+        // "minor antagonist" mixes a major AND a minor word → unknown tier → opt out.
+        { name: 'Bram', role: 'minor antagonist' },
+        { name: 'Aria', role: 'protagonist' },
+        { name: 'Cara' }, // no role → unknown
+      ],
+    };
+    // Bram dominates, but his contradictory role means the minor signal opts out.
+    const content = [
+      '"One," said Bram.',
+      '"Two," said Bram.',
+      '"Three," said Bram.',
+      '"Four," said Bram.',
+      '"Five," said Cara.',
+    ].join('\n');
+    const findings = runRep(canon, {
+      sections: [sec(1, content)],
+      config: only({ maxMinorShare: 0.35, minMajorShare: 0.05, minDialogueLines: 5 }),
+    });
+    expect(minorDom(findings)).toBeUndefined();
+    // Aria (protagonist) doesn't appear in the prose, so the silent-major signal
+    // also stays quiet rather than firing on canon-only presence.
+    expect(silentMajor(findings)).toBeUndefined();
   });
 
   it('flags a missing Bechdel co-presence signal when no scene pairs non-male characters', () => {

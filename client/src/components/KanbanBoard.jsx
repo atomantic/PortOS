@@ -1,16 +1,9 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { DndContext, DragOverlay, useDraggable, useDroppable, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
-import { GripVertical } from 'lucide-react';
+import { GripVertical, Play } from 'lucide-react';
 import toast from './ui/Toast';
 import * as api from '../services/api';
-
-const COLUMNS = ['To Do', 'In Progress', 'Done'];
-
-const COLUMN_CONFIG = {
-  'To Do': { bg: 'bg-gray-500/10', border: 'border-gray-500/30', dot: 'bg-gray-500', dropBorder: 'border-gray-400' },
-  'In Progress': { bg: 'bg-port-accent/10', border: 'border-port-accent/30', dot: 'bg-port-accent', dropBorder: 'border-port-accent' },
-  'Done': { bg: 'bg-port-success/10', border: 'border-port-success/30', dot: 'bg-port-success', dropBorder: 'border-port-success' }
-};
+import { FALLBACK_COLUMNS, ticketInColumn, bucketTickets } from '../lib/kanbanColumns.js';
 
 function TicketCard({ ticket, isDragOverlay }) {
   return (
@@ -37,16 +30,26 @@ function TicketCard({ ticket, isDragOverlay }) {
   );
 }
 
-function DraggableTicket({ ticket, disabled }) {
+function DraggableTicket({ ticket, disabled, appId, canQueue }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: ticket.key,
     data: { ticket },
     disabled
   });
+  const [queuing, setQueuing] = useState(false);
 
   const style = transform ? {
     transform: `translate3d(${transform.x}px, ${transform.y}px, 0)`,
   } : undefined;
+
+  const handleQueue = async () => {
+    setQueuing(true);
+    // silent: this caller owns its own success/error toasts (see CLAUDE.md).
+    await api.createJiraTicketTask(appId, ticket.key, { silent: true })
+      .then(() => toast.success(`Queued agent task for ${ticket.key}`))
+      .catch((err) => toast.error(`Failed to queue ${ticket.key}: ${err.message}`))
+      .finally(() => setQueuing(false));
+  };
 
   return (
     <div
@@ -75,34 +78,49 @@ function DraggableTicket({ ticket, disabled }) {
         >
           <TicketCard ticket={ticket} />
         </a>
+        {canQueue && (
+          <button
+            type="button"
+            onClick={handleQueue}
+            disabled={queuing}
+            className="flex items-center px-1.5 text-port-success/70 hover:text-port-success shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+            aria-label={`Start an agent on ${ticket.key}`}
+            title={`Queue a Chief of Staff agent to implement ${ticket.key}`}
+          >
+            <Play size={14} className={queuing ? 'animate-pulse' : ''} />
+          </button>
+        )}
       </div>
     </div>
   );
 }
 
-function DroppableColumn({ category, tickets, isOver, disabled }) {
-  const { setNodeRef } = useDroppable({ id: category, disabled });
-  const config = COLUMN_CONFIG[category];
-  const totalPoints = tickets.reduce((sum, t) => sum + (Number(t.storyPoints) || 0), 0);
+function DroppableColumn({ column, isOver, disabled, appId }) {
+  const { setNodeRef } = useDroppable({ id: column.id, disabled });
+  const config = column.config;
+  const totalPoints = column.tickets.reduce((sum, t) => sum + (Number(t.storyPoints) || 0), 0);
+  // The play button (queue a CoS agent for a ticket) only makes sense for
+  // not-started work, and only when we know which app the board belongs to.
+  const canQueue = column.category === 'To Do' && !!appId;
 
   return (
     <div
       ref={setNodeRef}
-      className={`${config.bg} border ${isOver ? `${config.dropBorder} border-dashed` : config.border} rounded-lg p-3 min-h-[120px] transition-colors`}
+      className={`flex-1 min-w-[220px] ${config.bg} border ${isOver ? `${config.dropBorder} border-dashed` : config.border} rounded-lg p-3 min-h-[120px] transition-colors`}
     >
       <div className="flex items-center gap-2 mb-3">
         <span className={`w-2 h-2 rounded-full ${config.dot}`} />
-        <span className="text-sm font-medium text-white">{category}</span>
-        <span className="text-xs text-gray-500">({tickets.length})</span>
+        <span className="text-sm font-medium text-white truncate" title={column.name}>{column.name}</span>
+        <span className="text-xs text-gray-500">({column.tickets.length})</span>
         {totalPoints > 0 && (
           <span className="text-xs text-cyan-400">{totalPoints}pt</span>
         )}
       </div>
       <div className="space-y-2">
-        {tickets.map(ticket => (
-          <DraggableTicket key={ticket.key} ticket={ticket} disabled={disabled} />
+        {column.tickets.map(ticket => (
+          <DraggableTicket key={ticket.key} ticket={ticket} disabled={disabled} appId={appId} canQueue={canQueue} />
         ))}
-        {tickets.length === 0 && (
+        {column.tickets.length === 0 && (
           <div className={`text-xs text-center py-4 ${isOver ? 'text-gray-300' : 'text-gray-500'}`}>
             {isOver ? 'Drop here' : 'No tickets'}
           </div>
@@ -112,23 +130,36 @@ function DroppableColumn({ category, tickets, isOver, disabled }) {
   );
 }
 
-export default function KanbanBoard({ tickets: initialTickets = [], instanceId, onTicketsChange }) {
+export default function KanbanBoard({ tickets: initialTickets = [], instanceId, onTicketsChange, appId, projectKey, boardId }) {
   const [tickets, setTickets] = useState(initialTickets);
   const [activeTicket, setActiveTicket] = useState(null);
   const [transitioning, setTransitioning] = useState(null);
   const [overColumn, setOverColumn] = useState(null);
+  const [boardColumns, setBoardColumns] = useState(null);
 
   // Sync if parent re-fetches
   useEffect(() => { setTickets(initialTickets); }, [initialTickets]);
+
+  // Resolve the full workflow lifecycle (Blocked, In Review, custom stages) for
+  // this project's board. Silent — on failure we keep the three-category
+  // fallback rather than surfacing a toast for a non-critical enhancement.
+  useEffect(() => {
+    if (!instanceId || !projectKey) {
+      setBoardColumns(null);
+      return;
+    }
+    let cancelled = false;
+    api.getJiraBoardColumns(instanceId, projectKey, boardId, { silent: true })
+      .then(res => { if (!cancelled) setBoardColumns(res?.columns?.length ? res.columns : null); })
+      .catch(() => { if (!cancelled) setBoardColumns(null); });
+    return () => { cancelled = true; };
+  }, [instanceId, projectKey, boardId]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } })
   );
 
-  const columns = {};
-  for (const col of COLUMNS) {
-    columns[col] = tickets.filter(t => t.statusCategory === col);
-  }
+  const columns = useMemo(() => bucketTickets(boardColumns || FALLBACK_COLUMNS, tickets), [boardColumns, tickets]);
 
   const handleDragStart = useCallback((event) => {
     const ticket = event.active.data.current?.ticket;
@@ -137,53 +168,64 @@ export default function KanbanBoard({ tickets: initialTickets = [], instanceId, 
 
   const handleDragOver = useCallback((event) => {
     const { over } = event;
-    setOverColumn(over?.id && COLUMNS.includes(over.id) ? over.id : null);
-  }, []);
+    setOverColumn(over?.id && columns.some(c => c.id === over.id) ? over.id : null);
+  }, [columns]);
 
   const handleDragEnd = useCallback(async (event) => {
     const { active, over } = event;
     setActiveTicket(null);
     setOverColumn(null);
 
-    if (!over || !COLUMNS.includes(over.id)) return;
+    if (!over) return;
+
+    const targetColumn = columns.find(c => c.id === over.id);
+    if (!targetColumn) return;
 
     const ticket = active.data.current?.ticket;
     if (!ticket) return;
 
-    const targetCategory = over.id;
-    if (ticket.statusCategory === targetCategory) return;
+    // Already in this column? Nothing to do.
+    if (ticketInColumn(ticket, targetColumn)) return;
 
     if (!instanceId) {
       toast.error('Cannot transition: no JIRA instance configured');
       return;
     }
 
-    // Optimistic update — notify parent immediately so cache stays in sync
+    // Optimistic update — notify parent immediately so cache stays in sync.
+    // We know the target category now; the exact status name is corrected once
+    // the matching transition is resolved below.
     const previousTickets = [...tickets];
     const optimistic = tickets.map(t =>
-      t.key === ticket.key ? { ...t, statusCategory: targetCategory } : t
+      t.key === ticket.key
+        ? { ...t, statusCategory: targetColumn.category, status: targetColumn.statuses[0] || t.status }
+        : t
     );
     setTickets(optimistic);
     onTicketsChange?.(optimistic);
     setTransitioning(ticket.key);
 
     try {
-      // Fetch available transitions and find matching one
+      // Fetch available transitions and find one that lands in the target column.
       const transitions = await api.getJiraTicketTransitions(instanceId, ticket.key, { silent: true });
-      const match = transitions.find(t => t.toCategory === targetCategory);
+      const match = transitions.find(t =>
+        targetColumn.statuses.length
+          ? targetColumn.statuses.includes(t.to)
+          : t.toCategory === targetColumn.category
+      );
 
       if (!match) {
         // Rollback — sync parent cache
         setTickets(previousTickets);
         onTicketsChange?.(previousTickets);
-        toast.error(`No transition available to "${targetCategory}" for ${ticket.key}`);
+        toast.error(`No transition available to "${targetColumn.name}" for ${ticket.key}`);
         return;
       }
 
       await api.transitionJiraTicket(instanceId, ticket.key, match.id, { silent: true });
-      // Update the status name too, derived from the optimistic snapshot
+      // Update the status name + category from the resolved transition.
       const nextTickets = optimistic.map(t =>
-        t.key === ticket.key ? { ...t, status: match.to, statusCategory: targetCategory } : t
+        t.key === ticket.key ? { ...t, status: match.to, statusCategory: match.toCategory } : t
       );
       setTickets(nextTickets);
       onTicketsChange?.(nextTickets);
@@ -195,7 +237,7 @@ export default function KanbanBoard({ tickets: initialTickets = [], instanceId, 
     } finally {
       setTransitioning(null);
     }
-  }, [tickets, instanceId, onTicketsChange]);
+  }, [columns, tickets, instanceId, onTicketsChange]);
 
   const handleDragCancel = useCallback(() => {
     setActiveTicket(null);
@@ -210,14 +252,14 @@ export default function KanbanBoard({ tickets: initialTickets = [], instanceId, 
       onDragEnd={handleDragEnd}
       onDragCancel={handleDragCancel}
     >
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-        {COLUMNS.map(category => (
+      <div className="flex gap-3 overflow-x-auto pb-2">
+        {columns.map(column => (
           <DroppableColumn
-            key={category}
-            category={category}
-            tickets={columns[category]}
-            isOver={overColumn === category}
+            key={column.id}
+            column={column}
+            isOver={overColumn === column.id}
             disabled={!!transitioning}
+            appId={appId}
           />
         ))}
       </div>

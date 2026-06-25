@@ -2,11 +2,12 @@ import { useState, useEffect, useCallback } from 'react';
 import toast from '../components/ui/Toast';
 import * as api from '../services/api';
 import socket from '../services/socket';
-import { filterSelectableModels, filterGenerationModels, isEmbeddingModel, mergeModelLists, localBackendForProvider, modelOptionLabel, providerTypeClass, isTuiProvider, isApiProvider, isProcessProvider, isClaudeCodePlanCli } from '../utils/providers';
+import { filterSelectableModels, filterGenerationModels, isEmbeddingModel, mergeModelLists, localBackendForProvider, modelOptionLabel, providerTypeClass, isTuiProvider, isApiProvider, isProcessProvider, isClaudeCodePlanCli, effectiveModelContextWindow } from '../utils/providers';
 import useLocalModels from '../hooks/useLocalModels';
 import EmptyState from '../components/EmptyState';
 import {
   formatDurationMs,
+  formatContextLength,
   parseTimeoutMs,
   TIMEOUT_INPUT_MIN_MS,
   TIMEOUT_INPUT_MAX_MS,
@@ -498,6 +499,15 @@ export default function AIProviders() {
                   {provider.defaultModel && (
                     <p className="break-words">Default: <code className="text-gray-300 break-all">{provider.defaultModel}</code></p>
                   )}
+                  {(() => {
+                    const windowLabel = formatContextLength(effectiveModelContextWindow(provider, provider.defaultModel));
+                    return windowLabel ? (
+                      <p className="text-xs">
+                        Context: <span className="text-gray-300">{windowLabel}</span>
+                        {provider.contextWindow ? <span className="text-gray-500"> override</span> : null}
+                      </p>
+                    ) : null;
+                  })()}
                   {(provider.lightModel || provider.mediumModel || provider.heavyModel) && (
                     <p className="text-xs">
                       Tiers:
@@ -685,6 +695,8 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
     heavyModel: provider?.heavyModel || '',
     fallbackProvider: provider?.fallbackProvider || '',
     fallbackModel: provider?.fallbackModel || '',
+    numCtx: provider?.numCtx ?? '',
+    contextWindow: provider?.contextWindow ?? '',
     timeout: provider?.timeout || 300000,
     enabled: provider?.enabled !== false,
     envVars: provider?.envVars || {},
@@ -723,6 +735,14 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
   const fallbackModelOptions = filterGenerationModels(
     mergeModelLists(selectedFallbackProvider?.models, liveModelsFor(selectedFallbackProvider)),
   );
+  const plannedContextLabel = formatContextLength(
+    effectiveModelContextWindow(formData, formData.defaultModel)
+  );
+  const parseOptionalIntField = (value) => {
+    const input = String(value ?? '').trim();
+    if (!input) return null;
+    return /^\d+$/.test(input) ? Number(input) : value;
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -744,6 +764,8 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
       ...formData,
       args: formData.args ? formData.args.split(' ').filter(Boolean) : [],
       headlessArgs: formData.headlessArgs ? formData.headlessArgs.split(' ').filter(Boolean) : [],
+      contextWindow: parseOptionalIntField(formData.contextWindow),
+      numCtx: formData.type === 'api' ? parseOptionalIntField(formData.numCtx) : null,
     };
     // The generation/fallback pickers filter out embedding-only models, so a
     // stored embedding (from an older config) would be hidden in the UI yet
@@ -1082,6 +1104,47 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
                   : `Per-call cap. Server max: ${TIMEOUT_INPUT_MAX_MS.toLocaleString()} ms (${formatDurationMs(TIMEOUT_INPUT_MAX_MS)}).`;
               })()}
             </p>
+          </div>
+
+          <div className="border-t border-port-border pt-4 mt-4">
+            <h4 className="text-sm font-medium text-gray-300 mb-3">Context Window</h4>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">Planning Window</label>
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min="512"
+                  max="2097152"
+                  value={formData.contextWindow}
+                  onChange={(e) => setFormData(prev => ({ ...prev, contextWindow: e.target.value }))}
+                  placeholder="Auto from model"
+                  className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  {plannedContextLabel ? `Budgeter uses ${plannedContextLabel}` : 'Leave blank to use model/provider defaults'}
+                </p>
+              </div>
+
+              {formData.type === 'api' && (
+                <div>
+                  <label className="block text-sm text-gray-400 mb-1">Local num_ctx</label>
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    min="512"
+                    max="1048576"
+                    value={formData.numCtx}
+                    onChange={(e) => setFormData(prev => ({ ...prev, numCtx: e.target.value }))}
+                    placeholder="Ollama request size"
+                    className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    Sent to compatible local backends; used for planning when no model window is known.
+                  </p>
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Fallback Provider */}

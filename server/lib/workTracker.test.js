@@ -53,7 +53,7 @@ describe('trackerToClaimTaskType', () => {
     expect(trackerToClaimTaskType('plan')).toBe('plan-task');
     expect(trackerToClaimTaskType('github')).toBe('claim-issue');
     expect(trackerToClaimTaskType('gitlab')).toBe('claim-issue-gitlab');
-    expect(trackerToClaimTaskType('jira')).toBe('jira-sprint-manager');
+    expect(trackerToClaimTaskType('jira')).toBe('claim-issue-jira');
     expect(trackerToClaimTaskType('auto')).toBeNull();
     expect(trackerToClaimTaskType('nonsense')).toBeNull();
   });

@@ -21,7 +21,7 @@ import { getIssue, listIssues, updateStage, assertStageUnlocked, TEXT_STAGE_IDS 
 import { getSeriesCanon } from './seriesCanon.js';
 import { getUniverse } from '../universeBuilder.js';
 import { compareIssuesByPosition, NO_LINKED_UNIVERSE_PLACEHOLDER } from './arcPlanner.js';
-import { computeIssueTargets } from '../../lib/issueLength.js';
+import { computeIssueTargets, assessSynopsisScope } from '../../lib/issueLength.js';
 import { renderEntitiesSummary } from '../../lib/universePromptRenderers.js';
 import { composeStyleNotes } from '../../lib/styleGuide.js';
 import { renderTickingClock } from '../../lib/storyArc.js';
@@ -32,6 +32,15 @@ const STAGE_TO_TEMPLATE = Object.freeze({
   comicScript: 'pipeline-comic-script',
   teleplay: 'pipeline-teleplay',
 });
+
+// Stages whose template renders the compact `worldEntitiesSummary` roster and can
+// therefore safely receive a SCOPED `series.characters` block (#1511) — the roster
+// is the continuity safety net for the un-scoped cast. The idea stage is excluded:
+// it generates the beat sheet straight from the seed (it needs the whole cast as a
+// creative palette) and its template renders NO roster, so a scoped block there
+// would drop characters with no fallback. New stages default to the full cast
+// until explicitly added here.
+const ROSTER_BACKED_STAGES = new Set(['prose', 'comicScript', 'teleplay']);
 
 // Human labels for the {{#sourceMaterials}} block so the LLM sees "Comic Script"
 // rather than "comicScript". Mirrors the client's PIPELINE_STAGE_LABELS.
@@ -77,7 +86,7 @@ function shapeNeighborForIdeaPrompt(iss) {
 // + parent volume + immediate-neighbor issues. Other text stages (prose,
 // comicScript, teleplay) don't need it — they derive from beats which
 // already encode it.
-async function buildIdeaContextAugment(series, issue) {
+async function buildIdeaContextAugment(series, issue, seedOverride = '') {
   const seasons = Array.isArray(series.seasons) ? series.seasons : [];
   const season = issue.seasonId ? seasons.find((s) => s.id === issue.seasonId) : null;
 
@@ -102,10 +111,22 @@ async function buildIdeaContextAugment(series, issue) {
   // `tickingClock.enabled === true`.
   const tickingClock = renderTickingClock(arc?.tickingClock);
 
+  // Scope-discipline signal: a terse synopsis on a long length profile tempts
+  // the beat sheet to pad by absorbing the next issue's events (#1513). The
+  // template gates a "do not pad past scope" warning on this flag. Assess the
+  // seed actually being expanded — an explicit seedInput override is what the
+  // template renders into {{seed}}, so the signal must track it, not the
+  // (possibly stale) stored synopsis.
+  const { paddingRisk } = assessSynopsisScope(
+    seedOverride || issue.stages?.idea?.input || '',
+    computeIssueTargets(issue),
+  );
+
   if (!season) {
     return {
       arc: arcBlock,
       tickingClock,
+      paddingRisk,
       volume: null,
       arcRole: issue.arcRole || null,
       positionInVolume: null,
@@ -150,6 +171,7 @@ async function buildIdeaContextAugment(series, issue) {
   return {
     arc: arcBlock,
     tickingClock,
+    paddingRisk,
     volume: {
       number: season.number,
       title: season.title || '',
@@ -190,6 +212,155 @@ function resolveSourceStageIds({ issue, stageId, sourceStageIds }) {
     && stageContentOf(issue.stages?.[id]));
 }
 
+// A character's free-text `role` reads as a principal when it names a lead /
+// recurring archetype. Used only as the fallback when an issue's source text
+// names no canon character (a thinly-seeded early issue) — better to ship the
+// series principals than the whole 68-character cast.
+const PRINCIPAL_ROLE_RE = /\b(main|lead|protagonist|principal|recurring|primary|hero|central)\b/i;
+
+// Word-boundary, case-insensitive containment test (same Unicode-aware boundary
+// the bible matcher in scenePrompt.js uses — lookarounds over `[\p{L}\p{N}_]` so
+// accented first names like "José" still match). Local copy so the first-name
+// supplement below doesn't have to widen the shared matcher (`canonReadiness`
+// also calls it).
+const wordInText = (needle, haystack) => {
+  if (!needle) return false;
+  const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(?<![\\p{L}\\p{N}_])${escaped}(?![\\p{L}\\p{N}_])`, 'iu').test(haystack);
+};
+
+// First-name token of a multi-word canon name ("Mira Reyes" → "Mira"). Drafts
+// routinely refer to a character by first name only after introduction, which
+// the full-name/alias matcher (whole-name word boundary) misses — so a clearly
+// in-issue character would lose their full record. Single-word names need no
+// supplement (the matcher already handles them).
+const firstNameToken = (c) => {
+  const parts = String(c?.name || '').trim().split(/\s+/);
+  return parts.length > 1 ? parts[0] : '';
+};
+
+// Proper-noun variant of `wordInText` (#1529): the match counts only when an
+// occurrence appears with an UPPERCASE first letter — so "Will entered" / "WILL"
+// match, but mid-sentence "the team will regroup" does not. We scan all
+// word-boundary occurrences case-insensitively (the `i` flag), then accept only if
+// at least one has a capitalized initial. A sentence-initial capital ("Will the
+// team…") still matches — that's the safe over-inclusion direction.
+const properNounInText = (needle, haystack) => {
+  if (!needle) return false;
+  const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(`(?<![\\p{L}\\p{N}_])${escaped}(?![\\p{L}\\p{N}_])`, 'giu');
+  for (const m of String(haystack || '').matchAll(re)) {
+    const ch = m[0][0];
+    // An uppercase cased letter: `ch === toUpperCase` AND `ch !== toLowerCase`
+    // (rules out digits/symbols, whose upper- and lower-case forms are equal).
+    if (ch && ch === ch.toUpperCase() && ch !== ch.toLowerCase()) return true;
+  }
+  return false;
+};
+
+// Reliable "this issue names them" signal with a proper-noun guard for single-word
+// names (#1529). `matchCharactersInText` is case-insensitive — correct for visual
+// stages and shared with `canonReadiness`, so we refine LOCALLY rather than widen it.
+// A character whose FULL NAME is a single common English word ("Will"/"May"/"Grace")
+// otherwise matches incidentally on ordinary prose ("the team will regroup"), and one
+// incidental hit can scope a prompt down to that lone character. So here a single-word
+// NAME must appear in its CAPITALIZED form to count; multi-word names and ALL aliases
+// keep the case-insensitive word-boundary match (a multi-word phrase or a nickname is
+// essentially never an incidental common-word collision).
+const matchReliableNames = (scopeText, allCharacters) => {
+  if (!scopeText || !Array.isArray(allCharacters)) return [];
+  const matched = [];
+  for (const c of allCharacters) {
+    const name = String(c?.name || '').trim();
+    const nameHit = name && !/\s/.test(name)
+      ? properNounInText(name, scopeText)   // single-word name → proper-noun guard
+      : wordInText(name, scopeText);        // multi-word name → as-is
+    const aliasHit = (c?.aliases || []).some((a) => wordInText(a, scopeText));
+    if (nameHit || aliasHit) matched.push(c);
+  }
+  return matched;
+};
+
+/**
+ * Scope the full-record character bible to the cast relevant to THIS issue (#1511).
+ *
+ * Injecting every canon character's full record into every issue's prose and
+ * comic-script prompt is the token-bloat this addresses: a 68-character bible is
+ * ~52K tokens re-sent on every issue × every stage, when most issues feature a
+ * handful of the cast. We keep full records for: (a) the series PRINCIPALS (always
+ * — the lead/recurring core is in play every issue), plus (b) any character the
+ * issue's own source text names. The always-present compact `worldEntitiesSummary`
+ * roster carries the rest of the cast for continuity refs.
+ *
+ * Two confidence tiers keep an incidental match from defeating the safety nets:
+ *   - RELIABLE signals — the series principals (an unconditional FLOOR, so an
+ *     incidental match can never SUPPRESS the leads) and full-name/alias matches.
+ *   - WEAK signal — the first-name supplement, which errs toward inclusion (a
+ *     common-word token like "will" in "the team will regroup" can spuriously
+ *     match "Will Stone"). It only ADDS to an already-reliable scope; it never
+ *     counts as the signal that suppresses the whole-cast fallback.
+ *
+ * So when there is NO reliable signal (no principals tagged AND no full-name
+ * match — e.g. an untagged early-bible cast), the result is the whole cast, even
+ * if a first-name token happened to match: better to ship the full bible than to
+ * let "will" scope the prompt down to "Will Stone" and drop everyone else. The
+ * block is therefore never empty.
+ *
+ * Precision guard (#1529): a character whose own name IS a common word (a cast
+ * member literally named "Will"/"May"/"Grace") would otherwise match incidentally
+ * via the case-insensitive full-name matcher and count as reliable — scoping the
+ * issue down to that one character. The reliable-signal matcher (`matchReliableNames`)
+ * therefore requires a SINGLE-WORD name to appear in its capitalized form, so "the
+ * team will regroup" no longer counts as naming a character called "Will", while
+ * "Will entered" still does. Multi-word names and aliases keep the case-insensitive
+ * match. Residual: a sentence-initial capital ("Will the team…") still matches, but
+ * that's the safe over-inclusion direction (the character keeps its full record) —
+ * and even a true miss is non-lossy, since the uncapped `worldEntitiesSummary` roster
+ * still carries every un-scoped character's one-line continuity entry.
+ */
+export function scopeCharactersForIssue(allCharacters, scopeText) {
+  if (!Array.isArray(allCharacters) || allCharacters.length === 0) return [];
+  const byKey = new Map();
+  // (a) Principals floor — always in play, never suppressible by an incidental match.
+  for (const c of allCharacters) {
+    if (PRINCIPAL_ROLE_RE.test(c?.role || '')) byKey.set(c.id || c.name, c);
+  }
+  // (b) Full-name / alias matches — a reliable "this issue names them" signal,
+  // with a proper-noun guard so a single-word common-name ("Will"/"Grace") doesn't
+  // scope on an incidental lowercase hit (#1529).
+  for (const c of matchReliableNames(scopeText, allCharacters)) byKey.set(c.id || c.name, c);
+  // Principals + full-name matches are the trustworthy signal. A first-name-only
+  // match is NOT, on its own, enough to suppress the whole-cast fallback below.
+  const hasReliableSignal = byKey.size > 0;
+  // (c) First-name supplement — additive only ("Mira" → "Mira Reyes").
+  if (scopeText) {
+    for (const c of allCharacters) {
+      const key = c.id || c.name;
+      if (!byKey.has(key) && wordInText(firstNameToken(c), scopeText)) byKey.set(key, c);
+    }
+  }
+  // Reliable signal → the scoped set (incl. any first-name additions). No reliable
+  // signal → the whole cast (which already contains any incidental first-name hit).
+  return hasReliableSignal ? [...byKey.values()] : allCharacters;
+}
+
+/**
+ * Concatenate the text that defines an issue's scope — its title, the unsaved
+ * `seedInput` driving this run (the idea stage generates beats straight from it,
+ * so a character named only in the seed must still be matched), synopsis
+ * (`idea.input`), beat sheet (`idea.output`), and whatever source stages this
+ * generation adapts from — into one haystack for the character matcher.
+ */
+function buildIssueScopeText(issue, sourceMaterials, seedInput) {
+  return [
+    issue.title,
+    seedInput,
+    issue.stages?.idea?.input,
+    issue.stages?.idea?.output,
+    ...sourceMaterials.map((s) => s.content),
+  ].filter(Boolean).join('\n\n');
+}
+
 /**
  * Build the variable bag fed into the stage template. Includes the series
  * bible (`series.*`) and every *prior* text stage's content (`stages.*`), plus
@@ -215,13 +386,30 @@ function buildStageContext({ series, canon, world, issue, stageId, seedInput, so
   // backfill the beat sheet from finished prose.
   const sourceMaterials = resolveSourceStageIds({ issue, stageId, sourceStageIds })
     .map((id) => ({ stageId: id, label: STAGE_LABELS[id] || id, content: stageContentOf(issue.stages?.[id]) }));
+  // Scope the heavyweight full-record character block to the cast this issue
+  // actually involves (#1511) — full records for the principals plus characters
+  // named in the issue's source text. Only the roster-backed stages are scoped
+  // (see ROSTER_BACKED_STAGES); the idea stage keeps the full cast.
+  const scopedCharacters = ROSTER_BACKED_STAGES.has(stageId)
+    ? scopeCharactersForIssue(canon?.characters || [], buildIssueScopeText(issue, sourceMaterials, seedInput))
+    : (canon?.characters || []);
   // Compact one-line-per-kind synopsis of the linked universe's canon. Lets
   // per-issue text prompts reference named entities without paying the full
-  // canon-block token cost — `series.characters` already covers the bible-
-  // sized character context, this adds places/objects + other characters not
-  // pulled into the series-canon for continuity anchors.
+  // canon-block token cost. The roster carries the REST of the cast — everyone
+  // NOT rendered as a full record in `series.characters` — plus places/objects,
+  // so a scoped-out character is still represented for naming/continuity and is
+  // never duplicated (excludeCharacterNames drops the scoped set). Characters are
+  // uncapped here (`maxPerKind: { characters: Infinity }`) because the roster is
+  // the ONLY place the non-scoped cast appears: the default top-8 cap would make
+  // a large-cast series silently drop mid-bible characters from the prompt.
+  const scopedCharacterNames = new Set(
+    scopedCharacters.map((c) => (c?.name || '').trim().toLowerCase()).filter(Boolean),
+  );
   const worldEntitiesSummary = world
-    ? (renderEntitiesSummary(world) || '(none)')
+    ? (renderEntitiesSummary(world, {
+      maxPerKind: { characters: Infinity },
+      excludeCharacterNames: scopedCharacterNames,
+    }) || '(none)')
     : NO_LINKED_UNIVERSE_PLACEHOLDER;
   return {
     series: {
@@ -234,7 +422,7 @@ function buildStageContext({ series, canon, world, issue, stageId, seedInput, so
       // variable (and thus no stage-prompt migration). See composeStyleNotes.
       styleNotes: composeStyleNotes(series),
       universeId: series.universeId || '',
-      characters: canon?.characters || [],
+      characters: scopedCharacters,
     },
     issue: {
       number: issue.number,
@@ -294,7 +482,10 @@ export async function generateStage(issueId, stageId, options = {}) {
     sourceStageIds: options.sourceStageIds,
   });
   if (stageId === 'idea') {
-    Object.assign(ctx, await buildIdeaContextAugment(series, issue));
+    Object.assign(ctx, await buildIdeaContextAugment(series, issue, options.seedInput));
+    if (ctx.paddingRisk) {
+      console.log(`⚠️ Pipeline idea — issue=${issueId.slice(0, 8)} terse synopsis vs ${ctx.lengthTargets?.profile} profile: scope-discipline guard engaged`);
+    }
   }
 
   // Catch only at this boundary so the stage record persists the failure
@@ -304,7 +495,16 @@ export async function generateStage(issueId, stageId, options = {}) {
   try {
     result = await runStagedLLM(template, ctx, {
       providerOverride: options.providerId,
+      // Soft run-level default (Series Autopilot, #1514): unlike providerId it
+      // loses to a per-stage pin and soft-falls-through to active when
+      // unavailable. Route callers pass providerId (hard); autopilot passes
+      // providerIdDefault (soft).
+      providerDefault: options.providerIdDefault,
       modelOverride: options.model,
+      // Soft run-level model default (Series Autopilot, #1558): loses to a
+      // per-stage `model` pin, mirroring providerIdDefault. Route callers pass
+      // model (hard); autopilot passes modelIdDefault (soft).
+      modelDefault: options.modelIdDefault,
       source: 'pipeline-text-stage',
     });
   } catch (err) {
@@ -344,18 +544,29 @@ export async function generateStage(issueId, stageId, options = {}) {
     // roll back the user's accepted prose draft. The stamp is best-effort: if
     // even the stamp write fails we only warn (no throw out of the prose path).
     //
-    // Record only the override actually forwarded to the extractor (not a
-    // series.llm fallback) — the extract call below passes bare
-    // `options.providerId`/`options.model`, so when those are undefined the
-    // extractor resolves to the global active provider. Claiming
-    // `series.llm.provider` here would make the banner misreport which provider
-    // failed. Empty string = "used the default/active provider".
-    const provider = options.providerId || '';
-    const model = options.model || '';
+    // Canon extraction follows whichever provider drove this prose stage — the
+    // manual route's hard `providerId` OR Series Autopilot's run provider
+    // (#1514 moved the autopilot from `providerId` to `providerIdDefault`, so
+    // fall back to it here; without this the just-generated prose would extract
+    // on the global active provider instead of the run's provider). The
+    // extractor takes a hard `providerOverride` (it has no stage pins of its own
+    // to honor), and a throw on an unavailable provider is non-fatal — caught
+    // below into a failed-extraction marker. Record only the provider actually
+    // forwarded (not a series.llm fallback) so the banner can't misreport which
+    // provider failed. Empty string = "used the default/active provider".
+    const extractProvider = options.providerId ?? options.providerIdDefault;
+    // Mirror the provider fallback for the model dimension (#1558): the hard
+    // route model wins, else the autopilot's soft run model — so the just-
+    // generated prose extracts canon on the run's model, not the active
+    // provider's default. extractCanonFromProse takes a hard modelOverride (it
+    // has no stage pins of its own).
+    const extractModel = options.model ?? options.modelIdDefault;
+    const provider = extractProvider || '';
+    const model = extractModel || '';
     const marker = await extractCanonFromProse(series.universeId, {
       corpus: output,
-      providerOverride: options.providerId,
-      modelOverride: options.model,
+      providerOverride: extractProvider,
+      modelOverride: extractModel,
       parallel: true,
       autoLock: true,
       sourceSeriesId: series.id,
@@ -381,4 +592,4 @@ export async function generateStage(issueId, stageId, options = {}) {
 }
 
 // Export internals for tests.
-export const __testing = { buildStageContext, buildIdeaContextAugment, shapeNeighborForIdeaPrompt, resolveSourceStageIds, STAGE_TO_TEMPLATE, STAGE_LABELS, DEFAULT_FORWARD_SOURCE };
+export const __testing = { buildStageContext, buildIdeaContextAugment, shapeNeighborForIdeaPrompt, resolveSourceStageIds, scopeCharactersForIssue, buildIssueScopeText, STAGE_TO_TEMPLATE, STAGE_LABELS, DEFAULT_FORWARD_SOURCE };

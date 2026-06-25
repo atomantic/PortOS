@@ -2,9 +2,16 @@ import { describe, it, expect } from 'vitest';
 import {
   groupChecksByScope,
   groupFindingsByCheck,
+  checkFalsePositiveRate,
   openFindingsTotal,
   findingManuscriptLink,
   scopeLabel,
+  categoryLabel,
+  normCategory,
+  deriveFindingFacets,
+  applyFindingsView,
+  normalizeFindingSort,
+  findingIssueKey,
 } from './editorialChecks.js';
 
 const checks = [
@@ -29,7 +36,7 @@ describe('groupChecksByScope', () => {
 
 describe('groupFindingsByCheck', () => {
   const rows = {
-    'a.series': { label: 'Series check', scope: 'series', kind: 'deterministic' },
+    'a.series': { label: 'Series check', scope: 'series', kind: 'deterministic', description: 'Checks the whole series.' },
     'b.issue': { label: 'Issue check', scope: 'issue', kind: 'llm' },
   };
   const comments = [
@@ -50,9 +57,20 @@ describe('groupFindingsByCheck', () => {
     expect(series.counts).toEqual({ high: 1, medium: 0, low: 1 });
   });
 
-  it('falls back to the checkId as label when the check is unknown', () => {
+  it('carries the catalog kind + description onto each group (#1604)', () => {
+    const groups = groupFindingsByCheck(comments, rows);
+    const series = groups.find((g) => g.checkId === 'a.series');
+    const issue = groups.find((g) => g.checkId === 'b.issue');
+    expect(series.kind).toBe('deterministic');
+    expect(series.description).toBe('Checks the whole series.');
+    // A row without a description falls back to null, not undefined/''.
+    expect(issue.description).toBeNull();
+  });
+
+  it('falls back to the checkId as label and null description when the check is unknown', () => {
     const groups = groupFindingsByCheck([{ id: '9', checkId: 'gone.check', status: 'open', severity: 'low' }], {});
     expect(groups[0].label).toBe('gone.check');
+    expect(groups[0].description).toBeNull();
   });
 
   it('accepts a Map of rows as well as a plain object', () => {
@@ -74,6 +92,41 @@ describe('groupFindingsByCheck', () => {
     const groups = groupFindingsByCheck(staleComments, rows);
     expect(groups.find((g) => g.checkId === 'a.series').stale).toBe(1);
     expect(groups.find((g) => g.checkId === 'b.issue').stale).toBe(0);
+  });
+
+  it('tallies dismissed + false-positive counts and stamps a stable rate (#1605)', () => {
+    const fpComments = [
+      { id: '1', checkId: 'a.series', status: 'open', severity: 'high' },
+      { id: '2', checkId: 'a.series', status: 'dismissed', severity: 'low' }, // plain dismiss
+      { id: '3', checkId: 'a.series', status: 'dismissed', severity: 'high', dismissReason: 'false-positive' },
+      { id: '4', checkId: 'a.series', status: 'dismissed', severity: 'high', dismissReason: 'false-positive' },
+      { id: '5', checkId: 'b.issue', status: 'open', severity: 'medium' },
+    ];
+    const groups = groupFindingsByCheck(fpComments, rows);
+    const series = groups.find((g) => g.checkId === 'a.series');
+    expect(series.dismissed).toBe(3);
+    expect(series.falsePositive).toBe(2);
+    expect(series.falsePositiveRate).toBeCloseTo(2 / 4); // 2 of 4 findings
+    const issue = groups.find((g) => g.checkId === 'b.issue');
+    expect(issue.falsePositive).toBe(0);
+    expect(issue.falsePositiveRate).toBe(0);
+  });
+});
+
+describe('checkFalsePositiveRate', () => {
+  it('prefers the stamped rate over a recompute (survives status-filter recounts)', () => {
+    // A group whose `total` was recounted to the open-only subset, but whose
+    // stamped rate reflects the full finding set.
+    expect(checkFalsePositiveRate({ total: 1, falsePositive: 0, falsePositiveRate: 0.5 })).toBe(0.5);
+  });
+
+  it('falls back to falsePositive/total for a hand-built group', () => {
+    expect(checkFalsePositiveRate({ total: 4, falsePositive: 1 })).toBe(0.25);
+  });
+
+  it('returns null when the check has no findings yet', () => {
+    expect(checkFalsePositiveRate({ total: 0, falsePositive: 0 })).toBeNull();
+    expect(checkFalsePositiveRate(null)).toBeNull();
   });
 });
 
@@ -99,5 +152,182 @@ describe('scopeLabel', () => {
     expect(scopeLabel('series')).toBe('Series');
     expect(scopeLabel('galaxy')).toBe('Galaxy');
     expect(scopeLabel('')).toBe('Other');
+  });
+});
+
+const findingsFixture = () => [
+  { id: 'a1', checkId: 'pacing', category: 'pacing', status: 'open', severity: 'high', issueNumber: 2, problem: 'Slow open', location: 'p1' },
+  { id: 'a2', checkId: 'pacing', category: 'pacing', status: 'dismissed', severity: 'low', issueNumber: 2, problem: 'Old note' },
+  { id: 'b1', checkId: 'naming', category: 'naming', status: 'open', severity: 'medium', issueNumber: 1, problem: 'Confusable names' },
+  { id: 'b2', checkId: 'naming', status: 'open', severity: 'low', issueNumber: null, problem: 'Series-wide naming' },
+];
+const fixtureRows = {
+  pacing: { label: 'Pacing', scope: 'scene' },
+  naming: { label: 'Naming', scope: 'series' },
+};
+const groupsFixture = () => groupFindingsByCheck(findingsFixture(), fixtureRows);
+
+describe('findingIssueKey', () => {
+  it('keys by issue number, bucketing series-wide findings under "none"', () => {
+    expect(findingIssueKey({ issueNumber: 5 })).toBe('5');
+    expect(findingIssueKey({ issueNumber: null })).toBe('none');
+    expect(findingIssueKey({})).toBe('none');
+  });
+});
+
+describe('normalizeFindingSort', () => {
+  it('passes through known sort ids and defaults unknown to scope', () => {
+    expect(normalizeFindingSort('severity')).toBe('severity');
+    expect(normalizeFindingSort('issue')).toBe('issue');
+    expect(normalizeFindingSort('bogus')).toBe('scope');
+    expect(normalizeFindingSort(undefined)).toBe('scope');
+  });
+});
+
+describe('deriveFindingFacets', () => {
+  it('enumerates only the facets present, ordering checks scope→label and issues numeric-then-none', () => {
+    const f = deriveFindingFacets(groupsFixture());
+    expect([...f.severities].sort()).toEqual(['high', 'low', 'medium']);
+    expect([...f.statuses].sort()).toEqual(['dismissed', 'open']);
+    // scene (Pacing) sorts before series (Naming) per CHECK_SCOPE_ORDER.
+    expect(f.checks.map((c) => c.id)).toEqual(['pacing', 'naming']);
+    expect(f.scopes.map((s) => s.scope)).toEqual(['scene', 'series']);
+    expect(f.issues.map((i) => i.key)).toEqual(['1', '2', 'none']);
+    expect(f.issues.find((i) => i.key === 'none').label).toBe('Series-wide');
+    // Categories come from the finding's `category` field; a finding without one
+    // buckets under 'other'. Sorted by display label.
+    expect(f.categories.map((c) => c.category)).toEqual(['naming', 'other', 'pacing']);
+    expect(f.categories.map((c) => c.label)).toEqual(['Naming', 'Other', 'Pacing']);
+  });
+});
+
+describe('normCategory / categoryLabel', () => {
+  it('normalizes a finding category, bucketing missing/blank under "other"', () => {
+    expect(normCategory({ category: 'continuity' })).toBe('continuity');
+    expect(normCategory({ category: '' })).toBe('other');
+    expect(normCategory({})).toBe('other');
+    expect(normCategory(null)).toBe('other');
+  });
+
+  it('title-cases a category token for display', () => {
+    expect(categoryLabel('continuity')).toBe('Continuity');
+    expect(categoryLabel('')).toBe('Other');
+  });
+});
+
+describe('applyFindingsView', () => {
+  it('returns all groups unchanged when no filters are active', () => {
+    const view = applyFindingsView(groupsFixture(), {}, 'scope');
+    expect(view.map((g) => g.checkId)).toEqual(['pacing', 'naming']);
+    expect(view.reduce((n, g) => n + g.comments.length, 0)).toBe(4);
+  });
+
+  it('filters by severity and recomputes the group counts to match', () => {
+    const view = applyFindingsView(groupsFixture(), { severities: new Set(['high']) }, 'scope');
+    expect(view).toHaveLength(1);
+    expect(view[0].checkId).toBe('pacing');
+    expect(view[0].comments.map((c) => c.id)).toEqual(['a1']);
+    expect(view[0].open).toBe(1);
+    expect(view[0].total).toBe(1);
+    expect(view[0].counts).toEqual({ high: 1, medium: 0, low: 0 });
+  });
+
+  it('filters by status (open only) dropping resolved findings', () => {
+    const view = applyFindingsView(groupsFixture(), { statuses: new Set(['open']) }, 'scope');
+    const ids = view.flatMap((g) => g.comments.map((c) => c.id));
+    expect(ids).toEqual(['a1', 'b1', 'b2']);
+  });
+
+  it('filters by scope and by check id', () => {
+    const byScope = applyFindingsView(groupsFixture(), { scopes: new Set(['series']) }, 'scope');
+    expect(byScope.map((g) => g.checkId)).toEqual(['naming']);
+    const byCheck = applyFindingsView(groupsFixture(), { checkIds: new Set(['pacing']) }, 'scope');
+    expect(byCheck.map((g) => g.checkId)).toEqual(['pacing']);
+  });
+
+  it('filters by finding category (comment-level), bucketing un-categorized under "other"', () => {
+    const byPacing = applyFindingsView(groupsFixture(), { categories: new Set(['pacing']) }, 'scope');
+    expect(byPacing.flatMap((g) => g.comments.map((c) => c.id))).toEqual(['a1', 'a2']);
+    // 'naming' category only matches b1 (b2 has no category → 'other'), so the
+    // naming group keeps just b1.
+    const byNaming = applyFindingsView(groupsFixture(), { categories: new Set(['naming']) }, 'scope');
+    expect(byNaming.flatMap((g) => g.comments.map((c) => c.id))).toEqual(['b1']);
+    const byOther = applyFindingsView(groupsFixture(), { categories: new Set(['other']) }, 'scope');
+    expect(byOther.flatMap((g) => g.comments.map((c) => c.id))).toEqual(['b2']);
+  });
+
+  it('filters by issue, including the series-wide "none" bucket', () => {
+    const issue2 = applyFindingsView(groupsFixture(), { issues: new Set(['2']) }, 'scope');
+    expect(issue2.flatMap((g) => g.comments.map((c) => c.id))).toEqual(['a1', 'a2']);
+    const seriesWide = applyFindingsView(groupsFixture(), { issues: new Set(['none']) }, 'scope');
+    expect(seriesWide.flatMap((g) => g.comments.map((c) => c.id))).toEqual(['b2']);
+  });
+
+  it('matches the free-text query against problem and location, case-insensitively', () => {
+    const view = applyFindingsView(groupsFixture(), { query: 'confusable' }, 'scope');
+    expect(view.flatMap((g) => g.comments.map((c) => c.id))).toEqual(['b1']);
+    const byLocation = applyFindingsView(groupsFixture(), { query: 'P1' }, 'scope');
+    expect(byLocation.flatMap((g) => g.comments.map((c) => c.id))).toEqual(['a1']);
+  });
+
+  it('sorts findings within a group by severity (high→low) when sort=severity', () => {
+    const view = applyFindingsView(groupsFixture(), { checkIds: new Set(['naming']) }, 'severity');
+    expect(view[0].comments.map((c) => c.id)).toEqual(['b1', 'b2']); // medium before low
+  });
+
+  it('sorts groups by most-severe open findings first when sort=severity', () => {
+    // pacing has a high open finding; naming's most severe open is medium.
+    const view = applyFindingsView(groupsFixture(), {}, 'severity');
+    expect(view.map((g) => g.checkId)).toEqual(['pacing', 'naming']);
+  });
+
+  it('sorts groups by severity even in a resolved-only filtered view (counts are open-only)', () => {
+    const comments = [
+      { id: 'z1', checkId: 'zebra', status: 'dismissed', severity: 'high', problem: 'High resolved' },
+      { id: 'a1', checkId: 'alpha', status: 'dismissed', severity: 'low', problem: 'Low resolved' },
+    ];
+    const rows = { zebra: { label: 'Zebra', scope: 'series' }, alpha: { label: 'Alpha', scope: 'series' } };
+    const groups = groupFindingsByCheck(comments, rows);
+    // Default scope→label order is Alpha, Zebra; severity sort must flip to Zebra (high) first.
+    const view = applyFindingsView(groups, { statuses: new Set(['dismissed']) }, 'severity');
+    expect(view.map((g) => g.checkId)).toEqual(['zebra', 'alpha']);
+  });
+
+  it('ranks a single high-severity group above a noisy many-low group when sort=severity', () => {
+    const comments = [
+      { id: 'h1', checkId: 'one-high', status: 'open', severity: 'high', problem: 'Critical' },
+      ...Array.from({ length: 50 }, (_, i) => (
+        { id: `l${i}`, checkId: 'many-low', status: 'open', severity: 'low', problem: `Nit ${i}` })),
+    ];
+    const rows = { 'one-high': { label: 'One high', scope: 'series' }, 'many-low': { label: 'Many low', scope: 'series' } };
+    const view = applyFindingsView(groupFindingsByCheck(comments, rows), {}, 'severity');
+    expect(view.map((g) => g.checkId)).toEqual(['one-high', 'many-low']);
+  });
+
+  it('sorts findings by issue number with series-wide last when sort=issue', () => {
+    const view = applyFindingsView(groupsFixture(), { checkIds: new Set(['naming']) }, 'issue');
+    expect(view[0].comments.map((c) => c.id)).toEqual(['b1', 'b2']); // issue 1 before series-wide
+  });
+
+  it('orders GROUPS by their lowest issue number when sort=issue (not just rows)', () => {
+    // naming's lowest issue is 1; pacing's is 2 — so naming leads even though the
+    // default scope order puts scene-scoped pacing first.
+    const view = applyFindingsView(groupsFixture(), {}, 'issue');
+    expect(view.map((g) => g.checkId)).toEqual(['naming', 'pacing']);
+  });
+
+  it('orders GROUPS by best open status then label when sort=status', () => {
+    // Both groups have an open finding (rank 0) → alphabetical tiebreak: Naming, Pacing.
+    const view = applyFindingsView(groupsFixture(), {}, 'status');
+    expect(view.map((g) => g.checkId)).toEqual(['naming', 'pacing']);
+  });
+
+  it('combines filters (AND semantics across facets)', () => {
+    const view = applyFindingsView(
+      groupsFixture(),
+      { statuses: new Set(['open']), severities: new Set(['low']) },
+      'scope',
+    );
+    expect(view.flatMap((g) => g.comments.map((c) => c.id))).toEqual(['b2']);
   });
 });

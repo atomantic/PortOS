@@ -11,7 +11,7 @@ import { join } from 'path';
 import { readJSONFile, ensureDir, PATHS, dataPath, atomicWrite } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { instanceEvents } from './instanceEvents.js';
-import { getPeers, DEFAULT_SYNC_CATEGORIES, updatePeer, getInstanceId, UNKNOWN_INSTANCE_ID } from './instances.js';
+import { getPeers, DEFAULT_SYNC_CATEGORIES, allSyncCategoriesOn, updatePeer, getInstanceId, UNKNOWN_INSTANCE_ID } from './instances.js';
 import { peerBaseUrl } from '../lib/peerUrl.js';
 import { peerAuthHeaders } from '../lib/peerHttpClient.js';
 import * as brainSync from './brainSync.js';
@@ -438,6 +438,11 @@ function detectCursorReset(cursor, peer) {
  * enable brain + memory for backward compatibility with older peers.
  */
 function getEffectiveCategories(peer) {
+  // A full-sync ("mirror everything") peer pulls EVERY snapshot category from
+  // its mirror, regardless of the stored per-category map — including a category
+  // added in a later version (allSyncCategoriesOn derives off
+  // DEFAULT_SYNC_CATEGORIES, so it stays current automatically).
+  if (peer.fullSync === true) return allSyncCategoriesOn();
   if (peer.syncCategories) return peer.syncCategories;
   // Legacy fallback: peers without syncCategories but with syncEnabled get brain+memory
   if (peer.syncEnabled !== false) {

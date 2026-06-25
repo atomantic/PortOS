@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense } fro
 import { useParams, useNavigate } from 'react-router-dom';
 import { useSocket } from '../hooks/useSocket';
 import { useLocalStorageBool } from '../hooks/useLocalStorageBool';
-import useNextEvalCountdown from '../hooks/useNextEvalCountdown';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
 import { useValidTab } from '../hooks/useValidTab';
 import * as api from '../services/api';
@@ -103,13 +102,6 @@ export default function ChiefOfStaff() {
   const toggleDesktopPanel = useCallback(() => {
     setDesktopPanelCollapsed((prev) => !prev);
   }, [setDesktopPanelCollapsed]);
-
-  // Countdown to next evaluation
-  const evalCountdown = useNextEvalCountdown(
-    status?.stats?.lastEvaluation,
-    status?.config?.evaluationIntervalMs,
-    status?.running
-  );
 
   // Derive agent state from system status
   const deriveAgentState = useCallback((statusData, agentsData, healthData) => {
@@ -574,7 +566,6 @@ export default function ChiefOfStaff() {
                 onStart={handleStart}
                 onStop={handleStop}
                 stats={status?.stats}
-                evalCountdown={evalCountdown}
               />
             </div>
           )}
@@ -589,7 +580,6 @@ export default function ChiefOfStaff() {
               onStart={handleStart}
               onStop={handleStop}
               stats={status?.stats}
-              evalCountdown={evalCountdown}
             />
           </div>
         </>
@@ -727,7 +717,7 @@ export default function ChiefOfStaff() {
                 <StateLabel state={agentState} />
               </div>
               <div className={`${hasCanvasAvatar ? 'sm:-mt-4 md:-mt-6 lg:mt-0' : ''} hidden sm:block`}>
-                <StatusBubble message={statusMessage} countdown={evalCountdown} />
+                <StatusBubble message={statusMessage} />
               </div>
 
               {/* Desktop Stats Grid - integrated into CoS sidebar (matches mobile compressed layout) */}
@@ -912,7 +902,7 @@ export default function ChiefOfStaff() {
         )}
         {activeTab === 'config' && (
           <div role="tabpanel" id="tabpanel-config" aria-labelledby="tab-config">
-            <ConfigTab config={status?.config} onUpdate={fetchData} onEvaluate={handleForceEvaluate} avatarStyle={configAvatarStyle} setAvatarStyle={setAvatarStyle} evalCountdown={evalCountdown} />
+            <ConfigTab config={status?.config} onUpdate={fetchData} onEvaluate={handleForceEvaluate} avatarStyle={configAvatarStyle} setAvatarStyle={setAvatarStyle} />
           </div>
         )}
       </div>
