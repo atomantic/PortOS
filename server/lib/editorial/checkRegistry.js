@@ -1490,6 +1490,18 @@ function buildRosterAppearances(ctx) {
   return rows;
 }
 
+// Normalized keys of every canon character that actually APPEARS in the prose
+// (named at least once across the manuscript sections) — the "appearing cast"
+// both the screen-time skew and the silent-major distribution signals score
+// against. Pure; reuses buildRosterAppearances' per-section matcher scan.
+function buildAppearingKeys(ctx) {
+  return new Set(
+    buildRosterAppearances(ctx)
+      .filter((r) => r.appearedInIssues.length > 0)
+      .map((r) => normalizeName(r.name))
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Cast representation & balance (#1312) — three coarse, computable casting
 // signals over the canon + reverse-outline + stitched manuscript:
@@ -1538,7 +1550,9 @@ function inferGender(pronouns) {
 // signal opts out rather than guess — the same absent-vs-empty discipline
 // inferGender() uses. Deliberately omits genuinely-ambiguous words ("supporting",
 // "secondary", "recurring") that sit between lead and walk-on. Returns
-// 'major' | 'minor' | 'unknown'.
+// 'major' | 'minor' | 'unknown'. The two keyword sets live at module scope (vs
+// inferGender's inline pronoun checks) so the regexes are compiled once, not on
+// every per-character call.
 const MAJOR_ROLE_RE = /\b(protagonist|deuteragonist|antagonist|villain|hero|heroine|lead|main|primary|central|principal)\b/;
 const MINOR_ROLE_RE = /\b(minor|background|cameo|walk-?on|bit[- ]?part|extra|incidental|tertiary)\b/;
 function inferRoleTier(role) {
@@ -2872,15 +2886,11 @@ export const EDITORIAL_CHECKS = [
 
           // Role-relative distribution. Silent-major is gated on prose appearance
           // (a major who never appears is just absent — a different signal — not
-          // "oddly silent"); the appearing set is computed lazily only when needed.
+          // "oddly silent"); the appearing-cast scan is skipped entirely unless the
+          // signal is enabled AND there's a major-tier character to score.
           if (wantMinorDom || wantSilentMajor) {
-            const appearingKeys = wantSilentMajor
-              ? new Set(
-                buildRosterAppearances(ctx)
-                  .filter((r) => r.appearedInIssues.length > 0)
-                  .map((r) => normalizeName(r.name))
-              )
-              : null;
+            const hasMajor = identities.some((id) => id.roleTier === 'major');
+            const appearingKeys = wantSilentMajor && hasMajor ? buildAppearingKeys(ctx) : null;
             for (const id of identities) {
               const count = byOwner.get(id.key) || 0;
               const share = count / attributed;
@@ -2952,10 +2962,7 @@ export const EDITORIAL_CHECKS = [
       // Over the APPEARING named cast (tied to prose appearances so canon-only
       // bloat doesn't trip it), is one inferable gender strongly over-represented?
       if (maxGenderShare < 1) {
-        const rows = buildRosterAppearances(ctx);
-        const appearingKeys = new Set(
-          rows.filter((r) => r.appearedInIssues.length > 0).map((r) => normalizeName(r.name))
-        );
+        const appearingKeys = buildAppearingKeys(ctx);
         const counts = { female: 0, male: 0, nonbinary: 0 };
         for (const key of appearingKeys) {
           const g = genderByKey.get(key);
