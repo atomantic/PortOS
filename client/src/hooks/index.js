@@ -8,6 +8,7 @@
 // hook uses.
 
 // === Default-exporting hooks (re-exported as named) ===
+export { default as useAnchorReveal } from './useAnchorReveal.js';
 export { default as useCityAudio } from './useCityAudio.js';
 export { default as useAutoSizeTextarea } from './useAutoSizeTextarea.js';
 export { default as useClickOutside } from './useClickOutside.js';

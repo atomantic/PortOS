@@ -1047,6 +1047,20 @@ input[type="color"],
   animation: pulse-soft 2s ease-in-out infinite;
 }
 
+/* Manuscript editorial-finding anchor reveal (#1601): a brief tint pulse drawn
+   over the offending text when its finding opens, so the eye lands on the exact
+   passage after the scroll-to. Honors prefers-reduced-motion via the global
+   reduce block above (animation collapses to ~instant). Paired with
+   `useAnchorReveal` — keep the 1.2s duration in sync with FLASH_MS there. */
+@keyframes portos-anchor-flash {
+  0%   { background-color: rgba(59, 130, 246, 0.5); }
+  100% { background-color: rgba(59, 130, 246, 0); }
+}
+.manuscript-anchor-flash {
+  animation: portos-anchor-flash 1.2s ease-out;
+  border-radius: 2px;
+}
+
 /* Chief of Staff Character Animations */
 .cos-character {
   filter: drop-shadow(0 0 20px rgba(99, 102, 241, 0.3));

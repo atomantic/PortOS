@@ -55,4 +55,25 @@ describe('ManuscriptHighlightedProse', () => {
     );
     expect(screen.queryByTestId('card')).not.toBeInTheDocument();
   });
+
+  it('scrolls to and flashes the open finding\'s highlight (#1601)', () => {
+    const scrollSpy = vi.fn();
+    window.HTMLElement.prototype.scrollIntoView = scrollSpy;
+    render(
+      <ManuscriptHighlightedProse content={CONTENT} spans={SPANS} openCommentId="c1" onOpenComment={() => {}} />,
+    );
+    const mark = screen.getByText('ANCHOR');
+    expect(mark.classList.contains('manuscript-anchor-flash')).toBe(true);
+    expect(scrollSpy).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center' });
+  });
+
+  it('does not flash any highlight when the open note is not located', () => {
+    const scrollSpy = vi.fn();
+    window.HTMLElement.prototype.scrollIntoView = scrollSpy;
+    const { container } = render(
+      <ManuscriptHighlightedProse content={CONTENT} spans={SPANS} openCommentId="c-unlocated" onOpenComment={() => {}} />,
+    );
+    expect(container.querySelector('.manuscript-anchor-flash')).toBeNull();
+    expect(scrollSpy).not.toHaveBeenCalled();
+  });
 });

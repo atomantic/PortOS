@@ -8,13 +8,25 @@
  * preserving whitespace.
  */
 
-import { useMemo } from 'react';
+import { useMemo, useRef } from 'react';
 import { buildHighlightSegments } from '../../../lib/manuscriptAnchors';
+import useAnchorReveal from '../../../hooks/useAnchorReveal';
 import { SEVERITY_TONE } from './constants';
 
 export default function ManuscriptHighlightedProse({ content, spans, openCommentId, onOpenComment, inlineCard }) {
   const text = content || '';
   const segments = useMemo(() => buildHighlightSegments(text, spans), [text, spans]);
+
+  // Scroll the open finding's highlighted text into view and flash it on open /
+  // prev-next step (#1601). `activeRef` points at the first highlight segment
+  // carrying the open comment; it stays null when the anchor isn't located in
+  // the draft, so the reveal is a no-op and the parent's card fallback scrolls.
+  const activeRef = useRef(null);
+  const located = useMemo(
+    () => !!openCommentId && (spans || []).some((s) => s.commentId === openCommentId),
+    [openCommentId, spans],
+  );
+  useAnchorReveal(() => activeRef.current, located ? openCommentId : null);
 
   // Character offset where the inline card splices into the prose: just past
   // the newline ending the line that contains the open note's highlight (or the
@@ -39,6 +51,7 @@ export default function ManuscriptHighlightedProse({ content, spans, openComment
     return (
       <button
         key={key}
+        ref={active ? activeRef : undefined}
         type="button"
         onClick={() => onOpenComment(seg.commentIds[0])}
         aria-expanded={active}

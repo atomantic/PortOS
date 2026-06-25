@@ -76,6 +76,7 @@ grep -i "what you want to do" client/src/hooks/README.md
 
 | Hook | Purpose | Use when |
 |---|---|---|
+| `useAnchorReveal` | `useAnchorReveal(getTarget, key, { reveal? })` — scroll a freshly-opened element into view + flash a tint over it; re-fires when `key` changes; no-op when `key` is falsy or `getTarget()` is null. | Reveal an editorial finding's anchored manuscript text on open / prev-next step (#1601). |
 | `useArmedAction` | Two-click-arm `[armed, fire]` confirmation. | Destructive button needing a confirm tap. (Project memory: user finds this less discoverable — prefer inline confirm rows for new UI.) |
 | `useAutoRefetch` | Poll-based refetch on an interval. `{ pollOnly: true }` skips internal data/loading state for side-effect-only callers (returns `{ refetch }` only). | Data needs periodic refresh (no socket / SSE available). |
 | `useAutoSizeTextarea` | `[ref, resize]` — grows a `<textarea>` to fit its content (no scroll / hand-resize); recomputes before paint on value change. | A textarea that should auto-fit content. Prefer the `AutoSizeTextarea` UI component, which wraps this. |
