@@ -45,6 +45,11 @@ export default function PipelineEditorialChecks() {
   const [loadingCatalog, setLoadingCatalog] = useState(true);
   const [savingIds, setSavingIds] = useState(() => new Set());
   const [selectedIds, setSelectedIds] = useState(() => new Set());
+  // Below `lg` the catalog + findings columns stack into one; this segmented
+  // switch picks which one is visible. Default to triage since that's the
+  // page's primary mobile task (#1611). No URL param — it's a breakpoint-only
+  // presentation toggle that doesn't exist on desktop.
+  const [mobileTab, setMobileTab] = useState('findings');
 
   const [series, setSeries] = useState([]);
   // Per-series editorial-check config overrides (#1591) are saved through the
@@ -532,9 +537,32 @@ export default function PipelineEditorialChecks() {
       {loadingCatalog ? (
         <p className="flex items-center gap-2 text-sm text-gray-400"><Loader2 size={16} className="animate-spin" /> Loading checks…</p>
       ) : (
-        <div className="grid gap-6 lg:grid-cols-2">
+        <div className="space-y-4">
+          {/* Below `lg` the two columns stack — this segmented switch picks which
+              one shows. Hidden on `lg+`, where both render side-by-side. */}
+          <div className="flex gap-1 rounded-lg border border-port-border p-1 lg:hidden" role="tablist" aria-label="Editorial sections">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={mobileTab === 'catalog'}
+              onClick={() => setMobileTab('catalog')}
+              className={`flex-1 rounded px-3 py-1.5 text-xs font-medium transition-colors ${mobileTab === 'catalog' ? 'bg-port-accent text-white' : 'text-gray-400 hover:text-gray-200'}`}
+            >
+              Catalog
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={mobileTab === 'findings'}
+              onClick={() => setMobileTab('findings')}
+              className={`flex-1 rounded px-3 py-1.5 text-xs font-medium transition-colors ${mobileTab === 'findings' ? 'bg-port-accent text-white' : 'text-gray-400 hover:text-gray-200'}`}
+            >
+              Findings
+            </button>
+          </div>
+          <div className="grid gap-6 lg:grid-cols-2">
           {/* Catalog */}
-          <section className="space-y-3">
+          <section className={`space-y-3 ${mobileTab === 'catalog' ? '' : 'hidden'} lg:block`}>
             <div className="flex items-center justify-between gap-2">
               <h2 className="text-sm font-semibold uppercase tracking-wide text-gray-400">Catalog</h2>
               {!formOpen ? (
@@ -602,7 +630,7 @@ export default function PipelineEditorialChecks() {
           </section>
 
           {/* Findings */}
-          <section className="space-y-3">
+          <section className={`space-y-3 ${mobileTab === 'findings' ? '' : 'hidden'} lg:block`}>
             <h2 className="text-sm font-semibold uppercase tracking-wide text-gray-400">Findings</h2>
             {!seriesId ? (
               <p className="rounded-lg border border-dashed border-port-border p-4 text-center text-xs text-gray-500">Select a series to view its findings.</p>
@@ -617,6 +645,7 @@ export default function PipelineEditorialChecks() {
               </>
             )}
           </section>
+          </div>
         </div>
       )}
     </div>
