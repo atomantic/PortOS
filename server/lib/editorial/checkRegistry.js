@@ -6204,6 +6204,36 @@ export function getEnabledChecks(settings, subsetIds = null) {
     .filter((x) => x.check);
 }
 
+/**
+ * Overlay a series' per-check config overrides (#1591) onto the GLOBAL
+ * `{ check, config }` pairs from `getEnabledChecks`, returning new pairs with
+ * the merged config. For each enabled check that carries an override, the
+ * override keys win over the (already resolved + valid) global config; the
+ * merged blob is re-validated through the check's own `configSchema` so a
+ * malformed / out-of-range per-series value can't corrupt the run — on a failed
+ * parse the global config is kept unchanged (NOT reset to schema defaults).
+ *
+ * Pure + side-effect-free. Returns the input array unchanged when `seriesOverrides`
+ * is absent/non-object, so a series that tunes nothing pays no allocation.
+ *
+ * @param {Array<{check: object, config: object}>} enabled  pairs from getEnabledChecks
+ * @param {Record<string, object>|null|undefined} seriesOverrides  series.editorialCheckConfig
+ * @returns {Array<{check: object, config: object}>}
+ */
+export function applySeriesCheckConfig(enabled, seriesOverrides) {
+  if (!Array.isArray(enabled)) return [];
+  if (!seriesOverrides || typeof seriesOverrides !== 'object' || Array.isArray(seriesOverrides)
+    || Object.keys(seriesOverrides).length === 0) {
+    return enabled;
+  }
+  return enabled.map(({ check, config }) => {
+    const override = seriesOverrides[check.id];
+    if (!override || typeof override !== 'object' || Array.isArray(override)) return { check, config };
+    const parsed = check.configSchema.safeParse({ ...config, ...override });
+    return { check, config: parsed.success ? parsed.data : config };
+  });
+}
+
 // ---------------------------------------------------------------------------
 // User-defined checks (#1346) — definition storage + synthesis.
 //

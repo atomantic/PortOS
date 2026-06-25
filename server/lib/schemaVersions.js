@@ -115,7 +115,16 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // would drop the reference (and reset the flag) and last-writer-wins the loss
   // back onto the newer peer. Bump makes the older peer reject the ahead-version
   // series transfer instead. Per-category gate → only series sync pauses with old peers.
-  pipelineSeries: 7,
+  // v8 = `series.editorialCheckConfig` added (#1591) — a per-series map of
+  // editorial-check config overrides ({ [checkId]: { [key]: value } }) that tune a
+  // check's thresholds (e.g. comic lettering density) for one series without
+  // touching the global catalog. Same silent-strip-then-LWW corruption as
+  // styleGuide/characterArcs: a ≤v7 peer that re-sanitizes a series through its
+  // editorialCheckConfig-unaware `sanitizeSeries` would drop the overrides and
+  // last-writer-wins the loss back onto the newer peer. Bump makes the older peer
+  // reject the ahead-version series transfer instead. Per-category gate → only
+  // series sync pauses with old peers.
+  pipelineSeries: 8,
   // NOT bumped for the manuscript-review sibling doc now bundled on series
   // pushes/exports (`data/pipeline-series/{id}/manuscript-review.json`).
   // Unlike `readerMap` (v2), the review is NOT a field inside the series

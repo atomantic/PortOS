@@ -172,6 +172,48 @@ export const sanitizeAutopilot = (raw) => {
 // older marker that predates the field reads as "no gaps", not undefined).
 const toCount = (v) => (Number.isInteger(v) && v >= 0 ? v : 0);
 
+// Per-series editorial-check config overrides (#1591). Shape:
+//   { [checkId]: { [configKey]: number|string|boolean } }
+// Each entry overrides the GLOBAL per-check config (settings.pipelineEditorialChecks)
+// for THIS series only — the runner overlays it via `applySeriesCheckConfig`, then
+// re-validates the merged blob through the check's own Zod `configSchema`, so a
+// malformed/out-of-range value is dropped at run time and can't corrupt a pass.
+// This sanitizer therefore only bounds the WIRE shape: a plain object-of-objects
+// with primitive leaves, size-capped against a hand-edited/older-peer file. Empty
+// → `undefined` (omitted) so a series that sets no override keeps its byte-stable
+// on-disk + wire shape against pre-feature peers (the v8 `pipelineSeries` gate
+// protects only series that DO carry the field from strip-then-LWW loss).
+const ECC_MAX_CHECKS = 200;
+const ECC_MAX_KEYS_PER_CHECK = 40;
+const ECC_CHECK_ID_MAX = 120;
+const ECC_STRING_MAX = 1000;
+
+const sanitizeCheckConfigOverride = (raw) => {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const out = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (Object.keys(out).length >= ECC_MAX_KEYS_PER_CHECK) break;
+    if (typeof key !== 'string' || !key) continue;
+    if (typeof value === 'number' && Number.isFinite(value)) out[key] = value;
+    else if (typeof value === 'boolean') out[key] = value;
+    else if (typeof value === 'string') out[key] = value.slice(0, ECC_STRING_MAX);
+    // null/object/array leaves are dropped — config fields are primitives.
+  }
+  return Object.keys(out).length ? out : null;
+};
+
+const sanitizeEditorialCheckConfig = (raw) => {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const out = {};
+  for (const [checkId, override] of Object.entries(raw)) {
+    if (Object.keys(out).length >= ECC_MAX_CHECKS) break;
+    if (typeof checkId !== 'string' || !checkId || checkId.length > ECC_CHECK_ID_MAX) continue;
+    const clean = sanitizeCheckConfigOverride(override);
+    if (clean) out[checkId] = clean;
+  }
+  return Object.keys(out).length ? out : undefined;
+};
+
 const sanitizeSeriesLocked = (raw = {}) => {
   if (!raw || typeof raw !== 'object') return {};
   const out = {};
@@ -206,6 +248,7 @@ const sanitizeSeries = (raw) => {
   const createdAt = isStr(raw.createdAt) ? raw.createdAt : new Date().toISOString();
   const updatedAt = isStr(raw.updatedAt) ? raw.updatedAt : createdAt;
   const autopilot = sanitizeAutopilot(raw.autopilot);
+  const editorialCheckConfig = sanitizeEditorialCheckConfig(raw.editorialCheckConfig);
   return {
     id: raw.id,
     name,
@@ -292,6 +335,13 @@ const sanitizeSeries = (raw) => {
     // Older peers' sanitizeSeries simply drops the unknown field (forward/
     // back-compatible).
     ...(autopilot ? { autopilot } : {}),
+    // Per-series editorial-check config overrides (#1591). Persisted only when a
+    // series actually carries an override so series that never tune a check keep
+    // their byte-stable on-disk + wire shape (the v8 `pipelineSeries` gate guards
+    // the loss for series that DO carry it). A ≤v7 peer that re-sanitizes a series
+    // through its editorialCheckConfig-unaware sanitizeSeries would otherwise drop
+    // the overrides and last-writer-wins the loss back onto the newer peer.
+    ...(editorialCheckConfig ? { editorialCheckConfig } : {}),
   };
 };
 
@@ -515,6 +565,10 @@ export async function updateSeries(id, patch = {}) {
       // boot-recovery demotion). Wholesale replace; sanitizer normalizes a
       // non-object back to absent.
       ...('autopilot' in patch ? { autopilot: patch.autopilot } : {}),
+      // Per-series editorial-check config overrides (#1591). Wholesale replace —
+      // `{}`/`null` clears every override; omission preserves. The sanitizer drops
+      // empty/malformed entries and normalizes an empty map back to absent.
+      ...('editorialCheckConfig' in patch ? { editorialCheckConfig: patch.editorialCheckConfig } : {}),
       llm: mergedLlm,
       updatedAt: new Date().toISOString(),
     });

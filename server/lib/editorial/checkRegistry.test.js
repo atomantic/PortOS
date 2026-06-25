@@ -11,6 +11,7 @@ import {
   resolveCheckConfig,
   resolveCheckState,
   getEnabledChecks,
+  applySeriesCheckConfig,
   buildCustomCheck,
   buildCustomCheckPrompt,
   isValidCustomCheckDef,
@@ -249,6 +250,49 @@ describe('editorial check registry — config + state resolution', () => {
 
     const subset = getEnabledChecks({}, [NAMING]).map((x) => x.check.id);
     expect(subset).toEqual([NAMING]);
+  });
+});
+
+describe('applySeriesCheckConfig — per-series config overrides (#1591)', () => {
+  const LETTERING = 'comic.lettering-density';
+  const enabledFor = (id) => getEnabledChecks({}, [id]);
+
+  it('returns the input unchanged when there are no overrides', () => {
+    const enabled = enabledFor(NAMING);
+    expect(applySeriesCheckConfig(enabled, null)).toBe(enabled);
+    expect(applySeriesCheckConfig(enabled, undefined)).toBe(enabled);
+    expect(applySeriesCheckConfig(enabled, [])).toBe(enabled); // non-plain-object → ignored
+    expect(applySeriesCheckConfig(enabled, {})).toBe(enabled); // empty map, no matching id
+  });
+
+  it('overlays a per-series threshold over the global config (override key wins)', () => {
+    const enabled = enabledFor(LETTERING);
+    const globalBalloon = enabled[0].config.maxWordsPerBalloon;
+    const out = applySeriesCheckConfig(enabled, { [LETTERING]: { maxWordsPerBalloon: 12 } });
+    expect(out[0].config.maxWordsPerBalloon).toBe(12);
+    // Untouched keys still resolve from the global config (merge, not replace).
+    expect(out[0].config.maxWordsPerPanel).toBe(enabled[0].config.maxWordsPerPanel);
+    // The input pair is not mutated.
+    expect(enabled[0].config.maxWordsPerBalloon).toBe(globalBalloon);
+  });
+
+  it('keeps the global config when a per-series override is out of range (no reset to defaults)', () => {
+    const enabled = enabledFor(LETTERING).map((p) => ({
+      ...p,
+      // Pretend the global config itself was tuned, to prove an invalid override
+      // falls back to THAT (not the schema defaults).
+      config: { ...p.config, maxWordsPerBalloon: 40 },
+    }));
+    const out = applySeriesCheckConfig(enabled, { [LETTERING]: { maxWordsPerBalloon: 99999 } });
+    expect(out[0].config.maxWordsPerBalloon).toBe(40);
+  });
+
+  it('ignores an override keyed to a different check / non-object override', () => {
+    const enabled = enabledFor(LETTERING);
+    const base = enabled[0].config.maxWordsPerBalloon;
+    expect(applySeriesCheckConfig(enabled, { [NAMING]: { minSharedSignals: 5 } })[0].config.maxWordsPerBalloon).toBe(base);
+    expect(applySeriesCheckConfig(enabled, { [LETTERING]: 'nope' })[0].config.maxWordsPerBalloon).toBe(base);
+    expect(applySeriesCheckConfig(enabled, { [LETTERING]: [1, 2] })[0].config.maxWordsPerBalloon).toBe(base);
   });
 });
 

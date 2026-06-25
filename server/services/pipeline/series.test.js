@@ -125,6 +125,46 @@ describe('pipeline series service', () => {
     expect(cleared.factReference).toBe('');
   });
 
+  it('defaults editorialCheckConfig absent and round-trips per-series overrides (#1591)', async () => {
+    const plain = await svc.createSeries({ name: 'Plain' });
+    // Absent until a series actually tunes a check (byte-stable shape for old peers).
+    expect(plain.editorialCheckConfig).toBeUndefined();
+
+    const tuned = await svc.createSeries({
+      name: 'YA Graphic Novel',
+      editorialCheckConfig: { 'comic.lettering-density': { maxWordsPerBalloon: 18, x: true } },
+    });
+    expect(tuned.editorialCheckConfig).toEqual({ 'comic.lettering-density': { maxWordsPerBalloon: 18, x: true } });
+  });
+
+  it('sanitizes editorialCheckConfig: drops empty/non-object overrides and non-primitive leaves (#1591)', async () => {
+    const s = await svc.createSeries({
+      name: 'Messy',
+      editorialCheckConfig: {
+        'comic.lettering-density': { maxWordsPerBalloon: 30, bad: null, nested: { a: 1 }, arr: [1] },
+        'empty.check': {},          // empty override → dropped
+        'bogus.check': 'not-an-object', // non-object override → dropped
+      },
+    });
+    expect(s.editorialCheckConfig).toEqual({ 'comic.lettering-density': { maxWordsPerBalloon: 30 } });
+  });
+
+  it('updateSeries replaces overrides wholesale and clears them with {}/null (#1591)', async () => {
+    const s = await svc.createSeries({
+      name: 'Tunable',
+      editorialCheckConfig: { 'comic.lettering-density': { maxWordsPerBalloon: 10 } },
+    });
+    // Omission preserves.
+    const kept = await svc.updateSeries(s.id, { logline: 'L2' });
+    expect(kept.editorialCheckConfig).toEqual({ 'comic.lettering-density': { maxWordsPerBalloon: 10 } });
+    // Wholesale replace.
+    const replaced = await svc.updateSeries(s.id, { editorialCheckConfig: { 'comic.panel-rhythm': { maxConsecutiveSplash: 1 } } });
+    expect(replaced.editorialCheckConfig).toEqual({ 'comic.panel-rhythm': { maxConsecutiveSplash: 1 } });
+    // {} clears (sanitizer normalizes the empty map back to absent).
+    const cleared = await svc.updateSeries(s.id, { editorialCheckConfig: {} });
+    expect(cleared.editorialCheckConfig).toBeUndefined();
+  });
+
   it('updateSeries throws ERR_NOT_FOUND for unknown id', async () => {
     await expect(svc.updateSeries('ser-nope', { name: 'x' })).rejects.toMatchObject({ code: svc.ERR_NOT_FOUND });
   });

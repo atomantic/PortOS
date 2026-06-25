@@ -19,7 +19,7 @@ import { randomUUID, createHash } from 'crypto';
 import { createSseRunner } from '../../../lib/sseUtils.js';
 import { runStagedLLM, runInlineLLM, runStageScopedInlineLLM, resolveStageContext } from '../../../lib/stageRunner.js';
 import { planManuscriptPass, fitContextToManuscriptFloor, estimateTokens, MANUSCRIPT_FLOOR_TOKENS } from '../../../lib/contextBudget.js';
-import { getEnabledChecks, getEnabledCheckRows, getAllChecks, EDITORIAL_SOURCES, comicLetteringIssues, proseStageIssues } from '../../../lib/editorial/index.js';
+import { getEnabledChecks, getEnabledCheckRows, getAllChecks, applySeriesCheckConfig, EDITORIAL_SOURCES, comicLetteringIssues, proseStageIssues } from '../../../lib/editorial/index.js';
 import { getSettings } from '../../settings.js';
 import { getSeries } from '../series.js';
 import { listIssuesForSeries } from '../issues.js';
@@ -353,6 +353,11 @@ export async function runEditorialChecks(seriesId, options = {}) {
   // manuscript section-collection I/O when an enabled check actually consumes
   // the stitched corpus (deterministic checks like naming use only the canon).
   const series = await getSeries(seriesId);
+  // Overlay this series' per-check config overrides (#1591) onto the global
+  // resolved config. The `needs*` gates below read only `check` (config-
+  // independent), so they keep using `enabled`; only the run loop consumes the
+  // merged config via `enabledResolved`.
+  const enabledResolved = applySeriesCheckConfig(enabled, series?.editorialCheckConfig);
   const needsManuscript = enabled.some(({ check }) => check.needsManuscript);
   // Reverse-outline fetch is gated on the declared source (#1296) so a run with no
   // scene-segmentation check pays no extra I/O — mirrors the needsManuscript gate.
@@ -547,7 +552,7 @@ export async function runEditorialChecks(seriesId, options = {}) {
   // must dismiss their now-stale prior open comments.
   const deterministicRanIds = new Set();
   let canceled = false;
-  for (const { check, config } of enabled) {
+  for (const { check, config } of enabledResolved) {
     if (signal?.aborted) { canceled = true; break; }
     onProgress?.({ type: 'check:start', checkId: check.id, label: check.label });
     const ctx = { ...baseCtx, config, severityDefault: check.severityDefault };

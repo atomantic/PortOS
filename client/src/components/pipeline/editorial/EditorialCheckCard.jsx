@@ -4,10 +4,13 @@
  * form built from the check's `configFields` render descriptors.
  *
  * Presentational — all persistence is lifted to PipelineEditorialChecks:
- *   onToggle(checkId, nextEnabled)      → optimistic enable/disable PATCH
- *   onConfigSave(checkId, nextConfig)   → PATCH the full config blob (Promise)
+ *   onToggle(checkId, nextEnabled)            → optimistic enable/disable PATCH
+ *   onConfigSave(checkId, nextConfig)         → PATCH the global config blob (Promise)
+ *   onSeriesConfigSave(checkId, nextOverride) → PATCH this series' override (#1591);
+ *                                               pass `null` to clear the override
  * The card only owns the in-progress *input* draft; committed values come back
- * down through `check.config`.
+ * down through `check.config` (global) and `seriesConfig` (the selected series'
+ * override for this check, when a series is selected).
  */
 import { memo, useEffect, useState } from 'react';
 import { ChevronDown, ChevronRight, Loader2, Pencil, Sliders, Trash2 } from 'lucide-react';
@@ -77,11 +80,19 @@ function ConfigField({ checkId, field, value, disabled, onCommit }) {
   );
 }
 
-function EditorialCheckCard({ check, saving = false, onToggle, onConfigSave, onEdit, onDelete }) {
+function EditorialCheckCard({
+  check, saving = false, onToggle, onConfigSave, onEdit, onDelete,
+  seriesId = '', seriesConfig = null, seriesSaving = false, onSeriesConfigSave,
+}) {
   const [expanded, setExpanded] = useState(false);
+  const [seriesExpanded, setSeriesExpanded] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const hasConfig = Array.isArray(check.configFields) && check.configFields.length > 0;
   const isCustom = !!check.isCustom;
+  // A per-series override panel is only meaningful when a series is selected, the
+  // check is tunable, and the parent wired a save handler (#1591).
+  const canOverride = hasConfig && !!seriesId && typeof onSeriesConfigSave === 'function';
+  const hasSeriesOverride = !!seriesConfig && Object.keys(seriesConfig).length > 0;
 
   return (
     <div className="rounded-lg border border-port-border bg-port-card p-3 space-y-2">
@@ -138,6 +149,54 @@ function EditorialCheckCard({ check, saving = false, onToggle, onConfigSave, onE
                   onCommit={(key, val) => onConfigSave(check.id, { ...check.config, [key]: val })}
                 />
               ))}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {canOverride ? (
+        <div className="border-t border-port-border/60 pt-2">
+          <button
+            type="button"
+            onClick={() => setSeriesExpanded((v) => !v)}
+            className="flex items-center gap-1 text-[11px] text-gray-400 hover:text-gray-200"
+            aria-expanded={seriesExpanded}
+          >
+            {seriesExpanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+            <Sliders size={12} />
+            Override for this series
+            {hasSeriesOverride ? (
+              <span className="ml-1 rounded bg-port-accent/15 px-1.5 py-0.5 text-[10px] text-port-accent">active</span>
+            ) : null}
+          </button>
+          {seriesExpanded ? (
+            <div className="mt-2 space-y-2.5">
+              <p className="text-[11px] text-gray-500">
+                Tune this check for the selected series only. Untouched fields fall through to the global value above.
+              </p>
+              {check.configFields.map((field) => (
+                <ConfigField
+                  // Prefix the checkId so the per-series input ids never collide
+                  // with the global form's (`cfg-<checkId>-<key>`).
+                  key={field.key}
+                  checkId={`series-${check.id}`}
+                  field={field}
+                  value={seriesConfig?.[field.key] ?? check.config?.[field.key]}
+                  disabled={seriesSaving}
+                  onCommit={(key, val) => onSeriesConfigSave(check.id, { ...(seriesConfig || {}), [key]: val })}
+                />
+              ))}
+              {hasSeriesOverride ? (
+                <button
+                  type="button"
+                  onClick={() => onSeriesConfigSave(check.id, null)}
+                  disabled={seriesSaving}
+                  className="inline-flex items-center gap-1 text-[11px] text-gray-400 hover:text-gray-200 disabled:opacity-50"
+                >
+                  {seriesSaving ? <Loader2 size={12} className="animate-spin" /> : null}
+                  Reset to global
+                </button>
+              ) : null}
             </div>
           ) : null}
         </div>

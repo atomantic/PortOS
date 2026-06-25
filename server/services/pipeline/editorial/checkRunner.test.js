@@ -233,6 +233,40 @@ describe('runEditorialChecks', () => {
     expect(result.findings.some((f) => f.checkId === 'comic.panel-rhythm')).toBe(false);
   });
 
+  // Per-series editorial-check config overrides (#1591). A clean 3-word balloon
+  // is below the default 25-word ceiling, so it only trips when a per-series
+  // override drops the ceiling — proving the runner overlays series config.
+  const cleanComicScript = '## Page 1\n\nPanel 1\n**Description:** A quiet field.\n**Dialogue:**\n- ANYA: "We should go."\n';
+
+  it('overlays a series editorialCheckConfig override onto a check\'s thresholds (#1591)', async () => {
+    issuesState = [{ id: 'i1', seriesId: 's1', number: 1, stages: { comicScript: { output: cleanComicScript } } }];
+
+    // Default thresholds → the 3-word balloon is clean.
+    const before = await runEditorialChecks('s1', { checkIds: ['comic.lettering-density'] });
+    expect(before.findings.some((f) => f.checkId === 'comic.lettering-density')).toBe(false);
+
+    // Same series, but a per-series override drops the per-balloon ceiling to 2.
+    getSeries.mockResolvedValueOnce({
+      id: 's1', universeId: 'u1',
+      editorialCheckConfig: { 'comic.lettering-density': { maxWordsPerBalloon: 2 } },
+    });
+    const after = await runEditorialChecks('s1', { checkIds: ['comic.lettering-density'] });
+    expect(after.findings.some((f) => f.checkId === 'comic.lettering-density')).toBe(true);
+  });
+
+  it('ignores a malformed/out-of-range per-series override and keeps global thresholds (#1591)', async () => {
+    issuesState = [{ id: 'i1', seriesId: 's1', number: 1, stages: { comicScript: { output: cleanComicScript } } }];
+    // 999999 is far above the schema max (200): the merged config fails validation,
+    // so the global default (25) holds and the clean balloon stays unflagged —
+    // a bad override must NOT corrupt the run (nor reset to schema defaults).
+    getSeries.mockResolvedValueOnce({
+      id: 's1', universeId: 'u1',
+      editorialCheckConfig: { 'comic.lettering-density': { maxWordsPerBalloon: 999999 } },
+    });
+    const result = await runEditorialChecks('s1', { checkIds: ['comic.lettering-density'] });
+    expect(result.findings.some((f) => f.checkId === 'comic.lettering-density')).toBe(false);
+  });
+
   it('skips disabled checks', async () => {
     // Disable every LLM check → no provider call, only deterministic findings.
     // The mock canon has no objects/links, so naming is the only producer.
