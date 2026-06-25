@@ -1,17 +1,19 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import ManuscriptCommentCard from './ManuscriptCommentCard';
-import { Toaster } from '../../ui/Toast';
+import { Toaster, toast } from '../../ui/Toast';
 import {
   acceptPipelineManuscriptFix,
   patchPipelineManuscriptComment,
   generatePipelineManuscriptFix,
+  undoPipelineManuscriptFix,
 } from '../../../services/api';
 
 vi.mock('../../../services/api', () => ({
   acceptPipelineManuscriptFix: vi.fn(),
   patchPipelineManuscriptComment: vi.fn(),
   generatePipelineManuscriptFix: vi.fn(),
+  undoPipelineManuscriptFix: vi.fn(),
 }));
 
 const baseComment = {
@@ -137,5 +139,34 @@ describe('ManuscriptCommentCard keyboard shortcuts (#1603)', () => {
     const textarea = screen.getByLabelText(/Replacement \(editable\)/i);
     fireEvent.keyDown(textarea, { key: 'd' });
     expect(patchPipelineManuscriptComment).not.toHaveBeenCalled();
+  });
+});
+
+describe('ManuscriptCommentCard — accept toast offers Undo (#1609)', () => {
+  beforeEach(() => {
+    acceptPipelineManuscriptFix.mockReset();
+    undoPipelineManuscriptFix.mockReset();
+    toast.dismiss(); // clear any accept toast left over from a prior test
+  });
+
+  it('shows an Undo action after accept, and clicking it undoes the fix', async () => {
+    acceptPipelineManuscriptFix.mockResolvedValue({ comment: { ...withFix, status: 'accepted' }, sections: [] });
+    undoPipelineManuscriptFix.mockResolvedValue({ comment: { ...withFix, status: 'open' }, sections: [] });
+    const onAccepted = vi.fn();
+    renderCard({ comment: withFix, onAccepted });
+
+    pressKey('a');
+    await waitFor(() => expect(acceptPipelineManuscriptFix).toHaveBeenCalled());
+    // The success toast renders with an inline Undo button.
+    const undoBtn = await screen.findByRole('button', { name: /undo/i });
+    expect(screen.getByText('Fix applied to the manuscript')).toBeTruthy();
+
+    fireEvent.click(undoBtn);
+    await waitFor(() => expect(undoPipelineManuscriptFix).toHaveBeenCalledWith('ser-1', 'c1', { silent: true }));
+    // The undo result is re-applied through onAccepted (re-opens the finding).
+    await waitFor(() => expect(onAccepted).toHaveBeenCalledWith(expect.objectContaining({
+      comment: expect.objectContaining({ status: 'open' }),
+    })));
+    expect(await screen.findByText(/Fix undone/i)).toBeTruthy();
   });
 });

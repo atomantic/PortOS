@@ -530,3 +530,45 @@ describe('manuscriptReview — locateComment (cross-series deep-link resolver, #
     expect(await locateComment(undefined)).toBeNull();
   });
 });
+
+describe('manuscriptReview — accepted-fix undo snapshot (#1609)', () => {
+  beforeEach(() => { fileStore.clear(); });
+
+  const snapshot = () => ({
+    acceptedAt: '2026-06-25T00:00:00.000Z',
+    sections: [{ issueId: 'i1', stageId: 'prose', priorText: 'Before.', appliedHash: 'a'.repeat(64) }],
+  });
+
+  it('persists the snapshot while accepted and round-trips it through getReview', async () => {
+    const seeded = await seedReviewFromFindings('ser-1', [{ problem: 'P', anchorQuote: 'q' }]);
+    const id = seeded.comments[0].id;
+    const updated = await updateComment('ser-1', id, { status: 'accepted', acceptedSnapshot: snapshot() });
+    expect(updated.status).toBe('accepted');
+    expect(updated.acceptedSnapshot.sections[0]).toMatchObject({ issueId: 'i1', stageId: 'prose', priorText: 'Before.' });
+    const review = await getReview('ser-1');
+    expect(review.comments[0].acceptedSnapshot.sections[0].priorText).toBe('Before.');
+  });
+
+  it('drops the snapshot when the comment is re-opened (status gate)', async () => {
+    const seeded = await seedReviewFromFindings('ser-1', [{ problem: 'P', anchorQuote: 'q' }]);
+    const id = seeded.comments[0].id;
+    await updateComment('ser-1', id, { status: 'accepted', acceptedSnapshot: snapshot() });
+    const reopened = await updateComment('ser-1', id, { status: 'open' });
+    expect(reopened.status).toBe('open');
+    expect(reopened.acceptedSnapshot).toBeNull();
+  });
+
+  it('drops a malformed snapshot (missing priorText) and an open-comment snapshot', async () => {
+    const seeded = await seedReviewFromFindings('ser-1', [{ problem: 'P', anchorQuote: 'q' }]);
+    const id = seeded.comments[0].id;
+    // Snapshot on an open comment never persists.
+    const stillOpen = await updateComment('ser-1', id, { acceptedSnapshot: snapshot() });
+    expect(stillOpen.acceptedSnapshot).toBeNull();
+    // Accepted but malformed (no priorText) sanitizes to null.
+    const bad = await updateComment('ser-1', id, {
+      status: 'accepted',
+      acceptedSnapshot: { sections: [{ issueId: 'i1', stageId: 'prose' }] },
+    });
+    expect(bad.acceptedSnapshot).toBeNull();
+  });
+});

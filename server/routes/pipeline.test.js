@@ -2483,6 +2483,47 @@ describe('pipeline routes', () => {
         .send({ find: 'x' }); // legacy accept must still include `replace`
       expect(acceptMissingReplace.status).toBe(400);
     });
+
+    it('accept captures an undo snapshot; undo restores the pre-edit text and re-opens (#1609)', async () => {
+      const app = makeApp();
+      const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
+      const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'One' });
+      await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
+        stages: { prose: { output: 'Hello old world.', status: 'ready' } },
+      });
+      // Seed a review comment anchored to this issue by id (not number — the
+      // shared test DB reuses series ids across tests, so a number lookup is
+      // ambiguous; the explicit id resolves to this issue regardless).
+      const { seedReviewFromFindings } = await import('../services/pipeline/manuscriptReview.js');
+      const seeded = await seedReviewFromFindings(ser.body.id, [{
+        problem: 'wording', anchorQuote: 'old', issueId: iss.body.id, stageId: 'prose',
+      }]);
+      const commentId = seeded.comments[0].id;
+
+      // Accept applies the edit + records the pre-edit snapshot.
+      const accepted = await request(app)
+        .post(`/api/pipeline/series/${ser.body.id}/manuscript/review/comments/${commentId}/accept`)
+        .send({ edits: [{ issueId: iss.body.id, stageId: 'prose', issueNumber: 1, find: 'old', replace: 'new' }] });
+      expect(accepted.status).toBe(200);
+      expect(accepted.body.comment.status).toBe('accepted');
+      expect(accepted.body.comment.acceptedSnapshot.sections[0].priorText).toBe('Hello old world.');
+      expect(accepted.body.section.content).toBe('Hello new world.');
+
+      // Undo restores the pre-edit text and re-opens the finding.
+      const undone = await request(app)
+        .post(`/api/pipeline/series/${ser.body.id}/manuscript/review/comments/${commentId}/undo`)
+        .send({});
+      expect(undone.status).toBe(200);
+      expect(undone.body.comment.status).toBe('open');
+      expect(undone.body.comment.acceptedSnapshot).toBeNull();
+      expect(undone.body.section.content).toBe('Hello old world.');
+
+      // Undo again is a 400 — nothing left to undo.
+      const again = await request(app)
+        .post(`/api/pipeline/series/${ser.body.id}/manuscript/review/comments/${commentId}/undo`)
+        .send({});
+      expect(again.status).toBe(400);
+    });
   });
 
   describe('audio stage routes', () => {

@@ -35,7 +35,7 @@ import { fixEditsOf, selectedEditsFor } from '../manuscript/ManuscriptCommentCar
 import InlineDiff from '../../ui/InlineDiff';
 import toast from '../../ui/Toast';
 import { useAsyncAction } from '../../../hooks/useAsyncAction';
-import { acceptPipelineManuscriptFix, patchPipelineManuscriptComment } from '../../../services/api';
+import { acceptPipelineManuscriptFix, patchPipelineManuscriptComment, undoPipelineManuscriptFix } from '../../../services/api';
 
 const SEVERITY_DOT = {
   high: 'bg-rose-400',
@@ -147,6 +147,13 @@ function FindingRow({ seriesId, comment, onCommentChange, selected, onToggleSele
     () => patchPipelineManuscriptComment(seriesId, comment.id, { status: 'dismissed', dismissReason: 'false-positive' }, { silent: true }),
     { errorMessage: 'Failed to flag false positive' },
   );
+  const [runUndo, undoing] = useAsyncAction(
+    () => undoPipelineManuscriptFix(seriesId, comment.id, { silent: true }),
+    { errorMessage: 'Failed to undo the fix' },
+  );
+  // An accepted fix is undoable only while its pre-edit snapshot survives (#1609)
+  // — captured on accept, dropped if the finding is later re-opened/dismissed.
+  const canUndo = comment.status === 'accepted' && !!comment.acceptedSnapshot;
 
   const accept = async () => {
     const result = await runAccept();
@@ -163,6 +170,12 @@ function FindingRow({ seriesId, comment, onCommentChange, selected, onToggleSele
   const markFalsePositive = async () => {
     const result = await runFalsePositive();
     if (result?.comment) onCommentChange?.(result.comment);
+  };
+  const undo = async () => {
+    const result = await runUndo();
+    if (!result?.comment) return;
+    onCommentChange?.(result.comment);
+    toast.success('Fix undone — finding re-opened');
   };
 
   return (
@@ -257,6 +270,21 @@ function FindingRow({ seriesId, comment, onCommentChange, selected, onToggleSele
               </p>
             </div>
           ) : null}
+        </div>
+      ) : canUndo ? (
+        // Accepted finding — offer a per-finding undo that restores the pre-edit
+        // manuscript text and re-opens it (#1609).
+        <div className="flex flex-wrap items-center gap-1.5">
+          <button
+            type="button"
+            onClick={undo}
+            disabled={undoing}
+            className="inline-flex items-center gap-1 rounded border border-port-border px-1.5 py-0.5 text-[10px] text-gray-400 hover:text-white hover:border-port-accent/40 disabled:opacity-40"
+            title="Undo this fix — restore the pre-edit text and re-open the finding"
+          >
+            {undoing ? <Loader2 size={11} className="animate-spin" /> : <Undo2 size={11} />}
+            Undo fix
+          </button>
         </div>
       ) : null}
     </li>

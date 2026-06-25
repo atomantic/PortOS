@@ -209,6 +209,15 @@ router.post('/series/:id/manuscript/review/comments/:commentId/accept', asyncHan
   res.json(result);
 }));
 
+// Undo a previously-accepted fix: restore the captured pre-edit text and re-open
+// the finding (#1609). No body — the authoritative snapshot lives on the comment.
+router.post('/series/:id/manuscript/review/comments/:commentId/undo', asyncHandler(async (req, res) => {
+  await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
+  const result = await manuscriptFix.undoManuscriptFix(req.params.id, { commentId: req.params.commentId })
+    .catch((err) => { throw mapServiceError(err); });
+  res.json(result);
+}));
+
 // Versioned free-text save of one manuscript section (snapshots the prior text
 // into history so the edit is revertible). Revert reuses the stage-restore route
 // (POST /issues/:id/stages/:stageId/restore).

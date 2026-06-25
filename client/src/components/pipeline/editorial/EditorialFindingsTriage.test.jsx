@@ -4,7 +4,7 @@ import { MemoryRouter } from 'react-router-dom';
 import EditorialFindingsTriage from './EditorialFindingsTriage';
 import { Toaster, toast } from '../../ui/Toast';
 import { findingManuscriptLink } from '../../../lib/editorialChecks';
-import { acceptPipelineManuscriptFix, patchPipelineManuscriptComment } from '../../../services/api';
+import { acceptPipelineManuscriptFix, patchPipelineManuscriptComment, undoPipelineManuscriptFix } from '../../../services/api';
 
 // Mock the whole api barrel — include every export the component tree touches.
 // EditorialFindingsTriage transitively imports ManuscriptCommentCard, which also
@@ -13,6 +13,7 @@ import { acceptPipelineManuscriptFix, patchPipelineManuscriptComment } from '../
 vi.mock('../../../services/api', () => ({
   acceptPipelineManuscriptFix: vi.fn(),
   patchPipelineManuscriptComment: vi.fn(),
+  undoPipelineManuscriptFix: vi.fn(),
   generatePipelineManuscriptFix: vi.fn(),
 }));
 
@@ -423,5 +424,42 @@ describe('EditorialFindingsTriage', () => {
     fireEvent.click(screen.getByRole('button', { name: /Disable check: Character name dissimilarity/i }));
     // Optimistically hidden, then reconciled back once the PATCH rejects.
     await waitFor(() => expect(screen.getByText('Noisy finding')).toBeTruthy());
+  });
+});
+
+describe('EditorialFindingsTriage — per-finding undo of an accepted fix (#1609)', () => {
+  beforeEach(() => {
+    acceptPipelineManuscriptFix.mockReset();
+    patchPipelineManuscriptComment.mockReset();
+    undoPipelineManuscriptFix.mockReset();
+    toast.dismiss();
+  });
+
+  it('offers Undo on an accepted finding with a snapshot and re-opens it on click', async () => {
+    const onCommentChange = vi.fn();
+    const comments = [
+      // An open sibling keeps the group expanded so the accepted row renders.
+      { id: 'open-1', checkId: 'naming.dissimilar-names', status: 'open', severity: 'low', problem: 'Still open' },
+      {
+        id: 'acc-1', checkId: 'naming.dissimilar-names', status: 'accepted', severity: 'high',
+        problem: 'Accepted finding', acceptedSnapshot: { acceptedAt: 't', sections: [{ issueId: 'i1', stageId: 'prose', priorText: 'before' }] },
+      },
+    ];
+    undoPipelineManuscriptFix.mockResolvedValue({ comment: { ...comments[1], status: 'open', acceptedSnapshot: null }, sections: [] });
+    renderTriage({ comments, onCommentChange });
+
+    const undoBtn = screen.getByRole('button', { name: /Undo fix/i });
+    fireEvent.click(undoBtn);
+    await waitFor(() => expect(undoPipelineManuscriptFix).toHaveBeenCalledWith('ser-1', 'acc-1', { silent: true }));
+    await waitFor(() => expect(onCommentChange).toHaveBeenCalledWith(expect.objectContaining({ id: 'acc-1', status: 'open' })));
+  });
+
+  it('does NOT offer Undo on an accepted finding without a snapshot (older/synced record)', () => {
+    const comments = [
+      { id: 'open-1', checkId: 'naming.dissimilar-names', status: 'open', severity: 'low', problem: 'Still open' },
+      { id: 'acc-2', checkId: 'naming.dissimilar-names', status: 'accepted', severity: 'high', problem: 'No snapshot' },
+    ];
+    renderTriage({ comments });
+    expect(screen.queryByRole('button', { name: /Undo fix/i })).toBeNull();
   });
 });

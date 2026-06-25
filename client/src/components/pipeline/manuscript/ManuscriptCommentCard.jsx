@@ -11,7 +11,7 @@
  */
 
 import { useMemo, useState } from 'react';
-import { Loader2, Sparkles, Check, X, Ban, Columns2, Rows2, Copy, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Loader2, Sparkles, Check, X, Ban, Columns2, Rows2, Copy, ChevronLeft, ChevronRight, Undo2 } from 'lucide-react';
 import InlineDiff from '../../ui/InlineDiff';
 import SideBySideDiff from '../../ui/SideBySideDiff';
 import toast from '../../ui/Toast';
@@ -21,6 +21,7 @@ import useKeyboardShortcuts from '../../../hooks/useKeyboardShortcuts';
 import Kbd from '../../ui/Kbd';
 import {
   patchPipelineManuscriptComment, generatePipelineManuscriptFix, acceptPipelineManuscriptFix,
+  undoPipelineManuscriptFix,
 } from '../../../services/api';
 import { SEVERITY_TONE, CATEGORY_LABEL } from './constants';
 
@@ -62,6 +63,61 @@ function ShortcutHints({ hasNav, hasFix, hasFalsePositive }) {
         <span className="inline-flex items-center gap-1"><Kbd size="sm">f</Kbd> false positive</span>
       ) : null}
     </div>
+  );
+}
+
+// Success toast for an accepted fix that carries an inline Undo (#1609). The
+// accepted comment leaves the open-note flow (its card unmounts as the editor
+// auto-advances), so this self-contained toast — not the card — owns the
+// immediate "oops, undo that" affordance. `onUndo` resolves true on success;
+// once undone the toast swaps to a confirmation and clears itself.
+export function UndoFixToast({ t, count, onUndo }) {
+  const [undoing, setUndoing] = useState(false);
+  const [undone, setUndone] = useState(false);
+  const label = count === 1 ? 'Fix applied to the manuscript' : `${count} fixes applied to the manuscript`;
+  return (
+    <span className="flex items-center gap-3">
+      <span className="inline-flex items-center gap-1.5 text-gray-200">
+        <Check size={14} className="text-port-success shrink-0" />
+        {undone ? 'Fix undone — finding re-opened' : label}
+      </span>
+      {!undone ? (
+        <button
+          type="button"
+          disabled={undoing}
+          onClick={async () => {
+            setUndoing(true);
+            const ok = await onUndo();
+            setUndoing(false);
+            if (ok) { setUndone(true); setTimeout(() => toast.dismiss(t.id), 1500); }
+          }}
+          className="inline-flex items-center gap-1 rounded border border-port-border px-2 py-0.5 text-xs text-port-accent hover:border-port-accent/50 disabled:opacity-40"
+        >
+          {undoing ? <Loader2 size={12} className="animate-spin" /> : <Undo2 size={12} />} Undo
+        </button>
+      ) : null}
+    </span>
+  );
+}
+
+// Show the accept confirmation + Undo toast. `applyResult` re-applies the undo's
+// { comment, section, sections } through the same handler an accept uses.
+export function showAcceptedFixToast({ seriesId, commentId, count, applyResult }) {
+  toast(
+    (t) => (
+      <UndoFixToast
+        t={t}
+        count={count}
+        onUndo={async () => {
+          const undone = await undoPipelineManuscriptFix(seriesId, commentId, { silent: true })
+            .catch((err) => { toast.error(err.message || 'Failed to undo the fix'); return null; });
+          if (!undone) return false;
+          applyResult?.(undone);
+          return true;
+        }}
+      />
+    ),
+    { duration: 10000 },
   );
 }
 
@@ -198,7 +254,12 @@ export default function ManuscriptCommentCard({
     const result = await runAccept(selected);
     if (!result) return;
     onAccepted(result);
-    toast.success(selected.length === 1 ? 'Fix applied to the manuscript' : `${selected.length} fixes applied to the manuscript`);
+    showAcceptedFixToast({
+      seriesId,
+      commentId: result.comment?.id || comment.id,
+      count: selected.length,
+      applyResult: onAccepted,
+    });
   };
 
   const dismiss = async () => {

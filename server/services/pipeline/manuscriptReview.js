@@ -94,6 +94,36 @@ function sanitizeFix(raw) {
   return out;
 }
 
+// Snapshot of the manuscript text a fix overwrote, captured at accept-time so
+// the finding can be undone back to its pre-edit state (#1609). `priorText` is
+// the section's FULL stage text before the fix applied (full restore handles
+// every edit shape — multi-edit, deletion, full-page rewrite — exactly, unlike
+// a span-level reverse-splice); `appliedHash` is a fingerprint of the text the
+// accept WROTE, so undo can detect later edits and refuse to clobber them. Only
+// carried while `status === 'accepted'` (a status flip drops it, mirroring
+// `dismissReason`). Optional + additive → older peers ignore it and the synced
+// review doc stays backward-compatible (no schema bump needed).
+function sanitizeAcceptedSnapshot(raw) {
+  if (!raw || typeof raw !== 'object' || !Array.isArray(raw.sections)) return null;
+  const sections = raw.sections
+    .map((s) => {
+      if (!s || typeof s !== 'object') return null;
+      const issueId = typeof s.issueId === 'string' && s.issueId ? s.issueId : null;
+      const stageId = typeof s.stageId === 'string' && s.stageId ? s.stageId : null;
+      const priorText = typeof s.priorText === 'string' ? s.priorText : null;
+      if (!issueId || !stageId || priorText == null) return null;
+      const out = { issueId, stageId, priorText };
+      if (typeof s.appliedHash === 'string' && s.appliedHash) out.appliedHash = s.appliedHash;
+      return out;
+    })
+    .filter(Boolean);
+  if (!sections.length) return null;
+  return {
+    acceptedAt: typeof raw.acceptedAt === 'string' ? raw.acceptedAt : new Date().toISOString(),
+    sections,
+  };
+}
+
 // Shape one stored comment. Tolerant of partial/legacy records so a hand-edited
 // or older-peer file round-trips without dropping fields.
 function sanitizeComment(raw) {
@@ -102,6 +132,7 @@ function sanitizeComment(raw) {
   if (!problem) return null;
   const category = clampStr(raw.category, 40) || 'other';
   const severity = ['high', 'medium', 'low'].includes(raw.severity) ? raw.severity : 'medium';
+  const status = STATUS_SET.has(raw.status) ? raw.status : 'open';
   return {
     id: typeof raw.id === 'string' && raw.id ? raw.id : `mrc-${randomUUID()}`,
     issueNumber: Number.isInteger(raw.issueNumber) ? raw.issueNumber : null,
@@ -138,7 +169,7 @@ function sanitizeComment(raw) {
     // findings, older peers, and legacy records (treated as never-stale).
     // Optional + additive, so the synced review doc stays backward-compatible.
     sourceContentHash: typeof raw.sourceContentHash === 'string' && raw.sourceContentHash ? raw.sourceContentHash : null,
-    status: STATUS_SET.has(raw.status) ? raw.status : 'open',
+    status,
     // Dismissal reason (#1605) — only carried while dismissed. A status flip
     // back to open/accepted drops it here so a re-opened finding can't keep a
     // stale `false-positive` mark. Legacy/older-peer records lack the field and
@@ -147,6 +178,11 @@ function sanitizeComment(raw) {
       ? raw.dismissReason
       : null,
     fix: sanitizeFix(raw.fix),
+    // Pre-edit snapshot for undo (#1609) — only meaningful once accepted, so a
+    // re-open/dismiss flip drops it (the undo path also clears it explicitly).
+    acceptedSnapshot: status === 'accepted'
+      ? sanitizeAcceptedSnapshot(raw.acceptedSnapshot)
+      : null,
     sourceRunId: typeof raw.sourceRunId === 'string' ? raw.sourceRunId : null,
     createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : new Date().toISOString(),
     updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : new Date().toISOString(),
@@ -397,6 +433,11 @@ export async function updateComment(seriesId, commentId, patch) {
     }
     // `fix: null` is an explicit clear; absent leaves it untouched.
     if (patch.fix !== undefined) merged.fix = sanitizeFix(patch.fix);
+    // Pre-edit undo snapshot (#1609). `null` is an explicit clear (the undo
+    // path); absent leaves it untouched. sanitizeComment below drops it anyway
+    // whenever the resulting status isn't `accepted`, so re-opening a finding
+    // can't leave a stale snapshot behind.
+    if (patch.acceptedSnapshot !== undefined) merged.acceptedSnapshot = patch.acceptedSnapshot;
     merged.updatedAt = new Date().toISOString();
     const next = { ...review, comments: review.comments.map((c, i) => (i === idx ? sanitizeComment(merged) : c)) };
     await writeReview(seriesId, next);

@@ -542,6 +542,16 @@ export const acceptPipelineManuscriptFix = (seriesId, commentId, { find, replace
     ...options,
   });
 
+// Undo a previously-accepted fix — restores the captured pre-edit manuscript
+// text and re-opens the finding. No body (the snapshot lives on the comment).
+// Returns { comment, section, sections } like accept, so callers reapply through
+// the same path.
+export const undoPipelineManuscriptFix = (seriesId, commentId, options = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/manuscript/review/comments/${encodeURIComponent(commentId)}/undo`, {
+    method: 'POST',
+    ...options,
+  });
+
 // Versioned free-text save of one manuscript section. Snapshots the prior text
 // into history (revert via restorePipelineStageVersion). Returns { section }
 // where section.versions is the updated [{ runId, createdAt }] list.
