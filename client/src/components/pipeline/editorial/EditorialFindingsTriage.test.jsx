@@ -118,4 +118,74 @@ describe('EditorialFindingsTriage', () => {
     expect(screen.queryByRole('button', { name: /dismiss/i })).toBeNull();
     expect(screen.queryByRole('button', { name: /preview fix/i })).toBeNull();
   });
+
+  it('only surfaces a selection checkbox for open findings (#1599)', () => {
+    const comments = [
+      { id: 'c1', checkId: 'naming.dissimilar-names', status: 'open', severity: 'high', problem: 'Open one' },
+      { id: 'c2', checkId: 'naming.dissimilar-names', status: 'dismissed', severity: 'low', problem: 'Resolved one' },
+    ];
+    renderTriage({ comments });
+    expect(screen.getByLabelText('Select finding: Open one')).toBeTruthy();
+    expect(screen.queryByLabelText('Select finding: Resolved one')).toBeNull();
+  });
+
+  it('reveals the bulk action bar once a finding is selected and bulk-dismisses the selection (#1599)', async () => {
+    const onCommentChange = vi.fn();
+    patchPipelineManuscriptComment
+      .mockResolvedValueOnce({ comment: { id: 'c1', checkId: 'naming.dissimilar-names', status: 'dismissed', severity: 'high', problem: 'A' } })
+      .mockResolvedValueOnce({ comment: { id: 'c2', checkId: 'naming.dissimilar-names', status: 'dismissed', severity: 'low', problem: 'B' } });
+    const comments = [
+      { id: 'c1', checkId: 'naming.dissimilar-names', status: 'open', severity: 'high', problem: 'A' },
+      { id: 'c2', checkId: 'naming.dissimilar-names', status: 'open', severity: 'low', problem: 'B' },
+    ];
+    renderTriage({ comments, onCommentChange });
+
+    // No selection → no bar.
+    expect(screen.queryByText(/selected$/)).toBeNull();
+    fireEvent.click(screen.getByLabelText('Select finding: A'));
+    fireEvent.click(screen.getByLabelText('Select finding: B'));
+    expect(screen.getByText('2 selected')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: /dismiss 2/i }));
+    await waitFor(() => expect(patchPipelineManuscriptComment).toHaveBeenCalledTimes(2));
+    expect(patchPipelineManuscriptComment).toHaveBeenCalledWith('ser-1', 'c1', { status: 'dismissed' }, { silent: true });
+    expect(patchPipelineManuscriptComment).toHaveBeenCalledWith('ser-1', 'c2', { status: 'dismissed' }, { silent: true });
+    await waitFor(() => expect(onCommentChange).toHaveBeenCalledTimes(2));
+  });
+
+  it('bulk-accepts only the selected findings that carry an applicable fix (#1599)', async () => {
+    const onCommentChange = vi.fn();
+    acceptPipelineManuscriptFix.mockResolvedValue({
+      comment: { id: 'c1', checkId: 'naming.dissimilar-names', status: 'accepted', severity: 'high', problem: 'Fixable' },
+    });
+    const comments = [
+      { id: 'c1', checkId: 'naming.dissimilar-names', status: 'open', severity: 'high', problem: 'Fixable', fix: { edits: [{ find: 'Adam', replace: 'Aaron' }] } },
+      { id: 'c2', checkId: 'naming.dissimilar-names', status: 'open', severity: 'low', problem: 'No fix' },
+    ];
+    renderTriage({ comments, onCommentChange });
+
+    fireEvent.click(screen.getByLabelText('Select finding: Fixable'));
+    fireEvent.click(screen.getByLabelText('Select finding: No fix'));
+    // Both selected, but only one has an applicable fix.
+    expect(screen.getByRole('button', { name: /accept 1/i })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: /accept 1/i }));
+    await waitFor(() => expect(acceptPipelineManuscriptFix).toHaveBeenCalledTimes(1));
+    const [, commentId, payload, options] = acceptPipelineManuscriptFix.mock.calls[0];
+    expect(commentId).toBe('c1');
+    expect(payload.edits).toEqual([{ find: 'Adam', replace: 'Aaron' }]);
+    expect(options).toEqual({ silent: true });
+  });
+
+  it('selects every open finding in a group via the group checkbox (#1599)', () => {
+    const comments = [
+      { id: 'c1', checkId: 'naming.dissimilar-names', status: 'open', severity: 'high', problem: 'A' },
+      { id: 'c2', checkId: 'naming.dissimilar-names', status: 'open', severity: 'low', problem: 'B' },
+      { id: 'c3', checkId: 'naming.dissimilar-names', status: 'dismissed', severity: 'low', problem: 'C' },
+    ];
+    renderTriage({ comments });
+    fireEvent.click(screen.getByLabelText(/Select all open findings in Character name dissimilarity/i));
+    // Two open findings selected (the dismissed one is not selectable).
+    expect(screen.getByText('2 selected')).toBeTruthy();
+  });
 });
