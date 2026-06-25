@@ -12,6 +12,7 @@ vi.mock('../services/sharing/peerSync.js', () => ({
   getRecordPayloadForPeer: vi.fn(),
   pullRecordFromPeer: vi.fn(),
   syncNowForPeer: vi.fn(),
+  buildMediaLibraryManifest: vi.fn(),
   ERR_NOT_FOUND: 'PEER_SYNC_SUBSCRIPTION_NOT_FOUND',
   ERR_VALIDATION: 'PEER_SYNC_SUBSCRIPTION_VALIDATION',
   ERR_SCHEMA_VERSION_AHEAD: 'PEER_SYNC_SCHEMA_VERSION_AHEAD',
@@ -509,6 +510,22 @@ describe('peer-sync routes', () => {
         .get('/api/peer-sync/manifest?kind=%20universe%20');
       expect(res.status).toBe(200);
       expect(integritySvc.buildLocalManifest).toHaveBeenCalledWith('universe');
+    });
+  });
+
+  describe('GET /api/peer-sync/library-manifest', () => {
+    it('200 with the standalone media-library manifest (#1566)', async () => {
+      const manifest = {
+        schemaVersion: 1,
+        manifestHash: 'a'.repeat(64),
+        assets: [{ filename: 'x.png', kind: 'image', sha256: 'b'.repeat(64) }],
+      };
+      svc.buildMediaLibraryManifest.mockResolvedValue(manifest);
+
+      const res = await request(buildApp()).get('/api/peer-sync/library-manifest');
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual(manifest);
+      expect(svc.buildMediaLibraryManifest).toHaveBeenCalled();
     });
   });
 

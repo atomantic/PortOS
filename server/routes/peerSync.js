@@ -41,6 +41,7 @@ import {
   getRecordPayloadForPeer,
   pullRecordFromPeer,
   syncNowForPeer,
+  buildMediaLibraryManifest,
   ERR_NOT_FOUND,
   ERR_VALIDATION,
   ERR_SCHEMA_VERSION_AHEAD,
@@ -144,6 +145,19 @@ router.get('/manifest', asyncHandler(async (req, res) => {
     throw new ServerError('invalid kind', { status: 400, code: 'VALIDATION_ERROR' });
   }
   res.json({ records: await buildLocalManifest(kind) });
+}));
+
+// --- GET /library-manifest --- advertise this instance's STANDALONE media
+// library (#1566) so a full-sync peer can diff + receiver-pull missing bytes.
+//
+// Returns `{ schemaVersion, manifestHash, assets: [{ kind, filename, sha256,
+// sidecarSha256? }] }` covering generated images/videos, pipeline audio, and
+// user-uploaded music. Unauthenticated like every peer-sync route (Tailnet-only
+// per the threat model); the receiver gates the PULL on its own `fullSync` flag,
+// so advertising the manifest to any tailnet peer is safe (it's read-only and
+// the bytes are already served by the /data/* static mounts).
+router.get('/library-manifest', asyncHandler(async (_req, res) => {
+  res.json(await buildMediaLibraryManifest());
 }));
 
 // --- GET /record --- return ONE record's push payload so a peer can PULL it.

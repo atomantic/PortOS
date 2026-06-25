@@ -11,7 +11,7 @@ import { tmpdir } from 'os';
 // runs against the real on-disk paths via the tmpdir-redirect pattern below.
 
 import { PATHS } from '../../lib/fileUtils.js';
-import { RECORD_KIND_SCHEMA_CATEGORIES, PORTOS_SCHEMA_VERSIONS } from '../../lib/schemaVersions.js';
+import { RECORD_KIND_SCHEMA_CATEGORIES, PORTOS_SCHEMA_VERSIONS, NON_RECORD_SCHEMA_CATEGORIES } from '../../lib/schemaVersions.js';
 
 // instances.js mock: aligns with mockNoPeers() contract (getPeers → [], getInstanceId
 // → 'test-instance' by default) while keeping vi.fn() wrappers so per-test
@@ -64,6 +64,13 @@ vi.mock('../mediaCollections.js', async () => ({
   findCollectionByUniverseId: vi.fn(),
   findCollectionBySeriesId: vi.fn(),
   mergeMediaCollectionsFromSync: vi.fn(),
+}));
+
+// #1566 — the media-library sweep dynamic-imports this to rebuild the derived
+// media_assets index after bytes land. Mock it to a no-op spy so the sweep tests
+// don't touch Postgres and can assert the reconcile fired.
+vi.mock('../mediaAssetIndex/index.js', () => ({
+  reconcileMediaAssets: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('../artists/index.js', async () => {
@@ -155,6 +162,10 @@ import {
   pullRecordFromPeer,
   syncNowForPeer,
   collectSubscriptionsForUpdate,
+  buildMediaLibraryManifest,
+  libraryKindsExcludedByPatterns,
+  syncMediaLibraryFromPeer,
+  syncMediaLibraryWithAllPeers,
   peerSyncEvents,
   __resetForTests,
   __drainForTests,
@@ -177,6 +188,7 @@ import { getArtist, listArtists, mergeArtistsFromSync } from '../artists/index.j
 import { getAlbum, listAlbums, mergeAlbumsFromSync } from '../albums/index.js';
 import { getTrack, listTracks, mergeTracksFromSync } from '../tracks/index.js';
 import { peerFetch } from '../../lib/peerHttpClient.js';
+import { reconcileMediaAssets } from '../mediaAssetIndex/index.js';
 import { getBackendName } from '../memoryBackend.js';
 import { getCatalogBundleForRef } from '../catalogDB.js';
 import { applyRemoteChanges as applyCatalogRemoteChanges } from '../catalogSync.js';
@@ -3117,9 +3129,12 @@ describe('peerSync', () => {
 
       it('every versioned PORTOS_SCHEMA_VERSIONS key is reachable from a record kind', () => {
         // So a newly-versioned category can't ship without being wired into the
-        // per-category gate (which would leave its transfers ungated).
+        // per-category gate (which would leave its transfers ungated). The only
+        // exemptions are categories explicitly declared as non-record (pull-gated
+        // elsewhere) via NON_RECORD_SCHEMA_CATEGORIES — e.g. mediaLibrary (#1566).
         const covered = new Set(Object.values(RECORD_KIND_SCHEMA_CATEGORIES).flat());
         for (const key of Object.keys(PORTOS_SCHEMA_VERSIONS)) {
+          if (NON_RECORD_SCHEMA_CATEGORIES.has(key)) continue;
           expect(covered.has(key)).toBe(true);
         }
       });
@@ -3687,6 +3702,177 @@ describe('peerSync', () => {
           sourceInstanceId: 'peer-abc',
         })).not.toThrow();
       }
+    });
+  });
+});
+
+describe('media-library federation (#1566)', () => {
+  let origAudio;
+  let origVideos;
+
+  beforeEach(async () => {
+    // The suite beforeEach redirects PATHS.data/images/music to `tmp` and
+    // restores videos in its afterEach; redirect videos + audio (not created
+    // there) into the same per-test tmpdir so manifest builds see ONLY fixtures.
+    origAudio = PATHS.audio;
+    origVideos = PATHS.videos;
+    PATHS.videos = join(tmp, 'videos');
+    PATHS.audio = join(tmp, 'audio');
+    await mkdir(PATHS.videos, { recursive: true });
+    await mkdir(PATHS.audio, { recursive: true });
+    vi.mocked(reconcileMediaAssets).mockClear();
+  });
+
+  afterEach(() => {
+    PATHS.audio = origAudio;
+    PATHS.videos = origVideos;
+  });
+
+  describe('libraryKindsExcludedByPatterns (honors backup excludes)', () => {
+    it('flags a kind whose whole dir is excluded — anchored, trailing-slash, and glob forms', () => {
+      expect([...libraryKindsExcludedByPatterns(['/music/'])]).toEqual(['music']);
+      expect([...libraryKindsExcludedByPatterns(['/videos/**'])]).toEqual(['video']);
+      expect([...libraryKindsExcludedByPatterns(['images'])]).toEqual(['image']);
+      expect([...libraryKindsExcludedByPatterns(['/audio'])]).toEqual(['audio']);
+    });
+
+    it('ignores excludes that do not name a whole media dir', () => {
+      expect(libraryKindsExcludedByPatterns(['/loras/*.safetensors', '/repos/']).size).toBe(0);
+      expect(libraryKindsExcludedByPatterns([]).size).toBe(0);
+      expect(libraryKindsExcludedByPatterns(undefined).size).toBe(0);
+    });
+  });
+
+  describe('buildMediaLibraryManifest', () => {
+    it('walks all media dirs, hashes files, skips image sidecars, and is deterministic', async () => {
+      await writeFile(join(PATHS.images, 'a.png'), 'img-a');
+      await writeFile(join(PATHS.images, 'a.png.metadata.json'), JSON.stringify({ prompt: 'x' }));
+      await writeFile(join(PATHS.videos, 'v.mp4'), 'vid');
+      await writeFile(join(PATHS.audio, 's.wav'), 'aud');
+      await writeFile(join(PATHS.music, 'm.mp3'), 'mus');
+
+      const m1 = await buildMediaLibraryManifest();
+      const kinds = m1.assets.map((e) => `${e.kind}:${e.filename}`).sort();
+      expect(kinds).toEqual(['audio:s.wav', 'image:a.png', 'music:m.mp3', 'video:v.mp4']);
+      // sidecar json is metadata, not advertised as its own asset
+      expect(m1.assets.find((e) => e.filename.endsWith('.json'))).toBeUndefined();
+      // every entry carries a 64-hex sha256
+      expect(m1.assets.every((e) => /^[a-f0-9]{64}$/.test(e.sha256))).toBe(true);
+      expect(m1.schemaVersion).toBe(PORTOS_SCHEMA_VERSIONS.mediaLibrary);
+      expect(/^[a-f0-9]{64}$/.test(m1.manifestHash)).toBe(true);
+      // deterministic hash across rebuilds of the same library
+      const m2 = await buildMediaLibraryManifest();
+      expect(m2.manifestHash).toBe(m1.manifestHash);
+    });
+
+    it('changes manifestHash when the library changes', async () => {
+      await writeFile(join(PATHS.audio, 's.wav'), 'aud');
+      const before = (await buildMediaLibraryManifest()).manifestHash;
+      await writeFile(join(PATHS.audio, 't.wav'), 'aud2');
+      const after = (await buildMediaLibraryManifest()).manifestHash;
+      expect(after).not.toBe(before);
+    });
+
+    it('returns an empty manifest when the library is empty', async () => {
+      const m = await buildMediaLibraryManifest();
+      expect(m.assets).toEqual([]);
+    });
+
+    it('re-hash cache invalidates when a flat asset changes in place (size differs)', async () => {
+      const p = join(PATHS.audio, 's.wav');
+      await writeFile(p, 'short');
+      const first = (await buildMediaLibraryManifest()).assets.find((e) => e.filename === 's.wav').sha256;
+      // Overwrite with different-length content → (mtime,size) cache key changes.
+      await writeFile(p, 'a much longer payload than before');
+      const second = (await buildMediaLibraryManifest()).assets.find((e) => e.filename === 's.wav').sha256;
+      expect(second).not.toBe(first);
+    });
+  });
+
+  describe('syncMediaLibraryFromPeer', () => {
+    const mkPeer = (id, extra = {}) => ({
+      instanceId: id, name: id, host: null, address: '10.0.0.9', port: 5555,
+      enabled: true, fullSync: true, ...extra,
+    });
+
+    it('no-ops for a non-full-sync peer and never hits the network', async () => {
+      const res = await syncMediaLibraryFromPeer(mkPeer('fs-nofs', { fullSync: false }));
+      expect(res.skipped).toBe('not-fullsync');
+      expect(peerFetch).not.toHaveBeenCalled();
+    });
+
+    it('gently skips a peer whose manifest schema is ahead of local (no pull, no reconcile)', async () => {
+      vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({
+        schemaVersion: PORTOS_SCHEMA_VERSIONS.mediaLibrary + 1,
+        manifestHash: 'a'.repeat(64), assets: [],
+      }) });
+      const res = await syncMediaLibraryFromPeer(mkPeer('fs-ahead'));
+      expect(res.skipped).toBe('schema-ahead');
+      expect(reconcileMediaAssets).not.toHaveBeenCalled();
+    });
+
+    it('skips an unreachable peer and an invalid manifest', async () => {
+      vi.mocked(peerFetch).mockResolvedValue({ ok: false });
+      expect((await syncMediaLibraryFromPeer(mkPeer('fs-down'))).skipped).toBe('unreachable');
+      vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({ bogus: true }) });
+      expect((await syncMediaLibraryFromPeer(mkPeer('fs-bad'))).skipped).toBe('invalid');
+    });
+
+    it('pulls nothing when assets already exist locally, then short-circuits on unchanged hash', async () => {
+      // The peer's manifest == our OWN library (write files, build manifest, feed
+      // it back) so diffAssetManifestAgainstLocal finds everything present.
+      await writeFile(join(PATHS.audio, 's.wav'), 'aud');
+      await writeFile(join(PATHS.images, 'a.png'), 'img');
+      const localManifest = await buildMediaLibraryManifest();
+      vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => localManifest });
+
+      const peer = mkPeer('fs-present');
+      const res1 = await syncMediaLibraryFromPeer(peer);
+      expect(res1.pulled).toBe(0);
+      expect(res1.skipped).toBeUndefined();
+      expect(reconcileMediaAssets).not.toHaveBeenCalled(); // nothing pulled → no reconcile
+
+      const res2 = await syncMediaLibraryFromPeer(peer);
+      expect(res2.skipped).toBe('unchanged');
+    });
+
+    it('requests missing bytes and reconciles the index when the library diverges', async () => {
+      const peer = mkPeer('fs-diverge');
+      // pullMissingAssetsFromPeer re-resolves the peer via getPeers — include it.
+      vi.mocked(getPeers).mockResolvedValue([peer]);
+      const manifest = {
+        schemaVersion: PORTOS_SCHEMA_VERSIONS.mediaLibrary,
+        manifestHash: 'b'.repeat(64),
+        assets: [{ filename: 'remote.wav', kind: 'audio', sha256: 'c'.repeat(64) }],
+      };
+      vi.mocked(peerFetch).mockImplementation(async (url) => {
+        if (String(url).endsWith('/library-manifest')) return { ok: true, json: async () => manifest };
+        return { ok: false }; // byte pull fails gracefully — mechanics tested elsewhere
+      });
+      const res = await syncMediaLibraryFromPeer(peer);
+      expect(res.pulled).toBe(1);
+      const urls = vi.mocked(peerFetch).mock.calls.map((c) => String(c[0]));
+      expect(urls.some((u) => u.includes('/data/audio/remote.wav'))).toBe(true);
+      expect(reconcileMediaAssets).toHaveBeenCalled();
+    });
+  });
+
+  describe('syncMediaLibraryWithAllPeers', () => {
+    it('sweeps only full-sync, enabled peers that have an instanceId', async () => {
+      vi.mocked(getPeers).mockResolvedValue([
+        { instanceId: 'fs1', address: '10.0.0.4', port: 5555, enabled: true, fullSync: true },
+        { instanceId: 'partial', address: '10.0.0.5', port: 5555, enabled: true, fullSync: false },
+        { instanceId: 'disabled', address: '10.0.0.6', port: 5555, enabled: false, fullSync: true },
+        { instanceId: null, address: '10.0.0.7', port: 5555, enabled: true, fullSync: true },
+      ]);
+      vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({
+        schemaVersion: PORTOS_SCHEMA_VERSIONS.mediaLibrary, manifestHash: 'd'.repeat(64), assets: [],
+      }) });
+      await syncMediaLibraryWithAllPeers();
+      const manifestUrls = vi.mocked(peerFetch).mock.calls
+        .map((c) => String(c[0])).filter((u) => u.endsWith('/library-manifest'));
+      expect(manifestUrls).toHaveLength(1);
+      expect(manifestUrls[0]).toContain('10.0.0.4');
     });
   });
 });

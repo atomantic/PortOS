@@ -309,6 +309,20 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // diff + receiver-pull), never round-tripped through the record. Folders +
   // exercises are NOT federated yet (they lack soft-delete columns).
   writersRoomWorks: 1,
+  // v1 = standalone media-library federation (#1566). NOT a record kind — it's
+  // the wire contract for the library-level asset manifest a full-sync peer
+  // advertises at GET /api/peer-sync/library-manifest. The receiver-pull sweep
+  // (syncMediaLibraryFromPeer) reads the sender's advertised `schemaVersion` and
+  // GENTLY SKIPS (logs, no reject) a sender ahead of its local `mediaLibrary` —
+  // unlike the push gate's hard 412, because a library sweep is best-effort
+  // background convergence, not an authoritative record transfer. The asset
+  // BYTES themselves are version-agnostic (an image is an image); only the
+  // MANIFEST envelope shape is gated, so the FIRST incompatible manifest-shape
+  // change (new required field, kind semantics) MUST bump this to 2. Adding a
+  // new media KIND to the manifest is additive — the receiver ignores kinds it
+  // can't route (directoryForAssetKind returns null) — and does NOT require a
+  // bump on its own.
+  mediaLibrary: 1,
   // NOTE: `videoHistory` is intentionally NOT listed here. The version gate
   // rejects the ENTIRE snapshot/push payload on ANY ahead-mismatch (the
   // comparator walks the union of keys), so declaring a brand-new key would
@@ -356,6 +370,25 @@ export const RECORD_KIND_SCHEMA_CATEGORIES = Object.freeze({
   moodBoard: Object.freeze(['moodBoards']),
   writersRoomWork: Object.freeze(['writersRoomWorks']),
 });
+
+/**
+ * Schema-version categories that are versioned but NOT reachable from a record
+ * push — they ride their OWN transport with their OWN compatibility gate, not the
+ * per-record push gate that `RECORD_KIND_SCHEMA_CATEGORIES` drives. Listing one
+ * here is the explicit, reviewed way to say "this version is gated elsewhere, so
+ * the gate-map-completeness guard should not require a record-kind mapping."
+ *
+ * - `mediaLibrary` (#1566): the standalone media-library manifest a full-sync
+ *   peer advertises at GET /api/peer-sync/library-manifest. The RECEIVER pulls
+ *   it and GENTLY SKIPS a sender ahead of its local version (see
+ *   syncMediaLibraryFromPeer) — there is no push to gate, so it has no entry in
+ *   RECORD_KIND_SCHEMA_CATEGORIES by design.
+ *
+ * Do NOT add a real record-push category here to silence the guard — that would
+ * leave its push transfers ungated (silent cross-install corruption). Only
+ * genuinely non-push categories belong.
+ */
+export const NON_RECORD_SCHEMA_CATEGORIES = Object.freeze(new Set(['mediaLibrary']));
 
 /**
  * Lazy-read the current PortOS version from the ROOT package.json so a

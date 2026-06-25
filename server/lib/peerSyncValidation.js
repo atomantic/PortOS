@@ -38,7 +38,12 @@ const peerAssetManifestEntrySchema = z.discriminatedUnion('kind', [
   }).strict(),
   z.object({
     filename: z.string().trim().min(1).max(255),
-    kind: z.enum(['image-ref', 'video', 'music']),
+    // `audio` (#1566) joins the per-record kinds (image-ref/video/music) for the
+    // standalone media-library manifest. Like video/music it carries no gen-params
+    // sidecar, so it rides the non-image branch (`.strict()` rejects a stray
+    // sidecarSha256). The per-record push pipeline never emits `audio`; accepting
+    // it here is harmless and keeps one shared entry schema across both manifests.
+    kind: z.enum(['image-ref', 'video', 'music', 'audio']),
     sha256: hex64.optional(),
   }).strict(),
 ]);
@@ -243,6 +248,23 @@ export const peerSyncRecordSchema = z.object({
 
 export const peerSyncNowSchema = z.object({
   peerId: z.string().trim().min(1).max(120),
+}).strict();
+
+// Standalone media-library manifest the SENDER advertises at
+// GET /api/peer-sync/library-manifest (#1566). A full-sync receiver fetches it,
+// validates it through this schema, then diffs `assets` vs local disk and
+// receiver-pulls the missing bytes. Reuses `peerAssetManifestEntrySchema` (now
+// incl. `audio`) so the wire shape stays identical to the per-record manifest.
+//
+// `assets` is capped well above the per-record manifest (a whole library is far
+// larger than one record's refs); the sender logs + truncates beyond the cap
+// rather than shipping an unbounded list. `manifestHash` lets the receiver
+// short-circuit an unchanged library without diffing every entry. `.strict()`
+// so a malformed envelope is rejected at the boundary.
+export const peerLibraryManifestSchema = z.object({
+  schemaVersion: z.number().int().min(0).max(1_000_000),
+  manifestHash: hex64,
+  assets: z.array(peerAssetManifestEntrySchema).max(100_000),
 }).strict();
 
 export const peerPullMetadataSchema = z.object({

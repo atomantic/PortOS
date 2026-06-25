@@ -12,7 +12,7 @@ import { join } from 'path';
 import { attachAllWatchers, attachWatcher, detachWatcher, shutdownAllWatchers, listAttachedWatchers } from './watcher.js';
 import { sharingEvents } from './importer.js';
 import { installSubscriptionListener } from './subscriptions.js';
-import { installPeerSyncListener, uninstallPeerSyncListener, peerSyncEvents } from './peerSync.js';
+import { installPeerSyncListener, uninstallPeerSyncListener, peerSyncEvents, syncMediaLibraryWithAllPeers } from './peerSync.js';
 import { hasSubscriptionAdapter } from './recordEvents.js';
 import { initAnnotationsSync } from './annotationsSync.js';
 
@@ -22,6 +22,43 @@ export { pullSidecarForImage, backfillMissingSidecars } from './sidecarSync.js';
 
 let initialized = false;
 let io = null;
+
+// Standalone media-library federation sweep (#1566). A low-frequency timer pulls
+// each full-sync peer's library bytes; an unchanged library short-circuits on the
+// manifestHash, so the steady-state tick is one cheap manifest fetch per peer.
+// Period is deliberately slower than the 30s peer health probe — media changes
+// less often and a sweep can move large bytes.
+const MEDIA_LIBRARY_SWEEP_INTERVAL_MS = 60_000;
+const MEDIA_LIBRARY_SWEEP_INITIAL_DELAY_MS = 20_000; // let boot settle before the first sweep
+let mediaLibraryTimer = null;
+let mediaLibraryKickoff = null;
+
+function startMediaLibrarySweep() {
+  // Timer callbacks run OUTSIDE the request lifecycle — an uncaught throw here
+  // crashes the process (CLAUDE.md). syncMediaLibraryWithAllPeers already catches
+  // per-peer; this guards a synchronous throw before the awaits begin.
+  const tick = () => {
+    try {
+      syncMediaLibraryWithAllPeers().catch((err) => {
+        console.error(`❌ sharing: media-library sweep failed: ${err.message}`);
+      });
+    } catch (err) {
+      console.error(`❌ sharing: media-library sweep threw synchronously: ${err.message}`);
+    }
+  };
+  mediaLibraryKickoff = setTimeout(() => {
+    mediaLibraryKickoff = null;
+    tick();
+    mediaLibraryTimer = setInterval(tick, MEDIA_LIBRARY_SWEEP_INTERVAL_MS);
+    if (typeof mediaLibraryTimer.unref === 'function') mediaLibraryTimer.unref();
+  }, MEDIA_LIBRARY_SWEEP_INITIAL_DELAY_MS);
+  if (typeof mediaLibraryKickoff.unref === 'function') mediaLibraryKickoff.unref();
+}
+
+function stopMediaLibrarySweep() {
+  if (mediaLibraryKickoff) { clearTimeout(mediaLibraryKickoff); mediaLibraryKickoff = null; }
+  if (mediaLibraryTimer) { clearInterval(mediaLibraryTimer); mediaLibraryTimer = null; }
+}
 
 export async function initSharing({ io: socketIo } = {}) {
   if (initialized) return;
@@ -103,6 +140,8 @@ export async function initSharing({ io: socketIo } = {}) {
   // subscription listener so a single recordEvents `updated` fan-out drives
   // both transports. No state until at least one peer subscription exists.
   installPeerSyncListener();
+  // #1566 — periodic standalone media-library mirror for full-sync peers.
+  startMediaLibrarySweep();
   initAnnotationsSync();
   const result = await attachAllWatchers();
   console.log(`📡 sharing: initialized, watchers attached for ${result.attached} bucket(s)`);
@@ -111,6 +150,7 @@ export async function initSharing({ io: socketIo } = {}) {
 
 export async function shutdownSharing() {
   await shutdownAllWatchers();
+  stopMediaLibrarySweep();
   sharingEvents.removeAllListeners();
   // Detach the recordEvents + instanceEvents listeners that
   // installPeerSyncListener attached. Without this, the peer-sync service
