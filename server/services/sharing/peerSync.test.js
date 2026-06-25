@@ -3836,7 +3836,7 @@ describe('media-library federation (#1566)', () => {
       expect(res2.skipped).toBe('unchanged');
     });
 
-    it('requests missing bytes and reconciles the index when the library diverges', async () => {
+    it('does NOT record the manifestHash when a byte pull fails — the next tick retries', async () => {
       const peer = mkPeer('fs-diverge');
       // pullMissingAssetsFromPeer re-resolves the peer via getPeers — include it.
       vi.mocked(getPeers).mockResolvedValue([peer]);
@@ -3847,13 +3847,49 @@ describe('media-library federation (#1566)', () => {
       };
       vi.mocked(peerFetch).mockImplementation(async (url) => {
         if (String(url).endsWith('/library-manifest')) return { ok: true, json: async () => manifest };
-        return { ok: false }; // byte pull fails gracefully — mechanics tested elsewhere
+        return { ok: false }; // byte pull fails → nothing lands on disk
       });
       const res = await syncMediaLibraryFromPeer(peer);
-      expect(res.pulled).toBe(1);
+      // The asset URL was requested...
       const urls = vi.mocked(peerFetch).mock.calls.map((c) => String(c[0]));
       expect(urls.some((u) => u.includes('/data/audio/remote.wav'))).toBe(true);
+      // ...but nothing landed (re-diff still sees it missing), so pulled=0,
+      // no reconcile, and the hash is NOT recorded.
+      expect(res.pulled).toBe(0);
+      expect(res.missing).toBe(1);
+      expect(reconcileMediaAssets).not.toHaveBeenCalled();
+      // Second call must re-diff (NOT short-circuit on an 'unchanged' hash).
+      const res2 = await syncMediaLibraryFromPeer(peer);
+      expect(res2.skipped).not.toBe('unchanged');
+    });
+
+    it('records the manifestHash + reconciles once missing bytes actually land', async () => {
+      const peer = mkPeer('fs-success');
+      vi.mocked(getPeers).mockResolvedValue([peer]);
+      // No sha256 on the entry → diff is existence-only, so once the byte pull
+      // writes the file the re-diff sees it present (no hash to mismatch).
+      const manifest = {
+        schemaVersion: PORTOS_SCHEMA_VERSIONS.mediaLibrary,
+        manifestHash: 'e'.repeat(64),
+        assets: [{ filename: 'land.wav', kind: 'audio' }],
+      };
+      const bytes = Buffer.from('audio-bytes-that-landed');
+      vi.mocked(peerFetch).mockImplementation(async (url) => {
+        if (String(url).endsWith('/library-manifest')) return { ok: true, json: async () => manifest };
+        // Asset byte fetch — a Response-like the cap-checker accepts.
+        return {
+          ok: true,
+          headers: new Headers({ 'content-length': String(bytes.length) }),
+          arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+        };
+      });
+      const res1 = await syncMediaLibraryFromPeer(peer);
+      expect(res1.pulled).toBe(1);
+      expect(res1.missing).toBe(0);
       expect(reconcileMediaAssets).toHaveBeenCalled();
+      // Hash recorded → second call short-circuits as unchanged.
+      const res2 = await syncMediaLibraryFromPeer(peer);
+      expect(res2.skipped).toBe('unchanged');
     });
   });
 
