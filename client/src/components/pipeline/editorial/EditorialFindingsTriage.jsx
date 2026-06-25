@@ -35,6 +35,10 @@ const STATUS_TONE = {
   dismissed: 'text-gray-600 line-through',
 };
 
+// A check-sourced finding that's still open — the only findings that are
+// selectable / bulk-actionable. Named once so the predicate lives in one place.
+const isOpenFinding = (c) => !!c.checkId && c.status === 'open';
+
 // A fix is acceptable only when it carries usable replacement text — mirror the
 // manuscript card so the inline/bulk Accept stays disabled for edge edits the
 // editor must handle. Shared by the per-finding row and the bulk action bar.
@@ -102,7 +106,7 @@ function FindingRow({ seriesId, comment, onCommentChange, selected, onToggleSele
   const hasFix = !!comment.fix;
   const isOpen = comment.status === 'open';
   const edits = useMemo(() => fixEditsOf(comment), [comment]);
-  const acceptable = isAcceptableFix(comment);
+  const acceptable = useMemo(() => isAcceptableFix(comment), [comment]);
 
   const [runAccept, accepting] = useAsyncAction(
     () => acceptPipelineManuscriptFix(
@@ -215,7 +219,7 @@ function FindingRow({ seriesId, comment, onCommentChange, selected, onToggleSele
 function CheckGroup({ seriesId, group, onCommentChange, selectedIds, onToggleSelect, onSelectMany }) {
   const [open, setOpen] = useState(group.open > 0);
   const openIds = useMemo(
-    () => group.comments.filter((c) => c.status === 'open').map((c) => c.id),
+    () => group.comments.filter(isOpenFinding).map((c) => c.id),
     [group.comments],
   );
   const selectedCount = openIds.reduce((n, id) => n + (selectedIds.has(id) ? 1 : 0), 0);
@@ -339,7 +343,7 @@ export default function EditorialFindingsTriage({ seriesId, comments = [], check
   // Selection only ever holds open findings — once a finding is accepted/dismissed
   // (here or in the editor) drop it so the bar's counts never count resolved ones.
   const openIds = useMemo(
-    () => new Set(comments.filter((c) => c.checkId && c.status === 'open').map((c) => c.id)),
+    () => new Set(comments.filter(isOpenFinding).map((c) => c.id)),
     [comments],
   );
   useEffect(() => {
@@ -364,8 +368,8 @@ export default function EditorialFindingsTriage({ seriesId, comments = [], check
   const clearSelection = () => setSelectedIds(new Set());
 
   const selectedComments = useMemo(
-    () => comments.filter((c) => c.checkId && c.status === 'open' && selectedIds.has(c.id)),
-    [comments, selectedIds],
+    () => comments.filter((c) => openIds.has(c.id) && selectedIds.has(c.id)),
+    [comments, openIds, selectedIds],
   );
 
   if (!groups.length) {
