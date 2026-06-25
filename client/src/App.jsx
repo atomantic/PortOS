@@ -97,6 +97,7 @@ const StoryBuilder = lazyWithReload(() => import('./pages/StoryBuilder'));
 const PipelineSeries = lazyWithReload(() => import('./pages/PipelineSeries'));
 const PipelineSeriesRoadmap = lazyWithReload(() => import('./pages/PipelineSeriesRoadmap'));
 const PipelineEditorialChecks = lazyWithReload(() => import('./pages/PipelineEditorialChecks'));
+const PipelineFindingRedirect = lazyWithReload(() => import('./pages/PipelineFindingRedirect'));
 const PipelineReverseOutline = lazyWithReload(() => import('./pages/PipelineReverseOutline'));
 const PipelineContinuityBible = lazyWithReload(() => import('./pages/PipelineContinuityBible'));
 const PipelineManuscriptEditor = lazyWithReload(() => import('./pages/PipelineManuscriptEditor'));
@@ -325,6 +326,7 @@ export default function App() {
           <Route path="music/:tab" element={<Music />} />
           <Route path="pipeline" element={<Pipeline />} />
           <Route path="pipeline/editorial-checks" element={<PipelineEditorialChecks />} />
+          <Route path="pipeline/findings/:commentId" element={<PipelineFindingRedirect />} />
           <Route path="pipeline/series/:seriesId" element={<PipelineSeries />} />
           <Route path="pipeline/series/:seriesId/roadmap" element={<PipelineSeriesRoadmap />} />
           <Route path="pipeline/series/:seriesId/reverse-outline" element={<PipelineReverseOutline />} />

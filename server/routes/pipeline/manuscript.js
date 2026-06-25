@@ -172,6 +172,17 @@ router.get('/series/:id/manuscript/review', asyncHandler(async (req, res) => {
   res.json(await getReviewWithStaleness(req.params.id));
 }));
 
+// Resolve a finding by its (series-agnostic) comment id alone → the owning
+// series + comment, so a deep-link carrying only a commentId can open the
+// editor without the user first picking a series (#1608). 404 when no series
+// review contains the id (e.g. the finding was dismissed-then-GC'd or the link
+// is stale).
+router.get('/findings/:commentId/locate', asyncHandler(async (req, res) => {
+  const located = await manuscriptReview.locateComment(req.params.commentId);
+  if (!located) throw new ServerError('Finding not found', { status: 404, code: 'PIPELINE_FINDING_NOT_FOUND' });
+  res.json(located);
+}));
+
 router.patch('/series/:id/manuscript/review/comments/:commentId', asyncHandler(async (req, res) => {
   await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
   const body = validateRequest(manuscriptCommentPatchSchema, req.body ?? {});

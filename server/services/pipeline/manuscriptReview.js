@@ -19,7 +19,7 @@ import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { atomicWrite, readJSONFile } from '../../lib/fileUtils.js';
 import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
-import { seriesStore } from './series.js';
+import { seriesStore, listSeries } from './series.js';
 import { collectManuscriptSections, REPLACEMENT_STRATEGIES, replacementStrategyForCategory } from './arcPlanner.js';
 import { shapeAnchoredEdit, fixFromEdits } from './manuscriptFix.js';
 import { emitRecordUpdated } from '../sharing/recordEvents.js';
@@ -438,4 +438,23 @@ export async function mergeReviewFromSync(seriesId, remoteReview) {
 export async function getComment(seriesId, commentId) {
   const review = await readReview(seriesId);
   return review.comments.find((c) => c.id === commentId) || null;
+}
+
+/**
+ * Locate a finding/comment across ALL series by its (globally-unique) comment
+ * id. Findings live per-series in each series' manuscript-review.json, so a
+ * deep-link that carries only a commentId (e.g. one shared from elsewhere) has
+ * to resolve the owning series before the editor can open it (#1608). Returns
+ * `{ seriesId, comment }` for the first series whose review contains the id, or
+ * `null` when no series owns it. Comment ids are UUID-based (`randomUUID`) so a
+ * match is unambiguous; deleted series are skipped (listSeries default).
+ */
+export async function locateComment(commentId) {
+  if (typeof commentId !== 'string' || !commentId) return null;
+  const series = await listSeries();
+  for (const s of series) {
+    const comment = await getComment(s.id, commentId);
+    if (comment) return { seriesId: s.id, comment };
+  }
+  return null;
 }

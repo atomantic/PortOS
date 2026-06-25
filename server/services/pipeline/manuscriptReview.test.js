@@ -7,9 +7,19 @@ vi.mock('../../lib/fileUtils.js', () => ({
   readJSONFile: vi.fn(async (path, fallback) => (fileStore.has(path) ? fileStore.get(path) : fallback)),
 }));
 
-// seriesStore().recordDir(id) → a stable per-series path key.
+// seriesStore().recordDir(id) → a stable per-series path key. `listSeries`
+// derives the seeded series ids straight from the in-memory file store so
+// locateComment's cross-series scan stays consistent with whatever was seeded.
 vi.mock('./series.js', () => ({
   seriesStore: () => ({ recordDir: (id) => `/mock/series/${id}` }),
+  listSeries: async () => {
+    const ids = [];
+    for (const key of fileStore.keys()) {
+      const id = /^\/mock\/series\/([^/]+)\//.exec(key)?.[1];
+      if (id && !ids.includes(id)) ids.push(id);
+    }
+    return ids.map((id) => ({ id }));
+  },
 }));
 
 // No manuscript sections needed for most tests (seed resolves issueId/stageId
@@ -25,7 +35,7 @@ vi.mock('./arcPlanner.js', () => ({
 
 import { recordEvents } from '../sharing/recordEvents.js';
 import { collectManuscriptSections } from './arcPlanner.js';
-import { seedReviewFromFindings, updateComment, mergeReviewFromSync, getReview, DISMISS_REASONS } from './manuscriptReview.js';
+import { seedReviewFromFindings, updateComment, mergeReviewFromSync, getReview, locateComment, DISMISS_REASONS } from './manuscriptReview.js';
 
 describe('manuscriptReview — record-event emission on write', () => {
   let updates;
@@ -492,5 +502,31 @@ describe('manuscriptReview — false-positive dismissal reason (#1605)', () => {
     const byId = Object.fromEntries(merged.comments.map((c) => [c.id, c]));
     expect(byId.fp1.dismissReason).toBe('false-positive');
     expect(byId.fp2.dismissReason).toBeNull(); // not dismissed → reason dropped
+  });
+});
+
+describe('manuscriptReview — locateComment (cross-series deep-link resolver, #1608)', () => {
+  beforeEach(() => { fileStore.clear(); });
+
+  it('resolves the owning series + comment for a known id', async () => {
+    await seedReviewFromFindings('loc-a', [{ problem: 'Act I drags', anchorQuote: 'q1' }]);
+    const seededB = await seedReviewFromFindings('loc-b', [{ problem: 'POV slips', anchorQuote: 'q2' }]);
+    const targetId = seededB.comments[0].id;
+
+    const located = await locateComment(targetId);
+    expect(located).toMatchObject({ seriesId: 'loc-b' });
+    expect(located.comment.id).toBe(targetId);
+    expect(located.comment.problem).toBe('POV slips');
+  });
+
+  it('returns null when no series review owns the id', async () => {
+    await seedReviewFromFindings('loc-a', [{ problem: 'P', anchorQuote: 'q' }]);
+    expect(await locateComment('comment-does-not-exist')).toBeNull();
+  });
+
+  it('returns null for a blank/non-string id without scanning', async () => {
+    expect(await locateComment('')).toBeNull();
+    expect(await locateComment(null)).toBeNull();
+    expect(await locateComment(undefined)).toBeNull();
   });
 });

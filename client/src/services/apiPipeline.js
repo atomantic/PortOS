@@ -509,6 +509,15 @@ export const getPipelineManuscript = (seriesId, type) =>
 export const getPipelineManuscriptReview = (seriesId) =>
   request(`/pipeline/series/${encodeURIComponent(seriesId)}/manuscript/review`);
 
+// Resolve a finding by its comment id alone (series-agnostic deep-link, #1608).
+// Finder semantics: resolves `{ seriesId, comment }` when a series owns the id,
+// or `null` when it doesn't (the route 404s) or the lookup fails — the deep-link
+// page renders the same "not found" fallback either way, so it owns the error UI
+// and we stay silent.
+export const locatePipelineFinding = (commentId) =>
+  request(`/pipeline/findings/${encodeURIComponent(commentId)}/locate`, { silent: true })
+    .catch(() => null);
+
 // Patch one comment: { status } flip and/or { fix } attach/clear. Returns { comment }.
 export const patchPipelineManuscriptComment = (seriesId, commentId, patch, options = {}) =>
   request(`/pipeline/series/${encodeURIComponent(seriesId)}/manuscript/review/comments/${encodeURIComponent(commentId)}`, {
