@@ -42,7 +42,7 @@ const STATUS_MAP = {
   '[!]': 'blocked'
 };
 
-const PRIORITY_VALUES = {
+export const PRIORITY_VALUES = {
   'CRITICAL': 4,
   'HIGH': 3,
   'MEDIUM': 2,
