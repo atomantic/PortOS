@@ -599,6 +599,25 @@ export async function updateTaskInterval(taskType, settings) {
     delete schedule.executions['task:pr-watcher'];
   }
 
+  // When the recheck cadence of a perpetual task changes, re-derive the
+  // `parkedUntil` of any CURRENTLY-parked execution records (global + per-app)
+  // from the new cadence — otherwise an already-parked task keeps waiting out
+  // its old timestamp and the cadence control appears to do nothing until then.
+  // Only recompute existing parks (never create one), and compute from now so a
+  // shortened cadence takes effect on the next slot.
+  const merged = schedule.tasks[taskType];
+  if (merged.type === INTERVAL_TYPES.PERPETUAL && ('recheckCron' in settings || 'recheckIntervalMs' in settings)) {
+    const exec = schedule.executions[`task:${taskType}`];
+    if (exec) {
+      const records = [exec, ...Object.values(exec.perApp || {})];
+      for (const rec of records) {
+        if (rec?.parkedUntil) {
+          rec.parkedUntil = await computePerpetualRecheckAt(merged);
+        }
+      }
+    }
+  }
+
   await saveSchedule(schedule);
 
   // Globally disabling pr-watcher clears every app's high-water mark, mirroring
@@ -1255,6 +1274,30 @@ export async function getScheduleStatus() {
     // Surface agent-managed flags so the UI can lock the corresponding toggles
     if (MANAGED_AGENT_OPTIONS[taskType]) {
       taskStatus.managedAgentOptions = MANAGED_AGENT_OPTIONS[taskType];
+    }
+
+    // Perpetual tasks park PER-APP (parkPerpetual is called with the appId), so
+    // the global `status` above (shouldRunTask with no appId) always reads
+    // 'perpetual-drain' for app-scoped tasks like claim-issue/claim-work even
+    // when every app is parked. Aggregate the per-app (and global) park records
+    // so the UI can show the true parked/draining state and the soonest recheck.
+    if (interval.type === INTERVAL_TYPES.PERPETUAL) {
+      const nowMs = Date.now();
+      const isParked = (r) => !!(r?.parkedUntil && new Date(r.parkedUntil).getTime() > nowMs);
+      const perAppEntries = Object.values(execution.perApp || {});
+      const parkedApps = perAppEntries.filter(isParked);
+      const globalParked = isParked(execution);
+      const nextRecheckAt = [
+        ...parkedApps.map((r) => r.parkedUntil),
+        ...(globalParked ? [execution.parkedUntil] : [])
+      ].filter(Boolean).sort()[0] || null;
+      taskStatus.perpetual = {
+        globalParked,
+        parkedAppCount: parkedApps.length,
+        trackedAppCount: perAppEntries.length,
+        nextRecheckAt,
+        parkReason: parkedApps[0]?.parkReason || (globalParked ? execution.parkReason : null) || null
+      };
     }
 
     status.tasks[taskType] = taskStatus;

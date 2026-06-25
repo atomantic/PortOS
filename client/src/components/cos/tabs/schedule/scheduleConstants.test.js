@@ -115,6 +115,28 @@ describe('describeNextRun', () => {
     expect(out.text).toMatch(/parked · rechecks/);
     expect(out.title).toContain('no-actionable-issues');
   });
+
+  it('prefers the per-app aggregate over the global drain status for app-scoped perpetual tasks', () => {
+    // Global status reads drain, but all tracked apps are parked — aggregate wins.
+    const out = describeNextRun({
+      enabled: true,
+      type: 'perpetual',
+      status: { reason: 'perpetual-drain' },
+      perpetual: { parkedAppCount: 2, trackedAppCount: 2, globalParked: false, nextRecheckAt: '2999-01-01T00:00:00Z', parkReason: 'no-actionable-issues' }
+    });
+    expect(out.text).toMatch(/2 app\(s\) parked · rechecks/);
+    expect(out.title).toContain('no-actionable-issues');
+  });
+
+  it('shows draining when some apps still have work in the aggregate', () => {
+    const out = describeNextRun({
+      enabled: true,
+      type: 'perpetual',
+      status: { reason: 'perpetual-drain' },
+      perpetual: { parkedAppCount: 1, trackedAppCount: 3, globalParked: false, nextRecheckAt: null, parkReason: null }
+    });
+    expect(out.text).toMatch(/draining/);
+  });
 });
 
 describe('coverageTone', () => {
