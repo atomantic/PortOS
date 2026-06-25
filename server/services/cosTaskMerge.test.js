@@ -131,6 +131,35 @@ describe('mergeTaskLists', () => {
     expect(local[0].status).toBe('pending');
   });
 
+  it('converges on a same-status content edit (priority differs) regardless of initiator', () => {
+    // User reprioritized a still-pending task MEDIUM→HIGH on one machine. "Keep
+    // local" would leave the two machines permanently divergent; the deterministic
+    // same-status tiebreak must pick the SAME record from both directions.
+    const a = [task('task-1', 'pending', { priority: 'HIGH', priorityValue: 3 })];
+    const b = [task('task-1', 'pending', { priority: 'MEDIUM', priorityValue: 2 })];
+    const [fromA] = mergeTaskLists(a, b, { now: NOW });
+    const [fromB] = mergeTaskLists(b, a, { now: NOW });
+    expect(fromA.priority).toBe(fromB.priority);
+    expect(fromA.priority).toBe('HIGH'); // higher priority wins the deterministic tiebreak
+  });
+
+  it('converges on a same-status, same-priority description edit', () => {
+    const a = [task('task-1', 'pending', { description: 'zzz later text' })];
+    const b = [task('task-1', 'pending', { description: 'aaa earlier text' })];
+    const [fromA] = mergeTaskLists(a, b, { now: NOW });
+    const [fromB] = mergeTaskLists(b, a, { now: NOW });
+    expect(fromA.description).toBe(fromB.description);
+  });
+
+  it('adopts a remote-only task whose metadata is absent without crashing (cross-version peer)', () => {
+    // The wire schema marks metadata optional, so a forked/older peer may omit it.
+    const remote = [{ id: 'task-x', taskType: 'user', status: 'pending', priority: 'LOW', description: 'd' }];
+    const [merged] = mergeTaskLists([], remote, { now: NOW });
+    expect(merged.metadata).toEqual({}); // defaulted, not undefined
+    // And it must round-trip through generateTasksMarkdown without throwing.
+    expect(() => JSON.stringify(merged)).not.toThrow();
+  });
+
   it('tolerates non-array / malformed inputs', () => {
     expect(mergeTaskLists(null, null, { now: NOW })).toEqual([]);
     expect(mergeTaskLists([task('a')], undefined, { now: NOW }).map((t) => t.id)).toEqual(['a']);

@@ -336,7 +336,11 @@ const peerCosTaskEntrySchema = z.object({
   description: z.string().max(20_000),
   approvalRequired: z.boolean().optional(),
   autoApproved: z.boolean().optional(),
-  metadata: z.record(z.string().min(1).max(120), z.any()).optional(),
+  // `.default({})` so a sender that omits metadata yields `{}` rather than
+  // undefined — the receiver's markdown generator does Object.entries(metadata)
+  // and would otherwise throw, failing the whole file merge (the merge layer
+  // also defends, but normalizing at the boundary is cheaper + clearer).
+  metadata: z.record(z.string().min(1).max(120), z.any()).optional().default({}),
 }).strict();
 export const peerCosTasksSchema = z.object({
   schemaVersion: z.number().int().min(0).max(1_000_000),

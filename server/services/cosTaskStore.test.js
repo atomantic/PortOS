@@ -400,4 +400,17 @@ describe('cosTaskStore.mergePeerTasks', () => {
     const after = await getCosTasks();
     expect(after.tasks.map(t => t.id)).toContain('sys-x');
   });
+
+  it('adopts a metadata-less remote task through the real markdown generator without throwing', async () => {
+    // A cross-version/forked peer may advertise a task with no `metadata` (the
+    // wire schema marks it optional). generateTasksMarkdown does
+    // Object.entries(metadata) — undefined would throw and fail the whole merge.
+    const remote = [{ id: 'task-nometa', taskType: 'user', status: 'pending', priority: 'HIGH', description: 'no metadata here' }];
+    const res = await mergePeerTasks('user', remote, { now: NOW });
+    expect(res.changed).toBe(true);
+    const after = await getUserTasks();
+    const adopted = after.tasks.find(t => t.id === 'task-nometa');
+    expect(adopted).toBeTruthy();
+    expect(adopted.description).toBe('no metadata here');
+  });
 });

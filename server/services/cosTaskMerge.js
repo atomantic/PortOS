@@ -95,12 +95,44 @@ function claimTriple(task) {
 }
 
 /**
+ * Choose the content base for a task on both sides. Higher lifecycle status wins
+ * (rule 2). On a SAME-status tie the two sides can still differ in editable
+ * content — priority, description, approval flags — and "keep local" would be
+ * side-dependent, so machine A (local=A) and machine B (local=B) would each keep
+ * their own value and never reconcile. Break the tie with a deterministic,
+ * side-independent comparator so both peers converge on the same record:
+ * higher priority, then lexicographically-greater description, then a stable
+ * JSON tiebreak on the remaining comparable fields.
+ *
+ * NOTE: with no per-task edit timestamp this converges but cannot guarantee
+ * *newest-edit* wins (it can prefer a stale higher-priority value over a fresh
+ * lower one). That's the conventional LWW trade-off; a real `updatedAt` edit
+ * key is the proper upgrade (tracked as a follow-up). Convergence is the
+ * load-bearing property here — a sync that never reconciles is worse.
+ */
+function pickContentBase(local, remote) {
+  const lr = statusRank(local.status);
+  const rr = statusRank(remote.status);
+  if (rr !== lr) return rr > lr ? remote : local;
+  const lp = PRIORITY_VALUES[local.priority] || 0;
+  const rp = PRIORITY_VALUES[remote.priority] || 0;
+  if (lp !== rp) return rp > lp ? remote : local;
+  if ((local.description || '') !== (remote.description || '')) {
+    return (remote.description || '') > (local.description || '') ? remote : local;
+  }
+  // Last resort: compare the remaining federated fields as a stable string so any
+  // residual difference (e.g. approval flags on an internal task) still converges.
+  const sig = (t) => JSON.stringify([t.approvalRequired ?? null, t.autoApproved ?? null]);
+  return sig(remote) > sig(local) ? remote : local;
+}
+
+/**
  * Merge one task that exists on both sides into a single record.
  */
 function mergeOne(local, remote, now) {
-  // (rule 2) content base by lifecycle rank — higher status wins; tie keeps
-  // local (same status ⇒ equivalent lifecycle state, local is the receiver).
-  const base = statusRank(remote.status) > statusRank(local.status) ? remote : local;
+  // (rule 2) content base — higher lifecycle status wins; a same-status tie is
+  // broken deterministically so both peers converge (see pickContentBase).
+  const base = pickContentBase(local, remote);
 
   // (rule 3) claim metadata resolved separately so a live claim propagates even
   // when content came from the other side.
@@ -124,11 +156,18 @@ function mergeOne(local, remote, now) {
  * sort as NaN and churn the output order. Re-derive it from the (authoritative)
  * `priority` string. `section` is left as-is: the generator buckets purely by
  * `status`, so it never reads `section`.
+ *
+ * Also guarantees `metadata` is an object: the wire schema marks it optional, so
+ * a cross-version / forked peer can legitimately advertise a task with no
+ * metadata. `generateTasksMarkdown` does `Object.entries(task.metadata)`, which
+ * throws on undefined — and that throw would fail the WHOLE file merge (not just
+ * the one task) on every sweep, permanently stalling convergence. Default it.
  */
 function normalizeAdopted(task) {
   return {
     ...task,
     priorityValue: PRIORITY_VALUES[task.priority] || 2,
+    metadata: (task.metadata && typeof task.metadata === 'object') ? task.metadata : {},
   };
 }
 
