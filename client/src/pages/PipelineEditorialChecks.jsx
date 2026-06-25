@@ -204,31 +204,49 @@ export default function PipelineEditorialChecks() {
   }, []);
 
   // ---- Per-series config override (#1591). The override map lives on the SERIES
-  // record (`editorialCheckConfig`), so a save PATCHes the series and the runner
-  // overlays it on the global config. A ref gives the latest series list so the
-  // handler can build the next map without a stale-closure race (editing two
-  // checks in succession). `nextOverride === null`/`{}` clears that check. ----
-  const seriesRef = useRef(series);
-  useEffect(() => { seriesRef.current = series; }, [series]);
-
+  // record (`editorialCheckConfig`); a save PATCHes the series and the runner
+  // overlays it on the global config. Saves are NON-optimistic (mirrors
+  // handleConfigSave) and SERIALIZED on a tail promise so two quick edits to
+  // different checks can't reorder responses and clobber each other — each PATCH
+  // applies its edit onto the freshest server-confirmed map at execution time.
+  // `overrideMapRef` is the authoritative server-confirmed map for the selected
+  // series; `nextOverride === null`/`{}` clears that check. ----
   const selectedSeries = useMemo(() => series.find((s) => s.id === seriesId) || null, [series, seriesId]);
   const seriesOverrides = selectedSeries?.editorialCheckConfig && typeof selectedSeries.editorialCheckConfig === 'object'
     ? selectedSeries.editorialCheckConfig
     : null;
 
+  const overrideMapRef = useRef({});
+  const seriesSaveTailRef = useRef(Promise.resolve());
+  // Reseed the authoritative map whenever the selected series (or its loaded
+  // record) changes — covers the async series-list load AND a server-confirmed
+  // save echo, so a later edit always composes onto the persisted overrides.
+  useEffect(() => {
+    overrideMapRef.current = seriesOverrides ? { ...seriesOverrides } : {};
+  }, [seriesId, seriesOverrides]);
+
   const handleSeriesConfigSave = useCallback((checkId, nextOverride) => {
     const sid = activeSeriesRef.current;
     if (!sid) return;
-    const cur = seriesRef.current.find((r) => r.id === sid);
-    const map = { ...(cur?.editorialCheckConfig && typeof cur.editorialCheckConfig === 'object' ? cur.editorialCheckConfig : {}) };
-    if (!nextOverride || Object.keys(nextOverride).length === 0) delete map[checkId];
-    else map[checkId] = nextOverride;
-    // Optimistic local update; the server echoes the sanitized record back.
-    setSeries((rows) => rows.map((r) => (r.id === sid ? { ...r, editorialCheckConfig: map } : r)));
     setSavingSeriesIds((s) => new Set(s).add(checkId));
-    updatePipelineSeries(sid, { editorialCheckConfig: map }, { silent: true })
-      .then((s) => { if (s) setSeries((rows) => rows.map((r) => (r.id === s.id ? s : r))); })
-      .catch((err) => toast.error(err.message || 'Failed to save series override'))
+    seriesSaveTailRef.current = seriesSaveTailRef.current
+      .then(async () => {
+        // Build at execution time from the freshest server-confirmed map.
+        const map = { ...overrideMapRef.current };
+        if (!nextOverride || Object.keys(nextOverride).length === 0) delete map[checkId];
+        else map[checkId] = nextOverride;
+        const saved = await updatePipelineSeries(sid, { editorialCheckConfig: map }, { silent: true })
+          .catch((err) => { toast.error(err.message || 'Failed to save series override'); return null; });
+        // On failure `overrideMapRef` is untouched, so the UI keeps showing the
+        // last persisted overrides (no phantom). On success, sync the ref + state
+        // from the sanitized record — but only if the user hasn't switched series
+        // mid-save (a stale echo must not clobber a different series' map).
+        if (saved && activeSeriesRef.current === sid) {
+          overrideMapRef.current = (saved.editorialCheckConfig && typeof saved.editorialCheckConfig === 'object')
+            ? { ...saved.editorialCheckConfig } : {};
+        }
+        if (saved) setSeries((rows) => rows.map((r) => (r.id === saved.id ? saved : r)));
+      })
       .finally(() => setSavingSeriesIds((s) => { const n = new Set(s); n.delete(checkId); return n; }));
   }, []);
 

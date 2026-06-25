@@ -390,6 +390,10 @@ export async function createSeries(input = {}) {
     ephemeral: input.ephemeral === true,
     // Importer-orphan marker (issue #727) — see sanitizeSeries.
     importDraft: input.importDraft === true,
+    // Per-series editorial-check config overrides (#1591) — forwarded so an
+    // importer / promote flow that seeds a series with tuned thresholds keeps
+    // them; sanitizeSeries normalizes an empty/malformed map back to absent.
+    editorialCheckConfig: input.editorialCheckConfig,
   });
   await store().saveOne(created.id, created);
   // Skip auto-subscribe for ephemeral series — wire-side push would short-
