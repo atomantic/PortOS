@@ -64,6 +64,34 @@ export function exceedsMaxSpawns(task) {
 }
 
 /**
+ * A task that must BYPASS the per-app review cooldown at spawn time. Two classes
+ * qualify, for the same reason — the cooldown is not their throttle:
+ *   - **Pipeline continuations** (`metadata.pipeline.currentStage > 0`) — a
+ *     multi-stage pipeline's own stage gating sequences the work.
+ *   - **Perpetual drains** (`metadata.perpetual`) — the work-detector park is the
+ *     throttle (see `queueEligibleImprovementTasks` / agentCompletion.js). Without
+ *     this, a perpetual task the refill just *queued* (after correctly bypassing
+ *     the queue-path cooldown) would still be skipped here at the spawn gate,
+ *     because the on-demand "Run" path stamped `lastReviewedAt` and these gates
+ *     read it — so a manually-triggered perpetual drain stalls one item in.
+ *
+ * `metadata.perpetual` is a bare boolean set upstream, but it round-trips through
+ * COS-TASKS.md as the STRING `"true"` (taskParser serializes non-string/-object
+ * metadata via `String(value)`; only arrays/objects like `pipeline` get the JSON
+ * sentinel that preserves their type). So accept BOTH the in-memory boolean and
+ * the re-parsed string — a `=== true` check alone would silently miss the
+ * persisted-then-reloaded task, which is exactly the one the spawn gate sees.
+ *
+ * Shared by both spawn engines (`dequeueNextTask` in cos.js and `evaluateTasks`
+ * here) and their dry-run planners so the cooldown-exempt set can't drift.
+ */
+export function isCooldownExemptTask(task) {
+  const meta = task?.metadata;
+  if (!meta) return false;
+  return meta.pipeline?.currentStage > 0 || meta.perpetual === true || meta.perpetual === 'true';
+}
+
+/**
  * Dry-run eligibility pass over auto-approved system tasks. Walks the tasks in
  * file order applying the SAME gates execute mode uses — global slot cap,
  * max-total-spawns, app cooldown, per-project cap — while tracking virtual
@@ -558,7 +586,7 @@ async function spawnPriority2AutoApproved(ctx) {
         perProjectLimit,
         spawnProjectCounts,
         isOnCooldown: (appId) => isAppOnCooldown(appId, state.config.appReviewCooldownMs),
-        cooldownExempt: (task) => task.metadata?.pipeline?.currentStage > 0
+        cooldownExempt: isCooldownExemptTask
       });
       for (const task of wouldSpawn) {
         emitLog('info', `[dry-run] CoS auto-run would spawn system task: ${task.id}`, { taskId: task.id, domainAutonomy: 'cos' });
@@ -571,10 +599,10 @@ async function spawnPriority2AutoApproved(ctx) {
 
       if (await blockIfExceedsMaxSpawns(task, 'internal')) continue;
 
-      // Check if task's app is on cooldown (pipeline continuations bypass cooldown)
+      // Check if task's app is on cooldown (pipeline continuations AND perpetual
+      // drains bypass cooldown — see isCooldownExemptTask).
       const appId = task.metadata?.app;
-      const isPipelineContinuation = task.metadata?.pipeline?.currentStage > 0;
-      if (appId && !isPipelineContinuation) {
+      if (appId && !isCooldownExemptTask(task)) {
         const onCooldown = await isAppOnCooldown(appId, state.config.appReviewCooldownMs);
         if (onCooldown) {
           emitLog('debug', `Skipping system task ${task.id} - app ${appId} on cooldown`);
