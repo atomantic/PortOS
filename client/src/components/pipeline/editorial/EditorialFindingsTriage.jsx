@@ -20,6 +20,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import CheckKindBadge from './CheckKindBadge';
 import {
   groupFindingsByCheck,
+  checkFalsePositiveRate,
   findingManuscriptLink,
   openFindingsTotal,
   deriveFindingFacets,
@@ -138,8 +139,12 @@ function FindingRow({ seriesId, comment, onCommentChange, selected, onToggleSele
     { errorMessage: 'Failed to apply fix' },
   );
   const [runDismiss, dismissing] = useAsyncAction(
-    () => patchPipelineManuscriptComment(seriesId, comment.id, { status: 'dismissed' }, { silent: true }),
+    () => patchPipelineManuscriptComment(seriesId, comment.id, { status: 'dismissed', dismissReason: null }, { silent: true }),
     { errorMessage: 'Failed to dismiss' },
+  );
+  const [runFalsePositive, flagging] = useAsyncAction(
+    () => patchPipelineManuscriptComment(seriesId, comment.id, { status: 'dismissed', dismissReason: 'false-positive' }, { silent: true }),
+    { errorMessage: 'Failed to flag false positive' },
   );
 
   const accept = async () => {
@@ -150,6 +155,12 @@ function FindingRow({ seriesId, comment, onCommentChange, selected, onToggleSele
   };
   const dismiss = async () => {
     const result = await runDismiss();
+    if (result?.comment) onCommentChange?.(result.comment);
+  };
+  // "This check is wrong here" — distinct from dismiss so the per-check
+  // false-positive rate can flag a broken check (#1605).
+  const markFalsePositive = async () => {
+    const result = await runFalsePositive();
     if (result?.comment) onCommentChange?.(result.comment);
   };
 
@@ -176,6 +187,9 @@ function FindingRow({ seriesId, comment, onCommentChange, selected, onToggleSele
             <span className="flex items-center gap-2">
               {comment.location ? <span className="block text-[11px] text-gray-500">{comment.location}</span> : null}
               {isOpen && comment.stale ? <StaleBadge /> : null}
+              {comment.dismissReason === 'false-positive' ? (
+                <span className="inline-flex items-center gap-1 text-[10px] text-port-warning"><Ban size={10} /> false positive</span>
+              ) : null}
             </span>
           </span>
           <ExternalLink size={13} className="mt-0.5 shrink-0 text-gray-600 group-hover:text-port-accent" />
@@ -211,12 +225,24 @@ function FindingRow({ seriesId, comment, onCommentChange, selected, onToggleSele
             <button
               type="button"
               onClick={dismiss}
-              disabled={accepting || dismissing}
+              disabled={accepting || dismissing || flagging}
               className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-gray-500 hover:text-white disabled:opacity-40"
             >
               {dismissing ? <Loader2 size={11} className="animate-spin" /> : <X size={11} />}
               Dismiss
             </button>
+            {comment.checkId ? (
+              <button
+                type="button"
+                onClick={markFalsePositive}
+                disabled={accepting || dismissing || flagging}
+                className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-gray-500 hover:text-port-warning disabled:opacity-40"
+                title="Flag as a false positive — the check is wrong here"
+              >
+                {flagging ? <Loader2 size={11} className="animate-spin" /> : <Ban size={11} />}
+                False positive
+              </button>
+            ) : null}
           </div>
           {hasFix && showFix ? (
             <div className="space-y-1.5 rounded border border-port-border/60 bg-port-card/40">
@@ -279,6 +305,17 @@ function CheckGroup({ seriesId, group, onCommentChange, selectedIds, onToggleSel
             <span className="text-[10px] text-gray-500 shrink-0">{group.open} open · {group.total} total</span>
           </span>
           <span className="flex items-center gap-1.5 shrink-0">
+            {group.falsePositive > 0 ? (
+              // Per-check quality signal (#1605): how often this check is wrong.
+              // Rate is stamped over the full finding set, so it's stable under
+              // the active status filter.
+              <span
+                className="inline-flex items-center gap-1 rounded border border-port-warning/40 px-1.5 py-0.5 text-[10px] text-port-warning"
+                title={`${group.falsePositive} finding${group.falsePositive === 1 ? '' : 's'} flagged false positive (${Math.round((checkFalsePositiveRate(group) || 0) * 100)}% of this check's findings)`}
+              >
+                <Ban size={10} /> {Math.round((checkFalsePositiveRate(group) || 0) * 100)}% FP
+              </span>
+            ) : null}
             {group.stale > 0 ? <StaleBadge count={group.stale} /> : null}
             <CountPills counts={group.counts} />
           </span>
@@ -355,7 +392,7 @@ function BulkActionBar({ seriesId, selected, onCommentChange, onClear }) {
     for (const comment of targets) {
       const result = mode === 'accept'
         ? await acceptPipelineManuscriptFix(seriesId, comment.id, { edits: acceptEditsOf(comment) }, { silent: true }).catch(() => null)
-        : await patchPipelineManuscriptComment(seriesId, comment.id, { status: 'dismissed' }, { silent: true }).catch(() => null);
+        : await patchPipelineManuscriptComment(seriesId, comment.id, { status: 'dismissed', dismissReason: null }, { silent: true }).catch(() => null);
       if (result?.comment) {
         onCommentChange?.(result.comment);
         ok += 1;

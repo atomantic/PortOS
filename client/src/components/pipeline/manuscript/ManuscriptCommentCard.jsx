@@ -11,7 +11,7 @@
  */
 
 import { useMemo, useState } from 'react';
-import { Loader2, Sparkles, Check, X, Columns2, Rows2, Copy, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Loader2, Sparkles, Check, X, Ban, Columns2, Rows2, Copy, ChevronLeft, ChevronRight } from 'lucide-react';
 import InlineDiff from '../../ui/InlineDiff';
 import SideBySideDiff from '../../ui/SideBySideDiff';
 import toast from '../../ui/Toast';
@@ -43,7 +43,7 @@ export function CopyId({ id }) {
 // On-screen cheatsheet for the card's keyboard shortcuts (#1603) — only the
 // actions actually available for this note are shown (prev/next when the card is
 // part of a triage order, Accept/regenerate when a fix exists, Generate when not).
-function ShortcutHints({ hasNav, hasFix }) {
+function ShortcutHints({ hasNav, hasFix, hasFalsePositive }) {
   return (
     <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 pt-1.5 text-[10px] text-gray-600">
       {hasNav ? (
@@ -58,6 +58,9 @@ function ShortcutHints({ hasNav, hasFix }) {
         <span className="inline-flex items-center gap-1"><Kbd size="sm">g</Kbd> generate</span>
       )}
       <span className="inline-flex items-center gap-1"><Kbd size="sm">d</Kbd> dismiss</span>
+      {hasFalsePositive ? (
+        <span className="inline-flex items-center gap-1"><Kbd size="sm">f</Kbd> false positive</span>
+      ) : null}
     </div>
   );
 }
@@ -69,6 +72,11 @@ export function Badge({ comment }) {
         {comment.severity}
       </span>
       <span className="text-[10px] uppercase tracking-wider text-gray-500">{CATEGORY_LABEL[comment.category] || comment.category}</span>
+      {comment.dismissReason === 'false-positive' ? (
+        <span className="text-[10px] px-1.5 py-0.5 rounded border border-port-warning/40 text-port-warning" title="Flagged as a false positive">
+          false positive
+        </span>
+      ) : null}
     </span>
   );
 }
@@ -194,10 +202,23 @@ export default function ManuscriptCommentCard({
   };
 
   const dismiss = async () => {
-    const result = await patchPipelineManuscriptComment(seriesId, comment.id, { status: 'dismissed' }, { silent: true })
+    // A plain dismiss is "won't fix" — clear any prior false-positive reason so
+    // re-dismissing a re-opened finding doesn't keep a stale mark.
+    const result = await patchPipelineManuscriptComment(seriesId, comment.id, { status: 'dismissed', dismissReason: null }, { silent: true })
       .catch((err) => { toast.error(err.message || 'Failed to dismiss'); return null; });
     if (result?.comment) onCommentChange(result.comment);
   };
+
+  // "This check is wrong here" (#1605) — distinct from a plain dismiss so broken
+  // checks are tracked for the per-check quality view instead of silently
+  // re-surfacing the same bad finding every run. Only offered for check-sourced
+  // findings (completeness-pass findings carry no checkId to attribute it to).
+  const markFalsePositive = async () => {
+    const result = await patchPipelineManuscriptComment(seriesId, comment.id, { status: 'dismissed', dismissReason: 'false-positive' }, { silent: true })
+      .catch((err) => { toast.error(err.message || 'Failed to flag false positive'); return null; });
+    if (result?.comment) onCommentChange(result.comment);
+  };
+  const canFlagFalsePositive = !!comment.checkId;
 
   const fuzzy = comment.fix?.fuzzy || fixEdits.some((e) => e.fuzzy);
   const Diff = diffStyle === 'side' ? SideBySideDiff : InlineDiff;
@@ -220,6 +241,7 @@ export default function ManuscriptCommentCard({
     j: nav?.onNext,
     a: canAccept && !accepting ? accept : undefined,
     d: !accepting ? dismiss : undefined,
+    f: canFlagFalsePositive && !accepting ? markFalsePositive : undefined,
     g: !generating && !accepting ? generate : undefined,
   });
 
@@ -358,16 +380,27 @@ export default function ManuscriptCommentCard({
             </button>
           </>
         )}
+        {canFlagFalsePositive ? (
+          <button
+            type="button"
+            onClick={markFalsePositive}
+            disabled={accepting}
+            className="ml-auto inline-flex items-center gap-1 px-2 py-1 rounded text-[12px] text-gray-500 hover:text-port-warning disabled:opacity-40"
+            title="Flag this finding as a false positive — the check is wrong here"
+          >
+            <Ban size={12} /> False positive
+          </button>
+        ) : null}
         <button
           type="button"
           onClick={dismiss}
-          className="ml-auto inline-flex items-center gap-1 px-2 py-1 rounded text-[12px] text-gray-500 hover:text-white"
+          className={`${canFlagFalsePositive ? '' : 'ml-auto '}inline-flex items-center gap-1 px-2 py-1 rounded text-[12px] text-gray-500 hover:text-white`}
         >
           <X size={12} /> Dismiss
         </button>
       </div>
 
-      <ShortcutHints hasNav={!!nav} hasFix={hasFix} />
+      <ShortcutHints hasNav={!!nav} hasFix={hasFix} hasFalsePositive={canFlagFalsePositive} />
     </div>
   );
 }

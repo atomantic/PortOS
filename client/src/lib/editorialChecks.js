@@ -69,6 +69,11 @@ export function groupFindingsByCheck(comments = [], rowsById = {}) {
         total: 0,
         counts: emptyCounts(),
         stale: 0,
+        // Dismissal tally (#1605): `dismissed` counts every dismissed finding,
+        // `falsePositive` the subset flagged as a broken check. The ratio drives
+        // the per-check quality signal in the catalog/triage view.
+        dismissed: 0,
+        falsePositive: 0,
       });
     }
     const g = groups.get(c.checkId);
@@ -79,7 +84,16 @@ export function groupFindingsByCheck(comments = [], rowsById = {}) {
       const sev = SEVERITY_ORDER.includes(c.severity) ? c.severity : 'low';
       g.counts[sev] += 1;
       if (c.stale) g.stale += 1;
+    } else if (c.status === 'dismissed') {
+      g.dismissed += 1;
+      if (c.dismissReason === 'false-positive') g.falsePositive += 1;
     }
+  }
+  // Stamp a stable false-positive rate over the FULL finding set (#1605) so the
+  // catalog/triage quality signal stays correct even when a status filter later
+  // recounts `total` to the matched subset (see applyFindingsView/recountGroup).
+  for (const g of groups.values()) {
+    g.falsePositiveRate = g.total > 0 ? g.falsePositive / g.total : null;
   }
   const scopeRank = (s) => {
     const i = CHECK_SCOPE_ORDER.indexOf(s);
@@ -92,6 +106,20 @@ export function groupFindingsByCheck(comments = [], rowsById = {}) {
 /** Total OPEN check-sourced findings across all groups — drives the header badge. */
 export const openFindingsTotal = (groups = []) =>
   groups.reduce((sum, g) => sum + g.open, 0);
+
+/**
+ * Per-check false-positive rate (#1605): the fraction of a check's findings the
+ * user flagged as a broken check (`false-positive` dismissals over total
+ * findings). `null` when the check has surfaced nothing yet, so callers can
+ * distinguish "no data" from a genuine 0%. Prefers the stable rate stamped by
+ * `groupFindingsByCheck` (immune to status-filter recounts), falling back to a
+ * direct compute for hand-built groups.
+ */
+export const checkFalsePositiveRate = (group) => {
+  if (!group) return null;
+  if (group.falsePositiveRate !== undefined) return group.falsePositiveRate;
+  return group.total > 0 ? group.falsePositive / group.total : null;
+};
 
 /**
  * Deep-link a finding into the manuscript editor: focuses the finding's issue
