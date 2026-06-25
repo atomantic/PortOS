@@ -244,4 +244,23 @@ describe('EditorialFindingsTriage', () => {
     expect(screen.getByText('Confusable names')).toBeTruthy();
     expect(screen.getByText('Sagging middle')).toBeTruthy();
   });
+
+  it('force-expands a group whose only matches are resolved findings (#1600)', () => {
+    // ?fstatus=dismissed matches only the dismissed finding, whose group has 0
+    // open — without force-expand it would hide behind a collapsed header.
+    renderTwoCheck(['/?fstatus=dismissed']);
+    expect(screen.getByText('Resolved drag')).toBeTruthy();
+    expect(screen.queryByText('Confusable names')).toBeNull();
+    expect(screen.queryByText('Sagging middle')).toBeNull();
+  });
+
+  it('drops a filter-hidden finding from the bulk selection so it can\'t be acted on unseen (#1600)', () => {
+    renderTwoCheck();
+    fireEvent.click(screen.getByLabelText('Select finding: Confusable names'));
+    fireEvent.click(screen.getByLabelText('Select finding: Sagging middle'));
+    expect(screen.getByText('2 selected')).toBeTruthy();
+    // Filter so only one selected finding stays visible — the bar must follow.
+    fireEvent.change(screen.getByLabelText('Search findings'), { target: { value: 'confusable' } });
+    expect(screen.getByText('1 selected')).toBeTruthy();
+  });
 });
