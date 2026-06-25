@@ -331,17 +331,22 @@ describe('per-check severity override (#1596)', () => {
     expect(resolveCheckSeverity(check, undefined)).toBe(check.severityDefault);
   });
 
-  it('getEnabledChecks threads the effective severity for the runner', () => {
+  it('getEnabledChecks threads the effective severity AND the raw override for the runner', () => {
     const target = flip(NAMING);
-    expect(getEnabledChecks(checksSettings(NAMING, target), [NAMING])[0].severity).toBe(target);
-    expect(getEnabledChecks({}, [NAMING])[0].severity).toBe(getCheck(NAMING).severityDefault);
+    const pinned = getEnabledChecks(checksSettings(NAMING, target), [NAMING])[0];
+    expect(pinned.severity).toBe(target); // effective → ctx.severityDefault base
+    expect(pinned.severityOverride).toBe(target); // raw → authoritative force-stamp
+    const unpinned = getEnabledChecks({}, [NAMING])[0];
+    expect(unpinned.severity).toBe(getCheck(NAMING).severityDefault);
+    expect(unpinned.severityOverride).toBeNull(); // no override → no force-stamp
   });
 
-  it('applySeriesCheckConfig preserves the effective severity through a config overlay', () => {
+  it('applySeriesCheckConfig preserves the severity fields through a config overlay', () => {
     const target = flip(LETTERING);
     const enabled = getEnabledChecks(checksSettings(LETTERING, target), [LETTERING]);
     const out = applySeriesCheckConfig(enabled, { [LETTERING]: { maxWordsPerBalloon: 12 } });
-    expect(out[0].severity).toBe(target); // severity rides through untouched
+    expect(out[0].severity).toBe(target); // effective severity rides through untouched
+    expect(out[0].severityOverride).toBe(target); // raw override preserved for force-stamp
     expect(out[0].config.maxWordsPerBalloon).toBe(12); // config still overlaid
   });
 });

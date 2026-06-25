@@ -552,12 +552,13 @@ export async function runEditorialChecks(seriesId, options = {}) {
   // must dismiss their now-stale prior open comments.
   const deterministicRanIds = new Set();
   let canceled = false;
-  for (const { check, config, severity } of enabledResolved) {
+  for (const { check, config, severity, severityOverride } of enabledResolved) {
     if (signal?.aborted) { canceled = true; break; }
     onProgress?.({ type: 'check:start', checkId: check.id, label: check.label });
     // `severity` is the effective per-check level (#1596): the user's stored
-    // override or the registry default. Fall back to the registry default if a
-    // pair somehow arrives without one (defensive for older getEnabledChecks).
+    // override or the registry default. It seeds `ctx.severityDefault` so checks
+    // that escalate FROM the default honor the override. Fall back to the
+    // registry default if a pair somehow arrives without one (defensive).
     const ctx = { ...baseCtx, config, severityDefault: severity || check.severityDefault };
     // Boundary try/catch: a check's run() calls into arbitrary logic / LLM
     // providers — one bad check must not abort the whole pass (mirrors the
@@ -570,7 +571,18 @@ export async function runEditorialChecks(seriesId, options = {}) {
       }
       const raw = (await check.run(ctx)) || [];
       const sourceContentHash = fingerprintForCheck(check, resolvedSources);
-      const stamped = raw.map((f) => ({ ...f, checkId: check.id, sourceContentHash }));
+      // A pinned per-check severity (#1596) is AUTHORITATIVE: force every finding
+      // to the chosen level so the pin is consistent across all check kinds —
+      // including LLM checks (which emit their own per-finding severity) and
+      // explicit-severity deterministic checks (e.g. lettering's overflowSeverity),
+      // not just escalation-from-default ones. No override → keep the emitted
+      // severity untouched, preserving each check's native per-finding nuance.
+      const stamped = raw.map((f) => ({
+        ...f,
+        ...(severityOverride ? { severity: severityOverride } : {}),
+        checkId: check.id,
+        sourceContentHash,
+      }));
       findings.push(...stamped);
       // A deterministic check is a pure function of its sources, so a finding it
       // no longer produces is genuinely resolved (not provider variance) — mark it

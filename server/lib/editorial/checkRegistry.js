@@ -6326,17 +6326,21 @@ export function getEnabledCheckRows(settings, subsetIds = null) {
 
 /**
  * The checks that should actually run for a given settings + optional subset.
- * Returns `{ check, config, severity }` pairs (the live registry entry, its
- * resolved config, and its EFFECTIVE severity — the stored override or the
- * registry default, #1596) for every enabled check, narrowed to `subsetIds`
- * when provided. The runner stamps `severity` (not `check.severityDefault`)
- * onto findings, so a per-check override is honored at run time.
+ * Returns `{ check, config, severity, severityOverride }` pairs (the live
+ * registry entry, its resolved config, its EFFECTIVE severity, and the RAW
+ * per-check override — null when defaulting, #1596) for every enabled check,
+ * narrowed to `subsetIds` when provided. The runner uses `severity` as the
+ * base (`ctx.severityDefault`) and, when `severityOverride` is set, force-stamps
+ * it onto every finding so a pin is authoritative even for LLM / explicit-
+ * severity checks (not just escalation-from-default ones).
  */
 export function getEnabledChecks(settings, subsetIds = null) {
   // Resolve against built-ins + custom checks (getCheck only knows built-ins).
   const byId = new Map(getAllChecks(settings).map((c) => [c.id, c]));
   return getEnabledCheckRows(settings, subsetIds)
-    .map((row) => ({ check: byId.get(row.id), config: row.config, severity: row.severity }))
+    .map((row) => ({
+      check: byId.get(row.id), config: row.config, severity: row.severity, severityOverride: row.severityOverride,
+    }))
     .filter((x) => x.check);
 }
 
@@ -6351,12 +6355,12 @@ export function getEnabledChecks(settings, subsetIds = null) {
  *
  * Pure + side-effect-free. Returns the input array unchanged when `seriesOverrides`
  * is absent/non-object, so a series that tunes nothing pays no allocation. The
- * effective `severity` carried by each pair (#1596) is preserved verbatim — the
- * per-series override layer only tunes `config`, not severity.
+ * severity fields carried by each pair (`severity` / `severityOverride`, #1596)
+ * are preserved verbatim — the per-series override layer only tunes `config`.
  *
- * @param {Array<{check: object, config: object, severity?: string}>} enabled  pairs from getEnabledChecks
+ * @param {Array<{check: object, config: object, severity?: string, severityOverride?: string|null}>} enabled  pairs from getEnabledChecks
  * @param {Record<string, object>|null|undefined} seriesOverrides  series.editorialCheckConfig
- * @returns {Array<{check: object, config: object, severity?: string}>}
+ * @returns {Array<{check: object, config: object, severity?: string, severityOverride?: string|null}>}
  */
 export function applySeriesCheckConfig(enabled, seriesOverrides) {
   if (!Array.isArray(enabled)) return [];

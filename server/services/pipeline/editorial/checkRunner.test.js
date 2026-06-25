@@ -154,6 +154,26 @@ describe('runEditorialChecks', () => {
     expect(high + medium + low).toBe(naming.count);
   });
 
+  // #1596 — a pinned per-check severity is AUTHORITATIVE: it force-stamps every
+  // finding from that check, overriding even an LLM-emitted per-finding level
+  // (the mocked info-dump LLM returns 'medium'; the pin forces 'high').
+  it('force-stamps a per-check severity override onto findings, overriding the LLM level', async () => {
+    const result = await runEditorialChecks('s1', {
+      checkIds: ['prose.info-dumping'],
+      settings: { pipelineEditorialChecks: { checks: { 'prose.info-dumping': { severity: 'high' } } } },
+    });
+    const infoDump = result.findings.filter((f) => f.checkId === 'prose.info-dumping');
+    expect(infoDump.length).toBeGreaterThan(0);
+    expect(infoDump.every((f) => f.severity === 'high')).toBe(true);
+  });
+
+  it('keeps the native per-finding severity when a check has no severity override', async () => {
+    const result = await runEditorialChecks('s1', { checkIds: ['prose.info-dumping'] });
+    const infoDump = result.findings.filter((f) => f.checkId === 'prose.info-dumping');
+    expect(infoDump.length).toBeGreaterThan(0);
+    expect(infoDump.every((f) => f.severity === 'medium')).toBe(true); // the LLM's own level
+  });
+
   // #1578 — the runner emits check:start / check:complete progress frames so the
   // autopilot SSE stream can show per-check progress mid-pass, not just a total.
   it('emits check:start and check:complete progress frames with a severity breakdown', async () => {
