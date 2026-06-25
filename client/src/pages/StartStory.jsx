@@ -63,11 +63,13 @@ export default function StartStory() {
 
   // A universe must actually be picked before the mode cards can attach it.
   const needsUniversePick = useExisting && !universeId;
+  // The universe id to forward, or '' when starting fresh / not yet picked.
+  const attachUniverseId = useExisting ? universeId : '';
 
   const go = (mode) => {
     if (needsUniversePick) return;
-    const attach = useExisting && universeId && mode.consumesUniverse;
-    const query = attach ? `?universeId=${encodeURIComponent(universeId)}` : '';
+    const attach = attachUniverseId && mode.consumesUniverse;
+    const query = attach ? `?universeId=${encodeURIComponent(attachUniverseId)}` : '';
     navigate(`${mode.to}${query}`);
   };
 
@@ -132,7 +134,7 @@ export default function StartStory() {
       <section className="grid gap-4 sm:grid-cols-3">
         {MODES.map((mode) => {
           const Icon = mode.icon;
-          const attaches = useExisting && universeId && mode.consumesUniverse;
+          const attaches = attachUniverseId && mode.consumesUniverse;
           return (
             <button
               key={mode.id}
@@ -151,7 +153,7 @@ export default function StartStory() {
               {attaches && (
                 <p className="text-xs text-port-success">Will attach to the selected universe.</p>
               )}
-              {useExisting && universeId && !mode.consumesUniverse && (
+              {attachUniverseId && !attaches && (
                 <p className="text-xs text-gray-500">Universe linking for prose drafts is coming in a later phase.</p>
               )}
             </button>
