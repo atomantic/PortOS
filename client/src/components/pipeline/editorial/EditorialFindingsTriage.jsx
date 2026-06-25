@@ -57,6 +57,11 @@ const STATUS_FILTER_ORDER = ['open', 'accepted', 'dismissed'];
 const parseSet = (raw) => new Set((raw || '').split(',').map((s) => s.trim()).filter(Boolean));
 const serializeSet = (set) => [...set].join(',');
 
+// Stable empty default for the `hiddenCheckIds` prop so callers that don't pass it
+// (tests, read-only embeds) don't bust the `visibleView` memo with a fresh Set
+// identity each render.
+const EMPTY_HIDDEN = new Set();
+
 // A check-sourced finding that's still open — the only findings that are
 // selectable / bulk-actionable. Named once so the predicate lives in one place.
 const isOpenFinding = (c) => !!c.checkId && c.status === 'open';
@@ -678,56 +683,14 @@ function NextStepsCTA({ seriesId, allCleared, onRunChecks, runDisabled = false }
   );
 }
 
-export default function EditorialFindingsTriage({ seriesId, comments = [], checksById = {}, onCommentChange, onToggleCheckEnabled, onRunChecks, runDisabled = false }) {
+export default function EditorialFindingsTriage({ seriesId, comments = [], checksById = {}, onCommentChange, hiddenCheckIds = EMPTY_HIDDEN, onDisableCheck, onRunChecks, runDisabled = false }) {
   const groups = useMemo(() => groupFindingsByCheck(comments, checksById), [comments, checksById]);
   const [selectedIds, setSelectedIds] = useState(() => new Set());
 
-  // Checks the user muted from this view this session (#1602). Disabling a check
-  // doesn't delete its persisted findings, so the group is hidden locally until an
-  // undo (or a fresh findings load) brings it back. Keyed by checkId.
-  const [hiddenCheckIds, setHiddenCheckIds] = useState(() => new Set());
-  const unhideCheck = (checkId) => setHiddenCheckIds((s) => {
-    if (!s.has(checkId)) return s;
-    const next = new Set(s);
-    next.delete(checkId);
-    return next;
-  });
-  const disableCheck = (checkId, label) => {
-    setHiddenCheckIds((s) => new Set(s).add(checkId));
-    const toastId = toast((t) => (
-      <span className="flex items-center gap-3 text-xs">
-        <span className="text-gray-200">Disabled <span className="font-medium text-white">{label}</span> — findings hidden</span>
-        <button
-          type="button"
-          onClick={() => { unhideCheck(checkId); onToggleCheckEnabled?.(checkId, true); toast.dismiss(t.id); }}
-          className="inline-flex shrink-0 items-center gap-1 rounded border border-port-border px-2 py-0.5 text-[11px] text-port-accent hover:border-port-accent/40 hover:text-white"
-        >
-          <Undo2 size={12} /> Undo
-        </button>
-      </span>
-    ), { duration: 8000 });
-    // Optimistic hide above; reconcile if the persist fails (onToggleCheckEnabled
-    // resolves false on error and has already reverted + toasted) so a failed
-    // disable doesn't leave the group stuck hidden behind a dead undo toast.
-    Promise.resolve(onToggleCheckEnabled?.(checkId, false)).then((ok) => {
-      if (ok === false) { unhideCheck(checkId); toast.dismiss(toastId); }
-    });
-  };
-  // Keep the muted set honest against the live enabled-state: if a muted check is
-  // re-enabled elsewhere (the catalog toggle on this same page, or a findings
-  // reload carrying fresh catalog rows), un-hide its group so visibility always
-  // follows the check's actual enabled state — never stranding a group the empty
-  // state tells the user to restore from the catalog. Re-enabling through the
-  // undo path goes here too (its onToggleCheckEnabled flips enabled back to true).
-  useEffect(() => {
-    setHiddenCheckIds((s) => {
-      if (!s.size) return s;
-      let changed = false;
-      const next = new Set();
-      s.forEach((id) => { if (checksById[id]?.enabled === false) next.add(id); else changed = true; });
-      return changed ? next : s;
-    });
-  }, [checksById]);
+  // The set of checks muted this session (#1602) is owned by the parent page
+  // (#1697) so the health panel's filterable sets can subtract them; this view
+  // just reads `hiddenCheckIds` to hide their groups and calls `onDisableCheck`
+  // (which records the mute, persists the disable, and shows the undo toast).
 
   // ---- Filter / search / sort, persisted in the URL so a view is deep-linkable
   // (#1600). Facets are derived from the full (unfiltered) groups so options never
@@ -868,8 +831,8 @@ export default function EditorialFindingsTriage({ seriesId, comments = [], check
           seriesId={seriesId}
           group={g}
           onCommentChange={onCommentChange}
-          canDisable={!!onToggleCheckEnabled && checksById[g.checkId]?.enabled === true}
-          onDisableCheck={disableCheck}
+          canDisable={!!onDisableCheck && checksById[g.checkId]?.enabled === true}
+          onDisableCheck={onDisableCheck}
           selectedIds={selectedIds}
           onToggleSelect={toggleSelect}
           onSelectMany={selectMany}

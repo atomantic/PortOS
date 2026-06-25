@@ -13,7 +13,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, ListChecks, Loader2, Play, Plus, Square } from 'lucide-react';
+import { ArrowLeft, ListChecks, Loader2, Play, Plus, Square, Undo2 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import EditorialCheckCard from '../components/pipeline/editorial/EditorialCheckCard';
 import EditorialCustomCheckForm from '../components/pipeline/editorial/EditorialCustomCheckForm';
@@ -46,6 +46,13 @@ export default function PipelineEditorialChecks() {
   const [loadingCatalog, setLoadingCatalog] = useState(true);
   const [savingIds, setSavingIds] = useState(() => new Set());
   const [selectedIds, setSelectedIds] = useState(() => new Set());
+  // Checks the user muted from the triage this session (#1602, lifted here for
+  // #1697). Disabling a check doesn't delete its persisted findings, so its triage
+  // group is hidden locally (keyed by checkId) until an undo, a fresh findings
+  // load, or a catalog re-enable brings it back. Owned here — not in the triage —
+  // so the health panel's filterable sets can subtract muted checks (the mute
+  // state and the filterable-set derivation must share one source of truth).
+  const [hiddenCheckIds, setHiddenCheckIds] = useState(() => new Set());
   // Below `lg` the catalog + findings columns stack into one; this segmented
   // switch picks which one is visible. Default to triage since that's the
   // page's primary mobile task (#1611). No URL param — it's a breakpoint-only
@@ -102,13 +109,22 @@ export default function PipelineEditorialChecks() {
     () => comments.filter((c) => c?.checkId && c.status === 'open'),
     [comments],
   );
+  // Subtract checks the user muted this session (#1697): the triage hides their
+  // groups, so the health panel must not advertise a check/category whose only
+  // open findings are hidden — clicking such a row would deep-link to a triage
+  // view with nothing in it. A category stays filterable as long as ANY non-muted
+  // check still contributes an open finding to it.
+  const visibleOpenCheckSourced = useMemo(
+    () => (hiddenCheckIds.size ? openCheckSourced.filter((c) => !hiddenCheckIds.has(c.checkId)) : openCheckSourced),
+    [openCheckSourced, hiddenCheckIds],
+  );
   const triageFilterableCheckIds = useMemo(
-    () => new Set(openCheckSourced.map((c) => c.checkId)),
-    [openCheckSourced],
+    () => new Set(visibleOpenCheckSourced.map((c) => c.checkId)),
+    [visibleOpenCheckSourced],
   );
   const triageFilterableCategories = useMemo(
-    () => new Set(openCheckSourced.map((c) => normCategory(c))),
-    [openCheckSourced],
+    () => new Set(visibleOpenCheckSourced.map((c) => normCategory(c))),
+    [visibleOpenCheckSourced],
   );
   // Config saves read server settings, so a run that fires before a save lands
   // would use stale config — gate the run buttons while any save is in flight.
@@ -257,6 +273,51 @@ export default function PipelineEditorialChecks() {
     toggleTailsRef.current.set(checkId, result.catch(() => {}));
     return result;
   }, []);
+
+  // ---- Session-local check mute (#1602), lifted from the triage (#1697). Hiding
+  // a check's triage group AND keeping the health panel's filterable sets honest
+  // both read `hiddenCheckIds`, so the state lives here and the action does too. ----
+  const unhideCheck = useCallback((checkId) => setHiddenCheckIds((s) => {
+    if (!s.has(checkId)) return s;
+    const next = new Set(s);
+    next.delete(checkId);
+    return next;
+  }), []);
+  const disableCheck = useCallback((checkId, label) => {
+    setHiddenCheckIds((s) => new Set(s).add(checkId));
+    const toastId = toast((t) => (
+      <span className="flex items-center gap-3 text-xs">
+        <span className="text-gray-200">Disabled <span className="font-medium text-white">{label}</span> — findings hidden</span>
+        <button
+          type="button"
+          onClick={() => { unhideCheck(checkId); handleToggle(checkId, true); toast.dismiss(t.id); }}
+          className="inline-flex shrink-0 items-center gap-1 rounded border border-port-border px-2 py-0.5 text-[11px] text-port-accent hover:border-port-accent/40 hover:text-white"
+        >
+          <Undo2 size={12} /> Undo
+        </button>
+      </span>
+    ), { duration: 8000 });
+    // Optimistic hide above; reconcile if the persist fails (handleToggle resolves
+    // false on error and has already reverted + toasted) so a failed disable doesn't
+    // leave the group stuck hidden behind a dead undo toast.
+    Promise.resolve(handleToggle(checkId, false)).then((ok) => {
+      if (ok === false) { unhideCheck(checkId); toast.dismiss(toastId); }
+    });
+  }, [unhideCheck, handleToggle]);
+  // Keep the muted set honest against the live enabled-state: if a muted check is
+  // re-enabled elsewhere (the catalog toggle on this page, or a findings reload
+  // carrying fresh catalog rows), un-hide its group so visibility always follows
+  // the check's actual enabled state — never stranding a group the triage's empty
+  // state tells the user to restore from the catalog.
+  useEffect(() => {
+    setHiddenCheckIds((s) => {
+      if (!s.size) return s;
+      let changed = false;
+      const next = new Set();
+      s.forEach((id) => { if (checksById[id]?.enabled === false) next.add(id); else changed = true; });
+      return changed ? next : s;
+    });
+  }, [checksById]);
 
   const handleConfigSave = useCallback((checkId, nextConfig) => {
     setSavingIds((s) => new Set(s).add(checkId));
@@ -631,7 +692,7 @@ export default function PipelineEditorialChecks() {
                 {loadingFindings ? (
                   <p className="flex items-center gap-2 text-sm text-gray-400"><Loader2 size={16} className="animate-spin" /> Loading findings…</p>
                 ) : (
-                  <EditorialFindingsTriage seriesId={seriesId} comments={comments} checksById={checksById} onCommentChange={handleCommentChange} onToggleCheckEnabled={handleToggle} onRunChecks={() => runChecks(null)} runDisabled={runDisabled || enabledCount === 0} />
+                  <EditorialFindingsTriage seriesId={seriesId} comments={comments} checksById={checksById} onCommentChange={handleCommentChange} hiddenCheckIds={hiddenCheckIds} onDisableCheck={disableCheck} onRunChecks={() => runChecks(null)} runDisabled={runDisabled || enabledCount === 0} />
                 )}
               </>
             )}
