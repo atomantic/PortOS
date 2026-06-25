@@ -84,19 +84,24 @@ export default function PipelineEditorialChecks() {
   );
   const enabledCount = useMemo(() => checks.filter((c) => c.enabled).length, [checks]);
   const scopeGroups = useMemo(() => groupChecksByScope(checks), [checks]);
-  // The check/category values the triage can actually FILTER to — i.e. those
-  // carried by a check-sourced finding (the triage drops null-checkId completeness
-  // / legacy findings). The health panel deep-links its breakdown rows to these
-  // filters (#1606), so a row whose key isn't here (e.g. the synthetic
-  // `completeness` check bucket, or a category present only on completeness
-  // findings) would link to an empty list — gate the panel's clickability on these.
-  const triageFilterableCheckIds = useMemo(
-    () => new Set(comments.filter((c) => c?.checkId).map((c) => c.checkId)),
+  // The check/category values the health panel can deep-link to (#1606). The
+  // panel's "Open by check/category" rows count OPEN findings, and the triage only
+  // lists check-sourced findings (it drops null-checkId completeness/legacy ones).
+  // So a row is navigable iff there's an OPEN check-sourced finding for it — match
+  // that exactly (open + checkId), or a row whose open count is all completeness
+  // findings (or only resolved check-sourced ones) would deep-link to a list with
+  // none of the open findings it summarizes.
+  const openCheckSourced = useMemo(
+    () => comments.filter((c) => c?.checkId && c.status === 'open'),
     [comments],
   );
+  const triageFilterableCheckIds = useMemo(
+    () => new Set(openCheckSourced.map((c) => c.checkId)),
+    [openCheckSourced],
+  );
   const triageFilterableCategories = useMemo(
-    () => new Set(comments.filter((c) => c?.checkId).map((c) => normCategory(c))),
-    [comments],
+    () => new Set(openCheckSourced.map((c) => normCategory(c))),
+    [openCheckSourced],
   );
   // Config saves read server settings, so a run that fires before a save lands
   // would use stale config — gate the run buttons while any save is in flight.
