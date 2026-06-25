@@ -69,7 +69,9 @@ describe('PipelineEditorialChecks responsive switch (#1611)', () => {
     renderPage();
 
     const tablist = await screen.findByRole('tablist', { name: /editorial sections/i });
-    expect(tablist).toHaveClass('lg:hidden');
+    // The switch (a shared TabPills) is wrapped in an `lg:hidden` div so it only
+    // appears below the breakpoint where the two columns stack.
+    expect(tablist.parentElement).toHaveClass('lg:hidden');
 
     const catalogTab = screen.getByRole('tab', { name: 'Catalog' });
     const findingsTab = screen.getByRole('tab', { name: 'Findings' });
