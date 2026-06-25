@@ -42,6 +42,40 @@ describe('EditorialFindingsTriage', () => {
     expect(screen.getByText(/No editorial-check findings yet/i)).toBeTruthy();
   });
 
+  it('offers next-step CTAs in the no-findings empty state (#1612)', () => {
+    const onRunChecks = vi.fn();
+    renderTriage({ comments: [], onRunChecks });
+    fireEvent.click(screen.getByRole('button', { name: /Run checks/i }));
+    expect(onRunChecks).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('link', { name: /Refresh reverse outline/i }).getAttribute('href'))
+      .toBe('/pipeline/series/ser-1/reverse-outline');
+    expect(screen.getByRole('link', { name: /Continue in the pipeline/i }).getAttribute('href'))
+      .toBe('/pipeline/series/ser-1');
+  });
+
+  it('shows an "all cleared" CTA when findings exist but none are open (#1612)', () => {
+    const onRunChecks = vi.fn();
+    const comments = [
+      { id: 'c1', checkId: 'naming.dissimilar-names', status: 'accepted', severity: 'high', problem: 'Confusable names' },
+      { id: 'c2', checkId: 'naming.dissimilar-names', status: 'dismissed', severity: 'low', problem: 'Old finding' },
+    ];
+    renderTriage({ comments, onRunChecks });
+    expect(screen.getByText(/All findings cleared/i)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Re-run checks/i }));
+    expect(onRunChecks).toHaveBeenCalledTimes(1);
+    // The resolved groups still render below the CTA so the user can review/undo.
+    expect(screen.getByText('Character name dissimilarity')).toBeTruthy();
+  });
+
+  it('does not show the "all cleared" CTA while any finding is still open (#1612)', () => {
+    const comments = [
+      { id: 'c1', checkId: 'naming.dissimilar-names', status: 'open', severity: 'high', problem: 'Still open' },
+      { id: 'c2', checkId: 'naming.dissimilar-names', status: 'accepted', severity: 'low', problem: 'Done' },
+    ];
+    renderTriage({ comments, onRunChecks: vi.fn() });
+    expect(screen.queryByText(/All findings cleared/i)).toBeNull();
+  });
+
   it('groups findings by check with an open/total header and deep-links each finding', () => {
     const comments = [
       { id: 'c1', checkId: 'naming.dissimilar-names', status: 'open', severity: 'high', issueNumber: 5, problem: 'Confusable names: Alice / Adam' },

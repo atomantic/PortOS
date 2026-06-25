@@ -631,7 +631,7 @@ export default function PipelineEditorialChecks() {
                 {loadingFindings ? (
                   <p className="flex items-center gap-2 text-sm text-gray-400"><Loader2 size={16} className="animate-spin" /> Loading findings…</p>
                 ) : (
-                  <EditorialFindingsTriage seriesId={seriesId} comments={comments} checksById={checksById} onCommentChange={handleCommentChange} onToggleCheckEnabled={handleToggle} />
+                  <EditorialFindingsTriage seriesId={seriesId} comments={comments} checksById={checksById} onCommentChange={handleCommentChange} onToggleCheckEnabled={handleToggle} onRunChecks={() => runChecks(null)} runDisabled={runDisabled || enabledCount === 0} />
                 )}
               </>
             )}
