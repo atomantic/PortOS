@@ -55,13 +55,22 @@ export function sparklineGeometry(points = [], { width = 120, height = 28, pad =
   return { points: coords.map((c) => `${c.x},${c.y}`).join(' '), coords };
 }
 
+// Order an open-finding-count map (`{ bucket: count }`) into rows sorted by
+// count desc then a string tiebreak, dropping zero/empty buckets. `makeRow`
+// shapes each `[bucket, count]` pair; `tieBreak` picks the secondary sort key.
+// Shared by the per-category and per-check (#1597) breakdowns so the two can't
+// drift on filtering/sort semantics.
+function orderedBuckets(map, makeRow, tieBreak) {
+  return Object.entries(map || {})
+    .filter(([, count]) => Number.isFinite(count) && count > 0)
+    .map(([bucket, count]) => makeRow(bucket, count))
+    .sort((a, b) => b.count - a.count || tieBreak(a).localeCompare(tieBreak(b)));
+}
+
 // Order an openByCategory map into `[{ category, count }]` sorted by count desc
 // then name, dropping zero/empty buckets. Used for the per-category breakdown.
 export function orderedCategories(openByCategory = {}) {
-  return Object.entries(openByCategory || {})
-    .filter(([, count]) => Number.isFinite(count) && count > 0)
-    .map(([category, count]) => ({ category, count }))
-    .sort((a, b) => b.count - a.count || a.category.localeCompare(b.category));
+  return orderedBuckets(openByCategory, (category, count) => ({ category, count }), (r) => r.category);
 }
 
 /**
@@ -72,10 +81,11 @@ export function orderedCategories(openByCategory = {}) {
  */
 export function orderedChecks(openByCheck = {}, labelFor = (id) => id) {
   const label = typeof labelFor === 'function' ? labelFor : (id) => id;
-  return Object.entries(openByCheck || {})
-    .filter(([, count]) => Number.isFinite(count) && count > 0)
-    .map(([checkId, count]) => ({ checkId, count, label: label(checkId) || checkId }))
-    .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+  return orderedBuckets(
+    openByCheck,
+    (checkId, count) => ({ checkId, count, label: label(checkId) || checkId }),
+    (r) => r.label,
+  );
 }
 
 /**
