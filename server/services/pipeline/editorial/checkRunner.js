@@ -551,10 +551,21 @@ export async function runEditorialChecks(seriesId, options = {}) {
   // reconcile each of them — including those that produced zero findings, which
   // must dismiss their now-stale prior open comments.
   const deterministicRanIds = new Set();
+  // Every check (any kind) that ran to completion this pass (#1596). The review
+  // seed scopes its severity re-grade to this set, so a targeted subset run — or
+  // the completeness pass — never rewrites the severity of comments for checks it
+  // didn't run (which would silently clear an unrelated check's active pin).
+  const ranCheckIds = new Set();
   let canceled = false;
-  for (const { check, config } of enabledResolved) {
+  for (const { check, config, severityOverride } of enabledResolved) {
     if (signal?.aborted) { canceled = true; break; }
     onProgress?.({ type: 'check:start', checkId: check.id, label: check.label });
+    // Run every check with its NATIVE default severity (#1596). A per-check
+    // override is applied AUTHORITATIVELY as a post-stamp below rather than via
+    // ctx, so escalation / LLM per-finding severities are computed natively and
+    // preserved as `nativeSeverity` — which lets a later "reset to Default"
+    // restore the true native level on carried findings (even ones that don't
+    // re-surface).
     const ctx = { ...baseCtx, config, severityDefault: check.severityDefault };
     // Boundary try/catch: a check's run() calls into arbitrary logic / LLM
     // providers — one bad check must not abort the whole pass (mirrors the
@@ -567,12 +578,27 @@ export async function runEditorialChecks(seriesId, options = {}) {
       }
       const raw = (await check.run(ctx)) || [];
       const sourceContentHash = fingerprintForCheck(check, resolvedSources);
-      const stamped = raw.map((f) => ({ ...f, checkId: check.id, sourceContentHash }));
+      // Stamp each finding with its NATIVE severity (the check's own escalated /
+      // LLM-emitted level, or the registry default fallback) AND its EFFECTIVE
+      // severity: a pin (#1596) is authoritative across every check kind, else
+      // the native level stands. Carrying `nativeSeverity` lets the review-seed
+      // layer re-grade a carried finding back to native when a pin is cleared.
+      const stamped = raw.map((f) => {
+        const nativeSeverity = ['high', 'medium', 'low'].includes(f.severity) ? f.severity : check.severityDefault;
+        return {
+          ...f,
+          nativeSeverity,
+          severity: severityOverride || nativeSeverity,
+          checkId: check.id,
+          sourceContentHash,
+        };
+      });
       findings.push(...stamped);
       // A deterministic check is a pure function of its sources, so a finding it
       // no longer produces is genuinely resolved (not provider variance) — mark it
       // for fresh-mode reconciliation. LLM checks stay merge-only (an absent
       // finding could just be sampling noise).
+      ranCheckIds.add(check.id);
       if (check.kind === 'deterministic') deterministicRanIds.add(check.id);
       const bySeverity = severityBreakdown(stamped);
       perCheck.push({ checkId: check.id, count: stamped.length, bySeverity });
@@ -606,17 +632,35 @@ export async function runEditorialChecks(seriesId, options = {}) {
   // accepted/dismissed comments are untouched by either mode.
   if (!canceled) {
     let lastReview = null;
+    // Per-check severity overrides active this run (#1596). A pinned check's
+    // level is authoritative for ALL its open comments, so the seed re-grades
+    // even open comments that didn't re-surface this pass — crucial for LLM
+    // checks (merge mode preserves a non-resurfaced open finding) and for a
+    // pinned check that produced zero findings this run.
+    const severityOverrides = {};
+    for (const { check, severityOverride } of enabledResolved) {
+      if (severityOverride) severityOverrides[check.id] = severityOverride;
+    }
     // Fresh-reconcile each deterministic check that ran, scoped to its checkId —
     // passing only that check's findings so the scoped 'fresh' pass dismisses the
-    // stale opens it no longer produces.
+    // stale opens it no longer produces. `regradeCheckIds` scopes the severity
+    // re-grade to this check alone.
     for (const checkId of deterministicRanIds) {
       const own = findings.filter((f) => f.checkId === checkId);
-      lastReview = await seedReviewFromFindings(seriesId, own, { runId, mode: 'fresh', checkId });
+      lastReview = await seedReviewFromFindings(seriesId, own, { runId, mode: 'fresh', checkId, severityOverrides, regradeCheckIds: [checkId] });
     }
-    // Seed the remaining (non-deterministic) findings in merge mode.
+    // Seed the remaining (non-deterministic) findings in merge mode. Also run
+    // when there are active overrides but no merged findings, so a pinned check
+    // that produced ZERO findings this pass still re-grades its lingering open
+    // comments (#1596) — merge mode never dismisses, so an empty seed is a safe
+    // no-op aside from the authoritative severity re-grade. `regradeCheckIds` is
+    // the set of non-deterministic checks that actually RAN this pass, so the
+    // re-grade never touches comments for a pinned check excluded from a targeted
+    // subset run.
     const merged = findings.filter((f) => !deterministicRanIds.has(f.checkId));
-    if (merged.length) {
-      lastReview = await seedReviewFromFindings(seriesId, merged, { runId, mode: 'merge' });
+    const mergedRanCheckIds = [...ranCheckIds].filter((id) => !deterministicRanIds.has(id));
+    if (merged.length || Object.keys(severityOverrides).length) {
+      lastReview = await seedReviewFromFindings(seriesId, merged, { runId, mode: 'merge', severityOverrides, regradeCheckIds: mergedRanCheckIds });
     }
     // Record a revision-trend snapshot for EVERY non-canceled run (#1316) — a run
     // is a revision boundary, and a CLEAN run (0 new findings, or a reconciliation

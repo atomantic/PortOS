@@ -91,12 +91,20 @@ function sanitizeComment(raw) {
   const problem = clampStr(raw.problem, 2000);
   if (!problem) return null;
   const category = clampStr(raw.category, 40) || 'other';
+  const severity = ['high', 'medium', 'low'].includes(raw.severity) ? raw.severity : 'medium';
   return {
     id: typeof raw.id === 'string' && raw.id ? raw.id : `mrc-${randomUUID()}`,
     issueNumber: Number.isInteger(raw.issueNumber) ? raw.issueNumber : null,
     issueId: typeof raw.issueId === 'string' ? raw.issueId : null,
     stageId: typeof raw.stageId === 'string' ? raw.stageId : null,
-    severity: ['high', 'medium', 'low'].includes(raw.severity) ? raw.severity : 'medium',
+    severity,
+    // The check's NATIVE per-finding level (#1596), independent of any per-check
+    // severity override. Carried so that clearing an override re-grades the
+    // finding back to its true native level (not a guessed default). Defaults to
+    // `severity` for legacy/older-peer comments written before this field (all of
+    // which predate overrides, so native == severity is correct). Optional +
+    // additive → the synced review doc stays backward-compatible.
+    nativeSeverity: ['high', 'medium', 'low'].includes(raw.nativeSeverity) ? raw.nativeSeverity : severity,
     category,
     location: clampStr(raw.location, 200),
     problem,
@@ -194,8 +202,21 @@ const findingKey = (c) => `${c.checkId ?? ''}|${c.issueNumber ?? ''}|${c.anchorQ
  * New findings resolve their issueId/stageId from the current manuscript
  * sections by issueNumber.
  */
-export async function seedReviewFromFindings(seriesId, findings, { runId = null, mode = 'merge', checkId = null } = {}) {
+export async function seedReviewFromFindings(seriesId, findings, { runId = null, mode = 'merge', checkId = null, severityOverrides = null, regradeCheckIds = null } = {}) {
   const scopeCheckId = checkId ?? null;
+  // Per-check severity overrides (#1596): a pinned check's level is authoritative
+  // for EVERY open comment of that check, so we re-grade carried open comments
+  // (re-surfaced or not) to the pinned level below. Tolerant of a junk/hand-edited
+  // value — only a valid level forces a re-grade.
+  const pins = severityOverrides && typeof severityOverrides === 'object' && !Array.isArray(severityOverrides)
+    ? severityOverrides : null;
+  // The pin/native severity re-grade of a NON-resurfaced carried comment is
+  // scoped to the checks that actually RAN this pass (#1596). Without this scope
+  // a targeted subset run — or the completeness seed, which carries every
+  // comment — would re-grade comments for checks it didn't run and silently
+  // clear their active pins. `null` (no scope passed) disables the non-match
+  // re-grade entirely, so legacy/external seed callers never mutate severities.
+  const regradeScope = Array.isArray(regradeCheckIds) ? new Set(regradeCheckIds) : null;
   const sections = await collectManuscriptSections(seriesId);
   const byNumber = new Map(sections.map((s) => [s.number, s]));
   return queueReviewWrite(seriesId, async () => {
@@ -258,17 +279,44 @@ export async function seedReviewFromFindings(seriesId, findings, { runId = null,
         return sanitizeComment({ ...c, status: 'dismissed', updatedAt: now });
       }
       if (c.status !== 'open') return c;
-      const match = candidateByKey.get(findingKey(c));
-      if (!match) return c;
       const patch = {};
-      if (!c.fix) {
-        const section = c.issueNumber != null ? byNumber.get(c.issueNumber) : null;
-        const fix = match.replace ? buildSeedFix({ ...c, replace: match.replace }, section) : null;
-        if (fix) { patch.fix = fix; backfilledCount += 1; }
-      }
-      if (match.sourceContentHash && match.sourceContentHash !== (c.sourceContentHash ?? null)) {
-        patch.sourceContentHash = match.sourceContentHash;
+      const match = candidateByKey.get(findingKey(c));
+      // Effective-severity re-grade (#1596), in priority order:
+      //  1. A RE-SURFACED finding carries the run's EFFECTIVE severity in
+      //     `match.severity` (the pin when set, else the native level). Adopt it.
+      //  2. NOT re-surfaced but the check is still PINNED → force the pinned level
+      //     so a pin reaches lingering opens too (LLM 'merge' mode preserves a
+      //     non-resurfaced open; a pinned check can also produce zero findings).
+      //  3. NOT re-surfaced and NOT pinned → fall back to the comment's stored
+      //     `nativeSeverity`, so CLEARING a pin re-grades even a non-resurfaced
+      //     open back to its true native level (not a guessed default). For a
+      //     never-pinned comment native == severity, so this is a no-op (no churn).
+      // Cases 2 & 3 (non-match re-grade) only apply to checks that ran this pass
+      // (`regradeScope`), so an unrelated check's pin is never silently cleared.
+      const inRegradeScope = !!(regradeScope && c.checkId && regradeScope.has(c.checkId));
+      const pin = inRegradeScope && pins && ['high', 'medium', 'low'].includes(pins[c.checkId]) ? pins[c.checkId] : null;
+      const carriedNative = inRegradeScope && ['high', 'medium', 'low'].includes(c.nativeSeverity) ? c.nativeSeverity : null;
+      const nextSeverity = (match && match.severity) ? match.severity : (pin || carriedNative);
+      if (nextSeverity && nextSeverity !== c.severity) {
+        patch.severity = nextSeverity;
         refreshedCount += 1;
+      }
+      if (match) {
+        // Keep the stored native level current so a future pin-clear restores the
+        // latest run's native severity, not a stale one.
+        if (match.nativeSeverity && match.nativeSeverity !== (c.nativeSeverity ?? null)) {
+          patch.nativeSeverity = match.nativeSeverity;
+          refreshedCount += 1;
+        }
+        if (!c.fix) {
+          const section = c.issueNumber != null ? byNumber.get(c.issueNumber) : null;
+          const fix = match.replace ? buildSeedFix({ ...c, replace: match.replace }, section) : null;
+          if (fix) { patch.fix = fix; backfilledCount += 1; }
+        }
+        if (match.sourceContentHash && match.sourceContentHash !== (c.sourceContentHash ?? null)) {
+          patch.sourceContentHash = match.sourceContentHash;
+          refreshedCount += 1;
+        }
       }
       if (Object.keys(patch).length === 0) return c;
       return sanitizeComment({ ...c, ...patch, updatedAt: now });

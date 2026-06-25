@@ -43,6 +43,32 @@ describe('EditorialCheckCard', () => {
     expect(onConfigSave).not.toHaveBeenCalled();
   });
 
+  describe('per-check severity override (#1596)', () => {
+    it('does not render the severity selector when onSeveritySave is absent', () => {
+      render(<EditorialCheckCard check={check} onToggle={vi.fn()} onConfigSave={vi.fn()} />);
+      expect(screen.queryByRole('combobox', { name: /severity for/i })).toBeNull();
+    });
+
+    it('defaults the selector to "Default" and commits a chosen level via onSeveritySave', () => {
+      const onSeveritySave = vi.fn();
+      render(<EditorialCheckCard check={check} onToggle={vi.fn()} onConfigSave={vi.fn()} onSeveritySave={onSeveritySave} />);
+      const select = screen.getByRole('combobox', { name: /severity for/i });
+      expect(select.value).toBe(''); // no stored override → "Default"
+      fireEvent.change(select, { target: { value: 'high' } });
+      expect(onSeveritySave).toHaveBeenCalledWith('naming.dissimilar-names', 'high');
+    });
+
+    it('seeds from a stored override and clears it (null) when "Default" is chosen', () => {
+      const onSeveritySave = vi.fn();
+      const overridden = { ...check, severity: 'high', severityOverride: 'high' };
+      render(<EditorialCheckCard check={overridden} onToggle={vi.fn()} onConfigSave={vi.fn()} onSeveritySave={onSeveritySave} />);
+      const select = screen.getByRole('combobox', { name: /severity for/i });
+      expect(select.value).toBe('high'); // seeded from the override
+      fireEvent.change(select, { target: { value: '' } });
+      expect(onSeveritySave).toHaveBeenCalledWith('naming.dissimilar-names', null);
+    });
+  });
+
   describe('per-series override (#1591)', () => {
     it('hides the override panel when no series is selected', () => {
       render(<EditorialCheckCard check={check} onToggle={vi.fn()} onConfigSave={vi.fn()} onSeriesConfigSave={vi.fn()} />);

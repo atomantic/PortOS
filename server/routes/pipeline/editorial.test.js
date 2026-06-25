@@ -97,6 +97,34 @@ describe('PATCH /api/pipeline/editorial/checks/:id', () => {
     const res = await request(app).patch('/api/pipeline/editorial/checks/nope.nope').send({ enabled: true });
     expect(res.status).toBe(404);
   });
+
+  it('persists a severity override and surfaces it on the resolved row (#1596)', async () => {
+    const res = await request(app)
+      .patch('/api/pipeline/editorial/checks/naming.dissimilar-names')
+      .send({ severity: 'high' });
+    expect(res.status).toBe(200);
+    expect(res.body.severity).toBe('high');
+    expect(res.body.severityOverride).toBe('high');
+    expect(settingsStore.pipelineEditorialChecks.checks['naming.dissimilar-names'].severity).toBe('high');
+  });
+
+  it('clears a severity override on null (falls back to the registry default)', async () => {
+    await request(app).patch('/api/pipeline/editorial/checks/naming.dissimilar-names').send({ severity: 'high' });
+    const res = await request(app)
+      .patch('/api/pipeline/editorial/checks/naming.dissimilar-names')
+      .send({ severity: null });
+    expect(res.status).toBe(200);
+    expect(res.body.severityOverride).toBeNull();
+    expect(res.body.severity).toBe(res.body.severityDefault);
+    expect(settingsStore.pipelineEditorialChecks.checks['naming.dissimilar-names'].severity).toBeUndefined();
+  });
+
+  it('rejects an out-of-enum severity (400)', async () => {
+    const res = await request(app)
+      .patch('/api/pipeline/editorial/checks/naming.dissimilar-names')
+      .send({ severity: 'critical' });
+    expect(res.status).toBe(400);
+  });
 });
 
 describe('POST /api/pipeline/series/:id/editorial/checks/run', () => {

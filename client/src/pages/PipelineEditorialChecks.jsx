@@ -240,6 +240,17 @@ export default function PipelineEditorialChecks() {
       .finally(() => setSavingIds((s) => { const n = new Set(s); n.delete(checkId); return n; }));
   }, []);
 
+  // Per-check severity override (#1596). Like config saves it reads server
+  // settings, so it joins savingIds to gate the run buttons; `severity === null`
+  // clears the override back to the registry default.
+  const handleSeveritySave = useCallback((checkId, severity) => {
+    setSavingIds((s) => new Set(s).add(checkId));
+    patchEditorialCheck(checkId, { severity }, { silent: true })
+      .then((row) => { if (row) setChecks((rows) => rows.map((r) => (r.id === checkId ? row : r))); })
+      .catch((err) => toast.error(err.message || 'Failed to save severity'))
+      .finally(() => setSavingIds((s) => { const n = new Set(s); n.delete(checkId); return n; }));
+  }, []);
+
   // ---- Per-series config override (#1591). The override map lives on the SERIES
   // record (`editorialCheckConfig`); a save PATCHes the series and the runner
   // overlays it on the global config. Saves are NON-optimistic (mirrors
@@ -536,6 +547,7 @@ export default function PipelineEditorialChecks() {
                         saving={savingIds.has(check.id)}
                         onToggle={handleToggle}
                         onConfigSave={handleConfigSave}
+                        onSeveritySave={handleSeveritySave}
                         seriesId={seriesId}
                         seriesConfig={seriesOverrides?.[check.id] || null}
                         seriesSaving={savingSeriesIds.has(check.id)}

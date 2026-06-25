@@ -1026,6 +1026,12 @@ export const writersRoomLiveRenderPreviewSchema = z.object({}).strict();
 export const editorialCheckConfigSchema = z.object({
   enabled: z.boolean().optional(),
   config: z.record(z.unknown()).optional(),
+  // Optional per-check severity override (#1596). Absent falls through to the
+  // check's registry `severityDefault`; an explicit `null` CLEARS a previously
+  // stored override (so the catalog "Default" option resets to the registry
+  // value rather than pinning a level). Bounded to the registry's own severity
+  // enum so the wire gate can't drift from resolveCheckState.
+  severity: z.enum([...CHECK_SEVERITIES]).nullable().optional(),
 }).strict();
 
 // POST .../editorial/checks/run — run all enabled checks, or a named subset.
