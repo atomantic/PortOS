@@ -235,8 +235,13 @@ function FindingRow({ seriesId, comment, onCommentChange, selected, onToggleSele
   );
 }
 
-function CheckGroup({ seriesId, group, onCommentChange, selectedIds, onToggleSelect, onSelectMany }) {
+// `forceOpen` keeps a group expanded while filters are active (#1600): a group's
+// default collapse derives from `group.open > 0`, so a status/search filter that
+// matches only resolved findings (open === 0) would otherwise hide its matches
+// behind a collapsed header and make the filtered view look empty.
+function CheckGroup({ seriesId, group, onCommentChange, selectedIds, onToggleSelect, onSelectMany, forceOpen = false }) {
   const [open, setOpen] = useState(group.open > 0);
+  const expanded = forceOpen || open;
   const openIds = useMemo(
     () => group.comments.filter(isOpenFinding).map((c) => c.id),
     [group.comments],
@@ -257,11 +262,12 @@ function CheckGroup({ seriesId, group, onCommentChange, selectedIds, onToggleSel
         <button
           type="button"
           onClick={() => setOpen((v) => !v)}
-          className="flex min-w-0 flex-1 items-center justify-between gap-2 text-left"
-          aria-expanded={open}
+          disabled={forceOpen}
+          className="flex min-w-0 flex-1 items-center justify-between gap-2 text-left disabled:cursor-default"
+          aria-expanded={expanded}
         >
           <span className="flex items-center gap-1.5 min-w-0">
-            {open ? <ChevronDown size={14} className="shrink-0" /> : <ChevronRight size={14} className="shrink-0" />}
+            {expanded ? <ChevronDown size={14} className="shrink-0" /> : <ChevronRight size={14} className="shrink-0" />}
             <span className="text-sm font-medium text-gray-100 truncate">{group.label}</span>
             <span className="text-[10px] text-gray-500 shrink-0">{group.open} open · {group.total} total</span>
           </span>
@@ -271,7 +277,7 @@ function CheckGroup({ seriesId, group, onCommentChange, selectedIds, onToggleSel
           </span>
         </button>
       </div>
-      {open ? (
+      {expanded ? (
         <ul className="divide-y divide-port-border/60 border-t border-port-border/60">
           {group.comments.map((c) => (
             <FindingRow
@@ -564,9 +570,13 @@ export default function EditorialFindingsTriage({ seriesId, comments = [], check
   });
   const clearSelection = () => setSelectedIds(new Set());
 
+  // Bulk actions only ever target findings that are BOTH selected and currently
+  // VISIBLE in the filtered view (#1600) — a selection hidden by a filter must not
+  // be silently accepted/dismissed by the sticky bar. Selection state itself is
+  // preserved (clearing the filter brings hidden selections back).
   const selectedComments = useMemo(
-    () => comments.filter((c) => openIds.has(c.id) && selectedIds.has(c.id)),
-    [comments, openIds, selectedIds],
+    () => view.flatMap((g) => g.comments).filter((c) => isOpenFinding(c) && selectedIds.has(c.id)),
+    [view, selectedIds],
   );
 
   if (!groups.length) {
@@ -617,6 +627,7 @@ export default function EditorialFindingsTriage({ seriesId, comments = [], check
           selectedIds={selectedIds}
           onToggleSelect={toggleSelect}
           onSelectMany={selectMany}
+          forceOpen={activeFilterCount > 0}
         />
       ))}
     </div>
