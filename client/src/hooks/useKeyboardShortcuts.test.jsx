@@ -89,6 +89,39 @@ describe('useKeyboardShortcuts', () => {
     expect(addSpy.mock.calls.filter(([type]) => type === 'keydown').length).toBe(keydownSubs);
   });
 
+  it('ignores OS key auto-repeat so a held one-shot key fires once, not per tick', () => {
+    const d = vi.fn();
+    renderHook(() => useKeyboardShortcuts(true, { d }));
+    fireEvent.keyDown(window, { key: 'd', repeat: true });
+    expect(d).not.toHaveBeenCalled();
+    fireEvent.keyDown(window, { key: 'd' });
+    expect(d).toHaveBeenCalledTimes(1);
+  });
+
+  it('suppresses shortcuts while an aria-modal dialog is open (page card stays behind it)', () => {
+    const d = vi.fn();
+    renderHook(() => useKeyboardShortcuts(true, { d }));
+    const dialog = document.createElement('div');
+    dialog.setAttribute('aria-modal', 'true');
+    document.body.appendChild(dialog);
+    press('d');
+    expect(d).not.toHaveBeenCalled();
+    document.body.removeChild(dialog);
+    press('d');
+    expect(d).toHaveBeenCalledTimes(1);
+  });
+
+  it('enabledInDialog lets a modal-owned shortcut fire even with an open dialog', () => {
+    const d = vi.fn();
+    renderHook(() => useKeyboardShortcuts(true, { d }, { enabledInDialog: true }));
+    const dialog = document.createElement('div');
+    dialog.setAttribute('aria-modal', 'true');
+    document.body.appendChild(dialog);
+    press('d');
+    document.body.removeChild(dialog);
+    expect(d).toHaveBeenCalledTimes(1);
+  });
+
   it('detaches the listener on unmount', () => {
     const a = vi.fn();
     const { unmount } = renderHook(() => useKeyboardShortcuts(true, { a }));

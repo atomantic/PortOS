@@ -208,8 +208,11 @@ export default function ManuscriptCommentCard({
   // Keyboard-driven triage over the open note (#1603): ←/→ (or k/j, vim-style)
   // step prev/next through the triage order, a=accept, d=dismiss, g=generate/
   // regenerate. Only one comment card mounts at a time (the open note), so the
-  // single global binding here can't collide. The hook ignores keys typed into
-  // the replacement textarea / manuscript editor, so letters never misfire.
+  // single global binding can't collide with a sibling card. The hook ignores
+  // keys typed into the replacement textarea / manuscript editor, drops OS key
+  // auto-repeat (so a held a/d can't stampede through auto-advancing notes), and
+  // suppresses itself while a manuscript modal (Impact preview / Read aloud) is
+  // open over the still-mounted card — so letters never misfire.
   useKeyboardShortcuts(true, {
     ArrowLeft: nav?.onPrev,
     ArrowRight: nav?.onNext,

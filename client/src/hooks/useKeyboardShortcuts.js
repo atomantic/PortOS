@@ -18,18 +18,29 @@ export function isEditableTarget(el) {
  * and any ⌘/Ctrl/Alt chord is skipped so app/browser shortcuts still win. The
  * event is `preventDefault`-ed only when a binding actually matches.
  *
+ * Two guards keep these page-level shortcuts from misfiring:
+ * - **Auto-repeat is dropped** (`e.repeat`) so a held key fires once, not once
+ *   per OS repeat tick — a long press on a one-shot action (accept/dismiss, which
+ *   may auto-advance to the next item) must not stampede through several of them.
+ * - **An open modal suppresses them**: while any `aria-modal` dialog is mounted
+ *   it owns the top surface, so a bare `a`/`d` typed into that modal must not
+ *   reach a page-level card still mounted behind it. Pass `{ enabledInDialog:
+ *   true }` for a shortcut that genuinely lives inside a modal.
+ *
  * Bindings are read through a ref, so handlers recreated every render don't
  * re-subscribe the listener — only `active` does. The listener detaches while
  * inactive, so a closed card/popover keeps no global keydown handler around.
  */
-export default function useKeyboardShortcuts(active, bindings) {
+export default function useKeyboardShortcuts(active, bindings, { ignoreRepeat = true, enabledInDialog = false } = {}) {
   const bindingsRef = useRef(bindings);
   bindingsRef.current = bindings;
   useEffect(() => {
     if (!active) return undefined;
     const onKey = (e) => {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (ignoreRepeat && e.repeat) return;
       if (isEditableTarget(e.target)) return;
+      if (!enabledInDialog && document.querySelector('[aria-modal="true"]')) return;
       const handler = bindingsRef.current[e.key];
       if (typeof handler !== 'function') return;
       e.preventDefault();
@@ -37,5 +48,5 @@ export default function useKeyboardShortcuts(active, bindings) {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [active]);
+  }, [active, ignoreRepeat, enabledInDialog]);
 }
