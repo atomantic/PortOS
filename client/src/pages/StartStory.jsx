@@ -44,6 +44,12 @@ export default function StartStory() {
   const [useExisting, setUseExisting] = useState(false);
   const [universeId, setUniverseId] = useState('');
 
+  // Only named universes can be an attach target: the Importer matches universes
+  // by name (not id), so forwarding an untitled one would silently start fresh;
+  // and an "(untitled universe)" option is indistinguishable from any other in
+  // the dropdown anyway. Name the universe first, then attach.
+  const namedUniverses = universes.filter((u) => (u.name || '').trim());
+
   useEffect(() => {
     let cancelled = false;
     // silent: the custom catch below owns the toast (CLAUDE.md). A failed load
@@ -106,7 +112,7 @@ export default function StartStory() {
               checked={useExisting}
               onChange={() => setUseExisting(true)}
               className="accent-port-accent"
-              disabled={universes.length === 0}
+              disabled={namedUniverses.length === 0}
             />
             Use an existing universe
           </label>
@@ -119,8 +125,8 @@ export default function StartStory() {
               className="bg-port-bg border border-port-border rounded px-3 py-1.5 text-sm text-gray-200 sm:ml-auto"
             >
               <option value="">Select a universe…</option>
-              {universes.map((u) => (
-                <option key={u.id} value={u.id}>{u.name || '(untitled universe)'}</option>
+              {namedUniverses.map((u) => (
+                <option key={u.id} value={u.id}>{u.name}</option>
               ))}
             </select>
           )}

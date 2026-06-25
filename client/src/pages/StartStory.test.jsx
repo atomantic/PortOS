@@ -77,6 +77,24 @@ describe('StartStory onramp', () => {
     expect(screen.getByText(/Pick a universe above/)).toBeTruthy();
   });
 
+  it('excludes untitled universes from the attach dropdown', async () => {
+    // The Importer matches universes by name, so an untitled one can't be an
+    // attach target — it must not appear as a selectable option.
+    listUniverses.mockResolvedValueOnce([
+      { id: 'u1', name: 'Alpha' },
+      { id: 'u2', name: '' },
+      { id: 'u3', name: '   ' },
+    ]);
+    render(<StartStory />);
+    await screen.findByText('From an idea');
+    fireEvent.click(screen.getByLabelText('Use an existing universe'));
+    const select = await screen.findByLabelText('Existing universe');
+    // Only the placeholder + the one named universe.
+    const options = select.querySelectorAll('option');
+    expect(options.length).toBe(2);
+    expect(options[1].value).toBe('u1');
+  });
+
   it('surfaces a toast when the universe list fails to load', async () => {
     listUniverses.mockRejectedValueOnce(new Error('boom'));
     render(<StartStory />);
