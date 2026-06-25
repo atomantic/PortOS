@@ -226,15 +226,21 @@ function sortComments(comments, sort) {
 // from its already-sorted comments (e.g. its lowest issue number / best status).
 function sortGroups(groups, sort) {
   if (sort === 'severity') {
-    // Surface the checks with the most severe open findings first. Compare tiers
-    // lexicographically (high, then medium, then low) so a single high finding
-    // always outranks any volume of lower-severity ones — a weighted sum would
-    // let 101 lows bury a high.
-    return [...groups].sort((a, b) =>
-      (b.counts.high - a.counts.high)
-      || (b.counts.medium - a.counts.medium)
-      || (b.counts.low - a.counts.low)
-      || (b.open - a.open));
+    // Surface the checks with the most severe findings first. Tally severity over
+    // ALL visible comments (group.counts is open-only, so a resolved-only filtered
+    // view would tie at zero) and compare tiers lexicographically (high, then
+    // medium, then low) so a single high always outranks any volume of lower ones.
+    const sevCounts = new Map(groups.map((g) => {
+      const c = emptyCounts();
+      for (const x of g.comments) c[normSeverity(x)] += 1;
+      return [g, c];
+    }));
+    return [...groups].sort((a, b) => {
+      const ca = sevCounts.get(a);
+      const cb = sevCounts.get(b);
+      return (cb.high - ca.high) || (cb.medium - ca.medium) || (cb.low - ca.low)
+        || (b.comments.length - a.comments.length);
+    });
   }
   if (sort === 'issue') {
     const leadIssue = (g) => {

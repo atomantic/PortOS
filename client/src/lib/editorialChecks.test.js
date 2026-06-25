@@ -203,6 +203,18 @@ describe('applyFindingsView', () => {
     expect(view.map((g) => g.checkId)).toEqual(['pacing', 'naming']);
   });
 
+  it('sorts groups by severity even in a resolved-only filtered view (counts are open-only)', () => {
+    const comments = [
+      { id: 'z1', checkId: 'zebra', status: 'dismissed', severity: 'high', problem: 'High resolved' },
+      { id: 'a1', checkId: 'alpha', status: 'dismissed', severity: 'low', problem: 'Low resolved' },
+    ];
+    const rows = { zebra: { label: 'Zebra', scope: 'series' }, alpha: { label: 'Alpha', scope: 'series' } };
+    const groups = groupFindingsByCheck(comments, rows);
+    // Default scope→label order is Alpha, Zebra; severity sort must flip to Zebra (high) first.
+    const view = applyFindingsView(groups, { statuses: new Set(['dismissed']) }, 'severity');
+    expect(view.map((g) => g.checkId)).toEqual(['zebra', 'alpha']);
+  });
+
   it('ranks a single high-severity group above a noisy many-low group when sort=severity', () => {
     const comments = [
       { id: 'h1', checkId: 'one-high', status: 'open', severity: 'high', problem: 'Critical' },
