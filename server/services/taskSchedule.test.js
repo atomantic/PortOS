@@ -866,6 +866,49 @@ describe('taskSchedule', () => {
       expect(result.taskType).toBe('plan-task')
       expect(result.reason).toBe('cron-due')
     })
+
+    it('perpetualOnly returns the due perpetual task even when a higher-priority cron task is also due', async () => {
+      // The mixed-schedule stall: an app on review cooldown has BOTH a due cron
+      // task and a due perpetual drain. Unconstrained, getNextTaskType returns
+      // the cron task (cron outranks perpetual) — but on cooldown only the
+      // perpetual drain is eligible, so the caller passes perpetualOnly to get
+      // the drain instead of being stranded behind the cooled-down cron pick.
+      const todayNineAm = recentNineAm()
+      const tomorrowNineAm = new Date(todayNineAm.getTime() + 24 * 60 * 60 * 1000)
+      const yesterdayNineAm = new Date(todayNineAm.getTime() - 24 * 60 * 60 * 1000)
+      parseCronToPrevRun
+        .mockReturnValueOnce(todayNineAm)
+        .mockReturnValueOnce(yesterdayNineAm)
+      parseCronToNextRun.mockReturnValue(tomorrowNineAm)
+
+      mockSchedule({
+        tasks: {
+          'pr-watcher':  { type: 'cron', enabled: true, cronExpression: '0 9 * * *', providerId: null, model: null, prompt: null },
+          'claim-issue': { type: 'perpetual', enabled: true, providerId: null, model: null, prompt: null }
+        }
+      })
+
+      // Unconstrained: cron wins.
+      const unconstrained = await getNextTaskType()
+      expect(unconstrained.taskType).toBe('pr-watcher')
+
+      // perpetualOnly: the perpetual drain is returned instead.
+      const constrained = await getNextTaskType(null, '', { perpetualOnly: true })
+      expect(constrained).not.toBeNull()
+      expect(constrained.taskType).toBe('claim-issue')
+      expect(constrained.reason).toBe('perpetual-drain')
+    })
+
+    it('perpetualOnly returns null when no perpetual task is due (app stays throttled)', async () => {
+      mockSchedule({
+        tasks: {
+          'code-quality':  { type: 'rotation', enabled: true, providerId: null, model: null, prompt: null },
+          'error-handling': { type: 'rotation', enabled: true, providerId: null, model: null, prompt: null }
+        }
+      })
+      const result = await getNextTaskType(null, '', { perpetualOnly: true })
+      expect(result).toBeNull()
+    })
   })
 
   describe('templates', () => {

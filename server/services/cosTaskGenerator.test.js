@@ -15,7 +15,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { selectDryRunAutoApproved, exceedsMaxSpawns, resolveIssueAuthorFilterBlock } from './cosTaskGenerator.js';
+import { selectDryRunAutoApproved, exceedsMaxSpawns, resolveIssueAuthorFilterBlock, isCooldownExemptTask } from './cosTaskGenerator.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/validation.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -27,8 +27,11 @@ const noCooldown = () => Promise.resolve(false);
 
 // The unit tests above exercise selectDryRunAutoApproved with synthetic hooks;
 // these source-level guards pin that each ENGINE wires the hook set matching
-// its own execute path — so a future edit can't silently swap or drop a hook
-// (e.g. give dequeue the pipeline cooldown bypass it doesn't have in execute).
+// its own execute path — so a future edit can't silently swap or drop a hook.
+// Both engines now share the `isCooldownExemptTask` predicate (pipeline
+// continuations AND perpetual drains bypass the cooldown), so a dry-run plan
+// matches its execute path; the only remaining asymmetry is `extraSkip`
+// (dequeue's disabled-analysis-type gate), which evaluateTasks does not have.
 describe('dry-run hook wiring matches each engine execute path', () => {
   // Isolate each engine's selectDryRunAutoApproved call site.
   const callSite = (src) => {
@@ -39,17 +42,56 @@ describe('dry-run hook wiring matches each engine execute path', () => {
     return src.slice(start, src.indexOf('});', start) + 3);
   };
 
-  it('dequeueNextTask (cos.js) passes extraSkip (disabled-analysis-type) but NOT cooldownExempt', () => {
+  it('dequeueNextTask (cos.js) passes the shared cooldownExempt AND extraSkip (disabled-analysis-type)', () => {
     const site = callSite(COS_SRC);
     expect(site).toContain('extraSkip: isDisabledAnalysisType');
-    expect(site).not.toContain('cooldownExempt');
+    // dequeue must exempt perpetual/pipeline tasks from cooldown in its dry-run
+    // plan too, mirroring its execute gate — otherwise the plan over-reports a
+    // perpetual drain as "would skip (cooldown)" that execute actually spawns.
+    expect(site).toContain('cooldownExempt: isCooldownExemptTask');
   });
 
-  it('evaluateTasks (cosTaskGenerator.js) passes cooldownExempt (pipeline continuation) but NOT extraSkip', () => {
+  it('evaluateTasks (cosTaskGenerator.js) passes the shared cooldownExempt but NOT extraSkip', () => {
     const site = callSite(GEN_SRC);
-    expect(site).toContain('cooldownExempt:');
-    expect(site).toContain('pipeline?.currentStage > 0');
+    expect(site).toContain('cooldownExempt: isCooldownExemptTask');
     expect(site).not.toContain('extraSkip');
+  });
+
+  it('both engines gate their EXECUTE cooldown check on isCooldownExemptTask', () => {
+    // The spawn gate (not just the dry-run planner) must consult the shared
+    // predicate, or a perpetual task the refill queued is skipped at spawn time
+    // until the 30-min window expires — the manually-triggered-drain stall.
+    expect(COS_SRC).toMatch(/if\s*\(appId\s*&&\s*!isCooldownExemptTask\(task\)\)/);
+    expect(GEN_SRC).toMatch(/if\s*\(appId\s*&&\s*!isCooldownExemptTask\(task\)\)/);
+  });
+});
+
+// isCooldownExemptTask is the single source of truth for "this task bypasses the
+// per-app review cooldown." The perpetual-string case is the subtle one: a
+// perpetual task is queued with `metadata.perpetual === true`, but that bare
+// boolean round-trips through COS-TASKS.md as the STRING "true" (taskParser
+// serializes non-object metadata via String()), and the spawn gate reads the
+// re-parsed task — so a `=== true`-only check would miss exactly the task the
+// gate sees.
+describe('isCooldownExemptTask', () => {
+  it('exempts pipeline continuations (currentStage > 0)', () => {
+    expect(isCooldownExemptTask({ metadata: { pipeline: { currentStage: 2 } } })).toBe(true);
+  });
+  it('does NOT exempt a pipeline task still at stage 0', () => {
+    expect(isCooldownExemptTask({ metadata: { pipeline: { currentStage: 0 } } })).toBe(false);
+  });
+  it('exempts a perpetual task as an in-memory boolean true', () => {
+    expect(isCooldownExemptTask({ metadata: { perpetual: true } })).toBe(true);
+  });
+  it('exempts a perpetual task as the re-parsed string "true" (COS-TASKS.md round-trip)', () => {
+    expect(isCooldownExemptTask({ metadata: { perpetual: 'true' } })).toBe(true);
+  });
+  it('does NOT exempt an ordinary app task', () => {
+    expect(isCooldownExemptTask({ metadata: { app: 'app-1', analysisType: 'security-audit' } })).toBe(false);
+  });
+  it('is null-safe for a task with no metadata', () => {
+    expect(isCooldownExemptTask(null)).toBe(false);
+    expect(isCooldownExemptTask({})).toBe(false);
   });
 });
 

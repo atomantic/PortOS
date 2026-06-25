@@ -88,6 +88,7 @@ import {
   generateManagedAppImprovementTaskForType,
   blockIfExceedsMaxSpawns,
   selectDryRunAutoApproved,
+  isCooldownExemptTask,
   countRunningAgentsByProject,
   isWithinProjectLimit,
   checkStagePrecondition,
@@ -855,6 +856,7 @@ async function dequeueNextTask() {
         perProjectLimit,
         spawnProjectCounts,
         isOnCooldown: (appId) => isAppOnCooldown(appId, state.config.appReviewCooldownMs),
+        cooldownExempt: isCooldownExemptTask,
         extraSkip: isDisabledAnalysisType
       });
       for (const task of wouldSpawn) {
@@ -871,8 +873,12 @@ async function dequeueNextTask() {
         emitLog('info', `System task skipped — task type '${analysisType}' is disabled`, { taskId: task.id });
         continue;
       }
+      // Pipeline continuations AND perpetual drains bypass the per-app cooldown
+      // (see isCooldownExemptTask) — otherwise a perpetual task the refill just
+      // queued is skipped here until the 30-min window expires, stalling the
+      // manually-triggered back-to-back drain one item in.
       const appId = task.metadata?.app;
-      if (appId) {
+      if (appId && !isCooldownExemptTask(task)) {
         const onCooldown = await isAppOnCooldown(appId, state.config.appReviewCooldownMs);
         if (onCooldown) continue;
       }

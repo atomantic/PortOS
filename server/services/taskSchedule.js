@@ -1034,11 +1034,26 @@ export async function getDueTasks(appId = null) {
 /**
  * Get the next task type to run (optionally for a specific app)
  */
-export async function getNextTaskType(appId = null, lastType = '') {
+export async function getNextTaskType(appId = null, lastType = '', { perpetualOnly = false } = {}) {
   const schedule = await loadSchedule();
   const taskTypes = Object.keys(schedule.tasks);
 
   const dueTasks = await getDueTasks(appId);
+
+  // `perpetualOnly` constrains the pick to a due perpetual (drain-until-done)
+  // task, skipping every other schedule type. Callers set this when the app is
+  // on its review cooldown: only perpetual drains bypass that cooldown (their
+  // work-detector park is the throttle), so a higher-priority cron/custom/daily
+  // type that's also due must NOT be returned — it would mask the perpetual
+  // drain and the caller, seeing a non-exempt pick, would skip the whole app for
+  // the cooldown window (the mixed-schedule stall). Returns null when nothing
+  // perpetual is due, so the caller leaves the cooled-down app alone.
+  if (perpetualOnly) {
+    const perpetualDue = dueTasks.filter(t => t.interval.type === INTERVAL_TYPES.PERPETUAL);
+    return perpetualDue.length > 0
+      ? { taskType: perpetualDue[0].taskType, reason: 'perpetual-drain' }
+      : null;
+  }
 
   // Explicit time-based schedules (cron, custom interval) outrank loose interval-based
   // ones (daily/weekly/once). A user-pinned 9 AM cron should fire at 9 AM even if a
