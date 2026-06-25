@@ -46,6 +46,10 @@ export const CATEGORY_LABEL = {
   casting: 'Casting',
   pacing: 'Pacing',
   continuity: 'Continuity',
+  // Real-world fact-accuracy findings (#1588): prose claims that contradict an
+  // author-supplied fact reference, from the opt-in research.fact-accuracy check.
+  // Distinct from `continuity` (internal contradiction) — this is external truth.
+  accuracy: 'Fact accuracy',
   style: 'Style',
   exposition: 'Exposition',
   // Comic lettering-density findings (#1313): over-stuffed balloons/panels/pages

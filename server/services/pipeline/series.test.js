@@ -99,6 +99,32 @@ describe('pipeline series service', () => {
     expect(updated.updatedAt >= s.updatedAt).toBe(true);
   });
 
+  it('defaults fact-checking fields off (#1588) and round-trips an opt-in + reference', async () => {
+    const off = await svc.createSeries({ name: 'Fantasy' });
+    expect(off.factCritical).toBe(false);
+    expect(off.factReference).toBe('');
+
+    const on = await svc.createSeries({
+      name: 'Grounded',
+      factCritical: true,
+      factReference: 'Paris is the capital of France.',
+    });
+    expect(on.factCritical).toBe(true);
+    expect(on.factReference).toBe('Paris is the capital of France.');
+  });
+
+  it('updateSeries clears the fact reference with "" but preserves it on omission (#1588)', async () => {
+    const s = await svc.createSeries({ name: 'Grounded', factCritical: true, factReference: 'Real facts.' });
+    // Omitting the field preserves both.
+    const kept = await svc.updateSeries(s.id, { logline: 'L2' });
+    expect(kept.factCritical).toBe(true);
+    expect(kept.factReference).toBe('Real facts.');
+    // Explicit "" clears the reference; toggling factCritical off sticks.
+    const cleared = await svc.updateSeries(s.id, { factCritical: false, factReference: '' });
+    expect(cleared.factCritical).toBe(false);
+    expect(cleared.factReference).toBe('');
+  });
+
   it('updateSeries throws ERR_NOT_FOUND for unknown id', async () => {
     await expect(svc.updateSeries('ser-nope', { name: 'x' })).rejects.toMatchObject({ code: svc.ERR_NOT_FOUND });
   });

@@ -50,7 +50,8 @@ const STYLE_OVERRIDE_MODE_TABS = [
 // empty-value defaults the server expects for the optional ones. Module-level
 // constants so the `useArcCanvasSync` callbacks keep a stable identity.
 const ARC_FLUSH_FIELDS = [
-  'name', 'logline', 'premise', 'styleNotes', 'styleGuide', 'titleLogo', 'author', 'authorId',
+  'name', 'logline', 'premise', 'styleNotes', 'factCritical', 'factReference', 'styleGuide',
+  'titleLogo', 'author', 'authorId',
   'stylePromptOverride', 'stylePromptOverrideMode', 'issueCountTarget', 'universeId', 'characterArcs',
 ];
 const ARC_PAYLOAD_DEFAULTS = {
@@ -59,6 +60,10 @@ const ARC_PAYLOAD_DEFAULTS = {
   authorId: null,
   stylePromptOverride: '',
   stylePromptOverrideMode: STYLE_OVERRIDE_MODE_DEFAULT,
+  // Fact-checking opt-in + author fact reference (#1588). false / '' are the
+  // server-sanitizer defaults for "not fact-critical" / "no reference".
+  factCritical: false,
+  factReference: '',
   // Structured house style — null means "no style guide", which the server
   // sanitizer also produces from an all-empty guide.
   styleGuide: null,
@@ -387,6 +392,8 @@ function BibleSidebar({ series, universes, patchSeries, onSeriesUpdate, onFlushP
 
       <StyleGuideSection series={series} patchSeries={patchSeries} />
 
+      <FactReferenceSection series={series} patchSeries={patchSeries} />
+
       <CharacterArcsSection series={series} patchSeries={patchSeries} />
 
       <div className="block">
@@ -587,6 +594,50 @@ const TRANSITION_KIND_OPTIONS = [
   ['relapse', 'Relapse'],
   ['sacrifice', 'Sacrifice'],
 ];
+
+// Fact-checking opt-in + author fact reference (#1588). When the series is flagged
+// fact-critical AND a non-empty reference is supplied, the gated research.fact-accuracy
+// editorial check reconciles the prose against these documented real-world facts.
+// Both fields persist on Save (factCritical / factReference are in ARC_FLUSH_FIELDS).
+// The toggle is htmlFor/id paired; the textarea is only meaningful (and shown
+// prominently) once the toggle is on, so it stays collapsed for pure-fantasy series.
+function FactReferenceSection({ series, patchSeries }) {
+  const factCritical = series.factCritical === true;
+  return (
+    <div className="block">
+      <h3 className="text-xs uppercase tracking-wider text-gray-500 mb-2">Fact accuracy (grounded series)</h3>
+      <label htmlFor="fact-critical" className="flex items-start gap-2 cursor-pointer mb-2">
+        <input
+          id="fact-critical"
+          type="checkbox"
+          checked={factCritical}
+          onChange={(e) => patchSeries({ factCritical: e.target.checked })}
+          className="mt-0.5 accent-port-accent"
+        />
+        <span className="text-xs text-gray-300">
+          Fact-critical series
+          <span className="block text-[11px] text-gray-500">
+            Enable the real-world fact-accuracy editorial check. Leave off for pure fantasy, where the check would second-guess deliberate invention.
+          </span>
+        </span>
+      </label>
+      {factCritical && (
+        <label htmlFor="fact-reference" className="block">
+          <span className="block text-xs uppercase tracking-wider text-gray-500 mb-1">Fact reference (real-world ground truth)</span>
+          <textarea
+            id="fact-reference"
+            value={series.factReference || ''}
+            onChange={(e) => patchSeries({ factReference: e.target.value })}
+            rows={5}
+            className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
+            maxLength={8000}
+            placeholder="Documented real-world facts the prose must respect: geography, dates, technology timelines, physical/physiological limits. The fact-accuracy check flags prose claims that contradict what you write here."
+          />
+        </label>
+      )}
+    </div>
+  );
+}
 
 // Per-character story arcs (#1293). Authored want/need, start → end state, and
 // explicit transition beats, edited into local series state via patchSeries and

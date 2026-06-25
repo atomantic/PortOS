@@ -181,6 +181,9 @@ const seriesCreateSchema = z.object({
   characterArcs: characterArcsSchema.optional(),
   locked: seriesLockedSchema.optional(),
   styleNotes: z.string().trim().max(seriesSvc.STYLE_NOTES_MAX).optional().default(''),
+  // Fact-checking opt-in + author fact reference (#1588).
+  factCritical: z.boolean().optional().default(false),
+  factReference: z.string().trim().max(seriesSvc.FACT_REFERENCE_MAX).optional().default(''),
   styleGuide: styleGuideSchema.nullable().optional(),
   titleLogo: z.string().trim().max(seriesSvc.TITLE_LOGO_MAX).optional().default(''),
   author: z.string().trim().max(seriesSvc.AUTHOR_MAX).optional().default(''),
@@ -206,6 +209,9 @@ const seriesPatchSchema = z.object({
   characterArcs: characterArcsSchema.optional(),
   locked: seriesLockedSchema.optional(),
   styleNotes: z.string().trim().max(seriesSvc.STYLE_NOTES_MAX).optional(),
+  // Fact-checking opt-in + author fact reference (#1588).
+  factCritical: z.boolean().optional(),
+  factReference: z.string().trim().max(seriesSvc.FACT_REFERENCE_MAX).optional(),
   styleGuide: styleGuideSchema.nullable().optional(),
   titleLogo: z.string().trim().max(seriesSvc.TITLE_LOGO_MAX).optional(),
   author: z.string().trim().max(seriesSvc.AUTHOR_MAX).optional(),

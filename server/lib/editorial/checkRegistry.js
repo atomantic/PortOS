@@ -146,6 +146,11 @@ export const EDITORIAL_SOURCES = Object.freeze([
   'series.arc.tickingClock',
   'series.arc.readerMap',
   'series.arc.themes',
+  // The author-supplied real-world fact reference the opt-in research.fact-accuracy
+  // check reconciles the prose against (#1588). Lives on the already-loaded series
+  // record (no extra I/O); fingerprinting it stales fact findings when the author
+  // edits the reference.
+  'series.factReference',
   'reverseOutline',
   'reverseOutline.plotlines',
   'editorialArcs',
@@ -547,6 +552,16 @@ export const PLOT_STRUCTURE_STAGE = 'pipeline-editorial-plot-structure';
 // — a dead character who reappears alive, an age that contradicts the bible, or an
 // impossible chronology.
 export const TIMELINE_CONTRADICTION_STAGE = 'pipeline-editorial-timeline-contradiction';
+
+// Stage name for the research / fact-accuracy LLM check (#1588). Ships in
+// data.reference/prompts/stages/ + stage-config.json (fresh installs via
+// setup-data.js) and migrates to existing installs via migration 135 (boot runs
+// migrations but NOT setup-data, so the migration is required). Reconciles the
+// stitched manuscript against the author-supplied real-world fact reference
+// (`series.factReference`) — a prose claim that contradicts a documented external
+// fact (geography, history, physics/physiology). Opt-in and gated on the
+// `series.factCritical` flag so it never fires on pure fantasy.
+export const FACT_ACCURACY_STAGE = 'pipeline-editorial-fact-accuracy';
 
 // Stage name for the character-consistency / unearned-personality-shift LLM check
 // (#1582). Ships in data.reference/prompts/stages/ + stage-config.json (fresh
@@ -3250,6 +3265,65 @@ export const EDITORIAL_CHECKS = [
         crossChunkSetup: true,
         setupFocus:
           'For each named character, note their last-established state a later part must stay consistent with: alive or dead (and how/when), stated or implied age, and current location — plus any dated events and the elapsed time between them. Carry these forward so a later chunk can catch a character who reappears alive after dying, an age that contradicts an earlier one, or an impossible chronology.',
+      });
+    },
+  },
+  {
+    id: 'research.fact-accuracy',
+    sources: ['manuscript', 'series.factReference'],
+    label: 'Research / fact accuracy',
+    description:
+      'LLM scan for contradictions to real-world facts the author has documented — a grounded historical, scientific, or geographic claim the prose gets wrong (a city placed in the wrong country, a date that predates the technology it describes, a physiologically impossible feat). Distinct from the internal timeline/canon-contradiction check: this reconciles the prose against EXTERNAL truth, not the story bible. Opt-in and gated — it runs only when the series is flagged fact-critical AND the author has supplied a fact reference, so it never second-guesses deliberate invention in pure fantasy.',
+    scope: 'series',
+    kind: 'llm',
+    category: 'accuracy',
+    // Fallback severity when the model omits one. A factual howler in grounded
+    // fiction is a credibility killer, but the prompt directs the model to mark a
+    // plot-relevant error 'high' per finding, so the worst cases still surface high.
+    severityDefault: 'medium',
+    // Opt-in: off by default so the check never runs on a series that hasn't
+    // declared itself fact-critical and supplied a reference (the gate also
+    // enforces both at run time).
+    defaultEnabled: false,
+    // Reads the stitched manuscript corpus — so the runner only pays the
+    // section-collection I/O when a manuscript-consuming check is enabled.
+    needsManuscript: true,
+    configSchema: z.object({
+      // Cap findings per run so a long manuscript can't flood the review.
+      maxFindings: z.number().int().min(1).max(50).default(12),
+    }),
+    configFields: [
+      {
+        key: 'maxFindings',
+        label: 'Max findings per run',
+        type: 'number',
+        min: 1,
+        max: 50,
+        step: 1,
+        help: 'Cap findings so a long manuscript can not flood the review.',
+      },
+    ],
+    // Gate on BOTH the per-series fact-critical opt-in AND a non-empty author
+    // fact reference (plus a non-empty manuscript). Without a reference there's
+    // nothing authoritative to reconcile against, and the flag keeps the check
+    // off for fantasy where "wrong" real-world facts may be intentional.
+    gate: (ctx) =>
+      ctx.series?.factCritical === true
+      && (ctx.series?.factReference || '').trim().length > 0
+      && (ctx.manuscript || '').trim().length > 0,
+    run: (ctx) => {
+      // The author's documented real-world facts are the authoritative reference
+      // the prose is judged against — fixed per-call overhead re-sent on each
+      // chunk. Trimmed largest-first if the manuscript needs the room.
+      const factReference = (ctx.series?.factReference || '').trim();
+      return runManuscriptLlmCheck(ctx, {
+        stage: FACT_ACCURACY_STAGE,
+        category: 'accuracy',
+        context: { factReference },
+        buildVars: (manuscript, _meta, c) => ({
+          manuscript,
+          factReference: c.factReference,
+        }),
       });
     },
   },

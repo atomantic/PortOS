@@ -50,6 +50,11 @@ export const NAME_MAX = 200;
 export const LOGLINE_MAX = 500;
 export const PREMISE_MAX = 8000;
 export const STYLE_NOTES_MAX = 4000;
+// Author-supplied real-world fact reference (#1588) — the ground-truth facts the
+// opt-in `research.fact-accuracy` editorial check reconciles the prose against
+// (e.g. "Paris is the capital of France"; physiological limits). Generous cap so
+// a grounded historical/SFF series can paste a sizable fact sheet.
+export const FACT_REFERENCE_MAX = 8000;
 export const STYLE_PROMPT_OVERRIDE_MAX = 1000;
 // How `stylePromptOverride` composes with the universe's style influences:
 //   'prepend'  — override leads, universe trails (the historical default
@@ -223,6 +228,14 @@ const sanitizeSeries = (raw) => {
     characterArcs: sanitizeCharacterArcList(raw.characterArcs),
     locked: sanitizeSeriesLocked(raw.locked),
     styleNotes: trimTo(raw.styleNotes, STYLE_NOTES_MAX),
+    // Fact-checking opt-in (#1588). When true (and a non-empty `factReference`
+    // is supplied), the gated `research.fact-accuracy` editorial check runs so
+    // it never fires on pure fantasy. Defaults to false — existing series.json
+    // files (which predate these fields) migrate forward without a writer pass;
+    // first save backfills both. Wire-gated (pipelineSeries schema v7) so a
+    // factReference-unaware peer can't strip-then-LWW the loss back.
+    factCritical: raw.factCritical === true,
+    factReference: trimTo(raw.factReference, FACT_REFERENCE_MAX),
     // Per-series house style (tense/POV/audience/rating/reading-level/tone/
     // conventions). Structured companion to the free-text styleNotes above;
     // sanitizeStyleGuide returns null when empty so existing series.json files
@@ -311,6 +324,8 @@ export async function createSeries(input = {}) {
     characterArcs: input.characterArcs || [],
     locked: input.locked || {},
     styleNotes: input.styleNotes || '',
+    factCritical: input.factCritical === true,
+    factReference: input.factReference || '',
     styleGuide: input.styleGuide || null,
     titleLogo: input.titleLogo || '',
     author: input.author || '',
@@ -473,6 +488,11 @@ export async function updateSeries(id, patch = {}) {
       // Wholesale replace — `locked: {}` clears every lock; omission preserves.
       ...('locked' in patch ? { locked: patch.locked } : {}),
       ...('styleNotes' in patch ? { styleNotes: patch.styleNotes } : {}),
+      // Fact-checking opt-in + author fact reference (#1588). `factReference: ''`
+      // clears the reference; omission preserves. Sanitizer normalizes a
+      // non-true `factCritical` back to false.
+      ...('factCritical' in patch ? { factCritical: patch.factCritical } : {}),
+      ...('factReference' in patch ? { factReference: patch.factReference } : {}),
       // Wholesale replace — sanitizeStyleGuide normalizes an empty object back
       // to null (clear); omission preserves. Mirrors the arc/readerMap pattern.
       ...('styleGuide' in patch ? { styleGuide: patch.styleGuide } : {}),
@@ -703,7 +723,7 @@ async function cascadeDeleteSideEffects(id) {
 // consult the RAW remote payload to tell the two apart: key absent → preserve
 // local; key present (even null/empty) → honor the intentional clear. Mirrors
 // the `universeId` hierarchy guard. See issue #1361.
-const ADDITIVE_SERIES_FIELDS = ['arc', 'seasons', 'styleGuide', 'styleNotes', 'characterArcs'];
+const ADDITIVE_SERIES_FIELDS = ['arc', 'seasons', 'styleGuide', 'styleNotes', 'characterArcs', 'factReference', 'factCritical'];
 // Additive sub-fields nested inside `arc`. A peer that predates these (readerMap
 // shipped at schema v2, tickingClock at #1289/v3) still sends an `arc` object —
 // just without these keys — so the erasure for them happens one level down.

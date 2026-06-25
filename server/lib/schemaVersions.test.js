@@ -27,9 +27,10 @@ describe('PORTOS_SCHEMA_VERSIONS', () => {
   it('declares pipeline collection layout versions', () => {
     // pipelineIssues bumped to 2 when stages.audio.audioMode + cues[] were added.
     expect(PORTOS_SCHEMA_VERSIONS.pipelineIssues).toBe(2);
-    // pipelineSeries bumped to 6 when series.characterArcs was added (v2 = readerMap,
-    // v3 = tickingClock, v4 = styleGuide, v5 = coverImage).
-    expect(PORTOS_SCHEMA_VERSIONS.pipelineSeries).toBe(6);
+    // pipelineSeries bumped to 7 when series.factCritical + series.factReference
+    // were added (#1588) (v2 = readerMap, v3 = tickingClock, v4 = styleGuide,
+    // v5 = coverImage, v6 = characterArcs).
+    expect(PORTOS_SCHEMA_VERSIONS.pipelineSeries).toBe(7);
   });
 
   it('declares mediaCollections layout version', () => {
@@ -43,7 +44,7 @@ describe('buildPortosMeta', () => {
     expect(meta.portosVersion).toMatch(/^\d+\.\d+\.\d+/);
     expect(meta.schemaVersions.universes).toBe(7);
     expect(meta.schemaVersions.pipelineIssues).toBe(2);
-    expect(meta.schemaVersions.pipelineSeries).toBe(6);
+    expect(meta.schemaVersions.pipelineSeries).toBe(7);
   });
 
   it('overrides merge into schemaVersions', async () => {

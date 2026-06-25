@@ -597,6 +597,13 @@
       "returnsJson": true,
       "variables": []
     },
+    "pipeline-editorial-fact-accuracy": {
+      "name": "Pipeline — Editorial Check: Research / fact accuracy",
+      "description": "Editorial check (#1588): scans grounded fiction for contradictions to real-world facts the author has documented — a city placed in the wrong country, an anachronistic event or technology, a physiologically impossible feat. Reconciles the stitched manuscript against the author-supplied fact reference (series.factReference); distinct from the internal timeline/canon-contradiction check. Opt-in and gated on the per-series fact-critical flag so it never fires on pure fantasy. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
     "pipeline-editorial-character-consistency": {
       "name": "Pipeline — Editorial Check: Character consistency (unearned personality shift)",
       "description": "Editorial check (#1582): flags unearned characterization changes — a reserved character who suddenly cracks jokes with no arc beat, an established trait (fear, allergy, skill) silently contradicted, or POV-character knowledge that changes mid-scene without on-page learning. Reconciles the stitched manuscript against the established canon character traits, the reverse-outline scene ordering, and the authored per-character arcs so an intentional, earned transition is NOT flagged; degrades to a prose-only scan when no canon or outline exists. Returns issue-anchored findings.",

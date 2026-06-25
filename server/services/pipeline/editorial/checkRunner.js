@@ -83,6 +83,10 @@ const SOURCE_RESOLVERS = {
   // (#1317). Lives on the already-loaded series record, so no extra I/O — fingerprint
   // the whole themes array so adding/editing a declared theme stales the findings.
   'series.arc.themes': ({ series }) => canonicalStringify(series?.arc?.themes ?? null),
+  // The author-supplied real-world fact reference the research.fact-accuracy check
+  // reconciles the prose against (#1588). Lives on the already-loaded series record,
+  // so no extra I/O — fingerprint the reference text so editing it stales fact findings.
+  'series.factReference': ({ series }) => canonicalStringify(series?.factReference ?? null),
   // The reverse-outline scenes the check reads (#1296). Fingerprinting the whole
   // scenes array is intentionally over-eager (any scene edit stales a finding)
   // rather than under: safe vs. false-fresh, and the check reads several scene fields.

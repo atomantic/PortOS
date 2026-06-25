@@ -107,7 +107,15 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // arcs and last-writer-wins the loss back onto the newer peer. Bump makes the
   // older peer reject the ahead-version series transfer instead. Per-category
   // gate → only series sync pauses with old peers.
-  pipelineSeries: 6,
+  // v7 = `series.factCritical` + `series.factReference` added (#1588) — the
+  // opt-in flag + author-supplied real-world fact reference the gated
+  // `research.fact-accuracy` editorial check reconciles the prose against. Same
+  // silent-strip-then-LWW corruption as styleGuide/characterArcs: a ≤v6 peer
+  // that re-sanitizes a series through its factReference-unaware `sanitizeSeries`
+  // would drop the reference (and reset the flag) and last-writer-wins the loss
+  // back onto the newer peer. Bump makes the older peer reject the ahead-version
+  // series transfer instead. Per-category gate → only series sync pauses with old peers.
+  pipelineSeries: 7,
   // NOT bumped for the manuscript-review sibling doc now bundled on series
   // pushes/exports (`data/pipeline-series/{id}/manuscript-review.json`).
   // Unlike `readerMap` (v2), the review is NOT a field inside the series

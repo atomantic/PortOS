@@ -106,6 +106,26 @@ describe('editorial check registry — shape invariants', () => {
   it('getCheck returns null for an unknown id', () => {
     expect(getCheck('does.not-exist')).toBeNull();
   });
+
+  it('fact-accuracy check is opt-in and gated on factCritical + a reference + manuscript (#1588)', () => {
+    const check = getCheck('research.fact-accuracy');
+    expect(check).toBeTruthy();
+    expect(check.kind).toBe('llm');
+    expect(check.scope).toBe('series');
+    // Off by default so it never runs on a series that hasn't declared itself
+    // fact-critical with a reference.
+    expect(check.defaultEnabled).toBe(false);
+    expect(check.sources).toContain('series.factReference');
+
+    const manuscript = 'Some prose.';
+    // All three preconditions present → gate opens.
+    expect(check.gate({ manuscript, series: { factCritical: true, factReference: 'Paris is in France.' } })).toBe(true);
+    // Missing any one → gate stays closed.
+    expect(check.gate({ manuscript, series: { factCritical: false, factReference: 'Paris is in France.' } })).toBe(false);
+    expect(check.gate({ manuscript, series: { factCritical: true, factReference: '   ' } })).toBe(false);
+    expect(check.gate({ manuscript: '', series: { factCritical: true, factReference: 'Paris is in France.' } })).toBe(false);
+    expect(check.gate({ manuscript, series: null })).toBe(false);
+  });
 });
 
 describe('editorial check registry — fail-fast guards', () => {
