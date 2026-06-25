@@ -2864,8 +2864,14 @@ export const EDITORIAL_CHECKS = [
           .filter((id) => id.matcher)
           .map((id) => ({ key: id.key, matcher: id.matcher }));
         const { byOwner, attributed } = attributeDialogueByOwner(manuscript, owners);
-        if (attributed >= minDialogueLines && byOwner.size >= 2) {
-          if (wantShare) {
+        if (attributed >= minDialogueLines) {
+          // The top-speaker share signal compares one voice against the others, so
+          // it needs 2+ speakers to mean anything. The role-relative signals do NOT:
+          // a lone minor speaking every line (size 1, 100% share) or a major who
+          // appears yet never speaks while a single other voice carries the scene is
+          // their STRONGEST case — gating those on size >= 2 would skip exactly the
+          // imbalance they exist to catch.
+          if (wantShare && byOwner.size >= 2) {
             let topKey = null;
             let topCount = 0;
             for (const [key, count] of byOwner) {
