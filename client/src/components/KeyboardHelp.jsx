@@ -4,6 +4,7 @@ import { useKeyboardHelp } from '../hooks/useKeyboardHelp';
 import { useScrollLock } from '../hooks/useScrollLock';
 import { modKey } from '../utils/platform';
 import Modal from './ui/Modal';
+import Kbd from './ui/Kbd';
 
 const SHORTCUT_SECTIONS = [
   {
@@ -32,13 +33,6 @@ const SHORTCUT_SECTIONS = [
   },
 ];
 
-function Kbd({ children }) {
-  return (
-    <kbd className="inline-flex items-center justify-center min-w-[24px] h-6 px-1.5 text-xs font-mono font-medium text-gray-300 bg-port-bg border border-port-border rounded shadow-sm">
-      {children}
-    </kbd>
-  );
-}
 
 export default function KeyboardHelp() {
   const { open, setOpen } = useKeyboardHelp();

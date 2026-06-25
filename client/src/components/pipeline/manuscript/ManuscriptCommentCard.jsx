@@ -18,6 +18,7 @@ import toast from '../../ui/Toast';
 import { copyToClipboard } from '../../../lib/clipboard';
 import { useAsyncAction } from '../../../hooks/useAsyncAction';
 import useKeyboardShortcuts from '../../../hooks/useKeyboardShortcuts';
+import Kbd from '../../ui/Kbd';
 import {
   patchPipelineManuscriptComment, generatePipelineManuscriptFix, acceptPipelineManuscriptFix,
 } from '../../../services/api';
@@ -39,15 +40,6 @@ export function CopyId({ id }) {
   );
 }
 
-// A single keycap for the on-screen shortcut hints.
-function Kbd({ children }) {
-  return (
-    <kbd className="rounded border border-port-border bg-port-bg px-1 font-mono text-[9px] leading-tight text-gray-400">
-      {children}
-    </kbd>
-  );
-}
-
 // On-screen cheatsheet for the card's keyboard shortcuts (#1603) — only the
 // actions actually available for this note are shown (prev/next when the card is
 // part of a triage order, Accept/regenerate when a fix exists, Generate when not).
@@ -55,17 +47,17 @@ function ShortcutHints({ hasNav, hasFix }) {
   return (
     <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 pt-1.5 text-[10px] text-gray-600">
       {hasNav ? (
-        <span className="inline-flex items-center gap-1"><Kbd>←</Kbd><Kbd>→</Kbd> step</span>
+        <span className="inline-flex items-center gap-1"><Kbd size="sm">←</Kbd><Kbd size="sm">→</Kbd> step</span>
       ) : null}
       {hasFix ? (
         <>
-          <span className="inline-flex items-center gap-1"><Kbd>a</Kbd> accept</span>
-          <span className="inline-flex items-center gap-1"><Kbd>g</Kbd> regenerate</span>
+          <span className="inline-flex items-center gap-1"><Kbd size="sm">a</Kbd> accept</span>
+          <span className="inline-flex items-center gap-1"><Kbd size="sm">g</Kbd> regenerate</span>
         </>
       ) : (
-        <span className="inline-flex items-center gap-1"><Kbd>g</Kbd> generate</span>
+        <span className="inline-flex items-center gap-1"><Kbd size="sm">g</Kbd> generate</span>
       )}
-      <span className="inline-flex items-center gap-1"><Kbd>d</Kbd> dismiss</span>
+      <span className="inline-flex items-center gap-1"><Kbd size="sm">d</Kbd> dismiss</span>
     </div>
   );
 }
@@ -223,7 +215,7 @@ export default function ManuscriptCommentCard({
     ArrowRight: nav?.onNext,
     k: nav?.onPrev,
     j: nav?.onNext,
-    a: hasFix && canAccept && !accepting ? accept : undefined,
+    a: canAccept && !accepting ? accept : undefined,
     d: !accepting ? dismiss : undefined,
     g: !generating && !accepting ? generate : undefined,
   });
