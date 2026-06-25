@@ -1,5 +1,9 @@
 # Unreleased
 
+## Creative onramp
+
+- **[issue-1633] A new "Start a Story" page gives you one clear front door for beginning a story.** Instead of guessing whether to open the Story Builder, the Importer, or the Writers Room, you now pick how you want to begin — from an idea, from an existing work, or by writing prose — and the page routes you into the right tool. You can also choose up front whether to start a fresh universe or attach the story to one you already have; that choice carries through to the Story Builder and Importer automatically. All the existing pages stay exactly where they were — this just adds a signposted entry point (reachable from the sidebar, ⌘K, and voice). (First phase of the larger creative-onramp effort; prose-mode universe linking comes later.)
+
 ## Chief of Staff
 
 - **[issue-1683] CoS daily action-budget can no longer overshoot by one at the boundary.** `completeAgent()` emitted `agent:completed` — whose handler schedules `dequeueNextTask()` and its daily action-budget gate — *before* recording the just-finished action via `recordDomainUsage('cos', …)`. At the exact `maxActionsPerDay` boundary the dequeue read stale usage that didn't yet include the completing action (which was already `status: 'completed'`, so it wasn't counted as in-flight either), admitting one autonomous spawn past the cap. The usage ledger is now written before the `agent:completed` emit so the gate always counts the completing action. (`server/services/cosAgents.js`)
