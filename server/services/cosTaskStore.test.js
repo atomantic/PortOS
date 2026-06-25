@@ -60,7 +60,8 @@ import {
   updateTask,
   deleteTask,
   reorderTasks,
-  approveTask
+  approveTask,
+  mergePeerTasks
 } from './cosTaskStore.js';
 
 const USER_FILE = '/root/TASKS.md';
@@ -345,5 +346,58 @@ describe('addTask — first-line dedup (source guards)', () => {
     const fnBody = STORE_SRC.slice(start, end === -1 ? undefined : end);
     expect(fnBody).toMatch(/t\.metadata\?\.app\s*\|\|\s*null/);
     expect(fnBody).toMatch(/taskData\.app\s*\|\|\s*null/);
+  });
+});
+
+// Receiver side of CoS task federation (#1712). Runs the REAL cosTaskMerge
+// against the in-memory file map so the read-merge-write round-trip + write-skip
+// are covered end-to-end (the merge rules themselves are unit-tested in
+// cosTaskMerge.test.js).
+describe('cosTaskStore.mergePeerTasks', () => {
+  const NOW = Date.parse('2026-06-25T12:00:00.000Z');
+  const future = (ms) => new Date(NOW + ms).toISOString();
+
+  it('adopts a remote-only task into the file and emits tasks:changed', async () => {
+    await addTask({ description: 'local task', priority: 'LOW', id: 'task-local' }, 'user');
+    mock.events = [];
+    const remote = [{ id: 'task-remote', taskType: 'user', status: 'pending', priority: 'HIGH', description: 'peer task', metadata: {} }];
+    const res = await mergePeerTasks('user', remote, { now: NOW });
+    expect(res.changed).toBe(true);
+    const after = await getUserTasks();
+    expect(after.tasks.map(t => t.id).sort()).toEqual(['task-local', 'task-remote']);
+    expect(mock.events.some(e => e.name === 'tasks:changed' && e.payload.action === 'peer-merged')).toBe(true);
+  });
+
+  it('is a no-op (no write, no event) when the peer payload changes nothing', async () => {
+    await addTask({ description: 'same', priority: 'MEDIUM', id: 'task-same' }, 'user');
+    mock.events = [];
+    const writeSpy = (await import('fs/promises')).writeFile;
+    writeSpy.mockClear();
+    const remote = [{ id: 'task-same', taskType: 'user', status: 'pending', priority: 'MEDIUM', description: 'same', metadata: {} }];
+    const res = await mergePeerTasks('user', remote, { now: NOW });
+    expect(res).toEqual({ changed: false });
+    expect(writeSpy).not.toHaveBeenCalled();
+    expect(mock.events.some(e => e.name === 'tasks:changed')).toBe(false);
+  });
+
+  it("never clobbers the local peer's live claim with a remote pending copy", async () => {
+    // Local task is claimed + in_progress (this instance is working it).
+    await addTask({ description: 'claimed work', id: 'task-c', priority: 'HIGH' }, 'user');
+    await updateTask('task-c', { status: 'in_progress', metadata: { claimedBy: 'instance-A', claimedAt: future(-1000), leaseExpiresAt: future(60_000) } }, 'user');
+    // Peer still thinks it's pending + unclaimed.
+    const remote = [{ id: 'task-c', taskType: 'user', status: 'pending', priority: 'HIGH', description: 'claimed work', metadata: {} }];
+    await mergePeerTasks('user', remote, { now: NOW });
+    const after = await getUserTasks();
+    const merged = after.tasks.find(t => t.id === 'task-c');
+    expect(merged.status).toBe('in_progress');
+    expect(merged.metadata.claimedBy).toBe('instance-A');
+  });
+
+  it('creates the file when it does not exist yet and the peer has tasks', async () => {
+    const remote = [{ id: 'sys-x', taskType: 'internal', status: 'pending', priority: 'MEDIUM', description: 'new', metadata: {} }];
+    const res = await mergePeerTasks('internal', remote, { now: NOW });
+    expect(res.changed).toBe(true);
+    const after = await getCosTasks();
+    expect(after.tasks.map(t => t.id)).toContain('sys-x');
   });
 });

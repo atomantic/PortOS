@@ -363,6 +363,21 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // manifest-shape change (new required entry field, segment semantics) MUST bump
   // this to 2.
   cosHistory: 1,
+  // v1 = live CoS task-list + claim-metadata federation (#1712, second half of
+  // #1650, part of epic #1561). NOT a record kind — it's the wire contract for
+  // the task payload a full-sync peer advertises at GET /api/peer-sync/cos-tasks.
+  // Unlike the immutable, append-only `cosHistory` archives (pure byte
+  // replication), the task files (data/COS-TASKS.md / data/TASKS.md) are mutated
+  // live by BOTH peers and carry `claimedBy`/`claimedAt`/`leaseExpiresAt` (#1563),
+  // so they ride a claim-aware per-task LWW merge (syncCosTasksFromPeer →
+  // cosTaskStore.mergePeerTasks), not the asset path. The receiver reads the
+  // sender's advertised `schemaVersion` and GENTLY SKIPS (logs, no reject) a
+  // sender ahead of its local `cosTasks` — same posture as `mediaLibrary` /
+  // `cosHistory`, because a task sweep is best-effort background convergence, not
+  // an authoritative record transfer. Only the payload envelope + task-entry
+  // shape is gated; the FIRST incompatible change (new required entry field, new
+  // claim semantics) MUST bump this to 2.
+  cosTasks: 1,
   // NOTE: `videoHistory` is intentionally NOT listed here. The version gate
   // rejects the ENTIRE snapshot/push payload on ANY ahead-mismatch (the
   // comparator walks the union of keys), so declaring a brand-new key would
@@ -429,12 +444,16 @@ export const RECORD_KIND_SCHEMA_CATEGORIES = Object.freeze({
  *   full-sync peer advertises at GET /api/peer-sync/cos-history-manifest. Same
  *   receiver-pull shape as `mediaLibrary` (see syncCosHistoryFromPeer) — no push
  *   to gate, so no RECORD_KIND_SCHEMA_CATEGORIES entry.
+ * - `cosTasks` (#1712): the live CoS task-list + claim-metadata payload a
+ *   full-sync peer advertises at GET /api/peer-sync/cos-tasks. Receiver-pull +
+ *   claim-aware per-task merge (see syncCosTasksFromPeer) — no push to gate, so
+ *   no RECORD_KIND_SCHEMA_CATEGORIES entry.
  *
  * Do NOT add a real record-push category here to silence the guard — that would
  * leave its push transfers ungated (silent cross-install corruption). Only
  * genuinely non-push categories belong.
  */
-export const NON_RECORD_SCHEMA_CATEGORIES = Object.freeze(new Set(['mediaLibrary', 'cosHistory']));
+export const NON_RECORD_SCHEMA_CATEGORIES = Object.freeze(new Set(['mediaLibrary', 'cosHistory', 'cosTasks']));
 
 /**
  * Lazy-read the current PortOS version from the ROOT package.json so a

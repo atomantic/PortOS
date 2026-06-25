@@ -20,6 +20,7 @@ import { REVIEW_STOP_MODES, normalizeReviewers } from '../lib/validation.js';
 import { loadState, withStateLock, ROOT_DIR } from './cosState.js';
 import { cosEvents } from './cosEvents.js';
 import { CLAIM_METADATA_KEYS } from './cosTaskClaim.js';
+import { mergeTaskLists } from './cosTaskMerge.js';
 
 // First non-empty line of a string. Used by addTask dedup: stored descriptions
 // are flattened to a single line by generateTasksMarkdown, so the comparison
@@ -313,6 +314,51 @@ export async function updateTask(taskId, updates, taskType = 'user') {
 
   cosEvents.emit('tasks:changed', { type: taskType, action: 'updated', task: updatedTask });
   return updatedTask;
+  });
+}
+
+/**
+ * Merge a full-sync peer's task list into one local task file (#1712).
+ *
+ * The receiver side of CoS task federation: `syncCosTasksFromPeer` fetches the
+ * peer's live backlog and hands the tasks for ONE file (user vs internal) here.
+ * The read-merge-write runs under `withStateLock` so it serializes against the
+ * spawn path's claim writes (agentLifecycle → updateTask, also lock-held) — the
+ * merge always sees, and merges against, the freshest persisted claim metadata.
+ *
+ * Idempotent + write-skipping: the claim-aware merge (cosTaskMerge) is pure and
+ * deterministic, so we compare the GENERATED markdown before/after (not the raw
+ * file bytes — pre-existing formatting drift shouldn't force a write) and only
+ * persist + emit `tasks:changed` when the merge actually changed something.
+ *
+ * @param {'user'|'internal'} taskType  which file to merge into
+ * @param {Array} remoteTasks           peer tasks for this file (wire-validated)
+ * @param {{ now?: number }} [opts]     injectable clock for deterministic tests
+ * @returns {Promise<{ changed: boolean, count?: number }>}
+ */
+export async function mergePeerTasks(taskType, remoteTasks, { now = Date.now() } = {}) {
+  return withStateLock(async () => {
+    const state = await loadState();
+    const filePath = taskType === 'user'
+      ? join(ROOT_DIR, state.config.userTasksFile)
+      : join(ROOT_DIR, state.config.cosTasksFile);
+
+    const localTasks = existsSync(filePath)
+      ? parseTasksMarkdown(await readFile(filePath, 'utf-8'))
+      : [];
+
+    const merged = mergeTaskLists(localTasks, remoteTasks, { now });
+
+    const includeApprovalFlags = taskType === 'internal';
+    const localMarkdown = generateTasksMarkdown(localTasks, includeApprovalFlags);
+    const mergedMarkdown = generateTasksMarkdown(merged, includeApprovalFlags);
+    // Nothing the peer sent changed our state — skip the write (and the event
+    // that would wake the scheduler) so a steady-state sweep is a pure no-op.
+    if (mergedMarkdown === localMarkdown) return { changed: false };
+
+    await writeFile(filePath, mergedMarkdown);
+    cosEvents.emit('tasks:changed', { type: taskType, action: 'peer-merged' });
+    return { changed: true, count: merged.length };
   });
 }
 

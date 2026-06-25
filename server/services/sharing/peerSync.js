@@ -63,7 +63,7 @@ import {
   getPortosVersion,
 } from '../../lib/schemaVersions.js';
 import { getInstanceId, getPeers, enqueueReciprocalSync, UNKNOWN_INSTANCE_ID } from '../instances.js';
-import { peerSyncPushSchema, peerLibraryManifestSchema, peerCosHistoryManifestSchema, COS_ARCHIVE_DATE_RE, COS_AGENT_ID_RE, COS_ARCHIVE_FILES } from '../../lib/validation.js';
+import { peerSyncPushSchema, peerLibraryManifestSchema, peerCosHistoryManifestSchema, peerCosTasksSchema, COS_ARCHIVE_DATE_RE, COS_AGENT_ID_RE, COS_ARCHIVE_FILES } from '../../lib/validation.js';
 import { instanceEvents } from '../instanceEvents.js';
 import { getUniverse, mergeUniversesFromSync } from '../universeBuilder.js';
 import { getSeries, mergeSeriesFromSync } from '../pipeline/series.js';
@@ -3305,6 +3305,200 @@ export async function syncCosHistoryWithAllPeers() {
   for (const peer of fullSyncPeers) {
     await syncCosHistoryFromPeer(peer).catch((err) => {
       console.log(`⚠️ peerSync: cos-history sweep for ${peer.name || peer.instanceId} failed: ${err.message}`);
+    });
+  }
+}
+
+// === Live CoS task-list + claim-metadata federation (#1712) ================
+//
+// The second half of #1650. Where the completed-agent HISTORY above federates as
+// pure append-only byte replication, the LIVE task files (data/COS-TASKS.md /
+// data/TASKS.md) are mutated by BOTH peers and carry claim/lease metadata (#1563),
+// so they ride a claim-aware per-task LWW MERGE — never a byte/whole-file copy
+// that would clobber a peer's fresh claim and re-open the double-spawn hazard.
+//
+// Transport mirrors the cos-history sweep's receiver-pull shape: the sender
+// advertises its backlog at GET /api/peer-sync/cos-tasks; a receiver (only for
+// peers it flags fullSync) fetches it, version-gates it, short-circuits on an
+// unchanged listHash, and merges per task into its own files via
+// cosTaskStore.mergePeerTasks (dynamic import — keeps the CoS task graph out of
+// peerSync's static import chain, mirroring reconcileCosHistoryIndex's import of
+// cosAgents). The merge itself is the pure cosTaskMerge module.
+//
+// Running-agent state (state.json slots), live PTY buffers, the in-flight
+// spawningTasks guard, and worktree working dirs are deliberately NOT federated —
+// only the task RECORDS + their claim metadata.
+
+// The task payload JSON (not bytes — there are none). Generous vs any real
+// single-user backlog; the build truncates beyond the entry cap and the receiver
+// rejects an over-cap response on its content-length check.
+const COS_TASKS_ENTRY_CAP = 50_000;
+const COS_TASKS_MAX_BYTES = 32 * 1024 * 1024;
+
+// Reduce a parsed task to its wire entry: the fields the receiver's merge +
+// markdown round-trip need, plus the `taskType` discriminator telling it which
+// file the task belongs in. Metadata rides verbatim (claim fields included);
+// the receiver re-escapes/re-parses it safely on its next file read.
+function taskToWireEntry(task, taskType) {
+  const entry = {
+    id: task.id,
+    taskType,
+    status: task.status,
+    priority: task.priority,
+    description: task.description,
+    metadata: isPlainObject(task.metadata) ? task.metadata : {},
+  };
+  if (typeof task.approvalRequired === 'boolean') entry.approvalRequired = task.approvalRequired;
+  if (typeof task.autoApproved === 'boolean') entry.autoApproved = task.autoApproved;
+  return entry;
+}
+
+/**
+ * Build the live task payload this instance advertises to full-sync peers.
+ * Unions the user (TASKS.md) and internal (COS-TASKS.md) backlogs, stamps a
+ * `listHash` over the sorted entries so a receiver can short-circuit an
+ * unchanged backlog, and caps the entry count (logs + truncates beyond it).
+ *
+ * Dynamic import of cosTaskStore keeps the CoS task graph out of peerSync's
+ * static import chain (mirrors reconcileCosHistoryIndex).
+ *
+ * @returns {Promise<{ schemaVersion:number, listHash:string, tasks:Array }>}
+ */
+export async function buildCosTasksPayload() {
+  const empty = { schemaVersion: PORTOS_SCHEMA_VERSIONS.cosTasks, listHash: createHash('sha256').update('').digest('hex'), tasks: [] };
+  const mod = await import('../cosTaskStore.js').catch(() => null);
+  if (!mod?.getUserTasks || !mod?.getCosTasks) return empty;
+  const [userRes, cosRes] = await Promise.all([
+    mod.getUserTasks().catch(() => null),
+    mod.getCosTasks().catch(() => null),
+  ]);
+  let entries = [
+    ...((userRes?.tasks || []).map((t) => taskToWireEntry(t, 'user'))),
+    ...((cosRes?.tasks || []).map((t) => taskToWireEntry(t, 'internal'))),
+  ];
+  if (entries.length > COS_TASKS_ENTRY_CAP) {
+    console.log(`⚠️ peerSync: cos-tasks payload hit the ${COS_TASKS_ENTRY_CAP}-entry cap — truncating (some tasks won't federate this tick)`);
+    entries = entries.slice(0, COS_TASKS_ENTRY_CAP);
+  }
+  // Deterministic order so the listHash converges across machines regardless of
+  // file/section order. Hash the lifecycle-relevant fields (incl. claim metadata)
+  // so a claim/renewal/status change flips the hash and re-triggers a merge,
+  // while pure reordering does not.
+  entries.sort((a, b) => (a.taskType < b.taskType ? -1 : a.taskType > b.taskType ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const listHash = createHash('sha256')
+    .update(entries.map((e) => `${e.taskType}:${e.id}:${e.status}:${e.priority}:${JSON.stringify(e.metadata || {})}`).join('\n'))
+    .digest('hex');
+  return { schemaVersion: PORTOS_SCHEMA_VERSIONS.cosTasks, listHash, tasks: entries };
+}
+
+// Receiver-side bookkeeping — mirrors the cos-history sweep.
+const lastCosTasksListHash = new Map(); // peerInstanceId → listHash
+const cosTasksUnchangedSkips = new Map(); // peerInstanceId → count
+const cosTasksSweepInFlight = new Set(); // peerInstanceId
+
+/**
+ * Apply a peer's task payload into the LOCAL task files via a claim-aware merge.
+ * Splits the entries by taskType and hands each file's tasks to
+ * cosTaskStore.mergePeerTasks (which runs the pure merge under the state lock).
+ * Returns the number of files actually changed.
+ */
+async function mergeCosTasksFromPayload(tasks) {
+  const mod = await import('../cosTaskStore.js').catch(() => null);
+  if (!mod?.mergePeerTasks) return 0;
+  const user = [];
+  const internal = [];
+  for (const t of Array.isArray(tasks) ? tasks : []) {
+    if (t?.taskType === 'internal') internal.push(t);
+    else if (t?.taskType === 'user') user.push(t);
+  }
+  let changed = 0;
+  // Always merge BOTH files (even when one side is empty) so a task the peer
+  // resolved/removed from a file converges — an empty list still merges (union
+  // keeps local-only tasks, so it never wipes the local backlog).
+  const userRes = await mod.mergePeerTasks('user', user).catch((err) => {
+    console.log(`⚠️ peerSync: cos-tasks user merge failed: ${err.message}`); return null;
+  });
+  if (userRes?.changed) changed++;
+  const internalRes = await mod.mergePeerTasks('internal', internal).catch((err) => {
+    console.log(`⚠️ peerSync: cos-tasks internal merge failed: ${err.message}`); return null;
+  });
+  if (internalRes?.changed) changed++;
+  return changed;
+}
+
+/**
+ * Receiver-pull the live task backlog from ONE full-sync peer and merge it.
+ * Best-effort + idempotent (every guard returns rather than throws), mirroring
+ * syncCosHistoryFromPeer. No-op for a non-full-sync peer.
+ *
+ * @param {object} peer  a peer entry from getPeers()
+ * @returns {Promise<{ merged:number, skipped?:string }>}
+ */
+export async function syncCosTasksFromPeer(peer) {
+  if (!isPlainObject(peer) || peer.fullSync !== true || !isStr(peer.instanceId)) {
+    return { merged: 0, skipped: 'not-fullsync' };
+  }
+  if (cosTasksSweepInFlight.has(peer.instanceId)) return { merged: 0, skipped: 'in-flight' };
+  cosTasksSweepInFlight.add(peer.instanceId);
+  try {
+    const url = `${peerBaseUrl(peer)}/api/peer-sync/cos-tasks`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), ASSET_PULL_TIMEOUT_MS);
+    const res = await peerFetch(url, { signal: controller.signal, maxBytes: COS_TASKS_MAX_BYTES }, peer)
+      .finally(() => clearTimeout(timeoutId))
+      .catch(() => null);
+    if (!res || !res.ok) return { merged: 0, skipped: 'unreachable' };
+    const declaredLen = Number(res.headers?.get?.('content-length'));
+    if (Number.isFinite(declaredLen) && declaredLen > COS_TASKS_MAX_BYTES) {
+      console.log(`⚠️ peerSync: cos-tasks payload from ${peer.name || peer.instanceId} too large (${declaredLen} > ${COS_TASKS_MAX_BYTES}) — skipping`);
+      return { merged: 0, skipped: 'too-large' };
+    }
+    const body = await res.json().catch(() => null);
+    const parsed = peerCosTasksSchema.safeParse(body);
+    if (!parsed.success) {
+      console.log(`⚠️ peerSync: cos-tasks payload from ${peer.name || peer.instanceId} failed validation — skipping`);
+      return { merged: 0, skipped: 'invalid' };
+    }
+    const payload = parsed.data;
+    // Schema gate — GENTLE skip (not reject): wait for the local PortOS to
+    // upgrade rather than mis-merge against a payload shape we can't read.
+    if (payload.schemaVersion > PORTOS_SCHEMA_VERSIONS.cosTasks) {
+      console.log(`⏸️ peerSync: ${peer.name || peer.instanceId} cos-tasks payload is schema v${payload.schemaVersion} > local v${PORTOS_SCHEMA_VERSIONS.cosTasks} — skipping until this instance updates`);
+      return { merged: 0, skipped: 'schema-ahead' };
+    }
+    // Unchanged short-circuit, with a periodic forced re-merge so a LOCAL task
+    // loss self-heals even while the REMOTE backlog stays put. Unlike cos-history
+    // the merge depends on TIME (lease expiry), so the forced re-merge also lets
+    // an expired remote claim become re-claimable locally without a remote change.
+    if (lastCosTasksListHash.get(peer.instanceId) === payload.listHash) {
+      const skips = (cosTasksUnchangedSkips.get(peer.instanceId) || 0) + 1;
+      if (skips < FORCE_REVALIDATE_EVERY) {
+        cosTasksUnchangedSkips.set(peer.instanceId, skips);
+        return { merged: 0, skipped: 'unchanged' };
+      }
+      cosTasksUnchangedSkips.set(peer.instanceId, 0); // forced re-merge — fall through
+    }
+    const changed = await mergeCosTasksFromPayload(payload.tasks);
+    lastCosTasksListHash.set(peer.instanceId, payload.listHash);
+    if (changed > 0) {
+      console.log(`📥 peerSync: cos-tasks sweep from ${peer.name || peer.instanceId} — merged ${changed} task file(s)`);
+    }
+    return { merged: changed };
+  } finally {
+    cosTasksSweepInFlight.delete(peer.instanceId);
+  }
+}
+
+/**
+ * Periodic driver: merge the live task backlog from every full-sync peer.
+ * Each peer's sweep is independent + best-effort.
+ */
+export async function syncCosTasksWithAllPeers() {
+  const peers = await getPeers().catch(() => []);
+  const fullSyncPeers = peers.filter((p) => p?.fullSync === true && p?.enabled !== false && isStr(p.instanceId));
+  for (const peer of fullSyncPeers) {
+    await syncCosTasksFromPeer(peer).catch((err) => {
+      console.log(`⚠️ peerSync: cos-tasks sweep for ${peer.name || peer.instanceId} failed: ${err.message}`);
     });
   }
 }

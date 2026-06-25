@@ -310,6 +310,43 @@ export const peerCosHistoryManifestSchema = z.object({
   entries: z.array(peerCosHistoryManifestEntrySchema).max(150_000),
 }).strict();
 
+// --- Live CoS task-list + claim-metadata federation (#1712) --------------
+// A full-sync peer advertises its live task backlog (both the user TASKS.md and
+// the internal COS-TASKS.md) at GET /api/peer-sync/cos-tasks; a receiver (only
+// for peers it flags fullSync) runs a claim-aware per-task LWW merge into its own
+// task files (see cosTaskStore.mergePeerTasks). Unlike the cos-history archives
+// this is NOT byte replication — both peers mutate the files live and each task
+// carries claim/lease metadata (#1563), so the merge unions by id and respects
+// `leaseExpiresAt` so a peer's fresh claim is never clobbered.
+//
+// Each entry mirrors a parsed task (taskParser.parseTasksMarkdown output) plus a
+// `taskType` discriminator telling the receiver which file it belongs in.
+// `metadata` is permissive (task metadata shapes vary — context, reviewers[],
+// screenshots[], claim fields) and is re-escaped/re-parsed safely on the
+// receiver's next file read, so we only bound the key length + entry count here.
+// `.strict()` on the entry rejects a smuggled extra top-level field; the metadata
+// record stays open.
+const TASK_STATUSES = ['pending', 'in_progress', 'blocked', 'completed'];
+const TASK_PRIORITIES = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'];
+const peerCosTaskEntrySchema = z.object({
+  id: z.string().trim().min(1).max(200),
+  taskType: z.enum(['user', 'internal']),
+  status: z.enum(TASK_STATUSES),
+  priority: z.enum(TASK_PRIORITIES),
+  description: z.string().max(20_000),
+  approvalRequired: z.boolean().optional(),
+  autoApproved: z.boolean().optional(),
+  metadata: z.record(z.string().min(1).max(120), z.any()).optional(),
+}).strict();
+export const peerCosTasksSchema = z.object({
+  schemaVersion: z.number().int().min(0).max(1_000_000),
+  listHash: hex64,
+  // A pathological backlog can't force unbounded merge work; the sender logs +
+  // truncates beyond its own cap (kept under the byte cap the receiver enforces
+  // on the response). 50k is far beyond any realistic single-user backlog.
+  tasks: z.array(peerCosTaskEntrySchema).max(50_000),
+}).strict();
+
 export const peerPullMetadataSchema = z.object({
   // Backfill tries every online peer; no per-peer scoping field today.
   // .trim() so a stray-whitespace filename ('  a.png  ') normalizes to the real

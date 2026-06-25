@@ -49,6 +49,7 @@ import {
   syncNowForPeer,
   buildMediaLibraryManifest,
   buildCosHistoryManifest,
+  buildCosTasksPayload,
   ERR_NOT_FOUND,
   ERR_VALIDATION,
   ERR_SCHEMA_VERSION_AHEAD,
@@ -177,6 +178,20 @@ router.get('/library-manifest', asyncHandler(async (_req, res) => {
 // model); the receiver gates the PULL on its own `fullSync` flag.
 router.get('/cos-history-manifest', asyncHandler(async (_req, res) => {
   res.json(await buildCosHistoryManifest());
+}));
+
+// --- GET /cos-tasks --- advertise this instance's LIVE task backlog (#1712) so
+// a full-sync peer can run a claim-aware per-task merge into its own task files.
+//
+// Returns `{ schemaVersion, listHash, tasks: [{ id, taskType, status, priority,
+// description, metadata, ... }] }` over the user (TASKS.md) + internal
+// (COS-TASKS.md) backlogs. Unlike the cos-history archives this is a MERGE
+// source, not byte replication — the task metadata carries claim/lease fields
+// (#1563) the receiver respects so a peer's fresh claim is never clobbered.
+// Unauthenticated like every peer-sync route (Tailnet-only per the threat model);
+// the receiver gates the MERGE on its own `fullSync` flag.
+router.get('/cos-tasks', asyncHandler(async (_req, res) => {
+  res.json(await buildCosTasksPayload());
 }));
 
 // --- GET /cos-agent-archive --- stream ONE completed-agent archive file so a

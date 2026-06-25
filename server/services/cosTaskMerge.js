@@ -1,0 +1,162 @@
+/**
+ * CoS Task Merge — claim-aware per-task LWW for cross-peer federation (#1712)
+ *
+ * The second half of #1650: where the completed-agent HISTORY federates as pure
+ * append-only byte replication, the live task files (data/COS-TASKS.md /
+ * data/TASKS.md) are the opposite — BOTH full-sync peers mutate them, and each
+ * task carries claim/lease metadata (`claimedBy`/`claimedAt`/`leaseExpiresAt`
+ * from #1563). A naive whole-file last-writer-wins would clobber a peer's fresh
+ * claim and re-introduce the exact double-spawn hazard the lease exists to
+ * prevent. So a peer's task list is merged into the local one per task, not
+ * copied over it.
+ *
+ * Pure + side-effect-free: `mergeTaskLists(local, remote, { now })` takes two
+ * arrays of parsed tasks (taskParser.parseTasksMarkdown shape) and returns the
+ * merged array. Persistence + the wire fetch live in the callers
+ * (cosTaskStore.mergePeerTasks, peerSync.syncCosTasksFromPeer).
+ *
+ * Merge rules (run identically on BOTH peers so they converge to the same
+ * result regardless of which side initiates the sweep):
+ *
+ *  1. Union by id. A task present on only one side is kept as-is — that's how
+ *     each peer learns the other's backlog. (Deletes do NOT propagate, matching
+ *     PortOS's LWW-per-id model everywhere else — a task is "removed" by moving
+ *     it to `completed`, never by dropping the line; an omitted id would just
+ *     resurrect from the peer on the next sweep. See cosTaskStore.deleteTask.)
+ *
+ *  2. For a task on BOTH sides, choose the CONTENT by lifecycle rank: a task
+ *     only ever advances pending → in_progress → (completed|blocked), so the
+ *     higher-ranked status is the newer truth and wins. This makes completion
+ *     converge: once either peer marks a task done, the other adopts it instead
+ *     of holding it `in_progress` forever (a live claim alone can't carry that
+ *     signal — the owner strips the claim when it completes).
+ *
+ *  3. Resolve the CLAIM metadata independently of content via the live lease:
+ *     a side holding an unexpired lease is authoritative (the other peer must
+ *     see that claim so its spawn guard yields). If BOTH hold a live lease (the
+ *     sub-second claim race the lease only narrows, never eliminates), break the
+ *     tie deterministically — later `leaseExpiresAt`, then smaller `claimedBy` —
+ *     so both peers pick the SAME owner and the loser yields on its next spawn
+ *     guard. A claim is never kept on a terminal (completed/blocked) task —
+ *     that mirrors cosTaskStore's release-on-transition so a finished task is
+ *     freely re-claimable.
+ */
+
+import { isLeaseLive, getClaimOwner, CLAIM_METADATA_KEYS } from './cosTaskClaim.js';
+
+// Lifecycle rank — higher wins the content tiebreak (rule 2). Each status has a
+// distinct rank so two DIFFERENT statuses never tie (full convergence); the only
+// genuine tie is same-status-both-sides, where the content is already equivalent.
+const STATUS_RANK = Object.freeze({ completed: 4, blocked: 3, in_progress: 2, pending: 1 });
+const statusRank = (status) => STATUS_RANK[status] || 0;
+const isTerminalStatus = (status) => status === 'completed' || status === 'blocked';
+
+const PRIORITY_VALUES = Object.freeze({ CRITICAL: 4, HIGH: 3, MEDIUM: 2, LOW: 1 });
+
+const leaseMs = (metadata) => {
+  const raw = metadata?.leaseExpiresAt;
+  if (raw === undefined || raw === null || raw === '') return null;
+  const ms = typeof raw === 'number' ? raw : Date.parse(raw);
+  return Number.isFinite(ms) ? ms : null;
+};
+
+/**
+ * Pick the authoritative claim metadata for a task present on both sides, or
+ * null when neither side holds a live lease. Returns just the claim triple
+ * (claimedBy/claimedAt/leaseExpiresAt), never the full task.
+ */
+function resolveClaim(local, remote, now) {
+  const localLive = isLeaseLive(local.metadata, now);
+  const remoteLive = isLeaseLive(remote.metadata, now);
+  if (localLive && remoteLive) {
+    // Both claimed — deterministic, side-independent winner so the two peers
+    // converge on one owner. Later lease wins (the most-recently-renewed claim
+    // is the live worker); exact-tie falls back to the smaller claimedBy.
+    const lExp = leaseMs(local.metadata) ?? 0;
+    const rExp = leaseMs(remote.metadata) ?? 0;
+    if (lExp !== rExp) return claimTriple(lExp > rExp ? local : remote);
+    const lOwner = getClaimOwner(local.metadata) || '';
+    const rOwner = getClaimOwner(remote.metadata) || '';
+    return claimTriple(lOwner <= rOwner ? local : remote);
+  }
+  if (localLive) return claimTriple(local);
+  if (remoteLive) return claimTriple(remote);
+  return null;
+}
+
+function claimTriple(task) {
+  const out = {};
+  for (const key of CLAIM_METADATA_KEYS) {
+    if (task.metadata?.[key] !== undefined) out[key] = task.metadata[key];
+  }
+  return out;
+}
+
+/**
+ * Merge one task that exists on both sides into a single record.
+ */
+function mergeOne(local, remote, now) {
+  // (rule 2) content base by lifecycle rank — higher status wins; tie keeps
+  // local (same status ⇒ equivalent lifecycle state, local is the receiver).
+  const base = statusRank(remote.status) > statusRank(local.status) ? remote : local;
+
+  // (rule 3) claim metadata resolved separately so a live claim propagates even
+  // when content came from the other side.
+  const claim = resolveClaim(local, remote, now);
+
+  // Strip any claim keys from the base's metadata, then re-apply the resolved
+  // live claim — unless the merged status is terminal, where a claim must never
+  // linger (mirrors cosTaskStore release-on-transition).
+  const metadata = { ...(base.metadata || {}) };
+  for (const key of CLAIM_METADATA_KEYS) delete metadata[key];
+  if (claim && !isTerminalStatus(base.status)) Object.assign(metadata, claim);
+
+  return { ...base, metadata };
+}
+
+/**
+ * Normalize a record adopted wholesale from the peer (a remote-only task, or a
+ * merged record sourced from the remote side) so downstream consumers that key
+ * on `priorityValue` / `section` stay correct. Re-derives `priorityValue` from
+ * the (authoritative) `priority` string and drops the transient `section` so the
+ * generator re-buckets it by status.
+ */
+function normalizeAdopted(task) {
+  return {
+    ...task,
+    priorityValue: PRIORITY_VALUES[task.priority] || 2,
+  };
+}
+
+/**
+ * Merge a peer's task list into the local one. Pure: returns a new array, never
+ * mutates the inputs. `now` is injectable for deterministic tests.
+ *
+ * @param {Array} localTasks  parsed local tasks (taskParser shape)
+ * @param {Array} remoteTasks parsed peer tasks (same shape; wire-validated)
+ * @returns {Array} merged tasks
+ */
+export function mergeTaskLists(localTasks, remoteTasks, { now = Date.now() } = {}) {
+  const local = Array.isArray(localTasks) ? localTasks : [];
+  const remote = Array.isArray(remoteTasks) ? remoteTasks : [];
+  const remoteById = new Map();
+  for (const r of remote) {
+    if (r && typeof r.id === 'string' && r.id) remoteById.set(r.id, r);
+  }
+
+  const merged = [];
+  const seen = new Set();
+  for (const l of local) {
+    if (!l || typeof l.id !== 'string' || !l.id) continue;
+    seen.add(l.id);
+    const r = remoteById.get(l.id);
+    if (!r) { merged.push(l); continue; }
+    merged.push(normalizeAdopted(mergeOne(l, r, now)));
+  }
+  // Remote-only tasks — adopt so the backlog replicates both directions.
+  for (const r of remote) {
+    if (!r || typeof r.id !== 'string' || !r.id || seen.has(r.id)) continue;
+    merged.push(normalizeAdopted(r));
+  }
+  return merged;
+}

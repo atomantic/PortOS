@@ -14,6 +14,7 @@ vi.mock('../services/sharing/peerSync.js', () => ({
   syncNowForPeer: vi.fn(),
   buildMediaLibraryManifest: vi.fn(),
   buildCosHistoryManifest: vi.fn(),
+  buildCosTasksPayload: vi.fn(),
   ERR_NOT_FOUND: 'PEER_SYNC_SUBSCRIPTION_NOT_FOUND',
   ERR_VALIDATION: 'PEER_SYNC_SUBSCRIPTION_VALIDATION',
   ERR_SCHEMA_VERSION_AHEAD: 'PEER_SYNC_SCHEMA_VERSION_AHEAD',
@@ -546,6 +547,21 @@ describe('peer-sync routes', () => {
       expect(res.status).toBe(200);
       expect(res.body).toEqual(manifest);
       expect(svc.buildCosHistoryManifest).toHaveBeenCalled();
+    });
+  });
+
+  describe('GET /api/peer-sync/cos-tasks (#1712)', () => {
+    it('200 with the live task-list + claim-metadata payload', async () => {
+      const payload = {
+        schemaVersion: 1,
+        listHash: 'e'.repeat(64),
+        tasks: [{ id: 'task-a', taskType: 'user', status: 'pending', priority: 'MEDIUM', description: 'd', metadata: {} }],
+      };
+      svc.buildCosTasksPayload.mockResolvedValue(payload);
+      const res = await request(buildApp()).get('/api/peer-sync/cos-tasks');
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual(payload);
+      expect(svc.buildCosTasksPayload).toHaveBeenCalled();
     });
   });
 

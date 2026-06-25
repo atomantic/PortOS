@@ -1123,6 +1123,12 @@ describe('dataSync — per-category schema gate (cross-key isolation)', () => {
       // Versioned for the manifest envelope and gated by syncCosHistoryFromPeer's
       // gentle skip-if-ahead; declared non-record in NON_RECORD_SCHEMA_CATEGORIES.
       'cosHistory',
+      // Live CoS task list + claim metadata (#1712) → its own receiver-pull
+      // endpoint (GET /api/peer-sync/cos-tasks) with a claim-aware per-task merge,
+      // NOT the file-snapshot transfer. Versioned for the payload envelope and
+      // gated by syncCosTasksFromPeer's gentle skip-if-ahead; declared non-record
+      // in NON_RECORD_SCHEMA_CATEGORIES.
+      'cosTasks',
     ]);
     const covered = new Set(Object.values(dataSync.getSnapshotCategorySchemaKeys()).flat());
     for (const key of Object.keys(PORTOS_SCHEMA_VERSIONS)) {

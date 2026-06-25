@@ -12,7 +12,7 @@ import { join } from 'path';
 import { attachAllWatchers, attachWatcher, detachWatcher, shutdownAllWatchers, listAttachedWatchers } from './watcher.js';
 import { sharingEvents } from './importer.js';
 import { installSubscriptionListener } from './subscriptions.js';
-import { installPeerSyncListener, uninstallPeerSyncListener, peerSyncEvents, syncMediaLibraryWithAllPeers, syncCosHistoryWithAllPeers } from './peerSync.js';
+import { installPeerSyncListener, uninstallPeerSyncListener, peerSyncEvents, syncMediaLibraryWithAllPeers, syncCosHistoryWithAllPeers, syncCosTasksWithAllPeers } from './peerSync.js';
 import { hasSubscriptionAdapter } from './recordEvents.js';
 import { initAnnotationsSync } from './annotationsSync.js';
 
@@ -47,6 +47,12 @@ function startMediaLibrarySweep() {
       // best-effort sweep, separate per-peer catch so one can't sink the other.
       syncCosHistoryWithAllPeers().catch((err) => {
         console.error(`❌ sharing: cos-history sweep failed: ${err.message}`);
+      });
+      // Live CoS task list + claim metadata (#1712) — the second half of #1650.
+      // Same cadence; independent best-effort claim-aware merge so a peer's fresh
+      // claim gates spawns across machines. Separate catch keeps it isolated.
+      syncCosTasksWithAllPeers().catch((err) => {
+        console.error(`❌ sharing: cos-tasks sweep failed: ${err.message}`);
       });
     } catch (err) {
       console.error(`❌ sharing: full-sync sweep threw synchronously: ${err.message}`);
