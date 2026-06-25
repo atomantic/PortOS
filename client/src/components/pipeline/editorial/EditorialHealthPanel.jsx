@@ -83,25 +83,38 @@ function CheckSparkline({ counts }) {
 // remainder is surfaced as a "+N more" note rather than silently dropped.
 const MAX_CHECK_ROWS = 8;
 
-// A clickable breakdown row (#1606) — toggles a triage filter, with the active
-// highlight kept in one place so the category and check lists can't drift. The
-// row's inner content differs per breakdown, so it's passed as children; layout
-// tweaks (width/gap) come through `className`.
-function FilterRowButton({ active, title, onClick, className = '', children }) {
+// A breakdown row (#1606) — when `interactive`, a button that toggles a triage
+// filter, with the active highlight kept in one place so the category and check
+// lists can't drift. When NOT interactive (the triage can't filter to this row's
+// key — e.g. the synthetic `completeness` bucket of null-checkId findings, which
+// the triage drops), it renders as static text so the deep-link can't strand the
+// user on an empty list. Inner content differs per breakdown, so it's passed as
+// children; layout tweaks (width/gap) come through `className`.
+function FilterRowButton({ active, title, onClick, interactive = true, className = '', children }) {
+  const base = `flex items-center rounded px-1 py-0.5 text-[11px] ${className}`;
+  if (!interactive) {
+    return <span className={base} title={title}>{children}</span>;
+  }
   return (
     <button
       type="button"
       onClick={onClick}
       aria-pressed={active}
       title={title}
-      className={`flex items-center rounded px-1 py-0.5 text-[11px] transition-colors hover:bg-port-border/50 ${active ? 'bg-port-accent/15 ring-1 ring-port-accent/40' : ''} ${className}`}
+      className={`${base} transition-colors hover:bg-port-border/50 ${active ? 'bg-port-accent/15 ring-1 ring-port-accent/40' : ''}`}
     >
       {children}
     </button>
   );
 }
 
-export default function EditorialHealthPanel({ seriesId, refreshKey = 0, checksById = {} }) {
+export default function EditorialHealthPanel({
+  seriesId,
+  refreshKey = 0,
+  checksById = {},
+  filterableCheckIds = null,
+  filterableCategories = null,
+}) {
   const [health, setHealth] = useState(null);
   const [loading, setLoading] = useState(false);
   const [savingGate, setSavingGate] = useState(false);
@@ -131,6 +144,11 @@ export default function EditorialHealthPanel({ seriesId, refreshKey = 0, checksB
     toggleFilter(FINDING_FILTER_PARAMS.category, category, activeCategory === category);
   const filterByCheck = (checkId) =>
     toggleFilter(FINDING_FILTER_PARAMS.check, checkId, activeCheck === checkId);
+  // A breakdown row only deep-links when the triage can actually filter to it.
+  // When the caller doesn't supply the filterable sets (older callers / tests),
+  // default to clickable rather than disabling every row.
+  const canFilterCategory = (category) => !filterableCategories || filterableCategories.has(category);
+  const canFilterCheck = (checkId) => !filterableCheckIds || filterableCheckIds.has(checkId);
 
   // Guard against a stale response: switching series (or a fast refresh) can let
   // an older fetch resolve last and render the wrong series' health. Only the
@@ -264,12 +282,16 @@ export default function EditorialHealthPanel({ seriesId, refreshKey = 0, checksB
             {categories.map(({ category, count }) => {
               const regressed = regressions.find((r) => r.category === category);
               const active = activeCategory === category;
+              const canFilter = canFilterCategory(category);
               return (
                 <li key={category}>
                   <FilterRowButton
                     active={active}
+                    interactive={canFilter}
                     onClick={() => filterByCategory(category)}
-                    title={active ? `Clear the ${category} filter` : `Filter findings to ${category}`}
+                    title={canFilter
+                      ? (active ? `Clear the ${category} filter` : `Filter findings to ${category}`)
+                      : `${category} findings aren't in the triage filter`}
                     className="gap-1"
                   >
                     <span className={active ? 'text-gray-100' : 'text-gray-300'}>{category}</span>
@@ -296,12 +318,16 @@ export default function EditorialHealthPanel({ seriesId, refreshKey = 0, checksB
           <ul className="mt-1 space-y-0.5">
             {checkRows.map(({ checkId, label, count, counts, regressed }) => {
               const active = activeCheck === checkId;
+              const canFilter = canFilterCheck(checkId);
               return (
                 <li key={checkId}>
                   <FilterRowButton
                     active={active}
+                    interactive={canFilter}
                     onClick={() => filterByCheck(checkId)}
-                    title={active ? `Clear the ${label} filter` : `Filter findings to ${label}`}
+                    title={canFilter
+                      ? (active ? `Clear the ${label} filter` : `Filter findings to ${label}`)
+                      : `${label} findings aren't in the triage filter`}
                     className="w-full gap-2 text-gray-400"
                   >
                     <span className={`min-w-0 flex-1 truncate text-left ${active ? 'text-gray-100' : 'text-gray-300'}`} title={label}>{label}</span>

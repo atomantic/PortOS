@@ -20,7 +20,7 @@ import EditorialCustomCheckForm from '../components/pipeline/editorial/Editorial
 import EditorialFindingsTriage from '../components/pipeline/editorial/EditorialFindingsTriage';
 import EditorialHealthPanel from '../components/pipeline/editorial/EditorialHealthPanel';
 import ProviderModelSelector from '../components/ProviderModelSelector';
-import { groupChecksByScope } from '../lib/editorialChecks';
+import { groupChecksByScope, normCategory } from '../lib/editorialChecks';
 import { usePipelineProgress } from '../hooks/usePipelineProgress';
 import useProviderModels from '../hooks/useProviderModels';
 import {
@@ -84,6 +84,20 @@ export default function PipelineEditorialChecks() {
   );
   const enabledCount = useMemo(() => checks.filter((c) => c.enabled).length, [checks]);
   const scopeGroups = useMemo(() => groupChecksByScope(checks), [checks]);
+  // The check/category values the triage can actually FILTER to — i.e. those
+  // carried by a check-sourced finding (the triage drops null-checkId completeness
+  // / legacy findings). The health panel deep-links its breakdown rows to these
+  // filters (#1606), so a row whose key isn't here (e.g. the synthetic
+  // `completeness` check bucket, or a category present only on completeness
+  // findings) would link to an empty list — gate the panel's clickability on these.
+  const triageFilterableCheckIds = useMemo(
+    () => new Set(comments.filter((c) => c?.checkId).map((c) => c.checkId)),
+    [comments],
+  );
+  const triageFilterableCategories = useMemo(
+    () => new Set(comments.filter((c) => c?.checkId).map((c) => normCategory(c))),
+    [comments],
+  );
   // Config saves read server settings, so a run that fires before a save lands
   // would use stale config — gate the run buttons while any save is in flight.
   const anySaving = savingIds.size > 0;
@@ -570,7 +584,7 @@ export default function PipelineEditorialChecks() {
               <p className="rounded-lg border border-dashed border-port-border p-4 text-center text-xs text-gray-500">Select a series to view its findings.</p>
             ) : (
               <>
-                <EditorialHealthPanel seriesId={seriesId} refreshKey={healthRefresh} checksById={checksById} />
+                <EditorialHealthPanel seriesId={seriesId} refreshKey={healthRefresh} checksById={checksById} filterableCheckIds={triageFilterableCheckIds} filterableCategories={triageFilterableCategories} />
                 {loadingFindings ? (
                   <p className="flex items-center gap-2 text-sm text-gray-400"><Loader2 size={16} className="animate-spin" /> Loading findings…</p>
                 ) : (

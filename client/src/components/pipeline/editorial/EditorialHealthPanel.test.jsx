@@ -197,4 +197,43 @@ describe('EditorialHealthPanel', () => {
     fireEvent.click(screen.getByTitle('Filter findings to Cast economy'));
     await waitFor(() => expect(params()).toContain('fcheck=roster.economy'));
   });
+
+  it('renders a non-triage-filterable check row as static text, not a deep-link (#1606)', async () => {
+    // The synthetic `completeness` bucket counts null-checkId findings the triage
+    // drops, so it isn't in the filterable set — its row must not link to an empty list.
+    getEditorialHealth.mockResolvedValue(health({
+      openByCheck: { completeness: 2 },
+      trend: { points: [{ score: 83, openByCheck: { completeness: 2 } }], regressions: [], checkRegressions: [], delta: 0 },
+    }));
+    renderPanel({ seriesId: 'ser-1', filterableCheckIds: new Set(), filterableCategories: new Set() });
+    await screen.findByText('83');
+    const row = screen.getByTitle(/completeness findings aren't in the triage filter/i);
+    expect(row.tagName).toBe('SPAN');
+    expect(screen.queryByTitle('Filter findings to completeness')).toBeNull();
+  });
+
+  it('renders a non-triage-filterable category row as static text (#1606)', async () => {
+    getEditorialHealth.mockResolvedValue(health({ openByCategory: { plot: 2 } }));
+    renderPanel({ seriesId: 'ser-1', filterableCheckIds: new Set(), filterableCategories: new Set() });
+    await screen.findByText('83');
+    const row = screen.getByTitle(/plot findings aren't in the triage filter/i);
+    expect(row.tagName).toBe('SPAN');
+    expect(screen.queryByTitle('Filter findings to plot')).toBeNull();
+  });
+
+  it('keeps a filterable check row clickable when filterable sets are provided (#1606)', async () => {
+    getEditorialHealth.mockResolvedValue(health({
+      openByCheck: { 'roster.economy': 1 },
+      trend: { points: [{ score: 83, openByCheck: { 'roster.economy': 1 } }], regressions: [], checkRegressions: [], delta: 0 },
+    }));
+    renderPanel({
+      seriesId: 'ser-1',
+      checksById: { 'roster.economy': { label: 'Cast economy' } },
+      filterableCheckIds: new Set(['roster.economy']),
+      filterableCategories: new Set(),
+    });
+    await screen.findByText('83');
+    fireEvent.click(screen.getByTitle('Filter findings to Cast economy'));
+    await waitFor(() => expect(params()).toContain('fcheck=roster.economy'));
+  });
 });
