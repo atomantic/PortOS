@@ -126,6 +126,23 @@ describe('PipelineEditorialChecks — muted checks drop out of the health-panel 
     await screen.findByTitle(`Filter findings to ${CHECK_LABEL}`);
   });
 
+  it('resets the mute on a series switch so it never bleeds across series (#1697)', async () => {
+    listPipelineSeries.mockResolvedValue([
+      { id: 'ser-1', title: 'My Series' },
+      { id: 'ser-2', title: 'Second Series' },
+    ]);
+    renderPage();
+    await screen.findByTitle(`Filter findings to ${CHECK_LABEL}`);
+
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(`Disable check: ${CHECK_LABEL}`, 'i') }));
+    await screen.findByTitle(`${CHECK_LABEL} findings aren't in the triage filter`);
+
+    // Switching series reloads findings, which clears the session mute — the
+    // health-panel deep-link is live again on the new series.
+    fireEvent.change(screen.getByLabelText('Series'), { target: { value: 'ser-2' } });
+    await screen.findByTitle(`Filter findings to ${CHECK_LABEL}`);
+  });
+
   it('reconciles the health-panel rows back when the disable PATCH fails', async () => {
     patchEditorialCheck.mockImplementation((id, body) => (
       body.enabled === false ? Promise.reject(new Error('nope')) : Promise.resolve({ ...CHECK, ...body })

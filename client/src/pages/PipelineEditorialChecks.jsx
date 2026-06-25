@@ -153,6 +153,12 @@ export default function PipelineEditorialChecks() {
   useEffect(() => { activeSeriesRef.current = seriesId; }, [seriesId]);
 
   const loadFindings = useCallback((id) => {
+    // The session mute is local to the currently-shown findings: a series switch,
+    // a fresh load, or a run-completion reload resets it. This happened for free
+    // while the set lived in the triage (it unmounted during the loading state and
+    // remounted with empty local state); now that the parent owns it (#1697), reset
+    // it explicitly so a mute can't bleed across series or outlive a reload.
+    setHiddenCheckIds((s) => (s.size ? new Set() : s));
     if (!id) { setComments([]); return; }
     setLoadingFindings(true);
     // getPipelineManuscriptReview has no silent option, so request() already
