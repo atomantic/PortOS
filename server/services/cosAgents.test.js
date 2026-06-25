@@ -96,6 +96,30 @@ describe('completeAgent budget-ledger ordering (#1683)', () => {
     expect(order).toEqual(['usage', 'completed']);
   });
 
+  it('still emits agent:completed when the usage-ledger write rejects', async () => {
+    // recordDomainUsage is .catch-guarded, so a ledger-write failure must not
+    // swallow the completion event — the scheduler still needs to advance.
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    recordDomainUsage.mockRejectedValueOnce(new Error('ledger disk full'));
+
+    const agentId = 'agent-ledger-fail';
+    mockCosState.state.agents[agentId] = {
+      id: agentId,
+      status: 'running',
+      metadata: { taskType: 'scheduled' }
+    };
+    let emitted = false;
+    cosEvents.on('agent:completed', () => { emitted = true; });
+
+    await completeAgent(agentId, { success: true, duration: 500 });
+
+    expect(emitted).toBe(true);
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining(`Failed to record CoS budget usage for ${agentId}`)
+    );
+    consoleSpy.mockRestore();
+  });
+
   it('skips usage accounting for user tasks but still emits agent:completed', async () => {
     const agentId = 'agent-user';
     mockCosState.state.agents[agentId] = {
