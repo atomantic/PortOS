@@ -304,16 +304,23 @@ function isPastParticiple(lower) {
   return lower.length >= 4 && lower.endsWith('ed');
 }
 
-// Atmospheric prepositions that introduce the "what it was rendered into/with"
-// complement of a mood image ("the sky was streaked WITH red", "the room was
-// bathed IN light"). A setting subject ALONE is not enough — "the room was
-// searched" shares the subject but is a genuine action passive — so `mood`
-// classification additionally requires one of these right after the participle.
-const MOOD_PREPOSITIONS = new Set(['with', 'in']);
+// Atmospheric "rendering" participles (#1593). These describe a setting being
+// visually rendered into a mood — "the sky was STREAKED with red", "the room was
+// BATHED in light", "the street was LINED with trees". A setting subject ALONE is
+// not enough ("the room was searched" / "the city was attacked" share the subject
+// but are genuine action passives), so `mood` requires the participle itself to be
+// one of these atmospheric verbs.
+const MOOD_PARTICIPLES = new Set([
+  'streaked', 'bathed', 'lined', 'dotted', 'washed', 'tinged', 'tinted',
+  'cloaked', 'veiled', 'shrouded', 'framed', 'dappled', 'draped', 'filled',
+  'painted', 'suffused', 'flooded', 'blanketed', 'carpeted', 'studded',
+  'wreathed', 'gilded', 'edged', 'rimmed', 'crowned', 'swathed', 'illuminated',
+  'silhouetted', 'bordered', 'fringed', 'speckled', 'splashed', 'drenched',
+  'soaked', 'coated', 'covered', 'wrapped', 'softened', 'muffled', 'hushed',
+]);
 
-// How far past the participle to look for a "by <agent>" phrase (allowing an
-// intervening adverb/complement, "decorated elaborately by Mira") and for the
-// mood-image preposition ("streaked faintly with red").
+// How far past the participle to look for a "by <agent>" phrase, allowing an
+// intervening adverb ("decorated elaborately by Mira").
 const PASSIVE_LOOKAHEAD = 3;
 
 // Whether the subject governing a be-verb at token index `i` is a setting noun.
@@ -336,9 +343,9 @@ function hasSettingSubject(tokens, i) {
  *   - `'stative'` — a predicate-adjective state of being ("she was exhausted"),
  *                   not an action done to the subject — the dominant FP class.
  *   - `'mood'`    — a setting/weather/atmosphere image: a setting subject AND an
- *                   atmospheric complement ("the sky was streaked WITH red", "the
- *                   room was bathed IN light"). A setting subject alone is not
- *                   enough ("the room was searched" stays `'weak'`).
+ *                   atmospheric rendering participle ("the sky was STREAKED",
+ *                   "the room was BATHED in light"). A setting subject alone is
+ *                   not enough ("the room was searched" stays `'weak'`).
  * `byAgent` is true when an explicit "by <agent>" follows the participle (allowing
  * an intervening adverb, "decorated elaborately by Mira").
  *
@@ -360,11 +367,10 @@ export function findPassiveVoice(text) {
       const start = tokens[i].index;
       const end = tokens[j].index + tokens[j].word.length;
       const participle = tokens[j].lower;
-      // Small window just past the participle, where a "by <agent>" or an
-      // atmospheric "with/in <…>" complement would sit. Stop at a sentence/line
-      // boundary so the next sentence ("…exhausted. By morning…") can't leak a
-      // false agent in — tokenizeWords drops punctuation, so the boundary is
-      // detected from the raw text gap between adjacent tokens.
+      // Small window just past the participle, where a "by <agent>" phrase would
+      // sit. Stop at a sentence/line boundary so the next sentence ("…exhausted.
+      // By morning…") can't leak a false agent in — tokenizeWords drops
+      // punctuation, so the boundary is read from the raw text gap between tokens.
       const after = [];
       for (let k = j + 1; k < tokens.length && after.length < PASSIVE_LOOKAHEAD; k += 1) {
         const prev = tokens[k - 1];
@@ -378,13 +384,10 @@ export function findPassiveVoice(text) {
       const byAgent = byPos !== -1 && after.length > byPos + 1;
       let classification = 'weak';
       if (!byAgent) {
-        // A mood image needs BOTH a setting subject and an atmospheric complement
-        // ("with/in <…>") right after the participle, allowing one intervening
-        // adverb ("streaked faintly with red") — a setting subject alone
-        // over-suppresses real action passives ("the room was searched").
-        const moodComplement = after.some((t, k) =>
-          MOOD_PREPOSITIONS.has(t.lower) && (k === 0 || isLyAdverb(after[k - 1].lower)));
-        if (moodComplement && hasSettingSubject(tokens, i)) classification = 'mood';
+        // A mood image needs BOTH a setting subject AND an atmospheric rendering
+        // participle — a setting subject alone over-suppresses real action
+        // passives ("the room was searched", "the city was attacked").
+        if (MOOD_PARTICIPLES.has(participle) && hasSettingSubject(tokens, i)) classification = 'mood';
         else if (STATIVE_PARTICIPLES.has(participle)) classification = 'stative';
       }
       out.push({ index: start, anchor: text.slice(start, end), be: tokens[i].lower, participle, classification, byAgent });

@@ -181,9 +181,11 @@ describe('findPassiveVoice', () => {
     expect(hit.classification).toBe('weak');
   });
 
-  it('keeps an action passive with a setting subject but no atmospheric complement as weak', () => {
-    const [hit] = findPassiveVoice('The room was searched.');
-    expect(hit.classification).toBe('weak');
+  it('keeps an action passive with a setting subject as weak (no atmospheric participle)', () => {
+    expect(findPassiveVoice('The room was searched.')[0].classification).toBe('weak');
+    // A "with"/"in" complement on a non-atmospheric verb must not read as mood.
+    expect(findPassiveVoice('The room was searched with dogs.')[0].classification).toBe('weak');
+    expect(findPassiveVoice('The city was attacked in winter.')[0].classification).toBe('weak');
   });
 
   it('does not read a "by" from the next sentence as the agent', () => {
