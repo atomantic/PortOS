@@ -188,4 +188,60 @@ describe('EditorialFindingsTriage', () => {
     // Two open findings selected (the dismissed one is not selectable).
     expect(screen.getByText('2 selected')).toBeTruthy();
   });
+
+  // ---- Filter / search / sort (#1600) ----
+  const twoCheckChecks = {
+    'naming.dissimilar-names': { label: 'Character name dissimilarity', scope: 'series', kind: 'deterministic' },
+    'pacing.scene-drag': { label: 'Scene pacing drag', scope: 'scene', kind: 'llm' },
+  };
+  const twoCheckComments = () => [
+    { id: 'n1', checkId: 'naming.dissimilar-names', status: 'open', severity: 'high', issueNumber: 1, problem: 'Confusable names' },
+    { id: 'p1', checkId: 'pacing.scene-drag', status: 'open', severity: 'low', issueNumber: 2, problem: 'Sagging middle' },
+    { id: 'p2', checkId: 'pacing.scene-drag', status: 'dismissed', severity: 'low', issueNumber: 2, problem: 'Resolved drag' },
+  ];
+  const renderTwoCheck = (initialEntries = ['/']) => render(
+    <MemoryRouter initialEntries={initialEntries}>
+      <EditorialFindingsTriage seriesId="ser-1" checksById={twoCheckChecks} comments={twoCheckComments()} />
+    </MemoryRouter>,
+  );
+
+  it('filters findings by severity via a toolbar chip (#1600)', () => {
+    renderTwoCheck();
+    // Both findings visible up front.
+    expect(screen.getByText('Confusable names')).toBeTruthy();
+    expect(screen.getByText('Sagging middle')).toBeTruthy();
+    // Toggle the High severity chip — only the high-severity finding remains.
+    fireEvent.click(screen.getByRole('button', { name: 'High', pressed: false }));
+    expect(screen.getByText('Confusable names')).toBeTruthy();
+    expect(screen.queryByText('Sagging middle')).toBeNull();
+  });
+
+  it('filters findings by the free-text search box (#1600)', () => {
+    renderTwoCheck();
+    fireEvent.change(screen.getByLabelText('Search findings'), { target: { value: 'sagging' } });
+    expect(screen.getByText('Sagging middle')).toBeTruthy();
+    expect(screen.queryByText('Confusable names')).toBeNull();
+  });
+
+  it('filters by check via the Check select (#1600)', () => {
+    renderTwoCheck();
+    fireEvent.change(screen.getByLabelText('Check'), { target: { value: 'naming.dissimilar-names' } });
+    expect(screen.getByText('Confusable names')).toBeTruthy();
+    expect(screen.queryByText('Sagging middle')).toBeNull();
+  });
+
+  it('honors filters supplied via the URL query so a view is deep-linkable (#1600)', () => {
+    renderTwoCheck(['/?fsev=low']);
+    expect(screen.getByText('Sagging middle')).toBeTruthy();
+    expect(screen.queryByText('Confusable names')).toBeNull();
+  });
+
+  it('shows a no-match state with a clear-filters affordance when filters exclude everything (#1600)', () => {
+    renderTwoCheck(['/?fq=zzzznomatch']);
+    expect(screen.getByText(/No findings match the current filters/i)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /clear filters/i }));
+    // Clearing restores the findings.
+    expect(screen.getByText('Confusable names')).toBeTruthy();
+    expect(screen.getByText('Sagging middle')).toBeTruthy();
+  });
 });

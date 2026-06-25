@@ -14,10 +14,18 @@
  * bar bulk-accepts the selected findings that have an applicable fix and/or
  * bulk-dismisses the selection — each result reactively updates local state.
  */
-import { Link } from 'react-router-dom';
-import { ChevronDown, ChevronRight, ExternalLink, History, Check, X, Loader2, GitCompareArrows } from 'lucide-react';
+import { Link, useSearchParams } from 'react-router-dom';
+import { ChevronDown, ChevronRight, ExternalLink, History, Check, X, Loader2, GitCompareArrows, Search } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { groupFindingsByCheck, findingManuscriptLink, openFindingsTotal } from '../../../lib/editorialChecks';
+import {
+  groupFindingsByCheck,
+  findingManuscriptLink,
+  openFindingsTotal,
+  deriveFindingFacets,
+  applyFindingsView,
+  normalizeFindingSort,
+  FINDING_SORT_OPTIONS,
+} from '../../../lib/editorialChecks';
 import { fixEditsOf, selectedEditsFor } from '../manuscript/ManuscriptCommentCard';
 import InlineDiff from '../../ui/InlineDiff';
 import toast from '../../ui/Toast';
@@ -34,6 +42,17 @@ const STATUS_TONE = {
   accepted: 'text-emerald-400 line-through',
   dismissed: 'text-gray-600 line-through',
 };
+const SEVERITY_LABELS = { high: 'High', medium: 'Medium', low: 'Low' };
+const STATUS_LABELS = { open: 'Open', accepted: 'Accepted', dismissed: 'Dismissed' };
+const SEVERITY_FILTER_ORDER = ['high', 'medium', 'low'];
+const STATUS_FILTER_ORDER = ['open', 'accepted', 'dismissed'];
+
+// URL params that persist the triage filters/sort (#1600). `f`-prefixed so they
+// never collide with the page's own `series` / `custom` params.
+const FILTER_PARAMS = { severity: 'fsev', status: 'fstatus', scope: 'fscope', check: 'fcheck', issue: 'fissue', query: 'fq', sort: 'fsort' };
+const ALL_FILTER_PARAMS = Object.values(FILTER_PARAMS);
+const parseSet = (raw) => new Set((raw || '').split(',').map((s) => s.trim()).filter(Boolean));
+const serializeSet = (set) => [...set].join(',');
 
 // A check-sourced finding that's still open — the only findings that are
 // selectable / bulk-actionable. Named once so the predicate lives in one place.
@@ -336,9 +355,187 @@ function BulkActionBar({ seriesId, selected, onCommentChange, onClear }) {
   );
 }
 
+// A small multi-select toggle chip used for severity / status facets.
+function FilterChip({ active, onClick, label, dotClass }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] transition-colors ${
+        active
+          ? 'border-port-accent/60 bg-port-accent/20 text-gray-100'
+          : 'border-port-border text-gray-400 hover:text-gray-200 hover:border-port-accent/40'
+      }`}
+    >
+      {dotClass ? <span className={`h-1.5 w-1.5 rounded-full ${dotClass}`} /> : null}
+      {label}
+    </button>
+  );
+}
+
+// Filter + search + sort toolbar (#1600). Reads/writes the page URL so a triage
+// view (e.g. "high-severity open findings on Issue 5, sorted by severity") is
+// deep-linkable. Single-pick selects for scope/check/issue (potentially many),
+// multi-select chips for the small severity/status facets, a free-text search,
+// and the sort order — only facets actually present in the findings are offered.
+function FindingsToolbar({ facets, filters, sort, setParam, toggleInParam, onClear, activeCount }) {
+  return (
+    <div className="space-y-2 rounded-lg border border-port-border bg-port-card p-2.5">
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative min-w-[10rem] flex-1">
+          <Search size={13} className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-gray-500" />
+          <label htmlFor="ec-find-search" className="sr-only">Search findings</label>
+          <input
+            id="ec-find-search"
+            type="search"
+            value={filters.query}
+            onChange={(e) => setParam('query', e.target.value)}
+            placeholder="Search problem / location…"
+            className="w-full rounded border border-port-border bg-port-bg py-1 pl-7 pr-2 text-xs text-gray-200 placeholder:text-gray-600 focus:border-port-accent focus:outline-none"
+          />
+        </div>
+        <div className="flex items-center gap-1.5">
+          <label htmlFor="ec-find-sort" className="text-[10px] text-gray-500">Sort</label>
+          <select
+            id="ec-find-sort"
+            value={sort}
+            onChange={(e) => setParam('sort', e.target.value)}
+            className="rounded border border-port-border bg-port-bg px-1.5 py-1 text-xs text-gray-200 focus:border-port-accent focus:outline-none"
+          >
+            {FINDING_SORT_OPTIONS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+          </select>
+        </div>
+        {activeCount > 0 ? (
+          <button
+            type="button"
+            onClick={onClear}
+            className="inline-flex items-center gap-1 rounded border border-port-border px-1.5 py-1 text-[10px] text-gray-400 hover:text-white hover:border-port-accent/40"
+          >
+            <X size={11} /> Clear {activeCount}
+          </button>
+        ) : null}
+      </div>
+
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+        {facets.severities.size > 1 ? (
+          <span className="flex flex-wrap items-center gap-1">
+            <span className="text-[10px] uppercase tracking-wide text-gray-600">Severity</span>
+            {SEVERITY_FILTER_ORDER.filter((s) => facets.severities.has(s)).map((s) => (
+              <FilterChip
+                key={s}
+                active={filters.severities.has(s)}
+                onClick={() => toggleInParam('severity', s)}
+                label={SEVERITY_LABELS[s]}
+                dotClass={SEVERITY_DOT[s]}
+              />
+            ))}
+          </span>
+        ) : null}
+        {facets.statuses.size > 1 ? (
+          <span className="flex flex-wrap items-center gap-1">
+            <span className="text-[10px] uppercase tracking-wide text-gray-600">Status</span>
+            {STATUS_FILTER_ORDER.filter((s) => facets.statuses.has(s)).map((s) => (
+              <FilterChip
+                key={s}
+                active={filters.statuses.has(s)}
+                onClick={() => toggleInParam('status', s)}
+                label={STATUS_LABELS[s]}
+              />
+            ))}
+          </span>
+        ) : null}
+        {facets.scopes.length > 1 ? (
+          <span className="flex items-center gap-1">
+            <label htmlFor="ec-find-scope" className="text-[10px] uppercase tracking-wide text-gray-600">Category</label>
+            <select
+              id="ec-find-scope"
+              value={[...filters.scopes][0] || ''}
+              onChange={(e) => setParam('scope', e.target.value)}
+              className="max-w-[9rem] rounded border border-port-border bg-port-bg px-1.5 py-1 text-xs text-gray-200 focus:border-port-accent focus:outline-none"
+            >
+              <option value="">All</option>
+              {facets.scopes.map((s) => <option key={s.scope} value={s.scope}>{s.label}</option>)}
+            </select>
+          </span>
+        ) : null}
+        {facets.checks.length > 1 ? (
+          <span className="flex items-center gap-1">
+            <label htmlFor="ec-find-check" className="text-[10px] uppercase tracking-wide text-gray-600">Check</label>
+            <select
+              id="ec-find-check"
+              value={[...filters.checkIds][0] || ''}
+              onChange={(e) => setParam('check', e.target.value)}
+              className="max-w-[11rem] truncate rounded border border-port-border bg-port-bg px-1.5 py-1 text-xs text-gray-200 focus:border-port-accent focus:outline-none"
+            >
+              <option value="">All</option>
+              {facets.checks.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
+            </select>
+          </span>
+        ) : null}
+        {facets.issues.length > 1 ? (
+          <span className="flex items-center gap-1">
+            <label htmlFor="ec-find-issue" className="text-[10px] uppercase tracking-wide text-gray-600">Issue</label>
+            <select
+              id="ec-find-issue"
+              value={[...filters.issues][0] || ''}
+              onChange={(e) => setParam('issue', e.target.value)}
+              className="max-w-[9rem] rounded border border-port-border bg-port-bg px-1.5 py-1 text-xs text-gray-200 focus:border-port-accent focus:outline-none"
+            >
+              <option value="">All</option>
+              {facets.issues.map((i) => <option key={i.key} value={i.key}>{i.label}</option>)}
+            </select>
+          </span>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 export default function EditorialFindingsTriage({ seriesId, comments = [], checksById = {}, onCommentChange }) {
   const groups = useMemo(() => groupFindingsByCheck(comments, checksById), [comments, checksById]);
   const [selectedIds, setSelectedIds] = useState(() => new Set());
+
+  // ---- Filter / search / sort, persisted in the URL so a view is deep-linkable
+  // (#1600). Facets are derived from the full (unfiltered) groups so options never
+  // vanish as you narrow; the toolbar only ever offers facets that exist. ----
+  const [searchParams, setSearchParams] = useSearchParams();
+  const facets = useMemo(() => deriveFindingFacets(groups), [groups]);
+  const sort = normalizeFindingSort(searchParams.get(FILTER_PARAMS.sort));
+  const filters = useMemo(() => ({
+    severities: parseSet(searchParams.get(FILTER_PARAMS.severity)),
+    statuses: parseSet(searchParams.get(FILTER_PARAMS.status)),
+    scopes: parseSet(searchParams.get(FILTER_PARAMS.scope)),
+    checkIds: parseSet(searchParams.get(FILTER_PARAMS.check)),
+    issues: parseSet(searchParams.get(FILTER_PARAMS.issue)),
+    query: searchParams.get(FILTER_PARAMS.query) || '',
+  }), [searchParams]);
+  const activeFilterCount = filters.severities.size + filters.statuses.size
+    + filters.scopes.size + filters.checkIds.size + filters.issues.size
+    + (filters.query ? 1 : 0);
+
+  // Write a single facet param (empty value clears it), preserving every other
+  // param the page owns. `replace` so filtering doesn't pile up history entries.
+  const setParam = (key, value) => setSearchParams((prev) => {
+    const next = new URLSearchParams(prev);
+    if (value) next.set(FILTER_PARAMS[key], value); else next.delete(FILTER_PARAMS[key]);
+    return next;
+  }, { replace: true });
+  // Toggle one token in a comma-list (multi-select) param.
+  const toggleInParam = (key, token) => setSearchParams((prev) => {
+    const next = new URLSearchParams(prev);
+    const set = parseSet(prev.get(FILTER_PARAMS[key]));
+    if (set.has(token)) set.delete(token); else set.add(token);
+    if (set.size) next.set(FILTER_PARAMS[key], serializeSet(set)); else next.delete(FILTER_PARAMS[key]);
+    return next;
+  }, { replace: true });
+  const clearFilters = () => setSearchParams((prev) => {
+    const next = new URLSearchParams(prev);
+    ALL_FILTER_PARAMS.forEach((p) => next.delete(p));
+    return next;
+  }, { replace: true });
+
+  const view = useMemo(() => applyFindingsView(groups, filters, sort), [groups, filters, sort]);
 
   // Selection only ever holds open findings — once a finding is accepted/dismissed
   // (here or in the editor) drop it so the bar's counts never count resolved ones.
@@ -380,8 +577,18 @@ export default function EditorialFindingsTriage({ seriesId, comments = [], check
     );
   }
   const totalOpen = openFindingsTotal(groups);
+  const shownOpen = openFindingsTotal(view);
   return (
     <div className="space-y-2">
+      <FindingsToolbar
+        facets={facets}
+        filters={filters}
+        sort={sort}
+        setParam={setParam}
+        toggleInParam={toggleInParam}
+        onClear={clearFilters}
+        activeCount={activeFilterCount}
+      />
       {selectedComments.length > 0 ? (
         <BulkActionBar
           seriesId={seriesId}
@@ -390,9 +597,18 @@ export default function EditorialFindingsTriage({ seriesId, comments = [], check
           onClear={clearSelection}
         />
       ) : (
-        <p className="text-[11px] text-gray-500">{totalOpen} open finding{totalOpen === 1 ? '' : 's'} across {groups.length} check{groups.length === 1 ? '' : 's'}</p>
+        <p className="text-[11px] text-gray-500">
+          {activeFilterCount > 0
+            ? `${shownOpen} of ${totalOpen} open finding${totalOpen === 1 ? '' : 's'} shown · ${view.length} of ${groups.length} check${groups.length === 1 ? '' : 's'}`
+            : `${totalOpen} open finding${totalOpen === 1 ? '' : 's'} across ${groups.length} check${groups.length === 1 ? '' : 's'}`}
+        </p>
       )}
-      {groups.map((g) => (
+      {view.length === 0 ? (
+        <p className="rounded-lg border border-dashed border-port-border p-4 text-center text-xs text-gray-500">
+          No findings match the current filters. <button type="button" onClick={clearFilters} className="text-port-accent hover:underline">Clear filters</button>.
+        </p>
+      ) : null}
+      {view.map((g) => (
         <CheckGroup
           key={g.checkId}
           seriesId={seriesId}

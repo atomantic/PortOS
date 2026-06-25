@@ -5,6 +5,10 @@ import {
   openFindingsTotal,
   findingManuscriptLink,
   scopeLabel,
+  deriveFindingFacets,
+  applyFindingsView,
+  normalizeFindingSort,
+  findingIssueKey,
 } from './editorialChecks.js';
 
 const checks = [
@@ -99,5 +103,117 @@ describe('scopeLabel', () => {
     expect(scopeLabel('series')).toBe('Series');
     expect(scopeLabel('galaxy')).toBe('Galaxy');
     expect(scopeLabel('')).toBe('Other');
+  });
+});
+
+const findingsFixture = () => [
+  { id: 'a1', checkId: 'pacing', status: 'open', severity: 'high', issueNumber: 2, problem: 'Slow open', location: 'p1' },
+  { id: 'a2', checkId: 'pacing', status: 'dismissed', severity: 'low', issueNumber: 2, problem: 'Old note' },
+  { id: 'b1', checkId: 'naming', status: 'open', severity: 'medium', issueNumber: 1, problem: 'Confusable names' },
+  { id: 'b2', checkId: 'naming', status: 'open', severity: 'low', issueNumber: null, problem: 'Series-wide naming' },
+];
+const fixtureRows = {
+  pacing: { label: 'Pacing', scope: 'scene' },
+  naming: { label: 'Naming', scope: 'series' },
+};
+const groupsFixture = () => groupFindingsByCheck(findingsFixture(), fixtureRows);
+
+describe('findingIssueKey', () => {
+  it('keys by issue number, bucketing series-wide findings under "none"', () => {
+    expect(findingIssueKey({ issueNumber: 5 })).toBe('5');
+    expect(findingIssueKey({ issueNumber: null })).toBe('none');
+    expect(findingIssueKey({})).toBe('none');
+  });
+});
+
+describe('normalizeFindingSort', () => {
+  it('passes through known sort ids and defaults unknown to scope', () => {
+    expect(normalizeFindingSort('severity')).toBe('severity');
+    expect(normalizeFindingSort('issue')).toBe('issue');
+    expect(normalizeFindingSort('bogus')).toBe('scope');
+    expect(normalizeFindingSort(undefined)).toBe('scope');
+  });
+});
+
+describe('deriveFindingFacets', () => {
+  it('enumerates only the facets present, ordering checks scope→label and issues numeric-then-none', () => {
+    const f = deriveFindingFacets(groupsFixture());
+    expect([...f.severities].sort()).toEqual(['high', 'low', 'medium']);
+    expect([...f.statuses].sort()).toEqual(['dismissed', 'open']);
+    // scene (Pacing) sorts before series (Naming) per CHECK_SCOPE_ORDER.
+    expect(f.checks.map((c) => c.id)).toEqual(['pacing', 'naming']);
+    expect(f.scopes.map((s) => s.scope)).toEqual(['scene', 'series']);
+    expect(f.issues.map((i) => i.key)).toEqual(['1', '2', 'none']);
+    expect(f.issues.find((i) => i.key === 'none').label).toBe('Series-wide');
+  });
+});
+
+describe('applyFindingsView', () => {
+  it('returns all groups unchanged when no filters are active', () => {
+    const view = applyFindingsView(groupsFixture(), {}, 'scope');
+    expect(view.map((g) => g.checkId)).toEqual(['pacing', 'naming']);
+    expect(view.reduce((n, g) => n + g.comments.length, 0)).toBe(4);
+  });
+
+  it('filters by severity and recomputes the group counts to match', () => {
+    const view = applyFindingsView(groupsFixture(), { severities: new Set(['high']) }, 'scope');
+    expect(view).toHaveLength(1);
+    expect(view[0].checkId).toBe('pacing');
+    expect(view[0].comments.map((c) => c.id)).toEqual(['a1']);
+    expect(view[0].open).toBe(1);
+    expect(view[0].total).toBe(1);
+    expect(view[0].counts).toEqual({ high: 1, medium: 0, low: 0 });
+  });
+
+  it('filters by status (open only) dropping resolved findings', () => {
+    const view = applyFindingsView(groupsFixture(), { statuses: new Set(['open']) }, 'scope');
+    const ids = view.flatMap((g) => g.comments.map((c) => c.id));
+    expect(ids).toEqual(['a1', 'b1', 'b2']);
+  });
+
+  it('filters by scope (category) and by check id', () => {
+    const byScope = applyFindingsView(groupsFixture(), { scopes: new Set(['series']) }, 'scope');
+    expect(byScope.map((g) => g.checkId)).toEqual(['naming']);
+    const byCheck = applyFindingsView(groupsFixture(), { checkIds: new Set(['pacing']) }, 'scope');
+    expect(byCheck.map((g) => g.checkId)).toEqual(['pacing']);
+  });
+
+  it('filters by issue, including the series-wide "none" bucket', () => {
+    const issue2 = applyFindingsView(groupsFixture(), { issues: new Set(['2']) }, 'scope');
+    expect(issue2.flatMap((g) => g.comments.map((c) => c.id))).toEqual(['a1', 'a2']);
+    const seriesWide = applyFindingsView(groupsFixture(), { issues: new Set(['none']) }, 'scope');
+    expect(seriesWide.flatMap((g) => g.comments.map((c) => c.id))).toEqual(['b2']);
+  });
+
+  it('matches the free-text query against problem and location, case-insensitively', () => {
+    const view = applyFindingsView(groupsFixture(), { query: 'confusable' }, 'scope');
+    expect(view.flatMap((g) => g.comments.map((c) => c.id))).toEqual(['b1']);
+    const byLocation = applyFindingsView(groupsFixture(), { query: 'P1' }, 'scope');
+    expect(byLocation.flatMap((g) => g.comments.map((c) => c.id))).toEqual(['a1']);
+  });
+
+  it('sorts findings within a group by severity (high→low) when sort=severity', () => {
+    const view = applyFindingsView(groupsFixture(), { checkIds: new Set(['naming']) }, 'severity');
+    expect(view[0].comments.map((c) => c.id)).toEqual(['b1', 'b2']); // medium before low
+  });
+
+  it('sorts groups by most-severe open findings first when sort=severity', () => {
+    // pacing has a high open finding; naming's most severe open is medium.
+    const view = applyFindingsView(groupsFixture(), {}, 'severity');
+    expect(view.map((g) => g.checkId)).toEqual(['pacing', 'naming']);
+  });
+
+  it('sorts findings by issue number with series-wide last when sort=issue', () => {
+    const view = applyFindingsView(groupsFixture(), { checkIds: new Set(['naming']) }, 'issue');
+    expect(view[0].comments.map((c) => c.id)).toEqual(['b1', 'b2']); // issue 1 before series-wide
+  });
+
+  it('combines filters (AND semantics across facets)', () => {
+    const view = applyFindingsView(
+      groupsFixture(),
+      { statuses: new Set(['open']), severities: new Set(['low']) },
+      'scope',
+    );
+    expect(view.flatMap((g) => g.comments.map((c) => c.id))).toEqual(['b2']);
   });
 });

@@ -105,3 +105,145 @@ export function findingManuscriptLink(seriesId, comment) {
     : base;
   return comment?.id ? `${path}?comment=${encodeURIComponent(comment.id)}` : path;
 }
+
+// ---- Findings triage filtering + sorting (#1600). Pure so the page and its
+// unit tests share them; the component owns the URL-param plumbing. ----
+
+const FINDING_SEVERITY_RANK = Object.freeze({ high: 0, medium: 1, low: 2 });
+const FINDING_STATUS_RANK = Object.freeze({ open: 0, accepted: 1, dismissed: 2 });
+const severityRank = (s) => (s in FINDING_SEVERITY_RANK ? FINDING_SEVERITY_RANK[s] : 2);
+const statusRank = (s) => (s in FINDING_STATUS_RANK ? FINDING_STATUS_RANK[s] : 99);
+const normSeverity = (c) => (c?.severity in FINDING_SEVERITY_RANK ? c.severity : 'low');
+const normStatus = (c) => (c?.status === 'accepted' || c?.status === 'dismissed' ? c.status : 'open');
+
+/** The issue facet key for a finding: its issue number as a string, or `none` for series-wide. */
+export const findingIssueKey = (comment) =>
+  (Number.isInteger(comment?.issueNumber) ? String(comment.issueNumber) : 'none');
+
+/** Sort options offered in the triage toolbar. `id` is what persists in the URL. */
+export const FINDING_SORT_OPTIONS = Object.freeze([
+  { id: 'scope', label: 'Scope & check' },
+  { id: 'severity', label: 'Severity' },
+  { id: 'issue', label: 'Issue' },
+  { id: 'status', label: 'Status' },
+]);
+const FINDING_SORT_IDS = Object.freeze(FINDING_SORT_OPTIONS.map((o) => o.id));
+/** Coerce an arbitrary `sort` value to a known option id (default `scope`). */
+export const normalizeFindingSort = (sort) => (FINDING_SORT_IDS.includes(sort) ? sort : 'scope');
+
+/**
+ * Enumerate the filter facets actually present in the current findings, so the
+ * toolbar only offers values that exist. Takes the already-grouped findings
+ * (groups carry the resolved scope + check label). Returns
+ *   `{ severities:Set, statuses:Set, scopes:[{scope,label}], checks:[{id,label}], issues:[{key,label}] }`
+ * with checks ordered as the groups are (scope→label) and issues numeric-ascending
+ * with the series-wide bucket last.
+ */
+export function deriveFindingFacets(groups = []) {
+  const severities = new Set();
+  const statuses = new Set();
+  const scopes = new Map();
+  const checks = [];
+  const issues = new Map();
+  for (const g of groups) {
+    if (!scopes.has(g.scope)) scopes.set(g.scope, scopeLabel(g.scope));
+    checks.push({ id: g.checkId, label: g.label });
+    for (const c of g.comments) {
+      severities.add(normSeverity(c));
+      statuses.add(normStatus(c));
+      const key = findingIssueKey(c);
+      if (!issues.has(key)) issues.set(key, key === 'none' ? 'Series-wide' : `Issue ${c.issueNumber}`);
+    }
+  }
+  const issueList = [...issues.entries()]
+    .map(([key, label]) => ({ key, label }))
+    .sort((a, b) => {
+      if (a.key === 'none') return 1;
+      if (b.key === 'none') return -1;
+      return Number(a.key) - Number(b.key);
+    });
+  return {
+    severities,
+    statuses,
+    scopes: [...scopes.entries()].map(([scope, label]) => ({ scope, label })),
+    checks,
+    issues: issueList,
+  };
+}
+
+// A single comment passes the comment-level filters (severity/status/issue/query).
+// Scope + check are group-level and filtered separately.
+function commentPassesFilters(c, filters) {
+  const { severities, statuses, issues, query } = filters;
+  if (severities?.size && !severities.has(normSeverity(c))) return false;
+  if (statuses?.size && !statuses.has(normStatus(c))) return false;
+  if (issues?.size && !issues.has(findingIssueKey(c))) return false;
+  if (query) {
+    const hay = `${c.problem || ''} ${c.location || ''}`.toLowerCase();
+    if (!hay.includes(query.toLowerCase())) return false;
+  }
+  return true;
+}
+
+// Recompute a group's open/total/severity counts + stale tally from a filtered
+// comment subset so the header reflects what's actually shown (never lies).
+function recountGroup(group, comments) {
+  const counts = emptyCounts();
+  let open = 0;
+  let stale = 0;
+  for (const c of comments) {
+    if (normStatus(c) === 'open') {
+      open += 1;
+      counts[normSeverity(c)] += 1;
+      if (c.stale) stale += 1;
+    }
+  }
+  return { ...group, comments, open, total: comments.length, counts, stale };
+}
+
+function sortComments(comments, sort) {
+  if (sort === 'scope') return comments;
+  const cmp = {
+    severity: (a, b) => severityRank(normSeverity(a)) - severityRank(normSeverity(b))
+      || statusRank(normStatus(a)) - statusRank(normStatus(b)),
+    status: (a, b) => statusRank(normStatus(a)) - statusRank(normStatus(b))
+      || severityRank(normSeverity(a)) - severityRank(normSeverity(b)),
+    issue: (a, b) => {
+      const an = Number.isInteger(a.issueNumber) ? a.issueNumber : Infinity;
+      const bn = Number.isInteger(b.issueNumber) ? b.issueNumber : Infinity;
+      return an - bn || severityRank(normSeverity(a)) - severityRank(normSeverity(b));
+    },
+  }[sort];
+  // Stable sort over a copy so the original grouping order is the tiebreak.
+  return comments
+    .map((c, i) => [c, i])
+    .sort((a, b) => cmp(a[0], b[0]) || a[1] - b[1])
+    .map(([c]) => c);
+}
+
+function sortGroups(groups, sort) {
+  if (sort !== 'severity') return groups; // groups already arrive scope→label ordered
+  // Surface the checks with the most severe open findings first.
+  const weight = (g) => g.counts.high * 100 + g.counts.medium * 10 + g.counts.low;
+  return [...groups].sort((a, b) => weight(b) - weight(a) || b.open - a.open);
+}
+
+/**
+ * Apply the toolbar's filters + sort to the grouped findings. Drops groups whose
+ * scope/check is filtered out or that have no comment matching the comment-level
+ * filters, recomputes each surviving group's counts, sorts findings within each
+ * group, then orders the groups. `filters` carries Sets for severities, statuses,
+ * scopes, checkIds, issues plus a `query` string; any empty/absent facet is "all".
+ */
+export function applyFindingsView(groups = [], filters = {}, sort = 'scope') {
+  const view = normalizeFindingSort(sort);
+  const out = [];
+  for (const g of groups) {
+    if (filters.scopes?.size && !filters.scopes.has(g.scope)) continue;
+    if (filters.checkIds?.size && !filters.checkIds.has(g.checkId)) continue;
+    const matched = g.comments.filter((c) => commentPassesFilters(c, filters));
+    if (!matched.length) continue;
+    out.push(recountGroup(g, sortComments(matched, view)));
+  }
+  return sortGroups(out, view);
+}
