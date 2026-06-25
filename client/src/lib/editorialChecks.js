@@ -221,11 +221,27 @@ function sortComments(comments, sort) {
     .map(([c]) => c);
 }
 
+// Order the groups to match the chosen sort, so a multi-check view reads as
+// sorted across groups — not just within each one. Each group's lead value comes
+// from its already-sorted comments (e.g. its lowest issue number / best status).
 function sortGroups(groups, sort) {
-  if (sort !== 'severity') return groups; // groups already arrive scope→label ordered
-  // Surface the checks with the most severe open findings first.
-  const weight = (g) => g.counts.high * 100 + g.counts.medium * 10 + g.counts.low;
-  return [...groups].sort((a, b) => weight(b) - weight(a) || b.open - a.open);
+  if (sort === 'severity') {
+    // Surface the checks with the most severe open findings first.
+    const weight = (g) => g.counts.high * 100 + g.counts.medium * 10 + g.counts.low;
+    return [...groups].sort((a, b) => weight(b) - weight(a) || b.open - a.open);
+  }
+  if (sort === 'issue') {
+    const leadIssue = (g) => {
+      const c = g.comments.find((x) => Number.isInteger(x.issueNumber));
+      return c ? c.issueNumber : Infinity; // series-wide-only groups sort last
+    };
+    return [...groups].sort((a, b) => leadIssue(a) - leadIssue(b) || a.label.localeCompare(b.label));
+  }
+  if (sort === 'status') {
+    const leadStatus = (g) => Math.min(...g.comments.map((c) => statusRank(normStatus(c))));
+    return [...groups].sort((a, b) => leadStatus(a) - leadStatus(b) || a.label.localeCompare(b.label));
+  }
+  return groups; // scope: already scope→label ordered
 }
 
 /**

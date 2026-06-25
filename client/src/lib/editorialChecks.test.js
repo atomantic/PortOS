@@ -208,6 +208,19 @@ describe('applyFindingsView', () => {
     expect(view[0].comments.map((c) => c.id)).toEqual(['b1', 'b2']); // issue 1 before series-wide
   });
 
+  it('orders GROUPS by their lowest issue number when sort=issue (not just rows)', () => {
+    // naming's lowest issue is 1; pacing's is 2 — so naming leads even though the
+    // default scope order puts scene-scoped pacing first.
+    const view = applyFindingsView(groupsFixture(), {}, 'issue');
+    expect(view.map((g) => g.checkId)).toEqual(['naming', 'pacing']);
+  });
+
+  it('orders GROUPS by best open status then label when sort=status', () => {
+    // Both groups have an open finding (rank 0) → alphabetical tiebreak: Naming, Pacing.
+    const view = applyFindingsView(groupsFixture(), {}, 'status');
+    expect(view.map((g) => g.checkId)).toEqual(['naming', 'pacing']);
+  });
+
   it('combines filters (AND semantics across facets)', () => {
     const view = applyFindingsView(
       groupsFixture(),
