@@ -10,8 +10,8 @@
  * (`SideBySideDiff`, default) and the compact stacked `InlineDiff`.
  */
 
-import { useMemo, useState } from 'react';
-import { Loader2, Sparkles, Check, X, Ban, Columns2, Rows2, Copy, ChevronLeft, ChevronRight, Undo2 } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { Loader2, Sparkles, Check, X, Ban, Columns2, Rows2, Copy, ChevronLeft, ChevronRight, Undo2, Pencil } from 'lucide-react';
 import InlineDiff from '../../ui/InlineDiff';
 import SideBySideDiff from '../../ui/SideBySideDiff';
 import toast from '../../ui/Toast';
@@ -44,7 +44,7 @@ export function CopyId({ id }) {
 // On-screen cheatsheet for the card's keyboard shortcuts (#1603) — only the
 // actions actually available for this note are shown (prev/next when the card is
 // part of a triage order, Accept/regenerate when a fix exists, Generate when not).
-function ShortcutHints({ hasNav, hasFix, hasFalsePositive }) {
+function ShortcutHints({ hasNav, hasFix, hasFalsePositive, hasManualEdit }) {
   return (
     <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 pt-1.5 text-[10px] text-gray-600">
       {hasNav ? (
@@ -58,6 +58,9 @@ function ShortcutHints({ hasNav, hasFix, hasFalsePositive }) {
       ) : (
         <span className="inline-flex items-center gap-1"><Kbd size="sm">g</Kbd> generate</span>
       )}
+      {hasManualEdit ? (
+        <span className="inline-flex items-center gap-1"><Kbd size="sm">m</Kbd> manual edit</span>
+      ) : null}
       <span className="inline-flex items-center gap-1"><Kbd size="sm">d</Kbd> dismiss</span>
       {hasFalsePositive ? (
         <span className="inline-flex items-center gap-1"><Kbd size="sm">f</Kbd> false positive</span>
@@ -213,6 +216,14 @@ export default function ManuscriptCommentCard({
   // Namespace form ids so two copies of an open comment don't share ids.
   const scope = idScope || comment.id;
   const [diffStyle, setDiffStyle] = useState('side'); // 'side' | 'inline'
+  // Manual-edit mode (#1610) — for findings whose suggested fix is wrong or
+  // absent, free-text the replacement for the anchored span and apply it through
+  // the same accept path a generated fix uses. Local (not parent-owned) state:
+  // it's an in-the-moment action in the open-note flow, where only one card
+  // mounts. Anchored on `comment.anchorQuote`, which the accept endpoint locates
+  // (whitespace-tolerant) to splice the replacement in.
+  const [manualMode, setManualMode] = useState(false);
+  const [manualText, setManualText] = useState('');
   const hasFix = !!comment.fix;
   const fixEdits = useMemo(() => fixEditsOf(comment), [comment]);
   const fixKey = useMemo(() => fixKeyOf(fixEdits), [fixEdits]);
@@ -262,6 +273,38 @@ export default function ManuscriptCommentCard({
     });
   };
 
+  // A manual edit needs a span to anchor against — without an anchorQuote the
+  // accept path can't locate where to splice, so the option isn't offered.
+  const canManualEdit = !!comment.anchorQuote;
+  const openManualEdit = () => {
+    // Seed with the current span so the diff starts as a no-op the user edits down.
+    setManualText(comment.anchorQuote || '');
+    setManualMode(true);
+  };
+  const applyManualEdit = async () => {
+    if (!comment.anchorQuote) return;
+    const edit = {
+      issueId: comment.issueId,
+      stageId: comment.stageId,
+      issueNumber: comment.issueNumber,
+      find: comment.anchorQuote,
+      replace: manualText,
+    };
+    const result = await runAccept([edit]);
+    if (!result) return;
+    setManualMode(false);
+    onAccepted(result);
+    showAcceptedFixToast({
+      seriesId,
+      commentId: result.comment?.id || comment.id,
+      count: 1,
+      applyResult: onAccepted,
+    });
+  };
+  // Leaving a note (nav/swap) abandons any half-typed manual edit so the next
+  // note doesn't inherit stale replacement text.
+  useEffect(() => { setManualMode(false); setManualText(''); }, [comment.id]);
+
   const dismiss = async () => {
     // A plain dismiss is "won't fix" — clear any prior false-positive reason so
     // re-dismissing a re-opened finding doesn't keep a stale mark.
@@ -300,10 +343,11 @@ export default function ManuscriptCommentCard({
     ArrowRight: nav?.onNext,
     k: nav?.onPrev,
     j: nav?.onNext,
-    a: canAccept && !accepting ? accept : undefined,
+    a: canAccept && !accepting && !manualMode ? accept : undefined,
     d: !accepting ? dismiss : undefined,
     f: canFlagFalsePositive && !accepting ? markFalsePositive : undefined,
     g: !generating && !accepting ? generate : undefined,
+    m: canManualEdit && !accepting ? (manualMode ? () => setManualMode(false) : openManualEdit) : undefined,
   });
 
   return (
@@ -407,6 +451,41 @@ export default function ManuscriptCommentCard({
         </div>
       ) : null}
 
+      {manualMode ? (
+        <div className="space-y-1.5 border border-port-accent/40 rounded bg-port-card/60 p-2">
+          <p className="text-[10px] uppercase tracking-wider text-gray-500">Manual edit — rewrite the anchored span</p>
+          <Diff oldText={comment.anchorQuote || ''} newText={manualText} emptyLabel="No replacement changes." />
+          <label htmlFor={`manual-replace-${scope}`} className="block pt-0.5 text-[10px] uppercase tracking-wider text-gray-500">Replacement (editable)</label>
+          <textarea
+            id={`manual-replace-${scope}`}
+            value={manualText}
+            onChange={(e) => setManualText(e.target.value)}
+            rows={Math.min(14, Math.max(3, manualText.split('\n').length + 1))}
+            className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-[12px] text-gray-100 font-mono resize-y focus:border-port-accent/50 focus:outline-none"
+          />
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={applyManualEdit}
+              disabled={accepting || manualText === (comment.anchorQuote || '')}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-[12px] font-medium bg-port-success/20 text-port-success border border-port-success/40 hover:bg-port-success/30 disabled:opacity-40"
+              title="Apply this replacement to the manuscript and resolve the finding"
+            >
+              {accepting ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
+              Apply edit
+            </button>
+            <button
+              type="button"
+              onClick={() => setManualMode(false)}
+              disabled={accepting}
+              className="inline-flex items-center gap-1 px-2 py-1 rounded text-[12px] text-gray-500 hover:text-white disabled:opacity-40"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       <div className="flex items-center gap-2 pt-0.5">
         {!hasFix ? (
           <button
@@ -441,6 +520,17 @@ export default function ManuscriptCommentCard({
             </button>
           </>
         )}
+        {canManualEdit && !manualMode ? (
+          <button
+            type="button"
+            onClick={openManualEdit}
+            disabled={accepting}
+            className="inline-flex items-center gap-1 px-2 py-1 rounded text-[12px] text-gray-400 hover:text-white disabled:opacity-40"
+            title="Manually rewrite the anchored span and apply it"
+          >
+            <Pencil size={12} /> Manual edit
+          </button>
+        ) : null}
         {canFlagFalsePositive ? (
           <button
             type="button"
@@ -461,7 +551,7 @@ export default function ManuscriptCommentCard({
         </button>
       </div>
 
-      <ShortcutHints hasNav={!!nav} hasFix={hasFix} hasFalsePositive={canFlagFalsePositive} />
+      <ShortcutHints hasNav={!!nav} hasFix={hasFix} hasFalsePositive={canFlagFalsePositive} hasManualEdit={canManualEdit} />
     </div>
   );
 }

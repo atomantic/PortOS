@@ -28,6 +28,12 @@ const withFix = {
   ...baseComment,
   fix: { edits: [{ find: 'old text', replace: 'new text', issueNumber: 5 }] },
 };
+const withAnchor = {
+  ...baseComment,
+  issueId: 'iss-1',
+  stageId: 'script',
+  anchorQuote: 'the muddled span',
+};
 
 const renderCard = (props) => render(
   <>
@@ -168,5 +174,59 @@ describe('ManuscriptCommentCard — accept toast offers Undo (#1609)', () => {
       comment: expect.objectContaining({ status: 'open' }),
     })));
     expect(await screen.findByText(/Fix undone/i)).toBeTruthy();
+  });
+});
+
+describe('ManuscriptCommentCard — manual edit path (#1610)', () => {
+  beforeEach(() => {
+    acceptPipelineManuscriptFix.mockReset();
+    toast.dismiss();
+  });
+
+  it('offers a manual-edit affordance for an anchored finding with no fix', () => {
+    renderCard({ comment: withAnchor });
+    expect(screen.getByText('Generate fix')).toBeTruthy();
+    expect(screen.getByText('Manual edit')).toBeTruthy();
+    expect(screen.getByText('manual edit')).toBeTruthy(); // shortcut hint
+  });
+
+  it('does NOT offer manual edit when the finding has no anchor span', () => {
+    renderCard(); // baseComment has no anchorQuote
+    expect(screen.queryByText('Manual edit')).toBeNull();
+  });
+
+  it('applies a manual replacement against the anchored span through the accept path', async () => {
+    acceptPipelineManuscriptFix.mockResolvedValue({ comment: { ...withAnchor, status: 'accepted' }, sections: [] });
+    const onAccepted = vi.fn();
+    renderCard({ comment: withAnchor, onAccepted });
+
+    fireEvent.click(screen.getByText('Manual edit'));
+    const textarea = screen.getByLabelText(/Replacement \(editable\)/i);
+    expect(textarea.value).toBe('the muddled span'); // seeded with the anchor
+    fireEvent.change(textarea, { target: { value: 'the clear span' } });
+    fireEvent.click(screen.getByText('Apply edit'));
+
+    await waitFor(() => expect(acceptPipelineManuscriptFix).toHaveBeenCalledWith('ser-1', 'c1', {
+      edits: [{ issueId: 'iss-1', stageId: 'script', issueNumber: 5, find: 'the muddled span', replace: 'the clear span' }],
+    }));
+    await waitFor(() => expect(onAccepted).toHaveBeenCalled());
+  });
+
+  it('disables Apply until the replacement differs from the anchored span', () => {
+    renderCard({ comment: withAnchor });
+    fireEvent.click(screen.getByText('Manual edit'));
+    // Seeded value equals the anchor → no-op, so Apply is disabled.
+    expect(screen.getByText('Apply edit').closest('button').disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText(/Replacement \(editable\)/i), { target: { value: 'changed' } });
+    expect(screen.getByText('Apply edit').closest('button').disabled).toBe(false);
+  });
+
+  it('m toggles manual-edit mode for an anchored finding', () => {
+    renderCard({ comment: withAnchor });
+    expect(screen.queryByLabelText(/Replacement \(editable\)/i)).toBeNull();
+    pressKey('m');
+    expect(screen.getByLabelText(/Replacement \(editable\)/i)).toBeTruthy();
+    pressKey('m');
+    expect(screen.queryByLabelText(/Replacement \(editable\)/i)).toBeNull();
   });
 });
