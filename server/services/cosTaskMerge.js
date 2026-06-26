@@ -42,7 +42,7 @@
  *     freely re-claimable.
  */
 
-import { isLeaseLive, getClaimOwner, CLAIM_METADATA_KEYS } from './cosTaskClaim.js';
+import { isLeaseLive, getClaimOwner, CLAIM_METADATA_KEYS, parseTimestampMs } from './cosTaskClaim.js';
 // Import from taskParser (the lowest task module) rather than cosTaskStore: the
 // store imports THIS module for mergeTaskLists, so pulling its PRIORITY_VALUES
 // here would form a circular import. taskParser has no cos-module deps.
@@ -67,18 +67,11 @@ const EDIT_STAMP_KEY = 'updatedAt';
 // same-status tie to a peer that did ("absent = oldest"), and two un-stamped
 // sides compare equal and fall through to the deterministic comparator.
 const updatedAtMs = (task) => {
-  const raw = task?.metadata?.[EDIT_STAMP_KEY];
-  if (raw === undefined || raw === null || raw === '') return -Infinity;
-  const ms = typeof raw === 'number' ? raw : Date.parse(raw);
-  return Number.isFinite(ms) ? ms : -Infinity;
+  const ms = parseTimestampMs(task?.metadata?.[EDIT_STAMP_KEY]);
+  return ms === null ? -Infinity : ms;
 };
 
-const leaseMs = (metadata) => {
-  const raw = metadata?.leaseExpiresAt;
-  if (raw === undefined || raw === null || raw === '') return null;
-  const ms = typeof raw === 'number' ? raw : Date.parse(raw);
-  return Number.isFinite(ms) ? ms : null;
-};
+const leaseMs = (metadata) => parseTimestampMs(metadata?.leaseExpiresAt);
 
 /**
  * Pick the authoritative claim metadata for a task present on both sides, or

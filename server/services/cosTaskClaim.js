@@ -33,15 +33,23 @@ export const LEASE_DURATION_MS = 30 * 60 * 1000; // 30 minutes
 export const CLAIM_METADATA_KEYS = Object.freeze(['claimedBy', 'claimedAt', 'leaseExpiresAt']);
 
 /**
- * Parse `leaseExpiresAt` (an ISO string after the markdown round-trip, or a
- * Date/number in-memory) to epoch ms, or null when absent/unparseable. A null
- * here means "no live lease" — never "lease in the past".
+ * Parse a timestamp (an ISO string after the markdown round-trip, or an epoch
+ * number in-memory) to epoch ms, or null when absent/unparseable. Shared by the
+ * lease-expiry reader here and the lease/edit-stamp readers in cosTaskMerge so
+ * the three callers don't each re-implement the same absent/NaN guard.
  */
-function leaseExpiryMs(metadata) {
-  const raw = metadata?.leaseExpiresAt;
+export function parseTimestampMs(raw) {
   if (raw === undefined || raw === null || raw === '') return null;
   const ms = typeof raw === 'number' ? raw : Date.parse(raw);
   return Number.isFinite(ms) ? ms : null;
+}
+
+/**
+ * Parse `leaseExpiresAt` to epoch ms, or null when absent/unparseable. A null
+ * here means "no live lease" — never "lease in the past".
+ */
+function leaseExpiryMs(metadata) {
+  return parseTimestampMs(metadata?.leaseExpiresAt);
 }
 
 /**

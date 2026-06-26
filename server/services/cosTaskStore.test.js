@@ -342,6 +342,14 @@ describe('cosTaskStore.approveTask', () => {
     expect(mock.events.some(e => e.name === 'tasks:changed' && e.payload.action === 'approved')).toBe(true);
   });
 
+  it('bumps the updatedAt LWW stamp on approval (approval is content) (#1714)', async () => {
+    const T0 = Date.parse('2026-06-25T00:00:00.000Z');
+    const T1 = Date.parse('2026-06-25T06:00:00.000Z');
+    await addTask({ description: 'need approve', id: 'sys-ap2', approvalRequired: true }, 'internal', { now: T0 });
+    const approved = await approveTask('sys-ap2', { now: T1 });
+    expect(approved.metadata.updatedAt).toBe(new Date(T1).toISOString());
+  });
+
   it('rejects a task that does not require approval', async () => {
     await addTask({ description: 'auto', id: 'sys-auto', approvalRequired: false }, 'internal');
     expect((await approveTask('sys-auto')).error).toBe('Task does not require approval');

@@ -36,6 +36,11 @@ export const PRIORITY_VALUES = {
 
 const CLAIM_KEY_SET = new Set(CLAIM_METADATA_KEYS);
 
+// Legacy fields an `updateTask` patch may carry directly (vs nested under
+// `metadata`); they're normalized into `metadata` on write. Listed once so the
+// content-edit detector and the normalizer below can't drift apart.
+const LEGACY_DIRECT_FIELDS = ['context', 'model', 'provider', 'app'];
+
 /**
  * Does an `updateTask` patch change a task's EDITABLE CONTENT (vs only its
  * claim/lease metadata)? Used to decide whether to bump the `updatedAt` LWW stamp
@@ -44,16 +49,16 @@ const CLAIM_KEY_SET = new Set(CLAIM_METADATA_KEYS);
  * NOT bump the stamp: a heartbeat is not a content edit, and letting it advance
  * `updatedAt` would make a lease-renewing peer spuriously win same-status content
  * ties over the other peer's genuine edit. Status transitions, priority/description
- * changes, legacy `context`/`app`/… fields, and any non-claim metadata key all
- * count as content edits.
+ * changes, approval flags, legacy `context`/`app`/… fields, and any non-claim
+ * metadata key all count as content edits.
  */
 function isContentEdit(updates) {
   if (!updates || typeof updates !== 'object') return false;
   if (updates.status !== undefined) return true;
   if (updates.description !== undefined) return true;
   if (updates.priority !== undefined) return true;
-  if (updates.context !== undefined || updates.model !== undefined
-    || updates.provider !== undefined || updates.app !== undefined) return true;
+  if (updates.approvalRequired !== undefined || updates.autoApproved !== undefined) return true;
+  if (LEGACY_DIRECT_FIELDS.some(f => updates[f] !== undefined)) return true;
   if (updates.metadata && typeof updates.metadata === 'object') {
     for (const key of Object.keys(updates.metadata)) {
       if (!CLAIM_KEY_SET.has(key)) return true;
@@ -298,10 +303,9 @@ export async function updateTask(taskId, updates, taskType = 'user', { now = Dat
     ...(updates.metadata || {})
   };
   // Handle legacy fields that may be passed directly in updates
-  if (updates.context !== undefined) updatedMetadata.context = updates.context || undefined;
-  if (updates.model !== undefined) updatedMetadata.model = updates.model || undefined;
-  if (updates.provider !== undefined) updatedMetadata.provider = updates.provider || undefined;
-  if (updates.app !== undefined) updatedMetadata.app = updates.app || undefined;
+  for (const f of LEGACY_DIRECT_FIELDS) {
+    if (updates[f] !== undefined) updatedMetadata[f] = updates[f] || undefined;
+  }
 
   // Clear blocked/failure metadata when transitioning out of blocked status
   if (updates.status && updates.status !== 'blocked' && tasks[taskIndex].status === 'blocked') {
@@ -490,7 +494,7 @@ export async function reorderTasks(taskIds) {
  * fires `dequeueNextTask` off that so the newly approved task can spawn
  * immediately.
  */
-export async function approveTask(taskId) {
+export async function approveTask(taskId, { now = Date.now() } = {}) {
   return withStateLock(async () => {
   const state = await loadState();
   const filePath = join(ROOT_DIR, state.config.cosTasksFile);
@@ -511,11 +515,15 @@ export async function approveTask(taskId) {
     return { error: 'Task does not require approval' };
   }
 
-  // Update approval flags
+  // Update approval flags. Approval is editable content (the merge's
+  // contentSignature counts the approval flags), so bump the `updatedAt` LWW
+  // stamp (#1714) too — otherwise an approval on one peer would lose a same-status
+  // tie to a stale edit on the other instead of winning as the newest edit.
   tasks[taskIndex] = {
     ...tasks[taskIndex],
     approvalRequired: false,
-    autoApproved: true
+    autoApproved: true,
+    metadata: { ...tasks[taskIndex].metadata, updatedAt: new Date(now).toISOString() }
   };
 
   // Write back to file
