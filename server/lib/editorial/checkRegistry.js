@@ -6498,6 +6498,9 @@ export function orderChecksByDependencies(pairs) {
     const declared = Array.isArray(p?.check?.dependsOn) ? p.check.dependsOn : [];
     return new Set(declared.filter((d) => typeof d === 'string' && d !== id && present.has(d)));
   });
+  // Common case — nothing in this run waits on anything → the input is already a
+  // valid order. Skip the O(n²) Kahn scan and return registry order untouched.
+  if (waits.every((w) => w.size === 0)) return pairs.slice();
   const used = new Array(pairs.length).fill(false);
   const emitted = new Set();
   const result = [];
@@ -6520,7 +6523,7 @@ export function orderChecksByDependencies(pairs) {
         used[i] = true;
         result.push(pairs[i]);
         const id = pairs[i]?.check?.id;
-        if (typeof id === 'string') { emitted.add(id); stuck.push(id); }
+        if (typeof id === 'string') stuck.push(id);
       }
       console.warn(`⚠️ editorial check dependency cycle — running in registry order: ${stuck.join(', ')}`);
       break;
