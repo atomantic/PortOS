@@ -6401,16 +6401,17 @@ export function resolveCheckState(settings) {
   return getAllChecks(settings).map((check) => {
     const row = stored[check.id] || {};
     const enabled = typeof row.enabled === 'boolean' ? row.enabled : check.defaultEnabled !== false;
+    // Normalize the declared scope ONCE: `scopes` (#1628) is the full declared set
+    // the catalog/plan fan a dual-scope check across; `scope` is the PRIMARY scope
+    // (a string) so every single-value consumer keeps working unchanged. For a
+    // single-scope check the two agree (`scope === scopes[0]`).
+    const scopes = normalizeCheckScopes(check.scope);
     return {
       id: check.id,
       label: check.label,
       description: check.description,
-      // `scope` is the PRIMARY scope (a string) so every single-value consumer
-      // keeps working unchanged; `scopes` (#1628) is the full declared set the
-      // catalog/plan fan a dual-scope check across. For a single-scope check the
-      // two agree (`scope === scopes[0]`).
-      scope: primaryCheckScope(check.scope),
-      scopes: normalizeCheckScopes(check.scope),
+      scope: scopes[0] || null,
+      scopes,
       kind: check.kind,
       category: check.category,
       // `severityDefault` is the registry baseline (what the override resets to);
