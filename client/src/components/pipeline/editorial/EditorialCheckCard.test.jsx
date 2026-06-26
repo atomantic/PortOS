@@ -24,6 +24,24 @@ describe('EditorialCheckCard', () => {
     expect(onToggle).toHaveBeenCalledWith('naming.dissimilar-names', false);
   });
 
+  it('scopes its DOM ids by idScope so a fanned dual-scope check stays unique (#1628)', () => {
+    const onSeveritySave = vi.fn();
+    const { container } = render(
+      <EditorialCheckCard check={check} idScope="issue" onToggle={vi.fn()} onConfigSave={vi.fn()} onSeveritySave={onSeveritySave} />,
+    );
+    // The severity control's id folds in the section scope; the label still pairs.
+    const select = screen.getByRole('combobox', { name: /severity for/i });
+    expect(select.id).toBe('sev-issue-naming.dissimilar-names');
+    expect(container.querySelector('label[for="sev-issue-naming.dissimilar-names"]')).not.toBeNull();
+    // The config input id is scoped too.
+    fireEvent.click(screen.getByRole('button', { name: /configure/i }));
+    expect(screen.getByLabelText('Minimum shared signals to flag').id)
+      .toBe('cfg-issue-naming.dissimilar-names-minSharedSignals');
+    // The API callback still uses the bare check id, not the scoped DOM id.
+    fireEvent.change(select, { target: { value: 'high' } });
+    expect(onSeveritySave).toHaveBeenCalledWith('naming.dissimilar-names', 'high');
+  });
+
   it('commits a clamped config value on blur, merged onto the existing config', () => {
     const onConfigSave = vi.fn();
     render(<EditorialCheckCard check={check} onToggle={vi.fn()} onConfigSave={onConfigSave} />);

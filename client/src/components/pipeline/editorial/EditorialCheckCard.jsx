@@ -88,8 +88,15 @@ function ConfigField({ checkId, field, value, disabled, onCommit, resetNonce = 0
 function EditorialCheckCard({
   check, saving = false, onToggle, onConfigSave, onSeveritySave, onEdit, onDelete,
   seriesId = '', seriesConfig = null, seriesSaving = false, seriesResetNonce = 0, onSeriesConfigSave,
+  idScope = '',
 }) {
   const [expanded, setExpanded] = useState(false);
+  // Base for this card's DOM ids. A dual-scope check (#1628) is fanned into more
+  // than one catalog section, so deriving ids from `check.id` alone would render
+  // duplicate `sev-`/`cfg-` ids (breaking every `htmlFor`/`id` pairing). The
+  // section scope makes each fanned copy's ids unique; single-scope cards (no
+  // `idScope`) keep their original ids. The API callbacks still use `check.id`.
+  const domBase = idScope ? `${idScope}-${check.id}` : check.id;
   const [seriesExpanded, setSeriesExpanded] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const hasConfig = Array.isArray(check.configFields) && check.configFields.length > 0;
@@ -138,9 +145,9 @@ function EditorialCheckCard({
 
       {canSetSeverity ? (
         <div className="flex items-center gap-2">
-          <label htmlFor={`sev-${check.id}`} className="text-[11px] text-gray-400">Severity</label>
+          <label htmlFor={`sev-${domBase}`} className="text-[11px] text-gray-400">Severity</label>
           <select
-            id={`sev-${check.id}`}
+            id={`sev-${domBase}`}
             value={check.severityOverride || ''}
             disabled={saving}
             aria-label={`Severity for ${check.label}`}
@@ -172,7 +179,7 @@ function EditorialCheckCard({
               {check.configFields.map((field) => (
                 <ConfigField
                   key={field.key}
-                  checkId={check.id}
+                  checkId={domBase}
                   field={field}
                   value={check.config?.[field.key]}
                   disabled={saving}
@@ -207,9 +214,11 @@ function EditorialCheckCard({
               {check.configFields.map((field) => (
                 <ConfigField
                   // Prefix the checkId so the per-series input ids never collide
-                  // with the global form's (`cfg-<checkId>-<key>`).
+                  // with the global form's (`cfg-<checkId>-<key>`). `domBase` already
+                  // folds in the section scope (#1628) so a fanned dual-scope check
+                  // stays unique here too.
                   key={field.key}
-                  checkId={`series-${check.id}`}
+                  checkId={`series-${domBase}`}
                   field={field}
                   value={seriesConfig?.[field.key] ?? check.config?.[field.key]}
                   disabled={seriesSaving}

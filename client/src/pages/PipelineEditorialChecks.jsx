@@ -654,10 +654,14 @@ export default function PipelineEditorialChecks() {
               <div key={group.scope} className="space-y-2">
                 <h3 className="text-[11px] font-medium uppercase tracking-wider text-gray-500">{group.label}</h3>
                 {group.checks.map((check) => (
-                  <div key={check.id} className="flex items-start gap-2">
+                  // A dual-scope check (#1628) is fanned into multiple sections, so
+                  // scope the per-row DOM ids (selection checkbox + the card's ids,
+                  // via `idScope`) by the section to keep them unique. The React key
+                  // and all state/selection keys stay `check.id` (the check identity).
+                  <div key={`${group.scope}-${check.id}`} className="flex items-start gap-2">
                     <input
                       type="checkbox"
-                      id={`sel-${check.id}`}
+                      id={`sel-${group.scope}-${check.id}`}
                       checked={selectedIds.has(check.id)}
                       disabled={!check.enabled}
                       onChange={() => toggleSelected(check.id)}
@@ -668,6 +672,7 @@ export default function PipelineEditorialChecks() {
                     <div className="min-w-0 flex-1">
                       <EditorialCheckCard
                         check={check}
+                        idScope={group.scope}
                         saving={savingIds.has(check.id)}
                         onToggle={handleToggle}
                         onConfigSave={handleConfigSave}
