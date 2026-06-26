@@ -67,7 +67,10 @@ export const inboxLogRecordSchema = z.object({
   status: inboxStatusEnum,
   filed: filedSchema.optional(),
   correction: correctionSchema.optional(),
-  error: errorSchema.optional()
+  error: errorSchema.optional(),
+  // User-marked creative note (see captureInputSchema.creative). Drives the
+  // "Send creative notes to Catalog" batch action in the inbox.
+  creative: z.boolean().optional()
 });
 
 // People Record schema
@@ -171,7 +174,11 @@ export const reviewRecordSchema = z.object({
 export const captureInputSchema = z.object({
   text: z.string().min(1).max(10000),
   providerOverride: z.string().optional(),
-  modelOverride: z.string().optional()
+  modelOverride: z.string().optional(),
+  // Opt-in flag: the user marked this note as a creative idea at capture time
+  // (vs a todo/reference). Creative notes are later batch-sendable into the
+  // creative catalog as ingredients (see catalog brain-bridge ingest).
+  creative: z.boolean().optional()
 });
 
 // Resolve review input schema

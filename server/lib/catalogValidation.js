@@ -222,6 +222,22 @@ export const catalogVoiceIngestSchema = z.object({
   providerOverride: z.string().trim().min(1).max(120).optional(),
 }).strict();
 
+// Brain-bridge ingest. Instead of pasted/fetched text, the source is an existing
+// brain record (an idea, journal memory, project, admin item, or person). The
+// route resolves the record by `{ brainType, brainId }`, folds its prose into
+// one rawText block, and runs the SAME extraction pipeline — so a captured
+// thought becomes typed catalog ingredients (characters/scenes/ideas/…) the
+// user reviews and commits. This is the "make the catalog the universal sink"
+// ingestion bridge: brain entries finally flow into the catalog the way
+// paste/url/file/voice already do. The supported types mirror
+// `BRAIN_INGEST_GETTERS` in catalogIngestSources.js (keep the two in lockstep).
+export const CATALOG_BRAIN_INGEST_TYPES = Object.freeze(['ideas', 'memories', 'projects', 'admin', 'people']);
+export const catalogBrainIngestSchema = z.object({
+  brainType: z.enum(CATALOG_BRAIN_INGEST_TYPES),
+  brainId: z.string().trim().min(1).max(200),
+  providerOverride: z.string().trim().min(1).max(120).optional(),
+}).strict();
+
 export const catalogIngredientCreateSchema = z.object({
   type: ingredientTypeGate,
   name: z.string().trim().min(1).max(BIBLE_LIMITS.NAME_MAX),

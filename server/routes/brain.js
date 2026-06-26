@@ -66,8 +66,8 @@ const router = Router();
  * Capture a thought, classify it, and store it
  */
 router.post('/capture', asyncHandler(async (req, res) => {
-  const { text, providerOverride, modelOverride } = validateRequest(captureInputSchema, req.body);
-  const result = await brainService.captureThought(text, providerOverride, modelOverride);
+  const { text, providerOverride, modelOverride, creative } = validateRequest(captureInputSchema, req.body);
+  const result = await brainService.captureThought(text, providerOverride, modelOverride, { creative });
   res.json(result);
 }));
 

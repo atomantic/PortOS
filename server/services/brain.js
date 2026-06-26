@@ -133,7 +133,7 @@ function safeParseJsonResponse(content) {
  * Returns immediately after creating the inbox entry.
  * AI classification runs in the background and emits a socket event on completion.
  */
-export async function captureThought(text, providerOverride, modelOverride) {
+export async function captureThought(text, providerOverride, modelOverride, { creative = false } = {}) {
   const meta = await storage.loadMeta();
   const provider = providerOverride || meta.defaultProvider;
   const model = modelOverride || meta.defaultModel;
@@ -162,6 +162,7 @@ export async function captureThought(text, providerOverride, modelOverride) {
   const inboxEntry = await storage.createInboxLog({
     capturedText: text,
     source: 'brain_ui',
+    ...(creative ? { creative: true } : {}),
     ...(mode === 'off'
       ? {}
       : { ai: { providerId: provider, modelId: model, promptTemplateId: 'brain-classifier' } }),
