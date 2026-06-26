@@ -115,8 +115,14 @@ export async function syncPinterestBoard(boardId) {
     for (const r of results) if (r) imported.push(r);
   }
 
+  // Pass the feed we actually fetched so the locked append aborts if the user
+  // unlinked / repointed the board while downloads ran (fetch is outside the lock).
   const syncedAt = new Date().toISOString();
-  const { board: nextBoard, added } = await store.appendPinterestItems(boardId, imported, { syncedAt });
+  const { board: nextBoard, added, aborted } = await store.appendPinterestItems(boardId, imported, { syncedAt, expectedFeedUrl: feedUrl });
+  if (aborted) {
+    console.log(`📌 Pinterest sync: board ${boardId} aborted — link changed mid-sync`);
+    return { board: nextBoard, added: 0, feedCount: pins.length, aborted: true };
+  }
   emitRecordUpdated('moodBoard', boardId);
   console.log(`📌 Pinterest sync: board ${boardId} +${added} new (${pins.length} pins in feed)`);
   return { board: nextBoard, added, feedCount: pins.length };

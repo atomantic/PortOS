@@ -117,6 +117,28 @@ describe('syncPinterestBoard', () => {
     expect(emitRecordUpdated).toHaveBeenCalledWith('moodBoard', 'mb-1');
   });
 
+  it('reports aborted (and does not emit) when the link changed mid-sync', async () => {
+    store.getBoard.mockResolvedValue({ id: 'mb-1', items: [], pinterest: { feedUrl: 'https://www.pinterest.com/j/b.rss' } });
+    net.fetchPublicText.mockResolvedValue(feedXml(PIN1));
+    net.fetchPublicBinary.mockResolvedValue({ buffer: Buffer.from([0xff, 0xd8, 0xff, 0x00]), contentType: 'image/jpeg' });
+    // store reports the locked append aborted (board was unlinked/repointed)
+    store.appendPinterestItems.mockResolvedValue({ board: { id: 'mb-1' }, added: 0, aborted: true });
+
+    const result = await syncPinterestBoard('mb-1');
+    expect(result).toMatchObject({ added: 0, aborted: true });
+    expect(emitRecordUpdated).not.toHaveBeenCalled();
+  });
+
+  it('forwards the fetched feed as expectedFeedUrl to the locked append', async () => {
+    store.getBoard.mockResolvedValue({ id: 'mb-1', items: [], pinterest: { feedUrl: 'https://www.pinterest.com/j/b.rss' } });
+    net.fetchPublicText.mockResolvedValue(feedXml(PIN1));
+    net.fetchPublicBinary.mockResolvedValue({ buffer: Buffer.from([0xff, 0xd8, 0xff, 0x00]), contentType: 'image/jpeg' });
+    store.appendPinterestItems.mockImplementation(async (_id, imported) => ({ board: { id: 'mb-1' }, added: imported.length }));
+
+    await syncPinterestBoard('mb-1');
+    expect(store.appendPinterestItems.mock.calls[0][2]).toMatchObject({ expectedFeedUrl: 'https://www.pinterest.com/j/b.rss' });
+  });
+
   it('skips a pin whose download returns a non-image body', async () => {
     store.getBoard.mockResolvedValue({ id: 'mb-1', items: [], pinterest: { feedUrl: 'https://www.pinterest.com/j/b.rss' } });
     net.fetchPublicText.mockResolvedValue(feedXml(PIN1));

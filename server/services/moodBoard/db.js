@@ -251,12 +251,14 @@ export async function clearPinterestLink(id) {
 }
 
 // Append the freshly-downloaded pins in ONE locked write (rather than N
-// addBoardItem round-trips) and stamp lastSyncedAt. Always persists so a
-// zero-new sync still records the check. Returns { board, added }.
+// addBoardItem round-trips) and stamp lastSyncedAt. Persists on every real sync
+// so a zero-new sync still records the check — but skips the write entirely when
+// appendPinterestPins aborts (the link changed mid-sync, see opts.expectedFeedUrl).
+// Returns { board, added, aborted }.
 export async function appendPinterestItems(id, imported, opts = {}) {
   const { board, result } = await withLockedBoard(id, (b) => {
-    const { board: next, added } = appendPinterestPins(b, imported, opts);
-    return { board: next, result: { added } };
+    const { board: next, added, aborted } = appendPinterestPins(b, imported, opts);
+    return { board: next, result: { added, aborted }, skipPersist: aborted };
   });
   return { board, ...result };
 }

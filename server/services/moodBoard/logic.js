@@ -247,16 +247,19 @@ export function applyBoardRestore(board, patch) {
 // schema-version bump: full-record LWW, and an older peer preserves the unknown
 // key). `lastSyncedAt` tracks the most recent manual "Sync now".
 
-// Set (or replace) the Pinterest link, preserving any prior sync timestamp so
-// re-linking the SAME board doesn't lose "last synced" context.
+// Set (or replace) the Pinterest link. Preserve the prior sync timestamp only
+// when re-linking the SAME feed; pointing the board at a DIFFERENT Pinterest
+// board clears lastSyncedAt, otherwise the UI would claim the new board was
+// "last synced" at the old board's time before any sync has run.
 export function applyPinterestLink(board, { feedUrl, boardUrl }) {
   const prior = board.pinterest || {};
+  const sameFeed = prior.feedUrl === feedUrl;
   return {
     ...board,
     pinterest: {
       feedUrl,
       boardUrl: boardUrl ?? null,
-      lastSyncedAt: prior.lastSyncedAt ?? null,
+      lastSyncedAt: sameFeed ? (prior.lastSyncedAt ?? null) : null,
     },
     updatedAt: nowIso(),
   };
@@ -280,9 +283,18 @@ export function clearPinterestLinkRecord(board) {
  * before downloading) and respects MAX_ITEMS_PER_BOARD by truncating to the
  * remaining capacity rather than throwing — a partial import beats a hard
  * mid-sync failure. Always re-stamps `pinterest.lastSyncedAt` (even on zero new)
- * so the UI reflects the check. Returns `{ board, added }`.
+ * so the UI reflects the check. Returns `{ board, added, aborted }`.
+ *
+ * `expectedFeedUrl` guards a single-user re-entrancy race: the feed fetch +
+ * image downloads run OUTSIDE the row lock, so the user can unlink or re-link
+ * the board mid-sync. When the persisted feed no longer matches the one this
+ * sync fetched, abort — append no pins and DON'T stamp lastSyncedAt — so stale
+ * pins never land on a board that was unlinked/repointed.
  */
-export function appendPinterestPins(board, imported, { syncedAt = nowIso() } = {}) {
+export function appendPinterestPins(board, imported, { syncedAt = nowIso(), expectedFeedUrl = null } = {}) {
+  if (expectedFeedUrl && board.pinterest?.feedUrl !== expectedFeedUrl) {
+    return { board, added: 0, aborted: true };
+  }
   const items = Array.isArray(board.items) ? board.items : [];
   const seen = new Set(items.map((it) => it && it.source).filter(Boolean));
   const capacity = Math.max(0, MAX_ITEMS_PER_BOARD - items.length);
@@ -302,5 +314,5 @@ export function appendPinterestPins(board, imported, { syncedAt = nowIso() } = {
     pinterest: { ...(board.pinterest || {}), lastSyncedAt: syncedAt },
     updatedAt: nowIso(),
   };
-  return { board: next, added: fresh.length };
+  return { board: next, added: fresh.length, aborted: false };
 }

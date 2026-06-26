@@ -43,6 +43,7 @@ describe('normalizePinterestFeedUrl', () => {
     ['pinterest look-alike (suffix)', 'https://pinterest.com.evil.com/jane/board'],
     ['pinterest as attacker subdomain label', 'https://pinterest.evil.com/jane/board'],
     ['pinterest as attacker subdomain under ccTLD', 'https://pinterest.evil.co.uk/jane/board'],
+    ['attacker-registered pinterest.<tld> (not a real Pinterest domain)', 'https://pinterest.zip/jane/board'],
     ['embedded brand name', 'https://evilpinterest.com/jane/board'],
     ['ftp scheme', 'ftp://pinterest.com/jane/board'],
     ['root path only', 'https://www.pinterest.com/'],

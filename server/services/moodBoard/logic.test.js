@@ -248,10 +248,16 @@ describe('applyPinterestLink', () => {
     expect(next.updatedAt).not.toBe('t0');
   });
 
-  it('preserves the prior sync timestamp when re-linking', () => {
-    const linked = { ...base(), pinterest: { feedUrl: 'old', boardUrl: 'oldb', lastSyncedAt: 's1' } };
-    const next = applyPinterestLink(linked, { feedUrl: 'new', boardUrl: 'newb' });
-    expect(next.pinterest).toMatchObject({ feedUrl: 'new', lastSyncedAt: 's1' });
+  it('preserves the prior sync timestamp when re-linking the SAME feed', () => {
+    const linked = { ...base(), pinterest: { feedUrl: 'f.rss', boardUrl: 'oldb', lastSyncedAt: 's1' } };
+    const next = applyPinterestLink(linked, { feedUrl: 'f.rss', boardUrl: 'newb' });
+    expect(next.pinterest).toMatchObject({ feedUrl: 'f.rss', lastSyncedAt: 's1' });
+  });
+
+  it('clears the sync timestamp when re-linking to a DIFFERENT feed', () => {
+    const linked = { ...base(), pinterest: { feedUrl: 'old.rss', boardUrl: 'oldb', lastSyncedAt: 's1' } };
+    const next = applyPinterestLink(linked, { feedUrl: 'new.rss', boardUrl: 'newb' });
+    expect(next.pinterest).toMatchObject({ feedUrl: 'new.rss', lastSyncedAt: null });
   });
 });
 
@@ -303,6 +309,21 @@ describe('appendPinterestPins', () => {
   it('truncates to MAX_ITEMS_PER_BOARD capacity', () => {
     const full = { ...linked(), items: Array.from({ length: MAX_ITEMS_PER_BOARD - 1 }, (_, i) => ({ id: `e${i}`, type: 'image', source: `e${i}` })) };
     const { added } = appendPinterestPins(full, [imp(1), imp(2), imp(3)], { syncedAt: 's1' });
+    expect(added).toBe(1);
+  });
+
+  it('aborts (no append, no stamp) when the link changed mid-sync', () => {
+    const b = { ...linked(), pinterest: { feedUrl: 'now.rss', lastSyncedAt: 'prev' } };
+    const { board, added, aborted } = appendPinterestPins(b, [imp(1)], { syncedAt: 's9', expectedFeedUrl: 'stale.rss' });
+    expect(aborted).toBe(true);
+    expect(added).toBe(0);
+    expect(board).toBe(b); // unchanged — no items appended, lastSyncedAt not bumped
+  });
+
+  it('proceeds when expectedFeedUrl matches the current link', () => {
+    const b = { ...linked(), pinterest: { feedUrl: 'now.rss', lastSyncedAt: 'prev' } };
+    const { added, aborted } = appendPinterestPins(b, [imp(1)], { syncedAt: 's9', expectedFeedUrl: 'now.rss' });
+    expect(aborted).toBe(false);
     expect(added).toBe(1);
   });
 });

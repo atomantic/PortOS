@@ -16,27 +16,30 @@
 
 import { ServerError } from './errorHandler.js';
 
-// Two-part public suffixes Pinterest's country domains use, so the registrable
-// label sits one level deeper (pinterest.co.uk → "pinterest" is third-from-last).
-const TWO_PART_TLDS = new Set([
-  'co.uk', 'com.au', 'co.nz', 'com.br', 'com.mx', 'co.jp', 'co.kr', 'com.tr',
+// Explicit allow-list of Pinterest's REGISTRABLE domains. A registrable-label
+// check ("second-to-last label is pinterest") is NOT enough: an attacker can
+// register `pinterest.zip`, `pinterest.app`, etc. (real TLDs), and the importer
+// would then fetch/download from an arbitrary host the SSRF guard otherwise
+// permits (it allows public hosts by design). Pinterest's RSS feeds all live on
+// `pinterest.com`; the country domains redirect to it (and safeUrlFetch follows
+// one validated redirect), but accept them so a pasted ccTLD board URL still
+// works. A host matches when it equals one of these or is a subdomain of one.
+const PINTEREST_DOMAINS = Object.freeze([
+  'pinterest.com',
+  'pinterest.co.uk', 'pinterest.ca', 'pinterest.fr', 'pinterest.de',
+  'pinterest.es', 'pinterest.it', 'pinterest.pt', 'pinterest.nl',
+  'pinterest.se', 'pinterest.dk', 'pinterest.at', 'pinterest.ch',
+  'pinterest.ie', 'pinterest.nz', 'pinterest.co.nz', 'pinterest.ph',
+  'pinterest.jp', 'pinterest.co.jp', 'pinterest.co.kr', 'pinterest.cl',
+  'pinterest.com.au', 'pinterest.com.mx',
 ]);
 
-// `pinterest` must be the REGISTRABLE domain, not merely a subdomain LABEL of an
-// attacker host. A plain `pinterest.<tld>` and `pinterest.<sub>.<tld>` are
-// structurally identical (`pinterest.co.uk` vs `pinterest.evil.com`), so a regex
-// can't tell them apart without knowing the public suffix — hence the explicit
-// two-part-TLD set. Accepts pinterest.com, www.pinterest.com, br.pinterest.com,
-// pinterest.co.uk; rejects pinterest.evil.com, pinterest.com.evil.com,
+// Accepts pinterest.com, www.pinterest.com, br.pinterest.com, pinterest.co.uk;
+// rejects pinterest.zip, pinterest.evil.com, pinterest.com.evil.com,
 // evilpinterest.com.
 function isPinterestHost(host) {
-  const labels = host.toLowerCase().split('.');
-  if (labels.length < 2) return false;
-  const lastTwo = labels.slice(-2).join('.');
-  if (TWO_PART_TLDS.has(lastTwo)) {
-    return labels.length >= 3 && labels[labels.length - 3] === 'pinterest';
-  }
-  return labels[labels.length - 2] === 'pinterest';
+  const h = host.toLowerCase();
+  return PINTEREST_DOMAINS.some((d) => h === d || h.endsWith(`.${d}`));
 }
 
 const badUrl = (msg) => new ServerError(msg, { status: 400, code: 'INVALID_PINTEREST_URL' });
