@@ -76,6 +76,10 @@ vi.mock('./manuscriptReview.js', () => ({
 // Drives whether the reverse-outline refresh step (#1349) thinks a scene-consuming
 // check is enabled. Default false so the existing conductor runs skip it cheaply.
 let reverseOutlineConsumed = false;
+// Gate-aware (#1614) signal: drives the consumption check when a gateCtx is
+// passed (the autopilot's Gate 3). `null` = mirror the sources-only signal, so
+// every pre-#1614 test keeps its existing behavior.
+let reverseOutlineConsumedGated = null;
 // Drives the perCheck array the editorial-checks pass sees, so a test can inject
 // an errored check and assert it surfaces in the run summary (#1573).
 let editorialChecksPerCheck = [];
@@ -85,7 +89,12 @@ let editorialChecksFindings = [];
 const checkRunnerSpies = {
   runEditorialChecks: vi.fn(async () => ({ runId: 'ec', findings: editorialChecksFindings, perCheck: editorialChecksPerCheck, canceled: false })),
   buildEditorialCheckPlan: vi.fn(async () => ({ seriesId: 's', checks: [], enabledCount: 0, consumesReverseOutline: reverseOutlineConsumed })),
-  enabledChecksConsumeReverseOutline: vi.fn(() => reverseOutlineConsumed),
+  enabledChecksConsumeReverseOutline: vi.fn((settings, checkIds, gateCtx) =>
+    (gateCtx != null && reverseOutlineConsumedGated !== null ? reverseOutlineConsumedGated : reverseOutlineConsumed)),
+  // Gate-context builder (#1614) — the SUT calls this before the gate-aware
+  // consumption re-check. Shape is irrelevant here (the consumption mock above
+  // ignores it); it only needs to resolve to a truthy ctx.
+  buildReverseOutlineGateContext: vi.fn(async (seriesId) => ({ seriesId, manuscript: 'x', canon: { characters: [] }, reverseOutline: [], reverseOutlinePlotlines: [] })),
   // Real pure impl (the module is fully mocked) so the SUT's error-summarizing
   // matches production behavior without pulling checkRunner's heavy imports.
   summarizeCheckErrors: (perCheck) => {
@@ -177,6 +186,7 @@ beforeEach(() => {
   canonReady = true;
   canonUndescribed = [];
   reverseOutlineConsumed = false;
+  reverseOutlineConsumedGated = null;
   reverseOutlineState = { status: 'complete', stale: false };
   editorialChecksPerCheck = [];
   editorialChecksFindings = [];
@@ -1262,6 +1272,50 @@ describe('autopilot conductor', () => {
     await waitFor(runFinished(seriesId));
     expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('complete');
     expect(generateReverseOutline).not.toHaveBeenCalled();
+  });
+
+  it('skips the refresh when the only consumer is gated out for this series (#1614)', async () => {
+    // A check DECLARES the outline as a source (gate 1 passes) but its runtime
+    // gate declines for this series — so refreshing the (stale) outline would
+    // spend an LLM call no runnable check consumes.
+    reverseOutlineConsumed = true; // gate 1: a consumer declares the source
+    reverseOutlineConsumedGated = false; // gate 3: but every consumer is gated out
+    reverseOutlineState = { status: 'complete', stale: true };
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { includeVisual: false });
+    await waitFor(runFinished(seriesId));
+    expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('complete');
+    expect(checkRunnerSpies.buildReverseOutlineGateContext).toHaveBeenCalled();
+    expect(generateReverseOutline).not.toHaveBeenCalled();
+  });
+
+  it('bootstraps a never-generated outline without the gate-aware skip (#1614)', async () => {
+    // `status:'none'` has no scenes to gate against — the outline-content gates
+    // would all falsely decline, so the first generation must NOT be gate-skipped.
+    reverseOutlineConsumed = true;
+    reverseOutlineConsumedGated = false; // would skip a complete outline, but...
+    reverseOutlineState = { status: 'none', stale: false }; // ...never generated yet
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { includeVisual: false });
+    await waitFor(runFinished(seriesId));
+    expect(checkRunnerSpies.buildReverseOutlineGateContext).not.toHaveBeenCalled();
+    expect(generateReverseOutline).toHaveBeenCalledTimes(1);
+  });
+
+  it('forces a regen when a cached refresh is still stale against the live manuscript (#1614)', async () => {
+    reverseOutlineConsumed = true;
+    reverseOutlineState = { status: 'complete', stale: true };
+    // First generate() no-ops as cached (hash matched at generate time), but the
+    // live manuscript is still stale → the run forces one more regen.
+    generateReverseOutline
+      .mockImplementationOnce(async () => ({ status: 'complete', cached: true, stale: false }))
+      .mockImplementationOnce(async () => ({ status: 'complete', stale: false, scenes: [{ id: 'sc1' }] }));
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { includeVisual: false });
+    await waitFor(runFinished(seriesId));
+    expect(generateReverseOutline).toHaveBeenCalledTimes(2);
+    expect(generateReverseOutline.mock.calls[0][1]).toMatchObject({ force: false });
+    expect(generateReverseOutline.mock.calls[1][1]).toMatchObject({ force: true });
   });
 
   it('a budget-exhausted run does not pause at the no-op reverse-outline refresh (#1575 self-gating exemption)', async () => {

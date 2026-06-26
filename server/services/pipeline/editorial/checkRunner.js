@@ -848,12 +848,52 @@ export async function buildEditorialCheckPlan(seriesId, { checkIds = null, setti
  * gate inside `runEditorialChecks` exactly, so the autopilot's reverse-outline
  * refresh step and the runner agree on what consumes the outline. Takes resolved
  * settings (sync) so a caller that already loaded them doesn't pay a second read.
+ *
+ * Gate-aware refinement (#1614): an enabled consumer whose runtime `gate(ctx)`
+ * declines won't actually run — so it doesn't justify spending an LLM call to
+ * refresh the outline. When the caller supplies a `gateCtx` (the autopilot
+ * refresh path, which already holds a complete-but-stale outline to evaluate
+ * against), a consumer must ALSO pass its gate to count. The sources-only signal
+ * stands when no ctx is given (the dry-run plan + the cheap pre-filter, neither
+ * of which builds a ctx) so existing callers are unchanged.
  */
-export function enabledChecksConsumeReverseOutline(settings, checkIds = null) {
+export function enabledChecksConsumeReverseOutline(settings, checkIds = null, gateCtx = null) {
   return getEnabledChecks(settings, checkIds).some(({ check }) => {
     const sources = checkSources(check);
-    return sources.includes('reverseOutline') || sources.includes('reverseOutline.plotlines');
+    if (!sources.includes('reverseOutline') && !sources.includes('reverseOutline.plotlines')) return false;
+    if (gateCtx && typeof check.gate === 'function' && !check.gate(gateCtx)) return false;
+    return true;
   });
+}
+
+/**
+ * Build the minimal context needed to evaluate a reverse-outline consumer's
+ * runtime `gate(ctx)` (#1614) — the manuscript corpus, canon, and the current
+ * outline's scenes/plotlines. The autopilot's reverse-outline refresh uses this
+ * to decide whether any check that would ACTUALLY run consumes the outline
+ * before spending an LLM call to regenerate it.
+ *
+ * Deliberately lighter than buildEditorialContext: no issues / editorial-arc /
+ * continuity-bible / comic projections and no injected LLM callers, because the
+ * gates of outline-consuming checks read only `manuscript`, `canon`, and
+ * `reverseOutline[.plotlines]`. Pass the already-read `outline` (the autopilot's
+ * Gate-2 read) to avoid a redundant outline fetch.
+ */
+export async function buildReverseOutlineGateContext(seriesId, { outline } = {}) {
+  const series = await getSeries(seriesId);
+  const [sections, canon] = await Promise.all([
+    collectManuscriptSections(seriesId),
+    getSeriesCanon(series),
+  ]);
+  const resolved = outline || await getReverseOutline(seriesId).catch(() => null);
+  return {
+    seriesId,
+    series,
+    manuscript: sectionsCorpus(sections),
+    canon,
+    reverseOutline: Array.isArray(resolved?.scenes) ? resolved.scenes : [],
+    reverseOutlinePlotlines: Array.isArray(resolved?.plotlines) ? resolved.plotlines : [],
+  };
 }
 
 /**

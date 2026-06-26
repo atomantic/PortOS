@@ -76,7 +76,7 @@ vi.mock('../reverseOutline.js', () => ({ getReverseOutline: vi.fn(async () => ou
 let editorialState = { characters: [] };
 vi.mock('../editorialAnalysis.js', () => ({ getSeriesEditorial: vi.fn(async () => editorialState) }));
 
-const { runEditorialChecks, buildEditorialCheckPlan, getReviewWithStaleness, enabledChecksConsumeReverseOutline, summarizeCheckErrors, previewCustomCheck, buildScopedPriorFindings, effectiveCheckSources } = await import('./checkRunner.js');
+const { runEditorialChecks, buildEditorialCheckPlan, getReviewWithStaleness, enabledChecksConsumeReverseOutline, buildReverseOutlineGateContext, summarizeCheckErrors, previewCustomCheck, buildScopedPriorFindings, effectiveCheckSources } = await import('./checkRunner.js');
 const { runStagedLLM, resolveStageContext } = await import('../../../lib/stageRunner.js');
 const { collectManuscriptSections } = await import('../arcPlanner.js');
 const { getSeriesCanon } = await import('../seriesCanon.js');
@@ -998,6 +998,50 @@ describe('enabledChecksConsumeReverseOutline (#1349)', () => {
   it('is false when every reverse-outline-consuming check is disabled', () => {
     const settings = disableWhere(consumesOutline);
     expect(enabledChecksConsumeReverseOutline(settings)).toBe(false);
+  });
+
+  // Gate-aware consumption (#1614): a supplied ctx narrows the signal to checks
+  // that would ACTUALLY run for this series, not just declare the source.
+  describe('gate-aware via ctx (#1614)', () => {
+    // No manuscript, no named canon, no scenes → every outline consumer's
+    // runtime gate declines, so nothing would run even though sources match.
+    const gatedOutCtx = { manuscript: '', canon: { characters: [] }, reverseOutline: [], reverseOutlinePlotlines: [] };
+    // A drafted manuscript re-opens the manuscript-gated outline consumers.
+    const liveCtx = { manuscript: 'The kingdom fell.', canon: { characters: [{ name: 'Bob' }] }, reverseOutline: [{ povCharacter: 'Bob' }], reverseOutlinePlotlines: [] };
+
+    it('sources-only signal is unchanged when no ctx is supplied', () => {
+      expect(enabledChecksConsumeReverseOutline({})).toBe(true);
+      expect(enabledChecksConsumeReverseOutline({}, null, null)).toBe(true);
+    });
+
+    it('is false when every consumer is gated out by the ctx', () => {
+      expect(enabledChecksConsumeReverseOutline({}, null, gatedOutCtx)).toBe(false);
+    });
+
+    it('is true when at least one consumer passes its gate against the ctx', () => {
+      expect(enabledChecksConsumeReverseOutline({}, null, liveCtx)).toBe(true);
+    });
+  });
+});
+
+describe('buildReverseOutlineGateContext (#1614)', () => {
+  it('assembles manuscript + canon + the passed outline scenes/plotlines', async () => {
+    const outline = { scenes: [{ povCharacter: 'Bob' }], plotlines: [{ id: 'p1' }] };
+    const ctx = await buildReverseOutlineGateContext('s1', { outline });
+    expect(ctx.manuscript).toContain('the kingdom fell');
+    expect(ctx.canon.characters.map((c) => c.name)).toContain('Alina');
+    expect(ctx.reverseOutline).toEqual(outline.scenes);
+    expect(ctx.reverseOutlinePlotlines).toEqual(outline.plotlines);
+  });
+
+  it('reads the stored outline when none is passed, and tolerates a missing one', async () => {
+    outlineState = { scenes: [{ povCharacter: 'Zog' }], plotlines: [] };
+    const ctx = await buildReverseOutlineGateContext('s1');
+    expect(ctx.reverseOutline).toEqual(outlineState.scenes);
+    // A non-array scenes/plotlines payload normalizes to empty arrays.
+    const ctx2 = await buildReverseOutlineGateContext('s1', { outline: { status: 'none' } });
+    expect(ctx2.reverseOutline).toEqual([]);
+    expect(ctx2.reverseOutlinePlotlines).toEqual([]);
   });
 });
 

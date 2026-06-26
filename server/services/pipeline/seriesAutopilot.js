@@ -92,7 +92,7 @@ import {
 import * as volumeBeatsRunner from './volumeBeatsRunner.js';
 import * as autoRunner from './autoRunner.js';
 import { seedReviewFromFindings, getReview } from './manuscriptReview.js';
-import { runEditorialChecks, buildEditorialCheckPlan, enabledChecksConsumeReverseOutline, summarizeCheckErrors } from './editorial/checkRunner.js';
+import { runEditorialChecks, buildEditorialCheckPlan, enabledChecksConsumeReverseOutline, buildReverseOutlineGateContext, summarizeCheckErrors } from './editorial/checkRunner.js';
 import { generateReverseOutline, getReverseOutline } from './reverseOutline.js';
 import { computeHealth, openBlockers, READINESS_GATES, resolveReadinessGate, summarizeEditorialBlockers, formatBlockerSummary } from './editorialScore.js';
 import { getSettings } from '../settings.js';
@@ -1044,10 +1044,12 @@ const editorialSubsetIds = (options) =>
 async function runReverseOutlineRefresh(sId, record) {
   if (record.cancelRequested) return { canceled: true };
   const settings = await getSettings();
-  // Gate 1 — does any enabled check (narrowed to this run's subset) even read the
-  // outline? If not, nothing to do — and a subset that skips outline-consuming
-  // checks must not pay for a refresh those checks would have triggered.
-  if (!enabledChecksConsumeReverseOutline(settings, editorialSubsetIds(record.options))) {
+  const checkIds = editorialSubsetIds(record.options);
+  // Gate 1 — sources-only pre-filter: does any enabled check (narrowed to this
+  // run's subset) even DECLARE the outline as a source? If not, nothing to do —
+  // and a subset that skips outline-consuming checks must not pay for a refresh
+  // those checks would have triggered.
+  if (!enabledChecksConsumeReverseOutline(settings, checkIds)) {
     record.runState.reverseOutlineRefreshed = true;
     return {};
   }
@@ -1062,20 +1064,48 @@ async function runReverseOutlineRefresh(sId, record) {
     record.runState.reverseOutlineRefreshed = true;
     return {};
   }
+  // Gate 3 (#1614) — gate-aware consumption. A check that DECLARES the outline as
+  // a source still won't run if its runtime gate declines for this series (e.g.
+  // no POV-tagged scenes, a canon-less roster). Evaluate each consumer's gate
+  // against the current outline so a refresh is skipped when nothing that would
+  // actually run reads it. Only applied to a COMPLETE-but-stale outline: a
+  // never-generated outline (`status:'none'`) has no scenes to gate against, so
+  // the outline-content gates would all decline — we bootstrap the first run
+  // unconditionally rather than chicken-and-egg ourselves out of it.
+  if (current.status === 'complete') {
+    const gateCtx = await buildReverseOutlineGateContext(sId, { outline: current }).catch(() => null);
+    if (gateCtx && !enabledChecksConsumeReverseOutline(settings, checkIds, gateCtx)) {
+      record.runState.reverseOutlineRefreshed = true;
+      return {};
+    }
+  }
   // A regenerate WILL spend one LLM call — gate the budget and bill, like the
   // other LLM passes. Bridge autopilot cancellation into the stage's AbortSignal.
   const beforeRefresh = await budgetPause();
   if (beforeRefresh) return beforeRefresh;
   const signal = { get aborted() { return record.cancelRequested; } };
-  const result = await generateReverseOutline(sId, { ...providerIdOpts(record), force: false, signal })
+  const regen = (force) => generateReverseOutline(sId, { ...providerIdOpts(record), force, signal })
     .catch((err) => {
       console.log(`⚠️ autopilot: reverse-outline refresh failed for ${sId.slice(0, 12)}: ${err.message}`);
       return null;
     });
+  let result = await regen(false);
   // Canceled mid-pass — don't bill, don't mark refreshed; let the loop unwind.
   if (result?.status === 'canceled' || record.cancelRequested) return { canceled: true };
+  // (#1614) A `cached:true` result means the manuscript hash still matched the
+  // stored outline at generate time. Re-confirm staleness against the LIVE
+  // manuscript within this run: if a concurrent edit moved the manuscript again
+  // after that cache check, the cached outline is now stale and the downstream
+  // checks would read it — force exactly one regen so they don't.
+  if (result?.cached === true) {
+    const after = await getReverseOutline(sId).catch(() => null);
+    if (after?.stale === true) {
+      result = await regen(true);
+      if (result?.status === 'canceled' || record.cancelRequested) return { canceled: true };
+    }
+  }
   // Bill ONLY when the call actually regenerated (an LLM run). A `cached` result
-  // (outline went fresh in the race window) or a `no-content` series spent nothing.
+  // (outline still fresh in the race window) or a `no-content` series spent nothing.
   // No verify:round broadcast here — a refresh isn't a review round (it produces
   // scenes, not findings); the conductor's generic step:start/step:complete already
   // surface "Refreshing scene segmentation…" / "done" to the UI.
