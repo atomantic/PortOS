@@ -143,6 +143,17 @@ const checkSeriesCanonReadiness = vi.fn(async (seriesId) => ({
 }));
 vi.mock('./canonReadiness.js', () => ({ checkSeriesCanonReadiness }));
 
+// Pause-escalation notifications (#1615) — spy on the notification center so a
+// test can assert a pause posts a banner (and a clean run / opt-out does not).
+const addNotification = vi.fn(async () => ({ id: 'notif-1' }));
+const removeByMetadata = vi.fn(async () => ({ success: true, removed: 0 }));
+vi.mock('../notifications.js', () => ({
+  addNotification,
+  removeByMetadata,
+  NOTIFICATION_TYPES: { AUTOPILOT_PAUSED: 'autopilot_paused' },
+  PRIORITY_LEVELS: { HIGH: 'high', MEDIUM: 'medium', LOW: 'low', CRITICAL: 'critical' },
+}));
+
 // Mocked domainUsage binding, so a test can drive the budget per call.
 const { getDomainBudgetStatus } = await import('../domainUsage.js');
 // Mocked settings binding, so a test can drive the persisted convergence-round
@@ -316,6 +327,29 @@ describe('resolveNextStep (pure)', () => {
       { checkFindingsPauseThreshold: 2.5 },
       { pipelineEditorialChecks: { checkFindingsPauseThreshold: 'x' } },
     )).toBe(0);
+  });
+
+  it('resolveAutopilotNotifyOnPause: per-run option wins, else setting, else true/on (#1615)', () => {
+    const { resolveAutopilotNotifyOnPause, DEFAULT_NOTIFY_ON_PAUSE } = autopilot;
+    expect(DEFAULT_NOTIFY_ON_PAUSE).toBe(true);
+    // per-run override wins (including an explicit false = silence)
+    expect(resolveAutopilotNotifyOnPause(
+      { notifyOnPause: false },
+      { pipelineEditorialChecks: { notifyOnPause: true } },
+    )).toBe(false);
+    expect(resolveAutopilotNotifyOnPause(
+      { notifyOnPause: true },
+      { pipelineEditorialChecks: { notifyOnPause: false } },
+    )).toBe(true);
+    // persisted setting fills in when no per-run override
+    expect(resolveAutopilotNotifyOnPause({}, { pipelineEditorialChecks: { notifyOnPause: false } })).toBe(false);
+    // on by default when neither is set (the one opt-OUT autopilot gate)
+    expect(resolveAutopilotNotifyOnPause({}, null)).toBe(true);
+    // a non-boolean at any layer falls through to the next
+    expect(resolveAutopilotNotifyOnPause(
+      { notifyOnPause: 'yes' },
+      { pipelineEditorialChecks: { notifyOnPause: 1 } },
+    )).toBe(true);
   });
 
   it('regenerates the arc for an arc-only series with no volumes', () => {
@@ -980,6 +1014,38 @@ describe('autopilot conductor', () => {
     const series = await seriesSvc.getSeries(seriesId);
     expect(series.autopilot?.status).toBe('paused');
     expect(series.autopilot?.residualFindings?.[0]?.problem).toBe('plot hole');
+  });
+
+  it('posts an in-app notification when a run pauses, with a resume link (#1615)', async () => {
+    verifyFindings = [{ severity: 'high', problem: 'plot hole', location: 'V1' }];
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { maxArcVerifyRounds: 2 });
+    await waitFor(runFinished(seriesId));
+    expect(addNotification).toHaveBeenCalledTimes(1);
+    const notif = addNotification.mock.calls[0][0];
+    expect(notif.type).toBe('autopilot_paused');
+    expect(notif.priority).toBe('high');
+    expect(notif.link).toBe(`/pipeline/series/${seriesId}`);
+    expect(notif.metadata?.autopilotPauseSeriesId).toBe(seriesId);
+    // prior pause banners for this series are cleared first so resume→pause leaves one
+    expect(removeByMetadata).toHaveBeenCalledWith('autopilotPauseSeriesId', seriesId);
+  });
+
+  it('does not notify on a clean complete (#1615)', async () => {
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, {});
+    await waitFor(runFinished(seriesId));
+    expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('complete');
+    expect(addNotification).not.toHaveBeenCalled();
+  });
+
+  it('does not notify when notifyOnPause is opted out for the run (#1615)', async () => {
+    verifyFindings = [{ severity: 'high', problem: 'plot hole', location: 'V1' }];
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { maxArcVerifyRounds: 2, notifyOnPause: false });
+    await waitFor(runFinished(seriesId));
+    expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('paused');
+    expect(addNotification).not.toHaveBeenCalled();
   });
 
   it('uses the persisted maxArcVerifyRounds setting when no per-run override is given', async () => {

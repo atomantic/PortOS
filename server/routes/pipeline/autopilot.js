@@ -67,6 +67,13 @@ const autopilotStartSchema = z.object({
   // pipelineEditorialChecks.checkFindingsPauseThreshold, then 0 (off). 0 disables
   // the gate for this run. No upper bound — a large N is effectively off.
   checkFindingsPauseThreshold: z.number().int().min(0).optional(),
+  // Per-run pause-notification override (#1615). When the run pauses (budget,
+  // findings, convergence, child failure), post an in-app notification with the
+  // reason + a resume link so a paused run isn't missed until the user opens the
+  // status page. When omitted, falls back to the persisted
+  // pipelineEditorialChecks.notifyOnPause, then true (on by default — a zero-cost
+  // informational signal). Set false to silence pause notifications for this run.
+  notifyOnPause: z.boolean().optional(),
 });
 
 router.post('/series/:id/autopilot/start', asyncHandler(async (req, res) => {

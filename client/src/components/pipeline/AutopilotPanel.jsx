@@ -28,6 +28,9 @@ const DEFAULT_BEAT_CONTINUITY_ROUNDS = 2;
 // Editorial-checks pause threshold (#1613) — mirror the server default (0 = off).
 // Unlike the round bounds it has no upper cap; a large N is effectively off.
 const DEFAULT_CHECK_PAUSE_THRESHOLD = 0;
+// Pause-notification escalation (#1615) — mirror the server default (on). The one
+// autopilot setting that defaults ON: a zero-cost in-app banner when a run pauses.
+const DEFAULT_NOTIFY_ON_PAUSE = true;
 
 // Editorial-health readiness gate (#1316/#1580) — the "manuscript clean" bar the
 // autopilot must clear before visuals. Mirrors READINESS_GATES on the server. The
@@ -195,6 +198,10 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
   // round inputs (saved default + per-run override), so a raised value is reused
   // on Resume.
   const [checkPauseThreshold, setCheckPauseThreshold] = useState(DEFAULT_CHECK_PAUSE_THRESHOLD);
+  // Pause-notification escalation (#1615). Persisted like the round inputs (saved
+  // default + per-run override) but defaults ON — toggling off silences the
+  // in-app pause banner. Persisted on change so the choice is reused on Resume.
+  const [notifyOnPause, setNotifyOnPause] = useState(DEFAULT_NOTIFY_ON_PAUSE);
   // Per-field dirty flags. Until a field is edited its input shows a display
   // default we must NOT persist (that would clobber a higher saved setting on
   // the untouched gate). Tracked per-field so editing one gate never discards
@@ -204,6 +211,7 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
   const editorialEditedRef = useRef(false);
   const beatContinuityEditedRef = useRef(false);
   const checkPauseEditedRef = useRef(false);
+  const notifyEditedRef = useRef(false);
   const [canon, setCanon] = useState(null);
   const [canonLoading, setCanonLoading] = useState(false);
 
@@ -222,6 +230,7 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
         if (!editorialEditedRef.current) setEditorialRounds(Number.isInteger(pec.maxEditorialRounds) ? pec.maxEditorialRounds : DEFAULT_EDITORIAL_ROUNDS);
         if (!beatContinuityEditedRef.current) setBeatContinuityRounds(Number.isInteger(pec.maxBeatContinuityRounds) ? pec.maxBeatContinuityRounds : DEFAULT_BEAT_CONTINUITY_ROUNDS);
         if (!checkPauseEditedRef.current) setCheckPauseThreshold(Number.isInteger(pec.checkFindingsPauseThreshold) ? pec.checkFindingsPauseThreshold : DEFAULT_CHECK_PAUSE_THRESHOLD);
+        if (!notifyEditedRef.current) setNotifyOnPause(typeof pec.notifyOnPause === 'boolean' ? pec.notifyOnPause : DEFAULT_NOTIFY_ON_PAUSE);
         // Persisted readiness gate — display-only, drives the "saved default" label.
         setSavedGate(READINESS_GATE_LABELS[pec.readinessGate] ? pec.readinessGate : '');
       })
@@ -250,6 +259,13 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
   const editEditorialRounds = useCallback((v) => { editorialEditedRef.current = true; setEditorialRounds(v); }, []);
   const editBeatContinuityRounds = useCallback((v) => { beatContinuityEditedRef.current = true; setBeatContinuityRounds(v); }, []);
   const editCheckPauseThreshold = useCallback((v) => { checkPauseEditedRef.current = true; setCheckPauseThreshold(v); }, []);
+  // Boolean checkbox — persist immediately on toggle (no blur event) so the saved
+  // default tracks the choice and Resume reuses it.
+  const editNotifyOnPause = useCallback((v) => {
+    notifyEditedRef.current = true;
+    setNotifyOnPause(v);
+    persistRounds({ notifyOnPause: v });
+  }, [persistRounds]);
 
   const { latest, frames } = usePipelineProgress(pipelineAutopilotSseUrl, [seriesId], { enabled: active });
 
@@ -328,6 +344,9 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
     // #1613 — the editorial-checks pause threshold persists + overrides like the
     // round inputs (clamps to a non-negative integer; 0 = off).
     if (checkPauseEditedRef.current) roundOverrides.checkFindingsPauseThreshold = clampThreshold(checkPauseThreshold);
+    // #1615 — pause notification toggle persists + overrides like the others, but
+    // is a plain boolean (no clamp). Untouched sends nothing → server default (on).
+    if (notifyEditedRef.current) roundOverrides.notifyOnPause = notifyOnPause;
     if (Object.keys(roundOverrides).length) await persistRounds(roundOverrides);
     // Per-run readiness-gate override (#1580): send it ONLY when the user picked a
     // specific gate. Unlike the round inputs we never persist it — '' leaves the
@@ -343,7 +362,7 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
     // effect can reject a stale terminal frame from the previous run.
     activeRunIdRef.current = res.runId || null;
     setActive(true);
-  }, [seriesId, includeVisual, fileGaps, arcRounds, editorialRounds, beatContinuityRounds, checkPauseThreshold, readinessGate, persistRounds]);
+  }, [seriesId, includeVisual, fileGaps, arcRounds, editorialRounds, beatContinuityRounds, checkPauseThreshold, notifyOnPause, readinessGate, persistRounds]);
 
   const cancel = useCallback(async () => {
     await cancelPipelineAutopilot(seriesId).catch(() => null);
@@ -415,6 +434,10 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
           <label className="flex items-center gap-2 text-xs text-gray-300">
             <input type="checkbox" checked={fileGaps} onChange={(e) => setFileGaps(e.target.checked)} />
             File CoS tasks for gaps it can&apos;t resolve
+          </label>
+          <label className="flex items-center gap-2 text-xs text-gray-300">
+            <input type="checkbox" checked={notifyOnPause} onChange={(e) => editNotifyOnPause(e.target.checked)} />
+            Notify me when a run pauses (with a resume link)
           </label>
           <div className="flex flex-wrap gap-4 pt-1">
             <RoundInput

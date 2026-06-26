@@ -1125,6 +1125,12 @@ export const pipelineEditorialChecksSettingsSchema = z.object({
   // installs are unchanged. Optional + additive so older peers fall through to off.
   // No upper bound mirrors the round caps — a large N just means "effectively off".
   checkFindingsPauseThreshold: z.number().int().min(0).optional(),
+  // Pause-notification escalation (#1615). When an autopilot run pauses, post an
+  // in-app notification (reason + resume link) so a paused run isn't missed until
+  // the user opens the status page. Defaults ON (true) when unset — a zero-cost
+  // informational signal — so this is the one autopilot setting that's opt-OUT.
+  // Optional + additive so older peers fall through to the default.
+  notifyOnPause: z.boolean().optional(),
 }).strict();
 
 // Cursor-context payload for the CD-bridge suggest route — identical shape to

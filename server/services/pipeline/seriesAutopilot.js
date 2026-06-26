@@ -100,6 +100,7 @@ import { readReadinessGate } from '../../lib/editorial/index.js';
 import { generateManuscriptFix, acceptManuscriptFix } from './manuscriptFix.js';
 import { verifyComicScript } from './scriptVerify.js';
 import { checkSeriesCanonReadiness } from './canonReadiness.js';
+import { addNotification, removeByMetadata, NOTIFICATION_TYPES, PRIORITY_LEVELS } from '../notifications.js';
 
 // runs: Map<seriesId, { runId, clients[], lastPayload, cancelRequested, finished,
 //   cleanupTimer, startedAt, mode, options, runState, activeChild }>
@@ -172,6 +173,21 @@ export function resolveAutopilotCheckPauseThreshold(options = {}, settings = nul
   const pec = settings?.pipelineEditorialChecks || {};
   if (Number.isInteger(pec?.checkFindingsPauseThreshold)) return pec.checkFindingsPauseThreshold;
   return DEFAULT_CHECK_FINDINGS_PAUSE_THRESHOLD;
+}
+
+// Pause escalation (#1615): post an in-app notification (notification center,
+// surfaced in the header dropdown) when a run pauses, so a paused run doesn't sit
+// unnoticed until the user happens to open the status page. Unlike the other
+// gates this defaults ON — it's a zero-cost informational signal that directly
+// addresses the "paused runs go unnoticed" problem — but stays overridable per
+// run and via the persisted setting for users who don't want the noise. Boolean
+// at every layer: per-run option wins, then the persisted setting, then true.
+export const DEFAULT_NOTIFY_ON_PAUSE = true;
+export function resolveAutopilotNotifyOnPause(options = {}, settings = null) {
+  if (typeof options?.notifyOnPause === 'boolean') return options.notifyOnPause;
+  const pec = settings?.pipelineEditorialChecks || {};
+  if (typeof pec?.notifyOnPause === 'boolean') return pec.notifyOnPause;
+  return DEFAULT_NOTIFY_ON_PAUSE;
 }
 
 // Per-gate copy for the non-convergence pause — shared by the arc-verify and
@@ -611,6 +627,30 @@ async function fileGap(record, sId, { gapKind, issueId = null, summary, context 
   if (result && !result.duplicate) {
     broadcast(sId, { type: 'gap:filed', gapKind, issueId, taskId: result.id });
   }
+}
+
+// Pause escalation (#1615): post an in-app notification when a run pauses so the
+// user is told actively, not only when they happen to open the status page. The
+// SSE `paused` frame still fires for an attached client; this is the persistent
+// out-of-band signal for a user who isn't watching. Opt-out via
+// `options.notifyOnPause` / the persisted setting (default on); never fires in
+// dry-run. Prior pause notifications for this series are cleared first so a
+// resume→pause cycle leaves exactly one current banner instead of a stack, and
+// the metadata field is series-scoped so removeByMetadata can't touch unrelated
+// notifications. Best-effort — a notification failure must never abort the run.
+async function notifyPause(record, sId, { reason, pauseKind = null, currentStep = null }) {
+  if (record.options.notifyOnPause === false || record.mode !== 'execute') return;
+  const series = await getSeries(sId).catch(() => null);
+  const seriesName = series?.name || 'a series';
+  await removeByMetadata('autopilotPauseSeriesId', sId).catch(() => {});
+  await addNotification({
+    type: NOTIFICATION_TYPES.AUTOPILOT_PAUSED,
+    title: `Autopilot paused — ${seriesName}`,
+    description: reason || 'The run paused and needs human review before it can continue.',
+    priority: PRIORITY_LEVELS.HIGH,
+    link: `/pipeline/series/${sId}`,
+    metadata: { autopilotPauseSeriesId: sId, runId: record.runId, pauseKind, currentStep },
+  }).catch((err) => { console.log(`⚠️ autopilot: pause notification failed for ${sId.slice(0, 12)}: ${err.message}`); });
 }
 
 // Series Autopilot threads BOTH its run provider AND its run model as SOFT
@@ -1625,6 +1665,7 @@ export async function startSeriesAutopilot(sId, options = {}) {
     ...resolveAutopilotRounds(options, settings),
     readinessGate: resolveAutopilotReadinessGate(options, settings),
     checkFindingsPauseThreshold: resolveAutopilotCheckPauseThreshold(options, settings),
+    notifyOnPause: resolveAutopilotNotifyOnPause(options, settings),
   };
 
   if (existing) {
@@ -1762,8 +1803,10 @@ export async function startSeriesAutopilot(sId, options = {}) {
         if (!selfGatingStep && !zeroRoundSkip) {
           const budget = await getDomainBudgetStatus('cos');
           if (!budget.withinBudget) {
-            await persistMarker(sId, { status: 'paused', runId, currentStep: step.kind, lastError: `daily cos ${budget.exceeded} budget reached` });
-            broadcast(sId, { type: 'paused', runId, reason: `daily cos ${budget.exceeded} budget reached`, completedAt: new Date().toISOString() });
+            const budgetReason = `daily cos ${budget.exceeded} budget reached`;
+            await persistMarker(sId, { status: 'paused', runId, currentStep: step.kind, lastError: budgetReason });
+            broadcast(sId, { type: 'paused', runId, reason: budgetReason, completedAt: new Date().toISOString() });
+            await notifyPause(record, sId, { reason: budgetReason, pauseKind: 'budget', currentStep: step.kind });
             console.log(`⏸️  autopilot paused (budget) — series=${sId.slice(0, 12)} after ${ordinal} steps`);
             return;
           }
@@ -1779,6 +1822,7 @@ export async function startSeriesAutopilot(sId, options = {}) {
         if (result?.pause) {
           await persistMarker(sId, { status: 'paused', runId, currentStep: step.kind, residualFindings: result.residual || [], lastError: result.reason, pauseKind: result.pauseKind || null, healthBreakdown: result.healthBreakdown || null });
           broadcast(sId, { type: 'paused', runId, scope: step.kind, reason: result.reason, residualFindings: result.residual || [], pauseKind: result.pauseKind || null, healthBreakdown: result.healthBreakdown || null, completedAt: new Date().toISOString() });
+          await notifyPause(record, sId, { reason: result.reason, pauseKind: result.pauseKind || null, currentStep: step.kind });
           // Only file the generic stalled task when the step didn't already file
           // a more specific gap (canon-undescribed, visual-no-pages, …) — else
           // fileGaps would create two CoS tasks for one underlying problem (the
