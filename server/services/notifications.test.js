@@ -257,6 +257,31 @@ describe('notifications', () => {
       expect(result.success).toBe(true)
       expect(result.removed).toBe(0)
     })
+
+    it('should emit a removed event per id so live clients prune their list', async () => {
+      const removedSpy = vi.fn()
+      const countSpy = vi.fn()
+      notificationEvents.on('removed', removedSpy)
+      notificationEvents.on('count-changed', countSpy)
+
+      await removeByMetadata('memoryId', 'mem-1')
+
+      expect(removedSpy).toHaveBeenCalledWith({ id: 'n1' })
+      expect(countSpy).toHaveBeenCalled()
+
+      notificationEvents.off('removed', removedSpy)
+      notificationEvents.off('count-changed', countSpy)
+    })
+
+    it('should not emit a removed event when nothing matches', async () => {
+      const removedSpy = vi.fn()
+      notificationEvents.on('removed', removedSpy)
+
+      await removeByMetadata('memoryId', 'nonexistent')
+
+      expect(removedSpy).not.toHaveBeenCalled()
+      notificationEvents.off('removed', removedSpy)
+    })
   })
 
   describe('markAsRead', () => {
