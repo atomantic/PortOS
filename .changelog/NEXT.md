@@ -25,3 +25,4 @@
 ## Internal
 
 - **[issue-1544] Dedup the arc-planner's season-tree grouping and episode-match logic.** Extracted `groupIssuesBySeasonTree` (backs both the arc-verify and beat-continuity context builders) and `seasonIdByNumberOf` + `matchIssueForEpisodeEdit` (back both the arc-resolve and beat-continuity episode-correction passes) into `arcPlanner/context.js`. Pure refactor — prompt output and match semantics are unchanged. (`server/services/pipeline/arcPlanner/`)
+- **Bump bundled slashdo to v3.17.2 — `/do:next --issues` now orders the backlog by declared dependencies and priority.** Auto-pick was strictly oldest-first; it now skips an issue whose body declares an open `Depends on #N` / `Blocked by #N` (self-clearing once the blocker closes) and honors a `priority:<N>` label to sequence independent work, while `/do:replan` keeps blocked issues out of the stale-prune path and reconciles dependency markers. (`lib/slashdo` submodule)
