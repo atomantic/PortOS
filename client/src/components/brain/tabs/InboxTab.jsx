@@ -236,22 +236,26 @@ export default function InboxTab({ onRefresh, settings }) {
   const doneEntries = entries.filter(e => e.status === 'done');
   const errorEntries = entries.filter(e => e.status === 'error');
 
-  // Creative notes the user flagged at capture, not yet marked done — the pool
-  // the "Send to Catalog" batch action draws from. Pending (optimistic) entries
-  // are excluded so we never ship a thought the server hasn't confirmed.
+  // Creative notes the user flagged at capture, not yet marked done and not yet
+  // consumed by a committed catalog ingest — the pool the "Send to Catalog" batch
+  // action draws from. `sentToCatalogAt` (stamped on commit, not navigation)
+  // drops a note out so it can't be accidentally re-sent. Pending (optimistic)
+  // entries are excluded so we never ship a thought the server hasn't confirmed.
   const creativeEntries = entries.filter(
-    e => e.creative && e.status !== 'done' && !String(e.id).startsWith('_pending_')
+    e => e.creative && e.status !== 'done' && !e.sentToCatalogAt && !String(e.id).startsWith('_pending_')
   );
   // Batch-send creative notes into the catalog ingest flow. We hand the combined
-  // text to /catalog/ingest (router state) where the user runs extract→review→
-  // commit — turning loose creative thoughts into typed catalog ingredients.
+  // text plus the source note ids to /catalog/ingest (router state) where the
+  // user runs extract→review→commit — turning loose creative thoughts into typed
+  // catalog ingredients. On commit the catalog page stamps these ids consumed.
   const handleSendCreativeToCatalog = () => {
     if (!creativeEntries.length) return;
     const rawText = creativeEntries
       .map(e => e.capturedText)
       .filter(Boolean)
       .join('\n\n---\n\n');
-    navigate('/catalog/ingest', { state: { prefill: { title: 'Creative notes from Brain', rawText } } });
+    const creativeNoteIds = creativeEntries.map(e => e.id);
+    navigate('/catalog/ingest', { state: { prefill: { title: 'Creative notes from Brain', rawText, creativeNoteIds } } });
   };
 
   if (loading) {

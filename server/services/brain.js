@@ -681,6 +681,24 @@ export async function markInboxDone(inboxLogId) {
 }
 
 /**
+ * Mark a batch of creative inbox notes as consumed by a catalog ingest that just
+ * committed — stamps `sentToCatalogAt` so they drop out of the inbox's "ready to
+ * become ingredients" banner and can't be accidentally re-sent. Idempotent and
+ * forgiving: ids that no longer exist (deleted/tombstoned) are skipped silently
+ * so a partially-stale list still stamps the rest. Returns the updated entries.
+ */
+export async function markInboxSentToCatalog(ids) {
+  const sentToCatalogAt = new Date().toISOString();
+  const updated = [];
+  for (const id of ids) {
+    const entry = await storage.updateInboxLog(id, { sentToCatalogAt });
+    if (entry) updated.push(entry);
+  }
+  console.log(`🧠 Marked ${updated.length} creative note(s) sent to catalog`);
+  return updated;
+}
+
+/**
  * Update inbox entry (edit captured text)
  */
 export async function updateInboxEntry(inboxLogId, updates) {

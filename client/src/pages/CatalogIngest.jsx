@@ -21,6 +21,7 @@ import {
   ingestCatalogVoice,
   ingestCatalogBrain,
 } from '../services/apiCatalog';
+import { markBrainInboxSentToCatalog } from '../services/apiBrain';
 
 // One review section per ingredient type. The first three are bible-shaped
 // (character/place/object) and use `physicalDescription`/`description` as the
@@ -89,6 +90,11 @@ export default function CatalogIngest() {
   const recorderRef = useRef(null);
   const fileInputRef = useRef(null);
   const brainHandledRef = useRef(false);
+  // Creative inbox note ids handed off from the Brain batch-send. Once the
+  // commit below succeeds we stamp these consumed so they drop out of the
+  // inbox's "ready to become ingredients" banner (issue #1722). Held in a ref so
+  // it survives the history-state clear and the extract/review re-renders.
+  const creativeNoteIdsRef = useRef([]);
 
   // Stop the mic if the page unmounts mid-recording (navigating away), so the
   // MediaRecorder stream isn't left live with no UI to stop it.
@@ -237,6 +243,9 @@ export default function CatalogIngest() {
       setSourceMode('paste');
       setTitle(prefill.title || '');
       setRawText(prefill.rawText);
+      if (Array.isArray(prefill.creativeNoteIds)) {
+        creativeNoteIdsRef.current = prefill.creativeNoteIds.filter(Boolean);
+      }
     }
     if (handled) {
       brainHandledRef.current = true;
@@ -379,6 +388,16 @@ export default function CatalogIngest() {
     if (!result) return;
     const n = Array.isArray(result.ingredients) ? result.ingredients.length : accepted.length;
     toast.success(`Added ${n} ingredient${n === 1 ? '' : 's'} to the catalog.`);
+    // Best-effort: mark the source creative notes consumed so the inbox banner
+    // stops offering them. Only fires when this ingest came from the Brain
+    // batch-send (ids present). Failure is non-fatal — the notes just stay
+    // re-sendable (the prior behavior) — so swallow it silently rather than
+    // toasting a confusing error after a successful commit.
+    const noteIds = creativeNoteIdsRef.current;
+    if (noteIds.length) {
+      creativeNoteIdsRef.current = [];
+      await markBrainInboxSentToCatalog(noteIds, { silent: true }).catch(() => {});
+    }
     navigate('/catalog');
   };
 

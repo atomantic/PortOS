@@ -13,6 +13,7 @@ vi.mock('../services/brain.js', () => ({
   resolveReview: vi.fn(),
   fixClassification: vi.fn(),
   retryClassification: vi.fn(),
+  markInboxSentToCatalog: vi.fn(),
   // People
   getPeople: vi.fn(),
   getPersonById: vi.fn(),
@@ -333,6 +334,44 @@ describe('Brain Routes', () => {
 
       expect(response.status).toBe(200);
       expect(brainService.retryClassification).toHaveBeenCalledWith('inbox-001', undefined, undefined);
+    });
+  });
+
+  describe('POST /api/brain/inbox/sent-to-catalog', () => {
+    const id1 = '11111111-1111-4111-8111-111111111111';
+    const id2 = '22222222-2222-4222-8222-222222222222';
+
+    it('stamps the given creative notes consumed and returns the count', async () => {
+      brainService.markInboxSentToCatalog.mockResolvedValue([
+        { id: id1, sentToCatalogAt: 'x' },
+        { id: id2, sentToCatalogAt: 'x' }
+      ]);
+
+      const response = await request(app)
+        .post('/api/brain/inbox/sent-to-catalog')
+        .send({ ids: [id1, id2] });
+
+      expect(response.status).toBe(200);
+      expect(response.body.count).toBe(2);
+      expect(brainService.markInboxSentToCatalog).toHaveBeenCalledWith([id1, id2]);
+    });
+
+    it('rejects an empty id list', async () => {
+      const response = await request(app)
+        .post('/api/brain/inbox/sent-to-catalog')
+        .send({ ids: [] });
+
+      expect(response.status).toBe(400);
+      expect(brainService.markInboxSentToCatalog).not.toHaveBeenCalled();
+    });
+
+    it('rejects non-guid ids', async () => {
+      const response = await request(app)
+        .post('/api/brain/inbox/sent-to-catalog')
+        .send({ ids: ['_pending_1'] });
+
+      expect(response.status).toBe(400);
+      expect(brainService.markInboxSentToCatalog).not.toHaveBeenCalled();
     });
   });
 

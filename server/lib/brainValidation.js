@@ -70,7 +70,12 @@ export const inboxLogRecordSchema = z.object({
   error: errorSchema.optional(),
   // User-marked creative note (see captureInputSchema.creative). Drives the
   // "Send creative notes to Catalog" batch action in the inbox.
-  creative: z.boolean().optional()
+  creative: z.boolean().optional(),
+  // ISO timestamp stamped once this creative note's catalog ingest COMMITS
+  // (not on mere navigation). Drives the inbox's "already consumed" filter so a
+  // batch-sent note drops out of the "ready to become ingredients" banner and
+  // can't be accidentally re-sent. Absent ⇒ still re-sendable.
+  sentToCatalogAt: z.string().datetime().optional()
 });
 
 // People Record schema
@@ -200,6 +205,13 @@ export const fixInputSchema = z.object({
 export const updateInboxInputSchema = z.object({
   capturedText: z.string().min(1).max(10000)
 });
+
+// Batch mark a set of creative inbox notes as consumed by a catalog ingest that
+// just committed. Bounded to keep a malformed/runaway payload from stamping the
+// whole inbox in one call.
+export const markInboxSentToCatalogSchema = z.object({
+  ids: z.array(z.string().guid()).min(1).max(200)
+}).strict();
 
 // Create/Update People input schema
 export const peopleInputSchema = z.object({

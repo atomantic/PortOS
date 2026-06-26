@@ -130,6 +130,7 @@ import {
   runWeeklyReview,
   retryClassification,
   markInboxDone,
+  markInboxSentToCatalog,
   updateInboxEntry,
   deleteInboxEntry,
   deleteMemoryEntry,
@@ -534,6 +535,45 @@ describe('brain service', () => {
       const result = await markInboxDone('missing');
 
       expect(result).toBeNull();
+      expect(storage.updateInboxLog).not.toHaveBeenCalled();
+    });
+  });
+
+  // ===========================================================================
+  // markInboxSentToCatalog
+  // ===========================================================================
+
+  describe('markInboxSentToCatalog', () => {
+    it('stamps sentToCatalogAt on each id and returns updated entries', async () => {
+      storage.updateInboxLog
+        .mockResolvedValueOnce({ id: 'inbox-001', sentToCatalogAt: 'x' })
+        .mockResolvedValueOnce({ id: 'inbox-002', sentToCatalogAt: 'x' });
+
+      const result = await markInboxSentToCatalog(['inbox-001', 'inbox-002']);
+
+      expect(storage.updateInboxLog).toHaveBeenCalledTimes(2);
+      expect(storage.updateInboxLog).toHaveBeenNthCalledWith(1, 'inbox-001', {
+        sentToCatalogAt: expect.any(String)
+      });
+      expect(storage.updateInboxLog).toHaveBeenNthCalledWith(2, 'inbox-002', {
+        sentToCatalogAt: expect.any(String)
+      });
+      expect(result).toHaveLength(2);
+    });
+
+    it('skips ids that no longer exist (null update) without throwing', async () => {
+      storage.updateInboxLog
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ id: 'inbox-002', sentToCatalogAt: 'x' });
+
+      const result = await markInboxSentToCatalog(['gone', 'inbox-002']);
+
+      expect(result).toEqual([{ id: 'inbox-002', sentToCatalogAt: 'x' }]);
+    });
+
+    it('returns an empty array for an empty id list', async () => {
+      const result = await markInboxSentToCatalog([]);
+      expect(result).toEqual([]);
       expect(storage.updateInboxLog).not.toHaveBeenCalled();
     });
   });
