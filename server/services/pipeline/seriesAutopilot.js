@@ -638,11 +638,20 @@ async function fileGap(record, sId, { gapKind, issueId = null, summary, context 
 // resume→pause cycle leaves exactly one current banner instead of a stack, and
 // the metadata field is series-scoped so removeByMetadata can't touch unrelated
 // notifications. Best-effort — a notification failure must never abort the run.
+// Drop any pause banner for this series. Called before posting a fresh one (so a
+// resume→pause cycle leaves exactly one) AND when a new execute run starts (so a
+// run resumed from a pause that then completes/errors doesn't leave a stale
+// "paused" banner + dead resume link). Series-scoped metadata so it can't touch
+// unrelated notifications. Best-effort.
+async function clearPauseNotice(sId) {
+  await removeByMetadata('autopilotPauseSeriesId', sId).catch(() => {});
+}
+
 async function notifyPause(record, sId, { reason, pauseKind = null, currentStep = null }) {
   if (record.options.notifyOnPause === false || record.mode !== 'execute') return;
   const series = await getSeries(sId).catch(() => null);
   const seriesName = series?.name || 'a series';
-  await removeByMetadata('autopilotPauseSeriesId', sId).catch(() => {});
+  await clearPauseNotice(sId);
   await addNotification({
     type: NOTIFICATION_TYPES.AUTOPILOT_PAUSED,
     title: `Autopilot paused — ${seriesName}`,
@@ -1745,6 +1754,9 @@ export async function startSeriesAutopilot(sId, options = {}) {
       const series0 = await getSeries(sId);
       broadcast(sId, { type: 'start', runId, mode, target: series0.targetFormat });
       await persistMarker(sId, { status: 'running', runId, currentStep: null, residualFindings: [], lastError: null });
+      // A resume is a fresh start: drop any stale pause banner up front so a run
+      // that completes/errors without re-pausing doesn't leave a dead resume link.
+      await clearPauseNotice(sId);
       if (runOptions.includeVisual && !VISUAL_DRAFT_ENABLED) {
         broadcast(sId, { type: 'note', message: 'Draft visual rendering is not enabled in this build — running to text-ready + editorial review.' });
       }

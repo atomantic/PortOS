@@ -1039,6 +1039,15 @@ describe('autopilot conductor', () => {
     expect(addNotification).not.toHaveBeenCalled();
   });
 
+  it('clears any stale pause banner when a (resumed) execute run starts (#1615)', async () => {
+    // A resume reuses startSeriesAutopilot; clearing on start means a run that
+    // completes/errors without re-pausing doesn't leave a dead resume link.
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, {});
+    await waitFor(runFinished(seriesId));
+    expect(removeByMetadata).toHaveBeenCalledWith('autopilotPauseSeriesId', seriesId);
+  });
+
   it('does not notify when notifyOnPause is opted out for the run (#1615)', async () => {
     verifyFindings = [{ severity: 'high', problem: 'plot hole', location: 'V1' }];
     const { seriesId } = await seedComplete();
