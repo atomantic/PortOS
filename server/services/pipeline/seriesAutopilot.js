@@ -1163,7 +1163,7 @@ async function runEditorialChecksPass(sId, record) {
       return {
         pause: true,
         pauseKind: 'checkFindings',
-        reason: `Editorial checks surfaced ${highFindings.length} high-severity finding(s) (≥ threshold ${threshold}) — paused for review. Address them in the manuscript editor, or lower/disable the editorial-check pause threshold in Options and resume.`,
+        reason: `Editorial checks surfaced ${highFindings.length} high-severity finding(s) (≥ threshold ${threshold}) — paused for review. Address them in the manuscript editor, or raise the editorial-check pause threshold above ${highFindings.length} (set it to 0 to disable) in Options and resume.`,
         residual,
       };
     }

@@ -569,7 +569,7 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
             {ap.status === 'paused' && ap.pauseKind === 'checkFindings' ? (
               <span
                 className="px-1.5 py-0.5 rounded text-[10px] bg-port-warning/15 text-port-warning border border-port-warning/30"
-                title="Editorial checks surfaced too many High findings — address them (or lower the threshold) and resume"
+                title="Editorial checks surfaced too many High findings — address them (or raise the threshold) and resume"
               >
                 high findings
               </span>
