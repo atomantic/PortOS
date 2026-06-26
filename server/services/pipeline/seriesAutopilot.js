@@ -1154,7 +1154,7 @@ async function runEditorialChecksPass(sId, record) {
       // sanitizes them), so the residual uses the same shape as the other pauses;
       // keep checkId so the UI can link a residual back to the check that raised it.
       const residual = highFindings.map((f) => ({
-        severity: 'high',
+        severity: f.severity, // already filtered to 'high' — carry it rather than re-asserting
         location: f.location || (f.checkId ? `check ${f.checkId}` : 'manuscript'),
         problem: f.problem || 'high-severity editorial finding',
         checkId: f.checkId,

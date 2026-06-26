@@ -28,14 +28,6 @@ const DEFAULT_BEAT_CONTINUITY_ROUNDS = 2;
 // Editorial-checks pause threshold (#1613) — mirror the server default (0 = off).
 // Unlike the round bounds it has no upper cap; a large N is effectively off.
 const DEFAULT_CHECK_PAUSE_THRESHOLD = 0;
-// Clamp the threshold to a non-negative integer. Blank/invalid → 0 (off) — a
-// cleared field disables the gate rather than falling back to a non-zero default.
-const clampThreshold = (n) => {
-  if (n === '' || n === null || n === undefined) return 0;
-  const v = Number(n);
-  if (!Number.isFinite(v)) return 0;
-  return Math.max(0, Math.round(v));
-};
 
 // Editorial-health readiness gate (#1316/#1580) — the "manuscript clean" bar the
 // autopilot must clear before visuals. Mirrors READINESS_GATES on the server. The
@@ -47,23 +39,29 @@ const READINESS_GATE_LABELS = {
   noOpenHighOrMedium: 'No open High or Medium (strict)',
   none: 'None — skip the health gate',
 };
-const clampRound = (n, fallback) => {
-  // A blank/cleared field falls back to the default — NOT 0. (Number('') === 0,
-  // and 0 means "skip the gate", so without this a cleared input would silently
-  // disable a verification gate.) An explicitly typed 0 is still honored.
+// Clamp a number-input value to [min, max] integers, with a blank/invalid field
+// falling back to `fallback` (NOT min — for round gates fallback is the default,
+// not 0, so a cleared input never silently disables a gate; an explicitly typed 0
+// is still honored). `max === null` leaves the value uncapped.
+const clampNumber = (n, { fallback, min, max }) => {
   if (n === '' || n === null || n === undefined) return fallback;
   const v = Number(n);
   if (!Number.isFinite(v)) return fallback;
-  return Math.max(ROUND_MIN, Math.min(ROUND_MAX, Math.round(v)));
+  const floored = Math.max(min, Math.round(v));
+  return max === null ? floored : Math.min(max, floored);
 };
+const clampRound = (n, fallback) => clampNumber(n, { fallback, min: ROUND_MIN, max: ROUND_MAX });
+// Pause threshold: blank → 0 (off), non-negative integer, no upper cap.
+const clampThreshold = (n) => clampNumber(n, { fallback: 0, min: 0, max: null });
 
-// A single convergence-round field for the Options popover. Allows '' mid-edit
-// (so the field can be cleared) and clamps + persists the chosen value on blur —
-// but ONLY when the user actually changed it. A bare focus+blur (tabbing through
-// Options) must not persist the display fallback or mark the field dirty, or it
-// would clobber a saved limit before settings load and block the load from
-// applying it.
-function RoundInput({ id, label, settingKey, value, setValue, defaultValue, persist }) {
+// A single numeric field for the Options popover (round bounds + the pause
+// threshold). Allows '' mid-edit (so the field can be cleared) and clamps +
+// persists the chosen value on blur — but ONLY when the user actually changed it.
+// A bare focus+blur (tabbing through Options) must not persist the display
+// fallback or mark the field dirty, or it would clobber a saved limit before
+// settings load and block the load from applying it. `max` caps the input (null =
+// uncapped); `clamp(value, defaultValue)` defaults to the round clamp.
+function RoundInput({ id, label, settingKey, value, setValue, defaultValue, persist, max = ROUND_MAX, clamp = clampRound }) {
   const dirtyRef = useRef(false);
   return (
     <div className="flex items-center gap-2">
@@ -72,13 +70,13 @@ function RoundInput({ id, label, settingKey, value, setValue, defaultValue, pers
         id={id}
         type="number"
         min={ROUND_MIN}
-        max={ROUND_MAX}
+        max={max ?? undefined}
         value={value}
         onChange={(e) => { dirtyRef.current = true; setValue(e.target.value === '' ? '' : Number(e.target.value)); }}
         onBlur={() => {
           if (!dirtyRef.current) return; // untouched — don't persist/clamp/mark dirty
           dirtyRef.current = false;
-          const v = clampRound(value, defaultValue);
+          const v = clamp(value, defaultValue);
           setValue(v);
           persist({ [settingKey]: v });
         }}
@@ -469,21 +467,17 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
           <p className="text-[11px] text-gray-500">
             The editorial-health bar this run must clear before drafting visuals. A per-run choice applies to this run only — it does not change the saved default.
           </p>
-          <div className="flex items-center gap-2 pt-1">
-            <label htmlFor="autopilot-check-pause-threshold" className="text-xs text-gray-300">Pause at high findings</label>
-            <input
+          <div className="pt-1">
+            <RoundInput
               id="autopilot-check-pause-threshold"
-              type="number"
-              min={0}
+              label="Pause at high findings"
+              settingKey="checkFindingsPauseThreshold"
               value={checkPauseThreshold}
-              onChange={(e) => editCheckPauseThreshold(e.target.value === '' ? '' : Number(e.target.value))}
-              onBlur={() => {
-                if (!checkPauseEditedRef.current) return;
-                const v = clampThreshold(checkPauseThreshold);
-                setCheckPauseThreshold(v);
-                persistRounds({ checkFindingsPauseThreshold: v });
-              }}
-              className="w-16 px-2 py-1 rounded text-xs bg-port-bg border border-port-border text-gray-200"
+              setValue={editCheckPauseThreshold}
+              defaultValue={DEFAULT_CHECK_PAUSE_THRESHOLD}
+              persist={persistRounds}
+              max={null}
+              clamp={clampThreshold}
             />
           </div>
           <p className="text-[11px] text-gray-500">
