@@ -142,6 +142,9 @@ export default function CatalogIngest() {
 
   const reset = () => {
     activeRunIdRef.current = null;
+    // Abandoning the review (Start Over / Cancel) discards the Brain hand-off —
+    // a later commit of unrelated text must NOT mark the original notes consumed.
+    creativeNoteIdsRef.current = [];
     recorderRef.current?.cancel?.();
     recorderRef.current = null;
     setRecording(false);
@@ -384,8 +387,11 @@ export default function CatalogIngest() {
       toast.error(err?.message || 'Commit failed');
       return null;
     });
-    setCommitting(false);
-    if (!result) return;
+    if (!result) { setCommitting(false); return; }
+    // Keep `committing` true through the mark request + navigate: re-enabling the
+    // Commit button before the awaited follow-up finishes would open a
+    // double-submit window that re-commits the same scrap and duplicates
+    // ingredients. We navigate away on success, so it never needs clearing.
     const n = Array.isArray(result.ingredients) ? result.ingredients.length : accepted.length;
     toast.success(`Added ${n} ingredient${n === 1 ? '' : 's'} to the catalog.`);
     // Best-effort: mark the source creative notes consumed so the inbox banner
