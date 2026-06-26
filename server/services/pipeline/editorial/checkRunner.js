@@ -19,7 +19,7 @@ import { randomUUID, createHash } from 'crypto';
 import { createSseRunner } from '../../../lib/sseUtils.js';
 import { runStagedLLM, runInlineLLM, runStageScopedInlineLLM, resolveStageContext } from '../../../lib/stageRunner.js';
 import { planManuscriptPass, fitContextToManuscriptFloor, estimateTokens, MANUSCRIPT_FLOOR_TOKENS } from '../../../lib/contextBudget.js';
-import { getEnabledChecks, getEnabledCheckRows, getAllChecks, applySeriesCheckConfig, buildCustomCheck, CUSTOM_CHECK_ID_PREFIX, EDITORIAL_SOURCES, comicLetteringIssues, proseStageIssues } from '../../../lib/editorial/index.js';
+import { getEnabledChecks, getEnabledCheckRows, getAllChecks, applySeriesCheckConfig, orderChecksByDependencies, buildCustomCheck, CUSTOM_CHECK_ID_PREFIX, EDITORIAL_SOURCES, comicLetteringIssues, proseStageIssues } from '../../../lib/editorial/index.js';
 import { getSettings } from '../../settings.js';
 import { getSeries } from '../series.js';
 import { listIssuesForSeries } from '../issues.js';
@@ -316,6 +316,22 @@ function fingerprintForCheck(check, resolved) {
   return sha256(segments.join(HASH_SEP));
 }
 
+// Inter-check context sharing (#1627). Build the read-only `ctx.priorFindings` a
+// check sees: the stamped findings produced EARLIER this pass by the checks it
+// named in `dependsOn`. Scoped to declared deps so a non-declaring check always
+// gets the shared EMPTY array (fully order-independent — identical to pre-#1627
+// behavior), and a check can only couple to a prior check it explicitly depended
+// on. Frozen — the array AND each finding (shallow) — so a check reads but can't
+// mutate the shared accumulator or another check's already-seeded finding.
+const EMPTY_PRIOR_FINDINGS = Object.freeze([]);
+export function buildScopedPriorFindings(findings, dependsOn) {
+  const deps = Array.isArray(dependsOn) ? dependsOn : [];
+  if (!deps.length || !Array.isArray(findings) || !findings.length) return EMPTY_PRIOR_FINDINGS;
+  const want = new Set(deps);
+  const scoped = findings.filter((f) => want.has(f?.checkId)).map((f) => Object.freeze({ ...f }));
+  return scoped.length ? Object.freeze(scoped) : EMPTY_PRIOR_FINDINGS;
+}
+
 // Output room reserved for an editorial check's findings JSON. Sized for the
 // editorial output (a bounded findings list — far smaller than the completeness
 // pass's full-page rewrites), NOT the 8_000-token contextBudget default: that
@@ -564,6 +580,11 @@ export async function runEditorialChecks(seriesId, options = {}) {
   // resolved config. The `needs*` gates inside the builder read only `check`
   // (config-independent); only the run loop consumes the merged config here.
   const enabledResolved = applySeriesCheckConfig(enabled, series?.editorialCheckConfig);
+  // Order the pass so a check's declared dependencies (#1627) run before it — the
+  // runner injects each dependency's findings into the dependent's
+  // `ctx.priorFindings`, so they must already be in the `findings` accumulator.
+  // A pass where nothing declares `dependsOn` keeps the exact registry order.
+  const enabledOrdered = orderChecksByDependencies(enabledResolved);
 
   const findings = [];
   const perCheck = [];
@@ -578,7 +599,7 @@ export async function runEditorialChecks(seriesId, options = {}) {
   // didn't run (which would silently clear an unrelated check's active pin).
   const ranCheckIds = new Set();
   let canceled = false;
-  for (const { check, config, severityOverride } of enabledResolved) {
+  for (const { check, config, severityOverride } of enabledOrdered) {
     if (signal?.aborted) { canceled = true; break; }
     onProgress?.({ type: 'check:start', checkId: check.id, label: check.label });
     // Run every check with its NATIVE default severity (#1596). A per-check
@@ -587,7 +608,22 @@ export async function runEditorialChecks(seriesId, options = {}) {
     // preserved as `nativeSeverity` — which lets a later "reset to Default"
     // restore the true native level on carried findings (even ones that don't
     // re-surface).
-    const ctx = { ...baseCtx, config, severityDefault: check.severityDefault };
+    // Inter-check context sharing (#1627): a check that declares `dependsOn` reads
+    // the findings its dependencies produced EARLIER this pass via
+    // `ctx.priorFindings` (scoped to declared deps only — a check with no
+    // `dependsOn` always gets the empty array and stays a pure function of its
+    // sources). `orderChecksByDependencies` above guarantees the deps already ran,
+    // so their stamped findings are in `findings`.
+    const priorFindings = buildScopedPriorFindings(findings, check.dependsOn);
+    const ctx = {
+      ...baseCtx,
+      config,
+      severityDefault: check.severityDefault,
+      priorFindings,
+      // Read a single dependency's findings by id — still scoped, so it returns []
+      // for a check NOT named in `dependsOn`, enforcing the explicit contract.
+      findingsByCheck: (checkId) => priorFindings.filter((f) => f.checkId === checkId),
+    };
     // Boundary try/catch: a check's run() calls into arbitrary logic / LLM
     // providers — one bad check must not abort the whole pass (mirrors the
     // per-comment fix guard in seriesAutopilot.runEditorial).
@@ -727,7 +763,9 @@ export async function previewCustomCheck(seriesId, def, { providerOverride, mode
   // Validate the (optional) per-run cap through the check's own config schema so
   // an out-of-range value falls back to the default rather than flooding.
   const config = check.configSchema.parse(Number.isInteger(maxFindings) ? { maxFindings } : {});
-  const ctx = { ...baseCtx, config, severityDefault: check.severityDefault };
+  // A preview runs one check in isolation — there are no prior findings, but expose
+  // the same ctx shape (#1627) so a draft whose run() references them never crashes.
+  const ctx = { ...baseCtx, config, severityDefault: check.severityDefault, priorFindings: EMPTY_PRIOR_FINDINGS, findingsByCheck: () => [] };
 
   if (typeof check.gate === 'function' && !check.gate(ctx)) {
     return { findings: [], skipped: true, invalid: false };

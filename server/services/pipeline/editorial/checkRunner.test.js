@@ -76,7 +76,7 @@ vi.mock('../reverseOutline.js', () => ({ getReverseOutline: vi.fn(async () => ou
 let editorialState = { characters: [] };
 vi.mock('../editorialAnalysis.js', () => ({ getSeriesEditorial: vi.fn(async () => editorialState) }));
 
-const { runEditorialChecks, buildEditorialCheckPlan, getReviewWithStaleness, enabledChecksConsumeReverseOutline, summarizeCheckErrors, previewCustomCheck } = await import('./checkRunner.js');
+const { runEditorialChecks, buildEditorialCheckPlan, getReviewWithStaleness, enabledChecksConsumeReverseOutline, summarizeCheckErrors, previewCustomCheck, buildScopedPriorFindings } = await import('./checkRunner.js');
 const { runStagedLLM, resolveStageContext } = await import('../../../lib/stageRunner.js');
 const { collectManuscriptSections } = await import('../arcPlanner.js');
 const { getSeriesCanon } = await import('../seriesCanon.js');
@@ -998,5 +998,76 @@ describe('enabledChecksConsumeReverseOutline (#1349)', () => {
   it('is false when every reverse-outline-consuming check is disabled', () => {
     const settings = disableWhere(consumesOutline);
     expect(enabledChecksConsumeReverseOutline(settings)).toBe(false);
+  });
+});
+
+// Inter-check context sharing (#1627) — dependency-scoped prior findings in ctx.
+describe('buildScopedPriorFindings (#1627)', () => {
+  const findings = [
+    { checkId: 'a', problem: 'x' }, { checkId: 'b', problem: 'y' }, { checkId: 'a', problem: 'z' },
+  ];
+  it('returns the shared empty (frozen) array when no deps are declared', () => {
+    const out = buildScopedPriorFindings(findings, []);
+    expect(out).toEqual([]);
+    expect(Object.isFrozen(out)).toBe(true);
+    expect(buildScopedPriorFindings(findings, undefined)).toEqual([]);
+  });
+  it('returns only the findings produced by the declared dependency ids', () => {
+    const out = buildScopedPriorFindings(findings, ['a']);
+    expect(out.map((f) => f.problem)).toEqual(['x', 'z']);
+    expect(out.every((f) => f.checkId === 'a')).toBe(true);
+  });
+  it('freezes the array AND each finding so a check can not mutate the accumulator', () => {
+    const out = buildScopedPriorFindings(findings, ['a', 'b']);
+    expect(Object.isFrozen(out)).toBe(true);
+    expect(out.every((f) => Object.isFrozen(f))).toBe(true);
+    expect(() => { out.push({}); }).toThrow();
+  });
+  it('returns empty when the accumulator holds nothing from the declared deps', () => {
+    expect(buildScopedPriorFindings(findings, ['zzz'])).toEqual([]);
+    expect(buildScopedPriorFindings([], ['a'])).toEqual([]);
+  });
+});
+
+describe('runEditorialChecks — ctx.priorFindings injection (#1627)', () => {
+  // The runner resolves checks from the LIVE registry objects, so we temporarily
+  // attach `dependsOn` / replace `run` on a real check and restore in `finally`.
+  const captureCtxFor = async (id, { dependsOn } = {}) => {
+    const check = getCheck(id);
+    const originalRun = check.run;
+    const hadDeps = Object.prototype.hasOwnProperty.call(check, 'dependsOn');
+    const originalDeps = check.dependsOn;
+    let ctx = null;
+    if (dependsOn) check.dependsOn = dependsOn;
+    check.run = vi.fn((c) => { ctx = c; return []; });
+    try {
+      await runEditorialChecks('s1');
+    } finally {
+      check.run = originalRun;
+      if (hadDeps) check.dependsOn = originalDeps; else delete check.dependsOn;
+    }
+    return ctx;
+  };
+
+  it('feeds a declared dependency\'s findings to the dependent (ordered + scoped + frozen)', async () => {
+    // info-dumping (LLM) declares it depends on naming (deterministic). The topo
+    // sort runs naming first, so its Alina/Alana findings are visible here.
+    const ctx = await captureCtxFor('prose.info-dumping', { dependsOn: ['naming.dissimilar-names'] });
+    expect(ctx, 'dependent ran').toBeTruthy();
+    expect(Array.isArray(ctx.priorFindings)).toBe(true);
+    expect(ctx.priorFindings.length).toBeGreaterThan(0);
+    expect(ctx.priorFindings.every((f) => f.checkId === 'naming.dissimilar-names')).toBe(true);
+    expect(Object.isFrozen(ctx.priorFindings)).toBe(true);
+    // findingsByCheck is scoped to declared deps: the declared id resolves, an
+    // undeclared id returns [] even if that check ran.
+    expect(ctx.findingsByCheck('naming.dissimilar-names').length).toBe(ctx.priorFindings.length);
+    expect(ctx.findingsByCheck('some.undeclared')).toEqual([]);
+  });
+
+  it('gives a check with no dependsOn an empty priorFindings even when earlier checks found things', async () => {
+    const ctx = await captureCtxFor('prose.info-dumping');
+    expect(ctx).toBeTruthy();
+    expect(ctx.priorFindings).toEqual([]);
+    expect(ctx.findingsByCheck('naming.dissimilar-names')).toEqual([]);
   });
 });

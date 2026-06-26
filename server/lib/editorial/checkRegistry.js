@@ -6291,6 +6291,21 @@ export function assertValidChecks(checks) {
         }
       }
     }
+    // `dependsOn` (#1627) is optional: an array of OTHER check ids whose findings
+    // this check reads from `ctx.priorFindings`. The runner topologically orders the
+    // pass so a declared dependency runs first; a check sees ONLY the findings of
+    // the checks it lists here (everything else stays order-independent). Shape is
+    // validated at load; the *referenced* ids are NOT — a dependency on a disabled,
+    // unknown, or not-yet-loaded (custom) check is tolerated at run time (the
+    // dependent just runs without those findings). A self-reference is meaningless.
+    if (check.dependsOn !== undefined) {
+      if (!Array.isArray(check.dependsOn) || check.dependsOn.some((d) => typeof d !== 'string' || !d)) {
+        throw new Error(`checkRegistry: ${check.id} dependsOn must be an array of check-id strings`);
+      }
+      if (check.dependsOn.includes(check.id)) {
+        throw new Error(`checkRegistry: ${check.id} cannot depend on itself`);
+      }
+    }
     if (seen.has(check.id)) throw new Error(`checkRegistry: duplicate id ${check.id}`);
     seen.add(check.id);
   }
@@ -6445,6 +6460,77 @@ export function applySeriesCheckConfig(enabled, seriesOverrides) {
     // rides through unchanged; only `config` is overlaid.
     return { ...pair, config: parsed.success ? parsed.data : config };
   });
+}
+
+/**
+ * Stable topological ordering of enabled check pairs by their declared
+ * `dependsOn` (#1627). A check that names another *enabled* check in `dependsOn`
+ * is emitted AFTER it, so when the runner injects a dependency's findings into the
+ * dependent's `ctx.priorFindings` the dependency has already run this pass. Checks
+ * that declare no dependencies keep their exact registry order (stable) — so a run
+ * where nothing opts in is byte-identical to before this existed.
+ *
+ * Robustness:
+ *  - A dependency on a check ABSENT from `pairs` (disabled, or outside a targeted
+ *    subset run) is ignored — the dependent still runs, just without those findings
+ *    (the runner's injection is likewise degrade-tolerant).
+ *  - A dependency CYCLE (or a chain that transitively waits on one) can't be
+ *    ordered; rather than drop a check or spin forever, the still-unplaced members
+ *    are flushed in registry order and the cycle is logged once. The runner then
+ *    simply can't guarantee a cyclic dependency's findings are present — acceptable,
+ *    since a cycle is a registry bug a human must fix.
+ *
+ * Pure + side-effect-free (aside from the one cycle warning). O(n²) over the
+ * enabled set, which is tiny (≈ the registry size).
+ *
+ * @param {Array<{check: object}>} pairs  enabled pairs (from getEnabledChecks / applySeriesCheckConfig)
+ * @returns {Array<{check: object}>} the same pairs, dependency-ordered
+ */
+export function orderChecksByDependencies(pairs) {
+  if (!Array.isArray(pairs)) return [];
+  if (pairs.length < 2) return pairs.slice();
+  // Only deps actually present in this run gate ordering — an absent dep can't be
+  // waited on (and would otherwise wedge the dependent forever).
+  const present = new Set();
+  for (const p of pairs) { const id = p?.check?.id; if (typeof id === 'string') present.add(id); }
+  const waits = pairs.map((p) => {
+    const id = p?.check?.id;
+    const declared = Array.isArray(p?.check?.dependsOn) ? p.check.dependsOn : [];
+    return new Set(declared.filter((d) => typeof d === 'string' && d !== id && present.has(d)));
+  });
+  const used = new Array(pairs.length).fill(false);
+  const emitted = new Set();
+  const result = [];
+  while (result.length < pairs.length) {
+    // Kahn's algorithm, but always take the LOWEST registry index among the ready
+    // nodes — that's what makes the sort stable (independent checks never move).
+    let pick = -1;
+    for (let i = 0; i < pairs.length; i += 1) {
+      if (used[i]) continue;
+      let ready = true;
+      for (const dep of waits[i]) { if (!emitted.has(dep)) { ready = false; break; } }
+      if (ready) { pick = i; break; }
+    }
+    if (pick === -1) {
+      // No ready node ⇒ every remaining node waits on another remaining node: a
+      // cycle. Flush the rest in registry order so nothing is dropped.
+      const stuck = [];
+      for (let i = 0; i < pairs.length; i += 1) {
+        if (used[i]) continue;
+        used[i] = true;
+        result.push(pairs[i]);
+        const id = pairs[i]?.check?.id;
+        if (typeof id === 'string') { emitted.add(id); stuck.push(id); }
+      }
+      console.warn(`⚠️ editorial check dependency cycle — running in registry order: ${stuck.join(', ')}`);
+      break;
+    }
+    used[pick] = true;
+    result.push(pairs[pick]);
+    const id = pairs[pick]?.check?.id;
+    if (typeof id === 'string') emitted.add(id);
+  }
+  return result;
 }
 
 // ---------------------------------------------------------------------------

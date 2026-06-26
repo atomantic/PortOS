@@ -76,6 +76,31 @@ both win when budget is tight. A single-chunk (whole-fits) run never summarizes,
 so it pays nothing. When the reverse-outline (#1349) or continuity-bible (#1305)
 artifacts land, either could feed this context more cheaply than a per-chunk call.
 
+## Inter-check context sharing (#1627)
+
+Within a single pass a check can read the findings produced by **other checks it
+explicitly depends on**, so compound signals are possible (e.g. on-the-nose
+dialogue that is *also* doing exposition for a setup another check flagged). The
+sharing is **opt-in and scoped**, which keeps every other check a pure function of
+its declared `sources` (order-independent):
+
+- A check declares `dependsOn: ['<otherCheckId>', …]` on its registry entry. The
+  runner topologically orders the pass (`orderChecksByDependencies`) so every
+  declared dependency runs **before** the dependent — independent checks keep their
+  exact registry order, so a pass where nothing opts in is unchanged.
+- During its `run(ctx)`, the dependent reads `ctx.priorFindings` — the stamped
+  findings (each carrying `checkId`) that its declared dependencies produced earlier
+  this pass — or `ctx.findingsByCheck('<id>')` for a single dependency's findings.
+  Both are **scoped to declared deps only**: a check that declares no `dependsOn`
+  always sees an empty `ctx.priorFindings`, and `findingsByCheck` returns `[]` for
+  any id the check didn't declare. The array and each finding are **frozen** — a
+  check may read but never mutate another check's already-seeded findings.
+- Degrade-tolerant: a dependency that is disabled, outside a targeted subset run, or
+  errored this pass simply contributes no findings (the dependent still runs). A
+  dependency **cycle** is a registry bug — it's logged and the cycle's members fall
+  back to registry order. The dependent must therefore tolerate missing prior
+  findings. `dependsOn` shape (string-array, no self-reference) is enforced at load.
+
 ## Discovery rule
 
 Before adding an editorial rule, check whether an existing registry entry covers
@@ -151,7 +176,7 @@ runner-injected `ctx.callInlineLLM` (an inline-prompt sibling of
 
 | Module | Purpose |
 |---|---|
-| `checkRegistry.js` | `EDITORIAL_CHECKS` array + `EDITORIAL_SOURCES` (the per-check `sources` vocabulary the staleness runner fingerprints, #1387) + fail-fast guards + lookup/state helpers (`getCheck`, `getCheckById`, `getAllChecks`, `listChecks`, `resolveCheckState`, `getEnabledChecks`, `resolveCheckConfig`). User-defined-check helpers (`buildCustomCheck`, `buildCustomCheckPrompt`, `readCustomCheckDefs`, `isCustomCheckId`, `isValidCustomCheckDef`). Ships two reference checks: `naming.dissimilar-names` (deterministic) and `prose.info-dumping` (LLM). |
+| `checkRegistry.js` | `EDITORIAL_CHECKS` array + `EDITORIAL_SOURCES` (the per-check `sources` vocabulary the staleness runner fingerprints, #1387) + fail-fast guards + lookup/state helpers (`getCheck`, `getCheckById`, `getAllChecks`, `listChecks`, `resolveCheckState`, `getEnabledChecks`, `resolveCheckConfig`, `orderChecksByDependencies` (the dependency topo-sort, #1627)). User-defined-check helpers (`buildCustomCheck`, `buildCustomCheckPrompt`, `readCustomCheckDefs`, `isCustomCheckId`, `isValidCustomCheckDef`). Ships two reference checks: `naming.dissimilar-names` (deterministic) and `prose.info-dumping` (LLM). |
 | `nameSimilarity.js` | Pure, dependency-free name-confusability primitives for `naming.dissimilar-names` (#1291): `normalizeName`, `vowelSkeleton`, `soundex` (phonetic key), `levenshtein` (edit distance), `nameSimilaritySignals` (the per-pair signal list, with option toggles), and `firstLetterHistogram` / `findFirstLetterClusters` (cast first-letter crowding). |
 | `cliches.js` | Pure, dependency-free cliché + overwriting primitives for `prose.cliches` and `prose.modifier-stacking` (#1308): `CLICHE_PHRASES` (seed stock-simile/idiom list), `findCliches` (whole-word phrase scan with house-style allow/extra lists), and `findModifierStacking` (cumulative no-comma runs of 3+ stacked adjectives/adverbs). The LLM sibling `prose.dead-metaphor` handles the judgment cases (mixed/dead metaphor, novel clichés, purple prose). |
 | `italicThoughts.js` | Pure, dependency-free italic-thought primitive for `prose.italic-thoughts` (#1300): `findItalicThoughts` (multi-word markdown `*…*` / `_…_` italic runs, dedup + word-count threshold so single-word emphasis, bold, and `snake_case` are skipped). The LLM siblings (`opening.wrong-start`, `prose.mirror-description`, `dialogue.pleasantries`, `prose.kill-your-darlings`) handle the judgment cases in the #1300 anti-pattern bundle. |

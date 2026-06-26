@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { z } from 'zod';
 import {
   EDITORIAL_CHECKS,
@@ -13,6 +13,7 @@ import {
   resolveCheckSeverity,
   getEnabledChecks,
   applySeriesCheckConfig,
+  orderChecksByDependencies,
   buildCustomCheck,
   buildCustomCheckPrompt,
   isValidCustomCheckDef,
@@ -5100,5 +5101,76 @@ describe('cast.representation-balance — deterministic check (#1312)', () => {
   it('tolerates empty canon / sections / outline without throwing', () => {
     expect(() => runRep({ characters: [] })).not.toThrow();
     expect(runRep({ characters: [{}, { name: '' }] }, { sections: [sec(1, 'x')] })).toEqual([]);
+  });
+});
+
+// Inter-check context sharing — dependency ordering (#1627).
+describe('orderChecksByDependencies (#1627)', () => {
+  // A pair is just `{ check: { id, dependsOn? } }` here — ordering reads only those.
+  const pair = (id, dependsOn) => ({ check: dependsOn ? { id, dependsOn } : { id } });
+  const ids = (pairs) => pairs.map((p) => p.check.id);
+
+  it('keeps registry order when no check declares a dependency (stable, identity)', () => {
+    const input = [pair('a'), pair('b'), pair('c')];
+    expect(ids(orderChecksByDependencies(input))).toEqual(['a', 'b', 'c']);
+  });
+
+  it('emits a declared dependency BEFORE the dependent even when registry order is reversed', () => {
+    // b depends on a, but is listed first — a must be pulled ahead of b.
+    const out = orderChecksByDependencies([pair('b', ['a']), pair('a'), pair('c')]);
+    expect(ids(out).indexOf('a')).toBeLessThan(ids(out).indexOf('b'));
+    // c (independent) stays in its relative slot — only b waited on something.
+    expect(ids(out)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('orders a transitive chain c→b→a so every dependency precedes its dependent', () => {
+    const out = ids(orderChecksByDependencies([pair('c', ['b']), pair('b', ['a']), pair('a')]));
+    expect(out.indexOf('a')).toBeLessThan(out.indexOf('b'));
+    expect(out.indexOf('b')).toBeLessThan(out.indexOf('c'));
+  });
+
+  it('ignores a dependency that is absent from the run (disabled / subset) and still runs the dependent', () => {
+    // b depends on z, which isn't in the enabled set — b still runs, order preserved.
+    const out = orderChecksByDependencies([pair('a'), pair('b', ['z'])]);
+    expect(ids(out)).toEqual(['a', 'b']);
+  });
+
+  it('breaks a dependency cycle by falling back to registry order without throwing or spinning', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const out = orderChecksByDependencies([pair('a', ['b']), pair('b', ['a']), pair('c')]);
+    // c (independent) is placed; the cyclic a/b are flushed in registry order.
+    expect(ids(out).sort()).toEqual(['a', 'b', 'c']);
+    expect(out).toHaveLength(3);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('returns a copy for trivial inputs and never mutates the caller array', () => {
+    expect(orderChecksByDependencies([])).toEqual([]);
+    const one = [pair('a')];
+    const out = orderChecksByDependencies(one);
+    expect(out).not.toBe(one);
+    expect(ids(out)).toEqual(['a']);
+    expect(orderChecksByDependencies(null)).toEqual([]);
+  });
+});
+
+// dependsOn shape is validated at registry load (#1627).
+describe('assertValidChecks — dependsOn shape (#1627)', () => {
+  const base = {
+    id: 'x.test', label: 'X', scope: 'series', kind: 'deterministic', category: 'c',
+    severityDefault: 'low', run: () => [], configSchema: z.object({}), sources: ['canon'],
+  };
+  it('accepts an absent or string-array dependsOn', () => {
+    expect(() => assertValidChecks([base])).not.toThrow();
+    expect(() => assertValidChecks([{ ...base, dependsOn: ['naming.dissimilar-names'] }])).not.toThrow();
+  });
+  it('rejects a non-array or non-string-element dependsOn', () => {
+    expect(() => assertValidChecks([{ ...base, dependsOn: 'a' }])).toThrow(/dependsOn must be an array/);
+    expect(() => assertValidChecks([{ ...base, dependsOn: [1] }])).toThrow(/dependsOn must be an array/);
+    expect(() => assertValidChecks([{ ...base, dependsOn: [''] }])).toThrow(/dependsOn must be an array/);
+  });
+  it('rejects a self-reference', () => {
+    expect(() => assertValidChecks([{ ...base, dependsOn: ['x.test'] }])).toThrow(/cannot depend on itself/);
   });
 });
