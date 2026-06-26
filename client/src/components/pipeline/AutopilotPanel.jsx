@@ -47,8 +47,8 @@ const clampNumber = (n, { fallback, min, max }) => {
   if (n === '' || n === null || n === undefined) return fallback;
   const v = Number(n);
   if (!Number.isFinite(v)) return fallback;
-  const floored = Math.max(min, Math.round(v));
-  return max === null ? floored : Math.min(max, floored);
+  const rounded = Math.max(min, Math.round(v));
+  return max === null ? rounded : Math.min(max, rounded);
 };
 const clampRound = (n, fallback) => clampNumber(n, { fallback, min: ROUND_MIN, max: ROUND_MAX });
 // Pause threshold: blank → 0 (off), non-negative integer, no upper cap.
