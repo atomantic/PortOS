@@ -61,6 +61,12 @@ const autopilotStartSchema = z.object({
   // for one run no longer requires editing global settings. Enum shares the
   // canonical READINESS_GATES set so the API and the scorer can't drift.
   readinessGate: z.enum(READINESS_GATES).optional(),
+  // Per-run editorial-checks pause threshold override (#1613). When the checks
+  // pass surfaces ≥ N high-severity findings, the run pauses for human review
+  // instead of proceeding. When omitted, falls back to the persisted
+  // pipelineEditorialChecks.checkFindingsPauseThreshold, then 0 (off). 0 disables
+  // the gate for this run. No upper bound — a large N is effectively off.
+  checkFindingsPauseThreshold: z.number().int().min(0).optional(),
 });
 
 router.post('/series/:id/autopilot/start', asyncHandler(async (req, res) => {

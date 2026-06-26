@@ -25,6 +25,17 @@ const ROUND_MAX = 20;
 const DEFAULT_ARC_ROUNDS = 3;
 const DEFAULT_EDITORIAL_ROUNDS = 2;
 const DEFAULT_BEAT_CONTINUITY_ROUNDS = 2;
+// Editorial-checks pause threshold (#1613) — mirror the server default (0 = off).
+// Unlike the round bounds it has no upper cap; a large N is effectively off.
+const DEFAULT_CHECK_PAUSE_THRESHOLD = 0;
+// Clamp the threshold to a non-negative integer. Blank/invalid → 0 (off) — a
+// cleared field disables the gate rather than falling back to a non-zero default.
+const clampThreshold = (n) => {
+  if (n === '' || n === null || n === undefined) return 0;
+  const v = Number(n);
+  if (!Number.isFinite(v)) return 0;
+  return Math.max(0, Math.round(v));
+};
 
 // Editorial-health readiness gate (#1316/#1580) — the "manuscript clean" bar the
 // autopilot must clear before visuals. Mirrors READINESS_GATES on the server. The
@@ -93,6 +104,8 @@ const STEP_LABELS = {
   scriptVerify: 'Verifying scripts',
   editorialReview: 'Editorial review',
   reverseOutline: 'Refreshing scene segmentation',
+  editorialChecks: 'Editorial checks',
+  editorialHealthGate: 'Editorial health gate',
   canonVerify: 'Checking canon descriptions',
   visualDraft: 'Drafting comic art',
 };
@@ -179,6 +192,11 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
   // option label so the user knows what the fallback is.
   const [readinessGate, setReadinessGate] = useState('');
   const [savedGate, setSavedGate] = useState('');
+  // Editorial-checks pause threshold (#1613). 0 = off (default): pause the run
+  // when the editorial-checks pass surfaces ≥ N high findings. Persisted like the
+  // round inputs (saved default + per-run override), so a raised value is reused
+  // on Resume.
+  const [checkPauseThreshold, setCheckPauseThreshold] = useState(DEFAULT_CHECK_PAUSE_THRESHOLD);
   // Per-field dirty flags. Until a field is edited its input shows a display
   // default we must NOT persist (that would clobber a higher saved setting on
   // the untouched gate). Tracked per-field so editing one gate never discards
@@ -187,6 +205,7 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
   const arcEditedRef = useRef(false);
   const editorialEditedRef = useRef(false);
   const beatContinuityEditedRef = useRef(false);
+  const checkPauseEditedRef = useRef(false);
   const [canon, setCanon] = useState(null);
   const [canonLoading, setCanonLoading] = useState(false);
 
@@ -204,6 +223,7 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
         if (!arcEditedRef.current) setArcRounds(Number.isInteger(pec.maxArcVerifyRounds) ? pec.maxArcVerifyRounds : DEFAULT_ARC_ROUNDS);
         if (!editorialEditedRef.current) setEditorialRounds(Number.isInteger(pec.maxEditorialRounds) ? pec.maxEditorialRounds : DEFAULT_EDITORIAL_ROUNDS);
         if (!beatContinuityEditedRef.current) setBeatContinuityRounds(Number.isInteger(pec.maxBeatContinuityRounds) ? pec.maxBeatContinuityRounds : DEFAULT_BEAT_CONTINUITY_ROUNDS);
+        if (!checkPauseEditedRef.current) setCheckPauseThreshold(Number.isInteger(pec.checkFindingsPauseThreshold) ? pec.checkFindingsPauseThreshold : DEFAULT_CHECK_PAUSE_THRESHOLD);
         // Persisted readiness gate — display-only, drives the "saved default" label.
         setSavedGate(READINESS_GATE_LABELS[pec.readinessGate] ? pec.readinessGate : '');
       })
@@ -231,6 +251,7 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
   const editArcRounds = useCallback((v) => { arcEditedRef.current = true; setArcRounds(v); }, []);
   const editEditorialRounds = useCallback((v) => { editorialEditedRef.current = true; setEditorialRounds(v); }, []);
   const editBeatContinuityRounds = useCallback((v) => { beatContinuityEditedRef.current = true; setBeatContinuityRounds(v); }, []);
+  const editCheckPauseThreshold = useCallback((v) => { checkPauseEditedRef.current = true; setCheckPauseThreshold(v); }, []);
 
   const { latest, frames } = usePipelineProgress(pipelineAutopilotSseUrl, [seriesId], { enabled: active });
 
@@ -306,6 +327,9 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
     if (arcEditedRef.current) roundOverrides.maxArcVerifyRounds = clampRound(arcRounds, DEFAULT_ARC_ROUNDS);
     if (editorialEditedRef.current) roundOverrides.maxEditorialRounds = clampRound(editorialRounds, DEFAULT_EDITORIAL_ROUNDS);
     if (beatContinuityEditedRef.current) roundOverrides.maxBeatContinuityRounds = clampRound(beatContinuityRounds, DEFAULT_BEAT_CONTINUITY_ROUNDS);
+    // #1613 — the editorial-checks pause threshold persists + overrides like the
+    // round inputs (clamps to a non-negative integer; 0 = off).
+    if (checkPauseEditedRef.current) roundOverrides.checkFindingsPauseThreshold = clampThreshold(checkPauseThreshold);
     if (Object.keys(roundOverrides).length) await persistRounds(roundOverrides);
     // Per-run readiness-gate override (#1580): send it ONLY when the user picked a
     // specific gate. Unlike the round inputs we never persist it — '' leaves the
@@ -321,7 +345,7 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
     // effect can reject a stale terminal frame from the previous run.
     activeRunIdRef.current = res.runId || null;
     setActive(true);
-  }, [seriesId, includeVisual, fileGaps, arcRounds, editorialRounds, beatContinuityRounds, readinessGate, persistRounds]);
+  }, [seriesId, includeVisual, fileGaps, arcRounds, editorialRounds, beatContinuityRounds, checkPauseThreshold, readinessGate, persistRounds]);
 
   const cancel = useCallback(async () => {
     await cancelPipelineAutopilot(seriesId).catch(() => null);
@@ -445,6 +469,26 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
           <p className="text-[11px] text-gray-500">
             The editorial-health bar this run must clear before drafting visuals. A per-run choice applies to this run only — it does not change the saved default.
           </p>
+          <div className="flex items-center gap-2 pt-1">
+            <label htmlFor="autopilot-check-pause-threshold" className="text-xs text-gray-300">Pause at high findings</label>
+            <input
+              id="autopilot-check-pause-threshold"
+              type="number"
+              min={0}
+              value={checkPauseThreshold}
+              onChange={(e) => editCheckPauseThreshold(e.target.value === '' ? '' : Number(e.target.value))}
+              onBlur={() => {
+                if (!checkPauseEditedRef.current) return;
+                const v = clampThreshold(checkPauseThreshold);
+                setCheckPauseThreshold(v);
+                persistRounds({ checkFindingsPauseThreshold: v });
+              }}
+              className="w-16 px-2 py-1 rounded text-xs bg-port-bg border border-port-border text-gray-200"
+            />
+          </div>
+          <p className="text-[11px] text-gray-500">
+            When the editorial-checks pass surfaces this many High findings (or more), the run pauses for review instead of proceeding. 0 = off. Saved as the default and reused on Resume.
+          </p>
           <p className="text-[11px] text-gray-500">
             Runs under the CoS auto-run autonomy domain. With it set to <em>dry-run</em>, this only previews the plan.
           </p>
@@ -526,6 +570,14 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
                 title="Auto-resolve stopped reducing blocking findings — needs a human edit, not more rounds"
               >
                 not converging
+              </span>
+            ) : null}
+            {ap.status === 'paused' && ap.pauseKind === 'checkFindings' ? (
+              <span
+                className="px-1.5 py-0.5 rounded text-[10px] bg-port-warning/15 text-port-warning border border-port-warning/30"
+                title="Editorial checks surfaced too many High findings — address them (or lower the threshold) and resume"
+              >
+                high findings
               </span>
             ) : null}
           </div>

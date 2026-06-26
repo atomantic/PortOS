@@ -160,6 +160,20 @@ export function resolveAutopilotReadinessGate(options = {}, settings = null) {
   return readReadinessGate(settings);
 }
 
+// Editorial-checks pause threshold (#1613): pause the run when the checks pass
+// surfaces ≥ N high-severity findings. 0 = off (the default), so the gate is
+// opt-in and existing installs are unchanged. Mirrors resolveAutopilotRounds —
+// per-run option wins, then the persisted setting, then 0. A non-integer at any
+// layer falls through to the next. Stamped onto run options once at start so the
+// loop and a later resume read the same effective threshold.
+export const DEFAULT_CHECK_FINDINGS_PAUSE_THRESHOLD = 0;
+export function resolveAutopilotCheckPauseThreshold(options = {}, settings = null) {
+  if (Number.isInteger(options?.checkFindingsPauseThreshold)) return options.checkFindingsPauseThreshold;
+  const pec = settings?.pipelineEditorialChecks || {};
+  if (Number.isInteger(pec?.checkFindingsPauseThreshold)) return pec.checkFindingsPauseThreshold;
+  return DEFAULT_CHECK_FINDINGS_PAUSE_THRESHOLD;
+}
+
 // Per-gate copy for the non-convergence pause — shared by the arc-verify and
 // editorial loops so the two messages can't drift.
 const PAUSE_GATES = {
@@ -1118,9 +1132,40 @@ async function runEditorialChecksPass(sId, record) {
     // can flag a partial failure (no silent "complete").
     const { errored, erroredCheckIds } = summarizeCheckErrors(result.perCheck);
     erroredCheckIds.forEach((id) => record.runState.editorialCheckErroredIds.add(id));
-    broadcast(sId, { type: 'verify:round', scope: 'editorialChecks', round: 1, findings: result.findings.length, blocking: 0, errored, erroredCheckIds });
+    // #1613 — count the high-severity findings this pass surfaced. The round frame
+    // previously hardcoded `blocking: 0`, which made a 50-high-finding pass look
+    // "complete" — the misleading per-step signal the issue calls out. Report the
+    // real high count so the step's `blocking` matches what it found, whether or
+    // not the optional pause gate is armed.
+    const highFindings = result.findings.filter((f) => f.severity === 'high');
+    broadcast(sId, { type: 'verify:round', scope: 'editorialChecks', round: 1, findings: result.findings.length, blocking: highFindings.length, errored, erroredCheckIds });
     if (errored) {
       console.error(`❌ autopilot: ${errored} editorial check(s) errored — series=${sId.slice(0, 12)} ${erroredCheckIds.join(', ')}`);
+    }
+    // #1613 — optional gate: when armed (threshold > 0) and the pass surfaced at
+    // least that many high findings, PAUSE for human review instead of silently
+    // proceeding to the health gate. Off by default (threshold 0), so existing
+    // runs are unchanged. Do NOT mark the step reviewed — a resume re-runs the
+    // checks and reconciles (like the health gate), so once the human reduces the
+    // high findings below the threshold (or lowers it) the run continues.
+    const threshold = record.options.checkFindingsPauseThreshold || 0;
+    if (threshold > 0 && highFindings.length >= threshold) {
+      // Editorial findings already carry severity/location/problem (manuscriptReview
+      // sanitizes them), so the residual uses the same shape as the other pauses;
+      // keep checkId so the UI can link a residual back to the check that raised it.
+      const residual = highFindings.map((f) => ({
+        severity: 'high',
+        location: f.location || (f.checkId ? `check ${f.checkId}` : 'manuscript'),
+        problem: f.problem || 'high-severity editorial finding',
+        checkId: f.checkId,
+      }));
+      console.log(`🚦 editorial checks gate — series=${sId.slice(0, 12)} ${highFindings.length} high finding(s) ≥ threshold ${threshold}, pausing for review`);
+      return {
+        pause: true,
+        pauseKind: 'checkFindings',
+        reason: `Editorial checks surfaced ${highFindings.length} high-severity finding(s) (≥ threshold ${threshold}) — paused for review. Address them in the manuscript editor, or lower/disable the editorial-check pause threshold in Options and resume.`,
+        residual,
+      };
     }
   }
   record.runState.editorialChecksReviewed = true;
@@ -1487,10 +1532,14 @@ function buildDryRunPlan(series, issues, options, costContext = {}) {
     const checksNote = editorialSubset
       ? `per-run subset of ${editorialSubset.length} editorial check(s) (#1575)`
       : 'enabled editorial checks (#1284)';
+    // Surface the optional pause threshold (#1613) when armed, mirroring how the
+    // readiness gate is exposed below — so a per-run override is visible in the plan.
+    const pauseThreshold = resolveAutopilotCheckPauseThreshold(options);
+    const pauseNote = pauseThreshold > 0 ? ` — pauses at ≥ ${pauseThreshold} high finding(s) (#1613)` : '';
     plan.push({
       kind: 'editorialChecks',
       count: 1,
-      note: llmCheckCount > 0 ? `${checksNote} — ~${estLlmCalls} LLM call(s)` : checksNote,
+      note: (llmCheckCount > 0 ? `${checksNote} — ~${estLlmCalls} LLM call(s)` : checksNote) + pauseNote,
       estActions: llmCheckCount > 0 ? 1 : 0,
       estLlmCalls,
     });
@@ -1542,6 +1591,7 @@ export async function startSeriesAutopilot(sId, options = {}) {
     ...options,
     ...resolveAutopilotRounds(options, settings),
     readinessGate: resolveAutopilotReadinessGate(options, settings),
+    checkFindingsPauseThreshold: resolveAutopilotCheckPauseThreshold(options, settings),
   };
 
   if (existing) {

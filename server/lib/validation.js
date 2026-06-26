@@ -1117,6 +1117,14 @@ export const pipelineEditorialChecksSettingsSchema = z.object({
   // Whole-manuscript beat-continuity convergence (#1510) — same bound + 0-skip
   // semantics. Optional + additive so older peers fall through to the default.
   maxBeatContinuityRounds: z.number().int().min(0).max(MAX_CONVERGENCE_ROUNDS).optional(),
+  // Editorial-checks pause threshold (#1613). When the registry-driven editorial
+  // checks pass surfaces ≥ N high-severity findings, the autopilot pauses the run
+  // for human review instead of silently proceeding (the downstream health gate is
+  // a backstop, but the per-step signal was misleading — a 50-high-finding pass
+  // looked "complete"). 0 = off (default), so the behavior is opt-in and existing
+  // installs are unchanged. Optional + additive so older peers fall through to off.
+  // No upper bound mirrors the round caps — a large N just means "effectively off".
+  checkFindingsPauseThreshold: z.number().int().min(0).optional(),
 }).strict();
 
 // Cursor-context payload for the CD-bridge suggest route — identical shape to

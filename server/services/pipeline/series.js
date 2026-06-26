@@ -121,7 +121,9 @@ const AUTOPILOT_FINDING_SEVERITIES = ['high', 'medium', 'low'];
 // (#1574): `childFailed` (a delegated beats/text run produced no output after
 // its retry budget). Lets the UI classify the pause without string-matching the
 // reason text. Any other pause (budget, error, a capability gap) leaves this null.
-export const AUTOPILOT_PAUSE_KINDS = Object.freeze(['maxRounds', 'divergence', 'childFailed']);
+// Editorial checks (#1613): `checkFindings` (the editorial-checks pass surfaced ≥
+// the armed high-finding threshold, so the run paused for human review).
+export const AUTOPILOT_PAUSE_KINDS = Object.freeze(['maxRounds', 'divergence', 'childFailed', 'checkFindings']);
 
 export const sanitizeAutopilot = (raw) => {
   if (!raw || typeof raw !== 'object') return null;
