@@ -689,11 +689,9 @@ export async function markInboxDone(inboxLogId) {
  */
 export async function markInboxSentToCatalog(ids) {
   const sentToCatalogAt = new Date().toISOString();
-  const updated = [];
-  for (const id of ids) {
-    const entry = await storage.updateInboxLog(id, { sentToCatalogAt });
-    if (entry) updated.push(entry);
-  }
+  // Single batched write (one store rewrite + one sync-log pass) — updateMany
+  // already skips unknown/tombstoned ids, preserving the "stamp the rest" contract.
+  const updated = await storage.updateMany('inbox', ids.map(id => ({ id, sentToCatalogAt })));
   console.log(`🧠 Marked ${updated.length} creative note(s) sent to catalog`);
   return updated;
 }
