@@ -16,6 +16,9 @@ import {
   mergeBoardRecord,
   imageUrlToAppAsset,
   MAX_ITEMS_PER_BOARD,
+  applyPinterestLink,
+  clearPinterestLinkRecord,
+  appendPinterestPins,
 } from './logic.js';
 
 describe('buildBoardRecord', () => {
@@ -229,5 +232,77 @@ describe('applyBoardRestore', () => {
   it('ignores a non-array items field', () => {
     const base = { ...buildBoardRecord({ name: 'A' }, { id: 'mb-1', now: 't0' }), items: [{ id: 'x' }] };
     expect(applyBoardRestore(base, { items: 'nope' }).items).toEqual([{ id: 'x' }]);
+  });
+});
+
+describe('applyPinterestLink', () => {
+  const base = () => buildBoardRecord({ name: 'A' }, { id: 'mb-1', now: 't0' });
+
+  it('stores the feed + board URLs and seeds sync state', () => {
+    const next = applyPinterestLink(base(), { feedUrl: 'https://www.pinterest.com/j/b.rss', boardUrl: 'https://www.pinterest.com/j/b/' });
+    expect(next.pinterest).toEqual({
+      feedUrl: 'https://www.pinterest.com/j/b.rss',
+      boardUrl: 'https://www.pinterest.com/j/b/',
+      lastSyncedAt: null,
+    });
+    expect(next.updatedAt).not.toBe('t0');
+  });
+
+  it('preserves the prior sync timestamp when re-linking', () => {
+    const linked = { ...base(), pinterest: { feedUrl: 'old', boardUrl: 'oldb', lastSyncedAt: 's1' } };
+    const next = applyPinterestLink(linked, { feedUrl: 'new', boardUrl: 'newb' });
+    expect(next.pinterest).toMatchObject({ feedUrl: 'new', lastSyncedAt: 's1' });
+  });
+});
+
+describe('clearPinterestLinkRecord', () => {
+  it('removes the pinterest field and bumps updatedAt', () => {
+    const linked = { ...buildBoardRecord({ name: 'A' }, { id: 'mb-1', now: 't0' }), pinterest: { feedUrl: 'f' } };
+    const { board, changed } = clearPinterestLinkRecord(linked);
+    expect(changed).toBe(true);
+    expect(board.pinterest).toBeUndefined();
+    expect(board.updatedAt).not.toBe('t0');
+  });
+
+  it('is a no-op when not linked', () => {
+    const board = buildBoardRecord({ name: 'A' }, { id: 'mb-1', now: 't0' });
+    const out = clearPinterestLinkRecord(board);
+    expect(out.changed).toBe(false);
+    expect(out.board).toBe(board);
+  });
+});
+
+describe('appendPinterestPins', () => {
+  const linked = () => ({
+    ...buildBoardRecord({ name: 'A' }, { id: 'mb-1', now: 't0' }),
+    pinterest: { feedUrl: 'f', boardUrl: 'b', lastSyncedAt: null },
+  });
+  const imp = (n) => ({ imageUrl: `/data/images/p${n}.jpg`, caption: `c${n}`, source: `https://www.pinterest.com/pin/${n}/` });
+
+  it('appends image items and stamps sync state', () => {
+    const { board, added } = appendPinterestPins(linked(), [imp(1), imp(2)], { syncedAt: 's1' });
+    expect(added).toBe(2);
+    expect(board.items.map((it) => it.source)).toEqual(['https://www.pinterest.com/pin/1/', 'https://www.pinterest.com/pin/2/']);
+    expect(board.items[0]).toMatchObject({ type: 'image', imageUrl: '/data/images/p1.jpg', caption: 'c1' });
+    expect(board.pinterest).toMatchObject({ lastSyncedAt: 's1' });
+  });
+
+  it('dedupes against existing item sources', () => {
+    const existing = { ...linked(), items: [{ id: 'mbi-x', type: 'image', source: 'https://www.pinterest.com/pin/1/' }] };
+    const { added, board } = appendPinterestPins(existing, [imp(1), imp(2)], { syncedAt: 's1' });
+    expect(added).toBe(1);
+    expect(board.items).toHaveLength(2);
+  });
+
+  it('stamps lastSyncedAt even when nothing new was added', () => {
+    const { board, added } = appendPinterestPins(linked(), [], { syncedAt: 's2' });
+    expect(added).toBe(0);
+    expect(board.pinterest).toMatchObject({ lastSyncedAt: 's2' });
+  });
+
+  it('truncates to MAX_ITEMS_PER_BOARD capacity', () => {
+    const full = { ...linked(), items: Array.from({ length: MAX_ITEMS_PER_BOARD - 1 }, (_, i) => ({ id: `e${i}`, type: 'image', source: `e${i}` })) };
+    const { added } = appendPinterestPins(full, [imp(1), imp(2), imp(3)], { syncedAt: 's1' });
+    expect(added).toBe(1);
   });
 });

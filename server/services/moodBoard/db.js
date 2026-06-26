@@ -32,6 +32,9 @@ import {
   updateItem,
   removeItem,
   mergeBoardRecord,
+  applyPinterestLink,
+  clearPinterestLinkRecord,
+  appendPinterestPins,
 } from './logic.js';
 import {
   maybeJournalBeforeOverwrite, setSyncBaseHash, contentHashForRecord, flushBaseHashes, deleteSyncBaseHash,
@@ -228,6 +231,34 @@ export async function updateBoardItem(id, itemId, patch) {
     return { board, result: item };
   });
   return result;
+}
+
+// ─── Pinterest board link (mood-board importer) ──────────────────────────────
+
+// Link (or re-link) the board to a Pinterest RSS feed.
+export async function setPinterestLink(id, link) {
+  const { board } = await withLockedBoard(id, (b) => ({ board: applyPinterestLink(b, link) }));
+  return board;
+}
+
+// Unlink. Skips the write (and peer push) when the board wasn't linked.
+export async function clearPinterestLink(id) {
+  const { board } = await withLockedBoard(id, (b) => {
+    const { board: next, changed } = clearPinterestLinkRecord(b);
+    return { board: next, skipPersist: !changed };
+  });
+  return board;
+}
+
+// Append the freshly-downloaded pins in ONE locked write (rather than N
+// addBoardItem round-trips) and stamp lastSyncedAt. Always persists so a
+// zero-new sync still records the check. Returns { board, added }.
+export async function appendPinterestItems(id, imported, opts = {}) {
+  const { board, result } = await withLockedBoard(id, (b) => {
+    const { board: next, added } = appendPinterestPins(b, imported, opts);
+    return { board: next, result: { added } };
+  });
+  return { board, ...result };
 }
 
 export async function removeBoardItem(id, itemId) {

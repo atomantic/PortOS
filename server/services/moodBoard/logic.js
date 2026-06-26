@@ -239,3 +239,68 @@ export function applyBoardRestore(board, patch) {
   next.updatedAt = nowIso();
   return next;
 }
+
+// ─── Pinterest board link (mood-board importer) ──────────────────────────────
+// A board can be linked to a public Pinterest board's RSS feed. The link is an
+// additive `pinterest` sub-object on the board record — it rides through
+// sanitizeBoardForSync's `...raw` spread, so it federates with the board (no
+// schema-version bump: full-record LWW, and an older peer preserves the unknown
+// key). `lastSyncedAt` tracks the most recent manual "Sync now".
+
+// Set (or replace) the Pinterest link, preserving any prior sync timestamp so
+// re-linking the SAME board doesn't lose "last synced" context.
+export function applyPinterestLink(board, { feedUrl, boardUrl }) {
+  const prior = board.pinterest || {};
+  return {
+    ...board,
+    pinterest: {
+      feedUrl,
+      boardUrl: boardUrl ?? null,
+      lastSyncedAt: prior.lastSyncedAt ?? null,
+    },
+    updatedAt: nowIso(),
+  };
+}
+
+// Remove the Pinterest link. Returns changed:false (no write) when the board
+// wasn't linked, so the db layer can skip a wasted row rewrite + peer push.
+export function clearPinterestLinkRecord(board) {
+  if (!board.pinterest) return { board, changed: false };
+  const next = { ...board };
+  delete next.pinterest;
+  next.updatedAt = nowIso();
+  return { board: next, changed: true };
+}
+
+/**
+ * Append already-downloaded Pinterest pins as image items, then stamp the sync
+ * timestamp. Each `imported` entry is `{ imageUrl, caption, source }` where
+ * `source` is the pin permalink — the dedupe key. Skips pins whose `source`
+ * already exists on the board (in-lock safety net; the service pre-dedupes
+ * before downloading) and respects MAX_ITEMS_PER_BOARD by truncating to the
+ * remaining capacity rather than throwing — a partial import beats a hard
+ * mid-sync failure. Always re-stamps `pinterest.lastSyncedAt` (even on zero new)
+ * so the UI reflects the check. Returns `{ board, added }`.
+ */
+export function appendPinterestPins(board, imported, { syncedAt = nowIso() } = {}) {
+  const items = Array.isArray(board.items) ? board.items : [];
+  const seen = new Set(items.map((it) => it && it.source).filter(Boolean));
+  const capacity = Math.max(0, MAX_ITEMS_PER_BOARD - items.length);
+  const fresh = [];
+  for (const imp of Array.isArray(imported) ? imported : []) {
+    if (fresh.length >= capacity) break;
+    if (imp.source && seen.has(imp.source)) continue;
+    if (imp.source) seen.add(imp.source);
+    fresh.push(normalizeItem(
+      { type: 'image', imageUrl: imp.imageUrl, caption: imp.caption ?? null, source: imp.source ?? null },
+      { id: `mbi-${randomUUID()}`, now: syncedAt },
+    ));
+  }
+  const next = {
+    ...board,
+    items: [...items, ...fresh],
+    pinterest: { ...(board.pinterest || {}), lastSyncedAt: syncedAt },
+    updatedAt: nowIso(),
+  };
+  return { board: next, added: fresh.length };
+}

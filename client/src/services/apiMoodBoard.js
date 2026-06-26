@@ -45,3 +45,24 @@ export const removeMoodBoardItem = (id, itemId, options) =>
     method: 'DELETE',
     ...options,
   });
+
+// Pinterest importer: link a board to a Pinterest board URL, unlink, and run a
+// manual "Sync now" that pulls new pins (download + dedupe) server-side.
+export const linkMoodBoardPinterest = (id, url, options) =>
+  request(`/mood-boards/${encodeURIComponent(id)}/pinterest`, {
+    method: 'PUT',
+    body: JSON.stringify({ url }),
+    ...options,
+  });
+
+export const unlinkMoodBoardPinterest = (id, options) =>
+  request(`/mood-boards/${encodeURIComponent(id)}/pinterest`, {
+    method: 'DELETE',
+    ...options,
+  });
+
+export const syncMoodBoardPinterest = (id, options) =>
+  request(`/mood-boards/${encodeURIComponent(id)}/pinterest/sync`, {
+    method: 'POST',
+    ...options,
+  });

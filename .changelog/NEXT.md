@@ -1,5 +1,9 @@
 # Unreleased
 
+## Mood boards
+
+- **Import a Pinterest board into a mood board — link it once, then "Sync now" pulls new pins on demand.** Paste a public Pinterest board URL onto a mood board and PortOS fetches the board's RSS feed, downloads each pin's image into your own `data/images/` (so it federates with the board and survives Pinterest link rot), and pins it as an image item with the pin's title as the caption and its permalink as the source. Syncing is incremental: the first sync after linking pulls everything the feed exposes; later syncs add only pins it hasn't seen (deduped by permalink), and re-linking to a different board pulls that one down. NOTE: Pinterest's RSS exposes only the most-recent ~25 pins, not the entire board — the UI states this rather than implying a full backfill. Feed and image fetches go through a new shared SSRF-guarded fetcher (`server/lib/safeUrlFetch.js`), and the link rides the board record's JSONB so it federates with no schema-version bump. (`server/lib/pinterestFeed.js`, `server/services/moodBoard/pinterest.js`, `server/routes/moodBoard.js`, `client/src/pages/MoodBoardDetail.jsx`)
+
 ## Creative onramp
 
 - **[issue-1633] A new "Start a Story" page gives you one clear front door for beginning a story.** Instead of guessing whether to open the Story Builder, the Importer, or the Writers Room, you now pick how you want to begin — from an idea, from an existing work, or by writing prose — and the page routes you into the right tool. You can also choose up front whether to start a fresh universe or attach the story to one you already have; that choice carries through to the Story Builder and Importer automatically. All the existing pages stay exactly where they were — this just adds a signposted entry point (reachable from the sidebar, ⌘K, and voice). (First phase of the larger creative-onramp effort; prose-mode universe linking comes later.)

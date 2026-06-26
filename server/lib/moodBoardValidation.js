@@ -72,6 +72,17 @@ export const moodBoardItemCreateSchema = z.object({
   }
 });
 
+// Pinterest link body. The URL shape is validated lightly here (present, http(s),
+// bounded); the Pinterest-host check + board-URL→feed-URL normalization happens
+// in `normalizePinterestFeedUrl` (server/lib/pinterestFeed.js), which throws a
+// specific 400 so the user sees *why* a non-Pinterest URL was rejected.
+export const moodBoardPinterestLinkSchema = z.object({
+  url: z.string().trim().min(1).max(2048).refine(
+    (v) => /^https?:\/\//.test(v),
+    'url must be an http(s) Pinterest board URL',
+  ),
+}).strict();
+
 // Item PATCH — caption/source on any item, plus the type-appropriate body
 // field. No `type` switch (an item's kind is fixed at creation); every field
 // optional so a partial edit validates.
