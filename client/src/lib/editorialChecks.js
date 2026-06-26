@@ -62,13 +62,20 @@ export const SEVERITY_BADGE_CLASSES = Object.freeze({
  * Group catalog rows into ordered scope sections for the catalog view.
  * Returns `[{ scope, label, checks }]` in CHECK_SCOPE_ORDER, with any unknown
  * scope appended after the known ones (alphabetical). Empty scopes are omitted.
+ * A dual-scope check (#1628, `scopes: ['series','issue']`) appears once under
+ * EACH of its declared scopes; older rows carrying only a string `scope` fall
+ * back to that single scope.
  */
 export function groupChecksByScope(checks = []) {
   const byScope = new Map();
   for (const check of checks) {
-    const scope = check?.scope || 'other';
-    if (!byScope.has(scope)) byScope.set(scope, []);
-    byScope.get(scope).push(check);
+    const scopes = Array.isArray(check?.scopes) && check.scopes.length
+      ? check.scopes
+      : [check?.scope || 'other'];
+    for (const scope of scopes) {
+      if (!byScope.has(scope)) byScope.set(scope, []);
+      byScope.get(scope).push(check);
+    }
   }
   const known = CHECK_SCOPE_ORDER.filter((s) => byScope.has(s));
   const unknown = [...byScope.keys()].filter((s) => !CHECK_SCOPE_ORDER.includes(s)).sort();

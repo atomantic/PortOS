@@ -5,6 +5,8 @@ import {
   EDITORIAL_SOURCES,
   CHECK_SCOPES,
   CHECK_KINDS,
+  normalizeCheckScopes,
+  primaryCheckScope,
   getCheck,
   listChecks,
   assertValidChecks,
@@ -156,6 +158,22 @@ describe('editorial check registry — fail-fast guards', () => {
     expect(() => assertValidChecks([{ ...valid, scope: 'galaxy' }])).toThrow(/invalid scope/);
   });
 
+  it('accepts an array scope of valid members (#1628)', () => {
+    expect(() => assertValidChecks([{ ...valid, scope: ['series', 'issue'] }])).not.toThrow();
+  });
+
+  it('throws on an empty array scope (#1628)', () => {
+    expect(() => assertValidChecks([{ ...valid, scope: [] }])).toThrow(/invalid scope/);
+  });
+
+  it('throws when an array scope has an unknown member (#1628)', () => {
+    expect(() => assertValidChecks([{ ...valid, scope: ['series', 'galaxy'] }])).toThrow(/invalid scope/);
+  });
+
+  it('throws on duplicate scopes in an array (#1628)', () => {
+    expect(() => assertValidChecks([{ ...valid, scope: ['series', 'series'] }])).toThrow(/duplicate scopes/);
+  });
+
   it('throws on an invalid kind', () => {
     expect(() => assertValidChecks([{ ...valid, kind: 'magic' }])).toThrow(/invalid kind/);
   });
@@ -205,6 +223,38 @@ describe('editorial check registry — fail-fast guards', () => {
   });
 });
 
+describe('editorial check registry — scope normalization (#1628)', () => {
+  it('normalizeCheckScopes wraps a string in a single-element array', () => {
+    expect(normalizeCheckScopes('series')).toEqual(['series']);
+  });
+
+  it('normalizeCheckScopes returns array scopes in canonical CHECK_SCOPES order', () => {
+    // Declared issue-before-series, but canonical order is series→issue.
+    expect(normalizeCheckScopes(['issue', 'series'])).toEqual(['series', 'issue']);
+  });
+
+  it('normalizeCheckScopes drops unknown members and empty/absent input returns []', () => {
+    expect(normalizeCheckScopes(['series', 'galaxy'])).toEqual(['series']);
+    expect(normalizeCheckScopes('galaxy')).toEqual([]);
+    expect(normalizeCheckScopes([])).toEqual([]);
+    expect(normalizeCheckScopes(null)).toEqual([]);
+    expect(normalizeCheckScopes(undefined)).toEqual([]);
+  });
+
+  it('primaryCheckScope returns the first canonical scope (or null)', () => {
+    expect(primaryCheckScope('issue')).toBe('issue');
+    expect(primaryCheckScope(['issue', 'series'])).toBe('series');
+    expect(primaryCheckScope([])).toBe(null);
+    expect(primaryCheckScope('galaxy')).toBe(null);
+  });
+
+  it('every built-in check normalizes to a non-empty scope set', () => {
+    for (const check of EDITORIAL_CHECKS) {
+      expect(normalizeCheckScopes(check.scope).length).toBeGreaterThan(0);
+    }
+  });
+});
+
 describe('editorial check registry — config + state resolution', () => {
   it('resolveCheckConfig fills schema defaults', () => {
     const cfg = resolveCheckConfig(getCheck(NAMING), undefined);
@@ -225,6 +275,17 @@ describe('editorial check registry — config + state resolution', () => {
     expect(naming.config.minSharedSignals).toBe(3);
     // Unconfigured check keeps its default-enabled state.
     expect(rows.find((r) => r.id === INFODUMP).enabled).toBe(true);
+  });
+
+  it('resolveCheckState exposes a primary scope string + a scopes array (#1628)', () => {
+    const rows = resolveCheckState({});
+    for (const row of rows) {
+      expect(typeof row.scope).toBe('string');
+      expect(Array.isArray(row.scopes)).toBe(true);
+      expect(row.scopes.length).toBeGreaterThan(0);
+      // The primary scope is the first entry of the normalized set.
+      expect(row.scope).toBe(row.scopes[0]);
+    }
   });
 
   it('resolveCheckState surfaces each check\'s serializable configFields', () => {

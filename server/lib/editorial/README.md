@@ -8,6 +8,15 @@ optional gate, and a `run(ctx)` that returns findings shaped for the existing
 the enabled checks, and seeds findings lives at
 `server/services/pipeline/editorial/checkRunner.js`.
 
+`scope` is a `series | issue | scene | noun` granularity. A check meaningful at
+more than one granularity may declare an **array** — `scope: ['series', 'issue']`
+(#1628) — instead of being split into two near-duplicate checks; the string form
+keeps working. `normalizeCheckScopes` / `primaryCheckScope` (in `checkRegistry.js`)
+normalize either form, the load-time guard validates every member, and
+`resolveCheckState` exposes both a single primary `scope` (for single-value
+consumers) and the full `scopes` array (the catalog and dry-run plan fan a
+dual-scope check across each of its declared scopes).
+
 This directory is **pure** (no side-effecting imports — only `zod` and the pure
 `estimateTokens` budgeter). LLM-kind checks get their model caller through
 `ctx.callStagedLLM` (or `ctx.callInlineLLM` for user-defined checks), and a

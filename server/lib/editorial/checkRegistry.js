@@ -58,6 +58,26 @@ import {
 import { findAxisReversals, findShotTypeMonotony, summarizeStoryboardShots } from './shotContinuity.js';
 
 export const CHECK_SCOPES = Object.freeze(['series', 'issue', 'scene', 'noun']);
+
+// A check's `scope` may be a single scope string OR an array of scopes (#1628).
+// A dual-scope check is one rule meaningful at more than one granularity — e.g.
+// `relationships.reciprocity` reasons series-wide but could also flag a newly
+// added relationship per issue — declared `scope: ['series', 'issue']` instead of
+// being split into two near-duplicate checks. These helpers normalize either form
+// so every consumer (the load-time guard, the catalog grouping, the dry-run plan)
+// fans a check across exactly its declared scopes.
+//
+// `normalizeCheckScopes` returns the declared scopes deduped and in canonical
+// CHECK_SCOPES order; an unknown/empty input returns []. `primaryCheckScope`
+// returns the first declared scope (canonical order) for the consumers that still
+// bucket/sort by a single value — for a single-scope check it is just that scope.
+export function normalizeCheckScopes(scope) {
+  const raw = Array.isArray(scope) ? scope : (scope == null ? [] : [scope]);
+  return CHECK_SCOPES.filter((s) => raw.includes(s));
+}
+
+export const primaryCheckScope = (scope) => normalizeCheckScopes(scope)[0] || null;
+
 export const CHECK_KINDS = Object.freeze(['deterministic', 'llm']);
 export const CHECK_SEVERITIES = Object.freeze(['high', 'medium', 'low']);
 const SEVERITIES = CHECK_SEVERITIES;
@@ -6246,8 +6266,16 @@ export function assertValidChecks(checks) {
     if (!check.id || !check.label || !check.scope || !check.kind || !check.category) {
       throw new Error(`checkRegistry: malformed entry ${JSON.stringify(check)}`);
     }
-    if (!CHECK_SCOPES.includes(check.scope)) {
-      throw new Error(`checkRegistry: invalid scope "${check.scope}" for ${check.id} (must be one of ${CHECK_SCOPES.join(', ')})`);
+    // `scope` may be a single scope string OR a non-empty array of scopes (#1628).
+    // Validate the RAW form strictly (every member known, array non-empty, no
+    // duplicates) rather than leaning on normalizeCheckScopes's silent drop, so a
+    // typo'd or empty scope fails boot instead of quietly losing a granularity.
+    const rawScopes = Array.isArray(check.scope) ? check.scope : [check.scope];
+    if (rawScopes.length === 0 || rawScopes.some((s) => !CHECK_SCOPES.includes(s))) {
+      throw new Error(`checkRegistry: invalid scope ${JSON.stringify(check.scope)} for ${check.id} (must be one of ${CHECK_SCOPES.join(', ')}, or a non-empty array of them)`);
+    }
+    if (new Set(rawScopes).size !== rawScopes.length) {
+      throw new Error(`checkRegistry: ${check.id} has duplicate scopes in ${JSON.stringify(check.scope)}`);
     }
     if (!CHECK_KINDS.includes(check.kind)) {
       throw new Error(`checkRegistry: invalid kind "${check.kind}" for ${check.id} (must be one of ${CHECK_KINDS.join(', ')})`);
@@ -6357,7 +6385,7 @@ export const resolveCheckSeverity = (check, row) =>
 /**
  * Merge the static registry with persisted per-check state from settings.
  * Returns one row per registered check:
- *   { id, label, description, scope, kind, category, severityDefault,
+ *   { id, label, description, scope, scopes, kind, category, severityDefault,
  *     severity, enabled, config, configFields }
  * `enabled` falls back to the check's `defaultEnabled`; `config` is validated
  * through the check's schema (with defaults); `severity` is the EFFECTIVE level
@@ -6377,7 +6405,12 @@ export function resolveCheckState(settings) {
       id: check.id,
       label: check.label,
       description: check.description,
-      scope: check.scope,
+      // `scope` is the PRIMARY scope (a string) so every single-value consumer
+      // keeps working unchanged; `scopes` (#1628) is the full declared set the
+      // catalog/plan fan a dual-scope check across. For a single-scope check the
+      // two agree (`scope === scopes[0]`).
+      scope: primaryCheckScope(check.scope),
+      scopes: normalizeCheckScopes(check.scope),
       kind: check.kind,
       category: check.category,
       // `severityDefault` is the registry baseline (what the override resets to);

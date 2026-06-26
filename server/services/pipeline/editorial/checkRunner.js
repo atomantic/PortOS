@@ -828,7 +828,9 @@ export async function previewCustomCheck(seriesId, def, { providerOverride, mode
 export async function buildEditorialCheckPlan(seriesId, { checkIds = null, settings } = {}) {
   const resolved = settings || await getSettings();
   const checks = getEnabledCheckRows(resolved, checkIds)
-    .map((row) => ({ id: row.id, label: row.label, kind: row.kind, scope: row.scope }));
+    // `scope` is the primary scope; `scopes` carries the full declared set so a
+    // dual-scope check (#1628) previews under each of its granularities.
+    .map((row) => ({ id: row.id, label: row.label, kind: row.kind, scope: row.scope, scopes: row.scopes }));
   return {
     seriesId,
     checks,

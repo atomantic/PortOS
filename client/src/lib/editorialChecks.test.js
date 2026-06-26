@@ -32,6 +32,20 @@ describe('groupChecksByScope', () => {
     expect(groupChecksByScope([{ id: 'x', scope: 'noun' }]).map((g) => g.scope)).toEqual(['noun']);
     expect(groupChecksByScope()).toEqual([]);
   });
+
+  it('fans a dual-scope check into each of its scopes (#1628)', () => {
+    const dual = { id: 'r.reciprocity', label: 'Reciprocity', scopes: ['series', 'issue'], kind: 'llm' };
+    const groups = groupChecksByScope([dual]);
+    expect(groups.map((g) => g.scope)).toEqual(['issue', 'series']);
+    // The same check appears under BOTH sections.
+    expect(groups.find((g) => g.scope === 'issue').checks).toContain(dual);
+    expect(groups.find((g) => g.scope === 'series').checks).toContain(dual);
+  });
+
+  it('falls back to the string scope when no scopes array is present (#1628)', () => {
+    // Older API rows / peers carry only a string `scope`.
+    expect(groupChecksByScope([{ id: 'x', scope: 'issue' }]).map((g) => g.scope)).toEqual(['issue']);
+  });
 });
 
 describe('groupFindingsByCheck', () => {
