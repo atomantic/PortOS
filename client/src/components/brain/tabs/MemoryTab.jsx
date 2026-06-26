@@ -602,6 +602,7 @@ export default function MemoryTab({ onRefresh }) {
               onClick={() => handleSendToCatalog(record)}
               className="p-1.5 text-gray-400 hover:text-purple-300 rounded hover:bg-purple-500/20"
               title="Send to Catalog"
+              aria-label="Send to Catalog"
             >
               <Library size={14} />
             </button>

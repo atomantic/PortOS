@@ -294,6 +294,7 @@ export default function InboxTab({ onRefresh, settings }) {
             type="button"
             onClick={() => setCreative(v => !v)}
             aria-pressed={creative}
+            aria-label="Toggle creative capture mode"
             className={`px-3 py-3 rounded-lg border transition-colors flex items-center gap-1.5 text-sm ${creative
               ? 'bg-purple-500/20 text-purple-300 border-purple-500/40'
               : 'bg-port-card text-gray-400 border-port-border hover:text-gray-200'}`}

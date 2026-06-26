@@ -77,6 +77,7 @@ export default function QuickBrainCapture() {
           type="button"
           onClick={() => setCreative(v => !v)}
           aria-pressed={creative}
+          aria-label="Toggle creative capture mode"
           disabled={isUrl}
           className={`flex items-center px-2.5 py-2 rounded-lg border text-sm transition-colors min-h-[40px] disabled:opacity-40 disabled:cursor-not-allowed ${creative
             ? 'bg-purple-500/20 text-purple-300 border-purple-500/40'
