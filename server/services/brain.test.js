@@ -198,6 +198,26 @@ describe('brain service', () => {
         })
       );
     });
+
+    it('flags the inbox entry when captured as creative', async () => {
+      storage.createInboxLog.mockResolvedValue({ id: 'inbox-004', status: 'classifying' });
+
+      await captureThought('a sentient city', undefined, undefined, { creative: true });
+
+      expect(storage.createInboxLog).toHaveBeenCalledWith(
+        expect.objectContaining({ creative: true })
+      );
+    });
+
+    it('omits the creative flag by default (non-creative captures stay unflagged)', async () => {
+      storage.createInboxLog.mockResolvedValue({ id: 'inbox-005', status: 'classifying' });
+
+      await captureThought('buy milk');
+
+      expect(storage.createInboxLog).toHaveBeenCalledWith(
+        expect.not.objectContaining({ creative: expect.anything() })
+      );
+    });
   });
 
   // ===========================================================================

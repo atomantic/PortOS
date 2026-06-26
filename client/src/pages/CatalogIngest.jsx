@@ -6,7 +6,7 @@
  */
 
 import { useState, useEffect, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { Sparkles, Loader2, CheckCircle2, AlertCircle, ArrowLeft, RotateCcw, Circle, Upload, Link2, FileText, Mic, Square } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import socket from '../services/socket';
@@ -19,6 +19,7 @@ import {
   ingestCatalogUrl,
   ingestCatalogFile,
   ingestCatalogVoice,
+  ingestCatalogBrain,
 } from '../services/apiCatalog';
 
 // One review section per ingredient type. The first three are bible-shaped
@@ -60,6 +61,7 @@ function StageIcon({ status }) {
 
 export default function CatalogIngest() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [phase, setPhase] = useState('paste'); // 'paste' | 'extracting' | 'review'
   const [title, setTitle] = useState('');
   const [rawText, setRawText] = useState('');
@@ -86,6 +88,7 @@ export default function CatalogIngest() {
   const [recording, setRecording] = useState(false);
   const recorderRef = useRef(null);
   const fileInputRef = useRef(null);
+  const brainHandledRef = useRef(false);
 
   // Stop the mic if the page unmounts mid-recording (navigating away), so the
   // MediaRecorder stream isn't left live with no UI to stop it.
@@ -200,6 +203,46 @@ export default function CatalogIngest() {
     setSubmitting(false);
     enterReviewFromResult(result);
   };
+
+  // Brain → catalog handoff: the brain UI navigates here with
+  // location.state.brainIngest = { brainType, brainId, title }, then we run the
+  // SAME extract→review flow as URL/file/voice (live stage checklist included).
+  const handleBrainIngest = async ({ brainType, brainId }) => {
+    setSubmitting(true);
+    setPhase('extracting');
+    setStages(INITIAL_STAGES);
+    const result = await ingestCatalogBrain({ brainType, brainId }, { silent: true })
+      .catch((err) => { toast.error(err?.message || 'Brain ingest failed'); return null; });
+    setSubmitting(false);
+    enterReviewFromResult(result);
+  };
+
+  // Handle inbound router-state handoffs once on mount:
+  //  - brainIngest { brainType, brainId } → run the brain-bridge extract→review.
+  //  - prefill { title, rawText }        → drop the text into the paste box so
+  //    the user reviews/edits it, then clicks Extract (the creative-notes batch
+  //    send from the brain inbox uses this).
+  // Either way we clear the history state afterwards so a refresh/back doesn't
+  // re-trigger the handoff (and, for brainIngest, a second LLM-billed run).
+  useEffect(() => {
+    if (brainHandledRef.current) return;
+    const brainIngest = location.state?.brainIngest;
+    const prefill = location.state?.prefill;
+    let handled = false;
+    if (brainIngest?.brainType && brainIngest?.brainId) {
+      handled = true;
+      handleBrainIngest(brainIngest);
+    } else if (typeof prefill?.rawText === 'string' && prefill.rawText.trim()) {
+      handled = true;
+      setSourceMode('paste');
+      setTitle(prefill.title || '');
+      setRawText(prefill.rawText);
+    }
+    if (handled) {
+      brainHandledRef.current = true;
+      navigate('.', { replace: true, state: {} });
+    }
+  }, []);
 
   const handleFilePicked = async (e) => {
     const file = e.target.files?.[0];

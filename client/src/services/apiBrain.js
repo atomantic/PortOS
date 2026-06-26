@@ -9,9 +9,9 @@ export const updateBrainSettings = (settings) => request('/brain/settings', {
 });
 
 // Brain - Capture & Inbox
-export const captureBrainThought = (text, providerOverride, modelOverride) => request('/brain/capture', {
+export const captureBrainThought = (text, providerOverride, modelOverride, { creative } = {}) => request('/brain/capture', {
   method: 'POST',
-  body: JSON.stringify({ text, providerOverride, modelOverride })
+  body: JSON.stringify({ text, providerOverride, modelOverride, creative })
 });
 export const getBrainInbox = (options = {}) => {
   const params = new URLSearchParams();

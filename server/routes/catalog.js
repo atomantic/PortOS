@@ -33,6 +33,7 @@ import {
   catalogUrlIngestSchema,
   catalogFileIngestSchema,
   catalogVoiceIngestSchema,
+  catalogBrainIngestSchema,
   catalogUserTypeSchema,
   catalogUserTypesSettingsSchema,
   REF_KINDS,
@@ -43,7 +44,7 @@ import { parseBulkPayload, bundleToMarkdown, toYamlString } from '../lib/catalog
 import { resolveImageInputPath } from '../lib/fileUtils.js';
 import { embedIngredient, embedBatch, ingredientEmbedSeed } from '../services/embeddings.js';
 import { extractIngredientsForScrap } from '../services/catalogExtraction.js';
-import { ingestFromUrl, ingestFromFile, ingestFromVoice } from '../services/catalogIngestSources.js';
+import { ingestFromUrl, ingestFromFile, ingestFromVoice, ingestFromBrain } from '../services/catalogIngestSources.js';
 import { migrateBibleToCatalog } from '../scripts/migrateBibleToCatalog.js';
 import { PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
 
@@ -135,6 +136,14 @@ router.post('/ingest/file', asyncHandler(async (req, res) => {
 router.post('/ingest/voice', asyncHandler(async (req, res) => {
   const body = validateRequest(catalogVoiceIngestSchema, req.body);
   const result = await ingestFromVoice(body);
+  res.status(201).json(result);
+}));
+
+// Brain → catalog bridge: ingest an existing brain record (idea/memory/etc.)
+// through the same extraction pipeline so it lands on the identical review phase.
+router.post('/ingest/brain', asyncHandler(async (req, res) => {
+  const body = validateRequest(catalogBrainIngestSchema, req.body);
+  const result = await ingestFromBrain(body);
   res.status(201).json(result);
 }));
 

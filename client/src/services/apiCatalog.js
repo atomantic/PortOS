@@ -38,7 +38,7 @@ export const extractFromCatalogScrap = (id, body = {}, options) =>
 export const commitCatalogScrapDraft = (id, accepted, options) =>
   request(`/catalog/scraps/${enc(id)}/commit`, { method: 'POST', body: JSON.stringify({ accepted }), ...options });
 
-// --- Alternate ingest sources (url / file / voice) ----------------------
+// --- Alternate ingest sources (url / file / voice / brain) --------------
 // Each returns { scrap, draft } — the same shape as extractFromCatalogScrap —
 // so CatalogIngest can drop straight into its review phase.
 
@@ -50,6 +50,10 @@ export const ingestCatalogFile = (body = {}, options) =>
 
 export const ingestCatalogVoice = (body = {}, options) =>
   request('/catalog/ingest/voice', { method: 'POST', body: JSON.stringify(body), ...options });
+
+// Brain → catalog bridge: ingest an existing brain record by { brainType, brainId }.
+export const ingestCatalogBrain = (body = {}, options) =>
+  request('/catalog/ingest/brain', { method: 'POST', body: JSON.stringify(body), ...options });
 
 // --- Ingredients --------------------------------------------------------
 

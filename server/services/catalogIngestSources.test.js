@@ -21,6 +21,13 @@ vi.mock('./catalogExtraction.js', () => ({
   extractIngredients: vi.fn(),
   extractIngredientsForScrap: vi.fn(),
 }));
+vi.mock('./brainStorage.js', () => ({
+  getIdeaById: vi.fn(),
+  getMemoryEntryById: vi.fn(),
+  getProjectById: vi.fn(),
+  getAdminById: vi.fn(),
+  getPersonById: vi.fn(),
+}));
 vi.mock('./voice/stt.js', () => ({
   transcribe: vi.fn(),
 }));
@@ -51,6 +58,7 @@ vi.mock('../lib/fileUtils.js', () => ({
 const catalogDB = await import('./catalogDB.js');
 const catalogExtraction = await import('./catalogExtraction.js');
 const browserService = await import('./browserService.js');
+const brainStorage = await import('./brainStorage.js');
 const fsp = await import('fs/promises');
 const dnsp = await import('dns/promises');
 const {
@@ -58,6 +66,8 @@ const {
   ingestFromUrl,
   ingestFromFile,
   ingestFromVoice,
+  ingestFromBrain,
+  brainRecordToIngestText,
 } = await import('./catalogIngestSources.js');
 
 const DRAFT = { runId: 'r1', characters: [], stages: [] };
@@ -212,5 +222,71 @@ describe('ingestFromVoice', () => {
     expect(mediaKey).toMatch(/^voice-memo-.*\.wav$/);
     const writtenPath = fsp.writeFile.mock.calls[0][0];
     expect(writtenPath).toContain('/tmp/data/audio');
+  });
+});
+
+describe('brainRecordToIngestText', () => {
+  it('folds an idea record (title + oneLiner + notes) into one block', () => {
+    const { title, rawText, tags } = brainRecordToIngestText('ideas', {
+      title: 'The city remembers',
+      oneLiner: 'A surveillance net becomes sentient.',
+      notes: 'It helps the protagonist.',
+      tags: ['sci-fi', 'ai'],
+    });
+    expect(title).toBe('The city remembers');
+    expect(rawText).toBe('The city remembers\n\nA surveillance net becomes sentient.\n\nIt helps the protagonist.');
+    expect(tags).toEqual(['sci-fi', 'ai']);
+  });
+
+  it('uses content for a memory and name for a person', () => {
+    expect(brainRecordToIngestText('memories', { title: 'Rooftop', content: 'Rain, neon.' }).rawText)
+      .toBe('Rooftop\n\nRain, neon.');
+    const person = brainRecordToIngestText('people', { name: 'Elena', context: 'Detective.', followUps: ['call', 'verify'] });
+    expect(person.title).toBe('Elena');
+    expect(person.rawText).toBe('Elena\n\nDetective.\n\nFollow-ups: call; verify');
+  });
+
+  it('falls back to a default title and drops non-string tags', () => {
+    const out = brainRecordToIngestText('memories', { content: 'orphan note', tags: ['ok', 5, null] });
+    expect(out.title).toBe('Brain entry');
+    expect(out.rawText).toBe('orphan note');
+    expect(out.tags).toEqual(['ok']);
+  });
+});
+
+describe('ingestFromBrain', () => {
+  it('resolves an idea, creates a brain-bridge scrap, and runs extraction', async () => {
+    brainStorage.getIdeaById.mockResolvedValue({
+      id: 'idea-1', title: 'Neon detective', oneLiner: 'Noir in a sentient city.', tags: ['noir'],
+    });
+    const { scrap, draft } = await ingestFromBrain({ brainType: 'ideas', brainId: 'idea-1' });
+    expect(draft).toBe(DRAFT);
+    const createArgs = catalogDB.createChunkedScrap.mock.calls[0][0];
+    expect(createArgs.sourceKind).toBe('brain-bridge');
+    expect(createArgs.title).toBe('Neon detective');
+    expect(createArgs.rawText).toBe('Neon detective\n\nNoir in a sentient city.');
+    expect(createArgs.metadata).toEqual({
+      brainType: 'ideas', brainId: 'idea-1', brainTitle: 'Neon detective', brainTags: ['noir'],
+    });
+    expect(catalogExtraction.extractIngredientsForScrap).toHaveBeenCalledWith(
+      expect.objectContaining({ scrapId: scrap.id }),
+    );
+  });
+
+  it('rejects an unsupported brain type before any lookup', async () => {
+    await expect(ingestFromBrain({ brainType: 'links', brainId: 'x' })).rejects.toThrow(/unsupported brain type/);
+    expect(catalogDB.createChunkedScrap).not.toHaveBeenCalled();
+  });
+
+  it('throws when the brain record is missing', async () => {
+    brainStorage.getMemoryEntryById.mockResolvedValue(null);
+    await expect(ingestFromBrain({ brainType: 'memories', brainId: 'gone' })).rejects.toThrow(/not found/);
+    expect(catalogDB.createChunkedScrap).not.toHaveBeenCalled();
+  });
+
+  it('throws when the record has no text to ingest', async () => {
+    brainStorage.getMemoryEntryById.mockResolvedValue({ id: 'm1', title: '   ', content: '' });
+    await expect(ingestFromBrain({ brainType: 'memories', brainId: 'm1' })).rejects.toThrow(/no text/);
+    expect(catalogDB.createChunkedScrap).not.toHaveBeenCalled();
   });
 });
