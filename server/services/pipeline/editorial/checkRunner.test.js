@@ -1003,9 +1003,20 @@ describe('enabledChecksConsumeReverseOutline (#1349)', () => {
   // Gate-aware consumption (#1614): a supplied ctx narrows the signal to checks
   // that would ACTUALLY run for this series, not just declare the source.
   describe('gate-aware via ctx (#1614)', () => {
-    // No manuscript, no named canon, no scenes → every outline consumer's
-    // runtime gate declines, so nothing would run even though sources match.
-    const gatedOutCtx = { manuscript: '', canon: { characters: [] }, reverseOutline: [], reverseOutlinePlotlines: [] };
+    // Does a check's gate read the outline? The refresh regenerates the outline,
+    // so an outline-reading gate's verdict against the STALE outline can't be
+    // trusted — such a check must stay a consumer. Probe it the same way the
+    // function does (mirrors the implementation's Proxy).
+    const gateReadsOutline = (check) => {
+      if (typeof check.gate !== 'function') return false;
+      let read = false;
+      const probe = new Proxy(
+        { manuscript: 'x', canon: { characters: [{ name: 'A' }] }, series: { styleGuide: {} }, reverseOutline: [{ povCharacter: 'A' }], reverseOutlinePlotlines: [{ id: 'p' }] },
+        { get(t, k) { if (k === 'reverseOutline' || k === 'reverseOutlinePlotlines') read = true; return t[k]; } },
+      );
+      try { check.gate(probe); } catch { /* a partial probe ctx may throw — irrelevant to the read flag */ }
+      return read;
+    };
     // A drafted manuscript re-opens the manuscript-gated outline consumers.
     const liveCtx = { manuscript: 'The kingdom fell.', canon: { characters: [{ name: 'Bob' }] }, reverseOutline: [{ povCharacter: 'Bob' }], reverseOutlinePlotlines: [] };
 
@@ -1014,12 +1025,26 @@ describe('enabledChecksConsumeReverseOutline (#1349)', () => {
       expect(enabledChecksConsumeReverseOutline({}, null, null)).toBe(true);
     });
 
-    it('is false when every consumer is gated out by the ctx', () => {
-      expect(enabledChecksConsumeReverseOutline({}, null, gatedOutCtx)).toBe(false);
+    it('is false only when the surviving consumers are gated out for OUTLINE-INDEPENDENT reasons', () => {
+      // Disable consumers whose gate reads the outline (those can't be skipped on
+      // a stale outline). The rest are manuscript/canon/series-gated, and an
+      // empty-manuscript empty-canon ctx makes each decline → no consumer runs.
+      const settings = disableWhere((c) => consumesOutline(c) && gateReadsOutline(c));
+      const ctx = { manuscript: '', canon: { characters: [] }, series: {}, reverseOutline: [], reverseOutlinePlotlines: [] };
+      expect(enabledChecksConsumeReverseOutline(settings, null, ctx)).toBe(false);
     });
 
     it('is true when at least one consumer passes its gate against the ctx', () => {
       expect(enabledChecksConsumeReverseOutline({}, null, liveCtx)).toBe(true);
+    });
+
+    it('keeps an outline-content-gated consumer that declines on the STALE outline (#1614, codex P2)', () => {
+      // Scoped to pov.justified only — its gate reads ctx.reverseOutline. A stale
+      // outline with scenes but no POV tags makes the gate decline, yet a refresh
+      // might re-tag POV, so the refresh must NOT be skipped: still a consumer.
+      const onlyPov = disableWhere((c) => consumesOutline(c) && c.id !== 'pov.justified');
+      const staleNoPov = { manuscript: 'x', canon: { characters: [] }, series: {}, reverseOutline: [{ heading: 'h', summary: 's' }], reverseOutlinePlotlines: [] };
+      expect(enabledChecksConsumeReverseOutline(onlyPov, null, staleNoPov)).toBe(true);
     });
   });
 });

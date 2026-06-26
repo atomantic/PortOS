@@ -852,17 +852,33 @@ export async function buildEditorialCheckPlan(seriesId, { checkIds = null, setti
  * Gate-aware refinement (#1614): an enabled consumer whose runtime `gate(ctx)`
  * declines won't actually run — so it doesn't justify spending an LLM call to
  * refresh the outline. When the caller supplies a `gateCtx` (the autopilot
- * refresh path, which already holds a complete-but-stale outline to evaluate
- * against), a consumer must ALSO pass its gate to count. The sources-only signal
- * stands when no ctx is given (the dry-run plan + the cheap pre-filter, neither
- * of which builds a ctx) so existing callers are unchanged.
+ * refresh path, which holds the current — stale — outline), a consumer must ALSO
+ * pass its gate to count. The sources-only signal stands when no ctx is given
+ * (the dry-run plan + the cheap pre-filter, neither of which builds a ctx) so
+ * existing callers are unchanged.
+ *
+ * Critically, the refresh REGENERATES the outline — so a gate that reads the
+ * outline can't be predicted from the stale copy (its "declines" may flip to
+ * "passes" once the outline is fresh, e.g. a `pov.justified` gate that finds no
+ * POV-tagged scenes in a stale outline a refresh would re-tag). We therefore
+ * only trust a DECLINING gate that decided WITHOUT touching the outline (from
+ * manuscript/canon/series, which the refresh leaves unchanged); a consumer whose
+ * gate read the outline stays a consumer so the refresh still runs. A passing
+ * gate always counts.
  */
 export function enabledChecksConsumeReverseOutline(settings, checkIds = null, gateCtx = null) {
   return getEnabledChecks(settings, checkIds).some(({ check }) => {
     const sources = checkSources(check);
     if (!sources.includes('reverseOutline') && !sources.includes('reverseOutline.plotlines')) return false;
-    if (gateCtx && typeof check.gate === 'function' && !check.gate(gateCtx)) return false;
-    return true;
+    if (!gateCtx || typeof check.gate !== 'function') return true;
+    let readOutline = false;
+    const tracked = new Proxy(gateCtx, {
+      get(target, key) {
+        if (key === 'reverseOutline' || key === 'reverseOutlinePlotlines') readOutline = true;
+        return target[key];
+      },
+    });
+    return check.gate(tracked) || readOutline;
   });
 }
 

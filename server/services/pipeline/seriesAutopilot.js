@@ -1065,17 +1065,16 @@ async function runReverseOutlineRefresh(sId, record) {
     return {};
   }
   // Gate 3 (#1614) — gate-aware consumption. A check that DECLARES the outline as
-  // a source still won't run if its runtime gate declines for this series (e.g.
-  // no POV-tagged scenes, a canon-less roster). Evaluate each consumer's gate
-  // against the current outline so a refresh is skipped when nothing that would
-  // actually run reads it. Gate on SCENE PRESENCE, not `status`: the real
-  // precondition is "there's scene content to gate against" — a never-generated
-  // (`status:'none'`) or empty outline has none, so the outline-content gates
-  // would all falsely decline; we bootstrap the first generation unconditionally
-  // rather than chicken-and-egg ourselves out of it. (This predicts the
-  // regenerated outline's consumption from the stale one's content — a leaky but
-  // safe proxy: the worst case is a wasted refresh, never a missed one, because
-  // a manuscript-gated consumer keeps the refresh alive whenever a draft exists.)
+  // a source still won't run if its runtime gate declines for this series (e.g. a
+  // canon-less roster). Evaluate each consumer's gate against the current outline
+  // and skip the refresh when none would run. Gate on SCENE PRESENCE, not
+  // `status`: the precondition is "there's scene content to evaluate gates
+  // against" — a never-generated (`status:'none'`) or empty outline has none, so
+  // we bootstrap the first generation unconditionally rather than chicken-and-egg
+  // ourselves out of it. enabledChecksConsumeReverseOutline only trusts a
+  // DECLINING gate that didn't read the outline (the refresh regenerates it, so
+  // an outline-content gate's stale verdict can't be trusted and keeps the check
+  // a consumer) — so a scoped run of only outline-gated checks still refreshes.
   if (Array.isArray(current.scenes) && current.scenes.length > 0) {
     const gateCtx = await buildReverseOutlineGateContext(sId, { outline: current }).catch(() => null);
     if (gateCtx && !enabledChecksConsumeReverseOutline(settings, checkIds, gateCtx)) {
