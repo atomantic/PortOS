@@ -1068,11 +1068,15 @@ async function runReverseOutlineRefresh(sId, record) {
   // a source still won't run if its runtime gate declines for this series (e.g.
   // no POV-tagged scenes, a canon-less roster). Evaluate each consumer's gate
   // against the current outline so a refresh is skipped when nothing that would
-  // actually run reads it. Only applied to a COMPLETE-but-stale outline: a
-  // never-generated outline (`status:'none'`) has no scenes to gate against, so
-  // the outline-content gates would all decline — we bootstrap the first run
-  // unconditionally rather than chicken-and-egg ourselves out of it.
-  if (current.status === 'complete') {
+  // actually run reads it. Gate on SCENE PRESENCE, not `status`: the real
+  // precondition is "there's scene content to gate against" — a never-generated
+  // (`status:'none'`) or empty outline has none, so the outline-content gates
+  // would all falsely decline; we bootstrap the first generation unconditionally
+  // rather than chicken-and-egg ourselves out of it. (This predicts the
+  // regenerated outline's consumption from the stale one's content — a leaky but
+  // safe proxy: the worst case is a wasted refresh, never a missed one, because
+  // a manuscript-gated consumer keeps the refresh alive whenever a draft exists.)
+  if (Array.isArray(current.scenes) && current.scenes.length > 0) {
     const gateCtx = await buildReverseOutlineGateContext(sId, { outline: current }).catch(() => null);
     if (gateCtx && !enabledChecksConsumeReverseOutline(settings, checkIds, gateCtx)) {
       record.runState.reverseOutlineRefreshed = true;

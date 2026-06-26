@@ -1043,6 +1043,37 @@ describe('buildReverseOutlineGateContext (#1614)', () => {
     expect(ctx2.reverseOutline).toEqual([]);
     expect(ctx2.reverseOutlinePlotlines).toEqual([]);
   });
+
+  // Contract guard (#1614): the autopilot evaluates consumer gates against this
+  // slim ctx, NOT the full buildEditorialContext. If a future reverse-outline
+  // consumer's gate reaches for a field the slim ctx omits (ctx.issues,
+  // ctx.editorialArcs, …), it would silently mis-evaluate against `undefined`
+  // and wrongly skip/force a refresh. Fail loudly here instead. The allowed set
+  // is exactly the keys buildReverseOutlineGateContext returns.
+  it('every reverse-outline consumer gate reads only slim-ctx keys', () => {
+    const ALLOWED = new Set(['seriesId', 'series', 'manuscript', 'canon', 'reverseOutline', 'reverseOutlinePlotlines']);
+    const base = {
+      seriesId: 's1',
+      series: { styleGuide: { povPerson: 'third-limited' } },
+      manuscript: 'The kingdom fell.',
+      canon: { characters: [{ name: 'Bob' }] },
+      reverseOutline: [{ povCharacter: 'Bob', heading: 'h' }],
+      reverseOutlinePlotlines: [{ id: 'p1' }],
+    };
+    const consumers = listChecks().filter((c) => Array.isArray(c.sources)
+      && (c.sources.includes('reverseOutline') || c.sources.includes('reverseOutline.plotlines'))
+      && typeof c.gate === 'function');
+    expect(consumers.length).toBeGreaterThan(0);
+    for (const check of consumers) {
+      const accessed = new Set();
+      // Record only TOP-LEVEL ctx key reads — nested reads (ctx.canon.characters)
+      // land on the real unproxied value, so they don't register.
+      const proxy = new Proxy(base, { get(t, k) { if (typeof k === 'string') accessed.add(k); return t[k]; } });
+      check.gate(proxy); // must also not throw against the slim ctx
+      const leaked = [...accessed].filter((k) => !ALLOWED.has(k));
+      expect(leaked, `${check.id} gate read non-slim ctx keys: ${leaked.join(', ')}`).toEqual([]);
+    }
+  });
 });
 
 // Inter-check context sharing (#1627) — dependency-scoped prior findings in ctx.

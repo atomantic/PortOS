@@ -1280,7 +1280,9 @@ describe('autopilot conductor', () => {
     // spend an LLM call no runnable check consumes.
     reverseOutlineConsumed = true; // gate 1: a consumer declares the source
     reverseOutlineConsumedGated = false; // gate 3: but every consumer is gated out
-    reverseOutlineState = { status: 'complete', stale: true };
+    // A complete-but-stale outline WITH scenes — gate 3 only evaluates when
+    // there's scene content to gate against (a scene-less outline bootstraps).
+    reverseOutlineState = { status: 'complete', stale: true, scenes: [{ id: 'sc1' }] };
     const { seriesId } = await seedComplete();
     await autopilot.startSeriesAutopilot(seriesId, { includeVisual: false });
     await waitFor(runFinished(seriesId));
@@ -1304,7 +1306,7 @@ describe('autopilot conductor', () => {
 
   it('forces a regen when a cached refresh is still stale against the live manuscript (#1614)', async () => {
     reverseOutlineConsumed = true;
-    reverseOutlineState = { status: 'complete', stale: true };
+    reverseOutlineState = { status: 'complete', stale: true, scenes: [{ id: 'sc1' }] };
     // First generate() no-ops as cached (hash matched at generate time), but the
     // live manuscript is still stale → the run forces one more regen.
     generateReverseOutline

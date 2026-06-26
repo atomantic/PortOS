@@ -875,9 +875,14 @@ export function enabledChecksConsumeReverseOutline(settings, checkIds = null, ga
  *
  * Deliberately lighter than buildEditorialContext: no issues / editorial-arc /
  * continuity-bible / comic projections and no injected LLM callers, because the
- * gates of outline-consuming checks read only `manuscript`, `canon`, and
- * `reverseOutline[.plotlines]`. Pass the already-read `outline` (the autopilot's
- * Gate-2 read) to avoid a redundant outline fetch.
+ * gates of outline-consuming checks read only `manuscript`, `canon`, `series`,
+ * and `reverseOutline[.plotlines]`. Pass the already-read `outline` (the
+ * autopilot's Gate-2 read) to avoid a redundant outline fetch.
+ *
+ * The slim field set is a contract: a checkRunner.test.js guard asserts every
+ * reverse-outline-consuming check's `gate()` reads only the keys this builder
+ * returns, so a future check whose gate reaches for `ctx.issues` (etc.) fails
+ * loudly in CI instead of silently mis-evaluating against an absent field.
  */
 export async function buildReverseOutlineGateContext(seriesId, { outline } = {}) {
   const series = await getSeries(seriesId);
