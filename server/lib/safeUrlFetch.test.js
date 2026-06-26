@@ -86,8 +86,28 @@ describe('fetchPublicText', () => {
   });
 });
 
+// Streaming response double — getReader() yields the given Uint8Array chunks.
+const streamRes = (chunks, { headers = {}, ok = true, status = 200 } = {}) => {
+  let i = 0;
+  const cancel = vi.fn(async () => {});
+  return {
+    ok,
+    status,
+    headers: new Map(Object.entries(headers)),
+    arrayBuffer: async () => new ArrayBuffer(0),
+    body: {
+      getReader: () => ({
+        read: async () => (i < chunks.length ? { done: false, value: chunks[i++] } : { done: true, value: undefined }),
+        cancel,
+        releaseLock: () => {},
+      }),
+      _cancel: cancel,
+    },
+  };
+};
+
 describe('fetchPublicBinary', () => {
-  it('returns the buffer + content-type within the cap', async () => {
+  it('returns the buffer + content-type from a non-streaming response (fallback)', async () => {
     const bytes = new Uint8Array([1, 2, 3]).buffer;
     fetchMock.mockResolvedValue(res({ body: bytes, headers: { 'content-type': 'image/jpeg' } }));
     const out = await fetchPublicBinary('https://i.pinimg.com/736x/x.jpg');
@@ -98,5 +118,18 @@ describe('fetchPublicBinary', () => {
   it('rejects a body over the declared Content-Length cap', async () => {
     fetchMock.mockResolvedValue(res({ headers: { 'content-length': String(99 * 1024 * 1024) } }));
     expect(await fetchPublicBinary('https://i.pinimg.com/x.jpg', { maxBytes: 1024 })).toBeNull();
+  });
+  it('streams a chunked body and concatenates within the cap', async () => {
+    const r = streamRes([new Uint8Array([1, 2]), new Uint8Array([3, 4])], { headers: { 'content-type': 'image/png' } });
+    fetchMock.mockResolvedValue(r);
+    const out = await fetchPublicBinary('https://i.pinimg.com/x.png', { maxBytes: 1024 });
+    expect(out.buffer.length).toBe(4);
+    expect(out.contentType).toBe('image/png');
+  });
+  it('aborts a no-Content-Length body that exceeds the cap (bounds peak memory)', async () => {
+    const r = streamRes([new Uint8Array(600), new Uint8Array(600)]); // 1200 > cap, no content-length
+    fetchMock.mockResolvedValue(r);
+    expect(await fetchPublicBinary('https://evil.example.com/x', { maxBytes: 1024 })).toBeNull();
+    expect(r.body._cancel).toHaveBeenCalled(); // stream was cancelled rather than fully read
   });
 });

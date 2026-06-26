@@ -84,16 +84,44 @@ export async function fetchPublicText(url, { timeoutMs, headers } = {}) {
 
 /**
  * Fetch a URL's body as a Buffer. Returns `{ buffer, contentType }` on a 2xx
- * within the size cap, or null on any failure. The size cap is enforced first
- * via Content-Length (cheap early-out) and again after the body is read (a
- * server can lie about / omit the header).
+ * within the size cap, or null on any failure. The cap is enforced first via
+ * Content-Length (cheap early-out) and then bounds PEAK MEMORY by streaming the
+ * body and aborting the moment accumulated bytes exceed it — so a server that
+ * omits or lies about Content-Length can't stream gigabytes into memory before a
+ * post-read check fires. Falls back to a buffered read only when the response
+ * exposes no stream (e.g. a test double).
  */
 export async function fetchPublicBinary(url, { timeoutMs, headers, maxBytes = DEFAULT_MAX_BYTES } = {}) {
   const res = await fetchGuarded(url, { timeoutMs, headers });
   if (!res?.ok) return null;
+  const contentType = res.headers.get('content-type') || '';
   const declared = Number(res.headers.get('content-length'));
   if (maxBytes && Number.isFinite(declared) && declared > maxBytes) return null;
-  const buffer = Buffer.from(await res.arrayBuffer());
-  if (maxBytes && buffer.byteLength > maxBytes) return null;
-  return { buffer, contentType: res.headers.get('content-type') || '' };
+
+  if (!res.body || typeof res.body.getReader !== 'function') {
+    // No readable stream (some runtimes / test doubles) — fall back to a
+    // buffered read, still capped post-read.
+    const buffer = Buffer.from(await res.arrayBuffer());
+    if (maxBytes && buffer.byteLength > maxBytes) return null;
+    return { buffer, contentType };
+  }
+
+  const reader = res.body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (maxBytes && total > maxBytes) {
+        await reader.cancel();
+        return null;
+      }
+      chunks.push(Buffer.from(value));
+    }
+  } finally {
+    try { reader.releaseLock(); } catch { /* already released by cancel() */ }
+  }
+  return { buffer: Buffer.concat(chunks), contentType };
 }

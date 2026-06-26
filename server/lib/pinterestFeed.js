@@ -16,8 +16,28 @@
 
 import { ServerError } from './errorHandler.js';
 
-// pinterest.com, www.pinterest.com, pinterest.co.uk, br.pinterest.com, …
-const PINTEREST_HOST_RE = /(^|\.)pinterest\.[a-z]{2,}(\.[a-z]{2,})?$/i;
+// Two-part public suffixes Pinterest's country domains use, so the registrable
+// label sits one level deeper (pinterest.co.uk → "pinterest" is third-from-last).
+const TWO_PART_TLDS = new Set([
+  'co.uk', 'com.au', 'co.nz', 'com.br', 'com.mx', 'co.jp', 'co.kr', 'com.tr',
+]);
+
+// `pinterest` must be the REGISTRABLE domain, not merely a subdomain LABEL of an
+// attacker host. A plain `pinterest.<tld>` and `pinterest.<sub>.<tld>` are
+// structurally identical (`pinterest.co.uk` vs `pinterest.evil.com`), so a regex
+// can't tell them apart without knowing the public suffix — hence the explicit
+// two-part-TLD set. Accepts pinterest.com, www.pinterest.com, br.pinterest.com,
+// pinterest.co.uk; rejects pinterest.evil.com, pinterest.com.evil.com,
+// evilpinterest.com.
+function isPinterestHost(host) {
+  const labels = host.toLowerCase().split('.');
+  if (labels.length < 2) return false;
+  const lastTwo = labels.slice(-2).join('.');
+  if (TWO_PART_TLDS.has(lastTwo)) {
+    return labels.length >= 3 && labels[labels.length - 3] === 'pinterest';
+  }
+  return labels[labels.length - 2] === 'pinterest';
+}
 
 const badUrl = (msg) => new ServerError(msg, { status: 400, code: 'INVALID_PINTEREST_URL' });
 
@@ -37,7 +57,7 @@ export function normalizePinterestFeedUrl(input) {
     throw badUrl('Pinterest URL must be http(s)');
   }
   const host = u.hostname.toLowerCase();
-  if (!PINTEREST_HOST_RE.test(host)) {
+  if (!isPinterestHost(host)) {
     throw badUrl('That doesn’t look like a Pinterest board URL');
   }
   // A board lives at /<user>/<board>/ and its feed at /<user>/<board>.rss.

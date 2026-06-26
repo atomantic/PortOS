@@ -26,16 +26,24 @@ describe('normalizePinterestFeedUrl', () => {
       .toBe('https://pinterest.com/jane/board.rss');
   });
 
-  it('accepts country-code Pinterest hosts', () => {
+  it('accepts a country subdomain of pinterest.com', () => {
     expect(normalizePinterestFeedUrl('https://br.pinterest.com/jane/board/').feedUrl)
       .toBe('https://br.pinterest.com/jane/board.rss');
+  });
+
+  it('accepts a two-part-TLD Pinterest domain (pinterest.co.uk)', () => {
+    expect(normalizePinterestFeedUrl('https://pinterest.co.uk/jane/board/').feedUrl)
+      .toBe('https://pinterest.co.uk/jane/board.rss');
   });
 
   it.each([
     ['empty', ''],
     ['not a url', 'not a url'],
     ['non-pinterest host', 'https://example.com/jane/board'],
-    ['pinterest look-alike', 'https://pinterest.com.evil.com/jane/board'],
+    ['pinterest look-alike (suffix)', 'https://pinterest.com.evil.com/jane/board'],
+    ['pinterest as attacker subdomain label', 'https://pinterest.evil.com/jane/board'],
+    ['pinterest as attacker subdomain under ccTLD', 'https://pinterest.evil.co.uk/jane/board'],
+    ['embedded brand name', 'https://evilpinterest.com/jane/board'],
     ['ftp scheme', 'ftp://pinterest.com/jane/board'],
     ['root path only', 'https://www.pinterest.com/'],
   ])('rejects %s with a 400', (_label, input) => {
