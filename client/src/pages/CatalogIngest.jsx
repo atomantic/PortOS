@@ -95,6 +95,11 @@ export default function CatalogIngest() {
   // inbox's "ready to become ingredients" banner (issue #1722). Held in a ref so
   // it survives the history-state clear and the extract/review re-renders.
   const creativeNoteIdsRef = useRef([]);
+  // The scrap id the handoff ids are bound to — set only when the PREFILLED
+  // paste is ingested. Commit consumes the notes ONLY when it commits this exact
+  // scrap, so switching to URL/File/Voice (a different scrap) and committing that
+  // never marks the original Brain notes consumed.
+  const creativeNoteScrapIdRef = useRef(null);
 
   // Stop the mic if the page unmounts mid-recording (navigating away), so the
   // MediaRecorder stream isn't left live with no UI to stop it.
@@ -145,6 +150,7 @@ export default function CatalogIngest() {
     // Abandoning the review (Start Over / Cancel) discards the Brain hand-off —
     // a later commit of unrelated text must NOT mark the original notes consumed.
     creativeNoteIdsRef.current = [];
+    creativeNoteScrapIdRef.current = null;
     recorderRef.current?.cancel?.();
     recorderRef.current = null;
     setRecording(false);
@@ -194,6 +200,9 @@ export default function CatalogIngest() {
       .catch((err) => { toast.error(err?.message || 'Failed to save scrap'); return null; });
     if (!created?.scrap?.id) { setSubmitting(false); setPhase('paste'); return; }
     setScrapId(created.scrap.id);
+    // Bind any pending Brain handoff ids to THIS scrap, so only a commit of the
+    // scrap built from the prefilled text consumes them (not a later URL/file/voice).
+    if (creativeNoteIdsRef.current.length) creativeNoteScrapIdRef.current = created.scrap.id;
     const result = await extractFromCatalogScrap(created.scrap.id, {}, { silent: true })
       .catch((err) => { toast.error(err?.message || 'Extraction failed'); return null; });
     setSubmitting(false);
@@ -400,8 +409,9 @@ export default function CatalogIngest() {
     // re-sendable (the prior behavior) — so swallow it silently rather than
     // toasting a confusing error after a successful commit.
     const noteIds = creativeNoteIdsRef.current;
-    if (noteIds.length) {
+    if (noteIds.length && scrapId && scrapId === creativeNoteScrapIdRef.current) {
       creativeNoteIdsRef.current = [];
+      creativeNoteScrapIdRef.current = null;
       await markBrainInboxSentToCatalog(noteIds, { silent: true }).catch(() => {});
     }
     navigate('/catalog');
