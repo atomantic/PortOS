@@ -211,6 +211,12 @@ describe('cosTaskStore.addTask', () => {
     const { tasks } = await getUserTasks();
     expect(tasks[0].description).toBe('second');
   });
+
+  it('stamps a content-edit timestamp (updatedAt) from the injectable clock (#1714)', async () => {
+    const NOW = Date.parse('2026-06-25T12:00:00.000Z');
+    const created = await addTask({ description: 'stamped', id: 'task-stamp' }, 'user', { now: NOW });
+    expect(created.metadata.updatedAt).toBe(new Date(NOW).toISOString());
+  });
 });
 
 describe('cosTaskStore.updateTask', () => {
@@ -258,6 +264,33 @@ describe('cosTaskStore.updateTask', () => {
     }, 'user');
     expect(renewed.metadata.claimedBy).toBe('instance-a');
     expect(renewed.metadata.leaseExpiresAt).toBe('2026-01-01T01:00:00.000Z');
+  });
+
+  it('bumps updatedAt on a content edit from the injectable clock (#1714)', async () => {
+    const T0 = Date.parse('2026-06-25T00:00:00.000Z');
+    const T1 = Date.parse('2026-06-25T06:00:00.000Z');
+    await addTask({ description: 'edit me', id: 'task-edit' }, 'user', { now: T0 });
+    const updated = await updateTask('task-edit', { priority: 'HIGH' }, 'user', { now: T1 });
+    expect(updated.metadata.updatedAt).toBe(new Date(T1).toISOString());
+  });
+
+  it('does NOT bump updatedAt on a claim-only lease renewal (heartbeat) (#1714)', async () => {
+    const T0 = Date.parse('2026-06-25T00:00:00.000Z');
+    const T1 = Date.parse('2026-06-25T06:00:00.000Z');
+    const T2 = Date.parse('2026-06-25T12:00:00.000Z');
+    await addTask({ description: 'beat', id: 'task-beat' }, 'user', { now: T0 });
+    // Claiming the task is a content edit (status change) → stamp advances to T1.
+    await updateTask('task-beat', {
+      status: 'in_progress',
+      metadata: { claimedBy: 'a', claimedAt: '2026-01-01T00:00:00.000Z', leaseExpiresAt: '2026-01-01T00:30:00.000Z' }
+    }, 'user', { now: T1 });
+    // A pure heartbeat (claim-only metadata, no status) must NOT advance the stamp,
+    // or a lease-renewing peer would spuriously win same-status content ties.
+    const renewed = await updateTask('task-beat', {
+      metadata: { claimedBy: 'a', claimedAt: '2026-01-01T00:00:00.000Z', leaseExpiresAt: '2026-01-01T01:00:00.000Z' }
+    }, 'user', { now: T2 });
+    expect(renewed.metadata.leaseExpiresAt).toBe('2026-01-01T01:00:00.000Z');
+    expect(renewed.metadata.updatedAt).toBe(new Date(T1).toISOString());
   });
 
   it('returns an error object when the file is missing', async () => {

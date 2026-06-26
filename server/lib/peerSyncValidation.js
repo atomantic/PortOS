@@ -340,6 +340,11 @@ const peerCosTaskEntrySchema = z.object({
   // undefined — the receiver's markdown generator does Object.entries(metadata)
   // and would otherwise throw, failing the whole file merge (the merge layer
   // also defends, but normalizing at the boundary is cheaper + clearer).
+  //
+  // The newest-edit-wins stamp (`metadata.updatedAt`, #1714) rides here verbatim:
+  // it lives in metadata (not a top-level entry field) so it survives the TASKS.md
+  // markdown round-trip the receiver re-reads, and is already covered by the
+  // permissive value schema + the listHash's `JSON.stringify(metadata)`.
   metadata: z.record(z.string().min(1).max(120), z.any()).optional().default({}),
 }).strict();
 export const peerCosTasksSchema = z.object({

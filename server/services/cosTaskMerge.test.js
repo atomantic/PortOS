@@ -160,6 +160,49 @@ describe('mergeTaskLists', () => {
     expect(fromA.metadata.context).toBe(fromB.metadata.context);
   });
 
+  it('newest-edit-wins: larger updatedAt wins a same-status tie, regardless of initiator', () => {
+    // Same pending status; the fresher edit (larger updatedAt) is authoritative
+    // even though it carries the LOWER priority — the #1714 upgrade over the
+    // pure-deterministic tiebreak, which would have preferred the stale HIGH.
+    const fresh = task('task-1', 'pending', { priority: 'LOW', priorityValue: 1, metadata: { updatedAt: future(5000) } });
+    const stale = task('task-1', 'pending', { priority: 'HIGH', priorityValue: 3, metadata: { updatedAt: past(5000) } });
+    const [fromFresh] = mergeTaskLists([fresh], [stale], { now: NOW });
+    const [fromStale] = mergeTaskLists([stale], [fresh], { now: NOW });
+    expect(fromFresh.priority).toBe('LOW');
+    expect(fromStale.priority).toBe('LOW');
+    expect(fromFresh.metadata.updatedAt).toBe(fresh.metadata.updatedAt);
+  });
+
+  it('treats an absent updatedAt as oldest, so a stamped edit beats an un-stamped (legacy) copy', () => {
+    const stamped = task('task-1', 'pending', { description: 'edited on a new peer', metadata: { updatedAt: past(1000) } });
+    const legacy = task('task-1', 'pending', { description: 'untouched on an old peer' });
+    const [fromStamped] = mergeTaskLists([stamped], [legacy], { now: NOW });
+    const [fromLegacy] = mergeTaskLists([legacy], [stamped], { now: NOW });
+    expect(fromStamped.description).toBe('edited on a new peer');
+    expect(fromLegacy.description).toBe('edited on a new peer');
+  });
+
+  it('falls back to the deterministic comparator when both stamps tie (or are absent)', () => {
+    // Equal updatedAt on both sides → newest-wins can't decide → priority breaks it.
+    const sameStamp = future(0);
+    const a = [task('task-1', 'pending', { priority: 'HIGH', priorityValue: 3, metadata: { updatedAt: sameStamp } })];
+    const b = [task('task-1', 'pending', { priority: 'MEDIUM', priorityValue: 2, metadata: { updatedAt: sameStamp } })];
+    const [fromA] = mergeTaskLists(a, b, { now: NOW });
+    const [fromB] = mergeTaskLists(b, a, { now: NOW });
+    expect(fromA.priority).toBe('HIGH');
+    expect(fromB.priority).toBe('HIGH');
+  });
+
+  it('does not let updatedAt override a lifecycle status advance (rank still wins first)', () => {
+    // A stale-stamped completed task still beats a freshly-stamped in_progress one:
+    // status rank is checked before updatedAt, so completion always converges.
+    const completedStale = task('task-1', 'completed', { metadata: { updatedAt: past(10_000) } });
+    const inProgressFresh = task('task-1', 'in_progress', { metadata: { updatedAt: future(10_000), ...liveClaim('instance-A') } });
+    const [merged] = mergeTaskLists([inProgressFresh], [completedStale], { now: NOW });
+    expect(merged.status).toBe('completed');
+    expect(merged.metadata.claimedBy).toBeUndefined(); // terminal → claim dropped
+  });
+
   it('treats metadata with different key order as identical (no spurious winner flip)', () => {
     const a = [task('task-1', 'pending', { metadata: { app: 'X', context: 'Y' } })];
     const b = [task('task-1', 'pending', { metadata: { context: 'Y', app: 'X' } })];

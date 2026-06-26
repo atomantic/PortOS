@@ -34,6 +34,34 @@ export const PRIORITY_VALUES = {
   'LOW': 1
 };
 
+const CLAIM_KEY_SET = new Set(CLAIM_METADATA_KEYS);
+
+/**
+ * Does an `updateTask` patch change a task's EDITABLE CONTENT (vs only its
+ * claim/lease metadata)? Used to decide whether to bump the `updatedAt` LWW stamp
+ * (#1714). A claim-only write — most importantly the periodic lease-renewal
+ * heartbeat (`buildRenewal`, which passes only claim keys and no status) — must
+ * NOT bump the stamp: a heartbeat is not a content edit, and letting it advance
+ * `updatedAt` would make a lease-renewing peer spuriously win same-status content
+ * ties over the other peer's genuine edit. Status transitions, priority/description
+ * changes, legacy `context`/`app`/… fields, and any non-claim metadata key all
+ * count as content edits.
+ */
+function isContentEdit(updates) {
+  if (!updates || typeof updates !== 'object') return false;
+  if (updates.status !== undefined) return true;
+  if (updates.description !== undefined) return true;
+  if (updates.priority !== undefined) return true;
+  if (updates.context !== undefined || updates.model !== undefined
+    || updates.provider !== undefined || updates.app !== undefined) return true;
+  if (updates.metadata && typeof updates.metadata === 'object') {
+    for (const key of Object.keys(updates.metadata)) {
+      if (!CLAIM_KEY_SET.has(key)) return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Get user tasks from TASKS.md
  */
@@ -114,7 +142,7 @@ export async function getTaskById(taskId) {
  * submitted task starts instantly instead of waiting for the next evaluation
  * interval.
  */
-export async function addTask(taskData, taskType = 'user', { raw = false, ignoreTaskId = null } = {}) {
+export async function addTask(taskData, taskType = 'user', { raw = false, ignoreTaskId = null, now = Date.now() } = {}) {
   return withStateLock(async () => {
   const state = await loadState();
   const filePath = taskType === 'user'
@@ -197,6 +225,13 @@ export async function addTask(taskData, taskType = 'user', { raw = false, ignore
     if (taskData.jiraTicketUrl) metadata.jiraTicketUrl = taskData.jiraTicketUrl;
     if (taskData.screenshots?.length > 0) metadata.screenshots = taskData.screenshots;
     if (taskData.attachments?.length > 0) metadata.attachments = taskData.attachments;
+    // Content-edit timestamp for cross-peer newest-edit-wins LWW (#1714). Stamped
+    // at creation so a freshly-added task always carries a stamp; the merge treats
+    // an absent stamp as oldest, so this also keeps a stamped task from losing a
+    // same-status tie to a legacy peer's un-stamped copy. `now` is injectable so
+    // the markdown output stays deterministic under test. Raw tasks (pre-built by
+    // the caller) keep whatever stamp they arrive with.
+    metadata.updatedAt = new Date(now).toISOString();
 
     // Create the new task
     newTask = {
@@ -236,7 +271,7 @@ export async function addTask(taskData, taskType = 'user', { raw = false, ignore
 /**
  * Update an existing task
  */
-export async function updateTask(taskId, updates, taskType = 'user') {
+export async function updateTask(taskId, updates, taskType = 'user', { now = Date.now() } = {}) {
   return withStateLock(async () => {
   const state = await loadState();
   const filePath = taskType === 'user'
@@ -286,6 +321,14 @@ export async function updateTask(taskId, updates, taskType = 'user') {
     for (const key of CLAIM_METADATA_KEYS) {
       delete updatedMetadata[key];
     }
+  }
+
+  // Bump the content-edit stamp (#1714) on a genuine content change so the peer's
+  // claim-aware merge can resolve a same-status edit by newest-edit-wins. Skipped
+  // for claim-only writes (lease-renewal heartbeats) — see isContentEdit. `now` is
+  // injectable for deterministic test output.
+  if (isContentEdit(updates)) {
+    updatedMetadata.updatedAt = new Date(now).toISOString();
   }
 
   // Clean undefined values from metadata

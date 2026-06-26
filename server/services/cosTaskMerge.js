@@ -55,6 +55,24 @@ const STATUS_RANK = Object.freeze({ completed: 4, blocked: 3, in_progress: 2, pe
 const statusRank = (status) => STATUS_RANK[status] || 0;
 const isTerminalStatus = (status) => status === 'completed' || status === 'blocked';
 
+// The metadata key carrying a task's content-edit timestamp (#1714). Stamped in
+// cosTaskStore's write paths on every content edit and used here as the
+// same-status LWW key. Excluded from the content signature (it's the edit *key*,
+// not content) the same way claim metadata is.
+const EDIT_STAMP_KEY = 'updatedAt';
+
+// Epoch ms of a task's content-edit stamp (`metadata.updatedAt`), or -Infinity
+// when absent/unparseable. -Infinity (not 0) so ANY real stamp beats a legacy
+// task that predates the field — an older peer that never stamps always loses a
+// same-status tie to a peer that did ("absent = oldest"), and two un-stamped
+// sides compare equal and fall through to the deterministic comparator.
+const updatedAtMs = (task) => {
+  const raw = task?.metadata?.[EDIT_STAMP_KEY];
+  if (raw === undefined || raw === null || raw === '') return -Infinity;
+  const ms = typeof raw === 'number' ? raw : Date.parse(raw);
+  return Number.isFinite(ms) ? ms : -Infinity;
+};
+
 const leaseMs = (metadata) => {
   const raw = metadata?.leaseExpiresAt;
   if (raw === undefined || raw === null || raw === '') return null;
@@ -96,24 +114,29 @@ function claimTriple(task) {
 
 /**
  * Choose the content base for a task on both sides. Higher lifecycle status wins
- * (rule 2). On a SAME-status tie the two sides can still differ in editable
- * content — priority, description, approval flags — and "keep local" would be
- * side-dependent, so machine A (local=A) and machine B (local=B) would each keep
- * their own value and never reconcile. Break the tie with a deterministic,
- * side-independent comparator so both peers converge on the same record:
- * higher priority, then lexicographically-greater description, then a stable
- * JSON tiebreak on the remaining comparable fields.
+ * (rule 2). On a SAME-status tie, newest-EDIT wins via the per-task `updatedAt`
+ * stamp (#1714): the side whose content was edited most recently is authoritative.
+ * The stamp is threaded through cosTaskStore's write paths, so a same-status
+ * content edit (priority/description/approval/metadata) on one machine carries a
+ * larger `updatedAt` and is adopted by the other. This is symmetric — machine A
+ * compares (A,B) and machine B compares (B,A), both prefer the larger stamp, so
+ * they converge on the SAME record regardless of which side initiates the sweep.
  *
- * NOTE: with no per-task edit timestamp this converges but cannot guarantee
- * *newest-edit* wins (it can prefer a stale higher-priority value over a fresh
- * lower one). That's the conventional LWW trade-off; a real `updatedAt` edit
- * key is the proper upgrade (tracked in #1714). Convergence is the
- * load-bearing property here — a sync that never reconciles is worse.
+ * When the stamps tie (equal, or both absent on legacy/older-peer tasks) we fall
+ * back to a deterministic, side-independent comparator — higher priority, then a
+ * canonical content signature — so a content edit still converges even with no
+ * usable timestamp. Convergence is the load-bearing property; `updatedAt` just
+ * upgrades the tiebreak from "deterministic" to "deterministic AND newest-wins"
+ * whenever a real stamp is present.
  */
 function pickContentBase(local, remote) {
   const lr = statusRank(local.status);
   const rr = statusRank(remote.status);
   if (rr !== lr) return rr > lr ? remote : local;
+  // Same lifecycle status: newest content edit wins (absent stamp = oldest).
+  const lu = updatedAtMs(local);
+  const ru = updatedAtMs(remote);
+  if (lu !== ru) return ru > lu ? remote : local;
   const lp = PRIORITY_VALUES[local.priority] || 0;
   const rp = PRIORITY_VALUES[remote.priority] || 0;
   if (lp !== rp) return rp > lp ? remote : local;
@@ -139,7 +162,11 @@ function contentSignature(task) {
   const md = (task.metadata && typeof task.metadata === 'object') ? task.metadata : {};
   const nonClaim = {};
   for (const key of Object.keys(md).sort()) {
-    if (CLAIM_METADATA_KEYS.includes(key)) continue;
+    // Exclude claim metadata (resolved separately by lease) AND the edit stamp
+    // (it's the LWW key consumed in pickContentBase before we ever reach the
+    // signature — including it here would just re-introduce a timestamp into the
+    // "content" comparison the signature is meant to isolate).
+    if (CLAIM_METADATA_KEYS.includes(key) || key === EDIT_STAMP_KEY) continue;
     nonClaim[key] = md[key];
   }
   return JSON.stringify([
