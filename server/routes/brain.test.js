@@ -173,7 +173,7 @@ describe('Brain Routes', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.inboxLog.id).toBe('inbox-001');
-      expect(brainService.captureThought).toHaveBeenCalledWith('Test thought', undefined, undefined);
+      expect(brainService.captureThought).toHaveBeenCalledWith('Test thought', undefined, undefined, { creative: undefined });
     });
 
     it('should return 400 if text is missing', async () => {
@@ -191,7 +191,17 @@ describe('Brain Routes', () => {
         .post('/api/brain/capture')
         .send({ text: 'Test', providerOverride: 'openai', modelOverride: 'gpt-4' });
 
-      expect(brainService.captureThought).toHaveBeenCalledWith('Test', 'openai', 'gpt-4');
+      expect(brainService.captureThought).toHaveBeenCalledWith('Test', 'openai', 'gpt-4', { creative: undefined });
+    });
+
+    it('should forward the creative flag when set', async () => {
+      brainService.captureThought.mockResolvedValue({ inboxLog: { id: 'inbox-003' } });
+
+      await request(app)
+        .post('/api/brain/capture')
+        .send({ text: 'a sentient city', creative: true });
+
+      expect(brainService.captureThought).toHaveBeenCalledWith('a sentient city', undefined, undefined, { creative: true });
     });
   });
 
