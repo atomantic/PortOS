@@ -857,28 +857,35 @@ export async function buildEditorialCheckPlan(seriesId, { checkIds = null, setti
  * (the dry-run plan + the cheap pre-filter, neither of which builds a ctx) so
  * existing callers are unchanged.
  *
- * Critically, the refresh REGENERATES the outline — so a gate that reads the
- * outline can't be predicted from the stale copy (its "declines" may flip to
- * "passes" once the outline is fresh, e.g. a `pov.justified` gate that finds no
- * POV-tagged scenes in a stale outline a refresh would re-tag). We therefore
- * only trust a DECLINING gate that decided WITHOUT touching the outline (from
- * manuscript/canon/series, which the refresh leaves unchanged); a consumer whose
- * gate read the outline stays a consumer so the refresh still runs. A passing
- * gate always counts.
+ * Critically, the refresh REGENERATES the outline — so a gate that declines
+ * against the stale copy may flip to "passes" once the outline is fresh (e.g. a
+ * `pov.justified` gate finds no POV-tagged scenes in a stale outline a refresh
+ * would re-tag). We answer the only question that matters — "could a fresh
+ * outline let this check run?" — by re-evaluating a declining gate against a
+ * permissive synthetic outline while keeping the REAL manuscript/canon/series
+ * (which the refresh leaves untouched). If it now passes, the outline was the
+ * blocker → consumer; if it still declines, the block is outline-independent (a
+ * mixed gate like `endings.pov-switch` that also needs authored cliffhangers, an
+ * empty manuscript, a canon-less roster) and a refresh can't help → not a
+ * consumer. A gate that already passes against the stale outline always counts.
  */
+const PERMISSIVE_GATE_OUTLINE = Object.freeze({
+  reverseOutline: Object.freeze([Object.freeze({
+    id: 'scene-001', sequence: 0, povCharacter: 'POV', heading: 'Scene', summary: 'Scene.',
+    plotlineId: 'p', secondaryPlotlineId: null, issueNumber: 1,
+    components: Object.freeze({ narrative: true, action: true, dialogue: true }),
+    charactersPresent: Object.freeze(['POV']), setting: 'Setting', anchorQuote: 'q',
+  })]),
+  reverseOutlinePlotlines: Object.freeze([Object.freeze({ id: 'p', label: 'Plot', kind: 'main' })]),
+});
+
 export function enabledChecksConsumeReverseOutline(settings, checkIds = null, gateCtx = null) {
   return getEnabledChecks(settings, checkIds).some(({ check }) => {
     const sources = checkSources(check);
     if (!sources.includes('reverseOutline') && !sources.includes('reverseOutline.plotlines')) return false;
     if (!gateCtx || typeof check.gate !== 'function') return true;
-    let readOutline = false;
-    const tracked = new Proxy(gateCtx, {
-      get(target, key) {
-        if (key === 'reverseOutline' || key === 'reverseOutlinePlotlines') readOutline = true;
-        return target[key];
-      },
-    });
-    return check.gate(tracked) || readOutline;
+    if (check.gate(gateCtx)) return true;
+    return check.gate({ ...gateCtx, ...PERMISSIVE_GATE_OUTLINE });
   });
 }
 
@@ -1076,4 +1083,4 @@ export function startEditorialChecksRun(seriesId, options = {}) {
 }
 
 // Export internals for tests.
-export const __testing = { runs: runner.runs };
+export const __testing = { runs: runner.runs, PERMISSIVE_GATE_OUTLINE };

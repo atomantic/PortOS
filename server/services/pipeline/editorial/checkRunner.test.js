@@ -76,7 +76,7 @@ vi.mock('../reverseOutline.js', () => ({ getReverseOutline: vi.fn(async () => ou
 let editorialState = { characters: [] };
 vi.mock('../editorialAnalysis.js', () => ({ getSeriesEditorial: vi.fn(async () => editorialState) }));
 
-const { runEditorialChecks, buildEditorialCheckPlan, getReviewWithStaleness, enabledChecksConsumeReverseOutline, buildReverseOutlineGateContext, summarizeCheckErrors, previewCustomCheck, buildScopedPriorFindings, effectiveCheckSources } = await import('./checkRunner.js');
+const { runEditorialChecks, buildEditorialCheckPlan, getReviewWithStaleness, enabledChecksConsumeReverseOutline, buildReverseOutlineGateContext, summarizeCheckErrors, previewCustomCheck, buildScopedPriorFindings, effectiveCheckSources, __testing: checkRunnerTesting } = await import('./checkRunner.js');
 const { runStagedLLM, resolveStageContext } = await import('../../../lib/stageRunner.js');
 const { collectManuscriptSections } = await import('../arcPlanner.js');
 const { getSeriesCanon } = await import('../seriesCanon.js');
@@ -1001,22 +1001,10 @@ describe('enabledChecksConsumeReverseOutline (#1349)', () => {
   });
 
   // Gate-aware consumption (#1614): a supplied ctx narrows the signal to checks
-  // that would ACTUALLY run for this series, not just declare the source.
+  // that would ACTUALLY run for this series. Because the refresh regenerates the
+  // outline, the test is "could a FRESH outline let this check run?" — a declining
+  // gate is re-evaluated against a permissive synthetic outline.
   describe('gate-aware via ctx (#1614)', () => {
-    // Does a check's gate read the outline? The refresh regenerates the outline,
-    // so an outline-reading gate's verdict against the STALE outline can't be
-    // trusted — such a check must stay a consumer. Probe it the same way the
-    // function does (mirrors the implementation's Proxy).
-    const gateReadsOutline = (check) => {
-      if (typeof check.gate !== 'function') return false;
-      let read = false;
-      const probe = new Proxy(
-        { manuscript: 'x', canon: { characters: [{ name: 'A' }] }, series: { styleGuide: {} }, reverseOutline: [{ povCharacter: 'A' }], reverseOutlinePlotlines: [{ id: 'p' }] },
-        { get(t, k) { if (k === 'reverseOutline' || k === 'reverseOutlinePlotlines') read = true; return t[k]; } },
-      );
-      try { check.gate(probe); } catch { /* a partial probe ctx may throw — irrelevant to the read flag */ }
-      return read;
-    };
     // A drafted manuscript re-opens the manuscript-gated outline consumers.
     const liveCtx = { manuscript: 'The kingdom fell.', canon: { characters: [{ name: 'Bob' }] }, reverseOutline: [{ povCharacter: 'Bob' }], reverseOutlinePlotlines: [] };
 
@@ -1025,26 +1013,47 @@ describe('enabledChecksConsumeReverseOutline (#1349)', () => {
       expect(enabledChecksConsumeReverseOutline({}, null, null)).toBe(true);
     });
 
-    it('is false only when the surviving consumers are gated out for OUTLINE-INDEPENDENT reasons', () => {
-      // Disable consumers whose gate reads the outline (those can't be skipped on
-      // a stale outline). The rest are manuscript/canon/series-gated, and an
-      // empty-manuscript empty-canon ctx makes each decline → no consumer runs.
-      const settings = disableWhere((c) => consumesOutline(c) && gateReadsOutline(c));
-      const ctx = { manuscript: '', canon: { characters: [] }, series: {}, reverseOutline: [], reverseOutlinePlotlines: [] };
-      expect(enabledChecksConsumeReverseOutline(settings, null, ctx)).toBe(false);
-    });
-
     it('is true when at least one consumer passes its gate against the ctx', () => {
       expect(enabledChecksConsumeReverseOutline({}, null, liveCtx)).toBe(true);
     });
 
-    it('keeps an outline-content-gated consumer that declines on the STALE outline (#1614, codex P2)', () => {
-      // Scoped to pov.justified only — its gate reads ctx.reverseOutline. A stale
-      // outline with scenes but no POV tags makes the gate decline, yet a refresh
-      // might re-tag POV, so the refresh must NOT be skipped: still a consumer.
+    it('keeps an outline-content-gated consumer that declines on the STALE outline (#1614, codex P2 r1)', () => {
+      // Scoped to pov.justified only — its gate reads ctx.reverseOutline; a stale
+      // outline with scenes but no POV tags makes it decline. A refresh might add
+      // POV, so the permissive re-eval flips it true → still a consumer (don't skip).
       const onlyPov = disableWhere((c) => consumesOutline(c) && c.id !== 'pov.justified');
       const staleNoPov = { manuscript: 'x', canon: { characters: [] }, series: {}, reverseOutline: [{ heading: 'h', summary: 's' }], reverseOutlinePlotlines: [] };
       expect(enabledChecksConsumeReverseOutline(onlyPov, null, staleNoPov)).toBe(true);
+    });
+
+    it('drops a mixed-gate consumer blocked for an OUTLINE-INDEPENDENT reason (#1614, codex P2 r2)', () => {
+      // Scoped to endings.pov-switch — its gate needs POV scenes AND authored
+      // cliffhangers. With no cliffhangers, even a fresh (permissive) outline can't
+      // make it run, so a refresh would be wasted → NOT a consumer → false.
+      const onlyEndings = disableWhere((c) => consumesOutline(c) && c.id !== 'endings.pov-switch');
+      const noCliffhangers = { manuscript: 'x', canon: { characters: [] }, series: { arc: {} }, reverseOutline: [{ povCharacter: 'A' }], reverseOutlinePlotlines: [] };
+      expect(enabledChecksConsumeReverseOutline(onlyEndings, null, noCliffhangers)).toBe(false);
+    });
+
+    // Richness guard: the permissive synthetic outline must satisfy the outline
+    // half of EVERY consumer's gate — a too-sparse synthetic would wrongly DROP a
+    // check whose fresh outline would actually unblock it (a false skip, the
+    // dangerous direction). A fully-populated ctx + the synthetic must pass every
+    // consumer gate; a new check needing a scene field the synthetic lacks trips this.
+    it('permissive synthetic outline satisfies every consumer gate (no false drop)', () => {
+      const richCtx = {
+        manuscript: 'The kingdom fell. '.repeat(20),
+        canon: { characters: [{ name: 'Hero' }, { name: 'Villain' }] },
+        series: { styleGuide: { povPerson: 'third-limited' }, arc: { readerMap: { cliffhangers: [{ id: 'c1' }], beats: [{}] }, themes: ['t'], readerKnowledge: [] }, factCritical: true, characterArcs: [] },
+        ...checkRunnerTesting.PERMISSIVE_GATE_OUTLINE,
+      };
+      const consumers = listChecks().filter((c) => Array.isArray(c.sources)
+        && (c.sources.includes('reverseOutline') || c.sources.includes('reverseOutline.plotlines'))
+        && typeof c.gate === 'function');
+      expect(consumers.length).toBeGreaterThan(0);
+      for (const check of consumers) {
+        expect(check.gate(richCtx), `${check.id} gate failed against permissive synthetic outline`).toBe(true);
+      }
     });
   });
 });
