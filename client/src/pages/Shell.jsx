@@ -28,7 +28,7 @@ const QUICK_COMMANDS = [
   { label: 'npm run dev', command: 'npm run dev' },
   // Claude Code slash-command shortcuts — typed + submitted into an interactive
   // `claude` session. The flags are double-dash (`--`); keep them verbatim.
-  { label: '/do:pr', command: '/do:pr --issues --review-with=claude,codex --merge' },
+  { label: '/do:next', command: '/do:next --issues --review-with=claude,codex --merge' },
   { label: '/remote-control', command: '/remote-control' },
 ];
 
