@@ -298,8 +298,10 @@ export async function ingestFromBrain({ brainType, brainId, providerOverride } =
   if (!getter) throw new Error(`unsupported brain type for catalog ingest: ${brainType}`);
   const record = await getter(brainId);
   if (!record) throw new Error(`brain ${brainType} entry not found: ${brainId}`);
-  // rawText is already trimmed by brainRecordToIngestText, so a falsy check is
-  // sufficient to catch an empty record.
+  // rawText is already trimmed by brainRecordToIngestText (and folds in the
+  // title), so a falsy check is sufficient to catch a record with no usable
+  // text at all (no title AND no body). A title-only record is intentionally
+  // ingestible — the user explicitly chose to send it.
   const { title, rawText, tags } = brainRecordToIngestText(brainType, record);
   if (!rawText) throw new Error('brain entry had no text to ingest');
   return createScrapAndExtract({
