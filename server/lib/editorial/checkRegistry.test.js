@@ -2914,6 +2914,149 @@ describe('pov.justified — deterministic check', () => {
   });
 });
 
+describe('pov.economy — deterministic check (#1620)', () => {
+  const POV = 'pov.economy';
+  // Build a scene for a POV holder in a given issue. `seq` keeps first-appearance
+  // order stable; `anchorQuote` lets the late-intro anchor assertion bite.
+  const scene = (pov, issueNumber, over = {}) => ({
+    heading: `${pov}-pov i${issueNumber}`, issueNumber, sequence: 0, anchorQuote: 'q', povCharacter: pov, ...over,
+  });
+  // Distinct alphabetic names — `normalizeName` strips digits, so "P1".."P8" would
+  // all collapse to one holder. Real viewpoint rosters use names, so the fixtures do too.
+  const NAMES = ['Aria', 'Bram', 'Cael', 'Dara', 'Enzo', 'Faye', 'Gwen', 'Hugo', 'Ivy', 'Jonas', 'Kira', 'Liam'];
+  // N POV holders, one scene each, spread one-per-issue across issues 1..issueCount.
+  const roster = (povCount, issueCount) => {
+    const out = [];
+    for (let i = 0; i < issueCount; i += 1) {
+      // Only the first `povCount` holders are distinct viewpoints; the rest reuse
+      // NAMES[0] so issue count grows without adding POVs.
+      out.push(scene(i < povCount ? NAMES[i] : NAMES[0], i + 1));
+    }
+    return out;
+  };
+  const runEcon = (scenes, config = {}) =>
+    getCheck(POV).run({ reverseOutline: scenes, config, severityDefault: 'low' });
+
+  it('declares reverseOutline as its only source and is a series-scope deterministic check', () => {
+    const c = getCheck(POV);
+    expect(c.scope).toBe('series');
+    expect(c.kind).toBe('deterministic');
+    expect(c.sources).toEqual(['reverseOutline']);
+    expect(c.defaultEnabled).toBe(true);
+    // Must NOT pull in the manuscript corpus — purely structural over the outline.
+    expect(c.sources).not.toContain('manuscript');
+  });
+
+  it('gate requires at least one POV-tagged scene', () => {
+    const c = getCheck(POV);
+    expect(c.gate({ reverseOutline: [] })).toBe(false);
+    expect(c.gate({ reverseOutline: [scene('', 1)] })).toBe(false);
+    expect(c.gate({ reverseOutline: [scene('Aria', 1)] })).toBe(true);
+  });
+
+  it('flags too many POVs for the run length (8 across 12 issues)', () => {
+    const findings = runEcon(roster(8, 12));
+    const crowded = findings.filter((f) => /more viewpoints than the run length/.test(f.problem));
+    expect(crowded).toHaveLength(1);
+    expect(crowded[0].location).toBe('Series');
+    expect(crowded[0].category).toBe('arc');
+    expect(crowded[0].severity).toBe('low');
+    // 12 * 0.5 = budget 6, so 8 POVs > 6.
+    expect(crowded[0].problem).toMatch(/8 POV characters across 12 issues/);
+    expect(crowded[0].problem).toMatch(/supports about 6/);
+  });
+
+  it('does NOT flag a roster that fits the run length (6 across 12 issues)', () => {
+    const findings = runEcon(roster(6, 12));
+    expect(findings.filter((f) => /more viewpoints than the run length/.test(f.problem))).toHaveLength(0);
+  });
+
+  it('never flags 1–2 POVs as a crowd even at a high ratio (2 across 3 issues)', () => {
+    // 2/3 shares the same 0.67 ratio as 8/12, but two viewpoints is not a crowd —
+    // the absolute floor (3) suppresses it.
+    const findings = runEcon([scene('A', 1), scene('B', 2), scene('A', 3)]);
+    expect(findings.filter((f) => /more viewpoints than the run length/.test(f.problem))).toHaveLength(0);
+  });
+
+  it('skips the economy verdict for a run shorter than minIssues', () => {
+    // 4 POVs but only 2 issues (< default minIssues 3) → no count finding.
+    const findings = runEcon([scene('A', 1), scene('B', 1), scene('C', 2), scene('D', 2)]);
+    expect(findings.filter((f) => /more viewpoints than the run length/.test(f.problem))).toHaveLength(0);
+  });
+
+  it('respects a custom maxPovPerIssue (ensemble tuning suppresses the crowd flag)', () => {
+    // 8/12 trips at the 0.5 default but not at 1.0 (budget 12).
+    expect(runEcon(roster(8, 12), { maxPovPerIssue: 1.0 })
+      .filter((f) => /more viewpoints than the run length/.test(f.problem))).toHaveLength(0);
+  });
+
+  it('flags a late-introduced, underdeveloped POV (first appears in issue 11 of 12)', () => {
+    // A 12-issue run carried by P1, plus a drive-by viewpoint that first shows up
+    // in issue 11 with a single scene.
+    const scenes = [];
+    for (let i = 1; i <= 12; i += 1) scenes.push(scene('Lead', i));
+    scenes.push(scene('Latecomer', 11));
+    const findings = runEcon(scenes);
+    const late = findings.filter((f) => /introduced too late to develop/.test(f.problem));
+    expect(late).toHaveLength(1);
+    expect(late[0].problem).toMatch(/"Latecomer" first takes the viewpoint in issue 11 of 1–12/);
+    expect(late[0].issueNumber).toBe(11);
+    expect(late[0].location).toBe('Issue 11: Latecomer-pov i11');
+    expect(late[0].anchorQuote).toBe('q');
+  });
+
+  it('does NOT flag a late POV that is well developed (above the underdevelopment threshold)', () => {
+    const scenes = [];
+    for (let i = 1; i <= 12; i += 1) scenes.push(scene('Lead', i));
+    // Latecomer first appears late but holds 3 scenes (> lateIntroMaxScenes 2).
+    scenes.push(scene('Latecomer', 11));
+    scenes.push(scene('Latecomer', 11, { heading: 'Latecomer-pov i11b' }));
+    scenes.push(scene('Latecomer', 12));
+    const findings = runEcon(scenes);
+    expect(findings.filter((f) => /introduced too late to develop/.test(f.problem))).toHaveLength(0);
+  });
+
+  it('does NOT flag an early POV introduced before the late-intro window', () => {
+    const scenes = [];
+    for (let i = 1; i <= 12; i += 1) scenes.push(scene('Lead', i));
+    // First appears in issue 8 of 12 → position (8-1)/11 = 0.64 < 0.8.
+    scenes.push(scene('Earlybird', 8));
+    const findings = runEcon(scenes);
+    expect(findings.filter((f) => /introduced too late to develop/.test(f.problem))).toHaveLength(0);
+  });
+
+  it('lateIntroMaxScenes=0 disables the late-introduction check', () => {
+    const scenes = [];
+    for (let i = 1; i <= 12; i += 1) scenes.push(scene('Lead', i));
+    scenes.push(scene('Latecomer', 11));
+    expect(runEcon(scenes, { lateIntroMaxScenes: 0 })
+      .filter((f) => /introduced too late to develop/.test(f.problem))).toHaveLength(0);
+  });
+
+  it('stays silent on both signals when the outline carries no issue numbers', () => {
+    // No issue length to judge against → neither count nor timing can fire.
+    const scenes = NAMES.slice(0, 8).map((n) => scene(n, null));
+    expect(runEcon(scenes)).toEqual([]);
+  });
+
+  it('collapses casing/spacing variants of a POV name into one holder', () => {
+    // Three spellings of one viewpoint across a 12-issue run → one holder, not three.
+    const scenes = [];
+    for (let i = 1; i <= 12; i += 1) scenes.push(scene('Lead', i));
+    scenes.push(scene('Aria', 2));
+    scenes.push(scene('  aria ', 5));
+    scenes.push(scene('ARIA', 9));
+    const findings = runEcon(scenes);
+    // 2 holders (Lead, Aria) over 12 issues → under budget 6, no crowd finding.
+    expect(findings.filter((f) => /more viewpoints than the run length/.test(f.problem))).toHaveLength(0);
+  });
+
+  it('tolerates an empty / malformed outline', () => {
+    expect(runEcon([])).toEqual([]);
+    expect(runEcon([null, 'x', {}, scene('', 1)])).toEqual([]);
+  });
+});
+
 describe('arc.transitions — LLM check (#1293)', () => {
   const ARC = 'arc.transitions';
   const baseCtx = (overrides = {}) => ({
