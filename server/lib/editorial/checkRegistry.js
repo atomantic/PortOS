@@ -219,6 +219,19 @@ export const INFO_DUMPING_STAGE = 'pipeline-editorial-info-dumping';
 export const OBJECT_MOTIVATION_STAGE = 'pipeline-editorial-object-motivation';
 export const OBJECT_BACKSTORY_STAGE = 'pipeline-editorial-object-backstory';
 
+// Stage name for the object weight-proportionality LLM check (#1624): judges
+// whether an object's narrative weight (established backstory + payoff depth)
+// matches its prominence in the prose — flagging a minor object given a heavy
+// backstory ("a one-line locket with a 3-issue origin") or a climactic object
+// with no lineage to earn it ("a heirloom that decides the finale, never set
+// up"). Ships in data.reference/prompts/stages/ + stage-config.json (fresh
+// installs via setup-data.js) and migrates to existing installs via migration
+// 143 (boot runs migrations but NOT setup-data, so the migration is required).
+// Like the two object-attachment checks above it feeds the canon's per-object
+// significance/attachment summary as context and reads the stitched manuscript
+// to weigh prose prominence against that established weight.
+export const OBJECT_WEIGHT_STAGE = 'pipeline-editorial-object-weight-proportionality';
+
 // Stage name for the style-guide conformance LLM check (#1303). Ships in
 // data.reference/prompts/stages/ + stage-config.json (fresh installs via
 // setup-data.js) and migrates to existing installs via migration 096 (boot runs
@@ -993,6 +1006,44 @@ function describeObjectAttachments(ctx) {
       }).join('; ')
       : 'nobody';
     lines.push(`- ${o.name || o.id}${sig ? ` — significance: ${sig}` : ''}\n  attached to: ${attText}`);
+  }
+  return lines.join('\n') || '(no objects in canon)';
+}
+
+// A richer per-object weight summary for the weight-proportionality check
+// (#1624). Unlike describeObjectAttachments (which the unmotivated-interaction
+// check uses to know who already cares about an object), this surfaces the FULL
+// recorded weight an object carries going in — the prose significance plus every
+// attachment's emotion, per-bond significance, ORIGIN (the lineage/backstory),
+// and ROLE archetype — so the model can weigh that recorded backstory against
+// how prominent the object actually is in the manuscript. The origin/role fields
+// are exactly the "rich recorded backstory for a barely used object" signal the
+// over-weighted verdict depends on, which the leaner attachments summary omits.
+function describeObjectWeight(ctx) {
+  const { objects, nameById } = attachmentCanon(ctx);
+  const lines = [];
+  for (const o of objects) {
+    const atts = Array.isArray(o.attachments) ? o.attachments : [];
+    const sig = (o.significance || '').trim();
+    const head = `- ${o.name || o.id}${sig ? ` — significance: ${sig}` : ''}`;
+    if (!atts.length) {
+      lines.push(`${head}\n  attachments: none`);
+      continue;
+    }
+    const attLines = atts.map((a) => {
+      const who = nameById.get(a.characterId) || a.characterId || 'unknown';
+      const emotion = (a.emotion || '').trim();
+      const significance = (a.significance || '').trim();
+      const origin = (a.origin || '').trim();
+      const role = (a.role || '').trim();
+      const parts = [
+        `  • ${who}${emotion ? ` (${emotion})` : ''}${role ? ` [${role}]` : ''}`,
+      ];
+      if (significance) parts.push(`    significance: ${significance}`);
+      if (origin) parts.push(`    origin: ${origin}`);
+      return parts.join('\n');
+    });
+    lines.push(`${head}\n${attLines.join('\n')}`);
   }
   return lines.join('\n') || '(no objects in canon)';
 }
@@ -5071,6 +5122,87 @@ export const EDITORIAL_CHECKS = [
         category: 'continuity',
         max: ctx.config?.maxFindings ?? 12,
         withIssueNumber: false,
+      });
+    },
+  },
+  {
+    id: 'objects.weight-proportionality',
+    sources: ['manuscript', 'canon'],
+    label: 'Object narrative-weight proportionality',
+    description:
+      'LLM check — flags objects whose narrative weight is disproportionate to their prominence: a minor item the prose barely uses yet given a heavy backstory or significance ("a one-line locket with a three-issue origin"), or a climactic / decisive object with little or no established lineage to earn its weight ("an heirloom that resolves the finale, never set up"). Weighs each object\'s prominence in the manuscript against the depth of backstory and payoff established for it — the canon\'s recorded significance/attachments plus what the prose itself plants and pays off. Distinct from objects.unattached-significant (presence of an attachment), objects.unmotivated-interaction (a single unmotivated beat), and objects.backstory-consistency (an origin that contradicts a character\'s background) — the gap here is the over- or under-writing of plot machinery.',
+    scope: 'series',
+    kind: 'llm',
+    category: 'plot',
+    severityDefault: 'low',
+    defaultEnabled: true,
+    // Reads the stitched manuscript corpus — so the runner only pays the
+    // section-collection I/O when a manuscript-consuming check is enabled.
+    needsManuscript: true,
+    configSchema: z.object({
+      // Cap findings per run so a large object roster can't flood the review.
+      maxFindings: z.number().int().min(1).max(50).default(12),
+    }),
+    configFields: [
+      {
+        key: 'maxFindings',
+        label: 'Max findings per run',
+        type: 'number',
+        min: 1,
+        max: 50,
+        step: 1,
+        help: 'Cap findings so a large object roster can not flood the review.',
+      },
+    ],
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    run: (ctx) => {
+      // The per-object weight summary (prose significance + every attachment's
+      // emotion / per-bond significance / origin lineage / role) is fixed per-call
+      // overhead re-sent on each chunk — trimmed by the runner to keep the
+      // manuscript a budget floor. It surfaces the FULL recorded backstory an
+      // object carries (the origin/role fields the leaner attachments summary
+      // omits) so the model can weigh that against the object's prose prominence.
+      const objects = describeObjectWeight(ctx);
+      return runManuscriptLlmCheck(ctx, {
+        stage: OBJECT_WEIGHT_STAGE,
+        category: 'plot',
+        context: { objects },
+        // `finalPart` gates the whole-corpus verdict. Both directions of this check
+        // are whole-story claims: "over-weighted" needs the object's TOTAL prominence
+        // (a non-final chunk can't know a barely-used object pays off later), and
+        // "under-established" needs the object's TOTAL lineage (the backstory may sit
+        // in an earlier chunk, carried in the setup digest). runChunkedManuscriptCheck
+        // merges findings first-wins and never retracts, so an imbalance reported from
+        // a non-final chunk would persist even after a later chunk clears it — so a
+        // non-final chunk only carries setup forward and the verdict waits for the
+        // final part. A single-chunk run is its own final part and judges the whole text.
+        buildVars: (manuscript, meta, c) => ({
+          manuscript,
+          objects: c.objects,
+          finalPart: meta?.isFinal ? 'true' : '',
+        }),
+        // An object's backstory can be planted in an early chapter and its
+        // prominence (or payoff) land much later; the findings digest stops a
+        // later chunk re-flagging the same imbalance the prose only half-shows.
+        crossChunkDigest: true,
+        // …and a cleanly proportioned object produces no finding, so the findings
+        // digest alone can't carry it forward — roll a setup summary of each
+        // object and the backstory/significance the prose has established so the
+        // final part weighs a payoff against the full lineage, not just its chunk.
+        crossChunkSetup: true,
+        // #1667: the verdict is gated to the final part and weighs each object against
+        // its carried prominence/lineage snapshot, so guarantee the setup digest reaches
+        // the final chunk (trim its manuscript tail to fit) rather than letting a packed
+        // final chunk drop the snapshot and judge an object on its last chunk alone.
+        reserveSetupDigest: true,
+        setupFocus: 'List the objects/items the story features and, for each, how prominent or decisive it has '
+          + 'been so far and the depth of backstory, lineage, or significance the prose or canon has established '
+          + 'for it. CRUCIALLY, because the weight verdict is deferred to the final part and the earlier text is '
+          + 'no longer in view by then: for every object record which issue(s) it appears in AND a SHORT verbatim '
+          + 'snippet (≤ 200 chars) of its most weight-bearing moment (a heavy backstory beat, or a prominent / '
+          + 'climactic use) — the snippet is required so the final part can quote it as the finding anchor. This '
+          + 'lets the final part weigh a payoff against the full established weight, and still attribute and quote '
+          + 'an imbalance whose evidence sits pages earlier, not just in the current part.',
       });
     },
   },

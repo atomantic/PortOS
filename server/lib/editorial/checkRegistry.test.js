@@ -3501,6 +3501,72 @@ describe('objects.unmotivated-interaction — LLM check (#1288)', () => {
   });
 });
 
+describe('objects.weight-proportionality — LLM check (#1624)', () => {
+  const baseCtx = (overrides = {}) => {
+    const manuscript = overrides.manuscript ?? 'The locket — three generations of her line had guarded it — caught the light, then she pocketed it and forgot it.';
+    return {
+      manuscript,
+      canon: {
+        objects: [{ id: 'o1', name: 'Locket', significance: 'an ancestral heirloom', attachments: [{ characterId: 'c1', emotion: 'reverence', origin: 'pried from her grandmother\'s coffin', role: 'talisman' }] }],
+        characters: [{ id: 'c1', name: 'Mara' }],
+      },
+      config: { maxFindings: 12 },
+      severityDefault: 'low',
+      // Default chunker: a single whole-corpus chunk.
+      planManuscriptChunks: async () => [manuscript],
+      callStagedLLM: async () => ({ content: { findings: [] } }),
+      ...overrides,
+    };
+  };
+
+  it('passes the manuscript AND the full per-object weight summary (incl. origin lineage + role) to the model', async () => {
+    let vars = null;
+    await getCheck('objects.weight-proportionality').run(baseCtx({
+      callStagedLLM: async (_stage, v) => { vars = v; return { content: { findings: [] } }; },
+    }));
+    expect(vars.manuscript).toContain('locket');
+    expect(vars.objects).toContain('Locket');
+    expect(vars.objects).toContain('Mara'); // resolved character name, not the id
+    // The recorded lineage/backstory the over-weighted verdict depends on (#1624 review):
+    expect(vars.objects).toContain('pried from her grandmother'); // attachment origin
+    expect(vars.objects).toContain('talisman'); // attachment role archetype
+  });
+
+  it('budgets the objects summary as prompt overhead and re-sends it on every chunk', async () => {
+    let sawObjectsContext = false;
+    const objectsSeen = [];
+    await getCheck('objects.weight-proportionality').run(baseCtx({
+      planManuscriptChunks: async (_stage, opts) => { sawObjectsContext = Object.prototype.hasOwnProperty.call(opts.context || {}, 'objects'); return ['chunk a', 'chunk b']; },
+      callStagedLLM: async (_stage, v) => { objectsSeen.push(v.objects); return { content: { findings: [] } }; },
+    }));
+    expect(sawObjectsContext).toBe(true);
+    expect(objectsSeen).toHaveLength(2);
+    expect(objectsSeen.every((o) => o.includes('Locket'))).toBe(true);
+  });
+
+  it('shapes findings into the plot category and respects maxFindings', async () => {
+    const many = Array.from({ length: 30 }, (_, i) => ({ severity: 'low', problem: `p${i}`, anchorQuote: `a${i}` }));
+    const findings = await getCheck('objects.weight-proportionality').run(baseCtx({
+      config: { maxFindings: 4 },
+      callStagedLLM: async () => ({ content: { findings: many } }),
+    }));
+    expect(findings).toHaveLength(4);
+    expect(findings.every((f) => f.category === 'plot')).toBe(true);
+  });
+
+  it('keeps a model-supplied issue number (manuscript-scoped findings)', async () => {
+    const findings = await getCheck('objects.weight-proportionality').run(baseCtx({
+      callStagedLLM: async () => ({ content: { findings: [{ severity: 'medium', issueNumber: 7, problem: 'climactic relic, no setup', anchorQuote: 'the relic' }] } }),
+    }));
+    expect(findings).toHaveLength(1);
+    expect(findings[0].issueNumber).toBe(7);
+  });
+
+  it('gates off when the manuscript is empty', () => {
+    expect(getCheck('objects.weight-proportionality').gate(baseCtx({ manuscript: '   ' }))).toBe(false);
+  });
+});
+
 describe('cross-chunk continuity digest (#1383)', () => {
   describe('editorialPriorFindingsDigest formatter', () => {
     it('returns empty string for no / non-array findings', () => {
@@ -3634,6 +3700,34 @@ describe('cross-chunk continuity digest (#1383)', () => {
     expect(seen[1].endsWith('CHUNK_TWO')).toBe(true);
   });
 
+  it('objects.weight-proportionality feeds the prior-chunk digest to later chunks and gates finalPart to the last chunk', async () => {
+    const seen = [];
+    const finalFlags = [];
+    await getCheck('objects.weight-proportionality').run({
+      config: { maxFindings: 12 },
+      severityDefault: 'low',
+      canon: {
+        objects: [{ id: 'o1', name: 'Locket', significance: 'an ancestral heirloom', attachments: [{ characterId: 'c1', emotion: 'reverence' }] }],
+        characters: [{ id: 'c1', name: 'Mara' }],
+      },
+      planManuscriptChunks: async () => ['CHUNK_ONE', 'CHUNK_TWO'],
+      callStagedLLM: async (_stage, vars) => {
+        seen.push(vars.manuscript);
+        finalFlags.push(vars.finalPart);
+        // Only the first chunk surfaces a finding, so the digest fed to chunk two carries it.
+        const findings = seen.length === 1
+          ? [{ severity: 'low', issueNumber: 1, problem: 'locket over-weighted', anchorQuote: 'the locket' }]
+          : [];
+        return { content: { findings } };
+      },
+    });
+    expect(seen[0]).toBe('CHUNK_ONE');
+    expect(seen[1]).toContain('EARLIER parts of this manuscript');
+    expect(seen[1].endsWith('CHUNK_TWO')).toBe(true);
+    // The whole-corpus verdict is gated: only the FINAL chunk is flagged finalPart.
+    expect(finalFlags).toEqual(['', 'true']);
+  });
+
   it('prose.info-dumping stays per-chunk — no digest is prepended (its problems are localized)', async () => {
     const { seen } = await runTwoChunks(INFODUMP, {
       manuscript: 'CHUNK_ONE',
@@ -3743,6 +3837,21 @@ describe('cross-chunk clean-setup digest (#1403)', () => {
     });
     expect(seen[0]).toBe('CHUNK_ONE');
     expect(setupPrompts).toHaveLength(1);
+    expect(seen[1]).toContain('Setup already established in EARLIER parts');
+    expect(seen[1].endsWith('CHUNK_TWO')).toBe(true);
+  });
+
+  it('objects.weight-proportionality rolls a setup summary forward keyed on object weight/prominence', async () => {
+    const { seen, setupPrompts } = await runTwoChunksWithSetup('objects.weight-proportionality', {
+      canon: {
+        objects: [{ id: 'o1', name: 'Locket', significance: 'an ancestral heirloom', attachments: [{ characterId: 'c1', emotion: 'reverence' }] }],
+        characters: [{ id: 'c1', name: 'Mara' }],
+      },
+    });
+    expect(seen[0]).toBe('CHUNK_ONE');
+    expect(setupPrompts).toHaveLength(1);
+    // The setup focus tracks each object's prominence + established lineage so the final part can weigh a late payoff.
+    expect(setupPrompts[0]).toMatch(/prominent or decisive/);
     expect(seen[1]).toContain('Setup already established in EARLIER parts');
     expect(seen[1].endsWith('CHUNK_TWO')).toBe(true);
   });

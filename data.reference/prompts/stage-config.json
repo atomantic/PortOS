@@ -632,6 +632,13 @@
       "returnsJson": true,
       "variables": []
     },
+    "pipeline-editorial-object-weight-proportionality": {
+      "name": "Pipeline — Editorial Check: Object narrative-weight proportionality",
+      "description": "Editorial check (#1624): flags objects whose narrative weight is out of proportion to their prominence — a minor object given a disproportionate backstory or significance (over-weighted plot machinery), or a prominent/decisive object with little established lineage to earn it (under-established payoff). Weighs each object's manuscript prominence against the depth of backstory/significance the prose and canon establish. Reads the stitched manuscript plus the canon object↔character attachment summary. Distinct from objects.unmotivated-interaction (a single unmotivated beat) and objects.backstory-consistency (a contradicted origin). Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
     "pipeline-editorial-style-conformance": {
       "name": "Pipeline — Editorial Check: Style-guide conformance",
       "description": "Editorial check (#1303): flags prose that drifts from the series style guide — wrong narrative tense, point-of-view person drift, or content/profanity beyond the configured rating ceiling. Reads the stitched manuscript plus the declared style-guide expectations. Returns issue-anchored findings.",
