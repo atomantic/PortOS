@@ -39,6 +39,7 @@ import {
   characterVoiceProfiles,
   intendedVoiceSummary,
   plotlineCoverageSummary,
+  conflictIntensityTally,
   scenePovSummary,
   secondaryCharacterPresenceSummary,
   declaredThemesSummary,
@@ -61,6 +62,7 @@ const POV_SWITCH = 'endings.pov-switch';
 const SENSORY_BALANCE = 'sensory.balance';
 const WHITE_ROOM = 'scene.white-room';
 const PLOT_STRUCTURE = 'plot.structure-momentum';
+const PACING_ESCALATION = 'pacing.escalation-curve';
 const HEAD_HOPPING = 'pov.head-hopping';
 const THEME_COHERENCE = 'theme.coherence';
 const UNMODELED_NAMES = 'roster.unmodeled-names';
@@ -1042,6 +1044,133 @@ describe('plot.structure-momentum — LLM check (#1310)', () => {
     });
     await getCheck(PLOT_STRUCTURE).run(ctx);
     expect(finals).toEqual(['', '', 'true']);
+  });
+});
+
+describe('pacing.escalation-curve — LLM check (#1618)', () => {
+  const wholeCtx = (overrides = {}) => ({
+    manuscript: '# Issue 1\n\nThings happened to her, and then more things happened.',
+    config: { maxFindings: 12 },
+    severityDefault: 'medium',
+    series: {},
+    reverseOutline: [{ sequence: 0, issueNumber: 1, heading: 'Opening', setting: 'a dock', plotlineId: 'a' }],
+    planManuscriptChunks: async () => [overrides.manuscript ?? '# Issue 1\n\nThings happened to her.'],
+    callStagedLLM: async () => ({ content: { findings: [] } }),
+    ...overrides,
+  });
+
+  it('is registered as a series-scoped LLM check reading manuscript + outline', () => {
+    const check = getCheck(PACING_ESCALATION);
+    expect(check.kind).toBe('llm');
+    expect(check.scope).toBe('series');
+    expect(check.category).toBe('pacing');
+    expect(check.sources).toEqual(['manuscript', 'reverseOutline']);
+    expect(check.needsManuscript).toBe(true);
+  });
+
+  it('only runs when there is drafted prose to scan', () => {
+    const check = getCheck(PACING_ESCALATION);
+    expect(check.gate({ manuscript: '' })).toBe(false);
+    expect(check.gate({ manuscript: '# Issue 1\n\nprose' })).toBeTruthy();
+  });
+
+  it('passes the manuscript, scene map, and conflict-marker tally to the model and forces the pacing category', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      manuscript: '# Issue 1\n\nThey shared tea and spoke softly.\n\n# Issue 2\n\nHe drew his knife and the gun fired; blood, screams, a desperate fight to the death.',
+      planManuscriptChunks: async (_stage, opts) => {
+        // Scene map + intensity tally both ride as trimmable context.
+        expect(opts.context).toHaveProperty('sceneMap');
+        expect(opts.context).toHaveProperty('intensityTally');
+        expect(opts.fixedOverheadTokens).toBeGreaterThan(0);
+        return ['# Issue 2\n\nHe drew his knife and the gun fired.'];
+      },
+      callStagedLLM: async (_stage, vars) => {
+        seenVars = vars;
+        return { content: { findings: [{ severity: 'high', issueNumber: 2, location: 'Front-loaded climax — Issue 2', problem: 'The peak lands early' }] } };
+      },
+    });
+    const findings = await getCheck(PACING_ESCALATION).run(ctx);
+    expect(seenVars.manuscript).toBe('# Issue 2\n\nHe drew his knife and the gun fired.');
+    expect(seenVars.sceneMap).toContain('Issue 1: Opening');
+    // Both issues land in the tally; issue 2's conflict words score higher.
+    expect(seenVars.intensityTally).toContain('Issue 1');
+    expect(seenVars.intensityTally).toContain('Issue 2');
+    expect(findings).toHaveLength(1);
+    expect(findings[0].category).toBe('pacing');
+    expect(findings[0].location).toBe('Front-loaded climax — Issue 2');
+  });
+
+  it('passes empty context vars when the series has no outline and the manuscript has no issue headers', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      manuscript: 'Plain prose with no issue headers at all.',
+      reverseOutline: undefined,
+      callStagedLLM: async (_stage, vars) => { seenVars = vars; return { content: { findings: [] } }; },
+    });
+    await getCheck(PACING_ESCALATION).run(ctx);
+    expect(seenVars.sceneMap).toBe('');
+    expect(seenVars.intensityTally).toBe('');
+  });
+
+  it('marks a single-chunk run as the final part so whole-curve judgments are enabled', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      callStagedLLM: async (_stage, vars) => { seenVars = vars; return { content: { findings: [] } }; },
+    });
+    await getCheck(PACING_ESCALATION).run(ctx);
+    expect(seenVars.finalPart).toBe('true');
+  });
+
+  it('flags only the LAST part as final across a chunked manuscript', async () => {
+    const finals = [];
+    const ctx = wholeCtx({
+      planManuscriptChunks: async () => ['# Issue 1\n\np1', '# Issue 2\n\np2', '# Issue 3\n\np3'],
+      callStagedLLM: async (_stage, vars) => { finals.push(vars.finalPart); return { content: { findings: [] } }; },
+    });
+    await getCheck(PACING_ESCALATION).run(ctx);
+    expect(finals).toEqual(['', '', 'true']);
+  });
+});
+
+describe('conflictIntensityTally (#1618)', () => {
+  it('returns an empty string for a missing, empty, or header-less manuscript', () => {
+    expect(conflictIntensityTally(undefined)).toBe('');
+    expect(conflictIntensityTally('')).toBe('');
+    expect(conflictIntensityTally('   ')).toBe('');
+    expect(conflictIntensityTally('Just prose, no issue headers anywhere.')).toBe('');
+  });
+
+  it('tallies conflict markers per issue, in numeric order, normalized per 1k words', () => {
+    const manuscript = [
+      '# Issue 1 — Quiet (prose)',
+      'They shared tea and spoke softly about the garden.',
+      '# Issue 2 — Storm (prose)',
+      'He drew his knife and the gun fired; blood, screams, a desperate fight to the death.',
+    ].join('\n\n');
+    const out = conflictIntensityTally(manuscript);
+    const lines = out.split('\n').filter((l) => l.startsWith('- Issue'));
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain('Issue 1');
+    expect(lines[1]).toContain('Issue 2');
+    // Issue 1 has no markers; Issue 2 has several (knife, gun, fired, blood, screams, desperate, fight, death).
+    expect(lines[0]).toContain('0 conflict markers');
+    expect(lines[1]).toMatch(/[1-9]\d* conflict markers/);
+  });
+
+  it('sums a repeated issue header (chunk boundary mid-issue) into one bucket', () => {
+    const manuscript = [
+      '# Issue 1',
+      'He drew his knife.',
+      '# Issue 1',
+      'The gun fired and blood spilled.',
+    ].join('\n\n');
+    const out = conflictIntensityTally(manuscript);
+    const lines = out.split('\n').filter((l) => l.startsWith('- Issue'));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('Issue 1');
+    // knife + gun + fired + blood = 4 markers merged across the two header sections.
+    expect(lines[0]).toContain('4 conflict markers');
   });
 });
 
