@@ -4457,6 +4457,56 @@ describe('style.reading-level — deterministic check (#1303)', () => {
     expect(findings[0].problem).toMatch(/below/i);
   });
 
+  // Per-scene reading-level variance (#1625). A scene-broken manuscript so
+  // `splitScenes` yields >1 measurable scene; `minSceneWords` lowered because the
+  // SIMPLE fixture is ~110 words (under the 120 default). A scene-level finding is
+  // identified by its "— scene N" location.
+  const sceneFindings = (findings) => findings.filter((f) => /— scene \d/i.test(f.location));
+  const BREAK = '\n\n* * *\n\n';
+
+  it('flags a single scene that swings ABOVE the target band', () => {
+    // Two calm scenes + one dense scene; the dense one breaks the band even if the
+    // averaged whole-corpus grade would not.
+    const manuscript = [MEDIUM, MEDIUM, DENSE].join(BREAK);
+    const findings = run({ readingLevel: 6 }, manuscript, { sceneTolerance: 3, minSceneWords: 20 });
+    const scenes = sceneFindings(findings);
+    expect(scenes.length).toBeGreaterThanOrEqual(1);
+    const above = scenes.find((f) => /above the target band/i.test(f.problem));
+    expect(above).toBeTruthy();
+    expect(above.location).toMatch(/— scene \d/i);
+    expect(above.anchorQuote).toBeTruthy();
+    expect(above.issueNumber).toBeNull();
+  });
+
+  it('flags a single scene that swings BELOW the target band', () => {
+    const manuscript = [DENSE, DENSE, SIMPLE].join(BREAK);
+    const findings = run({ readingLevel: 12 }, manuscript, { sceneTolerance: 3, minSceneWords: 20 });
+    const below = sceneFindings(findings).find((f) => /below the target band/i.test(f.problem));
+    expect(below).toBeTruthy();
+    expect(below.anchorQuote).toBeTruthy();
+  });
+
+  it('reports no per-scene findings when every scene sits within the band', () => {
+    const manuscript = [MEDIUM, MEDIUM, MEDIUM].join(BREAK);
+    const findings = run({ readingLevel: 7 }, manuscript, { tolerance: 6, sceneTolerance: 6, minSceneWords: 20 });
+    expect(sceneFindings(findings)).toHaveLength(0);
+  });
+
+  it('caps per-scene findings at maxSceneFindings (worst swings first)', () => {
+    // Six out-of-band dense scenes, cap of 2 → at most 2 scene findings.
+    const manuscript = Array(6).fill(DENSE).join(BREAK);
+    const findings = run({ readingLevel: 3 }, manuscript, { tolerance: 12, sceneTolerance: 4, minSceneWords: 20, maxSceneFindings: 2 });
+    expect(sceneFindings(findings)).toHaveLength(2);
+  });
+
+  it('does not emit per-scene findings for a single-scene manuscript', () => {
+    // No scene dividers → one scene → only the whole-corpus check can fire.
+    const findings = run({ readingLevel: 3 }, DENSE, { tolerance: 2, sceneTolerance: 1, minSceneWords: 20 });
+    expect(sceneFindings(findings)).toHaveLength(0);
+    expect(findings).toHaveLength(1);
+    expect(findings[0].location).toMatch(/whole-corpus/i);
+  });
+
   it('is enabled by default', () => {
     expect(check.defaultEnabled).toBe(true);
   });

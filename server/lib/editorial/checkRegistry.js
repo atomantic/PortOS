@@ -35,7 +35,7 @@ import {
 import { analyzeBalloonAttribution } from './balloonAttribution.js';
 import { analyzeNamePair, comparisonName, findFirstLetterClusters, normalizeName } from './nameSimilarity.js';
 import { findCliches, findModifierStacking } from './cliches.js';
-import { findSaidBookisms, findUnattributedDialogueRuns, attributeDialogueByOwner, findDialogueTagVariety } from './dialogue.js';
+import { findSaidBookisms, findUnattributedDialogueRuns, attributeDialogueByOwner, findDialogueTagVariety, splitScenes } from './dialogue.js';
 import { findItalicThoughts } from './italicThoughts.js';
 import {
   findFilterWords,
@@ -1522,6 +1522,40 @@ function readingGradeLevel(text) {
   if (words.length === 0) return null;
   const syllables = words.reduce((sum, w) => sum + countSyllables(w), 0);
   return 0.39 * (words.length / sentences) + 11.8 * (syllables / words.length) - 15.59;
+}
+
+// Per-scene reading-grade spread (#1625). The whole-corpus grade above is a single
+// number for the entire series — it averages away the legitimate modulation a
+// skilled writer uses (a quiet introspective scene reads lower, an action scene
+// higher) AND it hides a lone scene that swings far outside the intended band.
+// Splits the manuscript into scenes via the shared `splitScenes` (markdown
+// headings — including the stitcher's `# Issue N` — and centered rules like
+// "***") and measures each one, so the check can surface the outliers the corpus
+// average conceals. Scenes shorter than `minWords` are skipped: a brief fragment's
+// FK estimate is too noisy to judge. Returns one row per measurable scene
+// (`{ ordinal, grade, words, text }`), or [] when none qualify.
+function readingLevelByScene(manuscript, minWords) {
+  const floor = Number.isFinite(minWords) ? minWords : 120;
+  const rows = [];
+  for (const scene of splitScenes(String(manuscript || ''))) {
+    const words = (scene.text.match(WORD_RE) || []).length;
+    if (words < floor) continue;
+    const grade = readingGradeLevel(scene.text);
+    if (grade == null) continue;
+    rows.push({ ordinal: scene.ordinal, grade: Math.round(grade * 10) / 10, words, text: scene.text });
+  }
+  return rows;
+}
+
+// First substantive line of a scene, trimmed to a short anchor so a per-scene
+// finding lands on real prose the editor can locate. Skips blank lines; falls
+// back to '' for a whitespace-only scene.
+function sceneReadingAnchor(text) {
+  for (const line of String(text || '').split('\n')) {
+    const t = line.trim();
+    if (t) return t.length > 80 ? `${t.slice(0, 80).trim()}…` : t;
+  }
+  return '';
 }
 
 // Compact bullet list of the conformance-relevant style-guide expectations, fed
@@ -5288,7 +5322,7 @@ export const EDITORIAL_CHECKS = [
     sources: ['manuscript', 'series.styleGuide'],
     label: 'Reading-level conformance',
     description:
-      "Measures the drafted manuscript's reading grade level (Flesch–Kincaid) and flags it when it drifts beyond a tolerance from the series style guide's target reading level.",
+      "Measures the drafted manuscript's reading grade level (Flesch–Kincaid) and flags it when the whole-corpus level drifts beyond a tolerance from the series style guide's target. Also reports per-scene reading-level variance: a single scene whose grade swings far outside the target band (target ± scene tolerance) is flagged even when the corpus average sits on target — surfacing the modulation a one-number check averages away.",
     scope: 'series',
     kind: 'deterministic',
     category: 'style',
@@ -5297,19 +5331,57 @@ export const EDITORIAL_CHECKS = [
     // Reads the stitched manuscript to measure the actual grade level.
     needsManuscript: true,
     configSchema: z.object({
-      // How many grade levels the measured reading level may drift from the
+      // How many grade levels the whole-corpus reading level may drift from the
       // target before it's flagged.
       tolerance: z.number().int().min(0).max(6).default(2),
+      // Half-width of the per-scene target band: a scene whose grade lands more
+      // than this many levels from the target is flagged as an out-of-band swing.
+      // Wider than `tolerance` by default — scenes legitimately modulate, so only
+      // the extreme outliers are worth a finding.
+      sceneTolerance: z.number().int().min(1).max(8).default(4),
+      // Minimum words a scene needs before its reading level is judged — a short
+      // fragment's FK estimate is too noisy to trust.
+      minSceneWords: z.number().int().min(20).max(2000).default(120),
+      // Cap per-scene findings so a long manuscript with many outliers can't
+      // flood the review (worst swings are reported first).
+      maxSceneFindings: z.number().int().min(1).max(20).default(5),
     }),
     configFields: [
       {
         key: 'tolerance',
-        label: 'Reading-level tolerance (grades)',
+        label: 'Whole-corpus tolerance (grades)',
         type: 'number',
         min: 0,
         max: 6,
         step: 1,
-        help: 'How many grade levels the measured reading level may differ from the style-guide target before it is flagged.',
+        help: 'How many grade levels the whole-manuscript reading level may differ from the style-guide target before it is flagged.',
+      },
+      {
+        key: 'sceneTolerance',
+        label: 'Per-scene band tolerance (grades)',
+        type: 'number',
+        min: 1,
+        max: 8,
+        step: 1,
+        help: 'Half-width of the per-scene target band. A single scene whose reading level swings more than this many grades from the target is flagged, even when the whole-manuscript average is on target.',
+      },
+      {
+        key: 'minSceneWords',
+        label: 'Minimum scene words to measure',
+        type: 'number',
+        min: 20,
+        max: 2000,
+        step: 10,
+        help: 'Scenes shorter than this are skipped — a brief fragment is too short for a reliable reading-level estimate.',
+      },
+      {
+        key: 'maxSceneFindings',
+        label: 'Max per-scene findings',
+        type: 'number',
+        min: 1,
+        max: 20,
+        step: 1,
+        help: 'Cap on per-scene out-of-band findings so a long manuscript can not flood the review. The widest swings are reported first.',
       },
     ],
     // Only run when the style guide sets a target AND there's prose to measure.
@@ -5321,22 +5393,61 @@ export const EDITORIAL_CHECKS = [
       const grade = readingGradeLevel(ctx.manuscript);
       if (grade == null) return [];
       const tolerance = ctx.config?.tolerance ?? 2;
+      const sceneTolerance = ctx.config?.sceneTolerance ?? 4;
+      const minSceneWords = ctx.config?.minSceneWords ?? 120;
+      const maxSceneFindings = ctx.config?.maxSceneFindings ?? 5;
+      const findings = [];
+
+      // 1. Whole-corpus drift from the target (the original #1303 behavior).
       const rounded = Math.round(grade * 10) / 10;
       const delta = rounded - target;
-      if (Math.abs(delta) <= tolerance) return [];
-      const tooHard = delta > 0;
-      const off = Math.round(Math.abs(delta) * 10) / 10;
-      return [{
-        severity: ctx.severityDefault,
-        category: 'style',
-        location: 'Series manuscript (whole-corpus reading level)',
-        problem: `The drafted manuscript reads at about a grade-${rounded} level, ${tooHard ? 'above' : 'below'} the style-guide target of grade ${target} (off by ${off} grade${off === 1 ? '' : 's'}).`,
-        suggestion: tooHard
-          ? 'Shorten sentences and prefer plainer words to bring the reading level down toward the target.'
-          : 'Vary sentence length and vocabulary to raise the reading level toward the target.',
-        anchorQuote: '',
-        issueNumber: null,
-      }];
+      if (Math.abs(delta) > tolerance) {
+        const tooHard = delta > 0;
+        const off = Math.round(Math.abs(delta) * 10) / 10;
+        findings.push({
+          severity: ctx.severityDefault,
+          category: 'style',
+          location: 'Series manuscript (whole-corpus reading level)',
+          problem: `The drafted manuscript reads at about a grade-${rounded} level, ${tooHard ? 'above' : 'below'} the style-guide target of grade ${target} (off by ${off} grade${off === 1 ? '' : 's'}).`,
+          suggestion: tooHard
+            ? 'Shorten sentences and prefer plainer words to bring the reading level down toward the target.'
+            : 'Vary sentence length and vocabulary to raise the reading level toward the target.',
+          anchorQuote: '',
+          issueNumber: null,
+        });
+      }
+
+      // 2. Per-scene variance (#1625): flag scenes whose grade falls outside the
+      // target band [target ± sceneTolerance]. The whole-corpus average above can
+      // hide a lone scene that swings far past the band, so report the worst
+      // out-of-band swings (capped). Needs at least 2 measurable scenes — a
+      // single-scene corpus has no spread to report beyond the whole-corpus check.
+      const bandLow = target - sceneTolerance;
+      const bandHigh = target + sceneTolerance;
+      const scenes = readingLevelByScene(ctx.manuscript, minSceneWords);
+      if (scenes.length >= 2) {
+        const outliers = scenes
+          .filter((s) => s.grade < bandLow || s.grade > bandHigh)
+          .map((s) => ({ ...s, deviation: s.grade > bandHigh ? s.grade - bandHigh : bandLow - s.grade }))
+          .sort((a, b) => b.deviation - a.deviation)
+          .slice(0, maxSceneFindings);
+        for (const s of outliers) {
+          const tooHard = s.grade > bandHigh;
+          findings.push({
+            severity: ctx.severityDefault,
+            category: 'style',
+            location: `Series manuscript — scene ${s.ordinal} (${s.words} words)`,
+            problem: `Scene ${s.ordinal} reads at about a grade-${s.grade} level, ${tooHard ? 'above' : 'below'} the target band of grade ${bandLow}–${bandHigh} (target ${target} ± ${sceneTolerance}). A single scene swinging this far outside the band is hidden by the whole-corpus average.`,
+            suggestion: tooHard
+              ? 'If this scene is meant to read denser (action, exposition), confirm it is intentional; otherwise shorten sentences and simplify vocabulary to pull it toward the band.'
+              : 'If this scene is meant to read simpler (quiet introspection, sparse dialogue), confirm it is intentional; otherwise vary sentence length and vocabulary to raise it toward the band.',
+            anchorQuote: sceneReadingAnchor(s.text),
+            issueNumber: null,
+          });
+        }
+      }
+
+      return findings;
     },
   },
   {
