@@ -743,6 +743,13 @@
       "model": "default",
       "returnsJson": true,
       "variables": []
+    },
+    "pipeline-editorial-pacing-escalation-curve": {
+      "name": "Pipeline — Editorial Check: Pacing / intensity escalation curve",
+      "description": "Editorial check (#1618): scores each issue's dramatic intensity and flags a series-wide escalation curve that fails to build — flat intensity (issue 1 reads as intensely as issue N), a front-loaded climax (the biggest beat lands early), or stakes that plateau or de-escalate across the arc. Reads the stitched manuscript plus the reverse-outline scene map and a deterministic per-issue conflict-marker density tally (a grounding hint confirmed against the prose); degrades to a whole-manuscript scan when no outline exists. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
     }
   }
 }

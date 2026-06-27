@@ -570,6 +570,18 @@ export function continuityLedgerSummary(facts) {
 // subplots reconciled against the tagged plotlines.
 export const PLOT_STRUCTURE_STAGE = 'pipeline-editorial-plot-structure';
 
+// Stage name for the series-wide pacing / intensity escalation-curve LLM check
+// (#1618). Ships in data.reference/prompts/stages/ + stage-config.json (fresh
+// installs via setup-data.js) and migrates to existing installs via migration 140
+// (boot runs migrations but NOT setup-data, so the migration is required). Reads
+// the stitched manuscript plus the reverse-outline scene map and a deterministic
+// per-issue conflict-marker density tally, and scores the per-issue dramatic
+// intensity to flag a flat curve (issue 1 ≈ issue N), a front-loaded climax (the
+// biggest beat lands early), or stakes that plateau / de-escalate across the arc.
+// Complements plot.structure-momentum (flat stakes as one signal among many) by
+// focusing the lens on the whole-series escalation shape.
+export const PACING_ESCALATION_STAGE = 'pipeline-editorial-pacing-escalation-curve';
+
 // Stage name for the timeline / canon-contradiction LLM check (#1581). Ships in
 // data.reference/prompts/stages/ + stage-config.json (fresh installs via
 // setup-data.js) and migrates to existing installs via migration 129 (boot runs
@@ -1754,6 +1766,77 @@ export function plotlineCoverageSummary(plotlines, scenes) {
   }).filter(Boolean);
   if (!rows.length) return '';
   return `Plotlines (from the reverse outline — reconcile dropped subplots against these):\n${rows.join('\n')}`;
+}
+
+// Curated lexicon of conflict / stakes / high-intensity markers (#1618). A
+// per-issue tally of these words is a crude-but-deterministic proxy for dramatic
+// intensity: the escalation-curve check can't "feel" tension, but it CAN see
+// whether the density of conflict language rises, plateaus, or falls across the
+// issues. The model treats the tally as a hint (not ground truth) and confirms
+// the curve against the prose — so a quiet-but-tense scene the lexicon misses is
+// still caught. Word-boundary matched, case-insensitive; kept deliberately small
+// and high-signal (physical conflict + danger/stakes) to limit false hits.
+const CONFLICT_INTENSITY_MARKERS = Object.freeze([
+  // physical conflict / violence
+  'attack', 'attacks', 'attacked', 'fight', 'fights', 'fought', 'fighting',
+  'strike', 'strikes', 'struck', 'punch', 'punched', 'stab', 'stabbed', 'shoot',
+  'shoots', 'shot', 'kill', 'kills', 'killed', 'die', 'dies', 'died', 'death',
+  'blood', 'bleeding', 'wound', 'wounded', 'scream', 'screams', 'screamed',
+  'shout', 'shouted', 'slam', 'slammed', 'crash', 'crashed',
+  // danger / stakes / dread
+  'danger', 'dangerous', 'threat', 'threats', 'threaten', 'threatened', 'enemy',
+  'enemies', 'weapon', 'weapons', 'gun', 'guns', 'knife', 'fire', 'fired',
+  'fires', 'firing', 'explode', 'exploded', 'explosion', 'fear', 'terror',
+  'panic', 'desperate', 'betray',
+  'betrayed', 'betrayal', 'trap', 'trapped', 'flee', 'fled', 'chase', 'chased',
+  'escape', 'war', 'battle', 'dying', 'doom', 'doomed',
+]);
+
+// Tally the conflict-marker density per issue across the WHOLE stitched manuscript
+// (#1618) so the escalation-curve check sees the complete intensity shape on every
+// chunk. Splits on the `# Issue N` headers the manuscript stitcher emits, counts
+// markers + words per issue, and reports markers-per-1k-words — normalizing out
+// raw length so a long-but-quiet issue doesn't read as more intense than a short
+// climactic one. Pure + deterministic so it's unit-testable and its token cost can
+// be counted into the per-chunk overhead. Returns '' when there are no issue
+// headers (the prompt's `{{#intensityTally}}` section then renders nothing and the
+// check judges the curve from the prose + scene map alone). A header that repeats
+// across the stitch (a chunk boundary mid-issue) sums into the same issue bucket.
+export function conflictIntensityTally(manuscript) {
+  const text = typeof manuscript === 'string' ? manuscript : '';
+  if (!text.trim()) return '';
+  const headerRe = /^#+\s*Issue\s+(\d+)\b[^\n]*$/gim;
+  const sections = [];
+  let match;
+  let prev = null;
+  while ((match = headerRe.exec(text)) !== null) {
+    if (prev) prev.end = match.index;
+    prev = { issue: Number(match[1]), start: headerRe.lastIndex, end: text.length };
+    sections.push(prev);
+  }
+  if (!sections.length) return '';
+  const markerRe = new RegExp(`\\b(?:${CONFLICT_INTENSITY_MARKERS.join('|')})\\b`, 'gi');
+  // Sum duplicate issue numbers (a repeated header across a stitch) — keep numeric
+  // order so the rendered curve reads issue 1 → N for the model.
+  const byIssue = new Map();
+  for (const sec of sections) {
+    const body = text.slice(sec.start, sec.end);
+    const words = (body.match(/\b[\w']+\b/g) || []).length;
+    const markers = (body.match(markerRe) || []).length;
+    const acc = byIssue.get(sec.issue) || { words: 0, markers: 0 };
+    byIssue.set(sec.issue, { words: acc.words + words, markers: acc.markers + markers });
+  }
+  const rows = [...byIssue.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([issue, { words, markers }]) => {
+      const density = words > 0 ? (markers / words) * 1000 : 0;
+      return `- Issue ${issue}: ${markers} conflict marker${markers === 1 ? '' : 's'} across `
+        + `${words} word${words === 1 ? '' : 's'} (${density.toFixed(1)} per 1k)`;
+    });
+  if (!rows.length) return '';
+  return 'Conflict-marker density per issue (deterministic intensity proxy — a rising '
+    + 'number suggests escalation, a flat or falling one a plateau / de-escalation; '
+    + 'treat as a hint and confirm against the prose):\n' + rows.join('\n');
 }
 
 // Human-readable POV-person labels for the head-hopping check's prompt (#1311).
@@ -3985,6 +4068,76 @@ export const EDITORIAL_CHECKS = [
           + 'the stakes established so far and whether they have escalated; and any setup '
           + '(a planted problem, a coincidence, a try-fail attempt) a later part should pay off, '
           + 'so a later chunk can tell a genuinely dropped subplot or flat-stakes arc from one whose payoff simply has not arrived yet.',
+      });
+    },
+  },
+  {
+    id: 'pacing.escalation-curve',
+    sources: ['manuscript', 'reverseOutline'],
+    label: 'Pacing — escalation curve',
+    description:
+      'LLM scan of the SERIES-WIDE escalation curve: it scores each issue\'s dramatic intensity (stakes, conflict, tension) and flags a curve that fails to build — flat intensity (issue 1 reads as intensely as issue N), a front-loaded climax (the biggest reveal / set-piece lands early and the rest coasts), or stakes that plateau or de-escalate across the arc. Reads the stitched manuscript plus the reverse-outline scene map and a deterministic per-issue conflict-marker density tally (a grounding hint the model confirms against the prose); degrades to a whole-manuscript scan when no outline exists. Subsumes "conflict escalation" as one signal of the same curve and complements plot.structure-momentum (which flags flat stakes as one of many macro pathologies) by focusing the lens on the whole-series intensity shape.',
+    scope: 'series',
+    kind: 'llm',
+    category: 'pacing',
+    severityDefault: 'medium',
+    defaultEnabled: true,
+    // Reads the stitched manuscript corpus — so the runner only pays the
+    // section-collection I/O when a manuscript-consuming check is enabled.
+    needsManuscript: true,
+    configSchema: z.object({
+      // Cap findings per run so a long manuscript can't flood the review.
+      maxFindings: z.number().int().min(1).max(50).default(12),
+    }),
+    configFields: [
+      {
+        key: 'maxFindings',
+        label: 'Max findings per run',
+        type: 'number',
+        min: 1,
+        max: 50,
+        step: 1,
+        help: 'Cap findings so a long manuscript can not flood the review.',
+      },
+    ],
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    run: (ctx) => {
+      // Both blocks are fixed per-call overhead (re-sent on each chunk) and pure
+      // context: the scene map lets the model attribute escalation findings to a
+      // scene + issue, and the conflict-marker tally — computed once over the WHOLE
+      // manuscript so the curve is complete on every chunk — grounds the per-issue
+      // intensity scoring with a deterministic density signal. The check degrades
+      // gracefully — no outline ⇒ {{#sceneMap}} renders nothing; no issue headers ⇒
+      // {{#intensityTally}} renders nothing and the model scores intensity from the
+      // prose alone.
+      const sceneMap = sceneGroundingSummary(ctx.reverseOutline);
+      const intensityTally = conflictIntensityTally(ctx.manuscript);
+      return runManuscriptLlmCheck(ctx, {
+        stage: PACING_ESCALATION_STAGE,
+        category: 'pacing',
+        // sceneMap grows unbounded with scene count; intensityTally is bounded by
+        // issue count — so largest-first trimming absorbs the cut into sceneMap.
+        context: { sceneMap, intensityTally },
+        // `isFinal` gates the whole-curve judgments — a flat curve, a front-loaded
+        // climax, and a plateaued/de-escalating arc can only be judged once the
+        // whole manuscript is in view; an earlier chunk can't know intensity rises
+        // later, so it would false-flag.
+        buildVars: (manuscript, meta, c) => ({
+          manuscript,
+          sceneMap: c.sceneMap,
+          intensityTally: c.intensityTally,
+          finalPart: meta?.isFinal ? 'true' : '',
+        }),
+        // Intensity accrues across the whole manuscript — the findings digest keeps
+        // prior findings in view so a later chunk doesn't re-flag, and the clean-
+        // setup digest rolls forward the per-issue intensity seen so far so a later
+        // climax isn't mis-read as a flat or front-loaded curve.
+        crossChunkDigest: true,
+        crossChunkSetup: true,
+        setupFocus: 'For each issue/part seen so far, note the level of dramatic intensity '
+          + '(stakes, conflict, tension) and whether it has been rising, holding flat, or '
+          + 'falling, so a later chunk can judge the WHOLE escalation curve and tell a genuinely '
+          + 'flat or front-loaded arc from one whose climax simply has not arrived yet.',
       });
     },
   },
