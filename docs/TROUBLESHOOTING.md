@@ -297,7 +297,33 @@ force-rebooted it. On new Apple Silicon (M5 / `Mac17,7`) under sustained Metal/G
 load this is most likely a GPU/Metal driver hang; thermal/power or severe swap
 thrash are secondary possibilities. First observed 2026-06-13 (twice in one day).
 
+**Upstream root cause (mlx #3267 / #3186)**: This is an Apple Metal/IOGPU driver
+behavior, confirmed across M2/M3/M4/M5 hardware, not a PortOS bug. Two related
+forms: the GPU watchdog kills a training process whose command buffers compete
+with **active-display WindowServer compositing**
+([mlx #3267](https://github.com/ml-explore/mlx/issues/3267),
+`kIOGPUCommandBufferCallbackErrorImpactingInteractivity`), escalating on M5-class
+silicon to the full `watchdogd` kernel panic above; and a separate IOGPU
+memory-management panic ([mlx #3186](https://github.com/ml-explore/mlx/issues/3186),
+filed with Apple as FB22091885). The MLX maintainer's confirmed workaround is the
+`AGX_RELAX_CDM_CTXSTORE_TIMEOUT=1` env var — **PortOS now sets this automatically**
+for the trainer (`scripts/train_mflux_lora.py`). Note per #3267 the kill is at the
+IOGPU layer *above* the process boundary, so process-teardown segmentation alone
+does not prevent it; the env var attacks the actual cause.
+
+**Strongest user-side mitigation — keep the display off the GPU.** The watchdog
+fires hardest when training competes with the active display. Run training with the
+display asleep / lid closed under `caffeinate -s &`, or drive the box headless over
+SSH from another machine. With no WindowServer compositing the watchdog has nothing
+to protect and largely stops firing.
+
 **Mitigations already in place**:
+- `AGX_RELAX_CDM_CTXSTORE_TIMEOUT=1` is set automatically by the trainer (the
+  maintainer-confirmed workaround for mlx #3267); the run log shows
+  `STATUS:watchdog mitigation · AGX_RELAX_CDM_CTXSTORE_TIMEOUT=1` so a paniclog
+  records whether it was active. Set it to `0` in the environment to disable.
+- The mlx/mlx-metal backend is pinned to the validated 0.31.2 trio in
+  `scripts/setup-image-video.sh` (the original panics were on 0.30.6).
 - Training checkpoints at least every `ceil(totalSteps/4)` steps
   (`MFLUX_MIN_CHECKPOINTS`), so a crash loses at most ~¼ of a run. Resume from the
   newest `checkpoints/*.zip` via the UI's resume action or `--resume-checkpoint`.

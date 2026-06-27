@@ -5,6 +5,47 @@
 **Affected:** `Mac17,7` (Apple Silicon, `T6050` SoC), macOS 26.5 (`Darwin 25.5.0`, `xnu-12377.121.6~2`)
 **Trigger:** Sustained GPU compute during mflux FLUX.2 LoRA training (`scripts/train_mflux_lora.py` → `mflux-train`)
 
+## Upstream root cause + fix (2026-06-27, #1329)
+
+Searched the mflux and MLX trackers. **mflux has no relevant issue**; **MLX has two
+open ones that together explain this incident**, so we did NOT file a duplicate:
+
+- **[mlx #3267](https://github.com/ml-explore/mlx/issues/3267)** (open, `wontfix`) —
+  *"Metal GPU watchdog kills LoRA training when display is active."* The watchdog
+  fires when MLX command buffers compete with **active-display WindowServer
+  compositing** (`kIOGPUCommandBufferCallbackErrorImpactingInteractivity`). The
+  MLX maintainer (@zcbenz) gave a confirmed workaround — set
+  **`AGX_RELAX_CDM_CTXSTORE_TIMEOUT=1`** (relax the AGX CDM context-store timeout
+  so a long command buffer isn't judged interactivity-impacting); the reporter:
+  "Completely resolved." `wontfix` only because the policy is OS-controlled, not
+  because the workaround fails. **Crucial caveat: the kill is at the IOGPU layer
+  *above the process boundary*, so subprocess isolation / process-teardown
+  segmentation does NOT prevent it** — re-spawning the worker just gets killed
+  again. Other confirmed user-side mitigations: `caffeinate -s` + lid closed,
+  display-sleep, or SSH headless (no WindowServer GPU contention).
+- **[mlx #3186](https://github.com/ml-explore/mlx/issues/3186)** (open; Apple
+  `FB22091885`) — a separate IOGPU **kernel panic** (`completeMemory() prepare
+  count underflow` @IOGPUMemory.cpp:550), an Apple `IOGPU.kext` memory-management
+  bug. Corroborated on M4 Max, M3 Ultra, M1 Ultra, Mac mini M4, **and M5** ("system
+  reboots to a black screen"). No fix yet; zcbenz is "checking internally."
+
+**Our signature differs from both** (`watchdog timeout: no checkins from watchdogd`
+vs #3267's process-kill exception and #3186's `completeMemory` panic), but it is
+the same family: a system-level GPU/Metal driver stall under sustained ML load on
+new Apple Silicon, escalating to a `watchdogd` reboot on M5. So our exact panic
+string may be a third manifestation — worth adding as a data-point comment on
+#3186 (the panic tracker) when convenient, rather than a fresh issue.
+
+**Action taken (#1329):** PortOS now sets `AGX_RELAX_CDM_CTXSTORE_TIMEOUT=1`
+automatically in `scripts/train_mflux_lora.py` (mirrors the `generate_ltx2.py`
+env-knob pattern; propagates to the `mflux-train` child Popen). The trainer logs
+`STATUS:watchdog mitigation · AGX_RELAX_CDM_CTXSTORE_TIMEOUT=…` so a paniclog
+records whether it was active. The pinned 0.31.2 trio (this same PR's predecessor
+#1746) stands. The destructive seg-OFF version-bisect is now **lower priority** —
+the env-var fix attacks the actual cause and is far cheaper to validate than a
+version sweep; validate by running a sustained (seg-OFF) job with the display
+asleep and the env var set, before concluding anything about versions.
+
 ## Summary
 
 The machine hard-rebooted twice in one day, both times while a LoRA training run
