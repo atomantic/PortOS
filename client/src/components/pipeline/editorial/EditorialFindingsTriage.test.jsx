@@ -450,4 +450,51 @@ describe('EditorialFindingsTriage — per-finding undo of an accepted fix (#1609
     renderTriage({ comments });
     expect(screen.queryByRole('button', { name: /Undo fix/i })).toBeNull();
   });
+
+  describe('canon entity references (#1631)', () => {
+    const canonEntities = [
+      { id: 'ch1', name: 'Aria', kind: 'characters', descriptor: 'silver-haired pilot' },
+      { id: 'pl1', name: 'The Atrium', kind: 'places', descriptor: 'glass dome' },
+    ];
+
+    it('links canon entities named in a finding to the universe canon section, with a descriptor hovercard', () => {
+      const comments = [
+        { id: 'c1', checkId: 'naming.dissimilar-names', status: 'open', severity: 'high', problem: "Aria's arc stalls in The Atrium" },
+      ];
+      renderTriage({ comments, universeId: 'uni-7', canonEntities });
+      // Exact names so the chip (name "Aria") doesn't also match the manuscript
+      // deep-link (name = the full problem text).
+      const ariaLink = screen.getByRole('link', { name: 'Aria' });
+      expect(ariaLink.getAttribute('href')).toBe('/universes/uni-7#canon');
+      expect(ariaLink.getAttribute('title')).toBe('Aria — silver-haired pilot');
+      expect(screen.getByRole('link', { name: 'The Atrium' }).getAttribute('href')).toBe('/universes/uni-7#canon');
+    });
+
+    it('renders no canon chips when the series has no linked universe', () => {
+      const comments = [
+        { id: 'c1', checkId: 'naming.dissimilar-names', status: 'open', severity: 'high', problem: 'Aria drifts' },
+      ];
+      renderTriage({ comments, universeId: '', canonEntities });
+      expect(screen.queryByRole('link', { name: 'Aria' })).toBeNull();
+    });
+
+    it('renders no canon chips when the finding text names no canon entity', () => {
+      const comments = [
+        { id: 'c1', checkId: 'naming.dissimilar-names', status: 'open', severity: 'high', problem: 'Pacing sags in act two' },
+      ];
+      renderTriage({ comments, universeId: 'uni-7', canonEntities });
+      expect(screen.queryByText('Canon')).toBeNull();
+    });
+
+    it('also linkifies entities named in resolved findings (continuity review)', () => {
+      // An open sibling keeps the group expanded so the dismissed finding's row
+      // (and its canon chip) renders.
+      const comments = [
+        { id: 'c0', checkId: 'naming.dissimilar-names', status: 'open', severity: 'high', problem: 'Pacing sags' },
+        { id: 'c1', checkId: 'naming.dissimilar-names', status: 'dismissed', severity: 'low', problem: 'Aria appears off-model' },
+      ];
+      renderTriage({ comments, universeId: 'uni-7', canonEntities });
+      expect(screen.getByRole('link', { name: 'Aria' }).getAttribute('href')).toBe('/universes/uni-7#canon');
+    });
+  });
 });

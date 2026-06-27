@@ -15,7 +15,7 @@
  * bulk-dismisses the selection — each result reactively updates local state.
  */
 import { Link, useSearchParams } from 'react-router-dom';
-import { ChevronDown, ChevronRight, ExternalLink, History, Check, X, Loader2, GitCompareArrows, Search, Ban, Undo2, Info, Play, ArrowRight, CheckCircle2, RefreshCw } from 'lucide-react';
+import { ChevronDown, ChevronRight, ExternalLink, History, Check, X, Loader2, GitCompareArrows, Search, Ban, Undo2, Info, Play, ArrowRight, CheckCircle2, RefreshCw, Users, MapPin, Package } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import CheckKindBadge from './CheckKindBadge';
 import {
@@ -30,6 +30,9 @@ import {
   FINDING_FILTER_PARAMS as FILTER_PARAMS,
   ALL_FINDING_FILTER_PARAMS as ALL_FILTER_PARAMS,
   FINDINGS_TRIAGE_ANCHOR_ID,
+  canonReferencesInText,
+  canonEntityLink,
+  CANON_KIND_LABELS,
 } from '../../../lib/editorialChecks';
 import { fixEditsOf, selectedEditsFor } from '../manuscript/ManuscriptCommentCard';
 import InlineDiff from '../../ui/InlineDiff';
@@ -65,6 +68,46 @@ const EMPTY_HIDDEN = new Set();
 // A check-sourced finding that's still open — the only findings that are
 // selectable / bulk-actionable. Named once so the predicate lives in one place.
 const isOpenFinding = (c) => !!c.checkId && c.status === 'open';
+
+// Stable empty default for the `canonEntities` prop so callers that don't pass it
+// (tests, embeds without a linked universe) skip the canon scan entirely.
+const EMPTY_CANON = [];
+
+// Per-trunk icon for a canon-reference chip (#1631).
+const CANON_KIND_ICON = { characters: Users, places: MapPin, objects: Package };
+
+// The canon entities a finding names (#1631), rendered as links into the
+// universe's canon section so continuity/character findings cross-reference in one
+// click. Lives outside the manuscript deep-link `<Link>` (no nested anchors) and
+// only renders when the series has a linked universe whose canon the text mentions.
+function CanonReferences({ universeId, comment, canonEntities }) {
+  const refs = useMemo(
+    () => canonReferencesInText(`${comment.problem || ''}\n${comment.location || ''}`, canonEntities),
+    [comment.problem, comment.location, canonEntities],
+  );
+  if (!universeId || refs.length === 0) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <span className="text-[10px] uppercase tracking-wide text-gray-600">Canon</span>
+      {refs.map((entity) => {
+        const Icon = CANON_KIND_ICON[entity.kind] || Users;
+        return (
+          <Link
+            key={entity.id}
+            to={canonEntityLink(universeId)}
+            title={entity.descriptor
+              ? `${entity.name} — ${entity.descriptor}`
+              : `${entity.name} (${CANON_KIND_LABELS[entity.kind] || 'canon entry'})`}
+            className="inline-flex items-center gap-1 rounded-full border border-port-border px-1.5 py-0.5 text-[10px] text-gray-300 hover:border-port-accent/40 hover:text-port-accent"
+          >
+            <Icon size={10} className="shrink-0" />
+            {entity.name}
+          </Link>
+        );
+      })}
+    </div>
+  );
+}
 
 // A fix is acceptable only when it carries usable replacement text — mirror the
 // manuscript card so the inline/bulk Accept stays disabled for edge edits the
@@ -128,7 +171,7 @@ function SelectCheckbox({ checked, indeterminate = false, onChange, label, class
 // an inline preview/accept/dismiss bar (#1598). The collapsed diff reuses the
 // manuscript card's edit helpers + `InlineDiff` so the preview here matches what
 // the editor applies.
-function FindingRow({ seriesId, comment, onCommentChange, selected, onToggleSelect }) {
+function FindingRow({ seriesId, comment, onCommentChange, selected, onToggleSelect, universeId, canonEntities }) {
   const [showFix, setShowFix] = useState(false);
   const hasFix = !!comment.fix;
   const isOpen = comment.status === 'open';
@@ -215,6 +258,8 @@ function FindingRow({ seriesId, comment, onCommentChange, selected, onToggleSele
         </Link>
       </div>
 
+      <CanonReferences universeId={universeId} comment={comment} canonEntities={canonEntities} />
+
       {isOpen ? (
         <div className="space-y-1.5">
           <div className="flex flex-wrap items-center gap-1.5">
@@ -300,7 +345,7 @@ function FindingRow({ seriesId, comment, onCommentChange, selected, onToggleSele
 // default collapse derives from `group.open > 0`, so a status/search filter that
 // matches only resolved findings (open === 0) would otherwise hide its matches
 // behind a collapsed header and make the filtered view look empty.
-function CheckGroup({ seriesId, group, onCommentChange, selectedIds, onToggleSelect, onSelectMany, forceOpen = false, canDisable = false, onDisableCheck }) {
+function CheckGroup({ seriesId, group, onCommentChange, selectedIds, onToggleSelect, onSelectMany, forceOpen = false, canDisable = false, onDisableCheck, universeId, canonEntities }) {
   const [open, setOpen] = useState(group.open > 0);
   // The check's documented purpose/kind, surfaced inline so the user can tell a
   // hard rule from a heuristic while triaging (#1604). Collapsed by default to
@@ -402,6 +447,8 @@ function CheckGroup({ seriesId, group, onCommentChange, selectedIds, onToggleSel
               onCommentChange={onCommentChange}
               selected={selectedIds.has(c.id)}
               onToggleSelect={onToggleSelect}
+              universeId={universeId}
+              canonEntities={canonEntities}
             />
           ))}
         </ul>
@@ -683,7 +730,7 @@ function NextStepsCTA({ seriesId, allCleared, onRunChecks, runDisabled = false }
   );
 }
 
-export default function EditorialFindingsTriage({ seriesId, comments = [], checksById = {}, onCommentChange, hiddenCheckIds = EMPTY_HIDDEN, onDisableCheck, onRunChecks, runDisabled = false }) {
+export default function EditorialFindingsTriage({ seriesId, comments = [], checksById = {}, onCommentChange, hiddenCheckIds = EMPTY_HIDDEN, onDisableCheck, onRunChecks, runDisabled = false, universeId = '', canonEntities = EMPTY_CANON }) {
   const groups = useMemo(() => groupFindingsByCheck(comments, checksById), [comments, checksById]);
   const [selectedIds, setSelectedIds] = useState(() => new Set());
 
@@ -837,6 +884,8 @@ export default function EditorialFindingsTriage({ seriesId, comments = [], check
           onToggleSelect={toggleSelect}
           onSelectMany={selectMany}
           forceOpen={activeFilterCount > 0}
+          universeId={universeId}
+          canonEntities={canonEntities}
         />
       ))}
     </div>
