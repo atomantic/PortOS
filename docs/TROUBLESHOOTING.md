@@ -317,15 +317,22 @@ display asleep / lid closed under `caffeinate -s &`, or drive the box headless o
 SSH from another machine. With no WindowServer compositing the watchdog has nothing
 to protect and largely stops firing.
 
-> **Validated on M5 Max (2026-06-27): the env var alone is NOT enough for heavy
-> runs.** A 9B-bf16 segmentation-OFF run *with `AGX_RELAX_CDM_CTXSTORE_TIMEOUT=1`
-> set but the display active* still hard-rebooted within minutes. Telemetry showed
-> Nominal thermal pressure (so it's a GPU **driver hang**, not heat) and the
-> paniclog had `WindowServer` as the top-CPU thread (active-display contention).
-> For a **9B / heavy bf16 run you must also keep the display off** (lid closed /
-> asleep / SSH headless) — and prefer **segmentation ON** (the shipped default),
-> which on this box completed a full 4B run cleanly. `caffeinate -s` alone does
-> *not* turn the display off; it only prevents system sleep.
+> **Validated on M5 Max (2026-06-27) — keeping the display off is what works.**
+> A clean A/B on the *same* 9B-bf16 segmentation-OFF config, both with
+> `AGX_RELAX_CDM_CTXSTORE_TIMEOUT=1` set:
+> - **Display active** → hard-rebooted within minutes (at step 0). Telemetry: Nominal
+>   thermal pressure (a GPU **driver hang**, not heat); paniclog top-CPU thread was
+>   `WindowServer` (active-display contention).
+> - **Display asleep** (`pmset displaysleepnow`, lid open) → **reached step 302**,
+>   clearing the documented 150–300 panic window with no panic.
+>
+> So for a **9B / heavy bf16 run, the env var is necessary but not sufficient — you
+> must also keep the display off**: drive the box over SSH (cleanest), or run
+> `pmset displaysleepnow` right after launching. `caffeinate -s` alone does *not*
+> turn the display off; it only prevents system sleep, and **closing the lid sleeps
+> the whole machine** (suspending the run) unless an external display is attached.
+> Also prefer **segmentation ON** (the shipped default), which completed a full 4B
+> run cleanly on this box.
 
 **Mitigations already in place**:
 - `AGX_RELAX_CDM_CTXSTORE_TIMEOUT=1` is set automatically by the trainer (the

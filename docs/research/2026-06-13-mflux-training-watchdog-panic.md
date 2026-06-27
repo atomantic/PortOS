@@ -57,11 +57,20 @@ run defeats the env var when the display is compositing. The empirically-known
 survivors on this box are: **(a) segmentation ON** (run `d36562a0`, 4B, completed)
 and **(b) the #3267 thread's display-off levers** (lid closed / display asleep /
 SSH headless) — these were NOT both in effect for the failed run (display was on).
-The next validation worth a destructive session is **9B seg-OFF with the display
-genuinely asleep / lid closed** (or SSH headless), to isolate whether display-off
-alone clears it; until then the safe production combo is **segmentation ON +
-display off for heavy runs**, which is what PortOS ships by default (segmentation
-on). The version bisect is moot — 0.31.2 is not the variable; the display is.
+
+**CONFIRMED (2026-06-27): display-off clears it.** The clean A/B was run — the
+*identical* 9B bf16 seg-OFF config, AGX env still set, **only the display changed
+to asleep** (`pmset displaysleepnow`, lid open, `caffeinate -s`). It reached
+**STEP:302/600**, clearing the entire 150–300 panic window with no panic and no
+reboot (vs the display-on counterpart that died at STEP:0). So the variable is
+unambiguously the **active display / WindowServer GPU compositing** (mlx #3267),
+not the mlx version, not thermal, not memory. The version bisect is moot — 0.31.2
+was never the problem; the display is. **Working recipe for heavy (9B bf16)
+sustained runs on this M5 Max: `AGX_RELAX_CDM_CTXSTORE_TIMEOUT=1` (shipped) +
+display asleep + (ideally) segmentation ON.** PortOS ships the env var and
+segmentation-on by default; the remaining user action is to keep the display off
+(SSH headless or `pmset displaysleepnow`) for big sustained runs — documented in
+TROUBLESHOOTING.
 
 ## Summary
 
@@ -303,7 +312,8 @@ doesn't lose which version was under test.
 |---|---|---|---|---|---|
 | (baseline, not run) | 0.17.5 | 0.30.6 | 0.30.6 | known-bad (3 panics 06-13/14) | none captured (sudo was off) |
 | 2026-06-14 candidate #1 | 0.17.5 | **0.31.2** | **0.31.2** | ✅ **VALIDATED (seg-ON)** — full LoRA run `d36562a0` completed to adapter extraction (4B bf16, 768px, 4×150-step segs); box up, no panic. Pinned 2026-06-27 (#1329). | telemetry captured; GPU/power normal through the run |
-| 2026-06-27 AGX fix (seg-OFF) | 0.17.5 | 0.31.2 | 0.31.2 | ❌ **PANICKED** — `flux2-klein-9b` bf16, 768px, **segmentation OFF**, `AGX_RELAX_CDM_CTXSTORE_TIMEOUT=1` set, under `caffeinate -s` **but the display was active**. Hard-rebooted ~11 min in, at **STEP:0** (sustained training GPU load just beginning), same `watchdog timeout: no checkins from watchdogd in 93 seconds` signature (`AppleARMWatchdogTimer`/`AppleInterruptControllerV3`), paniclog `panic-full-2026-06-27-101518`. **The AGX env var alone does NOT prevent the panic on heavy (9B bf16) seg-OFF with the display active.** | ✅ **first telemetry-captured panic** — `Current pressure level: Nominal` throughout, GPU pegged (1592 MHz, 97% active, 24.4 W), then powermetrics **stops at 10:12:19** while the watchdog fires at 10:15:18 → **driver hang, NOT thermal/swap** (compressor 13% OK). Paniclog: `WindowServer` was the top-CPU thread = active-display contention (mlx #3267). |
+| 2026-06-27 AGX fix (seg-OFF, **display ON**) | 0.17.5 | 0.31.2 | 0.31.2 | ❌ **PANICKED** — `flux2-klein-9b` bf16, 768px, **segmentation OFF**, `AGX_RELAX_CDM_CTXSTORE_TIMEOUT=1` set, under `caffeinate -s` **but the display was active**. Hard-rebooted ~11 min in, at **STEP:0** (sustained training GPU load just beginning), same `watchdog timeout: no checkins from watchdogd in 93 seconds` signature (`AppleARMWatchdogTimer`/`AppleInterruptControllerV3`), paniclog `panic-full-2026-06-27-101518`. **The AGX env var alone does NOT prevent the panic on heavy (9B bf16) seg-OFF with the display active.** | ✅ **first telemetry-captured panic** — `Current pressure level: Nominal` throughout, GPU pegged (1592 MHz, 97% active, 24.4 W), then powermetrics **stops at 10:12:19** while the watchdog fires at 10:15:18 → **driver hang, NOT thermal/swap** (compressor 13% OK). Paniclog: `WindowServer` was the top-CPU thread = active-display contention (mlx #3267). |
+| 2026-06-27 AGX fix (seg-OFF, **display OFF**) | 0.17.5 | 0.31.2 | 0.31.2 | ✅ **SURVIVED** — *same* `flux2-klein-9b` bf16, 768px, **segmentation OFF**, `AGX_RELAX_CDM_CTXSTORE_TIMEOUT=1` set, only change = **display asleep** (`pmset displaysleepnow` after launch; lid open, `caffeinate -s`). Reached **STEP:302/600** (checkpoints 0/150/300), **clearing the whole 150–300 panic window**, no panic, no reboot (box up 5h20m). Stopped cleanly at the success bar — the display-off A/B counterpart of the row above. Scratch `data/training-runs/_validate-agx-segoff-displayoff/`. | telemetry captured; clean throughout |
 
 **Verdict & pin (2026-06-27, #1329).** The candidate #1 "IN FLIGHT" row above was
 the *seg-OFF scratch* run, which was **manually stopped clean at step ~11** (never
@@ -316,15 +326,12 @@ in `scripts/setup-image-video.sh` (replacing the `mflux>=0.17` floor that let ml
 drift), per phosphene's "every pin is a paid lesson."
 
 This validates the **production config** (segmentation ON — the shipped
-mitigation). The **pure seg-OFF sustained 9B-bf16 verdict on 0.31.2 remains
-untested** — a seg-OFF run reproduces the original panic condition and risks a
-session-killing hard reboot (~3.5–7 h to clear the panic window at ~1.3–1.6
-min/step). Run it on the throwaway dataset if a definitive "the driver hang
-itself is fixed" answer is wanted; until then the pin rests on a completed
-real-world run plus segmentation as the standing mitigation. The upstream
-mflux/MLX issue draft (`docs/research/2026-06-14-upstream-issue-draft-m5-watchdog.md`)
-stays unfiled pending a telemetry-captured seg-OFF repro that disambiguates
-thermal vs driver.
+mitigation). The **pure seg-OFF sustained 9B-bf16 verdict on 0.31.2 is now also
+settled** (2026-06-27): it **panics with the display ON and survives with the
+display OFF** (the two A/B rows above) — so the driver hang is real but is gated
+by active-display GPU contention, not by the mlx version. We did NOT file a fresh
+upstream issue (it would duplicate mlx #3267 / #3186); instead the telemetry +
+display-off A/B were posted as data-point comments on mlx #3267.
 
 **Speed finding (2026-06-14 ~14:10) — 9B bf16 is pathologically slow on this box; 4B is ~25× faster.**
 The first Freydis run (`flux2-klein-9b`, bf16, 768px, 600 steps) ran **14 minutes
@@ -351,8 +358,9 @@ already grinding her exact dataset into a throwaway dir. Dual-purposing it on
 the mlx **0.31.2** stack finishes her LoRA *and* gives 0.31.2 a real-world test.
 Trade-off: with segmentation ON a survived run proves "0.31.2 + segmentation
 completes" (the production config), NOT "0.31.2 alone survives sustained GPU" —
-the pure seg-OFF verdict on 0.31.2 remains untested (rerun on the throwaway
-dataset later if wanted). Telemetry still capturing per-run.
+the pure seg-OFF verdict on 0.31.2 was settled later on 2026-06-27 (the two
+display ON/OFF A/B rows in the bisect table: panics with the display on, survives
+to step 302 with it off). Telemetry still capturing per-run.
 
 **Candidate #1 live notes (2026-06-14 ~13:45, seg-OFF scratch — superseded):** scratch run
 `data/training-runs/_bisect-mlx0312/` (9B bf16, 768px, low_ram, segmentation
