@@ -5195,9 +5195,14 @@ export const EDITORIAL_CHECKS = [
         // the final chunk (trim its manuscript tail to fit) rather than letting a packed
         // final chunk drop the snapshot and judge an object on its last chunk alone.
         reserveSetupDigest: true,
-        setupFocus: 'Objects/items the story features, how prominent or decisive each one is, and the depth '
-          + 'of backstory, lineage, or significance the prose or canon has established for it (so the final '
-          + 'part weighs a payoff against the full established weight, not just the current part).',
+        setupFocus: 'List the objects/items the story features and, for each, how prominent or decisive it has '
+          + 'been so far and the depth of backstory, lineage, or significance the prose or canon has established '
+          + 'for it. CRUCIALLY, because the weight verdict is deferred to the final part and the earlier text is '
+          + 'no longer in view by then: for every object record which issue(s) it appears in AND a SHORT verbatim '
+          + 'snippet (≤ 200 chars) of its most weight-bearing moment (a heavy backstory beat, or a prominent / '
+          + 'climactic use) — the snippet is required so the final part can quote it as the finding anchor. This '
+          + 'lets the final part weigh a payoff against the full established weight, and still attribute and quote '
+          + 'an imbalance whose evidence sits pages earlier, not just in the current part.',
       });
     },
   },

@@ -49,10 +49,15 @@ attribute each finding to its `issueNumber`.
 You are seeing the FINAL part of the manuscript, so the whole story is now in
 view and you may judge each object's overall weight against its overall
 prominence. The "setup so far" digest above carries each object's established
-backstory/significance and how prominent it has been, so an object that pays off
-here can be weighed against lineage planted pages earlier, and an object whose
-backstory loaded up early can be judged against how little (or much) the whole
-story actually used it.
+backstory/significance, how prominent it has been, the issue(s) it appears in,
+and a short verbatim snippet of its most weight-bearing moment — so an object
+that pays off here can be weighed against lineage planted pages earlier, and an
+object whose backstory loaded up early can be judged against how little (or much)
+the whole story actually used it. When the object that is out of proportion
+appears only in an EARLIER part (its text is no longer in the part below),
+attribute the finding to the carried-forward issue number and use the
+carried-forward snippet as your `anchorQuote` — do not drop a real imbalance just
+because its evidence sits pages earlier.
 {{/finalPart}}
 {{^finalPart}}
 You are seeing an EARLIER part of a long manuscript reviewed in pieces. Do NOT
