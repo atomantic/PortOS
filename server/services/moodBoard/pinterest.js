@@ -93,14 +93,23 @@ export async function syncPinterestBoard(boardId) {
   // Self-heal links saved before section detection: a section URL was stored with
   // a `/user/board/section.rss` feed that Pinterest serves as HTML (0 pins). Re-
   // normalize the stored link (preferring the displayed boardUrl, which retains
-  // the section path) and persist the corrected board-level feed in place.
+  // the section path) and persist the corrected board-level feed in place. The
+  // heal is guarded under lock (healPinterestFeed) so it can't resurrect/clobber
+  // a link the user unlinked or repointed concurrently — same re-entrancy guard
+  // the locked append below uses via expectedFeedUrl.
+  const staleFeedUrl = board.pinterest.feedUrl;
   const { feedUrl: healedFeedUrl, boardUrl: healedBoardUrl } =
-    normalizePinterestFeedUrl(board.pinterest.boardUrl || board.pinterest.feedUrl);
-  if (healedFeedUrl !== board.pinterest.feedUrl) {
-    board = await store.setPinterestLink(boardId, { feedUrl: healedFeedUrl, boardUrl: healedBoardUrl });
-    console.log(`📌 Pinterest sync: board ${boardId} feed corrected to ${healedFeedUrl} (section URL has no RSS)`);
+    normalizePinterestFeedUrl(board.pinterest.boardUrl || staleFeedUrl);
+  if (healedFeedUrl !== staleFeedUrl) {
+    const { board: healed, changed } = await store.healPinterestFeed(boardId, {
+      fromFeedUrl: staleFeedUrl, feedUrl: healedFeedUrl, boardUrl: healedBoardUrl,
+    });
+    board = healed;
+    if (changed) console.log(`📌 Pinterest sync: board ${boardId} feed corrected to ${healedFeedUrl} (section URL has no RSS)`);
   }
-  const feedUrl = board.pinterest.feedUrl;
+  // A concurrent unlink during the heal leaves the board without a link — bail.
+  const feedUrl = board.pinterest?.feedUrl;
+  if (!feedUrl) throw new ServerError('This board is not linked to a Pinterest board', { status: 400, code: 'NOT_LINKED' });
 
   const xml = await fetchPublicText(feedUrl, { timeoutMs: FEED_TIMEOUT_MS, headers: FEED_HEADERS });
   if (!xml) throw new ServerError('Could not fetch the Pinterest feed (it may be private or rate-limited)', { status: 502, code: 'FEED_FETCH_FAILED' });
