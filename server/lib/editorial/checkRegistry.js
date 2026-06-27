@@ -321,6 +321,16 @@ export const KILL_YOUR_DARLINGS_STAGE = 'pipeline-editorial-kill-your-darlings';
 export const SENSORY_BALANCE_STAGE = 'pipeline-editorial-sensory-balance';
 export const WHITE_ROOM_STAGE = 'pipeline-editorial-white-room';
 
+// Stage name for the interiority-balance LLM check (#1623): visually dense but
+// emotionally empty scenes — heavy on description, light on POV reaction. Ships
+// in data.reference/prompts/stages/ + stage-config.json (fresh installs via
+// setup-data.js) and migrates to existing installs via migration 142 (boot runs
+// migrations but NOT setup-data, so the migration is required). Like the two
+// scene-grounding checks above it consumes the reverse-outline scene
+// segmentation as context and degrades to a whole-issue manuscript scan when no
+// outline exists.
+export const INTERIORITY_BALANCE_STAGE = 'pipeline-editorial-interiority-balance';
+
 // Stage name for the character-arc transition-detection LLM check (#1293). Ships
 // in data.reference/prompts/stages/ + stage-config.json (fresh installs via
 // setup-data.js) and migrates to existing installs via migration 109 (boot runs
@@ -3470,6 +3480,49 @@ export const EDITORIAL_CHECKS = [
       const sceneMap = sceneGroundingSummary(ctx.reverseOutline);
       return runManuscriptLlmCheck(ctx, {
         stage: WHITE_ROOM_STAGE,
+        category: 'style',
+        context: { sceneMap },
+        buildVars: (manuscript, _meta, c) => ({ manuscript, sceneMap: c.sceneMap }),
+      });
+    },
+  },
+  {
+    id: 'scene.interiority-balance',
+    sources: ['manuscript', 'reverseOutline'],
+    label: 'Interiority balance (visually dense / emotionally empty scenes)',
+    description:
+      'Flags scenes that are description-dense yet emotionally empty — prose heavy on setting, blocking, and physical detail but light on the viewpoint character\'s reaction, emotion, or thought, so description swamps interiority ("500 words of setting, zero POV reaction"). Judges the description-to-interiority ratio within each scene. Reads the stitched manuscript plus the reverse-outline scene segmentation, degrading to a whole-issue scan when no outline exists. Distinct from sensory balance (which weighs the five senses) and from interiority.protagonist (which flags whole-issue interiority absence) — the gap here is the in-scene balance: vivid outside, empty inside.',
+    scope: 'scene',
+    kind: 'llm',
+    category: 'style',
+    severityDefault: 'medium',
+    defaultEnabled: true,
+    // Reads the stitched manuscript corpus — so the runner only pays the
+    // section-collection I/O when a manuscript-consuming check is enabled.
+    needsManuscript: true,
+    configSchema: z.object({
+      // Cap findings per run so a long manuscript can't flood the review.
+      maxFindings: z.number().int().min(1).max(50).default(12),
+    }),
+    configFields: [
+      {
+        key: 'maxFindings',
+        label: 'Max findings per run',
+        type: 'number',
+        min: 1,
+        max: 50,
+        step: 1,
+        help: 'Cap findings so a long manuscript can not flood the review.',
+      },
+    ],
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    run: (ctx) => {
+      // The scene map is fixed per-call overhead (re-sent on each chunk). It's
+      // context only — the check degrades gracefully to a whole-issue scan when
+      // no reverse outline exists (the prompt's {{#sceneMap}} renders nothing).
+      const sceneMap = sceneGroundingSummary(ctx.reverseOutline);
+      return runManuscriptLlmCheck(ctx, {
+        stage: INTERIORITY_BALANCE_STAGE,
         category: 'style',
         context: { sceneMap },
         buildVars: (manuscript, _meta, c) => ({ manuscript, sceneMap: c.sceneMap }),

@@ -61,6 +61,7 @@ const ENDINGS_CLIFF = 'endings.cliffhanger';
 const POV_SWITCH = 'endings.pov-switch';
 const SENSORY_BALANCE = 'sensory.balance';
 const WHITE_ROOM = 'scene.white-room';
+const INTERIORITY_BALANCE = 'scene.interiority-balance';
 const PLOT_STRUCTURE = 'plot.structure-momentum';
 const PACING_ESCALATION = 'pacing.escalation-curve';
 const HEAD_HOPPING = 'pov.head-hopping';
@@ -649,7 +650,8 @@ describe('pov.head-hopping — LLM check (#1311)', () => {
 describe.each([
   { id: SENSORY_BALANCE, severityDefault: 'low', label: 'sensory.balance' },
   { id: WHITE_ROOM, severityDefault: 'medium', label: 'scene.white-room' },
-])('$label — scene-grounding LLM check (#1309)', ({ id, severityDefault }) => {
+  { id: INTERIORITY_BALANCE, severityDefault: 'medium', label: 'scene.interiority-balance' },
+])('$label — scene-grounding LLM check (#1309 / #1623)', ({ id, severityDefault }) => {
   const wholeCtx = (overrides = {}) => ({
     manuscript: '# Issue 1\n\n"We have to go," she said.',
     reverseOutline: [{ sequence: 0, issueNumber: 1, heading: 'The void', setting: '', charactersPresent: ['Mara'] }],

@@ -583,6 +583,13 @@
       "returnsJson": true,
       "variables": []
     },
+    "pipeline-editorial-interiority-balance": {
+      "name": "Pipeline — Editorial Check: Interiority balance (description vs. POV reaction)",
+      "description": "Editorial check (#1623): flags visually dense but emotionally empty scenes — prose heavy on setting, blocking, and physical detail yet light on the viewpoint character's reaction, emotion, or thought, so description swamps interiority. Judges the description-to-interiority ratio within each scene. Reads the stitched manuscript plus the reverse-outline scene segmentation (degrading to a whole-issue scan when absent). Distinct from sensory.balance (the senses) and interiority.protagonist (whole-issue interiority absence). Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
     "pipeline-editorial-arc-transitions": {
       "name": "Pipeline — Editorial Check: Character-arc transitions",
       "description": "Editorial check (#1293): scans each character's scenes for genuine change moments (decision, realization, point-of-no-return, relapse, sacrifice) and proposes transition beats with anchor quotes. Reconciles detected change moments against the authored per-character arcs (series.characterArcs) and flags flat arcs — a carrying character with no transition scenes. Reads the stitched manuscript plus the reverse-outline scene map (degrading to a whole-issue scan when absent). Returns issue-anchored findings.",
