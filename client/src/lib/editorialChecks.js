@@ -1,6 +1,7 @@
 // Pure helpers for the Editorial Checks page (#1285) — catalog grouping,
 // findings triage grouping, and manuscript deep-link building. No React, no
 // window: the page component and its unit tests both consume these.
+import { descriptorForCanonEntry } from './canonPrompt.js';
 
 // Scope display order + labels (mirrors server CHECK_SCOPES). A check whose
 // scope isn't one of these still renders, bucketed under its raw scope last.
@@ -360,3 +361,111 @@ export function applyFindingsView(groups = [], filters = {}, sort = 'scope') {
   }
   return sortGroups(out, view);
 }
+
+// ---- Canon entity references in findings (#1631) ----------------------------
+// A continuity/character finding ("Aria's eye colour drifts") names canon
+// entities in free text but doesn't link them. These helpers detect a universe's
+// canon names inside finding text so the triage can render them as links into the
+// canon section, with the entity's descriptor as a hovercard. Pure (no React/DOM)
+// so the page, the triage row, and the unit tests all share one implementation.
+
+// The plural canon-trunk array keys on a universe record (universe.characters, …).
+const CANON_TRUNK_KEYS = Object.freeze(['characters', 'places', 'objects']);
+
+// Singular human label per trunk — used in the chip hovercard when an entry has
+// no descriptor yet.
+export const CANON_KIND_LABELS = Object.freeze({ characters: 'character', places: 'place', objects: 'object' });
+
+/**
+ * Flatten a universe record's canon arrays into a lookup list for linkifying
+ * findings. Each entry: `{ id, name, kind, descriptor }` — `kind` is the plural
+ * trunk key, `descriptor` the short bio used for the link hovercard. Entries with
+ * a too-short name (1 char would match noise) are dropped; the first entry to
+ * claim a name (case-insensitive) wins, so one name never links to two entities.
+ */
+export function canonEntitiesFromUniverse(universe) {
+  if (!universe || typeof universe !== 'object') return [];
+  const out = [];
+  const seen = new Set();
+  for (const key of CANON_TRUNK_KEYS) {
+    const list = Array.isArray(universe[key]) ? universe[key] : [];
+    for (const entry of list) {
+      const name = String(entry?.name || '').trim();
+      if (name.length < 2) continue;
+      const norm = name.toLowerCase();
+      if (seen.has(norm)) continue;
+      seen.add(norm);
+      out.push({
+        id: entry.ingredientId || entry.id || norm,
+        name,
+        kind: key,
+        descriptor: descriptorForCanonEntry(key, entry) || '',
+      });
+    }
+  }
+  return out;
+}
+
+const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// Build a single case-insensitive, word-boundary-anchored matcher over every
+// canon name (longest first so "Jon Snow" wins over "Jon"), plus a lowercase
+// name→entity map. Returns `null` when there are no usable names.
+function buildCanonMatcher(entities = []) {
+  const byName = new Map();
+  const alts = [];
+  for (const e of [...entities].filter((e) => e?.name).sort((a, b) => b.name.length - a.name.length)) {
+    const key = e.name.toLowerCase();
+    if (byName.has(key)) continue;
+    byName.set(key, e);
+    alts.push(escapeRegExp(e.name));
+  }
+  if (!alts.length) return null;
+  return { byName, re: new RegExp(`\\b(${alts.join('|')})\\b`, 'gi') };
+}
+
+/**
+ * Split `text` into segments, tagging runs that match a canon entity name so the
+ * caller can render them as links. Returns an array of `{ text }` (plain) and
+ * `{ text, entity }` (matched) segments that, concatenated, reproduce `text`
+ * exactly. Matching is whole-word and case-insensitive.
+ */
+export function linkifyCanonEntities(text, entities = []) {
+  const str = typeof text === 'string' ? text : '';
+  if (!str) return [];
+  const matcher = buildCanonMatcher(entities);
+  if (!matcher) return [{ text: str }];
+  const { byName, re } = matcher;
+  re.lastIndex = 0;
+  const segments = [];
+  let last = 0;
+  let m;
+  while ((m = re.exec(str)) !== null) {
+    if (m.index > last) segments.push({ text: str.slice(last, m.index) });
+    segments.push({ text: m[0], entity: byName.get(m[0].toLowerCase()) });
+    last = m.index + m[0].length;
+  }
+  if (last < str.length) segments.push({ text: str.slice(last) });
+  return segments;
+}
+
+/**
+ * Unique canon entities referenced anywhere in `text`, in first-appearance order.
+ * Drives the per-finding "Canon" chip row — collapses repeated mentions of the
+ * same entity to one chip.
+ */
+export function canonReferencesInText(text, entities = []) {
+  const out = [];
+  const seen = new Set();
+  for (const seg of linkifyCanonEntities(text, entities)) {
+    if (seg.entity && !seen.has(seg.entity.id)) {
+      seen.add(seg.entity.id);
+      out.push(seg.entity);
+    }
+  }
+  return out;
+}
+
+/** Deep-link to a universe's canon section — the canon "page" for its entities. */
+export const canonEntityLink = (universeId) =>
+  universeId ? `/universes/${encodeURIComponent(universeId)}#canon` : null;

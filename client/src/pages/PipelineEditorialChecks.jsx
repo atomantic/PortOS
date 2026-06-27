@@ -21,7 +21,7 @@ import EditorialFindingsTriage from '../components/pipeline/editorial/EditorialF
 import EditorialHealthPanel from '../components/pipeline/editorial/EditorialHealthPanel';
 import ProviderModelSelector from '../components/ProviderModelSelector';
 import TabPills from '../components/ui/TabPills';
-import { groupChecksByScope, normCategory } from '../lib/editorialChecks';
+import { groupChecksByScope, normCategory, canonEntitiesFromUniverse } from '../lib/editorialChecks';
 import { usePipelineProgress } from '../hooks/usePipelineProgress';
 import useProviderModels from '../hooks/useProviderModels';
 import {
@@ -38,6 +38,7 @@ import {
   getEditorialChecksRunStatus,
   editorialChecksRunSseUrl,
   getPipelineManuscriptReview,
+  getUniverse,
 } from '../services/api';
 
 export default function PipelineEditorialChecks() {
@@ -69,6 +70,11 @@ export default function PipelineEditorialChecks() {
   const [seriesResetNonces, setSeriesResetNonces] = useState(() => ({}));
   const seriesId = searchParams.get('series') || '';
   const [comments, setComments] = useState([]);
+  // Canon entities (#1631) for the selected series' linked universe, flattened to
+  // a name→entity lookup so the triage can linkify entity references in findings.
+  // Empty until a series with a universe is selected; load failures degrade to no
+  // links (the findings still render).
+  const [canonEntities, setCanonEntities] = useState([]);
   const [loadingFindings, setLoadingFindings] = useState(false);
   // Bumped whenever the findings are (re)loaded so the health panel refetches
   // its score/trend in lockstep — a run that seeds new findings also moves the
@@ -355,6 +361,18 @@ export default function PipelineEditorialChecks() {
   // what stops a B-reseed from poisoning A's queued PATCH). `patch === null`
   // clears the whole check. ----
   const selectedSeries = useMemo(() => series.find((s) => s.id === seriesId) || null, [series, seriesId]);
+  // Load the linked universe's canon once the series resolves (#1631). Guarded by a
+  // mounted flag keyed on universeId so a slow fetch for a series the user has since
+  // switched away from can't linkify the new series' findings with stale canon.
+  const universeId = selectedSeries?.universeId || '';
+  useEffect(() => {
+    if (!universeId) { setCanonEntities([]); return undefined; }
+    let active = true;
+    getUniverse(universeId, { silent: true })
+      .then((universe) => { if (active) setCanonEntities(canonEntitiesFromUniverse(universe)); })
+      .catch(() => { if (active) setCanonEntities([]); });
+    return () => { active = false; };
+  }, [universeId]);
   const seriesOverrides = selectedSeries?.editorialCheckConfig && typeof selectedSeries.editorialCheckConfig === 'object'
     ? selectedSeries.editorialCheckConfig
     : null;
@@ -703,7 +721,7 @@ export default function PipelineEditorialChecks() {
                 {loadingFindings ? (
                   <p className="flex items-center gap-2 text-sm text-gray-400"><Loader2 size={16} className="animate-spin" /> Loading findings…</p>
                 ) : (
-                  <EditorialFindingsTriage seriesId={seriesId} comments={comments} checksById={checksById} onCommentChange={handleCommentChange} hiddenCheckIds={hiddenCheckIds} onDisableCheck={disableCheck} onRunChecks={() => runChecks(null)} runDisabled={runDisabled || enabledCount === 0} />
+                  <EditorialFindingsTriage seriesId={seriesId} comments={comments} checksById={checksById} onCommentChange={handleCommentChange} hiddenCheckIds={hiddenCheckIds} onDisableCheck={disableCheck} onRunChecks={() => runChecks(null)} runDisabled={runDisabled || enabledCount === 0} universeId={universeId} canonEntities={canonEntities} />
                 )}
               </>
             )}
