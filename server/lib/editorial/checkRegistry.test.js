@@ -3507,7 +3507,7 @@ describe('objects.weight-proportionality — LLM check (#1624)', () => {
     return {
       manuscript,
       canon: {
-        objects: [{ id: 'o1', name: 'Locket', significance: 'an ancestral heirloom', attachments: [{ characterId: 'c1', emotion: 'reverence' }] }],
+        objects: [{ id: 'o1', name: 'Locket', significance: 'an ancestral heirloom', attachments: [{ characterId: 'c1', emotion: 'reverence', origin: 'pried from her grandmother\'s coffin', role: 'talisman' }] }],
         characters: [{ id: 'c1', name: 'Mara' }],
       },
       config: { maxFindings: 12 },
@@ -3519,7 +3519,7 @@ describe('objects.weight-proportionality — LLM check (#1624)', () => {
     };
   };
 
-  it('passes the manuscript AND an objects-attachment summary to the model', async () => {
+  it('passes the manuscript AND the full per-object weight summary (incl. origin lineage + role) to the model', async () => {
     let vars = null;
     await getCheck('objects.weight-proportionality').run(baseCtx({
       callStagedLLM: async (_stage, v) => { vars = v; return { content: { findings: [] } }; },
@@ -3527,6 +3527,9 @@ describe('objects.weight-proportionality — LLM check (#1624)', () => {
     expect(vars.manuscript).toContain('locket');
     expect(vars.objects).toContain('Locket');
     expect(vars.objects).toContain('Mara'); // resolved character name, not the id
+    // The recorded lineage/backstory the over-weighted verdict depends on (#1624 review):
+    expect(vars.objects).toContain('pried from her grandmother'); // attachment origin
+    expect(vars.objects).toContain('talisman'); // attachment role archetype
   });
 
   it('budgets the objects summary as prompt overhead and re-sends it on every chunk', async () => {

@@ -25,13 +25,15 @@ no setup at all.
 
 ## Established objects (canon)
 
-These are the objects the canon records, with the significance and
-character attachments already on file. Treat this as the *recorded* weight an
-object carries going in; weigh it together with what the prose itself plants and
-pays off. An object with deep canon significance and attachments but almost no
-presence in the manuscript is a candidate for over-weighting; a manuscript-pivotal
-object with thin canon significance and no on-page lineage is a candidate for
-under-establishment.
+These are the objects the canon records, with the prose significance and each
+character attachment already on file — for every attachment, the emotion, its
+significance, the **origin** (how that character came to have the object — its
+recorded lineage/backstory), and a role archetype. Treat this as the *recorded*
+weight an object carries going in; weigh it together with what the prose itself
+plants and pays off. An object with deep canon significance, a rich origin, and
+attachments but almost no presence in the manuscript is a candidate for
+over-weighting; a manuscript-pivotal object with thin canon significance and no
+on-page or recorded lineage is a candidate for under-establishment.
 
 ```
 {{objects}}

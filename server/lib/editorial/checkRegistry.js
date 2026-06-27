@@ -1010,6 +1010,44 @@ function describeObjectAttachments(ctx) {
   return lines.join('\n') || '(no objects in canon)';
 }
 
+// A richer per-object weight summary for the weight-proportionality check
+// (#1624). Unlike describeObjectAttachments (which the unmotivated-interaction
+// check uses to know who already cares about an object), this surfaces the FULL
+// recorded weight an object carries going in — the prose significance plus every
+// attachment's emotion, per-bond significance, ORIGIN (the lineage/backstory),
+// and ROLE archetype — so the model can weigh that recorded backstory against
+// how prominent the object actually is in the manuscript. The origin/role fields
+// are exactly the "rich recorded backstory for a barely used object" signal the
+// over-weighted verdict depends on, which the leaner attachments summary omits.
+function describeObjectWeight(ctx) {
+  const { objects, nameById } = attachmentCanon(ctx);
+  const lines = [];
+  for (const o of objects) {
+    const atts = Array.isArray(o.attachments) ? o.attachments : [];
+    const sig = (o.significance || '').trim();
+    const head = `- ${o.name || o.id}${sig ? ` — significance: ${sig}` : ''}`;
+    if (!atts.length) {
+      lines.push(`${head}\n  attachments: none`);
+      continue;
+    }
+    const attLines = atts.map((a) => {
+      const who = nameById.get(a.characterId) || a.characterId || 'unknown';
+      const emotion = (a.emotion || '').trim();
+      const significance = (a.significance || '').trim();
+      const origin = (a.origin || '').trim();
+      const role = (a.role || '').trim();
+      const parts = [
+        `  • ${who}${emotion ? ` (${emotion})` : ''}${role ? ` [${role}]` : ''}`,
+      ];
+      if (significance) parts.push(`    significance: ${significance}`);
+      if (origin) parts.push(`    origin: ${origin}`);
+      return parts.join('\n');
+    });
+    lines.push(`${head}\n${attLines.join('\n')}`);
+  }
+  return lines.join('\n') || '(no objects in canon)';
+}
+
 // The attachment rows whose `origin` can be checked against the attached
 // character's `background` — both must be present, and the character must
 // still exist (a dangling characterId is the UI/sanitizer's concern, not this
@@ -5118,10 +5156,13 @@ export const EDITORIAL_CHECKS = [
     ],
     gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
     run: (ctx) => {
-      // The per-object canon summary (established significance + attachments) is
-      // fixed per-call overhead re-sent on each chunk — trimmed by the runner to
-      // keep the manuscript a budget floor.
-      const objects = describeObjectAttachments(ctx);
+      // The per-object weight summary (prose significance + every attachment's
+      // emotion / per-bond significance / origin lineage / role) is fixed per-call
+      // overhead re-sent on each chunk — trimmed by the runner to keep the
+      // manuscript a budget floor. It surfaces the FULL recorded backstory an
+      // object carries (the origin/role fields the leaner attachments summary
+      // omits) so the model can weigh that against the object's prose prominence.
+      const objects = describeObjectWeight(ctx);
       return runManuscriptLlmCheck(ctx, {
         stage: OBJECT_WEIGHT_STAGE,
         category: 'plot',
