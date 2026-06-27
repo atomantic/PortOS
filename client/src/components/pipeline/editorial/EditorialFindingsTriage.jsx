@@ -32,7 +32,7 @@ import {
   FINDINGS_TRIAGE_ANCHOR_ID,
 } from '../../../lib/editorialChecks';
 import { fixEditsOf, selectedEditsFor } from '../manuscript/ManuscriptCommentCard';
-import { SUBTYPE_LABEL } from '../manuscript/constants';
+import { subtypeLabel } from '../manuscript/constants';
 import InlineDiff from '../../ui/InlineDiff';
 import toast from '../../ui/Toast';
 import { useAsyncAction } from '../../../hooks/useAsyncAction';
@@ -208,7 +208,7 @@ function FindingRow({ seriesId, comment, onCommentChange, selected, onToggleSele
               {comment.location ? <span className="block text-[11px] text-gray-500">{comment.location}</span> : null}
               {comment.subtype ? (
                 <span className="inline-flex items-center rounded border border-port-border px-1 text-[10px] text-gray-400" title="Why this line was flagged">
-                  {SUBTYPE_LABEL[comment.subtype] || comment.subtype}
+                  {subtypeLabel(comment.subtype)}
                 </span>
               ) : null}
               {isOpen && comment.stale ? <StaleBadge /> : null}

@@ -23,7 +23,7 @@ import {
   patchPipelineManuscriptComment, generatePipelineManuscriptFix, acceptPipelineManuscriptFix,
   undoPipelineManuscriptFix,
 } from '../../../services/api';
-import { SEVERITY_TONE, CATEGORY_LABEL, SUBTYPE_LABEL } from './constants';
+import { SEVERITY_TONE, CATEGORY_LABEL, subtypeLabel } from './constants';
 
 // Truncated comment id + copy button — so a note that looks wrong can be quoted
 // by id when reporting/debugging.
@@ -133,7 +133,7 @@ export function Badge({ comment }) {
       <span className="text-[10px] uppercase tracking-wider text-gray-500">{CATEGORY_LABEL[comment.category] || comment.category}</span>
       {comment.subtype ? (
         <span className="text-[10px] px-1.5 py-0.5 rounded border border-port-border text-gray-400" title="Why this line was flagged">
-          {SUBTYPE_LABEL[comment.subtype] || comment.subtype}
+          {subtypeLabel(comment.subtype)}
         </span>
       ) : null}
       {comment.dismissReason === 'false-positive' ? (

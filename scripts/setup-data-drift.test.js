@@ -68,7 +68,7 @@ const EXPECTED_STAGE_NEW = {
   'pipeline-manuscript-fix.md': 'e2baaf0f2f53c8aa1e934a428c0ca583',
   'pipeline-editorial-telling-emotion.md': '871f7e8bea2a2d95f28875ab45a318e2',
   'pipeline-editorial-chekhov.md': '1f8a1696b5e4f476051dc5b2e5737db9',
-  'pipeline-editorial-on-the-nose.md': '8d9038a2b197728f6edeedb84699f364',
+  'pipeline-editorial-on-the-nose.md': 'e5786fb019e5bf19c7aa6ed0c8b35cda',
   'pipeline-tv-script.md': '376f779f4687b598f1c92ca4e770fd5a',
 };
 const EXPECTED_PARTIAL_OLD = {

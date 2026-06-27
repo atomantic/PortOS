@@ -33,7 +33,7 @@ export const ACCEPTED_OLD_MD5 = {
 // file's only prior migration (112) is a seed that tracks no hash, so there are
 // no earlier MD5 tables to mirror into.
 export const NEW_SHIPPED_MD5 = {
-  'pipeline-editorial-on-the-nose.md': '8d9038a2b197728f6edeedb84699f364',
+  'pipeline-editorial-on-the-nose.md': 'e5786fb019e5bf19c7aa6ed0c8b35cda',
 };
 
 const { applyMigration, up } = makePromptReplaceMigration({

@@ -246,4 +246,12 @@ describe('ManuscriptCommentCard Badge — subtype (#1626)', () => {
     render(<Badge comment={{ ...baseComment, category: 'dialogue', subtype: null }} />);
     expect(screen.queryByText('Emotion-tell')).toBeNull();
   });
+
+  it('renders a prototype-key subtype as its raw string without crashing', () => {
+    // A hand-edited / older-peer record whose subtype is a prototype key must not
+    // resolve to an inherited Object.prototype member (a truthy non-string) — that
+    // would throw "Objects are not valid as a React child" and blank the card.
+    render(<Badge comment={{ ...baseComment, category: 'dialogue', subtype: '__proto__' }} />);
+    expect(screen.getByText('__proto__')).toBeTruthy();
+  });
 });

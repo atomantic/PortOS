@@ -383,8 +383,16 @@ export async function seedReviewFromFindings(seriesId, findings, { runId = null,
         // on-the-nose check sub-classified its output gains the label on the next
         // run without the user having to clear it — the finding key is unchanged,
         // so the merge path (not the append path) is the only place it can land.
-        if ((match.subtype ?? null) !== (c.subtype ?? null)) {
-          patch.subtype = match.subtype ?? null;
+        // Only ADOPT a recognized (non-null) subtype; never clobber a stored
+        // classification back to null. `match.subtype` is null both when the model
+        // omitted the field AND when it returned an off-list value (checkRegistry's
+        // mapLlmFindings collapses both to null), so a non-deterministic re-run
+        // that drops/garbles the label must NOT erase the prior good one — that's
+        // the "absent vs intentionally empty" rule (there is no model signal for
+        // "this line is no longer this subtype"). A genuinely different non-null
+        // subtype still updates (a real re-classification).
+        if (match.subtype != null && match.subtype !== (c.subtype ?? null)) {
+          patch.subtype = match.subtype;
           refreshedCount += 1;
         }
       }

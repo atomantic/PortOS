@@ -52,7 +52,11 @@ line reads on-the-nose and how to fix it:
   characters rather than dramatizing it through how they treat each other.
 
 When a line spans more than one, pick the **dominant** failure — the one the
-fix should target first.
+fix should target first. A line flagged only for *answering its own question*
+(too-literal call-and-response, no evasion) still takes the subtype of what the
+over-direct answer over-states — the feeling (`emotion-tell`), the fact
+(`exposition`), or the bond (`relationship-report`) it lays bare. Every finding
+gets exactly one of these three labels.
 
 ## Manuscript
 

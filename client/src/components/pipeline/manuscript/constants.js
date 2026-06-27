@@ -69,6 +69,14 @@ export const SUBTYPE_LABEL = {
   'relationship-report': 'Relationship-report',
 };
 
+// Resolve a subtype to its display label. Use this (not a bare
+// `SUBTYPE_LABEL[subtype] || subtype`) so a hand-edited / older-peer record whose
+// subtype is a prototype key (`__proto__`, `constructor`, `toString`) can't return
+// an inherited Object.prototype member — a truthy non-string that the `|| subtype`
+// fallback wouldn't catch and that React then throws on as a non-element child.
+export const subtypeLabel = (subtype) =>
+  (Object.prototype.hasOwnProperty.call(SUBTYPE_LABEL, subtype) ? SUBTYPE_LABEL[subtype] : null) || subtype;
+
 // Approximate a textarea's height to its content so the manuscript reads as one
 // continuous scroll (lets jump-to-anchor scroll the page, not an inner box).
 export const rowsFor = (text) => Math.min(400, Math.max(8, (text || '').split('\n').length + 1));
