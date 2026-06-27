@@ -400,6 +400,14 @@ describe('canon entity references in findings (#1631)', () => {
     expect(refs.map((e) => e.name)).toEqual(['Aria', 'Jon', 'The Atrium']);
   });
 
+  it('matches accented / non-ASCII names (Unicode-aware boundaries, not ASCII \\b)', () => {
+    const entities = canonEntitiesFromUniverse({ characters: [{ id: 'e1', name: 'Élodie' }, { id: 'e2', name: 'Søren' }] });
+    const refs = canonReferencesInText('Élodie argues with Søren at dawn', entities);
+    expect(refs.map((e) => e.name)).toEqual(['Élodie', 'Søren']);
+    // Still whole-word: a name embedded in a longer accented word does not match.
+    expect(canonReferencesInText('Élodies', entities)).toEqual([]);
+  });
+
   it('handles empty/no-entity inputs without throwing', () => {
     expect(linkifyCanonEntities('', [])).toEqual([]);
     expect(linkifyCanonEntities('plain text', [])).toEqual([{ text: 'plain text' }]);

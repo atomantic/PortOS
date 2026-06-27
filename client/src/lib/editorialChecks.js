@@ -421,7 +421,11 @@ function buildCanonMatcher(entities = []) {
     alts.push(escapeRegExp(e.name));
   }
   if (!alts.length) return null;
-  return { byName, re: new RegExp(`\\b(${alts.join('|')})\\b`, 'gi') };
+  // Unicode-aware boundaries: JS `\b` is ASCII-only, so accented/non-Latin names
+  // (Élodie, Søren, 李雷) would never match in finding text. Lookarounds that treat
+  // any Unicode letter/number as a "word" char anchor the match on real word
+  // edges across scripts. The `u` flag is required for the \p{…} classes.
+  return { byName, re: new RegExp(`(?<![\\p{L}\\p{N}])(${alts.join('|')})(?![\\p{L}\\p{N}])`, 'giu') };
 }
 
 /**
