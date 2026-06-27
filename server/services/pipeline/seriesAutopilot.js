@@ -579,6 +579,12 @@ export function cancelSeriesAutopilot(seriesId) {
   const run = runs.get(seriesId);
   if (!run || run.finished) return false;
   run.cancelRequested = true;
+  // Emit an immediate acknowledgement frame so the UI can switch to a
+  // "cancelling…" state right away. Cancellation is cooperative and checked
+  // between steps (the terminal `canceled` frame follows once the active
+  // step/LLM call returns) — without this ack the user sees no feedback until
+  // the loop unwinds, which can be the length of a long in-flight LLM call (#1617).
+  broadcastSse(run, { type: 'cancel:acknowledged', runId: run.runId, requestedAt: new Date().toISOString() });
   // Propagate to the currently-delegated child so cancel is responsive
   // mid-step instead of only between steps.
   const child = run.activeChild;

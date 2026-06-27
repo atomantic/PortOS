@@ -8,6 +8,10 @@
  *                                          (404 series missing; 409 cos domain off)
  *   GET  /series/:id/autopilot/progress → SSE (text/event-stream)
  *   POST /series/:id/autopilot/cancel   → { canceled }
+ *                                          Emits a `cancel:acknowledged` SSE frame
+ *                                          immediately; the active step/LLM call
+ *                                          finishes before the terminal `canceled`
+ *                                          frame (cooperative, between-step cancel).
  *   GET  /series/:id/autopilot/status   → { autopilot }   (resume / paused UI)
  */
 

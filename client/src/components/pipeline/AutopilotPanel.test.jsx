@@ -281,6 +281,20 @@ describe('AutopilotPanel', () => {
     expect(await screen.findByText(/Editorial check: Info dumping — 3 finding\(s\) \(1H\/2M\/0L\)/i)).toBeInTheDocument();
   });
 
+  // #1617 — a cancel:acknowledged frame switches the Stop button to a disabled
+  // "Cancelling…" state with the active-step-finishing live label.
+  it('shows a Cancelling… state when the server acks a cancel (#1617)', async () => {
+    getPipelineAutopilotStatus.mockResolvedValue({ autopilot: { status: 'running', runId: 'r1' }, active: true });
+    sseLatest = { type: 'cancel:acknowledged', runId: 'r1' };
+    renderPanel({ id: 's1', targetFormat: 'comic' });
+    await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
+    const btn = await screen.findByRole('button', { name: /cancelling/i });
+    expect(btn).toBeDisabled();
+    // The original Stop affordance is gone while cancelling.
+    expect(screen.queryByRole('button', { name: /^stop$/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/finishing the active step/i)).toBeInTheDocument();
+  });
+
   it('renders canon readiness gaps with a link to the issue Nouns page', async () => {
     getPipelineSeriesCanonReadiness.mockResolvedValue({
       ready: false,

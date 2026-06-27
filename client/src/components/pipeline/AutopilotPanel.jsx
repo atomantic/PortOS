@@ -135,6 +135,8 @@ function frameLabel(f) {
     }
     case 'render:queued': return `Queued draft render: ${f.target}`;
     case 'gap:filed': return `Filed CoS task (${f.gapKind})`;
+    // #1617 — immediate cancel ack; the active step finishes before `canceled`.
+    case 'cancel:acknowledged': return 'Cancelling — finishing the active step…';
     case 'paused': return `Paused — ${f.reason}`;
     case 'complete': return f.dryRun ? 'Plan ready' : 'Complete';
     case 'canceled': return 'Canceled';
@@ -380,6 +382,10 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
 
   const ap = series.autopilot;
   const liveLabel = active ? (frameLabel(latest) || 'Working…') : null;
+  // #1617 — once the server acks the cancel, switch the Stop button to a
+  // disabled "Cancelling…" state so the user gets feedback (and can't re-fire
+  // cancel) while the active step finishes and the terminal frame arrives.
+  const canceling = active && latest?.type === 'cancel:acknowledged';
   const runLabel = ap?.status === 'paused' ? 'Resume autopilot'
     : ap?.status === 'done' ? 'Run autopilot again'
       : 'Run autopilot';
@@ -416,9 +422,10 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
             <button
               type="button"
               onClick={cancel}
-              className="inline-flex items-center gap-1 px-3 py-1.5 rounded text-xs text-port-warning hover:text-white border border-port-warning/40 bg-port-bg hover:bg-port-warning/10"
+              disabled={canceling}
+              className="inline-flex items-center gap-1 px-3 py-1.5 rounded text-xs text-port-warning hover:text-white border border-port-warning/40 bg-port-bg hover:bg-port-warning/10 disabled:opacity-50 disabled:hover:text-port-warning disabled:cursor-default"
             >
-              <X size={12} /> Stop
+              {canceling ? <Loader2 size={12} className="animate-spin" /> : <X size={12} />} {canceling ? 'Cancelling…' : 'Stop'}
             </button>
           )}
         </div>

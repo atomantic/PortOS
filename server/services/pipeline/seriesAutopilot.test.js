@@ -1480,6 +1480,35 @@ describe('autopilot conductor', () => {
     autopilot.cancelSeriesAutopilot(seriesId);
   });
 
+  it('emits an immediate cancel:acknowledged frame on cancel (#1617)', async () => {
+    // Hold the run open at the arc verify step so cancel lands mid-run and the
+    // terminal `canceled` frame can't have fired yet.
+    verifyFindings = [{ severity: 'high', problem: 'x' }];
+    arcSpies.resolveVerifyIssues.mockImplementationOnce(() => new Promise(() => {})); // never resolves
+    const { seriesId } = await seedComplete();
+    const { runId } = await autopilot.startSeriesAutopilot(seriesId, { maxArcVerifyRounds: 5 });
+    // Wait until the run is actually running (first frame emitted).
+    await waitFor(() => autopilot.__testing.runs.get(seriesId)?.lastPayload != null);
+
+    // Attach a fake SSE client so we can assert the ack reaches subscribers,
+    // not just the cached lastPayload.
+    const writes = [];
+    autopilot.attachClient(seriesId, {
+      writeHead: () => {},
+      write: (chunk) => writes.push(chunk),
+      end: () => {},
+      req: { on: () => {} },
+    });
+
+    const canceled = autopilot.cancelSeriesAutopilot(seriesId);
+    expect(canceled).toBe(true);
+    // Synchronous: broadcastSse sets lastPayload last, before the loop can run.
+    const last = autopilot.__testing.runs.get(seriesId)?.lastPayload;
+    expect(last?.type).toBe('cancel:acknowledged');
+    expect(last?.runId).toBe(runId);
+    expect(writes.some((w) => w.includes('"type":"cancel:acknowledged"'))).toBe(true);
+  });
+
   it('drafts cover + interior pages when includeVisual is set', async () => {
     const { seriesId, issueId } = await seedComplete();
     await autopilot.startSeriesAutopilot(seriesId, { includeVisual: true });
