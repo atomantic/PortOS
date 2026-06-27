@@ -4134,6 +4134,13 @@ export const EDITORIAL_CHECKS = [
         // climax isn't mis-read as a flat or front-loaded curve.
         crossChunkDigest: true,
         crossChunkSetup: true,
+        // #1667: this check's whole-curve verdict is gated to the final part AND
+        // anchored on the carried per-issue intensity digest — without it the final
+        // call would judge only the last chunk plus the crude tally. So the digest
+        // must reach the final chunk even when it's packed to the window — reserve
+        // room by trimming the final chunk's manuscript tail rather than silently
+        // dropping it (mirrors arc.climax-agency / emotion.reaction-proportionality).
+        reserveSetupDigest: true,
         setupFocus: 'For each issue/part seen so far, note the level of dramatic intensity '
           + '(stakes, conflict, tension) and whether it has been rising, holding flat, or '
           + 'falling, so a later chunk can judge the WHOLE escalation curve and tell a genuinely '
