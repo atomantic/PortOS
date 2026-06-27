@@ -424,6 +424,7 @@ export function computeTrend(snapshots) {
     score: s.score,
     open: s.open,
     openBySeverity: s.openBySeverity,
+    openByCategory: s.openByCategory,
     openByCheck: s.openByCheck,
   }));
   const latest = list[list.length - 1] || null;

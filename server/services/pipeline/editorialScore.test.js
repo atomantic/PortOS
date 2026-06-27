@@ -168,6 +168,17 @@ describe('computeTrend', () => {
     expect(trend.previous.open).toBe(5);
   });
 
+  it('carries each point\'s per-category open counts for the snapshot drill-down (#1630)', () => {
+    const trend = computeTrend([
+      snap('2026-06-01T00:00:00Z', 90, 3, { continuity: 1, pacing: 2 }),
+      snap('2026-06-02T00:00:00Z', 70, 5, { continuity: 4, pacing: 1 }),
+    ]);
+    expect(trend.points.map((p) => p.openByCategory)).toEqual([
+      { continuity: 1, pacing: 2 },
+      { continuity: 4, pacing: 1 },
+    ]);
+  });
+
   it('flags a category that regressed (got worse) between the two latest snapshots', () => {
     const trend = computeTrend([
       snap('2026-06-01T00:00:00Z', 90, 3, { continuity: 1, pacing: 2 }),

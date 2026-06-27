@@ -108,6 +108,63 @@ export function checkCountSeries(points = [], checkId) {
 }
 
 /**
+ * Diff two open-finding-count maps (`{ bucket: count }`) into a sorted list of
+ * CHANGED buckets (#1630). A bucket absent from one side counts as 0 there, so a
+ * newly-opened bucket reads `from: 0` and a fully-resolved one reads `to: 0`.
+ * Only buckets whose count actually changed are returned — an unchanged bucket
+ * carries no signal. Sorted by the magnitude of the change (largest first), then
+ * bucket name, so the biggest regressions/fixes lead. Returns
+ * `[{ key, from, to, delta }]` where `delta < 0` is an improvement (fewer
+ * findings) and `delta > 0` a regression.
+ */
+export function diffCountMaps(current = {}, previous = {}) {
+  const cur = current && typeof current === 'object' ? current : {};
+  const prev = previous && typeof previous === 'object' ? previous : {};
+  const keys = new Set([...Object.keys(cur), ...Object.keys(prev)]);
+  const rows = [];
+  for (const key of keys) {
+    const to = Number.isFinite(cur[key]) ? cur[key] : 0;
+    const from = Number.isFinite(prev[key]) ? prev[key] : 0;
+    if (to === from) continue;
+    rows.push({ key, from, to, delta: to - from });
+  }
+  return rows.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta) || a.key.localeCompare(b.key));
+}
+
+/**
+ * Build the drill-down view for a single trend snapshot (#1630): its own
+ * open-finding breakdown plus a per-dimension diff against the PREVIOUS
+ * snapshot, so clicking a sparkline point can answer "what changed since the
+ * prior run?". `previous` is null for the first recorded revision (nothing to
+ * compare — `hasPrevious: false`, all deltas null/empty).
+ *
+ * Per-check telemetry is null-aware (mirrors `checkCountSeries`/`computeTrend`):
+ * if EITHER snapshot lacks the `openByCheck` map (recorded before per-check
+ * tracking shipped), `byCheck` is `null` ("no telemetry to diff") rather than a
+ * misleading all-zero baseline that would flag every open check as new.
+ *
+ * @param {object} point — the selected snapshot (a `trend.points[i]`)
+ * @param {object|null} previous — the snapshot one revision earlier, or null
+ * @returns {{ hasPrevious, scoreDelta, openDelta, bySeverity, byCategory, byCheck }|null}
+ */
+export function snapshotDiff(point, previous = null) {
+  if (!point || typeof point !== 'object') return null;
+  const prev = previous && typeof previous === 'object' ? previous : null;
+  const numDelta = (cur, old) =>
+    prev && Number.isFinite(cur) && Number.isFinite(old) ? cur - old : null;
+  const canDiffChecks = point.openByCheck && typeof point.openByCheck === 'object'
+    && (!prev || (prev.openByCheck && typeof prev.openByCheck === 'object'));
+  return {
+    hasPrevious: !!prev,
+    scoreDelta: numDelta(point.score, prev?.score),
+    openDelta: numDelta(point.open, prev?.open),
+    bySeverity: diffCountMaps(point.openBySeverity, prev?.openBySeverity),
+    byCategory: diffCountMaps(point.openByCategory, prev?.openByCategory),
+    byCheck: canDiffChecks ? diffCountMaps(point.openByCheck, prev?.openByCheck) : null,
+  };
+}
+
+/**
  * Project a non-negative count series into SVG polyline coordinates within a
  * `width × height` box, normalized to the series' own max (unlike
  * `sparklineGeometry`'s fixed 0–100 axis): the largest count sits at the top,
