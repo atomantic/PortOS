@@ -265,6 +265,23 @@ export function applyPinterestLink(board, { feedUrl, boardUrl }) {
   };
 }
 
+// Self-heal a stale Pinterest feed (e.g. a section URL saved before section
+// detection, whose `/user/board/section.rss` feed Pinterest serves as HTML) to a
+// corrected `feedUrl`, but ONLY when the board's currently-persisted feed still
+// matches `fromFeedUrl` — the feed read at sync start. This guards the same
+// single-user re-entrancy race as appendPinterestPins: the sync's getBoard()
+// runs before this locked write, so the user can unlink or repoint the board in
+// between. Without the guard, applyPinterestLink would unconditionally rewrite
+// the link and resurrect/clobber the user's newer state. Returns changed:false
+// (no write) when the board was unlinked/repointed concurrently or is already
+// on the corrected feed. Returns { board, changed }.
+export function healPinterestFeedRecord(board, { fromFeedUrl, feedUrl, boardUrl }) {
+  if (board.pinterest?.feedUrl !== fromFeedUrl || fromFeedUrl === feedUrl) {
+    return { board, changed: false };
+  }
+  return { board: applyPinterestLink(board, { feedUrl, boardUrl }), changed: true };
+}
+
 // Remove the Pinterest link. Returns changed:false (no write) when the board
 // wasn't linked, so the db layer can skip a wasted row rewrite + peer push.
 export function clearPinterestLinkRecord(board) {

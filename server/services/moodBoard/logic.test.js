@@ -17,6 +17,7 @@ import {
   imageUrlToAppAsset,
   MAX_ITEMS_PER_BOARD,
   applyPinterestLink,
+  healPinterestFeedRecord,
   clearPinterestLinkRecord,
   appendPinterestPins,
 } from './logic.js';
@@ -258,6 +259,39 @@ describe('applyPinterestLink', () => {
     const linked = { ...base(), pinterest: { feedUrl: 'old.rss', boardUrl: 'oldb', lastSyncedAt: 's1' } };
     const next = applyPinterestLink(linked, { feedUrl: 'new.rss', boardUrl: 'newb' });
     expect(next.pinterest).toMatchObject({ feedUrl: 'new.rss', lastSyncedAt: null });
+  });
+});
+
+describe('healPinterestFeedRecord', () => {
+  const base = () => buildBoardRecord({ name: 'A' }, { id: 'mb-1', now: 't0' });
+  const heal = (b, link) => healPinterestFeedRecord(b, link);
+
+  it('rewrites to the corrected feed when the stored feed still matches', () => {
+    const linked = { ...base(), pinterest: { feedUrl: 'sec.rss', boardUrl: 'https://www.pinterest.com/j/b/s/', lastSyncedAt: null } };
+    const { board, changed } = heal(linked, { fromFeedUrl: 'sec.rss', feedUrl: 'board.rss', boardUrl: 'https://www.pinterest.com/j/b/s/' });
+    expect(changed).toBe(true);
+    expect(board.pinterest.feedUrl).toBe('board.rss');
+  });
+
+  it('is a no-op (no resurrect) when the user unlinked concurrently', () => {
+    const unlinked = base(); // pinterest removed mid-sync
+    const out = heal(unlinked, { fromFeedUrl: 'sec.rss', feedUrl: 'board.rss', boardUrl: 'b' });
+    expect(out.changed).toBe(false);
+    expect(out.board).toBe(unlinked);
+    expect(out.board.pinterest).toBeUndefined();
+  });
+
+  it('is a no-op when the user repointed the board to a different feed', () => {
+    const repointed = { ...base(), pinterest: { feedUrl: 'other.rss', boardUrl: 'ob', lastSyncedAt: null } };
+    const out = heal(repointed, { fromFeedUrl: 'sec.rss', feedUrl: 'board.rss', boardUrl: 'b' });
+    expect(out.changed).toBe(false);
+    expect(out.board.pinterest.feedUrl).toBe('other.rss');
+  });
+
+  it('is a no-op when already on the corrected feed (from === to)', () => {
+    const linked = { ...base(), pinterest: { feedUrl: 'board.rss', boardUrl: 'b', lastSyncedAt: 's1' } };
+    const out = heal(linked, { fromFeedUrl: 'board.rss', feedUrl: 'board.rss', boardUrl: 'b' });
+    expect(out.changed).toBe(false);
   });
 });
 

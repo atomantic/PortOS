@@ -33,6 +33,7 @@ import {
   removeItem,
   mergeBoardRecord,
   applyPinterestLink,
+  healPinterestFeedRecord,
   clearPinterestLinkRecord,
   appendPinterestPins,
 } from './logic.js';
@@ -239,6 +240,19 @@ export async function updateBoardItem(id, itemId, patch) {
 export async function setPinterestLink(id, link) {
   const { board } = await withLockedBoard(id, (b) => ({ board: applyPinterestLink(b, link) }));
   return board;
+}
+
+// Self-heal a stale feed URL under lock, skipping the write (and peer push) when
+// the user unlinked/repointed concurrently or it's already corrected (see
+// healPinterestFeedRecord). Returns { board, changed }.
+export async function healPinterestFeed(id, link) {
+  let changed = false;
+  const { board } = await withLockedBoard(id, (b) => {
+    const { board: next, changed: didChange } = healPinterestFeedRecord(b, link);
+    changed = didChange;
+    return { board: next, skipPersist: !didChange };
+  });
+  return { board, changed };
 }
 
 // Unlink. Skips the write (and peer push) when the board wasn't linked.
