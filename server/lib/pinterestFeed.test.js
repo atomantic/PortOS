@@ -11,6 +11,7 @@ describe('normalizePinterestFeedUrl', () => {
     expect(normalizePinterestFeedUrl('https://www.pinterest.com/jane/cyberpunk/')).toEqual({
       feedUrl: 'https://www.pinterest.com/jane/cyberpunk.rss',
       boardUrl: 'https://www.pinterest.com/jane/cyberpunk/',
+      isSection: false,
     });
   });
 
@@ -18,6 +19,24 @@ describe('normalizePinterestFeedUrl', () => {
     expect(normalizePinterestFeedUrl('https://www.pinterest.com/jane/cyberpunk.rss')).toEqual({
       feedUrl: 'https://www.pinterest.com/jane/cyberpunk.rss',
       boardUrl: 'https://www.pinterest.com/jane/cyberpunk/',
+      isSection: false,
+    });
+  });
+
+  it('collapses a board-section URL to the parent board feed (Pinterest has no section RSS)', () => {
+    // A section path (3+ segments) has no RSS; appending .rss returns HTML → 0 pins.
+    expect(normalizePinterestFeedUrl('https://www.pinterest.com/jane/cyberpunk/neon-alleys/')).toEqual({
+      feedUrl: 'https://www.pinterest.com/jane/cyberpunk.rss',
+      boardUrl: 'https://www.pinterest.com/jane/cyberpunk/neon-alleys/',
+      isSection: true,
+    });
+  });
+
+  it('collapses a section .rss URL to the parent board feed too', () => {
+    expect(normalizePinterestFeedUrl('https://www.pinterest.com/jane/cyberpunk/neon-alleys.rss')).toEqual({
+      feedUrl: 'https://www.pinterest.com/jane/cyberpunk.rss',
+      boardUrl: 'https://www.pinterest.com/jane/cyberpunk/neon-alleys/',
+      isSection: true,
     });
   });
 
@@ -75,6 +94,22 @@ describe('parsePinterestRss', () => {
       imageUrlOriginal: 'https://i.pinimg.com/236x/aa/bb/cc.jpg',
       title: 'Neon alley',
       description: 'a moody alley',
+    });
+  });
+
+  it('extracts the img from an entity-escaped description (live feed shape, no CDATA)', () => {
+    // Pinterest escapes the description HTML with entities instead of CDATA.
+    const xml = wrap([item(`
+      <title>点击查看大图</title>
+      <link>https://www.pinterest.com/pin/201465783329049465/</link>
+      <description>&lt;a href=&quot;https://www.pinterest.com/pin/201465783329049465/&quot;&gt;&lt;img src=&quot;https://i.pinimg.com/236x/a2/6a/00/a26a00dc0156784e3ab7188b95301bcd.jpg&quot;&gt;&lt;/a&gt;</description>
+    `)]);
+    const pins = parsePinterestRss(xml);
+    expect(pins).toHaveLength(1);
+    expect(pins[0]).toMatchObject({
+      pinUrl: 'https://www.pinterest.com/pin/201465783329049465/',
+      imageUrl: 'https://i.pinimg.com/736x/a2/6a/00/a26a00dc0156784e3ab7188b95301bcd.jpg',
+      imageUrlOriginal: 'https://i.pinimg.com/236x/a2/6a/00/a26a00dc0156784e3ab7188b95301bcd.jpg',
     });
   });
 

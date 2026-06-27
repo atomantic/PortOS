@@ -46,9 +46,19 @@ const badUrl = (msg) => new ServerError(msg, { status: 400, code: 'INVALID_PINTE
 
 /**
  * Normalize a user-supplied Pinterest board URL (or an already-`.rss` feed URL)
- * into `{ feedUrl, boardUrl }`. Accepts the human board URL and appends `.rss`;
- * passes a `.rss` URL through. Throws a 400 ServerError for a non-URL, a
- * non-http(s) scheme, a non-Pinterest host, or a board-less root path.
+ * into `{ feedUrl, boardUrl, isSection }`. Accepts the human board URL and
+ * appends `.rss`; passes a `.rss` URL through. Throws a 400 ServerError for a
+ * non-URL, a non-http(s) scheme, a non-Pinterest host, or a board-less root path.
+ *
+ * Pinterest exposes an RSS feed ONLY for a top-level board (`/user/board.rss`),
+ * NOT for a board *section* (`/user/board/section/`). Appending `.rss` to a
+ * section path returns Pinterest's HTML page with a 200 (content-type text/html,
+ * zero `<item>`s), which silently parses to 0 pins. So when the URL points at a
+ * section (3+ path segments), we collapse the FEED to the parent board's RSS
+ * while preserving the section URL the user pasted as `boardUrl` (for display /
+ * "view on Pinterest"). The feed then returns the whole board's recent pins —
+ * the best available, since Pinterest has no per-section feed — and `isSection`
+ * lets callers surface that the sync isn't section-scoped.
  */
 export function normalizePinterestFeedUrl(input) {
   if (typeof input !== 'string' || !input.trim()) {
@@ -69,11 +79,17 @@ export function normalizePinterestFeedUrl(input) {
     throw badUrl('Include the board path, e.g. pinterest.com/user/board');
   }
   const isRss = path.toLowerCase().endsWith('.rss');
-  const feedPath = isRss ? path : `${path}.rss`;
-  const boardPath = isRss ? path.slice(0, -'.rss'.length) : path;
+  // Logical (no `.rss`) path → segments. A section is anything deeper than
+  // /<user>/<board>; the RSS feed always lives at the first two segments.
+  const logicalPath = isRss ? path.slice(0, -'.rss'.length) : path;
+  const segments = logicalPath.split('/').filter(Boolean);
+  const isSection = segments.length > 2;
+  const feedPath = isSection ? `/${segments.slice(0, 2).join('/')}.rss` : `${logicalPath}.rss`;
+  // Keep the section path the user pasted as the displayed board URL.
   return {
     feedUrl: `https://${host}${feedPath}`,
-    boardUrl: `https://${host}${boardPath}/`,
+    boardUrl: `https://${host}${logicalPath}/`,
+    isSection,
   };
 }
 
@@ -137,14 +153,18 @@ export function parsePinterestRss(xml) {
   for (const block of blocks) {
     const pinUrl = decodeEntities(extractTag(block, 'link') || extractTag(block, 'guid'));
     const rawDescription = extractTag(block, 'description');
-    const found = decodeEntities(extractImageUrl(block, rawDescription));
+    // Pinterest entity-escapes the description's HTML (`&lt;img src=&quot;…&quot;&gt;`)
+    // rather than wrapping it in CDATA, so decode it before probing for the <img>;
+    // a no-op when the feed already ships a literal <img> (CDATA) tag.
+    const decodedDescription = decodeEntities(rawDescription);
+    const found = decodeEntities(extractImageUrl(block, decodedDescription));
     if (!pinUrl || !found) continue;
     pins.push({
       pinUrl,
       imageUrl: upgradePinImageSize(found),
       imageUrlOriginal: found,
       title: stripHtml(extractTag(block, 'title')).slice(0, 500),
-      description: stripHtml(rawDescription).slice(0, 500),
+      description: stripHtml(decodedDescription).slice(0, 500),
       pubDate: extractTag(block, 'pubDate'),
     });
   }

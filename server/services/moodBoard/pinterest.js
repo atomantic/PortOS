@@ -66,10 +66,10 @@ async function downloadPinImage({ pinUrl, imageUrl, imageUrlOriginal }) {
  * normalizes the URL (throws 400 on a non-Pinterest host) and stores the link.
  */
 export async function linkPinterestBoard(boardId, { url }) {
-  const { feedUrl, boardUrl } = normalizePinterestFeedUrl(url);
+  const { feedUrl, boardUrl, isSection } = normalizePinterestFeedUrl(url);
   const board = await store.setPinterestLink(boardId, { feedUrl, boardUrl });
   emitRecordUpdated('moodBoard', boardId);
-  console.log(`📌 Pinterest link set: board ${boardId} → ${feedUrl}`);
+  console.log(`📌 Pinterest link set: board ${boardId} → ${feedUrl}${isSection ? ' (section URL — feed covers the whole board; Pinterest has no per-section RSS)' : ''}`);
   return board;
 }
 
@@ -86,10 +86,21 @@ export async function unlinkPinterestBoard(boardId) {
  * unreachable).
  */
 export async function syncPinterestBoard(boardId) {
-  const board = await store.getBoard(boardId);
+  let board = await store.getBoard(boardId);
   if (!board) throw new ServerError('Mood board not found', { status: 404, code: 'NOT_FOUND' });
-  const feedUrl = board.pinterest?.feedUrl;
-  if (!feedUrl) throw new ServerError('This board is not linked to a Pinterest board', { status: 400, code: 'NOT_LINKED' });
+  if (!board.pinterest?.feedUrl) throw new ServerError('This board is not linked to a Pinterest board', { status: 400, code: 'NOT_LINKED' });
+
+  // Self-heal links saved before section detection: a section URL was stored with
+  // a `/user/board/section.rss` feed that Pinterest serves as HTML (0 pins). Re-
+  // normalize the stored link (preferring the displayed boardUrl, which retains
+  // the section path) and persist the corrected board-level feed in place.
+  const { feedUrl: healedFeedUrl, boardUrl: healedBoardUrl } =
+    normalizePinterestFeedUrl(board.pinterest.boardUrl || board.pinterest.feedUrl);
+  if (healedFeedUrl !== board.pinterest.feedUrl) {
+    board = await store.setPinterestLink(boardId, { feedUrl: healedFeedUrl, boardUrl: healedBoardUrl });
+    console.log(`📌 Pinterest sync: board ${boardId} feed corrected to ${healedFeedUrl} (section URL has no RSS)`);
+  }
+  const feedUrl = board.pinterest.feedUrl;
 
   const xml = await fetchPublicText(feedUrl, { timeoutMs: FEED_TIMEOUT_MS, headers: FEED_HEADERS });
   if (!xml) throw new ServerError('Could not fetch the Pinterest feed (it may be private or rate-limited)', { status: 502, code: 'FEED_FETCH_FAILED' });
