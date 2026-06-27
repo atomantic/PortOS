@@ -51,6 +51,7 @@ import {
   renderComicForProseSync,
   proseSyncPairs,
   PROSE_SYNC_PROSE_CHAR_CAP,
+  ON_THE_NOSE_SUBTYPES,
 } from './checkRegistry.js';
 
 const NAMING = 'naming.dissimilar-names';
@@ -5167,6 +5168,41 @@ describe('dialogue-craft bundle (#1307)', () => {
       expect(findings[0].category).toBe('dialogue');
       expect(findings[0].issueNumber).toBe(1);
     });
+
+    it('stamps a recognized subtype on each finding (#1626)', async () => {
+      const ctx = wholeCtx({
+        callStagedLLM: async () => ({
+          content: { findings: [{ severity: 'low', subtype: 'emotion-tell', issueNumber: 1, problem: 'names the feeling', anchorQuote: 'I am angry' }] },
+        }),
+      });
+      const findings = await getCheck(ON_THE_NOSE).run(ctx);
+      expect(findings).toHaveLength(1);
+      expect(findings[0].subtype).toBe('emotion-tell');
+    });
+
+    it('drops an off-list subtype to null (#1626)', async () => {
+      const ctx = wholeCtx({
+        callStagedLLM: async () => ({
+          content: { findings: [{ severity: 'low', subtype: 'made-up-label', issueNumber: 1, problem: 'on the nose', anchorQuote: 'I am angry' }] },
+        }),
+      });
+      const findings = await getCheck(ON_THE_NOSE).run(ctx);
+      expect(findings[0].subtype).toBeNull();
+    });
+
+    it('defaults subtype to null when the model omits it (#1626)', async () => {
+      const ctx = wholeCtx({
+        callStagedLLM: async () => ({
+          content: { findings: [{ severity: 'low', issueNumber: 1, problem: 'on the nose', anchorQuote: 'I am angry' }] },
+        }),
+      });
+      const findings = await getCheck(ON_THE_NOSE).run(ctx);
+      expect(findings[0].subtype).toBeNull();
+    });
+
+    it('only declares the three documented subtypes', () => {
+      expect(ON_THE_NOSE_SUBTYPES).toEqual(['exposition', 'emotion-tell', 'relationship-report']);
+    });
   });
 
   describe('dialogue.voice-distinctiveness — LLM check', () => {
@@ -5204,6 +5240,8 @@ describe('dialogue-craft bundle (#1307)', () => {
       expect(seenVars.voiceProfiles).toContain('clipped, profane');
       expect(findings).toHaveLength(1);
       expect(findings[0].category).toBe('dialogue');
+      // A check that doesn't declare subtypes carries a clean null (#1626).
+      expect(findings[0].subtype).toBeNull();
     });
   });
 

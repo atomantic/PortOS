@@ -35,6 +35,7 @@ import {
   CANON_KIND_LABELS,
 } from '../../../lib/editorialChecks';
 import { fixEditsOf, selectedEditsFor } from '../manuscript/ManuscriptCommentCard';
+import { subtypeLabel } from '../manuscript/constants';
 import InlineDiff from '../../ui/InlineDiff';
 import toast from '../../ui/Toast';
 import { useAsyncAction } from '../../../hooks/useAsyncAction';
@@ -248,6 +249,11 @@ function FindingRow({ seriesId, comment, onCommentChange, selected, onToggleSele
             </span>
             <span className="flex items-center gap-2">
               {comment.location ? <span className="block text-[11px] text-gray-500">{comment.location}</span> : null}
+              {comment.subtype ? (
+                <span className="inline-flex items-center rounded border border-port-border px-1 text-[10px] text-gray-400" title="Why this line was flagged">
+                  {subtypeLabel(comment.subtype)}
+                </span>
+              ) : null}
               {isOpen && comment.stale ? <StaleBadge /> : null}
               {comment.dismissReason === 'false-positive' ? (
                 <span className="inline-flex items-center gap-1 text-[10px] text-port-warning"><Ban size={10} /> false positive</span>

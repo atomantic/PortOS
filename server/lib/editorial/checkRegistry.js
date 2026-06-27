@@ -383,6 +383,13 @@ export const TELLING_EMOTION_STAGE = 'pipeline-editorial-telling-emotion';
 export const ON_THE_NOSE_STAGE = 'pipeline-editorial-on-the-nose';
 export const VOICE_DISTINCTIVENESS_STAGE = 'pipeline-editorial-voice-distinctiveness';
 
+// Finding subtypes for `dialogue.on-the-nose` (#1626) — the stage prompt classifies
+// each subtext-free line into *why* it reads on-the-nose so the writer gets specific,
+// actionable feedback instead of a flat "on-the-nose" label. Surfaced on the finding
+// (and persisted comment) as `subtype`; the runner validates the model's value against
+// this allow-list and drops anything off-list (→ null) so a stray label can't leak through.
+export const ON_THE_NOSE_SUBTYPES = ['exposition', 'emotion-tell', 'relationship-report'];
+
 // Stage name for the narrator voice / tone-consistency LLM check (#1586) — the
 // narration-level sibling of voice-distinctiveness (which covers per-CHARACTER
 // dialogue). Ships in data.reference/prompts/stages/ + stage-config.json (fresh
@@ -1253,7 +1260,7 @@ export function buildSetupDigestPrompt({ focus, priorSummary, manuscript }) {
 // only — every other chunk, and every non-reserving check, keeps full manuscript
 // coverage. If the digest alone is larger than the whole window it still yields
 // (never prepended past the budget), preserving the no-overflow contract.
-async function runChunkedManuscriptCheck(ctx, { chunks, category, max, callChunk, crossChunkDigest = false, summarizeChunk = null, reserveSetupDigest = false }) {
+async function runChunkedManuscriptCheck(ctx, { chunks, category, max, callChunk, crossChunkDigest = false, summarizeChunk = null, reserveSetupDigest = false, subtypes = null }) {
   const usableChars = Number.isFinite(chunks?.usableChars) ? chunks.usableChars : Infinity;
   const merged = new Map();
   // The presence of `summarizeChunk` (set only when the check opts into the
@@ -1306,6 +1313,7 @@ async function runChunkedManuscriptCheck(ctx, { chunks, category, max, callChunk
       category,
       max,
       withIssueNumber: true,
+      subtypes,
     })) {
       const k = editorialFindingKey(f);
       if (!merged.has(k)) merged.set(k, f);
@@ -1361,7 +1369,7 @@ async function runChunkedManuscriptCheck(ctx, { chunks, category, max, callChunk
 // check). Existing checks ignore the extra args. These checks are all
 // manuscript-scoped, so findings keep a model-supplied issue number
 // (`withIssueNumber: true`).
-async function runManuscriptLlmCheck(ctx, { stage, category, overheadTokens = 0, context = null, buildVars, crossChunkDigest = false, crossChunkSetup = false, setupFocus = '', reserveSetupDigest = false }) {
+async function runManuscriptLlmCheck(ctx, { stage, category, overheadTokens = 0, context = null, buildVars, crossChunkDigest = false, crossChunkSetup = false, setupFocus = '', reserveSetupDigest = false, subtypes = null }) {
   const max = ctx.config?.maxFindings ?? 12;
   // Chunks are planned at the full usable budget; the digest is fitted into each
   // later chunk's spare room inside runChunkedManuscriptCheck (it yields to the
@@ -1396,6 +1404,7 @@ async function runManuscriptLlmCheck(ctx, { stage, category, overheadTokens = 0,
     crossChunkDigest,
     summarizeChunk,
     reserveSetupDigest,
+    subtypes,
     callChunk: async (manuscript, meta) => {
       const { content } = await ctx.callStagedLLM(stage, buildVars(manuscript, meta, fittedContext), { returnsJson: true, source: stage });
       return content;
@@ -1408,11 +1417,21 @@ async function runManuscriptLlmCheck(ctx, { stage, category, overheadTokens = 0,
 // check's `category`, coerce each string field, cap the count, and drop any
 // finding with no `problem`. `withIssueNumber` keeps a model-supplied issue
 // number (manuscript-scoped checks) vs. forcing null (canon-scoped checks).
-function mapLlmFindings(raw, { severityDefault, category, max, withIssueNumber }) {
+// `subtypes` (optional) is a per-check allow-list (#1626): when supplied, the
+// model's `subtype` is validated against it and stamped on the finding (off-list
+// or absent → null), letting a check sub-classify its findings (e.g. on-the-nose
+// → exposition / emotion-tell / relationship-report) without a new field on every
+// other check.
+function mapLlmFindings(raw, { severityDefault, category, max, withIssueNumber, subtypes = null }) {
   const list = Array.isArray(raw) ? raw : [];
+  const allowSubtype = Array.isArray(subtypes) && subtypes.length > 0;
   return list.slice(0, max).map((f) => ({
     severity: SEVERITIES.includes(f?.severity) ? f.severity : severityDefault,
     category,
+    // Optional per-check sub-classification. Only set when the check declares an
+    // allow-list AND the model returned a recognized value — null otherwise so a
+    // check with no subtypes (and an unrecognized label) carries a clean null.
+    subtype: allowSubtype && subtypes.includes(f?.subtype) ? f.subtype : null,
     location: typeof f?.location === 'string' ? f.location : '',
     problem: typeof f?.problem === 'string' ? f.problem : '',
     suggestion: typeof f?.suggestion === 'string' ? f.suggestion : '',
@@ -6542,7 +6561,7 @@ export const EDITORIAL_CHECKS = [
     sources: ['manuscript'],
     label: 'On-the-nose / subtext-free dialogue (LLM)',
     description:
-      'LLM scan for dialogue that states exactly what a character feels or means with no subtext, and "maid-and-butler" exchanges where characters tell each other what they both already know. Complements the info-dumping check (#1297) — that targets backstory exposition, this targets emotionally flat, subtext-free lines.',
+      'LLM scan for dialogue that states exactly what a character feels or means with no subtext, and "maid-and-butler" exchanges where characters tell each other what they both already know. Each finding is sub-classified (#1626) as exposition (info-dump), emotion-tell (naming a feeling outright), or relationship-report (describing a bond instead of dramatizing it) so the fix is actionable. Complements the info-dumping check (#1297) — that targets backstory exposition, this targets emotionally flat, subtext-free lines.',
     scope: 'issue',
     kind: 'llm',
     category: 'dialogue',
@@ -6564,6 +6583,11 @@ export const EDITORIAL_CHECKS = [
       category: 'dialogue',
       overheadTokens: EDITORIAL_PROMPT_OVERHEAD_TOKENS,
       buildVars: (manuscript) => ({ manuscript }),
+      // The prompt classifies each finding (#1626) into why it reads on-the-nose;
+      // the runner validates the model's label against this set and stamps it as
+      // `subtype` on the finding so the editor sees exposition / emotion-tell /
+      // relationship-report instead of a flat "on-the-nose".
+      subtypes: ON_THE_NOSE_SUBTYPES,
     }),
   },
   {

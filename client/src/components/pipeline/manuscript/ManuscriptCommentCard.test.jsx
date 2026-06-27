@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import ManuscriptCommentCard from './ManuscriptCommentCard';
+import ManuscriptCommentCard, { Badge } from './ManuscriptCommentCard';
 import { Toaster, toast } from '../../ui/Toast';
 import {
   acceptPipelineManuscriptFix,
@@ -228,5 +228,30 @@ describe('ManuscriptCommentCard — manual edit path (#1610)', () => {
     expect(screen.getByLabelText(/Replacement \(editable\)/i)).toBeTruthy();
     pressKey('m');
     expect(screen.queryByLabelText(/Replacement \(editable\)/i)).toBeNull();
+  });
+});
+
+describe('ManuscriptCommentCard Badge — subtype (#1626)', () => {
+  it('renders a labeled subtype badge when the finding carries one', () => {
+    render(<Badge comment={{ ...baseComment, category: 'dialogue', subtype: 'emotion-tell' }} />);
+    expect(screen.getByText('Emotion-tell')).toBeTruthy();
+  });
+
+  it('falls back to the raw subtype when unmapped', () => {
+    render(<Badge comment={{ ...baseComment, category: 'dialogue', subtype: 'novel-kind' }} />);
+    expect(screen.getByText('novel-kind')).toBeTruthy();
+  });
+
+  it('renders no subtype badge when absent', () => {
+    render(<Badge comment={{ ...baseComment, category: 'dialogue', subtype: null }} />);
+    expect(screen.queryByText('Emotion-tell')).toBeNull();
+  });
+
+  it('renders a prototype-key subtype as its raw string without crashing', () => {
+    // A hand-edited / older-peer record whose subtype is a prototype key must not
+    // resolve to an inherited Object.prototype member (a truthy non-string) — that
+    // would throw "Objects are not valid as a React child" and blank the card.
+    render(<Badge comment={{ ...baseComment, category: 'dialogue', subtype: '__proto__' }} />);
+    expect(screen.getByText('__proto__')).toBeTruthy();
   });
 });

@@ -147,6 +147,15 @@ function sanitizeComment(raw) {
     // additive → the synced review doc stays backward-compatible.
     nativeSeverity: ['high', 'medium', 'low'].includes(raw.nativeSeverity) ? raw.nativeSeverity : severity,
     category,
+    // Optional per-check sub-classification of the finding (#1626) — e.g.
+    // `dialogue.on-the-nose` tags each finding `exposition` / `emotion-tell` /
+    // `relationship-report` so the editor sees *why* a line reads on-the-nose.
+    // `null` for checks that don't sub-classify, legacy records, and older peers.
+    // Validated by the producing check against its own allow-list, so a stray
+    // value never reaches here; the clamp is a belt-and-suspenders bound for
+    // hand-edited / older-peer files. Optional + additive → the synced review doc
+    // stays backward-compatible (no schema bump needed).
+    subtype: clampStr(raw.subtype, 40) || null,
     location: clampStr(raw.location, 200),
     problem,
     suggestion: clampStr(raw.suggestion, 8000),
@@ -368,6 +377,22 @@ export async function seedReviewFromFindings(seriesId, findings, { runId = null,
         }
         if (match.sourceContentHash && match.sourceContentHash !== (c.sourceContentHash ?? null)) {
           patch.sourceContentHash = match.sourceContentHash;
+          refreshedCount += 1;
+        }
+        // Adopt the run's subtype (#1626) so a finding first raised before the
+        // on-the-nose check sub-classified its output gains the label on the next
+        // run without the user having to clear it — the finding key is unchanged,
+        // so the merge path (not the append path) is the only place it can land.
+        // Only ADOPT a recognized (non-null) subtype; never clobber a stored
+        // classification back to null. `match.subtype` is null both when the model
+        // omitted the field AND when it returned an off-list value (checkRegistry's
+        // mapLlmFindings collapses both to null), so a non-deterministic re-run
+        // that drops/garbles the label must NOT erase the prior good one — that's
+        // the "absent vs intentionally empty" rule (there is no model signal for
+        // "this line is no longer this subtype"). A genuinely different non-null
+        // subtype still updates (a real re-classification).
+        if (match.subtype != null && match.subtype !== (c.subtype ?? null)) {
+          patch.subtype = match.subtype;
           refreshedCount += 1;
         }
       }
