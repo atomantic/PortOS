@@ -244,7 +244,28 @@ doesn't lose which version was under test.
 | When | mflux | mlx | mlx-metal | Result | powermetrics verdict |
 |---|---|---|---|---|---|
 | (baseline, not run) | 0.17.5 | 0.30.6 | 0.30.6 | known-bad (3 panics 06-13/14) | none captured (sudo was off) |
-| 2026-06-14 candidate #1 | 0.17.5 | **0.31.2** | **0.31.2** | ⏳ IN FLIGHT — survived to step ~11/600 @ 13:45 (box up, no panic) | telemetry capturing (`_bisect-mlx0312/powermetrics.log`) |
+| 2026-06-14 candidate #1 | 0.17.5 | **0.31.2** | **0.31.2** | ✅ **VALIDATED (seg-ON)** — full LoRA run `d36562a0` completed to adapter extraction (4B bf16, 768px, 4×150-step segs); box up, no panic. Pinned 2026-06-27 (#1329). | telemetry captured; GPU/power normal through the run |
+
+**Verdict & pin (2026-06-27, #1329).** The candidate #1 "IN FLIGHT" row above was
+the *seg-OFF scratch* run, which was **manually stopped clean at step ~11** (never
+reached the 150–300-step panic window) and superseded — it did NOT panic. The
+real validation is run **`d36562a0`** (`flux2-klein-4b`, bf16, 768px, segmentation
+ON: 4 × 150-step segments), which **COMPLETED to adapter extraction** on
+mflux 0.17.5 · mlx 0.31.2 · mlx-metal 0.31.2 with no panic and no reboot
+(`STATUS.txt`: "VERDICT: COMPLETED — adapter extracted"). That trio is now pinned
+in `scripts/setup-image-video.sh` (replacing the `mflux>=0.17` floor that let mlx
+drift), per phosphene's "every pin is a paid lesson."
+
+This validates the **production config** (segmentation ON — the shipped
+mitigation). The **pure seg-OFF sustained 9B-bf16 verdict on 0.31.2 remains
+untested** — a seg-OFF run reproduces the original panic condition and risks a
+session-killing hard reboot (~3.5–7 h to clear the panic window at ~1.3–1.6
+min/step). Run it on the throwaway dataset if a definitive "the driver hang
+itself is fixed" answer is wanted; until then the pin rests on a completed
+real-world run plus segmentation as the standing mitigation. The upstream
+mflux/MLX issue draft (`docs/research/2026-06-14-upstream-issue-draft-m5-watchdog.md`)
+stays unfiled pending a telemetry-captured seg-OFF repro that disambiguates
+thermal vs driver.
 
 **Speed finding (2026-06-14 ~14:10) — 9B bf16 is pathologically slow on this box; 4B is ~25× faster.**
 The first Freydis run (`flux2-klein-9b`, bf16, 768px, 600 steps) ran **14 minutes
@@ -289,9 +310,9 @@ Candidate #1 rationale: bump only the MLX/Metal backend (highest-probability
 driver-hang fix); mflux held at 0.17.5 to isolate the variable. mflux caps
 `mlx<0.32` and its `dev` extra pins `mlx==0.31.0`, so 0.31.2 is in-range and
 closer to what mflux develops against than the installed 0.30.6.
-**If this entry still says IN FLIGHT after a reboot: candidate #1 PANICKED** —
-read the scratch `powermetrics.log` (highest timestamp) for thermal-vs-driver,
-then fall back to 0.30.6 or try mflux 0.18.0.
+**Resolved 2026-06-27 (#1329):** candidate #1 did NOT panic — the seg-OFF scratch
+was manually stopped clean and superseded by the completed seg-ON run `d36562a0`.
+The 0.31.2 trio is now pinned (see "Verdict & pin" under the bisect table above).
 
 ## If it recurs — investigation checklist
 

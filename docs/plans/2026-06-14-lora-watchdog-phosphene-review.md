@@ -125,7 +125,7 @@ Phosphene's experience **confirms the architecture** rather than replacing it.
 | 1 | Record the eval-cadence negative result | this doc + incident doc | done |
 | 2 | ~~Inject per-block `mx.eval` into training~~ | — | **dropped** (not viable; see above) |
 | 3 | Phase-aware soft-hang stall watchdog (SIGKILL + auto-resume) | Node `loraTraining` + `mediaJobQueue` | PLAN item (defensive-only; needs careful phase budgets) |
-| 4 | Version bisect on the M5 → pin validated trio + runtime fingerprint + upstream issue | `setup-image-video.sh`, `train_mflux_lora.py` | PLAN item (blocked on M5 + a full run) |
+| 4 | Version bisect on the M5 → pin validated trio + runtime fingerprint + upstream issue | `setup-image-video.sh`, `train_mflux_lora.py` | **done (#1329, 2026-06-27)** — fingerprint shipped #1406; trio **mflux 0.17.5 · mlx 0.31.2 · mlx-metal 0.31.2** pinned after run `d36562a0` completed a full seg-ON LoRA on it (no panic). Pure seg-OFF 9B verdict + upstream filing deferred (destructive repro) |
 | 5 | Z-Image / FLUX.2-edit LoRA training; face+voice LoRA | future | separate proposals |
 
 Items 3–5 are captured as slug-tagged entries in `PLAN.md` → "Next Up".
