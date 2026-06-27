@@ -7,7 +7,11 @@
  * into columns for the queries the service + federation actually run (rename
  * cascade, delete-guard, list sort, snapshot ephemeral-filter, LWW staleness).
  * Render-history runs live one-row-per-run in `universe_runs` (local-only,
- * capped at 200, never federated).
+ * capped at 200, never federated). Non-federation is a deliberate decision, not
+ * an oversight: runs are a regenerable render cache under a 200-row GLOBAL cap
+ * (trimmed in `appendRun`) that two peers would mutually evict, and the durable
+ * universe record already federates. See ADR
+ * docs/decisions/2026-06-26-tribe-and-universe-runs-local.md (#1724).
  *
  * This module is PURE leaf I/O — no in-process serialization, no sanitizing.
  * The store facade (store.js) owns the per-id write queue + the mutation epoch

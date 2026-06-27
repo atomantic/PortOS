@@ -1,3 +1,17 @@
+/**
+ * Tribe — relationship/CRM graph (PostgreSQL: tribe_people, tribe_touchpoints,
+ * tribe_memory_links).
+ *
+ * INTENTIONALLY MACHINE-LOCAL — not federated. See ADR
+ * docs/decisions/2026-06-26-tribe-and-universe-runs-local.md (#1724). It mirrors
+ * the deliberate "relationship data is instance-local" boundary already drawn by
+ * memorySync.js (memory NODES federate; memory_links do not), and is coupled to
+ * machine-local domains: tribe_memory_links extends the non-federated memory_links
+ * layer, and tribe_touchpoints carry per-machine calendar-account refs
+ * (calendar_account_id / calendar_event_id). There is no sync hook here by design;
+ * adding one is a conscious act (revisit the ADR + the guard in
+ * sharing/peerSync.test.js).
+ */
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { ensureSchema, query, withTransaction } from '../lib/db.js';
 import { ServerError } from '../lib/errorHandler.js';

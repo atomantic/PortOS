@@ -3138,6 +3138,28 @@ describe('peerSync', () => {
           expect(covered.has(key)).toBe(true);
         }
       });
+
+      it('keeps the Tribe graph + universe render-runs intentionally OUT of the sync graph (#1724)', () => {
+        // ADR 2026-06-26: tribe_* and universe_runs are deliberately machine-local.
+        // - Tribe is relationship-graph data (mirrors the deliberate "memory_links
+        //   are instance-local" policy in memorySync.js) and is coupled to
+        //   machine-local calendar-account refs on touchpoints.
+        // - universe_runs is a regenerable render cache under a 200-row GLOBAL cap
+        //   that two producers would mutually evict; the durable universe record
+        //   already federates.
+        // This guard pins that decision: federating either later is a conscious act
+        // — wire the kind AND update this assertion + the ADR together.
+        const localOnlyKinds = ['tribe', 'tribePerson', 'tribeTouchpoint', 'tribeMemoryLink', 'universeRun'];
+        for (const kind of localOnlyKinds) {
+          expect(PEER_SUBSCRIBABLE_KINDS).not.toContain(kind);
+          expect(RECORD_KIND_SCHEMA_CATEGORIES[kind]).toBeUndefined();
+        }
+        const localOnlyCategories = ['tribe', 'tribePeople', 'tribeTouchpoints', 'tribeMemoryLinks', 'universeRuns'];
+        for (const category of localOnlyCategories) {
+          expect(PORTOS_SCHEMA_VERSIONS[category]).toBeUndefined();
+          expect(NON_RECORD_SCHEMA_CATEGORIES.has(category)).toBe(false);
+        }
+      });
     });
 
     describe('sender — pushRecordToPeer', () => {
