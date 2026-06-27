@@ -168,7 +168,7 @@ describe('syncPinterestBoard', () => {
     expect(store.appendPinterestItems.mock.calls[0][2]).toMatchObject({ expectedFeedUrl: 'https://www.pinterest.com/j/b.rss' });
   });
 
-  it('bails with NOT_LINKED when a concurrent unlink wins the heal race', async () => {
+  it('aborts (no fetch) when a concurrent unlink wins the heal race', async () => {
     store.getBoard.mockResolvedValue({
       id: 'mb-1',
       items: [],
@@ -177,8 +177,30 @@ describe('syncPinterestBoard', () => {
     // User unlinked concurrently: the guarded heal didn't write and the board is now unlinked.
     store.healPinterestFeed.mockResolvedValue({ board: { id: 'mb-1', items: [] }, changed: false });
 
-    await expect(syncPinterestBoard('mb-1')).rejects.toMatchObject({ status: 400, code: 'NOT_LINKED' });
+    const result = await syncPinterestBoard('mb-1');
+    expect(result).toMatchObject({ aborted: true, added: 0 });
     expect(net.fetchPublicText).not.toHaveBeenCalled();
+    expect(store.appendPinterestItems).not.toHaveBeenCalled();
+  });
+
+  it('aborts (no fetch) when a concurrent repoint wins the heal race', async () => {
+    store.getBoard.mockResolvedValue({
+      id: 'mb-1',
+      items: [],
+      pinterest: { feedUrl: 'https://www.pinterest.com/j/b/sec.rss', boardUrl: 'https://www.pinterest.com/j/b/sec/' },
+    });
+    // User repointed to a DIFFERENT board mid-heal: guard didn't write; the
+    // persisted feed is neither the section nor the healed board feed.
+    store.healPinterestFeed.mockResolvedValue({
+      board: { id: 'mb-1', items: [], pinterest: { feedUrl: 'https://www.pinterest.com/other/board.rss', boardUrl: 'https://www.pinterest.com/other/board/' } },
+      changed: false,
+    });
+
+    const result = await syncPinterestBoard('mb-1');
+    expect(result).toMatchObject({ aborted: true, added: 0 });
+    // Must NOT silently sync the user's newly-repointed feed.
+    expect(net.fetchPublicText).not.toHaveBeenCalled();
+    expect(store.appendPinterestItems).not.toHaveBeenCalled();
   });
 
   it('skips a pin whose download returns a non-image body', async () => {

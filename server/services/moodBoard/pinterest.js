@@ -105,11 +105,23 @@ export async function syncPinterestBoard(boardId) {
       fromFeedUrl: staleFeedUrl, feedUrl: healedFeedUrl, boardUrl: healedBoardUrl,
     });
     board = healed;
-    if (changed) console.log(`📌 Pinterest sync: board ${boardId} feed corrected to ${healedFeedUrl} (section URL has no RSS)`);
+    if (changed) {
+      // The heal persisted a feed-URL correction — emit now so federation/UI
+      // pick it up even if the fetch below fails (otherwise peers keep the stale
+      // section feed until a later successful sync).
+      emitRecordUpdated('moodBoard', boardId);
+      console.log(`📌 Pinterest sync: board ${boardId} feed corrected to ${healedFeedUrl} (section URL has no RSS)`);
+    }
   }
-  // A concurrent unlink during the heal leaves the board without a link — bail.
-  const feedUrl = board.pinterest?.feedUrl;
-  if (!feedUrl) throw new ServerError('This board is not linked to a Pinterest board', { status: 400, code: 'NOT_LINKED' });
+  // This sync is committed to `healedFeedUrl` (== staleFeedUrl when no heal was
+  // needed). If a concurrent unlink/repoint during the heal left the persisted
+  // board on a different feed, abort rather than sync a feed this run wasn't
+  // started for — same guard the locked append applies via expectedFeedUrl.
+  const feedUrl = healedFeedUrl;
+  if (board.pinterest?.feedUrl !== feedUrl) {
+    console.log(`📌 Pinterest sync: board ${boardId} aborted — link changed mid-sync`);
+    return { board, added: 0, feedCount: 0, aborted: true };
+  }
 
   const xml = await fetchPublicText(feedUrl, { timeoutMs: FEED_TIMEOUT_MS, headers: FEED_HEADERS });
   if (!xml) throw new ServerError('Could not fetch the Pinterest feed (it may be private or rate-limited)', { status: 502, code: 'FEED_FETCH_FAILED' });
