@@ -32,9 +32,12 @@ open ones that together explain this incident**, so we did NOT file a duplicate:
 **Our signature differs from both** (`watchdog timeout: no checkins from watchdogd`
 vs #3267's process-kill exception and #3186's `completeMemory` panic), but it is
 the same family: a system-level GPU/Metal driver stall under sustained ML load on
-new Apple Silicon, escalating to a `watchdogd` reboot on M5. So our exact panic
-string may be a third manifestation — worth adding as a data-point comment on
-#3186 (the panic tracker) when convenient, rather than a fresh issue.
+new Apple Silicon, escalating to a `watchdogd` reboot on M5. Our exact panic
+string is a harsher manifestation of #3267's watchdog mechanism (process kill →
+full reboot), so we **posted it as a data-point comment on #3267**
+(https://github.com/ml-explore/mlx/issues/3267#issuecomment-4819498999, 2026-06-27)
+rather than filing a duplicate, cross-referencing #3186 as the related panic
+tracker.
 
 **Action taken (#1329):** PortOS now sets `AGX_RELAX_CDM_CTXSTORE_TIMEOUT=1`
 automatically in `scripts/train_mflux_lora.py` (mirrors the `generate_ltx2.py`
@@ -286,6 +289,7 @@ doesn't lose which version was under test.
 |---|---|---|---|---|---|
 | (baseline, not run) | 0.17.5 | 0.30.6 | 0.30.6 | known-bad (3 panics 06-13/14) | none captured (sudo was off) |
 | 2026-06-14 candidate #1 | 0.17.5 | **0.31.2** | **0.31.2** | ✅ **VALIDATED (seg-ON)** — full LoRA run `d36562a0` completed to adapter extraction (4B bf16, 768px, 4×150-step segs); box up, no panic. Pinned 2026-06-27 (#1329). | telemetry captured; GPU/power normal through the run |
+| 2026-06-27 AGX fix (seg-OFF) | 0.17.5 | 0.31.2 | 0.31.2 | ⏳ **IN FLIGHT** — `flux2-klein-9b` bf16, 768px, **segmentation OFF**, `AGX_RELAX_CDM_CTXSTORE_TIMEOUT=1` set, under `caffeinate -s`. Scratch run `data/training-runs/_validate-agx-segoff/` (run.log + powermetrics.log). The real seg-OFF test of the env-var fix on the exact panic config. **If still IN FLIGHT after a reboot → the AGX fix did NOT prevent the panic on 9B seg-OFF** (read scratch powermetrics.log). | telemetry capturing |
 
 **Verdict & pin (2026-06-27, #1329).** The candidate #1 "IN FLIGHT" row above was
 the *seg-OFF scratch* run, which was **manually stopped clean at step ~11** (never
