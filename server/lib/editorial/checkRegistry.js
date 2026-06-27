@@ -3599,6 +3599,171 @@ export const EDITORIAL_CHECKS = [
     },
   },
   {
+    id: 'pov.economy',
+    sources: ['reverseOutline'],
+    label: 'POV economy (count vs series length, late-introduced viewpoints)',
+    description:
+      'Deterministic structural read of the reverse-outline POV-per-scene map at the SERIES level: flags too many viewpoints for the run length (N POV characters across M issues, each barely developed) and a POV introduced too late to earn its place (first appears in the final stretch of the run and holds only a scene or two). The acceptable POV-to-issue ratio and the late-introduction window are per-series tunable. Complements pov.justified (#1295, which asks whether each individual viewpoint earns an arc) by judging the viewpoint ROSTER as a whole. Degrades gracefully when the outline carries no issue numbers — without a series length neither signal can be judged, so the check stays silent.',
+    scope: 'series',
+    kind: 'deterministic',
+    category: 'arc',
+    severityDefault: 'low',
+    defaultEnabled: true,
+    configSchema: z.object({
+      // Max POV holders per issue before the roster reads as too crowded for the
+      // run length. 0.5 ≈ one viewpoint per two issues; a 12-issue run supports ~6
+      // POVs, a 7th-and-up trips the check. Raise for ensemble books, lower for a
+      // tight single-lead arc.
+      maxPovPerIssue: z.number().min(0.05).max(10).default(0.5),
+      // Don't judge POV economy on a run shorter than this many issues — a one- or
+      // two-issue book is too short for a count-vs-length verdict.
+      minIssues: z.number().int().min(1).max(100).default(3),
+      // A POV whose FIRST appearance falls this far into the issue span (0–1) is
+      // "late". 0.8 ⇒ the final fifth of the run. Only fires alongside the
+      // underdevelopment guard below.
+      lateIntroIssueFraction: z.number().min(0).max(1).default(0.8),
+      // A late POV is flagged only when it is ALSO underdeveloped — held in this
+      // many scenes or fewer. 0 disables the late-introduction check.
+      lateIntroMaxScenes: z.number().int().min(0).max(50).default(2),
+    }),
+    configFields: [
+      {
+        key: 'maxPovPerIssue',
+        label: 'Max POV characters per issue',
+        type: 'number',
+        min: 0.05,
+        max: 10,
+        step: 0.05,
+        help: 'Flag the roster as too crowded when POV count exceeds this many viewpoints per issue. 0.5 ≈ one viewpoint every two issues (a 12-issue run supports ~6 POVs). Raise for an ensemble book, lower for a single-lead arc.',
+      },
+      {
+        key: 'minIssues',
+        label: 'Minimum issues to judge economy',
+        type: 'number',
+        min: 1,
+        max: 100,
+        step: 1,
+        help: 'Skip the economy verdict for a run shorter than this — too short for a count-vs-length judgment.',
+      },
+      {
+        key: 'lateIntroIssueFraction',
+        label: 'Late-introduction window (fraction of run)',
+        type: 'number',
+        min: 0,
+        max: 1,
+        step: 0.05,
+        help: 'A POV whose first appearance falls this far into the issue span is "late". 0.8 = the final fifth of the run.',
+      },
+      {
+        key: 'lateIntroMaxScenes',
+        label: 'Late POV underdevelopment threshold (max scenes)',
+        type: 'number',
+        min: 0,
+        max: 50,
+        step: 1,
+        help: 'Flag a late-introduced POV only when it is also underdeveloped — held in this many scenes or fewer. 0 disables the late-introduction check.',
+      },
+    ],
+    // Needs a generated reverse outline with at least one POV-tagged scene to read.
+    gate: (ctx) => Array.isArray(ctx.reverseOutline)
+      && ctx.reverseOutline.some((s) => s && typeof s.povCharacter === 'string' && s.povCharacter.trim()),
+    run: (ctx) => {
+      const scenes = Array.isArray(ctx.reverseOutline) ? ctx.reverseOutline : [];
+      const cfg = ctx.config || {};
+      const maxPovPerIssue = Number.isFinite(cfg.maxPovPerIssue) ? cfg.maxPovPerIssue : 0.5;
+      const minIssues = Number.isInteger(cfg.minIssues) ? cfg.minIssues : 3;
+      const lateFraction = Number.isFinite(cfg.lateIntroIssueFraction) ? cfg.lateIntroIssueFraction : 0.8;
+      const lateMaxScenes = Number.isInteger(cfg.lateIntroMaxScenes) ? cfg.lateIntroMaxScenes : 2;
+      const severity = ctx.severityDefault || 'low';
+
+      // 1 or 2 POV characters is never a "too many viewpoints" roster, whatever the
+      // ratio — the dilution concern is fundamentally about an absolute crowd, and a
+      // 2-POV / 3-issue book shares the same 0.67 ratio as the 8-POV / 12-issue book
+      // the check targets. So the count signal also requires this absolute floor; the
+      // ratio is the tunable, this is a structural truth (not a knob).
+      const MIN_POV_TO_FLAG = 3;
+
+      // POV holder → { name, scenes[], firstIssue }, keyed by normalized name so
+      // casing/spacing variants collapse into one holder (mirrors pov.justified).
+      // Preserves first-appearance order (scenes arrive sequence-ordered).
+      const holders = new Map();
+      const issueSet = new Set();
+      for (const s of scenes) {
+        if (!s || typeof s !== 'object') continue;
+        const issueNumber = Number.isInteger(s.issueNumber) ? s.issueNumber : null;
+        if (issueNumber != null) issueSet.add(issueNumber);
+        const pov = typeof s.povCharacter === 'string' ? s.povCharacter.trim() : '';
+        if (!pov) continue;
+        const key = normalizeName(pov);
+        if (!key) continue;
+        let entry = holders.get(key);
+        if (!entry) { entry = { name: pov, key, scenes: [], firstIssue: issueNumber }; holders.set(key, entry); }
+        entry.scenes.push(s);
+        if (issueNumber != null && (entry.firstIssue == null || issueNumber < entry.firstIssue)) {
+          entry.firstIssue = issueNumber;
+        }
+      }
+      const povCount = holders.size;
+      if (povCount === 0) return [];
+
+      // Issue count drives the count-vs-length ratio AND locates "late". Without
+      // issue numbers we can't judge against series length, so both signals stay
+      // silent (graceful degradation — the outline rode peer sync and an older /
+      // hand-edited peer may carry untagged scenes).
+      const issueCount = issueSet.size;
+
+      const findings = [];
+      const flag = ({ location, problem, suggestion, anchorQuote = '', issueNumber = null }) =>
+        findings.push({ severity, category: 'arc', location, problem, suggestion, anchorQuote, issueNumber });
+
+      // 1) Too many POVs for the run length. Only when the run is long enough to
+      //    judge (minIssues), the roster clears the absolute floor, and the count
+      //    exceeds the configured viewpoints-per-issue budget.
+      if (issueCount >= minIssues && maxPovPerIssue > 0 && povCount >= MIN_POV_TO_FLAG) {
+        const budget = Math.floor(issueCount * maxPovPerIssue);
+        if (povCount > budget) {
+          const names = [...holders.values()].map((h) => h.name).join(', ');
+          const perIssues = (1 / maxPovPerIssue).toFixed(1);
+          flag({
+            location: 'Series',
+            problem: `${povCount} POV characters across ${issueCount} issue${issueCount === 1 ? '' : 's'} (${names}) — more viewpoints than the run length can develop. At roughly one viewpoint per ${perIssues} issues this run supports about ${budget}; each viewpoint past that gets less room and the narrative fragments.`,
+            suggestion: `Consolidate viewpoints — fold the thinnest POVs into a stronger character's perspective, or cut them — until the roster fits the run (about ${budget} for ${issueCount} issues), or raise "Max POV characters per issue" if this is a deliberate ensemble.`,
+          });
+        }
+      }
+
+      // 2) Late-introduced, underdeveloped POV. A viewpoint whose first appearance
+      //    lands in the final stretch of the run AND that holds only a scene or two
+      //    never earns its place. Needs an issue span to locate "late".
+      if (lateMaxScenes > 0 && issueCount >= minIssues) {
+        const issues = [...issueSet];
+        const minIssue = Math.min(...issues);
+        const maxIssue = Math.max(...issues);
+        const span = maxIssue - minIssue;
+        if (span > 0) {
+          for (const holder of holders.values()) {
+            if (holder.firstIssue == null) continue;
+            const sceneCount = holder.scenes.length;
+            if (sceneCount > lateMaxScenes) continue;
+            const position = (holder.firstIssue - minIssue) / span;
+            if (position < lateFraction) continue;
+            const first = holder.scenes[0];
+            const anchorQuote = typeof first?.anchorQuote === 'string' ? first.anchorQuote : '';
+            flag({
+              location: `Issue ${holder.firstIssue}: ${sceneLabel(first)}`,
+              problem: `"${holder.name}" first takes the viewpoint in issue ${holder.firstIssue} of ${minIssue}–${maxIssue} and holds POV in only ${sceneCount} scene${sceneCount === 1 ? '' : 's'} — a viewpoint introduced too late to develop. A fresh POV arriving in the final stretch reads as a structural seam rather than an earned perspective.`,
+              suggestion: `Seed "${holder.name}"'s viewpoint earlier so it has room to pay off, route these late scenes through an established POV character, or cut the viewpoint if it exists only to deliver late information.`,
+              anchorQuote,
+              issueNumber: holder.firstIssue,
+            });
+          }
+        }
+      }
+
+      return findings;
+    },
+  },
+  {
     id: 'pov.head-hopping',
     sources: ['manuscript', 'reverseOutline', 'series.styleGuide'],
     label: 'Head-hopping / POV discipline within scenes',
