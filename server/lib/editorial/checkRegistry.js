@@ -5426,10 +5426,12 @@ export const EDITORIAL_CHECKS = [
       const bandHigh = target + sceneTolerance;
       const scenes = readingLevelByScene(ctx.manuscript, minSceneWords);
       if (scenes.length >= 2) {
+        // How far a grade sits OUTSIDE the band (0 inside; positive when out) —
+        // the filter and the worst-first sort share this one definition.
+        const outsideBand = (g) => Math.max(g - bandHigh, bandLow - g, 0);
         const outliers = scenes
-          .filter((s) => s.grade < bandLow || s.grade > bandHigh)
-          .map((s) => ({ ...s, deviation: s.grade > bandHigh ? s.grade - bandHigh : bandLow - s.grade }))
-          .sort((a, b) => b.deviation - a.deviation)
+          .filter((s) => outsideBand(s.grade) > 0)
+          .sort((a, b) => outsideBand(b.grade) - outsideBand(a.grade))
           .slice(0, maxSceneFindings);
         for (const s of outliers) {
           const tooHard = s.grade > bandHigh;
