@@ -317,6 +317,16 @@ display asleep / lid closed under `caffeinate -s &`, or drive the box headless o
 SSH from another machine. With no WindowServer compositing the watchdog has nothing
 to protect and largely stops firing.
 
+> **Validated on M5 Max (2026-06-27): the env var alone is NOT enough for heavy
+> runs.** A 9B-bf16 segmentation-OFF run *with `AGX_RELAX_CDM_CTXSTORE_TIMEOUT=1`
+> set but the display active* still hard-rebooted within minutes. Telemetry showed
+> Nominal thermal pressure (so it's a GPU **driver hang**, not heat) and the
+> paniclog had `WindowServer` as the top-CPU thread (active-display contention).
+> For a **9B / heavy bf16 run you must also keep the display off** (lid closed /
+> asleep / SSH headless) — and prefer **segmentation ON** (the shipped default),
+> which on this box completed a full 4B run cleanly. `caffeinate -s` alone does
+> *not* turn the display off; it only prevents system sleep.
+
 **Mitigations already in place**:
 - `AGX_RELAX_CDM_CTXSTORE_TIMEOUT=1` is set automatically by the trainer (the
   maintainer-confirmed workaround for mlx #3267); the run log shows
