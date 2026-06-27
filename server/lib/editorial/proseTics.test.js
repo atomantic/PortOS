@@ -3,12 +3,14 @@ import {
   tokenizeWords,
   splitSentences,
   findFilterWords,
+  findHedgeWords,
   findCrutchWords,
   findAdverbs,
   findPassiveVoice,
   filterPassiveVoice,
   findGestures,
   FILTER_WORDS,
+  HEDGE_WORDS,
   CRUTCH_WORDS,
 } from './proseTics.js';
 
@@ -63,9 +65,48 @@ describe('findFilterWords', () => {
     expect(findFilterWords('The sawmill was loud.')).toEqual([]);
   });
 
+  it('flags modal-perception phrase additions ("could see", "found himself")', () => {
+    const entries = findFilterWords('She could see the door; he found himself running.').map((h) => h.entry);
+    expect(entries).toContain('could see');
+    expect(entries).toContain('found himself');
+  });
+
   it('seed list is frozen and lowercase', () => {
     expect(Object.isFrozen(FILTER_WORDS)).toBe(true);
     for (const w of FILTER_WORDS) expect(w).toBe(w.toLowerCase());
+  });
+});
+
+describe('findHedgeWords', () => {
+  it('flags metaphorical-distance, hedge, and weasel markers', () => {
+    const entries = findHedgeWords(
+      'It was as if he knew. Part of him almost felt it. I kind of think so, no doubt.',
+    ).map((h) => h.entry);
+    expect(entries).toContain('as if');
+    expect(entries).toContain('part of him');
+    expect(entries).toContain('almost');
+    expect(entries).toContain('kind of');
+    expect(entries).toContain('no doubt');
+  });
+
+  it('matches multi-word phrases whole, longest-first ("as if" not bare "if")', () => {
+    const hits = findHedgeWords('She moved as if weightless.');
+    expect(hits.map((h) => h.anchor.toLowerCase())).toContain('as if');
+  });
+
+  it('respects allowWords and extraWords', () => {
+    expect(findHedgeWords('Almost there.', { allowWords: ['almost'] })).toEqual([]);
+    const extra = findHedgeWords('It was basically fine.', { extraWords: ['basically'] });
+    expect(extra.map((h) => h.entry)).toContain('basically');
+  });
+
+  it('does not match substrings (almsot/almost boundary)', () => {
+    expect(findHedgeWords('The almshouse stood empty.')).toEqual([]);
+  });
+
+  it('seed list is frozen and lowercase', () => {
+    expect(Object.isFrozen(HEDGE_WORDS)).toBe(true);
+    for (const w of HEDGE_WORDS) expect(w).toBe(w.toLowerCase());
   });
 });
 

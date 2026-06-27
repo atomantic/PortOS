@@ -6,6 +6,7 @@
  * Word-level scanners backing the deterministic "copy-edit" check group in
  * checkRegistry.js:
  *   - findFilterWords()  → `prose.filter-words`   (distancing verbs)
+ *   - findHedgeWords()   → `prose.hedge-words`    (hedge / weasel distance markers)
  *   - findCrutchWords()  → `prose.crutch-words`   (intensifiers / fillers)
  *   - findAdverbs()      → `prose.adverbs`        (-ly adverbs + dialogue-tag adverbs)
  *   - findPassiveVoice() → `prose.passive-voice`  (be-verb + past-participle heuristic)
@@ -31,6 +32,35 @@ export const FILTER_WORDS = Object.freeze([
   'saw', 'watched', 'noticed', 'realized', 'realised', 'felt', 'heard',
   'seemed', 'looked', 'wondered', 'thought', 'knew', 'decided', 'sensed',
   'observed', 'spotted', 'glimpsed', 'began to', 'started to',
+  // Modal-perception and reflexive constructions are the same distancing tic in
+  // phrase form ("she could see the door" → "the door stood open"; "he found
+  // himself running" → "he ran"). Matched as whole phrases (longest-first).
+  'could see', 'could hear', 'could feel', 'could smell', 'could tell',
+  'found himself', 'found herself', 'found themselves', 'found myself',
+]);
+
+// Hedge / weasel distance markers (#1621) — the SECOND distancing bucket that
+// `prose.filter-words` (perception verbs) misses. Three families of softeners
+// that quietly back the reader out of the moment:
+//   - metaphorical distance — "it was as if he knew", "somewhere deep inside",
+//     "almost felt", "part of him";
+//   - dialogue / cognitive hedges — "I kind of think", "sort of felt",
+//     "more or less", "I suppose";
+//   - cognitive weasel words — "surely", "no doubt", "obviously", "of course".
+// Density-scaled like the other word lists and user-extendable (extraWords) /
+// mutable (allowWords). Multi-word entries match as whole phrases with flexible
+// internal whitespace, longest-first (so "as if" wins over a bare "if").
+export const HEDGE_WORDS = Object.freeze([
+  // Metaphorical distance — narration that gestures AT a feeling from arm's length.
+  'as if', 'as though', 'almost', 'somehow', 'somewhat', 'deep inside',
+  'deep down', 'somewhere inside', 'somewhere deep', 'part of him',
+  'part of her', 'part of them', 'something inside', 'in a way', 'in some way',
+  // Dialogue / cognitive hedges — the speaker (or narrator) softens the claim.
+  'kind of', 'sort of', 'more or less', 'i guess', 'i suppose', 'i think',
+  'i feel like', 'maybe', 'perhaps', 'possibly', 'probably',
+  // Cognitive weasel words — assert certainty in place of earning it on the page.
+  'surely', 'no doubt', 'obviously', 'clearly', 'of course', 'naturally',
+  'undoubtedly', 'evidently', 'presumably', 'needless to say', 'arguably',
 ]);
 
 // Crutch / filler words — intensifiers and hedges that almost always delete
@@ -243,6 +273,18 @@ function scanList(text, seed, opts) {
  */
 export function findFilterWords(text, opts = {}) {
   return scanList(text, FILTER_WORDS, opts);
+}
+
+/**
+ * Hedge / weasel distance-marker occurrences (#1621). One entry per match. Shares
+ * the same allow/extra plumbing as the other word lists, so a series can mute a
+ * noisy default ("almost") or add house-style hedges.
+ * @param {string} text
+ * @param {{ allowWords?: string[], extraWords?: string[] }} [opts]
+ * @returns {Array<{ entry: string, index: number, anchor: string }>}
+ */
+export function findHedgeWords(text, opts = {}) {
+  return scanList(text, HEDGE_WORDS, opts);
 }
 
 /**

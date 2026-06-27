@@ -39,6 +39,7 @@ import { findSaidBookisms, findUnattributedDialogueRuns, attributeDialogueByOwne
 import { findItalicThoughts } from './italicThoughts.js';
 import {
   findFilterWords,
+  findHedgeWords,
   findCrutchWords,
   findAdverbs,
   findPassiveVoice,
@@ -5470,6 +5471,41 @@ export const EDITORIAL_CHECKS = [
       noun: 'filter words',
       problem: (count, rate, anchor) => `${count} filter word${count === 1 ? '' : 's'} (e.g. "${anchor}") — about ${rate}/1000 words. Distancing verbs put a layer of narration between the reader and the experience.`,
       suggestion: 'Collapse to direct experience — "she saw the door open" → "the door opened" — or add intentional uses to the allowlist.',
+    }),
+  },
+  {
+    id: 'prose.hedge-words',
+    sources: ['manuscript'],
+    label: 'Hedge / weasel words (distance markers)',
+    description:
+      'Flags hedge and weasel constructions that soften prose and back the reader out of the moment — metaphorical distance ("as if", "somewhere deep inside", "almost", "part of him"), dialogue/cognitive hedges ("kind of", "sort of", "I suppose", "more or less"), and cognitive weasel words ("surely", "no doubt", "obviously", "of course"). Density-scaled per-1000-word frequency: an occasional hedge is fine, a steady drumbeat reads as a narrator who won\'t commit. Separate from the perception-verb bucket in prose.filter-words.',
+    scope: 'issue',
+    kind: 'deterministic',
+    category: 'style',
+    severityDefault: 'low',
+    defaultEnabled: true,
+    needsManuscript: true,
+    configSchema: z.object({
+      // Per-1000-word rate at/above which a section is flagged.
+      densityPer1000: z.number().min(0).max(50).default(7),
+      // Cap findings per run so a heavy draft can't flood the review.
+      maxFindings: z.number().int().min(1).max(50).default(20),
+      // House-style allowlist / extra hedge words (comma- or newline-separated).
+      allowWords: z.string().default(''),
+      extraWords: z.string().default(''),
+    }),
+    configFields: [
+      { key: 'densityPer1000', label: 'Hedge-word rate to flag (per 1000 words)', type: 'number', min: 0, max: 50, step: 1, help: 'Flag a section whose hedge/weasel-word frequency per 1000 words is at or above this. One "perhaps" is fine; a steady drumbeat is the tic.' },
+      { key: 'maxFindings', label: 'Max findings per run', type: 'number', min: 1, max: 50, step: 1, help: 'Cap findings so a heavy draft can not flood the review.' },
+      { key: 'allowWords', label: 'House-style allowlist', type: 'text', help: 'Hedge words to leave alone (comma-separated or one per line).' },
+      { key: 'extraWords', label: 'Extra hedge words to flag', type: 'text', help: 'Series-specific hedges/weasel words to add (comma-separated or one per line).' },
+    ],
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    run: (ctx) => runDensityCheck(ctx, {
+      scan: (text, cfg) => findHedgeWords(text, { allowWords: splitPhraseList(cfg.allowWords), extraWords: splitPhraseList(cfg.extraWords) }),
+      noun: 'hedge words',
+      problem: (count, rate, anchor) => `${count} hedge/weasel word${count === 1 ? '' : 's'} (e.g. "${anchor}") — about ${rate}/1000 words. Hedges and weasel words soften the prose and distance the reader from a committed, dramatized moment.`,
+      suggestion: 'Commit to the moment — drop the hedge or dramatize the feeling directly ("part of him almost felt" → "he felt") — or add intentional uses to the allowlist.',
     }),
   },
   {
