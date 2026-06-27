@@ -368,6 +368,10 @@ export default function PipelineEditorialChecks() {
   useEffect(() => {
     if (!universeId) { setCanonEntities([]); return undefined; }
     let active = true;
+    // Drop the previous universe's canon immediately so a series switch (A→B)
+    // whose findings fetch lands before this one can't linkify B's findings with
+    // A's entities — a brief no-chips window is correct, stale chips are not.
+    setCanonEntities([]);
     getUniverse(universeId, { silent: true })
       .then((universe) => { if (active) setCanonEntities(canonEntitiesFromUniverse(universe)); })
       .catch(() => { if (active) setCanonEntities([]); });
