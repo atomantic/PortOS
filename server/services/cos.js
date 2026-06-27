@@ -699,6 +699,11 @@ async function dequeueNextTask() {
 
   if (availableSlots <= 0) return;
 
+  // This instance's federation id, resolved once per cycle so the priority
+  // tiers below can skip tasks a peer holds a live lease on (#1650). Warm path
+  // is the cheap cached read; only the cold boot creates the identity.
+  const instanceId = await ensureInstanceId();
+
   const perProjectLimit = state.config.maxConcurrentAgentsPerProject || state.config.maxConcurrentAgents;
   const agentsByProject = countRunningAgentsByProject(state.agents);
   const spawnProjectCounts = { ...agentsByProject };
@@ -802,6 +807,14 @@ async function dequeueNextTask() {
 
   for (const task of pendingUserTasks) {
     if (spawned >= availableSlots) break;
+    // A federated peer holds a live lease on this task (#1650) — it's being
+    // worked on the other machine. Skip it during candidate selection so it
+    // doesn't consume this cycle's spawn slot (the spawn guard would return
+    // null anyway) and starve later unclaimed tasks.
+    if (isHeldByOther(task.metadata, instanceId)) {
+      emitLog('debug', `Skipping user task ${task.id} — live lease held by peer instance ${getClaimOwner(task.metadata)}`, { taskId: task.id });
+      continue;
+    }
     if (await blockIfExceedsMaxSpawns(task, 'user')) continue;
     const userTask = { ...task, taskType: 'user' };
     if (!canSpawn(userTask)) continue;
@@ -862,7 +875,8 @@ async function dequeueNextTask() {
         spawnProjectCounts,
         isOnCooldown: (appId) => isAppOnCooldown(appId, state.config.appReviewCooldownMs),
         cooldownExempt: isCooldownExemptTask,
-        extraSkip: isDisabledAnalysisType
+        extraSkip: isDisabledAnalysisType,
+        heldByOther: (task) => isHeldByOther(task.metadata, instanceId)
       });
       for (const task of wouldSpawn) {
         emitLog('info', `[dry-run] CoS auto-run would spawn system task: ${task.id}`, { taskId: task.id, domainAutonomy: 'cos' });
@@ -871,6 +885,13 @@ async function dequeueNextTask() {
   } else {
     for (const task of autoApproved) {
       if (spawned >= autonomousSpawnCeiling) break;
+      // A federated peer holds a live lease on this task (#1650) — skip it
+      // during candidate selection so it doesn't consume an autonomous slot
+      // the spawn guard would just reject.
+      if (isHeldByOther(task.metadata, instanceId)) {
+        emitLog('debug', `Skipping system task ${task.id} — live lease held by peer instance ${getClaimOwner(task.metadata)}`, { taskId: task.id });
+        continue;
+      }
       if (await blockIfExceedsMaxSpawns(task, 'internal')) continue;
       // Skip improvement tasks whose type was disabled after queuing
       if (isDisabledAnalysisType(task)) {

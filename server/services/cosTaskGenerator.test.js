@@ -66,6 +66,41 @@ describe('dry-run hook wiring matches each engine execute path', () => {
   });
 });
 
+// #1650: once a peer's claim/lease is visible via task-record federation, a
+// task whose live lease belongs to ANOTHER instance must be skipped during
+// candidate selection — BEFORE the engine emits `task:ready` + trackSpawn.
+// Otherwise that peer-claimed task (often the highest-priority pick) consumes
+// this instance's spawn slot every cycle (the spawn guard then returns null,
+// spawning nothing) and starves later unclaimed tasks. Both spawn engines
+// (dequeueNextTask in cos.js, evaluateTasks here) must apply it, in both their
+// execute loops AND their dry-run plan.
+describe('peer-claim skip during candidate selection (#1650)', () => {
+  it('both engines import isHeldByOther from the shared claim module', () => {
+    expect(COS_SRC).toContain("from './cosTaskClaim.js'");
+    expect(COS_SRC).toMatch(/import\s*\{[^}]*isHeldByOther[^}]*\}\s*from\s*'\.\/cosTaskClaim\.js'/);
+    expect(GEN_SRC).toMatch(/import\s*\{[^}]*isHeldByOther[^}]*\}\s*from\s*'\.\/cosTaskClaim\.js'/);
+  });
+
+  it('both engines resolve this instance id once per cycle via ensureInstanceId', () => {
+    expect(COS_SRC).toContain('const instanceId = await ensureInstanceId();');
+    expect(GEN_SRC).toContain('const instanceId = await ensureInstanceId();');
+  });
+
+  it('both engines skip peer-held tasks in their EXECUTE candidate loops', () => {
+    // Each engine must have the live-lease skip in BOTH the user-task and the
+    // auto-approved tiers — at least two execute-path skip sites per engine.
+    const cosSkips = COS_SRC.match(/if\s*\(isHeldByOther\(task\.metadata,\s*instanceId\)\)/g) || [];
+    const genSkips = GEN_SRC.match(/if\s*\(isHeldByOther\(task\.metadata,\s*instanceId\)\)/g) || [];
+    expect(cosSkips.length).toBeGreaterThanOrEqual(2);
+    expect(genSkips.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('both engines pass heldByOther into their dry-run plan so it matches execute', () => {
+    expect(COS_SRC).toContain('heldByOther: (task) => isHeldByOther(task.metadata, instanceId)');
+    expect(GEN_SRC).toContain('heldByOther: (task) => isHeldByOther(task.metadata, instanceId)');
+  });
+});
+
 // isCooldownExemptTask is the single source of truth for "this task bypasses the
 // per-app review cooldown." The perpetual-string case is the subtle one: a
 // perpetual task is queued with `metadata.perpetual === true`, but that bare
@@ -295,6 +330,27 @@ describe('selectDryRunAutoApproved', () => {
     const out = await selectDryRunAutoApproved(tasks, {
       ...baseCtx,
       extraSkip: (t) => t.metadata?.analysisType === 'security'
+    });
+    expect(out.map(t => t.id)).toEqual(['2']);
+  });
+
+  it('skips tasks a federated peer holds a live lease on (#1650)', async () => {
+    const tasks = [task('1', { claimedBy: 'peer' }), task('2'), task('3', { claimedBy: 'peer' })];
+    const out = await selectDryRunAutoApproved(tasks, {
+      ...baseCtx,
+      heldByOther: (t) => t.metadata?.claimedBy === 'peer'
+    });
+    expect(out.map(t => t.id)).toEqual(['2']);
+  });
+
+  it('a peer-held task does not consume virtual project capacity (#1650 skip-before-increment)', async () => {
+    // Both tasks on appX, per-project limit 1. Task 1 is peer-held → it must not
+    // burn appX's only slot, so task 2 (claimable here) still fits.
+    const tasks = [task('1', { app: 'appX', claimedBy: 'peer' }), task('2', { app: 'appX' })];
+    const out = await selectDryRunAutoApproved(tasks, {
+      ...baseCtx,
+      perProjectLimit: 1,
+      heldByOther: (t) => t.metadata?.claimedBy === 'peer'
     });
     expect(out.map(t => t.id)).toEqual(['2']);
   });

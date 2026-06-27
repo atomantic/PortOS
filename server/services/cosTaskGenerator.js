@@ -37,6 +37,8 @@ import { getTaskTypeConfidence } from './taskLearning.js';
 import { generateProactiveTasks as generateMissionTasks } from './missions.js';
 import { isRecoveryTask } from './recoveryTasks.js';
 import { getCodeReviewDefaults } from './codeReview.js';
+import { isHeldByOther, getClaimOwner } from './cosTaskClaim.js';
+import { ensureInstanceId } from './instances.js';
 
 /**
  * Block a task that has exceeded the max spawn limit. Returns true if blocked.
@@ -116,6 +118,7 @@ export function isCooldownExemptTask(task) {
  * @param {(appId: string) => Promise<boolean>} ctx.isOnCooldown - async cooldown probe
  * @param {(task: object) => boolean} [ctx.cooldownExempt] - true ⇒ skip the cooldown gate for this task
  * @param {(task: object) => boolean} [ctx.extraSkip] - true ⇒ task ineligible (engine-specific gate)
+ * @param {(task: object) => boolean} [ctx.heldByOther] - true ⇒ a federated peer holds a live lease on this task (#1650); the execute path skips it before spawning, so the dry-run plan must too
  * @returns {Promise<object[]>} the tasks execute mode would spawn, in order
  */
 export async function selectDryRunAutoApproved(autoApproved, ctx) {
@@ -126,7 +129,8 @@ export async function selectDryRunAutoApproved(autoApproved, ctx) {
     spawnProjectCounts = {},
     isOnCooldown,
     cooldownExempt = () => false,
-    extraSkip = () => false
+    extraSkip = () => false,
+    heldByOther = () => false
   } = ctx;
 
   const counts = { ...spawnProjectCounts };
@@ -135,6 +139,7 @@ export async function selectDryRunAutoApproved(autoApproved, ctx) {
 
   for (const task of autoApproved) {
     if (spawned >= availableSlots) break;
+    if (heldByOther(task)) continue;
     if (exceedsMaxSpawns(task)) continue;
     if (extraSkip(task)) continue;
     const appId = task.metadata?.app;
@@ -546,9 +551,17 @@ async function spawnPriority0OnDemand(ctx) {
  * autonomous action budget.
  */
 async function spawnPriority1UserTasks(ctx) {
-  const { pendingUserTasks, availableSlots, perProjectLimit, tasksToSpawn, canSpawnTask, trackSpawn } = ctx;
+  const { pendingUserTasks, availableSlots, perProjectLimit, tasksToSpawn, canSpawnTask, trackSpawn, instanceId } = ctx;
   for (const task of pendingUserTasks) {
     if (tasksToSpawn.length >= availableSlots) break;
+    // A federated peer holds a live lease on this task (#1650) — it's being
+    // worked on the other machine. Skip it during candidate selection so it
+    // doesn't consume this cycle's spawn slot (the spawn guard would return
+    // null anyway) and starve later unclaimed tasks.
+    if (isHeldByOther(task.metadata, instanceId)) {
+      emitLog('debug', `Skipping user task ${task.id} — live lease held by peer instance ${getClaimOwner(task.metadata)}`, { taskId: task.id });
+      continue;
+    }
     if (await blockIfExceedsMaxSpawns(task, 'user')) continue;
     const userTask = { ...task, taskType: 'user' };
     if (!canSpawnTask(userTask)) {
@@ -573,20 +586,21 @@ async function spawnPriority1UserTasks(ctx) {
  * by `autonomousSlotCeiling` (the CoS action budget, #711).
  */
 async function spawnPriority2AutoApproved(ctx) {
-  const { state, cosTaskData, cosAutonomyMode, autonomousSlotCeiling, perProjectLimit, spawnProjectCounts, tasksToSpawn, canSpawnTask, trackSpawn } = ctx;
+  const { state, cosTaskData, cosAutonomyMode, autonomousSlotCeiling, perProjectLimit, spawnProjectCounts, tasksToSpawn, canSpawnTask, trackSpawn, instanceId } = ctx;
 
   if (tasksToSpawn.length < autonomousSlotCeiling && cosTaskData.exists && cosAutonomyMode !== 'execute') {
     if (cosAutonomyMode === 'dry-run') {
       // Log only the tasks execute mode would ACTUALLY spawn — applying the same
-      // max-spawns / cooldown / per-project gates against virtual capacity —
-      // rather than every auto-approved task regardless of eligibility.
+      // peer-lease / max-spawns / cooldown / per-project gates against virtual
+      // capacity — rather than every auto-approved task regardless of eligibility.
       const wouldSpawn = await selectDryRunAutoApproved(cosTaskData.autoApproved || [], {
         availableSlots: autonomousSlotCeiling,
         alreadySpawned: tasksToSpawn.length,
         perProjectLimit,
         spawnProjectCounts,
         isOnCooldown: (appId) => isAppOnCooldown(appId, state.config.appReviewCooldownMs),
-        cooldownExempt: isCooldownExemptTask
+        cooldownExempt: isCooldownExemptTask,
+        heldByOther: (task) => isHeldByOther(task.metadata, instanceId)
       });
       for (const task of wouldSpawn) {
         emitLog('info', `[dry-run] CoS auto-run would spawn system task: ${task.id}`, { taskId: task.id, domainAutonomy: 'cos' });
@@ -596,6 +610,14 @@ async function spawnPriority2AutoApproved(ctx) {
     const autoApproved = cosTaskData.autoApproved || [];
     for (const task of autoApproved) {
       if (tasksToSpawn.length >= autonomousSlotCeiling) break;
+
+      // A federated peer holds a live lease on this task (#1650) — skip it
+      // during candidate selection so it doesn't consume an autonomous slot
+      // the spawn guard would just reject.
+      if (isHeldByOther(task.metadata, instanceId)) {
+        emitLog('debug', `Skipping system task ${task.id} — live lease held by peer instance ${getClaimOwner(task.metadata)}`, { taskId: task.id });
+        continue;
+      }
 
       if (await blockIfExceedsMaxSpawns(task, 'internal')) continue;
 
@@ -780,6 +802,11 @@ export async function evaluateTasks(options) {
     return s;
   });
 
+  // Resolve this instance's federation id once per cycle so the priority tiers
+  // can skip tasks a peer holds a live lease on (#1650). Warm path is the cheap
+  // cached read; only the cold boot creates the identity.
+  const instanceId = await ensureInstanceId();
+
   // Get both user and CoS tasks
   const { user: userTaskData, cos: cosTaskData } = await getAllTasks();
 
@@ -839,6 +866,7 @@ export async function evaluateTasks(options) {
   const ctx = {
     state,
     cosTaskData,
+    instanceId,
     availableSlots,
     perProjectLimit,
     tasksToSpawn,
