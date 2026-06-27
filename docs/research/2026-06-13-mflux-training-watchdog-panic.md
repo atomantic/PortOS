@@ -43,11 +43,25 @@ tracker.
 automatically in `scripts/train_mflux_lora.py` (mirrors the `generate_ltx2.py`
 env-knob pattern; propagates to the `mflux-train` child Popen). The trainer logs
 `STATUS:watchdog mitigation · AGX_RELAX_CDM_CTXSTORE_TIMEOUT=…` so a paniclog
-records whether it was active. The pinned 0.31.2 trio (this same PR's predecessor
-#1746) stands. The destructive seg-OFF version-bisect is now **lower priority** —
-the env-var fix attacks the actual cause and is far cheaper to validate than a
-version sweep; validate by running a sustained (seg-OFF) job with the display
-asleep and the env var set, before concluding anything about versions.
+records whether it was active. The pinned 0.31.2 trio (#1746) stands.
+
+**Validation result (2026-06-27) — the env var is necessary but NOT sufficient on
+this box.** A seg-OFF 9B-bf16 run with the env var set, under `caffeinate -s` *but
+with the display active*, **still hard-rebooted** ~11 min in at STEP:0 (bisect-log
+row above). The first-ever telemetry capture settled the mechanism: **driver hang,
+not thermal** — `Current pressure level: Nominal` with the GPU pegged, then
+powermetrics goes silent ~3 min before the watchdog fires. The paniclog shows
+`WindowServer` as the top-CPU thread, confirming mlx #3267's **active-display GPU
+contention** as the trigger. So on M5-class silicon a heavy (9B bf16) sustained
+run defeats the env var when the display is compositing. The empirically-known
+survivors on this box are: **(a) segmentation ON** (run `d36562a0`, 4B, completed)
+and **(b) the #3267 thread's display-off levers** (lid closed / display asleep /
+SSH headless) — these were NOT both in effect for the failed run (display was on).
+The next validation worth a destructive session is **9B seg-OFF with the display
+genuinely asleep / lid closed** (or SSH headless), to isolate whether display-off
+alone clears it; until then the safe production combo is **segmentation ON +
+display off for heavy runs**, which is what PortOS ships by default (segmentation
+on). The version bisect is moot — 0.31.2 is not the variable; the display is.
 
 ## Summary
 
@@ -289,7 +303,7 @@ doesn't lose which version was under test.
 |---|---|---|---|---|---|
 | (baseline, not run) | 0.17.5 | 0.30.6 | 0.30.6 | known-bad (3 panics 06-13/14) | none captured (sudo was off) |
 | 2026-06-14 candidate #1 | 0.17.5 | **0.31.2** | **0.31.2** | ✅ **VALIDATED (seg-ON)** — full LoRA run `d36562a0` completed to adapter extraction (4B bf16, 768px, 4×150-step segs); box up, no panic. Pinned 2026-06-27 (#1329). | telemetry captured; GPU/power normal through the run |
-| 2026-06-27 AGX fix (seg-OFF) | 0.17.5 | 0.31.2 | 0.31.2 | ⏳ **IN FLIGHT** — `flux2-klein-9b` bf16, 768px, **segmentation OFF**, `AGX_RELAX_CDM_CTXSTORE_TIMEOUT=1` set, under `caffeinate -s`. Scratch run `data/training-runs/_validate-agx-segoff/` (run.log + powermetrics.log). The real seg-OFF test of the env-var fix on the exact panic config. **If still IN FLIGHT after a reboot → the AGX fix did NOT prevent the panic on 9B seg-OFF** (read scratch powermetrics.log). | telemetry capturing |
+| 2026-06-27 AGX fix (seg-OFF) | 0.17.5 | 0.31.2 | 0.31.2 | ❌ **PANICKED** — `flux2-klein-9b` bf16, 768px, **segmentation OFF**, `AGX_RELAX_CDM_CTXSTORE_TIMEOUT=1` set, under `caffeinate -s` **but the display was active**. Hard-rebooted ~11 min in, at **STEP:0** (sustained training GPU load just beginning), same `watchdog timeout: no checkins from watchdogd in 93 seconds` signature (`AppleARMWatchdogTimer`/`AppleInterruptControllerV3`), paniclog `panic-full-2026-06-27-101518`. **The AGX env var alone does NOT prevent the panic on heavy (9B bf16) seg-OFF with the display active.** | ✅ **first telemetry-captured panic** — `Current pressure level: Nominal` throughout, GPU pegged (1592 MHz, 97% active, 24.4 W), then powermetrics **stops at 10:12:19** while the watchdog fires at 10:15:18 → **driver hang, NOT thermal/swap** (compressor 13% OK). Paniclog: `WindowServer` was the top-CPU thread = active-display contention (mlx #3267). |
 
 **Verdict & pin (2026-06-27, #1329).** The candidate #1 "IN FLIGHT" row above was
 the *seg-OFF scratch* run, which was **manually stopped clean at step ~11** (never
