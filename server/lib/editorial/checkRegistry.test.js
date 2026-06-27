@@ -4596,6 +4596,7 @@ describe('prose.cliches / prose.modifier-stacking / prose.dead-metaphor (#1308)'
 
 describe('copy-edit prose-tic bundle (#1306)', () => {
   const FILTER = 'prose.filter-words';
+  const HEDGE = 'prose.hedge-words';
   const CRUTCH = 'prose.crutch-words';
   const ADVERBS = 'prose.adverbs';
   const PASSIVE = 'prose.passive-voice';
@@ -4603,9 +4604,9 @@ describe('copy-edit prose-tic bundle (#1306)', () => {
   const ECHOES = 'prose.word-echoes';
   const RHYTHM = 'prose.sentence-rhythm';
   const TELLING = 'prose.telling-emotion';
-  const DETERMINISTIC = [FILTER, CRUTCH, ADVERBS, PASSIVE, GESTURES, ECHOES, RHYTHM];
+  const DETERMINISTIC = [FILTER, HEDGE, CRUTCH, ADVERBS, PASSIVE, GESTURES, ECHOES, RHYTHM];
 
-  it('registers all eight as manuscript style checks of the right kind', () => {
+  it('registers all deterministic prose-tic checks as manuscript style checks of the right kind', () => {
     for (const id of DETERMINISTIC) {
       const c = getCheck(id);
       expect(c.kind, id).toBe('deterministic');
@@ -4633,6 +4634,23 @@ describe('copy-edit prose-tic bundle (#1306)', () => {
     const filler = Array.from({ length: 200 }, (_, i) => `w${i}`).join(' ');
     const sections = [{ number: 1, content: `She saw it. ${filler}` }];
     expect(getCheck(FILTER).run({ sections, config: { densityPer1000: 6 }, severityDefault: 'low' })).toEqual([]);
+  });
+
+  it('prose.hedge-words flags hedge/weasel markers above the density threshold and anchors to the issue', () => {
+    // 4 hedge markers ("as if", "part of him", "almost", "no doubt") in ~13 words.
+    const sections = [{ number: 5, content: 'It was as if part of him almost knew, no doubt of it.' }];
+    const findings = getCheck(HEDGE).run({ sections, config: {}, severityDefault: 'low' });
+    expect(findings).toHaveLength(1);
+    expect(findings[0].issueNumber).toBe(5);
+    expect(findings[0].category).toBe('style');
+    expect(/hedge\/weasel/i.test(findings[0].problem)).toBe(true);
+    expect(findings[0].anchorQuote.toLowerCase()).toBe('as if');
+  });
+
+  it('prose.hedge-words stays silent below the density threshold', () => {
+    const filler = Array.from({ length: 200 }, (_, i) => `w${i}`).join(' ');
+    const sections = [{ number: 1, content: `It was as if true. ${filler}` }];
+    expect(getCheck(HEDGE).run({ sections, config: { densityPer1000: 7 }, severityDefault: 'low' })).toEqual([]);
   });
 
   it('prose.crutch-words excludes "that" unless includeThat is set', () => {
