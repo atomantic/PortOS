@@ -82,10 +82,12 @@ describes `universe_runs` as "local-only, capped 200, never federated."
   `PORTOS_SCHEMA_VERSIONS` keys — so none of the schema-version coverage guards
   (peerSync `RECORD_KIND_SCHEMA_CATEGORIES`, dataSync, `schemaVersions`) are
   touched.
-- The decision is pinned by a guard test
-  (`server/services/sharing/localDomains.test.js`) asserting `tribe_*` and
-  `universe_runs` are absent from the sync graph. Federating either later is a
-  conscious act: update that test and this ADR alongside the wiring.
+- The decision is pinned by a guard test — the "keeps the Tribe graph +
+  universe render-runs intentionally OUT of the sync graph" case in
+  `server/services/sharing/peerSync.test.js` (alongside the other gate-map
+  completeness guards) — asserting `tribe_*` and `universe_runs` are absent from
+  the sync graph. Federating either later is a conscious act: update that test
+  and this ADR alongside the wiring.
 - If the brain `memory_links` relationship graph and the calendar-account layer
   are ever federated, revisit Tribe — at that point the coupling argument no
   longer holds and people + touchpoints could mirror cleanly.
