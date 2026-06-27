@@ -5097,6 +5097,7 @@ export const EDITORIAL_CHECKS = [
     kind: 'llm',
     category: 'plot',
     severityDefault: 'low',
+    defaultEnabled: true,
     // Reads the stitched manuscript corpus — so the runner only pays the
     // section-collection I/O when a manuscript-consuming check is enabled.
     needsManuscript: true,
@@ -5125,19 +5126,37 @@ export const EDITORIAL_CHECKS = [
         stage: OBJECT_WEIGHT_STAGE,
         category: 'plot',
         context: { objects },
-        buildVars: (manuscript, _meta, c) => ({ manuscript, objects: c.objects }),
+        // `finalPart` gates the whole-corpus verdict. Both directions of this check
+        // are whole-story claims: "over-weighted" needs the object's TOTAL prominence
+        // (a non-final chunk can't know a barely-used object pays off later), and
+        // "under-established" needs the object's TOTAL lineage (the backstory may sit
+        // in an earlier chunk, carried in the setup digest). runChunkedManuscriptCheck
+        // merges findings first-wins and never retracts, so an imbalance reported from
+        // a non-final chunk would persist even after a later chunk clears it — so a
+        // non-final chunk only carries setup forward and the verdict waits for the
+        // final part. A single-chunk run is its own final part and judges the whole text.
+        buildVars: (manuscript, meta, c) => ({
+          manuscript,
+          objects: c.objects,
+          finalPart: meta?.isFinal ? 'true' : '',
+        }),
         // An object's backstory can be planted in an early chapter and its
         // prominence (or payoff) land much later; the findings digest stops a
         // later chunk re-flagging the same imbalance the prose only half-shows.
         crossChunkDigest: true,
         // …and a cleanly proportioned object produces no finding, so the findings
         // digest alone can't carry it forward — roll a setup summary of each
-        // object and the backstory/significance the prose has established so a
-        // late payoff is weighed against the full lineage, not just its chunk.
+        // object and the backstory/significance the prose has established so the
+        // final part weighs a payoff against the full lineage, not just its chunk.
         crossChunkSetup: true,
+        // #1667: the verdict is gated to the final part and weighs each object against
+        // its carried prominence/lineage snapshot, so guarantee the setup digest reaches
+        // the final chunk (trim its manuscript tail to fit) rather than letting a packed
+        // final chunk drop the snapshot and judge an object on its last chunk alone.
+        reserveSetupDigest: true,
         setupFocus: 'Objects/items the story features, how prominent or decisive each one is, and the depth '
-          + 'of backstory, lineage, or significance the prose or canon has established for it (so a later '
-          + 'payoff is weighed against the full established weight, not just the current part).',
+          + 'of backstory, lineage, or significance the prose or canon has established for it (so the final '
+          + 'part weighs a payoff against the full established weight, not just the current part).',
       });
     },
   },

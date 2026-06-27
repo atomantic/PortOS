@@ -43,6 +43,25 @@ The manuscript is stitched from the drafted issues. Each section begins with a
 header like `# Issue 3 — Title (prose)`; use the issue number in that header to
 attribute each finding to its `issueNumber`.
 
+{{#finalPart}}
+You are seeing the FINAL part of the manuscript, so the whole story is now in
+view and you may judge each object's overall weight against its overall
+prominence. The "setup so far" digest above carries each object's established
+backstory/significance and how prominent it has been, so an object that pays off
+here can be weighed against lineage planted pages earlier, and an object whose
+backstory loaded up early can be judged against how little (or much) the whole
+story actually used it.
+{{/finalPart}}
+{{^finalPart}}
+You are seeing an EARLIER part of a long manuscript reviewed in pieces. Do NOT
+yet flag an over- or under-weighted object — a later part may pay off an object
+that looks over-weighted now, or establish lineage for one that looks
+under-established. Note each object's prominence and the backstory/significance
+established so far (the "setup so far" digest carries this forward) but reserve
+every weight-proportionality verdict for the final part, and return an empty
+`findings` array for this part.
+{{/finalPart}}
+
 ```
 {{manuscript}}
 ```

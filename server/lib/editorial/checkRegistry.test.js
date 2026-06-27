@@ -3697,6 +3697,34 @@ describe('cross-chunk continuity digest (#1383)', () => {
     expect(seen[1].endsWith('CHUNK_TWO')).toBe(true);
   });
 
+  it('objects.weight-proportionality feeds the prior-chunk digest to later chunks and gates finalPart to the last chunk', async () => {
+    const seen = [];
+    const finalFlags = [];
+    await getCheck('objects.weight-proportionality').run({
+      config: { maxFindings: 12 },
+      severityDefault: 'low',
+      canon: {
+        objects: [{ id: 'o1', name: 'Locket', significance: 'an ancestral heirloom', attachments: [{ characterId: 'c1', emotion: 'reverence' }] }],
+        characters: [{ id: 'c1', name: 'Mara' }],
+      },
+      planManuscriptChunks: async () => ['CHUNK_ONE', 'CHUNK_TWO'],
+      callStagedLLM: async (_stage, vars) => {
+        seen.push(vars.manuscript);
+        finalFlags.push(vars.finalPart);
+        // Only the first chunk surfaces a finding, so the digest fed to chunk two carries it.
+        const findings = seen.length === 1
+          ? [{ severity: 'low', issueNumber: 1, problem: 'locket over-weighted', anchorQuote: 'the locket' }]
+          : [];
+        return { content: { findings } };
+      },
+    });
+    expect(seen[0]).toBe('CHUNK_ONE');
+    expect(seen[1]).toContain('EARLIER parts of this manuscript');
+    expect(seen[1].endsWith('CHUNK_TWO')).toBe(true);
+    // The whole-corpus verdict is gated: only the FINAL chunk is flagged finalPart.
+    expect(finalFlags).toEqual(['', 'true']);
+  });
+
   it('prose.info-dumping stays per-chunk — no digest is prepended (its problems are localized)', async () => {
     const { seen } = await runTwoChunks(INFODUMP, {
       manuscript: 'CHUNK_ONE',
@@ -3806,6 +3834,21 @@ describe('cross-chunk clean-setup digest (#1403)', () => {
     });
     expect(seen[0]).toBe('CHUNK_ONE');
     expect(setupPrompts).toHaveLength(1);
+    expect(seen[1]).toContain('Setup already established in EARLIER parts');
+    expect(seen[1].endsWith('CHUNK_TWO')).toBe(true);
+  });
+
+  it('objects.weight-proportionality rolls a setup summary forward keyed on object weight/prominence', async () => {
+    const { seen, setupPrompts } = await runTwoChunksWithSetup('objects.weight-proportionality', {
+      canon: {
+        objects: [{ id: 'o1', name: 'Locket', significance: 'an ancestral heirloom', attachments: [{ characterId: 'c1', emotion: 'reverence' }] }],
+        characters: [{ id: 'c1', name: 'Mara' }],
+      },
+    });
+    expect(seen[0]).toBe('CHUNK_ONE');
+    expect(setupPrompts).toHaveLength(1);
+    // The setup focus tracks each object's prominence + established lineage so the final part can weigh a late payoff.
+    expect(setupPrompts[0]).toMatch(/prominent or decisive/);
     expect(seen[1]).toContain('Setup already established in EARLIER parts');
     expect(seen[1].endsWith('CHUNK_TWO')).toBe(true);
   });
