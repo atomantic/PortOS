@@ -104,6 +104,25 @@ describe('manuscriptReview — record-event emission on write', () => {
     expect(merged.comments.find((c) => c.id === 'c1').status).toBe('dismissed');
   });
 
+  it('persists a finding subtype and nulls absent/legacy ones (#1626)', async () => {
+    const seeded = await seedReviewFromFindings('ser-subtype', [
+      { category: 'dialogue', subtype: 'emotion-tell', problem: 'names the feeling', anchorQuote: 'I am angry' },
+      { category: 'dialogue', problem: 'no subtype given', anchorQuote: 'plain line' },
+    ]);
+    const byProblem = Object.fromEntries(seeded.comments.map((c) => [c.problem, c]));
+    expect(byProblem['names the feeling'].subtype).toBe('emotion-tell');
+    expect(byProblem['no subtype given'].subtype).toBeNull();
+
+    // A legacy/older-peer comment with no subtype field round-trips as null.
+    const merged = await mergeReviewFromSync('ser-subtype-legacy', {
+      schemaVersion: 1,
+      comments: [
+        { id: 'mrc-st', category: 'dialogue', problem: 'legacy dialogue note', status: 'open', updatedAt: '2026-06-02T00:00:00Z' },
+      ],
+    });
+    expect(merged.comments.find((c) => c.id === 'mrc-st').subtype).toBeNull();
+  });
+
   it('persists replacementStrategy (explicit value, derived from category, and legacy fallback)', async () => {
     const seeded = await seedReviewFromFindings('ser-4', [
       { category: 'comic-structure', problem: 'page is prose', suggestion: 'Panel 1 …', anchorQuote: 'PAGE 5' },

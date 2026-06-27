@@ -147,6 +147,15 @@ function sanitizeComment(raw) {
     // additive → the synced review doc stays backward-compatible.
     nativeSeverity: ['high', 'medium', 'low'].includes(raw.nativeSeverity) ? raw.nativeSeverity : severity,
     category,
+    // Optional per-check sub-classification of the finding (#1626) — e.g.
+    // `dialogue.on-the-nose` tags each finding `exposition` / `emotion-tell` /
+    // `relationship-report` so the editor sees *why* a line reads on-the-nose.
+    // `null` for checks that don't sub-classify, legacy records, and older peers.
+    // Validated by the producing check against its own allow-list, so a stray
+    // value never reaches here; the clamp is a belt-and-suspenders bound for
+    // hand-edited / older-peer files. Optional + additive → the synced review doc
+    // stays backward-compatible (no schema bump needed).
+    subtype: clampStr(raw.subtype, 40) || null,
     location: clampStr(raw.location, 200),
     problem,
     suggestion: clampStr(raw.suggestion, 8000),

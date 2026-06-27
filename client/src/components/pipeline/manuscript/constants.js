@@ -58,6 +58,17 @@ export const CATEGORY_LABEL = {
   other: 'Note',
 };
 
+// Per-check finding sub-classifications (#1626). A finding's optional `subtype`
+// names *why* it was flagged within its category — currently only
+// `dialogue.on-the-nose` sets one (exposition / emotion-tell / relationship-report)
+// so writers get specific, actionable feedback. An unmapped subtype renders its
+// raw value; a `null` subtype renders no badge.
+export const SUBTYPE_LABEL = {
+  exposition: 'Exposition',
+  'emotion-tell': 'Emotion-tell',
+  'relationship-report': 'Relationship-report',
+};
+
 // Approximate a textarea's height to its content so the manuscript reads as one
 // continuous scroll (lets jump-to-anchor scroll the page, not an inner box).
 export const rowsFor = (text) => Math.min(400, Math.max(8, (text || '').split('\n').length + 1));
