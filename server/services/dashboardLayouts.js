@@ -51,11 +51,12 @@ export const INTENT_LAYOUTS = [
   {
     id: 'health',
     name: 'Health',
-    widgets: ['death-clock', 'goal-progress', 'activity-streak', 'quick-brain', 'hourly-activity'],
+    widgets: ['death-clock', 'goal-progress', 'activity-streak', 'daily-post', 'quick-brain', 'hourly-activity'],
     grid: [
       { id: 'death-clock',     x: 0, y: 0, w: 4, h: 3 },
       { id: 'goal-progress',   x: 4, y: 0, w: 5, h: 5 },
       { id: 'activity-streak', x: 9, y: 0, w: 3, h: 3 },
+      { id: 'daily-post',      x: 9, y: 3, w: 3, h: 2 },
       { id: 'quick-brain',     x: 0, y: 3, w: 4, h: 2 },
       { id: 'hourly-activity', x: 0, y: 5, w: 12, h: 4 },
     ],

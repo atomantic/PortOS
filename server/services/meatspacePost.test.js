@@ -7,6 +7,7 @@ import {
   generateEstimation,
   scoreDrill,
   computeExpectedFromPrompt,
+  computePostStreaks,
 } from './meatspacePost.js';
 
 // =============================================================================
@@ -359,5 +360,73 @@ describe('scoreDrill', () => {
     expect(recomputed[0].correct).toBe(false);
     expect(recomputed[1].answered).toBe(null);
     expect(recomputed[1].correct).toBe(false);
+  });
+});
+
+// =============================================================================
+// STREAK TESTS
+// =============================================================================
+
+describe('computePostStreaks', () => {
+  const s = (date, score = 80) => ({ date, score });
+
+  it('returns a zeroed result when there are no sessions', () => {
+    expect(computePostStreaks([], '2026-06-28')).toEqual({
+      completedToday: false,
+      currentStreak: 0,
+      longestStreak: 0,
+      lastDate: null,
+      todayScore: null,
+    });
+  });
+
+  it('counts a single-day streak when only today is practiced', () => {
+    const r = computePostStreaks([s('2026-06-28')], '2026-06-28');
+    expect(r.completedToday).toBe(true);
+    expect(r.currentStreak).toBe(1);
+    expect(r.longestStreak).toBe(1);
+    expect(r.lastDate).toBe('2026-06-28');
+  });
+
+  it('counts consecutive days back from today', () => {
+    const sessions = [s('2026-06-26'), s('2026-06-27'), s('2026-06-28')];
+    const r = computePostStreaks(sessions, '2026-06-28');
+    expect(r.currentStreak).toBe(3);
+    expect(r.longestStreak).toBe(3);
+  });
+
+  it('keeps the streak alive on a not-yet-done today when yesterday is done', () => {
+    const r = computePostStreaks([s('2026-06-26'), s('2026-06-27')], '2026-06-28');
+    expect(r.completedToday).toBe(false);
+    expect(r.currentStreak).toBe(2);
+  });
+
+  it('breaks the current streak after a two-day gap', () => {
+    const r = computePostStreaks([s('2026-06-20'), s('2026-06-21')], '2026-06-28');
+    expect(r.currentStreak).toBe(0);
+    expect(r.longestStreak).toBe(2);
+    expect(r.lastDate).toBe('2026-06-21');
+  });
+
+  it('reports the longest historical run independent of the current streak', () => {
+    const sessions = [
+      s('2026-06-01'), s('2026-06-02'), s('2026-06-03'), s('2026-06-04'), // run of 4
+      s('2026-06-27'), s('2026-06-28'), // current run of 2
+    ];
+    const r = computePostStreaks(sessions, '2026-06-28');
+    expect(r.currentStreak).toBe(2);
+    expect(r.longestStreak).toBe(4);
+  });
+
+  it('dedups multiple same-day sessions and reports the best score for today', () => {
+    const sessions = [s('2026-06-28', 70), s('2026-06-28', 91), s('2026-06-27', 60)];
+    const r = computePostStreaks(sessions, '2026-06-28');
+    expect(r.currentStreak).toBe(2);
+    expect(r.todayScore).toBe(91);
+  });
+
+  it('spans a month boundary without an off-by-one (UTC day math)', () => {
+    const r = computePostStreaks([s('2026-05-31'), s('2026-06-01')], '2026-06-01');
+    expect(r.currentStreak).toBe(2);
   });
 });

@@ -149,8 +149,63 @@ export async function submitPostSession(sessionData) {
   return session;
 }
 
+// Local-date arithmetic on `YYYY-MM-DD` strings via UTC midnight so day math
+// never drifts across DST boundaries (the activity-streak bug class).
+function ymdToUTC(s) {
+  const [y, m, d] = s.split('-').map(Number);
+  return Date.UTC(y, m - 1, d);
+}
+function ymdShift(s, deltaDays) {
+  return new Date(ymdToUTC(s) + deltaDays * 86400000).toISOString().split('T')[0];
+}
+
+/**
+ * Compute POST practice streaks from session records. Pure (takes `todayStr`
+ * explicitly) so it's unit-testable without faking the clock.
+ *
+ * - `completedToday`  — at least one session dated today
+ * - `currentStreak`   — consecutive days with a session counting back from
+ *   today; a not-yet-done today does NOT break the streak as long as yesterday
+ *   has one (grace window), mirroring `usage.js` `calculateStreak`
+ * - `longestStreak`   — longest consecutive-day run in all history
+ * - `lastDate`        — most recent session date (null if never practiced)
+ * - `todayScore`      — best session score recorded today (null if none)
+ */
+export function computePostStreaks(sessions, todayStr) {
+  const dateSet = new Set((sessions || []).map(s => s?.date).filter(Boolean));
+  const dates = Array.from(dateSet).sort();
+  const completedToday = dateSet.has(todayStr);
+  const lastDate = dates.length ? dates[dates.length - 1] : null;
+
+  const todayScores = (sessions || [])
+    .filter(s => s?.date === todayStr && typeof s?.score === 'number')
+    .map(s => s.score);
+  const todayScore = todayScores.length ? Math.max(...todayScores) : null;
+
+  let longestStreak = 0;
+  let run = 0;
+  let prev = null;
+  for (const d of dates) {
+    run = prev && ymdToUTC(d) - ymdToUTC(prev) === 86400000 ? run + 1 : 1;
+    if (run > longestStreak) longestStreak = run;
+    prev = d;
+  }
+
+  // Anchor the current streak at today, or yesterday if today isn't done yet.
+  let cursor = completedToday ? todayStr : ymdShift(todayStr, -1);
+  let currentStreak = 0;
+  while (dateSet.has(cursor)) {
+    currentStreak += 1;
+    cursor = ymdShift(cursor, -1);
+  }
+
+  return { completedToday, currentStreak, longestStreak, lastDate, todayScore };
+}
+
 export async function getPostStats(days = 30) {
   const sessions = await getPostSessions();
+  // Streaks are computed over ALL history, independent of the stats window.
+  const streaks = computePostStreaks(sessions, new Date().toISOString().split('T')[0]);
   let recent = sessions;
   if (days > 0) {
     const cutoff = new Date();
@@ -160,7 +215,7 @@ export async function getPostStats(days = 30) {
   }
 
   if (recent.length === 0) {
-    return { days, sessionCount: 0, overall: null, byModule: {}, byDrill: {} };
+    return { days, sessionCount: 0, overall: null, byModule: {}, byDrill: {}, ...streaks };
   }
 
   const scores = recent.map(s => s.score);
@@ -183,7 +238,7 @@ export async function getPostStats(days = 30) {
   for (const key of Object.keys(byModule)) byModule[key] = avg(byModule[key]);
   for (const key of Object.keys(byDrill)) byDrill[key] = avg(byDrill[key]);
 
-  return { days, sessionCount: recent.length, overall, byModule, byDrill };
+  return { days, sessionCount: recent.length, overall, byModule, byDrill, ...streaks };
 }
 
 // =============================================================================
