@@ -9,7 +9,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { Dumbbell, Loader2, Square, CheckCircle2, XCircle, Sparkles, RotateCcw } from 'lucide-react';
+import { Dumbbell, Loader2, Square, CheckCircle2, XCircle, Sparkles, RotateCcw, Moon } from 'lucide-react';
 import toast from '../ui/Toast';
 import { useSseProgress } from '../../hooks/useSseProgress';
 import CheckpointPicker from './CheckpointPicker';
@@ -350,6 +350,24 @@ export default function TrainingPanel({ dataset, readiness, triggerSaving, onRun
           </div>
         )}
       </div>
+      {status?.runtimes?.mflux?.ready && (
+        <div className="flex items-start gap-2 rounded-lg border border-port-border bg-port-bg/50 px-3 py-2 text-xs text-gray-400">
+          <Moon className="w-3.5 h-3.5 mt-0.5 shrink-0 text-port-accent" />
+          <div className="space-y-1">
+            <div className="text-gray-300">
+              This Mac's display sleeps automatically while training, then wakes when the run finishes.
+            </div>
+            <div>
+              On Apple Silicon, an <span className="text-gray-300">active display can crash the whole machine</span>{' '}
+              (GPU watchdog kernel panic) during heavy LoRA training — so PortOS puts the display to sleep for you
+              and the system keeps running underneath. Big runs (9B, bf16) can take hours: start one and{' '}
+              <span className="text-gray-300">let it run overnight</span>. Don't close the lid (that sleeps the
+              whole Mac and pauses the run); just leave it be, or drive it over SSH. On by default; set
+              <code className="text-gray-300">loraTraining.displaySleep: false</code> to opt out if you run headless.
+            </div>
+          </div>
+        </div>
+      )}
       <div className="flex items-center justify-between gap-2">
         <span className={`text-xs ${!disabledReason && readiness?.quality === 'minimum' ? 'text-port-warning' : 'text-gray-500'}`}>
           {disabledReason

@@ -889,6 +889,13 @@ export const loraTrainingConfigSchema = z.object({
   // from the newest checkpoint. Set false to fall back to only the flat 30-min
   // idle watchdog (e.g. if a future driver fix makes soft hangs impossible).
   stallWatchdog: z.boolean().optional(),
+  // Auto display-sleep during training on Apple Silicon (default ON in
+  // services/loraTraining/index.js). Sleeps the Mac's display when a run starts
+  // and wakes it when it finishes. This is the validated mitigation for the GPU
+  // watchdog kernel panic (mlx #3267): an active display makes WindowServer
+  // contend for the GPU, which hard-reboots the box during heavy sustained
+  // training. Set false if you drive the display some other way (SSH headless).
+  displaySleep: z.boolean().optional(),
 });
 
 // POST /api/lora-training/runs — start a training run for a dataset.

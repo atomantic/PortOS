@@ -72,6 +72,20 @@ segmentation-on by default; the remaining user action is to keep the display off
 (SSH headless or `pmset displaysleepnow`) for big sustained runs — documented in
 TROUBLESHOOTING.
 
+**Productized (#1329, 2026-06-27) — and a contributing bug fixed.** While wiring
+the display-off mitigation into the app, found that the trainer spawned
+`caffeinate -dis` to keep the Mac awake — and `-d` **forces the display to stay
+on** (the comment claimed "display can sleep"; the flag did the opposite). So
+PortOS was actively holding the box in the WindowServer-contention state that
+triggers the panic — a contributing cause, not just a missing nicety. Fixed to
+`-is` (idle+system sleep held, display free to sleep). On top of that, the LoRA
+trainer now **auto-sleeps the display when a run starts and wakes it when the run
+finishes** on Apple Silicon (`server/services/loraTraining/displayPower.js`,
+gated by `settings.loraTraining.displaySleep`, default on; wake skipped on a
+stall-watchdog auto-resume since that re-sleeps). The training panel surfaces the
+crash risk + the overnight recommendation. So the validated mitigation is now the
+default behavior, not a manual checklist item.
+
 ## Summary
 
 The machine hard-rebooted twice in one day, both times while a LoRA training run
