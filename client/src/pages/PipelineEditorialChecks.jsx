@@ -19,6 +19,7 @@ import EditorialCheckCard from '../components/pipeline/editorial/EditorialCheckC
 import EditorialCustomCheckForm from '../components/pipeline/editorial/EditorialCustomCheckForm';
 import EditorialFindingsTriage from '../components/pipeline/editorial/EditorialFindingsTriage';
 import EditorialHealthPanel from '../components/pipeline/editorial/EditorialHealthPanel';
+import SeriesSeverityConfig from '../components/pipeline/editorial/SeriesSeverityConfig';
 import ProviderModelSelector from '../components/ProviderModelSelector';
 import TabPills from '../components/ui/TabPills';
 import { groupChecksByScope, groupFindingsByCheck, normCategory, canonEntitiesFromUniverse } from '../lib/editorialChecks';
@@ -433,6 +434,30 @@ export default function PipelineEditorialChecks() {
       .finally(() => setSavingSeriesIds((s) => { const n = new Set(s); n.delete(checkId); return n; }));
   }, []);
 
+  // Per-series severity config (#1616): the health-score weights + per-gate
+  // blocking-severity sets live as top-level series fields (`severityWeights` /
+  // `blockingSeverities`). Saved through the SAME serialized silent tail as the
+  // per-check override so two quick edits can't reorder/clobber, NON-optimistic
+  // (the panel reverts to the persisted value on failure since the series record
+  // is left untouched). Keyed in savingSeriesIds so the run buttons gate on the
+  // save landing (the autopilot reads the persisted series record).
+  const handleSeriesFieldSave = useCallback((field, value) => {
+    const sid = activeSeriesRef.current;
+    if (!sid) return;
+    setSavingSeriesIds((s) => new Set(s).add(field));
+    seriesSaveTailRef.current = seriesSaveTailRef.current
+      .then(async () => {
+        const saved = await updatePipelineSeries(sid, { [field]: value }, { silent: true })
+          .catch((err) => { toast.error(err.message || 'Failed to save severity config'); return null; });
+        // On success sync THIS series' record by id (keyed, never clobbers
+        // another series); on failure leave it untouched so the panel keeps
+        // showing — and reverts to — the persisted values.
+        if (saved) setSeries((rows) => rows.map((r) => (r.id === saved.id ? saved : r)));
+      })
+      .finally(() => setSavingSeriesIds((s) => { const n = new Set(s); n.delete(field); return n; }));
+  }, []);
+  const severitySaving = savingSeriesIds.has('severityWeights') || savingSeriesIds.has('blockingSeverities');
+
   // ---- Custom-check authoring (#1346). The form is URL-driven (?custom=new |
   // ?custom=<checkId>) so it's deep-linkable, not a stateful modal. ----
   const customParam = searchParams.get('custom') || '';
@@ -632,6 +657,14 @@ export default function PipelineEditorialChecks() {
           <p className="text-xs text-gray-500">Pick a series to run checks and triage findings. The catalog below applies to every series.</p>
         ) : null}
       </div>
+
+      {selectedSeries ? (
+        <SeriesSeverityConfig
+          series={selectedSeries}
+          onSaveField={handleSeriesFieldSave}
+          saving={severitySaving}
+        />
+      ) : null}
 
       {loadingCatalog ? (
         <p className="flex items-center gap-2 text-sm text-gray-400"><Loader2 size={16} className="animate-spin" /> Loading checks…</p>

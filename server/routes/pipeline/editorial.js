@@ -23,6 +23,7 @@ import {
   readCustomCheckDefs,
   isCustomCheckId,
   CUSTOM_CHECK_ID_PREFIX,
+  mergeSeverityWeights,
 } from '../../lib/editorial/index.js';
 import * as seriesSvc from '../../services/pipeline/series.js';
 import * as issuesSvc from '../../services/pipeline/issues.js';
@@ -109,10 +110,13 @@ router.get('/editorial/checks', asyncHandler(async (req, res) => {
 // series + per issue), the readiness signal, and the revision trend +
 // regressions. Reads the same manuscript-review findings the triage view shows.
 router.get('/series/:id/editorial/health', asyncHandler(async (req, res) => {
-  await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
+  const series = await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
   const settings = await getSettings();
   const gate = readReadinessGate(settings) || DEFAULT_READINESS_GATE;
-  res.json(await getSeriesHealth(req.params.id, { gate }));
+  // Per-series severity-weight override (#1616) so the returned score + `weights`
+  // echo reflect the override the autopilot health gate also uses.
+  const weights = mergeSeverityWeights(series?.severityWeights);
+  res.json(await getSeriesHealth(req.params.id, { gate, weights }));
 }));
 
 // Set the editorial-health readiness gate (the convergence signal the autopilot

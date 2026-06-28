@@ -30,7 +30,7 @@ import { getFactsLedger } from '../continuityBible.js';
 import { getSeriesEditorial } from '../editorialAnalysis.js';
 import { seedReviewFromFindings, getReview } from '../manuscriptReview.js';
 import { recordTrendSnapshot } from '../editorialScore.js';
-import { readReadinessGate } from '../../../lib/editorial/index.js';
+import { readReadinessGate, mergeSeverityWeights } from '../../../lib/editorial/index.js';
 import { canonicalStringify } from '../../../lib/objects.js';
 
 // Per-check severity breakdown for telemetry (#1578). Bucket a check's findings
@@ -768,7 +768,10 @@ export async function runEditorialChecks(seriesId, options = {}) {
     // recordTrendSnapshot reads the current review itself. Best-effort — a ledger
     // write must never fail the check run (it's telemetry).
     const gate = readReadinessGate(settings) || undefined;
-    await recordTrendSnapshot(seriesId, { runId, gate, comments: lastReview?.comments }).catch((err) => {
+    // Series severity-weight override (#1616) so the persisted trend score
+    // matches the live computeHealth score the UI shows.
+    const weights = mergeSeverityWeights(series?.severityWeights);
+    await recordTrendSnapshot(seriesId, { runId, gate, weights, comments: lastReview?.comments }).catch((err) => {
       console.error(`⚠️ editorial trend snapshot failed — series=${String(seriesId).slice(0, 12)} ${err.message}`);
     });
   }

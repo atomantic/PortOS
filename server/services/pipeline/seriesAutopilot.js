@@ -96,7 +96,7 @@ import { runEditorialChecks, buildEditorialCheckPlan, enabledChecksConsumeRevers
 import { generateReverseOutline, getReverseOutline } from './reverseOutline.js';
 import { computeHealth, openBlockers, READINESS_GATES, resolveReadinessGate, summarizeEditorialBlockers, formatBlockerSummary } from './editorialScore.js';
 import { getSettings } from '../settings.js';
-import { readReadinessGate } from '../../lib/editorial/index.js';
+import { readReadinessGate, mergeSeverityWeights, resolveBlockingSet } from '../../lib/editorial/index.js';
 import { generateManuscriptFix, acceptManuscriptFix } from './manuscriptFix.js';
 import { verifyComicScript } from './scriptVerify.js';
 import { checkSeriesCanonReadiness } from './canonReadiness.js';
@@ -287,13 +287,12 @@ function summarizePlanCost(plan) {
 // editorial terminal into draft cover/page rendering (see runVisualDraft).
 export const VISUAL_DRAFT_ENABLED = true;
 
-// Severities that block a verify/review gate (low is informational).
-const ARC_BLOCKING = new Set(['high', 'medium']);
-// Beat continuity is the same class of structural continuity gate as arc verify
-// (a cross-issue continuity break, not a craft note), so it blocks at the same
-// altitude — high + medium.
-const BEAT_CONTINUITY_BLOCKING = ARC_BLOCKING;
-const EDITORIAL_BLOCKING = new Set(['high']);
+// Which severities block each verify/review gate (low is informational) is now
+// PER-SERIES configurable (#1616): the defaults (arc/beatContinuity → high+medium,
+// editorial → high) live in `lib/editorial/severityConfig.js` and a series may
+// override any gate. `startSeriesAutopilot` resolves each gate's blocking Set
+// once via `resolveBlockingSet(series.blockingSeverities, gate)` and stamps it on
+// `record.options.blockingSets` so every read site uses the same resolved set.
 
 // Poll cadence while awaiting a delegated child runner (volume beats / auto-run).
 const CHILD_POLL_MS = 750;
@@ -737,7 +736,7 @@ async function runArcVerify(seriesId, record) {
     if (beforeVerify) return beforeVerify;
     const { issues } = await verifyArc(seriesId, providerOverrideOpts(record));
     await recordDomainUsage('cos', { actions: 1 });
-    const blocking = issues.filter((i) => ARC_BLOCKING.has(i.severity));
+    const blocking = issues.filter((i) => record.options.blockingSets.arc.has(i.severity));
     broadcast(seriesId, {
       type: 'verify:round', scope: 'arc', round, findings: issues.length, blocking: blocking.length,
     });
@@ -792,7 +791,7 @@ async function runBeatContinuity(seriesId, record) {
     if (beforeVerify) return beforeVerify;
     const { issues } = await analyzeBeatContinuity(seriesId, providerOverrideOpts(record));
     await recordDomainUsage('cos', { actions: 1 });
-    const blocking = issues.filter((i) => BEAT_CONTINUITY_BLOCKING.has(i.severity));
+    const blocking = issues.filter((i) => record.options.blockingSets.beatContinuity.has(i.severity));
     broadcast(seriesId, {
       type: 'verify:round', scope: 'beatContinuity', round, findings: issues.length, blocking: blocking.length,
     });
@@ -1022,7 +1021,7 @@ async function runEditorial(sId, record) {
       ...providerOverrideOpts(record),
     });
     await recordDomainUsage('cos', { actions: 1 });
-    const blocking = (issues || []).filter((i) => EDITORIAL_BLOCKING.has(i.severity));
+    const blocking = (issues || []).filter((i) => record.options.blockingSets.editorial.has(i.severity));
     broadcast(sId, {
       type: 'verify:round', scope: 'editorial', round, findings: (issues || []).length, blocking: blocking.length,
     });
@@ -1047,7 +1046,7 @@ async function runEditorial(sId, record) {
     // the loop re-analyzes. Each fix is wrapped so one bad anchor doesn't abort
     // the pass (boundary use of try/catch — these call into LLM/file paths).
     const review = await getReview(sId).catch(() => ({ comments: [] }));
-    const open = (review.comments || []).filter((c) => c.status === 'open' && EDITORIAL_BLOCKING.has(c.severity));
+    const open = (review.comments || []).filter((c) => c.status === 'open' && record.options.blockingSets.editorial.has(c.severity));
     for (const comment of open) {
       if (record.cancelRequested) return { canceled: true };
       // Each generated fix is its own LLM call — gate AND bill per comment so a
@@ -1281,7 +1280,9 @@ async function runEditorialHealthGate(sId, record) {
   // top-level catch, which records a clean `error` terminal state.
   const review = await getReview(sId);
   const comments = review.comments || [];
-  const health = computeHealth(comments, gate);
+  // Per-series severity-weight override (#1616) resolved + stamped at start, so
+  // the health score the gate reads matches the live + persisted scores.
+  const health = computeHealth(comments, gate, { weights: record.options.severityWeights });
   broadcast(sId, {
     type: 'verify:round', scope: 'editorialHealth', round: 1,
     findings: health.open, blocking: health.ready ? 0 : health.open, score: health.score,
@@ -1675,12 +1676,25 @@ export async function startSeriesAutopilot(sId, options = {}) {
   // effective values. A resume reuses this same path, so a raised persisted
   // setting takes effect on the next Resume without re-specifying it.
   const settings = await getSettings().catch(() => null);
+  // Per-series severity config (#1616): resolve the (possibly overridden) health
+  // severity weights + the per-gate blocking-severity Sets ONCE at start and
+  // stamp them onto run options, mirroring the round bounds / readiness gate —
+  // so every gate read site + the health gate use the same resolved values, and
+  // a resume re-reads them fresh. Loading the series here is cheap; a missing
+  // series (deleted mid-run) falls through to the frozen defaults.
+  const seriesRecord = await getSeries(sId).catch(() => null);
   const runOptions = {
     ...options,
     ...resolveAutopilotRounds(options, settings),
     readinessGate: resolveAutopilotReadinessGate(options, settings),
     checkFindingsPauseThreshold: resolveAutopilotCheckPauseThreshold(options, settings),
     notifyOnPause: resolveAutopilotNotifyOnPause(options, settings),
+    severityWeights: mergeSeverityWeights(seriesRecord?.severityWeights),
+    blockingSets: {
+      arc: resolveBlockingSet(seriesRecord?.blockingSeverities, 'arc'),
+      beatContinuity: resolveBlockingSet(seriesRecord?.blockingSeverities, 'beatContinuity'),
+      editorial: resolveBlockingSet(seriesRecord?.blockingSeverities, 'editorial'),
+    },
   };
 
   if (existing) {

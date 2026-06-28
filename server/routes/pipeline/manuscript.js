@@ -19,7 +19,7 @@ import * as manuscriptFix from '../../services/pipeline/manuscriptFix.js';
 import * as completenessRunner from '../../services/pipeline/manuscriptCompletenessRunner.js';
 import { getReviewWithStaleness } from '../../services/pipeline/editorial/checkRunner.js';
 import { recordTrendSnapshot } from '../../services/pipeline/editorialScore.js';
-import { readReadinessGate } from '../../lib/editorial/index.js';
+import { readReadinessGate, mergeSeverityWeights } from '../../lib/editorial/index.js';
 import { getSettings } from '../../services/settings.js';
 import { mapServiceError, providerOverrideShape } from './shared.js';
 
@@ -89,7 +89,7 @@ const manuscriptReformatSchema = z.object({
 // Manuscript-completeness editor pass — categorized "finish the draft"
 // suggestions read from the actual drafted script (not synopses). Advisory.
 router.post('/series/:id/manuscript/completeness', asyncHandler(async (req, res) => {
-  await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
+  const series = await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
   const body = validateRequest(manuscriptCompletenessSchema, req.body ?? {});
   const result = await arcPlanner.analyzeManuscriptCompleteness(req.params.id, body)
     .catch((err) => { throw mapServiceError(err); });
@@ -101,7 +101,10 @@ router.post('/series/:id/manuscript/completeness', asyncHandler(async (req, res)
   // Revision-trend snapshot (#1316): this completeness pass is a revision
   // boundary. Best-effort — never fail the request on a ledger-write error.
   const gate = readReadinessGate(await getSettings().catch(() => null)) || undefined;
-  await recordTrendSnapshot(req.params.id, { runId: result.runId, gate, comments: review.comments })
+  // Series severity-weight override (#1616) so a persisted trend score matches
+  // the live computeHealth score the UI shows.
+  const weights = mergeSeverityWeights(series?.severityWeights);
+  await recordTrendSnapshot(req.params.id, { runId: result.runId, gate, weights, comments: review.comments })
     .catch((err) => { console.error(`⚠️ editorial trend snapshot failed — series=${String(req.params.id).slice(0, 12)} ${err.message}`); });
   res.json({ ...result, review });
 }));

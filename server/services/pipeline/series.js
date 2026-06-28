@@ -17,6 +17,7 @@ import { isStr, trimTo } from '../../lib/storyBible.js';
 import { sanitizeArc, sanitizeSeasonList } from '../../lib/storyArc.js';
 import { sanitizeCharacterArcList } from '../../lib/seriesCharacterArc.js';
 import { sanitizeStyleGuide } from '../../lib/styleGuide.js';
+import { sanitizeSeverityWeights, sanitizeBlockingSeverities } from '../../lib/editorial/severityConfig.js';
 import { sanitizeOrigin } from '../../lib/sharingOrigin.js';
 import { sanitizeSoftDeleteFields } from '../../lib/syncWire.js';
 import {
@@ -280,6 +281,12 @@ const sanitizeSeries = (raw) => {
   const updatedAt = isStr(raw.updatedAt) ? raw.updatedAt : createdAt;
   const autopilot = sanitizeAutopilot(raw.autopilot);
   const editorialCheckConfig = sanitizeEditorialCheckConfig(raw.editorialCheckConfig);
+  // Per-series autopilot severity config (#1616). Both default to `{}` (tunes
+  // nothing → frozen defaults apply via mergeSeverityWeights/resolveBlockingSet),
+  // mirroring editorialCheckConfig — so a clear propagates between v9 peers and a
+  // behind-sender's omission is preserved (see ADDITIVE_SERIES_FIELDS).
+  const severityWeights = sanitizeSeverityWeights(raw.severityWeights);
+  const blockingSeverities = sanitizeBlockingSeverities(raw.blockingSeverities);
   return {
     id: raw.id,
     name,
@@ -372,6 +379,12 @@ const sanitizeSeries = (raw) => {
     // ADDITIVE_SERIES_FIELDS). Wire-gated at pipelineSeries v8 so a ≤v7 peer can't
     // strip-then-LWW the overrides back onto a newer peer.
     editorialCheckConfig,
+    // Per-series autopilot severity config (#1616) — the health-score severity
+    // weights + per-gate blocking-severity sets. Both always present (empty `{}`
+    // when nothing is tuned), like editorialCheckConfig. Wire-gated at
+    // pipelineSeries v9 so a ≤v8 peer can't strip-then-LWW them back.
+    severityWeights,
+    blockingSeverities,
   };
 };
 
@@ -424,6 +437,11 @@ export async function createSeries(input = {}) {
     // importer / promote flow that seeds a series with tuned thresholds keeps
     // them; sanitizeSeries normalizes an empty/malformed map to `{}`.
     editorialCheckConfig: input.editorialCheckConfig,
+    // Per-series autopilot severity config (#1616) — forwarded so an importer /
+    // promote flow that seeds tuned weights/blocking sets keeps them;
+    // sanitizeSeries normalizes empty/malformed values to `{}`.
+    severityWeights: input.severityWeights,
+    blockingSeverities: input.blockingSeverities,
   });
   await store().saveOne(created.id, created);
   // Skip auto-subscribe for ephemeral series — wire-side push would short-
@@ -603,6 +621,11 @@ export async function updateSeries(id, patch = {}) {
       // `{}`/`null` clears every override; omission preserves. The sanitizer drops
       // empty/malformed entries and normalizes to `{}` (always present).
       ...('editorialCheckConfig' in patch ? { editorialCheckConfig: patch.editorialCheckConfig } : {}),
+      // Per-series autopilot severity config (#1616). Wholesale replace —
+      // `{}`/`null` clears the override (defaults apply); omission preserves. The
+      // sanitizer drops malformed values and normalizes to `{}` (always present).
+      ...('severityWeights' in patch ? { severityWeights: patch.severityWeights } : {}),
+      ...('blockingSeverities' in patch ? { blockingSeverities: patch.blockingSeverities } : {}),
       llm: mergedLlm,
       updatedAt: new Date().toISOString(),
     });
@@ -811,7 +834,7 @@ async function cascadeDeleteSideEffects(id) {
 // consult the RAW remote payload to tell the two apart: key absent → preserve
 // local; key present (even null/empty) → honor the intentional clear. Mirrors
 // the `universeId` hierarchy guard. See issue #1361.
-const ADDITIVE_SERIES_FIELDS = ['arc', 'seasons', 'styleGuide', 'styleNotes', 'characterArcs', 'factReference', 'factCritical', 'editorialCheckConfig'];
+const ADDITIVE_SERIES_FIELDS = ['arc', 'seasons', 'styleGuide', 'styleNotes', 'characterArcs', 'factReference', 'factCritical', 'editorialCheckConfig', 'severityWeights', 'blockingSeverities'];
 // Additive sub-fields nested inside `arc`. A peer that predates these (readerMap
 // shipped at schema v2, tickingClock at #1289/v3) still sends an `arc` object —
 // just without these keys — so the erasure for them happens one level down.

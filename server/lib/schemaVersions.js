@@ -124,7 +124,17 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // last-writer-wins the loss back onto the newer peer. Bump makes the older peer
   // reject the ahead-version series transfer instead. Per-category gate → only
   // series sync pauses with old peers.
-  pipelineSeries: 8,
+  // v9 = `series.severityWeights` + `series.blockingSeverities` added (#1616) —
+  // per-series overrides of the editorial health-score severity weights (default
+  // high:12/medium:5/low:1) and of which severities count as blocking for each
+  // autopilot gate (arc/beatContinuity/editorial). Both default to `{}` (no
+  // override → frozen defaults apply). Same silent-strip-then-LWW corruption as
+  // editorialCheckConfig: a ≤v8 peer that re-sanitizes a series through its
+  // severityWeights/blockingSeverities-unaware `sanitizeSeries` would drop the
+  // overrides and last-writer-wins the loss back onto the newer peer. Bump makes
+  // the older peer reject the ahead-version series transfer instead. Per-category
+  // gate → only series sync pauses with old peers.
+  pipelineSeries: 9,
   // NOT bumped for the manuscript-review sibling doc now bundled on series
   // pushes/exports (`data/pipeline-series/{id}/manuscript-review.json`).
   // Unlike `readerMap` (v2), the review is NOT a field inside the series
