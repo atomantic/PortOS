@@ -134,7 +134,8 @@ export async function applyImageClean({ filename, sourceMeta }) {
     throw err;
   });
 
-  const result = await cleanImageBuffer(buffer);
+  // Gallery "clean" is the aggressive variant: metadata strip + denoise.
+  const result = await cleanImageBuffer(buffer, { metadata: true, denoise: true });
   if (result.format !== 'png') {
     throw new ServerError('Gallery images must be PNG', { status: 400, code: 'UNSUPPORTED_FORMAT' });
   }
