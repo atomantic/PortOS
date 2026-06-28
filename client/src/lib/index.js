@@ -81,6 +81,7 @@ export * from './songCraft.js';
 export * from './songPlayback.js';
 export * from './songProgress.js';
 export * from './syncCounts.js';
+export * from './terminalTheme.js';
 export * from './tribe.js';
 export * from './universeBuilderExpand.js';
 export * from './wrSceneCursor.js';
