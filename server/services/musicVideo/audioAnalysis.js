@@ -78,6 +78,9 @@ export async function decodeAudioToPcm(audioPath, { signal } = {}) {
   if (signal?.aborted) return null;
   const ffmpeg = await findFfmpeg();
   if (!ffmpeg) return null;
+  // Re-check: the signal may have aborted while findFfmpeg() was awaiting, so
+  // the listener below would again attach to an already-aborted signal.
+  if (signal?.aborted) return null;
 
   return new Promise((resolve) => {
     const args = [
