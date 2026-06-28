@@ -169,11 +169,15 @@ describe('healMissingLocalModel', () => {
     expect(mocks.updateProvider).not.toHaveBeenCalled();
   });
 
-  it('treats loopback host spellings as the same instance (127.0.0.1 == localhost)', async () => {
-    // Manager lists from localhost:11434; a provider on 127.0.0.1:11434 is the
-    // SAME instance and must not be refused over a loopback spelling difference.
+  it.each([
+    ['127.0.0.1', 'http://127.0.0.1:11434/v1'],
+    ['127.0.0.53', 'http://127.0.0.53:11434/v1'], // anywhere in 127.0.0.0/8
+    ['0.0.0.0 bind-all', 'http://0.0.0.0:11434/v1'] // manager bound to all interfaces, reached as localhost
+  ])('treats loopback/bind-all host %s as the same instance as localhost', async (_label, endpoint) => {
+    // Manager lists from localhost:11434; these all name the SAME instance and
+    // must not be refused over a host-spelling difference.
     mocks.ollamaInstalled.mockResolvedValue([{ id: 'llama3.1:8b' }]);
-    const provider = { id: 'ollama', endpoint: 'http://127.0.0.1:11434/v1', defaultModel: 'gone', models: [] };
+    const provider = { id: 'ollama', endpoint, defaultModel: 'gone', models: [] };
     const result = await healMissingLocalModel({ provider, requestedModel: 'gone' });
     expect(result).toMatchObject({ healed: true, model: 'llama3.1:8b' });
   });

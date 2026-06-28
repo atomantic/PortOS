@@ -99,16 +99,24 @@ function managerOrigin(backend) {
   return normalizeOrigin(base);
 }
 
-// Loopback hosts that all name the same local instance — canonicalized to one
-// token so a provider at `127.0.0.1:11434` matches a manager at `localhost:11434`.
-const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
+// True when a hostname names the SAME local instance the backend manager runs
+// on — any loopback (`127.0.0.0/8`, `::1`), `localhost`, or the unspecified /
+// bind-all address (`0.0.0.0`, `::`, which a manager bound to all interfaces
+// reports while a provider reaches it as localhost). These all canonicalize to
+// one token so spelling differences don't block healing. Deliberately NOT
+// link-local / LAN / Tailscale hosts — a peer on another box is a DIFFERENT
+// instance whose installed models we must not heal against.
+function isLocalInstanceHost(hostname) {
+  const h = hostname.toLowerCase().replace(/^\[|\]$/g, ''); // strip IPv6 brackets
+  return h === 'localhost' || h === '0.0.0.0' || h === '::' || h === '::1' ||
+    /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h);
+}
 
 function normalizeOrigin(url) {
   const cleaned = String(url || '').replace(/\/v1\/?$/, '').replace(/\/+$/, '');
   try {
     const u = new URL(cleaned);
-    const hostname = u.hostname.toLowerCase();
-    const host = LOOPBACK_HOSTS.has(hostname) ? 'localhost' : hostname;
+    const host = isLocalInstanceHost(u.hostname) ? 'localhost' : u.hostname.toLowerCase();
     const port = u.port || (u.protocol === 'https:' ? '443' : '80');
     return `${u.protocol}//${host}:${port}`;
   } catch { return ''; }
