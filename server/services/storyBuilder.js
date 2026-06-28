@@ -271,14 +271,18 @@ export async function createStorySession(input = {}) {
   // ingredients (#1761). In the normal (no-ingredients) case this equals
   // seedIdea, so the create path is byte-for-byte unchanged.
   let effectiveSeed = seedIdea;
+  // Resolved catalog ingredients (#1761), hoisted to function scope so the
+  // series links can be created AFTER the session is saved (best-effort —
+  // see below). Stays empty in import mode and the no-ingredients case.
+  let remixIngredients = [];
 
   if (intakeMode === 'seed') {
     // Resolve any selected catalog ingredients up front: they feed both the
     // fallback seed (so the minted shells aren't empty) and the series links
-    // created once the series exists. Missing/deleted ids are skipped.
-    const ingredients = await resolveCatalogIngredients(input.catalogIngredientIds);
-    if (!effectiveSeed && ingredients.length > 0) {
-      effectiveSeed = composeSeedFromIngredients(ingredients);
+    // created once the session is saved. Missing/deleted ids are skipped.
+    remixIngredients = await resolveCatalogIngredients(input.catalogIngredientIds);
+    if (!effectiveSeed && remixIngredients.length > 0) {
+      effectiveSeed = composeSeedFromIngredients(remixIngredients);
     }
 
     // Mint the shells the wizard fills in. The universe name doubles as the
@@ -307,14 +311,6 @@ export async function createStorySession(input = {}) {
         throw err;
       });
       seriesId = series.id;
-    }
-
-    // Link the resolved ingredients to the (now-existing) series via
-    // catalog_ingredient_refs — the convergence contract's single data model.
-    // Role maps from the ingredient type; unknown types link as 'mentioned'.
-    if (ingredients.length > 0) {
-      const linked = await linkIngredientsToSeries(seriesId, ingredients);
-      console.log(`🔗 StoryBuilder: linked ${linked.length} catalog ingredient(s) to series ${seriesId}`);
     }
   }
 
@@ -346,6 +342,18 @@ export async function createStorySession(input = {}) {
       : {}),
   });
   await store().saveOne(created.id, created);
+
+  // Link the selected catalog ingredients to the new series via
+  // catalog_ingredient_refs — the convergence contract's single data model.
+  // Deliberately AFTER the session is saved and best-effort: the story is the
+  // primary artifact, so a transient ref-insert failure must not reject the
+  // create and orphan the just-minted universe/series (the link is recoverable
+  // by re-picking ingredients). Role maps from type; unknown types → 'mentioned'.
+  if (remixIngredients.length > 0) {
+    await linkIngredientsToSeries(seriesId, remixIngredients)
+      .then((linked) => console.log(`🔗 StoryBuilder: linked ${linked.length} catalog ingredient(s) to series ${seriesId}`))
+      .catch((err) => console.error(`⚠️ StoryBuilder: failed to link catalog ingredients to series ${seriesId}: ${err.message}`));
+  }
   return created;
 }
 
