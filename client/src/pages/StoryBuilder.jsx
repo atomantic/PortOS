@@ -149,7 +149,8 @@ function StoryBuilderIndex() {
   const [searchParams] = useSearchParams();
   // Merged catalog-type registry (system + user-defined) so the remix seed
   // prefill honors a user-defined type's snippetFallbackKeys, not just the six.
-  const { getType } = useCatalogTypes();
+  // `loading` gates the prefill until the merged registry resolves (below).
+  const { getType, loading: typesLoading } = useCatalogTypes();
   // The "Start a Story" onramp can deep-link here with a pre-chosen universe
   // (?universeId=…); pass it through so the new session attaches to it instead
   // of auto-creating a fresh universe. The create schema already accepts it.
@@ -179,17 +180,23 @@ function StoryBuilderIndex() {
     if (cleanIds.length === 0) return;
     setRemixIds(cleanIds);
     listCatalogIngredientsByIds(cleanIds, { silent: true })
-      .then((res) => {
-        const list = Array.isArray(res) ? res : (Array.isArray(res?.items) ? res.items : []);
-        setRemixIngredients(list);
-        // Prefill only if the user hasn't already typed a seed — don't clobber.
-        setSeedIdea((prev) => (prev.trim() ? prev : composeSeedFromIngredients(list, getType)));
-      })
+      .then((res) => setRemixIngredients(Array.isArray(res) ? res : (Array.isArray(res?.items) ? res.items : [])))
       .catch(() => {});
     // Clear the handoff state so a refresh doesn't re-seed (ids already captured).
     navigate('.', { replace: true, state: {} });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Compose the seed prefill once the ingredients are hydrated AND the catalog
+  // type registry has loaded — so a user-defined type's custom summary field is
+  // honored rather than dropped while useCatalogTypes() still has only its
+  // built-in fallback. Kept separate from the one-shot fetch above so it can
+  // re-run when the registry resolves. Prefill only if the user hasn't typed a
+  // seed — don't clobber (and the guard makes a second run idempotent).
+  useEffect(() => {
+    if (typesLoading || remixIngredients.length === 0) return;
+    setSeedIdea((prev) => (prev.trim() ? prev : composeSeedFromIngredients(remixIngredients, getType)));
+  }, [typesLoading, remixIngredients, getType]);
 
   const create = async () => {
     if (!title.trim()) { toast.error('Give your story a working title'); return; }
