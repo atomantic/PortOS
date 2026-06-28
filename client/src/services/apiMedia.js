@@ -41,9 +41,16 @@ export const cleanImage = async (file, steps = {}) => {
   if (typeof steps.denoise === 'boolean') params.set('denoise', steps.denoise ? '1' : '0');
   const qs = params.toString();
 
+  // Always send application/octet-stream rather than the browser's reported
+  // file.type. The server sniffs the real format from magic bytes, so a file
+  // the page accepted by extension despite an unreliable MIME (image/jpg,
+  // image/pjpeg, text/plain, or empty) must not be forwarded with a type the
+  // route's express.raw() type-filter would refuse to parse — that would fail
+  // with an empty body before the magic-byte sniff ever runs. octet-stream is
+  // always in the parser's accepted set.
   const response = await fetch(`${API_BASE}/image-clean${qs ? `?${qs}` : ''}`, {
     method: 'POST',
-    headers: { 'Content-Type': file.type || 'application/octet-stream' },
+    headers: { 'Content-Type': 'application/octet-stream' },
     body: file,
   }).catch(() => null);
 
