@@ -90,6 +90,18 @@ describe('scene board operations', () => {
     expect(() => applySceneUpdate(baseProject(), 'nope', { prompt: 'x' })).toThrow(/Scene not found/);
   });
 
+  it('clears a previously-set scene time when patched with null', () => {
+    const { project, scene } = addScene(baseProject(), { startSec: 5, endSec: 10 });
+    const { updated } = applySceneUpdate(project, scene.sceneId, { startSec: null });
+    expect(updated.startSec).toBeNull();
+    expect(updated.endSec).toBe(10);
+  });
+
+  it('rejects a patch whose merged endSec precedes the existing startSec', () => {
+    const { project, scene } = addScene(baseProject(), { startSec: 10, endSec: 20 });
+    expect(() => applySceneUpdate(project, scene.sceneId, { endSec: 5 })).toThrow(/endSec must be >= startSec/);
+  });
+
   it('removes a scene and re-sequences order', () => {
     let p = baseProject();
     const ids = [];

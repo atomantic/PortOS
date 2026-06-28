@@ -55,21 +55,25 @@ export const musicVideoSceneCreateSchema = z.object({
   sectionLabel: z.string().max(120).nullable().optional(),
   prompt: z.string().max(8000).optional(),
   framePrompt: z.string().max(8000).nullable().optional(),
-  startSec: z.number().min(0).max(36000).optional(),
-  endSec: z.number().min(0).max(36000).optional(),
+  startSec: z.number().min(0).max(36000).nullable().optional(),
+  endSec: z.number().min(0).max(36000).nullable().optional(),
   beatAligned: z.boolean().optional(),
 }).strict().refine(
   (s) => s.startSec == null || s.endSec == null || s.endSec >= s.startSec,
   { message: 'endSec must be >= startSec', path: ['endSec'] },
 );
 
+// Times are nullable here so clearing a Start/End input (the UI sends `null`)
+// is accepted. The endSec >= startSec invariant can't be checked on the partial
+// patch alone (the paired value may live on the existing record), so the merged
+// range is validated in projectsLogic.applySceneUpdate instead.
 export const musicVideoSceneUpdateSchema = z.object({
   label: z.string().max(120).optional(),
   sectionLabel: z.string().max(120).nullable().optional(),
   prompt: z.string().max(8000).optional(),
   framePrompt: z.string().max(8000).nullable().optional(),
-  startSec: z.number().min(0).max(36000).optional(),
-  endSec: z.number().min(0).max(36000).optional(),
+  startSec: z.number().min(0).max(36000).nullable().optional(),
+  endSec: z.number().min(0).max(36000).nullable().optional(),
   beatAligned: z.boolean().optional(),
   referenceImageId: z.string().max(256).nullable().optional(),
   videoHistoryId: z.string().max(64).nullable().optional(),
