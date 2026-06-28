@@ -166,6 +166,47 @@ describe('pipeline series service', () => {
     expect(cleared.editorialCheckConfig).toEqual({});
   });
 
+  it('defaults severityWeights/blockingSeverities to {} and round-trips overrides (#1616)', async () => {
+    const plain = await svc.createSeries({ name: 'PlainSev' });
+    expect(plain.severityWeights).toEqual({});
+    expect(plain.blockingSeverities).toEqual({});
+
+    const tuned = await svc.createSeries({
+      name: 'TunedSev',
+      severityWeights: { high: 20, low: 2 },
+      blockingSeverities: { arc: ['high'], editorial: [] },
+    });
+    expect(tuned.severityWeights).toEqual({ high: 20, low: 2 });
+    // Explicit empty array preserved (= nothing blocks the editorial gate).
+    expect(tuned.blockingSeverities).toEqual({ arc: ['high'], editorial: [] });
+  });
+
+  it('sanitizes severityWeights/blockingSeverities: drops junk, keeps valid (#1616)', async () => {
+    const s = await svc.createSeries({
+      name: 'MessySev',
+      severityWeights: { high: 20, medium: -1, low: '2', bogus: 9 },
+      blockingSeverities: { arc: ['high', 'nope', 'high'], beatContinuity: 'high', bogusGate: ['high'] },
+    });
+    expect(s.severityWeights).toEqual({ high: 20 });
+    expect(s.blockingSeverities).toEqual({ arc: ['high'] });
+  });
+
+  it('updateSeries replaces severity overrides wholesale and clears with {} (#1616)', async () => {
+    const s = await svc.createSeries({
+      name: 'TunableSev',
+      severityWeights: { high: 20 },
+      blockingSeverities: { arc: ['high'] },
+    });
+    // Omission preserves.
+    const kept = await svc.updateSeries(s.id, { logline: 'L2' });
+    expect(kept.severityWeights).toEqual({ high: 20 });
+    expect(kept.blockingSeverities).toEqual({ arc: ['high'] });
+    // Wholesale replace + clear.
+    const replaced = await svc.updateSeries(s.id, { severityWeights: { low: 3 }, blockingSeverities: {} });
+    expect(replaced.severityWeights).toEqual({ low: 3 });
+    expect(replaced.blockingSeverities).toEqual({});
+  });
+
   it('updateSeries throws ERR_NOT_FOUND for unknown id', async () => {
     await expect(svc.updateSeries('ser-nope', { name: 'x' })).rejects.toMatchObject({ code: svc.ERR_NOT_FOUND });
   });
@@ -666,6 +707,27 @@ describe('pipeline series service', () => {
       await svc.mergeSeriesFromSync([clear]);
       const cleared = await svc.getSeries(s.id);
       expect(cleared.editorialCheckConfig).toEqual({});
+    });
+
+    it('preserves severityWeights/blockingSeverities when a behind-sender omits them, applies an explicit clear (#1616)', async () => {
+      const s = await svc.createSeries({
+        name: 'SevKeep',
+        severityWeights: { high: 20 },
+        blockingSeverities: { arc: ['high'] },
+      });
+      // Behind-sender (older peer) omits both keys → local overrides preserved.
+      const behind = { id: s.id, name: 'SevKeep (peer edit)', updatedAt: NEWER };
+      await svc.mergeSeriesFromSync([behind]);
+      const kept = await svc.getSeries(s.id);
+      expect(kept.name).toBe('SevKeep (peer edit)');
+      expect(kept.severityWeights).toEqual({ high: 20 });
+      expect(kept.blockingSeverities).toEqual({ arc: ['high'] });
+      // Up-to-date peer present-but-empty maps → the clear applies (present key wins).
+      const clear = { id: s.id, name: 'SevKeep', severityWeights: {}, blockingSeverities: {}, updatedAt: '2999-06-01T00:00:00.000Z' };
+      await svc.mergeSeriesFromSync([clear]);
+      const cleared = await svc.getSeries(s.id);
+      expect(cleared.severityWeights).toEqual({});
+      expect(cleared.blockingSeverities).toEqual({});
     });
 
     it('preserves arc (incl. readerMap + tickingClock) when the remote omits arc', async () => {

@@ -164,6 +164,26 @@ const seriesLockedSchema = z.object({
   arcFields: z.object(optionalBooleanMap(seriesSvc.ARC_LOCKABLE_FIELDS)).optional(),
 }).passthrough();
 
+// Per-series autopilot severity config (#1616). `severityWeights` overrides the
+// health-score weights (high/medium/low → nonnegative number, all optional);
+// `blockingSeverities` overrides which severities block each autopilot gate
+// (arc/beatContinuity/editorial → array of high|medium|low, all optional, an
+// explicit `[]` = "nothing blocks this gate"). Both are re-bounded by the
+// sanitizers (sanitizeSeverityWeights / sanitizeBlockingSeverities) on persist;
+// `null`/`{}` clears the override (frozen defaults apply). Shared between create
+// + patch so the two can't drift.
+const severityWeightsSchema = z.object({
+  high: z.number().nonnegative().optional(),
+  medium: z.number().nonnegative().optional(),
+  low: z.number().nonnegative().optional(),
+}).strict();
+const blockingSeverityEnum = z.enum(['high', 'medium', 'low']);
+const blockingSeveritiesSchema = z.object({
+  arc: z.array(blockingSeverityEnum).optional(),
+  beatContinuity: z.array(blockingSeverityEnum).optional(),
+  editorial: z.array(blockingSeverityEnum).optional(),
+}).strict();
+
 const seriesCreateSchema = z.object({
   name: z.string().trim().min(1).max(seriesSvc.NAME_MAX),
   logline: z.string().trim().max(seriesSvc.LOGLINE_MAX).optional().default(''),
@@ -185,6 +205,9 @@ const seriesCreateSchema = z.object({
   // per check at run time, bounded by sanitizeEditorialCheckConfig); forwarded so an
   // importer / share-bucket create that seeds tuned thresholds keeps them.
   editorialCheckConfig: z.record(z.record(z.unknown())).nullable().optional(),
+  // Per-series autopilot severity config (#1616). null/{} clears.
+  severityWeights: severityWeightsSchema.nullable().optional(),
+  blockingSeverities: blockingSeveritiesSchema.nullable().optional(),
   // Fact-checking opt-in + author fact reference (#1588).
   factCritical: z.boolean().optional().default(false),
   factReference: z.string().trim().max(seriesSvc.FACT_REFERENCE_MAX).optional().default(''),
@@ -233,6 +256,12 @@ const seriesPatchSchema = z.object({
   // sanitizeEditorialCheckConfig on persist; this gate just keeps the wire shape sane.
   // `null`/`{}` clears all overrides.
   editorialCheckConfig: z.record(z.record(z.unknown())).nullable().optional(),
+  // Per-series autopilot severity config (#1616): { high?, medium?, low? } weights
+  // and { arc?, beatContinuity?, editorial? } blocking-severity arrays. Re-bounded
+  // by the sanitizers on persist; `null`/`{}` clears (frozen defaults apply). An
+  // explicit empty array on a gate = "nothing blocks this gate".
+  severityWeights: severityWeightsSchema.nullable().optional(),
+  blockingSeverities: blockingSeveritiesSchema.nullable().optional(),
 }).refine((p) => Object.keys(p).length > 0, { message: 'patch must include at least one field' });
 const arcFieldLockSchema = z.object({ locked: z.boolean() });
 

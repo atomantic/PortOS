@@ -1016,6 +1016,64 @@ describe('autopilot conductor', () => {
     expect(series.autopilot?.residualFindings?.[0]?.problem).toBe('plot hole');
   });
 
+  // Per-series blocking-severity sets (#1616).
+  it('arc gate: default blocks a medium finding (pauses)', async () => {
+    verifyFindings = [{ severity: 'medium', problem: 'soft beat', location: 'V1' }];
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { maxArcVerifyRounds: 1 });
+    await waitFor(runFinished(seriesId));
+    const last = autopilot.__testing.runs.get(seriesId)?.lastPayload;
+    expect(last?.type).toBe('paused');
+    expect(last?.scope).toBe('verifyArc');
+  });
+
+  it('arc gate: a per-series arc:[high] override lets a medium finding pass', async () => {
+    verifyFindings = [{ severity: 'medium', problem: 'soft beat', location: 'V1' }];
+    const { seriesId } = await seedComplete();
+    await seriesSvc.updateSeries(seriesId, { blockingSeverities: { arc: ['high'] } });
+    await autopilot.startSeriesAutopilot(seriesId, { maxArcVerifyRounds: 1 });
+    await waitFor(runFinished(seriesId));
+    // medium no longer blocks arc → the run proceeds past arc to completion.
+    expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('complete');
+  });
+
+  it('arc gate: an empty arc:[] override never blocks, even on a high finding', async () => {
+    verifyFindings = [{ severity: 'high', problem: 'plot hole', location: 'V1' }];
+    const { seriesId } = await seedComplete();
+    await seriesSvc.updateSeries(seriesId, { blockingSeverities: { arc: [] } });
+    await autopilot.startSeriesAutopilot(seriesId, { maxArcVerifyRounds: 1 });
+    await waitFor(runFinished(seriesId));
+    expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('complete');
+  });
+
+  it('beatContinuity gate: a per-series beatContinuity:[high] override lets a medium finding pass', async () => {
+    beatContinuityFindings = [{ severity: 'medium', problem: 'beat drift', location: 'I1' }];
+    const { seriesId } = await seedComplete();
+    await seriesSvc.updateSeries(seriesId, { blockingSeverities: { beatContinuity: ['high'] } });
+    await autopilot.startSeriesAutopilot(seriesId, { maxBeatContinuityRounds: 1 });
+    await waitFor(runFinished(seriesId));
+    expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('complete');
+  });
+
+  it('editorial gate: an empty editorial:[] override never blocks, even on a high finding', async () => {
+    editorialFindings = [{ severity: 'high', problem: 'missing scene', issueNumber: 1 }];
+    const { seriesId } = await seedComplete();
+    await seriesSvc.updateSeries(seriesId, { blockingSeverities: { editorial: [] } });
+    await autopilot.startSeriesAutopilot(seriesId, { maxEditorialRounds: 1 });
+    await waitFor(runFinished(seriesId));
+    expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('complete');
+  });
+
+  it('editorial gate: default blocks a high finding (pauses)', async () => {
+    editorialFindings = [{ severity: 'high', problem: 'missing scene', issueNumber: 1 }];
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { maxEditorialRounds: 1 });
+    await waitFor(runFinished(seriesId));
+    const last = autopilot.__testing.runs.get(seriesId)?.lastPayload;
+    expect(last?.type).toBe('paused');
+    expect(last?.scope).toBe('editorialReview');
+  });
+
   it('posts an in-app notification when a run pauses, with a resume link (#1615)', async () => {
     verifyFindings = [{ severity: 'high', problem: 'plot hole', location: 'V1' }];
     const { seriesId } = await seedComplete();

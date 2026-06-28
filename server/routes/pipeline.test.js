@@ -2077,6 +2077,32 @@ describe('pipeline routes', () => {
     });
   });
 
+  it('PATCH /series/:id accepts + persists severityWeights/blockingSeverities (#1616)', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
+    const r = await request(app).patch(`/api/pipeline/series/${ser.body.id}`).send({
+      severityWeights: { high: 20, low: 2 },
+      blockingSeverities: { arc: ['high'], editorial: [] },
+    });
+    expect(r.status).toBe(200);
+    expect(r.body.severityWeights).toEqual({ high: 20, low: 2 });
+    // Explicit empty array preserved (= nothing blocks the editorial gate).
+    expect(r.body.blockingSeverities).toEqual({ arc: ['high'], editorial: [] });
+  });
+
+  it('PATCH /series/:id 400s on an invalid severity weight / blocking enum (#1616)', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
+    const neg = await request(app).patch(`/api/pipeline/series/${ser.body.id}`).send({
+      severityWeights: { high: -1 },
+    });
+    expect(neg.status).toBe(400);
+    const badEnum = await request(app).patch(`/api/pipeline/series/${ser.body.id}`).send({
+      blockingSeverities: { arc: ['critical'] },
+    });
+    expect(badEnum.status).toBe(400);
+  });
+
   it('PATCH /series/:id/arc-fields/:field/lock merges a single arc field lock', async () => {
     const app = makeApp();
     const ser = await request(app).post('/api/pipeline/series').send({
