@@ -269,20 +269,35 @@ export async function cleanImageBuffer(buffer, options = {}) {
       if (metadata) steps.push({ step: 'metadata', status: 'applied', lossless: false, detail: 'dropped via re-encode' });
       steps.push({ step: 'denoise', status: 'applied', lossless: false, detail: 'median(3) + sharpen' });
     } else if (metadata && format === 'png') {
-      // Lossless PNG path: walk chunks and emit a new buffer minus the metadata
-      // chunks. Pixels byte-identical, no decode/re-encode.
-      const stripped = stripPngMetadataChunks(buffer);
-      outData = stripped.data;
-      c2paStripped = stripped.droppedTypes.includes('caBX');
       const meta = await sharp(buffer, { limitInputPixels: MAX_PIXELS }).metadata();
-      width = meta.width || null;
-      height = meta.height || null;
-      steps.push({
-        step: 'metadata',
-        status: stripped.stripped ? 'applied' : 'noop',
-        lossless: true,
-        detail: stripped.stripped ? `dropped ${stripped.droppedTypes.join(', ')}` : 'no metadata chunks found',
-      });
+      if (meta.orientation && meta.orientation > 1) {
+        // The PNG carries a non-default EXIF Orientation (in its eXIf chunk). A
+        // pure chunk strip would drop that tag and visibly rotate/flip the image
+        // in viewers that honor PNG orientation. Bake the rotation into pixels
+        // (re-encode → lossy) before dropping metadata, exactly like the
+        // JPEG/WebP path — correctness wins over losslessness here.
+        const base = sharp(buffer, { limitInputPixels: MAX_PIXELS }).rotate();
+        const { data, info } = await applyEncoder(base, format).toBuffer({ resolveWithObject: true });
+        outData = data;
+        width = info.width || null;
+        height = info.height || null;
+        c2paStripped = hadC2PA;
+        steps.push({ step: 'metadata', status: 'applied', lossless: false, detail: 'orientation baked + dropped via re-encode (lossy)' });
+      } else {
+        // Lossless PNG path: walk chunks and emit a new buffer minus the
+        // metadata chunks. Pixels byte-identical, no decode/re-encode.
+        const stripped = stripPngMetadataChunks(buffer);
+        outData = stripped.data;
+        c2paStripped = stripped.droppedTypes.includes('caBX');
+        width = meta.width || null;
+        height = meta.height || null;
+        steps.push({
+          step: 'metadata',
+          status: stripped.stripped ? 'applied' : 'noop',
+          lossless: true,
+          detail: stripped.stripped ? `dropped ${stripped.droppedTypes.join(', ')}` : 'no metadata chunks found',
+        });
+      }
     } else if (metadata) {
       // JPEG/WebP have no cheap lossless chunk-walk; re-encode through sharp,
       // which drops metadata by default. .rotate() bakes EXIF orientation into
