@@ -227,45 +227,19 @@ function estimateTempo(onset, fps) {
 
   // Significance gate. Structureless input (white noise) still has a strongest
   // lag, but it sits far below a real periodicity — emit `null` rather than a
-  // confident bogus tempo + beat grid. Judge the raw strongest peak (the true
-  // fundamental OR its half-tempo harmonic, whichever scored highest); octave
-  // correction below then settles on the right fundamental.
+  // confident bogus tempo + beat grid.
   if (bestAc / variance < TEMPO_PEAK_MIN) return { bpm: null, lag: null };
 
-  // Octave correction via a phase-aligned pulse-train comb. Autocorrelation
-  // peaks at every multiple of the true period, so it cannot by itself tell a
-  // period from its half/double — and the tempo weight can tip the pick to the
-  // wrong octave (90 over 180), or a fixed AC ratio fails when a fixture's
-  // half-tempo lag simply correlates higher than its fundamental. A comb does
-  // distinguish them: a pulse train at the TRUE period lands on every onset,
-  // while one at double the period misses every other onset (~half the energy)
-  // and one at half the period adds only near-empty slots. So `combSum` rises
-  // as the period halves and then plateaus at the true period — its "knee".
-  // Pick the LONGEST period (slowest tempo) on that plateau among the octave
-  // candidates of `bestLag` that fall in range.
-  const combSum = (period) => {
-    const maxOff = Math.ceil(period);
-    let best = 0;
-    for (let off = 0; off < maxOff; off++) {
-      let sum = 0;
-      for (let pos = off; pos < n; pos += period) sum += onset[Math.round(pos)] || 0;
-      if (sum > best) best = sum;
-    }
-    return best;
-  };
-  const candidates = [];
-  for (let L = bestLag; L >= minLag; L /= 2) candidates.push(L);
-  for (let L = bestLag * 2; L <= maxLag; L *= 2) candidates.push(L);
-  const combByLag = new Map(candidates.map((L) => [L, combSum(L)]));
-  const maxComb = Math.max(...combByLag.values());
-  // The knee: the longest period (slowest tempo) clearing 90% of the peak comb
-  // energy. A half-tempo AC winner folds up to the fundamental (its comb is
-  // ~half, below the cutoff), and a genuinely slow tempo is not pushed faster
-  // (its own period already sits on the plateau).
-  bestLag = candidates
-    .filter((L) => combByLag.get(L) >= 0.9 * maxComb)
-    .reduce((longest, L) => (L > longest ? L : longest), 0) || bestLag;
-
+  // NOTE — octave (half/double-tempo) ambiguity is intentionally NOT resolved
+  // here. Autocorrelation peaks at every multiple of the true period, so the
+  // estimate is only reliable UP TO an octave: a 140 BPM track may report 70,
+  // and a phase-aligned-comb tie-break (tried) cannot separate the two for many
+  // signals (a half-period grid captures comparable onset energy), while the
+  // tempo-preference weight alone mis-picks other octaves. Robust octave
+  // selection is a deliberate open question for a later phase (see #1760
+  // "beat-snap semantics") — beat snapping still works off this grid, just at a
+  // possibly-doubled/halved density. The detected period is the
+  // highest-weighted autocorrelation peak in [MIN_BPM, MAX_BPM].
   const bpm = (60 * fps) / bestLag;
   return { bpm, lag: bestLag };
 }
