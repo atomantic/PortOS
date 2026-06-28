@@ -90,6 +90,16 @@ describe('analyzePcm', () => {
     expect(result.bpm).toBeLessThan(92);
   });
 
+  it.each([140, 160, 180])('recovers a high-BPM (%i) click track without half-tempo error', (bpm) => {
+    // High tempos whose beat period falls between onset frames are prone to a
+    // half-tempo octave error (the 2× lag scores higher than the smeared
+    // fundamental). The detected tempo must stay near the true BPM, not ~half.
+    const samples = clickTrack({ bpm, durationSec: 18 });
+    const result = analyzePcm(samples, ANALYSIS_SAMPLE_RATE);
+    expect(result.bpm).toBeGreaterThan(bpm - 3);
+    expect(result.bpm).toBeLessThan(bpm + 3);
+  });
+
   it('emits 4/4 downbeats as a quarter of the beats', () => {
     const samples = clickTrack({ bpm: 120, durationSec: 16 });
     const { beats, downbeats } = analyzePcm(samples, ANALYSIS_SAMPLE_RATE);
