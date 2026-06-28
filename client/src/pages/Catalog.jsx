@@ -733,11 +733,13 @@ export default function Catalog() {
 
       {view === 'albums' ? (
         <AlbumsView
-          // Remount on a mutation OR a filter change so the lazy album loads
-          // re-run against fresh data and honor the active type/tag/q filters.
-          key={`${dataVersion}|${selectedType}|${selectedTag}|${q}`}
+          // Remount on a mutation OR any filter change so the lazy album loads
+          // re-run against fresh data and honor the active filters.
+          key={`${dataVersion}|${selectedType}|${selectedTag}|${q}|${selectedUniverse}|${selectedSeries}`}
           facets={facets}
           filters={{ type: selectedType || undefined, tag: selectedTag || undefined, q: q || undefined }}
+          selectedUniverse={selectedUniverse}
+          selectedSeries={selectedSeries}
           cardProps={cardProps}
           onConfirmDelete={albumDelete}
         />
@@ -906,11 +908,11 @@ export default function Catalog() {
 // under a `key={dataVersion}` so a mutation remounts it and the lazy loads
 // re-run against fresh data. A universe album rolls up its series' members
 // server-side (decision #1), so a series-only ingredient still has a home here.
-function AlbumsView({ facets, filters = {}, cardProps, onConfirmDelete }) {
+function AlbumsView({ facets, filters = {}, selectedUniverse = '', selectedSeries = '', cardProps, onConfirmDelete }) {
   if (!facets) {
     return <div className="text-gray-500 text-sm">Loading albums…</div>;
   }
-  const { universes = [], unlinkedCount = 0, orphanedCount = 0 } = facets;
+  const { universes = [], series = [], unlinkedCount = 0, orphanedCount = 0 } = facets;
   const albumProps = { ...cardProps, onConfirmDelete, pageSize: PAGE_SIZE };
   // One page fetcher per album view — paginated so albums never reintroduce the
   // old silent cap. `extra` carries the album selector (unlinked / orphaned / a
@@ -919,6 +921,42 @@ function AlbumsView({ facets, filters = {}, cardProps, onConfirmDelete }) {
   const pageLoader = (extra) => (offset) =>
     listCatalogIngredients({ ...filters, ...extra, limit: PAGE_SIZE, offset, silent: true })
       .then((d) => (Array.isArray(d?.items) ? d.items : []));
+
+  // A selected universe/series scopes the Albums view to that one album (the
+  // grid's ref filter, surfaced as a single open album) so the dropdowns drive
+  // albums the same way they drive the grid. Series wins over universe (more
+  // specific), mirroring the grid's buildListParams.
+  if (selectedSeries) {
+    const ser = series.find((s) => s.refId === selectedSeries);
+    return (
+      <div className="space-y-3">
+        <CatalogAlbum
+          title={ser?.name || 'Series'}
+          subtitle="filtered to the selected series"
+          count={ser?.count ?? 0}
+          defaultExpanded
+          loadPage={pageLoader({ refKind: 'series', refId: selectedSeries })}
+          {...albumProps}
+        />
+      </div>
+    );
+  }
+  if (selectedUniverse) {
+    const uni = universes.find((u) => u.refId === selectedUniverse);
+    return (
+      <div className="space-y-3">
+        <CatalogAlbum
+          title={uni?.name || 'Universe'}
+          subtitle="filtered to the selected universe"
+          count={uni?.count ?? 0}
+          defaultExpanded
+          loadPage={pageLoader({ refKind: 'universe', refId: selectedUniverse })}
+          {...albumProps}
+        />
+      </div>
+    );
+  }
+
   const noAlbums = universes.length === 0 && unlinkedCount === 0 && orphanedCount === 0;
   if (noAlbums) {
     return (
