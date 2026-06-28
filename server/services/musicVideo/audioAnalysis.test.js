@@ -112,6 +112,17 @@ describe('analyzePcm', () => {
     }
   });
 
+  it('does not shatter a long flat/structureless track into spurious sections', () => {
+    // A 40s sustained tone at constant amplitude has no energy novelty, so it
+    // must yield a single section — not the maximum evenly-spaced boundaries.
+    const n = ANALYSIS_SAMPLE_RATE * 40;
+    const samples = new Float32Array(n);
+    for (let i = 0; i < n; i++) samples[i] = 0.3 * Math.sin((2 * Math.PI * 220 * i) / ANALYSIS_SAMPLE_RATE);
+    const { sections } = analyzePcm(samples, ANALYSIS_SAMPLE_RATE);
+    expect(sections.length).toBe(1);
+    expect(sections[0].startSec).toBe(0);
+  });
+
   it('reports no tempo for silence but still spans sections', () => {
     const samples = new Float32Array(ANALYSIS_SAMPLE_RATE * 12); // 12s of zeros
     const result = analyzePcm(samples, ANALYSIS_SAMPLE_RATE);
