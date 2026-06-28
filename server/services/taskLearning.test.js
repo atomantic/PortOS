@@ -585,6 +585,33 @@ describe('TaskLearning - suggestModelTier with routing signals', () => {
     const result = await suggestModelTier('new-task');
     expect(result).toBeNull();
   });
+
+  it('should prefer the lightest tier when several clear the high-success threshold', async () => {
+    // heavy has the marginally-higher success rate, but light also clears 80% —
+    // we should route to light to avoid spending a heavier model for the same outcome.
+    const data = makeLearningData({
+      byTaskType: {
+        'docs-task': {
+          completed: 20, succeeded: 17, failed: 3,
+          totalDurationMs: 2000000, avgDurationMs: 100000,
+          successRate: 85
+        }
+      },
+      routingAccuracy: {
+        'docs-task': {
+          light: { succeeded: 9, failed: 2, lastAttempt: '2026-01-26T00:00:00.000Z' }, // 82%
+          heavy: { succeeded: 8, failed: 1, lastAttempt: '2026-01-25T00:00:00.000Z' }  // 89%
+        }
+      }
+    });
+    readFile.mockResolvedValue(JSON.stringify(data));
+
+    const result = await suggestModelTier('docs-task');
+
+    expect(result).not.toBeNull();
+    expect(result.suggested).toBe('light');
+    expect(result.reason).toMatch(/lightest of 2 proven tiers/);
+  });
 });
 
 describe('TaskLearning - recalculateModelTierMetrics', () => {

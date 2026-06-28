@@ -13,6 +13,18 @@ import { loadLearningData, emitLog } from './store.js';
 import { resetTaskTypeLearning } from './metrics.js';
 
 /**
+ * Relative resource cost of each model tier, lightest → heaviest.
+ * Used to break ties between tiers that both clear the high-success
+ * threshold: prefer the cheapest tier that still works well.
+ * (Mirrors the tier ordering in agentModelSelection.js.)
+ */
+const TIER_WEIGHT = { light: 0, default: 1, medium: 2, heavy: 3 };
+const tierWeight = (tier) => TIER_WEIGHT[tier] ?? TIER_WEIGHT.default;
+
+/** Minimum success rate (%) for a tier to count as "proven" for a task type. */
+const HIGH_SUCCESS_THRESHOLD = 80;
+
+/**
  * Get suggested priority boost for a task type based on historical success
  * Returns a multiplier: >1 for boost, <1 for demotion
  */
@@ -59,12 +71,21 @@ export async function suggestModelTier(taskType) {
       })
       .sort((a, b) => b.successRate - a.successRate);
 
-    // If a lighter tier has high success, no need to upgrade
-    const bestTier = tierResults[0];
-    if (bestTier && bestTier.successRate >= 80) {
+    // Among tiers that clear the high-success threshold, prefer the LIGHTEST
+    // (cheapest) one — there's no reason to spend a heavier model when a
+    // lighter tier already succeeds reliably. tierResults is sorted by success
+    // rate, so without this a heavy tier at 85% would beat a light tier at 82%
+    // and silently over-allocate compute for the same outcome.
+    const provenTiers = tierResults.filter(t => t.successRate >= HIGH_SUCCESS_THRESHOLD);
+    if (provenTiers.length > 0) {
+      const lightest = provenTiers.reduce((a, b) =>
+        tierWeight(b.tier) < tierWeight(a.tier) ? b : a);
+      const reason = provenTiers.length > 1
+        ? `${taskType} succeeds with ${lightest.tier} tier (${lightest.successRate}%) — using lightest of ${provenTiers.length} proven tiers`
+        : `${taskType} has ${lightest.successRate}% success with ${lightest.tier} tier`;
       return {
-        suggested: bestTier.tier,
-        reason: `${taskType} has ${bestTier.successRate}% success with ${bestTier.tier} tier`,
+        suggested: lightest.tier,
+        reason,
         avoidTiers: tierResults.filter(t => t.successRate < 40).map(t => t.tier)
       };
     }

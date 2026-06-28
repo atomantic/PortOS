@@ -1,5 +1,9 @@
 # Unreleased
 
+## CoS / task learning
+
+- **Learning-based model routing now prefers the lightest tier that succeeds, instead of the marginally-highest-success tier.** `suggestModelTier` sorted candidate tiers by success rate and returned the top one, so a `heavy` tier at 85% would beat a `light` tier at 82% — silently over-allocating compute for the same outcome, despite an inline comment that said "if a lighter tier has high success, no need to upgrade." It now picks the **lightest** tier among all that clear the high-success threshold (≥80%), realizing that intent and saving the heavier model for task types that actually need it. Failing-tier avoidance and the insufficient-data short-circuit are unchanged. (`server/services/taskLearning/routing.js`)
+
 ## Local model stack
 
 - **[issue-1329] Pinned a validated mlx/mlx-metal trio for LoRA training so the GPU-watchdog stack can't silently drift back to the known-bad build.** The three M5 Max kernel panics during FLUX.2 LoRA training all happened on mlx/mlx-metal 0.30.6, but `setup-image-video.sh` installed `mflux>=0.17` as a *floor* and let pip resolve mlx under mflux's `mlx<0.32` cap — so a reinstall could land back on a panicking build. The setup script now pins the bisect-validated trio **mflux 0.17.5 · mlx 0.31.2 · mlx-metal 0.31.2**, proven by run `d36562a0` completing a full LoRA training to adapter extraction (flux2-klein-4b, bf16, 768px, segmentation on) on the panicking M5 Max with no panic or reboot. The runtime-fingerprint half shipped earlier (#1406). (`scripts/setup-image-video.sh`, `docs/research/2026-06-13-mflux-training-watchdog-panic.md`)
