@@ -44,7 +44,18 @@ const pct = (rate) => `${Math.round((rate || 0) * 100)}%`;
 // false-positive rate plus a maturity badge, so a user can tell a high-signal
 // check from a brand-new/noisy one without leaving the catalog. `stats` is the
 // findings group for this check (per the selected series) or null when none.
-function CheckMaturityStrip({ stats }) {
+// While `pending` (the series' findings are still loading) we render a neutral
+// placeholder instead — `stats` would otherwise reflect the *previous* series'
+// findings (or the initial empty array on a preselected series), making the
+// badge claim stale counts or a misleading "untested".
+function CheckMaturityStrip({ stats, pending = false }) {
+  if (pending) {
+    return (
+      <div className="border-t border-port-border/60 pt-2 text-[10px] text-gray-600">
+        Loading findings…
+      </div>
+    );
+  }
   const { findings, dismissalRate, falsePositiveRate, level } = checkMaturity(stats);
   const badge = MATURITY_BADGE[level] || MATURITY_BADGE.new;
   return (
@@ -139,7 +150,7 @@ function ConfigField({ checkId, field, value, disabled, onCommit, resetNonce = 0
 function EditorialCheckCard({
   check, saving = false, onToggle, onConfigSave, onSeveritySave, onEdit, onDelete,
   seriesId = '', seriesConfig = null, seriesSaving = false, seriesResetNonce = 0, onSeriesConfigSave,
-  stats = null, idScope = '',
+  stats = null, statsPending = false, idScope = '',
 }) {
   const [expanded, setExpanded] = useState(false);
   // Base for this card's DOM ids. A dual-scope check (#1628) is fanned into more
@@ -196,8 +207,10 @@ function EditorialCheckCard({
 
       {/* Per-check maturity / quality signal (#1629). Only meaningful with a
           series selected — findings are per-series, so without one every check
-          would falsely read "untested". */}
-      {seriesId ? <CheckMaturityStrip stats={stats} /> : null}
+          would falsely read "untested". While the series' findings are loading
+          (`statsPending`), the strip shows a placeholder rather than the stale
+          previous-series counts `stats` still holds. */}
+      {seriesId ? <CheckMaturityStrip stats={stats} pending={statsPending} /> : null}
 
       {canSetSeverity ? (
         <div className="flex items-center gap-2">

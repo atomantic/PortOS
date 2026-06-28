@@ -221,5 +221,23 @@ describe('EditorialCheckCard', () => {
       expect(screen.getByText(/60% dismissed/i)).toBeInTheDocument();
       expect(screen.getByText(/50% FP/i)).toBeInTheDocument();
     });
+
+    it('shows a loading placeholder (not stale counts) while findings are pending', () => {
+      // `stats` still holds the previous series' findings during the fetch; the
+      // strip must not render those counts/badge — it shows a placeholder instead.
+      render(
+        <EditorialCheckCard
+          check={check}
+          onToggle={vi.fn()}
+          onConfigSave={vi.fn()}
+          seriesId="ser-2"
+          statsPending
+          stats={{ total: 10, dismissed: 6, falsePositive: 5 }}
+        />,
+      );
+      expect(screen.getByText(/loading findings/i)).toBeInTheDocument();
+      expect(screen.queryByText(/noisy/i)).toBeNull();
+      expect(screen.queryByText(/10 findings/i)).toBeNull();
+    });
   });
 });

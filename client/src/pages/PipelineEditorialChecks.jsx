@@ -705,6 +705,7 @@ export default function PipelineEditorialChecks() {
                         check={check}
                         idScope={group.scope}
                         stats={statsByCheck[check.id] || null}
+                        statsPending={loadingFindings}
                         saving={savingIds.has(check.id)}
                         onToggle={handleToggle}
                         onConfigSave={handleConfigSave}
