@@ -5,9 +5,11 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
 import { useSocket } from '../hooks/useSocket';
+import { useThemeContext } from '../components/ThemeContext';
 import { RefreshCw, Power, PowerOff, FolderOpen, ChevronDown, Plus, X, Terminal as TerminalIcon, ClipboardPaste, OctagonX, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, CornerDownLeft, Bot } from 'lucide-react';
 import * as api from '../services/api';
 import { readClipboard } from '../lib/clipboard';
+import { buildTerminalTheme, parseCssColorToHex } from '../lib/terminalTheme';
 
 // Must match MAX_TOTAL_SESSIONS in server/services/shell.js
 const MAX_SESSIONS = 20;
@@ -46,13 +48,24 @@ const NAV_KEYS = [
   { label: 'Enter', Icon: CornerDownLeft, seq: '\r' },
 ];
 
-// Read a CSS custom property as hex (e.g., '--port-bg' → '#0f0f0f')
-const getThemeHex = (varName) => {
-  const raw = getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
-  if (!raw) return '#000000';
-  const parts = raw.split(' ').map(Number);
-  if (parts.length !== 3) return '#000000';
-  return '#' + parts.map(n => n.toString(16).padStart(2, '0')).join('');
+// Read the active theme's colors off the document and assemble the xterm palette.
+// The day/night mode comes from the `data-port-theme-mode` attribute applyTheme()
+// stamps on <html>, so this stays correct without threading React state in.
+// Background/foreground prefer the dedicated --port-terminal-* tokens (hand-tuned
+// per theme) and fall back to the page bg/text.
+const readTerminalTheme = () => {
+  const root = document.documentElement;
+  const mode = root.dataset.portThemeMode === 'day' ? 'day' : 'night';
+  const css = (varName) => getComputedStyle(root).getPropertyValue(varName).trim();
+  return buildTerminalTheme({
+    bg: parseCssColorToHex(css('--port-terminal-bg') || css('--port-bg'), '#070707'),
+    fg: parseCssColorToHex(css('--port-terminal-text') || css('--port-text'), '#e5e5e5'),
+    accent: parseCssColorToHex(css('--port-accent')),
+    card: parseCssColorToHex(css('--port-card')),
+    error: parseCssColorToHex(css('--port-error')),
+    success: parseCssColorToHex(css('--port-success')),
+    warning: parseCssColorToHex(css('--port-warning')),
+  }, mode);
 };
 
 const formatAge = (createdAt) => {
@@ -114,6 +127,8 @@ export default function Shell() {
   // Cleared by any user-initiated start/attach action.
   const userIdleRef = useRef(false);
   const socket = useSocket();
+  const { themeId, theme: activeTheme } = useThemeContext();
+  const themeMode = activeTheme?.mode ?? 'night';
   const [connected, setConnected] = useState(false);
   const [sessions, setSessions] = useState([]);
   const [activeSessionId, setActiveSessionId] = useState(null);
@@ -206,42 +221,12 @@ export default function Shell() {
   useEffect(() => {
     if (!terminalRef.current || termInstanceRef.current) return;
 
-    const bg = getThemeHex('--port-bg');
-    const fg = getThemeHex('--port-text');
-    const accent = getThemeHex('--port-accent');
-    const card = getThemeHex('--port-card');
-    const error = getThemeHex('--port-error');
-    const success = getThemeHex('--port-success');
-    const warning = getThemeHex('--port-warning');
-
     const term = new Terminal({
       cursorBlink: true,
       cursorStyle: 'block',
       fontSize: 14,
       fontFamily: '"Roboto Mono for Powerline", "MesloLGS NF", "MesloLGS Nerd Font", "Hack Nerd Font", "FiraCode Nerd Font", "JetBrainsMono Nerd Font", Menlo, Monaco, "Courier New", monospace',
-      theme: {
-        background: bg,
-        foreground: fg,
-        cursor: accent,
-        cursorAccent: bg,
-        selectionBackground: accent + '40',
-        black: card,
-        red: error,
-        green: success,
-        yellow: warning,
-        blue: accent,
-        magenta: '#a855f7',
-        cyan: '#06b6d4',
-        white: fg,
-        brightBlack: '#404040',
-        brightRed: '#f87171',
-        brightGreen: '#4ade80',
-        brightYellow: '#fbbf24',
-        brightBlue: '#60a5fa',
-        brightMagenta: '#c084fc',
-        brightCyan: '#22d3ee',
-        brightWhite: '#ffffff'
-      },
+      theme: readTerminalTheme(),
       scrollback: 5000,
       allowProposedApi: true
     });
@@ -267,6 +252,17 @@ export default function Shell() {
       fitAddonRef.current = null;
     };
   }, []);
+
+  // Re-skin the live terminal when the user switches themes. The terminal is
+  // created once (above), so without this the xterm palette would stay frozen at
+  // whatever theme was active on mount — most visibly, a dark terminal stranded in
+  // a daytime theme. Depends on themeId (catches sibling day↔day / night↔night
+  // swaps that change accent/bg) and themeMode (catches the day/night palette flip).
+  useEffect(() => {
+    if (termInstanceRef.current) {
+      termInstanceRef.current.options.theme = readTerminalTheme();
+    }
+  }, [themeId, themeMode]);
 
   // Handle window resize
   useEffect(() => {
