@@ -31,7 +31,7 @@ import {
 import ArcCanvas from '../components/pipeline/ArcCanvas';
 import { useArcCanvasSync } from '../hooks/useArcCanvasSync';
 import { BEAT_KIND_COLORS, getBeatKindColor } from '../lib/beatColors';
-import { getCatalogType } from '../lib/catalogTypes';
+import { getCatalogType, payloadSnippet } from '../lib/catalogTypes';
 
 // Mirror Importer.jsx's commit picker — only these arc fields are sent on commit.
 const ARC_FIELDS_TO_COMMIT = ['logline', 'summary', 'protagonistArc', 'themes', 'shape'];
@@ -55,10 +55,10 @@ const CONTENT_TYPE_LABELS = {
 // Compose a starter-idea prefill from a set of catalog ingredients (the Catalog
 // "Remix into… → Story Builder" handoff). Ingredients are grouped by type, with
 // a header line per group (e.g. `Characters:`) and one bullet per ingredient
-// (`- {name}: {summary}`) where the summary is the first ~120 chars of the
-// payload's description/summary/text. The whole composed text is capped at 4000
-// chars to match the seedIdea field. Pure — unit-tested in StoryBuilder.test.jsx.
-const SEED_SUMMARY_KEYS = ['description', 'summary', 'text'];
+// (`- {name}: {summary}`) where the summary comes from payloadSnippet — the
+// type's snippetFallbackKeys, so a character's `physicalDescription` is included.
+// The whole composed text is capped at 4000 chars to match the seedIdea field.
+// Pure — unit-tested in StoryBuilder.test.jsx; mirrors the server composer.
 const SEED_MAX_CHARS = 4000;
 const SEED_SUMMARY_CHARS = 120;
 
@@ -88,9 +88,7 @@ export function composeSeedFromIngredients(ingredients) {
     lines.push(`${seedGroupHeading(type)}:`);
     for (const ing of members) {
       const name = (ing.name || '').trim() || '(untitled)';
-      const payload = ing.payload || {};
-      const rawKey = SEED_SUMMARY_KEYS.find((k) => typeof payload[k] === 'string' && payload[k].trim());
-      const summary = rawKey ? payload[rawKey].trim().slice(0, SEED_SUMMARY_CHARS) : '';
+      const summary = payloadSnippet(ing.payload, ing.type, SEED_SUMMARY_CHARS);
       lines.push(summary ? `- ${name}: ${summary}` : `- ${name}`);
     }
     lines.push('');

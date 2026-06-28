@@ -215,6 +215,39 @@ export function getCatalogType(id) {
   return BY_ID[id];
 }
 
+// Ordered union of every type's snippet keys — the unknown-type fallback so a
+// row whose type isn't in the registry still gets a snippet. Mirrors the client.
+const UNION_SNIPPET_KEYS = (() => {
+  const out = [];
+  for (const t of CATALOG_TYPES) {
+    for (const k of t.snippetFallbackKeys) {
+      if (!out.includes(k)) out.push(k);
+    }
+  }
+  return out;
+})();
+
+/**
+ * First non-empty payload value along a type's `snippetFallbackKeys` chain,
+ * trimmed/whitespace-collapsed and truncated to `max` (ellipsis on overflow).
+ * Honors each type's primary content key — e.g. a character's body text lives
+ * under `physicalDescription`, not `description`. Mirror of the client helper in
+ * `client/src/lib/catalogTypes.js`; keep the two in sync. `resolveType` lets a
+ * caller fold in user-defined types (defaults to the built-in registry).
+ */
+export function payloadSnippet(payload, typeId, max = 120, resolveType = null) {
+  if (!payload || typeof payload !== 'object') return '';
+  const typeDef = (resolveType && resolveType(typeId)) || BY_ID[typeId];
+  const keys = typeDef?.snippetFallbackKeys || UNION_SNIPPET_KEYS;
+  let raw = '';
+  for (const k of keys) {
+    if (payload[k]) { raw = payload[k]; break; }
+  }
+  const text = String(raw).trim().replace(/\s+/g, ' ');
+  if (text.length <= max) return text;
+  return `${text.slice(0, max - 3)}…`;
+}
+
 // --- User-defined types (runtime layer) ----------------------------------
 // User types are persisted in PostgreSQL (`catalog_user_types`, #1001 — they
 // lived in `data/settings.json` `catalogUserTypes: []` before that) and merged

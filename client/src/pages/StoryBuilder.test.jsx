@@ -116,7 +116,7 @@ describe('composeSeedFromIngredients', () => {
     const out = composeSeedFromIngredients([
       { id: 'c1', name: 'Echo Saint', type: 'character', payload: { description: 'A wiry figure in a long coat.' } },
       { id: 'c2', name: 'Mara', type: 'character', payload: { summary: 'Loyal to a fault.' } },
-      { id: 'p1', name: 'Old Harbor', type: 'place', payload: { text: 'Brine and rust.' } },
+      { id: 'p1', name: 'Old Harbor', type: 'place', payload: { description: 'Brine and rust.' } },
     ]);
     expect(out).toContain('Characters:');
     expect(out).toContain('- Echo Saint: A wiry figure in a long coat.');
@@ -125,12 +125,21 @@ describe('composeSeedFromIngredients', () => {
     expect(out).toContain('- Old Harbor: Brine and rust.');
   });
 
+  it('uses a character\'s physicalDescription (its primary content key), not just description', () => {
+    // A normal Catalog character stores its body prose under physicalDescription;
+    // payloadSnippet follows the type's snippetFallbackKeys so it is included.
+    const out = composeSeedFromIngredients([
+      { id: 'c1', name: 'Vance', type: 'character', payload: { physicalDescription: 'Scarred, silver-eyed, never still.' } },
+    ]);
+    expect(out).toContain('- Vance: Scarred, silver-eyed, never still.');
+  });
+
   it('truncates each summary to ~120 chars and the whole text to 4000', () => {
     const long = 'x'.repeat(500);
     const out = composeSeedFromIngredients([{ id: 'c1', name: 'Big', type: 'idea', payload: { description: long } }]);
-    // 120-char summary cap.
-    expect(out).toContain(`- Big: ${'x'.repeat(120)}`);
-    expect(out).not.toContain('x'.repeat(121));
+    // payloadSnippet caps at 120 with an ellipsis (117 chars + '…').
+    expect(out).toContain(`- Big: ${'x'.repeat(117)}…`);
+    expect(out).not.toContain('x'.repeat(118));
     expect(out.length).toBeLessThanOrEqual(4000);
   });
 

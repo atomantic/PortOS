@@ -181,13 +181,18 @@ export default function Catalog() {
   const confirmDelete = async (it) => {
     setArmedId(null);
     // A deleted ingredient can't be remixed — drop it from the selection so the
-    // action bar count stays honest.
-    setSelectedIds((prev) => {
-      if (!prev.has(it.id)) return prev;
-      const next = new Set(prev);
-      next.delete(it.id);
-      return next;
-    });
+    // action bar count stays honest. Remember whether it WAS selected so a failed
+    // delete can restore it (otherwise a still-live ingredient silently vanishes
+    // from the selection and a later Remix omits it).
+    const wasSelected = selectedIds.has(it.id);
+    if (wasSelected) {
+      setSelectedIds((prev) => {
+        if (!prev.has(it.id)) return prev;
+        const next = new Set(prev);
+        next.delete(it.id);
+        return next;
+      });
+    }
     // Capture the original index so a failed delete restores in place rather
     // than jumping the row to the top of the list.
     const originalIdx = items.findIndex((x) => x.id === it.id);
@@ -200,6 +205,8 @@ export default function Catalog() {
         next.splice(Math.max(0, originalIdx), 0, it);
         return next;
       });
+      // Roll the selection back too — the ingredient still exists.
+      if (wasSelected) setSelectedIds((prev) => (prev.has(it.id) ? prev : new Set(prev).add(it.id)));
     });
     loadStats();
   };
