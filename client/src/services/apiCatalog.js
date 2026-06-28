@@ -70,14 +70,18 @@ export const listCatalogIngredients = ({ type, tag, q, limit, offset, ...options
 // Batch fetch ingredients by id (max 50 server-side) — used by the Story
 // Builder remix handoff to hydrate the catalog ingredients the user selected.
 // The `ids` filter rides the normal paged list endpoint, which returns the
-// `{ items, nextOffset }` envelope; this unwraps to a plain array of ingredient
-// objects for callers. Empty/falsy ids are dropped before the request.
+// `{ items, nextOffset }` envelope ordered created_at DESC; this unwraps to a
+// plain array AND re-orders it to the requested `ids` so chips + seed read in
+// the user's selection order (mirroring the server's resolveCatalogIngredients).
+// Empty/falsy ids are dropped before the request.
 export const listCatalogIngredientsByIds = async (ids = [], options) => {
   const list = (Array.isArray(ids) ? ids : []).filter(Boolean);
   const params = new URLSearchParams();
   params.set('ids', list.join(','));
   const res = await request(`/catalog/ingredients?${params}`, options);
-  return Array.isArray(res) ? res : (Array.isArray(res?.items) ? res.items : []);
+  const items = Array.isArray(res) ? res : (Array.isArray(res?.items) ? res.items : []);
+  const byId = new Map(items.map((ing) => [ing.id, ing]));
+  return list.map((id) => byId.get(id)).filter(Boolean);
 };
 
 export const getCatalogIngredient = (id, options) =>

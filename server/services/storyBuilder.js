@@ -122,9 +122,11 @@ function composeSeedFromIngredients(ingredients) {
 // rows), then re-order to the caller's pick order so the composed seed reads in
 // the order the user selected. Missing/deleted ids are simply absent and skipped.
 async function resolveCatalogIngredients(ids) {
-  const list = (Array.isArray(ids) ? ids : [])
+  // De-dupe so a direct API caller passing the same id twice doesn't double the
+  // seed bullet (the UI selects via a Set, so this is only reachable off-UI).
+  const list = [...new Set((Array.isArray(ids) ? ids : [])
     .filter((id) => isStr(id) && id.trim())
-    .map((id) => id.trim());
+    .map((id) => id.trim()))];
   if (list.length === 0) return [];
   const { items } = await listIngredients({ ids: list, limit: list.length });
   const byId = new Map(items.map((ing) => [ing.id, ing]));
