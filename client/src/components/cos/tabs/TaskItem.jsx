@@ -21,7 +21,7 @@ import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
 import { filterSelectableModels } from '../../../utils/providers';
 import { formatDurationMin, formatBytes } from '../../../utils/formatters';
-import InlineConfirmRow from '../../ui/InlineConfirmRow';
+import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 
 const statusIcons = {
@@ -388,65 +388,68 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
           )}
         </div>
 
-        {/* Action buttons */}
-        <div className="flex items-center gap-1 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
+        {/* Action buttons. Keep the delete confirmation here, next to the trash
+            icon, rather than at the bottom of the card — a task with a lot of
+            context would otherwise push the confirm row far below the fold. */}
+        <div className={`flex items-center gap-1 transition-opacity ${
+          isConfirming(task.id) ? '' : 'md:opacity-0 md:group-hover:opacity-100'
+        }`}>
           {!editing && (
-            <>
-              {task.status === 'pending' && !task.approvalRequired && (
+            isConfirming(task.id) ? (
+              <ConfirmButtonPair
+                prompt="Delete?"
+                confirmText="Delete"
+                ariaLabel="Confirm delete task"
+                onConfirm={() => confirmDelete(handleDelete)}
+                onCancel={cancelDelete}
+              />
+            ) : (
+              <>
+                {task.status === 'pending' && !task.approvalRequired && (
+                  <button
+                    onClick={async () => {
+                      const result = await api.forceSpawnTask(task.id).catch(err => { toast.error(err.message); return null; });
+                      if (result?.success) toast.success(`Spawning ${task.id}`);
+                      if (onRefresh) onRefresh();
+                    }}
+                    className="p-1 text-gray-500 hover:text-port-success transition-colors"
+                    title="Process now"
+                    aria-label="Process task now"
+                  >
+                    <Play size={14} aria-hidden="true" />
+                  </button>
+                )}
+                {task.status !== 'blocked' && task.status !== 'completed' && (
+                  <button
+                    onClick={handleMarkBlocked}
+                    className="p-1 text-gray-500 hover:text-port-error transition-colors"
+                    title="Mark as blocked"
+                    aria-label="Mark task as blocked"
+                  >
+                    <Ban size={14} aria-hidden="true" />
+                  </button>
+                )}
                 <button
-                  onClick={async () => {
-                    const result = await api.forceSpawnTask(task.id).catch(err => { toast.error(err.message); return null; });
-                    if (result?.success) toast.success(`Spawning ${task.id}`);
-                    if (onRefresh) onRefresh();
-                  }}
-                  className="p-1 text-gray-500 hover:text-port-success transition-colors"
-                  title="Process now"
-                  aria-label="Process task now"
+                  onClick={() => setEditing(true)}
+                  className="p-1 text-gray-500 hover:text-white transition-colors"
+                  title="Edit"
+                  aria-label="Edit task"
                 >
-                  <Play size={14} aria-hidden="true" />
+                  <Edit3 size={14} aria-hidden="true" />
                 </button>
-              )}
-              {task.status !== 'blocked' && task.status !== 'completed' && (
                 <button
-                  onClick={handleMarkBlocked}
+                  onClick={() => requestDelete(task.id)}
                   className="p-1 text-gray-500 hover:text-port-error transition-colors"
-                  title="Mark as blocked"
-                  aria-label="Mark task as blocked"
+                  title="Delete"
+                  aria-label="Delete task"
                 >
-                  <Ban size={14} aria-hidden="true" />
+                  <Trash2 size={14} aria-hidden="true" />
                 </button>
-              )}
-              <button
-                onClick={() => setEditing(true)}
-                className="p-1 text-gray-500 hover:text-white transition-colors"
-                title="Edit"
-                aria-label="Edit task"
-              >
-                <Edit3 size={14} aria-hidden="true" />
-              </button>
-              <button
-                onClick={() => requestDelete(task.id)}
-                className="p-1 text-gray-500 hover:text-port-error transition-colors"
-                title="Delete"
-                aria-label="Delete task"
-              >
-                <Trash2 size={14} aria-hidden="true" />
-              </button>
-            </>
+              </>
+            )
           )}
         </div>
       </div>
-
-      {isConfirming(task.id) && (
-        <InlineConfirmRow
-          className="mt-2"
-          question="Delete this task? This cannot be undone."
-          confirmTitle="Confirm delete"
-          cancelTitle="Cancel delete"
-          onConfirm={() => confirmDelete(handleDelete)}
-          onCancel={cancelDelete}
-        />
-      )}
 
       {/* Blocked Reason Modal */}
       {showBlockedModal && (
