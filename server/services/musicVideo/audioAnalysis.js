@@ -72,6 +72,10 @@ const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
  */
 export async function decodeAudioToPcm(audioPath, { signal } = {}) {
   if (typeof audioPath !== 'string' || !audioPath) return null;
+  // A listener added to an already-aborted signal never fires, so without this
+  // guard a pre-cancelled request (plausible off the request lifecycle, under a
+  // render queue) would still spawn ffmpeg and decode the whole track.
+  if (signal?.aborted) return null;
   const ffmpeg = await findFfmpeg();
   if (!ffmpeg) return null;
 
@@ -272,11 +276,23 @@ function segmentSections(energy, fps, durationSec) {
   const novelty = new Float32Array(winCount);
   for (let w = 1; w < winCount; w++) novelty[w] = Math.abs(profile[w] - profile[w - 1]);
 
+  // A boundary must reflect a real energy change, not just be the highest of an
+  // essentially-flat profile. Without this floor, silence / sustained drones /
+  // an even click track (all near-zero novelty) still get carved into the
+  // maximum evenly-spaced sections purely as a spacing artifact. Require the
+  // jump to clear a small fraction of the track's mean window energy; flat
+  // input then has no qualifying boundary and falls through to one section.
+  let meanProfile = 0;
+  for (let w = 0; w < winCount; w++) meanProfile += profile[w];
+  meanProfile /= winCount;
+  const noveltyFloor = Math.max(1e-9, meanProfile * 0.05);
+
   const minWin = Math.max(1, Math.round(MIN_SECTION_SEC / SECTION_WINDOW_SEC));
-  // Rank candidate boundaries by novelty, greedily accept those that respect
-  // the minimum-section spacing, up to MAX_SECTIONS - 1 internal boundaries.
+  // Rank candidate boundaries by novelty, greedily accept those that clear the
+  // floor and respect the minimum-section spacing, up to MAX_SECTIONS - 1
+  // internal boundaries.
   const ranked = Array.from({ length: winCount }, (_, w) => w)
-    .filter((w) => w >= minWin && w <= winCount - minWin)
+    .filter((w) => w >= minWin && w <= winCount - minWin && novelty[w] >= noveltyFloor)
     .sort((a, b) => novelty[b] - novelty[a]);
   const boundaries = [];
   for (const w of ranked) {
