@@ -24,7 +24,7 @@ import { memo, useEffect, useState } from 'react';
 import { ChevronDown, ChevronRight, Loader2, Pencil, Sliders, Trash2 } from 'lucide-react';
 import ToggleSwitch from '../../ToggleSwitch';
 import CheckKindBadge from './CheckKindBadge';
-import { SEVERITY_BADGE_CLASSES, checkMaturity, CHECK_NOISY_DISMISSAL_RATE } from '../../../lib/editorialChecks';
+import { SEVERITY_BADGE_CLASSES, checkMaturity } from '../../../lib/editorialChecks';
 
 const SEVERITY_LEVELS = ['high', 'medium', 'low'];
 
@@ -73,7 +73,7 @@ function CheckMaturityStrip({ stats, pending = false }) {
           </span>
           <span aria-hidden="true">·</span>
           <span
-            className={(dismissalRate || 0) >= CHECK_NOISY_DISMISSAL_RATE ? 'text-port-warning' : undefined}
+            className={level === 'noisy' ? 'text-port-warning' : undefined}
             title="Share of this check's findings the user dismissed (drives the noisy badge)"
           >
             {pct(dismissalRate)} dismissed
