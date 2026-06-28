@@ -348,6 +348,32 @@ describe('Catalog page', () => {
     });
   });
 
+  it('paginates an album past one page with its own Load more', async () => {
+    const rawPage = Array.from({ length: 60 }, (_, i) => ({
+      id: `raw-${i}`, name: `Raw ${i}`, type: 'idea', payload: {}, tags: [],
+    }));
+    // Grid loads return the default sample; the Raw album (unlinked) gets a full
+    // first page then a short second page.
+    listCatalogIngredients.mockImplementation((params = {}) => {
+      if (params.unlinked && params.offset === 0) return Promise.resolve({ items: rawPage, nextOffset: 60 });
+      if (params.unlinked && params.offset === 60) return Promise.resolve({ items: [{ id: 'raw-60', name: 'Raw 60', type: 'idea', payload: {}, tags: [] }], nextOffset: 61 });
+      return Promise.resolve({ items: sample, nextOffset: sample.length });
+    });
+    renderCatalog();
+    await waitFor(() => expect(screen.getByText('Echo Saint')).toBeTruthy());
+
+    fireEvent.click(screen.getByRole('button', { name: /^Albums$/i }));
+    await waitFor(() => expect(screen.getByText('Raw 0')).toBeTruthy());
+
+    const loadMore = await screen.findByRole('button', { name: /Load more/i });
+    await act(async () => { fireEvent.click(loadMore); });
+
+    expect(listCatalogIngredients).toHaveBeenCalledWith(
+      expect.objectContaining({ unlinked: true, offset: 60 }),
+    );
+    await waitFor(() => expect(screen.getByText('Raw 60')).toBeTruthy());
+  });
+
   it('bulk-places the selection into a universe with type-derived roles', async () => {
     renderCatalog();
     await waitFor(() => expect(screen.getByText('Echo Saint')).toBeTruthy());

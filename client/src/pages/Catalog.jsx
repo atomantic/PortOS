@@ -128,6 +128,20 @@ export default function Catalog() {
     return () => clearTimeout(t);
   }, [searchInput, updateParams]);
 
+  // Adopt an externally-changed `?q=` (Back/Forward, or an in-app link to a
+  // different query while this page stays mounted) so the box + fetch never lag
+  // the URL. Our own debounced write lands urlQ === q, so this is a no-op for
+  // typing and only fires on a real external change.
+  const urlQ = searchParams.get('q') || '';
+  useEffect(() => {
+    if (urlQ !== q) {
+      setSearchInput(urlQ);
+      setQ(urlQ);
+    }
+    // Keyed on urlQ only: this effect reacts to URL changes, not to our own
+    // debounce writing q (which already set urlQ to match, making this a no-op).
+  }, [urlQ, q]);
+
   const loadStats = useCallback(() => {
     getCatalogStats({ silent: true })
       .then((s) => setStats(s || null))
@@ -272,8 +286,11 @@ export default function Catalog() {
     // unlinked, so it never belongs in a universe/series-filtered grid.
     const matchesType = !selectedType || created.type === selectedType;
     const matchesSearch = !q || (created.name || '').toLowerCase().includes(q.toLowerCase());
+    // The create form always posts tags: [], so an active tag filter can never
+    // match a fresh row — gate on it too, else the grid shows a non-matching card.
+    const matchesTag = !selectedTag || (created.tags || []).includes(selectedTag);
     const refFiltered = !!(selectedUniverse || selectedSeries);
-    if (view === 'grid' && matchesType && matchesSearch && !refFiltered) {
+    if (view === 'grid' && matchesType && matchesSearch && matchesTag && !refFiltered) {
       setItems((prev) => [created, ...prev]);
     }
     loadStats();
@@ -849,14 +866,22 @@ export default function Catalog() {
 
 // Albums grouped view (decision #1: flat universe albums + Raw + Orphaned).
 // Album headers show counts from /facets up front; each album lazy-loads its
-// cards the first time it is expanded. Mounted under a `key={dataVersion}` so a
-// mutation remounts it and the lazy loads re-run against fresh data.
+// cards the first time it is expanded and paginates with Load more. Mounted
+// under a `key={dataVersion}` so a mutation remounts it and the lazy loads
+// re-run against fresh data. A universe album rolls up its series' members
+// server-side (decision #1), so a series-only ingredient still has a home here.
 function AlbumsView({ facets, cardProps, onConfirmDelete }) {
   if (!facets) {
     return <div className="text-gray-500 text-sm">Loading albums…</div>;
   }
   const { universes = [], unlinkedCount = 0, orphanedCount = 0 } = facets;
-  const albumProps = { ...cardProps, onConfirmDelete };
+  const albumProps = { ...cardProps, onConfirmDelete, pageSize: PAGE_SIZE };
+  // One page fetcher per album view — paginated so albums never reintroduce the
+  // old silent cap. `extra` carries the view's filter (unlinked / orphaned / a
+  // universe ref).
+  const pageLoader = (extra) => (offset) =>
+    listCatalogIngredients({ ...extra, limit: PAGE_SIZE, offset, silent: true })
+      .then((d) => (Array.isArray(d?.items) ? d.items : []));
   const noAlbums = universes.length === 0 && unlinkedCount === 0 && orphanedCount === 0;
   if (noAlbums) {
     return (
@@ -873,8 +898,7 @@ function AlbumsView({ facets, cardProps, onConfirmDelete }) {
           subtitle="not yet placed in a universe or series"
           count={unlinkedCount}
           defaultExpanded
-          loadItems={() => listCatalogIngredients({ unlinked: true, limit: 200, silent: true })
-            .then((d) => (Array.isArray(d?.items) ? d.items : []))}
+          loadPage={pageLoader({ unlinked: true })}
           {...albumProps}
         />
       )}
@@ -883,8 +907,7 @@ function AlbumsView({ facets, cardProps, onConfirmDelete }) {
           key={u.refId}
           title={u.name}
           count={u.count}
-          loadItems={() => listCatalogIngredients({ refKind: 'universe', refId: u.refId, limit: 200, silent: true })
-            .then((d) => (Array.isArray(d?.items) ? d.items : []))}
+          loadPage={pageLoader({ refKind: 'universe', refId: u.refId })}
           {...albumProps}
         />
       ))}
@@ -893,8 +916,7 @@ function AlbumsView({ facets, cardProps, onConfirmDelete }) {
           title="Orphaned"
           subtitle="linked to a deleted universe/series — re-home these"
           count={orphanedCount}
-          loadItems={() => listCatalogIngredients({ orphaned: true, limit: 200, silent: true })
-            .then((d) => (Array.isArray(d?.items) ? d.items : []))}
+          loadPage={pageLoader({ orphaned: true })}
           {...albumProps}
         />
       )}

@@ -747,7 +747,20 @@ export async function listIngredients({ ids, type, tag, query: q, refKind = null
     // under multiple roles isn't duplicated — no DISTINCT needed. Composes with
     // type/tag/q above. `unlinked` and `orphaned` are mutually exclusive views
     // of the un-homed set; the route schema rejects combining them with ref.
-    if (refKind && refId) {
+    if (refKind === 'universe' && refId) {
+      // A universe album/filter is the universe's WHOLE membership: ingredients
+      // linked directly to the universe OR to any live series under it (decision
+      // #1 — the series dropdown narrows *within* the universe, so a series-only
+      // ingredient must still land in its parent universe). $refId is referenced
+      // twice via one placeholder.
+      const refIdx = idx++;
+      conditions.push(`EXISTS (SELECT 1 FROM catalog_ingredient_refs r
+        WHERE r.ingredient_id = catalog_ingredients.id AND r.deleted = false
+          AND ((r.ref_kind = 'universe' AND r.ref_id = $${refIdx})
+            OR (r.ref_kind = 'series' AND r.ref_id IN (
+                  SELECT id FROM pipeline_series WHERE universe_id = $${refIdx} AND deleted = false))))`);
+      params.push(refId);
+    } else if (refKind && refId) {
       conditions.push(`EXISTS (SELECT 1 FROM catalog_ingredient_refs r
         WHERE r.ingredient_id = catalog_ingredients.id AND r.deleted = false
           AND r.ref_kind = $${idx++} AND r.ref_id = $${idx++})`);
@@ -1751,11 +1764,17 @@ export async function getCatalogFacets() {
     query(`SELECT type, COUNT(*)::int AS count
              FROM catalog_ingredients WHERE deleted = false
             GROUP BY type ORDER BY count DESC, type`),
+    // Universe membership rolls up its series' members (decision #1), so the
+    // album header count matches what the universe album/filter actually lists:
+    // distinct ingredients linked to the universe OR to a live series under it.
     query(`SELECT u.id AS ref_id, u.name, COUNT(DISTINCT r.ingredient_id)::int AS count
-             FROM catalog_ingredient_refs r
+             FROM universes u
+             JOIN catalog_ingredient_refs r ON r.deleted = false AND (
+                  (r.ref_kind = 'universe' AND r.ref_id = u.id)
+                  OR (r.ref_kind = 'series' AND r.ref_id IN (
+                        SELECT s.id FROM pipeline_series s WHERE s.universe_id = u.id AND s.deleted = false)))
              JOIN catalog_ingredients i ON i.id = r.ingredient_id AND i.deleted = false
-             JOIN universes u ON u.id = r.ref_id AND u.deleted = false
-            WHERE r.deleted = false AND r.ref_kind = 'universe'
+            WHERE u.deleted = false
             GROUP BY u.id, u.name ORDER BY count DESC, u.name`),
     query(`SELECT s.id AS ref_id, s.name, s.universe_id, COUNT(DISTINCT r.ingredient_id)::int AS count
              FROM catalog_ingredient_refs r

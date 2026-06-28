@@ -76,6 +76,21 @@ describe.skipIf(!dbReady)('catalogDB facets + album filters (#1762)', () => {
     expect(typedMiss.items.map((i) => i.id)).not.toContain(linked.id);
   });
 
+  it('rolls a series-only ingredient up under its parent universe (decision #1)', async () => {
+    const seriesOnly = await catalogDB.createIngredient({ type: 'character', name: `SeriesOnly ${nonce}` });
+    createdIngredientIds.add(seriesOnly.id);
+    // Linked ONLY to the series (which belongs to UNI) — no direct universe ref.
+    await catalogDB.linkIngredientToRef(seriesOnly.id, 'series', SER_ID, 'cast-character');
+
+    const { items } = await catalogDB.listIngredients({ refKind: 'universe', refId: UNI_ID, limit: 200 });
+    expect(items.map((i) => i.id)).toContain(seriesOnly.id);
+
+    // And the universe facet count reflects the rolled-up series member.
+    const facets = await catalogDB.getCatalogFacets();
+    const uni = facets.universes.find((u) => u.refId === UNI_ID);
+    expect(uni.count).toBeGreaterThanOrEqual(1);
+  });
+
   it('does not duplicate a row linked under multiple roles', async () => {
     const multi = await catalogDB.createIngredient({ type: 'character', name: `Multi ${nonce}` });
     createdIngredientIds.add(multi.id);
