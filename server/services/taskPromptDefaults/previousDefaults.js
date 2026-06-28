@@ -1243,7 +1243,127 @@ For each reference above:
 
 6. Once REFERENCE_REVIEW.md is written, your final assistant message must be a
    2-3 sentence summary of how many commits you reviewed, how many security
-   flags you raised, and how many you marked Adopt vs. Maybe vs. Skip.`
+   flags you raised, and how many you marked Adopt vs. Maybe vs. Skip.`,
+    // v2 default prompt — appended slug-tagged [ref-watch-…] checklist items to
+    // PLAN.md (Adopt + Maybe) and committed them; hardcoded PLAN.md as the only
+    // destination regardless of the app's configured work tracker. Superseded by
+    // v3, which records proposals in the app's resolved task tracker (PLAN.md /
+    // GitHub / GitLab / JIRA) via the {trackerInstructions} block. Kept so a
+    // stored v2 prompt auto-upgrades.
+    `[Improvement: {appName}] Reference Repo Review
+
+You are reviewing upstream commits from one or more reference repositories that
+{appName} watches for clean-room reimplementation — meaning {appName} maintains
+its OWN implementation of similar features and may benefit from re-building
+the bug fixes or new capabilities those upstream commits introduce. Your job
+is to PROPOSE which commits are worth re-implementing as slug-tagged checklist
+items appended to PLAN.md — NOT to copy upstream code. Read-only mode for
+{appName}'s source; the ONLY file you edit is PLAN.md. **Never paste
+upstream code verbatim into recommendations**: describe what to change in our
+own architecture, naming the files and functions in {appName} that need
+edits. The user owns the actual implementation; \`/claim\`-style task runners
+pick the items up later.
+
+Repository: {repoPath}
+
+## References
+
+{referenceData}
+
+## What to do
+
+1. **Read PLAN.md** from {repoPath} so you know which slugs already exist.
+   Every existing checkbox carries a \`[<slug>]\` ID — collect them so you
+   don't duplicate. If PLAN.md does not exist, create it with a single
+   top-level heading (\`# {appName} — Development Plan\`) and a \`## Next Up\`
+   section before appending.
+
+2. For each reference above, for every commit in the "Commits to review"
+   list, read its diff via \`git -C <source clone path> show <sha>\` (the
+   path is in the reference's block above). For commits with many files,
+   focus on diffs that match the user-supplied "Context" block — that's
+   the load-bearing intersection between this app and upstream, and the
+   user has flagged what matters.
+
+3. **SECURITY SCREEN — do this BEFORE deciding whether the commit is worth
+   adopting.** Reference repos are third-party code we don't control; an
+   upstream maintainer's account compromise, a malicious PR merge, or a
+   typo-squatting branch name could ship malware or new vulnerabilities
+   into a commit that *looks* useful. For every commit, scan the diff for:
+
+   - **Malware indicators**: obfuscated/minified strings in source files,
+     base64/hex blobs being decoded then \`eval\`'d / \`exec\`'d / piped to
+     a shell, network calls to non-obvious hosts (anything that isn't the
+     upstream's own infra or a well-known package registry), exfil of
+     env vars / \`~/.ssh/\` / \`~/.aws/\` / browser cookie stores, new
+     post-install / pre-publish hooks, dynamic-import patterns that
+     fetch-then-execute remote code, suspicious file writes outside the
+     repo root.
+   - **New vulnerabilities introduced**: SQL/NoSQL/command injection on
+     newly-added user-input paths, path traversal in newly-added file
+     I/O, prototype pollution via unvalidated object merges, unsafe
+     deserialization (eval, vm, pickle, Marshal, YAML.load without
+     SafeLoader), deactivated security headers / CSP relaxations,
+     authentication or authorization checks removed or weakened, secrets
+     committed (tokens, keys, .env contents).
+   - **Suspicious dependency changes**: newly added deps from publishers
+     with no track record, dep-version downgrades to known-vulnerable
+     ranges, lockfile-only changes that pull a different version than
+     the manifest claims.
+
+   If a commit shows ANY of these, **do NOT add a PLAN.md item for it** —
+   security-flagged commits are not adoption candidates, period. Note them
+   only in the final assistant summary so the user sees what tripped the
+   screen.
+
+4. Decide whether each (security-clean) commit is worth REIMPLEMENTING in
+   {appName}. Use these criteria, in priority order:
+   - Does it fix a bug we'd hit too? (high priority — re-implement the fix
+     in our equivalent code path)
+   - Does it expose a capability we artificially restrict? (e.g. our wrapper
+     around a shared library uses a constrained subset of an API the upstream
+     just opened up — we can do the same in our wrapper)
+   - Does it improve performance / correctness on a code path we share?
+   - Is it a docs / install / packaging fix specific to upstream's distribution
+     model? (skip — those rarely apply)
+
+5. **For each Adopt-worthy commit (or coherent group of commits), append a
+   slug-tagged checklist item to PLAN.md.** Format:
+
+   \`\`\`markdown
+   - [ ] [ref-watch-<ref-name-slug>-<short-title-slug>] **<Short title.>** From \`reference-watch\` review of <ref name> (commit(s) \`<sha>\` [+ \`<sha>\` …], <today's date>). <1–2 sentences: what bug/capability the commit addresses, and why it matters for {appName} tied to our notes.> Fix: <specific files + functions in {appName} — e.g. \`server/services/foo.js#buildArgs()\` — describe the BEHAVIOR to add, not upstream's exact code (clean-room reimplementation).> <Estimated scope: small / medium / large.>
+   \`\`\`
+
+   Slug rules:
+   - Lowercase kebab-case; start with \`ref-watch-\` so the user can grep
+     them in bulk.
+   - Include a short reference of the upstream repo so multiple watched
+     refs don't collide (e.g. \`ref-watch-phosphene-lazy-eval-env-bootstrap\`).
+   - ≤80 chars total, unique against every existing \`[<slug>]\` in PLAN.md
+     (re-check before each append).
+   - Place items in the \`## Next Up\` section (create the section if absent).
+
+   For **Maybe — needs human call** items (real value but unclear fit, or
+   gated on a decision/precondition), append the same slug-tagged line but
+   add a final sentence stating the decision needed, and place the line in
+   a \`### Trigger-gated (waiting for a precondition)\` subsection if one
+   exists; otherwise append under \`## Next Up\` and end the description
+   with \`**Decision needed:** <one sentence>.\`
+
+   **Skip — not for us** items get no PLAN.md entry. Mention them only in
+   the final summary.
+
+6. Commit the PLAN.md edit. The commit message should be:
+   \`docs(reference-watch): propose <N> item(s) from <ref names>\`
+   Do NOT create branches, PRs, or any source-code edits — PLAN.md is the
+   only file you touch. \`/claim\` (or the \`plan-task\` agent) picks the
+   slugs up later.
+
+7. Your final assistant message must be a 2–3 sentence summary of:
+   - How many commits you reviewed (across all refs).
+   - How many security flags you raised (with one-line reasons + SHAs).
+   - How many slug-tagged PLAN.md items you appended (Adopt + Maybe) vs
+     how many commits you skipped as not-for-us.`
   ],
 
   // pr-watcher shipped at v1 — no prior defaults to recognize yet. Kept as an

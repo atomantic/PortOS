@@ -1357,13 +1357,14 @@ You are reviewing upstream commits from one or more reference repositories that
 {appName} watches for clean-room reimplementation — meaning {appName} maintains
 its OWN implementation of similar features and may benefit from re-building
 the bug fixes or new capabilities those upstream commits introduce. Your job
-is to PROPOSE which commits are worth re-implementing as slug-tagged checklist
-items appended to PLAN.md — NOT to copy upstream code. Read-only mode for
-{appName}'s source; the ONLY file you edit is PLAN.md. **Never paste
-upstream code verbatim into recommendations**: describe what to change in our
-own architecture, naming the files and functions in {appName} that need
-edits. The user owns the actual implementation; \`/claim\`-style task runners
-pick the items up later.
+is to PROPOSE which commits are worth re-implementing as work items recorded in
+{appName}'s configured task tracker (described under "Where to record proposals"
+below) — NOT to copy upstream code. Read-only mode for {appName}'s source: you
+do NOT edit application code, only the task tracker. **Never paste upstream code
+verbatim into recommendations**: describe what to change in our own
+architecture, naming the files and functions in {appName} that need edits. The
+user owns the actual implementation; \`/claim\`-style task runners pick the items
+up later.
 
 Repository: {repoPath}
 
@@ -1371,13 +1372,16 @@ Repository: {repoPath}
 
 {referenceData}
 
+## Where to record proposals
+
+{trackerInstructions}
+
 ## What to do
 
-1. **Read PLAN.md** from {repoPath} so you know which slugs already exist.
-   Every existing checkbox carries a \`[<slug>]\` ID — collect them so you
-   don't duplicate. If PLAN.md does not exist, create it with a single
-   top-level heading (\`# {appName} — Development Plan\`) and a \`## Next Up\`
-   section before appending.
+1. **Inventory existing proposals so you don't duplicate.** Follow the
+   "Inventory" step under "Where to record proposals" above for this app's
+   tracker. Every prior reference-watch proposal carries a \`[ref-watch-…]\`
+   slug — collect the existing slugs and skip any commit already proposed.
 
 2. For each reference above, for every commit in the "Commits to review"
    list, read its diff via \`git -C <source clone path> show <sha>\` (the
@@ -1412,7 +1416,7 @@ Repository: {repoPath}
      ranges, lockfile-only changes that pull a different version than
      the manifest claims.
 
-   If a commit shows ANY of these, **do NOT add a PLAN.md item for it** —
+   If a commit shows ANY of these, **do NOT propose it** —
    security-flagged commits are not adoption candidates, period. Note them
    only in the final assistant summary so the user sees what tripped the
    screen.
@@ -1428,43 +1432,42 @@ Repository: {repoPath}
    - Is it a docs / install / packaging fix specific to upstream's distribution
      model? (skip — those rarely apply)
 
-5. **For each Adopt-worthy commit (or coherent group of commits), append a
-   slug-tagged checklist item to PLAN.md.** Format:
+5. **For each Adopt-worthy commit (or coherent group of commits), record a
+   proposal in the task tracker** using the "Record" mechanics under "Where
+   to record proposals" above. Each proposal must carry:
 
-   \`\`\`markdown
-   - [ ] [ref-watch-<ref-name-slug>-<short-title-slug>] **<Short title.>** From \`reference-watch\` review of <ref name> (commit(s) \`<sha>\` [+ \`<sha>\` …], <today's date>). <1–2 sentences: what bug/capability the commit addresses, and why it matters for {appName} tied to our notes.> Fix: <specific files + functions in {appName} — e.g. \`server/services/foo.js#buildArgs()\` — describe the BEHAVIOR to add, not upstream's exact code (clean-room reimplementation).> <Estimated scope: small / medium / large.>
-   \`\`\`
-
-   Slug rules:
-   - Lowercase kebab-case; start with \`ref-watch-\` so the user can grep
-     them in bulk.
-   - Include a short reference of the upstream repo so multiple watched
-     refs don't collide (e.g. \`ref-watch-phosphene-lazy-eval-env-bootstrap\`).
-   - ≤80 chars total, unique against every existing \`[<slug>]\` in PLAN.md
-     (re-check before each append).
-   - Place items in the \`## Next Up\` section (create the section if absent).
+   - **A slug-tagged title.** Lowercase kebab-case starting with
+     \`ref-watch-\` so the user can grep them in bulk; include a short
+     reference of the upstream repo so multiple watched refs don't collide
+     (e.g. \`ref-watch-phosphene-lazy-eval-env-bootstrap\`); ≤80 chars total;
+     unique against every existing \`[ref-watch-…]\` slug (re-check before
+     each record).
+   - **A short title sentence.**
+   - **Provenance:** From \`reference-watch\` review of <ref name>
+     (commit(s) \`<sha>\` [+ \`<sha>\` …], <today's date>).
+   - **1–2 sentences** on what bug/capability the commit addresses and why it
+     matters for {appName} tied to our notes.
+   - **A \`Fix:\` line** naming the specific files + functions in {appName}
+     to change (e.g. \`server/services/foo.js#buildArgs()\`) — describe the
+     BEHAVIOR to add, not upstream's exact code (clean-room reimplementation).
+   - **Estimated scope:** small / medium / large.
 
    For **Maybe — needs human call** items (real value but unclear fit, or
-   gated on a decision/precondition), append the same slug-tagged line but
-   add a final sentence stating the decision needed, and place the line in
-   a \`### Trigger-gated (waiting for a precondition)\` subsection if one
-   exists; otherwise append under \`## Next Up\` and end the description
-   with \`**Decision needed:** <one sentence>.\`
+   gated on a decision/precondition), record the same proposal but end the
+   description with \`**Decision needed:** <one sentence>.\` (see the tracker
+   instructions for where Maybe items go).
 
-   **Skip — not for us** items get no PLAN.md entry. Mention them only in
-   the final summary.
+   **Skip — not for us** commits get no proposal. Mention them only in the
+   final summary.
 
-6. Commit the PLAN.md edit. The commit message should be:
-   \`docs(reference-watch): propose <N> item(s) from <ref names>\`
-   Do NOT create branches, PRs, or any source-code edits — PLAN.md is the
-   only file you touch. \`/claim\` (or the \`plan-task\` agent) picks the
-   slugs up later.
+6. **Finalize** per the "Finalize" step under "Where to record proposals"
+   above. Do NOT create branches, PRs, or any source-code edits.
 
 7. Your final assistant message must be a 2–3 sentence summary of:
    - How many commits you reviewed (across all refs).
    - How many security flags you raised (with one-line reasons + SHAs).
-   - How many slug-tagged PLAN.md items you appended (Adopt + Maybe) vs
-     how many commits you skipped as not-for-us.`,
+   - How many proposals you recorded (Adopt + Maybe) vs how many commits you
+     skipped as not-for-us.`,
 
   'pr-watcher': `[Improvement: {appName}] Pull Request Watcher
 

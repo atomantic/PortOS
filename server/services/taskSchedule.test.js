@@ -329,12 +329,14 @@ describe('taskSchedule', () => {
       expect(interval.enabled).toBe(false)
     })
 
-    it('reference-watch default is writable so the v2 prompt can append [ref-watch-…] items to PLAN.md', async () => {
-      // The v2 reference-watch prompt instructs the agent to append slug-tagged
-      // checklist items to PLAN.md and commit them. If `readOnly` flips back to
-      // true, agentPromptBuilder injects the "## Read-Only Task" guard and the
-      // agent refuses to write the entries — silently breaking the flow. Pin
-      // the contract so a future "default to read-only" refactor surfaces here.
+    it('reference-watch default is writable so the v3 prompt can record proposals (PLAN.md commit or gh/glab issue create)', async () => {
+      // The v3 reference-watch prompt records proposals in the app's resolved
+      // work tracker: the PLAN.md path appends slug-tagged checklist items and
+      // commits them; the GitHub/GitLab paths shell out to `gh`/`glab issue
+      // create`. Both need a writable agent — if `readOnly` flips back to true,
+      // agentPromptBuilder injects the "## Read-Only Task" guard and the agent
+      // refuses to write/commit/shell, silently breaking the flow. Pin the
+      // contract so a future "default to read-only" refactor surfaces here.
       const interval = await getTaskInterval('reference-watch')
       expect(interval.taskMetadata?.readOnly).toBe(false)
     })
@@ -348,12 +350,13 @@ describe('taskSchedule', () => {
       expect(PROMPT_VERSIONS['reference-watch']).toBe(REFERENCE_WATCH_AUDITED_VERSION)
     })
 
-    it('reference-watch v2 prompt requires a writable default so it can append + commit PLAN.md items (issue #734)', () => {
-      // The coupling the audit anchor protects: at the audited version (v2), the prompt
-      // writes to PLAN.md, so the raw default must be writable. If a future re-audit flips
+    it('reference-watch v3 prompt requires a writable default so it can record proposals (PLAN.md commit or gh/glab issue create) (issue #734)', () => {
+      // The coupling the audit anchor protects: at the audited version (v3), the prompt
+      // writes to the resolved tracker (PLAN.md commit, or `gh`/`glab issue create`), so the
+      // raw default must be writable. If a future re-audit flips
       // REFERENCE_WATCH_AUDITED_VERSION to a propose-only version, update this expectation
       // alongside the default and the anchor.
-      if (REFERENCE_WATCH_AUDITED_VERSION === 2) {
+      if (REFERENCE_WATCH_AUDITED_VERSION === 3) {
         expect(DEFAULT_TASK_INTERVALS['reference-watch'].taskMetadata.readOnly).toBe(false)
       }
     })

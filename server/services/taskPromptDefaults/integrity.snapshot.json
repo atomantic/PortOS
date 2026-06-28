@@ -27,7 +27,7 @@
     "pr-reviewer": "add27b67daa6aa2c75717ac96a6bd625",
     "pr-reviewer-security": "2050297d1cdb081a8576a781828ee44f",
     "pr-reviewer-review": "21ccd5d3a6f3eea16c479db9ed9aedaa",
-    "reference-watch": "722ca590fb4b6323c98850a176b9b309",
+    "reference-watch": "e0e20754700fb08d5159b8437d9c260b",
     "pr-watcher": "53ead8e26d396849bfa78f28550bd691",
     "refresh-local-llm-catalog": "a9dce67bb9f0837ba904f3412b03637f"
   },
@@ -40,7 +40,7 @@
     "pr-reviewer": 3,
     "code-reviewer-a": 1,
     "code-reviewer-b": 1,
-    "reference-watch": 2,
+    "reference-watch": 3,
     "pr-watcher": 1,
     "refresh-local-llm-catalog": 1,
     "security": 2,
@@ -54,7 +54,7 @@
     "mobile-responsive": 2,
     "release-check": 6
   },
-  "REFERENCE_WATCH_AUDITED_VERSION": 2,
+  "REFERENCE_WATCH_AUDITED_VERSION": 3,
   "PREVIOUS_DEFAULT_PROMPTS": {
     "feature-ideas": [
       "d67a9028aeb8bb8348453951f878501b",
@@ -77,7 +77,8 @@
       "f64e5d8176a871304fa691df812cda61"
     ],
     "reference-watch": [
-      "f9322140bff7d3f603799c09ce468da9"
+      "f9322140bff7d3f603799c09ce468da9",
+      "722ca590fb4b6323c98850a176b9b309"
     ],
     "pr-watcher": [],
     "claim-issue-gitlab": [
