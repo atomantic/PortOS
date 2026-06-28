@@ -323,3 +323,14 @@ cosEvents.on('agent:completed', (agent) => {
     );
   }
 });
+
+// When a task is deleted, dismiss any pending review items still pointing at it.
+// Otherwise the user is left staring at an orphaned alert for a task that no
+// longer exists — and its "Review"/approve action resolves nothing because the
+// underlying task is gone. Mirrors the memory:approved/rejected cleanup.
+cosEvents.on('tasks:changed', (data) => {
+  if (data?.action !== 'deleted' || !data?.taskId) return;
+  dismissByReferenceId(data.taskId).catch(err =>
+    console.error(`❌ Failed to dismiss review items for deleted task ${data.taskId}: ${err.message}`)
+  );
+});
