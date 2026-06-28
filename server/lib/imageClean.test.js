@@ -347,6 +347,18 @@ describe('cleanImageBuffer (composable steps)', () => {
     expect(result.height).toBe(32);
   });
 
+  it('reports the unavoidable metadata strip even when only denoise is selected', async () => {
+    const caBX = makePngChunk('caBX', Buffer.alloc(16, 0xCA));
+    const polluted = injectChunkBeforeIEND(pngFixture, caBX);
+    const result = await cleanImageBuffer(polluted, { metadata: false, denoise: true });
+    // The denoise re-encode strips caBX/metadata regardless — the report must
+    // not imply metadata survived.
+    expect(result.steps.map((s) => s.step)).toEqual(['metadata', 'denoise']);
+    expect(result.c2paStripped).toBe(true);
+    const meta = result.steps.find((s) => s.step === 'metadata');
+    expect(meta.detail).toContain('unavoidable');
+  });
+
   it('bakes orientation into pixels (lossy) when a PNG carries a non-default EXIF orientation', async () => {
     // 4×8 PNG re-emitted with EXIF Orientation=6 (rotate 90° CW). A pure chunk
     // strip would drop the tag and visibly rotate it, so the metadata-only path

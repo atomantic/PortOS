@@ -266,7 +266,15 @@ export async function cleanImageBuffer(buffer, options = {}) {
       width = info.width || null;
       height = info.height || null;
       c2paStripped = hadC2PA;
-      if (metadata) steps.push({ step: 'metadata', status: 'applied', lossless: false, detail: 'dropped via re-encode' });
+      // The re-encode drops all metadata unconditionally. Report it even when the
+      // user left the metadata step OFF — otherwise the report implies metadata
+      // survived a denoise pass, which it never does. Honest > misleading.
+      steps.push({
+        step: 'metadata',
+        status: 'applied',
+        lossless: false,
+        detail: metadata ? 'dropped via re-encode' : 'dropped as an unavoidable side effect of denoise re-encode',
+      });
       steps.push({ step: 'denoise', status: 'applied', lossless: false, detail: 'median(3) + sharpen' });
     } else if (metadata && format === 'png') {
       const meta = await sharp(buffer, { limitInputPixels: MAX_PIXELS }).metadata();
