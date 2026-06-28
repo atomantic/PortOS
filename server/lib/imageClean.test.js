@@ -347,6 +347,25 @@ describe('cleanImageBuffer (composable steps)', () => {
     expect(result.height).toBe(32);
   });
 
+  it('bakes orientation into pixels (lossy) when a PNG carries a non-default EXIF orientation', async () => {
+    // 4×8 PNG re-emitted with EXIF Orientation=6 (rotate 90° CW). A pure chunk
+    // strip would drop the tag and visibly rotate it, so the metadata-only path
+    // must bake the rotation → output is 8×4 and flagged lossy.
+    const raw = await sharp({
+      create: { width: 4, height: 8, channels: 3, background: { r: 10, g: 20, b: 30 } },
+    }).png().toBuffer();
+    const oriented = await sharp(raw).withMetadata({ orientation: 6 }).png().toBuffer();
+
+    const result = await cleanImageBuffer(oriented, { metadata: true, denoise: false });
+    expect(result.width).toBe(8);
+    expect(result.height).toBe(4);
+    const meta = result.steps.find((s) => s.step === 'metadata');
+    expect(meta.lossless).toBe(false);
+    // The baked output no longer carries an active orientation tag.
+    const outOrientation = (await sharp(result.data).metadata()).orientation;
+    expect(outOrientation === undefined || outOrientation === 1).toBe(true);
+  });
+
   it('no steps selected returns the input untouched with an empty report', async () => {
     const result = await cleanImageBuffer(pngFixture, { metadata: false, denoise: false });
     expect(result.steps).toEqual([]);
