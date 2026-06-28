@@ -245,6 +245,25 @@ describe('storyBuilder — catalog ingredient linking (#1761)', () => {
     expect(catalogMocks.linkIngredientsToSeries).toHaveBeenCalledWith(s.seriesId, [ing]);
   });
 
+  it('still creates + saves the session when linking fails (best-effort, no orphan)', async () => {
+    const ing = { id: 'cat-c', type: 'character', name: 'Mira', payload: {} };
+    catalogMocks.listIngredients.mockResolvedValue({ items: [ing] });
+    // A transient ref-insert failure must NOT reject the create (that would
+    // orphan the just-minted universe/series with no session pointing at them).
+    catalogMocks.linkIngredientsToSeries.mockRejectedValue(new Error('ref insert boom'));
+
+    const s = await sb.createStorySession({
+      title: 'Resilient', seedIdea: 'seed',
+      catalogIngredientIds: ['cat-c'],
+    });
+
+    // Session was saved despite the link failure, and the shells exist.
+    expect(s.id).toMatch(/^stb-/);
+    expect((await sb.listStorySessions()).map((x) => x.id)).toContain(s.id);
+    expect(await seriesSvc.getSeries(s.seriesId)).toBeTruthy();
+    expect(catalogMocks.linkIngredientsToSeries).toHaveBeenCalledWith(s.seriesId, [ing]);
+  });
+
   it('does not link in import mode', async () => {
     const universe = await universeSvc.createUniverse({ name: 'U' });
     const series = await seriesSvc.createSeries({ name: 'S', universeId: universe.id });
