@@ -2,9 +2,11 @@
  * CatalogAlbum — a collapsible group section in the Catalog "Albums" view (#1762).
  *
  * One album per live universe, plus the pinned "Unsorted / Raw" and "Orphaned"
- * albums. Cards lazy-load via `loadItems()` the FIRST time the album is
+ * albums. Cards lazy-load via `loadPage(offset)` the FIRST time the album is
  * expanded (album headers show the count from /facets up front, so an unexpanded
- * album costs nothing). Reuses <CatalogCard> so album cards match the flat grid.
+ * album costs nothing), and paginate with "Load more" so an album with more than
+ * one page's worth of ingredients is never silently truncated. Reuses
+ * <CatalogCard> so album cards match the flat grid.
  */
 
 import { useState, useEffect, useCallback } from 'react';
@@ -15,8 +17,9 @@ export default function CatalogAlbum({
   title,
   subtitle,
   count,
+  pageSize,
   defaultExpanded = false,
-  loadItems,
+  loadPage,
   getType,
   selectedIds,
   onToggleSelect,
@@ -29,20 +32,29 @@ export default function CatalogAlbum({
   // `null` = not yet loaded (distinct from `[]` = loaded-and-empty), so an
   // empty album doesn't re-fetch on every expand toggle.
   const [items, setItems] = useState(null);
+  const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState('');
+
+  const fetchPage = useCallback(async (offset) => {
+    const list = await loadPage(offset).catch((err) => {
+      setError(err?.message || 'Failed to load album');
+      return null;
+    });
+    if (!Array.isArray(list)) return null;
+    setHasMore(list.length === pageSize);
+    return list;
+  }, [loadPage, pageSize]);
 
   const ensureLoaded = useCallback(async () => {
     if (items !== null || loading) return;
     setLoading(true);
     setError('');
-    const list = await loadItems().catch((err) => {
-      setError(err?.message || 'Failed to load album');
-      return null;
-    });
+    const list = await fetchPage(0);
     setLoading(false);
-    if (Array.isArray(list)) setItems(list);
-  }, [items, loading, loadItems]);
+    if (list) setItems(list);
+  }, [items, loading, fetchPage]);
 
   // Load the first time the album is expanded — covers both an explicit toggle
   // and a `defaultExpanded` album that mounts already open (the pinned Raw album).
@@ -51,6 +63,13 @@ export default function CatalogAlbum({
   }, [expanded, ensureLoaded]);
 
   const toggle = () => setExpanded((e) => !e);
+
+  const loadMore = async () => {
+    setLoadingMore(true);
+    const list = await fetchPage((items || []).length);
+    setLoadingMore(false);
+    if (list) setItems((prev) => [...(prev || []), ...list]);
+  };
 
   // Album-local optimistic delete: remove the card immediately, restore it if
   // the parent's delete handler reports failure (it owns the toast + rollback
@@ -93,21 +112,36 @@ export default function CatalogAlbum({
           ) : error ? (
             <div className="text-sm text-port-error py-3">{error}</div>
           ) : (items && items.length > 0) ? (
-            <ul className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              {items.map((it) => (
-                <CatalogCard
-                  key={it.id}
-                  ingredient={it}
-                  getType={getType}
-                  selected={selectedIds.has(it.id)}
-                  onToggleSelect={onToggleSelect}
-                  armed={armedId === it.id}
-                  onArm={onArm}
-                  onCancelArm={onCancelArm}
-                  onConfirmDelete={handleDelete}
-                />
-              ))}
-            </ul>
+            <>
+              <ul className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {items.map((it) => (
+                  <CatalogCard
+                    key={it.id}
+                    ingredient={it}
+                    getType={getType}
+                    selected={selectedIds.has(it.id)}
+                    onToggleSelect={onToggleSelect}
+                    armed={armedId === it.id}
+                    onArm={onArm}
+                    onCancelArm={onCancelArm}
+                    onConfirmDelete={handleDelete}
+                  />
+                ))}
+              </ul>
+              {hasMore && (
+                <div className="flex justify-center mt-3">
+                  <button
+                    type="button"
+                    onClick={loadMore}
+                    disabled={loadingMore}
+                    className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-port-border bg-port-card hover:bg-port-bg text-white text-sm font-medium disabled:opacity-50"
+                  >
+                    {loadingMore ? <Loader2 size={14} className="animate-spin" /> : null}
+                    Load more
+                  </button>
+                </div>
+              )}
+            </>
           ) : (
             <div className="text-sm text-gray-500 py-3">No ingredients in this album.</div>
           )}
