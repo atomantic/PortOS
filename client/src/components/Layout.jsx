@@ -871,7 +871,7 @@ export default function Layout() {
   };
 
   return (
-    <div className="min-h-screen min-h-[100dvh] w-full max-w-full overflow-x-hidden bg-port-bg flex">
+    <div className="h-screen h-[100dvh] print:h-auto print:min-h-screen w-full max-w-full overflow-x-hidden bg-port-bg flex">
       {/* Skip to main content link for keyboard users */}
       <a
         href="#main-content"
