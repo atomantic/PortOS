@@ -21,10 +21,10 @@ import * as ollamaManager from './ollamaManager.js';
 import * as lmStudioManager from './lmStudioManager.js';
 import { recommendEditorialModel, isEmbeddingModel } from '../lib/localModelHeuristics.js';
 
-// LM Studio's default OpenAI-compatible port; Ollama's is recognized by
-// ollamaManager.isOllamaProvider. Matches `:1234` as host:port (with optional
-// trailing path/colon) so a relocated install on the same port still resolves.
-const LM_STUDIO_PORT_RE = /(^|[/:])(?:localhost|127\.0\.0\.1|\[::1\]):1234\b/i;
+// Default OpenAI-compatible ports for the two local backends. An endpoint-only
+// provider (no id/name) pointed at one of these on the local instance maps to
+// that backend.
+const BACKEND_DEFAULT_PORT = { '11434': 'ollama', '1234': 'lmstudio' };
 
 // A backend "model not found" — Ollama answers 404 `model "x" not found, try
 // pulling it first`; LM Studio answers `model "x" not found`/`unknown model`.
@@ -35,16 +35,29 @@ const MODEL_NOT_FOUND_RE = /model\s*['"]?[\w./:-]*['"]?\s*(?:not found|does not 
 const NO_MODELS_LOADED_RE = /no models loaded/i;
 
 /**
- * Which local backend (if any) a provider maps to.
+ * Which local backend (if any) a provider maps to. Matches by id/name first
+ * (`ollama` / `lmstudio`), then by an endpoint pointing at the backend's default
+ * port on THIS machine's local instance — using the same local-host logic as
+ * the endpoint guard, so every loopback / bind-all spelling resolves.
  * @returns {'ollama'|'lmstudio'|null}
  */
 export function localBackendForProvider(provider) {
   if (ollamaManager.isOllamaProvider(provider)) return 'ollama';
-  const endpoint = String(provider?.endpoint || '');
-  if (provider?.id === 'lmstudio' || /lm[\s-]?studio/i.test(provider?.name || '') || LM_STUDIO_PORT_RE.test(endpoint)) {
-    return 'lmstudio';
-  }
-  return null;
+  if (provider?.id === 'lmstudio' || /lm[\s-]?studio/i.test(provider?.name || '')) return 'lmstudio';
+  const port = localEndpointPort(provider?.endpoint);
+  return port ? (BACKEND_DEFAULT_PORT[port] || null) : null;
+}
+
+// The port of a provider endpoint when it points at THIS machine's local
+// instance (any loopback / bind-all host spelling); null otherwise — so a
+// LAN/Tailscale peer on the same port is NOT mistaken for a local backend.
+function localEndpointPort(endpoint) {
+  const cleaned = String(endpoint || '').replace(/\/v1\/?$/, '').replace(/\/+$/, '');
+  try {
+    const u = new URL(cleaned);
+    if (!isLocalInstanceHost(u.hostname)) return null;
+    return u.port || (u.protocol === 'https:' ? '443' : '80');
+  } catch { return null; }
 }
 
 /**

@@ -58,9 +58,23 @@ describe('localBackendForProvider', () => {
     expect(localBackendForProvider({ endpoint: 'http://127.0.0.1:1234/v1' })).toBe('lmstudio');
   });
 
+  it('classifies an endpoint-only provider by port across loopback/bind-all spellings', () => {
+    // No id/name — only the endpoint identifies the backend. Every local-host
+    // spelling on the default port must classify.
+    expect(localBackendForProvider({ endpoint: 'http://127.0.0.53:11434/v1' })).toBe('ollama');
+    expect(localBackendForProvider({ endpoint: 'http://0.0.0.0:11434' })).toBe('ollama');
+    expect(localBackendForProvider({ endpoint: 'http://[::1]:1234/v1' })).toBe('lmstudio');
+    expect(localBackendForProvider({ endpoint: 'http://0.0.0.0:1234' })).toBe('lmstudio');
+  });
+
   it('returns null for remote/CLI providers', () => {
     expect(localBackendForProvider({ id: 'anthropic', endpoint: 'https://api.anthropic.com/v1' })).toBeNull();
     expect(localBackendForProvider({ id: 'claude-code' })).toBeNull();
+    // A LAN/Tailscale peer on the backend's default port is NOT a local backend.
+    expect(localBackendForProvider({ endpoint: 'http://192.168.1.20:11434/v1' })).toBeNull();
+    expect(localBackendForProvider({ endpoint: 'http://10.0.0.5:1234' })).toBeNull();
+    // Local instance but not a known backend port.
+    expect(localBackendForProvider({ endpoint: 'http://localhost:9999' })).toBeNull();
     expect(localBackendForProvider(null)).toBeNull();
   });
 });
