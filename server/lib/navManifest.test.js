@@ -100,7 +100,7 @@ describe('navManifest — shape invariants', () => {
 
   it('every section is one of the approved sidebar group labels', () => {
     const ALLOWED_SECTIONS = new Set([
-      'Main', 'Apps', 'Brain', 'Calendar', 'Chief of Staff', 'Create',
+      'Main', 'Apps', 'Brain', 'Calendar', 'Chief of Staff', 'Comms', 'Create',
       'Dev Tools', 'Goals', 'Health', 'Settings', 'Identity', 'POST',
     ]);
     const bad = NAV_COMMANDS.filter((c) => !ALLOWED_SECTIONS.has(c.section));
