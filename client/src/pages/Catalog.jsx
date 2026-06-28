@@ -14,7 +14,7 @@
  * universe/series.
  */
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Sparkles, Plus, Search, FileInput, Loader2, RefreshCw, Wand2, X, LayoutGrid, Library, FolderPlus } from 'lucide-react';
 import toast from '../components/ui/Toast';
@@ -208,10 +208,18 @@ export default function Catalog() {
   useEffect(() => loadStats(), [loadStats]);
   useEffect(() => loadFacets(), [loadFacets]);
 
+  // Identity of the active filter set. loadMore captures it and drops its page
+  // if the filters changed while the request was in flight — otherwise a stale
+  // page would append into the freshly-reloaded (differently-filtered) list.
+  const filterKey = `${selectedType}|${selectedTag}|${q}|${selectedUniverse}|${selectedSeries}`;
+  const filterKeyRef = useRef(filterKey);
+  filterKeyRef.current = filterKey;
+
   const loadMore = () => {
+    const key = filterKey;
     setLoadingMore(true);
     fetchListPage(items.length).then((list) => {
-      if (list) {
+      if (key === filterKeyRef.current && list) {
         setItems((prev) => [...prev, ...list]);
         setHasMore(list.length === PAGE_SIZE);
       }
