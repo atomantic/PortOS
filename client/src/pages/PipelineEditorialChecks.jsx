@@ -69,6 +69,9 @@ export default function PipelineEditorialChecks() {
   // Per-check nonce bumped on a FAILED series-override save so the check card can
   // revert its draft inputs to the persisted value (#1591).
   const [seriesResetNonces, setSeriesResetNonces] = useState(() => ({}));
+  // Bumped on a FAILED severity-config save (#1616) so the severity-tuning panel
+  // re-seeds its number-input drafts from the persisted (untouched) values.
+  const [severityResetNonce, setSeverityResetNonce] = useState(0);
   const seriesId = searchParams.get('series') || '';
   const [comments, setComments] = useState([]);
   // Canon entities (#1631) for the selected series' linked universe, flattened to
@@ -391,7 +394,19 @@ export default function PipelineEditorialChecks() {
     ? selectedSeries.editorialCheckConfig
     : null;
 
+  // Per-series severity-config overrides (#1616) — the STORED (not effective)
+  // severityWeights/blockingSeverities, keyed by seriesId, so a queued save
+  // composes its edit onto THIS series' freshest server-confirmed values at
+  // execution time (mirrors overrideMapsRef). Without this, two quick edits each
+  // build a full wholesale-replacement from props captured at event time and the
+  // second clobbers the first.
+  const seriesSeverityWeights = selectedSeries?.severityWeights && typeof selectedSeries.severityWeights === 'object'
+    ? selectedSeries.severityWeights : null;
+  const seriesBlockingSeverities = selectedSeries?.blockingSeverities && typeof selectedSeries.blockingSeverities === 'object'
+    ? selectedSeries.blockingSeverities : null;
+
   const overrideMapsRef = useRef({});
+  const severityFieldsRef = useRef({});
   const seriesSaveTailRef = useRef(Promise.resolve());
   // Seed/refresh ONLY the selected series' entry from its loaded record (covers
   // the async series-list load AND a server-confirmed save echo). Keying by id
@@ -399,6 +414,12 @@ export default function PipelineEditorialChecks() {
   useEffect(() => {
     if (seriesId) overrideMapsRef.current[seriesId] = seriesOverrides ? { ...seriesOverrides } : {};
   }, [seriesId, seriesOverrides]);
+  useEffect(() => {
+    if (seriesId) severityFieldsRef.current[seriesId] = {
+      severityWeights: seriesSeverityWeights ? { ...seriesSeverityWeights } : {},
+      blockingSeverities: seriesBlockingSeverities ? { ...seriesBlockingSeverities } : {},
+    };
+  }, [seriesId, seriesSeverityWeights, seriesBlockingSeverities]);
 
   // `patch` is a PARTIAL per-check override ({ [key]: value }) to merge, or `null`
   // to clear the whole check. Merging (rather than replacing the per-check entry)
@@ -441,18 +462,40 @@ export default function PipelineEditorialChecks() {
   // (the panel reverts to the persisted value on failure since the series record
   // is left untouched). Keyed in savingSeriesIds so the run buttons gate on the
   // save landing (the autopilot reads the persisted series record).
-  const handleSeriesFieldSave = useCallback((field, value) => {
+  // `updater(currentStored)` composes the next STORED override from this series'
+  // freshest server-confirmed value at execution time (not from props captured
+  // when the user clicked), so two quick edits can't wholesale-clobber each other.
+  const handleSeriesFieldSave = useCallback((field, updater) => {
     const sid = activeSeriesRef.current;
     if (!sid) return;
     setSavingSeriesIds((s) => new Set(s).add(field));
     seriesSaveTailRef.current = seriesSaveTailRef.current
       .then(async () => {
-        const saved = await updatePipelineSeries(sid, { [field]: value }, { silent: true })
-          .catch((err) => { toast.error(err.message || 'Failed to save severity config'); return null; });
-        // On success sync THIS series' record by id (keyed, never clobbers
-        // another series); on failure leave it untouched so the panel keeps
-        // showing — and reverts to — the persisted values.
-        if (saved) setSeries((rows) => rows.map((r) => (r.id === saved.id ? saved : r)));
+        const store = severityFieldsRef.current[sid] || {};
+        const current = (store[field] && typeof store[field] === 'object') ? store[field] : {};
+        const nextValue = updater({ ...current });
+        const saved = await updatePipelineSeries(sid, { [field]: nextValue }, { silent: true })
+          .catch((err) => {
+            toast.error(err.message || 'Failed to save severity config');
+            // Failure: the series record is untouched, but the panel's number
+            // inputs may hold typed-but-unsaved drafts — bump the reset nonce so
+            // it re-seeds from the persisted values.
+            setSeverityResetNonce((n) => n + 1);
+            return null;
+          });
+        // On success sync THIS series' record + stored-override ref by id (keyed,
+        // never clobbers another series); on failure leave both untouched.
+        if (saved) {
+          severityFieldsRef.current[saved.id] = {
+            severityWeights: (saved.severityWeights && typeof saved.severityWeights === 'object') ? { ...saved.severityWeights } : {},
+            blockingSeverities: (saved.blockingSeverities && typeof saved.blockingSeverities === 'object') ? { ...saved.blockingSeverities } : {},
+          };
+          setSeries((rows) => rows.map((r) => (r.id === saved.id ? saved : r)));
+          // Weights change the health SCORE, so re-pull the panel's score/trend in
+          // lockstep (it only refetches on seriesId/refreshKey change). Blocking
+          // sets only gate the autopilot, not the score — no refresh needed.
+          if (field === 'severityWeights') setHealthRefresh((n) => n + 1);
+        }
       })
       .finally(() => setSavingSeriesIds((s) => { const n = new Set(s); n.delete(field); return n; }));
   }, []);
@@ -663,6 +706,7 @@ export default function PipelineEditorialChecks() {
           series={selectedSeries}
           onSaveField={handleSeriesFieldSave}
           saving={severitySaving}
+          resetNonce={severityResetNonce}
         />
       ) : null}
 

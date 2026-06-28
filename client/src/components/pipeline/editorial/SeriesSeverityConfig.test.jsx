@@ -38,13 +38,21 @@ describe('SeriesSeverityConfig (#1616)', () => {
     expect(document.getElementById('block-editorial-high').checked).toBe(false);
   });
 
-  it('saves a single weight key onto the stored override on blur', () => {
+  // onSaveField is called with (field, updater); the updater composes the next
+  // STORED override against the freshest stored value at save time. Pull it out
+  // and apply it to the stored override the parent would hold.
+  const lastUpdater = (field) => {
+    const call = [...onSaveField.mock.calls].reverse().find(([f]) => f === field);
+    return call ? call[1] : null;
+  };
+
+  it('saves a single weight key by composing onto the stored override on blur', () => {
     render(<SeriesSeverityConfig series={series({ severityWeights: { low: 2 } })} onSaveField={onSaveField} />);
     const high = weightInput('high');
     fireEvent.change(high, { target: { value: '20' } });
     fireEvent.blur(high);
-    // merges onto the stored override (keeps low:2), doesn't send the merged defaults.
-    expect(onSaveField).toHaveBeenCalledWith('severityWeights', { low: 2, high: 20 });
+    // Composes onto the stored override (keeps low:2) rather than sending merged defaults.
+    expect(lastUpdater('severityWeights')({ low: 2 })).toEqual({ low: 2, high: 20 });
   });
 
   it('clears a weight key when the input is emptied', () => {
@@ -52,20 +60,47 @@ describe('SeriesSeverityConfig (#1616)', () => {
     const high = weightInput('high');
     fireEvent.change(high, { target: { value: '' } });
     fireEvent.blur(high);
-    expect(onSaveField).toHaveBeenCalledWith('severityWeights', { low: 2 });
+    expect(lastUpdater('severityWeights')({ high: 20, low: 2 })).toEqual({ low: 2 });
   });
 
-  it('toggles a blocking severity, persisting an ordered array onto the stored override', () => {
+  it('does not save when the committed weight matches the stored value (no-op guard)', () => {
+    render(<SeriesSeverityConfig series={series({ severityWeights: { high: 20 } })} onSaveField={onSaveField} />);
+    const high = weightInput('high');
+    fireEvent.change(high, { target: { value: '20' } });
+    fireEvent.blur(high);
+    expect(onSaveField).not.toHaveBeenCalled();
+  });
+
+  it('toggles a blocking severity, composing an ordered array onto the freshest stored set', () => {
     render(<SeriesSeverityConfig series={series()} onSaveField={onSaveField} />);
-    // uncheck arc medium → arc becomes [high].
+    // uncheck arc medium → flip medium against the gate's default [high,medium] → [high].
     fireEvent.click(document.getElementById('block-arc-medium'));
-    expect(onSaveField).toHaveBeenCalledWith('blockingSeverities', { arc: ['high'] });
+    expect(lastUpdater('blockingSeverities')({})).toEqual({ arc: ['high'] });
+  });
+
+  it('composes a toggle against the freshest stored set, not the rendered props', () => {
+    render(<SeriesSeverityConfig series={series()} onSaveField={onSaveField} />);
+    // The user checks arc low; by save time another save has landed making arc [high].
+    fireEvent.click(document.getElementById('block-arc-low'));
+    // Flipping low onto the freshest stored arc:[high] yields [high, low] (ordered).
+    expect(lastUpdater('blockingSeverities')({ arc: ['high'] })).toEqual({ arc: ['high', 'low'] });
   });
 
   it('unchecking the last box persists an explicit empty array (nothing blocks)', () => {
     render(<SeriesSeverityConfig series={series({ blockingSeverities: { editorial: ['high'] } })} onSaveField={onSaveField} />);
     fireEvent.click(document.getElementById('block-editorial-high'));
-    expect(onSaveField).toHaveBeenCalledWith('blockingSeverities', { editorial: [] });
+    expect(lastUpdater('blockingSeverities')({ editorial: ['high'] })).toEqual({ editorial: [] });
+  });
+
+  it('re-seeds the weight drafts when resetNonce bumps (failed-save revert)', () => {
+    const s = series({ severityWeights: { high: 20 } });
+    const { rerender } = render(<SeriesSeverityConfig series={s} onSaveField={onSaveField} resetNonce={0} />);
+    const high = weightInput('high');
+    fireEvent.change(high, { target: { value: '99' } });
+    expect(high).toHaveValue(99);
+    // Parent leaves the series untouched on failure and bumps the nonce.
+    rerender(<SeriesSeverityConfig series={s} onSaveField={onSaveField} resetNonce={1} />);
+    expect(high).toHaveValue(20);
   });
 
   it('renders nothing without a series', () => {

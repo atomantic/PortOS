@@ -2,7 +2,10 @@
  * Per-series severity config panel (#1616) for the Editorial Checks page.
  *
  * Two per-series overrides, both saved through the parent's serialized silent
- * save tail (`onSaveField(field, value)`):
+ * save tail. The handler is `onSaveField(field, updater)` where `updater` is a
+ * pure `(currentStored) => nextStored` composed AT SAVE TIME against this series'
+ * freshest server-confirmed override — so two quick edits (or a toggle on the
+ * same gate) can't wholesale-clobber each other.
  *
  *  - SEVERITY WEIGHTS — the health-score penalty weights (high/medium/low). The
  *    defaults are high:12 / medium:5 / low:1; an unset series shows the defaults.
@@ -53,7 +56,7 @@ function effectiveBlocking(override, gate) {
   return DEFAULT_BLOCKING_SEVERITIES[gate];
 }
 
-export default function SeriesSeverityConfig({ series, onSaveField, saving = false }) {
+export default function SeriesSeverityConfig({ series, onSaveField, saving = false, resetNonce = 0 }) {
   const weightsOverride = series && typeof series.severityWeights === 'object' && series.severityWeights
     ? series.severityWeights : {};
   const blockingOverride = series && typeof series.blockingSeverities === 'object' && series.blockingSeverities
@@ -61,9 +64,10 @@ export default function SeriesSeverityConfig({ series, onSaveField, saving = fal
 
   // Draft state for the number inputs so typing doesn't fight the controlled
   // value. Re-seeded from the persisted effective values whenever the series id
-  // or its stored weights change (covers a failed-save revert too — the parent
-  // leaves the series record untouched on failure, so the effective values are
-  // still the persisted ones).
+  // or its stored weights change — AND whenever `resetNonce` bumps, which the
+  // parent does on a FAILED save (the series record is untouched on failure, so
+  // the props don't change and only the nonce can force the drafts back to the
+  // persisted values).
   const seriesId = series?.id || '';
   const [draft, setDraft] = useState({});
   useEffect(() => {
@@ -72,44 +76,55 @@ export default function SeriesSeverityConfig({ series, onSaveField, saving = fal
       medium: String(effectiveWeight(weightsOverride, 'medium')),
       low: String(effectiveWeight(weightsOverride, 'low')),
     });
-  }, [seriesId, JSON.stringify(weightsOverride)]);
+  }, [seriesId, JSON.stringify(weightsOverride), resetNonce]);
 
   if (!series) return null;
 
   // Persist a single weight key. An empty/invalid input CLEARS the key (absent →
-  // default); a valid number sets it. Built onto the STORED override so untouched
-  // keys stay absent.
+  // default); a valid number sets it. The save composes onto the STORED override
+  // at execution time (untouched keys stay absent), so a second edit can't drop
+  // the first.
   const commitWeight = (sev, rawText) => {
-    const next = { ...weightsOverride };
     const trimmed = (rawText ?? '').trim();
+    let clear = false;
+    let num = null;
     if (trimmed === '') {
-      delete next[sev];
+      clear = true;
     } else {
-      const num = Number(trimmed);
+      num = Number(trimmed);
       if (!Number.isFinite(num) || num < 0) {
         // Invalid → revert the draft to the persisted effective value, no save.
         setDraft((d) => ({ ...d, [sev]: String(effectiveWeight(weightsOverride, sev)) }));
         return;
       }
-      next[sev] = num;
     }
-    // No-op guard: if nothing actually changed vs the stored override, skip.
-    if (JSON.stringify(next) === JSON.stringify(weightsOverride)) return;
-    onSaveField('severityWeights', next);
+    // No-op guard vs the currently-displayed stored override (avoids a redundant
+    // PATCH when the committed value matches what's already persisted).
+    if (clear && !(sev in weightsOverride)) return;
+    if (!clear && weightsOverride[sev] === num) return;
+    onSaveField('severityWeights', (stored) => {
+      const next = { ...stored };
+      if (clear) delete next[sev];
+      else next[sev] = num;
+      return next;
+    });
   };
 
-  // Toggle one severity for one gate. Built onto the STORED override so an
-  // untouched gate stays absent (tracks the default). An explicit empty array is
-  // preserved (= nothing blocks this gate).
+  // Toggle one severity for one gate. The save FLIPS `sev` against the gate's
+  // freshest stored set (or its default when absent) at execution time — so an
+  // untouched gate stays absent (tracks the default) and rapid toggles compose
+  // instead of clobbering. An explicit empty array is preserved (= nothing
+  // blocks this gate).
   const toggleBlocking = (gate, sev) => {
-    const current = effectiveBlocking(blockingOverride, gate);
-    const nextSet = current.includes(sev)
-      ? current.filter((s) => s !== sev)
-      : [...current, sev];
-    // Order canonically (high → low) for a stable persisted shape.
-    const ordered = SEVERITIES.filter((s) => nextSet.includes(s));
-    const next = { ...blockingOverride, [gate]: ordered };
-    onSaveField('blockingSeverities', next);
+    onSaveField('blockingSeverities', (stored) => {
+      const cur = Array.isArray(stored[gate])
+        ? stored[gate].filter((s) => SEVERITIES.includes(s))
+        : DEFAULT_BLOCKING_SEVERITIES[gate];
+      const nextSet = cur.includes(sev) ? cur.filter((s) => s !== sev) : [...cur, sev];
+      // Order canonically (high → low) for a stable persisted shape.
+      const ordered = SEVERITIES.filter((s) => nextSet.includes(s));
+      return { ...stored, [gate]: ordered };
+    });
   };
 
   return (
