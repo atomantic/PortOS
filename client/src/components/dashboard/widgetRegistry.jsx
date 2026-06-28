@@ -11,6 +11,7 @@ const GoalProgressWidget    = lazyWithReload(() => import('../GoalProgressWidget
 const UpcomingTasksWidget   = lazyWithReload(() => import('../UpcomingTasksWidget'));
 const DecisionLogWidget     = lazyWithReload(() => import('../DecisionLogWidget'));
 const DeathClockWidget      = lazyWithReload(() => import('../DeathClockWidget'));
+const DailyPostWidget       = lazyWithReload(() => import('../DailyPostWidget'));
 const ProactiveAlertsWidget = lazyWithReload(() => import('../ProactiveAlertsWidget'));
 const QuickBrainCapture     = lazyWithReload(() => import('../QuickBrainCapture'));
 const QuickIdeaCapture      = lazyWithReload(() => import('../QuickIdeaCapture'));
@@ -54,6 +55,7 @@ export const WIDGETS = [
   { id: 'network-exposure',  label: 'Network Exposure',      Component: NetworkExposureWidget,  width: 'quarter', defaultH: 5, module: { id: '07', status: 'EXPOSURE', glyph: 'reticle' } },
   { id: 'backup',            label: 'Backup',                Component: BackupWidget,           width: 'quarter', defaultH: 5 },
   { id: 'death-clock',       label: 'Death Clock',           Component: DeathClockWidget,       width: 'quarter', defaultH: 4 },
+  { id: 'daily-post',        label: 'Daily POST',            Component: DailyPostWidget,        width: 'quarter', defaultH: 3 },
   { id: 'quick-stats',       label: 'Quick Stats',           Component: QuickStatsWidget,       width: 'quarter', defaultH: 3, gate: (s) => s.apps.length > 0 },
   { id: 'decision-log',      label: 'Decision Log',          Component: DecisionLogWidget,      width: 'quarter', defaultH: 4 },
   { id: 'activity-streak',   label: 'Activity Streak',       Component: ActivityStreakWidget,   width: 'third',   defaultH: 3, gate: (s) => s.usage?.currentStreak > 0 || s.usage?.longestStreak > 0, module: { id: '06', status: 'STREAK',  glyph: 'spark' } },
