@@ -355,15 +355,16 @@ export default function TrainingPanel({ dataset, readiness, triggerSaving, onRun
           <Moon className="w-3.5 h-3.5 mt-0.5 shrink-0 text-port-accent" />
           <div className="space-y-1">
             <div className="text-gray-300">
-              This Mac's display sleeps automatically while training, then wakes when the run finishes.
+              By default, this Mac's display is slept while training and woken when the run finishes.
             </div>
             <div>
               On Apple Silicon, an <span className="text-gray-300">active display can crash the whole machine</span>{' '}
               (GPU watchdog kernel panic) during heavy LoRA training — so PortOS puts the display to sleep for you
               and the system keeps running underneath. Big runs (9B, bf16) can take hours: start one and{' '}
               <span className="text-gray-300">let it run overnight</span>. Don't close the lid (that sleeps the
-              whole Mac and pauses the run); just leave it be, or drive it over SSH. On by default; set
-              <code className="text-gray-300">loraTraining.displaySleep: false</code> to opt out if you run headless.
+              whole Mac and pauses the run); just leave it be, or drive it over SSH. If you've set{' '}
+              <code className="text-gray-300">loraTraining.displaySleep: false</code> (e.g. headless), PortOS leaves
+              the display alone — keep it off the GPU yourself.
             </div>
           </div>
         </div>
