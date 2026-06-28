@@ -20,6 +20,56 @@ const DEFAULT_SAMPLE_PATH = join(__dirname, 'defaults/providers.sample.json');
 
 const execFileAsync = promisify(execFile);
 
+// Tool-use (function-calling) capable model families. Inlined here because the
+// aiToolkit is self-contained (no imports out to server/lib). MIRROR of
+// TOOL_USE_RE in server/lib/localModelHeuristics.js and isToolUseModel in
+// client/src/utils/providers.js — keep all three in lockstep.
+const TOOL_USE_RE = new RegExp([
+  'qwen',
+  'llama-?3\\.[1-9]', 'llama-?4',
+  'mistral', 'mixtral', 'ministral', 'codestral', 'devstral', 'magistral',
+  'command-?r', 'command-?a',
+  'firefunction', 'functionary', 'watt-tool', 'hermes',
+  'glm-?4',
+  'granite-?3',
+  'gpt-oss',
+  'nemotron',
+  'smollm2',
+  'deepseek-v3', 'deepseek-r1',
+].join('|'), 'i');
+
+/**
+ * A CLI provider (command `claude`) is "Ollama-backed" — the Clawed Ollama
+ * pattern — when it carries the `ollamaBacked` marker or its ANTHROPIC_BASE_URL
+ * points at an Ollama daemon. Such a provider runs the full Claude Code harness
+ * but generates tokens from a local model, so its model list must come from
+ * Ollama (filtered to tool-use-capable models) rather than the static Anthropic list.
+ */
+function isOllamaBackedProvider(provider) {
+  if (provider?.ollamaBacked === true) return true;
+  const base = String(provider?.envVars?.ANTHROPIC_BASE_URL || '');
+  return /:11434\b/.test(base) || /ollama/i.test(base);
+}
+
+/** Normalize an Ollama base URL (strip trailing slash + an OpenAI-compat `/v1`). */
+function ollamaBaseFromProvider(provider) {
+  const base = String(provider?.envVars?.ANTHROPIC_BASE_URL || provider?.endpoint || 'http://localhost:11434');
+  return base.replace(/\/+$/, '').replace(/\/v1$/, '');
+}
+
+/**
+ * Whether an Ollama model supports tool use. Prefers the authoritative `tools`
+ * capability from /api/show (a non-empty capabilities array without `tools` is
+ * an explicit negative); falls back to the id heuristic when capabilities are
+ * unavailable (daemon hiccup / older Ollama).
+ */
+function ollamaModelSupportsTools(id, capabilities) {
+  if (Array.isArray(capabilities) && capabilities.length > 0) {
+    return capabilities.some((c) => String(c).toLowerCase() === 'tools');
+  }
+  return TOOL_USE_RE.test(String(id || ''));
+}
+
 const CODEX_CONFIGURED_DEFAULT = 'codex-configured-default';
 const CODEX_MODEL_KEYS = ['defaultModel', 'lightModel', 'mediumModel', 'heavyModel'];
 const ANTIGRAVITY_MODEL_KEYS = ['defaultModel', 'lightModel', 'mediumModel', 'heavyModel'];
@@ -324,6 +374,9 @@ export function createProviderService(config = {}) {
         contextWindow: providerData.contextWindow || null,
         timeout: providerData.timeout || 300000,
         enabled: providerData.enabled !== false,
+        // Clawed Ollama marker — preserve so adopting the sample via POST drives
+        // ollama-backed model refresh (see isOllamaBackedProvider).
+        ...(providerData.ollamaBacked === true ? { ollamaBacked: true } : {}),
         envVars: providerData.envVars || {},
         secretEnvVars: providerData.secretEnvVars || [],
         headlessArgs: providerData.headlessArgs || [],
@@ -507,6 +560,14 @@ export function createProviderService(config = {}) {
     async _refreshCLIProviderModels(provider) {
       const providerName = provider.name.toLowerCase();
 
+      // Clawed Ollama: a `claude` CLI pointed at a local Ollama daemon. Pull the
+      // installed Ollama models (filtered to tool-use-capable ones — the agent
+      // harness depends on reliable tool-calling) instead of the static Anthropic
+      // list. Checked BEFORE the generic claude branch below.
+      if (isOllamaBackedProvider(provider)) {
+        return await this._fetchOllamaToolCapableModels(provider);
+      }
+
       if (providerName.includes('claude') || provider.command === 'claude') {
         return await this._fetchAnthropicModels(provider);
       }
@@ -520,6 +581,33 @@ export function createProviderService(config = {}) {
       }
 
       throw new Error('Model refresh not supported for this CLI provider');
+    },
+
+    async _fetchOllamaToolCapableModels(provider) {
+      const base = ollamaBaseFromProvider(provider);
+      const res = await fetch(`${base}/api/tags`, { signal: AbortSignal.timeout(8000) }).catch(() => null);
+      if (!res?.ok) {
+        throw new Error(`Ollama unreachable at ${base} (HTTP ${res?.status || 'error'})`);
+      }
+      const data = await res.json().catch(() => null);
+      const names = (data?.models || []).map(m => m.name || m.model).filter(Boolean);
+
+      // Query /api/show per model for the authoritative `tools` capability; fall
+      // back to the id heuristic when the daemon doesn't answer. Filter to
+      // tool-use-capable models only — a Claude harness on a non-tool model
+      // "runs" but silently fails to edit files.
+      const checked = await Promise.all(names.map(async (name) => {
+        const showRes = await fetch(`${base}/api/show`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: name, name }),
+          signal: AbortSignal.timeout(8000)
+        }).catch(() => null);
+        const showData = showRes?.ok ? await showRes.json().catch(() => null) : null;
+        const capabilities = Array.isArray(showData?.capabilities) ? showData.capabilities : null;
+        return ollamaModelSupportsTools(name, capabilities) ? name : null;
+      }));
+      return checked.filter(Boolean);
     },
 
     async _fetchAnthropicModels(_provider) {

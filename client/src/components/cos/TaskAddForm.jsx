@@ -5,7 +5,7 @@ import AppContextPicker from '../AppContextPicker';
 import * as api from '../../services/api';
 import { processScreenshotUploads, processAttachmentUploads } from '../../utils/fileUpload';
 import { formatBytes } from '../../utils/formatters';
-import { filterSelectableModels, isTuiProvider, isCliProvider } from '../../utils/providers';
+import { filterSelectableModels, isTuiProvider, isCliProvider, isProcessProvider } from '../../utils/providers';
 import { DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE } from './constants';
 import ReviewerPicker from './ReviewerPicker';
 
@@ -68,11 +68,33 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
     return () => { cancelled = true; };
   }, []);
 
-  // Memoize enabled providers for dropdown
+  // Memoize enabled providers for the dropdown — restricted to CODING providers
+  // (CLI/TUI agents with a file-writing harness). HTTP `api` providers (raw
+  // Ollama / LM Studio / nvidia-kimi) return plain text and can't write files, so
+  // they're not valid task runners; a user who only has those should use the
+  // "Clawed Ollama" sample (a `claude` CLI pointed at Ollama) instead.
   const enabledProviders = useMemo(() =>
-    providers?.filter(p => p.enabled) || [],
+    providers?.filter(p => p.enabled && isProcessProvider(p)) || [],
     [providers]
   );
+
+  // True when the user has enabled providers but ALL of them are HTTP `api`
+  // providers (Ollama / LM Studio / kimi) — none can run file-writing tasks.
+  // Surface the harness-boundary advisory so they aren't left with an empty
+  // dropdown and no explanation.
+  const apiOnlyProviders = useMemo(() => {
+    const enabled = providers?.filter(p => p.enabled) || [];
+    return enabled.length > 0 && enabledProviders.length === 0;
+  }, [providers, enabledProviders]);
+
+  // If the pinned provider isn't a valid coding option (e.g. a saved template
+  // pinned an `api` provider that's now filtered out of the dropdown), reset to
+  // "Auto" so the visible select and the submitted value can't diverge.
+  useEffect(() => {
+    if (newTask.provider && !enabledProviders.some(p => p.id === newTask.provider)) {
+      setNewTask(t => ({ ...t, provider: '', model: '' }));
+    }
+  }, [enabledProviders, newTask.provider]);
 
   // Check if selected app has JIRA configured
   const selectedApp = useMemo(() =>
@@ -539,6 +561,11 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
             </div>
           ) : null}
         </div>
+        {apiOnlyProviders && (
+          <div className="px-3 py-2 bg-port-warning/10 border border-port-warning/40 rounded-lg text-xs text-port-warning">
+            Your enabled providers (Ollama / LM Studio) are HTTP API providers with no file-writing harness, so they can't run agent tasks. Add the <span className="font-semibold">Clawed Ollama</span> sample provider (a <code>claude</code> CLI pointed at your local model) from AI Providers → Add Sample to run file-writing tasks on a local model.
+          </div>
+        )}
         {/* Screenshot and Attachment Upload */}
         <div className="flex items-center gap-3 flex-wrap">
           <button

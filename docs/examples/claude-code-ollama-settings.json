@@ -1,0 +1,10 @@
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://127.0.0.1:11434",
+    "ANTHROPIC_AUTH_TOKEN": "ollama",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "qwen3:32b",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "qwen3:32b",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "qwen2.5:7b",
+    "ANTHROPIC_SMALL_FAST_MODEL": "qwen2.5:7b"
+  }
+}
