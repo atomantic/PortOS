@@ -72,6 +72,13 @@ export default function PipelineEditorialChecks() {
   // Bumped on a FAILED severity-config save (#1616) so the severity-tuning panel
   // re-seeds its number-input drafts from the persisted (untouched) values.
   const [severityResetNonce, setSeverityResetNonce] = useState(0);
+  // In-flight COUNT of severity-config saves (#1616), not set membership: two
+  // quick same-field edits (high then medium weight) queue two saves under the
+  // same field name, so a Set key would be deleted by the first save's `finally`
+  // while the second is still pending — re-enabling the run buttons mid-save and
+  // letting a run read stale config. A counter only reaches 0 when ALL queued
+  // severity saves have drained.
+  const [severitySaveCount, setSeveritySaveCount] = useState(0);
   const seriesId = searchParams.get('series') || '';
   const [comments, setComments] = useState([]);
   // Canon entities (#1631) for the selected series' linked universe, flattened to
@@ -460,15 +467,16 @@ export default function PipelineEditorialChecks() {
   // `blockingSeverities`). Saved through the SAME serialized silent tail as the
   // per-check override so two quick edits can't reorder/clobber, NON-optimistic
   // (the panel reverts to the persisted value on failure since the series record
-  // is left untouched). Keyed in savingSeriesIds so the run buttons gate on the
-  // save landing (the autopilot reads the persisted series record).
+  // is left untouched). Counted in severitySaveCount so the run buttons stay
+  // gated until EVERY queued save lands (the autopilot reads the persisted
+  // series record, so starting a run mid-save would read stale config).
   // `updater(currentStored)` composes the next STORED override from this series'
   // freshest server-confirmed value at execution time (not from props captured
   // when the user clicked), so two quick edits can't wholesale-clobber each other.
   const handleSeriesFieldSave = useCallback((field, updater) => {
     const sid = activeSeriesRef.current;
     if (!sid) return;
-    setSavingSeriesIds((s) => new Set(s).add(field));
+    setSeveritySaveCount((n) => n + 1);
     seriesSaveTailRef.current = seriesSaveTailRef.current
       .then(async () => {
         const store = severityFieldsRef.current[sid] || {};
@@ -477,10 +485,12 @@ export default function PipelineEditorialChecks() {
         const saved = await updatePipelineSeries(sid, { [field]: nextValue }, { silent: true })
           .catch((err) => {
             toast.error(err.message || 'Failed to save severity config');
-            // Failure: the series record is untouched, but the panel's number
+            // Failure: the series record is untouched, but the WEIGHT number
             // inputs may hold typed-but-unsaved drafts — bump the reset nonce so
-            // it re-seeds from the persisted values.
-            setSeverityResetNonce((n) => n + 1);
+            // the panel re-seeds them. Only weights have free-text drafts (the
+            // blocking checkboxes are prop-driven), so only a weights failure
+            // needs it.
+            if (field === 'severityWeights') setSeverityResetNonce((n) => n + 1);
             return null;
           });
         // On success sync THIS series' record + stored-override ref by id (keyed,
@@ -497,9 +507,9 @@ export default function PipelineEditorialChecks() {
           if (field === 'severityWeights') setHealthRefresh((n) => n + 1);
         }
       })
-      .finally(() => setSavingSeriesIds((s) => { const n = new Set(s); n.delete(field); return n; }));
+      .finally(() => setSeveritySaveCount((n) => Math.max(0, n - 1)));
   }, []);
-  const severitySaving = savingSeriesIds.has('severityWeights') || savingSeriesIds.has('blockingSeverities');
+  const severitySaving = severitySaveCount > 0;
 
   // ---- Custom-check authoring (#1346). The form is URL-driven (?custom=new |
   // ?custom=<checkId>) so it's deep-linkable, not a stateful modal. ----
@@ -612,7 +622,7 @@ export default function PipelineEditorialChecks() {
   // Gate runs on formSaving too: a run reads server-side settings, so starting
   // one while a custom-check create/edit PATCH is in flight would run the stale
   // (pre-save) definition. Mirrors the savingIds gate for per-check config saves.
-  const runDisabled = !seriesId || runActive || runStarting || anySaving || formSaving || savingSeriesIds.size > 0;
+  const runDisabled = !seriesId || runActive || runStarting || anySaving || formSaving || savingSeriesIds.size > 0 || severitySaving;
 
   return (
     <div className="mx-auto max-w-6xl space-y-4">
