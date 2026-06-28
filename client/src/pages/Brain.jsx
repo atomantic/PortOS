@@ -11,19 +11,18 @@ import { sameJsonShape } from '../lib/sameJsonShape';
 import { TABS, FULL_BLEED_TAB_IDS } from '../components/brain/constants';
 import { timeAgo } from '../utils/formatters';
 
-import InboxTab from '../components/brain/tabs/InboxTab';
-import LinksTab from '../components/brain/tabs/LinksTab';
-import MemoryTab from '../components/brain/tabs/MemoryTab';
-import DigestTab from '../components/brain/tabs/DigestTab';
-import FeedsTab from '../components/brain/tabs/FeedsTab';
-import TrustTab from '../components/brain/tabs/TrustTab';
-import NotesTab from '../components/brain/tabs/NotesTab';
-import DailyLogTab from '../components/brain/tabs/DailyLogTab';
-import ConfigTab from '../components/brain/tabs/ConfigTab';
-import ImportTab from '../components/brain/tabs/ImportTab';
-
-// BrainGraph uses the three.js stack — lazy-load so it's not bundled until the
-// graph tab is actually opened.
+// Lazy-load tab bodies so opening one tab doesn't pull in all ten. BrainGraph in
+// particular drags in the three.js stack, so it must stay out of the eager set.
+const InboxTab = lazy(() => import('../components/brain/tabs/InboxTab'));
+const LinksTab = lazy(() => import('../components/brain/tabs/LinksTab'));
+const MemoryTab = lazy(() => import('../components/brain/tabs/MemoryTab'));
+const DigestTab = lazy(() => import('../components/brain/tabs/DigestTab'));
+const FeedsTab = lazy(() => import('../components/brain/tabs/FeedsTab'));
+const TrustTab = lazy(() => import('../components/brain/tabs/TrustTab'));
+const NotesTab = lazy(() => import('../components/brain/tabs/NotesTab'));
+const DailyLogTab = lazy(() => import('../components/brain/tabs/DailyLogTab'));
+const ConfigTab = lazy(() => import('../components/brain/tabs/ConfigTab'));
+const ImportTab = lazy(() => import('../components/brain/tabs/ImportTab'));
 const BrainGraph = lazy(() => import('../components/brain/tabs/BrainGraph'));
 
 export default function Brain() {
@@ -69,7 +68,7 @@ export default function Brain() {
       case 'daily-log':
         return <DailyLogTab />;
       case 'graph':
-        return <Suspense fallback={<div className="flex items-center justify-center h-64"><BrailleSpinner text="Loading" /></div>}><BrainGraph /></Suspense>;
+        return <BrainGraph />;
       case 'digest':
         return <DigestTab onRefresh={refetch} />;
       case 'feeds':
@@ -136,7 +135,9 @@ export default function Brain() {
       {/* Tab content — full-bleed tabs own their own scroll and fill height;
           document-style tabs scroll inside a padded wrapper. */}
       <div className={`flex-1 min-h-0 ${fullBleed ? 'overflow-hidden' : 'overflow-auto p-3 sm:p-4'}`}>
-        {renderTabContent()}
+        <Suspense fallback={<div className="flex items-center justify-center h-64"><BrailleSpinner text="Loading" /></div>}>
+          {renderTabContent()}
+        </Suspense>
       </div>
     </div>
   );

@@ -5,9 +5,12 @@ import { getSettings, updateSettings, getSelfInstance } from './services/api';
 import BrailleSpinner from './components/BrailleSpinner';
 import { CatalogTypesProvider } from './hooks/useCatalogTypes.jsx';
 import Dashboard from './pages/Dashboard';
-import Apps from './pages/Apps';
-import Ambient from './pages/Ambient';
 import { lazyWithReload } from './utils/lazyWithReload';
+
+// Neither /apps nor /ambient is the landing route, so keep them out of the eager
+// entry chunk — lazy-load them like every other non-index page.
+const Apps = lazyWithReload(() => import('./pages/Apps'));
+const Ambient = lazyWithReload(() => import('./pages/Ambient'));
 
 // Lazy load heavier pages for code splitting
 // DevTools pages are large (~2300 lines total) so lazy load them

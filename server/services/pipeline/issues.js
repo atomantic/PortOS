@@ -606,6 +606,13 @@ async function readState() {
   return { issues: await store().loadAll() };
 }
 
+// Series-scoped read — uses the indexed `idx_issues_series` query (PG) so a
+// per-series scan doesn't load + sanitize every issue in the install. Callers
+// that already filter by seriesId in JS should source from here instead.
+async function readStateForSeries(seriesId) {
+  return { issues: await store().loadAllForSeries(seriesId) };
+}
+
 async function saveIssueNow(issue) {
   await store().saveOneNow(issue.id, issue);
   return issue;
@@ -623,7 +630,10 @@ export async function listIssues({
   withHistory = true,
   includeDeleted = false,
 } = {}) {
-  const { issues } = await readState();
+  // Scope the read to one series when filtering by it — avoids loading every
+  // issue in the install just to discard the rest (the `seriesId.localeCompare`
+  // tiebreak below is a no-op within a single series).
+  const { issues } = seriesId ? await readStateForSeries(seriesId) : await readState();
   const live = includeDeleted ? issues : issues.filter((i) => !i.deleted);
   const filtered = seriesId ? live.filter((i) => i.seriesId === seriesId) : live;
   const sorted = [...filtered].sort((a, b) => {
@@ -698,10 +708,9 @@ export async function listAllIssues({ includeDeleted = false, withHistory = true
  * @param {boolean} [options.withHistory=true] - false strips per-stage run history
  */
 export async function listIssuesForSeries(seriesId, { includeDeleted = false, withHistory = true } = {}) {
-  const { issues } = await readState();
+  const { issues } = await readStateForSeries(seriesId);
   const live = includeDeleted ? issues : issues.filter((i) => !i.deleted);
-  const filtered = live.filter((i) => i.seriesId === seriesId);
-  const sorted = [...filtered].sort((a, b) => (a.number || 0) - (b.number || 0));
+  const sorted = [...live].sort((a, b) => (a.number || 0) - (b.number || 0));
   return withHistory ? sorted : sorted.map(stripRunHistoryFromIssue);
 }
 

@@ -59,6 +59,13 @@ function makeFileBackend(dir, sanitizeRecord) {
       const records = await Promise.all(ids.map((id) => cs.loadOneRaw(id)));
       return records.filter((r) => r != null);
     },
+    // No per-series index in the file backend — filter the full set in JS. The
+    // PG backend below uses an indexed WHERE; this keeps the facade uniform.
+    listRawBySeries: async (seriesId) => {
+      const ids = await cs.listIds();
+      const records = await Promise.all(ids.map((id) => cs.loadOneRaw(id)));
+      return records.filter((r) => r != null && r.seriesId === seriesId);
+    },
     writeRaw: (id, record) => cs.saveOneNow(id, record),
     deleteRaw: (id) => cs.deleteOneNow(id),
     verify: () => cs.verifySchemaVersion(),
@@ -74,6 +81,7 @@ function makePgBackend(db, sanitizeRecord) {
     },
     listIds: db.listIds,
     listRaw: db.listRaw,
+    listRawBySeries: db.listRawBySeries,
     writeRaw: db.writeRaw,
     deleteRaw: db.deleteRaw,
     verify: async () => ({ ok: true, type: 'pipelineIssues', onDisk: null, expected: null,
@@ -146,6 +154,10 @@ function createFacade({ dir, sanitizeRecord }) {
     },
     loadAll: async () => {
       const raw = await (await getBackend()).listRaw();
+      return raw.map((r) => sanitizer(r)).filter((r) => r != null);
+    },
+    loadAllForSeries: async (seriesId) => {
+      const raw = await (await getBackend()).listRawBySeries(seriesId);
       return raw.map((r) => sanitizer(r)).filter((r) => r != null);
     },
 
