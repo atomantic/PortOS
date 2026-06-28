@@ -15,6 +15,7 @@ import {
 } from '../utils/formatters';
 import SettingsTabsHeader from '../components/settings/SettingsTabsHeader';
 import CodeReviewDefaultsPanel from '../components/providers/CodeReviewDefaultsPanel';
+import Modal from '../components/ui/Modal';
 
 export default function AIProviders() {
   const [providers, setProviders] = useState([]);
@@ -807,11 +808,17 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto">
-        <h2 className="text-xl font-bold text-white mb-4">
-          {provider ? 'Edit Provider' : 'Add Provider'}
-        </h2>
+    <Modal
+      open
+      onClose={onClose}
+      size="md"
+      backdropClassName="bg-black/50"
+      panelClassName="bg-port-card border border-port-border rounded-xl p-4 sm:p-6 max-h-[90vh] overflow-y-auto"
+      ariaLabelledBy="provider-form-title"
+    >
+      <h2 id="provider-form-title" className="text-xl font-bold text-white mb-4">
+        {provider ? 'Edit Provider' : 'Add Provider'}
+      </h2>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
@@ -1333,7 +1340,6 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
             </button>
           </div>
         </form>
-      </div>
-    </div>
+    </Modal>
   );
 }
