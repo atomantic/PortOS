@@ -410,6 +410,35 @@ describe('Catalog page', () => {
     expect(toast.success).toHaveBeenCalledWith(expect.stringMatching(/Added 2 ingredients to Echo Saints/i));
   });
 
+  it('scopes the Albums view to a single album when a universe is selected', async () => {
+    renderCatalog();
+    await waitFor(() => expect(screen.getByText('Echo Saint')).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: /^Albums$/i }));
+    await waitFor(() => expect(screen.getByText('Unsorted / Raw')).toBeTruthy());
+
+    fireEvent.change(screen.getByLabelText(/^Universe$/i), { target: { value: 'u-1' } });
+    // Raw/Orphaned/other albums collapse to just the selected universe's album.
+    await waitFor(() => expect(screen.queryByText('Unsorted / Raw')).toBeNull());
+    expect(screen.getByText('Echo Saints')).toBeTruthy();
+  });
+
+  it('shows an inline error + Retry (no retry loop) when an album load fails', async () => {
+    listCatalogIngredients.mockImplementation((params = {}) => {
+      if (params.unlinked) return Promise.reject(new Error('boom'));
+      return Promise.resolve({ items: sample, nextOffset: sample.length });
+    });
+    renderCatalog();
+    await waitFor(() => expect(screen.getByText('Echo Saint')).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: /^Albums$/i }));
+
+    // The default-expanded Raw album fails → inline error + Retry, not a loop.
+    expect(await screen.findByRole('button', { name: /^Retry$/i })).toBeTruthy();
+    const unlinkedCalls = () => listCatalogIngredients.mock.calls.filter(([p]) => p?.unlinked).length;
+    const before = unlinkedCalls();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(unlinkedCalls()).toBe(before); // bounded — no tight retry loop
+  });
+
   it('lists empty (link-less) universes in the Add-to menu so they can be seeded', async () => {
     // A brand-new universe with zero catalog links is absent from /facets but
     // must still be a valid placement target.

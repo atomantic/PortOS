@@ -36,6 +36,10 @@ export default function CatalogAlbum({
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState('');
+  // `attempted` gates the auto-load so a FAILED first load (which leaves items
+  // null + loading false) doesn't make the expand effect retry in a tight loop.
+  // Reset by Retry; a remount (filter/data change) starts fresh.
+  const [attempted, setAttempted] = useState(false);
 
   const fetchPage = useCallback(async (offset) => {
     const list = await loadPage(offset).catch((err) => {
@@ -48,13 +52,21 @@ export default function CatalogAlbum({
   }, [loadPage, pageSize]);
 
   const ensureLoaded = useCallback(async () => {
-    if (items !== null || loading) return;
+    if (items !== null || loading || attempted) return;
+    setAttempted(true);
     setLoading(true);
     setError('');
     const list = await fetchPage(0);
     setLoading(false);
     if (list) setItems(list);
-  }, [items, loading, fetchPage]);
+  }, [items, loading, attempted, fetchPage]);
+
+  // Retry after a failed load: clear the attempt gate + error so the expand
+  // effect re-runs ensureLoaded.
+  const retry = () => {
+    setError('');
+    setAttempted(false);
+  };
 
   // Load the first time the album is expanded — covers both an explicit toggle
   // and a `defaultExpanded` album that mounts already open (the pinned Raw album).
@@ -110,7 +122,16 @@ export default function CatalogAlbum({
               <Loader2 size={14} className="animate-spin" /> Loading…
             </div>
           ) : error ? (
-            <div className="text-sm text-port-error py-3">{error}</div>
+            <div className="flex items-center gap-3 py-3">
+              <span className="text-sm text-port-error">{error}</span>
+              <button
+                type="button"
+                onClick={retry}
+                className="text-xs px-2 py-1 rounded border border-port-border text-gray-300 hover:text-white"
+              >
+                Retry
+              </button>
+            </div>
           ) : (items && items.length > 0) ? (
             <>
               <ul className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
