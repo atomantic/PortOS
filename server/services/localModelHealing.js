@@ -1,0 +1,150 @@
+/**
+ * Self-heal a wrong local-model configuration.
+ *
+ * When a run targets an Ollama or LM Studio model that isn't actually installed
+ * (typically a stale or mis-typed provider default), surfacing a raw "model not
+ * found" is a dead end on a single-user box — the fix is mechanical: pick a real
+ * installed model, repoint the provider so future runs use it, tell the user
+ * what changed, and let the caller retry. This module owns that recovery so any
+ * local-backend call path can adopt it instead of throwing.
+ *
+ * Only applies to the two local backends (Ollama / LM Studio). Remote/API and
+ * CLI providers return null from `localBackendForProvider` and are left alone —
+ * we can't enumerate their installed models, and their "model not found" is a
+ * config error the user must fix deliberately.
+ */
+
+import { emitLog } from './cosEvents.js';
+import { updateProvider } from './providers.js';
+import { addNotification, NOTIFICATION_TYPES, PRIORITY_LEVELS } from './notifications.js';
+import * as ollamaManager from './ollamaManager.js';
+import * as lmStudioManager from './lmStudioManager.js';
+import { recommendEditorialModel, isEmbeddingModel } from '../lib/localModelHeuristics.js';
+
+// LM Studio's default OpenAI-compatible port; Ollama's is recognized by
+// ollamaManager.isOllamaProvider. Matches `:1234` as host:port (with optional
+// trailing path/colon) so a relocated install on the same port still resolves.
+const LM_STUDIO_PORT_RE = /(^|[/:])(?:localhost|127\.0\.0\.1|\[::1\]):1234\b/i;
+
+// A backend "model not found" — Ollama answers 404 `model "x" not found, try
+// pulling it first`; LM Studio answers `model "x" not found`/`unknown model`.
+// Deliberately does NOT match "no models loaded" (a load problem with its own
+// recovery in aiProvider.js — auto-loading a downloaded model, not swapping the
+// configured one).
+const MODEL_NOT_FOUND_RE = /model\s*['"]?[\w./:-]*['"]?\s*(?:not found|does not exist|is not (?:found|installed|available))|not found, try pulling|unknown model|no such model/i;
+const NO_MODELS_LOADED_RE = /no models loaded/i;
+
+/**
+ * Which local backend (if any) a provider maps to.
+ * @returns {'ollama'|'lmstudio'|null}
+ */
+export function localBackendForProvider(provider) {
+  if (ollamaManager.isOllamaProvider(provider)) return 'ollama';
+  const endpoint = String(provider?.endpoint || '');
+  if (provider?.id === 'lmstudio' || /lm[\s-]?studio/i.test(provider?.name || '') || LM_STUDIO_PORT_RE.test(endpoint)) {
+    return 'lmstudio';
+  }
+  return null;
+}
+
+/**
+ * True when an error string is a backend "configured model isn't installed"
+ * failure (vs. "no models loaded", which is a separate recovery).
+ */
+export function isModelNotFoundError(text) {
+  const s = String(text || '');
+  if (NO_MODELS_LOADED_RE.test(s)) return false;
+  return MODEL_NOT_FOUND_RE.test(s);
+}
+
+/**
+ * Pick the best installed model to fall back to. Prefers the editorial
+ * recommender (family + size ranking, already drops embeddings/media weights);
+ * if it finds nothing usable, takes the first non-embedding model, then any —
+ * embeddings can't serve a chat completion, so never auto-pick one.
+ * @returns {string|null}
+ */
+export function chooseFallbackModel(models) {
+  const recommended = recommendEditorialModel(models);
+  if (recommended?.id) return recommended.id;
+  const usable = (models || []).find((m) => m?.id && !isEmbeddingModel(m.id));
+  return usable?.id || (models || [])[0]?.id || null;
+}
+
+/**
+ * The provider patch that repoints a wrong config onto an installed model:
+ * fixes the default when it's the missing model or otherwise not installed,
+ * repoints any tier slot pointing at an uninstalled model, and ensures the
+ * fallback is selectable in the model list. Pure — no I/O — so it's unit-tested.
+ */
+export function computeProviderPatch(provider, installedIds, fallback, requestedModel) {
+  const installed = new Set(installedIds);
+  const patch = {};
+  if (provider?.defaultModel === requestedModel || !installed.has(provider?.defaultModel)) {
+    patch.defaultModel = fallback;
+  }
+  for (const tier of ['lightModel', 'mediumModel', 'heavyModel']) {
+    const v = provider?.[tier];
+    if (v && !installed.has(v)) patch[tier] = fallback;
+  }
+  const models = Array.isArray(provider?.models) ? provider.models : [];
+  if (!models.includes(fallback)) patch.models = [...models, fallback];
+  return patch;
+}
+
+// Installed models that can actually serve a chat completion, freshly listed
+// (the configured model may have just been deleted, so bypass the cache).
+async function listInstalledChatModels(backend) {
+  if (backend === 'ollama') {
+    const models = await ollamaManager.getInstalledModels(true).catch(() => []);
+    // /api/tags doesn't tag embeddings — drop obvious embedding ids by name.
+    return models.filter((m) => m?.id && !isEmbeddingModel(m.id));
+  }
+  const models = await lmStudioManager.getAvailableModels(true).catch(() => []);
+  // LM Studio tags embedding models `type: 'embeddings'`.
+  return models.filter((m) => m?.id && m.type !== 'embeddings');
+}
+
+/**
+ * Repoint a local provider off a missing model onto a real installed one,
+ * persist the change, and notify the user. Returns `{ healed, backend, model,
+ * previous, patch }` on success, or null when nothing could be (or needed to
+ * be) healed — not a local backend, the requested model is actually installed,
+ * or nothing installable exists to fall back to.
+ *
+ * @param {{ provider: object, requestedModel?: string|null }} args
+ */
+export async function healMissingLocalModel({ provider, requestedModel }) {
+  const backend = localBackendForProvider(provider);
+  if (!backend) return null;
+
+  const installed = await listInstalledChatModels(backend);
+  if (!installed.length) return null; // nothing installed — can't self-heal
+
+  const installedIds = installed.map((m) => m.id);
+  if (requestedModel && installedIds.includes(requestedModel)) return null; // present after all
+
+  const fallback = chooseFallbackModel(installed);
+  if (!fallback || fallback === requestedModel) return null;
+
+  const patch = computeProviderPatch(provider, installedIds, fallback, requestedModel);
+  if (provider?.id && Object.keys(patch).length) {
+    await updateProvider(provider.id, patch).catch((err) => {
+      console.error(`⚠️ Failed to repoint ${provider.id} to ${fallback}: ${err.message}`);
+    });
+  }
+
+  const label = backend === 'ollama' ? 'Ollama' : 'LM Studio';
+  const had = requestedModel ? `"${requestedModel}" isn't installed` : 'no model was configured';
+  const message = `${label} model ${had} — switched to "${fallback}" and updated the provider default.`;
+  emitLog('warn', message, { providerId: provider?.id, backend, requestedModel: requestedModel || null, fallbackModel: fallback });
+  await addNotification({
+    type: NOTIFICATION_TYPES.AGENT_WARNING,
+    title: 'Local model auto-corrected',
+    description: message,
+    priority: PRIORITY_LEVELS.LOW,
+    metadata: { providerId: provider?.id, backend, requestedModel: requestedModel || null, fallbackModel: fallback }
+  }).catch((err) => console.error(`⚠️ heal notification failed: ${err.message}`));
+
+  return { healed: true, backend, model: fallback, previous: requestedModel || null, patch };
+}
