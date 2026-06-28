@@ -189,13 +189,28 @@ function estimateTempo(onset, fps) {
   }
   if (bestLag < 0 || bestScore <= 0) return { bpm: null, lag: null };
 
-  // Parabolic interpolation around the integer-lag peak for sub-frame tempo
-  // precision (raw integer lags quantize BPM coarsely at high tempo). Reuse the
-  // stored autocorrelation; only the rare boundary neighbor needs a fresh pass.
   const acAt = (lag) => {
     if (lag < 1 || lag >= n) return 0;
     return lag >= minLag && lag <= maxLag ? ac[lag] : acLag(lag);
   };
+
+  // Octave correction (half-tempo fold-down). Autocorrelation peaks at EVERY
+  // multiple of the true period, so the half-tempo lag (2× the true period) is
+  // itself a valid peak — and frame quantization smears a non-integer true
+  // period across two integer lags, dropping its value below the sharper
+  // half-tempo peak. The weighted score then picks half tempo (e.g. 140 BPM
+  // read as ~70). Fold down while half the chosen lag is still a strong peak:
+  // if `bestLag` were the true fundamental, its half-lag would sit on a trough
+  // (low/negative), so a strong peak there means the shorter period is the real
+  // one. The inverse error (picking double tempo) can't occur from AC alone.
+  const peakNear = (lag) => Math.max(acAt(Math.floor(lag)), acAt(Math.ceil(lag)));
+  while (bestLag / 2 >= minLag && peakNear(bestLag / 2) >= 0.5 * ac[bestLag]) {
+    bestLag = Math.round(bestLag / 2);
+  }
+
+  // Parabolic interpolation around the integer-lag peak for sub-frame tempo
+  // precision (raw integer lags quantize BPM coarsely at high tempo). Reuse the
+  // stored autocorrelation; only the rare boundary neighbor needs a fresh pass.
   const ym = acAt(bestLag - 1);
   const y0 = ac[bestLag];
   const yp = acAt(bestLag + 1);
