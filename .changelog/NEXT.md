@@ -29,6 +29,10 @@
 
 - **Messages moved out of Brain into its own top-level "Comms" section.** The four Messages pages (Inbox, Drafts, Sync, Config) were buried as loose children inside the Brain group, mixed in with notes/feeds/links. They now live under a dedicated **Comms** sidebar section (between Chief of Staff and Create, alphabetically), with clean labels — so messaging is a first-class destination rather than a Brain sub-item. The page routes are unchanged (`/messages/*`), so existing links, ⌘K, and voice ("messages" / "comms") still resolve; only the sidebar grouping and the nav-manifest section moved. (`client/src/components/Layout.jsx`, `server/lib/navManifest.js`)
 
+## Settings
+
+- **The AI Provider add/edit dialog now closes when you click outside it (or press Esc).** The provider form on the AI Providers page was a hand-rolled `fixed inset-0` backdrop with no dismiss-on-backdrop and no Esc handling — the only way out was the Cancel/✕ button. It now uses the shared `ui/Modal` component (the app-wide DRY standard for modal chrome), so a backdrop click or Esc dismisses it like every other migrated dialog. (`client/src/pages/AIProviders.jsx`)
+
 ## Mobile
 
 - **Fix: the Apps page action buttons now meet the 40px touch-target minimum on mobile.** A mobile-responsiveness audit of the app (375px viewport) found the codebase already well-covered — tables wrap in `overflow-x-auto`, drawers/modals use `w-full sm:w-[...]`, and grids carry responsive bases — with one outlier: every control button on `/apps` (Start/Stop/Restart, Launch/Dev UI, Manage/Delete/Archive, and the expanded-panel quick actions like Update/Build/Refresh Config) used `py-1.5` + `text-xs`, rendering ~30px tall — below the codebase's own 40px tap-target convention and the WCAG 44px guideline. Each now gets `min-h-[40px] sm:min-h-0`, so the primary app-management controls are comfortably tappable on a phone while desktop keeps its compact density. (`client/src/pages/Apps.jsx`)
