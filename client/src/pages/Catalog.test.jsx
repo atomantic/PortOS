@@ -345,6 +345,34 @@ describe('Catalog page', () => {
     await waitFor(() => expect(screen.getByText('Item 60')).toBeTruthy());
   });
 
+  it('drops a stale Load more page when filters change mid-flight', async () => {
+    const firstPage = Array.from({ length: 60 }, (_, i) => ({
+      id: `pg-${i}`, name: `Page ${i}`, type: 'idea', payload: {}, tags: [],
+    }));
+    let resolveStale;
+    const stalePromise = new Promise((r) => { resolveStale = r; });
+    listCatalogIngredients.mockImplementation((params = {}) => {
+      if (params.offset === 60 && !params.type) return stalePromise;          // the in-flight loadMore
+      if (params.type === 'character') {
+        return Promise.resolve({ items: [{ id: 'flt', name: 'Filtered Only', type: 'character', payload: {}, tags: [] }], nextOffset: 1 });
+      }
+      return Promise.resolve({ items: firstPage, nextOffset: 60 });           // initial full page
+    });
+    renderCatalog();
+    await waitFor(() => expect(screen.getByText('Page 0')).toBeTruthy());
+
+    fireEvent.click(screen.getByRole('button', { name: /Load more/i }));      // offset 60 → pending
+    fireEvent.click(screen.getByRole('button', { name: /^Character/i }));     // filter changes mid-flight
+    await waitFor(() => expect(screen.getByText('Filtered Only')).toBeTruthy());
+
+    await act(async () => {
+      resolveStale({ items: [{ id: 'stale', name: 'Stale Page Item', type: 'idea', payload: {}, tags: [] }], nextOffset: 61 });
+    });
+    // The stale page must NOT leak into the now-character-filtered grid.
+    expect(screen.queryByText('Stale Page Item')).toBeNull();
+    expect(screen.getByText('Filtered Only')).toBeTruthy();
+  });
+
   it('switches to the Albums view and lazy-loads the Raw album', async () => {
     renderCatalog();
     await waitFor(() => expect(screen.getByText('Echo Saint')).toBeTruthy());
