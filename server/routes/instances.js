@@ -70,6 +70,7 @@ const syncCategoriesSchema = z.object({
   writersRoomWorks: z.boolean().optional(),
   writersRoomFolders: z.boolean().optional(),
   writersRoomExercises: z.boolean().optional(),
+  musicVideoProjects: z.boolean().optional(),
   catalog: z.boolean().optional()
 }).optional();
 

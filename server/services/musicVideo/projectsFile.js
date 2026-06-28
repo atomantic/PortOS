@@ -19,7 +19,11 @@ import {
   applySceneUpdate,
   removeScene,
   reorderScenes,
+  mergeProjectRecord,
 } from './projectsLogic.js';
+import {
+  maybeJournalBeforeOverwrite, setSyncBaseHash, contentHashForRecord, flushBaseHashes, deleteSyncBaseHash,
+} from '../../lib/conflictJournal.js';
 
 const PROJECTS_FILE = join(PATHS.data, 'music-video-projects.json');
 
@@ -43,6 +47,12 @@ export async function getProject(id, { includeDeleted = false } = {}) {
   const found = all.find((p) => p.id === id);
   if (!found) return null;
   return includeDeleted || !found.deleted ? found : null;
+}
+
+/** Live project ids (or all when includeDeleted) — used by tombstone GC sweeps. */
+export async function listProjectIds({ includeDeleted = false } = {}) {
+  const all = await loadAll();
+  return (includeDeleted ? all : all.filter((p) => !p.deleted)).map((p) => p.id);
 }
 
 export async function createProject(input) {
@@ -77,6 +87,59 @@ export async function deleteProject(id) {
   all[idx] = { ...all[idx], deleted: true, deletedAt: now, updatedAt: now };
   await saveAll(all);
   return { ok: true };
+}
+
+/**
+ * File-backend mirror of projectsDB.js `mergeProjectsFromSync` — LWW-per-id
+ * (tombstone-aware) via the shared `mergeProjectRecord` decision so the two
+ * backends can't drift. Single load → per-record merge → single save.
+ */
+export async function mergeProjectsFromSync(remoteProjects, { source = { via: 'sync', peerId: null } } = {}) {
+  if (!Array.isArray(remoteProjects)) return { applied: false, count: 0 };
+  const all = await loadAll();
+  const byId = new Map(all.map((p) => [p.id, p]));
+  let changed = 0;
+  for (const remote of remoteProjects) {
+    const local = byId.get(remote?.id) || null;
+    const { next, inserted, remoteWins, changed: didChange } = mergeProjectRecord(local, remote);
+    if (!next) continue;
+    if (inserted) {
+      byId.set(next.id, next);
+      await setSyncBaseHash('musicVideoProject', next.id, contentHashForRecord('musicVideoProject', next));
+      changed += 1;
+      continue;
+    }
+    if (!remoteWins || !didChange) continue;
+    await maybeJournalBeforeOverwrite({ kind: 'musicVideoProject', id: next.id, local, remote: next, source });
+    byId.set(next.id, next);
+    await setSyncBaseHash('musicVideoProject', next.id, contentHashForRecord('musicVideoProject', next));
+    changed += 1;
+  }
+  if (changed > 0) await saveAll([...byId.values()]);
+  await flushBaseHashes();
+  if (changed === 0) return { applied: false, count: 0 };
+  return { applied: true, count: changed };
+}
+
+/**
+ * Hard-remove tombstoned projects whose deletedAt is older than the cutoff.
+ * Mirrors projectsDB.js `pruneTombstonedProjects`; evicts each pruned project's
+ * base hash.
+ */
+export async function pruneTombstonedProjects(olderThanMs) {
+  if (!Number.isFinite(olderThanMs)) return { pruned: 0 };
+  const all = await loadAll();
+  const survivors = [];
+  const pruned = [];
+  for (const p of all) {
+    const ms = p.deleted ? Date.parse(p.deletedAt || '') : NaN;
+    if (p.deleted && Number.isFinite(ms) && ms < olderThanMs) pruned.push(p.id);
+    else survivors.push(p);
+  }
+  if (pruned.length === 0) return { pruned: 0 };
+  await saveAll(survivors);
+  for (const id of pruned) await deleteSyncBaseHash('musicVideoProject', id);
+  return { pruned: pruned.length };
 }
 
 export async function setProjectAnalysis(id, analysis) {

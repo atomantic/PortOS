@@ -347,6 +347,19 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // their existing `startedAt`/`finishedAt` (see sanitizeExerciseForSync). The
   // FIRST incompatible exercise-shape change MUST bump this to 2.
   writersRoomExercises: 1,
+  // v1 = Music Video projects (PostgreSQL `music_video_projects`) federated via
+  // the per-record peer-sync push pipeline (record kind `musicVideoProject`, sync
+  // category `musicVideoProjects`, #1770 — follow-up to #1760 Phase 1). Same
+  // posture as `creativeDirectorProjects`/`writersRoomFolders`: a brand-NEW synced
+  // record type with its own per-category gate — a v1 sender pushing to a ≤v0
+  // (pre-feature) receiver is sender-ahead on `musicVideoProjects` and gets a 412
+  // (only that category pauses); a v1 receiver still accepts a ≤v0 sender
+  // (pre-feature peers never push a `musicVideoProject`). The project body
+  // (metadata + beat-aligned scenes) is LWW-overwritten whole; referenced media
+  // (uploaded audio, scene images/rendered videos) is NOT bundled in this phase —
+  // it federates via its own channels / a follow-up. The FIRST incompatible
+  // project-shape change MUST bump this to 2.
+  musicVideoProjects: 1,
   // v1 = standalone media-library federation (#1566). NOT a record kind — it's
   // the wire contract for the library-level asset manifest a full-sync peer
   // advertises at GET /api/peer-sync/library-manifest. The receiver-pull sweep
@@ -436,6 +449,7 @@ export const RECORD_KIND_SCHEMA_CATEGORIES = Object.freeze({
   writersRoomWork: Object.freeze(['writersRoomWorks']),
   writersRoomFolder: Object.freeze(['writersRoomFolders']),
   writersRoomExercise: Object.freeze(['writersRoomExercises']),
+  musicVideoProject: Object.freeze(['musicVideoProjects']),
 });
 
 /**

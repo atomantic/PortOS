@@ -8,6 +8,8 @@ import {
   removeScene,
   reorderScenes,
   mirrorStatus,
+  sanitizeProjectForSync,
+  mergeProjectRecord,
 } from './projectsLogic.js';
 
 const baseProject = () => buildProjectRecord({ name: 'Test MV' }, { id: 'mv-1', now: '2026-01-01T00:00:00.000Z' });
@@ -139,5 +141,81 @@ describe('mirrorStatus', () => {
     expect(mirrorStatus('')).toBe('draft');
     expect(mirrorStatus(null)).toBe('draft');
     expect(mirrorStatus('x'.repeat(40))).toHaveLength(32);
+  });
+});
+
+describe('sanitizeProjectForSync (#1770 federation)', () => {
+  it('rejects non-objects, arrays, and id-less records', () => {
+    expect(sanitizeProjectForSync(null)).toBeNull();
+    expect(sanitizeProjectForSync('x')).toBeNull();
+    expect(sanitizeProjectForSync([])).toBeNull();
+    expect(sanitizeProjectForSync({})).toBeNull();
+    expect(sanitizeProjectForSync({ id: '' })).toBeNull();
+  });
+
+  it('normalizes timestamps and the soft-delete pair', () => {
+    const out = sanitizeProjectForSync({ id: 'mv-1', name: 'A' });
+    expect(out.id).toBe('mv-1');
+    expect(typeof out.createdAt).toBe('string');
+    expect(out.updatedAt).toBe(out.createdAt); // defaults updatedAt to createdAt
+    expect(out.deleted).toBe(false);
+    expect(out.deletedAt).toBeNull();
+  });
+
+  it('drops a stray deletedAt when deleted is false', () => {
+    const out = sanitizeProjectForSync({ id: 'mv-1', updatedAt: 'u', deleted: false, deletedAt: '2026-01-01T00:00:00Z' });
+    expect(out.deletedAt).toBeNull();
+  });
+
+  it('keeps a tombstone with deleted=true + deletedAt', () => {
+    const out = sanitizeProjectForSync({ id: 'mv-1', updatedAt: 'u', deleted: true, deletedAt: '2026-01-01T00:00:00Z' });
+    expect(out.deleted).toBe(true);
+    expect(out.deletedAt).toBe('2026-01-01T00:00:00Z');
+  });
+});
+
+describe('mergeProjectRecord (#1770 LWW)', () => {
+  it('drops a malformed remote', () => {
+    expect(mergeProjectRecord(null, {}).next).toBeNull();
+  });
+
+  it('inserts when there is no local copy', () => {
+    const r = mergeProjectRecord(null, { id: 'mv-1', updatedAt: '2026-01-02T00:00:00Z', name: 'X' });
+    expect(r.inserted).toBe(true);
+    expect(r.remoteWins).toBe(true);
+    expect(r.next.name).toBe('X');
+  });
+
+  it('remote with a newer updatedAt wins', () => {
+    const local = { id: 'mv-1', updatedAt: '2026-01-01T00:00:00Z', name: 'old' };
+    const remote = { id: 'mv-1', updatedAt: '2026-01-05T00:00:00Z', name: 'new' };
+    const r = mergeProjectRecord(local, remote);
+    expect(r.remoteWins).toBe(true);
+    expect(r.changed).toBe(true);
+    expect(r.next.name).toBe('new');
+  });
+
+  it('local with a newer updatedAt wins (no change applied)', () => {
+    const local = { id: 'mv-1', updatedAt: '2026-01-05T00:00:00Z', name: 'local' };
+    const remote = { id: 'mv-1', updatedAt: '2026-01-01T00:00:00Z', name: 'remote' };
+    const r = mergeProjectRecord(local, remote);
+    expect(r.remoteWins).toBe(false);
+    expect(r.changed).toBe(false);
+    expect(r.next.name).toBe('local');
+  });
+
+  it('a remote tombstone beats an older live local copy (no resurrection)', () => {
+    const local = { id: 'mv-1', updatedAt: '2026-01-01T00:00:00Z', deleted: false, deletedAt: null };
+    const remote = { id: 'mv-1', updatedAt: '2026-01-05T00:00:00Z', deleted: true, deletedAt: '2026-01-05T00:00:00Z' };
+    const r = mergeProjectRecord(local, remote);
+    expect(r.remoteWins).toBe(true);
+    expect(r.next.deleted).toBe(true);
+  });
+
+  it('a same-updatedAt re-push is a no-op (changed=false, no churn)', () => {
+    const local = { id: 'mv-1', updatedAt: '2026-01-05T00:00:00Z', name: 'same', deleted: false, deletedAt: null };
+    const remote = { id: 'mv-1', updatedAt: '2026-01-05T00:00:00Z', name: 'same' };
+    const r = mergeProjectRecord(local, remote);
+    expect(r.changed).toBe(false);
   });
 });

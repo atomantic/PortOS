@@ -8,10 +8,10 @@
  * throws a ServerError on a validation failure), leaving read/write to the
  * caller.
  *
- * Scope note: peer-sync federation (sanitize/merge/tombstone-GC helpers the CD
- * store carries) is deferred to a follow-up — see services/musicVideo/projects.js.
- * The soft-delete fields are kept on the record now so adding federation later
- * is purely additive.
+ * Peer-sync federation (#1770): the sanitize + LWW-merge decision helpers the CD
+ * store carries now live here too (`sanitizeProjectForSync`, `mergeProjectRecord`),
+ * shared by both backends so the merge can't drift. The soft-delete fields were
+ * already on the record, so federation was purely additive (no record migration).
  */
 
 import { randomUUID } from 'crypto';
@@ -22,9 +22,13 @@ import {
   musicVideoSceneCreateSchema,
   musicVideoSceneUpdateSchema,
 } from '../../lib/validation.js';
+import { compareNewerWins } from '../../lib/lwwTimestamp.js';
+import { sanitizeSoftDeleteFields } from '../../lib/syncWire.js';
 
 // Re-exported for the PG backend's typed mirror columns (mirrors the CD store).
 export { mirrorTimestamp } from '../../lib/pgTimestamp.js';
+
+const isStr = (v) => typeof v === 'string';
 
 const STATUS_COLUMN_MAX = 32;
 
@@ -171,4 +175,46 @@ export function reorderScenes(project, orderedIds) {
   }
   const nextScenes = orderedIds.map((id, i) => ({ ...byId.get(id), order: i }));
   return touch(project, { scenes: nextScenes });
+}
+
+// ---- peer-sync federation (#1770) -----------------------------------------
+// Mirrors the Creative Director store (creativeDirector/projectsLogic.js): a
+// project is a whole-record LWW kind (no item-union, no ephemeral flag), so the
+// wire form is the record with normalized soft-delete fields and the merge is a
+// straight `updatedAt` newest-wins decision. Both backends call through here so
+// the file and PG paths can't diverge.
+
+/**
+ * Wire-safe / merge-safe projection of a peer-supplied project record. Rejects a
+ * non-object or one missing an id (the receiver could never apply it), and
+ * normalizes the timestamps + soft-delete pair so a legacy/hand-edited payload
+ * converges byte-for-byte with a freshly-written one. Returns null when unusable.
+ */
+export function sanitizeProjectForSync(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  if (!isStr(raw.id) || !raw.id) return null;
+  const createdAt = isStr(raw.createdAt) ? raw.createdAt : new Date().toISOString();
+  const updatedAt = isStr(raw.updatedAt) ? raw.updatedAt : createdAt;
+  const { deleted, deletedAt } = sanitizeSoftDeleteFields(raw);
+  return { ...raw, createdAt, updatedAt, deleted, deletedAt };
+}
+
+/**
+ * LWW merge decision for one incoming peer record against the local copy.
+ * Returns `{ next, inserted, remoteWins, changed }`:
+ *   - malformed remote → `{ next: null, ... }` (caller drops it)
+ *   - no local copy → insert the remote
+ *   - otherwise newest-`updatedAt`-wins; `changed` is false when the winner is
+ *     byte-identical to local (a same-`updatedAt` re-push no-ops, no churn).
+ * Tombstone-aware purely via `updatedAt`: deleteProject stamps a fresh
+ * `updatedAt`, so a tombstone beats an older live copy and can't be resurrected.
+ */
+export function mergeProjectRecord(local, remoteRaw) {
+  const remote = sanitizeProjectForSync(remoteRaw);
+  if (!remote) return { next: null, inserted: false, remoteWins: false, changed: false };
+  if (!local) return { next: remote, inserted: true, remoteWins: true, changed: true };
+  const remoteWins = compareNewerWins(remote.updatedAt, local.updatedAt);
+  const next = remoteWins ? remote : local;
+  const changed = JSON.stringify(next) !== JSON.stringify(local);
+  return { next, inserted: false, remoteWins, changed };
 }
