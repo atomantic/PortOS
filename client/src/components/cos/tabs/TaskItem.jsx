@@ -206,7 +206,7 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
   };
 
   return (
-    <div className={`bg-port-card border rounded-lg p-4 group ${
+    <div className={`bg-port-card border rounded-lg p-4 ${
       awaitingApproval ? 'border-yellow-500/50' : 'border-port-border'
     }`}>
       <div className="flex items-start gap-3">
@@ -391,9 +391,7 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
         {/* Action buttons. Keep the delete confirmation here, next to the trash
             icon, rather than at the bottom of the card — a task with a lot of
             context would otherwise push the confirm row far below the fold. */}
-        <div className={`flex items-center gap-1 transition-opacity ${
-          isConfirming(task.id) ? '' : 'md:opacity-0 md:group-hover:opacity-100'
-        }`}>
+        <div className="flex items-center gap-1">
           {!editing && (
             isConfirming(task.id) ? (
               <ConfirmButtonPair
