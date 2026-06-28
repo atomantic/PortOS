@@ -273,5 +273,35 @@ describe('review service', () => {
 
       expect(atomicWrite).not.toHaveBeenCalled();
     });
+
+    it('dismisses pending review items when their task is deleted', async () => {
+      const handler = registeredHandlers['tasks:changed'];
+      expect(handler).toBeDefined();
+
+      const items = [
+        { id: 'r1', type: 'cos', status: 'pending', metadata: { referenceId: 'task-42', taskId: 'task-42' } },
+        { id: 'r2', type: 'cos', status: 'pending', metadata: { referenceId: 'task-99', taskId: 'task-99' } }
+      ];
+      readFile.mockResolvedValue(JSON.stringify(items));
+
+      handler({ type: 'user', action: 'deleted', taskId: 'task-42' });
+      await new Promise(r => setImmediate(r));
+
+      const written = atomicWrite.mock.calls[0][1];
+      expect(written.find(i => i.id === 'r1').status).toBe('dismissed');
+      expect(written.find(i => i.id === 'r2').status).toBe('pending');
+    });
+
+    it('ignores non-deletion task changes', async () => {
+      const handler = registeredHandlers['tasks:changed'];
+      readFile.mockResolvedValue(JSON.stringify([
+        { id: 'r1', type: 'cos', status: 'pending', metadata: { referenceId: 'task-42', taskId: 'task-42' } }
+      ]));
+
+      handler({ type: 'user', action: 'updated', task: { id: 'task-42' } });
+      await new Promise(r => setImmediate(r));
+
+      expect(atomicWrite).not.toHaveBeenCalled();
+    });
   });
 });
