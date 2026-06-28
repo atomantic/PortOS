@@ -104,10 +104,13 @@ describe('analyzePcm', () => {
     const samples = clickTrack({ bpm: 120, durationSec: 16 });
     const { beats, downbeats } = analyzePcm(samples, ANALYSIS_SAMPLE_RATE);
     expect(downbeats.length).toBeGreaterThan(0);
-    // ~1 downbeat per 4 beats.
-    expect(downbeats.length).toBeCloseTo(beats.length / 4, 0);
-    // Every downbeat is an actual beat.
-    for (const d of downbeats) expect(beats).toContain(d);
+    // ~1 downbeat per 4 beats (floor..ceil tolerates the partial final bar).
+    expect(downbeats.length).toBeGreaterThanOrEqual(Math.floor(beats.length / 4));
+    expect(downbeats.length).toBeLessThanOrEqual(Math.ceil(beats.length / 4));
+    // Every downbeat is an actual beat, spaced exactly 4 beats apart.
+    const idx = downbeats.map((d) => beats.indexOf(d));
+    expect(idx.every((i) => i >= 0)).toBe(true);
+    for (let i = 1; i < idx.length; i++) expect(idx[i] - idx[i - 1]).toBe(4);
   });
 
   it('returns contiguous sections spanning the whole track', () => {
@@ -122,15 +125,30 @@ describe('analyzePcm', () => {
     }
   });
 
-  it('does not shatter a long flat/structureless track into spurious sections', () => {
-    // A 40s sustained tone at constant amplitude has no energy novelty, so it
-    // must yield a single section — not the maximum evenly-spaced boundaries.
+  it('reports no tempo and one section for a sustained pure tone', () => {
+    // A 40s steady tone has no beats. Frame windowing must suppress the
+    // spectral-leakage ripple so it reports neither a bogus tempo nor spurious
+    // sections (without windowing it returned ~112 BPM and multiple sections).
     const n = ANALYSIS_SAMPLE_RATE * 40;
     const samples = new Float32Array(n);
     for (let i = 0; i < n; i++) samples[i] = 0.3 * Math.sin((2 * Math.PI * 220 * i) / ANALYSIS_SAMPLE_RATE);
-    const { sections } = analyzePcm(samples, ANALYSIS_SAMPLE_RATE);
+    const { bpm, beats, sections } = analyzePcm(samples, ANALYSIS_SAMPLE_RATE);
+    expect(bpm).toBeNull();
+    expect(beats).toEqual([]);
     expect(sections.length).toBe(1);
     expect(sections[0].startSec).toBe(0);
+  });
+
+  it('reports no tempo for structureless white noise', () => {
+    // White noise has a strongest autocorrelation lag but no real periodicity;
+    // the significance gate must reject it rather than inventing a tempo.
+    const n = ANALYSIS_SAMPLE_RATE * 20;
+    const samples = new Float32Array(n);
+    let seed = 7;
+    for (let i = 0; i < n; i++) { seed = (seed * 1103515245 + 12345) & 0x7fffffff; samples[i] = (seed / 0x7fffffff) * 2 - 1; }
+    const { bpm, beats } = analyzePcm(samples, ANALYSIS_SAMPLE_RATE);
+    expect(bpm).toBeNull();
+    expect(beats).toEqual([]);
   });
 
   it('reports no tempo for silence but still spans sections', () => {
