@@ -216,6 +216,31 @@ describe('catalogValidation — catalogIngredientQuerySchema', () => {
   it('rejects negative offset', () => {
     expect(() => catalogIngredientQuerySchema.parse({ offset: '-1' })).toThrow();
   });
+
+  it('preprocesses a CSV ids string into a trimmed string[]', () => {
+    const out = catalogIngredientQuerySchema.parse({ ids: 'a, b ,c' });
+    expect(out.ids).toEqual(['a', 'b', 'c']);
+  });
+
+  it('drops empty segments and collapses an all-blank ids string to undefined', () => {
+    expect(catalogIngredientQuerySchema.parse({ ids: 'a,,,b' }).ids).toEqual(['a', 'b']);
+    expect(catalogIngredientQuerySchema.parse({ ids: ' , , ' }).ids).toBeUndefined();
+    expect(catalogIngredientQuerySchema.parse({ ids: '' }).ids).toBeUndefined();
+  });
+
+  it('omits ids cleanly when absent', () => {
+    expect(catalogIngredientQuerySchema.parse({ limit: '10' }).ids).toBeUndefined();
+  });
+
+  it('caps ids at 50 entries (extra trimmed before length validation)', () => {
+    const csv = Array.from({ length: 80 }, (_, i) => `id${i}`).join(',');
+    const out = catalogIngredientQuerySchema.parse({ ids: csv });
+    expect(out.ids).toHaveLength(50);
+  });
+
+  it('rejects an oversized single id token (>64 chars)', () => {
+    expect(() => catalogIngredientQuerySchema.parse({ ids: 'x'.repeat(65) })).toThrow();
+  });
 });
 
 describe('catalogValidation — catalogIngredientLinkSchema', () => {

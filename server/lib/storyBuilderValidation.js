@@ -20,6 +20,12 @@ export const storySessionCreateSchema = z.object({
   // Import mode supplies pre-created ids; seed mode mints shells server-side.
   universeId: z.preprocess(emptyToUndefined, z.string().trim().max(64).optional()),
   seriesId: z.preprocess(emptyToUndefined, z.string().trim().max(64).optional()),
+  // Optional Catalog ingredients to seed + link to the new series (#1761).
+  // Seed mode links each surviving ingredient to the minted series via
+  // catalog_ingredient_refs (ref_kind='series'); honors the convergence
+  // contract (no parallel data model). Additive + optional ⇒ older clients
+  // that omit it are unaffected.
+  catalogIngredientIds: z.array(z.string().trim().max(64)).max(50).optional(),
   // Picker choice that drives every Story Builder operation; nullable so the
   // UI can send "use the stage default" explicitly.
   llm: z.object({

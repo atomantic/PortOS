@@ -196,6 +196,7 @@ router.get('/tags', asyncHandler(async (req, res) => {
 router.get('/ingredients', asyncHandler(async (req, res) => {
   const params = validateRequest(catalogIngredientQuerySchema, req.query);
   res.json(await catalogDB.listIngredients({
+    ids: params.ids,
     type: params.type,
     tag: params.tag,
     query: params.q,

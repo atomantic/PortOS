@@ -2,6 +2,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
+// Spy on navigation so the "Remix into…" handoff can assert the target route +
+// the generic `remix.ingredientIds` state payload. MemoryRouter still supplies
+// the real Link/router context.
+const navigateMock = vi.hoisted(() => vi.fn());
+vi.mock('react-router-dom', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, useNavigate: () => navigateMock };
+});
+
 vi.mock('../services/apiCatalog', () => ({
   listCatalogIngredients: vi.fn(),
   createCatalogIngredient: vi.fn(),
@@ -219,6 +228,51 @@ describe('Catalog page', () => {
     renderCatalog();
     const img = await screen.findByAltText('Echo Saint');
     expect(img.getAttribute('src')).toBe('/data/images/hero.png');
+  });
+
+  it('multi-selects ingredients and remixes them into Story Builder with a generic state payload', async () => {
+    renderCatalog();
+    await waitFor(() => expect(screen.getByText('Echo Saint')).toBeTruthy());
+
+    // No action bar until something is selected.
+    expect(screen.queryByText(/selected$/i)).toBeNull();
+
+    fireEvent.click(screen.getByLabelText('Select Echo Saint'));
+    fireEvent.click(screen.getByLabelText('Select Old Harbor'));
+    await waitFor(() => expect(screen.getByText('2 selected')).toBeTruthy());
+
+    // Open the Remix menu and choose Story Builder.
+    fireEvent.click(screen.getByRole('button', { name: /Remix into/i }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Story Builder' }));
+
+    expect(navigateMock).toHaveBeenCalledWith('/story-builder', {
+      state: { remix: { ingredientIds: ['i-1', 'i-2'] } },
+    });
+  });
+
+  it('toggling a selection checkbox does not navigate to the card detail', async () => {
+    renderCatalog();
+    await waitFor(() => expect(screen.getByText('Echo Saint')).toBeTruthy());
+    fireEvent.click(screen.getByLabelText('Select Echo Saint'));
+    // Selection is a distinct gesture from opening the card — no navigation.
+    expect(navigateMock).not.toHaveBeenCalled();
+    expect(screen.getByText('1 selected')).toBeTruthy();
+  });
+
+  it('drops a deleted ingredient from the selection so the count stays honest', async () => {
+    deleteCatalogIngredient.mockResolvedValue({ success: true });
+    renderCatalog();
+    await waitFor(() => expect(screen.getByText('Echo Saint')).toBeTruthy());
+
+    fireEvent.click(screen.getByLabelText('Select Echo Saint'));
+    fireEvent.click(screen.getByLabelText('Select Old Harbor'));
+    expect(screen.getByText('2 selected')).toBeTruthy();
+
+    fireEvent.click(screen.getByLabelText(/Delete Echo Saint/i));
+    const yesBtn = await screen.findByRole('button', { name: /^Yes$/i });
+    await act(async () => { fireEvent.click(yesBtn); });
+
+    await waitFor(() => expect(screen.getByText('1 selected')).toBeTruthy());
   });
 
   it('renders a user-defined type as a filter chip from the merged registry', async () => {
