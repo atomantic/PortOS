@@ -423,4 +423,55 @@ describe('localLlm', () => {
       ]);
     });
   });
+
+  describe('getLatestOllamaVersion', () => {
+    afterEach(() => vi.unstubAllGlobals());
+
+    it('fetches the latest release, strips the leading v, and caches it', async () => {
+      const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ tag_name: 'v0.5.7' }) }));
+      vi.stubGlobal('fetch', fetchMock);
+      expect(await svc.getLatestOllamaVersion()).toBe('0.5.7');
+      // Second call within the TTL reuses the cache — no extra network hit.
+      expect(await svc.getLatestOllamaVersion()).toBe('0.5.7');
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('returns null on a failed lookup and backs off instead of refetching every call', async () => {
+      const fetchMock = vi.fn(async () => { throw new Error('network down'); });
+      vi.stubGlobal('fetch', fetchMock);
+      expect(await svc.getLatestOllamaVersion()).toBeNull();
+      expect(await svc.getLatestOllamaVersion()).toBeNull();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('getStatus update detection', () => {
+    afterEach(() => vi.unstubAllGlobals());
+
+    const stubLatest = (tag) => vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ tag_name: tag }) })));
+
+    it('flags updateAvailable when the latest release is newer than the running version', async () => {
+      mocks.ollama.getStatus.mockResolvedValueOnce({ available: true, baseUrl: 'x', version: '0.5.4', modelCount: 0, models: [] });
+      stubLatest('v0.5.7');
+      const s = await svc.getStatus();
+      expect(s.ollama.version).toBe('0.5.4');
+      expect(s.ollama.latestVersion).toBe('0.5.7');
+      expect(s.ollama.updateAvailable).toBe(true);
+    });
+
+    it('does not flag an update when already on the latest version', async () => {
+      mocks.ollama.getStatus.mockResolvedValueOnce({ available: true, baseUrl: 'x', version: '0.5.7', modelCount: 0, models: [] });
+      stubLatest('v0.5.7');
+      const s = await svc.getStatus();
+      expect(s.ollama.updateAvailable).toBe(false);
+    });
+
+    it('cannot flag an update when Ollama is stopped (no running version to compare)', async () => {
+      mocks.ollama.getStatus.mockResolvedValueOnce({ available: false, baseUrl: 'x', version: null, modelCount: 0, models: [] });
+      stubLatest('v0.5.7');
+      const s = await svc.getStatus();
+      expect(s.ollama.latestVersion).toBe('0.5.7');
+      expect(s.ollama.updateAvailable).toBe(false);
+    });
+  });
 });

@@ -29,6 +29,7 @@ import { tmpdir } from 'os'
 import { pipeline } from 'stream/promises'
 import { Readable } from 'stream'
 import { PATHS, atomicWrite } from '../lib/fileUtils.js'
+import { compareSemver } from '../lib/versionUtils.js'
 import { isBackend, mapModelToBackend } from '../lib/localLlmCatalog.js'
 import { sanitizeOllamaName } from '../lib/localLlmDisk.js'
 import { recommendEditorialModel, isVisionModel, isVisionCapableCliProvider } from '../lib/localModelHeuristics.js'
@@ -58,6 +59,16 @@ function canAutoInstall(backend) {
   if (process.platform === 'darwin') return true
   if (process.platform === 'linux') return backend === 'ollama'
   return false
+}
+
+// Which (platform, backend) pairs PortOS can UPGRADE in place. This is NOT the
+// same as canAutoInstall: LM Studio installs via the Homebrew cask on macOS but
+// self-updates through Sparkle, which PortOS can't drive (upgradeBackend returns
+// manualUpdateRequired for it). Only Ollama has a PortOS-driven upgrade path
+// (direct .app download on macOS, brew formula / official script otherwise).
+function canAutoUpgrade(backend) {
+  if (backend !== 'ollama') return false
+  return process.platform === 'darwin' || process.platform === 'linux'
 }
 
 // aiToolkit provider id that pairs with each backend.
@@ -350,6 +361,45 @@ export async function installBackend(backend, onProgress = () => {}) {
 }
 
 /**
+ * Fetch the latest Ollama GitHub release object (or null on any failure). The
+ * full object carries both the tag and the downloadable assets — getStatus's
+ * cached version lookup reads `tag_name`, the macOS upgrader reads `assets`.
+ */
+async function fetchLatestOllamaRelease(timeoutMs = 8000) {
+  return fetch('https://api.github.com/repos/ollama/ollama/releases/latest', {
+    headers: { 'User-Agent': 'PortOS', Accept: 'application/vnd.github+json' },
+    signal: AbortSignal.timeout(timeoutMs),
+  }).then((r) => (r.ok ? r.json() : null)).catch(() => null)
+}
+
+// Cache the latest Ollama release tag. GitHub's release API is slow and
+// unauthenticated-rate-limited, and getStatus() runs on every Local LLMs tab
+// load / refresh / action — so a steady-state UI must not hit GitHub each time.
+// `version: null` is the not-fetched sentinel (distinct from a cached value); a
+// successful fetch holds for LATEST_VERSION_TTL_MS, a failed one backs off for
+// the shorter error TTL instead of poisoning the cache forever or hammering.
+let latestOllamaCache = { version: null, fetchedAt: 0 }
+const LATEST_VERSION_TTL_MS = 6 * 60 * 60 * 1000
+const LATEST_VERSION_ERROR_TTL_MS = 10 * 60 * 1000
+
+/**
+ * Latest published Ollama version (no leading `v`), or null if it can't be
+ * determined. Cached — see the TTL notes above. Used by getStatus to surface an
+ * "update available" affordance in the UI without a per-call network round-trip.
+ */
+export async function getLatestOllamaVersion() {
+  const age = Date.now() - latestOllamaCache.fetchedAt
+  if (latestOllamaCache.version && age < LATEST_VERSION_TTL_MS) return latestOllamaCache.version
+  // Recent failed lookup — back off rather than refetch on every status call.
+  if (!latestOllamaCache.version && latestOllamaCache.fetchedAt && age < LATEST_VERSION_ERROR_TTL_MS) return null
+
+  const release = await fetchLatestOllamaRelease(8000)
+  const version = release?.tag_name ? String(release.tag_name).replace(/^v/, '') : null
+  latestOllamaCache = { version, fetchedAt: Date.now() }
+  return version
+}
+
+/**
  * Pre-upgrade Ollama version (best-effort — returns null if Ollama isn't running
  * or isn't responding). Used to verify an upgrade actually moved the version.
  */
@@ -388,10 +438,9 @@ async function upgradeOllamaMacApp(emit) {
   const appPath = '/Applications/Ollama.app'
 
   emit('Looking up the latest Ollama release on GitHub…')
-  const release = await fetch('https://api.github.com/repos/ollama/ollama/releases/latest', {
-    headers: { 'User-Agent': 'PortOS', Accept: 'application/vnd.github+json' },
-    signal: AbortSignal.timeout(15000),
-  }).then((r) => (r.ok ? r.json() : null)).catch(() => null)
+  // Uncached on purpose — an explicit upgrade needs the live release (and its
+  // download assets), not the status-path's 6h-cached tag.
+  const release = await fetchLatestOllamaRelease(15000)
   if (!release) return { success: false, error: 'Could not reach GitHub to look up the latest Ollama release.' }
 
   const asset = (release.assets || []).find((a) => a.name === 'Ollama-darwin.zip')
@@ -614,23 +663,35 @@ export async function listModels(backend, forceRefresh = false) {
  * Combined status for both backends plus the active marker.
  */
 export async function getStatus() {
-  const [ollamaStatus, ollamaCli, lmStudioStatus, lmsCli, lmStudioModels] = await Promise.all([
+  const [ollamaStatus, ollamaCli, lmStudioStatus, lmsCli, lmStudioModels, latestOllamaVersion] = await Promise.all([
     ollamaManager.getStatus(true),
     commandExists('ollama', ['--version']),
     lmStudioManager.getStatus(),
     commandExists('lms', ['version']),
     // forceRefresh: status/refresh path bypasses the list cache.
-    listModels('lmstudio', true).catch(() => [])
+    listModels('lmstudio', true).catch(() => []),
+    // Cached (6h) — never blocks the steady-state UI on a GitHub round-trip.
+    getLatestOllamaVersion().catch(() => null)
   ])
 
   const ollamaModels = normalizeModels('ollama', ollamaStatus.models)
   const lmStudioRecommendation = recommendEditorialModel(lmStudioModels)
+  // An update is "available" only when we know BOTH the installed version (Ollama
+  // must be running for /api/version to answer) and the latest, and latest is
+  // newer. canUpgrade (canAutoUpgrade) gates the in-app updater to the platforms
+  // where upgradeBackend can actually drive an Ollama upgrade.
+  const ollamaUpdateAvailable = Boolean(
+    ollamaStatus.version && latestOllamaVersion && compareSemver(latestOllamaVersion, ollamaStatus.version) > 0
+  )
   return {
     backend: getBackend(),
     ollama: {
       installed: ollamaCli || ollamaStatus.available,
       available: ollamaStatus.available,
       version: ollamaStatus.version,
+      latestVersion: latestOllamaVersion,
+      updateAvailable: ollamaUpdateAvailable,
+      canUpgrade: canAutoUpgrade('ollama'),
       baseUrl: ollamaStatus.baseUrl,
       modelCount: ollamaStatus.modelCount,
       models: ollamaModels,
