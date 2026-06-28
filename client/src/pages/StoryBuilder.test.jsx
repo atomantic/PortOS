@@ -47,6 +47,12 @@ const api = vi.hoisted(() => ({
 }));
 vi.mock('../services/api', () => api);
 
+// useCatalogTypes fetches the merged registry; mock it to "no user types" so the
+// hook resolves deterministically to the built-in six (its static fallback).
+vi.mock('../services/apiCatalogTypes', () => ({
+  listCatalogTypes: vi.fn().mockResolvedValue({ types: [] }),
+}));
+
 // Spy on toast so the rejection tests can prove the catch-path notice fired —
 // the success path never toasts, so a specific toast.error message uniquely
 // pins the rejection branch (a bare reload-count check can't, since onSuccess
@@ -132,6 +138,20 @@ describe('composeSeedFromIngredients', () => {
       { id: 'c1', name: 'Vance', type: 'character', payload: { physicalDescription: 'Scarred, silver-eyed, never still.' } },
     ]);
     expect(out).toContain('- Vance: Scarred, silver-eyed, never still.');
+  });
+
+  it('honors a user-defined type resolver (custom label + snippetFallbackKeys)', () => {
+    // A user-defined `faction` type whose body field is `creed` — the resolver
+    // (useCatalogTypes().getType) carries its snippetFallbackKeys + label.
+    const resolve = (id) => (id === 'faction'
+      ? { id: 'faction', label: 'Faction', snippetFallbackKeys: ['creed', 'description'] }
+      : undefined);
+    const out = composeSeedFromIngredients(
+      [{ id: 'f1', name: 'The Tide', type: 'faction', payload: { creed: 'The sea remembers.' } }],
+      resolve,
+    );
+    expect(out).toContain('Factions:');
+    expect(out).toContain('- The Tide: The sea remembers.');
   });
 
   it('truncates each summary to ~120 chars and the whole text to 4000', () => {

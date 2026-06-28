@@ -32,6 +32,7 @@ import ArcCanvas from '../components/pipeline/ArcCanvas';
 import { useArcCanvasSync } from '../hooks/useArcCanvasSync';
 import { BEAT_KIND_COLORS, getBeatKindColor } from '../lib/beatColors';
 import { getCatalogType, payloadSnippet } from '../lib/catalogTypes';
+import { useCatalogTypes } from '../hooks/useCatalogTypes.jsx';
 
 // Mirror Importer.jsx's commit picker — only these arc fields are sent on commit.
 const ARC_FIELDS_TO_COMMIT = ['logline', 'summary', 'protagonistArc', 'themes', 'shape'];
@@ -64,15 +65,19 @@ const SEED_SUMMARY_CHARS = 120;
 
 // "character" → "Characters:" — prefer the catalog registry's canonical label
 // (so idea/scene/concept get proper plurals), naive-pluralizing a user-defined
-// type's id as a fallback. Mirrors `seedGroupHeading` in server storyBuilder.js
-// so the prefill the user sees matches the server's fallback composition.
-function seedGroupHeading(type) {
-  const label = getCatalogType(type)?.label;
-  const base = label || (type ? `${type.charAt(0).toUpperCase()}${type.slice(1)}` : 'Other');
+// type's id as a fallback. `resolveType` (the merged useCatalogTypes registry)
+// covers user-defined types; falls back to the built-in registry. Mirrors
+// `seedGroupHeading` in server storyBuilder.js.
+function seedGroupHeading(type, resolveType) {
+  const typeDef = (resolveType && resolveType(type)) || getCatalogType(type);
+  const base = typeDef?.label || (type ? `${type.charAt(0).toUpperCase()}${type.slice(1)}` : 'Other');
   return base.endsWith('s') ? base : `${base}s`;
 }
 
-export function composeSeedFromIngredients(ingredients) {
+// `resolveType` is the merged catalog-type registry (useCatalogTypes().getType)
+// so a user-defined type's label + snippetFallbackKeys are honored; without it
+// the built-in six are used.
+export function composeSeedFromIngredients(ingredients, resolveType = null) {
   const list = Array.isArray(ingredients) ? ingredients : [];
   if (list.length === 0) return '';
   // Preserve first-seen group order so the prefill reads in selection order.
@@ -85,10 +90,10 @@ export function composeSeedFromIngredients(ingredients) {
   }
   const lines = [];
   for (const [type, members] of groups) {
-    lines.push(`${seedGroupHeading(type)}:`);
+    lines.push(`${seedGroupHeading(type, resolveType)}:`);
     for (const ing of members) {
       const name = (ing.name || '').trim() || '(untitled)';
-      const summary = payloadSnippet(ing.payload, ing.type, SEED_SUMMARY_CHARS);
+      const summary = payloadSnippet(ing.payload, ing.type, SEED_SUMMARY_CHARS, resolveType);
       lines.push(summary ? `- ${name}: ${summary}` : `- ${name}`);
     }
     lines.push('');
@@ -142,6 +147,9 @@ function StoryBuilderIndex() {
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams] = useSearchParams();
+  // Merged catalog-type registry (system + user-defined) so the remix seed
+  // prefill honors a user-defined type's snippetFallbackKeys, not just the six.
+  const { getType } = useCatalogTypes();
   // The "Start a Story" onramp can deep-link here with a pre-chosen universe
   // (?universeId=…); pass it through so the new session attaches to it instead
   // of auto-creating a fresh universe. The create schema already accepts it.
@@ -175,7 +183,7 @@ function StoryBuilderIndex() {
         const list = Array.isArray(res) ? res : (Array.isArray(res?.items) ? res.items : []);
         setRemixIngredients(list);
         // Prefill only if the user hasn't already typed a seed — don't clobber.
-        setSeedIdea((prev) => (prev.trim() ? prev : composeSeedFromIngredients(list)));
+        setSeedIdea((prev) => (prev.trim() ? prev : composeSeedFromIngredients(list, getType)));
       })
       .catch(() => {});
     // Clear the handoff state so a refresh doesn't re-seed (ids already captured).
