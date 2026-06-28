@@ -187,6 +187,26 @@ describe('storyBuilder — catalog ingredient linking (#1761)', () => {
     ]);
   });
 
+  it('de-dupes repeated ids (off-UI API callers) so the link + seed are not doubled', async () => {
+    catalogMocks.listIngredients.mockResolvedValue({
+      items: [{ id: 'cat-c', type: 'character', name: 'Mira', payload: { description: 'A foreman.' } }],
+    });
+
+    const s = await sb.createStorySession({
+      title: 'Dupes', // blank seed so the composed fallback is observable
+      catalogIngredientIds: ['cat-c', 'cat-c', 'cat-c'],
+    });
+
+    // Resolver collapses the dupes to one id before the batch query.
+    expect(catalogMocks.listIngredients).toHaveBeenCalledWith({ ids: ['cat-c'], limit: 1 });
+    expect(catalogMocks.linkIngredientsToSeries).toHaveBeenCalledWith(s.seriesId, [
+      { id: 'cat-c', type: 'character', name: 'Mira', payload: { description: 'A foreman.' } },
+    ]);
+    // The composed premise lists the ingredient exactly once, not three times.
+    const series = await seriesSvc.getSeries(s.seriesId);
+    expect(series.premise.match(/- Mira:/g)).toHaveLength(1);
+  });
+
   it('composes a fallback seed from ingredients when seedIdea is blank', async () => {
     catalogMocks.listIngredients.mockResolvedValue({ items: [
       { id: 'cat-c', type: 'character', name: 'Mira', payload: { description: 'A weary foundry foreman.' } },
