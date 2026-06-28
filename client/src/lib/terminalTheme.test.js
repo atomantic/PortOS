@@ -100,4 +100,22 @@ describe('buildTerminalTheme', () => {
     expect(buildTerminalTheme(COLORS, 'day').selectionBackground).toBe(COLORS.accent + '33');
     expect(buildTerminalTheme(COLORS, 'night').selectionBackground).toBe(COLORS.accent + '40');
   });
+
+  it('populates every xterm slot with a valid hex in both modes', () => {
+    // A typo'd ANSI_* key would leave a slot `undefined` (an invalid xterm color)
+    // without tripping the mode-equivalence tests above — assert each slot explicitly.
+    const SLOTS = [
+      'background', 'foreground', 'cursor', 'cursorAccent', 'selectionBackground',
+      'black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white',
+      'brightBlack', 'brightRed', 'brightGreen', 'brightYellow', 'brightBlue',
+      'brightMagenta', 'brightCyan', 'brightWhite',
+    ];
+    for (const mode of ['day', 'night']) {
+      const theme = buildTerminalTheme(COLORS, mode);
+      for (const slot of SLOTS) {
+        // selectionBackground carries an 8-digit alpha suffix; the rest are 6-digit.
+        expect(theme[slot], `${mode} ${slot}`).toMatch(/^#[0-9a-f]{6}([0-9a-f]{2})?$/i);
+      }
+    }
+  });
 });
