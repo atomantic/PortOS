@@ -186,9 +186,13 @@ export const checkDismissalRate = (group) => {
 // meaningful; below it the card shows an "unproven" badge instead of a rate the
 // user shouldn't yet trust (#1629).
 export const CHECK_MATURITY_MIN_SAMPLE = 5;
-// At or above this false-positive rate (on a proven sample) the check is "noisy"
-// — the signal users most want surfaced so they can deprioritize/mute it.
-export const CHECK_NOISY_FP_RATE = 0.4;
+// At or above this *dismissal* rate (on a proven sample) the check is "noisy" —
+// the signal users most want surfaced so they can deprioritize/mute it. Keyed on
+// the overall dismissal rate, not just the false-positive subset: a check the
+// user dismisses most of the time is low-signal whether or not they bothered to
+// tag each one a broken-check false positive. Since false positives are a subset
+// of dismissals, this strictly subsumes a high false-positive rate.
+export const CHECK_NOISY_DISMISSAL_RATE = 0.4;
 
 /**
  * Per-check maturity / quality signal (#1629) — the trust descriptor surfaced in
@@ -200,7 +204,7 @@ export const CHECK_NOISY_FP_RATE = 0.4;
  *   falsePositiveRate  false-positive / total, or null when no findings
  *   level              'new'      — no findings yet (untested, trust unknown)
  *                      'unproven' — too few findings to judge (< MIN_SAMPLE)
- *                      'noisy'    — proven sample with a high false-positive rate
+ *                      'noisy'    — proven sample the user dismisses a lot
  *                      'reliable' — proven sample the user mostly keeps
  */
 export function checkMaturity(group) {
@@ -212,7 +216,7 @@ export function checkMaturity(group) {
   const dismissalRate = checkDismissalRate(group);
   let level = 'reliable';
   if (findings < CHECK_MATURITY_MIN_SAMPLE) level = 'unproven';
-  else if ((falsePositiveRate || 0) >= CHECK_NOISY_FP_RATE) level = 'noisy';
+  else if ((dismissalRate || 0) >= CHECK_NOISY_DISMISSAL_RATE) level = 'noisy';
   return { findings, dismissalRate, falsePositiveRate, level };
 }
 
