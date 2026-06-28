@@ -473,5 +473,13 @@ describe('localLlm', () => {
       expect(s.ollama.latestVersion).toBe('0.5.7');
       expect(s.ollama.updateAvailable).toBe(false);
     });
+
+    it('does not flag an update when GitHub is unreachable (latest unknown)', async () => {
+      mocks.ollama.getStatus.mockResolvedValueOnce({ available: true, baseUrl: 'x', version: '0.5.4', modelCount: 0, models: [] });
+      vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('network down'); }));
+      const s = await svc.getStatus();
+      expect(s.ollama.latestVersion).toBeNull();
+      expect(s.ollama.updateAvailable).toBe(false);
+    });
   });
 });
