@@ -102,10 +102,14 @@ export function extractSubjectSignaturePhrases(subject, entryKind = 'characters'
     pushNames(subject.props);
     pushNames(subject.colorPalette);
   } else {
-    // Objects/places: the recurring details + palette names are the invariants.
-    pushNames(subject.colorPalette || subject.palette);
-    const recurring = flattenValue(subject.recurringDetails);
-    if (recurring) out.push(...recurring.split(',').map((p) => p.trim()));
+    // Objects/places: the recurring details + palette are the invariants. In the
+    // looser object/place bible shape both can be a string OR an array, so route
+    // them through flattenValue (handles both) rather than the array-only
+    // pushNames — a string `palette` would otherwise be dropped entirely.
+    for (const raw of [subject.colorPalette || subject.palette, subject.recurringDetails]) {
+      const flat = flattenValue(raw);
+      if (flat) out.push(...flat.split(',').map((p) => p.trim()));
+    }
   }
   const visualIdentity = trim(subject.visualIdentity);
   if (visualIdentity) out.push(visualIdentity);

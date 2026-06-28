@@ -186,6 +186,11 @@ export async function startTrainingRun({
     character: dataset.character,
     datasetId,
     triggerWord: dataset.triggerWord,
+    // Persist whether the launch opted past the caption identity-leak gate, so
+    // the staging re-validation can skip the gate for THIS run without also
+    // skipping it for ordinary queued runs whose captions were edited (leaky)
+    // while waiting in the queue.
+    captionLeakAcknowledged: acknowledgeCaptionLeak === true,
     params: mergedParams,
     progress: { step: 0, totalSteps: mergedParams.steps, loss: null, lastCheckpointStep: null },
     artifacts: { dir: `training-runs/${runId}`, checkpoints: [], samples: [] },
@@ -451,14 +456,19 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
   }
 
   // Re-validate — the dataset may have been edited/deleted while queued. Skip
-  // the caption-leak gate: it's a launch-time decision already settled at
-  // enqueue (a non-leaky run cleared it; a leaky run only got here via an
-  // explicit "Train anyway" acknowledge or a resume). Re-blocking on it now
-  // would fail the very runs the acknowledge/resume paths opted in.
+  // the caption identity-leak gate ONLY for a run that already opted past it:
+  // one launched with an explicit "Train anyway" (persisted on the record) or a
+  // resume (its captions already trained once). An ordinary clean-at-launch run
+  // is still re-checked here, so captions edited leaky while it sat in the queue
+  // are caught instead of training silently.
+  const skipCaptionLeakGate = run.captionLeakAcknowledged === true || resumeCheckpoint != null;
   let manifest;
   let dataset;
   try {
-    ({ dataset, manifest } = await validateDatasetReady(run.datasetId, { acknowledgeCaptionLeak: true }));
+    ({ dataset, manifest } = await validateDatasetReady(
+      run.datasetId,
+      { acknowledgeCaptionLeak: skipCaptionLeakGate },
+    ));
   } catch (err) {
     return failBeforeSpawn(err.message);
   }
