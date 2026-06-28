@@ -42,13 +42,13 @@ describe('selectModelForTask — learning-suggested tier resolution', () => {
     expect(result.reason).toBe('learning-suggested');
   });
 
-  it('resolves a local-preferred thinking-level suggestion (minimal) and flags localPreferred', async () => {
+  it('does NOT honor a local-preferred thinking-level suggestion under a cloud provider — falls through with an accurate tier', async () => {
+    // minimal/low map to the cross-provider 'lmstudio' sentinel; honoring it here
+    // would mis-record the local tier while the run actually uses the default.
     suggestModelTier.mockResolvedValue({ suggested: 'minimal', reason: 'r' });
     const result = await selectModelForTask(benignTask, PROVIDER);
-    expect(result.model).toBe('lmstudio');
-    expect(result.tier).toBe('minimal');
-    expect(result.localPreferred).toBe(true);
-    expect(result.reason).toBe('learning-suggested');
+    expect(result.tier).toBe('default');
+    expect(result.reason).toBe('standard-task');
   });
 
   it('falls through to default when the suggested tier resolves to no model', async () => {
