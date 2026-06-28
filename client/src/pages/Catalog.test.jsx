@@ -15,7 +15,9 @@ vi.mock('../services/apiCatalog', () => ({
   listCatalogIngredients: vi.fn(),
   createCatalogIngredient: vi.fn(),
   deleteCatalogIngredient: vi.fn(),
+  linkCatalogIngredient: vi.fn(),
   getCatalogStats: vi.fn(),
+  getCatalogFacets: vi.fn(),
   rerunCatalogMigration: vi.fn(),
 }));
 
@@ -40,7 +42,9 @@ import {
   listCatalogIngredients,
   createCatalogIngredient,
   deleteCatalogIngredient,
+  linkCatalogIngredient,
   getCatalogStats,
+  getCatalogFacets,
   rerunCatalogMigration,
 } from '../services/apiCatalog';
 import { listCatalogTypes } from '../services/apiCatalogTypes';
@@ -57,10 +61,22 @@ const renderCatalog = () => render(
   </MemoryRouter>,
 );
 
+const sampleFacets = {
+  types: [{ type: 'character', count: 1 }, { type: 'place', count: 1 }],
+  universes: [{ refId: 'u-1', name: 'Echo Saints', count: 1 }],
+  series: [{ refId: 's-1', name: 'Season 1', universeId: 'u-1', count: 1 }],
+  tags: [{ tag: 'noir', count: 1 }],
+  unlinkedCount: 1,
+  orphanedCount: 0,
+  total: 2,
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
-  listCatalogIngredients.mockResolvedValue({ items: sample });
+  listCatalogIngredients.mockResolvedValue({ items: sample, nextOffset: sample.length });
+  linkCatalogIngredient.mockResolvedValue({ success: true });
   getCatalogStats.mockResolvedValue({ total: 2, byType: { character: 1, place: 1 } });
+  getCatalogFacets.mockResolvedValue(sampleFacets);
   rerunCatalogMigration.mockResolvedValue({ stats: { promoted: 0 } });
   // Default: system registry only (the hook merges with the static fallback).
   listCatalogTypes.mockResolvedValue({ types: [] });
@@ -283,5 +299,75 @@ describe('Catalog page', () => {
     // The built-in chips render synchronously; the user chip appears after the
     // type-registry fetch resolves.
     await waitFor(() => expect(screen.getByRole('button', { name: /^Faction/i })).toBeTruthy());
+  });
+
+  it('filters by universe via the dropdown, passing a ref filter to the list fetch', async () => {
+    renderCatalog();
+    await waitFor(() => expect(screen.getByText('Echo Saint')).toBeTruthy());
+
+    fireEvent.change(screen.getByLabelText(/^Universe$/i), { target: { value: 'u-1' } });
+    await waitFor(() => {
+      expect(listCatalogIngredients).toHaveBeenLastCalledWith(
+        expect.objectContaining({ refKind: 'universe', refId: 'u-1' }),
+      );
+    });
+  });
+
+  it('paginates with "Load more", appending the next page at the right offset', async () => {
+    const firstPage = Array.from({ length: 60 }, (_, i) => ({
+      id: `p-${i}`, name: `Item ${i}`, type: 'idea', payload: {}, tags: [],
+    }));
+    listCatalogIngredients
+      .mockResolvedValueOnce({ items: firstPage, nextOffset: 60 })
+      .mockResolvedValueOnce({ items: [{ id: 'p-60', name: 'Item 60', type: 'idea', payload: {}, tags: [] }], nextOffset: 61 });
+    renderCatalog();
+    await waitFor(() => expect(screen.getByText('Item 0')).toBeTruthy());
+
+    const loadMore = screen.getByRole('button', { name: /Load more/i });
+    await act(async () => { fireEvent.click(loadMore); });
+
+    expect(listCatalogIngredients).toHaveBeenLastCalledWith(
+      expect.objectContaining({ offset: 60 }),
+    );
+    await waitFor(() => expect(screen.getByText('Item 60')).toBeTruthy());
+  });
+
+  it('switches to the Albums view and lazy-loads the Raw album', async () => {
+    renderCatalog();
+    await waitFor(() => expect(screen.getByText('Echo Saint')).toBeTruthy());
+
+    fireEvent.click(screen.getByRole('button', { name: /^Albums$/i }));
+    // Raw album is pinned + default-expanded → it fetches the unlinked set, and
+    // the live universe album header shows from /facets.
+    await waitFor(() => expect(screen.getByText('Unsorted / Raw')).toBeTruthy());
+    expect(screen.getByText('Echo Saints')).toBeTruthy();
+    await waitFor(() => {
+      expect(listCatalogIngredients).toHaveBeenCalledWith(
+        expect.objectContaining({ unlinked: true }),
+      );
+    });
+  });
+
+  it('bulk-places the selection into a universe with type-derived roles', async () => {
+    renderCatalog();
+    await waitFor(() => expect(screen.getByText('Echo Saint')).toBeTruthy());
+
+    fireEvent.click(screen.getByLabelText('Select Echo Saint'));
+    fireEvent.click(screen.getByLabelText('Select Old Harbor'));
+    expect(screen.getByText('2 selected')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: /Add to universe\/series/i }));
+    await act(async () => {
+      fireEvent.click(await screen.findByRole('menuitem', { name: 'Echo Saints' }));
+    });
+
+    // character → cast-character, place → cast-place.
+    expect(linkCatalogIngredient).toHaveBeenCalledWith(
+      'i-1', { refKind: 'universe', refId: 'u-1', role: 'cast-character' }, { silent: true },
+    );
+    expect(linkCatalogIngredient).toHaveBeenCalledWith(
+      'i-2', { refKind: 'universe', refId: 'u-1', role: 'cast-place' }, { silent: true },
+    );
+    expect(toast.success).toHaveBeenCalledWith(expect.stringMatching(/Added 2 ingredients to Echo Saints/i));
   });
 });

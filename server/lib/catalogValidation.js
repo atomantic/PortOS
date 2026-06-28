@@ -35,6 +35,15 @@ export const INGREDIENT_TYPES = INGREDIENT_TYPE_IDS;
 const ingredientTypeGate = z.string().trim().min(1).max(32)
   .refine(isActiveType, 'unknown ingredient type');
 
+// Query-string booleans arrive as the strings 'true'/'false'. Coerce to a real
+// boolean; anything else (including absent) collapses to undefined so an
+// `.optional()` field reads cleanly as "not set" rather than truthy-by-presence.
+const booleanish = z.preprocess((v) => {
+  if (v === true || v === 'true') return true;
+  if (v === false || v === 'false') return false;
+  return undefined;
+}, z.boolean());
+
 export const REF_KINDS = Object.freeze([
   'universe',
   'series',
@@ -289,9 +298,29 @@ export const catalogIngredientQuerySchema = z.object({
   type: ingredientTypeGate.optional(),
   tag: tag.optional(),
   q: z.string().trim().max(500).optional(),
+  // Album/facet filters (#1762). `refKind`+`refId` list ingredients linked to a
+  // universe/series; `unlinked` = the "Raw" album (no universe/series ref at
+  // all); `orphaned` = the "Orphaned" album (has a ref, none resolve live). The
+  // wire form sends booleans as `?unlinked=true`, so coerce the string here.
+  refKind: z.enum(REF_KINDS).optional(),
+  refId: z.string().trim().min(1).max(120).optional(),
+  unlinked: booleanish.optional(),
+  orphaned: booleanish.optional(),
   limit: z.coerce.number().int().min(1).max(200).optional(),
   offset: z.coerce.number().int().min(0).optional(),
-}).strict();
+}).strict()
+  // refKind/refId are a pair — one without the other is a malformed query.
+  .refine((v) => (v.refKind == null) === (v.refId == null), {
+    message: 'refKind and refId must be supplied together',
+    path: ['refId'],
+  })
+  // The three album filters are mutually exclusive — combining them is ambiguous
+  // (a ref-filtered row is by definition linked, so it can never be unlinked/
+  // orphaned). Reject rather than silently letting one win in the service.
+  .refine((v) => [v.refKind != null, v.unlinked === true, v.orphaned === true].filter(Boolean).length <= 1, {
+    message: 'refKind/refId, unlinked, and orphaned are mutually exclusive',
+    path: ['unlinked'],
+  });
 
 // Tag-autocomplete query — `q` is an optional prefix/substring filter, absent
 // returns the most-recently-created tags. Drives the tag-picker autocomplete on

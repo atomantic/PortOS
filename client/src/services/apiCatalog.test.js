@@ -48,3 +48,48 @@ describe('listCatalogIngredientsByIds', () => {
     expect(out.map((i) => i.id)).toEqual(['cat-a']);
   });
 });
+
+describe('listCatalogIngredients filter passthrough (#1762)', () => {
+  let listCatalogIngredients;
+  beforeEach(async () => {
+    ({ listCatalogIngredients } = await import('./apiCatalog.js'));
+    request.mockResolvedValue({ items: [], nextOffset: 0 });
+  });
+
+  it('encodes a universe/series ref filter as refKind + refId', async () => {
+    await listCatalogIngredients({ refKind: 'universe', refId: 'u-1', type: 'character' });
+    const [path] = request.mock.calls[0];
+    expect(decodeURIComponent(path)).toContain('refKind=universe');
+    expect(decodeURIComponent(path)).toContain('refId=u-1');
+    expect(decodeURIComponent(path)).toContain('type=character');
+  });
+
+  it('sends unlinked=true for the Raw album view', async () => {
+    await listCatalogIngredients({ unlinked: true });
+    const [path] = request.mock.calls[0];
+    expect(path).toContain('unlinked=true');
+  });
+
+  it('sends orphaned=true for the Orphaned album view', async () => {
+    await listCatalogIngredients({ orphaned: true });
+    const [path] = request.mock.calls[0];
+    expect(path).toContain('orphaned=true');
+  });
+
+  it('prefers the ref filter over unlinked/orphaned when both are passed', async () => {
+    await listCatalogIngredients({ refKind: 'series', refId: 's-1', unlinked: true, orphaned: true });
+    const [path] = request.mock.calls[0];
+    expect(decodeURIComponent(path)).toContain('refKind=series');
+    expect(path).not.toContain('unlinked');
+    expect(path).not.toContain('orphaned');
+  });
+});
+
+describe('getCatalogFacets (#1762)', () => {
+  it('GETs the facets endpoint', async () => {
+    const { getCatalogFacets } = await import('./apiCatalog.js');
+    request.mockResolvedValue({ types: [], universes: [], series: [], tags: [], total: 0 });
+    await getCatalogFacets();
+    expect(request).toHaveBeenCalledWith('/catalog/facets', undefined);
+  });
+});

@@ -12,6 +12,10 @@ const enc = encodeURIComponent;
 
 export const getCatalogStats = (options) => request('/catalog/stats', options);
 
+// Faceted counts (#1762) driving the filter dropdowns + album headers:
+// { types, universes, series, tags, unlinkedCount, orphanedCount, total }.
+export const getCatalogFacets = (options) => request('/catalog/facets', options);
+
 // --- Scraps -------------------------------------------------------------
 
 export const createCatalogScrap = (body = {}, options) =>
@@ -57,11 +61,22 @@ export const ingestCatalogBrain = (body = {}, options) =>
 
 // --- Ingredients --------------------------------------------------------
 
-export const listCatalogIngredients = ({ type, tag, q, limit, offset, ...options } = {}) => {
+export const listCatalogIngredients = ({ type, tag, q, refKind, refId, unlinked, orphaned, limit, offset, ...options } = {}) => {
   const params = new URLSearchParams();
   if (type) params.set('type', type);
   if (tag) params.set('tag', tag);
   if (q) params.set('q', q);
+  // Album/facet filters (#1762). refKind/refId are a pair; unlinked/orphaned are
+  // the "Raw"/"Orphaned" album views — mutually exclusive with each other and
+  // with the ref filter (the server rejects combining them).
+  if (refKind && refId) {
+    params.set('refKind', refKind);
+    params.set('refId', refId);
+  } else if (unlinked) {
+    params.set('unlinked', 'true');
+  } else if (orphaned) {
+    params.set('orphaned', 'true');
+  }
   if (limit) params.set('limit', String(limit));
   if (offset) params.set('offset', String(offset));
   return request(`/catalog/ingredients${params.toString() ? `?${params}` : ''}`, options);

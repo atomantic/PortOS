@@ -200,9 +200,20 @@ router.get('/ingredients', asyncHandler(async (req, res) => {
     type: params.type,
     tag: params.tag,
     query: params.q,
+    refKind: params.refKind,
+    refId: params.refId,
+    unlinked: params.unlinked === true,
+    orphaned: params.orphaned === true,
     limit: params.limit ?? 50,
     offset: params.offset ?? 0,
   }));
+}));
+
+// Faceted counts for the Catalog filter dropdowns + album headers (#1762):
+// type/universe/series/tag facets plus the unlinked ("Raw") and orphaned bucket
+// counts, in one round-trip. Live universes/series only.
+router.get('/facets', asyncHandler(async (_req, res) => {
+  res.json(await catalogDB.getCatalogFacets());
 }));
 
 router.get('/ingredients/:id', asyncHandler(async (req, res) => {
