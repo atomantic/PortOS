@@ -169,6 +169,25 @@ describe('healMissingLocalModel', () => {
     expect(mocks.updateProvider).not.toHaveBeenCalled();
   });
 
+  it('treats loopback host spellings as the same instance (127.0.0.1 == localhost)', async () => {
+    // Manager lists from localhost:11434; a provider on 127.0.0.1:11434 is the
+    // SAME instance and must not be refused over a loopback spelling difference.
+    mocks.ollamaInstalled.mockResolvedValue([{ id: 'llama3.1:8b' }]);
+    const provider = { id: 'ollama', endpoint: 'http://127.0.0.1:11434/v1', defaultModel: 'gone', models: [] };
+    const result = await healMissingLocalModel({ provider, requestedModel: 'gone' });
+    expect(result).toMatchObject({ healed: true, model: 'llama3.1:8b' });
+  });
+
+  it('reports persisted:false when updateProvider returns null (provider id gone)', async () => {
+    mocks.ollamaInstalled.mockResolvedValue([{ id: 'llama3.1:8b' }]);
+    mocks.updateProvider.mockResolvedValue(null); // toolkit returns null for an unknown id
+    const provider = { id: 'stale-ollama', name: 'Ollama', defaultModel: 'gone', models: [] };
+    const result = await healMissingLocalModel({ provider, requestedModel: 'gone' });
+    expect(result).toMatchObject({ healed: true, model: 'llama3.1:8b', persisted: false });
+    const [, message] = mocks.emitLog.mock.calls[0];
+    expect(message).toContain('for this run');
+  });
+
   it('excludes LM Studio embedding models from the fallback pick', async () => {
     mocks.lmStudioAvailable.mockResolvedValue([
       { id: 'nomic-embed', type: 'embeddings' },

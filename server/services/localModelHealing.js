@@ -99,9 +99,19 @@ function managerOrigin(backend) {
   return normalizeOrigin(base);
 }
 
+// Loopback hosts that all name the same local instance — canonicalized to one
+// token so a provider at `127.0.0.1:11434` matches a manager at `localhost:11434`.
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
+
 function normalizeOrigin(url) {
   const cleaned = String(url || '').replace(/\/v1\/?$/, '').replace(/\/+$/, '');
-  try { const u = new URL(cleaned); return `${u.protocol}//${u.host}`; } catch { return ''; }
+  try {
+    const u = new URL(cleaned);
+    const hostname = u.hostname.toLowerCase();
+    const host = LOOPBACK_HOSTS.has(hostname) ? 'localhost' : hostname;
+    const port = u.port || (u.protocol === 'https:' ? '443' : '80');
+    return `${u.protocol}//${host}:${port}`;
+  } catch { return ''; }
 }
 
 /**
@@ -166,8 +176,10 @@ export async function healMissingLocalModel({ provider, requestedModel }) {
   const patch = computeProviderPatch(provider, installedIds, fallback, requestedModel);
   let persisted = false;
   if (provider?.id && Object.keys(patch).length) {
+    // updateProvider resolves to the updated provider object, or null when the
+    // id no longer exists — Boolean(updated) is the real persisted signal.
     persisted = await updateProvider(provider.id, patch)
-      .then(() => true)
+      .then((updated) => Boolean(updated))
       .catch((err) => {
         console.error(`⚠️ Failed to repoint ${provider.id} to ${fallback}: ${err.message}`);
         return false;
