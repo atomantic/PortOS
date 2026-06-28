@@ -87,6 +87,15 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
     return enabled.length > 0 && enabledProviders.length === 0;
   }, [providers, enabledProviders]);
 
+  // If the pinned provider isn't a valid coding option (e.g. a saved template
+  // pinned an `api` provider that's now filtered out of the dropdown), reset to
+  // "Auto" so the visible select and the submitted value can't diverge.
+  useEffect(() => {
+    if (newTask.provider && !enabledProviders.some(p => p.id === newTask.provider)) {
+      setNewTask(t => ({ ...t, provider: '', model: '' }));
+    }
+  }, [enabledProviders, newTask.provider]);
+
   // Check if selected app has JIRA configured
   const selectedApp = useMemo(() =>
     apps?.find(a => a.id === newTask.app),
