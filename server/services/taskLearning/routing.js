@@ -13,13 +13,34 @@ import { loadLearningData, emitLog } from './store.js';
 import { resetTaskTypeLearning } from './metrics.js';
 
 /**
- * Relative resource cost of each model tier, lightest → heaviest.
- * Used to break ties between tiers that both clear the high-success
- * threshold: prefer the cheapest tier that still works well.
- * (Mirrors the tier ordering in agentModelSelection.js.)
+ * Relative resource cost of each tier name that can land in
+ * `routingAccuracy`, lightest → heaviest. Used to break ties between tiers
+ * that both clear the high-success threshold: prefer the cheapest tier that
+ * still works well.
+ *
+ * The keys here are whatever `selectModelForTask` records as `tier`
+ * (agentModelSelection.js → agentLifecycle.js `modelTier`), which is a mixed
+ * namespace: the literal tiers (`light`/`default`/`medium`/`heavy`) AND the
+ * thinking-level names from thinkingLevels.js (`off`/`minimal`/`low`/`medium`/
+ * `high`/`xhigh`, where `minimal`/`low` are local-preferred and therefore the
+ * cheapest, and `high`/`xhigh` map to provider-heavy/opus). An unknown name
+ * (e.g. `user-specified`, or a future tier) must NOT be treated as cheap, or
+ * the "prefer lightest" logic would pick it over a known-light tier — so the
+ * fallback ranks unknowns as heaviest.
  */
-const TIER_WEIGHT = { light: 0, default: 1, medium: 2, heavy: 3 };
-const tierWeight = (tier) => TIER_WEIGHT[tier] ?? TIER_WEIGHT.default;
+const TIER_WEIGHT = {
+  minimal: 0,   // local-small (thinking level)
+  low: 1,       // local-medium (thinking level)
+  light: 2,     // provider light model (e.g. haiku)
+  off: 3,       // no extended thinking → provider default
+  default: 3,   // provider default model
+  medium: 4,    // provider default + standard cloud thinking
+  high: 5,      // provider-heavy (thinking level)
+  heavy: 6,     // provider heavy model
+  xhigh: 7      // opus / heaviest (thinking level)
+};
+const HEAVIEST_WEIGHT = Math.max(...Object.values(TIER_WEIGHT)) + 1;
+const tierWeight = (tier) => TIER_WEIGHT[tier] ?? HEAVIEST_WEIGHT;
 
 /** Minimum success rate (%) for a tier to count as "proven" for a task type. */
 const HIGH_SUCCESS_THRESHOLD = 80;
