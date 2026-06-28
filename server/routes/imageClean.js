@@ -72,6 +72,7 @@ router.post(
       width: result.width,
       height: result.height,
       c2paStripped: result.c2paStripped,
+      c2paPresent: result.c2paPresent,
       steps: result.steps,
     };
 
