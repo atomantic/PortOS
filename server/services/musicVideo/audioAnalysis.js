@@ -104,8 +104,14 @@ export async function decodeAudioToPcm(audioPath, { signal } = {}) {
       // a multiple of 4 so a truncated final chunk can't throw on construction.
       const floats = Math.floor(buf.length / 4);
       if (floats === 0) { resolve(null); return; }
-      const samples = new Float32Array(floats);
-      for (let i = 0; i < floats; i++) samples[i] = buf.readFloatLE(i * 4);
+      // A view is O(1) (no per-sample copy), but Float32Array requires the byte
+      // offset to be 4-aligned. Buffer.concat returns an unpooled buffer
+      // (offset 0) for the multi-KB PCM we get here, so the view path is the
+      // normal case; fall back to a copied slice if a pooled buffer ever lands
+      // on a non-aligned offset.
+      const samples = buf.byteOffset % 4 === 0
+        ? new Float32Array(buf.buffer, buf.byteOffset, floats)
+        : new Float32Array(buf.buffer.slice(buf.byteOffset, buf.byteOffset + floats * 4));
       resolve({ samples, sampleRate: ANALYSIS_SAMPLE_RATE });
     });
   });
@@ -155,29 +161,36 @@ function estimateTempo(onset, fps) {
 
   const minLag = Math.max(1, Math.floor((60 * fps) / MAX_BPM));
   const maxLag = Math.min(n - 1, Math.ceil((60 * fps) / MIN_BPM));
+  // Single autocorrelation pass: compute each lag's correlation once into `ac`
+  // (indexed by lag) so the parabolic step below is array lookups, not three
+  // more O(n) recomputations.
+  const acLag = (lag) => {
+    let sum = 0;
+    for (let i = 0; i + lag < n; i++) sum += o[i] * o[i + lag];
+    return sum;
+  };
+  const ac = new Float64Array(maxLag + 1);
   let bestLag = -1;
   let bestScore = -Infinity;
   for (let lag = minLag; lag <= maxLag; lag++) {
-    let ac = 0;
-    for (let i = 0; i + lag < n; i++) ac += o[i] * o[i + lag];
+    ac[lag] = acLag(lag);
     const bpm = (60 * fps) / lag;
     const octaves = Math.log2(bpm / PREFERRED_BPM);
     const weight = Math.exp(-0.5 * (octaves / TEMPO_PREF_SIGMA) ** 2);
-    const score = ac * weight;
+    const score = ac[lag] * weight;
     if (score > bestScore) { bestScore = score; bestLag = lag; }
   }
   if (bestLag < 0 || bestScore <= 0) return { bpm: null, lag: null };
 
   // Parabolic interpolation around the integer-lag peak for sub-frame tempo
-  // precision (raw integer lags quantize BPM coarsely at high tempo).
+  // precision (raw integer lags quantize BPM coarsely at high tempo). Reuse the
+  // stored autocorrelation; only the rare boundary neighbor needs a fresh pass.
   const acAt = (lag) => {
     if (lag < 1 || lag >= n) return 0;
-    let ac = 0;
-    for (let i = 0; i + lag < n; i++) ac += o[i] * o[i + lag];
-    return ac;
+    return lag >= minLag && lag <= maxLag ? ac[lag] : acLag(lag);
   };
   const ym = acAt(bestLag - 1);
-  const y0 = acAt(bestLag);
+  const y0 = ac[bestLag];
   const yp = acAt(bestLag + 1);
   const denom = ym - 2 * y0 + yp;
   let refinedLag = bestLag;
@@ -298,19 +311,20 @@ function segmentSections(energy, fps, durationSec) {
  */
 export function analyzePcm(samples, sampleRate, { hop = ONSET_HOP } = {}) {
   const durationSec = samples?.length ? samples.length / sampleRate : 0;
-  const empty = { bpm: null, beats: [], downbeats: [], sections: segmentSections(new Float32Array(0), 1, durationSec), durationSec: Number(durationSec.toFixed(3)) };
-  if (!samples || samples.length < hop * 4) return empty;
+  const roundedDuration = Number(durationSec.toFixed(3));
+
+  // Too short to analyze: still report a single section spanning the track.
+  if (!samples || samples.length < hop * 4) {
+    return { bpm: null, beats: [], downbeats: [], sections: segmentSections(new Float32Array(0), 1, durationSec), durationSec: roundedDuration };
+  }
 
   const { onset, energy, fps } = onsetEnvelope(samples, sampleRate, hop);
   const { bpm } = estimateTempo(onset, fps);
   const sections = segmentSections(energy, fps, durationSec);
-  if (bpm == null) {
-    return { bpm: null, beats: [], downbeats: [], sections, durationSec: Number(durationSec.toFixed(3)) };
-  }
-  const roundedBpm = Number(bpm.toFixed(2));
-  const beats = fitBeats(onset, fps, bpm, durationSec);
-  const downbeats = pickDownbeats(beats, onset, fps);
-  return { bpm: roundedBpm, beats, downbeats, sections, durationSec: Number(durationSec.toFixed(3)) };
+  const roundedBpm = bpm == null ? null : Number(bpm.toFixed(2));
+  const beats = roundedBpm == null ? [] : fitBeats(onset, fps, bpm, durationSec);
+  const downbeats = roundedBpm == null ? [] : pickDownbeats(beats, onset, fps);
+  return { bpm: roundedBpm, beats, downbeats, sections, durationSec: roundedDuration };
 }
 
 /**
