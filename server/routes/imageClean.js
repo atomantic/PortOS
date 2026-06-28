@@ -43,7 +43,11 @@ const cleanQuerySchema = z.object({
 // that base64 inflation is gone. The decompression-bomb guard (MAX_PIXELS) in
 // the lib still protects the process regardless of byte size.
 const RAW_LIMIT = '256mb';
-const RAW_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'application/octet-stream'];
+// Include the common JPEG MIME aliases (image/jpg, image/pjpeg) so direct API
+// callers that send them get parsed; the bundled frontend forces
+// application/octet-stream, but other clients shouldn't have to. Format is
+// authoritatively decided by the magic-byte sniff, not the content-type.
+const RAW_TYPES = ['image/png', 'image/jpeg', 'image/jpg', 'image/pjpeg', 'image/webp', 'application/octet-stream'];
 
 router.post(
   '/',
