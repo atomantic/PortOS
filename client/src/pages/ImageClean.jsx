@@ -323,9 +323,11 @@ export default function ImageClean() {
               </div>
               <div>
                 <div className="text-xs text-gray-500 uppercase tracking-wide">C2PA</div>
-                <div className={`font-medium flex items-center gap-1 ${result.c2paStripped ? 'text-port-success' : 'text-gray-400'}`}>
+                <div className={`font-medium flex items-center gap-1 ${
+                  result.c2paStripped ? 'text-port-success' : result.c2paPresent ? 'text-port-warning' : 'text-gray-400'
+                }`}>
                   {result.c2paStripped && <ShieldCheck size={14} />}
-                  {result.c2paStripped ? 'Stripped' : 'None found'}
+                  {result.c2paStripped ? 'Stripped' : result.c2paPresent ? 'Present (kept)' : 'None found'}
                 </div>
               </div>
             </div>

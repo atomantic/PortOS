@@ -120,9 +120,11 @@ describe('POST /api/image-clean (raw transport)', () => {
     expect(res.status).toBe(200);
     const report = reportOf(res);
     expect(report.steps).toEqual([]);
-    // Untouched passthrough — the caBX chunk is left in place.
+    // Untouched passthrough — the caBX chunk is left in place, but the report
+    // still tells the truth: present-but-kept, not "none found".
     expect(report.sizeAfter).toBe(report.sizeBefore);
     expect(report.c2paStripped).toBe(false);
+    expect(report.c2paPresent).toBe(true);
   });
 
   it('accepts a multi-MB raw payload without a 413/FILE_TOO_LARGE (40MB cap removed)', async () => {

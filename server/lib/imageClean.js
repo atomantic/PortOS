@@ -328,10 +328,14 @@ export async function cleanImageBuffer(buffer, options = {}) {
       height = info.height || null;
       steps.push({ step: 'metadata', status: 'applied', lossless: false, detail: 'dropped via re-encode (lossy)' });
     } else {
-      // No steps selected — return the input untouched, but still report dims.
-      const meta = await sharp(buffer, { limitInputPixels: MAX_PIXELS }).metadata();
-      width = meta.width || null;
-      height = meta.height || null;
+      // No steps selected — return the input untouched, but still decode-validate
+      // (raw, no re-encode) so the endpoint never hands back known-corrupt bytes
+      // as a success, and report the post-decode dims. Mirrors the lossless PNG
+      // path's header-only validation gap fix.
+      const { info } = await sharp(buffer, { limitInputPixels: MAX_PIXELS })
+        .raw().toBuffer({ resolveWithObject: true });
+      width = info.width || null;
+      height = info.height || null;
     }
   } catch (err) {
     // Wrap sharp errors (truncated/corrupt buffer that still passed the
@@ -352,6 +356,10 @@ export async function cleanImageBuffer(buffer, options = {}) {
     width,
     height,
     c2paStripped,
+    // Whether a C2PA chunk was present in the source — distinct from whether it
+    // was stripped. Lets the UI distinguish "present but kept" (metadata step
+    // off) from "none found", instead of conflating both as c2paStripped:false.
+    c2paPresent: hadC2PA,
     steps,
   };
 }
