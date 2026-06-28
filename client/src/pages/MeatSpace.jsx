@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Skull } from 'lucide-react';
 
@@ -5,18 +6,21 @@ import { TABS } from '../components/meatspace/constants';
 import MortalLoomBanner from '../components/MortalLoomBanner';
 import PageHeader from '../components/PageHeader';
 import TabPills from '../components/ui/TabPills';
+import BrailleSpinner from '../components/BrailleSpinner';
 
-import OverviewTab from '../components/meatspace/tabs/OverviewTab';
-import AgeTab from '../components/meatspace/tabs/AgeTab';
-import AlcoholTab from '../components/meatspace/tabs/AlcoholTab';
-import BloodTab from '../components/meatspace/tabs/BloodTab';
-import BodyTab from '../components/meatspace/tabs/BodyTab';
-import ExportTab from '../components/meatspace/tabs/ExportTab';
-import GenomeTab from '../components/meatspace/tabs/GenomeTab';
-import HealthTab from '../components/meatspace/tabs/HealthTab';
-import SettingsTab from '../components/meatspace/tabs/SettingsTab';
-import LifestyleTab from '../components/meatspace/tabs/LifestyleTab';
-import NicotineTab from '../components/meatspace/tabs/NicotineTab';
+// Lazy-load tab bodies so opening one tab doesn't pull in all eleven (GenomeTab
+// in particular is heavy). The page itself is already a lazy route chunk.
+const OverviewTab = lazy(() => import('../components/meatspace/tabs/OverviewTab'));
+const AgeTab = lazy(() => import('../components/meatspace/tabs/AgeTab'));
+const AlcoholTab = lazy(() => import('../components/meatspace/tabs/AlcoholTab'));
+const BloodTab = lazy(() => import('../components/meatspace/tabs/BloodTab'));
+const BodyTab = lazy(() => import('../components/meatspace/tabs/BodyTab'));
+const ExportTab = lazy(() => import('../components/meatspace/tabs/ExportTab'));
+const GenomeTab = lazy(() => import('../components/meatspace/tabs/GenomeTab'));
+const HealthTab = lazy(() => import('../components/meatspace/tabs/HealthTab'));
+const SettingsTab = lazy(() => import('../components/meatspace/tabs/SettingsTab'));
+const LifestyleTab = lazy(() => import('../components/meatspace/tabs/LifestyleTab'));
+const NicotineTab = lazy(() => import('../components/meatspace/tabs/NicotineTab'));
 
 export default function MeatSpace() {
   const { tab } = useParams();
@@ -80,7 +84,9 @@ export default function MeatSpace() {
 
       {/* Tab content */}
       <div className="flex-1 overflow-auto p-6 print:overflow-visible print:p-0">
-        {renderTabContent()}
+        <Suspense fallback={<div className="flex justify-center py-12"><BrailleSpinner text="Loading" /></div>}>
+          {renderTabContent()}
+        </Suspense>
       </div>
     </div>
   );

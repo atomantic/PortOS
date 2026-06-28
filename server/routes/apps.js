@@ -173,8 +173,15 @@ router.get('/:id', loadApp, asyncHandler(async (req, res) => {
     // status object). A failed read is genuinely unknown, not "not running" —
     // mark `degraded` so the detail UI can offer refresh-to-retry rather than a
     // misleading Start. Mirrors the list endpoint's `degraded`.
-    for (const processName of app.pm2ProcessNames || []) {
-      const status = await pm2Service.getAppStatusStrict(processName, app.pm2Home);
+    // Read each process's PM2 status in parallel — a detail view of a
+    // multi-process app would otherwise serialize one IPC round-trip per process.
+    const reads = await Promise.all(
+      (app.pm2ProcessNames || []).map(async (processName) => ({
+        processName,
+        status: await pm2Service.getAppStatusStrict(processName, app.pm2Home),
+      })),
+    );
+    for (const { processName, status } of reads) {
       if (status === null) {
         degraded = true;
         statuses[processName] = { name: processName, status: 'unknown', pm2_env: null };

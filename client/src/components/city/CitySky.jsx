@@ -112,6 +112,10 @@ const lerpColor = (target, a, b, t) => {
 // sky bands (zenith, midSky) are tinted toward the active theme accent so the sky
 // tracks the theme; horizon haze + sun colors stay physical/untinted. The accent is
 // in the cache key so a theme switch re-derives instead of serving a stale tint.
+// Reused scratch vector for the per-frame sun direction — avoids allocating a
+// fresh THREE.Vector3 every frame (~60/sec) inside the useFrame loop below.
+const sunDirScratch = new THREE.Vector3();
+
 const presetColors = {};
 const getPresetColors = (name, skyTheme, accent) => {
   const cacheKey = `${skyTheme}:${name}:${accent}`;
@@ -269,7 +273,7 @@ export default function CitySky({ settings }) {
 
     // Compute sun position from current hour on the arc
     const bodyPos = getArcPosition(currentHourRef.current);
-    const bodyDir = new THREE.Vector3(...bodyPos).normalize();
+    const bodyDir = sunDirScratch.set(bodyPos[0], bodyPos[1], bodyPos[2]).normalize();
 
     // Lerp sky dome colors
     lerpColor(skyMaterial.uniforms.uZenith.value, skyMaterial.uniforms.uZenith.value, preset.zenith, lerpFactor);

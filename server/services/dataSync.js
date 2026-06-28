@@ -328,11 +328,14 @@ async function applyCharacterRemote(remoteData) {
 // --- Category: Meatspace ---
 
 async function getMeatspaceSnapshot() {
+  const filenames = Object.keys(MEATSPACE_FILES);
+  // The files are independent — read them in parallel rather than one-at-a-time
+  // (this snapshot runs on every ~60s sync poll).
+  const contents = await Promise.all(
+    filenames.map((filename) => readJSONFile(join(MEATSPACE_DIR, filename), null)),
+  );
   const result = {};
-  for (const [filename] of Object.entries(MEATSPACE_FILES)) {
-    const filePath = join(MEATSPACE_DIR, filename);
-    result[filename] = await readJSONFile(filePath, null);
-  }
+  filenames.forEach((filename, i) => { result[filename] = contents[i]; });
   return { data: result, checksum: computeChecksum(result) };
 }
 
@@ -512,15 +515,16 @@ async function getMediaCollectionsSnapshot({ exclude } = {}) {
   // item refs for records the user explicitly opted out of sync. Tombstoned
   // ephemeral parents also drop their collection (sender wouldn't bundle them
   // anyway, but the snapshot path is independent).
+  // Independent reads — fetch the universe and series lists concurrently.
+  const [allUniversesForEphemeral, allSeriesForEphemeral] = await Promise.all([
+    listUniverses({ includeDeleted: true }).catch(() => []),
+    listSeries({ includeDeleted: true }).catch(() => []),
+  ]);
   const ephemeralUniverseIds = new Set(
-    (await listUniverses({ includeDeleted: true }).catch(() => []))
-      .filter((u) => u?.ephemeral === true)
-      .map((u) => u.id),
+    allUniversesForEphemeral.filter((u) => u?.ephemeral === true).map((u) => u.id),
   );
   const ephemeralSeriesIds = new Set(
-    (await listSeries({ includeDeleted: true }).catch(() => []))
-      .filter((s) => s?.ephemeral === true)
-      .map((s) => s.id),
+    allSeriesForEphemeral.filter((s) => s?.ephemeral === true).map((s) => s.id),
   );
   // Exclude collections the requesting peer already receives per-record via
   // the push pipeline (its INBOUND coverage). Keyed on the collection's own
@@ -566,8 +570,10 @@ async function applyMediaCollectionsRemote(remoteData, source) {
   // the parent live could otherwise ship a newer collection snapshot
   // with the old parent id and re-link the collection to our tombstone,
   // undoing the cleanup.
-  const allUniverses = await listUniverses({ includeDeleted: true }).catch(() => []);
-  const allSeries = await listSeries({ includeDeleted: true }).catch(() => []);
+  const [allUniverses, allSeries] = await Promise.all([
+    listUniverses({ includeDeleted: true }).catch(() => []),
+    listSeries({ includeDeleted: true }).catch(() => []),
+  ]);
   const refusedUniverseIds = new Set(
     allUniverses.filter((u) => u?.ephemeral === true || u?.deleted === true).map((u) => u.id),
   );

@@ -316,10 +316,15 @@ export async function updateMemory(id, updates) {
 
       if (updates.relatedMemories) {
         await client.query('DELETE FROM memory_links WHERE source_id = $1', [id]);
-        for (const relId of updates.relatedMemories) {
+        if (updates.relatedMemories.length > 0) {
+          // One multi-row INSERT instead of N round-trips. $1 is source_id;
+          // each related id binds to $2, $3, … as its own VALUES row.
+          const valuesSql = updates.relatedMemories
+            .map((_, i) => `($1, $${i + 2})`)
+            .join(', ');
           await client.query(
-            'INSERT INTO memory_links (source_id, target_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
-            [id, relId]
+            `INSERT INTO memory_links (source_id, target_id) VALUES ${valuesSql} ON CONFLICT DO NOTHING`,
+            [id, ...updates.relatedMemories]
           );
         }
         // Bump updated_at so link changes appear in sync and timeline

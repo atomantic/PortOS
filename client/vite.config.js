@@ -93,6 +93,15 @@ export default defineConfig(({ mode }) => {
               { name: 'vendor-dnd', test: /[\\/]node_modules[\\/]@dnd-kit[\\/]/ },
               // Icon library (largest dependency)
               { name: 'vendor-icons', test: /[\\/]node_modules[\\/]lucide-react[\\/]/ },
+              // 3D stack — only pulled into lazy 3D pages (CyberCity, avatars,
+              // BrainGraph). Naming it gives the ~1 MB chunk a stable identity
+              // instead of an opaque `OrbitControls-*.js` and guarantees a single
+              // shared chunk across all 3D consumers.
+              { name: 'vendor-three', test: /[\\/]node_modules[\\/](three|@react-three|three-fenestra)[\\/]/ },
+              // Charting (recharts) — lazy chart pages only
+              { name: 'vendor-charts', test: /[\\/]node_modules[\\/](recharts|d3-[^\\/]+|victory-[^\\/]+)[\\/]/ },
+              // Terminal emulator (xterm) — Shell page only
+              { name: 'vendor-term', test: /[\\/]node_modules[\\/]@xterm[\\/]/ },
             ]
           }
         }
