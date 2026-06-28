@@ -171,6 +171,52 @@ export const checkFalsePositiveRate = (group) => {
 };
 
 /**
+ * Per-check dismissal rate (#1629): the fraction of a check's findings the user
+ * dismissed for ANY reason (the false-positive subset plus plain dismissals).
+ * `null` when the check has surfaced nothing yet, so callers can distinguish "no
+ * data" from a genuine 0% — a high dismissal rate flags a low-signal check even
+ * when the user didn't bother tagging each one a false positive.
+ */
+export const checkDismissalRate = (group) => {
+  if (!group || !group.total) return null;
+  return group.dismissed / group.total;
+};
+
+// A check needs at least this many findings before its rates are statistically
+// meaningful; below it the card shows an "unproven" badge instead of a rate the
+// user shouldn't yet trust (#1629).
+export const CHECK_MATURITY_MIN_SAMPLE = 5;
+// At or above this false-positive rate (on a proven sample) the check is "noisy"
+// — the signal users most want surfaced so they can deprioritize/mute it.
+export const CHECK_NOISY_FP_RATE = 0.4;
+
+/**
+ * Per-check maturity / quality signal (#1629) — the trust descriptor surfaced in
+ * the catalog card so a user can tell a brand-new/unreliable check from a proven
+ * high-signal one. Pure over a findings group from `groupFindingsByCheck`.
+ * Returns:
+ *   findings           total findings this check has produced (for the series)
+ *   dismissalRate      dismissed / total, or null when no findings
+ *   falsePositiveRate  false-positive / total, or null when no findings
+ *   level              'new'      — no findings yet (untested, trust unknown)
+ *                      'unproven' — too few findings to judge (< MIN_SAMPLE)
+ *                      'noisy'    — proven sample with a high false-positive rate
+ *                      'reliable' — proven sample the user mostly keeps
+ */
+export function checkMaturity(group) {
+  const findings = group?.total || 0;
+  if (!findings) {
+    return { findings: 0, dismissalRate: null, falsePositiveRate: null, level: 'new' };
+  }
+  const falsePositiveRate = checkFalsePositiveRate(group);
+  const dismissalRate = checkDismissalRate(group);
+  let level = 'reliable';
+  if (findings < CHECK_MATURITY_MIN_SAMPLE) level = 'unproven';
+  else if ((falsePositiveRate || 0) >= CHECK_NOISY_FP_RATE) level = 'noisy';
+  return { findings, dismissalRate, falsePositiveRate, level };
+}
+
+/**
  * Deep-link a finding into the manuscript editor: focuses the finding's issue
  * (when it has one) and opens its comment card via the `?comment=` param the
  * editor honors. Series-scoped findings (no issueNumber) land on the bare

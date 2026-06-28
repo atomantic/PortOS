@@ -192,4 +192,34 @@ describe('EditorialCheckCard', () => {
       expect(onSeriesConfigSave).toHaveBeenCalledWith('naming.dissimilar-names', null);
     });
   });
+
+  describe('per-check maturity / quality strip (#1629)', () => {
+    it('hides the strip when no series is selected (findings are per-series)', () => {
+      render(<EditorialCheckCard check={check} onToggle={vi.fn()} onConfigSave={vi.fn()} stats={{ total: 10, dismissed: 5, falsePositive: 5 }} />);
+      expect(screen.queryByText(/finding/i)).toBeNull();
+      expect(screen.queryByText(/untested|reliable|noisy|unproven/i)).toBeNull();
+    });
+
+    it('shows "untested" with a series but no findings for this check', () => {
+      render(<EditorialCheckCard check={check} onToggle={vi.fn()} onConfigSave={vi.fn()} seriesId="ser-1" stats={null} />);
+      expect(screen.getByText(/untested/i)).toBeInTheDocument();
+      expect(screen.getByText(/no findings yet for this series/i)).toBeInTheDocument();
+    });
+
+    it('surfaces findings count, dismissal rate, and FP rate with a noisy badge', () => {
+      render(
+        <EditorialCheckCard
+          check={check}
+          onToggle={vi.fn()}
+          onConfigSave={vi.fn()}
+          seriesId="ser-1"
+          stats={{ total: 10, dismissed: 6, falsePositive: 5 }}
+        />,
+      );
+      expect(screen.getByText(/noisy/i)).toBeInTheDocument();
+      expect(screen.getByText(/10 findings/i)).toBeInTheDocument();
+      expect(screen.getByText(/60% dismissed/i)).toBeInTheDocument();
+      expect(screen.getByText(/50% FP/i)).toBeInTheDocument();
+    });
+  });
 });

@@ -3,6 +3,9 @@ import {
   groupChecksByScope,
   groupFindingsByCheck,
   checkFalsePositiveRate,
+  checkDismissalRate,
+  checkMaturity,
+  CHECK_MATURITY_MIN_SAMPLE,
   openFindingsTotal,
   findingManuscriptLink,
   scopeLabel,
@@ -145,6 +148,41 @@ describe('checkFalsePositiveRate', () => {
   it('returns null when the check has no findings yet', () => {
     expect(checkFalsePositiveRate({ total: 0, falsePositive: 0 })).toBeNull();
     expect(checkFalsePositiveRate(null)).toBeNull();
+  });
+});
+
+describe('checkDismissalRate (#1629)', () => {
+  it('is dismissed/total over every dismissal, not just false positives', () => {
+    expect(checkDismissalRate({ total: 4, dismissed: 3 })).toBe(0.75);
+  });
+
+  it('returns null (not 0) with no findings, so "no data" stays distinct from 0%', () => {
+    expect(checkDismissalRate({ total: 0, dismissed: 0 })).toBeNull();
+    expect(checkDismissalRate(null)).toBeNull();
+  });
+});
+
+describe('checkMaturity (#1629)', () => {
+  it('reports "new" with no findings and null rates', () => {
+    expect(checkMaturity(null)).toEqual({ findings: 0, dismissalRate: null, falsePositiveRate: null, level: 'new' });
+    expect(checkMaturity({ total: 0 }).level).toBe('new');
+  });
+
+  it('reports "unproven" below the minimum sample even with a high FP rate', () => {
+    const m = checkMaturity({ total: CHECK_MATURITY_MIN_SAMPLE - 1, dismissed: 2, falsePositive: 2 });
+    expect(m.level).toBe('unproven');
+    expect(m.findings).toBe(CHECK_MATURITY_MIN_SAMPLE - 1);
+  });
+
+  it('reports "noisy" once a proven sample crosses the false-positive threshold', () => {
+    const m = checkMaturity({ total: 10, dismissed: 6, falsePositive: 5 });
+    expect(m.level).toBe('noisy');
+    expect(m.falsePositiveRate).toBe(0.5);
+    expect(m.dismissalRate).toBe(0.6);
+  });
+
+  it('reports "reliable" for a proven, mostly-kept check', () => {
+    expect(checkMaturity({ total: 12, dismissed: 1, falsePositive: 0 }).level).toBe('reliable');
   });
 });
 

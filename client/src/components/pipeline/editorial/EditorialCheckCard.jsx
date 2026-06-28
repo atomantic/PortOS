@@ -24,9 +24,60 @@ import { memo, useEffect, useState } from 'react';
 import { ChevronDown, ChevronRight, Loader2, Pencil, Sliders, Trash2 } from 'lucide-react';
 import ToggleSwitch from '../../ToggleSwitch';
 import CheckKindBadge from './CheckKindBadge';
-import { SEVERITY_BADGE_CLASSES } from '../../../lib/editorialChecks';
+import { SEVERITY_BADGE_CLASSES, checkMaturity, CHECK_NOISY_FP_RATE } from '../../../lib/editorialChecks';
 
 const SEVERITY_LEVELS = ['high', 'medium', 'low'];
+
+// Maturity badge styling (#1629) — the trust signal for a check, derived from its
+// findings group. `new`/`unproven` are muted (don't trust the rate yet); `noisy`
+// borrows the warning token (deprioritize/mute it); `reliable` the success token.
+const MATURITY_BADGE = {
+  new: { label: 'untested', className: 'border-port-border text-gray-500', title: 'No findings yet — trust unknown' },
+  unproven: { label: 'unproven', className: 'border-gray-500/40 text-gray-400', title: 'Too few findings to judge signal quality yet' },
+  noisy: { label: 'noisy', className: 'border-port-warning/40 text-port-warning', title: 'High false-positive rate — consider deprioritizing or muting' },
+  reliable: { label: 'reliable', className: 'border-port-success/40 text-port-success', title: 'Proven sample the user mostly keeps' },
+};
+
+const pct = (rate) => `${Math.round((rate || 0) * 100)}%`;
+
+// Compact per-check quality strip (#1629): findings count, dismissal rate, and
+// false-positive rate plus a maturity badge, so a user can tell a high-signal
+// check from a brand-new/noisy one without leaving the catalog. `stats` is the
+// findings group for this check (per the selected series) or null when none.
+function CheckMaturityStrip({ stats }) {
+  const { findings, dismissalRate, falsePositiveRate, level } = checkMaturity(stats);
+  const badge = MATURITY_BADGE[level] || MATURITY_BADGE.new;
+  return (
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-port-border/60 pt-2 text-[10px] text-gray-500">
+      <span
+        className={`inline-flex items-center rounded border px-1.5 py-0.5 uppercase tracking-wide ${badge.className}`}
+        title={badge.title}
+      >
+        {badge.label}
+      </span>
+      {findings > 0 ? (
+        <>
+          <span title="Findings this check has produced for the selected series">
+            {findings} finding{findings === 1 ? '' : 's'}
+          </span>
+          <span aria-hidden="true">·</span>
+          <span title="Share of this check's findings the user dismissed">
+            {pct(dismissalRate)} dismissed
+          </span>
+          <span aria-hidden="true">·</span>
+          <span
+            className={(falsePositiveRate || 0) >= CHECK_NOISY_FP_RATE ? 'text-port-warning' : undefined}
+            title="Share of this check's findings flagged false-positive"
+          >
+            {pct(falsePositiveRate)} FP
+          </span>
+        </>
+      ) : (
+        <span>No findings yet for this series</span>
+      )}
+    </div>
+  );
+}
 
 function ConfigField({ checkId, field, value, disabled, onCommit, resetNonce = 0 }) {
   const inputId = `cfg-${checkId}-${field.key}`;
@@ -88,7 +139,7 @@ function ConfigField({ checkId, field, value, disabled, onCommit, resetNonce = 0
 function EditorialCheckCard({
   check, saving = false, onToggle, onConfigSave, onSeveritySave, onEdit, onDelete,
   seriesId = '', seriesConfig = null, seriesSaving = false, seriesResetNonce = 0, onSeriesConfigSave,
-  idScope = '',
+  stats = null, idScope = '',
 }) {
   const [expanded, setExpanded] = useState(false);
   // Base for this card's DOM ids. A dual-scope check (#1628) is fanned into more
@@ -142,6 +193,11 @@ function EditorialCheckCard({
           />
         </div>
       </div>
+
+      {/* Per-check maturity / quality signal (#1629). Only meaningful with a
+          series selected — findings are per-series, so without one every check
+          would falsely read "untested". */}
+      {seriesId ? <CheckMaturityStrip stats={stats} /> : null}
 
       {canSetSeverity ? (
         <div className="flex items-center gap-2">
