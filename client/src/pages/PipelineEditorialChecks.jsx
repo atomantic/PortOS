@@ -21,7 +21,7 @@ import EditorialFindingsTriage from '../components/pipeline/editorial/EditorialF
 import EditorialHealthPanel from '../components/pipeline/editorial/EditorialHealthPanel';
 import ProviderModelSelector from '../components/ProviderModelSelector';
 import TabPills from '../components/ui/TabPills';
-import { groupChecksByScope, normCategory, canonEntitiesFromUniverse } from '../lib/editorialChecks';
+import { groupChecksByScope, groupFindingsByCheck, normCategory, canonEntitiesFromUniverse } from '../lib/editorialChecks';
 import { usePipelineProgress } from '../hooks/usePipelineProgress';
 import useProviderModels from '../hooks/useProviderModels';
 import {
@@ -104,6 +104,15 @@ export default function PipelineEditorialChecks() {
   );
   const enabledCount = useMemo(() => checks.filter((c) => c.enabled).length, [checks]);
   const scopeGroups = useMemo(() => groupChecksByScope(checks), [checks]);
+  // Per-check maturity / quality stats (#1629): group the loaded findings by
+  // check so each catalog card can show its findings count, dismissal rate, and
+  // false-positive rate. Keyed by checkId; a check with no findings is simply
+  // absent (the card renders its "untested" state). Findings are per-series, so
+  // this empties out — and the cards hide the strip — when no series is selected.
+  const statsByCheck = useMemo(() => {
+    const groups = groupFindingsByCheck(comments, checksById);
+    return Object.fromEntries(groups.map((g) => [g.checkId, g]));
+  }, [comments, checksById]);
   // The check/category values the health panel can deep-link to (#1606). The
   // panel's "Open by check/category" rows count OPEN findings, and the triage only
   // lists check-sourced findings (it drops null-checkId completeness/legacy ones).
@@ -695,6 +704,7 @@ export default function PipelineEditorialChecks() {
                       <EditorialCheckCard
                         check={check}
                         idScope={group.scope}
+                        stats={statsByCheck[check.id] || null}
                         saving={savingIds.has(check.id)}
                         onToggle={handleToggle}
                         onConfigSave={handleConfigSave}
