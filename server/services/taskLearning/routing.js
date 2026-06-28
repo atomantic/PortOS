@@ -13,6 +13,52 @@ import { loadLearningData, emitLog } from './store.js';
 import { resetTaskTypeLearning } from './metrics.js';
 
 /**
+ * Relative resource cost of each tier name that can land in
+ * `routingAccuracy`, lightest → heaviest. Used to break ties between tiers
+ * that both clear the high-success threshold: prefer the cheapest tier that
+ * still works well.
+ *
+ * The keys here are whatever `selectModelForTask` records as `tier`
+ * (agentModelSelection.js → agentLifecycle.js `modelTier`), which is a mixed
+ * namespace: the literal tiers (`light`/`default`/`medium`/`heavy`) AND the
+ * thinking-level names from thinkingLevels.js (`off`/`minimal`/`low`/`medium`/
+ * `high`/`xhigh`, where `minimal`/`low` are local-preferred and therefore the
+ * cheapest, and `high`/`xhigh` map to provider-heavy/opus). An unknown name
+ * (e.g. `user-specified`, or a future tier) must NOT be treated as cheap, or
+ * the "prefer lightest" logic would pick it over a known-light tier — so the
+ * fallback ranks unknowns as heaviest.
+ */
+const TIER_WEIGHT = {
+  minimal: 0,   // local-small (thinking level)
+  low: 1,       // local-medium (thinking level)
+  light: 2,     // provider light model (e.g. haiku)
+  off: 3,       // no extended thinking → provider default
+  default: 3,   // provider default model
+  medium: 4,    // provider default + standard cloud thinking
+  high: 5,      // provider-heavy (thinking level)
+  heavy: 6,     // provider heavy model
+  xhigh: 7      // opus / heaviest (thinking level)
+};
+const HEAVIEST_WEIGHT = Math.max(...Object.values(TIER_WEIGHT)) + 1;
+const tierWeight = (tier) => TIER_WEIGHT[tier] ?? HEAVIEST_WEIGHT;
+
+/**
+ * Tier names the learning→selection path can't actually route to. The
+ * local-preferred thinking levels (`minimal`/`low`) resolve to a local model
+ * (LM Studio/Ollama), but `selectModelForTask` doesn't switch the active
+ * provider for them (the `localPreferred` flag is unwired) — so a task can't
+ * be routed there from a learned suggestion. Excluding them from suggestion
+ * candidates is what keeps "prefer the lightest tier" honest: recommending a
+ * tier nothing can run would make the selector fall through to the provider
+ * default instead of the lightest tier it CAN run (e.g. `light`). They stay in
+ * TIER_WEIGHT (the cost ordering is still accurate) — they're just not offered.
+ */
+const NON_ROUTABLE_LEARNED_TIERS = new Set(['minimal', 'low']);
+
+/** Minimum success rate (%) for a tier to count as "proven" for a task type. */
+const HIGH_SUCCESS_THRESHOLD = 80;
+
+/**
  * Get suggested priority boost for a task type based on historical success
  * Returns a multiplier: >1 for boost, <1 for demotion
  */
@@ -52,19 +98,28 @@ export async function suggestModelTier(taskType) {
   if (routingData) {
     // Find tiers with enough data and their success rates
     const tierResults = Object.entries(routingData)
-      .filter(([, r]) => (r.succeeded + r.failed) >= 3)
+      .filter(([tier, r]) => (r.succeeded + r.failed) >= 3 && !NON_ROUTABLE_LEARNED_TIERS.has(tier))
       .map(([tier, r]) => {
         const total = r.succeeded + r.failed;
         return { tier, successRate: Math.round((r.succeeded / total) * 100), total };
       })
       .sort((a, b) => b.successRate - a.successRate);
 
-    // If a lighter tier has high success, no need to upgrade
-    const bestTier = tierResults[0];
-    if (bestTier && bestTier.successRate >= 80) {
+    // Among tiers that clear the high-success threshold, prefer the LIGHTEST
+    // (cheapest) one — there's no reason to spend a heavier model when a
+    // lighter tier already succeeds reliably. tierResults is sorted by success
+    // rate, so without this a heavy tier at 85% would beat a light tier at 82%
+    // and silently over-allocate compute for the same outcome.
+    const provenTiers = tierResults.filter(t => t.successRate >= HIGH_SUCCESS_THRESHOLD);
+    if (provenTiers.length > 0) {
+      const lightest = provenTiers.reduce((a, b) =>
+        tierWeight(b.tier) < tierWeight(a.tier) ? b : a);
+      const reason = provenTiers.length > 1
+        ? `${taskType} succeeds with ${lightest.tier} tier (${lightest.successRate}%) — using lightest of ${provenTiers.length} proven tiers`
+        : `${taskType} has ${lightest.successRate}% success with ${lightest.tier} tier`;
       return {
-        suggested: bestTier.tier,
-        reason: `${taskType} has ${bestTier.successRate}% success with ${bestTier.tier} tier`,
+        suggested: lightest.tier,
+        reason,
         avoidTiers: tierResults.filter(t => t.successRate < 40).map(t => t.tier)
       };
     }
