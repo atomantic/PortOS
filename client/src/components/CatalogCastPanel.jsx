@@ -22,18 +22,7 @@ import {
   linkCatalogIngredient,
   unlinkCatalogIngredient,
 } from '../services/apiCatalog';
-import { CATALOG_BADGE_BY_ID } from '../lib/catalogTypes';
-
-const ROLE_BY_TYPE = {
-  character: 'cast-character',
-  place:     'cast-place',
-  object:    'cast-object',
-  idea:      'reference',
-  scene:     'reference',
-  concept:   'reference',
-};
-
-const roleForType = (type) => ROLE_BY_TYPE[type] || 'reference';
+import { CATALOG_BADGE_BY_ID, catalogRefRoleForType as roleForType } from '../lib/catalogTypes';
 
 function snippet(payload) {
   if (!payload || typeof payload !== 'object') return '';

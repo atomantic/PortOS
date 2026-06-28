@@ -320,6 +320,19 @@ export const CATALOG_BADGE_BY_ID = Object.freeze(
   Object.fromEntries(CATALOG_TYPES.map((t) => [t.id, t.badgeColor])),
 );
 
+// Catalog ingredient `type` → ref role when linking the ingredient to a
+// universe/series from the UI (#1762 bulk "Add to universe/series" + the cast
+// panel). character/place/object carry a typed `cast-*` role; everything else
+// (idea/scene/concept/user types) links as a generic 'reference'. The server
+// validates role as a free string (min1/max64), so this is the client-side
+// convention shared by CatalogCastPanel and the Catalog bulk-place action.
+const CATALOG_REF_ROLE_BY_TYPE = Object.freeze({
+  character: 'cast-character',
+  place: 'cast-place',
+  object: 'cast-object',
+});
+export const catalogRefRoleForType = (type) => CATALOG_REF_ROLE_BY_TYPE[type] || 'reference';
+
 /**
  * Pull a short snippet from a payload using a type's fallback chain (first
  * non-empty key wins), trimmed + ellipsised to `max` chars. When `typeId` is

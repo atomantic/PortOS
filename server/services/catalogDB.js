@@ -700,7 +700,24 @@ const THUMBNAIL_KEY_SUBQUERY = `(
      LIMIT 1
   ) AS thumbnail_key`;
 
-export async function listIngredients({ ids, type, tag, query: q, limit = 50, offset = 0, includeEmbedding = false, embeddingMissing = false, staleEmbeddingModel = null } = {}) {
+// SQL predicate matching ingredients that have at least one LIVE universe/series
+// ref (target row still resolves). Hardcodes the universe/series live clauses —
+// both are `deleted = FALSE` in REF_TARGET_TABLES (catalogRefResolver.js); kept
+// inline rather than imported because each kind probes a different target table.
+const HAS_LIVE_UNIVERSE_SERIES_REF = `EXISTS (
+    SELECT 1 FROM catalog_ingredient_refs r
+     WHERE r.ingredient_id = catalog_ingredients.id AND r.deleted = false
+       AND ((r.ref_kind = 'universe' AND EXISTS (SELECT 1 FROM universes u WHERE u.id = r.ref_id AND u.deleted = false))
+         OR (r.ref_kind = 'series'   AND EXISTS (SELECT 1 FROM pipeline_series s WHERE s.id = r.ref_id AND s.deleted = false))))`;
+
+// At least one universe/series ref row exists (live OR dangling) — distinguishes
+// "orphaned" (has a ref, none resolve) from "unlinked" (no ref at all).
+const HAS_ANY_UNIVERSE_SERIES_REF = `EXISTS (
+    SELECT 1 FROM catalog_ingredient_refs r
+     WHERE r.ingredient_id = catalog_ingredients.id AND r.deleted = false
+       AND r.ref_kind IN ('universe', 'series'))`;
+
+export async function listIngredients({ ids, type, tag, query: q, refKind = null, refId = null, unlinked = false, orphaned = false, limit = 50, offset = 0, includeEmbedding = false, embeddingMissing = false, staleEmbeddingModel = null } = {}) {
   const conditions = ['deleted = false'];
   const params = [];
   let idx = 1;
@@ -725,6 +742,23 @@ export async function listIngredients({ ids, type, tag, query: q, limit = 50, of
       qIdx = idx++;
       conditions.push(`search_tsv @@ websearch_to_tsquery('english', $${qIdx})`);
       params.push(q);
+    }
+    // Album/facet filters (#1762). EXISTS subquery (not a JOIN) so a row linked
+    // under multiple roles isn't duplicated — no DISTINCT needed. Composes with
+    // type/tag/q above. `unlinked` and `orphaned` are mutually exclusive views
+    // of the un-homed set; the route schema rejects combining them with ref.
+    if (refKind && refId) {
+      conditions.push(`EXISTS (SELECT 1 FROM catalog_ingredient_refs r
+        WHERE r.ingredient_id = catalog_ingredients.id AND r.deleted = false
+          AND r.ref_kind = $${idx++} AND r.ref_id = $${idx++})`);
+      params.push(refKind, refId);
+    } else if (unlinked) {
+      // "Unsorted / Raw": no universe/series ref at all.
+      conditions.push(`NOT ${HAS_ANY_UNIVERSE_SERIES_REF}`);
+    } else if (orphaned) {
+      // "Orphaned": has a universe/series ref, but none resolve to a live target.
+      conditions.push(HAS_ANY_UNIVERSE_SERIES_REF);
+      conditions.push(`NOT ${HAS_LIVE_UNIVERSE_SERIES_REF}`);
     }
   }
   if (embeddingMissing) {
@@ -1702,5 +1736,67 @@ export async function getCatalogStats() {
     byType,
     scraps: parseInt(scrapResult.rows[0].count, 10),
     withEmbeddings: parseInt(withEmb.rows[0].count, 10),
+  };
+}
+
+// Faceted counts driving the Catalog filter dropdowns + album headers (#1762)
+// in one round-trip. Distinguishes three mutually-exclusive per-ingredient
+// buckets: LINKED (≥1 live universe/series ref — rolls up into the universes/
+// series facet arrays), UNLINKED (no universe/series ref at all → "Raw" album),
+// and ORPHANED (has a universe/series ref but none resolve to a live target →
+// "Orphaned" album). Only live universes/series appear in the facet arrays; the
+// joins on `deleted = false` enforce the same live predicate the resolver uses.
+export async function getCatalogFacets() {
+  const [typeRows, uniRows, serRows, tagRows, bucketRows] = await Promise.all([
+    query(`SELECT type, COUNT(*)::int AS count
+             FROM catalog_ingredients WHERE deleted = false
+            GROUP BY type ORDER BY count DESC, type`),
+    query(`SELECT u.id AS ref_id, u.name, COUNT(DISTINCT r.ingredient_id)::int AS count
+             FROM catalog_ingredient_refs r
+             JOIN catalog_ingredients i ON i.id = r.ingredient_id AND i.deleted = false
+             JOIN universes u ON u.id = r.ref_id AND u.deleted = false
+            WHERE r.deleted = false AND r.ref_kind = 'universe'
+            GROUP BY u.id, u.name ORDER BY count DESC, u.name`),
+    query(`SELECT s.id AS ref_id, s.name, s.universe_id, COUNT(DISTINCT r.ingredient_id)::int AS count
+             FROM catalog_ingredient_refs r
+             JOIN catalog_ingredients i ON i.id = r.ingredient_id AND i.deleted = false
+             JOIN pipeline_series s ON s.id = r.ref_id AND s.deleted = false
+            WHERE r.deleted = false AND r.ref_kind = 'series'
+            GROUP BY s.id, s.name, s.universe_id ORDER BY count DESC, s.name`),
+    query(`SELECT tag, COUNT(*)::int AS count
+             FROM (SELECT unnest(tags) AS tag FROM catalog_ingredients WHERE deleted = false) t
+            GROUP BY tag ORDER BY count DESC, tag`),
+    // Per-ingredient bucket classification. ref_count = live universe/series ref
+    // ROWS; live_count = those whose target still resolves. unlinked = ref_count 0;
+    // orphaned = ref_count > 0 but live_count 0; linked = live_count > 0.
+    query(`SELECT
+              COUNT(*) FILTER (WHERE ref_count = 0)::int AS unlinked,
+              COUNT(*) FILTER (WHERE ref_count > 0 AND live_count = 0)::int AS orphaned,
+              COUNT(*) FILTER (WHERE live_count > 0)::int AS linked
+            FROM (
+              SELECT i.id,
+                COUNT(r.ref_id) AS ref_count,
+                COUNT(r.ref_id) FILTER (WHERE
+                  (r.ref_kind = 'universe' AND EXISTS (SELECT 1 FROM universes u WHERE u.id = r.ref_id AND u.deleted = false))
+                  OR (r.ref_kind = 'series' AND EXISTS (SELECT 1 FROM pipeline_series s WHERE s.id = r.ref_id AND s.deleted = false))
+                ) AS live_count
+              FROM catalog_ingredients i
+              LEFT JOIN catalog_ingredient_refs r
+                ON r.ingredient_id = i.id AND r.deleted = false AND r.ref_kind IN ('universe', 'series')
+              WHERE i.deleted = false
+              GROUP BY i.id
+            ) sub`),
+  ]);
+  const types = typeRows.rows.map((r) => ({ type: r.type, count: r.count }));
+  const total = types.reduce((sum, t) => sum + t.count, 0);
+  const buckets = bucketRows.rows[0] || {};
+  return {
+    types,
+    universes: uniRows.rows.map((r) => ({ refId: r.ref_id, name: r.name, count: r.count })),
+    series: serRows.rows.map((r) => ({ refId: r.ref_id, name: r.name, universeId: r.universe_id, count: r.count })),
+    tags: tagRows.rows.map((r) => ({ tag: r.tag, count: r.count })),
+    unlinkedCount: buckets.unlinked ?? 0,
+    orphanedCount: buckets.orphaned ?? 0,
+    total,
   };
 }
