@@ -34,6 +34,7 @@ vi.mock('sharp', () => ({
 import {
   buildDatasetImagePrompt, deriveVariationAxes, getDatasetVariationAxes,
   normalizeCropProposals, proposeCropRegions, sliceReferenceSheet,
+  extractSubjectSignaturePhrases,
 } from './loraDatasetGenerate.js';
 import { getDataset, updateDataset } from './loraDatasets.js';
 import { getUniverse } from './universeBuilder.js';
@@ -44,6 +45,43 @@ import { getUniverse } from './universeBuilder.js';
 // silently because the renders themselves are non-deterministic.
 
 const UNIVERSE = { artStyle: 'gritty ink-and-wash fantasy' };
+
+describe('extractSubjectSignaturePhrases', () => {
+  it('collects character wardrobe, prop, and palette names + visual identity', () => {
+    const phrases = extractSubjectSignaturePhrases({
+      wardrobes: [{ name: 'red cloak', description: 'crimson' }, { name: 'light leather armor' }],
+      props: [{ name: 'woven crown' }],
+      colorPalette: [{ name: 'crimson', hex: '#b00' }, { name: 'iron blue' }],
+      visualIdentity: 'tall barbarian warrior',
+    }, 'characters');
+    expect(phrases).toEqual([
+      'red cloak', 'light leather armor', 'woven crown', 'crimson', 'iron blue', 'tall barbarian warrior',
+    ]);
+  });
+
+  it('de-dupes case-insensitively and caps the list', () => {
+    const wardrobes = Array.from({ length: 20 }, (_, i) => ({ name: `item ${i}` }));
+    const phrases = extractSubjectSignaturePhrases(
+      { wardrobes: [{ name: 'Red Cloak' }, { name: 'red cloak' }, ...wardrobes] },
+      'characters',
+    );
+    expect(phrases).toHaveLength(12);
+    expect(phrases.filter((p) => p.toLowerCase() === 'red cloak')).toHaveLength(1);
+  });
+
+  it('uses recurring details + palette for objects/places', () => {
+    const phrases = extractSubjectSignaturePhrases({
+      colorPalette: [{ name: 'mossy green' }],
+      recurringDetails: 'cracked obelisk, glowing runes',
+    }, 'places');
+    expect(phrases).toEqual(['mossy green', 'cracked obelisk', 'glowing runes']);
+  });
+
+  it('returns [] for a null/empty subject', () => {
+    expect(extractSubjectSignaturePhrases(null)).toEqual([]);
+    expect(extractSubjectSignaturePhrases({})).toEqual([]);
+  });
+});
 
 describe('buildDatasetImagePrompt', () => {
   it('renders a single-figure character prompt (default kind)', () => {

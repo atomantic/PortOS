@@ -148,7 +148,9 @@ const stampDatasetTrainingStatus = (run, jobId) =>
  * creates the run record, and enqueues the training job. Returns
  * `{ runId, jobId, position }` (202-shaped).
  */
-export async function startTrainingRun({ datasetId, baseModelId, name = null, params = {} }) {
+export async function startTrainingRun({
+  datasetId, baseModelId, name = null, params = {}, acknowledgeCaptionLeak = false,
+}) {
   const settings = await getSettings();
   const pythonPath = settings?.imageGen?.local?.pythonPath || null;
   // Engine pick: prefer mflux's MLX trainer when the user's mflux install
@@ -156,7 +158,7 @@ export async function startTrainingRun({ datasetId, baseModelId, name = null, pa
   // torch/diffusers trainer in venv-flux2.
   const mlxAvailable = isMfluxTrainAvailable(pythonPath);
   const routing = resolveTrainingRuntime(baseModelId, getImageModels(), { mlxAvailable });
-  const { dataset } = await validateDatasetReady(datasetId);
+  const { dataset } = await validateDatasetReady(datasetId, { acknowledgeCaptionLeak });
 
   if (routing.runtime === TRAINING_RUNTIMES.FLUX2) {
     const healthy = await isFlux2VenvHealthy();
@@ -260,7 +262,9 @@ export async function resumeTrainingRun(runId, { auto = false } = {}) {
 
   // Re-validate dataset readiness + ownership exactly like a fresh launch — the
   // dataset may have been edited, deleted, or reassigned since the run failed.
-  const { dataset } = await validateDatasetReady(run.datasetId);
+  // Skip the caption-leak gate: this run already cleared it at first launch,
+  // and resume shouldn't re-block on captions the user already accepted.
+  const { dataset } = await validateDatasetReady(run.datasetId, { acknowledgeCaptionLeak: true });
   if (!sameCharacter(dataset.character, run.character)) {
     throw new ServerError('Dataset was reassigned to a different subject — start a fresh run.', {
       status: 409, code: 'DATASET_REASSIGNED',

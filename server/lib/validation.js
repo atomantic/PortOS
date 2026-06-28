@@ -905,6 +905,9 @@ export const startTrainingRunSchema = z.object({
   baseModelId: z.string().min(1).max(128),
   name: z.string().trim().max(120).optional(),
   params: loraTrainingParamsSchema.optional(),
+  // Override the caption identity-leak gate (see validateDatasetReady) and train
+  // anyway — the UI sends this from the explicit "Train anyway" action.
+  acknowledgeCaptionLeak: z.boolean().optional(),
 });
 
 // Query for GET /api/city/snapshots — `since` (ISO timestamp) and `limit`
