@@ -625,9 +625,11 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
   }
   // Sleep the display now (Apple Silicon, opt-out via settings.loraTraining
   // .displaySleep) so sustained GPU training never competes with the display.
-  // Woken again in the close handler when the run finishes. No-op on reattach
-  // would re-sleep an already-protected run, which is harmless.
-  sleepDisplayForTraining(settings);
+  // The close handler wakes it when the run finishes. Gated on proc.pid (like
+  // the caffeinate spawn above) so a failed launch that emits 'error' without a
+  // 'close' never sleeps a display nothing will wake. Re-sleeping a still-running
+  // run on reattach is harmless (pmset displaysleepnow is idempotent).
+  if (proc.pid) sleepDisplayForTraining(settings);
 
   // Debounced run-record progress mirror (~2s). Per-step DB writes from a
   // hot loop are the high-frequency-write anti-pattern; SSE is the live
@@ -775,6 +777,11 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
   proc.on('error', (err) => {
     stopStallWatchdog();
     if (activeProcess === proc) { activeProcess = null; activeJobId = null; }
+    // Terminal too (no 'close' follows an 'error'), so wake the display here as
+    // well — no-op unless we actually slept it (proc.pid was set). Without this,
+    // a pid-bearing process that errors instead of closing would leave the
+    // display asleep.
+    wakeDisplay(settings);
     // A launch failure after the run was marked `running` — a genuine spawn
     // error, or (with spawnDetached) the control dir failing to create/clear.
     // Route through the same terminal cleanup as pre-spawn failures so the run
@@ -794,11 +801,14 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
     // escape the event handler (unhandled rejection kills the process on Node ≥15).
     Promise.resolve(flushProgress())
       .then(() => finalizeTraining({ jobId, runId, code, signal, state: getState(), stallKilled }))
-      .then(() => {
+      .then((resumed) => {
         // Wake the display now the run is over so the user sees the result —
-        // but NOT on a stall-watchdog auto-resume (stallKilled), which re-spawns
-        // and re-sleeps the display for the next attempt. Best-effort, darwin-only.
-        if (!stallKilled) wakeDisplay(settings);
+        // but NOT when finalize actually enqueued a stall-watchdog auto-resume
+        // (it re-spawns and re-sleeps the display for the next attempt). Gating
+        // on the returned `resumed` flag, not raw `stallKilled`, ensures a
+        // budget-exhausted or failed resume (terminal, no re-spawn) still wakes.
+        // Best-effort, darwin-only.
+        if (!resumed) wakeDisplay(settings);
       })
       .catch((err) => {
         console.error(`❌ training [${shortId(jobId)}] finalize failed: ${err?.message}`);
@@ -815,20 +825,26 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
  * leaves the run in its finalize-set `failed` state for manual resume. Runs
  * outside the request lifecycle (called from the close handler), so it owns its
  * own error handling rather than bubbling.
+ *
+ * Returns true ONLY when a resume was actually enqueued (a fresh trainer will
+ * re-spawn). The close handler relies on this to decide whether to wake the
+ * display: a budget-exhausted or failed resume does NOT re-spawn, so the display
+ * must be woken just like any other terminal end — gating on raw `stallKilled`
+ * would leave it asleep forever on those paths.
  */
 async function autoResumeAfterStall(runId, jobId) {
   const run = await runsDb.getRun(runId).catch(() => null);
-  if (!run) return;
+  if (!run) return false;
   const autoCount = run.resume?.autoCount || 0;
   if (autoCount >= STALL_MAX_AUTO_RESUMES) {
     console.log(`⚠️ training [${shortId(jobId)}] stall auto-resume budget exhausted (${autoCount}/${STALL_MAX_AUTO_RESUMES}) — leaving run failed for manual resume`);
-    return;
+    return false;
   }
   // resumeTrainingRun requires a failed/canceled status + a resumable checkpoint;
   // finalize has already flipped the run to failed by the time this runs.
-  await resumeTrainingRun(runId, { auto: true }).then(
-    (res) => console.log(`🔁 training [${shortId(jobId)}] auto-resumed run ${shortId(runId)} from step ${res.fromStep} (attempt ${autoCount + 1}/${STALL_MAX_AUTO_RESUMES})`),
-    (err) => console.error(`❌ training [${shortId(jobId)}] stall auto-resume failed: ${err?.message} — run stays failed for manual resume`),
+  return resumeTrainingRun(runId, { auto: true }).then(
+    (res) => { console.log(`🔁 training [${shortId(jobId)}] auto-resumed run ${shortId(runId)} from step ${res.fromStep} (attempt ${autoCount + 1}/${STALL_MAX_AUTO_RESUMES})`); return true; },
+    (err) => { console.error(`❌ training [${shortId(jobId)}] stall auto-resume failed: ${err?.message} — run stays failed for manual resume`); return false; },
   );
 }
 
@@ -929,7 +945,10 @@ async function finalizeTraining({ jobId, runId, code, signal, state, stallKilled
   // resumeTrainingRun's status precondition is satisfied — auto-resume from the
   // newest checkpoint. Bounded by STALL_MAX_AUTO_RESUMES; awaited so the resume
   // (re-enqueue + run-record flip back to queued) completes within finalize.
-  if (stallKilled) await autoResumeAfterStall(runId, jobId);
+  // Return whether a resume was actually enqueued so the close handler knows NOT
+  // to wake the display in that case (the re-spawn re-sleeps it); every other
+  // terminal path falls through to the implicit `undefined` (falsy) → wake.
+  if (stallKilled) return autoResumeAfterStall(runId, jobId);
 }
 
 /**
