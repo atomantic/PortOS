@@ -1,5 +1,9 @@
 # Unreleased
 
+## Music Video production mode
+
+- **[issue-1760] Groundwork: offline beat/tempo/section analysis of an audio track (Phase 0 spike).** The first slice of the planned Music Video production mode proves the riskiest unknown — that a music track's BPM, beat grid, 4/4 downbeats, and a coarse section map can be extracted **fully offline with no new dependency**, using only ffmpeg (already required) plus a pure-JS DSP core (onset-strength envelope → tempo-weighted autocorrelation → beat-phase fit → energy-novelty sections). No Python, no ML model download, no network — so it runs the same in CI and on every install. There's no user-facing surface yet; this is the analyzer the upcoming director scene board and beat-snapped render build on. (`server/services/musicVideo/audioAnalysis.js`)
+
 ## Performance
 
 - **Tabbed pages now lazy-load their tab bodies, and `/apps` + `/ambient` moved out of the eager entry bundle.** Digital Twin (17 tabs), MeatSpace (11 tabs), and Brain (10 tabs) previously imported *every* tab component up front, so opening any one tab downloaded a single 240–450 kB chunk's worth of all of them. Each tab body is now a `React.lazy` chunk behind a `<Suspense>` boundary, so a user who views 1–2 tabs no longer pays for the other 15. `Apps` and `Ambient` were the only two non-index pages still imported statically into the entry chunk — they're now `lazyWithReload` like every other route, shrinking the initial bundle (~109 → ~95 kB gzip). The Vite vendor split also gained named `vendor-three` / `vendor-charts` / `vendor-term` groups so the big 3D/charting/terminal libs land in stable, single shared chunks instead of an opaque `OrbitControls-*.js`. (`client/src/App.jsx`, `client/src/pages/DigitalTwin.jsx`, `client/src/pages/MeatSpace.jsx`, `client/src/pages/Brain.jsx`, `client/vite.config.js`)
