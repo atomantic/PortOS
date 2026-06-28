@@ -30,6 +30,7 @@ import { getSettings } from '../settings.js';
 import { enqueueJob, getJob, mediaJobEvents } from '../mediaJobQueue/index.js';
 import { updateDataset } from '../loraDatasets.js';
 import { trainingEvents } from './events.js';
+import { sleepDisplayForTraining, wakeDisplay } from './displayPower.js';
 import {
   TRAINING_DEFAULTS,
   TRAINING_RUNTIMES,
@@ -609,13 +610,24 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
   activeProcess = proc;
   activeJobId = jobId;
 
-  // Keep the Mac awake for the duration of the training child (display can
-  // sleep; system must not). Best-effort — caffeinate exits with the child.
+  // Keep the Mac awake for the duration of the training child (idle + system
+  // sleep held off) — but DELIBERATELY let the *display* sleep. An active
+  // display makes WindowServer contend for the GPU, which triggers the watchdog
+  // kernel panic during heavy training (mlx #3267; see the incident doc). The
+  // flags are `-is`, NOT `-dis`: `-d` would force the display awake and is what
+  // was crashing the box. We then proactively sleep the display below so the
+  // protection doesn't wait on the OS idle timeout. Best-effort — caffeinate
+  // exits with the child.
   if (platform() === 'darwin' && proc.pid) {
-    const caf = spawn('caffeinate', ['-dis', '-w', String(proc.pid)], { stdio: 'ignore' });
+    const caf = spawn('caffeinate', ['-is', '-w', String(proc.pid)], { stdio: 'ignore' });
     caf.on('error', () => {});
     caf.unref();
   }
+  // Sleep the display now (Apple Silicon, opt-out via settings.loraTraining
+  // .displaySleep) so sustained GPU training never competes with the display.
+  // Woken again in the close handler when the run finishes. No-op on reattach
+  // would re-sleep an already-protected run, which is harmless.
+  sleepDisplayForTraining(settings);
 
   // Debounced run-record progress mirror (~2s). Per-step DB writes from a
   // hot loop are the high-frequency-write anti-pattern; SSE is the live
@@ -782,6 +794,12 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
     // escape the event handler (unhandled rejection kills the process on Node ≥15).
     Promise.resolve(flushProgress())
       .then(() => finalizeTraining({ jobId, runId, code, signal, state: getState(), stallKilled }))
+      .then(() => {
+        // Wake the display now the run is over so the user sees the result —
+        // but NOT on a stall-watchdog auto-resume (stallKilled), which re-spawns
+        // and re-sleeps the display for the next attempt. Best-effort, darwin-only.
+        if (!stallKilled) wakeDisplay(settings);
+      })
       .catch((err) => {
         console.error(`❌ training [${shortId(jobId)}] finalize failed: ${err?.message}`);
         fail(`finalize failed: ${err?.message}`);
