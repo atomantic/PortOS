@@ -46,6 +46,8 @@ import {
 } from '../lib/storyBuilderSteps.js';
 import { hashUpstream, computeStaleSteps, computeSyncDrift } from '../lib/storyBuilderIntegrity.js';
 import { getStoryBuilderStore } from './storyBuilderStore/store.js';
+import { listIngredients, linkIngredientsToSeries } from './catalogDB.js';
+import { getCatalogType } from '../lib/catalogTypes.js';
 import { createUniverse, deleteUniverse, getUniverse, updateUniverse } from './universeBuilder.js';
 import { expandWorldTemplate } from './universeBuilderExpand.js';
 import { refineWorldPrompts } from './universeBuilderRefine.js';
@@ -74,6 +76,60 @@ const SESSION_ID_RE = /^stb-[A-Za-z0-9-]+$/;
 export const TITLE_MAX = 200;
 export const SEED_MAX = 4000;
 export const INTAKE_MODES = Object.freeze(['seed', 'import']);
+
+// Group → header label for the composed fallback seed. Prefer the catalog
+// registry's canonical label (so idea/scene/concept get proper plurals and
+// match the client's prefill), naive-pluralizing a user-defined type's id as a
+// fallback. Mirrors `seedGroupHeading` in client StoryBuilder.jsx.
+function seedGroupHeading(type) {
+  const label = getCatalogType(type)?.label;
+  const base = label || (isStr(type) && type ? `${type.charAt(0).toUpperCase()}${type.slice(1)}` : 'Other');
+  return base.endsWith('s') ? base : `${base}s`;
+}
+
+// Compose a fallback seed string from resolved catalog ingredients (#1761),
+// used when the user supplies ingredients but no seedIdea so the minted
+// universe/series shells aren't empty. Groups by type with a header line per
+// group and one `- {name}: {summary}` bullet per ingredient (summary = first
+// ~120 chars of the payload's description/summary/text; omitted, with the
+// `: `, when empty). Capped at SEED_MAX with a trailing ellipsis on overflow.
+function composeSeedFromIngredients(ingredients) {
+  const byType = new Map();
+  for (const ing of ingredients) {
+    const list = byType.get(ing.type) || [];
+    list.push(ing);
+    byType.set(ing.type, list);
+  }
+  const lines = [];
+  for (const [type, list] of byType) {
+    lines.push(`${seedGroupHeading(type)}:`);
+    for (const ing of list) {
+      const p = ing.payload && typeof ing.payload === 'object' ? ing.payload : {};
+      const raw = isStr(p.description) ? p.description
+        : isStr(p.summary) ? p.summary
+        : isStr(p.text) ? p.text : '';
+      const summary = raw.trim().slice(0, 120).trim();
+      lines.push(summary ? `- ${ing.name}: ${summary}` : `- ${ing.name}`);
+    }
+  }
+  const composed = lines.join('\n');
+  if (composed.length <= SEED_MAX) return composed;
+  return `${composed.slice(0, SEED_MAX - 1)}…`;
+}
+
+// Resolve the selected catalog ingredient ids to live ingredient records in a
+// single batch query (`listIngredients({ ids })` already excludes soft-deleted
+// rows), then re-order to the caller's pick order so the composed seed reads in
+// the order the user selected. Missing/deleted ids are simply absent and skipped.
+async function resolveCatalogIngredients(ids) {
+  const list = (Array.isArray(ids) ? ids : [])
+    .filter((id) => isStr(id) && id.trim())
+    .map((id) => id.trim());
+  if (list.length === 0) return [];
+  const { items } = await listIngredients({ ids: list, limit: list.length });
+  const byId = new Map(items.map((ing) => [ing.id, ing]));
+  return list.map((id) => byId.get(id)).filter(Boolean);
+}
 
 // Steps the importer actually pre-fills, so they open "ready" for review on an
 // import-mode session. `idea` (universe + series exist), `plotArc` (arc +
@@ -208,8 +264,21 @@ export async function createStorySession(input = {}) {
 
   let universeId = trimTo(input.universeId, 64) || null;
   let seriesId = trimTo(input.seriesId, 64) || null;
+  // Seed used to mint the shells: the user's seedIdea, or — when they picked
+  // Catalog ingredients but typed no seed — a fallback composed from those
+  // ingredients (#1761). In the normal (no-ingredients) case this equals
+  // seedIdea, so the create path is byte-for-byte unchanged.
+  let effectiveSeed = seedIdea;
 
   if (intakeMode === 'seed') {
+    // Resolve any selected catalog ingredients up front: they feed both the
+    // fallback seed (so the minted shells aren't empty) and the series links
+    // created once the series exists. Missing/deleted ids are skipped.
+    const ingredients = await resolveCatalogIngredients(input.catalogIngredientIds);
+    if (!effectiveSeed && ingredients.length > 0) {
+      effectiveSeed = composeSeedFromIngredients(ingredients);
+    }
+
     // Mint the shells the wizard fills in. The universe name doubles as the
     // working title; the seed idea seeds the universe starter prompt.
     //
@@ -220,12 +289,12 @@ export async function createStorySession(input = {}) {
     // touch a universe the caller passed in (`input.universeId`).
     let mintedUniverseId = null;
     if (!universeId) {
-      const universe = await createUniverse({ name: title, starterPrompt: seedIdea || '' });
+      const universe = await createUniverse({ name: title, starterPrompt: effectiveSeed || '' });
       universeId = universe.id;
       mintedUniverseId = universe.id;
     }
     if (!seriesId) {
-      const series = await createSeries({ name: title, universeId, premise: seedIdea || '' }).catch(async (err) => {
+      const series = await createSeries({ name: title, universeId, premise: effectiveSeed || '' }).catch(async (err) => {
         if (mintedUniverseId) {
           // Roll back the just-created universe so a failed session create
           // doesn't leave a stray (and already peer-subscribed) shell behind.
@@ -236,6 +305,14 @@ export async function createStorySession(input = {}) {
         throw err;
       });
       seriesId = series.id;
+    }
+
+    // Link the resolved ingredients to the (now-existing) series via
+    // catalog_ingredient_refs — the convergence contract's single data model.
+    // Role maps from the ingredient type; unknown types link as 'mentioned'.
+    if (ingredients.length > 0) {
+      const linked = await linkIngredientsToSeries(seriesId, ingredients);
+      console.log(`🔗 StoryBuilder: linked ${linked.length} catalog ingredient(s) to series ${seriesId}`);
     }
   }
 

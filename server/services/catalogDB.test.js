@@ -61,6 +61,21 @@ afterAll(async () => {
   await close();
 });
 
+// Pure helper — the type→series-role vocabulary (#1761). No DB, so it runs in
+// the normal (non-test:db) suite and stays the single source of truth for the
+// roles every remix target uses when attaching ingredients to a series.
+describe('seriesRefRoleForType', () => {
+  it('maps known types to canon roles and everything else to mentioned', () => {
+    expect(catalogDB.seriesRefRoleForType('character')).toBe('cast');
+    expect(catalogDB.seriesRefRoleForType('place')).toBe('canon-place');
+    expect(catalogDB.seriesRefRoleForType('object')).toBe('canon-object');
+    expect(catalogDB.seriesRefRoleForType('scene')).toBe('mentioned');
+    expect(catalogDB.seriesRefRoleForType('idea')).toBe('mentioned');
+    expect(catalogDB.seriesRefRoleForType('faction')).toBe('mentioned'); // user-defined
+    expect(catalogDB.seriesRefRoleForType(undefined)).toBe('mentioned');
+  });
+});
+
 describe.skipIf(!dbReady)('catalogDB (Postgres CRUD round-trip)', () => {
   it('creates and reads back an ingredient with payload + tags', async () => {
     if (!requireDb('create/get ingredient')) return;
@@ -185,6 +200,32 @@ describe.skipIf(!dbReady)('catalogDB (Postgres CRUD round-trip)', () => {
     expect(full.embedding).toHaveLength(768);
   });
 
+  it('lists by ids (batch fetch), excludes soft-deleted, and ignores type/tag (#1761)', async () => {
+    if (!requireDb('list by ids')) return;
+    const a = await catalogDB.createIngredient({ type: 'character', name: 'Batch Alpha', tags: ['hero'] });
+    const b = await catalogDB.createIngredient({ type: 'place', name: 'Batch Beta' });
+    const gone = await catalogDB.createIngredient({ type: 'object', name: 'Batch Gone' });
+    createdIngredientIds.add(a.id);
+    createdIngredientIds.add(b.id);
+    createdIngredientIds.add(gone.id);
+    await catalogDB.deleteIngredient(gone.id);
+
+    // ids returns exactly the requested non-deleted rows...
+    const { items } = await catalogDB.listIngredients({ ids: [a.id, b.id, gone.id, 'cat-missing'], limit: 200 });
+    const got = new Set(items.map((i) => i.id));
+    expect(got.has(a.id)).toBe(true);
+    expect(got.has(b.id)).toBe(true);
+    // ...and never the soft-deleted or unknown ids.
+    expect(got.has(gone.id)).toBe(false);
+    expect(got.has('cat-missing')).toBe(false);
+
+    // ids takes precedence over type/tag — a mismatched type filter is ignored.
+    const { items: precedence } = await catalogDB.listIngredients({
+      ids: [a.id, b.id], type: 'object', tag: 'nonexistent', limit: 200,
+    });
+    expect(new Set(precedence.map((i) => i.id))).toEqual(new Set([a.id, b.id]));
+  });
+
   it('links an ingredient to a ref, lists both directions, then soft-unlinks', async () => {
     if (!requireDb('ref link/unlink')) return;
     const ing = await catalogDB.createIngredient({ type: 'character', name: 'Linker McRef' });
@@ -206,6 +247,27 @@ describe.skipIf(!dbReady)('catalogDB (Postgres CRUD round-trip)', () => {
     // Live list paths hide tombstoned links.
     expect(await catalogDB.listRefsForIngredient(ing.id)).toHaveLength(0);
     expect(await catalogDB.listIngredientsForRef('series', refId)).toHaveLength(0);
+  });
+
+  it('linkIngredientsToSeries batch-links a mixed set with type-mapped roles (#1761)', async () => {
+    if (!requireDb('batch link to series')) return;
+    const chr = await catalogDB.createIngredient({ type: 'character', name: 'Batch Mira' });
+    const plc = await catalogDB.createIngredient({ type: 'place', name: 'Batch Foundry' });
+    const scn = await catalogDB.createIngredient({ type: 'scene', name: 'Batch Opening' });
+    [chr, plc, scn].forEach((i) => createdIngredientIds.add(i.id));
+    const seriesId = `series-batch-${chr.id}`;
+
+    const linked = await catalogDB.linkIngredientsToSeries(seriesId, [chr, plc, scn]);
+    expect(linked).toHaveLength(3);
+
+    const forRef = await catalogDB.listIngredientsForRef('series', seriesId);
+    const roleById = Object.fromEntries(forRef.map((r) => [r.ingredient.id, r.role]));
+    expect(roleById[chr.id]).toBe('cast');
+    expect(roleById[plc.id]).toBe('canon-place');
+    expect(roleById[scn.id]).toBe('mentioned');
+
+    // Empty / id-less input is a no-op.
+    expect(await catalogDB.linkIngredientsToSeries(seriesId, [])).toEqual([]);
   });
 
   it('creates a scrap, links it as an ingredient source, and hydrates it back', async () => {

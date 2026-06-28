@@ -10,6 +10,9 @@ export const listStorySessions = (options = {}) => request('/story-builder', opt
 
 export const getStorySession = (id, options = {}) => request(`/story-builder/${id}`, options);
 
+// payload accepts { title, intakeMode, seedIdea, universeId, seriesId, llm, ... }
+// plus an optional `catalogIngredientIds: string[]` (max 50) — the Catalog
+// "Remix into… → Story Builder" handoff seeds the new session from these.
 export const createStorySession = (payload, options = {}) => request('/story-builder', {
   method: 'POST',
   body: JSON.stringify(payload),

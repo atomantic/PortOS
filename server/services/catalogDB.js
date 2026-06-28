@@ -700,23 +700,32 @@ const THUMBNAIL_KEY_SUBQUERY = `(
      LIMIT 1
   ) AS thumbnail_key`;
 
-export async function listIngredients({ type, tag, query: q, limit = 50, offset = 0, includeEmbedding = false, embeddingMissing = false, staleEmbeddingModel = null } = {}) {
+export async function listIngredients({ ids, type, tag, query: q, limit = 50, offset = 0, includeEmbedding = false, embeddingMissing = false, staleEmbeddingModel = null } = {}) {
   const conditions = ['deleted = false'];
   const params = [];
   let idx = 1;
-  if (type) {
-    conditions.push(`type = $${idx++}`);
-    params.push(type);
-  }
-  if (tag) {
-    conditions.push(`$${idx++} = ANY(tags)`);
-    params.push(tag);
-  }
+  // Batch-fetch by id (Story Builder catalog→series linking, #1761). When
+  // present, `ids` takes precedence over type/tag/q — they're skipped so the
+  // caller gets exactly the requested (still non-deleted) rows.
+  const byIds = Array.isArray(ids) && ids.length > 0;
   let qIdx = null;
-  if (q) {
-    qIdx = idx++;
-    conditions.push(`search_tsv @@ websearch_to_tsquery('english', $${qIdx})`);
-    params.push(q);
+  if (byIds) {
+    conditions.push(`id = ANY($${idx++})`);
+    params.push(ids);
+  } else {
+    if (type) {
+      conditions.push(`type = $${idx++}`);
+      params.push(type);
+    }
+    if (tag) {
+      conditions.push(`$${idx++} = ANY(tags)`);
+      params.push(tag);
+    }
+    if (q) {
+      qIdx = idx++;
+      conditions.push(`search_tsv @@ websearch_to_tsquery('english', $${qIdx})`);
+      params.push(q);
+    }
   }
   if (embeddingMissing) {
     conditions.push('embedding IS NULL');
@@ -897,6 +906,28 @@ export async function linkIngredientToRef(ingredientId, refKind, refId, role) {
        SET deleted = false, deleted_at = NULL`,
     [ingredientId, refKind, refId, role],
   );
+}
+
+// Catalog ingredient `type` → series ref role (#1761). Anything outside this
+// map (idea/scene/user-defined types) links as a generic 'mentioned' ref.
+// Lives here, next to the link primitive, so every remix target that attaches
+// ingredients to a series shares one role vocabulary instead of inlining its own.
+const SERIES_REF_ROLE_BY_TYPE = Object.freeze({
+  character: 'cast',
+  place: 'canon-place',
+  object: 'canon-object',
+});
+export const seriesRefRoleForType = (type) => SERIES_REF_ROLE_BY_TYPE[type] || 'mentioned';
+
+// Link a batch of already-resolved catalog ingredients to a series via
+// catalog_ingredient_refs (#1761) — the convergence contract's single data
+// model. The inserts are mutually independent, so they fan out. Returns the
+// ingredients actually linked (those with an id).
+export async function linkIngredientsToSeries(seriesId, ingredients = []) {
+  const list = Array.isArray(ingredients) ? ingredients.filter((ing) => ing && ing.id) : [];
+  if (list.length === 0) return [];
+  await Promise.all(list.map((ing) => linkIngredientToRef(ing.id, 'series', seriesId, seriesRefRoleForType(ing.type))));
+  return list;
 }
 
 export async function unlinkIngredientFromRef(ingredientId, refKind, refId, role) {

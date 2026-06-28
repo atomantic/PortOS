@@ -276,6 +276,16 @@ export const catalogRevisionRestoreSchema = z.object({
 }).strict();
 
 export const catalogIngredientQuerySchema = z.object({
+  // Batch-fetch by id. The wire form is a CSV string (`?ids=a,b,c`); we
+  // preprocess it into a trimmed, empties-dropped, ≤50 string[]. An empty/
+  // all-blank CSV collapses to `undefined` so the field reads cleanly as
+  // absent (the route/service then falls through to the type/tag/q filters).
+  // When present, `ids` takes precedence over type/tag/q in `listIngredients`.
+  ids: z.preprocess((v) => {
+    if (typeof v !== 'string') return v;
+    const parts = v.split(',').map((s) => s.trim()).filter(Boolean).slice(0, 50);
+    return parts.length ? parts : undefined;
+  }, z.array(z.string().trim().min(1).max(64)).max(50).optional()),
   type: ingredientTypeGate.optional(),
   tag: tag.optional(),
   q: z.string().trim().max(500).optional(),

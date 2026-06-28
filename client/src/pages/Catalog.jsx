@@ -9,8 +9,8 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import { Link } from 'react-router-dom';
-import { Sparkles, Plus, Search, FileInput, Trash2, Loader2, RefreshCw } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
+import { Sparkles, Plus, Search, FileInput, Trash2, Loader2, RefreshCw, Wand2, X } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import {
   listCatalogIngredients,
@@ -61,11 +61,26 @@ function CardThumb({ mediaKey, alt }) {
   );
 }
 
+// Remix targets — destinations the user can hand a multi-selected set of
+// ingredients off to. Today there's only Story Builder; the array shape keeps a
+// second target a one-line addition. The handoff state is intentionally generic
+// (`remix.ingredientIds`), NOT story-builder-specific, so a new destination just
+// reads the same key. Each target's `to` is the route to navigate to.
+const REMIX_TARGETS = [
+  { id: 'story-builder', label: 'Story Builder', to: '/story-builder' },
+];
+
 export default function Catalog() {
+  const navigate = useNavigate();
   // Merged type registry (system + user-defined). `types` drives the filter
   // chips + the New-form dropdown; `getType` resolves badge/primary-content.
   const { types: TYPES, getType } = useCatalogTypes();
   const [items, setItems] = useState([]);
+  // Multi-select for "Remix into…". A Set of selected ingredient ids; selection
+  // is a distinct gesture from opening a card (which navigates to the detail
+  // page), so the per-card checkbox stops propagation.
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [remixMenuOpen, setRemixMenuOpen] = useState(false);
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [selectedType, setSelectedType] = useState('');
@@ -165,6 +180,14 @@ export default function Catalog() {
 
   const confirmDelete = async (it) => {
     setArmedId(null);
+    // A deleted ingredient can't be remixed — drop it from the selection so the
+    // action bar count stays honest.
+    setSelectedIds((prev) => {
+      if (!prev.has(it.id)) return prev;
+      const next = new Set(prev);
+      next.delete(it.id);
+      return next;
+    });
     // Capture the original index so a failed delete restores in place rather
     // than jumping the row to the top of the list.
     const originalIdx = items.findIndex((x) => x.id === it.id);
@@ -223,6 +246,30 @@ export default function Catalog() {
   const closeForm = () => {
     setForm((f) => ({ type: f.type, name: '', content: '' }));
     setShowForm(false);
+  };
+
+  // ── Multi-select "Remix into…" ────────────────────────────────────────────
+  const toggleSelect = (id) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const clearSelection = () => {
+    setSelectedIds(new Set());
+    setRemixMenuOpen(false);
+  };
+
+  // Hand the selected ids off to the chosen target with a GENERIC state key
+  // (`remix.ingredientIds`) so any future destination reads the same shape.
+  const handleRemix = (target) => {
+    const ingredientIds = [...selectedIds];
+    if (ingredientIds.length === 0) return;
+    setRemixMenuOpen(false);
+    navigate(target.to, { state: { remix: { ingredientIds } } });
   };
 
   return (
@@ -389,16 +436,35 @@ export default function Catalog() {
         <ul className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
           {items.map((it) => {
             const armed = armedId === it.id;
+            const selected = selectedIds.has(it.id);
             const name = it.name || '(untitled)';
             // The card is one big Link so clicking anywhere (name, badge, tags,
-            // snippet, empty body) opens the editor. The delete control sits in
-            // absolute-positioned overlay so it intercepts clicks before they
-            // bubble to the link.
+            // snippet, empty body) opens the editor. The delete control + the
+            // selection checkbox sit in absolute-positioned overlays (siblings
+            // of the Link, not descendants) so their clicks never bubble to the
+            // anchor; the checkbox also stops propagation defensively.
             return (
-              <li key={it.id} className="relative bg-port-card border border-port-border rounded-lg hover:border-port-accent/60 transition-colors">
+              <li
+                key={it.id}
+                className={`relative bg-port-card border rounded-lg transition-colors ${
+                  selected
+                    ? 'border-port-accent ring-1 ring-port-accent'
+                    : 'border-port-border hover:border-port-accent/60'
+                }`}
+              >
+                <span className="absolute top-2 left-2 z-10 flex items-center justify-center rounded bg-port-card/90 border border-port-border">
+                  <input
+                    type="checkbox"
+                    checked={selected}
+                    onChange={() => toggleSelect(it.id)}
+                    onClick={(e) => e.stopPropagation()}
+                    aria-label={`Select ${name}`}
+                    className="w-4 h-4 m-1 accent-port-accent cursor-pointer"
+                  />
+                </span>
                 <Link
                   to={`/catalog/${encodeURIComponent(it.type)}/${encodeURIComponent(it.id)}`}
-                  className={`flex gap-3 p-3 min-h-[88px] ${armed ? 'pr-32' : 'pr-10'}`}
+                  className={`flex gap-3 p-3 pl-10 min-h-[88px] ${armed ? 'pr-32' : 'pr-10'}`}
                 >
                   <CardThumb mediaKey={it.thumbnailKey} alt={name} />
                   <span className="flex flex-col gap-2 min-w-0 flex-1">
@@ -454,6 +520,55 @@ export default function Catalog() {
             );
           })}
         </ul>
+      )}
+
+      {selectedIds.size > 0 && (
+        <div className="sticky bottom-0 left-0 right-0 mt-4 -mx-4 md:-mx-6 px-4 md:px-6 py-3 bg-port-card/95 backdrop-blur border-t border-port-border flex items-center justify-between gap-3 flex-wrap z-20">
+          <span className="text-sm text-white font-medium">
+            {selectedIds.size} selected
+          </span>
+          <div className="flex items-center gap-2">
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setRemixMenuOpen((o) => !o)}
+                aria-haspopup="menu"
+                aria-expanded={remixMenuOpen}
+                className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-port-accent hover:bg-port-accent/90 text-white text-sm font-medium"
+              >
+                <Wand2 size={16} aria-hidden="true" />
+                Remix into…
+              </button>
+              {remixMenuOpen && (
+                <ul
+                  role="menu"
+                  className="absolute right-0 bottom-full mb-2 min-w-[180px] bg-port-card border border-port-border rounded-lg shadow-lg overflow-hidden"
+                >
+                  {REMIX_TARGETS.map((t) => (
+                    <li key={t.id} role="none">
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => handleRemix(t)}
+                        className="w-full text-left px-3 py-2 text-sm text-gray-200 hover:bg-port-bg hover:text-white"
+                      >
+                        {t.label}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={clearSelection}
+              className="inline-flex items-center gap-1 px-3 py-2 rounded-lg border border-port-border text-gray-300 hover:text-white text-sm"
+            >
+              <X size={16} aria-hidden="true" />
+              Clear
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );
