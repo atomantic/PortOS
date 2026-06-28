@@ -57,7 +57,27 @@ const SECTION_WINDOW_SEC = 0.5;
 const MIN_SECTION_SEC = 8;
 const MAX_SECTIONS = 8;
 
-const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+// Minimum normalized autocorrelation peak (`ac[lag] / ac[0]`) to accept a
+// tempo. Below this the "peak" is just the strongest lag of essentially
+// structureless audio (white noise, near-silence) — reporting a confident BPM
+// there is worse than reporting none. Clean periodic input sits well above it
+// (click tracks measure 0.4–0.9); white noise measures ~0.23.
+const TEMPO_PEAK_MIN = 0.3;
+
+// Hann window cached per length. Windowing each analysis frame before measuring
+// energy suppresses the spectral-leakage ripple a steady tone otherwise beats
+// against the frame grid — without it, a sustained pure tone produces a periodic
+// onset envelope and a confident-but-bogus tempo. Broadband transients (the
+// actual beats) survive windowing, so click/percussion detection is unaffected.
+const hannCache = new Map();
+const hannWindow = (len) => {
+  let w = hannCache.get(len);
+  if (w) return w;
+  w = new Float32Array(len);
+  for (let i = 0; i < len; i++) w[i] = 0.5 * (1 - Math.cos((2 * Math.PI * i) / (len - 1)));
+  hannCache.set(len, w);
+  return w;
+};
 
 /**
  * Decode an audio file to a mono Float32Array at ANALYSIS_SAMPLE_RATE via
@@ -134,10 +154,11 @@ export async function decodeAudioToPcm(audioPath, { signal } = {}) {
 function onsetEnvelope(samples, sampleRate, hop = ONSET_HOP) {
   const frameCount = Math.floor(samples.length / hop);
   const energy = new Float32Array(frameCount);
+  const win = hannWindow(hop);
   for (let f = 0; f < frameCount; f++) {
     let sum = 0;
     const base = f * hop;
-    for (let i = 0; i < hop; i++) { const s = samples[base + i]; sum += s * s; }
+    for (let i = 0; i < hop; i++) { const s = samples[base + i] * win[i]; sum += s * s; }
     energy[f] = Math.sqrt(sum / hop);
   }
   const onset = new Float32Array(frameCount);
@@ -148,12 +169,23 @@ function onsetEnvelope(samples, sampleRate, hop = ONSET_HOP) {
   return { onset, energy, fps: sampleRate / hop, frameCount };
 }
 
+// Fractional-lag step (frames) for the tempo autocorrelation scan. Scanning the
+// period continuously instead of at integer lags is what makes the estimate
+// robust: a true beat period of, say, 18.46 frames lands between integer lags,
+// so integer-lag autocorrelation smears its peak across lags 18 and 19 (each
+// weakened) while the sharper half-tempo lag wins — the classic half-tempo
+// octave error. Interpolating at 0.25-frame resolution recovers the full
+// fundamental peak, so both the significance gate and the octave fold judge it
+// fairly.
+const TEMPO_LAG_STEP = 0.25;
+
 /**
- * Estimate tempo (BPM) and the integer lag (in frames) by tempo-weighted
- * autocorrelation of the onset envelope. The envelope is zero-meaned first so
- * the silence floor between hits doesn't bias the correlation toward a DC peak.
- * Returns `{ bpm: null, lag: null }` when the envelope carries no usable
- * periodicity (e.g. silence).
+ * Estimate tempo (BPM) and the beat period (in fractional frames) by
+ * tempo-weighted, sub-frame autocorrelation of the onset envelope. The envelope
+ * is zero-meaned first so the silence floor between hits doesn't bias the
+ * correlation toward a DC peak. Returns `{ bpm: null, lag: null }` when the
+ * envelope carries no usable periodicity (silence, or structureless input whose
+ * strongest peak is below the significance floor).
  */
 function estimateTempo(onset, fps) {
   const n = onset.length;
@@ -166,59 +198,75 @@ function estimateTempo(onset, fps) {
   for (let i = 0; i < n; i++) { o[i] = onset[i] - mean; variance += o[i] * o[i]; }
   if (variance <= 1e-9) return { bpm: null, lag: null };
 
-  const minLag = Math.max(1, Math.floor((60 * fps) / MAX_BPM));
-  const maxLag = Math.min(n - 1, Math.ceil((60 * fps) / MIN_BPM));
-  // Single autocorrelation pass: compute each lag's correlation once into `ac`
-  // (indexed by lag) so the parabolic step below is array lookups, not three
-  // more O(n) recomputations.
-  const acLag = (lag) => {
+  // Autocorrelation at a fractional lag via linear interpolation of the shifted
+  // envelope. `variance` is the zero-lag value (ac(0) = sum of squares).
+  const acFrac = (lag) => {
+    const lo = Math.floor(lag);
+    const frac = lag - lo;
     let sum = 0;
-    for (let i = 0; i + lag < n; i++) sum += o[i] * o[i + lag];
+    for (let i = 0; i + lo + 1 < n; i++) {
+      sum += o[i] * (o[i + lo] * (1 - frac) + o[i + lo + 1] * frac);
+    }
     return sum;
   };
-  const ac = new Float64Array(maxLag + 1);
+
+  const minLag = Math.max(1, (60 * fps) / MAX_BPM);
+  const maxLag = Math.min(n - 2, (60 * fps) / MIN_BPM);
   let bestLag = -1;
   let bestScore = -Infinity;
-  for (let lag = minLag; lag <= maxLag; lag++) {
-    ac[lag] = acLag(lag);
+  let bestAc = 0;
+  for (let lag = minLag; lag <= maxLag; lag += TEMPO_LAG_STEP) {
+    const ac = acFrac(lag);
     const bpm = (60 * fps) / lag;
     const octaves = Math.log2(bpm / PREFERRED_BPM);
     const weight = Math.exp(-0.5 * (octaves / TEMPO_PREF_SIGMA) ** 2);
-    const score = ac[lag] * weight;
-    if (score > bestScore) { bestScore = score; bestLag = lag; }
+    const score = ac * weight;
+    if (score > bestScore) { bestScore = score; bestLag = lag; bestAc = ac; }
   }
   if (bestLag < 0 || bestScore <= 0) return { bpm: null, lag: null };
 
-  const acAt = (lag) => {
-    if (lag < 1 || lag >= n) return 0;
-    return lag >= minLag && lag <= maxLag ? ac[lag] : acLag(lag);
+  // Significance gate. Structureless input (white noise) still has a strongest
+  // lag, but it sits far below a real periodicity — emit `null` rather than a
+  // confident bogus tempo + beat grid. Judge the raw strongest peak (the true
+  // fundamental OR its half-tempo harmonic, whichever scored highest); octave
+  // correction below then settles on the right fundamental.
+  if (bestAc / variance < TEMPO_PEAK_MIN) return { bpm: null, lag: null };
+
+  // Octave correction via a phase-aligned pulse-train comb. Autocorrelation
+  // peaks at every multiple of the true period, so it cannot by itself tell a
+  // period from its half/double — and the tempo weight can tip the pick to the
+  // wrong octave (90 over 180), or a fixed AC ratio fails when a fixture's
+  // half-tempo lag simply correlates higher than its fundamental. A comb does
+  // distinguish them: a pulse train at the TRUE period lands on every onset,
+  // while one at double the period misses every other onset (~half the energy)
+  // and one at half the period adds only near-empty slots. So `combSum` rises
+  // as the period halves and then plateaus at the true period — its "knee".
+  // Pick the LONGEST period (slowest tempo) on that plateau among the octave
+  // candidates of `bestLag` that fall in range.
+  const combSum = (period) => {
+    const maxOff = Math.ceil(period);
+    let best = 0;
+    for (let off = 0; off < maxOff; off++) {
+      let sum = 0;
+      for (let pos = off; pos < n; pos += period) sum += onset[Math.round(pos)] || 0;
+      if (sum > best) best = sum;
+    }
+    return best;
   };
+  const candidates = [];
+  for (let L = bestLag; L >= minLag; L /= 2) candidates.push(L);
+  for (let L = bestLag * 2; L <= maxLag; L *= 2) candidates.push(L);
+  const combByLag = new Map(candidates.map((L) => [L, combSum(L)]));
+  const maxComb = Math.max(...combByLag.values());
+  // The knee: the longest period (slowest tempo) clearing 90% of the peak comb
+  // energy. A half-tempo AC winner folds up to the fundamental (its comb is
+  // ~half, below the cutoff), and a genuinely slow tempo is not pushed faster
+  // (its own period already sits on the plateau).
+  bestLag = candidates
+    .filter((L) => combByLag.get(L) >= 0.9 * maxComb)
+    .reduce((longest, L) => (L > longest ? L : longest), 0) || bestLag;
 
-  // Octave correction (half-tempo fold-down). Autocorrelation peaks at EVERY
-  // multiple of the true period, so the half-tempo lag (2× the true period) is
-  // itself a valid peak — and frame quantization smears a non-integer true
-  // period across two integer lags, dropping its value below the sharper
-  // half-tempo peak. The weighted score then picks half tempo (e.g. 140 BPM
-  // read as ~70). Fold down while half the chosen lag is still a strong peak:
-  // if `bestLag` were the true fundamental, its half-lag would sit on a trough
-  // (low/negative), so a strong peak there means the shorter period is the real
-  // one. The inverse error (picking double tempo) can't occur from AC alone.
-  const peakNear = (lag) => Math.max(acAt(Math.floor(lag)), acAt(Math.ceil(lag)));
-  while (bestLag / 2 >= minLag && peakNear(bestLag / 2) >= 0.5 * ac[bestLag]) {
-    bestLag = Math.round(bestLag / 2);
-  }
-
-  // Parabolic interpolation around the integer-lag peak for sub-frame tempo
-  // precision (raw integer lags quantize BPM coarsely at high tempo). Reuse the
-  // stored autocorrelation; only the rare boundary neighbor needs a fresh pass.
-  const ym = acAt(bestLag - 1);
-  const y0 = ac[bestLag];
-  const yp = acAt(bestLag + 1);
-  const denom = ym - 2 * y0 + yp;
-  let refinedLag = bestLag;
-  if (denom !== 0) refinedLag = bestLag + clamp(0.5 * (ym - yp) / denom, -0.5, 0.5);
-
-  const bpm = (60 * fps) / refinedLag;
+  const bpm = (60 * fps) / bestLag;
   return { bpm, lag: bestLag };
 }
 
