@@ -47,7 +47,7 @@ import {
 import { hashUpstream, computeStaleSteps, computeSyncDrift } from '../lib/storyBuilderIntegrity.js';
 import { getStoryBuilderStore } from './storyBuilderStore/store.js';
 import { listIngredients, linkIngredientsToSeries } from './catalogDB.js';
-import { getCatalogType } from '../lib/catalogTypes.js';
+import { getCatalogType, payloadSnippet } from '../lib/catalogTypes.js';
 import { createUniverse, deleteUniverse, getUniverse, updateUniverse } from './universeBuilder.js';
 import { expandWorldTemplate } from './universeBuilderExpand.js';
 import { refineWorldPrompts } from './universeBuilderRefine.js';
@@ -90,9 +90,9 @@ function seedGroupHeading(type) {
 // Compose a fallback seed string from resolved catalog ingredients (#1761),
 // used when the user supplies ingredients but no seedIdea so the minted
 // universe/series shells aren't empty. Groups by type with a header line per
-// group and one `- {name}: {summary}` bullet per ingredient (summary = first
-// ~120 chars of the payload's description/summary/text; omitted, with the
-// `: `, when empty). Capped at SEED_MAX with a trailing ellipsis on overflow.
+// group and one `- {name}: {summary}` bullet per ingredient (summary via
+// payloadSnippet — the type's snippetFallbackKeys, ~120 chars; omitted, with
+// the `: `, when empty). Capped at SEED_MAX with a trailing ellipsis on overflow.
 function composeSeedFromIngredients(ingredients) {
   const byType = new Map();
   for (const ing of ingredients) {
@@ -104,11 +104,9 @@ function composeSeedFromIngredients(ingredients) {
   for (const [type, list] of byType) {
     lines.push(`${seedGroupHeading(type)}:`);
     for (const ing of list) {
-      const p = ing.payload && typeof ing.payload === 'object' ? ing.payload : {};
-      const raw = isStr(p.description) ? p.description
-        : isStr(p.summary) ? p.summary
-        : isStr(p.text) ? p.text : '';
-      const summary = raw.trim().slice(0, 120).trim();
+      // payloadSnippet follows the type's snippetFallbackKeys, so a character's
+      // body text (under `physicalDescription`, not `description`) is included.
+      const summary = payloadSnippet(ing.payload, ing.type, 120);
       lines.push(summary ? `- ${ing.name}: ${summary}` : `- ${ing.name}`);
     }
   }
