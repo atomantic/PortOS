@@ -24,7 +24,7 @@ import { memo, useEffect, useState } from 'react';
 import { ChevronDown, ChevronRight, Loader2, Pencil, Sliders, Trash2 } from 'lucide-react';
 import ToggleSwitch from '../../ToggleSwitch';
 import CheckKindBadge from './CheckKindBadge';
-import { SEVERITY_BADGE_CLASSES, checkMaturity, CHECK_NOISY_FP_RATE } from '../../../lib/editorialChecks';
+import { SEVERITY_BADGE_CLASSES, checkMaturity, CHECK_NOISY_DISMISSAL_RATE } from '../../../lib/editorialChecks';
 
 const SEVERITY_LEVELS = ['high', 'medium', 'low'];
 
@@ -34,7 +34,7 @@ const SEVERITY_LEVELS = ['high', 'medium', 'low'];
 const MATURITY_BADGE = {
   new: { label: 'untested', className: 'border-port-border text-gray-500', title: 'No findings yet — trust unknown' },
   unproven: { label: 'unproven', className: 'border-gray-500/40 text-gray-400', title: 'Too few findings to judge signal quality yet' },
-  noisy: { label: 'noisy', className: 'border-port-warning/40 text-port-warning', title: 'High false-positive rate — consider deprioritizing or muting' },
+  noisy: { label: 'noisy', className: 'border-port-warning/40 text-port-warning', title: 'You dismiss most of this check\'s findings — consider deprioritizing or muting' },
   reliable: { label: 'reliable', className: 'border-port-success/40 text-port-success', title: 'Proven sample the user mostly keeps' },
 };
 
@@ -72,14 +72,14 @@ function CheckMaturityStrip({ stats, pending = false }) {
             {findings} finding{findings === 1 ? '' : 's'}
           </span>
           <span aria-hidden="true">·</span>
-          <span title="Share of this check's findings the user dismissed">
+          <span
+            className={(dismissalRate || 0) >= CHECK_NOISY_DISMISSAL_RATE ? 'text-port-warning' : undefined}
+            title="Share of this check's findings the user dismissed (drives the noisy badge)"
+          >
             {pct(dismissalRate)} dismissed
           </span>
           <span aria-hidden="true">·</span>
-          <span
-            className={(falsePositiveRate || 0) >= CHECK_NOISY_FP_RATE ? 'text-port-warning' : undefined}
-            title="Share of this check's findings flagged false-positive"
-          >
+          <span title="Share of this check's findings flagged false-positive (a subset of dismissals)">
             {pct(falsePositiveRate)} FP
           </span>
         </>

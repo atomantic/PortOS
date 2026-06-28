@@ -174,11 +174,20 @@ describe('checkMaturity (#1629)', () => {
     expect(m.findings).toBe(CHECK_MATURITY_MIN_SAMPLE - 1);
   });
 
-  it('reports "noisy" once a proven sample crosses the false-positive threshold', () => {
+  it('reports "noisy" once a proven sample crosses the dismissal threshold', () => {
     const m = checkMaturity({ total: 10, dismissed: 6, falsePositive: 5 });
     expect(m.level).toBe('noisy');
     expect(m.falsePositiveRate).toBe(0.5);
     expect(m.dismissalRate).toBe(0.6);
+  });
+
+  it('reports "noisy" on a high dismissal rate even with zero false positives', () => {
+    // The user dismisses most findings for reasons other than "broken check" —
+    // still low-signal, so the badge must not stay "reliable".
+    const m = checkMaturity({ total: 10, dismissed: 8, falsePositive: 0 });
+    expect(m.level).toBe('noisy');
+    expect(m.dismissalRate).toBe(0.8);
+    expect(m.falsePositiveRate).toBe(0);
   });
 
   it('reports "reliable" for a proven, mostly-kept check', () => {
