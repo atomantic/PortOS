@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { writeFile, mkdtemp, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -136,8 +136,11 @@ describe('analyzeAudioFile (ffmpeg decode round-trip)', () => {
     ffmpeg = await findFfmpeg();
     if (ffmpeg) dir = await mkdtemp(join(tmpdir(), 'mv-audio-'));
   });
+  afterAll(async () => {
+    if (dir) await rm(dir, { recursive: true, force: true });
+  });
 
-  it.runIf(true)('decodes a WAV and recovers its tempo (skipped without ffmpeg)', async () => {
+  it('decodes a WAV and recovers its tempo (skipped without ffmpeg)', async () => {
     if (!ffmpeg) {
       console.log('⏭️  ffmpeg not found — skipping decode round-trip');
       return;
@@ -155,8 +158,6 @@ describe('analyzeAudioFile (ffmpeg decode round-trip)', () => {
     expect(result).not.toBeNull();
     expect(result.bpm).toBeGreaterThan(126);
     expect(result.bpm).toBeLessThan(130);
-
-    await rm(dir, { recursive: true, force: true });
   });
 
   it('returns null for a missing/garbage path', async () => {
