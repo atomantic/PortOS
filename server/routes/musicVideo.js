@@ -9,7 +9,6 @@
  */
 
 import { Router } from 'express';
-import { join } from 'path';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import {
   validateRequest,
