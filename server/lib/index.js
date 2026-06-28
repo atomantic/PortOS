@@ -26,6 +26,7 @@ export * as identityValidation from './identityValidation.js';
 export * as meatspaceValidation from './meatspaceValidation.js';
 export * as memoryValidation from './memoryValidation.js';
 export * as moodBoardValidation from './moodBoardValidation.js';
+export * as musicVideoValidation from './musicVideoValidation.js';
 export * as notesValidation from './notesValidation.js';
 export * as peerSyncValidation from './peerSyncValidation.js';
 export * as postValidation from './postValidation.js';

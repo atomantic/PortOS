@@ -58,6 +58,7 @@ export * from './apiRounds.js';
 export * from './apiPeerSync.js';
 export * from './apiSyncReview.js';
 export * from './apiCreativeDirector.js';
+export * from './apiMusicVideo.js';
 export * from './apiMoodBoard.js';
 export * from './apiImporter.js';
 export * from './apiStoryBuilder.js';
