@@ -135,6 +135,11 @@ export function applySceneUpdate(project, sceneId, patch) {
   const idx = scenes.findIndex((s) => s.sceneId === sceneId);
   if (idx < 0) throw new ServerError('Scene not found', { status: 404, code: 'NOT_FOUND' });
   const updated = { ...scenes[idx], ...data };
+  // The partial-patch schema can't enforce endSec >= startSec (the paired value
+  // may be unchanged on the record), so validate the merged range here.
+  if (updated.startSec != null && updated.endSec != null && updated.endSec < updated.startSec) {
+    throw new ServerError('endSec must be >= startSec', { status: 400, code: 'VALIDATION_ERROR' });
+  }
   const nextScenes = scenes.slice();
   nextScenes[idx] = updated;
   const next = touch(project, { scenes: nextScenes });
