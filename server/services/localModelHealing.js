@@ -92,6 +92,35 @@ export function computeProviderPatch(provider, installedIds, fallback, requested
   return patch;
 }
 
+// The base URL the local-backend manager actually talks to, normalized to a
+// bare origin (protocol+host+port, `/v1` and trailing slashes stripped).
+function managerOrigin(backend) {
+  const base = backend === 'ollama' ? ollamaManager.getBaseUrl() : lmStudioManager.getBaseUrl();
+  return normalizeOrigin(base);
+}
+
+function normalizeOrigin(url) {
+  const cleaned = String(url || '').replace(/\/v1\/?$/, '').replace(/\/+$/, '');
+  try { const u = new URL(cleaned); return `${u.protocol}//${u.host}`; } catch { return ''; }
+}
+
+/**
+ * True when the provider's configured endpoint points at the SAME instance the
+ * backend manager enumerates models from. The heal lists installed models via
+ * the singleton manager (bound to OLLAMA_URL / LM_STUDIO_URL), so if a provider
+ * is pointed at a *different* host/port we'd otherwise pick + persist a model
+ * installed on the wrong instance. When the origins disagree we decline to heal
+ * (return false) rather than corrupt the config. A provider with no explicit
+ * endpoint, or an unparseable URL on either side, is treated as a match —
+ * best-effort, since the common local setup shares the default URL.
+ */
+function endpointMatchesManager(backend, provider) {
+  const providerOrigin = normalizeOrigin(provider?.endpoint);
+  if (!providerOrigin) return true; // no/unparseable endpoint — uses the local default the manager also targets
+  const origin = managerOrigin(backend);
+  return !origin || origin === providerOrigin;
+}
+
 // Installed models that can actually serve a chat completion, freshly listed
 // (the configured model may have just been deleted, so bypass the cache).
 async function listInstalledChatModels(backend) {
@@ -118,6 +147,10 @@ export async function healMissingLocalModel({ provider, requestedModel }) {
   const backend = localBackendForProvider(provider);
   if (!backend) return null;
 
+  // Only enumerate/repoint when the provider talks to the same instance the
+  // manager lists from — otherwise we'd pick a model from the wrong backend.
+  if (!endpointMatchesManager(backend, provider)) return null;
+
   const installed = await listInstalledChatModels(backend);
   if (!installed.length) return null; // nothing installed — can't self-heal
 
@@ -127,24 +160,34 @@ export async function healMissingLocalModel({ provider, requestedModel }) {
   const fallback = chooseFallbackModel(installed);
   if (!fallback || fallback === requestedModel) return null;
 
+  // Persist the repoint so future runs use the real model. Track success: a
+  // failed write must NOT be reported as "updated the provider default" (the
+  // retry below still works for THIS run, but the bad config remains).
   const patch = computeProviderPatch(provider, installedIds, fallback, requestedModel);
+  let persisted = false;
   if (provider?.id && Object.keys(patch).length) {
-    await updateProvider(provider.id, patch).catch((err) => {
-      console.error(`⚠️ Failed to repoint ${provider.id} to ${fallback}: ${err.message}`);
-    });
+    persisted = await updateProvider(provider.id, patch)
+      .then(() => true)
+      .catch((err) => {
+        console.error(`⚠️ Failed to repoint ${provider.id} to ${fallback}: ${err.message}`);
+        return false;
+      });
   }
 
   const label = backend === 'ollama' ? 'Ollama' : 'LM Studio';
   const had = requestedModel ? `"${requestedModel}" isn't installed` : 'no model was configured';
-  const message = `${label} model ${had} — switched to "${fallback}" and updated the provider default.`;
-  emitLog('warn', message, { providerId: provider?.id, backend, requestedModel: requestedModel || null, fallbackModel: fallback });
+  const tail = persisted
+    ? 'and updated the provider default.'
+    : 'for this run (couldn\'t save the provider default — will retry the switch next time).';
+  const message = `${label} model ${had} — switched to "${fallback}" ${tail}`;
+  emitLog('warn', message, { providerId: provider?.id, backend, requestedModel: requestedModel || null, fallbackModel: fallback, persisted });
   await addNotification({
     type: NOTIFICATION_TYPES.AGENT_WARNING,
     title: 'Local model auto-corrected',
     description: message,
     priority: PRIORITY_LEVELS.LOW,
-    metadata: { providerId: provider?.id, backend, requestedModel: requestedModel || null, fallbackModel: fallback }
+    metadata: { providerId: provider?.id, backend, requestedModel: requestedModel || null, fallbackModel: fallback, persisted }
   }).catch((err) => console.error(`⚠️ heal notification failed: ${err.message}`));
 
-  return { healed: true, backend, model: fallback, previous: requestedModel || null, patch };
+  return { healed: true, backend, model: fallback, previous: requestedModel || null, patch, persisted };
 }

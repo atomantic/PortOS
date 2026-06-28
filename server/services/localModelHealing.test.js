@@ -17,12 +17,16 @@ vi.mock('./notifications.js', () => ({
 }));
 vi.mock('./ollamaManager.js', () => ({
   getInstalledModels: mocks.ollamaInstalled,
+  getBaseUrl: () => 'http://localhost:11434',
   // Mirror the real predicate so localBackendForProvider classifies correctly.
   isOllamaProvider: (p) => p?.id === 'ollama' ||
     /ollama/i.test(p?.name || '') ||
     /(^|[/:])(?:localhost|127\.0\.0\.1|\[::1\]):11434\b/i.test(String(p?.endpoint || ''))
 }));
-vi.mock('./lmStudioManager.js', () => ({ getAvailableModels: mocks.lmStudioAvailable }));
+vi.mock('./lmStudioManager.js', () => ({
+  getAvailableModels: mocks.lmStudioAvailable,
+  getBaseUrl: () => 'http://localhost:1234'
+}));
 
 const {
   localBackendForProvider,
@@ -147,10 +151,22 @@ describe('healMissingLocalModel', () => {
     const provider = { id: 'ollama', defaultModel: 'gone', models: ['gone'] };
     const result = await healMissingLocalModel({ provider, requestedModel: 'gone' });
 
-    expect(result).toMatchObject({ healed: true, backend: 'ollama', model: 'llama3.1:70b', previous: 'gone' });
+    expect(result).toMatchObject({ healed: true, backend: 'ollama', model: 'llama3.1:70b', previous: 'gone', persisted: true });
     expect(mocks.updateProvider).toHaveBeenCalledWith('ollama', expect.objectContaining({ defaultModel: 'llama3.1:70b' }));
     expect(mocks.addNotification).toHaveBeenCalledWith(expect.objectContaining({ type: 'agent_warning' }));
-    expect(mocks.emitLog).toHaveBeenCalledWith('warn', expect.stringContaining('llama3.1:70b'), expect.any(Object));
+    expect(mocks.emitLog).toHaveBeenCalledWith('warn', expect.stringContaining('updated the provider default'), expect.any(Object));
+  });
+
+  it('declines to heal when the provider endpoint points at a different instance', async () => {
+    // Ollama manager lists from localhost:11434; this provider is a remote
+    // Ollama on another host — healing from the local list would persist a
+    // model that isn't installed on the remote.
+    mocks.ollamaInstalled.mockResolvedValue([{ id: 'llama3.1:8b' }]);
+    const provider = { id: 'ollama', endpoint: 'http://10.0.0.5:11434/v1', defaultModel: 'gone', models: [] };
+    const result = await healMissingLocalModel({ provider, requestedModel: 'gone' });
+    expect(result).toBeNull();
+    expect(mocks.ollamaInstalled).not.toHaveBeenCalled();
+    expect(mocks.updateProvider).not.toHaveBeenCalled();
   });
 
   it('excludes LM Studio embedding models from the fallback pick', async () => {
@@ -163,11 +179,16 @@ describe('healMissingLocalModel', () => {
     expect(result.model).toBe('qwen2.5-7b-instruct');
   });
 
-  it('still returns the heal result when persistence fails (best-effort)', async () => {
+  it('returns persisted:false and does not claim the default was saved when persistence fails', async () => {
     mocks.ollamaInstalled.mockResolvedValue([{ id: 'llama3.1:8b' }]);
     mocks.updateProvider.mockRejectedValue(new Error('disk full'));
     const provider = { id: 'ollama', defaultModel: 'gone', models: [] };
     const result = await healMissingLocalModel({ provider, requestedModel: 'gone' });
-    expect(result).toMatchObject({ healed: true, model: 'llama3.1:8b' });
+    // The run still recovers (heal returns the working model)...
+    expect(result).toMatchObject({ healed: true, model: 'llama3.1:8b', persisted: false });
+    // ...but the user is NOT told the default was saved.
+    const [, message] = mocks.emitLog.mock.calls[0];
+    expect(message).toContain('for this run');
+    expect(message).not.toContain('updated the provider default');
   });
 });
