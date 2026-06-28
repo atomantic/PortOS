@@ -8,6 +8,8 @@ import {
   isEmbeddingModel,
   isVisionModel,
   visionLocalModelFilter,
+  isToolUseModel,
+  toolUseLocalModelFilter,
   localBackendForProvider,
   effectiveModelContextWindow,
   mergeModelLists,
@@ -216,6 +218,38 @@ describe('isVisionModel (mirror of server localModelHeuristics)', () => {
       expect(isVisionModel(id), id).toBe(false);
     }
     expect(isVisionModel(null)).toBe(false);
+  });
+});
+
+describe('isToolUseModel (mirror of server localModelHeuristics)', () => {
+  it('flags known tool-use-capable model ids', () => {
+    for (const id of [
+      'qwen2.5:7b', 'qwen3:32b', 'llama3.1:8b', 'llama3.3:70b',
+      'mistral-small:24b', 'mixtral:8x7b', 'command-r:35b', 'hermes3:8b', 'glm-4:9b', 'gpt-oss:20b',
+    ]) {
+      expect(isToolUseModel(id), id).toBe(true);
+    }
+  });
+
+  it('does not flag non-tool families or non-strings', () => {
+    for (const id of ['llama3:8b', 'gemma2:9b', 'phi3:mini', 'nomic-embed-text', '']) {
+      expect(isToolUseModel(id), id).toBe(false);
+    }
+    expect(isToolUseModel(null)).toBe(false);
+  });
+});
+
+describe('toolUseLocalModelFilter', () => {
+  it('restricts local backends to tool-use models', () => {
+    const ollama = { name: 'Ollama', endpoint: 'http://localhost:11434/v1' };
+    expect(toolUseLocalModelFilter('qwen2.5:7b', ollama)).toBe(true);
+    expect(toolUseLocalModelFilter('gemma2:9b', ollama)).toBe(false);
+  });
+
+  it('leaves cloud/CLI providers untouched', () => {
+    const cloud = { name: 'OpenAI', endpoint: 'https://api.openai.com/v1' };
+    expect(toolUseLocalModelFilter('gpt-4o', cloud)).toBe(true);
+    expect(toolUseLocalModelFilter('anything', undefined)).toBe(true);
   });
 });
 
