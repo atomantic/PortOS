@@ -160,7 +160,7 @@ export default function ImageClean() {
     {
       key: 'metadata',
       label: 'Strip metadata & C2PA',
-      hint: 'Lossless — removes the C2PA provenance chunk plus EXIF/XMP/IPTC and PNG text chunks. Pixels untouched.',
+      hint: 'Removes the C2PA provenance chunk plus EXIF/XMP/IPTC and text metadata. Lossless for PNG (pixels untouched); JPEG/WebP are re-encoded.',
     },
     {
       key: 'denoise',
@@ -340,6 +340,11 @@ export default function ImageClean() {
                     <span className={`w-2 h-2 rounded-full ${s.status === 'applied' ? 'bg-port-success' : 'bg-gray-600'}`} />
                     <span className="text-white capitalize">{s.step}</span>
                     <span className="text-gray-500">— {s.status}{s.detail ? ` (${s.detail})` : ''}</span>
+                    {s.status === 'applied' && (
+                      <span className={`text-xs px-1.5 py-0.5 rounded ${s.lossless ? 'bg-port-success/15 text-port-success' : 'bg-port-warning/15 text-port-warning'}`}>
+                        {s.lossless ? 'lossless' : 'lossy'}
+                      </span>
+                    )}
                   </li>
                 ))}
               </ul>

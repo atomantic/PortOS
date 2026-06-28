@@ -266,8 +266,8 @@ export async function cleanImageBuffer(buffer, options = {}) {
       width = info.width || null;
       height = info.height || null;
       c2paStripped = hadC2PA;
-      if (metadata) steps.push({ step: 'metadata', status: 'applied', detail: 'dropped via re-encode' });
-      steps.push({ step: 'denoise', status: 'applied', detail: 'median(3) + sharpen' });
+      if (metadata) steps.push({ step: 'metadata', status: 'applied', lossless: false, detail: 'dropped via re-encode' });
+      steps.push({ step: 'denoise', status: 'applied', lossless: false, detail: 'median(3) + sharpen' });
     } else if (metadata && format === 'png') {
       // Lossless PNG path: walk chunks and emit a new buffer minus the metadata
       // chunks. Pixels byte-identical, no decode/re-encode.
@@ -280,20 +280,22 @@ export async function cleanImageBuffer(buffer, options = {}) {
       steps.push({
         step: 'metadata',
         status: stripped.stripped ? 'applied' : 'noop',
+        lossless: true,
         detail: stripped.stripped ? `dropped ${stripped.droppedTypes.join(', ')}` : 'no metadata chunks found',
       });
     } else if (metadata) {
       // JPEG/WebP have no cheap lossless chunk-walk; re-encode through sharp,
       // which drops metadata by default. .rotate() bakes EXIF orientation into
       // pixels first so the image still displays right-side-up after the tag is
-      // dropped. This is a re-encode (not strictly lossless) — the format
-      // carries no separate lossless metadata path here.
+      // dropped. This is a re-encode, NOT lossless — the format carries no
+      // separate lossless metadata path here, so the step is flagged lossy and
+      // the UI surfaces that (don't claim pixels are untouched for these).
       const base = sharp(buffer, { limitInputPixels: MAX_PIXELS }).rotate();
       const { data, info } = await applyEncoder(base, format).toBuffer({ resolveWithObject: true });
       outData = data;
       width = info.width || null;
       height = info.height || null;
-      steps.push({ step: 'metadata', status: 'applied', detail: 'dropped via re-encode' });
+      steps.push({ step: 'metadata', status: 'applied', lossless: false, detail: 'dropped via re-encode (lossy)' });
     } else {
       // No steps selected — return the input untouched, but still report dims.
       const meta = await sharp(buffer, { limitInputPixels: MAX_PIXELS }).metadata();
