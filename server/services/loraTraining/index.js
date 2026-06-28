@@ -450,11 +450,15 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
     return;
   }
 
-  // Re-validate — the dataset may have been edited/deleted while queued.
+  // Re-validate — the dataset may have been edited/deleted while queued. Skip
+  // the caption-leak gate: it's a launch-time decision already settled at
+  // enqueue (a non-leaky run cleared it; a leaky run only got here via an
+  // explicit "Train anyway" acknowledge or a resume). Re-blocking on it now
+  // would fail the very runs the acknowledge/resume paths opted in.
   let manifest;
   let dataset;
   try {
-    ({ dataset, manifest } = await validateDatasetReady(run.datasetId));
+    ({ dataset, manifest } = await validateDatasetReady(run.datasetId, { acknowledgeCaptionLeak: true }));
   } catch (err) {
     return failBeforeSpawn(err.message);
   }
