@@ -47,7 +47,7 @@ import {
 import { hashUpstream, computeStaleSteps, computeSyncDrift } from '../lib/storyBuilderIntegrity.js';
 import { getStoryBuilderStore } from './storyBuilderStore/store.js';
 import { listIngredients, linkIngredientsToSeries } from './catalogDB.js';
-import { getCatalogType, payloadSnippet } from '../lib/catalogTypes.js';
+import { getActiveCatalogType, payloadSnippet } from '../lib/catalogTypes.js';
 import { createUniverse, deleteUniverse, getUniverse, updateUniverse } from './universeBuilder.js';
 import { expandWorldTemplate } from './universeBuilderExpand.js';
 import { refineWorldPrompts } from './universeBuilderRefine.js';
@@ -77,12 +77,13 @@ export const TITLE_MAX = 200;
 export const SEED_MAX = 4000;
 export const INTAKE_MODES = Object.freeze(['seed', 'import']);
 
-// Group → header label for the composed fallback seed. Prefer the catalog
-// registry's canonical label (so idea/scene/concept get proper plurals and
-// match the client's prefill), naive-pluralizing a user-defined type's id as a
-// fallback. Mirrors `seedGroupHeading` in client StoryBuilder.jsx.
+// Group → header label for the composed fallback seed. Prefer the ACTIVE
+// registry's canonical label (getActiveCatalogType covers user-defined types
+// too, so idea/scene/concept + custom types get proper plurals and match the
+// client's prefill), naive-pluralizing an unknown type's id as a fallback.
+// Mirrors `seedGroupHeading` in client StoryBuilder.jsx.
 function seedGroupHeading(type) {
-  const label = getCatalogType(type)?.label;
+  const label = getActiveCatalogType(type)?.label;
   const base = label || (isStr(type) && type ? `${type.charAt(0).toUpperCase()}${type.slice(1)}` : 'Other');
   return base.endsWith('s') ? base : `${base}s`;
 }
@@ -104,9 +105,10 @@ function composeSeedFromIngredients(ingredients) {
   for (const [type, list] of byType) {
     lines.push(`${seedGroupHeading(type)}:`);
     for (const ing of list) {
-      // payloadSnippet follows the type's snippetFallbackKeys, so a character's
-      // body text (under `physicalDescription`, not `description`) is included.
-      const summary = payloadSnippet(ing.payload, ing.type, 120);
+      // payloadSnippet follows the type's snippetFallbackKeys (getActiveCatalogType
+      // resolves user-defined types too), so a character's body text — under
+      // `physicalDescription`, not `description` — is included.
+      const summary = payloadSnippet(ing.payload, ing.type, 120, getActiveCatalogType);
       lines.push(summary ? `- ${ing.name}: ${summary}` : `- ${ing.name}`);
     }
   }
