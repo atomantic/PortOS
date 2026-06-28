@@ -77,6 +77,14 @@ describe('extractSubjectSignaturePhrases', () => {
     expect(phrases).toEqual(['mossy green', 'cracked obelisk', 'glowing runes']);
   });
 
+  it('handles a STRING palette on object/place subjects (not just arrays)', () => {
+    const phrases = extractSubjectSignaturePhrases({
+      palette: 'mossy green, weathered grey',
+      recurringDetails: 'cracked obelisk',
+    }, 'places');
+    expect(phrases).toEqual(['mossy green', 'weathered grey', 'cracked obelisk']);
+  });
+
   it('returns [] for a null/empty subject', () => {
     expect(extractSubjectSignaturePhrases(null)).toEqual([]);
     expect(extractSubjectSignaturePhrases({})).toEqual([]);
