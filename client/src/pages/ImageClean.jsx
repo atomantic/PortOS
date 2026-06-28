@@ -1,22 +1,35 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { Eraser, Upload, Download, ShieldCheck } from 'lucide-react';
+import { Eraser, Upload, Download, ShieldCheck, Sparkles } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import BrailleSpinner from '../components/BrailleSpinner';
 import * as api from '../services/api';
 import { formatBytes } from '../utils/formatters';
-import { readFileAsBase64 } from '../utils/fileUpload';
 
-// Keep aligned with MAX_INPUT_BYTES in server/routes/imageClean.js — both are
-// sized so the base64+JSON envelope fits under the 55mb body parser cap.
-const MAX_BYTES = 40 * 1024 * 1024;
 const ALLOWED_EXT = /\.(png|jpe?g|webp)$/i;
 const ALLOWED_MIME = /^image\/(png|jpe?g|webp)$/i;
 
+// Detect pixel dimensions from a File without uploading — load it into an
+// <img> and read naturalWidth/Height. Resolves to null on decode failure so the
+// caller just omits the pre-clean dimensions instead of blocking the upload.
+function detectDimensions(objectUrl) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight });
+    img.onerror = () => resolve(null);
+    img.src = objectUrl;
+  });
+}
+
+const megapixels = (w, h) => (w && h ? (w * h) / 1_000_000 : 0);
+
 export default function ImageClean() {
-  const [original, setOriginal] = useState(null); // { previewUrl, base64, size, name }
+  // { previewUrl, file, size, name, width, height }
+  const [original, setOriginal] = useState(null);
   const [result, setResult] = useState(null);
   const [busy, setBusy] = useState(false);
   const [dragActive, setDragActive] = useState(false);
+  // Opt-in pipeline steps. metadata defaults ON (lossless), denoise OFF (lossy).
+  const [steps, setSteps] = useState({ metadata: true, denoise: false });
   const fileInputRef = useRef(null);
   const requestIdRef = useRef(0);
   const previewUrlRef = useRef(null);
@@ -28,17 +41,8 @@ export default function ImageClean() {
     if (resultUrlRef.current) URL.revokeObjectURL(resultUrlRef.current);
   }, []);
 
-  // Decode the cleaned-image base64 once into a blob URL so the After preview
-  // and the download link don't each carry a multi-MB data: string. Use
-  // fetch().blob() so the base64 → bytes conversion happens in native browser
-  // code instead of a JS atob loop that would block the main thread for large
-  // images.
-  const buildResultUrl = async (cleaned) => {
-    const blob = await fetch(`data:${cleaned.mimeType};base64,${cleaned.data}`).then((r) => r.blob());
-    return URL.createObjectURL(blob);
-  };
-
-  const runClean = useCallback(async (base64) => {
+  const runClean = useCallback(async (file, selectedSteps) => {
+    if (!file) return;
     const myRequestId = ++requestIdRef.current;
     setBusy(true);
     if (resultUrlRef.current) {
@@ -46,46 +50,31 @@ export default function ImageClean() {
       resultUrlRef.current = null;
     }
     setResult(null);
-    const cleaned = await api.cleanImage(base64).catch((err) => {
+    const cleaned = await api.cleanImage(file, selectedSteps).catch((err) => {
       toast.error(err.message || 'Failed to clean image');
       return null;
     });
-    // Drop responses from a stale click — newer reclean is in flight.
+    // Drop responses from a stale click — a newer reclean is in flight.
     if (myRequestId !== requestIdRef.current) return;
     if (!cleaned) {
       setBusy(false);
       return;
     }
-    // Keep busy=true through the decode — for large images the base64→Blob
-    // conversion is non-trivial and the spinner should stay visible.
-    const objectUrl = await buildResultUrl(cleaned).catch((err) => {
-      toast.error(err.message || 'Failed to decode cleaned image');
-      return null;
-    });
-    if (myRequestId !== requestIdRef.current) {
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-      return;
-    }
     setBusy(false);
-    if (!objectUrl) return;
+    const objectUrl = URL.createObjectURL(cleaned.blob);
     resultUrlRef.current = objectUrl;
-    // Drop `cleaned.data` (the full base64 payload) before storing — keeping it
-    // alongside the blob URL would double the in-memory image footprint.
-    const { data: _omit, ...meta } = cleaned;
-    setResult({ ...meta, objectUrl });
-    toast.success(cleaned.c2paStripped ? 'C2PA chunk removed' : 'Image cleaned (no C2PA chunk found)');
+    const report = cleaned.report || {};
+    setResult({ ...report, mimeType: cleaned.mimeType, objectUrl });
+    toast.success(report.c2paStripped ? 'C2PA chunk removed' : 'Image cleaned');
   }, []);
 
   const handleFile = async (file) => {
     if (!file) return;
-    if (file.size > MAX_BYTES) {
-      toast.error(`File exceeds ${MAX_BYTES / 1024 / 1024}MB limit`);
-      return;
-    }
     // Server-side magic-byte sniff is the source of truth. Only fail-fast in the
     // client when BOTH MIME and extension are present and clearly not supported
     // — missing/empty values (common on drag from the file system) fall through
-    // to the server.
+    // to the server. No byte cap: the server streams raw bytes (256MB transport
+    // limit) and guards against decompression bombs by pixel count.
     const hasMime = !!file.type;
     const hasExt = /\./.test(file.name || '');
     const mimeOk = hasMime ? ALLOWED_MIME.test(file.type) : null;
@@ -95,25 +84,30 @@ export default function ImageClean() {
       return;
     }
 
-    const base64 = await readFileAsBase64(file).catch(() => null);
-    if (!base64) {
-      toast.error('Failed to read file');
-      return;
-    }
-
-    // Use a blob URL for the Before preview so we don't double the in-memory
-    // image (base64 string + data URI string). Revoke any previous URL first.
+    // Use a blob URL for the Before preview and dimension detection.
     if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
     const previewUrl = URL.createObjectURL(file);
     previewUrlRef.current = previewUrl;
+    const dims = await detectDimensions(previewUrl);
 
     setOriginal({
       previewUrl,
-      base64,
+      file,
       size: file.size,
       name: file.name,
+      width: dims?.width || null,
+      height: dims?.height || null,
     });
-    runClean(base64);
+    runClean(file, steps);
+  };
+
+  const toggleStep = (key) => {
+    // Compute next outside setState so the updater stays pure (no side effects).
+    const next = { ...steps, [key]: !steps[key] };
+    setSteps(next);
+    // Re-run immediately against the new selection so the After preview always
+    // reflects the current steps.
+    if (original?.file) runClean(original.file, next);
   };
 
   const handleDrag = (e) => {
@@ -162,6 +156,19 @@ export default function ImageClean() {
     ? ((sizeDelta / result.sizeBefore) * 100).toFixed(1)
     : '0.0';
 
+  const STEP_DEFS = [
+    {
+      key: 'metadata',
+      label: 'Strip metadata & C2PA',
+      hint: 'Lossless — removes the C2PA provenance chunk plus EXIF/XMP/IPTC and PNG text chunks. Pixels untouched.',
+    },
+    {
+      key: 'denoise',
+      label: 'Median + sharpen',
+      hint: 'Lossy — reduces visible AI-generation artifacts but blurs fine text. Re-encodes the image.',
+    },
+  ];
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 sm:gap-4">
@@ -171,16 +178,17 @@ export default function ImageClean() {
             Image Cleaner
           </h2>
           <p className="text-gray-500 text-sm">
-            Removes the C2PA metadata chunk (when present) and reduces visible AI-generation artifacts via a median pass + sharpen.
+            Composable, opt-in pipeline: strip provenance/identifying metadata and/or reduce AI-generation artifacts.
           </p>
           <p className="text-gray-500 text-xs mt-1">
             <span className="text-port-warning">Note:</span>{' '}
-            does NOT defeat SynthID. gpt-image / Imagen / Gemini renders stay detectable by their vendor watermark checkers
+            these passes do NOT defeat SynthID. gpt-image / Imagen / Gemini renders stay detectable by their vendor watermark checkers
             (e.g.{' '}
             <a href="https://openai.com/synthid" target="_blank" rel="noopener noreferrer" className="text-port-accent hover:underline">
               openai.com/synthid
             </a>
-            ) after a clean — SynthID is embedded in pixel values and was designed to survive median + sharpen + re-encode.
+            ) — SynthID is embedded in pixel values and was designed to survive median + sharpen + re-encode. A local diffusion pass that
+            actually disrupts SynthID is tracked as a follow-up (issue #1763).
           </p>
         </div>
       </div>
@@ -214,7 +222,7 @@ export default function ImageClean() {
           <p className="text-white mb-2">
             {dragActive ? 'Drop image here' : 'Drag and drop an image here'}
           </p>
-          <p className="text-gray-500 text-sm mb-4">PNG, JPEG, or WebP (max 40MB)</p>
+          <p className="text-gray-500 text-sm mb-4">PNG, JPEG, or WebP</p>
           <button
             onClick={() => fileInputRef.current?.click()}
             className="px-4 py-2 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded-lg transition-colors"
@@ -226,11 +234,47 @@ export default function ImageClean() {
 
       {original && (
         <div className="space-y-6">
+          {/* Step selector */}
+          <div className="bg-port-card border border-port-border rounded-lg p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <Sparkles size={16} className="text-port-accent" />
+              <span className="text-sm font-medium text-white">Pipeline steps</span>
+              <span className="text-xs text-gray-500">run in order: metadata → median/sharpen</span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {STEP_DEFS.map(({ key, label, hint }) => (
+                <label
+                  key={key}
+                  htmlFor={`step-${key}`}
+                  className="flex items-start gap-3 p-3 rounded-lg border border-port-border hover:border-port-accent/50 cursor-pointer transition-colors"
+                >
+                  <input
+                    id={`step-${key}`}
+                    type="checkbox"
+                    checked={steps[key]}
+                    onChange={() => toggleStep(key)}
+                    disabled={busy}
+                    className="mt-1 accent-port-accent"
+                  />
+                  <span>
+                    <span className="block text-sm text-white">{label}</span>
+                    <span className="block text-xs text-gray-500">{hint}</span>
+                  </span>
+                </label>
+              ))}
+            </div>
+          </div>
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="bg-port-card border border-port-border rounded-lg overflow-hidden">
               <div className="px-4 py-2 border-b border-port-border flex items-center justify-between">
                 <span className="text-sm font-medium text-white">Before</span>
-                <span className="text-xs text-gray-500">{formatBytes(original.size)}</span>
+                <span className="text-xs text-gray-500">
+                  {formatBytes(original.size)}
+                  {original.width && original.height && (
+                    <> · {original.width}×{original.height} · {megapixels(original.width, original.height).toFixed(1)}MP</>
+                  )}
+                </span>
               </div>
               <div className="p-4 flex items-center justify-center bg-port-bg/50 min-h-[200px]">
                 <img src={original.previewUrl} alt="Original" className="max-w-full max-h-[480px] object-contain" />
@@ -250,6 +294,9 @@ export default function ImageClean() {
                     alt="Cleaned"
                     className="max-w-full max-h-[480px] object-contain"
                   />
+                )}
+                {!busy && !result && (
+                  <span className="text-gray-600 text-sm">Select steps to clean</span>
                 )}
               </div>
             </div>
@@ -281,6 +328,21 @@ export default function ImageClean() {
                   {result.c2paStripped ? 'Stripped' : 'None found'}
                 </div>
               </div>
+            </div>
+          )}
+
+          {result?.steps?.length > 0 && (
+            <div className="bg-port-card border border-port-border rounded-lg p-4">
+              <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Per-step report</div>
+              <ul className="space-y-1 text-sm">
+                {result.steps.map((s) => (
+                  <li key={s.step} className="flex items-center gap-2">
+                    <span className={`w-2 h-2 rounded-full ${s.status === 'applied' ? 'bg-port-success' : 'bg-gray-600'}`} />
+                    <span className="text-white capitalize">{s.step}</span>
+                    <span className="text-gray-500">— {s.status}{s.detail ? ` (${s.detail})` : ''}</span>
+                  </li>
+                ))}
+              </ul>
             </div>
           )}
 

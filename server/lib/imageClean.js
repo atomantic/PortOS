@@ -41,13 +41,13 @@ export function resolveCleanersFromConfig(modeCfg, mode) {
   };
 }
 
-// All sizes here are MiB (1024*1024). 40 MiB decoded → ~53.3 MiB base64 (4*ceil(n/3))
-// + small JSON envelope, which fits under the 55mb (= 55 MiB) body parser limit
-// in server/index.js. Keep these aligned — raising the decoded cap requires
-// raising the body parser limit too.
-export const MAX_INPUT_BYTES = 40 * 1024 * 1024;
-// Reject oversized payloads before allocating the decoded Buffer.
-export const MAX_BASE64_CHARS = Math.ceil((MAX_INPUT_BYTES * 4) / 3) + 4;
+// There is intentionally no decoded-byte cap. The HTTP route streams raw bytes
+// through `express.raw({ limit })`, so the transport itself is the (generous)
+// byte ceiling — the old base64-in-JSON cap (40 MiB sized to fit a 55 MiB JSON
+// body parser) only existed to bound the ~33% base64 inflation, which the raw
+// transport removes. The decompression-bomb guard below stays: it protects the
+// process regardless of how the buffer arrived.
+//
 // Cap decoded pixel count to prevent decompression-bomb images: a small payload
 // can declare gigantic dimensions and OOM the process during sharp decode. ~96MP
 // covers reasonable photos (12000×8000) without allowing pathological inputs.
@@ -79,8 +79,18 @@ function isPngChunkType(buf, offset) {
 
 // Real PNGs have well under 50 chunks. Cap the walk so a buffer crafted with
 // the PNG signature followed by many tiny ASCII-typed zero-length chunks can't
-// force millions of iterations at the 40MiB input limit.
+// force millions of iterations on a large input.
 const MAX_PNG_CHUNKS = 10000;
+
+// Chunk types the metadata-strip pass removes. `caBX` is the gpt-image C2PA
+// provenance chunk; the text chunks (`tEXt`/`zTXt`/`iTXt`) carry XMP, IPTC and
+// arbitrary author/comment key-values (PNG stores XMP as an `iTXt` keyed
+// `XML:com.adobe.xmp`), and `eXIf` is the PNG-native EXIF block. All four are
+// ancillary — none affect rendering — so dropping them is lossless. Critical and
+// color/gamma chunks (IHDR/PLTE/IDAT/IEND, gAMA/cHRM/sRGB/iCCP/tRNS/…) are left
+// untouched so pixels and color reproduction are byte-identical.
+const C2PA_CHUNK_TYPES = new Set(['caBX']);
+const METADATA_CHUNK_TYPES = new Set(['caBX', 'tEXt', 'zTXt', 'iTXt', 'eXIf']);
 
 // Walks PNG chunks once for the `caBX` provenance chunk emitted by gpt-image.
 // Sharp's default re-encode drops it; we detect it explicitly so the response
@@ -105,29 +115,35 @@ function pngHasC2PA(buf) {
 }
 
 /**
- * Lossless C2PA strip — walks PNG chunks and emits a NEW buffer containing
- * every chunk except `caBX`. Pixels untouched, no decode, no re-encode.
- * Output is byte-identical to input modulo the removed chunk(s).
+ * Lossless PNG-chunk strip — walks PNG chunks and emits a NEW buffer containing
+ * every chunk except those whose type is in `dropTypes`. Pixels untouched, no
+ * decode, no re-encode. Output is byte-identical to input modulo the removed
+ * chunk(s).
  *
- * Returns `{ data, stripped, sizeBefore, sizeAfter }`:
+ * Returns `{ data, stripped, droppedTypes, sizeBefore, sizeAfter }`:
  *  - `data` is the new buffer (or the input buffer when no strip happened).
- *  - `stripped` is true only when a `caBX` chunk was actually found and removed.
+ *  - `stripped` is true only when at least one matching chunk was removed.
+ *  - `droppedTypes` lists the distinct chunk types actually removed.
  *  - sizes reflect input vs output buffer lengths.
  *
  * Returns the input untouched (`stripped: false`) on non-PNG / malformed PNG /
  * chunk-count overrun. Never throws — caller decides whether to write the
  * result back or skip.
  */
-export function stripPngC2PAChunk(buffer) {
-  const passThrough = { data: buffer, stripped: false, sizeBefore: buffer?.length || 0, sizeAfter: buffer?.length || 0 };
+function stripPngChunks(buffer, dropTypes) {
+  const passThrough = {
+    data: buffer, stripped: false, droppedTypes: [],
+    sizeBefore: buffer?.length || 0, sizeAfter: buffer?.length || 0,
+  };
   if (!Buffer.isBuffer(buffer) || buffer.length < 8 || detectFormat(buffer) !== 'png') {
     return passThrough;
   }
-  // First pass: locate every `caBX` chunk's start/end so we can splice them
-  // out into a single new buffer allocation. Real PNGs only carry one but the
-  // PNG spec doesn't forbid duplicates — handle it anyway so a defective
+  // First pass: locate every droppable chunk's start/end so we can splice them
+  // out into a single new buffer allocation. Real PNGs only carry one of each
+  // but the PNG spec doesn't forbid duplicates — handle it anyway so a defective
   // producer can't leave provenance fragments behind.
   const ranges = []; // [{ start, end }] of chunk bytes (length+type+data+crc) to drop
+  const dropped = new Set();
   let offset = 8;
   let count = 0;
   let sawIEND = false;
@@ -138,7 +154,7 @@ export function stripPngC2PAChunk(buffer) {
     const chunkEnd = offset + 8 + length + 4;
     if (chunkEnd > buffer.length) return passThrough;
     const type = buffer.toString('ascii', offset + 4, offset + 8);
-    if (type === 'caBX') ranges.push({ start: offset, end: chunkEnd });
+    if (dropTypes.has(type)) { ranges.push({ start: offset, end: chunkEnd }); dropped.add(type); }
     if (type === 'IEND') { sawIEND = true; break; }
     offset = chunkEnd;
   }
@@ -159,7 +175,29 @@ export function stripPngC2PAChunk(buffer) {
   }
   // Copy the tail after the last dropped chunk.
   buffer.copy(out, writeOffset, readOffset);
-  return { data: out, stripped: true, sizeBefore: buffer.length, sizeAfter: out.length };
+  return { data: out, stripped: true, droppedTypes: [...dropped], sizeBefore: buffer.length, sizeAfter: out.length };
+}
+
+/**
+ * Lossless C2PA strip — removes only the gpt-image `caBX` provenance chunk.
+ * Kept as a focused wrapper so the post-generation auto-clean hook (which only
+ * wants the provenance gone, not author metadata) and its tests stay stable.
+ * Returns `{ data, stripped, sizeBefore, sizeAfter }`.
+ */
+export function stripPngC2PAChunk(buffer) {
+  const { data, stripped, sizeBefore, sizeAfter } = stripPngChunks(buffer, C2PA_CHUNK_TYPES);
+  return { data, stripped, sizeBefore, sizeAfter };
+}
+
+/**
+ * Lossless metadata strip — removes C2PA (`caBX`) plus the ancillary metadata
+ * chunks (`tEXt`/`zTXt`/`iTXt`/`eXIf`, which carry EXIF/XMP/IPTC/comments).
+ * Pixels and color chunks are untouched. Returns the full
+ * `{ data, stripped, droppedTypes, sizeBefore, sizeAfter }` shape so callers can
+ * report exactly what was removed.
+ */
+export function stripPngMetadataChunks(buffer) {
+  return stripPngChunks(buffer, METADATA_CHUNK_TYPES);
 }
 
 const MIME_TYPES = {
@@ -178,17 +216,24 @@ function applyEncoder(pipeline, format) {
   return pipeline.webp({ quality: 92 });
 }
 
-// Throws ServerError (400) on invalid input so callers get a consistent
-// status instead of a sharp stack trace surfacing as a 500.
-export async function cleanImageBuffer(buffer) {
+/**
+ * Composable clean — runs an opt-in subset of the cleaning steps, in order:
+ *   1. metadata (default ON, lossless)  — strip C2PA + EXIF/XMP/IPTC/text
+ *   2. denoise  (default OFF, lossy)    — median(3) + sharpen
+ *
+ * `denoise` re-encodes through sharp, which drops ALL ancillary metadata as a
+ * side effect — so when denoise runs it implicitly satisfies the metadata step
+ * regardless of the `metadata` flag (both off is the only way to keep metadata).
+ *
+ * Returns the cleaned bytes plus a per-step `steps[]` report so the route/UI can
+ * tell the user exactly what ran. Throws ServerError (400) on invalid input so
+ * callers get a consistent status instead of a sharp stack trace surfacing as a
+ * 500. No byte cap — see the MAX_PIXELS note above; the transport bounds size.
+ */
+export async function cleanImageBuffer(buffer, options = {}) {
+  const { metadata = true, denoise = false } = options;
   if (!Buffer.isBuffer(buffer) || buffer.length === 0) {
     throw new ServerError('Decoded payload is empty', { status: 400, code: 'VALIDATION_ERROR' });
-  }
-  if (buffer.length > MAX_INPUT_BYTES) {
-    throw new ServerError(`Image exceeds ${MAX_INPUT_BYTES / 1024 / 1024}MB limit`, {
-      status: 400,
-      code: 'FILE_TOO_LARGE',
-    });
   }
 
   const format = detectFormat(buffer);
@@ -199,27 +244,62 @@ export async function cleanImageBuffer(buffer) {
     });
   }
 
-  const c2paStripped = format === 'png' && pngHasC2PA(buffer);
+  const sizeBefore = buffer.length;
+  const hadC2PA = format === 'png' && pngHasC2PA(buffer);
+  const steps = [];
+  let outData = buffer;
+  let width = null;
+  let height = null;
+  let c2paStripped = false;
 
-  // Single decode for both EXIF auto-orient + denoise/encode. .rotate() with no
-  // args applies the EXIF Orientation tag so the cleaned pixels match what the
-  // browser showed in the Before preview (browsers honor EXIF orientation but
-  // sharp does not by default). resolveWithObject gives us output dimensions
-  // (post-rotation), avoiding a second decode for metadata.
-  const base = sharp(buffer, { limitInputPixels: MAX_PIXELS }).rotate();
   try {
-    const { data, info } = await applyEncoder(applyDenoise(base), format)
-      .toBuffer({ resolveWithObject: true });
-    return {
-      data,
-      format,
-      mimeType: MIME_TYPES[format],
-      sizeBefore: buffer.length,
-      sizeAfter: data.length,
-      width: info.width || null,
-      height: info.height || null,
-      c2paStripped,
-    };
+    if (denoise) {
+      // Single decode for EXIF auto-orient + denoise + encode. .rotate() with no
+      // args bakes the EXIF Orientation tag into pixels so the cleaned image
+      // matches what the browser showed (browsers honor EXIF orientation, sharp
+      // does not by default). The re-encode drops every ancillary chunk, so the
+      // metadata step is implicitly satisfied here too.
+      const base = sharp(buffer, { limitInputPixels: MAX_PIXELS }).rotate();
+      const { data, info } = await applyEncoder(applyDenoise(base), format)
+        .toBuffer({ resolveWithObject: true });
+      outData = data;
+      width = info.width || null;
+      height = info.height || null;
+      c2paStripped = hadC2PA;
+      if (metadata) steps.push({ step: 'metadata', status: 'applied', detail: 'dropped via re-encode' });
+      steps.push({ step: 'denoise', status: 'applied', detail: 'median(3) + sharpen' });
+    } else if (metadata && format === 'png') {
+      // Lossless PNG path: walk chunks and emit a new buffer minus the metadata
+      // chunks. Pixels byte-identical, no decode/re-encode.
+      const stripped = stripPngMetadataChunks(buffer);
+      outData = stripped.data;
+      c2paStripped = stripped.droppedTypes.includes('caBX');
+      const meta = await sharp(buffer, { limitInputPixels: MAX_PIXELS }).metadata();
+      width = meta.width || null;
+      height = meta.height || null;
+      steps.push({
+        step: 'metadata',
+        status: stripped.stripped ? 'applied' : 'noop',
+        detail: stripped.stripped ? `dropped ${stripped.droppedTypes.join(', ')}` : 'no metadata chunks found',
+      });
+    } else if (metadata) {
+      // JPEG/WebP have no cheap lossless chunk-walk; re-encode through sharp,
+      // which drops metadata by default. .rotate() bakes EXIF orientation into
+      // pixels first so the image still displays right-side-up after the tag is
+      // dropped. This is a re-encode (not strictly lossless) — the format
+      // carries no separate lossless metadata path here.
+      const base = sharp(buffer, { limitInputPixels: MAX_PIXELS }).rotate();
+      const { data, info } = await applyEncoder(base, format).toBuffer({ resolveWithObject: true });
+      outData = data;
+      width = info.width || null;
+      height = info.height || null;
+      steps.push({ step: 'metadata', status: 'applied', detail: 'dropped via re-encode' });
+    } else {
+      // No steps selected — return the input untouched, but still report dims.
+      const meta = await sharp(buffer, { limitInputPixels: MAX_PIXELS }).metadata();
+      width = meta.width || null;
+      height = meta.height || null;
+    }
   } catch (err) {
     // Wrap sharp errors (truncated/corrupt buffer that still passed the
     // magic-byte sniff) into a 400 so bad input doesn't surface as a 500.
@@ -229,6 +309,18 @@ export async function cleanImageBuffer(buffer) {
       context: { details: { format, reason: err.message } },
     });
   }
+
+  return {
+    data: outData,
+    format,
+    mimeType: MIME_TYPES[format],
+    sizeBefore,
+    sizeAfter: outData.length,
+    width,
+    height,
+    c2paStripped,
+    steps,
+  };
 }
 
 // Post-generation cleaners. Reads the just-written PNG, applies the requested
@@ -276,7 +368,7 @@ export async function autoCleanGeneratedImage({ cleanC2PA = false, denoise = fal
     // Denoise re-encodes through sharp, which incidentally drops every
     // ancillary chunk (including caBX). So a denoise pass implicitly
     // satisfies the cleanC2PA flag too — no separate strip needed.
-    const result = await cleanImageBuffer(buffer).catch((err) => {
+    const result = await cleanImageBuffer(buffer, { metadata: true, denoise: true }).catch((err) => {
       console.warn(`⚠️ Auto-clean denoise failed for ${basename(pngPath)}: ${err?.message || err}`);
       return null;
     });
