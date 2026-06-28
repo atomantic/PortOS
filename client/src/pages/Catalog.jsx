@@ -27,6 +27,8 @@ import {
   getCatalogFacets,
   rerunCatalogMigration,
 } from '../services/apiCatalog';
+import { listUniverses } from '../services/apiUniverseBuilder';
+import { listPipelineSeries } from '../services/apiPipeline';
 import CatalogCard from '../components/catalog/CatalogCard';
 import CatalogAlbum from '../components/catalog/CatalogAlbum';
 import { catalogRefRoleForType } from '../lib/catalogTypes';
@@ -460,12 +462,36 @@ export default function Catalog() {
     if (view === 'grid') loadFirstPage();
   };
 
-  const refTargets = useMemo(() => {
-    const universes = (facets?.universes || []).map((u) => ({ refKind: 'universe', refId: u.refId, label: u.name }));
-    const series = (facets?.series || []).map((s) => ({ refKind: 'series', refId: s.refId, label: s.name }));
-    return { universes, series };
-  }, [facets]);
-  const hasRefTargets = refTargets.universes.length > 0 || refTargets.series.length > 0;
+  // Bulk-place targets are the FULL set of live universes/series — NOT the
+  // facet arrays, which only list refs that already have catalog links. A
+  // freshly-created (still empty) universe/series must be a valid destination so
+  // the user can seed it. Lazy-loaded the first time the menu opens to keep
+  // mount cheap; `null` = not yet fetched.
+  const [placeTargets, setPlaceTargets] = useState(null);
+  const [placeTargetsLoading, setPlaceTargetsLoading] = useState(false);
+  const loadPlaceTargets = useCallback(() => {
+    setPlaceTargetsLoading(true);
+    Promise.all([
+      listUniverses({ silent: true }).catch(() => []),
+      listPipelineSeries({ silent: true }).catch(() => []),
+    ]).then(([universes, series]) => {
+      setPlaceTargets({
+        universes: (Array.isArray(universes) ? universes : []).map((u) => ({ refKind: 'universe', refId: u.id, label: u.name || '(untitled universe)' })),
+        series: (Array.isArray(series) ? series : []).map((s) => ({ refKind: 'series', refId: s.id, label: s.name || '(untitled series)' })),
+      });
+      setPlaceTargetsLoading(false);
+    });
+  }, []);
+
+  const openAddMenu = () => {
+    setRemixMenuOpen(false);
+    setAddMenuOpen((o) => {
+      const next = !o;
+      if (next && placeTargets === null && !placeTargetsLoading) loadPlaceTargets();
+      return next;
+    });
+  };
+  const hasPlaceTargets = !!placeTargets && (placeTargets.universes.length > 0 || placeTargets.series.length > 0);
 
   // Stable so the grid's per-card render (up to PAGE_SIZE cards) doesn't
   // allocate a fresh arrow per card every render.
@@ -707,8 +733,11 @@ export default function Catalog() {
 
       {view === 'albums' ? (
         <AlbumsView
-          key={dataVersion}
+          // Remount on a mutation OR a filter change so the lazy album loads
+          // re-run against fresh data and honor the active type/tag/q filters.
+          key={`${dataVersion}|${selectedType}|${selectedTag}|${q}`}
           facets={facets}
+          filters={{ type: selectedType || undefined, tag: selectedTag || undefined, q: q || undefined }}
           cardProps={cardProps}
           onConfirmDelete={albumDelete}
         />
@@ -799,51 +828,58 @@ export default function Catalog() {
             <div className="relative">
               <button
                 type="button"
-                onClick={() => { setAddMenuOpen((o) => !o); setRemixMenuOpen(false); }}
+                onClick={openAddMenu}
                 aria-haspopup="menu"
                 aria-expanded={addMenuOpen}
-                disabled={!hasRefTargets}
-                title={hasRefTargets ? 'Place the selected ingredients into a universe or series' : 'No universes or series to place into yet'}
+                title="Place the selected ingredients into a universe or series"
                 className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-port-border bg-port-card hover:bg-port-bg text-white text-sm font-medium disabled:opacity-50"
               >
                 <FolderPlus size={16} aria-hidden="true" />
                 Add to universe/series…
               </button>
-              {addMenuOpen && hasRefTargets && (
+              {addMenuOpen && (
                 <div
                   role="menu"
                   className="absolute right-0 bottom-full mb-2 min-w-[220px] max-h-72 overflow-y-auto bg-port-card border border-port-border rounded-lg shadow-lg"
                 >
-                  {refTargets.universes.length > 0 && (
+                  {placeTargetsLoading || placeTargets === null ? (
+                    <p className="px-3 py-2 text-sm text-gray-500">Loading…</p>
+                  ) : !hasPlaceTargets ? (
+                    <p className="px-3 py-2 text-sm text-gray-500">No universes or series yet.</p>
+                  ) : (
                     <>
-                      <p className="px-3 pt-2 pb-1 text-[10px] uppercase tracking-wider text-gray-500">Universes</p>
-                      {refTargets.universes.map((t) => (
-                        <button
-                          key={`u-${t.refId}`}
-                          type="button"
-                          role="menuitem"
-                          onClick={() => handleAddToRef(t.refKind, t.refId, t.label)}
-                          className="w-full text-left px-3 py-2 text-sm text-gray-200 hover:bg-port-bg hover:text-white"
-                        >
-                          {t.label}
-                        </button>
-                      ))}
-                    </>
-                  )}
-                  {refTargets.series.length > 0 && (
-                    <>
-                      <p className="px-3 pt-2 pb-1 text-[10px] uppercase tracking-wider text-gray-500">Series</p>
-                      {refTargets.series.map((t) => (
-                        <button
-                          key={`s-${t.refId}`}
-                          type="button"
-                          role="menuitem"
-                          onClick={() => handleAddToRef(t.refKind, t.refId, t.label)}
-                          className="w-full text-left px-3 py-2 text-sm text-gray-200 hover:bg-port-bg hover:text-white"
-                        >
-                          {t.label}
-                        </button>
-                      ))}
+                      {placeTargets.universes.length > 0 && (
+                        <>
+                          <p className="px-3 pt-2 pb-1 text-[10px] uppercase tracking-wider text-gray-500">Universes</p>
+                          {placeTargets.universes.map((t) => (
+                            <button
+                              key={`u-${t.refId}`}
+                              type="button"
+                              role="menuitem"
+                              onClick={() => handleAddToRef(t.refKind, t.refId, t.label)}
+                              className="w-full text-left px-3 py-2 text-sm text-gray-200 hover:bg-port-bg hover:text-white"
+                            >
+                              {t.label}
+                            </button>
+                          ))}
+                        </>
+                      )}
+                      {placeTargets.series.length > 0 && (
+                        <>
+                          <p className="px-3 pt-2 pb-1 text-[10px] uppercase tracking-wider text-gray-500">Series</p>
+                          {placeTargets.series.map((t) => (
+                            <button
+                              key={`s-${t.refId}`}
+                              type="button"
+                              role="menuitem"
+                              onClick={() => handleAddToRef(t.refKind, t.refId, t.label)}
+                              className="w-full text-left px-3 py-2 text-sm text-gray-200 hover:bg-port-bg hover:text-white"
+                            >
+                              {t.label}
+                            </button>
+                          ))}
+                        </>
+                      )}
                     </>
                   )}
                 </div>
@@ -870,17 +906,18 @@ export default function Catalog() {
 // under a `key={dataVersion}` so a mutation remounts it and the lazy loads
 // re-run against fresh data. A universe album rolls up its series' members
 // server-side (decision #1), so a series-only ingredient still has a home here.
-function AlbumsView({ facets, cardProps, onConfirmDelete }) {
+function AlbumsView({ facets, filters = {}, cardProps, onConfirmDelete }) {
   if (!facets) {
     return <div className="text-gray-500 text-sm">Loading albums…</div>;
   }
   const { universes = [], unlinkedCount = 0, orphanedCount = 0 } = facets;
   const albumProps = { ...cardProps, onConfirmDelete, pageSize: PAGE_SIZE };
   // One page fetcher per album view — paginated so albums never reintroduce the
-  // old silent cap. `extra` carries the view's filter (unlinked / orphaned / a
-  // universe ref).
+  // old silent cap. `extra` carries the album selector (unlinked / orphaned / a
+  // universe ref); the active type/tag/q filters compose with it so album cards
+  // stay consistent with the visible filter state.
   const pageLoader = (extra) => (offset) =>
-    listCatalogIngredients({ ...extra, limit: PAGE_SIZE, offset, silent: true })
+    listCatalogIngredients({ ...filters, ...extra, limit: PAGE_SIZE, offset, silent: true })
       .then((d) => (Array.isArray(d?.items) ? d.items : []));
   const noAlbums = universes.length === 0 && unlinkedCount === 0 && orphanedCount === 0;
   if (noAlbums) {
