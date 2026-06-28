@@ -292,13 +292,21 @@ export async function cleanImageBuffer(buffer, options = {}) {
         c2paStripped = hadC2PA;
         steps.push({ step: 'metadata', status: 'applied', lossless: false, detail: 'orientation baked + dropped via re-encode (lossy)' });
       } else {
-        // Lossless PNG path: walk chunks and emit a new buffer minus the
-        // metadata chunks. Pixels byte-identical, no decode/re-encode.
+        // Validate the pixel data decodes before returning the (lossless)
+        // original bytes — `.metadata()` only reads headers, so a PNG with a
+        // readable header but corrupt IDAT would otherwise pass through as a
+        // broken "cleaned" download. A raw decode (no re-encode) rejects the
+        // corruption while keeping the output byte-lossless, and yields the
+        // post-decode dims in the same pass.
+        const { info } = await sharp(buffer, { limitInputPixels: MAX_PIXELS })
+          .raw().toBuffer({ resolveWithObject: true });
+        // Lossless strip: walk chunks and emit a new buffer minus the metadata
+        // chunks. Pixels byte-identical, no re-encode.
         const stripped = stripPngMetadataChunks(buffer);
         outData = stripped.data;
         c2paStripped = stripped.droppedTypes.includes('caBX');
-        width = meta.width || null;
-        height = meta.height || null;
+        width = info.width || null;
+        height = info.height || null;
         steps.push({
           step: 'metadata',
           status: stripped.stripped ? 'applied' : 'noop',

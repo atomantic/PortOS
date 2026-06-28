@@ -347,6 +347,17 @@ describe('cleanImageBuffer (composable steps)', () => {
     expect(result.height).toBe(32);
   });
 
+  it('rejects a PNG with a readable header but corrupt pixel data on the lossless path', async () => {
+    // Header (IHDR) stays valid so .metadata() succeeds, but the IDAT stream is
+    // corrupted — the lossless path must decode-validate and reject it rather
+    // than pass the broken bytes through as a "cleaned" download.
+    const corrupt = Buffer.from(pngFixture);
+    const start = Math.floor(corrupt.length * 0.5);
+    for (let i = start; i < start + 40 && i < corrupt.length - 12; i += 1) corrupt[i] ^= 0xff;
+    await expect(cleanImageBuffer(corrupt, { metadata: true, denoise: false }))
+      .rejects.toMatchObject({ code: 'INVALID_IMAGE' });
+  });
+
   it('reports the unavoidable metadata strip even when only denoise is selected', async () => {
     const caBX = makePngChunk('caBX', Buffer.alloc(16, 0xCA));
     const polluted = injectChunkBeforeIEND(pngFixture, caBX);
