@@ -118,6 +118,12 @@ vi.mock('../tracks/index.js', async () => ({
   }),
 }));
 
+vi.mock('../musicVideo/projects.js', async () => ({
+  getProject: vi.fn(),
+  listProjects: vi.fn(),
+  mergeProjectsFromSync: vi.fn(),
+}));
+
 vi.mock('../../lib/peerHttpClient.js', async () => ({
   peerFetch: vi.fn(),
   peerSocketOptions: {},
@@ -187,6 +193,11 @@ import {
 import { getArtist, listArtists, mergeArtistsFromSync } from '../artists/index.js';
 import { getAlbum, listAlbums, mergeAlbumsFromSync } from '../albums/index.js';
 import { getTrack, listTracks, mergeTracksFromSync } from '../tracks/index.js';
+import {
+  getProject as getMusicVideoProject,
+  listProjects as listMusicVideoProjects,
+  mergeProjectsFromSync as mergeMusicVideoProjectsFromSync,
+} from '../musicVideo/projects.js';
 import { peerFetch } from '../../lib/peerHttpClient.js';
 import { reconcileMediaAssets } from '../mediaAssetIndex/index.js';
 import { getBackendName } from '../memoryBackend.js';
@@ -284,6 +295,9 @@ beforeEach(async () => {
   vi.mocked(getTrack).mockReset().mockResolvedValue(null);
   vi.mocked(listTracks).mockReset().mockResolvedValue([]);
   vi.mocked(mergeTracksFromSync).mockReset().mockResolvedValue({ applied: true, count: 1 });
+  vi.mocked(getMusicVideoProject).mockReset().mockResolvedValue(null);
+  vi.mocked(listMusicVideoProjects).mockReset().mockResolvedValue([]);
+  vi.mocked(mergeMusicVideoProjectsFromSync).mockReset().mockResolvedValue({ applied: true, count: 1 });
   // Catalog bundle defaults: non-postgres backend (no bundle), empty DB read,
   // no-op apply. The catalog-bundle suite overrides these per-test.
   vi.mocked(getBackendName).mockReset().mockReturnValue('file');
