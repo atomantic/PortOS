@@ -811,6 +811,10 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
         if (!resumed) wakeDisplay(settings);
       })
       .catch((err) => {
+        // A finalize/flush rejection is still a terminal end with no auto-resume
+        // enqueued, so wake the display here too — otherwise this error path
+        // would leave it asleep (no .then ran). No-op unless we slept it.
+        wakeDisplay(settings);
         console.error(`❌ training [${shortId(jobId)}] finalize failed: ${err?.message}`);
         fail(`finalize failed: ${err?.message}`);
       });
