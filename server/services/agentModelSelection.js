@@ -122,14 +122,22 @@ export async function selectModelForTask(task, provider, agent = {}) {
       light: provider.lightModel
     };
 
+    // The learning store also records thinking-level tier names (minimal/low/
+    // high/xhigh) that aren't in tierToModel — resolve those through
+    // getModelForLevel so a proven thinking-level suggestion is honored
+    // instead of silently falling through to the provider default.
+    const resolveTierModel = (tier) => tierToModel[tier] ?? getModelForLevel(tier, provider);
+
     // If we have a specific tier suggestion, use it
-    if (suggested && tierToModel[suggested]) {
+    const suggestedModel = suggested ? resolveTierModel(suggested) : null;
+    if (suggestedModel) {
       console.log(`📊 Learning-based selection: ${taskTypeKey} → ${suggested} (${learningReason})`);
       return {
-        model: tierToModel[suggested],
+        model: suggestedModel,
         tier: suggested,
         reason: 'learning-suggested',
         learningReason,
+        localPreferred: isLocalPreferred(suggested),
         avoidedTiers: avoidTiers.length > 0 ? avoidTiers : undefined
       };
     }
