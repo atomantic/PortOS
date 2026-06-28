@@ -15,7 +15,7 @@ import { catalogSyncIngredientSchema, catalogSyncRefSchema } from './catalogVali
 // subscriptions target another PortOS instance over Tailnet.
 export const peerSubscribeSchema = z.object({
   peerId: z.string().trim().min(1).max(120),
-  recordKind: z.enum(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard', 'writersRoomWork', 'writersRoomFolder', 'writersRoomExercise']),
+  recordKind: z.enum(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard', 'writersRoomWork', 'writersRoomFolder', 'writersRoomExercise', 'musicVideoProject']),
   recordId: z.string().trim().min(1).max(120),
 }).strict();
 
@@ -238,6 +238,16 @@ const writersRoomExercisePushSchema = z.object({
   kind: z.literal('writersRoomExercise'),
   ...peerSyncPushBase,
 }).strict();
+// Music Video projects (#1770) push the bare record (metadata + beat-aligned
+// scenes[]) — no bundled children/linked collection, and referenced media
+// (uploaded audio, scene images/rendered videos) is NOT bundled in this phase,
+// so the base shape alone suffices and the sender always ships `assetManifest:
+// []` (`.strict()` rejects smuggled bundle keys, same posture as
+// creativeDirectorProject/writersRoomFolder).
+const musicVideoProjectPushSchema = z.object({
+  kind: z.literal('musicVideoProject'),
+  ...peerSyncPushBase,
+}).strict();
 export const peerSyncPushSchema = z.discriminatedUnion('kind', [
   universePushSchema,
   seriesPushSchema,
@@ -251,13 +261,14 @@ export const peerSyncPushSchema = z.discriminatedUnion('kind', [
   writersRoomWorkPushSchema,
   writersRoomFolderPushSchema,
   writersRoomExercisePushSchema,
+  musicVideoProjectPushSchema,
 ]);
 
 // Manual sync action schemas — used by POST /sync-record, /sync-now, /pull-metadata.
 
 export const peerSyncRecordSchema = z.object({
   peerId: z.string().trim().min(1).max(120),
-  recordKind: z.enum(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard', 'writersRoomWork', 'writersRoomFolder', 'writersRoomExercise']),
+  recordKind: z.enum(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard', 'writersRoomWork', 'writersRoomFolder', 'writersRoomExercise', 'musicVideoProject']),
   recordId: z.string().trim().min(1).max(200),
 }).strict();
 

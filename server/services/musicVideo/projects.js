@@ -11,14 +11,18 @@
  *     NODE_ENV=test — both UNSUPPORTED for production. Tests boot without a DB,
  *     so they exercise the file backend.
  *
- * Federation note: peer-sync of `musicVideoProject` records (record-event emit,
- * LWW merge, tombstone GC — the wiring the CD store carries) is a deliberate
- * follow-up, tracked as its own issue. The store is db-primary and fully usable
- * locally now; adding federation later is additive (the soft-delete fields are
- * already on the record). Until then this dispatcher does no record-event emit.
+ * Federation (#1770): peer-sync of `musicVideoProject` records mirrors the CD
+ * store — the structural mutators emit record events (announce on create,
+ * updated on edits, deleted on tombstone) routed through the recordEvents
+ * subscription adapter (a no-op until peerSync registers it at boot, so this
+ * store never imports peerSync and no load-order cycle forms). The backends
+ * carry the LWW merge (`mergeProjectsFromSync`) + tombstone GC
+ * (`pruneTombstonedProjects`); both are re-exported here for peerSync + the GC
+ * sweep. The soft-delete fields were already on the record, so this was additive.
  */
 
 import { checkHealth, ensureSchema } from '../../lib/db.js';
+import { emitRecordUpdated, emitRecordDeleted, autoSubscribeRecordToAllPeers } from '../sharing/recordEvents.js';
 
 let backend = null;
 let backendName = null;
@@ -51,6 +55,18 @@ export function getProjectsBackendName() {
   return backendName;
 }
 
+// Announce a newly-created project to the per-record peer-sync pipeline: emit the
+// 'updated' event so any existing subscription pushes it, AND auto-subscribe
+// every musicVideoProjects-enabled peer so brand-new projects (and their later
+// tombstones) propagate. Routed through the recordEvents subscription adapter (a
+// no-op until peerSync registers it at boot) so this store doesn't import
+// peerSync — peerSync statically imports mergeProjectsFromSync from here, so
+// importing it back would close a load-order cycle. Mirrors CD announceNewProject.
+function announceNewProject(id) {
+  emitRecordUpdated('musicVideoProject', id);
+  autoSubscribeRecordToAllPeers('musicVideoProject', id).catch(() => {});
+}
+
 export async function listProjects(options = {}) {
   return (await selectBackend()).listProjects(options);
 }
@@ -59,34 +75,66 @@ export async function getProject(id, options = {}) {
   return (await selectBackend()).getProject(id, options);
 }
 
+/** Live project ids (or all when includeDeleted) — used by tombstone GC sweeps. */
+export async function listProjectIds(options = {}) {
+  return (await selectBackend()).listProjectIds(options);
+}
+
 export async function createProject(input) {
-  return (await selectBackend()).createProject(input);
+  const project = await (await selectBackend()).createProject(input);
+  announceNewProject(project.id);
+  return project;
 }
 
 export async function updateProject(id, patch) {
-  return (await selectBackend()).updateProject(id, patch);
+  const next = await (await selectBackend()).updateProject(id, patch);
+  emitRecordUpdated('musicVideoProject', id);
+  return next;
 }
 
 export async function deleteProject(id) {
-  return (await selectBackend()).deleteProject(id);
+  const result = await (await selectBackend()).deleteProject(id);
+  // Soft-delete tombstone — push the deletion to subscribed peers immediately.
+  emitRecordDeleted('musicVideoProject', id);
+  return result;
 }
 
 export async function setProjectAnalysis(id, analysis) {
-  return (await selectBackend()).setProjectAnalysis(id, analysis);
+  const next = await (await selectBackend()).setProjectAnalysis(id, analysis);
+  emitRecordUpdated('musicVideoProject', id);
+  return next;
 }
 
 export async function addProjectScene(id, sceneInput) {
-  return (await selectBackend()).addProjectScene(id, sceneInput);
+  const scene = await (await selectBackend()).addProjectScene(id, sceneInput);
+  emitRecordUpdated('musicVideoProject', id);
+  return scene;
 }
 
 export async function updateScene(id, sceneId, patch) {
-  return (await selectBackend()).updateScene(id, sceneId, patch);
+  const result = await (await selectBackend()).updateScene(id, sceneId, patch);
+  emitRecordUpdated('musicVideoProject', id);
+  return result;
 }
 
 export async function deleteScene(id, sceneId) {
-  return (await selectBackend()).deleteScene(id, sceneId);
+  const next = await (await selectBackend()).deleteScene(id, sceneId);
+  emitRecordUpdated('musicVideoProject', id);
+  return next;
 }
 
 export async function reorderProjectScenes(id, orderedIds) {
-  return (await selectBackend()).reorderProjectScenes(id, orderedIds);
+  const next = await (await selectBackend()).reorderProjectScenes(id, orderedIds);
+  emitRecordUpdated('musicVideoProject', id);
+  return next;
+}
+
+/** Merge an incoming batch of project records from a peer (LWW, tombstone-aware). */
+export async function mergeProjectsFromSync(remoteProjects, options = {}) {
+  return (await selectBackend()).mergeProjectsFromSync(remoteProjects, options);
+}
+
+/** Hard-remove project tombstones older than the cutoff (called by tombstone GC). */
+export async function pruneTombstonedProjects(olderThanMs) {
+  return (await selectBackend()).pruneTombstonedProjects(olderThanMs);
 }

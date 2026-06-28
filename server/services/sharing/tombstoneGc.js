@@ -35,6 +35,10 @@ import { pruneTombstonedArtists, listArtistIds } from '../artists/index.js';
 import { pruneTombstonedAlbums, listAlbumIds } from '../albums/index.js';
 import { pruneTombstonedTracks, listTrackIds } from '../tracks/index.js';
 import { pruneTombstonedProjects, listProjectIds } from '../creativeDirector/local.js';
+import {
+  pruneTombstonedProjects as pruneTombstonedMusicVideoProjects,
+  listProjectIds as listMusicVideoProjectIds,
+} from '../musicVideo/projects.js';
 import { pruneTombstonedBoards, listBoardIds } from '../moodBoard/index.js';
 import {
   pruneTombstonedWorks, listWorkIdsForSync,
@@ -62,6 +66,7 @@ const LIVE_ID_LISTERS = Object.freeze({
   album: () => listAlbumIds(),
   track: () => listTrackIds(),
   creativeDirectorProject: () => listProjectIds(),
+  musicVideoProject: () => listMusicVideoProjectIds(),
   moodBoard: () => listBoardIds(),
   writersRoomWork: () => listWorkIdsForSync(),
   writersRoomFolder: () => listFolderIdsForSync(),
@@ -84,6 +89,7 @@ const ALL_ID_LISTERS = Object.freeze({
   album: () => listAlbumIds({ includeDeleted: true }),
   track: () => listTrackIds({ includeDeleted: true }),
   creativeDirectorProject: () => listProjectIds({ includeDeleted: true }),
+  musicVideoProject: () => listMusicVideoProjectIds({ includeDeleted: true }),
   moodBoard: () => listBoardIds({ includeDeleted: true }),
   writersRoomWork: () => listWorkIdsForSync({ includeDeleted: true }),
   writersRoomFolder: () => listFolderIdsForSync({ includeDeleted: true }),
@@ -257,6 +263,7 @@ function refusedFromCutoffs(cutoffs) {
     albumCutoff,
     trackCutoff,
     projectCutoff,
+    musicVideoProjectCutoff,
     boardCutoff,
     workCutoff,
     folderCutoff,
@@ -277,6 +284,7 @@ function refusedFromCutoffs(cutoffs) {
   if (albumCutoff === null) refused.push('album');
   if (trackCutoff === null) refused.push('track');
   if (projectCutoff === null) refused.push('creativeDirectorProject');
+  if (musicVideoProjectCutoff === null) refused.push('musicVideoProject');
   if (boardCutoff === null) refused.push('moodBoard');
   if (workCutoff === null) refused.push('writersRoomWork');
   if (folderCutoff === null) refused.push('writersRoomFolder');
@@ -306,6 +314,7 @@ export async function sweepTombstones({ now = Date.now(), graceMs = GRACE_MS } =
     albumCutoff,
     trackCutoff,
     projectCutoff,
+    musicVideoProjectCutoff,
     boardCutoff,
     workCutoff,
     folderCutoff,
@@ -319,13 +328,14 @@ export async function sweepTombstones({ now = Date.now(), graceMs = GRACE_MS } =
     cutoffForKind('album', { peers, subs, now, graceMs }),
     cutoffForKind('track', { peers, subs, now, graceMs }),
     cutoffForKind('creativeDirectorProject', { peers, subs, now, graceMs }),
+    cutoffForKind('musicVideoProject', { peers, subs, now, graceMs }),
     cutoffForKind('moodBoard', { peers, subs, now, graceMs }),
     cutoffForKind('writersRoomWork', { peers, subs, now, graceMs }),
     cutoffForKind('writersRoomFolder', { peers, subs, now, graceMs }),
     cutoffForKind('writersRoomExercise', { peers, subs, now, graceMs }),
   ]);
   const issueCutoff = seriesCutoff;
-  const [u, s, i, c, a, ar, al, t, cd, mb, wr, wrf, wre] = await Promise.all([
+  const [u, s, i, c, a, ar, al, t, cd, mv, mb, wr, wrf, wre] = await Promise.all([
     universeCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedUniverses(universeCutoff),
     seriesCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedSeries(seriesCutoff),
     issueCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedIssues(issueCutoff),
@@ -335,6 +345,7 @@ export async function sweepTombstones({ now = Date.now(), graceMs = GRACE_MS } =
     albumCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedAlbums(albumCutoff),
     trackCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedTracks(trackCutoff),
     projectCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedProjects(projectCutoff),
+    musicVideoProjectCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedMusicVideoProjects(musicVideoProjectCutoff),
     boardCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedBoards(boardCutoff),
     workCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedWorks(workCutoff),
     folderCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedFolders(folderCutoff),
@@ -364,13 +375,14 @@ export async function sweepTombstones({ now = Date.now(), graceMs = GRACE_MS } =
     albums: al.pruned,
     tracks: t.pruned,
     creativeDirectorProjects: cd.pruned,
+    musicVideoProjects: mv.pruned,
     moodBoards: mb.pruned,
     writersRoomWorks: wr.pruned,
     writersRoomFolders: wrf.pruned,
     writersRoomExercises: wre.pruned,
     orphanBaseHashes: orphan.pruned,
     orphanSubscriptions: orphanSubs.pruned,
-    refused: refusedFromCutoffs({ universeCutoff, seriesCutoff, collectionCutoff, authorCutoff, artistCutoff, albumCutoff, trackCutoff, projectCutoff, boardCutoff, workCutoff, folderCutoff, exerciseCutoff }),
+    refused: refusedFromCutoffs({ universeCutoff, seriesCutoff, collectionCutoff, authorCutoff, artistCutoff, albumCutoff, trackCutoff, projectCutoff, musicVideoProjectCutoff, boardCutoff, workCutoff, folderCutoff, exerciseCutoff }),
   };
 }
 
@@ -379,7 +391,7 @@ export async function sweepTombstones({ now = Date.now(), graceMs = GRACE_MS } =
 // coverage matters), so this hardcodes graceMs:0 internally.
 export async function getSweepStatus({ now = Date.now() } = {}) {
   const { peers, subs } = await loadState();
-  const [universeCutoff, seriesCutoff, collectionCutoff, authorCutoff, artistCutoff, albumCutoff, trackCutoff, projectCutoff, boardCutoff, workCutoff, folderCutoff, exerciseCutoff] = await Promise.all([
+  const [universeCutoff, seriesCutoff, collectionCutoff, authorCutoff, artistCutoff, albumCutoff, trackCutoff, projectCutoff, musicVideoProjectCutoff, boardCutoff, workCutoff, folderCutoff, exerciseCutoff] = await Promise.all([
     cutoffForKind('universe', { peers, subs, now, graceMs: 0 }),
     cutoffForKind('series', { peers, subs, now, graceMs: 0 }),
     cutoffForKind('mediaCollection', { peers, subs, now, graceMs: 0 }),
@@ -388,12 +400,13 @@ export async function getSweepStatus({ now = Date.now() } = {}) {
     cutoffForKind('album', { peers, subs, now, graceMs: 0 }),
     cutoffForKind('track', { peers, subs, now, graceMs: 0 }),
     cutoffForKind('creativeDirectorProject', { peers, subs, now, graceMs: 0 }),
+    cutoffForKind('musicVideoProject', { peers, subs, now, graceMs: 0 }),
     cutoffForKind('moodBoard', { peers, subs, now, graceMs: 0 }),
     cutoffForKind('writersRoomWork', { peers, subs, now, graceMs: 0 }),
     cutoffForKind('writersRoomFolder', { peers, subs, now, graceMs: 0 }),
     cutoffForKind('writersRoomExercise', { peers, subs, now, graceMs: 0 }),
   ]);
-  return { refused: refusedFromCutoffs({ universeCutoff, seriesCutoff, collectionCutoff, authorCutoff, artistCutoff, albumCutoff, trackCutoff, projectCutoff, boardCutoff, workCutoff, folderCutoff, exerciseCutoff }) };
+  return { refused: refusedFromCutoffs({ universeCutoff, seriesCutoff, collectionCutoff, authorCutoff, artistCutoff, albumCutoff, trackCutoff, projectCutoff, musicVideoProjectCutoff, boardCutoff, workCutoff, folderCutoff, exerciseCutoff }) };
 }
 
 export const TOMBSTONE_GRACE_MS = GRACE_MS;

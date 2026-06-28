@@ -106,6 +106,11 @@ import {
   startingImageFilename,
 } from '../creativeDirector/local.js';
 import {
+  getProject as getMusicVideoProject,
+  listProjects as listMusicVideoProjects,
+  mergeProjectsFromSync as mergeMusicVideoProjectsFromSync,
+} from '../musicVideo/projects.js';
+import {
   getBoard,
   listBoards,
   mergeBoardsFromSync,
@@ -133,7 +138,7 @@ import {
   removeCursor as removeTombstoneCursor,
 } from './peerTombstoneCursors.js';
 
-export const PEER_SUBSCRIBABLE_KINDS = Object.freeze(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard', 'writersRoomWork', 'writersRoomFolder', 'writersRoomExercise']);
+export const PEER_SUBSCRIBABLE_KINDS = Object.freeze(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard', 'writersRoomWork', 'writersRoomFolder', 'writersRoomExercise', 'musicVideoProject']);
 
 /**
  * Cross-cutting event bus for the peer-sync receiver. The asset-pull worker
@@ -415,6 +420,7 @@ const KIND_TO_CATEGORY = Object.freeze({
   writersRoomWork: 'writersRoomWorks',
   writersRoomFolder: 'writersRoomFolders',
   writersRoomExercise: 'writersRoomExercises',
+  musicVideoProject: 'musicVideoProjects',
 });
 
 function peerAllowsOutbound(peer) {
@@ -531,6 +537,8 @@ async function listRecordsForKind(recordKind) {
     // Live exercises as { id, updatedAt } (#1645). updatedAt is derived from
     // finishedAt ?? startedAt in the facade so coverage keys on the wire value.
     records = await listExercisesForSync().catch(() => []);
+  } else if (recordKind === 'musicVideoProject') {
+    records = await listMusicVideoProjects({ includeDeleted: false }).catch(() => []);
   }
   return records.filter(r => r?.ephemeral !== true && isNonEmptyStr(r?.id));
 }
@@ -834,6 +842,10 @@ async function buildIntegrityAssetManifest(kind, record) {
   if (kind === 'album') return buildAlbumAssetManifest(record);
   if (kind === 'track') return buildTrackAssetManifest(record);
   if (kind === 'creativeDirectorProject') return buildProjectAssetManifest(record);
+  // Music Video projects (#1770): the record federates but its referenced media
+  // (uploaded audio, scene reference images / rendered videos) is NOT bundled in
+  // this phase — empty manifest, mirroring the body-less Writers Room kinds.
+  if (kind === 'musicVideoProject') return [];
   if (kind === 'moodBoard') return buildBoardAssetManifest(record);
   if (kind === 'series') {
     const childIssues = await listIssues({ seriesId: record?.id, includeDeleted: true }).catch(() => []);
@@ -1072,6 +1084,10 @@ async function isSubscriptionRecordTombstone(sub) {
   }
   if (sub.recordKind === 'writersRoomExercise') {
     const record = await getExerciseForSync(sub.recordId).catch(() => null);
+    return record?.deleted === true;
+  }
+  if (sub.recordKind === 'musicVideoProject') {
+    const record = await getMusicVideoProject(sub.recordId, { includeDeleted: true }).catch(() => null);
     return record?.deleted === true;
   }
   return false;
@@ -1672,6 +1688,17 @@ async function buildPushPayload(sub, sourceInstanceId) {
     if (!sanitized) return null;
     return { kind: 'writersRoomExercise', record: sanitized, assetManifest: [], sourceInstanceId, portosMeta };
   }
+  if (sub.recordKind === 'musicVideoProject') {
+    // #1770 — the record (metadata + beat-aligned scenes) is the LWW envelope.
+    // Referenced media (uploaded audio, scene images/rendered videos) is NOT
+    // bundled in this phase, so the asset manifest is empty (writersRoomFolder
+    // pattern). Media-asset bundling is a follow-up.
+    const record = await getMusicVideoProject(sub.recordId, { includeDeleted: true }).catch(() => null);
+    if (!record) return null;
+    const sanitized = sanitizeRecordForWire('musicVideoProject', record);
+    if (!sanitized) return null;
+    return { kind: 'musicVideoProject', record: sanitized, assetManifest: [], sourceInstanceId, portosMeta };
+  }
   return null;
 }
 
@@ -2151,6 +2178,8 @@ export async function applyIncomingPush(payload) {
     await mergeFoldersFromSync([record], { source });
   } else if (kind === 'writersRoomExercise') {
     await mergeExercisesFromSync([record], { source });
+  } else if (kind === 'musicVideoProject') {
+    await mergeMusicVideoProjectsFromSync([record], { source });
   }
 
   // Apply the bundled collection (if any) — same LWW + union-of-items
@@ -2447,6 +2476,13 @@ async function classifyLocalRecord(recordKind, recordId) {
   if (recordKind === 'writersRoomExercise') {
     const e = await getExerciseForSync(recordId).catch(() => null);
     return e ? 'syncable' : 'missing';
+  }
+  if (recordKind === 'musicVideoProject') {
+    // Music Video projects have no `ephemeral` concept (like the persona/music/CD/
+    // board kinds) — a found project (live or tombstoned) is always 'syncable'.
+    // No ping-pong risk: lastPushedHash + LWW same-`updatedAt` no-op merge prevent it.
+    const p = await getMusicVideoProject(recordId, { includeDeleted: true }).catch(() => null);
+    return p ? 'syncable' : 'missing';
   }
   return 'missing';
 }

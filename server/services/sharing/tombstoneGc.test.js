@@ -40,6 +40,10 @@ vi.mock('../creativeDirector/local.js', () => ({
   pruneTombstonedProjects: vi.fn().mockResolvedValue({ pruned: 0 }),
   listProjectIds: vi.fn().mockResolvedValue([]),
 }));
+vi.mock('../musicVideo/projects.js', () => ({
+  pruneTombstonedProjects: vi.fn().mockResolvedValue({ pruned: 0 }),
+  listProjectIds: vi.fn().mockResolvedValue([]),
+}));
 vi.mock('../moodBoard/index.js', () => ({
   pruneTombstonedBoards: vi.fn().mockResolvedValue({ pruned: 0 }),
   listBoardIds: vi.fn().mockResolvedValue([]),
@@ -80,6 +84,7 @@ import { pruneTombstonedArtists, listArtistIds } from '../artists/index.js';
 import { pruneTombstonedAlbums, listAlbumIds } from '../albums/index.js';
 import { pruneTombstonedTracks, listTrackIds } from '../tracks/index.js';
 import { pruneTombstonedProjects } from '../creativeDirector/local.js';
+import { pruneTombstonedProjects as pruneTombstonedMusicVideoProjects } from '../musicVideo/projects.js';
 import { pruneTombstonedBoards } from '../moodBoard/index.js';
 import { pruneTombstonedWorks, pruneTombstonedFolders, pruneTombstonedExercises } from '../writersRoom/sync.js';
 import { pruneOrphanedBaseHashes } from '../../lib/conflictJournal.js';
@@ -438,6 +443,7 @@ describe('sweepTombstones — return shape', () => {
     pruneTombstonedAlbums.mockResolvedValueOnce({ pruned: 6 });
     pruneTombstonedTracks.mockResolvedValueOnce({ pruned: 7 });
     pruneTombstonedProjects.mockResolvedValueOnce({ pruned: 8 });
+    pruneTombstonedMusicVideoProjects.mockResolvedValueOnce({ pruned: 13 });
     pruneTombstonedBoards.mockResolvedValueOnce({ pruned: 9 });
     pruneTombstonedWorks.mockResolvedValueOnce({ pruned: 10 });
     pruneTombstonedFolders.mockResolvedValueOnce({ pruned: 11 });
@@ -453,6 +459,7 @@ describe('sweepTombstones — return shape', () => {
       albums: 6,
       tracks: 7,
       creativeDirectorProjects: 8,
+      musicVideoProjects: 13,
       moodBoards: 9,
       writersRoomWorks: 10,
       writersRoomFolders: 11,

@@ -36,6 +36,7 @@ import { updateSeries, ERR_NOT_FOUND as SERIES_NOT_FOUND } from './pipeline/seri
 import { updateCollection, getCollection, ERR_NOT_FOUND as COLLECTION_NOT_FOUND } from './mediaCollections.js';
 import { updateIssue, ERR_NOT_FOUND as ISSUE_NOT_FOUND } from './pipeline/issues.js';
 import { updateProject } from './creativeDirector/local.js';
+import { updateProject as updateMusicVideoProject } from './musicVideo/projects.js';
 import { restoreBoard } from './moodBoard/index.js';
 import { updateWork, restoreFolder, restoreExercise } from './writersRoom/local.js';
 
@@ -134,6 +135,13 @@ async function applyToRecord(kind, recordId, patch, { replace = false } = {}) {
     // merge-fields both apply faithfully through the same call. It validates +
     // rejects a tombstoned row (404 → translateGone → ERR_TARGET_GONE).
     await restoreBoard(recordId, patch).catch(translateGone);
+  } else if (kind === 'musicVideoProject') {
+    // updateProject does a wholesale spread (applyProjectPatch → touch), so the
+    // restorable scalars + scenes[] in the snapshot patch overwrite the live
+    // values faithfully — restore-all and merge-fields both apply through the
+    // same path. It validates `status` and rejects a missing/tombstoned row with
+    // the generic ServerError 'NOT_FOUND' (→ translateGone → ERR_TARGET_GONE).
+    await updateMusicVideoProject(recordId, patch).catch(translateGone);
   } else if (kind === 'writersRoomWork') {
     // updateWork applies the snapshot's title/kind/status/folderId/imageStyle/
     // liveMode (the RESTORABLE_FIELDS set) through its allow-list + the liveMode

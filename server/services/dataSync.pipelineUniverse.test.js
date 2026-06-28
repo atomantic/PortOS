@@ -1113,6 +1113,10 @@ describe('dataSync — per-category schema gate (cross-key isolation)', () => {
       // RECORD_KIND_SCHEMA_CATEGORIES.writersRoomFolder / .writersRoomExercise.
       'writersRoomFolders',
       'writersRoomExercises',
+      // Music Video projects (#1770) → per-record peer-push only (no 60s
+      // file-snapshot category). Gated at applyIncomingPush via
+      // compareSchemaVersions / RECORD_KIND_SCHEMA_CATEGORIES.musicVideoProject.
+      'musicVideoProjects',
       // Standalone media library (#1566) → its own receiver-pull endpoint
       // (GET /api/peer-sync/library-manifest), NOT the file-snapshot transfer.
       // Versioned for the manifest envelope and gated by syncMediaLibraryFromPeer's

@@ -365,6 +365,18 @@ export const RESTORABLE_FIELDS = Object.freeze({
   // Server-owned / structural fields are excluded (`id`/`createdAt`/`startedAt`/
   // the LWW-tombstone trio). `writersRoomExercise` matches the record kind.
   writersRoomExercise: ['workId', 'prompt', 'durationSeconds', 'startingWords', 'endingWords', 'wordsAdded', 'appendedText', 'status', 'finishedAt'],
+  // Music Video projects (#1770): the user-authored config + creative content the
+  // merge can restore. `scenes[]` (the beat-aligned director board with prompts)
+  // carries the bulk of the work, alongside name/status/mode/trackId/
+  // uploadedAudioFilename/concept. Server-owned / machine-managed fields are
+  // excluded — `id`/`createdAt`/the LWW-tombstone trio are structural,
+  // `renderHistoryId` is a derived output pointer, and `audioAnalysis` is the
+  // machine-derived beat cache (regenerated from the audio, not hand-authored).
+  // The whole record is hashed for DETECTION by contentHashForRecord (no scalar
+  // narrowing); this set is what the Conflicts UI offers for restore.
+  // `musicVideoProject` matches the record kind and updateProject (via
+  // applyProjectPatch's wholesale spread) accepts every field here.
+  musicVideoProject: ['name', 'status', 'mode', 'trackId', 'uploadedAudioFilename', 'concept', 'scenes'],
 });
 
 const present = (v) => v !== undefined;
