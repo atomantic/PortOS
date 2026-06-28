@@ -9,7 +9,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { Dumbbell, Loader2, Square, CheckCircle2, XCircle, Sparkles, RotateCcw, Moon } from 'lucide-react';
+import { Dumbbell, Loader2, Square, CheckCircle2, XCircle, Sparkles, RotateCcw, Moon, AlertTriangle, Eraser } from 'lucide-react';
 import toast from '../ui/Toast';
 import { useSseProgress } from '../../hooks/useSseProgress';
 import CheckpointPicker from './CheckpointPicker';
@@ -21,6 +21,7 @@ import {
   cancelLoraTrainingRun,
   resumeLoraTrainingRun,
   listImageModels,
+  stripLoraDatasetSharedCaptionFragments,
 } from '../../services/api';
 
 const isActive = (run) => run && ['queued', 'running'].includes(run.status);
@@ -35,6 +36,11 @@ export default function TrainingPanel({ dataset, readiness, triggerSaving, onRun
   const [starting, setStarting] = useState(false);
   const [canceling, setCanceling] = useState(false);
   const [resuming, setResuming] = useState(false);
+  // Server-detected caption identity-leak (409 CAPTION_IDENTITY_LEAK): the
+  // fragments that repeat + the captioned-image total they're measured against.
+  // Non-empty fragments → render the inline confirm row instead of queueing.
+  const [captionLeak, setCaptionLeak] = useState({ fragments: [], total: 0 });
+  const [strippingLeak, setStrippingLeak] = useState(false);
 
   useEffect(() => {
     getLoraTrainingStatus().then((s) => {
@@ -100,14 +106,46 @@ export default function TrainingPanel({ dataset, readiness, triggerSaving, onRun
   // installed, else the torch venv. Either being ready unblocks training.
   const engineReady = !!(status?.runtimes?.mflux?.ready || status?.runtimes?.flux2?.ready);
 
-  const start = async () => {
+  // `silent: true` — this owns its own error surfacing: the expected
+  // CAPTION_IDENTITY_LEAK 409 becomes the inline confirm row (not a toast), and
+  // every other failure toasts here exactly once.
+  const start = async ({ acknowledgeCaptionLeak = false } = {}) => {
     setStarting(true);
     try {
-      await startLoraTrainingRun({ datasetId: dataset.id, baseModelId, params });
+      await startLoraTrainingRun(
+        { datasetId: dataset.id, baseModelId, params, acknowledgeCaptionLeak },
+        { silent: true },
+      );
+      setCaptionLeak({ fragments: [], total: 0 });
       toast.success('Training queued');
       refreshRuns();
+    } catch (err) {
+      if (err?.code === 'CAPTION_IDENTITY_LEAK') {
+        setCaptionLeak({ fragments: err.context?.sharedFragments || [], total: err.context?.total || 0 });
+      } else {
+        toast.error(err?.message || 'Failed to queue training');
+      }
     } finally {
       setStarting(false);
+    }
+  };
+
+  // From the leak row: strip the shared identity fragments server-side, sync the
+  // parent's caption view, then re-launch (the gate now passes).
+  const stripAndQueue = async () => {
+    setStrippingLeak(true);
+    try {
+      const { removedFragments } = await stripLoraDatasetSharedCaptionFragments(dataset.id);
+      if (removedFragments?.length) {
+        toast.success(`Stripped ${removedFragments.length} shared identity fragment${removedFragments.length === 1 ? '' : 's'}`);
+      }
+      onRunFinished?.(); // parent reloads the dataset so captions + the lint banner refresh
+      setCaptionLeak({ fragments: [], total: 0 });
+      await start();
+    } catch (err) {
+      toast.error(err?.message || 'Failed to strip captions');
+    } finally {
+      setStrippingLeak(false);
     }
   };
 
@@ -369,6 +407,49 @@ export default function TrainingPanel({ dataset, readiness, triggerSaving, onRun
           </div>
         </div>
       )}
+      {captionLeak.fragments.length > 0 && (
+        <div className="bg-port-warning/10 border border-port-warning/40 rounded-lg p-3 text-sm space-y-2">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="w-4 h-4 text-port-warning shrink-0 mt-0.5" />
+            <p className="text-gray-200 min-w-0">
+              <span className="font-medium text-port-warning">Identity is leaking into the captions.</span>{' '}
+              These fragments repeat across most images, so the{' '}
+              <span className="font-mono text-gray-300">{dataset.triggerWord || 'trigger'}</span>{' '}
+              token would learn a generic subject. Strip them so the trigger absorbs the fixed identity, or train anyway.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {captionLeak.fragments.map((f) => (
+              <span
+                key={f.normalized}
+                className="text-xs px-1.5 py-0.5 rounded bg-port-bg border border-port-border text-gray-300 font-mono"
+                title={`in ${f.count} of ${captionLeak.total} captions`}
+              >
+                {f.fragment}<span className="text-gray-500"> ·{f.count}</span>
+              </span>
+            ))}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={stripAndQueue}
+              disabled={strippingLeak || starting}
+              className="px-3 py-1.5 text-xs rounded bg-port-warning/20 text-port-warning hover:bg-port-warning/30 flex items-center gap-2 disabled:opacity-50"
+            >
+              {strippingLeak ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Eraser className="w-3.5 h-3.5" />}
+              Strip identity &amp; queue
+            </button>
+            <button
+              type="button"
+              onClick={() => start({ acknowledgeCaptionLeak: true })}
+              disabled={strippingLeak || starting}
+              className="px-3 py-1.5 text-xs rounded border border-port-border text-gray-300 hover:bg-port-bg flex items-center gap-2 disabled:opacity-50"
+            >
+              Train anyway
+            </button>
+          </div>
+        </div>
+      )}
       <div className="flex items-center justify-between gap-2">
         <span className={`text-xs ${!disabledReason && readiness?.quality === 'minimum' ? 'text-port-warning' : 'text-gray-500'}`}>
           {disabledReason
@@ -378,8 +459,8 @@ export default function TrainingPanel({ dataset, readiness, triggerSaving, onRun
         </span>
         <button
           type="button"
-          onClick={start}
-          disabled={!!disabledReason || starting}
+          onClick={() => start()}
+          disabled={!!disabledReason || starting || strippingLeak}
           className="px-3 py-2 text-sm rounded bg-port-accent text-white disabled:opacity-50 flex items-center gap-2"
         >
           {starting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Dumbbell className="w-4 h-4" />}

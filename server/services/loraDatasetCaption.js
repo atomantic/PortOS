@@ -33,14 +33,47 @@ import { getSettings } from './settings.js';
 import { listVisionModels } from './localLlm.js';
 import { isVisionModel } from '../lib/localModelHeuristics.js';
 import { getDataset, updateDataset, datasetImagePath } from './loraDatasets.js';
+import { loadDatasetSubject, extractSubjectSignaturePhrases } from './loraDatasetGenerate.js';
 
-export const CAPTION_PROMPT = [
-  'Describe the person or character in this image for image-generation training:',
-  'pose, camera angle, expression, clothing, visible accessories, and framing',
-  '(full body / bust / close-up). Reply with ONE comma-separated list of short',
-  'fragments. Do not mention art style, the character\'s name, or that this is',
-  'an illustration.',
-].join(' ');
+/**
+ * Build the vision-captioning instruction. A LoRA binds whatever the captions
+ * DON'T describe to the trigger word, so a strong character/object/place caption
+ * names only what changes shot-to-shot (pose, framing, lighting, setting) and
+ * deliberately omits the subject's permanent identity — hair, build, signature
+ * outfit, recurring props, palette. Captioning those in every shot teaches the
+ * model the phrases instead of the trigger, and the bare trigger then renders a
+ * generic subject (issue #1320). When the bible knows the subject's signature
+ * features, we name them explicitly so the model omits them even when it would
+ * have phrased them differently shot-to-shot (the case the post-hoc
+ * shared-fragment strip misses, since it matches on exact repeated phrasing).
+ *
+ * `signaturePhrases` — discrete always-present features (wardrobe, props,
+ * palette) to call out by name; empty for uploaded datasets with no bible
+ * subject, where the general guidance still applies.
+ */
+export function buildCaptionPrompt(signaturePhrases = []) {
+  const omit = (Array.isArray(signaturePhrases) ? signaturePhrases : [])
+    .map((p) => (typeof p === 'string' ? p.trim() : ''))
+    .filter(Boolean);
+  return [
+    'Describe ONLY what changes from shot to shot in this image, for image-generation training:',
+    'pose, body position, camera angle, expression, framing (full body / bust / close-up),',
+    'lighting, and background or setting. If the outfit clearly differs from the subject\'s',
+    'usual look, name it briefly; otherwise do not describe clothing.',
+    'Do NOT describe the subject\'s fixed identity — hair, eyes, skin, body build, signature',
+    'outfit, recurring props, or color scheme. Those are bound to the trigger word, and',
+    'repeating them in every caption weakens it.',
+    omit.length
+      ? `In particular, do NOT mention these signature features that are always present: ${omit.join('; ')}.`
+      : '',
+    'Reply with ONE comma-separated list of short fragments. Do not mention art style,',
+    'the subject\'s name, or that this is an illustration.',
+  ].filter(Boolean).join(' ');
+}
+
+// Base prompt with no bible-derived deny-list — the fallback when a dataset has
+// no resolvable subject (uploads), and the shape the tests pin.
+export const CAPTION_PROMPT = buildCaptionPrompt();
 
 // A comma-separated caption fits well under 300, but reasoning models (Qwen3,
 // thinking Gemma builds) spend tokens on a hidden <think> block FIRST and only
@@ -223,6 +256,19 @@ export async function startCaptionRun(datasetId, {
     providerId, model, settings,
   });
 
+  // Build the captioning instruction once, naming the subject's bible-known
+  // signature features so the vision model omits them (they belong to the
+  // trigger word, not the per-shot caption). Best-effort: an upload-only
+  // dataset or a since-deleted subject just falls back to the general guidance.
+  let signaturePhrases = [];
+  try {
+    const { subject, entryKind } = await loadDatasetSubject(dataset);
+    signaturePhrases = extractSubjectSignaturePhrases(subject, entryKind);
+  } catch (err) {
+    console.log(`🏷️ No bible subject for dataset ${shortId(datasetId)} — captioning with general identity guidance (${err?.message || err})`);
+  }
+  const captionPrompt = buildCaptionPrompt(signaturePhrases);
+
   const runId = uuidv4();
   captionRuns.set(runId, { clients: [], lastPayload: null });
   console.log(`🏷️ Caption run ${shortId(runId)} — dataset=${shortId(datasetId)} images=${targets.length} provider=${resolvedProvider} model=${resolvedModel}`);
@@ -240,7 +286,7 @@ export async function startCaptionRun(datasetId, {
         const dataUrl = `data:image/png;base64,${bytes.toString('base64')}`;
         const result = await withCaptionVisionLock(() => describeImageDataUrlDetailed({
           dataUrl,
-          prompt: CAPTION_PROMPT,
+          prompt: captionPrompt,
           providerId: resolvedProvider,
           model: resolvedModel,
           maxTokens: CAPTION_MAX_TOKENS,

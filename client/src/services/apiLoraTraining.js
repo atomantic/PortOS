@@ -90,10 +90,17 @@ export const stripLoraDatasetSharedCaptionFragments = (id) =>
 
 export const getLoraTrainingStatus = () => request('/lora-training/status');
 
-export const startLoraTrainingRun = ({ datasetId, baseModelId, name, params }) =>
+export const startLoraTrainingRun = ({ datasetId, baseModelId, name, params, acknowledgeCaptionLeak }, options = {}) =>
   request('/lora-training/runs', {
     method: 'POST',
-    body: JSON.stringify({ datasetId, baseModelId, ...(name ? { name } : {}), ...(params ? { params } : {}) }),
+    silent: options.silent,
+    body: JSON.stringify({
+      datasetId,
+      baseModelId,
+      ...(name ? { name } : {}),
+      ...(params ? { params } : {}),
+      ...(acknowledgeCaptionLeak ? { acknowledgeCaptionLeak: true } : {}),
+    }),
   });
 
 export const listLoraTrainingRuns = (filters = {}) => {
