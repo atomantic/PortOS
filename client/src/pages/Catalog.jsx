@@ -153,26 +153,34 @@ export default function Catalog() {
     return p;
   }, [selectedType, selectedTag, q, selectedSeries, selectedUniverse]);
 
-  // Fetch page 1 for the grid, replacing the list. Used by the filter-change
-  // effect and by the post-sync reload.
+  // Fetch one page for the current filters; returns the items array (or null on
+  // error, already toasted). The caller owns replace-vs-append and its loading
+  // flag + staleness guard, so this stays free of cancellation concerns.
+  const fetchListPage = useCallback((offset) =>
+    listCatalogIngredients({ ...buildListParams(), limit: PAGE_SIZE, offset, silent: true })
+      .then((data) => (Array.isArray(data?.items) ? data.items : []))
+      .catch((err) => {
+        toast.error(err?.message || 'Failed to load catalog');
+        return null;
+      }),
+  [buildListParams]);
+
+  // Load page 1 for the grid, replacing the list. Used by the filter-change
+  // effect and the post-sync reload; the cancelled flag drops a stale response
+  // when the filters change mid-flight.
   const loadFirstPage = useCallback(() => {
     let cancelled = false;
     setLoading(true);
-    listCatalogIngredients({ ...buildListParams(), limit: PAGE_SIZE, offset: 0, silent: true })
-      .then((data) => {
-        if (cancelled) return;
-        const list = Array.isArray(data?.items) ? data.items : [];
+    fetchListPage(0).then((list) => {
+      if (cancelled) return;
+      if (list) {
         setItems(list);
         setHasMore(list.length === PAGE_SIZE);
-        setLoading(false);
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        toast.error(err?.message || 'Failed to load catalog');
-        setLoading(false);
-      });
+      }
+      setLoading(false);
+    });
     return () => { cancelled = true; };
-  }, [buildListParams]);
+  }, [fetchListPage]);
 
   // Grid view: (re)load page 1 whenever the filters change. Albums manage their
   // own lazy loads, so skip the grid fetch entirely in that view.
@@ -186,17 +194,13 @@ export default function Catalog() {
 
   const loadMore = () => {
     setLoadingMore(true);
-    listCatalogIngredients({ ...buildListParams(), limit: PAGE_SIZE, offset: items.length, silent: true })
-      .then((data) => {
-        const list = Array.isArray(data?.items) ? data.items : [];
+    fetchListPage(items.length).then((list) => {
+      if (list) {
         setItems((prev) => [...prev, ...list]);
         setHasMore(list.length === PAGE_SIZE);
-        setLoadingMore(false);
-      })
-      .catch((err) => {
-        toast.error(err?.message || 'Failed to load more');
-        setLoadingMore(false);
-      });
+      }
+      setLoadingMore(false);
+    });
   };
 
   const totalCount = stats?.total ?? items.length;
@@ -446,13 +450,17 @@ export default function Catalog() {
   }, [facets]);
   const hasRefTargets = refTargets.universes.length > 0 || refTargets.series.length > 0;
 
+  // Stable so the grid's per-card render (up to PAGE_SIZE cards) doesn't
+  // allocate a fresh arrow per card every render.
+  const cancelArm = useCallback(() => setArmedId(null), []);
+
   const cardProps = {
     getType,
     selectedIds,
     onToggleSelect: toggleSelect,
     armedId,
     onArm: setArmedId,
-    onCancelArm: () => setArmedId(null),
+    onCancelArm: cancelArm,
   };
 
   return (
@@ -713,7 +721,7 @@ export default function Catalog() {
                 onToggleSelect={toggleSelect}
                 armed={armedId === it.id}
                 onArm={setArmedId}
-                onCancelArm={() => setArmedId(null)}
+                onCancelArm={cancelArm}
                 onConfirmDelete={confirmDelete}
               />
             ))}
