@@ -1,0 +1,131 @@
+import { describe, it, expect } from 'vitest';
+import {
+  buildProjectRecord,
+  applyProjectPatch,
+  setAudioAnalysis,
+  addScene,
+  applySceneUpdate,
+  removeScene,
+  reorderScenes,
+  mirrorStatus,
+} from './projectsLogic.js';
+
+const baseProject = () => buildProjectRecord({ name: 'Test MV' }, { id: 'mv-1', now: '2026-01-01T00:00:00.000Z' });
+
+describe('buildProjectRecord', () => {
+  it('builds a draft director project with sensible defaults', () => {
+    const p = buildProjectRecord({ name: 'Neon Nights', trackId: 'track-9' }, { id: 'mv-x', now: '2026-01-01T00:00:00.000Z' });
+    expect(p).toMatchObject({
+      id: 'mv-x', name: 'Neon Nights', status: 'draft', mode: 'director',
+      trackId: 'track-9', uploadedAudioFilename: null, concept: null,
+      audioAnalysis: null, scenes: [], renderHistoryId: null,
+      deleted: false, deletedAt: null,
+    });
+    expect(p.createdAt).toBe(p.updatedAt);
+  });
+
+  it('honors an explicit autonomous mode and concept', () => {
+    const p = buildProjectRecord({ name: 'A', mode: 'autonomous', concept: { prompt: 'noir' } }, { id: 'mv-2', now: 'n' });
+    expect(p.mode).toBe('autonomous');
+    expect(p.concept).toEqual({ prompt: 'noir' });
+  });
+});
+
+describe('applyProjectPatch', () => {
+  it('merges fields and bumps updatedAt', () => {
+    const next = applyProjectPatch(baseProject(), { name: 'Renamed', trackId: 't2' });
+    expect(next.name).toBe('Renamed');
+    expect(next.trackId).toBe('t2');
+    expect(next.updatedAt).not.toBe('2026-01-01T00:00:00.000Z');
+  });
+
+  it('rejects an invalid status', () => {
+    expect(() => applyProjectPatch(baseProject(), { status: 'bogus' })).toThrow(/Invalid status/);
+  });
+
+  it('accepts a valid status', () => {
+    expect(applyProjectPatch(baseProject(), { status: 'ready' }).status).toBe('ready');
+  });
+});
+
+describe('setAudioAnalysis', () => {
+  const analysis = { bpm: 120, beats: [0, 0.5], downbeats: [0], sections: [{ label: 'Section 1', startSec: 0, endSec: 1 }], durationSec: 1 };
+
+  it('caches the analysis and flips a draft to analyzed', () => {
+    const next = setAudioAnalysis(baseProject(), analysis);
+    expect(next.audioAnalysis).toEqual(analysis);
+    expect(next.status).toBe('analyzed');
+  });
+
+  it('does not regress a later lifecycle status', () => {
+    const ready = { ...baseProject(), status: 'ready' };
+    expect(setAudioAnalysis(ready, analysis).status).toBe('ready');
+  });
+});
+
+describe('scene board operations', () => {
+  it('adds scenes with incrementing order and unique ids', () => {
+    const { project: p1, scene: s1 } = addScene(baseProject(), { prompt: 'wide shot' });
+    const { project: p2, scene: s2 } = addScene(p1, { prompt: 'close up' });
+    expect(s1.order).toBe(0);
+    expect(s2.order).toBe(1);
+    expect(s1.sceneId).not.toBe(s2.sceneId);
+    expect(p2.scenes).toHaveLength(2);
+    expect(s1.prompt).toBe('wide shot');
+    expect(s1.referenceImageId).toBeNull();
+  });
+
+  it('rejects a scene whose endSec precedes startSec', () => {
+    expect(() => addScene(baseProject(), { startSec: 10, endSec: 5 })).toThrow(/Scene validation failed/);
+  });
+
+  it('updates a scene by id', () => {
+    const { project, scene } = addScene(baseProject(), { prompt: 'a' });
+    const { updated } = applySceneUpdate(project, scene.sceneId, { prompt: 'b', referenceImageId: 'img-1' });
+    expect(updated.prompt).toBe('b');
+    expect(updated.referenceImageId).toBe('img-1');
+  });
+
+  it('404s updating an unknown scene', () => {
+    expect(() => applySceneUpdate(baseProject(), 'nope', { prompt: 'x' })).toThrow(/Scene not found/);
+  });
+
+  it('removes a scene and re-sequences order', () => {
+    let p = baseProject();
+    const ids = [];
+    for (const prompt of ['a', 'b', 'c']) { const r = addScene(p, { prompt }); p = r.project; ids.push(r.scene.sceneId); }
+    const next = removeScene(p, ids[0]);
+    expect(next.scenes).toHaveLength(2);
+    expect(next.scenes.map((s) => s.order)).toEqual([0, 1]);
+    expect(next.scenes.map((s) => s.sceneId)).toEqual([ids[1], ids[2]]);
+  });
+
+  it('404s removing an unknown scene', () => {
+    expect(() => removeScene(baseProject(), 'nope')).toThrow(/Scene not found/);
+  });
+
+  it('reorders scenes to the given id order and reassigns order', () => {
+    let p = baseProject();
+    const ids = [];
+    for (const prompt of ['a', 'b', 'c']) { const r = addScene(p, { prompt }); p = r.project; ids.push(r.scene.sceneId); }
+    const next = reorderScenes(p, [ids[2], ids[0], ids[1]]);
+    expect(next.scenes.map((s) => s.sceneId)).toEqual([ids[2], ids[0], ids[1]]);
+    expect(next.scenes.map((s) => s.order)).toEqual([0, 1, 2]);
+  });
+
+  it('rejects a reorder that is not an exact permutation', () => {
+    let p = baseProject();
+    const r = addScene(p, { prompt: 'a' }); p = r.project;
+    expect(() => reorderScenes(p, [r.scene.sceneId, 'extra'])).toThrow(/each existing scene id exactly once/);
+    expect(() => reorderScenes(p, [])).toThrow(/each existing scene id exactly once/);
+  });
+});
+
+describe('mirrorStatus', () => {
+  it('bounds and defaults the status column value', () => {
+    expect(mirrorStatus('rendering')).toBe('rendering');
+    expect(mirrorStatus('')).toBe('draft');
+    expect(mirrorStatus(null)).toBe('draft');
+    expect(mirrorStatus('x'.repeat(40))).toHaveLength(32);
+  });
+});

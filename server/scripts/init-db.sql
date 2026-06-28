@@ -655,6 +655,24 @@ CREATE TABLE IF NOT EXISTS creative_director_projects (
 -- Partial index for the live-list filter (deleted = FALSE).
 CREATE INDEX IF NOT EXISTS idx_creative_director_projects_live ON creative_director_projects (deleted) WHERE deleted = FALSE;
 
+-- Music Video projects (issue #1760). The director scene board's db-primary
+-- record: id/status/created_at/updated_at mirrored as columns, the full project
+-- (track link, cached audioAnalysis, scenes[]) in `data` JSONB — same shape as
+-- creative_director_projects. The soft-delete tombstone trio is present so
+-- peer-sync federation (a follow-up) is additive. Mirrors the music_video_projects
+-- block in db.js ensureSchema().
+CREATE TABLE IF NOT EXISTS music_video_projects (
+  id TEXT PRIMARY KEY,
+  status VARCHAR(32) NOT NULL DEFAULT 'draft',
+  data JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  deleted BOOLEAN DEFAULT FALSE,               -- soft-delete tombstone so deletes propagate to peers
+  deleted_at TIMESTAMPTZ
+);
+-- Partial index for the live-list filter (deleted = FALSE).
+CREATE INDEX IF NOT EXISTS idx_music_video_projects_live ON music_video_projects (deleted) WHERE deleted = FALSE;
+
 -- Mood boards (issue #911). A dedicated inspiration/mood-board canvas, distinct
 -- from raw Media History, for collecting visual + textual references that feed
 -- the Create suite. One row per board, the full record (name/description/items[])

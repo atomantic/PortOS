@@ -1889,5 +1889,6 @@ export const legacyExportSchema = z.object({
 // (e.g. `emptyToUndefined`) live in zodCompat.js.
 export * from './peerSyncValidation.js';
 export * from './creativeDirectorValidation.js';
+export * from './musicVideoValidation.js';
 export * from './storyBuilderValidation.js';
 export * from './moodBoardValidation.js';
