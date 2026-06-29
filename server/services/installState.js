@@ -108,18 +108,28 @@ async function statMtimeMs(path) {
  * as soon as a newer source file is found, false if the build is current.
  */
 async function isClientSourceNewer(rootDir, buildMtimeMs, { statMtime = statMtimeMs } = {}) {
-  // Top-level client files that affect the build but live outside the walked
-  // dirs.
-  const topLevel = ['client/index.html', 'client/package.json', 'client/vite.config.js'];
-  for (const rel of topLevel) {
-    const m = await statMtime(join(rootDir, rel));
+  const clientDir = join(rootDir, 'client');
+  const stack = [];
+
+  // Every file directly under client/ is a build input or config (index.html,
+  // package.json, vite.config.js, postcss.config.js, tailwind/tsconfig, …).
+  // Stat them all rather than enumerating filenames, so a config-only change
+  // still marks the build stale without a list that rots as configs are added.
+  // Directories here are handled below: src/public are walked recursively;
+  // node_modules/dist/.git are skipped.
+  const rootEntries = await readdir(clientDir, { withFileTypes: true }).catch(() => []);
+  for (const entry of rootEntries) {
+    if (entry.isDirectory()) {
+      // Both client/src AND client/public feed the build — Vite copies public/
+      // verbatim into dist/, so a public-asset-only change (e.g. a swapped
+      // favicon) still requires a rebuild.
+      if (entry.name === 'src' || entry.name === 'public') stack.push(join(clientDir, entry.name));
+      continue;
+    }
+    const m = await statMtime(join(clientDir, entry.name));
     if (m != null && m > buildMtimeMs) return true;
   }
 
-  // Both client/src AND client/public feed the build — Vite copies public/
-  // verbatim into dist/, so a public-asset-only change (e.g. a swapped favicon)
-  // still requires a rebuild and must keep staleBuild true.
-  const stack = [join(rootDir, 'client', 'src'), join(rootDir, 'client', 'public')];
   while (stack.length) {
     const dir = stack.pop();
     const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);

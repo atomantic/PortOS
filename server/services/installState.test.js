@@ -1,4 +1,7 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, utimesSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import {
   getInstallState,
   captureBootCommit,
@@ -221,6 +224,58 @@ describe('captureBootCommit', () => {
     const getCommit = async () => null;
     expect(await captureBootCommit({ getCommit })).toBeNull();
     expect(getBootCommit()).toBeNull();
+  });
+});
+
+describe('isClientSourceNewer (real fs)', () => {
+  let rootDir;
+  const BUILD = 1_000_000_000; // arbitrary base "build" mtime in seconds
+  const setMtime = (p, secs) => utimesSync(p, secs, secs);
+
+  beforeEach(() => {
+    rootDir = mkdtempSync(join(tmpdir(), 'client-src-'));
+    mkdirSync(join(rootDir, 'client', 'src'), { recursive: true });
+    mkdirSync(join(rootDir, 'client', 'public'), { recursive: true });
+    // A baseline where every input predates the build.
+    for (const rel of ['client/index.html', 'client/package.json', 'client/src/app.jsx', 'client/public/favicon.ico']) {
+      writeFileSync(join(rootDir, rel), 'x');
+      setMtime(join(rootDir, rel), BUILD - 100);
+    }
+  });
+
+  afterEach(() => rmSync(rootDir, { recursive: true, force: true }));
+
+  const buildMs = BUILD * 1000;
+
+  it('returns false when every input predates the build', async () => {
+    expect(await __internal.isClientSourceNewer(rootDir, buildMs)).toBe(false);
+  });
+
+  it('detects a newer file under client/src', async () => {
+    const p = join(rootDir, 'client', 'src', 'new.jsx');
+    writeFileSync(p, 'x'); setMtime(p, BUILD + 100);
+    expect(await __internal.isClientSourceNewer(rootDir, buildMs)).toBe(true);
+  });
+
+  it('detects a newer public asset', async () => {
+    const p = join(rootDir, 'client', 'public', 'og.png');
+    writeFileSync(p, 'x'); setMtime(p, BUILD + 100);
+    expect(await __internal.isClientSourceNewer(rootDir, buildMs)).toBe(true);
+  });
+
+  it('detects a newer root-level build config (postcss/tailwind/tsconfig) without an explicit allow-list', async () => {
+    const p = join(rootDir, 'client', 'postcss.config.js');
+    writeFileSync(p, 'x'); setMtime(p, BUILD + 100);
+    expect(await __internal.isClientSourceNewer(rootDir, buildMs)).toBe(true);
+  });
+
+  it('ignores changes under client/node_modules and client/dist', async () => {
+    for (const rel of ['client/node_modules/dep/index.js', 'client/dist/assets/x.js']) {
+      mkdirSync(join(rootDir, rel, '..'), { recursive: true });
+      writeFileSync(join(rootDir, rel), 'x');
+      setMtime(join(rootDir, rel), BUILD + 100);
+    }
+    expect(await __internal.isClientSourceNewer(rootDir, buildMs)).toBe(false);
   });
 });
 
