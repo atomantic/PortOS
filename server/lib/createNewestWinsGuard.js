@@ -23,6 +23,14 @@
  *
  * In-memory and best-effort: lost on restart, which is fine for the bookkeeping
  * it guards. Carries `.clear()` for test reset.
+ *
+ * The `latest` Map is NOT self-pruning (unlike `createKeyCachedQueue`'s tail
+ * Map) — it retains one entry (`key → ~24-char ISO string`) per distinct slot
+ * ever marked, for the process lifetime. The cardinality is the number of scene
+ * slots rendered (per-scene / per-ingredient), which is human-scale for a
+ * single-user install, so the growth is a non-issue in practice. If a future
+ * caller needs bounded memory, add a `.forget(key)` and call it from the same
+ * deletion path that drops the underlying record.
  */
 export function createNewestWinsGuard() {
   const latest = new Map();

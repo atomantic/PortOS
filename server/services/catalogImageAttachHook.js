@@ -83,11 +83,8 @@ const hook = createMediaJobImageHook({
   // ingredient don't both read an empty media list, both pick 'portrait', and
   // have the second demote the first. Different ingredients attach concurrently.
   serializeKey: ({ ingredientId }) => ingredientId,
-  attach: ({ ingredientId, tag, filename, job }) => attachGeneratedImage({
-    ingredientId,
-    kind: tag.kind,
-    filename,
-    queuedAt: typeof job.queuedAt === 'string' ? job.queuedAt : null,
+  attach: ({ ingredientId, tag, filename, queuedAt }) => attachGeneratedImage({
+    ingredientId, kind: tag.kind, filename, queuedAt,
   }),
   onAttached: ({ ingredientId, filename }, status) => {
     if (status === 'portrait' || status === 'reference') {

@@ -117,15 +117,6 @@ export default function LiveRenderPanel({
       pendingJobRef.current = null;
       if (mountedRef.current) setGenStatus('idle');
     };
-    // A canceled render (e.g. dropped from the Media Jobs queue) emits no
-    // *:failed when it was still queued — clear the in-flight state on the
-    // bridged `image-gen:canceled` so "Rendering…" doesn't stick (#1791).
-    const onCanceled = (data) => {
-      const job = pendingJobRef.current;
-      if (!job || data.generationId !== job.jobId) return;
-      pendingJobRef.current = null;
-      if (mountedRef.current) setGenStatus('idle');
-    };
     // The hook fires `writers-room:scene-image` once an async render lands on the
     // analysis snapshot — fold that entry up so the boards update reactively.
     // Gate on workId (the event is broadcast to every client); the downstream
@@ -138,12 +129,16 @@ export default function LiveRenderPanel({
     };
     socket.on('image-gen:completed', onCompleted);
     socket.on('image-gen:failed', onFailed);
-    socket.on('image-gen:canceled', onCanceled);
+    // A canceled render (e.g. dropped from the Media Jobs queue) clears the
+    // in-flight state exactly like a failure — and a queued-then-canceled job
+    // emits no *:failed, so this is the only signal that clears "Rendering…"
+    // for it (#1791). Reuse onFailed rather than duplicate its body.
+    socket.on('image-gen:canceled', onFailed);
     socket.on('writers-room:scene-image', onSceneImage);
     return () => {
       socket.off('image-gen:completed', onCompleted);
       socket.off('image-gen:failed', onFailed);
-      socket.off('image-gen:canceled', onCanceled);
+      socket.off('image-gen:canceled', onFailed);
       socket.off('writers-room:scene-image', onSceneImage);
     };
     // The job snapshot is read from pendingJobRef (set at kickoff); the attach

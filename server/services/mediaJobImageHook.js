@@ -53,11 +53,6 @@ import { mediaJobEvents } from './mediaJobQueue/index.js';
 import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
 import { createNewestWinsGuard } from '../lib/createNewestWinsGuard.js';
 
-// Sentinel a guard'd attach returns to mean "dropped as stale" — distinct from
-// a null result (attach declined / failed) so the caller skips onAttached for both
-// but the guard never records a queuedAt for a render it dropped.
-const STALE = Symbol('stale-render-dropped');
-
 export function createMediaJobImageHook(config) {
   const {
     label,
@@ -86,7 +81,11 @@ export function createMediaJobImageHook(config) {
     if (!identity) return null;
     const filename = job.result?.filename;
     if (!filename || typeof filename !== 'string') return null;
-    return { ...identity, job, tag, filename };
+    // Normalize queuedAt once here so the guard below AND any consumer's attach
+    // (e.g. catalog's portrait guard) read the same `ctx.queuedAt` instead of
+    // re-deriving it.
+    const queuedAt = typeof job.queuedAt === 'string' ? job.queuedAt : null;
+    return { ...identity, job, tag, filename, queuedAt };
   }
 
   function init() {
@@ -99,25 +98,25 @@ export function createMediaJobImageHook(config) {
         const ctx = decode(job);
         if (!ctx) return;
         const sKey = sceneKey ? sceneKey(ctx) : null;
-        const queuedAt = typeof job.queuedAt === 'string' ? job.queuedAt : null;
 
         const result = await serialize(serializeKey(ctx), async () => {
           // Newest-render-wins: drop an out-of-order older render so it can't
-          // clobber a newer frame on the same scene slot. Checked + recorded
-          // inside the serialize section so the read/write pair never races.
-          if (sKey && guard.isStale(sKey, queuedAt)) return STALE;
+          // clobber a newer frame on the same scene slot (returns null, the same
+          // "nothing applied" signal as a declined/failed attach). Checked +
+          // recorded inside the serialize section so the read/write never races.
+          if (sKey && guard.isStale(sKey, ctx.queuedAt)) return null;
           const r = await attach(ctx);
           // Only record the slot's newest queuedAt once the attach actually
           // applied — a failed attach (null) must not advance the guard, or a
           // later legitimate render would be wrongly dropped as stale.
-          if (sKey && r != null) guard.mark(sKey, queuedAt);
+          if (sKey && r != null) guard.mark(sKey, ctx.queuedAt);
           return r;
         }).catch((err) => {
           console.log(`⚠️ ${label} hook failed for ${ctx.filename}: ${err?.message || String(err)}`);
           return null;
         });
 
-        if (result !== STALE && result != null) onAttached(ctx, result);
+        if (result != null) onAttached(ctx, result);
       })().catch((err) => {
         // Last-resort net for synchronous throws (unexpected job shape, etc).
         console.log(`⚠️ ${label} hook crashed: ${err?.message || err}`);
