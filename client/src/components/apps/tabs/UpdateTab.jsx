@@ -157,8 +157,11 @@ export default function UpdateTab() {
       setTimeout(() => window.location.reload(), 1000);
       return;
     }
-    // Track the running peak so a later uptime drop is detectable.
-    if (typeof ok.uptime === 'number' && ok.uptime > maxUptimeRef.current) {
+    // Track the running peak so a later uptime drop is detectable. Guard on
+    // `ok` — the !ok (server-down) branch falls through to here, and a null
+    // deref would throw before the attempts>=30 timeout check below, hanging the
+    // UI on a restart that never recovers.
+    if (ok && typeof ok.uptime === 'number' && ok.uptime > maxUptimeRef.current) {
       maxUptimeRef.current = ok.uptime;
     }
     if (attemptsRef.current >= 30) {

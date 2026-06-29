@@ -179,7 +179,12 @@ router.post('/execute', asyncHandler(async (req, res) => {
   // so the actual post-update version may differ from `tag` if new commits
   // landed after the release. The script writes the true version to
   // data/update-complete.json, which the server reads on boot.
-  executeUpdate(tag, emit).then(result => {
+  //
+  // For a reconcile, hand update.sh the commit the running process was built at
+  // (installState.bootCommit) so its dependency-change diff spans install→now —
+  // a bare `git pull` already advanced HEAD, so HEAD-vs-HEAD would miss it.
+  const fromSha = reconcile ? status.installState.bootCommit : undefined;
+  executeUpdate(tag, emit, { fromSha }).then(result => {
     // Note: this .then() may never fire if the update script's PM2 restart
     // kills this server process first. The client handles this by polling
     // /api/system/health after receiving the 'restart' step.

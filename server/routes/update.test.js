@@ -65,12 +65,15 @@ describe('POST /api/update/execute — reconcile gating (issue #1779)', () => {
     expect(executeUpdate).not.toHaveBeenCalled();
   });
 
-  it('runs the reconcile when out of sync, targeting the current version', async () => {
-    updateChecker.getUpdateStatus.mockResolvedValue(baseStatus({ installState: { outOfSync: true } }));
+  it('runs the reconcile when out of sync, targeting the current version and threading the boot commit', async () => {
+    updateChecker.getUpdateStatus.mockResolvedValue(
+      baseStatus({ installState: { outOfSync: true, bootCommit: 'abc1234def' } })
+    );
     const res = await request(makeApp()).post('/api/update/execute').send({ reconcile: true });
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ started: true, tag: 'v1.26.0' });
-    expect(executeUpdate).toHaveBeenCalledWith('v1.26.0', expect.any(Function));
+    // update.sh needs the install→now diff base, so the boot commit is threaded.
+    expect(executeUpdate).toHaveBeenCalledWith('v1.26.0', expect.any(Function), { fromSha: 'abc1234def' });
   });
 
   it('reconcile runs even with NO cached release (out of sync)', async () => {
@@ -101,11 +104,11 @@ describe('POST /api/update/execute — reconcile gating (issue #1779)', () => {
     expect(res.body.code).toBe('NO_RELEASE');
   });
 
-  it('a normal update uses the cached release tag', async () => {
+  it('a normal update uses the cached release tag and passes no fromSha', async () => {
     updateChecker.getUpdateStatus.mockResolvedValue(baseStatus());
     const res = await request(makeApp()).post('/api/update/execute').send({});
     expect(res.status).toBe(200);
     expect(res.body.tag).toBe('v1.27.0');
-    expect(executeUpdate).toHaveBeenCalledWith('v1.27.0', expect.any(Function));
+    expect(executeUpdate).toHaveBeenCalledWith('v1.27.0', expect.any(Function), { fromSha: undefined });
   });
 });

@@ -162,4 +162,36 @@ describe('executeUpdate', () => {
       expect.objectContaining({ success: false, log: 'spawn failed' })
     );
   });
+
+  // Reconcile (issue #1779) passes the boot commit so update.sh diffs
+  // install→now for its dependency-change detection.
+  it('passes a valid fromSha to the child as PORTOS_UPDATE_FROM_SHA', async () => {
+    const child = createMockChild();
+    spawn.mockReturnValue(child);
+    const promise = executeUpdate('v1.0.0', () => {}, { fromSha: 'abc1234def5678' });
+    child.emit('close', 0);
+    await promise;
+    const env = spawn.mock.calls[0][2].env;
+    expect(env.PORTOS_UPDATE_FROM_SHA).toBe('abc1234def5678');
+  });
+
+  it('does NOT set PORTOS_UPDATE_FROM_SHA when no fromSha is given', async () => {
+    const child = createMockChild();
+    spawn.mockReturnValue(child);
+    const promise = executeUpdate('v1.0.0', () => {});
+    child.emit('close', 0);
+    await promise;
+    const env = spawn.mock.calls[0][2].env;
+    expect(env.PORTOS_UPDATE_FROM_SHA).toBeUndefined();
+  });
+
+  it('rejects a non-sha fromSha (no env injection)', async () => {
+    const child = createMockChild();
+    spawn.mockReturnValue(child);
+    const promise = executeUpdate('v1.0.0', () => {}, { fromSha: 'main; rm -rf /' });
+    child.emit('close', 0);
+    await promise;
+    const env = spawn.mock.calls[0][2].env;
+    expect(env.PORTOS_UPDATE_FROM_SHA).toBeUndefined();
+  });
 });

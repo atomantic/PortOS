@@ -135,7 +135,14 @@ fi
 # installs/builds), not a feature branch we just left. Diffing this against
 # post-pull HEAD yields exactly the pull's delta on main, so a manifest change
 # the update brings is detected even when launched from another branch.
-pre_pull_sha=$(git rev-parse HEAD 2>/dev/null || echo "")
+#
+# RECONCILE (issue #1779): when PortOS triggers this to finish a bare `git pull`
+# the user already did, the checkout is ALREADY at the new HEAD, so capturing
+# HEAD here would diff against itself (empty) and skip the clean reinstall the
+# stale node_modules needs. PortOS passes PORTOS_UPDATE_FROM_SHA = the commit the
+# running process was built at, so the manifest diff spans the install→now delta
+# and the clean reinstall fires for workspaces whose deps actually changed.
+pre_pull_sha="${PORTOS_UPDATE_FROM_SHA:-$(git rev-parse HEAD 2>/dev/null || echo "")}"
 run git pull --rebase --autostash
 step "git-pull" "done" "Latest changes pulled"
 

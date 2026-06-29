@@ -21,7 +21,7 @@ const UPDATE_PS1 = join(PATHS.root, 'update.ps1');
  * @param {function} emit - Callback (step, status, message) for progress
  * @returns {Promise<{success: boolean, version?: string, failedStep?: string, errorMessage?: string}>}
  */
-export async function executeUpdate(tag, emit) {
+export async function executeUpdate(tag, emit, { fromSha } = {}) {
   const isWindows = process.platform === 'win32';
   const cmd = isWindows ? 'powershell' : 'bash';
   const args = isWindows
@@ -30,11 +30,21 @@ export async function executeUpdate(tag, emit) {
 
   emit('starting', 'running', `Starting update (target: ${tag})...`);
 
+  // For a reconcile (issue #1779) the checkout is already at the new HEAD, so
+  // update.sh's HEAD-based dependency-change diff would be empty and miss the
+  // clean reinstall stale node_modules needs. Pass the commit the running
+  // process was built at as the diff base so update.sh detects the real delta.
+  // Validate as a hex sha to keep arbitrary input out of the child env.
+  const childEnv = (typeof fromSha === 'string' && /^[0-9a-f]{7,40}$/i.test(fromSha))
+    ? { ...process.env, PORTOS_UPDATE_FROM_SHA: fromSha }
+    : process.env;
+
   return new Promise((resolve) => {
     const child = spawn(cmd, args, {
       detached: true,
       stdio: ['ignore', 'pipe', 'pipe'],
-      cwd: PATHS.root
+      cwd: PATHS.root,
+      env: childEnv
     });
 
     let lastStep = 'starting';
