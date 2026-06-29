@@ -51,7 +51,16 @@ async function attachGeneratedImage({ ingredientId, kind, filename, queuedAt }) 
   const existing = await listMediaForIngredient(ingredientId);
   // Idempotent against the optimistic client path: it already attached this
   // exact render (under any kind) — don't double-file it as a second kind.
-  if (existing.some((m) => m.mediaKey === filename)) return 'duplicate';
+  const existingRow = existing.find((m) => m.mediaKey === filename);
+  if (existingRow) {
+    // The mounted client won the optimistic attach for this render. If it
+    // landed as the PORTRAIT, still record its queuedAt in the guard — otherwise
+    // a later OLDER portrait render isn't seen as stale and would clobber this
+    // newer one (the guard's mark normally happens on our own setPortraitMedia
+    // write below, which this duplicate path skips).
+    if (existingRow.kind === 'portrait') portraitGuard.mark(ingredientId, queuedAt);
+    return 'duplicate';
+  }
   const hasPortrait = existing.some((m) => m.kind === 'portrait');
   // Explicit kind wins; otherwise auto: first image → portrait, later → reference
   // (mirrors CatalogIngredient.jsx `handleGeneratedImage`).

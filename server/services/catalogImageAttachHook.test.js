@@ -197,6 +197,43 @@ describe('catalogImageAttachHook', () => {
     ]);
   });
 
+  it('marks the guard when the client already filed a newer portrait, so a later older portrait is demoted (#1791)', async () => {
+    // The mounted client optimistically attached the NEWER render as the
+    // portrait, so the hook sees it as a duplicate (it never runs setPortraitMedia
+    // for it). The guard must still record the newer queuedAt.
+    const rows = [{ mediaKey: 'new.png', kind: 'portrait' }];
+    listMediaForIngredient.mockImplementation(async () => rows.map((r) => ({ ...r })));
+    setPortraitMedia.mockImplementation(async (id, key) => {
+      for (let i = rows.length - 1; i >= 0; i--) {
+        if (rows[i].kind === 'portrait' && rows[i].mediaKey !== key) rows.splice(i, 1);
+      }
+      rows.push({ mediaKey: key, kind: 'portrait' });
+      return {};
+    });
+    attachMedia.mockImplementation(async (id, key, kind) => { rows.push({ mediaKey: key, kind }); return {}; });
+
+    // Newer render arrives at the hook but the client already filed it → duplicate.
+    mediaJobEvents.emit('completed', {
+      kind: 'image', params: { catalogAttach: { ingredientId: 'ing-dup', kind: 'portrait' } },
+      result: { filename: 'new.png' }, queuedAt: '2026-06-29T00:00:02.000Z',
+    });
+    await waitFor(() => listMediaForIngredient.mock.calls.length > 0);
+    // An OLDER explicit-portrait render completes afterward — it must be demoted
+    // to a reference, NOT replace the newer portrait the client filed.
+    mediaJobEvents.emit('completed', {
+      kind: 'image', params: { catalogAttach: { ingredientId: 'ing-dup', kind: 'portrait' } },
+      result: { filename: 'old.png' }, queuedAt: '2026-06-29T00:00:01.000Z',
+    });
+    await waitFor(() => rows.length === 2);
+
+    expect(setPortraitMedia).not.toHaveBeenCalled(); // newer portrait never overwritten
+    expect(attachMedia).toHaveBeenCalledWith('ing-dup', 'old.png', 'reference');
+    expect(rows).toEqual([
+      { mediaKey: 'new.png', kind: 'portrait' },
+      { mediaKey: 'old.png', kind: 'reference' },
+    ]);
+  });
+
   it('swallows a DB error without rejecting (best-effort)', async () => {
     listMediaForIngredient.mockRejectedValueOnce(new Error('db down'));
     // Must not throw / leave an unhandled rejection.
