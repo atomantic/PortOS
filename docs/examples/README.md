@@ -19,14 +19,14 @@ keeping the full Read/Write/Edit/Bash tool harness.
 - **Global (`~/.claude/settings.json`)** — copy this file's `env` block in. The stock
   `claude-code` provider in PortOS then works as-is, with no custom provider. Downside:
   it routes *all* local `claude` usage (interactive too) through Ollama.
-- **Scoped (recommended)** — add the **Clawed Ollama** sample provider in PortOS
-  (AI Providers → Add Sample). It carries the same env *per provider*, so you keep
-  cloud Claude and a local-model option side by side and pick per task. See
-  [docs/features/clawed-ollama.md](../features/clawed-ollama.md).
+- **Scoped (recommended)** — use the **Claude Ollama** provider in PortOS (shipped on
+  the AI Providers page; CLI and TUI variants). It carries the same env *per provider*,
+  so you keep cloud Claude and a local-model option side by side and pick per task. See
+  [docs/features/claude-ollama.md](../features/claude-ollama.md).
 
 > ⚠️ **Tool-use caveat.** The agent harness depends on reliable tool-calling. Small
 > generic models (Mistral 7B, base Llama, etc.) "run" but fail ~35–85% of tool calls
 > and silently stop writing files. Use a tool-capable model — **Qwen 2.5/3, Llama
 > 3.1+, Mistral Small 24B, GLM-4, Granite 3, gpt-oss**. Q4_K_M is the practical quant
-> floor. The Clawed Ollama provider's model refresh filters its list to tool-capable
+> floor. The Claude Ollama provider's model refresh filters its list to tool-capable
 > models for you.

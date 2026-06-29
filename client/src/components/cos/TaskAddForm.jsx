@@ -72,7 +72,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
   // (CLI/TUI agents with a file-writing harness). HTTP `api` providers (raw
   // Ollama / LM Studio / nvidia-kimi) return plain text and can't write files, so
   // they're not valid task runners; a user who only has those should use the
-  // "Clawed Ollama" sample (a `claude` CLI pointed at Ollama) instead.
+  // "Claude Ollama" sample (a `claude` CLI/TUI pointed at Ollama) instead.
   const enabledProviders = useMemo(() =>
     providers?.filter(p => p.enabled && isProcessProvider(p)) || [],
     [providers]
@@ -563,7 +563,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
         </div>
         {apiOnlyProviders && (
           <div className="px-3 py-2 bg-port-warning/10 border border-port-warning/40 rounded-lg text-xs text-port-warning">
-            Your enabled providers (Ollama / LM Studio) are HTTP API providers with no file-writing harness, so they can't run agent tasks. Add the <span className="font-semibold">Clawed Ollama</span> sample provider (a <code>claude</code> CLI pointed at your local model) from AI Providers → Add Sample to run file-writing tasks on a local model.
+            Your enabled providers (Ollama / LM Studio) are HTTP API providers with no file-writing harness, so they can't run agent tasks. Add the <span className="font-semibold">Claude Ollama</span> sample provider (a <code>claude</code> CLI/TUI pointed at your local model) from AI Providers → Add Sample to run file-writing tasks on a local model.
           </div>
         )}
         {/* Screenshot and Attachment Upload */}

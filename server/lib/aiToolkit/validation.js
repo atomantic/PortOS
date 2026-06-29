@@ -34,8 +34,8 @@ export const providerSchema = z.object({
   contextWindow: z.number().int().min(512).max(2097152).nullable().optional(),
   timeout: z.number().int().min(1000).max(1800000).optional(),
   enabled: z.boolean().optional(),
-  // Marks a CLI provider (command `claude`) whose ANTHROPIC_BASE_URL points at a
-  // local Ollama daemon — the "Clawed Ollama" pattern. Drives model refresh to
+  // Marks a `claude` CLI/TUI provider whose ANTHROPIC_BASE_URL points at a
+  // local Ollama daemon — the "Claude Ollama" pattern. Drives model refresh to
   // pull tool-use-capable Ollama models instead of the static Anthropic list.
   ollamaBacked: z.boolean().optional(),
   envVars: z.record(z.string()).optional(),

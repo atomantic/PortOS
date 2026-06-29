@@ -39,7 +39,7 @@ const TOOL_USE_RE = new RegExp([
 ].join('|'), 'i');
 
 /**
- * A CLI provider (command `claude`) is "Ollama-backed" — the Clawed Ollama
+ * A `claude` CLI/TUI provider is "Ollama-backed" — the Claude Ollama
  * pattern — when it carries the `ollamaBacked` marker or its ANTHROPIC_BASE_URL
  * points at an Ollama daemon. Such a provider runs the full Claude Code harness
  * but generates tokens from a local model, so its model list must come from
@@ -374,7 +374,7 @@ export function createProviderService(config = {}) {
         contextWindow: providerData.contextWindow || null,
         timeout: providerData.timeout || 300000,
         enabled: providerData.enabled !== false,
-        // Clawed Ollama marker — preserve so adopting the sample via POST drives
+        // Claude Ollama marker — preserve so adopting the sample via POST drives
         // ollama-backed model refresh (see isOllamaBackedProvider).
         ...(providerData.ollamaBacked === true ? { ollamaBacked: true } : {}),
         envVars: providerData.envVars || {},
@@ -498,6 +498,11 @@ export function createProviderService(config = {}) {
           models = await this._refreshAPIProviderModels(provider);
         } else if (provider.type === 'cli') {
           models = await this._refreshCLIProviderModels(provider);
+        } else if (provider.type === 'tui' && isOllamaBackedProvider(provider)) {
+          // TUI providers normally don't refresh (their model is fixed by the
+          // CLI/config), but the Claude-Ollama TUI variant still needs its
+          // tool-use-capable Ollama model list pulled live, same as the CLI one.
+          models = await this._fetchOllamaToolCapableModels(provider);
         }
       } catch (error) {
         console.error(`Failed to refresh models for ${provider.name}:`, error.message);
@@ -560,7 +565,7 @@ export function createProviderService(config = {}) {
     async _refreshCLIProviderModels(provider) {
       const providerName = provider.name.toLowerCase();
 
-      // Clawed Ollama: a `claude` CLI pointed at a local Ollama daemon. Pull the
+      // Claude Ollama: a `claude` CLI pointed at a local Ollama daemon. Pull the
       // installed Ollama models (filtered to tool-use-capable ones — the agent
       // harness depends on reliable tool-calling) instead of the static Anthropic
       // list. Checked BEFORE the generic claude branch below.
