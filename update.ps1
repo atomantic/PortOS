@@ -83,6 +83,14 @@ $script:DepsChangedUnknown = $false
 function Test-WorkspaceDepsChanged {
     param([string]$Dir)
     if ($script:DepsChangedUnknown) { return $true }
+    # RECONCILE (issue #1779): PortOS passes the workspaces whose installed deps
+    # are stale (per npm's install receipt) in PORTOS_FORCE_CLEAN_WORKSPACES, so
+    # they get a from-scratch reinstall even when the commit diff is empty (a
+    # bare `git pull`, possibly already restarted). Mirrors update.sh.
+    if ($env:PORTOS_FORCE_CLEAN_WORKSPACES) {
+        $forced = $env:PORTOS_FORCE_CLEAN_WORKSPACES -split ','
+        if ($forced -contains $Dir) { return $true }
+    }
     $rel = if ($Dir -eq ".") { "package.json" } else { ($Dir -replace '^\./', '') + "/package.json" }
     return $script:DepsChangedFiles -contains $rel
 }

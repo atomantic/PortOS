@@ -165,6 +165,7 @@ import { getSettings as getInitSettings } from './services/settings.js';
 import { setUserCatalogTypes } from './lib/catalogTypes.js';
 import { readUserTypes as readUserTypeSlice } from './services/catalogUserTypes/store.js';
 import { startUpdateScheduler, recordUpdateResult, clearStaleUpdateInProgress, getCurrentVersion } from './services/updateChecker.js';
+import { captureBootCommit } from './services/installState.js';
 import { restoreLoops } from './services/loops.js';
 import { startBrainScheduler } from './services/brainScheduler.js';
 import { recoverStuckClassifications } from './services/brain.js';
@@ -675,6 +676,11 @@ const removeMarker = () => unlink(updateMarkerPath).catch(e => {
 
 // Clear stale updateInProgress if the server was killed mid-update
 clearStaleUpdateInProgress().catch(err => console.error(`❌ Stale update recovery failed: ${err.message}`));
+
+// Capture the commit this process booted at, so /api/update/status can detect
+// a bare `git pull` that advanced on-disk HEAD without restarting (issue #1779).
+// Best-effort — a tarball/non-git install just yields no boot commit.
+captureBootCommit().catch(err => console.error(`❌ Boot commit capture failed: ${err.message}`));
 
 // Start periodic update checker (checks GitHub releases every 30 min)
 startUpdateScheduler();

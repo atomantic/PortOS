@@ -162,4 +162,46 @@ describe('executeUpdate', () => {
       expect.objectContaining({ success: false, log: 'spawn failed' })
     );
   });
+
+  // Reconcile (issue #1779) passes the stale workspaces so update.sh force-
+  // reinstalls exactly those, regardless of the commit diff.
+  it('passes allowlisted forceCleanWorkspaces as PORTOS_FORCE_CLEAN_WORKSPACES', async () => {
+    const child = createMockChild();
+    spawn.mockReturnValue(child);
+    const promise = executeUpdate('v1.0.0', () => {}, { forceCleanWorkspaces: ['.', 'client'] });
+    child.emit('close', 0);
+    await promise;
+    const env = spawn.mock.calls[0][2].env;
+    expect(env.PORTOS_FORCE_CLEAN_WORKSPACES).toBe('.,client');
+  });
+
+  it('does NOT set PORTOS_FORCE_CLEAN_WORKSPACES when none are given', async () => {
+    const child = createMockChild();
+    spawn.mockReturnValue(child);
+    const promise = executeUpdate('v1.0.0', () => {});
+    child.emit('close', 0);
+    await promise;
+    const env = spawn.mock.calls[0][2].env;
+    expect(env.PORTOS_FORCE_CLEAN_WORKSPACES).toBeUndefined();
+  });
+
+  it('filters out non-allowlisted workspace names (no injection)', async () => {
+    const child = createMockChild();
+    spawn.mockReturnValue(child);
+    const promise = executeUpdate('v1.0.0', () => {}, { forceCleanWorkspaces: ['client', '../../etc', 'rm -rf /'] });
+    child.emit('close', 0);
+    await promise;
+    const env = spawn.mock.calls[0][2].env;
+    expect(env.PORTOS_FORCE_CLEAN_WORKSPACES).toBe('client');
+  });
+
+  it('does NOT set the env when every workspace name is rejected', async () => {
+    const child = createMockChild();
+    spawn.mockReturnValue(child);
+    const promise = executeUpdate('v1.0.0', () => {}, { forceCleanWorkspaces: ['bogus'] });
+    child.emit('close', 0);
+    await promise;
+    const env = spawn.mock.calls[0][2].env;
+    expect(env.PORTOS_FORCE_CLEAN_WORKSPACES).toBeUndefined();
+  });
 });

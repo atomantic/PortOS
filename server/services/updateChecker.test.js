@@ -27,6 +27,12 @@ vi.mock('../lib/gitRemote.js', () => ({
   UPSTREAM_FULL_NAME: 'atomantic/PortOS'
 }));
 
+// Keep getUpdateStatus unit tests hermetic — install-sync detection has its own
+// suite (installState.test.js); here it must not spawn real git/fs.
+vi.mock('./installState.js', () => ({
+  getInstallState: vi.fn().mockResolvedValue(null)
+}));
+
 import { readJSONFile, ensureDir, atomicWrite } from '../lib/fileUtils.js';
 import { execGh } from './github.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
