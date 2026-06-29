@@ -184,11 +184,12 @@ export default function MusicVideo() {
   //   - music-video:scene-video — durable attach filed by musicVideoSceneVideoHook;
   //     fold videoHistoryId onto the matching scene without a refetch, even for a
   //     project that isn't selected. Does NOT touch the spinner.
-  //   - video-gen:completed / video-gen:failed — the job's terminal events; clear
-  //     the spinner by correlating generationId → sceneId. There is no
-  //     video-gen:canceled bridge, so a running-cancel surfaces as :failed for an
-  //     owned job; the deferred toast re-polls the job and stays silent when it
-  //     resolved to 'canceled' (same disambiguation the image lane uses).
+  //   - video-gen:completed / video-gen:failed / video-gen:canceled — the job's
+  //     terminal events; clear the spinner by correlating generationId → sceneId.
+  //     A queued-cancel emits only :canceled (no :failed), so without that
+  //     handler the spinner would stick; a running-cancel emits :failed then
+  //     :canceled, so the deferred toast re-polls the job and stays silent when
+  //     it resolved to 'canceled' (same disambiguation the image lane uses).
   useEffect(() => {
     const onSceneVideo = ({ projectId, sceneId, videoHistoryId }) => {
       applySceneVideo(projectId, sceneId, videoHistoryId);
@@ -229,13 +230,25 @@ export default function MusicVideo() {
       settle(data, !owned);
       if (owned && !failTimers.has(jobId)) armFailToast(jobId);
     };
+    // Queued-cancel emits no *:failed; running-cancel emits failed then this.
+    // Either way clear the spinner and cancel any pending failure toast.
+    const onCanceled = (data) => {
+      const jobId = data?.generationId || data?.jobId;
+      if (jobId) {
+        const t = failTimers.get(jobId);
+        if (t) { clearTimeout(t); failTimers.delete(jobId); }
+      }
+      settle(data, false);
+    };
     socket.on('music-video:scene-video', onSceneVideo);
     socket.on('video-gen:completed', onCompleted);
     socket.on('video-gen:failed', onFailed);
+    socket.on('video-gen:canceled', onCanceled);
     return () => {
       socket.off('music-video:scene-video', onSceneVideo);
       socket.off('video-gen:completed', onCompleted);
       socket.off('video-gen:failed', onFailed);
+      socket.off('video-gen:canceled', onCanceled);
       for (const t of failTimers.values()) clearTimeout(t);
       failTimers.clear();
     };

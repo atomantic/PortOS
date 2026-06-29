@@ -1,16 +1,19 @@
 /**
  * createMediaJobImageHook — shared tag-dispatch scaffold for the media-job
- * scene-image completion hooks (#1791).
+ * scene-asset completion hooks (#1791, generalized to video in #1760 Phase 1).
  *
- * Three completion hooks (writers-room #1363, catalog #1359, music-video #1760)
- * each subscribe to `mediaJobEvents 'completed'` and do the same shape of work:
- * ignore non-image jobs, decode a destination tag off `job.params`, validate its
- * fields, attach the rendered filename onto a record (serialized per-key so two
- * renders for the same record can't clobber each other), and — for the
- * scene-frame hooks — drop an out-of-order older render so it can't overwrite a
- * newer frame. This factory owns that copy-pasted skeleton so each hook becomes
- * a small config; a future "attach a render to record X" feature is a new config
- * object, not a 4th hand-wired listener.
+ * Four completion hooks (writers-room #1363, catalog #1359, music-video scene
+ * image #1760 Phase 1b, music-video scene video #1760 Phase 1) each subscribe to
+ * `mediaJobEvents 'completed'` and do the same shape of work: ignore jobs of the
+ * wrong `kind`, decode a destination tag off `job.params`, validate its fields,
+ * attach the rendered asset (an image filename or a video history id) onto a
+ * record (serialized per-key so two renders for the same record can't clobber
+ * each other), and — for the scene-frame hooks — drop an out-of-order older
+ * render so it can't overwrite a newer one. This factory owns that copy-pasted
+ * skeleton so each hook becomes a small config; a new "attach a render to record
+ * X" feature is a new config object, not another hand-wired listener. The job
+ * `kind` and the attached-value extraction are config knobs (`kind`,
+ * `extractResult`) so the scaffold covers both image and video jobs.
  *
  * The shared skeleton this owns:
  *   - the idempotent init (a stray double-init must not double-register the
@@ -67,6 +70,19 @@ export function createMediaJobImageHook(config) {
     // log (e.g. `workId/sceneId`), so a "render didn't attach" line is traceable
     // to a specific record the way each hand-written hook's log used to be.
     describe = null,
+    // The media-job kind this hook attaches. Defaults to 'image' (the three
+    // scene-image hooks); the music-video i2v hook (#1760) passes 'video' to
+    // ride this same scaffold for a different job kind.
+    kind = 'image',
+    // Pull the fields to merge into `ctx` off a completed job, or return null to
+    // ignore it. The default surfaces the rendered image filename as
+    // `ctx.filename` (string-required) — the shape the three image hooks consume.
+    // The video hook overrides it to surface `ctx.videoHistoryId` (the clip's
+    // history id) instead, so each hook's attach/onAttached reads its own field.
+    extractResult = (job) => {
+      const f = job.result?.filename;
+      return (f && typeof f === 'string') ? { filename: f } : null;
+    },
   } = config;
 
   const serialize = createKeyCachedQueue();
@@ -74,22 +90,22 @@ export function createMediaJobImageHook(config) {
 
   let completedHandler = null;
 
-  // Decode the job into the hook's identity context, or null to ignore it.
-  // Shared across the completed path (filename required) so the kind/tag/field
-  // guards live in one place.
+  // Decode the job into the hook's identity context, or null to ignore it, so
+  // the kind/tag/result guards live in one place (the result fields are pulled
+  // by the configurable `extractResult`).
   function decode(job) {
-    if (!job || job.kind !== 'image') return null;
+    if (!job || job.kind !== kind) return null;
     const tag = job.params?.[tagKey];
     if (!tag) return null;
     const identity = identify(tag, job);
     if (!identity) return null;
-    const filename = job.result?.filename;
-    if (!filename || typeof filename !== 'string') return null;
+    const fields = extractResult(job);
+    if (!fields) return null;
     // Normalize queuedAt once here so the guard below AND any consumer's attach
     // (e.g. catalog's portrait guard) read the same `ctx.queuedAt` instead of
     // re-deriving it.
     const queuedAt = typeof job.queuedAt === 'string' ? job.queuedAt : null;
-    return { ...identity, job, tag, filename, queuedAt };
+    return { ...identity, job, tag, ...fields, queuedAt };
   }
 
   function init() {
@@ -117,7 +133,10 @@ export function createMediaJobImageHook(config) {
           return r;
         }).catch((err) => {
           const where = describe ? ` → ${describe(ctx)}` : '';
-          console.log(`⚠️ ${label} hook failed for ${ctx.filename}${where}: ${err?.message || String(err)}`);
+          // `ctx.filename` is the image lanes' attached value; the video lane has
+          // no filename (it attaches a history id), so fall back to the routing
+          // string from `describe` for a still-traceable line.
+          console.log(`⚠️ ${label} hook failed for ${ctx.filename || 'render'}${where}: ${err?.message || String(err)}`);
           return null;
         });
 
