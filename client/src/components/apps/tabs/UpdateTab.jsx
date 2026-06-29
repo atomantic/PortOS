@@ -166,7 +166,16 @@ export default function UpdateTab() {
 
   const handleUpdateFromForkAsIs = () => runUpdate({ acknowledgeFork: true });
 
-  const handleSyncForkAndUpdate = async () => {
+  // Reconcile a half-updated install (issue #1779) — same machinery as a normal
+  // update, but `reconcile: true` lets the server run update.sh even with no
+  // newer release. Fork-aware variants mirror the release-update buttons.
+  const handleReconcile = () => runUpdate({ reconcile: true });
+
+  const handleReconcileFromForkAsIs = () => runUpdate({ acknowledgeFork: true, reconcile: true });
+
+  // Shared fork-sync-then-run: syncs the fork, then runs update/reconcile with
+  // the freshly fetched status. `extraOpts` distinguishes update vs reconcile.
+  const syncForkThenRun = async (extraOpts = {}) => {
     setSyncingFork(true);
     setForkSyncError(null);
     const synced = await api.syncPortosFork({}, { silent: true }).catch(err => {
@@ -181,8 +190,12 @@ export default function UpdateTab() {
       toast.success(`Synced ${synced.fullName} from ${synced.source}`);
     }
     const fresh = await fetchStatus();
-    await runUpdate({}, fresh);
+    await runUpdate(extraOpts, fresh);
   };
+
+  const handleSyncForkAndUpdate = () => syncForkThenRun({});
+
+  const handleSyncForkAndReconcile = () => syncForkThenRun({ reconcile: true });
 
   const handleSyncForkOnly = async () => {
     setSyncingFork(true);
@@ -232,6 +245,26 @@ export default function UpdateTab() {
   // Server is the source of truth for the freshness window — don't
   // re-implement the time math here.
   const forkSyncFresh = !!status?.forkSyncFresh;
+
+  // Install-sync state (issue #1779) — surfaces a half-updated install (bare
+  // `git pull`, no ./update.sh). Distinct from "a new release is available".
+  const installState = status?.installState;
+  const outOfSync = !!installState?.outOfSync;
+  const installIssues = [];
+  if (installState?.runningStaleCode) {
+    installIssues.push('Running code is older than what’s checked out — a restart/update is required.');
+  }
+  if (installState?.staleDeps?.stale) {
+    const ws = (installState.staleDeps.workspaces || []).filter(w => w.stale).map(w => w.name);
+    installIssues.push(`Dependencies are out of date${ws.length ? ` (${ws.join(', ')})` : ''} — run update.sh to npm install.`);
+  }
+  if (installState?.staleBuild === true) {
+    installIssues.push('The served client build is older than the UI source — a rebuild is needed.');
+  }
+  if (installState?.pendingMigrations?.count > 0) {
+    const n = installState.pendingMigrations.count;
+    installIssues.push(`${n} pending data migration${n === 1 ? '' : 's'} not yet applied.`);
+  }
 
   return (
     <div className="space-y-6">
@@ -283,6 +316,62 @@ export default function UpdateTab() {
               {forkSyncError && (
                 <div className="mt-2 text-xs text-port-error whitespace-pre-wrap">{forkSyncError}</div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Install out of sync (issue #1779) — distinct from "new release available" */}
+      {outOfSync && (
+        <div className="p-4 rounded-lg border border-port-warning/50 bg-port-warning/5">
+          <div className="flex items-start gap-2">
+            <AlertTriangle size={18} className="text-port-warning shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <div className="text-sm text-white font-medium">Install out of sync</div>
+              <div className="text-xs text-gray-400 mt-1">
+                Your checked-out code is ahead of what’s running or installed — this happens after a
+                manual <span className="font-mono">git pull</span> without <span className="font-mono">./update.sh</span>.
+                Reconcile to finish the update (install dependencies, rebuild, run migrations, restart).
+              </div>
+              <ul className="text-xs text-gray-300 mt-2 space-y-1 list-disc list-inside">
+                {installIssues.map((msg, i) => (
+                  <li key={i}>{msg}</li>
+                ))}
+              </ul>
+              <div className="flex flex-wrap gap-2 mt-3">
+                {isFork ? (
+                  <>
+                    <button
+                      onClick={handleSyncForkAndReconcile}
+                      disabled={updating || polling || syncingFork}
+                      className="px-4 py-2 bg-port-warning text-black rounded-lg text-sm flex items-center gap-2 hover:bg-port-warning/80 disabled:opacity-50"
+                      title={`Fast-forwards ${remote?.fullName} main from ${upstreamName}, then runs update.sh to reconcile the install.`}
+                    >
+                      <GitFork size={14} className={syncingFork ? 'animate-pulse' : ''} />
+                      {syncingFork ? 'Syncing fork...' : updating ? 'Reconciling...' : polling ? 'Restarting...' : 'Sync Fork & Reconcile'}
+                    </button>
+                    <button
+                      onClick={handleReconcileFromForkAsIs}
+                      disabled={updating || polling || syncingFork}
+                      className="px-4 py-2 bg-port-border text-gray-300 rounded-lg text-sm flex items-center gap-2 hover:bg-port-border/80 hover:text-white disabled:opacity-50"
+                      title="Skip the fork sync and reconcile from your fork's origin as-is."
+                    >
+                      <RefreshCw size={14} className={updating ? 'animate-spin' : ''} />
+                      Reconcile from Fork As-Is
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    onClick={handleReconcile}
+                    disabled={updating || polling || syncingFork}
+                    className="px-4 py-2 bg-port-warning text-black rounded-lg text-sm flex items-center gap-2 hover:bg-port-warning/80 disabled:opacity-50"
+                    title="Run update.sh to install dependencies, rebuild the client, run migrations, and restart."
+                  >
+                    <RefreshCw size={14} className={updating ? 'animate-spin' : ''} />
+                    {updating ? 'Reconciling...' : polling ? 'Restarting...' : 'Reconcile Now'}
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         </div>

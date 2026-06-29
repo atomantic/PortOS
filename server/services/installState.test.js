@@ -1,0 +1,233 @@
+import { describe, it, expect, beforeEach } from 'vitest';
+import {
+  getInstallState,
+  captureBootCommit,
+  getBootCommit,
+  __setBootCommitForTest,
+  __internal
+} from './installState.js';
+
+// All external effects are injected, so these tests never touch real git/fs.
+
+const ROOT = '/repo';
+
+// Build a statMtime mock from a { pathSuffix: mtimeMs } map. A path not present
+// in the map resolves to null (absent), mirroring the real helper.
+function makeStat(map) {
+  return async (path) => {
+    for (const [suffix, mtime] of Object.entries(map)) {
+      if (path.endsWith(suffix)) return mtime;
+    }
+    return null;
+  };
+}
+
+// A fully in-sync baseline: every workspace installed (receipt newer than
+// manifest), build current, no pending migrations, same commit.
+function syncedOpts(overrides = {}) {
+  return {
+    rootDir: ROOT,
+    boot: 'abc',
+    getCurrentCommit: async () => 'abc',
+    isAncestor: async () => false,
+    statMtime: makeStat({
+      'package.json': 100,
+      '.package-lock.json': 200,
+      'client/dist/index.html': 500
+    }),
+    clientSourceNewer: async () => false,
+    listPending: async () => [],
+    ...overrides
+  };
+}
+
+describe('getInstallState — running stale code', () => {
+  it('flags stale code when on-disk HEAD is strictly ahead of the boot commit', async () => {
+    const state = await getInstallState(syncedOpts({
+      boot: 'old',
+      getCurrentCommit: async () => 'new',
+      isAncestor: async () => true // boot is an ancestor of current → ahead
+    }));
+    expect(state.runningStaleCode).toBe(true);
+    expect(state.outOfSync).toBe(true);
+    expect(state.bootCommit).toBe('old');
+    expect(state.currentCommit).toBe('new');
+  });
+
+  it('does NOT flag when commits differ but boot is not an ancestor (branch switch / rollback)', async () => {
+    const state = await getInstallState(syncedOpts({
+      boot: 'branchA',
+      getCurrentCommit: async () => 'branchB',
+      isAncestor: async () => false
+    }));
+    expect(state.runningStaleCode).toBe(false);
+    expect(state.outOfSync).toBe(false);
+  });
+
+  it('does NOT flag when boot and current commit are identical', async () => {
+    const state = await getInstallState(syncedOpts());
+    expect(state.runningStaleCode).toBe(false);
+  });
+
+  it('does NOT flag when there is no boot commit (tarball / non-git install)', async () => {
+    const state = await getInstallState(syncedOpts({ boot: null, isAncestor: async () => true }));
+    expect(state.runningStaleCode).toBe(false);
+  });
+});
+
+describe('getInstallState — stale deps', () => {
+  it('flags a workspace whose manifest is newer than the npm install receipt', async () => {
+    const state = await getInstallState(syncedOpts({
+      statMtime: makeStat({
+        'package.json': 300, // manifest newer than receipt
+        '.package-lock.json': 200,
+        'client/dist/index.html': 500
+      })
+    }));
+    expect(state.staleDeps.stale).toBe(true);
+    expect(state.staleDeps.workspaces.some(w => w.stale && w.reason === 'manifest-newer')).toBe(true);
+    expect(state.outOfSync).toBe(true);
+  });
+
+  it('flags a workspace with no install receipt as not-installed', async () => {
+    const state = await getInstallState(syncedOpts({
+      statMtime: makeStat({
+        'package.json': 100,
+        'client/dist/index.html': 500
+        // no .package-lock.json → receipt missing
+      })
+    }));
+    expect(state.staleDeps.stale).toBe(true);
+    expect(state.staleDeps.workspaces.every(w => w.reason === 'not-installed')).toBe(true);
+  });
+
+  it('flags a workspace whose lockfile is newer than the receipt', async () => {
+    const state = await getInstallState(syncedOpts({
+      statMtime: makeStat({
+        'package.json': 100,
+        '.package-lock.json': 200,
+        'package-lock.json': 300, // lockfile newer than receipt
+        'client/dist/index.html': 500
+      })
+    }));
+    expect(state.staleDeps.stale).toBe(true);
+    expect(state.staleDeps.workspaces.some(w => w.reason === 'lockfile-newer')).toBe(true);
+  });
+
+  it('skips workspaces with no package.json (absent in this install)', async () => {
+    const state = await getInstallState(syncedOpts({
+      statMtime: makeStat({
+        // Only the root manifest exists; others absent → skipped
+        '/repo/package.json': 100,
+        '/repo/node_modules/.package-lock.json': 200,
+        'client/dist/index.html': 500
+      })
+    }));
+    expect(state.staleDeps.workspaces.map(w => w.name)).toEqual(['root']);
+    expect(state.staleDeps.stale).toBe(false);
+  });
+
+  it('reports in-sync when every receipt is newer than its manifest', async () => {
+    const state = await getInstallState(syncedOpts());
+    expect(state.staleDeps.stale).toBe(false);
+  });
+});
+
+describe('getInstallState — stale build', () => {
+  it('flags when client source is newer than the built bundle', async () => {
+    const state = await getInstallState(syncedOpts({ clientSourceNewer: async () => true }));
+    expect(state.staleBuild).toBe(true);
+    expect(state.outOfSync).toBe(true);
+  });
+
+  it('is null (unknown) when there is no built bundle — dev / never built', async () => {
+    const state = await getInstallState(syncedOpts({
+      statMtime: makeStat({ 'package.json': 100, '.package-lock.json': 200 }) // no dist/index.html
+    }));
+    expect(state.staleBuild).toBeNull();
+    // null build must NOT count toward outOfSync
+    expect(state.outOfSync).toBe(false);
+  });
+
+  it('is false when the build is current', async () => {
+    const state = await getInstallState(syncedOpts());
+    expect(state.staleBuild).toBe(false);
+  });
+});
+
+describe('getInstallState — pending migrations', () => {
+  it('surfaces pending migration files and count', async () => {
+    const state = await getInstallState(syncedOpts({
+      listPending: async () => ['099-foo.js', '100-bar.js']
+    }));
+    expect(state.pendingMigrations.count).toBe(2);
+    expect(state.pendingMigrations.files).toEqual(['099-foo.js', '100-bar.js']);
+    expect(state.outOfSync).toBe(true);
+  });
+
+  it('reports zero pending when the applied-list is current', async () => {
+    const state = await getInstallState(syncedOpts());
+    expect(state.pendingMigrations.count).toBe(0);
+    expect(state.outOfSync).toBe(false);
+  });
+});
+
+describe('getInstallState — resilience', () => {
+  it('treats a thrown ancestry check as not-ahead', async () => {
+    const state = await getInstallState(syncedOpts({
+      boot: 'old',
+      getCurrentCommit: async () => 'new',
+      isAncestor: async () => { throw new Error('git boom'); }
+    }));
+    expect(state.runningStaleCode).toBe(false);
+  });
+
+  it('treats a thrown migration listing as zero pending', async () => {
+    const state = await getInstallState(syncedOpts({
+      listPending: async () => { throw new Error('fs boom'); }
+    }));
+    expect(state.pendingMigrations.count).toBe(0);
+  });
+});
+
+describe('captureBootCommit', () => {
+  beforeEach(() => __setBootCommitForTest(null));
+
+  it('captures the HEAD commit once and is idempotent', async () => {
+    let calls = 0;
+    const getCommit = async () => { calls++; return calls === 1 ? 'first' : 'second'; };
+    expect(await captureBootCommit({ getCommit })).toBe('first');
+    // A later on-disk pull must not overwrite the captured boot commit.
+    expect(await captureBootCommit({ getCommit })).toBe('first');
+    expect(getBootCommit()).toBe('first');
+    expect(calls).toBe(1);
+  });
+
+  it('leaves boot commit null when HEAD cannot be read', async () => {
+    const getCommit = async () => null;
+    expect(await captureBootCommit({ getCommit })).toBeNull();
+    expect(getBootCommit()).toBeNull();
+  });
+});
+
+describe('detectStaleDeps (direct)', () => {
+  it('classifies each workspace independently', async () => {
+    const statMtime = makeStat({
+      '/repo/package.json': 100,
+      '/repo/node_modules/.package-lock.json': 200, // root: fresh
+      '/repo/client/package.json': 300,
+      '/repo/client/node_modules/.package-lock.json': 200, // client: manifest-newer
+      '/repo/server/package.json': 100,
+      '/repo/server/node_modules/.package-lock.json': 200, // server: fresh
+      '/repo/autofixer/package.json': 100
+      // autofixer: no receipt → not-installed
+    });
+    const result = await __internal.detectStaleDeps(ROOT, { statMtime });
+    const byName = Object.fromEntries(result.workspaces.map(w => [w.name, w]));
+    expect(byName.root.stale).toBe(false);
+    expect(byName.client.reason).toBe('manifest-newer');
+    expect(byName.server.stale).toBe(false);
+    expect(byName.autofixer.reason).toBe('not-installed');
+    expect(result.stale).toBe(true);
+  });
+});

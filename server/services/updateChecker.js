@@ -5,6 +5,7 @@ import { createMutex } from '../lib/asyncMutex.js';
 import { isPlainObject } from '../lib/objects.js';
 import { getOriginInfo, UPSTREAM_OWNER, UPSTREAM_REPO, UPSTREAM_FULL_NAME } from '../lib/gitRemote.js';
 import { compareSemver } from '../lib/versionUtils.js';
+import { getInstallState } from './installState.js';
 import { execGh } from './github.js';
 
 // Re-exported for back-compat: callers/tests historically import compareSemver
@@ -240,6 +241,11 @@ export async function getUpdateStatus() {
     (Date.now() - new Date(lastSync.syncedAt).getTime()) < FORK_SYNC_FRESHNESS_MS
   );
 
+  // Install-sync state — "is the checked-out code ahead of what's running /
+  // installed?" (issue #1779). Best-effort: a git/fs hiccup here must never
+  // block the status response, so failures collapse to null.
+  const installState = await getInstallState().catch(() => null);
+
   return {
     currentVersion,
     ...state,
@@ -247,7 +253,8 @@ export async function getUpdateStatus() {
     remoteInfo,
     upstream: { owner: UPSTREAM_OWNER, repo: UPSTREAM_REPO, fullName: UPSTREAM_FULL_NAME },
     forkSyncFresh,
-    forkSyncWindowMs: FORK_SYNC_FRESHNESS_MS
+    forkSyncWindowMs: FORK_SYNC_FRESHNESS_MS,
+    installState
   };
 }
 

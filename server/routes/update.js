@@ -17,7 +17,11 @@ const syncForkSchema = z.object({
 });
 
 const executeSchema = z.object({
-  acknowledgeFork: z.boolean().optional()
+  acknowledgeFork: z.boolean().optional(),
+  // Reconcile a half-updated install (issue #1779): run update.sh to pull +
+  // install + build + restart even when there's no NEWER GitHub release — the
+  // user did a bare `git pull` and just needs the rest of the update steps.
+  reconcile: z.boolean().optional()
 });
 
 // GET /api/update/status — returns update state (also clears stale locks)
@@ -104,12 +108,23 @@ router.post('/sync-fork', asyncHandler(async (req, res) => {
 
 // POST /api/update/execute — kicks off update
 router.post('/execute', asyncHandler(async (req, res) => {
-  const { acknowledgeFork } = validateRequest(executeSchema, req.body || {});
+  const { acknowledgeFork, reconcile } = validateRequest(executeSchema, req.body || {});
   const status = await updateChecker.getUpdateStatus();
-  if (!status.latestRelease?.tag) {
-    throw new ServerError('No release available to update to', { status: 400, code: 'NO_RELEASE' });
+
+  // Normal path requires a known release tag to update TO. A reconcile request
+  // (issue #1779) instead runs update.sh to finish a bare `git pull` even with
+  // no newer release — so when no release tag is known, synthesize one from the
+  // current version purely for logging (update.sh pulls main regardless of tag).
+  // Guard reconcile on the install actually being out of sync so it can't be
+  // used to force an unnecessary restart.
+  let tag = status.latestRelease?.tag;
+  if (!tag) {
+    if (reconcile && status.installState?.outOfSync) {
+      tag = `v${status.currentVersion}`;
+    } else {
+      throw new ServerError('No release available to update to', { status: 400, code: 'NO_RELEASE' });
+    }
   }
-  const tag = status.latestRelease.tag;
 
   // Validate tag is a well-formed semver release (e.g. "v1.27.0" or "v1.27.0-rc.1") to prevent option injection
   if (!/^v\d+\.\d+\.\d+(-[a-zA-Z0-9.]+)?$/.test(tag)) {
