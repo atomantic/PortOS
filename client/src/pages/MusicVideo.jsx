@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { Plus, Film, Trash2, Music, Activity, ArrowUp, ArrowDown, Image as ImageIcon } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import PageHeader from '../components/PageHeader';
@@ -40,15 +40,26 @@ export default function MusicVideo() {
   const [form, setForm] = useState({ name: '', mode: 'director', trackId: '' });
   // Per-scene reference-frame generation: sceneId → true while a render is in flight.
   const [genScenes, setGenScenes] = useState({});
+  // Async-render correlation: in-flight media-job id → sceneId, so a queued
+  // render's terminal image-gen:completed / image-gen:failed event clears the
+  // right scene's spinner. The success image lands separately via the durable
+  // music-video:scene-image event, but the SPINNER is cleared on job lifecycle
+  // so a render whose attach hook 404s (scene deleted mid-render) or that fails
+  // outright doesn't leave the button stuck on "Rendering…" forever.
+  const pendingJobsRef = useRef(new Map());
 
   const selected = projects.find((p) => p.id === selectedId) || null;
   const replaceProject = (next) => setProjects((prev) => prev.map((p) => (p.id === next.id ? next : p)));
   const clearGen = (sceneId) => setGenScenes((prev) => { const next = { ...prev }; delete next[sceneId]; return next; });
 
-  // A reference-frame render filed durably by musicVideoSceneImageHook (#1760
-  // Phase 1b) arrives here — fold the new referenceImageId onto the matching
-  // scene without a refetch, even if it targets a project that isn't selected
-  // (a background render that finished after navigating away still lands).
+  // Socket lifecycle for async (local/Codex) reference-frame renders (#1760
+  // Phase 1b). Three events, all broadcast to every client:
+  //   - music-video:scene-image — durable attach filed by musicVideoSceneImageHook;
+  //     fold the new referenceImageId onto the matching scene without a refetch,
+  //     even for a project that isn't selected (a render that finished after
+  //     navigating away still lands).
+  //   - image-gen:completed / image-gen:failed — the job's terminal events;
+  //     clear the spinner by correlating generationId → sceneId. Failure toasts.
   useEffect(() => {
     const onSceneImage = ({ projectId, sceneId, referenceImageId }) => {
       setProjects((prev) => prev.map((p) => (p.id === projectId
@@ -56,8 +67,25 @@ export default function MusicVideo() {
         : p)));
       clearGen(sceneId);
     };
+    const settle = (data) => {
+      const jobId = data?.generationId || data?.jobId;
+      if (!jobId) return null;
+      const sceneId = pendingJobsRef.current.get(jobId);
+      if (!sceneId) return null;
+      pendingJobsRef.current.delete(jobId);
+      clearGen(sceneId);
+      return sceneId;
+    };
+    const onCompleted = (data) => { settle(data); };
+    const onFailed = (data) => { if (settle(data)) toast.error('Frame render failed'); };
     socket.on('music-video:scene-image', onSceneImage);
-    return () => socket.off('music-video:scene-image', onSceneImage);
+    socket.on('image-gen:completed', onCompleted);
+    socket.on('image-gen:failed', onFailed);
+    return () => {
+      socket.off('music-video:scene-image', onSceneImage);
+      socket.off('image-gen:completed', onCompleted);
+      socket.off('image-gen:failed', onFailed);
+    };
   }, []);
 
   useEffect(() => {
@@ -142,8 +170,9 @@ export default function MusicVideo() {
 
   // Render a still reference frame for one scene from its frame prompt. The
   // async local/Codex lanes ride the media-job queue and are attached durably
-  // server-side (musicVideoSceneImageHook → music-video:scene-image), so we just
-  // keep the button spinning until that socket event lands. The synchronous
+  // server-side (musicVideoSceneImageHook → music-video:scene-image); we record
+  // the job id and let the terminal image-gen:completed/failed event clear the
+  // spinner (so a failed render doesn't strand the button). The synchronous
   // external SD-API lane returns a finished filename inline — attach it here.
   const handleGenerateFrame = (scene) => {
     const prompt = buildFramePrompt(scene);
@@ -152,7 +181,14 @@ export default function MusicVideo() {
     generateImage({ prompt, musicVideo: { projectId: selected.id, sceneId: scene.sceneId } }, { silent: true })
       .then((res) => {
         const stillRunning = res?.status === 'queued' || res?.status === 'running';
-        if (stillRunning) return; // async lane: the scene-image socket event attaches + clears the spinner
+        if (stillRunning) {
+          // async lane: correlate the job so its terminal event clears the spinner
+          // (and the durable scene-image event lands the generated frame).
+          const jobId = res?.jobId || res?.generationId;
+          if (jobId) pendingJobsRef.current.set(jobId, scene.sceneId);
+          else clearGen(scene.sceneId); // no id to track → don't strand the button
+          return;
+        }
         const filename = res?.filename;
         if (filename) {
           editSceneLocal(scene.sceneId, { referenceImageId: filename });
