@@ -209,16 +209,21 @@ async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self' } =
   if (!repoPath) return { actionable: false, count: 0, reason: 'no-repo-path' };
 
   const args = [...cfg.listArgs];
-  if (issueAuthorFilter === 'self') {
-    const { author, error } = await cfg.resolveSelf(repoPath);
-    // Transient: skip this dispatch and retry next tick rather than parking a full cadence.
-    if (error) return { actionable: false, count: 0, reason: error, transient: true };
-    args.push('--author', author);
-  } else if (issueAuthorFilter !== 'any') {
+  // Resolve the author filter symmetrically with resolveIssueAuthorFilterBlock:
+  // 'any' = no filter; 'owner' = repo/project owner; everything else (the 'self'
+  // default plus any out-of-vocab value) = the @me security boundary. Transient
+  // resolver failures skip this dispatch and retry next tick rather than parking
+  // a full cadence.
+  if (issueAuthorFilter === 'any') {
+    // no --author filter
+  } else if (issueAuthorFilter === 'owner') {
     const { owner, error } = await cfg.resolveOwner(repoPath);
-    // Transient: skip this dispatch and retry next tick rather than parking a full cadence.
     if (error) return { actionable: false, count: 0, reason: error, transient: true };
     args.push('--author', owner);
+  } else {
+    const { author, error } = await cfg.resolveSelf(repoPath);
+    if (error) return { actionable: false, count: 0, reason: error, transient: true };
+    args.push('--author', author);
   }
 
   const res = await runCli(cfg.cli, args, repoPath);
