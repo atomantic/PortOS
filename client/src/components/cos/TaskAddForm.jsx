@@ -563,7 +563,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
         </div>
         {apiOnlyProviders && (
           <div className="px-3 py-2 bg-port-warning/10 border border-port-warning/40 rounded-lg text-xs text-port-warning">
-            Your enabled providers (Ollama / LM Studio) are HTTP API providers with no file-writing harness, so they can't run agent tasks. Add the <span className="font-semibold">Claude Ollama</span> sample provider (a <code>claude</code> CLI/TUI pointed at your local model) from AI Providers → Add Sample to run file-writing tasks on a local model.
+            Your enabled providers (Ollama / LM Studio) are HTTP API providers with no file-writing harness, so they can't run agent tasks. Enable the <span className="font-semibold">Claude Ollama</span> provider (a <code>claude</code> CLI/TUI pointed at your local model) on the AI Providers page to run file-writing tasks on a local model.
           </div>
         )}
         {/* Screenshot and Attachment Upload */}
