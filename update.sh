@@ -61,6 +61,17 @@ DEPS_CHANGED_UNKNOWN=0
 workspace_deps_changed() {
   local dir="$1"
   [ "$DEPS_CHANGED_UNKNOWN" = "1" ] && return 0
+  # RECONCILE (issue #1779): a bare `git pull` (no update.sh) leaves stale
+  # node_modules even though HEAD already advanced — so the commit diff above is
+  # empty (especially if the user also restarted). PortOS passes the workspaces
+  # whose installed deps are stale (detected via npm's install receipt) in
+  # PORTOS_FORCE_CLEAN_WORKSPACES so they get the from-scratch reinstall here
+  # regardless of the diff. Tokens are dir names (".","client","server","autofixer").
+  if [ -n "${PORTOS_FORCE_CLEAN_WORKSPACES:-}" ]; then
+    case ",${PORTOS_FORCE_CLEAN_WORKSPACES}," in
+      *",${dir},"*) return 0 ;;
+    esac
+  fi
   local rel="package.json"
   [ "$dir" != "." ] && rel="${dir#./}/package.json"
   printf '%s\n' "$DEPS_CHANGED_FILES" | grep -qx "$rel"
@@ -135,14 +146,7 @@ fi
 # installs/builds), not a feature branch we just left. Diffing this against
 # post-pull HEAD yields exactly the pull's delta on main, so a manifest change
 # the update brings is detected even when launched from another branch.
-#
-# RECONCILE (issue #1779): when PortOS triggers this to finish a bare `git pull`
-# the user already did, the checkout is ALREADY at the new HEAD, so capturing
-# HEAD here would diff against itself (empty) and skip the clean reinstall the
-# stale node_modules needs. PortOS passes PORTOS_UPDATE_FROM_SHA = the commit the
-# running process was built at, so the manifest diff spans the install→now delta
-# and the clean reinstall fires for workspaces whose deps actually changed.
-pre_pull_sha="${PORTOS_UPDATE_FROM_SHA:-$(git rev-parse HEAD 2>/dev/null || echo "")}"
+pre_pull_sha=$(git rev-parse HEAD 2>/dev/null || echo "")
 run git pull --rebase --autostash
 step "git-pull" "done" "Latest changes pulled"
 

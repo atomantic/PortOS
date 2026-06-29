@@ -180,11 +180,16 @@ router.post('/execute', asyncHandler(async (req, res) => {
   // landed after the release. The script writes the true version to
   // data/update-complete.json, which the server reads on boot.
   //
-  // For a reconcile, hand update.sh the commit the running process was built at
-  // (installState.bootCommit) so its dependency-change diff spans install→now —
-  // a bare `git pull` already advanced HEAD, so HEAD-vs-HEAD would miss it.
-  const fromSha = reconcile ? status.installState.bootCommit : undefined;
-  executeUpdate(tag, emit, { fromSha }).then(result => {
+  // For a reconcile, hand the updater the workspaces whose installed deps are
+  // stale (per installState's receipt check) so it force-reinstalls exactly
+  // those — a bare `git pull` (possibly already restarted) leaves the scripts'
+  // commit-diff dependency detection empty. 'root' maps to update.sh's '.' token.
+  const forceCleanWorkspaces = reconcile
+    ? (status.installState.staleDeps?.workspaces || [])
+        .filter(w => w.stale)
+        .map(w => (w.name === 'root' ? '.' : w.name))
+    : undefined;
+  executeUpdate(tag, emit, { forceCleanWorkspaces }).then(result => {
     // Note: this .then() may never fire if the update script's PM2 restart
     // kills this server process first. The client handles this by polling
     // /api/system/health after receiving the 'restart' step.

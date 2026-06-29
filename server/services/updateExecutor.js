@@ -21,7 +21,11 @@ const UPDATE_PS1 = join(PATHS.root, 'update.ps1');
  * @param {function} emit - Callback (step, status, message) for progress
  * @returns {Promise<{success: boolean, version?: string, failedStep?: string, errorMessage?: string}>}
  */
-export async function executeUpdate(tag, emit, { fromSha } = {}) {
+// Workspaces update.sh / update.ps1 know how to clean-reinstall — the env
+// passthrough is allowlisted to these so nothing arbitrary reaches the scripts.
+const CLEANABLE_WORKSPACES = new Set(['.', 'client', 'server', 'autofixer']);
+
+export async function executeUpdate(tag, emit, { forceCleanWorkspaces } = {}) {
   const isWindows = process.platform === 'win32';
   const cmd = isWindows ? 'powershell' : 'bash';
   const args = isWindows
@@ -30,13 +34,16 @@ export async function executeUpdate(tag, emit, { fromSha } = {}) {
 
   emit('starting', 'running', `Starting update (target: ${tag})...`);
 
-  // For a reconcile (issue #1779) the checkout is already at the new HEAD, so
-  // update.sh's HEAD-based dependency-change diff would be empty and miss the
-  // clean reinstall stale node_modules needs. Pass the commit the running
-  // process was built at as the diff base so update.sh detects the real delta.
-  // Validate as a hex sha to keep arbitrary input out of the child env.
-  const childEnv = (typeof fromSha === 'string' && /^[0-9a-f]{7,40}$/i.test(fromSha))
-    ? { ...process.env, PORTOS_UPDATE_FROM_SHA: fromSha }
+  // For a reconcile (issue #1779), a bare `git pull` left stale node_modules
+  // even though HEAD already advanced — so the scripts' commit-diff dependency
+  // detection finds nothing to reinstall. Pass the workspaces whose deps are
+  // actually stale (per installState's receipt check) so update.sh/update.ps1
+  // force a from-scratch reinstall of exactly those, regardless of the diff.
+  const cleanList = Array.isArray(forceCleanWorkspaces)
+    ? forceCleanWorkspaces.filter(w => CLEANABLE_WORKSPACES.has(w))
+    : [];
+  const childEnv = cleanList.length
+    ? { ...process.env, PORTOS_FORCE_CLEAN_WORKSPACES: cleanList.join(',') }
     : process.env;
 
   return new Promise((resolve) => {
