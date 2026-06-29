@@ -1791,13 +1791,15 @@ async function videoHistoryFilenamesById() {
  *     `videoHistory` dataSync category; this adds the bytes. Falls back to the
  *     `<id>.mp4` convention (`collectionVideoRefToFilename`) when the row hasn't
  *     synced yet — a missing file is skipped, so a wrong guess never ships.
+ *   - per-scene reference-frame stills (`scene.referenceImageId`, #1760 Phase 1b
+ *     — a gallery basename under PATHS.images, the same store every other gen'd
+ *     image uses). Hashed sidecar-aware via `hashImageForManifest` so a peer that
+ *     receives the synced scene record also gets the thumbnail bytes instead of a
+ *     dangling `/data/images/<file>` reference.
  *
- * Scene reference-frame images (`scene.referenceImageId`) are intentionally NOT
- * hashed: the i2v render pipeline that populates them is Phase 1b (unshipped)
- * and its reference-image store/dir convention isn't defined yet — federating
- * them is a follow-up. Path-traversal-guarded + missing-file-skipped via
- * hashSimpleAsset; dedup by `<kind>:<filename>` so two scenes pointing at the
- * same render ship once.
+ * All three kinds are path-traversal-guarded + missing-file-skipped (a wrong/
+ * stale reference never forces a peer to re-request bytes the sender lacks);
+ * dedup by `<kind>:<filename>` so two scenes pointing at the same render ship once.
  */
 async function buildMusicVideoAssetManifest(project) {
   const dedup = new Map();
@@ -1814,6 +1816,15 @@ async function buildMusicVideoAssetManifest(project) {
     const entries = await Promise.all(videoIds.map((id) =>
       hashSimpleAsset(byId.get(id) || collectionVideoRefToFilename(id), 'video', PATHS.videos),
     ));
+    for (const entry of entries) {
+      if (entry) dedup.set(`${entry.kind}:${entry.filename}`, entry);
+    }
+  }
+  const imageNames = [...new Set(
+    scenes.map((s) => (isStr(s?.referenceImageId) ? s.referenceImageId : null)).filter(Boolean),
+  )];
+  if (imageNames.length) {
+    const entries = await Promise.all(imageNames.map((name) => hashImageForManifest(name)));
     for (const entry of entries) {
       if (entry) dedup.set(`${entry.kind}:${entry.filename}`, entry);
     }

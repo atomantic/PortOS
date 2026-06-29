@@ -119,6 +119,7 @@ import conflictJournalRoutes from './routes/conflictJournal.js';
 import { initUniverseBuilderCollectionHook } from './services/universeBuilderCollectionHook.js';
 import { initCatalogImageAttachHook } from './services/catalogImageAttachHook.js';
 import { initWritersRoomSceneImageHook } from './services/writersRoomSceneImageHook.js';
+import { initMusicVideoSceneImageHook } from './services/musicVideoSceneImageHook.js';
 import { initComicPagesFilenameHook } from './services/pipeline/comicPagesFilenameHook.js';
 import { initStoryboardsFilenameHook } from './services/pipeline/storyboardsFilenameHook.js';
 import { initSeasonCoverFilenameHook } from './services/pipeline/seasonCoverFilenameHook.js';
@@ -804,6 +805,11 @@ ensureSelf()
     // onto its analysis snapshot + work collection on completion, even if the
     // editor unmounted mid-render (#1363). Also depends on the queue being loaded.
     initWritersRoomSceneImageHook();
+    // Music Video scene-image hook — durably files a queued reference-frame
+    // render onto its project scene's `referenceImageId` on completion, even if
+    // the director board unmounted mid-render (#1760 Phase 1b). Also depends on
+    // the queue being loaded.
+    initMusicVideoSceneImageHook();
     // Pipeline filename hooks — stamp `filename` onto stage records on
     // media-job completion so the UI can still render them after the
     // 24h media-job archive TTL elapses.

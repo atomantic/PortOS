@@ -26,28 +26,16 @@
 import { mediaJobEvents } from './mediaJobQueue/index.js';
 import { persistSceneImage } from './writersRoom/evaluator.js';
 import { writersRoomEvents } from './writersRoomEvents.js';
+import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
 
 // Serialize attaches per analysis FILE (workId:analysisId). Two scene renders
 // for the same analysis completing close together would otherwise both
 // load→modify→save the one `sceneImages` map and the later write would clobber
 // the earlier scene's entry. Chaining each attach onto the prior one for that
 // analysis makes the later job merge against the freshest persisted snapshot.
-// Different analyses (and different works) still attach concurrently. In-memory
-// tail, evicted once settled; lost on restart, which is fine — best-effort.
-const attachTails = new Map();
-
-function serializePerAnalysis(key, work) {
-  const prev = attachTails.get(key) || Promise.resolve();
-  // Run `work` on both fulfil AND reject so a prior failure doesn't stall the chain.
-  const next = prev.then(work, work);
-  attachTails.set(key, next);
-  // Evict once settled, but only if nothing newer has chained on. Swallow here
-  // so eviction can't surface as an unhandled rejection — the caller attaches
-  // its own `.catch` to the returned promise.
-  const evict = () => { if (attachTails.get(key) === next) attachTails.delete(key); };
-  next.then(evict, evict);
-  return next;
-}
+// Different analyses (and different works) still attach concurrently. (Shared
+// per-key queue — catalog + music-video scene-image hooks use the same primitive.)
+const serializePerAnalysis = createKeyCachedQueue();
 
 let completedHandler = null;
 
@@ -113,6 +101,6 @@ export const __testing = {
       mediaJobEvents.off('completed', completedHandler);
       completedHandler = null;
     }
-    attachTails.clear();
+    serializePerAnalysis.clear();
   },
 };

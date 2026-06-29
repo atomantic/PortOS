@@ -23,6 +23,7 @@
 
 import { mediaJobEvents } from './mediaJobQueue/index.js';
 import { attachMedia, setPortraitMedia, listMediaForIngredient, getIngredient } from './catalogDB.js';
+import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
 
 // Resolve the render onto the ingredient. Returns the kind attached
 // ('portrait' | 'reference'), 'duplicate' when the client already filed it,
@@ -62,21 +63,9 @@ async function attachGeneratedImage({ ingredientId, kind, filename }) {
 // so it correctly falls through to 'reference'. Keyed by ingredientId, so
 // different ingredients still attach concurrently (their Postgres rows don't
 // conflict). In-memory tail, evicted once settled; lost on restart, which is
-// fine — the whole hook is best-effort.
-const attachTails = new Map();
-
-function serializePerIngredient(ingredientId, work) {
-  const prev = attachTails.get(ingredientId) || Promise.resolve();
-  // `work` on both fulfil AND reject so a prior failure doesn't stall the chain.
-  const next = prev.then(work, work);
-  attachTails.set(ingredientId, next);
-  // Evict once settled, but only if nothing newer has chained on. Swallow here
-  // (the eviction branch never rethrows) so it can't surface as an unhandled
-  // rejection — the caller attaches its own `.catch` to the returned promise.
-  const evict = () => { if (attachTails.get(ingredientId) === next) attachTails.delete(ingredientId); };
-  next.then(evict, evict);
-  return next;
-}
+// fine — the whole hook is best-effort. (Shared per-key queue — writers-room +
+// music-video scene-image hooks use the same primitive.)
+const serializePerIngredient = createKeyCachedQueue();
 
 let completedHandler = null;
 
@@ -125,6 +114,6 @@ export const __testing = {
       mediaJobEvents.off('completed', completedHandler);
       completedHandler = null;
     }
-    attachTails.clear();
+    serializePerIngredient.clear();
   },
 };

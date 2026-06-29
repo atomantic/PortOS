@@ -101,6 +101,7 @@ export * from './tuiPromptRunner.js';
 // === File & I/O ===
 export * from './collectionStore.js';
 export * from './conflictJournal.js';
+export * from './createKeyCachedQueue.js';
 export * from './fileUtils.js';
 export * from './fileWriteQueue.js';
 export * from './schemaVersions.js';

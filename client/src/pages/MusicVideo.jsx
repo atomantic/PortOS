@@ -1,5 +1,5 @@
-import { useEffect, useState, useCallback } from 'react';
-import { Plus, Film, Trash2, Music, Activity, ArrowUp, ArrowDown } from 'lucide-react';
+import { useEffect, useRef, useState, useCallback } from 'react';
+import { Plus, Film, Trash2, Music, Activity, ArrowUp, ArrowDown, Image as ImageIcon } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import PageHeader from '../components/PageHeader';
 import {
@@ -12,7 +12,9 @@ import {
   deleteMusicVideoScene,
   reorderMusicVideoScenes,
 } from '../services/apiMusicVideo.js';
+import { generateImage } from '../services/apiSystem.js';
 import { listTracks } from '../services/apiTracks.js';
+import socket from '../services/socket.js';
 import { formatDurationSec } from '../utils/formatters.js';
 
 const MODES = ['director', 'autonomous'];
@@ -36,9 +38,77 @@ export default function MusicVideo() {
   const [loading, setLoading] = useState(true);
   const [analyzing, setAnalyzing] = useState(false);
   const [form, setForm] = useState({ name: '', mode: 'director', trackId: '' });
+  // Per-scene reference-frame generation: sceneId → true while a render is in flight.
+  const [genScenes, setGenScenes] = useState({});
+  // Async-render correlation: in-flight media-job id → sceneId, so a queued
+  // render's terminal image-gen:completed / image-gen:failed event clears the
+  // right scene's spinner. The success image lands separately via the durable
+  // music-video:scene-image event, but the SPINNER is cleared on job lifecycle
+  // so a render whose attach hook 404s (scene deleted mid-render) or that fails
+  // outright doesn't leave the button stuck on "Rendering…" forever.
+  const pendingJobsRef = useRef(new Map());
+  // Terminal events that arrived BEFORE the kickoff .then registered the job id.
+  // The HTTP response and the WebSocket terminal event race on separate channels,
+  // so a fast-failing queued job's event can land first; without this, that event
+  // finds no pending entry, gets dropped, and the spinner sticks forever. Capped
+  // (jobId → failed) so the terminal events of unrelated image-gen jobs across the
+  // app can't grow it unbounded; the kickoff reconciles its own entry on arrival.
+  const orphanTerminalsRef = useRef(new Map());
 
   const selected = projects.find((p) => p.id === selectedId) || null;
   const replaceProject = (next) => setProjects((prev) => prev.map((p) => (p.id === next.id ? next : p)));
+  const clearGen = (sceneId) => setGenScenes((prev) => { const next = { ...prev }; delete next[sceneId]; return next; });
+  // Merge ONLY a scene's referenceImageId via a functional update so a render
+  // that resolves after the user edited the board can't clobber those edits with
+  // a stale project snapshot. Shared by the socket handler and the synchronous
+  // external-lane attach below.
+  const applyReferenceImage = (projectId, sceneId, referenceImageId) =>
+    setProjects((prev) => prev.map((p) => (p.id === projectId
+      ? { ...p, scenes: (p.scenes || []).map((s) => (s.sceneId === sceneId ? { ...s, referenceImageId } : s)) }
+      : p)));
+
+  // Socket lifecycle for async (local/Codex) reference-frame renders (#1760
+  // Phase 1b). Three events, all broadcast to every client:
+  //   - music-video:scene-image — durable attach filed by musicVideoSceneImageHook;
+  //     fold the new referenceImageId onto the matching scene without a refetch,
+  //     even for a project that isn't selected (a render that finished after
+  //     navigating away still lands). It does NOT touch the spinner: an older
+  //     render's scene-image can arrive while a newer one is still in flight, so
+  //     the spinner is owned solely by the job-id-correlated terminal events below.
+  //   - image-gen:completed / image-gen:failed — the job's terminal events;
+  //     clear the spinner by correlating generationId → sceneId. Failure toasts.
+  useEffect(() => {
+    const onSceneImage = ({ projectId, sceneId, referenceImageId }) => {
+      applyReferenceImage(projectId, sceneId, referenceImageId);
+    };
+    const settle = (data, failed) => {
+      const jobId = data?.generationId || data?.jobId;
+      if (!jobId) return;
+      const sceneId = pendingJobsRef.current.get(jobId);
+      if (!sceneId) {
+        // Not yet correlated (the kickoff .then hasn't registered it, or it's an
+        // unrelated image-gen job). Stash it so a slightly-late registration can
+        // reconcile; cap so other pages' renders can't grow this unbounded.
+        const orphans = orphanTerminalsRef.current;
+        orphans.set(jobId, !!failed);
+        if (orphans.size > 64) orphans.delete(orphans.keys().next().value);
+        return;
+      }
+      pendingJobsRef.current.delete(jobId);
+      clearGen(sceneId);
+      if (failed) toast.error('Frame render failed');
+    };
+    const onCompleted = (data) => settle(data, false);
+    const onFailed = (data) => settle(data, true);
+    socket.on('music-video:scene-image', onSceneImage);
+    socket.on('image-gen:completed', onCompleted);
+    socket.on('image-gen:failed', onFailed);
+    return () => {
+      socket.off('music-video:scene-image', onSceneImage);
+      socket.off('image-gen:completed', onCompleted);
+      socket.off('image-gen:failed', onFailed);
+    };
+  }, []);
 
   useEffect(() => {
     listMusicVideoProjects()
@@ -110,6 +180,58 @@ export default function MusicVideo() {
     reorderMusicVideoScenes(selected.id, ids)
       .then((proj) => replaceProject(proj))
       .catch((err) => toast.error(err?.message || 'Failed to reorder'));
+  };
+
+  // The image prompt for a scene's reference frame: its frame prompt (or the
+  // shot prompt as a fallback) suffixed with the project's global concept style.
+  const buildFramePrompt = (scene) => {
+    const base = (scene.framePrompt?.trim() || scene.prompt?.trim() || '');
+    const style = selected?.concept?.style?.trim();
+    return [base, style].filter(Boolean).join(', ');
+  };
+
+  // Render a still reference frame for one scene from its frame prompt. The
+  // async local/Codex lanes ride the media-job queue and are attached durably
+  // server-side (musicVideoSceneImageHook → music-video:scene-image); we record
+  // the job id and let the terminal image-gen:completed/failed event clear the
+  // spinner (so a failed render doesn't strand the button). The synchronous
+  // external SD-API lane returns a finished filename inline — attach it here.
+  const handleGenerateFrame = (scene) => {
+    const prompt = buildFramePrompt(scene);
+    if (!prompt) { toast.error('Add a frame prompt or shot prompt first'); return; }
+    setGenScenes((prev) => ({ ...prev, [scene.sceneId]: true }));
+    generateImage({ prompt, musicVideo: { projectId: selected.id, sceneId: scene.sceneId } }, { silent: true })
+      .then((res) => {
+        const stillRunning = res?.status === 'queued' || res?.status === 'running';
+        if (stillRunning) {
+          // async lane: correlate the job so its terminal event clears the spinner
+          // (and the durable scene-image event lands the generated frame).
+          const jobId = res?.jobId || res?.generationId;
+          if (!jobId) { clearGen(scene.sceneId); return; } // no id to track → don't strand the button
+          // The terminal event may have raced ahead of this .then (fast fail) —
+          // if so, reconcile it now instead of registering a job that's already done.
+          if (orphanTerminalsRef.current.has(jobId)) {
+            const failed = orphanTerminalsRef.current.get(jobId);
+            orphanTerminalsRef.current.delete(jobId);
+            clearGen(scene.sceneId);
+            if (failed) toast.error('Frame render failed');
+            return;
+          }
+          pendingJobsRef.current.set(jobId, scene.sceneId);
+          return;
+        }
+        const filename = res?.filename;
+        if (filename) {
+          applyReferenceImage(selected.id, scene.sceneId, filename);
+          updateMusicVideoScene(selected.id, scene.sceneId, { referenceImageId: filename }, { silent: true })
+            .catch((err) => toast.error(err?.message || 'Failed to attach frame'));
+        }
+        clearGen(scene.sceneId);
+      })
+      .catch((err) => {
+        toast.error(err?.message || 'Frame generation failed');
+        clearGen(scene.sceneId);
+      });
   };
 
   return (
@@ -231,6 +353,28 @@ export default function MusicVideo() {
                           onChange={(e) => { editSceneLocal(scene.sceneId, { beatAligned: e.target.checked }); saveScene(scene.sceneId, { beatAligned: e.target.checked }); }} />
                         Beat-aligned
                       </label>
+                    </div>
+                    {/* Reference frame — the still image that seeds this shot (Phase 1b) */}
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-start">
+                      <textarea
+                        value={scene.framePrompt || ''} rows={2}
+                        onChange={(e) => editSceneLocal(scene.sceneId, { framePrompt: e.target.value })}
+                        onBlur={(e) => saveScene(scene.sceneId, { framePrompt: e.target.value || null })}
+                        placeholder="Reference frame prompt — the still that seeds this shot (defaults to the shot prompt)"
+                        className="flex-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm"
+                      />
+                      <div className="flex items-center gap-2">
+                        {scene.referenceImageId && (
+                          <img src={`/data/images/${scene.referenceImageId}`} alt="Reference frame"
+                            className="w-16 h-16 object-cover rounded border border-port-border" />
+                        )}
+                        <button onClick={() => handleGenerateFrame(scene)} disabled={!!genScenes[scene.sceneId]}
+                          className="flex items-center gap-1 bg-port-border hover:bg-port-border/70 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[40px] sm:min-h-0 whitespace-nowrap"
+                          title="Generate a still reference frame for this scene">
+                          {genScenes[scene.sceneId] ? <Activity size={14} className="animate-spin" /> : <ImageIcon size={14} />}
+                          {genScenes[scene.sceneId] ? 'Rendering…' : (scene.referenceImageId ? 'Regenerate frame' : 'Generate frame')}
+                        </button>
+                      </div>
                     </div>
                   </div>
                 ))}
