@@ -108,15 +108,18 @@ async function statMtimeMs(path) {
  * as soon as a newer source file is found, false if the build is current.
  */
 async function isClientSourceNewer(rootDir, buildMtimeMs, { statMtime = statMtimeMs } = {}) {
-  // Top-level client files that affect the build but live outside src/.
+  // Top-level client files that affect the build but live outside the walked
+  // dirs.
   const topLevel = ['client/index.html', 'client/package.json', 'client/vite.config.js'];
   for (const rel of topLevel) {
     const m = await statMtime(join(rootDir, rel));
     if (m != null && m > buildMtimeMs) return true;
   }
 
-  const srcRoot = join(rootDir, 'client', 'src');
-  const stack = [srcRoot];
+  // Both client/src AND client/public feed the build — Vite copies public/
+  // verbatim into dist/, so a public-asset-only change (e.g. a swapped favicon)
+  // still requires a rebuild and must keep staleBuild true.
+  const stack = [join(rootDir, 'client', 'src'), join(rootDir, 'client', 'public')];
   while (stack.length) {
     const dir = stack.pop();
     const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);

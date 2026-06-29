@@ -47,6 +47,11 @@ export default function UpdateTab() {
   // release bump), so version-change detection alone can't confirm completion —
   // a down→up transition does.
   const healthWentDownRef = useRef(false);
+  // Highest /system/health uptime seen so far. The server's uptime resets to
+  // ~0 on restart, so an uptime that drops well below the previous peak proves
+  // a restart happened — catching a same-version reconcile whose restart is too
+  // fast for the 2s poll to ever sample the down window.
+  const maxUptimeRef = useRef(0);
 
   const fetchStatus = useCallback(async () => {
     const data = await api.getUpdateStatus().catch(() => null);
@@ -138,14 +143,23 @@ export default function UpdateTab() {
       toast.success(`Updated to v${ok.version}`, { id: 'portos-update-restart' });
       setTimeout(() => window.location.reload(), 1000);
       return;
-    } else if (healthWentDownRef.current && ok.version) {
-      // Came back up after a confirmed down→up dip at the same version — a
-      // reconcile (no release bump). The restart succeeded; reload to pick up
-      // the freshly built client.
+    } else if (
+      ok.version &&
+      (healthWentDownRef.current ||
+        (typeof ok.uptime === 'number' && ok.uptime < maxUptimeRef.current - 5))
+    ) {
+      // Same version, but the restart is proven either by a down→up dip or by
+      // the server's uptime resetting below its pre-restart peak (the 5s slack
+      // absorbs clock jitter). Catches a reconcile whose restart was too fast
+      // for the 2s poll to ever sample the down window.
       setPolling(false);
       toast.success('Install reconciled — reloading', { id: 'portos-update-restart' });
       setTimeout(() => window.location.reload(), 1000);
       return;
+    }
+    // Track the running peak so a later uptime drop is detectable.
+    if (typeof ok.uptime === 'number' && ok.uptime > maxUptimeRef.current) {
+      maxUptimeRef.current = ok.uptime;
     }
     if (attemptsRef.current >= 30) {
       setPolling(false);
@@ -172,6 +186,11 @@ export default function UpdateTab() {
       targetVersionRef.current = s.latestRelease.version;
     }
     preUpdateVersionRef.current = s?.currentVersion || null;
+    // Seed the uptime peak with the still-running server's uptime, so even an
+    // instant restart (whose first post-restart poll already reports a small
+    // uptime) is detected as a drop below this pre-update value.
+    const preHealth = await api.checkHealth().catch(() => null);
+    maxUptimeRef.current = typeof preHealth?.uptime === 'number' ? preHealth.uptime : 0;
     setUpdating(true);
     setSteps([]);
     setUpdateError(null);
