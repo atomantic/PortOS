@@ -207,15 +207,27 @@ export default {
     let changed = false;
 
     // 1. Promote an existing clawed-ollama to claude-ollama, preserving the
-    //    user's config (it wins over any fresh default merged in this run).
+    //    user's config. The promoted entry must win over the *freshly merged
+    //    default* claude-ollama (pristine: not enabled, no models) — but NOT over
+    //    a claude-ollama the user already customized (enabled or with a refreshed
+    //    model list). In that rare both-exist-and-customized state, keep the
+    //    user's claude-ollama and just drop the stale clawed entry.
     const clawed = providers[OLD_ID];
     if (clawed) {
-      const promoted = { ...clawed, id: NEW_ID };
-      if (promoted.name === OLD_DEFAULT_NAME) promoted.name = NEW_DEFAULT_NAME;
-      providers[NEW_ID] = promoted;
-      delete providers[OLD_ID];
+      const existing = providers[NEW_ID];
+      const existingIsCustomized = !!existing
+        && (existing.enabled === true || (Array.isArray(existing.models) && existing.models.length > 0));
+      if (existingIsCustomized) {
+        delete providers[OLD_ID];
+        console.log(`📝 ${PROVIDERS_REL_PATH}: kept your customized ${NEW_ID}, removed stale ${OLD_ID}`);
+      } else {
+        const promoted = { ...clawed, id: NEW_ID };
+        if (promoted.name === OLD_DEFAULT_NAME) promoted.name = NEW_DEFAULT_NAME;
+        providers[NEW_ID] = promoted;
+        delete providers[OLD_ID];
+        console.log(`📝 ${PROVIDERS_REL_PATH}: renamed ${OLD_ID} → ${NEW_ID} (preserving your settings)`);
+      }
       changed = true;
-      console.log(`📝 ${PROVIDERS_REL_PATH}: renamed ${OLD_ID} → ${NEW_ID} (preserving your settings)`);
     }
 
     // 2. Add the shipped CLI + TUI providers when missing (idempotent).
