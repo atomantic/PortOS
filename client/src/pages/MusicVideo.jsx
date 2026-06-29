@@ -14,6 +14,7 @@ import {
 } from '../services/apiMusicVideo.js';
 import { generateImage } from '../services/apiSystem.js';
 import { listTracks } from '../services/apiTracks.js';
+import { getMediaJob } from '../services/apiMediaJobs.js';
 import socket from '../services/socket.js';
 import { formatDurationSec } from '../utils/formatters.js';
 
@@ -81,6 +82,8 @@ export default function MusicVideo() {
     const onSceneImage = ({ projectId, sceneId, referenceImageId }) => {
       applyReferenceImage(projectId, sceneId, referenceImageId);
     };
+    // jobId → pending error-toast timer (running-cancel deferral; see onFailed).
+    const failTimers = new Map();
     const settle = (data, failed) => {
       const jobId = data?.generationId || data?.jobId;
       if (!jobId) return;
@@ -99,14 +102,64 @@ export default function MusicVideo() {
       if (failed) toast.error('Frame render failed');
     };
     const onCompleted = (data) => settle(data, false);
-    const onFailed = (data) => settle(data, true);
+    // Deferred failure toast for an owned render. A render canceled WHILE RUNNING
+    // reaches us as image-gen:failed (SIGTERM) just before image-gen:canceled —
+    // and before the queue flips the job to 'canceled' — so neither the failed
+    // event nor an immediate status fetch can tell a cancel from a real failure
+    // (#1791/#1796). image-gen:canceled cancels this timer in the common case;
+    // if the timer fires first it re-polls the job and only toasts on a CONFIRMED
+    // terminal failure — a still-'running'/'queued' status means the cancel (or
+    // the failure transition) hasn't landed yet, so it re-polls a bounded number
+    // of times rather than toasting prematurely (the spinner is already cleared,
+    // so giving up silently never strands the UI).
+    const armFailToast = (jobId, attempt = 0) => {
+      failTimers.set(jobId, setTimeout(() => {
+        failTimers.delete(jobId);
+        getMediaJob(jobId)
+          .then((job) => {
+            const status = job?.status;
+            if (status === 'canceled') return; // user cancel — never a failure toast
+            if (status === 'failed' || status === 'error') { toast.error('Frame render failed'); return; }
+            if (attempt < 2) armFailToast(jobId, attempt + 1); // non-terminal: wait, don't toast yet
+          })
+          .catch(() => toast.error('Frame render failed'));
+      }, 800));
+    };
+    const onFailed = (data) => {
+      const jobId = data?.generationId || data?.jobId;
+      if (!jobId) return;
+      // Only THIS page's renders surface a failure toast. An OWNED job clears the
+      // spinner silently (settle with failed=false) and defers the toast above so
+      // a running-cancel can retract it. A not-yet-owned job is stashed as an
+      // orphan WITH the failure bit so a fast-fail that raced ahead of its own
+      // kickoff registration is toasted by the kickoff .then reconciliation; an
+      // unrelated image-gen job is simply capped/evicted from the orphan map
+      // unseen (never reconciled → never toasts here).
+      const owned = pendingJobsRef.current.has(jobId);
+      settle(data, !owned);
+      if (owned && !failTimers.has(jobId)) armFailToast(jobId);
+    };
+    // Queued-cancel emits no *:failed; running-cancel emits failed then this.
+    // Either way clear the spinner and cancel any pending failure toast.
+    const onCanceled = (data) => {
+      const jobId = data?.generationId || data?.jobId;
+      if (jobId) {
+        const t = failTimers.get(jobId);
+        if (t) { clearTimeout(t); failTimers.delete(jobId); }
+      }
+      settle(data, false);
+    };
     socket.on('music-video:scene-image', onSceneImage);
     socket.on('image-gen:completed', onCompleted);
     socket.on('image-gen:failed', onFailed);
+    socket.on('image-gen:canceled', onCanceled);
     return () => {
       socket.off('music-video:scene-image', onSceneImage);
       socket.off('image-gen:completed', onCompleted);
       socket.off('image-gen:failed', onFailed);
+      socket.off('image-gen:canceled', onCanceled);
+      for (const t of failTimers.values()) clearTimeout(t);
+      failTimers.clear();
     };
   }, []);
 
