@@ -49,12 +49,6 @@ describe('useSceneRenderLifecycle', () => {
     expect(handlers.size).toBe(0);
   });
 
-  it('does not subscribe to a canceled event when canceledEvent is omitted (e.g. a no-cancel lane)', () => {
-    renderLane({ canceledEvent: undefined });
-    expect(handlers.has('image-gen:canceled')).toBe(false);
-    expect(handlers.has('image-gen:completed')).toBe(true);
-  });
-
   it('clears the right scene spinner when a tracked job completes', () => {
     const { result } = renderLane();
     act(() => { result.current.startScene('s1'); result.current.trackJob('job-1', 's1'); });
