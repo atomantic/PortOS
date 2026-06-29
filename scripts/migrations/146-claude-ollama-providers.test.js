@@ -219,6 +219,40 @@ describe('migration 146 — Claude Ollama providers', () => {
     expect(readFileSync(tasksPath, 'utf-8')).toBe(before);
   });
 
+  it('repoints clawed-ollama pins in any top-level data/*.json (settings AI assignments, etc.)', async () => {
+    writeJson(providersPath, { providers: { 'clawed-ollama': clawed() } });
+    const settingsPath = join(rootDir, 'data/settings.json');
+    const arbitraryPath = join(rootDir, 'data/some-other-feature.json');
+    writeJson(settingsPath, {
+      autofixer: { providerId: 'clawed-ollama' },
+      calendarSync: { providerId: 'clawed-ollama' },
+      unrelated: { providerId: 'codex' },
+    });
+    writeJson(arbitraryPath, { nested: { deep: [{ provider: 'clawed-ollama' }] } });
+
+    await migration.up({ rootDir });
+
+    const settings = readJson(settingsPath);
+    expect(settings.autofixer.providerId).toBe('claude-ollama');
+    expect(settings.calendarSync.providerId).toBe('claude-ollama');
+    expect(settings.unrelated.providerId).toBe('codex');
+    expect(readJson(arbitraryPath).nested.deep[0].provider).toBe('claude-ollama');
+  });
+
+  it('does not recurse into data/ subdirectories (e.g. cos worktrees with source)', async () => {
+    writeJson(providersPath, { providers: { 'clawed-ollama': clawed() } });
+    // a nested store (subdir) that legitimately contains the slug must be left alone
+    const worktreeJsonDir = join(rootDir, 'data/cos/worktrees/agent-x');
+    mkdirSync(worktreeJsonDir, { recursive: true });
+    const nestedPath = join(worktreeJsonDir, 'config.json');
+    writeJson(nestedPath, { providerId: 'clawed-ollama' });
+    const before = readFileSync(nestedPath, 'utf-8');
+
+    await migration.up({ rootDir });
+
+    expect(readFileSync(nestedPath, 'utf-8')).toBe(before);
+  });
+
   it('leaves pin files untouched when they have no clawed-ollama references', async () => {
     writeJson(providersPath, { providers: { 'claude-code': { id: 'claude-code', type: 'cli', command: 'claude' } } });
     const schedulePath = join(rootDir, 'data/task-schedule.json');
