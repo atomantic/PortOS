@@ -84,6 +84,57 @@ const CLAUDE_OLLAMA_TUI = {
   tuiIdleTimeoutMs: 180000,
 };
 
+// Provider pins live OUTSIDE providers.json: scheduled tasks
+// (data/task-schedule.json) and autonomous jobs (data/autonomous-jobs.json)
+// persist the chosen provider as a `providerId` / `provider` field (including
+// nested pipeline stages). Renaming the provider id above would orphan those
+// pins — they'd resolve as "provider not found" and silently fall back to the
+// active provider instead of the user's local model. So rewrite them too.
+// Generic recursive walk keyed on field name + the EXACT old id (no other field
+// legitimately holds the literal string "clawed-ollama", so false positives are
+// impossible). Idempotent — a second run finds nothing left to rewrite.
+const PIN_KEYS = new Set(['providerId', 'provider']);
+const PIN_FILES = ['data/task-schedule.json', 'data/autonomous-jobs.json'];
+
+function rewriteProviderPins(node) {
+  let changed = false;
+  if (Array.isArray(node)) {
+    for (const item of node) {
+      if (rewriteProviderPins(item)) changed = true;
+    }
+  } else if (node && typeof node === 'object') {
+    for (const [key, value] of Object.entries(node)) {
+      if (PIN_KEYS.has(key) && value === OLD_ID) {
+        node[key] = NEW_ID;
+        changed = true;
+      } else if (value && typeof value === 'object') {
+        if (rewriteProviderPins(value)) changed = true;
+      }
+    }
+  }
+  return changed;
+}
+
+async function rewritePinFile(rootDir, relPath) {
+  const filePath = join(rootDir, relPath);
+  const raw = await readFile(filePath, 'utf-8').catch((err) => {
+    if (err.code === 'ENOENT') return null;
+    throw err;
+  });
+  if (raw == null) return;
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch (err) {
+    console.log(`⚠️ ${relPath}: invalid JSON, skipping pin rewrite (${err.message})`);
+    return;
+  }
+  if (rewriteProviderPins(data)) {
+    await writeFile(filePath, `${JSON.stringify(data, null, 2)}\n`);
+    console.log(`📝 ${relPath}: repointed ${OLD_ID} provider pins → ${NEW_ID}`);
+  }
+}
+
 export default {
   async up({ rootDir }) {
     const providersPath = join(rootDir, PROVIDERS_REL_PATH);
@@ -138,11 +189,17 @@ export default {
       }
     }
 
-    if (!changed) {
+    if (changed) {
+      await writeFile(providersPath, `${JSON.stringify(config, null, 2)}\n`);
+    } else {
       console.log(`✅ ${PROVIDERS_REL_PATH}: Claude Ollama providers already present — no change`);
-      return;
     }
 
-    await writeFile(providersPath, `${JSON.stringify(config, null, 2)}\n`);
+    // Repoint persisted provider pins (schedules / autonomous jobs) off the
+    // retired id — runs regardless of whether providers.json changed this run,
+    // since a pin can outlive the provider entry (e.g. already removed by hand).
+    for (const relPath of PIN_FILES) {
+      await rewritePinFile(rootDir, relPath);
+    }
   },
 };

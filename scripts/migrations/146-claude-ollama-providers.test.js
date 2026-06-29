@@ -143,6 +143,48 @@ describe('migration 146 — Claude Ollama providers', () => {
     expect(readFileSync(providersPath, 'utf-8')).toBe(afterFirst);
   });
 
+  it('repoints clawed-ollama provider pins in schedules and autonomous jobs', async () => {
+    writeJson(providersPath, { providers: { 'clawed-ollama': clawed() } });
+    const schedulePath = join(rootDir, 'data/task-schedule.json');
+    const jobsPath = join(rootDir, 'data/autonomous-jobs.json');
+    writeJson(schedulePath, {
+      intervals: {
+        security: { providerId: 'clawed-ollama', model: null },
+        // nested pipeline stage pin must also be rewritten
+        'code-reviewer': {
+          providerId: null,
+          taskMetadata: { pipeline: { stages: [{ providerId: 'clawed-ollama' }, { providerId: 'claude-code' }] } },
+        },
+        other: { providerId: 'codex' }, // untouched
+      },
+    });
+    writeJson(jobsPath, { jobs: [{ id: 'j1', providerId: 'clawed-ollama' }, { id: 'j2', provider: 'clawed-ollama' }, { id: 'j3', providerId: 'claude-code' }] });
+
+    await migration.up({ rootDir });
+
+    const sched = readJson(schedulePath);
+    expect(sched.intervals.security.providerId).toBe('claude-ollama');
+    expect(sched.intervals['code-reviewer'].taskMetadata.pipeline.stages[0].providerId).toBe('claude-ollama');
+    expect(sched.intervals['code-reviewer'].taskMetadata.pipeline.stages[1].providerId).toBe('claude-code'); // untouched
+    expect(sched.intervals.other.providerId).toBe('codex'); // untouched
+
+    const jobs = readJson(jobsPath);
+    expect(jobs.jobs[0].providerId).toBe('claude-ollama');
+    expect(jobs.jobs[1].provider).toBe('claude-ollama');
+    expect(jobs.jobs[2].providerId).toBe('claude-code'); // untouched
+  });
+
+  it('leaves pin files untouched when they have no clawed-ollama references', async () => {
+    writeJson(providersPath, { providers: { 'claude-code': { id: 'claude-code', type: 'cli', command: 'claude' } } });
+    const schedulePath = join(rootDir, 'data/task-schedule.json');
+    writeJson(schedulePath, { intervals: { security: { providerId: 'codex' } } });
+    const before = readFileSync(schedulePath, 'utf-8');
+
+    await migration.up({ rootDir });
+
+    expect(readFileSync(schedulePath, 'utf-8')).toBe(before);
+  });
+
   it('is a no-op when data/providers.json does not exist (fresh install)', async () => {
     await migration.up({ rootDir });
     expect(existsSync(providersPath)).toBe(false);
