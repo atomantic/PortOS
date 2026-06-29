@@ -280,6 +280,10 @@ export const isOllamaBackedProvider = (provider) => {
 export const isClaudeCodePlanCli = (provider) =>
   isCliProvider(provider) &&
   provider?.command === 'claude' &&
+  // Ollama-backed Claude (the "Claude Ollama" sample) routes generation to a
+  // local daemon via ANTHROPIC_BASE_URL — it's never plan/API-billed, so the
+  // billing warning would be misleading and discourage the shipped local setup.
+  !isOllamaBackedProvider(provider) &&
   !provider?.envVars?.CLAUDE_CODE_USE_BEDROCK &&
   !provider?.envVars?.CLAUDE_CODE_USE_VERTEX;
 

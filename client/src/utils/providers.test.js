@@ -132,6 +132,13 @@ describe('isClaudeCodePlanCli', () => {
     expect(isClaudeCodePlanCli({ type: 'cli', command: 'claude', envVars: { CLAUDE_CODE_USE_VERTEX: '1' } })).toBe(false);
   });
 
+  it('excludes Ollama-backed Claude (local model — never plan/API-billed)', () => {
+    // Claude Ollama CLI carries the ollamaBacked marker + ANTHROPIC_BASE_URL
+    expect(isClaudeCodePlanCli({ type: 'cli', command: 'claude', ollamaBacked: true, envVars: { ANTHROPIC_BASE_URL: 'http://localhost:11434' } })).toBe(false);
+    // inferred purely from the base URL too
+    expect(isClaudeCodePlanCli({ type: 'cli', command: 'claude', envVars: { ANTHROPIC_BASE_URL: 'http://localhost:11434' } })).toBe(false);
+  });
+
   it('safely returns false for nullish input', () => {
     expect(isClaudeCodePlanCli(null)).toBe(false);
     expect(isClaudeCodePlanCli(undefined)).toBe(false);

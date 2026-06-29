@@ -193,11 +193,6 @@ export default {
       if (promoted.name === OLD_DEFAULT_NAME) promoted.name = NEW_DEFAULT_NAME;
       providers[NEW_ID] = promoted;
       delete providers[OLD_ID];
-
-      if (config.activeProvider === OLD_ID) config.activeProvider = NEW_ID;
-      for (const p of Object.values(providers)) {
-        if (p && p.fallbackProvider === OLD_ID) p.fallbackProvider = NEW_ID;
-      }
       changed = true;
       console.log(`📝 ${PROVIDERS_REL_PATH}: renamed ${OLD_ID} → ${NEW_ID} (preserving your settings)`);
     }
@@ -208,6 +203,22 @@ export default {
         providers[def.id] = { ...def };
         changed = true;
         console.log(`📝 ${PROVIDERS_REL_PATH}: added ${def.id} provider`);
+      }
+    }
+
+    // 3. Rewrite activeProvider / fallbackProvider references off the retired id.
+    //    OUTSIDE the promotion branch: an install can have the reference dangling
+    //    with the clawed-ollama entry already gone (manual delete / setup drift) —
+    //    leaving it would resolve as "provider not found". claude-ollama is
+    //    guaranteed to exist by now (renamed above or added in step 2).
+    if (config.activeProvider === OLD_ID) {
+      config.activeProvider = NEW_ID;
+      changed = true;
+    }
+    for (const p of Object.values(providers)) {
+      if (p && p.fallbackProvider === OLD_ID) {
+        p.fallbackProvider = NEW_ID;
+        changed = true;
       }
     }
 
