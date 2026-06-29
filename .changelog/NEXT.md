@@ -2,6 +2,7 @@
 
 ## Setup
 
+- **[issue-1792] Windows setup no longer aborts rebuilding esbuild.** Running `setup.ps1` on Windows could stop partway with `Error: Cannot find module ...\client\node_modules\esbuild\install.js`. The script ran esbuild's installer through a hardcoded path that only exists when esbuild is installed directly under `client/node_modules` — but npm often hoists it to the project's top-level `node_modules`, so the fixed path was missing and setup bailed. It now rebuilds esbuild with `npm rebuild esbuild`, which finds esbuild wherever it actually landed, matching how the Mac/Linux setup already works. (Closes #1792)
 - **[issue-1788] Windows setup no longer fails to launch on the default PowerShell.** Running `setup.ps1` on Windows PowerShell 5.1 errored out before doing anything (`The string is missing the terminator` / `Missing closing '}'`). The scripts contained accented punctuation and an emoji but were saved without a UTF-8 byte-order mark, so the default Windows PowerShell read them in the legacy system codepage and mis-parsed those characters. `setup.ps1`, `update.ps1`, and `scripts/setup-voice.ps1` now carry a UTF-8 BOM so they parse correctly on both Windows PowerShell 5.1 and PowerShell 7+, and a test keeps any future `.ps1` from regressing. (Closes #1788)
 
 ## AI Providers
