@@ -121,6 +121,7 @@ vi.mock('fs/promises', () => ({
 
 import * as videoGenService from '../services/videoGen/local.js';
 import * as mediaJobQueue from '../services/mediaJobQueue/index.js';
+import { resolveGalleryImage } from '../lib/fileUtils.js';
 import videoGenRoutes, { isAudioMime } from './videoGen.js';
 
 // isAudioMime is the gating function inside the fileFilter callback. The
@@ -333,6 +334,37 @@ describe('videoGen routes', () => {
           sourceImagePath: '/mock/images/passwd',
         }),
       }));
+    });
+
+    it('forwards a musicVideo i2v tag into job.params alongside the resolved frame (#1760 Phase 1)', async () => {
+      const r = await request(app).post('/api/video-gen/').send({
+        prompt: 'slow dolly across the skyline',
+        mode: 'image',
+        sourceImageFile: 'scene-frame.png',
+        musicVideo: JSON.stringify({ projectId: 'mv-1', sceneId: 'mvs-1' }),
+      });
+      expect(r.status).toBe(200);
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'video',
+        params: expect.objectContaining({
+          sourceImagePath: '/mock/images/scene-frame.png',
+          musicVideo: { projectId: 'mv-1', sceneId: 'mvs-1' },
+        }),
+      }));
+    });
+
+    it('rejects a musicVideo i2v render when the reference frame cannot be resolved (no silent t2v)', async () => {
+      // A stale/deleted gallery file resolves to null (mustExist defaults true).
+      resolveGalleryImage.mockReturnValueOnce(null);
+      const r = await request(app).post('/api/video-gen/').send({
+        prompt: 'slow dolly across the skyline',
+        mode: 'image',
+        sourceImageFile: 'gone.png',
+        musicVideo: JSON.stringify({ projectId: 'mv-1', sceneId: 'mvs-1' }),
+      });
+      expect(r.status).toBe(400);
+      expect(r.body.code).toBe('MUSIC_VIDEO_SOURCE_REQUIRED');
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
     });
 
     it('forwards lastImageFile + mode for FFLF', async () => {

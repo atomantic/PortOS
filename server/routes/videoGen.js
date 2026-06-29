@@ -687,6 +687,19 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
   } else if (body.sourceImageFile) {
     sourceImagePath = resolveGalleryImage(body.sourceImageFile);
   }
+  // Music Video director-board renders are always i2v FROM the scene's reference
+  // frame (#1760 Phase 1). resolveGalleryImage returns null for a missing/invalid
+  // gallery file (mustExist defaults true), and an unresolved source would
+  // otherwise fall through to a text-to-video render — silently attaching a clip
+  // that ignores the frame the director chose. Reject instead, so a stale/deleted
+  // reference frame surfaces as a clear error rather than a wrong-looking clip.
+  if (body.musicVideo && !sourceImagePath) {
+    await cleanupAllStaged();
+    throw new ServerError(
+      'Music Video scene render needs a resolvable reference frame (sourceImageFile) — the scene\'s frame is missing or could not be resolved.',
+      { status: 400, code: 'MUSIC_VIDEO_SOURCE_REQUIRED' },
+    );
+  }
   if (uploads.lastImage) {
     lastImagePath = await stageUploadDurable(uploads.lastImage, 'last');
     extraUploadedTempPaths.push(lastImagePath);
