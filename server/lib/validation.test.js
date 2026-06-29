@@ -581,10 +581,11 @@ describe('validation.js', () => {
     });
 
     it('should accept a valid issueAuthorFilter and drop invalid ones', () => {
+      expect(sanitizeTaskMetadata({ issueAuthorFilter: 'self' })).toEqual({ issueAuthorFilter: 'self' });
       expect(sanitizeTaskMetadata({ issueAuthorFilter: 'owner' })).toEqual({ issueAuthorFilter: 'owner' });
       expect(sanitizeTaskMetadata({ issueAuthorFilter: 'any' })).toEqual({ issueAuthorFilter: 'any' });
-      // Arbitrary strings must not slip through (would silently read as "owner").
-      expect(sanitizeTaskMetadata({ issueAuthorFilter: 'self' })).toBeNull();
+      // Arbitrary strings must not slip through (would silently read as the default).
+      expect(sanitizeTaskMetadata({ issueAuthorFilter: 'somebody-else' })).toBeNull();
       expect(sanitizeTaskMetadata({ issueAuthorFilter: 42 })).toBeNull();
       expect(sanitizeTaskMetadata({ useWorktree: true, issueAuthorFilter: 'bogus' }))
         .toEqual({ useWorktree: true });
