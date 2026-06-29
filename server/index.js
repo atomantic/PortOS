@@ -120,6 +120,7 @@ import { initUniverseBuilderCollectionHook } from './services/universeBuilderCol
 import { initCatalogImageAttachHook } from './services/catalogImageAttachHook.js';
 import { initWritersRoomSceneImageHook } from './services/writersRoomSceneImageHook.js';
 import { initMusicVideoSceneImageHook } from './services/musicVideoSceneImageHook.js';
+import { initMusicVideoSceneVideoHook } from './services/musicVideoSceneVideoHook.js';
 import { initComicPagesFilenameHook } from './services/pipeline/comicPagesFilenameHook.js';
 import { initStoryboardsFilenameHook } from './services/pipeline/storyboardsFilenameHook.js';
 import { initSeasonCoverFilenameHook } from './services/pipeline/seasonCoverFilenameHook.js';
@@ -810,6 +811,11 @@ ensureSelf()
     // the director board unmounted mid-render (#1760 Phase 1b). Also depends on
     // the queue being loaded.
     initMusicVideoSceneImageHook();
+    // Music Video scene-video hook — durably files a queued i2v scene clip onto
+    // its project scene's `videoHistoryId` on completion, even if the director
+    // board unmounted mid-render (#1760 Phase 1). Also depends on the queue
+    // being loaded.
+    initMusicVideoSceneVideoHook();
     // Pipeline filename hooks — stamp `filename` onto stage records on
     // media-job completion so the UI can still render them after the
     // 24h media-job archive TTL elapses.

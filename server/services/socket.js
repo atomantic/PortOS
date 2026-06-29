@@ -699,6 +699,12 @@ function setupMusicVideoEventForwarding() {
   musicVideoEvents.on('scene-image', (data) => {
     if (ioInstance) ioInstance.emit('music-video:scene-image', data);
   });
+  // A scene i2v clip filed durably by musicVideoSceneVideoHook — bridge it so
+  // the board picks up the resulting `videoHistoryId` without a refetch
+  // (#1760 Phase 1).
+  musicVideoEvents.on('scene-video', (data) => {
+    if (ioInstance) ioInstance.emit('music-video:scene-video', data);
+  });
 }
 
 let aiStatusForwardingSetup = false;
