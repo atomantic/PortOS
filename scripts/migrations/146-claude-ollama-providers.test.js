@@ -174,6 +174,33 @@ describe('migration 146 — Claude Ollama providers', () => {
     expect(jobs.jobs[2].providerId).toBe('claude-code'); // untouched
   });
 
+  it('repoints clawed-ollama task pins in TASKS.md / COS-TASKS.md markdown', async () => {
+    writeJson(providersPath, { providers: { 'clawed-ollama': clawed() } });
+    const tasksPath = join(rootDir, 'TASKS.md');
+    const cosTasksPath = join(rootDir, 'COS-TASKS.md');
+    writeFileSync(tasksPath, '# Tasks\n\n- [ ] Do a thing\n  provider: clawed-ollama\n  model: qwen2.5:7b\n');
+    writeFileSync(cosTasksPath, '# CoS Tasks\n\n- [ ] internal\n  provider: clawed-ollama\n');
+
+    await migration.up({ rootDir });
+
+    expect(readFileSync(tasksPath, 'utf-8')).toContain('provider: claude-ollama');
+    expect(readFileSync(tasksPath, 'utf-8')).not.toContain('clawed-ollama');
+    expect(readFileSync(cosTasksPath, 'utf-8')).toContain('provider: claude-ollama');
+  });
+
+  it('does not touch claude-ollama-tui or unrelated tokens in markdown task files', async () => {
+    writeJson(providersPath, { providers: { 'claude-code': { id: 'claude-code', type: 'cli', command: 'claude' } } });
+    const tasksPath = join(rootDir, 'TASKS.md');
+    // a task pinned to the TUI variant + prose must survive untouched
+    writeFileSync(tasksPath, '- [ ] x\n  provider: claude-ollama-tui\n  context: see clawed-ollama-notes.md\n');
+    const before = readFileSync(tasksPath, 'utf-8');
+
+    await migration.up({ rootDir });
+
+    // boundary guard: "claude-ollama-tui" and "clawed-ollama-notes.md" are NOT bare clawed-ollama tokens
+    expect(readFileSync(tasksPath, 'utf-8')).toBe(before);
+  });
+
   it('leaves pin files untouched when they have no clawed-ollama references', async () => {
     writeJson(providersPath, { providers: { 'claude-code': { id: 'claude-code', type: 'cli', command: 'claude' } } });
     const schedulePath = join(rootDir, 'data/task-schedule.json');
