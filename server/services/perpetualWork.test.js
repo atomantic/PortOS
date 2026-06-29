@@ -183,6 +183,21 @@ describe('perpetualWork', () => {
       // No `gh repo view` owner lookup is needed in self mode.
       expect(spawn.mock.calls.some(([cmd, args]) => cmd === 'gh' && args[0] === 'repo')).toBe(false);
     });
+
+    it('an out-of-vocab filter value collapses to the @me self boundary (safe default)', async () => {
+      // Defense-in-depth: callers feed sanitizeTaskMetadata-constrained values,
+      // but if an unknown one ever reaches here it must fall to the @me security
+      // boundary (matching resolveIssueAuthorFilterBlock), never to owner/any.
+      routeSpawn({
+        'gh issue': { stdout: JSON.stringify([{ number: 1, title: 'mine', assignees: [], labels: [] }]) },
+        'git branch': { stdout: 'main\n' },
+        'gh pr': { stdout: '' }
+      });
+      const out = await detectGithubIssues(app, { issueAuthorFilter: 'bogus' });
+      expect(out.actionable).toBe(true);
+      const listCall = spawn.mock.calls.find(([cmd, args]) => cmd === 'gh' && args[0] === 'issue');
+      expect(listCall[1]).toContain('@me');
+    });
   });
 
   describe('detectGitlabIssues (spawn-mocked)', () => {
