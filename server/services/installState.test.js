@@ -101,17 +101,31 @@ describe('getInstallState — stale deps', () => {
     expect(state.staleDeps.workspaces.every(w => w.reason === 'not-installed')).toBe(true);
   });
 
-  it('flags a workspace whose lockfile is newer than the receipt', async () => {
+  it('flags a workspace whose lockfile is newer than the receipt beyond the jitter slack', async () => {
     const state = await getInstallState(syncedOpts({
       statMtime: makeStat({
         'package.json': 100,
         '.package-lock.json': 200,
-        'package-lock.json': 300, // lockfile newer than receipt
+        'package-lock.json': 200 + 120000, // lockfile clearly newer (2 min) → real stale
         'client/dist/index.html': 500
       })
     }));
     expect(state.staleDeps.stale).toBe(true);
     expect(state.staleDeps.workspaces.some(w => w.reason === 'lockfile-newer')).toBe(true);
+  });
+
+  it('does NOT flag lockfile-newer for same-install write jitter (lock barely ahead of receipt)', async () => {
+    // The tracked lock and npm's receipt are written by the same `npm install`
+    // ms apart; a small lead must never trip a permanent false "out of sync".
+    const state = await getInstallState(syncedOpts({
+      statMtime: makeStat({
+        'package.json': 100,
+        '.package-lock.json': 200,
+        'package-lock.json': 220, // 20ms ahead — within slack
+        'client/dist/index.html': 500
+      })
+    }));
+    expect(state.staleDeps.stale).toBe(false);
   });
 
   it('skips workspaces with no package.json (absent in this install)', async () => {

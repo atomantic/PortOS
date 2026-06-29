@@ -42,6 +42,11 @@ export default function UpdateTab() {
   const attemptsRef = useRef(0);
   const targetVersionRef = useRef(null);
   const preUpdateVersionRef = useRef(null);
+  // Tracks whether the health endpoint went down during a restart poll. A
+  // reconcile (issue #1779) often lands the SAME version (new commits, no
+  // release bump), so version-change detection alone can't confirm completion —
+  // a down→up transition does.
+  const healthWentDownRef = useRef(false);
 
   const fetchStatus = useCallback(async () => {
     const data = await api.getUpdateStatus().catch(() => null);
@@ -110,16 +115,35 @@ export default function UpdateTab() {
   // `enabled: polling` gate handles teardown automatically when polling flips
   // off; attemptsRef resets on every fresh polling cycle.
   useEffect(() => {
-    if (polling) attemptsRef.current = 0;
+    if (polling) {
+      attemptsRef.current = 0;
+      healthWentDownRef.current = false;
+    }
   }, [polling]);
 
   const pollHealth = useCallback(async () => {
     attemptsRef.current += 1;
     const ok = await api.checkHealth().catch(() => null);
     const preUpdateVersion = preUpdateVersionRef.current;
-    if (ok?.version && (ok.version === targetVersionRef.current || (preUpdateVersion && ok.version !== preUpdateVersion))) {
+    if (!ok) {
+      // Server is mid-restart (PM2 stopped it) — record the dip so a same-version
+      // recovery still counts as "restarted".
+      healthWentDownRef.current = true;
+    } else if (preUpdateVersion && ok.version && ok.version !== preUpdateVersion) {
+      // The running version differs from before the update — restart confirmed.
+      // (We don't gate on === targetVersion: that clause would fire on the FIRST
+      // healthy poll of a same-version reconcile, where target === preUpdate, and
+      // declare success before the server ever went down.)
       setPolling(false);
       toast.success(`Updated to v${ok.version}`, { id: 'portos-update-restart' });
+      setTimeout(() => window.location.reload(), 1000);
+      return;
+    } else if (healthWentDownRef.current && ok.version) {
+      // Came back up after a confirmed down→up dip at the same version — a
+      // reconcile (no release bump). The restart succeeded; reload to pick up
+      // the freshly built client.
+      setPolling(false);
+      toast.success('Install reconciled — reloading', { id: 'portos-update-restart' });
       setTimeout(() => window.location.reload(), 1000);
       return;
     }

@@ -44,6 +44,14 @@ const DEP_WORKSPACES = ['.', 'client', 'server', 'autofixer'];
 // Directories never worth walking for client-source freshness.
 const WALK_SKIP_DIRS = new Set(['node_modules', 'dist', '.git']);
 
+// The tracked lockfile and npm's receipt (node_modules/.package-lock.json) are
+// written by the SAME `npm install`, milliseconds apart, in an order npm does
+// not guarantee. Only treat the lockfile as "newer" when it leads the receipt
+// by more than this slack — so install-time jitter never produces a permanent
+// false "out of sync", while a real pulled-but-uninstalled lock (minutes/hours
+// ahead) still trips. A genuine stale lock is never this close.
+const LOCKFILE_NEWER_SLACK_MS = 60 * 1000;
+
 /**
  * Capture the commit the process is running. Idempotent — only the first
  * successful read sticks, so a later on-disk `git pull` (which we WANT to
@@ -147,7 +155,7 @@ async function detectStaleDeps(rootDir, { statMtime = statMtimeMs } = {}) {
     } else if (manifestMtime > receiptMtime) {
       stale = true;
       reason = 'manifest-newer';
-    } else if (lockMtime != null && lockMtime > receiptMtime) {
+    } else if (lockMtime != null && lockMtime - receiptMtime > LOCKFILE_NEWER_SLACK_MS) {
       stale = true;
       reason = 'lockfile-newer';
     }

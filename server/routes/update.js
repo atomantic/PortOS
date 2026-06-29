@@ -111,19 +111,30 @@ router.post('/execute', asyncHandler(async (req, res) => {
   const { acknowledgeFork, reconcile } = validateRequest(executeSchema, req.body || {});
   const status = await updateChecker.getUpdateStatus();
 
-  // Normal path requires a known release tag to update TO. A reconcile request
-  // (issue #1779) instead runs update.sh to finish a bare `git pull` even with
-  // no newer release — so when no release tag is known, synthesize one from the
-  // current version purely for logging (update.sh pulls main regardless of tag).
-  // Guard reconcile on the install actually being out of sync so it can't be
-  // used to force an unnecessary restart.
-  let tag = status.latestRelease?.tag;
-  if (!tag) {
-    if (reconcile && status.installState?.outOfSync) {
-      tag = `v${status.currentVersion}`;
-    } else {
+  // Two distinct entry points:
+  //   - Normal update: requires a known, newer release tag to update TO.
+  //   - Reconcile (issue #1779): finishes a bare `git pull` by running update.sh
+  //     even with no newer release. It must be gated on the install ACTUALLY
+  //     being out of sync — branch on `reconcile` first so a cached release tag
+  //     can't let `reconcile: true` force update.sh on an in-sync install (or
+  //     target a stale release). update.sh pulls main regardless of the tag, so
+  //     the tag here is purely for logging; prefer the current version.
+  let tag;
+  if (reconcile) {
+    if (!status.installState) {
+      // installState is best-effort (.catch(() => null) in getUpdateStatus); a
+      // transient git/fs hiccup shouldn't read as "already in sync".
+      throw new ServerError('Could not determine install state — try again', { status: 503, code: 'INSTALL_STATE_UNAVAILABLE' });
+    }
+    if (!status.installState.outOfSync) {
+      throw new ServerError('Install is already in sync — nothing to reconcile', { status: 400, code: 'ALREADY_IN_SYNC' });
+    }
+    tag = `v${status.currentVersion}`;
+  } else {
+    if (!status.latestRelease?.tag) {
       throw new ServerError('No release available to update to', { status: 400, code: 'NO_RELEASE' });
     }
+    tag = status.latestRelease.tag;
   }
 
   // Validate tag is a well-formed semver release (e.g. "v1.27.0" or "v1.27.0-rc.1") to prevent option injection
