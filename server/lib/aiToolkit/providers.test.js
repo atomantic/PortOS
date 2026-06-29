@@ -593,7 +593,7 @@ describe('Provider Service', () => {
     });
   });
 
-  describe('Clawed Ollama (ollama-backed CLI) model refresh', () => {
+  describe('Claude Ollama (ollama-backed) model refresh', () => {
     afterEach(() => {
       vi.unstubAllGlobals();
     });
@@ -622,7 +622,7 @@ describe('Provider Service', () => {
       });
 
       const p = await providerService.createProvider({
-        name: 'Clawed Ollama (local model)',
+        name: 'Claude Ollama (local model)',
         type: 'cli',
         command: 'claude',
         ollamaBacked: true,
@@ -638,7 +638,7 @@ describe('Provider Service', () => {
       stubOllama(['qwen2.5:7b', 'gemma2:9b'], {}); // no capabilities reported for any
 
       const p = await providerService.createProvider({
-        name: 'Clawed Ollama',
+        name: 'Claude Ollama',
         type: 'cli',
         command: 'claude',
         envVars: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:11434' },
@@ -647,6 +647,39 @@ describe('Provider Service', () => {
       const updated = await providerService.refreshProviderModels(p.id);
       // qwen matches the tool-use heuristic; gemma2 does not.
       expect(updated.models).toEqual(['qwen2.5:7b']);
+    });
+
+    it('refreshes models for an ollama-backed TUI provider too', async () => {
+      stubOllama(['qwen2.5:7b', 'gemma2:9b'], {
+        'qwen2.5:7b': ['completion', 'tools'],
+        'gemma2:9b': ['completion', 'vision'],
+      });
+
+      const p = await providerService.createProvider({
+        name: 'Claude Ollama TUI (local model)',
+        type: 'tui',
+        command: 'claude',
+        ollamaBacked: true,
+        envVars: { ANTHROPIC_BASE_URL: 'http://localhost:11434', ANTHROPIC_AUTH_TOKEN: 'ollama' },
+      });
+
+      const updated = await providerService.refreshProviderModels(p.id);
+      expect(updated).not.toBeNull();
+      expect(updated.models).toEqual(['qwen2.5:7b']);
+    });
+
+    it('does not refresh a non-ollama-backed TUI provider (returns null)', async () => {
+      // A plain claude TUI provider has no Ollama backing — refresh is a no-op
+      // for tui type, so it returns null (models left as configured).
+      const p = await providerService.createProvider({
+        name: 'Claude Code TUI',
+        type: 'tui',
+        command: 'claude',
+        models: ['claude-opus-4-8'],
+      });
+
+      const updated = await providerService.refreshProviderModels(p.id);
+      expect(updated).toBeNull();
     });
   });
 

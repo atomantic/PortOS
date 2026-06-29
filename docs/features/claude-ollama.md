@@ -1,8 +1,14 @@
-# Clawed Ollama — run CoS agent tasks on a local model
+# Claude Ollama — run CoS agent tasks on a local model
 
-**Clawed Ollama** lets a user whose only LLM is **Ollama / LM Studio** run
+**Claude Ollama** lets a user whose only LLM is **Ollama / LM Studio** run
 file-writing **CoS agent tasks** — create/edit files, run tests, ship a PR — by
-running the **Claude Code harness on top of a local model**.
+running the **Claude Code harness on top of a local model**. It ships in two
+variants:
+
+- **Claude Ollama (local model)** — a `cli` provider (`claude --print`), headless.
+- **Claude Ollama TUI (local model)** — a `tui` provider
+  (`claude --dangerously-skip-permissions`), the interactive harness CoS agents
+  drive in TUI mode.
 
 ## Why a special provider?
 
@@ -17,9 +23,9 @@ PortOS has two provider classes:
 
 Claude Code's harness is **independent of which model serves tokens**. Point the
 `claude` CLI at a local model via `ANTHROPIC_BASE_URL` and you keep the *entire*
-file-editing harness while Ollama does the generation. **Clawed Ollama** is exactly
-that: a `cli` provider (`command: claude`) whose `envVars` route Claude Code to your
-Ollama daemon, with its model list pulled live from Ollama.
+file-editing harness while Ollama does the generation. **Claude Ollama** is exactly
+that: a `claude` CLI/TUI provider whose `envVars` route Claude Code to your Ollama
+daemon, with its model list pulled live from Ollama.
 
 ## Setup
 
@@ -28,17 +34,20 @@ Ollama daemon, with its model list pulled live from Ollama.
 2. **Run Ollama ≥ 0.14** (locally or on a remote box) — it natively serves the
    Anthropic Messages API, so no proxy is needed. (LM Studio / vLLM / older Ollama:
    put **LiteLLM** in front to translate Anthropic ↔ OpenAI.)
-3. **Add the sample provider** — in PortOS, **AI Providers → Add Sample → "Clawed
-   Ollama (local model)"**. Edit `ANTHROPIC_BASE_URL` if your Ollama isn't on
-   `localhost:11434` (e.g. `http://<remote-host>:11434`).
+3. **Pick a variant** — after `./update.sh`, both **Claude Ollama (local model)**
+   (CLI) and **Claude Ollama TUI (local model)** appear on the **AI Providers** page.
+   (On older installs you can also adopt them via **Add Sample**.) Edit
+   `ANTHROPIC_BASE_URL` if your Ollama isn't on `localhost:11434`
+   (e.g. `http://<remote-host>:11434`).
 4. **Refresh models** — hit the provider's **Refresh Models** button. PortOS pulls the
    installed Ollama models and **keeps only the tool-use-capable ones** (the harness
-   depends on reliable tool-calling), then pick a default.
-5. **Run a task** — set Clawed Ollama as the active provider (or pin it per task) and
+   depends on reliable tool-calling), then pick a default. This works for both the CLI
+   and TUI variant.
+5. **Run a task** — set Claude Ollama as the active provider (or pin it per task) and
    create a CoS agent task. It now writes files and ships a PR backed by your local model.
 
-The provider is `enabled: false` by default — adopting the sample doesn't change your
-active provider until you choose it.
+Both providers are `enabled: false` by default — adopting them doesn't change your
+active provider until you choose one.
 
 ## Coding-task restrictions
 
@@ -48,7 +57,7 @@ active provider until you choose it.
 - A server-side guard in `agentProviderResolution` rejects an `api` provider that
   reaches the spawn path (via a task pin or the fallback chain) with a clear error,
   rather than spawning a child process that can't write files.
-- Clawed Ollama's model list is filtered to **tool-use-capable** models (Qwen 2.5/3,
+- Claude Ollama's model list is filtered to **tool-use-capable** models (Qwen 2.5/3,
   Llama 3.1+, Mistral/Mixtral, Cohere Command, GLM-4, Granite 3, gpt-oss, Hermes, …).
 
 ## ⚠️ Tool-use caveat

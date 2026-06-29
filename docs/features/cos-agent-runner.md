@@ -43,4 +43,4 @@ A separate `portos-cos` PM2 process that:
 
 - [Chief of Staff](./chief-of-staff.md) - Main orchestration system
 - [Error Handling](./error-handling.md) - Agent error recovery
-- [Clawed Ollama](./clawed-ollama.md) - Run agent tasks on a local Ollama/LM Studio model
+- [Claude Ollama](./claude-ollama.md) - Run agent tasks on a local Ollama/LM Studio model
