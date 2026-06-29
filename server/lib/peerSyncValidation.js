@@ -239,11 +239,11 @@ const writersRoomExercisePushSchema = z.object({
   ...peerSyncPushBase,
 }).strict();
 // Music Video projects (#1770) push the bare record (metadata + beat-aligned
-// scenes[]) — no bundled children/linked collection, and referenced media
-// (uploaded audio, scene images/rendered videos) is NOT bundled in this phase,
-// so the base shape alone suffices and the sender always ships `assetManifest:
-// []` (`.strict()` rejects smuggled bundle keys, same posture as
-// creativeDirectorProject/writersRoomFolder).
+// scenes[]) — no bundled children/linked collection. #1772 bundles referenced
+// media (uploaded audio as a `music` entry, rendered scene clips as `video`
+// entries) via the base `assetManifest`, which already accepts both kinds; no
+// project-specific manifest field is needed (`.strict()` still rejects smuggled
+// bundle keys, same posture as creativeDirectorProject/writersRoomFolder).
 const musicVideoProjectPushSchema = z.object({
   kind: z.literal('musicVideoProject'),
   ...peerSyncPushBase,

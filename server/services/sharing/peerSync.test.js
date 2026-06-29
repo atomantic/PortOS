@@ -2289,6 +2289,111 @@ describe('peerSync', () => {
       expect(captured[1].assetManifest).toEqual([expect.objectContaining({ kind: 'image', filename: 'album.png' })]);
       expect(captured[2].assetManifest).toEqual([expect.objectContaining({ kind: 'music', filename: 'song.mp3' })]);
     });
+
+    // --- Music Video project media federation (#1772) ---
+    const enableMusicVideoPeer = () => {
+      vi.mocked(getPeers).mockResolvedValue([{
+        instanceId: 'peer-a', name: 'Peer A', host: null, address: '10.0.0.2', port: 5555,
+        enabled: true, syncEnabled: true, directions: ['outbound', 'inbound'],
+        syncCategories: { musicVideoProjects: true },
+      }]);
+    };
+
+    it('bundles uploaded audio + rendered scene clips for a music video project push', async () => {
+      // #1772: the project record federated but shipped an empty manifest, so a
+      // selectively-subscribed peer never received the referenced media. Audio
+      // rides as a `music` entry (PATHS.music); each scene's videoHistoryId
+      // resolves through video-history.json to its `<filename>` under PATHS.videos.
+      enableMusicVideoPeer();
+      PATHS.videos = join(tmp, 'videos');
+      await mkdir(PATHS.videos, { recursive: true });
+      await writeFile(join(PATHS.music, 'mv-song.mp3'), Buffer.from('audio bytes'));
+      await writeFile(join(PATHS.videos, 'scene-one.mp4'), Buffer.from('clip one'));
+      await writeFile(join(PATHS.videos, 'scene-two.webm'), Buffer.from('clip two'));
+      // video-history.json maps each videoHistoryId → its on-disk basename.
+      await writeFile(join(tmp, 'video-history.json'), JSON.stringify([
+        { id: 'vh-1', filename: 'scene-one.mp4' },
+        { id: 'vh-2', filename: 'scene-two.webm' },
+      ]));
+      vi.mocked(getMusicVideoProject).mockResolvedValue({
+        id: 'mv-1', name: 'My Video', mode: 'director', trackId: null,
+        uploadedAudioFilename: 'mv-song.mp3',
+        scenes: [
+          { sceneId: 's-1', order: 0, videoHistoryId: 'vh-1', referenceImageId: 'ref-x' },
+          { sceneId: 's-2', order: 1, videoHistoryId: 'vh-2', referenceImageId: null },
+          { sceneId: 's-3', order: 2, videoHistoryId: null, referenceImageId: null },
+        ],
+        updatedAt: '2026-06-28T00:00:00Z', deleted: false, deletedAt: null,
+      });
+      let captured = null;
+      vi.mocked(peerFetch).mockImplementation(async (_url, opts) => {
+        captured = JSON.parse(opts.body);
+        return { ok: true, json: async () => ({ missingAssets: [] }) };
+      });
+      await pushRecordToPeer({
+        id: 'sub-mv', peerId: 'peer-a', recordKind: 'musicVideoProject', recordId: 'mv-1',
+      });
+      expect(captured.kind).toBe('musicVideoProject');
+      expect(captured.record.id).toBe('mv-1');
+      const byKind = (k) => captured.assetManifest.filter(a => a.kind === k).map(a => a.filename).sort();
+      expect(byKind('music')).toEqual(['mv-song.mp3']);
+      expect(byKind('video')).toEqual(['scene-one.mp4', 'scene-two.webm']);
+      // referenceImageId is Phase 1b — no image entry ships yet.
+      expect(byKind('image')).toEqual([]);
+    });
+
+    it('falls back to the <id>.mp4 convention when a scene clip has no video-history row', async () => {
+      // The metadata row may not have synced yet; the bare-id + .mp4 convention
+      // (collectionVideoRefToFilename) still resolves the bytes. A wrong guess is
+      // harmless — a missing file is skipped, never shipped.
+      enableMusicVideoPeer();
+      PATHS.videos = join(tmp, 'videos');
+      await mkdir(PATHS.videos, { recursive: true });
+      await writeFile(join(PATHS.videos, 'vh-orphan.mp4'), Buffer.from('orphan clip'));
+      vi.mocked(getMusicVideoProject).mockResolvedValue({
+        id: 'mv-2', name: 'No Rows', mode: 'director', trackId: null,
+        uploadedAudioFilename: null,
+        scenes: [{ sceneId: 's-1', order: 0, videoHistoryId: 'vh-orphan', referenceImageId: null }],
+        updatedAt: '2026-06-28T00:00:00Z', deleted: false, deletedAt: null,
+      });
+      let captured = null;
+      vi.mocked(peerFetch).mockImplementation(async (_url, opts) => {
+        captured = JSON.parse(opts.body);
+        return { ok: true, json: async () => ({ missingAssets: [] }) };
+      });
+      await pushRecordToPeer({
+        id: 'sub-mv2', peerId: 'peer-a', recordKind: 'musicVideoProject', recordId: 'mv-2',
+      });
+      expect(captured.assetManifest).toEqual([expect.objectContaining({ kind: 'video', filename: 'vh-orphan.mp4' })]);
+    });
+
+    it('ships an empty asset manifest for a tombstone music video project push', async () => {
+      enableMusicVideoPeer();
+      PATHS.videos = join(tmp, 'videos');
+      await mkdir(PATHS.videos, { recursive: true });
+      // Real files on disk would otherwise hash in — the deleted gate must skip
+      // the manifest builder entirely.
+      await writeFile(join(PATHS.music, 'doomed.mp3'), Buffer.from('bytes'));
+      await writeFile(join(PATHS.videos, 'doomed.mp4'), Buffer.from('bytes'));
+      await writeFile(join(tmp, 'video-history.json'), JSON.stringify([{ id: 'vh-d', filename: 'doomed.mp4' }]));
+      vi.mocked(getMusicVideoProject).mockResolvedValue({
+        id: 'mv-tomb', name: 'Doomed', mode: 'director', trackId: null,
+        uploadedAudioFilename: 'doomed.mp3',
+        scenes: [{ sceneId: 's-1', order: 0, videoHistoryId: 'vh-d', referenceImageId: null }],
+        updatedAt: '2026-06-28T03:00:00Z', deleted: true, deletedAt: '2026-06-28T03:00:00Z',
+      });
+      let captured = null;
+      vi.mocked(peerFetch).mockImplementation(async (_url, opts) => {
+        captured = JSON.parse(opts.body);
+        return { ok: true, json: async () => ({}) };
+      });
+      await pushRecordToPeer({
+        id: 'sub-mvt', peerId: 'peer-a', recordKind: 'musicVideoProject', recordId: 'mv-tomb',
+      });
+      expect(captured.record.id).toBe('mv-tomb');
+      expect(captured.record.deleted).toBe(true);
+      expect(captured.assetManifest).toEqual([]);
+    });
   });
 
   describe('collectSubscriptionsForUpdate', () => {

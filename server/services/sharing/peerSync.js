@@ -842,10 +842,7 @@ async function buildIntegrityAssetManifest(kind, record) {
   if (kind === 'album') return buildAlbumAssetManifest(record);
   if (kind === 'track') return buildTrackAssetManifest(record);
   if (kind === 'creativeDirectorProject') return buildProjectAssetManifest(record);
-  // Music Video projects (#1770): the record federates but its referenced media
-  // (uploaded audio, scene reference images / rendered videos) is NOT bundled in
-  // this phase — empty manifest, mirroring the body-less Writers Room kinds.
-  if (kind === 'musicVideoProject') return [];
+  if (kind === 'musicVideoProject') return buildMusicVideoAssetManifest(record);
   if (kind === 'moodBoard') return buildBoardAssetManifest(record);
   if (kind === 'series') {
     const childIssues = await listIssues({ seriesId: record?.id, includeDeleted: true }).catch(() => []);
@@ -1689,15 +1686,14 @@ async function buildPushPayload(sub, sourceInstanceId) {
     return { kind: 'writersRoomExercise', record: sanitized, assetManifest: [], sourceInstanceId, portosMeta };
   }
   if (sub.recordKind === 'musicVideoProject') {
-    // #1770 — the record (metadata + beat-aligned scenes) is the LWW envelope.
-    // Referenced media (uploaded audio, scene images/rendered videos) is NOT
-    // bundled in this phase, so the asset manifest is empty (writersRoomFolder
-    // pattern). Media-asset bundling is a follow-up.
+    // #1770 ships the record (metadata + beat-aligned scenes) as the LWW
+    // envelope; #1772 bundles its referenced media. A tombstone ships no bytes.
     const record = await getMusicVideoProject(sub.recordId, { includeDeleted: true }).catch(() => null);
     if (!record) return null;
     const sanitized = sanitizeRecordForWire('musicVideoProject', record);
     if (!sanitized) return null;
-    return { kind: 'musicVideoProject', record: sanitized, assetManifest: [], sourceInstanceId, portosMeta };
+    const assetManifest = record.deleted === true ? [] : await buildMusicVideoAssetManifest(record);
+    return { kind: 'musicVideoProject', record: sanitized, assetManifest, sourceInstanceId, portosMeta };
   }
   return null;
 }
@@ -1763,6 +1759,66 @@ async function buildProjectAssetManifest(project) {
   if (!filename) return [];
   const entry = await hashImageForManifest(filename);
   return entry ? [entry] : [];
+}
+
+// `data/video-history.json` is a FLAT array of video-generation rows
+// (`{ id, filename, ... }`). The same store dataSync's `videoHistory` category
+// federates as metadata; here we read it only to resolve a scene's
+// `videoHistoryId` to its on-disk basename under PATHS.videos. Mirrors
+// dataSync's direct readJSONFile (no videoGen import — that drags in
+// ffmpeg/spawn machinery we don't need on the manifest path).
+async function videoHistoryFilenamesById() {
+  const raw = await readJSONFile(join(PATHS.data, 'video-history.json'), []);
+  const map = new Map();
+  for (const row of Array.isArray(raw) ? raw : []) {
+    if (isStr(row?.id) && isStr(row?.filename)) map.set(row.id, row.filename);
+  }
+  return map;
+}
+
+/**
+ * Build a Music Video project's asset manifest (#1772). Unlike the Creative
+ * Director store, a music video project has NO auto-linked media collection, so
+ * its referenced media has no other federation channel — this manifest is the
+ * only way a selectively-subscribed peer receives the bytes. Covers the two
+ * media kinds a shipped project actually references:
+ *   - the uploaded audio track (`uploadedAudioFilename`, a basename under
+ *     PATHS.music — the same dir tracks use). A track-LINKED project stores
+ *     `uploadedAudioFilename: null` (the route writes one or the other), so the
+ *     linked track's own federation carries that audio and nothing double-ships.
+ *   - per-scene rendered clips (`scene.videoHistoryId` → a video-history row →
+ *     `<filename>` under PATHS.videos). The row METADATA union-merges via the
+ *     `videoHistory` dataSync category; this adds the bytes. Falls back to the
+ *     `<id>.mp4` convention (`collectionVideoRefToFilename`) when the row hasn't
+ *     synced yet — a missing file is skipped, so a wrong guess never ships.
+ *
+ * Scene reference-frame images (`scene.referenceImageId`) are intentionally NOT
+ * hashed: the i2v render pipeline that populates them is Phase 1b (unshipped)
+ * and its reference-image store/dir convention isn't defined yet — federating
+ * them is a follow-up. Path-traversal-guarded + missing-file-skipped via
+ * hashSimpleAsset; dedup by `<kind>:<filename>` so two scenes pointing at the
+ * same render ship once.
+ */
+async function buildMusicVideoAssetManifest(project) {
+  const dedup = new Map();
+  if (isStr(project?.uploadedAudioFilename)) {
+    const audio = await hashSimpleAsset(project.uploadedAudioFilename, 'music', PATHS.music);
+    if (audio) dedup.set(`${audio.kind}:${audio.filename}`, audio);
+  }
+  const scenes = Array.isArray(project?.scenes) ? project.scenes : [];
+  const videoIds = [...new Set(
+    scenes.map((s) => (isStr(s?.videoHistoryId) ? s.videoHistoryId : null)).filter(Boolean),
+  )];
+  if (videoIds.length) {
+    const byId = await videoHistoryFilenamesById();
+    const entries = await Promise.all(videoIds.map((id) =>
+      hashSimpleAsset(byId.get(id) || collectionVideoRefToFilename(id), 'video', PATHS.videos),
+    ));
+    for (const entry of entries) {
+      if (entry) dedup.set(`${entry.kind}:${entry.filename}`, entry);
+    }
+  }
+  return [...dedup.values()];
 }
 
 /**
