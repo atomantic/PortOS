@@ -2299,17 +2299,21 @@ describe('peerSync', () => {
       }]);
     };
 
-    it('bundles uploaded audio + rendered scene clips for a music video project push', async () => {
+    it('bundles uploaded audio + rendered scene clips + reference-frame stills for a music video project push', async () => {
       // #1772: the project record federated but shipped an empty manifest, so a
       // selectively-subscribed peer never received the referenced media. Audio
       // rides as a `music` entry (PATHS.music); each scene's videoHistoryId
-      // resolves through video-history.json to its `<filename>` under PATHS.videos.
+      // resolves through video-history.json to its `<filename>` under PATHS.videos;
+      // each scene's referenceImageId (#1760 Phase 1b) rides as a sidecar-aware
+      // `image` entry (a gallery basename under PATHS.images).
       enableMusicVideoPeer();
       PATHS.videos = join(tmp, 'videos');
       await mkdir(PATHS.videos, { recursive: true });
+      await mkdir(PATHS.images, { recursive: true });
       await writeFile(join(PATHS.music, 'mv-song.mp3'), Buffer.from('audio bytes'));
       await writeFile(join(PATHS.videos, 'scene-one.mp4'), Buffer.from('clip one'));
       await writeFile(join(PATHS.videos, 'scene-two.webm'), Buffer.from('clip two'));
+      await writeFile(join(PATHS.images, 'ref-x.png'), Buffer.from('frame bytes'));
       // video-history.json maps each videoHistoryId → its on-disk basename.
       await writeFile(join(tmp, 'video-history.json'), JSON.stringify([
         { id: 'vh-1', filename: 'scene-one.mp4' },
@@ -2319,7 +2323,7 @@ describe('peerSync', () => {
         id: 'mv-1', name: 'My Video', mode: 'director', trackId: null,
         uploadedAudioFilename: 'mv-song.mp3',
         scenes: [
-          { sceneId: 's-1', order: 0, videoHistoryId: 'vh-1', referenceImageId: 'ref-x' },
+          { sceneId: 's-1', order: 0, videoHistoryId: 'vh-1', referenceImageId: 'ref-x.png' },
           { sceneId: 's-2', order: 1, videoHistoryId: 'vh-2', referenceImageId: null },
           { sceneId: 's-3', order: 2, videoHistoryId: null, referenceImageId: null },
         ],
@@ -2338,8 +2342,9 @@ describe('peerSync', () => {
       const byKind = (k) => captured.assetManifest.filter(a => a.kind === k).map(a => a.filename).sort();
       expect(byKind('music')).toEqual(['mv-song.mp3']);
       expect(byKind('video')).toEqual(['scene-one.mp4', 'scene-two.webm']);
-      // referenceImageId is Phase 1b — no image entry ships yet.
-      expect(byKind('image')).toEqual([]);
+      // referenceImageId (Phase 1b) now ships as a gallery `image` asset so the
+      // peer renders the thumbnail instead of a dangling /data/images/ reference.
+      expect(byKind('image')).toEqual(['ref-x.png']);
     });
 
     it('falls back to the <id>.mp4 convention when a scene clip has no video-history row', async () => {
