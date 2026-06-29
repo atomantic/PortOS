@@ -61,11 +61,14 @@ if ($LASTEXITCODE -ne 0) { Pop-Location; exit $LASTEXITCODE }
 Pop-Location
 
 # Rebuild native bindings. Use `npm rebuild esbuild` instead of invoking a
-# hardcoded client/node_modules/esbuild/install.js path: npm resolves esbuild
-# wherever it was actually hoisted/deduped, whereas the fixed nested path doesn't
-# exist when esbuild lands in the root node_modules — that path mismatch is what
-# aborted setup.ps1 with MODULE_NOT_FOUND on Windows (issue #1792). Mirrors the
-# cross-platform `npm run setup` script and setup.sh.
+# hardcoded client/node_modules/esbuild/install.js path: esbuild is a transitive
+# dep (via vite) that npm may place anywhere inside the client dependency tree, so
+# the fixed client/node_modules/esbuild/install.js path doesn't exist when npm
+# nests it deeper — that path mismatch is what aborted setup.ps1 with
+# MODULE_NOT_FOUND on Windows (issue #1792). `npm rebuild esbuild --prefix client`
+# resolves esbuild wherever it landed within client's tree and re-runs its
+# binary-download postinstall. Mirrors the cross-platform `npm run setup` script
+# and setup.sh.
 Write-Host ""
 Write-Host "Rebuilding esbuild, node-pty & sharp..." -ForegroundColor Yellow
 npm rebuild esbuild --prefix client
