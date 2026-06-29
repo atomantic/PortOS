@@ -102,31 +102,42 @@ export default function MusicVideo() {
       if (failed) toast.error('Frame render failed');
     };
     const onCompleted = (data) => settle(data, false);
-    // A render canceled WHILE RUNNING reaches us as image-gen:failed (SIGTERM)
-    // just before image-gen:canceled — and before the queue flips the job to
-    // 'canceled', so neither the failed event nor an immediate status fetch can
-    // tell a cancel from a real failure (#1791/#1796). Clear the spinner now
-    // (correct either way) but DEFER the error toast: image-gen:canceled cancels
-    // the timer in the common case, and if the timer fires first it re-checks the
-    // now-settled status, so a user cancel never surfaces as "Frame render failed".
-    const onFailed = (data) => {
-      const jobId = data?.generationId || data?.jobId;
-      if (!jobId) return;
-      // Only THIS page's renders should surface a failure toast. Capture
-      // ownership before settle() deletes the correlation: an unrelated
-      // image-gen job that fails while this page is open must not toast
-      // "Frame render failed". A fast-fail that raced ahead of its own kickoff
-      // registration isn't owned yet either — settle() stashes it as an orphan
-      // and the kickoff .then reconciles (and toasts) it, so we lose nothing.
-      const owned = pendingJobsRef.current.has(jobId);
-      settle(data, false);
-      if (!owned || failTimers.has(jobId)) return;
+    // Deferred failure toast for an owned render. A render canceled WHILE RUNNING
+    // reaches us as image-gen:failed (SIGTERM) just before image-gen:canceled —
+    // and before the queue flips the job to 'canceled' — so neither the failed
+    // event nor an immediate status fetch can tell a cancel from a real failure
+    // (#1791/#1796). image-gen:canceled cancels this timer in the common case;
+    // if the timer fires first it re-polls the job and only toasts on a CONFIRMED
+    // terminal failure — a still-'running'/'queued' status means the cancel (or
+    // the failure transition) hasn't landed yet, so it re-polls a bounded number
+    // of times rather than toasting prematurely (the spinner is already cleared,
+    // so giving up silently never strands the UI).
+    const armFailToast = (jobId, attempt = 0) => {
       failTimers.set(jobId, setTimeout(() => {
         failTimers.delete(jobId);
         getMediaJob(jobId)
-          .then((job) => { if (job?.status !== 'canceled') toast.error('Frame render failed'); })
+          .then((job) => {
+            const status = job?.status;
+            if (status === 'canceled') return; // user cancel — never a failure toast
+            if (status === 'failed' || status === 'error') { toast.error('Frame render failed'); return; }
+            if (attempt < 2) armFailToast(jobId, attempt + 1); // non-terminal: wait, don't toast yet
+          })
           .catch(() => toast.error('Frame render failed'));
       }, 800));
+    };
+    const onFailed = (data) => {
+      const jobId = data?.generationId || data?.jobId;
+      if (!jobId) return;
+      // Only THIS page's renders surface a failure toast. An OWNED job clears the
+      // spinner silently (settle with failed=false) and defers the toast above so
+      // a running-cancel can retract it. A not-yet-owned job is stashed as an
+      // orphan WITH the failure bit so a fast-fail that raced ahead of its own
+      // kickoff registration is toasted by the kickoff .then reconciliation; an
+      // unrelated image-gen job is simply capped/evicted from the orphan map
+      // unseen (never reconciled → never toasts here).
+      const owned = pendingJobsRef.current.has(jobId);
+      settle(data, !owned);
+      if (owned && !failTimers.has(jobId)) armFailToast(jobId);
     };
     // Queued-cancel emits no *:failed; running-cancel emits failed then this.
     // Either way clear the spinner and cancel any pending failure toast.
