@@ -355,7 +355,14 @@ export default function Shell() {
     setPendingAttach('new');
     userIdleRef.current = false;
     if (termInstanceRef.current) {
-      termInstanceRef.current.clear();
+      // reset() not clear(): the xterm instance is reused across every session,
+      // and a full-screen TUI (a watched agent-tui claude/codex run) leaves DEC
+      // private modes ON — mouse-motion tracking, focus reporting, bracketed
+      // paste, alt-screen. clear() only wipes the viewport, so those modes would
+      // persist into this fresh shell and make xterm inject escape-sequence
+      // reports (mouse/focus events) as INPUT, echoing as accumulating garbage
+      // at the prompt. reset() restores the terminal to a clean initial state.
+      termInstanceRef.current.reset();
       termInstanceRef.current.writeln('\x1b[36mStarting shell session...\x1b[0m');
     }
     const opts = initialOptsRef.current || {};
@@ -372,7 +379,10 @@ export default function Shell() {
     setPendingAttach(sessionId);
     userIdleRef.current = false;
     if (termInstanceRef.current) {
-      termInstanceRef.current.clear();
+      // reset() not clear() — drop any DEC private modes (mouse/focus tracking,
+      // alt-screen) the previously-viewed session left active so they can't
+      // bleed into this one as injected escape-sequence input. See startSession.
+      termInstanceRef.current.reset();
       termInstanceRef.current.writeln('\x1b[36mAttaching to session...\x1b[0m');
     }
     // claim:true → server refuses to displace a different socket. Used by auto-pick
@@ -562,7 +572,12 @@ export default function Shell() {
       cancelPendingAttach();
       activateSession(sid);
       if (termInstanceRef.current) {
-        termInstanceRef.current.clear();
+        // reset() not clear(): wipe modes/parser state from the prior session
+        // before repainting this one's buffer, so a previously-viewed full-screen
+        // TUI's lingering mouse/focus tracking can't inject garbage here. The
+        // freshly-painted bufferedOutput re-establishes whatever modes THIS
+        // session legitimately uses. See startSession for the full rationale.
+        termInstanceRef.current.reset();
         if (bufferedOutput) {
           termInstanceRef.current.write(bufferedOutput);
         }
