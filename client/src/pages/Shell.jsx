@@ -264,24 +264,50 @@ export default function Shell() {
     }
   }, [themeId, themeMode]);
 
+  // Refit the terminal to its container and tell the PTY about the new size.
+  const refitTerminal = useCallback(() => {
+    if (!fitAddonRef.current || !termInstanceRef.current) return;
+    fitAddonRef.current.fit();
+    if (socket && sessionIdRef.current) {
+      socket.emit('shell:resize', {
+        sessionId: sessionIdRef.current,
+        cols: termInstanceRef.current.cols,
+        rows: termInstanceRef.current.rows
+      });
+    }
+  }, [socket]);
+
   // Handle window resize
   useEffect(() => {
-    const handleResize = () => {
-      if (fitAddonRef.current && termInstanceRef.current) {
-        fitAddonRef.current.fit();
-        if (socket && sessionIdRef.current) {
-          socket.emit('shell:resize', {
-            sessionId: sessionIdRef.current,
-            cols: termInstanceRef.current.cols,
-            rows: termInstanceRef.current.rows
-          });
-        }
-      }
-    };
+    window.addEventListener('resize', refitTerminal);
+    return () => window.removeEventListener('resize', refitTerminal);
+  }, [refitTerminal]);
 
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, [socket]);
+  // Refit whenever the terminal *container* changes size — not just the window.
+  // The toolbars (session tabs, live-run banner, quick-commands bar) mount
+  // conditionally on `connected`, which shrinks the flex-1 terminal box after the
+  // one-shot mount fit() has already run. Without re-fitting, xterm keeps its
+  // taller row count and overflows below the fold, hiding the prompt and breaking
+  // scrollback. A ResizeObserver catches every such reflow (the user's "resize the
+  // window and it appears" glitch). rAF-guarded so fit()'s own DOM mutation can't
+  // re-enter the observer in a tight loop.
+  useEffect(() => {
+    const el = terminalRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    let frame = null;
+    const observer = new ResizeObserver(() => {
+      if (frame != null) return;
+      frame = requestAnimationFrame(() => {
+        frame = null;
+        refitTerminal();
+      });
+    });
+    observer.observe(el);
+    return () => {
+      if (frame != null) cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, [refitTerminal]);
 
   // Handle terminal input
   useEffect(() => {
