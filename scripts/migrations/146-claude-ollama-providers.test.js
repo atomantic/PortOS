@@ -129,6 +129,26 @@ describe('migration 146 — Claude Ollama providers', () => {
     expect(out.providers['claude-ollama']).toBeDefined();
   });
 
+  it('does not clobber a user-customized claude-ollama when clawed also exists', async () => {
+    // Both exist, and claude-ollama is genuinely customized (enabled + models) —
+    // not the freshly-merged pristine default. Keep it; just drop stale clawed.
+    writeJson(providersPath, {
+      providers: {
+        'clawed-ollama': clawed({ enabled: false, models: ['old-model'] }),
+        'claude-ollama': clawed({ id: 'claude-ollama', name: 'My Tuned Local', enabled: true, models: ['qwen2.5-coder:32b'] }),
+      },
+    });
+
+    await migration.up({ rootDir });
+
+    const out = readJson(providersPath);
+    expect(out.providers['clawed-ollama']).toBeUndefined();
+    // user's customized claude-ollama survives untouched
+    expect(out.providers['claude-ollama'].name).toBe('My Tuned Local');
+    expect(out.providers['claude-ollama'].enabled).toBe(true);
+    expect(out.providers['claude-ollama'].models).toEqual(['qwen2.5-coder:32b']);
+  });
+
   it('adds both shipped providers to an install that never had clawed', async () => {
     writeJson(providersPath, {
       activeProvider: 'claude-code',
