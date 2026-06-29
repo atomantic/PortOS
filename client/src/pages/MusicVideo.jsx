@@ -14,6 +14,7 @@ import {
 } from '../services/apiMusicVideo.js';
 import { generateImage } from '../services/apiSystem.js';
 import { listTracks } from '../services/apiTracks.js';
+import { getMediaJob } from '../services/apiMediaJobs.js';
 import socket from '../services/socket.js';
 import { formatDurationSec } from '../utils/formatters.js';
 
@@ -99,7 +100,18 @@ export default function MusicVideo() {
       if (failed) toast.error('Frame render failed');
     };
     const onCompleted = (data) => settle(data, false);
-    const onFailed = (data) => settle(data, true);
+    // A render canceled WHILE RUNNING reaches us as image-gen:failed (SIGTERM)
+    // just before image-gen:canceled, so confirm via the authoritative job status
+    // before showing a failure toast — a user cancel must not toast "render
+    // failed" (#1791/#1796). A real failure still toasts. The queued-cancel case
+    // never emits failed and is handled by onCanceled below.
+    const onFailed = (data) => {
+      const jobId = data?.generationId || data?.jobId;
+      if (!jobId) { settle(data, true); return; }
+      getMediaJob(jobId)
+        .then((job) => settle(data, job?.status !== 'canceled'))
+        .catch(() => settle(data, true));
+    };
     socket.on('music-video:scene-image', onSceneImage);
     socket.on('image-gen:completed', onCompleted);
     socket.on('image-gen:failed', onFailed);
