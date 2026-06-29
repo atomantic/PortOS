@@ -63,6 +63,10 @@ export function createMediaJobImageHook(config) {
     sceneKey = null,
     attach,
     onAttached,
+    // Optional: ctx → a short per-record routing string appended to the failure
+    // log (e.g. `workId/sceneId`), so a "render didn't attach" line is traceable
+    // to a specific record the way each hand-written hook's log used to be.
+    describe = null,
   } = config;
 
   const serialize = createKeyCachedQueue();
@@ -112,7 +116,8 @@ export function createMediaJobImageHook(config) {
           if (sKey && r != null) guard.mark(sKey, ctx.queuedAt);
           return r;
         }).catch((err) => {
-          console.log(`⚠️ ${label} hook failed for ${ctx.filename}: ${err?.message || String(err)}`);
+          const where = describe ? ` → ${describe(ctx)}` : '';
+          console.log(`⚠️ ${label} hook failed for ${ctx.filename}${where}: ${err?.message || String(err)}`);
           return null;
         });
 

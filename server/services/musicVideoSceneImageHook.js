@@ -48,6 +48,7 @@ const hook = createMediaJobImageHook({
   // renders kicked off from another client can complete out of order — drop an
   // older render so it can't overwrite a newer reference frame.
   sceneKey: ({ projectId, sceneId }) => `${projectId}:${sceneId}`,
+  describe: ({ projectId, sceneId }) => `${projectId}/${sceneId}`,
   attach: ({ projectId, sceneId, filename }) =>
     updateScene(projectId, sceneId, { referenceImageId: filename }),
   onAttached: ({ projectId, sceneId, filename }) => {

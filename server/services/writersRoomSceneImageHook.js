@@ -52,6 +52,7 @@ const hook = createMediaJobImageHook({
   // Newest-render-wins per scene frame so an older render that completes after a
   // newer regenerate can't overwrite the newer storyboard frame (#1791).
   sceneKey: ({ workId, analysisId, sceneId }) => `${workId}:${analysisId}:${sceneId}`,
+  describe: ({ workId, sceneId }) => `${workId}/${sceneId}`,
   attach: ({ workId, analysisId, sceneId, filename, job }) =>
     persistSceneImage(workId, analysisId, {
       sceneId, filename, jobId: deriveJobId(job, filename), prompt: derivePrompt(job),
