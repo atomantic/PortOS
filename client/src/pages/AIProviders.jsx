@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import toast from '../components/ui/Toast';
 import * as api from '../services/api';
 import socket from '../services/socket';
-import { filterSelectableModels, filterGenerationModels, isEmbeddingModel, mergeModelLists, localBackendForProvider, modelOptionLabel, providerTypeClass, isTuiProvider, isApiProvider, isProcessProvider, isClaudeCodePlanCli, effectiveModelContextWindow } from '../utils/providers';
+import { filterSelectableModels, filterGenerationModels, isEmbeddingModel, mergeModelLists, localBackendForProvider, modelOptionLabel, providerTypeClass, isTuiProvider, isApiProvider, isProcessProvider, isOllamaBackedProvider, isClaudeCodePlanCli, effectiveModelContextWindow } from '../utils/providers';
 import useLocalModels from '../hooks/useLocalModels';
 import EmptyState from '../components/EmptyState';
 import {
@@ -136,6 +136,13 @@ export default function AIProviders() {
   };
 
   const supportsModelRefresh = (provider) => {
+    // Claude Ollama (ollama-backed claude CLI/TUI) refreshes its model list from
+    // the local Ollama daemon — including the TUI variant, which the server now
+    // refreshes via the type==='tui' && ollamaBacked branch. Check this before
+    // the generic TUI gate so the TUI variant's Refresh Models button shows.
+    if (isOllamaBackedProvider(provider)) {
+      return true;
+    }
     if (isTuiProvider(provider)) {
       return false;
     }

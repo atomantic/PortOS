@@ -34,10 +34,10 @@ daemon, with its model list pulled live from Ollama.
 2. **Run Ollama ≥ 0.14** (locally or on a remote box) — it natively serves the
    Anthropic Messages API, so no proxy is needed. (LM Studio / vLLM / older Ollama:
    put **LiteLLM** in front to translate Anthropic ↔ OpenAI.)
-3. **Pick a variant** — after `./update.sh`, both **Claude Ollama (local model)**
-   (CLI) and **Claude Ollama TUI (local model)** appear on the **AI Providers** page.
-   (On older installs you can also adopt them via **Add Sample**.) Edit
-   `ANTHROPIC_BASE_URL` if your Ollama isn't on `localhost:11434`
+3. **Pick a variant** — after `./update.sh` (or a server restart), both
+   **Claude Ollama (local model)** (CLI) and **Claude Ollama TUI (local model)**
+   appear on the **AI Providers** page, disabled by default. Enable the one you
+   want. Edit `ANTHROPIC_BASE_URL` if your Ollama isn't on `localhost:11434`
    (e.g. `http://<remote-host>:11434`).
 4. **Refresh models** — hit the provider's **Refresh Models** button. PortOS pulls the
    installed Ollama models and **keeps only the tool-use-capable ones** (the harness
