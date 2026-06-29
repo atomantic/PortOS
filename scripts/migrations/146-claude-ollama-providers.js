@@ -115,13 +115,14 @@ function rewriteProviderPins(node) {
   return changed;
 }
 
-// Task-level pins live in the markdown task queues (TASKS.md / COS-TASKS.md) as
-// `metadata.provider` — read by resolveAgentProviderAndModel for a pending or
-// in-progress task. Those aren't JSON, so rewrite the exact old-id token in
-// place. `clawed-ollama` is a unique provider slug, so a boundary-guarded token
-// replace (not preceded/followed by an id char) can't touch unrelated text, and
-// it's format-agnostic (no markdown-metadata parser to keep in sync).
-const PIN_TEXT_FILES = ['TASKS.md', 'COS-TASKS.md'];
+// Task-level pins live in the markdown task queues as `metadata.provider` —
+// read by resolveAgentProviderAndModel for a pending or in-progress task. The
+// shipped CoS defaults put these under data/ (see userTasksFile/cosTasksFile in
+// server/services/cosState.js), NOT the repo root. Those aren't JSON, so rewrite
+// the exact old-id token in place. `clawed-ollama` is a unique provider slug, so
+// a boundary-guarded token replace (not preceded/followed by an id char) can't
+// touch unrelated text, and it's format-agnostic (no markdown parser to sync).
+const PIN_TEXT_FILES = ['data/TASKS.md', 'data/COS-TASKS.md'];
 
 async function rewritePinTextFile(rootDir, relPath) {
   const filePath = join(rootDir, relPath);

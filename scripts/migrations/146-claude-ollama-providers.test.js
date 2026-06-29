@@ -194,8 +194,8 @@ describe('migration 146 — Claude Ollama providers', () => {
 
   it('repoints clawed-ollama task pins in TASKS.md / COS-TASKS.md markdown', async () => {
     writeJson(providersPath, { providers: { 'clawed-ollama': clawed() } });
-    const tasksPath = join(rootDir, 'TASKS.md');
-    const cosTasksPath = join(rootDir, 'COS-TASKS.md');
+    const tasksPath = join(rootDir, 'data/TASKS.md');
+    const cosTasksPath = join(rootDir, 'data/COS-TASKS.md');
     writeFileSync(tasksPath, '# Tasks\n\n- [ ] Do a thing\n  provider: clawed-ollama\n  model: qwen2.5:7b\n');
     writeFileSync(cosTasksPath, '# CoS Tasks\n\n- [ ] internal\n  provider: clawed-ollama\n');
 
@@ -208,7 +208,7 @@ describe('migration 146 — Claude Ollama providers', () => {
 
   it('does not touch claude-ollama-tui or unrelated tokens in markdown task files', async () => {
     writeJson(providersPath, { providers: { 'claude-code': { id: 'claude-code', type: 'cli', command: 'claude' } } });
-    const tasksPath = join(rootDir, 'TASKS.md');
+    const tasksPath = join(rootDir, 'data/TASKS.md');
     // a task pinned to the TUI variant + prose must survive untouched
     writeFileSync(tasksPath, '- [ ] x\n  provider: claude-ollama-tui\n  context: see clawed-ollama-notes.md\n');
     const before = readFileSync(tasksPath, 'utf-8');
