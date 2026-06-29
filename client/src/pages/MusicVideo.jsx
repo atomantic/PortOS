@@ -112,8 +112,15 @@ export default function MusicVideo() {
     const onFailed = (data) => {
       const jobId = data?.generationId || data?.jobId;
       if (!jobId) return;
+      // Only THIS page's renders should surface a failure toast. Capture
+      // ownership before settle() deletes the correlation: an unrelated
+      // image-gen job that fails while this page is open must not toast
+      // "Frame render failed". A fast-fail that raced ahead of its own kickoff
+      // registration isn't owned yet either — settle() stashes it as an orphan
+      // and the kickoff .then reconciles (and toasts) it, so we lose nothing.
+      const owned = pendingJobsRef.current.has(jobId);
       settle(data, false);
-      if (failTimers.has(jobId)) return;
+      if (!owned || failTimers.has(jobId)) return;
       failTimers.set(jobId, setTimeout(() => {
         failTimers.delete(jobId);
         getMediaJob(jobId)
