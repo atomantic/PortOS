@@ -39,6 +39,18 @@ import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
 // writers-room + catalog scene-image hooks use the same primitive.)
 const serializePerProject = createKeyCachedQueue();
 
+// Newest render (by job `queuedAt`) attached per scene, so an OLDER render that
+// completes AFTER a newer regenerate can't overwrite the newer frame. The GPU
+// lane is FIFO, but the Codex lane and renders kicked off from another client
+// (or after a refresh cleared the local spinner) can complete out of order —
+// "last write wins by completion order" would then show the new frame then
+// revert to the stale one. Keyed `${projectId}:${sceneId}` → queuedAt ISO; read
+// + written inside the per-project serialize section so it never races. In-memory
+// best-effort (lost on restart); one short string per rendered scene.
+// NOTE: the sibling completion hooks (writers-room / catalog) share the same
+// last-write-wins gap — generalizing this guard across them is part of #1791.
+const latestAttachedAt = new Map();
+
 let completedHandler = null;
 
 export function initMusicVideoSceneImageHook() {
@@ -58,10 +70,18 @@ export function initMusicVideoSceneImageHook() {
       const filename = job.result?.filename;
       if (!filename || typeof filename !== 'string') return;
       const { projectId, sceneId } = tag;
+      const queuedAt = typeof job.queuedAt === 'string' ? job.queuedAt : null;
+      const sceneKey = `${projectId}:${sceneId}`;
 
-      const updated = await serializePerProject(projectId, () =>
-        updateScene(projectId, sceneId, { referenceImageId: filename }),
-      ).catch((err) => {
+      const updated = await serializePerProject(projectId, async () => {
+        // Drop an out-of-order older render so it can't clobber a newer frame.
+        // Fixed-width UTC ISO timestamps compare chronologically as strings.
+        const prevAt = latestAttachedAt.get(sceneKey);
+        if (queuedAt && prevAt && queuedAt < prevAt) return null;
+        const result = await updateScene(projectId, sceneId, { referenceImageId: filename });
+        if (queuedAt) latestAttachedAt.set(sceneKey, queuedAt);
+        return result;
+      }).catch((err) => {
         // A 404 here is expected and benign — the project or scene was deleted
         // while its render was in flight. Log and drop; never throw.
         console.log(`⚠️ music-video scene-image hook failed for ${filename} → ${projectId}/${sceneId}: ${err?.message || String(err)}`);
@@ -91,5 +111,6 @@ export const __testing = {
       completedHandler = null;
     }
     serializePerProject.clear();
+    latestAttachedAt.clear();
   },
 };

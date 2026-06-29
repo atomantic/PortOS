@@ -51,6 +51,14 @@ export default function MusicVideo() {
   const selected = projects.find((p) => p.id === selectedId) || null;
   const replaceProject = (next) => setProjects((prev) => prev.map((p) => (p.id === next.id ? next : p)));
   const clearGen = (sceneId) => setGenScenes((prev) => { const next = { ...prev }; delete next[sceneId]; return next; });
+  // Merge ONLY a scene's referenceImageId via a functional update so a render
+  // that resolves after the user edited the board can't clobber those edits with
+  // a stale project snapshot. Shared by the socket handler and the synchronous
+  // external-lane attach below.
+  const applyReferenceImage = (projectId, sceneId, referenceImageId) =>
+    setProjects((prev) => prev.map((p) => (p.id === projectId
+      ? { ...p, scenes: (p.scenes || []).map((s) => (s.sceneId === sceneId ? { ...s, referenceImageId } : s)) }
+      : p)));
 
   // Socket lifecycle for async (local/Codex) reference-frame renders (#1760
   // Phase 1b). Three events, all broadcast to every client:
@@ -62,9 +70,7 @@ export default function MusicVideo() {
   //     clear the spinner by correlating generationId → sceneId. Failure toasts.
   useEffect(() => {
     const onSceneImage = ({ projectId, sceneId, referenceImageId }) => {
-      setProjects((prev) => prev.map((p) => (p.id === projectId
-        ? { ...p, scenes: (p.scenes || []).map((s) => (s.sceneId === sceneId ? { ...s, referenceImageId } : s)) }
-        : p)));
+      applyReferenceImage(projectId, sceneId, referenceImageId);
       clearGen(sceneId);
     };
     const settle = (data) => {
@@ -191,7 +197,7 @@ export default function MusicVideo() {
         }
         const filename = res?.filename;
         if (filename) {
-          editSceneLocal(scene.sceneId, { referenceImageId: filename });
+          applyReferenceImage(selected.id, scene.sceneId, filename);
           updateMusicVideoScene(selected.id, scene.sceneId, { referenceImageId: filename }, { silent: true })
             .catch((err) => toast.error(err?.message || 'Failed to attach frame'));
         }

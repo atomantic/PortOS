@@ -22,8 +22,8 @@ async function waitFor(predicate, { timeoutMs = 1000, intervalMs = 5 } = {}) {
 }
 
 const tag = (over = {}) => ({ projectId: 'mv-1', sceneId: 'mvs-1', ...over });
-const completedImageJob = ({ params = {}, filename = 'job-abc.png', id = 'job-abc' } = {}) => ({
-  kind: 'image', id, params, result: { filename },
+const completedImageJob = ({ params = {}, filename = 'job-abc.png', id = 'job-abc', queuedAt } = {}) => ({
+  kind: 'image', id, params, result: { filename }, ...(queuedAt ? { queuedAt } : {}),
 });
 
 describe('musicVideoSceneImageHook', () => {
@@ -86,6 +86,23 @@ describe('musicVideoSceneImageHook', () => {
     // The failed attach must not surface as a scene-image event.
     await new Promise((r) => setTimeout(r, 20));
     expect(emitted).toHaveLength(0);
+  });
+
+  it('does not let an older render (earlier queuedAt) overwrite a newer frame on the same scene', async () => {
+    // Newer render lands first, then an out-of-order older one completes.
+    mediaJobEvents.emit('completed', completedImageJob({
+      params: { musicVideo: tag() }, filename: 'new.png', id: 'b', queuedAt: '2026-06-29T00:00:02.000Z',
+    }));
+    await waitFor(() => updateScene.mock.calls.length > 0);
+    mediaJobEvents.emit('completed', completedImageJob({
+      params: { musicVideo: tag() }, filename: 'old.png', id: 'a', queuedAt: '2026-06-29T00:00:01.000Z',
+    }));
+    // Give the older job's handler a chance to run and be dropped.
+    await new Promise((r) => setTimeout(r, 30));
+    // The newer frame attached; the older one was skipped (never re-attached).
+    expect(updateScene).toHaveBeenCalledTimes(1);
+    expect(updateScene).toHaveBeenCalledWith('mv-1', 'mvs-1', { referenceImageId: 'new.png' });
+    expect(emitted.map((e) => e.referenceImageId)).toEqual(['new.png']);
   });
 
   it('serializes attaches for the same project so concurrent renders do not clobber', async () => {
