@@ -213,8 +213,9 @@ describe('claim-work single-source routing', () => {
     expect(fn).toMatch(/getTaskInterval\('claim-work'\)/);
     expect(fn).toMatch(/getAppTaskTypeOverrides\(app\.id\)/);
     expect(fn).toMatch(/stripManagedAgentOptionsFromOverride\(\s*'claim-work'/);
-    // issueAuthorFilter: explicit option > configured metadata > 'owner'.
-    expect(fn).toMatch(/issueAuthorFilter \?\? metadata\.issueAuthorFilter \?\? 'owner'/);
+    // issueAuthorFilter: explicit option > configured metadata > 'self'
+    // (the slashdo /do:next --self security boundary).
+    expect(fn).toMatch(/issueAuthorFilter \?\? metadata\.issueAuthorFilter \?\? 'self'/);
     // reviewers fall back to Code Review Defaults via normalizeReviewers, dropping local-LLM reviewers.
     expect(fn).toMatch(/normalizeReviewers\(metadata, codeReviewDefaults\?\.reviewers\)/);
     expect(fn).toMatch(/LOCAL_LLM_REVIEWERS\.includes/);
@@ -231,17 +232,23 @@ describe('resolveIssueAuthorFilterBlock', () => {
   it('returns the gh forge directive for the github claim body', () => {
     expect(resolveIssueAuthorFilterBlock('claim-issue', 'owner')).toContain('gh issue list');
     expect(resolveIssueAuthorFilterBlock('claim-issue', 'any')).toContain('regardless of who filed it');
+    // 'self' = the --self security boundary: --author "@me", refuse third-party issues.
+    expect(resolveIssueAuthorFilterBlock('claim-issue', 'self')).toContain('--author "@me"');
   });
 
   it('returns the glab forge directive for the gitlab claim body', () => {
     expect(resolveIssueAuthorFilterBlock('claim-issue-gitlab', 'owner')).toContain('glab issue list');
     expect(resolveIssueAuthorFilterBlock('claim-issue-gitlab', 'any')).toContain('regardless of who opened it');
+    // 'self' resolves the authenticated glab username (no @me token on GitLab).
+    expect(resolveIssueAuthorFilterBlock('claim-issue-gitlab', 'self')).toContain('glab api user');
   });
 
-  it('defaults to the gh block (harmless no-op) for plan/jira bodies and to owner mode', () => {
+  it('defaults to the gh block (harmless no-op) for plan/jira bodies and to self mode', () => {
     expect(resolveIssueAuthorFilterBlock('plan-task')).toContain('gh issue list');
-    // Unknown mode collapses to owner, not any.
-    expect(resolveIssueAuthorFilterBlock('claim-issue', 'bogus')).toContain('repository owner only');
+    // Default (no mode) is the --self security boundary.
+    expect(resolveIssueAuthorFilterBlock('claim-issue')).toContain('--author "@me"');
+    // Unknown mode collapses to self, not owner/any.
+    expect(resolveIssueAuthorFilterBlock('claim-issue', 'bogus')).toContain('--author "@me"');
   });
 });
 

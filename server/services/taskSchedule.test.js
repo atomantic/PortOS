@@ -1007,11 +1007,12 @@ describe('taskSchedule', () => {
       expect(SELF_IMPROVEMENT_TASK_TYPES).toContain('claim-issue')
     })
 
-    it('defaults to owner-filed issues with worktree/PR managed by the agent', () => {
+    it('defaults to self-filed issues with worktree/PR managed by the agent', () => {
       const cfg = DEFAULT_TASK_INTERVALS['claim-issue']
       expect(cfg.type).toBe(INTERVAL_TYPES.DAILY)
       expect(cfg.enabled).toBe(false)
-      expect(cfg.taskMetadata.issueAuthorFilter).toBe('owner')
+      // Default is the slashdo /do:next --self security boundary.
+      expect(cfg.taskMetadata.issueAuthorFilter).toBe('self')
       // Mirrors plan-task: the agent creates its own worktree + opens the PR,
       // so CoS must keep both off (and lock them).
       expect(cfg.taskMetadata.useWorktree).toBe(false)

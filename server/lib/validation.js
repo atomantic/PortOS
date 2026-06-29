@@ -1647,11 +1647,14 @@ const ALLOWED_TASK_METADATA_KEYS = [...PIPELINE_BEHAVIOR_FLAGS, 'readOnly'];
 // agree on the vocabulary.
 export const PR_AUTHOR_FILTERS = ['any', 'self', 'others'];
 
-// claim-issue author-gate values. 'owner' = only claim issues filed by the
-// repository owner/creator (matches the `/claim --issues` default); 'any' =
-// claim any open issue regardless of who filed it. Kept here so both the
-// sanitizer and the claim-issue prompt-builder agree on the vocabulary.
-export const ISSUE_AUTHOR_FILTERS = ['owner', 'any'];
+// claim-issue author-gate values. 'self' = only claim issues YOU filed (the
+// gh/glab-authenticated `@me` account — the slashdo `/do:next --self` security
+// boundary, and the default so a shared/multi-contributor tracker never
+// auto-feeds third-party issues into an agent); 'owner' = only claim issues
+// filed by the repository owner/creator; 'any' = claim any open issue regardless
+// of who filed it. Kept here so both the sanitizer and the claim-issue
+// prompt-builder agree on the vocabulary.
+export const ISSUE_AUTHOR_FILTERS = ['self', 'owner', 'any'];
 
 /**
  * Sanitize taskMetadata to an allow-list of agent-option keys. Boolean flags
