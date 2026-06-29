@@ -136,4 +136,25 @@ describe('createMediaJobImageHook', () => {
     await waitFor(() => h.attach.mock.calls.length > 1);
     expect(h.attach).toHaveBeenCalledTimes(2);
   });
+
+  it('config kind + extractResult ride the same scaffold for non-image jobs (video lane, #1760)', async () => {
+    h.hook.__testing.reset();
+    // A video-kind hook: it ignores image jobs and surfaces a custom ctx field
+    // from a custom extractor (the music-video i2v hook's exact shape).
+    h = makeHook({
+      kind: 'video',
+      extractResult: (j) => {
+        const id = (typeof j.result?.generationId === 'string' && j.result.generationId) || j.id;
+        return id ? { videoHistoryId: id } : null;
+      },
+    });
+    h.hook.init();
+    // An image-kind job is ignored by a kind:'video' hook.
+    mediaJobEvents.emit('completed', { kind: 'image', id: 'i', params: { test: tag() }, result: { filename: 'f.png' } });
+    // A video job attaches via extractResult → ctx.videoHistoryId (falls back to job.id).
+    mediaJobEvents.emit('completed', { kind: 'video', id: 'vid-1', params: { test: tag() }, result: { generationId: 'vid-1' } });
+    await waitFor(() => h.onAttached.mock.calls.length > 0);
+    expect(h.attach).toHaveBeenCalledTimes(1);
+    expect(h.attach.mock.calls[0][0]).toMatchObject({ recordId: 'r1', sceneId: 's1', videoHistoryId: 'vid-1' });
+  });
 });
