@@ -65,13 +65,14 @@ export default function MusicVideo() {
   //   - music-video:scene-image — durable attach filed by musicVideoSceneImageHook;
   //     fold the new referenceImageId onto the matching scene without a refetch,
   //     even for a project that isn't selected (a render that finished after
-  //     navigating away still lands).
+  //     navigating away still lands). It does NOT touch the spinner: an older
+  //     render's scene-image can arrive while a newer one is still in flight, so
+  //     the spinner is owned solely by the job-id-correlated terminal events below.
   //   - image-gen:completed / image-gen:failed — the job's terminal events;
   //     clear the spinner by correlating generationId → sceneId. Failure toasts.
   useEffect(() => {
     const onSceneImage = ({ projectId, sceneId, referenceImageId }) => {
       applyReferenceImage(projectId, sceneId, referenceImageId);
-      clearGen(sceneId);
     };
     const settle = (data) => {
       const jobId = data?.generationId || data?.jobId;
