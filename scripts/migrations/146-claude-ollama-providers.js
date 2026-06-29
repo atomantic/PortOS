@@ -115,6 +115,28 @@ function rewriteProviderPins(node) {
   return changed;
 }
 
+// Task-level pins live in the markdown task queues (TASKS.md / COS-TASKS.md) as
+// `metadata.provider` — read by resolveAgentProviderAndModel for a pending or
+// in-progress task. Those aren't JSON, so rewrite the exact old-id token in
+// place. `clawed-ollama` is a unique provider slug, so a boundary-guarded token
+// replace (not preceded/followed by an id char) can't touch unrelated text, and
+// it's format-agnostic (no markdown-metadata parser to keep in sync).
+const PIN_TEXT_FILES = ['TASKS.md', 'COS-TASKS.md'];
+
+async function rewritePinTextFile(rootDir, relPath) {
+  const filePath = join(rootDir, relPath);
+  const raw = await readFile(filePath, 'utf-8').catch((err) => {
+    if (err.code === 'ENOENT') return null;
+    throw err;
+  });
+  if (raw == null) return;
+  const next = raw.replace(new RegExp(`(?<![a-z0-9-])${OLD_ID}(?![a-z0-9-])`, 'g'), NEW_ID);
+  if (next !== raw) {
+    await writeFile(filePath, next);
+    console.log(`📝 ${relPath}: repointed ${OLD_ID} provider pins → ${NEW_ID}`);
+  }
+}
+
 async function rewritePinFile(rootDir, relPath) {
   const filePath = join(rootDir, relPath);
   const raw = await readFile(filePath, 'utf-8').catch((err) => {
@@ -200,6 +222,9 @@ export default {
     // since a pin can outlive the provider entry (e.g. already removed by hand).
     for (const relPath of PIN_FILES) {
       await rewritePinFile(rootDir, relPath);
+    }
+    for (const relPath of PIN_TEXT_FILES) {
+      await rewritePinTextFile(rootDir, relPath);
     }
   },
 };
