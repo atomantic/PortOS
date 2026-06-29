@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { Plus, Film, Trash2, Music, Activity, ArrowUp, ArrowDown } from 'lucide-react';
+import { Plus, Film, Trash2, Music, Activity, ArrowUp, ArrowDown, Image as ImageIcon } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import PageHeader from '../components/PageHeader';
 import {
@@ -12,7 +12,9 @@ import {
   deleteMusicVideoScene,
   reorderMusicVideoScenes,
 } from '../services/apiMusicVideo.js';
+import { generateImage } from '../services/apiSystem.js';
 import { listTracks } from '../services/apiTracks.js';
+import socket from '../services/socket.js';
 import { formatDurationSec } from '../utils/formatters.js';
 
 const MODES = ['director', 'autonomous'];
@@ -36,9 +38,27 @@ export default function MusicVideo() {
   const [loading, setLoading] = useState(true);
   const [analyzing, setAnalyzing] = useState(false);
   const [form, setForm] = useState({ name: '', mode: 'director', trackId: '' });
+  // Per-scene reference-frame generation: sceneId → true while a render is in flight.
+  const [genScenes, setGenScenes] = useState({});
 
   const selected = projects.find((p) => p.id === selectedId) || null;
   const replaceProject = (next) => setProjects((prev) => prev.map((p) => (p.id === next.id ? next : p)));
+  const clearGen = (sceneId) => setGenScenes((prev) => { const next = { ...prev }; delete next[sceneId]; return next; });
+
+  // A reference-frame render filed durably by musicVideoSceneImageHook (#1760
+  // Phase 1b) arrives here — fold the new referenceImageId onto the matching
+  // scene without a refetch, even if it targets a project that isn't selected
+  // (a background render that finished after navigating away still lands).
+  useEffect(() => {
+    const onSceneImage = ({ projectId, sceneId, referenceImageId }) => {
+      setProjects((prev) => prev.map((p) => (p.id === projectId
+        ? { ...p, scenes: (p.scenes || []).map((s) => (s.sceneId === sceneId ? { ...s, referenceImageId } : s)) }
+        : p)));
+      clearGen(sceneId);
+    };
+    socket.on('music-video:scene-image', onSceneImage);
+    return () => socket.off('music-video:scene-image', onSceneImage);
+  }, []);
 
   useEffect(() => {
     listMusicVideoProjects()
@@ -110,6 +130,41 @@ export default function MusicVideo() {
     reorderMusicVideoScenes(selected.id, ids)
       .then((proj) => replaceProject(proj))
       .catch((err) => toast.error(err?.message || 'Failed to reorder'));
+  };
+
+  // The image prompt for a scene's reference frame: its frame prompt (or the
+  // shot prompt as a fallback) suffixed with the project's global concept style.
+  const buildFramePrompt = (scene) => {
+    const base = (scene.framePrompt?.trim() || scene.prompt?.trim() || '');
+    const style = selected?.concept?.style?.trim();
+    return [base, style].filter(Boolean).join(', ');
+  };
+
+  // Render a still reference frame for one scene from its frame prompt. The
+  // async local/Codex lanes ride the media-job queue and are attached durably
+  // server-side (musicVideoSceneImageHook → music-video:scene-image), so we just
+  // keep the button spinning until that socket event lands. The synchronous
+  // external SD-API lane returns a finished filename inline — attach it here.
+  const handleGenerateFrame = (scene) => {
+    const prompt = buildFramePrompt(scene);
+    if (!prompt) { toast.error('Add a frame prompt or shot prompt first'); return; }
+    setGenScenes((prev) => ({ ...prev, [scene.sceneId]: true }));
+    generateImage({ prompt, musicVideo: { projectId: selected.id, sceneId: scene.sceneId } }, { silent: true })
+      .then((res) => {
+        const stillRunning = res?.status === 'queued' || res?.status === 'running';
+        if (stillRunning) return; // async lane: the scene-image socket event attaches + clears the spinner
+        const filename = res?.filename;
+        if (filename) {
+          editSceneLocal(scene.sceneId, { referenceImageId: filename });
+          updateMusicVideoScene(selected.id, scene.sceneId, { referenceImageId: filename }, { silent: true })
+            .catch((err) => toast.error(err?.message || 'Failed to attach frame'));
+        }
+        clearGen(scene.sceneId);
+      })
+      .catch((err) => {
+        toast.error(err?.message || 'Frame generation failed');
+        clearGen(scene.sceneId);
+      });
   };
 
   return (
@@ -231,6 +286,28 @@ export default function MusicVideo() {
                           onChange={(e) => { editSceneLocal(scene.sceneId, { beatAligned: e.target.checked }); saveScene(scene.sceneId, { beatAligned: e.target.checked }); }} />
                         Beat-aligned
                       </label>
+                    </div>
+                    {/* Reference frame — the still image that seeds this shot (Phase 1b) */}
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-start">
+                      <textarea
+                        value={scene.framePrompt || ''} rows={2}
+                        onChange={(e) => editSceneLocal(scene.sceneId, { framePrompt: e.target.value })}
+                        onBlur={(e) => saveScene(scene.sceneId, { framePrompt: e.target.value || null })}
+                        placeholder="Reference frame prompt — the still that seeds this shot (defaults to the shot prompt)"
+                        className="flex-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm"
+                      />
+                      <div className="flex items-center gap-2">
+                        {scene.referenceImageId && (
+                          <img src={`/data/images/${scene.referenceImageId}`} alt="Reference frame"
+                            className="w-16 h-16 object-cover rounded border border-port-border" />
+                        )}
+                        <button onClick={() => handleGenerateFrame(scene)} disabled={!!genScenes[scene.sceneId]}
+                          className="flex items-center gap-1 bg-port-border hover:bg-port-border/70 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[40px] sm:min-h-0 whitespace-nowrap"
+                          title="Generate a still reference frame for this scene">
+                          {genScenes[scene.sceneId] ? <Activity size={14} className="animate-spin" /> : <ImageIcon size={14} />}
+                          {genScenes[scene.sceneId] ? 'Rendering…' : (scene.referenceImageId ? 'Regenerate frame' : 'Generate frame')}
+                        </button>
+                      </div>
                     </div>
                   </div>
                 ))}

@@ -23,6 +23,7 @@ import { imageGenEvents } from './imageGenEvents.js';
 import { importerEvents, getImporterProgressFrames } from './importerEvents.js';
 import { catalogEvents } from './catalogEvents.js';
 import { writersRoomEvents } from './writersRoomEvents.js';
+import { musicVideoEvents } from './musicVideo/events.js';
 import { videoGenEvents } from './videoGen/events.js';
 import { aiStatusEvents } from './aiStatusEvents.js';
 import { wireProactiveTriggers } from './voice/proactiveTriggers.js';
@@ -646,6 +647,9 @@ export function initSocket(io) {
   // Set up Writers-Room scene-image forwarding (broadcast to all clients)
   setupWritersRoomEventForwarding();
 
+  // Set up Music Video scene reference-frame forwarding (broadcast to all clients)
+  setupMusicVideoEventForwarding();
+
   // Wire proactive voice (CoS speaks first on high-severity errors, new tasks,
   // and high-priority notifications — rate-limited per source).
   setupProactiveSpeechForwarding();
@@ -681,6 +685,18 @@ function setupWritersRoomEventForwarding() {
   // so the boards update reactively without a refetch (#1363).
   writersRoomEvents.on('scene-image', (data) => {
     if (ioInstance) ioInstance.emit('writers-room:scene-image', data);
+  });
+}
+
+let musicVideoForwardingSetup = false;
+function setupMusicVideoEventForwarding() {
+  if (musicVideoForwardingSetup) return;
+  musicVideoForwardingSetup = true;
+  // A scene reference-frame render filed durably by musicVideoSceneImageHook —
+  // bridge it so the director board updates reactively without a refetch
+  // (#1760 Phase 1b).
+  musicVideoEvents.on('scene-image', (data) => {
+    if (ioInstance) ioInstance.emit('music-video:scene-image', data);
   });
 }
 

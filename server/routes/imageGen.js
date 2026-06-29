@@ -149,6 +149,17 @@ const generateSchema = z.object({
     analysisId: z.string().min(1).max(200),
     sceneId: z.string().min(1).max(200),
   }).optional(),
+  // Music Video scene reference-frame render (#1760 Phase 1b). When present, the
+  // mediaJobQueue completion hook (`musicVideoSceneImageHook`) files the finished
+  // render onto the project scene's `referenceImageId` — durably, even if the
+  // director board unmounted mid-render. Only the async local/Codex lanes ride
+  // the queue this hook listens to; the synchronous external SD-API lane returns
+  // the filename inline and the client PATCHes `referenceImageId` directly. Rides
+  // into job.params untouched via `...params` (like `writersRoom`). JSON-only.
+  musicVideo: z.object({
+    projectId: z.string().min(1).max(200),
+    sceneId: z.string().min(1).max(200),
+  }).optional(),
   // Durable catalog attach (#1359). When present, the mediaJobQueue completion
   // hook (catalogImageAttachHook) files the finished render onto this catalog
   // ingredient even if the page that started the render has since unmounted —
