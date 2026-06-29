@@ -82,6 +82,8 @@ export default function MusicVideo() {
     const onSceneImage = ({ projectId, sceneId, referenceImageId }) => {
       applyReferenceImage(projectId, sceneId, referenceImageId);
     };
+    // jobId → pending error-toast timer (running-cancel deferral; see onFailed).
+    const failTimers = new Map();
     const settle = (data, failed) => {
       const jobId = data?.generationId || data?.jobId;
       if (!jobId) return;
@@ -101,29 +103,45 @@ export default function MusicVideo() {
     };
     const onCompleted = (data) => settle(data, false);
     // A render canceled WHILE RUNNING reaches us as image-gen:failed (SIGTERM)
-    // just before image-gen:canceled, so confirm via the authoritative job status
-    // before showing a failure toast — a user cancel must not toast "render
-    // failed" (#1791/#1796). A real failure still toasts. The queued-cancel case
-    // never emits failed and is handled by onCanceled below.
+    // just before image-gen:canceled — and before the queue flips the job to
+    // 'canceled', so neither the failed event nor an immediate status fetch can
+    // tell a cancel from a real failure (#1791/#1796). Clear the spinner now
+    // (correct either way) but DEFER the error toast: image-gen:canceled cancels
+    // the timer in the common case, and if the timer fires first it re-checks the
+    // now-settled status, so a user cancel never surfaces as "Frame render failed".
     const onFailed = (data) => {
       const jobId = data?.generationId || data?.jobId;
-      if (!jobId) { settle(data, true); return; }
-      getMediaJob(jobId)
-        .then((job) => settle(data, job?.status !== 'canceled'))
-        .catch(() => settle(data, true));
+      if (!jobId) return;
+      settle(data, false);
+      if (failTimers.has(jobId)) return;
+      failTimers.set(jobId, setTimeout(() => {
+        failTimers.delete(jobId);
+        getMediaJob(jobId)
+          .then((job) => { if (job?.status !== 'canceled') toast.error('Frame render failed'); })
+          .catch(() => toast.error('Frame render failed'));
+      }, 800));
+    };
+    // Queued-cancel emits no *:failed; running-cancel emits failed then this.
+    // Either way clear the spinner and cancel any pending failure toast.
+    const onCanceled = (data) => {
+      const jobId = data?.generationId || data?.jobId;
+      if (jobId) {
+        const t = failTimers.get(jobId);
+        if (t) { clearTimeout(t); failTimers.delete(jobId); }
+      }
+      settle(data, false);
     };
     socket.on('music-video:scene-image', onSceneImage);
     socket.on('image-gen:completed', onCompleted);
     socket.on('image-gen:failed', onFailed);
-    // A canceled render clears the scene spinner with no failure toast — same as
-    // a completion (settle false). A queued-then-canceled job emits no *:failed,
-    // so this is the only signal that clears its "Rendering…" button (#1791).
-    socket.on('image-gen:canceled', onCompleted);
+    socket.on('image-gen:canceled', onCanceled);
     return () => {
       socket.off('music-video:scene-image', onSceneImage);
       socket.off('image-gen:completed', onCompleted);
       socket.off('image-gen:failed', onFailed);
-      socket.off('image-gen:canceled', onCompleted);
+      socket.off('image-gen:canceled', onCanceled);
+      for (const t of failTimers.values()) clearTimeout(t);
+      failTimers.clear();
     };
   }, []);
 
