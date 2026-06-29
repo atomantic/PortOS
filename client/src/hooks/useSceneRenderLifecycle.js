@@ -33,9 +33,9 @@ import toast from '../components/ui/Toast';
  *                        raw event payload and calls `apply(data)`.
  *   - `completedEvent` — job terminal success (e.g. `image-gen:completed`).
  *   - `failedEvent`    — job terminal failure (e.g. `image-gen:failed`).
- *   - `canceledEvent`  — optional job cancel (e.g. `image-gen:canceled`). A
- *                        queued-cancel emits only this (no `failedEvent`), so
- *                        without it the spinner would stick.
+ *   - `canceledEvent`  — job cancel (e.g. `image-gen:canceled`). A queued-cancel
+ *                        emits only this (no `failedEvent`), so without it the
+ *                        spinner would stick — every queue-backed lane has one.
  *   - `apply(data)`    — fold the finished asset onto the matching scene
  *                        (functional setProjects update); called on `attachEvent`.
  *   - `failMessage`    — the toast string for a confirmed render failure.
@@ -168,12 +168,12 @@ export default function useSceneRenderLifecycle({
     socket.on(attachEvent, onAttach);
     socket.on(completedEvent, onCompleted);
     socket.on(failedEvent, onFailed);
-    if (canceledEvent) socket.on(canceledEvent, onCanceled);
+    socket.on(canceledEvent, onCanceled);
     return () => {
       socket.off(attachEvent, onAttach);
       socket.off(completedEvent, onCompleted);
       socket.off(failedEvent, onFailed);
-      if (canceledEvent) socket.off(canceledEvent, onCanceled);
+      socket.off(canceledEvent, onCanceled);
       for (const t of failTimers.values()) clearTimeout(t);
       failTimers.clear();
     };
