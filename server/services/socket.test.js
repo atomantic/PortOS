@@ -60,6 +60,7 @@ vi.mock('../sockets/voice.js', () => ({ registerVoiceHandlers: vi.fn() }));
 
 import { initSocket } from './socket.js';
 import { cosEvents } from './cosEvents.js';
+import { mediaJobEvents } from './mediaJobQueue/index.js';
 import { detachSocketSessions } from './shell.js';
 import * as shellService from './shell.js';
 
@@ -140,6 +141,20 @@ describe('socket.js — initSocket', () => {
   // Tested via the subscription ack — the internal Set membership is observable
   // through the ack emission which only happens when registerSubscriber runs.
   // ===========================================================================
+  // ===========================================================================
+  // media-job cancellation bridge (#1791): mediaJobEvents 'canceled' → a
+  // generationId-keyed *-gen:canceled broadcast so stuck render spinners clear.
+  // ===========================================================================
+  it('bridges a canceled image job to image-gen:canceled keyed by generationId', () => {
+    mediaJobEvents.emit('canceled', { id: 'job-xyz', kind: 'image' });
+    expect(io.emitted).toContainEqual(['image-gen:canceled', { generationId: 'job-xyz' }]);
+  });
+
+  it('bridges a canceled video job to video-gen:canceled', () => {
+    mediaJobEvents.emit('canceled', { id: 'vid-1', kind: 'video' });
+    expect(io.emitted).toContainEqual(['video-gen:canceled', { generationId: 'vid-1' }]);
+  });
+
   it('two independent sockets can both subscribe to cos independently', () => {
     const s1 = makeSocket('s1');
     const s2 = makeSocket('s2');

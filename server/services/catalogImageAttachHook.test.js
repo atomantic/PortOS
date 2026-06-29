@@ -161,6 +161,42 @@ describe('catalogImageAttachHook', () => {
     expect(listMediaForIngredient).not.toHaveBeenCalled();
   });
 
+  it('demotes a stale would-be-portrait to a reference instead of clobbering a newer portrait (#1791)', async () => {
+    // Stateful store so the second (older) render observes the first's portrait.
+    const rows = [];
+    listMediaForIngredient.mockImplementation(async () => rows.map((r) => ({ ...r })));
+    setPortraitMedia.mockImplementation(async (id, key) => {
+      for (let i = rows.length - 1; i >= 0; i--) {
+        if (rows[i].kind === 'portrait' && rows[i].mediaKey !== key) rows.splice(i, 1);
+      }
+      rows.push({ mediaKey: key, kind: 'portrait' });
+      return {};
+    });
+    attachMedia.mockImplementation(async (id, key, kind) => { rows.push({ mediaKey: key, kind }); return {}; });
+
+    // Newer explicit-portrait render lands first and becomes the portrait.
+    mediaJobEvents.emit('completed', {
+      kind: 'image', params: { catalogAttach: { ingredientId: 'ing-q', kind: 'portrait' } },
+      result: { filename: 'new.png' }, queuedAt: '2026-06-29T00:00:02.000Z',
+    });
+    await waitFor(() => rows.length === 1);
+    // An OLDER explicit-portrait render completes out of order — it must NOT
+    // demote the newer portrait; it is kept as a reference instead.
+    mediaJobEvents.emit('completed', {
+      kind: 'image', params: { catalogAttach: { ingredientId: 'ing-q', kind: 'portrait' } },
+      result: { filename: 'old.png' }, queuedAt: '2026-06-29T00:00:01.000Z',
+    });
+    await waitFor(() => rows.length === 2);
+
+    expect(setPortraitMedia).toHaveBeenCalledTimes(1);
+    expect(setPortraitMedia).toHaveBeenCalledWith('ing-q', 'new.png');
+    expect(attachMedia).toHaveBeenCalledWith('ing-q', 'old.png', 'reference');
+    expect(rows).toEqual([
+      { mediaKey: 'new.png', kind: 'portrait' },
+      { mediaKey: 'old.png', kind: 'reference' },
+    ]);
+  });
+
   it('swallows a DB error without rejecting (best-effort)', async () => {
     listMediaForIngredient.mockRejectedValueOnce(new Error('db down'));
     // Must not throw / leave an unhandled rejection.

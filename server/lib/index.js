@@ -102,6 +102,7 @@ export * from './tuiPromptRunner.js';
 export * from './collectionStore.js';
 export * from './conflictJournal.js';
 export * from './createKeyCachedQueue.js';
+export * from './createNewestWinsGuard.js';
 export * from './fileUtils.js';
 export * from './fileWriteQueue.js';
 export * from './schemaVersions.js';

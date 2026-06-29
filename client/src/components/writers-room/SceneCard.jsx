@@ -125,17 +125,33 @@ const SceneCard = forwardRef(function SceneCard({
       setProgress(null);
       jobIdRef.current = null;
     };
+    // A canceled render (e.g. dropped from the Media Jobs queue) is not an
+    // error — roll back to idle / the prior image so the spinner clears instead
+    // of sticking until remount (#1791). The `*-gen:canceled` event is bridged
+    // from mediaJobEvents, keyed by the same generationId as completed/failed.
+    const onCanceled = (data) => {
+      if (!jobIdRef.current || data.generationId !== jobIdRef.current) return;
+      jobIdRef.current = null;
+      setProgress(null);
+      setError(null);
+      setGenerated(initialImage
+        ? { path: `/data/images/${initialImage.filename}`, jobId: initialImage.jobId, prompt: initialImage.prompt }
+        : null);
+      setGenStatus(initialImage ? 'done' : 'idle');
+    };
     socket.on('image-gen:started', onStarted);
     socket.on('image-gen:progress', onProgress);
     socket.on('image-gen:completed', onCompleted);
     socket.on('image-gen:failed', onFailed);
+    socket.on('image-gen:canceled', onCanceled);
     return () => {
       socket.off('image-gen:started', onStarted);
       socket.off('image-gen:progress', onProgress);
       socket.off('image-gen:completed', onCompleted);
       socket.off('image-gen:failed', onFailed);
+      socket.off('image-gen:canceled', onCanceled);
     };
-  }, [workId, analysisId, scene.id]);
+  }, [workId, analysisId, scene.id, initialImage]);
 
   const generate = async () => {
     if (genStatus === 'running') return;

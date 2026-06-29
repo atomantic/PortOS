@@ -100,13 +100,20 @@ export default function MusicVideo() {
     };
     const onCompleted = (data) => settle(data, false);
     const onFailed = (data) => settle(data, true);
+    // A canceled render (e.g. dropped from the Media Jobs queue) clears the
+    // scene spinner with no failure toast — settle as a non-failure (#1791).
+    // A queued-then-canceled job emits no *:failed, so without this the
+    // "Rendering…" button sticks until the page remounts.
+    const onCanceled = (data) => settle(data, false);
     socket.on('music-video:scene-image', onSceneImage);
     socket.on('image-gen:completed', onCompleted);
     socket.on('image-gen:failed', onFailed);
+    socket.on('image-gen:canceled', onCanceled);
     return () => {
       socket.off('music-video:scene-image', onSceneImage);
       socket.off('image-gen:completed', onCompleted);
       socket.off('image-gen:failed', onFailed);
+      socket.off('image-gen:canceled', onCanceled);
     };
   }, []);
 

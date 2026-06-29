@@ -20,6 +20,7 @@ import { sanitizePeerForClient } from './instances.js';
 import { reviewEvents } from './review.js';
 import { loopEvents } from './loops.js';
 import { imageGenEvents } from './imageGenEvents.js';
+import { mediaJobEvents } from './mediaJobQueue/index.js';
 import { importerEvents, getImporterProgressFrames } from './importerEvents.js';
 import { catalogEvents } from './catalogEvents.js';
 import { writersRoomEvents } from './writersRoomEvents.js';
@@ -990,5 +991,22 @@ function setupMediaGenEventForwarding() {
   });
   videoGenEvents.on('failed', (data) => {
     if (ioInstance) ioInstance.emit('video-gen:failed', data);
+  });
+
+  // Bridge media-job cancellation onto a `*-gen:canceled` socket event keyed by
+  // `generationId` (#1791). The internal gen modules emit started/progress/
+  // completed/failed but have NO 'canceled' — a job canceled *while queued*
+  // never starts a gen run, so it produces only `mediaJobEvents 'canceled'` and
+  // no socket frame at all, leaving per-scene render spinners stuck until the
+  // component remounts. Every client spinner already correlates by media-job id
+  // (`data.generationId === jobId`), so a single id-keyed event clears the right
+  // spinner across writers-room, music-video, and `useMediaJobProgress`
+  // consumers (catalog et al.) uniformly — no per-domain event needed. For a
+  // job canceled *while running* this fires alongside the gen module's `failed`;
+  // both clear the spinner and the handlers are idempotent.
+  mediaJobEvents.on('canceled', (job) => {
+    if (!ioInstance || !job?.id) return;
+    const evt = job.kind === 'video' ? 'video-gen:canceled' : 'image-gen:canceled';
+    ioInstance.emit(evt, { generationId: job.id });
   });
 }
