@@ -17,6 +17,7 @@ import {
   ThumbsDown,
   MessageSquare,
   ExternalLink,
+  Terminal,
   Send,
   GitBranch,
   GitPullRequest,
@@ -557,11 +558,12 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
           {!inactive && agent.metadata?.tuiSessionId && (
             <Link
               to={`/shell?session=${encodeURIComponent(agent.metadata.tuiSessionId)}`}
-              className="flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25 whitespace-nowrap"
-              title="Open TUI shell session"
+              className="flex items-center gap-1.5 px-3 py-1 rounded font-semibold bg-emerald-500 text-black hover:bg-emerald-400 shadow-sm ring-1 ring-emerald-400/50 whitespace-nowrap transition-colors"
+              title="Open the live TUI shell to inspect and interact with this agent"
             >
-              <ExternalLink size={10} aria-hidden="true" className="shrink-0" />
-              <span className="font-mono">shell {agent.metadata.tuiSessionId.slice(0, 6)}</span>
+              <Terminal size={14} aria-hidden="true" className="shrink-0" />
+              <span>Open Shell</span>
+              <span className="font-mono text-[10px] text-black/60">{agent.metadata.tuiSessionId.slice(0, 6)}</span>
             </Link>
           )}
           {!remote && (
