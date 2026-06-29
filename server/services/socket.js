@@ -1015,4 +1015,20 @@ function setupMediaGenEventForwarding() {
     const evt = job.kind === 'video' ? 'video-gen:canceled' : 'image-gen:canceled';
     ioInstance.emit(evt, { generationId: job.id });
   });
+
+  // Bridge media-job FAILURE onto a `*-gen:failed` socket event keyed by
+  // `generationId` (#1799) — the failure-side analog of the canceled bridge
+  // above. A job that fails *before* the gen run starts (e.g. an unready BYOV
+  // runtime throws synchronously in the queue worker, or the watchdog times the
+  // job out) emits only `mediaJobEvents 'failed'` and never a `*-gen:failed`
+  // frame, so the scene button stays stuck on "Rendering…". Forward it with the
+  // same `{ generationId, error }` shape the gen modules use so the client's
+  // `onFailed` clears the spinner and can toast the reason. For a job that fails
+  // *while running* this fires alongside the gen module's own `failed`; both
+  // settle the spinner to 'failed' and the handler is idempotent.
+  mediaJobEvents.on('failed', (job) => {
+    if (!ioInstance || !job?.id) return;
+    const evt = job.kind === 'video' ? 'video-gen:failed' : 'image-gen:failed';
+    ioInstance.emit(evt, { generationId: job.id, error: job.error });
+  });
 }

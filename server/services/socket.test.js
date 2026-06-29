@@ -155,6 +155,21 @@ describe('socket.js — initSocket', () => {
     expect(io.emitted).toContainEqual(['video-gen:canceled', { generationId: 'vid-1' }]);
   });
 
+  // ===========================================================================
+  // media-job failure bridge (#1799): mediaJobEvents 'failed' → a
+  // generationId-keyed *-gen:failed broadcast so spinners clear on a queue-level
+  // (pre-gen) failure that never reached the gen module's own failed event.
+  // ===========================================================================
+  it('bridges a failed image job to image-gen:failed keyed by generationId with the error', () => {
+    mediaJobEvents.emit('failed', { id: 'job-fail', kind: 'image', error: 'runtime not ready' });
+    expect(io.emitted).toContainEqual(['image-gen:failed', { generationId: 'job-fail', error: 'runtime not ready' }]);
+  });
+
+  it('bridges a failed video job to video-gen:failed', () => {
+    mediaJobEvents.emit('failed', { id: 'vid-fail', kind: 'video', error: 'BYOV runtime threw' });
+    expect(io.emitted).toContainEqual(['video-gen:failed', { generationId: 'vid-fail', error: 'BYOV runtime threw' }]);
+  });
+
   it('two independent sockets can both subscribe to cos independently', () => {
     const s1 = makeSocket('s1');
     const s2 = makeSocket('s2');
