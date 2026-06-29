@@ -111,6 +111,24 @@ describe('migration 146 — Claude Ollama providers', () => {
     expect(out.providers['claude-ollama'].models).toEqual(['qwen2.5:7b']);
   });
 
+  it('rewrites dangling active/fallback refs even when the clawed entry is already gone', async () => {
+    // clawed-ollama entry removed (manual delete / setup drift) but refs linger
+    writeJson(providersPath, {
+      activeProvider: 'clawed-ollama',
+      providers: {
+        'claude-code': { id: 'claude-code', type: 'cli', command: 'claude', fallbackProvider: 'clawed-ollama' },
+      },
+    });
+
+    await migration.up({ rootDir });
+
+    const out = readJson(providersPath);
+    expect(out.activeProvider).toBe('claude-ollama');
+    expect(out.providers['claude-code'].fallbackProvider).toBe('claude-ollama');
+    // and the target now exists (added in step 2)
+    expect(out.providers['claude-ollama']).toBeDefined();
+  });
+
   it('adds both shipped providers to an install that never had clawed', async () => {
     writeJson(providersPath, {
       activeProvider: 'claude-code',
