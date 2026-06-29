@@ -27,7 +27,7 @@
  * existing ones, so deployed installs need this migration to pick up the rename.
  */
 
-import { readFile, writeFile } from 'fs/promises';
+import { readFile, writeFile, readdir } from 'fs/promises';
 import { join } from 'path';
 
 const PROVIDERS_REL_PATH = 'data/providers.json';
@@ -84,17 +84,18 @@ const CLAUDE_OLLAMA_TUI = {
   tuiIdleTimeoutMs: 180000,
 };
 
-// Provider pins live OUTSIDE providers.json: scheduled tasks
-// (data/task-schedule.json) and autonomous jobs (data/autonomous-jobs.json)
-// persist the chosen provider as a `providerId` / `provider` field (including
-// nested pipeline stages). Renaming the provider id above would orphan those
-// pins — they'd resolve as "provider not found" and silently fall back to the
-// active provider instead of the user's local model. So rewrite them too.
-// Generic recursive walk keyed on field name + the EXACT old id (no other field
-// legitimately holds the literal string "clawed-ollama", so false positives are
-// impossible). Idempotent — a second run finds nothing left to rewrite.
+// Provider pins live OUTSIDE providers.json in many stores: scheduled tasks
+// (task-schedule.json), autonomous jobs (autonomous-jobs.json), and AI-assignment
+// settings (settings.json — autofixer/calendarSync/etc. `providerId`, resolved by
+// pickCliProvider) all persist the chosen provider as a `providerId` / `provider`
+// field (including nested pipeline stages). Renaming the provider id above would
+// orphan those pins — they'd resolve as "provider not found" and silently fall
+// back to the active provider instead of the user's local model. Rather than
+// enumerate every store, scan ALL top-level data/*.json generically (see
+// rewriteDataJsonPins) — a recursive walk keyed on field name + the EXACT old id
+// (no other field legitimately holds the literal string "clawed-ollama", so
+// false positives are impossible). Idempotent — a second run finds nothing left.
 const PIN_KEYS = new Set(['providerId', 'provider']);
-const PIN_FILES = ['data/task-schedule.json', 'data/autonomous-jobs.json'];
 
 function rewriteProviderPins(node) {
   let changed = false;
@@ -155,6 +156,25 @@ async function rewritePinFile(rootDir, relPath) {
   if (rewriteProviderPins(data)) {
     await writeFile(filePath, `${JSON.stringify(data, null, 2)}\n`);
     console.log(`📝 ${relPath}: repointed ${OLD_ID} provider pins → ${NEW_ID}`);
+  }
+}
+
+// Scan every TOP-LEVEL data/*.json for orphaned pins. Deliberately NOT recursive
+// into subdirectories: data/cos/worktrees/ holds full git checkouts of the repo
+// (source that legitimately contains the "clawed-ollama" string), and data/cos/
+// agent records are run history, not re-resolved pins — rewriting either would
+// corrupt working copies / falsify history. providers.json is skipped here (its
+// registry id + activeProvider/fallbackProvider are handled in up()).
+async function rewriteDataJsonPins(rootDir) {
+  const dataDir = join(rootDir, 'data');
+  const entries = await readdir(dataDir, { withFileTypes: true }).catch((err) => {
+    if (err.code === 'ENOENT') return [];
+    throw err;
+  });
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+    if (entry.name === 'providers.json') continue;
+    await rewritePinFile(rootDir, `data/${entry.name}`);
   }
 }
 
@@ -232,9 +252,7 @@ export default {
     // Repoint persisted provider pins (schedules / autonomous jobs) off the
     // retired id — runs regardless of whether providers.json changed this run,
     // since a pin can outlive the provider entry (e.g. already removed by hand).
-    for (const relPath of PIN_FILES) {
-      await rewritePinFile(rootDir, relPath);
-    }
+    await rewriteDataJsonPins(rootDir);
     for (const relPath of PIN_TEXT_FILES) {
       await rewritePinTextFile(rootDir, relPath);
     }
