@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { Plus, Film, Trash2, Music, Activity, ArrowUp, ArrowDown, Image as ImageIcon } from 'lucide-react';
+import { Plus, Film, Trash2, Music, Activity, ArrowUp, ArrowDown, Image as ImageIcon, Video } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import PageHeader from '../components/PageHeader';
 import {
@@ -13,6 +13,7 @@ import {
   reorderMusicVideoScenes,
 } from '../services/apiMusicVideo.js';
 import { generateImage } from '../services/apiSystem.js';
+import { generateVideo } from '../services/apiImageVideo.js';
 import { listTracks } from '../services/apiTracks.js';
 import { getMediaJob } from '../services/apiMediaJobs.js';
 import socket from '../services/socket.js';
@@ -55,6 +56,14 @@ export default function MusicVideo() {
   // (jobId → failed) so the terminal events of unrelated image-gen jobs across the
   // app can't grow it unbounded; the kickoff reconciles its own entry on arrival.
   const orphanTerminalsRef = useRef(new Map());
+  // Per-scene i2v video generation (#1760 Phase 1): sceneId → true while a scene
+  // clip is rendering. Video renders always ride the media-job queue (no
+  // synchronous lane), so the spinner is cleared by the job-id-correlated
+  // video-gen:completed/failed events and the clip lands durably via
+  // music-video:scene-video — the direct analog of the reference-frame refs above.
+  const [genVideoScenes, setGenVideoScenes] = useState({});
+  const pendingVideoJobsRef = useRef(new Map());
+  const orphanVideoTerminalsRef = useRef(new Map());
 
   const selected = projects.find((p) => p.id === selectedId) || null;
   const replaceProject = (next) => setProjects((prev) => prev.map((p) => (p.id === next.id ? next : p)));
@@ -66,6 +75,13 @@ export default function MusicVideo() {
   const applyReferenceImage = (projectId, sceneId, referenceImageId) =>
     setProjects((prev) => prev.map((p) => (p.id === projectId
       ? { ...p, scenes: (p.scenes || []).map((s) => (s.sceneId === sceneId ? { ...s, referenceImageId } : s)) }
+      : p)));
+  const clearGenVideo = (sceneId) => setGenVideoScenes((prev) => { const next = { ...prev }; delete next[sceneId]; return next; });
+  // Merge ONLY a scene's videoHistoryId via a functional update (same stale-
+  // snapshot guard as applyReferenceImage above).
+  const applySceneVideo = (projectId, sceneId, videoHistoryId) =>
+    setProjects((prev) => prev.map((p) => (p.id === projectId
+      ? { ...p, scenes: (p.scenes || []).map((s) => (s.sceneId === sceneId ? { ...s, videoHistoryId } : s)) }
       : p)));
 
   // Socket lifecycle for async (local/Codex) reference-frame renders (#1760
@@ -158,6 +174,68 @@ export default function MusicVideo() {
       socket.off('image-gen:completed', onCompleted);
       socket.off('image-gen:failed', onFailed);
       socket.off('image-gen:canceled', onCanceled);
+      for (const t of failTimers.values()) clearTimeout(t);
+      failTimers.clear();
+    };
+  }, []);
+
+  // Socket lifecycle for async i2v scene-clip renders (#1760 Phase 1). Mirrors
+  // the reference-frame effect above, for video:
+  //   - music-video:scene-video — durable attach filed by musicVideoSceneVideoHook;
+  //     fold videoHistoryId onto the matching scene without a refetch, even for a
+  //     project that isn't selected. Does NOT touch the spinner.
+  //   - video-gen:completed / video-gen:failed — the job's terminal events; clear
+  //     the spinner by correlating generationId → sceneId. There is no
+  //     video-gen:canceled bridge, so a running-cancel surfaces as :failed for an
+  //     owned job; the deferred toast re-polls the job and stays silent when it
+  //     resolved to 'canceled' (same disambiguation the image lane uses).
+  useEffect(() => {
+    const onSceneVideo = ({ projectId, sceneId, videoHistoryId }) => {
+      applySceneVideo(projectId, sceneId, videoHistoryId);
+    };
+    const failTimers = new Map();
+    const settle = (data, failed) => {
+      const jobId = data?.generationId || data?.jobId;
+      if (!jobId) return;
+      const sceneId = pendingVideoJobsRef.current.get(jobId);
+      if (!sceneId) {
+        const orphans = orphanVideoTerminalsRef.current;
+        orphans.set(jobId, !!failed);
+        if (orphans.size > 64) orphans.delete(orphans.keys().next().value);
+        return;
+      }
+      pendingVideoJobsRef.current.delete(jobId);
+      clearGenVideo(sceneId);
+      if (failed) toast.error('Scene video render failed');
+    };
+    const onCompleted = (data) => settle(data, false);
+    const armFailToast = (jobId, attempt = 0) => {
+      failTimers.set(jobId, setTimeout(() => {
+        failTimers.delete(jobId);
+        getMediaJob(jobId)
+          .then((job) => {
+            const status = job?.status;
+            if (status === 'canceled') return; // user cancel — never a failure toast
+            if (status === 'failed' || status === 'error') { toast.error('Scene video render failed'); return; }
+            if (attempt < 2) armFailToast(jobId, attempt + 1); // non-terminal: wait, don't toast yet
+          })
+          .catch(() => toast.error('Scene video render failed'));
+      }, 800));
+    };
+    const onFailed = (data) => {
+      const jobId = data?.generationId || data?.jobId;
+      if (!jobId) return;
+      const owned = pendingVideoJobsRef.current.has(jobId);
+      settle(data, !owned);
+      if (owned && !failTimers.has(jobId)) armFailToast(jobId);
+    };
+    socket.on('music-video:scene-video', onSceneVideo);
+    socket.on('video-gen:completed', onCompleted);
+    socket.on('video-gen:failed', onFailed);
+    return () => {
+      socket.off('music-video:scene-video', onSceneVideo);
+      socket.off('video-gen:completed', onCompleted);
+      socket.off('video-gen:failed', onFailed);
       for (const t of failTimers.values()) clearTimeout(t);
       failTimers.clear();
     };
@@ -284,6 +362,51 @@ export default function MusicVideo() {
       .catch((err) => {
         toast.error(err?.message || 'Frame generation failed');
         clearGen(scene.sceneId);
+      });
+  };
+
+  // The i2v prompt for a scene's clip: its shot prompt (or the frame prompt as a
+  // fallback) suffixed with the project's global concept style. The reference
+  // frame already fixes the look; this prompt guides the motion.
+  const buildShotPrompt = (scene) => {
+    const base = (scene.prompt?.trim() || scene.framePrompt?.trim() || '');
+    const style = selected?.concept?.style?.trim();
+    return [base, style].filter(Boolean).join(', ');
+  };
+
+  // Generate this scene's video from its chosen reference frame via the video
+  // route's image (i2v) mode. The render always rides the media-job queue, so we
+  // correlate the returned job id and let the terminal video-gen:completed/failed
+  // event clear the spinner; the finished clip's history id lands durably via
+  // music-video:scene-video (musicVideoSceneVideoHook). generateVideo() throws on
+  // a non-OK response, so the catch owns the only error toast (no double-toast).
+  const handleGenerateVideo = (scene) => {
+    if (!scene.referenceImageId) { toast.error('Generate a reference frame first'); return; }
+    const prompt = buildShotPrompt(scene);
+    if (!prompt) { toast.error('Add a shot prompt first'); return; }
+    setGenVideoScenes((prev) => ({ ...prev, [scene.sceneId]: true }));
+    generateVideo({
+      prompt,
+      mode: 'image',
+      sourceImageFile: scene.referenceImageId,
+      musicVideo: JSON.stringify({ projectId: selected.id, sceneId: scene.sceneId }),
+    })
+      .then((res) => {
+        const jobId = res?.jobId || res?.generationId;
+        if (!jobId) { clearGenVideo(scene.sceneId); return; } // no id to track → don't strand the button
+        // The terminal event may have raced ahead of this .then — reconcile it now.
+        if (orphanVideoTerminalsRef.current.has(jobId)) {
+          const failed = orphanVideoTerminalsRef.current.get(jobId);
+          orphanVideoTerminalsRef.current.delete(jobId);
+          clearGenVideo(scene.sceneId);
+          if (failed) toast.error('Scene video render failed');
+          return;
+        }
+        pendingVideoJobsRef.current.set(jobId, scene.sceneId);
+      })
+      .catch((err) => {
+        toast.error(err?.message || 'Scene video generation failed');
+        clearGenVideo(scene.sceneId);
       });
   };
 
@@ -428,6 +551,21 @@ export default function MusicVideo() {
                           {genScenes[scene.sceneId] ? 'Rendering…' : (scene.referenceImageId ? 'Regenerate frame' : 'Generate frame')}
                         </button>
                       </div>
+                    </div>
+                    {/* Scene clip — i2v video generated from the reference frame (Phase 1) */}
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {scene.videoHistoryId && (
+                        <video src={`/data/videos/${scene.videoHistoryId}.mp4`}
+                          className="w-28 h-16 object-cover rounded border border-port-border bg-black"
+                          muted playsInline preload="metadata" controls />
+                      )}
+                      <button onClick={() => handleGenerateVideo(scene)}
+                        disabled={!scene.referenceImageId || !!genVideoScenes[scene.sceneId]}
+                        className="flex items-center gap-1 bg-port-border hover:bg-port-border/70 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[40px] sm:min-h-0 whitespace-nowrap"
+                        title={scene.referenceImageId ? "Generate this scene's video from its reference frame (i2v)" : 'Generate a reference frame first'}>
+                        {genVideoScenes[scene.sceneId] ? <Activity size={14} className="animate-spin" /> : <Video size={14} />}
+                        {genVideoScenes[scene.sceneId] ? 'Rendering…' : (scene.videoHistoryId ? 'Regenerate video' : 'Generate video')}
+                      </button>
                     </div>
                   </div>
                 ))}

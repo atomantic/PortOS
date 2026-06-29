@@ -175,6 +175,28 @@ const generateBodySchema = z.object({
     },
     z.array(z.number().min(0).max(2)).max(8).optional(),
   ),
+  // Music Video director-board i2v render (#1760 Phase 1). When present, the
+  // mediaJobQueue completion hook (`musicVideoSceneVideoHook`) files the finished
+  // clip's history id onto the project scene's `videoHistoryId` — durably, even
+  // if the director board unmounted mid-render (the i2v counterpart to the
+  // Phase 1b reference-frame `musicVideo` tag on the image route). The shot
+  // prompt rides in `prompt` and the reference frame in `sourceImageFile`, so
+  // the tag carries only the destination identity. The video route always sends
+  // multipart, so the object arrives as a JSON string — preprocess-parse it
+  // before the schema sees it (mirrors `keyframes` above).
+  musicVideo: z.preprocess(
+    (v) => {
+      if (v == null || v === '') return undefined;
+      if (typeof v === 'string') {
+        try { return JSON.parse(v); } catch { return v; }
+      }
+      return v;
+    },
+    z.object({
+      projectId: z.string().min(1).max(200),
+      sceneId: z.string().min(1).max(200),
+    }).optional(),
+  ),
 });
 
 // Probes required-package imports on each call so a half-installed Python
@@ -856,6 +878,10 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
       imageStrength: body.imageStrength,
       chunks: effectiveChunks,
       loras,
+      // Director-board attach tag (#1760 Phase 1). Rides into persisted
+      // job.params so the completion hook can file the clip onto the scene even
+      // if the board unmounted; absent for ordinary VideoGen-page renders.
+      ...(body.musicVideo ? { musicVideo: body.musicVideo } : {}),
     },
   });
   // Match the legacy response shape (jobId, generationId, filename, model,
