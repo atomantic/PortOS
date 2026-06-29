@@ -110,7 +110,7 @@ export function isVisionModel(model) {
 
 // Tool-use (function-calling) capable model families. The CoS agent harness
 // (Read/Write/Edit/Bash + the agent loop) depends entirely on reliable
-// tool-calling, so a Claude-on-Ollama ("Clawed Ollama") provider must only
+// tool-calling, so a Claude-on-Ollama ("Claude Ollama") provider must only
 // surface models that can actually drive tools. Ollama's /api/show reports a
 // `tools` capability that is authoritative when present — this id regex is the
 // fallback for bare model-id strings (e.g. LM Studio, or a stored provider

@@ -18,6 +18,7 @@ import {
   isCliProvider,
   isApiProvider,
   isProcessProvider,
+  isOllamaBackedProvider,
   isClaudeCodePlanCli,
   enabledApiProviderFilter,
   providerTypeClass,
@@ -87,6 +88,19 @@ describe('provider type predicates', () => {
     expect(isProcessProvider(api)).toBe(false);
   });
 
+  it('isOllamaBackedProvider matches the marker or an Ollama base URL', () => {
+    // explicit marker (Claude Ollama CLI + TUI samples carry this)
+    expect(isOllamaBackedProvider({ type: 'tui', ollamaBacked: true })).toBe(true);
+    expect(isOllamaBackedProvider({ type: 'cli', ollamaBacked: true })).toBe(true);
+    // inferred from ANTHROPIC_BASE_URL (port 11434 or "ollama" host)
+    expect(isOllamaBackedProvider({ envVars: { ANTHROPIC_BASE_URL: 'http://localhost:11434' } })).toBe(true);
+    expect(isOllamaBackedProvider({ envVars: { ANTHROPIC_BASE_URL: 'http://my-ollama:1234' } })).toBe(true);
+    // plain claude TUI / cloud providers are NOT ollama-backed
+    expect(isOllamaBackedProvider({ type: 'tui', command: 'claude' })).toBe(false);
+    expect(isOllamaBackedProvider({ type: 'cli', command: 'claude', envVars: {} })).toBe(false);
+    expect(isOllamaBackedProvider(null)).toBe(false);
+  });
+
   it('all predicates safely return false for nullish input', () => {
     expect(isTuiProvider(null)).toBe(false);
     expect(isTuiProvider(undefined)).toBe(false);
@@ -94,6 +108,7 @@ describe('provider type predicates', () => {
     expect(isApiProvider(null)).toBe(false);
     expect(isApiProvider(undefined)).toBe(false);
     expect(isProcessProvider(null)).toBe(false);
+    expect(isOllamaBackedProvider(undefined)).toBe(false);
   });
 });
 
@@ -115,6 +130,13 @@ describe('isClaudeCodePlanCli', () => {
   it('excludes Bedrock/Vertex-routed claude CLIs (billed via cloud, not the plan)', () => {
     expect(isClaudeCodePlanCli({ type: 'cli', command: 'claude', envVars: { CLAUDE_CODE_USE_BEDROCK: '1' } })).toBe(false);
     expect(isClaudeCodePlanCli({ type: 'cli', command: 'claude', envVars: { CLAUDE_CODE_USE_VERTEX: '1' } })).toBe(false);
+  });
+
+  it('excludes Ollama-backed Claude (local model — never plan/API-billed)', () => {
+    // Claude Ollama CLI carries the ollamaBacked marker + ANTHROPIC_BASE_URL
+    expect(isClaudeCodePlanCli({ type: 'cli', command: 'claude', ollamaBacked: true, envVars: { ANTHROPIC_BASE_URL: 'http://localhost:11434' } })).toBe(false);
+    // inferred purely from the base URL too
+    expect(isClaudeCodePlanCli({ type: 'cli', command: 'claude', envVars: { ANTHROPIC_BASE_URL: 'http://localhost:11434' } })).toBe(false);
   });
 
   it('safely returns false for nullish input', () => {

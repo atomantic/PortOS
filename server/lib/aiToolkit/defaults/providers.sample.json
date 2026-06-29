@@ -38,9 +38,9 @@
       "secretEnvVars": ["AWS_BEARER_TOKEN_BEDROCK"],
       "headlessArgs": ["--no-session-persistence", "--disable-slash-commands", "--tools", ""]
     },
-    "clawed-ollama": {
-      "id": "clawed-ollama",
-      "name": "Clawed Ollama (local model)",
+    "claude-ollama": {
+      "id": "claude-ollama",
+      "name": "Claude Ollama (local model)",
       "type": "cli",
       "command": "claude",
       "args": ["--print"],
@@ -56,6 +56,26 @@
       },
       "secretEnvVars": [],
       "headlessArgs": ["--no-session-persistence", "--disable-slash-commands", "--tools", ""]
+    },
+    "claude-ollama-tui": {
+      "id": "claude-ollama-tui",
+      "name": "Claude Ollama TUI (local model)",
+      "type": "tui",
+      "command": "claude",
+      "args": ["--dangerously-skip-permissions"],
+      "models": [],
+      "defaultModel": null,
+      "ollamaBacked": true,
+      "timeout": 600000,
+      "enabled": false,
+      "envVars": {
+        "ANTHROPIC_BASE_URL": "http://localhost:11434",
+        "ANTHROPIC_AUTH_TOKEN": "ollama",
+        "ANTHROPIC_SMALL_FAST_MODEL": "qwen2.5:7b"
+      },
+      "secretEnvVars": [],
+      "tuiPromptDelayMs": 2500,
+      "tuiIdleTimeoutMs": 180000
     },
     "codex": {
       "id": "codex",
