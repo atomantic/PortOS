@@ -47,6 +47,13 @@ export default function MusicVideo() {
   // so a render whose attach hook 404s (scene deleted mid-render) or that fails
   // outright doesn't leave the button stuck on "Rendering…" forever.
   const pendingJobsRef = useRef(new Map());
+  // Terminal events that arrived BEFORE the kickoff .then registered the job id.
+  // The HTTP response and the WebSocket terminal event race on separate channels,
+  // so a fast-failing queued job's event can land first; without this, that event
+  // finds no pending entry, gets dropped, and the spinner sticks forever. Capped
+  // (jobId → failed) so the terminal events of unrelated image-gen jobs across the
+  // app can't grow it unbounded; the kickoff reconciles its own entry on arrival.
+  const orphanTerminalsRef = useRef(new Map());
 
   const selected = projects.find((p) => p.id === selectedId) || null;
   const replaceProject = (next) => setProjects((prev) => prev.map((p) => (p.id === next.id ? next : p)));
@@ -74,17 +81,25 @@ export default function MusicVideo() {
     const onSceneImage = ({ projectId, sceneId, referenceImageId }) => {
       applyReferenceImage(projectId, sceneId, referenceImageId);
     };
-    const settle = (data) => {
+    const settle = (data, failed) => {
       const jobId = data?.generationId || data?.jobId;
-      if (!jobId) return null;
+      if (!jobId) return;
       const sceneId = pendingJobsRef.current.get(jobId);
-      if (!sceneId) return null;
+      if (!sceneId) {
+        // Not yet correlated (the kickoff .then hasn't registered it, or it's an
+        // unrelated image-gen job). Stash it so a slightly-late registration can
+        // reconcile; cap so other pages' renders can't grow this unbounded.
+        const orphans = orphanTerminalsRef.current;
+        orphans.set(jobId, !!failed);
+        if (orphans.size > 64) orphans.delete(orphans.keys().next().value);
+        return;
+      }
       pendingJobsRef.current.delete(jobId);
       clearGen(sceneId);
-      return sceneId;
+      if (failed) toast.error('Frame render failed');
     };
-    const onCompleted = (data) => { settle(data); };
-    const onFailed = (data) => { if (settle(data)) toast.error('Frame render failed'); };
+    const onCompleted = (data) => settle(data, false);
+    const onFailed = (data) => settle(data, true);
     socket.on('music-video:scene-image', onSceneImage);
     socket.on('image-gen:completed', onCompleted);
     socket.on('image-gen:failed', onFailed);
@@ -192,8 +207,17 @@ export default function MusicVideo() {
           // async lane: correlate the job so its terminal event clears the spinner
           // (and the durable scene-image event lands the generated frame).
           const jobId = res?.jobId || res?.generationId;
-          if (jobId) pendingJobsRef.current.set(jobId, scene.sceneId);
-          else clearGen(scene.sceneId); // no id to track → don't strand the button
+          if (!jobId) { clearGen(scene.sceneId); return; } // no id to track → don't strand the button
+          // The terminal event may have raced ahead of this .then (fast fail) —
+          // if so, reconcile it now instead of registering a job that's already done.
+          if (orphanTerminalsRef.current.has(jobId)) {
+            const failed = orphanTerminalsRef.current.get(jobId);
+            orphanTerminalsRef.current.delete(jobId);
+            clearGen(scene.sceneId);
+            if (failed) toast.error('Frame render failed');
+            return;
+          }
+          pendingJobsRef.current.set(jobId, scene.sceneId);
           return;
         }
         const filename = res?.filename;
