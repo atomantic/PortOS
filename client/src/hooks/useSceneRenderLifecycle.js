@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import socket from '../services/socket';
 import { getMediaJob } from '../services/apiMediaJobs';
+import { evictOldest, ORPHAN_BUFFER_MAX } from '../lib/boundedMap';
 import toast from '../components/ui/Toast';
 
 /**
@@ -110,7 +111,7 @@ export default function useSceneRenderLifecycle({
         // reconcile; cap so other pages' renders can't grow this unbounded.
         const orphans = orphanRef.current;
         orphans.set(jobId, !!failed);
-        if (orphans.size > 64) orphans.delete(orphans.keys().next().value);
+        evictOldest(orphans, ORPHAN_BUFFER_MAX);
         return;
       }
       pendingRef.current.delete(jobId);
