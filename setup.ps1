@@ -1,4 +1,4 @@
-# PortOS Setup Script for Windows PowerShell
+﻿# PortOS Setup Script for Windows PowerShell
 $ErrorActionPreference = "Stop"
 
 $RootDir = Split-Path -Parent $MyInvocation.MyCommand.Path

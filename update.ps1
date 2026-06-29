@@ -1,4 +1,4 @@
-# PortOS Update Script for Windows PowerShell
+﻿# PortOS Update Script for Windows PowerShell
 $ErrorActionPreference = "Stop"
 
 $RootDir = Split-Path -Parent $MyInvocation.MyCommand.Path
