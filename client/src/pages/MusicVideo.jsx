@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { Plus, Film, Trash2, Music, Activity, ArrowUp, ArrowDown, Image as ImageIcon, Video } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import PageHeader from '../components/PageHeader';
@@ -15,8 +15,7 @@ import {
 import { generateImage } from '../services/apiSystem.js';
 import { generateVideo } from '../services/apiImageVideo.js';
 import { listTracks } from '../services/apiTracks.js';
-import { getMediaJob } from '../services/apiMediaJobs.js';
-import socket from '../services/socket.js';
+import useSceneRenderLifecycle from '../hooks/useSceneRenderLifecycle.js';
 import { formatDurationSec } from '../utils/formatters.js';
 
 const MODES = ['director', 'autonomous'];
@@ -40,34 +39,8 @@ export default function MusicVideo() {
   const [loading, setLoading] = useState(true);
   const [analyzing, setAnalyzing] = useState(false);
   const [form, setForm] = useState({ name: '', mode: 'director', trackId: '' });
-  // Per-scene reference-frame generation: sceneId → true while a render is in flight.
-  const [genScenes, setGenScenes] = useState({});
-  // Async-render correlation: in-flight media-job id → sceneId, so a queued
-  // render's terminal image-gen:completed / image-gen:failed event clears the
-  // right scene's spinner. The success image lands separately via the durable
-  // music-video:scene-image event, but the SPINNER is cleared on job lifecycle
-  // so a render whose attach hook 404s (scene deleted mid-render) or that fails
-  // outright doesn't leave the button stuck on "Rendering…" forever.
-  const pendingJobsRef = useRef(new Map());
-  // Terminal events that arrived BEFORE the kickoff .then registered the job id.
-  // The HTTP response and the WebSocket terminal event race on separate channels,
-  // so a fast-failing queued job's event can land first; without this, that event
-  // finds no pending entry, gets dropped, and the spinner sticks forever. Capped
-  // (jobId → failed) so the terminal events of unrelated image-gen jobs across the
-  // app can't grow it unbounded; the kickoff reconciles its own entry on arrival.
-  const orphanTerminalsRef = useRef(new Map());
-  // Per-scene i2v video generation (#1760 Phase 1): sceneId → true while a scene
-  // clip is rendering. Video renders always ride the media-job queue (no
-  // synchronous lane), so the spinner is cleared by the job-id-correlated
-  // video-gen:completed/failed events and the clip lands durably via
-  // music-video:scene-video — the direct analog of the reference-frame refs above.
-  const [genVideoScenes, setGenVideoScenes] = useState({});
-  const pendingVideoJobsRef = useRef(new Map());
-  const orphanVideoTerminalsRef = useRef(new Map());
-
   const selected = projects.find((p) => p.id === selectedId) || null;
   const replaceProject = (next) => setProjects((prev) => prev.map((p) => (p.id === next.id ? next : p)));
-  const clearGen = (sceneId) => setGenScenes((prev) => { const next = { ...prev }; delete next[sceneId]; return next; });
   // Merge ONLY a scene's referenceImageId via a functional update so a render
   // that resolves after the user edited the board can't clobber those edits with
   // a stale project snapshot. Shared by the socket handler and the synchronous
@@ -76,7 +49,6 @@ export default function MusicVideo() {
     setProjects((prev) => prev.map((p) => (p.id === projectId
       ? { ...p, scenes: (p.scenes || []).map((s) => (s.sceneId === sceneId ? { ...s, referenceImageId } : s)) }
       : p)));
-  const clearGenVideo = (sceneId) => setGenVideoScenes((prev) => { const next = { ...prev }; delete next[sceneId]; return next; });
   // Merge ONLY a scene's videoHistoryId via a functional update (same stale-
   // snapshot guard as applyReferenceImage above).
   const applySceneVideo = (projectId, sceneId, videoHistoryId) =>
@@ -84,175 +56,31 @@ export default function MusicVideo() {
       ? { ...p, scenes: (p.scenes || []).map((s) => (s.sceneId === sceneId ? { ...s, videoHistoryId } : s)) }
       : p)));
 
-  // Socket lifecycle for async (local/Codex) reference-frame renders (#1760
-  // Phase 1b). Three events, all broadcast to every client:
-  //   - music-video:scene-image — durable attach filed by musicVideoSceneImageHook;
-  //     fold the new referenceImageId onto the matching scene without a refetch,
-  //     even for a project that isn't selected (a render that finished after
-  //     navigating away still lands). It does NOT touch the spinner: an older
-  //     render's scene-image can arrive while a newer one is still in flight, so
-  //     the spinner is owned solely by the job-id-correlated terminal events below.
-  //   - image-gen:completed / image-gen:failed — the job's terminal events;
-  //     clear the spinner by correlating generationId → sceneId. Failure toasts.
-  useEffect(() => {
-    const onSceneImage = ({ projectId, sceneId, referenceImageId }) => {
-      applyReferenceImage(projectId, sceneId, referenceImageId);
-    };
-    // jobId → pending error-toast timer (running-cancel deferral; see onFailed).
-    const failTimers = new Map();
-    const settle = (data, failed) => {
-      const jobId = data?.generationId || data?.jobId;
-      if (!jobId) return;
-      const sceneId = pendingJobsRef.current.get(jobId);
-      if (!sceneId) {
-        // Not yet correlated (the kickoff .then hasn't registered it, or it's an
-        // unrelated image-gen job). Stash it so a slightly-late registration can
-        // reconcile; cap so other pages' renders can't grow this unbounded.
-        const orphans = orphanTerminalsRef.current;
-        orphans.set(jobId, !!failed);
-        if (orphans.size > 64) orphans.delete(orphans.keys().next().value);
-        return;
-      }
-      pendingJobsRef.current.delete(jobId);
-      clearGen(sceneId);
-      if (failed) toast.error('Frame render failed');
-    };
-    const onCompleted = (data) => settle(data, false);
-    // Deferred failure toast for an owned render. A render canceled WHILE RUNNING
-    // reaches us as image-gen:failed (SIGTERM) just before image-gen:canceled —
-    // and before the queue flips the job to 'canceled' — so neither the failed
-    // event nor an immediate status fetch can tell a cancel from a real failure
-    // (#1791/#1796). image-gen:canceled cancels this timer in the common case;
-    // if the timer fires first it re-polls the job and only toasts on a CONFIRMED
-    // terminal failure — a still-'running'/'queued' status means the cancel (or
-    // the failure transition) hasn't landed yet, so it re-polls a bounded number
-    // of times rather than toasting prematurely (the spinner is already cleared,
-    // so giving up silently never strands the UI).
-    const armFailToast = (jobId, attempt = 0) => {
-      failTimers.set(jobId, setTimeout(() => {
-        failTimers.delete(jobId);
-        getMediaJob(jobId)
-          .then((job) => {
-            const status = job?.status;
-            if (status === 'canceled') return; // user cancel — never a failure toast
-            if (status === 'failed' || status === 'error') { toast.error('Frame render failed'); return; }
-            if (attempt < 2) armFailToast(jobId, attempt + 1); // non-terminal: wait, don't toast yet
-          })
-          .catch(() => toast.error('Frame render failed'));
-      }, 800));
-    };
-    const onFailed = (data) => {
-      const jobId = data?.generationId || data?.jobId;
-      if (!jobId) return;
-      // Only THIS page's renders surface a failure toast. An OWNED job clears the
-      // spinner silently (settle with failed=false) and defers the toast above so
-      // a running-cancel can retract it. A not-yet-owned job is stashed as an
-      // orphan WITH the failure bit so a fast-fail that raced ahead of its own
-      // kickoff registration is toasted by the kickoff .then reconciliation; an
-      // unrelated image-gen job is simply capped/evicted from the orphan map
-      // unseen (never reconciled → never toasts here).
-      const owned = pendingJobsRef.current.has(jobId);
-      settle(data, !owned);
-      if (owned && !failTimers.has(jobId)) armFailToast(jobId);
-    };
-    // Queued-cancel emits no *:failed; running-cancel emits failed then this.
-    // Either way clear the spinner and cancel any pending failure toast.
-    const onCanceled = (data) => {
-      const jobId = data?.generationId || data?.jobId;
-      if (jobId) {
-        const t = failTimers.get(jobId);
-        if (t) { clearTimeout(t); failTimers.delete(jobId); }
-      }
-      settle(data, false);
-    };
-    socket.on('music-video:scene-image', onSceneImage);
-    socket.on('image-gen:completed', onCompleted);
-    socket.on('image-gen:failed', onFailed);
-    socket.on('image-gen:canceled', onCanceled);
-    return () => {
-      socket.off('music-video:scene-image', onSceneImage);
-      socket.off('image-gen:completed', onCompleted);
-      socket.off('image-gen:failed', onFailed);
-      socket.off('image-gen:canceled', onCanceled);
-      for (const t of failTimers.values()) clearTimeout(t);
-      failTimers.clear();
-    };
-  }, []);
-
-  // Socket lifecycle for async i2v scene-clip renders (#1760 Phase 1). Mirrors
-  // the reference-frame effect above, for video:
-  //   - music-video:scene-video — durable attach filed by musicVideoSceneVideoHook;
-  //     fold videoHistoryId onto the matching scene without a refetch, even for a
-  //     project that isn't selected. Does NOT touch the spinner.
-  //   - video-gen:completed / video-gen:failed / video-gen:canceled — the job's
-  //     terminal events; clear the spinner by correlating generationId → sceneId.
-  //     A queued-cancel emits only :canceled (no :failed), so without that
-  //     handler the spinner would stick; a running-cancel emits :failed then
-  //     :canceled, so the deferred toast re-polls the job and stays silent when
-  //     it resolved to 'canceled' (same disambiguation the image lane uses).
-  useEffect(() => {
-    const onSceneVideo = ({ projectId, sceneId, videoHistoryId }) => {
-      applySceneVideo(projectId, sceneId, videoHistoryId);
-    };
-    const failTimers = new Map();
-    const settle = (data, failed) => {
-      const jobId = data?.generationId || data?.jobId;
-      if (!jobId) return;
-      const sceneId = pendingVideoJobsRef.current.get(jobId);
-      if (!sceneId) {
-        const orphans = orphanVideoTerminalsRef.current;
-        orphans.set(jobId, !!failed);
-        if (orphans.size > 64) orphans.delete(orphans.keys().next().value);
-        return;
-      }
-      pendingVideoJobsRef.current.delete(jobId);
-      clearGenVideo(sceneId);
-      if (failed) toast.error('Scene video render failed');
-    };
-    const onCompleted = (data) => settle(data, false);
-    const armFailToast = (jobId, attempt = 0) => {
-      failTimers.set(jobId, setTimeout(() => {
-        failTimers.delete(jobId);
-        getMediaJob(jobId)
-          .then((job) => {
-            const status = job?.status;
-            if (status === 'canceled') return; // user cancel — never a failure toast
-            if (status === 'failed' || status === 'error') { toast.error('Scene video render failed'); return; }
-            if (attempt < 2) armFailToast(jobId, attempt + 1); // non-terminal: wait, don't toast yet
-          })
-          .catch(() => toast.error('Scene video render failed'));
-      }, 800));
-    };
-    const onFailed = (data) => {
-      const jobId = data?.generationId || data?.jobId;
-      if (!jobId) return;
-      const owned = pendingVideoJobsRef.current.has(jobId);
-      settle(data, !owned);
-      if (owned && !failTimers.has(jobId)) armFailToast(jobId);
-    };
-    // Queued-cancel emits no *:failed; running-cancel emits failed then this.
-    // Either way clear the spinner and cancel any pending failure toast.
-    const onCanceled = (data) => {
-      const jobId = data?.generationId || data?.jobId;
-      if (jobId) {
-        const t = failTimers.get(jobId);
-        if (t) { clearTimeout(t); failTimers.delete(jobId); }
-      }
-      settle(data, false);
-    };
-    socket.on('music-video:scene-video', onSceneVideo);
-    socket.on('video-gen:completed', onCompleted);
-    socket.on('video-gen:failed', onFailed);
-    socket.on('video-gen:canceled', onCanceled);
-    return () => {
-      socket.off('music-video:scene-video', onSceneVideo);
-      socket.off('video-gen:completed', onCompleted);
-      socket.off('video-gen:failed', onFailed);
-      socket.off('video-gen:canceled', onCanceled);
-      for (const t of failTimers.values()) clearTimeout(t);
-      failTimers.clear();
-    };
-  }, []);
+  // Per-scene async-render lifecycle for each lane (#1798). One hook call owns a
+  // lane's spinner state, job-id correlation, orphan-terminal reconcile, and
+  // socket subscription — the client-side analog of the server's #1791
+  // image/video hook unification. The reference-frame lane attaches the finished
+  // still durably via music-video:scene-image; the i2v lane attaches the clip via
+  // music-video:scene-video. Both ride the media-job queue, so the spinner is
+  // cleared by the job-id-correlated *-gen:completed/failed/canceled events.
+  const frameLane = useSceneRenderLifecycle({
+    attachEvent: 'music-video:scene-image',
+    completedEvent: 'image-gen:completed',
+    failedEvent: 'image-gen:failed',
+    canceledEvent: 'image-gen:canceled',
+    apply: ({ projectId, sceneId, referenceImageId }) => applyReferenceImage(projectId, sceneId, referenceImageId),
+    failMessage: 'Frame render failed',
+  });
+  const videoLane = useSceneRenderLifecycle({
+    attachEvent: 'music-video:scene-video',
+    completedEvent: 'video-gen:completed',
+    failedEvent: 'video-gen:failed',
+    canceledEvent: 'video-gen:canceled',
+    apply: ({ projectId, sceneId, videoHistoryId }) => applySceneVideo(projectId, sceneId, videoHistoryId),
+    failMessage: 'Scene video render failed',
+  });
+  const genScenes = frameLane.genScenes;
+  const genVideoScenes = videoLane.genScenes;
 
   useEffect(() => {
     listMusicVideoProjects()
@@ -343,25 +171,17 @@ export default function MusicVideo() {
   const handleGenerateFrame = (scene) => {
     const prompt = buildFramePrompt(scene);
     if (!prompt) { toast.error('Add a frame prompt or shot prompt first'); return; }
-    setGenScenes((prev) => ({ ...prev, [scene.sceneId]: true }));
+    frameLane.startScene(scene.sceneId);
     generateImage({ prompt, musicVideo: { projectId: selected.id, sceneId: scene.sceneId } }, { silent: true })
       .then((res) => {
         const stillRunning = res?.status === 'queued' || res?.status === 'running';
         if (stillRunning) {
           // async lane: correlate the job so its terminal event clears the spinner
-          // (and the durable scene-image event lands the generated frame).
+          // (and the durable scene-image event lands the generated frame). trackJob
+          // reconciles a terminal event that raced ahead of this .then (fast fail).
           const jobId = res?.jobId || res?.generationId;
-          if (!jobId) { clearGen(scene.sceneId); return; } // no id to track → don't strand the button
-          // The terminal event may have raced ahead of this .then (fast fail) —
-          // if so, reconcile it now instead of registering a job that's already done.
-          if (orphanTerminalsRef.current.has(jobId)) {
-            const failed = orphanTerminalsRef.current.get(jobId);
-            orphanTerminalsRef.current.delete(jobId);
-            clearGen(scene.sceneId);
-            if (failed) toast.error('Frame render failed');
-            return;
-          }
-          pendingJobsRef.current.set(jobId, scene.sceneId);
+          if (!jobId) { frameLane.clearScene(scene.sceneId); return; } // no id to track → don't strand the button
+          frameLane.trackJob(jobId, scene.sceneId);
           return;
         }
         const filename = res?.filename;
@@ -370,11 +190,11 @@ export default function MusicVideo() {
           updateMusicVideoScene(selected.id, scene.sceneId, { referenceImageId: filename }, { silent: true })
             .catch((err) => toast.error(err?.message || 'Failed to attach frame'));
         }
-        clearGen(scene.sceneId);
+        frameLane.clearScene(scene.sceneId);
       })
       .catch((err) => {
         toast.error(err?.message || 'Frame generation failed');
-        clearGen(scene.sceneId);
+        frameLane.clearScene(scene.sceneId);
       });
   };
 
@@ -397,7 +217,7 @@ export default function MusicVideo() {
     if (!scene.referenceImageId) { toast.error('Generate a reference frame first'); return; }
     const prompt = buildShotPrompt(scene);
     if (!prompt) { toast.error('Add a shot prompt first'); return; }
-    setGenVideoScenes((prev) => ({ ...prev, [scene.sceneId]: true }));
+    videoLane.startScene(scene.sceneId);
     generateVideo({
       prompt,
       mode: 'image',
@@ -406,20 +226,13 @@ export default function MusicVideo() {
     })
       .then((res) => {
         const jobId = res?.jobId || res?.generationId;
-        if (!jobId) { clearGenVideo(scene.sceneId); return; } // no id to track → don't strand the button
-        // The terminal event may have raced ahead of this .then — reconcile it now.
-        if (orphanVideoTerminalsRef.current.has(jobId)) {
-          const failed = orphanVideoTerminalsRef.current.get(jobId);
-          orphanVideoTerminalsRef.current.delete(jobId);
-          clearGenVideo(scene.sceneId);
-          if (failed) toast.error('Scene video render failed');
-          return;
-        }
-        pendingVideoJobsRef.current.set(jobId, scene.sceneId);
+        if (!jobId) { videoLane.clearScene(scene.sceneId); return; } // no id to track → don't strand the button
+        // trackJob reconciles a terminal event that raced ahead of this .then.
+        videoLane.trackJob(jobId, scene.sceneId);
       })
       .catch((err) => {
         toast.error(err?.message || 'Scene video generation failed');
-        clearGenVideo(scene.sceneId);
+        videoLane.clearScene(scene.sceneId);
       });
   };
 
