@@ -8,7 +8,7 @@
 import { Router } from 'express';
 import * as brainService from '../services/brain.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest, isPaginationRequested, paginateArray } from '../lib/validation.js';
 import { partialWithoutDefaults } from '../lib/zodCompat.js';
 import {
   peopleInputSchema,
@@ -26,7 +26,11 @@ const router = Router();
 
 router.get('/people', asyncHandler(async (req, res) => {
   const people = await brainService.getPeople();
-  res.json(people);
+  if (!isPaginationRequested(req.query)) {
+    return res.json(people);
+  }
+  const { items, total, limit, offset } = paginateArray(people, req.query, { defaultLimit: 50, maxLimit: 500 });
+  res.json({ people: items, total, limit, offset });
 }));
 
 router.get('/people/:id', asyncHandler(async (req, res) => {
@@ -68,7 +72,11 @@ router.get('/projects', asyncHandler(async (req, res) => {
   const { status } = req.query;
   const filters = status ? { status } : undefined;
   const projects = await brainService.getProjects(filters);
-  res.json(projects);
+  if (!isPaginationRequested(req.query)) {
+    return res.json(projects);
+  }
+  const { items, total, limit, offset } = paginateArray(projects, req.query, { defaultLimit: 50, maxLimit: 500 });
+  res.json({ projects: items, total, limit, offset });
 }));
 
 router.get('/projects/:id', asyncHandler(async (req, res) => {
@@ -110,7 +118,11 @@ router.get('/ideas', asyncHandler(async (req, res) => {
   const { status } = req.query;
   const filters = status ? { status } : undefined;
   const ideas = await brainService.getIdeas(filters);
-  res.json(ideas);
+  if (!isPaginationRequested(req.query)) {
+    return res.json(ideas);
+  }
+  const { items, total, limit, offset } = paginateArray(ideas, req.query, { defaultLimit: 50, maxLimit: 500 });
+  res.json({ ideas: items, total, limit, offset });
 }));
 
 router.get('/ideas/:id', asyncHandler(async (req, res) => {
@@ -152,7 +164,11 @@ router.get('/admin', asyncHandler(async (req, res) => {
   const { status } = req.query;
   const filters = status ? { status } : undefined;
   const adminItems = await brainService.getAdminItems(filters);
-  res.json(adminItems);
+  if (!isPaginationRequested(req.query)) {
+    return res.json(adminItems);
+  }
+  const { items, total, limit, offset } = paginateArray(adminItems, req.query, { defaultLimit: 50, maxLimit: 500 });
+  res.json({ admin: items, total, limit, offset });
 }));
 
 router.get('/admin/:id', asyncHandler(async (req, res) => {
@@ -192,7 +208,11 @@ router.delete('/admin/:id', asyncHandler(async (req, res) => {
 
 router.get('/memories', asyncHandler(async (req, res) => {
   const memories = await brainService.getMemoryEntries();
-  res.json(memories);
+  if (!isPaginationRequested(req.query)) {
+    return res.json(memories);
+  }
+  const { items, total, limit, offset } = paginateArray(memories, req.query, { defaultLimit: 50, maxLimit: 500 });
+  res.json({ memories: items, total, limit, offset });
 }));
 
 router.get('/memories/:id', asyncHandler(async (req, res) => {

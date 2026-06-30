@@ -4,7 +4,7 @@
  * Shared utilities for file operations used across services.
  */
 
-import { access, appendFile, mkdir, readFile, readdir, stat, writeFile, rename, unlink } from 'fs/promises';
+import { access, appendFile, chmod, mkdir, readFile, readdir, stat, writeFile, rename, unlink } from 'fs/promises';
 import { existsSync, statSync, createReadStream } from 'fs';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
@@ -182,8 +182,23 @@ export async function atomicWrite(filePath, data) {
   // `{"type":"Buffer","data":[...]}` which corrupts binary writes (PNG, etc.).
   const payload = typeof data === 'string' || Buffer.isBuffer(data) ? data : JSON.stringify(data, null, 2);
   await ensureDir(dirname(filePath));
+  // Preserve the destination's existing permission bits. A plain
+  // writeFile(existing) truncated the inode in place and kept its mode, but
+  // atomicWrite creates a fresh temp inode and renames it over the target —
+  // which would silently widen a hand-restricted file (e.g. a `chmod 600`
+  // OAuth tokens.json) to the umask default (typically 0644) on every rewrite.
+  // Read the destination's mode FIRST and create the temp file with it from
+  // the start, so the secret bytes are never written to a world-readable temp
+  // (a crash between write and chmod would otherwise leave a readable copy, and
+  // a local user could race-read it during the window). A trailing chmod pins
+  // the exact mode in case the umask tightened the create below it. New files
+  // (stat fails with ENOENT) keep the umask default, exactly as before.
+  const existingMode = await stat(filePath).then((s) => s.mode & 0o777, () => null);
   const tmp = `${filePath}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`;
-  await writeFile(tmp, payload);
+  await writeFile(tmp, payload, existingMode !== null ? { mode: existingMode } : undefined);
+  if (existingMode !== null) {
+    await chmod(tmp, existingMode).catch(() => {});
+  }
   // Node's fs.rename uses MoveFileExW with MOVEFILE_REPLACE_EXISTING on Windows (atomic
   // overwrite), but still fails with EPERM/EACCES if the destination is locked (AV scan,
   // concurrent reader). Fall back to a backup-swap so the original file is never lost.

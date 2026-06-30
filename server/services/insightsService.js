@@ -11,9 +11,8 @@
  *   3. Cross-domain narrative (INS-04) — LLM generation with diff support
  */
 
-import { writeFile } from 'fs/promises';
 import { join } from 'path';
-import { PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
+import { atomicWrite, PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
 import { getGenomeSummary } from './genome.js';
 import { getBloodTests } from './meatspaceHealth.js';
 import { MARKER_CATEGORIES, CURATED_MARKERS } from '../lib/curatedGenomeMarkers.js';
@@ -407,7 +406,7 @@ Example format:
     generatedAt: new Date().toISOString(),
     model: selectedModel
   };
-  await writeFile(THEMES_FILE, JSON.stringify(output, null, 2));
+  await atomicWrite(THEMES_FILE, output);
 
   console.log(`🧠 Taste-identity themes generated: ${themes.length} themes`);
 
@@ -512,7 +511,7 @@ Respond with only the narrative text, no JSON, no headings, no markdown.`;
     previousGeneratedAt: existingNarrative?.generatedAt ?? null,
     model: selectedModel
   };
-  await writeFile(NARRATIVE_FILE, JSON.stringify(output, null, 2));
+  await atomicWrite(NARRATIVE_FILE, output);
 
   console.log(`🔮 Cross-domain narrative generated (${newText.length} chars)`);
 

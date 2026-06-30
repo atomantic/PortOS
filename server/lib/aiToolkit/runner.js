@@ -1,7 +1,7 @@
 import { mkdir, readFile, readdir, rm } from 'fs/promises';
 import { atomicWrite } from './internal/atomicWrite.js';
 import { existsSync } from 'fs';
-import { join, extname } from 'path';
+import { join, extname, basename, isAbsolute } from 'path';
 import { spawn } from 'child_process';
 import { randomUUID } from 'crypto';
 import { analyzeError, analyzeHttpError, ERROR_CATEGORIES } from './errorDetection.js';
@@ -67,7 +67,21 @@ export function createRunnerService(config = {}) {
   }
 
   async function loadImageAsBase64(imagePath) {
-    const fullPath = imagePath.startsWith('/') ? imagePath : join(screenshotsDir, imagePath);
+    if (typeof imagePath !== 'string' || !imagePath) {
+      throw new Error(`Invalid screenshot path: ${imagePath}`);
+    }
+    // Relative references are anchored under screenshotsDir with `basename`
+    // applied, so a `../`-traversal collapses to a bare filename and can't
+    // escape the screenshots dir. Absolute paths come only from trusted
+    // in-process callers (e.g. PortOS's Universe Builder, whose
+    // `resolveImageSources` has already validated them against an approved
+    // image root) and pass through unchanged. The untrusted POST /api/runs
+    // surface is additionally sanitized at the route boundary
+    // (sanitizeScreenshotRefs in routes/runs.js) so an attacker-supplied
+    // absolute path never reaches this loader. See issue #1870 / #1820.
+    const fullPath = isAbsolute(imagePath)
+      ? imagePath
+      : join(screenshotsDir, basename(imagePath));
 
     if (!existsSync(fullPath)) {
       throw new Error(`Image not found: ${fullPath}`);

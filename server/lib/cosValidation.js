@@ -271,6 +271,16 @@ export const PR_AUTHOR_FILTERS = ['any', 'self', 'others'];
 // prompt-builder agree on the vocabulary.
 export const ISSUE_AUTHOR_FILTERS = ['self', 'owner', 'any'];
 
+// claim-issue `--swarm` fan-out size. Mirrors slashdo `/do:next --swarm=<N>`,
+// which clamps N to 1..6 and treats bare `--swarm` as 3. Here a swarmCount of
+// 0 (or absent) means swarm OFF (the default one-issue-per-run flow); a value
+// of 2..6 turns on swarm with that many parallel claim agents. 1 is collapsed
+// to off (a one-agent swarm is just the single-issue flow with overhead), so
+// the smallest meaningful swarm is 2. Kept here so the sanitizer and the
+// claim-issue prompt-builder agree on the vocabulary.
+export const SWARM_COUNT_MIN = 2;
+export const SWARM_COUNT_MAX = 6;
+
 /**
  * Sanitize taskMetadata to an allow-list of agent-option keys. Boolean flags
  * (`useWorktree`/`openPR`/`simplify`/`reviewLoop`/`readOnly`/`reviewerApplies`)
@@ -326,6 +336,19 @@ export function sanitizeTaskMetadata(raw) {
   // arbitrary string the claim flow would silently treat as "owner".
   if (Object.prototype.hasOwnProperty.call(raw, 'issueAuthorFilter') && ISSUE_AUTHOR_FILTERS.includes(raw.issueAuthorFilter)) {
     clean.issueAuthorFilter = raw.issueAuthorFilter;
+    hasKeys = true;
+  }
+  // `swarmCount` turns claim-issue `--swarm` fan-out on (2..6 parallel agents)
+  // or off. 0 is kept as an explicit "off" (so a per-app override can disable
+  // swarm even when the global default has it on — `0` = off, absent = inherit);
+  // 2..6 is the swarm size. 1/non-integer/out-of-range are dropped, so a
+  // hand-edited config can't smuggle in an unbounded swarm size. The prompt
+  // builder treats anything below SWARM_COUNT_MIN as off (resolveSwarmBlock).
+  if (Object.prototype.hasOwnProperty.call(raw, 'swarmCount')
+      && Number.isInteger(raw.swarmCount)
+      && (raw.swarmCount === 0
+        || (raw.swarmCount >= SWARM_COUNT_MIN && raw.swarmCount <= SWARM_COUNT_MAX))) {
+    clean.swarmCount = raw.swarmCount;
     hasKeys = true;
   }
   // Pass through pipeline config (validated shape: object with stages array)

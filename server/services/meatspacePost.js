@@ -5,10 +5,9 @@
  * Reads/writes to meatspace data files.
  */
 
-import { writeFile } from 'fs/promises';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
-import { PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
+import { atomicWrite, PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
 import { deepMerge, isPlainObject } from '../lib/objects.js';
 import { LLM_DRILL_TYPES, MEMORY_DRILL_TYPES, POST_SUPPORTED_MEMORY_TYPES } from '../lib/postValidation.js';
 
@@ -61,7 +60,7 @@ export async function updatePostConfig(updates) {
   const config = await getPostConfig();
   const merged = deepMerge(config, updates);
   await ensureMeatspaceDir();
-  await writeFile(CONFIG_FILE, JSON.stringify(merged, null, 2));
+  await atomicWrite(CONFIG_FILE, merged);
   console.log(`🧪 POST config updated`);
   return merged;
 }
@@ -144,7 +143,7 @@ export async function submitPostSession(sessionData) {
   data.sessions.push(session);
   data.sessions.sort((a, b) => a.date.localeCompare(b.date));
   await ensureMeatspaceDir();
-  await writeFile(SESSIONS_FILE, JSON.stringify(data, null, 2));
+  await atomicWrite(SESSIONS_FILE, data);
   console.log(`🧪 POST session saved: score=${session.score} modules=${session.modules.join(',')}`);
   return session;
 }

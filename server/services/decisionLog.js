@@ -6,9 +6,8 @@
  * This helps users understand CoS behavior and identify patterns.
  */
 
-import { writeFile } from 'fs/promises';
 import { join } from 'path';
-import { ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
+import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
 import { cosEvents } from './cosEvents.js';
 
 const DATA_DIR = PATHS.cos;
@@ -65,7 +64,7 @@ async function loadDecisions() {
  */
 async function saveDecisions(data) {
   decisionCache = data;
-  await writeFile(DECISION_FILE, JSON.stringify(data, null, 2));
+  await atomicWrite(DECISION_FILE, data);
 }
 
 /**

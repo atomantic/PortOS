@@ -5,8 +5,7 @@
 
 import crypto from 'crypto';
 import path from 'path';
-import { writeFile } from 'fs/promises';
-import { ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
+import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
 import * as jiraService from './jira.js';
 import * as cosService from './cos.js';
 
@@ -86,7 +85,7 @@ export async function getCharacter() {
 export async function saveCharacter(data) {
   await ensureDir(PATHS.data);
   data.updatedAt = new Date().toISOString();
-  await writeFile(CHARACTER_FILE, JSON.stringify(data, null, 2));
+  await atomicWrite(CHARACTER_FILE, data);
   return data;
 }
 

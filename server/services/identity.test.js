@@ -1,5 +1,38 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+// identity/store.js now persists via the canonical atomicWrite (#1837), which
+// writes to a temp file then renames it over the target (with unlink cleanup on
+// error) and ensureDir's the parent. The integration tests below mock
+// fs/promises with a simple path-keyed in-memory store; makeFsPromisesStore()
+// supplies the rename/unlink/mkdir the real atomicWrite needs so the temp→final
+// move lands in the same store the reads come from.
+function makeFsPromisesStore() {
+  const store = {};
+  return {
+    readFile: vi.fn(async (path) => {
+      if (path in store) return store[path];
+      throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    }),
+    writeFile: vi.fn(async (path, data) => { store[path] = data; }),
+    rename: vi.fn(async (from, to) => {
+      if (!(from in store)) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      store[to] = store[from];
+      delete store[from];
+    }),
+    unlink: vi.fn(async (path) => { delete store[path]; }),
+    mkdir: vi.fn(async () => {}),
+    // atomicWrite stats the destination to mirror its mode onto the temp file
+    // before renaming (#1837). The in-memory store doesn't track modes, so
+    // report a default for existing paths and ENOENT for absent ones; chmod is
+    // a no-op here.
+    stat: vi.fn(async (path) => {
+      if (!(path in store)) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      return { mode: 0o644 };
+    }),
+    chmod: vi.fn(async () => {}),
+  };
+}
+
 // === Pure function copies for unit testing (avoids complex mocking) ===
 
 const SLEEP_MARKERS = {
@@ -848,19 +881,7 @@ describe('Integration: deriveChronotype', () => {
     vi.resetModules();
 
     // Mock fs/promises
-    vi.doMock('fs/promises', () => {
-      const store = {};
-      return {
-        readFile: vi.fn(async (path) => {
-          if (store[path]) return store[path];
-          throw new Error('ENOENT');
-        }),
-        writeFile: vi.fn(async (path, data) => {
-          store[path] = data;
-        }),
-        mkdir: vi.fn(async () => {})
-      };
-    });
+    vi.doMock('fs/promises', makeFsPromisesStore);
 
     // Mock genome service
     vi.doMock('./genome.js', () => ({
@@ -949,19 +970,7 @@ describe('Integration: getIdentityStatus', () => {
   beforeEach(async () => {
     vi.resetModules();
 
-    vi.doMock('fs/promises', () => {
-      const store = {};
-      return {
-        readFile: vi.fn(async (path) => {
-          if (store[path]) return store[path];
-          throw new Error('ENOENT');
-        }),
-        writeFile: vi.fn(async (path, data) => {
-          store[path] = data;
-        }),
-        mkdir: vi.fn(async () => {})
-      };
-    });
+    vi.doMock('fs/promises', makeFsPromisesStore);
 
     vi.doMock('./genome.js', () => ({
       getGenomeSummary: vi.fn(async () => ({
@@ -998,17 +1007,7 @@ describe('Integration: getIdentityStatus', () => {
   it('should show genome as active when markers exist', async () => {
     vi.resetModules();
 
-    vi.doMock('fs/promises', () => {
-      const store = {};
-      return {
-        readFile: vi.fn(async (path) => {
-          if (store[path]) return store[path];
-          throw new Error('ENOENT');
-        }),
-        writeFile: vi.fn(async (path, data) => { store[path] = data; }),
-        mkdir: vi.fn(async () => {})
-      };
-    });
+    vi.doMock('fs/promises', makeFsPromisesStore);
 
     vi.doMock('./genome.js', () => ({
       getGenomeSummary: vi.fn(async () => ({
@@ -1062,19 +1061,7 @@ describe('Integration: deriveLongevity', () => {
   beforeEach(async () => {
     vi.resetModules();
 
-    vi.doMock('fs/promises', () => {
-      const store = {};
-      return {
-        readFile: vi.fn(async (path) => {
-          if (store[path]) return store[path];
-          throw new Error('ENOENT');
-        }),
-        writeFile: vi.fn(async (path, data) => {
-          store[path] = data;
-        }),
-        mkdir: vi.fn(async () => {})
-      };
-    });
+    vi.doMock('fs/promises', makeFsPromisesStore);
 
     vi.doMock('./genome.js', () => ({
       getGenomeSummary: vi.fn(async () => ({
@@ -1150,19 +1137,7 @@ describe('Integration: Goal CRUD', () => {
   beforeEach(async () => {
     vi.resetModules();
 
-    vi.doMock('fs/promises', () => {
-      const store = {};
-      return {
-        readFile: vi.fn(async (path) => {
-          if (store[path]) return store[path];
-          throw new Error('ENOENT');
-        }),
-        writeFile: vi.fn(async (path, data) => {
-          store[path] = data;
-        }),
-        mkdir: vi.fn(async () => {})
-      };
-    });
+    vi.doMock('fs/promises', makeFsPromisesStore);
 
     vi.doMock('./genome.js', () => ({
       getGenomeSummary: vi.fn(async () => ({
@@ -1355,19 +1330,7 @@ describe('Integration: Goal Tree', () => {
   beforeEach(async () => {
     vi.resetModules();
 
-    vi.doMock('fs/promises', () => {
-      const store = {};
-      return {
-        readFile: vi.fn(async (path) => {
-          if (store[path]) return store[path];
-          throw new Error('ENOENT');
-        }),
-        writeFile: vi.fn(async (path, data) => {
-          store[path] = data;
-        }),
-        mkdir: vi.fn(async () => {})
-      };
-    });
+    vi.doMock('fs/promises', makeFsPromisesStore);
 
     vi.doMock('./genome.js', () => ({
       getGenomeSummary: vi.fn(async () => ({
@@ -1425,19 +1388,7 @@ describe('Integration: Progress Log', () => {
   beforeEach(async () => {
     vi.resetModules();
 
-    vi.doMock('fs/promises', () => {
-      const store = {};
-      return {
-        readFile: vi.fn(async (path) => {
-          if (store[path]) return store[path];
-          throw new Error('ENOENT');
-        }),
-        writeFile: vi.fn(async (path, data) => {
-          store[path] = data;
-        }),
-        mkdir: vi.fn(async () => {})
-      };
-    });
+    vi.doMock('fs/promises', makeFsPromisesStore);
 
     vi.doMock('./genome.js', () => ({
       getGenomeSummary: vi.fn(async () => ({
@@ -1498,19 +1449,7 @@ describe('Integration: Calendar Linking', () => {
   beforeEach(async () => {
     vi.resetModules();
 
-    vi.doMock('fs/promises', () => {
-      const store = {};
-      return {
-        readFile: vi.fn(async (path) => {
-          if (store[path]) return store[path];
-          throw new Error('ENOENT');
-        }),
-        writeFile: vi.fn(async (path, data) => {
-          store[path] = data;
-        }),
-        mkdir: vi.fn(async () => {})
-      };
-    });
+    vi.doMock('fs/promises', makeFsPromisesStore);
 
     vi.doMock('./genome.js', () => ({
       getGenomeSummary: vi.fn(async () => ({
@@ -1594,19 +1533,7 @@ describe('Integration: applyGoalOrganization', () => {
   beforeEach(async () => {
     vi.resetModules();
 
-    vi.doMock('fs/promises', () => {
-      const store = {};
-      return {
-        readFile: vi.fn(async (path) => {
-          if (store[path]) return store[path];
-          throw new Error('ENOENT');
-        }),
-        writeFile: vi.fn(async (path, data) => {
-          store[path] = data;
-        }),
-        mkdir: vi.fn(async () => {})
-      };
-    });
+    vi.doMock('fs/promises', makeFsPromisesStore);
 
     vi.doMock('./genome.js', () => ({
       getGenomeSummary: vi.fn(async () => ({
@@ -1763,19 +1690,7 @@ describe('Integration: organizeGoals', () => {
   beforeEach(async () => {
     vi.resetModules();
 
-    vi.doMock('fs/promises', () => {
-      const store = {};
-      return {
-        readFile: vi.fn(async (path) => {
-          if (store[path]) return store[path];
-          throw new Error('ENOENT');
-        }),
-        writeFile: vi.fn(async (path, data) => {
-          store[path] = data;
-        }),
-        mkdir: vi.fn(async () => {})
-      };
-    });
+    vi.doMock('fs/promises', makeFsPromisesStore);
 
     vi.doMock('./genome.js', () => ({
       getGenomeSummary: vi.fn(async () => ({
@@ -1851,17 +1766,7 @@ describe('Integration: organizeGoals', () => {
   it('should throw when no AI provider is available', async () => {
     vi.resetModules();
 
-    vi.doMock('fs/promises', () => {
-      const store = {};
-      return {
-        readFile: vi.fn(async (path) => {
-          if (store[path]) return store[path];
-          throw new Error('ENOENT');
-        }),
-        writeFile: vi.fn(async (path, data) => { store[path] = data; }),
-        mkdir: vi.fn(async () => {})
-      };
-    });
+    vi.doMock('fs/promises', makeFsPromisesStore);
 
     vi.doMock('./genome.js', () => ({
       getGenomeSummary: vi.fn(async () => ({

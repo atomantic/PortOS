@@ -1,7 +1,7 @@
 import { writeFile, unlink } from 'fs/promises';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
-import { PATHS, ensureDir, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
+import { atomicWrite, PATHS, ensureDir, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
 import { CURATED_MARKERS, MARKER_CATEGORIES, classifyGenotype, formatGenotype, resolveApoeHaplotype } from '../lib/curatedGenomeMarkers.js';
 
 const GENOME_DIR = PATHS.meatspace;
@@ -36,7 +36,7 @@ async function loadMeta() {
 
 async function saveMeta(meta) {
   await ensureGenomeDir();
-  await writeFile(META_FILE, JSON.stringify(meta, null, 2));
+  await atomicWrite(META_FILE, meta);
 }
 
 /**
