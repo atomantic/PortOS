@@ -1,18 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { buildBeatGridPoints, computeSceneSpans, snapTimeToGrid } from '../../lib/beatGrid.js';
+import { buildBeatGridPoints, computeDragSpan, computeSceneSpans, shouldMarkBeatAligned } from '../../lib/beatGrid.js';
 
 // Beat-quantized timeline arranger for a music-video project's scene board
 // (#1854). Renders a beat-grid overlay (section bands, beat/downbeat ticks)
 // from the project's cached `audioAnalysis`, plus draggable scene blocks
-// whose left/right edges (in/out) and body (reposition) snap to the grid.
+// whose right edge (out-point) and body (reposition) snap to the grid. There
+// is intentionally no left-edge/in-point handle — `beatSnapClips`
+// (server/services/musicVideo/render.js) always trims a clip from its own
+// frame 0, so it has no way to honor a distinct in-point; offering that
+// handle would promise behavior the render can't deliver.
 // On drag release, `onCommit(sceneId, { startSec, endSec, beatAligned })`
 // persists the result via the existing scene PATCH endpoint — the server's
-// `beatSnapClips` (server/services/musicVideo/render.js) honors a
-// `beatAligned` scene's saved boundaries exactly at render time instead of
-// re-deriving them from the live beat grid.
+// `beatSnapClips` honors a `beatAligned` scene's saved boundaries exactly at
+// render time instead of re-deriving them from the live beat grid.
 
 const PX_PER_SEC = 80;
-const MIN_SCENE_SEC = 0.3;
 const SNAP_TOLERANCE_SEC = 0.15;
 
 export default function BeatTimeline({ audioAnalysis, scenes, onCommit }) {
@@ -39,33 +41,8 @@ export default function BeatTimeline({ audioAnalysis, scenes, onCommit }) {
     const drag = dragRef.current;
     if (!drag) return;
     const deltaSec = (e.clientX - drag.startClientX) / PX_PER_SEC;
-    let nextStart = drag.startSpan.startSec;
-    let nextEnd = drag.startSpan.endSec;
-    if (drag.kind === 'move') {
-      const duration = drag.startSpan.endSec - drag.startSpan.startSec;
-      nextStart = Math.max(0, drag.startSpan.startSec + deltaSec);
-      nextEnd = nextStart + duration;
-    } else if (drag.kind === 'left') {
-      nextStart = Math.max(0, Math.min(drag.startSpan.endSec - MIN_SCENE_SEC, drag.startSpan.startSec + deltaSec));
-    } else if (drag.kind === 'right') {
-      nextEnd = Math.max(drag.startSpan.startSec + MIN_SCENE_SEC, drag.startSpan.endSec + deltaSec);
-    }
-    let snapped = false;
-    if (drag.kind === 'move') {
-      const snap = snapTimeToGrid(nextStart, gridPoints, SNAP_TOLERANCE_SEC);
-      if (snap) { nextEnd = snap.t + (nextEnd - nextStart); nextStart = snap.t; snapped = true; }
-    } else {
-      const snapStart = drag.kind === 'left' ? snapTimeToGrid(nextStart, gridPoints, SNAP_TOLERANCE_SEC) : null;
-      const snapEnd = drag.kind === 'right' ? snapTimeToGrid(nextEnd, gridPoints, SNAP_TOLERANCE_SEC) : null;
-      if (snapStart) { nextStart = snapStart.t; snapped = true; }
-      if (snapEnd) { nextEnd = snapEnd.t; snapped = true; }
-    }
-    setLiveSpan({
-      sceneId: drag.sceneId,
-      startSec: Number(nextStart.toFixed(3)),
-      endSec: Number(nextEnd.toFixed(3)),
-      snapped,
-    });
+    const result = computeDragSpan({ kind: drag.kind, startSpan: drag.startSpan, deltaSec, gridPoints, toleranceSec: SNAP_TOLERANCE_SEC });
+    setLiveSpan({ sceneId: drag.sceneId, ...result });
   }, [gridPoints]);
 
   const onPointerUp = useCallback(() => {
@@ -75,7 +52,8 @@ export default function BeatTimeline({ audioAnalysis, scenes, onCommit }) {
     window.removeEventListener('pointerup', onPointerUp);
     setLiveSpan((current) => {
       if (drag && current && current.sceneId === drag.sceneId) {
-        onCommit?.(drag.sceneId, { startSec: current.startSec, endSec: current.endSec, beatAligned: current.snapped });
+        const beatAligned = shouldMarkBeatAligned({ kind: drag.kind, snapped: current.snapped, wasPersisted: drag.wasPersisted });
+        onCommit?.(drag.sceneId, { startSec: current.startSec, endSec: current.endSec, beatAligned });
       }
       return null;
     });
@@ -90,7 +68,11 @@ export default function BeatTimeline({ audioAnalysis, scenes, onCommit }) {
 
   const beginDrag = (e, sceneId, kind, span) => {
     e.preventDefault();
-    dragRef.current = { sceneId, kind, startClientX: e.clientX, startSpan: { startSec: span.startSec, endSec: span.endSec } };
+    dragRef.current = {
+      sceneId, kind, startClientX: e.clientX,
+      startSpan: { startSec: span.startSec, endSec: span.endSec },
+      wasPersisted: !!span.persisted,
+    };
     setLiveSpan({ sceneId, startSec: span.startSec, endSec: span.endSec, snapped: false });
     window.addEventListener('pointermove', onPointerMove);
     window.addEventListener('pointerup', onPointerUp);
@@ -101,7 +83,7 @@ export default function BeatTimeline({ audioAnalysis, scenes, onCommit }) {
   return (
     <div className="space-y-1">
       <div className="flex items-center justify-between text-xs text-port-text-muted">
-        <span>Beat-quantized timeline — drag a scene's edges to snap to beats, or its body to reposition</span>
+        <span>Beat-quantized timeline — drag a scene's right edge to trim its length, or its body to reposition</span>
         {audioAnalysis.bpm && <span>{audioAnalysis.bpm} BPM</span>}
       </div>
       <div className="overflow-x-auto border border-port-border rounded-lg bg-port-bg">
@@ -128,9 +110,6 @@ export default function BeatTimeline({ audioAnalysis, scenes, onCommit }) {
               <div key={span.sceneId}
                 className={`absolute top-14 h-12 rounded border bg-port-card/90 select-none ${snappedNow ? 'border-port-success' : 'border-port-accent'}`}
                 style={{ left: span.startSec * PX_PER_SEC, width: Math.max(6, (span.endSec - span.startSec) * PX_PER_SEC) }}>
-                <div role="presentation"
-                  className="absolute inset-y-0 left-0 w-2 cursor-ew-resize hover:bg-port-accent/40"
-                  onPointerDown={(e) => beginDrag(e, span.sceneId, 'left', span)} />
                 <div role="presentation"
                   className="absolute inset-0 flex items-center justify-center text-[10px] px-2 cursor-grab truncate"
                   onPointerDown={(e) => beginDrag(e, span.sceneId, 'move', span)}

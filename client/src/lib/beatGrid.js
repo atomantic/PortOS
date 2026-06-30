@@ -7,6 +7,7 @@
 
 const DEFAULT_TOLERANCE_SEC = 0.15;
 const DEFAULT_SCENE_DURATION_SEC = 3;
+const MIN_SCENE_SEC = 0.3;
 const KIND_RANK = { beat: 0, downbeat: 1, section: 2 };
 
 // Merge an audioAnalysis record's beats, downbeats, and section start/end
@@ -234,4 +235,46 @@ export function autoArrangeScenes(scenes, audioAnalysis, { minSceneSec = DEFAULT
     }
   }
   return result;
+}
+
+// Resolve a BeatTimeline drag gesture (pointer delta in seconds) into a new
+// span, snapping to the grid when the result lands within tolerance. `kind`
+// is `'move'` (reposition the whole block, duration unchanged) or `'right'`
+// (drag the out-point — the render can only ever shorten/lengthen a clip
+// from its own frame 0, so there is no `'left'`/in-point equivalent; see
+// `server/services/musicVideo/render.js` `beatSnapClips`, which always trims
+// from `inSec: 0`).
+export function computeDragSpan({ kind, startSpan, deltaSec, gridPoints, toleranceSec = DEFAULT_TOLERANCE_SEC, minSceneSec = MIN_SCENE_SEC }) {
+  let nextStart = startSpan.startSec;
+  let nextEnd = startSpan.endSec;
+  if (kind === 'move') {
+    const duration = startSpan.endSec - startSpan.startSec;
+    nextStart = Math.max(0, startSpan.startSec + deltaSec);
+    nextEnd = nextStart + duration;
+  } else {
+    nextEnd = Math.max(startSpan.startSec + minSceneSec, startSpan.endSec + deltaSec);
+  }
+  let snapped = false;
+  if (kind === 'move') {
+    const snap = snapTimeToGrid(nextStart, gridPoints, toleranceSec);
+    if (snap) { nextEnd = snap.t + (nextEnd - nextStart); nextStart = snap.t; snapped = true; }
+  } else {
+    const snap = snapTimeToGrid(nextEnd, gridPoints, toleranceSec);
+    if (snap) { nextEnd = snap.t; snapped = true; }
+  }
+  return { startSec: Number(nextStart.toFixed(3)), endSec: Number(nextEnd.toFixed(3)), snapped };
+}
+
+// A snapped drag earns the `beatAligned` flag (render honors the saved
+// duration exactly — see `beatSnapClips`) only when the resulting DURATION is
+// trustworthy. A `'right'` resize is always an explicit, intentional
+// duration-setting action, so it always qualifies. A `'move'` never touches
+// duration — it only repositions the block — so confirming it must NOT
+// silently promote an unpersisted scene's synthetic `computeSceneSpans`
+// fallback span (3s, unrelated to the scene's real generated clip length)
+// into a "saved exactly" render duration. Only a move on an already-persisted
+// span (a real duration the user previously set) can mark beatAligned.
+export function shouldMarkBeatAligned({ kind, snapped, wasPersisted }) {
+  if (!snapped) return false;
+  return kind !== 'move' || !!wasPersisted;
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildBeatGridPoints, snapTimeToGrid, computeSceneSpans, autoArrangeScenes } from './beatGrid.js';
+import { buildBeatGridPoints, snapTimeToGrid, computeSceneSpans, computeDragSpan, shouldMarkBeatAligned, autoArrangeScenes } from './beatGrid.js';
 
 describe('buildBeatGridPoints', () => {
   it('returns an empty list with no analysis', () => {
@@ -247,5 +247,64 @@ describe('autoArrangeScenes', () => {
     ];
     const out = autoArrangeScenes(unordered, { sections: [{ startSec: 0, endSec: 4, energy: 1 }], durationSec: 4 });
     expect(out.map((a) => a.sceneId)).toEqual(['s1', 's2']);
+  });
+});
+
+describe('computeDragSpan', () => {
+  const grid = [{ t: 5, kind: 'beat' }, { t: 10, kind: 'downbeat' }];
+
+  it('repositions both edges on a move, preserving duration', () => {
+    const result = computeDragSpan({ kind: 'move', startSpan: { startSec: 2, endSec: 4 }, deltaSec: 1, gridPoints: [] });
+    expect(result).toEqual({ startSec: 3, endSec: 5, snapped: false });
+  });
+
+  it('snaps a move to the nearest grid point and shifts the end by the same offset', () => {
+    const result = computeDragSpan({ kind: 'move', startSpan: { startSec: 2, endSec: 4 }, deltaSec: 2.9, gridPoints: grid, toleranceSec: 0.2 });
+    // raw start = 4.9, snaps to the beat at 5; duration (2) is preserved.
+    expect(result).toEqual({ startSec: 5, endSec: 7, snapped: true });
+  });
+
+  it('never moves a move-drag start below 0', () => {
+    const result = computeDragSpan({ kind: 'move', startSpan: { startSec: 1, endSec: 3 }, deltaSec: -5, gridPoints: [] });
+    expect(result.startSec).toBe(0);
+    expect(result.endSec).toBe(2); // duration preserved
+  });
+
+  it('only moves the end on a right-edge drag, start untouched', () => {
+    const result = computeDragSpan({ kind: 'right', startSpan: { startSec: 2, endSec: 4 }, deltaSec: 1, gridPoints: [] });
+    expect(result).toEqual({ startSec: 2, endSec: 5, snapped: false });
+  });
+
+  it('snaps a right-edge drag to the nearest grid point', () => {
+    const result = computeDragSpan({ kind: 'right', startSpan: { startSec: 2, endSec: 4.9 }, deltaSec: 0, gridPoints: grid, toleranceSec: 0.2 });
+    expect(result).toEqual({ startSec: 2, endSec: 5, snapped: true });
+  });
+
+  it('clamps a right-edge drag to minSceneSec', () => {
+    const result = computeDragSpan({ kind: 'right', startSpan: { startSec: 2, endSec: 4 }, deltaSec: -10, gridPoints: [], minSceneSec: 0.5 });
+    expect(result.endSec).toBeCloseTo(2.5, 5);
+  });
+});
+
+describe('shouldMarkBeatAligned', () => {
+  it('is false when the drag did not snap, regardless of kind', () => {
+    expect(shouldMarkBeatAligned({ kind: 'right', snapped: false, wasPersisted: true })).toBe(false);
+    expect(shouldMarkBeatAligned({ kind: 'move', snapped: false, wasPersisted: true })).toBe(false);
+  });
+
+  it('a snapped right-edge (explicit duration-setting) drag is always beat-aligned', () => {
+    expect(shouldMarkBeatAligned({ kind: 'right', snapped: true, wasPersisted: false })).toBe(true);
+    expect(shouldMarkBeatAligned({ kind: 'right', snapped: true, wasPersisted: true })).toBe(true);
+  });
+
+  it('a snapped move on an unpersisted (fallback) span is NOT beat-aligned', () => {
+    // Reposition-only drags never set a duration — confirming one on a scene
+    // whose span is still the computeSceneSpans placeholder must not bake
+    // that synthetic duration in as the render's "saved exactly" length.
+    expect(shouldMarkBeatAligned({ kind: 'move', snapped: true, wasPersisted: false })).toBe(false);
+  });
+
+  it('a snapped move on an already-persisted span IS beat-aligned', () => {
+    expect(shouldMarkBeatAligned({ kind: 'move', snapped: true, wasPersisted: true })).toBe(true);
   });
 });
