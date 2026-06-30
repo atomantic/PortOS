@@ -17,6 +17,7 @@ vi.mock('fs/promises', () => ({
 }));
 
 const { spawn } = await import('child_process');
+const { writeFile } = await import('fs/promises');
 const runner = await import('./runner.js');
 const { analyzeError, ERROR_CATEGORIES } = await import('../lib/aiToolkit/errorDetection.js');
 const { setAIToolkit, executeCliRun, buildCliArgs, hasModelFlag, extractBakedModel, emitRunStarted } = runner;
@@ -159,6 +160,35 @@ describe('executeCliRun — Codex sentinel suppression', () => {
     const metadata = await completed;
     expect(metadata.success).toBe(false);
     expect(metadata.errorAnalysis).toMatchObject({ requiresFallback: true });
+  });
+});
+
+describe('executeCliRun — close handler crash guard', () => {
+  it('does not throw an unhandled rejection when a metadata write fails on close', async () => {
+    const child = makeChild();
+    spawn.mockReturnValue(child);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    // First write (output) succeeds, second write (metadata) rejects — the
+    // handler runs outside the request lifecycle, so an uncaught throw here
+    // would crash the Node process.
+    writeFile
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('ENOSPC: disk full'));
+
+    const provider = {
+      id: 'codex', command: 'codex', args: [],
+      defaultModel: 'codex-configured-default', timeout: 5000,
+    };
+
+    await executeCliRun({ runId: 'run-write-fail', provider, prompt: 'test prompt', workspacePath: '/workspace' });
+
+    child.stdout.emit('data', Buffer.from('output'));
+    child.emit('close', 0);
+    // Let the detached close handler settle.
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('run-write-fail close handler error'));
+    errorSpy.mockRestore();
   });
 });
 

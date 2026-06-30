@@ -448,33 +448,40 @@ export function createRunnerService(config = {}) {
       };
 
       processStream().catch(async (err) => {
-        activeRuns.delete(runId);
+        // This catch runs detached (the promise is not awaited), so an
+        // unguarded throw from handleProviderError/atomicWrite below would
+        // surface as an unhandled rejection and crash the process. Wrap it.
+        try {
+          activeRuns.delete(runId);
 
-        if (output) {
-          await atomicWrite(outputPath, output).catch(() => {});
+          if (output) {
+            await atomicWrite(outputPath, output).catch(() => {});
+          }
+
+          const metadata = safeJsonParse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
+          metadata.endTime = new Date().toISOString();
+          metadata.duration = Date.now() - startTime;
+          metadata.success = false;
+
+          const errorAnalysis = analyzeError(err.message);
+          metadata.error = errorAnalysis.message || err.message;
+          metadata.errorCategory = errorAnalysis.category;
+          metadata.errorAnalysis = errorAnalysis;
+          metadata.outputSize = Buffer.byteLength(output);
+
+          if (errorAnalysis.hasError &&
+              (errorAnalysis.category === ERROR_CATEGORIES.RATE_LIMIT ||
+               errorAnalysis.category === ERROR_CATEGORIES.USAGE_LIMIT)) {
+            await handleProviderError(provider.id, errorAnalysis, output);
+          }
+
+          await atomicWrite(metadataPath, metadata);
+
+          hooks.onRunFailed?.(metadata, metadata.error, output);
+          onComplete?.(metadata);
+        } catch (handlerErr) {
+          console.error(`❌ Run ${runId} failure handler error: ${handlerErr.message}`);
         }
-
-        const metadata = safeJsonParse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
-        metadata.endTime = new Date().toISOString();
-        metadata.duration = Date.now() - startTime;
-        metadata.success = false;
-
-        const errorAnalysis = analyzeError(err.message);
-        metadata.error = errorAnalysis.message || err.message;
-        metadata.errorCategory = errorAnalysis.category;
-        metadata.errorAnalysis = errorAnalysis;
-        metadata.outputSize = Buffer.byteLength(output);
-
-        if (errorAnalysis.hasError &&
-            (errorAnalysis.category === ERROR_CATEGORIES.RATE_LIMIT ||
-             errorAnalysis.category === ERROR_CATEGORIES.USAGE_LIMIT)) {
-          await handleProviderError(provider.id, errorAnalysis, output);
-        }
-
-        await atomicWrite(metadataPath, metadata);
-
-        hooks.onRunFailed?.(metadata, metadata.error, output);
-        onComplete?.(metadata);
       });
 
       return runId;

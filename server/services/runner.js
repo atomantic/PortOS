@@ -238,41 +238,48 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, on
   });
 
   childProcess.on('close', async (code) => {
-    if (timeoutHandle) clearTimeout(timeoutHandle);
-    toolkit.services.runner._portosActiveRuns?.delete(runId);
+    // This runs outside the Express request lifecycle — an uncaught throw
+    // (e.g. a failed metadata write) would crash the Node process, so wrap
+    // the whole body and log via the emoji-prefixed convention.
+    try {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+      toolkit.services.runner._portosActiveRuns?.delete(runId);
 
-    await writeFile(outputPath, output);
+      await writeFile(outputPath, output);
 
-    const metadataStr = await readFile(metadataPath, 'utf-8').catch(() => '{}');
-    let metadata = {};
-    try { metadata = JSON.parse(metadataStr); } catch { console.log('⚠️ Corrupted metadata for run, using fresh'); }
-    metadata.endTime = new Date().toISOString();
-    metadata.duration = Date.now() - startTime;
-    metadata.exitCode = code;
-    // A mid-stream fallback signal (e.g. usage-limit hit) SIGTERM-kills the
-    // child; if it happens to exit 0 in that race, don't record the run as
-    // successful — the fallback path (onRunFailed) must fire. Mirrors the TUI
-    // finish({ success: false }) handling of the same signal.
-    metadata.success = code === 0 && !immediateFallbackAnalysis;
-    metadata.outputSize = Buffer.byteLength(output);
+      const metadataStr = await readFile(metadataPath, 'utf-8').catch(() => '{}');
+      let metadata = {};
+      try { metadata = JSON.parse(metadataStr); } catch { console.log('⚠️ Corrupted metadata for run, using fresh'); }
+      metadata.endTime = new Date().toISOString();
+      metadata.duration = Date.now() - startTime;
+      metadata.exitCode = code;
+      // A mid-stream fallback signal (e.g. usage-limit hit) SIGTERM-kills the
+      // child; if it happens to exit 0 in that race, don't record the run as
+      // successful — the fallback path (onRunFailed) must fire. Mirrors the TUI
+      // finish({ success: false }) handling of the same signal.
+      metadata.success = code === 0 && !immediateFallbackAnalysis;
+      metadata.outputSize = Buffer.byteLength(output);
 
-    // Analyze errors if the run failed (delegate to toolkit's error detection)
-    if (!metadata.success && toolkit.services.errorDetection) {
-      const errorAnalysis = immediateFallbackAnalysis || toolkit.services.errorDetection.analyzeError(output, code);
-      metadata.error = errorAnalysis.message || `Process exited with code ${code}`;
-      metadata.errorCategory = errorAnalysis.category;
-      metadata.errorAnalysis = errorAnalysis;
+      // Analyze errors if the run failed (delegate to toolkit's error detection)
+      if (!metadata.success && toolkit.services.errorDetection) {
+        const errorAnalysis = immediateFallbackAnalysis || toolkit.services.errorDetection.analyzeError(output, code);
+        metadata.error = errorAnalysis.message || `Process exited with code ${code}`;
+        metadata.errorCategory = errorAnalysis.category;
+        metadata.errorAnalysis = errorAnalysis;
+      }
+
+      await writeFile(metadataPath, JSON.stringify(metadata, null, 2));
+
+      if (metadata.success) {
+        runnerConfig.hooks?.onRunCompleted?.(metadata, output);
+      } else {
+        runnerConfig.hooks?.onRunFailed?.(metadata, metadata.error, output);
+      }
+
+      onComplete?.(metadata);
+    } catch (err) {
+      console.error(`❌ Run ${runId} close handler error: ${err.message}`);
     }
-
-    await writeFile(metadataPath, JSON.stringify(metadata, null, 2));
-
-    if (metadata.success) {
-      runnerConfig.hooks?.onRunCompleted?.(metadata, output);
-    } else {
-      runnerConfig.hooks?.onRunFailed?.(metadata, metadata.error, output);
-    }
-
-    onComplete?.(metadata);
   });
 
   return runId;

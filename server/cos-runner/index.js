@@ -301,7 +301,8 @@ app.post('/spawn', async (req, res) => {
     if (!existsSync(agentDir)) {
       await ensureDir(agentDir);
     }
-    await writeFile(join(agentDir, 'output.txt'), output).catch(() => {});
+    await writeFile(join(agentDir, 'output.txt'), output)
+      .catch(err => console.error(`❌ Agent ${agentId} failed to persist output.txt: ${err.message}`));
 
     if (paused) {
       activeAgents.delete(agentId);
@@ -322,7 +323,10 @@ app.post('/spawn', async (req, res) => {
       duration,
       outputSize: Buffer.byteLength(output)
     };
-    await writeFile(metadataPath, JSON.stringify(completionMetadata, null, 2)).catch(() => {});
+    // Recovery-critical: completion metadata is how a restart reconstructs a
+    // finished task — never swallow a write failure here, log it.
+    await writeFile(metadataPath, JSON.stringify(completionMetadata, null, 2))
+      .catch(err => console.error(`❌ Agent ${agentId} failed to persist completion metadata: ${err.message}`));
 
     // Emit completion event
     emitToServer('agent:completed', {

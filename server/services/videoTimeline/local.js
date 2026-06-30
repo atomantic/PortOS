@@ -416,6 +416,10 @@ export async function renderProject(projectId) {
   });
 
   proc.on('close', async (code, signal) => {
+    // Runs outside the request lifecycle — an uncaught throw from
+    // generateThumbnail/loadHistory/saveHistory would crash the process, so
+    // wrap the body and surface the failure over SSE instead.
+    try {
     job.process = null;
     if (code !== 0) {
       const canceled = signal === 'SIGTERM' || signal === 'SIGKILL';
@@ -463,6 +467,15 @@ export async function renderProject(projectId) {
     broadcastSse(job, { type: 'complete', result: { id: jobId, filename, thumbnail: thumb, path: `/data/videos/${filename}` } });
     projectRenders.delete(projectId);
     closeJobAfterDelay(jobs, jobId);
+    } catch (err) {
+      const reason = `Post-render failed: ${err.message}`;
+      job.status = 'error';
+      job.lastError = reason;
+      console.error(`❌ Timeline render post-processing error [${jobId.slice(0, 8)}]: ${reason}`);
+      broadcastSse(job, { type: 'error', error: reason });
+      projectRenders.delete(projectId);
+      closeJobAfterDelay(jobs, jobId);
+    }
   });
 
   return { jobId };
