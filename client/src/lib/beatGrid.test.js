@@ -167,6 +167,37 @@ describe('autoArrangeScenes', () => {
     expect(new Set(out.map((a) => a.sceneId)).size).toBe(2);
   });
 
+  it('covers every section (no gap) when scenes >= sections, even a near-silent one', () => {
+    const analysis = {
+      durationSec: 30,
+      sections: [
+        { startSec: 0, endSec: 10, energy: 1 },
+        { startSec: 10, endSec: 20, energy: 0.001 }, // near-silent breakdown
+        { startSec: 20, endSec: 30, energy: 1 },
+      ],
+    };
+    const out = autoArrangeScenes(scenes(3), analysis);
+    // Each section gets at least one scene → the arrangement spans the whole track.
+    expect(out.some((a) => a.endSec <= 10)).toBe(true);
+    expect(out.some((a) => a.startSec >= 10 && a.endSec <= 20)).toBe(true);
+    expect(out.some((a) => a.startSec >= 20)).toBe(true);
+    expect(out[0].startSec).toBe(0);
+    expect(out[out.length - 1].endSec).toBe(30);
+  });
+
+  it('weights a longer section more than a shorter equal-energy one (density tracks energy)', () => {
+    const analysis = {
+      durationSec: 25,
+      sections: [
+        { startSec: 0, endSec: 5, energy: 1 }, // short
+        { startSec: 5, endSec: 25, energy: 1 }, // 4x longer, same energy
+      ],
+    };
+    const out = autoArrangeScenes(scenes(5), analysis);
+    expect(out.filter((a) => a.startSec >= 5).length)
+      .toBeGreaterThan(out.filter((a) => a.endSec <= 5).length);
+  });
+
   it('snaps interior cuts to the beat grid and marks them beatAligned', () => {
     const analysis = {
       durationSec: 8,

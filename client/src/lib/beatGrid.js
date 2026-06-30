@@ -81,20 +81,19 @@ export function computeSceneSpans(scenes, durationSec) {
 const DEFAULT_MIN_SCENE_SEC = 0.5;
 const round3 = (n) => Number(n.toFixed(3));
 
-// Allocate `total` whole items across `weights` (non-negative) using the
-// largest-remainder method, so the per-bucket counts sum to EXACTLY `total`
-// and a heavier weight gets proportionally more. All-zero weights fall back to
-// an even split. Returns an integer array the same length as `weights`.
-function allocateByWeight(weights, total) {
+// Hand out `total` whole units across `weights` by the largest-remainder method.
+// Returns an integer array summing to EXACTLY `total`. All-zero weights fall back
+// to an even split. (Shared by both the base-floor pass and the remainder pass.)
+function distributeByWeight(weights, total) {
+  const counts = weights.map(() => 0);
+  if (total <= 0 || weights.length === 0) return counts;
   const positive = weights.map((w) => (typeof w === 'number' && w > 0 ? w : 0));
   const sum = positive.reduce((a, b) => a + b, 0);
-  // No usable weight signal → split evenly across the buckets.
   const eff = sum > 0 ? positive : weights.map(() => 1);
   const effSum = sum > 0 ? sum : weights.length;
   const raw = eff.map((w) => (w / effSum) * total);
-  const counts = raw.map((r) => Math.floor(r));
+  for (let i = 0; i < raw.length; i++) counts[i] = Math.floor(raw[i]);
   let remaining = total - counts.reduce((a, b) => a + b, 0);
-  // Hand out the leftover units to the buckets with the largest fractional part.
   const byFrac = raw
     .map((r, i) => ({ i, frac: r - Math.floor(r) }))
     .sort((a, b) => b.frac - a.frac);
@@ -105,21 +104,41 @@ function allocateByWeight(weights, total) {
   return counts;
 }
 
+// Allocate `total` scenes across the weighted sections, guaranteeing each section
+// `minEach` scenes WHEN there are enough to go round (so no section is silently
+// skipped and the arrangement covers the whole track). When `total` can't even
+// satisfy the floor, the scarce scenes go to the heaviest sections — coverage is
+// impossible with fewer scenes than sections, so weight decides who gets one.
+function allocateByWeight(weights, total, minEach = 0) {
+  const n = weights.length;
+  const base = total >= n * minEach ? minEach : 0;
+  const counts = weights.map(() => base);
+  const extra = distributeByWeight(weights, total - base * n);
+  for (let i = 0; i < n; i++) counts[i] += extra[i];
+  return counts;
+}
+
 // Split one section's [startSec, endSec] span into `count` contiguous cut
-// boundaries (length `count + 1`). Interior cuts snap to the nearest grid point
-// when one keeps the run monotonic AND leaves both adjacent spans at least
-// `minSceneSec` long; otherwise the raw even-division time is kept. The
-// section's own outer edges are never moved (they're already section grid lines).
+// boundaries (length `count + 1`). Interior cuts snap to the nearest grid point,
+// then clamp into [prev + minSceneSec, endSec - remainingCuts * minSceneSec] so
+// every produced span is at least `minSceneSec` long AND enough room is reserved
+// for the cuts still to come. When the section is too short to honor minSceneSec
+// for `count` cuts, fall back to plain even division (best effort — the render
+// clamps clips to its own floor anyway). The section's own outer edges never move.
 function sectionCutBoundaries(startSec, endSec, count, gridPoints, minSceneSec) {
+  const span = endSec - startSec;
+  const even = (k) => startSec + (span * k) / count;
+  if (span < count * minSceneSec) {
+    return Array.from({ length: count + 1 }, (_, k) => even(k));
+  }
   const boundaries = [startSec];
   for (let k = 1; k < count; k++) {
-    const raw = startSec + ((endSec - startSec) * k) / count;
+    const raw = even(k);
     const snap = snapTimeToGrid(raw, gridPoints, Infinity);
-    let b = snap ? snap.t : raw;
-    const prev = boundaries[boundaries.length - 1];
-    if (b < prev + minSceneSec || b > endSec - minSceneSec) b = raw;
-    if (b < prev) b = prev; // keep strictly non-decreasing on a tiny section
-    boundaries.push(b);
+    const candidate = snap ? snap.t : raw;
+    const minB = boundaries[boundaries.length - 1] + minSceneSec;
+    const maxB = endSec - (count - k) * minSceneSec; // leave room for remaining cuts
+    boundaries.push(Math.min(Math.max(candidate, minB), maxB));
   }
   boundaries.push(endSec);
   return boundaries;
@@ -140,7 +159,8 @@ function sectionCutBoundaries(startSec, endSec, count, gridPoints, minSceneSec) 
 //   - no scenes → []
 //   - no usable `sections` AND no `durationSec` → [] (nothing to arrange against)
 //   - no `sections` but a `durationSec` → treat the whole track as one section
-//   - missing per-section `energy` (older analyses) → equal weights (even spread)
+//   - missing per-section `energy` (older analyses) → weight by duration only
+//     (an even, energy-agnostic spread across the track)
 export function autoArrangeScenes(scenes, audioAnalysis, { minSceneSec = DEFAULT_MIN_SCENE_SEC } = {}) {
   const ordered = (Array.isArray(scenes) ? scenes : [])
     .filter((s) => s && typeof s.sceneId === 'string')
@@ -165,12 +185,17 @@ export function autoArrangeScenes(scenes, audioAnalysis, { minSceneSec = DEFAULT
     sections = [{ startSec: 0, endSec: durationSec, energy: null }];
   }
 
-  // Energy is the cut-density weight. When no section carries energy (legacy
-  // analyses, or the single synthetic fallback section), weigh every section
-  // equally so scenes still spread across the whole track.
+  // Weight = energy × duration, so a section's scene COUNT scales with both its
+  // loudness and its length — making cut DENSITY (cuts per second) track energy.
+  // Weighting by energy alone would give an 80s calm section and an 8s loud one
+  // similar counts, leaving the long section sparsely cut. When no section
+  // carries energy (legacy analyses, or the single synthetic fallback section),
+  // weight by duration alone so scenes still spread evenly across the track.
+  // Every section is guaranteed at least one scene when scenes ≥ sections, so a
+  // near-silent section still gets a single long cut rather than a coverage gap.
   const haveEnergy = sections.some((s) => s.energy != null);
-  const weights = sections.map((s) => (haveEnergy ? (s.energy ?? 0) : 1));
-  const counts = allocateByWeight(weights, ordered.length);
+  const weights = sections.map((s) => (s.endSec - s.startSec) * (haveEnergy ? (s.energy ?? 0) : 1));
+  const counts = allocateByWeight(weights, ordered.length, 1);
 
   const gridPoints = buildBeatGridPoints(audioAnalysis);
   // A grid (beats/downbeats/section edges) means the cuts are genuinely
