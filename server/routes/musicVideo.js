@@ -17,6 +17,7 @@ import {
   musicVideoSceneCreateSchema,
   musicVideoSceneUpdateSchema,
   musicVideoSceneReorderSchema,
+  musicVideoPlanRequestSchema,
 } from '../lib/validation.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { safeUnder } from '../lib/ffmpeg.js';
@@ -34,6 +35,7 @@ import {
 } from '../services/musicVideo/projects.js';
 import { analyzeAudioFile } from '../services/musicVideo/audioAnalysis.js';
 import { renderMusicVideo, attachRenderSseClient, cancelRender } from '../services/musicVideo/render.js';
+import { planProject } from '../services/musicVideo/planner.js';
 import { getTrack } from '../services/tracks/index.js';
 
 const router = Router();
@@ -98,6 +100,20 @@ router.post('/:id/analyze', asyncHandler(async (req, res) => {
   }
   const updated = await setProjectAnalysis(project.id, analysis);
   res.json(updated);
+}));
+
+// Autonomous shot planner (#1855, the secondary "autonomous mode" path):
+// propose one scene per analyzed audio section (energy-aware durations fall
+// out of the cached section boundaries) and seed them onto the director
+// scene board. Director-first — this only seeds editable scenes, same as a
+// hand-added one. `seedPrompts` (default true) additionally best-effort asks
+// the active/given AI provider for a first-pass framePrompt/prompt per scene;
+// a missing provider or parse failure degrades to plain scenes rather than
+// failing the request (see `promptsSeeded`/`promptsSkippedReason` in the body).
+router.post('/:id/plan', asyncHandler(async (req, res) => {
+  const { seedPrompts, providerId, model } = validateRequest(musicVideoPlanRequestSchema, req.body || {});
+  const result = await planProject(req.params.id, { seedPrompts, providerId, model });
+  res.json(result);
 }));
 
 // --- Render (#1760, Phase 2) ---

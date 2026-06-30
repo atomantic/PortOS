@@ -4,6 +4,7 @@ import {
   applyProjectPatch,
   setAudioAnalysis,
   addScene,
+  addScenes,
   applySceneUpdate,
   removeScene,
   reorderScenes,
@@ -79,6 +80,36 @@ describe('scene board operations', () => {
 
   it('rejects a scene whose endSec precedes startSec', () => {
     expect(() => addScene(baseProject(), { startSec: 10, endSec: 5 })).toThrow(/Scene validation failed/);
+  });
+
+  it('addScenes bulk-appends in one pass with incrementing order (the autonomous planner, #1855)', () => {
+    const { project, scenes } = addScenes(baseProject(), [
+      { label: 'Intro', startSec: 0, endSec: 10 },
+      { label: 'Drop', startSec: 10, endSec: 18 },
+    ]);
+    expect(scenes).toHaveLength(2);
+    expect(scenes.map((s) => s.order)).toEqual([0, 1]);
+    expect(scenes[0].sceneId).not.toBe(scenes[1].sceneId);
+    expect(project.scenes).toHaveLength(2);
+  });
+
+  it('addScenes continues ordering after existing scenes', () => {
+    const { project: seeded } = addScene(baseProject(), { prompt: 'existing' });
+    const { scenes } = addScenes(seeded, [{ label: 'Next' }]);
+    expect(scenes[0].order).toBe(1);
+  });
+
+  it('addScenes rejects the whole batch if any scene is invalid', () => {
+    expect(() => addScenes(baseProject(), [
+      { label: 'ok', startSec: 0, endSec: 5 },
+      { label: 'bad', startSec: 10, endSec: 5 },
+    ])).toThrow(/Scene validation failed/);
+  });
+
+  it('addScenes treats a non-array input as empty', () => {
+    const { project, scenes } = addScenes(baseProject(), null);
+    expect(scenes).toEqual([]);
+    expect(project.scenes).toEqual([]);
   });
 
   it('updates a scene by id', () => {

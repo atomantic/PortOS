@@ -16,6 +16,7 @@ import {
   applyProjectPatch,
   setAudioAnalysis,
   addScene,
+  addScenes,
   applySceneUpdate,
   removeScene,
   reorderScenes,
@@ -155,6 +156,15 @@ export async function addProjectScene(id, sceneInput) {
   all[idx] = project;
   await saveAll(all);
   return scene;
+}
+
+/** Bulk-append scenes (the autonomous planner, #1855) — one load/save round trip. */
+export async function addProjectScenes(id, sceneInputs) {
+  const { all, idx } = await loadAllAndIndex(id);
+  const { project, scenes } = addScenes(all[idx], sceneInputs);
+  all[idx] = project;
+  await saveAll(all);
+  return scenes;
 }
 
 export async function updateScene(id, sceneId, patch) {

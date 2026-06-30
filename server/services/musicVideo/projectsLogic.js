@@ -119,14 +119,33 @@ function buildScene(input, { order }) {
 
 /**
  * Append a scene to the board. Validates the input, assigns a sceneId and the
- * next order index. Returns `{ project, scene }`.
+ * next order index. Returns `{ project, scene }`. A thin single-item wrapper
+ * over `addScenes` so the validate/build/order logic lives in exactly one
+ * place.
  */
 export function addScene(project, sceneInput) {
-  const data = parseSceneOrThrow(musicVideoSceneCreateSchema, sceneInput);
-  const scenes = project.scenes || [];
-  const scene = buildScene(data, { order: scenes.length });
-  const next = touch(project, { scenes: [...scenes, scene] });
-  return { project: next, scene };
+  const { project: next, scenes } = addScenes(project, [sceneInput]);
+  return { project: next, scene: scenes[0] };
+}
+
+/**
+ * Append several scenes to the board in one pass (the autonomous planner,
+ * #1855) — a single `touch`/persist instead of N sequential addScene calls, so
+ * a 10-section plan is one write (and one peer-sync emit) instead of ten.
+ * Returns `{ project, scenes }` (the newly-created scenes, in input order).
+ */
+export function addScenes(project, sceneInputs) {
+  const list = Array.isArray(sceneInputs) ? sceneInputs : [];
+  const existing = project.scenes || [];
+  const added = [];
+  let order = existing.length;
+  for (const input of list) {
+    const data = parseSceneOrThrow(musicVideoSceneCreateSchema, input);
+    added.push(buildScene(data, { order }));
+    order += 1;
+  }
+  const next = touch(project, { scenes: [...existing, ...added] });
+  return { project: next, scenes: added };
 }
 
 /**

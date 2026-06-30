@@ -22,6 +22,14 @@ export const analyzeMusicVideoProject = (id, options = {}) => request(`/music-vi
   method: 'POST', ...options,
 });
 
+// Autonomous shot planner (#1855): propose one scene per analyzed audio
+// section and seed them onto the board. `seedPrompts` (default true) also
+// best-effort asks the active provider for a first-pass framePrompt/prompt
+// per scene. Returns `{ project, scenesAdded, promptsSeeded, promptsSkippedReason }`.
+export const planMusicVideoProject = (id, body = {}, options = {}) => request(`/music-video/${encodeURIComponent(id)}/plan`, {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
+
 // ---- Director scene board ----
 export const addMusicVideoScene = (id, scene, options = {}) => request(`/music-video/${encodeURIComponent(id)}/scenes`, {
   method: 'POST', body: JSON.stringify(scene), ...options,

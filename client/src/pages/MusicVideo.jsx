@@ -7,6 +7,7 @@ import {
   createMusicVideoProject,
   deleteMusicVideoProject,
   analyzeMusicVideoProject,
+  planMusicVideoProject,
   addMusicVideoScene,
   updateMusicVideoScene,
   deleteMusicVideoScene,
@@ -45,6 +46,7 @@ export default function MusicVideo() {
   const [loading, setLoading] = useState(true);
   const [analyzing, setAnalyzing] = useState(false);
   const [arranging, setArranging] = useState(false);
+  const [planning, setPlanning] = useState(false);
   const [form, setForm] = useState({ name: '', mode: 'director', trackId: '' });
   const selected = projects.find((p) => p.id === selectedId) || null;
   const replaceProject = (next) => setProjects((prev) => prev.map((p) => (p.id === next.id ? next : p)));
@@ -127,6 +129,24 @@ export default function MusicVideo() {
       .then((proj) => { replaceProject(proj); toast.success(`Analyzed — ${proj.audioAnalysis?.bpm ? `${proj.audioAnalysis.bpm} BPM` : 'no tempo detected'}`); })
       .catch((err) => toast.error(err?.message || 'Analysis failed'))
       .finally(() => setAnalyzing(false));
+  };
+
+  // Autonomous shot planner (#1855): propose one scene per analyzed audio
+  // section (energy-aware durations fall out of the section boundaries
+  // themselves) and seed them onto the board, optionally with a first-pass
+  // framePrompt/prompt per scene. Director-first — seeded scenes are
+  // ordinary, fully-editable board entries, same as a hand-added one.
+  const handlePlan = () => {
+    if (!selected?.audioAnalysis) return;
+    setPlanning(true);
+    planMusicVideoProject(selected.id, { seedPrompts: true })
+      .then(({ project, scenesAdded, promptsSeeded }) => {
+        replaceProject(project);
+        const suffix = promptsSeeded ? ' with first-pass prompts' : '';
+        toast.success(`Planned ${scenesAdded} scene${scenesAdded === 1 ? '' : 's'}${suffix}`);
+      })
+      .catch((err) => toast.error(err?.message || 'Plan failed'))
+      .finally(() => setPlanning(false));
   };
 
   // Auto-arrange (#1915): distribute every scene across the analyzed song
@@ -409,6 +429,11 @@ export default function MusicVideo() {
                       title={!selected.trackId && !selected.uploadedAudioFilename ? 'Link a track first' : 'Analyze beat grid'}
                       className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[40px] sm:min-h-0 disabled:opacity-50">
                       <Activity size={15} /> {analyzing ? 'Analyzing…' : 'Analyze'}
+                    </button>
+                    <button onClick={handlePlan} disabled={planning || !selected.audioAnalysis}
+                      title={!selected.audioAnalysis ? 'Analyze the track first' : 'AI-propose a scene per song section'}
+                      className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[40px] sm:min-h-0 disabled:opacity-50">
+                      <Wand2 size={15} /> {planning ? 'Planning…' : 'AI Plan'}
                     </button>
                     <button onClick={handleAutoArrange}
                       disabled={arranging || !selected.audioAnalysis || (selected.scenes || []).length === 0}

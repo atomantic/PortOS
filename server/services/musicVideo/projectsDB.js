@@ -19,6 +19,7 @@ import {
   applyProjectPatch,
   setAudioAnalysis,
   addScene,
+  addScenes,
   applySceneUpdate,
   removeScene,
   reorderScenes,
@@ -190,6 +191,15 @@ export async function addProjectScene(id, sceneInput) {
   const { result } = await withLockedProject(id, (p) => {
     const { project, scene } = addScene(p, sceneInput);
     return { project, result: scene };
+  });
+  return result;
+}
+
+/** Bulk-append scenes (the autonomous planner, #1855) — one locked read/write. */
+export async function addProjectScenes(id, sceneInputs) {
+  const { result } = await withLockedProject(id, (p) => {
+    const { project, scenes } = addScenes(p, sceneInputs);
+    return { project, result: scenes };
   });
   return result;
 }
