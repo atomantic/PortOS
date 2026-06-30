@@ -93,6 +93,7 @@ describe('stageRunner — context windows', () => {
     expect(knownModelContextWindow('gpt-5.4-mini')).toBe(400_000);
     expect(knownModelContextWindow('gpt-5.4-nano')).toBeNull();
     expect(knownModelContextWindow('claude-opus-4-8')).toBe(1_000_000);
+    expect(knownModelContextWindow('claude-sonnet-5')).toBe(1_000_000);
     expect(knownModelContextWindow('claude-sonnet-4-6')).toBe(1_000_000);
     expect(knownModelContextWindow('us.anthropic.claude-sonnet-4-5-20250929-v1:0')).toBe(200_000);
     expect(knownModelContextWindow('gemini-2.5-pro')).toBe(GEMINI_CONTEXT_WINDOW);
