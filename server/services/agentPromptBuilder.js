@@ -882,7 +882,7 @@ function buildPostPRMergeSteps(startStep, { reviewers = DEFAULT_REVIEWERS, revie
  */
 function buildTuiCompletionSection({ willOpenPR, willReviewLoop, simplifyEnabled, sentinelPath, providerId = null, slashdoFree = false, branchName = null, reviewers = DEFAULT_REVIEWERS, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false }) {
   if (slashdoFree) {
-    return buildManualTuiCompletionSection({ willOpenPR, simplifyEnabled, sentinelPath, branchName });
+    return buildManualTuiCompletionSection({ willOpenPR, willReviewLoop, simplifyEnabled, sentinelPath, branchName });
   }
   const cmd = willOpenPR ? '/do:pr' : '/do:push';
   const reviewArgs = willOpenPR && willReviewLoop ? buildReviewWithArgs(reviewers, reviewStopMode, reviewerApplies) : '';
@@ -937,11 +937,13 @@ function buildTuiCompletionSection({ willOpenPR, willReviewLoop, simplifyEnabled
  * agentTuiSpawning.js), so nothing happens after the agent exits — the agent owns
  * the push, and the PR + merge when one is requested, itself.
  *
- * No automated review loop is emitted: OpenCode can't invoke the CLI reviewers, so
- * (unlike `buildPostPRMergeSteps`) the merge step is unconditional rather than gated
- * on a review-loop verdict.
+ * OpenCode can't invoke the CLI reviewers itself, and PortOS runs no post-exit
+ * review follow-up for a TUI. So when a review loop is requested (`willReviewLoop`),
+ * the agent opens the PR but must NOT auto-merge — it leaves the PR open for a
+ * configured reviewer / human, preserving the same review gate the slashdo `/do:pr`
+ * flow enforces. Only when no review loop is requested does it merge directly.
  */
-function buildManualTuiCompletionSection({ willOpenPR, simplifyEnabled, sentinelPath, branchName = null }) {
+function buildManualTuiCompletionSection({ willOpenPR, willReviewLoop = false, simplifyEnabled, sentinelPath, branchName = null }) {
   const branchRef = branchName || 'HEAD';
   const simplifyStep = simplifyEnabled
     ? `1. Before committing, ${SIMPLIFY_INLINE_REVIEW} and fix any findings.`
@@ -974,13 +976,25 @@ function buildManualTuiCompletionSection({ willOpenPR, simplifyEnabled, sentinel
       '   ```bash',
       '   gh pr create --fill',
       '   ```',
-      `${step++}. Merge the PR and delete the branch:`,
-      '',
-      '   ```bash',
-      '   gh pr merge "<PR_URL>" --merge --delete-branch',
-      '   ```',
-      `${step++}. Confirm the merge before exiting: \`gh pr view "<PR_URL>" --json state -q .state\` must return \`MERGED\`. If it returns \`OPEN\` or \`CLOSED\`, investigate (failing check, branch protection), fix, and retry.`,
     );
+    if (willReviewLoop) {
+      // A review loop was requested. This provider can't drive the reviewer
+      // CLIs, and PortOS runs no post-exit review for a TUI — so DON'T merge.
+      // Leave the PR open so the configured reviewer / a human reviews + merges,
+      // matching the gate the slashdo `/do:pr` flow enforces before merging.
+      lines.push(
+        `${step++}. **Leave the PR open for review — do NOT merge it yourself.** A code review was requested for this task; this provider can't run the reviewer loop, so a configured reviewer or a human reviews and merges the PR. Record the PR URL in the sentinel below and finish.`,
+      );
+    } else {
+      lines.push(
+        `${step++}. Merge the PR and delete the branch:`,
+        '',
+        '   ```bash',
+        '   gh pr merge "<PR_URL>" --merge --delete-branch',
+        '   ```',
+        `${step++}. Confirm the merge before exiting: \`gh pr view "<PR_URL>" --json state -q .state\` must return \`MERGED\`. If it returns \`OPEN\` or \`CLOSED\`, investigate (failing check, branch protection), fix, and retry.`,
+      );
+    }
   }
 
   lines.push(

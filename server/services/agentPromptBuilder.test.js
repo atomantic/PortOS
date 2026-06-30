@@ -239,6 +239,24 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).not.toMatch(/^\s*\d+\.\s*`\/quit`/m);
     });
 
+    it('OpenCode TUI + openPR + reviewLoop opens the PR but does NOT auto-merge (review gate)', () => {
+      // OpenCode can't drive the reviewer loop and PortOS runs no post-exit review
+      // for a TUI, so when a review loop is requested the agent must leave the PR
+      // open for a reviewer/human rather than merging past the gate.
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { openPR: true, reviewLoop: true } }),
+        '/r',
+        { branchName: 'claim/issue-3', worktreePath: '/tmp/wt' },
+        isTruthyMeta,
+        { isTui: true, providerId: 'opencode-ollama-tui', providerCommand: 'opencode' });
+      expect(prompt).toMatch(/## Completion Workflow/);
+      expect(prompt).toMatch(/gh pr create --fill/);
+      // No merge — the PR is left open for review.
+      expect(prompt).not.toMatch(/gh pr merge/);
+      expect(prompt).toMatch(/Leave the PR open for review/);
+      expect(prompt).toMatch(/\.agent-done/);
+    });
+
     it('OpenCode TUI without openPR pushes the branch but opens no PR', () => {
       const prompt = buildLightContextPrompt(
         makeTask({ metadata: { openPR: false } }),
