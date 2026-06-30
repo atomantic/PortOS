@@ -23,6 +23,7 @@ const {
   killProcessTree,
   needsShell,
   resolveWindowsExecutable,
+  prepareWindowsSafeSpawn,
   IS_WIN32,
   WIN_CMD_SHIMS,
   MAX_OUTPUT_BYTES,
@@ -164,6 +165,35 @@ describe('resolveWindowsExecutable', () => {
 
   it('returns null for a relative path containing a separator', () => {
     expect(resolveWindowsExecutable('./bin/opencode', true)).toBeNull();
+  });
+});
+
+describe('prepareWindowsSafeSpawn', () => {
+  // isWin32 is passed explicitly so these tests are deterministic regardless
+  // of the host platform actually running them.
+  it('wraps a .cmd target in cmd.exe /c on Windows (the actual #1865 fix)', () => {
+    const result = prepareWindowsSafeSpawn('C:\\npm\\opencode.cmd', ['exec', '-'], true);
+    expect(result).toEqual({ command: 'cmd.exe', args: ['/c', 'C:\\npm\\opencode.cmd', 'exec', '-'] });
+  });
+
+  it('wraps a .bat target in cmd.exe /c on Windows, case-insensitively', () => {
+    const result = prepareWindowsSafeSpawn('C:\\tools\\thing.BAT', ['x'], true);
+    expect(result).toEqual({ command: 'cmd.exe', args: ['/c', 'C:\\tools\\thing.BAT', 'x'] });
+  });
+
+  it('leaves a resolved .exe target unwrapped on Windows — directly launchable, no batch interpreter needed', () => {
+    const result = prepareWindowsSafeSpawn('C:\\tools\\claude.exe', ['-p', '-'], true);
+    expect(result).toEqual({ command: 'C:\\tools\\claude.exe', args: ['-p', '-'] });
+  });
+
+  it('never wraps off Windows, even for a .cmd-looking path', () => {
+    const result = prepareWindowsSafeSpawn('/usr/local/bin/opencode.cmd', ['exec', '-'], false);
+    expect(result).toEqual({ command: '/usr/local/bin/opencode.cmd', args: ['exec', '-'] });
+  });
+
+  it('passes through a bare unresolved command unchanged (resolution-failure fallback)', () => {
+    const result = prepareWindowsSafeSpawn('opencode', ['exec', '-'], true);
+    expect(result).toEqual({ command: 'opencode', args: ['exec', '-'] });
   });
 });
 

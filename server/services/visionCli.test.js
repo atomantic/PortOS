@@ -1,13 +1,18 @@
 import { describe, it, expect, vi } from 'vitest';
 import { EventEmitter } from 'events';
 
-// Wrap the REAL resolveWindowsExecutable in a spy (not a stub) so every
-// existing test below is unaffected (a no-op pass-through on the non-win32
-// host running this suite) while one test can force a specific resolved
-// path to prove describeImageViaCli actually spawns it.
+// Wrap the REAL resolveWindowsExecutable/prepareWindowsSafeSpawn in spies
+// (not stubs) so every existing test below is unaffected (both are no-op
+// pass-throughs on the non-win32 host running this suite) while one test
+// can force a specific resolved path, or force isWin32 on the wrap, to
+// prove describeImageViaCli actually spawns the result.
 vi.mock('../lib/bufferedSpawn.js', async (importOriginal) => {
   const actual = await importOriginal();
-  return { ...actual, resolveWindowsExecutable: vi.fn(actual.resolveWindowsExecutable) };
+  return {
+    ...actual,
+    resolveWindowsExecutable: vi.fn(actual.resolveWindowsExecutable),
+    prepareWindowsSafeSpawn: vi.fn(actual.prepareWindowsSafeSpawn),
+  };
 });
 
 const {
@@ -15,7 +20,7 @@ const {
   buildCliVisionInvocation,
   describeImageViaCli,
 } = await import('./visionCli.js');
-const { resolveWindowsExecutable } = await import('../lib/bufferedSpawn.js');
+const { resolveWindowsExecutable, prepareWindowsSafeSpawn } = await import('../lib/bufferedSpawn.js');
 
 const PNG_DATA_URL = `data:image/png;base64,${Buffer.from('fake-png').toString('base64')}`;
 
@@ -115,8 +120,14 @@ describe('describeImageViaCli', () => {
     expect(spawnImpl).toHaveBeenCalledOnce();
   });
 
-  it('spawns the resolveWindowsExecutable-resolved path when one is found (#1865)', async () => {
-    vi.mocked(resolveWindowsExecutable).mockReturnValueOnce('C:\\Users\\Joe\\AppData\\Roaming\\npm\\codex.cmd');
+  it('wraps a resolved .cmd shim via cmd.exe /c, preserving the multi-word prompt as one arg (#1865)', async () => {
+    const resolvedPath = 'C:\\Users\\Joe\\AppData\\Roaming\\npm\\codex.cmd';
+    vi.mocked(resolveWindowsExecutable).mockReturnValueOnce(resolvedPath);
+    // Force the wrap's win32 branch (host running this suite is never win32)
+    // to exercise the real cmd.exe /c contract, not the identity pass-through.
+    const { prepareWindowsSafeSpawn: realPrepare } = await vi.importActual('../lib/bufferedSpawn.js');
+    vi.mocked(prepareWindowsSafeSpawn).mockImplementationOnce((cmd, args) => realPrepare(cmd, args, true));
+
     const child = makeFakeChild();
     const spawnImpl = spawnEmitting(child, (c) => {
       c.stdout.emit('data', Buffer.from('caption'));
@@ -125,14 +136,22 @@ describe('describeImageViaCli', () => {
     const promise = describeImageViaCli({
       provider: { id: 'codex', command: 'codex', args: [] },
       dataUrl: PNG_DATA_URL,
-      prompt: 'caption this',
+      // Free-text prompt with spaces — the exact scenario that broke under
+      // the prior (rejected) shell:true approach: shell:true + an args array
+      // doesn't escape arguments, so this would have silently mis-split into
+      // extra shell tokens. The cmd.exe wrapper relies on Node's own correct
+      // non-shell argv escaping instead, which keeps it as one token.
+      prompt: 'describe this photo in detail',
       spawnImpl,
     });
     await promise;
-    const [spawnedCommand, , options] = spawnImpl.mock.calls[0];
-    expect(spawnedCommand).toBe('C:\\Users\\Joe\\AppData\\Roaming\\npm\\codex.cmd');
-    // Never falls back to shell:true — the resolved path carries the explicit
-    // extension, so no shell option is needed (see resolveWindowsExecutable).
+    const [spawnedCommand, spawnedArgs, options] = spawnImpl.mock.calls[0];
+    expect(spawnedCommand).toBe('cmd.exe');
+    expect(spawnedArgs[0]).toBe('/c');
+    expect(spawnedArgs[1]).toBe(resolvedPath);
+    expect(spawnedArgs[spawnedArgs.length - 1]).toBe('describe this photo in detail');
+    // Never falls back to shell:true (DEP0190) — the cmd.exe wrapper relies
+    // on Node's own correct non-shell argv escaping instead.
     expect(options.shell).toBeUndefined();
   });
 

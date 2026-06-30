@@ -7,12 +7,18 @@ vi.mock('child_process', async (importOriginal) => {
 });
 
 // Keep the real killProcessTree (existing tests below rely on its real
-// non-Windows SIGTERM branch) but stub resolveWindowsExecutable so the
-// Windows command-resolution path can be driven deterministically regardless
-// of the host platform actually running the suite.
+// non-Windows SIGTERM branch) but stub resolveWindowsExecutable AND
+// prepareWindowsSafeSpawn so the Windows command-resolution/wrap path can be
+// driven deterministically regardless of the host platform actually running
+// the suite (prepareWindowsSafeSpawn's own win32 check is bound to the real
+// platform by default, which is never win32 in CI).
 vi.mock('../lib/bufferedSpawn.js', async (importOriginal) => {
   const actual = await importOriginal();
-  return { ...actual, resolveWindowsExecutable: vi.fn(() => null) };
+  return {
+    ...actual,
+    resolveWindowsExecutable: vi.fn(() => null),
+    prepareWindowsSafeSpawn: vi.fn((command, args) => ({ command, args })),
+  };
 });
 
 vi.mock('../lib/fileUtils.js', () => ({
@@ -189,14 +195,20 @@ describe('executeCliRun — Codex sentinel suppression', () => {
 });
 
 describe('executeCliRun — Windows .cmd/.bat shim spawning (#1865)', () => {
-  it('spawns the resolveWindowsExecutable-resolved path (e.g. opencode.cmd) when one is found', async () => {
-    const { resolveWindowsExecutable } = await import('../lib/bufferedSpawn.js');
-    vi.mocked(resolveWindowsExecutable).mockReturnValueOnce('C:\\Users\\Joe\\AppData\\Roaming\\npm\\opencode.cmd');
+  it('wraps a resolved .cmd shim via cmd.exe /c — the actual #1865 fix (never shell:true)', async () => {
+    const { resolveWindowsExecutable, prepareWindowsSafeSpawn } = await import('../lib/bufferedSpawn.js');
+    const resolvedPath = 'C:\\Users\\Joe\\AppData\\Roaming\\npm\\opencode.cmd';
+    vi.mocked(resolveWindowsExecutable).mockReturnValueOnce(resolvedPath);
+    // Exercise the REAL wrap logic (not the describe-level identity stub) so
+    // this test pins the actual cmd.exe /c contract, with isWin32 forced true
+    // since the host running this suite is never win32.
+    const { prepareWindowsSafeSpawn: realPrepare } = await vi.importActual('../lib/bufferedSpawn.js');
+    vi.mocked(prepareWindowsSafeSpawn).mockImplementationOnce((cmd, args) => realPrepare(cmd, args, true));
 
     const child = makeChild();
     spawn.mockReturnValue(child);
 
-    const provider = { id: 'opencode', command: 'opencode', args: [], timeout: 5000 };
+    const provider = { id: 'codex', command: 'codex', args: ['exec', '-'], timeout: 5000 };
 
     setImmediate(() => {
       child.stdout.emit('data', Buffer.from('output'));
@@ -205,10 +217,15 @@ describe('executeCliRun — Windows .cmd/.bat shim spawning (#1865)', () => {
 
     await executeCliRun({ runId: 'run-resolved', provider, prompt: 'test prompt', workspacePath: '/workspace' });
 
-    const [command, , options] = spawn.mock.calls.at(-1);
-    expect(command).toBe('C:\\Users\\Joe\\AppData\\Roaming\\npm\\opencode.cmd');
-    // Never set shell:true — resolving the explicit extension lets Node's own
-    // safely-escaping .bat/.cmd handling take over under shell:false instead.
+    const [command, args, options] = spawn.mock.calls.at(-1);
+    expect(command).toBe('cmd.exe');
+    // buildCliArgs injects/transforms provider.args per-provider convention —
+    // assert the WRAPPING contract (/c + resolved path prepended), not the
+    // exact downstream arg list.
+    expect(args[0]).toBe('/c');
+    expect(args[1]).toBe(resolvedPath);
+    // Never set shell:true — DEP0190's unescaped-join hazard. The cmd.exe
+    // wrapper relies on Node's own correct non-shell argv escaping instead.
     expect(options.shell).toBeFalsy();
   });
 

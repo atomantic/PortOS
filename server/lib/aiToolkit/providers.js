@@ -46,6 +46,24 @@ function resolveWindowsExecutable(command, isWin32 = process.platform === 'win32
   return null;
 }
 
+const WIN_BATCH_EXT_RE = /\.(cmd|bat)$/i;
+
+/**
+ * Return the `{ command, args }` pair that's actually safe to hand to
+ * `execFile()` under `shell:false` — mirrors `prepareWindowsSafeSpawn` in
+ * `server/lib/bufferedSpawn.js` (duplicated here for self-containment).
+ * `.bat`/`.cmd` files cannot be launched directly under `shell:false` even
+ * with the explicit extension (Node's CVE-2024-27980 patch makes
+ * spawn/execFile refuse them outright); the documented safe alternative is
+ * to invoke `cmd.exe /c <path> <args>` directly.
+ */
+function prepareWindowsSafeSpawn(command, args, isWin32 = process.platform === 'win32') {
+  if (isWin32 && WIN_BATCH_EXT_RE.test(command)) {
+    return { command: 'cmd.exe', args: ['/c', command, ...args] };
+  }
+  return { command, args };
+}
+
 const execFileAsync = promisify(execFile);
 
 // Tool-use (function-calling) capable model families. Inlined here because the
@@ -507,11 +525,13 @@ export function createProviderService(config = {}) {
         const tryVersion = async (flag) => {
           // Invoke the resolved path so Windows runs the exact `.exe`/`.cmd`
           // we found — execFile won't re-apply PATHEXT to a bare command
-          // name, and (now that `invokePath` carries the correct explicit
-          // extension) no shell is needed: Node's own already-safely-escaping
-          // internal `.bat`/`.cmd` handling takes over under shell:false.
+          // name. A `.cmd`/`.bat` target still can't be launched directly
+          // under shell:false (Node refuses it outright, even with the
+          // explicit extension — see prepareWindowsSafeSpawn above), so wrap
+          // it through cmd.exe /c exactly like the runner does.
           try {
-            const out = await execFileAsync(invokePath, [flag]);
+            const { command: execCommand, args: execArgs } = prepareWindowsSafeSpawn(invokePath, [flag]);
+            const out = await execFileAsync(execCommand, execArgs);
             everSpawned = true;
             return out?.stdout?.trim() || null;
           } catch (err) {
