@@ -17,7 +17,7 @@ import { analyzeAgentFailure } from './agentErrorAnalysis.js';
 import { finalizeAgent, releaseAgentLane } from './agentLifecycle.js';
 import { activeAgents, userTerminatedAgents, pausedAgents } from './agentState.js';
 import { PATHS } from '../lib/fileUtils.js';
-import { resolveCliModel, resolveBedrockCliModel, prefixOpencodeModel, hasModelFlag } from '../lib/providerModels.js';
+import { resolveCliModel, resolveBedrockCliModel, prefixOpencodeModel, hasModelFlag, isOpencodeCommand } from '../lib/providerModels.js';
 import { createStreamingAnsiStripper, stripAnsi } from '../lib/ansiStrip.js';
 import { createImmediateFallbackSignalDetector } from '../lib/aiToolkit/errorDetection.js';
 import { isAntigravityCommand } from '../lib/antigravity.js';
@@ -185,7 +185,7 @@ function appendModelArgs(args, model, command, provider) {
   // flag preselects the model). Namespace the bare Ollama id; no Bedrock mapping.
   // Respect a user-baked --model/-m pin (mirrors buildTuiInvocation/buildCliArgs)
   // rather than appending a second flag that overrides it.
-  if (command === 'opencode') {
+  if (isOpencodeCommand(command)) {
     if (hasModelFlag(args)) return args;
     return [...args, '--model', prefixOpencodeModel(provider, effectiveModel)];
   }

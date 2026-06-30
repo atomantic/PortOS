@@ -18,6 +18,21 @@ export const isCodexConfiguredDefault = (model) => model === CODEX_CONFIGURED_DE
 export const resolveCliModel = (model) => isCodexConfiguredDefault(model) ? null : (model || null);
 
 /**
+ * True when a provider command points at the OpenCode binary — matching the bare
+ * `opencode` on PATH OR an absolute/relative path to it (`/opt/homebrew/bin/opencode`,
+ * common when the service PATH can't resolve the CLI), and a Windows `.exe`/`.cmd`/`.bat`
+ * shim. The OpenCode arg-builder branches key on this rather than `command === 'opencode'`
+ * so a path-configured provider isn't misrouted into the Claude-style invocation.
+ * @param {string|null|undefined} command
+ * @returns {boolean}
+ */
+export function isOpencodeCommand(command) {
+  if (typeof command !== 'string' || command === '') return false;
+  const base = command.split(/[\\/]/).pop().toLowerCase().replace(/\.(exe|cmd|bat)$/, '');
+  return base === 'opencode';
+}
+
+/**
  * OpenCode addresses models as `provider/model` (e.g. `ollama/qwen2.5:7b`). The
  * OpenCode Ollama provider declares its local daemon under the config-provider
  * key `ollama` (via OPENCODE_CONFIG_CONTENT), so the bare Ollama model id stored
@@ -37,7 +52,7 @@ export const resolveCliModel = (model) => isCodexConfiguredDefault(model) ? null
  * @returns {string|null|undefined}
  */
 export function prefixOpencodeModel(provider, model) {
-  if (provider?.command !== 'opencode' || provider?.ollamaBacked !== true || !model) return model;
+  if (!isOpencodeCommand(provider?.command) || provider?.ollamaBacked !== true || !model) return model;
   const id = String(model);
   return id.startsWith('ollama/') ? id : `ollama/${id}`;
 }

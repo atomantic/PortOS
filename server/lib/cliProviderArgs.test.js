@@ -95,6 +95,14 @@ describe('cliProviderArgs', () => {
       });
       expect(args).toEqual(['run', '-m', 'ollama/custom']);
     });
+
+    it('takes the opencode path for a path-configured binary (not the Claude fallback)', () => {
+      const args = buildCliArgs({
+        id: 'opencode-ollama', command: '/opt/homebrew/bin/opencode', args: ['run'], ollamaBacked: true,
+        defaultModel: 'qwen2.5:7b',
+      });
+      expect(args).toEqual(['run', '-m', 'ollama/qwen2.5:7b']);
+    });
   });
 
   describe('stripBrokenModelFlags', () => {

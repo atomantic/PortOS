@@ -16,7 +16,7 @@
  *   - Claude Code: `-p -`                (+ `--model <id>`)
  */
 
-import { resolveCliModel, hasModelFlag, resolveBedrockCliModel, prefixOpencodeModel } from './providerModels.js';
+import { resolveCliModel, hasModelFlag, resolveBedrockCliModel, prefixOpencodeModel, isOpencodeCommand } from './providerModels.js';
 import { ensureAntigravityPrintArgs, isAntigravityCliProvider } from './antigravity.js';
 
 /**
@@ -70,7 +70,7 @@ export function buildCliArgs(provider) {
   // saved provider.args dropped it. Model injection is gated on the user not
   // having hard-coded a `--model`/`-m` of their own, mirroring the claude/gemini
   // gate below.
-  if (provider?.command === 'opencode') {
+  if (isOpencodeCommand(provider?.command)) {
     const args = baseArgs.includes('run') ? [...baseArgs] : ['run', ...baseArgs];
     const model = prefixOpencodeModel(provider, effectiveDefaultModel);
     if (model && !hasModelFlag(baseArgs)) {

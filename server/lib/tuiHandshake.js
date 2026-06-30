@@ -12,7 +12,7 @@
  * No cycle risk: this module imports nothing from either consumer.
  */
 
-import { resolveCliModel, hasModelFlag, resolveBedrockCliModel, prefixOpencodeModel } from './providerModels.js';
+import { resolveCliModel, hasModelFlag, resolveBedrockCliModel, prefixOpencodeModel, isOpencodeCommand } from './providerModels.js';
 import { ensureAntigravityTuiArgs, isAntigravityCommand } from './antigravity.js';
 
 // ─── Paste handshake constants ────────────────────────────────────────────
@@ -411,7 +411,7 @@ export function buildTuiInvocation(provider, model) {
   // claude-code-tui runner.
   const injectedModel = !shouldInject
     ? effectiveModel
-    : command === 'opencode'
+    : isOpencodeCommand(command)
       ? prefixOpencodeModel(provider, effectiveModel)
       : resolveBedrockCliModel(effectiveModel, {
         env: { ...process.env, ...provider?.envVars },

@@ -26,7 +26,7 @@ import { createCodexStderrFormatter } from '../lib/codexCliOutput.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { createImmediateFallbackSignalDetector } from '../lib/aiToolkit/errorDetection.js';
 import { ensureAntigravityPrintArgs, isAntigravityCliProvider } from '../lib/antigravity.js';
-import { resolveBedrockCliModel, prefixOpencodeModel, hasModelFlag } from '../lib/providerModels.js';
+import { resolveBedrockCliModel, prefixOpencodeModel, hasModelFlag, isOpencodeCommand } from '../lib/providerModels.js';
 import { agentGuardEnv } from '../lib/agentGuard/index.js';
 
 const AGENTS_DIR = PATHS.cosAgents;
@@ -286,7 +286,7 @@ export function buildCliSpawnConfig(provider, model, settingsEnv = {}) {
   // for PortOS's single-user trusted box). The model is namespaced `ollama/<id>`
   // (prefixOpencodeModel). OpenCode emits plain text (no stream-json), so the
   // live-output handler falls through to its default text path.
-  if (provider?.command === 'opencode') {
+  if (isOpencodeCommand(provider?.command)) {
     const baseArgs = provider?.args?.includes('run') ? [...provider.args] : ['run', ...(provider?.args || [])];
     const model = prefixOpencodeModel(provider, effectiveModel);
     // Respect a user-baked -m/--model pin (mirrors buildCliArgs) rather than

@@ -11,7 +11,8 @@ import {
   hasBedrockRegionPrefix,
   toBedrockModelId,
   resolveBedrockCliModel,
-  prefixOpencodeModel
+  prefixOpencodeModel,
+  isOpencodeCommand
 } from './providerModels.js';
 
 describe('providerModels', () => {
@@ -29,8 +30,31 @@ describe('providerModels', () => {
     });
   });
 
+  describe('isOpencodeCommand', () => {
+    it('matches the bare binary and path/extension variants', () => {
+      expect(isOpencodeCommand('opencode')).toBe(true);
+      expect(isOpencodeCommand('/opt/homebrew/bin/opencode')).toBe(true);
+      expect(isOpencodeCommand('./bin/opencode')).toBe(true);
+      expect(isOpencodeCommand('C:\\tools\\opencode.exe')).toBe(true);
+      expect(isOpencodeCommand('opencode.cmd')).toBe(true);
+    });
+
+    it('rejects other commands and non-strings', () => {
+      expect(isOpencodeCommand('claude')).toBe(false);
+      expect(isOpencodeCommand('/usr/bin/codex')).toBe(false);
+      expect(isOpencodeCommand('opencode-wrapper')).toBe(false);
+      expect(isOpencodeCommand('')).toBe(false);
+      expect(isOpencodeCommand(null)).toBe(false);
+      expect(isOpencodeCommand(undefined)).toBe(false);
+    });
+  });
+
   describe('prefixOpencodeModel', () => {
     const oc = { command: 'opencode', ollamaBacked: true };
+
+    it('namespaces for a path-configured opencode binary (not just the bare command)', () => {
+      expect(prefixOpencodeModel({ command: '/opt/homebrew/bin/opencode', ollamaBacked: true }, 'qwen2.5:7b')).toBe('ollama/qwen2.5:7b');
+    });
 
     it('namespaces a bare Ollama id under ollama/ for ollama-backed opencode providers', () => {
       expect(prefixOpencodeModel(oc, 'qwen2.5:7b')).toBe('ollama/qwen2.5:7b');
