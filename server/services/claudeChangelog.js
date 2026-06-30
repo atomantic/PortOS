@@ -50,8 +50,8 @@ function extractTag(entryXml, tag) {
 /**
  * Parse the GitHub releases Atom feed into flat entries. The feed is small
  * and flat (one level of <entry> under <feed>), so a focused extractor beats
- * pulling in a streaming SAX parser — sax stays for the 500MB Apple Health
- * export path where streaming actually matters (issue #1167).
+ * pulling in a general XML parser — same dependency-free approach the streaming
+ * Apple Health `<Record>` parser takes for the 500MB export path (issue #1167).
  */
 function parseAtomFeed(xml) {
   const entries = []
@@ -147,5 +147,5 @@ export async function getCachedChangelog() {
 }
 
 // Exposed for unit tests — the Atom parse is the regex-extractor that replaced
-// sax on this path (issue #1167).
+// a general XML parser on this path (issue #1167).
 export const __testing = { parseAtomFeed, stripHtml, extractVersion }
