@@ -2369,6 +2369,81 @@ describe('peerSync', () => {
       expect(byKind('image')).toEqual(['ref-x.png']);
     });
 
+    it('bundles the linked track record + its master audio for a track-linked project (#1858)', async () => {
+      // The create-UI path stores trackId with uploadedAudioFilename: null. A
+      // peer subscribed to musicVideoProjects ONLY (no Tracks category) needs
+      // both the audio BYTES (manifest) and the track RECORD (linkedTrack) — the
+      // receiver's resolveMasterAudioPath() looks the track up by id first.
+      enableMusicVideoPeer();
+      await writeFile(join(PATHS.music, 'linked.mp3'), Buffer.from('linked track audio'));
+      vi.mocked(getTrack).mockResolvedValue({
+        id: 'track-7', title: 'Anthem', audioFilename: 'linked.mp3',
+        updatedAt: '2026-06-28T00:00:00Z', deleted: false, deletedAt: null,
+      });
+      vi.mocked(getMusicVideoProject).mockResolvedValue({
+        id: 'mv-3', name: 'Linked', mode: 'director', trackId: 'track-7',
+        uploadedAudioFilename: null, scenes: [],
+        updatedAt: '2026-06-28T00:00:00Z', deleted: false, deletedAt: null,
+      });
+      let captured = null;
+      vi.mocked(peerFetch).mockImplementation(async (_url, opts) => {
+        captured = JSON.parse(opts.body);
+        return { ok: true, json: async () => ({ missingAssets: [] }) };
+      });
+      await pushRecordToPeer({
+        id: 'sub-mv3', peerId: 'peer-a', recordKind: 'musicVideoProject', recordId: 'mv-3',
+      });
+      expect(captured.assetManifest.filter(a => a.kind === 'music').map(a => a.filename)).toEqual(['linked.mp3']);
+      expect(captured.linkedTrack?.id).toBe('track-7');
+      expect(captured.linkedTrack?.audioFilename).toBe('linked.mp3');
+    });
+
+    it('bundles a tombstone linkedTrack when the linked track is deleted (#1858)', async () => {
+      // A track delete fans out to its linked projects; the project push must
+      // carry the track tombstone so a Music-Videos-only peer converges instead
+      // of keeping stale audio. No audio bytes ride for a deleted track.
+      enableMusicVideoPeer();
+      vi.mocked(getTrack).mockResolvedValue({
+        id: 'track-8', title: 'Gone', audioFilename: 'gone.mp3',
+        updatedAt: '2026-06-29T00:00:00Z', deleted: true, deletedAt: '2026-06-29T00:00:00Z',
+      });
+      vi.mocked(getMusicVideoProject).mockResolvedValue({
+        id: 'mv-5', name: 'Linked-deleted', mode: 'director', trackId: 'track-8',
+        uploadedAudioFilename: null, scenes: [],
+        updatedAt: '2026-06-29T00:00:00Z', deleted: false, deletedAt: null,
+      });
+      let captured = null;
+      vi.mocked(peerFetch).mockImplementation(async (_url, opts) => {
+        captured = JSON.parse(opts.body);
+        return { ok: true, json: async () => ({ missingAssets: [] }) };
+      });
+      await pushRecordToPeer({
+        id: 'sub-mv5', peerId: 'peer-a', recordKind: 'musicVideoProject', recordId: 'mv-5',
+      });
+      expect(captured.linkedTrack?.id).toBe('track-8');
+      expect(captured.linkedTrack?.deleted).toBe(true);
+      expect(captured.assetManifest.filter(a => a.kind === 'music')).toEqual([]);
+    });
+
+    it('omits linkedTrack when the project has no linked track', async () => {
+      enableMusicVideoPeer();
+      vi.mocked(getMusicVideoProject).mockResolvedValue({
+        id: 'mv-4', name: 'Upload only', mode: 'director', trackId: null,
+        uploadedAudioFilename: null, scenes: [],
+        updatedAt: '2026-06-28T00:00:00Z', deleted: false, deletedAt: null,
+      });
+      let captured = null;
+      vi.mocked(peerFetch).mockImplementation(async (_url, opts) => {
+        captured = JSON.parse(opts.body);
+        return { ok: true, json: async () => ({ missingAssets: [] }) };
+      });
+      await pushRecordToPeer({
+        id: 'sub-mv4', peerId: 'peer-a', recordKind: 'musicVideoProject', recordId: 'mv-4',
+      });
+      expect(captured.kind).toBe('musicVideoProject');
+      expect('linkedTrack' in captured).toBe(false);
+    });
+
     it('falls back to the <id>.mp4 convention when a scene clip has no video-history row', async () => {
       // The metadata row may not have synced yet; the bare-id + .mp4 convention
       // (collectionVideoRefToFilename) still resolves the bytes. A wrong guess is
@@ -2447,6 +2522,31 @@ describe('peerSync', () => {
       const subs = await collectSubscriptionsForUpdate('mediaCollection', 'col-7');
       expect(subs.map((s) => s.recordId)).toContain('col-7');
       expect(subs.every((s) => s.recordKind === 'mediaCollection')).toBe(true);
+    });
+
+    it('fans a track update out to music-video projects that link it (#1858)', async () => {
+      vi.mocked(getPeers).mockResolvedValue([{
+        instanceId: 'peer-a', name: 'Peer A', host: null, address: '10.0.0.2', port: 5555,
+        enabled: true, syncEnabled: true, directions: ['outbound', 'inbound'],
+        syncCategories: { musicVideoProjects: true },
+      }]);
+      vi.mocked(getMusicVideoProject).mockResolvedValue({
+        id: 'mv-link', name: 'Linked', mode: 'director', trackId: 'track-7',
+        uploadedAudioFilename: null, scenes: [],
+        updatedAt: '2026-06-28T00:00:00Z', deleted: false, deletedAt: null,
+      });
+      vi.mocked(listMusicVideoProjects).mockResolvedValue([
+        { id: 'mv-link', trackId: 'track-7' },
+        { id: 'mv-other', trackId: 'track-99' },
+      ]);
+      vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({ missingAssets: [] }) });
+      await subscribePeer({ peerId: 'peer-a', recordKind: 'musicVideoProject', recordId: 'mv-link' });
+      await __drainForTests();
+
+      const subs = await collectSubscriptionsForUpdate('track', 'track-7');
+      expect(subs.some((s) => s.recordKind === 'musicVideoProject' && s.recordId === 'mv-link')).toBe(true);
+      // A project linking a DIFFERENT track is not fanned out.
+      expect(subs.some((s) => s.recordId === 'mv-other')).toBe(false);
     });
 
     it('returns [] for a kind with no direct/parent subscription path', async () => {
@@ -2553,6 +2653,72 @@ describe('peerSync', () => {
         sourceInstanceId: 'peer-a',
       });
       expect(mergeMediaCollectionsFromSync).not.toHaveBeenCalled();
+    });
+
+    it('routes a bundled linkedTrack through mergeTracksFromSync on a music-video push (#1858)', async () => {
+      const linkedTrack = {
+        id: 'track-9', title: 'Anthem', audioFilename: 'linked.mp3',
+        updatedAt: '2026-06-28T00:00:00Z', deleted: false, deletedAt: null,
+      };
+      await applyIncomingPush({
+        kind: 'musicVideoProject',
+        record: { id: 'mv-1', name: 'Linked', trackId: 'track-9', deleted: false, deletedAt: null },
+        linkedTrack,
+        assetManifest: [],
+        sourceInstanceId: 'peer-a',
+      });
+      expect(mergeMusicVideoProjectsFromSync).toHaveBeenCalledWith(
+        [expect.objectContaining({ id: 'mv-1' })],
+        { source: { via: 'peer-push', peerId: 'peer-a' } },
+      );
+      expect(mergeTracksFromSync).toHaveBeenCalledWith(
+        [linkedTrack],
+        { source: { via: 'peer-push', peerId: 'peer-a' } },
+      );
+    });
+
+    it('skips linkedTrack merge when none is bundled or the project is a tombstone', async () => {
+      await applyIncomingPush({
+        kind: 'musicVideoProject',
+        record: { id: 'mv-2', trackId: 'track-9', deleted: false, deletedAt: null },
+        assetManifest: [],
+        sourceInstanceId: 'peer-a',
+      });
+      expect(mergeTracksFromSync).not.toHaveBeenCalled();
+      await applyIncomingPush({
+        kind: 'musicVideoProject',
+        record: { id: 'mv-3', trackId: 'track-9', deleted: true, deletedAt: '2026-06-29T00:00:00Z' },
+        linkedTrack: { id: 'track-9', audioFilename: 'linked.mp3' },
+        assetManifest: [],
+        sourceInstanceId: 'peer-a',
+      });
+      expect(mergeTracksFromSync).not.toHaveBeenCalled();
+    });
+
+    it('refuses a linkedTrack whose id does not match the project trackId (#1858)', async () => {
+      await applyIncomingPush({
+        kind: 'musicVideoProject',
+        record: { id: 'mv-5', trackId: 'track-A', deleted: false, deletedAt: null },
+        linkedTrack: { id: 'track-SMUGGLED', audioFilename: 'x.mp3' },
+        assetManifest: [],
+        sourceInstanceId: 'peer-a',
+      });
+      expect(mergeTracksFromSync).not.toHaveBeenCalled();
+    });
+
+    it('signals trackSyncPending when the bundled linkedTrack merge fails (#1858)', async () => {
+      // The linked track has no independent reconciliation cycle for a
+      // musicVideoProjects-only subscriber, so a swallowed failure must surface
+      // a pending flag that makes the sender withhold its hash and re-send.
+      vi.mocked(mergeTracksFromSync).mockRejectedValueOnce(new Error('disk full'));
+      const res = await applyIncomingPush({
+        kind: 'musicVideoProject',
+        record: { id: 'mv-9', trackId: 'track-9', deleted: false, deletedAt: null },
+        linkedTrack: { id: 'track-9', audioFilename: 'linked.mp3' },
+        assetManifest: [],
+        sourceInstanceId: 'peer-a',
+      });
+      expect(res.trackSyncPending).toBe(true);
     });
 
     it('routes a bundled manuscriptReview through mergeReviewFromSync on a series push', async () => {

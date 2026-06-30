@@ -30,7 +30,7 @@ import { findCollectionBySeriesId } from '../mediaCollections.js';
 import { headshotImageFilename } from '../authors/index.js';
 import { portraitImageFilename } from '../artists/index.js';
 import { coverImageFilename } from '../albums/index.js';
-import { trackAudioFilename } from '../tracks/index.js';
+import { trackAudioFilename, getTrack } from '../tracks/index.js';
 import { startingImageFilename } from '../creativeDirector/local.js';
 import { imageUrlToAppAsset } from '../moodBoard/index.js';
 import { WRITERS_ROOM_DRAFT_ASSET_KIND } from '../writersRoom/syncLogic.js';
@@ -390,10 +390,17 @@ async function videoHistoryFilenamesById() {
  * its referenced media has no other federation channel — this manifest is the
  * only way a selectively-subscribed peer receives the bytes. Covers the two
  * media kinds a shipped project actually references:
- *   - the uploaded audio track (`uploadedAudioFilename`, a basename under
- *     PATHS.music — the same dir tracks use). A track-LINKED project stores
- *     `uploadedAudioFilename: null` (the route writes one or the other), so the
- *     linked track's own federation carries that audio and nothing double-ships.
+ *   - the master audio. A project stores EITHER an uploaded basename
+ *     (`uploadedAudioFilename`) OR a `trackId` pointing at a music-library track
+ *     whose `audioFilename` lives under the same PATHS.music dir; the create UI's
+ *     normal path is the latter. We bundle whichever one carries the bytes (#1858)
+ *     so a peer subscribed to `musicVideoProjects` ONLY — not the music/tracks
+ *     category — still receives playable audio instead of `resolveMasterAudioPath()`
+ *     later failing with `Linked track not found` / `AUDIO_MISSING`. When the
+ *     linked track ALSO federates (the peer has the music category), dedup by
+ *     `music:<filename>` ships it exactly once. The track is dynamic-resolved via
+ *     `getTrack`; a deleted/missing track or a track with no `audioFilename` simply
+ *     contributes nothing (a missing file is skipped, same as every other ref).
  *   - per-scene rendered clips (`scene.videoHistoryId` → a video-history row →
  *     `<filename>` under PATHS.videos). The row METADATA union-merges via the
  *     `videoHistory` dataSync category; this adds the bytes. Falls back to the
@@ -411,8 +418,17 @@ async function videoHistoryFilenamesById() {
  */
 export async function buildMusicVideoAssetManifest(project) {
   const dedup = new Map();
-  if (isStr(project?.uploadedAudioFilename)) {
-    const audio = await hashSimpleAsset(project.uploadedAudioFilename, 'music', PATHS.music);
+  // Master audio: the uploaded basename and/or the linked track's audioFilename
+  // (the create-UI path stores trackId with uploadedAudioFilename: null, so a
+  // music-video-only subscriber gets no audio unless we resolve+bundle it here).
+  const audioNames = [];
+  if (isStr(project?.uploadedAudioFilename)) audioNames.push(project.uploadedAudioFilename);
+  if (isStr(project?.trackId)) {
+    const track = await getTrack(project.trackId).catch(() => null);
+    if (isStr(track?.audioFilename)) audioNames.push(track.audioFilename);
+  }
+  for (const name of [...new Set(audioNames)]) {
+    const audio = await hashSimpleAsset(name, 'music', PATHS.music);
     if (audio) dedup.set(`${audio.kind}:${audio.filename}`, audio);
   }
   const scenes = Array.isArray(project?.scenes) ? project.scenes : [];

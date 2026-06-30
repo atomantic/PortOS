@@ -109,7 +109,7 @@ export async function applyIncomingPush(payload) {
   if (!isPlainObject(payload)) {
     throw makeErr('payload must be an object', ERR_VALIDATION);
   }
-  const { kind, record, issues, linkedCollection, catalogBundle, manuscriptReview, reverseOutline, assetManifest, draftBodyManifest, sourceInstanceId, portosMeta } = payload;
+  const { kind, record, issues, linkedCollection, linkedTrack, catalogBundle, manuscriptReview, reverseOutline, assetManifest, draftBodyManifest, sourceInstanceId, portosMeta } = payload;
   if (!PEER_SUBSCRIBABLE_KINDS.includes(kind)) {
     throw makeErr(`unknown kind: ${kind}`, ERR_VALIDATION);
   }
@@ -186,6 +186,15 @@ export async function applyIncomingPush(payload) {
       catalogBundle.ingredients.some((i) => i?.deleted !== true)) {
     for (const c of (RECORD_KIND_SCHEMA_CATEGORIES['cat-ingredient'] || ['catalog'])) relevantCategories.add(c);
   }
+  // A bundled linked track (#1858) ships a live, full-shape `track` record. Gate
+  // the `tracks` category so a sender ahead on the track schema can't smuggle a
+  // forward-shaped track row past the gate via a music-video push (same reasoning
+  // as the linkedCollection gate above). Skip the gate for a tombstone track —
+  // id+deleted+deletedAt+updatedAt is schema-safe at every version.
+  if (record.deleted !== true && isPlainObject(linkedTrack) && linkedTrack.deleted !== true
+      && linkedTrack.id === record.trackId) {
+    for (const c of RECORD_KIND_SCHEMA_CATEGORIES.track) relevantCategories.add(c);
+  }
   const fullDiff = compareSchemaVersions(senderSchemaVersions, PORTOS_SCHEMA_VERSIONS);
   const versionDiff = scopeVersionDiff(fullDiff, [...relevantCategories]);
   if (versionDiff.ahead.length > 0) {
@@ -225,6 +234,12 @@ export async function applyIncomingPush(payload) {
   } else if (kind === 'series') {
     const local = await getSeries(record.id, { includeDeleted: true }).catch(() => null);
     localEphemeral = local?.ephemeral === true;
+  } else if (kind === 'musicVideoProject') {
+    // #1858: the music-video push now carries a secondary `linkedTrack` bundle,
+    // so it needs the same opt-out gate — a stale peer push must not plant a
+    // track record for a project the user marked ephemeral.
+    const local = await getMusicVideoProject(record.id, { includeDeleted: true }).catch(() => null);
+    localEphemeral = local?.ephemeral === true;
   }
 
   // Merge into local state via the existing LWW path. The merge functions
@@ -240,6 +255,11 @@ export async function applyIncomingPush(payload) {
   let reviewSyncPending = false;
   // Same contract as reviewSyncPending, for the bundled reverse-outline doc.
   let outlineSyncPending = false;
+  // Same contract again, for the #1858 bundled linked-track record: a
+  // musicVideoProjects-only subscriber has NO independent `tracks` sync cycle,
+  // so a swallowed merge failure would strand the record the receiver needs to
+  // render. Signal so the sender withholds lastPushedHash and re-sends.
+  let trackSyncPending = false;
   // Set true when a writersRoomWork merge accepted the remote (insert/remote-won)
   // — gates whether a present-but-different local draft body may be overwritten.
   let workMergeApplied = false;
@@ -311,6 +331,21 @@ export async function applyIncomingPush(payload) {
     await mergeExercisesFromSync([record], { source });
   } else if (kind === 'musicVideoProject') {
     await mergeMusicVideoProjectsFromSync([record], { source });
+    // #1858: merge the bundled linked track record so a receiver WITHOUT the
+    // Tracks category can still resolve `project.trackId` (getTrack) at render
+    // time. The audio bytes already pulled via assetManifest. Non-fatal: the
+    // project itself is merged; skip on a tombstone push, a local-ephemeral
+    // (opted-out) project, or a missing bundle — same contract as linkedCollection.
+    // Require the bundle's id to MATCH the project's `trackId` so a malformed/
+    // malicious sender can't smuggle an unrelated track record through the
+    // music-video push (the project only needs the track it actually links).
+    if (!localEphemeral && record.deleted !== true && isPlainObject(linkedTrack)
+        && linkedTrack.id === record.trackId) {
+      await mergeTracksFromSync([linkedTrack], { source }).catch((err) => {
+        console.log(`⚠️ peerSync: linkedTrack merge failed: ${err.message}`);
+        trackSyncPending = true;
+      });
+    }
   }
 
   // Apply the bundled collection (if any) — same LWW + union-of-items
@@ -440,6 +475,7 @@ export async function applyIncomingPush(payload) {
     ackedDeletesUpTo,
     ...(reviewSyncPending ? { reviewSyncPending: true } : {}),
     ...(outlineSyncPending ? { outlineSyncPending: true } : {}),
+    ...(trackSyncPending ? { trackSyncPending: true } : {}),
   };
 }
 

@@ -210,6 +210,7 @@ export async function pushRecordToPeer(sub, options = {}) {
     record: payload.record,
     issues: payload.issues ?? null,
     linkedCollection: payload.linkedCollection ?? null,
+    linkedTrack: payload.linkedTrack ?? null,
     manuscriptReview: payload.manuscriptReview ?? null,
     reverseOutline: payload.reverseOutline ?? null,
     assetManifest: payload.assetManifest ?? [],
@@ -246,6 +247,12 @@ export async function pushRecordToPeer(sub, options = {}) {
   // a pre-#1348 peer's strict series schema rejects the `reverseOutline` key, so
   // the retry strips it and we withhold the hash to re-send once it upgrades.
   let outlineStrippedForLegacyPeer = false;
+  // Same as the two flags above, for the #1858 bundled linked-track record — a
+  // pre-feature peer's strict musicVideoProject push schema rejects the
+  // `linkedTrack` key, so the retry strips it and we withhold the hash to
+  // re-send once it upgrades (the track has no independent cycle for a
+  // musicVideoProjects-only subscriber).
+  let trackStrippedForLegacyPeer = false;
   // MIXED-VERSION COMPAT: an older receiver's push schema is still `.strict()`
   // without a `portosMeta` field, so it 400-rejects our envelope at Zod
   // validation BEFORE its schema-version gate code (which doesn't exist on
@@ -278,8 +285,8 @@ export async function pushRecordToPeer(sub, options = {}) {
     const mentions = (key) => details.some((d) => new RegExp(key).test(`${d?.path || ''} ${d?.message || ''}`));
     if (
       isValidationError
-      && (payload.portosMeta || payload.catalogBundle || payload.manuscriptReview || payload.reverseOutline)
-      && (mentions('portosMeta') || mentions('catalogBundle') || mentions('manuscriptReview') || mentions('reverseOutline'))
+      && (payload.portosMeta || payload.catalogBundle || payload.manuscriptReview || payload.reverseOutline || payload.linkedTrack)
+      && (mentions('portosMeta') || mentions('catalogBundle') || mentions('manuscriptReview') || mentions('reverseOutline') || mentions('linkedTrack'))
     ) {
       // (1) UNKNOWN ENVELOPE KEY — the peer recognizes the record `kind` but its
       // `.strict()` schema predates a newer top-level key we sent. Strip whichever
@@ -291,6 +298,7 @@ export async function pushRecordToPeer(sub, options = {}) {
       if (mentions('catalogBundle') && 'catalogBundle' in legacyPayload) { delete legacyPayload.catalogBundle; stripped.push('catalogBundle'); }
       if (mentions('manuscriptReview') && 'manuscriptReview' in legacyPayload) { delete legacyPayload.manuscriptReview; stripped.push('manuscriptReview'); reviewStrippedForLegacyPeer = true; }
       if (mentions('reverseOutline') && 'reverseOutline' in legacyPayload) { delete legacyPayload.reverseOutline; stripped.push('reverseOutline'); outlineStrippedForLegacyPeer = true; }
+      if (mentions('linkedTrack') && 'linkedTrack' in legacyPayload) { delete legacyPayload.linkedTrack; stripped.push('linkedTrack'); trackStrippedForLegacyPeer = true; }
       console.log(
         `ℹ️ peerSync: ${peer.name || peer.instanceId} rejected newer envelope key(s) ${stripped.join(', ')} — retrying push without them`,
       );
@@ -399,6 +407,12 @@ export async function pushRecordToPeer(sub, options = {}) {
   // the key for a pre-#1348 peer). The outline has no independent reconciliation
   // path, so withhold lastPushedHash to re-send next cycle.
   const outlineSyncPending = body?.outlineSyncPending === true || outlineStrippedForLegacyPeer;
+  // TRACK-STRANDED GUARD: same as the review/outline guards — the receiver merged
+  // the project (returned 2xx) but its bundled linked-track merge threw, OR we
+  // stripped the key for a pre-#1858 peer. The track has no independent
+  // reconciliation path for a musicVideoProjects-only subscriber, so withhold
+  // lastPushedHash to re-send next cycle.
+  const trackSyncPending = body?.trackSyncPending === true || trackStrippedForLegacyPeer;
   // This push landed (receiver returned 2xx). Stamp the per-record confirmed-
   // delivery water-mark so tombstoneGc won't prune THIS record's tombstone
   // until its delete-push has been confirmed — even if a later push for a
@@ -408,7 +422,7 @@ export async function pushRecordToPeer(sub, options = {}) {
   // the tombstone's deletedAt once it lands. The `missingAssets` case still
   // counts as confirmed delivery of the RECORD (merge ran on the receiver);
   // only the asset-stranded hash is withheld, not the confirmation mark.
-  await persistPushSuccess(sub.id, (missingCount > 0 || reviewSyncPending || outlineSyncPending) ? null : hash, { confirmedAtMs: Date.now() });
+  await persistPushSuccess(sub.id, (missingCount > 0 || reviewSyncPending || outlineSyncPending || trackSyncPending) ? null : hash, { confirmedAtMs: Date.now() });
   if (Number.isFinite(body?.ackedDeletesUpTo) && body.ackedDeletesUpTo > 0) {
     await ackDeletesUpTo(sub.peerId, body.ackedDeletesUpTo).catch(() => {});
   }
@@ -753,7 +767,28 @@ export async function buildPushPayload(sub, sourceInstanceId) {
     const sanitized = sanitizeRecordForWire('musicVideoProject', record);
     if (!sanitized) return null;
     const assetManifest = record.deleted === true ? [] : await buildMusicVideoAssetManifest(record);
-    return { kind: 'musicVideoProject', record: sanitized, assetManifest, sourceInstanceId, portosMeta };
+    // #1858: bundle the LINKED TRACK RECORD (create-UI projects store `trackId`,
+    // not `uploadedAudioFilename`). The audio BYTES ride `assetManifest` above,
+    // but the receiver's `resolveMasterAudioPath()` looks the track up by id
+    // FIRST and throws "Linked track not found" without the record — so a peer
+    // subscribed to `musicVideoProjects` only (no Tracks category) needs the
+    // record itself to render. Additive optional key: an older receiver ignores
+    // it (same as before), so no schema-version bump (mirrors `linkedCollection`).
+    let linkedTrack = null;
+    if (record.deleted !== true && isStr(record.trackId)) {
+      const track = await getTrack(record.trackId, { includeDeleted: true }).catch(() => null);
+      // Ship the linked track whether LIVE or a TOMBSTONE. A track delete fans
+      // out to its linked music-video projects (collectSubscriptionsForUpdate),
+      // and a musicVideoProjects-only peer needs the tombstone to converge
+      // instead of keeping stale audio it can still (wrongly) render. The audio
+      // BYTES are dropped for a deleted track (buildMusicVideoAssetManifest reads
+      // it without includeDeleted), so only the tombstone record rides.
+      if (track) linkedTrack = sanitizeRecordForWire('track', track);
+    }
+    return {
+      kind: 'musicVideoProject', record: sanitized, assetManifest, sourceInstanceId, portosMeta,
+      ...(linkedTrack ? { linkedTrack } : {}),
+    };
   }
   return null;
 }

@@ -652,7 +652,20 @@ export async function collectSubscriptionsForUpdate(recordKind, recordId) {
   // collection edits would only reach peers via initial subscribe / manual
   // force-push, never on subsequent edits.
   if (PEER_SUBSCRIBABLE_KINDS.includes(recordKind)) {
-    return listPeerSubscriptions({ recordKind, recordId });
+    const direct = await listPeerSubscriptions({ recordKind, recordId });
+    // #1858: a track edit must ALSO re-push every music-video project that links
+    // it. The linked track's record + master-audio bytes ride the project's push
+    // (a `musicVideoProjects`-only subscriber has no direct `track` sub), so
+    // without this fan-out the project's audio would go stale on that peer until
+    // the project itself is edited. Mirrors the issue→series resolution below.
+    if (recordKind === 'track') {
+      const projectSubs = await collectMusicVideoSubsForTrack(recordId);
+      if (projectSubs.length === 0) return direct;
+      const byId = new Map(direct.map((s) => [s.id, s]));
+      for (const s of projectSubs) byId.set(s.id, s);
+      return [...byId.values()];
+    }
+    return direct;
   }
   if (recordKind === 'issue') {
     const seriesId = await getIssueSeriesId(recordId);
@@ -660,6 +673,22 @@ export async function collectSubscriptionsForUpdate(recordKind, recordId) {
     return listPeerSubscriptions({ recordKind: 'series', recordId: seriesId });
   }
   return [];
+}
+
+// #1858: every music-video-project subscription whose project links `trackId`.
+// Backs the track→project push fan-out in collectSubscriptionsForUpdate so a
+// linked-track edit reaches a `musicVideoProjects`-only subscriber. The project
+// list is small (per-install), so a full scan on the debounce path is fine —
+// same posture as getIssueSeriesId's issue scan below.
+async function collectMusicVideoSubsForTrack(trackId) {
+  if (!isNonEmptyStr(trackId)) return [];
+  const projects = await listMusicVideoProjects({ includeDeleted: false }).catch(() => []);
+  const linked = projects.filter((p) => p?.trackId === trackId && isNonEmptyStr(p?.id));
+  if (linked.length === 0) return [];
+  const subLists = await Promise.all(
+    linked.map((p) => listPeerSubscriptions({ recordKind: 'musicVideoProject', recordId: p.id })),
+  );
+  return subLists.flat();
 }
 
 async function getIssueSeriesId(issueId) {
