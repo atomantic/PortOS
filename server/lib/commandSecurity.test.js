@@ -50,6 +50,23 @@ describe('commandSecurity', () => {
         expect(ALLOWED_COMMANDS.has(cmd)).toBe(true)
       }
     })
+
+    // Anchor against known-safe entries so the allowlist can't silently lose a
+    // command everything else depends on. Iterating the array against itself
+    // (above) is tautological — these assert real, expected membership.
+    it.each(['git', 'gh', 'node', 'npm', 'pm2', 'ls', 'cat', 'echo'])(
+      'includes the known-safe command %s',
+      (cmd) => {
+        expect(ALLOWED_COMMANDS.has(cmd)).toBe(true)
+        expect(ALLOWED_COMMANDS_SORTED).toContain(cmd)
+      },
+    )
+
+    it('does NOT include dangerous commands that were never on the allowlist', () => {
+      for (const cmd of ['rm', 'env', 'sudo', 'sh', 'bash', 'eval']) {
+        expect(ALLOWED_COMMANDS.has(cmd)).toBe(false)
+      }
+    })
   })
 
   describe('DANGEROUS_SHELL_CHARS', () => {
