@@ -61,9 +61,10 @@ function Step {
 function Invoke-Logged {
     param([Parameter(ValueFromRemainingArguments)]$CmdArgs)
     $cmd = $CmdArgs[0]
-    # Avoid clobbering the automatic $args variable — use a distinct name.
-    $cmdArgs = @()
-    if ($CmdArgs.Count -gt 1) { $cmdArgs = $CmdArgs[1..($CmdArgs.Count - 1)] }
+    # Name must differ from $CmdArgs by more than case — PowerShell variable names are
+    # case-insensitive, so a $cmdArgs would alias the $CmdArgs parameter and wipe it.
+    $cmdRest = @()
+    if ($CmdArgs.Count -gt 1) { $cmdRest = $CmdArgs[1..($CmdArgs.Count - 1)] }
     # Native commands (git, npm, node) routinely write progress/status to stderr —
     # `git pull` prints "From https://github.com/..." there on every SUCCESSFUL run.
     # Under the script-level $ErrorActionPreference='Stop', PowerShell promotes that
@@ -72,7 +73,7 @@ function Invoke-Logged {
     # $LASTEXITCODE by every caller, so downgrade the error action to Continue for the
     # external call only — this assignment is function-scoped and reverts on return.
     $ErrorActionPreference = 'Continue'
-    & $cmd @cmdArgs >> $UpdateLog 2>&1
+    & $cmd @cmdRest >> $UpdateLog 2>&1
 }
 
 Write-SafeHost "===================================" -ForegroundColor Cyan
