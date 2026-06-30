@@ -23,6 +23,7 @@ import { filterSelectableModels } from '../../../utils/providers';
 import { formatDurationMin, formatBytes } from '../../../utils/formatters';
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
+import Modal from '../../ui/Modal';
 
 const statusIcons = {
   pending: <Clock size={16} aria-hidden="true" className="text-yellow-500" />,
@@ -450,50 +451,46 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
       </div>
 
       {/* Blocked Reason Modal */}
-      {showBlockedModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setShowBlockedModal(false)}>
-          <div
-            className="bg-port-card border border-port-border rounded-lg p-4 w-full max-w-md mx-4"
-            onClick={e => e.stopPropagation()}
-            role="dialog"
-            aria-labelledby="blocked-modal-title"
+      <Modal
+        open={showBlockedModal}
+        onClose={() => setShowBlockedModal(false)}
+        size="sm"
+        ariaLabelledBy="blocked-modal-title"
+        panelClassName="bg-port-card border border-port-border rounded-lg p-4"
+      >
+        <h3 id="blocked-modal-title" className="text-white font-medium mb-3 flex items-center gap-2">
+          <Ban size={18} className="text-port-error" aria-hidden="true" />
+          Mark Task as Blocked
+        </h3>
+        <p className="text-sm text-gray-400 mb-3">
+          What&apos;s blocking this task? This helps track dependencies and unblock work.
+        </p>
+        <input
+          ref={blockedInputRef}
+          type="text"
+          value={blockedReason}
+          onChange={e => setBlockedReason(e.target.value)}
+          onKeyDown={e => {
+            if (e.key === 'Enter') handleConfirmBlocked();
+          }}
+          placeholder="e.g., Waiting for API access, Needs design review..."
+          className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm mb-4"
+        />
+        <div className="flex justify-end gap-2">
+          <button
+            onClick={() => setShowBlockedModal(false)}
+            className="px-3 py-1.5 text-sm text-gray-400 hover:text-white transition-colors"
           >
-            <h3 id="blocked-modal-title" className="text-white font-medium mb-3 flex items-center gap-2">
-              <Ban size={18} className="text-port-error" aria-hidden="true" />
-              Mark Task as Blocked
-            </h3>
-            <p className="text-sm text-gray-400 mb-3">
-              What&apos;s blocking this task? This helps track dependencies and unblock work.
-            </p>
-            <input
-              ref={blockedInputRef}
-              type="text"
-              value={blockedReason}
-              onChange={e => setBlockedReason(e.target.value)}
-              onKeyDown={e => {
-                if (e.key === 'Enter') handleConfirmBlocked();
-                if (e.key === 'Escape') setShowBlockedModal(false);
-              }}
-              placeholder="e.g., Waiting for API access, Needs design review..."
-              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm mb-4"
-            />
-            <div className="flex justify-end gap-2">
-              <button
-                onClick={() => setShowBlockedModal(false)}
-                className="px-3 py-1.5 text-sm text-gray-400 hover:text-white transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleConfirmBlocked}
-                className="px-3 py-1.5 bg-port-error/20 hover:bg-port-error/30 text-port-error rounded-lg text-sm transition-colors min-h-[40px]"
-              >
-                Mark Blocked
-              </button>
-            </div>
-          </div>
+            Cancel
+          </button>
+          <button
+            onClick={handleConfirmBlocked}
+            className="px-3 py-1.5 bg-port-error/20 hover:bg-port-error/30 text-port-error rounded-lg text-sm transition-colors min-h-[40px]"
+          >
+            Mark Blocked
+          </button>
         </div>
-      )}
+      </Modal>
     </div>
   );
 }

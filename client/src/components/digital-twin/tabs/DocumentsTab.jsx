@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import * as api from '../../../services/api';
 import toast from '../../ui/Toast';
+import Modal from '../../ui/Modal';
 
 import { DOCUMENT_CATEGORIES } from '../constants';
 import { timeAgo } from '../../../utils/formatters';
@@ -305,107 +306,118 @@ export default function DocumentsTab({ onRefresh }) {
         )}
       </div>
 
-      {/* Create Document Modal */}
-      {showCreate && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-port-card rounded-lg border border-port-border w-full max-w-lg p-4 sm:p-6 max-h-[90vh] overflow-y-auto">
-            <h2 className="text-lg font-semibold text-white mb-4">Create Soul Document</h2>
+      {/* Create Document Modal — closeOnBackdrop/closeOnEsc disabled so an
+          accidental outside click or Escape can't silently discard a typed
+          draft; matches the pre-Modal markup, which had no backdrop-click or
+          Escape dismissal at all (only the explicit Cancel/Create buttons). */}
+      <Modal
+        open={showCreate}
+        onClose={() => {
+          setShowCreate(false);
+          setNewDoc({ filename: '', title: '', category: 'core', content: '' });
+        }}
+        closeOnBackdrop={false}
+        closeOnEsc={false}
+        ariaLabel="Create Soul Document"
+        panelClassName="bg-port-card rounded-lg border border-port-border p-4 sm:p-6 max-h-[90vh] overflow-y-auto"
+      >
+        <h2 className="text-lg font-semibold text-white mb-4">Create Soul Document</h2>
 
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm text-gray-400 mb-1">Filename</label>
-                <input
-                  type="text"
-                  value={newDoc.filename}
-                  onChange={(e) => setNewDoc({ ...newDoc, filename: e.target.value })}
-                  placeholder="DOCUMENT_NAME.md"
-                  className="w-full px-3 py-3 min-h-[44px] bg-port-bg border border-port-border rounded-lg text-white"
-                />
-              </div>
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm text-gray-400 mb-1">Filename</label>
+            <input
+              type="text"
+              value={newDoc.filename}
+              onChange={(e) => setNewDoc({ ...newDoc, filename: e.target.value })}
+              placeholder="DOCUMENT_NAME.md"
+              className="w-full px-3 py-3 min-h-[44px] bg-port-bg border border-port-border rounded-lg text-white"
+            />
+          </div>
 
-              <div>
-                <label className="block text-sm text-gray-400 mb-1">Title</label>
-                <input
-                  type="text"
-                  value={newDoc.title}
-                  onChange={(e) => setNewDoc({ ...newDoc, title: e.target.value })}
-                  placeholder="Document title"
-                  className="w-full px-3 py-3 min-h-[44px] bg-port-bg border border-port-border rounded-lg text-white"
-                />
-              </div>
+          <div>
+            <label className="block text-sm text-gray-400 mb-1">Title</label>
+            <input
+              type="text"
+              value={newDoc.title}
+              onChange={(e) => setNewDoc({ ...newDoc, title: e.target.value })}
+              placeholder="Document title"
+              className="w-full px-3 py-3 min-h-[44px] bg-port-bg border border-port-border rounded-lg text-white"
+            />
+          </div>
 
-              <div>
-                <label className="block text-sm text-gray-400 mb-1">Category</label>
-                <select
-                  value={newDoc.category}
-                  onChange={(e) => setNewDoc({ ...newDoc, category: e.target.value })}
-                  className="w-full px-3 py-3 min-h-[44px] bg-port-bg border border-port-border rounded-lg text-white"
-                >
-                  {Object.entries(DOCUMENT_CATEGORIES).map(([key, config]) => (
-                    <option key={key} value={key}>{config.label}</option>
-                  ))}
-                </select>
-              </div>
+          <div>
+            <label className="block text-sm text-gray-400 mb-1">Category</label>
+            <select
+              value={newDoc.category}
+              onChange={(e) => setNewDoc({ ...newDoc, category: e.target.value })}
+              className="w-full px-3 py-3 min-h-[44px] bg-port-bg border border-port-border rounded-lg text-white"
+            >
+              {Object.entries(DOCUMENT_CATEGORIES).map(([key, config]) => (
+                <option key={key} value={key}>{config.label}</option>
+              ))}
+            </select>
+          </div>
 
-              <div>
-                <label className="block text-sm text-gray-400 mb-1">Content</label>
-                <textarea
-                  value={newDoc.content}
-                  onChange={(e) => setNewDoc({ ...newDoc, content: e.target.value })}
-                  placeholder="# Document Title&#10;&#10;Content here..."
-                  rows={8}
-                  className="w-full px-3 py-3 bg-port-bg border border-port-border rounded-lg text-white font-mono text-sm"
-                />
-              </div>
-            </div>
-
-            <div className="flex flex-col-reverse sm:flex-row justify-end gap-3 mt-6">
-              <button
-                onClick={() => {
-                  setShowCreate(false);
-                  setNewDoc({ filename: '', title: '', category: 'core', content: '' });
-                }}
-                className="px-4 py-3 min-h-[44px] text-gray-400 hover:text-white transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleCreate}
-                disabled={saving}
-                className="px-4 py-3 min-h-[44px] bg-port-accent text-white rounded-lg hover:bg-port-accent/80 disabled:opacity-50"
-              >
-                {saving ? 'Creating...' : 'Create'}
-              </button>
-            </div>
+          <div>
+            <label className="block text-sm text-gray-400 mb-1">Content</label>
+            <textarea
+              value={newDoc.content}
+              onChange={(e) => setNewDoc({ ...newDoc, content: e.target.value })}
+              placeholder="# Document Title&#10;&#10;Content here..."
+              rows={8}
+              className="w-full px-3 py-3 bg-port-bg border border-port-border rounded-lg text-white font-mono text-sm"
+            />
           </div>
         </div>
-      )}
+
+        <div className="flex flex-col-reverse sm:flex-row justify-end gap-3 mt-6">
+          <button
+            onClick={() => {
+              setShowCreate(false);
+              setNewDoc({ filename: '', title: '', category: 'core', content: '' });
+            }}
+            className="px-4 py-3 min-h-[44px] text-gray-400 hover:text-white transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleCreate}
+            disabled={saving}
+            className="px-4 py-3 min-h-[44px] bg-port-accent text-white rounded-lg hover:bg-port-accent/80 disabled:opacity-50"
+          >
+            {saving ? 'Creating...' : 'Create'}
+          </button>
+        </div>
+      </Modal>
 
       {/* Delete Confirmation Modal */}
-      {deleteConfirm && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-port-card rounded-lg border border-port-border p-4 sm:p-6 w-full max-w-md">
-            <h2 className="text-lg font-semibold text-white mb-2">Delete Document?</h2>
-            <p className="text-gray-400 mb-6">
-              This action cannot be undone. The document will be permanently deleted.
-            </p>
-            <div className="flex flex-col-reverse sm:flex-row justify-end gap-3">
-              <button
-                onClick={() => setDeleteConfirm(null)}
-                className="px-4 py-3 min-h-[44px] text-gray-400 hover:text-white transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => handleDelete(deleteConfirm)}
-                className="px-4 py-3 min-h-[44px] bg-red-500 text-white rounded-lg hover:bg-red-600"
-              >
-                Delete
-              </button>
-            </div>
-          </div>
+      <Modal
+        open={!!deleteConfirm}
+        onClose={() => setDeleteConfirm(null)}
+        size="sm"
+        ariaLabel="Delete Document?"
+        panelClassName="bg-port-card rounded-lg border border-port-border p-4 sm:p-6"
+      >
+        <h2 className="text-lg font-semibold text-white mb-2">Delete Document?</h2>
+        <p className="text-gray-400 mb-6">
+          This action cannot be undone. The document will be permanently deleted.
+        </p>
+        <div className="flex flex-col-reverse sm:flex-row justify-end gap-3">
+          <button
+            onClick={() => setDeleteConfirm(null)}
+            className="px-4 py-3 min-h-[44px] text-gray-400 hover:text-white transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={() => handleDelete(deleteConfirm)}
+            className="px-4 py-3 min-h-[44px] bg-red-500 text-white rounded-lg hover:bg-red-600"
+          >
+            Delete
+          </button>
         </div>
-      )}
+      </Modal>
     </div>
   );
 }
