@@ -31,18 +31,19 @@ describe('providerModels', () => {
   });
 
   describe('isOpencodeCommand', () => {
-    it('matches the bare binary and path/extension variants', () => {
+    it('matches the bare binary, a path, and a Windows .exe', () => {
       expect(isOpencodeCommand('opencode')).toBe(true);
       expect(isOpencodeCommand('/opt/homebrew/bin/opencode')).toBe(true);
       expect(isOpencodeCommand('./bin/opencode')).toBe(true);
       expect(isOpencodeCommand('C:\\tools\\opencode.exe')).toBe(true);
-      expect(isOpencodeCommand('opencode.cmd')).toBe(true);
     });
 
-    it('rejects other commands and non-strings', () => {
+    it('rejects other commands, batch shims, and non-strings', () => {
       expect(isOpencodeCommand('claude')).toBe(false);
       expect(isOpencodeCommand('/usr/bin/codex')).toBe(false);
       expect(isOpencodeCommand('opencode-wrapper')).toBe(false);
+      // .cmd/.bat shims aren't directly spawnable (shell:false), so not matched
+      expect(isOpencodeCommand('opencode.cmd')).toBe(false);
       expect(isOpencodeCommand('')).toBe(false);
       expect(isOpencodeCommand(null)).toBe(false);
       expect(isOpencodeCommand(undefined)).toBe(false);

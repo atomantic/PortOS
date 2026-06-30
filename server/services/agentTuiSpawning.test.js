@@ -106,10 +106,10 @@ vi.mock('../lib/providerModels.js', () => ({
   resolveBedrockCliModel: vi.fn((m) => m),
   // Mirror the real opencode-command basename match (fully unit-tested in
   // providerModels.test.js).
-  isOpencodeCommand: vi.fn((c) => typeof c === 'string' && c.split(/[\\/]/).pop().toLowerCase().replace(/\.(exe|cmd|bat)$/, '') === 'opencode'),
+  isOpencodeCommand: vi.fn((c) => typeof c === 'string' && c.split(/[\\/]/).pop().toLowerCase().replace(/\.exe$/, '') === 'opencode'),
   // Mirror the real ollama/ namespacing for opencode providers (fully unit-
   // tested in providerModels.test.js).
-  prefixOpencodeModel: vi.fn((p, m) => (typeof p?.command === 'string' && p.command.split(/[\\/]/).pop().toLowerCase().replace(/\.(exe|cmd|bat)$/, '') === 'opencode' && p?.ollamaBacked === true && m && !String(m).startsWith('ollama/')) ? `ollama/${m}` : m),
+  prefixOpencodeModel: vi.fn((p, m) => (typeof p?.command === 'string' && p.command.split(/[\\/]/).pop().toLowerCase().replace(/\.exe$/, '') === 'opencode' && p?.ollamaBacked === true && m && !String(m).startsWith('ollama/')) ? `ollama/${m}` : m),
   // Mirror hasModelFlag (real impl unit-tested in providerModels.test.js).
   hasModelFlag: vi.fn((a) => Array.isArray(a) && a.some((x) => x === '--model' || x === '-m' || (typeof x === 'string' && (x.startsWith('--model=') || x.startsWith('-m=')))))
 }));

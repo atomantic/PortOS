@@ -20,15 +20,17 @@ export const resolveCliModel = (model) => isCodexConfiguredDefault(model) ? null
 /**
  * True when a provider command points at the OpenCode binary — matching the bare
  * `opencode` on PATH OR an absolute/relative path to it (`/opt/homebrew/bin/opencode`,
- * common when the service PATH can't resolve the CLI), and a Windows `.exe`/`.cmd`/`.bat`
- * shim. The OpenCode arg-builder branches key on this rather than `command === 'opencode'`
- * so a path-configured provider isn't misrouted into the Claude-style invocation.
+ * common when the service PATH can't resolve the CLI), with an optional Windows `.exe`
+ * suffix. The OpenCode arg-builder branches key on this rather than `command === 'opencode'`
+ * so a path-configured provider isn't misrouted into the Claude-style invocation. Only
+ * `.exe` is stripped (not `.cmd`/`.bat`), matching the runner allowlist and the
+ * `shell: false` spawn path — a batch shim isn't directly spawnable.
  * @param {string|null|undefined} command
  * @returns {boolean}
  */
 export function isOpencodeCommand(command) {
   if (typeof command !== 'string' || command === '') return false;
-  const base = command.split(/[\\/]/).pop().toLowerCase().replace(/\.(exe|cmd|bat)$/, '');
+  const base = command.split(/[\\/]/).pop().toLowerCase().replace(/\.exe$/, '');
   return base === 'opencode';
 }
 
