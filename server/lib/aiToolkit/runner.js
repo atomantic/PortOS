@@ -293,13 +293,15 @@ export function createRunnerService(config = {}) {
 
           await atomicWrite(metadataPath, metadata);
 
+          // Isolate the completion hooks + onComplete from the outer catch — a
+          // throwing onRunCompleted must NOT be reinterpreted as a finalization
+          // failure that flips a successful run to success:false for the caller.
           if (metadata.success) {
-            hooks.onRunCompleted?.(metadata, output);
+            safeSettle(() => hooks.onRunCompleted?.(metadata, output), `Run ${runId} onRunCompleted hook`);
           } else {
-            hooks.onRunFailed?.(metadata, metadata.error, output);
+            safeSettle(() => hooks.onRunFailed?.(metadata, metadata.error, output), `Run ${runId} onRunFailed hook`);
           }
-
-          onComplete?.(metadata);
+          safeSettle(() => onComplete?.(metadata), `Run ${runId} onComplete`);
         } catch (err) {
           console.error(`❌ Run ${runId} close handler error: ${err.message}`);
           const failMetadata = {
@@ -507,8 +509,10 @@ export function createRunnerService(config = {}) {
 
           await atomicWrite(metadataPath, metadata);
 
-          hooks.onRunFailed?.(metadata, metadata.error, output);
-          onComplete?.(metadata);
+          // Isolate the hook + onComplete so a throwing onRunFailed doesn't
+          // bounce into the recovery path and call onRunFailed a second time.
+          safeSettle(() => hooks.onRunFailed?.(metadata, metadata.error, output), `Run ${runId} onRunFailed hook`);
+          safeSettle(() => onComplete?.(metadata), `Run ${runId} onComplete`);
         } catch (handlerErr) {
           console.error(`❌ Run ${runId} failure handler error: ${handlerErr.message}`);
           // Still settle callers waiting on onComplete so a persistence/hook
