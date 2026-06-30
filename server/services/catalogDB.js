@@ -977,6 +977,33 @@ export async function linkIngredientsToSeries(seriesId, ingredients = []) {
   return list;
 }
 
+// Catalog ingredient `type` → Creative Director ref role (#1808). CD projects
+// reuse the same convergence data model (catalog_ingredient_refs) as series; the
+// role vocabulary is CD-flavored (location/prop) so the Catalog "Appears in"
+// panel and any future casting UI can label a CD link meaningfully. Anything
+// outside this map (idea/concept/user-defined types) links as a generic
+// 'reference'. Lives next to seriesRefRoleForType so every remix target shares
+// one role-vocabulary home.
+const CD_REF_ROLE_BY_TYPE = Object.freeze({
+  character: 'cast',
+  place: 'location',
+  object: 'prop',
+  scene: 'scene',
+});
+export const cdRefRoleForType = (type) => CD_REF_ROLE_BY_TYPE[type] || 'reference';
+
+// Link a batch of already-resolved catalog ingredients to a Creative Director
+// project via catalog_ingredient_refs with ref_kind='creative-director' (#1808)
+// — the reserved-but-previously-unwritten ref kind. Mirrors
+// linkIngredientsToSeries; the inserts are independent so they fan out. Returns
+// the ingredients actually linked (those with an id).
+export async function linkIngredientsToCreativeDirector(projectId, ingredients = []) {
+  const list = Array.isArray(ingredients) ? ingredients.filter((ing) => ing && ing.id) : [];
+  if (list.length === 0) return [];
+  await Promise.all(list.map((ing) => linkIngredientToRef(ing.id, 'creative-director', projectId, cdRefRoleForType(ing.type))));
+  return list;
+}
+
 export async function unlinkIngredientFromRef(ingredientId, refKind, refId, role) {
   // Soft-delete via UPDATE so the row stays around as a tombstone and the
   // trg_catalog_ref_sync_seq trigger bumps sync_sequence — peers pick the
@@ -1012,6 +1039,22 @@ export async function listIngredientsForRef(refKind, refId) {
     [refKind, refId],
   );
   return result.rows.map((row) => ({ ingredient: rowToIngredient(row), role: row.role }));
+}
+
+// Resolve a list of ingredient ids to live ingredient records in a single batch
+// query (listIngredients already excludes soft-deleted rows), de-duped and
+// re-ordered to the caller's pick order so a composed seed/cast reads in the
+// order the user selected. Missing/deleted ids are simply absent and skipped.
+// Shared by every remix target (#1761 Story Builder seed, #1808 Creative
+// Director cast) so the resolve logic lives in one place next to the data layer.
+export async function resolveIngredientsByIds(ids) {
+  const list = [...new Set((Array.isArray(ids) ? ids : [])
+    .filter((id) => typeof id === 'string' && id.trim())
+    .map((id) => id.trim()))];
+  if (list.length === 0) return [];
+  const { items } = await listIngredients({ ids: list, limit: list.length });
+  const byId = new Map(items.map((ing) => [ing.id, ing]));
+  return list.map((id) => byId.get(id)).filter(Boolean);
 }
 
 
