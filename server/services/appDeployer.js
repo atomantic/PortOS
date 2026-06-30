@@ -2,6 +2,7 @@ import { spawn } from 'child_process';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { NON_PM2_TYPES } from './streamingDetect.js';
+import { getAppById } from './apps.js';
 
 export const DEPLOY_FLAGS = ['--ios', '--macos', '--watch', '--all', '--skip-tests'];
 const VALID_FLAGS = new Set(DEPLOY_FLAGS);
@@ -109,6 +110,45 @@ export function deployApp(app, flags, emit) {
       resolve(result);
     });
   });
+}
+
+/**
+ * Resolve an app by id, validate it has a deploy script, and run the deploy —
+ * the orchestration the `app:deploy` socket handler used to do inline. Pulling
+ * it into the service makes it unit-testable and HTTP-callable; the caller only
+ * supplies a streaming-output callback and consumes the terminal outcome.
+ *
+ * Returns a discriminated outcome so the caller can map it to the right event:
+ *   - `{ ok: false, error }` — the request was invalid (app not found, or no
+ *     deploy.sh) and never started a deploy (caller emits `app:deploy:error`).
+ *   - `{ ok: true, success, code }` — the deploy ran to completion (caller emits
+ *     `app:deploy:complete`).
+ *
+ * @param {string} appId - Id of the app to deploy
+ * @param {string[]} flags - CLI flags forwarded to deploy.sh
+ * @param {object} [opts]
+ * @param {(type: string, payload: object) => void} [opts.onOutput] - Streaming
+ *   deploy output/status/error frames (same `(type, data)` shape `deployApp` emits)
+ * @param {Function} [opts.resolveApp] - Injectable app lookup (defaults to getAppById);
+ *   a test seam so the orchestration is unit-testable without a real app store.
+ * @param {Function} [opts.checkScript] - Injectable deploy-script check (defaults to hasDeployScript).
+ * @param {Function} [opts.runDeploy] - Injectable deploy runner (defaults to deployApp).
+ * @returns {Promise<{ok: false, error: string} | {ok: true, success: boolean, code: number}>}
+ */
+export async function runDeployFlow(
+  appId,
+  flags = [],
+  { onOutput, resolveApp = getAppById, checkScript = hasDeployScript, runDeploy = deployApp } = {}
+) {
+  const app = await resolveApp(appId);
+  if (!app) return { ok: false, error: 'App not found' };
+  if (!checkScript(app)) return { ok: false, error: 'No deploy.sh found for this app' };
+
+  console.log(`🚀 Deploy started for ${app.name} [${flags.join(', ') || 'default'}]`);
+  const result = await runDeploy(app, flags, onOutput || (() => {}));
+  console.log(`${result.success ? '✅' : '❌'} Deploy ${result.success ? 'complete' : 'failed'} for ${app.name}`);
+
+  return { ok: true, success: result.success, code: result.code };
 }
 
 /**

@@ -3,7 +3,7 @@ import { createReadStream } from 'fs';
 import { stat } from 'fs/promises';
 import { join } from 'path';
 import { PATHS, pathExists } from '../lib/fileUtils.js';
-import { ServerError } from '../lib/errorHandler.js';
+import { ServerError, getErrorCode } from '../lib/errorHandler.js';
 
 const router = Router();
 const AVATAR_DIR = join(PATHS.data, 'avatar');
@@ -45,7 +45,16 @@ router.get('/model.glb', async (req, res) => {
   stream.on('error', (err) => {
     console.warn(`⚠️ Avatar stream error: ${err.code || err.message}`);
     if (!res.headersSent) {
-      res.status(err.code === 'ENOENT' ? 404 : 500).json({ error: 'Avatar model unavailable' });
+      // The stream 'error' fires outside the asyncHandler promise chain, so a
+      // throw here would crash the process instead of bubbling to
+      // errorMiddleware. Emit the SAME { error, code, timestamp } envelope
+      // errorMiddleware stamps everywhere else so clients see a consistent shape.
+      const status = err.code === 'ENOENT' ? 404 : 500;
+      res.status(status).json({
+        error: 'Avatar model unavailable',
+        code: getErrorCode(status),
+        timestamp: Date.now()
+      });
     } else {
       res.destroy(err);
     }
