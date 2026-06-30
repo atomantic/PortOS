@@ -26,12 +26,21 @@ describe('parseTsMs', () => {
     expect(parseTsMs({})).toBeNull();
   });
 
-  it('orders two parseable-but-different-format timestamps by epoch, not lexically', () => {
-    // Lexicographically 'Jan' < 'Feb' is false but here the ISO form sorts the
-    // other way from the RFC form — the point is both resolve to the same ms.
+  it('a same-instant ISO and RFC string parse to the identical epoch ms', () => {
     const iso = parseTsMs('2026-01-02T03:04:05.000Z');
     const rfc = parseTsMs('Fri, 02 Jan 2026 03:04:05 GMT');
     expect(iso).toBe(rfc);
+  });
+
+  it('orders two different-format timestamps by epoch even when lexical order disagrees', () => {
+    // The ISO string is the LATER instant (2030) but sorts EARLIER as a raw
+    // string because '2' < 'F'. A lexicographic compare would therefore call the
+    // 2030 ISO value "smaller/earlier" than the 2026 RFC value — inverting the
+    // true order. Epoch parsing is what keeps the polarity correct.
+    const isoLater = '2030-01-01T00:00:00.000Z';
+    const rfcEarlier = 'Fri, 02 Jan 2026 03:04:06 GMT';
+    expect(isoLater < rfcEarlier).toBe(true);                          // lexical: ISO sorts first
+    expect(parseTsMs(isoLater)).toBeGreaterThan(parseTsMs(rfcEarlier)); // epoch: ISO is later
   });
 });
 
