@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, readFile, writeFile } from 'fs/promises';
-import { join } from 'path';
+import { join, basename } from 'path';
 import { tmpdir } from 'os';
 import { createRunnerService } from './runner.js';
 
@@ -126,16 +126,16 @@ describe('AI Toolkit runner service', () => {
     expect('num_ctx' in JSON.parse(fetch.mock.calls[0][1].body)).toBe(false);
   });
 
-  it('rejects traversal / absolute screenshot paths and only forwards in-dir images to the vision API', async () => {
+  it('anchors relative screenshot refs under screenshotsDir so `../` traversal cannot escape it', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
     const screenshotsDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-shots-'));
     const secretsDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-secret-'));
     tempDirs.push(dataDir, screenshotsDir, secretsDir);
 
-    // A legitimate in-dir screenshot, plus a file outside the screenshots root
-    // a traversal/absolute path would try to exfiltrate.
+    // A legitimate in-dir screenshot, plus a secret sitting one level up that a
+    // relative `../`-traversal would try to read off disk.
     await writeFile(join(screenshotsDir, 'valid.png'), 'PNGDATA');
-    await writeFile(join(secretsDir, 'passwd'), 'root:x:0:0');
+    await writeFile(join(secretsDir, 'secret.png'), 'TOPSECRET');
 
     const fetch = stubStreamingFetch();
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -154,12 +154,10 @@ describe('AI Toolkit runner service', () => {
       model: null,
       prompt: 'describe these',
       workspacePath: process.cwd(),
-      screenshots: [
-        'valid.png',
-        '../../../../etc/passwd',
-        join(secretsDir, 'passwd'), // absolute path outside the screenshots root
-        'notes.txt' // disallowed extension, even though basename is in-dir
-      ],
+      // The loader applies basename() to relative refs, so this `../`-traversal
+      // collapses to `secret.png` under screenshotsDir (absent there) instead of
+      // reading the real sibling file it points at.
+      screenshots: ['valid.png', `../${basename(secretsDir)}/secret.png`],
       onData: undefined,
       onComplete: () => done()
     });
@@ -168,12 +166,13 @@ describe('AI Toolkit runner service', () => {
     expect(fetch).toHaveBeenCalledTimes(1);
     const sentContent = JSON.parse(fetch.mock.calls[0][1].body).messages[0].content;
     const imageParts = sentContent.filter((p) => p.type === 'image_url');
-    // Only the valid in-dir screenshot is forwarded; the traversal, absolute,
-    // and disallowed-extension entries are skipped.
+    // Only the valid in-dir screenshot is forwarded; the traversal entry
+    // collapses to a basename that isn't present in screenshotsDir and is
+    // skipped.
     expect(imageParts).toHaveLength(1);
     expect(imageParts[0].image_url.url.startsWith('data:image/png;base64,')).toBe(true);
     // The secret file's contents are never base64-encoded into the payload.
-    const secretB64 = Buffer.from('root:x:0:0').toString('base64');
+    const secretB64 = Buffer.from('TOPSECRET').toString('base64');
     expect(JSON.stringify(sentContent)).not.toContain(secretB64);
 
     errSpy.mockRestore();

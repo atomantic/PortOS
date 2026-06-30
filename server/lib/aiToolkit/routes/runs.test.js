@@ -163,4 +163,37 @@ describe('POST /api/runs — fallback-model execution', () => {
     expect(res.status).toBe(400);
     expect(runnerService.createRun).not.toHaveBeenCalled();
   });
+
+  describe('screenshot path sanitization (#1870)', () => {
+    it('rejects a traversal screenshot path with 400 before reaching the runner', async () => {
+      const { app, runnerService } = makeApp(runData({ providerType: 'api', defaultModel: 'd' }));
+      const res = await request(app)
+        .post('/api/runs')
+        .send({ providerId: 'p1', prompt: 'hi', screenshots: ['../../../../etc/passwd'] });
+      expect(res.status).toBe(400);
+      expect(runnerService.createRun).not.toHaveBeenCalled();
+      expect(runnerService.executeApiRun).not.toHaveBeenCalled();
+    });
+
+    it('rejects an absolute non-image path with 400', async () => {
+      const { app, runnerService } = makeApp(runData({ providerType: 'api', defaultModel: 'd' }));
+      const res = await request(app)
+        .post('/api/runs')
+        .send({ providerId: 'p1', prompt: 'hi', screenshots: ['/etc/passwd'] });
+      expect(res.status).toBe(400);
+      expect(runnerService.createRun).not.toHaveBeenCalled();
+    });
+
+    it('rebases a legit absolute screenshots path to its basename and forwards it to the runner', async () => {
+      const { app, runnerService } = makeApp(runData({ providerType: 'api', defaultModel: 'd' }));
+      const res = await request(app)
+        .post('/api/runs')
+        .send({ providerId: 'p1', prompt: 'hi', screenshots: ['/home/u/portos/data/screenshots/grab.png'] });
+      expect(res.status).toBe(202);
+      // Both createRun and executeApiRun receive the sanitized basename, never
+      // the caller-supplied absolute path.
+      expect(runnerService.createRun.mock.calls[0][0].screenshots).toEqual(['grab.png']);
+      expect(runnerService.executeApiRun.mock.calls[0][0].screenshots).toEqual(['grab.png']);
+    });
+  });
 });
