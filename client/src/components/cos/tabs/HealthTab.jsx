@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { RefreshCw, CheckCircle, AlertCircle, TrendingUp, Brain, Zap, Database, Clock, Trophy, Activity } from 'lucide-react';
 import * as api from '../../../services/api';
+import { formatDateTime } from '../../../utils/formatters';
 import ProviderStatusCard from './ProviderStatusCard';
 
 export default function HealthTab({ health, onCheck }) {
@@ -130,7 +131,7 @@ export default function HealthTab({ health, onCheck }) {
               <h3 className="text-sm font-semibold text-white">System Health</h3>
               {health?.lastCheck && (
                 <p className="text-xs text-gray-500">
-                  Last check: {new Date(health.lastCheck).toLocaleString()}
+                  Last check: {formatDateTime(health.lastCheck)}
                 </p>
               )}
             </div>
@@ -369,7 +370,7 @@ export default function HealthTab({ health, onCheck }) {
       {/* Last Updated */}
       {learning?.lastUpdated && (
         <p className="text-xs text-gray-600 text-center">
-          Learning data updated: {new Date(learning.lastUpdated).toLocaleString()}
+          Learning data updated: {formatDateTime(learning.lastUpdated)}
         </p>
       )}
     </div>

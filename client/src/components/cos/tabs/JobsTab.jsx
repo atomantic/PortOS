@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Plus, RefreshCw, Play, Trash2, ChevronDown, ChevronUp, Clock, ToggleLeft, ToggleRight, Edit3, Save, X, Terminal } from 'lucide-react';
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
-import { timeAgo } from '../../../utils/formatters';
+import { timeAgo, formatDateTime } from '../../../utils/formatters';
 import { CRON_PRESETS, describeCron } from '../../../utils/cronHelpers';
 import { filterSelectableModels } from '../../../utils/providers';
 import ProviderModelSelector from '../../ProviderModelSelector';
@@ -750,7 +750,7 @@ export default function JobsTab() {
           <span>{stats.totalRuns} total runs</span>
           {stats.nextDue && (
             <span className={stats.nextDue.isDue ? 'text-port-warning' : ''}>
-              Next: {stats.nextDue.jobName} ({stats.nextDue.isDue ? 'due now' : new Date(stats.nextDue.nextDueAt).toLocaleString()})
+              Next: {stats.nextDue.jobName} ({stats.nextDue.isDue ? 'due now' : formatDateTime(stats.nextDue.nextDueAt)})
             </span>
           )}
         </div>

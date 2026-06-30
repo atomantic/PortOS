@@ -36,7 +36,7 @@ import TagPicker from '../components/TagPicker';
 import GenericIngredientFields from '../components/GenericIngredientFields';
 import { getCatalogType, CATALOG_BADGE_BY_ID, RELATION_KINDS, getRelationKind } from '../lib/catalogTypes';
 import { useCatalogTypes } from '../hooks/useCatalogTypes.jsx';
-import { timeAgo } from '../utils/formatters';
+import { timeAgo, formatDateTime } from '../utils/formatters';
 
 // Per-type editor field list + badge color now come from the shared registry
 // (`client/src/lib/catalogTypes.js`). Each editor entry is `[key, label, kind]`
@@ -1216,7 +1216,7 @@ function SourcesPanel({ sources }) {
           {list.map((s, i) => (
             <li key={s.scrapId || i} className="text-xs text-gray-300 flex items-center justify-between gap-2">
               <span className="font-mono truncate" title={s.scrapId}>{s.scrapId}</span>
-              {s.extractedAt && <span className="text-gray-500 whitespace-nowrap">{new Date(s.extractedAt).toLocaleString()}</span>}
+              {s.extractedAt && <span className="text-gray-500 whitespace-nowrap">{formatDateTime(s.extractedAt)}</span>}
             </li>
           ))}
         </ul>

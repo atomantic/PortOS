@@ -12,6 +12,7 @@ import { useSwipeNav } from '../../hooks/useSwipeNav';
 import { isEditableTarget } from '../../hooks/useKeyboardShortcuts';
 import { copyToClipboard } from '../../lib/clipboard';
 import { IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
+import { formatDateTime } from '../../utils/formatters';
 
 // Intentionally NOT migrated to <ui/Modal> or <components/Drawer>. The
 // prev/next buttons sit as viewport-edge siblings of the card (not children
@@ -209,7 +210,7 @@ export default function MediaLightbox({
     ['Cleaned', cleanedLabel],
     ['Frames', item.numFrames],
     ['FPS', item.fps],
-    ['Created', item.createdAt && new Date(item.createdAt).toLocaleString()],
+    ['Created', item.createdAt && formatDateTime(item.createdAt)],
   ].filter(([, v]) => v != null && v !== '');
 
   const cardClasses = fullScreen

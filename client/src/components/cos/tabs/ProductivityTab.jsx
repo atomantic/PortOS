@@ -16,6 +16,7 @@ import {
   Award
 } from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
+import { formatDateTime } from '../../../utils/formatters';
 import * as api from '../../../services/api';
 import DailyTrendsChart from '../DailyTrendsChart';
 
@@ -423,7 +424,7 @@ export default function ProductivityTab() {
           {/* Last Updated */}
           {data.lastUpdated && (
             <div className="text-xs text-gray-600 text-center pt-4 border-t border-port-border">
-              Last updated: {new Date(data.lastUpdated).toLocaleString()}
+              Last updated: {formatDateTime(data.lastUpdated)}
             </div>
           )}
         </>

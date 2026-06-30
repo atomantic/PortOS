@@ -21,6 +21,7 @@ import * as api from '../../../services/api';
 import { copyToClipboard } from '../../../lib/clipboard';
 import toast from '../../ui/Toast';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
+import { formatDateTime } from '../../../utils/formatters';
 
 export default function AutobiographyTab({ onRefresh }) {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -293,7 +294,7 @@ export default function AutobiographyTab({ onRefresh }) {
           </div>
           {config.lastPromptAt && (
             <p className="text-xs text-gray-500">
-              Last prompt: {new Date(config.lastPromptAt).toLocaleString()}
+              Last prompt: {formatDateTime(config.lastPromptAt)}
             </p>
           )}
         </div>

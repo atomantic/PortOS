@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { AlertCircle, RefreshCw } from 'lucide-react';
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
+import { formatDateTime } from '../../../utils/formatters';
 import Banner from '../../ui/Banner';
 import { CodeReviewDefaultsProvider } from '../../../hooks/useCodeReviewDefaults';
 import AppTaskTypeSection from './schedule/AppTaskTypeSection';
@@ -182,7 +183,7 @@ export default function ScheduleTab({ apps }) {
 
       {schedule.lastUpdated && (
         <div className="text-xs text-gray-500 text-right">
-          Schedule last updated: {new Date(schedule.lastUpdated).toLocaleString()}
+          Schedule last updated: {formatDateTime(schedule.lastUpdated)}
         </div>
       )}
 

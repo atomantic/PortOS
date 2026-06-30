@@ -12,6 +12,7 @@ import {
   TIMEOUT_INPUT_MIN_MS,
   TIMEOUT_INPUT_MAX_MS,
   TIMEOUT_INPUT_STEP_MS,
+  formatDateTime,
 } from '../utils/formatters';
 import SettingsTabsHeader from '../components/settings/SettingsTabsHeader';
 import CodeReviewDefaultsPanel from '../components/providers/CodeReviewDefaultsPanel';
@@ -661,7 +662,7 @@ export default function AIProviders() {
                   <div className="min-w-0">
                     <p className="text-sm text-white break-words">{run.prompt}</p>
                     <p className="text-xs text-gray-500 break-words">
-                      {run.providerName} • {run.workspaceName || 'No workspace'} • {new Date(run.startTime).toLocaleString()}
+                      {run.providerName} • {run.workspaceName || 'No workspace'} • {formatDateTime(run.startTime)}
                     </p>
                   </div>
                 </div>

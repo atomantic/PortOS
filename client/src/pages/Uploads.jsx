@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { Upload, Trash2, Download, FileText, Image, File, FolderOpen, RefreshCw } from 'lucide-react';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
+import { formatDateTime } from '../utils/formatters';
 import toast from '../components/ui/Toast';
 import BrailleSpinner from '../components/BrailleSpinner';
 import * as api from '../services/api';
@@ -266,7 +267,7 @@ export default function Uploads() {
                     {file.sizeFormatted} &middot; {file.mimeType}
                   </p>
                   <p className="text-gray-600 text-xs">
-                    Uploaded {new Date(file.createdAt).toLocaleString()}
+                    Uploaded {formatDateTime(file.createdAt)}
                   </p>
                 </div>
 

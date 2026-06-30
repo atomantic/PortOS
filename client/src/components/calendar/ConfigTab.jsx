@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { Plus, Trash2, RefreshCw, Globe, Calendar, Eye, EyeOff, ChevronDown, ChevronRight, Search, Key, ExternalLink, Wand2, Monitor } from 'lucide-react';
 import toast from '../ui/Toast';
 import * as api from '../../services/api';
+import { formatDateTime } from '../../utils/formatters';
 import FeatureProviderPicker from '../FeatureProviderPicker';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
@@ -299,7 +300,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
                       </div>
                       {account.lastSyncAt && (
                         <div className="text-xs text-gray-600">
-                          Last sync: {new Date(account.lastSyncAt).toLocaleString()} ({account.lastSyncStatus})
+                          Last sync: {formatDateTime(account.lastSyncAt)} ({account.lastSyncStatus})
                         </div>
                       )}
                     </div>

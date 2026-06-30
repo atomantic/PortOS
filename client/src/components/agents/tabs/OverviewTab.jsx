@@ -7,7 +7,7 @@ import { filterSelectableModels } from '../../../utils/providers';
 import BrailleSpinner from '../../BrailleSpinner';
 import { PERSONALITY_STYLES, DEFAULT_PERSONALITY, DEFAULT_AVATAR, PLATFORM_TYPES, ACCOUNT_STATUSES } from '../constants';
 import { useCooldownTick } from '../../../hooks/useCooldownTick';
-import { formatCooldown } from '../../../utils/formatters';
+import { formatCooldown, formatDateTime } from '../../../utils/formatters';
 
 export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
   const navigate = useNavigate();
@@ -706,7 +706,7 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
                           </div>
                           <p className="text-xs text-gray-500">
                             {platform?.label}
-                            {account.lastActivity && ` • Last activity: ${new Date(account.lastActivity).toLocaleString()}`}
+                            {account.lastActivity && ` • Last activity: ${formatDateTime(account.lastActivity)}`}
                           </p>
                           {account.platformData?.claimUrl && account.status === 'pending' && (
                             <a href={account.platformData.claimUrl} target="_blank" rel="noopener noreferrer" className="text-port-accent underline text-xs mt-1 inline-block">
