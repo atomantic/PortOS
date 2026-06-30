@@ -76,10 +76,14 @@ const router = Router();
 // GET /api/cos/tasks - Get all tasks (user + internal), grouped by source.
 //
 // Backward-compatible by default: with no pagination params it returns the full
-// `{ user, cos }` structure every existing consumer expects. When a client
-// passes `limit`/`offset`, each source's `tasks` array is bounded to that window
-// (the `grouped` buckets still reflect the full set) and a `pagination` block is
-// added so the caller can page without pulling an unbounded list.
+// `{ user, cos }` structure every existing consumer expects (tasks + grouped
+// buckets + awaiting/auto-approved derived lists). When a client passes
+// `limit`/`offset`, each source is reduced to a *genuinely bounded* shape: the
+// windowed `tasks` slice plus scalar metadata only. The full-set derived
+// collections (`grouped`, `autoApproved`, `awaitingApproval`) are dropped from
+// the paginated branch — keeping them would re-include the entire queue the
+// caller asked to page through, defeating the bound. A `pagination` block with
+// the true per-source totals is added so the caller can page.
 router.get('/tasks', asyncHandler(async (req, res) => {
   const tasks = await cos.getAllTasks();
   if (!isPaginationRequested(req.query)) {
@@ -87,8 +91,12 @@ router.get('/tasks', asyncHandler(async (req, res) => {
   }
   const { limit, offset } = parsePagination(req.query, { defaultLimit: 50, maxLimit: 500 });
   const sliceSource = (src) => {
-    const list = Array.isArray(src?.tasks) ? src.tasks : [];
-    return { ...src, tasks: list.slice(offset, offset + limit) };
+    if (!src || typeof src !== 'object') return { tasks: [] };
+    // Strip the full-set derived collections so the response is actually bounded;
+    // keep only scalar metadata (file/exists/type) + the windowed task slice.
+    const { tasks: list, grouped, autoApproved, awaitingApproval, ...meta } = src;
+    const arr = Array.isArray(list) ? list : [];
+    return { ...meta, tasks: arr.slice(offset, offset + limit) };
   };
   const userTotal = Array.isArray(tasks?.user?.tasks) ? tasks.user.tasks.length : 0;
   const cosTotal = Array.isArray(tasks?.cos?.tasks) ? tasks.cos.tasks.length : 0;

@@ -244,11 +244,21 @@ describe('CoS Routes', () => {
       const mockTasks = {
         user: {
           tasks: [{ id: 'u1' }, { id: 'u2' }, { id: 'u3' }],
-          grouped: { pending: [{ id: 'u1' }] }
+          grouped: { pending: [{ id: 'u1' }, { id: 'u2' }, { id: 'u3' }] },
+          awaitingApproval: [{ id: 'u1' }],
+          autoApproved: [{ id: 'u2' }],
+          file: 'data/cos/user-tasks.md',
+          exists: true,
+          type: 'user'
         },
         cos: {
           tasks: [{ id: 'c1' }, { id: 'c2' }],
-          grouped: {}
+          grouped: { pending: [{ id: 'c1' }, { id: 'c2' }] },
+          awaitingApproval: [],
+          autoApproved: [],
+          file: 'data/cos/cos-tasks.md',
+          exists: true,
+          type: 'internal'
         }
       };
       cos.getAllTasks.mockResolvedValue(mockTasks);
@@ -259,8 +269,14 @@ describe('CoS Routes', () => {
       // Inner task arrays are windowed...
       expect(response.body.user.tasks).toEqual([{ id: 'u2' }]);
       expect(response.body.cos.tasks).toEqual([{ id: 'c2' }]);
-      // ...but grouped buckets keep reflecting the full set.
-      expect(response.body.user.grouped).toEqual({ pending: [{ id: 'u1' }] });
+      // ...scalar metadata is preserved...
+      expect(response.body.user).toMatchObject({ file: 'data/cos/user-tasks.md', exists: true, type: 'user' });
+      // ...and the full-set derived collections are dropped so the response is
+      // genuinely bounded (not re-leaked through grouped/awaiting/auto-approved).
+      expect(response.body.user).not.toHaveProperty('grouped');
+      expect(response.body.user).not.toHaveProperty('awaitingApproval');
+      expect(response.body.user).not.toHaveProperty('autoApproved');
+      expect(response.body.cos).not.toHaveProperty('grouped');
       expect(response.body.pagination).toEqual({
         limit: 1,
         offset: 1,
