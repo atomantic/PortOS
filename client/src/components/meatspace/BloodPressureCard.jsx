@@ -89,7 +89,7 @@ export default function BloodPressureCard() {
         {!showForm && (
           <button
             onClick={openForm}
-            className="flex items-center gap-1 text-xs text-port-accent hover:text-blue-300 transition-colors"
+            className="flex items-center gap-1 text-xs text-port-accent hover:text-port-accent/80 transition-colors"
           >
             <Plus size={14} /> Add Reading
           </button>
