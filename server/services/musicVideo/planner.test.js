@@ -41,12 +41,14 @@ beforeEach(() => {
 });
 
 describe('validSections', () => {
-  it('keeps only sections with a positive forward span', () => {
+  it('keeps only sections with a positive forward span within the scene-schema bounds', () => {
     const result = validSections([
       { label: 'A', startSec: 0, endSec: 5 },
       { label: 'bad-order', startSec: 5, endSec: 5 },
       { label: 'bad-reverse', startSec: 8, endSec: 3 },
       { label: 'missing-times' },
+      { label: 'negative-start', startSec: -1, endSec: 5 },
+      { label: 'over-max', startSec: 0, endSec: 36001 },
       null,
     ]);
     expect(result).toEqual([{ label: 'A', startSec: 0, endSec: 5 }]);
@@ -113,28 +115,40 @@ describe('planProject', () => {
     await expect(planProject('mv-1')).rejects.toMatchObject({ status: 422, code: 'NOT_ANALYZED' });
   });
 
-  it('seeds one scene per section and skips prompts gracefully when no provider is configured', async () => {
+  // addProjectScenes returns the project it just persisted (read fresh under
+  // its own lock/transaction), NOT a value the caller derives from the
+  // pre-mutation `getProject` snapshot — so the mock's returned project here
+  // deliberately differs from `makeProject()` (an extra `renderHistoryId`) to
+  // prove `planProject` uses what addProjectScenes hands back, not a stale
+  // composition of its own.
+  const FRESH_SCENES = [{ sceneId: 's1' }, { sceneId: 's2' }, { sceneId: 's3' }];
+  function freshProjectResult(overrides = {}) {
+    return { project: { ...makeProject(), renderHistoryId: 'rh-fresh', scenes: FRESH_SCENES, ...overrides }, scenes: FRESH_SCENES };
+  }
+
+  it('seeds one scene per section, calls getProject exactly once, and returns the freshly-persisted project from addProjectScenes', async () => {
     const project = makeProject();
-    getProject.mockResolvedValueOnce(project).mockResolvedValueOnce({ ...project, scenes: [{ sceneId: 's1' }] });
-    addProjectScenes.mockResolvedValue([{ sceneId: 's1' }, { sceneId: 's2' }, { sceneId: 's3' }]);
+    getProject.mockResolvedValue(project);
+    addProjectScenes.mockResolvedValue(freshProjectResult());
     resolveProviderAndModel.mockResolvedValue({ provider: null, selectedModel: null });
 
     const result = await planProject('mv-1');
 
+    expect(getProject).toHaveBeenCalledTimes(1);
     expect(addProjectScenes).toHaveBeenCalledWith('mv-1', expect.arrayContaining([
       expect.objectContaining({ label: 'Intro', startSec: 0, endSec: 10 }),
     ]));
     expect(addProjectScenes.mock.calls[0][1]).toHaveLength(3);
     expect(runPromptThroughProvider).not.toHaveBeenCalled();
+    expect(result.project.renderHistoryId).toBe('rh-fresh');
     expect(result.scenesAdded).toBe(3);
     expect(result.promptsSeeded).toBe(false);
     expect(result.promptsSkippedReason).toBe('no-provider');
   });
 
   it('skips the LLM call entirely when seedPrompts is false', async () => {
-    const project = makeProject();
-    getProject.mockResolvedValueOnce(project).mockResolvedValueOnce(project);
-    addProjectScenes.mockResolvedValue([{ sceneId: 's1' }, { sceneId: 's2' }, { sceneId: 's3' }]);
+    getProject.mockResolvedValue(makeProject());
+    addProjectScenes.mockResolvedValue(freshProjectResult());
 
     const result = await planProject('mv-1', { seedPrompts: false });
 
@@ -144,9 +158,8 @@ describe('planProject', () => {
   });
 
   it('merges first-pass framePrompt/prompt into the matching scenes when the LLM call succeeds', async () => {
-    const project = makeProject();
-    getProject.mockResolvedValueOnce(project).mockResolvedValueOnce(project);
-    addProjectScenes.mockResolvedValue([{ sceneId: 's1' }, { sceneId: 's2' }, { sceneId: 's3' }]);
+    getProject.mockResolvedValue(makeProject());
+    addProjectScenes.mockResolvedValue(freshProjectResult());
     resolveProviderAndModel.mockResolvedValue({ provider: { id: 'p1', type: 'api' }, selectedModel: 'gpt' });
     runPromptThroughProvider.mockResolvedValue({
       text: JSON.stringify([
@@ -167,9 +180,8 @@ describe('planProject', () => {
   });
 
   it('degrades to plain scenes when the LLM call throws', async () => {
-    const project = makeProject();
-    getProject.mockResolvedValueOnce(project).mockResolvedValueOnce(project);
-    addProjectScenes.mockResolvedValue([{ sceneId: 's1' }, { sceneId: 's2' }, { sceneId: 's3' }]);
+    getProject.mockResolvedValue(makeProject());
+    addProjectScenes.mockResolvedValue(freshProjectResult());
     resolveProviderAndModel.mockResolvedValue({ provider: { id: 'p1', type: 'api' }, selectedModel: 'gpt' });
     runPromptThroughProvider.mockRejectedValue(new Error('boom'));
 
@@ -182,9 +194,8 @@ describe('planProject', () => {
   });
 
   it('degrades to plain scenes when the LLM response is unparsable', async () => {
-    const project = makeProject();
-    getProject.mockResolvedValueOnce(project).mockResolvedValueOnce(project);
-    addProjectScenes.mockResolvedValue([{ sceneId: 's1' }, { sceneId: 's2' }, { sceneId: 's3' }]);
+    getProject.mockResolvedValue(makeProject());
+    addProjectScenes.mockResolvedValue(freshProjectResult());
     resolveProviderAndModel.mockResolvedValue({ provider: { id: 'p1', type: 'api' }, selectedModel: 'gpt' });
     runPromptThroughProvider.mockResolvedValue({ text: 'not json at all' });
 
@@ -195,14 +206,26 @@ describe('planProject', () => {
   });
 
   it('skips prompt-seeding when the resolved provider is disabled', async () => {
-    const project = makeProject();
-    getProject.mockResolvedValueOnce(project).mockResolvedValueOnce(project);
-    addProjectScenes.mockResolvedValue([{ sceneId: 's1' }, { sceneId: 's2' }, { sceneId: 's3' }]);
+    getProject.mockResolvedValue(makeProject());
+    addProjectScenes.mockResolvedValue(freshProjectResult());
     resolveProviderAndModel.mockResolvedValue({ provider: { id: 'p1', enabled: false }, selectedModel: 'gpt' });
 
     const result = await planProject('mv-1');
 
     expect(runPromptThroughProvider).not.toHaveBeenCalled();
     expect(result.promptsSkippedReason).toBe('provider-disabled');
+  });
+
+  it('logs and falls through to no-provider when resolveProviderAndModel itself throws', async () => {
+    getProject.mockResolvedValue(makeProject());
+    addProjectScenes.mockResolvedValue(freshProjectResult());
+    resolveProviderAndModel.mockRejectedValue(new Error('toolkit not initialized'));
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const result = await planProject('mv-1');
+
+    expect(result.promptsSkippedReason).toBe('no-provider');
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('toolkit not initialized'));
+    warnSpy.mockRestore();
   });
 });

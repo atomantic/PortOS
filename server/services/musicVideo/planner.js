@@ -39,15 +39,25 @@ const SCENE_TEXT_MAX = 2000;
 // cap, just without the optional first-pass prompt text.
 const MAX_SECTIONS_FOR_PROMPTS = 80;
 
+// Mirrors musicVideoSceneCreateSchema's startSec/endSec bounds (musicVideoValidation.js)
+// so a section just outside the downstream scene schema's range is dropped
+// here rather than failing addScenes' atomic batch validation and aborting
+// the whole plan request over one bad section.
+const MAX_SECTION_SEC = 36000;
+
 /**
- * Keep only sections with a valid forward-time span. Defensive against a
- * malformed/legacy cached analysis — `musicVideoAudioAnalysisSchema` doesn't
- * enforce `endSec > startSec` per section. Shared by the scene-input builder
- * and the LLM prompt builder so their array indices always agree.
+ * Keep only sections with a valid forward-time span within the bounds the
+ * downstream scene schema accepts. Defensive against a malformed/legacy
+ * cached analysis — `musicVideoAudioAnalysisSchema` doesn't enforce these
+ * per-section invariants the way `musicVideoSceneCreateSchema` does. Shared
+ * by the scene-input builder and the LLM prompt builder so their array
+ * indices always agree.
  */
 export function validSections(sections) {
   return (Array.isArray(sections) ? sections : [])
-    .filter((s) => s && typeof s.startSec === 'number' && typeof s.endSec === 'number' && s.endSec > s.startSec);
+    .filter((s) => s
+      && typeof s.startSec === 'number' && s.startSec >= 0
+      && typeof s.endSec === 'number' && s.endSec > s.startSec && s.endSec <= MAX_SECTION_SEC);
 }
 
 /**
@@ -192,14 +202,14 @@ export async function planProject(id, { seedPrompts = true, providerId, model } 
     }
   }
 
-  const scenes = await addProjectScenes(id, sceneInputs);
-  // Assemble the response in-memory from the pre-mutation `project` + the
-  // scenes `addProjectScenes` just returned, rather than a second
-  // getProject round trip — addScenes' `touch()` only changes `scenes` +
-  // `updatedAt`, so this mirrors exactly what a re-fetch would return
-  // without a second DB transaction / whole-file re-read (the client's
-  // single-scene `addMusicVideoScene` path already composes state this way).
-  const updated = { ...project, scenes: [...(project.scenes || []), ...scenes], updatedAt: new Date().toISOString() };
+  // `addProjectScenes` returns the project it just persisted (read fresh
+  // under the same lock/transaction that wrote it, not a re-derived
+  // snapshot) — using it directly avoids both a stale-snapshot response
+  // (a concurrent edit made while the prompt-seeding LLM call was in
+  // flight would otherwise be silently dropped from this response and
+  // visually reverted by the client's replaceProject) and a redundant
+  // second getProject round trip.
+  const { project: updated, scenes } = await addProjectScenes(id, sceneInputs);
   console.log(`🪄 Music Video plan: seeded ${scenes.length} scene${scenes.length === 1 ? '' : 's'} for ${id} (prompts ${promptsSeeded ? 'seeded' : `skipped: ${promptsSkippedReason || 'n/a'}`})`);
   return { project: updated, scenesAdded: scenes.length, promptsSeeded, promptsSkippedReason };
 }

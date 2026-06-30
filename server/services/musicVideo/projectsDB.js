@@ -195,13 +195,19 @@ export async function addProjectScene(id, sceneInput) {
   return result;
 }
 
-/** Bulk-append scenes (the autonomous planner, #1855) — one locked read/write. */
+/**
+ * Bulk-append scenes (the autonomous planner, #1855) — one locked read/write.
+ * Returns `{ project, scenes }` (the freshly-persisted project, read under
+ * the same `SELECT ... FOR UPDATE` that wrote it — not a pre-mutation
+ * snapshot) so a caller composing a response never has to re-fetch or risk
+ * overwriting a concurrent edit with stale state.
+ */
 export async function addProjectScenes(id, sceneInputs) {
-  const { result } = await withLockedProject(id, (p) => {
+  const { project, result: scenes } = await withLockedProject(id, (p) => {
     const { project, scenes } = addScenes(p, sceneInputs);
     return { project, result: scenes };
   });
-  return result;
+  return { project, scenes };
 }
 
 export async function updateScene(id, sceneId, patch) {

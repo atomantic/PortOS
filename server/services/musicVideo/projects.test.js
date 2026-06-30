@@ -63,14 +63,15 @@ describe('musicVideo dispatcher — record-event emit (#1770)', () => {
     expect(emitRecordDeleted).not.toHaveBeenCalled();
   });
 
-  it('addProjectScenes bulk-appends and emits exactly one updated (not one per scene)', async () => {
+  it('addProjectScenes bulk-appends, emits exactly one updated (not one per scene), and returns the freshly-persisted project', async () => {
     const p = await projects.createProject({ name: 'A' });
     emitRecordUpdated.mockClear();
 
-    const scenes = await projects.addProjectScenes(p.id, [{ prompt: 'one' }, { prompt: 'two' }, { prompt: 'three' }]);
+    const { project, scenes } = await projects.addProjectScenes(p.id, [{ prompt: 'one' }, { prompt: 'two' }, { prompt: 'three' }]);
 
     expect(scenes).toHaveLength(3);
     expect(scenes.map((s) => s.order)).toEqual([0, 1, 2]);
+    expect(project.scenes).toHaveLength(3);
     expect(emitRecordUpdated).toHaveBeenCalledTimes(1);
     expect(emitRecordUpdated).toHaveBeenCalledWith('musicVideoProject', p.id);
 
