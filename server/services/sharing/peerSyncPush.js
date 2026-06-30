@@ -753,7 +753,22 @@ export async function buildPushPayload(sub, sourceInstanceId) {
     const sanitized = sanitizeRecordForWire('musicVideoProject', record);
     if (!sanitized) return null;
     const assetManifest = record.deleted === true ? [] : await buildMusicVideoAssetManifest(record);
-    return { kind: 'musicVideoProject', record: sanitized, assetManifest, sourceInstanceId, portosMeta };
+    // #1858: bundle the LINKED TRACK RECORD (create-UI projects store `trackId`,
+    // not `uploadedAudioFilename`). The audio BYTES ride `assetManifest` above,
+    // but the receiver's `resolveMasterAudioPath()` looks the track up by id
+    // FIRST and throws "Linked track not found" without the record — so a peer
+    // subscribed to `musicVideoProjects` only (no Tracks category) needs the
+    // record itself to render. Additive optional key: an older receiver ignores
+    // it (same as before), so no schema-version bump (mirrors `linkedCollection`).
+    let linkedTrack = null;
+    if (record.deleted !== true && isStr(record.trackId)) {
+      const track = await getTrack(record.trackId, { includeDeleted: true }).catch(() => null);
+      if (track && track.deleted !== true) linkedTrack = sanitizeRecordForWire('track', track);
+    }
+    return {
+      kind: 'musicVideoProject', record: sanitized, assetManifest, sourceInstanceId, portosMeta,
+      ...(linkedTrack ? { linkedTrack } : {}),
+    };
   }
   return null;
 }

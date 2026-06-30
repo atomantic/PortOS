@@ -109,7 +109,7 @@ export async function applyIncomingPush(payload) {
   if (!isPlainObject(payload)) {
     throw makeErr('payload must be an object', ERR_VALIDATION);
   }
-  const { kind, record, issues, linkedCollection, catalogBundle, manuscriptReview, reverseOutline, assetManifest, draftBodyManifest, sourceInstanceId, portosMeta } = payload;
+  const { kind, record, issues, linkedCollection, linkedTrack, catalogBundle, manuscriptReview, reverseOutline, assetManifest, draftBodyManifest, sourceInstanceId, portosMeta } = payload;
   if (!PEER_SUBSCRIBABLE_KINDS.includes(kind)) {
     throw makeErr(`unknown kind: ${kind}`, ERR_VALIDATION);
   }
@@ -225,6 +225,12 @@ export async function applyIncomingPush(payload) {
   } else if (kind === 'series') {
     const local = await getSeries(record.id, { includeDeleted: true }).catch(() => null);
     localEphemeral = local?.ephemeral === true;
+  } else if (kind === 'musicVideoProject') {
+    // #1858: the music-video push now carries a secondary `linkedTrack` bundle,
+    // so it needs the same opt-out gate — a stale peer push must not plant a
+    // track record for a project the user marked ephemeral.
+    const local = await getMusicVideoProject(record.id, { includeDeleted: true }).catch(() => null);
+    localEphemeral = local?.ephemeral === true;
   }
 
   // Merge into local state via the existing LWW path. The merge functions
@@ -311,6 +317,16 @@ export async function applyIncomingPush(payload) {
     await mergeExercisesFromSync([record], { source });
   } else if (kind === 'musicVideoProject') {
     await mergeMusicVideoProjectsFromSync([record], { source });
+    // #1858: merge the bundled linked track record so a receiver WITHOUT the
+    // Tracks category can still resolve `project.trackId` (getTrack) at render
+    // time. The audio bytes already pulled via assetManifest. Non-fatal: the
+    // project itself is merged; skip on a tombstone push, a local-ephemeral
+    // (opted-out) project, or a missing bundle — same contract as linkedCollection.
+    if (!localEphemeral && record.deleted !== true && isPlainObject(linkedTrack)) {
+      await mergeTracksFromSync([linkedTrack], { source }).catch((err) => {
+        console.log(`⚠️ peerSync: linkedTrack merge failed: ${err.message}`);
+      });
+    }
   }
 
   // Apply the bundled collection (if any) — same LWW + union-of-items
