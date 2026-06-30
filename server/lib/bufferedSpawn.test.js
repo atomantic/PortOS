@@ -1,13 +1,20 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
+import { ChildProcess } from 'child_process';
 import { mkdtemp, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
 // Mock child_process.spawn so we can drive the buffered-spawn machinery without
-// launching real processes.
+// launching real processes. Pass the real module through (importOriginal) and
+// override only `spawn` — killProcessTree's `instanceof ChildProcess` guard
+// needs the real `ChildProcess` export; a from-scratch replacement object
+// (no `ChildProcess` key) would make that check throw on an actual win32 run.
 const spawnMock = vi.fn();
-vi.mock('child_process', () => ({ spawn: (...a) => spawnMock(...a) }));
+vi.mock('child_process', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, spawn: (...a) => spawnMock(...a) };
+});
 
 // Re-imported after the mock is registered.
 const {
@@ -21,9 +28,16 @@ const {
   MAX_OUTPUT_BYTES,
 } = await import('./bufferedSpawn.js');
 
-/** Build a fake child process with stdout/stderr emitters and a kill spy. */
+/**
+ * Build a fake child process with stdout/stderr emitters and a kill spy.
+ * Its prototype is swapped to ChildProcess.prototype so it passes
+ * killProcessTree's `instanceof ChildProcess` guard exactly like a real
+ * spawn() result would — without this, the "spawns taskkill" test below
+ * would silently take the SIGTERM fallback branch on an actual win32 run.
+ */
 function makeFakeChild({ pid = 1234 } = {}) {
   const child = new EventEmitter();
+  Object.setPrototypeOf(child, ChildProcess.prototype);
   child.pid = pid;
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
@@ -85,6 +99,18 @@ describe('killProcessTree', () => {
     // .killed must be set synchronously here so re-entrant kill/abort guards
     // elsewhere (gated on `!child.killed`) actually engage on Windows.
     expect(child.killed).toBe(true);
+  });
+
+  it('on Windows still uses .kill() (not taskkill) for a non-ChildProcess killable, e.g. a node-pty session', () => {
+    if (!IS_WIN32) return; // can't simulate platform branch from outside
+    // A killable that exposes .kill()/.pid like a ChildProcess but isn't one
+    // (e.g. node-pty's IPty, registered via registerExternalRun for TUI
+    // runs) — taskkill against its pid would bypass its own native teardown
+    // (releasing a Windows ConPTY handle) and leak it.
+    const ptyLike = { pid: 4321, kill: vi.fn() };
+    killProcessTree(ptyLike);
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(ptyLike.kill).toHaveBeenCalledWith('SIGTERM');
   });
 });
 

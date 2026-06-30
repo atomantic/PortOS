@@ -2,7 +2,7 @@ import { mkdir, readFile, readdir, rm } from 'fs/promises';
 import { atomicWrite } from './internal/atomicWrite.js';
 import { existsSync } from 'fs';
 import { join, extname, basename, isAbsolute, delimiter } from 'path';
-import { spawn } from 'child_process';
+import { spawn, ChildProcess } from 'child_process';
 import { randomUUID } from 'crypto';
 import { analyzeError, analyzeHttpError, ERROR_CATEGORIES } from './errorDetection.js';
 
@@ -46,8 +46,16 @@ function resolveWindowsExecutable(command, isWin32 = IS_WIN32) {
 // `.killed` actually engage on Windows. A plain SIGTERM kills the cmd.exe
 // wrapper but orphans the real child, so the whole process tree is taken
 // down via `taskkill /T /F` there; SIGTERM is sufficient elsewhere.
+//
+// The win32 branch is gated on `instanceof ChildProcess`: stopRun/deleteRun
+// below call this with whatever was registered via registerExternalRun,
+// which can be a node-pty `IPty` TUI session (server/lib/tuiPromptRunner.js,
+// via the host's registerActiveRun) — it also exposes `.kill()`/`.pid`, but
+// a raw `taskkill` against its pid bypasses node-pty's own Windows teardown
+// (releasing its native ConPTY handle), leaking it. Any non-ChildProcess
+// killable always uses its own `.kill()` instead, on every platform.
 function killProcessTree(child) {
-  if (IS_WIN32 && child.pid) {
+  if (IS_WIN32 && child.pid && child instanceof ChildProcess) {
     child.killed = true;
     spawn('taskkill', ['/T', '/F', '/PID', String(child.pid)], { stdio: 'ignore', windowsHide: true })
       .on('error', () => {})
