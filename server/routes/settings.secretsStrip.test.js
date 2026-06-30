@@ -85,3 +85,48 @@ describe('PUT /api/settings — secrets-strip', () => {
     expect(readSettingsFile().timezone).toBe('Europe/Berlin');
   });
 });
+
+// Regression for #1821: third-party API tokens stored OUTSIDE the `secrets.*`
+// hierarchy (`imageGen.hfToken`, `civitai.apiKey`) must never be echoed by
+// GET /api/settings. The Settings UI reads only their presence from dedicated
+// status routes, so stripping the raw values is non-breaking.
+describe('GET /api/settings — external token redaction', () => {
+  it('omits imageGen.hfToken and civitai.apiKey while preserving siblings', async () => {
+    seedSettings({
+      timezone: 'UTC',
+      imageGen: { hfToken: 'hf_secret123', defaultModel: 'flux' },
+      civitai: { apiKey: 'civ_secret456', autoDownload: true },
+    });
+    const app = await buildApp();
+    const res = await request(app).get('/api/settings');
+    expect(res.status).toBe(200);
+    // Tokens are stripped from the response...
+    expect(res.body.imageGen?.hfToken).toBeUndefined();
+    expect(res.body.civitai?.apiKey).toBeUndefined();
+    // ...but their sibling config is preserved.
+    expect(res.body.imageGen?.defaultModel).toBe('flux');
+    expect(res.body.civitai?.autoDownload).toBe(true);
+    // ...and the on-disk values are untouched (redaction is response-only).
+    const persisted = readSettingsFile();
+    expect(persisted.imageGen?.hfToken).toBe('hf_secret123');
+    expect(persisted.civitai?.apiKey).toBe('civ_secret456');
+  });
+
+  it('leaves settings without those keys unchanged', async () => {
+    seedSettings({ timezone: 'UTC', imageGen: { defaultModel: 'flux' } });
+    const app = await buildApp();
+    const res = await request(app).get('/api/settings');
+    expect(res.status).toBe(200);
+    expect(res.body.imageGen?.defaultModel).toBe('flux');
+    expect(res.body.civitai).toBeUndefined();
+  });
+
+  it('does not spread a malformed array-valued civitai into index keys', async () => {
+    seedSettings({ civitai: ['legacy-junk'] });
+    const app = await buildApp();
+    const res = await request(app).get('/api/settings');
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body.civitai)).toBe(true);
+    expect(res.body.civitai[0]).toBe('legacy-junk');
+  });
+});
